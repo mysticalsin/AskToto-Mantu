@@ -15,6 +15,15 @@
  * compliance doc may not claim it does; package them again and these tests demand the doc move with it.
  * The runtime half (the sidecar IS bundled, the URL IS commit-pinned, size+sha256 ARE enforced) is
  * asserted too, because those are the mitigations the corrected doc now offers in their place.
+ *
+ * MQA-243 — and then it happened again, because this file only ever read ONE document. The claim it
+ * exists to police ("the installer contains the weights") was repeated in two more live documents that
+ * no test could see: docs/asktoto-architecture.md said the model "and native runtime are embedded in
+ * the same DMG/EXE" with "no post-install model download required" — both halves false — and
+ * docs/compliance/legitimate-interest-assessment.md, the one an enterprise security review actually
+ * reads, still named the 0.8B and its ~728 MB. An assertion scoped to its own file rather than to its
+ * own claim passes while the thing it guards is broken somewhere else. The sweep below therefore runs
+ * over every document that makes the claim, and fails if that list is ever empty.
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -110,5 +119,82 @@ describe('MQA-188/191 — the in-app copy may not out-run what the installer act
   it('says instead that the model is fetched on first run', () => {
     if (weightsArePackaged) return
     expect(localAi()).toMatch(/first run/i)
+  })
+})
+
+/**
+ * MQA-243 — the same claim, every document that makes it.
+ *
+ * Discovered by grep, not by a test: the packaging claim above lived in three live documents and only
+ * one of them was guarded. The list is enumerated rather than globbed over docs/ because most of what
+ * is under there is a dated record — plans, design notes, past QA runs, the bug ledger itself — and
+ * those are supposed to say what was true when they were written. These three describe the product as
+ * it ships today, so they are the ones that must not lie about it.
+ */
+describe('MQA-243 — no live document may claim the installer carries the weights', () => {
+  const LIVE_DOCS = [
+    'docs/compliance/data-flow-onepager.md',
+    'docs/compliance/legitimate-interest-assessment.md',
+    'docs/asktoto-architecture.md'
+  ] as const
+
+  it('the guarded list is non-empty — an empty sweep would pass silently forever', () => {
+    // The failure mode this whole block exists to prevent is a check that quietly measures nothing.
+    expect(LIVE_DOCS.length).toBeGreaterThanOrEqual(3)
+  })
+
+  for (const rel of LIVE_DOCS) {
+    const doc = read(rel)
+
+    it(`${rel} does not claim the weights are bundled/embedded in the installer`, () => {
+      if (weightsArePackaged) return
+      // Deliberately narrow: the offence is asserting the WEIGHTS ship. The sidecar, the runtime and
+      // the licence text genuinely are bundled, and every one of these docs says so correctly.
+      expect(doc).not.toMatch(/bundled Qwen/i)
+      expect(doc).not.toMatch(/model[^.\n]{0,80}embedded in the same (?:DMG|EXE|package)/i)
+      expect(doc).not.toMatch(/no (?:post-install )?model download is required/i)
+    })
+
+    it(`${rel} states the first-run fetch instead`, () => {
+      if (weightsArePackaged) return
+      expect(doc).toMatch(/first run|once per user profile/i)
+    })
+  }
+
+  /**
+   * The size figures are the part an enterprise provisions against, so they have to come from the
+   * manifest rather than from whoever last edited the prose. bestModelForMachine() ranks by weight
+   * size and every entry's RAM floor is 8 GB today, so any supported host takes the LARGEST entry —
+   * that is the number egress and per-user disk must be sized for.
+   */
+  it('every size a live doc quotes is a real first-run download from local-models.ts', () => {
+    // A quoted figure is the TOTAL a user's machine actually pulls — gguf + mmproj — not either file
+    // on its own, because both land before the model can serve anything. local-models.ts lists them in
+    // that order per entry, so consecutive pairs are the per-model downloads.
+    const declared = [...manifest.matchAll(/bytes:\s*(\d{6,})/g)].map((m) => Number(m[1]))
+    expect(declared.length, 'manifest byte lengths not found').toBeGreaterThanOrEqual(4)
+    expect(declared.length % 2, 'every model must declare both a gguf and an mmproj length').toBe(0)
+
+    const downloads = new Set<number>()
+    for (let i = 0; i < declared.length; i += 2) {
+      downloads.add(declared[i] + declared[i + 1])
+      downloads.add(declared[i])
+    }
+
+    for (const rel of ['docs/compliance/data-flow-onepager.md', 'docs/ENTERPRISE-DEPLOY-WINDOWS.md']) {
+      const quoted = [...read(rel).matchAll(/([\d,]{9,})\s*bytes/g)].map((m) => Number(m[1].replace(/,/g, '')))
+      expect(quoted.length, `${rel} quotes no byte figure at all`).toBeGreaterThan(0)
+      for (const q of quoted) {
+        expect(
+          [...downloads],
+          `${rel} quotes ${q.toLocaleString('en-US')} bytes, which is not any model's first-run download`
+        ).toContain(q)
+      }
+    }
+
+    // And the number an enterprise provisions against must be the LARGEST, since bestModelForMachine()
+    // hands every host that clears the RAM floor the biggest entry.
+    const biggest = Math.max(...[...downloads])
+    expect(read('docs/ENTERPRISE-DEPLOY-WINDOWS.md').replace(/,/g, '')).toContain(String(biggest))
   })
 })

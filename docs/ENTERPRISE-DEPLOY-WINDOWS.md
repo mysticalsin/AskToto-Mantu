@@ -23,7 +23,7 @@ reach the network on first launch:
 
 | Host | When | Why | If blocked |
 |---|---|---|---|
-| `huggingface.co` and the CDN host it redirects to | Once, on first launch, per user profile | Fetches the ~730 MB Métis Local (Qwen3.5 0.8B) weights into `%APPDATA%\Métis\local-llm\models\qwen3.5-0.8b\`. They are deliberately **not** in the installer: a universal package carrying them would exceed GitHub's 2 GB per-asset release limit. The URL is pinned to an immutable upstream commit and the files are size- and SHA-256-verified before use. | Métis Local stays unavailable and the app falls back to the configured cloud/CLI provider. Settings → AI → Local AI reports the failed download and the next launch retries. Transcription and everything else are unaffected. |
+| `huggingface.co` and the CDN host it redirects to | Once, on first launch, per user profile | Fetches the Métis Local weights into `%APPDATA%\Métis\local-llm\models\<model-id>\`. Which model is chosen depends on the machine: Métis picks the largest registered model whose RAM floor the host meets, so any machine with 8 GB or more takes **Qwen3.5 4B — 3,584,533,344 bytes (3.58 GB)**, not the 0.8B (763,759,712 bytes / 0.76 GB). Size egress and per-user disk for 3.58 GB. They are deliberately **not** in the installer: a universal package carrying them would exceed GitHub's 2 GB per-asset release limit. The URL is pinned to an immutable upstream commit and the files are size- and SHA-256-verified before use. | Métis Local stays unavailable and the app falls back to the configured cloud/CLI provider. Settings → AI → Local AI reports the failed download and the next launch retries. Transcription and everything else are unaffected. |
 
 The request goes through the machine's configured proxy (`HTTP(S)_PROXY`, the Windows system proxy, or a
 PAC script), so a proxy-only fleet works as long as the host is allowed.
@@ -103,3 +103,34 @@ admin-owned (`src/main/win-security.ts`) — a non-admin user cannot plant polic
 - No telemetry, no crash-report upload — by design (`src/main/index.ts`).
 - What leaves the device: prompts to the user-chosen AI provider; optional Dust/graph reads of the
   notes folder. See `README.md` §Security & privacy.
+
+## Logs, audit trail, and support diagnostics
+
+- Diagnostic log: `%APPDATA%sktoto\logs\main.log` (5MB rotation). Crash dumps: `%APPDATA%sktoto\crash-*.log`
+  plus Crashpad minidumps under the profile.
+- Security audit trail: `%APPDATA%sktoto\logsudit.log` + rotated `audit-<epoch>.log` generations
+  (20 kept). Hash-chained for tamper evidence — verify with `node scripts/verify-audit-log.mjs "<logs dir>"`.
+  Policy, retention, and the erasure stance: `docs/AUDIT-LOG.md`.
+- Users export everything support needs from **Settings -> About -> Export diagnostics bundle** — logs,
+  crash dumps and the boot sentinel to a folder of their choice, with a MANIFEST. Never includes
+  meetings, the knowledge store, or settings.
+
+## Private update feed (admin policy)
+
+By default updates come from the public GitHub releases feed. To serve them from an internally hosted
+endpoint instead, add to the ADMIN managed-config (`%ProgramData%\Métis\managed-config.json` — the
+ACL-trusted machine policy; a per-user config is deliberately ignored for this key):
+
+```json
+{ "updateFeedUrl": "https://updates.your-corp.example/metis/" }
+```
+
+The URL must be `https://` and must serve electron-updater's generic layout: `latest.yml`, the
+`Metis-Setup-*.exe` it names, and its `.blockmap`. Signature verification
+(`verifyUpdateCodeSignature`) still applies to whatever the feed serves. `disableAutoUpdate: true`
+continues to freeze updates entirely.
+
+## DevTools posture
+
+DevTools are disabled in packaged builds (`devTools: false` on every window). For a field-debugging
+session, launch with `ASKTOTO_DEVTOOLS=1`.

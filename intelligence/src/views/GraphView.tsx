@@ -3,7 +3,8 @@ import { useNavigate, useSearchParams } from 'react-router-dom'
 import { DataSet } from 'vis-data'
 import { Network } from 'vis-network/standalone'
 import type { DashboardData, GraphEdge, GraphNode, Reason, ScopeSummary, WinLikelihoodBand } from '../types/data'
-import { bandColor, bandLabel } from '../lib/format'
+import { bandColor, bandLabel, fmtScopeTotal } from '../lib/format'
+import { findBridges } from '../lib/bridges'
 import { slug } from '../lib/slug'
 
 interface Props {
@@ -28,11 +29,6 @@ const TYPE_SIZE: Record<GraphNode['type'], number> = {
   sector: 30,
 }
 
-function fmtUsd(n: number): string {
-  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `$${(n / 1_000).toFixed(0)}K`
-  return `$${n}`
-}
 
 // Same palette as DealView's StanceTag, remapped onto the vocabulary the brain actually writes for a
 // person's stance_trail (positive/objection/neutral — see brain.ts's PersonEntitySchema), which differs
@@ -74,8 +70,11 @@ function buildNodeItem(n: GraphNode) {
       background: fill,
       border: ring,
       highlight: { background: '#ffffff', border: ring },
-      opacity: nodeOpacity(n),
     },
+    // Going-cold fade. TOP level, not inside `color`: vis-network 10 reads node opacity only as a
+    // top-level NodeOptions key (Network.d.ts:907) — inside `color` it is silently ignored, which is
+    // why the fade never rendered.
+    opacity: nodeOpacity(n),
     borderWidth: n.type === 'deal' && n.win_likelihood_band ? 3 : 1.5,
     font: { size: 12, color: '#ece6f2' },
   }
@@ -110,20 +109,21 @@ function buildEdgeItem(e: GraphEdge, freshnessById: Map<string, GraphNode['fresh
 }
 
 function emptySummary(key: string, label: string): ScopeSummary {
-  return { key, label, deal_count: 0, total_value_usd: null, band_counts: { good: 0, mixed: 0, concerning: 0 }, insight_ids: [] }
+  return { key, label, deal_count: 0, total_value: [], band_counts: { good: 0, mixed: 0, concerning: 0 }, insight_ids: [] }
 }
 
 function mergeSummaries(summaries: ScopeSummary[]): ScopeSummary {
   const merged = emptySummary('all', 'All')
+  const byCurrency = new Map<string, number>()
   for (const s of summaries) {
     merged.deal_count += s.deal_count
-    // Sum only real values; if no scope has value data the merged total stays null (not $0).
-    if (s.total_value_usd !== null) merged.total_value_usd = (merged.total_value_usd ?? 0) + s.total_value_usd
+    for (const t of s.total_value) byCurrency.set(t.currency, (byCurrency.get(t.currency) ?? 0) + t.value)
     merged.band_counts.good += s.band_counts.good
     merged.band_counts.mixed += s.band_counts.mixed
     merged.band_counts.concerning += s.band_counts.concerning
     for (const id of s.insight_ids) if (!merged.insight_ids.includes(id)) merged.insight_ids.push(id)
   }
+  merged.total_value = [...byCurrency.entries()].map(([currency, value]) => ({ currency, value }))
   return merged
 }
 
@@ -190,6 +190,16 @@ export function GraphView({ data }: Props) {
     () => graph.nodes.filter((n) => n.single_threaded || n.unmapped),
     [graph.nodes],
   )
+
+  // Connectors — nodes whose neighbours span more than one detected community (see lib/bridges.ts).
+  // Computed over the VISIBLE set, not the raw graph, so hiding an account/sector/community from the
+  // canvas also removes the connections that ran through it: a panel claiming a bridge the user just
+  // filtered out of view would be pointing at nothing.
+  const bridges = useMemo(() => {
+    const visible = graph.nodes.filter(nodeVisible)
+    return findBridges(visible, graph.edges)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- nodeVisible reads the hidden* sets below
+  }, [graph.nodes, graph.edges, hiddenAccounts, hiddenSectors, hiddenCommunities, hiddenBands])
 
   function nodeVisible(n: GraphNode): boolean {
     if (n.account && hiddenAccounts.has(n.account)) return false
@@ -334,7 +344,11 @@ export function GraphView({ data }: Props) {
       const network = networkRef.current
       if (network) {
         network.setOptions({ physics: { enabled: true } })
-        network.once('stabilizationIterationsDone', () => {
+        // 'stabilized', not 'stabilizationIterationsDone': the latter only fires for constructor-time
+        // stabilization (the mount handler keeps it), while a live simulation re-enabled via setOptions
+        // settles with 'stabilized' — the old handler never fired, so physics never froze again and
+        // every data poll re-laid-out the entire graph.
+        network.once('stabilized', () => {
           network.setOptions({ physics: { enabled: false } })
         })
       }
@@ -669,6 +683,41 @@ export function GraphView({ data }: Props) {
           </div>
         )}
 
+        {/* Connectors — cross-community bridges (lib/bridges.ts). The one thing the graph's own shape
+            knows that no per-node view can show: Going cold and Relationship risk both measure a node
+            in isolation, and a well-connected bridge looks healthy to both. */}
+        {bridges.length > 0 && (
+          <div className="shrink-0 border-b border-[var(--color-mantu-border)] p-4">
+            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/40">Connectors</h3>
+            <div className="max-h-56 space-y-1.5 overflow-y-auto">
+              {bridges.map((b) => (
+                <button
+                  key={b.id}
+                  onClick={() => focusNode(b.id)}
+                  className="block w-full rounded-md bg-black/20 px-2 py-1.5 text-left hover:bg-white/5"
+                >
+                  <div className="flex items-center gap-2 text-xs">
+                    <span className="truncate font-medium text-white/85">{b.label}</span>
+                    {b.account && b.account !== b.label && (
+                      <span className="truncate text-[10px] text-white/35">{b.account}</span>
+                    )}
+                    <span className="ml-auto shrink-0 rounded-full bg-[var(--color-mantu-light)]/15 px-1.5 py-0.5 text-[10px] font-semibold text-[var(--color-mantu-light)]">
+                      {b.spans} groups
+                    </span>
+                  </div>
+                  <div className="mt-0.5 truncate text-[11px] leading-snug text-white/50">
+                    connects {b.communityLabels.join(' · ')}
+                  </div>
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-[10px] leading-relaxed text-white/30">
+              People and deals whose links cross more than one detected group — the paths between
+              otherwise-separate parts of your map. Structural, computed from existing edges only.
+            </p>
+          </div>
+        )}
+
         {/* Win/Loss & ROI intelligence */}
         <div className="shrink-0 border-b border-[var(--color-mantu-border)] p-4">
           <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-white/40">Win/Loss &amp; ROI</h3>
@@ -707,11 +756,9 @@ export function GraphView({ data }: Props) {
             </div>
             <div className="rounded-md bg-black/20 p-2">
               <div className="text-white/40">Value at stake</div>
-              <div className="text-base font-semibold text-white/90">
-                {roiSummary.total_value_usd === null ? 'N/A' : fmtUsd(roiSummary.total_value_usd)}
-              </div>
-              {roiSummary.total_value_usd === null && (
-                <div className="text-[9px] leading-tight text-white/30">no value data in transcripts</div>
+              <div className="text-base font-semibold text-white/90">{fmtScopeTotal(roiSummary.total_value)}</div>
+              {roiSummary.total_value.length === 0 && (
+                <div className="text-[9px] leading-tight text-white/30">no confirmed value data yet</div>
               )}
             </div>
           </div>

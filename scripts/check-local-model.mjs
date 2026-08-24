@@ -1,5 +1,11 @@
 #!/usr/bin/env node
-/** No-network release gate for the model payload embedded in Métis. */
+/**
+ * No-network release gate for the Métis Local model payload.
+ *
+ * The weights are NOT packaged (see fetch-local-model.mjs). What this proves is the pin: the bytes and
+ * SHA-256 in local-model-assets.mjs match the real upstream file, so the identical pins that
+ * src/main/llm/local-models.ts hands the first-run downloader cannot ship wrong.
+ */
 import './check-offline-package.mjs'
 import { createReadStream, existsSync, readdirSync, statSync } from 'node:fs'
 import { createHash } from 'node:crypto'

@@ -20,6 +20,7 @@ import {
   sessionKey,
   baseURL
 } from './local-runtime'
+import { LOCAL_MODELS, spawnProfileFor } from './local-models'
 
 const REPO_ROOT = process.cwd()
 
@@ -27,7 +28,7 @@ describe('buildSpawnArgs', () => {
   // The spawn contract (PLAN.md §4.4) is IDENTICAL on mac and win — parameterize over both platforms to
   // prove that invariant explicitly rather than assuming it.
   it.each(['mac', 'win'] as const)('produces the exact sidecar flag set on %s', () => {
-    const args = buildSpawnArgs({ gguf: '/models/model.gguf', mmproj: '/models/mmproj.gguf' })
+    const args = buildSpawnArgs({ gguf: '/models/model.gguf', mmproj: '/models/mmproj.gguf', ctxSize: 65536, parallel: 2, gpuLayers: 99 })
     expect(args).toEqual([
       '-m', '/models/model.gguf',
       '--mmproj', '/models/mmproj.gguf',
@@ -43,13 +44,22 @@ describe('buildSpawnArgs', () => {
     ])
   })
 
+  it('passes the per-model context window through rather than a hardcoded one', () => {
+    // Context is per-model (local-models.ts LocalModelEntry.ctxSize) because the KV cache, not the
+    // weights, is what decides whether a bigger model fits a small machine.
+    expect(buildSpawnArgs({ gguf: 'g', mmproj: 'm', ctxSize: 16384, parallel: 2, gpuLayers: 99 })).toContain('16384')
+    expect(buildSpawnArgs({ gguf: 'g', mmproj: 'm', ctxSize: 65536, parallel: 2, gpuLayers: 99 })).toContain('65536')
+  })
+
   it('never includes --cache-reuse (disabled upstream for multimodal loads — PLAN.md §3)', () => {
-    const args = buildSpawnArgs({ gguf: 'g', mmproj: 'm' })
+    const args = buildSpawnArgs({ gguf: 'g', mmproj: 'm', ctxSize: 65536, parallel: 2, gpuLayers: 99 })
     expect(args).not.toContain('--cache-reuse')
   })
 
-  it('gives each of the two slots 32768 tokens and caps host prompt-cache RAM at 128 MiB', () => {
-    const args = buildSpawnArgs({ gguf: 'g', mmproj: 'm' })
+  it('splits the context evenly across the two slots and caps host prompt-cache RAM at 128 MiB', () => {
+    // The per-slot budget follows the model's own window now: 65536 -> 32768 each for the small model,
+    // 16384 -> 8192 each for the 4B, whose KV cache is what a small machine actually feels.
+    const args = buildSpawnArgs({ gguf: 'g', mmproj: 'm', ctxSize: 65536, parallel: 2, gpuLayers: 99 })
     const totalContext = Number(args[args.indexOf('-c') + 1])
     const slots = Number(args[args.indexOf('--parallel') + 1])
     expect(totalContext / slots).toBe(32768)
@@ -237,7 +247,15 @@ describe('start() integration — real binary + real Qwen3.5-0.8B model', () => 
   run(
     title,
     async () => {
-      await start({ gguf, mmproj }, 'mac')
+      // MQA: ModelPaths gained ctxSize/parallel/gpuLayers when the sidecar became machine-sized
+      // (local-models.ts spawnProfileFor). This call site was not updated, so buildSpawnArgs emitted
+      // the literal `-c undefined` and llama-server died with `stoi: no conversion` before ever
+      // becoming healthy. Typecheck could not catch it — tsconfig.node.json excludes **/*.test.ts.
+      // Derive the profile the way production does (local.ts) rather than hardcoding numbers, so a
+      // future sizing change cannot silently desynchronise this test from the shipped path again.
+      const entry = LOCAL_MODELS.find((m) => m.id === 'qwen3.5-0.8b')
+      if (!entry) throw new Error('qwen3.5-0.8b is no longer a known local model; update this test')
+      await start({ gguf, mmproj, ...spawnProfileFor(entry) }, 'mac')
       try {
         expect(isRunning()).toBe(true)
         expect(sessionKey()).toMatch(/^[0-9a-f]{64}$/)

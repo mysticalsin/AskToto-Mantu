@@ -20,7 +20,17 @@ import {
   systemPreferences
 } from 'electron'
 import { join, basename, dirname, resolve, extname } from 'node:path'
-import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync } from 'node:fs'
+import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync, mkdirSync, copyFileSync } from 'node:fs'
+
+// Enterprise checkbox: DevTools stay reachable only where they are a development tool. No secret ever
+// reaches the renderer (publicSettings strips key material), but DevTools on a packaged build still
+// exposes in-memory renderer state (transcript text, screen-context strings) to anyone at the keyboard,
+// and every security questionnaire asks. ASKTOTO_DEVTOOLS=1 is the deliberate field-debugging override —
+// an env var a local user could set, which is fine: whoever controls the local environment already owns
+// this session; the control is about the DEFAULT posture, not about defeating a local admin.
+// Shared with intelligence.ts so every window in src/main gates on ONE decision — see
+// dev-env.ts's devToolsEnabled() for why this moved out of this file.
+const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import {
@@ -67,6 +77,7 @@ import {
   type AskStart,
   type ImportJobView,
   type ScreenContextResult,
+  type DiagnosticsExportResult,
   type RecallExportPlainResult
 } from '@shared/ipc'
 import {
@@ -126,7 +137,7 @@ function getSpeakerId(): SpeakerId {
   return speakerIdInstance
 }
 import { buildPrewarmMessages } from './llm/prewarm'
-import { listModels as listLocalModels, LOCAL_MODELS } from './llm/local-models'
+import { listModels as listLocalModels, bestModelForMachine, isDownloaded as localModelDownloaded } from './llm/local-models'
 import { ensureLocalModel, localModelDownloadState, shouldFetchWeights } from './llm/local-model-download'
 import { createScreenPreprocess, type ScreenPreprocess } from './screen-preprocess'
 import { startForegroundWatcher } from './foreground-watcher'
@@ -139,6 +150,7 @@ import {
 } from './screen-capture'
 import {
   enqueueIngest,
+  exciseDeletedMeeting,
   markBrainChanged,
   requestBackfill,
   requestSourceRefresh,
@@ -214,7 +226,10 @@ import {
   parakeetAddonError
 } from './parakeet'
 import { appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
-import { resetLanguageFollow as resetImportLanguageFollow, whisperImportTranscribe } from './whisper-import'
+import { resetLanguageFollow as resetImportLanguageFollow, whisperImportTranscribe, stopWhisperHost } from './whisper-import'
+import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine } from './polish'
+import { detectLanguage as detectTextLanguage } from '@shared/lang-id'
+import type { TranscriptLine } from '@shared/ipc'
 import { pickAudioFile, consumePickedAudio } from './import-audio'
 import { ImportJobManager, type ImportJob } from './import-jobs'
 import { EncryptedImportJobStore } from './import-job-store'
@@ -252,7 +267,7 @@ import {
 } from './recall'
 import { initAutoUpdate, checkForUpdateNow, startUpdateDownload } from './updater'
 import { runSelfTest } from './selftest'
-import { devEnv } from './dev-env'
+import { devEnv, devToolsEnabled } from './dev-env'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { importDustCliSession, refreshDustCliSession } from './dustcli'
 import {
@@ -305,12 +320,14 @@ import {
 } from '@shared/providers'
 import { routeTier } from '@shared/routing'
 import { HedgeRace, HEDGE_DELAY_MS, type HedgeLeg } from './llm/hedge'
+import { ThinkStripper } from './llm/think-strip'
 import { redactSecrets } from '@shared/redact'
 import { isSafeAccelerator } from '@shared/accelerator'
 import { formatResetPhrase } from '@shared/reset-time'
 import { applySpeakerNames } from '@shared/transcript-align'
 import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
 import { importEmbeddedCaheKey, seedCaheLocalAiForBackgroundScreen } from './cahe-embedded-key'
+import { importEmbeddedCloudflareKey } from './embedded-cloudflare-key'
 
 /**
  * Builds the `refreshDustAuth` callback a Dust-routed stream/recap call hands to createStream — branches
@@ -415,6 +432,12 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding')
 const BAR_WIDTH = 880
 const BAR_HEIGHT = 84 // initial idle height of the slimmer two-row widget; useAutoResize grows it for answers
 const BAR_MIN_HEIGHT = 44 // floor for the resize clamp so the collapsed control mini-pill can shrink fully
+// Ceiling used when telling the Intelligence dashboard what to open clear of. NOT BAR_HEIGHT: that is the
+// initial idle constant (84), while a real collapsed bar measures ~120 once its two rows render, so
+// capping at 84 described a shorter bar than exists and the collision check missed a 23px overlap that
+// was really there. This is the height a COLLAPSED bar can occupy, with margin — high enough to cover the
+// real thing, low enough that an expanded panel (up to ~992) cannot shove the dashboard off-screen.
+const BAR_COLLAPSED_MAX_HEIGHT = 160
 const PILL_WIDTH = 220 // narrow width for the collapsed control mini-pill (so it isn't a wide click-trap)
 
 /** Content protection hides the window from screen capture. Disable via env for dev/screenshots ONLY —
@@ -448,6 +471,12 @@ let audioArmed = false // loopback capture only granted during an explicit user-
 let listeningActive = false
 let lastPlainAskAt = 0 // 0 = no live follow-up window; the next plain ask always starts clean
 let lastBarHeight = BAR_HEIGHT // remember the bar's content height to restore on settings exit
+// The top edge the USER last put the window at (drag, hotkey move, display reanchor). resizeTo slides the
+// window up when a growing panel would run off the bottom, but that slide used to be permanent: it wrote
+// the raised y back as the new position, and shrinking never undid it. One long answer therefore walked a
+// bar parked near the bottom all the way to the top of the screen, 24px at a time, and it stayed there.
+// Keeping the anchor separate lets the slide be temporary — up to fit, back down when the content shrinks.
+let userAnchorY: number | null = null
 let currentWidth = BAR_WIDTH // window width; narrows to PILL_WIDTH while collapsed to the control mini-pill
 // True while collapsed to the control mini-pill. Guards lastBarHeight below: the pill's own (much shorter)
 // content height must never overwrite the remembered full-bar height, or expanding back out would apply
@@ -659,7 +688,10 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
       }
     }
     if (ffmpegDecoders.size) throw new Error('Another audio decoder is already active.')
-    const decoder = startFfmpegDecode(ffmpeg, job.sourcePath, job.cursor, {
+    // vad-v1 jobs: cursor counts WINDOWS (phase 2); a resume re-decodes the whole file (seconds of
+    // ffmpeg) and the deterministic re-segmentation + window cursor skip the already-transcribed part.
+    const skipThrough = job.pipeline === 'vad-v1' ? 0 : job.cursor
+    const decoder = startFfmpegDecode(ffmpeg, job.sourcePath, skipThrough, {
       onChunk: async (seq, samples) => {
         await importJobs?.acceptDecodedChunk(job.jobId, seq, 0, samples)
       },
@@ -710,6 +742,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
+      devTools: DEVTOOLS_ENABLED,
       backgroundThrottling: false,
       webSecurity: true
     }
@@ -762,6 +795,143 @@ function importedTranscriptText(lines: ImportJob['lines']): string {
   return lines.map((line) => `SPEAKER: ${line.text}`).join('\n')
 }
 
+/** Text-side language name for one probe window's Parakeet decode, or null when inconclusive. */
+function detectImportLanguage(text: string): string | null {
+  return detectTextLanguage(text).lang ?? null
+}
+
+/**
+ * MQA-235: the Plaud-style polish pass over a finished import's lines — stutter/punctuation cleanup,
+ * never a paraphrase, per-line, order-preserving (src/main/polish.ts owns the prompt + strict parsing).
+ *
+ * Redaction rule, decided not defaulted: with `redactSensitive` ON, a cloud polish would ship the raw
+ * transcript off-device, and redacting first would write REDACTED text into the saved transcript (the
+ * polish output replaces the lines — unlike the recap, which only derives from them). So under
+ * redaction the pass runs on-device or not at all. Fail-open everywhere: any fault keeps the raw lines.
+ */
+async function runImportPolish(lines: TranscriptLine[]): Promise<TranscriptLine[]> {
+  const settings = getSettings()
+  const allowed = getAllowedProviders()
+  const localReady =
+    localEligibleFor({ mode: 'summary' }, settings, 'base', allowed) ||
+    localFallbackEligibleFor({ mode: 'summary' }, settings, 'base', allowed)
+  const cloudReady =
+    (!allowed || allowed.includes(settings.provider)) &&
+    (PROVIDERS[settings.provider]?.kind === 'cli'
+      ? !!settings.cliConnected[settings.provider]
+      : getApiKey(settings.provider).length > 0) &&
+    (!requiresUserBaseUrl(settings.provider) || !!providerBaseUrl(settings.provider, settings))
+  const candidates: ProviderId[] = settings.redactSensitive
+    ? localReady
+      ? (['local'] as ProviderId[])
+      : []
+    : [
+        ...(cloudReady ? [settings.provider] : []),
+        ...(localReady ? (['local'] as ProviderId[]) : [])
+      ]
+  if (!candidates.length) return lines
+
+  const out = [...lines]
+  const asPolish = (l: TranscriptLine): PolishLine => ({
+    speaker: l.name || l.speaker,
+    t: new Date(l.t).toISOString().slice(11, 19),
+    text: l.text
+  })
+  // polishBatches slices are contiguous and ordered — track the running offset directly.
+  let offset = 0
+  // MQA-239: the org's known people/account names, so the polish can correct near-miss transcriptions
+  // ("Coer" -> "Cohere") — the decode-time alternative was spiked and rejected (it splices names into
+  // unrelated speech; see polish.ts). Capped small on purpose: a kitchen-sink list dilutes the rule.
+  const entityNames = (() => {
+    try {
+      const s2 = getSettings()
+      const people = listBrainEntities(s2, 'person').map((slug) => readBrainPerson(s2, slug)?.name)
+      const accounts = listBrainEntities(s2, 'account').map((slug) => readBrainAccount(s2, slug)?.name)
+      return Array.from(new Set([...people, ...accounts].filter((n): n is string => !!n))).slice(0, 60)
+    } catch {
+      return []
+    }
+  })()
+  // Batches of 8, not the module default 24: live runs showed a 24-line French batch's JSON answer
+  // (3000+ chars) frequently arrives truncated/malformed, and strict parsing rightly rejects it.
+  // Short outputs parse; a batch that still fails is split in half and each half retried once, and
+  // ONLY the finally-unparseable slice keeps its raw lines — one bad batch no longer costs the meeting.
+  const polishOne = async (batch: PolishLine[]): Promise<string[] | null> => {
+    const prompt = buildPolishPrompt(batch, entityNames)
+    for (const provider of candidates) {
+      const def = PROVIDERS[provider]
+      const local = provider === 'local'
+      const model = local
+        ? settings.localLlm.modelId
+        : applyInteractiveGuardrail(
+            provider,
+            'base',
+            resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'base', settings.providerModelsDeep) || def.defaultModel
+          )
+      try {
+        const raw = await new Promise<string>((resolvePolish, rejectPolish) => {
+          let text = ''
+          createStream({
+            providerId: provider,
+            kind: def.kind,
+            apiKey: local ? '' : getApiKey(provider),
+            baseURL: local ? undefined : providerBaseUrl(provider, settings),
+            workspaceId: settings.dustWorkspaceId,
+            model,
+            temperature: 0,
+            idleMs: 120_000,
+            freshConversation: true,
+            system:
+              'You clean up raw speech-to-text transcript lines. Follow the instructions in the user message exactly and output only the JSON array.',
+            // mode 'answer', deliberately: 'summary' makes userText() build a summarize-the-transcript
+            // scaffold and DISCARD the prompt — both candidates answered an empty summary request
+            // (cloudflare: "[", local: '["Summarize it as instructed."]'). 'answer' passes the prompt
+            // through verbatim, which is the whole job here.
+            req: { id: `import-polish-${Date.now()}`, mode: 'answer', prompt, history: [] },
+            handlers: {
+              onDelta: (delta) => {
+                text += delta
+              },
+              onDone: () => resolvePolish(text),
+              onError: (error) => rejectPolish(new Error(String(error)))
+            }
+          })
+        })
+        const cleaned = parsePolishResponse(raw, batch.length)
+        if (cleaned) return cleaned
+        mainLog.warn(`[polish] ${provider} answered but the response did not parse (len ${raw.length}): ${raw.slice(0, 160)}`)
+      } catch (e) {
+        mainLog.warn(`[polish] ${provider} failed: ${e instanceof Error ? e.message : String(e)}`)
+      }
+    }
+    return null
+  }
+  const applyCleaned = (cleaned: string[], at: number, count: number): void => {
+    for (let i = 0; i < count; i++) {
+      const next = cleaned[i]?.trim()
+      if (next) out[at + i] = { ...out[at + i], text: next }
+    }
+  }
+  for (const batch of polishBatches(lines.map(asPolish), 8)) {
+    const cleaned = await polishOne(batch)
+    if (cleaned) {
+      applyCleaned(cleaned, offset, batch.length)
+    } else if (batch.length > 1) {
+      const mid = Math.ceil(batch.length / 2)
+      const first = await polishOne(batch.slice(0, mid))
+      if (first) applyCleaned(first, offset, mid)
+      const second = await polishOne(batch.slice(mid))
+      if (second) applyCleaned(second, offset + mid, batch.length - mid)
+      if (!first || !second) mainLog.warn('[polish] a split batch still failed — its lines stay raw')
+    } else {
+      mainLog.warn('[polish] single-line batch unparseable — line stays raw')
+    }
+    offset += batch.length
+  }
+  auditLog('transcript.imported', { polished: true, lines: out.length })
+  return out
+}
+
 async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
   const settings = getSettings()
   const allowed = getAllowedProviders()
@@ -793,6 +963,12 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
     if (provider === 'local') return localSummaryReady || localFallbackReady
     if (def.kind === 'cli') return !!settings.cliConnected[provider]
     if (!getApiKey(provider)) return false
+    // MQA-215: same rule as pickFailover and the brain-ingest walk. A provider whose endpoint the USER
+    // supplies (Custom, and Cloudflare's operator-deployed Worker) is not a candidate until it has one.
+    // Cloudflare ships a default model, so a stored METIS_PROXY_KEY alone would otherwise leave it in
+    // this waterfall as the LAST cloud candidate, and streamOpenAI's own guard message would become the
+    // lastError an import that failed for unrelated reasons reports back to the user.
+    if (requiresUserBaseUrl(provider) && !providerBaseUrl(provider, settings)) return false
     if (provider === 'dust' && !settings.dustWorkspaceId) return false
     return !!resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think', settings.providerModelsDeep)
   })
@@ -831,7 +1007,9 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
           freshConversation: true,
           system:
             buildSystem(req, personaMode, settings.profile, settings.modePrompts, settings.contextDocs[personaMode] || [], settings.outputLanguage, settings.summaryLanguage, settings.systemPrompt) +
-            '\n\nThis is an imported recording with no speaker diarization. Do not attribute statements to YOU or THEM.',
+            (job.lines.some((l) => l.name)
+              ? '\n\nThis is an imported recording. Lines carry on-device voice-matched speaker labels (e.g. "Speaker 1" or an enrolled name) — attribute statements to those labels, never to YOU or THEM.'
+              : '\n\nThis is an imported recording with no speaker diarization. Do not attribute statements to YOU or THEM.'),
           req,
           handlers: {
             onDelta: (delta) => {
@@ -873,9 +1051,12 @@ function initializeImportJobs(): void {
       // One reset per job, at decode start — a new import must never inherit the previous one's
       // converged language (same reasoning as the live worker's session-start resetFollow).
       resetImportLanguageFollow(getSettings().asrLanguage)
+      // MQA-235: fresh diarization session per recording — cluster labels ("Speaker 1") are meeting-
+      // scoped, never carried across imports.
+      getSpeakerId().resetSession()
       return startImportDecoder(job)
     },
-    transcribe: async (samples) => {
+    transcribe: async (samples, opts) => {
       const engine = getSettings().asrEngine
       if (engine === 'parakeet') {
         await ensureParakeetModel()
@@ -892,7 +1073,12 @@ function initializeImportJobs(): void {
         // decode of that same first window, before whisper-base's own unreliable per-window auto-detect
         // gets a chance to hallucinate a wrong one. Wired here rather than inside whisper-import.ts so
         // that module stays decoupled from parakeet.ts — a plain callback, easy to fake in tests.
-        return await whisperImportTranscribe(samples, getSettings().asrLanguage, async (probeSamples) => {
+        // MQA-235: the manager's whole-recording majority vote outranks both the per-window guess and
+        // the single window-0 probe (a greeting in the other language mis-pinned a whole meeting on
+        // 2026-08-05). The user's explicit Settings pin still outranks the vote.
+        const userPin = getSettings().asrLanguage
+        const language = userPin !== 'auto' ? userPin : (opts?.language ?? 'auto')
+        return await whisperImportTranscribe(samples, language, async (probeSamples) => {
           await ensureParakeetModel()
           return parakeetTranscribe(probeSamples)
         })
@@ -907,6 +1093,26 @@ function initializeImportJobs(): void {
         return parakeetTranscribe(samples)
       }
     },
+    // MQA-235: one language-ID vote sample — Parakeet decodes the window (language-agnostic), text-side
+    // lang-id classifies it. Same signal probeLanguage uses, but the manager votes across windows spread
+    // over the whole recording instead of trusting window 0.
+    probeLanguageName: async (samples) => {
+      try {
+        await ensureParakeetModel()
+        const text = await parakeetTranscribe(samples)
+        if (text.trim().split(/\s+/).filter(Boolean).length < 4) return null
+        return detectImportLanguage(text)
+      } catch {
+        return null
+      }
+    },
+    // MQA-235: diarize one utterance window — enrolled profile name or session cluster label. Same
+    // CAM++ extractor the live path uses; a fresh session is reset per job in `decode` above.
+    speakerFor: async (samples) => getSpeakerId().labelWindow(samples)?.name ?? null,
+    finalizeSpeakers: () => getSpeakerId().finalizeSession(),
+    polish: (lines) => runImportPolish(lines),
+    // Free the whisper helper's model memory between imports; the next job spawns a fresh child.
+    onIdle: () => stopWhisperHost(),
     saveMeeting: (meeting) => saveMeeting(getSettings(), meeting),
     deleteMeeting,
     enqueueIngest,
@@ -1043,9 +1249,10 @@ function publicSettings(): PublicSettings {
   const localSuggestReady = localReady && s.localLlm.useFor.suggest
   const localSummaryReady = localReady && s.localLlm.useFor.summary
   const localVisionReady = localReady && s.localLlm.useFor.vision
-  // "Local as safety net" is live: with zero cloud/CLI configured, in-scope asks and meeting indexing
-  // still run on-device (askStart's fallback seams + brain/ingest.ts's last-resort candidate). Surfaced
-  // so renderer readiness gates (index CTA, screen-ask) match what routing will actually do.
+  // "Local as safety net" is live: with zero cloud/CLI configured, meeting indexing and — through the
+  // absolute floor — asks of ANY mode still run on-device (askStart's fallback seams + brain/ingest.ts's
+  // last-resort candidate). Surfaced so renderer readiness gates match what routing will actually do:
+  // this one flag is what tells the renderer not to demand an API key it does not need (MQA-242).
   const localFallbackReady = localReady && s.localLlm.fallback
   return {
     ...s,
@@ -1170,6 +1377,7 @@ function createWindow(): void {
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
+      devTools: DEVTOOLS_ENABLED,
       backgroundThrottling: false,
       webSecurity: true
     }
@@ -1322,9 +1530,12 @@ function resizeTo(height: number): void {
     return // idempotent — skip a no-op setBounds (belt-and-braces with the renderer-side resize dedup)
   }
   if (!isMinimized) lastBarHeight = h
-  // Keep the panel fully on-screen; if it would grow below the work area, slide it up.
+  // Keep the panel fully on-screen; if it would grow below the work area, slide it up — TEMPORARILY.
+  // Measured against the user's own anchor rather than the current (possibly already-slid) top edge, so
+  // the window returns to where they put it once the content shrinks again.
   const maxY = workArea.y + workArea.height - h - 8
-  const y = Math.min(b.y, maxY)
+  const anchor = userAnchorY ?? b.y
+  const y = Math.max(workArea.y + 8, Math.min(anchor, maxY))
   // When the width changes (collapse to / expand from the mini-pill), recenter around the old midpoint
   // so the overlay stays put; otherwise keep the left edge. Clamp x into the work area either way.
   let x = currentWidth === b.width ? b.x : Math.round(b.x + (b.width - currentWidth) / 2)
@@ -1753,7 +1964,9 @@ function moveBy(dx: number, dy: number): void {
   // to stick a drag pinned to that display's edge, since the matched display never changed until the
   // window had already fully crossed onto it — which the clamp itself was preventing.
   if (isReachable(x, y, b.width, b.height)) {
-    w.setBounds(refitToDisplay({ ...b, x, y }, fromDisplayId))
+    const next = refitToDisplay({ ...b, x, y }, fromDisplayId)
+    userAnchorY = next.y // a deliberate move re-arms the anchor resizeTo slides against
+    w.setBounds(next)
     return
   }
   // Unreachable (flung past every display): pull back onto the display nearest the ATTEMPTED position,
@@ -1761,7 +1974,9 @@ function moveBy(dx: number, dy: number): void {
   const { workArea } = screen.getDisplayMatching({ x, y, width: b.width, height: b.height })
   const cx = clampAxisMargin(x, b.width, workArea.x, workArea.width, DRAG_VISIBLE_MARGIN)
   const cy = clampAxisMargin(y, b.height, workArea.y, workArea.height, DRAG_VISIBLE_MARGIN)
-  w.setBounds(refitToDisplay({ ...b, x: cx, y: cy }, fromDisplayId))
+  const pulled = refitToDisplay({ ...b, x: cx, y: cy }, fromDisplayId)
+  userAnchorY = pulled.y
+  w.setBounds(pulled)
 }
 
 /**
@@ -2901,7 +3116,8 @@ function registerIpc(): void {
   ipcMain.handle(IPC.authSignIn, async (e) => {
     assertMainWindow(e)
     const status = await authSignIn()
-    prewarmCapture() // warm the cold capture pipeline now that we're signed in (no-op if not authed)
+    // MQA-236: no prewarmCapture() here anymore — it takes a REAL frame, and signing in is not screen
+    // intent. The warm rides hovering the Capture button (Bar.tsx), the moment intent is signalled.
     prewarmCli() // warm the CLI binary cache so the first CLI ask doesn't stall on a login-shell lookup
     refreshScreenPreprocess() // start background screen pre-analysis if eligible now that we're signed in
     return status
@@ -2964,6 +3180,68 @@ function registerIpc(): void {
   // Recall delete: GDPR right-to-erasure for a saved meeting — removes the file + its index row.
   // Confirmed with a native, unmissable modal BEFORE deleting (sync — blocks until the user answers) so a
   // single click is unambiguous: no "did that register?" two-click pattern that's easy to misread as broken.
+  // Support diagnosability: nothing in this app uploads anywhere by design (crashReporter
+  // uploadToServer:false, zero telemetry), so the ONLY way the log trail reaches support is the user
+  // exporting it. Copies logs/ (main + audit + rotated audit generations), crash-*.log dumps, and the
+  // boot sentinel into a user-chosen folder, plus a MANIFEST naming the app version and every file
+  // copied. Deliberately NEVER copies meetings, .brain/, wiki/, or settings.json — diagnostics must not
+  // become an accidental data-exfiltration path for content.
+  ipcMain.handle(IPC.diagnosticsExport, async (e): Promise<DiagnosticsExportResult> => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    try {
+      const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
+      const dialogOpts = {
+        title: 'Export diagnostics bundle',
+        defaultPath: join(app.getPath('downloads'), `Metis-diagnostics-${stamp}`),
+        buttonLabel: 'Export here'
+      }
+      const res = win ? await dialog.showSaveDialog(win, dialogOpts) : await dialog.showSaveDialog(dialogOpts)
+      if (res.canceled || !res.filePath) return { ok: false, cancelled: true }
+      const dest = res.filePath
+      mkdirSync(dest, { recursive: true })
+      const userData = app.getPath('userData')
+      const copied: string[] = []
+      const copy = (src: string, name: string): void => {
+        try {
+          copyFileSync(src, join(dest, name))
+          copied.push(name)
+        } catch {
+          /* a locked/absent file is skipped, and the manifest shows exactly what made it */
+        }
+      }
+      const logsDir = join(userData, 'logs')
+      if (existsSync(logsDir)) {
+        for (const f of readdirSync(logsDir)) {
+          if (/\.log$/.test(f)) copy(join(logsDir, f), f)
+        }
+      }
+      for (const f of readdirSync(userData)) {
+        if (/^crash-.*\.log$/.test(f)) copy(join(userData, f), f)
+      }
+      const sentinel = join(userData, 'boot-incomplete.json')
+      if (existsSync(sentinel)) copy(sentinel, 'boot-incomplete.json')
+      const manifest = [
+        `Métis diagnostics bundle`,
+        `exported: ${new Date().toISOString()}`,
+        `version: ${app.getVersion()}`,
+        `platform: ${process.platform} ${process.arch}`,
+        `packaged: ${app.isPackaged}`,
+        ``,
+        `files (${copied.length}):`,
+        ...copied.map((f) => `  ${f}`),
+        ``,
+        `Deliberately NOT included: meeting transcripts, the .brain/ knowledge store, the wiki mirror,`,
+        `and settings.json — this bundle is for diagnosing the app, never for moving content.`
+      ].join('\n')
+      writeFileSync(join(dest, 'MANIFEST.txt'), manifest, 'utf8')
+      auditLog('diagnostics.export', { files: copied.length })
+      return { ok: true, path: dest, files: copied.length }
+    } catch {
+      return { ok: false, error: 'Could not export the diagnostics bundle.' }
+    }
+  })
+
   ipcMain.handle(IPC.recallDelete, async (e, file: unknown, title: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
@@ -2973,7 +3251,7 @@ function registerIpc(): void {
       type: 'warning' as const,
       title: 'Delete meeting',
       message: `Delete "${label}"?`,
-      detail: 'This removes the saved transcript and notes from disk. This cannot be undone.',
+      detail: 'This removes the saved transcript, its notes, and its extracted knowledge from this device. This cannot be undone.',
       buttons: ['Delete', 'Cancel'],
       defaultId: 1,
       cancelId: 1
@@ -2991,6 +3269,18 @@ function registerIpc(): void {
         const detail = error instanceof Error ? error.message : String(error)
         mainLog.warn(`[publish] could not remove the note card for a deleted meeting: ${detail}`)
       })
+      // MQA-230: the deleted meeting's own extraction JSON + ledger row need no provider to remove —
+      // erase them NOW rather than leaving them to the refresh below, which no-ops while no provider is
+      // usable. Best-effort like the card removal above: a locked file must not fail the delete the user
+      // already confirmed, but it is logged so the residue is never silent.
+      await exciseDeletedMeeting(getSettings(), safeName)
+        .then(({ gone }) => {
+          if (!gone) mainLog.warn(`[brain] extraction for a deleted meeting could not be removed: ${safeName}`)
+        })
+        .catch((error) => {
+          const detail = error instanceof Error ? error.message : String(error)
+          mainLog.warn(`[brain] excise failed for a deleted meeting: ${detail}`)
+        })
       await requestSourceRefresh(getSettings())
     }
     return result
@@ -3428,6 +3718,28 @@ function registerIpc(): void {
     const providerVisionOk = (p: ProviderId): boolean =>
       p === 'dust' ? dustSelectedAgentVision(s.providerModels['dust']) : PROVIDERS[p].vision
 
+    // MQA-228: the "can't read screenshots" advice must name a provider the user is actually ALLOWED to
+    // switch to. The static "Switch to Claude or GPT" wording sent org-policy users at providers the
+    // allowlist blocks — following the advice dead-ended on the approved-provider-list error. Prefer a
+    // target that is already keyed/CLI-connected (immediately actionable), else any allowed vision-capable
+    // provider; when the policy leaves none at all, say THAT instead of advising an impossible switch.
+    // 'local' is excluded as a switch target: when it was eligible, the fallback path already answered
+    // before this message could surface, so naming it here would always be advice that just failed.
+    const visionSwitchAdvice = (blocked: ProviderId): string => {
+      const candidates = (Object.keys(PROVIDERS) as ProviderId[]).filter(
+        (p) => p !== blocked && p !== 'local' && providerVisionOk(p) && (!allowed || allowed.includes(p))
+      )
+      const ready = candidates.find((p) =>
+        PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0
+      )
+      const target = ready ?? candidates[0]
+      if (target)
+        return `Switch to ${PROVIDERS[target].label} in Settings, or ask without a screen capture.`
+      return allowed
+        ? "Your organization's approved providers can't read screenshots — ask without a screen capture."
+        : 'Ask without a screen capture.'
+    }
+
     // Pick the next eligible keyed provider not yet tried — the waterfall target when the primary (e.g.
     // Dust) can't answer. Pure (no side effect) so the retry gate can cheaply ask "is there anywhere to
     // fall over to?" before deciding how long to keep retrying a dead primary.
@@ -3640,7 +3952,7 @@ function registerIpc(): void {
                   def.kind !== 'cli' && requiresUserBaseUrl(provider) && !baseURL
                   ? `No endpoint URL set for ${def.label}. Open Settings → Advanced and add it.`
                   : req.mode === 'vision' && !providerVisionOk(provider)
-                    ? `${def.label} can't read screenshots. Switch to Claude or GPT in Settings, or ask without a screen capture.`
+                    ? `${def.label} can't read screenshots. ${visionSwitchAdvice(provider)}`
                     : provider === 'dust' && !s.dustWorkspaceId
                       ? 'Add your Dust workspace ID in Settings → AI → Dust setup.'
                       : ''
@@ -3669,6 +3981,27 @@ function registerIpc(): void {
             localFallbackEligibleFor(req, s, tier, allowed)
           ) {
             attempt('local', attempted.concat(provider), 0, race)
+            return
+          }
+          // Out-of-scope modes (answer, recap) used to stop right here and surface "No API key for X.
+          // Open Settings (gear) and add it." — even with a provisioned on-device model and the safety
+          // net on. That is the single most common thing anyone asks Métis (type a question), so a user
+          // who had deliberately turned the local model ON and added no key was told the app could not
+          // answer, while the model that could sat idle on their disk. The absolute floor
+          // (localAnswerFloorEligibleFor) exists precisely for this case and attempt()'s own eligibility
+          // chain above already accepts it — only this seam never offered it.
+          //
+          // Routed through failover() rather than jumping straight to 'local' so the floor keeps its
+          // rank: pickFailover places it DEAD LAST, after every keyed provider and even a cooling one,
+          // so a user whose ACTIVE provider is merely misconfigured still gets their other key (or the
+          // actionable setup error), not a silently weaker on-device answer. Gated on the floor being
+          // genuinely available so an install without local behaves exactly as it did before.
+          if (
+            provider !== 'local' &&
+            allowCrossProviderFailover(req) &&
+            localAnswerFloorEligibleFor(req, s, allowed) &&
+            failover(attempted.concat(provider), undefined, race)
+          ) {
             return
           }
           if (!race || race.gate.markDead(race.leg) === 'surface') {
@@ -3730,6 +4063,35 @@ function registerIpc(): void {
       const startedAt = Date.now()
       let gotToken = false
       let ttftMs: number | undefined
+      // Strips a reasoning model's inline <think>…</think> out of the answer stream (llm/think-strip.ts).
+      // One per attempt: each leg/retry is its own stream, and the stripper carries position state.
+      // Sitting here rather than in a provider strategy is the point — every provider funnels through
+      // this one onDelta, so the guarantee holds for cloud, CLI, Dust, a custom endpoint and on-device
+      // alike, instead of being re-implemented per strategy and drifting.
+      const think = new ThinkStripper()
+      // Every visible token goes through here. `gotToken` deliberately tracks VISIBLE output, not raw
+      // deltas: a model part-way through a think block has not answered yet, so it must not win the
+      // hedge race, stop the MQA-020 empty-answer failover, or report a TTFT it hasn't earned. The
+      // provider's own stall watchdog still sees the raw deltas, so a long think can't trip a timeout.
+      const paint = (text: string): void => {
+        if (!text) return
+        if (!gotToken) {
+          ttftMs = Date.now() - startedAt
+          // Tokens are flowing, so these credentials demonstrably work — clear any prior auth
+          // verdict (MQA-003/MQA-004) rather than leaving a stale "broken" mark on a live provider.
+          recordSuccess(provider)
+          // F3 hedge: this leg's first token is its bid to win — aborts whatever the other leg is doing.
+          if (race) {
+            race.gate.declareWinner(race.leg)
+            // Re-assert WHO actually answered. Both legs announce themselves when they start, so if
+            // the backup started second and the primary then won, the UI's last streamMeta named the
+            // loser — the answer would be attributed to a provider that produced none of it.
+            win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier, usedScreen: screenGrounded })
+          }
+        }
+        gotToken = true
+        win?.webContents.send(IPC.streamDelta, { id: req.id, text })
+      }
       const handle = createStream({
         providerId: provider,
         kind: def.kind,
@@ -3754,25 +4116,15 @@ function registerIpc(): void {
             // F3 hedge: a leg that already lost the race is aborted, but a chunk already in flight when
             // abort() fires can still reach here once — swallow it rather than let two legs both paint.
             if (race && race.gate.isLoser(race.leg)) return
-            if (!gotToken) {
-              ttftMs = Date.now() - startedAt
-              // Tokens are flowing, so these credentials demonstrably work — clear any prior auth
-              // verdict (MQA-003/MQA-004) rather than leaving a stale "broken" mark on a live provider.
-              recordSuccess(provider)
-              // F3 hedge: this leg's first token is its bid to win — aborts whatever the other leg is doing.
-              if (race) {
-                race.gate.declareWinner(race.leg)
-                // Re-assert WHO actually answered. Both legs announce themselves when they start, so if
-                // the backup started second and the primary then won, the UI's last streamMeta named the
-                // loser — the answer would be attributed to a provider that produced none of it.
-                win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier, usedScreen: screenGrounded })
-              }
-            }
-            gotToken = true
-            win?.webContents.send(IPC.streamDelta, { id: req.id, text })
+            paint(think.push(text))
           },
           onDone: (u) => {
             if (race && race.gate.isLoser(race.leg)) return
+            // Release whatever the stripper is still holding: a tail that could have been a partial tag,
+            // or — only when the answer would otherwise be blank — an unterminated think block. Must run
+            // BEFORE the !gotToken check below, or a response that was entirely one unclosed think block
+            // would be judged content-less and fail over despite having something to show.
+            paint(think.flush())
             if (!race) streams.delete(req.id)
             // MQA-020 (belt-and-braces half): a provider that completes with ZERO content deltas has not
             // answered — the user gets a blank bubble and the waterfall stops, because "done" reads as
@@ -4027,10 +4379,21 @@ function registerIpc(): void {
       allowCrossProviderFailover(req)
     if (hedgeEligible) {
       const race = new HedgeRace()
+      // TRUE RACE (Tony's call): ANY cloud/CLI provider — Cloudflare or otherwise — and the on-device
+      // model start TOGETHER and
+      // the fastest answer wins. HEDGE_DELAY_MS exists to stop a merely-slow PAID primary being billed
+      // twice for one ask, but an on-device backup has no per-request cost and no quota, so that head
+      // start would be pure latency whenever the cloud turns out to be the slower of the two. Quality is
+      // preserved because HedgeRace declares the winner on FIRST TOKEN, not on start order — a healthy
+      // cloud provider that answers faster still wins and still serves its answer; local only takes the
+      // ask when it genuinely gets there first, which is the cloud-is-slow / cloud-is-down case.
+      // This early pick decides the DELAY only: startHedgeLeg re-picks the provider at fire time against
+      // the live primaryChain, so a primary that fails over in the meantime is still excluded correctly.
+      const hedgeDelayMs = pickFailover([primary]) === 'local' ? 0 : HEDGE_DELAY_MS
       let hedgeTimer: NodeJS.Timeout | null = setTimeout(() => {
         hedgeTimer = null
         startHedgeLeg()
-      }, HEDGE_DELAY_MS)
+      }, hedgeDelayMs)
       // ONE launcher behind both triggers: the HEDGE_DELAY_MS timer (a primary that is merely slow) and
       // HedgeRace's own early pull-forward (a primary already dead — nothing left to give it time for).
       // race.markHedgeStarted() makes whichever fires second a no-op.
@@ -4126,7 +4489,22 @@ function registerIpc(): void {
   ipcMain.handle(IPC.brainOpenDashboard, (e) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
-    const result = openIntelligenceWindow()
+    // Hand the overlay's live bounds over so the dashboard opens clear of it. The bar is always-on-top,
+    // so anywhere the two intersect the dashboard is the one that gets covered (measured: the bar hid its
+    // top 23px across the full width). Undefined when the overlay is gone — placement then just centres.
+    // Height is capped deliberately, NOT taken live. The renderer collapses the panel only
+    // after this IPC resolves (RecallView/BrainView call onDashboardOpen in the .then), so sampling the
+    // live bounds here measured the still-EXPANDED bar — up to ~992px tall — and placed the dashboard
+    // below that, i.e. off the bottom of the screen. Placing against the idle rectangle the bar is about
+    // to return to is deterministic and does not depend on a React render landing first.
+    const avoid =
+      win && !win.isDestroyed() && win.isVisible()
+        ? (() => {
+            const b = win.getBounds()
+            return { ...b, height: Math.min(b.height, BAR_COLLAPSED_MAX_HEIGHT) }
+          })()
+        : undefined
+    const result = openIntelligenceWindow(avoid)
     // Opening the full dashboard is an explicit request for current meeting knowledge. Kick off one
     // backlog pass for saved transcripts that predate the brain; new saves already call enqueueIngest.
     // This is deliberately fire-and-forget so a slow OneDrive listing never delays the window itself.
@@ -4173,7 +4551,11 @@ function registerIpc(): void {
       ...(failure.topError ? { topError: failure.topError } : {}),
       // MI-2.5 review round 3: computed fresh from the on-disk sentinel each poll — lets BrainView offer
       // the in-app "Reset corrections lock" recovery instead of a hand-deleted hidden .brain file.
-      corruptionBlocked: isJournalCorruptionBlocked(s)
+      corruptionBlocked: isJournalCorruptionBlocked(s),
+      // MQA-230: entity files can still hold items attributed to an already-deleted meeting until the
+      // deferred source refresh runs (it needs a usable provider). Surfaced so the UI can say the
+      // cleanup is pending instead of silently claiming the delete was complete.
+      cleanupPending: idx.sourceRefreshRequested === true
     }
   })
   ipcMain.handle(IPC.brainBackfill, (e) => {
@@ -4593,7 +4975,7 @@ function registerIpc(): void {
     const html = recapMarkdownToHtml(md, input?.title)
     const pdfWin = new BrowserWindow({
       show: false,
-      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true }
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, devTools: DEVTOOLS_ENABLED, webSecurity: true }
     })
     try {
       await pdfWin.loadURL('data:text/html;charset=UTF-8,' + encodeURIComponent(html))
@@ -4922,6 +5304,10 @@ if (!app.requestSingleInstanceLock()) {
   // Cahê M13: one-time enable of the on-device model so the background screen reader works out of the box
   // (own marker → also migrates existing pilot profiles upgraded from 1.0.7). See cahe-embedded-key.ts.
   seedCaheLocalAiForBackgroundScreen()
+  // Every build (not just Cahê): seed an optional installer-embedded Cloudflare proxy key, once per
+  // profile, so a fresh install of the default provider can answer with zero paste-a-key setup when the
+  // operator chose to embed one. See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
+  importEmbeddedCloudflareKey()
   // Métis Local weights are no longer bundled in the installer (~728 MB; a universal mac package
   // carrying them would blow past GitHub's 2 GB release-asset limit), so fetch them once here on first
   // run. Deliberately NOT awaited: this is a ~763 MB download and startup must not wait on it, nor fail
@@ -4936,10 +5322,54 @@ if (!app.requestSingleInstanceLock()) {
   // background screen reader does: its eligibility is evaluated when the engine is refreshed, and the boot
   // refresh below runs while this download is still in flight — without this re-arm, a first-run user who
   // opted in gets an inert fast path until some unrelated setting changes (MQA-178).
-  if (shouldFetchWeights(LOCAL_MODELS[0].id, getSettings().localLlm.enabled)) {
-    void ensureLocalModel(LOCAL_MODELS[0].id)
-      .then(() => refreshScreenPreprocess())
-      .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
+  // Pick by hardware, not by list position: bestModelForMachine() returns the strongest entry whose RAM
+  // floor this machine clears. A profile still holding the SMALL floor model is upgraded here rather than
+  // left behind — when that id was persisted it was the only model that existed, so it was never a user
+  // choice to respect. An explicit pick of any other id is left alone. The upgrade only rewrites the
+  // setting; ensureLocalModel then fetches whatever is missing, and a machine below the bigger model's
+  // floor simply resolves back to the small one.
+  {
+    const best = bestModelForMachine()
+    const current = getSettings().localLlm.modelId
+    if (current !== best.id && current === 'qwen3.5-0.8b') {
+      try {
+        setSettings({ localLlm: { ...getSettings().localLlm, modelId: best.id } })
+        mainLog.info(`[boot] upgraded the on-device model to ${best.id}`)
+      } catch (e) {
+        mainLog.warn('[boot] on-device model upgrade failed:', e)
+      }
+    }
+    // Warm the sidecar so the first ask is never the cold one — measured 42s cold against ~2.3s warm.
+    // Gated on the weights actually being PRESENT: on a fresh install they are still downloading (~3.4 GB,
+    // in the background, right through onboarding), and warming then would fight that transfer for I/O to
+    // load a model that is not there yet. So there are two triggers and one guard: warm shortly after boot
+    // when the model is already on disk, and warm off the back of the fetch when it has just landed.
+    // Fire-and-forget either way — startup never waits on it, and localPrewarmEligible re-checks
+    // enabled/allowlist/hedge. spawnProfileFor already sizes the sidecar for this machine's RAM, so on a
+    // small machine this warms the CPU-only ~2.1 GB configuration rather than the offloaded one.
+    const warmLocalIfReady = (): void => {
+      try {
+        const cur = getSettings()
+        if (!localModelDownloaded(cur.localLlm.modelId)) return
+        if (!localPrewarmEligible(cur, getAllowedProviders(), publicSettings().providerReady)) return
+        void prewarmLocal(cur.localLlm.modelId, buildPrewarmMessages('warm', cur)).catch((e) =>
+          mainLog.warn('[boot] local prewarm failed:', e instanceof Error ? e.message : String(e))
+        )
+      } catch (e) {
+        mainLog.warn('[boot] local prewarm skipped:', e instanceof Error ? e.message : String(e))
+      }
+    }
+    if (shouldFetchWeights(best.id, getSettings().localLlm.enabled)) {
+      void ensureLocalModel(best.id)
+        .then(() => {
+          refreshScreenPreprocess()
+          // The weights just landed (first run, mid-onboarding). Warm now rather than leaving the very
+          // first ask to pay the full cold load.
+          warmLocalIfReady()
+        })
+        .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
+    }
+    setTimeout(warmLocalIfReady, 4000).unref?.()
   }
   // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
   // (electron-builder sets it to appId) or Windows silently drops native Notifications — which breaks

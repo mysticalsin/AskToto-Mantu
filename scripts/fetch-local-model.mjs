@@ -1,10 +1,19 @@
 #!/usr/bin/env node
 /**
- * Provision the single model payload that ships inside every Métis installer.
+ * Provision the Métis Local model payload into the build tree.
  *
- * Network access exists only in this build-time script. Installed application code has no model
- * downloader. Set METIS_LOCAL_MODEL_SOURCE_DIR to reuse already-reviewed local files without a network
- * request; CI omits it and downloads the same byte/hash-pinned assets into the build cache.
+ * The weights no longer ship inside the installer. At ~728 MB they dominated the download, and a
+ * universal mac package carrying them would exceed GitHub's 2 GB per-asset release limit, so
+ * electron-builder packages only the Apache licence text (electron-builder.yml) and
+ * src/main/llm/local-model-download.ts fetches the weights once, on first run, into the per-user
+ * profile.
+ *
+ * This script therefore exists for the gate that follows it: check-local-model.mjs re-hashes what
+ * lands here, which is what proves the byte length and SHA-256 pinned in local-model-assets.mjs — the
+ * same pins src/main/llm/local-models.ts hands the first-run downloader — are the real upstream file
+ * and not a typo that would brick every install. Set METIS_LOCAL_MODEL_SOURCE_DIR to reuse
+ * already-reviewed local files without a network request; CI omits it and downloads the same
+ * byte/hash-pinned assets into the build cache.
  */
 import {
   createReadStream,

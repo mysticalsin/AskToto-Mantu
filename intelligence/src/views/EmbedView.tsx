@@ -24,9 +24,13 @@ export function EmbedView({ data }: Props) {
   return (
     <div className="min-h-screen bg-[var(--color-mantu-bg)] p-4">
       {data.meta.is_placeholder && <PlaceholderBanner note={data.meta.note} compact />}
+      <div className="text-xs font-semibold uppercase tracking-wide text-white/50">
+        Coaching insights — Mantu Intelligence
+      </div>
       {top.length === 0 ? (
+        // The embed has no filters — the old "for this filter" copy was borrowed from CoachingView and lied.
         <div className="mt-3 rounded-xl border border-dashed border-white/15 p-10 text-center text-sm text-white/40">
-          No coaching insights for this filter yet.
+          No coaching insights yet — they appear as meetings are ingested.
         </div>
       ) : (
         <motion.div layout className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">

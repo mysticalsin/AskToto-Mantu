@@ -41,7 +41,7 @@ export function StatTile({
         )}
       </div>
       <div className="mt-1 text-xs text-white/50">{label}</div>
-      {hint && <div className="mt-0.5 text-[11px] text-white/30">{hint}</div>}
+      {hint && <div className="mt-0.5 text-[11px] text-white/50">{hint}</div>}
     </motion.div>
   )
 }
@@ -94,7 +94,7 @@ function shortWeekLabel(iso: string): string {
 /** A mini vertical bar chart of meeting counts per week (meetingsPerWeek's buckets). Fixed pixel width,
  *  meant to sit inside an `overflow-x-auto` wrapper rather than stretch/distort. */
 export function WeeklyBars({ buckets }: { buckets: { weekStartISO: string; count: number }[] }) {
-  if (buckets.length === 0) return <div className="text-xs text-white/30">No meetings recorded yet.</div>
+  if (buckets.length === 0) return <div className="text-xs text-white/50">No meetings recorded yet.</div>
 
   const max = Math.max(1, ...buckets.map((b) => b.count))
   const barW = 26
@@ -126,7 +126,7 @@ export function WeeklyBars({ buckets }: { buckets: { weekStartISO: string; count
                 <title>{`Week of ${shortWeekLabel(b.weekStartISO)}: ${b.count} meeting${b.count === 1 ? '' : 's'}`}</title>
               </rect>
               {showLabel && (
-                <text x={x + barW / 2} y={totalH - 4} textAnchor="middle" fontSize="8" fill="rgba(255,255,255,0.35)">
+                <text x={x + barW / 2} y={totalH - 4} textAnchor="middle" fontSize="8" fill="rgba(255,255,255,0.55)">
                   {shortWeekLabel(b.weekStartISO)}
                 </text>
               )}
@@ -149,7 +149,7 @@ export function Sparkline({
   rolling?: { date: string; avg: number }[]
   height?: number
 }) {
-  if (series.length === 0) return <div className="text-xs text-white/30">No sentiment data yet.</div>
+  if (series.length === 0) return <div className="text-xs text-white/50">No sentiment data yet.</div>
 
   const viewW = 600
   const pad = 10
@@ -223,7 +223,7 @@ export function StackedBar({
     <div>
       <div className="mb-1 flex items-center justify-between text-xs text-white/60">
         <span>{title}</span>
-        <span className="text-white/30">{total}</span>
+        <span className="text-white/50">{total}</span>
       </div>
       {total === 0 ? (
         <div className="h-3 rounded-full bg-white/5" />
@@ -240,7 +240,7 @@ export function StackedBar({
         </div>
       )}
       {visible.length > 0 && (
-        <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-white/40">
+        <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-white/55">
           {visible.map((seg) => (
             <span key={seg.key} className="inline-flex items-center gap-1">
               <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: seg.color }} />

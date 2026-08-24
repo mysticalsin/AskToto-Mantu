@@ -7,7 +7,7 @@ A frameless, transparent, always-on-top glass overlay for macOS and Windows.
 
 <img src="docs/media/asktoto-hero.png" alt="Métis overlay — Ask anything bar with a syntax-highlighted answer on frosted purple glass" width="760">
 
-`16 AI providers (incl. Dust)` · `thinking-mode routing` · `on-device transcription` · `knowledge graph` · `encrypted at rest`
+`18 AI providers (incl. Dust)` · `thinking-mode routing` · `on-device transcription` · `knowledge graph` · `encrypted at rest`
 
 Built by **[Tony Walteur](https://www.linkedin.com/in/tonywalteur/)** · Mantu
 
@@ -19,8 +19,8 @@ Built by **[Tony Walteur](https://www.linkedin.com/in/tonywalteur/)** · Mantu
 
 Métis is an **on-device AI meeting copilot**: a frameless, transparent, always-on-top glass overlay
 that floats over every app on macOS and Windows. Look and feel modeled on Cluely, rebuilt from scratch
-with Mantu branding and wired to 16 AI providers (Claude, GPT, Gemini, and more), including Dust as
-the primary "your own agents" brain.
+with Mantu branding and wired to 18 AI providers (Claude, GPT, Gemini, an on-device model, and more),
+including Dust as the primary "your own agents" brain.
 
 Three core actions:
 - **Ask** — type a question, get a streamed answer (rich markdown, code, tables).
@@ -149,7 +149,7 @@ AskToto/
 │   │   └── lib/whisper*      on-device Whisper STT (Web Worker)
 │   └── shared/               cross-process contract
 │       ├── ipc.ts            IPC channels + zod schemas + settings schema
-│       ├── providers.ts      15-provider + custom-endpoint registry + model-tier routing
+│       ├── providers.ts      17-provider + custom-endpoint registry + model-tier routing
 │       ├── routing.ts        thinking-mode router (base / think / deep tiers)
 │       └── prompts.ts        default mode prompts
 ├── intelligence/             Mantu Intelligence dashboard — separate Vite/React app (its own
@@ -178,9 +178,12 @@ native-binary provisioning (sherpa-onnx, ffmpeg), and the roadmap: **[`docs/askt
 
 ## Features
 
-- **16 providers (including Dust).** Claude, GPT, Gemini, NVIDIA, DeepSeek, Qwen, MiniMax, Kimi, OpenRouter,
-  Groq, Mistral, Grok, custom OpenAI-compatible, keyless Claude Code / Codex CLI backends, and
-  **Dust** (your own agents, the primary brain). Keys auto-detected from prefix; each stored encrypted.
+- **18 providers (including Dust).** Claude, GPT, Gemini, NVIDIA, DeepSeek, Qwen, MiniMax, Kimi, OpenRouter,
+  Groq, Mistral, Grok, custom OpenAI-compatible, keyless Claude Code / Codex CLI backends,
+  **Métis Local** (Qwen3.5 0.8B on this machine, no key and no cloud call),
+  **Cloudflare** (one endpoint reaching Workers AI, OpenAI, Anthropic and Google, through a Worker your
+  own team deploys so the account token never ships in the app — [`docs/CLOUDFLARE.md`](docs/CLOUDFLARE.md)),
+  and **Dust** (your own agents, the primary brain). Keys auto-detected from prefix; each stored encrypted.
 - **Thinking mode.** `auto` routes simple questions to a fast model, heavier analytical questions to a
   mid-tier model, and coding/engineering/deep reasoning to the deepest model; the Bar toggle forces the
   deep tier. For Dust: a base agent + a thinking agent.
@@ -219,14 +222,25 @@ native-binary provisioning (sherpa-onnx, ffmpeg), and the roadmap: **[`docs/askt
 ## Test / verify
 
 ```bash
-npm test              # vitest run — src/shared, src/main, src/renderer/src/lib, intelligence/src
+npm test              # vitest run — src/shared, src/main, src/renderer/src/lib, intelligence/src —
+                      # then test:proxy, the Cloudflare Worker's own suite (separate root + config,
+                      # so the main run's globs can never reach it)
 npm run typecheck     # tsc --noEmit, node + web tsconfigs
+npm run check:bugs    # every FIXED row in docs/qa/BUG-LEDGER.md names a test that cites its MQA id
 npm run test:smoke:import   # packaged-app smoke test for audio import (builds first)
 ```
 
 Coverage is concentrated in `src/shared/**` (pure logic) and `src/main/**` (store, auth, transcripts,
 recall, graphify, brain, mcp, license). Renderer UI coverage is thin — most `components/*.tsx` have no
-tests; there is no Playwright UI/E2E suite, only the single import smoke test above.
+unit tests.
+
+What covers the app as a whole instead is the **physical QA suite**, `scripts/qa/e2e-workflows.mjs`:
+it drives a real running build over CDP (`playwright-core`) through the actual workflows — ask,
+capture, listen, recall, provider failover, the Cloudflare gateway failure matrix — against real IPC,
+real settings on disk and real streaming. It is not part of `npm test` because it needs a launched app;
+run it against a build with `--remote-debugging-port` (the header of that file has the exact command).
+Every defect it finds becomes a row in [`docs/qa/BUG-LEDGER.md`](docs/qa/BUG-LEDGER.md), and `check:bugs`
+fails the build if a row marked `FIXED` has no regression test naming its id.
 
 ## Docs
 
@@ -235,6 +249,8 @@ tests; there is no Playwright UI/E2E suite, only the single import smoke test ab
   (IPC contract, state management, native-module packaging, debugging)
 - [`docs/SIGNING.md`](docs/SIGNING.md) — code-signing / notarization setup
 - [`docs/ENTERPRISE_RELEASE.md`](docs/ENTERPRISE_RELEASE.md) — enterprise release checklist
+- [`docs/CLOUDFLARE.md`](docs/CLOUDFLARE.md) — the Cloudflare provider: why it needs a Worker the
+  operator deploys, what that operator stands up, and what a user types into Settings
 - [`docs/asktoto-architecture.md`](docs/asktoto-architecture.md) — architecture reference
 - [`docs/asktoto-hardening-backlog.md`](docs/asktoto-hardening-backlog.md) — deferred hardening items
 - [`docs/license-platform-plan.md`](docs/license-platform-plan.md) — license/activation platform design

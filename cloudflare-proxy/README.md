@@ -21,8 +21,8 @@ Métis  ──Bearer METIS_PROXY_KEY──▶  this Worker  ──Bearer CLOUDFL
 
 | Route | Auth | Behaviour |
 | --- | --- | --- |
-| `POST /v1/chat/completions` | `Authorization: Bearer <METIS_PROXY_KEY>` | OpenAI-shaped. Forwarded to `https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/v1/chat/completions` with the account token injected. `"stream": true` is passed through frame by frame. |
-| `GET /health` | none | `{ "ok": true, "service": "metis-cloudflare-proxy", "configured": true }`. `configured` says whether all three secrets are set — never what they are. |
+| `POST /v1/chat/completions` | `Authorization: Bearer <any configured key>` | OpenAI-shaped. Forwarded to `https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}/ai/v1/chat/completions` with the account token injected. `"stream": true` is passed through frame by frame. Accepts `METIS_PROXY_KEY` and/or any key listed in `METIS_PROXY_KEYS` — see [Per-user keys](#per-user-keys). |
+| `GET /health` | none | `{ "ok": true, "service": "metis-cloudflare-proxy", "configured": true }`. `configured` says whether the account token, account id, and at least one proxy key are set — never what they are, never how many. |
 
 Anything else is a `404`; the wrong method on a real route is a `405`. There is no CORS handling: Métis
 calls this from its Electron **main** process, not from a browser.
@@ -38,7 +38,8 @@ output — that is the entire point of the design.
 | --- | --- | --- |
 | `CLOUDFLARE_API_TOKEN` | The account token the Worker spends. | Cloudflare dashboard → **My Profile → API Tokens → Create Token**. Give it permission to run AI models on the one account below, and nothing else. Not a Global API Key — those cannot be scoped. |
 | `CF_ACCOUNT_ID` | The account the models bill to. | Cloudflare dashboard → any zone's **Overview** sidebar, or `npx wrangler whoami`. |
-| `METIS_PROXY_KEY` | What Métis presents as its API key. Worthless outside this Worker. | You generate it. `openssl rand -base64 32`, or `node -e "console.log(crypto.randomUUID())"`. |
+| `METIS_PROXY_KEY` | What Métis presents as its API key, single-org mode. Worthless outside this Worker. | You generate it. `openssl rand -base64 32`, or `node -e "console.log(crypto.randomUUID())"`. |
+| `METIS_PROXY_KEYS` *(optional)* | Per-user keys, so one caller can be revoked without rotating everyone else's. See [Per-user keys](#per-user-keys) below. | You generate one per user, the same way. |
 
 ---
 
@@ -98,7 +99,7 @@ curl -N https://metis-cloudflare-proxy.<YOUR_SUBDOMAIN>.workers.dev/v1/chat/comp
   -H "Authorization: Bearer <YOUR_METIS_PROXY_KEY>" \
   -H "Content-Type: application/json" \
   -d '{
-        "model": "workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+        "model": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
         "messages": [{"role": "user", "content": "Say hello in five words."}],
         "stream": true
       }'
@@ -142,9 +143,65 @@ found in a log — treat it as spending someone's money until it is replaced.
 4. Check what the leaked key spent: **Workers & Pages → metis-cloudflare-proxy → Logs**, and the AI
    Gateway dashboard for the account.
 
-There is deliberately no list of accepted keys and no per-user keys. One secret, one `put` to revoke.
-If you need per-user revocation, that is a different design (put Cloudflare Access in front of the
-Worker) and should be decided as one, not bolted on.
+This is the whole org sharing one key: rotating it re-keys every user's Métis install at once. If you
+only need to cut off **one** leaked or departing user without touching everyone else, use per-user keys
+instead — see below.
+
+## Per-user keys
+
+`METIS_PROXY_KEY` is one shared secret for the whole org: fine for a single user or a small trusted
+team, but rotating it to drop one person locks out everyone. `METIS_PROXY_KEYS` is the minimal fix —
+a second, optional Wrangler secret holding a JSON array of keys, any of which the Worker accepts.
+
+**Format.** A JSON array of strings. Each entry is either a bare key, or `label:key` — everything before
+the first `:` is a free-form label for your own bookkeeping (a username, a machine name) and plays no
+part in authentication; only the text after it is compared against the bearer token. Pick whichever form
+you want per entry; the Worker does not care which you use, or that a file uses both.
+
+```json
+["tony:Zt3f9…", "dana:Qp81x…", "8h2Kd9…"]
+```
+
+**Issue one key per user.** Same generator as the shared key, once per person:
+
+```sh
+openssl rand -base64 32
+```
+
+Build the array (labelling by user is recommended — it is what makes "revoke dana's key" a one-line
+edit instead of a guess) and set it:
+
+```sh
+npx wrangler@4 secret put METIS_PROXY_KEYS
+# paste: ["tony:<tonys key>","dana:<danas key>","priya:<priyas key>"]
+```
+
+Give each user their own key in Métis Settings. `METIS_PROXY_KEY` can stay set alongside `METIS_PROXY_KEYS`
+(both are accepted at once) or be unset once everyone has moved to a per-user key — either is a valid
+end state.
+
+**Revoke one user without touching anyone else.** Edit the array, drop their entry, redeploy the secret:
+
+```sh
+npx wrangler@4 secret put METIS_PROXY_KEYS
+# paste the array again, with dana's entry removed
+```
+
+That redeploys a new Worker version with dana's key gone and everyone else's untouched — no shared
+secret to hand back out, no other user's Métis install re-configured. Confirm with the same `401` check
+from the deploy section, using dana's now-revoked key.
+
+**Malformed `METIS_PROXY_KEYS` fails closed.** If the secret is set but is not valid JSON, or not an
+array of non-empty strings, the Worker refuses every request — including ones presenting a perfectly
+valid `METIS_PROXY_KEY` — with a `5xx` naming the problem, and `/health` reports `configured: false`.
+A typo while editing the array takes the proxy down for everyone rather than silently widening who it
+accepts; fix the JSON (or unset the secret) and redeploy to restore service.
+
+**When this still isn't enough.** Per-user keys give you revocation and rough attribution via the label,
+nothing more — no per-user rate limits, no audit log of who made which call, no SSO. If you need real
+per-identity access control, that is a heavier, deliberate design: put
+[Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/) in front of the
+Worker and decide it as its own project, not bolted on here.
 
 ## Keeping the bill bounded
 
@@ -184,15 +241,16 @@ committed before this paragraph existed, on purpose. Never move those values int
 `src/index.test.ts` covers the two things that can hurt someone if they are wrong — the auth boundary
 and the account token not leaking back out — plus the streaming passthrough, all without deploying.
 
-It is **not** part of the repo's `npm test` run: the root `vitest.config.ts` scopes `include` to `src/`,
-`intelligence/src/`, `scripts/` and `eval/`, and this directory is not part of the Electron app or of
-any installer. Run it explicitly, from the repo root:
+It **is** part of the repo's `npm test` run. The root `vitest.config.ts` scopes `include` to `src/`,
+`intelligence/src/`, `scripts/` and `eval/`, so its globs can never reach this directory — which is why
+`package.json`'s `test` script chains `test:proxy` explicitly. A suite that never runs is not a suite.
+To run only this one, from the repo root:
 
 ```sh
-./node_modules/.bin/vitest run --config cloudflare-proxy/vitest.config.ts
+npm run test:proxy
 ```
 
-Type-check the Worker against the Cloudflare runtime's globals (also not part of `npm run typecheck`,
+Type-check the Worker against the Cloudflare runtime's globals (not part of `npm run typecheck`,
 which describes the Electron main and renderer trees):
 
 ```sh

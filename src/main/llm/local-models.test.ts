@@ -59,16 +59,27 @@ describe('bundled local model runtime', () => {
   })
 
   describe('single pinned manifest', () => {
-    it('ships exactly Qwen3.5 0.8B, pinned to an IMMUTABLE upstream revision', () => {
-      expect(LOCAL_MODELS.map((model) => model.id)).toEqual(['qwen3.5-0.8b'])
-      expect(LOCAL_MODELS[0].label).toBe('Qwen3.5 0.8B')
-      // The weights are fetched on first run instead of bundled, which makes this URL part of the
-      // supply chain. A branch or tag ref would let upstream move the bytes underneath us; require a
-      // 40-hex commit in the path so the revision cannot change, and https so it cannot be downgraded.
-      for (const file of [LOCAL_MODELS[0].gguf, LOCAL_MODELS[0].mmproj]) {
-        expect(file.url).toMatch(/^https:\/\//)
-        expect(file.url).toMatch(/\/resolve\/[0-9a-f]{40}\//)
+    it('pins EVERY registry entry to an IMMUTABLE upstream revision', () => {
+      // The registry is multi-model (a small floor model plus the best one an 8 GB machine can hold), so
+      // this asserts the supply-chain property for all of them rather than naming one. The weights are
+      // fetched on first run instead of bundled, which makes each URL part of the supply chain: a branch
+      // or tag ref would let upstream move the bytes underneath us, so require a 40-hex commit in the
+      // path so the revision cannot change, and https so it cannot be downgraded.
+      expect(LOCAL_MODELS.length).toBeGreaterThan(0)
+      for (const model of LOCAL_MODELS) {
+        expect(model.id).toMatch(/^qwen3\.5-/)
+        expect(model.label).toBeTruthy()
+        expect(model.ctxSize).toBeGreaterThan(0)
+        expect(model.minTotalRamGB).toBeGreaterThan(0)
+        for (const file of [model.gguf, model.mmproj]) {
+          expect(file.url).toMatch(/^https:\/\//)
+          expect(file.url).toMatch(/\/resolve\/[0-9a-f]{40}\//)
+          expect(file.sha256).toMatch(/^[0-9a-f]{64}$/)
+          expect(file.bytes).toBeGreaterThan(0)
+        }
       }
+      // Ids must be unique — getModel() resolves by id.
+      expect(new Set(LOCAL_MODELS.map((m) => m.id)).size).toBe(LOCAL_MODELS.length)
     })
 
     it('keeps the verified byte sizes and sha256 pins for both files', () => {
@@ -93,7 +104,13 @@ describe('bundled local model runtime', () => {
       expect(modelPaths('qwen3.5-0.8b')).toEqual({
         dir: join(userData, 'local-llm', 'models', 'qwen3.5-0.8b'),
         gguf: join(userData, 'local-llm', 'models', 'qwen3.5-0.8b', 'model.gguf'),
-        mmproj: join(userData, 'local-llm', 'models', 'qwen3.5-0.8b', 'mmproj.gguf')
+        mmproj: join(userData, 'local-llm', 'models', 'qwen3.5-0.8b', 'mmproj.gguf'),
+        // Carried with the paths so the spawn is fully described by one object (local-runtime ModelPaths).
+        // Sizing is machine-aware (spawnProfileFor), so assert the shape rather than pinning this host's
+        // RAM — the exact values are covered by local-spawn-profile.test.ts.
+        ctxSize: expect.any(Number),
+        parallel: expect.any(Number),
+        gpuLayers: expect.any(Number)
       })
     })
 
@@ -107,7 +124,10 @@ describe('bundled local model runtime', () => {
       expect(modelPaths('qwen3.5-0.8b')).toEqual({
         dir: join(userData, 'local-llm', 'models', 'qwen3.5-0.8b'),
         gguf: join(userData, 'local-llm', 'models', 'qwen3.5-0.8b', 'model.gguf'),
-        mmproj: join(userData, 'local-llm', 'models', 'qwen3.5-0.8b', 'mmproj.gguf')
+        mmproj: join(userData, 'local-llm', 'models', 'qwen3.5-0.8b', 'mmproj.gguf'),
+        ctxSize: expect.any(Number),
+        parallel: expect.any(Number),
+        gpuLayers: expect.any(Number)
       })
       expect(modelPaths('qwen3.5-0.8b').dir).not.toContain(resourcesPath)
     })
@@ -147,7 +167,9 @@ describe('bundled local model runtime', () => {
       const paths = modelPaths(model.id)
 
       expect(isDownloaded(model.id)).toBe(false)
-      expect(listModels()).toEqual([
+      // The registry is multi-model now, so listModels() returns one summary per entry. Assert the one
+      // under test by id instead of pinning the whole array, which would break on every model added.
+      expect(listModels().filter((m) => m.id === model.id)).toEqual([
         {
           id: model.id,
           label: model.label,
@@ -167,7 +189,8 @@ describe('bundled local model runtime', () => {
       truncateSync(paths.mmproj, model.mmproj.bytes)
 
       expect(isDownloaded(model.id)).toBe(true)
-      expect(listModels()).toEqual([
+      // Scoped to the entry under test — the registry holds more than one model now.
+      expect(listModels().filter((m) => m.id === model.id)).toEqual([
         {
           id: model.id,
           label: model.label,

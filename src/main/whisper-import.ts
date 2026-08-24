@@ -1,94 +1,128 @@
 /**
- * Main-process Whisper transcriber for background import jobs (import-jobs.ts's serialized, one-at-a-time
- * pump). Imported recordings deserve the same multilingual quality live Listen gets: this loads the exact
- * bundled whisper-base model files the renderer's Listen worker uses (resources/models/Xenova/whisper-base
- * — see asr-manifest.ts) and ports that worker's adaptive language-follow machine (renderer/src/lib/
- * whisper.worker.ts, PR #29) near-verbatim, so an imported FR/EN meeting gets the same mid-recording
- * language switching a live meeting does, instead of one language baked in for the whole file.
+ * Main-process side of import transcription: the adaptive language-follow machine (ported from the
+ * renderer's whisper.worker.ts) plus an RPC client to the whisper utilityProcess.
  *
- * Runs in Node, not a browser worker, so there is no asr-model:// protocol here and none is needed:
- * transformers.js's Node backend resolves env.localModelPath with plain fs reads whenever RUNNING_LOCALLY
- * is true (see @huggingface/transformers/src/env.js) — pointing it at the SAME models/ directory the
- * protocol handler serves from is enough.
- *
- * @huggingface/transformers is loaded via a lazy, memoized require() — never a static top-level import —
- * so the packaged bytecode main (electron.vite.config.ts's build.bytecode) never eagerly pulls in its
- * onnxruntime-node/sharp native dependencies just because this module got loaded; the load is deferred to
- * the first actual import job. Mirrors parakeet.ts's probeSherpa() memo for the exact same reason.
+ * MQA-234: the transformers/onnxruntime-node stack must NEVER load into the main process — sherpa-onnx
+ * (Parakeet, speaker-id) lives there, both ship an `onnxruntime` DLL under the same name, and whichever
+ * loads second is broken (at require, or worse: a native crash at first decode — both directions proven
+ * in the packaged app; a load-order fix was shipped and reverted the same day when the packaged-ASR gate
+ * caught the crash). So the model runs in an Electron utilityProcess (whisper-asr-host.ts) and this
+ * module only ships Float32 windows across and text back. A dead/failed child rejects the in-flight
+ * request; index.ts's transcribe seam keeps its existing "engine choice must never fail an import"
+ * Parakeet fallback, exactly as before.
  */
-import { app } from 'electron'
+import { app, utilityProcess, type UtilityProcess } from 'electron'
 import { join } from 'node:path'
 import { detectLanguage, LANGUAGE_NAMES } from '@shared/lang-id'
 import { collapseRepeatedPhrase } from '@shared/transcript-filter'
 import { mainLog } from './logger'
 
-const MODEL_ID = 'Xenova/whisper-base' // same bundled multilingual model the renderer's WASM fallback uses
-const MODEL_REVISION = 'main' // pin to a specific commit SHA in production to resist upstream drift/tampering
-
-/** resources/models — the same directory asr-model://models is rooted at (see index.ts's protocol
- *  handler), read here directly off disk since main has no need for (and cannot use) that renderer-only
- *  custom protocol. */
+/** resources/models — same directory the renderer's asr-model:// protocol serves from. Resolved here
+ *  and handed to the child in its init message, so the child needs no packaged/dev path logic. */
 function modelsDir(): string {
   const REPO_ROOT = join(__dirname, '..', '..')
   const base = app.isPackaged ? process.resourcesPath : join(REPO_ROOT, 'resources')
   return join(base, 'models')
 }
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
-// undefined = not probed yet; null = probed and require() threw; otherwise the loaded module. require()
-// itself does not cache a failed load, so without this memo a repeated probe would repeat the attempt.
-let transformersModule: any = undefined
+// ── Whisper utilityProcess client ────────────────────────────────────────────────────────────────────
+const HOST_REQUEST_TIMEOUT_MS = 180_000 // whisper-base on CPU decodes a ≤20s window in seconds; 3min is a hang, not a slow decode
 
-/** Probe (once, memoized forever — success or failure) whether @huggingface/transformers loads. Mirrors
- *  parakeet.ts's probeSherpa(). */
-function loadTransformers(): any | null {
-  if (transformersModule !== undefined) return transformersModule
-  try {
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    transformersModule = require('@huggingface/transformers')
-  } catch (e) {
-    transformersModule = null
-    mainLog.error('[whisper-import] @huggingface/transformers failed to load:', (e as Error)?.message || String(e))
+interface PendingRequest {
+  resolve: (text: string) => void
+  reject: (err: Error) => void
+  timer: NodeJS.Timeout
+}
+
+let host: UtilityProcess | null = null
+let hostReady = false
+let nextRequestId = 1
+const pending = new Map<number, PendingRequest>()
+
+function failAllPending(message: string): void {
+  for (const [, req] of pending) {
+    clearTimeout(req.timer)
+    req.reject(new Error(message))
   }
-  return transformersModule
+  pending.clear()
 }
 
-let asr: any = null
-let loadingAsr: Promise<any> | null = null
-
-/** Loads the pipeline once and memoizes it; concurrent callers await the same in-flight load. Imports are
- *  processed one at a time (ImportJobManager's FIFO pump), so this is never contended in practice, but the
- *  guard keeps a warm-vs-cold caller from racing two separate ~150MB model loads regardless. */
-async function ensureAsr(): Promise<any> {
-  if (asr) return asr
-  if (loadingAsr) return loadingAsr
-  const reinstallMessage = 'The bundled transcription files are missing or damaged. Reinstall Métis from a complete installer.'
-  const mod = loadTransformers()
-  if (!mod) throw new Error(reinstallMessage)
-  const { pipeline, env } = mod
-  env.allowLocalModels = true
-  env.localModelPath = modelsDir()
-  // Imports are offline-only, the same guarantee the renderer's bundled worker gives live Listen: never
-  // fall back to a network fetch for a missing file.
-  env.allowRemoteModels = false
-  env.useBrowserCache = false
-  loadingAsr = pipeline('automatic-speech-recognition', MODEL_ID, { dtype: 'q8', revision: MODEL_REVISION })
-    .then((p: any) => {
-      asr = p
-      return p
-    })
-    .catch((e: unknown) => {
-      // The raw transformers.js message ("local_files_only=true … file was not found locally at
-      // …/models/Xenova/whisper-base/…") is meaningless to a user reading an import failure — log the
-      // detail and surface the same human line the renderer's bundled-mode worker uses.
-      mainLog.error('[whisper-import] model load failed:', (e as Error)?.message || String(e))
-      throw new Error(reinstallMessage)
-    })
-    .finally(() => {
-      loadingAsr = null
-    })
-  return loadingAsr
+function ensureHost(): UtilityProcess {
+  if (host) return host
+  const child = utilityProcess.fork(join(__dirname, 'whisper-asr-host.js'), [], {
+    serviceName: 'metis-whisper-import',
+    stdio: 'pipe'
+  })
+  child.stderr?.on('data', (chunk: Buffer) => mainLog.warn('[whisper-host]', chunk.toString('utf8').trim()))
+  child.stdout?.on('data', () => {})
+  child.on('message', (msg: unknown) => {
+    const m = msg as { type?: string; id?: number; text?: string; message?: string }
+    if (m?.type === 'ready') {
+      hostReady = true
+      return
+    }
+    if ((m?.type === 'result' || m?.type === 'error') && typeof m.id === 'number') {
+      const req = pending.get(m.id)
+      if (!req) return
+      pending.delete(m.id)
+      clearTimeout(req.timer)
+      if (m.type === 'result') req.resolve(m.text ?? '')
+      else req.reject(new Error(m.message || 'Whisper transcription failed.'))
+    }
+  })
+  child.on('exit', (code) => {
+    // A crashed/killed child (OOM, native fault) must fail fast, not hang the import until timeout —
+    // and the NEXT transcribe call gets a fresh child rather than a dead handle.
+    if (host === child) {
+      host = null
+      hostReady = false
+    }
+    failAllPending(`The transcription helper exited unexpectedly (code ${code ?? 'unknown'}).`)
+  })
+  child.postMessage({ type: 'init', modelsPath: modelsDir() })
+  host = child
+  hostReady = false
+  return child
 }
+
+/** Stop the helper and free its ~300MB of model memory. Called by the import pipeline at job end; the
+ *  next import simply spawns a fresh child. Safe to call when no host is running. */
+export function stopWhisperHost(): void {
+  const child = host
+  host = null
+  hostReady = false
+  if (child) {
+    failAllPending('Import cancelled.')
+    try {
+      child.kill()
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+function transcribeRemote(samples: Float32Array, language?: string, task?: string): Promise<string> {
+  const child = ensureHost()
+  const id = nextRequestId++
+  // Copy into an owned, transfer-safe buffer: `samples` may be a view over a decoder buffer the caller
+  // reuses, and postMessage's structured clone must see a stable snapshot.
+  const pcm = samples.buffer.slice(samples.byteOffset, samples.byteOffset + samples.byteLength)
+  return new Promise<string>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      pending.delete(id)
+      reject(new Error('Whisper transcription timed out.'))
+    }, HOST_REQUEST_TIMEOUT_MS)
+    pending.set(id, { resolve, reject, timer })
+    try {
+      child.postMessage({ type: 'transcribe', id, pcm, ...(language ? { language } : {}), ...(task ? { task } : {}) })
+    } catch (e) {
+      pending.delete(id)
+      clearTimeout(timer)
+      reject(e instanceof Error ? e : new Error(String(e)))
+    }
+  })
+}
+void hostReady // informational only today; kept for a future readiness gate without changing the protocol
 
 // ── Language follow (ported near-verbatim from renderer/src/lib/whisper.worker.ts, PR #29) ───────────────
 // See that file's block comment for the full design rationale — the mechanics are identical here: an
@@ -304,9 +338,7 @@ export async function whisperImportTranscribe(samples: Float32Array, language: s
   applyInitLanguage(language)
   await probeLanguage(samples, probe)
   await reprobeForSwitch(samples, probe)
-  const model = await ensureAsr()
   const opts = nextDecodeOptions()
-  const out: any = await model(samples, opts)
-  const rawText = Array.isArray(out) ? out.map((o: any) => o.text).join(' ') : out?.text || ''
+  const rawText = await transcribeRemote(samples, opts.language, opts.task)
   return finalizeDecodedText(rawText)
 }

@@ -546,6 +546,24 @@ export function listMeetingExtractions(s: Settings): string[] {
 }
 
 /**
+ * MQA-230: remove ONE meeting's stored extraction (.brain/meetings/<slug>.json) — the deleted meeting's
+ * own derived cleartext (verbatim quotes, commitments, numeric facts). Needs no provider, so the delete
+ * flow can run it synchronously instead of leaving this file to the deferred source refresh, which
+ * no-ops for as long as no provider is usable. Best-effort like purgeBrain: never throws, returns
+ * whether the file is gone (absent counts as gone — there is nothing left to erase).
+ */
+export function removeMeetingExtraction(s: Settings, fileSlug: string): { gone: boolean } {
+  const p = join(brainDir(s), 'meetings', `${fileSlug}.json`)
+  try {
+    rmSync(p, { force: true })
+  } catch {
+    /* fall through to the existence check — a locked file reports gone:false */
+  }
+  jsonCache.delete(p)
+  return { gone: !existsSync(p) }
+}
+
+/**
  * Erase the entire `.brain/` store — every meeting extraction, entity file, the graph, and the index.
  *
  * Part of "Delete all Métis data": the brain IS the knowledge graph now (the old userData/graph

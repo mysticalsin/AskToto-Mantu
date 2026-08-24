@@ -71,7 +71,13 @@ export async function ensureLocalRuntimeStarted(modelId: string): Promise<void> 
   if (localRuntime.getState() === 'stopped' || localRuntime.getActiveModelKey() !== paths.gguf) {
     await verifyIntegrity(modelId)
   }
-  await localRuntime.start({ gguf: paths.gguf, mmproj: paths.mmproj })
+  await localRuntime.start({
+      gguf: paths.gguf,
+      mmproj: paths.mmproj,
+      ctxSize: paths.ctxSize,
+      parallel: paths.parallel,
+      gpuLayers: paths.gpuLayers
+    })
 }
 
 export type LocalEngine = 'llama' | 'apple'

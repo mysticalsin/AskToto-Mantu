@@ -22,8 +22,19 @@ export interface Env {
   CLOUDFLARE_API_TOKEN: string
   /** The account the models are billed to. `wrangler secret put CF_ACCOUNT_ID`. */
   CF_ACCOUNT_ID: string
-  /** What Métis presents as its API key. `wrangler secret put METIS_PROXY_KEY`. */
-  METIS_PROXY_KEY: string
+  /**
+   * What Métis presents as its API key, single-org mode. `wrangler secret put METIS_PROXY_KEY`.
+   * At least one of this and METIS_PROXY_KEYS must be set; both may be set at once (the keys union).
+   */
+  METIS_PROXY_KEY?: string
+  /**
+   * Per-user keys, for revoking one caller without rotating everyone else's. `wrangler secret put
+   * METIS_PROXY_KEYS` with a JSON array of strings, each either a bare key or "label:key" — everything
+   * before the first ':' is a free-form label for the operator's own bookkeeping (e.g. a username) and
+   * plays no part in matching; only the text after it (or the whole entry, if there is no ':') is
+   * compared against the bearer token. Example: `["tony:9f2c…","dana:71ab…"]`. See README § Per-user keys.
+   */
+  METIS_PROXY_KEYS?: string
   /**
    * Optional plain var (NOT a secret): pin one AI Gateway instead of the account default. Set it in
    * wrangler.jsonc `vars` when the operator wants this proxy's traffic isolated behind a gateway with
@@ -98,8 +109,60 @@ function configErrorResponse(status: number, message: string): Response {
   return jsonResponse(status, { error: { message: `${OPERATOR_FAULT} ${message}`, type: 'metis_proxy_config_error' } })
 }
 
+/**
+ * Parses METIS_PROXY_KEYS into the literal key material to compare against.
+ *
+ * Format: a JSON array of strings, each either a bare key or "label:key" (see the Env doc comment for
+ * the label rule). `null` means the secret is set but does not parse as that shape — malformed JSON, a
+ * non-array, or an entry that is not a non-empty string. That is distinct from "no entries" and must be
+ * treated as a configuration error, never as "fall back to single-key mode": a typo in this secret must
+ * fail closed, not silently widen to whatever METIS_PROXY_KEY happens to be.
+ */
+function parseProxyKeys(raw: string): string[] | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    return null
+  }
+  if (!Array.isArray(parsed)) return null
+  const keys: string[] = []
+  for (const entry of parsed) {
+    if (typeof entry !== 'string') return null
+    const colon = entry.indexOf(':')
+    const key = colon === -1 ? entry : entry.slice(colon + 1)
+    if (!key) return null
+    keys.push(key)
+  }
+  return keys
+}
+
+/**
+ * Every configured proxy key, from either secret, as one flat list to match the presented bearer
+ * against. `null` propagates a malformed METIS_PROXY_KEYS so the caller fails closed instead of quietly
+ * running in single-key (or no-key) mode.
+ */
+function configuredKeys(env: Env): string[] | null {
+  const keys: string[] = []
+  if (env.METIS_PROXY_KEY) keys.push(env.METIS_PROXY_KEY)
+  if (env.METIS_PROXY_KEYS) {
+    const parsed = parseProxyKeys(env.METIS_PROXY_KEYS)
+    if (parsed === null) return null
+    keys.push(...parsed)
+  }
+  return keys
+}
+
+/** True when `presented` constant-time-matches ANY configured key. Never short-circuits on the first
+ * match, so response timing cannot leak which key — or how many — it was. */
+async function matchesAnyKey(presented: string, keys: string[]): Promise<boolean> {
+  const results = await Promise.all(keys.map((key) => secretsMatch(presented, key)))
+  return results.some(Boolean)
+}
+
 function isConfigured(env: Env): boolean {
-  return Boolean(env.CLOUDFLARE_API_TOKEN && env.CF_ACCOUNT_ID && env.METIS_PROXY_KEY)
+  const keys = configuredKeys(env)
+  return Boolean(env.CLOUDFLARE_API_TOKEN && env.CF_ACCOUNT_ID && keys && keys.length > 0)
 }
 
 /**
@@ -150,12 +213,20 @@ export default {
     if (request.method !== 'POST') return errorResponse(405, 'Use POST for /v1/chat/completions.')
 
     // Checked before the key compare so a half-deployed Worker says so plainly instead of rejecting
-    // every correct key as invalid — and, more importantly, so an unset METIS_PROXY_KEY can never be
-    // matched by an empty presented key.
-    if (!isConfigured(env)) {
+    // every correct key as invalid — and, more importantly, so an unset key set can never be matched by
+    // an empty presented key. A malformed METIS_PROXY_KEYS is its own case: it must fail exactly the
+    // same closed way, never silently drop back to whatever METIS_PROXY_KEY happens to hold.
+    const keys = configuredKeys(env)
+    if (keys === null) {
+      return configErrorResponse(
+        500,
+        'METIS_PROXY_KEYS is set but is not valid JSON (expected an array of key strings). The operator must fix or unset it.'
+      )
+    }
+    if (!env.CLOUDFLARE_API_TOKEN || !env.CF_ACCOUNT_ID || keys.length === 0) {
       return configErrorResponse(
         503,
-        'This proxy is not configured. The operator must set CLOUDFLARE_API_TOKEN, CF_ACCOUNT_ID and METIS_PROXY_KEY.'
+        'This proxy is not configured. The operator must set CLOUDFLARE_API_TOKEN, CF_ACCOUNT_ID and at least one of METIS_PROXY_KEY / METIS_PROXY_KEYS.'
       )
     }
 
@@ -163,7 +234,7 @@ export default {
     // operator's Cloudflare balance, and AI Gateway's rate limits would be the only thing standing
     // between a scraped hostname and the bill.
     const presented = presentedKey(request)
-    if (!presented || !(await secretsMatch(presented, env.METIS_PROXY_KEY))) {
+    if (!presented || !(await matchesAnyKey(presented, keys))) {
       return errorResponse(401, 'Invalid proxy key.')
     }
 

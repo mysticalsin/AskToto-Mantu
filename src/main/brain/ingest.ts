@@ -58,6 +58,7 @@ import {
   writeDeal,
   listEntities,
   listMeetingExtractions,
+  removeMeetingExtraction,
   readMeetingExtraction,
   withEntityLock,
   cloneEntity,
@@ -2011,6 +2012,24 @@ export async function startRebuild(s: Settings, options: StartRebuildOptions = {
   return { queued: r.queued }
 }
 
+/**
+ * MQA-230: the provider-free half of deleting ONE meeting. The deferred source refresh below re-derives
+ * the entity files, but it no-ops for as long as no provider is usable — while the deleted meeting's own
+ * extraction JSON (verbatim quotes, commitments, numeric facts) and its ledger row need no provider to
+ * remove. Erase those NOW, synchronously with the transcript unlink, so the most sensitive derived
+ * artifact never outlives the file the user was told is gone. Entity-file residue attributed to this
+ * meeting remains until the refresh runs; brainStatus.cleanupPending makes that wait visible.
+ */
+export async function exciseDeletedMeeting(s: Settings, file: string): Promise<{ gone: boolean }> {
+  const key = basename(file)
+  const removed = removeMeetingExtraction(s, extractionSlug(key))
+  await updateIndex(s, (idx) => {
+    if (idx.ingested[key]) delete idx.ingested[key]
+    idx.revision += 1
+  })
+  return removed
+}
+
 /** Persisted source edits/deletions are replayed as a clean rebuild when a provider is ready. */
 export async function requestSourceRefresh(s: Settings = getSettings()): Promise<void> {
   await updateIndex(s, (idx) => {
@@ -2259,6 +2278,34 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
  * Rebuild/resume paths keep using startBackfill() directly because they need the actual queued count
  * synchronously for their durable journal semantics.
  */
+/** Local calendar day as 'YYYY-MM-DD' — the unit dailyBackfillRunsRemaining buckets against. */
+function todayKey(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+/**
+ * Daily cap on BULK background rescans (Tony, 2026-08-22): a dashboard open or a periodic OneDrive
+ * reconciliation tick each count as one "run" against a 3-per-day budget, independent of provider — this
+ * bounds cost/compute even when the active provider is Métis Local, not only a metered cloud one. Does
+ * NOT touch enqueueIngest's own live-save path (that always indexes a just-recorded meeting immediately;
+ * this only bounds how often the app goes LOOKING for old/drifted work on its own). Returns true and
+ * consumes one run when budget remains; false (leaving the counter untouched) once the day's 3 are spent.
+ */
+const DAILY_BACKFILL_RUN_BUDGET = 3
+function consumeDailyBackfillRun(s: Settings): boolean {
+  const idx = readIndex(s)
+  const today = todayKey()
+  const spent = idx.dailyRunDate === today ? idx.dailyRunCount : 0
+  if (spent >= DAILY_BACKFILL_RUN_BUDGET) return false
+  updateIndexDetached(s, (i) => {
+    // Re-check inside the mutation: a concurrent caller may have already rolled the day/count over.
+    const cur = i.dailyRunDate === today ? i.dailyRunCount : 0
+    i.dailyRunDate = today
+    i.dailyRunCount = cur + 1
+  })
+  return true
+}
+
 export function requestBackfill(options: BackfillStartOptions = {}): BackfillStartResult {
   const s = getSettings()
   // Preserve the existing synchronous no-provider contract so the renderer can show the actionable
@@ -2275,6 +2322,11 @@ export function requestBackfill(options: BackfillStartOptions = {}): BackfillSta
     if (!hasJobsInFlight()) pump()
     return { queued: 0 }
   }
+  // A batch already dispatched today keeps running/resuming freely (the guard above owns that) — this
+  // only stops a NEW scan/dispatch cycle once 3 have started today. respectRetryBackoff callers (the 60s
+  // reconcile tick) are exactly the repeat callers this exists to bound; an explicit user click still
+  // reports 0 queued rather than throwing, so the dashboard reads it the same as "nothing to do right now".
+  if (!consumeDailyBackfillRun(s)) return { queued: 0 }
 
   backfillPreparing = true
   const idx = readIndex(s)
