@@ -37,7 +37,7 @@ function env(overrides: Partial<Env> = {}): Env {
 }
 
 const BODY = JSON.stringify({
-  model: 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+  model: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
   messages: [{ role: 'user', content: 'hello' }],
   stream: true
 })
@@ -132,6 +132,77 @@ describe('caller authentication', () => {
   })
 })
 
+describe('multi-key auth (METIS_PROXY_KEYS)', () => {
+  const KEYS_JSON = JSON.stringify(['tony:key-for-tony', 'dana:key-for-dana', 'bare-key-no-label'])
+
+  it('single-key mode is unchanged when METIS_PROXY_KEYS is not set', async () => {
+    const calls = stubUpstream(new Response('{"ok":true}', { status: 200 }))
+
+    const res = await worker.fetch(chatRequest(PROXY_KEY), env())
+
+    expect(res.status).toBe(200)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('accepts every key listed in METIS_PROXY_KEYS, label form and bare form alike', async () => {
+    for (const key of ['key-for-tony', 'key-for-dana', 'bare-key-no-label']) {
+      const calls = stubUpstream(new Response('{"ok":true}', { status: 200 }))
+
+      const res = await worker.fetch(
+        chatRequest(key),
+        env({ METIS_PROXY_KEY: undefined, METIS_PROXY_KEYS: KEYS_JSON })
+      )
+
+      expect(res.status, `key: ${key}`).toBe(200)
+      expect(calls, `key: ${key}`).toHaveLength(1)
+    }
+  })
+
+  it('rejects a key that is not in METIS_PROXY_KEYS, and never calls Cloudflare', async () => {
+    const calls = stubUpstream(new Response('{}', { status: 200 }))
+
+    const res = await worker.fetch(
+      chatRequest('key-for-someone-else'),
+      env({ METIS_PROXY_KEY: undefined, METIS_PROXY_KEYS: KEYS_JSON })
+    )
+
+    expect(res.status).toBe(401)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('accepts either secret when both METIS_PROXY_KEY and METIS_PROXY_KEYS are configured', async () => {
+    for (const key of [PROXY_KEY, 'key-for-dana']) {
+      const calls = stubUpstream(new Response('{"ok":true}', { status: 200 }))
+
+      const res = await worker.fetch(chatRequest(key), env({ METIS_PROXY_KEYS: KEYS_JSON }))
+
+      expect(res.status, `key: ${key}`).toBe(200)
+      expect(calls, `key: ${key}`).toHaveLength(1)
+    }
+  })
+
+  it('fails CLOSED on malformed METIS_PROXY_KEYS — a correct METIS_PROXY_KEY is still refused, not silently accepted', async () => {
+    const calls = stubUpstream(new Response('{"ok":true}', { status: 200 }))
+
+    const res = await worker.fetch(chatRequest(PROXY_KEY), env({ METIS_PROXY_KEYS: '{ not valid json' }))
+
+    expect(res.status).toBeGreaterThanOrEqual(500)
+    expect(res.status).toBeLessThan(600)
+    await expect(res.json()).resolves.toMatchObject({ error: { type: 'metis_proxy_config_error' } })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('fails CLOSED on a METIS_PROXY_KEYS that is valid JSON but not an array of strings', async () => {
+    const calls = stubUpstream(new Response('{"ok":true}', { status: 200 }))
+
+    for (const bad of ['"just-a-string"', '{"a":"b"}', '[1,2,3]', '[""]', 'null']) {
+      const res = await worker.fetch(chatRequest(PROXY_KEY), env({ METIS_PROXY_KEYS: bad }))
+      expect(res.status, `payload: ${bad}`).toBeGreaterThanOrEqual(500)
+    }
+    expect(calls).toHaveLength(0)
+  })
+})
+
 describe('forwarding to the Cloudflare AI REST API', () => {
   it('injects the account token server-side and never passes the caller key upstream', async () => {
     const calls = stubUpstream(new Response('{"ok":true}', { status: 200 }))
@@ -167,6 +238,35 @@ describe('forwarding to the Cloudflare AI REST API', () => {
     const withoutGateway = stubUpstream(new Response('{}', { status: 200 }))
     await worker.fetch(chatRequest(), env())
     expect(new Headers(withoutGateway[0][1].headers).get('cf-aig-gateway-id')).toBeNull()
+  })
+
+  it('rebuilds the response headers instead of forwarding whatever Cloudflare attached', async () => {
+    stubUpstream(
+      new Response('{"ok":true}', {
+        status: 200,
+        headers: {
+          'content-type': 'application/json',
+          'set-cookie': '__cf_bm=bot-management-cookie',
+          'cf-ray': '8a1b2c3d4e5f6789-CDG',
+          'cf-aig-cache-status': 'MISS'
+        }
+      })
+    )
+
+    const res = await worker.fetch(chatRequest(), env())
+
+    // The other half of the leak boundary the test above proves in the request direction: the request
+    // headers are built fresh so the caller's key never travels up, and these are built fresh so the
+    // operator's edge metadata never travels down. Shortening the return to
+    // `new Response(upstream.body, upstream)` — the idiomatic-looking one-liner — passes every other
+    // case in this file while shipping the operator's ray ids, gateway cache status and Cloudflare's
+    // bot cookie to every Métis install.
+    expect(res.headers.get('set-cookie')).toBeNull()
+    expect(res.headers.get('cf-ray')).toBeNull()
+    expect(res.headers.get('cf-aig-cache-status')).toBeNull()
+    // Only the two this file writes itself survive.
+    expect(res.headers.get('content-type')).toBe('application/json')
+    expect(res.headers.get('cache-control')).toBe('no-store')
   })
 })
 
@@ -295,6 +395,27 @@ describe('routing', () => {
       env({ CLOUDFLARE_API_TOKEN: '' })
     )
     await expect(res.json()).resolves.toMatchObject({ ok: true, configured: false })
+  })
+
+  it('reports configured:true from METIS_PROXY_KEYS alone, with METIS_PROXY_KEY unset', async () => {
+    const res = await worker.fetch(
+      new Request('https://proxy.example.workers.dev/health'),
+      env({ METIS_PROXY_KEY: undefined, METIS_PROXY_KEYS: JSON.stringify(['a-key']) })
+    )
+    await expect(res.json()).resolves.toMatchObject({ ok: true, configured: true })
+  })
+
+  it('reports configured:false, not true, when METIS_PROXY_KEYS is set but malformed — and discloses no key material or count', async () => {
+    const res = await worker.fetch(
+      new Request('https://proxy.example.workers.dev/health'),
+      env({ METIS_PROXY_KEYS: '{ not valid json' })
+    )
+    const text = await res.text()
+
+    expect(JSON.parse(text)).toMatchObject({ ok: true, configured: false })
+    expect(JSON.parse(text)).not.toHaveProperty('keys')
+    expect(JSON.parse(text)).not.toHaveProperty('keyCount')
+    expect(text).not.toContain(PROXY_KEY)
   })
 
   it('404s an unknown path and 405s the wrong method, never reaching Cloudflare', async () => {

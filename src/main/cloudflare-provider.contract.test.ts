@@ -92,10 +92,36 @@ describe('an unconfigured endpoint is a routing decision, never a silent redirec
     expect(indexSource).toMatch(/test\(s\.cloudflareBaseUrl\)/)
   })
 
+  // The gate expression is byte-identical at both seams below, so a whole-file toMatch is satisfied by
+  // EITHER copy and would stay green if one were deleted. Both assertions slice to their own seam first.
+  const sliceFrom = (marker: string, end: string): string => {
+    const start = indexSource.indexOf(marker)
+    expect(start, `anchor "${marker}" no longer exists in index.ts`).toBeGreaterThan(-1)
+    const stop = indexSource.indexOf(end, start)
+    expect(stop, `end anchor "${end}" no longer follows "${marker}"`).toBeGreaterThan(start)
+    return indexSource.slice(start, stop)
+  }
+  const ENDPOINT_GATE = /\(!requiresUserBaseUrl\(p\) \|\| !!providerBaseUrl\(p, s\)\)/
+
   it('pickFailover refuses a bring-your-own-endpoint provider that has none', () => {
     // Cloudflare ships a default model, so the key + model checks alone would let the failover walk hand
     // it to streamOpenAI with no baseURL — where the SDK default base URL is OpenAI's own backend.
-    expect(indexSource).toMatch(/\(!requiresUserBaseUrl\(p\) \|\| !!providerBaseUrl\(p, s\)\)/)
+    expect(sliceFrom('const eligible = ', "req.mode !== 'vision'")).toMatch(ENDPOINT_GATE)
+  })
+
+  it('MQA-214: visionAvailable refuses to advertise vision on a provider with no endpoint, so no screen is captured for a request that cannot be sent', () => {
+    // Without this gate a stored METIS_PROXY_KEY and no Worker URL — the ordinary state between the
+    // operator sending the key and sending the URL — lights up the screen-ask affordances and prewarms
+    // REAL captures (App.tsx canPrewarm → Bar.tsx onFocus → prewarmCapture) for an unsendable request.
+    expect(sliceFrom('visionAvailable:', '|| localVisionReady')).toMatch(ENDPOINT_GATE)
+  })
+
+  it('MQA-215: the import-recap candidate walk applies the same rule, so it neither burns a slot nor reports the wrong cause', () => {
+    // Cloudflare sorts last among cloud candidates here, so without the gate streamOpenAI's guard message
+    // becomes the lastError an import that failed for unrelated reasons shows the user.
+    expect(indexSource).toMatch(
+      /if \(requiresUserBaseUrl\(provider\) && !providerBaseUrl\(provider, settings\)\) return false/
+    )
   })
 
   it('the ask eligibility chain names the missing endpoint instead of failing mid-stream', () => {
@@ -179,5 +205,49 @@ describe('Cloudflare participates in the circuit breaker like any sibling', () =
   it('is reachable by the failover walk, which enumerates the registry rather than a hand-kept list', () => {
     expect(Object.keys(PROVIDERS)).toContain('cloudflare')
     expect(indexSource).toMatch(/const order = \(Object\.keys\(PROVIDERS\) as ProviderId\[\]\)/)
+  })
+})
+
+describe('MQA-213 — a gateway failure only its operator can clear is never rewritten as the user network', () => {
+  it('checks the operator-fault marker BEFORE the transient rewrite, because a 502 matches both', () => {
+    // The order is the fix. isTransient matches the same 502, so if these two branches were ever swapped
+    // every user in an org would be told to check their wifi while the real cause is a secret on the
+    // Worker — which is exactly what shipped before this branch existed.
+    expect(indexSource).toMatch(/isProxyOperatorFault\(message\)\s*\n?\s*\? stripProxyFaultMarker\(message\)/)
+    const fault = indexSource.indexOf('isProxyOperatorFault(message)')
+    const network = indexSource.indexOf('Check your network and try again.')
+    expect(fault).toBeGreaterThan(-1)
+    expect(network).toBeGreaterThan(fault)
+  })
+
+  it('strips the routing marker on the Settings Test surface too, where the same message is shown raw', () => {
+    expect(storeSource).toMatch(/stripProxyFaultMarker\(e instanceof Error \? e\.message : String\(e\)\)/)
+  })
+})
+
+describe('MQA-217 — the optional AI Gateway pin can be uncommented without breaking the deploy', () => {
+  // wrangler.jsonc is the one file in this feature an OPERATOR edits by hand, following an instruction
+  // written in three places (the file itself, cloudflare-proxy/README.md, docs/CLOUDFLARE.md). It used
+  // to keep the commented `vars` line AFTER the last real member with no comma anywhere, so following
+  // that instruction produced two members with nothing between them and `wrangler deploy` died on the
+  // config parse — at the exact moment an operator is reacting to abuse by installing a rate limit.
+  const jsonc = read('..', '..', 'cloudflare-proxy', 'wrangler.jsonc')
+  const VARS_LINE = /^(\s*)\/\/ ("vars": \{ "CF_AI_GATEWAY_ID": "<YOUR_GATEWAY_ID>" \},)$/m
+
+  /** Strict-JSON parse of a JSONC file: drop whole-line comments, keep everything else. */
+  const parse = (text: string): Record<string, unknown> =>
+    JSON.parse(text.replace(/^\s*\/\/.*$/gm, '')) as Record<string, unknown>
+
+  it('parses as committed', () => {
+    expect(parse(jsonc).name).toBe('metis-cloudflare-proxy')
+  })
+
+  it('still parses with the documented line uncommented, and the var lands where the Worker reads it', () => {
+    expect(jsonc, 'the commented vars line moved or was reworded').toMatch(VARS_LINE)
+    const uncommented = jsonc.replace(VARS_LINE, '$1$2')
+    const config = parse(uncommented) as { vars?: Record<string, string> }
+    expect(config.vars?.CF_AI_GATEWAY_ID).toBe('<YOUR_GATEWAY_ID>')
+    // Env.CF_AI_GATEWAY_ID is what turns into the cf-aig-gateway-id header on every upstream call.
+    expect(read('..', '..', 'cloudflare-proxy', 'src', 'index.ts')).toMatch(/CF_AI_GATEWAY_ID/)
   })
 })

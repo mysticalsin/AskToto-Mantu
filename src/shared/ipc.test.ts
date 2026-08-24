@@ -239,11 +239,22 @@ describe('SettingsSchema', () => {
     expect(result.success).toBe(true)
   })
 
-  it('defaults cloudflareBaseUrl empty — Métis ships no Cloudflare endpoint and no account token', () => {
-    // A packaged Electron app cannot keep a secret (`npx asar extract`), and a default endpoint would be
-    // the first half of shipping one. Each operator deploys their own Worker and pastes its URL.
-    expect(DEFAULT_SETTINGS.cloudflareBaseUrl).toBe('')
-    expect(SettingsSchema.parse(DEFAULT_SETTINGS).cloudflareBaseUrl).toBe('')
+  it('ships the Worker ENDPOINT but never a credential — the distinction the whole design rests on', () => {
+    // A packaged Electron app cannot keep a secret: `npx asar extract` recovers any embedded string. A
+    // URL is not a secret, so presetting the operator's Worker endpoint costs nothing and saves the user
+    // pasting a second string. The Cloudflare ACCOUNT token is the thing that must never ship, and it
+    // does not: it lives as a Wrangler secret ON that Worker. What a user still pastes is their
+    // METIS_PROXY_KEY, which goes to the encrypted key store, never to settings.
+    const preset = SettingsSchema.parse(DEFAULT_SETTINGS).cloudflareBaseUrl
+    expect(preset).toBe(DEFAULT_SETTINGS.cloudflareBaseUrl)
+    expect(preset).toMatch(/^https:\/\//)
+    expect(preset.replace(/\/+$/, '')).toMatch(/\/v1$/)
+    // No credential may hide in the endpoint: no userinfo, no query string carrying a key.
+    expect(preset).not.toMatch(/@/)
+    expect(preset).not.toMatch(/[?&](key|token|secret|api[-_]?key)=/i)
+    // And nothing token-shaped is anywhere in the shipped defaults.
+    const asJson = JSON.stringify(DEFAULT_SETTINGS)
+    expect(asJson).not.toMatch(/cfut_|CLOUDFLARE_API_TOKEN|Bearer /)
   })
 
   it('rejects a non-https Cloudflare Worker URL', () => {

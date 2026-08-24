@@ -6,6 +6,7 @@ import {
   bandColor,
   bandLabel,
   categoryLabel,
+  fmtAmount,
   groundingColor,
   groundingLabel,
   outcomeLabel,
@@ -107,7 +108,7 @@ export function DealView({ data }: Props) {
   }, [bidParam])
 
   const deal = useMemo(
-    () => data.deals.find((d) => d.bid_id === selected) ?? data.deals[0],
+    () => data.deals.find((d) => d.bid_id === selected),
     [data.deals, selected],
   )
 
@@ -137,6 +138,25 @@ export function DealView({ data }: Props) {
   }
 
   if (!deal) {
+    // Deep-link to a bid_id that no longer exists (renamed/merged deal, stale bookmark) is a different
+    // case from a genuinely empty brain — the old `?? data.deals[0]` silently showed the WRONG deal instead.
+    if (bidParam && data.deals.length > 0) {
+      return (
+        <div className="mx-auto max-w-7xl px-6 py-8">
+          <h1 className="text-2xl font-semibold text-white/95">Deal breakdown</h1>
+          <div className="mt-6 rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-6 text-sm text-white/60">
+            No deal named &ldquo;{bidParam}&rdquo;. It may have been renamed or merged. {' '}
+            <button
+              onClick={() => selectDeal(data.deals[0].bid_id)}
+              className="text-mantu-light hover:underline"
+            >
+              Go to {data.deals[0].display_name}
+            </button>
+            .
+          </div>
+        </div>
+      )
+    }
     return (
       <div className="mx-auto max-w-7xl px-6 py-8 text-sm text-white/50">No deals available.</div>
     )
@@ -224,6 +244,34 @@ export function DealView({ data }: Props) {
                   }
                 />
                 <Row label="Outcome" value={outcomeLabel[deal.outcome]} />
+                {deal.amount ? (
+                  <Row
+                    label="Value"
+                    value={fmtAmount(deal.amount.currency, deal.amount.value)}
+                    title={deal.amount.quote || undefined}
+                  />
+                ) : (
+                  deal.amount_pending && (
+                    <Row
+                      label="Value"
+                      value={`${fmtAmount(deal.amount_pending.currency, deal.amount_pending.value)} (unconfirmed)`}
+                      title={deal.amount_pending.quote || 'Extracted from a meeting, not yet reviewed.'}
+                      extra={<AcceptSuggestion entityKind="deal" entityId={deal.bid_id} field="amount" />}
+                    />
+                  )
+                )}
+                {deal.close_date ? (
+                  <Row label="Close date" value={deal.close_date} />
+                ) : (
+                  deal.close_date_pending && (
+                    <Row
+                      label="Close date"
+                      value={`${deal.close_date_pending.value} (unconfirmed)`}
+                      title={deal.close_date_pending.quote || 'Extracted from a meeting, not yet reviewed.'}
+                      extra={<AcceptSuggestion entityKind="deal" entityId={deal.bid_id} field="close_date" />}
+                    />
+                  )
+                )}
                 <Row
                   label="Win likelihood"
                   value={deal.win_likelihood_band ? bandLabel[deal.win_likelihood_band] : 'Ungraded (no cited evidence)'}
@@ -346,7 +394,9 @@ export function DealView({ data }: Props) {
                     <div className="min-w-0">
                       <div className="flex items-center gap-1.5 text-xs font-medium text-white/80">
                         {cg.label}
-                        {!cg.is_client_facing && (
+                        {/* `=== false` on purpose: undefined means the extraction never named an
+                            account, which is missing attribution, not proof of an internal call. */}
+                        {cg.is_client_facing === false && (
                           <span className="rounded-full bg-white/10 px-1.5 py-0.5 text-[9px] font-normal uppercase tracking-wide text-white/40">
                             internal
                           </span>

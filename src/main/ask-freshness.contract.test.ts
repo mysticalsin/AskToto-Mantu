@@ -140,14 +140,20 @@ describe('key-exhaustion failover classification (the "Kimi maxed out → next k
     // seam above still fires. Pin both halves.
     const openaiSrc = readFileSync(join(__dirname, 'llm', 'openai.ts'), 'utf8')
     expect(openaiSrc).toMatch(/sawReasoning && !usageResult\.sawContent/)
-    // The load-bearing half is that `gotToken` is set ONLY inside onDelta — i.e. only a real CONTENT
-    // delta counts as "answered", so a reasoning-only response still reaches the pre-token failover
-    // seam. Matched structurally rather than as one exact line so the first-token block can carry
-    // additional bookkeeping (the provider-health clear for MQA-003/MQA-004, and the hedge's
-    // declareWinner + winner streamMeta re-assert for MQA-143) without this contract going stale. What
-    // must not change — and what the length assertion below actually locks — is that nothing ELSE
-    // anywhere in index.ts assigns gotToken = true; the windows are generous for exactly that reason.
-    expect(indexSrc).toMatch(/onDelta: \(text\) => \{[\s\S]{0,400}?if \(!gotToken\)[\s\S]{0,1200}?gotToken = true/)
+    // The load-bearing half is that `gotToken` is set ONLY by text that actually reaches the user, so a
+    // reasoning-only response still hits the pre-token failover seam. That bookkeeping now lives in the
+    // single `paint()` helper (onDelta and the onDone flush both go through it) rather than inline in
+    // onDelta — a STRONGER version of the same rule, since paint() early-returns on empty text and the
+    // think-stripper (llm/think-strip.ts) yields empty while a model is mid-<think>. Matched structurally
+    // so the first-token block can keep carrying its other bookkeeping (the provider-health clear for
+    // MQA-003/MQA-004, the hedge's declareWinner + winner streamMeta re-assert for MQA-143) without this
+    // contract going stale. What must not change — and what the length assertion below locks — is that
+    // nothing ELSE anywhere in index.ts assigns gotToken = true.
+    expect(indexSrc).toMatch(
+      /const paint = \(text: string\): void => \{\s*if \(!text\) return[\s\S]{0,1400}?gotToken = true/
+    )
+    // …and that every delta actually routes through it, rather than some provider painting directly.
+    expect(indexSrc).toMatch(/onDelta: \(text\) => \{[\s\S]{0,400}?paint\(think\.push\(text\)\)/)
     const gotTokenAssignments = indexSrc.match(/gotToken = true/g) ?? []
     expect(gotTokenAssignments).toHaveLength(1)
   })

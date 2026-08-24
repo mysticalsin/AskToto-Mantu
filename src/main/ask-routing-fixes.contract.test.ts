@@ -155,3 +155,23 @@ describe('MQA-013 — settle/outcome resolve a renamed deal by its stable id', (
     expect(outcome).not.toMatch(/brainSlugify/)
   })
 })
+
+describe('MQA-228 — the screenshot-incapable advice respects the org allowlist', () => {
+  it('the vision-gap message is built by visionSwitchAdvice, not a static provider pair', () => {
+    expect(indexSrc).toMatch(/can't read screenshots\. \$\{visionSwitchAdvice\(provider\)\}/)
+    expect(indexSrc).not.toMatch(/can't read screenshots\. Switch to Claude or GPT/)
+  })
+
+  it('the advice only ever names an ALLOWED vision-capable provider, preferring a configured one', () => {
+    const body = blockAfter(indexSrc, 'const visionSwitchAdvice = (blocked: ProviderId): string =>')
+    // Candidate filter: vision-capable AND on the allowlist (null allowlist = unrestricted), never local.
+    expect(body).toMatch(/p !== blocked && p !== 'local' && providerVisionOk\(p\) && \(!allowed \|\| allowed\.includes\(p\)\)/)
+    // Immediately-actionable first: a keyed / CLI-connected candidate outranks a merely-allowed one.
+    expect(body).toMatch(/PROVIDERS\[p\]\.kind === 'cli' \? !!s\.cliConnected\[p\] : getApiKey\(p\)\.length > 0/)
+  })
+
+  it('a policy that leaves no vision route says so, instead of advising an impossible switch', () => {
+    const body = blockAfter(indexSrc, 'const visionSwitchAdvice = (blocked: ProviderId): string =>')
+    expect(body).toMatch(/Your organization's approved providers can't read screenshots/)
+  })
+})

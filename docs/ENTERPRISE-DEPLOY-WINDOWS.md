@@ -103,3 +103,34 @@ admin-owned (`src/main/win-security.ts`) — a non-admin user cannot plant polic
 - No telemetry, no crash-report upload — by design (`src/main/index.ts`).
 - What leaves the device: prompts to the user-chosen AI provider; optional Dust/graph reads of the
   notes folder. See `README.md` §Security & privacy.
+
+## Logs, audit trail, and support diagnostics
+
+- Diagnostic log: `%APPDATA%sktoto\logs\main.log` (5MB rotation). Crash dumps: `%APPDATA%sktoto\crash-*.log`
+  plus Crashpad minidumps under the profile.
+- Security audit trail: `%APPDATA%sktoto\logsudit.log` + rotated `audit-<epoch>.log` generations
+  (20 kept). Hash-chained for tamper evidence — verify with `node scripts/verify-audit-log.mjs "<logs dir>"`.
+  Policy, retention, and the erasure stance: `docs/AUDIT-LOG.md`.
+- Users export everything support needs from **Settings -> About -> Export diagnostics bundle** — logs,
+  crash dumps and the boot sentinel to a folder of their choice, with a MANIFEST. Never includes
+  meetings, the knowledge store, or settings.
+
+## Private update feed (admin policy)
+
+By default updates come from the public GitHub releases feed. To serve them from an internally hosted
+endpoint instead, add to the ADMIN managed-config (`%ProgramData%\Métis\managed-config.json` — the
+ACL-trusted machine policy; a per-user config is deliberately ignored for this key):
+
+```json
+{ "updateFeedUrl": "https://updates.your-corp.example/metis/" }
+```
+
+The URL must be `https://` and must serve electron-updater's generic layout: `latest.yml`, the
+`Metis-Setup-*.exe` it names, and its `.blockmap`. Signature verification
+(`verifyUpdateCodeSignature`) still applies to whatever the feed serves. `disableAutoUpdate: true`
+continues to freeze updates entirely.
+
+## DevTools posture
+
+DevTools are disabled in packaged builds (`devTools: false` on every window). For a field-debugging
+session, launch with `ASKTOTO_DEVTOOLS=1`.

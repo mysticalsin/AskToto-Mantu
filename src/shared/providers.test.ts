@@ -260,21 +260,25 @@ describe('Cloudflare provider registry', () => {
     expect(entry).not.toMatch(/[A-Za-z0-9_-]{40,}/)
   })
 
-  it("uses Cloudflare's {provider}/{model} ids, including the third-party models one token reaches", () => {
-    // Unified Billing means the operator's single Cloudflare token also reaches OpenAI/Anthropic/Google
-    // models — the reason this provider is worth having over pointing 'custom' at Workers AI.
-    expect(PROVIDERS.cloudflare.defaultModel).toBe('workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct')
-    for (const m of PROVIDERS.cloudflare.models) expect(m).toMatch(/^[a-z0-9-]+\/.+/)
-    expect(PROVIDERS.cloudflare.models).toContain('openai/gpt-5.5')
-    expect(PROVIDERS.cloudflare.models).toContain('anthropic/claude-sonnet-4-5')
-    expect(PROVIDERS.cloudflare.models).toContain('google-ai-studio/gemini-2.5-flash')
+  it('ships only ids that a live Cloudflare account actually served', () => {
+    // The third-party {provider}/{model} ids that used to be listed here were never reachable on a
+    // default install: `openai/gpt-5.5` needs a funded Unified Billing gateway ("Insufficient balance;
+    // add money to your gateway or use BYOK") and `anthropic/claude-sonnet-4-5` /
+    // `google-ai-studio/gemini-2.5-flash` are not valid ids at this endpoint at all. Suggesting a model
+    // the user cannot run is the same defect class as defaulting to one.
+    expect(PROVIDERS.cloudflare.defaultModel).toBe('@cf/meta/llama-4-scout-17b-16e-instruct')
+    for (const m of PROVIDERS.cloudflare.models) expect(m).toMatch(/^@cf\/.+/)
   })
 
-  it('resolves a cheap base tier and a frontier think/deep tier with no user override', () => {
-    expect(resolveModelTier('cloudflare', {}, {}, 'base')).toBe('workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct')
-    expect(resolveModelTier('cloudflare', {}, {}, 'think')).toBe('anthropic/claude-sonnet-4-5')
-    // No distinct deep model, so deep degrades to think — never silently back down to the base model.
-    expect(resolveModelTier('cloudflare', {}, {}, 'deep', {})).toBe('anthropic/claude-sonnet-4-5')
+  it('resolves a cheap base tier, a fast think tier, and a reasoning deep tier with no user override', () => {
+    expect(resolveModelTier('cloudflare', {}, {}, 'base')).toBe('@cf/meta/llama-4-scout-17b-16e-instruct')
+    // MQA-229: think must stream visible text immediately. gpt-oss-120b used to sit here and spent
+    // 3.6-14.2s on hidden reasoning before its first visible token (measured through the live Worker),
+    // while routing.ts sends every "why/how/explain/compare" question to this tier — so the app's most
+    // common ask shape blew the 2-3s answer budget. The 70B fp8-fast model answers in ~0.4s to first
+    // visible token; the reasoning model is reserved for the DEEP tier, where depth is the point.
+    expect(resolveModelTier('cloudflare', {}, {}, 'think')).toBe('@cf/meta/llama-3.3-70b-instruct-fp8-fast')
+    expect(resolveModelTier('cloudflare', {}, {}, 'deep', {})).toBe('@cf/openai/gpt-oss-120b')
   })
 
   it('speaks the OpenAI wire protocol, so it reuses the existing streaming client unchanged', () => {
@@ -283,16 +287,38 @@ describe('Cloudflare provider registry', () => {
     expect(PROVIDERS.cloudflare.kind).toBe('openai')
   })
 
-  it('claims vision only because its resolved base/fast model can actually read an image', () => {
-    // `vision` is a per-PROVIDER flag but a screen-ask runs on the resolved BASE model, so the two must
-    // agree or screenshots go somewhere unreadable. Llama 4 Scout is natively multimodal (Cloudflare's
-    // own catalog lists Vision: Yes), which is the whole reason it is the default rather than the
-    // text-only 3.3-70b that used to be. Assert the COUPLING, not just the flag: a future default that
-    // is text-only must fail here rather than silently breaking screen-asks.
-    expect(PROVIDERS.cloudflare.vision).toBe(true)
+  it('MQA-226: every model id is the bare @cf/ form the live endpoint actually accepts', () => {
+    // Run against a real Cloudflare account: the `workers-ai/` prefix these ids used to carry is rejected
+    // with "No such model", so every ask on the shipped default 404'd. The mock gateway never caught it
+    // because it echoes whatever model it is handed — this is a defect only a live endpoint can find.
+    // The `{provider}/{model}` form is real, but only for third-party labs behind Unified Billing
+    // (`openai/gpt-5.5` answers "Insufficient balance"), so it can never be a default.
+    for (const id of [
+      ...PROVIDERS.cloudflare.models,
+      PROVIDERS.cloudflare.defaultModel,
+      PROVIDERS.cloudflare.fastModel,
+      PROVIDERS.cloudflare.thinkModel ?? PROVIDERS.cloudflare.defaultModel,
+      PROVIDERS.cloudflare.deepModel ?? PROVIDERS.cloudflare.defaultModel
+    ]) {
+      expect(id, `${id} must be a bare Workers AI id`).toMatch(/^@cf\//)
+      expect(id, `${id} must not carry the rejected workers-ai/ prefix`).not.toMatch(/^workers-ai\//)
+    }
     const base = resolveModelTier('cloudflare', {}, {}, 'base')
-    expect(base).toBe('workers-ai/@cf/meta/llama-4-scout-17b-16e-instruct')
+    expect(base).toBe('@cf/meta/llama-4-scout-17b-16e-instruct')
     expect(PROVIDERS.cloudflare.models).toContain(base)
+  })
+
+  it('MQA-227 (supersedes MQA-212): claims no vision, because the endpoint cannot carry an image at all', () => {
+    // Not a model limitation — Llama 4 Scout really is multimodal. Cloudflare's OpenAI-compatible route
+    // rejects EVERY image_url shape with "Property image_url only supports base64 encoded image data"
+    // (code 6004): a data: URL and bare base64, on Scout and on the dedicated vision model alike.
+    // Claiming vision would capture the user's screen and upload it for a request that always errors.
+    // False sends screen-asks to the on-device model, which works. Flip this only against a live
+    // endpoint that accepts an image, never against the mock.
+    // MQA-212 flipped this flag TRUE for a sound reason measured against the mock (Scout is multimodal,
+    // and vision:false was sending screen-asks to the on-device floor). A live endpoint then showed the
+    // transport cannot carry the image at all, so that row is superseded here rather than reopened.
+    expect(PROVIDERS.cloudflare.vision).toBe(false)
   })
 
   it('claims no free tier, because requests bill to the operator', () => {

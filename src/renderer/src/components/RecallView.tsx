@@ -131,7 +131,14 @@ export function meetingIndexStatus(
 // Knowledge-graph status bar — unchanged from original
 // ---------------------------------------------------------------------------
 
-function GraphBar({ onOpenSettings }: { onOpenSettings?: () => void }): JSX.Element | null {
+function GraphBar({
+  onOpenSettings,
+  onDashboardOpen
+}: {
+  onOpenSettings?: () => void
+  /** Called once the full Mantu Intelligence dashboard window actually opened successfully. */
+  onDashboardOpen?: () => void
+}): JSX.Element | null {
   // Mantu Intelligence — the meeting brain (people, accounts, deals, win/loss reasons, graph).
   // Replaces the old graphify note-graph as the "open graph" surface in History.
   const [brain, setBrain] = useState<import('@shared/brain').BrainStatus | null>(null)
@@ -183,6 +190,7 @@ function GraphBar({ onOpenSettings }: { onOpenSettings?: () => void }): JSX.Elem
   const openDashboard = async (): Promise<void> => {
     const r = await window.toto.brainOpenDashboard().catch((e) => ({ ok: false, error: String(e) }))
     if (!r.ok) setError(r.error || 'Could not open Mantu Intelligence.')
+    else onDashboardOpen?.()
   }
 
   const backfilling = !!brain?.backfill?.running
@@ -693,7 +701,8 @@ export function RecallView({
   onNewChat,
   onOpenMeeting,
   onIntelligence,
-  onOpenSettings
+  onOpenSettings,
+  onDashboardOpen
 }: {
   onOpenFolder: () => void
   /** Optional: ← back button in the header. */
@@ -711,6 +720,10 @@ export function RecallView({
   /** Optional: opens Settings → AI — GraphBar's no-provider message needs a real way out, and this view
    *  lives in the same window as Settings (just a `setView` swap in App.tsx). */
   onOpenSettings?: () => void
+  /** Optional: called once the full Mantu Intelligence dashboard window actually opened successfully —
+   *  App.tsx uses this to minimize the History section so it isn't fighting the new window for screen
+   *  space. Never called on failure (the error stays visible in THIS panel for the user to read). */
+  onDashboardOpen?: () => void
 }): JSX.Element {
   const [q, setQ] = useState('')
   // Always the LATEST typed query, readable from a stable (empty-deps) callback — refreshList (below)
@@ -1183,7 +1196,7 @@ export function RecallView({
 
       {/* ── KNOWLEDGE GRAPH STATUS ──────────────────────────────────────── */}
       <div className="mb-2">
-        <GraphBar onOpenSettings={onOpenSettings} />
+        <GraphBar onOpenSettings={onOpenSettings} onDashboardOpen={onDashboardOpen} />
       </div>
 
       {/* ── DATE-GROUPED MEETING LIST ───────────────────────────────────── */}

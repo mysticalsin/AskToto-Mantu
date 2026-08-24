@@ -42,7 +42,7 @@ export function ControlPill({
     // data-hug-width: lets useAutoResize report this element's own shrink-to-fit width to the window
     // instead of the wider fixed guess — without it, the window stayed wider than the visible pill and
     // silently swallowed clicks meant for whatever app was behind that invisible margin.
-    <div {...drag} data-hug-width className="aw-pill inline-flex items-center gap-2 p-1.5">
+    <div {...drag} data-hug-width className="aw-pill inline-flex items-center gap-2 py-1.5 pl-1.5 pr-1">
       <button
         type="button"
         title="Expand Métis"
@@ -98,13 +98,18 @@ export function ControlPill({
           <Mic size={16} />
         </button>
       )}
-      <span className="h-[16px] w-px shrink-0 bg-white/20" />
+      {/* The trailing divider + ✕ pull in tighter than the row's gap-2. At the full 8px each side of the
+          hairline the ✕ read as detached; 4px each was still too far right, so this trims to 2px a side
+          (5px total across the divider) and the container's right padding drops to 4px. The ✕ now reads
+          as the pill's last control rather than something parked past its end. data-hug-width measures
+          scrollWidth, so the window narrows to match instead of leaving dead margin that eats clicks. */}
+      <span className="-ml-1.5 h-[16px] w-px shrink-0 bg-white/20" />
       <button
         type="button"
         onClick={onHide}
         title="Hide Métis"
         aria-label="Hide Métis"
-        className="no-drag focus-ring grid h-[26px] w-[26px] shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] transition-colors hover:bg-white/10 hover:text-[color:var(--color-ink)]"
+        className="no-drag focus-ring -ml-1.5 grid h-[26px] w-[26px] shrink-0 place-items-center rounded-full text-[color:var(--color-ink-3)] transition-colors hover:bg-white/10 hover:text-[color:var(--color-ink)]"
       >
         <X size={14} />
       </button>

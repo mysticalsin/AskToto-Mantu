@@ -4,8 +4,11 @@
  * here. Independent of brainAdapter.ts / types/data.ts on purpose (see momentum.ts's header for why)
  * — minimal structural interfaces are declared locally so any adapter shape can be passed straight in.
  *
- * Status vocabulary mirrors the real ledger schema exactly (src/shared/brain.ts LedgerCommitmentSchema):
- * 'open' | 'kept' | 'broken', defaulting to 'open' when a legacy row predates the `status` field.
+ * Status vocabulary is the display subset of the real ledger schema (src/shared/brain.ts
+ * LedgerCommitmentSchema): 'open' | 'kept' | 'broken', defaulting to 'open' when a legacy row predates
+ * the `status` field. The schema also carries 'rejected' — a human override for a promise that was never
+ * made — but brainAdapter drops those rows before anything reaches this file, so a row here that is
+ * neither kept nor broken is genuinely open rather than one the user already struck out.
  */
 
 export interface CommitmentLike {
