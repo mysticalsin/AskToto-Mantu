@@ -189,6 +189,8 @@ export type AuditEvent =
   | 'settings.profile_recovered'
   | 'graph.purged'
   | 'calendar.read'
+  | 'asr.model.fetch_requested'
+  | 'asr.model.removed'
   | 'app.started'
   | 'app.crash'
   | 'meeting.detect.degraded'

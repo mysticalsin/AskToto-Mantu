@@ -1524,6 +1524,74 @@ function ResilienceSection({
   )
 }
 
+/**
+ * MQA-247 — the high-accuracy transcription model, offered rather than assumed.
+ *
+ * The model cannot ship: 1.61 GB on top of a 0.77 GB installer breaches GitHub's 2 GiB per-asset limit.
+ * So imports fall back to the bundled floor model, which is materially worse on non-English audio.
+ * MQA-246 made that visible; this makes it fixable.
+ *
+ * The size is stated before the button, not after. Someone on a metered connection is agreeing to a
+ * specific number of gigabytes, and a control that reveals the cost only once the transfer has started
+ * is not consent.
+ */
+function AsrModelRow(): JSX.Element | null {
+  const [state, setState] = useState<{ status: string; progress: number; error?: string; ready: boolean; bytes: number } | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  const refresh = useCallback(async () => {
+    try {
+      setState(await window.toto.asrModelState())
+    } catch {
+      setState(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    void refresh()
+  }, [refresh])
+
+  // Poll only while a transfer is actually running — 1.61 GB takes minutes, and a progress bar that does
+  // not move is worse than no progress bar.
+  useEffect(() => {
+    if (state?.status !== 'downloading') return
+    const t = setInterval(() => void refresh(), 700)
+    return () => clearInterval(t)
+  }, [state?.status, refresh])
+
+  if (!state) return null
+  const gb = (state.bytes / 1e9).toFixed(2)
+
+  return (
+    <div className="-mt-1 flex items-start justify-between gap-3 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+      <span>
+        {state.ready
+          ? `High-accuracy transcription model installed (${gb} GB). Imports use it instead of the compact model.`
+          : state.status === 'downloading'
+            ? `Downloading the high-accuracy transcription model — ${Math.round(state.progress * 100)}% of ${gb} GB.`
+            : `Imports use the compact transcription model. The high-accuracy one is a ${gb} GB download — noticeably better, especially on non-English audio.`}
+        {state.status === 'error' && state.error ? ` ${state.error}` : ''}
+      </span>
+      {state.status !== 'downloading' && (
+        <TextButton
+          onClick={async () => {
+            setBusy(true)
+            try {
+              if (state.ready) await window.toto.asrModelRemove()
+              else await window.toto.asrModelFetch()
+            } finally {
+              setBusy(false)
+              void refresh()
+            }
+          }}
+        >
+          {busy ? 'Working…' : state.ready ? 'Remove' : `Download ${gb} GB`}
+        </TextButton>
+      )}
+    </div>
+  )
+}
+
 function LocalAiSection({
   settings,
   patch
@@ -5287,6 +5355,7 @@ export function Settings({
                       <TextButton onClick={() => patch({ asrLastFallbackAt: null })}>Dismiss</TextButton>
                     </div>
                   )}
+                  <AsrModelRow />
                   {settings.asrImportTierFallbackAt != null && (
                     <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
                       <span>

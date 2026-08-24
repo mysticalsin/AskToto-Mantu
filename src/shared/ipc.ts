@@ -164,6 +164,12 @@ export const IPC = {
   asrBundled: 'asr:bundled',
   // Métis Local (on-device LLM): read-only readiness metadata for the model bundled in the installer.
   localModelsList: 'localModels:list',
+  // MQA-247: the high-accuracy transcription model. Its own pair rather than folded into the LLM
+  // channel above — different asset, different size, different consent, and a user may want one
+  // and not the other.
+  asrModelState: 'asrModel:state',
+  asrModelFetch: 'asrModel:fetch',
+  asrModelRemove: 'asrModel:remove',
   // Live-meeting pre-warm (PLAN.md §4.4): a debounced transcript tail, fire-and-forget, so the sidecar's
   // per-slot KV cache stays hot between real suggest requests. See LocalPrewarmPayloadSchema.
   localPrewarm: 'local:prewarm',

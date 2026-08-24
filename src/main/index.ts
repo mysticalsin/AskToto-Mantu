@@ -206,6 +206,8 @@ import {
 import { buildBrainContext } from './brain/context'
 import { buildSystem } from './personas'
 import { initLogging, mainLog, auditLog } from './logger'
+import { asrModelDownloadState, ensureHighTierAsrModel, isHighTierAsrModelReady, removeHighTierAsrModel } from './asr-model-download'
+import { asrModelBytes } from './asr-model-manifest'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
 import { installProxyAwareFetch } from './net/install-proxy'
 import {
@@ -3564,6 +3566,29 @@ function registerIpc(): void {
   ipcMain.handle(IPC.localModelsList, (e) => {
     assertMainWindow(e)
     return listLocalModels(localModelDownloadState())
+  })
+
+  // MQA-247: the high-accuracy transcription model. Same shape as the LLM weights above — paths stay in
+  // main, the renderer learns only readiness, a status word and a fraction.
+  //
+  // Fetch is EXPLICIT. 1.61 GB is not a transfer to begin on someone's behalf, and the bundled floor
+  // model already works, so nothing here runs on a timer or on first import. The user asks.
+  ipcMain.handle(IPC.asrModelState, async (e) => {
+    assertMainWindow(e)
+    return { ...asrModelDownloadState(), ready: await isHighTierAsrModelReady(), bytes: asrModelBytes() }
+  })
+  ipcMain.handle(IPC.asrModelFetch, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false }
+    auditLog('asr.model.fetch_requested', { bytes: asrModelBytes() })
+    return { ok: await ensureHighTierAsrModel() }
+  })
+  ipcMain.handle(IPC.asrModelRemove, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false }
+    removeHighTierAsrModel()
+    auditLog('asr.model.removed', {})
+    return { ok: true }
   })
 
   // Live-meeting pre-warm (PLAN.md §4.4): a debounced transcript tail from the renderer's

@@ -62,3 +62,45 @@ describe('MQA-247 — the high-tier ASR manifest', () => {
     expect(builder).toContain(`!${HIGH_TIER_ASR_MODEL.id}/**`)
   })
 })
+
+/**
+ * MQA-247 — the fetch has to be reachable, explicit, and honest about its size.
+ *
+ * The download machinery existing is not the same as a user being able to use it. And a 1.61 GB transfer
+ * that starts without the number being shown first is not consent — it is a surprise on someone's metered
+ * connection. Both are pinned against source because neither has a runtime seam that a unit test reaches.
+ */
+describe('MQA-247 — the fetch is reachable and explicit', () => {
+  const REPO = join(__dirname, '..', '..')
+  const read = (rel: string): string => readFileSync(join(REPO, rel), 'utf8')
+
+  it('is exposed end to end: channel, handler, preload, UI', () => {
+    expect(read('src/shared/ipc.ts')).toMatch(/asrModelFetch: 'asrModel:fetch'/)
+    expect(read('src/main/index.ts')).toMatch(/ipcMain\.handle\(IPC\.asrModelFetch/)
+    expect(read('src/preload/index.ts')).toMatch(/asrModelFetch: \(\)/)
+    expect(read('src/renderer/src/components/Settings.tsx')).toMatch(/<AsrModelRow \/>/)
+  })
+
+  it('never starts on its own — no timer, no first-import trigger', () => {
+    // The floor model works. Beginning 1.61 GB on someone's behalf is not a reasonable default, and the
+    // module's failure mode must stay "as before", never "worse than before".
+    const main = read('src/main/index.ts')
+    expect(main).not.toMatch(/setTimeout\([^)]*ensureHighTierAsrModel/)
+    expect(main).not.toMatch(/setInterval\([^)]*ensureHighTierAsrModel/)
+    expect(read('src/main/whisper-import.ts')).not.toMatch(/ensureHighTierAsrModel/)
+  })
+
+  it('shows the size BEFORE the button that spends it', () => {
+    const ui = read('src/renderer/src/components/Settings.tsx')
+    expect(ui).toMatch(/Download \$\{gb\} GB/)
+    expect(ui).toMatch(/\$\{gb\} GB download/)
+  })
+
+  it('the fetch and removal are authenticated and audited like every other state change', () => {
+    const main = read('src/main/index.ts')
+    const block = main.slice(main.indexOf('IPC.asrModelFetch'), main.indexOf('IPC.asrModelRemove') + 400)
+    expect(block).toMatch(/requireAuth\(\)/)
+    expect(block).toMatch(/auditLog\('asr\.model\.fetch_requested'/)
+    expect(block).toMatch(/auditLog\('asr\.model\.removed'/)
+  })
+})
