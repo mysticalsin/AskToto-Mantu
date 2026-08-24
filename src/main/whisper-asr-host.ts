@@ -43,11 +43,30 @@ const MODEL_REVISION = 'main'
  *  it is answerable the moment modelsPath is known — which is what lets the `ready` message report the
  *  tier BEFORE the (lazy) model load, rather than leaving the caller to guess. */
 function resolveTier(dir: string | null): (typeof MODEL_TIERS)[number] {
-  if (!dir) return MODEL_TIERS[MODEL_TIERS.length - 1]
-  return MODEL_TIERS.find((t) => existsSync(join(dir, t.id))) ?? MODEL_TIERS[MODEL_TIERS.length - 1]
+  return tierAndRoot(dir).tier
+}
+
+/**
+ * The best tier present in EITHER root, and the root it was found in. transformers.js takes a single
+ * localModelPath, so the caller needs both answers together — otherwise it can select the fetched high
+ * tier and then point the loader at the packaged directory, which does not contain it.
+ *
+ * Searched tier-major, best first, checking the fetched profile before the package. The floor lives only
+ * in the package and the high tier only in the profile today, but writing it this way keeps neither of
+ * those assumptions load-bearing.
+ */
+function tierAndRoot(dir: string | null): { tier: (typeof MODEL_TIERS)[number]; root: string | null } {
+  for (const tier of MODEL_TIERS) {
+    for (const root of [fetchedModelsPath, dir]) {
+      if (root && existsSync(join(root, tier.id))) return { tier, root }
+    }
+  }
+  return { tier: MODEL_TIERS[MODEL_TIERS.length - 1], root: dir }
 }
 
 let modelsPath: string | null = null
+/** Per-user profile root for models fetched after install (MQA-247). */
+let fetchedModelsPath: string | null = null
 let transformersModule: any = undefined // undefined = unprobed, null = probed and failed
 let asr: any = null
 let loadingAsr: Promise<any> | null = null
@@ -72,11 +91,13 @@ async function ensureAsr(): Promise<any> {
   if (!mod || !modelsPath) throw new Error('The bundled transcription files are missing or damaged. Reinstall Métis from a complete installer.')
   const { pipeline, env } = mod
   env.allowLocalModels = true
-  env.localModelPath = modelsPath
+  const { tier, root } = tierAndRoot(modelsPath)
+  // Point the loader at the root that actually holds the selected tier, never unconditionally at the
+  // packaged one — selecting the fetched high tier and loading from the package would find nothing.
+  env.localModelPath = root ?? modelsPath
   env.allowRemoteModels = false // offline-only, same guarantee as the renderer's bundled worker
   env.useBrowserCache = false
-  const tier = resolveTier(modelsPath)
-  console.error(`[whisper-asr-host] loading ${tier.id}`)
+  console.error(`[whisper-asr-host] loading ${tier.id} from ${root ?? modelsPath}`)
   loadingAsr = pipeline('automatic-speech-recognition', tier.id, { dtype: tier.dtype, revision: MODEL_REVISION })
     .then((p: any) => {
       asr = p
@@ -115,8 +136,11 @@ if (port) {
     if (!msg || typeof msg !== 'object') return
     if (msg.type === 'init') {
       modelsPath = typeof msg.modelsPath === 'string' ? msg.modelsPath : null
-      // MQA-246: say WHICH tier loaded. The high tier is not in the package today, so the find() above
-      // always falls through to the whisper-base floor — a real degradation the user had no way to see.
+      // MQA-247: a SECOND root — the per-user profile the high tier is fetched into. The packaged
+      // resources directory can never hold it (1.61 GB would put the installer over GitHub's 2 GiB
+      // per-asset limit), so without this the probe can only ever find the bundled floor.
+      fetchedModelsPath = typeof msg.fetchedModelsPath === 'string' ? msg.fetchedModelsPath : null
+      // MQA-246: say WHICH tier resolved, and whether that is a degradation.
       const readyTier = resolveTier(modelsPath)
       port.postMessage({ type: 'ready', tier: readyTier.id, degraded: readyTier.id !== MODEL_TIERS[0].id })
       return

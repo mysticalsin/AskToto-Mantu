@@ -7,6 +7,16 @@
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { join } from 'node:path'
+import { LOCAL_MODELS, spawnProfileFor } from './local-models'
+
+// MQA-248: these literals used to be `{ gguf, mmproj }` alone, missing the ctxSize/parallel/gpuLayers that
+// ModelPaths gained when the sidecar learned to size itself to the machine. That is the identical defect
+// that shipped `-c undefined` into a tagged release from local-runtime.test.ts — the same omission, in a
+// sibling file, invisible for the same two reasons: both tsconfigs exclude **/*.test.ts, so no test file is
+// typechecked, and these tests mock the spawn so nothing ever read the bad value at runtime.
+//
+// Derived from the real profile rather than hardcoded, so it cannot drift from production again.
+const SPAWN_PROFILE = spawnProfileFor(LOCAL_MODELS[LOCAL_MODELS.length - 1])
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
@@ -94,7 +104,7 @@ describe('F1 — concurrent start() calls share one in-flight start', () => {
         }, 15)
       })
 
-    const paths = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
+    const paths = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
     const p1 = start(paths, 'mac')
     const p2 = start(paths, 'mac') // second caller arrives while state === 'starting'
 
@@ -134,7 +144,7 @@ describe('F1 — concurrent start() calls share one in-flight start', () => {
 
 describe('quit cancellation — Windows fallback', () => {
   it('stop() during the first Windows candidate cancels startup instead of spawning the CPU fallback', async () => {
-    const paths = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
+    const paths = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
     let outcome: 'resolved' | 'rejected' | undefined
 
     void start(paths, 'win').then(
@@ -162,8 +172,8 @@ describe('quit cancellation — Windows fallback', () => {
   })
 
   it('a detached old start cannot overwrite a newer generation port with a delayed listening line', async () => {
-    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
-    const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj' }
+    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
+    const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
     let outcomeA: 'resolved' | 'rejected' | undefined
 
     void start(pathsA, 'mac').then(
@@ -201,8 +211,8 @@ describe('quit cancellation — Windows fallback', () => {
 
 describe('F2 — model switch', () => {
   it('starting a DIFFERENT model while one is running stops the old sidecar and spawns the new model', async () => {
-    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
-    const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj' }
+    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
+    const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
 
     const p1 = start(pathsA, 'mac')
     emitListening(0, 55201)
@@ -223,7 +233,7 @@ describe('F2 — model switch', () => {
   })
 
   it('calling start() again with the SAME model while running is a no-op — no restart, no new spawn', async () => {
-    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
+    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
     const p1 = start(pathsA, 'mac')
     emitListening(0, 55301)
     await p1
@@ -243,8 +253,8 @@ describe('F2 — model switch', () => {
         releaseHealthA = () => resolve({ status: 200 })
       })
 
-    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
-    const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj' }
+    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
+    const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
 
     const p1 = start(pathsA, 'mac') // still "starting" — health never resolves until released below
     emitListening(0, 55401)
@@ -280,8 +290,8 @@ describe('switch-kill hardening — model switch defers instead of killing an ac
   })
 
   it('does NOT kill the running sidecar while a stream is active — defers until the stream ends, then switches', async () => {
-    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
-    const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj' }
+    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
+    const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
 
     const p1 = start(pathsA, 'mac')
     emitListening(0, 55601)
@@ -318,7 +328,7 @@ describe('switch-kill hardening — model switch defers instead of killing an ac
   })
 
   it('a caller re-requesting the SAME (already-running) model while a stream is active resolves immediately — no deferral needed', async () => {
-    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
+    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
     const p1 = start(pathsA, 'mac')
     emitListening(0, 55701)
     await p1
@@ -332,8 +342,8 @@ describe('switch-kill hardening — model switch defers instead of killing an ac
   })
 
   it('switches immediately (baseline unaffected) when no stream is active — activeStreamCount defaults to zero', async () => {
-    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
-    const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj' }
+    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
+    const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
     const p1 = start(pathsA, 'mac')
     emitListening(0, 55801)
     await p1
@@ -351,8 +361,8 @@ describe('switch-kill hardening — model switch defers instead of killing an ac
 
 describe('G1 — exit handler generation guard', () => {
   it('a stale exit event from the OLD sidecar, arriving AFTER a switch to a NEW one is already healthy, does not clobber the new instance, fire a crash audit, or trigger an auto-restart — and will-quit-style stop() still kills the NEW instance', async () => {
-    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj' }
-    const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj' }
+    const pathsA = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
+    const pathsB = { gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }
 
     const p1 = start(pathsA, 'mac')
     emitListening(0, 55501)
@@ -395,7 +405,7 @@ describe('G1 — exit handler generation guard', () => {
   })
 
   it('a proc that dies BEFORE becoming healthy still rejects start() even though it is (trivially) still the current child — the guard only skips a proc that is no longer current', async () => {
-    const paths = { gguf: '/m/dies-early.gguf', mmproj: '/m/dies-early.mmproj' }
+    const paths = { gguf: '/m/dies-early.gguf', mmproj: '/m/dies-early.mmproj', ...SPAWN_PROFILE }
     const p = start(paths, 'mac')
     await waitUntil(() => spawnState.calls.length === 1)
     const proc = spawnState.procs[0]

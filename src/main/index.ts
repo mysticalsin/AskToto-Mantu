@@ -1331,6 +1331,19 @@ function createWindow(): void {
   // overwrite `win` with a second BrowserWindow and orphan the first one — still visible, still
   // always-on-top, unreferenced.
   if (win && !win.isDestroyed()) return
+  // MQA-249: the one unconditional "this build came up" signal, and the only portable one.
+  //
+  // check-packaged-launch.mjs proves a packaged app actually starts, but it is Win32-only: it asserts on
+  // the real top-level window via PowerShell + UI Automation, and the macOS equivalents all need a TCC
+  // Automation grant an unattended build cannot answer. Its own doc names the missing piece — "no
+  // unconditional audit event fires at startup — so today there is no portable positive signal to assert
+  // on". This is that signal. auditLog writes to userData/logs/audit.log, which ASKTOTO_USERDATA relocates
+  // (electron-log's main.log does NOT on macOS — it goes to ~/Library/Logs), so a gate can point a clean
+  // profile at a temp directory and read the answer out of it on either platform.
+  //
+  // Emitted here rather than at app-ready because reaching createWindow means the main process survived
+  // module load, bytecode load, and boot — which is exactly the class of failure that shipped DOA twice.
+  auditLog('app.started', { version: app.getVersion(), platform: process.platform, arch: process.arch })
   // Crash/recovery guard: render-process-gone recovery and the boot-retry path both rebuild the window
   // from scratch, but isMinimized/currentWidth are module-level state that otherwise survives from before
   // the crash. If the overlay had been collapsed to the mini-pill (currentWidth === PILL_WIDTH) at the

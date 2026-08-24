@@ -17,6 +17,7 @@ import { detectLanguage, LANGUAGE_NAMES } from '@shared/lang-id'
 import { collapseRepeatedPhrase } from '@shared/transcript-filter'
 import { mainLog } from './logger'
 import { getSettings, setSettings } from './store'
+import { asrModelRoot } from './asr-model-download'
 
 /** resources/models — same directory the renderer's asr-model:// protocol serves from. Resolved here
  *  and handed to the child in its init message, so the child needs no packaged/dev path logic. */
@@ -92,7 +93,17 @@ function ensureHost(): UtilityProcess {
     }
     failAllPending(`The transcription helper exited unexpectedly (code ${code ?? 'unknown'}).`)
   })
-  child.postMessage({ type: 'init', modelsPath: modelsDir() })
+  // MQA-247: both roots — the packaged floor and the per-user profile the high tier is fetched into.
+  // Resolved defensively: if the profile path is unavailable for any reason, an import must still run
+  // on the bundled floor rather than fail outright. Losing the better model is a degradation; losing
+  // transcription is an outage, and this module already treats the floor as the always-available path.
+  let fetchedModelsPath: string | undefined
+  try {
+    fetchedModelsPath = asrModelRoot()
+  } catch (e) {
+    mainLog.warn('[whisper-host] no fetched-model root; the bundled floor is the only tier:', e)
+  }
+  child.postMessage({ type: 'init', modelsPath: modelsDir(), ...(fetchedModelsPath ? { fetchedModelsPath } : {}) })
   host = child
   hostReady = false
   return child

@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -136,5 +136,44 @@ describe('MQA-246 — an import must not silently run on the floor transcription
 
   it('the note is written once, not re-stamped on every import', () => {
     expect(importer).toMatch(/getSettings\(\)\.asrImportTierFallbackAt == null/)
+  })
+})
+
+describe('MQA-247 — the fetched high tier must actually win over the bundled floor', () => {
+  const hostSrc = readFileSync(join(__dirname, 'whisper-asr-host.ts'), 'utf8')
+  it('reports the high tier, not degraded, when it exists in the FETCHED root only', async () => {
+    // The whole point of the feature: the packaged resources directory can never hold this model, so if
+    // the probe only ever searched that root the 1.61 GB fetch would land in a directory nothing reads.
+    const fetched = mkdtempSync(join(tmpdir(), 'metis-asr-fetched-'))
+    try {
+      mkdirSync(join(fetched, 'onnx-community', 'whisper-large-v3-turbo'), { recursive: true })
+      await loadHost()
+      port.emit('message', { data: { type: 'init', modelsPath: tempDir, fetchedModelsPath: fetched } })
+      expect(lastMessage()).toEqual({
+        type: 'ready',
+        tier: 'onnx-community/whisper-large-v3-turbo',
+        degraded: false
+      })
+    } finally {
+      rmSync(fetched, { recursive: true, force: true })
+    }
+  })
+
+  it('falls back to the floor and says so when the fetched root is absent or empty', async () => {
+    const empty = mkdtempSync(join(tmpdir(), 'metis-asr-empty-'))
+    try {
+      await loadHost()
+      port.emit('message', { data: { type: 'init', modelsPath: tempDir, fetchedModelsPath: empty } })
+      expect(lastMessage()).toEqual({ type: 'ready', tier: 'Xenova/whisper-base', degraded: true })
+    } finally {
+      rmSync(empty, { recursive: true, force: true })
+    }
+  })
+
+  it('the loader is pointed at the root the tier was found in, not unconditionally at the package', () => {
+    // Selecting the fetched tier and then loading from the packaged root would find nothing — a failure
+    // that looks like a corrupt download rather than a wiring bug, so it is pinned against source.
+    expect(hostSrc).toMatch(/env\.localModelPath = root \?\? modelsPath/)
+    expect(hostSrc).toMatch(/function tierAndRoot\(dir: string \| null\)/)
   })
 })
