@@ -85,9 +85,16 @@ extraResources:
   # Populated by `npm run fetch-models` before packaging.
   - from: resources/models
     to: models
-    # The 1.5 GiB WebGPU Whisper tier is an opt-in development/benchmark asset. Parakeet is the
-    # primary on-device engine and whisper-base remains bundled as an offline fallback; shipping both
-    # models puts a release above the GitHub asset safety gate with no import-path benefit.
+    # The 1.6 GiB WebGPU Whisper tier is excluded because it CANNOT ship: 1.6 GiB of weights on top of a
+    # 0.77 GiB installer is 2.37 GiB, over GitHub's hard 2 GiB per-asset limit (check-release.mjs gates at
+    # 1.9 GiB). Parakeet remains the primary on-device engine and whisper-base the bundled offline floor.
+    #
+    # This comment used to end "with no import-path benefit". That was false, and the falsehood is what
+    # kept the consequence unexamined (MQA-246): whisper-asr-host.ts lists this exact model FIRST in
+    # MODEL_TIERS, so excluding it means every IMPORT — on every platform, not just macOS — silently
+    # decodes with the floor model. The degradation is now disclosed to the user rather than denied here,
+    # but disclosure is not the fix. The fix is the same one MQA-146 applied to the LLM weights for the
+    # same 2 GiB reason: fetch on first use, size- and SHA-256-pinned. Tracked as MQA-247.
     filter:
       - '**/*'
       - '!onnx-community/whisper-large-v3-turbo/**'
