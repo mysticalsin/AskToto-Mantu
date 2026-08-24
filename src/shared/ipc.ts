@@ -691,10 +691,24 @@ export const StreamMetaSchema = z.object({
 })
 export type StreamMeta = z.infer<typeof StreamMetaSchema>
 
-const BUNDLED_LOCAL_MODEL_ID = 'qwen3.5-0.8b'
+/**
+ * On-device model ids the registry knows (main/llm/local-models.ts owns the URLs, sizes and hashes;
+ * this list exists only so the settings schema can validate an id without importing main-only code).
+ *
+ * The DEFAULT stays the small model on purpose: this file cannot measure RAM, and a fresh profile that
+ * defaulted straight to the 4B on an 8 GB machine would persist a model assertRamOk refuses to load —
+ * turning Local AI off entirely rather than falling back. Boot owns the upgrade instead, where
+ * bestModelForMachine() can actually see the hardware.
+ */
+const LOCAL_MODEL_IDS = ['qwen3.5-4b', 'qwen3.5-0.8b'] as const
+const BUNDLED_LOCAL_MODEL_ID: (typeof LOCAL_MODEL_IDS)[number] = 'qwen3.5-0.8b'
 const BundledLocalModelIdSchema = z.preprocess(
+  // 'qwen3.5-2b' is a retired id from an earlier swap; it has no weights any more, so it maps to the
+  // floor and boot re-upgrades from there if the machine allows.
   (value) => (value === undefined || value === 'qwen3.5-2b' ? BUNDLED_LOCAL_MODEL_ID : value),
-  z.string().refine((value) => value === BUNDLED_LOCAL_MODEL_ID, 'Unknown bundled local model.')
+  z
+    .string()
+    .refine((value) => (LOCAL_MODEL_IDS as readonly string[]).includes(value), 'Unknown bundled local model.')
 )
 
 // ─── MCP connections (generalized from the single BidStack connection) ──────────────────────────────
