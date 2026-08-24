@@ -14,8 +14,8 @@ import {
   verifyExtraction,
   mergeExtraction,
   parseExtractionPayload,
-  enqueueIngest, whenIndexWritesSettle } from './ingest'
-import { readDeal, readMeetingExtraction, slugify } from './store'
+  enqueueIngest, whenIndexWritesSettle, SELF_PERSON_SLUG } from './ingest'
+import { readDeal, readMeetingExtraction, readPerson, slugify } from './store'
 import { formatDeal } from './context'
 
 /**
@@ -251,6 +251,52 @@ describe('mergeExtraction — deal amount/close_date/band, verification-gated (T
         ...overrides
       }
     })
+
+  it('MQA-244: a you/them commitment in a DEAL-LESS meeting reaches a rendered ledger', async () => {
+    // Deliberately NOT a named speaker. `by` is "you" | "them" | a name, and Metis's own transcription
+    // labels speakers with the role words — so this is the common case. MQA-116 strips those names from
+    // people[], which left the person loop nothing to match `by` against; the deal branch takes every
+    // commitment, so only a meeting WITHOUT a deal exposed the gap. Adding a named speaker to this
+    // fixture would turn it green while live data loss continued, which is the whole trap.
+    const x = MeetingExtractionSchema.parse({
+      account: null,
+      deal: null,
+      people: [],
+      commitments: [
+        { text: 'Send the pricing deck', by: 'you', due_hint: 'by Tuesday', quote: "I'll send the pricing deck by Tuesday", confidence: 'EXTRACTED' },
+        { text: 'Come back with the headcount numbers', by: 'them', due_hint: '', quote: '', confidence: 'EXTRACTED' }
+      ]
+    })
+    await mergeExtraction(s, x, { file: 'sync.md', date: '2026-02-02', title: 'Internal sync' }, undefined, '')
+
+    const self = readPerson(s, SELF_PERSON_SLUG)
+    expect(self, 'no ledger received the commitments — they were dropped').toBeTruthy()
+    expect(self!.commitments?.map((c) => c.text).sort()).toEqual([
+      'Come back with the headcount numbers',
+      'Send the pricing deck'
+    ])
+    // `by` survives verbatim, so the rendered page still says who promised what.
+    expect(self!.commitments?.map((c) => c.by).sort()).toEqual(['them', 'you'])
+    expect(self!.commitments?.every((c) => c.status === 'open')).toBe(true)
+    expect(self!.commitments?.every((c) => c.meeting === 'sync.md')).toBe(true)
+  })
+
+  it('MQA-244: a commitment a real ledger already claimed is NOT also copied to the user ledger', async () => {
+    // The catch-all must be a catch-all, not a duplicate. A named speaker still routes to that person.
+    const x = MeetingExtractionSchema.parse({
+      account: null,
+      deal: null,
+      people: [{ name: 'Alice Adams', role: 'CTO', org: 'Acme', confidence: 'EXTRACTED' }],
+      commitments: [
+        { text: 'Share the architecture doc', by: 'Alice Adams', due_hint: '', quote: '', confidence: 'EXTRACTED' }
+      ]
+    })
+    await mergeExtraction(s, x, { file: 'named.md', date: '2026-02-03', title: 'With Alice' }, undefined, '')
+
+    expect(readPerson(s, slugify('Alice Adams'))!.commitments?.map((c) => c.text)).toEqual(['Share the architecture doc'])
+    const self = readPerson(s, SELF_PERSON_SLUG)
+    expect(self?.commitments?.some((c) => c.text === 'Share the architecture doc') ?? false).toBe(false)
+  })
 
   it('a verified amount lands in state "verified" with EXTRACTED confidence', async () => {
     const transcript = 'Them: the total contract value comes in at 2.4M EUR for the first phase.'

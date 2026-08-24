@@ -63,10 +63,13 @@ async function waitForMessageCount(min: number): Promise<void> {
 }
 
 describe('whisper-asr-host — the isolated transformers child (MQA-234)', () => {
-  it('replies ready to an init message', async () => {
+  it('replies ready to an init message, naming the transcription tier it resolved (MQA-246)', async () => {
     await loadHost()
     port.emit('message', { data: { type: 'init', modelsPath: tempDir } })
-    expect(lastMessage()).toEqual({ type: 'ready' })
+    // tempDir holds no model directories, so the probe falls to the bundled floor — which is exactly the
+    // shipped condition (the high tier is not in the package) and must be reported as a degradation
+    // rather than passed off as the best available.
+    expect(lastMessage()).toEqual({ type: 'ready', tier: 'Xenova/whisper-base', degraded: true })
   })
 
   it('is inert (never throws) when process.parentPort is absent — a stray node invocation or a plain import', async () => {
@@ -107,5 +110,31 @@ describe('whisper-asr-host — the isolated transformers child (MQA-234)', () =>
     expect(turboIdx).toBeGreaterThan(-1)
     expect(baseIdx).toBeGreaterThan(-1)
     expect(turboIdx).toBeLessThan(baseIdx)
+  })
+})
+
+describe('MQA-246 — an import must not silently run on the floor transcription model', () => {
+  const src = readFileSync(join(__dirname, 'whisper-asr-host.ts'), 'utf8')
+  const importer = readFileSync(join(__dirname, 'whisper-import.ts'), 'utf8')
+  const settingsUi = readFileSync(join(__dirname, '..', 'renderer', 'src', 'components', 'Settings.tsx'), 'utf8')
+
+  it('the ready message names the tier it resolved, and whether that is a degradation', () => {
+    // Resolvable at init because the tier is decided by file presence alone — the model load is lazy, so
+    // reporting it only after loading would mean the first import is already running before anyone knows.
+    expect(src).toMatch(/function resolveTier\(dir: string \| null\)/)
+    expect(src).toMatch(/type: 'ready', tier: readyTier\.id, degraded: readyTier\.id !== MODEL_TIERS\[0\]\.id/)
+  })
+
+  it('a degraded tier is recorded where the user can actually see it', () => {
+    // The fallback is by design; the silence was the defect. Same after-the-fact contract the live
+    // engine-swap note already uses — never a live banner mid-import.
+    expect(importer).toMatch(/asrImportTierFallbackAt/)
+    expect(importer).toMatch(/if \(m\.degraded\)/)
+    expect(settingsUi).toMatch(/settings\.asrImportTierFallbackAt != null/)
+    expect(settingsUi).toMatch(/asrImportTierFallbackAt: null/) // dismissable, like its siblings
+  })
+
+  it('the note is written once, not re-stamped on every import', () => {
+    expect(importer).toMatch(/getSettings\(\)\.asrImportTierFallbackAt == null/)
   })
 })

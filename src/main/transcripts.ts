@@ -622,6 +622,10 @@ const cleanTitle = (s: string): string => {
 }
 const speakerLabel = (speaker: TranscriptLine['speaker']): 'Them' | 'You' | 'Speaker' =>
   speaker === 'them' ? 'Them' : speaker === 'you' ? 'You' : 'Speaker'
+/** A diarization cluster label ("Speaker 1"), as minted by speaker-cluster.ts. Shared with recall.ts's
+ *  parser via the same shape, so the writer and the reader cannot disagree about what one looks like. */
+export const CLUSTER_LABEL_RE = /^Speaker \d+$/
+const isClusterLabel = (name: string): boolean => CLUSTER_LABEL_RE.test(name)
 const yamlSafeTitle = (s: string): string =>
   s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ')
 
@@ -648,7 +652,12 @@ function formatTranscriptLine(l: TranscriptLine): string {
   const d = new Date(l.t)
   const t = `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
   const name = sanitizeSpeakerName(l.name)
-  const label = name ? `${speakerLabel(l.speaker)} (${name})` : speakerLabel(l.speaker)
+  // MQA-245: a diarization cluster label IS the speaker identity, not a name for one. Wrapping it in the
+  // generic role label rendered "Speaker (Speaker 1)" in the durable file the user reads and may share.
+  // Emit the cluster label alone; recall.ts's line regex accepts this form and reads the label back as
+  // the name, so the round trip is unchanged. Only the generic role collapses — "Them (Jane Doe)" says
+  // two different things and keeps both.
+  const label = isClusterLabel(name) && speakerLabel(l.speaker) === 'Speaker' ? name : name ? `${speakerLabel(l.speaker)} (${name})` : speakerLabel(l.speaker)
   return `**[${t}] ${label}:** ${l.text}`
 }
 

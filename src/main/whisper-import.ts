@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import { detectLanguage, LANGUAGE_NAMES } from '@shared/lang-id'
 import { collapseRepeatedPhrase } from '@shared/transcript-filter'
 import { mainLog } from './logger'
+import { getSettings, setSettings } from './store'
 
 /** resources/models — same directory the renderer's asr-model:// protocol serves from. Resolved here
  *  and handed to the child in its init message, so the child needs no packaged/dev path logic. */
@@ -56,9 +57,21 @@ function ensureHost(): UtilityProcess {
   child.stderr?.on('data', (chunk: Buffer) => mainLog.warn('[whisper-host]', chunk.toString('utf8').trim()))
   child.stdout?.on('data', () => {})
   child.on('message', (msg: unknown) => {
-    const m = msg as { type?: string; id?: number; text?: string; message?: string }
+    const m = msg as { type?: string; id?: number; text?: string; message?: string; tier?: string; degraded?: boolean }
     if (m?.type === 'ready') {
       hostReady = true
+      // MQA-246: an import that ran on the floor transcription model must be visible somewhere. The live
+      // path already has this contract for its own engine swap (settings.asrLastFallbackAt, surfaced in
+      // Settings until dismissed); imports had nothing, so a recording transcribed by the weakest model
+      // looked identical to one transcribed by the best. Same after-the-fact note, never a live banner.
+      mainLog.info(`[whisper-host] transcription tier: ${m.tier ?? 'unknown'}${m.degraded ? ' (degraded — high tier not present)' : ''}`)
+      if (m.degraded) {
+        try {
+          if (getSettings().asrImportTierFallbackAt == null) setSettings({ asrImportTierFallbackAt: Date.now() })
+        } catch (e) {
+          mainLog.warn('[whisper-host] could not record the transcription-tier note:', e)
+        }
+      }
       return
     }
     if ((m?.type === 'result' || m?.type === 'error') && typeof m.id === 'number') {
