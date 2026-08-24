@@ -124,11 +124,7 @@ function flattenCommitments(data: DashboardData, nodeIds: Set<string>): OwnedCom
 export function BriefingView({ data }: Props) {
   const now = Date.now()
 
-  const allCommitments = useMemo(
-    () => [...data.deals.flatMap((d) => d.commitments ?? []), ...data.people.flatMap((p) => p.commitments ?? [])],
-    [data.deals, data.people],
-  )
-  const ledger = useMemo(() => ledgerTotals(allCommitments), [allCommitments])
+
   const openDeals = useMemo(() => data.deals.filter((d) => d.outcome === 'open'), [data.deals])
   // Open deals only — every other number on this page is scoped to open work, and a lost deal's
   // concerning band is not a "this morning" signal.
@@ -139,6 +135,13 @@ export function BriefingView({ data }: Props) {
 
   const nodeIds = useMemo(() => new Set(data.account_graph.nodes.map((n) => n.id)), [data.account_graph.nodes])
   const owned = useMemo(() => flattenCommitments(data, nodeIds), [data, nodeIds])
+  // One DEDUPED list feeds both the tiles and the cards below. ingest.ts writes the same promise onto
+  // the deal ledger AND the person ledger whenever `by` matches a named attendee, so a raw concat of
+  // the two counts every such promise twice. That is what the tiles used to do while the cards beneath
+  // them used flattenCommitments (which dedupes on text|by|meeting|date) — so this page printed two
+  // different numbers for the same set, "Broken commitments" disagreeing with "Broken (N)" directly
+  // below it, and its kept rate disagreeing with Stats for identical data.
+  const ledger = useMemo(() => ledgerTotals(owned.map((o) => o.commitment)), [owned])
   const broken = useMemo(() => owned.filter((o) => o.commitment.status === 'broken'), [owned])
   const aging = useMemo(() => {
     const open = owned.filter((o) => o.commitment.status === 'open')

@@ -22,11 +22,17 @@
  * needs a TCC prompt that an unattended build cannot answer, and electron-log writes main.log to
  * ~/Library/Logs/<product> there rather than under the userData override this gate isolates with. So
  * no mac chain in package.json calls this script, and the non-win32 branch below refuses instead of
- * exiting 0. The gap it leaves is specific and worth naming: the mac target is universal, but
- * electron-vite emits exactly ONE out/main/index.jsc, compiled by spawning the build host's own
- * Electron, and electron-builder packages that single file into both slices. The non-host slice
- * therefore runs V8 bytecode it did not produce — precisely the mismatch this gate exists to catch —
- * so the darwin branch prints the manual two-slice procedure that does cover it.
+ * exiting 0.
+ *
+ * The specific mac failure this gate could not catch has since been removed at the source rather than
+ * gated: the universal target used to ship ONE out/main/index.jsc — compiled by spawning the build
+ * host's own Electron — into both slices, so the non-host slice ran V8 bytecode it did not produce and
+ * died with cachedDataRejected (the 1.6.0 DMG, on every Intel Mac). The three --universal chains now
+ * build with ASKTOTO_MAC_UNIVERSAL=1, which turns bytecode off for that target (electron.vite.config.ts),
+ * so both slices execute the same plain JS. The darwin branch still prints the manual two-slice
+ * procedure, because the slices continue to differ in the ways this script cannot inspect at all —
+ * per-arch native modules (sherpa-onnx, onnxruntime, sharp), the ffmpeg and llama-server sidecars, and
+ * code signing.
  */
 import { spawn, execFileSync } from 'node:child_process'
 import { mkdtempSync, existsSync, readFileSync, readdirSync, writeFileSync, rmSync } from 'node:fs'
@@ -55,13 +61,13 @@ if (process.platform !== 'win32') {
   )
   if (process.platform === 'darwin') {
     console.error(
-      '[check:launch] Verify a mac build by hand instead, and verify BOTH slices: the universal .app\n' +
-        "[check:launch]   carries one out/main/index.jsc, built by this host's Electron, and V8 bytecode is\n" +
-        '[check:launch]   tied to the arch that produced it, so the other slice is unproven until it runs.\n' +
+      '[check:launch] Verify a mac build by hand instead, and verify BOTH slices — they differ in the\n' +
+        '[check:launch]   per-arch native modules, sidecars and signing this script cannot inspect anyway:\n' +
         '[check:launch]     open release/mac-universal/Metis.app\n' +
         '[check:launch]     arch -x86_64 release/mac-universal/Metis.app/Contents/MacOS/Metis   # Apple Silicon host, Rosetta 2\n' +
         '[check:launch]   A window must appear for each. An immediate "Error" dialog naming cachedDataRejected\n' +
-        '[check:launch]   is the 1.2.0/1.5.3 DOA — rebuild from a clean out/ on that architecture.\n' +
+        '[check:launch]   means the universal build compiled V8 bytecode after all (the 1.2.0/1.5.3/1.6.0 DOA):\n' +
+        '[check:launch]   confirm ASKTOTO_MAC_UNIVERSAL=1 reached `npm run build`, then rebuild from a clean out/.\n' +
         '[check:launch]   (An Intel host cannot execute the arm64 slice at all: build the DMG on Apple Silicon.)'
     )
   }

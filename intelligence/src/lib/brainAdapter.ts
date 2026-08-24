@@ -1,6 +1,7 @@
 import type {
   DashboardData,
   Deal,
+  DealAmount,
   Claim,
   CoachingInsight,
   GraphNode,
@@ -45,6 +46,11 @@ interface BrainCommitment { text: string; by: string; status: string; due_hint?:
 // the dashboard's Accept affordance shows) — the value/quote/source_file/superseded history stay
 // server-side, read fresh by the brain:field-decision handler itself when a decision comes in.
 interface BrainProvenance { state?: string }
+// MI-4: amount/close_date have NO plain sibling field the way stage/velocity do — the provenant
+// sidecar IS the only place the value lives (DealEntitySchema — brain.ts:436-437), so these mirrors
+// need the full { value, quote, state } shape, not just BrainProvenance's bare .state.
+interface BrainAmountField { value: { value: number; currency: string }; quote?: string; state?: string }
+interface BrainCloseDateField { value: string; quote?: string; state?: string }
 interface BrainDeal {
   name: string
   account: string
@@ -61,6 +67,8 @@ interface BrainDeal {
   stage_provenance?: BrainProvenance
   win_likelihood_band_provenance?: BrainProvenance
   velocity_provenance?: BrainProvenance
+  amount?: BrainAmountField
+  close_date?: BrainCloseDateField
 }
 interface BrainMeeting {
   source_file: string
@@ -96,6 +104,28 @@ interface BrainPerson {
  *  ProvenanceState values are ever carried through (see FieldState's doc comment); anything else
  *  (absent sidecar, a schema-drifted/legacy value) is dropped rather than guessed at. Returns undefined
  *  (not `{}`) when nothing qualifies, so a view's `data.field_state?.stage` check stays a clean absence. */
+// MI-4 render-gate invariant, mirrored from src/shared/brain.ts's RENDERABLE_PROVENANCE_STATES: a bare
+// 'extracted' (LLM-only, never independently confirmed) amount/close_date must NEVER render as a real
+// figure — only a human-verified/pinned/edited value may. See amountFrom()/closeDateFrom() below.
+const RENDERABLE_STATES = new Set(['verified', 'pinned', 'edited'])
+
+/** Split one amount provenance sidecar into the (confirmed, pending) pair Deal.amount/amount_pending
+ *  carry — at most one is ever non-null. Absent sidecar (no amount ever extracted) → both null. */
+function amountFrom(f: BrainAmountField | undefined): { amount: DealAmount | null; pending: DealAmount | null } {
+  if (!f) return { amount: null, pending: null }
+  const value: DealAmount = { value: f.value.value, currency: f.value.currency, quote: f.quote ?? '' }
+  return RENDERABLE_STATES.has(f.state ?? '') ? { amount: value, pending: null } : { amount: null, pending: value }
+}
+
+/** Same split for close_date — see amountFrom(). */
+function closeDateFrom(
+  f: BrainCloseDateField | undefined
+): { close_date: string | null; pending: { value: string; quote: string } | null } {
+  if (!f) return { close_date: null, pending: null }
+  const value = { value: f.value, quote: f.quote ?? '' }
+  return RENDERABLE_STATES.has(f.state ?? '') ? { close_date: f.value, pending: null } : { close_date: null, pending: value }
+}
+
 function fieldState(entries: Array<[string, BrainProvenance | undefined]>): FieldState | undefined {
   type State = 'extracted' | 'verified' | 'edited' | 'pinned'
   const known: readonly State[] = ['extracted', 'verified', 'edited', 'pinned']
@@ -153,8 +183,18 @@ function categorize(text: string): Category {
 }
 
 /** Normalizes a brain commitment (ledger entry, loose `status: string`) into the display shape's strict
- *  status union — an unrecognized/legacy status defaults to 'open', mirroring LedgerCommitmentSchema's
- *  own default and the same fallback goingCold.ts already applies to missing statuses. */
+ *  status union.
+ *
+ *  Callers MUST drop `status === 'rejected'` rows before calling this. 'rejected' is a human override for
+ *  a promise that was never actually made (LedgerCommitmentSchema, src/shared/brain.ts) — its schema
+ *  comment says every `status === 'open'` filter excludes it for free, which is true of every surface
+ *  that FILTERS on open and exactly false here, because this function MAPS anything unrecognized TO
+ *  'open'. Left unfiltered, a promise the user struck out in Métis came back as a live obligation on the
+ *  dashboard they make decisions from, counted in the open tile, the aging buckets and the attention
+ *  score, while goingCold.ts (which does filter) disagreed about the same row.
+ *
+ *  With rejected rows excluded at both call sites, the fallback below only ever catches a genuinely
+ *  legacy status with no value, mirroring LedgerCommitmentSchema's own default. */
 function toCommitment(c: BrainCommitment): Commitment {
   return {
     text: c.text,
@@ -191,11 +231,14 @@ function toDeal(d: BrainDeal, accountBySlug: Map<string, BrainAccount>, meetings
         label: m.title24 || ref.title,
         grade: m.sentiment,
         note: m.topics.slice(0, 3).join(' · '),
-        is_client_facing: !!m.account
+        is_client_facing: m.account ? true : undefined
       }
     })
     .filter((g): g is NonNullable<typeof g> => g !== null)
     .sort((a, b) => a.date.localeCompare(b.date))
+
+  const { amount, pending: amountPending } = amountFrom(d.amount)
+  const { close_date, pending: closeDatePending } = closeDateFrom(d.close_date)
 
   return {
     bid_id: slug(d.name),
@@ -204,18 +247,23 @@ function toDeal(d: BrainDeal, accountBySlug: Map<string, BrainAccount>, meetings
     display_name: d.name,
     outcome: d.outcome,
     win_likelihood_band: d.win_likelihood_band ?? null, // preserve "ungraded" — never fabricate a band
-    value_usd: null, // the brain never invents money — no value data in transcripts
+    amount,
+    amount_pending: amountPending,
+    close_date,
+    close_date_pending: closeDatePending,
     stage: d.stage || (d.velocity.signal === 'hard-calendar-gate' ? 'moving (hard date)' : 'open'),
     band_evidence: d.band_evidence ?? '',
     velocity: d.velocity,
     claims,
     call_grades,
-    commitments: (d.commitments ?? []).map(toCommitment),
+    commitments: (d.commitments ?? []).filter((c) => c.status !== 'rejected').map(toCommitment),
     meetings: d.meetings,
     field_state: fieldState([
       ['stage', d.stage_provenance],
       ['win_likelihood_band', d.win_likelihood_band_provenance],
-      ['velocity', d.velocity_provenance]
+      ['velocity', d.velocity_provenance],
+      ['amount', d.amount],
+      ['close_date', d.close_date]
     ])
   }
 }
@@ -304,7 +352,12 @@ function toInsights(deals: BrainDeal[]): CoachingInsight[] {
           : lead.kind === 'missed'
             ? 'An opening the seller did not pursue.'
             : 'Coaching note grounded in this call.'),
-      coaching_move: lead.kind === 'missed' ? `Next call, pursue this directly: ${lead.text}` : lead.text,
+      // Both branches prefix lead.text rather than echo it bare, so the card never prints the same
+      // sentence twice under "pattern" and "coaching move" (it used to for every non-missed insight).
+      coaching_move:
+        lead.kind === 'missed'
+          ? `Next call, pursue this directly: ${lead.text}`
+          : `Bring this up directly next call and get their real read: ${lead.text}`,
       category: categorize(lead.text),
       confidence,
       grounding,
@@ -455,7 +508,7 @@ export function brainToDashboard(b: BrainRead): DashboardData {
         community_label: '',
         ref: ref?.file,
         date: ref?.date,
-        is_client_facing: ref ? !!meetingsByFile.get(ref.file)?.account : undefined,
+        is_client_facing: ref && meetingsByFile.get(ref.file)?.account ? true : undefined,
         last_touch: t?.lastTouch,
         days_quiet: t?.daysQuiet,
         freshness: t?.freshness,
@@ -476,6 +529,17 @@ export function brainToDashboard(b: BrainRead): DashboardData {
   communities(nodes, edges)
 
   const band0 = (): Record<WinLikelihoodBand, number> => ({ good: 0, mixed: 0, concerning: 0 })
+  // Sum only HUMAN-CONFIRMED amounts (deal.amount — amount_pending never counts toward a rollup a human
+  // hasn't confirmed), grouped per currency: nothing in this pipeline does FX conversion, so a "$120,000"
+  // total across a EUR deal and a USD deal would be a fabricated number, not a rollup.
+  function sumAmounts(scoped: Deal[]): Array<{ currency: string; value: number }> {
+    const byCurrency = new Map<string, number>()
+    for (const d of scoped) {
+      if (!d.amount) continue
+      byCurrency.set(d.amount.currency, (byCurrency.get(d.amount.currency) ?? 0) + d.amount.value)
+    }
+    return [...byCurrency.entries()].map(([currency, value]) => ({ currency, value }))
+  }
   const accountSummaries: ScopeSummary[] = b.accounts.map((a) => {
     // Joined by slug, not raw name equality — `d.account` and `a.name` are independently frozen at two
     // different first-creation timestamps in ingest.ts, so casing/punctuation drift between two LLM
@@ -485,11 +549,12 @@ export function brainToDashboard(b: BrainRead): DashboardData {
     const counts = band0()
     // Ungraded deals (null band) are deliberately NOT counted into any band — no fabrication.
     for (const d of deals.filter((d) => slug(d.account) === accSlug)) if (d.win_likelihood_band) counts[d.win_likelihood_band]++
+    const accDeals = deals.filter((d) => slug(d.account) === accSlug)
     return {
       key: accSlug,
       label: a.name,
-      deal_count: deals.filter((d) => slug(d.account) === accSlug).length,
-      total_value_usd: null, // no money data in transcripts — the UI states this, never shows $0
+      deal_count: accDeals.length,
+      total_value: sumAmounts(accDeals),
       band_counts: counts,
       insight_ids: insights.filter((i) => i.deals.some((bd) => slug(deals.find((d) => d.bid_id === bd)?.account ?? '') === accSlug)).map((i) => i.insight_id)
     }
@@ -503,7 +568,7 @@ export function brainToDashboard(b: BrainRead): DashboardData {
       key: slug(sec),
       label: sec,
       deal_count: inSector.length,
-      total_value_usd: null,
+      total_value: sumAmounts(inSector),
       band_counts: counts,
       // Same rollup as the account summary above, keyed by sector instead of account name — this was
       // hardcoded to [] before, silently emptying every sector's coaching-insight panel.
@@ -528,7 +593,7 @@ export function brainToDashboard(b: BrainRead): DashboardData {
     role: p.role,
     account: p.account,
     stance_trail: p.stance_trail ?? [],
-    commitments: (p.commitments ?? []).map(toCommitment),
+    commitments: (p.commitments ?? []).filter((c) => c.status !== 'rejected').map(toCommitment),
     meetings: p.meetings ?? [],
     field_state: fieldState([
       ['role', p.role_provenance],

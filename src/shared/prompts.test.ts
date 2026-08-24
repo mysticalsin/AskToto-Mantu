@@ -7,6 +7,7 @@ import {
   MEETING_BRIEF_PROMPT,
   WINS_CLAUSE,
   DEFAULT_MODE_PROMPTS,
+  retargetForTypedAsk,
   ASSIST_PROMPT,
   buildNoDecisionPrompt,
   COLD_CALL_COACHING_PROMPT,
@@ -164,5 +165,52 @@ describe('DEFAULT_MODE_PROMPTS', () => {
     expect(honk).toContain('SAY THIS:')
     expect(honk).toContain('x'.repeat(4000))
     expect(honk).not.toContain('x'.repeat(4001))
+  })
+})
+
+describe('typed asks get a written output format, not the spoken one', () => {
+  const modes = Object.keys(DEFAULT_MODE_PROMPTS) as (keyof typeof DEFAULT_MODE_PROMPTS)[]
+
+  it('every mode prompt exposes exactly one replaceable OUTPUT FORMAT block', () => {
+    // retargetForTypedAsk depends on this uniform shape; a mode that drifts would silently keep its
+    // spoken format on typed asks, which is the whole bug being fixed.
+    for (const m of modes) {
+      const occurrences = DEFAULT_MODE_PROMPTS[m].match(/OUTPUT FORMAT/g) ?? []
+      expect(occurrences).toHaveLength(1)
+      expect(retargetForTypedAsk(DEFAULT_MODE_PROMPTS[m])).not.toBe(DEFAULT_MODE_PROMPTS[m])
+    }
+  })
+
+  it('drops the spoken framing and the Backup line from every mode FORMAT section', () => {
+    for (const m of modes) {
+      const typed = retargetForTypedAsk(DEFAULT_MODE_PROMPTS[m])
+      const section = /OUTPUT FORMAT\n[\s\S]*?(?=\n\n)/.exec(typed)?.[0] ?? ''
+      expect(section).not.toMatch(/say out loud/i)
+      expect(section).not.toMatch(/seconds/i)
+      expect(section).toContain('Lead with the answer itself')
+      // The "Backup:" line is only ever specified in the format section, so it goes with it.
+      expect(typed).not.toContain('"Backup:"')
+    }
+  })
+
+  it("general — the default mode — carries no spoken framing at all once retargeted", () => {
+    // Other modes (interview/sales/negotiation) legitimately keep a spoken intro: even a typed ask
+    // there means "give me the line to say". `general` is the one that must read as a written answer.
+    const typed = retargetForTypedAsk(DEFAULT_MODE_PROMPTS.general)
+    expect(typed).not.toMatch(/say out loud/i)
+    expect(typed).not.toMatch(/seconds/i)
+  })
+
+  it('keeps the rest of the persona intact — only the format section changes', () => {
+    const typed = retargetForTypedAsk(DEFAULT_MODE_PROMPTS.recruiting)
+    for (const anchor of ['INTERVIEW SHEET', 'STAR', 'CHALLENGE', 'A to D', 'notice period']) {
+      expect(typed).toContain(anchor)
+    }
+    expect(typed.startsWith('You are Métis')).toBe(true)
+  })
+
+  it('leaves a custom prompt with no OUTPUT FORMAT section untouched', () => {
+    const custom = 'You are my own assistant. Answer however I asked.'
+    expect(retargetForTypedAsk(custom)).toBe(custom)
   })
 })

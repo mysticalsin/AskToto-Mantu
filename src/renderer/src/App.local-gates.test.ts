@@ -63,8 +63,16 @@ describe('No-Decision Honk gate (H2)', () => {
     expect(gateLine).toBeTruthy()
   })
 
-  it('gate condition does NOT reference localSuggestReady (local never serves answer mode)', () => {
+  it('gate condition does NOT reference localSuggestReady (that flag is the suggest-mode opt-in)', () => {
     expect(gateLine).not.toMatch(/localSuggestReady/)
+  })
+
+  it('gate condition does NOT reference localFallbackReady either — the honk never volunteers local work', () => {
+    // The safety net WOULD serve this request (see the answer-floor block below), so this is a deliberate
+    // product choice rather than a routing limit: the honk is the one request the user never asked for,
+    // and an unprompted multi-second sidecar inference is the wrong thing to spend on a machine small
+    // enough to be running the on-device model in the first place.
+    expect(gateLine).not.toMatch(/localFallbackReady/)
   })
 
   it('gate condition still requires settings.providerReady', () => {
@@ -103,8 +111,9 @@ describe('requireProvider(local?) call-site contract (H1)', () => {
   })
 
   it('whatNext re-gates its cloud-only text route bare before firing mode "answer" (r6)', () => {
-    // The answer-mode branch must keep a bare provider gate even after the suggest-scoped top gate
-    // passed on localSuggestReady alone — the local model never serves answer mode.
+    // The answer-mode branch must keep its own provider gate even after the suggest-scoped top gate
+    // passed on localSuggestReady alone: that flag is the suggest-mode opt-in and proves nothing about
+    // answer mode. The bare call is not "cloud only" — it still passes on the safety net (below).
     expect(source).toMatch(/route\.transport === 'text' && !requireProvider\(\)/)
   })
 
@@ -121,12 +130,22 @@ describe('requireProvider(local?) call-site contract (H1)', () => {
   })
 })
 
-// r5/r6 + fallback closure: the local-capable chips must be reachable for a zero-API-key setup — App
-// passes the per-task readiness flags AND the default-on fallback flag into QuickActions, which enables
-// the summarize chip (summary/vision mode) and the whatnext chip (transcript route fires suggest mode)
-// when EITHER the explicit useFor flag or the fallback is ready; fact-check and explain keep the cloud
-// gate because their direct branches all fire answer mode, which the on-device model never serves.
-describe('QuickActions local reachability (r5/r6 + fallback)', () => {
+/**
+ * The zero-API-key install has to work, because it is the install Métis Local exists for.
+ *
+ * Two different local flags decide that, and conflating them is what broke it. The per-task useFor
+ * toggles (localSuggestReady / localSummaryReady / localVisionReady) are narrow: they say "prefer local
+ * FIRST for this mode", and they only exist for the three modes local is scoped to. The safety net
+ * (localFallbackReady) is the floor, and main's routing floor — localAnswerFloorEligibleFor in
+ * local-routing.ts — deliberately ignores mode and tier entirely: when no cloud/CLI route can answer, a
+ * weak on-device answer beats an error, answer and recap included.
+ *
+ * The renderer used to accept the net only inside the three in-scope branches, so a bare
+ * requireProvider() — every typed question, fact-check and explain — returned false on a local-only
+ * install and pushed the user to Settings to "add an API key", for a request main would have answered
+ * on-device. The key-prompt CTA had the same hole and nagged permanently. Both are pinned below.
+ */
+describe('QuickActions and gate reachability for a zero-API-key install', () => {
   const appSrc = readFileSync(join(__dirname, 'App.tsx'), 'utf8')
   const qaSrc = readFileSync(join(__dirname, 'components', 'QuickActions.tsx'), 'utf8')
 
@@ -136,20 +155,37 @@ describe('QuickActions local reachability (r5/r6 + fallback)', () => {
     expect(appSrc).toMatch(/localFallbackReady=\{settings\?\.localFallbackReady \?\? false\}/)
   })
 
-  it('QuickActions enables the summarize and whatnext chips via their useFor flag OR the fallback', () => {
-    expect(qaSrc).toMatch(/a\.kind === 'summarize' && \(localSummaryReady \|\| localFallbackReady\)/)
-    expect(qaSrc).toMatch(/a\.kind === 'whatnext' && \(localSuggestReady \|\| localFallbackReady\)/)
-    // Fact-check and Explain are NEVER enabled by a local flag — they are answer-mode, cloud-only.
-    expect(qaSrc).not.toMatch(/a\.kind === 'factcheck' && \(/)
-    expect(qaSrc).not.toMatch(/a\.kind === 'explain' && \(/)
+  it('the safety net enables EVERY chip, unconditioned on kind', () => {
+    // Fact-check and Explain fire answer mode, which the floor serves. Leaving them dim on a local-only
+    // install refused a request main would have taken, and the tooltip told the user to go get a key.
+    expect(qaSrc).toMatch(/const localServes =\s*\n\s*localFallbackReady \|\|/)
   })
 
-  it('requireProvider accepts the fallback for every in-scope local task (so zero-key installs are not bounced)', () => {
-    // Without this, a fresh install with no cloud key bounced whatNext/summarize/screen into Settings even
-    // though Métis Local answers suggest/summary/vision on-device.
-    expect(appSrc).toMatch(/settings\?\.localSuggestReady \|\| settings\?\.localFallbackReady/)
-    expect(appSrc).toMatch(/settings\?\.localSummaryReady \|\| settings\?\.localFallbackReady/)
-    expect(appSrc).toMatch(/settings\?\.localVisionReady \|\| settings\?\.localFallbackReady/)
+  it('the per-task flags stay narrow — only the two in-scope chips', () => {
+    expect(qaSrc).toMatch(/a\.kind === 'summarize' && localSummaryReady/)
+    expect(qaSrc).toMatch(/a\.kind === 'whatnext' && localSuggestReady/)
+    expect(qaSrc).not.toMatch(/a\.kind === 'factcheck' && localS/)
+    expect(qaSrc).not.toMatch(/a\.kind === 'explain' && localS/)
+  })
+
+  it('MQA-242: requireProvider passes on the safety net for ANY mode, including a bare call', () => {
+    // The bare call is the typed-question path. This single clause is the fix: it sits outside the
+    // per-task ternary, so it applies whether or not a task was named.
+    expect(appSrc).toMatch(
+      /if \(settings\?\.providerReady \|\| localTaskReady \|\| settings\?\.localFallbackReady\) return true/
+    )
+  })
+
+  it('requireProvider still honours each per-task useFor toggle', () => {
+    expect(appSrc).toMatch(/local === 'suggest'\s*\n\s*\? settings\?\.localSuggestReady/)
+    expect(appSrc).toMatch(/\? settings\?\.localSummaryReady/)
+    expect(appSrc).toMatch(/\? settings\?\.localVisionReady/)
+  })
+
+  it('the "add an API key" CTA is suppressed once the on-device model can answer', () => {
+    // Not cosmetic: this banner is the app's own statement that it is not yet usable. Showing it to a
+    // user whose local model answers every question is the app contradicting itself.
+    expect(appSrc).toMatch(/!settings\.providerReady && !settings\.localFallbackReady && !nudgeExpired/)
   })
 })
 

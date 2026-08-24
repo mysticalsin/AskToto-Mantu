@@ -24,19 +24,25 @@ describe('screen-capture permission recovery', () => {
     expect(catchBlock.indexOf(guard)).toBeLessThan(catchBlock.indexOf("ask.run({ mode: 'answer'"))
   })
 
-  it('lets a typed chat question fall back to a text answer when Screen Recording is denied (chat is never blocked)', () => {
-    // Tony 2026-07-15: with Screen Recording off, a typed chat question was swallowed by the permission
-    // notice and the user could do nothing. The first typed question routes through askScreen with
-    // allowTextFallback so a denied grant degrades to a text ask (with the notice still shown), instead of
-    // wedging chat. The bare "look at my screen" (blank Enter) path deliberately does NOT set the flag.
+  it('MQA-236: a TYPED question never routes through askScreen — screen intent is always explicit', () => {
+    // Supersedes the 2026-07-15 allowTextFallback pin: the first typed question of a session used to run
+    // askScreen(q) — a silent screenshot the user never asked for, and under the shipped Cloudflare
+    // default (vision: false) it routed the ask to the slow on-device vision model instead of the fast
+    // Worker. Typed questions now ALWAYS go out as a plain mode:'answer' ask; the only askScreen call
+    // left in submit is the blank-Enter "look at my screen", which is a deliberate screen gesture. The
+    // permission-denied class the old pin protected (typed chat swallowed by the screen notice) is now
+    // structurally impossible — a typed ask never touches the capture path at all.
     const submitStart = app.indexOf('const submit = useCallback')
     const submitEnd = app.indexOf('const factCheck = useCallback', submitStart)
     const submitBlock = app.slice(submitStart, submitEnd)
     expect(submitStart).toBeGreaterThan(-1)
-    // The typed-question askScreen call carries allowTextFallback: true …
-    expect(submitBlock).toMatch(/askScreen\(q, \{[^}]*allowTextFallback: true[^}]*\}\)/)
-    // … while the blank "look at my screen" call must NOT (nothing to answer without the screen).
-    expect(submitBlock).toMatch(/askScreen\('Help me with what is on my screen\.', \{\s*history: historyRef\.current,\s*record: 'Help me with what is on my screen\.'\s*\}\)/)
+    // No typed-question askScreen call survives …
+    expect(submitBlock).not.toMatch(/askScreen\(q/)
+    // … the blank "look at my screen" gesture is the ONLY askScreen call in submit …
+    expect(submitBlock.match(/askScreen\(/g)?.length).toBe(1)
+    expect(submitBlock).toMatch(/askScreen\('Help me with what is on my screen\.'/)
+    // … and the typed branch answers plainly.
+    expect(submitBlock).toMatch(/ask\.run\(\{ mode: 'answer', prompt: q, history: historyRef\.current \}\)/)
   })
 
   it('always announces the degrade — a text fallback still sets the capture notice (not silent)', () => {
@@ -75,5 +81,27 @@ describe('screen-capture permission recovery', () => {
     expect(answer).toMatch(/isScreenCapturePermissionError\(captureNotice\)/)
     expect(answer).toMatch(/window\.toto\.openPermissionSettings\('screenRecording'\)/)
     expect(answer).toMatch(/Open Screen Recording settings/)
+  })
+})
+
+describe('MQA-236 (part 2) - nothing captures a frame without a screen gesture', () => {
+  const CRLF = new RegExp(String.fromCharCode(13) + String.fromCharCode(10), 'g')
+  const bar = readFileSync(join(__dirname, 'components', 'Bar.tsx'), 'utf8').replace(CRLF, String.fromCharCode(10))
+  const mainSrc = readFileSync(join(__dirname, '..', '..', 'main', 'index.ts'), 'utf8').replace(CRLF, String.fromCharCode(10))
+
+  it('focusing the ask input never pre-warms capture (prewarmCapture takes a REAL frame)', () => {
+    expect(bar).not.toMatch(/onFocus=\{[^}]*prewarmCapture/)
+  })
+
+  it('the warm rides hovering the Capture tool - the one place intent is signalled before the click', () => {
+    expect(bar).toMatch(/onMouseEnter=\{\(\) => \{ if \(props\.canPrewarm\) void window\.toto\.prewarmCapture\(\) \}\}/)
+  })
+
+  it('signing in never captures a frame either', () => {
+    // The old post-sign-in prewarmCapture() call took a screenshot the instant auth completed.
+    const at = mainSrc.indexOf('MQA-236: no prewarmCapture() here anymore')
+    expect(at).toBeGreaterThan(-1)
+    const signin = mainSrc.slice(at - 200, at + 400)
+    expect(signin).not.toMatch(/^\s*prewarmCapture\(\)/m)
   })
 })

@@ -58,8 +58,12 @@ to work, each with a graceful fallback — know about them so you're not surpris
    present before the final hash gate) and wired as `predist`/`prepack` so packaging always has them. Without
    running it, Listen still works in dev via a one-time CDN model download at runtime (see README's
    "Known gaps"); run `npm run fetch-models` once if you want the bundled-model path locally. The
-   separate `npm run fetch:local-model` provisions the checksum-pinned Qwen3.5 0.8B payload used by
-   llama-server. Both are build-time operations; installed applications have no model downloader.
+   separate `npm run fetch:local-model` provisions the checksum-pinned Qwen3.5 0.8B payload, which exists so
+   `check-local-model.mjs` can re-hash it and prove the byte length and SHA-256 pinned in
+   `local-model-assets.mjs` are the real upstream file. Both are build-time operations, and neither ships:
+   the ASR models are installer assets, but the LLM weights are fetched on first run by
+   `src/main/llm/local-model-download.ts` (MQA-146) — an installed app does have a model downloader, and
+   only for these.
 
 **Secrets/config in dev vs. prod** (`src/main/secrets.ts`): in dev (`!app.isPackaged`) or when
 `ASKTOTO_LOCAL_KEYSTORE` is set, secrets use a FILE backend — a per-install AES-256-GCM key persisted to

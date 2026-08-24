@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { isProxyOperatorFault, isTransient, stripProxyFaultMarker } from './retry'
 
 /**
- * A gateway (cloudflare-proxy/) reports "the OPERATOR's account token is dead" as a 502 — correctly,
+ * MQA-213 — a gateway (cloudflare-proxy/) reports "the OPERATOR's account token is dead" as a 502 — correctly,
  * because the caller's own key was accepted and answering 401 would send the user off to re-enter a
  * credential that works. But 502 also matches the transient-retry pattern, so on the terminal-error
  * path that failure used to be rewritten to "Connection issue — check your network": every user in the

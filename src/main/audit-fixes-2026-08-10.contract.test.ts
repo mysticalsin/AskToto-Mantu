@@ -23,7 +23,13 @@ describe('MQA-129 — team-transcript-folder IPC handlers require auth', () => {
 
 describe('MQA-130 — Local AI fallback readiness is honored in the renderer gates', () => {
   it('requireProvider() lists localFallbackReady in its dependency array (no stale gate)', () => {
-    const block = appSrc.slice(appSrc.indexOf('const requireProvider'), appSrc.indexOf('const requireProvider') + 2400)
+    // Sliced to the useCallback's own closing `  )` rather than a fixed character count — a fixed window
+    // silently stops covering the dependency array the moment the body grows (which is exactly what
+    // happened when the gate learned about the answer floor, MQA-242).
+    const rest = appSrc.slice(appSrc.indexOf('const requireProvider'))
+    const end = rest.search(/\n {2}\)\r?\n/)
+    expect(end, 'requireProvider useCallback closing paren not found').toBeGreaterThan(-1)
+    const block = rest.slice(0, end)
     expect(block).toMatch(/settings\?\.localFallbackReady,/)
   })
 

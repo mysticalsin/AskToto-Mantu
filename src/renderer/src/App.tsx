@@ -31,7 +31,7 @@ import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, LicenseG
 import { HOTKEY_ACTIONS } from '@shared/ipc'
 import { useTapControl } from './lib/tap/tap-control'
 import type { TapProfile } from './lib/tap/classify'
-import { PROVIDERS, isDustReady } from '@shared/providers'
+import { PROVIDERS, isDustReady, providerBaseUrl, requiresUserBaseUrl } from '@shared/providers'
 import { ASSIST_PROMPT, buildNoDecisionPrompt, EMAIL_RECAP_PROMPT, COLD_CALL_COACHING_PROMPT, BOOK_MEETING_PROMPT } from '@shared/prompts'
 import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import { detectNoDecisionEnding } from '@shared/wrapup'
@@ -850,8 +850,11 @@ export function App(): JSX.Element {
     if (!listen.listening || honkedRef.current) return
     // providerReady only — NOT localSuggestReady. The honk always fires suggest.run({ mode: 'answer', ... })
     // (buildNoDecisionPrompt is deliberately answer-shaped, a free-form nudge, not a suggest-card prompt),
-    // and Métis Local never serves 'answer' mode. Gating on localSuggestReady here would let a local-only
-    // setup pass this check and then hit the same provider error the fired request was supposed to avoid.
+    // and localSuggestReady is the suggest-mode opt-in, so it says nothing about whether answer mode can
+    // be served. Nor is this widened to localFallbackReady, which genuinely would serve it: the honk is
+    // the one request in the app the USER never asked for, and spending an unprompted multi-second
+    // sidecar inference on a machine small enough to be running the on-device model is a worse trade than
+    // staying quiet. Local answers what the user asks for; it does not volunteer.
     if (!(settings?.autoSuggest ?? true) || !settings?.providerReady) return
     if (suggest.answer?.streaming) return
     const verdict = detectNoDecisionEnding(listen.lines, meetingStartRef.current, Date.now())
@@ -875,33 +878,47 @@ export function App(): JSX.Element {
   // Single readiness gate for EVERY user-initiated request entry point (not just submit). When the
   // active provider has no key / no CLI connection, route the user to Settings instead of firing an
   // LLM request that fails reactively with a red stream error. Returns false → the caller must bail.
-  // `local` names the in-scope Métis Local task this call site is ABOUT to fire (suggest/summary/vision)
-  // so a local-only setup (no cloud provider configured at all) answers instead of bouncing to Settings —
-  // omitted by callers whose request can't route to Métis Local (answer/recap/mixed-mode entry points).
+  // `local` names the in-scope Métis Local task this call site is ABOUT to fire (suggest/summary/vision),
+  // which is what the per-task useFor toggles gate; it is omitted by call sites that fire answer/recap or
+  // that can fire either depending on runtime state.
   const requireProvider = useCallback(
     (local?: 'suggest' | 'summary' | 'vision'): boolean => {
-      // A named in-scope task (suggest/summary/vision) is ready when its explicit useFor toggle is on OR
-      // the default-on safety net (localFallbackReady) can serve it. Without the fallback clause a
-      // zero-API-key install — the exact case Métis Local exists for — bounced every quick action into
-      // Settings even though local answers suggest/summary/vision on-device.
-      const localReady =
+      // A named in-scope task is ready when its explicit useFor toggle is on. Without this a zero-API-key
+      // install — the exact case Métis Local exists for — bounced every quick action into Settings even
+      // though local answers suggest/summary/vision on-device.
+      const localTaskReady =
         local === 'suggest'
-          ? settings?.localSuggestReady || settings?.localFallbackReady
+          ? settings?.localSuggestReady
           : local === 'summary'
-            ? settings?.localSummaryReady || settings?.localFallbackReady
+            ? settings?.localSummaryReady
             : local === 'vision'
-              ? settings?.localVisionReady || settings?.localFallbackReady
+              ? settings?.localVisionReady
               : false
-      if (settings?.providerReady || localReady) return true
-      // A keyed API provider can still be !providerReady because the org allowlist excludes it
-      // (settings.allowedProviders) — that user already has a valid key, so "add your API key" is the
-      // wrong remedy; point them at switching providers instead.
-      const blockedByOrg = !!settings?.hasApiKey && !!settings?.provider && PROVIDERS[settings.provider]?.kind !== 'cli'
+      // The safety net applies to EVERY mode, not only the in-scope three. main's routing floor
+      // (localAnswerFloorEligibleFor) deliberately ignores mode and tier: when no cloud/CLI provider can
+      // answer, a weak on-device answer beats an error, so with the net on, local serves answer and recap
+      // too. This gate used to stop at the three in-scope tasks and hand a bare call `false`, which is why
+      // a user with the local model enabled and no API key was told to "add an API key" for the one thing
+      // Métis Local is for: typing a question. The renderer was refusing a request main would have served.
+      if (settings?.providerReady || localTaskReady || settings?.localFallbackReady) return true
+      // MQA-216: three distinct reasons a keyed provider is still !providerReady, three different
+      // remedies. Test the allowlist itself — a saved key alone never proved an org policy, and reading
+      // it that way told a user whose only mistake was not having pasted the Worker URL yet that their
+      // employer had restricted them. Endpoint case second, because it is the ordinary Cloudflare state
+      // between the operator sending the key and sending the URL.
+      const blockedByOrg =
+        !!settings?.provider && !!settings.allowedProviders && !settings.allowedProviders.includes(settings.provider)
+      const needsEndpoint =
+        !!settings?.provider &&
+        requiresUserBaseUrl(settings.provider) &&
+        !providerBaseUrl(settings.provider, settings).trim()
       openSettings(
         'ai',
         blockedByOrg
           ? 'Your organization restricts which providers you can use. Switch to an approved provider here.'
-          : 'Add an API key or connect a provider here to ask questions.'
+          : needsEndpoint
+            ? `No endpoint URL set for ${PROVIDERS[settings!.provider].label}. Open Settings → Advanced and add it.`
+            : 'Add an API key or connect a provider here to ask questions.'
       )
       return false
     },
@@ -911,7 +928,9 @@ export function App(): JSX.Element {
       settings?.localSummaryReady,
       settings?.localVisionReady,
       settings?.localFallbackReady, // read in the body (803/805/807); without it the gate acts on a stale flag
-      settings?.hasApiKey,
+      settings?.allowedProviders,
+      settings?.customBaseUrl,
+      settings?.cloudflareBaseUrl, // both read by providerBaseUrl for the needsEndpoint branch
       settings?.provider,
       openSettings
     ]
@@ -1152,19 +1171,16 @@ export function App(): JSX.Element {
         // the unconditional setInput('') below would still fire and silently drop whatever the user just
         // typed, with no feedback that the ask never went out.
         return
-      } else if (priorAnswerOk) {
-        // Typed follow-up while an answer is already showing: stay fast — no new capture. The prior
-        // turn's text already describes what was on screen, so the model reasons from that; an explicit
-        // fresh look is one click away (Capture button / ⌘⇧S, already an unconditional re-screenshot).
+      } else {
+        // MQA-236: a TYPED question never captures. The first-question-of-a-session branch used to route
+        // through the screen-capture ask here — a silent screenshot the user never asked for, and under the shipped
+        // Cloudflare default (vision: false) it routed the ask to the slow on-device vision model
+        // instead of the fast Worker. Screen intent is now always explicit: the Capture button, ⌘⇧S, or
+        // blank Enter ("look at my screen"). screenAsk keeps governing exactly those explicit paths.
         setView('answer')
         setCollapsed(false)
         const id = ask.run({ mode: 'answer', prompt: q, history: historyRef.current })
         pendingUserRef.current = { id, q }
-      } else {
-        // First question of this session — screenshot + the question together. allowTextFallback: the
-        // user typed a real question, so if Screen Recording is off it must still get a text answer (with
-        // the "screen is off" notice) instead of being swallowed — chat must work without screen access.
-        void askScreen(q, { history: historyRef.current, record: q, allowTextFallback: true })
       }
     } else {
       if (!q) return
@@ -1361,6 +1377,50 @@ export function App(): JSX.Element {
     listen.listening,
     listen.text,
     settings?.localSuggestReady,
+    ask.answer?.streaming,
+    suggest.answer?.streaming,
+    speculative.answer?.streaming
+  ])
+  // 1b) TYPED-ask intent warms the on-device model too. The hedge starts a local leg at t=0 on every
+  //     interactive ask (index.ts's hedgeDelayMs), but the warm-up above only ever runs during a LIVE
+  //     meeting — so a typed question spawned that leg cold, made it load ~730 MB mid-request, and lost
+  //     the race it exists to win. The first keystroke is the earliest honest signal an ask is coming;
+  //     warming there means the race is real by the time Enter is pressed. Debounced to once per 30s and
+  //     suppressed while anything is streaming, so typing never fans out repeated spawns. Main re-checks
+  //     eligibility (localPrewarmEligible) and silently no-ops when local could not serve this install.
+  const typedPrewarmAtRef = useRef(0)
+  // Warm on FOCUS, not just on the first keystroke. The on-device model went from ~0.7 GB to ~2.7 GB
+  // when the 4B replaced the 0.8B, and its cold start rose with it — measured 41s cold against ~2s warm.
+  // Typing a question takes a few seconds, so a keystroke trigger alone still left most of that load in
+  // front of the answer. Bringing Métis to the front is the earliest honest signal that an ask is coming.
+  // Same 30s debounce and streaming guard as below; main re-checks eligibility and no-ops when local
+  // could not serve this install, so this never spawns a sidecar nothing would route to.
+  useEffect(() => {
+    const onFocus = (): void => {
+      if (listen.listening || !settings?.localFallbackReady) return
+      if (Date.now() - typedPrewarmAtRef.current < 30_000) return
+      typedPrewarmAtRef.current = Date.now()
+      void window.toto.localPrewarm('warm')
+    }
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [listen.listening, settings?.localFallbackReady])
+  useEffect(() => {
+    if (!input.trim() || listen.listening) return
+    if (!settings?.localFallbackReady) return
+    if (ask.answer?.streaming || suggest.answer?.streaming || speculative.answer?.streaming) return
+    if (Date.now() - typedPrewarmAtRef.current < 30_000) return
+    typedPrewarmAtRef.current = Date.now()
+    // Send the real typed text, never '': LocalPrewarmPayloadSchema requires `text` min length 1, so an
+    // empty ping is rejected by safeParse and the handler returns silently — the warm-up looked wired but
+    // never fired (caught by watching for the sidecar process, not by reading the code). Capped well under
+    // the schema's 24k ceiling. The dominant cost being bought here is the ~730 MB model load, not an
+    // exact KV-cache prefix match, so the ask's own text is the right thing to warm on.
+    void window.toto.localPrewarm(input.trim().slice(0, 2000))
+  }, [
+    input,
+    listen.listening,
+    settings?.localFallbackReady,
     ask.answer?.streaming,
     suggest.answer?.streaming,
     speculative.answer?.streaming
@@ -2511,6 +2571,16 @@ export function App(): JSX.Element {
   // Back arrow return there, instead of a single hardcoded destination.
   const brainReturnViewRef = useRef<View>('history')
 
+  // The full Mantu Intelligence dashboard is its own BrowserWindow — once it's actually open, the bar's
+  // History/Intelligence panel is just competing with it for screen space. Collapse back to the idle bar
+  // (same minimize Escape already does) so the dashboard window is what the user looks at next, not a
+  // still-expanded panel behind it. Wired into both real "open the dashboard" entry points below: History's
+  // own button and the in-bar BrainView glance's footer button.
+  const minimizeForIntelligence = useCallback(() => {
+    setView('answer')
+    setCollapsed(true)
+  }, [setView])
+
   // Panel body — memoized so state changes unrelated to the active view/answer (typing in the ask input,
   // the elapsed-meeting clock, focus signals, etc.) don't rebuild this whole element tree on every App
   // render. Without this, `body` was a fresh JSX literal every single render, which defeated memo(Bar)'s
@@ -2578,9 +2648,10 @@ export function App(): JSX.Element {
         // in this app lives in the same window as Settings, so this is just the same openSettings('ai')
         // used by Review's own recapUnavailable CTA, not a new cross-window mechanism.
         onOpenSettings={() => openSettings('ai')}
+        onDashboardOpen={minimizeForIntelligence}
       />
     ),
-    [reset, savedPath, openPastMeeting, openSettings]
+    [reset, savedPath, openPastMeeting, openSettings, minimizeForIntelligence]
   )
   const brainBody = useMemo(
     () => (
@@ -2588,9 +2659,10 @@ export function App(): JSX.Element {
         onBack={() => setView(brainReturnViewRef.current)}
         onOpenMeeting={openPastMeeting}
         onOpenSettings={() => openSettings('ai')}
+        onDashboardOpen={minimizeForIntelligence}
       />
     ),
-    [openPastMeeting, openSettings]
+    [openPastMeeting, openSettings, minimizeForIntelligence]
   )
   const agendaBody = useMemo(() => <AgendaView />, [])
   const copilotBody = useMemo(
@@ -3163,20 +3235,30 @@ export function App(): JSX.Element {
               </button>
             )
           })()}
-          {settings && !settings.providerReady && !nudgeExpired && view !== 'settings' && !showListeningChrome && (() => {
+          {/* Suppressed once the on-device safety net can answer: this CTA asks for an API key, and a user
+              running Métis Local with no cloud provider does not need one — that install is finished, not
+              half-configured. Telling them to "Add your Cloudflare API key" while the local model answers
+              every question is the app contradicting itself. Same flag the requireProvider gate reads. */}
+          {settings && !settings.providerReady && !settings.localFallbackReady && !nudgeExpired && view !== 'settings' && !showListeningChrome && (() => {
             const activeDef = PROVIDERS[settings.provider]
-            // A keyed API provider can still be blocked by the org allowlist (settings.hasApiKey true,
-            // providerReady false) — "add your API key" is the wrong remedy there; the user needs to
-            // switch to an approved provider, not enter a key they already have.
-            const blockedByOrg = settings.hasApiKey && activeDef.kind !== 'cli'
+            // MQA-216: same three cases as requireProvider above, in the same order. Reading a saved key
+            // as proof of an org policy made the CTA tell a Cloudflare user to "switch to an approved
+            // provider" when all they were missing was the Worker URL their operator sends separately.
+            const blockedByOrg = !!settings.allowedProviders && !settings.allowedProviders.includes(settings.provider)
+            const needsEndpoint =
+              requiresUserBaseUrl(settings.provider) && !providerBaseUrl(settings.provider, settings).trim()
             const cta = activeDef.kind === 'cli'
               ? `Connect ${activeDef.label} in Settings`
               : blockedByOrg
                 ? 'Switch to an approved provider'
-                : `Add your ${activeDef.label} API key`
+                : needsEndpoint
+                  ? `Add your ${activeDef.label} endpoint URL`
+                  : `Add your ${activeDef.label} API key`
             const notice = blockedByOrg
               ? "Your organization restricts which providers you can use. Switch to an approved provider here."
-              : 'Add an API key or connect a provider here to ask questions.'
+              : needsEndpoint
+                ? `No endpoint URL set for ${activeDef.label}. Open Settings → Advanced and add it.`
+                : 'Add an API key or connect a provider here to ask questions.'
             return (
               <button
                 type="button"

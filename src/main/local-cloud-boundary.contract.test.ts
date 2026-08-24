@@ -46,6 +46,22 @@ describe('local processing privacy boundary', () => {
     expect(gate).toMatch(/primary !== 'local'/)
   })
 
+  // TRUE RACE: whatever API is primary (Cloudflare or any other) starts TOGETHER with the on-device
+  // model, and the fastest answer wins. The zero delay is keyed on the BACKUP being local — never on the
+  // primary's identity — so it holds for every provider rather than being special-cased to one.
+  // Quality is safe because HedgeRace declares the winner on FIRST TOKEN, not on start order.
+  it('races the on-device model from t=0 against ANY api primary, not just one provider', () => {
+    const at = source.indexOf('const hedgeDelayMs')
+    expect(at).toBeGreaterThan(-1)
+    const decl = source.slice(at, at + 160)
+    // Keyed on the BACKUP, so no provider name appears in the condition.
+    expect(decl).toMatch(/pickFailover\(\[primary\]\) === 'local' \? 0 : HEDGE_DELAY_MS/)
+    expect(decl).not.toMatch(/cloudflare|anthropic|openai/)
+    const timerAt = source.indexOf('startHedgeLeg()', at)
+    expect(timerAt).toBeGreaterThan(at)
+    expect(source.slice(timerAt, timerAt + 120)).toMatch(/\}, hedgeDelayMs\)/)
+  })
+
   it('MQA-147 — a local primary therefore dispatches with no race, so its own guards still apply', () => {
     // The else branch of the hedge dispatch passes no AttemptRace, which is what makes index.ts's
     // `if (!race || race.gate.markDead(race.leg) === 'surface')` terminals actually surface for local.

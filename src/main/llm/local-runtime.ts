@@ -25,6 +25,11 @@ export type BinaryVariant = WinVariant | 'mac'
 export interface ModelPaths {
   gguf: string
   mmproj: string
+  /** Machine-aware sizing (local-models.ts spawnProfileFor). Travels with the paths so the spawn is
+   *  fully described by one object and no caller has to know the model's sizing. */
+  ctxSize: number
+  parallel: number
+  gpuLayers: number
 }
 
 export interface BinaryCandidate {
@@ -113,6 +118,13 @@ export function resolveBinaryPath(platform: LlamaPlatform = detectPlatform()): B
 export interface SpawnArgsInput {
   gguf: string
   mmproj: string
+  /** Total context across the slots. Per-model AND per-machine — see local-models.ts spawnProfileFor. */
+  ctxSize: number
+  /** Concurrent slots (`--parallel`). */
+  parallel: number
+  /** Layers offloaded to the GPU (`-ngl`). 0 on a small machine: measured, offloading every layer costs
+   *  ~3.2 GB of HOST memory where the GPU has no dedicated VRAM, which is what put an 8 GB machine over. */
+  gpuLayers: number
 }
 
 /**
@@ -127,16 +139,29 @@ export interface SpawnArgsInput {
  * is the load-bearing prompt-cache mechanism instead. `--reasoning off` is mandatory — without it Qwen3.5
  * emits into `reasoning_content` and `content` comes back empty.
  */
+/**
+ * llama-server slots (`--parallel`). Exported because ROUTING needs it: with every slot busy, a further
+ * request queues inside the sidecar and produces no tokens until one frees, which the ask path cannot
+ * tell apart from a hung model — measured, a third concurrent ask sat for 48s and then failed with
+ * "Stream timed out — no response from the model." Callers use this to route elsewhere instead of waiting.
+ */
+export const LOCAL_PARALLEL_SLOTS = 2
+
+/** True when every sidecar slot is already serving a stream, so a new one would only queue. */
+export function atCapacity(): boolean {
+  return activeStreamCount >= LOCAL_PARALLEL_SLOTS
+}
+
 export function buildSpawnArgs(input: SpawnArgsInput): string[] {
   return [
     '-m', input.gguf,
     '--mmproj', input.mmproj,
     '--host', '127.0.0.1',
     '--port', '0',
-    '-c', '65536',
-    '--parallel', '2',
+    '-c', String(input.ctxSize),
+    '--parallel', String(input.parallel),
     '--cache-ram', '128',
-    '-ngl', '99',
+    '-ngl', String(input.gpuLayers),
     '--no-ui',
     '--jinja',
     '--reasoning', 'off'
@@ -291,7 +316,13 @@ function spawnAndWaitHealthy(
   variant: BinaryVariant
 ): Promise<void> {
   return new Promise((resolve, reject) => {
-    const args = buildSpawnArgs({ gguf: modelPaths.gguf, mmproj: modelPaths.mmproj })
+    const args = buildSpawnArgs({
+      gguf: modelPaths.gguf,
+      mmproj: modelPaths.mmproj,
+      ctxSize: modelPaths.ctxSize,
+      parallel: modelPaths.parallel,
+      gpuLayers: modelPaths.gpuLayers
+    })
     let proc: ChildProcess
     try {
       // The per-session api key travels via env, never argv (see module doc comment) — `ps`/the process

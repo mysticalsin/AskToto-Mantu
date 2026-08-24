@@ -123,6 +123,9 @@ export const IPC = {
   recallSetCrmPushed: 'recall:set-crm-pushed',
   recallBackfillSpeakers: 'recall:backfillSpeakers',
   recallDeleteAll: 'recall:deleteAll',
+  // Support diagnosability: copy the log trail (main + audit + crash dumps + boot sentinel) into a
+  // user-chosen folder — the ONLY way that data reaches support, since nothing uploads by design.
+  diagnosticsExport: 'diagnostics:export',
   debriefSave: 'debrief:save',
   brainCommitmentSettle: 'brain:commitmentSettle',
   brainSetDealOutcome: 'brain:setDealOutcome',
@@ -688,10 +691,24 @@ export const StreamMetaSchema = z.object({
 })
 export type StreamMeta = z.infer<typeof StreamMetaSchema>
 
-const BUNDLED_LOCAL_MODEL_ID = 'qwen3.5-0.8b'
+/**
+ * On-device model ids the registry knows (main/llm/local-models.ts owns the URLs, sizes and hashes;
+ * this list exists only so the settings schema can validate an id without importing main-only code).
+ *
+ * The DEFAULT stays the small model on purpose: this file cannot measure RAM, and a fresh profile that
+ * defaulted straight to the 4B on an 8 GB machine would persist a model assertRamOk refuses to load —
+ * turning Local AI off entirely rather than falling back. Boot owns the upgrade instead, where
+ * bestModelForMachine() can actually see the hardware.
+ */
+const LOCAL_MODEL_IDS = ['qwen3.5-4b', 'qwen3.5-0.8b'] as const
+const BUNDLED_LOCAL_MODEL_ID: (typeof LOCAL_MODEL_IDS)[number] = 'qwen3.5-0.8b'
 const BundledLocalModelIdSchema = z.preprocess(
+  // 'qwen3.5-2b' is a retired id from an earlier swap; it has no weights any more, so it maps to the
+  // floor and boot re-upgrades from there if the machine allows.
   (value) => (value === undefined || value === 'qwen3.5-2b' ? BUNDLED_LOCAL_MODEL_ID : value),
-  z.string().refine((value) => value === BUNDLED_LOCAL_MODEL_ID, 'Unknown bundled local model.')
+  z
+    .string()
+    .refine((value) => (LOCAL_MODEL_IDS as readonly string[]).includes(value), 'Unknown bundled local model.')
 )
 
 // ─── MCP connections (generalized from the single BidStack connection) ──────────────────────────────
@@ -727,10 +744,26 @@ export const McpConnectionSchema = z.object({
 })
 export type McpConnection = z.infer<typeof McpConnectionSchema>
 
+/**
+ * The operator-deployed Worker Métis talks to by default. A URL, never a credential: the Cloudflare
+ * account token lives as a Wrangler secret ON this Worker and never ships, which is the whole reason
+ * the Worker exists. Shipping the endpoint means a user pastes one string (their METIS_PROXY_KEY)
+ * instead of two, and an org can still override it per install through managed config.
+ *
+ * Verified live before being pinned here: GET /health returns configured:true, an unauthenticated POST
+ * returns 401, and an authenticated one streams SSE frames back.
+ */
+export const METIS_WORKER_URL = 'https://metis-cloudflare-proxy.tony-walteur.workers.dev/v1'
+
 export const BaseSettingsSchema = z.object({
-  // Default provider: NVIDIA NIM (Tony, 2026-08-14) — fast, generous free tier, hedge-raced against a
-  // configured backup (resilience.hedge) so a slow NIM response never costs more than HEDGE_DELAY_MS.
-  provider: ProviderIdSchema.default('nvidia'),
+  // Default provider: Cloudflare (Tony, 2026-08-21), replacing NVIDIA NIM (2026-08-14). One endpoint the
+  // operator deploys reaches Workers AI, OpenAI, Anthropic and Google on a single account credential, so
+  // a fleet is configured once rather than per vendor per user. The build ships the operator's Worker URL
+  // as cloudflareBaseUrl's default (a URL is not a secret); the METIS_PROXY_KEY never ships and is the one
+  // string a user pastes. Until that key exists the provider is simply not ready, and the walk behaves as
+  // it always has: an explicitly enabled on-device model short-circuits first (localLlm.useFor), then
+  // Cloudflare, then NVIDIA NIM, then whatever keys the user added themselves.
+  provider: ProviderIdSchema.default('cloudflare'),
   // CLI-vs-API priority. 'api' (default) keeps the explicitly-chosen `provider` as primary. 'cli' makes a
   // connected CLI integration (Claude/Codex) the primary so the user's local subscription is used before
   // any metered API key, and prefers CLI on failover. With no CLI connected, 'cli' behaves like 'api'.
@@ -759,7 +792,7 @@ export const BaseSettingsSchema = z.object({
       (v) => v === '' || /^https:\/\//i.test(v),
       'Cloudflare Worker endpoint must be an https:// URL'
     )
-    .default(''),
+    .default(METIS_WORKER_URL),
   // Per-provider THINKING-tier model override (parallel to providerModels). For Dust this is the
   // thinking agent sId. Empty → fall back to the provider's built-in think model. See shared/routing.ts.
   providerModelsThinking: z.record(z.string(), z.string()).default({}),
@@ -865,8 +898,10 @@ export const BaseSettingsSchema = z.object({
   // fails, so the old global accelerator stayed bound with no error shown.
   shortcuts: z.record(z.string(), z.string()).default({}),
   autoSuggest: z.boolean().default(true),
-  // Cluely "Uses Screen": when on (and the active provider is vision-capable), a hero ask captures the
-  // screen and answers about it. Default on. Gated by the derived `visionReady` flag in PublicSettings.
+  // Screen asks: when on (and a vision-capable provider exists), the EXPLICIT screen paths — Capture
+  // button, its shortcut, quick actions, blank Enter — capture the screen and answer about it. Default
+  // on. MQA-236: a TYPED question never captures regardless of this flag; screen intent is always an
+  // explicit gesture, never inferred from asking a question.
   screenAsk: z.boolean().default(true),
   showLiveTranscript: z.boolean().default(false),
   meetingsFolder: z.string().default(''),
@@ -1002,11 +1037,14 @@ export const BaseSettingsSchema = z.object({
       // exhausted — every configured provider failed, or none is configured at all — in-scope work runs
       // on the on-device model as the strictly-LAST candidate instead of failing with "no provider".
       // Gates BOTH surfaces: the meeting-index waterfall (brain/ingest.ts pickProviderCandidates) and
-      // in-scope live asks (suggest/summary/vision — local-routing.ts localFallbackEligibleFor). Only
-      // ever reachable when localLlm.enabled is true and the runtime+model are actually provisioned AND
-      // the org allowlist permits 'local' (localBaseReady). Defaults on: it can only ever reduce the
-      // chance of work going undone, never increase cloud exposure (on-device is same-or-more private
-      // than cloud, never less).
+      // in-scope live asks (suggest/summary/vision — local-routing.ts localFallbackEligibleFor), and
+      // beneath that the absolute floor (localAnswerFloorEligibleFor), which drops the mode and tier
+      // limits entirely so a plain typed question is answered on-device rather than met with "add an API
+      // key" — the alternative there is not a better cloud answer, it is no answer. Only ever reachable
+      // when localLlm.enabled is true and the runtime+model are actually provisioned AND the org
+      // allowlist permits 'local' (localBaseReady). Defaults on: it can only ever reduce the chance of
+      // work going undone, never increase cloud exposure (on-device is same-or-more private than cloud,
+      // never less).
       fallback: z.boolean().default(true)
     })
     .default({
@@ -1036,11 +1074,14 @@ export const BaseSettingsSchema = z.object({
     })
     .default({ preferFreeOnExhaustion: true, budgetPreempt: true, hedge: true }),
   // Speaker Intelligence (docs/SPEAKER-INTELLIGENCE-PLAN.md): live "who's speaking" labels on THEM
-  // transcript lines via on-device voice embeddings (sherpa-onnx, same addon as Parakeet). Off by
-  // default — it's a beta and the embedding model must be provisioned (fetch-speaker-model.mjs).
+  // transcript lines via on-device voice embeddings (sherpa-onnx, same addon as Parakeet). ON by
+  // default since 2026-08-21 (MQA-235 / Plaud-parity work): the embedding model ships in every build
+  // (runtime-assets-manifest.json pins resources/models/speaker/embedding.onnx; check-packaged-runtime
+  // verifies it), the whole pass is on-device, and speaker-id.ts degrades to unlabeled lines when the
+  // extractor is unavailable — so the default costs nothing where it cannot work.
   speakerId: z
-    .object({ enabled: z.boolean().default(false) })
-    .default({ enabled: false }),
+    .object({ enabled: z.boolean().default(true) })
+    .default({ enabled: true }),
   // Durable "time saved" usage counters (shared/time-saved.ts). Incremented ONCE when a meeting file is
   // first written (main/store.ts recordMeetingSummarized) — a rebuild/re-index never re-counts, and this
   // survives transcriptRetentionDays deleting the meetings a live sum would need, so the lifetime figure
@@ -1234,7 +1275,7 @@ export const DUST_BASE_AGENT_ID = 'vJxYHvTRBT' // Dust agent "Métis" — defaul
 export const DUST_SPOTLIGHT_REF_AGENT_ID = 'GOr913Zr5V' // Dust agent "Spotlight Ref"
 
 export const DEFAULT_SETTINGS: Settings = {
-  provider: 'nvidia',
+  provider: 'cloudflare', // keep in lockstep with BaseSettingsSchema's ProviderIdSchema default above
   providerPriority: 'api',
   providerModels: { dust: DUST_BASE_AGENT_ID },
   providerModelsThinking: {},
@@ -1244,7 +1285,7 @@ export const DEFAULT_SETTINGS: Settings = {
   thinkingMode: 'auto',
   askFollowUpMemory: false,
   customBaseUrl: '',
-  cloudflareBaseUrl: '',
+  cloudflareBaseUrl: METIS_WORKER_URL,
   dustWorkspaceId: '',
   dustBaseUrl: 'https://dust.tt',
   dustSessionOrigin: 'oauth',
@@ -1317,7 +1358,7 @@ export const DEFAULT_SETTINGS: Settings = {
     useFor: { suggest: false, summary: false, vision: false },
     fallback: true
   },
-  speakerId: { enabled: false },
+  speakerId: { enabled: true },
   usageStats: { meetingsSummarized: 0, conversationMinutes: 0, firstMeetingAt: 0 },
   timeSaved: { writeupRatio: 0.2, floorMin: 5, capMin: 30 },
   tapControl: {
@@ -1606,6 +1647,16 @@ export interface UpdateDownloadStart {
 /** Result of recall:export-plain — a user-initiated decrypted markdown copy of one saved meeting, so
  *  external tools (Claude local ingesting into the second brain, an email, an archive) can read it even
  *  when at-rest encryption is on. Always explicit per meeting; never a bulk decrypt. */
+export interface DiagnosticsExportResult {
+  ok: boolean
+  /** Folder the bundle was written to. */
+  path?: string
+  /** How many files were copied. */
+  files?: number
+  cancelled?: boolean
+  error?: string
+}
+
 export interface RecallExportPlainResult {
   ok: boolean
   /** Absolute path the copy was written to (absent when the user cancelled the save dialog). */

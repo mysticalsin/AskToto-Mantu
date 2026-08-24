@@ -4,7 +4,8 @@ import {
   INJECTION_GUARD,
   GROUNDING_RAIL,
   effectiveModePrompt,
-  recapPromptFor
+  recapPromptFor,
+  retargetForTypedAsk
 } from '@shared/prompts'
 
 function profileBlock(p: Profile): string {
@@ -100,7 +101,15 @@ export function buildSystem(
   // instructs first-person coaching/dialogue that fights that contract, so omit it for fact-check the same
   // way GROUNDING_RAIL is already excluded below — otherwise the persona can silently corrupt the verdict
   // format and the verdict chip disappears.
-  const prompt = req.kind === 'factcheck' ? '' : effectiveModePrompt(mode, modePrompts)
+  // Typed and screen asks get the WRITTEN output format in place of the mode's spoken one. Every mode
+  // prompt is authored for the live meeting copilot ("say this out loud, 15 to 40 seconds"), which is
+  // wrong for a typed question and was why answers came back as spoken-length paragraphs that narrated
+  // their working — on every provider, since the prompt asked for it. Swapped at the source rather than
+  // overridden later: two contradictory instructions in one prompt is a coin flip, not a contract.
+  // 'suggest' (the live spoken line) and recap/summary keep their own formats untouched.
+  const typedAsk = (req.mode === 'answer' || req.mode === 'vision') && req.kind !== 'factcheck'
+  const basePrompt = req.kind === 'factcheck' ? '' : effectiveModePrompt(mode, modePrompts)
+  const prompt = typedAsk ? retargetForTypedAsk(basePrompt) : basePrompt
   // Modes where the user is performing as themselves benefit from the profile (background/role/company);
   // general and meeting are neutral observers, and recruiting grounds on the candidate (not the
   // interviewer's own resume), so these three skip it.

@@ -33,6 +33,16 @@ const stanceColor: Record<string, string> = {
   unknown: 'rgba(255,255,255,0.28)',
 }
 
+/** Age buckets carry severity: a fresh promise is routine (brand gradient), a quarter-old one is a
+ *  problem. Encoded in color, not just position, so the danger reads at a glance (design-standards:
+ *  "encode state in form as well as number"). undefined = BarRow's default brand gradient. */
+const AGING_SEVERITY: Record<string, string | undefined> = {
+  '<7d': undefined,
+  '7-30d': undefined,
+  '30-90d': 'var(--color-band-stalled)',
+  '>90d': 'var(--color-band-negative)',
+}
+
 /** Every commitment carries `text` + `by` but not a stable id — dedupe on `text` + `by` + `meeting` +
  *  `date` so only the same occurrence, echoed in both a deal's ledger and a person's ledger (the same
  *  promise, seen from two entities), collapses into one row. Distinct commitments that merely share
@@ -102,8 +112,10 @@ export function StatsView({ data }: Props) {
   const worstReliability = useMemo(() => {
     const byPerson: Record<string, Commitment[]> = {}
     for (const c of allCommitments) (byPerson[c.by] ??= []).push(c)
+    // 3+ settled to rank: with the old `> 0` gate a single broken promise (0/1) crowned someone the
+    // org's least reliable person off one data point — same class of bug as the cadence caveat below.
     return reliabilityByOwner(byPerson)
-      .filter((r) => r.kept + r.broken > 0)
+      .filter((r) => r.kept + r.broken >= 3)
       .slice(0, 5)
   }, [allCommitments])
 
@@ -111,24 +123,39 @@ export function StatsView({ data }: Props) {
     <div className="mx-auto max-w-7xl px-6 py-8">
       <h1 className="text-2xl font-semibold text-white/95">Tracked statistics</h1>
 
-      <motion.div
-        initial={{ opacity: 0 }}
-        animate={{ opacity: 1 }}
-        className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-300"
-      >
-        <strong className="font-semibold">n = {data.deals.length}: illustrative until more deals close.</strong>{' '}
-        These numbers describe a handful of deals, not a portfolio. Treat every stat below as a
-        single-point observation, not a trend, until real volume accumulates.
-      </motion.div>
+      {/* Small-sample caveat — CONDITIONAL, and keyed on CLOSED deals (won+lost), which is what the
+          copy actually claims. It used to render unconditionally with n = ALL deals: a lie both ways —
+          shown forever regardless of volume, and counting open deals as if they were closed outcomes. */}
+      {outcomeDist.won + outcomeDist.lost < 5 && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="mt-4 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-300"
+        >
+          <strong className="font-semibold">
+            {outcomeDist.won + outcomeDist.lost === 0
+              ? 'No closed deals yet.'
+              : `${outcomeDist.won + outcomeDist.lost} closed deal${outcomeDist.won + outcomeDist.lost === 1 ? '' : 's'}: illustrative until more close.`}
+          </strong>{' '}
+          Outcome-based numbers below describe a handful of closed deals, not a portfolio. Treat them as
+          single-point observations, not trends, until at least 5 deals have closed.
+        </motion.div>
+      )}
 
       <div className="mt-6 grid grid-cols-2 gap-4 md:grid-cols-4">
+        <StatTile label="Meetings ingested" value={data.status.meetings} />
         <StatTile label="Deals tracked" value={data.deals.length} />
         <StatTile label="Claims extracted" value={totalClaims} />
         <StatTile label="Coaching insights" value={data.coaching_insights.length} />
         <StatTile label="Recurring patterns (n≥2)" value={recurringInsights} />
         <StatTile label="People mapped" value={data.status.people} />
         <StatTile label="Accounts mapped" value={data.status.accounts} />
-        <StatTile label="Graph nodes · edges" value={`${data.status.nodes} · ${data.status.edges}`} />
+        {/* Same filtered account_graph the Relationships tab renders (meetings dropped from the display
+            graph) — not the raw brain graph. The two used to disagree under this identical label. */}
+        <StatTile
+          label="Graph nodes · edges"
+          value={`${data.account_graph.nodes.length} · ${data.account_graph.edges.length}`}
+        />
       </div>
 
       {/* Pipeline */}
@@ -175,7 +202,7 @@ export function StatsView({ data }: Props) {
             <CardLabel>Meetings per week (last 12 weeks)</CardLabel>
             <WeeklyBars buckets={weekly.buckets} />
             {weekly.undated > 0 && (
-              <p className="mt-2 text-[11px] text-white/30">
+              <p className="mt-2 text-[11px] text-white/50">
                 +{weekly.undated} meeting{weekly.undated === 1 ? '' : 's'} with no date, not shown above.
               </p>
             )}
@@ -183,6 +210,12 @@ export function StatsView({ data }: Props) {
           <Card>
             <CardLabel>Sentiment trend (with rolling average)</CardLabel>
             <Sparkline series={sentiment} rolling={sentimentRolling} />
+            {sentiment.length > 1 && (
+              <div className="mt-1 flex justify-between text-[10px] text-white/50">
+                <span>{sentiment[0].date}</span>
+                <span>{sentiment[sentiment.length - 1].date}</span>
+              </div>
+            )}
           </Card>
         </div>
       </Section>
@@ -221,15 +254,20 @@ export function StatsView({ data }: Props) {
                       ) : (
                         bar
                       )}
-                      <div className="mt-1 pl-[9.5rem] text-[11px] text-white/30">
+                      <div className="mt-1 pl-[9.5rem] text-[11px] text-white/50">
                         last touch {c.daysSinceLast === 0 ? 'today' : `${c.daysSinceLast}d ago`}
+                        {c.count < 3 && (
+                          <span className="ml-2 text-amber-300/70">
+                            · only {c.count} meeting{c.count === 1 ? '' : 's'} so far, not a real rate yet
+                          </span>
+                        )}
                       </div>
                     </div>
                   )
                 })}
               </div>
               {cadence.length > 6 && (
-                <p className="mt-2 text-[11px] text-white/30">
+                <p className="mt-2 text-[11px] text-white/50">
                   +{cadence.length - 6} more account{cadence.length - 6 === 1 ? '' : 's'}, not shown above.
                 </p>
               )}
@@ -251,6 +289,14 @@ export function StatsView({ data }: Props) {
             hint={ledger.keptRate === null ? 'nothing settled yet' : undefined}
           />
         </div>
+        {/* This dashboard is read-only for the ledger (see src/preload/intelligence.ts) — without this
+            line, Kept/Broken sit at 0 forever and read as broken tracking rather than untouched tracking. */}
+        {ledger.kept + ledger.broken === 0 && ledger.open > 0 && (
+          <p className="mt-3 text-[11px] text-white/50">
+            Promises settle from the main Métis window: open a meeting there and mark each commitment kept
+            or broken. The tiles above update from that.
+          </p>
+        )}
         <div className="mt-4 grid gap-4 md:grid-cols-2">
           <Card>
             <CardLabel>Age of open commitments</CardLabel>
@@ -260,11 +306,17 @@ export function StatsView({ data }: Props) {
               <>
                 <div className="space-y-2">
                   {aging.buckets.map((b) => (
-                    <BarRow key={b.label} label={b.label} value={b.items.length} max={Math.max(1, ledger.open)} />
+                    <BarRow
+                      key={b.label}
+                      label={b.label}
+                      value={b.items.length}
+                      max={Math.max(1, ledger.open)}
+                      color={AGING_SEVERITY[b.label]}
+                    />
                   ))}
                 </div>
                 {aging.undated.length > 0 && (
-                  <p className="mt-2 text-[11px] text-white/30">
+                  <p className="mt-2 text-[11px] text-white/50">
                     +{aging.undated.length} open commitment{aging.undated.length === 1 ? '' : 's'} with no date, not
                     aged above.
                   </p>
@@ -273,9 +325,9 @@ export function StatsView({ data }: Props) {
             )}
           </Card>
           <Card>
-            <CardLabel>Least reliable (kept rate, worst 5)</CardLabel>
+            <CardLabel>Least reliable (kept rate, 3+ settled promises)</CardLabel>
             {worstReliability.length === 0 ? (
-              <Empty text="No settled commitments to rank yet." />
+              <Empty text="No one has 3+ settled promises yet — a reliability rank needs at least three data points." />
             ) : (
               <div className="space-y-2">
                 {worstReliability.map((r) => {
@@ -372,7 +424,7 @@ export function StatsView({ data }: Props) {
         </div>
       </Section>
 
-      <p className="mt-6 text-xs text-white/30">{data.meta.note}</p>
+      <p className="mt-6 text-xs text-white/50">{data.meta.note}</p>
     </div>
   )
 }
@@ -399,5 +451,5 @@ function CardLabel({ children }: { children: React.ReactNode }) {
 }
 
 function Empty({ text }: { text: string }) {
-  return <div className="text-xs text-white/30">{text}</div>
+  return <div className="text-xs text-white/50">{text}</div>
 }

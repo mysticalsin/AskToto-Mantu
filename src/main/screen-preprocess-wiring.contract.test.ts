@@ -39,7 +39,7 @@ describe('MQA-178 — the engine is armed at boot, not only when some other sett
     // false. Nothing else notices when it finishes, so without this the feature stays dead all session.
     const download = sliceBetween(
       indexSrc,
-      'ensureLocalModel(LOCAL_MODELS[0].id)',
+      'ensureLocalModel(best.id)',
       'app.setAppUserModelId'
     )
     expect(download).toContain('refreshScreenPreprocess')

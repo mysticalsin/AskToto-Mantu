@@ -524,6 +524,9 @@ export function OnboardingV2({
       // still-in-flight patch can't let the legacy finish() re-persist false. legacy-full = the Skip
       // path, which hits the real consent slide 1, so leave it to read from settings.
       initialConsent={phase === 'provider' ? true : undefined}
+      // legacy-full still needs its own consent slide (1), but must not then walk slides 2-4 — that
+      // would make "Skip the tour" show MORE screens than just finishing the narrative experience does.
+      skipWalkthrough={phase === 'legacy-full'}
     />
   )
 }

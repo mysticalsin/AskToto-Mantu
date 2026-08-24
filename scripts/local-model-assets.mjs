@@ -12,8 +12,10 @@ export const LOCAL_MODEL_LICENSE = Object.freeze({
   sha256: '2410613f992aef11cab1ca584d5732068b6038da37bd140092f09f61dd1c31bd'
 })
 
-// Build-time supply-chain manifest. These URLs are never packaged into the application. The upstream
-// revision, byte length, and SHA-256 are all immutable supply-chain gates.
+// Build-time supply-chain manifest. The upstream revision, byte length, and SHA-256 are all immutable
+// supply-chain gates. Keep them identical to the entry in src/main/llm/local-models.ts, which is the
+// copy that ships and that the first-run downloader verifies against: this manifest's only job is to
+// let check-local-model.mjs re-hash the real file and prove those pins before a release goes out.
 export const LOCAL_MODEL_ASSETS = Object.freeze([
   Object.freeze({
     file: 'model.gguf',

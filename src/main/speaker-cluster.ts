@@ -28,6 +28,16 @@ export interface SpeakerClusterer {
   size: () => number
   /** Snapshot of a cluster's centroid (for enrollment joins) — null for an unknown label. */
   centroid: (label: string) => Float32Array | null
+  /**
+   * MQA-238: whole-session agglomerative merge, run once at import end when every window has been seen.
+   * The online assign() only looks BACKWARD (a drifting voice opens a new cluster it can never rejoin),
+   * so a real 2-speaker meeting came out as 8 labels. This pass (a) repeatedly merges the two most
+   * similar clusters while their centroid cosine >= mergeThreshold (count-weighted mean), then
+   * (b) absorbs minority clusters (count < minorityFloor) into their nearest survivor — the long tail of
+   * 2-5-window fragments is drift, not people. Survivors are relabeled densely by first appearance.
+   * Returns old->final label mapping for every ORIGINAL label (identity entries included).
+   */
+  mergePass: (opts?: { mergeThreshold?: number; minorityFloor?: number }) => Map<string, string>
   reset: () => void
 }
 
@@ -115,6 +125,69 @@ export function createSpeakerClusterer(options: ClustererOptions = {}): SpeakerC
       return { label, isNew: true, similarity: 1 }
     },
     size: () => clusters.length,
+    mergePass: (opts) => {
+      const mergeThreshold = opts?.mergeThreshold ?? threshold
+      const minorityFloor = opts?.minorityFloor ?? 3
+      // Every original label -> the cluster object currently owning it.
+      const owner = new Map<string, { label: string; centroid: Float32Array; count: number }>()
+      for (const c of clusters) owner.set(c.label, c)
+      const absorb = (
+        into: { label: string; centroid: Float32Array; count: number },
+        from: { label: string; centroid: Float32Array; count: number }
+      ): void => {
+        const total = into.count + from.count
+        for (let i = 0; i < into.centroid.length; i++) {
+          into.centroid[i] = (into.centroid[i] * into.count + from.centroid[i] * from.count) / total
+        }
+        into.count = total
+        for (const [orig, c] of owner) if (c === from) owner.set(orig, into)
+        clusters = clusters.filter((c) => c !== from)
+      }
+      // (a) agglomerative: closest pair first, while above the floor.
+      for (;;) {
+        let bi = -1
+        let bj = -1
+        let best = -Infinity
+        for (let i = 0; i < clusters.length; i++) {
+          for (let j = i + 1; j < clusters.length; j++) {
+            const sim = cosineSimilarity(clusters[i].centroid, clusters[j].centroid)
+            if (sim > best) {
+              best = sim
+              bi = i
+              bj = j
+            }
+          }
+        }
+        if (bi < 0 || best < mergeThreshold) break
+        // Keep the earlier-appearing (lower-numbered) cluster as the survivor.
+        absorb(clusters[bi], clusters[bj])
+      }
+      // (b) minority absorption: tail fragments join their nearest survivor unconditionally.
+      for (;;) {
+        const minor = clusters.find((c) => c.count < minorityFloor && clusters.length > 1)
+        if (!minor) break
+        let nearestC: (typeof clusters)[number] | null = null
+        let bestSim = -Infinity
+        for (const c of clusters) {
+          if (c === minor) continue
+          const sim = cosineSimilarity(minor.centroid, c.centroid)
+          if (sim > bestSim) {
+            bestSim = sim
+            nearestC = c
+          }
+        }
+        if (!nearestC) break
+        absorb(nearestC, minor)
+      }
+      // Dense relabel by first appearance (original numbering order of the survivors).
+      const finalLabel = new Map<{ label: string }, string>()
+      let n = 1
+      for (const c of clusters) finalLabel.set(c, `Speaker ${n++}`)
+      for (const c of clusters) c.label = finalLabel.get(c) as string
+      const mapping = new Map<string, string>()
+      for (const [orig, c] of owner) mapping.set(orig, finalLabel.get(c) as string)
+      return mapping
+    },
     centroid: (label) => {
       const c = clusters.find((x) => x.label === label)
       return c ? Float32Array.from(c.centroid) : null

@@ -5,7 +5,17 @@ import { brainStatusIsWorking, shouldReloadForBrainStatus } from './status-refre
 interface State {
   data: DashboardData | null
   loading: boolean
+  /** Fatal: there is nothing to show. The view is replaced by the error. */
   error: string | null
+  /**
+   * Non-fatal: `data` is the last good snapshot and a REFRESH failed.
+   *
+   * Keeping the last snapshot on screen is deliberate — one IPC hiccup must not blank a dashboard
+   * someone is reading. But it used to be kept SILENTLY (`error: prev.data ? null : err.message`),
+   * so a bridge that died stayed dead while the page went on presenting figures as current. Numbers
+   * that stopped updating have to say so, or they are worse than no numbers.
+   */
+  stale: string | null
 }
 
 /**
@@ -15,7 +25,7 @@ interface State {
  *  2. Standalone/dev: the generated data.json from /public (placeholder or a manual vault build).
  */
 export function useDashboardData(): State {
-  const [state, setState] = useState<State>({ data: null, loading: true, error: null })
+  const [state, setState] = useState<State>({ data: null, loading: true, error: null, stale: null })
 
   useEffect(() => {
     let cancelled = false
@@ -53,11 +63,18 @@ export function useDashboardData(): State {
       lastLoadAt = Date.now()
       ;(window.intelligence ? fromBrain() : fromFile())
         .then((data) => {
-          if (!cancelled && myId === requestId) setState({ data, loading: false, error: null })
+          if (!cancelled && myId === requestId) setState({ data, loading: false, error: null, stale: null })
         })
         .catch((err: Error) => {
           if (!cancelled && myId === requestId)
-            setState((prev) => ({ data: prev.data, loading: false, error: prev.data ? null : err.message }))
+            setState((prev) => ({
+              data: prev.data,
+              loading: false,
+              // With no snapshot to fall back on this is fatal and replaces the view. With one, keep
+              // showing it and mark it stale rather than discarding the failure.
+              error: prev.data ? null : err.message,
+              stale: prev.data ? err.message : null
+            }))
         })
     }
     load()

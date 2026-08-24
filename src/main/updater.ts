@@ -31,6 +31,35 @@ function autoUpdateDisabledByPolicy(): boolean {
   return content ? configDisablesAutoUpdate(content) : false
 }
 
+/** Pure: the admin managed-config's private update feed URL, or null. Only an https:// URL is honored —
+ *  anything else (http, a path, garbage, malformed JSON) means "use the built-in feed". Exported for
+ *  tests. */
+export function configUpdateFeedUrl(configText: string): string | null {
+  try {
+    const v = (JSON.parse(configText) as { updateFeedUrl?: unknown })?.updateFeedUrl
+    return typeof v === 'string' && /^https:\/\//i.test(v.trim()) ? v.trim() : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Enterprise: point electron-updater at an internally hosted feed instead of the public GitHub repo.
+ * Deliberately ADMIN-policy only (same ACL-trusted path as disableAutoUpdate) — a per-user or
+ * user-writable config must never be able to redirect the update channel, because whoever controls the
+ * feed controls what binary gets offered. Signature verification (verifyUpdateCodeSignature) still
+ * applies to whatever the feed serves; this is routing, not trust. The feed is a `generic` provider:
+ * an HTTPS directory serving latest.yml + the installer, which IT can host on any internal static host.
+ */
+function applyAdminUpdateFeed(autoUpdater: { setFeedURL: (opts: { provider: string; url: string }) => void }): void {
+  const content = readTrustedAdminManaged()
+  const url = content ? configUpdateFeedUrl(content) : null
+  if (url) {
+    autoUpdater.setFeedURL({ provider: 'generic', url })
+    log.info(`[updater] using the org's private update feed (admin policy): ${url}`)
+  }
+}
+
 /** Which channel rule forbids this install from consuming the shared Métis release feed, or null. */
 export type BlockedUpdateChannel = 'cahe' | 'store' | 'policy'
 
@@ -182,6 +211,7 @@ export async function startUpdateDownload(): Promise<UpdateDownloadStart> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { autoUpdater } = require('electron-updater')
+    applyAdminUpdateFeed(autoUpdater)
     // checkForUpdates() resolves as soon as the FEED answers — the download it kicked off is still
     // running behind `downloadPromise`, so "started" can only mean "there is a download to watch".
     const downloadPromise = (await autoUpdater.checkForUpdates())?.downloadPromise
@@ -241,6 +271,7 @@ export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
     // — only a packaged build with a real update host ever needs it loaded.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { autoUpdater } = require('electron-updater')
+    applyAdminUpdateFeed(autoUpdater)
     autoUpdater.logger = log
     log.transports.file.level = 'info'
     autoUpdater.autoDownload = true

@@ -101,6 +101,15 @@ extraResources:
     to: ort
   - from: resources/runtime-assets-manifest.json
     to: runtime-assets-manifest.json
+  # Optional, disclosed installer-embedded Cloudflare proxy key (docs/CLOUDFLARE.md, src/main/
+  # embedded-cloudflare-key.ts). build/cloudflare-embed/ is a real, always-present directory (tracked via
+  # .gitkeep) that is EMPTY on a normal build — electron-builder copies whatever it finds, so packaging
+  # never fails when there's nothing to embed. An operator who wants a fresh install to reach the default
+  # Cloudflare provider with zero paste-a-key setup drops a local, gitignored key.json into it first (see
+  # scripts/check-embedded-cloudflare-key.mjs, which scans every Windows packaging chain so this is never
+  # accidental).
+  - from: build/cloudflare-embed
+    to: cloudflare-embed
 mac:
   category: public.app-category.productivity
   # electron-builder treats a target-specific `files` override as the complete app allowlist. Keep the
@@ -196,6 +205,32 @@ masDev:
   entitlementsInherit: build/entitlements.mas.inherit.plist
 dmg:
   title: Métis ${version}
+  # A three-item layout, not the default two. Métis is not Apple-notarized, so on macOS 15+ dragging
+  # the app across and double-clicking it dead-ends at "Apple could not verify Métis is free of
+  # malware" with no Control-click → Open escape any more. `Install Metis.command` does the copy,
+  # clears com.apple.quarantine (recursively — the nested Metis Helper bundles carry their own tags),
+  # re-verifies the signature and launches the app. docs/INSTALL.md documents it, and documented it
+  # before it existed; this is the file that claim refers to.
+  # The path is deliberately RELATIVE: dmg-builder rejects an absolute dmg.contents path outside the
+  # workspace root, and resolves a relative one against the project directory it is invoked from.
+  window:
+    width: 560
+    height: 400
+  contents:
+    # No `path` on the first entry — dmg-builder substitutes the packaged .app (its documented
+    # backward-compatibility behaviour), which keeps this working if productName ever changes.
+    - x: 140
+      y: 170
+      type: file
+    - x: 420
+      y: 170
+      type: link
+      path: /Applications
+    - x: 280
+      y: 320
+      type: file
+      path: build/install-metis.command
+      name: Install Metis.command
 win:
   icon: build/icon.png
   # Do not hardcode a guessed publisher name. For signed builds electron-builder derives the exact

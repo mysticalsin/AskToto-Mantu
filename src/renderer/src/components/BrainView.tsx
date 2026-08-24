@@ -419,7 +419,8 @@ const BAND_ORDER: Record<string, number> = { concerning: 0, mixed: 1, good: 2 }
 export function BrainView({
   onBack,
   onOpenMeeting,
-  onOpenSettings
+  onOpenSettings,
+  onDashboardOpen
 }: {
   onBack: () => void
   /** Opens a saved meeting read-only (the same handler History/Settings use) — record pages' provenance
@@ -428,6 +429,10 @@ export function BrainView({
   /** Opens Settings → AI — this view and Settings live in the same window, so this is just a `setView`
    *  swap in App.tsx, not a new cross-window mechanism. Wired into the no-provider CTAs below. */
   onOpenSettings?: () => void
+  /** Optional: called once the full Mantu Intelligence dashboard window actually opened successfully —
+   *  App.tsx uses this to minimize this in-bar glance panel so it isn't fighting the new window for
+   *  screen space. Never called on failure (the error stays visible in THIS panel for the user to read). */
+  onDashboardOpen?: () => void
 }): JSX.Element {
   const [data, setData] = useState<BrainRead | null>(null)
   const [marsCopied, flashMarsCopied] = useFlash(2000)
@@ -1391,6 +1396,16 @@ export function BrainView({
             </div>
           )}
 
+          {/* MQA-230: a deleted meeting's transcript + extraction are removed synchronously, but items
+              attributed to it inside entity files wait on the next source refresh (needs a usable
+              provider). Say so — a silent wait reads as a completed delete. */}
+          {status?.cleanupPending && (
+            <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
+              Cleanup after a deleted meeting is pending — references to it are removed automatically the
+              next time indexing runs.
+            </div>
+          )}
+
           {/* Lint warnings — contradictions the ingest refused to auto-resolve (the replay-failure notice
               is shown in the banner above, so it's filtered out here to avoid duplication + being cut off). */}
           {(() => {
@@ -1418,6 +1433,7 @@ export function BrainView({
                 .catch((e) => ({ ok: false, error: String(e) }))
                 .then((r) => {
                   if (!r.ok) setError(r.error || 'Could not open Mantu Intelligence.')
+                  else onDashboardOpen?.()
                 })
             }}
             className="no-drag focus-ring flex items-center justify-center gap-1.5 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2 text-[11px] font-semibold text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink)]"
