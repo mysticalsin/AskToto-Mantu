@@ -253,7 +253,10 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
     // Optional group 5 captures a Speaker Intelligence display name — "Them (Jane Doe):**" — written by
     // transcripts.ts's formatTranscriptLine once one has been resolved; absent on every meeting saved
     // before that feature existed, and on any line no name was ever resolved for.
-    const lineRe = /^\*\*\[(\d{2}):(\d{2}):(\d{2})\] (Them|You|Speaker)(?: \(([^)]*)\))?:\*\* (.+)$/gm
+    // MQA-245: `Speaker 1` (a diarization cluster label standing alone) joins the accepted label set.
+    // Older files wrote it as `Speaker (Speaker 1)` and still parse through the optional paren group
+    // below — this only ADDS a form, so no previously-saved meeting changes meaning.
+    const lineRe = /^\*\*\[(\d{2}):(\d{2}):(\d{2})\] (Them|You|Speaker(?: \d+)?)(?: \(([^)]*)\))?:\*\* (.+)$/gm
     let m: RegExpExecArray | null
     // Seeded at the SAME resolution the comparison runs at: the frontmatter `date` keeps milliseconds
     // while every reconstructed time below is floored to the whole second, so an unfloored seed reads a
@@ -276,7 +279,9 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
         text: lineText.trim(),
         t
       }
+      // A bare cluster label carries the identity in the label slot, not the paren slot.
       if (name) line.name = name.trim()
+      else if (/^Speaker \d+$/.test(speakerLabel)) line.name = speakerLabel
       // Re-derive the spoken-language tag the same way the live path does (commitLine). The saved file
       // carries language only as "_[conversation switches to …]_" marker PROSE, which this line regex
       // rightly skips — without re-tagging, a Speaker Intelligence backfill rewrite (updateMeetingNames

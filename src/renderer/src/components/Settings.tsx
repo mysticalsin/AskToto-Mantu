@@ -5287,6 +5287,16 @@ export function Settings({
                       <TextButton onClick={() => patch({ asrLastFallbackAt: null })}>Dismiss</TextButton>
                     </div>
                   )}
+                  {settings.asrImportTierFallbackAt != null && (
+                    <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+                      <span>
+                        An imported recording was transcribed with the compact model — the
+                        higher-accuracy one is not installed. Accuracy is lower, especially on
+                        non-English audio. {new Date(settings.asrImportTierFallbackAt).toLocaleString()}.
+                      </span>
+                      <TextButton onClick={() => patch({ asrImportTierFallbackAt: null })}>Dismiss</TextButton>
+                    </div>
+                  )}
                   {(settings as SettingsWithAsrWebgpuFallback).asrWebgpuFallbackAt != null && (
                     <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
                       <span>
