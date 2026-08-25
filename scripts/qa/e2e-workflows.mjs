@@ -1260,7 +1260,11 @@ async function groupAccuracy() {
   // result here can mean "still working" rather than "got it wrong". That distinction is the whole
   // point of the third status — see MQA-255.
   let settled = false
-  const deadline = Date.now() + 6 * 60 * 1000
+  // 12 min, not 6. On-device extraction of a single 5-line transcript measured ~3-6 min on a warm
+  // profile (the model is doing entity, deal, value and commitment passes), so a 6-min budget expired
+  // mid-extraction and the cleanup below then deleted the fixture before it could ever be indexed —
+  // making every re-run start from zero and never converge.
+  const deadline = Date.now() + 12 * 60 * 1000
   while (Date.now() < deadline) {
     const st = await page.evaluate(() => window.toto.brainStatus())
     const idle = st?.backfill && !st.backfill.running && !st.backfill.preparing
@@ -1335,6 +1339,10 @@ async function groupAccuracy() {
 
   if (file) {
     await check(g, 'clean up the accuracy fixture', async () => {
+      // Only when its extraction actually completed. Deleting a transcript that is still mid-extraction
+      // is why a timed-out run could never be recovered by simply re-running: each attempt removed the
+      // very file the next attempt was waiting on.
+      if (!settled) return { __info: `left in place — extraction never settled, so deleting it would make the next run start over: ${file}` }
       try { rmSync(file, { force: true }) } catch { /* best effort */ }
       return existsSync(file) ? 'still present' : 'removed'
     })
