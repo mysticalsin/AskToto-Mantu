@@ -359,14 +359,28 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     deepModel: '@cf/openai/gpt-oss-120b',
     keyHint: 'METIS_PROXY_KEY from your operator',
     keyPattern: '', // operator-chosen shared secret — no fixed prefix to auto-detect
-    // MQA-227: FALSE, and not because of the model. Llama 4 Scout really is multimodal, but Cloudflare's
-    // OpenAI-compatible route has no way to carry the image: every `image_url` shape is rejected with
-    // "Property image_url only supports base64 encoded image data" (code 6004) — both a
-    // `data:image/jpeg;base64,...` URL and bare base64, on Scout AND on the dedicated
-    // llama-3.2-11b-vision-instruct. It is a transport limit, not a model one. Claiming vision here would
-    // capture the user's screen and upload it for a request that always errors; false sends screen-asks
-    // to the on-device model, which works. Revisit only against a live endpoint, never against the mock.
-    vision: false,
+    // MQA-259: TRUE since 2026-08-25. MQA-227 recorded this as false because Cloudflare's
+    // OpenAI-compatible route rejected every `image_url` shape with code 6004 — a TRANSPORT limit, never a
+    // model one (Llama 4 Scout has always been multimodal). That note said to revisit only against a live
+    // endpoint. Re-probed against the live Worker with the shipped embedded key, and the data-URI shape
+    // now answers:
+    //
+    //   {type:'image_url', image_url:{url:'data:image/jpeg;base64,…'}}  -> 200, image genuinely read
+    //   {type:'image_url', image_url:{url:'<bare base64>'}}             -> 400
+    //   {type:'image_url', image_url:'data:image/jpeg;base64,…'}        -> 400
+    //
+    // Proven by content the model could not guess: two rendered images returned "INVOICE 84213" and
+    // "RECEIPT 90577" exactly, and a 2560x1440 screenshot (0.75 MB base64) returned the text on its banner
+    // in 1.86s — against 12s+ for the same ask on the on-device model.
+    //
+    // ONLY the nested data-URI shape works, which is what llm/openai.ts already builds. A refactor to bare
+    // base64 would silently 400 every screen-ask, so cloudflare-vision.contract.test.ts pins the shape as
+    // well as this flag.
+    //
+    // Screen-asks therefore leave the device for the operator's Worker — the same boundary the transcript
+    // and the question already cross. A user who wants them kept on-device sets Local AI -> Use for vision,
+    // which pins them to the on-device model regardless of this flag.
+    vision: true,
     keyUrl: '' // issued by whoever deployed the Worker, not by a signup page
   },
   local: {

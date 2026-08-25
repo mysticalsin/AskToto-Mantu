@@ -60,7 +60,19 @@ const PROFILE_RECOVERY_FIXED_FILES = new Set([
   'auth-session.bin',
   'auth-configured.flag',
   'msal-cache.bin',
-  'google-session.bin'
+  'google-session.bin',
+  // MQA-260: the one-shot seed markers for the installer-embedded keys. Their job is to stop a later
+  // launch silently overwriting a key the USER chose (embedded-cloudflare-key.ts:18-20) — that job is
+  // about a live profile, and it does not survive into a rebuilt one.
+  //
+  // "Create new local profile & retry" runs when secret-key.bin cannot be unwrapped, which means every
+  // key-<provider>.bin is already undecryptable. Archiving them destroys nothing that still worked. But
+  // leaving the markers behind carried the OLD profile's "already seeded" verdict into the new one, so
+  // the repair produced a profile with no Cloudflare key and no way to ever get one — on a build that
+  // ships an embedded key, that turns the repair button into a downgrade to the 12s on-device path.
+  // Clearing them lets the fresh profile seed exactly as a first install does.
+  '.cloudflare-key-seeded',
+  '.cahe-key-seeded'
 ])
 
 function encryptedProfileFiles(): string[] {
