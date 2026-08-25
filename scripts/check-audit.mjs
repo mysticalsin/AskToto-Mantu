@@ -32,6 +32,24 @@
  * needs a Swift toolchain (macOS), and Snyk Code (SAST) is not enabled for this organization — the
  * dependency scan says nothing about our own source.
  *
+ * SAST (Snyk Code), 2026-08-24. Enabled on the org and run: 6 HIGH findings, all triaged to false
+ * positives, each verified rather than waved away. Recorded so nobody re-triages them from scratch:
+ *
+ *   - Path Traversal, license-server/lib/app.mjs:555 — req.params.name reaching res.download. Guarded by
+ *     BACKUP_FILE_RE (/^licenses-backup-[0-9TZ-]+\.json$/, anchored, digits/T/Z/hyphen only) AND
+ *     path.basename(name) === name, behind requireAdmin. Tested against 8 payloads including encoded,
+ *     null-byte and Windows-separator variants: every one blocked. Snyk's taint analysis does not model
+ *     the regex+basename guard.
+ *   - Hardcoded secret ×3, src/shared/ipc.ts:42-44 — 'settings:setApiKey' and siblings are IPC CHANNEL
+ *     NAMES. The literal contains "ApiKey"; it is not a key.
+ *   - Hardcoded secret, src/main/llm/local.ts:206 — apiKey: 'fm-loopback' is a placeholder the OpenAI SDK
+ *     requires as a non-empty string. `fm serve` binds 127.0.0.1 and has no auth surface.
+ *   - Hardcoded secret, license-server/admin/index.html:974 — a localStorage KEY name, not a token.
+ *
+ * Worth its own look, and NOT what Snyk flagged: that admin page keeps its session token in
+ * localStorage, which is XSS-exfiltratable by design. Out of scope for this file; noted so it is not
+ * mistaken for something the SAST run cleared.
+ *
  * Usage: node scripts/check-audit.mjs   (exit 0 = clean or excused-only; 1 = real findings)
  */
 import { execSync } from 'node:child_process'
