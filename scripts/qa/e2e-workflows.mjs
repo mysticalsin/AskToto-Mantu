@@ -295,6 +295,38 @@ async function groupSettings() {
     assert((await settings()).localFallbackReady === true, 'localFallbackReady did not come back')
     return 'tracks fallback'
   })
+  // MQA-261: on a build that ships an embedded key, removing it must not be a one-way door. This runs
+  // LAST in the group and leaves the key restored, so it is self-healing even if the assertions fail.
+  await check(g, 'the shipped Cloudflare key survives being removed — it can be put back', async () => {
+    const s0 = await settings()
+    if (!s0.embeddedCloudflareKeyAvailable) {
+      return { __info: 'not exercised — this build shipped no embedded key (the normal keyless build)' }
+    }
+    if (!s0.hasKeys?.cloudflare) {
+      return { __info: 'not exercised — no Cloudflare key is stored on this profile to remove' }
+    }
+    try {
+      await page.evaluate(() => window.toto.clearApiKey('cloudflare'))
+      const cleared = await settings()
+      assert(cleared.hasKeys?.cloudflare === false, 'the key was not actually removed, so the test proves nothing')
+      assert(
+        cleared.embeddedCloudflareKeyAvailable === true,
+        'the build stopped reporting a restorable key the moment the stored one went — the user has no way back'
+      )
+
+      const res = await page.evaluate(() => window.toto.restoreEmbeddedCloudflareKey())
+      assert(res && res.ok, `restore refused: ${res && res.error ? res.error : JSON.stringify(res)}`)
+
+      const back = await settings()
+      assert(back.hasKeys?.cloudflare === true, 'restore reported success but no key is stored')
+      assert(back.providerReady === true, 'the key is back but the provider is still not ready')
+      return 'removed and restored'
+    } finally {
+      // Never leave the profile without the key it shipped with, whatever happened above.
+      await page.evaluate(() => window.toto.restoreEmbeddedCloudflareKey()).catch(() => {})
+    }
+  })
+
   await check(g, 'a malformed settings patch is rejected without corrupting good settings', async () => {
     const before = (await settings()).temperature
     await page.evaluate(() => window.toto.setSettings({ temperature: 'not-a-number' })).catch(() => {})

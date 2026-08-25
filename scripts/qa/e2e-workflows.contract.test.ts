@@ -191,3 +191,26 @@ describe('MQA-258 — the dashboard, accuracy, and latency are exercised, not as
     expect(SUITE).toMatch(/an on-device ask answers within the on-device budget/)
   })
 })
+
+/**
+ * MQA-261 — the physical suite must exercise the way back, not just the removal.
+ *
+ * The defect was silent: clearing the shipped key left the app answering, on the on-device model, an order
+ * of magnitude slower. A suite that only checks "a key can be cleared" would have stayed green through it.
+ */
+describe('MQA-261 — removing the shipped key is not a one-way door', () => {
+  it('drives remove -> restore against the real app', () => {
+    expect(SUITE).toMatch(/the shipped Cloudflare key survives being removed/)
+    expect(SUITE).toMatch(/window\.toto\.restoreEmbeddedCloudflareKey\(\)/)
+  })
+
+  it('fails if the build stops offering a restore the moment the key is gone', () => {
+    // That is the exact state the user lands in, so it is the one that must be asserted.
+    expect(SUITE).toMatch(/the user has no way back/)
+  })
+
+  it('always leaves the key restored, even when its own assertions fail', () => {
+    // A QA run must not be the thing that strands a profile on the slow path.
+    expect(SUITE).toMatch(/Never leave the profile without the key it shipped with/)
+  })
+})
