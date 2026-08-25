@@ -107,3 +107,6 @@ native-app/**/*.xcodeproj/xcuserdata/
 .forge/qa/
 .forge/qa-udd-*/
 .forge/qa-appdata/
+
+# Conductor session snapshots — regenerated per session, record UNCOMMITTED state, conflict on every merge.
+.conductor/
