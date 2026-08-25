@@ -374,8 +374,8 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     // in 1.86s — against 12s+ for the same ask on the on-device model.
     //
     // ONLY the nested data-URI shape works, which is what llm/openai.ts already builds. A refactor to bare
-    // base64 would silently 400 every screen-ask, so cloudflare-vision.contract.test.ts pins the shape as
-    // well as this flag.
+    // base64 would silently 400 every screen-ask, so providers.test.ts pins the shape llm/openai.ts builds
+    // alongside this flag ('MQA-259: the app builds the ONE image shape the endpoint accepts').
     //
     // Screen-asks therefore leave the device for the operator's Worker — the same boundary the transcript
     // and the question already cross. A user who wants them kept on-device sets Local AI -> Use for vision,
