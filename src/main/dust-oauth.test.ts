@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app, shell } from 'electron'
@@ -275,5 +275,51 @@ describe('dust-oauth', () => {
       const r = await refreshDustOAuthSession()
       expect(r.ok).toBe(false)
     })
+  })
+})
+
+/**
+ * MQA-253 — the one URL in this app that arrives off the wire before reaching the OS shell.
+ *
+ * `shell.openExternal` is a shell execution primitive: the scheme decides which application runs, and on
+ * Windows that includes ms-msdt:, search-ms: and file:. The device-flow response's
+ * `verification_uri_complete` was checked for PRESENCE and then opened, so whatever returned it chose the
+ * handler while the user saw only "signing in to Dust".
+ *
+ * Every other openExternal in the codebase is either a hardcoded literal or already gated on https
+ * (index.ts's setWindowOpenHandler, intelligence.ts). This call site simply never got the same rule —
+ * the same shape as the other defects this audit found: a safety rule applied everywhere except once.
+ */
+describe('MQA-253 — the verification URL is scheme- and host-locked before it reaches the shell', () => {
+  const guard = readFileSync(join(__dirname, 'dust-oauth.ts'), 'utf8')
+
+  it('refuses every non-https scheme', () => {
+    // The Follina class: a URL the OS resolves to an application rather than a browser.
+    for (const scheme of ['file://', 'ms-msdt:', 'search-ms:', 'javascript:', 'data:text/html,', 'http://']) {
+      expect(guard).toMatch(/new URL\(raw\)\.protocol === 'https:'/)
+      expect(scheme).toBeTruthy()
+    }
+  })
+
+  it('is deliberately NOT host-locked, and says why', () => {
+    // The first version of this guard pinned the host to WORKOS_DOMAIN and broke sign-in outright: the
+    // API is api.workos.com but the verification PAGE is signin.dust.tt. An existing test in this file
+    // caught it. Pinning a host across two vendors' infrastructure is a latent outage; the scheme is
+    // where the privilege escalation actually lives.
+    expect(guard).not.toMatch(/hostname === WORKOS_DOMAIN/)
+    expect(guard).toMatch(/Scheme only, deliberately NOT host-locked/)
+  })
+
+  it('refuses rather than sanitises, and says so to the user', () => {
+    expect(guard).toMatch(/returned an unexpected verification link, so it was not opened/)
+    // The guard must run BEFORE the shell call, not as a log after it.
+    const guardAt = guard.indexOf('isHttpsUrl(data.verification_uri_complete)')
+    const openAt = guard.indexOf('shell.openExternal(data.verification_uri_complete)')
+    expect(guardAt).toBeGreaterThan(-1)
+    expect(openAt).toBeGreaterThan(guardAt)
+  })
+
+  it('a malformed URL is refused, not thrown on', () => {
+    expect(guard).toMatch(/} catch \{\s*return false/)
   })
 })

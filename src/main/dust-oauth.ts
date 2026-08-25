@@ -107,6 +107,33 @@ export interface DustDeviceLoginStart {
   intervalSec?: number
 }
 
+/**
+ * Only an https URL may be handed to the OS shell (MQA-253).
+ *
+ * shell.openExternal is a shell execution primitive, not a browser call: the SCHEME decides which
+ * application runs. `ms-msdt:`, `search-ms:` and `file:` all resolve to local handlers on Windows, so an
+ * unvalidated URL off the wire lets the responder choose the handler while the user sees only "signing in
+ * to Dust". Everywhere else in this codebase that opens a URL it did not construct already gates on https
+ * (index.ts's setWindowOpenHandler, intelligence.ts); this call site never got the same rule.
+ *
+ * Refused rather than sanitised — there is no legitimate non-https verification link, and a "clean it up"
+ * branch is where the next bypass lives.
+ *
+ * Scheme only, deliberately NOT host-locked. The first version of this pinned the host to WORKOS_DOMAIN,
+ * on the reasoning that the verification page belongs to the domain the request went to. It does not: the
+ * API is api.workos.com but the user-facing page is Dust's own (signin.dust.tt), so that guard rejected
+ * every real sign-in — caught by an existing test in this file. Pinning a host across two vendors'
+ * infrastructure is a latent outage the moment either changes it, and the scheme is where the actual
+ * privilege escalation lives.
+ */
+function isHttpsUrl(raw: string): boolean {
+  try {
+    return new URL(raw).protocol === 'https:'
+  } catch {
+    return false
+  }
+}
+
 /** Step 1: ask WorkOS for a device code and open the consent page in the user's default browser. */
 export async function beginDustDeviceLogin(): Promise<DustDeviceLoginStart> {
   try {
@@ -119,6 +146,11 @@ export async function beginDustDeviceLogin(): Promise<DustDeviceLoginStart> {
     const data = (await res.json()) as Partial<DeviceAuthorizeResponse>
     if (!data.device_code || !data.verification_uri_complete) {
       return { ok: false, error: 'Dust sign-in did not return a device code.' }
+    }
+    // MQA-253: the ONE openExternal in this app whose URL arrives off the wire rather than being built
+    // here. Presence was checked; the scheme was not.
+    if (!isHttpsUrl(data.verification_uri_complete)) {
+      return { ok: false, error: 'Dust sign-in returned an unexpected verification link, so it was not opened.' }
     }
     await shell.openExternal(data.verification_uri_complete)
     return {
