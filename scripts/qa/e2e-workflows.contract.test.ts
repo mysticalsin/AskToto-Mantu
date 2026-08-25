@@ -54,7 +54,9 @@ describe('MQA-255 — the QA suite reports the build, not the environment', () =
     // "not exercised" with no reason is just a failure nobody will investigate.
     for (const blocker of [
       /weights are still arriving/,
-      /_API_KEY/,
+      // The env-key blocker is now phrased from the APP's answer rather than the shell's — see MQA-256's
+      // sibling fix. It must still say WHICH providers are stuck and why no profile can clear them.
+      /they come from its ENVIRONMENT/,
       /working \$\{r\.providers\.at\(-1\)\} key/
     ]) {
       expect(SUITE).toMatch(blocker)
@@ -65,5 +67,127 @@ describe('MQA-255 — the QA suite reports the build, not the environment', () =
     // The line between environment and defect. Weights on disk that will not load is a real bug — a bad
     // RAM floor, a damaged file — and must not be absorbed by the same excuse as a cold profile.
     expect(SUITE).toMatch(/no ready model and none downloading/)
+  })
+})
+
+/**
+ * MQA-256 — the on-device guard was ordered AFTER the assert it was supposed to pre-empt.
+ *
+ * MQA-255 added `if (!localModelReady) return { __info }` to the checks that depend on the on-device
+ * floor, but placed it below `assert(!r.error, ...)`. On a warm profile that is invisible. On a genuine
+ * first run it is not: the weights are still downloading, and the profile has no cloud key beyond the
+ * embedded one the test itself clears, so the ask legitimately errors — and the assert fires first,
+ * turning "this environment cannot test that yet" back into red lines about the app.
+ *
+ * Observed on 2026-08-25 against the packaged 1.6.2 build on a genuinely fresh profile: six failures,
+ * every one of them the guard arriving too late. The fix is ordering, so ordering is what is pinned.
+ */
+describe('MQA-256 — the on-device guard must run before the assert it exists to pre-empt', () => {
+  it('places a localModelReady guard ahead of every error assert', () => {
+    const lines = SUITE.split(/\r?\n/)
+    const asserts: number[] = []
+    lines.forEach((l, i) => {
+      if (/^\s*assert\(!r\.error,/.test(l)) asserts.push(i)
+    })
+    expect(asserts.length).toBeGreaterThan(0)
+    for (const a of asserts) {
+      const above = lines.slice(Math.max(0, a - 6), a).join(' ')
+      expect(
+        /if \(!localModelReady\) return \{ __info/.test(above),
+        `the error assert on line ${a + 1} has no on-device guard above it — a first-run profile reports it as an app failure`
+      ).toBe(true)
+    }
+  })
+})
+
+/**
+ * MQA-257 — a check whose NAME asserted the opposite of the shipped design.
+ *
+ * "everything needed to run is bundled — no post-install download required" ran on every pass. The
+ * product deliberately does the opposite: electron-builder.yml excludes the ~728 MB Qwen weights,
+ * because a universal build carrying them would exceed GitHub's 2 GB per-asset limit, and
+ * local-model-download.ts fetches them once on first run from a pinned immutable revision.
+ *
+ * So the check could only ever pass on a warm profile, and on a real first install it was guaranteed
+ * red — which is how a name that lies about the design survives: nobody runs the fresh-profile case.
+ */
+describe('MQA-257 — the bundling check must describe what the product actually ships', () => {
+  it('no longer claims the on-device weights are bundled', () => {
+    // The phrase still appears in the comment that explains why it was retired — that is the record of
+    // the decision and must survive. What must NOT survive is a CHECK asserting it.
+    expect(SUITE).not.toMatch(/check\([a-z]+, 'everything needed to run is bundled/)
+  })
+
+  it('checks the promise that IS made: ASR ships, and the LLM is ready or visibly arriving', () => {
+    expect(SUITE).toMatch(/ASR ships bundled, and the on-device LLM is either ready or visibly arriving/)
+    // "neither ready nor downloading" stays a hard failure — that one is a real defect.
+    expect(SUITE).toMatch(/neither ready nor downloading/)
+  })
+})
+
+/**
+ * MQA-258 — Mantu Intelligence, extraction accuracy, and latency had no end-to-end coverage at all.
+ *
+ * The dashboard ships nine views in their own window behind their own preload. The suite's only touch
+ * was `graphify status answers`, which proves an IPC handler replies and nothing about whether a single
+ * view renders. Separately, 58 checks asked "did it answer?" and none asked "was the answer right", and
+ * nothing anywhere was timed — so a change that tripled time-to-answer, or one that made extraction
+ * silently return an empty graph, shipped green.
+ */
+describe('MQA-258 — the dashboard, accuracy, and latency are exercised, not assumed', () => {
+  it('registers the three groups', () => {
+    for (const g of ['intelligence: groupIntelligence', 'accuracy: groupAccuracy', 'latency: groupLatency']) {
+      expect(SUITE).toContain(g)
+    }
+  })
+
+  it('drives every route a user can click, not just the window opening', () => {
+    const routes = [
+      "'/coaching', 'Coaching'",
+      "'/deals', 'Deals'",
+      "'/accounts', 'Accounts'",
+      "'/people', 'People'",
+      "'/stats', 'Stats'",
+      "'/graph', 'Relationships'",
+      "'/meetings', 'Meetings'"
+    ]
+    for (const route of routes) expect(SUITE).toContain(route)
+    expect(SUITE).toMatch(/renders without hitting the error boundary/)
+  })
+
+  it('holds the dashboard preload to read-only', () => {
+    // The dashboard window is a READER; a privileged write reaching it is a security regression.
+    expect(SUITE).toMatch(/the dashboard preload stays read-only/)
+    expect(SUITE).toMatch(/that is the privileged main-window API/)
+  })
+
+  it('compares the graph tile against the DISPLAY graph, derived with the adapter own predicate', () => {
+    // getData() returns the BRAIN shape; account_graph only exists after brainToDashboard runs in the
+    // renderer. Asserting on a field that is absent by construction fails for the wrong reason.
+    expect(SUITE).toMatch(/the graph tile counts the DISPLAY graph, not the raw brain graph/)
+    expect(SUITE).toMatch(/that is the RAW brain count, the regression is back/)
+  })
+
+  it('tests accuracy in BOTH directions, not just recall', () => {
+    // A hallucinated commitment is worse than a missed one: it puts words in the user's mouth.
+    expect(SUITE).toMatch(/PRECISION: the hypothetical aside was NOT recorded as a commitment/)
+    expect(SUITE).toMatch(/RECALL: the commitment made in the transcript survives to the graph/)
+  })
+
+  it('waits for ITS OWN transcript before judging extraction', () => {
+    // Keying on "any file ingested" let an earlier group's fixture satisfy the wait, so this group read
+    // the graph before its own file existed and reported recall failures against an empty result.
+    expect(SUITE).toMatch(/Wait for THIS transcript, not for any transcript/)
+  })
+
+  it('sends the schema field the app actually reads', () => {
+    // AskStartBaseSchema calls it `prompt`. `text` is not in the schema, so it silently defaults to ''
+    // and the app correctly answers "I don't have any input yet" — a green-looking test of nothing.
+    expect(SUITE).not.toMatch(/ask\(\{[^}]*\btext:/)
+  })
+
+  it('reports latency numbers even when they pass, so a trend is visible', () => {
+    expect(SUITE).toMatch(/settings round-trip is instant/)
+    expect(SUITE).toMatch(/an on-device ask answers within the on-device budget/)
   })
 })
