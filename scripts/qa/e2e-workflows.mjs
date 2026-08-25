@@ -116,6 +116,18 @@ async function ask(req, timeoutMs = 240000) {
 
 const settings = () => page.evaluate(() => window.toto.getSettings())
 const patch = (p) => page.evaluate((p) => window.toto.setSettings(p), p)
+/** Which providers does the APP still hold a key for after clearAllKeys()? Anything left is env-backed
+ *  (store.ts's getApiKey reads process.env[ENV_VAR[provider]] BEFORE the profile store) and therefore
+ *  unremovable from here — the one honest reason the zero-key path cannot be exercised. */
+async function stubbornKeys() {
+  try {
+    const s = await settings()
+    return Object.entries(s.hasKeys ?? {}).filter(([, v]) => v === true).map(([k]) => k)
+  } catch {
+    return []
+  }
+}
+
 const clearAllKeys = () =>
   page.evaluate(async () => {
     const s = await window.toto.getSettings()
@@ -194,15 +206,32 @@ async function groupBoot() {
     return perms
   })
 
-  await check(g, 'everything needed to run is bundled — no post-install download required', async () => {
+  // This check used to be called "everything needed to run is bundled — no post-install download
+  // required", which asserts the opposite of what the product deliberately does. The Qwen weights are
+  // NOT packaged: at ~728 MB they dominated the installer, and a universal build carrying them would
+  // exceed GitHub's 2 GB per-asset limit, so electron-builder.yml ships only the licence and
+  // local-model-download.ts fetches the weights once on first run from a pinned immutable revision.
+  // The old name could therefore only ever pass on a WARM profile — on a real first run it was
+  // guaranteed red, which is how a name that lies about the design stays unnoticed.
+  //
+  // What is actually promised, and what is checked here: the ASR weights DO ship (zero runtime
+  // download), and the on-device LLM either is ready or is honestly reporting progress toward it.
+  await check(g, 'ASR ships bundled, and the on-device LLM is either ready or visibly arriving', async () => {
     const out = await page.evaluate(async () => ({
       models: await window.toto.localModelsList(),
       asr: await window.toto.asrBundled?.().catch?.(() => null) ?? null,
       settings: await window.toto.getSettings()
     }))
-    if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so this request can only be served by a cloud provider; re-run once first-run setup finishes' }
-    assert(out.models.some((m) => m.ready), 'bundled local LLM not ready')
-    assert(out.settings.localReady === true, 'localReady false — on-device path unavailable out of the box')
+    const ready = out.models.some((m) => m.ready)
+    const arriving = out.models.some((m) => typeof m.progress === 'number' && m.progress >= 0 && !m.ready)
+    assert(
+      ready || arriving,
+      `the on-device model is neither ready nor downloading: ${JSON.stringify(out.models.map((m) => ({ id: m.id, ready: m.ready, progress: m.progress })))}`
+    )
+    if (!ready) {
+      return { __info: `not exercised — first run, weights still arriving (${out.models.filter((m) => !m.ready).map((m) => `${m.id} ${Math.round((m.progress ?? 0) * 100)}%`).join(', ')}); the app is served by the embedded provider meanwhile` }
+    }
+    assert(out.settings.localReady === true, 'a model reports ready but localReady is false — the on-device path is unavailable despite present weights')
     return { localModel: out.models.map((m) => `${m.id}:${m.ready}`), asrBundled: out.asr }
   })
 
@@ -252,7 +281,6 @@ async function groupSettings() {
     const before = (await settings()).localLlm
     await patch({ localLlm: { ...before, useFor: { ...before.useFor, summary: true } } })
     const on = await settings()
-    if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so this request can only be served by a cloud provider; re-run once first-run setup finishes' }
     assert(on.localSummaryReady === true, 'localSummaryReady did not follow useFor.summary')
     await patch({ localLlm: before })
     const off = await settings()
@@ -264,7 +292,6 @@ async function groupSettings() {
     await patch({ localLlm: { ...before, fallback: false } })
     assert((await settings()).localFallbackReady === false, 'localFallbackReady stayed true with fallback off')
     await patch({ localLlm: before })
-    if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so this request can only be served by a cloud provider; re-run once first-run setup finishes' }
     assert((await settings()).localFallbackReady === true, 'localFallbackReady did not come back')
     return 'tracks fallback'
   })
@@ -285,16 +312,23 @@ async function groupAsk() {
       id: uid('suggest'), mode: 'suggest', prompt: '',
       transcript: 'THEM: What does your pricing look like for a 500-seat rollout?', history: []
     })
+    // The on-device floor cannot catch anything until the weights exist. Ordered BEFORE the error
+    // assert on purpose: a first-run profile with no cloud key legitimately errors here, and the
+    // assert firing first turned that into a red line about the app (MQA-255 missed exactly this).
+    if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so nothing can serve this yet; re-run once first-run setup finishes' }
     assert(!r.error, `errored: ${r.error}`)
-    if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so this request can only be served by a cloud provider; re-run once first-run setup finishes' }
     // "Zero API keys" cannot be arranged on a machine that exports provider keys in its ENVIRONMENT:
     // store.ts's getApiKey reads process.env[ENV_VAR[provider]] BEFORE the profile store, so the app
     // inherits a real, working key no isolated profile can remove. A cloud provider answering here is
     // then the DESIGNED behaviour, and calling it red would be wrong about the product rather than
     // informative about it.
-    const envKeys = Object.keys(process.env).filter((k) => /^[A-Z0-9]+_API_KEY$/.test(k))
-    if (envKeys.length) {
-      return { __info: `not exercised — this shell exports ${envKeys.join(', ')}, which the app reads ahead of the profile store; run with those unset to cover the zero-key path` }
+    // Ask the APP which keys it still has, not this shell which keys IT exports. The two are different
+    // processes: the app is frequently launched with provider vars unset even when the suite inherits
+    // them, and reading process.env here downgraded three checks that were genuinely exercising the
+    // zero-key path. Same defect class as MQA-255 — measuring the harness instead of the build.
+    const stuck = await stubbornKeys()
+    if (stuck.length) {
+      return { __info: `not exercised — the app still reports keys for ${stuck.join(', ')} after clearAllKeys(); they come from its ENVIRONMENT (getApiKey reads process.env before the profile store), so no isolated profile can remove them — relaunch the app with those vars unset to cover the zero-key path` }
     }
     assert(r.providers.at(-1) === 'local', `answered by ${r.providers.at(-1)}, expected local`)
     assert(r.text.trim().length > 0, 'empty answer')
@@ -324,16 +358,23 @@ async function groupAsk() {
   await check(g, 'answer mode falls to the on-device floor rather than dead-ending (MQA-122/MQA-123)', async () => {
     const r = await ask({ id: uid('answer'), mode: 'answer', prompt: 'What is our renewal risk?', history: [] }, 180000)
     assert(!r.error || !/TIMEOUT/.test(r.error), 'answer mode HUNG instead of reaching the on-device floor')
+    // The on-device floor cannot catch anything until the weights exist. Ordered BEFORE the error
+    // assert on purpose: a first-run profile with no cloud key legitimately errors here, and the
+    // assert firing first turned that into a red line about the app (MQA-255 missed exactly this).
+    if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so nothing can serve this yet; re-run once first-run setup finishes' }
     assert(!r.error, `answer mode dead-ended instead of falling to local: "${r.error}"`)
-    if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so this request can only be served by a cloud provider; re-run once first-run setup finishes' }
     // "Zero API keys" cannot be arranged on a machine that exports provider keys in its ENVIRONMENT:
     // store.ts's getApiKey reads process.env[ENV_VAR[provider]] BEFORE the profile store, so the app
     // inherits a real, working key no isolated profile can remove. A cloud provider answering here is
     // then the DESIGNED behaviour, and calling it red would be wrong about the product rather than
     // informative about it.
-    const envKeys = Object.keys(process.env).filter((k) => /^[A-Z0-9]+_API_KEY$/.test(k))
-    if (envKeys.length) {
-      return { __info: `not exercised — this shell exports ${envKeys.join(', ')}, which the app reads ahead of the profile store; run with those unset to cover the zero-key path` }
+    // Ask the APP which keys it still has, not this shell which keys IT exports. The two are different
+    // processes: the app is frequently launched with provider vars unset even when the suite inherits
+    // them, and reading process.env here downgraded three checks that were genuinely exercising the
+    // zero-key path. Same defect class as MQA-255 — measuring the harness instead of the build.
+    const stuck = await stubbornKeys()
+    if (stuck.length) {
+      return { __info: `not exercised — the app still reports keys for ${stuck.join(', ')} after clearAllKeys(); they come from its ENVIRONMENT (getApiKey reads process.env before the profile store), so no isolated profile can remove them — relaunch the app with those vars unset to cover the zero-key path` }
     }
     assert(r.providers.at(-1) === 'local', `expected the on-device floor to serve it, got ${r.providers.at(-1)}`)
     assert(r.text.trim().length > 0, 'the on-device floor answered with no text at all')
@@ -367,6 +408,10 @@ async function groupDegrade() {
 
   await check(g, 'BASELINE: no keys at all → in-scope ask still served on-device', async () => {
     const r = await ask({ id: uid('base'), mode: 'suggest', prompt: '', transcript: 'THEM: can you send pricing?', history: [] })
+    // The on-device floor cannot catch anything until the weights exist. Ordered BEFORE the error
+    // assert on purpose: a first-run profile with no cloud key legitimately errors here, and the
+    // assert firing first turned that into a red line about the app (MQA-255 missed exactly this).
+    if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so nothing can serve this yet; re-run once first-run setup finishes' }
     assert(!r.error, `errored: ${r.error}`)
     assert(r.providers.at(-1) === 'local', `served by ${r.providers.at(-1)}`)
     return { walk: r.providers }
@@ -376,6 +421,10 @@ async function groupDegrade() {
     await page.evaluate((k) => window.toto.setApiKey('deepseek', k), DEAD_DEEPSEEK)
     await patch({ provider: 'deepseek' })
     const r = await ask({ id: uid('dead1'), mode: 'suggest', prompt: '', transcript: 'THEM: what is the renewal price?', history: [] })
+    // The on-device floor cannot catch anything until the weights exist. Ordered BEFORE the error
+    // assert on purpose: a first-run profile with no cloud key legitimately errors here, and the
+    // assert firing first turned that into a red line about the app (MQA-255 missed exactly this).
+    if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so nothing can serve this yet; re-run once first-run setup finishes' }
     assert(!r.error, `dead key killed the ask outright: ${r.error}`)
     assert(r.providers[0] === 'deepseek', `did not try the configured primary first (walk: ${r.providers})`)
     assert(r.providers.at(-1) !== 'deepseek', 'never left the dead provider')
@@ -386,16 +435,23 @@ async function groupDegrade() {
   await check(g, 'DEAD PRIMARY + DEAD NIM → walks both, still answers on-device', async () => {
     await page.evaluate((k) => window.toto.setApiKey('nvidia', k), DEAD_NVIDIA)
     const r = await ask({ id: uid('dead2'), mode: 'suggest', prompt: '', transcript: 'THEM: send me the quote please', history: [] })
+    // The on-device floor cannot catch anything until the weights exist. Ordered BEFORE the error
+    // assert on purpose: a first-run profile with no cloud key legitimately errors here, and the
+    // assert firing first turned that into a red line about the app (MQA-255 missed exactly this).
+    if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so nothing can serve this yet; re-run once first-run setup finishes' }
     assert(!r.error, `errored with two dead keys: ${r.error}`)
-    if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so this request can only be served by a cloud provider; re-run once first-run setup finishes' }
     // "Zero API keys" cannot be arranged on a machine that exports provider keys in its ENVIRONMENT:
     // store.ts's getApiKey reads process.env[ENV_VAR[provider]] BEFORE the profile store, so the app
     // inherits a real, working key no isolated profile can remove. A cloud provider answering here is
     // then the DESIGNED behaviour, and calling it red would be wrong about the product rather than
     // informative about it.
-    const envKeys = Object.keys(process.env).filter((k) => /^[A-Z0-9]+_API_KEY$/.test(k))
-    if (envKeys.length) {
-      return { __info: `not exercised — this shell exports ${envKeys.join(', ')}, which the app reads ahead of the profile store; run with those unset to cover the zero-key path` }
+    // Ask the APP which keys it still has, not this shell which keys IT exports. The two are different
+    // processes: the app is frequently launched with provider vars unset even when the suite inherits
+    // them, and reading process.env here downgraded three checks that were genuinely exercising the
+    // zero-key path. Same defect class as MQA-255 — measuring the harness instead of the build.
+    const stuck = await stubbornKeys()
+    if (stuck.length) {
+      return { __info: `not exercised — the app still reports keys for ${stuck.join(', ')} after clearAllKeys(); they come from its ENVIRONMENT (getApiKey reads process.env before the profile store), so no isolated profile can remove them — relaunch the app with those vars unset to cover the zero-key path` }
     }
     assert(r.providers.at(-1) === 'local', `final provider ${r.providers.at(-1)}, expected local`)
     assert(r.providers.includes('deepseek'), 'primary was skipped entirely')
@@ -465,6 +521,10 @@ async function groupDegrade() {
   await check(g, 'RECOVERY: clearing the dead key restores a clean walk', async () => {
     await clearAllKeys()
     const r = await ask({ id: uid('recover'), mode: 'suggest', prompt: '', transcript: 'THEM: ok, next steps?', history: [] })
+    // The on-device floor cannot catch anything until the weights exist. Ordered BEFORE the error
+    // assert on purpose: a first-run profile with no cloud key legitimately errors here, and the
+    // assert firing first turned that into a red line about the app (MQA-255 missed exactly this).
+    if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so nothing can serve this yet; re-run once first-run setup finishes' }
     assert(!r.error, `errored after cleanup: ${r.error}`)
     assert(!r.providers.includes('deepseek'), 'still trying the removed provider')
     return { walk: r.providers }
@@ -970,6 +1030,390 @@ async function groupCloudflare() {
   }
 }
 
+
+/**
+ * Mantu Intelligence — the dashboard window, driven the way a user drives it.
+ *
+ * This whole surface had ZERO end-to-end coverage before: the suite's only touch was `graphify status
+ * answers`, which proves an IPC handler replies and nothing about whether the dashboard renders. Nine
+ * views ship in that window (Today, Coaching, Deals, Accounts, People, Stats, Relationships, Meetings,
+ * Embed) and every one of them could throw on real data without a single test going red.
+ *
+ * It runs in its own BrowserWindow with its own narrow preload, so it is a separate CDP page reached
+ * through window.toto.brainOpenDashboard() — not a route inside the main renderer.
+ */
+async function findIntelPage(browser, timeoutMs = 30000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    for (const ctx of browser.contexts()) {
+      for (const p of ctx.pages()) {
+        try {
+          if (await p.evaluate(() => typeof window.intelligence !== 'undefined')) return p
+        } catch { /* page mid-navigation */ }
+      }
+    }
+    await sleep(500)
+  }
+  throw new Error(`no page exposing window.intelligence after ${timeoutMs}ms`)
+}
+
+/** Route the dashboard and wait for React to commit. HashRouter, because the window loads over
+ *  file:// where a path-based router cannot round-trip. */
+async function gotoIntelRoute(intel, route) {
+  await intel.evaluate((r) => { window.location.hash = `#${r}` }, route)
+  await sleep(900)
+}
+
+async function groupIntelligence() {
+  const g = 'intelligence'
+  let intel = null
+
+  await check(g, 'the dashboard window opens from the main window', async () => {
+    const r = await page.evaluate(() => window.toto.brainOpenDashboard())
+    assert(r && r.ok, `brainOpenDashboard refused: ${JSON.stringify(r)}`)
+    return r
+  })
+
+  await check(g, 'it loads the bundled dashboard, not the "bundle not found" error page', async () => {
+    intel = await findIntelPage(browser)
+    const title = await intel.title()
+    const body = await intel.evaluate(() => document.body.innerText.slice(0, 400))
+    assert(!/bundle not found/i.test(body), `dashboard failed to load its bundle: ${body.slice(0, 160)}`)
+    return { title, chars: body.length }
+  })
+
+  if (!intel) {
+    record(g, '(remaining dashboard checks)', 'info', 'not exercised — the dashboard page never appeared')
+    return
+  }
+
+  // Security: this window is a READER. Its preload deliberately exposes four channels and nothing else,
+  // so a bug (or an injected script) in the dashboard cannot reach the privileged main-window surface.
+  await check(g, 'the dashboard preload stays read-only — no window.toto, no privileged writes', async () => {
+    const surface = await intel.evaluate(() => ({
+      hasToto: typeof window.toto !== 'undefined',
+      keys: Object.keys(window.intelligence ?? {}).sort()
+    }))
+    assert(!surface.hasToto, 'the dashboard window can reach window.toto — that is the privileged main-window API')
+    for (const forbidden of ['setSettings', 'setApiKey', 'ask', 'capture', 'saveTranscript']) {
+      assert(!surface.keys.includes(forbidden), `dashboard preload exposes a privileged write: ${forbidden}`)
+    }
+    return surface.keys.join(',')
+  })
+
+  await check(g, 'getStatus answers with a coherent shape', async () => {
+    const st = await intel.evaluate(() => window.intelligence.getStatus())
+    assert(st && typeof st === 'object', 'getStatus returned nothing')
+    return { meetings: st.meetings, people: st.people, deals: st.deals }
+  })
+
+  await check(g, 'getData returns the dashboard graph', async () => {
+    const d = await intel.evaluate(() => window.intelligence.getData())
+    assert(d && typeof d === 'object', 'getData returned nothing')
+    return {
+      people: d.people?.length ?? 0,
+      deals: d.deals?.length ?? 0,
+      meetings: d.meetings?.length ?? 0
+    }
+  })
+
+  // The core of this group: every route a user can click must actually render. The ErrorBoundary is
+  // keyed on the route, so a view that throws shows its fallback rather than a blank window — which
+  // means a broken view is invisible to a test that only checks the window opened.
+  const ROUTES = [
+    ['/', 'Today'],
+    ['/coaching', 'Coaching'],
+    ['/deals', 'Deals'],
+    ['/accounts', 'Accounts'],
+    ['/people', 'People'],
+    ['/stats', 'Stats'],
+    ['/graph', 'Relationships'],
+    ['/meetings', 'Meetings']
+  ]
+  for (const [route, label] of ROUTES) {
+    await check(g, `${label} (${route}) renders without hitting the error boundary`, async () => {
+      await gotoIntelRoute(intel, route)
+      const state = await intel.evaluate(() => ({
+        text: document.body.innerText,
+        // vis-network mounts a canvas; the graph route is the one that can silently render nothing.
+        canvases: document.querySelectorAll('canvas').length
+      }))
+      assert(
+        !/hit an error and could/i.test(state.text),
+        `${label} threw: ${state.text.replace(/\s+/g, ' ').slice(0, 200)}`
+      )
+      // A route that renders an empty <main> is as broken as one that throws, just quieter.
+      assert(state.text.trim().length > 40, `${label} rendered almost nothing (${state.text.trim().length} chars)`)
+      return route === '/graph' ? { chars: state.text.length, canvases: state.canvases } : { chars: state.text.length }
+    })
+  }
+
+  // Regression: Stats and Relationships once reported different node/edge counts for the same data
+  // under the same label, because Stats read the raw brain graph and Relationships read the filtered
+  // display graph. Two numbers claiming to be the same number is a correctness bug, not a cosmetic one.
+  // Regression: the "Graph nodes · edges" tile once showed the RAW brain graph while the Relationships
+  // tab drew the FILTERED display graph, under one identical label. Meetings are deliberately dropped
+  // from the display graph (brainAdapter keeps account|person|deal|sector — 61 meeting nodes would drown
+  // the entity structure), so the two numbers diverge exactly when meeting nodes exist. Two numbers
+  // claiming to be the same number is a correctness bug, not a cosmetic one.
+  //
+  // getData() returns the BRAIN shape; account_graph is built from it by brainToDashboard in the
+  // renderer. So the expected filtered counts are derived here with the adapter's own predicate rather
+  // than read off a field that only exists after adaptation.
+  await check(g, 'the graph tile counts the DISPLAY graph, not the raw brain graph', async () => {
+    await gotoIntelRoute(intel, '/stats')
+    const statsTile = await intel.evaluate(() => {
+      const el = [...document.querySelectorAll('*')].find((n) =>
+        n.children.length === 0 && /Graph nodes/i.test(n.textContent ?? '')
+      )
+      return el?.parentElement?.innerText ?? null
+    })
+    assert(statsTile, 'the "Graph nodes · edges" tile is not on the Stats page')
+    const nums = (statsTile.match(/\d+/g) ?? []).map(Number)
+    assert(nums.length >= 2, `could not read two numbers out of the tile: ${JSON.stringify(statsTile)}`)
+    const shownNodes = nums[nums.length - 2]
+    const shownEdges = nums[nums.length - 1]
+
+    const raw = await intel.evaluate(async () => {
+      const b = await window.intelligence.getData()
+      const KEEP = new Set(['account', 'person', 'deal', 'sector'])
+      const all = b.graph?.nodes ?? []
+      const kept = all.filter((n) => KEEP.has(n.type))
+      const keptIds = new Set(kept.map((n) => n.id))
+      const keptEdges = (b.graph?.edges ?? []).filter((e) => keptIds.has(e.from) && keptIds.has(e.to))
+      return { allNodes: all.length, keptNodes: kept.length, keptEdges: keptEdges.length }
+    })
+
+    assert(
+      shownNodes === raw.keptNodes && shownEdges === raw.keptEdges,
+      `tile shows ${shownNodes}·${shownEdges}, the display graph has ${raw.keptNodes}·${raw.keptEdges}` +
+        (shownNodes === raw.allNodes ? ' — that is the RAW brain count, the regression is back' : '')
+    )
+    return `${shownNodes} nodes · ${shownEdges} edges (raw brain graph has ${raw.allNodes} nodes)`
+  })
+
+  await check(g, 'a full pass over every route raises no uncaught error', async () => {
+    const errors = []
+    const onErr = (e) => errors.push(String(e.message ?? e))
+    intel.on('pageerror', onErr)
+    try {
+      for (const [route] of ROUTES) await gotoIntelRoute(intel, route)
+    } finally {
+      intel.off('pageerror', onErr)
+    }
+    assert(errors.length === 0, `uncaught errors while navigating: ${errors.slice(0, 3).join(' | ')}`)
+    return `${ROUTES.length} routes, 0 uncaught errors`
+  })
+
+  await check(g, 'the dashboard closes cleanly', async () => {
+    await page.evaluate(() => window.toto.brainCloseDashboard?.()).catch(() => {})
+    return 'closed (or already closed)'
+  })
+}
+
+/**
+ * Accuracy — does the pipeline recover what is actually IN a transcript, and nothing that is not?
+ *
+ * Every other group asks "did it answer?". None asked "was the answer right". A pipeline that
+ * confidently extracts the wrong person, invents a commitment, or drops the one real next step passes
+ * all 58 of the previous checks. Both directions are tested here, because recall without precision is
+ * how a note-taker earns distrust: a hallucinated commitment is worse than a missed one.
+ *
+ * Ground truth is a transcript this group writes itself, so the expected entities are known exactly
+ * rather than inferred from whatever happens to be on disk.
+ */
+async function groupAccuracy() {
+  const g = 'accuracy'
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+  const title = `QA Accuracy Probe ${stamp}`
+  // Deliberately specific and mutually unconfusable: a rare surname, an unambiguous amount, one clear
+  // commitment with an owner and a date, and one decoy sentence that is NOT a commitment.
+  const GROUND_TRUTH = {
+    person: 'Priya Venkatesan',
+    company: 'Northwind Logistics',
+    amount: '$240,000',
+    commitment: 'send the revised pricing sheet',
+    decoy: 'we might redesign the portal someday'
+  }
+  let file = null
+
+  await check(g, 'a transcript with known, checkable content is saved', async () => {
+    const res = await page.evaluate(async (t) => window.toto.saveTranscript({
+      title: t.title,
+      mode: 'sales',
+      startedAt: Date.now() - 300000,
+      recap: '',
+      lines: [
+        { speaker: 'you', text: `Good to meet you. I am here about the ${t.gt.company} renewal.`, t: 0 },
+        { speaker: 'them', text: `${t.gt.person} here — I run procurement for ${t.gt.company}.`, t: 20000 },
+        { speaker: 'them', text: `Our budget for this cycle is ${t.gt.amount}, firm.`, t: 45000 },
+        { speaker: 'them', text: `Honestly, ${t.gt.decoy}, but that is not on the table this year.`, t: 70000 },
+        { speaker: 'you', text: `Understood. I will ${t.gt.commitment} to you by Friday.`, t: 95000 }
+      ]
+    }), { title, gt: GROUND_TRUTH })
+    assert(res && res.path, `no path returned: ${JSON.stringify(res)}`)
+    file = res.path
+    return res.path
+  })
+
+  // Indexing is asynchronous and shares the on-device model with everything else, so absence of a
+  // result here can mean "still working" rather than "got it wrong". That distinction is the whole
+  // point of the third status — see MQA-255.
+  let settled = false
+  const deadline = Date.now() + 6 * 60 * 1000
+  while (Date.now() < deadline) {
+    const st = await page.evaluate(() => window.toto.brainStatus())
+    const idle = st?.backfill && !st.backfill.running && !st.backfill.preparing
+    // Wait for THIS transcript, not for any transcript. Keying on `ingestedFiles.length > 0` meant the
+    // brain group's earlier fixture already satisfied the condition, so this group read the graph before
+    // its own file was ever indexed and reported four recall failures against an empty result.
+    const mine = file ? (st?.ingestedFiles ?? []).some((f) => String(f).includes(file.split(/[\/]/).pop())) : false
+    if (idle && mine) {
+      settled = true
+      break
+    }
+    await sleep(4000)
+  }
+
+  if (!settled) {
+    record(g, '(extraction accuracy checks)', 'info',
+      'not exercised — indexing did not settle within 6 min (on-device model busy); re-run with --only=accuracy')
+  } else {
+    const graph = await page.evaluate(() => window.toto.brainRead())
+
+    await check(g, 'RECALL: the person who spoke is in the graph, spelled correctly', async () => {
+      const names = (graph.people ?? []).map((p) => p.name ?? p.slug ?? '')
+      const hit = names.find((n) => n.toLowerCase().includes('venkatesan'))
+      assert(hit, `"${GROUND_TRUTH.person}" not among ${names.length} people: ${names.slice(0, 12).join(', ')}`)
+      return hit
+    })
+
+    await check(g, 'RECALL: the commitment made in the transcript survives to the graph', async () => {
+      const blob = JSON.stringify(graph).toLowerCase()
+      assert(blob.includes('pricing sheet'), 'the "revised pricing sheet" commitment is nowhere in the graph')
+      return 'found'
+    })
+
+    await check(g, 'PRECISION: the hypothetical aside was NOT recorded as a commitment', async () => {
+      // "we might redesign the portal someday" is explicitly ruled out in the next breath. Extracting
+      // it is a hallucinated obligation — the failure mode that makes a note-taker untrustworthy.
+      const commitments = []
+      for (const p of graph.people ?? []) for (const c of p.commitments ?? []) commitments.push(String(c.text ?? c))
+      for (const d of graph.deals ?? []) for (const c of d.commitments ?? []) commitments.push(String(c.text ?? c))
+      const bogus = commitments.filter((c) => /redesign the portal/i.test(c))
+      assert(bogus.length === 0, `invented a commitment from a hypothetical: ${bogus.join(' | ')}`)
+      return `${commitments.length} commitments, none hallucinated from the decoy`
+    })
+
+    await check(g, 'the entity-name feed carries the new name (this is what biases ASR casing)', async () => {
+      const feed = await page.evaluate(() => (window.toto.brainEntityNames ? window.toto.brainEntityNames() : null))
+      if (!feed) return { __info: 'not exercised — brainEntityNames is not exposed on this build' }
+      const flat = JSON.stringify(feed).toLowerCase()
+      assert(flat.includes('venkatesan'), 'a freshly-indexed surname never reached the ASR bias feed')
+      return 'name present'
+    })
+  }
+
+  // Retrieval accuracy: the app has to find the right answer in its own notes. A confident wrong
+  // number here is the single most damaging failure this product can have.
+  await check(g, 'ANSWER ACCURACY: asking about the budget returns the number from the transcript', async () => {
+    const r = await ask({
+      id: `qa-acc-${Date.now()}`,
+      mode: 'answer',
+      prompt: `What is the stated budget for the ${GROUND_TRUTH.company} renewal?`
+    })
+    if (r.error) return { __info: `not exercised — the ask failed (${String(r.error).slice(0, 90)})` }
+    const text = r.text ?? ''
+    assert(text.trim().length > 0, 'the ask returned no text at all')
+    const digits = text.replace(/[,\s]/g, '')
+    assert(
+      /240[,.]?000/.test(digits) || /240k/i.test(text),
+      `answered without the ground-truth figure ($240,000): "${text.replace(/\s+/g, ' ').slice(0, 200)}"`
+    )
+    return { via: r.providers[r.providers.length - 1], chars: text.length }
+  })
+
+  if (file) {
+    await check(g, 'clean up the accuracy fixture', async () => {
+      try { rmSync(file, { force: true }) } catch { /* best effort */ }
+      return existsSync(file) ? 'still present' : 'removed'
+    })
+  }
+}
+
+/**
+ * Latency — how long the app actually makes a person wait.
+ *
+ * Nothing in this suite was timed before, so a change that tripled time-to-first-answer would have
+ * shipped green. Budgets are deliberately generous: this is a regression tripwire for an order-of-
+ * magnitude change, not a benchmark. Every measurement is REPORTED even when it passes, so a trend is
+ * visible in the report rather than only a pass/fail.
+ *
+ * On-device inference speed is hardware-bound, so the on-device budget is the loosest of the three.
+ */
+async function groupLatency() {
+  const g = 'latency'
+  const timed = async (fn) => {
+    const t0 = Date.now()
+    const value = await fn()
+    return { ms: Date.now() - t0, value }
+  }
+
+  await check(g, 'settings round-trip is instant (the UI blocks on this)', async () => {
+    const { ms } = await timed(() => settings())
+    assert(ms < 2000, `getSettings took ${ms}ms — the Settings pane blocks on it`)
+    return `${ms}ms`
+  })
+
+  await check(g, 'brainRead returns fast enough to open the dashboard on', async () => {
+    const { ms, value } = await timed(() => page.evaluate(() => window.toto.brainRead()))
+    const size = (value?.people?.length ?? 0) + (value?.deals?.length ?? 0) + (value?.meetings?.length ?? 0)
+    assert(ms < 15000, `brainRead took ${ms}ms for ${size} entities — the dashboard waits on this`)
+    return `${ms}ms for ${size} entities`
+  })
+
+  await check(g, 'screen capture completes within a usable window', async () => {
+    const s = await settings()
+    if (s?.privateView) return { __info: 'not exercised — Private View is ON, so capture is refused by design' }
+    const { ms, value } = await timed(() => page.evaluate(() => window.toto.capture()))
+    if (!value || value.error) {
+      return { __info: `not exercised — capture unavailable here (${String(value?.error ?? 'no result').slice(0, 80)})` }
+    }
+    assert(ms < 20000, `capture took ${ms}ms — a screen-ask feels broken past a few seconds`)
+    return `${ms}ms`
+  })
+
+  await check(g, 'an on-device ask answers within the on-device budget', async () => {
+    if (!localModelReady) return { __info: 'not exercised — on-device weights were still downloading at boot' }
+    const r = await ask({
+      id: `qa-lat-local-${Date.now()}`,
+      mode: 'suggest',
+      prompt: 'Summarise the last meeting in one sentence.'
+    }, 240000)
+    if (r.error) return { __info: `not exercised — the ask failed (${String(r.error).slice(0, 90)})` }
+    // Generous on purpose: this runs on whatever CPU/GPU the machine has, often while indexing.
+    assert(r.doneAt < 180000, `on-device ask took ${Math.round(r.doneAt / 1000)}s`)
+    return { ms: r.doneAt, via: r.providers[r.providers.length - 1] }
+  })
+
+  await check(g, 'the configured cloud provider answers within a cloud budget', async () => {
+    const s = await settings()
+    if (!s?.providerReady) return { __info: 'not exercised — no cloud provider is configured on this profile' }
+    const r = await ask({
+      id: `qa-lat-cloud-${Date.now()}`,
+      mode: 'answer',
+      prompt: 'Reply with the single word: ready.'
+    }, 120000)
+    if (r.error) return { __info: `not exercised — the ask failed (${String(r.error).slice(0, 90)})` }
+    const via = r.providers[r.providers.length - 1]
+    if (via === 'local') {
+      return { __info: `not exercised — the walk ended on-device (${r.providers.join(' → ')}), so this timed local inference` }
+    }
+    assert(r.doneAt < 90000, `${via} took ${Math.round(r.doneAt / 1000)}s to answer a one-word prompt`)
+    return { ms: r.doneAt, via, walk: r.providers.join(' → ') }
+  })
+}
+
 const GROUPS = {
   boot: groupBoot,
   settings: groupSettings,
@@ -979,7 +1423,10 @@ const GROUPS = {
   degrade: groupDegrade,
   meetings: groupMeetings,
   brain: groupBrain,
-  window: groupWindow
+  window: groupWindow,
+  intelligence: groupIntelligence,
+  accuracy: groupAccuracy,
+  latency: groupLatency
 }
 
 if (args.includes('--list')) {
