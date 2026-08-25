@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { isDustReady, dustStoredAgentMissing, applyInteractiveGuardrail, parseDustUrl, detectProvider, filterAllowedProviders, migrateRetiredModelId, migrateRetiredModelMap, providerBaseUrl, reasoningEffortFor, requiresUserBaseUrl, resolveModelTier, PROVIDERS, PROVIDER_IDS, dustAgentVision } from './providers'
 
 // MQA-001 (docs/qa/BUG-LEDGER.md): the registry shipped DeepSeek's retired 'deepseek-chat' /
@@ -308,17 +310,30 @@ describe('Cloudflare provider registry', () => {
     expect(PROVIDERS.cloudflare.models).toContain(base)
   })
 
-  it('MQA-227 (supersedes MQA-212): claims no vision, because the endpoint cannot carry an image at all', () => {
-    // Not a model limitation — Llama 4 Scout really is multimodal. Cloudflare's OpenAI-compatible route
-    // rejects EVERY image_url shape with "Property image_url only supports base64 encoded image data"
-    // (code 6004): a data: URL and bare base64, on Scout and on the dedicated vision model alike.
-    // Claiming vision would capture the user's screen and upload it for a request that always errors.
-    // False sends screen-asks to the on-device model, which works. Flip this only against a live
-    // endpoint that accepts an image, never against the mock.
-    // MQA-212 flipped this flag TRUE for a sound reason measured against the mock (Scout is multimodal,
-    // and vision:false was sending screen-asks to the on-device floor). A live endpoint then showed the
-    // transport cannot carry the image at all, so that row is superseded here rather than reopened.
-    expect(PROVIDERS.cloudflare.vision).toBe(false)
+  it('MQA-259 (supersedes MQA-227, which superseded MQA-212): claims vision, because the endpoint now carries an image', () => {
+    // The history matters, because this flag has moved twice and each move was evidence-led:
+    //   MQA-212 set it TRUE against the MOCK — Scout is multimodal, and false was sending screen-asks to
+    //           the on-device floor. Sound reasoning, wrong evidence.
+    //   MQA-227 set it FALSE against the LIVE endpoint — every image_url shape returned code 6004,
+    //           "Property image_url only supports base64 encoded image data". A transport limit, and it
+    //           left instructions: revisit only against a live endpoint, never the mock.
+    //   MQA-259 set it TRUE against the LIVE endpoint, following those instructions exactly. Re-probed
+    //           2026-08-25 with the shipped embedded key: the nested data-URI shape answers 200 and the
+    //           model genuinely reads the image. Two rendered images returned "INVOICE 84213" and
+    //           "RECEIPT 90577" verbatim — content it could not guess — and a 2560x1440 screenshot
+    //           (0.75 MB base64) returned its banner text in 1.86s, against 12s+ on-device.
+    expect(PROVIDERS.cloudflare.vision).toBe(true)
+  })
+
+  it('MQA-259: the app builds the ONE image shape the endpoint accepts', () => {
+    // Only the nested data-URI form works. Re-probed live on 2026-08-25:
+    //   {image_url: {url: 'data:image/jpeg;base64,…'}}  -> 200
+    //   {image_url: {url: '<bare base64>'}}             -> 400
+    //   {image_url: 'data:image/jpeg;base64,…'}         -> 400
+    // So vision:true is only safe while llm/openai.ts keeps building the first form. A refactor to bare
+    // base64 would 400 every screen-ask on the default provider, and the flag above would then be a lie.
+    const openai = readFileSync(join(__dirname, '..', 'main', 'llm', 'openai.ts'), 'utf8')
+    expect(openai).toMatch(/type: 'image_url', image_url: \{ url: `data:\$\{imageMime\(req\.image\)\};base64,\$\{req\.image\}` \}/)
   })
 
   it('claims no free tier, because requests bill to the operator', () => {
