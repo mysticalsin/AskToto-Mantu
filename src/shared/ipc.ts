@@ -57,6 +57,7 @@ export const IPC = {
   brainBackfill: 'brain:backfill',
   brainRead: 'brain:read',
   brainEntityNames: 'brain:entityNames',
+  restoreEmbeddedCloudflareKey: 'settings:restoreEmbeddedCloudflareKey',
   brainOpenDashboard: 'brain:openDashboard',
   brainRebuildAll: 'brain:rebuildAll',
   brainClearJournalCorruption: 'brain:clearJournalCorruption',
@@ -1185,6 +1186,12 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
   hasApiKey: z.boolean(),
   /** Active provider is actually usable (key present AND any provider-specific setup done) — drives the
    *  "add your key" CTA so it only shows when the app genuinely can't answer yet. */
+  /** MQA-261: this build shipped a Cloudflare key, so a user who removed theirs can get it back.
+   *  Reads the packaged bundle only — it says nothing about whether a key is stored right now, which is
+   *  `hasKeys.cloudflare`. Both are needed: the restore affordance shows only when a key IS available and
+   *  is NOT currently stored. False on every ordinary keyless build, so the affordance never appears
+   *  where there is nothing to restore. */
+  embeddedCloudflareKeyAvailable: z.boolean().default(false),
   providerReady: z.boolean(),
   /** Active provider is usable AND vision-capable — gates screen-ask so screenshots never route to a
    *  non-vision model. Derived in publicSettings() from providerReady && PROVIDERS[provider].vision. */

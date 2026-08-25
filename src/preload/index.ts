@@ -79,6 +79,9 @@ const api = {
     ipcRenderer.invoke(IPC.setApiKey, { provider, key }),
   clearApiKey: (provider: ProviderId): Promise<{ hasKeys: Record<string, boolean> }> =>
     ipcRenderer.invoke(IPC.clearApiKey, { provider }),
+  /** MQA-261: put back the Cloudflare key this build shipped with, after the user removed it. */
+  restoreEmbeddedCloudflareKey: (): Promise<{ ok: boolean; error?: string; hasKeys: Record<string, boolean> }> =>
+    ipcRenderer.invoke(IPC.restoreEmbeddedCloudflareKey),
   testApiKey: (provider: ProviderId, key: string): Promise<TestKeyResponse> =>
     ipcRenderer.invoke(IPC.testApiKey, { provider, key }),
   dustListAgents: (): Promise<DustAgentsResponse> => ipcRenderer.invoke(IPC.dustListAgents),

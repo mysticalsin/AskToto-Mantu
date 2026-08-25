@@ -761,6 +761,15 @@ function AiSection({
     if (requiresUserBaseUrl(provider)) setAdv(true)
   }, [provider])
   const [filter, setFilter] = useState('')
+  // MQA-261: removing a key is irreversible for the Cloudflare key this build ships, so the trash
+  // icon asks once. Reset whenever the active provider changes, so a confirm armed on one tile can
+  // never be spent on another.
+  const [confirmRemove, setConfirmRemove] = useState(false)
+  const [restoreMsg, setRestoreMsg] = useState<string | null>(null)
+  useEffect(() => {
+    setConfirmRemove(false)
+    setRestoreMsg(null)
+  }, [provider])
   const skipClearRef = useRef(false) // don't wipe a freshly-pasted key when detection switches provider
   // Latest `provider` value, readable from inside onSave/onTest's async continuations — those closures
   // capture the provider a save/test was started for, then compare against this ref once the awaited
@@ -917,6 +926,22 @@ function AiSection({
     })
   }
 
+  // MQA-261: the key this build shipped with, put back. Offered only when the bundle exists AND no key
+  // is stored — restoring over a key the user chose would be the overwrite the seed marker exists to stop.
+  const canRestoreEmbedded =
+    provider === 'cloudflare' && settings.embeddedCloudflareKeyAvailable && !settings.hasKeys.cloudflare
+  const onRestoreEmbedded = async (): Promise<void> => {
+    setRestoreMsg(null)
+    const res = await window.toto.restoreEmbeddedCloudflareKey()
+    if (!res.ok) {
+      setRestoreMsg(res.error || 'Could not restore the key that shipped with this build.')
+      return
+    }
+    setRestoreMsg('Restored. Cloudflare is ready again.')
+    setTest({ status: 'idle' })
+    await patch({ provider: 'cloudflare' })
+  }
+
   const hint = detectHint(key, provider, settings.allowedProviders)
   const q = filter.trim().toLowerCase()
   // Dust + CLI providers have dedicated UI sections; Anthropic has its own always-visible card below;
@@ -1015,16 +1040,66 @@ function AiSection({
             Set via environment variable
           </span>
         ) : settings.hasKeys[provider] ? (
+          confirmRemove ? (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  setConfirmRemove(false)
+                  void onRemove()
+                }}
+                className="no-drag cl-focus flex items-center rounded-[10px] border border-[var(--cl-destructive)]/40 bg-[var(--cl-destructive)]/20 px-3 py-2.5 text-[12px] font-medium text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/30"
+              >
+                Remove key
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmRemove(false)}
+                className="no-drag cl-focus flex items-center rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.08]"
+              >
+                Cancel
+              </button>
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmRemove(true)}
+              title="Remove saved key"
+              className="no-drag cl-focus flex items-center justify-center rounded-[10px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-3 py-2.5 text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20"
+            >
+              <Trash2 size={14} />
+            </button>
+          )
+        ) : canRestoreEmbedded ? (
           <button
             type="button"
-            onClick={onRemove}
-            title="Remove saved key"
-            className="no-drag cl-focus flex items-center justify-center rounded-[10px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-3 py-2.5 text-[color:var(--cl-destructive)] hover:bg-[var(--cl-destructive)]/20"
+            onClick={() => void onRestoreEmbedded()}
+            title="Put back the Cloudflare key that shipped with Metis"
+            className="no-drag cl-focus flex items-center rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08]"
           >
-            <Trash2 size={14} />
+            Restore shipped key
           </button>
         ) : null}
       </div>
+
+      {/* MQA-261: a fresh install gets a working Cloudflare key nobody typed, so the user has no copy of
+          it. Removing it is therefore not like removing a key they pasted — say so before, and offer the
+          way back after. */}
+      {confirmRemove && provider === 'cloudflare' && settings.embeddedCloudflareKeyAvailable && (
+        <div className="mt-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
+          This key came with Metis rather than from you, so you have no copy of it. You can put it back
+          from this card afterwards.
+        </div>
+      )}
+      {canRestoreEmbedded && (
+        <div className="mt-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
+          Metis shipped with a Cloudflare key. Without it, questions fall back to the on-device model,
+          which is private but noticeably slower.
+        </div>
+      )}
+      {restoreMsg && (
+        <div className="mt-2 text-[12px] text-[color:var(--cl-foreground)]">{restoreMsg}</div>
+      )}
 
       {hint && (
         <div

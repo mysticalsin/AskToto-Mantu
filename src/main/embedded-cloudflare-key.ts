@@ -88,3 +88,67 @@ export function importEmbeddedCloudflareKey(): void {
     mainLog.warn('[embedded-cloudflare-key] could not write the seed marker', e)
   }
 }
+
+/**
+ * Is there a shipped key this install could fall back on? Reads the bundle only — it says nothing about
+ * whether the keystore currently holds a key, which is deliberately the renderer's other question.
+ *
+ * A keyless build (the normal case) answers false, so the restore affordance never appears where there is
+ * nothing to restore.
+ */
+export function embeddedCloudflareKeyAvailable(): boolean {
+  try {
+    const bundlePath = join(process.resourcesPath, 'cloudflare-embed', 'key.json')
+    if (!existsSync(bundlePath)) return false
+    const bundle = JSON.parse(readFileSync(bundlePath, 'utf8')) as EmbeddedCloudflareKeyBundle
+    const key = bundle.proxyKey?.trim()
+    return !!key && PROXY_KEY_PATTERN.test(key)
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Put the shipped key back, at the user's explicit request (MQA-261).
+ *
+ * This deliberately ignores the seed marker, and that is not a hole in it. The marker's job is to stop a
+ * LAUNCH silently overwriting a key the user chose — it protects the user's intent against the app. Here
+ * the user IS the one asking, so there is no intent to protect; refusing would be the app overruling them.
+ *
+ * Why it has to exist: onboarding hands a fresh install a working Cloudflare key nobody typed, so the user
+ * never had a copy. One unconfirmed click on the trash icon then removed the only credential they had, the
+ * marker meant it never came back, and the Settings copy told them to paste a METIS_PROXY_KEY they were
+ * never given. Every ask fell to the on-device model — measured at 12.2s against ~0.9s through the Worker —
+ * with nothing on screen explaining why the product had become slow.
+ */
+export function restoreEmbeddedCloudflareKey(): { ok: boolean; error?: string } {
+  let key: string
+  try {
+    const bundlePath = join(process.resourcesPath, 'cloudflare-embed', 'key.json')
+    if (!existsSync(bundlePath)) {
+      return { ok: false, error: 'This build did not ship a Cloudflare key, so there is nothing to restore.' }
+    }
+    const bundle = JSON.parse(readFileSync(bundlePath, 'utf8')) as EmbeddedCloudflareKeyBundle
+    const candidate = bundle.proxyKey?.trim()
+    if (!candidate || !PROXY_KEY_PATTERN.test(candidate)) {
+      return { ok: false, error: 'The key that shipped with this build is unreadable, so it was not restored.' }
+    }
+    key = candidate
+  } catch (e) {
+    mainLog.warn('[embedded-cloudflare-key] restore could not read the bundle', e)
+    return { ok: false, error: 'The key that shipped with this build could not be read.' }
+  }
+
+  try {
+    setApiKey('cloudflare', key)
+  } catch (e) {
+    mainLog.warn('[embedded-cloudflare-key] restore could not write the keystore', e)
+    return { ok: false, error: 'The key could not be saved to this profile.' }
+  }
+
+  // Distinct from the seed's own 'embedded-default' so the audit trail separates "the installer set this"
+  // from "the user asked for it back" — they answer different questions after the fact.
+  auditLog('key.set', { provider: 'cloudflare', source: 'embedded-default-restored' })
+  mainLog.info('[embedded-cloudflare-key] restored the embedded Cloudflare proxy key on an explicit request')
+  return { ok: true }
+}
