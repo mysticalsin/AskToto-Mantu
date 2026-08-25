@@ -329,7 +329,7 @@ import { formatResetPhrase } from '@shared/reset-time'
 import { applySpeakerNames } from '@shared/transcript-align'
 import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
 import { importEmbeddedCaheKey, seedCaheLocalAiForBackgroundScreen } from './cahe-embedded-key'
-import { importEmbeddedCloudflareKey } from './embedded-cloudflare-key'
+import { importEmbeddedCloudflareKey, embeddedCloudflareKeyAvailable, restoreEmbeddedCloudflareKey } from './embedded-cloudflare-key'
 
 /**
  * Builds the `refreshDustAuth` callback a Dust-routed stream/recap call hands to createStream — branches
@@ -1265,6 +1265,9 @@ function publicSettings(): PublicSettings {
     contentProtection: contentProtectionOn(),
     // Same rule for the stronger switch: the Privacy toggle must show what capture actually obeys.
     privateView: privateViewOn(),
+    // MQA-261: does a shipped key exist to fall back on? The renderer pairs this with
+    // hasKeys.cloudflare to decide whether to offer a restore — available AND not currently stored.
+    embeddedCloudflareKeyAvailable: embeddedCloudflareKeyAvailable(),
     providerReady,
     // gates screen-ask so shots never hit a non-vision model — ORs localVisionReady so a local-only setup
     // (no cloud provider configured at all) still counts as vision-ready. localFallbackReady counts too:
@@ -2739,6 +2742,23 @@ function registerIpc(): void {
     // actual effect, not just the channel name, so a credential removal is never mislabeled as a set.
     auditLog(parsed.key.trim() ? 'key.set' : 'key.removed', { provider: parsed.provider })
     return { hasKeys: hasKeysMap() }
+  })
+
+  // MQA-261: put the shipped Cloudflare key back. Main-window-gated like every other credential write —
+  // the Intelligence window's reader preload must never reach a key mutation.
+  //
+  // resetProviderHealth is not incidental: the reason a user reaches for this is usually that asks started
+  // failing, and a recorded auth verdict against 'cloudflare' would otherwise keep the restored key
+  // demoted until it happened to succeed. Same pairing setApiKey and clearApiKey already use.
+  ipcMain.handle(IPC.restoreEmbeddedCloudflareKey, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Unlock Metis first.', hasKeys: hasKeysMap() }
+    const result = restoreEmbeddedCloudflareKey()
+    if (result.ok) {
+      resetProviderHealth('cloudflare')
+      resetHeadroom('cloudflare')
+    }
+    return { ...result, hasKeys: hasKeysMap() }
   })
 
   ipcMain.handle(IPC.clearApiKey, (e, payload: unknown) => {
