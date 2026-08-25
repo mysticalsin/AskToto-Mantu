@@ -31,7 +31,11 @@ import { describe, expect, it } from 'vitest'
 
 const root = join(__dirname, '..', '..')
 
-const loggerSrc = readFileSync(join(root, 'src', 'main', 'logger.ts'), 'utf8')
+// MQA-262: normalised to LF before any offset search. git checks this repo out with core.autocrlf on Windows, so
+// the same file is LF on the author's machine and CRLF on a Windows runner — a literal two-newline marker
+// then never matches, and collection dies with "update this test's slice" on CI while passing locally.
+// Same class as the hash-chain rule: strip the carriage returns before looking for structure in text.
+const loggerSrc = readFileSync(join(root, 'src', 'main', 'logger.ts'), 'utf8').replace(/\r\n/g, '\n')
 const unionStart = loggerSrc.indexOf('export type AuditEvent =')
 const unionEnd = loggerSrc.indexOf('\n\n// Lazy actor resolver', unionStart)
 if (unionStart === -1) throw new Error('logger.ts no longer declares `export type AuditEvent =` — update this test')
