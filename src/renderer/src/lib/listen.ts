@@ -1015,7 +1015,28 @@ export function useListen(
     }, THEM_WATCHDOG_MS)
   }
 
-  const openChannel = useCallback(
+  /** MQA-268: per-speaker serialization for openChannel. The channel record is stored only AFTER the
+   *  `await addModule(...)` inside — so the Windows paced retry's `if (channels.current.them) return`
+   *  guard reads undefined while a first open is still in flight, slips past, and opens a SECOND channel
+   *  whose entry closeChannel closes nothing (the first record does not exist yet). Both worklets end up
+   *  live on the same system audio, each with its own VAD clock, and every utterance transcribes twice —
+   *  identical pairs when sentence pauses align the cuts, offset overlapping fragments when they do not.
+   *  Observed verbatim on packaged 1.6.5: a five-sentence call where every line appeared exactly twice.
+   *  Chaining opens per speaker makes the second open's closeChannel actually see (and stop) the first. */
+  const openSeqRef = useRef<Partial<Record<Speaker, Promise<void>>>>({})
+  // Ref-indirected like recoverSystemAudioRef below: openChannelNow's identity changes with pushAudio,
+  // and the serializing wrapper must always invoke the CURRENT one, not the render it was created in.
+  const openChannelNowRef = useRef<((sp: Speaker, stream: MediaStream) => Promise<void>) | null>(null)
+
+  const openChannel = useCallback((sp: Speaker, stream: MediaStream): Promise<void> => {
+    const prev = openSeqRef.current[sp] ?? Promise.resolve()
+    // Chain regardless of the predecessor's outcome — a failed open must not wedge every later one.
+    const run = prev.catch(() => {}).then(() => openChannelNowRef.current?.(sp, stream))
+    openSeqRef.current[sp] = run.catch(() => {}) as Promise<void> // keep the chain alive past a failure
+    return run as Promise<void>
+  }, [])
+
+  const openChannelNow = useCallback(
     async (sp: Speaker, stream: MediaStream): Promise<void> => {
       closeChannel(sp) // close any prior channel for this speaker (avoid orphan on retry)
       const ctx = new AudioContext({ sampleRate: SR })
@@ -1144,6 +1165,7 @@ export function useListen(
     },
     [pushAudio]
   )
+  openChannelNowRef.current = openChannelNow
 
   // Re-acquire the microphone after its track died (device disconnect / sleep) or the default input
   // moved (Bluetooth headset on/off). Kept in a ref so openChannel (defined above) can call it without

@@ -91,3 +91,34 @@ describe('MQA-267 — the boost cannot clip now that processing is off', () => {
     expect(SRC).toMatch(/ch\.limiter\?\.disconnect\(\)/)
   })
 })
+
+/**
+ * MQA-268 — every utterance transcribed twice: two live worklets on one system-audio stream.
+ *
+ * openChannel stores the channel record only AFTER its internal `await addModule(...)`. The Windows
+ * paced retry guards on `if (channels.current.them) return` — which reads undefined while the first
+ * open is still in flight. Recovery slips past, opens a second channel, and ITS entry closeChannel
+ * closes nothing because the first record is not stored yet. Both worklets stay live on the same
+ * loopback, each with an independent VAD clock: identical duplicate lines when sentence pauses align
+ * the cuts, offset overlapping fragments when they do not.
+ *
+ * Observed verbatim on packaged 1.6.5: a five-sentence call where every line appeared exactly twice.
+ * The MAX_CONSECUTIVE_DUPES guard cannot catch it — it tolerates one repeat by design, so a single
+ * systematic duplicate walks straight through.
+ */
+describe('MQA-268 — channel opens are serialized per speaker', () => {
+  it('openChannel chains onto the previous open for the same speaker', () => {
+    expect(SRC).toMatch(/const openSeqRef = useRef/)
+    expect(SRC).toMatch(/prev\.catch\(\(\) => \{\}\)\.then\(\(\) => openChannelNowRef\.current\?\.\(sp, stream\)\)/)
+  })
+
+  it('a failed open cannot wedge the chain for every later one', () => {
+    expect(SRC).toMatch(/keep the chain alive past a failure/)
+  })
+
+  it('the serialized wrapper always calls the CURRENT implementation, not a stale render', () => {
+    // openChannelNow's identity changes with pushAudio; a wrapper closing over one render's copy would
+    // silently pump audio into a torn-down queue after the next re-render.
+    expect(SRC).toMatch(/openChannelNowRef\.current = openChannelNow/)
+  })
+})
