@@ -13,6 +13,7 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
+import { availableParallelism } from 'node:os'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import { auditLog, mainLog } from '../logger'
@@ -25,6 +26,12 @@ export type BinaryVariant = WinVariant | 'mac'
 export interface ModelPaths {
   gguf: string
   mmproj: string
+  /** MQA-270 (B1): whether the multimodal projector is loaded. Measured on the pinned binary: llama-server
+   *  loads the mmproj AT STARTUP, not lazily ("srv load_model: loaded multimodal model" prints before
+   *  "listening on") — costing 1.03 GB private on the CPU profile whether or not a vision ask ever comes.
+   *  false spawns with --no-mmproj; a later vision request restarts through start()'s existing switch
+   *  path, which already drains in-flight streams. */
+  vision: boolean
   /** Machine-aware sizing (local-models.ts spawnProfileFor). Travels with the paths so the spawn is
    *  fully described by one object and no caller has to know the model's sizing. */
   ctxSize: number
@@ -118,6 +125,8 @@ export function resolveBinaryPath(platform: LlamaPlatform = detectPlatform()): B
 export interface SpawnArgsInput {
   gguf: string
   mmproj: string
+  /** MQA-270 (B1): load the multimodal projector? See ModelPaths.vision. */
+  vision: boolean
   /** Total context across the slots. Per-model AND per-machine — see local-models.ts spawnProfileFor. */
   ctxSize: number
   /** Concurrent slots (`--parallel`). */
@@ -152,16 +161,38 @@ export function atCapacity(): boolean {
   return activeStreamCount >= LOCAL_PARALLEL_SLOTS
 }
 
-export function buildSpawnArgs(input: SpawnArgsInput): string[] {
+/** MQA-270 (B5): threads for llama-server, leaving headroom for everything else. Unpinned, llama.cpp's
+ *  `-t -1` resolves to EVERY physical core — measured n_threads=8 on an 8-core box — which on a 4-core
+ *  laptop starves the Electron renderer and the Parakeet ASR worker simultaneously: the "Metis lags"
+ *  report is those three fighting for the same cores, not the model being slow. Node exposes only
+ *  logical cores, so physical is estimated as logical/2 (SMT assumption; an estimate is fine — the cost
+ *  of guessing low is generation throughput, the cost of guessing high is the UI freezing). Floor of 2
+ *  so a 2-core machine still generates at all. */
+export function inferenceThreads(logicalCores = availableParallelism()): number {
+  const physical = Math.max(1, Math.floor(logicalCores / 2))
+  return Math.max(2, physical - 2)
+}
+
+export function buildSpawnArgs(input: SpawnArgsInput, threads = inferenceThreads()): string[] {
+  const t = threads
   return [
     '-m', input.gguf,
-    '--mmproj', input.mmproj,
+    // MQA-270 (B1): the projector is start-up-loaded, never lazy, so --no-mmproj is the only way to not
+    // pay its 1.03 GB when no vision surface is live. --no-mmproj-offload does NOT free it (measured
+    // 5589 vs 5614 MB); both flags verified against the pinned b9957 binary's --help.
+    ...(input.vision ? ['--mmproj', input.mmproj] : ['--no-mmproj']),
     '--host', '127.0.0.1',
     '--port', '0',
     '-c', String(input.ctxSize),
     '--parallel', String(input.parallel),
     '--cache-ram', '128',
     '-ngl', String(input.gpuLayers),
+    // MQA-270 (B5): cap generation (-t) and batch (-tb) threads, and the HTTP pool. All three flags
+    // verified against the pinned b9957 binary's --help. Costs some throughput on big machines; buys
+    // back the renderer and ASR worker on small ones, which is where the lag lived.
+    '-t', String(t),
+    '-tb', String(t),
+    '--threads-http', '2',
     '--no-ui',
     '--jinja',
     '--reasoning', 'off'
@@ -319,6 +350,7 @@ function spawnAndWaitHealthy(
     const args = buildSpawnArgs({
       gguf: modelPaths.gguf,
       mmproj: modelPaths.mmproj,
+      vision: modelPaths.vision,
       ctxSize: modelPaths.ctxSize,
       parallel: modelPaths.parallel,
       gpuLayers: modelPaths.gpuLayers
@@ -478,8 +510,15 @@ function maybeAutoRestart(platform: LlamaPlatform): void {
 
 /** True when `a` (the currently-running/loaded model paths, if any) is the SAME model as `b` (a fresh
  *  start() request) — the switch/no-op decision (F2) hinges on this. */
+/** Does the RUNNING configuration `a` satisfy the REQUEST `b`? MQA-270 (B1): vision is one-way sticky —
+ *  a runtime holding the projector satisfies a text request (superset), but a text-only runtime does NOT
+ *  satisfy a vision request, which forces the switch path and its restart. Without the asymmetry an
+ *  interleaved text/vision session would thrash a 14.6 s reload on every alternation; with it, the
+ *  projector loads at most once per runtime lifetime and is only released by the idle stop. This
+ *  comparison previously ignored vision entirely, which would have reported "same model" and silently
+ *  never restarted for the first screen ask. */
 function samePaths(a: ModelPaths | null, b: ModelPaths): boolean {
-  return !!a && a.gguf === b.gguf && a.mmproj === b.mmproj
+  return !!a && a.gguf === b.gguf && a.mmproj === b.mmproj && (a.vision || !b.vision)
 }
 
 /**

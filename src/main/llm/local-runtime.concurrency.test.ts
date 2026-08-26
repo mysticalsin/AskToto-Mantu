@@ -16,7 +16,7 @@ import { LOCAL_MODELS, spawnProfileFor } from './local-models'
 // typechecked, and these tests mock the spawn so nothing ever read the bad value at runtime.
 //
 // Derived from the real profile rather than hardcoded, so it cannot drift from production again.
-const SPAWN_PROFILE = spawnProfileFor(LOCAL_MODELS[LOCAL_MODELS.length - 1])
+const SPAWN_PROFILE = { ...spawnProfileFor(LOCAL_MODELS[LOCAL_MODELS.length - 1], 16, 8), vision: false }
 
 vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))

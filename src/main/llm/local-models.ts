@@ -2,7 +2,7 @@ import { app } from 'electron'
 import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { totalmem } from 'node:os'
+import { freemem, totalmem } from 'node:os'
 import { auditLog, type AuditEvent } from '../logger'
 
 /**
@@ -81,8 +81,10 @@ export const LOCAL_MODELS: readonly LocalModelEntry[] = [
     // 8 GB is the deliberate target: the best model such a machine can actually hold. It works because
     // the two costs behave differently — llama.cpp mmaps the weights (no --no-mmap in buildSpawnArgs), so
     // the 2.71 GB is page-cache the OS can reclaim under pressure rather than committed RSS, while the KV
-    // cache IS committed and is held down by the 16K window above. The 672 MB mmproj only loads for a
-    // vision ask. Below 8 GB nothing is loadable at all and assertRamOk says so.
+    // cache IS committed and is held down by the 16K window above. The 672 MB mmproj loads only when a
+    // vision surface is live — and that is TRUE only since MQA-270 (B1): llama-server loads the projector
+    // at STARTUP, not lazily, so before --no-mmproj this line was wrong and every text-only session paid
+    // 1.03 GB for it anyway. Below 8 GB nothing is loadable at all and assertRamOk says so.
     minTotalRamGB: 8,
     gguf: {
       bytes: 2912109728,
@@ -150,12 +152,24 @@ export interface LocalSpawnProfile {
  *  spare, while a 16 GB+ machine keeps the faster offloaded configuration. */
 export const GPU_OFFLOAD_MIN_RAM_GB = 12
 
-export function spawnProfileFor(entry: LocalModelEntry, totalRamGB = totalRamGBValue()): LocalSpawnProfile {
-  if (totalRamGB >= GPU_OFFLOAD_MIN_RAM_GB) {
+/** MQA-270 (B9): free RAM required before full GPU offload is chosen. `-ngl 99` on an INTEGRATED GPU
+ *  offloads into host DRAM — the same memory everything else needs — and the profile was picked purely
+ *  from totalmem(), so a 16 GB machine with 3 GB free still committed the full-offload footprint.
+ *  freemem() under-reports on Windows (standby list excluded), so the threshold is generous; failing it
+ *  falls to the small-machine profile, which costs speed, never correctness. */
+export const GPU_OFFLOAD_MIN_FREE_RAM_GB = 5
+
+export function spawnProfileFor(
+  entry: LocalModelEntry,
+  totalRamGB = totalRamGBValue(),
+  freeRamGB = freeRamGBValue()
+): LocalSpawnProfile {
+  if (totalRamGB >= GPU_OFFLOAD_MIN_RAM_GB && freeRamGB >= GPU_OFFLOAD_MIN_FREE_RAM_GB) {
     return { ctxSize: entry.ctxSize, parallel: 2, gpuLayers: 99 }
   }
-  // Small machine: no offload, and a context halved from the model's own ceiling so the committed KV
-  // cache stays small too. Measured at ~2.8 GB for the 4B, which leaves an 8 GB machine ~5 GB.
+  // Small machine (or a big one that is currently squeezed): no offload, and a context halved from the
+  // model's own ceiling so the committed KV cache stays small too. Measured at ~2.8 GB for the 4B,
+  // which leaves an 8 GB machine ~5 GB.
   return { ctxSize: Math.min(entry.ctxSize, 8192), parallel: 2, gpuLayers: 0 }
 }
 
@@ -195,6 +209,10 @@ function totalRamGB(): number {
   return totalmem() / 1024 ** 3
 }
 /** Same value, exported name used by spawnProfileFor's default argument (declared above it). */
+function freeRamGBValue(): number {
+  return freemem() / 1024 ** 3
+}
+
 function totalRamGBValue(): number {
   return totalRamGB()
 }

@@ -426,7 +426,12 @@ export function useListen(
   // spells a known name correctly (e.g. "l'oreal" -> "L'Oréal") without any fuzzy/phonetic guessing. Gated
   // by settings.asrEntityBias in App.tsx (pass undefined/[] to disable). Applied AFTER asrCorrections so
   // an explicit user correction always wins.
-  entityNames?: string[]
+  entityNames?: string[],
+  // MQA-270 (B7): the configured ASR engine, so the whisper prewarm below can skip itself on parakeet/
+  // apple sessions instead of loading ~100 MB of worker + ORT wasm + whisper-base weights that start()
+  // will immediately terminate. Optional and undefined-tolerant: undefined means "unknown yet", which
+  // warms (the pre-existing behaviour) rather than guessing cold.
+  asrEngine?: string
 ): ListenApi {
   const [state, setState] = useState({
     listening: false,
@@ -1847,7 +1852,16 @@ export function useListen(
   // Pre-warm the small default model in the BACKGROUND a few seconds after startup, so the first time the
   // user presses Listen the bundled model is already loaded (no setup pause mid-meeting).
   // Deferred + idle-scheduled so it never competes with the first paint / onboarding interaction.
+  //
+  // MQA-270 (B7): two holes closed. (1) This warmed regardless of asrEngine — but the parakeet/apple
+  // start() paths terminate the whisper worker immediately, so a parakeet install paid ~100 MB (worker +
+  // ORT wasm instance + whisper-base weights) at every boot for an engine it never uses. The engine is
+  // now consulted BEFORE the load, not after. (2) The idle release was only armed by start()'s failure
+  // branch and stop()'s teardown — the prewarm called neither, so a launch-and-never-Listen session held
+  // that memory for its whole life. The release is armed right after warming, same timer the teardown
+  // uses; a real start() within the window clears it and keeps the worker warm, which was the point.
   useEffect(() => {
+    if (asrEngine && asrEngine !== 'whisper') return
     let warmed = false
     const warm = async (): Promise<void> => {
       if (warmed || workerRef.current) return
@@ -1858,13 +1872,21 @@ export function useListen(
         // message updates the (already warm) worker's language before the first audio window.
         ensureWorker().postMessage({ type: 'init', quality: 'fast', bundled })
         loadedQualityRef.current = 'fast'
+        if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
+        workerIdleTimer.current = setTimeout(() => {
+          workerRef.current?.terminate()
+          workerRef.current = null
+          readyRef.current = false
+          workerIdleTimer.current = null
+        }, WORKER_IDLE_RELEASE_MS)
       } catch {
         /* best-effort prewarm */
       }
     }
-    const t = setTimeout(() => void warm(), 4000)
+    const ric = (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback
+    const t = setTimeout(() => (ric ? ric(() => void warm()) : void warm()), 4000)
     return () => clearTimeout(t)
-  }, [ensureWorker, getAsrBundled])
+  }, [ensureWorker, getAsrBundled, asrEngine])
 
   // Mid-session spoken-language change (Settings → Audio while listening). The ref update covers every
   // engine's future reads; only a live Whisper worker needs an explicit nudge — a warm re-init whose

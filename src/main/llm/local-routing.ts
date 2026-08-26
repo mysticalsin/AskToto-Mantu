@@ -9,6 +9,7 @@
  * (localReady + per-task *Ready flags).
  */
 import { existsSync } from 'node:fs'
+import { freemem } from 'node:os'
 import type { AskMode, Settings } from '@shared/ipc'
 import type { ModelTier, ProviderId } from '@shared/providers'
 import { resolveBinaryPath, detectPlatform } from './local-runtime'
@@ -163,13 +164,28 @@ export function localVisionPrivacyRequired(
  * no real request could ever route to it — a pointless spawn + standing RAM/CPU cost with no product
  * benefit, not merely a redundant check.
  */
+/** MQA-270 (B8): minimum free RAM before an UNATTENDED warm may commit the model. The repo previously
+ *  contained zero freemem() reads — every sizing decision consulted totalmem() only, so a 16 GB machine
+ *  with 3 GB free still committed up to ~5.6 GB from login onward for an ask that might never come.
+ *  Windows freemem() excludes the standby list and under-reports, so the floor is deliberately generous
+ *  and conservative in the safe direction: refusing a warm costs one cold start on the next real ask,
+ *  never correctness. A real ask still loads the model regardless — this gates only speculative loads. */
+function freeRamGBValue(): number {
+  return freemem() / 1024 ** 3
+}
+
+export const PREWARM_MIN_FREE_RAM_GB = 4
+
 export function localPrewarmEligible(
   s: Pick<Settings, 'localLlm' | 'resilience'>,
   allowed: string[] | null,
-  cloudReady = true
+  cloudReady = true,
+  freeRamGB = freeRamGBValue()
 ): boolean {
   if (!s.localLlm.enabled) return false
   if (allowed && !allowed.includes('local')) return false
+  // MQA-270 (B8): both unattended warms (boot, window-focus) route through here — one floor covers both.
+  if (freeRamGB < PREWARM_MIN_FREE_RAM_GB) return false
   // "Local first for suggestions" — the original condition: local WILL serve the next suggest.
   if (s.localLlm.useFor.suggest) return true
   // The hedge now starts an on-device backup at t=0 on every interactive ask (index.ts's hedgeDelayMs),

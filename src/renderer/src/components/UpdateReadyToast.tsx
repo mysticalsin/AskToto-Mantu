@@ -1,6 +1,12 @@
-import { useState } from 'react'
+import { Suspense, lazy, useState } from 'react'
 import { Download, X, ChevronDown } from 'lucide-react'
-import { Markdown } from './Markdown'
+
+// MQA-270 (B2): lazy, because a static import here dragged streamdown + shiki/core + parse5 + marked +
+// micromark into the BOOT chunk — this toast is imported statically by App.tsx, so the overlay paid
+// 592 kB (63% of its entry) at launch for markdown that renders only after an update has downloaded AND
+// the user clicked "What's new". Measured: entry 944.85 kB -> 352.57 kB with this one change. The
+// Suspense boundary is required — same React #426 hazard App.tsx documents for its own lazy views.
+const Markdown = lazy(() => import('./Markdown').then((m) => ({ default: m.Markdown })))
 
 export interface UpdateReadyToastProps {
   open: boolean
@@ -103,7 +109,9 @@ export function UpdateReadyToast({
       </div>
       {trimmed && showNotes && (
         <div className="scroll-thin mt-2 max-h-52 overflow-y-auto rounded-[10px] border border-white/10 bg-white/[0.03] px-3 py-2 text-[11px] leading-relaxed text-[color:var(--color-ink-2)]">
-          <Markdown>{trimmed}</Markdown>
+          <Suspense fallback={null}>
+            <Markdown>{trimmed}</Markdown>
+          </Suspense>
         </div>
       )}
     </div>

@@ -28,44 +28,63 @@ const REPO_ROOT = process.cwd()
 // itself to the machine. Five call sites here still passed only { gguf, mmproj } — the identical omission
 // that shipped `-c undefined` into a tagged release, and the third file found carrying it. Derived from
 // production's own profile so it cannot drift again.
-const SPAWN_PROFILE = spawnProfileFor(LOCAL_MODELS[LOCAL_MODELS.length - 1])
+const SPAWN_PROFILE = spawnProfileFor(LOCAL_MODELS[LOCAL_MODELS.length - 1], 16, 8)
 
 describe('buildSpawnArgs', () => {
   // The spawn contract (PLAN.md §4.4) is IDENTICAL on mac and win — parameterize over both platforms to
   // prove that invariant explicitly rather than assuming it.
   it.each(['mac', 'win'] as const)('produces the exact sidecar flag set on %s', () => {
-    const args = buildSpawnArgs({ gguf: '/models/model.gguf', mmproj: '/models/mmproj.gguf', ctxSize: 65536, parallel: 2, gpuLayers: 99 })
+    // Threads pinned (4) — buildSpawnArgs defaults them from the LIVE machine's core count, and a golden
+    // list that varies by hardware is not a contract. MQA-270 (B5) added -t/-tb/--threads-http; (B1)
+    // made the projector conditional — vision:false is the new text-only default, spawning --no-mmproj.
+    const args = buildSpawnArgs(
+      { gguf: '/models/model.gguf', vision: false, mmproj: '/models/mmproj.gguf', ctxSize: 65536, parallel: 2, gpuLayers: 99 },
+      4
+    )
     expect(args).toEqual([
       '-m', '/models/model.gguf',
-      '--mmproj', '/models/mmproj.gguf',
+      '--no-mmproj',
       '--host', '127.0.0.1',
       '--port', '0',
       '-c', '65536',
       '--parallel', '2',
       '--cache-ram', '128',
       '-ngl', '99',
+      '-t', '4',
+      '-tb', '4',
+      '--threads-http', '2',
       '--no-ui',
       '--jinja',
       '--reasoning', 'off'
     ])
   })
 
+  it.each(['mac', 'win'] as const)('the vision spawn carries the projector path on %s', () => {
+    const args = buildSpawnArgs(
+      { gguf: '/models/model.gguf', vision: true, mmproj: '/models/mmproj.gguf', ctxSize: 65536, parallel: 2, gpuLayers: 99 },
+      4
+    )
+    expect(args).toContain('--mmproj')
+    expect(args[args.indexOf('--mmproj') + 1]).toBe('/models/mmproj.gguf')
+    expect(args).not.toContain('--no-mmproj')
+  })
+
   it('passes the per-model context window through rather than a hardcoded one', () => {
     // Context is per-model (local-models.ts LocalModelEntry.ctxSize) because the KV cache, not the
     // weights, is what decides whether a bigger model fits a small machine.
-    expect(buildSpawnArgs({ gguf: 'g', mmproj: 'm', ctxSize: 16384, parallel: 2, gpuLayers: 99 })).toContain('16384')
-    expect(buildSpawnArgs({ gguf: 'g', mmproj: 'm', ctxSize: 65536, parallel: 2, gpuLayers: 99 })).toContain('65536')
+    expect(buildSpawnArgs({ gguf: 'g', vision: false, mmproj: 'm', ctxSize: 16384, parallel: 2, gpuLayers: 99 })).toContain('16384')
+    expect(buildSpawnArgs({ gguf: 'g', vision: false, mmproj: 'm', ctxSize: 65536, parallel: 2, gpuLayers: 99 })).toContain('65536')
   })
 
   it('never includes --cache-reuse (disabled upstream for multimodal loads — PLAN.md §3)', () => {
-    const args = buildSpawnArgs({ gguf: 'g', mmproj: 'm', ctxSize: 65536, parallel: 2, gpuLayers: 99 })
+    const args = buildSpawnArgs({ gguf: 'g', vision: false, mmproj: 'm', ctxSize: 65536, parallel: 2, gpuLayers: 99 })
     expect(args).not.toContain('--cache-reuse')
   })
 
   it('splits the context evenly across the two slots and caps host prompt-cache RAM at 128 MiB', () => {
     // The per-slot budget follows the model's own window now: 65536 -> 32768 each for the small model,
     // 16384 -> 8192 each for the 4B, whose KV cache is what a small machine actually feels.
-    const args = buildSpawnArgs({ gguf: 'g', mmproj: 'm', ctxSize: 65536, parallel: 2, gpuLayers: 99 })
+    const args = buildSpawnArgs({ gguf: 'g', vision: false, mmproj: 'm', ctxSize: 65536, parallel: 2, gpuLayers: 99 })
     const totalContext = Number(args[args.indexOf('-c') + 1])
     const slots = Number(args[args.indexOf('--parallel') + 1])
     expect(totalContext / slots).toBe(32768)
@@ -76,7 +95,7 @@ describe('buildSpawnArgs', () => {
   })
 
   it('never puts the api key on argv — it travels via the LLAMA_API_KEY env var instead (ps-visibility fix)', () => {
-    const args = buildSpawnArgs({ gguf: 'g', mmproj: 'm', ...SPAWN_PROFILE })
+    const args = buildSpawnArgs({ gguf: 'g', vision: false, mmproj: 'm', ...SPAWN_PROFILE })
     expect(args).not.toContain('--api-key')
     // SpawnArgsInput has no apiKey field at all (enforced at compile time) — the key is only ever
     // handed to the child via spawn()'s env option (see spawnAndWaitHealthy), never argv.
@@ -261,7 +280,7 @@ describe('start() integration — real binary + real Qwen3.5-0.8B model', () => 
       // future sizing change cannot silently desynchronise this test from the shipped path again.
       const entry = LOCAL_MODELS.find((m) => m.id === 'qwen3.5-0.8b')
       if (!entry) throw new Error('qwen3.5-0.8b is no longer a known local model; update this test')
-      await start({ gguf, mmproj, ...spawnProfileFor(entry) }, 'mac')
+      await start({ gguf, mmproj, vision: false, ...spawnProfileFor(entry, 16, 8) }, 'mac')
       try {
         expect(isRunning()).toBe(true)
         expect(sessionKey()).toMatch(/^[0-9a-f]{64}$/)
@@ -384,7 +403,7 @@ describe('port-line timeout — a sidecar that starts but never reports a listen
 
     let outcome: 'resolved' | 'rejected' | undefined
     let err: unknown
-    void h.runtime.start({ gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac').then(
+    void h.runtime.start({ gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }, 'mac').then(
       () => {
         outcome = 'resolved'
       },
@@ -430,7 +449,7 @@ describe('sticky CPU fallback — a Vulkan sidecar that crashes AFTER reaching r
   it('pins the CPU build for the rest of the session instead of auto-restarting Vulkan into a crash loop', async () => {
     const h = await loadIsolatedRuntime()
     vi.stubGlobal('fetch', async () => ({ status: 200 }))
-    const paths = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
+    const paths = { gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
 
     const p = h.runtime.start(paths, 'win')
     expect(h.calls[0].path).toContain(join('win', 'vulkan', 'llama-server.exe'))
@@ -460,13 +479,13 @@ describe('sticky CPU fallback — a Vulkan sidecar that crashes AFTER reaching r
   it('leaves the Vulkan-first order intact when no Vulkan crash has happened this session', async () => {
     const h = await loadIsolatedRuntime()
     vi.stubGlobal('fetch', async () => ({ status: 200 }))
-    const paths = { gguf: '/m/a.gguf', mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
+    const paths = { gguf: '/m/a.gguf', vision: false, mmproj: '/m/a.mmproj', ...SPAWN_PROFILE }
 
     const p = h.runtime.start(paths, 'win')
     emitListening(h, 0, 56001)
     await p
     // A model SWITCH is not a crash — the GPU build must still be preferred.
-    const p2 = h.runtime.start({ gguf: '/m/b.gguf', mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }, 'win')
+    const p2 = h.runtime.start({ gguf: '/m/b.gguf', vision: false, mmproj: '/m/b.mmproj', ...SPAWN_PROFILE }, 'win')
     await waitUntil(() => h.calls.length === 2)
     expect(h.calls[1].path).toContain(join('win', 'vulkan', 'llama-server.exe'))
     emitListening(h, 1, 56002)

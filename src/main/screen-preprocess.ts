@@ -70,7 +70,7 @@ export interface ScreenPreprocessDeps {
   /** True while Private View is on — dynamic, re-checked at every describe. */
   privateViewOn: () => boolean
   /** Spin up / confirm the local sidecar for the configured model (from llm/local.ts). */
-  ensureLocalRuntimeStarted: (modelId: string) => Promise<void>
+  ensureLocalRuntimeStarted: (modelId: string, vision?: boolean) => Promise<void>
   runtime: {
     baseURL: () => string
     sessionKey: () => string
@@ -209,7 +209,8 @@ export function createScreenPreprocess(deps: ScreenPreprocessDeps): ScreenPrepro
 
   async function describeOnce(imageB64: string): Promise<string> {
     const s = deps.getSettings()
-    await deps.ensureLocalRuntimeStarted(s.localLlm.modelId)
+    // MQA-270 (B1): the background describe IS a vision pass — it needs the projector loaded.
+    await deps.ensureLocalRuntimeStarted(s.localLlm.modelId, true)
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), DESCRIBE_TIMEOUT_MS)
     deps.runtime.markActivity()

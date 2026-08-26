@@ -298,14 +298,15 @@ describe('MQA-053 / MQA-059 — the user is told when the ACTIVE provider stoppe
     expect(body).toMatch(/Reconnect it/)
   })
 
-  it('re-fetches settings when an ask stops streaming, so the notice is not deferred to a window focus', () => {
-    const effect = blockBetween('const wasStreamingRef = useRef(false)', 'const followup = useAsk()')
-    const body = code(effect)
-    expect(body).toMatch(/if \(askStreaming \|\| suggestStreaming\)/)
-    expect(body).toMatch(/wasStreamingRef\.current = true/)
-    // Never on mount: useSettings already fetches there, and a mount-time refetch would be pure noise.
-    expect(body).toMatch(/if \(!wasStreamingRef\.current\) return/)
-    expect(body).toMatch(/void refresh\(\)/)
+  it('the streaming-to-idle refetch is RETIRED — the dead-key notice arrives on focus, not as a stinger (MQA-269)', () => {
+    // This test used to pin the opposite: a force-refetch the instant a visible ask stopped streaming,
+    // so the dead-key banner appeared immediately after the failover that had just answered correctly.
+    // MQA-269 retired it deliberately — that timing turned a standing state into an event, narrating a
+    // hop the user was never supposed to notice. The MQA-053/059 guarantee this file protects survives:
+    // the notice still renders (asserted by the tests above) and still arrives, on the next natural
+    // window-focus settings refresh. What must NOT come back is the refetch keyed to streaming state.
+    expect(source).not.toMatch(/wasStreamingRef/)
+    expect(source).toMatch(/retires the MQA-053\/MQA-059 force-refetch/)
   })
 })
 

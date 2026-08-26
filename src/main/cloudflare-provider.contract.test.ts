@@ -204,7 +204,10 @@ describe('Cloudflare participates in the circuit breaker like any sibling', () =
 
   it('is reachable by the failover walk, which enumerates the registry rather than a hand-kept list', () => {
     expect(Object.keys(PROVIDERS)).toContain('cloudflare')
-    expect(indexSource).toMatch(/const order = \(Object\.keys\(PROVIDERS\) as ProviderId\[\]\)/)
+    // MQA-269 moved the enumeration one line up (`const all = Object.keys(PROVIDERS)…`), with the order
+    // derived from it — the walk still enumerates the registry, which is the invariant this pins.
+    expect(indexSource).toMatch(/const all = Object\.keys\(PROVIDERS\) as ProviderId\[\]/)
+    expect(indexSource).toMatch(/const order = userOrder\.length/)
   })
 })
 
