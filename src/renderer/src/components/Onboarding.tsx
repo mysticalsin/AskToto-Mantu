@@ -121,9 +121,16 @@ export function ssoSignInVerdict(r: SignInResult): SsoVerdict {
 /** Copy for step 6's provider readiness row. Dust needs its own branch: it's a one-click OAuth/CLI
  *  flow with no key to paste, so the generic API-key wording sends the user hunting for a key this
  *  path never asks for. */
-export function providerReadyCopy(provider: ProviderId): { label: string; hint: string } {
+export function providerReadyCopy(
+  provider: ProviderId,
+  /** MQA-263: true when this install already holds a working key it never asked the user for — the
+   *  installer-embedded Cloudflare key. Without it the generic branch below tells someone to "add your
+   *  key" for a key that shipped with the app and that they were never given a copy of. */
+  opts?: { alreadyConnected?: boolean }
+): { label: string; hint: string } {
   const p = PROVIDERS[provider]
   const label = p?.label ?? 'AI provider'
+  if (opts?.alreadyConnected) return { label: `${label} connected`, hint: 'already set up — nothing to paste' }
   if (p?.kind === 'cli') return { label: `${label} connected`, hint: 'connect it to get live answers' }
   if (p?.kind === 'dust') return { label: `${label} connected`, hint: 'finish the one-click sign-in to get live answers' }
   return { label: `${label} API key`, hint: 'add your key to get live answers' }
@@ -609,6 +616,13 @@ export function Onboarding({
     // A locked `provider` (Settings' managedKeys) is not user-choosable — main silently drops the pick, so
     // the tiles must not pretend it's an option here either.
     const providerLocked = settings.managedKeys.includes('provider')
+    // MQA-263: this build may already be connected. The installer can ship a Cloudflare key that main
+    // seeds into the keystore on first launch, so `providerReady` is true before the user has done
+    // anything — yet this step still opened with "pick one way to connect the AI" and offered a picker
+    // whose escape hatch named DeepSeek. That asks someone to solve a problem they do not have, and
+    // points them at a provider they would have to go and sign up for, while a working one is already
+    // configured. The tiles stay available underneath, because switching is still legitimate.
+    const alreadyConnected = settings.providerReady && !providerLocked
     // Org data-residency allowlist (null = unrestricted): these path tiles route straight to a provider,
     // so each needs its own check — the CLI tile covers claude-cli/codex-cli (whichever chooseCli detects).
     const pathAllow = settings.allowedProviders
@@ -677,11 +691,21 @@ export function Onboarding({
             tabIndex={-1}
             className="font-ui text-[18px] font-semibold tracking-tight text-[color:var(--color-ink)] outline-none"
           >
-            How should Métis answer you?
+            {alreadyConnected ? 'Métis is ready to answer' : 'How should Métis answer you?'}
           </div>
           <p className="max-w-[460px] text-[12px] leading-snug text-[color:var(--color-ink-2)]">
-            Transcription is always free and runs on your device. To get live answers, pick one way to
-            connect the AI. You can change this any time in Settings.
+            {alreadyConnected ? (
+              <>
+                This build ships connected to {PROVIDERS[settings.provider]?.label ?? 'an AI provider'}, so
+                there is no key to paste and nothing to sign up for. Transcription still runs free on your
+                device. Prefer your own provider? Pick one below, or change it any time in Settings.
+              </>
+            ) : (
+              <>
+                Transcription is always free and runs on your device. To get live answers, pick one way to
+                connect the AI. You can change this any time in Settings.
+              </>
+            )}
           </p>
         </div>
 
@@ -753,7 +777,14 @@ export function Onboarding({
           onClick={() => setStep(6)}
           className="no-drag focus-ring inline-flex items-center gap-1 text-[12px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
         >
-          Decide later; recording and transcripts still work <ArrowRight size={11} />
+          {/* MQA-263: "Decide later" tells someone nothing works yet. When the build already ships a
+              working provider, the honest label is that they are done. */}
+          {alreadyConnected ? (
+            <>Keep {PROVIDERS[settings.provider]?.label ?? 'the built-in provider'} and continue</>
+          ) : (
+            <>Decide later; recording and transcripts still work</>
+          )}{' '}
+          <ArrowRight size={11} />
         </button>
         {(initialStep ?? 1) < 5 && <StepDots step={5} />}
         <button
@@ -768,7 +799,10 @@ export function Onboarding({
   }
 
   if (step === 6) {
-    const readyCopy = providerReadyCopy(settings.provider)
+    // MQA-263: a provider that is ALREADY ready needs no instruction. Passing readiness through stops
+    // the row reading "Cloudflare · AI Gateway API key — add your key to get live answers" for a key the
+    // installer supplied and the user never had.
+    const readyCopy = providerReadyCopy(settings.provider, { alreadyConnected: settings.providerReady })
     // Windows has no OS-level permission API, so status is always 'unknown' there — that's a genuine
     // "we can't tell", not a granted status, so it must not be faked into `ok`. Surface it as a
     // not-yet-confirmed row instead, with a working link to the Windows privacy pane as the recovery path.
