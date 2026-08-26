@@ -358,6 +358,59 @@ async function acquireMic(deviceId: string): Promise<MediaStream> {
   }
 }
 
+/**
+ * MQA-267 — voice processing must be OFF on the loopback ('them') track, and it defaulted ON.
+ *
+ * Probed on real Windows hardware (the index.ts CAVEAT said this path was never validated): the granted
+ * loopback track came back with echoCancellation:true, noiseSuppression:true, autoGainControl:true.
+ * Echo cancellation's entire purpose is to subtract the far-end audio playing through the speakers —
+ * which on a loopback capture IS the signal. With the mic channel open beside it, the AEC reference
+ * lines up and the 'them' audio is partially or wholly cancelled before it ever reaches ASR. That is the
+ * reported symptom exactly: the main speaker transcribes, the other person intermittently vanishes, and
+ * the transcript breaks mid-conversation. Noise suppression and AGC compound it — both are tuned for a
+ * mouth near a microphone, not for rendered playout, so they pump and gate clean far-end speech.
+ *
+ * The MIC keeps its processing (acquireMic above): AEC on the mic is what stops the speakers bleeding
+ * the other person's words into the 'you' channel as duplicates. The asymmetry is the design.
+ */
+const LOOPBACK_AUDIO: MediaTrackConstraints = {
+  echoCancellation: false,
+  noiseSuppression: false,
+  autoGainControl: false
+}
+
+/** getDisplayMedia audio constraints are not reliably honored across Chromium versions, so the
+ *  constraint is also applied to the LIVE track after the grant. applyConstraints on these three
+ *  booleans works even where the initial request was ignored; a track that refuses is left as-is
+ *  rather than failing the capture — degraded audio still beats no 'them' channel at all. */
+async function stripLoopbackProcessing(sys: MediaStream): Promise<void> {
+  for (const t of sys.getAudioTracks()) {
+    try {
+      await t.applyConstraints(LOOPBACK_AUDIO)
+    } catch {
+      /* keep the track — a processed 'them' is still better than none */
+    }
+  }
+}
+
+/** The one way a loopback stream is acquired. Windows tries audio-only first so no genuine screen
+ *  source is grabbed (and no OS/EDR screen-recording indicator fires) for what the user intended as
+ *  system audio; macOS must bind to a 1fps ScreenCaptureKit video stream or the audio never starts. */
+async function acquireLoopback(): Promise<MediaStream> {
+  let sys: MediaStream
+  if (isWindows) {
+    try {
+      sys = await navigator.mediaDevices.getDisplayMedia({ audio: LOOPBACK_AUDIO })
+    } catch {
+      sys = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: LOOPBACK_AUDIO })
+    }
+  } else {
+    sys = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: LOOPBACK_AUDIO })
+  }
+  await stripLoopbackProcessing(sys)
+  return sys
+}
+
 export function useListen(
   onQuestion?: (line: TranscriptLine) => void,
   corrections?: { from: string; to: string }[],
@@ -1132,18 +1185,9 @@ export function useListen(
       await window.toto.armAudio(true)
       let sys: MediaStream
       try {
-        if (isWindows) {
-          // Windows loopback audio doesn't need a bound video stream the way macOS's ScreenCaptureKit
-          // binding does — try audio-only first so a genuine screen source is never grabbed (and no
-          // OS/EDR screen-recording indicator fires) for what the user only intended as system audio.
-          try {
-            sys = await navigator.mediaDevices.getDisplayMedia({ audio: true })
-          } catch {
-            sys = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: true })
-          }
-        } else {
-          sys = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: true })
-        }
+        // MQA-267: acquired through the one shared path, which disables voice processing on the
+        // loopback — see acquireLoopback/LOOPBACK_AUDIO for why AEC on this track eats the far end.
+        sys = await acquireLoopback()
       } finally {
         await window.toto.armAudio(false)
       }
@@ -1431,29 +1475,17 @@ export function useListen(
             await window.toto.armAudio(true) // arm the loopback handler only for this request
             let sys: MediaStream
             try {
-              if (isWindows) {
-                // Windows loopback audio doesn't need a bound video stream — try audio-only first so a
-                // genuine screen source is never grabbed (and no OS/EDR screen-recording indicator fires)
-                // for what the user only intended as system-audio capture. Fall back to the video-bound
-                // request below if this Electron/Chromium build still requires a paired video track.
-                try {
-                  sys = await navigator.mediaDevices.getDisplayMedia({ audio: true })
-                } catch {
-                  sys = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: true })
-                }
-              } else {
-                // macOS: system-audio loopback only arrives inside a ScreenCaptureKit screen stream —
-                // getDisplayMedia({ audio: true }) alone fails with "Error starting capture".  We
-                // request a minimal 1fps video track to start the SCKit session.
-                //
-                // IMPORTANT: do NOT call t.stop() on the video track here.  On macOS, the video and
-                // audio loopback share a single ScreenCaptureKit SCStream session.  Stopping the video
-                // track before the audio worklet is connected can terminate that SCStream, leaving the
-                // audio track in readyState='ended' — alive in getAudioTracks() but producing no PCM.
-                // openChannel() stores the full stream (video + audio); closeChannel() calls t.stop()
-                // on every track when Listen ends, releasing the recording indicator cleanly then.
-                sys = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 1 }, audio: true })
-              }
+              // MQA-267: acquired through the one shared path (voice processing disabled on the
+              // loopback — AEC on this track subtracts the very audio it exists to capture).
+              //
+              // IMPORTANT (macOS): do NOT call t.stop() on the returned video track here. The video and
+              // audio loopback share a single ScreenCaptureKit SCStream session; stopping the video
+              // track before the audio worklet is connected can terminate that SCStream, leaving the
+              // audio track in readyState 'ended' — alive in getAudioTracks() but producing no PCM.
+              // openChannel() stores the full stream (video + audio); closeChannel() calls t.stop()
+              // on every track when Listen ends, releasing the recording indicator cleanly then.
+              // acquireLoopback never stops tracks, so this contract holds.
+              sys = await acquireLoopback()
             } finally {
               await window.toto.armAudio(false)
             }
