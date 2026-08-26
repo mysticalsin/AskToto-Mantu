@@ -29,7 +29,15 @@ none of the gates below execute. See `docs/MANTU-IT-REQUEST.md` for the recorded
    build without it.
 9. Bump `package.json`'s `version`, then tag `vX.Y.Z` from `main` — the tag must exactly match, or
    `release.yml`'s first step fails the job before any build work starts.
-10. Verify install, activation, heartbeat, revoke, and auto-update on a clean machine.
+10. Publish the update feed on `mysticalsin/Metis-Releases`, then **immediately push the release
+    tag to the Forgejo twin** (`ssh://forgejo/tony/Metis-Releases.git`). Forgejo push-mirrors both
+    repos to GitHub and deletes any ref it does not hold — a tag that exists only on GitHub gets
+    deleted on the next sync, which demotes the published release to a hidden draft and silently
+    rolls `/releases/latest` back to an older version (this happened to v1.6.3/v1.6.5/v1.6.6 on
+    2026-08-26). A release is not landed until its tag exists on both remotes. As a backstop, the
+    GitHub ruleset `protect-release-tags` on Metis-Releases blocks tag deletion outright; to
+    intentionally delete a release tag, disable the ruleset, delete, and re-arm it.
+11. Verify install, activation, heartbeat, revoke, and auto-update on a clean machine.
 
 ## ffmpeg Sidecar Provisioning
 
