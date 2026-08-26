@@ -37,7 +37,13 @@ none of the gates below execute. See `docs/MANTU-IT-REQUEST.md` for the recorded
     2026-08-26). A release is not landed until its tag exists on both remotes. As a backstop, the
     GitHub ruleset `protect-release-tags` on Metis-Releases blocks tag deletion outright; to
     intentionally delete a release tag, disable the ruleset, delete, and re-arm it.
-11. Verify install, activation, heartbeat, revoke, and auto-update on a clean machine.
+11. The same mirror rule binds this code repo: `tony/AskToto-Mantu` on Forgejo push-mirrors to
+    GitHub every 8h and deletes any ref it does not hold. GitHub is private on the free plan, so
+    no ruleset backstop is possible here — the only protection is never leaving a ref on one
+    remote. Push through `bash scripts/push-both.sh <refspec>` (pushes GitHub and Forgejo in one
+    command, fails loudly if either is unreachable), and after merging a PR in the GitHub web UI,
+    fetch and push the merge to Forgejo before the next sync.
+12. Verify install, activation, heartbeat, revoke, and auto-update on a clean machine.
 
 ## ffmpeg Sidecar Provisioning
 
