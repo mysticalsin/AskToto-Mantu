@@ -20,6 +20,7 @@ import {
   Volume2,
   Headphones,
   ChevronDown,
+  ChevronUp,
   Sparkles,
   FolderOpen,
   FolderCog,
@@ -1566,6 +1567,8 @@ function ResilienceSection({
           )}
         </div>
 
+        <FallbackOrderEditor settings={settings} patch={patch} />
+
         <ToggleRow
           label="Prefer a free backup when a paid provider runs out"
           desc="Route to a provider with a free tier (or the on-device model) before another paid one, once the paid primary is spent."
@@ -1596,6 +1599,97 @@ function ResilienceSection({
         </div>
       </div>
     </Section>
+  )
+}
+
+/**
+ * MQA-269 — the failover order, authored by the user instead of guessed for them.
+ *
+ * Failover itself has always been automatic and silent on the wire; what did not exist was any way to
+ * say WHICH provider gets tried next. providerPriority is a two-value cli/api preference, not an order.
+ * This editor writes settings.providerFallbackOrder — and sets the active provider to the chain's head
+ * in the same patch, so "first in my chain" and "the provider that answers me" can never disagree.
+ *
+ * Deliberately up/down buttons, not drag: drag targets in a 44px-row overlay are an accessibility debt
+ * for zero gain at a list this size. Only CONFIGURED providers are offered (a chain naming a keyless
+ * provider is a chain of dead hops), filtered by the org allowlist for the same reason the tile grid is.
+ */
+function FallbackOrderEditor({
+  settings,
+  patch
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element | null {
+  const allowed = settings.allowedProviders
+  const configured = (Object.keys(PROVIDERS) as ProviderId[]).filter((p) => {
+    if (allowed && !allowed.includes(p)) return false
+    if (PROVIDERS[p].kind === 'cli') return !!settings.cliConnected?.[p]
+    if (p === 'local') return settings.localReady
+    return !!settings.hasKeys?.[p]
+  })
+  // A stale chain entry (key since removed, org policy tightened) is display-filtered the same way the
+  // router filters it — the stored value is corrected on the next edit rather than silently rewritten.
+  const chain = settings.providerFallbackOrder.filter((p) => configured.includes(p))
+  const rest = configured.filter((p) => !chain.includes(p))
+
+  if (configured.length < 2) return null // one provider has no order to author
+
+  const commit = (next: ProviderId[]): void => {
+    // The chain's head IS the primary — written together so they cannot drift apart. An empty chain
+    // returns to automatic ordering and leaves the active provider as the user last set it.
+    if (next.length) patch({ providerFallbackOrder: next, provider: next[0] })
+    else patch({ providerFallbackOrder: [] })
+  }
+  const move = (i: number, delta: number): void => {
+    const next = [...chain]
+    const j = i + delta
+    if (j < 0 || j >= next.length) return
+    ;[next[i], next[j]] = [next[j], next[i]]
+    commit(next)
+  }
+
+  return (
+    <div className="rounded-[10px] border border-[var(--cl-border)] bg-white/[0.02] p-3">
+      <div className="mb-1 text-[12.5px] font-medium text-[color:var(--cl-foreground)]">Failover order</div>
+      <div className="mb-2 text-[11.5px] text-[color:var(--cl-muted-foreground)]">
+        {chain.length
+          ? 'Providers are tried top to bottom when one fails. Anything not listed stays available after the chain.'
+          : 'Automatic — Métis picks the next provider itself. Set an order to decide it yourself.'}
+      </div>
+      {chain.length > 0 && (
+        <ul className="mb-2 flex flex-col gap-1">
+          {chain.map((p, i) => (
+            <li key={p} className="flex items-center gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.02] px-2.5 py-1.5">
+              <span className="w-4 text-[11px] tabular-nums text-[color:var(--cl-muted-foreground)]">{i + 1}</span>
+              <span className="flex-1 text-[12px] text-[color:var(--cl-foreground)]">{PROVIDERS[p].label}</span>
+              <button type="button" aria-label={`Move ${PROVIDERS[p].label} up`} disabled={i === 0} onClick={() => move(i, -1)}
+                className="no-drag cl-focus grid h-6 w-6 place-items-center rounded-[6px] border border-[var(--cl-border)] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] disabled:opacity-30">
+                <ChevronUp size={12} />
+              </button>
+              <button type="button" aria-label={`Move ${PROVIDERS[p].label} down`} disabled={i === chain.length - 1} onClick={() => move(i, 1)}
+                className="no-drag cl-focus grid h-6 w-6 place-items-center rounded-[6px] border border-[var(--cl-border)] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06] disabled:opacity-30">
+                <ChevronDown size={12} />
+              </button>
+              <button type="button" aria-label={`Remove ${PROVIDERS[p].label} from the order`} onClick={() => commit(chain.filter((x) => x !== p))}
+                className="no-drag cl-focus grid h-6 w-6 place-items-center rounded-[6px] border border-[var(--cl-border)] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.06]">
+                <X size={12} />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      {rest.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {rest.map((p) => (
+            <button key={p} type="button" onClick={() => commit([...chain, p])}
+              className="no-drag cl-focus rounded-[8px] border border-[var(--cl-border)] px-2.5 py-1 text-[11.5px] text-[color:var(--cl-muted-foreground)] hover:border-[var(--cl-primary)] hover:text-[color:var(--cl-foreground)]">
+              + {PROVIDERS[p].label}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }
 

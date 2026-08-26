@@ -239,24 +239,14 @@ export function App(): JSX.Element {
 
   const ask = useAsk() // answer view + recap
   const suggest = useAsk() // live copilot card
-  // MQA-053 / MQA-059: provider health is session state main computes as a side effect of answering, and
-  // the settings snapshot is otherwise only re-fetched on window focus. Without this, the ask that
-  // discovered a dead key finishes, cross-provider failover answers it correctly, and the notice below
-  // stays invisible until the user happens to alt-tab away and back. Re-fetch when a visible ask stops
-  // streaming — the exact moment `unhealthyProviders` can have changed.
-  const askStreaming = ask.answer?.streaming ?? false
-  const suggestStreaming = suggest.answer?.streaming ?? false
-  const wasStreamingRef = useRef(false)
-  useEffect(() => {
-    if (askStreaming || suggestStreaming) {
-      wasStreamingRef.current = true
-      return
-    }
-    // Only on a real streaming → idle transition, never on mount (useSettings already fetches there).
-    if (!wasStreamingRef.current) return
-    wasStreamingRef.current = false
-    void refresh()
-  }, [askStreaming, suggestStreaming, refresh])
+  // MQA-269 (retires the MQA-053/MQA-059 force-refetch that lived here): provider health used to be
+  // re-fetched the instant a visible ask stopped streaming, purely so the dead-key notice could appear
+  // IMMEDIATELY after the failover that had just answered the question correctly. That timing is what
+  // turned a standing state into an event — the user gets their answer and, in the same breath, a banner
+  // announces the hop they were never supposed to notice. Failover is meant to be silent; the honest
+  // record (`Answered by X`, and the unhealthy list in Settings → Backups & limits) still exists. The
+  // snapshot now refreshes on the next natural window focus, so the dead-key notice still arrives — just
+  // not as a stinger on the answer.
   const followup = useAsk() // Review screen's follow-up draft — must NOT reuse `ask`, which already holds the recap there
   // Cold Calling Mode (see maybeFireRecap + generateBookMeetings below): end-of-call coaching, fired
   // automatically alongside the recap, and the manual "Book meetings" outreach draft built from it.
