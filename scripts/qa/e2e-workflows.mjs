@@ -744,7 +744,13 @@ async function groupBrain() {
   const settleDeadline = Date.now() + 6 * 60 * 1000
   let indexSettled = false
   while (Date.now() < settleDeadline) {
-    const st = await page.evaluate(() => window.toto.brainStatus())
+    // MQA-265: bounded, for the same reason as the accuracy group's loop below — the deadline is only
+    // consulted BETWEEN iterations, so one CDP call that never settles would hang this group and every
+    // group after it. A timed-out probe reads as "not settled yet" and the loop re-checks the deadline.
+    const st = await Promise.race([
+      page.evaluate(() => window.toto.brainStatus()).catch(() => null),
+      new Promise((r) => setTimeout(() => r(null), 20000))
+    ])
     const idle = st?.backfill && !st.backfill.running && !st.backfill.preparing
     if (idle && (st.ingestedFiles?.length ?? 0) > 0) {
       indexSettled = true
@@ -941,7 +947,18 @@ async function groupCloudflare() {
   })
 
   if (!reachable) {
-    record(g, 'mock gateway reachable', 'info', `not exercised — no mock at ${MOCK}; start scripts/qa/mock-llm-server.mjs to cover this group`)
+    // MQA-264: the old text said only "start scripts/qa/mock-llm-server.mjs", which does not work —
+    // started plainly the mock listens on HTTP, this probe is HTTPS (the app's customBaseUrl refine
+    // demands https), so the group stays unexercised and the operator believes they followed the
+    // instruction. Name the whole requirement, or it is advice that cannot succeed.
+    record(
+      g,
+      'mock gateway reachable',
+      'info',
+      `not exercised — no HTTPS mock at ${MOCK}. The mock serves plain HTTP unless MOCK_TLS_CERT and ` +
+        `MOCK_TLS_KEY point at a throwaway PEM pair, AND the app under test is launched with ` +
+        `NODE_TLS_REJECT_UNAUTHORIZED=0 so it accepts the self-signed cert. Starting the mock alone is not enough.`
+    )
     return
   }
 
@@ -1297,13 +1314,26 @@ async function groupAccuracy() {
   // mid-extraction and the cleanup below then deleted the fixture before it could ever be indexed —
   // making every re-run start from zero and never converge.
   const deadline = Date.now() + 12 * 60 * 1000
+  // MQA-265: the basename must be split on BOTH separators. `/[\/]/` is a character class holding one
+  // escaped forward slash, so on Windows — where every fixture path is backslash-separated — split()
+  // returned the whole path, pop() returned the whole path, and `basename.includes(wholePath)` was false
+  // on every iteration. `mine` could never become true, so this group burned its full budget and reported
+  // "not exercised" every single run, on a pipeline that was extracting correctly the whole time.
+  const base = file ? file.split(/[\\/]/).pop() : null
   while (Date.now() < deadline) {
-    const st = await page.evaluate(() => window.toto.brainStatus())
+    // MQA-265: bound each probe. The deadline is only consulted BETWEEN iterations, so one CDP call that
+    // never settles blocks the loop — and therefore the whole suite — indefinitely. Observed: this group
+    // sat for ~50 minutes against a 12-minute budget while the app itself stayed responsive. A probe that
+    // times out is treated as "not settled yet" and the loop moves on to re-check the deadline.
+    const st = await Promise.race([
+      page.evaluate(() => window.toto.brainStatus()).catch(() => null),
+      new Promise((r) => setTimeout(() => r(null), 20000))
+    ])
     const idle = st?.backfill && !st.backfill.running && !st.backfill.preparing
     // Wait for THIS transcript, not for any transcript. Keying on `ingestedFiles.length > 0` meant the
     // brain group's earlier fixture already satisfied the condition, so this group read the graph before
     // its own file was ever indexed and reported four recall failures against an empty result.
-    const mine = file ? (st?.ingestedFiles ?? []).some((f) => String(f).includes(file.split(/[\/]/).pop())) : false
+    const mine = base ? (st?.ingestedFiles ?? []).some((f) => String(f).includes(base)) : false
     if (idle && mine) {
       settled = true
       break
@@ -1313,7 +1343,7 @@ async function groupAccuracy() {
 
   if (!settled) {
     record(g, '(extraction accuracy checks)', 'info',
-      'not exercised — indexing did not settle within 6 min (on-device model busy); re-run with --only=accuracy')
+      'not exercised — indexing did not settle within 12 min (on-device model busy); re-run with --only=accuracy')
   } else {
     const graph = await page.evaluate(() => window.toto.brainRead())
 

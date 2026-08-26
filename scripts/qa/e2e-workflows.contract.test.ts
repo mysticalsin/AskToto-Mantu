@@ -214,3 +214,76 @@ describe('MQA-261 — removing the shipped key is not a one-way door', () => {
     expect(SUITE).toMatch(/Never leave the profile without the key it shipped with/)
   })
 })
+
+/**
+ * MQA-264 — the blocker message named an action that cannot succeed.
+ *
+ * "start scripts/qa/mock-llm-server.mjs" was the entire instruction. Started that way the mock listens on
+ * plain HTTP, while this group probes HTTPS (the app's customBaseUrl refine rejects anything else), so the
+ * operator follows the instruction, sees the same "not exercised" line, and has no idea why. The whole
+ * Cloudflare failure-matrix group had never run in any recorded session as a result.
+ */
+describe('MQA-264 — a not-exercised message must name the whole requirement', () => {
+  it('names the TLS env vars, not just the script', () => {
+    // Asserted individually: the message is a concatenation, so the two names are not adjacent in source.
+    expect(SUITE).toContain('MOCK_TLS_CERT')
+    expect(SUITE).toContain('MOCK_TLS_KEY')
+    expect(SUITE).toContain('NODE_TLS_REJECT_UNAUTHORIZED=0')
+  })
+
+  it('says outright that starting the mock alone is insufficient', () => {
+    // Without this the reader assumes they did it right and stops investigating.
+    expect(SUITE).toMatch(/Starting the mock alone is not enough/)
+  })
+})
+
+/**
+ * MQA-265 — the accuracy group could never settle on Windows, and could hang the whole suite.
+ *
+ * Two defects in one loop, both found by running the packaged 1.6.3 end to end:
+ *
+ * 1. The basename was computed with `file.split(/[\/]/)` — a character class holding a single escaped
+ *    FORWARD slash. Every fixture path on Windows is backslash-separated, so split() returned the whole
+ *    path, pop() returned the whole path, and `basename.includes(wholePath)` was false on every
+ *    iteration. `mine` could never become true. The group burned its entire budget and reported "not
+ *    exercised" on every run, while extraction had in fact been working the whole time.
+ *
+ * 2. The per-iteration probe was unbounded. The deadline is only consulted BETWEEN iterations, so a
+ *    single CDP call that never settles blocks the loop and therefore the entire suite. Observed on
+ *    2026-08-25: this group sat for roughly 50 minutes against a 12-minute budget while the app itself
+ *    stayed responsive to other clients.
+ */
+describe('MQA-265 — the settle loop must be able to succeed, and must not be able to hang', () => {
+  it('splits the fixture path on BOTH separators', () => {
+    // Asserted via the surrounding code rather than by escaping a regex that matches a regex — that
+    // escaping is precisely what produced the bug being pinned here.
+    const idx = SUITE.indexOf('const base = file ?')
+    expect(idx, 'the basename is no longer hoisted out of the loop').toBeGreaterThan(-1)
+    const decl = SUITE.slice(idx, idx + 120)
+    // A backslash must appear inside the split character class; the forward-slash-only form has none.
+    const charClass = decl.slice(decl.indexOf('split('), decl.indexOf('.pop()'))
+    expect(charClass.includes(String.fromCharCode(92)), `split class lacks a backslash: ${charClass}`).toBe(true)
+  })
+
+  it('bounds every probe, not just the total wait', () => {
+    expect(SUITE).toMatch(/Promise\.race\(\[/)
+    expect(SUITE).toMatch(/setTimeout\(\(\) => r\(null\), 20000\)/)
+    // A probe failure must read as "not settled yet", never abort the group.
+    expect(SUITE).toMatch(/window\.toto\.brainStatus\(\)\)\.catch\(\(\) => null\)/)
+  })
+
+  it('states the budget it actually enforces', () => {
+    // The accuracy message said 6 min after its budget was raised to 12 — a stale instruction sends the
+    // reader looking for a timeout that is not the one that fired. Scoped to the accuracy group on
+    // purpose: the brain group genuinely uses 6 min and correctly says so, and forbidding the string
+    // repo-wide would fail on a message that is telling the truth.
+    expect(SUITE).toMatch(/did not settle within 12 min[^']*--only=accuracy/)
+  })
+
+  it('bounds the brain group probe as well, not only accuracy', () => {
+    // Same hang, second site: whichever group hangs takes every group after it with it.
+    const brainAt = SUITE.indexOf('while (Date.now() < settleDeadline)')
+    expect(brainAt).toBeGreaterThan(-1)
+    expect(SUITE.slice(brainAt, brainAt + 700)).toMatch(/Promise\.race\(\[/)
+  })
+})

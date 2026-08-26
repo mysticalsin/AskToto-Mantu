@@ -191,3 +191,40 @@ describe('MQA-201 — scene 4 never fakes a check', () => {
     expect(src).toMatch(/micRowStatus\(perms\?\.microphone\)/)
   })
 })
+
+/**
+ * MQA-263 — onboarding asked the user to solve a problem they did not have.
+ *
+ * The installer can ship a Cloudflare key that main seeds into the keystore on first launch, so
+ * `providerReady` is already true when step 5 renders. Step 5 nevertheless opened with "To get live
+ * answers, pick one way to connect the AI", offered Claude Code / an API key / Mantu Dust, and its
+ * escape hatch read "Something else (DeepSeek, Qwen, Mistral, and more)".
+ *
+ * Cloudflare — the provider actually configured and answering — was not among the options. So a user
+ * whose install was already working was told to go and sign up for DeepSeek. Step 6 compounded it: the
+ * generic branch of providerReadyCopy rendered "Cloudflare · AI Gateway API key — add your key to get
+ * live answers" for a key they were never given a copy of.
+ */
+describe('MQA-263 — a build that ships connected must say so', () => {
+  it('reports an already-connected provider as connected, not as needing a key', () => {
+    const copy = providerReadyCopy('cloudflare', { alreadyConnected: true })
+    expect(copy.hint).not.toMatch(/add your key/i)
+    expect(copy.label).toMatch(/connected$/)
+    expect(copy.hint).toMatch(/nothing to paste/i)
+  })
+
+  it('still tells an UNCONFIGURED key provider to add its key', () => {
+    // The fix must not silence the case where the instruction is correct.
+    const copy = providerReadyCopy('anthropic', { alreadyConnected: false })
+    expect(copy.hint).toBe('add your key to get live answers')
+  })
+
+  it('leaves the CLI and Dust branches alone when not already connected', () => {
+    expect(providerReadyCopy('claude-cli').hint).toBe('connect it to get live answers')
+    expect(providerReadyCopy('dust').hint).toMatch(/one-click sign-in/)
+  })
+
+  it('treats the second argument as optional, so existing call sites keep working', () => {
+    expect(providerReadyCopy('anthropic')).toEqual(providerReadyCopy('anthropic', {}))
+  })
+})
