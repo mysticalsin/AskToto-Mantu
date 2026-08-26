@@ -74,3 +74,20 @@ describe('MQA-267 — voice processing stays OFF on the loopback, ON on the mic'
     expect(fn).not.toMatch(/\.stop\(\)/)
   })
 })
+
+describe('MQA-267 — the boost cannot clip now that processing is off', () => {
+  it('a limiter sits between the them boost and the worklet', () => {
+    // The 3.0x gain was sized while default-on AGC held the loopback small. Un-processed loopback peaks
+    // near full scale; 3.0x that is +-3.0 in the float graph, surviving unclamped to the ASR's [-1,1]
+    // conversion where it hard-clips. The limiter keeps the lift for quiet signals, flattens the overs.
+    expect(SRC).toMatch(/createDynamicsCompressor\(\)/)
+    expect(SRC).toMatch(/gain\.connect\(limiter\)/)
+    expect(SRC).toMatch(/limiter\.connect\(worklet\)/)
+    // And it must be AFTER the gain — upstream it would do nothing.
+    expect(SRC).toMatch(/The limiter must sit AFTER the gain/)
+  })
+
+  it('is torn down with the channel like every other node', () => {
+    expect(SRC).toMatch(/ch\.limiter\?\.disconnect\(\)/)
+  })
+})

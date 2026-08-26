@@ -229,6 +229,7 @@ interface Channel {
   worklet: AudioWorkletNode
   stream: MediaStream
   gain?: GainNode // present on 'them' only: boosts quiet system-loopback above the VAD floor
+  limiter?: DynamicsCompressorNode // 'them' only: flattens the overs the boost creates (MQA-267)
 }
 
 /** A capture side the session REQUESTED but is NOT currently hearing, while Listen stays active
@@ -1044,7 +1045,22 @@ export function useListen(
       // The boost also lifts steady background (hold music, fans) over those thresholds; the worklet's
       // emit-time envelope-spread gate (isSpeechLikeWindow in ./vad) drops those windows before the ASR.
       const gain = sp === 'them' ? ctx.createGain() : null
-      if (gain) gain.gain.value = 3.0 // ~10 dB boost; safe headroom before digital clip at 1.0
+      if (gain) gain.gain.value = 3.0 // ~10 dB boost for a genuinely quiet loopback (low system volume)
+      // MQA-267: the boost needs a limiter behind it now. The 3.0x was sized while the loopback ran
+      // through AGC (default-on voice processing, since removed) which held the signal small — "safe
+      // headroom" was true then. Un-processed loopback of a call at normal volume peaks near full scale,
+      // and 3.0x that is +-3.0 in the float graph: Web Audio does not clamp, so the overs survive to the
+      // ASR's [-1,1] PCM conversion and hard-clip there — distortion that degrades recognition the
+      // opposite way the boost intended. A limiter keeps the lift for quiet signals and flattens only
+      // the overs; ASR is robust to gain compression and terrible with clipping.
+      const limiter = gain ? ctx.createDynamicsCompressor() : null
+      if (limiter) {
+        limiter.threshold.value = -6 // dBFS; engage just before full scale
+        limiter.knee.value = 6
+        limiter.ratio.value = 20 // limiting, not gentle compression
+        limiter.attack.value = 0.001
+        limiter.release.value = 0.1
+      }
 
       worklet.port.onmessage = (ev: MessageEvent): void => {
         const data = ev.data as { audio?: Float32Array }
@@ -1068,11 +1084,14 @@ export function useListen(
           pushAudio(sp, data.audio)
         }
       }
-      const ch: Channel = { ctx, src, worklet, stream, gain: gain ?? undefined }
+      const ch: Channel = { ctx, src, worklet, stream, gain: gain ?? undefined, limiter: limiter ?? undefined }
       channels.current[sp] = ch
-      if (gain) {
+      if (gain && limiter) {
+        // them: source -> boost -> limiter -> worklet. The limiter must sit AFTER the gain — it exists
+        // to flatten the overs the gain creates; upstream of it, it would do nothing.
         src.connect(gain)
-        gain.connect(worklet)
+        gain.connect(limiter)
+        limiter.connect(worklet)
       } else {
         src.connect(worklet)
       }
@@ -1605,6 +1624,7 @@ export function useListen(
     ch.worklet.disconnect()
     ch.worklet.port.onmessage = null
     ch.gain?.disconnect() // disconnect the boost node if present (them channel only)
+    ch.limiter?.disconnect()
     ch.src.disconnect()
     ch.stream.getTracks().forEach((t) => t.stop())
     void ch.ctx.close().catch(() => {})
