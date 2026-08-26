@@ -976,35 +976,48 @@ async function groupCloudflare() {
       return { walk: r.providers }
     })
 
-    await check(g, 'a SCREEN ask goes on-device, never to a gateway that cannot carry an image', async () => {
-      // MQA-227 (supersedes MQA-212). Cloudflare's OpenAI-compatible endpoint rejects every image_url
-      // shape with code 6004 — a transport limit, not a model one — so PROVIDERS.cloudflare.vision is
-      // false and a screen-ask must route to the on-device model. Asserting the WALK, because the old
-      // check read `visionReady`, which localFallbackReady satisfies on its own: it could not fail.
+    await check(g, 'a SCREEN ask is carried by the gateway, and still answered if it is not', async () => {
+      // MQA-266 (supersedes the MQA-227 form of this check). This asserted the OPPOSITE until 2026-08-25:
+      // that a screen-ask must never reach cloudflare, because its OpenAI-compatible route rejected every
+      // image_url shape with code 6004. That was true when written and is not any more — MQA-259 re-probed
+      // the LIVE Worker and the nested data-URI shape now answers 200 with the image genuinely read, so
+      // PROVIDERS.cloudflare.vision is true and screen-asks go to the gateway (~1-2s) instead of the
+      // on-device model (12s+).
+      //
+      // The check was left behind by that flip: it kept asserting the retired invariant and only surfaced
+      // once the cloudflare group could run at all (MQA-264 — it needs an HTTPS mock, which no recorded
+      // session had ever configured). What matters now is not WHICH leg carries the image, but that the
+      // ask is ANSWERED — the gateway may still be down, rate-limited, or serving a mock that has no
+      // vision, and the on-device model must pick it up.
       const r = await ask({ id: uid('cf-vision'), mode: 'vision', prompt: 'What is on screen?', image: TINY_JPEG_B64 })
-      assert(
-        !r.providers.includes('cloudflare'),
-        `a screen-ask reached cloudflare, which cannot accept an image: ${JSON.stringify(r.providers)}`
-      )
-      // Under an org allowlist that excludes 'local' (e.g. exactly ["cloudflare"]), NO provider may carry
-      // an image, so the honest outcome is a dead-end with advice that does not name a policy-blocked
-      // provider (MQA-228) — not a walk onto the on-device model the policy forbids.
+      // MQA-266: this branch also assumed vision:false. Under an allowlist of exactly ["cloudflare"] the
+      // old expectation was a dead-end, because no approved provider could carry an image. Cloudflare can
+      // now, so the honest expectation is the opposite — the ask is SERVED. The one thing that must still
+      // hold if it somehow is not: the advice may not name a provider the policy blocks (MQA-228).
       const policyBlocksLocal = (await settings()).allowedProviders?.includes('local') === false
       if (policyBlocksLocal) {
-        assert(r.providers.length === 0, `policy excludes every vision route, yet the walk was ${JSON.stringify(r.providers)}`)
-        assert(Boolean(r.error), 'no error surfaced for a screen-ask no approved provider can serve')
-        assert(
-          !/Claude or GPT/.test(String(r.error)),
-          `advice names policy-blocked providers: ${r.error}`
-        )
-        return { walk: r.providers, error: r.error }
+        if (r.error) {
+          assert(
+            !/Claude or GPT/.test(String(r.error)),
+            `advice names policy-blocked providers: ${r.error}`
+          )
+          return { __info: `not exercised — no approved provider carried the image here (${String(r.error).slice(0, 90)})` }
+        }
+        assert(r.text.trim().length > 0, 'policy-restricted screen-ask reported success with no text')
+        return { walk: r.providers, servedBy: r.providers[r.providers.length - 1] }
       }
-      assert(
-        r.providers.includes('local'),
-        `screen-ask did not reach the on-device model, walk was ${JSON.stringify(r.providers)}`
-      )
+      // The product guarantee is that a screen-ask gets ANSWERED. Which leg carries it is a routing
+      // detail that MQA-259 deliberately changed; pinning a specific provider here is what made this
+      // check assert a retired invariant for weeks.
+      //
+      // Guarded per MQA-256: against the MOCK gateway (which serves no vision) the only leg that can
+      // carry an image is the on-device model, so a profile whose weights have not arrived yet
+      // legitimately errors here. That is the environment, not the build.
+      if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so nothing can carry the image against a mock gateway; re-run once first-run setup finishes' }
+      assert(!r.error, `screen-ask errored instead of being answered: ${r.error}`)
       assert(r.text.trim().length > 0, 'no text streamed back for the screen-ask')
-      return { walk: r.providers }
+      assert(r.providers.length > 0, 'no provider was recorded for the screen-ask')
+      return { walk: r.providers, servedBy: r.providers[r.providers.length - 1] }
     })
 
     // Every way the hop can fail. None may dead-end or hang: the user keeps getting answers.

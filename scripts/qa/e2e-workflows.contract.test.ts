@@ -287,3 +287,32 @@ describe('MQA-265 — the settle loop must be able to succeed, and must not be a
     expect(SUITE.slice(brainAt, brainAt + 700)).toMatch(/Promise\.race\(\[/)
   })
 })
+
+/**
+ * MQA-266 — a QA check left asserting an invariant the product deliberately retired.
+ *
+ * MQA-227 established that Cloudflare's OpenAI-compatible route could not carry an image, so screen-asks
+ * had to go on-device. MQA-259 re-probed the live Worker, proved the nested data-URI shape now answers
+ * 200 with the image genuinely read, and flipped the vision flag. providers.test.ts was updated; this
+ * check was not — so the packaged build failed a test asserting the opposite of the shipped design.
+ *
+ * It stayed invisible because the cloudflare group had never been runnable (MQA-264 — it needs an HTTPS
+ * mock no recorded session had configured). Two latent defects hid each other.
+ */
+describe('MQA-266 — the screen-ask check must assert the guarantee, not the route', () => {
+  it('no longer forbids the gateway from carrying a screen-ask', () => {
+    expect(SUITE).not.toMatch(/a SCREEN ask goes on-device, never to a gateway that cannot carry an image/)
+    expect(SUITE).toMatch(/a SCREEN ask is carried by the gateway, and still answered if it is not/)
+  })
+
+  it('asserts the ask is ANSWERED rather than pinning a provider', () => {
+    // Pinning the leg is what made this assert a retired invariant for weeks.
+    expect(SUITE).toMatch(/screen-ask errored instead of being answered/)
+    expect(SUITE).toMatch(/no text streamed back for the screen-ask/)
+  })
+
+  it('keeps the policy guarantee that advice never names a blocked provider', () => {
+    // MQA-228 still holds regardless of which provider can carry vision.
+    expect(SUITE).toMatch(/advice names policy-blocked providers/)
+  })
+})
