@@ -46,6 +46,12 @@ files:
   - '!node_modules/@dust-tt/client/node_modules/express-rate-limit{,/**/*}'
   - '!node_modules/@dust-tt/client/node_modules/ip-address{,/**/*}'
   - '!out/**/*.map'
+  # MQA-270 (B6): Vite emits a second copy of the 20.6 MB ORT wasm into out/renderer/assets, and it is
+  # verifiably dead in production — whisper.worker.ts sets wasmPaths to 'asr-model://ort/' whenever the
+  # bundled ASR is in use (always, in a packaged build), which serves the copy in resources/ort/ that
+  # check-packaged-runtime pins. The dev branch uses the HF CDN. Neither path can reach this file, yet it
+  # rode inside app.asar anyway. resources/ort/ is the live copy — never exclude that one.
+  - '!out/renderer/assets/ort-wasm-*.wasm'
   - '!**/*.d.ts'
 asar: true
 # Native addons (.node) must live outside the asar to be loadable at runtime. sherpa-onnx-node (Parakeet

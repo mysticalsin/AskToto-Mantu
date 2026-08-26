@@ -66,14 +66,20 @@ function boundedLocalRequest(req: StreamOptions['req']): StreamOptions['req'] {
  * re-hash — never on every live-meeting request against an unchanged model. A mismatch throws and start()
  * is never reached, so a corrupt file never reaches llama-server.
  */
-export async function ensureLocalRuntimeStarted(modelId: string): Promise<void> {
+export async function ensureLocalRuntimeStarted(modelId: string, vision = false): Promise<void> {
   const paths = resolveLocalModelPaths(modelId)
   if (localRuntime.getState() === 'stopped' || localRuntime.getActiveModelKey() !== paths.gguf) {
     await verifyIntegrity(modelId)
   }
+  // MQA-270 (B1): the multimodal projector loads at server START, never lazily, and costs 1.03 GB
+  // whether or not vision is ever used — so text-only starts spawn with --no-mmproj. A vision request
+  // against a text-only runtime fails samePaths (vision is one-way sticky there) and takes start()'s
+  // existing switch path, which drains in-flight streams before the restart. Callers pass true only
+  // when the request actually carries an image.
   await localRuntime.start({
       gguf: paths.gguf,
       mmproj: paths.mmproj,
+      vision,
       ctxSize: paths.ctxSize,
       parallel: paths.parallel,
       gpuLayers: paths.gpuLayers
@@ -166,7 +172,7 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
   })
 
   const runLlama = async (): Promise<void> => {
-    await ensureLocalRuntimeStarted(opts.model)
+    await ensureLocalRuntimeStarted(opts.model, opts.req.mode === 'vision')
     if (aborted) return // caller aborted while the sidecar was still starting — never start a stream
     localRuntime.markActivity()
     // Suggest and summary pin the SAME slots the pre-warm path (Rock 5) targets, so cache_prompt

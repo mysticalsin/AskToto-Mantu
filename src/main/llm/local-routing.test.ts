@@ -558,7 +558,8 @@ describe('streamLocal', () => {
     expect(localModelsMock.modelPaths).toHaveBeenCalledWith('qwen3.5-0.8b')
     expect(localRuntimeMock.start).toHaveBeenCalledWith({
       gguf: '/models/qwen3.5-0.8b/model.gguf',
-      mmproj: '/models/qwen3.5-0.8b/mmproj.gguf'
+      mmproj: '/models/qwen3.5-0.8b/mmproj.gguf',
+      vision: false
     })
   })
 
@@ -568,7 +569,8 @@ describe('streamLocal', () => {
     await flush()
     expect(localRuntimeMock.start).toHaveBeenCalledWith({
       gguf: '/models/qwen3.5-0.8b/model.gguf',
-      mmproj: '/models/qwen3.5-0.8b/mmproj.gguf'
+      mmproj: '/models/qwen3.5-0.8b/mmproj.gguf',
+      vision: false
     })
     expect(openaiMock.streamOpenAI).toHaveBeenCalledOnce()
   })

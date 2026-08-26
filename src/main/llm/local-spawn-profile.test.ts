@@ -14,7 +14,7 @@ const FOUR_B = getModel('qwen3.5-4b')
  */
 describe('spawnProfileFor — the sidecar must fit the machine it is on', () => {
   it('refuses GPU offload on an 8 GB machine, which is what put it over budget', () => {
-    const p = spawnProfileFor(FOUR_B, 8)
+    const p = spawnProfileFor(FOUR_B, 8, 8)
     expect(p.gpuLayers).toBe(0)
     // ~2811 MB measured at this shape, leaving roughly 5 GB of an 8 GB machine for the OS and the app.
     expect(p.ctxSize).toBeLessThanOrEqual(8192)
@@ -22,21 +22,21 @@ describe('spawnProfileFor — the sidecar must fit the machine it is on', () => 
   })
 
   it('keeps the faster offloaded configuration once there is headroom', () => {
-    const p = spawnProfileFor(FOUR_B, 32)
+    const p = spawnProfileFor(FOUR_B, 32, 8)
     expect(p.gpuLayers).toBe(99)
     expect(p.ctxSize).toBe(FOUR_B.ctxSize)
   })
 
   it('switches exactly at the documented threshold, not somewhere near it', () => {
-    expect(spawnProfileFor(FOUR_B, GPU_OFFLOAD_MIN_RAM_GB - 0.1).gpuLayers).toBe(0)
-    expect(spawnProfileFor(FOUR_B, GPU_OFFLOAD_MIN_RAM_GB).gpuLayers).toBe(99)
+    expect(spawnProfileFor(FOUR_B, GPU_OFFLOAD_MIN_RAM_GB - 0.1, 8).gpuLayers).toBe(0)
+    expect(spawnProfileFor(FOUR_B, GPU_OFFLOAD_MIN_RAM_GB, 8).gpuLayers).toBe(99)
   })
 
   it('never hands back a context larger than the model asked for', () => {
     for (const m of LOCAL_MODELS) {
       for (const ram of [4, 8, 12, 16, 64]) {
-        expect(spawnProfileFor(m, ram).ctxSize).toBeLessThanOrEqual(m.ctxSize)
-        expect(spawnProfileFor(m, ram).ctxSize).toBeGreaterThan(0)
+        expect(spawnProfileFor(m, ram, 8).ctxSize).toBeLessThanOrEqual(m.ctxSize)
+        expect(spawnProfileFor(m, ram, 8).ctxSize).toBeGreaterThan(0)
       }
     }
   })
@@ -44,14 +44,14 @@ describe('spawnProfileFor — the sidecar must fit the machine it is on', () => 
   it('the profile actually reaches the sidecar argv', () => {
     // A profile that is computed but not passed through would be a silent no-op — the whole point is the
     // flags llama-server receives.
-    const small = spawnProfileFor(FOUR_B, 8)
-    const args = buildSpawnArgs({ gguf: 'g', mmproj: 'm', ...small })
+    const small = spawnProfileFor(FOUR_B, 8, 8)
+    const args = buildSpawnArgs({ gguf: 'g', mmproj: 'm', vision: false, ...small })
     expect(args[args.indexOf('-ngl') + 1]).toBe('0')
     expect(args[args.indexOf('-c') + 1]).toBe(String(small.ctxSize))
     expect(args[args.indexOf('--parallel') + 1]).toBe(String(small.parallel))
 
-    const big = spawnProfileFor(FOUR_B, 64)
-    const bigArgs = buildSpawnArgs({ gguf: 'g', mmproj: 'm', ...big })
+    const big = spawnProfileFor(FOUR_B, 64, 8)
+    const bigArgs = buildSpawnArgs({ gguf: 'g', mmproj: 'm', vision: false, ...big })
     expect(bigArgs[bigArgs.indexOf('-ngl') + 1]).toBe('99')
   })
 })

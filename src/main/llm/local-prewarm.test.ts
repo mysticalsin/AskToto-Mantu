@@ -47,7 +47,7 @@ describe('LocalPrewarmPayloadSchema', () => {
 })
 
 // ─── localPrewarmEligible (local-routing.ts) — the handler's settings gate ────────────────────────────
-import { localPrewarmEligible } from './local-routing'
+import { localPrewarmEligible, PREWARM_MIN_FREE_RAM_GB } from './local-routing'
 
 const settingsFor = (
   overrides: Partial<Settings['localLlm']> = {},
@@ -70,11 +70,11 @@ const NO_HEDGE = { hedge: false } as Partial<Settings['resilience']>
 
 describe('localPrewarmEligible', () => {
   it('true when enabled and useFor.suggest is on, with no allowlist restriction', () => {
-    expect(localPrewarmEligible(settingsFor(), null)).toBe(true)
+    expect(localPrewarmEligible(settingsFor(), null, true, 8)).toBe(true)
   })
 
   it('false when localLlm is disabled, regardless of useFor.suggest', () => {
-    expect(localPrewarmEligible(settingsFor({ enabled: false }), null)).toBe(false)
+    expect(localPrewarmEligible(settingsFor({ enabled: false }), null, true, 8)).toBe(false)
   })
 
   it('false when useFor.suggest is off, cloud is ready, and the hedge is disarmed', () => {
@@ -95,19 +95,19 @@ describe('localPrewarmEligible', () => {
     const noLocalFirst = { useFor: { suggest: false, summary: false, vision: false }, fallback: true }
 
     it('true even with a healthy cloud provider, when hedge and fallback are both armed', () => {
-      expect(localPrewarmEligible(settingsFor(noLocalFirst), null, true)).toBe(true)
+      expect(localPrewarmEligible(settingsFor(noLocalFirst), null, true, 8)).toBe(true)
     })
 
     it('false once the hedge is disarmed — nothing would race, so nothing to warm', () => {
-      expect(localPrewarmEligible(settingsFor(noLocalFirst, NO_HEDGE), null, true)).toBe(false)
+      expect(localPrewarmEligible(settingsFor(noLocalFirst, NO_HEDGE), null, true, 8)).toBe(false)
     })
 
     it('false when the safety net is disarmed, since the hedge has no local leg to start', () => {
-      expect(localPrewarmEligible(settingsFor({ ...noLocalFirst, fallback: false }), null, true)).toBe(false)
+      expect(localPrewarmEligible(settingsFor({ ...noLocalFirst, fallback: false }), null, true, 8)).toBe(false)
     })
 
     it('still respects the org allowlist — data residency beats warm-start latency', () => {
-      expect(localPrewarmEligible(settingsFor(noLocalFirst), ['anthropic'], true)).toBe(false)
+      expect(localPrewarmEligible(settingsFor(noLocalFirst), ['anthropic'], true, 8)).toBe(false)
     })
   })
 
@@ -118,32 +118,32 @@ describe('localPrewarmEligible', () => {
     const fallbackOnly = { useFor: { suggest: false, summary: false, vision: false }, fallback: true }
 
     it('true when the fallback is armed and NO cloud provider is ready', () => {
-      expect(localPrewarmEligible(settingsFor(fallbackOnly), null, false)).toBe(true)
+      expect(localPrewarmEligible(settingsFor(fallbackOnly), null, false, 8)).toBe(true)
     })
 
     it('still false when a cloud provider IS ready AND the hedge is disarmed', () => {
       // With the hedge off nothing races on-device, so a healthy cloud provider means no sidecar.
-      expect(localPrewarmEligible(settingsFor(fallbackOnly, NO_HEDGE), null, true)).toBe(false)
+      expect(localPrewarmEligible(settingsFor(fallbackOnly, NO_HEDGE), null, true, 8)).toBe(false)
     })
 
     it('false when the fallback is disarmed, even with no cloud provider ready', () => {
       expect(
-        localPrewarmEligible(settingsFor({ ...fallbackOnly, fallback: false }), null, false)
+        localPrewarmEligible(settingsFor({ ...fallbackOnly, fallback: false }), null, false, 8)
       ).toBe(false)
     })
 
     it('still respects the org allowlist — data residency beats warm-start latency', () => {
-      expect(localPrewarmEligible(settingsFor(fallbackOnly), ['anthropic'], false)).toBe(false)
+      expect(localPrewarmEligible(settingsFor(fallbackOnly), ['anthropic'], false, 8)).toBe(false)
     })
 
     it('still requires the master Local AI switch', () => {
-      expect(localPrewarmEligible(settingsFor({ ...fallbackOnly, enabled: false }), null, false)).toBe(false)
+      expect(localPrewarmEligible(settingsFor({ ...fallbackOnly, enabled: false }), null, false, 8)).toBe(false)
     })
   })
 
   it('is independent of useFor.summary/useFor.vision — only the suggest toggle gates prewarm', () => {
     expect(
-      localPrewarmEligible(settingsFor({ useFor: { suggest: true, summary: false, vision: false } }), null)
+      localPrewarmEligible(settingsFor({ useFor: { suggest: true, summary: false, vision: false } }), null, true, 8)
     ).toBe(true)
   })
 
@@ -207,7 +207,8 @@ describe('ensureLocalRuntimeStarted', () => {
     expect(localModelsMock.modelPaths).toHaveBeenCalledWith('qwen3.5-0.8b')
     expect(localRuntimeMock.start).toHaveBeenCalledWith({
       gguf: '/models/qwen3.5-0.8b/model.gguf',
-      mmproj: '/models/qwen3.5-0.8b/mmproj.gguf'
+      mmproj: '/models/qwen3.5-0.8b/mmproj.gguf',
+      vision: false
     })
     expect(order).toEqual(['verify', 'start'])
   })
@@ -220,7 +221,8 @@ describe('ensureLocalRuntimeStarted', () => {
     await ensureLocalRuntimeStarted('qwen3.5-0.8b')
     expect(localRuntimeMock.start).toHaveBeenCalledWith({
       gguf: '/models/qwen3.5-0.8b/model.gguf',
-      mmproj: '/models/qwen3.5-0.8b/mmproj.gguf'
+      mmproj: '/models/qwen3.5-0.8b/mmproj.gguf',
+      vision: false
     })
   })
 
@@ -359,5 +361,23 @@ describe('local:prewarm handler-gating (composed from the tested primitives abov
     localModelsMock.verifyIntegrity.mockRejectedValue(new Error('checksum mismatch'))
     await expect(runPrewarmHandler(settingsFor(), null, 'THEM: hello')).resolves.toBeUndefined()
     expect(localRuntimeMock.prewarm).not.toHaveBeenCalled()
+  })
+})
+
+describe('MQA-270 (B8) — the free-RAM floor on unattended warms', () => {
+  it('refuses to warm when free RAM is below the floor, whatever the toggles say', () => {
+    // A 16 GB machine with 3 GB free used to commit up to ~5.6 GB from login onward for an ask that
+    // might never come. Refusing costs one cold start on the next real ask — never correctness.
+    expect(localPrewarmEligible(settingsFor(), null, true, 3.9)).toBe(false)
+  })
+
+  it('warms exactly at the floor', () => {
+    expect(localPrewarmEligible(settingsFor(), null, true, 4)).toBe(true)
+  })
+
+  it('the default reads the LIVE machine — tests must always pin it', () => {
+    // This file pins freeRamGB=8 on every call above, because the default parameter reads freemem() and
+    // a squeezed CI runner would otherwise fail tests that have nothing to do with memory.
+    expect(PREWARM_MIN_FREE_RAM_GB).toBe(4)
   })
 })

@@ -282,7 +282,9 @@ export function App(): JSX.Element {
     // Persist a mid-session engine fallback to Settings (checkable after the fact) instead of a live banner.
     () => void patch({ asrLastFallbackAt: Date.now() }),
     settings?.micDeviceId,
-    settings?.asrEntityBias ? entityNames : undefined
+    settings?.asrEntityBias ? entityNames : undefined,
+    // MQA-270 (B7): lets the whisper prewarm skip itself on parakeet/apple installs — see useListen.
+    settings?.asrEngine
   )
   // Surface a best-quality ASR downgrade (listen.qualityDegraded — WebGPU/large model unavailable) to Settings, mirroring the
   // onEngineFallback → asrLastFallbackAt wiring just above. Patches exactly once per transition to true —
@@ -350,16 +352,11 @@ export function App(): JSX.Element {
       void import('./components/Answer')
       void import('./components/Copilot')
     }, 2000)
-    // Also warm the two toolbar-button views (Settings is a large chunk) so their first click commits its
-    // transition on the next tick instead of after a cold parse — otherwise that load beat reads as the
-    // button "not responding". Deeper views (Review/Brain/Agenda) stay lazy until actually navigated to.
-    const t = setTimeout(() => {
-      idle(() => {
-        void import('./components/Settings')
-        void import('./components/RecallView')
-      }, 2000)
-    }, 1000)
-    return () => clearTimeout(t)
+    // MQA-270 (B10): the second warm (Settings 189 kB + RecallView 23 kB, ~1 s after mount, every
+    // launch) is retired. The Answer/Copilot warm above stays — it is load-bearing for the React #426
+    // transition documented above, and those views are reachable from the very first keystroke. Settings
+    // and Recall are behind a deliberate click; their first open pays one cold parse, and a user who only
+    // records a meeting no longer pays 212 kB of parse at every boot for views they never open.
   }, [])
 
   const [collapsed, setCollapsed] = useState(false)

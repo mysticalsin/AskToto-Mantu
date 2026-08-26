@@ -1,6 +1,6 @@
-import { isValidElement, cloneElement, type ReactElement } from 'react'
+import { isValidElement, cloneElement, useEffect, type ReactElement } from 'react'
 import { Streamdown } from 'streamdown'
-import { CodeBlock } from './CodeBlock'
+import { CodeBlock, warmHighlighter } from './CodeBlock'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // Override streamdown's code rendering with our shiki block (reliable colors) and
@@ -21,6 +21,9 @@ const components: any = {
 }
 
 export function Markdown({ children }: { children: string }): JSX.Element {
+  // MQA-270 (B3): warm shiki when markdown actually mounts — see warmHighlighter's comment for why this
+  // moved out of CodeBlock's module scope. Idempotent (hlPromise singleton), so re-mounts are free.
+  useEffect(() => warmHighlighter(), [])
   return (
     <div className="md">
       <Streamdown components={components} shikiTheme={['catppuccin-mocha', 'catppuccin-mocha']}>

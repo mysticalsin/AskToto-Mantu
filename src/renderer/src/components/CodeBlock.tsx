@@ -51,11 +51,14 @@ function highlighter(): Promise<HighlighterCore> {
   return hlPromise
 }
 
-// Pre-warm the highlighter singleton shortly after this module loads, so the FIRST code block to
-// actually stream in doesn't burst-fetch every curated grammar + the oniguruma wasm engine all at once
-// mid-answer. Idle-scheduled (2s fallback where requestIdleCallback isn't available) so it never
-// competes with first paint/streaming text for the main thread.
-if (typeof window !== 'undefined') {
+/** MQA-270 (B3): the warm is exported for Markdown.tsx to fire ON MOUNT, no longer a module-scope side
+ *  effect. As a bare side effect it ran the moment this module loaded — and once B2's static-import
+ *  chain existed, that was BOOT, pulling 622 kB of oniguruma wasm plus 1.11 MB of grammars into every
+ *  launch and pinning the HighlighterCore forever via the hlPromise singleton, for a surface most
+ *  sessions never render. Firing on Markdown mount keeps the original intent (the first code block must
+ *  not burst-fetch grammars mid-answer) while a session that never renders markdown never pays it. */
+export function warmHighlighter(): void {
+  if (typeof window === 'undefined') return
   const ric = (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback
   const warm = (): void => void highlighter().catch(() => {})
   if (ric) ric(warm)
