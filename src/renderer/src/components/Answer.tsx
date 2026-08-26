@@ -223,7 +223,12 @@ export const Answer = memo(function Answer({
       <span
         className={`h-1.5 w-1.5 rounded-full bg-[var(--color-accent)]${streaming ? ' animate-pulse' : ''}`}
       />
-      {streaming ? `Asking ${who}…` : `Answered by ${who}`}
+      {/* MQA-269: neutral while streaming. This row re-renders on every failover attempt, so naming the
+          provider mid-stream made the user watch the brand change ("Asking DeepSeek…" → "Asking NVIDIA ·
+          NIM…") — the loudest artefact of a failover that succeeded. The after-the-fact `Answered by`
+          stays: a quiet, honest record of who actually answered is what makes silent failover honest
+          rather than deceptive. */}
+      {streaming ? 'Thinking…' : `Answered by ${who}`}
     </div>
   ) : null
 
@@ -329,14 +334,14 @@ export const Answer = memo(function Answer({
   if (thinking) {
     // Reasoning models (e.g. Kimi Code) think before the first token, and Dust specifically can take
     // ~40-48s to first token — past ~8s, swap the static label for an elapsed-time count so a long wait
-    // still reads as "working" instead of "stuck". Naming the brain ("Asking your Dust agent…") makes the
-    // wait attributable instead of anonymous — users forgive an agent working, not a frozen spinner.
-    const label =
-      thinkingSecs >= 8
-        ? `Still working… (${thinkingSecs}s)${who ? `, ${who} is on it` : ''}`
-        : who
-          ? `Asking ${who}…`
-          : 'Thinking…'
+    // still reads as "working" instead of "stuck". The elapsed counter is what prevents the frozen-
+    // spinner read; the provider name is not.
+    //
+    // MQA-269: no provider name here any more. This label re-renders on every failover attempt, so
+    // naming the brain narrated each hop ("Asking DeepSeek…" → "NVIDIA · NIM is on it") — the wait
+    // stayed the same, only the brand flickered. The finished answer's `Answered by` byline remains the
+    // one attribution surface, after the fact, when it is stable and true.
+    const label = thinkingSecs >= 8 ? `Still working… (${thinkingSecs}s)` : 'Thinking…'
     return (
       <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
         {header}

@@ -775,6 +775,12 @@ export const BaseSettingsSchema = z.object({
   // connected CLI integration (Claude/Codex) the primary so the user's local subscription is used before
   // any metered API key, and prefers CLI on failover. With no CLI connected, 'cli' behaves like 'api'.
   providerPriority: z.enum(['cli', 'api']).default('api'),
+  /** MQA-269: user-authored failover order. Empty (the default) is EXACTLY today's behaviour — PROVIDERS
+   *  declaration order shaped by providerPriority/preferFree. Non-empty means "try these, in this order,
+   *  first"; providers not listed stay reachable after the chain, because a chain is a preference, not an
+   *  allowlist — a user who adds a fourth key later must not silently lose failover to it. Ids are
+   *  filtered through PROVIDERS at read time so a registry edit can never crash a stale profile. */
+  providerFallbackOrder: z.array(ProviderIdSchema).max(8).default([]),
   providerModels: z.record(z.string(), z.string()).default({}),
   customBaseUrl: z
     .string()
@@ -1295,6 +1301,7 @@ export const DUST_SPOTLIGHT_REF_AGENT_ID = 'GOr913Zr5V' // Dust agent "Spotlight
 export const DEFAULT_SETTINGS: Settings = {
   provider: 'cloudflare', // keep in lockstep with BaseSettingsSchema's ProviderIdSchema default above
   providerPriority: 'api',
+  providerFallbackOrder: [],
   providerModels: { dust: DUST_BASE_AGENT_ID },
   providerModelsThinking: {},
   providerModelsDeep: {},

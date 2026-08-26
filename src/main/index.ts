@@ -3809,21 +3809,36 @@ function registerIpc(): void {
       // failover line), letting the flow fall through to the reconnect-Dust message instead.
       if (!allowCrossProviderFailover(req)) return null
       const tier = routeTier(req, s.thinkingMode)
-      // Candidate order honors the CLI-vs-API priority: when 'cli', CLI-kind providers sort first so a
-      // failover reaches for another local CLI before a metered API. V8's Array.sort is stable, so equal-
-      // rank providers keep their PROVIDERS declaration order; 'api' (default) leaves the order unchanged.
-      // `preferFree` (set when the primary just ran OUT of credit/tokens, gated on
+      // MQA-269: a user-authored chain IS the priority. When present it replaces both sort keys —
+      // providerPriority's CLI bucket-swap and preferFree's free-tier float — because both exist to GUESS
+      // an order the user has now stated outright. Silently re-sorting a chain the user typed is the
+      // failure mode this field exists to end; preferFree in particular would reorder it at exactly the
+      // moment the order matters most (the primary just ran out). Providers not in the chain are appended
+      // after it, still in declaration order — a chain is a preference, not an allowlist, so a key added
+      // later remains a reachable backup without re-editing the chain.
+      // Ids are filtered through PROVIDERS so a stale profile naming a retired provider cannot crash, and
+      // deduped so a hand-edited settings file cannot make one provider eat two attempts.
+      const userOrder = s.providerFallbackOrder.filter(
+        (p, i, a) => p in PROVIDERS && a.indexOf(p) === i
+      ) as ProviderId[]
+      const all = Object.keys(PROVIDERS) as ProviderId[]
+      // Candidate order (no chain) honors the CLI-vs-API priority: when 'cli', CLI-kind providers sort
+      // first so a failover reaches for another local CLI before a metered API. V8's Array.sort is
+      // stable, so equal-rank providers keep their PROVIDERS declaration order; 'api' (default) leaves
+      // the order unchanged. `preferFree` (set when the primary just ran OUT of credit/tokens, gated on
       // resilience.preferFreeOnExhaustion) adds a secondary key that floats free-tier providers ahead of
       // paid ones — "prefer a free backup when the paid one is spent" — without touching the normal order.
-      const order = (Object.keys(PROVIDERS) as ProviderId[]).slice().sort((a, b) => {
-        const cliRank =
-          s.providerPriority === 'cli'
-            ? (PROVIDERS[a].kind === 'cli' ? 0 : 1) - (PROVIDERS[b].kind === 'cli' ? 0 : 1)
-            : 0
-        if (cliRank !== 0) return cliRank
-        if (preferFree) return (PROVIDERS[a].freeTier ? 0 : 1) - (PROVIDERS[b].freeTier ? 0 : 1)
-        return 0
-      })
+      const order = userOrder.length
+        ? [...userOrder, ...all.filter((p) => !userOrder.includes(p))]
+        : all.slice().sort((a, b) => {
+            const cliRank =
+              s.providerPriority === 'cli'
+                ? (PROVIDERS[a].kind === 'cli' ? 0 : 1) - (PROVIDERS[b].kind === 'cli' ? 0 : 1)
+                : 0
+            if (cliRank !== 0) return cliRank
+            if (preferFree) return (PROVIDERS[a].freeTier ? 0 : 1) - (PROVIDERS[b].freeTier ? 0 : 1)
+            return 0
+          })
       const eligible = (p: ProviderId): boolean => {
         if (tried.includes(p)) return false
         // Métis Local replaces the generic key/model/vision checks with localEligibleFor — the SAME
