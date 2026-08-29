@@ -95,6 +95,16 @@ function hasUsableProvider(s: Settings): boolean {
  *  provider is down or none is configured, instead of never being indexed at all. */
 function pickProviderCandidates(s: Settings): { provider: ProviderId; model: string; key: string }[] {
   if (s.localLlm.useFor.summary && localBaseReady(s, getAllowedProviders())) {
+    // MQA-018 (exclusive-local parity): honor the SAME session-long 'unavailable' lockout the fallback
+    // branch below already excludes, and that localOnlyRebuildBlocked's comment assumes is "already
+    // excluded upstream in pickProviderCandidates". `useFor.summary` is an explicit privacy choice, so
+    // this branch must NEVER waterfall to cloud — but returning a `local` candidate while the runtime is
+    // in its restart-budget-exhausted lockout hands hasUsableProvider() the weakest possible evidence:
+    // it authorizes startRebuild's purge, then EVERY re-extraction fails against the dead runtime with
+    // nothing (cloud is off by choice) to catch it — a wiped brain that cannot rebuild until relaunch.
+    // Returning [] instead makes hasUsableProvider() false, so the rebuild refuses with its actionable
+    // error and the meeting simply stays unindexed (retried once the runtime recovers) — never uploaded.
+    if (localRuntimeState() === 'unavailable') return []
     return [{ provider: 'local', model: s.localLlm.modelId, key: '' }]
   }
 
