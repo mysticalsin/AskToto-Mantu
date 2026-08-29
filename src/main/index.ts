@@ -121,6 +121,7 @@ import {
   localBaseReady,
   localPrewarmEligible,
   localVisionPrivacyRequired,
+  localPrimaryEligibleFor,
   pickPrimaryProvider,
   allowCrossProviderFailover
 } from './llm/local-routing'
@@ -163,6 +164,7 @@ import {
   settleCommitment,
   startRebuild
 } from './brain/ingest'
+import { runConsolidationIfDue, scheduleConsolidation } from './brain/consolidate'
 import {
   renameEntity,
   mergeEntities,
@@ -283,6 +285,7 @@ import { asrManifestComplete } from './asr-manifest'
 import { isInsideResourceBase, realResourceBase } from './asr-model-path'
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli, checkCliSession } from './cli'
 import { connectMcp, pushToMcp } from './mcp/mcpClient'
+import { pushQueue, type OutboundAction, type OutboundActionKind } from './mcp/pushQueue'
 import { activateLicense, checkLicenseGrace, heartbeat } from './license'
 import {
   setMcpApiKey,
@@ -2988,6 +2991,43 @@ function registerIpc(): void {
     return kind.success ? MCP_KIND_LABELS[kind.data] : connectionId
   }
 
+  // Wave 4: mcp:push's own MCP tool names are per-connection and user/operator-configured — there is no
+  // registry mapping them to the queue's small action-kind enum. A cheap name heuristic is enough for
+  // this queue's own purposes (it only affects a retry-log label, never routing): most tools are named
+  // for what they do (push_meeting_recap, create_task, log_note, update_deal, …).
+  function inferPushActionKind(toolName: string): OutboundActionKind {
+    const t = toolName.toLowerCase()
+    if (t.includes('deal')) return 'update_deal'
+    if (t.includes('task')) return 'create_task'
+    return 'log_note'
+  }
+
+  // The background half of the retry queue: re-attempts one durable OutboundAction against whatever the
+  // named connection's CURRENT endpoint/key are (a retry may run long after the original attempt, so the
+  // key may have since been rotated or the connection reconnected). Deliberately does not repeat the
+  // interactive handler's ClickUp-401-refresh dance below — that stays exclusive to the live, synchronous
+  // path; a ClickUp token that expired between attempts here simply dead-letters like any other repeated
+  // failure, which is an acceptable (and honest — "reconnect ClickUp") outcome for a background retry.
+  async function retryOutboundAction(action: OutboundAction): Promise<{ ok: boolean; error?: string }> {
+    const s = getSettings()
+    const conn = s.mcpConnections.find((c) => c.kind === action.kind)
+    if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(conn.id)) {
+      return { ok: false, error: `${mcpLabelFor(action.kind)} is no longer connected.` }
+    }
+    const apiKey = getMcpApiKey(conn.id)
+    return pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, action.toolName, action.payload, conn.label)
+  }
+
+  // Same minute-ish cadence as the brain reconcile tick (BRAIN_RECONCILE_MS, set up below in
+  // app.whenReady) — cheap enough to poll often, and pushQueue.processDue itself no-ops instantly when
+  // the queue is empty or every due action is still cooling down on backoff. Lives here (registerIpc),
+  // not next to that tick, because retryOutboundAction and mcpLabelFor above are this function's own
+  // locals — pulling the timer out to whenReady's scope would mean hoisting both to module scope for no
+  // real benefit.
+  trackTimer(setInterval(() => {
+    void pushQueue.processDue(retryOutboundAction).catch((e) => mainLog.warn('[mcp-push-queue] processDue tick failed:', e))
+  }, 60 * 1000))
+
   // Test connection: connects + authenticates + lists tools, persists NOTHING (mirrors BidStack's own
   // "Test endpoint" button). Lets the user verify before committing an endpoint/key to disk.
   ipcMain.handle(IPC.mcpTestConnection, async (e, payload: unknown) => {
@@ -3110,6 +3150,20 @@ function registerIpc(): void {
       }
     }
     auditLog('mcp.push', { connectionId, tool: toolName, ok: r.ok })
+    // Wave 4: the live attempt above already gave the renderer an immediate answer. A FAILURE also goes
+    // into the durable retry queue so a transient MCP-endpoint blip doesn't silently drop the push —
+    // enqueue is idempotent (same connection+tool+payload collapses to one entry), so a user who clicks
+    // "Push" again after a failure never double-queues the same write. Confidential is read straight off
+    // `args` (McpArgValueSchema already allows a boolean value there) — never sent, ever, by processDue.
+    if (!r.ok) {
+      pushQueue.enqueue({
+        kind: conn.kind,
+        action: inferPushActionKind(toolName),
+        toolName,
+        payload: args,
+        confidential: args.confidential === true
+      })
+    }
     return r
   })
 
@@ -4413,7 +4467,10 @@ function registerIpc(): void {
     // Métis Local outranks cliPrimary (but never providerOverride): an in-scope suggest/summary/vision ask
     // routes to the on-device model first whenever it's eligible right now (PLAN.md §4.3 "Routing
     // precedence, explicit") — see local-routing.ts's pickPrimaryProvider for the exact precedence rule.
-    const localPrimaryEligible = localEligibleFor(req, s, routeTier(req, s.thinkingMode), allowed)
+    // localPrimaryEligibleFor (not the bare localEligibleFor) layers Wave 2's routingMode on top: 'api'
+    // forces this false so local can never win the first-attempt pick, 'local' relaxes the per-mode
+    // useFor toggle, 'auto' is byte-identical to the old localEligibleFor call.
+    const localPrimaryEligible = localPrimaryEligibleFor(req, s, routeTier(req, s.thinkingMode), allowed)
     const localVisionRequired = localVisionPrivacyRequired(req, s)
     const primary = pickPrimaryProvider(
       req.providerOverride,
@@ -4550,7 +4607,11 @@ function registerIpc(): void {
     scheduleRebuild() // refresh the knowledge graph with the new note (debounced; no-op if disabled)
     // Persist the small background-work marker before confirming the transcript save. The actual LLM
     // extraction remains asynchronous, but a quit immediately after Save can now resume it.
-    await enqueueIngest(r.path)
+    // Wave 3 (settings.brainConsolidation): when batching is on, this meeting is marked pending but NOT
+    // queued for immediate extraction — it waits for the next consolidation pass (or a manual rebuild/
+    // "Index meetings" click, which scans for pending work independent of this flag) instead of paying a
+    // network round trip after every single save.
+    await enqueueIngest(r.path, { deferred: getSettings().brainConsolidation.enabled })
     // Speaker Intelligence (Phases A/B): best-effort, fire-and-forget backfill of resolved names from the
     // meeting's own Teams transcript (if one exists yet). Never awaited — must never delay or fail the
     // save response itself; see backfillSpeakerNames's own doc comment for the full quiet-no-op contract.
@@ -5923,6 +5984,12 @@ if (!app.requestSingleInstanceLock()) {
       // Registered here rather than alongside the timer so safe start skips the recurring brain work too,
       // not just the single resume — the reconcile tick reads the same index.json.
       trackTimer(setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS))
+      // Wave 3: batch brain LLM extraction into settings.brainConsolidation's daily pass budget instead
+      // of a round trip after every meeting. Hourly check, same "cheap enough to poll often, the budget
+      // does the real gating" shape as the reconcile tick above; runConsolidationIfDue itself no-ops
+      // instantly once today's passes are spent or the feature is off.
+      void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] initial consolidation check failed:', e))
+      scheduleConsolidation(60 * 60 * 1000, trackTimer)
     }
     endBootWatch(app.getPath('userData'))
   }, 15_000)

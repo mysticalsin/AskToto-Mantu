@@ -208,6 +208,17 @@ export type AuditEvent =
   | 'dust.conversation'
   | 'brain.ingest'
   | 'brain.backfill.start'
+  // Wave 3 (main/brain/consolidate.ts): one batched extraction pass actually ran. Distinct from
+  // 'brain.ingest' (per-meeting) — this is the per-PASS marker metrics.ts counts against the
+  // maxPassesPerDay budget.
+  | 'brain.consolidation'
+  // Wave 4 (main/mcp/pushQueue.ts): an outbound CRM/task-manager action was queued, retried, sent, or
+  // dead-lettered — the audit trail for the push queue's own lifecycle, separate from 'mcp.push' (one
+  // live attempt).
+  | 'mcp.push.queued'
+  | 'mcp.push.retried'
+  | 'mcp.push.dead_letter'
+  | 'mcp.push.skipped_confidential'
   | 'local.runtime.start'
   | 'local.runtime.stop'
   | 'local.runtime.crash'

@@ -61,6 +61,7 @@ import {
   Lock,
   Timer,
   ListTree,
+  Route,
   type LucideIcon
 } from 'lucide-react'
 import { formatSavedTime, timeSavedFromTotals } from '@shared/time-saved'
@@ -1547,6 +1548,49 @@ function ResilienceSection({
       icon={ShieldCheck}
     >
       <div className="flex flex-col gap-3">
+        {/* Wave 2 (docs/PROVIDER-ROUTING-POLICY.md): the top-level policy, separate from Local AI's own
+            "use for suggestions/summaries/screenshots" toggles above, which stay how 'auto' picks a mode. */}
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-1.5 text-[13px] text-[color:var(--cl-foreground)]">
+            <Route size={14} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />
+            Routing mode
+          </div>
+          <div className="flex gap-1.5">
+            {(
+              [
+                ['local', 'Local'],
+                ['auto', 'Auto'],
+                ['api', 'API']
+              ] as const
+            ).map(([m, label]) => {
+              const on = settings.routingMode === m
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => patch({ routingMode: m })}
+                  aria-pressed={on}
+                  className={[
+                    'no-drag cl-focus flex-1 rounded-[8px] border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
+                    on
+                      ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)] text-[color:var(--cl-foreground)]'
+                      : 'border-[var(--cl-border)] bg-white/[0.02] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.05]'
+                  ].join(' ')}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            {settings.routingMode === 'local'
+              ? 'Prefer Métis Local for every eligible ask (live suggestions, summaries, screenshots) and escalate to your cloud provider only on a hard failure.'
+              : settings.routingMode === 'api'
+                ? "Use your configured provider / backup order below. The on-device model still answers as the last resort when it's enabled as a safety net and everything else is exhausted."
+                : 'Auto (default): health, headroom, free-tier exhaustion and each task\u2019s Local AI toggle below decide, per ask.'}
+          </span>
+        </div>
+
         <div className="rounded-[10px] border border-[var(--cl-border)] bg-white/[0.02] p-3">
           {limited.length === 0 ? (
             <div className="flex items-center gap-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
