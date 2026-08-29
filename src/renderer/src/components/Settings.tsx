@@ -5046,8 +5046,6 @@ const TABS: {
     desc: 'Where meetings are saved, and how long they stay.',
     keywords: ['meetings & transcripts', 'folder', 'retention', 'danger zone', 'delete', 'ingest']
   },
-  // Label shortened to keep all nine tabs on ONE line at the overlay's width — the MantuMark icon already
-  // signals "Mantu"; the tab id stays 'intelligence' so nothing else changes.
   {
     // Wave 5: label "Brain" — CRM/MCP push lives here as Integrations content under the same tab
     // (overlay width cannot afford a tenth tab). Keywords keep old "Intelligence" / CRM search hits.
@@ -5058,7 +5056,8 @@ const TABS: {
     keywords: [
       'mantu intelligence', 'intelligence', 'brain', 'meetings & follow-up', 'published wiki',
       'polo pre-sales', 'crm', 'integrations', 'knowledge graph', 'plane', 'clickup',
-      'task management', 'book next steps', 'action items', 'consolidation', 'token', 'batch index'
+      'task management', 'book next steps', 'action items', 'consolidation', 'token', 'batch index',
+      'brain consolidation', 'batch index (1–2× / day)', 'prefer on-device model for consolidation'
     ]
   },
   {

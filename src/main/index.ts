@@ -113,6 +113,15 @@ import {
   resetProviderHealth,
   unhealthyProviders
 } from './llm/provider-health'
+
+/** Wave 2 — session-scoped last successful failover hop for the one-shot UI chip. Never persisted. */
+let lastFailoverNotice: { from: string; to: string; at: number; reason: string } | null = null
+export function peekLastFailoverNotice(): typeof lastFailoverNotice {
+  return lastFailoverNotice
+}
+export function dismissLastFailoverNotice(): void {
+  lastFailoverNotice = null
+}
 import * as localRuntime from './llm/local-runtime'
 import {
   localEligibleFor,
@@ -1332,6 +1341,7 @@ function publicSettings(): PublicSettings {
     // MQA-004: the honest counterpart to providerReady — which providers actually REJECTED their
     // credentials recently, so the UI can say "your key stopped working" instead of claiming ready.
     unhealthyProviders: unhealthyProviders(),
+    lastFailover: lastFailoverNotice,
     // Background on-device screen pre-analysis can actually run. Asked of the ENGINE, never recomputed
     // here: the old `s.backgroundScreenContext && localReady` copy missed the macOS OCR engine (Settings
     // said "not running" while it captured every 6s) and could not see a dead foreground watcher at all.
@@ -2455,6 +2465,11 @@ function registerIpc(): void {
     }
     return s
   })
+  ipcMain.handle(IPC.dismissFailoverNotice, (e) => {
+    assertMainWindow(e)
+    dismissLastFailoverNotice()
+    return { ok: true as const }
+  })
   ipcMain.handle(IPC.permissionsGet, (e) => {
     assertMainWindow(e)
     return getPlatformPermissions()
@@ -3155,6 +3170,12 @@ function registerIpc(): void {
     const parsed = McpPushPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
     const { connectionId, toolName, args } = parsed.data
+    // Wave 4 / QA defense-in-depth: never push when the caller marks the payload confidential
+    // (Review already hides the chips; this stops a buggy/compromised renderer from bypassing).
+    if (args && typeof args === 'object' && (args as { confidential?: unknown }).confidential === true) {
+      auditLog('mcp.push.skipped_confidential', { connectionId, tool: toolName })
+      return { ok: false, error: 'This meeting is marked confidential — push is blocked.' }
+    }
     const s = getSettings()
     const conn = s.mcpConnections.find((c) => c.id === connectionId)
     if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(connectionId)) {
@@ -4030,6 +4051,18 @@ function registerIpc(): void {
     const failover = (tried: ProviderId[], preferFree = false, race?: AttemptRace): boolean => {
       const next = pickFailover(tried, preferFree)
       if (!next) return false
+      // Wave 2 — record the hop for the one-shot UI chip (docs/PROVIDER-ROUTING-POLICY.md). Only fire
+      // when we actually start a different provider; a no-op return above leaves the notice untouched.
+      const from = tried.length ? tried[tried.length - 1]! : 'unknown'
+      if (from !== next) {
+        lastFailoverNotice = {
+          from,
+          to: next,
+          at: Date.now(),
+          reason: preferFree ? 'exhausted' : 'failover'
+        }
+        auditLog('provider.failover', { from, to: next, reason: lastFailoverNotice.reason })
+      }
       attempt(next, tried, 0, race)
       return true
     }

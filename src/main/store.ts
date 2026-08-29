@@ -212,6 +212,13 @@ function readAllowedFrom(p: string): string[] | null {
 const ADMIN_POLICY_REPROBE_MS = 60_000
 let _adminManagedCache: { mtime: number; at: number; content: string | null } | null = null
 
+/** Test-only: drop the admin-policy content snapshot between cases that redirect ProgramData /
+ *  recreate the policy file. Same class of flake as resetSettingsCacheForTests — mtime collision +
+ *  wall-clock TTL would otherwise serve a previous case's bytes (or skip the probe entirely). */
+export function resetAdminManagedCacheForTests(): void {
+  _adminManagedCache = null
+}
+
 function adminManagedContent(): string | null {
   const mtime = safeMtime(adminManagedConfigPath())
   const now = Date.now()
