@@ -73,8 +73,13 @@ export interface ConsolidationRunResult {
   ran: boolean
   queued: number
   /** Present when brainConsolidation.enabled is false or today's pass budget is already spent. */
-  reason?: 'disabled' | 'budget-spent'
+  reason?: 'disabled' | 'budget-spent' | 'in-flight'
 }
+
+/** Process-wide single-flight — overlapping hourly ticks (or a manual trigger racing the timer) must
+ *  never both call startBackfill + recordConsolidationPass for the same pending set, or today's
+ *  budget is spent twice for one logical pass. */
+let consolidating = false
 
 /**
  * The one entry point the timer below (and any manual "consolidate now" trigger) calls: if consolidation
@@ -85,17 +90,28 @@ export interface ConsolidationRunResult {
 export async function runConsolidationIfDue(s: Settings = getSettings()): Promise<ConsolidationRunResult> {
   if (!s.brainConsolidation.enabled) return { ran: false, queued: 0, reason: 'disabled' }
   if (!canConsolidateToday(s)) return { ran: false, queued: 0, reason: 'budget-spent' }
-  let result: BackfillStartResult
+  if (consolidating) return { ran: false, queued: 0, reason: 'in-flight' }
+  consolidating = true
   try {
-    result = startBackfill()
-  } catch (e) {
-    // Never let a scan failure (a locked index file, a missing meetings folder) throw out of the timer
-    // — the next hourly tick gets another try, same as every other best-effort background pass in main.
-    mainLog.warn('[brain] consolidation pass could not scan for pending meetings:', e)
-    return { ran: false, queued: 0 }
+    let result: BackfillStartResult
+    try {
+      result = startBackfill()
+    } catch (e) {
+      // Never let a scan failure (a locked index file, a missing meetings folder) throw out of the timer
+      // — the next hourly tick gets another try, same as every other best-effort background pass in main.
+      mainLog.warn('[brain] consolidation pass could not scan for pending meetings:', e)
+      return { ran: false, queued: 0 }
+    }
+    if (result.queued > 0) await recordConsolidationPass(s)
+    return { ran: result.queued > 0, queued: result.queued }
+  } finally {
+    consolidating = false
   }
-  if (result.queued > 0) await recordConsolidationPass(s)
-  return { ran: result.queued > 0, queued: result.queued }
+}
+
+/** Test-only: clear the in-flight lock between suites. */
+export function resetConsolidationLockForTests(): void {
+  consolidating = false
 }
 
 /**

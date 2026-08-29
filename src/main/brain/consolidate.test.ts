@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { app } from 'electron'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { getSettings, setSettings, setApiKey } from '../store'
-import { canConsolidateToday, recordConsolidationPass, runConsolidationIfDue } from './consolidate'
+import { canConsolidateToday, recordConsolidationPass, runConsolidationIfDue, resetConsolidationLockForTests } from './consolidate'
 import { whenIndexWritesSettle } from './ingest'
 
 vi.mock('electron')
@@ -26,6 +26,7 @@ let userData: string
 let meetingsFolder: string
 
 beforeEach(() => {
+  resetConsolidationLockForTests()
   userData = mkdtempSync(join(tmpdir(), 'asktoto-consolidate-test-'))
   meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-consolidate-meetings-'))
   ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {

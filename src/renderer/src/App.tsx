@@ -416,6 +416,10 @@ export function App(): JSX.Element {
   // Shown as a banner inside Settings — set when we redirect the user there for a specific reason
   // (e.g. no provider configured) so the redirect explains itself instead of looking broken.
   const [settingsNotice, setSettingsNotice] = useState<string | undefined>(undefined)
+  // Wave 2 failover chip: hide locally the instant the user dismisses, keyed by the event's `at`.
+  // refresh() after dismissFailoverNotice can race a concurrent focus poll and re-show the same hop
+  // from a stale getSettings snapshot — comparing `at` keeps the chip down until a NEW failover lands.
+  const [failoverDismissedAt, setFailoverDismissedAt] = useState(0)
 
   // The "Add your API key" nudge under the bar is a first-run courtesy, not a permanent nag. It shows
   // while no provider is ready, but only for 10 minutes after onboarding — then it steps aside (Settings
@@ -600,6 +604,13 @@ export function App(): JSX.Element {
   const manualSave = useCallback(async (): Promise<void> => {
     const a = ask.answer
     if (!a || a.streaming || !listen.lines.length) return
+    const id = String(meetingStartRef.current)
+    // Same redundancy + in-flight guards as the auto-save effect — without them a double-click (or a
+    // Save tapped while autosave is mid-IPC) writes the meeting twice under two paths.
+    if (meetingSaveIsRedundant(listen.lines.length, id, savedRef.current, claimedSavesRef.current)) return
+    if (savingRef.current) return
+    claimedSavesRef.current.add(id)
+    savingRef.current = true
     try {
       const title = defaultMeetingTitle(listen.lines, mode)
       const r = await window.toto.saveTranscript({
@@ -609,15 +620,19 @@ export function App(): JSX.Element {
         lines: listen.lines,
         recap: a.text
       })
-      savedRef.current = String(meetingStartRef.current)
+      savedRef.current = id
       setSavedPath(r.path)
       setSaveError(null)
       setSaveAttempts(0)
       setSaveGaveUp(false)
     } catch (e) {
+      // Released only on failure so a later retry (manual or auto) can still persist this meeting.
+      claimedSavesRef.current.delete(id)
       // A manual retry that fails does NOT restart the ladder, so saveGaveUp stays as it was: still true
       // after a give-up (the terminal line remains correct), still false while the ladder is running.
       setSaveError(saveFailureReason(e))
+    } finally {
+      savingRef.current = false
     }
   }, [ask.answer, listen.lines, mode])
 
@@ -3225,7 +3240,11 @@ export function App(): JSX.Element {
           {/* Wave 2 — one-shot failover chip (docs/PROVIDER-ROUTING-POLICY.md). Distinct from the standing
               dead-key banner above: this is an EVENT (primary hopped once), dismissible, and clears via
               dismissFailoverNotice so it never nags every poll. */}
-          {settings?.lastFailover && view !== 'settings' && !showListeningChrome && (() => {
+          {settings?.lastFailover &&
+            settings.lastFailover.at > failoverDismissedAt &&
+            view !== 'settings' &&
+            !showListeningChrome &&
+            (() => {
             const hop = settings.lastFailover!
             const fromLabel = PROVIDERS[hop.from as keyof typeof PROVIDERS]?.label ?? hop.from
             const toLabel = PROVIDERS[hop.to as keyof typeof PROVIDERS]?.label ?? hop.to
@@ -3233,6 +3252,7 @@ export function App(): JSX.Element {
               <button
                 type="button"
                 onClick={() => {
+                  setFailoverDismissedAt(hop.at)
                   void window.toto.dismissFailoverNotice().then(() => refresh()).catch(() => {})
                 }}
                 className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-white/15 bg-white/[0.06] px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-ink-2)]"

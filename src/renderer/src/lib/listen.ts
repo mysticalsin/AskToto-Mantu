@@ -596,6 +596,10 @@ export function useListen(
   // samples to window.toto.speakerEmbed. Whisper processes one window at a time same as pump() above, so
   // this single ref is enough; null whenever the in-flight window is 'you' (never labeled) or absent.
   const pendingWhisperEmbedRef = useRef<Float32Array | null>(null)
+  // Epoch stamped when the Whisper audio window was posted — the worker reply is async and can land
+  // after stop()/start() of the next meeting; without this check commitLine would paste into the new
+  // transcript (liveRef is true again). Same class as the Parakeet/Apple jobEpoch guards in pump().
+  const pendingWhisperEpochRef = useRef(0)
   // Trailing run of consecutive 'them' speech (joined) since the last 'you' turn or last auto-answer fire.
   // The auto-answer endpoints on this COALESCED turn rather than a single VAD window, so a question split
   // across windows by a mid-sentence hesitation pause (more likely now the endpoint is a snappy 0.6s) still
@@ -784,6 +788,10 @@ export function useListen(
     if (!readyRef.current || busy.current || queue.current.length === 0) return
     const job = queue.current.shift() as { audio: Float32Array; speaker: Speaker }
     busy.current = true
+    // Stamp the session epoch at dequeue so an in-flight decode that lands after stop()/start() of the
+    // NEXT meeting cannot commitLine into the wrong transcript (liveRef is true again for the new
+    // session — epoch is the only reliable "same meeting" check; same class as MQA-157 for probes).
+    const jobEpoch = sessionEpochRef.current
     // ASR quality (1B.2b) — show the "…" placeholder for this speaker the instant decode actually BEGINS
     // (not merely queued), so its timing matches when real speech was captured rather than however long
     // it sat behind a backlog.
@@ -799,6 +807,7 @@ export function useListen(
       )
       void Promise.race([feed, timeout])
         .then((res) => {
+          if (sessionEpochRef.current !== jobEpoch) return // meeting moved on — drop stale text
           // Normalize both feed shapes: bare string (legacy/error paths) and {text, name?} (Speaker
           // Intelligence labels THEM windows main-side — see SPEAKER-INTELLIGENCE-PLAN §3).
           const text = typeof res === 'string' ? res : res.text
@@ -819,6 +828,7 @@ export function useListen(
           }
         })
         .catch((err) => {
+          if (sessionEpochRef.current !== jobEpoch) return
           parakeetFailures.current += 1
           console.warn(
             `[listen] parakeet window failed (${parakeetFailures.current}/${PARAKEET_MAX_FAILURES}):`,
@@ -844,6 +854,7 @@ export function useListen(
       )
       void Promise.race([feed, timeout])
         .then((res) => {
+          if (sessionEpochRef.current !== jobEpoch) return
           const text = typeof res === 'string' ? res : res.text
           const speakerName = typeof res === 'string' ? undefined : res.name
           parakeetFailures.current = 0 // success (even empty) resets the IPC-failure streak
@@ -859,6 +870,7 @@ export function useListen(
           }
         })
         .catch((err) => {
+          if (sessionEpochRef.current !== jobEpoch) return
           parakeetFailures.current += 1
           console.warn(
             `[listen] apple speech window failed (${parakeetFailures.current}/${PARAKEET_MAX_FAILURES}):`,
@@ -886,6 +898,8 @@ export function useListen(
       }
     }
     if (!workerRef.current) {
+      // beginProvisional already showed "…" — clear it so a missing worker never leaves a stuck placeholder.
+      clearProvisional()
       busy.current = false
       return
     }
@@ -894,6 +908,7 @@ export function useListen(
     // (postMessage's transfer list detaches job.audio.buffer synchronously), so the 'text' response
     // handler can still hand the exact same samples to window.toto.speakerEmbed afterwards.
     pendingWhisperEmbedRef.current = job.speaker === 'them' ? job.audio.slice() : null
+    pendingWhisperEpochRef.current = jobEpoch
     workerRef.current.postMessage({ type: 'audio', audio: job.audio, speaker: job.speaker }, [job.audio.buffer])
     // fallBackToWhisper (called in the parakeet .catch above) is forward-declared below and intentionally
     // omitted from deps: pump → fallBackToWhisper → ensureWorker → pump is a cycle, so listing it would TDZ
@@ -934,6 +949,14 @@ export function useListen(
         // armNetworkRetry is defined further down (after ensureWorker) and forward-referenced via closure
         // — same pattern as pump → fallBackToWhisper above. It only runs later, once this handler actually
         // fires, by which point it's fully initialized; deliberately omitted from this useCallback's deps.
+        if (pendingWhisperEpochRef.current !== sessionEpochRef.current) {
+          // Stale decode from a previous meeting — drop without touching live UI/error state.
+          clearProvisional()
+          pendingWhisperEmbedRef.current = null
+          busy.current = false
+          pump()
+          return
+        }
         if (!armNetworkRetry(m.message ?? '')) {
           const note = m.message ?? 'transcription error'
           // armNetworkRetry declines once the model is loaded because this is a per-window decode
@@ -951,6 +974,12 @@ export function useListen(
         clearProvisional() // this window has settled — replace the placeholder with the real line below
         const embedAudio = pendingWhisperEmbedRef.current
         pendingWhisperEmbedRef.current = null
+        if (pendingWhisperEpochRef.current !== sessionEpochRef.current) {
+          // Meeting moved on while this window decoded — never commit into the new transcript.
+          busy.current = false
+          pump()
+          return
+        }
         const committedAt = commitLine(m.text || '', (m.speaker as Speaker) || 'you')
         // Speaker Intelligence (1C.2) — fire-and-forget AFTER the line already committed: never blocks
         // the live decode, and a slow/failed round trip just leaves the line unlabeled (the pre-P2
