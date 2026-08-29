@@ -804,8 +804,9 @@ export const BaseSettingsSchema = z.object({
   // as cloudflareBaseUrl's default (a URL is not a secret); the METIS_PROXY_KEY is either
   // installer-embedded (embedded-cloudflare-key.ts) or pasted once in Settings — Cloudflare stays the
   // always-on cloud path. Additional LLMs are additive: paste any featured / "more models" / Custom
-  // OpenAI-compatible API key in Settings → AI. Métis Local is opt-in (localLlm.enabled defaults off)
-  // and only preempts Cloudflare when the user turns a useFor toggle on.
+  // OpenAI-compatible API key in Settings → AI. Métis Local routing is opt-in (localLlm.enabled defaults
+  // off) but the weights still download in the background when the app opens so enabling Local later is
+  // instant. Local only preempts Cloudflare when the user turns a useFor toggle on.
   provider: ProviderIdSchema.default('cloudflare'),
   // CLI-vs-API priority. 'api' (default) keeps the explicitly-chosen `provider` as primary. 'cli' makes a
   // connected CLI integration (Claude/Codex) the primary so the user's local subscription is used before
@@ -1062,10 +1063,11 @@ export const BaseSettingsSchema = z.object({
   localLlm: z
     .object({
       // Default FALSE: Cloudflare (the shipped default provider, with Worker URL + optional embedded
-      // METIS_PROXY_KEY) is the always-on cloud path. Métis Local is opt-in — turning it on in Settings
-      // triggers the ~730 MB weight download (not part of the installer). Keeping this false means a
-      // fresh install never pays that transfer, never warms a sidecar, and never silently routes
-      // work on-device ahead of the configured Cloudflare / API providers.
+      // METIS_PROXY_KEY) is the always-on cloud path. Métis Local ROUTING is opt-in — turning it on in
+      // Settings uses the on-device model. The weights themselves still download in the background whenever
+      // the app opens (RAM permitting), so enabling Local later does not wait on a multi-GB transfer.
+      // Keeping enabled false means a fresh install never silently routes work on-device ahead of
+      // Cloudflare / API providers.
       enabled: z.boolean().default(false),
       modelId: BundledLocalModelIdSchema,
       // All FALSE by default: useFor.X means "local FIRST for X" — it short-circuits even a configured

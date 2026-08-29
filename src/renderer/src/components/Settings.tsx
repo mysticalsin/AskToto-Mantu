@@ -1846,20 +1846,20 @@ function LocalAiSection({
   // incomplete" and told the user to reinstall Métis — an instruction the build gate guarantees cannot
   // work, because no installer contains the weights (MQA-188/191).
   const downloadFailedText =
-    'Could not download the on-device model. Métis retries when you turn Local AI back on — check that huggingface.co is reachable from this network.'
+    'Could not download the on-device model. Métis retries on the next launch — check that huggingface.co is reachable from this network.'
   const notDownloadedText =
-    'Not downloaded yet. Turn on Local AI above — Métis fetches the on-device model automatically (~730 MB).'
+    'Not downloaded yet. Métis fetches the on-device model automatically when the app opens (~730 MB).'
 
   return (
     <Section
       title="Local AI"
-      desc="Optional on-device model. Off by default — Cloudflare and any API keys you add stay primary. Turn this on to download and run a small model locally for suggestions, summaries, and screenshot reads."
+      desc="Optional on-device model. Off by default for answering — Cloudflare and any API keys you add stay primary. The model downloads in the background when Métis opens so enabling Local later is instant."
       icon={Cpu}
     >
       <div className="flex flex-col gap-3">
         <ToggleRow
           label="Enable Métis Local"
-          desc="Downloads the model (~730 MB) the first time you turn this on — it is not part of the installer. Cloudflare and your other API providers stay available."
+          desc="Use the on-device model for suggestions, summaries, and screenshot reads. The weights download automatically when Métis opens (not part of the installer). Cloudflare and your other API providers stay available."
           on={settings.localLlm.enabled}
           onChange={(v) =>
             patch({
@@ -1867,7 +1867,7 @@ function LocalAiSection({
                 ...settings.localLlm,
                 enabled: v,
                 // Arm the safety net with the opt-in so a just-enabled Local install can still answer
-                // when every cloud provider is exhausted — without forcing a download while Local is off.
+                // when every cloud provider is exhausted.
                 ...(v ? { fallback: true } : {})
               }
             })
