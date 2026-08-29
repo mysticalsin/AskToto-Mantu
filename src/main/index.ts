@@ -361,7 +361,7 @@ import {
   type ProviderDef
 } from '@shared/providers'
 import { routeTier } from '@shared/routing'
-import { HedgeRace, HEDGE_DELAY_MS, type HedgeLeg } from './llm/hedge'
+import { HedgeRace, HEDGE_DELAY_MS, HEDGE_DELAY_SUGGEST_MS, type HedgeLeg } from './llm/hedge'
 import { ThinkStripper } from './llm/think-strip'
 import { redactSecrets } from '@shared/redact'
 import { isSafeAccelerator } from '@shared/accelerator'
@@ -1713,8 +1713,9 @@ function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown)
 
 // --- Screen capture (cached + pre-warmable for vision latency) -----------------------------------------
 // A vision ask issued within CAPTURE_TTL_MS of a (pre-warmed) capture reuses the JPEG instead of paying the
-// ~150-450ms capture cost again. Kept tiny so the screen the model sees is never visibly stale.
-const CAPTURE_TTL_MS = 1500
+// ~150-450ms capture cost again. 4s covers hover→click and shortcut→Enter without showing a visibly stale
+// frame; Private View / display-id checks still refuse a bad send.
+const CAPTURE_TTL_MS = 4000
 let shotCache: { image: string; width: number; height: number; dispId: number; displayMismatch: boolean; ts: number } | null = null
 type CapturedScreen = { image: string; width: number; height: number; dispId: number; displayMismatch: boolean }
 
@@ -3861,6 +3862,13 @@ function registerIpc(): void {
     // no typed claim) — redact it the same way so a secret-shaped pattern in that fallback text isn't sent
     // to the provider. Typed-claim fact-check asks never set this flag, so normal prompts are untouched.
     if (s.redactSensitive && req.redactPrompt) req.prompt = redactSecrets(req.prompt)
+    // Overlap local sidecar start with the sync brain stamp below — when local will serve (or hedge),
+    // kicking ensure NOW hides cold-load behind Receipt Mode work instead of serializing after it.
+    if (localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady)) {
+      void ensureLocalRuntimeStarted(s.localLlm.modelId, req.mode === 'vision').catch((err) =>
+        mainLog.warn('[local] early ensure failed', err instanceof Error ? err.message : String(err))
+      )
+    }
     // Receipt Mode: ground a typed answer in the user's own past meetings. Match the brain against the
     // question (which already carries the live transcript tail via the renderer's withContext) and inject
     // the relevant, meeting-cited slice per-turn. Answer mode only — never the latency-critical spoken
@@ -4620,7 +4628,12 @@ function registerIpc(): void {
       // ask when it genuinely gets there first, which is the cloud-is-slow / cloud-is-down case.
       // This early pick decides the DELAY only: startHedgeLeg re-picks the provider at fire time against
       // the live primaryChain, so a primary that fails over in the meantime is still excluded correctly.
-      const hedgeDelayMs = pickFailover([primary]) === 'local' ? 0 : HEDGE_DELAY_MS
+      const hedgeDelayMs =
+        pickFailover([primary]) === 'local'
+          ? 0
+          : req.mode === 'suggest'
+            ? HEDGE_DELAY_SUGGEST_MS
+            : HEDGE_DELAY_MS
       let hedgeTimer: NodeJS.Timeout | null = setTimeout(() => {
         hedgeTimer = null
         startHedgeLeg()
