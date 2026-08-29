@@ -85,6 +85,8 @@ import {
   localAnswerFloorEligibleFor,
   localBaseReady,
   localVisionPrivacyRequired,
+  resolveRoutingMode,
+  localPrimaryEligibleFor,
   pickPrimaryProvider,
   allowCrossProviderFailover
 } from './local-routing'
@@ -107,6 +109,15 @@ const readySettings = (overrides: Partial<LocalLlmSettings['localLlm']> = {}): L
     fallback: true,
     ...overrides
   }
+})
+
+// Wave 2: same base fixture, plus the routingMode field localPrimaryEligibleFor/resolveRoutingMode read.
+const routedSettings = (
+  routingMode: 'local' | 'api' | 'auto',
+  overrides: Partial<LocalLlmSettings['localLlm']> = {}
+): LocalLlmSettings & { routingMode: 'local' | 'api' | 'auto' } => ({
+  ...readySettings(overrides),
+  routingMode
 })
 
 beforeEach(() => {
@@ -413,6 +424,67 @@ describe('pickPrimaryProvider', () => {
 
   it('local still wins over the active provider even with no cliPrimary in play', () => {
     expect(pickPrimaryProvider(undefined, true, undefined, 'anthropic')).toBe('local')
+  })
+})
+
+// ─── resolveRoutingMode / localPrimaryEligibleFor — Wave 2 (docs/PROVIDER-ROUTING-POLICY.md) ──────────
+describe('resolveRoutingMode', () => {
+  it('reads the persisted value verbatim for each of the three modes', () => {
+    expect(resolveRoutingMode({ routingMode: 'local' })).toBe('local')
+    expect(resolveRoutingMode({ routingMode: 'api' })).toBe('api')
+    expect(resolveRoutingMode({ routingMode: 'auto' })).toBe('auto')
+  })
+
+  it('a legacy profile with no persisted routingMode at all degrades to auto, never throws', () => {
+    expect(resolveRoutingMode({} as { routingMode?: 'local' | 'api' | 'auto' })).toBe('auto')
+  })
+})
+
+describe('localPrimaryEligibleFor', () => {
+  it("'auto' is byte-identical to the bare localEligibleFor call it wraps", () => {
+    for (const mode of ['suggest', 'summary', 'vision', 'answer', 'recap'] as const) {
+      const s = routedSettings('auto')
+      expect(localPrimaryEligibleFor({ mode }, s, 'base', null)).toBe(localEligibleFor({ mode }, s, 'base', null))
+    }
+  })
+
+  it("'api' never lets local win the primary pick, even fully ready and in-scope", () => {
+    const s = routedSettings('api')
+    for (const mode of ['suggest', 'summary', 'vision'] as const) {
+      expect(localEligibleFor({ mode }, s, 'base', null)).toBe(true) // sanity: local IS otherwise eligible
+      expect(localPrimaryEligibleFor({ mode }, s, 'base', null)).toBe(false)
+    }
+  })
+
+  it("'local' bypasses the per-mode useFor toggle for every in-scope mode at once", () => {
+    const s = routedSettings('local', { useFor: { suggest: false, summary: false, vision: false } })
+    for (const mode of ['suggest', 'summary', 'vision'] as const) {
+      expect(localEligibleFor({ mode }, s, 'base', null)).toBe(false) // sanity: useFor is off
+      expect(localPrimaryEligibleFor({ mode }, s, 'base', null)).toBe(true)
+    }
+  })
+
+  it("'local' still refuses an out-of-scope mode (answer/recap) as the primary pick — cloud goes first", () => {
+    const s = routedSettings('local')
+    for (const mode of ['answer', 'recap'] as const) {
+      expect(localPrimaryEligibleFor({ mode }, s, 'base', null)).toBe(false)
+    }
+  })
+
+  it("'local' still refuses an escalated text tier — a deep/think ask is not the small bundled model's job", () => {
+    const s = routedSettings('local')
+    for (const tier of ['think', 'deep'] as const) {
+      expect(localPrimaryEligibleFor({ mode: 'suggest' }, s, tier, null)).toBe(false)
+    }
+    // vision keeps its tier exemption, same as localEligibleFor/localFallbackEligibleFor.
+    expect(localPrimaryEligibleFor({ mode: 'vision' }, s, 'deep', null)).toBe(true)
+  })
+
+  it("'local' still fails closed on readiness and the org allowlist — a preference is not a bypass of reality", () => {
+    fsState.binaryExists = false
+    expect(localPrimaryEligibleFor({ mode: 'suggest' }, routedSettings('local'), 'base', null)).toBe(false)
+    fsState.binaryExists = true
+    expect(localPrimaryEligibleFor({ mode: 'suggest' }, routedSettings('local'), 'base', ['anthropic'])).toBe(false)
   })
 })
 

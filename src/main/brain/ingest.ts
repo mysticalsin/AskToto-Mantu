@@ -1894,8 +1894,19 @@ function pump(): void {
  * extraction is allowed to start, so a quit/restart replays the meeting instead of losing it in RAM.
  * `force` is for an edited existing note such as a debrief: its prior successful extraction is no longer
  * current and must be replaced.
+ *
+ * Wave 3 (`deferred`, settings.brainConsolidation): when true, writes the exact same durable pending
+ * record as always — a quit right after Save still resumes it — but stops short of `queue.push` +
+ * `pump()`, so this one meeting does NOT trigger an immediate network-bound extraction. The file is not
+ * lost: it is still on disk, not marked `ok` in the index, so the next backfill scan (a periodic
+ * consolidation pass, or the user clicking "Index meetings" / rebuild) picks it up exactly like any other
+ * not-yet-ingested transcript — startBackfill's readdir scan finds it by content, independent of whether
+ * enqueueIngest ever ran for it at all.
  */
-export async function enqueueIngest(file: string, { force = false }: { force?: boolean } = {}): Promise<void> {
+export async function enqueueIngest(
+  file: string,
+  { force = false, deferred = false }: { force?: boolean; deferred?: boolean } = {}
+): Promise<void> {
   const s = getSettings()
   const key = basename(file)
   const sourceVersion = meetingSourceVersion(file)
@@ -1931,6 +1942,7 @@ export async function enqueueIngest(file: string, { force = false }: { force?: b
     // cannot be recovered until the index store becomes writable again.
     mainLog.warn(`[brain] could not persist live ingest intent for ${key}: ${error instanceof Error ? error.message : String(error)}`)
   }
+  if (deferred) return
   queue.push({ file, source: 'meetings', origin: 'live', ...(sourceVersion ? { sourceVersion } : {}) })
   pump()
 }

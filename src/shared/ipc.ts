@@ -230,6 +230,10 @@ export interface EvalMetrics {
   tokensIn: number
   tokensOut: number
   byProvider: Record<string, number>
+  /** Wave 3 (docs/qa/QUALITY-SCORECARD.md's "Brain LLM consolidations / active day"): count of
+   *  'brain.consolidation' audit events in this window — how many batched extraction passes actually
+   *  ran, as opposed to the per-mode provider.request counts above. */
+  brainConsolidationPasses: number
 }
 
 export type AskMode = 'answer' | 'vision' | 'suggest' | 'summary' | 'recap'
@@ -1071,6 +1075,13 @@ export const BaseSettingsSchema = z.object({
       useFor: { suggest: false, summary: false, vision: false },
       fallback: true
     }),
+  // Wave 2 (docs/PROVIDER-ROUTING-POLICY.md): a top-level policy choice, separate from localLlm.useFor/
+  // fallback (which stay the per-mode mechanics 'auto' actually consults). 'local' prefers Métis Local for
+  // every eligible mode and only escalates to cloud on hard failure; 'api' keeps local out of the FIRST-
+  // attempt pick entirely (it still applies as the last-resort floor when localLlm.fallback is on — the
+  // "never fully stuck" guarantee stays true in every mode); 'auto' (default) is today's health/headroom/
+  // useFor-driven behavior, unchanged. Legacy installs with no persisted value parse to 'auto'.
+  routingMode: z.enum(['local', 'api', 'auto']).default('auto'),
   // Resilience routing (the OmniRoute integration): what to do when a provider runs out of tokens/credit
   // rather than a key being rejected. See main/llm/exhaustion.ts + provider-health.ts. Both default ON —
   // they can only ever KEEP an ask answerable, never expose more than the user already configured.
@@ -1091,6 +1102,19 @@ export const BaseSettingsSchema = z.object({
       hedge: z.boolean().default(true)
     })
     .default({ preferFreeOnExhaustion: true, budgetPreempt: true, hedge: true }),
+  // Wave 3: batch the brain's LLM extraction into 1-2 passes/day (docs/qa/QUALITY-SCORECARD.md's "Brain
+  // LLM consolidations / active day ≤ 2") instead of a network round trip after every single meeting.
+  // main/brain/consolidate.ts owns the pass counting and the timer that drives runConsolidationIfDue;
+  // this is only the user-facing policy. enabled=true + preferLocal=true by default: consolidation can
+  // only ever REDUCE cloud calls (batching, and preferring the on-device model for the batch) relative to
+  // today's per-meeting behavior, never add one.
+  brainConsolidation: z
+    .object({
+      enabled: z.boolean().default(true),
+      maxPassesPerDay: z.number().int().min(1).max(4).default(2),
+      preferLocal: z.boolean().default(true)
+    })
+    .default({ enabled: true, maxPassesPerDay: 2, preferLocal: true }),
   // Speaker Intelligence (docs/SPEAKER-INTELLIGENCE-PLAN.md): live "who's speaking" labels on THEM
   // transcript lines via on-device voice embeddings (sherpa-onnx, same addon as Parakeet). ON by
   // default since 2026-08-21 (MQA-235 / Plaud-parity work): the embedding model ships in every build
@@ -1306,6 +1330,7 @@ export const DEFAULT_SETTINGS: Settings = {
   providerModelsThinking: {},
   providerModelsDeep: {},
   providerModelsSpotlightRef: DUST_SPOTLIGHT_REF_AGENT_ID ? { dust: DUST_SPOTLIGHT_REF_AGENT_ID } : {},
+  routingMode: 'auto',
   resilience: { preferFreeOnExhaustion: true, budgetPreempt: true, hedge: true },
   thinkingMode: 'auto',
   askFollowUpMemory: false,
@@ -1384,6 +1409,7 @@ export const DEFAULT_SETTINGS: Settings = {
     fallback: true
   },
   speakerId: { enabled: true },
+  brainConsolidation: { enabled: true, maxPassesPerDay: 2, preferLocal: true },
   usageStats: { meetingsSummarized: 0, conversationMinutes: 0, firstMeetingAt: 0 },
   timeSaved: { writeupRatio: 0.2, floorMin: 5, capMin: 30 },
   tapControl: {
