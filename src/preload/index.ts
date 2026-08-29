@@ -66,6 +66,8 @@ function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
 
 const api = {
   getSettings: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.settingsGet),
+  /** Wave 2 — dismiss the one-shot last-failover chip after the user has seen it. */
+  dismissFailoverNotice: (): Promise<{ ok: true }> => ipcRenderer.invoke(IPC.dismissFailoverNotice),
   getPermissions: (): Promise<PlatformPermissions> => ipcRenderer.invoke(IPC.permissionsGet),
   getShortcutFailures: (): Promise<ShortcutFailure[]> => ipcRenderer.invoke(IPC.shortcutFailures),
   openPermissionSettings: (kind: 'microphone' | 'screenRecording'): Promise<void> =>
@@ -154,6 +156,10 @@ const api = {
   // Apple Speech (on-device, macOS only) — same {text, name?} shape and speaker ride-along as parakeetFeed.
   appleSpeechFeed: (samples: Float32Array, speaker: string): Promise<string | { text: string; name?: string }> =>
     ipcRenderer.invoke(IPC.appleSpeechFeed, { samples, speaker }),
+  // Speaker Intelligence's engine-independent embedding tap (see IPC.speakerEmbed's own comment) — the
+  // Whisper path's equivalent of the label ride-along parakeetFeed/appleSpeechFeed carry for free.
+  speakerEmbed: (samples: Float32Array, speaker: string): Promise<{ name?: string }> =>
+    ipcRenderer.invoke(IPC.speakerEmbed, { samples, speaker }),
 
   ask: (req: AskStart): Promise<void> => ipcRenderer.invoke(IPC.askStart, req),
   cancel: (id: string): Promise<void> => ipcRenderer.invoke(IPC.askCancel, id),

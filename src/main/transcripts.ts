@@ -1116,7 +1116,8 @@ export function parseRecapMarkdown(markdown: string): RecapExport {
   // unknown headings keep the strict whole-line key so a legitimate colon in prose isn't mis-split.
   const KNOWN = new Set([
     'title', 'tags', 'overview', 'topics', 'key q&a', 'key qa',
-    'decisions', 'action items', 'open questions', 'notable quotes'
+    'decisions', 'action items', 'next steps', 'follow-ups', 'follow ups',
+    'open questions', 'notable quotes', 'recap'
   ])
   const sections: Record<string, string> = {}
   for (const part of md.split(/^##\s+/m)) {
@@ -1140,7 +1141,7 @@ export function parseRecapMarkdown(markdown: string): RecapExport {
     (text || '')
       .split('\n')
       .map((l) => l.replace(/^\s*[-*]\s+(\[[ xX]\]\s+)?/, '').trim()) // strip bullet + optional [ ]/[x] checkbox
-      .filter((l) => l.length > 0)
+      .filter((l) => l.length > 0 && !/^none\.?$/i.test(l))
 
   // Best-effort trailing "by <phrase>" clause on the OWNER-STRIPPED text (e.g. "Send the deck by Friday"
   // → dueDateText "Friday"). Never parsed into a Date — RECAP_PROMPT only asks the model for "an owner
@@ -1150,7 +1151,16 @@ export function parseRecapMarkdown(markdown: string): RecapExport {
     return by ? { text: by[1].trim(), dueDateText: by[2].trim() } : { text, dueDateText: null }
   }
 
-  const actionItems = bullets(sections['action items']).map((raw) => {
+  // Wave 1D / QA: SUMMARY_PROMPT uses "## Next steps" (and historically "**Follow-ups**"); RECAP_PROMPT
+  // uses "## Action items". Prefer the first non-empty body so local summaries feed Book-next-steps,
+  // wiki publish, and RecapExport the same way cloud recaps do.
+  const actionBody =
+    sections['action items'] ||
+    sections['next steps'] ||
+    sections['follow-ups'] ||
+    sections['follow ups'] ||
+    ''
+  const actionItems = bullets(actionBody).map((raw) => {
     // "Do the thing (Alice)". Non-greedy text + a paren-free owner anchored to the end, so a stray inner
     // paren (e.g. "(Alice (boss))") degrades gracefully to owner:null rather than a wrong split.
     const paren = raw.match(/^(.*?\S)\s*\(([^()]+)\)\s*$/)
@@ -1187,7 +1197,8 @@ export function parseRecapMarkdown(markdown: string): RecapExport {
   return {
     title24,
     tags,
-    overview: sections['overview'] || '',
+    // SUMMARY_PROMPT's first section used to be "**Recap**" / "## Recap"; RECAP uses "## Overview".
+    overview: sections['overview'] || sections['recap'] || '',
     topics: bullets(sections['topics']),
     keyQA: bullets(sections['key q&a'] || sections['key qa']),
     decisions: bullets(sections['decisions']),

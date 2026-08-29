@@ -113,6 +113,15 @@ import {
   resetProviderHealth,
   unhealthyProviders
 } from './llm/provider-health'
+
+/** Wave 2 — session-scoped last successful failover hop for the one-shot UI chip. Never persisted. */
+let lastFailoverNotice: { from: string; to: string; at: number; reason: string } | null = null
+export function peekLastFailoverNotice(): typeof lastFailoverNotice {
+  return lastFailoverNotice
+}
+export function dismissLastFailoverNotice(): void {
+  lastFailoverNotice = null
+}
 import * as localRuntime from './llm/local-runtime'
 import {
   localEligibleFor,
@@ -121,13 +130,14 @@ import {
   localBaseReady,
   localPrewarmEligible,
   localVisionPrivacyRequired,
+  localPrimaryEligibleFor,
   pickPrimaryProvider,
   allowCrossProviderFailover
 } from './llm/local-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText } from './mac-helper'
-import { createSpeakerId, type SpeakerId } from './speaker-id'
+import { createSpeakerId, type SpeakerId, type SpeakerLabel } from './speaker-id'
 
 // Lazy Speaker Intelligence singleton — building it probes the sherpa addon + embedding model, so defer
 // until the first THEM window with the feature enabled (never on the startup path).
@@ -135,6 +145,34 @@ let speakerIdInstance: SpeakerId | null = null
 function getSpeakerId(): SpeakerId {
   if (!speakerIdInstance) speakerIdInstance = createSpeakerId()
   return speakerIdInstance
+}
+
+/** Shared Speaker Intelligence label lookup for a THEM window — parakeetFeed, appleSpeechFeed and
+ *  speakerEmbed all funnel through this one place so the settings gate + failure handling can't drift
+ *  between the three chokepoints. Degrades to null on any failure, the feature being off, or the model
+ *  being unprovisioned — a missing label must never break transcription. See speaker-id.ts's labelWindow
+ *  for the echo-defense flag (`label.echo`) callers must check before attaching `label.name` anywhere. */
+function labelThemAudio(samples: Float32Array): SpeakerLabel | null {
+  if (!getSettings().speakerId.enabled) return null
+  try {
+    return getSpeakerId().labelWindow(samples)
+  } catch (err) {
+    mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
+    return null
+  }
+}
+
+/** Echo defense + operator profile upkeep (SPEAKER-INTELLIGENCE-PLAN §3.3) — feed a 'you' (mic) window's
+ *  raw audio into the operator's rolling voiceprint so labelThemAudio can recognize the operator's own
+ *  voice bleeding through the loopback. Fire-and-forget by construction (void return, swallows errors):
+ *  called from the SAME handlers that already transcribe the window, and must never affect their result. */
+function observeOperatorAudio(samples: Float32Array): void {
+  if (!getSettings().speakerId.enabled) return
+  try {
+    getSpeakerId().observeOperatorWindow(samples)
+  } catch (err) {
+    mainLog.warn('[speaker-id] operator observation failed', err instanceof Error ? err.message : String(err))
+  }
 }
 import { buildPrewarmMessages } from './llm/prewarm'
 import { listModels as listLocalModels, bestModelForMachine, isDownloaded as localModelDownloaded } from './llm/local-models'
@@ -163,6 +201,7 @@ import {
   settleCommitment,
   startRebuild
 } from './brain/ingest'
+import { runConsolidationIfDue, scheduleConsolidation } from './brain/consolidate'
 import {
   renameEntity,
   mergeEntities,
@@ -283,6 +322,7 @@ import { asrManifestComplete } from './asr-manifest'
 import { isInsideResourceBase, realResourceBase } from './asr-model-path'
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli, checkCliSession } from './cli'
 import { connectMcp, pushToMcp } from './mcp/mcpClient'
+import { pushQueue, type OutboundAction, type OutboundActionKind } from './mcp/pushQueue'
 import { activateLicense, checkLicenseGrace, heartbeat } from './license'
 import {
   setMcpApiKey,
@@ -308,7 +348,7 @@ import {
   scheduleRebuild,
   purgeGraphArtifacts
 } from './graphify'
-import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
+import { SaveMeetingSchema, SaveNoteSchema, stripProvisionalLines } from '@shared/ipc'
 import {
   PROVIDERS,
   PROVIDER_IDS,
@@ -321,12 +361,12 @@ import {
   type ProviderDef
 } from '@shared/providers'
 import { routeTier } from '@shared/routing'
-import { HedgeRace, HEDGE_DELAY_MS, type HedgeLeg } from './llm/hedge'
+import { HedgeRace, HEDGE_DELAY_MS, HEDGE_DELAY_SUGGEST_MS, type HedgeLeg } from './llm/hedge'
 import { ThinkStripper } from './llm/think-strip'
 import { redactSecrets } from '@shared/redact'
 import { isSafeAccelerator } from '@shared/accelerator'
 import { formatResetPhrase } from '@shared/reset-time'
-import { applySpeakerNames } from '@shared/transcript-align'
+import { applySpeakerNames, clusterNamePairsFromAlignment } from '@shared/transcript-align'
 import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
 import { importEmbeddedCaheKey, seedCaheLocalAiForBackgroundScreen } from './cahe-embedded-key'
 import { importEmbeddedCloudflareKey, embeddedCloudflareKeyAvailable, restoreEmbeddedCloudflareKey } from './embedded-cloudflare-key'
@@ -1301,6 +1341,7 @@ function publicSettings(): PublicSettings {
     // MQA-004: the honest counterpart to providerReady — which providers actually REJECTED their
     // credentials recently, so the UI can say "your key stopped working" instead of claiming ready.
     unhealthyProviders: unhealthyProviders(),
+    lastFailover: lastFailoverNotice,
     // Background on-device screen pre-analysis can actually run. Asked of the ENGINE, never recomputed
     // here: the old `s.backgroundScreenContext && localReady` copy missed the macOS OCR engine (Settings
     // said "not running" while it captured every 6s) and could not see a dead foreground watcher at all.
@@ -1672,8 +1713,9 @@ function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown)
 
 // --- Screen capture (cached + pre-warmable for vision latency) -----------------------------------------
 // A vision ask issued within CAPTURE_TTL_MS of a (pre-warmed) capture reuses the JPEG instead of paying the
-// ~150-450ms capture cost again. Kept tiny so the screen the model sees is never visibly stale.
-const CAPTURE_TTL_MS = 1500
+// ~150-450ms capture cost again. 4s covers hover→click and shortcut→Enter without showing a visibly stale
+// frame; Private View / display-id checks still refuse a bad send.
+const CAPTURE_TTL_MS = 4000
 let shotCache: { image: string; width: number; height: number; dispId: number; displayMismatch: boolean; ts: number } | null = null
 type CapturedScreen = { image: string; width: number; height: number; dispId: number; displayMismatch: boolean }
 
@@ -2338,6 +2380,21 @@ async function backfillSpeakerNames(file: string): Promise<{ ok: boolean; named?
     const { lines, named } = applySpeakerNames(read.lines, fetched.entries, { operatorName })
     if (named === 0) return { ok: true, named: 0 }
 
+    // Auto-enrollment flywheel (SPEAKER-INTELLIGENCE-PLAN §3.4): a THEM line VTT alignment just resolved
+    // to a real name, whose PRE-alignment name was a live session cluster label ("Speaker N"), is exactly
+    // the join needed to grow a permanent voiceprint with zero user effort — this session's "Speaker N"
+    // IS that person. Best-effort and silent: a missed window (feature off, no session buffer left, below
+    // the quality gate) never affects the save this function already guarantees.
+    const clusterNamePairs = clusterNamePairsFromAlignment(read.lines, lines)
+    if (clusterNamePairs.length) {
+      try {
+        const enrolled = getSpeakerId().autoEnrollFromLabeledWindows(clusterNamePairs)
+        if (enrolled) auditLog('speaker.auto_enrolled', { enrolled })
+      } catch (err) {
+        mainLog.warn('[speaker-id] auto-enroll failed', err instanceof Error ? err.message : String(err))
+      }
+    }
+
     const result = await updateMeetingTranscript(settings, safeName, lines)
     if (!result.ok) return { ok: false, error: result.error }
 
@@ -2408,6 +2465,11 @@ function registerIpc(): void {
       }
     }
     return s
+  })
+  ipcMain.handle(IPC.dismissFailoverNotice, (e) => {
+    assertMainWindow(e)
+    dismissLastFailoverNotice()
+    return { ok: true as const }
   })
   ipcMain.handle(IPC.permissionsGet, (e) => {
     assertMainWindow(e)
@@ -2587,10 +2649,10 @@ function registerIpc(): void {
     // Start/stop background screen pre-analysis to match the new settings (backgroundScreenContext toggle,
     // or Local AI being enabled/disabled/provisioned) — takes effect immediately, no relaunch.
     refreshScreenPreprocess()
-    // Local AI turned back ON → arm the weight fetch here (MQA-186). Boot is the only other trigger and
-    // it now skips while the toggle is off, so without this edge a user who declined the download once
-    // could never get it: Settings would report the model unavailable for the rest of the install's life.
-    if (!cur.localLlm.enabled && next.localLlm.enabled && shouldFetchWeights(next.localLlm.modelId, true)) {
+    // Local AI turned ON → re-arm the weight fetch if boot somehow skipped it (offline first launch,
+    // under-RAM machine later upgraded). Boot already starts the download whenever the app opens
+    // (RAM permitting); this edge is the second chance, not the only path to the weights.
+    if (!cur.localLlm.enabled && next.localLlm.enabled && shouldFetchWeights(next.localLlm.modelId)) {
       void ensureLocalModel(next.localLlm.modelId)
         .then(() => refreshScreenPreprocess())
         .catch((e) => mainLog.warn('[settings] local model provisioning failed:', e))
@@ -2988,6 +3050,43 @@ function registerIpc(): void {
     return kind.success ? MCP_KIND_LABELS[kind.data] : connectionId
   }
 
+  // Wave 4: mcp:push's own MCP tool names are per-connection and user/operator-configured — there is no
+  // registry mapping them to the queue's small action-kind enum. A cheap name heuristic is enough for
+  // this queue's own purposes (it only affects a retry-log label, never routing): most tools are named
+  // for what they do (push_meeting_recap, create_task, log_note, update_deal, …).
+  function inferPushActionKind(toolName: string): OutboundActionKind {
+    const t = toolName.toLowerCase()
+    if (t.includes('deal')) return 'update_deal'
+    if (t.includes('task')) return 'create_task'
+    return 'log_note'
+  }
+
+  // The background half of the retry queue: re-attempts one durable OutboundAction against whatever the
+  // named connection's CURRENT endpoint/key are (a retry may run long after the original attempt, so the
+  // key may have since been rotated or the connection reconnected). Deliberately does not repeat the
+  // interactive handler's ClickUp-401-refresh dance below — that stays exclusive to the live, synchronous
+  // path; a ClickUp token that expired between attempts here simply dead-letters like any other repeated
+  // failure, which is an acceptable (and honest — "reconnect ClickUp") outcome for a background retry.
+  async function retryOutboundAction(action: OutboundAction): Promise<{ ok: boolean; error?: string }> {
+    const s = getSettings()
+    const conn = s.mcpConnections.find((c) => c.kind === action.kind)
+    if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(conn.id)) {
+      return { ok: false, error: `${mcpLabelFor(action.kind)} is no longer connected.` }
+    }
+    const apiKey = getMcpApiKey(conn.id)
+    return pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, action.toolName, action.payload, conn.label)
+  }
+
+  // Same minute-ish cadence as the brain reconcile tick (BRAIN_RECONCILE_MS, set up below in
+  // app.whenReady) — cheap enough to poll often, and pushQueue.processDue itself no-ops instantly when
+  // the queue is empty or every due action is still cooling down on backoff. Lives here (registerIpc),
+  // not next to that tick, because retryOutboundAction and mcpLabelFor above are this function's own
+  // locals — pulling the timer out to whenReady's scope would mean hoisting both to module scope for no
+  // real benefit.
+  trackTimer(setInterval(() => {
+    void pushQueue.processDue(retryOutboundAction).catch((e) => mainLog.warn('[mcp-push-queue] processDue tick failed:', e))
+  }, 60 * 1000))
+
   // Test connection: connects + authenticates + lists tools, persists NOTHING (mirrors BidStack's own
   // "Test endpoint" button). Lets the user verify before committing an endpoint/key to disk.
   ipcMain.handle(IPC.mcpTestConnection, async (e, payload: unknown) => {
@@ -3072,6 +3171,12 @@ function registerIpc(): void {
     const parsed = McpPushPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
     const { connectionId, toolName, args } = parsed.data
+    // Wave 4 / QA defense-in-depth: never push when the caller marks the payload confidential
+    // (Review already hides the chips; this stops a buggy/compromised renderer from bypassing).
+    if (args && typeof args === 'object' && (args as { confidential?: unknown }).confidential === true) {
+      auditLog('mcp.push.skipped_confidential', { connectionId, tool: toolName })
+      return { ok: false, error: 'This meeting is marked confidential — push is blocked.' }
+    }
     const s = getSettings()
     const conn = s.mcpConnections.find((c) => c.id === connectionId)
     if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(connectionId)) {
@@ -3110,6 +3215,20 @@ function registerIpc(): void {
       }
     }
     auditLog('mcp.push', { connectionId, tool: toolName, ok: r.ok })
+    // Wave 4: the live attempt above already gave the renderer an immediate answer. A FAILURE also goes
+    // into the durable retry queue so a transient MCP-endpoint blip doesn't silently drop the push —
+    // enqueue is idempotent (same connection+tool+payload collapses to one entry), so a user who clicks
+    // "Push" again after a failure never double-queues the same write. Confidential is read straight off
+    // `args` (McpArgValueSchema already allows a boolean value there) — never sent, ever, by processDue.
+    if (!r.ok) {
+      pushQueue.enqueue({
+        kind: conn.kind,
+        action: inferPushActionKind(toolName),
+        toolName,
+        payload: args,
+        confidential: args.confidential === true
+      })
+    }
     return r
   })
 
@@ -3543,13 +3662,16 @@ function registerIpc(): void {
     // ("Jane Doe" from an enrolled profile, else a stable "Speaker N" session label). Same PCM buffer the
     // ASR just consumed — no extra capture. Strictly additive and best-effort: any failure or the feature
     // being off/unprovisioned attaches no name and the line renders exactly as before.
-    if (text && p.speaker === 'them' && getSettings().speakerId.enabled) {
-      try {
-        const label = getSpeakerId().labelWindow(p.samples)
-        if (label) return { text, name: label.name }
-      } catch (err) {
-        mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
-      }
+    if (text && p.speaker === 'them') {
+      const label = labelThemAudio(p.samples)
+      // P2 echo defense: this window is the operator's OWN voice bleeding through the loopback, not the
+      // other person — drop the transcribed text entirely rather than mislabel the operator's words as
+      // "them" (a name/cluster label attached here would otherwise show up as something THEY said).
+      if (label?.echo) return { text: '' }
+      if (label) return { text, name: label.name }
+    } else if (p.speaker === 'you') {
+      // ME windows never get a THEM label — feed straight into operator echo-defense/profile upkeep.
+      observeOperatorAudio(p.samples)
     }
     return { text }
   })
@@ -3567,15 +3689,37 @@ function registerIpc(): void {
     if (p.samples.length > 16_000 * 30) return ''
     // Spoken-language hint (Settings → Audio) pins the recognizer locale; 'auto' keeps system locale.
     const text = await appleSpeechTranscribe(p.samples, appleSpeechLocale(getSettings().asrLanguage))
-    if (text && p.speaker === 'them' && getSettings().speakerId.enabled) {
-      try {
-        const label = getSpeakerId().labelWindow(p.samples)
-        if (label) return { text, name: label.name }
-      } catch (err) {
-        mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
-      }
+    if (text && p.speaker === 'them') {
+      const label = labelThemAudio(p.samples)
+      if (label?.echo) return { text: '' } // see parakeetFeed's identical echo-defense comment above
+      if (label) return { text, name: label.name }
+    } else if (p.speaker === 'you') {
+      observeOperatorAudio(p.samples)
     }
     return { text }
+  })
+
+  // Speaker Intelligence (SPEAKER-INTELLIGENCE-PLAN §3) — the Whisper engine's speaker-embedding tap.
+  // Whisper runs entirely in a renderer Worker with no main-process round trip of its own (unlike
+  // Parakeet/Apple, which already ride the label along on parakeetFeed/appleSpeechFeed above), so
+  // listen.ts's Whisper commitLine path calls this separately, after the fact, with the SAME window's
+  // audio the worker just transcribed — fire-and-forget, best-effort, never blocking the live decode.
+  ipcMain.handle(IPC.speakerEmbed, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return {}
+    const p = payload as { samples?: unknown; speaker?: unknown }
+    if (!(p?.samples instanceof Float32Array)) return {}
+    // Same defensive cap as parakeetFeed — see its own comment for why.
+    if (p.samples.length > 16_000 * 30) return {}
+    if (p.speaker === 'them') {
+      const label = labelThemAudio(p.samples)
+      // Echo bleed has no text to drop here (the Whisper worker already committed the line before this
+      // call resolves) — degrade to attaching no name, which is exactly the pre-P2 "unlabeled" outcome.
+      if (label && !label.echo) return { name: label.name }
+    } else if (p.speaker === 'you') {
+      observeOperatorAudio(p.samples)
+    }
+    return {}
   })
 
   // --- Métis Local (on-device LLM): model readiness metadata ---
@@ -3718,6 +3862,13 @@ function registerIpc(): void {
     // no typed claim) — redact it the same way so a secret-shaped pattern in that fallback text isn't sent
     // to the provider. Typed-claim fact-check asks never set this flag, so normal prompts are untouched.
     if (s.redactSensitive && req.redactPrompt) req.prompt = redactSecrets(req.prompt)
+    // Overlap local sidecar start with the sync brain stamp below — when local will serve (or hedge),
+    // kicking ensure NOW hides cold-load behind Receipt Mode work instead of serializing after it.
+    if (localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady)) {
+      void ensureLocalRuntimeStarted(s.localLlm.modelId, req.mode === 'vision').catch((err) =>
+        mainLog.warn('[local] early ensure failed', err instanceof Error ? err.message : String(err))
+      )
+    }
     // Receipt Mode: ground a typed answer in the user's own past meetings. Match the brain against the
     // question (which already carries the live transcript tail via the renderer's withContext) and inject
     // the relevant, meeting-cited slice per-turn. Answer mode only — never the latency-critical spoken
@@ -3908,6 +4059,18 @@ function registerIpc(): void {
     const failover = (tried: ProviderId[], preferFree = false, race?: AttemptRace): boolean => {
       const next = pickFailover(tried, preferFree)
       if (!next) return false
+      // Wave 2 — record the hop for the one-shot UI chip (docs/PROVIDER-ROUTING-POLICY.md). Only fire
+      // when we actually start a different provider; a no-op return above leaves the notice untouched.
+      const from = tried.length ? tried[tried.length - 1]! : 'unknown'
+      if (from !== next) {
+        lastFailoverNotice = {
+          from,
+          to: next,
+          at: Date.now(),
+          reason: preferFree ? 'exhausted' : 'failover'
+        }
+        auditLog('provider.failover', { from, to: next, reason: lastFailoverNotice.reason })
+      }
       attempt(next, tried, 0, race)
       return true
     }
@@ -4413,7 +4576,10 @@ function registerIpc(): void {
     // Métis Local outranks cliPrimary (but never providerOverride): an in-scope suggest/summary/vision ask
     // routes to the on-device model first whenever it's eligible right now (PLAN.md §4.3 "Routing
     // precedence, explicit") — see local-routing.ts's pickPrimaryProvider for the exact precedence rule.
-    const localPrimaryEligible = localEligibleFor(req, s, routeTier(req, s.thinkingMode), allowed)
+    // localPrimaryEligibleFor (not the bare localEligibleFor) layers Wave 2's routingMode on top: 'api'
+    // forces this false so local can never win the first-attempt pick, 'local' relaxes the per-mode
+    // useFor toggle, 'auto' is byte-identical to the old localEligibleFor call.
+    const localPrimaryEligible = localPrimaryEligibleFor(req, s, routeTier(req, s.thinkingMode), allowed)
     const localVisionRequired = localVisionPrivacyRequired(req, s)
     const primary = pickPrimaryProvider(
       req.providerOverride,
@@ -4462,7 +4628,12 @@ function registerIpc(): void {
       // ask when it genuinely gets there first, which is the cloud-is-slow / cloud-is-down case.
       // This early pick decides the DELAY only: startHedgeLeg re-picks the provider at fire time against
       // the live primaryChain, so a primary that fails over in the meantime is still excluded correctly.
-      const hedgeDelayMs = pickFailover([primary]) === 'local' ? 0 : HEDGE_DELAY_MS
+      const hedgeDelayMs =
+        pickFailover([primary]) === 'local'
+          ? 0
+          : req.mode === 'suggest'
+            ? HEDGE_DELAY_SUGGEST_MS
+            : HEDGE_DELAY_MS
       let hedgeTimer: NodeJS.Timeout | null = setTimeout(() => {
         hedgeTimer = null
         startHedgeLeg()
@@ -4535,6 +4706,10 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const m = SaveMeetingSchema.parse(raw)
+    // ASR quality (1B.2b) — a live-only interim placeholder must never reach disk (see
+    // TranscriptLineSchema.provisional's own doc comment). Belt-and-suspenders: listen.ts already
+    // replaces a provisional line with the real one before it could ever be included here.
+    m.lines = stripProvisionalLines(m.lines)
     const r = { path: await saveMeeting(getSettings(), m) }
     // Time-saved: the meeting file just landed — credit it ONCE to the durable lifetime counters. This is
     // the live-meeting save path; the import path credits itself separately once its file is durable. A
@@ -4550,7 +4725,11 @@ function registerIpc(): void {
     scheduleRebuild() // refresh the knowledge graph with the new note (debounced; no-op if disabled)
     // Persist the small background-work marker before confirming the transcript save. The actual LLM
     // extraction remains asynchronous, but a quit immediately after Save can now resume it.
-    await enqueueIngest(r.path)
+    // Wave 3 (settings.brainConsolidation): when batching is on, this meeting is marked pending but NOT
+    // queued for immediate extraction — it waits for the next consolidation pass (or a manual rebuild/
+    // "Index meetings" click, which scans for pending work independent of this flag) instead of paying a
+    // network round trip after every single save.
+    await enqueueIngest(r.path, { deferred: getSettings().brainConsolidation.enabled })
     // Speaker Intelligence (Phases A/B): best-effort, fire-and-forget backfill of resolved names from the
     // meeting's own Teams transcript (if one exists yet). Never awaited — must never delay or fail the
     // save response itself; see backfillSpeakerNames's own doc comment for the full quiet-no-op contract.
@@ -4889,7 +5068,9 @@ function registerIpc(): void {
     if (!requireAuth()) return
     const parsed = SaveMeetingSchema.safeParse(raw)
     if (!parsed.success) return
-    await saveDraftTranscript(getSettings(), parsed.data)
+    // Same provisional-line guard as the real saveTranscript handler above — this periodic crash-
+    // recovery snapshot must never resurrect a UI-only "…" placeholder into a recovered draft.
+    await saveDraftTranscript(getSettings(), { ...parsed.data, lines: stripProvisionalLines(parsed.data.lines) })
   })
 
   ipcMain.handle(IPC.saveNote, async (e, raw) => {
@@ -5382,15 +5563,17 @@ if (!app.requestSingleInstanceLock()) {
   // operator chose to embed one. See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
   importEmbeddedCloudflareKey()
   // Métis Local weights are no longer bundled in the installer (~728 MB; a universal mac package
-  // carrying them would blow past GitHub's 2 GB release-asset limit), so fetch them once here on first
-  // run. Deliberately NOT awaited: this is a ~763 MB download and startup must not wait on it, nor fail
-  // when the machine is offline or behind a restrictive proxy — Local simply stays unavailable and the
-  // next launch retries. ensureLocalModel() verifies the pinned sha256 and never throws.
-  // GATED (MQA-186): this used to fire unconditionally, so a machine under the model's RAM floor paid
-  // 763 MB for weights assertRamOk would refuse to load, and a user who had switched Local AI off got
-  // the transfer anyway with no way to decline it. shouldFetchWeights answers both. Because this is the
-  // only trigger, the settings handler re-arms it on the OFF→ON edge — see the localLlm.enabled branch
-  // in IPC.setSettings — otherwise switching Local AI back on would leave no path to the weights at all.
+  // carrying them would blow past GitHub's 2 GB release-asset limit), so fetch them once here whenever
+  // the app opens. Deliberately NOT awaited: this is a multi-GB download and startup must not wait on
+  // it, nor fail when the machine is offline or behind a restrictive proxy — the next launch retries.
+  // ensureLocalModel() verifies the pinned sha256 and never throws.
+  //
+  // GATED on RAM only (MQA-186): a machine under the model's floor must not pay for weights
+  // assertRamOk would refuse to load. Local AI `enabled` does NOT gate the download — routing stays
+  // off by default (Cloudflare / API keys stay primary); the bytes land in the background so turning
+  // Local on later is instant. OFF→ON in setSettings still re-arms as a second chance after a failed
+  // first-run fetch.
+  //
   // local-routing.ts re-reads isDownloaded() per request, so no ROUTING decision needs notifying. The
   // background screen reader does: its eligibility is evaluated when the engine is refreshed, and the boot
   // refresh below runs while this download is still in flight — without this re-arm, a first-run user who
@@ -5432,7 +5615,7 @@ if (!app.requestSingleInstanceLock()) {
         mainLog.warn('[boot] local prewarm skipped:', e instanceof Error ? e.message : String(e))
       }
     }
-    if (shouldFetchWeights(best.id, getSettings().localLlm.enabled)) {
+    if (shouldFetchWeights(best.id)) {
       void ensureLocalModel(best.id)
         .then(() => {
           refreshScreenPreprocess()
@@ -5923,6 +6106,12 @@ if (!app.requestSingleInstanceLock()) {
       // Registered here rather than alongside the timer so safe start skips the recurring brain work too,
       // not just the single resume — the reconcile tick reads the same index.json.
       trackTimer(setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS))
+      // Wave 3: batch brain LLM extraction into settings.brainConsolidation's daily pass budget instead
+      // of a round trip after every meeting. Hourly check, same "cheap enough to poll often, the budget
+      // does the real gating" shape as the reconcile tick above; runConsolidationIfDue itself no-ops
+      // instantly once today's passes are spent or the feature is off.
+      void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] initial consolidation check failed:', e))
+      scheduleConsolidation(60 * 60 * 1000, trackTimer)
     }
     endBootWatch(app.getPath('userData'))
   }, 15_000)

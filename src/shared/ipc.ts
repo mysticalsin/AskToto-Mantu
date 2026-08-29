@@ -73,6 +73,15 @@ export const IPC = {
   // No status/ensure/progress channels: unlike Parakeet there is no bundled model to download: the
   // helper binary either transcribes or the call resolves to '' (see main/apple-speech.ts).
   appleSpeechFeed: 'apple-speech:feed',
+  // Speaker Intelligence (SPEAKER-INTELLIGENCE-PLAN §3) — the engine-independent voice-embedding tap.
+  // Parakeet/Apple Speech already ride the label along on their own feed channels (same PCM window the
+  // ASR just consumed); Whisper runs entirely in a renderer Worker with no main-process round trip of its
+  // own, so it needs this separate channel to hand the SAME window's audio to speaker-id.ts after the
+  // fact. Fire-and-forget from listen.ts's Whisper commitLine path — a slow/failed call attaches no name,
+  // it never blocks or retries the decode. `speaker` distinguishes a THEM window (gets labeled) from a
+  // YOU window (only reinforces the operator echo-defense profile — see speaker-id.ts's
+  // observeOperatorWindow); either way the response is best-effort `{ name? }`.
+  speakerEmbed: 'speaker:embed',
   askStart: 'ask:start',
   askCancel: 'ask:cancel',
   // Explicit "new chat" boundary: clears the main-owned carriers of cross-question state (the server-side
@@ -211,7 +220,9 @@ export const IPC = {
   localTranscriptBegin: 'local-ai:transcript:begin',
   localTranscriptAppend: 'local-ai:transcript:append',
   localTranscriptResync: 'local-ai:transcript:resync',
-  localTranscriptEnd: 'local-ai:transcript:end'
+  localTranscriptEnd: 'local-ai:transcript:end',
+  /** Wave 2 — clear the one-shot last-failover chip after the user dismisses it. */
+  dismissFailoverNotice: 'settings:dismissFailoverNotice'
 } as const
 
 /** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals. */
@@ -230,6 +241,10 @@ export interface EvalMetrics {
   tokensIn: number
   tokensOut: number
   byProvider: Record<string, number>
+  /** Wave 3 (docs/qa/QUALITY-SCORECARD.md's "Brain LLM consolidations / active day"): count of
+   *  'brain.consolidation' audit events in this window — how many batched extraction passes actually
+   *  ran, as opposed to the per-mode provider.request counts above. */
+  brainConsolidationPasses: number
 }
 
 export type AskMode = 'answer' | 'vision' | 'suggest' | 'summary' | 'recap'
@@ -307,9 +322,29 @@ export const TranscriptLineSchema = z.object({
   // by commitLine so mixed-language meetings render "[conversation switches to …]" markers in the recap
   // prompt and the saved transcript (the LLM otherwise has no way to know a switch happened). Absent
   // when detection wasn't confident, and on every line saved before this field existed.
-  lang: z.string().optional()
+  lang: z.string().optional(),
+  // ASR quality (Wave 1, 1B.2b) — a UI-only interim placeholder for a window listen.ts has queued/is
+  // decoding but hasn't gotten text back for yet ("…" bubble), so the live transcript doesn't sit blank
+  // while a slow/backlogged model works through the queue. Replaced (never merged) by the real line
+  // commitLine produces for the same window once it resolves — never true on a line that reached a save
+  // or the recap prompt (see transcript.ts's transcriptToText and shared/ipc.ts's stripProvisionalLines),
+  // so this field existing on a line is itself the "don't persist me" contract. Optional so every
+  // previously saved meeting still parses unchanged.
+  provisional: z.boolean().optional()
 })
 export type TranscriptLine = z.infer<typeof TranscriptLineSchema>
+
+/** ASR quality (1B.2b) — strip UI-only provisional placeholders (see TranscriptLineSchema.provisional
+ *  above) before a transcript reaches disk or the recap prompt. `transcriptToText` (renderer/lib/
+ *  transcript.ts) is the live-text guard; this is the save-path guard, applied once at the IPC boundary
+ *  (main/index.ts's saveTranscript/saveDraftTranscript handlers) so every caller is covered even one that
+ *  forgot to filter — belt-and-suspenders, since commitLine already removes the placeholder it's
+ *  replacing before pushing the real line, so in the common case there is nothing left to strip. Returns
+ *  the input array unchanged (same reference) when nothing needed removing, so a save of an ordinary
+ *  meeting with no provisional lines never pays a spurious copy. */
+export function stripProvisionalLines(lines: TranscriptLine[]): TranscriptLine[] {
+  return lines.some((l) => l.provisional) ? lines.filter((l) => !l.provisional) : lines
+}
 
 /** Single source of truth for the import pipeline's decode window. Both decoders that turn a recording
  *  into PCM windows — main's ffmpeg sidecar (main/ffmpeg-decoder.ts) and the renderer's Chromium
@@ -766,10 +801,12 @@ export const BaseSettingsSchema = z.object({
   // Default provider: Cloudflare (Tony, 2026-08-21), replacing NVIDIA NIM (2026-08-14). One endpoint the
   // operator deploys reaches Workers AI, OpenAI, Anthropic and Google on a single account credential, so
   // a fleet is configured once rather than per vendor per user. The build ships the operator's Worker URL
-  // as cloudflareBaseUrl's default (a URL is not a secret); the METIS_PROXY_KEY never ships and is the one
-  // string a user pastes. Until that key exists the provider is simply not ready, and the walk behaves as
-  // it always has: an explicitly enabled on-device model short-circuits first (localLlm.useFor), then
-  // Cloudflare, then NVIDIA NIM, then whatever keys the user added themselves.
+  // as cloudflareBaseUrl's default (a URL is not a secret); the METIS_PROXY_KEY is either
+  // installer-embedded (embedded-cloudflare-key.ts) or pasted once in Settings — Cloudflare stays the
+  // always-on cloud path. Additional LLMs are additive: paste any featured / "more models" / Custom
+  // OpenAI-compatible API key in Settings → AI. Métis Local routing is opt-in (localLlm.enabled defaults
+  // off) but the weights still download in the background when the app opens so enabling Local later is
+  // instant. Local only preempts Cloudflare when the user turns a useFor toggle on.
   provider: ProviderIdSchema.default('cloudflare'),
   // CLI-vs-API priority. 'api' (default) keeps the explicitly-chosen `provider` as primary. 'cli' makes a
   // connected CLI integration (Claude/Codex) the primary so the user's local subscription is used before
@@ -943,12 +980,10 @@ export const BaseSettingsSchema = z.object({
   /** Background screen preprocessing: when the foreground window changes, quietly analyze the screen with
    *  the ON-DEVICE model and cache the description, so "What's on my screen" answers from pre-computed text
    *  instead of a cold capture + full-image round trip. On-device only — nothing extra is sent to the cloud;
-   *  Private View hard-blocks it. Default OFF — explicit opt-in. This used to default on while relying on
-   *  localLlm.enabled defaulting off to stay inert; now that Local AI is enabled by default (fallback
-   *  safety net), a true default here would silently start continuous foreground-window capture +
-   *  captioning on every fresh install with zero user action. Continuous screen reading is its own
-   *  consent decision, never a side effect of another default. (The Cahê pilot still seeds it true
-   *  explicitly — cahe-embedded-key.ts — which is an explicit per-edition choice, not a default.) */
+   *  Private View hard-blocks it. Default OFF — explicit opt-in. Continuous screen reading is its own
+   *  consent decision, and it also requires Local AI to be enabled (itself off by default). (The Cahê
+   *  pilot still seeds both true explicitly — cahe-embedded-key.ts — which is an explicit per-edition
+   *  choice, not a default.) */
   backgroundScreenContext: z.boolean().default(false),
   // How see-through the overlay's glass background is. A multiplier on the default glass alpha values
   // (see --glass-fill etc. in styles.css) — 1 = today's default look, lower = more transparent (see more
@@ -995,9 +1030,6 @@ export const BaseSettingsSchema = z.object({
   // before it's sent to a cloud model. On by default; never touches the typed question or the saved file.
   redactSensitive: z.boolean().default(true),
   lastConsentReminderAt: z.number().default(0),
-  // deprecated — kept so persisted settings/managed-config still parse (was only used by the removed
-  // auto-start-on-meeting-detected popup's app-name matching).
-  customMeetingApps: z.array(z.string().min(1).max(80)).max(20).default([]),
   // Words the ASR engine consistently mishears, always corrected in the live transcript (commitLine).
   asrCorrections: z.array(AsrCorrectionPairSchema).max(100).default([]),
   // Entity-casing bias (SAFE — exact-match only, never phonetic/fuzzy): spell people/account names the
@@ -1030,13 +1062,13 @@ export const BaseSettingsSchema = z.object({
   // main/store.ts instead of pointing llama-server at a file that can never exist.
   localLlm: z
     .object({
-      // Default TRUE: the llama-server RUNTIME ships inside every installer, and the flag alone costs
-      // nothing at runtime — the sidecar spawns lazily on first local request, and
-      // prewarm additionally requires useFor.suggest (local-routing.ts localPrewarmEligible). With every
-      // useFor toggle defaulting FALSE below, default-enabled can never preempt a configured cloud
-      // provider; it only makes the `fallback` safety net (and the Settings toggles) live out of the box,
-      // so a zero-API-key install still indexes meetings and answers in-scope asks on-device.
-      enabled: z.boolean().default(true),
+      // Default FALSE: Cloudflare (the shipped default provider, with Worker URL + optional embedded
+      // METIS_PROXY_KEY) is the always-on cloud path. Métis Local ROUTING is opt-in — turning it on in
+      // Settings uses the on-device model. The weights themselves still download in the background whenever
+      // the app opens (RAM permitting), so enabling Local later does not wait on a multi-GB transfer.
+      // Keeping enabled false means a fresh install never silently routes work on-device ahead of
+      // Cloudflare / API providers.
+      enabled: z.boolean().default(false),
       modelId: BundledLocalModelIdSchema,
       // All FALSE by default: useFor.X means "local FIRST for X" — it short-circuits even a configured
       // cloud provider (local-routing.ts pickPrimaryProvider) and, for summary, makes local the EXCLUSIVE
@@ -1060,17 +1092,25 @@ export const BaseSettingsSchema = z.object({
       // limits entirely so a plain typed question is answered on-device rather than met with "add an API
       // key" — the alternative there is not a better cloud answer, it is no answer. Only ever reachable
       // when localLlm.enabled is true and the runtime+model are actually provisioned AND the org
-      // allowlist permits 'local' (localBaseReady). Defaults on: it can only ever reduce the chance of
-      // work going undone, never increase cloud exposure (on-device is same-or-more private than cloud,
-      // never less).
-      fallback: z.boolean().default(true)
+      // allowlist permits 'local' (localBaseReady). Defaults OFF with enabled: a safety net that would
+      // trigger a ~730 MB download the user never asked for is not a safety net. Settings → Local AI
+      // arms fallback when the user turns Local on.
+      fallback: z.boolean().default(false)
     })
     .default({
-      enabled: true,
+      enabled: false,
       modelId: BUNDLED_LOCAL_MODEL_ID,
       useFor: { suggest: false, summary: false, vision: false },
-      fallback: true
+      fallback: false
     }),
+  // Wave 2 (docs/PROVIDER-ROUTING-POLICY.md): a top-level policy choice, separate from localLlm.useFor/
+  // fallback (which stay the per-mode mechanics 'auto' actually consults). 'local' prefers Métis Local for
+  // every eligible mode and only escalates to cloud on hard failure; 'api' keeps local out of the FIRST-
+  // attempt pick entirely (it still applies as the last-resort floor when localLlm.fallback is on — the
+  // "never fully stuck" guarantee stays true once Local is opted in); 'auto' (default) is today's
+  // health/headroom/useFor-driven behavior. With Local off by default, 'auto' still routes to Cloudflare /
+  // pasted API keys first. Legacy installs with no persisted value parse to 'auto'.
+  routingMode: z.enum(['local', 'api', 'auto']).default('auto'),
   // Resilience routing (the OmniRoute integration): what to do when a provider runs out of tokens/credit
   // rather than a key being rejected. See main/llm/exhaustion.ts + provider-health.ts. Both default ON —
   // they can only ever KEEP an ask answerable, never expose more than the user already configured.
@@ -1091,6 +1131,20 @@ export const BaseSettingsSchema = z.object({
       hedge: z.boolean().default(true)
     })
     .default({ preferFreeOnExhaustion: true, budgetPreempt: true, hedge: true }),
+  // Wave 3: batch the brain's LLM extraction into 1-2 passes/day (docs/qa/QUALITY-SCORECARD.md's "Brain
+  // LLM consolidations / active day ≤ 2") instead of a network round trip after every single meeting.
+  // main/brain/consolidate.ts owns the pass counting and the timer that drives runConsolidationIfDue;
+  // this is only the user-facing policy. enabled=true by default (batching reduces cloud calls);
+  // preferLocal=false by default so consolidation uses Cloudflare / API providers until Local is opted in.
+  // today's per-meeting behavior, never add one.
+  brainConsolidation: z
+    .object({
+      enabled: z.boolean().default(true),
+      maxPassesPerDay: z.number().int().min(1).max(4).default(2),
+      // Prefer Cloudflare / API providers for consolidation batches unless the user opts Local on.
+      preferLocal: z.boolean().default(false)
+    })
+    .default({ enabled: true, maxPassesPerDay: 2, preferLocal: false }),
   // Speaker Intelligence (docs/SPEAKER-INTELLIGENCE-PLAN.md): live "who's speaking" labels on THEM
   // transcript lines via on-device voice embeddings (sherpa-onnx, same addon as Parakeet). ON by
   // default since 2026-08-21 (MQA-235 / Plaud-parity work): the embedding model ships in every build
@@ -1239,6 +1293,20 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
       })
     )
     .default([]),
+  /**
+   * Wave 2 / QA — last successful failover hop this session (primary → backup). Session-scoped, never
+   * persisted; the renderer shows a one-shot chip then clears via settings:dismissFailoverNotice.
+   * null when no failover has fired yet (or the user dismissed the chip).
+   */
+  lastFailover: z
+    .object({
+      from: z.string(),
+      to: z.string(),
+      at: z.number(),
+      reason: z.string().default('failover')
+    })
+    .nullable()
+    .default(null),
   /** Background on-device screen pre-analysis can actually run RIGHT NOW, straight from the engine's own
    *  gate (screen-preprocess.ts canRun(), never recomputed renderer-side): session valid, the
    *  `backgroundScreenContext` setting on, an on-device reader available (local model OR the macOS Vision
@@ -1288,6 +1356,7 @@ export type SettingsPatch = Partial<
     | 'managedKeys'
     | 'envKeys'
     | 'loginItemOpenAtLogin'
+    | 'lastFailover'
   >
 >
 
@@ -1306,6 +1375,7 @@ export const DEFAULT_SETTINGS: Settings = {
   providerModelsThinking: {},
   providerModelsDeep: {},
   providerModelsSpotlightRef: DUST_SPOTLIGHT_REF_AGENT_ID ? { dust: DUST_SPOTLIGHT_REF_AGENT_ID } : {},
+  routingMode: 'auto',
   resilience: { preferFreeOnExhaustion: true, budgetPreempt: true, hedge: true },
   thinkingMode: 'auto',
   askFollowUpMemory: false,
@@ -1338,7 +1408,7 @@ export const DEFAULT_SETTINGS: Settings = {
   privateView: false,
   audioSource: 'both',
   micDeviceId: '',
-  suggestEverySec: 15,
+  suggestEverySec: 8,
   mode: 'general',
   profile: { name: '', role: '', company: '', resume: '', jobDescription: '', notes: '' },
   shortcuts: {}, // empty → built-in DEFAULT_SHORTCUTS apply (merged at hotkey registration)
@@ -1369,7 +1439,6 @@ export const DEFAULT_SETTINGS: Settings = {
   requireConsentIndicator: true,
   redactSensitive: true,
   lastConsentReminderAt: 0,
-  customMeetingApps: [], // deprecated — kept so persisted settings/managed-config still parse
   asrCorrections: [],
   asrEntityBias: true,
   cliConnected: {},
@@ -1378,12 +1447,13 @@ export const DEFAULT_SETTINGS: Settings = {
   mcpConnections: [],
   clickupClientId: '',
   localLlm: {
-    enabled: true,
+    enabled: false,
     modelId: BUNDLED_LOCAL_MODEL_ID,
     useFor: { suggest: false, summary: false, vision: false },
-    fallback: true
+    fallback: false
   },
   speakerId: { enabled: true },
+  brainConsolidation: { enabled: true, maxPassesPerDay: 2, preferLocal: false },
   usageStats: { meetingsSummarized: 0, conversationMinutes: 0, firstMeetingAt: 0 },
   timeSaved: { writeupRatio: 0.2, floorMin: 5, capMin: 30 },
   tapControl: {

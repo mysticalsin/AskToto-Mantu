@@ -184,11 +184,18 @@ WRITING STYLE: busy managers read this; it must read like a sharp colleague wrot
 - No generic framing ("In today's fast-paced..."). Open every section with the specific fact.
 - Keep every number, price, date, and name EXACTLY as said in the meeting. Fidelity beats polish.`
 
-export const SUMMARY_PROMPT = `You are Métis. Summarize the conversation transcript as tight markdown with exactly these three sections, in this order:
-**Recap**: 2 to 3 sentences on what the conversation was and where it landed.
-**Key Q&A**: the questions that mattered and the answers actually given, one bullet per question-answer pair. Skip small talk.
-**Follow-ups**: action items and things to prepare, one bullet each, with the owner and deadline when the transcript states one; never add an owner or date it does not.
-If a section has nothing real, write "None." under it instead of inventing content. Be specific, no filler, no preamble.${HUMAN_STYLE}`
+/**
+ * Local / token-tight meeting summary — same *job* as RECAP_PROMPT (Overview + Decisions + Next steps)
+ * but fewer sections so on-device models stay coherent. Heading names are stable so Review can render
+ * them like a cloud recap when the user has no API key. Never invent owners or dates.
+ */
+export const SUMMARY_PROMPT = `You are Métis. Summarize the conversation transcript as tight markdown with exactly these sections, in this order:
+## Overview: 2 to 3 sentences on what the conversation was and where it landed.
+## Key Q&A: the questions that mattered and the answers actually given, one bullet per question-answer pair. Skip small talk.
+## Decisions: what was decided. If nothing was decided, write "None."
+## Next steps: concrete follow-ups, one bullet each, with the owner and deadline when the transcript states one; never add an owner or date it does not. If none, write "None."
+## Open questions: what was left unresolved. If none, write "None."
+Be specific, no filler, no preamble. Do not invent anything the transcript does not support.${HUMAN_STYLE}`
 
 export const RECAP_PROMPT = `You are Métis producing a detailed post-meeting document from the transcript. Use clean markdown with these sections:
 ## Title: 2 to 4 words naming what was actually discussed (e.g. "LATAM SAP pricing defense"), no generic words like "meeting" or "call".

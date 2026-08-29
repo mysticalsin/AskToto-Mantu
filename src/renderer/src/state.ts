@@ -268,6 +268,11 @@ export function useAsk(): {
   const [answer, setAnswer] = useState<AnswerState | null>(null)
   const idRef = useRef<string>('')
   const lastReqRef = useRef<AskRequest | null>(null) // last request, so Retry can replay vision verbatim
+  // True once an Answer/Copilot state has been painted at least once this session — follow-up asks can
+  // setAnswer synchronously (faster TTFT) because the lazy chunk is already mounted; the FIRST mount
+  // still needs startTransition to avoid React #426 (see run() below).
+  const answerMountedRef = useRef(false)
+  if (answer) answerMountedRef.current = true
   // Batch streamed tokens to one flush per animation frame. Without this, every token re-renders the
   // whole markdown answer and Streamdown re-lexes the entire growing string → O(n^2) on fast providers.
   const pendingRef = useRef('')
@@ -295,7 +300,6 @@ export function useAsk(): {
       rafRef.current = 0
       const chunk = pendingRef.current
       if (!chunk) return
-      pendingRef.current = ''
       // Capture BEFORE enqueuing the state update, not after: React 18 batches this setAnswer call, so
       // the updater below runs later (during the batched re-render), not synchronously on this line. The
       // old code reset pendingReplaceRef.current = false right after calling setAnswer and read the LIVE
@@ -304,7 +308,15 @@ export function useAsk(): {
       // the stale previous answer instead of replacing it (turn 2 rendered as turn1Text + turn2Text). Match
       // onDone/onError's existing capture-then-reset idiom, which reads a plain captured boolean inside the
       // updater instead of the ref itself.
+      //
+      // If Answer state has not mounted yet (first ask still inside startTransition), keep the buffer and
+      // retry next frame — never drop the first tokens a fast local/Worker provider already sent.
+      if (!answerMountedRef.current) {
+        rafRef.current = requestAnimationFrame(flush)
+        return
+      }
       const replace = pendingReplaceRef.current
+      pendingRef.current = ''
       pendingReplaceRef.current = false
       setAnswer((a) => {
         if (!a) return a
@@ -423,7 +435,10 @@ export function useAsk(): {
       // prevent the crash: React always suspends a lazy component's very FIRST render attempt regardless of
       // whether the module is already cached, so the transition wrap is the actual fix; the warm-up just
       // makes it resolve on the very next tick instead of after a real network/parse wait.
-      startTransition(() => {
+      //
+      // Follow-up asks (Answer already mounted): paint synchronously so the first stream delta never races
+      // a deferred transition and drops / delays TTFT.
+      const paint = (): void => {
         setAnswer((prev) => ({
           id,
           text: prev?.text ?? '',
@@ -435,7 +450,9 @@ export function useAsk(): {
           usedScreen: req.mode === 'vision' || !!req.wantsScreenContext,
           ephemeral: req.mode === 'suggest'
         }))
-      })
+      }
+      if (answerMountedRef.current) paint()
+      else startTransition(paint)
       void window.toto.ask({
         id,
         mode: req.mode,
@@ -477,15 +494,26 @@ export function useAsk(): {
       const id = idRef.current
       cancelledIdsRef.current.add(id) // marks the id so onError knows this one's abort is expected
       void window.toto.cancel(id)
+      // Drop any buffered tokens + pending RAF so a late flush cannot append onto the cancelled answer
+      // after streaming:false (cancel used to leave the buffer armed → one more chunk could land).
+      resetBuffer()
       setAnswer((a) => (a ? { ...a, streaming: false } : a))
       // A genuine cancel never gets a terminal onDone/onError to remove this id (see the ref's comment
       // above), so self-evict after a delay comfortably longer than any straggling late error could take
       // to arrive — bounds the Set's size instead of leaking one entry per cancelled stream forever.
       setTimeout(() => cancelledIdsRef.current.delete(id), 30_000)
     }
-  }, [])
+  }, [resetBuffer])
 
   const clear = useCallback((): void => {
+    // Abort any in-flight stream first — clearing UI without cancel left main producing tokens for an
+    // orphaned id (onDelta drops them once idRef is wiped, but the provider call still burned quota).
+    if (idRef.current) {
+      const id = idRef.current
+      cancelledIdsRef.current.add(id)
+      void window.toto.cancel(id)
+      setTimeout(() => cancelledIdsRef.current.delete(id), 30_000)
+    }
     idRef.current = ''
     resetBuffer()
     setAnswer(null)

@@ -244,6 +244,8 @@ fails the build if a row marked `FIXED` has no regression test naming its id.
 
 ## Docs
 
+- [`docs/qa/QUALITY-SCORECARD.md`](docs/qa/QUALITY-SCORECARD.md) — live quality targets (WER, failover, brain tokens/day, MCP)
+- [`docs/PROVIDER-ROUTING-POLICY.md`](docs/PROVIDER-ROUTING-POLICY.md) — Local / API / Auto routing precedence
 - [`docs/INSTALL.md`](docs/INSTALL.md) — Mac and Windows install instructions
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — dev-environment setup, gotchas, and internal patterns
   (IPC contract, state management, native-module packaging, debugging)
@@ -252,6 +254,7 @@ fails the build if a row marked `FIXED` has no regression test naming its id.
 - [`docs/CLOUDFLARE.md`](docs/CLOUDFLARE.md) — the Cloudflare provider: why it needs a Worker the
   operator deploys, what that operator stands up, and what a user types into Settings
 - [`docs/asktoto-architecture.md`](docs/asktoto-architecture.md) — architecture reference
+- [`docs/qa/BUG-LEDGER.md`](docs/qa/BUG-LEDGER.md) — defect ledger
 - [`docs/asktoto-hardening-backlog.md`](docs/asktoto-hardening-backlog.md) — deferred hardening items
 - [`docs/license-platform-plan.md`](docs/license-platform-plan.md) — license/activation platform design
 - `docs/design/` — design spec

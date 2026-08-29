@@ -212,6 +212,13 @@ function readAllowedFrom(p: string): string[] | null {
 const ADMIN_POLICY_REPROBE_MS = 60_000
 let _adminManagedCache: { mtime: number; at: number; content: string | null } | null = null
 
+/** Test-only: drop the admin-policy content snapshot between cases that redirect ProgramData /
+ *  recreate the policy file. Same class of flake as resetSettingsCacheForTests — mtime collision +
+ *  wall-clock TTL would otherwise serve a previous case's bytes (or skip the probe entirely). */
+export function resetAdminManagedCacheForTests(): void {
+  _adminManagedCache = null
+}
+
 function adminManagedContent(): string | null {
   const mtime = safeMtime(adminManagedConfigPath())
   const now = Date.now()
@@ -499,6 +506,14 @@ interface SettingsCache {
   caheEdition: boolean
 }
 let _settingsCache: SettingsCache | null = null
+
+/** Test-only: drop the mtime-keyed cache between cases that swap `app.getPath('userData')`. The cache
+ *  key is mtimes alone (not the absolute path), so two temp profiles that happen to share an mtimeMs
+ *  would otherwise return the previous case's Settings — a flake that surfaces as "mcpConnections is []"
+ *  / wrong provider after an unrelated earlier write. Production never swaps userData mid-process. */
+export function resetSettingsCacheForTests(): void {
+  _settingsCache = null
+}
 
 function currentSettingsMtimes(): Pick<SettingsCache, 'userMtime' | 'managedMtime' | 'adminMtime' | 'caheEdition'> {
   return {

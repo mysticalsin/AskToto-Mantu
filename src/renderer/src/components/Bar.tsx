@@ -245,6 +245,7 @@ function IconTool({
   title,
   onClick,
   onMouseEnter,
+  onMouseDown,
   active,
   danger,
   rainbow,
@@ -261,6 +262,9 @@ function IconTool({
   /** Optional hover hook — used by the Capture tool to pre-warm the OS capture pipeline at the one
    *  moment screen intent is actually signalled (MQA-236: never on text-input focus). */
   onMouseEnter?: () => void
+  /** Optional press hook — re-arms capture prewarm so a click >TTL after hover still shares the
+   *  in-flight single-flight capture instead of paying a cold desktopCapturer round trip. */
+  onMouseDown?: () => void
   active?: boolean
   danger?: boolean
   rainbow?: boolean
@@ -293,6 +297,7 @@ function IconTool({
         disabled={disabled}
         onClick={onClick}
         onMouseEnter={onMouseEnter}
+        onMouseDown={onMouseDown}
         className={[
           'no-drag focus-ring peer grid place-items-center rounded-[10px] p-1 transition-colors duration-[var(--duration-hover)] active:scale-[0.92]',
           rainbow ? 'rainbow-ring' : '',
@@ -590,6 +595,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
               title={props.captureAccel ? `Capture screen (${accelLabel(props.captureAccel)})` : 'Capture screen'}
               onClick={props.onCapture}
               onMouseEnter={() => { if (props.canPrewarm) void window.toto.prewarmCapture() }}
+              onMouseDown={() => { if (props.canPrewarm) void window.toto.prewarmCapture() }}
             >
               {props.capturing ? <Spinner size={19} /> : <Image size={19} strokeWidth={ICON_STROKE} />}
             </IconTool>
