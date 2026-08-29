@@ -73,6 +73,15 @@ export const IPC = {
   // No status/ensure/progress channels: unlike Parakeet there is no bundled model to download: the
   // helper binary either transcribes or the call resolves to '' (see main/apple-speech.ts).
   appleSpeechFeed: 'apple-speech:feed',
+  // Speaker Intelligence (SPEAKER-INTELLIGENCE-PLAN §3) — the engine-independent voice-embedding tap.
+  // Parakeet/Apple Speech already ride the label along on their own feed channels (same PCM window the
+  // ASR just consumed); Whisper runs entirely in a renderer Worker with no main-process round trip of its
+  // own, so it needs this separate channel to hand the SAME window's audio to speaker-id.ts after the
+  // fact. Fire-and-forget from listen.ts's Whisper commitLine path — a slow/failed call attaches no name,
+  // it never blocks or retries the decode. `speaker` distinguishes a THEM window (gets labeled) from a
+  // YOU window (only reinforces the operator echo-defense profile — see speaker-id.ts's
+  // observeOperatorWindow); either way the response is best-effort `{ name? }`.
+  speakerEmbed: 'speaker:embed',
   askStart: 'ask:start',
   askCancel: 'ask:cancel',
   // Explicit "new chat" boundary: clears the main-owned carriers of cross-question state (the server-side
@@ -311,9 +320,29 @@ export const TranscriptLineSchema = z.object({
   // by commitLine so mixed-language meetings render "[conversation switches to …]" markers in the recap
   // prompt and the saved transcript (the LLM otherwise has no way to know a switch happened). Absent
   // when detection wasn't confident, and on every line saved before this field existed.
-  lang: z.string().optional()
+  lang: z.string().optional(),
+  // ASR quality (Wave 1, 1B.2b) — a UI-only interim placeholder for a window listen.ts has queued/is
+  // decoding but hasn't gotten text back for yet ("…" bubble), so the live transcript doesn't sit blank
+  // while a slow/backlogged model works through the queue. Replaced (never merged) by the real line
+  // commitLine produces for the same window once it resolves — never true on a line that reached a save
+  // or the recap prompt (see transcript.ts's transcriptToText and shared/ipc.ts's stripProvisionalLines),
+  // so this field existing on a line is itself the "don't persist me" contract. Optional so every
+  // previously saved meeting still parses unchanged.
+  provisional: z.boolean().optional()
 })
 export type TranscriptLine = z.infer<typeof TranscriptLineSchema>
+
+/** ASR quality (1B.2b) — strip UI-only provisional placeholders (see TranscriptLineSchema.provisional
+ *  above) before a transcript reaches disk or the recap prompt. `transcriptToText` (renderer/lib/
+ *  transcript.ts) is the live-text guard; this is the save-path guard, applied once at the IPC boundary
+ *  (main/index.ts's saveTranscript/saveDraftTranscript handlers) so every caller is covered even one that
+ *  forgot to filter — belt-and-suspenders, since commitLine already removes the placeholder it's
+ *  replacing before pushing the real line, so in the common case there is nothing left to strip. Returns
+ *  the input array unchanged (same reference) when nothing needed removing, so a save of an ordinary
+ *  meeting with no provisional lines never pays a spurious copy. */
+export function stripProvisionalLines(lines: TranscriptLine[]): TranscriptLine[] {
+  return lines.some((l) => l.provisional) ? lines.filter((l) => !l.provisional) : lines
+}
 
 /** Single source of truth for the import pipeline's decode window. Both decoders that turn a recording
  *  into PCM windows — main's ffmpeg sidecar (main/ffmpeg-decoder.ts) and the renderer's Chromium
@@ -999,9 +1028,6 @@ export const BaseSettingsSchema = z.object({
   // before it's sent to a cloud model. On by default; never touches the typed question or the saved file.
   redactSensitive: z.boolean().default(true),
   lastConsentReminderAt: z.number().default(0),
-  // deprecated — kept so persisted settings/managed-config still parse (was only used by the removed
-  // auto-start-on-meeting-detected popup's app-name matching).
-  customMeetingApps: z.array(z.string().min(1).max(80)).max(20).default([]),
   // Words the ASR engine consistently mishears, always corrected in the live transcript (commitLine).
   asrCorrections: z.array(AsrCorrectionPairSchema).max(100).default([]),
   // Entity-casing bias (SAFE — exact-match only, never phonetic/fuzzy): spell people/account names the
@@ -1394,7 +1420,6 @@ export const DEFAULT_SETTINGS: Settings = {
   requireConsentIndicator: true,
   redactSensitive: true,
   lastConsentReminderAt: 0,
-  customMeetingApps: [], // deprecated — kept so persisted settings/managed-config still parse
   asrCorrections: [],
   asrEntityBias: true,
   cliConnected: {},

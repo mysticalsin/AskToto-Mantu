@@ -27,11 +27,18 @@ export interface OnboardingExperienceProps {
 
 const REVEAL: string[] = ['Grounded in your meeting, in your words.', 'On your device. Nothing uploaded.']
 
-type Scene = 'hero' | 'reveal' | 'setup' | 'personalize'
+/** Wave 5 — problem story (docs/ONBOARDING-EXPERIENCE.md Scene 2): staged lines, one at a time. */
+const PROBLEM_STORY: string[] = [
+  "You're in the meeting.",
+  'The question lands on you.',
+  'You know that you know it.',
+  '…and the moment passes.'
+]
 
-// Hero is the welcome beat, not a "step" — the dots only track the guided acts after it, so the
-// indicator appears the moment the user is actually inside the flow instead of before they've begun.
-const GUIDED_SCENES: Scene[] = ['reveal', 'setup', 'personalize']
+type Scene = 'hero' | 'problem' | 'reveal' | 'setup' | 'personalize'
+
+// Hero is the welcome beat, not a "step" — the dots only track the guided acts after it.
+const GUIDED_SCENES: Scene[] = ['problem', 'reveal', 'setup', 'personalize']
 
 // Lives in its own reserved-height row above the scene content (see the render below) rather than an
 // absolute overlay — an overlay collided with scene headings that sit close to the top on taller scenes
@@ -251,7 +258,7 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
           </div>
           <button
             type="button"
-            onClick={() => setScene('reveal')}
+            onClick={() => setScene('problem')}
             className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-6 text-[13px] font-semibold text-white shadow-[0_2px_16px_var(--color-accent-glow)] hover:brightness-110"
           >
             Begin
@@ -262,6 +269,34 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
             </button>
           )}
           <p className="m-0 text-[10px] tracking-wide text-[color:var(--color-ink-3)]">Mantu · Métis</p>
+        </div>
+      )}
+
+      {scene === 'problem' && (
+        <div key="problem" className="scene-enter flex flex-col items-center gap-8">
+          <div className="flex max-w-[420px] flex-col gap-3 text-left">
+            {PROBLEM_STORY.map((line, i) => (
+              <p
+                key={line}
+                className="fade-up m-0 text-[22px] font-medium leading-snug text-[color:var(--color-ink)]"
+                style={{
+                  animationDelay: `${200 + i * 1100}ms`,
+                  animationFillMode: 'backwards',
+                  opacity: 1
+                }}
+              >
+                {line}
+              </p>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => setScene('reveal')}
+            className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-6 text-[13px] font-semibold text-white hover:brightness-110"
+            style={{ animationDelay: `${200 + PROBLEM_STORY.length * 1100}ms` }}
+          >
+            Continue
+          </button>
         </div>
       )}
 

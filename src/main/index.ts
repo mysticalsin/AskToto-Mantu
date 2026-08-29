@@ -128,7 +128,7 @@ import {
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText } from './mac-helper'
-import { createSpeakerId, type SpeakerId } from './speaker-id'
+import { createSpeakerId, type SpeakerId, type SpeakerLabel } from './speaker-id'
 
 // Lazy Speaker Intelligence singleton — building it probes the sherpa addon + embedding model, so defer
 // until the first THEM window with the feature enabled (never on the startup path).
@@ -136,6 +136,34 @@ let speakerIdInstance: SpeakerId | null = null
 function getSpeakerId(): SpeakerId {
   if (!speakerIdInstance) speakerIdInstance = createSpeakerId()
   return speakerIdInstance
+}
+
+/** Shared Speaker Intelligence label lookup for a THEM window — parakeetFeed, appleSpeechFeed and
+ *  speakerEmbed all funnel through this one place so the settings gate + failure handling can't drift
+ *  between the three chokepoints. Degrades to null on any failure, the feature being off, or the model
+ *  being unprovisioned — a missing label must never break transcription. See speaker-id.ts's labelWindow
+ *  for the echo-defense flag (`label.echo`) callers must check before attaching `label.name` anywhere. */
+function labelThemAudio(samples: Float32Array): SpeakerLabel | null {
+  if (!getSettings().speakerId.enabled) return null
+  try {
+    return getSpeakerId().labelWindow(samples)
+  } catch (err) {
+    mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
+    return null
+  }
+}
+
+/** Echo defense + operator profile upkeep (SPEAKER-INTELLIGENCE-PLAN §3.3) — feed a 'you' (mic) window's
+ *  raw audio into the operator's rolling voiceprint so labelThemAudio can recognize the operator's own
+ *  voice bleeding through the loopback. Fire-and-forget by construction (void return, swallows errors):
+ *  called from the SAME handlers that already transcribe the window, and must never affect their result. */
+function observeOperatorAudio(samples: Float32Array): void {
+  if (!getSettings().speakerId.enabled) return
+  try {
+    getSpeakerId().observeOperatorWindow(samples)
+  } catch (err) {
+    mainLog.warn('[speaker-id] operator observation failed', err instanceof Error ? err.message : String(err))
+  }
 }
 import { buildPrewarmMessages } from './llm/prewarm'
 import { listModels as listLocalModels, bestModelForMachine, isDownloaded as localModelDownloaded } from './llm/local-models'
@@ -311,7 +339,7 @@ import {
   scheduleRebuild,
   purgeGraphArtifacts
 } from './graphify'
-import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
+import { SaveMeetingSchema, SaveNoteSchema, stripProvisionalLines } from '@shared/ipc'
 import {
   PROVIDERS,
   PROVIDER_IDS,
@@ -329,7 +357,7 @@ import { ThinkStripper } from './llm/think-strip'
 import { redactSecrets } from '@shared/redact'
 import { isSafeAccelerator } from '@shared/accelerator'
 import { formatResetPhrase } from '@shared/reset-time'
-import { applySpeakerNames } from '@shared/transcript-align'
+import { applySpeakerNames, clusterNamePairsFromAlignment } from '@shared/transcript-align'
 import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
 import { importEmbeddedCaheKey, seedCaheLocalAiForBackgroundScreen } from './cahe-embedded-key'
 import { importEmbeddedCloudflareKey, embeddedCloudflareKeyAvailable, restoreEmbeddedCloudflareKey } from './embedded-cloudflare-key'
@@ -2341,6 +2369,21 @@ async function backfillSpeakerNames(file: string): Promise<{ ok: boolean; named?
     const { lines, named } = applySpeakerNames(read.lines, fetched.entries, { operatorName })
     if (named === 0) return { ok: true, named: 0 }
 
+    // Auto-enrollment flywheel (SPEAKER-INTELLIGENCE-PLAN §3.4): a THEM line VTT alignment just resolved
+    // to a real name, whose PRE-alignment name was a live session cluster label ("Speaker N"), is exactly
+    // the join needed to grow a permanent voiceprint with zero user effort — this session's "Speaker N"
+    // IS that person. Best-effort and silent: a missed window (feature off, no session buffer left, below
+    // the quality gate) never affects the save this function already guarantees.
+    const clusterNamePairs = clusterNamePairsFromAlignment(read.lines, lines)
+    if (clusterNamePairs.length) {
+      try {
+        const enrolled = getSpeakerId().autoEnrollFromLabeledWindows(clusterNamePairs)
+        if (enrolled) auditLog('speaker.auto_enrolled', { enrolled })
+      } catch (err) {
+        mainLog.warn('[speaker-id] auto-enroll failed', err instanceof Error ? err.message : String(err))
+      }
+    }
+
     const result = await updateMeetingTranscript(settings, safeName, lines)
     if (!result.ok) return { ok: false, error: result.error }
 
@@ -3597,13 +3640,16 @@ function registerIpc(): void {
     // ("Jane Doe" from an enrolled profile, else a stable "Speaker N" session label). Same PCM buffer the
     // ASR just consumed — no extra capture. Strictly additive and best-effort: any failure or the feature
     // being off/unprovisioned attaches no name and the line renders exactly as before.
-    if (text && p.speaker === 'them' && getSettings().speakerId.enabled) {
-      try {
-        const label = getSpeakerId().labelWindow(p.samples)
-        if (label) return { text, name: label.name }
-      } catch (err) {
-        mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
-      }
+    if (text && p.speaker === 'them') {
+      const label = labelThemAudio(p.samples)
+      // P2 echo defense: this window is the operator's OWN voice bleeding through the loopback, not the
+      // other person — drop the transcribed text entirely rather than mislabel the operator's words as
+      // "them" (a name/cluster label attached here would otherwise show up as something THEY said).
+      if (label?.echo) return { text: '' }
+      if (label) return { text, name: label.name }
+    } else if (p.speaker === 'you') {
+      // ME windows never get a THEM label — feed straight into operator echo-defense/profile upkeep.
+      observeOperatorAudio(p.samples)
     }
     return { text }
   })
@@ -3621,15 +3667,37 @@ function registerIpc(): void {
     if (p.samples.length > 16_000 * 30) return ''
     // Spoken-language hint (Settings → Audio) pins the recognizer locale; 'auto' keeps system locale.
     const text = await appleSpeechTranscribe(p.samples, appleSpeechLocale(getSettings().asrLanguage))
-    if (text && p.speaker === 'them' && getSettings().speakerId.enabled) {
-      try {
-        const label = getSpeakerId().labelWindow(p.samples)
-        if (label) return { text, name: label.name }
-      } catch (err) {
-        mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
-      }
+    if (text && p.speaker === 'them') {
+      const label = labelThemAudio(p.samples)
+      if (label?.echo) return { text: '' } // see parakeetFeed's identical echo-defense comment above
+      if (label) return { text, name: label.name }
+    } else if (p.speaker === 'you') {
+      observeOperatorAudio(p.samples)
     }
     return { text }
+  })
+
+  // Speaker Intelligence (SPEAKER-INTELLIGENCE-PLAN §3) — the Whisper engine's speaker-embedding tap.
+  // Whisper runs entirely in a renderer Worker with no main-process round trip of its own (unlike
+  // Parakeet/Apple, which already ride the label along on parakeetFeed/appleSpeechFeed above), so
+  // listen.ts's Whisper commitLine path calls this separately, after the fact, with the SAME window's
+  // audio the worker just transcribed — fire-and-forget, best-effort, never blocking the live decode.
+  ipcMain.handle(IPC.speakerEmbed, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return {}
+    const p = payload as { samples?: unknown; speaker?: unknown }
+    if (!(p?.samples instanceof Float32Array)) return {}
+    // Same defensive cap as parakeetFeed — see its own comment for why.
+    if (p.samples.length > 16_000 * 30) return {}
+    if (p.speaker === 'them') {
+      const label = labelThemAudio(p.samples)
+      // Echo bleed has no text to drop here (the Whisper worker already committed the line before this
+      // call resolves) — degrade to attaching no name, which is exactly the pre-P2 "unlabeled" outcome.
+      if (label && !label.echo) return { name: label.name }
+    } else if (p.speaker === 'you') {
+      observeOperatorAudio(p.samples)
+    }
+    return {}
   })
 
   // --- Métis Local (on-device LLM): model readiness metadata ---
@@ -4592,6 +4660,10 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const m = SaveMeetingSchema.parse(raw)
+    // ASR quality (1B.2b) — a live-only interim placeholder must never reach disk (see
+    // TranscriptLineSchema.provisional's own doc comment). Belt-and-suspenders: listen.ts already
+    // replaces a provisional line with the real one before it could ever be included here.
+    m.lines = stripProvisionalLines(m.lines)
     const r = { path: await saveMeeting(getSettings(), m) }
     // Time-saved: the meeting file just landed — credit it ONCE to the durable lifetime counters. This is
     // the live-meeting save path; the import path credits itself separately once its file is durable. A
@@ -4950,7 +5022,9 @@ function registerIpc(): void {
     if (!requireAuth()) return
     const parsed = SaveMeetingSchema.safeParse(raw)
     if (!parsed.success) return
-    await saveDraftTranscript(getSettings(), parsed.data)
+    // Same provisional-line guard as the real saveTranscript handler above — this periodic crash-
+    // recovery snapshot must never resurrect a UI-only "…" placeholder into a recovered draft.
+    await saveDraftTranscript(getSettings(), { ...parsed.data, lines: stripProvisionalLines(parsed.data.lines) })
   })
 
   ipcMain.handle(IPC.saveNote, async (e, raw) => {

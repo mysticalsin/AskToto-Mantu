@@ -5016,15 +5016,21 @@ const TABS: {
       'thinking mode', 'model', 'other providers', 'model provider', 'cli integration',
       'fallback', 'indexing fallback', 'offline indexing',
       'backups & limits', 'nvidia', 'nim', 'race a backup provider', 'hedge',
-      'cloudflare', 'worker', 'ai gateway', 'workers ai', 'metis_proxy_key'
+      'cloudflare', 'worker', 'ai gateway', 'workers ai', 'metis_proxy_key',
+      'routing mode', 'routing', 'local', 'api', 'auto'
     ]
   },
   {
+    // Wave 5 Settings IA: user-facing label "Speech" (plan: AI · Speech · Brain · Integrations · Privacy).
+    // Tab id stays 'audio' so persisted deep-links / managed-config and every `tab === 'audio'` guard keep working.
     id: 'audio',
-    label: 'Audio',
+    label: 'Speech',
     icon: Mic,
     desc: 'What Métis listens to, and how it hears you.',
-    keywords: ['microphone', 'listen to', 'in meetings', 'vocabulary corrections', 'transcription', 'asr']
+    keywords: [
+      'audio', 'speech', 'microphone', 'listen to', 'in meetings', 'vocabulary corrections',
+      'transcription', 'asr', 'parakeet', 'whisper', 'apple speech', 'speaker identification'
+    ]
   },
   {
     id: 'calendar',
@@ -5043,13 +5049,16 @@ const TABS: {
   // Label shortened to keep all nine tabs on ONE line at the overlay's width — the MantuMark icon already
   // signals "Mantu"; the tab id stays 'intelligence' so nothing else changes.
   {
+    // Wave 5: label "Brain" — CRM/MCP push lives here as Integrations content under the same tab
+    // (overlay width cannot afford a tenth tab). Keywords keep old "Intelligence" / CRM search hits.
     id: 'intelligence',
-    label: 'Intelligence',
+    label: 'Brain',
     icon: MantuMark,
-    desc: 'Your second brain: meetings, wiki, CRM, knowledge graph.',
+    desc: 'Your second brain: meetings, wiki, CRM push, knowledge graph.',
     keywords: [
-      'mantu intelligence', 'meetings & follow-up', 'published wiki', 'polo pre-sales', 'crm',
-      'knowledge graph', 'plane', 'clickup', 'task management', 'book next steps', 'action items'
+      'mantu intelligence', 'intelligence', 'brain', 'meetings & follow-up', 'published wiki',
+      'polo pre-sales', 'crm', 'integrations', 'knowledge graph', 'plane', 'clickup',
+      'task management', 'book next steps', 'action items', 'consolidation', 'token', 'batch index'
     ]
   },
   {
@@ -6506,6 +6515,58 @@ function IntelligenceTab({
       </Section>
 
       <GraphSection settings={settings} patch={patch} />
+
+      <Section
+        title="Brain consolidation"
+        desc="Index meetings in at most a few LLM passes per day instead of one extract per save — keeps the second brain token-efficient. Manual Index now still runs immediately."
+        icon={Cpu}
+      >
+        <ToggleRow
+          label="Batch index (1–2× / day)"
+          desc={
+            settings.brainConsolidation.enabled
+              ? `Up to ${settings.brainConsolidation.maxPassesPerDay} consolidation pass${settings.brainConsolidation.maxPassesPerDay === 1 ? '' : 'es'} per day. New meetings wait in a durable queue until the next pass.`
+              : 'Off: each saved meeting is indexed with an LLM extract as soon as it lands (higher token use).'
+          }
+          on={settings.brainConsolidation.enabled}
+          onChange={(v) =>
+            patch({ brainConsolidation: { ...settings.brainConsolidation, enabled: v } })
+          }
+        />
+        {settings.brainConsolidation.enabled && (
+          <>
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <span className="text-[12px] text-[color:var(--cl-foreground)]">Max passes per day</span>
+              <select
+                className="no-drag cl-focus rounded-lg border border-[var(--cl-input)] bg-white/[0.04] px-2 py-1 text-[12px]"
+                value={settings.brainConsolidation.maxPassesPerDay}
+                onChange={(e) =>
+                  patch({
+                    brainConsolidation: {
+                      ...settings.brainConsolidation,
+                      maxPassesPerDay: Number(e.target.value) as 1 | 2 | 3 | 4
+                    }
+                  })
+                }
+              >
+                {[1, 2, 3, 4].map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <ToggleRow
+              label="Prefer on-device model for consolidation"
+              desc="When Métis Local is ready, use it for batch extracts before burning cloud tokens."
+              on={settings.brainConsolidation.preferLocal}
+              onChange={(v) =>
+                patch({ brainConsolidation: { ...settings.brainConsolidation, preferLocal: v } })
+              }
+            />
+          </>
+        )}
+      </Section>
 
       <Section
         title="Published wiki (Dust-readable)"

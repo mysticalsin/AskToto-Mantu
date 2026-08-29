@@ -8,6 +8,7 @@ import { slug } from '../lib/slug'
 import {
   agingBuckets,
   bandDistribution,
+  closingRate,
   ledgerTotals,
   outcomeDistribution,
   reliabilityByOwner,
@@ -76,8 +77,16 @@ export function StatsView({ data }: Props) {
   const stanceByCategory = useMemo(() => stanceMix(allClaims), [allClaims])
 
   const outcomeDist = useMemo(() => outcomeDistribution(data.deals), [data.deals])
+  const closedRate = useMemo(() => closingRate(data.deals), [data.deals])
   const bandDist = useMemo(() => bandDistribution(data.deals), [data.deals])
   const pipelineMax = Math.max(1, data.deals.length)
+  // Wave 6 — honest time-saved estimate (same axis as shared/time-saved.ts): ~13 min write-up avoided
+  // per ingested meeting when we lack per-meeting durations in the Intelligence feed. Label as estimate.
+  const timeSavedEstMin = data.status.meetings * 13
+  const timeSavedLabel =
+    timeSavedEstMin >= 60
+      ? `${(timeSavedEstMin / 60).toFixed(timeSavedEstMin % 60 === 0 ? 0 : 1)} h`
+      : `${timeSavedEstMin} min`
 
   // momentum.ts's MeetingLike wants `account?: string`; the feed's account is `string | null` — normalize
   // null to undefined rather than widening the shared lib's type for one caller.
@@ -145,6 +154,15 @@ export function StatsView({ data }: Props) {
       <div className="mt-6 grid grid-cols-2 gap-4 md:grid-cols-4">
         <StatTile label="Meetings ingested" value={data.status.meetings} />
         <StatTile label="Deals tracked" value={data.deals.length} />
+        <StatTile
+          label="Closing rate"
+          value={
+            closedRate
+              ? `${Math.round(closedRate.rate * 100)}%`
+              : '—'
+          }
+        />
+        <StatTile label="Time saved (est.)" value={data.status.meetings === 0 ? '—' : timeSavedLabel} />
         <StatTile label="Claims extracted" value={totalClaims} />
         <StatTile label="Coaching insights" value={data.coaching_insights.length} />
         <StatTile label="Recurring patterns (n≥2)" value={recurringInsights} />
@@ -157,6 +175,13 @@ export function StatsView({ data }: Props) {
           value={`${data.account_graph.nodes.length} · ${data.account_graph.edges.length}`}
         />
       </div>
+      {data.status.meetings > 0 && (
+        <p className="mt-2 text-xs text-white/45">
+          Time saved is an estimate (~13 min of write-up avoided per ingested meeting), not a measured clock.
+          Closing rate uses only human-set won/lost outcomes
+          {closedRate ? ` (n=${closedRate.closed})` : ' — needs ≥5 closed deals before a rate is shown'}.
+        </p>
+      )}
 
       {/* Pipeline */}
       <Section title="Pipeline">

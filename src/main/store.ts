@@ -500,6 +500,14 @@ interface SettingsCache {
 }
 let _settingsCache: SettingsCache | null = null
 
+/** Test-only: drop the mtime-keyed cache between cases that swap `app.getPath('userData')`. The cache
+ *  key is mtimes alone (not the absolute path), so two temp profiles that happen to share an mtimeMs
+ *  would otherwise return the previous case's Settings — a flake that surfaces as "mcpConnections is []"
+ *  / wrong provider after an unrelated earlier write. Production never swaps userData mid-process. */
+export function resetSettingsCacheForTests(): void {
+  _settingsCache = null
+}
+
 function currentSettingsMtimes(): Pick<SettingsCache, 'userMtime' | 'managedMtime' | 'adminMtime' | 'caheEdition'> {
   return {
     userMtime: safeMtime(settingsPath()),

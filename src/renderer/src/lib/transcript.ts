@@ -14,6 +14,10 @@ export function transcriptToText(lines: TranscriptLine[]): string {
   const out: string[] = []
   let prevLang: string | undefined
   for (const l of lines) {
+    // ASR quality (1B.2b) — a provisional line is a UI-only "…" placeholder for a window still being
+    // transcribed (see shared/ipc.ts's TranscriptLineSchema.provisional). It must never reach the recap
+    // prompt or a saved transcript — real text for the SAME speech replaces it once decode settles.
+    if (l.provisional) continue
     if (l.lang && prevLang && l.lang !== prevLang) out.push(`[conversation switches to ${l.lang}]`)
     if (l.lang) prevLang = l.lang
     out.push(`${l.speaker === 'them' ? 'THEM' : l.speaker === 'you' ? 'YOU' : 'SPEAKER'}: ${l.text}`)

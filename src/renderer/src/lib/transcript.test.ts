@@ -48,6 +48,14 @@ describe('transcriptToText', () => {
     )
   })
 
+  it('excludes provisional lines — a UI-only "…" placeholder must never reach the recap prompt (1B.2b)', () => {
+    const lines: TranscriptLine[] = [
+      line('you', 'How is the roadmap looking?'),
+      { speaker: 'them', text: '…', t: 1, provisional: true }
+    ]
+    expect(transcriptToText(lines)).toBe('YOU: How is the roadmap looking?')
+  })
+
   it('never emits markers for untagged lines (older meetings, unconfident detection) or before the first tag', () => {
     const lines: TranscriptLine[] = [
       { speaker: 'them', text: 'Hmm.', t: 0 }, // untagged

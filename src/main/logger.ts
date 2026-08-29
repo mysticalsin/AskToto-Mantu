@@ -163,6 +163,9 @@ export type AuditEvent =
   | 'transcript.imported'
   // Speaker Intelligence (Phases A/B): a Teams-transcript name backfill actually resolved >=1 name.
   | 'transcript.speakers_backfilled'
+  // Speaker Intelligence (P2): the auto-enrollment flywheel folded >=1 session cluster's buffered
+  // embeddings into a permanent voiceprint under a Teams-VTT-resolved real name (see backfillSpeakerNames).
+  | 'speaker.auto_enrolled'
   | 'brain.commitment.settled'
   | 'brain.deal.outcome'
   | 'brain.entity.renamed'
