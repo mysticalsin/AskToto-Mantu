@@ -101,6 +101,7 @@ resources/mac-helper/
 
 # Native app build artifacts
 native-app/MetisKit/.build/
+native-app/Metis.xcodeproj/
 native-app/**/*.xcodeproj/xcuserdata/
 
 # Packaged-app QA harness scratch output (.forge live E2E runs)

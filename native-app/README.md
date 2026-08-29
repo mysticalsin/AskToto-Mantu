@@ -77,9 +77,18 @@ native-app/
 cd native-app/MetisKit && swift build && swift test    # the core, today
 ```
 
-The app targets need an Xcode project (no xcodegen on this machine yet). Next step: `brew install
-xcodegen`, add a `project.yml` wrapping `MetisKit` + the SwiftUI `App/` sources, or create the app target
-in Xcode directly. Then the on-device model runs live on an Apple-Intelligence Mac.
+Release zip for GitHub (`Metis-Native-<version>.zip`, contains `Metis.app`) — **macOS only**:
+
+```
+brew install xcodegen          # once
+npm run release:native-mac     # syncs version from package.json, xcodegen, xcodebuild, ditto zip
+```
+
+That artifact is what tagged Release CI publishes alongside the Electron `.dmg` / Windows `.exe`s.
+It is not produced by electron-builder.
+
+The app targets need an Xcode project. `npm run release:native-mac` runs `xcodegen generate` for you;
+for interactive work: `cd native-app && xcodegen generate && open Metis.xcodeproj`.
 
 ## Roadmap (next, in order)
 
