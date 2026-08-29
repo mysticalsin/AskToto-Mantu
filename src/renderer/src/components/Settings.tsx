@@ -1095,8 +1095,8 @@ function AiSection({
       )}
       {canRestoreEmbedded && (
         <div className="mt-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
-          Metis shipped with a Cloudflare key. Without it, questions fall back to the on-device model,
-          which is private but noticeably slower.
+          Metis shipped with a Cloudflare key. Restore it to keep Cloudflare answering — or add another
+          provider&apos;s API key below.
         </div>
       )}
       {restoreMsg && (
@@ -1846,21 +1846,32 @@ function LocalAiSection({
   // incomplete" and told the user to reinstall Métis — an instruction the build gate guarantees cannot
   // work, because no installer contains the weights (MQA-188/191).
   const downloadFailedText =
-    'Could not download the on-device model. Métis retries on the next launch — check that huggingface.co is reachable from this network.'
-  const notDownloadedText = 'Not downloaded yet. Métis fetches the on-device model automatically on first run.'
+    'Could not download the on-device model. Métis retries when you turn Local AI back on — check that huggingface.co is reachable from this network.'
+  const notDownloadedText =
+    'Not downloaded yet. Turn on Local AI above — Métis fetches the on-device model automatically (~730 MB).'
 
   return (
     <Section
       title="Local AI"
-      desc="Runs a small model on this device. Live suggestions, summaries, Mantu Intelligence extraction, and screenshot reads stay local."
+      desc="Optional on-device model. Off by default — Cloudflare and any API keys you add stay primary. Turn this on to download and run a small model locally for suggestions, summaries, and screenshot reads."
       icon={Cpu}
     >
       <div className="flex flex-col gap-3">
         <ToggleRow
           label="Enable Métis Local"
-          desc="Métis downloads the model (~730 MB) once, on first run — it is not part of the installer. Turning this off skips that download."
+          desc="Downloads the model (~730 MB) the first time you turn this on — it is not part of the installer. Cloudflare and your other API providers stay available."
           on={settings.localLlm.enabled}
-          onChange={(v) => patch({ localLlm: { ...settings.localLlm, enabled: v } })}
+          onChange={(v) =>
+            patch({
+              localLlm: {
+                ...settings.localLlm,
+                enabled: v,
+                // Arm the safety net with the opt-in so a just-enabled Local install can still answer
+                // when every cloud provider is exhausted — without forcing a download while Local is off.
+                ...(v ? { fallback: true } : {})
+              }
+            })
+          }
         />
 
         <div className="flex items-center gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.02] px-3 py-2 text-[11px] text-[color:var(--cl-muted-foreground)]">

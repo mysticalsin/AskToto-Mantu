@@ -199,11 +199,11 @@ describe('SettingsSchema', () => {
   })
 
   it('defaults backgroundScreenContext OFF — continuous screen capture is its own opt-in', () => {
-    // This used to default on, relying on localLlm.enabled defaulting off to stay inert. With Local AI
-    // now enabled by default (fallback safety net), a true default here would silently start continuous
-    // foreground-window capture + captioning on every fresh install. Both defaults must never be true.
     expect(DEFAULT_SETTINGS.backgroundScreenContext).toBe(false)
     expect(SettingsSchema.parse(DEFAULT_SETTINGS).backgroundScreenContext).toBe(false)
+    // Local AI is also off by default — both must stay false so a fresh install never starts
+    // continuous screen capture as a side effect of another default.
+    expect(DEFAULT_SETTINGS.localLlm.enabled).toBe(false)
     expect(
       DEFAULT_SETTINGS.localLlm.enabled && DEFAULT_SETTINGS.backgroundScreenContext
     ).toBe(false)

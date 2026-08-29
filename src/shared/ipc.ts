@@ -801,10 +801,11 @@ export const BaseSettingsSchema = z.object({
   // Default provider: Cloudflare (Tony, 2026-08-21), replacing NVIDIA NIM (2026-08-14). One endpoint the
   // operator deploys reaches Workers AI, OpenAI, Anthropic and Google on a single account credential, so
   // a fleet is configured once rather than per vendor per user. The build ships the operator's Worker URL
-  // as cloudflareBaseUrl's default (a URL is not a secret); the METIS_PROXY_KEY never ships and is the one
-  // string a user pastes. Until that key exists the provider is simply not ready, and the walk behaves as
-  // it always has: an explicitly enabled on-device model short-circuits first (localLlm.useFor), then
-  // Cloudflare, then NVIDIA NIM, then whatever keys the user added themselves.
+  // as cloudflareBaseUrl's default (a URL is not a secret); the METIS_PROXY_KEY is either
+  // installer-embedded (embedded-cloudflare-key.ts) or pasted once in Settings — Cloudflare stays the
+  // always-on cloud path. Additional LLMs are additive: paste any featured / "more models" / Custom
+  // OpenAI-compatible API key in Settings → AI. Métis Local is opt-in (localLlm.enabled defaults off)
+  // and only preempts Cloudflare when the user turns a useFor toggle on.
   provider: ProviderIdSchema.default('cloudflare'),
   // CLI-vs-API priority. 'api' (default) keeps the explicitly-chosen `provider` as primary. 'cli' makes a
   // connected CLI integration (Claude/Codex) the primary so the user's local subscription is used before
@@ -978,12 +979,10 @@ export const BaseSettingsSchema = z.object({
   /** Background screen preprocessing: when the foreground window changes, quietly analyze the screen with
    *  the ON-DEVICE model and cache the description, so "What's on my screen" answers from pre-computed text
    *  instead of a cold capture + full-image round trip. On-device only — nothing extra is sent to the cloud;
-   *  Private View hard-blocks it. Default OFF — explicit opt-in. This used to default on while relying on
-   *  localLlm.enabled defaulting off to stay inert; now that Local AI is enabled by default (fallback
-   *  safety net), a true default here would silently start continuous foreground-window capture +
-   *  captioning on every fresh install with zero user action. Continuous screen reading is its own
-   *  consent decision, never a side effect of another default. (The Cahê pilot still seeds it true
-   *  explicitly — cahe-embedded-key.ts — which is an explicit per-edition choice, not a default.) */
+   *  Private View hard-blocks it. Default OFF — explicit opt-in. Continuous screen reading is its own
+   *  consent decision, and it also requires Local AI to be enabled (itself off by default). (The Cahê
+   *  pilot still seeds both true explicitly — cahe-embedded-key.ts — which is an explicit per-edition
+   *  choice, not a default.) */
   backgroundScreenContext: z.boolean().default(false),
   // How see-through the overlay's glass background is. A multiplier on the default glass alpha values
   // (see --glass-fill etc. in styles.css) — 1 = today's default look, lower = more transparent (see more
@@ -1062,13 +1061,12 @@ export const BaseSettingsSchema = z.object({
   // main/store.ts instead of pointing llama-server at a file that can never exist.
   localLlm: z
     .object({
-      // Default TRUE: the llama-server RUNTIME ships inside every installer, and the flag alone costs
-      // nothing at runtime — the sidecar spawns lazily on first local request, and
-      // prewarm additionally requires useFor.suggest (local-routing.ts localPrewarmEligible). With every
-      // useFor toggle defaulting FALSE below, default-enabled can never preempt a configured cloud
-      // provider; it only makes the `fallback` safety net (and the Settings toggles) live out of the box,
-      // so a zero-API-key install still indexes meetings and answers in-scope asks on-device.
-      enabled: z.boolean().default(true),
+      // Default FALSE: Cloudflare (the shipped default provider, with Worker URL + optional embedded
+      // METIS_PROXY_KEY) is the always-on cloud path. Métis Local is opt-in — turning it on in Settings
+      // triggers the ~730 MB weight download (not part of the installer). Keeping this false means a
+      // fresh install never pays that transfer, never warms a sidecar, and never silently routes
+      // work on-device ahead of the configured Cloudflare / API providers.
+      enabled: z.boolean().default(false),
       modelId: BundledLocalModelIdSchema,
       // All FALSE by default: useFor.X means "local FIRST for X" — it short-circuits even a configured
       // cloud provider (local-routing.ts pickPrimaryProvider) and, for summary, makes local the EXCLUSIVE
@@ -1092,23 +1090,24 @@ export const BaseSettingsSchema = z.object({
       // limits entirely so a plain typed question is answered on-device rather than met with "add an API
       // key" — the alternative there is not a better cloud answer, it is no answer. Only ever reachable
       // when localLlm.enabled is true and the runtime+model are actually provisioned AND the org
-      // allowlist permits 'local' (localBaseReady). Defaults on: it can only ever reduce the chance of
-      // work going undone, never increase cloud exposure (on-device is same-or-more private than cloud,
-      // never less).
-      fallback: z.boolean().default(true)
+      // allowlist permits 'local' (localBaseReady). Defaults OFF with enabled: a safety net that would
+      // trigger a ~730 MB download the user never asked for is not a safety net. Settings → Local AI
+      // arms fallback when the user turns Local on.
+      fallback: z.boolean().default(false)
     })
     .default({
-      enabled: true,
+      enabled: false,
       modelId: BUNDLED_LOCAL_MODEL_ID,
       useFor: { suggest: false, summary: false, vision: false },
-      fallback: true
+      fallback: false
     }),
   // Wave 2 (docs/PROVIDER-ROUTING-POLICY.md): a top-level policy choice, separate from localLlm.useFor/
   // fallback (which stay the per-mode mechanics 'auto' actually consults). 'local' prefers Métis Local for
   // every eligible mode and only escalates to cloud on hard failure; 'api' keeps local out of the FIRST-
   // attempt pick entirely (it still applies as the last-resort floor when localLlm.fallback is on — the
-  // "never fully stuck" guarantee stays true in every mode); 'auto' (default) is today's health/headroom/
-  // useFor-driven behavior, unchanged. Legacy installs with no persisted value parse to 'auto'.
+  // "never fully stuck" guarantee stays true once Local is opted in); 'auto' (default) is today's
+  // health/headroom/useFor-driven behavior. With Local off by default, 'auto' still routes to Cloudflare /
+  // pasted API keys first. Legacy installs with no persisted value parse to 'auto'.
   routingMode: z.enum(['local', 'api', 'auto']).default('auto'),
   // Resilience routing (the OmniRoute integration): what to do when a provider runs out of tokens/credit
   // rather than a key being rejected. See main/llm/exhaustion.ts + provider-health.ts. Both default ON —
@@ -1133,16 +1132,17 @@ export const BaseSettingsSchema = z.object({
   // Wave 3: batch the brain's LLM extraction into 1-2 passes/day (docs/qa/QUALITY-SCORECARD.md's "Brain
   // LLM consolidations / active day ≤ 2") instead of a network round trip after every single meeting.
   // main/brain/consolidate.ts owns the pass counting and the timer that drives runConsolidationIfDue;
-  // this is only the user-facing policy. enabled=true + preferLocal=true by default: consolidation can
-  // only ever REDUCE cloud calls (batching, and preferring the on-device model for the batch) relative to
+  // this is only the user-facing policy. enabled=true by default (batching reduces cloud calls);
+  // preferLocal=false by default so consolidation uses Cloudflare / API providers until Local is opted in.
   // today's per-meeting behavior, never add one.
   brainConsolidation: z
     .object({
       enabled: z.boolean().default(true),
       maxPassesPerDay: z.number().int().min(1).max(4).default(2),
-      preferLocal: z.boolean().default(true)
+      // Prefer Cloudflare / API providers for consolidation batches unless the user opts Local on.
+      preferLocal: z.boolean().default(false)
     })
-    .default({ enabled: true, maxPassesPerDay: 2, preferLocal: true }),
+    .default({ enabled: true, maxPassesPerDay: 2, preferLocal: false }),
   // Speaker Intelligence (docs/SPEAKER-INTELLIGENCE-PLAN.md): live "who's speaking" labels on THEM
   // transcript lines via on-device voice embeddings (sherpa-onnx, same addon as Parakeet). ON by
   // default since 2026-08-21 (MQA-235 / Plaud-parity work): the embedding model ships in every build
@@ -1445,13 +1445,13 @@ export const DEFAULT_SETTINGS: Settings = {
   mcpConnections: [],
   clickupClientId: '',
   localLlm: {
-    enabled: true,
+    enabled: false,
     modelId: BUNDLED_LOCAL_MODEL_ID,
     useFor: { suggest: false, summary: false, vision: false },
-    fallback: true
+    fallback: false
   },
   speakerId: { enabled: true },
-  brainConsolidation: { enabled: true, maxPassesPerDay: 2, preferLocal: true },
+  brainConsolidation: { enabled: true, maxPassesPerDay: 2, preferLocal: false },
   usageStats: { meetingsSummarized: 0, conversationMinutes: 0, firstMeetingAt: 0 },
   timeSaved: { writeupRatio: 0.2, floorMin: 5, capMin: 30 },
   tapControl: {
