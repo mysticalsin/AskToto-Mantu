@@ -828,7 +828,7 @@ export function App(): JSX.Element {
     if (!settings?.providerReady && !settings?.localSuggestReady && !settings?.localFallbackReady) return
     if (suggest.answer?.streaming) return
     const now = Date.now()
-    const everyMs = (settings?.suggestEverySec ?? 15) * 1000
+    const everyMs = (settings?.suggestEverySec ?? 8) * 1000
     if (now - lastSuggestRef.current < everyMs) return
     lastSuggestRef.current = now
     // Don't yank the user out of a panel they're actively using (Settings / Review / History / Agenda);
@@ -837,6 +837,9 @@ export function App(): JSX.Element {
       setView('copilot')
       setCollapsed(false)
     }
+    // Prefer a finished shadow suggestion (zero LLM wait) — same adopt rule as the manual "What to say
+    // next" button. Only hit the network when nothing speculative is ready for this transcript state.
+    if (tryAdoptSpeculative()) return
     suggest.run({ mode: 'suggest', transcript: listen.text() })
   }
 
@@ -1328,8 +1331,8 @@ export function App(): JSX.Element {
 
   // Instant-suggestion machinery (settings.instantSuggestions, default on):
   // 1) While a meeting is live, pre-generate a shadow "what to say next" whenever the OTHER side has
-  //    spoken and the last speculative run is ≥15s old — so the button click can paint instantly.
-  //    Never fires while anything visible is streaming (the visible work always wins the bandwidth).
+  //    spoken and the last speculative run is older than suggestEverySec — so the button / auto-suggest
+  //    can paint instantly. Never fires while anything visible is streaming (visible work wins bandwidth).
   useEffect(() => {
     if (
       !listen.listening ||
@@ -1340,7 +1343,8 @@ export function App(): JSX.Element {
     const lines = listen.lines
     if (!lines.length || lines[lines.length - 1].speaker !== 'them') return
     const w = specWatermarkRef.current
-    if (lines.length === w.lineCount || Date.now() - w.at < 15_000) return
+    const everyMs = (settings?.suggestEverySec ?? 8) * 1000
+    if (lines.length === w.lineCount || Date.now() - w.at < everyMs) return
     if (ask.answer?.streaming || suggest.answer?.streaming || speculative.answer?.streaming) return
     const transcript = listen.text()
     specWatermarkRef.current = { lineCount: lines.length, at: Date.now(), key: transcriptStateKey(transcript) }
@@ -1352,6 +1356,7 @@ export function App(): JSX.Element {
     settings?.instantSuggestions,
     settings?.providerReady,
     settings?.localSuggestReady,
+    settings?.suggestEverySec,
     ask.answer?.streaming,
     suggest.answer?.streaming,
     speculative.answer?.streaming,

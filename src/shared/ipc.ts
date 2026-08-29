@@ -1406,7 +1406,7 @@ export const DEFAULT_SETTINGS: Settings = {
   privateView: false,
   audioSource: 'both',
   micDeviceId: '',
-  suggestEverySec: 15,
+  suggestEverySec: 8,
   mode: 'general',
   profile: { name: '', role: '', company: '', resume: '', jobDescription: '', notes: '' },
   shortcuts: {}, // empty → built-in DEFAULT_SHORTCUTS apply (merged at hotkey registration)
