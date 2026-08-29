@@ -156,3 +156,38 @@ export function applySpeakerNames(
 
   return { lines: result, named }
 }
+
+// --- Auto-enrollment flywheel join (P2, SPEAKER-INTELLIGENCE-PLAN §3.4) -----------------------------
+
+/**
+ * The pure diff behind the Teams-VTT auto-enrollment flywheel: a THEM line's `name` field holds a live
+ * SESSION cluster label ("Speaker N", from speaker-id.ts's labelWindow) BEFORE applySpeakerNames runs.
+ * If VTT alignment just resolved that same line to a real name, the pairing (clusterLabel -> name) is
+ * exactly the evidence needed to fold that cluster's buffered embeddings into a permanent voiceprint —
+ * "Speaker N in THIS session IS Jane Doe" — with zero user effort (main/index.ts's backfillSpeakerNames
+ * feeds the result to speaker-id.ts's autoEnrollFromLabeledWindows).
+ *
+ * Pure and index-aligned: `before`/`after` must be the SAME lines array before/after an applySpeakerNames
+ * call (same length, same order — applySpeakerNames never reorders or drops lines). Restricted to
+ * `speaker === 'them'`: 'you' lines get the operator's name directly (no clustering ever happened for
+ * them), so a 'you' line's pre-existing name is never a cluster label. Deduplicated by clusterLabel
+ * (first resolved name wins) so a cluster mentioned across many lines contributes exactly one pairing.
+ */
+export function clusterNamePairsFromAlignment(
+  before: readonly TranscriptLine[],
+  after: readonly TranscriptLine[]
+): { clusterLabel: string; name: string }[] {
+  const CLUSTER_LABEL_RE = /^Speaker \d+$/
+  const resolved = new Map<string, string>()
+  const len = Math.min(before.length, after.length)
+  for (let i = 0; i < len; i++) {
+    const prior = before[i]
+    const next = after[i]
+    if (prior.speaker !== 'them') continue
+    const priorLabel = prior.name
+    if (!priorLabel || !CLUSTER_LABEL_RE.test(priorLabel)) continue
+    if (!next.name || next.name === priorLabel) continue
+    if (!resolved.has(priorLabel)) resolved.set(priorLabel, next.name)
+  }
+  return Array.from(resolved, ([clusterLabel, name]) => ({ clusterLabel, name }))
+}

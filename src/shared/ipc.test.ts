@@ -22,8 +22,11 @@ import {
   MeetingExtractionQuerySchema,
   AttentionItemSchema,
   BrainAttentionResultSchema,
-  appendAsrCorrection
+  appendAsrCorrection,
+  TranscriptLineSchema,
+  stripProvisionalLines
 } from './ipc'
+import type { TranscriptLine } from './ipc'
 
 /** process.platform is configurable in Node — flip it for the duration of a platform-specific test. */
 function setPlatform(p: NodeJS.Platform): void {
@@ -868,6 +871,55 @@ describe('local AI IPC channel constants', () => {
     expect(IPC.localTranscriptEnd).toBe('local-ai:transcript:end')
     const values = Object.values(IPC)
     expect(new Set(values).size).toBe(values.length)
+  })
+})
+
+// ASR quality (Wave 1, 1B.2b) — `provisional` is an optional, additive field: every meeting saved before
+// it existed (and every line a caller doesn't set it on) must still parse unchanged.
+describe('TranscriptLineSchema.provisional', () => {
+  it('parses a line with no provisional field at all (every pre-existing saved meeting)', () => {
+    const parsed = TranscriptLineSchema.safeParse({ speaker: 'them', text: 'Hello', t: 0 })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.provisional).toBeUndefined()
+  })
+
+  it('parses a live-only provisional placeholder line', () => {
+    const parsed = TranscriptLineSchema.safeParse({ speaker: 'them', text: '…', t: 0, provisional: true })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.provisional).toBe(true)
+  })
+
+  it('rejects a non-boolean provisional value', () => {
+    expect(TranscriptLineSchema.safeParse({ speaker: 'them', text: 'Hello', t: 0, provisional: 'yes' }).success).toBe(
+      false
+    )
+  })
+})
+
+describe('stripProvisionalLines', () => {
+  const line = (text: string, t: number, provisional?: true): TranscriptLine => ({
+    speaker: 'them',
+    text,
+    t,
+    ...(provisional ? { provisional } : {})
+  })
+
+  it('drops every provisional line, keeping the rest in order', () => {
+    const lines = [line('Hi', 0), line('…', 1, true), line('Bye', 2)]
+    expect(stripProvisionalLines(lines)).toEqual([line('Hi', 0), line('Bye', 2)])
+  })
+
+  it('returns the SAME array reference when nothing needed removing (no spurious copy on save)', () => {
+    const lines = [line('Hi', 0), line('Bye', 1)]
+    expect(stripProvisionalLines(lines)).toBe(lines)
+  })
+
+  it('returns an empty array when every line was provisional', () => {
+    expect(stripProvisionalLines([line('…', 0, true)])).toEqual([])
+  })
+
+  it('is a no-op on an already-empty transcript', () => {
+    expect(stripProvisionalLines([])).toEqual([])
   })
 })
 

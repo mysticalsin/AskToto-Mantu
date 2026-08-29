@@ -154,6 +154,10 @@ const api = {
   // Apple Speech (on-device, macOS only) — same {text, name?} shape and speaker ride-along as parakeetFeed.
   appleSpeechFeed: (samples: Float32Array, speaker: string): Promise<string | { text: string; name?: string }> =>
     ipcRenderer.invoke(IPC.appleSpeechFeed, { samples, speaker }),
+  // Speaker Intelligence's engine-independent embedding tap (see IPC.speakerEmbed's own comment) — the
+  // Whisper path's equivalent of the label ride-along parakeetFeed/appleSpeechFeed carry for free.
+  speakerEmbed: (samples: Float32Array, speaker: string): Promise<{ name?: string }> =>
+    ipcRenderer.invoke(IPC.speakerEmbed, { samples, speaker }),
 
   ask: (req: AskStart): Promise<void> => ipcRenderer.invoke(IPC.askStart, req),
   cancel: (id: string): Promise<void> => ipcRenderer.invoke(IPC.askCancel, id),
