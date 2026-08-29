@@ -2649,10 +2649,10 @@ function registerIpc(): void {
     // Start/stop background screen pre-analysis to match the new settings (backgroundScreenContext toggle,
     // or Local AI being enabled/disabled/provisioned) — takes effect immediately, no relaunch.
     refreshScreenPreprocess()
-    // Local AI turned back ON → arm the weight fetch here (MQA-186). Boot is the only other trigger and
-    // it now skips while the toggle is off, so without this edge a user who declined the download once
-    // could never get it: Settings would report the model unavailable for the rest of the install's life.
-    if (!cur.localLlm.enabled && next.localLlm.enabled && shouldFetchWeights(next.localLlm.modelId, true)) {
+    // Local AI turned ON → re-arm the weight fetch if boot somehow skipped it (offline first launch,
+    // under-RAM machine later upgraded). Boot already starts the download whenever the app opens
+    // (RAM permitting); this edge is the second chance, not the only path to the weights.
+    if (!cur.localLlm.enabled && next.localLlm.enabled && shouldFetchWeights(next.localLlm.modelId)) {
       void ensureLocalModel(next.localLlm.modelId)
         .then(() => refreshScreenPreprocess())
         .catch((e) => mainLog.warn('[settings] local model provisioning failed:', e))
@@ -5563,15 +5563,17 @@ if (!app.requestSingleInstanceLock()) {
   // operator chose to embed one. See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
   importEmbeddedCloudflareKey()
   // Métis Local weights are no longer bundled in the installer (~728 MB; a universal mac package
-  // carrying them would blow past GitHub's 2 GB release-asset limit), so fetch them once here on first
-  // run. Deliberately NOT awaited: this is a ~763 MB download and startup must not wait on it, nor fail
-  // when the machine is offline or behind a restrictive proxy — Local simply stays unavailable and the
-  // next launch retries. ensureLocalModel() verifies the pinned sha256 and never throws.
-  // GATED (MQA-186): this used to fire unconditionally, so a machine under the model's RAM floor paid
-  // 763 MB for weights assertRamOk would refuse to load, and a user who had switched Local AI off got
-  // the transfer anyway with no way to decline it. shouldFetchWeights answers both. Because this is the
-  // only trigger, the settings handler re-arms it on the OFF→ON edge — see the localLlm.enabled branch
-  // in IPC.setSettings — otherwise switching Local AI back on would leave no path to the weights at all.
+  // carrying them would blow past GitHub's 2 GB release-asset limit), so fetch them once here whenever
+  // the app opens. Deliberately NOT awaited: this is a multi-GB download and startup must not wait on
+  // it, nor fail when the machine is offline or behind a restrictive proxy — the next launch retries.
+  // ensureLocalModel() verifies the pinned sha256 and never throws.
+  //
+  // GATED on RAM only (MQA-186): a machine under the model's floor must not pay for weights
+  // assertRamOk would refuse to load. Local AI `enabled` does NOT gate the download — routing stays
+  // off by default (Cloudflare / API keys stay primary); the bytes land in the background so turning
+  // Local on later is instant. OFF→ON in setSettings still re-arms as a second chance after a failed
+  // first-run fetch.
+  //
   // local-routing.ts re-reads isDownloaded() per request, so no ROUTING decision needs notifying. The
   // background screen reader does: its eligibility is evaluated when the engine is refreshed, and the boot
   // refresh below runs while this download is still in flight — without this re-arm, a first-run user who
@@ -5613,7 +5615,7 @@ if (!app.requestSingleInstanceLock()) {
         mainLog.warn('[boot] local prewarm skipped:', e instanceof Error ? e.message : String(e))
       }
     }
-    if (shouldFetchWeights(best.id, getSettings().localLlm.enabled)) {
+    if (shouldFetchWeights(best.id)) {
       void ensureLocalModel(best.id)
         .then(() => {
           refreshScreenPreprocess()

@@ -50,10 +50,9 @@ describe('MQA-219 — the default provider is one decision, in one state, and is
     expect(url.replace(/\/+$/, '')).toMatch(/\/v1$/)
   })
 
-  it('Cloudflare is the always-on default; Local AI is opt-in (no silent on-device download)', () => {
-    // Cloudflare ships with a Worker URL (+ optional embedded key). Local was previously the
-    // zero-config safety net and triggered a ~730 MB first-run download; it is now off until the
-    // user turns it on in Settings → Local AI.
+  it('Cloudflare is the always-on default; Local AI routing is opt-in (weights still download on open)', () => {
+    // Cloudflare ships with a Worker URL (+ optional embedded key). Local routing stays off until the
+    // user turns it on; the weight download is independent and starts whenever the app opens.
     expect(DEFAULT_SETTINGS.provider).toBe('cloudflare')
     expect(DEFAULT_SETTINGS.cloudflareBaseUrl).toMatch(/^https:\/\//)
     expect(DEFAULT_SETTINGS.localLlm.enabled).toBe(false)

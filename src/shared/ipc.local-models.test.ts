@@ -76,10 +76,11 @@ describe('bundled local-model settings migration', () => {
     })
   })
 
-  it('defaults Local AI to off: Cloudflare / API keys stay primary until the user opts in', () => {
-    // Weights are not in the installer (~730 MB). enabled:false means no first-run download and no
-    // sidecar warm. useFor must stay false — with sparse settings persistence, a true default would
-    // silently reroute upgrading cloud users onto the small on-device model (local-first preemption).
+  it('defaults Local AI to off for routing: Cloudflare / API keys stay primary until the user opts in', () => {
+    // Weights download whenever the app opens (separate from this flag). enabled:false means no
+    // on-device routing and no sidecar warm until the user turns Local on. useFor must stay false —
+    // with sparse settings persistence, a true default would silently reroute upgrading cloud users
+    // onto the small on-device model (local-first preemption).
     const parsed = SettingsSchema.parse(DEFAULT_SETTINGS)
     expect(parsed.localLlm.enabled).toBe(false)
     expect(parsed.localLlm.useFor).toEqual({ suggest: false, summary: false, vision: false })
