@@ -66,6 +66,8 @@ function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
 
 const api = {
   getSettings: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.settingsGet),
+  /** Wave 2 — dismiss the one-shot last-failover chip after the user has seen it. */
+  dismissFailoverNotice: (): Promise<{ ok: true }> => ipcRenderer.invoke(IPC.dismissFailoverNotice),
   getPermissions: (): Promise<PlatformPermissions> => ipcRenderer.invoke(IPC.permissionsGet),
   getShortcutFailures: (): Promise<ShortcutFailure[]> => ipcRenderer.invoke(IPC.shortcutFailures),
   openPermissionSettings: (kind: 'microphone' | 'screenRecording'): Promise<void> =>

@@ -220,7 +220,9 @@ export const IPC = {
   localTranscriptBegin: 'local-ai:transcript:begin',
   localTranscriptAppend: 'local-ai:transcript:append',
   localTranscriptResync: 'local-ai:transcript:resync',
-  localTranscriptEnd: 'local-ai:transcript:end'
+  localTranscriptEnd: 'local-ai:transcript:end',
+  /** Wave 2 — clear the one-shot last-failover chip after the user dismisses it. */
+  dismissFailoverNotice: 'settings:dismissFailoverNotice'
 } as const
 
 /** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals. */
@@ -1289,6 +1291,20 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
       })
     )
     .default([]),
+  /**
+   * Wave 2 / QA — last successful failover hop this session (primary → backup). Session-scoped, never
+   * persisted; the renderer shows a one-shot chip then clears via settings:dismissFailoverNotice.
+   * null when no failover has fired yet (or the user dismissed the chip).
+   */
+  lastFailover: z
+    .object({
+      from: z.string(),
+      to: z.string(),
+      at: z.number(),
+      reason: z.string().default('failover')
+    })
+    .nullable()
+    .default(null),
   /** Background on-device screen pre-analysis can actually run RIGHT NOW, straight from the engine's own
    *  gate (screen-preprocess.ts canRun(), never recomputed renderer-side): session valid, the
    *  `backgroundScreenContext` setting on, an on-device reader available (local model OR the macOS Vision
@@ -1338,6 +1354,7 @@ export type SettingsPatch = Partial<
     | 'managedKeys'
     | 'envKeys'
     | 'loginItemOpenAtLogin'
+    | 'lastFailover'
   >
 >
 

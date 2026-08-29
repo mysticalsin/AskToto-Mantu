@@ -588,6 +588,11 @@ export const Review = memo(function Review({
   const sendToCrm = async (): Promise<void> => {
     if (pushState.phase === 'sending') return
     if (!pushTool) return
+    // Wave 4 / QA: confidential meetings never leave the device via MCP — same contract as wiki publish.
+    if (confidentialFlag) {
+      setPushState({ phase: 'error', error: 'This meeting is marked confidential — CRM push is blocked.' })
+      return
+    }
     // Remember the payload that was actually sent — recapText can move on (an edit, a regeneration) while
     // the call is in flight, and the CRM holds what left here, not what the screen shows when it lands.
     const payload = crmPayload
@@ -720,6 +725,11 @@ export const Review = memo(function Review({
 
   const runNextStepPushes = async (): Promise<void> => {
     if (!nextStepsData) return
+    if (confidentialFlag) {
+      // Same gate as sendToCrm — never enqueue Plane/ClickUp tasks for a confidential meeting.
+      setNextStepsFetchError('This meeting is marked confidential — task push is blocked.')
+      return
+    }
     const items = nextStepsData.map((it, i) => ({ item: it, i })).filter(({ i }) => itemChecked[i])
     const conns = taskConnections.filter((c) => connChecked[c.id] ?? true)
     for (const { item, i } of items) {
@@ -1232,10 +1242,13 @@ export const Review = memo(function Review({
             <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
               <Send size={12} /> CRM
             </div>
-            {bidstackConnected && !pushOpen && !crmPushed && (
+            {bidstackConnected && !pushOpen && !crmPushed && !confidentialFlag && (
               <Chip onClick={() => setPushOpen(true)} variant="accent">
                 <Send size={13} /> Push to CRM
               </Chip>
+            )}
+            {confidentialFlag && bidstackConnected && (
+              <span className="text-[11px] text-[color:var(--color-ink-3)]">CRM push blocked (confidential)</span>
             )}
           </div>
 
@@ -1336,10 +1349,13 @@ export const Review = memo(function Review({
             <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
               <ListTree size={12} /> Next steps
             </div>
-            {!nextStepsOpen && (
+            {!nextStepsOpen && !confidentialFlag && (
               <Chip onClick={() => void openNextSteps()} variant="accent">
                 <ListTree size={13} /> Book next steps
               </Chip>
+            )}
+            {confidentialFlag && (
+              <span className="text-[11px] text-[color:var(--color-ink-3)]">Task push blocked (confidential)</span>
             )}
           </div>
 

@@ -3222,6 +3222,26 @@ export function App(): JSX.Element {
               </button>
             )
           })()}
+          {/* Wave 2 — one-shot failover chip (docs/PROVIDER-ROUTING-POLICY.md). Distinct from the standing
+              dead-key banner above: this is an EVENT (primary hopped once), dismissible, and clears via
+              dismissFailoverNotice so it never nags every poll. */}
+          {settings?.lastFailover && view !== 'settings' && !showListeningChrome && (() => {
+            const hop = settings.lastFailover!
+            const fromLabel = PROVIDERS[hop.from as keyof typeof PROVIDERS]?.label ?? hop.from
+            const toLabel = PROVIDERS[hop.to as keyof typeof PROVIDERS]?.label ?? hop.to
+            return (
+              <button
+                type="button"
+                onClick={() => {
+                  void window.toto.dismissFailoverNotice().then(() => refresh()).catch(() => {})
+                }}
+                className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-white/15 bg-white/[0.06] px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-ink-2)]"
+              >
+                Switched from {fromLabel} to {toLabel}
+                {hop.reason === 'exhausted' ? ' (quota)' : ''}. Tap to dismiss.
+              </button>
+            )
+          })()}
           {/* Suppressed once the on-device safety net can answer: this CTA asks for an API key, and a user
               running Métis Local with no cloud provider does not need one — that install is finished, not
               half-configured. Telling them to "Add your Cloudflare API key" while the local model answers

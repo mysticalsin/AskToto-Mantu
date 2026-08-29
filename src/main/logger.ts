@@ -186,6 +186,7 @@ export type AuditEvent =
   | 'provider.request'
   | 'provider.failed'
   | 'provider.retry'
+  | 'provider.failover'
   | 'provider.blocked'
   | 'net.proxy'
   | 'settings.changed'
