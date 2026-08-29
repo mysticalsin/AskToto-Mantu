@@ -416,6 +416,10 @@ export function App(): JSX.Element {
   // Shown as a banner inside Settings — set when we redirect the user there for a specific reason
   // (e.g. no provider configured) so the redirect explains itself instead of looking broken.
   const [settingsNotice, setSettingsNotice] = useState<string | undefined>(undefined)
+  // Wave 2 failover chip: hide locally the instant the user dismisses, keyed by the event's `at`.
+  // refresh() after dismissFailoverNotice can race a concurrent focus poll and re-show the same hop
+  // from a stale getSettings snapshot — comparing `at` keeps the chip down until a NEW failover lands.
+  const [failoverDismissedAt, setFailoverDismissedAt] = useState(0)
 
   // The "Add your API key" nudge under the bar is a first-run courtesy, not a permanent nag. It shows
   // while no provider is ready, but only for 10 minutes after onboarding — then it steps aside (Settings
@@ -600,6 +604,13 @@ export function App(): JSX.Element {
   const manualSave = useCallback(async (): Promise<void> => {
     const a = ask.answer
     if (!a || a.streaming || !listen.lines.length) return
+    const id = String(meetingStartRef.current)
+    // Same redundancy + in-flight guards as the auto-save effect — without them a double-click (or a
+    // Save tapped while autosave is mid-IPC) writes the meeting twice under two paths.
+    if (meetingSaveIsRedundant(listen.lines.length, id, savedRef.current, claimedSavesRef.current)) return
+    if (savingRef.current) return
+    claimedSavesRef.current.add(id)
+    savingRef.current = true
     try {
       const title = defaultMeetingTitle(listen.lines, mode)
       const r = await window.toto.saveTranscript({
@@ -609,15 +620,19 @@ export function App(): JSX.Element {
         lines: listen.lines,
         recap: a.text
       })
-      savedRef.current = String(meetingStartRef.current)
+      savedRef.current = id
       setSavedPath(r.path)
       setSaveError(null)
       setSaveAttempts(0)
       setSaveGaveUp(false)
     } catch (e) {
+      // Released only on failure so a later retry (manual or auto) can still persist this meeting.
+      claimedSavesRef.current.delete(id)
       // A manual retry that fails does NOT restart the ladder, so saveGaveUp stays as it was: still true
       // after a give-up (the terminal line remains correct), still false while the ladder is running.
       setSaveError(saveFailureReason(e))
+    } finally {
+      savingRef.current = false
     }
   }, [ask.answer, listen.lines, mode])
 
@@ -813,7 +828,7 @@ export function App(): JSX.Element {
     if (!settings?.providerReady && !settings?.localSuggestReady && !settings?.localFallbackReady) return
     if (suggest.answer?.streaming) return
     const now = Date.now()
-    const everyMs = (settings?.suggestEverySec ?? 15) * 1000
+    const everyMs = (settings?.suggestEverySec ?? 8) * 1000
     if (now - lastSuggestRef.current < everyMs) return
     lastSuggestRef.current = now
     // Don't yank the user out of a panel they're actively using (Settings / Review / History / Agenda);
@@ -822,6 +837,9 @@ export function App(): JSX.Element {
       setView('copilot')
       setCollapsed(false)
     }
+    // Prefer a finished shadow suggestion (zero LLM wait) — same adopt rule as the manual "What to say
+    // next" button. Only hit the network when nothing speculative is ready for this transcript state.
+    if (tryAdoptSpeculative()) return
     suggest.run({ mode: 'suggest', transcript: listen.text() })
   }
 
@@ -1313,8 +1331,8 @@ export function App(): JSX.Element {
 
   // Instant-suggestion machinery (settings.instantSuggestions, default on):
   // 1) While a meeting is live, pre-generate a shadow "what to say next" whenever the OTHER side has
-  //    spoken and the last speculative run is ≥15s old — so the button click can paint instantly.
-  //    Never fires while anything visible is streaming (the visible work always wins the bandwidth).
+  //    spoken and the last speculative run is older than suggestEverySec — so the button / auto-suggest
+  //    can paint instantly. Never fires while anything visible is streaming (visible work wins bandwidth).
   useEffect(() => {
     if (
       !listen.listening ||
@@ -1325,7 +1343,8 @@ export function App(): JSX.Element {
     const lines = listen.lines
     if (!lines.length || lines[lines.length - 1].speaker !== 'them') return
     const w = specWatermarkRef.current
-    if (lines.length === w.lineCount || Date.now() - w.at < 15_000) return
+    const everyMs = (settings?.suggestEverySec ?? 8) * 1000
+    if (lines.length === w.lineCount || Date.now() - w.at < everyMs) return
     if (ask.answer?.streaming || suggest.answer?.streaming || speculative.answer?.streaming) return
     const transcript = listen.text()
     specWatermarkRef.current = { lineCount: lines.length, at: Date.now(), key: transcriptStateKey(transcript) }
@@ -1337,6 +1356,7 @@ export function App(): JSX.Element {
     settings?.instantSuggestions,
     settings?.providerReady,
     settings?.localSuggestReady,
+    settings?.suggestEverySec,
     ask.answer?.streaming,
     suggest.answer?.streaming,
     speculative.answer?.streaming,
@@ -3219,6 +3239,31 @@ export function App(): JSX.Element {
                 className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-[var(--color-warn,#fac775)]/30 bg-[var(--color-warn,#fac775)]/10 px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-warn,#fac775)]"
               >
                 {what} — Métis is using another provider. {remedy} in Settings → AI.
+              </button>
+            )
+          })()}
+          {/* Wave 2 — one-shot failover chip (docs/PROVIDER-ROUTING-POLICY.md). Distinct from the standing
+              dead-key banner above: this is an EVENT (primary hopped once), dismissible, and clears via
+              dismissFailoverNotice so it never nags every poll. */}
+          {settings?.lastFailover &&
+            settings.lastFailover.at > failoverDismissedAt &&
+            view !== 'settings' &&
+            !showListeningChrome &&
+            (() => {
+            const hop = settings.lastFailover!
+            const fromLabel = PROVIDERS[hop.from as keyof typeof PROVIDERS]?.label ?? hop.from
+            const toLabel = PROVIDERS[hop.to as keyof typeof PROVIDERS]?.label ?? hop.to
+            return (
+              <button
+                type="button"
+                onClick={() => {
+                  setFailoverDismissedAt(hop.at)
+                  void window.toto.dismissFailoverNotice().then(() => refresh()).catch(() => {})
+                }}
+                className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-white/15 bg-white/[0.06] px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-ink-2)]"
+              >
+                Switched from {fromLabel} to {toLabel}
+                {hop.reason === 'exhausted' ? ' (quota)' : ''}. Tap to dismiss.
               </button>
             )
           })()}

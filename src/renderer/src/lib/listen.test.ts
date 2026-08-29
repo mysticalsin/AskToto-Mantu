@@ -5,14 +5,18 @@ import {
   degradedAfterMicRecovery,
   isQuestion,
   looksLikeNetworkError,
+  probeMinWords,
   probeResultIsStale,
   shouldProbeLanguageWindow,
   sysRetryDelayMs,
   themDeviceChangeAction,
   themRecoveryFailureIsNoop,
-  themTracksLookDead
+  themTracksLookDead,
+  trimQueue
 } from './listen'
 import type { CaptureDegraded } from './listen'
+import { transcriptToText } from './transcript'
+import type { TranscriptLine } from '@shared/ipc'
 
 // Normalize CRLF → LF (same rationale as App.mic-only-visibility.test.ts): Windows checkouts would
 // otherwise break any anchor whose newline sits mid-string.
@@ -406,5 +410,100 @@ describe('themRecoveryFailureIsNoop — a repeated failure must not re-render th
     // The write itself still only ever RAISES — an existing captureDegraded carries the more specific
     // start-time cause (the Screen-Recording copy) and must survive the retry.
     expect(listenSrc).toMatch(/captureDegraded: s\.captureDegraded \?\? \{ side: 'them', note: THEM_LOST_MSG, permission: false \}/)
+  })
+})
+
+// ASR quality (1B.2a) — the pure trim behind pushAudio's MAX_QUEUE backpressure guard. A naive
+// drop-the-front trim can erase every queued window of one speaker's channel when the other channel
+// produced a longer burst just ahead of it — trimQueue instead protects the newest already-queued window
+// of EACH speaker present, so a caller never loses BOTH sides of the conversation to a one-sided backlog.
+describe('trimQueue — backpressure drop keeps the newest window per speaker (1B.2a)', () => {
+  const job = (speaker: string, id: number): { speaker: string; id: number } => ({ speaker, id })
+
+  it('is a no-op under the limit', () => {
+    const queue = [job('them', 1), job('you', 2)]
+    expect(trimQueue(queue, 5)).toEqual(queue)
+  })
+
+  it('drops the oldest windows first for a single-speaker backlog', () => {
+    const queue = [job('them', 1), job('them', 2), job('them', 3), job('them', 4)]
+    const trimmed = trimQueue(queue, 2)
+    expect(trimmed.map((j) => j.id)).toEqual([3, 4])
+  })
+
+  it('never drops the newest window of a speaker even when the other channel bursts right before it', () => {
+    // Five THEM windows queued, then one stale YOU window — a naive front-trim to maxLen=2 would keep
+    // only [them4, you5] or worse, but the newest THEM window (them5 doesn't exist here — the point is
+    // the LAST 'them' before the trim boundary) must survive alongside the newest 'you'.
+    const queue = [job('them', 1), job('them', 2), job('them', 3), job('them', 4), job('them', 5), job('you', 6)]
+    const trimmed = trimQueue(queue, 2)
+    // Newest 'them' (5) and newest 'you' (6) are both protected, even though that's the exact maxLen.
+    expect(trimmed.map((j) => j.id)).toEqual(expect.arrayContaining([5, 6]))
+    expect(trimmed).toHaveLength(2)
+  })
+
+  it('protects one newest window per speaker, then trims the rest oldest-first', () => {
+    const queue = [job('you', 1), job('them', 2), job('you', 3), job('them', 4), job('you', 5), job('them', 6)]
+    const trimmed = trimQueue(queue, 3)
+    // Newest 'you' (5) and newest 'them' (6) are protected outright; the oldest THREE (1, 2, 3) are the
+    // excess to drop, leaving the next-oldest unprotected window (4) as the third survivor.
+    expect(trimmed.map((j) => j.id)).toEqual([4, 5, 6])
+  })
+
+  it('is what pushAudio actually calls on backpressure, surfacing DROPPED_MSG', () => {
+    expect(listenSrc).toMatch(/queue\.current = trimQueue\(queue\.current, MAX_QUEUE\)/)
+    expect(listenSrc).toMatch(/setState\(\(s\) => \(s\.error == null \? \{ \.\.\.s, error: DROPPED_MSG \} : s\)\)/)
+  })
+})
+
+// ASR quality (1B.2c) — the FIRST language pin gets one more aggressive attempt (lower word-count bar)
+// once the opening probe budget is spent with no pin yet, rather than staying wrongly latched to English
+// for the rest of a meeting whose opening minute never produced an 8+-word window.
+describe('probeMinWords — the first-pin word-count bar relaxes after the opening probe budget (1B.2c)', () => {
+  it('uses the normal, stricter bar while still inside the opening probe budget', () => {
+    expect(probeMinWords(false, 1)).toBe(8)
+    expect(probeMinWords(false, 5)).toBe(8) // PROBE_WINDOW_BUDGET itself — still the strict bar
+  })
+
+  it('relaxes to the aggressive bar only once the budget is spent with no pin yet', () => {
+    expect(probeMinWords(false, 6)).toBe(5)
+    expect(probeMinWords(false, 50)).toBe(5)
+  })
+
+  it('never relaxes once a language is already pinned, regardless of window index', () => {
+    expect(probeMinWords(true, 1)).toBe(8)
+    expect(probeMinWords(true, 50)).toBe(8)
+  })
+})
+
+// ASR quality (1B.2b) — a provisional "…" placeholder is a UI-only stand-in for a window still decoding;
+// it must never reach the recap prompt or a saved transcript. transcriptToText (shared by text() and the
+// save paths) is the single chokepoint that filters it out.
+describe('provisional lines are excluded from text()/transcriptToText (1B.2b)', () => {
+  const line = (speaker: TranscriptLine['speaker'], text: string, t: number, provisional?: true): TranscriptLine => ({
+    speaker,
+    text,
+    t,
+    ...(provisional ? { provisional } : {})
+  })
+
+  it('drops a still-showing "…" placeholder from the recap/save text', () => {
+    const lines: TranscriptLine[] = [
+      line('you', 'How is the roadmap looking?', 1),
+      line('them', '…', 2, true) // decode still in flight when text() was read
+    ]
+    expect(transcriptToText(lines)).toBe('YOU: How is the roadmap looking?')
+  })
+
+  it('includes the real line once it replaces the placeholder (same identity, no provisional flag)', () => {
+    const lines: TranscriptLine[] = [line('you', 'How is the roadmap looking?', 1), line('them', 'On track for Q3.', 2)]
+    expect(transcriptToText(lines)).toBe('YOU: How is the roadmap looking?\nTHEM: On track for Q3.')
+  })
+
+  it('is the exact field commitLine never sets and beginProvisional always does', () => {
+    // beginProvisional is the only writer of `provisional: true`; commitLine's own line literal has no
+    // such field, so a committed line can never be mistaken for a still-pending placeholder.
+    expect(listenSrc).toMatch(/const line: TranscriptLine = \{ speaker: sp, text: '…', t, provisional: true \}/)
+    expect(listenSrc).toMatch(/const next = linesRef\.current\.filter\(\(l\) => !\(l\.provisional && l\.t === p\.t\)\)/)
   })
 })

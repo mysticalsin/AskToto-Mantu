@@ -154,10 +154,10 @@ async function groupBoot() {
     assert(s.resolvedMeetingsFolder, 'no resolved meetings folder')
     return { provider: s.provider, localReady: s.localReady, version: s.version }
   })
-  await check(g, 'Local AI ships enabled, non-preempting, with fallback armed', async () => {
+  await check(g, 'Local AI ships off by default (Cloudflare / API keys stay primary)', async () => {
     const s = await settings()
-    assert(s.localLlm.enabled === true, 'localLlm.enabled is not true by default')
-    assert(s.localLlm.fallback === true, 'localLlm.fallback is not true by default')
+    assert(s.localLlm.enabled === false, 'localLlm.enabled should be false by default')
+    assert(s.localLlm.fallback === false, 'localLlm.fallback should be false by default')
     const anyUseFor = s.localLlm.useFor.suggest || s.localLlm.useFor.summary || s.localLlm.useFor.vision
     assert(!anyUseFor, 'a useFor toggle defaults ON — local would preempt a configured cloud provider')
     return s.localLlm

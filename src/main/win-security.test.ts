@@ -26,9 +26,10 @@ import {
   readTrustedAdminManaged,
   trustedAdminManagedPath,
   WINDOWS_POWERSHELL,
+  resetAclMemoForTests,
   type AclProbe
 } from './win-security'
-import { getAllowedProviders, getLockedKeys } from './store'
+import { getAllowedProviders, getLockedKeys, resetAdminManagedCacheForTests } from './store'
 
 const REAL_PLATFORM = process.platform
 function setPlatform(p: NodeJS.Platform): void {
@@ -365,6 +366,8 @@ describe('policy accessors — the ACL probe is off the per-ask and per-tick pat
   const REAL_PROGRAM_DATA = process.env.ProgramData
 
   beforeEach(() => {
+    resetAclMemoForTests()
+    resetAdminManagedCacheForTests()
     mkdirSync(join(programData, 'Métis'), { recursive: true })
     writeFileSync(policy, JSON.stringify({ allowedProviders: ['dust'], lockedKeys: ['provider'] }))
     process.env.ProgramData = programData

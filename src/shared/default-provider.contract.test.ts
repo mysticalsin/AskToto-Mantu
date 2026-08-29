@@ -50,12 +50,13 @@ describe('MQA-219 — the default provider is one decision, in one state, and is
     expect(url.replace(/\/+$/, '')).toMatch(/\/v1$/)
   })
 
-  it('an unconfigured default cannot dead-end the app', () => {
-    // The default provider needs a credential the build does not ship, so a brand-new install has no
-    // cloud route until someone pastes it. localLlm.fallback is the safety net that still answers
-    // on-device in that window; if it ever defaults false, a fresh install answers nothing.
-    expect(DEFAULT_SETTINGS.localLlm.enabled).toBe(true)
-    expect(DEFAULT_SETTINGS.localLlm.fallback).toBe(true)
+  it('Cloudflare is the always-on default; Local AI routing is opt-in (weights still download on open)', () => {
+    // Cloudflare ships with a Worker URL (+ optional embedded key). Local routing stays off until the
+    // user turns it on; the weight download is independent and starts whenever the app opens.
+    expect(DEFAULT_SETTINGS.provider).toBe('cloudflare')
+    expect(DEFAULT_SETTINGS.cloudflareBaseUrl).toMatch(/^https:\/\//)
+    expect(DEFAULT_SETTINGS.localLlm.enabled).toBe(false)
+    expect(DEFAULT_SETTINGS.localLlm.fallback).toBe(false)
   })
 
   it('the on-device model still only PREEMPTS when the user asks it to', () => {

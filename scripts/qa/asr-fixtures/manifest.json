@@ -1,0 +1,40 @@
+{
+  "version": 1,
+  "clips": [
+    {
+      "id": "en-numbers",
+      "lang": "en",
+      "path": "en/numbers.txt",
+      "expected": "Please confirm the budget is three point five million euros by Friday.",
+      "tags": ["numbers", "currency", "deadline"]
+    },
+    {
+      "id": "en-names",
+      "lang": "en",
+      "path": "en/names.txt",
+      "expected": "Jane Doe from Acme Corp will send the proposal to Marie Dupont.",
+      "tags": ["names", "account"]
+    },
+    {
+      "id": "fr-greeting",
+      "lang": "fr",
+      "path": "fr/greeting.txt",
+      "expected": "Bonjour, nous devons revoir le contrat avant mardi prochain.",
+      "tags": ["language", "deadline"]
+    },
+    {
+      "id": "fr-numbers",
+      "lang": "fr",
+      "path": "fr/numbers.txt",
+      "expected": "Le montant est de deux millions cinq cent mille euros.",
+      "tags": ["numbers", "currency", "language"]
+    },
+    {
+      "id": "mixed-switch",
+      "lang": "en",
+      "path": "mixed/names.txt",
+      "expected": "Okay let's switch — Marie, can you confirm the LATAM pricing defense?",
+      "tags": ["codeswitch", "names", "deal"]
+    }
+  ]
+}
