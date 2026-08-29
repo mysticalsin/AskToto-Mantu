@@ -44,7 +44,8 @@ consent tied to the bundle id) and the electron-updater continuity for existing 
 
 Grab the installer for your OS from the [Métis releases page](https://github.com/mysticalsin/AskToto-Mantu/releases):
 
-- **macOS Apple Silicon** — `Metis-<version>.dmg`.
+- **macOS Electron** — `Metis-<version>.dmg` (cross-platform overlay).
+- **macOS native** — `Metis-Native-<version>.zip` (SwiftUI / Apple Intelligence; unzip → `Metis.app`).
 - **Windows x64** — `Metis-Setup-<version>.exe` (installer) or `Metis-Portable-<version>.exe`
   (no-install; the portable build never auto-updates because electron-updater has no portable-EXE
   support).
@@ -115,7 +116,8 @@ Every script in `package.json`, one line each:
 | `dist:win` | Fetch models, build intelligence, then package an unsigned Windows build (no publish) |
 | `dist:win:appx` | ffmpeg + sherpa checks (win), then package a Windows APPX (no publish) |
 | `prepack` | Fetch models (runs automatically before electron-builder packs) |
-| `release` | Build signed/notarized macOS release artifacts (no independent publish; tag CI performs final verification) |
+| `release` | Build signed/notarized macOS Electron release artifacts (no independent publish; tag CI performs final verification) |
+| `release:native-mac` | Build pure SwiftUI Mac app → `release/Metis-Native-<version>.zip` (needs Xcode + xcodegen) |
 | `release:win` | Build Windows release artifacts after credential/package gates (no independent publish; tag CI verifies the signer) |
 | `release:mas` | Mac App Store build (provisioning profile via `MAS_PROVISIONING_PROFILE`), no publish |
 | `release:win:store` | Windows Store (APPX) build gate, no publish |

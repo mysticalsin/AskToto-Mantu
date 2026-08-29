@@ -34,6 +34,8 @@
     "test:proxy": "vitest run --config cloudflare-proxy/vitest.config.ts",
     "test:smoke:import": "npm run build && node scripts/smoke-import.mjs",
     "check:xcode": "node scripts/check-xcode-tools.mjs",
+    "build:native-mac": "node scripts/build-native-mac.mjs",
+    "release:native-mac": "npm run check:xcode && node scripts/build-native-mac.mjs",
     "check:release-secrets": "node scripts/check-release-secrets.mjs",
     "check:release": "node scripts/check-release.mjs",
     "verify:signing": "node scripts/verify-signing.mjs",
