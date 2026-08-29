@@ -1,4 +1,4 @@
-import { statSync } from 'node:fs'
+import { readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Settings } from '@shared/ipc'
 import type { MeetingRef, PersonEntity, AccountEntity, DealEntity, ProvenanceState } from '@shared/brain'
@@ -67,45 +67,68 @@ const ENTITY_READERS: Record<EntityKind, (s: Settings, slug: string) => { id: st
 }
 
 /**
- * Match keys per entity kind, keyed by the entity directory and stamped with that directory's mtime.
+ * Match keys per entity kind, keyed by the entity directory and stamped with a cheap corpus fingerprint.
  *
  * The header comment above promises only the named handful get read off disk, but `aliases[]` live
  * INSIDE each entity file — so deciding a match used to mean reading ALL of them, and every answer-mode
  * ask stat+read+decrypt+Zod-parsed the whole corpus (hundreds of files on a OneDrive-backed `.brain`)
  * on the synchronous IPC handler, even for a question that named nobody. Pre-filtering on the slug alone
  * would be cheap but would SHRINK what can match; caching the keys keeps the matchable set identical
- * while an unchanged corpus costs one stat per kind.
+ * while an unchanged corpus costs one cheap stamp per kind.
  *
- * Directory mtime is a sound stamp because every entity write goes through writeSaved's tmp-file +
- * rename (transcripts.ts), which mutates the containing directory — a new entity, a removed one, and an
- * alias added to an existing one all move it. The stamp is re-read AFTER the rebuild so a write landing
- * mid-rebuild invalidates the entry instead of being swallowed by it. Only keys are cached: entity
- * CONTENT still comes from readPerson/readAccount/readDeal on every ask.
+ * Stamp = directory mtime + entity count + sum of entity file sizes. Directory mtime alone is usually
+ * enough (every entity write goes through writeSaved's tmp+rename, which mutates the containing dir),
+ * but on some filesystems a same-millisecond rewrite of an existing file does not bump dir mtime —
+ * count+sizeSum catch that alias-edit case (MQA-010 flake). The stamp is re-read AFTER the rebuild so a
+ * write landing mid-rebuild invalidates the entry instead of being swallowed by it. Only keys are
+ * cached: entity CONTENT still comes from readPerson/readAccount/readDeal on every ask.
  */
-const matchKeyCache = new Map<string, { mtimeMs: number; entries: { slug: string; keys: string[] }[] }>()
+type DirStamp = { mtimeMs: number; count: number; sizeSum: number }
+const matchKeyCache = new Map<string, { stamp: DirStamp; entries: { slug: string; keys: string[] }[] }>()
 
-function entityDirMtime(dir: string): number {
+function entityDirStamp(dir: string): DirStamp {
   try {
-    return statSync(dir).mtimeMs
+    const mtimeMs = statSync(dir).mtimeMs
+    let count = 0
+    let sizeSum = 0
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith('.json')) continue
+      count += 1
+      try {
+        sizeSum += statSync(join(dir, f)).size
+      } catch {
+        /* file vanished mid-scan — count still reflects the name; size miss is fine */
+      }
+    }
+    return { mtimeMs, count, sizeSum }
   } catch {
-    return -1 // nothing of this kind ingested yet — no directory, so nothing to match
+    return { mtimeMs: -1, count: 0, sizeSum: 0 } // nothing of this kind yet
   }
+}
+
+function stampsEqual(a: DirStamp, b: DirStamp): boolean {
+  return a.mtimeMs === b.mtimeMs && a.count === b.count && a.sizeSum === b.sizeSum
+}
+
+/** Test-only: drop the match-key cache so each suite starts from a cold stamp. */
+export function resetMatchKeyCacheForTests(): void {
+  matchKeyCache.clear()
 }
 
 /** Slugs whose id or one of its aliases appears as a whole-token run in the question, in listEntities'
  *  stable sorted order so the MAX_* caps keep selecting the same entities they always did. */
 function matchedSlugs(s: Settings, kind: EntityKind, hay: string): string[] {
   const dir = join(brainDir(s), 'entities', kind)
-  const mtimeMs = entityDirMtime(dir)
+  const stamp = entityDirStamp(dir)
   let cached = matchKeyCache.get(dir)
-  if (!cached || cached.mtimeMs !== mtimeMs) {
+  if (!cached || !stampsEqual(cached.stamp, stamp)) {
     const read = ENTITY_READERS[kind]
     const entries: { slug: string; keys: string[] }[] = []
     for (const slug of listEntities(s, kind)) {
       const e = read(s, slug)
       if (e) entries.push({ slug, keys: matchKeys(e.id, e.aliases) })
     }
-    cached = { mtimeMs: entityDirMtime(dir), entries }
+    cached = { stamp: entityDirStamp(dir), entries }
     matchKeyCache.set(dir, cached)
   }
   return cached.entries.filter((e) => e.keys.some((k) => slugInText(k, hay))).map((e) => e.slug)

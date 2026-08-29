@@ -153,4 +153,78 @@ describe('processDue — success and retry', () => {
     })
     expect(q.pending()[0].lastError).toBe('network down')
   })
+
+  it('overlapping processDue calls are single-flight (second returns zeros, never double-sends)', async () => {
+    const q = makeQueue()
+    q.enqueue(baseInput)
+    let release!: () => void
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    const pushFn = vi.fn(async () => {
+      await gate
+      return { ok: true }
+    })
+    const first = q.processDue(pushFn)
+    const second = await q.processDue(pushFn)
+    expect(second).toEqual({ processed: 0, succeeded: 0, deadLettered: 0, skippedConfidential: 0 })
+    release()
+    await expect(first).resolves.toEqual({
+      processed: 1,
+      succeeded: 1,
+      deadLettered: 0,
+      skippedConfidential: 0
+    })
+    expect(pushFn).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('load — corrupt on-disk rows', () => {
+  it('coerces a non-finite attempts field so retries can still dead-letter (never NaN forever)', async () => {
+    const { writeFileSync } = await import('node:fs')
+    writeFileSync(
+      join(dir, 'mcp-push-queue.json'),
+      JSON.stringify({
+        version: 1,
+        actions: [
+          {
+            id: 'bad-attempts',
+            kind: 'clickup',
+            action: 'create_task',
+            toolName: 'create_task',
+            payload: { title: 'x' },
+            attempts: 'oops',
+            nextAt: 0
+          }
+        ]
+      }),
+      'utf8'
+    )
+    const q = makeQueue({ maxAttempts: 1 })
+    const [action] = q.pending()
+    expect(action.attempts).toBe(0) // sanitized on load
+    await q.processDue(async () => ({ ok: false, error: 'fail' }))
+    expect(q.pending()[0].deadLetter).toBe(true)
+    expect(q.pending()[0].attempts).toBe(1)
+  })
+
+  it('drops rows missing required fields instead of crashing processDue', async () => {
+    const { writeFileSync } = await import('node:fs')
+    writeFileSync(
+      join(dir, 'mcp-push-queue.json'),
+      JSON.stringify({
+        version: 1,
+        actions: [{ id: 'incomplete' }, { notAnAction: true }]
+      }),
+      'utf8'
+    )
+    const q = makeQueue()
+    expect(q.pending()).toHaveLength(0)
+    await expect(q.processDue(async () => ({ ok: true }))).resolves.toEqual({
+      processed: 0,
+      succeeded: 0,
+      deadLettered: 0,
+      skippedConfidential: 0
+    })
+  })
 })

@@ -477,15 +477,26 @@ export function useAsk(): {
       const id = idRef.current
       cancelledIdsRef.current.add(id) // marks the id so onError knows this one's abort is expected
       void window.toto.cancel(id)
+      // Drop any buffered tokens + pending RAF so a late flush cannot append onto the cancelled answer
+      // after streaming:false (cancel used to leave the buffer armed → one more chunk could land).
+      resetBuffer()
       setAnswer((a) => (a ? { ...a, streaming: false } : a))
       // A genuine cancel never gets a terminal onDone/onError to remove this id (see the ref's comment
       // above), so self-evict after a delay comfortably longer than any straggling late error could take
       // to arrive — bounds the Set's size instead of leaking one entry per cancelled stream forever.
       setTimeout(() => cancelledIdsRef.current.delete(id), 30_000)
     }
-  }, [])
+  }, [resetBuffer])
 
   const clear = useCallback((): void => {
+    // Abort any in-flight stream first — clearing UI without cancel left main producing tokens for an
+    // orphaned id (onDelta drops them once idRef is wiped, but the provider call still burned quota).
+    if (idRef.current) {
+      const id = idRef.current
+      cancelledIdsRef.current.add(id)
+      void window.toto.cancel(id)
+      setTimeout(() => cancelledIdsRef.current.delete(id), 30_000)
+    }
     idRef.current = ''
     resetBuffer()
     setAnswer(null)

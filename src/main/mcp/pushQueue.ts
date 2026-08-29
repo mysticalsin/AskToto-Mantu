@@ -68,6 +68,7 @@ export interface PushQueueDeps {
 }
 
 const DEFAULT_MAX_ATTEMPTS = 5
+const ACTION_KINDS = new Set<OutboundActionKind>(['create_task', 'update_deal', 'log_note'])
 // Small, deterministic backoff steps (mirrors provider-health.ts's cooldown shape) rather than a raw
 // exponent that could balloon to hours after just a few failures — an MCP endpoint being briefly
 // unreachable should retry within the hour, not tomorrow.
@@ -94,10 +95,42 @@ function isConfidential(input: { confidential?: boolean; payload: Record<string,
   return input.confidential === true || input.payload?.confidential === true
 }
 
+/** Coerce a hand-edited / corrupt on-disk row into a safe OutboundAction, or drop it. Without this,
+ *  `attempts: "oops"` becomes NaN after `+= 1` and `NaN >= maxAttempts` is forever false → infinite
+ *  retry. Same for a missing nextAt (always "due"). */
+function sanitizeAction(raw: unknown): OutboundAction | null {
+  if (!raw || typeof raw !== 'object') return null
+  const a = raw as Record<string, unknown>
+  if (typeof a.id !== 'string' || !a.id) return null
+  if (typeof a.kind !== 'string' || !a.kind) return null
+  if (typeof a.action !== 'string' || !ACTION_KINDS.has(a.action as OutboundActionKind)) return null
+  if (typeof a.toolName !== 'string' || !a.toolName) return null
+  if (!a.payload || typeof a.payload !== 'object' || Array.isArray(a.payload)) return null
+  const attemptsRaw = typeof a.attempts === 'number' && Number.isFinite(a.attempts) ? a.attempts : 0
+  const attempts = Math.max(0, Math.floor(attemptsRaw))
+  const nextAt =
+    typeof a.nextAt === 'number' && Number.isFinite(a.nextAt) ? a.nextAt : 0
+  const out: OutboundAction = {
+    id: a.id,
+    kind: a.kind,
+    action: a.action as OutboundActionKind,
+    payload: a.payload as Record<string, unknown>,
+    toolName: a.toolName,
+    attempts,
+    nextAt
+  }
+  if (typeof a.lastError === 'string') out.lastError = a.lastError
+  if (typeof a.meetingFile === 'string') out.meetingFile = a.meetingFile
+  if (a.confidential === true) out.confidential = true
+  if (a.deadLetter === true) out.deadLetter = true
+  return out
+}
+
 export interface PushQueue {
   enqueue: (input: EnqueueInput) => OutboundAction
   /** Attempts every due, non-confidential, non-dead-lettered action via `pushFn`. Never throws — a
-   *  `pushFn` rejection is treated the same as `{ ok: false, error }`. */
+   *  `pushFn` rejection is treated the same as `{ ok: false, error }`. Single-flight: a second call
+   *  while one is in progress returns zeros immediately (never double-sends the same action). */
   processDue: (pushFn: (action: OutboundAction) => Promise<PushResult>) => Promise<{
     processed: number
     succeeded: number
@@ -107,17 +140,23 @@ export interface PushQueue {
   pending: () => OutboundAction[]
 }
 
+const EMPTY_RESULT = { processed: 0, succeeded: 0, deadLettered: 0, skippedConfidential: 0 }
+
 export function createPushQueue(deps: PushQueueDeps = {}): PushQueue {
   const storePath = deps.storePath ?? (() => join(app.getPath('userData'), 'mcp-push-queue.json'))
   const now = deps.now ?? (() => Date.now())
   const maxAttempts = deps.maxAttempts ?? DEFAULT_MAX_ATTEMPTS
 
   let actions: OutboundAction[] | null = null
+  /** Single-flight lock — overlapping timer ticks must not process the same row twice in parallel. */
+  let processing = false
+
   const load = (): OutboundAction[] => {
     if (actions) return actions
     try {
-      const parsed = JSON.parse(readFileSync(storePath(), 'utf8')) as { actions?: OutboundAction[] }
-      actions = Array.isArray(parsed.actions) ? parsed.actions : []
+      const parsed = JSON.parse(readFileSync(storePath(), 'utf8')) as { actions?: unknown }
+      const raw = Array.isArray(parsed.actions) ? parsed.actions : []
+      actions = raw.map(sanitizeAction).filter((a): a is OutboundAction => a !== null)
     } catch {
       actions = [] // absent or corrupt — treated as an empty queue, never a crash
     }
@@ -160,47 +199,56 @@ export function createPushQueue(deps: PushQueueDeps = {}): PushQueue {
   async function processDue(
     pushFn: (action: OutboundAction) => Promise<PushResult>
   ): Promise<{ processed: number; succeeded: number; deadLettered: number; skippedConfidential: number }> {
-    const list = load()
-    const t = now()
-    let processed = 0
-    let succeeded = 0
-    let deadLettered = 0
-    let skippedConfidential = 0
-    for (const action of list) {
-      if (action.deadLetter || action.nextAt > t) continue
-      // Never process if the meeting is confidential — checked on every tick, not only at enqueue time,
-      // so this holds even if a future caller ever mutates payload/confidential after enqueueing.
-      if (isConfidential(action)) {
-        skippedConfidential++
-        auditLog('mcp.push.skipped_confidential', { kind: action.kind, action: action.action })
-        continue
+    if (processing) return { ...EMPTY_RESULT }
+    processing = true
+    try {
+      const list = load()
+      const t = now()
+      let processed = 0
+      let succeeded = 0
+      let deadLettered = 0
+      let skippedConfidential = 0
+      for (const action of list) {
+        if (action.deadLetter || action.nextAt > t) continue
+        // Never process if the meeting is confidential — checked on every tick, not only at enqueue time,
+        // so this holds even if a future caller ever mutates payload/confidential after enqueueing.
+        if (isConfidential(action)) {
+          skippedConfidential++
+          auditLog('mcp.push.skipped_confidential', { kind: action.kind, action: action.action })
+          continue
+        }
+        processed++
+        let result: PushResult
+        try {
+          result = await pushFn(action)
+        } catch (e) {
+          result = { ok: false, error: e instanceof Error ? e.message : String(e) }
+        }
+        if (result.ok) {
+          succeeded++
+          const idx = list.indexOf(action)
+          if (idx !== -1) list.splice(idx, 1)
+          continue
+        }
+        // Coerce before increment — a corrupt in-memory attempts (should be impossible after sanitize,
+        // but defend the hot path anyway) must never become NaN and retry forever.
+        const prev = Number.isFinite(action.attempts) ? action.attempts : 0
+        action.attempts = prev + 1
+        action.lastError = result.error
+        if (action.attempts >= maxAttempts) {
+          action.deadLetter = true
+          deadLettered++
+          auditLog('mcp.push.dead_letter', { kind: action.kind, action: action.action, attempts: action.attempts })
+        } else {
+          action.nextAt = now() + backoffFor(action.attempts)
+          auditLog('mcp.push.retried', { kind: action.kind, action: action.action, attempts: action.attempts })
+        }
       }
-      processed++
-      let result: PushResult
-      try {
-        result = await pushFn(action)
-      } catch (e) {
-        result = { ok: false, error: e instanceof Error ? e.message : String(e) }
-      }
-      if (result.ok) {
-        succeeded++
-        const idx = list.indexOf(action)
-        if (idx !== -1) list.splice(idx, 1)
-        continue
-      }
-      action.attempts += 1
-      action.lastError = result.error
-      if (action.attempts >= maxAttempts) {
-        action.deadLetter = true
-        deadLettered++
-        auditLog('mcp.push.dead_letter', { kind: action.kind, action: action.action, attempts: action.attempts })
-      } else {
-        action.nextAt = now() + backoffFor(action.attempts)
-        auditLog('mcp.push.retried', { kind: action.kind, action: action.action, attempts: action.attempts })
-      }
+      save()
+      return { processed, succeeded, deadLettered, skippedConfidential }
+    } finally {
+      processing = false
     }
-    save()
-    return { processed, succeeded, deadLettered, skippedConfidential }
   }
 
   function pending(): OutboundAction[] {
