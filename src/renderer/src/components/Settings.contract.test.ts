@@ -45,8 +45,8 @@ describe('Local AI tells the truth about a model that is downloaded, not bundled
     expect(copy).not.toMatch(/Included with Métis/)
     expect(copy).not.toMatch(/no separate model download/i)
     expect(copy).not.toMatch(/bundled model/i)
-    // ...and says what actually happens instead.
-    expect(block).toMatch(/first run/i)
+    // ...and says what actually happens instead (opt-in download when Local AI is turned on).
+    expect(block).toMatch(/Turn on Local AI|first time you turn this on|fetches the on-device model/i)
   })
 
   it('MQA-191 — never tells the user to reinstall, which cannot restore weights no installer carries', () => {
@@ -62,7 +62,7 @@ describe('Local AI tells the truth about a model that is downloaded, not bundled
   it('MQA-187 — a failed download names what has to be reachable and when it retries', () => {
     expect(block).toMatch(/unavailableReason === 'download-failed'/)
     expect(block).toMatch(/huggingface\.co/)
-    expect(block).toMatch(/next launch/i)
+    expect(block).toMatch(/turn Local AI back on|retries when you turn/i)
   })
 
   it('MQA-187 — the card re-polls while a download is running instead of freezing on its mount snapshot', () => {

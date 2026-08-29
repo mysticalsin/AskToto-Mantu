@@ -72,29 +72,29 @@ describe('bundled local-model settings migration', () => {
       enabled: true,
       modelId: 'qwen3.5-0.8b',
       useFor: { suggest: true, summary: false, vision: true },
-      fallback: true
+      fallback: false
     })
   })
 
-  it('defaults Local AI to enabled-but-non-preempting: on, no useFor surface, fallback armed', () => {
-    // The bundled model + runtime ship in every installer, so enabled:true costs nothing until routed
-    // to. useFor must default false — with sparse settings persistence, a true default would silently
-    // reroute upgrading cloud users onto the small on-device model (local-first preemption).
+  it('defaults Local AI to off: Cloudflare / API keys stay primary until the user opts in', () => {
+    // Weights are not in the installer (~730 MB). enabled:false means no first-run download and no
+    // sidecar warm. useFor must stay false — with sparse settings persistence, a true default would
+    // silently reroute upgrading cloud users onto the small on-device model (local-first preemption).
     const parsed = SettingsSchema.parse(DEFAULT_SETTINGS)
-    expect(parsed.localLlm.enabled).toBe(true)
+    expect(parsed.localLlm.enabled).toBe(false)
     expect(parsed.localLlm.useFor).toEqual({ suggest: false, summary: false, vision: false })
-    expect(parsed.localLlm.fallback).toBe(true)
+    expect(parsed.localLlm.fallback).toBe(false)
     // An absent localLlm key (a settings.json from a user who never touched Local AI) gets the same shape.
     const { localLlm: _omitted, ...withoutLocal } = DEFAULT_SETTINGS
     expect(SettingsSchema.parse(withoutLocal).localLlm).toEqual({
-      enabled: true,
+      enabled: false,
       modelId: 'qwen3.5-0.8b',
       useFor: { suggest: false, summary: false, vision: false },
-      fallback: true
+      fallback: false
     })
   })
 
-  it('keeps a persisted pre-rename localLlm object parseable (indexFallback key is dropped, fallback defaults on)', () => {
+  it('keeps a persisted pre-rename localLlm object parseable (indexFallback key is dropped, fallback defaults off)', () => {
     const parsed = SettingsSchema.parse({
       ...DEFAULT_SETTINGS,
       localLlm: {
@@ -105,7 +105,7 @@ describe('bundled local-model settings migration', () => {
       }
     })
     expect(parsed.localLlm.enabled).toBe(false) // explicit user choice survives the default flip
-    expect(parsed.localLlm.fallback).toBe(true)
+    expect(parsed.localLlm.fallback).toBe(false)
     expect(parsed.localLlm).not.toHaveProperty('indexFallback')
   })
 
