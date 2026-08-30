@@ -8,7 +8,8 @@ import {
   providerTileDisabledReason,
   ssoSignInVerdict
 } from './Onboarding'
-import { micRowStatus } from './OnboardingExperience'
+import { Sparkles } from 'lucide-react'
+import { aiRowStatus, micRowStatus, summarizeSetupRows, type SetupRow } from './OnboardingExperience'
 
 describe('providerTileDisabledReason — step-5 provider tiles must not misreport why they are disabled', () => {
   it('is null (tappable) when nothing blocks the tile', () => {
@@ -168,6 +169,67 @@ describe('MQA-093 — a DENIED microphone is not the same row state as one that 
   })
 })
 
+describe('MQA-279 — Act 3 (Config) AI-readiness row must never claim ready before providerReady says so', () => {
+  it('is "checking" — never a guess — before settings have loaded', () => {
+    expect(aiRowStatus(undefined)).toEqual({ state: 'checking', detail: '' })
+    expect(aiRowStatus(null)).toEqual({ state: 'checking', detail: '' })
+  })
+
+  it('reads ready off the embedded Cloudflare default with the exact competence-framed copy', () => {
+    expect(aiRowStatus({ providerReady: true, provider: 'cloudflare' })).toEqual({
+      state: 'ready',
+      detail: "Ready — Métis's built-in Cloudflare, no key needed"
+    })
+  })
+
+  it('names whatever OTHER provider is actually ready, for a returning/reset profile', () => {
+    expect(aiRowStatus({ providerReady: true, provider: 'anthropic' })).toEqual({
+      state: 'ready',
+      detail: 'Ready — Claude · Anthropic configured'
+    })
+  })
+
+  it('is an honest, actionable "action" — not a fabricated ready — when nothing answers yet', () => {
+    expect(aiRowStatus({ providerReady: false, provider: 'cloudflare' })).toEqual({
+      state: 'action',
+      detail: 'not configured yet'
+    })
+  })
+
+  it('never reports ready purely because the provider id is cloudflare — providerReady must be true too', () => {
+    // The bug this pins: a naive `provider === 'cloudflare' ? ready : ...` would show competence for a
+    // keyless dev build that shipped no embedded credential (providerReady false, https URL unset).
+    expect(aiRowStatus({ providerReady: false, provider: 'cloudflare' }).state).not.toBe('ready')
+  })
+})
+
+describe('MQA-279 — Act 3 config-complete state: "scan first, then present" must stay two honest claims', () => {
+  const row = (state: SetupRow['state']): SetupRow => ({ key: 'k', label: 'l', icon: Sparkles, state })
+
+  it('reports neither scanDone nor allReady before any row exists', () => {
+    expect(summarizeSetupRows([])).toEqual({ scanDone: false, allReady: false })
+  })
+
+  it('is not scanDone while even one row is still "checking"', () => {
+    expect(summarizeSetupRows([row('ready'), row('checking')])).toEqual({ scanDone: false, allReady: false })
+  })
+
+  it('is scanDone but NOT allReady once every row has resolved but one still needs action', () => {
+    // The headline this gates ("Everything's ready. Nothing to configure.") must not fire here — MQA-201's
+    // rule extended to the derivation the whole scene reads.
+    expect(summarizeSetupRows([row('ready'), row('action')])).toEqual({ scanDone: true, allReady: false })
+  })
+
+  it('is scanDone but NOT allReady for blocked/restart, same as action', () => {
+    expect(summarizeSetupRows([row('ready'), row('blocked')]).allReady).toBe(false)
+    expect(summarizeSetupRows([row('ready'), row('restart')]).allReady).toBe(false)
+  })
+
+  it('is both scanDone and allReady once every row landed on ready or skipped', () => {
+    expect(summarizeSetupRows([row('ready'), row('skipped'), row('ready')])).toEqual({ scanDone: true, allReady: true })
+  })
+})
+
 describe('MQA-201 — scene 4 never fakes a check', () => {
   // docs/ONBOARDING-EXPERIENCE.md: "Rows animate from spinner -> state, using REAL signals ... (only show
   // rows that are actually true - never fake a check.)" The acceleration row was an unconditional
@@ -189,6 +251,28 @@ describe('MQA-201 — scene 4 never fakes a check', () => {
     expect(src).toMatch(/window\.toto\.asrBundled\(\)/)
     expect(src).toMatch(/window\.toto\.getPermissions\(\)/)
     expect(src).toMatch(/micRowStatus\(perms\?\.microphone\)/)
+  })
+
+  it('Wave 5 — includes the staged problem story before the reveal', () => {
+    expect(src).toMatch(/scene === 'problem'/)
+    expect(src).toMatch(/You're in the meeting\./)
+    expect(src).toMatch(/GUIDED_SCENES: Scene\[\] = \['problem', 'reveal', 'setup', 'personalize'\]/)
+  })
+
+  it('MQA-279 — the new AI row is derived from providerReady, never asserted for being cloudflare alone', () => {
+    expect(src).toMatch(/aiRowStatus\(settings\)/)
+    expect(src).toMatch(/settings\.providerReady/)
+    // Guards against a future edit collapsing the two-part check back into "provider === 'cloudflare'".
+    expect(src).not.toMatch(/state: 'ready'.*provider === 'cloudflare'/)
+  })
+
+  it('MQA-279 — the opt-out toggle maps to the real screenAsk setting, never an invented one', () => {
+    expect(src).toMatch(/settings\.screenAsk/)
+    expect(src).toMatch(/patch\(\{ screenAsk: v \}\)/)
+  })
+
+  it('MQA-279 — the Listen-only caveat is placed in Act 3 (setup), ahead of the Act 6 Ready reinforcement', () => {
+    expect(src).toMatch(/Métis only starts listening when you press Listen and tell the room/)
   })
 })
 

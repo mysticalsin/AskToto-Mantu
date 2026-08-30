@@ -45,8 +45,8 @@ describe('Local AI tells the truth about a model that is downloaded, not bundled
     expect(copy).not.toMatch(/Included with Métis/)
     expect(copy).not.toMatch(/no separate model download/i)
     expect(copy).not.toMatch(/bundled model/i)
-    // ...and says what actually happens instead.
-    expect(block).toMatch(/first run/i)
+    // ...and says what actually happens instead (background download when the app opens).
+    expect(block).toMatch(/when the app opens|when Métis opens|downloads automatically when Métis opens/i)
   })
 
   it('MQA-191 — never tells the user to reinstall, which cannot restore weights no installer carries', () => {

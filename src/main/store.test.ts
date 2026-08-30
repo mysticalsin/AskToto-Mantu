@@ -13,7 +13,8 @@ import {
   listDustAgents,
   testApiKey,
   getAllowedProviders,
-  getLockedKeys
+  getLockedKeys,
+  resetSettingsCacheForTests
 } from './store'
 import { decryptSecret } from './secrets'
 
@@ -64,6 +65,7 @@ describe('store', () => {
   let userData: string
 
   beforeEach(() => {
+    resetSettingsCacheForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-store-test-'))
     // store.ts's getApiKey() short-circuits on the provider's env var BEFORE it ever touches the
     // profile on disk (`const env = process.env[ENV_VAR[provider]]; if (env) return env`). That is

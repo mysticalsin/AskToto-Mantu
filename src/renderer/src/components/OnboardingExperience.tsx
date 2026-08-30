@@ -1,41 +1,115 @@
 /**
- * Métis onboarding as an EXPERIENCE — five-act narrative per docs/ONBOARDING-EXPERIENCE.md
- * (anatomy extracted from the Vibe Island reference Tony supplied: hero → staged problem story →
- * reveal → live environment-scan magic moment → personalization/landing).
+ * Métis onboarding as an EXPERIENCE — six-act narrative per docs/ONBOARDING-EXPERIENCE.md, now that
+ * Act 6 (Ready, MQA-283) closes it out: hero → staged problem story → reveal → live environment-scan
+ * magic moment → personalization/vibe → [license, optional] → Ready → finish (anatomy extracted from
+ * the Vibe Island reference Tony supplied: welcome → demo → config → vibe → license → ready).
  *
  * Deliberate constraints:
  * - No animation libraries — CSS transitions + staged `animation-delay` only, like the rest of the app.
+ *   The exceptions are Act 1's wordmark scramble (HeroWelcome below) and Act 2's synthetic cursor
+ *   (OnboardingDemoScene), both of which need a per-frame projection CSS cannot express — small rAF
+ *   loops over pure helpers in lib/scramble.ts and lib/synthetic-cursor.ts, not a dependency.
  * - Scene 4's checks are REAL (getPermissions / requestPermissionsUpfront / asrBundled) — a row only
  *   ever shows "ready" when it is actually true. Never fake the magic moment.
+ * - Act 2 (reveal) is the one deliberate exception to "never fake" — it drives Métis's REAL Bar/
+ *   Copilot/Answer/QuickActions components with a scripted fake meeting (MQA-277), guarded so fake data
+ *   can never persist and the demo can never see real data (MQA-278, @shared/demo-guard).
+ * - Act 6 (Ready, MQA-283) is the terminal act: it finishes onboarding itself (marks `onboardingDone`)
+ *   instead of handing off to the legacy provider/API-key step the way this component used to. That
+ *   hop is gone from the narrative path entirely — the embedded-Cloudflare-default install
+ *   (main/embedded-cloudflare-key.ts, MQA-273) already makes a fresh install `providerReady` with zero
+ *   user action, so a mandatory config screen for something already configured was the dishonest part.
+ *   Adding a personal provider key stays reachable as an OPTIONAL link from Ready, never a gate — see
+ *   `ActReady` below and `onboarding-flow.ts` for the (independently tested) scene-transition rules.
+ * - Act 3 (setup/Config, MQA-279) is "scan first, then present a completed configuration" — the
+ *   Vibe-Island-teardown Config act's shape ("Everything's configured. No action needed."), kept honest
+ *   by extending the SAME never-fake rule the other rows already follow to a new AI-readiness row
+ *   (`aiRowStatus`, below): it reads `providerReady`/`provider` straight off the settings snapshot
+ *   `publicSettings()` derives in main/index.ts, so it can never claim "Ready" while a real ask would
+ *   still fail. The opt-out toggle on the screen row is the same rule in the other direction — it only
+ *   ever appears because `screenAsk` is a real, always-on-by-default setting (ipc.ts), never invented.
  * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
  *   needs comes back through onDone.
  */
-import { useEffect, useRef, useState } from 'react'
-import { Check, FolderLock, Mic, MonitorUp, Sparkles } from 'lucide-react'
+import { useEffect, useId, useRef, useState } from 'react'
+import {
+  AlertCircle,
+  Check,
+  CircleCheck,
+  Cloud,
+  FolderLock,
+  KeyRound,
+  Loader2,
+  MessageSquare,
+  Mic,
+  MonitorUp,
+  Sparkles,
+  TrendingUp,
+  UserSearch
+} from 'lucide-react'
 import type { ConversationMode, PermissionStatus, ProfileRecoveryResult, PublicSettings } from '@shared/ipc'
-import type { ProviderId } from '@shared/providers'
+import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { MetisMark } from './MetisMark'
 import { Onboarding } from './Onboarding'
+import { OnboardingDemoScene } from './OnboardingDemoScene'
 import { isWindows } from '../lib/keys'
+import { useScrambleReveal } from '../lib/scramble'
+import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
+import { sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
 
-export interface OnboardingExperienceProps {
-  onDone: (result: { mode: ConversationMode; recordingConsent: boolean }) => void
-  /** Optional escape hatch to the old flow while this one beds in. */
-  onSkip?: () => void
+// Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
+// one icon, everywhere it appears, rather than inventing a second icon language just for this scene.
+const PERSONA_ICONS: Record<OnboardingPersonaId, typeof MessageSquare> = {
+  general: MessageSquare,
+  sales: TrendingUp,
+  recruiting: UserSearch
 }
 
-const REVEAL: string[] = ['Grounded in your meeting, in your words.', 'On your device. Nothing uploaded.']
+export interface OnboardingExperienceProps {
+  /** Act 6 (Ready, MQA-283): awaited before Ready's optional "Add your own AI provider" link opens
+   *  Settings, so the settings snapshot behind `onOpenAiSettings` always reflects a finished onboarding
+   *  (`onboardingDone: true`) rather than racing an in-flight patch. OnboardingV2 below is the only
+   *  caller and marks onboarding done inside this callback. */
+  onDone: (result: { mode: ConversationMode; recordingConsent: boolean }) => void | Promise<void>
+  /** Optional escape hatch to the old flow while this one beds in. */
+  onSkip?: () => void
+  /** Ready's OPTIONAL "Add your own AI provider" link (never a gate) — opens Settings' AI tab. Omitted
+   *  in contexts with no Settings surface to open (the link itself does not render without it). */
+  onOpenAiSettings?: () => void
+  /** Act 3's AI-readiness row (providerReady/provider) and screen-context opt-out toggle (screenAsk)
+   *  read straight from the live settings snapshot — the same one OnboardingV2 already threads to the
+   *  legacy provider step. Optional so a caller that only wants the narrative shell (or an older test)
+   *  keeps compiling; both rows fall back to an honest "still checking" / no-toggle state without it. */
+  settings?: PublicSettings
+  /** Required to flip `screenAsk` from the opt-out toggle. Same function OnboardingV2 already calls to
+   *  persist `mode`/`recordingConsent` out of this component. */
+  patch?: (p: Partial<PublicSettings>) => void
+}
 
-type Scene = 'hero' | 'reveal' | 'setup' | 'personalize'
+/** Wave 5 — problem story (docs/ONBOARDING-EXPERIENCE.md Scene 2): staged lines, one at a time. */
+const PROBLEM_STORY: string[] = [
+  "You're in the meeting.",
+  'The question lands on you.',
+  'You know that you know it.',
+  '…and the moment passes.'
+]
 
-// Hero is the welcome beat, not a "step" — the dots only track the guided acts after it, so the
-// indicator appears the moment the user is actually inside the flow instead of before they've begun.
-const GUIDED_SCENES: Scene[] = ['reveal', 'setup', 'personalize']
+// 'license' (Act 5, MQA-281/282) is deliberately NOT in GUIDED_SCENES below — see ActProgress's
+// comment. It now appears between 'personalize' and 'ready' (Act 6's re-point, MQA-283, moved it from
+// its original setup->license->personalize position to match the six-act canonical order — see
+// onboarding-flow.ts), and only when settings.licenseGateEnabled is true (the non-default,
+// self-hosted-license-server case); every other user's flow is byte-for-byte the four-scene guided
+// sequence the MQA-201 regression test pins, now closed out by the 'ready' bookend below.
+type Scene = OnboardingScene
+
+// Hero and Ready are the bookends, not "steps" — like Onboarding.tsx's own slide 1/6 bookends, the dots
+// only track the guided acts in between.
+const GUIDED_SCENES: Scene[] = ['problem', 'reveal', 'setup', 'personalize']
 
 // Lives in its own reserved-height row above the scene content (see the render below) rather than an
 // absolute overlay — an overlay collided with scene headings that sit close to the top on taller scenes
-// (e.g. "Your setup"'s 5 rows push the h2 up into where an absolutely-positioned dot row would sit).
+// (e.g. "Your setup"'s 6 rows push the h2 up into where an absolutely-positioned dot row would sit).
 function ActProgress({ scene }: { scene: Scene }): JSX.Element | null {
   const idx = GUIDED_SCENES.indexOf(scene)
   if (idx < 0) return null
@@ -54,12 +128,78 @@ function ActProgress({ scene }: { scene: Scene }): JSX.Element | null {
   )
 }
 
+const WORDMARK = 'Métis'
+
+/**
+ * Act 1 — Welcome (MQA-276). The Métis mark lands as a top-center "island" capsule and the wordmark
+ * resolves out of scrambled glyphs, in the spirit of the notch-capsule materialization researched in
+ * the Vibe Island teardown (motion FEEL only — own copy, own mark, own timing; see docs/qa/BUG-LEDGER.md
+ * MQA-276 and the teardown PDF for the reference). Every beat is CSS keyframes (`.island-capsule` +
+ * friends in styles.css, staged with `animation-delay` like the rest of this file) except the wordmark,
+ * which is the one place a JS-driven effect earns its keep — `useScrambleReveal` (src/renderer/src/lib/
+ * scramble.ts) is a small rAF loop over a pure, independently-tested projection function. Both honor
+ * `prefers-reduced-motion`: the CSS keyframes fall out of the existing global `animation-duration: 0`
+ * rule (plus explicit end-state overrides below for the ones with a custom-property angle), and the
+ * scramble hook checks the media query itself and skips straight to the resolved word.
+ */
+function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => void }): JSX.Element {
+  const wordmark = useScrambleReveal(WORDMARK, 900)
+  return (
+    <div className="scene-enter flex flex-col items-center gap-5">
+      <div className="island-capsule" aria-hidden="true">
+        <span className="island-capsule-mark">
+          <MetisMark size={40} />
+        </span>
+      </div>
+      <div className="flex flex-col items-center gap-2">
+        <h1
+          className="hero-wordmark m-0 select-none"
+          aria-label={WORDMARK}
+          style={{ fontFamily: 'var(--font-ui)' }}
+        >
+          <span aria-hidden="true">{wordmark}</span>
+        </h1>
+        <p
+          className="hero-tagline fade-up m-0 text-[14px] text-[color:var(--color-ink-2)]"
+          style={{ animationDelay: '900ms', animationFillMode: 'backwards' }}
+        >
+          Your on-device meeting copilot.
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onBegin}
+        className="fade-up no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-6 text-[13px] font-semibold text-white shadow-[0_2px_16px_var(--color-accent-glow)] hover:brightness-110"
+        style={{ animationDelay: '1000ms', animationFillMode: 'backwards' }}
+      >
+        Get Started
+      </button>
+      {onSkip && (
+        <button
+          type="button"
+          onClick={onSkip}
+          className="fade-up no-drag text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
+          style={{ animationDelay: '1150ms', animationFillMode: 'backwards' }}
+        >
+          Skip the tour
+        </button>
+      )}
+      <p
+        className="hero-byline fade-up m-0 text-[10px] tracking-wide text-[color:var(--color-ink-3)]"
+        style={{ animationDelay: '1300ms', animationFillMode: 'backwards' }}
+      >
+        Mantu · Tony Walteur
+      </p>
+    </div>
+  )
+}
+
 // 'restart' = permission is actually granted, but this same-session ScreenCaptureKit handle never saw it
 // (macOS only applies a fresh Screen Recording grant to the NEXT launch) — needs a relaunch, not a prompt.
 // 'blocked' = the OS holds an explicit Deny, which no prompt can undo — only the privacy pane can.
 export type SetupRowState = 'checking' | 'ready' | 'action' | 'blocked' | 'restart' | 'skipped'
 
-interface SetupRow {
+export interface SetupRow {
   key: string
   label: string
   icon: typeof Sparkles
@@ -77,7 +217,331 @@ export function micRowStatus(status: PermissionStatus | undefined): { state: Set
   return { state: 'action', detail: 'needs permission' }
 }
 
-export function OnboardingExperience({ onDone, onSkip }: OnboardingExperienceProps): JSX.Element {
+/** Act 3's AI row (MQA-279): "Ready" only ever means what `providerReady` means everywhere else in the
+ *  app — main/index.ts's `publicSettings()` computes it as the SAME gate askStart's attempt()/failover
+ *  chain enforce before a real ask is allowed through, so this can never show competence the product
+ *  cannot back up. The embedded-Cloudflare-default build (embedded-cloudflare-key.ts, MQA-273) makes
+ *  `providerReady` true with zero user action, which is the case this row is written to narrate; a
+ *  non-Cloudflare provider being ready (a returning/reset profile) still reads as ready, just named.
+ *  Never gates onboarding's Continue — adding a personal key stays optional, exactly as it is once
+ *  onboarding finishes (Settings → AI). */
+export function aiRowStatus(
+  settings: Pick<PublicSettings, 'providerReady' | 'provider'> | null | undefined
+): { state: SetupRowState; detail: string } {
+  if (!settings) return { state: 'checking', detail: '' }
+  if (settings.providerReady) {
+    return settings.provider === 'cloudflare'
+      ? { state: 'ready', detail: "Ready — Métis's built-in Cloudflare, no key needed" }
+      : { state: 'ready', detail: `Ready — ${PROVIDERS[settings.provider].label} configured` }
+  }
+  return { state: 'action', detail: 'not configured yet' }
+}
+
+/** Act 3 — "scan first, then present a completed configuration": two DIFFERENT claims the scene makes,
+ *  kept as one pure derivation so both stay honest and are each independently testable.
+ *  `scanDone` only means every row has left 'checking' — safe to stop showing spinners and reveal the
+ *  Listen-only caveat, which is true whether or not anything still needs action.
+ *  `allReady` is the stronger "nothing to configure" claim (MQA-201's rule: never true from a row that
+ *  never actually resolved, and never true while something still needs 'action'/'blocked'/'restart'). */
+export interface SetupScanSummary {
+  scanDone: boolean
+  allReady: boolean
+}
+export function summarizeSetupRows(rows: SetupRow[]): SetupScanSummary {
+  const scanDone = rows.length > 0 && rows.every((r) => r.state !== 'checking')
+  const allReady = scanDone && rows.every((r) => r.state === 'ready' || r.state === 'skipped')
+  return { scanDone, allReady }
+}
+
+/** Act 3's opt-out toggle (screenAsk) — a small local switch so this scene doesn't need to reach into
+ *  Settings.tsx's `Toggle` (which is styled against the separate `--cl-*` settings-panel token set this
+ *  onboarding shell never mounts). Same on/off mechanics, themed with the onboarding's own
+ *  `--color-accent` tokens instead. */
+function MiniToggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }): JSX.Element {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      onClick={(e) => {
+        e.stopPropagation()
+        onChange(!on)
+      }}
+      className={
+        'no-drag focus-ring relative h-[20px] w-[34px] shrink-0 rounded-full transition-colors duration-150 ' +
+        (on ? 'bg-[var(--color-accent)]' : 'bg-white/15')
+      }
+    >
+      <span
+        className={
+          'absolute top-[2px] h-[16px] w-[16px] rounded-full bg-white transition-all duration-150 ' +
+          (on ? 'left-[16px]' : 'left-[2px]')
+        }
+      />
+    </button>
+  )
+}
+
+/** Plain-language copy for every code the license server (or this client) can return. Duplicated from
+ *  Settings.tsx's / LicenseGate.tsx's licenseErrorMessage on purpose — same reasoning both of those give
+ *  for not importing one another: this scene has to keep working even if either of those chunks changes
+ *  shape, and the map is a handful of lines. */
+function licenseErrorMessage(code: string | undefined): string {
+  switch (code) {
+    case 'invalid':
+      return 'That license key was not recognized.'
+    case 'revoked':
+      return 'This license has been revoked.'
+    case 'expired':
+      return 'This license has expired.'
+    case 'seat_limit_reached':
+      return 'All seats on this license are in use.'
+    case 'network':
+      return 'Could not reach the license server. Check the server URL and your connection.'
+    default:
+      return code || 'Could not activate this license.'
+  }
+}
+
+/**
+ * Act 5 — License (MQA-281/282). Paste-key -> validate -> activate, in Métis's own voice — never a
+ * price or a checkout: the copy is deliberately "the key you were given", matching license-server's
+ * README ("no purchase, no price… keys are minted and handed out by an operator"). Rendered ONLY when
+ * the caller (OnboardingExperience below) has already decided `settings.licenseGateEnabled` is true;
+ * this component itself has no opinion on that, so it stays simple to reason about and to test.
+ *
+ * Never a dead end: Continue is ALWAYS enabled, activated or not. The real enforcement decision lives
+ * in main's checkLicenseGrace() (consulted at boot by App.tsx's <LicenseGate/>, gated on the separate
+ * LICENSE_ENFORCEMENT compile-time switch) — this scene's job is only to offer the paste-key flow at a
+ * natural point in the narrative, never to become a second, onboarding-only gate that could strand a
+ * trial user who has done nothing wrong.
+ */
+function ActLicense({
+  settings,
+  onContinue
+}: {
+  settings?: PublicSettings
+  onContinue: () => void
+}): JSX.Element {
+  const [serverUrl, setServerUrl] = useState(settings?.licenseServerUrl || '')
+  const [licenseKey, setLicenseKey] = useState('')
+  const [activating, setActivating] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [activated, setActivated] = useState(false)
+  const serverId = useId()
+  const keyId = useId()
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  const activate = async (): Promise<void> => {
+    const url = serverUrl.trim()
+    const key = licenseKey.trim()
+    if (!url || !key) return
+    setActivating(true)
+    setError(null)
+    const r = await window.toto.licenseActivate({ serverUrl: url, licenseKey: key })
+    if (!mountedRef.current) return
+    setActivating(false)
+    if (r.ok) {
+      setLicenseKey('')
+      setActivated(true)
+    } else {
+      setError(licenseErrorMessage(r.error))
+    }
+  }
+
+  return (
+    <div key="license" className="scene-enter flex flex-col items-center gap-6">
+      <div className="flex flex-col items-center gap-1.5">
+        <p className="m-0 text-[11px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-ink-3)]">
+          One more thing
+        </p>
+        <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">Activate your license</h2>
+        <p className="m-0 max-w-[380px] text-[12.5px] leading-snug text-[color:var(--color-ink-2)]">
+          Your organization runs its own license server. Paste the key you were given — no key yet? You
+          can still continue on a trial and activate later from Settings.
+        </p>
+      </div>
+
+      <div className="flex w-full max-w-[360px] flex-col gap-2 text-left">
+        <label htmlFor={serverId} className="flex flex-col gap-1">
+          <span className="text-[11px] font-medium text-[color:var(--color-ink-3)]">License server URL</span>
+          <input
+            id={serverId}
+            value={serverUrl}
+            spellCheck={false}
+            autoComplete="off"
+            placeholder="https://license.your-company.com"
+            onChange={(e) => {
+              setServerUrl(e.target.value)
+              setError(null)
+              setActivated(false)
+            }}
+            className="no-drag focus-ring rounded-[10px] border border-white/10 bg-white/[0.04] px-3 py-2.5 text-[13px] text-[color:var(--color-ink)] placeholder:text-[color:var(--color-ink-3)]"
+          />
+        </label>
+        <label htmlFor={keyId} className="flex flex-col gap-1">
+          <span className="text-[11px] font-medium text-[color:var(--color-ink-3)]">License key</span>
+          <input
+            id={keyId}
+            type="password"
+            value={licenseKey}
+            spellCheck={false}
+            autoComplete="off"
+            placeholder="Paste the key you were given"
+            onChange={(e) => {
+              setLicenseKey(e.target.value)
+              setError(null)
+              setActivated(false)
+            }}
+            className="no-drag focus-ring rounded-[10px] border border-white/10 bg-white/[0.04] px-3 py-2.5 text-[13px] text-[color:var(--color-ink)] placeholder:text-[color:var(--color-ink-3)]"
+          />
+        </label>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--color-destructive,#ff8080)]">
+          <AlertCircle size={13} className="mt-px shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+      {!error && activated && (
+        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--color-accent-2)]">
+          <CircleCheck size={13} className="mt-px shrink-0" />
+          <span>Activated. You're all set.</span>
+        </div>
+      )}
+
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void activate()}
+          disabled={!serverUrl.trim() || !licenseKey.trim() || activating}
+          className="no-drag focus-ring flex items-center gap-1.5 rounded-full bg-[var(--color-accent)]/15 px-4 py-2 text-[12px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50"
+        >
+          {activating ? <Loader2 size={13} className="animate-spin" /> : <KeyRound size={13} />}
+          Activate
+        </button>
+        <button
+          type="button"
+          onClick={onContinue}
+          className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-6 text-[13px] font-semibold text-white hover:brightness-110"
+        >
+          Continue
+        </button>
+      </div>
+    </div>
+  )
+}
+
+/** Fixed spark positions for the Ready ceremony (Act 6, MQA-283) — a handful of one-shot CSS motes
+ *  around the mark, not a particle system. Positions are spread by hand (plain `left`/`top` offsets)
+ *  rather than computed, so this is six literal, readable values instead of a runtime trig call for
+ *  six static dots. Reduced motion is handled entirely by the blanket `prefers-reduced-motion` rule in
+ *  styles.css: `.ready-spark`'s keyframes only ever animate opacity/transform (no `@property`-typed
+ *  value), so the rule's 0ms duration reliably lands on the invisible end state. */
+const READY_SPARKS: ReadonlyArray<{ x: number; y: number; delay: number }> = [
+  { x: 34, y: -10, delay: 60 },
+  { x: -30, y: -22, delay: 140 },
+  { x: 22, y: 30, delay: 100 },
+  { x: -34, y: 14, delay: 200 },
+  { x: 4, y: -38, delay: 40 },
+  { x: -8, y: 36, delay: 160 }
+]
+
+/**
+ * Act 6 — Ready (MQA-283). The narrative's terminal act: a tasteful, Apple-grade celebratory beat (the
+ * Métis mark gets one gleam sweep + a handful of one-shot spark motes — see READY_SPARKS/styles.css —
+ * deliberately NOT VI's heavier confetti-cannon + collectible edition card; own copy, own restraint),
+ * then the Métis equivalent of the teardown's honest "restart your sessions" last line: onboarding
+ * finishes ONLY when this screen's own button is pressed, and even then Métis does not start listening
+ * until Listen is pressed and the room has been told — the empty state is the truth, not a formality.
+ *
+ * `onOpenAiSettings` is OPTIONAL and never a gate: adding a personal provider key is reachable from
+ * here (the embedded-Cloudflare-default install is already `providerReady` with nothing to add), and
+ * pressing it still finishes onboarding first so the user lands in Settings, not back in onboarding.
+ */
+function ActReady({
+  mode,
+  onFinish,
+  onOpenAiSettings
+}: {
+  mode: ConversationMode
+  onFinish: () => Promise<void>
+  onOpenAiSettings?: () => void
+}): JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const persona = ONBOARDING_PERSONAS.find((p) => p.id === (mode as OnboardingPersonaId))
+
+  const finishAndOpenAiSettings = async (): Promise<void> => {
+    if (busy) return
+    setBusy(true)
+    await onFinish()
+    onOpenAiSettings?.()
+  }
+
+  return (
+    <div key="ready" className="scene-enter flex flex-col items-center gap-6">
+      <div className="ready-mark-wrap" aria-hidden="true">
+        {READY_SPARKS.map((s, i) => (
+          <span
+            key={i}
+            className="ready-spark"
+            style={{ left: `calc(50% + ${s.x}px)`, top: `calc(50% + ${s.y}px)`, animationDelay: `${s.delay}ms` }}
+          />
+        ))}
+        <MetisMark size={96} />
+      </div>
+      <div className="flex flex-col items-center gap-2">
+        <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">You’re all set.</h2>
+        {persona && (
+          <p className="fade-up m-0 text-[11px] font-medium uppercase tracking-[0.08em] text-[color:var(--color-accent-2)]">
+            {persona.label} mode
+          </p>
+        )}
+        {/* The honest empty-state — Métis's equivalent of the teardown's "restart your sessions" last
+            line. Never softened into "you're good to go": nothing is captured until Listen is pressed
+            AND the room has been told, which is exactly what the recording-consent checkbox back in
+            personalize already committed the user to. */}
+        <p className="m-0 max-w-[380px] text-[13px] leading-snug text-[color:var(--color-ink-2)]">
+          Métis is ready. It starts listening only when you press Listen and tell the room — nothing is
+          captured before that.
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={() => void onFinish()}
+        disabled={busy}
+        className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-7 text-[13px] font-semibold text-white shadow-[0_2px_16px_var(--color-accent-glow)] hover:brightness-110 disabled:opacity-60"
+      >
+        Get started
+      </button>
+      {onOpenAiSettings && (
+        <button
+          type="button"
+          onClick={() => void finishAndOpenAiSettings()}
+          disabled={busy}
+          className="no-drag focus-ring text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)] disabled:opacity-50"
+        >
+          Add your own AI provider — optional, never required
+        </button>
+      )}
+    </div>
+  )
+}
+
+export function OnboardingExperience({
+  onDone,
+  onSkip,
+  onOpenAiSettings,
+  settings,
+  patch
+}: OnboardingExperienceProps): JSX.Element {
   const [scene, setScene] = useState<Scene>('hero')
   const [rows, setRows] = useState<SetupRow[]>([])
   const [mode, setMode] = useState<ConversationMode>('general')
@@ -106,7 +570,10 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
       { key: 'asr', label: 'On-device transcription', icon: Sparkles, state: 'checking' },
       { key: 'brain', label: 'Private meeting brain', icon: FolderLock, state: 'checking' },
       { key: 'mic', label: 'Microphone', icon: Mic, state: 'checking' },
-      { key: 'screen', label: 'Screen context', icon: MonitorUp, state: 'checking' }
+      { key: 'screen', label: 'Screen context', icon: MonitorUp, state: 'checking' },
+      // Act 3 (MQA-279): AI readiness, derived from the SAME `providerReady`/`provider` publicSettings()
+      // computes for every other gate in the app — see `aiRowStatus` above.
+      { key: 'ai', label: 'Métis AI', icon: Cloud, state: 'checking' }
     ]
     setRows(base)
     screenGrantedRef.current = null
@@ -149,6 +616,12 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
       if (!isWindows && perms && (perms.microphone !== 'granted' || perms.screenRecording !== 'granted')) {
         void window.toto.requestPermissionsUpfront().catch(() => null)
       }
+      // AI readiness has no OS prompt to fire and no permission to live-poll — `providerReady` is
+      // already a settled fact by the time this scene mounts (main seeds the embedded Cloudflare
+      // credential, if any, before the first window even shows), so one staged resolution is enough.
+      await delay(350)
+      const ai = aiRowStatus(settings)
+      set('ai', ai.state, ai.detail)
     })()
     return () => {
       live = false
@@ -213,15 +686,20 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
     void window.toto.relaunch().catch(() => setRestarting(false))
   }
 
-  const finish = (): void => {
+  // Act 6 (Ready, MQA-283): this is now the narrative's actual finish — invoked from the Ready scene's
+  // CTA, not personalize's Start (which now only advances to license/ready, see sceneAfterPersonalize).
+  // Returns a promise so Ready's optional provider link can await it before opening Settings.
+  const finish = async (): Promise<void> => {
     if (doneRef.current || !consent) return
     doneRef.current = true
-    onDone({ mode, recordingConsent: true })
+    await onDone({ mode, recordingConsent: true })
   }
 
-  const allReady = rows.length > 0 && rows.every((r) => r.state === 'ready' || r.state === 'skipped')
+  const { scanDone, allReady } = summarizeSetupRows(rows)
   // 'blocked' counts here for the same reason 'action' does — it was one of those states before it got
-  // its own name, and Continue must not go primary while the mic is still denied.
+  // its own name, and Continue must not go primary while the mic is still denied. The AI row is
+  // deliberately excluded — a personal provider key is available, never required (the embedded
+  // Cloudflare default already answers), so it never blocks Continue the way mic/screen do.
   const needsPerms = rows.some(
     (r) => (r.key === 'mic' || r.key === 'screen') && (r.state === 'action' || r.state === 'blocked' || r.state === 'restart')
   )
@@ -232,72 +710,45 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
         <ActProgress scene={scene} />
       </div>
       <div className="flex w-full flex-1 flex-col items-center justify-center gap-6">
-      {scene === 'hero' && (
-        <div key="hero" className="scene-enter flex flex-col items-center gap-6">
-          <span className="mark-halo">
-            <MetisMark size={92} />
-          </span>
-          <div>
-            <h1 className="text-[28px] font-semibold text-[color:var(--color-ink)]">
-              Métis. <span className="text-[color:var(--color-ink-2)]">Your on-device meeting copilot.</span>
-            </h1>
-            <div className="mt-4 flex flex-col gap-1.5 text-[13px] text-[color:var(--color-ink-2)]">
-              {['Answers grounded in your own meeting', 'Runs on your device. Nothing is uploaded.', 'Recording always asks first, so you stay in control.'].map((t, i) => (
-                <p key={t} className="fade-up m-0" style={{ animationDelay: `${300 + i * 220}ms` }}>
-                  {t}
-                </p>
-              ))}
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => setScene('reveal')}
-            className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-6 text-[13px] font-semibold text-white shadow-[0_2px_16px_var(--color-accent-glow)] hover:brightness-110"
-          >
-            Begin
-          </button>
-          {onSkip && (
-            <button type="button" onClick={onSkip} className="no-drag text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]">
-              Skip the tour
-            </button>
-          )}
-          <p className="m-0 text-[10px] tracking-wide text-[color:var(--color-ink-3)]">Mantu · Métis</p>
-        </div>
-      )}
+      {scene === 'hero' && <HeroWelcome onBegin={() => setScene('problem')} onSkip={onSkip} />}
 
-      {scene === 'reveal' && (
-        <div key="reveal" className="scene-enter flex flex-col items-center gap-6">
-          <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">Here’s what that looks like.</h2>
-          {/* Representation of the live bar — a real transcript line, then the answer MATERIALIZES through
-              the glass (develop-in — the same blur-to-sharp idiom the real first-answer moment uses in
-              styles.css) after a beat, instead of appearing instantly. That beat is the whole point: it's
-              the one place in onboarding that should feel like it's actually thinking. */}
-          <div className="glass-strong fade-up w-full max-w-[520px] rounded-[16px] px-4 py-3 text-left">
-            <p className="m-0 text-[12px] text-[color:var(--color-ink-3)]">Example · THEM · just now</p>
-            <p className="m-0 mt-0.5 text-[13px] text-[color:var(--color-ink)]">“Can you recap where we left things last time?”</p>
-            <div className="develop-in mt-2 rounded-[10px] border border-white/10 bg-white/[0.04] px-3 py-2" style={{ animationDelay: '650ms', animationFillMode: 'backwards' }}>
-              <p className="m-0 text-[12px] leading-relaxed text-[color:var(--color-ink-2)]">
-                <Sparkles size={12} className="mr-1 inline text-[var(--color-accent-2)]" />
-                Three things were agreed last call: the revised timeline, the security review, and the intro to
-                their CTO. All three are done, so lead with that.
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-col gap-1 text-[13px] text-[color:var(--color-ink-2)]">
-            {REVEAL.map((t, i) => (
-              <p key={t} className="fade-up m-0" style={{ animationDelay: `${900 + i * 240}ms`, animationFillMode: 'backwards' }}>
-                {t}
+      {scene === 'problem' && (
+        <div key="problem" className="scene-enter flex flex-col items-center gap-8">
+          <div className="flex max-w-[420px] flex-col gap-3 text-left">
+            {PROBLEM_STORY.map((line, i) => (
+              <p
+                key={line}
+                className="fade-up m-0 text-[22px] font-medium leading-snug text-[color:var(--color-ink)]"
+                style={{
+                  animationDelay: `${200 + i * 1100}ms`,
+                  animationFillMode: 'backwards',
+                  opacity: 1
+                }}
+              >
+                {line}
               </p>
             ))}
           </div>
           <button
             type="button"
-            onClick={() => setScene('setup')}
+            onClick={() => setScene('reveal')}
             className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-6 text-[13px] font-semibold text-white hover:brightness-110"
+            style={{ animationDelay: `${200 + PROBLEM_STORY.length * 1100}ms` }}
           >
-            Set me up
+            Continue
           </button>
         </div>
+      )}
+
+      {scene === 'reveal' && (
+        <OnboardingDemoScene
+          onContinue={() => setScene('setup')}
+          // Skip-available-from-here (per the Act 2 brief): jumps straight to Personalize — unlike
+          // HeroWelcome's onSkip (which restarts the entire legacy flow from its own slide 1), this
+          // keeps everything already shown (Welcome, the problem story, the demo) and just gets the
+          // user to Start faster, bypassing the real permission checklist.
+          onSkipToEnd={() => setScene('personalize')}
+        />
       )}
 
       {scene === 'setup' && (
@@ -375,6 +826,32 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
                       </button>
                     </div>
                   )}
+                  {/* Opt-out toggle framed as competence (Act 3 brief): screenAsk is a REAL, on-by-default
+                      setting (ipc.ts) — never invented for this scene — so it's shown as "already on,
+                      your call" rather than a setup step. Independent of the permission grant above: the
+                      toggle flips the app's intent to ask, whether or not the OS has said yes yet. */}
+                  {r.key === 'screen' && settings && patch && (
+                    <div className="mt-1.5 flex items-center justify-between gap-2 border-t border-white/10 pt-1.5">
+                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                        Let Métis see your screen when you ask — on by default, your call.
+                      </span>
+                      <MiniToggle
+                        on={settings.screenAsk}
+                        onChange={(v) => patch({ screenAsk: v })}
+                        label="Let Métis see your screen when you ask"
+                      />
+                    </div>
+                  )}
+                  {r.key === 'ai' && r.state === 'action' && (
+                    <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                      You'll add a provider key on the next step — nothing else here needs one.
+                    </p>
+                  )}
+                  {r.key === 'ai' && r.state === 'ready' && (
+                    <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                      Add your own provider key anytime in Settings — optional, never required.
+                    </p>
+                  )}
                 </div>
                 {r.state === 'checking' && (
                   <span className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-white/20 border-t-[var(--color-accent-2)]" />
@@ -393,10 +870,21 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
               Everything’s ready. Nothing to configure.
             </p>
           )}
+          {/* Métis's equivalent of Vibe Island's "restart your sessions" honest caveat (teardown, Config
+              act) — but placed HERE, first, rather than saved for the final act, and reinforced again at
+              Ready. True the moment scanning settles, regardless of allReady: nothing above changes when
+              Métis is actually allowed to listen. */}
+          {scanDone && (
+            <p className="fade-up m-0 max-w-[360px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+              Métis only starts listening when you press Listen and tell the room — nothing is captured before that.
+            </p>
+          )}
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setScene('personalize')}
+              // Act 6 re-point (MQA-283): setup always advances to personalize now — license (when
+              // enabled) has moved to sit between personalize and ready. See onboarding-flow.ts.
+              onClick={() => setScene(sceneAfterSetup())}
               className={
                 'no-drag focus-ring h-10 rounded-full px-5 text-[13px] font-semibold ' +
                 (needsPerms
@@ -412,30 +900,55 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
 
       {scene === 'personalize' && (
         <div key="personalize" className="scene-enter flex flex-col items-center gap-6">
-          <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">How will you use Métis?</h2>
+          <div className="flex flex-col items-center gap-1.5">
+            <p className="m-0 text-[11px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-ink-3)]">
+              Last one
+            </p>
+            <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">How should Métis show up?</h2>
+            <p className="m-0 max-w-[360px] text-[12.5px] leading-snug text-[color:var(--color-ink-2)]">
+              One pick shapes how it listens and what it says next — change it anytime in Settings.
+            </p>
+          </div>
           <div className="flex gap-3">
-            {(
-              [
-                { id: 'general', label: 'General', desc: 'Every meeting, every topic' },
-                { id: 'sales', label: 'Sales', desc: 'Deals, objections, next steps' },
-                { id: 'recruiting', label: 'Recruiting', desc: 'You interview: STAR probes, challenges' }
-              ] as Array<{ id: ConversationMode; label: string; desc: string }>
-            ).map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                onClick={() => setMode(m.id)}
-                className={
-                  'no-drag focus-ring w-[150px] rounded-[14px] border px-4 py-3 text-left transition-all duration-150 ' +
-                  (mode === m.id
-                    ? 'scale-[1.03] border-[var(--color-accent)] bg-[var(--color-accent-soft)] shadow-[0_2px_14px_var(--color-accent-glow)]'
-                    : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]')
-                }
-              >
-                <p className="m-0 text-[13px] font-semibold text-[color:var(--color-ink)]">{m.label}</p>
-                <p className="m-0 mt-0.5 text-[11px] leading-snug text-[color:var(--color-ink-2)]">{m.desc}</p>
-              </button>
-            ))}
+            {/* The onboarding personality beat (Act 4, Vibe-Island-teardown "the ONE emotional choice
+                after the heavy config step") — three refined cards over the plain three-button picker
+                this replaced, each naming the mode's real behavior change (`persona-vibe.ts`, honest and
+                unit-tested against the actual `DEFAULT_MODE_PROMPTS`) rather than inventing personality
+                settings that don't exist. Selection delight is a single one-shot ring (`.persona-select-
+                ring` below), keyed by `mode` so it retriggers fresh on every pick — same remount trick as
+                `.scene-enter`'s `key={scene}` — and folds into the global prefers-reduced-motion rule for
+                free (0ms duration = jumps straight to its end state, i.e. invisible). */}
+            {ONBOARDING_PERSONAS.map((p) => {
+              const Icon = PERSONA_ICONS[p.id]
+              const selected = mode === p.id
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => setMode(p.id)}
+                  className={
+                    'no-drag focus-ring relative w-[164px] overflow-hidden rounded-[14px] border px-4 py-3.5 text-left transition-all duration-150 ' +
+                    (selected
+                      ? 'scale-[1.03] border-[var(--color-accent)] bg-[var(--color-accent-soft)] shadow-[0_2px_14px_var(--color-accent-glow)]'
+                      : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]')
+                  }
+                >
+                  {selected && <span key={mode} aria-hidden="true" className="persona-select-ring" />}
+                  <div className="flex items-center gap-1.5">
+                    <Icon
+                      size={14}
+                      className={selected ? 'text-[color:var(--color-accent-2)]' : 'text-[color:var(--color-ink-3)]'}
+                    />
+                    <p className="m-0 text-[13px] font-semibold text-[color:var(--color-ink)]">{p.label}</p>
+                  </div>
+                  <p className="m-0 mt-1 text-[10.5px] font-medium uppercase tracking-[0.06em] text-[color:var(--color-accent-2)]">
+                    {p.vibe}
+                  </p>
+                  <p className="m-0 mt-1.5 text-[11px] leading-snug text-[color:var(--color-ink-2)]">{p.changes}</p>
+                </button>
+              )
+            })}
           </div>
           <div className="flex flex-col items-center gap-3">
             <label className="flex max-w-[420px] cursor-pointer items-start gap-2.5 rounded-[12px] border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-left">
@@ -452,7 +965,9 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
             <p className="m-0 text-[15px] font-medium text-[color:var(--color-ink)]">Ready when you are.</p>
             <button
               type="button"
-              onClick={finish}
+              // Act 6 re-point (MQA-283): advances to license (only if enabled) or straight to Ready —
+              // never finishes here directly any more. See onboarding-flow.ts.
+              onClick={() => setScene(sceneAfterPersonalize(settings?.licenseGateEnabled))}
               disabled={!consent}
               className={
                 'no-drag focus-ring h-10 rounded-full px-7 text-[13px] font-semibold text-white ' +
@@ -461,10 +976,20 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
                   : 'cursor-not-allowed bg-white/10 opacity-60')
               }
             >
-              Start
+              Continue
             </button>
           </div>
         </div>
+      )}
+
+      {/* Act 5 (MQA-281/282), re-pointed after personalize by Act 6 (MQA-283) — skipped ENTIRELY when
+          settings.licenseGateEnabled is false (the default): personalize's Continue button above only
+          ever routes here when that setting is already true, so a normal user (licensing off) never
+          sees this scene render, not even for a frame. */}
+      {scene === 'license' && <ActLicense settings={settings} onContinue={() => setScene(sceneAfterLicense())} />}
+
+      {scene === 'ready' && (
+        <ActReady mode={mode} onFinish={finish} onOpenAiSettings={onOpenAiSettings} />
       )}
       </div>
     </div>
@@ -472,9 +997,10 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
 }
 
 /**
- * The full first-run flow: the five-act experience above, then the legacy component entered at its
- * PROVIDER step (5) so API-key setup + the final consent/permissions checklist keep their proven
- * implementation. Mode from the personalize scene is persisted before the handoff.
+ * The full first-run flow: the six-act experience above, which now finishes onboarding ITSELF at its
+ * own Ready act (MQA-283) — no more handoff to the legacy component's provider step for the completed-
+ * narrative path. The legacy `Onboarding` component only renders for the "Skip the tour" escape hatch
+ * below (`legacy-full`), unchanged from before.
  */
 export function OnboardingV2({
   settings,
@@ -497,13 +1023,22 @@ export function OnboardingV2({
 }): JSX.Element {
   // 'legacy-full' = the Skip path: the user opted out of the narrative, so they get the ENTIRE legacy
   // flow from slide 1 — its consent gate included. Skipping must never skip consent (CMO-QA #1).
-  const [phase, setPhase] = useState<'experience' | 'provider' | 'legacy-full'>('experience')
+  // No more 'provider' phase (MQA-283) — the experience's own Ready act finishes onboarding directly.
+  const [phase, setPhase] = useState<'experience' | 'legacy-full'>('experience')
   if (phase === 'experience') {
     return (
       <OnboardingExperience
-        onDone={({ mode, recordingConsent }) => {
-          patch({ mode, recordingConsent })
-          setPhase('provider')
+        settings={settings}
+        patch={patch}
+        onOpenAiSettings={onOpenAiSettings}
+        onDone={async ({ mode, recordingConsent }) => {
+          // Act 6 re-point (MQA-283): finish onboarding HERE, at the end of the narrative's own Ready
+          // act, instead of handing off to the legacy provider/API-key step. The embedded-Cloudflare-
+          // default install (MQA-273) already makes a fresh install `providerReady` with zero user
+          // action, so that step is no longer required to complete onboarding — Ready's own optional
+          // "Add your own AI provider" link (wired to `onOpenAiSettings` above) is how it stays reachable.
+          await patch({ mode, recordingConsent, onboardingDone: true, onboardingDoneAt: Date.now() })
+          onDone()
         }}
         onSkip={() => setPhase('legacy-full')}
       />
@@ -519,14 +1054,10 @@ export function OnboardingV2({
       onDone={onDone}
       signedIn={signedIn}
       signedInEmail={signedInEmail}
-      initialStep={phase === 'legacy-full' ? 1 : 5}
-      // Provider phase = the experience's required consent checkbox was already ticked. Seed it so a
-      // still-in-flight patch can't let the legacy finish() re-persist false. legacy-full = the Skip
-      // path, which hits the real consent slide 1, so leave it to read from settings.
-      initialConsent={phase === 'provider' ? true : undefined}
-      // legacy-full still needs its own consent slide (1), but must not then walk slides 2-4 — that
-      // would make "Skip the tour" show MORE screens than just finishing the narrative experience does.
-      skipWalkthrough={phase === 'legacy-full'}
+      initialStep={1}
+      // legacy-full needs its own consent slide (1), but must not then walk slides 2-4 — that would
+      // make "Skip the tour" show MORE screens than just finishing the narrative experience does.
+      skipWalkthrough
     />
   )
 }

@@ -49,6 +49,8 @@ import {
   type LicenseActivateResult,
   type LicenseStatusResult,
   type LicenseGateVerdict,
+  type LicenseConfigPayload,
+  type LicenseConfigResult,
   type ImportAudioPickResult,
   type ImportAudioProgress,
   type ImportJobView,
@@ -66,6 +68,8 @@ function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
 
 const api = {
   getSettings: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.settingsGet),
+  /** Wave 2 — dismiss the one-shot last-failover chip after the user has seen it. */
+  dismissFailoverNotice: (): Promise<{ ok: true }> => ipcRenderer.invoke(IPC.dismissFailoverNotice),
   getPermissions: (): Promise<PlatformPermissions> => ipcRenderer.invoke(IPC.permissionsGet),
   getShortcutFailures: (): Promise<ShortcutFailure[]> => ipcRenderer.invoke(IPC.shortcutFailures),
   openPermissionSettings: (kind: 'microphone' | 'screenRecording'): Promise<void> =>
@@ -142,18 +146,30 @@ const api = {
   parakeetStatus: (): Promise<{ ready: boolean; addonError: string | null }> =>
     ipcRenderer.invoke(IPC.parakeetStatus),
   parakeetEnsure: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.parakeetEnsure),
-  // Returns {text, name?} — name is the Speaker Intelligence label for THEM windows when enabled
-  // (older shape was a bare string; the renderer normalizes both while the contract settles).
-  parakeetFeed: (samples: Float32Array, speaker: string): Promise<string | { text: string; name?: string }> =>
+  // Returns {text, name?, echo?} — name is the Speaker Intelligence label for THEM windows when enabled;
+  // echo:true means operator bleed was dropped (renderer must not count that as an ASR stall).
+  // (Older shape was a bare string; the renderer normalizes both while the contract settles.)
+  parakeetFeed: (
+    samples: Float32Array,
+    speaker: string
+  ): Promise<string | { text: string; name?: string; echo?: boolean }> =>
     ipcRenderer.invoke(IPC.parakeetFeed, { samples, speaker }),
   onParakeetProgress: (cb: (pct: number) => void): (() => void) => {
     const h = (_e: unknown, d: { pct: number }): void => cb(d.pct)
     ipcRenderer.on(IPC.parakeetProgress, h)
     return () => ipcRenderer.removeListener(IPC.parakeetProgress, h)
   },
-  // Apple Speech (on-device, macOS only) — same {text, name?} shape and speaker ride-along as parakeetFeed.
-  appleSpeechFeed: (samples: Float32Array, speaker: string): Promise<string | { text: string; name?: string }> =>
+  // Apple Speech (on-device, macOS only) — same {text, name?, echo?} shape and speaker ride-along as parakeetFeed.
+  appleSpeechFeed: (
+    samples: Float32Array,
+    speaker: string
+  ): Promise<string | { text: string; name?: string; echo?: boolean }> =>
     ipcRenderer.invoke(IPC.appleSpeechFeed, { samples, speaker }),
+  // Speaker Intelligence's engine-independent embedding tap (see IPC.speakerEmbed's own comment) — the
+  // Whisper path's equivalent of the label ride-along parakeetFeed/appleSpeechFeed carry for free.
+  // echo:true → renderer drops the already-committed THEM line (operator loopback bleed).
+  speakerEmbed: (samples: Float32Array, speaker: string): Promise<{ name?: string; echo?: boolean }> =>
+    ipcRenderer.invoke(IPC.speakerEmbed, { samples, speaker }),
 
   ask: (req: AskStart): Promise<void> => ipcRenderer.invoke(IPC.askStart, req),
   cancel: (id: string): Promise<void> => ipcRenderer.invoke(IPC.askCancel, id),
@@ -300,6 +316,11 @@ const api = {
   windowMoveBy: (dx: number, dy: number): Promise<void> =>
     ipcRenderer.invoke(IPC.windowMoveBy, { dx, dy }),
   minimize: (narrow: boolean): Promise<void> => ipcRenderer.invoke(IPC.windowMinimize, narrow),
+  // Auto-hide: pin the overlay to the top-center of its current display (grows downward from the top
+  // edge). Fire-and-forget; never shows/focuses the window, so the foreground app keeps focus.
+  anchorTop: (): Promise<void> => ipcRenderer.invoke(IPC.windowAnchorTop),
+  // Auto-hide reveal: widen the window back to the full bar width after the peek narrowed it.
+  revealWidth: (): Promise<void> => ipcRenderer.invoke(IPC.windowRevealWidth),
   // A caught render-throw (ErrorBoundary) — fire-and-forget, best-effort. Main persists it to disk (same
   // sink as a main-process crash) so a field report survives without ASKTOTO_DEBUG_RENDERER devtools.
   reportCrash: (message: string, stack?: string, componentStack?: string): Promise<void> =>
@@ -349,7 +370,10 @@ const api = {
   licenseStatus: (): Promise<LicenseStatusResult> => ipcRenderer.invoke(IPC.licenseStatus),
   // Boot-gate verdict — see the license:gate handler in main/index.ts for why this is a separate,
   // non-auth-gated channel from licenseStatus.
-  licenseGate: (): Promise<LicenseGateVerdict> => ipcRenderer.invoke(IPC.licenseGate)
+  licenseGate: (): Promise<LicenseGateVerdict> => ipcRenderer.invoke(IPC.licenseGate),
+  // Act 5 — informational GET /license/config read, for the onboarding ActLicense scene.
+  licenseConfig: (payload: LicenseConfigPayload): Promise<LicenseConfigResult> =>
+    ipcRenderer.invoke(IPC.licenseConfig, payload)
 }
 
 contextBridge.exposeInMainWorld('toto', api)

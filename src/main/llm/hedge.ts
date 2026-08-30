@@ -7,6 +7,10 @@ import type { StreamHandle } from './shared'
  * happened anyway; it only ever shortens the worst case.
  */
 export const HEDGE_DELAY_MS = 3000
+/** Live suggest has a tight idle budget — pull the backup earlier than answer/vision so a slow primary
+ *  still leaves room for a useful hedge within the turn. Paid double-bill risk is lower than missing
+ *  the suggest window entirely. Local backup still uses delay 0 (see askStart). */
+export const HEDGE_DELAY_SUGGEST_MS = 1200
 
 export type HedgeLeg = 'primary' | 'hedge'
 

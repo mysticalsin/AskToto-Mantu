@@ -6,7 +6,15 @@ import { spawnSync } from 'node:child_process'
 vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
 vi.mock('./logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
 
-import { buildOcrContext, macHelperPath, macHelperPresent, extractScreenText, type OcrResult } from './mac-helper'
+import {
+  buildOcrContext,
+  macHelperPath,
+  macHelperPresent,
+  macScreenMetricsSpawnSpec,
+  getMacScreenMetrics,
+  extractScreenText,
+  type OcrResult
+} from './mac-helper'
 
 const REPO_ROOT = process.cwd()
 
@@ -70,6 +78,24 @@ describe('macHelperPath / macHelperPresent', () => {
   it('is never present on non-darwin platforms', () => {
     expect(macHelperPresent('win32')).toBe(false)
     expect(macHelperPresent('linux')).toBe(false)
+  })
+})
+
+describe('macScreenMetricsSpawnSpec / getMacScreenMetrics (MQA-275 — island notch metrics)', () => {
+  it('spawn spec targets the screen-metrics subcommand when the helper exists (repo checkout state)', () => {
+    const spec = macScreenMetricsSpawnSpec()
+    if (existsSync(macHelperPath())) {
+      expect(spec).toEqual({ command: macHelperPath(), args: ['screen-metrics'] })
+    } else {
+      expect(spec).toBeNull()
+    }
+  })
+
+  it('degrades to null (never throws) when the helper binary is absent — proven on this non-darwin CI host', async () => {
+    // This VM has no darwin helper binary at all, so macHelperPresent() is false regardless of platform
+    // mocking, and getMacScreenMetrics must resolve null rather than reject/hang.
+    const result = await getMacScreenMetrics()
+    expect(result).toBeNull()
   })
 })
 

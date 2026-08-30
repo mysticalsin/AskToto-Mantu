@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { transformWithEsbuild } from 'vite'
 import { describe, expect, it } from 'vitest'
+import { clampAxis, clampAxisMargin, clampHeight as islandClampHeight, isReachable as islandIsReachable, recenterXForWidth, refitToDisplay as islandRefitToDisplay } from './island/geometry'
 
 /**
  * Source-contract tests for the overlay-placement findings (MQA-196, MQA-197). src/main/index.ts boots
@@ -9,6 +10,13 @@ import { describe, expect, it } from 'vitest'
  * screen listener, so the established pattern applies (index-audit-fixes.contract.test.ts,
  * main-lifecycle.contract.test.ts, c-main-fixes.contract.test.ts): lift the real source out of index.ts
  * and RUN it against stubs, so the assertions exercise the shipped arithmetic rather than its shape.
+ *
+ * The island positioning math itself now lives in the PURE `island/geometry.ts` module (Phase 1 of the
+ * Métis rebuild) and is covered directly by geometry.test.ts; index.ts's `clampHeight`/`isReachable`/
+ * `refitToDisplay` are thin wrappers that resolve the live `screen.*` display and forward to it. These
+ * tests lift the wrappers + their callers (moveBy, registerScreenListeners, setWindowMode) and inject the
+ * REAL geometry functions as stubs — so what runs here is still the shipped wiring end-to-end, just with
+ * the already-covered pure math imported instead of re-sliced.
  */
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 
@@ -156,10 +164,15 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
     bounds: Rect,
     screen: ReturnType<typeof fakeScreen>
   ): Promise<{ bounds: () => Rect; moveBy: (dx: number, dy: number) => void }> {
-    const region = await toJs(sliceBetween('function clampAxis(pos: number', 'function toggleVisible('))
+    // Starts at the clampHeight wrapper (clampAxis/clampAxisMargin are now direct imports from
+    // island/geometry.ts, not local functions — nothing left to lift for them).
+    const region = await toJs(
+      sliceBetween('function clampHeight(height: number, areaHeight: number): number {', 'function toggleVisible(')
+    )
     const preamble = [
-      'const { screen, start, BAR_MIN_HEIGHT } = stubs',
+      'const { screen, start, BAR_MIN_HEIGHT, DRAG_VISIBLE_MARGIN, islandClampHeight, islandIsReachable, islandRefitToDisplay, clampAxis, clampAxisMargin } = stubs',
       'let current = { ...start }',
+      'let userAnchorY = null',
       'const win = { getBounds: () => ({ ...current }), setBounds: (b) => { current = { ...current, ...b } } }',
       'const ensureWindow = () => win',
       ''
@@ -169,7 +182,17 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       bounds: () => Rect
       moveBy: (dx: number, dy: number) => void
     }
-    return run({ screen, start: bounds, BAR_MIN_HEIGHT: constant('BAR_MIN_HEIGHT') })
+    return run({
+      screen,
+      start: bounds,
+      BAR_MIN_HEIGHT: constant('BAR_MIN_HEIGHT'),
+      DRAG_VISIBLE_MARGIN: constant('DRAG_VISIBLE_MARGIN'),
+      islandClampHeight,
+      islandIsReachable,
+      islandRefitToDisplay,
+      clampAxis,
+      clampAxisMargin
+    })
   }
 
   const RETINA: Display = { id: 1, workArea: { x: 0, y: 0, width: 3840, height: 2112 } }
@@ -223,7 +246,7 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       sliceBetween('function setWindowMode(): void {', '/** Self-heal a null `win`')
     )
     const preamble = [
-      'const { screen, clampHeight } = stubs',
+      'const { screen, clampHeight, recenterXForWidth } = stubs',
       'let current = { x: 0, y: 0, width: 880, height: 400 }',
       'const win = { getBounds: () => ({ ...current }), setBounds: (b) => { current = { ...current, ...b } } }',
       'const currentWidth = 880',
@@ -235,7 +258,8 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
     ) => Rect
     const height = run({
       screen: fakeScreen([LAPTOP_ALONE]),
-      clampHeight: (h: number, areaHeight: number) => Math.min(h, areaHeight - 48)
+      clampHeight: (h: number, areaHeight: number) => Math.min(h, areaHeight - 48),
+      recenterXForWidth
     }).height
     expect(height).toBeLessThanOrEqual(LAPTOP_ALONE.workArea.height - 48)
   })
