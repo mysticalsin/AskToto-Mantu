@@ -7,6 +7,8 @@ import { z } from 'zod';
 import { generateLicenseKey, licenseStatus, successPayload, adminListView, adminDetailView, computeStats, computeAnalytics } from './license.mjs';
 import { licenseEventView } from './webhooks.mjs';
 import { toCsv } from './csv.mjs';
+import { signLease } from './lease.mjs';
+import { resolveLicenseGateConfig } from './license-gate.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -52,6 +54,22 @@ const adminCreateSchema = z.object({
   notes: notesField,
 });
 
+// Trial keys are minted, not sold — no price, no checkout. Defaults mirror the plan's Phase 4
+// language ("mints a 1-seat, N-day-expiry key (default 14) with notes: 'trial'").
+const DEFAULT_TRIAL_DAYS = 14;
+const DEFAULT_TRIAL_SEATS = 1;
+const MAX_TRIAL_DAYS = 3650; // ~10 years — generous ceiling, still bounded (no accidental "forever")
+const MAX_TRIAL_SEATS = 1000;
+
+const adminTrialSchema = z.object({
+  seats: z.number().int().positive().max(MAX_TRIAL_SEATS).optional(),
+  days: z.number().int().positive().max(MAX_TRIAL_DAYS).optional(),
+  companyName: z.string().trim().max(MAX_ID_LEN).optional(),
+  contactName: contactNameField,
+  contactEmail: contactEmailField,
+  notes: notesField,
+});
+
 const adminPatchSchema = z
   .object({
     seatCap: z.number().int().positive().optional(),
@@ -70,7 +88,7 @@ const adminPatchSchema = z
     { message: 'at least one field must be provided' }
   );
 
-function badRequest(res, parseResult) {
+  function badRequest(res, parseResult) {
   return res.status(400).json({
     ok: false,
     error: 'invalid_request',
@@ -167,11 +185,24 @@ const NOOP_WEBHOOKS = {
 // factory (rather than a module-level singleton) so tests can spin up
 // isolated instances against isolated temp-file stores.
 //
+// Default offline lease lifetime: how long a signed lease is valid for before the client must
+// phone home again (a heartbeat well inside this window refreshes it). Kept short relative to the
+// client's own 7-day soft-grace/30-day hard-cap fallback (src/main/license.ts) — the lease is a
+// strictly *stronger* offline proof (a tampered or clock-rolled-back lease is rejected outright),
+// not a longer one.
+const DEFAULT_LEASE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
 // options.webhooks — a createWebhooks() instance (server.mjs wires the real one from env).
 // options.backups — a createBackupManager() instance; without one the backup routes return 503.
+// options.leaseSigningKey — { privateKey, publicKey, publicKeyRaw } from lease.mjs's
+//   loadLeaseSigningKey(); undefined/null means LICENSE_LEASE_PRIVATE_KEY isn't set, so no lease is
+//   ever issued and /license/pubkey 404s — every existing activate/heartbeat client is unaffected.
+// options.leaseTtlMs — how long a freshly-issued lease is valid for; defaults to DEFAULT_LEASE_TTL_MS.
 export function createApp(store, auditLog, options = {}) {
   const webhooks = options.webhooks || NOOP_WEBHOOKS;
   const backups = options.backups || null;
+  const leaseSigningKey = options.leaseSigningKey || null;
+  const leaseTtlMs = options.leaseTtlMs || DEFAULT_LEASE_TTL_MS;
   const app = express();
   const startedAt = Date.now();
   // Client-IP trust is deliberately OPT-IN via TRUST_PROXY, because the rate limiter and the admin
@@ -187,6 +218,25 @@ export function createApp(store, auditLog, options = {}) {
   app.use(express.json());
   const rateLimit = makeRateLimit();
   const adminLockout = makeAdminLockout();
+
+  // Issues a signed, compact Ed25519 lease for a machine's current activation, or undefined when
+  // no signing key is configured (additive-only: an old/unaware client simply never sees the field,
+  // and a server operator who never sets LICENSE_LEASE_PRIVATE_KEY sees zero behaviour change).
+  // The payload's `notAfter` is a signed absolute timestamp — moving the local clock backwards on
+  // the machine can never extend it, unlike the wall-clock-only grace period this strictly improves.
+  function issueLease(license, machineId) {
+    if (!leaseSigningKey) return undefined;
+    const issuedAt = Date.now();
+    const payload = {
+      licenseKey: license.licenseKey,
+      machineId,
+      companyName: license.companyName,
+      seatCap: license.seatCap,
+      issuedAt,
+      notAfter: issuedAt + leaseTtlMs,
+    };
+    return signLease(payload, leaseSigningKey.privateKey);
+  }
 
   // JSON body parse errors land here (thrown by express.json()).
   app.use((err, req, res, next) => {
@@ -214,7 +264,7 @@ export function createApp(store, auditLog, options = {}) {
       existing.lastSeenAt = now;
       if (machineName) existing.machineName = machineName;
       store.persist();
-      return res.json(successPayload(license));
+      return res.json({ ...successPayload(license), lease: issueLease(license, machineId) });
     }
 
     if (license.activations.length >= license.seatCap) {
@@ -230,7 +280,7 @@ export function createApp(store, auditLog, options = {}) {
       lastSeenAt: now,
     });
     store.persist();
-    return res.json(successPayload(license));
+    return res.json({ ...successPayload(license), lease: issueLease(license, machineId) });
   });
 
   app.post('/heartbeat', rateLimit, (req, res) => {
@@ -251,7 +301,7 @@ export function createApp(store, auditLog, options = {}) {
 
     existing.lastSeenAt = Date.now();
     store.persist();
-    return res.json(successPayload(license));
+    return res.json({ ...successPayload(license), lease: issueLease(license, machineId) });
   });
 
   app.post('/deactivate', (req, res) => {
@@ -367,6 +417,56 @@ export function createApp(store, auditLog, options = {}) {
       companyName: license.companyName,
       seatCap: license.seatCap,
       expiresAt: license.expiresAt,
+    });
+  });
+
+  // Mints a time-boxed TRIAL license/lease — no purchase, no price, no checkout of any kind. A
+  // thin wrapper over the same create path as POST /admin/licenses, so the audit log, webhooks,
+  // and dashboard all pick a trial up for free: it's a real license record (server-issued, with a
+  // real expiry), just pre-filled with trial-shaped defaults (1 seat, 14 days, notes: "trial") and
+  // tagged `trial: true` so the dashboard/CSV/analytics can tell trials apart from sold licenses.
+  // Still admin-authed — minting a key, even a free one, is an operator action, not a public route.
+  app.post('/admin/licenses/trial', requireAdmin, (req, res) => {
+    const parsed = adminTrialSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed);
+    const { seats, days, companyName, contactName, contactEmail, notes } = parsed.data;
+
+    const seatCap = seats ?? DEFAULT_TRIAL_SEATS;
+    const trialDays = days ?? DEFAULT_TRIAL_DAYS;
+    const expiresAt = Date.now() + trialDays * 24 * 60 * 60 * 1000;
+
+    let licenseKey = generateLicenseKey();
+    while (store.findByKey(licenseKey)) {
+      licenseKey = generateLicenseKey();
+    }
+
+    const license = {
+      licenseKey,
+      companyName: companyName || 'Trial',
+      seatCap,
+      createdAt: Date.now(),
+      expiresAt,
+      revoked: false,
+      activations: [],
+      contactName: contactName ?? '',
+      contactEmail: contactEmail ?? '',
+      notes: notes ?? 'trial',
+      trial: true,
+    };
+    store.addLicense(license);
+    auditLog.record({
+      action: 'create_trial',
+      licenseKey: license.licenseKey,
+      details: { companyName: license.companyName, seatCap, expiresAt, days: trialDays },
+    });
+    webhooks.emit('license.created', { license: licenseEventView(license) });
+
+    return res.status(201).json({
+      licenseKey: license.licenseKey,
+      companyName: license.companyName,
+      seatCap: license.seatCap,
+      expiresAt: license.expiresAt,
+      trial: true,
     });
   });
 
@@ -587,6 +687,29 @@ export function createApp(store, auditLog, options = {}) {
     gauge('asktoto_seats_used_total', 'Sum of activated seats across all licenses.', stats.totalSeatsUsed);
     gauge('asktoto_seats_active_30d', 'Activated seats seen in the last 30 days.', stats.totalActive30d);
     res.type('text/plain; version=0.0.4; charset=utf-8').send(`${lines.join('\n')}\n`);
+  });
+
+  // Unauthenticated by design (the client needs it before it has anything to authenticate with —
+  // there's no secret here, only a public verification key). 404s when LICENSE_LEASE_PRIVATE_KEY
+  // isn't configured, same "unconfigured feature doesn't even reveal it exists" convention as
+  // /metrics — a server that has never turned leases on shouldn't advertise a key nobody signs
+  // with. `publicKey` is the raw 32-byte Ed25519 key, base64url-encoded (the JWK `x` value) — the
+  // client reconstructs it with `crypto.createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x },
+  // format: 'jwk' })`, no PEM/DER parsing, no new dependency on either side.
+  app.get('/license/pubkey', (req, res) => {
+    if (!leaseSigningKey) return res.status(404).json({ ok: false, error: 'lease_disabled' });
+    return res.json({ ok: true, algorithm: 'ed25519', publicKey: leaseSigningKey.publicKeyRaw });
+  });
+
+  // Server-declared state of the two client-side compile-time switches (LICENSE_ENFORCEMENT /
+  // LICENSE_UI_ENABLED) — see lib/license-gate.mjs for the drift-fails-closed contract. This is a
+  // read-only DECLARATION for a future managed-config fetch to consume; it does not itself gate
+  // anything on this server (every /activate, /heartbeat, /admin/* route behaves exactly as it
+  // does today regardless of this response). Unauthenticated: it's operator-declared intent, not a
+  // secret, and a pre-activation client needs to read it before it has an admin token.
+  app.get('/license/config', (req, res) => {
+    const { licenseEnforcement, licenseUiEnabled, drift } = resolveLicenseGateConfig();
+    return res.json({ ok: true, licenseEnforcement, licenseUiEnabled, drift });
   });
 
   app.get('/health', (req, res) => {
