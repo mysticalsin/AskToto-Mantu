@@ -2,7 +2,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import {
+  advanceLanguageProbe,
   degradedAfterMicRecovery,
+  feedEmptyIsEcho,
   isQuestion,
   looksLikeNetworkError,
   probeResultIsStale,
@@ -406,5 +408,101 @@ describe('themRecoveryFailureIsNoop — a repeated failure must not re-render th
     // The write itself still only ever RAISES — an existing captureDegraded carries the more specific
     // start-time cause (the Screen-Recording copy) and must survive the retry.
     expect(listenSrc).toMatch(/captureDegraded: s\.captureDegraded \?\? \{ side: 'them', note: THEM_LOST_MSG, permission: false \}/)
+  })
+})
+// Live auto-language first pin (MQA-235): require SWITCH_AFTER consecutive confirming probes before the
+// INITIAL pin — same bar as a mid-meeting switch. A single English greeting on a French call used to latch
+// English for the rest of the meeting.
+describe('advanceLanguageProbe — live first-pin needs SWITCH_AFTER (MQA-235)', () => {
+  it('does not pin on the first confident detection while still unpinned', () => {
+    const next = advanceLanguageProbe({
+      detected: 'English',
+      pinnedLang: null,
+      switchRun: null,
+      switchAfter: 2
+    })
+    expect(next).toEqual({
+      pinnedLang: null,
+      switchRun: { lang: 'English', count: 1 },
+      shouldPin: false
+    })
+  })
+
+  it('pins only after SWITCH_AFTER consecutive confirming detections', () => {
+    const first = advanceLanguageProbe({
+      detected: 'French',
+      pinnedLang: null,
+      switchRun: null,
+      switchAfter: 2
+    })
+    const second = advanceLanguageProbe({
+      detected: 'French',
+      pinnedLang: null,
+      switchRun: first.switchRun,
+      switchAfter: 2
+    })
+    expect(second).toEqual({ pinnedLang: 'French', switchRun: null, shouldPin: true })
+  })
+
+  it('restarts the run when a different language appears before confirmation', () => {
+    const next = advanceLanguageProbe({
+      detected: 'Spanish',
+      pinnedLang: null,
+      switchRun: { lang: 'English', count: 1 },
+      switchAfter: 2
+    })
+    expect(next).toEqual({
+      pinnedLang: null,
+      switchRun: { lang: 'Spanish', count: 1 },
+      shouldPin: false
+    })
+  })
+
+  it('clears a pending switch run when the current pin is re-confirmed', () => {
+    const next = advanceLanguageProbe({
+      detected: 'French',
+      pinnedLang: 'French',
+      switchRun: { lang: 'English', count: 1 },
+      switchAfter: 2
+    })
+    expect(next).toEqual({ pinnedLang: 'French', switchRun: null, shouldPin: false })
+  })
+
+  it('re-pins after SWITCH_AFTER consecutive detections of a different language', () => {
+    const first = advanceLanguageProbe({
+      detected: 'English',
+      pinnedLang: 'French',
+      switchRun: null,
+      switchAfter: 2
+    })
+    const second = advanceLanguageProbe({
+      detected: 'English',
+      pinnedLang: 'French',
+      switchRun: first.switchRun,
+      switchAfter: 2
+    })
+    expect(second).toEqual({ pinnedLang: 'English', switchRun: null, shouldPin: true })
+  })
+
+  it('is what useListen feeds into pinLanguage (source contract)', () => {
+    expect(listenSrc).toMatch(/advanceLanguageProbe\(\{/)
+    expect(listenSrc).toMatch(/workerRef\.current\?\.postMessage\(\{ type: 'pinLanguage', language: next\.pinnedLang \}\)/)
+  })
+})
+
+// Echo-defense empty feeds must not count toward the Parakeet/Apple empty-run stall that silent-downgrades
+// a healthy session to Whisper.
+describe('feedEmptyIsEcho — echo silence is not an ASR stall', () => {
+  it('is true only for the explicit echo-drop shape', () => {
+    expect(feedEmptyIsEcho({ text: '', echo: true })).toBe(true)
+    expect(feedEmptyIsEcho({ text: '', echo: false })).toBe(false)
+    expect(feedEmptyIsEcho({ text: 'hello', echo: true })).toBe(false)
+    expect(feedEmptyIsEcho({ text: '' })).toBe(false)
+    expect(feedEmptyIsEcho('')).toBe(false)
+  })
+
+  it('is what the Parakeet/Apple empty-run counters gate on (source contract)', () => {
+    expect(listenSrc).toMatch(/if \(feedEmptyIsEcho\(res\)\) \{\s*\n\s*parakeetEmptyRunRef\.current = 0/g)
+    expect(listenSrc).toMatch(/if \(res\?\.echo\) \{\s*\n\s*const next = linesRef\.current\.filter/)
   })
 })
