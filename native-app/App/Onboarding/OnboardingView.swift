@@ -266,10 +266,10 @@ private struct SetupScene: View {
                             .font(.system(size: 11, weight: .medium))
                             .tracking(1.4)
                             .foregroundStyle(.white.opacity(0.45))
-                        Text(model.allReady ? "Everything’s ready." : (model.rows.contains(where: { $0.state == .checking }) ? "Checking this Mac…" : "Almost there."))
+                        Text(model.allReady ? "Ready for your island." : (model.rows.contains(where: { $0.state == .checking }) ? "Checking this Mac…" : "Almost there."))
                             .font(.system(size: 22, weight: .semibold))
                             .foregroundStyle(.white)
-                        Text("Real checks only — Métis lights each capability when it’s actually available.")
+                        Text("Real checks only. When you’re done, Métis rests in your island until you need it.")
                             .font(.system(size: 12.5))
                             .foregroundStyle(.white.opacity(0.65))
                             .multilineTextAlignment(.center)
@@ -508,8 +508,19 @@ private struct PersonalizeScene: View {
 
             VStack(spacing: 10) {
                 Text("Ready when you are.").font(.system(size: 15, weight: .medium)).foregroundStyle(.white)
+                #if os(macOS)
+                Text("Métis will hide in your Mac island — hover to open, never steals focus.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.white.opacity(0.45))
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 360)
+                #endif
                 Button { model.finish() } label: {
+                    #if os(macOS)
+                    Text("Hide in my island").metisPrimaryButton(enabled: model.canFinish)
+                    #else
                     Text("Start").metisPrimaryButton(enabled: model.canFinish)
+                    #endif
                 }
                 .buttonStyle(.plain)
                 .disabled(!model.canFinish)

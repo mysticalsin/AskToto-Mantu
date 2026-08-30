@@ -57,6 +57,12 @@ import { isWindows } from '../lib/keys'
 import { useScrambleReveal } from '../lib/scramble'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
 import { sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
+import {
+  onboardingHomeCopy,
+  onboardingHomeSurface,
+  READY_LAND_MS,
+  WINDOWS_SETUP_MOMENTS
+} from '../lib/onboarding-home'
 
 // Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
 // one icon, everywhere it appears, rather than inventing a second icon language just for this scene.
@@ -144,13 +150,22 @@ const WORDMARK = 'Métis'
  */
 function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => void }): JSX.Element {
   const wordmark = useScrambleReveal(WORDMARK, 900)
+  const home = onboardingHomeCopy(onboardingHomeSurface(isWindows))
   return (
     <div className="scene-enter flex flex-col items-center gap-5">
-      <div className="island-capsule" aria-hidden="true">
+      <div className={'island-capsule' + (isWindows ? ' island-capsule--strip' : ' island-capsule--notch')} aria-hidden="true">
         <span className="island-capsule-mark">
           <MetisMark size={40} />
         </span>
       </div>
+      {!isWindows && (
+        <p
+          className="fade-up m-0 text-[10px] font-semibold uppercase tracking-[0.16em] text-[color:var(--color-accent-2)]"
+          style={{ animationDelay: '700ms', animationFillMode: 'backwards' }}
+        >
+          Lives in your Mac island
+        </p>
+      )}
       <div className="flex flex-col items-center gap-2">
         <h1
           className="hero-wordmark m-0 select-none"
@@ -160,10 +175,10 @@ function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => 
           <span aria-hidden="true">{wordmark}</span>
         </h1>
         <p
-          className="hero-tagline fade-up m-0 text-[14px] text-[color:var(--color-ink-2)]"
+          className="hero-tagline fade-up m-0 max-w-[360px] text-[14px] text-[color:var(--color-ink-2)]"
           style={{ animationDelay: '900ms', animationFillMode: 'backwards' }}
         >
-          Your on-device meeting copilot.
+          {home.heroTagline}
         </p>
       </div>
       <button
@@ -363,6 +378,41 @@ function SetupCapabilityRail({ rows, scanDone }: { rows: SetupRow[]; scanDone: b
           )
         })}
       </div>
+    </div>
+  )
+}
+
+/** Windows-only denser pitch — Mac gets the island story instead; the exe needs a stronger product beat. */
+function WindowsSetupMoments(): JSX.Element {
+  return (
+    <div className="setup-win-moments w-full max-w-[460px]">
+      {WINDOWS_SETUP_MOMENTS.map((m, i) => (
+        <div
+          key={m.title}
+          className="setup-win-moment fade-up"
+          style={{ animationDelay: `${120 + i * 90}ms`, animationFillMode: 'backwards' }}
+        >
+          <p className="m-0 text-[12px] font-semibold text-[color:var(--color-ink)]">{m.title}</p>
+          <p className="m-0 mt-0.5 text-[11px] leading-snug text-[color:var(--color-ink-3)]">{m.blurb}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** Decorative peek (no data-hug-width) — shows where Métis will rest without resizing the onboarding window. */
+function ReadyHomePreview({ surface, caption }: { surface: 'island' | 'strip'; caption: string }): JSX.Element {
+  return (
+    <div className={'ready-home-preview ready-home-preview--' + surface} aria-hidden="true">
+      {surface === 'island' && <span className="ready-notch-plate" />}
+      <div className={'overlay-peek ready-peek-demo' + (surface === 'strip' ? ' ready-peek-demo--strip' : '')}>
+        <span className="overlay-peek__grip">
+          <span />
+          <span />
+          <span />
+        </span>
+      </div>
+      <p className="ready-home-caption m-0">{caption}</p>
     </div>
   )
 }
@@ -569,16 +619,12 @@ const READY_SPARKS: ReadonlyArray<{ x: number; y: number; delay: number }> = [
 ]
 
 /**
- * Act 6 — Ready (MQA-283). The narrative's terminal act: a tasteful, Apple-grade celebratory beat (the
- * Métis mark gets one gleam sweep + a handful of one-shot spark motes — see READY_SPARKS/styles.css —
- * deliberately NOT VI's heavier confetti-cannon + collectible edition card; own copy, own restraint),
- * then the Métis equivalent of the teardown's honest "restart your sessions" last line: onboarding
- * finishes ONLY when this screen's own button is pressed, and even then Métis does not start listening
- * until Listen is pressed and the room has been told — the empty state is the truth, not a formality.
+ * Act 6 — Ready (MQA-283). Terminal act: on Mac this is the Vibe-Island "land in the notch" beat —
+ * a peek preview plus a collapse animation into the island before finish. On Windows the same
+ * machinery pins as a top command strip (no notch). Honesty caveat stays: nothing is captured until
+ * Listen + telling the room.
  *
- * `onOpenAiSettings` is OPTIONAL and never a gate: adding a personal provider key is reachable from
- * here (the embedded-Cloudflare-default install is already `providerReady` with nothing to add), and
- * pressing it still finishes onboarding first so the user lands in Settings, not back in onboarding.
+ * `onOpenAiSettings` is OPTIONAL and never a gate.
  */
 function ActReady({
   mode,
@@ -590,55 +636,77 @@ function ActReady({
   onOpenAiSettings?: () => void
 }): JSX.Element {
   const [busy, setBusy] = useState(false)
+  const [landing, setLanding] = useState(false)
   const persona = ONBOARDING_PERSONAS.find((p) => p.id === (mode as OnboardingPersonaId))
+  const surface = onboardingHomeSurface(isWindows)
+  const home = onboardingHomeCopy(surface)
+  const landTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const finishAndOpenAiSettings = async (): Promise<void> => {
+  useEffect(() => {
+    return () => {
+      if (landTimer.current) clearTimeout(landTimer.current)
+    }
+  }, [])
+
+  const landAndFinish = async (thenOpenAi?: boolean): Promise<void> => {
     if (busy) return
     setBusy(true)
+    setLanding(true)
+    // Pin to the top-center island/strip anchor before the bar remounts — same IPC the idle auto-hide
+    // path uses, so the first idle peek after onboarding is already in the right place.
+    void window.toto.anchorTop?.().catch(() => {})
+    await new Promise<void>((resolve) => {
+      landTimer.current = setTimeout(resolve, READY_LAND_MS)
+    })
     await onFinish()
-    onOpenAiSettings?.()
+    if (thenOpenAi) onOpenAiSettings?.()
   }
 
   return (
-    <div key="ready" className="scene-enter flex flex-col items-center gap-6">
-      <div className="ready-mark-wrap" aria-hidden="true">
-        {READY_SPARKS.map((s, i) => (
-          <span
-            key={i}
-            className="ready-spark"
-            style={{ left: `calc(50% + ${s.x}px)`, top: `calc(50% + ${s.y}px)`, animationDelay: `${s.delay}ms` }}
-          />
-        ))}
-        <MetisMark size={96} />
-      </div>
-      <div className="flex flex-col items-center gap-2">
-        <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">You’re all set.</h2>
+    <div
+      key="ready"
+      className={
+        'scene-enter flex flex-col items-center gap-5 ' +
+        (landing ? 'ready-landing ready-landing--' + surface : '')
+      }
+    >
+      <ReadyHomePreview surface={surface} caption={home.peekCaption} />
+
+      <div className="ready-landing-body flex flex-col items-center gap-2">
+        <div className="ready-mark-wrap" aria-hidden="true">
+          {READY_SPARKS.map((s, i) => (
+            <span
+              key={i}
+              className="ready-spark"
+              style={{ left: `calc(50% + ${s.x}px)`, top: `calc(50% + ${s.y}px)`, animationDelay: `${s.delay}ms` }}
+            />
+          ))}
+          <MetisMark size={72} />
+        </div>
+        <p className="m-0 text-[11px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-ink-3)]">
+          {home.readyEyebrow}
+        </p>
+        <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">{home.readyTitle}</h2>
         {persona && (
           <p className="fade-up m-0 text-[11px] font-medium uppercase tracking-[0.08em] text-[color:var(--color-accent-2)]">
             {persona.label} mode
           </p>
         )}
-        {/* The honest empty-state — Métis's equivalent of the teardown's "restart your sessions" last
-            line. Never softened into "you're good to go": nothing is captured until Listen is pressed
-            AND the room has been told, which is exactly what the recording-consent checkbox back in
-            personalize already committed the user to. */}
-        <p className="m-0 max-w-[380px] text-[13px] leading-snug text-[color:var(--color-ink-2)]">
-          Métis is ready. It starts listening only when you press Listen and tell the room — nothing is
-          captured before that.
-        </p>
+        <p className="m-0 max-w-[400px] text-[13px] leading-snug text-[color:var(--color-ink-2)]">{home.readyBody}</p>
       </div>
+
       <button
         type="button"
-        onClick={() => void onFinish()}
+        onClick={() => void landAndFinish(false)}
         disabled={busy}
         className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-7 text-[13px] font-semibold text-white shadow-[0_2px_16px_var(--color-accent-glow)] hover:brightness-110 disabled:opacity-60"
       >
-        Get started
+        {busy ? home.readyBusy : home.readyCta}
       </button>
       {onOpenAiSettings && (
         <button
           type="button"
-          onClick={() => void finishAndOpenAiSettings()}
+          onClick={() => void landAndFinish(true)}
           disabled={busy}
           className="no-drag focus-ring text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)] disabled:opacity-50"
         >
@@ -817,6 +885,7 @@ export function OnboardingExperience({
   const needsPerms = rows.some(
     (r) => (r.key === 'mic' || r.key === 'screen') && (r.state === 'action' || r.state === 'blocked' || r.state === 'restart')
   )
+  const home = onboardingHomeCopy(onboardingHomeSurface(isWindows))
 
   // Cap to the BrowserWindow viewport (100vh) so a tall "Your setup" never paints Continue below the
   // frame with no scrollbar. Panel's own maxHeight tracks the display, which can exceed the clamped
@@ -874,20 +943,48 @@ export function OnboardingExperience({
       )}
 
       {scene === 'setup' && (
-        <div key="setup" className="scene-enter flex min-h-0 w-full max-w-[480px] flex-1 flex-col">
+        <div
+          key="setup"
+          className={
+            'scene-enter flex min-h-0 w-full max-w-[480px] flex-1 flex-col ' +
+            (isWindows ? 'setup-shell--win' : 'setup-shell--mac')
+          }
+        >
           {/* Scrollable scan body — sticky Continue below stays clickable even when rows expand. */}
           <div className="scroll-thin flex min-h-0 flex-1 flex-col items-center gap-4 overflow-y-auto pb-3 pt-1">
+            {!isWindows && (
+              <div className="setup-island-anchor" aria-hidden="true">
+                <span className="ready-notch-plate" />
+                <div className="overlay-peek ready-peek-demo setup-island-peek">
+                  <span className="overlay-peek__grip">
+                    <span />
+                    <span />
+                    <span />
+                  </span>
+                </div>
+              </div>
+            )}
             <div className="flex flex-col items-center gap-1">
               <p className="m-0 text-[11px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-ink-3)]">
                 Your setup
               </p>
               <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">
-                {scanDone ? (allReady ? 'Everything’s ready.' : 'Almost there.') : 'Checking this machine…'}
+                {scanDone
+                  ? allReady
+                    ? isWindows
+                      ? 'Command strip ready.'
+                      : 'Ready for your island.'
+                    : 'Almost there.'
+                  : isWindows
+                    ? 'Checking this PC…'
+                    : 'Checking this Mac…'}
               </h2>
               <p className="m-0 max-w-[380px] text-[12.5px] leading-snug text-[color:var(--color-ink-2)]">
-                Real checks only — Métis lights each capability when it’s actually available.
+                {home.setupHint}
               </p>
             </div>
+
+            {isWindows && <WindowsSetupMoments />}
 
             <SetupCapabilityRail rows={rows} scanDone={scanDone} />
 

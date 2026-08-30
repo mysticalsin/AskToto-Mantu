@@ -275,6 +275,13 @@ describe('Your setup — Continue stays reachable (viewport cap + sticky CTA)', 
     expect(src).toMatch(/SetupCapabilityRail/)
     expect(src).toMatch(/SETUP_CAPABILITIES/)
   })
+
+  it('Mac setup previews the island; Windows gets denser moments instead of a notch story', () => {
+    expect(src).toMatch(/setup-shell--mac/)
+    expect(src).toMatch(/setup-island-anchor/)
+    expect(src).toMatch(/WindowsSetupMoments/)
+    expect(src).toMatch(/setup-shell--win/)
+  })
 })
 
 describe('MQA-201 — scene 4 never fakes a check', () => {

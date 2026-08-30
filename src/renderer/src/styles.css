@@ -608,6 +608,132 @@ input::placeholder {
   background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.18) 35%);
 }
 
+/* Mac setup — peek preview of the island Métis will hide in (decorative; no data-hug-width). */
+.setup-island-anchor {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+.setup-island-peek {
+  pointer-events: none;
+  transform: scale(0.92);
+  transform-origin: top center;
+  animation: setup-island-breathe 2.8s var(--ease-spring) infinite;
+}
+@keyframes setup-island-breathe {
+  0%,
+  100% {
+    box-shadow:
+      0 4px 12px -6px rgba(0, 0, 0, 0.55),
+      0 0 14px -8px var(--color-accent-glow);
+  }
+  50% {
+    box-shadow:
+      0 5px 16px -6px rgba(0, 0, 0, 0.6),
+      0 0 22px -4px var(--color-accent-glow);
+  }
+}
+
+/* Windows setup — denser product moments (exe has no notch story to lean on). */
+.setup-win-moments {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.setup-win-moment {
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background:
+    linear-gradient(165deg, color-mix(in srgb, var(--color-accent) 16%, transparent), rgba(255, 255, 255, 0.03));
+  padding: 10px 10px 11px;
+  text-align: left;
+}
+.setup-shell--win .setup-atmosphere {
+  border-color: color-mix(in srgb, var(--color-accent) 32%, transparent);
+}
+
+/* Ready act — peek demo of where Métis lands (island on Mac, top strip on Windows). */
+.ready-home-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-height: 48px;
+}
+.ready-notch-plate {
+  display: block;
+  width: 118px;
+  height: 28px;
+  border-radius: 999px;
+  background: #0a0a0c;
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 8px 20px -10px rgba(0, 0, 0, 0.7);
+}
+.ready-peek-demo {
+  pointer-events: none;
+  cursor: default;
+}
+.ready-peek-demo--strip {
+  width: 168px;
+  border-radius: 999px;
+  border-top-color: rgba(255, 255, 255, 0.12);
+}
+.ready-home-caption {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-ink-3);
+}
+/* Collapse the Ready body into the peek when landing — Vibe-Island "hide in the island" beat. */
+.ready-landing .ready-landing-body,
+.ready-landing > button,
+.ready-landing > button + button {
+  animation: ready-fold-up 680ms var(--ease-spring) both;
+}
+.ready-landing .ready-home-preview {
+  animation: ready-peek-settle 680ms var(--ease-spring) both;
+}
+.ready-landing--island .ready-peek-demo {
+  animation: ready-island-glow 680ms var(--ease-spring) both;
+}
+@keyframes ready-fold-up {
+  to {
+    opacity: 0;
+    transform: translateY(-28px) scale(0.86);
+  }
+}
+@keyframes ready-peek-settle {
+  to {
+    transform: translateY(12px) scale(1.06);
+  }
+}
+@keyframes ready-island-glow {
+  50% {
+    box-shadow:
+      0 0 0 1px color-mix(in srgb, var(--color-accent-2) 50%, transparent),
+      0 0 22px -2px var(--color-accent-glow);
+  }
+  to {
+    box-shadow:
+      0 4px 12px -6px rgba(0, 0, 0, 0.55),
+      0 0 18px -6px var(--color-accent-glow);
+  }
+}
+.island-capsule--notch {
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.1),
+    0 10px 28px -12px rgba(0, 0, 0, 0.55),
+    0 0 24px -8px var(--color-accent-glow);
+}
+.island-capsule--strip {
+  border-radius: 18px;
+  width: 92px;
+}
+
 /* Act 1 (Welcome) hero — the Métis mark lands as a top-center "island" capsule (MQA-276). Three staged
    beats, each its own keyframe so they can be tuned independently:
      1. island-descend — the capsule drops in from above and settles, like the notch capsule reference

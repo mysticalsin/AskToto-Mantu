@@ -49,17 +49,19 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
 
 describe('MQA-283 — Ready\'s honest empty-state line (Métis\'s equivalent of "restart your sessions")', () => {
   it('states plainly that nothing is captured until Listen is pressed and the room is told', () => {
-    expect(experienceSrc).toMatch(
-      /Métis is ready\. It starts listening only when you press Listen and tell the room — nothing is[\s\S]{0,20}captured before that\./
-    )
+    // Platform copy lives in onboarding-home.ts — both surfaces keep the Listen caveat.
+    const homeSrc = readFileSync(join(__dirname, '../lib/onboarding-home.ts'), 'utf8')
+    expect(homeSrc).toMatch(/Listening starts only when you press Listen and tell the room/)
   })
 
-  it('never claims readiness with no caveat — the honest line always ships alongside the CTA', () => {
-    const readyBlockStart = experienceSrc.indexOf("key=\"ready\"")
+  it('never claims readiness with no caveat — Ready wires platform home copy + land CTA', () => {
+    const readyBlockStart = experienceSrc.indexOf('function ActReady')
     expect(readyBlockStart).toBeGreaterThan(-1)
-    const readyBlock = experienceSrc.slice(readyBlockStart, readyBlockStart + 2000)
-    expect(readyBlock).toMatch(/Métis is ready\./)
-    expect(readyBlock).toMatch(/Get started/)
+    const readyBlock = experienceSrc.slice(readyBlockStart, readyBlockStart + 3500)
+    expect(readyBlock).toMatch(/home\.readyBody/)
+    expect(readyBlock).toMatch(/home\.readyCta/)
+    expect(readyBlock).toMatch(/ReadyHomePreview/)
+    expect(readyBlock).toMatch(/anchorTop/)
   })
 })
 
@@ -69,9 +71,9 @@ describe('MQA-283 — adding a personal AI provider from Ready is optional, neve
     expect(experienceSrc).toMatch(/Add your own AI provider — optional, never required/)
   })
 
-  it('the Get started CTA never depends on onOpenAiSettings, or on any provider state at all', () => {
-    const ctaMatch = experienceSrc.match(/onClick=\{\(\) => void onFinish\(\)\}\s*\n\s*disabled=\{busy\}/)
-    expect(ctaMatch).not.toBeNull()
+  it('the land CTA never depends on onOpenAiSettings, or on any provider state at all', () => {
+    expect(experienceSrc).toMatch(/onClick=\{\(\) => void landAndFinish\(false\)\}/)
+    expect(experienceSrc).toMatch(/onClick=\{\(\) => void landAndFinish\(true\)\}/)
   })
 })
 
