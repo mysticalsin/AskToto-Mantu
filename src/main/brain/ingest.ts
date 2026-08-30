@@ -66,6 +66,7 @@ import {
 } from './store'
 import { applyCorrections, readAliasMap, resolveEntitySlug, replayCorrections, readCorrectionsJournalSafe } from './corrections'
 import { publishForExtraction, publishIndexes, publishAll } from './publish'
+import { refuseIfDemoTagged } from '@shared/demo-guard'
 
 /**
  * Brain ingest — turns one saved transcript into a structured extraction, then merges it into the
@@ -1923,6 +1924,11 @@ export async function enqueueIngest(
   file: string,
   { force = false, deferred = false }: { force?: boolean; deferred?: boolean } = {}
 ): Promise<void> {
+  // MQA-278 — refuses Act 2 onboarding-demo-tagged data before it can reach the private meeting brain.
+  // saveMeeting already refuses the same tag before a file could legitimately exist (see
+  // transcripts.ts), so this is belt-and-suspenders for any other caller that hands enqueueIngest a
+  // path directly. See @shared/demo-guard.
+  refuseIfDemoTagged('enqueueIngest', basename(file))
   const s = getSettings()
   const key = basename(file)
   const sourceVersion = meetingSourceVersion(file)
