@@ -1405,7 +1405,7 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
   isMinimized = false
   try {
     w.setFullScreenable?.(true)
-    w.setBackgroundColor('#3a2416')
+    w.setBackgroundColor('#3A0B6B')
     w.setBounds(stage)
   } catch {
     /* headless / already destroyed */
@@ -1498,7 +1498,7 @@ function createWindow(): void {
     maximizable: false,
     minimizable: false,
     roundedCorners: !onboardingLive,
-    backgroundColor: onboardingLive ? '#3a2416' : '#00000000',
+    backgroundColor: onboardingLive ? '#3A0B6B' : '#00000000',
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

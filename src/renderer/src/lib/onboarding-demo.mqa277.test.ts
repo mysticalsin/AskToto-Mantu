@@ -4,8 +4,11 @@ import {
   DEMO_LINES,
   DEMO_STAGE_BOUNDARIES,
   DEMO_TIMING,
+  demoElapsedAtBeat,
   demoFrameAt,
-  demoRecapMarkdown
+  demoHasNextBeat,
+  demoRecapMarkdown,
+  nextDemoBeatIndex
 } from './onboarding-demo'
 
 describe('MQA-277 — Act 2 (Demo) scripted timeline projector (demoFrameAt)', () => {
@@ -109,7 +112,7 @@ describe('MQA-277 — Act 2 (Demo) scripted timeline projector (demoFrameAt)', (
     expect(demoFrameAt(DEMO_TIMING.end + 999999).done).toBe(true)
   })
 
-  it('DEMO_STAGE_BOUNDARIES is sorted ascending and ends at DEMO_TIMING.end (reduced-motion stepper relies on this)', () => {
+  it('DEMO_STAGE_BOUNDARIES is sorted ascending and ends at DEMO_TIMING.end (click-to-advance beats)', () => {
     for (let i = 1; i < DEMO_STAGE_BOUNDARIES.length; i++) {
       expect(DEMO_STAGE_BOUNDARIES[i]).toBeGreaterThanOrEqual(DEMO_STAGE_BOUNDARIES[i - 1])
     }
@@ -130,6 +133,16 @@ describe('MQA-277 — Act 2 (Demo) scripted timeline projector (demoFrameAt)', (
     expect(meeting).toContain('## Decisions')
     expect(sales).not.toBe(recruiting)
     expect(sales).not.toBe(meeting)
+  })
+
+  it('click-to-advance maps a beat index onto boundaries; the last beat has no next', () => {
+    expect(demoElapsedAtBeat(0)).toBe(DEMO_STAGE_BOUNDARIES[0])
+    expect(nextDemoBeatIndex(0)).toBe(1)
+    expect(demoHasNextBeat(0)).toBe(true)
+    const last = DEMO_STAGE_BOUNDARIES.length - 1
+    expect(nextDemoBeatIndex(last)).toBe(last)
+    expect(demoHasNextBeat(last)).toBe(false)
+    expect(demoElapsedAtBeat(last)).toBe(DEMO_TIMING.end)
   })
 })
 

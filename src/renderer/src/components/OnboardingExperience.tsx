@@ -201,7 +201,15 @@ function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => 
         className="hero-byline fade-up m-0 text-[10px] tracking-wide text-[color:var(--color-ink-3)]"
         style={{ animationDelay: '1300ms', animationFillMode: 'backwards' }}
       >
-        Mantu · Tony Walteur
+        Mantu ·{' '}
+        <a
+          href="https://www.linkedin.com/in/tonywalteur/"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hero-byline-link no-drag focus-ring"
+        >
+          Tony Walteur
+        </a>
       </p>
     </div>
   )
@@ -828,7 +836,7 @@ export function OnboardingExperience({
                   {r.key === 'local' && r.progress != null && r.progress > 0 && r.progress < 1 && (
                     <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
                       <div
-                        className="h-full rounded-full bg-[#f4b060]"
+                        className="h-full rounded-full bg-[#9A2BF0]"
                         style={{ width: `${Math.round(r.progress * 100)}%` }}
                       />
                     </div>
