@@ -31,7 +31,7 @@
  * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
  *   needs comes back through onDone.
  */
-import { useEffect, useId, useRef, useState, type RefObject } from 'react'
+import { useEffect, useId, useRef, useState, type Ref } from 'react'
 import {
   AlertCircle,
   Check,
@@ -162,7 +162,7 @@ const WORDMARK = 'Métis'
 function OnboardingHeroVideo({
   videoRef
 }: {
-  videoRef: RefObject<HTMLVideoElement | null>
+  videoRef: Ref<HTMLVideoElement>
 }): JSX.Element | null {
   const [failed, setFailed] = useState(false)
   if (prefersReducedMotion() || failed) return null
