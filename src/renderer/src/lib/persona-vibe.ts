@@ -19,7 +19,7 @@ export const ONBOARDING_PERSONAS: readonly PersonaVibe[] = [
     id: 'general',
     label: 'General',
     vibe: 'The sharp generalist',
-    changes: 'Every meeting, every topic — answers first, no padding.'
+    changes: 'Every meeting, every topic: answers first, no padding.'
   },
   {
     id: 'meeting',

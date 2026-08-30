@@ -178,14 +178,14 @@ describe('MQA-279 — Act 3 (Config) AI-readiness row must never claim ready bef
   it('reads ready off the embedded Cloudflare default with the exact competence-framed copy', () => {
     expect(aiRowStatus({ providerReady: true, provider: 'cloudflare' })).toEqual({
       state: 'ready',
-      detail: "Ready — Métis's built-in Cloudflare, no key needed"
+      detail: "Ready: Métis's built-in Cloudflare, no key needed"
     })
   })
 
   it('names whatever OTHER provider is actually ready, for a returning/reset profile', () => {
     expect(aiRowStatus({ providerReady: true, provider: 'anthropic' })).toEqual({
       state: 'ready',
-      detail: 'Ready — Claude · Anthropic configured'
+      detail: 'Ready: Claude · Anthropic configured'
     })
   })
 

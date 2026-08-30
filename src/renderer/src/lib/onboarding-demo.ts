@@ -28,13 +28,13 @@ export interface DemoLine {
 }
 
 export const DEMO_LINES: readonly DemoLine[] = [
-  { speaker: 'them', text: 'Quick gut-check before we move on — where did we land on the renewal timeline?', at: 200 },
+  { speaker: 'them', text: 'Quick gut-check before we move on: where did we land on the renewal timeline?', at: 200 },
   { speaker: 'you', text: 'Let me pull that up.', at: 1900 },
   { speaker: 'them', text: "Wasn't the security review supposed to take three weeks?", at: 7100 }
 ]
 
 export const DEMO_SUGGESTION_TEXT =
-  '**Say this:** "We agreed to renew by the 15th, contingent on the security review closing this week — ' +
+  '**Say this:** "We agreed to renew by the 15th, contingent on the security review closing this week, ' +
   'and that review is on track, nothing\u2019s blocking it."\n\n' +
   "- Lead with the date so it can't slip in the notes.\n" +
   "- Confirm the review's status before you commit to it out loud."
@@ -50,7 +50,7 @@ export const DEMO_FACTCHECK_TEXT =
 export const DEMO_RECAP_HEADLINE = 'Renewal on track for the 15th.'
 
 export const DEMO_RECAP_ITEMS: readonly string[] = [
-  'Security review closes this week — confirmed live, on the call.',
+  'Security review closes this week (confirmed live, on the call).',
   'Corrected the "three weeks" claim before it became the record.',
   'Send the renewal date in writing today.'
 ]
