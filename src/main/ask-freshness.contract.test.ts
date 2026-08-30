@@ -161,10 +161,11 @@ describe('key-exhaustion failover classification (the "Kimi maxed out → next k
 
 describe('onboarding fires the real OS permission flow proactively (max legitimate automation)', () => {
   it('macOS: setup-scene mount triggers the mic prompt + screen TCC registration without a button press', () => {
-    const start = onboardingSrc.indexOf("if (scene !== 'setup') return")
-    expect(start).toBeGreaterThan(-1)
-    const body = onboardingSrc.slice(start, start + 4000)
-    expect(body).toMatch(/window\.toto\.requestPermissionsUpfront\(\)/)
+    // Normalize CRLF so a 4k window is the same on Windows checkout as on Ubuntu.
+    const src = onboardingSrc.replace(/\r\n/g, '\n')
+    expect(src).toMatch(
+      /if \(scene !== 'setup'\) return[\s\S]{0,5000}?window\.toto\.requestPermissionsUpfront\(\)/
+    )
   })
 
   it('Windows: mic consent resolves via a renderer getUserMedia probe (main has no ask API off darwin)', () => {
