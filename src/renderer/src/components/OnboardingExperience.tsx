@@ -13,13 +13,20 @@
  * - Act 2 (reveal) is the one deliberate exception to "never fake" — it drives Métis's REAL Bar/
  *   Copilot/Answer/QuickActions components with a scripted fake meeting (MQA-277), guarded so fake data
  *   can never persist and the demo can never see real data (MQA-278, @shared/demo-guard).
+ * - Act 3 (setup/Config, MQA-279) is "scan first, then present a completed configuration" — the
+ *   Vibe-Island-teardown Config act's shape ("Everything's configured. No action needed."), kept honest
+ *   by extending the SAME never-fake rule the other rows already follow to a new AI-readiness row
+ *   (`aiRowStatus`, below): it reads `providerReady`/`provider` straight off the settings snapshot
+ *   `publicSettings()` derives in main/index.ts, so it can never claim "Ready" while a real ask would
+ *   still fail. The opt-out toggle on the screen row is the same rule in the other direction — it only
+ *   ever appears because `screenAsk` is a real, always-on-by-default setting (ipc.ts), never invented.
  * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
  *   needs comes back through onDone.
  */
 import { useEffect, useRef, useState } from 'react'
-import { Check, FolderLock, Mic, MonitorUp, Sparkles } from 'lucide-react'
+import { Check, Cloud, FolderLock, Mic, MonitorUp, Sparkles } from 'lucide-react'
 import type { ConversationMode, PermissionStatus, ProfileRecoveryResult, PublicSettings } from '@shared/ipc'
-import type { ProviderId } from '@shared/providers'
+import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { MetisMark } from './MetisMark'
 import { Onboarding } from './Onboarding'
@@ -31,6 +38,14 @@ export interface OnboardingExperienceProps {
   onDone: (result: { mode: ConversationMode; recordingConsent: boolean }) => void
   /** Optional escape hatch to the old flow while this one beds in. */
   onSkip?: () => void
+  /** Act 3's AI-readiness row (providerReady/provider) and screen-context opt-out toggle (screenAsk)
+   *  read straight from the live settings snapshot — the same one OnboardingV2 already threads to the
+   *  legacy provider step. Optional so a caller that only wants the narrative shell (or an older test)
+   *  keeps compiling; both rows fall back to an honest "still checking" / no-toggle state without it. */
+  settings?: PublicSettings
+  /** Required to flip `screenAsk` from the opt-out toggle. Same function OnboardingV2 already calls to
+   *  persist `mode`/`recordingConsent` out of this component. */
+  patch?: (p: Partial<PublicSettings>) => void
 }
 
 /** Wave 5 — problem story (docs/ONBOARDING-EXPERIENCE.md Scene 2): staged lines, one at a time. */
@@ -48,7 +63,7 @@ const GUIDED_SCENES: Scene[] = ['problem', 'reveal', 'setup', 'personalize']
 
 // Lives in its own reserved-height row above the scene content (see the render below) rather than an
 // absolute overlay — an overlay collided with scene headings that sit close to the top on taller scenes
-// (e.g. "Your setup"'s 5 rows push the h2 up into where an absolutely-positioned dot row would sit).
+// (e.g. "Your setup"'s 6 rows push the h2 up into where an absolutely-positioned dot row would sit).
 function ActProgress({ scene }: { scene: Scene }): JSX.Element | null {
   const idx = GUIDED_SCENES.indexOf(scene)
   if (idx < 0) return null
@@ -138,7 +153,7 @@ function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => 
 // 'blocked' = the OS holds an explicit Deny, which no prompt can undo — only the privacy pane can.
 export type SetupRowState = 'checking' | 'ready' | 'action' | 'blocked' | 'restart' | 'skipped'
 
-interface SetupRow {
+export interface SetupRow {
   key: string
   label: string
   icon: typeof Sparkles
@@ -156,7 +171,73 @@ export function micRowStatus(status: PermissionStatus | undefined): { state: Set
   return { state: 'action', detail: 'needs permission' }
 }
 
-export function OnboardingExperience({ onDone, onSkip }: OnboardingExperienceProps): JSX.Element {
+/** Act 3's AI row (MQA-279): "Ready" only ever means what `providerReady` means everywhere else in the
+ *  app — main/index.ts's `publicSettings()` computes it as the SAME gate askStart's attempt()/failover
+ *  chain enforce before a real ask is allowed through, so this can never show competence the product
+ *  cannot back up. The embedded-Cloudflare-default build (embedded-cloudflare-key.ts, MQA-273) makes
+ *  `providerReady` true with zero user action, which is the case this row is written to narrate; a
+ *  non-Cloudflare provider being ready (a returning/reset profile) still reads as ready, just named.
+ *  Never gates onboarding's Continue — adding a personal key stays optional, exactly as it is once
+ *  onboarding finishes (Settings → AI). */
+export function aiRowStatus(
+  settings: Pick<PublicSettings, 'providerReady' | 'provider'> | null | undefined
+): { state: SetupRowState; detail: string } {
+  if (!settings) return { state: 'checking', detail: '' }
+  if (settings.providerReady) {
+    return settings.provider === 'cloudflare'
+      ? { state: 'ready', detail: "Ready — Métis's built-in Cloudflare, no key needed" }
+      : { state: 'ready', detail: `Ready — ${PROVIDERS[settings.provider].label} configured` }
+  }
+  return { state: 'action', detail: 'not configured yet' }
+}
+
+/** Act 3 — "scan first, then present a completed configuration": two DIFFERENT claims the scene makes,
+ *  kept as one pure derivation so both stay honest and are each independently testable.
+ *  `scanDone` only means every row has left 'checking' — safe to stop showing spinners and reveal the
+ *  Listen-only caveat, which is true whether or not anything still needs action.
+ *  `allReady` is the stronger "nothing to configure" claim (MQA-201's rule: never true from a row that
+ *  never actually resolved, and never true while something still needs 'action'/'blocked'/'restart'). */
+export interface SetupScanSummary {
+  scanDone: boolean
+  allReady: boolean
+}
+export function summarizeSetupRows(rows: SetupRow[]): SetupScanSummary {
+  const scanDone = rows.length > 0 && rows.every((r) => r.state !== 'checking')
+  const allReady = scanDone && rows.every((r) => r.state === 'ready' || r.state === 'skipped')
+  return { scanDone, allReady }
+}
+
+/** Act 3's opt-out toggle (screenAsk) — a small local switch so this scene doesn't need to reach into
+ *  Settings.tsx's `Toggle` (which is styled against the separate `--cl-*` settings-panel token set this
+ *  onboarding shell never mounts). Same on/off mechanics, themed with the onboarding's own
+ *  `--color-accent` tokens instead. */
+function MiniToggle({ on, onChange, label }: { on: boolean; onChange: (v: boolean) => void; label: string }): JSX.Element {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={on}
+      aria-label={label}
+      onClick={(e) => {
+        e.stopPropagation()
+        onChange(!on)
+      }}
+      className={
+        'no-drag focus-ring relative h-[20px] w-[34px] shrink-0 rounded-full transition-colors duration-150 ' +
+        (on ? 'bg-[var(--color-accent)]' : 'bg-white/15')
+      }
+    >
+      <span
+        className={
+          'absolute top-[2px] h-[16px] w-[16px] rounded-full bg-white transition-all duration-150 ' +
+          (on ? 'left-[16px]' : 'left-[2px]')
+        }
+      />
+    </button>
+  )
+}
+
+export function OnboardingExperience({ onDone, onSkip, settings, patch }: OnboardingExperienceProps): JSX.Element {
   const [scene, setScene] = useState<Scene>('hero')
   const [rows, setRows] = useState<SetupRow[]>([])
   const [mode, setMode] = useState<ConversationMode>('general')
@@ -185,7 +266,10 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
       { key: 'asr', label: 'On-device transcription', icon: Sparkles, state: 'checking' },
       { key: 'brain', label: 'Private meeting brain', icon: FolderLock, state: 'checking' },
       { key: 'mic', label: 'Microphone', icon: Mic, state: 'checking' },
-      { key: 'screen', label: 'Screen context', icon: MonitorUp, state: 'checking' }
+      { key: 'screen', label: 'Screen context', icon: MonitorUp, state: 'checking' },
+      // Act 3 (MQA-279): AI readiness, derived from the SAME `providerReady`/`provider` publicSettings()
+      // computes for every other gate in the app — see `aiRowStatus` above.
+      { key: 'ai', label: 'Métis AI', icon: Cloud, state: 'checking' }
     ]
     setRows(base)
     screenGrantedRef.current = null
@@ -228,6 +312,12 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
       if (!isWindows && perms && (perms.microphone !== 'granted' || perms.screenRecording !== 'granted')) {
         void window.toto.requestPermissionsUpfront().catch(() => null)
       }
+      // AI readiness has no OS prompt to fire and no permission to live-poll — `providerReady` is
+      // already a settled fact by the time this scene mounts (main seeds the embedded Cloudflare
+      // credential, if any, before the first window even shows), so one staged resolution is enough.
+      await delay(350)
+      const ai = aiRowStatus(settings)
+      set('ai', ai.state, ai.detail)
     })()
     return () => {
       live = false
@@ -298,9 +388,11 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
     onDone({ mode, recordingConsent: true })
   }
 
-  const allReady = rows.length > 0 && rows.every((r) => r.state === 'ready' || r.state === 'skipped')
+  const { scanDone, allReady } = summarizeSetupRows(rows)
   // 'blocked' counts here for the same reason 'action' does — it was one of those states before it got
-  // its own name, and Continue must not go primary while the mic is still denied.
+  // its own name, and Continue must not go primary while the mic is still denied. The AI row is
+  // deliberately excluded — a personal provider key is available, never required (the embedded
+  // Cloudflare default already answers), so it never blocks Continue the way mic/screen do.
   const needsPerms = rows.some(
     (r) => (r.key === 'mic' || r.key === 'screen') && (r.state === 'action' || r.state === 'blocked' || r.state === 'restart')
   )
@@ -427,6 +519,32 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
                       </button>
                     </div>
                   )}
+                  {/* Opt-out toggle framed as competence (Act 3 brief): screenAsk is a REAL, on-by-default
+                      setting (ipc.ts) — never invented for this scene — so it's shown as "already on,
+                      your call" rather than a setup step. Independent of the permission grant above: the
+                      toggle flips the app's intent to ask, whether or not the OS has said yes yet. */}
+                  {r.key === 'screen' && settings && patch && (
+                    <div className="mt-1.5 flex items-center justify-between gap-2 border-t border-white/10 pt-1.5">
+                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                        Let Métis see your screen when you ask — on by default, your call.
+                      </span>
+                      <MiniToggle
+                        on={settings.screenAsk}
+                        onChange={(v) => patch({ screenAsk: v })}
+                        label="Let Métis see your screen when you ask"
+                      />
+                    </div>
+                  )}
+                  {r.key === 'ai' && r.state === 'action' && (
+                    <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                      You'll add a provider key on the next step — nothing else here needs one.
+                    </p>
+                  )}
+                  {r.key === 'ai' && r.state === 'ready' && (
+                    <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                      Add your own provider key anytime in Settings — optional, never required.
+                    </p>
+                  )}
                 </div>
                 {r.state === 'checking' && (
                   <span className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-white/20 border-t-[var(--color-accent-2)]" />
@@ -443,6 +561,15 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
           {allReady && (
             <p className="fade-up m-0 text-[14px] font-medium text-[color:var(--color-ink)]">
               Everything’s ready. Nothing to configure.
+            </p>
+          )}
+          {/* Métis's equivalent of Vibe Island's "restart your sessions" honest caveat (teardown, Config
+              act) — but placed HERE, first, rather than saved for the final act, and reinforced again at
+              Ready. True the moment scanning settles, regardless of allReady: nothing above changes when
+              Métis is actually allowed to listen. */}
+          {scanDone && (
+            <p className="fade-up m-0 max-w-[360px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+              Métis only starts listening when you press Listen and tell the room — nothing is captured before that.
             </p>
           )}
           <div className="flex items-center gap-2">
@@ -553,6 +680,8 @@ export function OnboardingV2({
   if (phase === 'experience') {
     return (
       <OnboardingExperience
+        settings={settings}
+        patch={patch}
         onDone={({ mode, recordingConsent }) => {
           patch({ mode, recordingConsent })
           setPhase('provider')
