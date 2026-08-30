@@ -2,7 +2,7 @@
  * mac-helper.ts — main-process gateway to the `metis-mac-helper` Swift sidecar (macOS only).
  *
  * The helper (native/mac-helper/main.swift, compiled by scripts/build-mac-helper.mjs, shipped via
- * electron-builder's mac extraResources) provides two OS capabilities Electron lacks natively:
+ * electron-builder's mac extraResources) provides OS capabilities Electron lacks natively:
  *   - `watch-frontmost`: NSWorkspace app-activation events as TSV lines in the EXACT shape
  *     foreground-watcher.ts already parses from the Windows PowerShell watcher — this module only
  *     supplies the spawn spec; lifecycle/restart/parsing stay in foreground-watcher.ts, one code path
@@ -10,14 +10,24 @@
  *   - `ocr -`: Vision-framework text recognition over an image piped on stdin, JSON out. Spawn-per-call
  *     by design: upstream throttles describes to >=2.5s apart, so a ~100ms process start beats another
  *     long-lived server to babysit.
+ *   - `screen-metrics`: one-shot per-display notch/menu-bar geometry (island/metrics.ts caches + joins
+ *     this to Electron's `Display.id`, which IS the `CGDirectDisplayID` NSScreen reports — see that
+ *     module's header for the coordinate-space caveat this raw payload carries).
  *
  * Everything here degrades to null/absent — a missing or broken helper must leave the app exactly as it
- * behaved before the helper existed (VLM describe, 6s-timer-only mac trigger), never crash a feature.
+ * behaved before the helper existed (VLM describe, 6s-timer-only mac trigger, floating non-notch island),
+ * never crash a feature.
+ *
+ * NOTE for reviewers: this VM has no macOS/Xcode/Swift toolchain, so the Swift side of screen-metrics
+ * (native/mac-helper/main.swift) is written and reasoned about but NOT compiled or run here. It needs a
+ * real on-Mac build + manual QA pass (scripts/build-mac-helper.mjs, then this module's getMacScreenMetrics
+ * against a real notch MacBook) before it can be trusted in production. See island/metrics.ts's header.
  */
 import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
+import { z } from 'zod'
 import { mainLog } from './logger'
 
 const OCR_TIMEOUT_MS = 8_000
@@ -28,6 +38,9 @@ const OCR_MIN_CONFIDENCE = 0.3
 const OCR_MIN_USEFUL_CHARS = 40
 /** Cap the extract so a dense document screen can't blow up the ask prompt it gets injected into. */
 const OCR_MAX_CHARS = 1_500
+/** screen-metrics is a single NSScreen.screens enumeration with no I/O — generous but bounded so a
+ *  hung/misbehaving helper can't stall the overlay's top-anchor path forever. */
+const SCREEN_METRICS_TIMEOUT_MS = 3_000
 
 export interface OcrLine {
   text: string
@@ -69,6 +82,91 @@ export function macHelperPresent(platform: NodeJS.Platform = process.platform): 
 export function macWatcherSpawnSpec(): { command: string; args: string[] } | null {
   if (!macHelperPresent()) return null
   return { command: macHelperPath(), args: ['watch-frontmost'] }
+}
+
+/** Spawn spec for the one-shot `screen-metrics` subcommand, or null when the helper isn't available —
+ *  mirrors macWatcherSpawnSpec()'s degrade-to-null contract. Exported so a unit test can assert the
+ *  command/args without spawning a real helper. */
+export function macScreenMetricsSpawnSpec(): { command: string; args: string[] } | null {
+  if (!macHelperPresent()) return null
+  return { command: macHelperPath(), args: ['screen-metrics'] }
+}
+
+/** Raw per-screen payload shape emitted by `metis-mac-helper screen-metrics` (see main.swift's
+ *  ScreenMetric). `frame`/`visibleFrame` are AppKit `NSScreen` rects (bottom-left origin) — kept in the
+ *  raw shape for diagnostics, but island/metrics.ts must NEVER use them as Electron bounds/workArea (see
+ *  that module's coordinate-space note). Only the magnitude fields (notchWidth, safeAreaInsetTop,
+ *  backingScaleFactor) are safe to use directly. */
+const ScreenMetricSchema = z.object({
+  displayID: z.number(),
+  frame: z.tuple([z.number(), z.number(), z.number(), z.number()]),
+  visibleFrame: z.tuple([z.number(), z.number(), z.number(), z.number()]),
+  safeAreaInsetTop: z.number(),
+  auxLeftWidth: z.number(),
+  auxRightWidth: z.number(),
+  notchWidth: z.number(),
+  backingScaleFactor: z.number()
+})
+const ScreenMetricsResultSchema = z.object({ screens: z.array(ScreenMetricSchema) })
+export type RawScreenMetric = z.infer<typeof ScreenMetricSchema>
+
+/**
+ * One-shot fetch of every connected display's notch/menu-bar metrics via the helper's `screen-metrics`
+ * subcommand. Null on ANY failure (missing helper, spawn error, timeout, malformed/non-conforming JSON)
+ * — callers (island/metrics.ts) must degrade to the heuristic fallback, never crash a feature. Spawn-once
+ * per call by design, same as OCR: this is invoked at most once per display-topology change, not polled.
+ */
+export function getMacScreenMetrics(): Promise<RawScreenMetric[] | null> {
+  return new Promise((resolve) => {
+    const spec = macScreenMetricsSpawnSpec()
+    if (!spec) {
+      resolve(null)
+      return
+    }
+    let proc: ReturnType<typeof spawn>
+    try {
+      proc = spawn(spec.command, spec.args, { stdio: ['ignore', 'pipe', 'pipe'] })
+    } catch (e) {
+      mainLog.warn('[mac-helper] screen-metrics spawn failed', e instanceof Error ? e.message : String(e))
+      resolve(null)
+      return
+    }
+    let settled = false
+    const settle = (value: RawScreenMetric[] | null): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(value)
+    }
+    const timer = setTimeout(() => {
+      proc.kill('SIGKILL')
+      settle(null)
+    }, SCREEN_METRICS_TIMEOUT_MS)
+    let stdout = ''
+    let stderr = ''
+    proc.stdout?.on('data', (chunk: Buffer) => (stdout += chunk.toString('utf8')))
+    proc.stderr?.on('data', (chunk: Buffer) => (stderr += chunk.toString('utf8')))
+    proc.once('error', (e) => {
+      mainLog.warn('[mac-helper] screen-metrics error', e instanceof Error ? e.message : String(e))
+      settle(null)
+    })
+    // 'close', never 'exit' — same rationale as extractScreenText's OCR path below: 'exit' can fire
+    // while piped stdout still has undelivered chunks in flight (more displays = more JSON).
+    proc.once('close', (code) => {
+      if (code !== 0) {
+        if (stderr.trim()) mainLog.warn(`[mac-helper] screen-metrics exited ${code}: ${stderr.trim().slice(0, 300)}`)
+        settle(null)
+        return
+      }
+      try {
+        const parsed = ScreenMetricsResultSchema.parse(JSON.parse(stdout))
+        settle(parsed.screens)
+      } catch (e) {
+        mainLog.warn('[mac-helper] screen-metrics: malformed JSON', e instanceof Error ? e.message : String(e))
+        settle(null)
+      }
+    })
+  })
 }
 
 /**

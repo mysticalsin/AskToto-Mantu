@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import type { TranscriptLine } from './ipc'
-import { applySpeakerNames, parseTeamsVtt, type VttEntry } from './transcript-align'
+import { applySpeakerNames, clusterNamePairsFromAlignment, parseTeamsVtt, type VttEntry } from './transcript-align'
 
 const T0 = 1_700_000_000_000
 
@@ -79,6 +79,71 @@ describe('applySpeakerNames', () => {
     expect(applySpeakerNames([], [])).toEqual({ lines: [], named: 0 })
     const lines = [line('them', 'hello', 0)]
     expect(applySpeakerNames(lines, [])).toEqual({ lines, named: 0 })
+  })
+})
+
+// Speaker Intelligence P2 (§3.4) — the pure diff behind the Teams-VTT auto-enrollment flywheel.
+describe('clusterNamePairsFromAlignment', () => {
+  const withName = (l: TranscriptLine, name: string): TranscriptLine => ({ ...l, name })
+
+  it('pairs a THEM line whose live cluster label got resolved to a real name', () => {
+    const before = [line('them', "Let's lock the Q3 roadmap", 10)]
+    before[0] = withName(before[0], 'Speaker 1')
+    const after = [withName(before[0], 'Alice Johnson')]
+    expect(clusterNamePairsFromAlignment(before, after)).toEqual([{ clusterLabel: 'Speaker 1', name: 'Alice Johnson' }])
+  })
+
+  it('ignores a "you" line even if it somehow carried a Speaker-N-shaped name', () => {
+    const before = [withName(line('you', 'so about pricing', 0), 'Speaker 1')]
+    const after = [withName(before[0], 'Tony Walteur')]
+    expect(clusterNamePairsFromAlignment(before, after)).toEqual([])
+  })
+
+  it('ignores a THEM line with no pre-existing cluster label (never lived through live clustering)', () => {
+    const before = [line('them', 'hello there', 0)]
+    const after = [withName(before[0], 'Alice Johnson')]
+    expect(clusterNamePairsFromAlignment(before, after)).toEqual([])
+  })
+
+  it('ignores a name that does not look like a live session cluster label', () => {
+    const before = [withName(line('them', 'hello there', 0), 'Alice Johnson')] // already named, not a cluster
+    const after = [withName(before[0], 'Bob Smith')]
+    expect(clusterNamePairsFromAlignment(before, after)).toEqual([])
+  })
+
+  it('ignores a line VTT alignment left untouched (name unchanged)', () => {
+    const before = [withName(line('them', 'hello there', 0), 'Speaker 1')]
+    const after = [before[0]] // applySpeakerNames found no match — line returned as-is
+    expect(clusterNamePairsFromAlignment(before, after)).toEqual([])
+  })
+
+  it('deduplicates by cluster label — first resolved name wins across many lines', () => {
+    const before = [
+      withName(line('them', 'first', 0), 'Speaker 1'),
+      withName(line('them', 'second', 1), 'Speaker 1'),
+      withName(line('them', 'third', 2), 'Speaker 1')
+    ]
+    const after = [
+      withName(before[0], 'Alice Johnson'),
+      withName(before[1], 'Alice Johnson'),
+      withName(before[2], 'Alice Johnson')
+    ]
+    expect(clusterNamePairsFromAlignment(before, after)).toEqual([{ clusterLabel: 'Speaker 1', name: 'Alice Johnson' }])
+  })
+
+  it('handles multiple distinct clusters resolved in the same meeting', () => {
+    const before = [withName(line('them', 'a', 0), 'Speaker 1'), withName(line('them', 'b', 1), 'Speaker 2')]
+    const after = [withName(before[0], 'Alice Johnson'), withName(before[1], 'Bob Smith')]
+    expect(clusterNamePairsFromAlignment(before, after)).toEqual([
+      { clusterLabel: 'Speaker 1', name: 'Alice Johnson' },
+      { clusterLabel: 'Speaker 2', name: 'Bob Smith' }
+    ])
+  })
+
+  it('returns empty for empty input, and never throws on mismatched-length arrays', () => {
+    expect(clusterNamePairsFromAlignment([], [])).toEqual([])
+    const before = [withName(line('them', 'a', 0), 'Speaker 1')]
+    expect(clusterNamePairsFromAlignment(before, [])).toEqual([])
   })
 })
 

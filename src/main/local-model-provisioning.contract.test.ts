@@ -1,13 +1,14 @@
 /**
  * local-model-provisioning.contract.test.ts — MQA-186.
  *
- * The ~763 MB of Métis Local weights are not in the installer; `ensureLocalModel` fetches them on first
- * run. Boot fired that fetch unconditionally: no eligibility check, no way to decline, and — because the
- * boot call is the ONLY trigger in the whole app — no second chance if it was ever skipped.
+ * The Métis Local weights are not in the installer; `ensureLocalModel` fetches them when the app opens.
+ * Boot gates that fetch on RAM (never fetch onto a machine that cannot load the model). Local AI
+ * `enabled` controls routing only — not whether bytes are fetched — so turning Local on later is
+ * instant once the background download has finished.
  *
  * Source-contract, following App.local-gates.test.ts / screen-preprocess-wiring.contract.test.ts: there
  * is no harness that boots main/index.ts, but the wiring is structural and can be asserted directly. The
- * behaviour of the gate itself (RAM floor, disabled toggle, progress) is unit-tested for real in
+ * behaviour of the gate itself (RAM floor, progress) is unit-tested for real in
  * llm/local-model-download.test.ts.
  */
 import { readFileSync } from 'node:fs'
@@ -25,21 +26,20 @@ function sliceBetween(text: string, start: string, end: string): string {
 }
 
 describe('MQA-186 — the first-run weight fetch is gated, and the gate is not a dead end', () => {
-  it('boot asks whether this machine should fetch the weights before starting a 763 MB transfer', () => {
+  it('boot asks whether this machine should fetch the weights before starting a multi-GB transfer', () => {
     const boot = sliceBetween(src, 'app.whenReady().then(async () => {', 'app.setAppUserModelId')
-    // The RAM floor and the Local AI toggle are both answered by one predicate in the downloader.
+    // RAM floor only — Local AI enabled does not gate the download (routing stays off by default).
     // The model is chosen by HARDWARE (bestModelForMachine), not by registry position — indexing
     // LOCAL_MODELS[0] would silently fetch whichever entry happened to be listed first.
     expect(boot).toMatch(/const best = bestModelForMachine\(\)/)
-    expect(boot).toMatch(/shouldFetchWeights\(best\.id, getSettings\(\)\.localLlm\.enabled\)/)
+    expect(boot).toMatch(/shouldFetchWeights\(best\.id\)/)
+    expect(boot).not.toMatch(/shouldFetchWeights\(best\.id, getSettings\(\)\.localLlm\.enabled\)/)
     // ...and the call it guards is the one that costs the bytes.
     expect(boot).toMatch(/ensureLocalModel\(best\.id\)/)
   })
 
-  it('turning Local AI back on re-arms the fetch, so declining once is not permanent', () => {
-    // Without this edge the gate above would strand the user: boot skips while the toggle is off, and
-    // nothing else in the app ever calls ensureLocalModel, so Settings would report the model
-    // unavailable for the rest of the install's life with no action that could change it.
+  it('turning Local AI on still re-arms the fetch as a second chance after a failed boot download', () => {
+    // Boot starts the download on open; OFF→ON re-arms if the first attempt failed (offline, disk, etc.).
     const handler = sliceBetween(src, 'const next = setSettings(p)', 'ipcMain.handle(IPC.settingsRecoverProfile')
     expect(handler).toMatch(/!cur\.localLlm\.enabled && next\.localLlm\.enabled/)
     expect(handler).toMatch(/ensureLocalModel\(next\.localLlm\.modelId\)/)

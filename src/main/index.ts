@@ -47,6 +47,7 @@ import {
   type McpConnection,
   type McpConnectionKind,
   LicenseActivatePayloadSchema,
+  LicenseConfigPayloadSchema,
   SetDealOutcomePayloadSchema,
   EntityRenamePayloadSchema,
   EntityMergePayloadSchema,
@@ -113,6 +114,15 @@ import {
   resetProviderHealth,
   unhealthyProviders
 } from './llm/provider-health'
+
+/** Wave 2 — session-scoped last successful failover hop for the one-shot UI chip. Never persisted. */
+let lastFailoverNotice: { from: string; to: string; at: number; reason: string } | null = null
+export function peekLastFailoverNotice(): typeof lastFailoverNotice {
+  return lastFailoverNotice
+}
+export function dismissLastFailoverNotice(): void {
+  lastFailoverNotice = null
+}
 import * as localRuntime from './llm/local-runtime'
 import {
   localEligibleFor,
@@ -121,13 +131,26 @@ import {
   localBaseReady,
   localPrewarmEligible,
   localVisionPrivacyRequired,
+  localPrimaryEligibleFor,
   pickPrimaryProvider,
-  allowCrossProviderFailover
+  allowCrossProviderFailover,
+  resolveRoutingMode
 } from './llm/local-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText } from './mac-helper'
-import { createSpeakerId, type SpeakerId } from './speaker-id'
+import { createSpeakerId, type SpeakerId, type SpeakerLabel } from './speaker-id'
+import {
+  clampAxis,
+  clampAxisMargin,
+  clampHeight as islandClampHeight,
+  isReachable as islandIsReachable,
+  recenterXForWidth,
+  refitToDisplay as islandRefitToDisplay,
+  slideWithinMargin,
+  topCenterPosition
+} from './island/geometry'
+import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
 
 // Lazy Speaker Intelligence singleton — building it probes the sherpa addon + embedding model, so defer
 // until the first THEM window with the feature enabled (never on the startup path).
@@ -135,6 +158,34 @@ let speakerIdInstance: SpeakerId | null = null
 function getSpeakerId(): SpeakerId {
   if (!speakerIdInstance) speakerIdInstance = createSpeakerId()
   return speakerIdInstance
+}
+
+/** Shared Speaker Intelligence label lookup for a THEM window — parakeetFeed, appleSpeechFeed and
+ *  speakerEmbed all funnel through this one place so the settings gate + failure handling can't drift
+ *  between the three chokepoints. Degrades to null on any failure, the feature being off, or the model
+ *  being unprovisioned — a missing label must never break transcription. See speaker-id.ts's labelWindow
+ *  for the echo-defense flag (`label.echo`) callers must check before attaching `label.name` anywhere. */
+function labelThemAudio(samples: Float32Array): SpeakerLabel | null {
+  if (!getSettings().speakerId.enabled) return null
+  try {
+    return getSpeakerId().labelWindow(samples)
+  } catch (err) {
+    mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
+    return null
+  }
+}
+
+/** Echo defense + operator profile upkeep (SPEAKER-INTELLIGENCE-PLAN §3.3) — feed a 'you' (mic) window's
+ *  raw audio into the operator's rolling voiceprint so labelThemAudio can recognize the operator's own
+ *  voice bleeding through the loopback. Fire-and-forget by construction (void return, swallows errors):
+ *  called from the SAME handlers that already transcribe the window, and must never affect their result. */
+function observeOperatorAudio(samples: Float32Array): void {
+  if (!getSettings().speakerId.enabled) return
+  try {
+    getSpeakerId().observeOperatorWindow(samples)
+  } catch (err) {
+    mainLog.warn('[speaker-id] operator observation failed', err instanceof Error ? err.message : String(err))
+  }
 }
 import { buildPrewarmMessages } from './llm/prewarm'
 import { listModels as listLocalModels, bestModelForMachine, isDownloaded as localModelDownloaded } from './llm/local-models'
@@ -158,11 +209,13 @@ import {
   brainLiveIngestProgress,
   ingestFailureCounts,
   ingestFailureDetails,
+  isPendingIngestRecord,
   resumeBackfillIfPending,
   reconcileMeetingsInBackground,
   settleCommitment,
   startRebuild
 } from './brain/ingest'
+import { runConsolidationIfDue, scheduleConsolidation } from './brain/consolidate'
 import {
   renameEntity,
   mergeEntities,
@@ -264,6 +317,7 @@ import {
   updateMeetingTranscript,
   setMeetingConfidential,
   setMeetingCrmPushed,
+  isMeetingConfidentialOnDisk,
   deleteAllMeetings,
   sweepExpiredMeetings
 } from './recall'
@@ -283,7 +337,8 @@ import { asrManifestComplete } from './asr-manifest'
 import { isInsideResourceBase, realResourceBase } from './asr-model-path'
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli, checkCliSession } from './cli'
 import { connectMcp, pushToMcp } from './mcp/mcpClient'
-import { activateLicense, checkLicenseGrace, heartbeat } from './license'
+import { pushQueue, type OutboundAction, type OutboundActionKind } from './mcp/pushQueue'
+import { activateLicense, checkLicenseGrace, fetchLicenseConfig, heartbeat, licenseDisplayStatus, noteQualifyingUse } from './license'
 import {
   setMcpApiKey,
   getMcpApiKey,
@@ -308,7 +363,7 @@ import {
   scheduleRebuild,
   purgeGraphArtifacts
 } from './graphify'
-import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
+import { SaveMeetingSchema, SaveNoteSchema, stripProvisionalLines } from '@shared/ipc'
 import {
   PROVIDERS,
   PROVIDER_IDS,
@@ -321,12 +376,12 @@ import {
   type ProviderDef
 } from '@shared/providers'
 import { routeTier } from '@shared/routing'
-import { HedgeRace, HEDGE_DELAY_MS, type HedgeLeg } from './llm/hedge'
+import { HedgeRace, HEDGE_DELAY_MS, HEDGE_DELAY_SUGGEST_MS, type HedgeLeg } from './llm/hedge'
 import { ThinkStripper } from './llm/think-strip'
 import { redactSecrets } from '@shared/redact'
 import { isSafeAccelerator } from '@shared/accelerator'
 import { formatResetPhrase } from '@shared/reset-time'
-import { applySpeakerNames } from '@shared/transcript-align'
+import { applySpeakerNames, clusterNamePairsFromAlignment } from '@shared/transcript-align'
 import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
 import { importEmbeddedCaheKey, seedCaheLocalAiForBackgroundScreen } from './cahe-embedded-key'
 import { importEmbeddedCloudflareKey, embeddedCloudflareKeyAvailable, restoreEmbeddedCloudflareKey } from './embedded-cloudflare-key'
@@ -573,8 +628,10 @@ function publishImportJob(job: ImportJob): void {
     })
     notification.on('click', () => {
       if (!win || win.isDestroyed()) createWindow()
-      win?.show()
-      win?.focus()
+      // Non-activating: clicking the notification surfaces the overlay but must not steal focus from
+      // whatever app the user was in (the island's "never steals focus" contract) — see showForAsk's
+      // doc comment for the one deliberate exception.
+      win?.showInactive()
     })
     notification.show()
   }
@@ -794,7 +851,9 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
 }
 
 function importedTranscriptText(lines: ImportJob['lines']): string {
-  return lines.map((line) => `SPEAKER: ${line.text}`).join('\n')
+  // Diarization lands on line.name (enrolled profile or "Speaker N") — the recap prompt asks the model
+  // to attribute by those labels, so erasing them here made every import look like one anonymous SPEAKER.
+  return lines.map((line) => `${line.name?.trim() || 'SPEAKER'}: ${line.text}`).join('\n')
 }
 
 /** Text-side language name for one probe window's Parakeet decode, or null when inconclusive. */
@@ -940,7 +999,9 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
   // An imported recording is a summary task. If the user opted into Métis Local summaries and its
   // installer-owned runtime is ready, try it first so the transcript stays on-device. Cloud providers
   // remain the explicit fallback when local is disabled or unavailable.
-  const localSummaryReady = localEligibleFor({ mode: 'summary' }, settings, 'base', allowed)
+  // localPrimaryEligibleFor (not bare localEligibleFor) honors routingMode:'local' the same way live
+  // ask primary pick does — otherwise Routing mode → Local still forced every import recap through cloud.
+  const localSummaryReady = localPrimaryEligibleFor({ mode: 'summary' }, settings, 'base', allowed)
   // MQA-056: the same zero-config safety net (localLlm.fallback) the live-ask seams and brain ingest
   // already honour. Without it a revoked cloud key left the imported meeting with no summary at all —
   // while the very same file was being indexed on-device under the identical flag — and the "retry the
@@ -1248,9 +1309,13 @@ function publicSettings(): PublicSettings {
   // local-routing.ts's localBaseReady() so this snapshot and the live routing decision (attempt()/
   // pickFailover below) can never drift apart.
   const localReady = localBaseReady(s, allowed)
-  const localSuggestReady = localReady && s.localLlm.useFor.suggest
-  const localSummaryReady = localReady && s.localLlm.useFor.summary
-  const localVisionReady = localReady && s.localLlm.useFor.vision
+  // routingMode:'local' is a standing opt-in for every in-scope mode (see localPrimaryEligibleFor) —
+  // the per-task useFor toggles are only required under 'auto'. Without this, Settings → Routing mode
+  // → Local left the readiness chips and requireProvider() gates claiming Local was off.
+  const routingLocal = resolveRoutingMode(s) === 'local'
+  const localSuggestReady = localReady && (s.localLlm.useFor.suggest || routingLocal)
+  const localSummaryReady = localReady && (s.localLlm.useFor.summary || routingLocal)
+  const localVisionReady = localReady && (s.localLlm.useFor.vision || routingLocal)
   // "Local as safety net" is live: with zero cloud/CLI configured, meeting indexing and — through the
   // absolute floor — asks of ANY mode still run on-device (askStart's fallback seams + brain/ingest.ts's
   // last-resort candidate). Surfaced so renderer readiness gates match what routing will actually do:
@@ -1301,6 +1366,7 @@ function publicSettings(): PublicSettings {
     // MQA-004: the honest counterpart to providerReady — which providers actually REJECTED their
     // credentials recently, so the UI can say "your key stopped working" instead of claiming ready.
     unhealthyProviders: unhealthyProviders(),
+    lastFailover: lastFailoverNotice,
     // Background on-device screen pre-analysis can actually run. Asked of the ENGINE, never recomputed
     // here: the old `s.backgroundScreenContext && localReady` copy missed the macOS OCR engine (Settings
     // said "not running" while it captured every 6s) and could not see a dead foreground watcher at all.
@@ -1319,14 +1385,6 @@ function publicSettings(): PublicSettings {
     loginItemOpenAtLogin,
     version: app.getVersion(),
     allowedProviders: allowed // org allowlist (null = unrestricted); surfaced so the picker matches enforcement
-  }
-}
-
-function topCenter(width: number, height: number): { x: number; y: number } {
-  const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
-  return {
-    x: Math.round(workArea.x + (workArea.width - width) / 2),
-    y: workArea.y + 24
   }
 }
 
@@ -1372,7 +1430,11 @@ function createWindow(): void {
   } catch {
     /* getSettings unavailable — keep bar height; auto-resize grows onboarding if the renderer isn't frozen */
   }
-  const { x, y } = topCenter(BAR_WIDTH, initialHeight)
+  const { x, y } = islandTopCenter(
+    BAR_WIDTH,
+    screen.getDisplayNearestPoint(screen.getCursorScreenPoint()),
+    TOP_CENTER_MARGIN_PX
+  )
   win = new BrowserWindow({
     width: BAR_WIDTH,
     height: initialHeight,
@@ -1551,13 +1613,11 @@ function resizeTo(height: number): void {
   // Keep the panel fully on-screen; if it would grow below the work area, slide it up — TEMPORARILY.
   // Measured against the user's own anchor rather than the current (possibly already-slid) top edge, so
   // the window returns to where they put it once the content shrinks again.
-  const maxY = workArea.y + workArea.height - h - 8
   const anchor = userAnchorY ?? b.y
-  const y = Math.max(workArea.y + 8, Math.min(anchor, maxY))
+  const y = slideWithinMargin(anchor, h, workArea, RESIZE_EDGE_MARGIN)
   // When the width changes (collapse to / expand from the mini-pill), recenter around the old midpoint
   // so the overlay stays put; otherwise keep the left edge. Clamp x into the work area either way.
-  let x = currentWidth === b.width ? b.x : Math.round(b.x + (b.width - currentWidth) / 2)
-  x = Math.max(workArea.x + 8, Math.min(x, workArea.x + workArea.width - currentWidth - 8))
+  const x = recenterXForWidth(b.x, b.width, currentWidth, workArea, RESIZE_EDGE_MARGIN)
   win.setBounds({ x, y, width: currentWidth, height: h }, false)
 }
 
@@ -1576,14 +1636,68 @@ function setMinimizedWidth(narrow: boolean): void {
  * Settings keeps the same top edge (so it grows downward from the bar) and centers horizontally,
  * clamped to the work area. Exiting restores the bar's width and last content height.
  */
+// Top margin (px) for the auto-hide peek anchor — how far below the work-area top edge the overlay hugs
+// on a NON-notch display (Windows, an external monitor, an older Mac). Small so the peek strip reads as
+// pinned to the very top (Vibe-Island notch), with just enough gap to clear a menu-bar/rounded-corner and
+// leave room for the stealth glow halo not to be clipped at y=0. On a notch Mac, island/geometry.ts's
+// topClamp() ignores this margin entirely and draws into the menu-bar strip instead (MQA-275).
+const ISLAND_TOP_MARGIN = 8
+// Top margin (px) for the ONE-TIME initial window placement in createWindow — deliberately larger than
+// ISLAND_TOP_MARGIN so a freshly-launched window doesn't appear jammed against the very top edge before
+// the user has ever triggered the auto-hide anchor.
+const TOP_CENTER_MARGIN_PX = 24
+// Edge margin (px) resizeTo keeps clear on every side while sliding/recentering a growing or narrowing
+// bar — small breathing room from the raw screen edge, distinct from ISLAND_TOP_MARGIN (the auto-hide
+// anchor's OWN resting position, which intentionally sits closer to y=0).
+const RESIZE_EDGE_MARGIN = 8
+
+/** Where THIS window's top-center placement should land on a display, honoring the notch clamp
+ *  (island/geometry.ts's topClamp) — the single call every top-anchor site in this file routes through,
+ *  so "island" layout consistently hugs the notch on a notch Mac and floats elsewhere. Phase 1 always
+ *  passes layout 'island': the whole current overlay (peek + auto-hide reveal, MQA-274) already IS the
+ *  top-anchored island; Phase 2 threads a real user-facing `overlayLayout` setting through this
+ *  parameter instead of the hard-coded literal. */
+function islandTopCenter(width: number, display: Electron.Display, topMargin: number): { x: number; y: number } {
+  return topCenterPosition(width, 'island', getDisplayMetrics(display), topMargin)
+}
+
+/** Pin the overlay to the top-center of the display it is currently on, and re-arm the resizeTo anchor
+ *  there, so the auto-hide peek strip and the revealed bar both grow DOWNWARD from the top edge (the
+ *  clean default position for the Vibe-Island-style auto-hide) — or draw into the menu-bar strip on a
+ *  notch Mac (island/geometry.ts's topClamp). Uses getDisplayMatching(win bounds) so it stays correct on
+ *  the overlay's actual display in a multi-monitor setup. A pure setBounds — never show()/focus() — so
+ *  the user's foreground app keeps focus (the non-activating contract). */
+function anchorTopCenter(): void {
+  if (!win) return
+  const display = screen.getDisplayMatching(win.getBounds())
+  const b = win.getBounds()
+  const { x, y } = islandTopCenter(b.width, display, ISLAND_TOP_MARGIN)
+  userAnchorY = y // resizeTo slides against this, so a growing bar returns to the top edge when it shrinks
+  win.setBounds({ x, y, width: b.width, height: b.height }, false)
+}
+
+/** Reveal from the auto-hide peek: widen the window back to the full bar width and re-center it on the
+ *  peek's own midpoint, keeping the current top edge/height. The peek narrows the window via
+ *  data-hug-width (useAutoResize reports the slim strip's width), and nothing in the plain-bar view ever
+ *  reports a width again — so without this the revealed bar would stay stuck at the ~140px peek width.
+ *  Height is left to the renderer's own auto-resize (its grow path is immediate), so this only moves the
+ *  width/x. A pure setBounds — never show()/focus() — so the foreground app keeps focus. */
+function restoreBarWidth(): void {
+  if (!win || currentWidth === BAR_WIDTH) return
+  const { workArea } = screen.getDisplayMatching(win.getBounds())
+  const b = win.getBounds()
+  currentWidth = BAR_WIDTH
+  const x = recenterXForWidth(b.x, b.width, BAR_WIDTH, workArea, 0)
+  win.setBounds({ x, y: b.y, width: BAR_WIDTH, height: b.height }, false)
+}
+
 // Re-center the compact bar on its current display. The old fixed 'settings' window-mode was removed —
 // settings renders as a panel under the bar now, so the window only ever lives in 'bar' mode.
 function setWindowMode(): void {
   if (!win) return
   const { workArea } = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
-  let x = Math.round(b.x + (b.width - currentWidth) / 2)
-  x = Math.max(workArea.x + 16, Math.min(x, workArea.x + workArea.width - currentWidth - 16))
+  const x = recenterXForWidth(b.x, b.width, currentWidth, workArea, 16)
   // lastBarHeight was measured on whatever display the bar was on at the time. The renderer sends
   // windowMode('bar') on every mount — including the reload after a renderer crash — which can land after
   // the overlay has moved to a shorter monitor, so re-apply that monitor's ceiling instead of restoring a
@@ -1607,10 +1721,27 @@ function ensureWindow(): BrowserWindow | null {
   return win
 }
 
+/**
+ * The ONE deliberate, user-initiated focus grab in this file (MQA-275 / Phase 1d of the island rebuild:
+ * "never steals focus" except a deliberate ask). `show()` (unlike `showInactive()`) activates the window
+ * on both macOS and Windows, stealing focus from whatever app the user was typing in — acceptable ONLY
+ * when the user just explicitly asked to type into the overlay (the `ask` hotkey, or the show/hide
+ * toggle's reveal, which always opens `ask` immediately after). Every other reveal in this file must call
+ * `showInactive()` instead — enforced by `no-show-steals-focus.contract.test.ts`, which greps this file
+ * for bare `.show()` calls and fails on any occurrence outside this function.
+ */
+function showForAsk(w: BrowserWindow): void {
+  w.show()
+  w.focus()
+}
+
 function sendHotkey(action: HotkeyAction): void {
   const w = ensureWindow()
   if (!w) return
-  if (!w.isVisible()) w.show()
+  if (!w.isVisible()) {
+    if (action === 'ask') showForAsk(w)
+    else w.showInactive()
+  }
   w.webContents.send(IPC.hotkey, action)
 }
 
@@ -1672,8 +1803,9 @@ function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown)
 
 // --- Screen capture (cached + pre-warmable for vision latency) -----------------------------------------
 // A vision ask issued within CAPTURE_TTL_MS of a (pre-warmed) capture reuses the JPEG instead of paying the
-// ~150-450ms capture cost again. Kept tiny so the screen the model sees is never visibly stale.
-const CAPTURE_TTL_MS = 1500
+// ~150-450ms capture cost again. 4s covers hover→click and shortcut→Enter without showing a visibly stale
+// frame; Private View / display-id checks still refuse a bad send.
+const CAPTURE_TTL_MS = 4000
 let shotCache: { image: string; width: number; height: number; dispId: number; displayMismatch: boolean; ts: number } | null = null
 type CapturedScreen = { image: string; width: number; height: number; dispId: number; displayMismatch: boolean }
 
@@ -1909,47 +2041,31 @@ function revokePrivilegedSurface(): void {
 }
 setSessionClearedHandler(revokePrivilegedSurface)
 
-/** Clamp a single axis (pos/size) into a work-area span, without inverting when the window is bigger
- *  than the display. Math.min(Math.max(pos, areaPos), areaPos + areaSpan - size) assumes
- *  areaPos + areaSpan - size >= areaPos; when size > areaSpan that upper bound falls below areaPos and
- *  min/max invert, pushing the window partially off-screen instead of pinning it. Pin to areaPos instead. */
-function clampAxis(pos: number, size: number, areaPos: number, areaSpan: number): number {
-  if (size >= areaSpan) return areaPos
-  return Math.min(Math.max(pos, areaPos), areaPos + areaSpan - size)
-}
-
-/** Ceiling a window height to a display's work area, keeping the 48px reserve. Lives here rather than
- *  inside resizeTo because the ceiling has to be re-applied every time the overlay lands on a DIFFERENT
- *  display — while the rest of resizeTo (width, recenter, lastBarHeight) must NOT run on those paths. */
-function clampHeight(height: number, areaHeight: number): number {
-  return Math.max(BAR_MIN_HEIGHT, Math.min(height, areaHeight - 48))
-}
-
 // How much of the window must stay visibly reachable on some display while it's being dragged — enough
 // to grab it back, not the whole thing. Below this it's treated as flung off-screen and pulled back in.
 const DRAG_VISIBLE_MARGIN = 40
 
-/** Loosened clampAxis: pins `pos` so between `margin` and `size` px (whichever is smaller) of the
- *  window stays inside [areaPos, areaPos + areaSpan), instead of pinning the WHOLE window inside it.
- *  Only used as the moveBy() fallback below — letting most of the window hang off a display's edge is
- *  what lets a drag glide across a gap to a neighboring monitor instead of stopping dead at the first
- *  display's boundary. */
-function clampAxisMargin(pos: number, size: number, areaPos: number, areaSpan: number, margin: number): number {
-  const m = Math.min(margin, size, areaSpan)
-  return Math.min(Math.max(pos, areaPos - size + m), areaPos + areaSpan - m)
+/** Ceiling a window height to a display's work area, keeping the 48px reserve. Lives here rather than
+ *  inside resizeTo because the ceiling has to be re-applied every time the overlay lands on a DIFFERENT
+ *  display — while the rest of resizeTo (width, recenter, lastBarHeight) must NOT run on those paths.
+ *  Thin index.ts-local name preserved at every call site (MQA-275); the clamp math itself now lives in
+ *  island/geometry.ts so it is unit-tested there without booting Electron. */
+function clampHeight(height: number, areaHeight: number): number {
+  return islandClampHeight(height, areaHeight, BAR_MIN_HEIGHT)
 }
 
 /** True if, positioned at (x, y), at least DRAG_VISIBLE_MARGIN px of the window overlaps the work area
  *  of at least one CONNECTED display — checked against the union of every display (getAllDisplays()),
- *  not just whichever one the window started the drag on. */
+ *  not just whichever one the window started the drag on. Math lives in island/geometry.ts. */
 function isReachable(x: number, y: number, width: number, height: number): boolean {
-  const marginW = Math.min(DRAG_VISIBLE_MARGIN, width)
-  const marginH = Math.min(DRAG_VISIBLE_MARGIN, height)
-  return screen.getAllDisplays().some(({ workArea: wa }) => {
-    const overlapW = Math.min(x + width, wa.x + wa.width) - Math.max(x, wa.x)
-    const overlapH = Math.min(y + height, wa.y + wa.height) - Math.max(y, wa.y)
-    return overlapW >= marginW && overlapH >= marginH
-  })
+  return islandIsReachable(
+    x,
+    y,
+    width,
+    height,
+    screen.getAllDisplays().map((d) => d.workArea),
+    DRAG_VISIBLE_MARGIN
+  )
 }
 
 /** Re-apply the work-area height ceiling when a move lands the window on a DIFFERENT display than it
@@ -1957,14 +2073,11 @@ function isReachable(x: number, y: number, width: number, height: number): boole
  *  4K panel keeps that height when it is dragged onto a 1080p monitor — hanging a thousand pixels below
  *  the bottom edge, where resizable:false leaves the user no way to fix it. Height only: x/y stay the
  *  caller's, except that y is re-checked, because the caller validated it against the OLD (taller)
- *  height and a shorter window can lose the overlap that made that position reachable. */
+ *  height and a shorter window can lose the overlap that made that position reachable. Math lives in
+ *  island/geometry.ts; this wrapper resolves the live `screen.getDisplayMatching` display. */
 function refitToDisplay(next: Electron.Rectangle, fromDisplayId: number): Electron.Rectangle {
   const { id, workArea } = screen.getDisplayMatching(next)
-  if (id === fromDisplayId) return next
-  const height = clampHeight(next.height, workArea.height)
-  if (height === next.height) return next
-  const y = clampAxisMargin(next.y, height, workArea.y, workArea.height, DRAG_VISIBLE_MARGIN)
-  return { ...next, height, y }
+  return islandRefitToDisplay(next, id, workArea, fromDisplayId, BAR_MIN_HEIGHT, DRAG_VISIBLE_MARGIN)
 }
 
 function moveBy(dx: number, dy: number): void {
@@ -2043,8 +2156,9 @@ function toggleVisible(): void {
   if (!w) return
   if (!hadNoWindow && w.isVisible()) w.hide()
   else {
-    w.show()
-    w.focus()
+    // Revealing via the show/hide hotkey always opens the ask input right after — the same deliberate,
+    // user-initiated focus grab as sendHotkey('ask'). See showForAsk's doc comment.
+    showForAsk(w)
     w.webContents.send(IPC.hotkey, 'ask')
   }
 }
@@ -2229,13 +2343,13 @@ function buildTrayMenu(): Menu {
   }
   return Menu.buildFromTemplate([
     { label: label('Show / Hide', 'hide'), click: toggleVisible },
+    // sendHotkey() already reveals the window itself (non-activating — see showForAsk's doc comment)
+    // when it isn't visible, so no separate show call is needed (or wanted) here.
     { label: 'Settings…', click: () => {
-      if (win && !win.isVisible()) win.show()
       sendHotkey('settings')
     } },
     { label: label('Listen / Stop listening', 'toggle-listen'), click: () => sendHotkey('toggle-listen') },
     { label: "Today's agenda", click: () => {
-      if (win && !win.isVisible()) win.show()
       sendHotkey('agenda')
     } },
     { label: label('New', 'reset'), click: () => sendHotkey('reset') },
@@ -2338,6 +2452,21 @@ async function backfillSpeakerNames(file: string): Promise<{ ok: boolean; named?
     const { lines, named } = applySpeakerNames(read.lines, fetched.entries, { operatorName })
     if (named === 0) return { ok: true, named: 0 }
 
+    // Auto-enrollment flywheel (SPEAKER-INTELLIGENCE-PLAN §3.4): a THEM line VTT alignment just resolved
+    // to a real name, whose PRE-alignment name was a live session cluster label ("Speaker N"), is exactly
+    // the join needed to grow a permanent voiceprint with zero user effort — this session's "Speaker N"
+    // IS that person. Best-effort and silent: a missed window (feature off, no session buffer left, below
+    // the quality gate) never affects the save this function already guarantees.
+    const clusterNamePairs = clusterNamePairsFromAlignment(read.lines, lines)
+    if (clusterNamePairs.length) {
+      try {
+        const enrolled = getSpeakerId().autoEnrollFromLabeledWindows(clusterNamePairs)
+        if (enrolled) auditLog('speaker.auto_enrolled', { enrolled })
+      } catch (err) {
+        mainLog.warn('[speaker-id] auto-enroll failed', err instanceof Error ? err.message : String(err))
+      }
+    }
+
     const result = await updateMeetingTranscript(settings, safeName, lines)
     if (!result.ok) return { ok: false, error: result.error }
 
@@ -2408,6 +2537,11 @@ function registerIpc(): void {
       }
     }
     return s
+  })
+  ipcMain.handle(IPC.dismissFailoverNotice, (e) => {
+    assertMainWindow(e)
+    dismissLastFailoverNotice()
+    return { ok: true as const }
   })
   ipcMain.handle(IPC.permissionsGet, (e) => {
     assertMainWindow(e)
@@ -2505,7 +2639,19 @@ function registerIpc(): void {
     // write it. Without this strip, any renderer code could self-issue an unlimited license with a
     // plain settings patch ({licenseValid:true, licenseSeatCap:999999}) and defeat the gate once it's
     // wired. licenseServerUrl + licenseGateEnabled stay writable — those are genuine user inputs.
-    for (const k of ['licenseKey', 'licenseCompanyName', 'licenseSeatCap', 'licenseExpiresAt', 'licenseValid', 'licenseLastValidatedAt']) {
+    // licenseLease (MQA-282) and trialStartedAt (MQA-281) are the same class of field: only
+    // activateLicense/heartbeat may set the former, only noteQualifyingUse the latter — a renderer patch
+    // must not be able to self-issue a signed-looking lease string or grant itself a fresh trial.
+    for (const k of [
+      'licenseKey',
+      'licenseCompanyName',
+      'licenseSeatCap',
+      'licenseExpiresAt',
+      'licenseValid',
+      'licenseLastValidatedAt',
+      'licenseLease',
+      'trialStartedAt'
+    ]) {
       if (k in p) delete (p as Record<string, unknown>)[k]
     }
     // MCP connection STATE is main-owned for the same reason. IPC.mcpPush deliberately reads the endpoint
@@ -2587,10 +2733,10 @@ function registerIpc(): void {
     // Start/stop background screen pre-analysis to match the new settings (backgroundScreenContext toggle,
     // or Local AI being enabled/disabled/provisioned) — takes effect immediately, no relaunch.
     refreshScreenPreprocess()
-    // Local AI turned back ON → arm the weight fetch here (MQA-186). Boot is the only other trigger and
-    // it now skips while the toggle is off, so without this edge a user who declined the download once
-    // could never get it: Settings would report the model unavailable for the rest of the install's life.
-    if (!cur.localLlm.enabled && next.localLlm.enabled && shouldFetchWeights(next.localLlm.modelId, true)) {
+    // Local AI turned ON → re-arm the weight fetch if boot somehow skipped it (offline first launch,
+    // under-RAM machine later upgraded). Boot already starts the download whenever the app opens
+    // (RAM permitting); this edge is the second chance, not the only path to the weights.
+    if (!cur.localLlm.enabled && next.localLlm.enabled && shouldFetchWeights(next.localLlm.modelId)) {
       void ensureLocalModel(next.localLlm.modelId)
         .then(() => refreshScreenPreprocess())
         .catch((e) => mainLog.warn('[settings] local model provisioning failed:', e))
@@ -2700,10 +2846,16 @@ function registerIpc(): void {
         licenseExpiresAt: null,
         licenseValid: false,
         licenseLastValidatedAt: 0,
-        licenseGateEnabled: false
+        licenseGateEnabled: false,
+        leaseExpiresAt: null,
+        trialActive: false,
+        trialDaysRemaining: 0
       }
     }
     const s = getSettings()
+    // Act 5 (MQA-281/282): lease/trial status is live-verified (licenseDisplayStatus), not a raw
+    // settings echo — a tampered/expired licenseLease string must never read back as "active".
+    const display = licenseDisplayStatus()
     return {
       licenseServerUrl: s.licenseServerUrl,
       licenseCompanyName: s.licenseCompanyName,
@@ -2711,7 +2863,10 @@ function registerIpc(): void {
       licenseExpiresAt: s.licenseExpiresAt,
       licenseValid: s.licenseValid,
       licenseLastValidatedAt: s.licenseLastValidatedAt,
-      licenseGateEnabled: s.licenseGateEnabled
+      licenseGateEnabled: s.licenseGateEnabled,
+      leaseExpiresAt: display.leaseExpiresAt,
+      trialActive: display.trialActive,
+      trialDaysRemaining: display.trialDaysRemaining
     }
   })
   // Startup-gate verdict for App.tsx's <LicenseGate/>. Deliberately NOT behind requireAuth(): this is
@@ -2722,6 +2877,15 @@ function registerIpc(): void {
     assertMainWindow(e)
     const verdict = checkLicenseGrace()
     return { gateEnabled: getSettings().licenseGateEnabled, ...verdict }
+  })
+  // Informational read of the server's declared license-gate intent (GET /license/config) — used by the
+  // onboarding ActLicense scene. No requireAuth(): reachable before sign-in, like licenseGate above, and
+  // the server route itself is unauthenticated (see license-server/lib/license-gate.mjs's header).
+  ipcMain.handle(IPC.licenseConfig, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    const parsed = LicenseConfigPayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
+    return fetchLicenseConfig(parsed.data.serverUrl)
   })
 
   // --- Provider API keys ---
@@ -2988,6 +3152,49 @@ function registerIpc(): void {
     return kind.success ? MCP_KIND_LABELS[kind.data] : connectionId
   }
 
+  // Wave 4: mcp:push's own MCP tool names are per-connection and user/operator-configured — there is no
+  // registry mapping them to the queue's small action-kind enum. A cheap name heuristic is enough for
+  // this queue's own purposes (it only affects a retry-log label, never routing): most tools are named
+  // for what they do (push_meeting_recap, create_task, log_note, update_deal, …).
+  function inferPushActionKind(toolName: string): OutboundActionKind {
+    const t = toolName.toLowerCase()
+    if (t.includes('deal')) return 'update_deal'
+    if (t.includes('task')) return 'create_task'
+    return 'log_note'
+  }
+
+  // The background half of the retry queue: re-attempts one durable OutboundAction against whatever the
+  // named connection's CURRENT endpoint/key are (a retry may run long after the original attempt, so the
+  // key may have since been rotated or the connection reconnected). Deliberately does not repeat the
+  // interactive handler's ClickUp-401-refresh dance below — that stays exclusive to the live, synchronous
+  // path; a ClickUp token that expired between attempts here simply dead-letters like any other repeated
+  // failure, which is an acceptable (and honest — "reconnect ClickUp") outcome for a background retry.
+  async function retryOutboundAction(action: OutboundAction): Promise<{ ok: boolean; error?: string }> {
+    // Re-check disk on every retry tick — a meeting flagged confidential AFTER enqueue must never leave.
+    if (action.meetingFile && isMeetingConfidentialOnDisk(getSettings(), action.meetingFile)) {
+      // Dequeue without sending — returning ok:true removes the entry; a hard error would retry forever.
+      auditLog('mcp.push.skipped_confidential', { kind: action.kind, action: action.action, source: 'disk' })
+      return { ok: true }
+    }
+    const s = getSettings()
+    const conn = s.mcpConnections.find((c) => c.kind === action.kind)
+    if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(conn.id)) {
+      return { ok: false, error: `${mcpLabelFor(action.kind)} is no longer connected.` }
+    }
+    const apiKey = getMcpApiKey(conn.id)
+    return pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, action.toolName, action.payload, conn.label)
+  }
+
+  // Same minute-ish cadence as the brain reconcile tick (BRAIN_RECONCILE_MS, set up below in
+  // app.whenReady) — cheap enough to poll often, and pushQueue.processDue itself no-ops instantly when
+  // the queue is empty or every due action is still cooling down on backoff. Lives here (registerIpc),
+  // not next to that tick, because retryOutboundAction and mcpLabelFor above are this function's own
+  // locals — pulling the timer out to whenReady's scope would mean hoisting both to module scope for no
+  // real benefit.
+  trackTimer(setInterval(() => {
+    void pushQueue.processDue(retryOutboundAction).catch((e) => mainLog.warn('[mcp-push-queue] processDue tick failed:', e))
+  }, 60 * 1000))
+
   // Test connection: connects + authenticates + lists tools, persists NOTHING (mirrors BidStack's own
   // "Test endpoint" button). Lets the user verify before committing an endpoint/key to disk.
   ipcMain.handle(IPC.mcpTestConnection, async (e, payload: unknown) => {
@@ -3071,8 +3278,20 @@ function registerIpc(): void {
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const parsed = McpPushPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
-    const { connectionId, toolName, args } = parsed.data
+    const { connectionId, toolName, args, meetingFile } = parsed.data
     const s = getSettings()
+    // Wave 4 / QA defense-in-depth: never push confidential meetings. Prefer disk frontmatter over the
+    // renderer flag — a buggy UI could omit args.confidential. Unreadable files fail closed.
+    const diskConfidential = meetingFile ? isMeetingConfidentialOnDisk(s, meetingFile) : false
+    const argConfidential = args && typeof args === 'object' && (args as { confidential?: unknown }).confidential === true
+    if (diskConfidential || argConfidential) {
+      auditLog('mcp.push.skipped_confidential', {
+        connectionId,
+        tool: toolName,
+        source: diskConfidential ? 'disk' : 'args'
+      })
+      return { ok: false, error: 'This meeting is marked confidential — push is blocked.' }
+    }
     const conn = s.mcpConnections.find((c) => c.id === connectionId)
     if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(connectionId)) {
       return { ok: false, error: `${mcpLabelFor(connectionId)} is not connected. Set it up in Settings → Mantu Intelligence first.` }
@@ -3110,6 +3329,21 @@ function registerIpc(): void {
       }
     }
     auditLog('mcp.push', { connectionId, tool: toolName, ok: r.ok })
+    // Wave 4: the live attempt above already gave the renderer an immediate answer. A FAILURE also goes
+    // into the durable retry queue so a transient MCP-endpoint blip doesn't silently drop the push —
+    // enqueue is idempotent (same connection+tool+payload collapses to one entry), so a user who clicks
+    // "Push" again after a failure never double-queues the same write. Confidential is read straight off
+    // `args` (McpArgValueSchema already allows a boolean value there) — never sent, ever, by processDue.
+    if (!r.ok) {
+      pushQueue.enqueue({
+        kind: conn.kind,
+        action: inferPushActionKind(toolName),
+        toolName,
+        payload: args,
+        ...(meetingFile ? { meetingFile: meetingFile.split(/[/\\]/).pop() || meetingFile } : {}),
+        confidential: argConfidential || diskConfidential
+      })
+    }
     return r
   })
 
@@ -3543,13 +3777,16 @@ function registerIpc(): void {
     // ("Jane Doe" from an enrolled profile, else a stable "Speaker N" session label). Same PCM buffer the
     // ASR just consumed — no extra capture. Strictly additive and best-effort: any failure or the feature
     // being off/unprovisioned attaches no name and the line renders exactly as before.
-    if (text && p.speaker === 'them' && getSettings().speakerId.enabled) {
-      try {
-        const label = getSpeakerId().labelWindow(p.samples)
-        if (label) return { text, name: label.name }
-      } catch (err) {
-        mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
-      }
+    if (text && p.speaker === 'them') {
+      const label = labelThemAudio(p.samples)
+      // P2 echo defense: this window is the operator's OWN voice bleeding through the loopback, not the
+      // other person — drop the transcribed text entirely rather than mislabel the operator's words as
+      // "them" (a name/cluster label attached here would otherwise show up as something THEY said).
+      if (label?.echo) return { text: '', echo: true }
+      if (label) return { text, name: label.name }
+    } else if (p.speaker === 'you') {
+      // ME windows never get a THEM label — feed straight into operator echo-defense/profile upkeep.
+      observeOperatorAudio(p.samples)
     }
     return { text }
   })
@@ -3567,15 +3804,38 @@ function registerIpc(): void {
     if (p.samples.length > 16_000 * 30) return ''
     // Spoken-language hint (Settings → Audio) pins the recognizer locale; 'auto' keeps system locale.
     const text = await appleSpeechTranscribe(p.samples, appleSpeechLocale(getSettings().asrLanguage))
-    if (text && p.speaker === 'them' && getSettings().speakerId.enabled) {
-      try {
-        const label = getSpeakerId().labelWindow(p.samples)
-        if (label) return { text, name: label.name }
-      } catch (err) {
-        mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
-      }
+    if (text && p.speaker === 'them') {
+      const label = labelThemAudio(p.samples)
+      if (label?.echo) return { text: '', echo: true } // see parakeetFeed's identical echo-defense comment above
+      if (label) return { text, name: label.name }
+    } else if (p.speaker === 'you') {
+      observeOperatorAudio(p.samples)
     }
     return { text }
+  })
+
+  // Speaker Intelligence (SPEAKER-INTELLIGENCE-PLAN §3) — the Whisper engine's speaker-embedding tap.
+  // Whisper runs entirely in a renderer Worker with no main-process round trip of its own (unlike
+  // Parakeet/Apple, which already ride the label along on parakeetFeed/appleSpeechFeed above), so
+  // listen.ts's Whisper commitLine path calls this separately, after the fact, with the SAME window's
+  // audio the worker just transcribed — fire-and-forget, best-effort, never blocking the live decode.
+  ipcMain.handle(IPC.speakerEmbed, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return {}
+    const p = payload as { samples?: unknown; speaker?: unknown }
+    if (!(p?.samples instanceof Float32Array)) return {}
+    // Same defensive cap as parakeetFeed — see its own comment for why.
+    if (p.samples.length > 16_000 * 30) return {}
+    if (p.speaker === 'them') {
+      const label = labelThemAudio(p.samples)
+      // Echo bleed: the Whisper worker already committed the line — return echo:true so the renderer
+      // can drop it (listen.ts). Without that flag the operator's own words stayed labeled as THEM.
+      if (label?.echo) return { echo: true as const }
+      if (label) return { name: label.name }
+    } else if (p.speaker === 'you') {
+      observeOperatorAudio(p.samples)
+    }
+    return {}
   })
 
   // --- Métis Local (on-device LLM): model readiness metadata ---
@@ -3718,6 +3978,13 @@ function registerIpc(): void {
     // no typed claim) — redact it the same way so a secret-shaped pattern in that fallback text isn't sent
     // to the provider. Typed-claim fact-check asks never set this flag, so normal prompts are untouched.
     if (s.redactSensitive && req.redactPrompt) req.prompt = redactSecrets(req.prompt)
+    // Overlap local sidecar start with the sync brain stamp below — when local will serve (or hedge),
+    // kicking ensure NOW hides cold-load behind Receipt Mode work instead of serializing after it.
+    if (localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady)) {
+      void ensureLocalRuntimeStarted(s.localLlm.modelId, req.mode === 'vision').catch((err) =>
+        mainLog.warn('[local] early ensure failed', err instanceof Error ? err.message : String(err))
+      )
+    }
     // Receipt Mode: ground a typed answer in the user's own past meetings. Match the brain against the
     // question (which already carries the live transcript tail via the renderer's withContext) and inject
     // the relevant, meeting-cited slice per-turn. Answer mode only — never the latency-critical spoken
@@ -3841,11 +4108,14 @@ function registerIpc(): void {
           })
       const eligible = (p: ProviderId): boolean => {
         if (tried.includes(p)) return false
-        // Métis Local replaces the generic key/model/vision checks with localEligibleFor — the SAME
-        // mode-scope gate the ineligible chain below enforces, so local can never become a failover
-        // target for an out-of-scope mode (answer/recap or escalated text) even though it's a keyless,
-        // always-vision-capable entry in PROVIDERS (PLAN.md §4.3: "enforced at BOTH gates").
-        if (p === 'local') return localEligibleFor(req, s, tier, allowed)
+        // Métis Local: routingMode-aware primary eligibility (localPrimaryEligibleFor) so Routing mode
+        // → Local can fail over / serve without per-mode useFor toggles. 'api' mode keeps local out of
+        // the healthy mid-walk (fallback/floor still catch last-resort below). Out-of-scope modes
+        // (answer/recap) stay ineligible here — same PLAN.md §4.3 both-gates contract.
+        if (p === 'local') {
+          if (resolveRoutingMode(s) === 'api') return false
+          return localPrimaryEligibleFor(req, s, tier, allowed)
+        }
         return (
           (!allowed || allowed.includes(p)) &&
           (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0) &&
@@ -3908,6 +4178,18 @@ function registerIpc(): void {
     const failover = (tried: ProviderId[], preferFree = false, race?: AttemptRace): boolean => {
       const next = pickFailover(tried, preferFree)
       if (!next) return false
+      // Wave 2 — record the hop for the one-shot UI chip (docs/PROVIDER-ROUTING-POLICY.md). Only fire
+      // when we actually start a different provider; a no-op return above leaves the notice untouched.
+      const from = tried.length ? tried[tried.length - 1]! : 'unknown'
+      if (from !== next) {
+        lastFailoverNotice = {
+          from,
+          to: next,
+          at: Date.now(),
+          reason: preferFree ? 'exhausted' : 'failover'
+        }
+        auditLog('provider.failover', { from, to: next, reason: lastFailoverNotice.reason })
+      }
       attempt(next, tried, 0, race)
       return true
     }
@@ -3994,14 +4276,12 @@ function registerIpc(): void {
       // built-in. Resolved BEFORE the eligibility chain because a missing user endpoint is an eligibility
       // failure, not a stream failure.
       const baseURL = providerBaseUrl(provider, s)
-      // Métis Local replaces the ENTIRE generic key/model/vision chain below with localEligibleFor — the
-      // same mode-scope + readiness gate the settings snapshot and pickFailover's candidate filter use, so
-      // an out-of-scope request (answer/recap or escalated text) can never actually route to the local
-      // provider. Opted-in vision deliberately stays local at every tier so prompt complexity cannot
-      // silently turn a screenshot into a cloud upload.
+      // Métis Local: accept localPrimaryEligibleFor (routingMode-aware) plus the unchanged fallback/floor
+      // nets. Opted-in vision stays local at every tier so prompt complexity cannot silently turn a
+      // screenshot into a cloud upload.
       const ineligible =
         provider === 'local'
-          ? localEligibleFor(req, s, tier, allowed) ||
+          ? localPrimaryEligibleFor(req, s, tier, allowed) ||
             localFallbackEligibleFor(req, s, tier, allowed) ||
             // The answer-mode floor: pickFailover routes here when every cloud/CLI route is exhausted for an
             // out-of-scope mode (answer/recap). attempt() must accept it too, or the floor pickFailover
@@ -4135,6 +4415,7 @@ function registerIpc(): void {
           : baseIdleMs
       const startedAt = Date.now()
       let gotToken = false
+      let paintedLen = 0
       let ttftMs: number | undefined
       // Strips a reasoning model's inline <think>…</think> out of the answer stream (llm/think-strip.ts).
       // One per attempt: each leg/retry is its own stream, and the stripper carries position state.
@@ -4163,6 +4444,7 @@ function registerIpc(): void {
           }
         }
         gotToken = true
+        paintedLen += text.length
         win?.webContents.send(IPC.streamDelta, { id: req.id, text })
       }
       const handle = createStream({
@@ -4253,6 +4535,11 @@ function registerIpc(): void {
             // registration set up before either leg started (see the hedge dispatch below).
             if (race) streams.delete(req.id)
             win?.webContents.send(IPC.streamDone, { id: req.id, ...u })
+            // Act 5 trial hook (MQA-281): the ONE seam that fires on a real, successfully-delivered
+            // result (gotToken is guaranteed true above) — never on install/launch. Cheap no-op unless
+            // this is the very first qualifying (suggest/summary/recap) result this install has ever
+            // produced; the demo-tagged check is belt-and-suspenders (see noteQualifyingUse's header).
+            noteQualifyingUse(req.mode, req.prompt, req.transcript)
           },
           onError: (message) => {
             if (race && race.gate.isLoser(race.leg)) return
@@ -4390,6 +4677,17 @@ function registerIpc(): void {
               // path already deleted its entry at the top of onError; without this the map kept the
               // HedgeRace and both handles alive for every hedged ask that ended in an error.
               if (race) streams.delete(req.id)
+              // Trailing stream error AFTER substantial visible output (claude-cli idle linger, etc.) —
+              // same keep-threshold as import-recap. Without this, Review blanked notes / autosave wrote
+              // an empty recap even though the summary had already streamed onto the screen.
+              if (gotToken && paintedLen >= 200) {
+                mainLog.warn(
+                  `[ask] keeping ${paintedLen}-char answer despite trailing stream error: ${friendly}`
+                )
+                win?.webContents.send(IPC.streamDone, { id: req.id })
+                noteQualifyingUse(req.mode, req.prompt, req.transcript)
+                return
+              }
               win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
             }
           }
@@ -4413,7 +4711,10 @@ function registerIpc(): void {
     // Métis Local outranks cliPrimary (but never providerOverride): an in-scope suggest/summary/vision ask
     // routes to the on-device model first whenever it's eligible right now (PLAN.md §4.3 "Routing
     // precedence, explicit") — see local-routing.ts's pickPrimaryProvider for the exact precedence rule.
-    const localPrimaryEligible = localEligibleFor(req, s, routeTier(req, s.thinkingMode), allowed)
+    // localPrimaryEligibleFor (not the bare localEligibleFor) layers Wave 2's routingMode on top: 'api'
+    // forces this false so local can never win the first-attempt pick, 'local' relaxes the per-mode
+    // useFor toggle, 'auto' is byte-identical to the old localEligibleFor call.
+    const localPrimaryEligible = localPrimaryEligibleFor(req, s, routeTier(req, s.thinkingMode), allowed)
     const localVisionRequired = localVisionPrivacyRequired(req, s)
     const primary = pickPrimaryProvider(
       req.providerOverride,
@@ -4462,7 +4763,12 @@ function registerIpc(): void {
       // ask when it genuinely gets there first, which is the cloud-is-slow / cloud-is-down case.
       // This early pick decides the DELAY only: startHedgeLeg re-picks the provider at fire time against
       // the live primaryChain, so a primary that fails over in the meantime is still excluded correctly.
-      const hedgeDelayMs = pickFailover([primary]) === 'local' ? 0 : HEDGE_DELAY_MS
+      const hedgeDelayMs =
+        pickFailover([primary]) === 'local'
+          ? 0
+          : req.mode === 'suggest'
+            ? HEDGE_DELAY_SUGGEST_MS
+            : HEDGE_DELAY_MS
       let hedgeTimer: NodeJS.Timeout | null = setTimeout(() => {
         hedgeTimer = null
         startHedgeLeg()
@@ -4535,6 +4841,10 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const m = SaveMeetingSchema.parse(raw)
+    // ASR quality (1B.2b) — a live-only interim placeholder must never reach disk (see
+    // TranscriptLineSchema.provisional's own doc comment). Belt-and-suspenders: listen.ts already
+    // replaces a provisional line with the real one before it could ever be included here.
+    m.lines = stripProvisionalLines(m.lines)
     const r = { path: await saveMeeting(getSettings(), m) }
     // Time-saved: the meeting file just landed — credit it ONCE to the durable lifetime counters. This is
     // the live-meeting save path; the import path credits itself separately once its file is durable. A
@@ -4550,7 +4860,11 @@ function registerIpc(): void {
     scheduleRebuild() // refresh the knowledge graph with the new note (debounced; no-op if disabled)
     // Persist the small background-work marker before confirming the transcript save. The actual LLM
     // extraction remains asynchronous, but a quit immediately after Save can now resume it.
-    await enqueueIngest(r.path)
+    // Wave 3 (settings.brainConsolidation): when batching is on, this meeting is marked pending but NOT
+    // queued for immediate extraction — it waits for the next consolidation pass (or a manual rebuild/
+    // "Index meetings" click, which scans for pending work independent of this flag) instead of paying a
+    // network round trip after every single save.
+    await enqueueIngest(r.path, { deferred: getSettings().brainConsolidation.enabled })
     // Speaker Intelligence (Phases A/B): best-effort, fire-and-forget backfill of resolved names from the
     // meeting's own Teams transcript (if one exists yet). Never awaited — must never delay or fail the
     // save response itself; see backfillSpeakerNames's own doc comment for the full quiet-no-op contract.
@@ -4611,7 +4925,11 @@ function registerIpc(): void {
       ingestedFiles: Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([file]) => file),
       // 6d: failing-source filenames, the failed-side counterpart to ingestedFiles above — lets a
       // per-meeting indicator (indexed/pending/failed) be derived without a second, heavier IPC call.
-      failedFiles: Object.entries(idx.ingested).filter(([, v]) => !v.ok).map(([file]) => file),
+      // Pending (deferred for consolidation) is NOT a failure — same discriminator ingestFailureCounts
+      // already uses. Listing pending here painted every just-saved meeting as a red "failed" History dot.
+      failedFiles: Object.entries(idx.ingested)
+        .filter(([, v]) => !v.ok && !isPendingIngestRecord(v))
+        .map(([file]) => file),
       ...(failureDetails.length ? { failedDetails: failureDetails } : {}),
       backfillRequested: idx.backfillRequested,
       ...counts,
@@ -4889,7 +5207,9 @@ function registerIpc(): void {
     if (!requireAuth()) return
     const parsed = SaveMeetingSchema.safeParse(raw)
     if (!parsed.success) return
-    await saveDraftTranscript(getSettings(), parsed.data)
+    // Same provisional-line guard as the real saveTranscript handler above — this periodic crash-
+    // recovery snapshot must never resurrect a UI-only "…" placeholder into a recovered draft.
+    await saveDraftTranscript(getSettings(), { ...parsed.data, lines: stripProvisionalLines(parsed.data.lines) })
   })
 
   ipcMain.handle(IPC.saveNote, async (e, raw) => {
@@ -5242,6 +5562,14 @@ function registerIpc(): void {
     assertMainWindow(e)
     setMinimizedWidth(!!narrow)
   })
+  ipcMain.handle(IPC.windowAnchorTop, (e) => {
+    assertMainWindow(e)
+    anchorTopCenter()
+  })
+  ipcMain.handle(IPC.windowRevealWidth, (e) => {
+    assertMainWindow(e)
+    restoreBarWidth()
+  })
   // Renderer ErrorBoundary catch: persist via the same sink as onFatal's main-process crashes, so a
   // caught render-throw survives to disk instead of only reaching console (gated behind
   // ASKTOTO_DEBUG_RENDERER, never on in a packaged build).
@@ -5350,8 +5678,9 @@ if (!app.requestSingleInstanceLock()) {
     // no-opping forever. ensureWindow() also filters a destroyed-but-non-null window.
     const w = ensureWindow()
     if (!w) return
-    if (!w.isVisible()) w.show()
-    w.focus()
+    // Non-activating, same island contract as every other reveal (see showForAsk's doc comment) — a
+    // second launch attempt surfaces the overlay without stealing focus from the foreground app.
+    if (!w.isVisible()) w.showInactive()
   })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
@@ -5382,15 +5711,17 @@ if (!app.requestSingleInstanceLock()) {
   // operator chose to embed one. See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
   importEmbeddedCloudflareKey()
   // Métis Local weights are no longer bundled in the installer (~728 MB; a universal mac package
-  // carrying them would blow past GitHub's 2 GB release-asset limit), so fetch them once here on first
-  // run. Deliberately NOT awaited: this is a ~763 MB download and startup must not wait on it, nor fail
-  // when the machine is offline or behind a restrictive proxy — Local simply stays unavailable and the
-  // next launch retries. ensureLocalModel() verifies the pinned sha256 and never throws.
-  // GATED (MQA-186): this used to fire unconditionally, so a machine under the model's RAM floor paid
-  // 763 MB for weights assertRamOk would refuse to load, and a user who had switched Local AI off got
-  // the transfer anyway with no way to decline it. shouldFetchWeights answers both. Because this is the
-  // only trigger, the settings handler re-arms it on the OFF→ON edge — see the localLlm.enabled branch
-  // in IPC.setSettings — otherwise switching Local AI back on would leave no path to the weights at all.
+  // carrying them would blow past GitHub's 2 GB release-asset limit), so fetch them once here whenever
+  // the app opens. Deliberately NOT awaited: this is a multi-GB download and startup must not wait on
+  // it, nor fail when the machine is offline or behind a restrictive proxy — the next launch retries.
+  // ensureLocalModel() verifies the pinned sha256 and never throws.
+  //
+  // GATED on RAM only (MQA-186): a machine under the model's floor must not pay for weights
+  // assertRamOk would refuse to load. Local AI `enabled` does NOT gate the download — routing stays
+  // off by default (Cloudflare / API keys stay primary); the bytes land in the background so turning
+  // Local on later is instant. OFF→ON in setSettings still re-arms as a second chance after a failed
+  // first-run fetch.
+  //
   // local-routing.ts re-reads isDownloaded() per request, so no ROUTING decision needs notifying. The
   // background screen reader does: its eligibility is evaluated when the engine is refreshed, and the boot
   // refresh below runs while this download is still in flight — without this re-arm, a first-run user who
@@ -5432,7 +5763,7 @@ if (!app.requestSingleInstanceLock()) {
         mainLog.warn('[boot] local prewarm skipped:', e instanceof Error ? e.message : String(e))
       }
     }
-    if (shouldFetchWeights(best.id, getSettings().localLlm.enabled)) {
+    if (shouldFetchWeights(best.id)) {
       void ensureLocalModel(best.id)
         .then(() => {
           refreshScreenPreprocess()
@@ -5890,6 +6221,10 @@ if (!app.requestSingleInstanceLock()) {
   }
   recoverImports()
   runStep('registerScreenListeners', registerScreenListeners)
+  // Notch/menu-bar metrics for the island top clamp (MQA-275) — invalidate-on-topology-change, same
+  // event set registerScreenListeners just subscribed to, plus powerMonitor resume (a notch MacBook can
+  // wake docked to a different external display than it slept on). macOS-only signal; a no-op elsewhere.
+  runStep('registerDisplayMetricsInvalidation', registerDisplayMetricsInvalidation)
   // Establish real screen-capture readiness at boot on Windows, where the probe raises NO system prompt
   // and there is no queryable permission to read instead — without it getPlatformPermissions() reports
   // 'unknown' forever and the readiness checklist cannot tell the user whether screenshots will work
@@ -5923,13 +6258,20 @@ if (!app.requestSingleInstanceLock()) {
       // Registered here rather than alongside the timer so safe start skips the recurring brain work too,
       // not just the single resume — the reconcile tick reads the same index.json.
       trackTimer(setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS))
+      // Wave 3: batch brain LLM extraction into settings.brainConsolidation's daily pass budget instead
+      // of a round trip after every meeting. Hourly check, same "cheap enough to poll often, the budget
+      // does the real gating" shape as the reconcile tick above; runConsolidationIfDue itself no-ops
+      // instantly once today's passes are spent or the feature is off.
+      void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] initial consolidation check failed:', e))
+      scheduleConsolidation(60 * 60 * 1000, trackTimer)
     }
     endBootWatch(app.getPath('userData'))
   }, 15_000)
 
   app.on('activate', () => {
     if (!win) createWindow()
-    else win.show()
+    // Non-activating (island contract) — a dock-icon click surfaces the overlay without stealing focus.
+    else win.showInactive()
   })
   }).catch((e) => {
     // console.error is a no-op in a packaged GUI build with no console — route to the real sinks (same

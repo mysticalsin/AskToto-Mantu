@@ -1,0 +1,4 @@
+{
+  "name": "Métis (asktoto)",
+  "install": "bash ./.cursor/install.sh"
+}

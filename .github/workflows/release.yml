@@ -187,6 +187,12 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Embed the default Cloudflare account credential (encrypted at rest) so a fresh install answers
+          # with no key to paste. Both are read only from the environment; only ciphertext ships. If the
+          # token secret is unset the embed step is a clean no-op (a normal keyless build).
+          METIS_CLOUDFLARE_API_TOKEN: ${{ secrets.METIS_CLOUDFLARE_API_TOKEN }}
+          METIS_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.METIS_CLOUDFLARE_ACCOUNT_ID }}
+          METIS_EMBED_CLOUDFLARE_KEY: '1'
       # Hard size gate before anything is published.
       - run: npm run check:release
         env:
@@ -204,6 +210,40 @@ jobs:
             release/*.zip
             release/*.blockmap
             release/latest-mac.yml
+
+  # Pure SwiftUI Mac app (native-app/) — NOT the Electron DMG. Ships Metis-Native-<ver>.zip.
+  release-macos-native:
+    name: macOS native (SwiftUI)
+    needs: release-quality
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify tag matches package.json version
+        run: node scripts/check-version-parity.mjs
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+      - name: Install xcodegen
+        run: brew install xcodegen
+      - name: Build Metis-Native zip
+        run: npm run release:native-mac
+      - name: Require Metis-Native zip
+        run: |
+          version=$(node -p "require('./package.json').version")
+          test -f "release/Metis-Native-${version}.zip" || {
+            echo "::error::Missing release/Metis-Native-${version}.zip"
+            exit 1
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: metis-release-macos-native
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0
+          path: release/Metis-Native-*.zip
 
   release-windows:
     name: Windows release
@@ -292,6 +332,12 @@ jobs:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
+          # Embed the default Cloudflare account credential (encrypted at rest) so a fresh install answers
+          # with no key to paste. Both are read only from the environment; only ciphertext ships. If the
+          # token secret is unset the embed step is a clean no-op (a normal keyless build).
+          METIS_CLOUDFLARE_API_TOKEN: ${{ secrets.METIS_CLOUDFLARE_API_TOKEN }}
+          METIS_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.METIS_CLOUDFLARE_ACCOUNT_ID }}
+          METIS_EMBED_CLOUDFLARE_KEY: '1'
       # Same pre-publication size gate as release-macos.
       - run: npm run check:release
         env:
@@ -310,11 +356,12 @@ jobs:
             release/*.blockmap
             release/latest.yml
 
-  # Publish only after both signed native builds pass. Assets first land on an invisible draft; the draft
-  # becomes public only after the complete Mac + Windows set is verified in that same release.
+  # Publish only after Electron Mac + Windows AND the pure SwiftUI Mac native zip all pass.
+  # Assets first land on an invisible draft; the draft becomes public only after the complete set
+  # is verified in that same release.
   release-verify:
     name: Publish verified Mac + Windows release
-    needs: [release-macos, release-windows]
+    needs: [release-macos, release-macos-native, release-windows]
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -323,6 +370,10 @@ jobs:
         with:
           name: metis-release-macos
           path: release-bundle/macos
+      - uses: actions/download-artifact@v4
+        with:
+          name: metis-release-macos-native
+          path: release-bundle/macos-native
       - uses: actions/download-artifact@v4
         with:
           name: metis-release-windows
@@ -344,11 +395,16 @@ jobs:
           version="${tag#v}"
           shopt -s nullglob
 
+          # Flatten the SwiftUI native zip next to the Electron Mac assets for a single upload set.
+          mv release-bundle/macos-native/Metis-Native-${version}.zip release-bundle/macos/
+          rmdir release-bundle/macos-native
+
           required_files=(
             "release-bundle/macos/Metis-${version}.dmg"
             "release-bundle/macos/Metis-${version}.dmg.blockmap"
             "release-bundle/macos/Metis-${version}.zip"
             "release-bundle/macos/Metis-${version}.zip.blockmap"
+            "release-bundle/macos/Metis-Native-${version}.zip"
             "release-bundle/macos/latest-mac.yml"
             "release-bundle/windows/Metis-Setup-${version}.exe"
             "release-bundle/windows/Metis-Setup-${version}.exe.blockmap"

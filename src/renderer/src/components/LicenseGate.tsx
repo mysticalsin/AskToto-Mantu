@@ -51,7 +51,7 @@ export function LicenseGate({
   onRecheck
 }: {
   settings: PublicSettings
-  reason?: 'not_activated' | 'expired_grace'
+  reason?: 'not_activated' | 'expired_grace' | 'trial_expired'
   onRecheck: () => Promise<void>
 }): JSX.Element {
   const [serverUrl, setServerUrl] = useState(settings.licenseServerUrl || '')
@@ -108,6 +108,11 @@ export function LicenseGate({
           <p className="mx-auto max-w-[420px] text-[13px] leading-relaxed text-[color:var(--color-ink-2)]">
             This device has been offline too long for its license check. Reconnect to the internet and
             retry.
+          </p>
+        ) : reason === 'trial_expired' ? (
+          <p className="mx-auto max-w-[420px] text-[13px] leading-relaxed text-[color:var(--color-ink-2)]">
+            Your trial has ended. Enter your license server and key to keep going — no key yet? Ask
+            whoever set up Métis for one.
           </p>
         ) : (
           <p className="mx-auto max-w-[420px] text-[13px] leading-relaxed text-[color:var(--color-ink-2)]">

@@ -91,7 +91,7 @@ describe('MQA-155 — a failed post-sweep source refresh is observed, never fabr
 })
 
 describe('MQA-172 — a second launch after a failed boot window recreates it instead of doing nothing', () => {
-  type Win = { isVisible: () => boolean; isDestroyed: () => boolean; show: () => void; focus: () => void }
+  type Win = { isVisible: () => boolean; isDestroyed: () => boolean; showInactive: () => void }
 
   /** Execute the real `app.on('second-instance', ...)` registration and hand back the handler it installs. */
   const secondInstanceHandler = (win: Win | null, ensureWindow: () => Win | null): (() => void) => {
@@ -111,8 +111,7 @@ describe('MQA-172 — a second launch after a failed boot window recreates it in
     const recovered: Win = {
       isVisible: () => false,
       isDestroyed: () => false,
-      show: vi.fn(),
-      focus: vi.fn()
+      showInactive: vi.fn()
     }
     const ensureWindow = vi.fn(() => recovered)
 
@@ -121,15 +120,20 @@ describe('MQA-172 — a second launch after a failed boot window recreates it in
     secondInstanceHandler(null, ensureWindow)()
 
     expect(ensureWindow).toHaveBeenCalledTimes(1)
-    expect(recovered.show).toHaveBeenCalledTimes(1)
-    expect(recovered.focus).toHaveBeenCalledTimes(1)
+    // Non-activating reveal (island Phase 1 showInactive() audit) — a second launch must not steal focus.
+    expect(recovered.showInactive).toHaveBeenCalledTimes(1)
   })
 
   it('MQA-172 — still just raises an existing hidden window without rebuilding it', () => {
-    const existing: Win = { isVisible: () => false, isDestroyed: () => false, show: vi.fn(), focus: vi.fn() }
+    const existing: Win = { isVisible: () => false, isDestroyed: () => false, showInactive: vi.fn() }
     secondInstanceHandler(existing, () => existing)()
-    expect(existing.show).toHaveBeenCalledTimes(1)
-    expect(existing.focus).toHaveBeenCalledTimes(1)
+    expect(existing.showInactive).toHaveBeenCalledTimes(1)
+  })
+
+  it('MQA-172 — an already-visible window is left alone (no redundant showInactive)', () => {
+    const visible: Win = { isVisible: () => true, isDestroyed: () => false, showInactive: vi.fn() }
+    secondInstanceHandler(visible, () => visible)()
+    expect(visible.showInactive).not.toHaveBeenCalled()
   })
 
   it('MQA-172 — createWindow() is idempotent, so the boot step cannot orphan a recovered window', () => {

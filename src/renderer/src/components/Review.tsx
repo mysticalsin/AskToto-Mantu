@@ -233,6 +233,7 @@ export const Review = memo(function Review({
   onRecapSaved,
   onDirtyChange,
   recapUnavailable,
+  finishingTranscript,
   coldCall
 }: {
   recap: AnswerState | null
@@ -288,6 +289,9 @@ export const Review = memo(function Review({
    *  fired and left to fail with a red error. Shown in place of the "writing detailed notes…" spinner,
    *  which would otherwise spin forever since no recap request was ever sent. */
   recapUnavailable?: { message: string; onOpenSettings?: () => void }
+  /** Live stop is still draining the last ASR windows — show "Finishing transcript…" instead of
+   *  pretending the LLM is already writing notes. */
+  finishingTranscript?: boolean
   /** Cold Calling Mode only (live session, see App.tsx maybeFireRecap): end-of-call coaching, fired
    *  automatically alongside the recap, plus the manual "Book meetings" action drafted from it. Session-
    *  only — not persisted, so a reopened past cold call never carries this. */
@@ -303,6 +307,7 @@ export const Review = memo(function Review({
   const [jsonCopied, flashJsonCopied] = useFlash(1500)
   const [exportError, setExportError] = useState<string | null>(null)
   const [transcriptOpen, setTranscriptOpen] = useState(!!showTranscript)
+  useEffect(() => setTranscriptOpen(!!showTranscript), [showTranscript])
   // Task MI-5 — confidential flag: excludes this meeting from every published wiki surface. Local state
   // seeded from the `confidential` prop (the meeting's actual saved value for a reopened past meeting;
   // false for a just-ended live one) and updated optimistically on toggle.
@@ -588,12 +593,22 @@ export const Review = memo(function Review({
   const sendToCrm = async (): Promise<void> => {
     if (pushState.phase === 'sending') return
     if (!pushTool) return
+    // Wave 4 / QA: confidential meetings never leave the device via MCP — same contract as wiki publish.
+    if (confidentialFlag) {
+      setPushState({ phase: 'error', error: 'This meeting is marked confidential — CRM push is blocked.' })
+      return
+    }
     // Remember the payload that was actually sent — recapText can move on (an edit, a regeneration) while
     // the call is in flight, and the CRM holds what left here, not what the screen shows when it lands.
     const payload = crmPayload
     const file = savedPath
     setPushState({ phase: 'sending', error: null })
-    const r = await window.toto.mcpPush({ connectionId: 'bidstack', toolName: pushTool, args: payload })
+    const r = await window.toto.mcpPush({
+      connectionId: 'bidstack',
+      toolName: pushTool,
+      args: { ...payload, confidential: confidentialFlag },
+      ...(file ? { meetingFile: file.split(/[/\\]/).pop() || file } : {})
+    })
     if (r.ok) {
       markCrmPushed(payload)
       setPushState({ phase: 'sent', error: null })
@@ -720,6 +735,11 @@ export const Review = memo(function Review({
 
   const runNextStepPushes = async (): Promise<void> => {
     if (!nextStepsData) return
+    if (confidentialFlag) {
+      // Same gate as sendToCrm — never enqueue Plane/ClickUp tasks for a confidential meeting.
+      setNextStepsFetchError('This meeting is marked confidential — task push is blocked.')
+      return
+    }
     const items = nextStepsData.map((it, i) => ({ item: it, i })).filter(({ i }) => itemChecked[i])
     const conns = taskConnections.filter((c) => connChecked[c.id] ?? true)
     for (const { item, i } of items) {
@@ -730,7 +750,12 @@ export const Review = memo(function Review({
         const key = `${i}:${conn.id}`
         if (nextStepPushed(stepStatus[key]?.phase ?? 'idle', conn.id, args)) continue
         setStepStatus((s) => ({ ...s, [key]: { phase: 'sending', error: null } }))
-        const r = await window.toto.mcpPush({ connectionId: conn.id, toolName: tool, args })
+        const r = await window.toto.mcpPush({
+          connectionId: conn.id,
+          toolName: tool,
+          args: { ...args, confidential: confidentialFlag },
+          ...(savedPath ? { meetingFile: savedPath.split(/[/\\]/).pop() || savedPath } : {})
+        })
         if (r.ok) {
           markNextStepPushed(conn.id, args)
           setStepStatus((s) => ({ ...s, [key]: { phase: 'sent', error: null } }))
@@ -1034,6 +1059,13 @@ export const Review = memo(function Review({
           </div>
         ) : recap?.error ? (
           <div className="flex flex-col gap-2">
+            {/* Substantial streamed notes stay visible — a trailing idle-timeout used to hide them
+                behind the error alone and autosave used to wipe them. Show what we have + Retry. */}
+            {recapText.trim().length >= 40 && (
+              <div className="opacity-90">
+                <Markdown>{recapText}</Markdown>
+              </div>
+            )}
             <div className="text-[13px] text-[var(--color-danger)]">{recap.error}</div>
             {/* Scoped retry — replays just the recap request. Previously the only recovery was
                 "New meeting", which throws away the whole saved transcript. */}
@@ -1082,6 +1114,10 @@ export const Review = memo(function Review({
                 </TextButton>
               </div>
             )}
+          </div>
+        ) : finishingTranscript ? (
+          <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
+            <Spinner size={13} /> finishing transcript…
           </div>
         ) : (
           <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
@@ -1232,10 +1268,13 @@ export const Review = memo(function Review({
             <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
               <Send size={12} /> CRM
             </div>
-            {bidstackConnected && !pushOpen && !crmPushed && (
+            {bidstackConnected && !pushOpen && !crmPushed && !confidentialFlag && (
               <Chip onClick={() => setPushOpen(true)} variant="accent">
                 <Send size={13} /> Push to CRM
               </Chip>
+            )}
+            {confidentialFlag && bidstackConnected && (
+              <span className="text-[11px] text-[color:var(--color-ink-3)]">CRM push blocked (confidential)</span>
             )}
           </div>
 
@@ -1336,10 +1375,13 @@ export const Review = memo(function Review({
             <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
               <ListTree size={12} /> Next steps
             </div>
-            {!nextStepsOpen && (
+            {!nextStepsOpen && !confidentialFlag && (
               <Chip onClick={() => void openNextSteps()} variant="accent">
                 <ListTree size={13} /> Book next steps
               </Chip>
+            )}
+            {confidentialFlag && (
+              <span className="text-[11px] text-[color:var(--color-ink-3)]">Task push blocked (confidential)</span>
             )}
           </div>
 

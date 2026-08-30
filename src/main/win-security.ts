@@ -164,6 +164,11 @@ type AclMemo = { path: string; dev: number; ino: number; mtimeMs: number; size: 
 // One slot: production probes exactly one path (adminManagedConfigPath()); a second path just evicts it.
 let aclMemo: AclMemo | null = null
 
+/** Test-only: drop the ACL verdict memo between cases that recreate the policy file or fake the clock. */
+export function resetAclMemoForTests(): void {
+  aclMemo = null
+}
+
 /** Trust verdict for the file `st` describes. `st` must be the caller's OWN stat/fstat of the file it is
  *  about to act on, so a memo can never be applied to a different file than the one that was probed. */
 function aclTrusted(path: string, st: Stats): boolean {

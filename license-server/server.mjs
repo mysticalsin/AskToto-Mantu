@@ -6,6 +6,7 @@ import { createStore } from './lib/store.mjs';
 import { createAuditLog } from './lib/audit.mjs';
 import { createBackupManager } from './lib/backups.mjs';
 import { createWebhooks } from './lib/webhooks.mjs';
+import { loadLeaseSigningKey } from './lib/lease.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -44,7 +45,12 @@ async function main() {
     expiryAlertDays: numberEnv('WEBHOOK_EXPIRY_ALERT_DAYS', 14),
   });
 
-  const app = createApp(store, auditLog, { webhooks, backups });
+  // Offline lease signing (lib/lease.mjs). Unset LICENSE_LEASE_PRIVATE_KEY -> no lease is ever
+  // issued and GET /license/pubkey 404s; every other route is completely unaffected.
+  const leaseSigningKey = loadLeaseSigningKey();
+  const leaseTtlMs = numberEnv('LICENSE_LEASE_TTL_DAYS', 14) * 24 * 60 * 60 * 1000;
+
+  const app = createApp(store, auditLog, { webhooks, backups, leaseSigningKey, leaseTtlMs });
 
   const httpServer = app.listen(PORT, () => {
     console.log(`[license-server] listening on port ${PORT}`);
@@ -52,6 +58,11 @@ async function main() {
     if (!process.env.LICENSE_ADMIN_TOKEN) {
       console.warn(
         '[license-server] LICENSE_ADMIN_TOKEN is not set — /admin/* routes will return 503 until it is configured.'
+      );
+    }
+    if (!leaseSigningKey) {
+      console.log(
+        '[license-server] LICENSE_LEASE_PRIVATE_KEY is not set — offline leases are disabled (activate/heartbeat unaffected).'
       );
     }
     backups.start();
