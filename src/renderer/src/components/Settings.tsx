@@ -65,6 +65,12 @@ import {
   type LucideIcon
 } from 'lucide-react'
 import { formatSavedTime, timeSavedFromTotals } from '@shared/time-saved'
+import {
+  OVERLAY_LAYOUTS,
+  OVERLAY_LAYOUT_COPY,
+  autoHideOverlayForLayout,
+  parseOverlayLayout
+} from '@shared/overlay-chrome'
 import { formatResetPhrase } from '@shared/reset-time'
 import {
   DEFAULT_SHORTCUTS,
@@ -5390,13 +5396,56 @@ export function Settings({
                     <MetisMark size={16} />
                     <span className="text-[12px] text-[color:var(--color-ink)]">This is how the overlay bar will look.</span>
                   </div>
-                  <ToggleRow
-                    label="Auto-hide overlay"
-                    desc="Collapse the bar to a slim strip at the top of the screen when you're not using it, and reveal it on hover. Never steals focus from the app you're in."
-                    on={settings.autoHideOverlay}
-                    onChange={(v) => patch({ autoHideOverlay: v })}
-                    disabled={settings.managedKeys.includes('autoHideOverlay')}
-                  />
+                  <div className="mt-3 px-1">
+                    <p className="m-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">Overlay chrome</p>
+                    <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                      How Métis sits on the desktop. Changes apply now — no reinstall.
+                    </p>
+                    <div
+                      role="radiogroup"
+                      aria-label="Overlay chrome"
+                      className="grid grid-cols-3 gap-1.5"
+                    >
+                      {OVERLAY_LAYOUTS.map((id) => {
+                        const selected = parseOverlayLayout(settings.overlayLayout) === id
+                        const locked = settings.managedKeys.includes('overlayLayout')
+                        return (
+                          <button
+                            key={id}
+                            type="button"
+                            role="radio"
+                            aria-checked={selected}
+                            disabled={locked}
+                            onClick={() =>
+                              patch({
+                                overlayLayout: id,
+                                autoHideOverlay: autoHideOverlayForLayout(id)
+                              })
+                            }
+                            className={
+                              'no-drag focus-ring rounded-[10px] border px-2 py-2 text-left ' +
+                              (selected
+                                ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]'
+                                : 'border-[var(--cl-border)] bg-white/[0.02] hover:bg-white/[0.05]') +
+                              (locked ? ' opacity-60' : '')
+                            }
+                          >
+                            <span className="block text-[12px] font-semibold text-[color:var(--cl-foreground)]">
+                              {OVERLAY_LAYOUT_COPY[id].title}
+                              {id === 'hide' ? (
+                                <span className="ml-1 text-[10px] font-medium text-[color:var(--cl-muted-foreground)]">
+                                  Default
+                                </span>
+                              ) : null}
+                            </span>
+                            <span className="mt-0.5 block text-[10px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                              {OVERLAY_LAYOUT_COPY[id].desc}
+                            </span>
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
                 </Section>
                 <Section
                   title="Language"

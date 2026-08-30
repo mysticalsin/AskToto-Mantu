@@ -31,6 +31,7 @@ import {
   isRevealed as isOverlayRevealed,
   reduceAutoHide
 } from './lib/overlay-autohide'
+import { overlayRestsHidden, overlayUsesHover, parseOverlayLayout } from '@shared/overlay-chrome'
 import { useListen, playListenChime } from './lib/listen'
 import { transcriptToText, recapPersistAction } from './lib/transcript'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
@@ -506,8 +507,9 @@ export function App(): JSX.Element {
   // it, then reveals the full bar on hover or on an important event. Reveal/collapse are PURE content
   // resizes of the always-on-top window (never show()/focus()), so the user's foreground app keeps focus
   // — the non-activating notch contract. The pure state machine lives in lib/overlay-autohide.ts.
-  const autoHideSetting = settings?.autoHideOverlay ?? true
-  // Auto-hide is in effect only in the plain idle bar surface: the setting is on, the overlay isn't
+  const overlayLayout = parseOverlayLayout(settings?.overlayLayout)
+  const autoHideSetting = overlayUsesHover(overlayLayout)
+  // Hover chrome (hide / island) is in effect only in the plain idle bar surface: the overlay isn't
   // collapsed to the control mini-pill, onboarding is finished, and the default bar view is showing with
   // no answer/capture/meeting in flight. Every other surface (answers, the settings/history/review/agenda
   // panels, the mini-pill, onboarding) stays fully shown.
@@ -3237,9 +3239,12 @@ export function App(): JSX.Element {
           />
         </div>
       ) : overlayPeeked ? (
-        // Auto-hide resting state: the slim top-center peek strip. The window hugs it (data-hug-width),
-        // so it sits as a small notch at the top edge; hovering the root reveals the full bar below.
-        <OverlayPeek onReveal={revealOverlay} stealth={settings?.contentProtection ?? true} />
+        // Hide: invisible top hit target. Island: visible peek capsule. Window hugs it (data-hug-width).
+        <OverlayPeek
+          rest={overlayRestsHidden(overlayLayout) ? 'hide' : 'island'}
+          onReveal={revealOverlay}
+          stealth={settings?.contentProtection ?? true}
+        />
       ) : (
         <>
           {/* overlay-reveal springs the bar down when it expands from the peek (idle auto-hide surface

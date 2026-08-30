@@ -13,14 +13,18 @@ import { memo } from 'react'
  */
 export const OverlayPeek = memo(function OverlayPeek({
   onReveal,
-  stealth
+  stealth,
+  rest = 'island'
 }: {
   /** Reveal on an explicit click (keyboard/click fallback to the hover reveal the container handles). */
   onReveal: () => void
   /** contentProtection is on (overlay hidden from screen capture) — carry a contained multi-colour hint
    *  so the "invisible" cue survives into the peek without the full halo the wide bar can afford. */
   stealth: boolean
+  /** `hide` is a fully hidden hit target. `island` is the always-visible peek. */
+  rest?: 'hide' | 'island'
 }): JSX.Element {
+  const hidden = rest === 'hide'
   return (
     <div className="flex w-full justify-center">
       <button
@@ -31,8 +35,8 @@ export const OverlayPeek = memo(function OverlayPeek({
         title="Show Métis"
         aria-label="Show Métis"
         className={[
-          'overlay-peek no-drag focus-ring',
-          stealth ? 'overlay-peek--stealth' : ''
+          hidden ? 'overlay-hide-target no-drag focus-ring' : 'overlay-peek no-drag focus-ring',
+          !hidden && stealth ? 'overlay-peek--stealth' : ''
         ].join(' ')}
       >
         {/* Three-dot grip reads as a pull-down handle without any text or icon weight. */}
