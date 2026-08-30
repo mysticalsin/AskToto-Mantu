@@ -713,6 +713,28 @@ input::placeholder {
     radial-gradient(1200px 700px at 18% 12%, color-mix(in srgb, #9a2bf0 42%, transparent), transparent 58%),
     radial-gradient(900px 600px at 88% 78%, color-mix(in srgb, #7f00da 36%, transparent), transparent 55%),
     linear-gradient(165deg, #3a0b6b 0%, #7f00da 42%, #2a0848 100%);
+  clip-path: circle(8% at 50% 0%);
+  animation: onboard-portal-open 620ms ease-out forwards;
+  will-change: clip-path;
+}
+@keyframes onboard-portal-open {
+  from {
+    clip-path: circle(8% at 50% 0%);
+  }
+  to {
+    clip-path: circle(160% at 50% 0%);
+  }
+}
+@keyframes onboard-portal-close {
+  from {
+    clip-path: circle(160% at 50% 0%);
+  }
+  to {
+    clip-path: circle(6% at 50% 0%);
+  }
+}
+.onboard-stage--portal-close {
+  animation: onboard-portal-close 620ms ease-in forwards;
 }
 
 /* Living stripe wash — compositor-only rotate. No filter:blur orbs. */
@@ -770,6 +792,11 @@ input::placeholder {
   }
 }
 @media (prefers-reduced-motion: reduce) {
+  .onboard-stage,
+  .onboard-stage--portal-close {
+    animation: none;
+    clip-path: none;
+  }
   .onboard-stripes,
   .onboard-stripes--b {
     animation: none;
@@ -851,6 +878,20 @@ input::placeholder {
   font-weight: 500;
   color: #f4f4f5;
   cursor: pointer;
+}
+/* Hero Skip: quieter than Get Started. Never a raw text link. */
+.onboard-skip-chip {
+  min-height: 34px;
+  padding: 0 14px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: rgba(244, 244, 245, 0.68);
+}
+.onboard-skip-chip:hover {
+  color: rgba(244, 244, 245, 0.88);
+}
+.onboard-skip-screen {
+  width: min(100%, 480px);
 }
 
 /* Act 4: tell-the-room consent moment. One glass card, not a banner. */

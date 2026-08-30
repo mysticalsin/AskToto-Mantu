@@ -12,18 +12,20 @@ const experienceSrc = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 
 const settingsSrc = readFileSync(join(__dirname, 'Settings.tsx'), 'utf8')
 
 describe('MQA-283 — the narrative experience now ends at Ready, not a legacy provider handoff', () => {
-  it('OnboardingV2 no longer has a "provider" phase — only experience and legacy-full', () => {
-    expect(experienceSrc).toMatch(/useState<'experience' \| 'legacy-full'>\('experience'\)/)
-    expect(experienceSrc).not.toMatch(/'experience' \| 'provider' \| 'legacy-full'/)
+  it('OnboardingV2 no longer has a provider or legacy-full phase', () => {
+    expect(experienceSrc).not.toMatch(/legacy-full/)
     expect(experienceSrc).not.toMatch(/setPhase\('provider'\)/)
+    expect(experienceSrc).not.toMatch(/<Onboarding[\s>]/)
+    expect(experienceSrc).toMatch(/<OnboardingExperience/)
   })
 
   it('OnboardingV2 marks onboardingDone itself inside the experience\'s onDone, not via a provider phase', () => {
     expect(experienceSrc).toMatch(/onboardingDone: true, onboardingDoneAt: Date\.now\(\)/)
   })
 
-  it('the legacy Onboarding is only entered at step 1 now (the Skip path) — never step 5', () => {
-    expect(experienceSrc).toMatch(/initialStep=\{1\}/)
+  it('Skip stays on the exclusive stage and does not mount legacy Onboarding.tsx', () => {
+    expect(experienceSrc).toMatch(/setScene\('skip'\)/)
+    expect(experienceSrc).not.toMatch(/from '\.\/Onboarding'/)
     expect(experienceSrc).not.toMatch(/initialStep=\{phase === 'legacy-full' \? 1 : 5\}/)
   })
 

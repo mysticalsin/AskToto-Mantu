@@ -19,7 +19,15 @@
  * `ActReady` in OnboardingExperience.tsx), never a gate.
  */
 
-export type OnboardingScene = 'hero' | 'problem' | 'reveal' | 'setup' | 'personalize' | 'license' | 'ready'
+export type OnboardingScene =
+  | 'hero'
+  | 'problem'
+  | 'reveal'
+  | 'setup'
+  | 'personalize'
+  | 'license'
+  | 'ready'
+  | 'skip'
 
 /** setup's Continue always lands on personalize now — license (when enabled) has moved to sit AFTER
  *  personalize instead of between setup and personalize. */
