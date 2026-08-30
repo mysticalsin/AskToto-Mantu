@@ -137,6 +137,34 @@ const clearAllKeys = () =>
 
 const uid = (() => { let n = 0; return (p) => `qa-${p}-${Date.now()}-${n++}` })()
 
+/**
+ * Arm the on-device answer floor the way a user would (Settings → Local AI: enable + turn on fallback),
+ * and report whether it can ACTUALLY serve on this profile. The floor gates in llm/local-routing.ts
+ * (localFallbackEligibleFor / localAnswerFloorEligibleFor) require BOTH the user toggle
+ * (localLlm.enabled + localLlm.fallback) AND localBaseReady(): the llama-server sidecar binary, the
+ * downloaded weights, and enough RAM. Weights-on-disk is NOT enough — a dev/unpackaged build ships no
+ * sidecar (resources/llama is absent), so localReady stays false even with the toggle on and the floor
+ * genuinely cannot answer. The old `localModelReady` guard only tracked the weights DOWNLOAD, so it let
+ * every "answered on-device" check assert against a build where the floor could never run: the harness
+ * measuring the wrong thing (same defect class as MQA-255). Two additional facts these checks depend on:
+ *  1. Nothing routes to local on a fully-default profile — useFor and fallback both ship OFF — so a
+ *     zero-key ask correctly ERRORS ("add an API key") unless the floor is armed first. Asserting an
+ *     on-device answer without arming the floor could only ever pass by accident.
+ *  2. Arming is a live settings patch; callers MUST `await restore()` in a finally so a later check in
+ *     the same run does not inherit an armed floor.
+ * Returns { ready, restore }: gate the on-device assertions on `ready`, downgrade to { __info } when it
+ * is false, and always restore.
+ */
+async function armLocalFloor() {
+  const prev = (await settings()).localLlm
+  await patch({ localLlm: { ...prev, enabled: true, fallback: true } })
+  const ready = (await settings()).localReady === true
+  return { ready, restore: () => patch({ localLlm: prev }) }
+}
+
+const FLOOR_UNAVAILABLE =
+  'not exercised — the on-device answer floor cannot serve on this profile: even with Local AI armed (enabled + fallback), localReady is false because this build ships no llama-server sidecar (resources/llama is absent) — only the Qwen weights are provisioned. Run against a packaged build to cover the on-device floor.'
+
 // ── Groups ────────────────────────────────────────────────────────────────────────────────────────
 
 async function groupBoot() {
@@ -380,31 +408,35 @@ async function groupAsk() {
   const g = 'ask'
   await clearAllKeys()
   await check(g, 'suggest answers on-device with zero API keys configured', async () => {
-    const r = await ask({
-      id: uid('suggest'), mode: 'suggest', prompt: '',
-      transcript: 'THEM: What does your pricing look like for a 500-seat rollout?', history: []
-    })
-    // The on-device floor cannot catch anything until the weights exist. Ordered BEFORE the error
-    // assert on purpose: a first-run profile with no cloud key legitimately errors here, and the
-    // assert firing first turned that into a red line about the app (MQA-255 missed exactly this).
-    if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so nothing can serve this yet; re-run once first-run setup finishes' }
-    assert(!r.error, `errored: ${r.error}`)
-    // "Zero API keys" cannot be arranged on a machine that exports provider keys in its ENVIRONMENT:
-    // store.ts's getApiKey reads process.env[ENV_VAR[provider]] BEFORE the profile store, so the app
-    // inherits a real, working key no isolated profile can remove. A cloud provider answering here is
-    // then the DESIGNED behaviour, and calling it red would be wrong about the product rather than
-    // informative about it.
-    // Ask the APP which keys it still has, not this shell which keys IT exports. The two are different
-    // processes: the app is frequently launched with provider vars unset even when the suite inherits
-    // them, and reading process.env here downgraded three checks that were genuinely exercising the
-    // zero-key path. Same defect class as MQA-255 — measuring the harness instead of the build.
-    const stuck = await stubbornKeys()
-    if (stuck.length) {
-      return { __info: `not exercised — the app still reports keys for ${stuck.join(', ')} after clearAllKeys(); they come from its ENVIRONMENT (getApiKey reads process.env before the profile store), so no isolated profile can remove them — relaunch the app with those vars unset to cover the zero-key path` }
+    // Arm the floor first (a default profile never routes to local — see armLocalFloor). If the build
+    // cannot actually run local (no sidecar), say so honestly instead of asserting an answer it can't give.
+    const floor = await armLocalFloor()
+    try {
+      if (!floor.ready) return { __info: FLOOR_UNAVAILABLE }
+      const r = await ask({
+        id: uid('suggest'), mode: 'suggest', prompt: '',
+        transcript: 'THEM: What does your pricing look like for a 500-seat rollout?', history: []
+      })
+      // "Zero API keys" cannot be arranged on a machine that exports provider keys in its ENVIRONMENT:
+      // store.ts's getApiKey reads process.env[ENV_VAR[provider]] BEFORE the profile store, so the app
+      // inherits a real, working key no isolated profile can remove. A cloud provider answering here is
+      // then the DESIGNED behaviour, and calling it red would be wrong about the product rather than
+      // informative about it.
+      // Ask the APP which keys it still has, not this shell which keys IT exports. The two are different
+      // processes: the app is frequently launched with provider vars unset even when the suite inherits
+      // them, and reading process.env here downgraded three checks that were genuinely exercising the
+      // zero-key path. Same defect class as MQA-255 — measuring the harness instead of the build.
+      const stuck = await stubbornKeys()
+      if (stuck.length) {
+        return { __info: `not exercised — the app still reports keys for ${stuck.join(', ')} after clearAllKeys(); they come from its ENVIRONMENT (getApiKey reads process.env before the profile store), so no isolated profile can remove them — relaunch the app with those vars unset to cover the zero-key path` }
+      }
+      assert(!r.error, `errored: ${r.error}`)
+      assert(r.providers.at(-1) === 'local', `answered by ${r.providers.at(-1)}, expected local`)
+      assert(r.text.trim().length > 0, 'empty answer')
+      return { walk: r.providers, ms: r.doneAt, chars: r.text.length }
+    } finally {
+      await floor.restore()
     }
-    assert(r.providers.at(-1) === 'local', `answered by ${r.providers.at(-1)}, expected local`)
-    assert(r.text.trim().length > 0, 'empty answer')
-    return { walk: r.providers, ms: r.doneAt, chars: r.text.length }
   })
   await check(g, 'an in-flight ask can be cancelled without leaving the stream stuck', async () => {
     const id = uid('cancel')
@@ -428,29 +460,33 @@ async function groupAsk() {
   // ever fail — a check that can never pass is worse than none, because it trains people to ignore the
   // suite. Asserts the current contract instead, which is the stronger claim.
   await check(g, 'answer mode falls to the on-device floor rather than dead-ending (MQA-122/MQA-123)', async () => {
-    const r = await ask({ id: uid('answer'), mode: 'answer', prompt: 'What is our renewal risk?', history: [] }, 180000)
-    assert(!r.error || !/TIMEOUT/.test(r.error), 'answer mode HUNG instead of reaching the on-device floor')
-    // The on-device floor cannot catch anything until the weights exist. Ordered BEFORE the error
-    // assert on purpose: a first-run profile with no cloud key legitimately errors here, and the
-    // assert firing first turned that into a red line about the app (MQA-255 missed exactly this).
-    if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so nothing can serve this yet; re-run once first-run setup finishes' }
-    assert(!r.error, `answer mode dead-ended instead of falling to local: "${r.error}"`)
-    // "Zero API keys" cannot be arranged on a machine that exports provider keys in its ENVIRONMENT:
-    // store.ts's getApiKey reads process.env[ENV_VAR[provider]] BEFORE the profile store, so the app
-    // inherits a real, working key no isolated profile can remove. A cloud provider answering here is
-    // then the DESIGNED behaviour, and calling it red would be wrong about the product rather than
-    // informative about it.
-    // Ask the APP which keys it still has, not this shell which keys IT exports. The two are different
-    // processes: the app is frequently launched with provider vars unset even when the suite inherits
-    // them, and reading process.env here downgraded three checks that were genuinely exercising the
-    // zero-key path. Same defect class as MQA-255 — measuring the harness instead of the build.
-    const stuck = await stubbornKeys()
-    if (stuck.length) {
-      return { __info: `not exercised — the app still reports keys for ${stuck.join(', ')} after clearAllKeys(); they come from its ENVIRONMENT (getApiKey reads process.env before the profile store), so no isolated profile can remove them — relaunch the app with those vars unset to cover the zero-key path` }
+    // answer is OUT of local's normal v1 scope; only the absolute floor (localAnswerFloorEligibleFor)
+    // can serve it, and that too is gated on localLlm.fallback + localBaseReady. Arm it, or say why not.
+    const floor = await armLocalFloor()
+    try {
+      if (!floor.ready) return { __info: FLOOR_UNAVAILABLE }
+      const r = await ask({ id: uid('answer'), mode: 'answer', prompt: 'What is our renewal risk?', history: [] }, 180000)
+      assert(!r.error || !/TIMEOUT/.test(r.error), 'answer mode HUNG instead of reaching the on-device floor')
+      // "Zero API keys" cannot be arranged on a machine that exports provider keys in its ENVIRONMENT:
+      // store.ts's getApiKey reads process.env[ENV_VAR[provider]] BEFORE the profile store, so the app
+      // inherits a real, working key no isolated profile can remove. A cloud provider answering here is
+      // then the DESIGNED behaviour, and calling it red would be wrong about the product rather than
+      // informative about it.
+      // Ask the APP which keys it still has, not this shell which keys IT exports. The two are different
+      // processes: the app is frequently launched with provider vars unset even when the suite inherits
+      // them, and reading process.env here downgraded three checks that were genuinely exercising the
+      // zero-key path. Same defect class as MQA-255 — measuring the harness instead of the build.
+      const stuck = await stubbornKeys()
+      if (stuck.length) {
+        return { __info: `not exercised — the app still reports keys for ${stuck.join(', ')} after clearAllKeys(); they come from its ENVIRONMENT (getApiKey reads process.env before the profile store), so no isolated profile can remove them — relaunch the app with those vars unset to cover the zero-key path` }
+      }
+      assert(!r.error, `answer mode dead-ended instead of falling to local: "${r.error}"`)
+      assert(r.providers.at(-1) === 'local', `expected the on-device floor to serve it, got ${r.providers.at(-1)}`)
+      assert(r.text.trim().length > 0, 'the on-device floor answered with no text at all')
+      return { provider: r.providers.at(-1), chars: r.text.length, ms: r.doneAt }
+    } finally {
+      await floor.restore()
     }
-    assert(r.providers.at(-1) === 'local', `expected the on-device floor to serve it, got ${r.providers.at(-1)}`)
-    assert(r.text.trim().length > 0, 'the on-device floor answered with no text at all')
-    return { provider: r.providers.at(-1), chars: r.text.length, ms: r.doneAt }
   })
   await check(g, 'resetAskContext clears conversation state without throwing', async () => {
     await page.evaluate(() => window.toto.resetAskContext())
@@ -479,55 +515,64 @@ async function groupDegrade() {
   await clearAllKeys()
 
   await check(g, 'BASELINE: no keys at all → in-scope ask still served on-device', async () => {
-    const r = await ask({ id: uid('base'), mode: 'suggest', prompt: '', transcript: 'THEM: can you send pricing?', history: [] })
-    // The on-device floor cannot catch anything until the weights exist. Ordered BEFORE the error
-    // assert on purpose: a first-run profile with no cloud key legitimately errors here, and the
-    // assert firing first turned that into a red line about the app (MQA-255 missed exactly this).
-    if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so nothing can serve this yet; re-run once first-run setup finishes' }
-    assert(!r.error, `errored: ${r.error}`)
-    assert(r.providers.at(-1) === 'local', `served by ${r.providers.at(-1)}`)
-    return { walk: r.providers }
+    // With zero keys, ONLY the armed on-device floor can serve this — arm it, or report the build can't.
+    const floor = await armLocalFloor()
+    try {
+      if (!floor.ready) return { __info: FLOOR_UNAVAILABLE }
+      const r = await ask({ id: uid('base'), mode: 'suggest', prompt: '', transcript: 'THEM: can you send pricing?', history: [] })
+      assert(!r.error, `errored: ${r.error}`)
+      assert(r.providers.at(-1) === 'local', `served by ${r.providers.at(-1)}`)
+      return { walk: r.providers }
+    } finally {
+      await floor.restore()
+    }
   })
 
   await check(g, 'DEAD PRIMARY KEY (DeepSeek 401) → walks off it and still answers', async () => {
     await page.evaluate((k) => window.toto.setApiKey('deepseek', k), DEAD_DEEPSEEK)
     await patch({ provider: 'deepseek' })
-    const r = await ask({ id: uid('dead1'), mode: 'suggest', prompt: '', transcript: 'THEM: what is the renewal price?', history: [] })
-    // The on-device floor cannot catch anything until the weights exist. Ordered BEFORE the error
-    // assert on purpose: a first-run profile with no cloud key legitimately errors here, and the
-    // assert firing first turned that into a red line about the app (MQA-255 missed exactly this).
-    if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so nothing can serve this yet; re-run once first-run setup finishes' }
-    assert(!r.error, `dead key killed the ask outright: ${r.error}`)
-    assert(r.providers[0] === 'deepseek', `did not try the configured primary first (walk: ${r.providers})`)
-    assert(r.providers.at(-1) !== 'deepseek', 'never left the dead provider')
-    assert(r.text.trim().length > 0, 'no answer text after failover')
-    return { walk: r.providers, servedBy: r.providers.at(-1), ms: r.doneAt }
+    // The walk can only "still answer" if there is a live route to land on. With only a dead cloud key,
+    // that route is the armed on-device floor — arm it, or report the build has no floor to walk to.
+    const floor = await armLocalFloor()
+    try {
+      if (!floor.ready) return { __info: FLOOR_UNAVAILABLE }
+      const r = await ask({ id: uid('dead1'), mode: 'suggest', prompt: '', transcript: 'THEM: what is the renewal price?', history: [] })
+      assert(!r.error, `dead key killed the ask outright: ${r.error}`)
+      assert(r.providers[0] === 'deepseek', `did not try the configured primary first (walk: ${r.providers})`)
+      assert(r.providers.at(-1) !== 'deepseek', 'never left the dead provider')
+      assert(r.text.trim().length > 0, 'no answer text after failover')
+      return { walk: r.providers, servedBy: r.providers.at(-1), ms: r.doneAt }
+    } finally {
+      await floor.restore()
+    }
   })
 
   await check(g, 'DEAD PRIMARY + DEAD NIM → walks both, still answers on-device', async () => {
     await page.evaluate((k) => window.toto.setApiKey('nvidia', k), DEAD_NVIDIA)
-    const r = await ask({ id: uid('dead2'), mode: 'suggest', prompt: '', transcript: 'THEM: send me the quote please', history: [] })
-    // The on-device floor cannot catch anything until the weights exist. Ordered BEFORE the error
-    // assert on purpose: a first-run profile with no cloud key legitimately errors here, and the
-    // assert firing first turned that into a red line about the app (MQA-255 missed exactly this).
-    if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so nothing can serve this yet; re-run once first-run setup finishes' }
-    assert(!r.error, `errored with two dead keys: ${r.error}`)
-    // "Zero API keys" cannot be arranged on a machine that exports provider keys in its ENVIRONMENT:
-    // store.ts's getApiKey reads process.env[ENV_VAR[provider]] BEFORE the profile store, so the app
-    // inherits a real, working key no isolated profile can remove. A cloud provider answering here is
-    // then the DESIGNED behaviour, and calling it red would be wrong about the product rather than
-    // informative about it.
-    // Ask the APP which keys it still has, not this shell which keys IT exports. The two are different
-    // processes: the app is frequently launched with provider vars unset even when the suite inherits
-    // them, and reading process.env here downgraded three checks that were genuinely exercising the
-    // zero-key path. Same defect class as MQA-255 — measuring the harness instead of the build.
-    const stuck = await stubbornKeys()
-    if (stuck.length) {
-      return { __info: `not exercised — the app still reports keys for ${stuck.join(', ')} after clearAllKeys(); they come from its ENVIRONMENT (getApiKey reads process.env before the profile store), so no isolated profile can remove them — relaunch the app with those vars unset to cover the zero-key path` }
+    const floor = await armLocalFloor()
+    try {
+      if (!floor.ready) return { __info: FLOOR_UNAVAILABLE }
+      const r = await ask({ id: uid('dead2'), mode: 'suggest', prompt: '', transcript: 'THEM: send me the quote please', history: [] })
+      // "Zero API keys" cannot be arranged on a machine that exports provider keys in its ENVIRONMENT:
+      // store.ts's getApiKey reads process.env[ENV_VAR[provider]] BEFORE the profile store, so the app
+      // inherits a real, working key no isolated profile can remove. A cloud provider answering here is
+      // then the DESIGNED behaviour, and calling it red would be wrong about the product rather than
+      // informative about it.
+      // Ask the APP which keys it still has, not this shell which keys IT exports. The two are different
+      // processes: the app is frequently launched with provider vars unset even when the suite inherits
+      // them, and reading process.env here downgraded three checks that were genuinely exercising the
+      // zero-key path. Same defect class as MQA-255 — measuring the harness instead of the build.
+      const stuck = (await stubbornKeys()).filter((p) => p !== 'deepseek' && p !== 'nvidia')
+      if (stuck.length) {
+        return { __info: `not exercised — the app still reports keys for ${stuck.join(', ')} after clearAllKeys(); they come from its ENVIRONMENT (getApiKey reads process.env before the profile store), so no isolated profile can remove them — relaunch the app with those vars unset to cover the zero-key path` }
+      }
+      assert(!r.error, `errored with two dead keys: ${r.error}`)
+      assert(r.providers.at(-1) === 'local', `final provider ${r.providers.at(-1)}, expected local`)
+      assert(r.providers.includes('deepseek'), 'primary was skipped entirely')
+      return { walk: r.providers, servedBy: r.providers.at(-1), ms: r.doneAt }
+    } finally {
+      await floor.restore()
     }
-    assert(r.providers.at(-1) === 'local', `final provider ${r.providers.at(-1)}, expected local`)
-    assert(r.providers.includes('deepseek'), 'primary was skipped entirely')
-    return { walk: r.providers, servedBy: r.providers.at(-1), ms: r.doneAt }
   })
 
   await check(g, 'DEAD KEYS: is the DEAD provider re-tried first on every single ask? (cooldown check)', async () => {
@@ -592,14 +637,17 @@ async function groupDegrade() {
 
   await check(g, 'RECOVERY: clearing the dead key restores a clean walk', async () => {
     await clearAllKeys()
-    const r = await ask({ id: uid('recover'), mode: 'suggest', prompt: '', transcript: 'THEM: ok, next steps?', history: [] })
-    // The on-device floor cannot catch anything until the weights exist. Ordered BEFORE the error
-    // assert on purpose: a first-run profile with no cloud key legitimately errors here, and the
-    // assert firing first turned that into a red line about the app (MQA-255 missed exactly this).
-    if (!localModelReady) return { __info: 'not exercised — the on-device weights are still downloading, so nothing can serve this yet; re-run once first-run setup finishes' }
-    assert(!r.error, `errored after cleanup: ${r.error}`)
-    assert(!r.providers.includes('deepseek'), 'still trying the removed provider')
-    return { walk: r.providers }
+    // Cleared every key, so again only the armed on-device floor can answer — arm it, or report no floor.
+    const floor = await armLocalFloor()
+    try {
+      if (!floor.ready) return { __info: FLOOR_UNAVAILABLE }
+      const r = await ask({ id: uid('recover'), mode: 'suggest', prompt: '', transcript: 'THEM: ok, next steps?', history: [] })
+      assert(!r.error, `errored after cleanup: ${r.error}`)
+      assert(!r.providers.includes('deepseek'), 'still trying the removed provider')
+      return { walk: r.providers }
+    } finally {
+      await floor.restore()
+    }
   })
 }
 
@@ -1514,16 +1562,22 @@ async function groupLatency() {
   })
 
   await check(g, 'an on-device ask answers within the on-device budget', async () => {
-    if (!localModelReady) return { __info: 'not exercised — on-device weights were still downloading at boot' }
-    const r = await ask({
-      id: `qa-lat-local-${Date.now()}`,
-      mode: 'suggest',
-      prompt: 'Summarise the last meeting in one sentence.'
-    }, 240000)
-    if (r.error) return { __info: `not exercised — the ask failed (${String(r.error).slice(0, 90)})` }
-    // Generous on purpose: this runs on whatever CPU/GPU the machine has, often while indexing.
-    assert(r.doneAt < 180000, `on-device ask took ${Math.round(r.doneAt / 1000)}s`)
-    return { ms: r.doneAt, via: r.providers[r.providers.length - 1] }
+    // Arm the floor so this actually times on-device inference rather than an unarmed no-provider error.
+    const floor = await armLocalFloor()
+    try {
+      if (!floor.ready) return { __info: FLOOR_UNAVAILABLE }
+      const r = await ask({
+        id: `qa-lat-local-${Date.now()}`,
+        mode: 'suggest',
+        prompt: 'Summarise the last meeting in one sentence.'
+      }, 240000)
+      if (r.error) return { __info: `not exercised — the ask failed (${String(r.error).slice(0, 90)})` }
+      // Generous on purpose: this runs on whatever CPU/GPU the machine has, often while indexing.
+      assert(r.doneAt < 180000, `on-device ask took ${Math.round(r.doneAt / 1000)}s`)
+      return { ms: r.doneAt, via: r.providers[r.providers.length - 1] }
+    } finally {
+      await floor.restore()
+    }
   })
 
   await check(g, 'the configured cloud provider answers within a cloud budget', async () => {
