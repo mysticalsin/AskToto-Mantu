@@ -153,12 +153,14 @@ import {
   overlayRestSize,
   parkAfterExclusiveOnboarding,
   shouldIgnoreResizeWhilePeekResting,
+  shouldParkHoverRestAfterLeavingSurface,
   topCenterPosition,
   topClamp
 } from './island/geometry'
 import {
   CURSOR_WATCH_INTERVAL_MS,
   decideCursorWatch,
+  pointInRect,
   shouldWatchOverlayCursor
 } from './island/cursor-watch'
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
@@ -1707,10 +1709,10 @@ function resizeTo(height: number): void {
   if (h === b.height && currentWidth === b.width) {
     // Only remember this height for restore-on-expand when it's the real bar, not the mini-pill's
     // much shorter content — see isMinimized comment above.
-    if (!isMinimized) lastBarHeight = h
+    if (!isMinimized && !islandResting) lastBarHeight = h
     return // idempotent — skip a no-op setBounds (belt-and-braces with the renderer-side resize dedup)
   }
-  if (!isMinimized) lastBarHeight = h
+  if (!isMinimized && !islandResting) lastBarHeight = h
   // Resting hide/island stay at hoverRestTop (island hit). Revealed chrome sits at islandSafeTop
   // (below the notch). Do not fight macOS by writing y=0 on the full bar every tick.
   const metrics = getDisplayMetrics(display)
@@ -1727,9 +1729,30 @@ function setMinimizedWidth(narrow: boolean): void {
   if (onboardingExclusiveLive()) return
   // Flip BEFORE resizeTo so the pill's own resize reports (while narrow) never clobber lastBarHeight,
   // and so expanding restores the last real bar height instead of the pill's tiny one.
-  isMinimized = narrow
-  currentWidth = narrow ? PILL_WIDTH : BAR_WIDTH
-  resizeTo(lastBarHeight) // re-apply immediately so width + recenter land before the renderer re-measures
+  if (narrow) {
+    islandResting = false
+    isMinimized = true
+    currentWidth = PILL_WIDTH
+    resizeTo(lastBarHeight)
+    return
+  }
+  const leavingPill = isMinimized
+  isMinimized = false
+  // Leaving the pill on Hide/island with the pointer outside the island/bar must PARK the rest
+  // (Tony live: 560×103 stub at Y=39). The pill itself is not the bar.
+  if (
+    shouldParkHoverRestAfterLeavingSurface({
+      layout: liveOverlayLayout(),
+      pointerInIslandOrBar: pointerInIslandOrBar({ ignoreWindow: leavingPill })
+    })
+  ) {
+    overlayCursorWatchHovering = false
+    parkOverlayAfterHideSpring()
+    notifyOverlayCursorHover(false)
+    return
+  }
+  currentWidth = BAR_WIDTH
+  resizeTo(lastBarHeight)
 }
 
 /**
@@ -1797,26 +1820,57 @@ function tickOverlayCursorWatch(): void {
   if (decision === 'reveal' && !overlayCursorWatchHovering) {
     overlayCursorWatchHovering = true
     restoreBarWidth()
-    try {
-      win.webContents.send(IPC.overlayCursorHover, { hovering: true })
-    } catch {
-      /* renderer gone */
-    }
+    notifyOverlayCursorHover(true)
   } else if (decision === 'stay') {
     /* never setBounds on a stay tick — that was the 40fps hide/reveal stutter */
   } else if (decision === 'hide' && overlayCursorWatchHovering) {
     overlayCursorWatchHovering = false
-    const park = parkAfterExclusiveOnboarding(layout, m, ISLAND_TOP_MARGIN)
-    currentWidth = park.width
-    islandResting = overlayUsesHover(layout)
-    userAnchorY = park.y
-    win.setBounds(park, false)
-    try {
-      win.webContents.send(IPC.overlayCursorHover, { hovering: false })
-    } catch {
-      /* renderer gone */
-    }
+    // Do not park on this tick — the renderer plays the hide spring first, then overlayParkAfterHide.
+    notifyOverlayCursorHover(false)
   }
+}
+
+function notifyOverlayCursorHover(hovering: boolean): void {
+  if (!win || win.isDestroyed()) return
+  try {
+    win.webContents.send(IPC.overlayCursorHover, { hovering })
+  } catch {
+    /* renderer gone */
+  }
+}
+
+/** Island strip or the revealed bar — not the ControlPill. Used when leaving pill/Settings. */
+function pointerInIslandOrBar(opts?: { ignoreWindow?: boolean }): boolean {
+  if (!win || win.isDestroyed()) return false
+  const display = screen.getDisplayMatching(win.getBounds())
+  const m = getDisplayMetrics(display)
+  const layout = liveOverlayLayout()
+  const rest = hoverWatchRestRect(layout, m)
+  const cursor = screen.getCursorScreenPoint()
+  if (pointInRect(cursor, rest)) return true
+  // The pill window is not the bar. Expanding it must not count as "pointer in bar".
+  if (opts?.ignoreWindow || isMinimized || islandResting) return false
+  return (
+    decideCursorWatch({
+      cursor,
+      restRect: rest,
+      revealedRect: win.getBounds(),
+      revealed: true
+    }) === 'stay'
+  )
+}
+
+function parkOverlayAfterHideSpring(): void {
+  if (!win || win.isDestroyed() || onboardingExclusiveLive()) return
+  if (overlayCursorWatchHovering) return
+  const layout = liveOverlayLayout()
+  if (!overlayUsesHover(layout)) return
+  const display = screen.getDisplayMatching(win.getBounds())
+  const park = parkAfterExclusiveOnboarding(layout, getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+  currentWidth = park.width
+  islandResting = true
+  userAnchorY = park.y
+  win.setBounds(park, false)
 }
 
 function islandTopCenter(width: number, display: Electron.Display, topMargin: number): { x: number; y: number } {
@@ -1831,6 +1885,13 @@ function anchorTopCenter(): void {
   if (!win) return
   if (onboardingExclusiveLive()) {
     applyExclusiveOnboardingStage(win)
+    return
+  }
+  // Hide/island already parked: re-apply the rest rect. Do not slide a hide rest down to
+  // islandSafeTop (~39) — that was the 560×103 stub at Y=39.
+  if (islandResting && overlayUsesHover(liveOverlayLayout())) {
+    overlayCursorWatchHovering = false
+    parkOverlayAfterHideSpring()
     return
   }
   const display = screen.getDisplayMatching(win.getBounds())
@@ -2910,13 +2971,29 @@ function registerIpc(): void {
     if (cur.overlayLayout !== next.overlayLayout && next.onboardingDone && win && !win.isDestroyed() && !onboardingExclusiveLive()) {
       const layout = parseOverlayLayout(next.overlayLayout)
       if (overlayUsesHover(layout)) {
-        const display = screen.getDisplayMatching(win.getBounds())
-        const park = parkAfterExclusiveOnboarding(layout, getDisplayMetrics(display), ISLAND_TOP_MARGIN)
-        currentWidth = park.width
-        islandResting = true
-        userAnchorY = park.y
-        win.setBounds(park, false)
         startOverlayCursorWatch()
+        // Park now only when the pointer is out of the island/bar and this is not an open
+        // Settings panel (tall window). The renderer parks on idle if Settings is still open.
+        const display = screen.getDisplayMatching(win.getBounds())
+        const metrics = getDisplayMetrics(display)
+        const rest = overlayRestSize(layout, metrics)
+        const openPanel = win.getBounds().height > rest.height + 80
+        if (
+          !isMinimized &&
+          !openPanel &&
+          shouldParkHoverRestAfterLeavingSurface({
+            layout,
+            pointerInIslandOrBar: pointerInIslandOrBar()
+          })
+        ) {
+          overlayCursorWatchHovering = false
+          const park = parkAfterExclusiveOnboarding(layout, metrics, ISLAND_TOP_MARGIN)
+          currentWidth = park.width
+          islandResting = true
+          userAnchorY = park.y
+          win.setBounds(park, false)
+          notifyOverlayCursorHover(false)
+        }
       } else {
         stopOverlayCursorWatch()
         restoreBarWidth()
@@ -5778,6 +5855,10 @@ function registerIpc(): void {
   ipcMain.handle(IPC.windowRevealWidth, (e) => {
     assertMainWindow(e)
     restoreBarWidth()
+  })
+  ipcMain.handle(IPC.overlayParkAfterHide, (e) => {
+    assertMainWindow(e)
+    parkOverlayAfterHideSpring()
   })
   // Renderer ErrorBoundary catch: persist via the same sink as onFatal's main-process crashes, so a
   // caught render-throw survives to disk instead of only reaching console (gated behind

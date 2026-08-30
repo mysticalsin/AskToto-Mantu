@@ -23,6 +23,7 @@ import {
   overlayRestSize,
   isForbiddenMidFlowCard,
   shouldIgnoreResizeWhilePeekResting,
+  shouldParkHoverRestAfterLeavingSurface,
   OVERLAY_HIDE_TARGET,
   OVERLAY_ISLAND_PEEK,
   ISLAND_NOTCH_STRUT_PX,
@@ -386,6 +387,19 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
     expect(shouldIgnoreResizeWhilePeekResting(false, 816, peek)).toBe(false)
   })
 
+  it('Tony stub 103px is ignored while hide is resting at ~39–44', () => {
+    expect(shouldIgnoreResizeWhilePeekResting(true, 103, 39)).toBe(true)
+    expect(shouldIgnoreResizeWhilePeekResting(true, 103, 44)).toBe(true)
+    expect(shouldIgnoreResizeWhilePeekResting(true, 44, 44)).toBe(false)
+  })
+
+  it('leaving pill/Settings parks hide when the pointer is not in the island/bar', () => {
+    expect(shouldParkHoverRestAfterLeavingSurface({ layout: 'hide', pointerInIslandOrBar: false })).toBe(true)
+    expect(shouldParkHoverRestAfterLeavingSurface({ layout: 'island', pointerInIslandOrBar: false })).toBe(true)
+    expect(shouldParkHoverRestAfterLeavingSurface({ layout: 'hide', pointerInIslandOrBar: true })).toBe(false)
+    expect(shouldParkHoverRestAfterLeavingSurface({ layout: 'bar', pointerInIslandOrBar: false })).toBe(false)
+  })
+
   it('peek constants match the CSS hide-target and island capsule', () => {
     const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
     const hide = css.slice(css.indexOf('.overlay-hide-target {'), css.indexOf('.overlay-peek {'))
@@ -417,6 +431,9 @@ describe('DESIGN.md overlay contract', () => {
     expect(design).toMatch(/getCursorScreenPoint/)
     expect(design).toMatch(/islandSafeTop/)
     expect(design).toMatch(/stay tick/i)
+    expect(design).toMatch(/overlayParkAfterHide/)
+    expect(design).toMatch(/cubic-bezier\(0\.22, 1, 0\.36, 1\)/)
+    expect(design).toMatch(/100px stub|~100px stub/)
   })
 
   it('names hover-down, exclusive fullscreen, large CTA, and Métis demo', () => {
@@ -462,6 +479,14 @@ describe('island reveal/collapse wiring (index.ts)', () => {
     expect(index).toMatch(/function resizeTo/)
     expect(index).toMatch(/never setBounds on a stay tick/)
     expect(index).toMatch(/islandResting \? hoverRestTop/)
+    expect(index).toMatch(/Do not park on this tick/)
+    expect(index).toMatch(/overlayParkAfterHide/)
+    expect(index).toMatch(/parkOverlayAfterHideSpring/)
+    expect(index).toMatch(/shouldParkHoverRestAfterLeavingSurface/)
+    expect(index).toMatch(/The pill itself is not the bar/)
+    const hideTick = index.slice(index.indexOf('function tickOverlayCursorWatch'), index.indexOf('function notifyOverlayCursorHover'))
+    expect(hideTick).not.toMatch(/setBounds\(park/)
+    expect(hideTick).not.toMatch(/parkAfterExclusiveOnboarding/)
   })
 
   it('main wires cursor-watch when layout is hide/island and onboardingDone', () => {

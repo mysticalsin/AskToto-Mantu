@@ -311,11 +311,24 @@ export function parkAfterExclusiveOnboarding(
   return { x, y, width: size.width, height: size.height }
 }
 
-/** Stale exclusive / card measures must not grow a hide/island park back into 880×816. */
+/** Stale exclusive / card measures must not grow a hide/island park back into 880×816.
+ *  Also swallows the ~100px hide stub (Tony live: 560×103 at Y=39) while resting. */
 export function shouldIgnoreResizeWhilePeekResting(
   resting: boolean,
   reportedHeight: number,
   peekHeight: number
 ): boolean {
   return resting && reportedHeight > peekHeight + 24
+}
+
+/**
+ * Leaving ControlPill or Settings back to hide/island: park the hover rest when the
+ * pointer is not in the island strip or the revealed bar. The pill itself does not count
+ * as the bar — expanding it on Hide must disappear, not restore a ~100px stub.
+ */
+export function shouldParkHoverRestAfterLeavingSurface(input: {
+  layout: OverlayLayout
+  pointerInIslandOrBar: boolean
+}): boolean {
+  return overlayUsesHover(input.layout) && !input.pointerInIslandOrBar
 }

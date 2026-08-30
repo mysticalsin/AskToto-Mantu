@@ -32,6 +32,15 @@ import {
   reduceAutoHide
 } from './lib/overlay-autohide'
 import { overlayRestsHidden, overlayUsesHover, parseOverlayLayout } from '@shared/overlay-chrome'
+import {
+  OVERLAY_PARK_FALLBACK_MS,
+  overlayShowPeek,
+  overlaySpringAfterHide,
+  overlaySpringAfterReveal,
+  overlaySpringClassName,
+  prefersOverlayReducedMotion,
+  type OverlaySpring
+} from './lib/overlay-motion'
 import { useListen, playListenChime } from './lib/listen'
 import { transcriptToText, recapPersistAction } from './lib/transcript'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
@@ -557,26 +566,51 @@ export function App(): JSX.Element {
     const t = setTimeout(() => dispatchAutoHide({ type: 'dwell-elapsed' }), REVEAL_DWELL_MS)
     return () => clearTimeout(t)
   }, [autoHide.hoverPending])
-  // Pin the overlay to the top-center of its display when auto-hide first becomes active (the clean
-  // default position). Fires only on the off→on transition — not on every peek — so a later deliberate
-  // drag is respected. anchorTop is a pure setBounds in main; it never shows/focuses the window.
-  const wasOverlayIdleRef = useRef(false)
-  useEffect(() => {
-    if (overlayIdle && !wasOverlayIdleRef.current) void window.toto.anchorTop()
-    wasOverlayIdleRef.current = overlayIdle
-  }, [overlayIdle])
+  // Hide/island idle: park the rest rect (do not anchorTop to islandSafeTop — that was the 103px stub).
   const overlayRevealed = isOverlayRevealed(autoHide)
-  // Render the slim peek strip in place of the full bar only while auto-hide is active AND nothing is
-  // holding it revealed. `revealOverlay` is the click/keyboard fallback to the container's hover reveal.
-  const overlayPeeked = overlayIdle && !overlayRevealed
-  // When we reveal from the peek, the window is still hugged to the slim peek WIDTH (data-hug-width), and
-  // the plain bar view never reports a width again — so widen it back to the full bar. Fires only on the
-  // peek→revealed edge while auto-hide is active; a pure setBounds in main, no show/focus.
-  const wasOverlayPeekedRef = useRef(false)
+  const [overlaySpring, setOverlaySpring] = useState<OverlaySpring>('rest')
+  // Hide pad / island peek only when fully parked. Bar stays mounted during the spring (in / out).
+  const overlayPeeked = overlayShowPeek(overlayIdle, overlayRevealed, overlaySpring)
+  const springIdleRef = useRef(false)
+  const wasRevealedRef = useRef(overlayRevealed)
+  const overlayRevealedRef = useRef(overlayRevealed)
+  overlayRevealedRef.current = overlayRevealed
   useEffect(() => {
-    if (wasOverlayPeekedRef.current && !overlayPeeked) void window.toto.revealWidth()
-    wasOverlayPeekedRef.current = overlayPeeked
-  }, [overlayPeeked])
+    if (!overlayIdle) {
+      setOverlaySpring('rest')
+      springIdleRef.current = false
+      wasRevealedRef.current = overlayRevealed
+      return
+    }
+    const becameIdle = !springIdleRef.current
+    springIdleRef.current = true
+    const reduced = prefersOverlayReducedMotion()
+    const wasRevealed = wasRevealedRef.current
+    wasRevealedRef.current = overlayRevealed
+    if (becameIdle && !overlayRevealed) {
+      // Left Settings / pill to Hide with the pointer out — park, no ~100px stub spring.
+      setOverlaySpring('rest')
+      void window.toto.parkAfterHide()
+      return
+    }
+    if (overlayRevealed && !wasRevealed) {
+      void window.toto.revealWidth()
+      setOverlaySpring(overlaySpringAfterReveal(reduced))
+    } else if (!overlayRevealed && wasRevealed) {
+      const next = overlaySpringAfterHide(reduced)
+      setOverlaySpring(next)
+      if (next === 'rest') void window.toto.parkAfterHide()
+    }
+  }, [overlayIdle, overlayRevealed])
+  useEffect(() => {
+    if (overlaySpring !== 'out') return
+    const t = window.setTimeout(() => {
+      if (overlayRevealedRef.current) return
+      void window.toto.parkAfterHide()
+      setOverlaySpring('rest')
+    }, OVERLAY_PARK_FALLBACK_MS)
+    return () => window.clearTimeout(t)
+  }, [overlaySpring])
   const revealOverlay = useCallback(() => dispatchAutoHide({ type: 'pointer-enter' }), [])
   const onOverlayPointerEnter = useCallback(() => dispatchAutoHide({ type: 'pointer-enter' }), [])
   const onOverlayPointerLeave = useCallback(() => dispatchAutoHide({ type: 'pointer-leave' }), [])
@@ -1046,7 +1080,11 @@ export function App(): JSX.Element {
   const unminimize = useCallback((): void => {
     setMinimized(false)
     void window.toto.minimize(false)
-  }, [])
+    if (autoHideSetting) {
+      dispatchAutoHide({ type: 'collapse-now' })
+      setOverlaySpring('rest')
+    }
+  }, [autoHideSetting])
 
   const askScreen = useCallback(
     async (
@@ -3241,7 +3279,11 @@ export function App(): JSX.Element {
             onToggleListen={toggleListen}
             onExpand={() => {
               setMinimized(false)
-              void window.toto.minimize(false) // widen the window back to the full widget
+              void window.toto.minimize(false)
+              if (autoHideSetting) {
+                dispatchAutoHide({ type: 'collapse-now' })
+                setOverlaySpring('rest')
+              }
             }}
             // Fully hide the window (a global hotkey restores it); reset so it reopens as the full widget.
             onHide={() => {
@@ -3260,10 +3302,18 @@ export function App(): JSX.Element {
         />
       ) : (
         <>
-          {/* overlay-reveal springs the bar down when it expands from the peek (idle auto-hide surface
-              only — every other view mounts the bar without the reveal flourish). `contents` keeps the
-              wrapper layout-transparent so the bar stays a direct flex child of the root as before. */}
-          <div className={overlayIdle ? 'overlay-reveal w-full' : 'contents'}>
+          {/* overlay-spring: one surface, compositor-only. Peek pad mounts only at rest after park. */}
+          <div
+            className={overlayIdle ? overlaySpringClassName(overlaySpring) : 'contents'}
+            onAnimationEnd={(e) => {
+              if (e.target !== e.currentTarget) return
+              if (overlaySpring === 'in') setOverlaySpring('settled')
+              if (overlaySpring === 'out' && !overlayRevealedRef.current) {
+                void window.toto.parkAfterHide()
+                setOverlaySpring('rest')
+              }
+            }}
+          >
           <Bar
             value={input}
             onChange={setInput}
