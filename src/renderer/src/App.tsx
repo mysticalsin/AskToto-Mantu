@@ -3058,7 +3058,15 @@ export function App(): JSX.Element {
     <div
       ref={setRoot}
       {...(minimized ? {} : windowDrag)}
-      className={['relative flex w-full flex-col gap-2 p-1.5', showListeningChrome ? 'listening' : ''].join(' ')}
+      className={[
+        'relative flex w-full flex-col gap-2',
+        // Stealth (contentProtection) paints a multi-colour halo that spills ~34px past the widget via
+        // box-shadow (see .aw-hidden-rainbow). The overlay window hugs content height to ~2px, so without
+        // extra room the halo would be clipped at the window edge into a flat band. Widen the transparent
+        // margin only while invisible; the resting/visible overlay keeps its tight p-1.5.
+        (settings?.contentProtection ?? true) && !minimized ? 'p-5 stealth-glow' : 'p-1.5',
+        showListeningChrome ? 'listening' : ''
+      ].join(' ')}
     >
       {(() => {
         const toasts = (

@@ -662,19 +662,38 @@ input::placeholder {
   animation-timing-function: steps(24, end);
 }
 
-/* "Hidden from screen sharing" (stealth ON = contentProtection on) indicator — a calm, slow rainbow
-   contour so the user can see at a glance that the AskToto window won't appear on a screen they share
-   or record. Toggled by the bar's eye button. Same masked conic-gradient as the thinking ring, but
-   slower + a touch bolder so the two states stay distinct (fast = working, slow = hidden). */
+/* "Hidden from screen sharing" (stealth ON = contentProtection on) indicator — a multi-colour aurora
+   GLOW around the whole overlay so the user can see at a glance that Métis won't appear on a screen
+   they share or record. Toggled by the bar's eye button. Two layers: a crisp masked conic-gradient RIM
+   right on the edge, and a soft coloured HALO that spills outward past it (the "glow").
+
+   Why box-shadow for the halo and not a blurred pseudo-element: .aw-widget is `overflow:hidden` (for its
+   rounded blur backdrop), which clips every child/pseudo — a ::after halo would be cut off at the edge.
+   Only the element's OWN box-shadow is painted by the parent, OUTSIDE that clip, so it is the one thing
+   that can spill past the widget. The overlay root adds breathing room while stealth is on (App.tsx
+   `stealth-glow`) so the halo isn't clipped at the window boundary in turn.
+
+   Static, not spinning: an always-on indicator must never burn a per-frame repaint — animating the
+   conic angle or the box-shadow every frame is exactly the paint-storm this file fights elsewhere. A
+   rich static halo reads as a glow without one. */
 .aw-hidden-rainbow {
   position: relative;
+  /* Brand-violet core, cyan + magenta flanks → "multi-colour" without a per-frame gradient. Reaches
+     ~34px, which the stealth-glow root padding leaves room for. */
+  box-shadow:
+    0 0 0 1.5px rgba(175, 82, 222, 0.6),
+    0 0 12px 0 rgba(175, 82, 222, 0.85),
+    0 0 20px 2px rgba(127, 0, 218, 0.6),
+    0 0 24px 4px rgba(50, 173, 230, 0.45),
+    0 0 28px 6px rgba(255, 45, 85, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 .aw-hidden-rainbow::before {
   content: '';
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  padding: 2px;
+  padding: 2.5px;
   background: conic-gradient(
     from var(--cl-rainbow-angle),
     #ff3b30,
@@ -691,12 +710,29 @@ input::placeholder {
     linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  /* Static, not spinning — an always-visible idle indicator has no business burning a compositor
-     animation for the whole time stealth is on. (This is exactly the look prefers-reduced-motion
-     used to fall back to; it's now the default for everyone.) */
   pointer-events: none;
   z-index: var(--z-ring);
-  opacity: 0.92;
+  filter: saturate(1.25);
+  opacity: 1;
+  /* A slow, gentle breathe so the rim reads as "alive" without a repaint storm. opacity is a
+     compositor-only property (its own layer), so this animates on the GPU — no per-frame paint,
+     unlike the conic-angle spin this indicator used to run. */
+  animation: aw-hidden-breathe 4.2s ease-in-out infinite;
+}
+@keyframes aw-hidden-breathe {
+  0%,
+  100% {
+    opacity: 0.82;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aw-hidden-rainbow::before {
+    animation: none;
+    opacity: 1;
+  }
 }
 
 /* ── Ask widget — Cluely-style two-row overlay, Mantu purple glass ──────────────────────────
