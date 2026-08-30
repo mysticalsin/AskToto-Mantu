@@ -59,6 +59,10 @@ export function adminListView(license) {
     expiresAt: license.expiresAt,
     createdAt: license.createdAt,
     contactName: license.contactName || '',
+    // Trial licenses (POST /admin/licenses/trial) are real, server-issued keys — this just lets
+    // the dashboard/CSV/analytics tell them apart from sold licenses. Absent on every license
+    // minted before this field existed; the on-disk record is never migrated to add it.
+    trial: license.trial === true,
   };
 }
 
