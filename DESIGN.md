@@ -24,9 +24,11 @@ The stage is a **Mantu purple** brand wash (`#3A0B6B` / `#7F00DA` / `#9A2BF0`), 
 
 Primary CTAs (Get Started / Continue / Next) are **large** hit targets (min 52×220), high contrast, bottom-safe, and visible.
 
-Act 2 is a scripted **Métis** demo on the real product: meeting / transcript / copilot / Intelligence, fake data only. Not coding terminals. Not Vibe Island strings. The recap uses the **chosen** built-in role's summary layout. **No auto-advance.** Each beat waits for a click (Next, or anywhere on the stage). Continue leaves the whole demo act.
+Act 2 is a scripted **Métis** demo on the real product: meeting / transcript / copilot / Intelligence, fake data only. Not an mp4. Not coding terminals. Not Vibe Island strings. The recap uses the **chosen** built-in role's summary layout. Each `DEMO_STAGE` is one video: the current clip **plays by itself** (elapsedMs, synthetic cursor, chips, recap). **No auto-advance** to the next video. Next is the only way to change clips; it resets the clock so the next clip plays from its start. No 1100ms timer that jumps stages. Continue leaves the whole demo act.
 
 Welcome byline: `Tony Walteur` is a real link to his LinkedIn (`https://www.linkedin.com/in/tonywalteur/`). It opens in the system browser. Do not make the whole stage a link.
+
+Onboarding music: a quiet original Web Audio bed (no copyrighted recording) from Act 1. Loops softly. Mute control on the stage. Honor OS mute (system output). `prefers-reduced-motion` lowers volume. Starts on welcome or Get Started, never before the window exists. Never auto-send.
 
 Act 3 shows on-device model **download/install progress** (weights already fetch via `ensureLocalModel` on app open). Never copy "not installed" as a dead state. If RAM-gated, say so honestly.
 

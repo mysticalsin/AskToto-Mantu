@@ -774,6 +774,27 @@ input::placeholder {
   cursor: pointer;
   box-shadow: 0 2px 16px rgba(244, 244, 245, 0.16);
 }
+.onboard-mute {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #f4f4f5;
+  cursor: pointer;
+}
+.onboard-mute:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
 .onboard-cta:hover:not(:disabled) {
   filter: brightness(1.06);
 }

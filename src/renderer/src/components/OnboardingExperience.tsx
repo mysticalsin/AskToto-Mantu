@@ -52,7 +52,9 @@ import {
   Headphones,
   Phone,
   Presentation,
-  Users
+  Users,
+  Volume2,
+  VolumeX
 } from 'lucide-react'
 import type { ConversationMode, LocalModelSummary, PermissionStatus, ProfileRecoveryResult, PublicSettings } from '@shared/ipc'
 import { PROVIDERS, type ProviderId } from '@shared/providers'
@@ -64,6 +66,7 @@ import { isWindows } from '../lib/keys'
 import { useScrambleReveal } from '../lib/scramble'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
 import { sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
+import { createOnboardingMusicBed } from '../lib/onboarding-music'
 
 // Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
 // one icon, everywhere it appears, rather than inventing a second icon language just for this scene.
@@ -585,6 +588,39 @@ function ActReady({
   )
 }
 
+function prefersReducedMotion(): boolean {
+  return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    : false
+}
+
+/** Original bed from Act 1. Starts on welcome mount (and again on Get Started if the context was suspended). */
+function useOnboardingMusic(): { muted: boolean; toggleMute: () => void; start: () => void } {
+  const [muted, setMuted] = useState(false)
+  const bedRef = useRef<ReturnType<typeof createOnboardingMusicBed> | null>(null)
+
+  useEffect(() => {
+    const bed = createOnboardingMusicBed()
+    bedRef.current = bed
+    bed.setReducedMotion(prefersReducedMotion())
+    void bed.start()
+    return () => {
+      bed.stop()
+      bedRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    bedRef.current?.setMuted(muted)
+  }, [muted])
+
+  return {
+    muted,
+    toggleMute: () => setMuted((m) => !m),
+    start: () => void bedRef.current?.start()
+  }
+}
+
 export function OnboardingExperience({
   onDone,
   onSkip,
@@ -592,6 +628,7 @@ export function OnboardingExperience({
   settings,
   patch
 }: OnboardingExperienceProps): JSX.Element {
+  const music = useOnboardingMusic()
   const [scene, setScene] = useState<Scene>('hero')
   const [rows, setRows] = useState<SetupRow[]>([])
   const [mode, setMode] = useState<ConversationMode>('general')
@@ -771,12 +808,29 @@ export function OnboardingExperience({
   )
 
   return (
-    <div className="flex h-full w-full select-none flex-col items-center px-10 text-center">
+    <div className="relative flex h-full w-full select-none flex-col items-center px-10 text-center">
+      <button
+        type="button"
+        className="onboard-mute no-drag focus-ring"
+        aria-label={music.muted ? 'Unmute music' : 'Mute music'}
+        aria-pressed={music.muted}
+        onClick={music.toggleMute}
+      >
+        {music.muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
+      </button>
       <div className="flex h-9 shrink-0 items-center justify-center pt-3">
         <ActProgress scene={scene} />
       </div>
       <div className="flex w-full flex-1 flex-col items-center justify-center gap-6">
-      {scene === 'hero' && <HeroWelcome onBegin={() => setScene('problem')} onSkip={onSkip} />}
+      {scene === 'hero' && (
+        <HeroWelcome
+          onBegin={() => {
+            music.start()
+            setScene('problem')
+          }}
+          onSkip={onSkip}
+        />
+      )}
 
       {scene === 'problem' && (
         <div key="problem" className="scene-enter flex flex-col items-center gap-8">
