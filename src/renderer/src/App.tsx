@@ -2839,6 +2839,7 @@ export function App(): JSX.Element {
         : recapGenLive
     return (
       <Review
+        mode={mode}
         recap={
           generatingThisPm
             ? recapGenDisplay
@@ -3096,17 +3097,19 @@ export function App(): JSX.Element {
       )
     }
     return (
-      <div ref={setRoot} {...windowDrag} className="flex h-full min-h-0 w-full flex-col bg-[#0c0c0e]">
-        <OnboardingV2
-          settings={settings}
-          saveKey={saveKey}
-          recoverEncryptedProfile={recoverEncryptedProfile}
-          patch={patch}
-          onOpenAiSettings={() => openSettings('ai')}
-          onDone={() => void refresh()}
-          signedIn={auth.status?.signedIn}
-          signedInEmail={auth.status?.email}
-        />
+      <div ref={setRoot} {...windowDrag} className="onboard-stage">
+        <div className="relative z-10 flex h-full min-h-0 w-full flex-col">
+          <OnboardingV2
+            settings={settings}
+            saveKey={saveKey}
+            recoverEncryptedProfile={recoverEncryptedProfile}
+            patch={patch}
+            onOpenAiSettings={() => openSettings('ai')}
+            onDone={() => void refresh()}
+            signedIn={auth.status?.signedIn}
+            signedInEmail={auth.status?.email}
+          />
+        </div>
       </div>
     )
   }

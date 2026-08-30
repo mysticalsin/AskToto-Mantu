@@ -1122,7 +1122,16 @@ export function parseRecapMarkdown(markdown: string): RecapExport {
   const KNOWN = new Set([
     'title', 'tags', 'overview', 'topics', 'key q&a', 'key qa',
     'decisions', 'action items', 'next steps', 'follow-ups', 'follow ups',
-    'open questions', 'notable quotes', 'recap'
+    'open questions', 'notable quotes', 'recap',
+    'outcome', 'key numbers', 'deal snapshot', 'buying signals', 'objections',
+    'what the seller must know', 'stakeholders', 'candidate', 'background',
+    'motivations', 'projects', 'compensation and contract', 'availability',
+    'ratings', 'strengths and concerns', 'role', 'questions and answers',
+    'examples given', 'next rounds', 'positions', 'interests', 'concessions',
+    'agreed terms', 'still open', 'what landed', 'audience questions',
+    'confusion or pushback', 'follow-ups promised', 'reported problem',
+    'steps tried', 'resolution', 'how the call went', 'qualifying facts',
+    'commitment'
   ])
   const sections: Record<string, string> = {}
   for (const part of md.split(/^##\s+/m)) {
@@ -1164,6 +1173,8 @@ export function parseRecapMarkdown(markdown: string): RecapExport {
     sections['next steps'] ||
     sections['follow-ups'] ||
     sections['follow ups'] ||
+    sections['follow-ups promised'] ||
+    sections['commitment'] ||
     ''
   const actionItems = bullets(actionBody).map((raw) => {
     // "Do the thing (Alice)". Non-greedy text + a paren-free owner anchored to the end, so a stray inner

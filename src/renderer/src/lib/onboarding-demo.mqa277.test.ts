@@ -4,7 +4,8 @@ import {
   DEMO_LINES,
   DEMO_STAGE_BOUNDARIES,
   DEMO_TIMING,
-  demoFrameAt
+  demoFrameAt,
+  demoRecapMarkdown
 } from './onboarding-demo'
 
 describe('MQA-277 — Act 2 (Demo) scripted timeline projector (demoFrameAt)', () => {
@@ -118,6 +119,17 @@ describe('MQA-277 — Act 2 (Demo) scripted timeline projector (demoFrameAt)', (
   it('DEMO_LINES only ever contains "them"/"you" speakers — never "unknown" (this is a scripted, ' +
       'fully-attributed fake meeting, not an imported recording)', () => {
     for (const l of DEMO_LINES) expect(['them', 'you']).toContain(l.speaker)
+  })
+
+  it('the chosen-role recap layouts differ for sales vs recruiting vs meeting', () => {
+    const sales = demoRecapMarkdown('sales')
+    const recruiting = demoRecapMarkdown('recruiting')
+    const meeting = demoRecapMarkdown('meeting')
+    expect(sales).toContain('## What the seller must know')
+    expect(recruiting).toContain('## Ratings')
+    expect(meeting).toContain('## Decisions')
+    expect(sales).not.toBe(recruiting)
+    expect(sales).not.toBe(meeting)
   })
 })
 

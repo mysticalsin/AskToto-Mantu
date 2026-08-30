@@ -18,15 +18,14 @@
  *   transcript or session in the first place (pinned by a contract test).
  */
 import { Suspense, lazy, useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { Check, Sparkles } from 'lucide-react'
 import type { TranscriptLine } from '@shared/ipc'
+import { CONVERSATION_MODES, BUILTIN_MODE_LABELS, type BuiltinMode } from '@shared/ipc'
 import type { AnswerState } from '../state'
 import { Bar } from './Bar'
 import { QuickActions } from './QuickActions'
 import {
   DEMO_FACTCHECK_LABEL,
-  DEMO_RECAP_HEADLINE,
-  DEMO_RECAP_ITEMS,
+  demoRecapMarkdown,
   DEMO_STAGE_BOUNDARIES,
   DEMO_TIMING,
   demoFrameAt,
@@ -34,6 +33,7 @@ import {
 } from '../lib/onboarding-demo'
 import { cursorPositionAt, type Point } from '../lib/synthetic-cursor'
 import { setOnboardingDemoActive } from '../lib/onboarding-demo-guard'
+import { ModeRecapView, modeRecapSections } from './ModeRecap'
 
 // Same weight rationale as App.tsx's own lazy Answer/Copilot: both pull in Markdown.tsx -> streamdown +
 // shiki/core, which has no reason to be in the eager boot chunk for a user who skips the tour.
@@ -92,34 +92,23 @@ function useDemoElapsed(): number {
   return elapsed
 }
 
-function DemoRecapCard(): JSX.Element {
+function DemoRecapCard({ mode }: { mode: string }): JSX.Element {
+  const md = demoRecapMarkdown(mode)
   return (
-    <div className="glass-strong scene-enter w-full max-w-[880px] rounded-[16px] px-4 py-3.5 text-left">
-      <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
-        <Sparkles size={11} className="text-[var(--color-accent-2)]" />
-        Mantu Intelligence
-      </div>
-      <p className="m-0 text-[14px] font-semibold text-[color:var(--color-ink)]">{DEMO_RECAP_HEADLINE}</p>
-      <ul className="m-0 mt-2 flex flex-col gap-1.5 pl-0">
-        {DEMO_RECAP_ITEMS.map((item, i) => (
-          <li
-            key={item}
-            className="fade-up flex items-start gap-1.5 text-[12px] leading-snug text-[color:var(--color-ink-2)]"
-            style={{ animationDelay: `${i * 120}ms`, animationFillMode: 'backwards' }}
-          >
-            <Check size={13} className="mt-0.5 shrink-0 text-[var(--color-accent-2)]" />
-            {item}
-          </li>
-        ))}
-      </ul>
+    <div className="scene-enter w-full max-w-[880px]">
+      <ModeRecapView mode={mode} title="Mantu Intelligence" sections={modeRecapSections(md, mode)} />
     </div>
   )
 }
 
 export function OnboardingDemoScene({
+  mode,
+  onSetMode,
   onContinue,
   onSkipToEnd
 }: {
+  mode: string
+  onSetMode: (mode: BuiltinMode) => void
   onContinue: () => void
   onSkipToEnd: () => void
 }): JSX.Element {
@@ -208,6 +197,23 @@ export function OnboardingDemoScene({
   return (
     <div key="reveal" className="scene-enter flex w-full flex-col items-center gap-6">
       <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">Here’s what that looks like.</h2>
+      <div className="flex max-w-[880px] flex-wrap justify-center gap-1.5">
+        {CONVERSATION_MODES.map((id) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => onSetMode(id)}
+            className={
+              'onboard-role-chip no-drag focus-ring rounded-full px-3 py-1.5 text-[11px] font-semibold ' +
+              (mode === id
+                ? 'bg-[#f4f4f5] text-[#09090b]'
+                : 'bg-white/10 text-[color:var(--color-ink-2)] hover:bg-white/16')
+            }
+          >
+            {BUILTIN_MODE_LABELS[id]}
+          </button>
+        ))}
+      </div>
 
       {!frame.meetingEnded ? (
         <div ref={wrapRef} className="relative w-full max-w-[880px]">
@@ -258,7 +264,7 @@ export function OnboardingDemoScene({
           )}
         </div>
       ) : (
-        <DemoRecapCard />
+        <DemoRecapCard mode={mode} />
       )}
 
       <button
