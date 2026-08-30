@@ -86,6 +86,14 @@ describe('embedded-cloudflare crypto — the SHIPPED decryptor against the BUILD
       const tampered = { ...blob, salt: flipFirstByteOfBase64(blob.salt) }
       expect(decryptEmbeddedBlob(tampered)).toBeNull()
     })
+
+    it('rejects a truncated auth tag (must be a full 16 bytes)', () => {
+      const blob = encryptProxyKey(DUMMY_TOKEN)
+      const shortTag = Buffer.from(blob.tag, 'base64').subarray(0, 8).toString('base64')
+      const tampered = { ...blob, tag: shortTag }
+      expect(decryptEmbeddedBlob(tampered)).toBeNull()
+      expect(() => decryptProxyKey(tampered)).toThrow()
+    })
   })
 
   it('fails closed on a blob encrypted under different material (wrong obfuscation secret)', () => {
