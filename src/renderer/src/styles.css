@@ -757,6 +757,77 @@ input::placeholder {
   }
 }
 
+/* Act 1 welcome atmosphere — full viewport, under the UI. Purple wash remains if this is absent. */
+.onboard-hero-video {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.onboard-hero-video video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.onboard-hero-video-tint {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(1200px 700px at 18% 12%, color-mix(in srgb, #9a2bf0 28%, transparent), transparent 58%),
+    linear-gradient(165deg, color-mix(in srgb, #3a0b6b 62%, transparent), color-mix(in srgb, #7f00da 48%, transparent));
+}
+
+/* Liquid glass — backdrop blur, inset highlight, gradient-border ::before. Technique only. */
+.onboard-glass {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  color: #f4f4f5;
+  background: rgba(255, 255, 255, 0.12);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  backdrop-filter: blur(18px) saturate(160%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.06),
+    0 8px 28px rgba(58, 11, 107, 0.22);
+}
+.onboard-glass::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.55), rgba(154, 43, 240, 0.35), rgba(255, 255, 255, 0.08));
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+.onboard-cta.onboard-glass {
+  background: rgba(255, 255, 255, 0.14);
+  color: #f4f4f5;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.06),
+    0 8px 28px rgba(58, 11, 107, 0.22);
+}
+.onboard-glass-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #f4f4f5;
+  cursor: pointer;
+}
+
 /* Exclusive-stage primary CTAs — min 52×220, high contrast, hittable (DESIGN.md). */
 .onboard-cta {
   display: inline-flex;
