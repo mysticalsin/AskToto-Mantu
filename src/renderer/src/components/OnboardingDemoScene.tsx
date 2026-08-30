@@ -65,12 +65,12 @@ const CHIP_SELECTOR: Record<Exclude<DemoCursorTarget, 'none'>, string> = {
 
 /** Intra-video rAF clock. Plays the current DEMO_STAGE; Next is the only way to change beat.
  *  Cursor is a ref + DOM transform. React state commits at beat boundaries or ≤ ~10 Hz. */
-function useDemoPlayback(wrapRef: RefObject<HTMLDivElement | null>): {
+function useDemoPlayback(wrapRef: RefObject<HTMLDivElement>): {
   elapsedMs: number
   beat: number
   hasNext: boolean
   advance: () => void
-  cursorRef: RefObject<HTMLDivElement | null>
+  cursorRef: RefObject<HTMLDivElement>
 } {
   const [beat, setBeat] = useState(0)
   const [localMs, setLocalMs] = useState(0)
