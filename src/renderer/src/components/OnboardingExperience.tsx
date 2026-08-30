@@ -253,6 +253,120 @@ export function summarizeSetupRows(rows: SetupRow[]): SetupScanSummary {
   return { scanDone, allReady }
 }
 
+/**
+ * Act 3 capability rail — what Métis can do, lit only from real setup rows (never decorative "ready").
+ * Unlock rules stay honest: a capability only reads as lit when every named row is ready or skipped.
+ */
+export type SetupCapabilityId = 'listen' | 'answers' | 'private' | 'screen'
+export type SetupCapabilityLit = 'pending' | 'warming' | 'lit'
+
+export interface SetupCapability {
+  id: SetupCapabilityId
+  title: string
+  blurb: string
+  /** Setup row keys that must be ready/skipped for this capability to light. */
+  unlockKeys: readonly string[]
+  icon: typeof Sparkles
+}
+
+export const SETUP_CAPABILITIES: readonly SetupCapability[] = [
+  {
+    id: 'listen',
+    title: 'Live listen',
+    blurb: 'Catches the question as it lands.',
+    unlockKeys: ['mic', 'asr'],
+    icon: Mic
+  },
+  {
+    id: 'answers',
+    title: 'Instant answers',
+    blurb: 'What to say next, from your meetings.',
+    unlockKeys: ['ai', 'brain'],
+    icon: Sparkles
+  },
+  {
+    id: 'private',
+    title: 'On-device brain',
+    blurb: 'Your meetings never leave this machine.',
+    unlockKeys: ['brain'],
+    icon: FolderLock
+  },
+  {
+    id: 'screen',
+    title: 'Screen context',
+    blurb: 'Answers grounded in what you see.',
+    unlockKeys: ['screen'],
+    icon: MonitorUp
+  }
+]
+
+export function capabilityLit(cap: SetupCapability, rows: SetupRow[]): SetupCapabilityLit {
+  // Every unlock key must be present — a missing row is not "ready", it's unknown.
+  const relevant = cap.unlockKeys.map((key) => rows.find((r) => r.key === key))
+  if (relevant.some((r) => r == null)) return 'pending'
+  const found = relevant as SetupRow[]
+  if (found.some((r) => r.state === 'checking')) return 'warming'
+  if (found.every((r) => r.state === 'ready' || r.state === 'skipped')) return 'lit'
+  return 'pending'
+}
+
+function SetupCapabilityRail({ rows, scanDone }: { rows: SetupRow[]; scanDone: boolean }): JSX.Element {
+  const litCount = SETUP_CAPABILITIES.filter((c) => capabilityLit(c, rows) === 'lit').length
+  return (
+    <div className="setup-atmosphere w-full max-w-[460px] rounded-[16px] px-3.5 py-3 text-left" aria-live="polite">
+      <div className="mb-2.5 flex items-end justify-between gap-2">
+        <div>
+          <p className="m-0 text-[10px] font-semibold uppercase tracking-[0.14em] text-[color:var(--color-ink-3)]">
+            What Métis unlocks
+          </p>
+          <p className="m-0 mt-0.5 text-[12px] leading-snug text-[color:var(--color-ink-2)]">
+            {scanDone
+              ? litCount === SETUP_CAPABILITIES.length
+                ? 'Every capability below is ready on this machine.'
+                : 'Live on your machine — finish permissions anytime.'
+              : 'Scanning what’s already here…'}
+          </p>
+        </div>
+        <span className="shrink-0 text-[10px] font-medium tabular-nums text-[color:var(--color-ink-3)]">
+          {litCount}/{SETUP_CAPABILITIES.length}
+        </span>
+      </div>
+      <div className="grid grid-cols-2 gap-1.5">
+        {SETUP_CAPABILITIES.map((cap, i) => {
+          const lit = capabilityLit(cap, rows)
+          const Icon = cap.icon
+          return (
+            <div
+              key={cap.id}
+              className={
+                'setup-cap fade-up flex items-start gap-2 rounded-[12px] border px-2.5 py-2 ' +
+                (lit === 'lit'
+                  ? 'setup-cap-lit border-[var(--color-accent)]/35 bg-[var(--color-accent-soft)]'
+                  : lit === 'warming'
+                    ? 'setup-cap-warming border-white/10 bg-white/[0.04]'
+                    : 'border-white/8 bg-white/[0.02] opacity-70')
+              }
+              style={{ animationDelay: `${80 + i * 70}ms`, animationFillMode: 'backwards' }}
+            >
+              <Icon
+                size={14}
+                className={
+                  'mt-0.5 shrink-0 ' +
+                  (lit === 'lit' ? 'text-[color:var(--color-accent-2)]' : 'text-[color:var(--color-ink-3)]')
+                }
+              />
+              <div className="min-w-0">
+                <p className="m-0 text-[12px] font-semibold text-[color:var(--color-ink)]">{cap.title}</p>
+                <p className="m-0 mt-0.5 text-[10.5px] leading-snug text-[color:var(--color-ink-3)]">{cap.blurb}</p>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 /** Act 3's opt-out toggle (screenAsk) — a small local switch so this scene doesn't need to reach into
  *  Settings.tsx's `Toggle` (which is styled against the separate `--cl-*` settings-panel token set this
  *  onboarding shell never mounts). Same on/off mechanics, themed with the onboarding's own
@@ -704,12 +818,20 @@ export function OnboardingExperience({
     (r) => (r.key === 'mic' || r.key === 'screen') && (r.state === 'action' || r.state === 'blocked' || r.state === 'restart')
   )
 
+  // Cap to the BrowserWindow viewport (100vh) so a tall "Your setup" never paints Continue below the
+  // frame with no scrollbar. Panel's own maxHeight tracks the display, which can exceed the clamped
+  // overlay height — without this, auto-resize hits main's workArea clamp and the CTA is clipped.
   return (
-    <div className="flex h-full w-full select-none flex-col items-center px-10 text-center">
-      <div className="flex h-9 shrink-0 items-center justify-center pt-3">
+    <div className="flex max-h-[calc(100vh-12px)] min-h-[480px] w-full select-none flex-col items-center px-8 text-center">
+      <div className="flex h-9 shrink-0 items-center justify-center pt-2">
         <ActProgress scene={scene} />
       </div>
-      <div className="flex w-full flex-1 flex-col items-center justify-center gap-6">
+      <div
+        className={
+          'flex min-h-0 w-full flex-1 flex-col items-center ' +
+          (scene === 'setup' || scene === 'personalize' ? 'overflow-hidden' : 'justify-center overflow-y-auto')
+        }
+      >
       {scene === 'hero' && <HeroWelcome onBegin={() => setScene('problem')} onSkip={onSkip} />}
 
       {scene === 'problem' && (
@@ -752,154 +874,177 @@ export function OnboardingExperience({
       )}
 
       {scene === 'setup' && (
-        <div key="setup" className="scene-enter flex flex-col items-center gap-6">
-          <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">Your setup</h2>
-          <div className="flex w-full max-w-[440px] flex-col gap-2">
-            {rows.map((r, i) => (
-              <div
-                key={r.key}
-                className="glass-strong fade-up flex items-start gap-3 rounded-[12px] px-3.5 py-2.5 text-left"
-                style={{ animationDelay: `${i * 70}ms`, animationFillMode: 'backwards' }}
-              >
-                <r.icon size={16} className="mt-0.5 shrink-0 text-[color:var(--color-ink-2)]" />
-                <div className="min-w-0 flex-1">
-                  <p className="m-0 truncate text-[13px] text-[color:var(--color-ink)]">{r.label}</p>
-                  {r.detail && <p className="m-0 text-[11px] text-[color:var(--color-ink-3)]">{r.detail}</p>}
-                  {/* Why-before-prompt: shown before the button that triggers the OS dialog / deep link, not
-                      after — so the user knows what they're being asked for before they're asked. */}
-                  {r.key === 'mic' && r.state === 'action' && (
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                        Lets Métis hear your side of the call.
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => void requestMic()}
-                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
-                      >
-                        Allow Microphone
-                      </button>
-                    </div>
+        <div key="setup" className="scene-enter flex min-h-0 w-full max-w-[480px] flex-1 flex-col">
+          {/* Scrollable scan body — sticky Continue below stays clickable even when rows expand. */}
+          <div className="scroll-thin flex min-h-0 flex-1 flex-col items-center gap-4 overflow-y-auto pb-3 pt-1">
+            <div className="flex flex-col items-center gap-1">
+              <p className="m-0 text-[11px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-ink-3)]">
+                Your setup
+              </p>
+              <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">
+                {scanDone ? (allReady ? 'Everything’s ready.' : 'Almost there.') : 'Checking this machine…'}
+              </h2>
+              <p className="m-0 max-w-[380px] text-[12.5px] leading-snug text-[color:var(--color-ink-2)]">
+                Real checks only — Métis lights each capability when it’s actually available.
+              </p>
+            </div>
+
+            <SetupCapabilityRail rows={rows} scanDone={scanDone} />
+
+            <div className="flex w-full max-w-[440px] flex-col gap-2">
+              {rows.map((r, i) => (
+                <div
+                  key={r.key}
+                  className="glass-strong fade-up flex items-start gap-3 rounded-[12px] px-3.5 py-2.5 text-left"
+                  style={{ animationDelay: `${i * 70}ms`, animationFillMode: 'backwards' }}
+                >
+                  <r.icon size={16} className="mt-0.5 shrink-0 text-[color:var(--color-ink-2)]" />
+                  <div className="min-w-0 flex-1">
+                    <p className="m-0 truncate text-[13px] text-[color:var(--color-ink)]">{r.label}</p>
+                    {r.detail && <p className="m-0 text-[11px] text-[color:var(--color-ink-3)]">{r.detail}</p>}
+                    {/* Why-before-prompt: shown before the button that triggers the OS dialog / deep link, not
+                        after — so the user knows what they're being asked for before they're asked. */}
+                    {r.key === 'mic' && r.state === 'action' && (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                        <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                          Lets Métis hear your side of the call.
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void requestMic()}
+                          className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
+                        >
+                          Allow Microphone
+                        </button>
+                      </div>
+                    )}
+                    {r.key === 'mic' && r.state === 'blocked' && (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                        <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                          {isWindows
+                            ? 'Windows is blocking the microphone — turn it back on in Privacy settings.'
+                            : "macOS won't ask again once you've said no — turn it back on in Privacy settings."}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void window.toto.openPermissionSettings('microphone')}
+                          className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
+                        >
+                          Open Microphone Settings
+                        </button>
+                      </div>
+                    )}
+                    {r.key === 'screen' && r.state === 'action' && (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                        <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                          Lets Métis answer questions about what&apos;s on your screen.
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => void window.toto.openPermissionSettings('screenRecording')}
+                          className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
+                        >
+                          Open Screen Recording Settings
+                        </button>
+                      </div>
+                    )}
+                    {r.key === 'screen' && r.state === 'restart' && (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                        <span className="text-[11px] leading-snug text-[color:var(--color-accent-2)]">
+                          Granted. Restart Métis to finish enabling it.
+                        </span>
+                        <button
+                          type="button"
+                          onClick={restartApp}
+                          disabled={restarting}
+                          className="no-drag focus-ring rounded-full bg-[var(--color-accent)] px-2.5 py-1 text-[11px] font-semibold text-white hover:brightness-110 disabled:opacity-60"
+                        >
+                          {restarting ? 'Restarting…' : 'Restart Métis'}
+                        </button>
+                      </div>
+                    )}
+                    {/* Opt-out toggle framed as competence (Act 3 brief): screenAsk is a REAL, on-by-default
+                        setting (ipc.ts) — never invented for this scene — so it's shown as "already on,
+                        your call" rather than a setup step. Independent of the permission grant above: the
+                        toggle flips the app's intent to ask, whether or not the OS has said yes yet. */}
+                    {r.key === 'screen' && settings && patch && (
+                      <div className="mt-1.5 flex items-center justify-between gap-2 border-t border-white/10 pt-1.5">
+                        <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                          Let Métis see your screen when you ask — on by default, your call.
+                        </span>
+                        <MiniToggle
+                          on={settings.screenAsk}
+                          onChange={(v) => patch({ screenAsk: v })}
+                          label="Let Métis see your screen when you ask"
+                        />
+                      </div>
+                    )}
+                    {r.key === 'ai' && r.state === 'action' && (
+                      <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                        You&apos;ll add a provider key on the next step — nothing else here needs one.
+                      </p>
+                    )}
+                    {r.key === 'ai' && r.state === 'ready' && (
+                      <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                        Add your own provider key anytime in Settings — optional, never required.
+                      </p>
+                    )}
+                  </div>
+                  {r.state === 'checking' && (
+                    <span className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-white/20 border-t-[var(--color-accent-2)]" />
                   )}
-                  {r.key === 'mic' && r.state === 'blocked' && (
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                        {isWindows
-                          ? "Windows is blocking the microphone — turn it back on in Privacy settings."
-                          : "macOS won't ask again once you've said no — turn it back on in Privacy settings."}
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => void window.toto.openPermissionSettings('microphone')}
-                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
-                      >
-                        Open Microphone Settings
-                      </button>
-                    </div>
+                  {r.state === 'ready' && <Check size={16} className="mt-0.5 shrink-0 text-[var(--color-accent-2)]" />}
+                  {r.state === 'action' && (
+                    <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-ink-2)]">needed</span>
                   )}
-                  {r.key === 'screen' && r.state === 'action' && (
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                        Lets Métis answer questions about what's on your screen.
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => void window.toto.openPermissionSettings('screenRecording')}
-                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
-                      >
-                        Open Screen Recording Settings
-                      </button>
-                    </div>
+                  {r.state === 'blocked' && (
+                    <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-ink-2)]">blocked</span>
                   )}
-                  {r.key === 'screen' && r.state === 'restart' && (
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      <span className="text-[11px] leading-snug text-[color:var(--color-accent-2)]">
-                        Granted. Restart Métis to finish enabling it.
-                      </span>
-                      <button
-                        type="button"
-                        onClick={restartApp}
-                        disabled={restarting}
-                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)] px-2.5 py-1 text-[11px] font-semibold text-white hover:brightness-110 disabled:opacity-60"
-                      >
-                        {restarting ? 'Restarting…' : 'Restart Métis'}
-                      </button>
-                    </div>
-                  )}
-                  {/* Opt-out toggle framed as competence (Act 3 brief): screenAsk is a REAL, on-by-default
-                      setting (ipc.ts) — never invented for this scene — so it's shown as "already on,
-                      your call" rather than a setup step. Independent of the permission grant above: the
-                      toggle flips the app's intent to ask, whether or not the OS has said yes yet. */}
-                  {r.key === 'screen' && settings && patch && (
-                    <div className="mt-1.5 flex items-center justify-between gap-2 border-t border-white/10 pt-1.5">
-                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                        Let Métis see your screen when you ask — on by default, your call.
-                      </span>
-                      <MiniToggle
-                        on={settings.screenAsk}
-                        onChange={(v) => patch({ screenAsk: v })}
-                        label="Let Métis see your screen when you ask"
-                      />
-                    </div>
-                  )}
-                  {r.key === 'ai' && r.state === 'action' && (
-                    <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                      You'll add a provider key on the next step — nothing else here needs one.
-                    </p>
-                  )}
-                  {r.key === 'ai' && r.state === 'ready' && (
-                    <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                      Add your own provider key anytime in Settings — optional, never required.
-                    </p>
+                  {r.state === 'restart' && (
+                    <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-accent-2)]">restart</span>
                   )}
                 </div>
-                {r.state === 'checking' && (
-                  <span className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-white/20 border-t-[var(--color-accent-2)]" />
-                )}
-                {r.state === 'ready' && <Check size={16} className="mt-0.5 shrink-0 text-[var(--color-accent-2)]" />}
-                {r.state === 'action' && <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-ink-2)]">needed</span>}
-                {r.state === 'blocked' && <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-ink-2)]">blocked</span>}
-                {r.state === 'restart' && (
-                  <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-accent-2)]">restart</span>
-                )}
-              </div>
-            ))}
+              ))}
+            </div>
+            {allReady && (
+              <p className="fade-up m-0 text-[14px] font-medium text-[color:var(--color-ink)]">
+                Nothing left to configure.
+              </p>
+            )}
+            {/* Métis's equivalent of Vibe Island's "restart your sessions" honest caveat (teardown, Config
+                act) — but placed HERE, first, rather than saved for the final act, and reinforced again at
+                Ready. True the moment scanning settles, regardless of allReady: nothing above changes when
+                Métis is actually allowed to listen. */}
+            {scanDone && (
+              <p className="fade-up m-0 max-w-[360px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                Métis only starts listening when you press Listen and tell the room — nothing is captured before
+                that.
+              </p>
+            )}
           </div>
-          {allReady && (
-            <p className="fade-up m-0 text-[14px] font-medium text-[color:var(--color-ink)]">
-              Everything’s ready. Nothing to configure.
-            </p>
-          )}
-          {/* Métis's equivalent of Vibe Island's "restart your sessions" honest caveat (teardown, Config
-              act) — but placed HERE, first, rather than saved for the final act, and reinforced again at
-              Ready. True the moment scanning settles, regardless of allReady: nothing above changes when
-              Métis is actually allowed to listen. */}
-          {scanDone && (
-            <p className="fade-up m-0 max-w-[360px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-              Métis only starts listening when you press Listen and tell the room — nothing is captured before that.
-            </p>
-          )}
-          <div className="flex items-center gap-2">
+          {/* Sticky CTA — always primary and always enabled (perms can finish later). Secondary styling
+              used to look disabled and sat below the fold on short laptop work areas. */}
+          <div className="setup-cta-bar flex shrink-0 flex-col items-center gap-1.5 border-t border-white/10 px-2 pb-1 pt-3">
+            {needsPerms && (
+              <p className="m-0 text-[11px] text-[color:var(--color-ink-3)]">
+                Permissions can wait — you can finish them anytime in Settings.
+              </p>
+            )}
             <button
               type="button"
               // Act 6 re-point (MQA-283): setup always advances to personalize now — license (when
               // enabled) has moved to sit between personalize and ready. See onboarding-flow.ts.
               onClick={() => setScene(sceneAfterSetup())}
-              className={
-                'no-drag focus-ring h-10 rounded-full px-5 text-[13px] font-semibold ' +
-                (needsPerms
-                  ? 'text-[color:var(--color-ink-2)] hover:bg-white/10'
-                  : 'bg-[var(--color-accent)] text-white hover:brightness-110')
-              }
+              className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-7 text-[13px] font-semibold text-white shadow-[0_2px_16px_var(--color-accent-glow)] hover:brightness-110"
             >
-              Continue
+              {needsPerms ? 'Continue anyway' : 'Continue'}
             </button>
           </div>
         </div>
       )}
 
       {scene === 'personalize' && (
-        <div key="personalize" className="scene-enter flex flex-col items-center gap-6">
+        <div key="personalize" className="scene-enter scroll-thin flex min-h-0 w-full flex-1 flex-col items-center gap-6 overflow-y-auto py-2">
           <div className="flex flex-col items-center gap-1.5">
             <p className="m-0 text-[11px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-ink-3)]">
               Last one
@@ -909,7 +1054,7 @@ export function OnboardingExperience({
               One pick shapes how it listens and what it says next — change it anytime in Settings.
             </p>
           </div>
-          <div className="flex gap-3">
+          <div className="flex flex-wrap justify-center gap-3">
             {/* The onboarding personality beat (Act 4, Vibe-Island-teardown "the ONE emotional choice
                 after the heavy config step") — three refined cards over the plain three-button picker
                 this replaced, each naming the mode's real behavior change (`persona-vibe.ts`, honest and
@@ -950,7 +1095,7 @@ export function OnboardingExperience({
               )
             })}
           </div>
-          <div className="flex flex-col items-center gap-3">
+          <div className="flex flex-col items-center gap-3 pb-2">
             <label className="flex max-w-[420px] cursor-pointer items-start gap-2.5 rounded-[12px] border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-left">
               <input
                 type="checkbox"

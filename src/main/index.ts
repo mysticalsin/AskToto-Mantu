@@ -1415,16 +1415,18 @@ function createWindow(): void {
   // resizable:false blocking any manual fix. Reset both so a recovered window always starts full-size.
   isMinimized = false
   currentWidth = BAR_WIDTH
-  // Fresh-install onboarding is a ~640px panel, not the 84px bar. The renderer's content-driven auto-resize
-  // can be starved by the macOS compositor on a just-created transparent, always-on-top overlay (rAF/timers
-  // frozen for a beat after first paint), which would otherwise leave onboarding clipped to bar height with
-  // its "Continue" buttons off-screen. Size the window to fit onboarding up front — deterministic, not
-  // dependent on the renderer — and let auto-resize settle it back to the bar once onboarding is done.
+  // Fresh-install onboarding is a tall panel (setup + capability rail), not the 84px bar. The renderer's
+  // content-driven auto-resize can be starved by the macOS compositor on a just-created transparent,
+  // always-on-top overlay (rAF/timers frozen for a beat after first paint), which would otherwise leave
+  // onboarding clipped to bar height with its "Continue" buttons off-screen. Size the window to fit
+  // onboarding up front — deterministic, not dependent on the renderer — and let auto-resize settle it
+  // back to the bar once onboarding is done. The setup scene also sticky-pins Continue and caps to
+  // 100vh so a short work area still keeps the CTA clickable.
   // getSettings() is safe to read here (file keystore, no Keychain prompt — see the keystore note at top).
   let initialHeight = BAR_HEIGHT
   try {
     if (!getSettings().onboardingDone) {
-      initialHeight = Math.min(680, screen.getPrimaryDisplay().workArea.height - 48)
+      initialHeight = Math.min(760, screen.getPrimaryDisplay().workArea.height - 48)
       lastBarHeight = initialHeight // so a later width-only change (mini-pill) doesn't snap it back to 84
     }
   } catch {

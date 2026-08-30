@@ -9,7 +9,7 @@ import {
   ssoSignInVerdict
 } from './Onboarding'
 import { Sparkles } from 'lucide-react'
-import { aiRowStatus, micRowStatus, summarizeSetupRows, type SetupRow } from './OnboardingExperience'
+import { aiRowStatus, capabilityLit, micRowStatus, SETUP_CAPABILITIES, summarizeSetupRows, type SetupRow } from './OnboardingExperience'
 
 describe('providerTileDisabledReason — step-5 provider tiles must not misreport why they are disabled', () => {
   it('is null (tappable) when nothing blocks the tile', () => {
@@ -227,6 +227,53 @@ describe('MQA-279 — Act 3 config-complete state: "scan first, then present" mu
 
   it('is both scanDone and allReady once every row landed on ready or skipped', () => {
     expect(summarizeSetupRows([row('ready'), row('skipped'), row('ready')])).toEqual({ scanDone: true, allReady: true })
+  })
+})
+
+describe('Your setup — capability rail stays honest to real row states', () => {
+  const row = (key: string, state: SetupRow['state']): SetupRow => ({
+    key,
+    label: key,
+    icon: Sparkles,
+    state
+  })
+
+  it('stays pending until every unlock row exists and is ready', () => {
+    const listen = SETUP_CAPABILITIES.find((c) => c.id === 'listen')!
+    expect(capabilityLit(listen, [row('mic', 'ready')])).toBe('pending')
+    expect(capabilityLit(listen, [row('mic', 'ready'), row('asr', 'action')])).toBe('pending')
+  })
+
+  it('warms while any unlock row is still checking', () => {
+    const answers = SETUP_CAPABILITIES.find((c) => c.id === 'answers')!
+    expect(capabilityLit(answers, [row('ai', 'checking'), row('brain', 'ready')])).toBe('warming')
+  })
+
+  it('lights only when every unlock row is ready or skipped', () => {
+    const priv = SETUP_CAPABILITIES.find((c) => c.id === 'private')!
+    expect(capabilityLit(priv, [row('brain', 'ready')])).toBe('lit')
+    expect(capabilityLit(priv, [row('brain', 'skipped')])).toBe('lit')
+  })
+})
+
+describe('Your setup — Continue stays reachable (viewport cap + sticky CTA)', () => {
+  const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+
+  it('caps the experience to the BrowserWindow viewport so the overlay clamp cannot hide the CTA', () => {
+    expect(src).toMatch(/max-h-\[calc\(100vh-12px\)\]/)
+  })
+
+  it('keeps a sticky setup CTA bar with Continue always primary', () => {
+    expect(src).toMatch(/setup-cta-bar/)
+    expect(src).toMatch(/Continue anyway/)
+    // Must not reintroduce the secondary "looks disabled" styling that made the button feel dead.
+    expect(src).not.toMatch(/needsPerms\s*\?\s*'text-\[color:var\(--color-ink-2\)\]/)
+  })
+
+  it('showcases Métis capabilities from real setup signals', () => {
+    expect(src).toMatch(/What Métis unlocks/)
+    expect(src).toMatch(/SetupCapabilityRail/)
+    expect(src).toMatch(/SETUP_CAPABILITIES/)
   })
 })
 

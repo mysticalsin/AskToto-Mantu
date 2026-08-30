@@ -48,7 +48,7 @@ describe('placeAvoiding — the dashboard must not open under the always-on-top 
   })
 
   it('shrinks rather than overflowing when the bar is tall, and never goes below minHeight', () => {
-    // A grown bar (onboarding is ~680 tall) leaves little room underneath.
+    // A grown bar (onboarding is ~760 tall) leaves little room underneath.
     const workArea = { x: 0, y: 0, width: 1800, height: 1082 }
     const tallBar = { x: 460, y: 24, width: 880, height: 400 }
     const p = placeAvoiding(SIZE, workArea, tallBar)

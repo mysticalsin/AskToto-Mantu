@@ -34,20 +34,34 @@ struct OnboardingView: View {
                 ActProgress(scene: model.scene)
                     .frame(height: 36)
                     .padding(.top, 10)
-                Spacer(minLength: 0)
-                sceneContent
-                    .frame(maxWidth: 560)
-                    .padding(.horizontal, 40)
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .offset(y: 10)),
-                        removal: .opacity.combined(with: .offset(y: -10))
-                    ))
-                    .id(model.scene)
-                Spacer(minLength: 0)
+                // Setup owns its own scroll + sticky CTA and needs the remaining height. Other acts
+                // stay vertically centered in the leftover space.
+                if model.scene == .setup {
+                    sceneContent
+                        .frame(maxWidth: 560, maxHeight: .infinity)
+                        .padding(.horizontal, 40)
+                        .padding(.bottom, 16)
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .offset(y: 10)),
+                            removal: .opacity.combined(with: .offset(y: -10))
+                        ))
+                        .id(model.scene)
+                } else {
+                    Spacer(minLength: 0)
+                    sceneContent
+                        .frame(maxWidth: 560)
+                        .padding(.horizontal, 40)
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .offset(y: 10)),
+                            removal: .opacity.combined(with: .offset(y: -10))
+                        ))
+                        .id(model.scene)
+                    Spacer(minLength: 0)
+                }
             }
             .animation(.easeInOut(duration: 0.4), value: model.scene)
         }
-        .frame(minWidth: 640, minHeight: 620)
+        .frame(minWidth: 640, minHeight: 700)
         .preferredColorScheme(.dark)
     }
 
@@ -211,29 +225,92 @@ private struct RevealScene: View {
 
 // MARK: - Scene 4: Your setup (live)
 
+/// Capability tiles lit from real setup rows — same honesty rule as Electron's SetupCapabilityRail.
+private struct SetupCapability: Identifiable {
+    let id: String
+    let title: String
+    let blurb: String
+    let systemImage: String
+    let unlockKeys: [String]
+}
+
+private let setupCapabilities: [SetupCapability] = [
+    .init(id: "listen", title: "Live listen", blurb: "Catches the question as it lands.", systemImage: "ear", unlockKeys: ["mic", "asr"]),
+    .init(id: "answers", title: "Instant answers", blurb: "What to say next, from your meetings.", systemImage: "sparkles", unlockKeys: ["intelligence", "brain"]),
+    .init(id: "private", title: "On-device brain", blurb: "Your meetings never leave this Mac.", systemImage: "lock.doc", unlockKeys: ["brain"]),
+    .init(id: "screen", title: "Screen context", blurb: "Answers grounded in what you see.", systemImage: "rectangle.on.rectangle", unlockKeys: ["screen"])
+]
+
+private enum CapabilityLit { case pending, warming, lit }
+
+private func capabilityLit(_ cap: SetupCapability, rows: [SetupRow]) -> CapabilityLit {
+    let relevant = cap.unlockKeys.map { key in rows.first(where: { $0.key == key }) }
+    if relevant.contains(where: { $0 == nil }) { return .pending }
+    let found = relevant.compactMap { $0 }
+    if found.contains(where: { $0.state == .checking }) { return .warming }
+    if found.allSatisfy({ $0.state == .ready || $0.state == .skipped }) { return .lit }
+    return .pending
+}
+
 private struct SetupScene: View {
     @Bindable var model: OnboardingModel
     var body: some View {
-        VStack(spacing: 20) {
-            Text("Your setup").font(.system(size: 22, weight: .semibold)).foregroundStyle(.white)
-            VStack(spacing: 8) {
-                ForEach(model.rows) { row in
-                    SetupRowView(model: model, row: row)
+        // Scroll body + sticky Continue: on short displays the old centered VStack clipped the CTA
+        // below the window edge with no way to reach it. Continue stays primary even while perms
+        // are pending (always clickable — finish later in Settings).
+        VStack(spacing: 0) {
+            ScrollView {
+                VStack(spacing: 18) {
+                    VStack(spacing: 6) {
+                        Text("Your setup")
+                            .font(.system(size: 11, weight: .medium))
+                            .tracking(1.4)
+                            .foregroundStyle(.white.opacity(0.45))
+                        Text(model.allReady ? "Everything’s ready." : (model.rows.contains(where: { $0.state == .checking }) ? "Checking this Mac…" : "Almost there."))
+                            .font(.system(size: 22, weight: .semibold))
+                            .foregroundStyle(.white)
+                        Text("Real checks only — Métis lights each capability when it’s actually available.")
+                            .font(.system(size: 12.5))
+                            .foregroundStyle(.white.opacity(0.65))
+                            .multilineTextAlignment(.center)
+                    }
+
+                    SetupCapabilityRail(rows: model.rows, includeScreen: model.rows.contains(where: { $0.key == "screen" }))
+
+                    VStack(spacing: 8) {
+                        ForEach(model.rows) { row in
+                            SetupRowView(model: model, row: row)
+                        }
+                    }
+                    .frame(maxWidth: 460)
+
+                    if model.allReady {
+                        Text("Nothing left to configure.")
+                            .font(.system(size: 14, weight: .medium)).foregroundStyle(.white)
+                            .transition(.opacity)
+                    }
                 }
-            }
-            .frame(maxWidth: 460)
-
-            if model.allReady {
-                Text("Everything's ready. Nothing to configure.")
-                    .font(.system(size: 14, weight: .medium)).foregroundStyle(.white)
-                    .transition(.opacity)
+                .padding(.bottom, 12)
             }
 
-            Button { model.advance() } label: {
-                Text("Continue").metisPrimaryButton(enabled: !model.needsPermissions)
+            VStack(spacing: 8) {
+                if model.needsPermissions {
+                    Text("Permissions can wait — finish them anytime in Settings.")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.white.opacity(0.45))
+                        .multilineTextAlignment(.center)
+                }
+                Button { model.advance() } label: {
+                    Text(model.needsPermissions ? "Continue anyway" : "Continue").metisPrimaryButton()
+                }
+                .buttonStyle(.plain)
+                .keyboardShortcut(.defaultAction)
             }
-            .buttonStyle(.plain)
-            .keyboardShortcut(.defaultAction)
+            .padding(.top, 12)
+            .frame(maxWidth: .infinity)
+            .background(
+                LinearGradient(colors: [.clear, Color.black.opacity(0.22)], startPoint: .top, endPoint: .bottom)
+            )
         }
         .animation(.easeInOut(duration: 0.3), value: model.allReady)
         .task(id: model.scene) {
@@ -245,6 +322,81 @@ private struct SetupScene: View {
                 await model.refreshPermissions()
             }
         }
+    }
+}
+
+private struct SetupCapabilityRail: View {
+    let rows: [SetupRow]
+    let includeScreen: Bool
+    private var caps: [SetupCapability] {
+        setupCapabilities.filter { includeScreen || $0.id != "screen" }
+    }
+    private var litCount: Int {
+        caps.filter { capabilityLit($0, rows: rows) == .lit }.count
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .bottom) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("What Métis unlocks")
+                        .font(.system(size: 10, weight: .semibold))
+                        .tracking(1.2)
+                        .foregroundStyle(.white.opacity(0.45))
+                    Text(litCount == caps.count
+                          ? "Every capability below is ready on this Mac."
+                          : "Live on your Mac — finish permissions anytime.")
+                        .font(.system(size: 12))
+                        .foregroundStyle(.white.opacity(0.65))
+                }
+                Spacer(minLength: 0)
+                Text("\(litCount)/\(caps.count)")
+                    .font(.system(size: 10, weight: .medium).monospacedDigit())
+                    .foregroundStyle(.white.opacity(0.4))
+            }
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)], spacing: 8) {
+                ForEach(caps) { cap in
+                    let lit = capabilityLit(cap, rows: rows)
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: cap.systemImage)
+                            .font(.system(size: 12))
+                            .foregroundStyle(lit == .lit ? MetisTheme.accent2 : .white.opacity(0.4))
+                            .frame(width: 14)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(cap.title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
+                            Text(cap.blurb).font(.system(size: 10.5)).foregroundStyle(.white.opacity(0.45))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(10)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(lit == .lit ? MetisTheme.accent.opacity(0.16) : Color.white.opacity(0.03))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(lit == .lit ? MetisTheme.accent.opacity(0.4) : .white.opacity(0.08))
+                    )
+                    .opacity(lit == .pending ? 0.7 : 1)
+                }
+            }
+        }
+        .padding(14)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(
+                    LinearGradient(
+                        colors: [MetisTheme.accent.opacity(0.14), Color.white.opacity(0.03)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(MetisTheme.accent.opacity(0.22))
+        )
+        .frame(maxWidth: 460)
     }
 }
 
