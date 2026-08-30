@@ -140,7 +140,7 @@ export interface BrainRead {
   index: {
     warnings: string[]
     revision?: number
-    ingested: Record<string, { at: number; ok: boolean; error?: string; sourceVersion?: string; attempts?: number; retryAfter?: number }>
+    ingested: Record<string, { at: number; ok: boolean; error?: string; sourceVersion?: string; attempts?: number; retryAfter?: number; exhausted?: boolean }>
   }
   graph: { nodes: Array<{ id: string; type: string; label: string }>; edges: Array<{ from: string; to: string; rel: string; confidence: Conf }> }
   people: BrainPerson[]
