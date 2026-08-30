@@ -222,6 +222,9 @@ async function groupBoot() {
       asr: await window.toto.asrBundled?.().catch?.(() => null) ?? null,
       settings: await window.toto.getSettings()
     }))
+    if (out.models.length === 0) {
+      return { __info: 'not exercised — this build ships no on-device LLM runtime; llama-server + the Qwen weights are provisioned only by predist/dist, so a dev/unpackaged build has neither to report on. Run against a packaged build.' }
+    }
     const ready = out.models.some((m) => m.ready)
     const arriving = out.models.some((m) => typeof m.progress === 'number' && m.progress >= 0 && !m.ready)
     assert(
@@ -875,6 +878,12 @@ async function groupScreen() {
     })
 
     await check(g, 'Private View ON refuses to capture, and says so specifically', async () => {
+      // ASKTOTO_DISABLE_CP=1 (set for screenshot QA) makes privateViewOn()/contentProtectionOn() return
+      // false, so capture is NOT refused — exercising this in that mode would be a false red. A release
+      // build never sets the flag, so the refusal is exercised for real there.
+      if (process.env.ASKTOTO_DISABLE_CP === '1') {
+        return { __info: 'not exercised — ASKTOTO_DISABLE_CP=1 disables Private View / content-protection enforcement for screenshot QA; run without that flag (as release builds do) to exercise the capture refusal' }
+      }
       await page.evaluate(() => window.toto.setSettings({ privateView: true }))
       await sleep(300)
       const r = await page.evaluate(async () => {

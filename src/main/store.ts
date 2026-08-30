@@ -500,6 +500,7 @@ function safeMtime(p: string): number {
 
 interface SettingsCache {
   value: Settings
+  base: string
   userMtime: number
   managedMtime: number
   adminMtime: number
@@ -507,16 +508,20 @@ interface SettingsCache {
 }
 let _settingsCache: SettingsCache | null = null
 
-/** Test-only: drop the mtime-keyed cache between cases that swap `app.getPath('userData')`. The cache
- *  key is mtimes alone (not the absolute path), so two temp profiles that happen to share an mtimeMs
- *  would otherwise return the previous case's Settings — a flake that surfaces as "mcpConnections is []"
- *  / wrong provider after an unrelated earlier write. Production never swaps userData mid-process. */
+/** Test-only: drop the settings cache between cases that swap `app.getPath('userData')`. Redundant now
+ *  that the cache key includes the userData dir (see `base` below), but kept because existing suites call
+ *  it in beforeEach and an explicit reset is a harmless belt-and-braces. Production never swaps userData. */
 export function resetSettingsCacheForTests(): void {
   _settingsCache = null
 }
 
-function currentSettingsMtimes(): Pick<SettingsCache, 'userMtime' | 'managedMtime' | 'adminMtime' | 'caheEdition'> {
+function currentSettingsMtimes(): Pick<SettingsCache, 'base' | 'userMtime' | 'managedMtime' | 'adminMtime' | 'caheEdition'> {
   return {
+    // The userData base dir is part of the key so a change of profile directory always misses the cache.
+    // In production `dir()` is constant (no behavior change); it is the test suites — each of which points
+    // app.getPath('userData') at a fresh temp dir per case — that would otherwise get a prior case's cached
+    // Settings when the fresh profile has no settings.json (all mtimes 0), causing order-dependent flakes.
+    base: dir(),
     userMtime: safeMtime(settingsPath()),
     managedMtime: safeMtime(join(dir(), 'managed-config.json')),
     adminMtime: safeMtime(adminManagedConfigPath()),
@@ -528,6 +533,7 @@ export function getSettings(): Settings {
   const m = currentSettingsMtimes()
   if (
     _settingsCache &&
+    _settingsCache.base === m.base &&
     _settingsCache.userMtime === m.userMtime &&
     _settingsCache.managedMtime === m.managedMtime &&
     _settingsCache.adminMtime === m.adminMtime &&
