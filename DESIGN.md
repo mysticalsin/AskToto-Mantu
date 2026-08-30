@@ -10,6 +10,8 @@ Three modes in Settings (persist, no reinstall). Default on a fresh install is *
 2. **island**. The always-visible peek capsule. Hover expands down. Leave returns to the peek.
 3. **bar**. Classic bar and pill. Always visible.
 
+Settings shows these as **cards with a tiny desktop diagram**, not three text radios. Hide: empty top-middle, faint hover hint, caption "Hidden until you move to the top." Island: small capsule at the top-middle, caption "A small island stays visible. Hover opens it." Bar: full bar at the top, caption "The bar stays on screen." Selected card is obvious. Changes apply immediately. No reinstall. Original Métis copy. No em dash. No Vibe Island trademark strings.
+
 ## Island Y
 
 When hide or island is revealed (or island is peeking), the top sits **fully below** the Mac hardware notch. It is not clipped.
@@ -22,6 +24,12 @@ Peek/hide-target and revealed share that Y. Height changes; Y does not. Windows 
 ## Hover / leave
 
 Hide and island: hover or click expands **down** from the safe top to the full bar (same top edge, taller height). Leave collapses (`pointer-leave` → grace → hide or peek). Bar does not auto-collapse.
+
+The hide hit target is a thin always-on-top strip at the top-middle even when visually gone. Pointer at the top-center / notch area pops the overlay down. Do not require clicking an 880px panel.
+
+## After exclusive exit
+
+When `onboardingDone` flips true, `exitExclusiveOnboardingStage` leaves exclusive fullscreen and parks the default **hide** rest (or island / bar if Settings already chose one). Never an **880×816** mid-flow card. Re-apply `setAlwaysOnTop(true, 'screen-saver')` (the level exclusive used). Width is peek / hug. Height is peek / hide-target. Y is `islandSafeTop` (path A: `display.workArea.y`, must be >= 25 on a notch Mac; path C strut if `workArea.y` is 0; never a `y=0` peek). Auto-resize must not grow that park back into 880×816. Then destroy the exclusive stage. Do not leave layer 0.
 
 ## Onboarding
 

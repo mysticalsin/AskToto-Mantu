@@ -254,6 +254,7 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       'const currentWidth = 880',
       `const lastBarHeight = ${TALL}`,
       'const onboardingExclusiveLive = () => false',
+      'const islandResting = false',
       ''
     ].join('\n')
     const run = new Function('stubs', preamble + region + '\nsetWindowMode()\nreturn current') as (
