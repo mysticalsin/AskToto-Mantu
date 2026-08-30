@@ -682,6 +682,92 @@ input::placeholder {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
 }
 
+/* Act 6 (Ready, MQA-283) — the narrative's closing ceremony. Tasteful, not a confetti cannon: one gleam
+   sweep around the Métis mark (same conic-mask trick as Act 1's `.island-capsule::before` above, so the
+   two bookend acts share a visual language) plus a handful of one-shot spark motes (positioned by
+   OnboardingExperience.tsx's READY_SPARKS via plain `left`/`top`, see `.ready-spark` below). Both are
+   one-shot / forwards — nothing loops, so the cost is a handful of repaints on scene mount, never an
+   ongoing one. Reduced motion needs the same explicit override `.island-capsule` does for the same
+   reason (an `@property`-typed angle is not guaranteed to land on its keyframe's end value at 0ms
+   duration); `.ready-spark` needs no override since it only ever animates opacity/transform, which the
+   blanket rule already handles correctly. */
+@property --ready-gleam-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes ready-gleam-sweep {
+  from {
+    --ready-gleam-angle: 0deg;
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  to {
+    --ready-gleam-angle: 720deg;
+    opacity: 0;
+  }
+}
+.ready-mark-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.ready-mark-wrap::before {
+  content: '';
+  position: absolute;
+  inset: -12px;
+  border-radius: 999px;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--ready-gleam-angle),
+    transparent 0deg,
+    var(--color-accent-2) 24deg,
+    transparent 58deg,
+    transparent 190deg,
+    var(--color-accent) 216deg,
+    transparent 250deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: ready-gleam-sweep 1400ms steps(60, end) 120ms both;
+}
+@keyframes ready-spark {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.3);
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.5);
+  }
+}
+.ready-spark {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--color-accent-2);
+  pointer-events: none;
+  animation: ready-spark 900ms var(--ease-spring) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ready-mark-wrap::before {
+    animation: none;
+    opacity: 0;
+  }
+}
+
 /* "Develops like film" — the signature first-answer moment. When the streamed answer's first content
    replaces the skeleton, it emerges THROUGH the frosted glass (blur → sharp) rather than snapping in,
    masking the unavoidable provider TTFT (~300–750ms) so the reveal reads as the product working, not
