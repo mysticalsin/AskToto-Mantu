@@ -124,6 +124,51 @@ export function probeMinWords(pinned: boolean, windowIndex: number): number {
 }
 
 /**
+ * Live language pin / re-pin confirmation (MQA-235 for live).
+ *
+ * Import already majority-votes before the first pin because window 0 is often a wrong-language
+ * greeting. Live used to latch on the FIRST confident probe — an English "thanks for joining" on a
+ * French call pinned English for the rest of the meeting. The INITIAL pin now needs the same
+ * SWITCH_AFTER consecutive confirming detections as a mid-meeting switch.
+ *
+ * Returns the next switch-run state and whether the worker should be (re)pinned to `detected`.
+ */
+export function advanceLanguageProbe(args: {
+  detected: string
+  pinnedLang: string | null
+  switchRun: { lang: string; count: number } | null
+  switchAfter?: number
+}): { pinnedLang: string | null; switchRun: { lang: string; count: number } | null; shouldPin: boolean } {
+  const switchAfter = args.switchAfter ?? SWITCH_AFTER
+  if (args.pinnedLang === null) {
+    const run =
+      args.switchRun && args.switchRun.lang === args.detected
+        ? { lang: args.detected, count: args.switchRun.count + 1 }
+        : { lang: args.detected, count: 1 }
+    if (run.count >= switchAfter) {
+      return { pinnedLang: args.detected, switchRun: null, shouldPin: true }
+    }
+    return { pinnedLang: null, switchRun: run, shouldPin: false }
+  }
+  if (args.detected === args.pinnedLang) {
+    return { pinnedLang: args.pinnedLang, switchRun: null, shouldPin: false }
+  }
+  const run =
+    args.switchRun && args.switchRun.lang === args.detected
+      ? { lang: args.detected, count: args.switchRun.count + 1 }
+      : { lang: args.detected, count: 1 }
+  if (run.count >= switchAfter) {
+    return { pinnedLang: args.detected, switchRun: null, shouldPin: true }
+  }
+  return { pinnedLang: args.pinnedLang, switchRun: run, shouldPin: false }
+}
+
+/** True when a Parakeet/Apple feed returned empty because echo-defense dropped operator bleed — not an engine stall. */
+export function feedEmptyIsEcho(res: string | { text: string; name?: string; echo?: boolean }): boolean {
+  return typeof res !== 'string' && res.echo === true && res.text === ''
+}
+
+/**
  * Exported for unit testing — the pure trim behind pushAudio's backpressure guard (1B.2a). Bounds the
  * queue to maxLen by dropping the OLDEST windows first, same as before — but a naive drop-the-front trim
  * can silently erase every queued window of one speaker's channel when the other channel produced a
@@ -505,7 +550,7 @@ export function useListen(
   // and independent of loadedQualityRef (which stays null whenever the whisper worker hasn't loaded yet,
   // e.g. mid-Parakeet/Apple session). fallBackToWhisper and armNetworkRetry's retry() read this so a
   // mid-session engine swap or a network-recovery reload honors the original choice instead of 'fast'.
-  const requestedQualityRef = useRef<'best' | 'fast'>('fast')
+  const requestedQualityRef = useRef<'best' | 'fast'>('best')
   // Spoken-language hint from settings ('auto' or a language display name, e.g. 'Portuguese'). Read
   // through a ref for the same reason as requestedQualityRef: fallback/retry re-inits fire long after
   // start() returned and must re-send the language the session was started with.
@@ -750,33 +795,18 @@ export function useListen(
         if (text.trim().split(/\s+/).filter(Boolean).length < probeMinWords(probePinnedRef.current, probeWindowCountRef.current)) return
         const detected = detectLanguage(text).lang
         if (!detected) return
-        if (!probePinnedRef.current) {
-          // First confident identification pins the worker immediately — no SWITCH_AFTER convergence
-          // wait for the INITIAL pin, same as whisper-import.ts's probeLanguage.
+        // MQA-235 (live): require SWITCH_AFTER consecutive confirming probes before the FIRST pin too —
+        // a greeting in the wrong language used to latch the whole meeting (import already majority-votes).
+        const next = advanceLanguageProbe({
+          detected,
+          pinnedLang: probePinnedRef.current ? pinnedLangRef.current : null,
+          switchRun: probeSwitchRunRef.current
+        })
+        probeSwitchRunRef.current = next.switchRun
+        if (next.shouldPin && next.pinnedLang) {
           probePinnedRef.current = true
-          pinnedLangRef.current = detected
-          probeSwitchRunRef.current = null
-          workerRef.current?.postMessage({ type: 'pinLanguage', language: detected })
-          return
-        }
-        if (detected === pinnedLangRef.current) {
-          probeSwitchRunRef.current = null // the current pin re-confirmed — false alarm
-          return
-        }
-        const run = probeSwitchRunRef.current
-        if (run && run.lang === detected) {
-          run.count += 1
-          if (run.count >= SWITCH_AFTER) {
-            pinnedLangRef.current = detected
-            probeSwitchRunRef.current = null
-            workerRef.current?.postMessage({ type: 'pinLanguage', language: detected })
-          }
-        } else {
-          // Different candidate than the one being confirmed: restart the count (no age/patience budget
-          // here — unlike the worker's OWN un-pinned switchRun, this only ticks on probe-cadence windows,
-          // which are already PROBE_EVERY apart, so there is no "stuck holding un-pinned" failure mode to
-          // bound against).
-          probeSwitchRunRef.current = { lang: detected, count: 1 }
+          pinnedLangRef.current = next.pinnedLang
+          workerRef.current?.postMessage({ type: 'pinLanguage', language: next.pinnedLang })
         }
       })
       .catch(() => {
@@ -814,13 +844,19 @@ export function useListen(
           const speakerName = typeof res === 'string' ? undefined : res.name
           parakeetFailures.current = 0 // success (even empty) resets the IPC-failure streak
           if (text === '') {
-            // Empty but technically successful: the window passed EMIT_RMS so audio WAS flowing — the
-            // engine returning nothing every time signals a stall (wrong model path, native init failure,
-            // silent loopback bug). Fall back to Whisper after a run so windows aren't silently swallowed.
-            parakeetEmptyRunRef.current += 1
-            if (parakeetEmptyRunRef.current >= PARAKEET_EMPTY_RUN_MAX) {
-              console.warn('[listen] parakeet returning empty every window — falling back to Whisper')
-              fallBackToWhisper()
+            // Echo-defense dropping operator bleed is intentional silence — never count it as an engine
+            // stall (that used to silent-downgrade a healthy Parakeet session to floor Whisper).
+            if (feedEmptyIsEcho(res)) {
+              parakeetEmptyRunRef.current = 0
+            } else {
+              // Empty but technically successful: the window passed EMIT_RMS so audio WAS flowing — the
+              // engine returning nothing every time signals a stall (wrong model path, native init failure,
+              // silent loopback bug). Fall back to Whisper after a run so windows aren't silently swallowed.
+              parakeetEmptyRunRef.current += 1
+              if (parakeetEmptyRunRef.current >= PARAKEET_EMPTY_RUN_MAX) {
+                console.warn('[listen] parakeet returning empty every window — falling back to Whisper')
+                fallBackToWhisper()
+              }
             }
           } else {
             parakeetEmptyRunRef.current = 0
@@ -859,10 +895,14 @@ export function useListen(
           const speakerName = typeof res === 'string' ? undefined : res.name
           parakeetFailures.current = 0 // success (even empty) resets the IPC-failure streak
           if (text === '') {
-            parakeetEmptyRunRef.current += 1
-            if (parakeetEmptyRunRef.current >= PARAKEET_EMPTY_RUN_MAX) {
-              console.warn('[listen] apple speech returning empty every window — falling back to Whisper')
-              fallBackToWhisper()
+            if (feedEmptyIsEcho(res)) {
+              parakeetEmptyRunRef.current = 0
+            } else {
+              parakeetEmptyRunRef.current += 1
+              if (parakeetEmptyRunRef.current >= PARAKEET_EMPTY_RUN_MAX) {
+                console.warn('[listen] apple speech returning empty every window — falling back to Whisper')
+                fallBackToWhisper()
+              }
             }
           } else {
             parakeetEmptyRunRef.current = 0
@@ -989,6 +1029,14 @@ export function useListen(
           void window.toto
             .speakerEmbed(embedAudio, 'them')
             .then((res) => {
+              // Echo defense (parity with Parakeet/Apple): operator bleed through loopback must not stay
+              // labeled as THEM. Whisper already committed the text before embed returns — drop the line.
+              if (res?.echo) {
+                const next = linesRef.current.filter((line) => line.t !== committedAt)
+                linesRef.current = next
+                setLines(next)
+                return
+              }
               if (res?.name) attachSpeakerName(committedAt, res.name)
             })
             .catch(() => {})

@@ -317,6 +317,14 @@ describe('SettingsSchema', () => {
   it('defaults mcpConnections to an empty array', () => {
     expect(DEFAULT_SETTINGS.mcpConnections).toEqual([])
   })
+
+  it('defaults asrQuality to best (live Whisper uses the large multilingual model)', () => {
+    expect(DEFAULT_SETTINGS.asrQuality).toBe('best')
+    // Schema default must match DEFAULT_SETTINGS — store.ts layers defaults under the user file, then
+    // parses; keep both identical so neither lies (see ipc.ts comment on asrQuality).
+    const { asrQuality: _omit, ...withoutQuality } = DEFAULT_SETTINGS
+    expect(SettingsSchema.parse(withoutQuality).asrQuality).toBe('best')
+  })
 })
 
 // Generalized MCP push connections (BidStack CRM + Plane "Book next steps") — McpConnectionSchema is the

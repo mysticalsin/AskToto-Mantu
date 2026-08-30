@@ -243,21 +243,24 @@ describe('speaker:embed — the Whisper-engine speaker-embedding tap (contract)'
     expect(ipcSrc).toMatch(/speakerEmbed: 'speaker:embed'/)
   })
 
-  it('the handler returns a best-effort { name? } shape, gated on Float32Array + size, and skips echo', () => {
+  it('the handler returns a best-effort { name?, echo? } shape, gated on Float32Array + size, and flags echo', () => {
     const start = indexSrc.indexOf('ipcMain.handle(IPC.speakerEmbed')
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 1200)
     expect(body).toMatch(/if \(!\(p\?\.samples instanceof Float32Array\)\) return \{\}/)
     expect(body).toMatch(/if \(p\.samples\.length > 16_000 \* 30\) return \{\}/)
     expect(body).toMatch(/labelThemAudio\(p\.samples\)/)
-    expect(body).toMatch(/if \(label && !label\.echo\) return \{ name: label\.name \}/)
+    // Echo must surface as echo:true so the renderer can drop the already-committed Whisper THEM line
+    // (silent skip used to leave operator loopback bleed labeled as THEM).
+    expect(body).toMatch(/if \(label\?\.echo\) return \{ echo: true/)
+    expect(body).toMatch(/if \(label\) return \{ name: label\.name \}/)
     expect(body).toMatch(/observeOperatorAudio\(p\.samples\)/)
     expect(body).toMatch(/return \{\}\s*\n\s*\}\)/)
   })
 
   it('the preload bridges it with the same {samples, speaker} payload shape as parakeetFeed', () => {
     expect(preloadSrc).toMatch(
-      /speakerEmbed: \(samples: Float32Array, speaker: string\): Promise<\{ name\?: string \}> =>\s*\n\s*ipcRenderer\.invoke\(IPC\.speakerEmbed, \{ samples, speaker \}\)/
+      /speakerEmbed: \(samples: Float32Array, speaker: string\): Promise<\{ name\?: string; echo\?: boolean \}> =>\s*\n\s*ipcRenderer\.invoke\(IPC\.speakerEmbed, \{ samples, speaker \}\)/
     )
   })
 })

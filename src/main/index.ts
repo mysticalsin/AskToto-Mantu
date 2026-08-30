@@ -834,7 +834,9 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
 }
 
 function importedTranscriptText(lines: ImportJob['lines']): string {
-  return lines.map((line) => `SPEAKER: ${line.text}`).join('\n')
+  // Diarization lands on line.name (enrolled profile or "Speaker N") — the recap prompt asks the model
+  // to attribute by those labels, so erasing them here made every import look like one anonymous SPEAKER.
+  return lines.map((line) => `${line.name?.trim() || 'SPEAKER'}: ${line.text}`).join('\n')
 }
 
 /** Text-side language name for one probe window's Parakeet decode, or null when inconclusive. */
@@ -3667,7 +3669,7 @@ function registerIpc(): void {
       // P2 echo defense: this window is the operator's OWN voice bleeding through the loopback, not the
       // other person — drop the transcribed text entirely rather than mislabel the operator's words as
       // "them" (a name/cluster label attached here would otherwise show up as something THEY said).
-      if (label?.echo) return { text: '' }
+      if (label?.echo) return { text: '', echo: true }
       if (label) return { text, name: label.name }
     } else if (p.speaker === 'you') {
       // ME windows never get a THEM label — feed straight into operator echo-defense/profile upkeep.
@@ -3691,7 +3693,7 @@ function registerIpc(): void {
     const text = await appleSpeechTranscribe(p.samples, appleSpeechLocale(getSettings().asrLanguage))
     if (text && p.speaker === 'them') {
       const label = labelThemAudio(p.samples)
-      if (label?.echo) return { text: '' } // see parakeetFeed's identical echo-defense comment above
+      if (label?.echo) return { text: '', echo: true } // see parakeetFeed's identical echo-defense comment above
       if (label) return { text, name: label.name }
     } else if (p.speaker === 'you') {
       observeOperatorAudio(p.samples)
@@ -3713,9 +3715,10 @@ function registerIpc(): void {
     if (p.samples.length > 16_000 * 30) return {}
     if (p.speaker === 'them') {
       const label = labelThemAudio(p.samples)
-      // Echo bleed has no text to drop here (the Whisper worker already committed the line before this
-      // call resolves) — degrade to attaching no name, which is exactly the pre-P2 "unlabeled" outcome.
-      if (label && !label.echo) return { name: label.name }
+      // Echo bleed: the Whisper worker already committed the line — return echo:true so the renderer
+      // can drop it (listen.ts). Without that flag the operator's own words stayed labeled as THEM.
+      if (label?.echo) return { echo: true as const }
+      if (label) return { name: label.name }
     } else if (p.speaker === 'you') {
       observeOperatorAudio(p.samples)
     }
