@@ -177,7 +177,7 @@ function TellTheRoomCard({
           type="checkbox"
           checked={consent}
           onChange={(e) => onConsent(e.target.checked)}
-          className="no-drag mt-0.5 accent-[var(--color-accent)]"
+          className="onboard-tell-check-box no-drag accent-[var(--color-accent)]"
         />
         <span>{TELL_THE_ROOM_CHECKBOX}</span>
       </label>
@@ -1113,17 +1113,15 @@ export function OnboardingExperience({
       )}
 
       {scene === 'personalize' && (
-        <div key="personalize" className="scene-enter flex flex-col items-center gap-6">
-          <div className="flex flex-col items-center gap-1.5">
-            <p className="m-0 text-[11px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-ink-3)]">
-              Last one
-            </p>
-            <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">How should Métis show up?</h2>
-            <p className="m-0 max-w-[360px] text-[12.5px] leading-snug text-[color:var(--color-ink-2)]">
+        <div key="personalize" className="scene-enter onboard-act4 flex flex-col items-center">
+          <div className="flex flex-col items-center gap-2">
+            <p className="onboard-act4-kicker">Last one</p>
+            <h2 className="onboard-act4-title">How should Métis show up?</h2>
+            <p className="onboard-act4-lead">
               One pick shapes how it listens and what it says next. Change it anytime in Settings.
             </p>
           </div>
-          <div className="flex max-w-[920px] flex-wrap justify-center gap-3">
+          <div className="onboard-persona-row">
             {/* The onboarding personality beat (Act 4, Vibe-Island-teardown "the ONE emotional choice
                 after the heavy config step") — three refined cards over the plain three-button picker
                 this replaced, each naming the mode's real behavior change (`persona-vibe.ts`, honest and
@@ -1141,25 +1139,15 @@ export function OnboardingExperience({
                   type="button"
                   aria-pressed={selected}
                   onClick={() => setMode(p.id)}
-                  className={
-                    'no-drag focus-ring relative w-[168px] overflow-hidden rounded-[14px] border px-4 py-3.5 text-left transition-all duration-150 ' +
-                    (selected
-                      ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)] shadow-[0_2px_14px_var(--color-accent-glow)]'
-                      : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]')
-                  }
+                  className={'onboard-persona no-drag focus-ring' + (selected ? ' is-selected' : '')}
                 >
                   {selected && <span key={mode} aria-hidden="true" className="persona-select-ring" />}
                   <div className="flex items-center gap-1.5">
-                    <Icon
-                      size={14}
-                      className={selected ? 'text-[color:var(--color-accent-2)]' : 'text-[color:var(--color-ink-3)]'}
-                    />
-                    <p className="m-0 text-[13px] font-semibold text-[color:var(--color-ink)]">{p.label}</p>
+                    <Icon size={13} className="text-[color:var(--color-ink)]" />
+                    <p className="onboard-persona-label">{p.label}</p>
                   </div>
-                  <p className="m-0 mt-1 text-[10.5px] font-medium uppercase tracking-[0.06em] text-[color:var(--color-accent-2)]">
-                    {p.vibe}
-                  </p>
-                  <p className="m-0 mt-1.5 text-[11px] leading-snug text-[color:var(--color-ink-2)]">{p.changes}</p>
+                  <p className="onboard-persona-vibe">{p.vibe}</p>
+                  <p className="onboard-persona-changes">{p.changes}</p>
                 </button>
               )
             })}
@@ -1202,7 +1190,7 @@ export function OnboardingExperience({
       )}
 
       {scene === 'skip' && (
-        <div key="skip" className="scene-enter onboard-skip-screen flex flex-col items-center">
+        <div key="skip" className="scene-enter onboard-act4 onboard-skip-screen flex flex-col items-center">
           <div className="hero-mark" aria-hidden="true">
             <MetisMark size={72} />
           </div>

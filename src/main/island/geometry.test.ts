@@ -331,6 +331,8 @@ describe('DESIGN.md overlay contract', () => {
     expect(design).toMatch(/0\.30/)
     expect(design).toMatch(/em dash/)
     expect(design).toMatch(/Tell the room/)
+    expect(design).toMatch(/primary window/)
+    expect(design).toMatch(/Act 4 light/)
     expect(design).toMatch(/GDPR/)
     expect(design).toMatch(/Portal/)
     expect(design).toMatch(/Skip the tour/)

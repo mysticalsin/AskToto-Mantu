@@ -49,6 +49,17 @@ describe('tell the room — designed consent on personalize', () => {
     expect(block).not.toMatch(/Ready when you are/)
     expect(css).toMatch(/\.onboard-tell-card\s*\{/)
     expect(css).toMatch(/backdrop-filter:\s*blur\(12px\)/)
+    const tell = css.slice(css.indexOf('.onboard-tell-card {'), css.indexOf('.onboard-tell-card h3'))
+    expect(tell).toMatch(/max-width:\s*540px/)
+    expect(tell).toMatch(/min-width:\s*min\(100%,\s*520px\)/)
+    expect(tell).toMatch(/rgba\(255,\s*255,\s*255,\s*0\.22\)/)
+    expect(css).toMatch(/\.onboard-tell-check-box\s*\{/)
+    expect(css).toMatch(/width:\s*18px/)
+    expect(css).toMatch(/\.onboard-act4::before/)
+    expect(experience).toMatch(/onboard-persona/)
+    const personalizeSrc = experience.slice(experience.indexOf("scene === 'personalize'"))
+    expect(personalizeSrc.slice(0, personalizeSrc.indexOf("scene === 'license'"))).not.toMatch(/bg-white\/\[0\.03\]/)
+    expect(experience).toMatch(/onboard-act4-kicker/)
   })
 
   it('Continue stays gated; finish still writes recordingConsent; Ready echoes the quote', () => {
