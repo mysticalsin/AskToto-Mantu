@@ -147,6 +147,7 @@ import {
   isReachable as islandIsReachable,
   recenterXForWidth,
   refitToDisplay as islandRefitToDisplay,
+  exclusiveOnboardingBounds,
   topCenterPosition,
   topClamp
 } from './island/geometry'
@@ -1388,6 +1389,62 @@ function publicSettings(): PublicSettings {
   }
 }
 
+/** Wiped-profile / mid-tour: exclusive fullscreen owns the display until onboardingDone. */
+function onboardingExclusiveLive(): boolean {
+  try {
+    return !getSettings().onboardingDone
+  } catch {
+    return false
+  }
+}
+
+function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDisplayMatching(w.getBounds())): void {
+  const stage = exclusiveOnboardingBounds(display.bounds, display.workArea)
+  currentWidth = stage.width
+  lastBarHeight = stage.height
+  isMinimized = false
+  try {
+    w.setFullScreenable?.(true)
+    w.setBackgroundColor('#0c0c0e')
+    w.setBounds(stage)
+  } catch {
+    /* headless / already destroyed */
+  }
+  try {
+    if (process.platform === 'darwin' && typeof w.setSimpleFullScreen === 'function') {
+      if (!w.isSimpleFullScreen()) w.setSimpleFullScreen(true)
+    } else if (process.platform === 'win32' && typeof w.setKiosk === 'function') {
+      if (!w.isKiosk()) w.setKiosk(true)
+    }
+  } catch {
+    /* CI / Linux kiosk unsupported — bounds still cover the display */
+  }
+}
+
+/** After onboardingDone only: leave exclusive fullscreen and park the small island (path A then C). */
+function exitExclusiveOnboardingStage(): void {
+  if (!win || win.isDestroyed()) return
+  try {
+    if (typeof win.isSimpleFullScreen === 'function' && win.isSimpleFullScreen()) win.setSimpleFullScreen(false)
+    if (typeof win.isKiosk === 'function' && win.isKiosk()) win.setKiosk(false)
+  } catch {
+    /* headless */
+  }
+  try {
+    win.setFullScreenable?.(false)
+    win.setBackgroundColor('#00000000')
+  } catch {
+    /* ignore */
+  }
+  currentWidth = BAR_WIDTH
+  lastBarHeight = BAR_HEIGHT
+  isMinimized = false
+  const display = screen.getDisplayMatching(win.getBounds())
+  const { x, y } = islandTopCenter(BAR_WIDTH, display, ISLAND_TOP_MARGIN)
+  userAnchorY = y
+  win.setBounds({ x, y, width: BAR_WIDTH, height: BAR_HEIGHT }, false)
+}
+
 function createWindow(): void {
   // Idempotent: `second-instance` is registered before app-ready and can call ensureWindow() while boot's
   // own runStep('createWindow') is still queued behind its awaits. Without this, the boot step would
@@ -1415,42 +1472,33 @@ function createWindow(): void {
   // resizable:false blocking any manual fix. Reset both so a recovered window always starts full-size.
   isMinimized = false
   currentWidth = BAR_WIDTH
-  // Fresh-install onboarding is a ~640px panel, not the 84px bar. The renderer's content-driven auto-resize
-  // can be starved by the macOS compositor on a just-created transparent, always-on-top overlay (rAF/timers
-  // frozen for a beat after first paint), which would otherwise leave onboarding clipped to bar height with
-  // its "Continue" buttons off-screen. Size the window to fit onboarding up front — deterministic, not
-  // dependent on the renderer — and let auto-resize settle it back to the bar once onboarding is done.
-  // getSettings() is safe to read here (file keystore, no Keychain prompt — see the keystore note at top).
-  let initialHeight = BAR_HEIGHT
-  try {
-    if (!getSettings().onboardingDone) {
-      initialHeight = Math.min(680, screen.getPrimaryDisplay().workArea.height - 48)
-      lastBarHeight = initialHeight // so a later width-only change (mini-pill) doesn't snap it back to 84
-    }
-  } catch {
-    /* getSettings unavailable — keep bar height; auto-resize grows onboarding if the renderer isn't frozen */
+  // Wiped-profile onboarding owns the display (exclusiveOnboardingBounds) — never the 880×816 card
+  // that overlapped Tony's work. Auto-resize must not shrink this until onboardingDone; exit then
+  // parks the island at islandSafeTop (path A then C). getSettings() is file-keystore-safe here.
+  const placementDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  const onboardingLive = onboardingExclusiveLive()
+  const stage = exclusiveOnboardingBounds(placementDisplay.bounds, placementDisplay.workArea)
+  const islandPos = islandTopCenter(BAR_WIDTH, placementDisplay, TOP_CENTER_MARGIN_PX)
+  if (onboardingLive) {
+    currentWidth = stage.width
+    lastBarHeight = stage.height
   }
-  const { x, y } = islandTopCenter(
-    BAR_WIDTH,
-    screen.getDisplayNearestPoint(screen.getCursorScreenPoint()),
-    TOP_CENTER_MARGIN_PX
-  )
   win = new BrowserWindow({
-    width: BAR_WIDTH,
-    height: initialHeight,
-    x,
-    y,
+    width: onboardingLive ? stage.width : BAR_WIDTH,
+    height: onboardingLive ? stage.height : BAR_HEIGHT,
+    x: onboardingLive ? stage.x : islandPos.x,
+    y: onboardingLive ? stage.y : islandPos.y,
     frame: false,
     transparent: true,
     hasShadow: false, // panel paints its own shadow; window shadow would box the transparent area
     resizable: false,
     movable: true,
     skipTaskbar: true,
-    fullscreenable: false,
+    fullscreenable: onboardingLive,
     maximizable: false,
     minimizable: false,
-    roundedCorners: true,
-    backgroundColor: '#00000000',
+    roundedCorners: !onboardingLive,
+    backgroundColor: onboardingLive ? '#0c0c0e' : '#00000000',
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -1464,6 +1512,7 @@ function createWindow(): void {
   })
 
   try {
+  if (onboardingLive) applyExclusiveOnboardingStage(win, placementDisplay)
   win.setAlwaysOnTop(true, 'screen-saver')
   // setVisibleOnAllWorkspaces is a documented no-op on Windows (Electron: "This API does nothing on
   // Windows") — gate the call so it isn't dead code there. Windows has no public API for pinning a
@@ -1559,7 +1608,11 @@ function createWindow(): void {
     // width — squeezing the recovered bar into a ~130px sliver that resizable:false makes unfixable. Same
     // two lines createWindow's crash guard uses, for the reload path that never reaches it.
     isMinimized = false
-    currentWidth = BAR_WIDTH
+    if (onboardingExclusiveLive() && win && !win.isDestroyed()) {
+      applyExclusiveOnboardingStage(win)
+    } else {
+      currentWidth = BAR_WIDTH
+    }
     if (!win || win.isDestroyed()) return
     if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
     else win.loadFile(join(__dirname, '../renderer/index.html'))
@@ -1597,6 +1650,11 @@ function createWindow(): void {
 
 function resizeTo(height: number): void {
   if (!win) return
+  // Exclusive onboarding owns the display. Auto-resize must not shrink to the 880×816 card.
+  if (onboardingExclusiveLive()) {
+    applyExclusiveOnboardingStage(win)
+    return
+  }
   // Clamp + reposition against the display the OVERLAY is actually on (not the cursor's). Otherwise, on a
   // laptop + external monitor of different heights, a streaming answer clamps to the wrong monitor and the
   // window jumps vertically while the cursor sits on the other screen.
@@ -1623,6 +1681,7 @@ function resizeTo(height: number): void {
 /** Collapse to / expand from the control mini-pill by switching the window width; the renderer's
  *  auto-resize then settles the height to whichever surface is shown. */
 function setMinimizedWidth(narrow: boolean): void {
+  if (onboardingExclusiveLive()) return
   // Flip BEFORE resizeTo so the pill's own resize reports (while narrow) never clobber lastBarHeight,
   // and so expanding restores the last real bar height instead of the pill's tiny one.
   isMinimized = narrow
@@ -1663,6 +1722,10 @@ function islandTopCenter(width: number, display: Electron.Display, topMargin: nu
  *  display. A pure setBounds — never show()/focus(). */
 function anchorTopCenter(): void {
   if (!win) return
+  if (onboardingExclusiveLive()) {
+    applyExclusiveOnboardingStage(win)
+    return
+  }
   const display = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
   const { x, y } = islandTopCenter(b.width, display, ISLAND_TOP_MARGIN)
@@ -1673,7 +1736,8 @@ function anchorTopCenter(): void {
 /** Reveal from the auto-hide peek: widen to the full bar and grow height downward from the same
  *  safe Y. Leave collapse is the inverse (resizeTo with peek height, same Y). */
 function restoreBarWidth(): void {
-  if (!win || currentWidth === BAR_WIDTH) return
+  if (!win || onboardingExclusiveLive()) return
+  if (currentWidth === BAR_WIDTH) return
   const display = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
   currentWidth = BAR_WIDTH
@@ -1687,6 +1751,10 @@ function restoreBarWidth(): void {
 // settings renders as a panel under the bar now, so the window only ever lives in 'bar' mode.
 function setWindowMode(): void {
   if (!win) return
+  if (onboardingExclusiveLive()) {
+    applyExclusiveOnboardingStage(win)
+    return
+  }
   const { workArea } = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
   const x = recenterXForWidth(b.x, b.width, currentWidth, workArea, 16)
@@ -2112,6 +2180,10 @@ function moveBy(dx: number, dy: number): void {
 function registerScreenListeners(): void {
   const reanchor = (): void => {
     if (!win) return
+    if (onboardingExclusiveLive()) {
+      applyExclusiveOnboardingStage(win)
+      return
+    }
     const b = win.getBounds()
     const { workArea: wa } = screen.getDisplayMatching(b)
     // Height first, and BEFORE the reachability guard below. A window grown to fit a tall display keeps
@@ -2713,6 +2785,11 @@ function registerIpc(): void {
     }
     const next = setSettings(p)
     auditLog('settings.changed', { keys: Object.keys(p) })
+    // Exclusive stage exits only here: onboardingDone false→true. Replay (true→false) re-enters it.
+    if (!cur.onboardingDone && next.onboardingDone) exitExclusiveOnboardingStage()
+    else if (cur.onboardingDone && !next.onboardingDone && win && !win.isDestroyed()) {
+      applyExclusiveOnboardingStage(win)
+    }
     // Flipping follow-up memory is itself a conversation boundary. Without this, turning it ON would
     // retroactively inherit the Q&A recorded — and the Dust conversation created — while the user was
     // being told each question "starts completely fresh" (review finding, 2026-08-04). Zeroing the idle
@@ -5534,7 +5611,7 @@ function registerIpc(): void {
     // was behind it. Floor/ceiling guard against a measurement glitch reporting something absurd — the
     // ceiling is BAR_WIDTH itself since nothing legitimately needs to be wider than the full bar (a lower
     // ceiling here once clipped a wider toast's own content that had genuinely asked for more room).
-    if (typeof payload?.width === 'number' && Number.isFinite(payload.width)) {
+    if (typeof payload?.width === 'number' && Number.isFinite(payload.width) && !onboardingExclusiveLive()) {
       // +10 (not the height report's +2) gives the pill's own box-shadow/glow room to render without
       // being hard-clipped at the window edge — see the .aw-pill / .aw-mark-glow comments in styles.css.
       currentWidth = Math.max(120, Math.min(Math.ceil(payload.width) + 10, BAR_WIDTH))

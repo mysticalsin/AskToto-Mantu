@@ -3096,19 +3096,17 @@ export function App(): JSX.Element {
       )
     }
     return (
-      <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
-        <Panel>
-          <OnboardingV2
-            settings={settings}
-            saveKey={saveKey}
-            recoverEncryptedProfile={recoverEncryptedProfile}
-            patch={patch}
-            onOpenAiSettings={() => openSettings('ai')}
-            onDone={() => void refresh()}
-            signedIn={auth.status?.signedIn}
-            signedInEmail={auth.status?.email}
-          />
-        </Panel>
+      <div ref={setRoot} {...windowDrag} className="flex h-full min-h-0 w-full flex-col bg-[#0c0c0e]">
+        <OnboardingV2
+          settings={settings}
+          saveKey={saveKey}
+          recoverEncryptedProfile={recoverEncryptedProfile}
+          patch={patch}
+          onOpenAiSettings={() => openSettings('ai')}
+          onDone={() => void refresh()}
+          signedIn={auth.status?.signedIn}
+          signedInEmail={auth.status?.email}
+        />
       </div>
     )
   }
