@@ -79,31 +79,62 @@ Model ids are typed the same way as for any other provider, in Cloudflare's form
 
 ---
 
-## Optional: an installer-embedded proxy key, so a fresh install needs zero setup
+## On by default: an installer-embedded Cloudflare credential, so a fresh install needs zero setup
 
-Cloudflare is the DEFAULT provider (`BaseSettingsSchema.provider`), and it ships the Worker URL above —
-but not a `METIS_PROXY_KEY`, so a brand-new install still has no cloud route until someone pastes one in
-Settings. An operator can optionally close that last gap the same disclosed, opt-in way the Cahê pilot
-already embeds its Kimi key (`src/main/cahe-embedded-key.ts`) — this is the general-build counterpart,
-`src/main/embedded-cloudflare-key.ts`:
+Cloudflare is the DEFAULT provider (`BaseSettingsSchema.provider`). By default the release builds now also
+embed a Cloudflare credential (encrypted at rest), so a brand-new install answers with **nothing to paste**:
+on a fresh profile `provider` is `cloudflare`, a key is seeded into the encrypted keystore, an https
+endpoint is set, and `providerReady` is true with no "Add your Cloudflare key" prompt.
+
+The embedded credential comes in **two shapes**, both encrypted into the same blob
+(`src/main/embedded-cloudflare-key.ts`), built only from build-time env — only ciphertext ships, and
+**nothing about the account (id, endpoint or token) is in tracked source**:
+
+1. **Worker proxy key** (the original, token-never-ships design above). The blob's plaintext is a bare
+   `METIS_PROXY_KEY`; the app still points `cloudflareBaseUrl` at the operator's Worker. Set
+   `METIS_CLOUDFLARE_API_TOKEN` (or the legacy `METIS_PROXY_KEY`) at build time, with no account id.
+
+2. **Direct Cloudflare account credential** (the product owner's on-by-default configuration). The blob's
+   plaintext is a JSON `{token,baseUrl}`: `token` is a Cloudflare **account API token** sent as
+   `Authorization: Bearer …`, and `baseUrl` is the account-scoped OpenAI-compatible REST endpoint
+   `https://api.cloudflare.com/client/v4/accounts/<id>/ai/v1`. Métis then talks to Cloudflare **directly**,
+   with no Worker in the path. Set `METIS_CLOUDFLARE_API_TOKEN` **and** `METIS_CLOUDFLARE_ACCOUNT_ID` at
+   build time (or `METIS_CLOUDFLARE_BASE_URL` for a full endpoint override). On first run the runtime seeds
+   both the key and — guarded so it never clobbers an operator/user endpoint (`=== METIS_WORKER_URL`) — the
+   account endpoint into settings.
+
+   The honest trade-off is the same as any embedded credential: an account token that ships is
+   **obfuscation, not secrecy** (see below), and an account token is broader than a proxy key. The product
+   owner accepts this deliberately and rotates the token out-of-band; size/scope the token accordingly and
+   be ready to rotate it. The truly-secure alternative remains shape (1)/the Worker proxy.
+
+Either shape is the same disclosed, opt-in mechanism the Cahê pilot uses for its Kimi key
+(`src/main/cahe-embedded-key.ts`) — `src/main/embedded-cloudflare-key.ts` is the general-build counterpart:
 
 1. Generate a **separate** key — never the operator's own `METIS_PROXY_KEY` — and add it to the Worker's
    `METIS_PROXY_KEYS` array under its own label, e.g. `"embedded-default:<value>"`
    (`cloudflare-proxy/src/index.ts`'s multi-key union). A labeled key is revoked independently, by
    removing just that entry, without touching any other user's key. Size it as a minimum-quota fallback
    on the Worker side, not a shared admin credential.
-2. Set that value as the `METIS_PROXY_KEY` build environment variable (a build **Secret** in CI, or an
-   exported shell var locally). It is read **only** from the environment — never a hardcoded value, never
-   a committed file. The predist/prebuild step `scripts/embed-cloudflare-key.mjs` then AES-256-GCM-encrypts
-   it into `build/cloudflare-embed/key.json` (gitignored). Only the **ciphertext** blob is written to disk;
-   the plaintext token is not. If the env var is unset, the step is a clean no-op (the normal keyless build).
-3. Build with `METIS_EMBED_CLOUDFLARE_KEY=1` set as well, e.g.
-   `METIS_PROXY_KEY=… METIS_EMBED_CLOUDFLARE_KEY=1 npm run dist:win` (or `release:build:win`, `dist`,
-   `release:build:mac`, or the Cahê chain). This is a deliberate **double opt-in**: `METIS_PROXY_KEY`
-   supplies the token, and `METIS_EMBED_CLOUDFLARE_KEY=1` authorizes packaging it. Without the second var,
-   `scripts/check-embedded-cloudflare-key.mjs` refuses the package outright rather than silently shipping a
-   key nobody meant to embed. That same gate proves the packaged blob is ciphertext (never a plaintext
-   `proxyKey` field) and that the decrypted token appears **nowhere** in the packaged app.
+2. Supply the credential as build environment variables (build **Secrets** in CI, or exported shell vars
+   locally). All are read **only** from the environment — never a hardcoded value, never a committed file:
+   - `METIS_CLOUDFLARE_API_TOKEN` (or legacy `METIS_PROXY_KEY`) — the token to embed.
+   - For the **direct account** shape, also `METIS_CLOUDFLARE_ACCOUNT_ID` (the endpoint is derived as
+     `https://api.cloudflare.com/client/v4/accounts/<id>/ai/v1`), or `METIS_CLOUDFLARE_BASE_URL` to set a
+     full endpoint explicitly. Omit both for the bare Worker-proxy-key shape.
+   The predist/prebuild step `scripts/embed-cloudflare-key.mjs` then AES-256-GCM-encrypts the payload into
+   `build/cloudflare-embed/key.json` (gitignored). Only the **ciphertext** blob is written to disk; the
+   plaintext token is not. If no token env var is set, the step is a clean no-op (the normal keyless build).
+3. Build with `METIS_EMBED_CLOUDFLARE_KEY=1` set as well. `.github/workflows/release.yml` already sets this
+   for the mac/win release jobs, so with the account secrets configured in the repo the DMG/EXE embed the
+   credential **by default**; locally you set it explicitly, e.g.
+   `METIS_CLOUDFLARE_API_TOKEN=… METIS_CLOUDFLARE_ACCOUNT_ID=… METIS_EMBED_CLOUDFLARE_KEY=1 npm run dist`
+   (or `release:build:mac`, `dist:win`, `release:build:win`, or the Cahê chain). This is a deliberate
+   **double opt-in**: the token env supplies the credential, and `METIS_EMBED_CLOUDFLARE_KEY=1` authorizes
+   packaging it. Without the second var, `scripts/check-embedded-cloudflare-key.mjs` refuses the package
+   outright rather than silently shipping a key nobody meant to embed. That same gate proves the packaged
+   blob is ciphertext (never a plaintext `proxyKey` field) and that the decrypted token appears **nowhere**
+   in the packaged app.
 
 ### The encryption, and its honest limits
 
