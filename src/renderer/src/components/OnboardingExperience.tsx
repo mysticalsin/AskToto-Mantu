@@ -217,15 +217,15 @@ function OnboardingHeroVideo({
 function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => void }): JSX.Element {
   return (
     <>
-      <div className="relative z-10 scene-enter flex flex-col items-center gap-5">
-        <div className="hero-mark" aria-hidden="true">
+      <div className="hero-welcome relative z-10 scene-enter flex flex-col items-center gap-5">
+        <div className="hero-mark fade-up" aria-hidden="true" style={{ animationDelay: '80ms', animationFillMode: 'backwards' }}>
           <MetisMark size={96} />
         </div>
         <div className="flex flex-col items-center gap-2">
           <h1
-            className="hero-wordmark m-0 select-none"
+            className="hero-wordmark fade-up m-0 select-none"
             aria-label={WORDMARK}
-            style={{ fontFamily: 'var(--font-ui)' }}
+            style={{ fontFamily: 'var(--font-ui)', animationDelay: '160ms', animationFillMode: 'backwards' }}
           >
             <span aria-hidden="true">{WORDMARK}</span>
           </h1>

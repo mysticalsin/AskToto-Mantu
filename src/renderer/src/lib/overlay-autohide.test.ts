@@ -156,4 +156,13 @@ describe('overlay auto-hide state machine (MQA-274)', () => {
     expect(REVEAL_DWELL_MS).toBeGreaterThanOrEqual(80)
     expect(REVEAL_DWELL_MS).toBeLessThanOrEqual(250)
   })
+
+  it('a sustained pointer-enter on the pad reveals once the dwell elapses', () => {
+    let s = initialAutoHideState(true)
+    s = reduceAutoHide(s, { type: 'pointer-enter' })
+    expect(isRevealed(s)).toBe(false)
+    s = reduceAutoHide(s, { type: 'dwell-elapsed' })
+    expect(isRevealed(s)).toBe(true)
+    expect(s.hovering).toBe(true)
+  })
 })

@@ -1,9 +1,9 @@
 /**
- * Act 1 atmosphere only. The clip is ~43MB, so it is not bundled; the exclusive stage
- * purple wash is the fallback if CloudFront fails or prefers-reduced-motion is on.
+ * Act 1 atmosphere only. March 19 clip (taller than 16:9). Not bundled; the exclusive
+ * stage purple wash is the fallback if CloudFront fails or prefers-reduced-motion is on.
  */
 export const ONBOARDING_HERO_VIDEO_SRC =
-  'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260714_113715_c7e0daa0-8bdd-4486-a2da-040901f8f0ea.mp4'
+  'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260319_055001_8e16d972-3b2b-441c-86ad-2901a54682f9.mp4'
 
 /**
  * Must run inside a user click. `play()` is the first media call so the user-gesture

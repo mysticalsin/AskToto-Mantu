@@ -215,11 +215,12 @@ export function onboardingFitsWorkArea(win: Rect, workArea: Rect): boolean {
   return win.width >= workArea.width && win.height >= workArea.height
 }
 
-/** Hide-until-hover sliver — keep in lockstep with `.overlay-hide-target` in styles.css. */
-export const OVERLAY_HIDE_TARGET = { width: 168, height: 8 } as const
+/** Hide-until-hover hit pad — keep in lockstep with `.overlay-hide-target` in styles.css.
+ *  Wide top-middle strip (not a 120px pill). Opaque to hit-testing. Do not hug-width this. */
+export const OVERLAY_HIDE_TARGET = { width: 560, height: 28 } as const
 /** Always-visible island peek — keep in lockstep with `.overlay-peek` in styles.css. */
 export const OVERLAY_ISLAND_PEEK = { width: 132, height: 15 } as const
-/** Matches the windowResize hug-width pad so the strip is not clipped. */
+/** Matches the windowResize hug-width pad so the island capsule is not clipped. */
 export const OVERLAY_PEEK_WIDTH_PAD = 10
 export const OVERLAY_PEEK_HEIGHT_PAD = 4
 /** Classic idle bar — used only when chrome is `bar`. */
@@ -230,13 +231,13 @@ export function isForbiddenMidFlowCard(win: Pick<Rect, 'width' | 'height'>): boo
   return win.width === OVERLAY_BAR_REST.width && win.height >= 700
 }
 
-/** Rest size after exclusive exit. Hide/island are a hug-width peek, never the 880-wide bar. */
+/** Rest size after exclusive exit / createWindow. Hide is the wide pad (no hug). Island hugs the peek. */
 export function overlayRestSize(layout: OverlayLayout): { width: number; height: number } {
   if (layout === 'bar') return { width: OVERLAY_BAR_REST.width, height: OVERLAY_BAR_REST.height }
-  const rest = layout === 'hide' ? OVERLAY_HIDE_TARGET : OVERLAY_ISLAND_PEEK
+  if (layout === 'hide') return { width: OVERLAY_HIDE_TARGET.width, height: OVERLAY_HIDE_TARGET.height }
   return {
-    width: rest.width + OVERLAY_PEEK_WIDTH_PAD,
-    height: rest.height + OVERLAY_PEEK_HEIGHT_PAD
+    width: OVERLAY_ISLAND_PEEK.width + OVERLAY_PEEK_WIDTH_PAD,
+    height: OVERLAY_ISLAND_PEEK.height + OVERLAY_PEEK_HEIGHT_PAD
   }
 }
 

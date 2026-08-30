@@ -14,8 +14,10 @@ const html = readFileSync(join(__dirname, '../../index.html'), 'utf8')
 describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
   it('uses Tony’s first-slide clip, muted loop autoplay, object-cover, z-0 under the UI', () => {
     expect(ONBOARDING_HERO_VIDEO_SRC).toBe(
-      'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260714_113715_c7e0daa0-8bdd-4486-a2da-040901f8f0ea.mp4'
+      'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260319_055001_8e16d972-3b2b-441c-86ad-2901a54682f9.mp4'
     )
+    expect(ONBOARDING_HERO_VIDEO_SRC).not.toMatch(/hf_20260714_113715_c7e0daa0/)
+    expect(ONBOARDING_HERO_VIDEO_SRC).not.toMatch(/hf_20260411_104032_69319010/)
     expect(experience).toMatch(/ONBOARDING_HERO_VIDEO_SRC/)
     expect(experience).toMatch(/muted/)
     expect(experience).toMatch(/loop/)
@@ -25,6 +27,10 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(css).toMatch(/\.onboard-hero-video\s*\{/)
     expect(css).toMatch(/z-index:\s*0/)
     expect(css).toMatch(/object-fit:\s*cover/)
+    expect(css).toMatch(/object-position:\s*center/)
+    expect(css).toMatch(/onboard-hero-kenburns/)
+    expect(css).toMatch(/\.hero-welcome/)
+    expect(experience).toMatch(/hero-welcome/)
     expect(css).toMatch(/#3a0b6b/)
     expect(css).toMatch(/#7f00da/)
   })

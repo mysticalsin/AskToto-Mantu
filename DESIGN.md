@@ -25,11 +25,17 @@ Peek/hide-target and revealed share that Y. Height changes; Y does not. Windows 
 
 Hide and island: hover or click expands **down** from the safe top to the full bar (same top edge, taller height). Leave collapses (`pointer-leave` → grace → hide or peek). Bar does not auto-collapse.
 
-The hide hit target is a thin always-on-top strip at the top-middle even when visually gone. Pointer at the top-center / notch area pops the overlay down. Do not require clicking an 880px panel.
+**Hide (default).** The rest is a **wide top-middle hit pad**, not a 120px pill. At least **560×28**. Visually stealth, **opaque to hit-testing** (Electron ignores fully transparent pixels). Do **not** `data-hug-width` the hide pad down to ~120px. Do not wrap it in `p-5` transparent padding. Pointer-enter is on the pad itself. Y is `islandSafeTop` / `workArea.y` (path A). If path A still cannot receive hover, path C is a top strut (wide hit strip). Do not jump to native NSPanel this round. `setIgnoreMouseEvents` must not eat the pad. A hover that stays on the pad must open. Crossing the menu bar without staying can stay gated.
+
+**Island.** Always-visible peek capsule. Hover expands down. Leave returns to the peek. Hug-width is OK on the visible capsule only.
+
+**Bar.** Always the bar. No hide.
+
+`createWindow` when `onboardingDone` + hide/island parks `overlayRestSize` immediately (same as exclusive exit). Never boot at 880×84 and hope hug wins.
 
 ## After exclusive exit
 
-When `onboardingDone` flips true, `exitExclusiveOnboardingStage` leaves exclusive fullscreen and parks the default **hide** rest (or island / bar if Settings already chose one). Never an **880×816** mid-flow card. Re-apply `setAlwaysOnTop(true, 'screen-saver')` (the level exclusive used). Width is peek / hug. Height is peek / hide-target. Y is `islandSafeTop` (path A: `display.workArea.y`, must be >= 25 on a notch Mac; path C strut if `workArea.y` is 0; never a `y=0` peek). Auto-resize must not grow that park back into 880×816. Then destroy the exclusive stage. Do not leave layer 0.
+When `onboardingDone` flips true, `exitExclusiveOnboardingStage` leaves exclusive fullscreen and parks the default **hide** rest (or island / bar if Settings already chose one). Never an **880×816** mid-flow card. Never a 120×50 pill for hide. Re-apply `setAlwaysOnTop(true, 'screen-saver')` (the level exclusive used). Hide width/height are the wide hit pad (560×28). Island is the peek capsule. Y is `islandSafeTop` (path A: `display.workArea.y`, must be >= 25 on a notch Mac; path C strut if `workArea.y` is 0; never a `y=0` peek). Auto-resize must not grow that park back into 880×816 and must not hug-shrink hide below 560. Then destroy the exclusive stage. Do not leave layer 0.
 
 ## Onboarding
 
@@ -48,7 +54,7 @@ The stage is a **Mantu purple** brand wash (`#3A0B6B` / `#7F00DA` / `#9A2BF0`), 
 
 **Motion budget (60fps-class).** Compositor-only: `transform` and `opacity`. Never animate `filter`, `backdrop-filter`, blur, box-shadow, or layout. Scene enter is opacity + translate only, ~300ms ease-out — no scale-down, no `develop-in` filter blur on onboarding. Hover on large surfaces does not scale; CTA hover is brightness or `scale(1.02)` max. Liquid glass (backdrop-filter ≤ 12px) is on small CTAs / chips only — no full-viewport glass, no 50px blur over video.
 
-Act 1 (welcome) plays a full-viewport muted looping video behind the Métis mark (`object-cover`, z-0; UI z-10). No CSS `filter` on the `<video>`. A purple Mantu tint sits on the video. Not a Bloom or Axon landing page. If the video fails or motion is reduced, the purple wash stays. **Leave Act 1: pause and unmount/hide the hero video** so it is not compositing after welcome. **Métis** (mark + wordmark) lands and **stays**. The wordmark is static. **No scramble.** The tagline may fade in once. **Next**, Skip, and the Tony Walteur byline use liquid glass (capped blur, inset highlight, gradient-border). Steal the technique, not Bloom copy.
+Act 1 (welcome) plays a full-viewport muted looping video behind the Métis mark (`object-cover`, `object-position: center`, z-0; UI z-10). Clip: CloudFront `hf_20260319_055001_8e16d972` (March 19). Not the July 14 clip. Not the April 11 clip. No CSS `filter` on the `<video>`. A purple Mantu tint sits on the video. A very slight loop-safe Ken Burns (`transform: scale` only) may run on the video. Wordmark, Next, and the Tony Walteur chip ease in (`opacity` / `transform`) and sit on the **darker sky**, not on the bright vortex. Not a Bloom or Axon landing page. If the video fails or motion is reduced, the purple wash stays (drop the video). **Leave Act 1: pause and unmount/hide the hero video** so it is not compositing after welcome. **Métis** (mark + wordmark) lands and **stays**. The wordmark is static. **No scramble.** The tagline may fade in once. **Next**, Skip, and the Tony Walteur byline use liquid glass (capped blur, inset highlight, gradient-border). Steal the technique, not Bloom copy.
 
 Primary CTAs (Next / Continue / Get started) are **large** hit targets (min 52×220), high contrast, bottom-safe, and visible. They must not hitch. Hero primary is **Next**. That click starts the six-act tour (problem scene). Skip finish and Ready still say Get started.
 
