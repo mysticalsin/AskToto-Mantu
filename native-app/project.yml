@@ -45,7 +45,14 @@ targets:
         SWIFT_STRICT_CONCURRENCY: complete
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: YES
+        # Branding lives in App/Assets.xcassets (AccentColor + AppIcon). Drop real icon PNGs into
+        # AppIcon.appiconset before an App Store build — the set ships as a valid scaffold today.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         INFOPLIST_KEY_CFBundleDisplayName: "Métis"
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.productivity"
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "Métis transcribes meeting audio on-device to give you live suggestions and summaries."
-        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Métis transcribes meeting audio on-device so it can caption who said what."
+        # Speech recognition drives the on-device live transcript. Screen Recording (system-audio loopback,
+        # the two-sided macOS copilot) is TCC-managed with no Info.plist usage key — the OS shows its own
+        # prompt when ScreenCaptureKit first runs; onboarding explains it before that happens.
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Métis converts meeting audio to text on-device so it can suggest what to say and summarize the call."

@@ -1,5 +1,3 @@
-#if canImport(AppIntents)
-import AppIntents
 import Foundation
 
 // App Intents — the Siri / Spotlight / Shortcuts / Action-button surface. Research (WWDC 2024/2025, App
@@ -11,6 +9,11 @@ import Foundation
 
 /// The app target conforms a controller to this and installs it at launch, so intents can drive real
 /// recording/summarize actions without the package importing app internals.
+///
+/// Defined OUTSIDE the `canImport(AppIntents)` gate below: `MeetingController` conforms to it
+/// unconditionally, so gating the protocol would break compilation anywhere AppIntents is absent
+/// (older SDKs, and Linux `swift test` / CI). The protocol itself has no AppIntents dependency; only the
+/// concrete intent structs do.
 public protocol MeetingActions: Sendable {
     func startRecording() async throws
     func stopRecording() async throws
@@ -21,6 +24,9 @@ public protocol MeetingActions: Sendable {
 public enum MeetingActionsRegistry {
     nonisolated(unsafe) public static var shared: MeetingActions?
 }
+
+#if canImport(AppIntents)
+import AppIntents
 
 private func actions() throws -> MeetingActions {
     guard let a = MeetingActionsRegistry.shared else { throw MetisIntentError.notReady }
