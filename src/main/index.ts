@@ -148,12 +148,18 @@ import {
   recenterXForWidth,
   refitToDisplay as islandRefitToDisplay,
   exclusiveOnboardingBounds,
+  hoverWatchRestRect,
   overlayRestSize,
   parkAfterExclusiveOnboarding,
   shouldIgnoreResizeWhilePeekResting,
   topCenterPosition,
   topClamp
 } from './island/geometry'
+import {
+  CURSOR_WATCH_INTERVAL_MS,
+  decideCursorWatch,
+  shouldWatchOverlayCursor
+} from './island/cursor-watch'
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
 import { overlayUsesHover, parseOverlayLayout, type OverlayLayout } from '@shared/overlay-chrome'
 
@@ -546,6 +552,8 @@ let currentWidth = BAR_WIDTH // window width; narrows to PILL_WIDTH while collap
 let isMinimized = false
 // Hide/island rest after exclusive onboarding. Stale exclusive / 880×816 measures must not grow the park.
 let islandResting = false
+let overlayCursorWatchTimer: ReturnType<typeof setInterval> | null = null
+let overlayCursorWatchHovering = false
 const streams = new Map<string, { abort: () => void }>()
 let importJobs: ImportJobManager | null = null
 let decoderWin: BrowserWindow | null = null
@@ -1405,6 +1413,7 @@ function onboardingExclusiveLive(): boolean {
 }
 
 function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDisplayMatching(w.getBounds())): void {
+  stopOverlayCursorWatch()
   const stage = exclusiveOnboardingBounds(display.bounds, display.workArea)
   currentWidth = stage.width
   lastBarHeight = stage.height
@@ -1453,6 +1462,7 @@ function exitExclusiveOnboardingStage(): void {
   islandResting = overlayUsesHover(layout)
   userAnchorY = park.y
   win.setBounds(park, false)
+  startOverlayCursorWatch()
 }
 
 function applyOverlayAlwaysOnTop(w: BrowserWindow): void {
@@ -1493,7 +1503,7 @@ function createWindow(): void {
   currentWidth = BAR_WIDTH
   // Wiped-profile onboarding owns the display (exclusiveOnboardingBounds) — never the 880×816 card
   // that overlapped Tony's work. Auto-resize must not shrink this until onboardingDone; exit then
-  // parks the island at islandSafeTop (path A then C). getSettings() is file-keystore-safe here.
+  // parks hide/island at bounds.y (notch strip) so the hardware island can hit. getSettings() is file-keystore-safe here.
   const placementDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   const onboardingLive = onboardingExclusiveLive()
   const stage = exclusiveOnboardingBounds(placementDisplay.bounds, placementDisplay.workArea)
@@ -1584,7 +1594,10 @@ function createWindow(): void {
     streams.clear()
     // Import jobs belong to main plus the hidden decoder window, so closing the overlay never abandons
     // a selected recording. Their checkpointed state resumes even if the entire app exits.
-    if (win === self) win = null
+    if (win === self) {
+      stopOverlayCursorWatch()
+      win = null
+    }
   })
 
   // Security: never let model-output links navigate the trusted renderer or open child windows
@@ -1671,6 +1684,7 @@ function createWindow(): void {
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }
+  startOverlayCursorWatch()
 }
 
 function resizeTo(height: number): void {
@@ -1680,12 +1694,12 @@ function resizeTo(height: number): void {
     applyExclusiveOnboardingStage(win)
     return
   }
-  const rest = overlayRestSize(liveOverlayLayout())
+  const display = screen.getDisplayMatching(win.getBounds())
+  const rest = overlayRestSize(liveOverlayLayout(), getDisplayMetrics(display))
   if (shouldIgnoreResizeWhilePeekResting(islandResting, height, rest.height)) return
   // Clamp + reposition against the display the OVERLAY is actually on (not the cursor's). Otherwise, on a
   // laptop + external monitor of different heights, a streaming answer clamps to the wrong monitor and the
   // window jumps vertically while the cursor sits on the other screen.
-  const display = screen.getDisplayMatching(win.getBounds())
   const { workArea } = display
   const h = clampHeight(Math.round(height), workArea.height)
   const b = win.getBounds()
@@ -1696,8 +1710,8 @@ function resizeTo(height: number): void {
     return // idempotent — skip a no-op setBounds (belt-and-braces with the renderer-side resize dedup)
   }
   if (!isMinimized) lastBarHeight = h
-  // Island: peek and revealed share the safe Y (below the notch) so hover grows DOWN, leave shrinks
-  // in place. Do not slide into bounds.y — that clips the capsule on a notch Mac.
+  // Hide/island: peek and revealed share bounds.y so hover grows DOWN from the notch strip.
+  // Jumping the revealed bar to workArea.y while the cursor is in the island immediately hides.
   const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
   // When the width changes (collapse to / expand from the mini-pill), recenter around the old midpoint
   // so the overlay stays put; otherwise keep the left edge. Clamp x into the work area either way.
@@ -1721,8 +1735,7 @@ function setMinimizedWidth(narrow: boolean): void {
  * Settings keeps the same top edge (so it grows downward from the bar) and centers horizontally,
  * clamped to the work area. Exiting restores the bar's width and last content height.
  */
-// Top margin (px) for the auto-hide peek on a NON-notch display. Notch Macs use islandSafeTop
-// (workArea.y, or a strut if workArea.y is 0) and ignore this margin so the capsule is not clipped.
+// Top margin (px) for BAR chrome. Hide/island ignore this and park at bounds.y (hover rest).
 const ISLAND_TOP_MARGIN = 8
 // Top margin (px) for the ONE-TIME initial window placement in createWindow — deliberately larger than
 // ISLAND_TOP_MARGIN so a freshly-launched window doesn't appear jammed against the very top edge before
@@ -1735,9 +1748,71 @@ const RESIZE_EDGE_MARGIN = 8
 
 /** Where THIS window's top-center placement should land on a display, honoring the notch clamp
  *  (island/geometry.ts's topClamp) — the single call every top-anchor site in this file routes through,
- *  so hide/island hug the notch on a notch Mac and bar floats on the work area. */
+ *  so hide/island rest at bounds.y (island hover hits) and bar floats on the work area. */
 function liveOverlayLayout(): OverlayLayout {
   return parseOverlayLayout(getSettings().overlayLayout)
+}
+
+function overlayCursorWatchWanted(): boolean {
+  if (onboardingExclusiveLive()) return false
+  try {
+    return shouldWatchOverlayCursor(process.platform, getSettings().onboardingDone, liveOverlayLayout())
+  } catch {
+    return false
+  }
+}
+
+function stopOverlayCursorWatch(): void {
+  if (overlayCursorWatchTimer) {
+    clearInterval(overlayCursorWatchTimer)
+    overlayCursorWatchTimer = null
+  }
+  overlayCursorWatchHovering = false
+}
+
+function startOverlayCursorWatch(): void {
+  stopOverlayCursorWatch()
+  if (!overlayCursorWatchWanted() || !win || win.isDestroyed()) return
+  overlayCursorWatchTimer = setInterval(() => tickOverlayCursorWatch(), CURSOR_WATCH_INTERVAL_MS)
+  overlayCursorWatchTimer.unref?.()
+}
+
+function tickOverlayCursorWatch(): void {
+  if (!win || win.isDestroyed() || !overlayCursorWatchWanted()) {
+    stopOverlayCursorWatch()
+    return
+  }
+  const display = screen.getDisplayMatching(win.getBounds())
+  const m = getDisplayMetrics(display)
+  const layout = liveOverlayLayout()
+  const rest = hoverWatchRestRect(layout, m)
+  const decision = decideCursorWatch({
+    cursor: screen.getCursorScreenPoint(),
+    restRect: rest,
+    revealedRect: win.getBounds(),
+    revealed: !islandResting
+  })
+  if (decision === 'reveal' && !overlayCursorWatchHovering) {
+    overlayCursorWatchHovering = true
+    restoreBarWidth()
+    try {
+      win.webContents.send(IPC.overlayCursorHover, { hovering: true })
+    } catch {
+      /* renderer gone */
+    }
+  } else if (decision === 'hide' && overlayCursorWatchHovering) {
+    overlayCursorWatchHovering = false
+    const park = parkAfterExclusiveOnboarding(layout, m, ISLAND_TOP_MARGIN)
+    currentWidth = park.width
+    islandResting = overlayUsesHover(layout)
+    userAnchorY = park.y
+    win.setBounds(park, false)
+    try {
+      win.webContents.send(IPC.overlayCursorHover, { hovering: false })
+    } catch {
+      /* renderer gone */
+    }
+  }
 }
 
 function islandTopCenter(width: number, display: Electron.Display, topMargin: number): { x: number; y: number } {
@@ -2826,6 +2901,21 @@ function registerIpc(): void {
     if (!cur.onboardingDone && next.onboardingDone) exitExclusiveOnboardingStage()
     else if (cur.onboardingDone && !next.onboardingDone && win && !win.isDestroyed()) {
       applyExclusiveOnboardingStage(win)
+    }
+    if (cur.overlayLayout !== next.overlayLayout && next.onboardingDone && win && !win.isDestroyed() && !onboardingExclusiveLive()) {
+      const layout = parseOverlayLayout(next.overlayLayout)
+      if (overlayUsesHover(layout)) {
+        const display = screen.getDisplayMatching(win.getBounds())
+        const park = parkAfterExclusiveOnboarding(layout, getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+        currentWidth = park.width
+        islandResting = true
+        userAnchorY = park.y
+        win.setBounds(park, false)
+        startOverlayCursorWatch()
+      } else {
+        stopOverlayCursorWatch()
+        restoreBarWidth()
+      }
     }
     // Flipping follow-up memory is itself a conversation boundary. Without this, turning it ON would
     // retroactively inherit the Q&A recorded — and the Dust conversation created — while the user was

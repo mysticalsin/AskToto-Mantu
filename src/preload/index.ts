@@ -321,6 +321,8 @@ const api = {
   anchorTop: (): Promise<void> => ipcRenderer.invoke(IPC.windowAnchorTop),
   // Auto-hide reveal: widen the window back to the full bar width after the peek narrowed it.
   revealWidth: (): Promise<void> => ipcRenderer.invoke(IPC.windowRevealWidth),
+  onOverlayCursorHover: (cb: (d: { hovering: boolean }) => void): Unsub =>
+    sub(IPC.overlayCursorHover, cb),
   // A caught render-throw (ErrorBoundary) — fire-and-forget, best-effort. Main persists it to disk (same
   // sink as a main-process crash) so a field report survives without ASKTOTO_DEBUG_RENDERER devtools.
   reportCrash: (message: string, stack?: string, componentStack?: string): Promise<void> =>

@@ -6,36 +6,39 @@ This file is the gate. Do not add or restyle overlay / onboarding UI unless it m
 
 Three modes in Settings (persist, no reinstall). Default on a fresh install is **hide**.
 
-1. **hide** (default). Fully hidden until the pointer is at the top, then reveal down. Leave hides. Mac: below-notch hover target (path A then C). Windows: top-center of the work area, taskbar-aware, **no fake notch**.
-2. **island**. The always-visible peek capsule. Hover expands down. Leave returns to the peek.
+1. **hide** (default). Fully hidden until the pointer is in the Mac Dynamic Island / top-center notch strip, then reveal down. Leave hides. Windows: top-center of the display, **no fake notch**.
+2. **island**. The always-visible peek capsule (may sit in the island / notch). Hover expands down. Leave returns to the peek.
 3. **bar**. Classic bar and pill. Always visible.
 
 Settings shows these as **cards with a tiny desktop diagram**, not three text radios. Hide: empty top-middle, faint hover hint, caption "Hidden until you move to the top." Island: small capsule at the top-middle, caption "A small island stays visible. Hover opens it." Bar: full bar at the top, caption "The bar stays on screen." Selected card is obvious. Changes apply immediately. No reinstall. Original Métis copy. No em dash. No Vibe Island trademark strings.
 
 ## Island Y
 
-When hide or island is revealed (or island is peeking), the top sits **fully below** the Mac hardware notch. It is not clipped.
+Hide and island **rest in** the Mac menu-bar / Dynamic Island strip so hovering the hardware island hits the window.
 
-- **Path A (chosen).** Electron `display.workArea.y` — first unobstructed row under the notch / menu bar. Never park at `display.bounds.y` (0). That is the hardware island and clips the capsule.
-- **Path C.** Only when `workArea.y` is 0 (Electron reported no inset) on a notched display: apply a notch strut (`menuBarHeight`, or 37px). Do not push `y = 0` again.
+- **Hide/island rest.** `y = display.bounds.y` (0 on the built-in Retina). Height covers that strip (`workArea.y` / `menuBarHeight`, ~37-44). Width at least the notch (min ~220, cap ~560), top-center. Visually stealth, opaque to hit-testing.
+- **Path A.** Electron `display.workArea.y` is the first unobstructed row under the notch / menu bar — used by **bar** chrome (`workArea.y + margin`) and as the strip **height** for hide/island. Do not park hide/island *below* the island at `workArea.y` (Tony live: Y=39 pad never intersects the island).
+- **Path C.** When `workArea.y` is 0 on a notched display, hide/island still rest at `bounds.y` with a strut-tall strip (`menuBarHeight`, or 37px) so the hit rect covers the notch. Bar still floats; never a fake notch on Windows.
 
-Peek/hide-target and revealed share that Y. Height changes; Y does not. Windows never applies a notch strut.
+Peek/hide-target and revealed share that top edge (`bounds.y` on hide/island). Height changes; Y does not. Revealed bar expands **down** from the same top edge (do not jump Y to 39 while the cursor is at 12). Windows: top-center of the display, **no fake notch**.
 
 ## Hover / leave
 
-Hide and island: hover or click expands **down** from the safe top to the full bar (same top edge, taller height). Leave collapses (`pointer-leave` → grace → hide or peek). Bar does not auto-collapse.
+Hide and island: hover or click expands **down** from the display top to the full bar (same top edge, taller height). Leave collapses (`pointer-leave` → grace → hide or peek). Bar does not auto-collapse.
 
-**Hide (default).** The rest is a **wide top-middle hit pad**, not a 120px pill. At least **560×28**. Visually stealth, **opaque to hit-testing** (Electron ignores fully transparent pixels). Do **not** `data-hug-width` the hide pad down to ~120px. Do not wrap it in `p-5` transparent padding. Pointer-enter is on the pad itself. Y is `islandSafeTop` / `workArea.y` (path A). If path A still cannot receive hover, path C is a top strut (wide hit strip). Do not jump to native NSPanel this round. `setIgnoreMouseEvents` must not eat the pad. A hover that stays on the pad must open. Crossing the menu bar without staying can stay gated.
+**Hide (default).** The rest is a **wide top-middle hit pad** in the notch strip (`bounds.y`, strip height), not a 120px pill and not a pad stranded at `workArea.y` (39). Width at least **220**, cap **560**. Visually stealth, **opaque to hit-testing** (Electron ignores fully transparent pixels). Do **not** `data-hug-width` the hide pad down to ~120px. Do not wrap it in `p-5` transparent padding. CSS fills the parked window (`width/height: 100%`).
 
-**Island.** Always-visible peek capsule. Hover expands down. Leave returns to the peek. Hug-width is OK on the visible capsule only.
+**Cursor watch (required).** macOS menu bar / Dynamic Island often does **not** deliver `mouseenter` to an Electron window, even at Y=0. Renderer `onMouseEnter` is not enough. Main polls `screen.getCursorScreenPoint()` every ~16-32ms on darwin and Windows top-edge while hide/island is resting and `onboardingDone`: cursor inside the hide/island rest rect → reveal; cursor left the revealed bar bounds (+ small grace) → hide. No Accessibility / CGEvent tap required.
+
+**Island.** Always-visible peek capsule. May sit in the island / notch (same Y). Hover expands down. Leave returns to the peek. Hug-width is OK on the visible capsule only.
 
 **Bar.** Always the bar. No hide.
 
-`createWindow` when `onboardingDone` + hide/island parks `overlayRestSize` immediately (same as exclusive exit). Never boot at 880×84 and hope hug wins.
+`createWindow` when `onboardingDone` + hide/island parks this rest rect immediately (same as exclusive exit). Never boot at 880×84 and hope hug wins. Never rest as 880×816. Never hug hide down to 120px.
 
 ## After exclusive exit
 
-When `onboardingDone` flips true, `exitExclusiveOnboardingStage` leaves exclusive fullscreen and parks the default **hide** rest (or island / bar if Settings already chose one). Never an **880×816** mid-flow card. Never a 120×50 pill for hide. Re-apply `setAlwaysOnTop(true, 'screen-saver')` (the level exclusive used). Hide width/height are the wide hit pad (560×28). Island is the peek capsule. Y is `islandSafeTop` (path A: `display.workArea.y`, must be >= 25 on a notch Mac; path C strut if `workArea.y` is 0; never a `y=0` peek). Auto-resize must not grow that park back into 880×816 and must not hug-shrink hide below 560. Then destroy the exclusive stage. Do not leave layer 0.
+When `onboardingDone` flips true, `exitExclusiveOnboardingStage` leaves exclusive fullscreen and parks the default **hide** rest (or island / bar if Settings already chose one). Never an **880×816** mid-flow card. Never a 120×50 pill for hide. Re-apply `setAlwaysOnTop(true, 'screen-saver')` (the level exclusive used). Hide is the notch-strip rest (`y = display.bounds.y`, height covers `workArea.y` / `menuBarHeight`, width >= 220 and < 880). Island is the peek capsule at the same Y. Bar keeps `workArea.y + margin`. Auto-resize must not grow that park back into 880×816 and must not hug-shrink hide below 220. Then destroy the exclusive stage. Do not leave layer 0. Start the cursor watch when layout is hide/island.
 
 ## Onboarding
 
