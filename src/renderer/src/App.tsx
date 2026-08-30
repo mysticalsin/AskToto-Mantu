@@ -557,6 +557,14 @@ export function App(): JSX.Element {
   // Render the slim peek strip in place of the full bar only while auto-hide is active AND nothing is
   // holding it revealed. `revealOverlay` is the click/keyboard fallback to the container's hover reveal.
   const overlayPeeked = overlayIdle && !overlayRevealed
+  // When we reveal from the peek, the window is still hugged to the slim peek WIDTH (data-hug-width), and
+  // the plain bar view never reports a width again — so widen it back to the full bar. Fires only on the
+  // peek→revealed edge while auto-hide is active; a pure setBounds in main, no show/focus.
+  const wasOverlayPeekedRef = useRef(false)
+  useEffect(() => {
+    if (overlayIdle && wasOverlayPeekedRef.current && !overlayPeeked) void window.toto.revealWidth()
+    wasOverlayPeekedRef.current = overlayPeeked
+  }, [overlayPeeked, overlayIdle])
   const revealOverlay = useCallback(() => dispatchAutoHide({ type: 'pointer-enter' }), [])
   const onOverlayPointerEnter = useCallback(() => dispatchAutoHide({ type: 'pointer-enter' }), [])
   const onOverlayPointerLeave = useCallback(() => dispatchAutoHide({ type: 'pointer-leave' }), [])

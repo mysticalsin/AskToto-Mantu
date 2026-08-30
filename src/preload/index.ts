@@ -317,6 +317,8 @@ const api = {
   // Auto-hide: pin the overlay to the top-center of its current display (grows downward from the top
   // edge). Fire-and-forget; never shows/focuses the window, so the foreground app keeps focus.
   anchorTop: (): Promise<void> => ipcRenderer.invoke(IPC.windowAnchorTop),
+  // Auto-hide reveal: widen the window back to the full bar width after the peek narrowed it.
+  revealWidth: (): Promise<void> => ipcRenderer.invoke(IPC.windowRevealWidth),
   // A caught render-throw (ErrorBoundary) — fire-and-forget, best-effort. Main persists it to disk (same
   // sink as a main-process crash) so a field report survives without ASKTOTO_DEBUG_RENDERER devtools.
   reportCrash: (message: string, stack?: string, componentStack?: string): Promise<void> =>

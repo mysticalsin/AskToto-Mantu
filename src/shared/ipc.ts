@@ -165,6 +165,9 @@ export const IPC = {
   // resizeTo anchor there, so the peek strip / revealed bar grow downward from the top edge. Never
   // shows or focuses the window — a pure setBounds, so the user's foreground app keeps focus.
   windowAnchorTop: 'window:anchorTop',
+  // Auto-hide reveal: widen the window back to the full bar width (the peek narrowed it via
+  // data-hug-width, and the plain-bar view never reports a width again). Pure setBounds; no show/focus.
+  windowRevealWidth: 'window:revealWidth',
   // Renderer ErrorBoundary catch (React render-throw) → persisted crash-*.log, same sink as onFatal's
   // main-process crashes. Distinct from render-process-gone (whole renderer dies): this is a caught JS
   // exception the renderer survives, previously visible only via ASKTOTO_DEBUG_RENDERER console mirroring.
