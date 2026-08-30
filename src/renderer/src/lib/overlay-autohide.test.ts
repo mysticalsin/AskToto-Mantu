@@ -78,7 +78,7 @@ describe('overlay auto-hide state machine (MQA-274)', () => {
     expect(isRevealed(s)).toBe(false)
   })
 
-  it('collapses to peek only after the grace window elapses', () => {
+  it('hide+leave collapses after grace (same machine hide and island use)', () => {
     let s = revealViaHover(initialAutoHideState(true))
     s = reduceAutoHide(s, { type: 'pointer-leave' })
     expect(isRevealed(s)).toBe(true) // still shown during grace

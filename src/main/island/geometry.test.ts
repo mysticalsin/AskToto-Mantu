@@ -100,6 +100,7 @@ describe('MQA-275 — the notch clamp (topClamp)', () => {
     })
     expect(islandSafeTop(m)).toBe(39)
     expect(topClamp('island', m, 8)).toBe(m.workArea.y)
+    expect(topClamp('hide', m, 8)).toBe(m.workArea.y)
     expect(topClamp('island', m, 8)).not.toBe(m.bounds.y)
     expect(topClamp('island', m, 8)).toBe(39)
   })
@@ -175,8 +176,24 @@ describe('MQA-275 — the notch clamp (topClamp)', () => {
 
   it('windows (no notch concept) always floors at workArea.y + margin regardless of layout', () => {
     const m = metrics({ workArea: RETINA_WORK_AREA, hasNotch: false, source: 'heuristic' })
+    expect(topClamp('hide', m, 8)).toBe(RETINA_WORK_AREA.y + 8)
     expect(topClamp('island', m, 8)).toBe(RETINA_WORK_AREA.y + 8)
     expect(topClamp('bar', m, 8)).toBe(RETINA_WORK_AREA.y + 8)
+    expect(topClamp('hide', m, 8)).not.toBe(ISLAND_NOTCH_STRUT_PX)
+  })
+
+  it('Windows top taskbar uses workArea.y — no fake notch strut', () => {
+    const m = metrics({
+      workArea: { x: 0, y: 40, width: 1920, height: 1040 },
+      bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+      hasNotch: false,
+      menuBarHeight: 0,
+      source: 'heuristic'
+    })
+    expect(hasNotchHeuristic(40, 'win32')).toBe(false)
+    expect(islandSafeTop(m)).toBe(40)
+    expect(topClamp('hide', m, 8)).toBe(40)
+    expect(topClamp('hide', m, 8)).not.toBe(ISLAND_NOTCH_STRUT_PX)
   })
 })
 
@@ -309,6 +326,8 @@ describe('DESIGN.md overlay contract', () => {
     expect(design).toMatch(/original Web Audio/)
     expect(design).toMatch(/Mute control/)
     expect(design).toMatch(/Do not add or restyle overlay \/ onboarding UI unless it matches this document/)
+    expect(design).toMatch(/\*\*hide\*\* \(default\)/)
+    expect(design).toMatch(/no fake notch/)
   })
 })
 
@@ -316,7 +335,7 @@ describe('island reveal/collapse wiring (index.ts)', () => {
   it('restoreBarWidth grows height at the same topClamp Y; resizeTo pins that Y', () => {
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
     expect(index).toMatch(/revealedHeight = Math\.max\(b\.height, lastBarHeight, BAR_HEIGHT\)/)
-    expect(index).toMatch(/const y = topClamp\('island', getDisplayMetrics\(display\), ISLAND_TOP_MARGIN\)/)
+    expect(index).toMatch(/const y = topClamp\(liveOverlayLayout\(\), getDisplayMetrics\(display\), ISLAND_TOP_MARGIN\)/)
     expect(index).toMatch(/function resizeTo/)
   })
 })
@@ -419,5 +438,29 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(stageCss).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?animation:\s*none/)
     expect(stageCss).not.toMatch(/#3a2416|#5a3218|#2c1810|#f4b060/)
     expect(index).toMatch(/backgroundColor: onboardingLive \? '#3A0B6B'/)
+  })
+})
+
+describe('overlay chrome modes (hide / island / bar)', () => {
+  it('default is hide; Settings switches island and bar; hide rest + leave collapse', () => {
+    const ipc = readFileSync(join(__dirname, '../../shared/ipc.ts'), 'utf8')
+    const settings = readFileSync(join(__dirname, '../../renderer/src/components/Settings.tsx'), 'utf8')
+    const app = readFileSync(join(__dirname, '../../renderer/src/App.tsx'), 'utf8')
+    const peek = readFileSync(join(__dirname, '../../renderer/src/components/OverlayPeek.tsx'), 'utf8')
+    const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
+    const autohide = readFileSync(join(__dirname, '../../renderer/src/lib/overlay-autohide.ts'), 'utf8')
+    expect(ipc).toMatch(/overlayLayout: z\.enum\(\['hide', 'island', 'bar'\]\)\.default\('hide'\)/)
+    expect(ipc).toMatch(/overlayLayout: 'hide'/)
+    expect(settings).toMatch(/OVERLAY_LAYOUTS/)
+    expect(settings).toMatch(/overlayLayout: id/)
+    expect(settings).toMatch(/aria-label="Overlay chrome"/)
+    expect(settings).toMatch(/Default/)
+    expect(settings).not.toMatch(/label="Auto-hide overlay"/)
+    expect(app).toMatch(/parseOverlayLayout/)
+    expect(app).toMatch(/overlayRestsHidden\(overlayLayout\) \? 'hide' : 'island'/)
+    expect(app).toMatch(/pointer-leave/)
+    expect(peek).toMatch(/rest === 'hide'/)
+    expect(css).toMatch(/\.overlay-hide-target/)
+    expect(autohide).toMatch(/case 'pointer-leave'/)
   })
 })

@@ -1004,6 +1004,8 @@ export const BaseSettingsSchema = z.object({
   // and collapse are pure content resizes of the always-on-top window — they never show/focus it, so the
   // user's foreground app keeps focus (the non-activating notch contract). Off = the bar is always shown.
   autoHideOverlay: z.boolean().default(true),
+  /** Overlay chrome: hide (default, fully hidden until top hover), island (visible peek), bar (classic). */
+  overlayLayout: z.enum(['hide', 'island', 'bar']).default('hide'),
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('best'), // packaged builds use the bundled compact model for both modes
   // whisper = ~99 langs (default — safe for any locale; parakeet is European-only, which is why 1fa4d76
@@ -1459,6 +1461,7 @@ export const DEFAULT_SETTINGS: Settings = {
   backgroundScreenContext: false,
   overlayOpacity: 1,
   autoHideOverlay: true,
+  overlayLayout: 'hide',
   showFullTranscriptInReview: false,
   asrQuality: 'best',
   asrEngine: 'whisper',

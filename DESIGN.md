@@ -2,18 +2,26 @@
 
 This file is the gate. Do not add or restyle overlay / onboarding UI unless it matches this document.
 
-## Island
+## Chrome
 
-The peek sits **fully below** the Mac hardware notch. It is not clipped.
+Three modes in Settings (persist, no reinstall). Default on a fresh install is **hide**.
+
+1. **hide** (default). Fully hidden until the pointer is at the top, then reveal down. Leave hides. Mac: below-notch hover target (path A then C). Windows: top-center of the work area, taskbar-aware, **no fake notch**.
+2. **island**. The always-visible peek capsule. Hover expands down. Leave returns to the peek.
+3. **bar**. Classic bar and pill. Always visible.
+
+## Island Y
+
+When hide or island is revealed (or island is peeking), the top sits **fully below** the Mac hardware notch. It is not clipped.
 
 - **Path A (chosen).** Electron `display.workArea.y` — first unobstructed row under the notch / menu bar. Never park at `display.bounds.y` (0). That is the hardware island and clips the capsule.
 - **Path C.** Only when `workArea.y` is 0 (Electron reported no inset) on a notched display: apply a notch strut (`menuBarHeight`, or 37px). Do not push `y = 0` again.
 
-Peek and revealed share that Y. Height changes; Y does not.
+Peek/hide-target and revealed share that Y. Height changes; Y does not. Windows never applies a notch strut.
 
 ## Hover / leave
 
-Hover or click expands **down** from the safe peek to the full bar (same top edge, taller height). Leave collapses to the peek (`pointer-leave` → grace → hide).
+Hide and island: hover or click expands **down** from the safe top to the full bar (same top edge, taller height). Leave collapses (`pointer-leave` → grace → hide or peek). Bar does not auto-collapse.
 
 ## Onboarding
 

@@ -14,20 +14,17 @@
  * (notch awareness) for the fuller architecture this is Phase 1 of.
  */
 
+import type { OverlayLayout } from '@shared/overlay-chrome'
+import { overlayUsesSafeTop } from '@shared/overlay-chrome'
+
+export type { OverlayLayout }
+
 export interface Rect {
   x: number
   y: number
   width: number
   height: number
 }
-
-/**
- * `'island'` is the top-anchored, notch-aware default this Phase 1 rebuild establishes; `'bar'` is the
- * pre-existing floating/free-drag behavior (kept as the escape hatch — see topClamp). Phase 2 threads a
- * real `overlayLayout` setting through to this parameter; Phase 1 call sites pass `'island'` directly
- * since the whole current overlay (peek + auto-hide reveal, MQA-274) already IS the top-anchored island.
- */
-export type OverlayLayout = 'island' | 'bar'
 
 /**
  * Per-display metrics used by the notch-aware clamp. `bounds`/`workArea` are always Electron's own
@@ -163,11 +160,12 @@ export function islandSafeTop(m: DisplayMetrics): number {
 }
 
 /**
- * Island chrome parks at `islandSafeTop` (path A / C). Bar chrome keeps `workArea.y + topMargin`.
- * Non-notch island with a flush work area keeps the small `topMargin` gap (unchanged).
+ * Hide and island park at `islandSafeTop` (path A / C). Bar chrome keeps `workArea.y + topMargin`.
+ * Non-notch hide/island with a flush work area keeps the small `topMargin` gap (unchanged).
+ * Windows: `hasNotch` is false, so this never applies a notch strut.
  */
 export function topClamp(layout: OverlayLayout, m: DisplayMetrics, topMargin: number): number {
-  if (layout === 'island' && (m.hasNotch || m.workArea.y > m.bounds.y)) return islandSafeTop(m)
+  if (overlayUsesSafeTop(layout) && (m.hasNotch || m.workArea.y > m.bounds.y)) return islandSafeTop(m)
   return m.workArea.y + topMargin
 }
 

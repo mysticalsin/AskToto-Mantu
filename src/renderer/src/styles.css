@@ -1205,6 +1205,19 @@ input::placeholder {
    resting "notch"). Deliberately small so the hugged window is a tiny top-center strip, not a wide
    transparent click-trap. Springs into place with a compositor-cheap transform+opacity (reduced-motion
    is honoured by the global rule at the bottom of this file, which zeroes the duration). */
+/* Hide-until-hover rest: hittable sliver, visually gone. Same top Y as the island peek. */
+.overlay-hide-target {
+  display: block;
+  width: 168px;
+  height: 8px;
+  padding: 0;
+  border: none;
+  border-radius: 0 0 8px 8px;
+  background: transparent;
+  opacity: 0.01;
+  cursor: default;
+}
+
 .overlay-peek {
   display: inline-flex;
   align-items: center;

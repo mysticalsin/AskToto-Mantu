@@ -47,6 +47,7 @@ import { DustAPI } from '@dust-tt/client'
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import { stripProxyFaultMarker } from './llm/retry'
+import { migrateOverlayLayout } from '@shared/overlay-chrome'
 
 const dir = () => app.getPath('userData')
 const settingsPath = () => join(dir(), 'settings.json')
@@ -587,6 +588,8 @@ export function getSettings(): Settings {
   // touches the connection card (reconnect/disconnect/save), setSettings({ mcpConnections: [...] })
   // persists the new shape for real and the legacy keys become permanently inert.
   migrateLegacyBidstackConnection(raw)
+  const overlayLayout = migrateOverlayLayout(raw)
+  if (overlayLayout) raw.overlayLayout = overlayLayout
   // Locked keys are authoritative on READ too, not just on write: a value persisted before a lock (or a
   // hand-edited settings.json) must not override the managed/default value. Strip locked keys from the
   // user layer so org policy always wins. Runs AFTER every migration above so a migration's synthesized

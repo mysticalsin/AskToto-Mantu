@@ -152,6 +152,7 @@ import {
   topClamp
 } from './island/geometry'
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
+import { parseOverlayLayout, type OverlayLayout } from '@shared/overlay-chrome'
 
 // Lazy Speaker Intelligence singleton — building it probes the sherpa addon + embedding model, so defer
 // until the first THEM window with the feature enabled (never on the startup path).
@@ -1671,7 +1672,7 @@ function resizeTo(height: number): void {
   if (!isMinimized) lastBarHeight = h
   // Island: peek and revealed share the safe Y (below the notch) so hover grows DOWN, leave shrinks
   // in place. Do not slide into bounds.y — that clips the capsule on a notch Mac.
-  const y = topClamp('island', getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+  const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
   // When the width changes (collapse to / expand from the mini-pill), recenter around the old midpoint
   // so the overlay stays put; otherwise keep the left edge. Clamp x into the work area either way.
   const x = recenterXForWidth(b.x, b.width, currentWidth, workArea, RESIZE_EDGE_MARGIN)
@@ -1708,12 +1709,13 @@ const RESIZE_EDGE_MARGIN = 8
 
 /** Where THIS window's top-center placement should land on a display, honoring the notch clamp
  *  (island/geometry.ts's topClamp) — the single call every top-anchor site in this file routes through,
- *  so "island" layout consistently hugs the notch on a notch Mac and floats elsewhere. Phase 1 always
- *  passes layout 'island': the whole current overlay (peek + auto-hide reveal, MQA-274) already IS the
- *  top-anchored island; Phase 2 threads a real user-facing `overlayLayout` setting through this
- *  parameter instead of the hard-coded literal. */
+ *  so hide/island hug the notch on a notch Mac and bar floats on the work area. */
+function liveOverlayLayout(): OverlayLayout {
+  return parseOverlayLayout(getSettings().overlayLayout)
+}
+
 function islandTopCenter(width: number, display: Electron.Display, topMargin: number): { x: number; y: number } {
-  return topCenterPosition(width, 'island', getDisplayMetrics(display), topMargin)
+  return topCenterPosition(width, liveOverlayLayout(), getDisplayMetrics(display), topMargin)
 }
 
 /** Pin the overlay to the top-center of the display it is currently on, and re-arm the resizeTo anchor
@@ -1742,7 +1744,7 @@ function restoreBarWidth(): void {
   const b = win.getBounds()
   currentWidth = BAR_WIDTH
   const x = recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
-  const y = topClamp('island', getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+  const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
   const revealedHeight = Math.max(b.height, lastBarHeight, BAR_HEIGHT)
   win.setBounds({ x, y, width: BAR_WIDTH, height: revealedHeight }, false)
 }
