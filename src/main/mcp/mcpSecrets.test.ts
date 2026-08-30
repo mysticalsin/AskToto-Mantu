@@ -164,6 +164,9 @@ describe('mcpSecrets — MCP connection API key storage, keyed by connectionId',
         expect(() => m.getMcpRefreshToken(id)).toThrow(/unsafe mcp connection id/i)
         expect(() => m.setMcpRefreshToken(id, 'v')).toThrow(/unsafe mcp connection id/i)
         expect(() => m.clearMcpRefreshToken(id)).toThrow(/unsafe mcp connection id/i)
+        expect(() => m.setMcpClientSecret(id, 'v')).toThrow(/unsafe mcp connection id/i)
+        expect(() => m.getMcpClientSecret(id)).toThrow(/unsafe mcp connection id/i)
+        expect(() => m.clearMcpClientSecret(id)).toThrow(/unsafe mcp connection id/i)
       }
     })
 
@@ -212,8 +215,8 @@ describe('mcpSecrets — MCP connection API key storage, keyed by connectionId',
       expect(clearMcpRefreshToken('clickup')).toBe(true)
       expect(existsSync(p)).toBe(false)
       expect(getMcpRefreshToken('clickup')).toBe('')
-      // A connection that never had a refresh token (e.g. bidstack, plane) clears as a clean no-op.
-      expect(clearMcpRefreshToken('plane')).toBe(true)
+      // A connection that never had a refresh token (e.g. bidstack) clears as a clean no-op.
+      expect(clearMcpRefreshToken('bidstack')).toBe(true)
     })
 
     it('a fresh module load re-reads the persisted refresh token from disk', async () => {
@@ -227,6 +230,21 @@ describe('mcpSecrets — MCP connection API key storage, keyed by connectionId',
       )
       const second = await import('./mcpSecrets')
       expect(second.getMcpRefreshToken('clickup')).toBe('reloaded-refresh-token')
+    })
+  })
+
+  describe('OAuth client-secret slot (Plane DCR)', () => {
+    it('round-trips and clears an encrypted client_secret independently of the access token', async () => {
+      const { setMcpApiKey, setMcpClientSecret, getMcpApiKey, getMcpClientSecret, clearMcpClientSecret } =
+        await import('./mcpSecrets')
+      setMcpApiKey('plane', 'plane-access')
+      setMcpClientSecret('plane', 'plane-client-secret')
+      expect(getMcpApiKey('plane')).toBe('plane-access')
+      expect(getMcpClientSecret('plane')).toBe('plane-client-secret')
+      expect(existsSync(join(userData, 'key-mcp-plane-client.bin'))).toBe(true)
+      expect(clearMcpClientSecret('plane')).toBe(true)
+      expect(getMcpClientSecret('plane')).toBe('')
+      expect(existsSync(join(userData, 'key-mcp-plane-client.bin'))).toBe(false)
     })
   })
 

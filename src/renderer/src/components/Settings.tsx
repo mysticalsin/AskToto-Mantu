@@ -2636,7 +2636,7 @@ function McpConnectionCard({
       ) : !open ? (
         <button type="button" onClick={() => setOpen(true)} className={secondaryBtnStyle}>
           <Link2 size={12} />
-          Set up
+          Connect with API key
         </button>
       ) : (
         <div className="flex flex-col gap-2">
@@ -2764,42 +2764,63 @@ const activePillStyle =
   'flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]'
 
 /**
- * ClickUp's connection card — same shell as McpConnectionCard (title/desc/Connected pill/tools list/
- * Reconnect+Disconnect) but a genuinely different trigger: there's no endpoint/key form to fill in and
- * Test/Save, ClickUp is OAuth-only (2.1 + PKCE). One "Connect ClickUp" button runs the whole browser
- * consent flow in main (window.toto.mcpClickupConnect) and, on success, main has already upserted the
- * mcpConnections entry — this component only reflects that state back, via the same `patch` callback
- * McpConnectionCard uses so both write through Settings' single settings-patch path.
+ * Plug-and-play MCP connect — the product standard Tony wants for every hosted integration:
+ * one primary button → system browser login tab → Métis finishes the handshake and marks Connected.
+ * No endpoint, API key, workspace slug, or Test/Save steps. Used for ClickUp and Plane (OAuth MCP).
+ * BidStack stays on the manual key card below — its local CRM MCP has no browser OAuth surface.
  */
-function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p: Partial<PublicSettings>) => void }): JSX.Element {
-  const conn = settings.mcpConnections.find((c) => c.id === 'clickup')
+function McpBrowserConnectCard({
+  settings,
+  patch,
+  kind,
+  title,
+  desc,
+  connectLabel,
+  connect
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+  kind: Extract<McpConnectionKind, 'clickup' | 'plane'>
+  title: string
+  desc: string
+  connectLabel: string
+  connect: () => Promise<{ ok: boolean; error?: string; tools?: string[] }>
+}): JSX.Element {
+  const conn = settings.mcpConnections.find((c) => c.id === kind)
   const connected = conn?.connected ?? false
   const [state, setState] = useState<{ phase: 'idle' | 'connecting' | 'error'; error: string | null }>({
     phase: 'idle',
     error: null
   })
 
-  const connect = async (): Promise<void> => {
+  const runConnect = async (): Promise<void> => {
     setState({ phase: 'connecting', error: null })
-    // Opens the system browser for ClickUp's consent screen — never fired except from this explicit click.
-    const r = await window.toto.mcpClickupConnect()
+    const r = await connect()
     if (r.ok) {
       await patch({
         mcpConnections: [
-          ...settings.mcpConnections.filter((c) => c.id !== 'clickup'),
-          { id: 'clickup', kind: 'clickup', label: 'ClickUp', endpointUrl: '', connected: true, tools: r.tools ?? [], extraHeaders: {} }
+          ...settings.mcpConnections.filter((c) => c.id !== kind),
+          {
+            id: kind,
+            kind,
+            label: connectLabel,
+            endpointUrl: '',
+            connected: true,
+            tools: r.tools ?? [],
+            extraHeaders: {}
+          }
         ]
       })
       setState({ phase: 'idle', error: null })
     } else {
-      setState({ phase: 'error', error: r.error || 'Could not connect ClickUp.' })
+      setState({ phase: 'error', error: r.error || `Could not connect ${connectLabel}.` })
     }
   }
 
   const disconnect = async (): Promise<void> => {
-    const r = await window.toto.mcpDisconnect({ connectionId: 'clickup' })
+    const r = await window.toto.mcpDisconnect({ connectionId: kind })
     await patch({
-      mcpConnections: settings.mcpConnections.map((c) => (c.id === 'clickup' ? { ...c, connected: false, tools: [] } : c))
+      mcpConnections: settings.mcpConnections.map((c) => (c.id === kind ? { ...c, connected: false, tools: [] } : c))
     })
     setState(r.ok ? { phase: 'idle', error: null } : { phase: 'error', error: r.error || 'Disconnected, but cleanup failed.' })
   }
@@ -2813,10 +2834,8 @@ function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p:
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex flex-col gap-0.5">
-          <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">ClickUp · task management</span>
-          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Push action items from a meeting recap to ClickUp as tasks. Manual and review-first: nothing sends automatically.
-          </span>
+          <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{title}</span>
+          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{desc}</span>
         </div>
         {connected ? (
           <span className={activePillStyle}>
@@ -2834,7 +2853,7 @@ function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p:
           </span>
           <button
             type="button"
-            onClick={() => void connect()}
+            onClick={() => void runConnect()}
             disabled={state.phase === 'connecting'}
             className="no-drag cl-focus shrink-0 text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
           >
@@ -2849,15 +2868,20 @@ function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p:
           </button>
         </div>
       ) : (
-        <button
-          type="button"
-          onClick={() => void connect()}
-          disabled={state.phase === 'connecting'}
-          className={secondaryBtnStyle}
-        >
-          {state.phase === 'connecting' ? <Loader2 size={12} className="animate-spin" /> : <Link2 size={12} />}
-          {state.phase === 'connecting' ? 'Waiting for ClickUp…' : 'Connect ClickUp'}
-        </button>
+        <div className="flex flex-col gap-1.5">
+          <button
+            type="button"
+            onClick={() => void runConnect()}
+            disabled={state.phase === 'connecting'}
+            className={primaryBtnStyle}
+          >
+            {state.phase === 'connecting' ? <Loader2 size={12} className="animate-spin" /> : <Link2 size={12} />}
+            {state.phase === 'connecting' ? 'Waiting for browser login…' : `Connect ${connectLabel}`}
+          </button>
+          <p className="m-0 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            Opens a browser tab to sign in. That’s it — Métis connects your account automatically.
+          </p>
+        </div>
       )}
 
       {state.phase === 'error' && state.error && (
@@ -2867,6 +2891,21 @@ function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p:
         </div>
       )}
     </div>
+  )
+}
+
+/** @deprecated Prefer McpBrowserConnectCard — kept name as thin alias for any leftover imports. */
+function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p: Partial<PublicSettings>) => void }): JSX.Element {
+  return (
+    <McpBrowserConnectCard
+      settings={settings}
+      patch={patch}
+      kind="clickup"
+      title="ClickUp · task management"
+      desc="Push action items from a meeting recap to ClickUp as tasks. Manual and review-first: nothing sends automatically."
+      connectLabel="ClickUp"
+      connect={() => window.toto.mcpClickupConnect()}
+    />
   )
 }
 
@@ -6637,7 +6676,7 @@ function IntelligenceTab({
 
       <Section
         title="Polo Pre-Sales"
-        desc="Push meeting recaps to your pre-sales CRM. Manual and review-first: nothing sends automatically."
+        desc="Local CRM MCP — paste an API key once (no browser login on this server). Manual and review-first: nothing sends automatically."
         icon={MessageSquare}
       >
         <McpConnectionCard
@@ -6646,7 +6685,7 @@ function IntelligenceTab({
           kind="bidstack"
           defaultLabel="Polo Pre-Sales"
           title="Polo Pre-Sales · your CRM"
-          desc="Push meeting recaps to Polo Pre-Sales over its MCP server. Manual and review-first: nothing sends automatically."
+          desc="Push meeting recaps to Polo Pre-Sales over its MCP server. Paste the endpoint + key once — that's the whole setup."
           endpointPlaceholder="http://localhost:4001/mcp"
           apiKeyHint="Bearer token from Polo Pre-Sales → Developer access → API keys (mcp + write scope)"
         />
@@ -6657,16 +6696,14 @@ function IntelligenceTab({
         desc="Push meeting action items to Plane as work items — see Review → Book next steps. Manual and review-first: nothing sends automatically."
         icon={ListTree}
       >
-        <McpConnectionCard
+        <McpBrowserConnectCard
           settings={settings}
           patch={patch}
           kind="plane"
-          defaultLabel="Plane"
           title="Plane · task management"
           desc="Push action items from a meeting recap to Plane as work items. Manual and review-first: nothing sends automatically."
-          endpointPlaceholder="https://mcp.plane.so/http/api-key/mcp"
-          apiKeyHint="Personal or workspace access token from Plane → Settings → API tokens"
-          extraFields={[{ key: 'X-Workspace-slug', label: 'Workspace slug', placeholder: 'acme' }]}
+          connectLabel="Plane"
+          connect={() => window.toto.mcpPlaneConnect()}
         />
       </Section>
 

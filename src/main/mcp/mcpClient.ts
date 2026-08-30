@@ -10,9 +10,10 @@
  *     Plane whose hosted endpoint needs more than a bearer token (its `X-Workspace-slug` header),
  *     `extraHeaders` merged onto every request.
  *
- * ClickUp is deliberately NOT wired through this module: its official remote MCP server is OAuth-2.1-
- * with-PKCE only, a materially different auth shape than the static bearer-header transport below. That
- * is its own scoped follow-up (see McpConnectionKindSchema in shared/ipc.ts).
+ * ClickUp is wired through the same connectMcp bearer transport AFTER OAuth hands back an access
+ * token (see mcp/clickupOAuth.ts + mcp/planeOAuth.ts). Plane's hosted OAuth endpoint is
+ * https://mcp.plane.so/http/mcp — the older api-key + X-Workspace-slug path remains available only
+ * via a pasted key through mcpSaveConnection for self-hosted / automation cases.
  *
  * This module owns the low-level MCP plumbing only: connect, list tools, call a tool. It never persists
  * anything (that's main/index.ts's job) and never renders UI. Lives in the main process alongside

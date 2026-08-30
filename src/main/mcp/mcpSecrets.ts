@@ -60,6 +60,11 @@ const refreshPath = (connectionId: string): string => {
   assertSafeConnectionId(connectionId)
   return join(app.getPath('userData'), `key-mcp-${connectionId}-refresh.bin`)
 }
+/** OAuth Dynamic Client Registration client_secret (Plane today) — never plain settings.json. */
+const clientSecretPath = (connectionId: string): string => {
+  assertSafeConnectionId(connectionId)
+  return join(app.getPath('userData'), `key-mcp-${connectionId}-client.bin`)
+}
 
 // One in-memory cache per connectionId — mirrors bidstackSecrets.ts's single-slot `_cache`, generalized
 // to a Map now that more than one connection can hold a key. A separate map for refresh tokens: today
@@ -67,6 +72,7 @@ const refreshPath = (connectionId: string): string => {
 // second OAuth kind needs no new plumbing.
 const cache = new Map<string, string>()
 const refreshCache = new Map<string, string>()
+const clientSecretCache = new Map<string, string>()
 
 /** Encrypt+write one secret to `p`, using the same file-backend/safeStorage choice and error message
  *  shape store.ts's setApiKey and the rest of this module already use. Never partially writes. */
@@ -231,5 +237,43 @@ export function clearMcpRefreshToken(connectionId: string): boolean {
     return false
   }
   refreshCache.set(connectionId, '')
+  return true
+}
+
+/** Store an OAuth DCR client_secret for a connection (Plane today). Public client_id stays in settings;
+ *  the secret must never. Empty token clears. */
+export function setMcpClientSecret(connectionId: string, secret: string): void {
+  const trimmed = secret.trim()
+  if (!trimmed) {
+    clearMcpClientSecret(connectionId)
+    return
+  }
+  writeSecretFile(clientSecretPath(connectionId), trimmed, 'OAuth client secret')
+  clientSecretCache.set(connectionId, trimmed)
+}
+
+export function getMcpClientSecret(connectionId: string): string {
+  const cached = clientSecretCache.get(connectionId)
+  if (cached !== undefined) return cached
+  const secret = readKeyFile(clientSecretPath(connectionId), AES_KEY_MARKER)
+  clientSecretCache.set(connectionId, secret)
+  return secret
+}
+
+/** Same delete contract as clearMcpRefreshToken — false only when a file existed and could not be removed. */
+export function clearMcpClientSecret(connectionId: string): boolean {
+  const p = clientSecretPath(connectionId)
+  if (!existsSync(p)) {
+    clientSecretCache.set(connectionId, '')
+    return true
+  }
+  try {
+    rmSync(p)
+  } catch (e) {
+    mainLog.warn(`[mcp:${connectionId}] could not delete client-secret file`, e)
+    clientSecretCache.delete(connectionId)
+    return false
+  }
+  clientSecretCache.set(connectionId, '')
   return true
 }

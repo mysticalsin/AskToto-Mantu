@@ -346,7 +346,9 @@ import {
   hasMcpApiKey,
   setMcpRefreshToken,
   getMcpRefreshToken,
-  clearMcpRefreshToken
+  clearMcpRefreshToken,
+  setMcpClientSecret,
+  clearMcpClientSecret
 } from './mcp/mcpSecrets'
 import {
   runClickupOAuth,
@@ -355,6 +357,13 @@ import {
   tryAcquireClickupTokenLock,
   releaseClickupTokenLock
 } from './mcp/clickupOAuth'
+import {
+  runPlaneOAuth,
+  refreshPlaneToken,
+  PLANE_MCP_ENDPOINT,
+  tryAcquirePlaneTokenLock,
+  releasePlaneTokenLock
+} from './mcp/planeOAuth'
 import {
   graphifyStatus,
   buildGraph,
@@ -2664,7 +2673,7 @@ function registerIpc(): void {
     // patch({ mcpConnections }) calls are redundant echoes of what main just persisted, and state.ts's
     // patch() re-seeds React state from this handler's return value, so dropping the key here costs the
     // UI nothing. clickupClientId is main-owned too (written only by the DCR step).
-    for (const k of ['mcpConnections', 'clickupClientId']) {
+    for (const k of ['mcpConnections', 'clickupClientId', 'planeClientId']) {
       if (k in p) delete (p as Record<string, unknown>)[k]
     }
     const cur = getSettings()
@@ -3250,18 +3259,22 @@ function registerIpc(): void {
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
     const { connectionId } = parsed.data
     const keyRemoved = clearMcpApiKey(connectionId)
-    // A no-op for a connection kind that never had one (BidStack, Plane) — only ClickUp's OAuth token
-    // pair populates this file, but clearing unconditionally means disconnect never has to know which
-    // kinds are OAuth-based.
+    // OAuth pairs (ClickUp, Plane): clear refresh + DCR client_secret unconditionally — no-op when absent.
     const refreshRemoved = clearMcpRefreshToken(connectionId)
+    const clientSecretRemoved = clearMcpClientSecret(connectionId)
     const s = getSettings()
     setSettings({
       mcpConnections: s.mcpConnections.map((c) => (c.id === connectionId ? { ...c, connected: false, tools: [] } : c))
     })
-    auditLog('mcp.disconnected', { connectionId, keyFileRemoved: keyRemoved, refreshFileRemoved: refreshRemoved })
+    auditLog('mcp.disconnected', {
+      connectionId,
+      keyFileRemoved: keyRemoved,
+      refreshFileRemoved: refreshRemoved,
+      clientSecretRemoved
+    })
     // Don't falsely report a clean disconnect when a secret is still on disk — the connection is marked
     // off, but the user needs to know a file survived so they can remove it manually.
-    if (!keyRemoved || !refreshRemoved)
+    if (!keyRemoved || !refreshRemoved || !clientSecretRemoved)
       return {
         ok: false,
         error: `Disconnected, but the stored ${mcpLabelFor(connectionId)} credentials could not be fully deleted — remove them manually.`
@@ -3304,28 +3317,30 @@ function registerIpc(): void {
     }
     const apiKey = getMcpApiKey(connectionId)
     let r = await pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, toolName, args, conn.label)
-    // ClickUp-only: its credential is an OAuth access token, not a pasted key that only changes when the
-    // user edits it — a 401 here can mean the token simply expired. Attempt exactly one refresh + retry
-    // before surfacing reconnect-required, gated on the SAME single-flight lock the interactive OAuth
-    // flow uses (see clickupOAuth.ts) so a background refresh here and a user-initiated Reconnect in
-    // Settings can never both persist tokens at once.
-    if (!r.ok && conn.kind === 'clickup' && /401|403|unauthor|forbidden/i.test(r.error || '')) {
-      if (tryAcquireClickupTokenLock()) {
+    // OAuth connections (ClickUp, Plane): credential is an access token that can expire. One refresh +
+    // retry before surfacing reconnect-required, gated on each provider's single-flight lock so a
+    // background refresh and a user-initiated Reconnect never both persist tokens at once.
+    if (!r.ok && (conn.kind === 'clickup' || conn.kind === 'plane') && /401|403|unauthor|forbidden/i.test(r.error || '')) {
+      const acquire = conn.kind === 'clickup' ? tryAcquireClickupTokenLock : tryAcquirePlaneTokenLock
+      const release = conn.kind === 'clickup' ? releaseClickupTokenLock : releasePlaneTokenLock
+      const refresh = conn.kind === 'clickup' ? refreshClickupToken : refreshPlaneToken
+      const label = conn.kind === 'clickup' ? 'ClickUp' : 'Plane'
+      if (acquire()) {
         try {
           const refreshToken = getMcpRefreshToken(connectionId)
-          const refreshed = refreshToken ? await refreshClickupToken(refreshToken) : { ok: false as const }
+          const refreshed = refreshToken ? await refresh(refreshToken) : { ok: false as const }
           if (refreshed.ok && refreshed.accessToken) {
             setMcpApiKey(connectionId, refreshed.accessToken)
             setMcpRefreshToken(connectionId, refreshed.refreshToken ?? refreshToken ?? '')
             r = await pushToMcp(conn.endpointUrl, refreshed.accessToken, conn.extraHeaders, toolName, args, conn.label)
           } else {
-            r = { ok: false, error: 'Your ClickUp session expired. Reconnect ClickUp in Settings.' }
+            r = { ok: false, error: `Your ${label} session expired. Reconnect ${label} in Settings.` }
           }
         } finally {
-          releaseClickupTokenLock()
+          release()
         }
       } else {
-        r = { ok: false, error: 'A ClickUp sign-in or refresh is already in progress. Try again in a moment.' }
+        r = { ok: false, error: `A ${label} sign-in or refresh is already in progress. Try again in a moment.` }
       }
     }
     auditLog('mcp.push', { connectionId, tool: toolName, ok: r.ok })
@@ -3374,6 +3389,37 @@ function registerIpc(): void {
       return { ok: false as const, error: error instanceof Error ? error.message : 'Could not store the ClickUp connection.' }
     }
     auditLog('mcp.connected', { connectionId: 'clickup', tools: (r.tools ?? []).length })
+    return r
+  })
+
+  // Plane — same plug-and-play OAuth shape as ClickUp (browser login → auto-connect). Uses the hosted
+  // OAuth MCP endpoint; workspace is chosen during Plane consent (no slug / PAT paste).
+  ipcMain.handle(IPC.mcpPlaneConnect, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const tokens = await runPlaneOAuth()
+    if (!tokens.ok || !tokens.accessToken) return { ok: false, error: tokens.error || 'Could not connect Plane.' }
+    const r = await connectMcp(PLANE_MCP_ENDPOINT, tokens.accessToken, {}, 'Plane')
+    if (!r.ok) return r
+    try {
+      if (tokens.clientSecret) setMcpClientSecret('plane', tokens.clientSecret)
+      setMcpApiKey('plane', tokens.accessToken)
+      setMcpRefreshToken('plane', tokens.refreshToken ?? '')
+      const s = getSettings()
+      const entry: McpConnection = {
+        id: 'plane',
+        kind: 'plane',
+        label: 'Plane',
+        endpointUrl: PLANE_MCP_ENDPOINT,
+        connected: true,
+        tools: r.tools ?? [],
+        extraHeaders: {}
+      }
+      setSettings({ mcpConnections: [...s.mcpConnections.filter((c) => c.id !== 'plane'), entry] })
+    } catch (error) {
+      return { ok: false as const, error: error instanceof Error ? error.message : 'Could not store the Plane connection.' }
+    }
+    auditLog('mcp.connected', { connectionId: 'plane', tools: (r.tools ?? []).length })
     return r
   })
 

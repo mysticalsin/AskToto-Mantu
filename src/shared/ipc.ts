@@ -220,6 +220,8 @@ export const IPC = {
   // + PKCE flow (browser consent) and, on success, upserts an mcpConnections entry exactly like
   // mcpSaveConnection does for a pasted key. Reuses mcpDisconnect/mcpPush unchanged.
   mcpClickupConnect: 'mcp:clickupConnect',
+  // Plane OAuth 2.1 + PKCE (same plug-and-play shape as ClickUp): one button → browser → connected.
+  mcpPlaneConnect: 'mcp:planeConnect',
   licenseActivate: 'license:activate',
   licenseStatus: 'license:status',
   licenseGate: 'license:gate',
@@ -1058,7 +1060,8 @@ export const BaseSettingsSchema = z.object({
   dustTokenMintedAt: z.number().default(0),
   // Whether the user has acknowledged the CLI integration notice banner.
   cliNoticeAck: z.boolean().default(false),
-  // Named MCP connections — CRM (BidStack) and task managers (Plane; ClickUp is schema-reserved only,
+// Named MCP connections — CRM (BidStack) and task managers (Plane + ClickUp). Plane and ClickUp are
+  // browser OAuth (one-click); BidStack stays API-key. API keys / OAuth tokens themselves are
   // see McpConnectionKindSchema). One connection per kind (id === kind in v1). API keys themselves are
   // NOT stored here; they go through the same encrypted-file mechanism as provider keys, via
   // main/mcp/mcpSecrets.ts (kept out of the ProviderId union — these are push credentials, not LLM
@@ -1071,6 +1074,8 @@ export const BaseSettingsSchema = z.object({
   // plain settings rather than mcpSecrets.ts. Registered once (main/mcp/clickupOAuth.ts) and cached here
   // so every later connect/reconnect reuses the same client instead of re-registering.
   clickupClientId: z.string().default(''),
+  // Plane OAuth Dynamic Client Registration public client_id (secret lives in mcpSecrets).
+  planeClientId: z.string().default(''),
   // Métis Local uses a single on-device model. The preprocess is a persisted-settings migration for
   // releases that offered qwen3.5-2b; unknown ids fail validation and fall back safely in
   // main/store.ts instead of pointing llama-server at a file that can never exist.
@@ -1476,6 +1481,7 @@ export const DEFAULT_SETTINGS: Settings = {
   cliNoticeAck: false,
   mcpConnections: [],
   clickupClientId: '',
+  planeClientId: '',
   localLlm: {
     enabled: false,
     modelId: BUNDLED_LOCAL_MODEL_ID,
