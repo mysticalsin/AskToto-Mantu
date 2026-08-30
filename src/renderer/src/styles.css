@@ -1582,21 +1582,20 @@ input::placeholder {
    resting "notch"). Deliberately small so the hugged window is a tiny top-center strip, not a wide
    transparent click-trap. Springs into place with a compositor-cheap transform+opacity (reduced-motion
    is honoured by the global rule at the bottom of this file, which zeroes the duration). */
-/* Hide-until-hover rest: wide top-middle pad. Visually stealth, opaque to Electron hit-testing
-   (alpha 0 pixels do not receive mouse events). Do not hug-width this down to a 120px pill. */
+/* Hide rest: 1–8px fully transparent hairline. Cursor watch is the sensor, not this paint. */
 .overlay-hide-target {
   display: block;
-  width: 100%;
-  min-width: 220px;
-  max-width: 560px;
-  height: 100%;
-  min-height: 28px;
+  width: 8px;
+  height: 2px;
+  min-width: 0;
+  min-height: 0;
+  max-width: 8px;
   padding: 0;
   border: none;
-  border-radius: 0 0 10px 10px;
-  background: rgba(8, 4, 16, 0.04);
+  border-radius: 0;
+  background: transparent;
   opacity: 1;
-  pointer-events: auto;
+  pointer-events: none;
   cursor: default;
 }
 
