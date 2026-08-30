@@ -163,6 +163,15 @@ AskToto/
 └── docs/                     design spec, architecture, hardening backlog, SIGNING.md, …
 ```
 
+## Platform & dispatch map
+
+This repo ships **three products from one tree**: Métis for Windows (Electron `.exe`), Métis for macOS
+(Electron `.dmg`), and the native macOS Swift app under `native-app/`. The Electron side is **not** forked
+per-OS — Windows and macOS share `src/**` and differ only by runtime checks and packaging overlays
+(`electron-builder.win.yml` vs the mac section of `electron-builder.yml`). For exactly where each
+platform's code lives, and how a fix is dispatched to users (tag → CI → `Metis-Releases` feed →
+`electron-updater`, vs the App Store for the native app), see **[`docs/PLATFORM-MAP.md`](docs/PLATFORM-MAP.md)**.
+
 ## Architecture
 
 The main process is the trust boundary: every privileged IPC handler is guarded by
