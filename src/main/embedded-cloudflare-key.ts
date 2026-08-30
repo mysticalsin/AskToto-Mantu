@@ -3,37 +3,66 @@
  * to the operator's Cloudflare Worker (the default provider, see ipc.ts's BaseSettingsSchema.provider)
  * with zero paste-a-key setup.
  *
- * Same disclosed, opt-in pattern cahe-embedded-key.ts already uses for the Cahê pilot's Kimi key: a
- * local, gitignored bundle (build/cloudflare-embed/key.json — see .gitignore) is copied into the package
- * ONLY when the operator builds with it present (electron-builder.yml's extraResources tolerates the
- * directory being empty), and scripts/check-cloudflare-embed-key.mjs scans every packaging chain so an
- * embed is never accidental. The key is NOT hidden by this: `npx asar extract` (or, since it ships
- * outside the asar as an extraResource, a plain file read) recovers it from any installer that has it in
- * seconds — see docs/CLOUDFLARE.md. What makes this safe to ship is the key's SCOPE, not secrecy:
+ * WHAT SHIPS IN THE INSTALLER IS AN ENCRYPTED BLOB, NOT THE PLAINTEXT KEY. The build step
+ * (scripts/embed-cloudflare-key.mjs) AES-256-GCM-encrypts the operator's METIS_PROXY_KEY under a key
+ * derived (scrypt) from build-stable material (appId + an obfuscation secret in embedded-key-material.json)
+ * and writes only the ciphertext blob to build/cloudflare-embed/key.json, which electron-builder copies to
+ * resources/cloudflare-embed/key.json. At runtime this module reads that blob and decrypts it IN MEMORY
+ * (decryptEmbeddedBlob, static-import + bytecode-safe — docs/DEVELOPMENT.md). The decrypted plaintext is
+ * never written to disk or logs; what lands on disk is only ever the app's OWN encrypted keystore blob
+ * (store.ts's setApiKey, AES file keystore — the exact same at-rest encryption a user-pasted key gets).
+ *
+ * SECURITY HONESTY (do not soften this): encrypting a key with material that ALSO ships in the app is
+ * OBFUSCATION, not secrecy. A determined attacker with the binary can re-derive the key and decrypt the
+ * blob — this only raises the bar above a plaintext file that `npx asar extract` reads in seconds. The
+ * truly-secure option, where the token never ships at all, is the Worker proxy (docs/CLOUDFLARE.md). What
+ * makes an embedded key safe to ship is its SCOPE, not this encryption:
  *   - it is provisioned into the Worker's METIS_PROXY_KEYS array under its own "embedded-default" label
  *     (cloudflare-proxy/src/index.ts's multi-key union), never as METIS_PROXY_KEY (the operator's own key);
  *   - a labeled key is revoked independently, by removing its entry, without touching any other user's key;
  *   - the operator sizes it as a minimum-quota fallback, not a shared admin credential.
  *
- * This module only SEEDS the key into the app's own encrypted keystore (store.ts's setApiKey — the same
- * AES file keystore a pasted key goes through) once per profile, tracked by a marker file so a user's
- * later key change/removal always sticks and is never silently re-overwritten on the next launch.
+ * This module only SEEDS the decrypted key into the app's own encrypted keystore (store.ts's setApiKey)
+ * once per profile, tracked by a marker file so a user's later key change/removal always sticks and is
+ * never silently re-overwritten on the next launch.
  */
 import { app } from 'electron'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { getApiKey, setApiKey } from './store'
 import { mainLog, auditLog } from './logger'
+import { decryptEmbeddedBlob, type EncryptedCloudflareKeyBlob } from './embedded-cloudflare-crypto'
 
 const PROXY_KEY_PATTERN = /^[A-Za-z0-9+/_=-]{20,}$/
-
-interface EmbeddedCloudflareKeyBundle {
-  proxyKey?: string
-}
 
 /** Per-profile marker recording the one-time embedded-key seed already ran (mirrors cahe-embedded-key.ts). */
 function seededMarkerPath(): string {
   return join(app.getPath('userData'), '.cloudflare-key-seeded')
+}
+
+/** Absolute path of the packaged encrypted blob (ciphertext only — see the file header). */
+function bundlePath(): string {
+  return join(process.resourcesPath, 'cloudflare-embed', 'key.json')
+}
+
+/**
+ * Read the packaged blob and DECRYPT it in memory, returning the plaintext proxy key or null. Null covers
+ * every "nothing usable here" case identically — no bundle (the normal keyless build), unreadable/corrupt
+ * JSON, a blob encrypted under different material, a tampered blob that fails GCM auth, or a decrypted
+ * value that does not look like a proxy key. Never throws; never logs the plaintext.
+ */
+function readEmbeddedProxyKey(): string | null {
+  try {
+    const p = bundlePath()
+    if (!existsSync(p)) return null // keyless build: no bundle to decrypt
+    const blob = JSON.parse(readFileSync(p, 'utf8')) as EncryptedCloudflareKeyBlob
+    const key = decryptEmbeddedBlob(blob)?.trim()
+    if (!key || !PROXY_KEY_PATTERN.test(key)) return null
+    return key
+  } catch (e) {
+    mainLog.warn('[embedded-cloudflare-key] could not read/decrypt the embedded blob', e)
+    return null
+  }
 }
 
 /**
@@ -62,22 +91,19 @@ export function importEmbeddedCloudflareKey(): void {
     return
   }
 
-  const bundlePath = join(process.resourcesPath, 'cloudflare-embed', 'key.json')
-  if (!existsSync(bundlePath)) return // keyless build: leave the marker unwritten so a later build can still seed
+  const key = readEmbeddedProxyKey()
+  if (!key) {
+    // Keyless build, or a malformed/undecryptable bundle: leave the marker unwritten so a corrected build
+    // can still seed on a later launch, and leave normal onboarding in place.
+    return
+  }
 
   try {
-    const bundle = JSON.parse(readFileSync(bundlePath, 'utf8')) as EmbeddedCloudflareKeyBundle
-    const key = bundle.proxyKey?.trim()
-    if (!key || !PROXY_KEY_PATTERN.test(key)) {
-      mainLog.warn('[embedded-cloudflare-key] embedded bundle is missing a valid proxyKey; leaving normal onboarding in place')
-      return // malformed bundle: leave the marker unwritten so a corrected build can still seed
-    }
     setApiKey('cloudflare', key)
     auditLog('key.set', { provider: 'cloudflare', source: 'embedded-default' })
     mainLog.info('[embedded-cloudflare-key] seeded the embedded Cloudflare proxy key')
   } catch (e) {
-    // Corrupt bundle or keystore error — never block startup, and never burn the marker so a corrected
-    // build gets a chance next launch.
+    // Keystore error — never block startup, and never burn the marker so a later launch can retry.
     mainLog.warn('[embedded-cloudflare-key] embedded key import failed', e)
     return
   }
@@ -90,22 +116,15 @@ export function importEmbeddedCloudflareKey(): void {
 }
 
 /**
- * Is there a shipped key this install could fall back on? Reads the bundle only — it says nothing about
- * whether the keystore currently holds a key, which is deliberately the renderer's other question.
+ * Is there a shipped key this install could fall back on? Reads and DECRYPTS the bundle only — it says
+ * nothing about whether the keystore currently holds a key, which is deliberately the renderer's other
+ * question.
  *
  * A keyless build (the normal case) answers false, so the restore affordance never appears where there is
  * nothing to restore.
  */
 export function embeddedCloudflareKeyAvailable(): boolean {
-  try {
-    const bundlePath = join(process.resourcesPath, 'cloudflare-embed', 'key.json')
-    if (!existsSync(bundlePath)) return false
-    const bundle = JSON.parse(readFileSync(bundlePath, 'utf8')) as EmbeddedCloudflareKeyBundle
-    const key = bundle.proxyKey?.trim()
-    return !!key && PROXY_KEY_PATTERN.test(key)
-  } catch {
-    return false
-  }
+  return readEmbeddedProxyKey() !== null
 }
 
 /**
@@ -122,21 +141,13 @@ export function embeddedCloudflareKeyAvailable(): boolean {
  * with nothing on screen explaining why the product had become slow.
  */
 export function restoreEmbeddedCloudflareKey(): { ok: boolean; error?: string } {
-  let key: string
-  try {
-    const bundlePath = join(process.resourcesPath, 'cloudflare-embed', 'key.json')
-    if (!existsSync(bundlePath)) {
-      return { ok: false, error: 'This build did not ship a Cloudflare key, so there is nothing to restore.' }
-    }
-    const bundle = JSON.parse(readFileSync(bundlePath, 'utf8')) as EmbeddedCloudflareKeyBundle
-    const candidate = bundle.proxyKey?.trim()
-    if (!candidate || !PROXY_KEY_PATTERN.test(candidate)) {
-      return { ok: false, error: 'The key that shipped with this build is unreadable, so it was not restored.' }
-    }
-    key = candidate
-  } catch (e) {
-    mainLog.warn('[embedded-cloudflare-key] restore could not read the bundle', e)
-    return { ok: false, error: 'The key that shipped with this build could not be read.' }
+  const p = bundlePath()
+  if (!existsSync(p)) {
+    return { ok: false, error: 'This build did not ship a Cloudflare key, so there is nothing to restore.' }
+  }
+  const key = readEmbeddedProxyKey()
+  if (!key) {
+    return { ok: false, error: 'The key that shipped with this build is unreadable, so it was not restored.' }
   }
 
   try {
