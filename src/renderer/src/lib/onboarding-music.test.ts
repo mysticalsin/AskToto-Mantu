@@ -46,9 +46,9 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
   it('mute zeros volume; reduced-motion is not a mute switch', () => {
     expect(onboardingMusicGain(true)).toBe(0)
     expect(onboardingMusicGain(false)).toBe(ONBOARDING_MUSIC_GAIN)
-    expect(ONBOARDING_MUSIC_GAIN).toBe(0.4)
-    expect(ONBOARDING_MUSIC_GAIN).toBeGreaterThan(0.3)
-    expect(ONBOARDING_MUSIC_GAIN).toBeLessThan(0.5)
+    expect(ONBOARDING_MUSIC_GAIN).toBe(0.3)
+    expect(ONBOARDING_MUSIC_GAIN).toBeGreaterThan(0.2)
+    expect(ONBOARDING_MUSIC_GAIN).toBeLessThan(0.4)
     expect(production).not.toMatch(/ONBOARDING_MUSIC_REDUCED_GAIN/)
     expect(onboardingMusicGain.length).toBe(1)
     expect(experience).toMatch(/onboard-mute/)

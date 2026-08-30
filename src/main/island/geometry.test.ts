@@ -328,7 +328,7 @@ describe('DESIGN.md overlay contract', () => {
     expect(design).toMatch(/CC0 1\.0/)
     expect(design).toMatch(/Mute control/)
     expect(design).toMatch(/rotating stripe|stripe layers/)
-    expect(design).toMatch(/0\.40/)
+    expect(design).toMatch(/0\.30/)
     expect(design).toMatch(/em dash/)
     expect(design).toMatch(/Tell the room/)
     expect(design).toMatch(/GDPR/)
