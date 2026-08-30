@@ -603,7 +603,12 @@ export const Review = memo(function Review({
     const payload = crmPayload
     const file = savedPath
     setPushState({ phase: 'sending', error: null })
-    const r = await window.toto.mcpPush({ connectionId: 'bidstack', toolName: pushTool, args: payload })
+    const r = await window.toto.mcpPush({
+      connectionId: 'bidstack',
+      toolName: pushTool,
+      args: { ...payload, confidential: confidentialFlag },
+      ...(file ? { meetingFile: file.split(/[/\\]/).pop() || file } : {})
+    })
     if (r.ok) {
       markCrmPushed(payload)
       setPushState({ phase: 'sent', error: null })
@@ -745,7 +750,12 @@ export const Review = memo(function Review({
         const key = `${i}:${conn.id}`
         if (nextStepPushed(stepStatus[key]?.phase ?? 'idle', conn.id, args)) continue
         setStepStatus((s) => ({ ...s, [key]: { phase: 'sending', error: null } }))
-        const r = await window.toto.mcpPush({ connectionId: conn.id, toolName: tool, args })
+        const r = await window.toto.mcpPush({
+          connectionId: conn.id,
+          toolName: tool,
+          args: { ...args, confidential: confidentialFlag },
+          ...(savedPath ? { meetingFile: savedPath.split(/[/\\]/).pop() || savedPath } : {})
+        })
         if (r.ok) {
           markNextStepPushed(conn.id, args)
           setStepStatus((s) => ({ ...s, [key]: { phase: 'sent', error: null } }))
