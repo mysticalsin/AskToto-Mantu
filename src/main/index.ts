@@ -147,8 +147,8 @@ import {
   isReachable as islandIsReachable,
   recenterXForWidth,
   refitToDisplay as islandRefitToDisplay,
-  slideWithinMargin,
-  topCenterPosition
+  topCenterPosition,
+  topClamp
 } from './island/geometry'
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
 
@@ -1600,7 +1600,8 @@ function resizeTo(height: number): void {
   // Clamp + reposition against the display the OVERLAY is actually on (not the cursor's). Otherwise, on a
   // laptop + external monitor of different heights, a streaming answer clamps to the wrong monitor and the
   // window jumps vertically while the cursor sits on the other screen.
-  const { workArea } = screen.getDisplayMatching(win.getBounds())
+  const display = screen.getDisplayMatching(win.getBounds())
+  const { workArea } = display
   const h = clampHeight(Math.round(height), workArea.height)
   const b = win.getBounds()
   if (h === b.height && currentWidth === b.width) {
@@ -1610,11 +1611,9 @@ function resizeTo(height: number): void {
     return // idempotent — skip a no-op setBounds (belt-and-braces with the renderer-side resize dedup)
   }
   if (!isMinimized) lastBarHeight = h
-  // Keep the panel fully on-screen; if it would grow below the work area, slide it up — TEMPORARILY.
-  // Measured against the user's own anchor rather than the current (possibly already-slid) top edge, so
-  // the window returns to where they put it once the content shrinks again.
-  const anchor = userAnchorY ?? b.y
-  const y = slideWithinMargin(anchor, h, workArea, RESIZE_EDGE_MARGIN)
+  // Island: peek and revealed share the safe Y (below the notch) so hover grows DOWN, leave shrinks
+  // in place. Do not slide into bounds.y — that clips the capsule on a notch Mac.
+  const y = topClamp('island', getDisplayMetrics(display), ISLAND_TOP_MARGIN)
   // When the width changes (collapse to / expand from the mini-pill), recenter around the old midpoint
   // so the overlay stays put; otherwise keep the left edge. Clamp x into the work area either way.
   const x = recenterXForWidth(b.x, b.width, currentWidth, workArea, RESIZE_EDGE_MARGIN)
@@ -1636,11 +1635,8 @@ function setMinimizedWidth(narrow: boolean): void {
  * Settings keeps the same top edge (so it grows downward from the bar) and centers horizontally,
  * clamped to the work area. Exiting restores the bar's width and last content height.
  */
-// Top margin (px) for the auto-hide peek anchor — how far below the work-area top edge the overlay hugs
-// on a NON-notch display (Windows, an external monitor, an older Mac). Small so the peek strip reads as
-// pinned to the very top (Vibe-Island notch), with just enough gap to clear a menu-bar/rounded-corner and
-// leave room for the stealth glow halo not to be clipped at y=0. On a notch Mac, island/geometry.ts's
-// topClamp() ignores this margin entirely and draws into the menu-bar strip instead (MQA-275).
+// Top margin (px) for the auto-hide peek on a NON-notch display. Notch Macs use islandSafeTop
+// (workArea.y, or a strut if workArea.y is 0) and ignore this margin so the capsule is not clipped.
 const ISLAND_TOP_MARGIN = 8
 // Top margin (px) for the ONE-TIME initial window placement in createWindow — deliberately larger than
 // ISLAND_TOP_MARGIN so a freshly-launched window doesn't appear jammed against the very top edge before
@@ -1662,11 +1658,9 @@ function islandTopCenter(width: number, display: Electron.Display, topMargin: nu
 }
 
 /** Pin the overlay to the top-center of the display it is currently on, and re-arm the resizeTo anchor
- *  there, so the auto-hide peek strip and the revealed bar both grow DOWNWARD from the top edge (the
- *  clean default position for the Vibe-Island-style auto-hide) — or draw into the menu-bar strip on a
- *  notch Mac (island/geometry.ts's topClamp). Uses getDisplayMatching(win bounds) so it stays correct on
- *  the overlay's actual display in a multi-monitor setup. A pure setBounds — never show()/focus() — so
- *  the user's foreground app keeps focus (the non-activating contract). */
+ *  there, so the auto-hide peek strip and the revealed bar both grow DOWNWARD from the same safe Y
+ *  (below the notch). Uses getDisplayMatching(win bounds) so it stays correct on the overlay's actual
+ *  display. A pure setBounds — never show()/focus(). */
 function anchorTopCenter(): void {
   if (!win) return
   const display = screen.getDisplayMatching(win.getBounds())
@@ -1676,19 +1670,17 @@ function anchorTopCenter(): void {
   win.setBounds({ x, y, width: b.width, height: b.height }, false)
 }
 
-/** Reveal from the auto-hide peek: widen the window back to the full bar width and re-center it on the
- *  peek's own midpoint, keeping the current top edge/height. The peek narrows the window via
- *  data-hug-width (useAutoResize reports the slim strip's width), and nothing in the plain-bar view ever
- *  reports a width again — so without this the revealed bar would stay stuck at the ~140px peek width.
- *  Height is left to the renderer's own auto-resize (its grow path is immediate), so this only moves the
- *  width/x. A pure setBounds — never show()/focus() — so the foreground app keeps focus. */
+/** Reveal from the auto-hide peek: widen to the full bar and grow height downward from the same
+ *  safe Y. Leave collapse is the inverse (resizeTo with peek height, same Y). */
 function restoreBarWidth(): void {
   if (!win || currentWidth === BAR_WIDTH) return
-  const { workArea } = screen.getDisplayMatching(win.getBounds())
+  const display = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
   currentWidth = BAR_WIDTH
-  const x = recenterXForWidth(b.x, b.width, BAR_WIDTH, workArea, 0)
-  win.setBounds({ x, y: b.y, width: BAR_WIDTH, height: b.height }, false)
+  const x = recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
+  const y = topClamp('island', getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+  const revealedHeight = Math.max(b.height, lastBarHeight, BAR_HEIGHT)
+  win.setBounds({ x, y, width: BAR_WIDTH, height: revealedHeight }, false)
 }
 
 // Re-center the compact bar on its current display. The old fixed 'settings' window-mode was removed —

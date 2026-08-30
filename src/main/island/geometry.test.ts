@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import {
   clampAxis,
@@ -11,6 +13,8 @@ import {
   slideWithinMargin,
   topCenterPosition,
   topClamp,
+  islandSafeTop,
+  ISLAND_NOTCH_STRUT_PX,
   type DisplayMetrics,
   type Rect
 } from './geometry'
@@ -83,17 +87,58 @@ describe('MQA-275 — multi-display centering', () => {
 })
 
 describe('MQA-275 — the notch clamp (topClamp)', () => {
-  it('draws into the menu-bar strip on a notch Mac in island layout: y = bounds.y, not workArea.y + margin', () => {
+  it('path A — parks just below the notch: y = workArea.y, never bounds.y = 0', () => {
     const m = metrics({
-      workArea: LAPTOP_WORK_AREA,
-      bounds: { x: 0, y: 0, width: 1512, height: 982 }, // full display, notch strip included
+      workArea: { x: 0, y: 39, width: 1512, height: 943 },
+      bounds: { x: 0, y: 0, width: 1512, height: 982 },
       hasNotch: true,
       notchWidth: 200,
-      menuBarHeight: 37,
+      menuBarHeight: 39,
       source: 'helper'
     })
-    expect(topClamp('island', m, 8)).toBe(m.bounds.y)
-    expect(topClamp('island', m, 8)).not.toBe(m.workArea.y + 8)
+    expect(islandSafeTop(m)).toBe(39)
+    expect(topClamp('island', m, 8)).toBe(m.workArea.y)
+    expect(topClamp('island', m, 8)).not.toBe(m.bounds.y)
+    expect(topClamp('island', m, 8)).toBe(39)
+  })
+
+  it('path C — when workArea.y is 0 on a notch display, apply a strut so the capsule is not clipped', () => {
+    const m = metrics({
+      workArea: { x: 0, y: 0, width: 1512, height: 982 },
+      bounds: { x: 0, y: 0, width: 1512, height: 982 },
+      hasNotch: true,
+      notchWidth: 200,
+      menuBarHeight: 0,
+      source: 'helper'
+    })
+    expect(islandSafeTop(m)).toBe(ISLAND_NOTCH_STRUT_PX)
+    expect(topClamp('island', m, 8)).toBe(ISLAND_NOTCH_STRUT_PX)
+    expect(topClamp('island', m, 8)).not.toBe(0)
+  })
+
+  it('path C uses menuBarHeight when it is larger than the default strut', () => {
+    const m = metrics({
+      workArea: { x: 0, y: 0, width: 1512, height: 982 },
+      bounds: { x: 0, y: 0, width: 1512, height: 982 },
+      hasNotch: true,
+      menuBarHeight: 44,
+      source: 'helper'
+    })
+    expect(islandSafeTop(m)).toBe(44)
+  })
+
+  it('peek and revealed share the same safe Y so hover expands down', () => {
+    const m = metrics({
+      workArea: { x: 0, y: 39, width: 1512, height: 943 },
+      bounds: { x: 0, y: 0, width: 1512, height: 982 },
+      hasNotch: true,
+      menuBarHeight: 39,
+      source: 'helper'
+    })
+    const peekY = topClamp('island', m, 8)
+    const revealedY = topClamp('island', m, 8)
+    expect(peekY).toBe(revealedY)
+    expect(peekY).toBe(39)
   })
 
   it('floats below the work-area top on a NON-notch Mac even in island layout', () => {
@@ -122,7 +167,8 @@ describe('MQA-275 — the notch clamp (topClamp)', () => {
       source: 'heuristic'
     })
     const y = topClamp('island', m, 8)
-    expect(y).toBeGreaterThanOrEqual(m.bounds.y)
+    expect(y).toBeGreaterThanOrEqual(m.workArea.y)
+    expect(y).toBeGreaterThan(m.bounds.y)
   })
 
   it('windows (no notch concept) always floors at workArea.y + margin regardless of layout', () => {
@@ -229,5 +275,14 @@ describe('MQA-275 — clamp primitives (moved verbatim from index.ts)', () => {
     const result = refitToDisplay(tall, 2, LAPTOP_RIGHT_WORK_AREA, 1, 44, 40)
     expect(result.height).toBeLessThanOrEqual(LAPTOP_RIGHT_WORK_AREA.height - 48)
     expect(result.y + result.height).toBeLessThanOrEqual(LAPTOP_RIGHT_WORK_AREA.y + LAPTOP_RIGHT_WORK_AREA.height)
+  })
+})
+
+describe('island reveal/collapse wiring (index.ts)', () => {
+  it('restoreBarWidth grows height at the same topClamp Y; resizeTo pins that Y', () => {
+    const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
+    expect(index).toMatch(/revealedHeight = Math\.max\(b\.height, lastBarHeight, BAR_HEIGHT\)/)
+    expect(index).toMatch(/const y = topClamp\('island', getDisplayMetrics\(display\), ISLAND_TOP_MARGIN\)/)
+    expect(index).toMatch(/function resizeTo/)
   })
 })

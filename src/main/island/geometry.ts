@@ -142,18 +142,32 @@ export function refitToDisplay(
 }
 
 /**
- * The notch-aware top clamp (Phase 1 item 2 of the island rebuild). On a notch Mac in island layout, the
- * island is allowed to draw INTO the menu-bar strip (`bounds.y`, the very top of the physical display) —
- * the `'screen-saver'` always-on-top level already sits above the menu bar, so this does not fight the
- * OS for menu clicks (verify manually: File/Edit/Apple menus must still be clickable while peeking).
- * Every other case — non-notch Mac, Windows, bar layout, or a heuristic guess — floors at the work-area
- * top plus `topMargin`, which is the ONLY behavior a wrong `hasNotch` guess can ever produce: a heuristic
- * false-positive is caught by `metrics.source`, but even uncaught it can only make the island float
- * slightly high, never clip under a real menu bar it didn't know about (a wrong guess never subtracts
- * `topMargin` below the work-area floor, it only skips ADDING it — see the `island && hasNotch` guard).
+ * Fallback strut (px) when Electron reports no top inset (`workArea.y === bounds.y`, usually 0).
+ * Typical notch + menu-bar safe area on a recent MacBook. Used only on path C.
+ */
+export const ISLAND_NOTCH_STRUT_PX = 37
+
+/**
+ * Safe Y for the island peek and the revealed bar (same top edge so hover expands DOWN).
+ *
+ * Path A: `workArea.y` when Electron reports a top inset — first unobstructed row under the
+ * notch / menu bar. Live Mac: `bounds.y = 0` sits *in* the hardware island and clips the capsule.
+ * Path C: if `workArea.y` is 0 (or equal to `bounds.y`) on a notched display, apply a strut so
+ * the capsule still clears the notch.
+ */
+export function islandSafeTop(m: DisplayMetrics): number {
+  const reserved = m.workArea.y - m.bounds.y
+  if (reserved > 0) return m.workArea.y
+  if (m.hasNotch) return m.bounds.y + Math.max(m.menuBarHeight || 0, ISLAND_NOTCH_STRUT_PX)
+  return m.workArea.y
+}
+
+/**
+ * Island chrome parks at `islandSafeTop` (path A / C). Bar chrome keeps `workArea.y + topMargin`.
+ * Non-notch island with a flush work area keeps the small `topMargin` gap (unchanged).
  */
 export function topClamp(layout: OverlayLayout, m: DisplayMetrics, topMargin: number): number {
-  if (layout === 'island' && m.hasNotch) return m.bounds.y
+  if (layout === 'island' && (m.hasNotch || m.workArea.y > m.bounds.y)) return islandSafeTop(m)
   return m.workArea.y + topMargin
 }
 
