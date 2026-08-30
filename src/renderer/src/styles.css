@@ -494,6 +494,32 @@ input::placeholder {
   animation: mic-burst 0.55s ease-out forwards;
 }
 
+/* Onboarding Act 4 (Vibe/personality) — the one-shot selection-delight ring on a persona card
+   (OnboardingExperience.tsx's `personalize` scene). Same "one-shot expanding+fading ring, forwards, no
+   infinite" shape as `.rec-dot::before` above; the difference is that this element is keyed by `mode` in
+   the component rather than by a mount/unmount boolean, so React freshly remounts it (and retriggers the
+   animation) every time the selected persona actually changes, not on every render. Needs no explicit
+   prefers-reduced-motion override: the global `animation-duration: 0ms` rule further down makes it jump
+   straight to its (invisible) end state, which is exactly the desired reduced-motion behavior here. */
+@keyframes persona-select-ring {
+  0% {
+    opacity: 0.6;
+    transform: scale(0.92);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.3);
+  }
+}
+.persona-select-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  border: 1.5px solid var(--color-accent);
+  pointer-events: none;
+  animation: persona-select-ring 420ms var(--ease-spring) forwards;
+}
+
 @keyframes fade-up {
   from {
     opacity: 0;
