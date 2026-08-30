@@ -49,6 +49,8 @@ import {
   type LicenseActivateResult,
   type LicenseStatusResult,
   type LicenseGateVerdict,
+  type LicenseConfigPayload,
+  type LicenseConfigResult,
   type ImportAudioPickResult,
   type ImportAudioProgress,
   type ImportJobView,
@@ -368,7 +370,10 @@ const api = {
   licenseStatus: (): Promise<LicenseStatusResult> => ipcRenderer.invoke(IPC.licenseStatus),
   // Boot-gate verdict — see the license:gate handler in main/index.ts for why this is a separate,
   // non-auth-gated channel from licenseStatus.
-  licenseGate: (): Promise<LicenseGateVerdict> => ipcRenderer.invoke(IPC.licenseGate)
+  licenseGate: (): Promise<LicenseGateVerdict> => ipcRenderer.invoke(IPC.licenseGate),
+  // Act 5 — informational GET /license/config read, for the onboarding ActLicense scene.
+  licenseConfig: (payload: LicenseConfigPayload): Promise<LicenseConfigResult> =>
+    ipcRenderer.invoke(IPC.licenseConfig, payload)
 }
 
 contextBridge.exposeInMainWorld('toto', api)

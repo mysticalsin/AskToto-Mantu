@@ -223,6 +223,7 @@ export const IPC = {
   licenseActivate: 'license:activate',
   licenseStatus: 'license:status',
   licenseGate: 'license:gate',
+  licenseConfig: 'license:config',
   localAiStatus: 'local-ai:status',
   localTranscriptBegin: 'local-ai:transcript:begin',
   localTranscriptAppend: 'local-ai:transcript:append',
@@ -1242,7 +1243,22 @@ export const BaseSettingsSchema = z.object({
   licenseExpiresAt: z.number().nullable().default(null),
   licenseValid: z.boolean().default(false),
   licenseLastValidatedAt: z.number().default(0),
-  licenseGateEnabled: z.boolean().default(false)
+  licenseGateEnabled: z.boolean().default(false),
+  // ── Act 5 (License/trial), MQA-281/282 ──────────────────────────────────────────────────────────
+  /** Compact Ed25519-signed offline lease from the most recent successful /activate or /heartbeat that
+   *  carried one (license-server's lib/lease.mjs wire format). '' = no lease (an unconfigured server,
+   *  or a build that never activated at all) — checkLicenseGrace() (main/license.ts) then falls back to
+   *  the wall-clock grace exactly as it did before this existed. Server-authoritative: stripped from
+   *  any renderer-supplied settings patch, same as the other license fields above (settings:set's strip
+   *  list, main/index.ts) — a hostile renderer must not be able to self-issue a lease. */
+  licenseLease: z.string().default(''),
+  /** Epoch ms of the first QUALIFYING real use — a real suggest/summary/recap result actually delivered
+   *  (main/license.ts's noteQualifyingUse, called from main/index.ts's ask pipeline). null = no
+   *  qualifying use yet. Deliberately NOT set on install/first launch, and never reachable from Act 2's
+   *  onboarding demo (structurally IPC-free — see onboarding-demo.ts). Main-authoritative: stripped
+   *  from renderer patches for the same reason as licenseLease — a plain settings patch must not be
+   *  able to grant a fresh 14-day trial. */
+  trialStartedAt: z.number().nullable().default(null)
 })
 
 export const SettingsSchema = BaseSettingsSchema.refine(
@@ -1484,7 +1500,9 @@ export const DEFAULT_SETTINGS: Settings = {
   licenseExpiresAt: null,
   licenseValid: false,
   licenseLastValidatedAt: 0,
-  licenseGateEnabled: false
+  licenseGateEnabled: false,
+  licenseLease: '',
+  trialStartedAt: null
 }
 
 export const HOTKEY_ACTIONS: HotkeyAction[] = [
@@ -1978,6 +1996,11 @@ export const LicenseActivatePayloadSchema = z.object({
 })
 export type LicenseActivatePayload = z.infer<typeof LicenseActivatePayloadSchema>
 
+export const LicenseConfigPayloadSchema = z.object({
+  serverUrl: z.string().min(1, 'Enter the license server URL.')
+})
+export type LicenseConfigPayload = z.infer<typeof LicenseConfigPayloadSchema>
+
 /** Result of an activate/heartbeat call. `error` carries either the server's own code ('invalid' |
  *  'revoked' | 'expired' | 'seat_limit_reached') or a client-side code for cases the server never sees:
  *  'network' (unreachable or a malformed response) and 'not_activated' (heartbeat with no activation on
@@ -1988,6 +2011,9 @@ export interface LicenseActivateResult {
   companyName?: string
   seatCap?: number
   expiresAt?: number | null
+  /** Compact signed offline lease (MQA-282), when this server has lease signing configured. Absent on
+   *  an unconfigured/older server — additive-only, see license-server/README.md. */
+  lease?: string
 }
 
 /** Cached license state for display — read straight from settings, no network call (see the
@@ -2001,6 +2027,11 @@ export interface LicenseStatusResult {
   licenseValid: boolean
   licenseLastValidatedAt: number
   licenseGateEnabled: boolean
+  /** Act 5 (MQA-281/282) — live-verified lease/trial status, independent of licenseGateEnabled (see
+   *  main/license.ts's licenseDisplayStatus). null/false/0 whenever neither applies. */
+  leaseExpiresAt: number | null
+  trialActive: boolean
+  trialDaysRemaining: number
 }
 
 /** Startup-gate verdict for App.tsx's boot gate, derived by calling checkLicenseGrace() fresh on every
@@ -2011,7 +2042,21 @@ export interface LicenseStatusResult {
 export interface LicenseGateVerdict {
   gateEnabled: boolean
   allowed: boolean
-  reason?: 'not_activated' | 'expired_grace'
+  reason?: 'not_activated' | 'expired_grace' | 'trial_expired'
+  leaseExpiresAt?: number
+  trialActive?: boolean
+  trialDaysRemaining?: number
+}
+
+/** GET /license/config's declared-intent pair (license-server's lib/license-gate.mjs) — informational
+ *  only, read by the ActLicense onboarding scene. `error` mirrors LicenseActivateResult's client-side
+ *  codes ('network' for unreachable/malformed; the server route itself never returns a business error). */
+export interface LicenseConfigResult {
+  ok: boolean
+  error?: string
+  licenseEnforcement?: boolean
+  licenseUiEnabled?: boolean
+  drift?: boolean
 }
 
 export const CaptureResultSchema = z.object({
