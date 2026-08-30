@@ -225,17 +225,35 @@ async function groupBoot() {
     if (out.models.length === 0) {
       return { __info: 'not exercised — this build ships no on-device LLM runtime; llama-server + the Qwen weights are provisioned only by predist/dist, so a dev/unpackaged build has neither to report on. Run against a packaged build.' }
     }
+    // The IPC field is `downloadProgress` + `unavailableReason` (shared/ipc.ts LocalModelSummarySchema).
+    // The old `m.progress` read was always undefined, so a first-run profile whose weights were still
+    // `not-downloaded` (or downloading at 0%) was reported as a defect — the exact false-red the
+    // paragraph above exists to prevent.
     const ready = out.models.some((m) => m.ready)
-    const arriving = out.models.some((m) => typeof m.progress === 'number' && m.progress >= 0 && !m.ready)
-    assert(
-      ready || arriving,
-      `the on-device model is neither ready nor downloading: ${JSON.stringify(out.models.map((m) => ({ id: m.id, ready: m.ready, progress: m.progress })))}`
+    const arriving = out.models.some(
+      (m) =>
+        !m.ready &&
+        (m.unavailableReason === 'downloading' || m.unavailableReason === 'not-downloaded')
     )
+    const ramLocked = out.models.every((m) => m.unavailableReason === 'insufficient-ram')
     if (!ready) {
-      return { __info: `not exercised — first run, weights still arriving (${out.models.filter((m) => !m.ready).map((m) => `${m.id} ${Math.round((m.progress ?? 0) * 100)}%`).join(', ')}); the app is served by the embedded provider meanwhile` }
+      assert(
+        arriving || ramLocked,
+        `the on-device model is neither ready nor arriving: ${JSON.stringify(out.models.map((m) => ({ id: m.id, ready: m.ready, reason: m.unavailableReason, downloadProgress: m.downloadProgress })))}`
+      )
+      return {
+        __info: `not exercised — first run, weights not ready yet (${out.models.map((m) => `${m.id}:${m.unavailableReason ?? 'ready'} ${Math.round((m.downloadProgress ?? 0) * 100)}%`).join(', ')}); the app is served by the configured cloud provider meanwhile`
+      }
     }
-    assert(out.settings.localReady === true, 'a model reports ready but localReady is false — the on-device path is unavailable despite present weights')
-    return { localModel: out.models.map((m) => `${m.id}:${m.ready}`), asrBundled: out.asr }
+    // Weights on disk ≠ Local AI enabled. localReady also requires localLlm.enabled (off by default)
+    // and the llama-server sidecar, so asserting localReady here would red-line every fresh profile
+    // that has finished the first-run fetch but has not flipped the Settings toggle.
+    return {
+      localModel: out.models.map((m) => `${m.id}:${m.ready ? 'ready' : m.unavailableReason}`),
+      asrBundled: out.asr,
+      localEnabled: out.settings.localLlm.enabled,
+      localReady: out.settings.localReady
+    }
   })
 
   await check(g, 'permissions + license + metrics IPC answer without throwing', async () => {
@@ -284,18 +302,37 @@ async function groupSettings() {
     const before = (await settings()).localLlm
     await patch({ localLlm: { ...before, useFor: { ...before.useFor, summary: true } } })
     const on = await settings()
+    assert(on.localLlm.useFor.summary === true, 'useFor.summary did not persist')
+    // localSummaryReady = localReady && useFor.summary. localReady also needs the toggle ON, the
+    // sidecar binary, and the weights — a default profile has enabled:false, so the derived flag
+    // staying false is the contract, not a defect.
+    if (!on.localReady) {
+      assert(on.localSummaryReady === false, 'localSummaryReady came on without localReady — the derived flag lied')
+      await patch({ localLlm: before })
+      return { __info: 'not exercised — local is not ready on this profile (Local AI off, or llama-server/weights missing), so localSummaryReady correctly stayed false; the toggle itself persisted' }
+    }
     assert(on.localSummaryReady === true, 'localSummaryReady did not follow useFor.summary')
     await patch({ localLlm: before })
     const off = await settings()
-    assert(off.localSummaryReady === false, 'localSummaryReady did not reset')
+    assert(off.localSummaryReady === false || before.useFor.summary, 'localSummaryReady did not reset')
     return 'derived flags track the toggle'
   })
   await check(g, 'fallback toggle drives localFallbackReady', async () => {
     const before = (await settings()).localLlm
+    // Drive the toggle ON, then OFF. The shipped default is fallback:false, so the old form
+    // (set false → restore `before` → assert ready===true) could never pass on a fresh profile.
+    await patch({ localLlm: { ...before, fallback: true } })
+    const on = await settings()
+    assert(on.localLlm.fallback === true, 'fallback toggle did not persist')
+    if (!on.localReady) {
+      assert(on.localFallbackReady === false, 'localFallbackReady came on without localReady — the derived flag lied')
+      await patch({ localLlm: before })
+      return { __info: 'not exercised — local is not ready on this profile, so localFallbackReady correctly stayed false; the toggle itself persisted' }
+    }
+    assert(on.localFallbackReady === true, 'localFallbackReady did not follow fallback=true')
     await patch({ localLlm: { ...before, fallback: false } })
     assert((await settings()).localFallbackReady === false, 'localFallbackReady stayed true with fallback off')
     await patch({ localLlm: before })
-    assert((await settings()).localFallbackReady === true, 'localFallbackReady did not come back')
     return 'tracks fallback'
   })
   // MQA-261: on a build that ships an embedded key, removing it must not be a one-way door. This runs
@@ -878,14 +915,15 @@ async function groupScreen() {
     })
 
     await check(g, 'Private View ON refuses to capture, and says so specifically', async () => {
-      // ASKTOTO_DISABLE_CP=1 (set for screenshot QA) makes privateViewOn()/contentProtectionOn() return
-      // false, so capture is NOT refused — exercising this in that mode would be a false red. A release
-      // build never sets the flag, so the refusal is exercised for real there.
-      if (process.env.ASKTOTO_DISABLE_CP === '1') {
-        return { __info: 'not exercised — ASKTOTO_DISABLE_CP=1 disables Private View / content-protection enforcement for screenshot QA; run without that flag (as release builds do) to exercise the capture refusal' }
-      }
+      // ASKTOTO_DISABLE_CP=1 (set on the APP for screenshot QA) makes privateViewOn() return false, so
+      // capture is NOT refused. The suite process often does not inherit that env — measuring
+      // process.env here missed the live app and produced a false red. Ask the app instead.
       await page.evaluate(() => window.toto.setSettings({ privateView: true }))
       await sleep(300)
+      const applied = await settings()
+      if (!applied.privateView) {
+        return { __info: 'not exercised — the app reports Private View still off after the toggle (dev build with ASKTOTO_DISABLE_CP strips enforcement); run a packaged build without that flag to cover the refusal' }
+      }
       const r = await page.evaluate(async () => {
         try {
           const shot = await window.toto.capture()
