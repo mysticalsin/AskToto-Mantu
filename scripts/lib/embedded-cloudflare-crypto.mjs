@@ -21,6 +21,11 @@ import { fileURLToPath } from 'node:url'
 
 const MATERIAL_PATH = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'src', 'main', 'embedded-key-material.json')
 
+// AES-GCM authentication tag length, in bytes. Pinned to the full 16 (128 bits) and enforced on BOTH
+// encrypt and decrypt so a truncated tag can never be accepted — a shorter tag weakens forgery resistance
+// (semgrep javascript.node-crypto.security.gcm-no-tag-length).
+const GCM_TAG_LENGTH = 16
+
 /** Load and lightly validate the shared obfuscation material. Throws loudly on anything malformed — a
  *  silently-wrong parameter would produce a blob the runtime cannot decrypt, which is worse than failing. */
 export function loadMaterial() {
@@ -54,7 +59,7 @@ export function encryptProxyKey(plaintext, materialOverride) {
   const salt = randomBytes(16)
   const iv = randomBytes(12)
   const key = deriveKey(material, salt)
-  const cipher = createCipheriv('aes-256-gcm', key, iv)
+  const cipher = createCipheriv('aes-256-gcm', key, iv, { authTagLength: GCM_TAG_LENGTH })
   cipher.setAAD(Buffer.from(material.aad, 'utf8'))
   const ciphertext = Buffer.concat([cipher.update(trimmed, 'utf8'), cipher.final()])
   const tag = cipher.getAuthTag()
@@ -82,8 +87,10 @@ export function decryptProxyKey(blob, materialOverride) {
   const iv = Buffer.from(blob.iv, 'base64')
   const tag = Buffer.from(blob.tag, 'base64')
   const ciphertext = Buffer.from(blob.ciphertext, 'base64')
+  // Reject a truncated tag up front — never let a short tag reach setAuthTag, where a weaker check applies.
+  if (tag.length !== GCM_TAG_LENGTH) throw new Error(`decryptProxyKey: auth tag must be ${GCM_TAG_LENGTH} bytes`)
   const key = deriveKey(material, salt)
-  const decipher = createDecipheriv('aes-256-gcm', key, iv)
+  const decipher = createDecipheriv('aes-256-gcm', key, iv, { authTagLength: GCM_TAG_LENGTH })
   decipher.setAAD(Buffer.from(material.aad, 'utf8'))
   decipher.setAuthTag(tag)
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8')

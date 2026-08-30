@@ -16,6 +16,10 @@
 import { createDecipheriv, scryptSync } from 'node:crypto'
 import material from './embedded-key-material.json'
 
+// Full 16-byte (128-bit) GCM auth tag, pinned and enforced so a truncated tag is never accepted — a short
+// tag weakens forgery resistance (semgrep javascript.node-crypto.security.gcm-no-tag-length).
+const GCM_TAG_LENGTH = 16
+
 export interface EncryptedCloudflareKeyBlob {
   version?: number
   alg?: string
@@ -44,10 +48,12 @@ export function decryptEmbeddedBlob(blob: EncryptedCloudflareKeyBlob | null | un
   const { salt, iv, tag, ciphertext } = blob
   if (!salt || !iv || !tag || !ciphertext) return null
   try {
+    const tagBuf = Buffer.from(tag, 'base64')
+    if (tagBuf.length !== GCM_TAG_LENGTH) return null // truncated/oversized tag — never accept it
     const key = deriveKey(Buffer.from(salt, 'base64'))
-    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64'))
+    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64'), { authTagLength: GCM_TAG_LENGTH })
     decipher.setAAD(Buffer.from(material.aad, 'utf8'))
-    decipher.setAuthTag(Buffer.from(tag, 'base64'))
+    decipher.setAuthTag(tagBuf)
     const out = Buffer.concat([decipher.update(Buffer.from(ciphertext, 'base64')), decipher.final()])
     const plaintext = out.toString('utf8').trim()
     return plaintext || null
