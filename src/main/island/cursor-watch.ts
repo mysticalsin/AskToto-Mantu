@@ -37,7 +37,9 @@ export type CursorWatchDecision = 'reveal' | 'hide' | 'stay'
 
 /**
  * Resting: cursor in the hide/island rest rect → reveal.
- * Revealed: cursor left the bar bounds (+ grace) → hide; otherwise stay.
+ * Revealed: stay if the cursor is still in the island/notch rest strip OR the
+ * inflated bar. Hide only when it is in neither. macOS clamps the bar to
+ * workArea.y (~39); a cursor in the island (Y≈12) must not oscillate hide/reveal.
  */
 export function decideCursorWatch(input: {
   cursor: { x: number; y: number }
@@ -50,7 +52,8 @@ export function decideCursorWatch(input: {
     return pointInRect(input.cursor, input.restRect) ? 'reveal' : 'stay'
   }
   const leave = inflateRect(input.revealedRect, input.gracePx ?? CURSOR_LEAVE_GRACE_PX)
-  return pointInRect(input.cursor, leave) ? 'stay' : 'hide'
+  if (pointInRect(input.cursor, input.restRect) || pointInRect(input.cursor, leave)) return 'stay'
+  return 'hide'
 }
 
 /** Darwin + Windows top-edge only. Linux is WRONG_WORKER for the live Mac island. */

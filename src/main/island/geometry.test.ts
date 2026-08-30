@@ -60,10 +60,11 @@ describe('MQA-275 — top-center anchor math', () => {
     expect(y).toBe(RETINA_WORK_AREA.y + 8)
   })
 
-  it('hide/island ignore topMargin and park at bounds.y; bar still uses the margin', () => {
+  it('hide/island rest parks at bounds.y; revealed topClamp is islandSafeTop; bar uses the margin', () => {
     const m = metrics({ workArea: RETINA_WORK_AREA })
-    expect(topCenterPosition(880, 'island', m, 24).y).toBe(m.bounds.y)
-    expect(topCenterPosition(880, 'hide', m, 8).y).toBe(m.bounds.y)
+    expect(hoverRestTop(m)).toBe(m.bounds.y)
+    expect(topCenterPosition(880, 'island', m, 24).y).toBe(islandSafeTop(m))
+    expect(topCenterPosition(880, 'hide', m, 8).y).toBe(islandSafeTop(m))
     expect(topCenterPosition(880, 'bar', m, 24).y).toBe(24)
     expect(topCenterPosition(880, 'bar', m, 8).y).toBe(8)
   })
@@ -112,10 +113,11 @@ describe('MQA-275 — the notch clamp (topClamp)', () => {
     expect(islandSafeTop(m)).toBe(39)
     expect(islandSafeTop(m)).toBe(m.workArea.y)
     expect(hoverRestTop(m)).toBe(m.bounds.y)
-    expect(topClamp('island', m, 8)).toBe(0)
-    expect(topClamp('hide', m, 8)).toBe(0)
-    expect(topClamp('hide', m, 8)).toBe(m.bounds.y)
+    expect(topClamp('island', m, 8)).toBe(islandSafeTop(m))
+    expect(topClamp('hide', m, 8)).toBe(islandSafeTop(m))
+    expect(topClamp('hide', m, 8)).toBe(39)
     expect(hoverRestHeight(m)).toBeGreaterThanOrEqual(m.menuBarHeight)
+    expect(parkAfterExclusiveOnboarding('hide', m, 8).y).toBe(0)
   })
 
   it('path C — strut is the strip HEIGHT when workArea.y is 0; hide/island still rest at y=0', () => {
@@ -128,8 +130,9 @@ describe('MQA-275 — the notch clamp (topClamp)', () => {
       source: 'helper'
     })
     expect(islandSafeTop(m)).toBe(ISLAND_NOTCH_STRUT_PX)
-    expect(topClamp('island', m, 8)).toBe(0)
-    expect(topClamp('hide', m, 8)).toBe(0)
+    expect(topClamp('island', m, 8)).toBe(ISLAND_NOTCH_STRUT_PX)
+    expect(topClamp('hide', m, 8)).toBe(ISLAND_NOTCH_STRUT_PX)
+    expect(parkAfterExclusiveOnboarding('hide', m, 8).y).toBe(0)
     expect(hoverRestHeight(m)).toBeGreaterThanOrEqual(ISLAND_NOTCH_STRUT_PX)
   })
 
@@ -143,10 +146,11 @@ describe('MQA-275 — the notch clamp (topClamp)', () => {
     })
     expect(islandSafeTop(m)).toBe(44)
     expect(hoverRestHeight(m)).toBeGreaterThanOrEqual(44)
-    expect(topClamp('hide', m, 8)).toBe(0)
+    expect(topClamp('hide', m, 8)).toBe(44)
+    expect(parkAfterExclusiveOnboarding('hide', m, 8).y).toBe(0)
   })
 
-  it('peek and revealed share bounds.y so hover expands down (not a mid-flow card)', () => {
+  it('rest stays at bounds.y; revealed chrome sits at islandSafeTop (below the notch)', () => {
     const m = metrics({
       workArea: { x: 0, y: 39, width: 1512, height: 943 },
       bounds: { x: 0, y: 0, width: 1512, height: 982 },
@@ -154,17 +158,19 @@ describe('MQA-275 — the notch clamp (topClamp)', () => {
       menuBarHeight: 39,
       source: 'helper'
     })
-    const peekY = topClamp('island', m, 8)
-    const revealedY = topClamp('island', m, 8)
-    expect(peekY).toBe(revealedY)
-    expect(peekY).toBe(0)
-    expect(peekY).toBe(m.bounds.y)
+    const restY = parkAfterExclusiveOnboarding('hide', m, 8).y
+    const revealedY = topClamp('hide', m, 8)
+    expect(restY).toBe(0)
+    expect(revealedY).toBe(39)
+    expect(revealedY).toBe(islandSafeTop(m))
+    expect(isForbiddenMidFlowCard({ width: 880, height: revealedY + 84 })).toBe(false)
   })
 
-  it('hide/island rest at the display top on a NON-notch display; bar keeps the margin', () => {
+  it('hide/island rest at the display top on a NON-notch display; revealed uses islandSafeTop', () => {
     const m = metrics({ workArea: RETINA_WORK_AREA, hasNotch: false, source: 'helper' })
-    expect(topClamp('island', m, 8)).toBe(m.bounds.y)
-    expect(topClamp('hide', m, 8)).toBe(m.bounds.y)
+    expect(hoverRestTop(m)).toBe(m.bounds.y)
+    expect(topClamp('island', m, 8)).toBe(islandSafeTop(m))
+    expect(topClamp('hide', m, 8)).toBe(islandSafeTop(m))
     expect(topClamp('bar', m, 8)).toBe(RETINA_WORK_AREA.y + 8)
   })
 
@@ -177,7 +183,8 @@ describe('MQA-275 — the notch clamp (topClamp)', () => {
       source: 'helper'
     })
     expect(topClamp('bar', m, 8)).toBe(LAPTOP_WORK_AREA.y + 8)
-    expect(topClamp('hide', m, 8)).toBe(0)
+    expect(topClamp('hide', m, 8)).toBe(islandSafeTop(m))
+    expect(parkAfterExclusiveOnboarding('hide', m, 8).y).toBe(hoverRestTop(m))
   })
 
   it('hide/island park at bounds.y even when the heuristic notch guess is wrong', () => {
@@ -187,15 +194,19 @@ describe('MQA-275 — the notch clamp (topClamp)', () => {
       hasNotch: true,
       source: 'heuristic'
     })
-    expect(topClamp('island', m, 8)).toBe(m.bounds.y)
+    expect(hoverRestTop(m)).toBe(m.bounds.y)
+    expect(topClamp('island', m, 8)).toBe(islandSafeTop(m))
     expect(topClamp('bar', m, 8)).toBe(m.workArea.y + 8)
+    expect(parkAfterExclusiveOnboarding('island', m, 8).y).toBe(m.bounds.y)
   })
 
   it('windows hide/island rest at the display top; bar keeps workArea + margin; no fake notch', () => {
     const m = metrics({ workArea: RETINA_WORK_AREA, hasNotch: false, source: 'heuristic' })
-    expect(topClamp('hide', m, 8)).toBe(m.bounds.y)
-    expect(topClamp('island', m, 8)).toBe(m.bounds.y)
+    expect(hoverRestTop(m)).toBe(m.bounds.y)
+    expect(topClamp('hide', m, 8)).toBe(islandSafeTop(m))
+    expect(topClamp('island', m, 8)).toBe(islandSafeTop(m))
     expect(topClamp('bar', m, 8)).toBe(RETINA_WORK_AREA.y + 8)
+    expect(parkAfterExclusiveOnboarding('hide', m, 8).y).toBe(m.bounds.y)
     expect(topClamp('hide', m, 8)).not.toBe(ISLAND_NOTCH_STRUT_PX)
   })
 
@@ -209,9 +220,11 @@ describe('MQA-275 — the notch clamp (topClamp)', () => {
     })
     expect(hasNotchHeuristic(40, 'win32')).toBe(false)
     expect(islandSafeTop(m)).toBe(40)
-    expect(topClamp('hide', m, 8)).toBe(0)
+    expect(hoverRestTop(m)).toBe(0)
+    expect(topClamp('hide', m, 8)).toBe(40)
     expect(topClamp('bar', m, 8)).toBe(40 + 8)
     expect(hoverRestHeight(m)).toBeGreaterThanOrEqual(40)
+    expect(parkAfterExclusiveOnboarding('hide', m, 8).y).toBe(0)
     expect(topClamp('hide', m, 8)).not.toBe(ISLAND_NOTCH_STRUT_PX)
   })
 })
@@ -402,6 +415,8 @@ describe('DESIGN.md overlay contract', () => {
     expect(design).toMatch(/display\.bounds\.y/)
     expect(design).toMatch(/cursor watch/i)
     expect(design).toMatch(/getCursorScreenPoint/)
+    expect(design).toMatch(/islandSafeTop/)
+    expect(design).toMatch(/stay tick/i)
   })
 
   it('names hover-down, exclusive fullscreen, large CTA, and Métis demo', () => {
@@ -445,6 +460,8 @@ describe('island reveal/collapse wiring (index.ts)', () => {
     expect(index).toMatch(/revealedHeight = Math\.max\(b\.height, lastBarHeight, BAR_HEIGHT\)/)
     expect(index).toMatch(/const y = topClamp\(liveOverlayLayout\(\), getDisplayMetrics\(display\), ISLAND_TOP_MARGIN\)/)
     expect(index).toMatch(/function resizeTo/)
+    expect(index).toMatch(/never setBounds on a stay tick/)
+    expect(index).toMatch(/islandResting \? hoverRestTop/)
   })
 
   it('main wires cursor-watch when layout is hide/island and onboardingDone', () => {

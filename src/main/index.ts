@@ -148,6 +148,7 @@ import {
   recenterXForWidth,
   refitToDisplay as islandRefitToDisplay,
   exclusiveOnboardingBounds,
+  hoverRestTop,
   hoverWatchRestRect,
   overlayRestSize,
   parkAfterExclusiveOnboarding,
@@ -1710,9 +1711,10 @@ function resizeTo(height: number): void {
     return // idempotent — skip a no-op setBounds (belt-and-braces with the renderer-side resize dedup)
   }
   if (!isMinimized) lastBarHeight = h
-  // Hide/island: peek and revealed share bounds.y so hover grows DOWN from the notch strip.
-  // Jumping the revealed bar to workArea.y while the cursor is in the island immediately hides.
-  const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+  // Resting hide/island stay at hoverRestTop (island hit). Revealed chrome sits at islandSafeTop
+  // (below the notch). Do not fight macOS by writing y=0 on the full bar every tick.
+  const metrics = getDisplayMetrics(display)
+  const y = islandResting ? hoverRestTop(metrics) : topClamp(liveOverlayLayout(), metrics, ISLAND_TOP_MARGIN)
   // When the width changes (collapse to / expand from the mini-pill), recenter around the old midpoint
   // so the overlay stays put; otherwise keep the left edge. Clamp x into the work area either way.
   const x = recenterXForWidth(b.x, b.width, currentWidth, workArea, RESIZE_EDGE_MARGIN)
@@ -1800,6 +1802,8 @@ function tickOverlayCursorWatch(): void {
     } catch {
       /* renderer gone */
     }
+  } else if (decision === 'stay') {
+    /* never setBounds on a stay tick — that was the 40fps hide/reveal stutter */
   } else if (decision === 'hide' && overlayCursorWatchHovering) {
     overlayCursorWatchHovering = false
     const park = parkAfterExclusiveOnboarding(layout, m, ISLAND_TOP_MARGIN)
@@ -1841,13 +1845,14 @@ function anchorTopCenter(): void {
 function restoreBarWidth(): void {
   if (!win || onboardingExclusiveLive()) return
   islandResting = false
-  if (currentWidth === BAR_WIDTH) return
   const display = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
-  currentWidth = BAR_WIDTH
-  const x = recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
   const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
   const revealedHeight = Math.max(b.height, lastBarHeight, BAR_HEIGHT)
+  const x = currentWidth === BAR_WIDTH ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
+  currentWidth = BAR_WIDTH
+  // Already the below-notch bar — do not setBounds y=0 and fight the OS clamp.
+  if (b.x === x && b.y === y && b.width === BAR_WIDTH && b.height === revealedHeight) return
   win.setBounds({ x, y, width: BAR_WIDTH, height: revealedHeight }, false)
 }
 
