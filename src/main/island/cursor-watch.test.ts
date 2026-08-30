@@ -6,11 +6,7 @@ import {
   pointInRect,
   shouldWatchOverlayCursor
 } from './cursor-watch'
-import {
-  hoverWatchRestRect,
-  parkAfterExclusiveOnboarding,
-  type DisplayMetrics
-} from './geometry'
+import { hoverWatchRestRect, islandSafeTop, type DisplayMetrics } from './geometry'
 
 const tonyMac: DisplayMetrics = {
   bounds: { x: 0, y: 0, width: 1800, height: 1169 },
@@ -30,17 +26,15 @@ describe('cursor-in-rect (Mac Dynamic Island hover)', () => {
     expect(pointInRect({ x: 900, y: 200 }, rest)).toBe(false)
   })
 
-  it('decideCursorWatch reveals in the strip and hides after leaving the bar', () => {
-    const rest = hoverWatchRestRect('hide', tonyMac)
-    const revealed = { x: 460, y: 0, width: 880, height: 84 }
+  it('revealed bar at y=39 stays open when the pointer is in the island (Y=12)', () => {
+    const rest = { x: 620, y: 0, width: 560, height: 39 }
+    const revealed = { x: 460, y: 39, width: 880, height: 84 }
+    expect(islandSafeTop(tonyMac)).toBe(39)
     expect(
       decideCursorWatch({ cursor: { x: 900, y: 12 }, restRect: rest, revealedRect: revealed, revealed: false })
     ).toBe('reveal')
     expect(
-      decideCursorWatch({ cursor: { x: 900, y: 200 }, restRect: rest, revealedRect: revealed, revealed: false })
-    ).toBe('stay')
-    expect(
-      decideCursorWatch({ cursor: { x: 900, y: 40 }, restRect: rest, revealedRect: revealed, revealed: true })
+      decideCursorWatch({ cursor: { x: 900, y: 12 }, restRect: rest, revealedRect: revealed, revealed: true })
     ).toBe('stay')
     expect(
       decideCursorWatch({
@@ -53,12 +47,13 @@ describe('cursor-in-rect (Mac Dynamic Island hover)', () => {
     ).toBe('hide')
   })
 
-  it('revealed bar keeps y at bounds.y so a cursor at Y=12 does not leave', () => {
-    const park = parkAfterExclusiveOnboarding('hide', tonyMac, 8)
-    const revealedY = park.y
-    expect(revealedY).toBe(0)
-    const revealed = { x: park.x, y: revealedY, width: 880, height: 84 }
-    expect(pointInRect({ x: 900, y: 12 }, revealed)).toBe(true)
+  it('does not treat a cursor at Y=12 as having left a macOS-clamped bar', () => {
+    const rest = hoverWatchRestRect('hide', tonyMac)
+    const revealed = { x: 460, y: 39, width: 880, height: 84 }
+    expect(pointInRect({ x: 900, y: 12 }, revealed)).toBe(false)
+    expect(
+      decideCursorWatch({ cursor: { x: 900, y: 12 }, restRect: rest, revealedRect: revealed, revealed: true })
+    ).toBe('stay')
   })
 
   it('wires only on darwin/win32 when hide/island and onboardingDone', () => {

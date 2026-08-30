@@ -170,7 +170,7 @@ export function islandSafeTop(m: DisplayMetrics): number {
   return m.workArea.y
 }
 
-/** Physical top of the display — hide/island rest and the revealed bar share this Y. */
+/** Physical top of the display — hide/island *rest* / cursor-watch hit rect only. Revealed chrome uses `islandSafeTop`. */
 export function hoverRestTop(m: DisplayMetrics): number {
   return m.bounds.y
 }
@@ -213,12 +213,11 @@ export function hoverWatchRestRect(_layout: OverlayLayout, m: DisplayMetrics): R
 }
 
 /**
- * Hide and island park at `hoverRestTop` (`bounds.y`) so the Mac Dynamic Island / top-center
- * strip intersects the window. Revealed bar uses the same Y and expands down. Bar chrome
- * keeps `workArea.y + topMargin`. Windows: top of the display, no fake notch strut.
+ * Revealed chrome Y. Hide/island sit at `islandSafeTop` (below the notch — macOS
+ * clamps here anyway). Rest/watch still use `hoverRestTop`. Bar keeps `workArea.y + topMargin`.
  */
 export function topClamp(layout: OverlayLayout, m: DisplayMetrics, topMargin: number): number {
-  if (overlayUsesHover(layout)) return hoverRestTop(m)
+  if (overlayUsesHover(layout)) return islandSafeTop(m)
   return m.workArea.y + topMargin
 }
 
@@ -299,6 +298,15 @@ export function parkAfterExclusiveOnboarding(
 ): Rect {
   if (layout === 'hide') return hoverWatchRestRect('hide', m)
   const size = overlayRestSize(layout, m)
+  if (layout === 'island') {
+    const x = clampAxis(
+      Math.round(m.workArea.x + (m.workArea.width - size.width) / 2),
+      size.width,
+      m.workArea.x,
+      m.workArea.width
+    )
+    return { x, y: hoverRestTop(m), width: size.width, height: size.height }
+  }
   const { x, y } = topCenterPosition(size.width, layout, m, topMargin)
   return { x, y, width: size.width, height: size.height }
 }

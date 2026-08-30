@@ -20,15 +20,15 @@ Hide and island **rest in** the Mac menu-bar / Dynamic Island strip so hovering 
 - **Path A.** Electron `display.workArea.y` is the first unobstructed row under the notch / menu bar — used by **bar** chrome (`workArea.y + margin`) and as the strip **height** for hide/island. Do not park hide/island *below* the island at `workArea.y` (Tony live: Y=39 pad never intersects the island).
 - **Path C.** When `workArea.y` is 0 on a notched display, hide/island still rest at `bounds.y` with a strut-tall strip (`menuBarHeight`, or 37px) so the hit rect covers the notch. Bar still floats; never a fake notch on Windows.
 
-Peek/hide-target and revealed share that top edge (`bounds.y` on hide/island). Height changes; Y does not. Revealed bar expands **down** from the same top edge (do not jump Y to 39 while the cursor is at 12). Windows: top-center of the display, **no fake notch**.
+Hide/island **rest** stays at `bounds.y` (the hit strip). Revealed chrome sits at `islandSafeTop` / `workArea.y` (~39) so content is fully below the notch — macOS clamps there anyway. Cursor watch **stays** open if the pointer is in the rest strip **or** the revealed bar. Do not fight the OS with `setBounds(y=0)` on the full bar (that hide/reveal loop is the live stutter). Windows: top-center of the display, **no fake notch**.
 
 ## Hover / leave
 
-Hide and island: hover or click expands **down** from the display top to the full bar (same top edge, taller height). Leave collapses (`pointer-leave` → grace → hide or peek). Bar does not auto-collapse.
+Hide and island: hover or click expands **down** from the rest strip to the full bar at `islandSafeTop` (below the notch). Leave collapses (`pointer-leave` → grace → hide or peek). Bar does not auto-collapse. Pushing the pointer **up** into the Dynamic Island must keep the bar open (smooth, no flicker).
 
 **Hide (default).** The rest is a **wide top-middle hit pad** in the notch strip (`bounds.y`, strip height), not a 120px pill and not a pad stranded at `workArea.y` (39). Width at least **220**, cap **560**. Visually stealth, **opaque to hit-testing** (Electron ignores fully transparent pixels). Do **not** `data-hug-width` the hide pad down to ~120px. Do not wrap it in `p-5` transparent padding. CSS fills the parked window (`width/height: 100%`).
 
-**Cursor watch (required).** macOS menu bar / Dynamic Island often does **not** deliver `mouseenter` to an Electron window, even at Y=0. Renderer `onMouseEnter` is not enough. Main polls `screen.getCursorScreenPoint()` every ~16-32ms on darwin and Windows top-edge while hide/island is resting and `onboardingDone`: cursor inside the hide/island rest rect → reveal; cursor left the revealed bar bounds (+ small grace) → hide. No Accessibility / CGEvent tap required.
+**Cursor watch (required).** macOS menu bar / Dynamic Island often does **not** deliver `mouseenter` to an Electron window, even at Y=0. Renderer `onMouseEnter` is not enough. Main polls `screen.getCursorScreenPoint()` every ~16-32ms on darwin and Windows top-edge while hide/island is resting and `onboardingDone`: cursor inside the hide/island rest rect → reveal; cursor in the rest strip **or** the revealed bar (+ small grace) → stay (never `setBounds` on a stay tick); cursor in neither → hide. No Accessibility / CGEvent tap required. Do not animate window y every frame.
 
 **Island.** Always-visible peek capsule. May sit in the island / notch (same Y). Hover expands down. Leave returns to the peek. Hug-width is OK on the visible capsule only.
 
