@@ -5,6 +5,9 @@
  *
  * Deliberate constraints:
  * - No animation libraries — CSS transitions + staged `animation-delay` only, like the rest of the app.
+ *   The one exception is Act 1's wordmark scramble (HeroWelcome below), which needs a per-frame text
+ *   projection CSS cannot express — it's a small rAF loop over a pure helper in lib/scramble.ts, not a
+ *   dependency.
  * - Scene 4's checks are REAL (getPermissions / requestPermissionsUpfront / asrBundled) — a row only
  *   ever shows "ready" when it is actually true. Never fake the magic moment.
  * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
@@ -18,6 +21,7 @@ import { PERMISSIONS_POLL_MS } from '../state'
 import { MetisMark } from './MetisMark'
 import { Onboarding } from './Onboarding'
 import { isWindows } from '../lib/keys'
+import { useScrambleReveal } from '../lib/scramble'
 
 export interface OnboardingExperienceProps {
   onDone: (result: { mode: ConversationMode; recordingConsent: boolean }) => void
@@ -57,6 +61,72 @@ function ActProgress({ scene }: { scene: Scene }): JSX.Element | null {
           }
         />
       ))}
+    </div>
+  )
+}
+
+const WORDMARK = 'Métis'
+
+/**
+ * Act 1 — Welcome (MQA-276). The Métis mark lands as a top-center "island" capsule and the wordmark
+ * resolves out of scrambled glyphs, in the spirit of the notch-capsule materialization researched in
+ * the Vibe Island teardown (motion FEEL only — own copy, own mark, own timing; see docs/qa/BUG-LEDGER.md
+ * MQA-276 and the teardown PDF for the reference). Every beat is CSS keyframes (`.island-capsule` +
+ * friends in styles.css, staged with `animation-delay` like the rest of this file) except the wordmark,
+ * which is the one place a JS-driven effect earns its keep — `useScrambleReveal` (src/renderer/src/lib/
+ * scramble.ts) is a small rAF loop over a pure, independently-tested projection function. Both honor
+ * `prefers-reduced-motion`: the CSS keyframes fall out of the existing global `animation-duration: 0`
+ * rule (plus explicit end-state overrides below for the ones with a custom-property angle), and the
+ * scramble hook checks the media query itself and skips straight to the resolved word.
+ */
+function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => void }): JSX.Element {
+  const wordmark = useScrambleReveal(WORDMARK, 900)
+  return (
+    <div className="scene-enter flex flex-col items-center gap-5">
+      <div className="island-capsule" aria-hidden="true">
+        <span className="island-capsule-mark">
+          <MetisMark size={40} />
+        </span>
+      </div>
+      <div className="flex flex-col items-center gap-2">
+        <h1
+          className="hero-wordmark m-0 select-none"
+          aria-label={WORDMARK}
+          style={{ fontFamily: 'var(--font-ui)' }}
+        >
+          <span aria-hidden="true">{wordmark}</span>
+        </h1>
+        <p
+          className="hero-tagline fade-up m-0 text-[14px] text-[color:var(--color-ink-2)]"
+          style={{ animationDelay: '900ms', animationFillMode: 'backwards' }}
+        >
+          Your on-device meeting copilot.
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onBegin}
+        className="fade-up no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-6 text-[13px] font-semibold text-white shadow-[0_2px_16px_var(--color-accent-glow)] hover:brightness-110"
+        style={{ animationDelay: '1000ms', animationFillMode: 'backwards' }}
+      >
+        Get Started
+      </button>
+      {onSkip && (
+        <button
+          type="button"
+          onClick={onSkip}
+          className="fade-up no-drag text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
+          style={{ animationDelay: '1150ms', animationFillMode: 'backwards' }}
+        >
+          Skip the tour
+        </button>
+      )}
+      <p
+        className="hero-byline fade-up m-0 text-[10px] tracking-wide text-[color:var(--color-ink-3)]"
+        style={{ animationDelay: '1300ms', animationFillMode: 'backwards' }}
+      >
+        Mantu · Tony Walteur
+      </p>
     </div>
   )
 }
@@ -239,38 +309,7 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
         <ActProgress scene={scene} />
       </div>
       <div className="flex w-full flex-1 flex-col items-center justify-center gap-6">
-      {scene === 'hero' && (
-        <div key="hero" className="scene-enter flex flex-col items-center gap-6">
-          <span className="mark-halo">
-            <MetisMark size={92} />
-          </span>
-          <div>
-            <h1 className="text-[28px] font-semibold text-[color:var(--color-ink)]">
-              Métis. <span className="text-[color:var(--color-ink-2)]">Your on-device meeting copilot.</span>
-            </h1>
-            <div className="mt-4 flex flex-col gap-1.5 text-[13px] text-[color:var(--color-ink-2)]">
-              {['Answers grounded in your own meeting', 'Runs on your device. Nothing is uploaded.', 'Recording always asks first, so you stay in control.'].map((t, i) => (
-                <p key={t} className="fade-up m-0" style={{ animationDelay: `${300 + i * 220}ms` }}>
-                  {t}
-                </p>
-              ))}
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => setScene('problem')}
-            className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-6 text-[13px] font-semibold text-white shadow-[0_2px_16px_var(--color-accent-glow)] hover:brightness-110"
-          >
-            Begin
-          </button>
-          {onSkip && (
-            <button type="button" onClick={onSkip} className="no-drag text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]">
-              Skip the tour
-            </button>
-          )}
-          <p className="m-0 text-[10px] tracking-wide text-[color:var(--color-ink-3)]">Mantu · Métis</p>
-        </div>
-      )}
+      {scene === 'hero' && <HeroWelcome onBegin={() => setScene('problem')} onSkip={onSkip} />}
 
       {scene === 'problem' && (
         <div key="problem" className="scene-enter flex flex-col items-center gap-8">
