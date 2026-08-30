@@ -146,6 +146,8 @@ describe('MQA-172 — a second launch after a failed boot window recreates it in
 
   it("MQA-172 — the 'closed' handler only clears the module ref when it still points at that window", () => {
     const closed = sliceBetween("const self = win\n  win.on('closed', () => {", '// Security: never let model-output')
-    expect(closed).toMatch(/if \(win === self\) win = null/)
+    expect(closed).toMatch(/if \(win === self\)/)
+    expect(closed).toMatch(/win = null/)
+    expect(closed).toMatch(/stopOverlayCursorWatch/)
   })
 })
