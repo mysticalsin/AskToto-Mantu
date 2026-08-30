@@ -1648,6 +1648,21 @@ function anchorTopCenter(): void {
   win.setBounds({ x, y, width: b.width, height: b.height }, false)
 }
 
+/** Reveal from the auto-hide peek: widen the window back to the full bar width and re-center it on the
+ *  peek's own midpoint, keeping the current top edge/height. The peek narrows the window via
+ *  data-hug-width (useAutoResize reports the slim strip's width), and nothing in the plain-bar view ever
+ *  reports a width again — so without this the revealed bar would stay stuck at the ~140px peek width.
+ *  Height is left to the renderer's own auto-resize (its grow path is immediate), so this only moves the
+ *  width/x. A pure setBounds — never show()/focus() — so the foreground app keeps focus. */
+function restoreBarWidth(): void {
+  if (!win || currentWidth === BAR_WIDTH) return
+  const { workArea } = screen.getDisplayMatching(win.getBounds())
+  const b = win.getBounds()
+  currentWidth = BAR_WIDTH
+  const x = clampAxis(Math.round(b.x + (b.width - BAR_WIDTH) / 2), BAR_WIDTH, workArea.x, workArea.width)
+  win.setBounds({ x, y: b.y, width: BAR_WIDTH, height: b.height }, false)
+}
+
 // Re-center the compact bar on its current display. The old fixed 'settings' window-mode was removed —
 // settings renders as a panel under the bar now, so the window only ever lives in 'bar' mode.
 function setWindowMode(): void {
@@ -5488,6 +5503,10 @@ function registerIpc(): void {
   ipcMain.handle(IPC.windowAnchorTop, (e) => {
     assertMainWindow(e)
     anchorTopCenter()
+  })
+  ipcMain.handle(IPC.windowRevealWidth, (e) => {
+    assertMainWindow(e)
+    restoreBarWidth()
   })
   // Renderer ErrorBoundary catch: persist via the same sink as onFatal's main-process crashes, so a
   // caught render-throw survives to disk instead of only reaching console (gated behind
