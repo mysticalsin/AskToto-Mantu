@@ -1904,7 +1904,9 @@ export const McpPushPayloadSchema = z.object({
   toolName: z.string().min(1, 'Choose an MCP tool to push to.'),
   args: z
     .record(z.string(), McpArgValueSchema)
-    .refine((a) => Object.keys(a).length <= 20, { message: 'Too many fields in the push payload.' })
+    .refine((a) => Object.keys(a).length <= 20, { message: 'Too many fields in the push payload.' }),
+  /** Basename of the saved meeting markdown — main re-reads frontmatter for confidential (never trust UI alone). */
+  meetingFile: z.string().min(1).max(260).optional()
 })
 export type McpPushPayload = z.infer<typeof McpPushPayloadSchema>
 

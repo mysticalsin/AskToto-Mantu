@@ -305,6 +305,7 @@ import {
   updateMeetingTranscript,
   setMeetingConfidential,
   setMeetingCrmPushed,
+  isMeetingConfidentialOnDisk,
   deleteAllMeetings,
   sweepExpiredMeetings
 } from './recall'
@@ -3078,6 +3079,12 @@ function registerIpc(): void {
   // path; a ClickUp token that expired between attempts here simply dead-letters like any other repeated
   // failure, which is an acceptable (and honest — "reconnect ClickUp") outcome for a background retry.
   async function retryOutboundAction(action: OutboundAction): Promise<{ ok: boolean; error?: string }> {
+    // Re-check disk on every retry tick — a meeting flagged confidential AFTER enqueue must never leave.
+    if (action.meetingFile && isMeetingConfidentialOnDisk(getSettings(), action.meetingFile)) {
+      // Dequeue without sending — returning ok:true removes the entry; a hard error would retry forever.
+      auditLog('mcp.push.skipped_confidential', { kind: action.kind, action: action.action, source: 'disk' })
+      return { ok: true }
+    }
     const s = getSettings()
     const conn = s.mcpConnections.find((c) => c.kind === action.kind)
     if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(conn.id)) {
@@ -3180,14 +3187,20 @@ function registerIpc(): void {
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const parsed = McpPushPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
-    const { connectionId, toolName, args } = parsed.data
-    // Wave 4 / QA defense-in-depth: never push when the caller marks the payload confidential
-    // (Review already hides the chips; this stops a buggy/compromised renderer from bypassing).
-    if (args && typeof args === 'object' && (args as { confidential?: unknown }).confidential === true) {
-      auditLog('mcp.push.skipped_confidential', { connectionId, tool: toolName })
+    const { connectionId, toolName, args, meetingFile } = parsed.data
+    const s = getSettings()
+    // Wave 4 / QA defense-in-depth: never push confidential meetings. Prefer disk frontmatter over the
+    // renderer flag — a buggy UI could omit args.confidential. Unreadable files fail closed.
+    const diskConfidential = meetingFile ? isMeetingConfidentialOnDisk(s, meetingFile) : false
+    const argConfidential = args && typeof args === 'object' && (args as { confidential?: unknown }).confidential === true
+    if (diskConfidential || argConfidential) {
+      auditLog('mcp.push.skipped_confidential', {
+        connectionId,
+        tool: toolName,
+        source: diskConfidential ? 'disk' : 'args'
+      })
       return { ok: false, error: 'This meeting is marked confidential — push is blocked.' }
     }
-    const s = getSettings()
     const conn = s.mcpConnections.find((c) => c.id === connectionId)
     if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(connectionId)) {
       return { ok: false, error: `${mcpLabelFor(connectionId)} is not connected. Set it up in Settings → Mantu Intelligence first.` }
@@ -3236,7 +3249,8 @@ function registerIpc(): void {
         action: inferPushActionKind(toolName),
         toolName,
         payload: args,
-        confidential: args.confidential === true
+        ...(meetingFile ? { meetingFile: meetingFile.split(/[/\\]/).pop() || meetingFile } : {}),
+        confidential: argConfidential || diskConfidential
       })
     }
     return r
