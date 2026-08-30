@@ -45,9 +45,16 @@ import {
   MonitorUp,
   Sparkles,
   TrendingUp,
-  UserSearch
+  UserSearch,
+  Cpu,
+  CalendarDays,
+  Handshake,
+  Headphones,
+  Phone,
+  Presentation,
+  Users
 } from 'lucide-react'
-import type { ConversationMode, PermissionStatus, ProfileRecoveryResult, PublicSettings } from '@shared/ipc'
+import type { ConversationMode, LocalModelSummary, PermissionStatus, ProfileRecoveryResult, PublicSettings } from '@shared/ipc'
 import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { MetisMark } from './MetisMark'
@@ -62,8 +69,14 @@ import { sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type Onboard
 // one icon, everywhere it appears, rather than inventing a second icon language just for this scene.
 const PERSONA_ICONS: Record<OnboardingPersonaId, typeof MessageSquare> = {
   general: MessageSquare,
+  meeting: CalendarDays,
   sales: TrendingUp,
-  recruiting: UserSearch
+  recruiting: UserSearch,
+  interview: Users,
+  negotiation: Handshake,
+  presentation: Presentation,
+  support: Headphones,
+  'cold-call': Phone
 }
 
 export interface OnboardingExperienceProps {
@@ -205,6 +218,7 @@ export interface SetupRow {
   icon: typeof Sparkles
   state: SetupRowState
   detail?: string
+  progress?: number
 }
 
 /** The microphone row for an OS permission status. 'denied' MUST be its own state: getUserMedia never
@@ -235,6 +249,34 @@ export function aiRowStatus(
       : { state: 'ready', detail: `Ready — ${PROVIDERS[settings.provider].label} configured` }
   }
   return { state: 'action', detail: 'not configured yet' }
+}
+
+/** Act 3 on-device model row. Never a dead missing-weights state. RAM-gated says so. */
+export function localModelRowStatus(
+  model:
+    | Pick<LocalModelSummary, 'ready' | 'unavailableReason' | 'downloadProgress' | 'minTotalRamGB'>
+    | null
+    | undefined
+): { state: SetupRowState; detail: string; progress?: number } {
+  if (!model) return { state: 'checking', detail: '' }
+  if (model.unavailableReason === 'insufficient-ram') {
+    return {
+      state: 'blocked',
+      detail: `This Mac needs at least ${model.minTotalRamGB} GB of memory for the on-device model.`
+    }
+  }
+  if (model.unavailableReason === 'downloading') {
+    const pct = Math.round((model.downloadProgress ?? 0) * 100)
+    return { state: 'action', detail: `Downloading ${pct}%`, progress: model.downloadProgress }
+  }
+  if (model.unavailableReason === 'download-failed') {
+    return { state: 'action', detail: 'Download paused. Métis retries when the network is back.' }
+  }
+  if (model.unavailableReason === 'not-downloaded') {
+    return { state: 'action', detail: 'Starting the on-device download…' }
+  }
+  if (model.ready) return { state: 'ready', detail: 'On-device model ready' }
+  return { state: 'checking', detail: 'Checking the on-device model…' }
 }
 
 /** Act 3 — "scan first, then present a completed configuration": two DIFFERENT claims the scene makes,
@@ -573,13 +615,14 @@ export function OnboardingExperience({
       { key: 'screen', label: 'Screen context', icon: MonitorUp, state: 'checking' },
       // Act 3 (MQA-279): AI readiness, derived from the SAME `providerReady`/`provider` publicSettings()
       // computes for every other gate in the app — see `aiRowStatus` above.
-      { key: 'ai', label: 'Métis AI', icon: Cloud, state: 'checking' }
+      { key: 'ai', label: 'Métis AI', icon: Cloud, state: 'checking' },
+      { key: 'local', label: 'On-device model', icon: Cpu, state: 'checking' }
     ]
     setRows(base)
     screenGrantedRef.current = null
-    const set = (key: string, state: SetupRowState, detail?: string): void => {
+    const set = (key: string, state: SetupRowState, detail?: string, progress?: number): void => {
       if (!live) return
-      setRows((rs) => rs.map((r) => (r.key === key ? { ...r, state, detail } : r)))
+      setRows((rs) => rs.map((r) => (r.key === key ? { ...r, state, detail, progress } : r)))
     }
     // Stagger the resolutions so each row visibly "lands" — but every verdict is real.
     void (async () => {
@@ -622,6 +665,13 @@ export function OnboardingExperience({
       await delay(350)
       const ai = aiRowStatus(settings)
       set('ai', ai.state, ai.detail)
+      const models = await window.toto.localModelsList().catch(() => [])
+      const local =
+        models.find((m) => m.unavailableReason === 'downloading') ??
+        models.find((m) => m.id === settings?.localLlm.modelId) ??
+        models[0]
+      const lm = localModelRowStatus(local)
+      set('local', lm.state, lm.detail, lm.progress)
     })()
     return () => {
       live = false
@@ -635,9 +685,17 @@ export function OnboardingExperience({
     let live = true
     const poll = async (): Promise<void> => {
       const perms = await window.toto.getPermissions().catch(() => null)
-      if (!live || !perms) return
+      const models = await window.toto.localModelsList().catch(() => [])
+      if (!live) return
+      const local =
+        models.find((m) => m.unavailableReason === 'downloading') ??
+        models.find((m) => m.id === settings?.localLlm.modelId) ??
+        models[0]
+      const lm = localModelRowStatus(local)
       setRows((rs) =>
         rs.map((r) => {
+          if (r.key === 'local') return { ...r, state: lm.state, detail: lm.detail, progress: lm.progress }
+          if (!perms) return r
           if (r.key === 'mic') {
             const mic = micRowStatus(perms.microphone)
             return { ...r, state: mic.state, detail: mic.detail }
@@ -664,7 +722,7 @@ export function OnboardingExperience({
       live = false
       clearInterval(interval)
     }
-  }, [scene])
+  }, [scene, settings?.localLlm.modelId])
 
   const requestMic = async (): Promise<void> => {
     // Windows: main's requestPermissionsUpfront is a darwin no-op — the only thing that resolves mic
@@ -742,6 +800,8 @@ export function OnboardingExperience({
 
       {scene === 'reveal' && (
         <OnboardingDemoScene
+          mode={mode}
+          onSetMode={setMode}
           onContinue={() => setScene('setup')}
           // Skip-available-from-here (per the Act 2 brief): jumps straight to Personalize — unlike
           // HeroWelcome's onSkip (which restarts the entire legacy flow from its own slide 1), this
@@ -765,6 +825,14 @@ export function OnboardingExperience({
                 <div className="min-w-0 flex-1">
                   <p className="m-0 truncate text-[13px] text-[color:var(--color-ink)]">{r.label}</p>
                   {r.detail && <p className="m-0 text-[11px] text-[color:var(--color-ink-3)]">{r.detail}</p>}
+                  {r.key === 'local' && r.progress != null && r.progress > 0 && r.progress < 1 && (
+                    <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
+                      <div
+                        className="h-full rounded-full bg-[#f4b060]"
+                        style={{ width: `${Math.round(r.progress * 100)}%` }}
+                      />
+                    </div>
+                  )}
                   {/* Why-before-prompt: shown before the button that triggers the OS dialog / deep link, not
                       after — so the user knows what they're being asked for before they're asked. */}
                   {r.key === 'mic' && r.state === 'action' && (
@@ -906,7 +974,7 @@ export function OnboardingExperience({
               One pick shapes how it listens and what it says next — change it anytime in Settings.
             </p>
           </div>
-          <div className="flex gap-3">
+          <div className="flex max-w-[920px] flex-wrap justify-center gap-3">
             {/* The onboarding personality beat (Act 4, Vibe-Island-teardown "the ONE emotional choice
                 after the heavy config step") — three refined cards over the plain three-button picker
                 this replaced, each naming the mode's real behavior change (`persona-vibe.ts`, honest and
@@ -925,7 +993,7 @@ export function OnboardingExperience({
                   aria-pressed={selected}
                   onClick={() => setMode(p.id)}
                   className={
-                    'no-drag focus-ring relative w-[164px] overflow-hidden rounded-[14px] border px-4 py-3.5 text-left transition-all duration-150 ' +
+                    'no-drag focus-ring relative w-[168px] overflow-hidden rounded-[14px] border px-4 py-3.5 text-left transition-all duration-150 ' +
                     (selected
                       ? 'scale-[1.03] border-[var(--color-accent)] bg-[var(--color-accent-soft)] shadow-[0_2px_14px_var(--color-accent-glow)]'
                       : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]')

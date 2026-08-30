@@ -206,3 +206,160 @@ export const DEMO_STAGE_BOUNDARIES: readonly number[] = [
   DEMO_TIMING.recapStart,
   DEMO_TIMING.end
 ]
+
+/** Act 2 recap for the chosen role. Sales / recruiting / meeting (and the other six) are different layouts. */
+export function demoRecapMarkdown(mode: string): string {
+  switch (mode) {
+    case 'sales':
+      return `## Deal snapshot
+Q3 renewal. On track for the 15th if security review closes this week.
+
+## Buying signals
+They asked for the date in writing. No budget pushback.
+
+## Objections
+"The review takes three weeks." Corrected live: five business days.
+
+## What the seller must know
+Renewal date is the 15th. Review is on track. Nothing blocking.
+
+## Next steps
+- Send the renewal date in writing today (you)
+- Confirm security review close (them)
+
+## Stakeholders
+Their AE, their security lead.`
+    case 'recruiting':
+      return `## Candidate
+Alex, mid-level consultant. Clear on the stack, thin on ownership.
+
+## Background
+CS 2019. Current role: implementation. Open because the work flattened.
+
+## Motivations
+Wants client-facing delivery, not ticket queues. not covered: target sector.
+
+## Projects
+Renault, 8 months: cut cutover defects. They owned the test plan. SAP + Jira.
+
+## Compensation and contract
+Current 62k. Expected "around 70". Permanent.
+
+## Availability
+3 month notice. Real: will hear a counter.
+
+## Ratings
+Technical B (named the stack, no deep design). Functional B. Personality A. Dynamism C (needed a second ask for numbers).
+
+## Strengths and concerns
+Strength: concrete Renault example. Concern: "we" more than "I".`
+    case 'meeting':
+      return `## Outcome
+Renewal stays on the 15th. Security review is five days, not three weeks.
+
+## Decisions
+Keep the 15th date. Review closes this week.
+
+## Action items
+- Send the date in writing today (you)
+- Confirm review close (them)
+
+## Open questions
+None on the date. Review owner on their side not named.
+
+## Key numbers
+15th. Five business days.`
+    case 'interview':
+      return `## Role
+Implementation consultant, client-facing.
+
+## Questions and answers
+"Where did we land on timeline?" You restated the 15th and the five-day review.
+
+## Examples given
+Last call scoped the review to five business days.
+
+## Next rounds
+Send the date in writing today.`
+    case 'negotiation':
+      return `## Positions
+They: review takes three weeks. You: five business days, date holds.
+
+## Interests
+They want slack. You want the 15th in the notes.
+
+## Concessions
+None. The three-week claim was corrected, not traded.
+
+## Agreed terms
+Renew by the 15th, contingent on this week's review.
+
+## Still open
+Written confirmation of the date.`
+    case 'presentation':
+      return `## What landed
+The 15th date, once restated.
+
+## Audience questions
+"Wasn't the security review supposed to take three weeks?"
+
+## Confusion or pushback
+The three-week figure. Corrected from last call's notes.
+
+## Follow-ups promised
+Send the renewal date in writing today.`
+    case 'support':
+      return `## Reported problem
+Security review timeline is wrong in their head (three weeks).
+
+## Steps tried
+Checked last call's notes: five business days.
+
+## Resolution
+Corrected live. Date holds.
+
+## Follow-ups
+Write the date today.`
+    case 'cold-call':
+      return `## How the call went
+Reached the buyer. Opener was a gut-check on the renewal date.
+
+## Objections
+Three-week review. Met with last call's five-day scope.
+
+## Qualifying facts
+Renewal still targeted at the 15th.
+
+## Commitment
+They want the date in writing today.`
+    default:
+      return `## Title
+Q3 renewal lock
+
+## Tags
+renewal, security, timeline
+
+## Overview
+Renewal stays on the 15th. The three-week review claim was wrong.
+
+## Topics
+- Gut-check on the renewal date
+- Security review length
+- Correction from last call
+
+## Key Q&A
+Q: Three weeks? A: Five business days. On track.
+
+## Decisions
+Keep the 15th.
+
+## Action items
+- Send the date in writing today
+
+## Open questions
+None.
+
+## Notable quotes
+"Wasn't the security review supposed to take three weeks?"`
+  }
+}

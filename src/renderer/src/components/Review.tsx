@@ -6,6 +6,7 @@ import { isNonSpeechLine } from '@shared/transcript-filter'
 import { talkStats } from '@shared/talkstats'
 import { fnv1a } from '@shared/hash'
 import { Markdown } from './Markdown'
+import { ModeRecapView, modeRecapSections } from './ModeRecap'
 import { Chip, TextButton, Spinner } from './ui'
 import { ReviewEntityStrip } from './ReviewEntityStrip'
 import { useFlash } from '../lib/useFlash'
@@ -96,6 +97,12 @@ export type EditedRecap = { base: string; text: string }
 export function displayedRecapText(edited: EditedRecap | null, incoming: string | undefined): string {
   const text = incoming ?? ''
   return edited && edited.base === text ? edited.text : text
+}
+
+function RecapBody({ text, mode }: { text: string; mode: string }): JSX.Element {
+  const sections = modeRecapSections(text, mode)
+  if (sections.length >= 2) return <ModeRecapView mode={mode} sections={sections} />
+  return <Markdown>{text}</Markdown>
 }
 
 /** The line under a save-failure banner. It used to be an unconditional present-tense "Retrying… attempt
@@ -205,6 +212,7 @@ export function nextStepPushed(phase: NextStepPhase, connectionId: string, args:
 }
 
 export const Review = memo(function Review({
+  mode = 'general',
   recap,
   lines,
   savedPath,
@@ -236,6 +244,8 @@ export const Review = memo(function Review({
   finishingTranscript,
   coldCall
 }: {
+  /** Built-in or custom mode: picks the recap section layout (sales vs recruiting vs meeting, etc.). */
+  mode?: string
   recap: AnswerState | null
   lines: TranscriptLine[]
   savedPath: string | null
@@ -1063,7 +1073,7 @@ export const Review = memo(function Review({
                 behind the error alone and autosave used to wipe them. Show what we have + Retry. */}
             {recapText.trim().length >= 40 && (
               <div className="opacity-90">
-                <Markdown>{recapText}</Markdown>
+                <RecapBody text={recapText} mode={mode} />
               </div>
             )}
             <div className="text-[13px] text-[var(--color-danger)]">{recap.error}</div>
@@ -1084,7 +1094,7 @@ export const Review = memo(function Review({
             )}
           </div>
         ) : recapText ? (
-          <Markdown>{recapText}</Markdown>
+          <RecapBody text={recapText} mode={mode} />
         ) : recap?.streaming ? (
           // A past meeting's retroactive "Generate recap" (or a just-finished import) is in flight —
           // recap here is recapGen's live streaming answer, not the static (still-empty) saved recap.

@@ -9,7 +9,7 @@ import {
   ssoSignInVerdict
 } from './Onboarding'
 import { Sparkles } from 'lucide-react'
-import { aiRowStatus, micRowStatus, summarizeSetupRows, type SetupRow } from './OnboardingExperience'
+import { aiRowStatus, localModelRowStatus, micRowStatus, summarizeSetupRows, type SetupRow } from './OnboardingExperience'
 
 describe('providerTileDisabledReason — step-5 provider tiles must not misreport why they are disabled', () => {
   it('is null (tappable) when nothing blocks the tile', () => {
@@ -203,6 +203,43 @@ describe('MQA-279 — Act 3 (Config) AI-readiness row must never claim ready bef
   })
 })
 
+describe('Act 3 on-device model row', () => {
+  it('shows downloading progress, never "not installed"', () => {
+    const row = localModelRowStatus({
+      ready: false,
+      unavailableReason: 'downloading',
+      downloadProgress: 0.42,
+      minTotalRamGB: 16
+    })
+    expect(row.detail).toMatch(/Downloading 42%/)
+    expect(row.detail.toLowerCase()).not.toMatch(/not installed/)
+    expect(row.progress).toBe(0.42)
+  })
+
+  it('says so honestly when RAM-gated', () => {
+    const row = localModelRowStatus({
+      ready: false,
+      unavailableReason: 'insufficient-ram',
+      downloadProgress: 0,
+      minTotalRamGB: 16
+    })
+    expect(row.state).toBe('blocked')
+    expect(row.detail).toMatch(/16 GB/)
+    expect(row.detail.toLowerCase()).not.toMatch(/not installed/)
+  })
+
+  it('treats not-downloaded as starting the fetch, not a dead install state', () => {
+    const row = localModelRowStatus({
+      ready: false,
+      unavailableReason: 'not-downloaded',
+      downloadProgress: 0,
+      minTotalRamGB: 8
+    })
+    expect(row.detail).toMatch(/Starting the on-device download/)
+    expect(row.detail.toLowerCase()).not.toMatch(/not installed/)
+  })
+})
+
 describe('MQA-279 — Act 3 config-complete state: "scan first, then present" must stay two honest claims', () => {
   const row = (state: SetupRow['state']): SetupRow => ({ key: 'k', label: 'l', icon: Sparkles, state })
 
@@ -251,6 +288,9 @@ describe('MQA-201 — scene 4 never fakes a check', () => {
     expect(src).toMatch(/window\.toto\.asrBundled\(\)/)
     expect(src).toMatch(/window\.toto\.getPermissions\(\)/)
     expect(src).toMatch(/micRowStatus\(perms\?\.microphone\)/)
+    expect(src).toMatch(/window\.toto\.localModelsList\(\)/)
+    expect(src).toMatch(/localModelRowStatus/)
+    expect(src).not.toMatch(/not installed/)
   })
 
   it('Wave 5 — includes the staged problem story before the reveal', () => {

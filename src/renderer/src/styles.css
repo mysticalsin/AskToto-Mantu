@@ -682,6 +682,61 @@ input::placeholder {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
 }
 
+/* Exclusive onboarding stage — warm, animated, never a solid black void (DESIGN.md).
+   Viewport-fixed so simple-fullscreen + % height cannot collapse the paint to the
+   window chrome color. */
+.onboard-stage {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  min-height: 100vh;
+  min-width: 100vw;
+  flex-direction: column;
+  overflow: hidden;
+  background:
+    radial-gradient(1200px 700px at 18% 12%, rgba(232, 140, 64, 0.42), transparent 58%),
+    radial-gradient(900px 600px at 88% 78%, rgba(180, 72, 28, 0.34), transparent 55%),
+    linear-gradient(165deg, #3a2416 0%, #5a3218 42%, #2c1810 100%);
+}
+.onboard-stage::before,
+.onboard-stage::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  filter: blur(40px);
+  animation: onboard-warm-drift 18s ease-in-out infinite alternate;
+}
+.onboard-stage::before {
+  width: 46vw;
+  height: 46vw;
+  left: -8vw;
+  top: -12vh;
+  background: rgba(255, 176, 92, 0.28);
+}
+.onboard-stage::after {
+  width: 40vw;
+  height: 40vw;
+  right: -6vw;
+  bottom: -10vh;
+  background: rgba(214, 96, 42, 0.22);
+  animation-delay: -7s;
+}
+@keyframes onboard-warm-drift {
+  from {
+    transform: translate3d(0, 0, 0) scale(1);
+  }
+  to {
+    transform: translate3d(4vw, 3vh, 0) scale(1.08);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .onboard-stage::before,
+  .onboard-stage::after {
+    animation: none;
+  }
+}
+
 /* Exclusive-stage primary CTAs — min 52×220, high contrast, hittable (DESIGN.md). */
 .onboard-cta {
   display: inline-flex;
