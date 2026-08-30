@@ -187,6 +187,12 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Embed the default Cloudflare account credential (encrypted at rest) so a fresh install answers
+          # with no key to paste. Both are read only from the environment; only ciphertext ships. If the
+          # token secret is unset the embed step is a clean no-op (a normal keyless build).
+          METIS_CLOUDFLARE_API_TOKEN: ${{ secrets.METIS_CLOUDFLARE_API_TOKEN }}
+          METIS_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.METIS_CLOUDFLARE_ACCOUNT_ID }}
+          METIS_EMBED_CLOUDFLARE_KEY: '1'
       # Hard size gate before anything is published.
       - run: npm run check:release
         env:
@@ -326,6 +332,12 @@ jobs:
           WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
           WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
           WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
+          # Embed the default Cloudflare account credential (encrypted at rest) so a fresh install answers
+          # with no key to paste. Both are read only from the environment; only ciphertext ships. If the
+          # token secret is unset the embed step is a clean no-op (a normal keyless build).
+          METIS_CLOUDFLARE_API_TOKEN: ${{ secrets.METIS_CLOUDFLARE_API_TOKEN }}
+          METIS_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.METIS_CLOUDFLARE_ACCOUNT_ID }}
+          METIS_EMBED_CLOUDFLARE_KEY: '1'
       # Same pre-publication size gate as release-macos.
       - run: npm run check:release
         env:

@@ -117,14 +117,25 @@ if (embedIntended) {
   // 3. Decrypt the packaged blob with the SAME material the app ships, then prove the recovered plaintext
   //    token appears NOWHERE in the packaged app. If encryption did its job, the only place the token
   //    exists is transiently in memory here — never in app.asar or any resource on disk.
-  let token
+  let payload
   try {
-    token = decryptProxyKey(packagedBlob)
+    payload = decryptProxyKey(packagedBlob)
   } catch (e) {
     throw new Error(`packaged cloudflare-embed/key.json could not be decrypted with the shipped material: ${e.message}`)
   }
+  // The payload is EITHER a bare proxy key OR a JSON {token,baseUrl} direct-Cloudflare credential. Scan
+  // for the actual TOKEN either way — the JSON wrapper is not the secret, the token inside it is.
+  let token = payload
+  if (typeof payload === 'string' && payload.trim().startsWith('{')) {
+    try {
+      const obj = JSON.parse(payload)
+      if (obj && typeof obj.token === 'string') token = obj.token
+    } catch {
+      /* not JSON after all — scan the whole decrypted string */
+    }
+  }
   if (typeof token !== 'string' || token.length < 20) {
-    throw new Error('packaged cloudflare-embed/key.json decrypted to something that is not a usable proxy key')
+    throw new Error('packaged cloudflare-embed/key.json decrypted to something that is not a usable credential')
   }
   const hits = []
   scanForPlaintext(resourcesDir, token, hits)
