@@ -193,23 +193,52 @@ export function demoFrameAt(elapsedMs: number): DemoFrame {
   }
 }
 
-/** Ordered stage-boundary milestones. Act 2 click-to-advance maps a beat index onto these
- *  (no timers). Same beats, one click each. */
+/** One showcase video per DemoStage. Intra-beat playback animates elapsedMs from start→hold.
+ *  Next is the only way to change which video is playing — nothing here advances the index. */
+export const DEMO_STAGE_VIDEOS: readonly DemoStage[] = ['lines', 'suggestion', 'factcheck', 'recap']
+
+/** Exclusive end of each video (start of the next stage, or DEMO_TIMING.end). */
 export const DEMO_STAGE_BOUNDARIES: readonly number[] = [
-  DEMO_TIMING.line1,
-  DEMO_TIMING.line2,
-  DEMO_TIMING.suggestionTextEnd,
-  DEMO_TIMING.line3,
-  DEMO_TIMING.factcheckTextEnd,
+  DEMO_TIMING.cursorToSuggestionStart,
+  DEMO_TIMING.cursorToFactcheckStart,
   DEMO_TIMING.recapStart,
   DEMO_TIMING.end
 ]
 
-/** Click-to-advance: elapsed ms for beat `i`. No timers. */
-export function demoElapsedAtBeat(i: number): number {
+function clampBeat(i: number): number {
   const last = DEMO_STAGE_BOUNDARIES.length - 1
-  const n = i < 0 ? 0 : i > last ? last : i
-  return DEMO_STAGE_BOUNDARIES[n]
+  return i < 0 ? 0 : i > last ? last : i
+}
+
+/** Absolute timeline start of video `i`. Next resets the clock here so the clip plays from the start. */
+export function demoBeatStartMs(i: number): number {
+  const n = clampBeat(i)
+  return n === 0 ? 0 : DEMO_STAGE_BOUNDARIES[n - 1]
+}
+
+/** Where playback freezes. Non-last videos hold 1ms before the next stage so the clip cannot leak. */
+export function demoBeatHoldMs(i: number): number {
+  const n = clampBeat(i)
+  const end = DEMO_STAGE_BOUNDARIES[n]
+  const last = DEMO_STAGE_BOUNDARIES.length - 1
+  return n === last ? end : Math.max(demoBeatStartMs(n), end - 1)
+}
+
+/** Map a beat-local clock onto the absolute timeline. Capping at hold means a long rAF cannot jump stage. */
+export function demoPlaybackElapsed(beat: number, localMs: number): number {
+  const start = demoBeatStartMs(beat)
+  const hold = demoBeatHoldMs(beat)
+  if (localMs <= 0) return start
+  return Math.min(hold, start + localMs)
+}
+
+export function demoStageAtBeat(i: number): DemoStage {
+  return DEMO_STAGE_VIDEOS[clampBeat(i)]
+}
+
+/** Settled frame of video `i` (hold). Does not start the next video. */
+export function demoElapsedAtBeat(i: number): number {
+  return demoBeatHoldMs(i)
 }
 
 export function nextDemoBeatIndex(i: number): number {

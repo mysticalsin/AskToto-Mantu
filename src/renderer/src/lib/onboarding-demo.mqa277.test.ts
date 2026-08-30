@@ -3,11 +3,16 @@ import { describe, expect, it } from 'vitest'
 import {
   DEMO_LINES,
   DEMO_STAGE_BOUNDARIES,
+  DEMO_STAGE_VIDEOS,
   DEMO_TIMING,
+  demoBeatHoldMs,
+  demoBeatStartMs,
   demoElapsedAtBeat,
   demoFrameAt,
   demoHasNextBeat,
+  demoPlaybackElapsed,
   demoRecapMarkdown,
+  demoStageAtBeat,
   nextDemoBeatIndex
 } from './onboarding-demo'
 
@@ -112,7 +117,8 @@ describe('MQA-277 — Act 2 (Demo) scripted timeline projector (demoFrameAt)', (
     expect(demoFrameAt(DEMO_TIMING.end + 999999).done).toBe(true)
   })
 
-  it('DEMO_STAGE_BOUNDARIES is sorted ascending and ends at DEMO_TIMING.end (click-to-advance beats)', () => {
+  it('DEMO_STAGE_BOUNDARIES is one exclusive end per DEMO_STAGE video and ends at DEMO_TIMING.end', () => {
+    expect(DEMO_STAGE_BOUNDARIES).toHaveLength(DEMO_STAGE_VIDEOS.length)
     for (let i = 1; i < DEMO_STAGE_BOUNDARIES.length; i++) {
       expect(DEMO_STAGE_BOUNDARIES[i]).toBeGreaterThanOrEqual(DEMO_STAGE_BOUNDARIES[i - 1])
     }
@@ -135,14 +141,39 @@ describe('MQA-277 — Act 2 (Demo) scripted timeline projector (demoFrameAt)', (
     expect(sales).not.toBe(meeting)
   })
 
-  it('click-to-advance maps a beat index onto boundaries; the last beat has no next', () => {
-    expect(demoElapsedAtBeat(0)).toBe(DEMO_STAGE_BOUNDARIES[0])
+  it('Next is required to change DEMO_STAGE — a long local clock cannot leak into the next video', () => {
+    expect(demoElapsedAtBeat(0)).toBe(demoBeatHoldMs(0))
     expect(nextDemoBeatIndex(0)).toBe(1)
     expect(demoHasNextBeat(0)).toBe(true)
     const last = DEMO_STAGE_BOUNDARIES.length - 1
     expect(nextDemoBeatIndex(last)).toBe(last)
     expect(demoHasNextBeat(last)).toBe(false)
     expect(demoElapsedAtBeat(last)).toBe(DEMO_TIMING.end)
+
+    for (let beat = 0; beat < DEMO_STAGE_VIDEOS.length; beat++) {
+      const stage = demoStageAtBeat(beat)
+      const start = demoBeatStartMs(beat)
+      const hold = demoBeatHoldMs(beat)
+      expect(demoFrameAt(start).stage).toBe(stage)
+      expect(demoFrameAt(hold).stage).toBe(stage)
+      expect(demoPlaybackElapsed(beat, 0)).toBe(start)
+      expect(demoPlaybackElapsed(beat, 250)).toBeGreaterThanOrEqual(start)
+      expect(demoPlaybackElapsed(beat, 1e9)).toBe(hold)
+      expect(demoFrameAt(demoPlaybackElapsed(beat, 1e9)).stage).toBe(stage)
+    }
+    expect(demoStageAtBeat(nextDemoBeatIndex(0))).not.toBe(demoStageAtBeat(0))
+  })
+
+  it('the current video animates without a Next click (mid-clip elapsed is between start and hold)', () => {
+    const suggestion = DEMO_STAGE_VIDEOS.indexOf('suggestion')
+    const mid = demoPlaybackElapsed(suggestion, 400)
+    expect(mid).toBeGreaterThan(demoBeatStartMs(suggestion))
+    expect(mid).toBeLessThan(demoBeatHoldMs(suggestion))
+    const frame = demoFrameAt(mid)
+    expect(frame.stage).toBe('suggestion')
+    expect(frame.cursor.target).toBe('suggestion')
+    expect(frame.cursor.progress).toBeGreaterThan(0)
+    expect(frame.cursor.progress).toBeLessThan(1)
   })
 })
 

@@ -8,7 +8,8 @@
  *
  * Architecture:
  * - lib/onboarding-demo.ts owns ALL the fake content as a pure `demoFrameAt(elapsedMs)` projection.
- *   The scene maps a click-stepped beat index onto DEMO_STAGE_BOUNDARIES. No auto-advance.
+ *   Each DEMO_STAGE is one video: a rAF clock plays elapsedMs from that clip's start to its hold.
+ *   Next is the only way to change videos (resets the clock). No timer that jumps stages.
  * - lib/synthetic-cursor.ts owns the pure easing math for the drawn cursor; this component only
  *   measures the target chip's real screen position each frame.
  * - SAFETY (MQA-278, see @shared/demo-guard + lib/onboarding-demo-guard.ts): this component flips a
@@ -26,8 +27,9 @@ import { QuickActions } from './QuickActions'
 import {
   DEMO_FACTCHECK_LABEL,
   demoRecapMarkdown,
-  demoElapsedAtBeat,
+  demoBeatHoldMs,
   demoHasNextBeat,
+  demoPlaybackElapsed,
   nextDemoBeatIndex,
   demoFrameAt,
   type DemoCursorTarget
@@ -52,16 +54,35 @@ const CHIP_SELECTOR: Record<Exclude<DemoCursorTarget, 'none'>, string> = {
   factcheck: '[aria-label="Fact-check"]'
 }
 
-/** Click-stepped beat index. No auto-step timers, no rAF clock. Tony watches each beat, then clicks Next. */
-function useDemoBeat(): {
+/** Intra-video rAF clock. Plays the current DEMO_STAGE; Next is the only way to change beat. */
+function useDemoPlayback(): {
   elapsedMs: number
   beat: number
   hasNext: boolean
   advance: () => void
 } {
   const [beat, setBeat] = useState(0)
+  const [localMs, setLocalMs] = useState(0)
+  const reduced = prefersReducedMotion()
+
+  useEffect(() => {
+    setLocalMs(reduced ? 1e9 : 0)
+    if (reduced) return
+    let raf = 0
+    const t0 = performance.now()
+    const tick = (now: number): void => {
+      const local = now - t0
+      setLocalMs(local)
+      if (demoPlaybackElapsed(beat, local) < demoBeatHoldMs(beat)) {
+        raf = requestAnimationFrame(tick)
+      }
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [beat, reduced])
+
   return {
-    elapsedMs: demoElapsedAtBeat(beat),
+    elapsedMs: demoPlaybackElapsed(beat, localMs),
     beat,
     hasNext: demoHasNextBeat(beat),
     advance: () => setBeat((i) => nextDemoBeatIndex(i))
@@ -89,7 +110,7 @@ export function OnboardingDemoScene({
   onSkipToEnd: () => void
 }): JSX.Element {
   const reducedMotion = prefersReducedMotion()
-  const { elapsedMs, hasNext, advance } = useDemoBeat()
+  const { elapsedMs, beat, hasNext, advance } = useDemoPlayback()
   const frame = demoFrameAt(elapsedMs)
   const startedAtRef = useRef(Date.now())
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -103,6 +124,10 @@ export function OnboardingDemoScene({
     setOnboardingDemoActive(true)
     return () => setOnboardingDemoActive(false)
   }, [])
+
+  useEffect(() => {
+    clickedForRef.current = null
+  }, [beat])
 
   // Measure the target chip's REAL on-screen position each frame the cursor is moving/arrived, and
   // fire a real click on it once, right as it arrives — see the module doc for why this matters.
@@ -171,24 +196,14 @@ export function OnboardingDemoScene({
     )
 
   return (
-    <div
-      key="reveal"
-      className={
-        'scene-enter flex w-full flex-1 flex-col items-center justify-center gap-6 ' +
-        (hasNext ? 'cursor-pointer' : '')
-      }
-      onClick={() => {
-        if (hasNext) advance()
-      }}
-    >
+    <div key="reveal" className="scene-enter flex w-full flex-1 flex-col items-center justify-center gap-6">
       <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">Here’s what that looks like.</h2>
       <p className="m-0 text-[13px] text-[color:var(--color-ink-2)]">
-        {hasNext ? 'Click Next, or anywhere on the stage, for the next beat.' : 'That’s the full pass. Continue when you’re ready.'}
+        {hasNext
+          ? 'This clip plays on its own. Next starts the next one.'
+          : 'That’s the full pass. Continue when you’re ready.'}
       </p>
-      <div
-        className="flex max-w-[880px] flex-wrap justify-center gap-1.5"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="flex max-w-[880px] flex-wrap justify-center gap-1.5">
         {CONVERSATION_MODES.map((id) => (
           <button
             key={id}
@@ -207,11 +222,7 @@ export function OnboardingDemoScene({
       </div>
 
       {!frame.meetingEnded ? (
-        <div
-          ref={wrapRef}
-          className="relative w-full max-w-[880px]"
-          onClick={(e) => e.stopPropagation()}
-        >
+        <div ref={wrapRef} className="relative w-full max-w-[880px]">
           <Bar
             value=""
             onChange={() => {}}
@@ -259,12 +270,10 @@ export function OnboardingDemoScene({
           )}
         </div>
       ) : (
-        <div onClick={(e) => e.stopPropagation()}>
-          <DemoRecapCard mode={mode} />
-        </div>
+        <DemoRecapCard mode={mode} />
       )}
 
-      <div className="flex flex-col items-center gap-3" onClick={(e) => e.stopPropagation()}>
+      <div className="flex flex-col items-center gap-3">
         {hasNext && (
           <button type="button" onClick={advance} className="onboard-cta no-drag focus-ring">
             Next
