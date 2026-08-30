@@ -144,21 +144,29 @@ const api = {
   parakeetStatus: (): Promise<{ ready: boolean; addonError: string | null }> =>
     ipcRenderer.invoke(IPC.parakeetStatus),
   parakeetEnsure: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.parakeetEnsure),
-  // Returns {text, name?} — name is the Speaker Intelligence label for THEM windows when enabled
-  // (older shape was a bare string; the renderer normalizes both while the contract settles).
-  parakeetFeed: (samples: Float32Array, speaker: string): Promise<string | { text: string; name?: string }> =>
+  // Returns {text, name?, echo?} — name is the Speaker Intelligence label for THEM windows when enabled;
+  // echo:true means operator bleed was dropped (renderer must not count that as an ASR stall).
+  // (Older shape was a bare string; the renderer normalizes both while the contract settles.)
+  parakeetFeed: (
+    samples: Float32Array,
+    speaker: string
+  ): Promise<string | { text: string; name?: string; echo?: boolean }> =>
     ipcRenderer.invoke(IPC.parakeetFeed, { samples, speaker }),
   onParakeetProgress: (cb: (pct: number) => void): (() => void) => {
     const h = (_e: unknown, d: { pct: number }): void => cb(d.pct)
     ipcRenderer.on(IPC.parakeetProgress, h)
     return () => ipcRenderer.removeListener(IPC.parakeetProgress, h)
   },
-  // Apple Speech (on-device, macOS only) — same {text, name?} shape and speaker ride-along as parakeetFeed.
-  appleSpeechFeed: (samples: Float32Array, speaker: string): Promise<string | { text: string; name?: string }> =>
+  // Apple Speech (on-device, macOS only) — same {text, name?, echo?} shape and speaker ride-along as parakeetFeed.
+  appleSpeechFeed: (
+    samples: Float32Array,
+    speaker: string
+  ): Promise<string | { text: string; name?: string; echo?: boolean }> =>
     ipcRenderer.invoke(IPC.appleSpeechFeed, { samples, speaker }),
   // Speaker Intelligence's engine-independent embedding tap (see IPC.speakerEmbed's own comment) — the
   // Whisper path's equivalent of the label ride-along parakeetFeed/appleSpeechFeed carry for free.
-  speakerEmbed: (samples: Float32Array, speaker: string): Promise<{ name?: string }> =>
+  // echo:true → renderer drops the already-committed THEM line (operator loopback bleed).
+  speakerEmbed: (samples: Float32Array, speaker: string): Promise<{ name?: string; echo?: boolean }> =>
     ipcRenderer.invoke(IPC.speakerEmbed, { samples, speaker }),
 
   ask: (req: AskStart): Promise<void> => ipcRenderer.invoke(IPC.askStart, req),

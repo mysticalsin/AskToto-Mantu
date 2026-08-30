@@ -1724,7 +1724,7 @@ export function App(): JSX.Element {
     if (settings?.playListenChime ?? true) playListenChime()
     void listen.start(
       settings?.audioSource ?? 'both',
-      settings?.asrQuality ?? 'fast',
+      settings?.asrQuality ?? 'best',
       settings?.asrEngine ?? 'whisper',
       settings?.asrLanguage ?? 'auto'
     )
