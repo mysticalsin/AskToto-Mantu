@@ -101,6 +101,16 @@ function pickProviderCandidates(s: Settings): { provider: ProviderId; model: str
     resolveRoutingMode(s) === 'local' ||
     s.brainConsolidation.preferLocal
   if (preferOnDevice && localBaseReady(s, getAllowedProviders())) {
+    // MQA-018 (exclusive-local parity): honor the SAME session-long 'unavailable' lockout the fallback
+    // branch below already excludes, and that localOnlyRebuildBlocked's comment assumes is "already
+    // excluded upstream in pickProviderCandidates". This branch must NEVER waterfall to cloud (an explicit
+    // privacy choice) — but returning a `local` candidate while the runtime is in its restart-budget-
+    // exhausted lockout hands hasUsableProvider() the weakest possible evidence: it authorizes
+    // startRebuild's purge, then EVERY re-extraction fails against the dead runtime with nothing (cloud is
+    // off by choice) to catch it — a wiped brain that cannot rebuild until relaunch. Returning [] instead
+    // makes hasUsableProvider() false, so the rebuild refuses with its actionable error and the meeting
+    // stays unindexed (retried once the runtime recovers) — never uploaded.
+    if (localRuntimeState() === 'unavailable') return []
     return [{ provider: 'local', model: s.localLlm.modelId, key: '' }]
   }
 
