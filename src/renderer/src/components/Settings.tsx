@@ -6127,15 +6127,24 @@ export function Settings({
       <footer className="cl-footer flex h-14 shrink-0 items-center gap-2 rounded-b-2xl px-4">
         <button
           type="button"
+          // Act 6 (Ready, MQA-283): "Replay onboarding" — re-arms the SAME gate App.tsx checks
+          // (`!settings.onboardingDone`), so the very next render remounts the six-act experience fresh
+          // from hero, exactly like a first run. Nothing else is touched: no other setting is cleared.
+          // App.tsx's onboarding gate special-cases `view === 'settings'` to keep showing THIS panel
+          // over the gate (so the Ready scene's "Add your own AI provider" link can open Settings
+          // without the gate stealing focus back) — so without closing Settings here too, the user
+          // would click Replay and see nothing change until they also hit Done. Call onClose so the
+          // gate is what they land on immediately, matching what "Replay" promises.
           onClick={() => {
-            if (window.confirm("Show the intro tour again? Your settings won't change.")) {
+            if (window.confirm("Replay onboarding from the start? Your settings won't change.")) {
               patch({ onboardingDone: false })
+              onClose?.()
             }
           }}
           className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.03] px-3 py-2 text-[12px] text-[color:var(--cl-foreground)] transition-colors hover:border-[var(--cl-input)] hover:bg-white/[0.08]"
         >
           <RotateCcw size={13} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />
-          Reset onboarding
+          Replay onboarding
         </button>
         <button
           type="button"
