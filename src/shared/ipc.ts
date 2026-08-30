@@ -73,6 +73,9 @@ export const IPC = {
   // No status/ensure/progress channels: unlike Parakeet there is no bundled model to download: the
   // helper binary either transcribes or the call resolves to '' (see main/apple-speech.ts).
   appleSpeechFeed: 'apple-speech:feed',
+  // Whisper path's speaker-embedding tap (Parakeet/Apple ride the label on their feed). echo:true means
+  // operator loopback bleed — the renderer drops the already-committed THEM line.
+  speakerEmbed: 'speaker:embed',
   askStart: 'ask:start',
   askCancel: 'ask:cancel',
   // Explicit "new chat" boundary: clears the main-owned carriers of cross-question state (the server-side
@@ -956,7 +959,7 @@ export const BaseSettingsSchema = z.object({
   // simply saturate at fully opaque for the most solid backgrounds; nothing errors or clips oddly.
   overlayOpacity: z.number().min(0.3).max(1.5).default(1),
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
-  asrQuality: z.enum(['best', 'fast']).default('fast'), // packaged builds use the bundled compact model for both modes
+  asrQuality: z.enum(['best', 'fast']).default('best'), // packaged builds use the bundled compact model for both modes
   // whisper = ~99 langs (default — safe for any locale; parakeet is European-only, which is why 1fa4d76
   // moved the default off it); parakeet = 25 European languages, fastest; apple = on-device Apple Speech
   // (SFSpeechRecognizer via the mac-helper sidecar), opt-in, macOS 13+ only — see main/apple-speech.ts.
@@ -1360,7 +1363,7 @@ export const DEFAULT_SETTINGS: Settings = {
   backgroundScreenContext: false,
   overlayOpacity: 1,
   showFullTranscriptInReview: false,
-  asrQuality: 'fast',
+  asrQuality: 'best',
   asrEngine: 'whisper',
   asrLanguage: 'auto',
   asrLastFallbackAt: null,

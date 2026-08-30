@@ -8,9 +8,10 @@
  *    enrollment today and by the Teams-VTT auto-enrollment flywheel in P2;
  *  - the pure session clusterer (speaker-cluster.ts) labelling un-enrolled voices "Speaker N".
  *
- * Resolution order per THEM window: enrolled profile match (cosine ≥ ID_THRESHOLD) → session cluster
- * label. Everything degrades to null (no label) when the model is missing, sherpa fails to load, or the
- * embedding is degenerate — a missing label must never break transcription, exactly like the OCR helper.
+ * Resolution order per THEM window: echo-bleed check against the operator's own voiceprint
+ * (isEchoBleed) → enrolled profile match (cosine ≥ ID_THRESHOLD) → session cluster label. Everything
+ * degrades to null (no label) when the model is missing, sherpa fails to load, or the embedding is
+ * degenerate — a missing label must never break transcription, exactly like the OCR helper.
  *
  * Privacy: embeddings and profiles never leave the machine; the store lives in userData and is removed
  * with the profile delete (P2 Settings surface). PLAN §3.6.
@@ -32,11 +33,28 @@ const ID_THRESHOLD = 0.55
 /** A silence gap this long between THEM windows means a new meeting — session labels reset. */
 const SESSION_GAP_MS = 30 * 60_000
 const SAMPLE_RATE = 16_000
+/** Cosine similarity above which a THEM window is the operator's OWN voice leaking through loopback.
+ *  Higher than ID_THRESHOLD — "you just heard yourself" is the strongest claim this file makes. */
+const ECHO_THRESHOLD = 0.7
+const OPERATOR_BUFFER_K = 8
 
 export interface SpeakerLabel {
   name: string
   source: 'profile' | 'cluster'
   similarity: number
+  /** True when this window was the operator's own voice bleeding through loopback. */
+  echo?: boolean
+}
+
+/**
+ * Pure echo-defense decision. `operatorCentroid` is null when no operator voiceprint exists yet
+ * (brand-new session) — echo defense degrades to "never fires" rather than throwing.
+ */
+export function isEchoBleed(embedding: Float32Array, operatorCentroid: Float32Array | null): boolean {
+  if (!operatorCentroid || operatorCentroid.length === 0 || embedding.length !== operatorCentroid.length) {
+    return false
+  }
+  return cosineSimilarity(embedding, operatorCentroid) >= ECHO_THRESHOLD
 }
 
 interface VoiceProfile {
@@ -118,6 +136,8 @@ function buildSherpaExtractor(): EmbeddingExtractor | null {
 export interface SpeakerId {
   /** Label one THEM window. Returns null when unavailable/degenerate (caller attaches no name). */
   labelWindow: (samples: Float32Array) => SpeakerLabel | null
+  /** Feed a 'you' (mic) window into the in-session operator voiceprint used for echo defense. */
+  observeOperatorWindow: (samples: Float32Array) => void
   /** Enroll (or reinforce) a named voice profile from one or more turn embeddings' raw audio. */
   enroll: (name: string, sampleWindows: readonly Float32Array[]) => boolean
   listProfiles: () => Array<{ name: string; samples: number }>
@@ -175,6 +195,9 @@ export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
   }
 
   let lastWindowAt = 0
+  const operatorEmbeds: Float32Array[] = []
+
+  const operatorCentroid = (): Float32Array | null => meanEmbedding(operatorEmbeds)
 
   const matchProfile = (embedding: Float32Array): SpeakerLabel | null => {
     let best: SpeakerLabel | null = null
@@ -196,10 +219,21 @@ export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
       lastWindowAt = t
       const embedding = ex.compute(samples)
       if (!embedding) return null
+      if (isEchoBleed(embedding, operatorCentroid())) {
+        return { name: '', source: 'cluster', similarity: 1, echo: true }
+      }
       const enrolled = matchProfile(embedding)
       if (enrolled) return enrolled
       const assigned = clusterer.assign(embedding)
       return { name: assigned.label, source: 'cluster', similarity: assigned.similarity }
+    },
+    observeOperatorWindow: (samples) => {
+      const ex = getExtractor()
+      if (!ex) return
+      const embedding = ex.compute(samples)
+      if (!embedding) return
+      operatorEmbeds.push(embedding)
+      if (operatorEmbeds.length > OPERATOR_BUFFER_K) operatorEmbeds.shift()
     },
     enroll: (name, sampleWindows) => {
       const ex = getExtractor()
@@ -241,6 +275,7 @@ export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
     resetSession: () => {
       clusterer.reset()
       lastWindowAt = 0
+      operatorEmbeds.length = 0
     }
   }
 }
