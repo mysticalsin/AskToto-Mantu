@@ -15,6 +15,13 @@
  *  brief calls for. */
 export const AUTO_HIDE_GRACE_MS = 500
 
+/** Dwell (ms) the pointer must rest over the peek strip before it expands into the full bar. Without this,
+ *  a pointer merely crossing the top edge of the screen (moving to another app, a menu bar click, etc.)
+ *  would instantly flash the bar open and shut. Short enough that a deliberate hover still feels
+ *  immediate. Only gates the peek→revealed transition — re-entering while already revealed (e.g. during
+ *  the grace window, or while a force event holds it open) stays instant since nothing would "flash". */
+export const REVEAL_DWELL_MS = 150
+
 export interface AutoHideState {
   /** Auto-hide is in effect: the setting is on AND the overlay is in its idle bar surface (not minimized,
    *  no answer/panel open). When false the bar is always revealed. */
@@ -27,15 +34,20 @@ export interface AutoHideState {
   /** A collapse is scheduled: the pointer has left (or a force event ended) but the grace timer has not
    *  yet elapsed, so the bar is still shown for now. */
   graceArmed: boolean
+  /** The pointer entered the (still-collapsed) peek strip and the reveal dwell timer is running. Does NOT
+   *  by itself reveal the bar — only `dwell-elapsed` flips `hovering`, and a `pointer-leave` before then
+   *  cancels it with no reveal ever happening. */
+  hoverPending: boolean
 }
 
 export function initialAutoHideState(enabled: boolean): AutoHideState {
-  return { enabled, hovering: false, forced: false, graceArmed: false }
+  return { enabled, hovering: false, forced: false, graceArmed: false, hoverPending: false }
 }
 
 /** The single derived question the renderer asks each render: show the full bar (true) or the slim peek
  *  strip (false)? Revealed whenever auto-hide is off, the pointer is over it, an event forces it open, or
- *  a collapse is merely pending (still inside the grace window). */
+ *  a collapse is merely pending (still inside the grace window). `hoverPending` deliberately does NOT
+ *  count — the dwell timer must elapse first. */
 export function isRevealed(s: AutoHideState): boolean {
   return !s.enabled || s.hovering || s.forced || s.graceArmed
 }
@@ -46,6 +58,7 @@ export type AutoHideEvent =
   | { type: 'pointer-enter' }
   | { type: 'pointer-leave' }
   | { type: 'grace-elapsed' }
+  | { type: 'dwell-elapsed' }
 
 /** Pure transition. Returns the SAME reference when nothing changes so a `useReducer` consumer doesn't
  *  re-render on a no-op event (e.g. a repeated pointer-enter, or set-enabled to the current value). */
@@ -70,19 +83,30 @@ export function reduceAutoHide(s: AutoHideState, e: AutoHideEvent): AutoHideStat
       }
     }
     case 'pointer-enter': {
-      if (s.hovering && !s.graceArmed) return s
-      // Entering always cancels a pending collapse and marks hover.
-      return { ...s, hovering: true, graceArmed: false }
+      if (isRevealed(s)) {
+        // Already shown (grace window, forced open, or auto-hide off) — no dwell needed, entering just
+        // cancels a pending collapse and marks hover.
+        if (s.hovering && !s.graceArmed && !s.hoverPending) return s
+        return { ...s, hovering: true, graceArmed: false, hoverPending: false }
+      }
+      // Still collapsed to the peek strip: start the reveal dwell instead of expanding immediately.
+      if (s.hoverPending) return s
+      return { ...s, hoverPending: true }
     }
     case 'pointer-leave': {
-      if (!s.hovering && !s.graceArmed) return s
-      // Only schedule a collapse when auto-hide is on and nothing else is forcing the bar open; otherwise
-      // a leave just clears the hover flag.
-      return { ...s, hovering: false, graceArmed: s.enabled && !s.forced }
+      if (!s.hovering && !s.graceArmed && !s.hoverPending) return s
+      // A leave before the dwell elapsed cancels it outright — the bar never opened, so there's nothing to
+      // ease back from. Otherwise, only schedule a collapse when auto-hide is on and nothing else is
+      // forcing the bar open.
+      return { ...s, hovering: false, hoverPending: false, graceArmed: s.enabled && !s.forced && s.hovering }
     }
     case 'grace-elapsed': {
       if (!s.graceArmed) return s
       return { ...s, graceArmed: false }
+    }
+    case 'dwell-elapsed': {
+      if (!s.hoverPending) return s
+      return { ...s, hoverPending: false, hovering: true }
     }
     default:
       return s
