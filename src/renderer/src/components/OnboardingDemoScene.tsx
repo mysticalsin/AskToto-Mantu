@@ -18,7 +18,7 @@
  *   scene is up — and the demo's own data source (onboarding-demo.ts) structurally cannot read a real
  *   transcript or session in the first place (pinned by a contract test).
  */
-import { Suspense, lazy, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Suspense, lazy, useEffect, useRef, useState, type RefObject } from 'react'
 import type { TranscriptLine } from '@shared/ipc'
 import { CONVERSATION_MODES, BUILTIN_MODE_LABELS, type BuiltinMode } from '@shared/ipc'
 import type { AnswerState } from '../state'
@@ -43,6 +43,15 @@ import { ModeRecapView, modeRecapSections } from './ModeRecap'
 const Answer = lazy(() => import('./Answer').then((m) => ({ default: m.Answer })))
 const Copilot = lazy(() => import('./Copilot').then((m) => ({ default: m.Copilot })))
 
+/** Prefetch Markdown+shiki during Act 1 so the first Next does not compile on the click. */
+export function prefetchOnboardingDemoChunks(): void {
+  void import('./Answer')
+  void import('./Copilot')
+}
+
+/** Transcript / frame React commits — not every rAF. Cursor is DOM-driven. */
+export const DEMO_COMMIT_MS = 100
+
 function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
     ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -54,39 +63,76 @@ const CHIP_SELECTOR: Record<Exclude<DemoCursorTarget, 'none'>, string> = {
   factcheck: '[aria-label="Fact-check"]'
 }
 
-/** Intra-video rAF clock. Plays the current DEMO_STAGE; Next is the only way to change beat. */
-function useDemoPlayback(): {
+/** Intra-video rAF clock. Plays the current DEMO_STAGE; Next is the only way to change beat.
+ *  Cursor is a ref + DOM transform. React state commits at beat boundaries or ≤ ~10 Hz. */
+function useDemoPlayback(wrapRef: RefObject<HTMLDivElement | null>): {
   elapsedMs: number
   beat: number
   hasNext: boolean
   advance: () => void
+  cursorRef: RefObject<HTMLDivElement | null>
 } {
   const [beat, setBeat] = useState(0)
   const [localMs, setLocalMs] = useState(0)
   const reduced = prefersReducedMotion()
+  const cursorRef = useRef<HTMLDivElement>(null)
+  const lastCommitRef = useRef(0)
+  const clickedForRef = useRef<DemoCursorTarget | null>(null)
 
   useEffect(() => {
+    clickedForRef.current = null
+    lastCommitRef.current = 0
     setLocalMs(reduced ? 1e9 : 0)
     if (reduced) return
     let raf = 0
     const t0 = performance.now()
     const tick = (now: number): void => {
       const local = now - t0
-      setLocalMs(local)
-      if (demoPlaybackElapsed(beat, local) < demoBeatHoldMs(beat)) {
-        raf = requestAnimationFrame(tick)
+      const elapsed = demoPlaybackElapsed(beat, local)
+      const frame = demoFrameAt(elapsed)
+      const cursorEl = cursorRef.current
+      const wrap = wrapRef.current
+      if (!cursorEl || !wrap || frame.cursor.target === 'none') {
+        if (cursorEl) cursorEl.style.opacity = '0'
+      } else {
+        const chip = wrap.querySelector<HTMLElement>(CHIP_SELECTOR[frame.cursor.target])
+        if (chip) {
+          const wrapRect = wrap.getBoundingClientRect()
+          const chipRect = chip.getBoundingClientRect()
+          const to: Point = {
+            x: chipRect.left + chipRect.width / 2 - wrapRect.left,
+            y: chipRect.top + chipRect.height / 2 - wrapRect.top
+          }
+          const from: Point = { x: wrapRect.width / 2, y: 24 }
+          const p = cursorPositionAt(frame.cursor.progress, from, to)
+          cursorEl.style.opacity = '1'
+          cursorEl.style.transform = `translate(${p.x - 7}px, ${p.y - 7}px)`
+          cursorEl.classList.toggle('demo-cursor-press', frame.cursor.pressed)
+          if (frame.cursor.pressed && clickedForRef.current !== frame.cursor.target) {
+            clickedForRef.current = frame.cursor.target
+            chip.click()
+          }
+        }
       }
+      const held = elapsed >= demoBeatHoldMs(beat)
+      if (held || local - lastCommitRef.current >= DEMO_COMMIT_MS) {
+        lastCommitRef.current = local
+        setLocalMs(local)
+      }
+      if (!held) raf = requestAnimationFrame(tick)
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [beat, reduced])
+  }, [beat, reduced, wrapRef])
 
   return {
     elapsedMs: demoPlaybackElapsed(beat, localMs),
     beat,
     hasNext: demoHasNextBeat(beat),
+    cursorRef,
     advance: () => {
       const next = demoPlaybackAfterNext(beat)
+      lastCommitRef.current = 0
       setLocalMs(next.localMs)
       setBeat(next.beat)
     }
@@ -116,54 +162,16 @@ export function OnboardingDemoScene({
   onPlayVideo?: () => void
 }): JSX.Element {
   const reducedMotion = prefersReducedMotion()
-  const { elapsedMs, beat, hasNext, advance } = useDemoPlayback()
+  const wrapRef = useRef<HTMLDivElement>(null)
+  const { elapsedMs, beat, hasNext, advance, cursorRef } = useDemoPlayback(wrapRef)
   const frame = demoFrameAt(elapsedMs)
   const startedAtRef = useRef(Date.now())
-  const wrapRef = useRef<HTMLDivElement>(null)
-  const [cursorPos, setCursorPos] = useState<Point | null>(null)
-  // Guards against firing the synthetic .click() on every rAF tick while `pressed` stays true across
-  // DEMO_CLICK_FLASH_MS of frames — one real click per arrival at a given target is enough.
-  const clickedForRef = useRef<DemoCursorTarget | null>(null)
 
   // MQA-278 — flip the session-scoped guard for exactly as long as this scene is mounted.
   useEffect(() => {
     setOnboardingDemoActive(true)
     return () => setOnboardingDemoActive(false)
   }, [])
-
-  useEffect(() => {
-    clickedForRef.current = null
-  }, [beat])
-
-  // Measure the target chip's REAL on-screen position each frame the cursor is moving/arrived, and
-  // fire a real click on it once, right as it arrives — see the module doc for why this matters.
-  useLayoutEffect(() => {
-    if (reducedMotion || frame.cursor.target === 'none') {
-      setCursorPos(null)
-      return
-    }
-    const wrap = wrapRef.current
-    const chip = wrap?.querySelector<HTMLElement>(CHIP_SELECTOR[frame.cursor.target])
-    if (!wrap || !chip) return
-    const wrapRect = wrap.getBoundingClientRect()
-    const chipRect = chip.getBoundingClientRect()
-    const to: Point = {
-      x: chipRect.left + chipRect.width / 2 - wrapRect.left,
-      y: chipRect.top + chipRect.height / 2 - wrapRect.top
-    }
-    const from: Point = { x: wrapRect.width / 2, y: 24 }
-    setCursorPos(cursorPositionAt(frame.cursor.progress, from, to))
-
-    if (frame.cursor.pressed && clickedForRef.current !== frame.cursor.target) {
-      clickedForRef.current = frame.cursor.target
-      chip.click()
-    }
-    // Re-measures on every tick, not just while `progress` is changing: the streamed suggestion/
-    // fact-check text growing the Bar's body height pushes the QuickActions row (and its chip) down
-    // for as long as that streaming lasts, so a target measured once at arrival (progress clamped to
-    // 1) would go stale mid-stream. `elapsedMs` is the "a new frame happened" dependency that keeps
-    // this from freezing.
-  }, [elapsedMs, frame.cursor.target, frame.cursor.pressed, reducedMotion])
 
   const demoLines: TranscriptLine[] = frame.lines.map((l) => ({ speaker: l.speaker, text: l.text, t: l.at }))
 
@@ -267,12 +275,8 @@ export function OnboardingDemoScene({
             localSuggestReady
             localFallbackReady
           />
-          {cursorPos && (
-            <div
-              aria-hidden="true"
-              className={['demo-cursor', frame.cursor.pressed ? 'demo-cursor-press' : ''].join(' ')}
-              style={{ transform: `translate(${cursorPos.x - 7}px, ${cursorPos.y - 7}px)` }}
-            />
+          {!reducedMotion && (
+            <div ref={cursorRef} aria-hidden="true" className="demo-cursor" style={{ opacity: 0 }} />
           )}
         </div>
       ) : (

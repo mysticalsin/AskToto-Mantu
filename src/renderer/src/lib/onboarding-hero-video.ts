@@ -18,3 +18,22 @@ export function playOnboardingVideo(
   if (opts.restart) el.currentTime = 0
   void playing.catch(() => {})
 }
+
+/**
+ * Get Started gesture: `audio.play()` then `video.play()` are the first media calls.
+ * Seek / setState happen after both play()s. Next still uses playOnboardingVideo (play, then seek 0).
+ */
+export function playOnboardingMedia(
+  video: HTMLVideoElement | null | undefined,
+  audio: HTMLAudioElement | null | undefined,
+  opts: { restart?: boolean } = {}
+): void {
+  const audioPlay = audio?.play()
+  const videoPlay = video?.play()
+  if (opts.restart) {
+    if (audio) audio.currentTime = 0
+    if (video) video.currentTime = 0
+  }
+  void audioPlay?.catch(() => {})
+  void videoPlay?.catch(() => {})
+}

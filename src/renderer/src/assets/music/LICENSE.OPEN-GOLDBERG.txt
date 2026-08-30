@@ -1,0 +1,15 @@
+Open Goldberg Variations — Aria (bundled onboarding bed)
+
+Piece:       J.S. Bach, Goldberg Variations BWV 988, Aria
+Performance: Kimiko Ishizaka, Open Goldberg Variations (2012)
+License:     CC0 1.0 Universal (public-domain dedication)
+             The composition is public domain. This recording is dedicated
+             to the public domain under CC0 1.0 (commercial use OK;
+             attribution not required).
+Source:      https://commons.wikimedia.org/wiki/File:Goldberg_Variations_01_Aria.ogg
+             Wikimedia Special:FilePath/Goldberg_Variations_01_Aria.ogg
+Project:     https://www.opengoldbergvariations.org/
+
+Bundled file: goldberg-variations-aria.ogg
+              (lossy transcode of the Commons Ogg, ≤ 4MB, cosine fades at
+              the loop points so the ~5:00 Aria can repeat quietly)

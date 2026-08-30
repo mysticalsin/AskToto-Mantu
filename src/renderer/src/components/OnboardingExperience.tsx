@@ -61,13 +61,17 @@ import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { MetisMark } from './MetisMark'
 import { Onboarding } from './Onboarding'
-import { OnboardingDemoScene } from './OnboardingDemoScene'
+import { OnboardingDemoScene, prefetchOnboardingDemoChunks } from './OnboardingDemoScene'
 import { isWindows } from '../lib/keys'
 import { useScrambleReveal } from '../lib/scramble'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
 import { sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
 import { createOnboardingMusicBed } from '../lib/onboarding-music'
-import { ONBOARDING_HERO_VIDEO_SRC, playOnboardingVideo } from '../lib/onboarding-hero-video'
+import {
+  ONBOARDING_HERO_VIDEO_SRC,
+  playOnboardingMedia,
+  playOnboardingVideo
+} from '../lib/onboarding-hero-video'
 
 // Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
 // one icon, everywhere it appears, rather than inventing a second icon language just for this scene.
@@ -165,6 +169,12 @@ function OnboardingHeroVideo({
   videoRef: Ref<HTMLVideoElement>
 }): JSX.Element | null {
   const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    return () => {
+      const el = typeof videoRef === 'object' && videoRef ? videoRef.current : null
+      el?.pause()
+    }
+  }, [videoRef])
   if (prefersReducedMotion() || failed) return null
   return (
     <div className="onboard-hero-video" aria-hidden="true">
@@ -619,18 +629,21 @@ function prefersReducedMotion(): boolean {
     : false
 }
 
-/** Original bed from Act 1. Starts on welcome mount (and again on Get Started if the context was suspended). */
-function useOnboardingMusic(): { muted: boolean; toggleMute: () => void; start: () => void } {
+/** Bach Aria bed. Do not start on mount (autoplay). play() on Get Started, same gesture as the video. */
+function useOnboardingMusic(): {
+  muted: boolean
+  toggleMute: () => void
+  audio: () => HTMLAudioElement | null
+} {
   const [muted, setMuted] = useState(false)
   const bedRef = useRef<ReturnType<typeof createOnboardingMusicBed> | null>(null)
+  if (!bedRef.current && typeof Audio !== 'undefined') {
+    bedRef.current = createOnboardingMusicBed()
+  }
 
   useEffect(() => {
-    const bed = createOnboardingMusicBed()
-    bedRef.current = bed
-    bed.setReducedMotion(prefersReducedMotion())
-    void bed.start()
     return () => {
-      bed.stop()
+      bedRef.current?.stop()
       bedRef.current = null
     }
   }, [])
@@ -642,7 +655,7 @@ function useOnboardingMusic(): { muted: boolean; toggleMute: () => void; start: 
   return {
     muted,
     toggleMute: () => setMuted((m) => !m),
-    start: () => void bedRef.current?.start()
+    audio: () => bedRef.current?.element ?? null
   }
 }
 
@@ -656,6 +669,10 @@ export function OnboardingExperience({
   const music = useOnboardingMusic()
   const heroVideoRef = useRef<HTMLVideoElement>(null)
   const playHero = (restart = false): void => playOnboardingVideo(heroVideoRef.current, { restart })
+
+  useEffect(() => {
+    prefetchOnboardingDemoChunks()
+  }, [])
   const [scene, setScene] = useState<Scene>('hero')
   const [rows, setRows] = useState<SetupRow[]>([])
   const [mode, setMode] = useState<ConversationMode>('general')
@@ -836,7 +853,7 @@ export function OnboardingExperience({
 
   return (
     <div className="relative flex h-full w-full select-none flex-col items-center px-10 text-center">
-      <OnboardingHeroVideo videoRef={heroVideoRef} />
+      {scene === 'hero' && <OnboardingHeroVideo videoRef={heroVideoRef} />}
       <button
         type="button"
         className="onboard-mute no-drag focus-ring"
@@ -853,8 +870,7 @@ export function OnboardingExperience({
       {scene === 'hero' && (
         <HeroWelcome
           onBegin={() => {
-            playHero(true)
-            music.start()
+            playOnboardingMedia(heroVideoRef.current, music.audio(), { restart: true })
             setScene('problem')
           }}
           onSkip={onSkip}
@@ -1096,7 +1112,7 @@ export function OnboardingExperience({
                   className={
                     'no-drag focus-ring relative w-[168px] overflow-hidden rounded-[14px] border px-4 py-3.5 text-left transition-all duration-150 ' +
                     (selected
-                      ? 'scale-[1.03] border-[var(--color-accent)] bg-[var(--color-accent-soft)] shadow-[0_2px_14px_var(--color-accent-glow)]'
+                      ? 'border-[var(--color-accent)] bg-[var(--color-accent-soft)] shadow-[0_2px_14px_var(--color-accent-glow)]'
                       : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]')
                   }
                 >

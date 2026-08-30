@@ -534,23 +534,20 @@ input::placeholder {
   animation: fade-up 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* Onboarding act transition — each of the five scenes mounts keyed by its own name (see
-   OnboardingExperience.tsx), so React remounts the whole scene on every advance and this fires fresh
-   every time, unlike .fade-up alone (which only ever plays once, on the component's first mount). A
-   touch heavier than .fade-up — the extra scale + longer duration reads as one act closing before the
-   next opens, without needing an actual exit animation on the outgoing scene. */
+/* Onboarding act transition — each scene remounts keyed by name. Opacity + translate only
+   (~300ms ease-out). No scale-down — compositor-only motion budget (DESIGN.md). */
 @keyframes scene-enter {
   from {
     opacity: 0;
-    transform: translateY(14px) scale(0.97);
+    transform: translateY(10px);
   }
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: translateY(0);
   }
 }
 .scene-enter {
-  animation: scene-enter 420ms var(--ease-spring);
+  animation: scene-enter 300ms ease-out;
 }
 
 /* Act 1 (Welcome) hero — the Métis mark lands as a top-center "island" capsule (MQA-276). Three staged
@@ -716,43 +713,10 @@ input::placeholder {
     radial-gradient(900px 600px at 88% 78%, color-mix(in srgb, #7f00da 36%, transparent), transparent 55%),
     linear-gradient(165deg, #3a0b6b 0%, #7f00da 42%, #2a0848 100%);
 }
-.onboard-stage::before,
-.onboard-stage::after {
-  content: '';
-  position: absolute;
-  border-radius: 50%;
-  pointer-events: none;
-  filter: blur(40px);
-  animation: onboard-purple-drift 18s ease-in-out infinite alternate;
-}
-.onboard-stage::before {
-  width: 46vw;
-  height: 46vw;
-  left: -8vw;
-  top: -12vh;
-  background: #9a2bf0;
-  opacity: 0.32;
-}
-.onboard-stage::after {
-  width: 40vw;
-  height: 40vw;
-  right: -6vw;
-  bottom: -10vh;
-  background: #7f00da;
-  opacity: 0.26;
-  animation-delay: -7s;
-}
-@keyframes onboard-purple-drift {
-  from {
-    transform: translate3d(0, 0, 0) scale(1);
-  }
-  to {
-    transform: translate3d(4vw, 3vh, 0) scale(1.08);
-  }
-}
+/* Depth is the purple radial wash on .onboard-stage — no filter:blur drifting orbs. */
 @media (prefers-reduced-motion: reduce) {
-  .onboard-stage::before,
-  .onboard-stage::after {
+  .onboard-stage .scene-enter,
+  .onboard-stage .fade-up {
     animation: none;
   }
 }
@@ -769,6 +733,7 @@ input::placeholder {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  /* No CSS filter on the <video> — compositor-only motion budget. */
 }
 .onboard-hero-video-tint {
   position: absolute;
@@ -785,8 +750,8 @@ input::placeholder {
   overflow: hidden;
   color: #f4f4f5;
   background: rgba(255, 255, 255, 0.12);
-  -webkit-backdrop-filter: blur(18px) saturate(160%);
-  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  backdrop-filter: blur(12px) saturate(160%);
   box-shadow:
     inset 0 1px 0 rgba(255, 255, 255, 0.4),
     inset 0 -1px 0 rgba(255, 255, 255, 0.06),
@@ -867,7 +832,7 @@ input::placeholder {
 }
 
 .onboard-cta:hover:not(:disabled) {
-  filter: brightness(1.06);
+  transform: scale(1.02);
 }
 .onboard-cta:disabled {
   opacity: 0.45;
@@ -991,6 +956,12 @@ input::placeholder {
 .develop-in {
   animation: develop-in 280ms cubic-bezier(0.22, 1, 0.36, 1);
   will-change: filter, opacity, transform;
+}
+
+/* Onboarding never runs develop-in filter blur over the stage / leftover video. */
+.onboard-stage .develop-in {
+  animation: none;
+  filter: none;
 }
 
 /* Animated rainbow contour — shown around the ask bar while the agent is working (replaces the old
