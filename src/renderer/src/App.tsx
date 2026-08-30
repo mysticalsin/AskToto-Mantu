@@ -3160,11 +3160,7 @@ export function App(): JSX.Element {
         // box-shadow (see .aw-hidden-rainbow). The overlay window hugs content height to ~2px, so without
         // extra room the halo would be clipped at the window edge into a flat band. Widen the transparent
         // margin only while invisible; the resting/visible overlay keeps its tight p-1.5.
-        overlayPeeked
-          ? 'p-0'
-          : (settings?.contentProtection ?? true) && !minimized
-            ? 'p-5 stealth-glow'
-            : 'p-1.5',
+        overlayPeeked ? 'p-0' : (settings?.contentProtection ?? true) && !minimized ? 'p-5 stealth-glow' : 'p-1.5',
         showListeningChrome ? 'listening' : ''
       ].join(' ')}
     >
