@@ -139,6 +139,17 @@ import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText } from './mac-helper'
 import { createSpeakerId, type SpeakerId, type SpeakerLabel } from './speaker-id'
+import {
+  clampAxis,
+  clampAxisMargin,
+  clampHeight as islandClampHeight,
+  isReachable as islandIsReachable,
+  recenterXForWidth,
+  refitToDisplay as islandRefitToDisplay,
+  slideWithinMargin,
+  topCenterPosition
+} from './island/geometry'
+import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
 
 // Lazy Speaker Intelligence singleton — building it probes the sherpa addon + embedding model, so defer
 // until the first THEM window with the feature enabled (never on the startup path).
@@ -1374,14 +1385,6 @@ function publicSettings(): PublicSettings {
   }
 }
 
-function topCenter(width: number, height: number): { x: number; y: number } {
-  const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
-  return {
-    x: Math.round(workArea.x + (workArea.width - width) / 2),
-    y: workArea.y + 24
-  }
-}
-
 function createWindow(): void {
   // Idempotent: `second-instance` is registered before app-ready and can call ensureWindow() while boot's
   // own runStep('createWindow') is still queued behind its awaits. Without this, the boot step would
@@ -1424,7 +1427,11 @@ function createWindow(): void {
   } catch {
     /* getSettings unavailable — keep bar height; auto-resize grows onboarding if the renderer isn't frozen */
   }
-  const { x, y } = topCenter(BAR_WIDTH, initialHeight)
+  const { x, y } = islandTopCenter(
+    BAR_WIDTH,
+    screen.getDisplayNearestPoint(screen.getCursorScreenPoint()),
+    TOP_CENTER_MARGIN_PX
+  )
   win = new BrowserWindow({
     width: BAR_WIDTH,
     height: initialHeight,
@@ -1603,13 +1610,11 @@ function resizeTo(height: number): void {
   // Keep the panel fully on-screen; if it would grow below the work area, slide it up — TEMPORARILY.
   // Measured against the user's own anchor rather than the current (possibly already-slid) top edge, so
   // the window returns to where they put it once the content shrinks again.
-  const maxY = workArea.y + workArea.height - h - 8
   const anchor = userAnchorY ?? b.y
-  const y = Math.max(workArea.y + 8, Math.min(anchor, maxY))
+  const y = slideWithinMargin(anchor, h, workArea, RESIZE_EDGE_MARGIN)
   // When the width changes (collapse to / expand from the mini-pill), recenter around the old midpoint
   // so the overlay stays put; otherwise keep the left edge. Clamp x into the work area either way.
-  let x = currentWidth === b.width ? b.x : Math.round(b.x + (b.width - currentWidth) / 2)
-  x = Math.max(workArea.x + 8, Math.min(x, workArea.x + workArea.width - currentWidth - 8))
+  const x = recenterXForWidth(b.x, b.width, currentWidth, workArea, RESIZE_EDGE_MARGIN)
   win.setBounds({ x, y, width: currentWidth, height: h }, false)
 }
 
@@ -1628,22 +1633,42 @@ function setMinimizedWidth(narrow: boolean): void {
  * Settings keeps the same top edge (so it grows downward from the bar) and centers horizontally,
  * clamped to the work area. Exiting restores the bar's width and last content height.
  */
-// Top margin (px) for the auto-hide peek anchor — how far below the work-area top edge the overlay hugs.
-// Small so the peek strip reads as pinned to the very top (Vibe-Island notch), with just enough gap to
-// clear a menu-bar/rounded-corner and leave room for the stealth glow halo not to be clipped at y=0.
-const AUTO_HIDE_TOP_MARGIN = 8
+// Top margin (px) for the auto-hide peek anchor — how far below the work-area top edge the overlay hugs
+// on a NON-notch display (Windows, an external monitor, an older Mac). Small so the peek strip reads as
+// pinned to the very top (Vibe-Island notch), with just enough gap to clear a menu-bar/rounded-corner and
+// leave room for the stealth glow halo not to be clipped at y=0. On a notch Mac, island/geometry.ts's
+// topClamp() ignores this margin entirely and draws into the menu-bar strip instead (MQA-275).
+const ISLAND_TOP_MARGIN = 8
+// Top margin (px) for the ONE-TIME initial window placement in createWindow — deliberately larger than
+// ISLAND_TOP_MARGIN so a freshly-launched window doesn't appear jammed against the very top edge before
+// the user has ever triggered the auto-hide anchor.
+const TOP_CENTER_MARGIN_PX = 24
+// Edge margin (px) resizeTo keeps clear on every side while sliding/recentering a growing or narrowing
+// bar — small breathing room from the raw screen edge, distinct from ISLAND_TOP_MARGIN (the auto-hide
+// anchor's OWN resting position, which intentionally sits closer to y=0).
+const RESIZE_EDGE_MARGIN = 8
+
+/** Where THIS window's top-center placement should land on a display, honoring the notch clamp
+ *  (island/geometry.ts's topClamp) — the single call every top-anchor site in this file routes through,
+ *  so "island" layout consistently hugs the notch on a notch Mac and floats elsewhere. Phase 1 always
+ *  passes layout 'island': the whole current overlay (peek + auto-hide reveal, MQA-274) already IS the
+ *  top-anchored island; Phase 2 threads a real user-facing `overlayLayout` setting through this
+ *  parameter instead of the hard-coded literal. */
+function islandTopCenter(width: number, display: Electron.Display, topMargin: number): { x: number; y: number } {
+  return topCenterPosition(width, 'island', getDisplayMetrics(display), topMargin)
+}
 
 /** Pin the overlay to the top-center of the display it is currently on, and re-arm the resizeTo anchor
  *  there, so the auto-hide peek strip and the revealed bar both grow DOWNWARD from the top edge (the
- *  clean default position for the Vibe-Island-style auto-hide). Uses getDisplayMatching(win bounds) so
- *  it stays correct on the overlay's actual display in a multi-monitor setup. A pure setBounds — never
- *  show()/focus() — so the user's foreground app keeps focus (the non-activating contract). */
+ *  clean default position for the Vibe-Island-style auto-hide) — or draw into the menu-bar strip on a
+ *  notch Mac (island/geometry.ts's topClamp). Uses getDisplayMatching(win bounds) so it stays correct on
+ *  the overlay's actual display in a multi-monitor setup. A pure setBounds — never show()/focus() — so
+ *  the user's foreground app keeps focus (the non-activating contract). */
 function anchorTopCenter(): void {
   if (!win) return
-  const { workArea } = screen.getDisplayMatching(win.getBounds())
+  const display = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
-  const x = clampAxis(Math.round(workArea.x + (workArea.width - b.width) / 2), b.width, workArea.x, workArea.width)
-  const y = workArea.y + AUTO_HIDE_TOP_MARGIN
+  const { x, y } = islandTopCenter(b.width, display, ISLAND_TOP_MARGIN)
   userAnchorY = y // resizeTo slides against this, so a growing bar returns to the top edge when it shrinks
   win.setBounds({ x, y, width: b.width, height: b.height }, false)
 }
@@ -1659,7 +1684,7 @@ function restoreBarWidth(): void {
   const { workArea } = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
   currentWidth = BAR_WIDTH
-  const x = clampAxis(Math.round(b.x + (b.width - BAR_WIDTH) / 2), BAR_WIDTH, workArea.x, workArea.width)
+  const x = recenterXForWidth(b.x, b.width, BAR_WIDTH, workArea, 0)
   win.setBounds({ x, y: b.y, width: BAR_WIDTH, height: b.height }, false)
 }
 
@@ -1669,8 +1694,7 @@ function setWindowMode(): void {
   if (!win) return
   const { workArea } = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
-  let x = Math.round(b.x + (b.width - currentWidth) / 2)
-  x = Math.max(workArea.x + 16, Math.min(x, workArea.x + workArea.width - currentWidth - 16))
+  const x = recenterXForWidth(b.x, b.width, currentWidth, workArea, 16)
   // lastBarHeight was measured on whatever display the bar was on at the time. The renderer sends
   // windowMode('bar') on every mount — including the reload after a renderer crash — which can land after
   // the overlay has moved to a shorter monitor, so re-apply that monitor's ceiling instead of restoring a
@@ -1997,47 +2021,31 @@ function revokePrivilegedSurface(): void {
 }
 setSessionClearedHandler(revokePrivilegedSurface)
 
-/** Clamp a single axis (pos/size) into a work-area span, without inverting when the window is bigger
- *  than the display. Math.min(Math.max(pos, areaPos), areaPos + areaSpan - size) assumes
- *  areaPos + areaSpan - size >= areaPos; when size > areaSpan that upper bound falls below areaPos and
- *  min/max invert, pushing the window partially off-screen instead of pinning it. Pin to areaPos instead. */
-function clampAxis(pos: number, size: number, areaPos: number, areaSpan: number): number {
-  if (size >= areaSpan) return areaPos
-  return Math.min(Math.max(pos, areaPos), areaPos + areaSpan - size)
-}
-
-/** Ceiling a window height to a display's work area, keeping the 48px reserve. Lives here rather than
- *  inside resizeTo because the ceiling has to be re-applied every time the overlay lands on a DIFFERENT
- *  display — while the rest of resizeTo (width, recenter, lastBarHeight) must NOT run on those paths. */
-function clampHeight(height: number, areaHeight: number): number {
-  return Math.max(BAR_MIN_HEIGHT, Math.min(height, areaHeight - 48))
-}
-
 // How much of the window must stay visibly reachable on some display while it's being dragged — enough
 // to grab it back, not the whole thing. Below this it's treated as flung off-screen and pulled back in.
 const DRAG_VISIBLE_MARGIN = 40
 
-/** Loosened clampAxis: pins `pos` so between `margin` and `size` px (whichever is smaller) of the
- *  window stays inside [areaPos, areaPos + areaSpan), instead of pinning the WHOLE window inside it.
- *  Only used as the moveBy() fallback below — letting most of the window hang off a display's edge is
- *  what lets a drag glide across a gap to a neighboring monitor instead of stopping dead at the first
- *  display's boundary. */
-function clampAxisMargin(pos: number, size: number, areaPos: number, areaSpan: number, margin: number): number {
-  const m = Math.min(margin, size, areaSpan)
-  return Math.min(Math.max(pos, areaPos - size + m), areaPos + areaSpan - m)
+/** Ceiling a window height to a display's work area, keeping the 48px reserve. Lives here rather than
+ *  inside resizeTo because the ceiling has to be re-applied every time the overlay lands on a DIFFERENT
+ *  display — while the rest of resizeTo (width, recenter, lastBarHeight) must NOT run on those paths.
+ *  Thin index.ts-local name preserved at every call site (MQA-275); the clamp math itself now lives in
+ *  island/geometry.ts so it is unit-tested there without booting Electron. */
+function clampHeight(height: number, areaHeight: number): number {
+  return islandClampHeight(height, areaHeight, BAR_MIN_HEIGHT)
 }
 
 /** True if, positioned at (x, y), at least DRAG_VISIBLE_MARGIN px of the window overlaps the work area
  *  of at least one CONNECTED display — checked against the union of every display (getAllDisplays()),
- *  not just whichever one the window started the drag on. */
+ *  not just whichever one the window started the drag on. Math lives in island/geometry.ts. */
 function isReachable(x: number, y: number, width: number, height: number): boolean {
-  const marginW = Math.min(DRAG_VISIBLE_MARGIN, width)
-  const marginH = Math.min(DRAG_VISIBLE_MARGIN, height)
-  return screen.getAllDisplays().some(({ workArea: wa }) => {
-    const overlapW = Math.min(x + width, wa.x + wa.width) - Math.max(x, wa.x)
-    const overlapH = Math.min(y + height, wa.y + wa.height) - Math.max(y, wa.y)
-    return overlapW >= marginW && overlapH >= marginH
-  })
+  return islandIsReachable(
+    x,
+    y,
+    width,
+    height,
+    screen.getAllDisplays().map((d) => d.workArea),
+    DRAG_VISIBLE_MARGIN
+  )
 }
 
 /** Re-apply the work-area height ceiling when a move lands the window on a DIFFERENT display than it
@@ -2045,14 +2053,11 @@ function isReachable(x: number, y: number, width: number, height: number): boole
  *  4K panel keeps that height when it is dragged onto a 1080p monitor — hanging a thousand pixels below
  *  the bottom edge, where resizable:false leaves the user no way to fix it. Height only: x/y stay the
  *  caller's, except that y is re-checked, because the caller validated it against the OLD (taller)
- *  height and a shorter window can lose the overlap that made that position reachable. */
+ *  height and a shorter window can lose the overlap that made that position reachable. Math lives in
+ *  island/geometry.ts; this wrapper resolves the live `screen.getDisplayMatching` display. */
 function refitToDisplay(next: Electron.Rectangle, fromDisplayId: number): Electron.Rectangle {
   const { id, workArea } = screen.getDisplayMatching(next)
-  if (id === fromDisplayId) return next
-  const height = clampHeight(next.height, workArea.height)
-  if (height === next.height) return next
-  const y = clampAxisMargin(next.y, height, workArea.y, workArea.height, DRAG_VISIBLE_MARGIN)
-  return { ...next, height, y }
+  return islandRefitToDisplay(next, id, workArea, fromDisplayId, BAR_MIN_HEIGHT, DRAG_VISIBLE_MARGIN)
 }
 
 function moveBy(dx: number, dy: number): void {
@@ -6158,6 +6163,10 @@ if (!app.requestSingleInstanceLock()) {
   }
   recoverImports()
   runStep('registerScreenListeners', registerScreenListeners)
+  // Notch/menu-bar metrics for the island top clamp (MQA-275) — invalidate-on-topology-change, same
+  // event set registerScreenListeners just subscribed to, plus powerMonitor resume (a notch MacBook can
+  // wake docked to a different external display than it slept on). macOS-only signal; a no-op elsewhere.
+  runStep('registerDisplayMetricsInvalidation', registerDisplayMetricsInvalidation)
   // Establish real screen-capture readiness at boot on Windows, where the probe raises NO system prompt
   // and there is no queryable permission to read instead — without it getPlatformPermissions() reports
   // 'unknown' forever and the readiness checklist cannot tell the user whether screenshots will work
