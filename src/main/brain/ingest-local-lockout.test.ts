@@ -72,7 +72,8 @@ describe('brain ingest — exclusive local summary vs runtime lockout (MQA-271, 
       localLlm: {
         enabled: true,
         modelId: 'qwen3.5-0.8b',
-        useFor: { suggest: true, summary: true, vision: true }
+        useFor: { suggest: true, summary: true, vision: true },
+        fallback: false
       }
     })
     writeFileSync(
