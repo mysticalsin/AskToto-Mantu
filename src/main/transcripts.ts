@@ -19,6 +19,7 @@ import { encryptSecret, decryptSecret, useFileBackend } from './secrets'
 import { readTrustedAdminManaged, lockPathToCurrentUserWin32 } from './win-security'
 import { mainLog, auditLog } from './logger'
 import { devEnv, isPackagedBuild } from './dev-env'
+import { refuseIfDemoTagged } from '@shared/demo-guard'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -681,6 +682,8 @@ export function formatTranscript(lines: TranscriptLine[]): string {
 
 /** Save any single Q&A / answer as a Dust-readable markdown note. Returns the file path. */
 export async function saveNote(settings: Settings, n: SaveNote): Promise<string> {
+  // MQA-278 — refuses Act 2 onboarding-demo-tagged data before touching disk. See @shared/demo-guard.
+  refuseIfDemoTagged('saveNote', n.title, n.mode, n.question)
   const folder = ensureMeetingsFolder(settings)
   const started = Date.now()
   const title = cleanTitle(n.title || n.question || 'Note') || 'Note'
@@ -737,6 +740,8 @@ export function meetingDurationMin(m: { startedAt: number; lines: { t: number }[
 
 /** Write a meeting as Dust-readable markdown + frontmatter. Returns the file path. */
 export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<string> {
+  // MQA-278 — refuses Act 2 onboarding-demo-tagged data before touching disk. See @shared/demo-guard.
+  refuseIfDemoTagged('saveMeeting', m.title, m.mode)
   const folder = ensureMeetingsFolder(settings)
 
   // Guard against non-finite/out-of-range values (e.g. Infinity), not just falsy ones: Date's valid
