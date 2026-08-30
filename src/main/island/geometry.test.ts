@@ -330,6 +330,8 @@ describe('DESIGN.md overlay contract', () => {
     expect(design).toMatch(/rotating stripe|stripe layers/)
     expect(design).toMatch(/0\.40/)
     expect(design).toMatch(/em dash/)
+    expect(design).toMatch(/Tell the room/)
+    expect(design).toMatch(/GDPR/)
     expect(design).toMatch(/full-viewport muted looping video/)
     expect(design).toMatch(/liquid glass/)
     expect(design).toMatch(/Do not add or restyle overlay \/ onboarding UI unless it matches this document/)

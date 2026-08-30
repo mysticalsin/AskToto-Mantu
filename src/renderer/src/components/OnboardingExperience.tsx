@@ -68,6 +68,14 @@ import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vi
 import { sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
 import { createOnboardingMusicBed } from '../lib/onboarding-music'
 import {
+  TELL_THE_ROOM_CHECKBOX,
+  TELL_THE_ROOM_LEAD,
+  TELL_THE_ROOM_QUOTE,
+  TELL_THE_ROOM_READY,
+  TELL_THE_ROOM_TITLE,
+  TELL_THE_ROOM_WHY
+} from '../lib/onboarding-tell-the-room'
+import {
   ONBOARDING_HERO_VIDEO_SRC,
   playOnboardingMedia,
   playOnboardingVideo
@@ -597,9 +605,9 @@ function ActReady({
             AND the room has been told, which is exactly what the recording-consent checkbox back in
             personalize already committed the user to. */}
         <p className="m-0 max-w-[380px] text-[13px] leading-snug text-[color:var(--color-ink-2)]">
-          Métis is ready. It starts listening only when you press Listen and tell the room. Nothing is
-          captured before that.
+          {TELL_THE_ROOM_READY}
         </p>
+        <p className="onboard-tell-quote onboard-tell-quote--echo fade-up">{TELL_THE_ROOM_QUOTE}</p>
       </div>
       <button
         type="button"
@@ -1132,19 +1140,22 @@ export function OnboardingExperience({
               )
             })}
           </div>
-          <div className="flex flex-col items-center gap-3">
-            <label className="flex max-w-[420px] cursor-pointer items-start gap-2.5 rounded-[12px] border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-left">
-              <input
-                type="checkbox"
-                checked={consent}
-                onChange={(e) => setConsent(e.target.checked)}
-                className="no-drag mt-0.5 accent-[var(--color-accent)]"
-              />
-              <span className="text-[12px] leading-snug text-[color:var(--color-ink-2)]">
-                I’ll tell everyone on the call before I record, and follow my company’s policy and the law.
-              </span>
-            </label>
-            <p className="m-0 text-[15px] font-medium text-[color:var(--color-ink)]">Ready when you are.</p>
+          <div className="flex flex-col items-center gap-4">
+            <div className="onboard-glass onboard-tell-card">
+              <h3>{TELL_THE_ROOM_TITLE}</h3>
+              <p>{TELL_THE_ROOM_LEAD}</p>
+              <p className="onboard-tell-quote">{TELL_THE_ROOM_QUOTE}</p>
+              <p className="onboard-tell-why">{TELL_THE_ROOM_WHY}</p>
+              <label className="onboard-tell-check">
+                <input
+                  type="checkbox"
+                  checked={consent}
+                  onChange={(e) => setConsent(e.target.checked)}
+                  className="no-drag mt-0.5 accent-[var(--color-accent)]"
+                />
+                <span>{TELL_THE_ROOM_CHECKBOX}</span>
+              </label>
+            </div>
             <button
               type="button"
               // Act 6 re-point (MQA-283): advances to license (only if enabled) or straight to Ready —

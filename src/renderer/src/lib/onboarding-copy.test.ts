@@ -9,7 +9,8 @@ function stripComments(src: string): string {
 const files = [
   join(__dirname, '../components/OnboardingExperience.tsx'),
   join(__dirname, './onboarding-demo.ts'),
-  join(__dirname, './persona-vibe.ts')
+  join(__dirname, './persona-vibe.ts'),
+  join(__dirname, './onboarding-tell-the-room.ts')
 ]
 
 describe('onboarding user-facing copy — no em dash (U+2014)', () => {
