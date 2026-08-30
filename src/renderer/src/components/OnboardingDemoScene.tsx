@@ -162,7 +162,12 @@ export function OnboardingDemoScene({
       clickedForRef.current = frame.cursor.target
       chip.click()
     }
-  }, [frame.cursor.target, frame.cursor.progress, frame.cursor.pressed, reducedMotion])
+    // Re-measures on every tick, not just while `progress` is changing: the streamed suggestion/
+    // fact-check text growing the Bar's body height pushes the QuickActions row (and its chip) down
+    // for as long as that streaming lasts, so a target measured once at arrival (progress clamped to
+    // 1) would go stale mid-stream. `elapsedMs` is the "a new frame happened" dependency that keeps
+    // this from freezing.
+  }, [elapsedMs, frame.cursor.target, frame.cursor.pressed, reducedMotion])
 
   const demoLines: TranscriptLine[] = frame.lines.map((l) => ({ speaker: l.speaker, text: l.text, t: l.at }))
 
