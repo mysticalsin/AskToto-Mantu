@@ -191,6 +191,15 @@ function aclTrusted(path: string, st: Stats): boolean {
 
 let warnedUntrusted = false
 
+/** Test-only: clear the ACL verdict memo and the one-shot untrusted warning so each test starts from a
+ *  cold cache. The memo is a module singleton — production probes exactly one path and never needs to
+ *  clear it at runtime — but without a per-test reset the probe-COUNT assertions below are order-dependent
+ *  (a prior test's still-valid memo satisfies the next test's first call, so the expected probe never runs). */
+export function __resetAclMemoForTest(): void {
+  aclMemo = null
+  warnedUntrusted = false
+}
+
 function warnUntrusted(path: string): void {
   if (warnedUntrusted) return
   warnedUntrusted = true
