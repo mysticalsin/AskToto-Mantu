@@ -144,9 +144,10 @@ export function refitToDisplay(
  */
 export const ISLAND_NOTCH_STRUT_PX = 37
 
-/** Hide-until-hover hit pad — CSS `.overlay-hide-target` fills the parked window (100%).
- *  Wide top-middle strip (not a 120px pill). Opaque to hit-testing. Do not hug-width this. */
+/** Logical hide/island cursor-watch strip (not the parked window). Width cap 560. */
 export const OVERLAY_HIDE_TARGET = { width: 560, height: 28 } as const
+/** Parked hide window: 1–8px fully transparent hairline. Watch uses hoverWatchRestRect, not this. */
+export const OVERLAY_HIDE_PARK = { width: 8, height: 2 } as const
 /** Always-visible island peek — keep in lockstep with `.overlay-peek` in styles.css. */
 export const OVERLAY_ISLAND_PEEK = { width: 132, height: 15 } as const
 /** Matches the windowResize hug-width pad so the island capsule is not clipped. */
@@ -194,9 +195,9 @@ export function hoverRestWidth(m: DisplayMetrics): number {
 }
 
 /**
- * Logical rest rect the cursor watch hit-tests. Hide parks the window here. Island keeps a
- * smaller visible peek at the same Y; the watch rect is still the top-center strip so
- * hovering the hardware island (wider than the 132px capsule) still reveals.
+ * Logical rest rect the cursor watch hit-tests. Hide does NOT park the window here
+ * (that was the visible 560×44 slab). Island keeps a smaller visible peek at the same Y;
+ * the watch rect is still the top-center strip so hovering the hardware island still reveals.
  */
 export function hoverWatchRestRect(_layout: OverlayLayout, m: DisplayMetrics): Rect {
   const height = hoverRestHeight(m)
@@ -273,30 +274,44 @@ export function isForbiddenMidFlowCard(win: Pick<Rect, 'width' | 'height'>): boo
   return win.width === OVERLAY_BAR_REST.width && win.height >= 700
 }
 
-/** Rest size after exclusive exit / createWindow. Hide is the hover strip (metrics when known). Island hugs the peek. */
+/** Rest size after exclusive exit / createWindow. Hide is a 1–8px invisible hairline. Island hugs the peek. */
 export function overlayRestSize(layout: OverlayLayout, m?: DisplayMetrics): { width: number; height: number } {
   if (layout === 'bar') return { width: OVERLAY_BAR_REST.width, height: OVERLAY_BAR_REST.height }
-  if (layout === 'hide') {
-    if (!m) return { width: OVERLAY_HIDE_TARGET.width, height: OVERLAY_HIDE_TARGET.height }
-    return { width: hoverRestWidth(m), height: hoverRestHeight(m) }
-  }
+  if (layout === 'hide') return { width: OVERLAY_HIDE_PARK.width, height: OVERLAY_HIDE_PARK.height }
   return {
     width: OVERLAY_ISLAND_PEEK.width + OVERLAY_PEEK_WIDTH_PAD,
     height: OVERLAY_ISLAND_PEEK.height + OVERLAY_PEEK_HEIGHT_PAD
   }
 }
 
+/** Parked hide window: tiny, fully transparent. Cursor watch still uses hoverWatchRestRect. */
+export function hideParkRect(m: DisplayMetrics): Rect {
+  const { width, height } = OVERLAY_HIDE_PARK
+  const x = clampAxis(
+    Math.round(m.workArea.x + (m.workArea.width - width) / 2),
+    width,
+    m.workArea.x,
+    m.workArea.width
+  )
+  return { x, y: hoverRestTop(m), width, height }
+}
+
+/** Tony live fails: 560×44 slab and 560×103 stub. Hide rest must not look like either. */
+export function isVisibleHideSlab(win: Pick<Rect, 'width' | 'height'>): boolean {
+  return win.height > OVERLAY_HIDE_PARK.height || (win.width >= 220 && win.height >= 20)
+}
+
 /**
- * Park the overlay after exclusive onboarding ends. Hide is the notch-strip rest rect
- * (`bounds.y`, strip height). Island is the peek at the same Y. Bar is classic rest
- * at `workArea.y + margin`. Never 880×816.
+ * Park the overlay after exclusive onboarding ends. Hide is a 1–8px transparent hairline
+ * at `bounds.y` (watch rect stays the notch strip). Island is the peek at the same Y.
+ * Bar is classic rest at `workArea.y + margin`. Never 880×816.
  */
 export function parkAfterExclusiveOnboarding(
   layout: OverlayLayout,
   m: DisplayMetrics,
   topMargin: number
 ): Rect {
-  if (layout === 'hide') return hoverWatchRestRect('hide', m)
+  if (layout === 'hide') return hideParkRect(m)
   const size = overlayRestSize(layout, m)
   if (layout === 'island') {
     const x = clampAxis(

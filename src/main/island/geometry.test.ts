@@ -25,7 +25,10 @@ import {
   shouldIgnoreResizeWhilePeekResting,
   shouldParkHoverRestAfterLeavingSurface,
   OVERLAY_HIDE_TARGET,
+  OVERLAY_HIDE_PARK,
   OVERLAY_ISLAND_PEEK,
+  hideParkRect,
+  isVisibleHideSlab,
   ISLAND_NOTCH_STRUT_PX,
   type DisplayMetrics,
   type Rect
@@ -340,20 +343,28 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
     source: 'helper'
   }
 
-  it('hide parks at bounds.y covering the notch strip, never the 880×816 card or a 120px pill', () => {
+  it('hide parks an invisible 1–8px hairline; watch rect still covers the island', () => {
     const park = parkAfterExclusiveOnboarding('hide', tonyMac, 8)
+    const watch = hoverWatchRestRect('hide', tonyMac)
+    expect(park).toEqual(hideParkRect(tonyMac))
     expect(park.y).toBe(tonyMac.bounds.y)
     expect(park.y).toBe(0)
-    expect(park.height).toBeGreaterThanOrEqual(tonyMac.menuBarHeight)
-    expect(park.width).toBeGreaterThanOrEqual(220)
-    expect(park.width).toBeLessThan(880)
-    expect(park.width).toBe(OVERLAY_HIDE_TARGET.width)
-    expect(park.height).toBeLessThan(880)
+    expect(park.height).toBeGreaterThanOrEqual(1)
+    expect(park.height).toBeLessThanOrEqual(8)
+    expect(park.width).toBeLessThanOrEqual(8)
+    expect(park.height).toBe(OVERLAY_HIDE_PARK.height)
+    expect(isVisibleHideSlab(park)).toBe(false)
+    expect(isVisibleHideSlab({ width: 560, height: 44 })).toBe(true)
+    expect(isVisibleHideSlab({ width: 560, height: 103 })).toBe(true)
     expect(isForbiddenMidFlowCard(park)).toBe(false)
     expect(isForbiddenMidFlowCard({ width: 880, height: 816 })).toBe(true)
-    expect(park.x).toBe(Math.round((1512 - park.width) / 2))
-    const watch = hoverWatchRestRect('hide', tonyMac)
-    expect(watch).toEqual(park)
+    expect(watch.width).toBe(OVERLAY_HIDE_TARGET.width)
+    expect(watch.height).toBeGreaterThanOrEqual(tonyMac.menuBarHeight)
+    expect(watch.y).toBe(0)
+    expect(watch).not.toEqual(park)
+    expect(watch.x).toBeLessThanOrEqual(900)
+    expect(watch.x + watch.width).toBeGreaterThan(900)
+    expect(900 >= watch.x && 12 >= watch.y && 12 < watch.y + watch.height).toBe(true)
   })
 
   it('island parks the peek capsule at the same Y; bar keeps the classic rest below the notch', () => {
@@ -376,8 +387,11 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
       menuBarHeight: 0
     }
     const park = parkAfterExclusiveOnboarding('hide', flush, 8)
+    const watch = hoverWatchRestRect('hide', flush)
     expect(park.y).toBe(0)
-    expect(park.height).toBeGreaterThanOrEqual(ISLAND_NOTCH_STRUT_PX)
+    expect(park.height).toBeLessThanOrEqual(8)
+    expect(watch.height).toBeGreaterThanOrEqual(ISLAND_NOTCH_STRUT_PX)
+    expect(watch.y).toBe(0)
   })
 
   it('stale 816px measures are ignored while hide/island is resting', () => {
@@ -387,10 +401,11 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
     expect(shouldIgnoreResizeWhilePeekResting(false, 816, peek)).toBe(false)
   })
 
-  it('Tony stub 103px is ignored while hide is resting at ~39–44', () => {
-    expect(shouldIgnoreResizeWhilePeekResting(true, 103, 39)).toBe(true)
-    expect(shouldIgnoreResizeWhilePeekResting(true, 103, 44)).toBe(true)
-    expect(shouldIgnoreResizeWhilePeekResting(true, 44, 44)).toBe(false)
+  it('Tony stub 103px and 44px slab are ignored while hide is resting at the hairline', () => {
+    const hairline = OVERLAY_HIDE_PARK.height
+    expect(shouldIgnoreResizeWhilePeekResting(true, 103, hairline)).toBe(true)
+    expect(shouldIgnoreResizeWhilePeekResting(true, 44, hairline)).toBe(true)
+    expect(shouldIgnoreResizeWhilePeekResting(true, hairline, hairline)).toBe(false)
   })
 
   it('leaving pill/Settings parks hide when the pointer is not in the island/bar', () => {
@@ -404,15 +419,13 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
     const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
     const hide = css.slice(css.indexOf('.overlay-hide-target {'), css.indexOf('.overlay-peek {'))
     const peek = css.slice(css.indexOf('.overlay-peek {'), css.indexOf('.overlay-peek:hover'))
-    expect(hide).toMatch(/width:\s*100%/)
-    expect(hide).toMatch(/min-width:\s*220px/)
-    expect(hide).toMatch(/max-width:\s*560px/)
-    expect(hide).toMatch(/height:\s*100%/)
-    expect(hide).toMatch(/min-height:\s*28px/)
-    expect(hide).toMatch(/pointer-events:\s*auto/)
-    expect(hide).toMatch(/rgba\(\s*8,\s*4,\s*16,\s*0\.04\s*\)/)
-    expect(hide).not.toMatch(/opacity:\s*0\.01/)
-    expect(hide).not.toMatch(/background:\s*transparent/)
+    expect(hide).toMatch(/width:\s*8px/)
+    expect(hide).toMatch(/height:\s*2px/)
+    expect(hide).toMatch(/background:\s*transparent/)
+    expect(hide).toMatch(/pointer-events:\s*none/)
+    expect(hide).not.toMatch(/rgba\(\s*8,\s*4,\s*16/)
+    expect(hide).not.toMatch(/min-height:\s*28px/)
+    expect(hide).not.toMatch(/min-width:\s*220px/)
     expect(peek).toMatch(new RegExp(`width:\\s*${OVERLAY_ISLAND_PEEK.width}px`))
     expect(peek).toMatch(new RegExp(`height:\\s*${OVERLAY_ISLAND_PEEK.height}px`))
   })
@@ -434,6 +447,9 @@ describe('DESIGN.md overlay contract', () => {
     expect(design).toMatch(/overlayParkAfterHide/)
     expect(design).toMatch(/cubic-bezier\(0\.22, 1, 0\.36, 1\)/)
     expect(design).toMatch(/100px stub|~100px stub/)
+    expect(design).toMatch(/1–8px|1-8px/)
+    expect(design).toMatch(/hoverWatchRestRect/)
+    expect(design).toMatch(/transparent/)
   })
 
   it('names hover-down, exclusive fullscreen, large CTA, and Métis demo', () => {
@@ -484,6 +500,9 @@ describe('island reveal/collapse wiring (index.ts)', () => {
     expect(index).toMatch(/parkOverlayAfterHideSpring/)
     expect(index).toMatch(/shouldParkHoverRestAfterLeavingSurface/)
     expect(index).toMatch(/The pill itself is not the bar/)
+    expect(index).toMatch(/setIgnoreMouseEvents/)
+    expect(index).toMatch(/BAR_MIN_HEIGHT \(44\) must never grow it/)
+    expect(index).toMatch(/applyHideClickThrough/)
     const hideTick = index.slice(index.indexOf('function tickOverlayCursorWatch'), index.indexOf('function notifyOverlayCursorHover'))
     expect(hideTick).not.toMatch(/setBounds\(park/)
     expect(hideTick).not.toMatch(/parkAfterExclusiveOnboarding/)
@@ -656,9 +675,9 @@ describe('overlay chrome modes (hide / island / bar)', () => {
     expect(app).toMatch(/onOverlayCursorHover/)
     expect(app).toMatch(/dwell-elapsed/)
     expect(peek).toMatch(/rest === 'hide'/)
-    expect(peek).toMatch(/onPointerEnter=\{onReveal\}/)
-    expect(peek).toMatch(/data-hug-width=\{hidden \? undefined : true\}/)
+    expect(peek).toMatch(/data-hug-width/)
     expect(css).toMatch(/\.overlay-hide-target/)
+    expect(css).toMatch(/background:\s*transparent/)
     expect(css).toMatch(/\.overlay-chrome-diagram--hide/)
     expect(autohide).toMatch(/case 'pointer-leave'/)
   })

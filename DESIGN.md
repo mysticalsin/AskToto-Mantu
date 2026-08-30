@@ -16,7 +16,8 @@ Settings shows these as **cards with a tiny desktop diagram**, not three text ra
 
 Hide and island **rest in** the Mac menu-bar / Dynamic Island strip so hovering the hardware island hits the window.
 
-- **Hide/island rest.** `y = display.bounds.y` (0 on the built-in Retina). Height covers that strip (`workArea.y` / `menuBarHeight`, ~37-44). Width at least the notch (min ~220, cap ~560), top-center. Visually stealth, opaque to hit-testing.
+- **Hide/island watch rect.** `y = display.bounds.y` (0 on the built-in Retina). Height covers that strip (`workArea.y` / `menuBarHeight`, ~37-44). Width at least the notch (min ~220, cap ~560), top-center. Cursor watch hit-tests this rect. The parked **hide window** is not this strip.
+- **Hide park (invisible).** 1–8px fully transparent hairline (or click-through). Not a 44px tint, not a 103px stub, not a 560-wide glass chip. Apple Hide is gone until the pointer enters the island.
 - **Path A.** Electron `display.workArea.y` is the first unobstructed row under the notch / menu bar — used by **bar** chrome (`workArea.y + margin`) and as the strip **height** for hide/island. Do not park hide/island *below* the island at `workArea.y` (Tony live: Y=39 pad never intersects the island).
 - **Path C.** When `workArea.y` is 0 on a notched display, hide/island still rest at `bounds.y` with a strut-tall strip (`menuBarHeight`, or 37px) so the hit rect covers the notch. Bar still floats; never a fake notch on Windows.
 
@@ -26,7 +27,7 @@ Hide/island **rest** stays at `bounds.y` (the hit strip). Revealed chrome sits a
 
 Hide and island: hover or click expands **down** from the rest strip to the full bar at `islandSafeTop` (below the notch). Leave collapses (`pointer-leave` → grace → hide or peek). Bar does not auto-collapse. Pushing the pointer **up** into the Dynamic Island must keep the bar open (smooth, no flicker).
 
-**Hide (default).** The rest is a **wide top-middle hit pad** in the notch strip (`bounds.y`, strip height), not a 120px pill and not a pad stranded at `workArea.y` (39). Width at least **220**, cap **560**. Visually stealth, **opaque to hit-testing** (Electron ignores fully transparent pixels). Do **not** `data-hug-width` the hide pad down to ~120px. Do not wrap it in `p-5` transparent padding. CSS fills the parked window (`width/height: 100%`).
+**Hide (default).** Fully gone until the pointer enters the island. The parked window is a **1–8px fully transparent** rest (`ignoreMouseEvents` click-through). `.overlay-hide-target` must not paint a visible rectangle (`background: transparent`). Cursor watch (`getCursorScreenPoint` vs `hoverWatchRestRect`) is the sensor — the window is not a 560×44 hittable slab. Do not park a 44px/103px card. Do not hug hide to 120px.
 
 **Cursor watch (required).** macOS menu bar / Dynamic Island often does **not** deliver `mouseenter` to an Electron window, even at Y=0. Renderer `onMouseEnter` is not enough. Main polls `screen.getCursorScreenPoint()` every ~16-32ms on darwin and Windows top-edge while hide/island is resting and `onboardingDone`: cursor inside the hide/island rest rect → reveal; cursor in the rest strip **or** the revealed bar (+ small grace) → stay (never `setBounds` on a stay tick); cursor in neither → hide. No Accessibility / CGEvent tap required. Do not animate window y every frame.
 
@@ -37,7 +38,7 @@ Hide and island: hover or click expands **down** from the rest strip to the full
 - **Reduced-motion:** skip the spring, instant size change, still no 24ms fight.
 - Leave grace stays ~500ms (`AUTO_HIDE_GRACE_MS`). Island hover may skip dwell (`pointer-enter` + `dwell-elapsed`).
 
-**Leave pill / Settings → Hide.** Pill mode may stay on screen. Putting chrome back on Hide must **disappear** (park `hoverRestHeight` at `display.bounds.y`, width 560). Do not `restoreBarWidth` / `setMinimizedWidth(false)` into a ~100px stub at `islandSafeTop`. Closing Settings after picking Hide, or closing Settings back to the idle overlay, parks hide when the pointer is not in the island or the bar. OverlayIdle + Hide + pointer not hovering renders the OverlayPeek hide pad, not a chopped Bar. Island may keep the visible peek. Bar keeps the full bar.
+**Leave pill / Settings → Hide.** Pill mode may stay on screen. Putting chrome back on Hide must **disappear** (park the invisible 1–8px rest). Do not `restoreBarWidth` / `setMinimizedWidth(false)` into a ~100px stub or a 560×44 slab at `islandSafeTop`. Closing Settings after picking Hide, or closing Settings back to the idle overlay, parks this invisible rest when the pointer is not in the island or the bar. OverlayIdle + Hide + pointer not hovering is nothing visible. Island may keep the visible 132×15 peek. Bar keeps the full bar.
 
 **Island.** Always-visible peek capsule. May sit in the island / notch (same Y). Hover expands down. Leave returns to the peek. Hug-width is OK on the visible capsule only.
 
@@ -47,7 +48,7 @@ Hide and island: hover or click expands **down** from the rest strip to the full
 
 ## After exclusive exit
 
-When `onboardingDone` flips true, `exitExclusiveOnboardingStage` leaves exclusive fullscreen and parks the default **hide** rest (or island / bar if Settings already chose one). Never an **880×816** mid-flow card. Never a 120×50 pill for hide. Re-apply `setAlwaysOnTop(true, 'screen-saver')` (the level exclusive used). Hide is the notch-strip rest (`y = display.bounds.y`, height covers `workArea.y` / `menuBarHeight`, width >= 220 and < 880). Island is the peek capsule at the same Y. Bar keeps `workArea.y + margin`. Auto-resize must not grow that park back into 880×816 and must not hug-shrink hide below 220. Then destroy the exclusive stage. Do not leave layer 0. Start the cursor watch when layout is hide/island.
+When `onboardingDone` flips true, `exitExclusiveOnboardingStage` leaves exclusive fullscreen and parks the default **hide** rest (or island / bar if Settings already chose one). Never an **880×816** mid-flow card. Never a 120×50 pill for hide. Re-apply `setAlwaysOnTop(true, 'screen-saver')` (the level exclusive used). Hide parks a 1–8px transparent rest; `hoverWatchRestRect` still covers the notch strip (`y = display.bounds.y`, height ~37-44). Island is the peek capsule at the same Y. Bar keeps `workArea.y + margin`. Auto-resize must not grow hide into a 44px/103px slab or 880×816. Then destroy the exclusive stage. Do not leave layer 0. Start the cursor watch when layout is hide/island.
 
 ## Onboarding
 

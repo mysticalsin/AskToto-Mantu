@@ -1423,6 +1423,11 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
   isMinimized = false
   islandResting = false
   try {
+    w.setIgnoreMouseEvents(false)
+  } catch {
+    /* headless */
+  }
+  try {
     w.setFullScreenable?.(true)
     w.setBackgroundColor('#3A0B6B')
     w.setBounds(stage)
@@ -1466,6 +1471,7 @@ function exitExclusiveOnboardingStage(): void {
   userAnchorY = park.y
   win.setBounds(park, false)
   startOverlayCursorWatch()
+  applyHideClickThrough()
 }
 
 function applyOverlayAlwaysOnTop(w: BrowserWindow): void {
@@ -1688,6 +1694,7 @@ function createWindow(): void {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }
   startOverlayCursorWatch()
+  applyHideClickThrough()
 }
 
 function resizeTo(height: number): void {
@@ -1699,6 +1706,8 @@ function resizeTo(height: number): void {
   }
   const display = screen.getDisplayMatching(win.getBounds())
   const rest = overlayRestSize(liveOverlayLayout(), getDisplayMetrics(display))
+  // Hide rest is a 1–8px hairline. BAR_MIN_HEIGHT (44) must never grow it into Tony's slab.
+  if (islandResting && liveOverlayLayout() === 'hide') return
   if (shouldIgnoreResizeWhilePeekResting(islandResting, height, rest.height)) return
   // Clamp + reposition against the display the OVERLAY is actually on (not the cursor's). Otherwise, on a
   // laptop + external monitor of different heights, a streaming answer clamps to the wrong monitor and the
@@ -1733,6 +1742,7 @@ function setMinimizedWidth(narrow: boolean): void {
     islandResting = false
     isMinimized = true
     currentWidth = PILL_WIDTH
+    applyHideClickThrough()
     resizeTo(lastBarHeight)
     return
   }
@@ -1871,6 +1881,19 @@ function parkOverlayAfterHideSpring(): void {
   islandResting = true
   userAnchorY = park.y
   win.setBounds(park, false)
+  applyHideClickThrough()
+}
+
+/** Hide rest is click-through so the menu bar stays usable. Island peek and the bar must receive clicks. */
+function applyHideClickThrough(): void {
+  if (!win || win.isDestroyed()) return
+  const clickThrough =
+    islandResting && liveOverlayLayout() === 'hide' && !isMinimized && !onboardingExclusiveLive()
+  try {
+    win.setIgnoreMouseEvents(clickThrough)
+  } catch {
+    /* headless */
+  }
 }
 
 function islandTopCenter(width: number, display: Electron.Display, topMargin: number): { x: number; y: number } {
@@ -1906,6 +1929,7 @@ function anchorTopCenter(): void {
 function restoreBarWidth(): void {
   if (!win || onboardingExclusiveLive()) return
   islandResting = false
+  applyHideClickThrough()
   const display = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
   const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
@@ -1931,6 +1955,7 @@ function setWindowMode(): void {
     currentWidth = park.width
     userAnchorY = park.y
     win.setBounds(park, false)
+    applyHideClickThrough()
     return
   }
   const { workArea } = screen.getDisplayMatching(win.getBounds())
@@ -2992,6 +3017,7 @@ function registerIpc(): void {
           islandResting = true
           userAnchorY = park.y
           win.setBounds(park, false)
+          applyHideClickThrough()
           notifyOverlayCursorHover(false)
         }
       } else {
@@ -5813,6 +5839,9 @@ function registerIpc(): void {
   // --- Window management ---
   ipcMain.handle(IPC.windowResize, (e, payload: { height: number; width?: number }) => {
     assertMainWindow(e)
+    // Hide rest stays the 1–8px hairline. The 120px hug floor and BAR_MIN_HEIGHT (44) must not
+    // grow it into a visible slab.
+    if (islandResting && liveOverlayLayout() === 'hide') return
     // A view can opt into reporting its own visible width (the collapsed control mini-pill, and a toast
     // that widens the pill to fit itself while minimized) instead of relying on the fixed
     // BAR_WIDTH/PILL_WIDTH guess. Without this the pill's real content (~170px) sat centered inside the
@@ -5826,10 +5855,7 @@ function registerIpc(): void {
       const nextWidth = Math.max(120, Math.min(Math.ceil(payload.width) + 10, BAR_WIDTH))
       const layout = liveOverlayLayout()
       const rest = overlayRestSize(layout)
-      // Hide pad must stay wide (~560). Do not accept a hug-width shrink to ~120.
-      if (islandResting && layout === 'hide' && nextWidth < rest.width - 24) {
-        /* keep parked hide width */
-      } else if (!islandResting || nextWidth <= rest.width + 24) {
+      if (!islandResting || nextWidth <= rest.width + 24) {
         currentWidth = nextWidth
       }
     }
