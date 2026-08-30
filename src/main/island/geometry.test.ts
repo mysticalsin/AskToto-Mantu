@@ -313,13 +313,15 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
     source: 'helper'
   }
 
-  it('hide parks a hug-width hide-target at islandSafeTop, never the 880×816 card', () => {
+  it('hide parks a wide hittable pad at islandSafeTop, never the 880×816 card or a 120px pill', () => {
     const park = parkAfterExclusiveOnboarding('hide', tonyMac, 8)
     expect(park.y).toBe(39)
     expect(park.y).toBeGreaterThanOrEqual(25)
-    expect(park.width).toBe(OVERLAY_HIDE_TARGET.width + 10)
-    expect(park.height).toBe(OVERLAY_HIDE_TARGET.height + 4)
-    expect(park.width).toBeLessThan(300)
+    expect(park.width).toBe(OVERLAY_HIDE_TARGET.width)
+    expect(park.height).toBe(OVERLAY_HIDE_TARGET.height)
+    expect(park.width).toBeGreaterThanOrEqual(560)
+    expect(park.height).toBeGreaterThanOrEqual(28)
+    expect(park.width).toBeLessThan(880)
     expect(park.height).toBeLessThan(40)
     expect(isForbiddenMidFlowCard(park)).toBe(false)
     expect(isForbiddenMidFlowCard({ width: 880, height: 816 })).toBe(true)
@@ -362,6 +364,10 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
     const peek = css.slice(css.indexOf('.overlay-peek {'), css.indexOf('.overlay-peek:hover'))
     expect(hide).toMatch(new RegExp(`width:\\s*${OVERLAY_HIDE_TARGET.width}px`))
     expect(hide).toMatch(new RegExp(`height:\\s*${OVERLAY_HIDE_TARGET.height}px`))
+    expect(hide).toMatch(/pointer-events:\s*auto/)
+    expect(hide).toMatch(/rgba\(\s*8,\s*4,\s*16,\s*0\.04\s*\)/)
+    expect(hide).not.toMatch(/opacity:\s*0\.01/)
+    expect(hide).not.toMatch(/background:\s*transparent/)
     expect(peek).toMatch(new RegExp(`width:\\s*${OVERLAY_ISLAND_PEEK.width}px`))
     expect(peek).toMatch(new RegExp(`height:\\s*${OVERLAY_ISLAND_PEEK.height}px`))
   })
@@ -468,6 +474,11 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(exit).not.toMatch(/width: BAR_WIDTH, height: BAR_HEIGHT/)
     expect(exit).not.toMatch(/currentWidth = BAR_WIDTH/)
     expect(index).toMatch(/shouldIgnoreResizeWhilePeekResting/)
+    const create = index.slice(index.indexOf('function createWindow'), index.indexOf('function resizeTo'))
+    expect(create).toMatch(/parkAfterExclusiveOnboarding/)
+    expect(create).toMatch(/onboardingLive \? stage.width : restPark.width/)
+    expect(create).toMatch(/islandResting = overlayUsesHover\(layout\)/)
+    expect(create).not.toMatch(/width: onboardingLive \? stage.width : BAR_WIDTH/)
   })
 
   it('App fills the stage — OnboardingV2 is not wrapped in the overlapping Panel card', () => {
@@ -563,6 +574,8 @@ describe('overlay chrome modes (hide / island / bar)', () => {
     expect(app).toMatch(/overlayRestsHidden\(overlayLayout\) \? 'hide' : 'island'/)
     expect(app).toMatch(/pointer-leave/)
     expect(peek).toMatch(/rest === 'hide'/)
+    expect(peek).toMatch(/onPointerEnter=\{onReveal\}/)
+    expect(peek).toMatch(/data-hug-width=\{hidden \? undefined : true\}/)
     expect(css).toMatch(/\.overlay-hide-target/)
     expect(css).toMatch(/\.overlay-chrome-diagram--hide/)
     expect(autohide).toMatch(/case 'pointer-leave'/)

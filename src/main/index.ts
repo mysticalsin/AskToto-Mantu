@@ -1497,16 +1497,22 @@ function createWindow(): void {
   const placementDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   const onboardingLive = onboardingExclusiveLive()
   const stage = exclusiveOnboardingBounds(placementDisplay.bounds, placementDisplay.workArea)
-  const islandPos = islandTopCenter(BAR_WIDTH, placementDisplay, TOP_CENTER_MARGIN_PX)
+  const layout = liveOverlayLayout()
+  const restPark = parkAfterExclusiveOnboarding(layout, getDisplayMetrics(placementDisplay), ISLAND_TOP_MARGIN)
   if (onboardingLive) {
     currentWidth = stage.width
     lastBarHeight = stage.height
+    islandResting = false
+  } else {
+    currentWidth = restPark.width
+    lastBarHeight = BAR_HEIGHT
+    islandResting = overlayUsesHover(layout)
   }
   win = new BrowserWindow({
-    width: onboardingLive ? stage.width : BAR_WIDTH,
-    height: onboardingLive ? stage.height : BAR_HEIGHT,
-    x: onboardingLive ? stage.x : islandPos.x,
-    y: onboardingLive ? stage.y : islandPos.y,
+    width: onboardingLive ? stage.width : restPark.width,
+    height: onboardingLive ? stage.height : restPark.height,
+    x: onboardingLive ? stage.x : restPark.x,
+    y: onboardingLive ? stage.y : restPark.y,
     frame: false,
     transparent: true,
     hasShadow: false, // panel paints its own shadow; window shadow would box the transparent area
@@ -5646,8 +5652,14 @@ function registerIpc(): void {
       // +10 (not the height report's +2) gives the pill's own box-shadow/glow room to render without
       // being hard-clipped at the window edge — see the .aw-pill / .aw-mark-glow comments in styles.css.
       const nextWidth = Math.max(120, Math.min(Math.ceil(payload.width) + 10, BAR_WIDTH))
-      const rest = overlayRestSize(liveOverlayLayout())
-      if (!islandResting || nextWidth <= rest.width + 24) currentWidth = nextWidth
+      const layout = liveOverlayLayout()
+      const rest = overlayRestSize(layout)
+      // Hide pad must stay wide (~560). Do not accept a hug-width shrink to ~120.
+      if (islandResting && layout === 'hide' && nextWidth < rest.width - 24) {
+        /* keep parked hide width */
+      } else if (!islandResting || nextWidth <= rest.width + 24) {
+        currentWidth = nextWidth
+      }
     }
     // Same finite-number guard as width: a NaN/Infinity height from a renderer layout glitch would
     // otherwise reach resizeTo's Math.round/min/max unclamped, poisoning them to NaN and making
