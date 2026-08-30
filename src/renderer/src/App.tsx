@@ -3102,7 +3102,7 @@ export function App(): JSX.Element {
       <div ref={setRoot} {...windowDrag} className="onboard-stage">
         <div className="onboard-stripes" aria-hidden="true" />
         <div className="onboard-stripes onboard-stripes--b" aria-hidden="true" />
-        <div className="relative z-10 flex h-full min-h-0 w-full flex-col">
+        <div className="onboard-portal-content relative z-10 flex h-full min-h-0 w-full flex-col">
           <OnboardingV2
             settings={settings}
             saveKey={saveKey}

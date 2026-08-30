@@ -1,40 +1,67 @@
 /**
- * Exclusive-stage portal iris SFX. Original short whooshes, precomputed at module load.
- * Do not synthesize on the click stack. OS mute + onboarding mute chip both zero gain.
+ * Exclusive-stage portal SFX. Original sci-fi entry and close, precomputed at module load.
+ * OPEN and CLOSE are different sounds. Do not synthesize on the click stack.
+ * OS mute + onboarding mute chip both zero gain. Not the Goldberg Aria gain.
  */
 
-export const ONBOARDING_PORTAL_MS = 620
+export const ONBOARDING_PORTAL_OPEN_MS = 1280
+export const ONBOARDING_PORTAL_CLOSE_MS = 1220
+/** Close wait before onboardingDone. Exclusive exit must not beat the collapse. */
+export const ONBOARDING_PORTAL_MS = ONBOARDING_PORTAL_CLOSE_MS
 export const ONBOARDING_PORTAL_SAMPLE_RATE = 22050
-export const ONBOARDING_PORTAL_OPEN_GAIN = 0.26
-export const ONBOARDING_PORTAL_CLOSE_GAIN = 0.2
+export const ONBOARDING_PORTAL_OPEN_GAIN = 0.16
+export const ONBOARDING_PORTAL_CLOSE_GAIN = 0.12
+export const ONBOARDING_PORTAL_OPEN_SECONDS = 1.28
+export const ONBOARDING_PORTAL_CLOSE_SECONDS = 1.22
 
-function whoosh(
-  seconds: number,
-  sampleRate: number,
-  startBright: number,
-  endBright: number,
-  amp: number
-): Float32Array {
+function tone(freq: number, t: number): number {
+  return Math.sin(2 * Math.PI * freq * t)
+}
+
+/** Slow rising sci-fi entry: clean shimmer + rising air-tone. Not noise, not a franchise sting. */
+function sciFiOpen(seconds: number, sampleRate: number): Float32Array {
   const n = Math.max(1, Math.floor(sampleRate * seconds))
   const out = new Float32Array(n)
-  let prev = 0
   for (let i = 0; i < n; i++) {
-    const t = i / (n - 1 || 1)
-    const env = Math.sin(Math.PI * t)
-    const fade =
-      t < 0.08 ? t / 0.08 : t > 0.82 ? (1 - t) / 0.18 : 1
-    const noise = Math.random() * 2 - 1
-    const bright = startBright + (endBright - startBright) * t
-    const hp = noise - prev * bright
-    prev = noise
-    out[i] = hp * env * fade * amp
+    const u = i / (n - 1 || 1)
+    const t = i / sampleRate
+    const attack = u < 0.32 ? 0.5 - 0.5 * Math.cos(Math.PI * (u / 0.32)) : 1
+    const release = u > 0.78 ? 0.5 + 0.5 * Math.cos(Math.PI * ((u - 0.78) / 0.22)) : 1
+    const env = attack * release
+    const rise = u * u
+    const air = 196 + 588 * rise
+    const fifth = 294 + 882 * rise
+    const shimmerHz = 3180 + 1640 * rise
+    const shimmer = tone(shimmerHz, t) * (0.18 + 0.14 * tone(5.5, t))
+    const body = tone(air, t) * 0.62 + tone(fifth, t) * 0.28 + shimmer * 0.22
+    out[i] = body * env * 0.55
   }
   return out
 }
 
-/** Built once at import. Open: brighter rising air. Close: darker, a bit longer. */
-export const PORTAL_OPEN_SAMPLES = whoosh(0.16, ONBOARDING_PORTAL_SAMPLE_RATE, 0.28, 0.72, 0.55)
-export const PORTAL_CLOSE_SAMPLES = whoosh(0.22, ONBOARDING_PORTAL_SAMPLE_RATE, 0.7, 0.22, 0.42)
+/** Darker descending close. Different harmonics and envelope than open. Not a reverse whoosh. */
+function sciFiClose(seconds: number, sampleRate: number): Float32Array {
+  const n = Math.max(1, Math.floor(sampleRate * seconds))
+  const out = new Float32Array(n)
+  for (let i = 0; i < n; i++) {
+    const u = i / (n - 1 || 1)
+    const t = i / sampleRate
+    const attack = u < 0.08 ? u / 0.08 : 1
+    const fall = u > 0.18 ? 0.5 + 0.5 * Math.cos(Math.PI * ((u - 0.18) / 0.82)) : 1
+    const env = attack * fall
+    const drop = u * u * (3 - 2 * u)
+    const low = 440 - 348 * drop
+    const sub = 110 - 68 * drop
+    const gate = tone(1680 - 980 * drop, t) * Math.exp(-u * 5.2) * 0.16
+    const body = tone(low, t) * 0.58 + tone(sub, t) * 0.34 + gate
+    out[i] = body * env * 0.5
+  }
+  return out
+}
+
+/** Built once at import. */
+export const PORTAL_OPEN_SAMPLES = sciFiOpen(ONBOARDING_PORTAL_OPEN_SECONDS, ONBOARDING_PORTAL_SAMPLE_RATE)
+export const PORTAL_CLOSE_SAMPLES = sciFiClose(ONBOARDING_PORTAL_CLOSE_SECONDS, ONBOARDING_PORTAL_SAMPLE_RATE)
 
 function playPrecomputed(samples: Float32Array, gain: number, muted: boolean): void {
   if (muted || typeof AudioContext === 'undefined') return
@@ -70,11 +97,11 @@ export function requestOnboardingPortalClose(): void {
 }
 
 export function onboardingPortalWaitMs(reducedMotion: boolean): number {
-  return reducedMotion ? 0 : ONBOARDING_PORTAL_MS
+  return reducedMotion ? 0 : ONBOARDING_PORTAL_CLOSE_MS
 }
 
 /**
- * Close iris + whoosh, then resolve. Call this BEFORE patching onboardingDone
+ * Close pill + sci-fi close tone, then resolve. Call this BEFORE patching onboardingDone
  * so exclusive exit cannot beat the animation.
  */
 export async function closeOnboardingPortal(muted: boolean, reducedMotion: boolean): Promise<void> {

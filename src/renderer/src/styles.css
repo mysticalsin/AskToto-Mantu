@@ -713,28 +713,65 @@ input::placeholder {
     radial-gradient(1200px 700px at 18% 12%, color-mix(in srgb, #9a2bf0 42%, transparent), transparent 58%),
     radial-gradient(900px 600px at 88% 78%, color-mix(in srgb, #7f00da 36%, transparent), transparent 55%),
     linear-gradient(165deg, #3a0b6b 0%, #7f00da 42%, #2a0848 100%);
-  clip-path: circle(8% at 50% 0%);
-  animation: onboard-portal-open 620ms ease-out forwards;
-  will-change: clip-path;
+  -webkit-mask-image: radial-gradient(closest-side, rgb(0, 0, 0) 62%, rgba(0, 0, 0, 0.4) 82%, transparent 100%);
+  mask-image: radial-gradient(closest-side, rgb(0, 0, 0) 62%, rgba(0, 0, 0, 0.4) 82%, transparent 100%);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: top center;
+  mask-position: top center;
+  -webkit-mask-size: 120px 36px;
+  mask-size: 120px 36px;
+  animation: onboard-portal-open 1280ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  will-change: mask-size, -webkit-mask-size;
 }
 @keyframes onboard-portal-open {
   from {
-    clip-path: circle(8% at 50% 0%);
+    -webkit-mask-size: 120px 36px;
+    mask-size: 120px 36px;
   }
   to {
-    clip-path: circle(160% at 50% 0%);
+    -webkit-mask-size: 280vmax 180vmax;
+    mask-size: 280vmax 180vmax;
   }
 }
 @keyframes onboard-portal-close {
   from {
-    clip-path: circle(160% at 50% 0%);
+    -webkit-mask-size: 280vmax 180vmax;
+    mask-size: 280vmax 180vmax;
   }
   to {
-    clip-path: circle(6% at 50% 0%);
+    -webkit-mask-size: 120px 36px;
+    mask-size: 120px 36px;
   }
 }
 .onboard-stage--portal-close {
-  animation: onboard-portal-close 620ms ease-in forwards;
+  animation: onboard-portal-close 1220ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+.onboard-portal-content {
+  animation: onboard-portal-content-in 1280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes onboard-portal-content-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.onboard-stage--portal-close .onboard-portal-content {
+  animation: onboard-portal-content-out 1220ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+@keyframes onboard-portal-content-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px);
+  }
 }
 
 /* Living stripe wash — compositor-only rotate. No filter:blur orbs. */
@@ -795,7 +832,14 @@ input::placeholder {
   .onboard-stage,
   .onboard-stage--portal-close {
     animation: none;
-    clip-path: none;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  .onboard-portal-content,
+  .onboard-stage--portal-close .onboard-portal-content {
+    animation: none;
+    opacity: 1;
+    transform: none;
   }
   .onboard-stripes,
   .onboard-stripes--b {
@@ -881,17 +925,19 @@ input::placeholder {
 }
 /* Hero Skip: quieter than Get Started. Never a raw text link. */
 .onboard-skip-chip {
-  min-height: 34px;
-  padding: 0 14px;
-  font-size: 11.5px;
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 11px;
   font-weight: 500;
-  color: rgba(244, 244, 245, 0.68);
+  letter-spacing: 0.01em;
+  color: rgba(244, 244, 245, 0.58);
 }
 .onboard-skip-chip:hover {
-  color: rgba(244, 244, 245, 0.88);
+  color: rgba(244, 244, 245, 0.82);
 }
 .onboard-skip-screen {
-  width: min(100%, 480px);
+  width: min(100%, 460px);
+  gap: 28px;
 }
 
 /* Act 4: tell-the-room consent moment. One glass card, not a banner. */
@@ -901,23 +947,24 @@ input::placeholder {
   max-width: 440px;
   flex-direction: column;
   align-items: stretch;
-  gap: 12px;
-  padding: 22px 22px 18px;
+  gap: 14px;
+  padding: 26px 24px 20px;
   border: none;
-  border-radius: 18px;
+  border-radius: 20px;
   text-align: left;
 }
 .onboard-tell-card h3 {
   margin: 0;
-  font-size: 18px;
+  font-size: 22px;
   font-weight: 600;
+  letter-spacing: -0.02em;
   color: #f4f4f5;
 }
 .onboard-tell-card p {
   margin: 0;
-  font-size: 13px;
-  line-height: 1.45;
-  color: rgba(244, 244, 245, 0.82);
+  font-size: 14px;
+  line-height: 1.5;
+  color: rgba(244, 244, 245, 0.78);
 }
 .onboard-tell-quote {
   margin: 0;
@@ -933,6 +980,12 @@ input::placeholder {
 .onboard-tell-quote--echo {
   max-width: 380px;
   text-align: center;
+}
+.onboard-ready-screen {
+  gap: 28px;
+}
+.onboard-ready-screen h2 {
+  letter-spacing: -0.02em;
 }
 .onboard-tell-why {
   font-size: 12px;

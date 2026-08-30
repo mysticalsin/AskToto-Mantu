@@ -608,7 +608,7 @@ function ActReady({
   }
 
   return (
-    <div key="ready" className="scene-enter flex flex-col items-center gap-6">
+    <div key="ready" className="scene-enter onboard-ready-screen flex flex-col items-center">
       <div className="ready-mark-wrap" aria-hidden="true">
         {READY_SPARKS.map((s, i) => (
           <span
@@ -1202,7 +1202,7 @@ export function OnboardingExperience({
       )}
 
       {scene === 'skip' && (
-        <div key="skip" className="scene-enter onboard-skip-screen flex flex-col items-center gap-6">
+        <div key="skip" className="scene-enter onboard-skip-screen flex flex-col items-center">
           <div className="hero-mark" aria-hidden="true">
             <MetisMark size={72} />
           </div>

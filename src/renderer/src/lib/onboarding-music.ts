@@ -11,7 +11,7 @@ export const ONBOARDING_MUSIC_SRC = new URL(
   `../assets/music/${ONBOARDING_MUSIC_FILE}`,
   import.meta.url
 ).href
-export const ONBOARDING_MUSIC_GAIN = 0.4
+export const ONBOARDING_MUSIC_GAIN = 0.3
 export const ONBOARDING_MUSIC_FADE_SECONDS = 2.4
 
 /** Mute is silence. Reduced-motion is not a parameter — it must not duck or mute the piano. */
