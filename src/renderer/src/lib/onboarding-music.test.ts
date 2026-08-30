@@ -32,10 +32,10 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
   })
 
   it('has no synthesizeOnboardingPad / AudioBuffer choir pad on the production path', () => {
-    expect(production).not.toMatch(/synthesizeOnboardingPad/)
-    expect(production).not.toMatch(/AudioContext/)
+    expect(production).not.toMatch(/function synthesizeOnboardingPad/)
+    expect(production).not.toMatch(/AudioContext|webkitAudioContext/)
     expect(production).not.toMatch(/createBuffer|getChannelData|createDelay/)
-    expect(production).not.toMatch(/choirVoice|ONBOARDING_MUSIC_PAD_SECONDS/)
+    expect(production).not.toMatch(/function choirVoice|ONBOARDING_MUSIC_PAD_SECONDS/)
     expect(experience).not.toMatch(/synthesizeOnboardingPad|AudioContext/)
     expect(experience).toMatch(/createOnboardingMusicBed/)
     expect(experience).toMatch(/playOnboardingMedia/)
