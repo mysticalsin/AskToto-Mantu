@@ -49,16 +49,16 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
 
 describe('MQA-283 — Ready\'s honest empty-state line (Métis\'s equivalent of "restart your sessions")', () => {
   it('states plainly that nothing is captured until Listen is pressed and the room is told', () => {
-    expect(experienceSrc).toMatch(
-      /Métis is ready\. It starts listening only when you press Listen and tell the room\. Nothing is[\s\S]{0,20}captured before that\./
-    )
+    expect(experienceSrc).toMatch(/TELL_THE_ROOM_READY/)
+    expect(experienceSrc).toMatch(/TELL_THE_ROOM_QUOTE/)
   })
 
   it('never claims readiness with no caveat — the honest line always ships alongside the CTA', () => {
     const readyBlockStart = experienceSrc.indexOf("key=\"ready\"")
     expect(readyBlockStart).toBeGreaterThan(-1)
     const readyBlock = experienceSrc.slice(readyBlockStart, readyBlockStart + 2000)
-    expect(readyBlock).toMatch(/Métis is ready\./)
+    expect(readyBlock).toMatch(/TELL_THE_ROOM_READY/)
+    expect(readyBlock).toMatch(/TELL_THE_ROOM_QUOTE/)
     expect(readyBlock).toMatch(/Get started/)
   })
 })

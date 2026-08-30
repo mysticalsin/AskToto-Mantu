@@ -48,6 +48,14 @@ Onboarding music: a bundled, hardware-decoded `<audio>` of J.S. Bach, Goldberg V
 
 User-facing onboarding copy never uses an em dash (U+2014). Use a comma, period, colon, or parentheses.
 
+**Tell the room.** After the Act 4 mode cards, before Continue, on the personalize scene: one `.onboard-glass` card (backdrop-filter ≤ 12px). Not a seventh act, not a red legal banner, not a TOS, not a GDPR logo. Title, two short sentences, a spoken sample as a quote chip, then the required `recordingConsent` checkbox (CMO-QA #1). Continue stays disabled until checked. Quiet echo on Act 6 Ready (keep the Listen line; add the sample quote under it). Skip-the-tour still hits the legacy slide 1 consent gate. Do not move the gate off personalize. Do not add a second checkbox. Pin this copy:
+
+- Title: Tell the room
+- Lead: Métis captures the meeting so you can keep quality high and actually get things done. People on the call deserve to hear that first.
+- Sample quote: I'm using Métis to capture this for notes, follow-ups, and quality.
+- Why: Saying it out loud is how we stay transparent and aligned with GDPR.
+- Checkbox: I'll tell everyone on the call before I record.
+
 Act 3 shows on-device model **download/install progress** (weights already fetch via `ensureLocalModel` on app open). Never copy "not installed" as a dead state. If RAM-gated, say so honestly.
 
 ## Summaries
