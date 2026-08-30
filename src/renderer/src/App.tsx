@@ -580,6 +580,17 @@ export function App(): JSX.Element {
   const revealOverlay = useCallback(() => dispatchAutoHide({ type: 'pointer-enter' }), [])
   const onOverlayPointerEnter = useCallback(() => dispatchAutoHide({ type: 'pointer-enter' }), [])
   const onOverlayPointerLeave = useCallback(() => dispatchAutoHide({ type: 'pointer-leave' }), [])
+  // Main-process cursor watch: macOS menu bar / Dynamic Island often skips renderer mouseenter.
+  useEffect(() => {
+    return window.toto.onOverlayCursorHover?.((d) => {
+      if (d.hovering) {
+        dispatchAutoHide({ type: 'pointer-enter' })
+        dispatchAutoHide({ type: 'dwell-elapsed' })
+      } else {
+        dispatchAutoHide({ type: 'pointer-leave' })
+      }
+    })
+  }, [])
 
   // Idempotence latch for endReview() re-entry — see endReview's own comment for the exact hazard it
   // guards against. Cleared at the start of every fresh session (startListen) so a later stop can fire.

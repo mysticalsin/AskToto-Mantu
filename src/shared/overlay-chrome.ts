@@ -40,7 +40,7 @@ export function overlayRestsHidden(layout: OverlayLayout): boolean {
   return layout === 'hide'
 }
 
-/** Hide and island park at islandSafeTop (path A then C). Bar uses workArea + margin. */
+/** Hide and island park at the display top (`bounds.y`) so island hover hits. Bar uses workArea + margin. */
 export function overlayUsesSafeTop(layout: OverlayLayout): boolean {
   return layout === 'hide' || layout === 'island'
 }

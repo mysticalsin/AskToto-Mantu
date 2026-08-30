@@ -15,7 +15,7 @@
  */
 
 import type { OverlayLayout } from '@shared/overlay-chrome'
-import { overlayUsesSafeTop } from '@shared/overlay-chrome'
+import { overlayUsesHover } from '@shared/overlay-chrome'
 
 export type { OverlayLayout }
 
@@ -144,13 +144,24 @@ export function refitToDisplay(
  */
 export const ISLAND_NOTCH_STRUT_PX = 37
 
+/** Hide-until-hover hit pad — CSS `.overlay-hide-target` fills the parked window (100%).
+ *  Wide top-middle strip (not a 120px pill). Opaque to hit-testing. Do not hug-width this. */
+export const OVERLAY_HIDE_TARGET = { width: 560, height: 28 } as const
+/** Always-visible island peek — keep in lockstep with `.overlay-peek` in styles.css. */
+export const OVERLAY_ISLAND_PEEK = { width: 132, height: 15 } as const
+/** Matches the windowResize hug-width pad so the island capsule is not clipped. */
+export const OVERLAY_PEEK_WIDTH_PAD = 10
+export const OVERLAY_PEEK_HEIGHT_PAD = 4
+/** Classic idle bar — used only when chrome is `bar`. */
+export const OVERLAY_BAR_REST = { width: 880, height: 84 } as const
+
 /**
- * Safe Y for the island peek and the revealed bar (same top edge so hover expands DOWN).
+ * First unobstructed row under the notch / menu bar (bar chrome, exclusive-stage docs).
  *
- * Path A: `workArea.y` when Electron reports a top inset — first unobstructed row under the
- * notch / menu bar. Live Mac: `bounds.y = 0` sits *in* the hardware island and clips the capsule.
- * Path C: if `workArea.y` is 0 (or equal to `bounds.y`) on a notched display, apply a strut so
- * the capsule still clears the notch.
+ * Path A: `workArea.y` when Electron reports a top inset.
+ * Path C: if `workArea.y` is 0 on a notched display, apply a strut so content that must
+ * clear the notch still has a row. Hide/island hover rest does NOT use this — they park
+ * at `hoverRestTop` (`bounds.y`) so the hardware island / top-center strip can hit them.
  */
 export function islandSafeTop(m: DisplayMetrics): number {
   const reserved = m.workArea.y - m.bounds.y
@@ -159,13 +170,55 @@ export function islandSafeTop(m: DisplayMetrics): number {
   return m.workArea.y
 }
 
+/** Physical top of the display — hide/island rest and the revealed bar share this Y. */
+export function hoverRestTop(m: DisplayMetrics): number {
+  return m.bounds.y
+}
+
 /**
- * Hide and island park at `islandSafeTop` (path A / C). Bar chrome keeps `workArea.y + topMargin`.
- * Non-notch hide/island with a flush work area keeps the small `topMargin` gap (unchanged).
- * Windows: `hasNotch` is false, so this never applies a notch strut.
+ * Height of the hide/island hover strip. Covers the menu-bar / notch inset
+ * (`workArea.y - bounds.y` or `menuBarHeight`, ~37-44). Path C (flush work area on a
+ * notch Mac) still uses the strut so the hit rect covers the island. Windows has no
+ * fake notch: only a real top inset, else the stealth pad height.
+ */
+export function hoverRestHeight(m: DisplayMetrics): number {
+  const inset = Math.max(0, m.workArea.y - m.bounds.y, m.menuBarHeight || 0)
+  if (inset > 0) return Math.max(inset, OVERLAY_HIDE_TARGET.height)
+  if (m.hasNotch) return Math.max(m.menuBarHeight || 0, ISLAND_NOTCH_STRUT_PX, OVERLAY_HIDE_TARGET.height)
+  return OVERLAY_HIDE_TARGET.height
+}
+
+/** Hide pad width: at least the notch (min 220), cap 560. */
+export function hoverRestWidth(m: DisplayMetrics): number {
+  return Math.min(OVERLAY_HIDE_TARGET.width, Math.max(220, m.notchWidth || 0, OVERLAY_HIDE_TARGET.width))
+}
+
+/**
+ * Logical rest rect the cursor watch hit-tests. Hide parks the window here. Island keeps a
+ * smaller visible peek at the same Y; the watch rect is still the top-center strip so
+ * hovering the hardware island (wider than the 132px capsule) still reveals.
+ */
+export function hoverWatchRestRect(_layout: OverlayLayout, m: DisplayMetrics): Rect {
+  const height = hoverRestHeight(m)
+  // Same top-center strip for hide and island watch — the visible island peek is narrower,
+  // but hovering the hardware island / notch must still hit.
+  const width = hoverRestWidth(m)
+  const x = clampAxis(
+    Math.round(m.workArea.x + (m.workArea.width - width) / 2),
+    width,
+    m.workArea.x,
+    m.workArea.width
+  )
+  return { x, y: hoverRestTop(m), width, height }
+}
+
+/**
+ * Hide and island park at `hoverRestTop` (`bounds.y`) so the Mac Dynamic Island / top-center
+ * strip intersects the window. Revealed bar uses the same Y and expands down. Bar chrome
+ * keeps `workArea.y + topMargin`. Windows: top of the display, no fake notch strut.
  */
 export function topClamp(layout: OverlayLayout, m: DisplayMetrics, topMargin: number): number {
-  if (overlayUsesSafeTop(layout) && (m.hasNotch || m.workArea.y > m.bounds.y)) return islandSafeTop(m)
+  if (overlayUsesHover(layout)) return hoverRestTop(m)
   return m.workArea.y + topMargin
 }
 
@@ -199,7 +252,8 @@ export function slideWithinMargin(anchorY: number, height: number, workArea: Rec
 /**
  * Exclusive onboarding stage: cover the display. Width/height are never smaller than the work
  * area (Tony live fail: 880×816 card at Y=39). `bounds.y = 0` is correct HERE — the stage owns
- * the display. The island y=0 ban applies only after `onboardingDone`.
+ * the display. After `onboardingDone`, hide/island also rest at `bounds.y` (the notch strip)
+ * so the hardware island can hit them — never as an 880×816 card.
  */
 export function exclusiveOnboardingBounds(bounds: Rect, workArea: Rect): Rect {
   return {
@@ -215,26 +269,18 @@ export function onboardingFitsWorkArea(win: Rect, workArea: Rect): boolean {
   return win.width >= workArea.width && win.height >= workArea.height
 }
 
-/** Hide-until-hover hit pad — keep in lockstep with `.overlay-hide-target` in styles.css.
- *  Wide top-middle strip (not a 120px pill). Opaque to hit-testing. Do not hug-width this. */
-export const OVERLAY_HIDE_TARGET = { width: 560, height: 28 } as const
-/** Always-visible island peek — keep in lockstep with `.overlay-peek` in styles.css. */
-export const OVERLAY_ISLAND_PEEK = { width: 132, height: 15 } as const
-/** Matches the windowResize hug-width pad so the island capsule is not clipped. */
-export const OVERLAY_PEEK_WIDTH_PAD = 10
-export const OVERLAY_PEEK_HEIGHT_PAD = 4
-/** Classic idle bar — used only when chrome is `bar`. */
-export const OVERLAY_BAR_REST = { width: 880, height: 84 } as const
-
 /** Tony live fail after onboardingDone on 58f6972: 880×816 layer-0 card at Y=39. */
 export function isForbiddenMidFlowCard(win: Pick<Rect, 'width' | 'height'>): boolean {
   return win.width === OVERLAY_BAR_REST.width && win.height >= 700
 }
 
-/** Rest size after exclusive exit / createWindow. Hide is the wide pad (no hug). Island hugs the peek. */
-export function overlayRestSize(layout: OverlayLayout): { width: number; height: number } {
+/** Rest size after exclusive exit / createWindow. Hide is the hover strip (metrics when known). Island hugs the peek. */
+export function overlayRestSize(layout: OverlayLayout, m?: DisplayMetrics): { width: number; height: number } {
   if (layout === 'bar') return { width: OVERLAY_BAR_REST.width, height: OVERLAY_BAR_REST.height }
-  if (layout === 'hide') return { width: OVERLAY_HIDE_TARGET.width, height: OVERLAY_HIDE_TARGET.height }
+  if (layout === 'hide') {
+    if (!m) return { width: OVERLAY_HIDE_TARGET.width, height: OVERLAY_HIDE_TARGET.height }
+    return { width: hoverRestWidth(m), height: hoverRestHeight(m) }
+  }
   return {
     width: OVERLAY_ISLAND_PEEK.width + OVERLAY_PEEK_WIDTH_PAD,
     height: OVERLAY_ISLAND_PEEK.height + OVERLAY_PEEK_HEIGHT_PAD
@@ -242,15 +288,17 @@ export function overlayRestSize(layout: OverlayLayout): { width: number; height:
 }
 
 /**
- * Park the overlay after exclusive onboarding ends. Width/height are peek or hide-target
- * (or the classic bar). Y is islandSafeTop (path A / C). Never 880×816.
+ * Park the overlay after exclusive onboarding ends. Hide is the notch-strip rest rect
+ * (`bounds.y`, strip height). Island is the peek at the same Y. Bar is classic rest
+ * at `workArea.y + margin`. Never 880×816.
  */
 export function parkAfterExclusiveOnboarding(
   layout: OverlayLayout,
   m: DisplayMetrics,
   topMargin: number
 ): Rect {
-  const size = overlayRestSize(layout)
+  if (layout === 'hide') return hoverWatchRestRect('hide', m)
+  const size = overlayRestSize(layout, m)
   const { x, y } = topCenterPosition(size.width, layout, m, topMargin)
   return { x, y, width: size.width, height: size.height }
 }
