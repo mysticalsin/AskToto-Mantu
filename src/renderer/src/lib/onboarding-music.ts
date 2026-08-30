@@ -68,7 +68,8 @@ export function createOnboardingMusicBed(): OnboardingMusicBed {
     if (started && source) return
     const samples = synthesizeOnboardingPad(ctx.sampleRate, 12)
     const buffer = ctx.createBuffer(1, samples.length, ctx.sampleRate)
-    buffer.copyToChannel(samples, 0)
+    // getChannelData().set() accepts ArrayBufferLike; copyToChannel() is Float32Array<ArrayBuffer> only.
+    buffer.getChannelData(0).set(samples)
     master = ctx.createGain()
     master.gain.value = onboardingMusicGain(muted, reduced)
     source = ctx.createBufferSource()

@@ -32,6 +32,8 @@ describe('onboarding music — original bed, mute, reduced-motion duck', () => {
     expect(src).toMatch(/AudioContext/)
     expect(src).toMatch(/setMuted/)
     expect(src).toMatch(/ctx\.destination/)
+    expect(src).toMatch(/getChannelData\(0\)\.set\(samples\)/)
+    expect(src).not.toMatch(/copyToChannel/)
     expect(src).not.toMatch(/beethoven|mozart|bach|mp3|wav|spotify|youtube|itunes/i)
     expect(src).not.toMatch(/fetch\(|window\.toto|playCue\('send'\)/)
   })
