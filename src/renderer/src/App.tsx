@@ -26,6 +26,7 @@ import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from '.
 import { useWindowDrag } from './lib/window-drag'
 import {
   AUTO_HIDE_GRACE_MS,
+  REVEAL_DWELL_MS,
   initialAutoHideState,
   isRevealed as isOverlayRevealed,
   reduceAutoHide
@@ -545,6 +546,15 @@ export function App(): JSX.Element {
     const t = setTimeout(() => dispatchAutoHide({ type: 'grace-elapsed' }), AUTO_HIDE_GRACE_MS)
     return () => clearTimeout(t)
   }, [autoHide.graceArmed])
+  // Reveal dwell (MQA-275): a pointer-enter on the still-collapsed peek strip only *arms* `hoverPending`;
+  // it doesn't reveal until this timer commits it. A pointer merely crossing the top edge (moving to
+  // another app, a menu-bar click) leaves before the dwell elapses, so the cleanup here cancels it and the
+  // bar never flashes open. Mirrors the grace-timer effect above, just for the opposite edge.
+  useEffect(() => {
+    if (!autoHide.hoverPending) return
+    const t = setTimeout(() => dispatchAutoHide({ type: 'dwell-elapsed' }), REVEAL_DWELL_MS)
+    return () => clearTimeout(t)
+  }, [autoHide.hoverPending])
   // Pin the overlay to the top-center of its display when auto-hide first becomes active (the clean
   // default position). Fires only on the off→on transition — not on every peek — so a later deliberate
   // drag is respected. anchorTop is a pure setBounds in main; it never shows/focuses the window.
