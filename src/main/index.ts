@@ -47,6 +47,7 @@ import {
   type McpConnection,
   type McpConnectionKind,
   LicenseActivatePayloadSchema,
+  LicenseConfigPayloadSchema,
   SetDealOutcomePayloadSchema,
   EntityRenamePayloadSchema,
   EntityMergePayloadSchema,
@@ -337,7 +338,7 @@ import { isInsideResourceBase, realResourceBase } from './asr-model-path'
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli, checkCliSession } from './cli'
 import { connectMcp, pushToMcp } from './mcp/mcpClient'
 import { pushQueue, type OutboundAction, type OutboundActionKind } from './mcp/pushQueue'
-import { activateLicense, checkLicenseGrace, heartbeat } from './license'
+import { activateLicense, checkLicenseGrace, fetchLicenseConfig, heartbeat, licenseDisplayStatus, noteQualifyingUse } from './license'
 import {
   setMcpApiKey,
   getMcpApiKey,
@@ -2638,7 +2639,19 @@ function registerIpc(): void {
     // write it. Without this strip, any renderer code could self-issue an unlimited license with a
     // plain settings patch ({licenseValid:true, licenseSeatCap:999999}) and defeat the gate once it's
     // wired. licenseServerUrl + licenseGateEnabled stay writable — those are genuine user inputs.
-    for (const k of ['licenseKey', 'licenseCompanyName', 'licenseSeatCap', 'licenseExpiresAt', 'licenseValid', 'licenseLastValidatedAt']) {
+    // licenseLease (MQA-282) and trialStartedAt (MQA-281) are the same class of field: only
+    // activateLicense/heartbeat may set the former, only noteQualifyingUse the latter — a renderer patch
+    // must not be able to self-issue a signed-looking lease string or grant itself a fresh trial.
+    for (const k of [
+      'licenseKey',
+      'licenseCompanyName',
+      'licenseSeatCap',
+      'licenseExpiresAt',
+      'licenseValid',
+      'licenseLastValidatedAt',
+      'licenseLease',
+      'trialStartedAt'
+    ]) {
       if (k in p) delete (p as Record<string, unknown>)[k]
     }
     // MCP connection STATE is main-owned for the same reason. IPC.mcpPush deliberately reads the endpoint
@@ -2833,10 +2846,16 @@ function registerIpc(): void {
         licenseExpiresAt: null,
         licenseValid: false,
         licenseLastValidatedAt: 0,
-        licenseGateEnabled: false
+        licenseGateEnabled: false,
+        leaseExpiresAt: null,
+        trialActive: false,
+        trialDaysRemaining: 0
       }
     }
     const s = getSettings()
+    // Act 5 (MQA-281/282): lease/trial status is live-verified (licenseDisplayStatus), not a raw
+    // settings echo — a tampered/expired licenseLease string must never read back as "active".
+    const display = licenseDisplayStatus()
     return {
       licenseServerUrl: s.licenseServerUrl,
       licenseCompanyName: s.licenseCompanyName,
@@ -2844,7 +2863,10 @@ function registerIpc(): void {
       licenseExpiresAt: s.licenseExpiresAt,
       licenseValid: s.licenseValid,
       licenseLastValidatedAt: s.licenseLastValidatedAt,
-      licenseGateEnabled: s.licenseGateEnabled
+      licenseGateEnabled: s.licenseGateEnabled,
+      leaseExpiresAt: display.leaseExpiresAt,
+      trialActive: display.trialActive,
+      trialDaysRemaining: display.trialDaysRemaining
     }
   })
   // Startup-gate verdict for App.tsx's <LicenseGate/>. Deliberately NOT behind requireAuth(): this is
@@ -2855,6 +2877,15 @@ function registerIpc(): void {
     assertMainWindow(e)
     const verdict = checkLicenseGrace()
     return { gateEnabled: getSettings().licenseGateEnabled, ...verdict }
+  })
+  // Informational read of the server's declared license-gate intent (GET /license/config) — used by the
+  // onboarding ActLicense scene. No requireAuth(): reachable before sign-in, like licenseGate above, and
+  // the server route itself is unauthenticated (see license-server/lib/license-gate.mjs's header).
+  ipcMain.handle(IPC.licenseConfig, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    const parsed = LicenseConfigPayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
+    return fetchLicenseConfig(parsed.data.serverUrl)
   })
 
   // --- Provider API keys ---
@@ -4504,6 +4535,11 @@ function registerIpc(): void {
             // registration set up before either leg started (see the hedge dispatch below).
             if (race) streams.delete(req.id)
             win?.webContents.send(IPC.streamDone, { id: req.id, ...u })
+            // Act 5 trial hook (MQA-281): the ONE seam that fires on a real, successfully-delivered
+            // result (gotToken is guaranteed true above) — never on install/launch. Cheap no-op unless
+            // this is the very first qualifying (suggest/summary/recap) result this install has ever
+            // produced; the demo-tagged check is belt-and-suspenders (see noteQualifyingUse's header).
+            noteQualifyingUse(req.mode, req.prompt, req.transcript)
           },
           onError: (message) => {
             if (race && race.gate.isLoser(race.leg)) return
@@ -4649,6 +4685,7 @@ function registerIpc(): void {
                   `[ask] keeping ${paintedLen}-char answer despite trailing stream error: ${friendly}`
                 )
                 win?.webContents.send(IPC.streamDone, { id: req.id })
+                noteQualifyingUse(req.mode, req.prompt, req.transcript)
                 return
               }
               win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
