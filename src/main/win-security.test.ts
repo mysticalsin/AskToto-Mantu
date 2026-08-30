@@ -37,6 +37,11 @@ function setPlatform(p: NodeJS.Platform): void {
 }
 afterEach(() => Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true }))
 
+// The ACL verdict memo is a module singleton; clear it before every test so the probe-count assertions
+// in this file are order-independent (a prior test's still-valid memo would otherwise absorb the first
+// probe of the next test). Runs before each describe's own beforeEach.
+beforeEach(() => resetAclMemoForTests())
+
 // FileSystemRights: FullControl = 0x1F01FF, Modify = 0x301BF, ReadAndExecute = 0x1200A9, Write = 0x116.
 const FULL = 0x1f01ff
 const READ = 0x1200a9
