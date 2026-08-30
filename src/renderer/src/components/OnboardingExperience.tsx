@@ -23,8 +23,22 @@
  * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
  *   needs comes back through onDone.
  */
-import { useEffect, useRef, useState } from 'react'
-import { Check, Cloud, FolderLock, MessageSquare, Mic, MonitorUp, Sparkles, TrendingUp, UserSearch } from 'lucide-react'
+import { useEffect, useId, useRef, useState } from 'react'
+import {
+  AlertCircle,
+  Check,
+  CircleCheck,
+  Cloud,
+  FolderLock,
+  KeyRound,
+  Loader2,
+  MessageSquare,
+  Mic,
+  MonitorUp,
+  Sparkles,
+  TrendingUp,
+  UserSearch
+} from 'lucide-react'
 import type { ConversationMode, PermissionStatus, ProfileRecoveryResult, PublicSettings } from '@shared/ipc'
 import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
@@ -65,7 +79,11 @@ const PROBLEM_STORY: string[] = [
   '…and the moment passes.'
 ]
 
-type Scene = 'hero' | 'problem' | 'reveal' | 'setup' | 'personalize'
+// 'license' (Act 5, MQA-281/282) is deliberately NOT in GUIDED_SCENES below — see ActProgress's
+// comment. It only ever appears between 'setup' and 'personalize', and only when
+// settings.licenseGateEnabled is true (the non-default, self-hosted-license-server case); every other
+// user's flow is byte-for-byte the four-scene one the MQA-201 regression test pins.
+type Scene = 'hero' | 'problem' | 'reveal' | 'setup' | 'license' | 'personalize'
 
 // Hero is the welcome beat, not a "step" — the dots only track the guided acts after it.
 const GUIDED_SCENES: Scene[] = ['problem', 'reveal', 'setup', 'personalize']
@@ -243,6 +261,162 @@ function MiniToggle({ on, onChange, label }: { on: boolean; onChange: (v: boolea
         }
       />
     </button>
+  )
+}
+
+/** Plain-language copy for every code the license server (or this client) can return. Duplicated from
+ *  Settings.tsx's / LicenseGate.tsx's licenseErrorMessage on purpose — same reasoning both of those give
+ *  for not importing one another: this scene has to keep working even if either of those chunks changes
+ *  shape, and the map is a handful of lines. */
+function licenseErrorMessage(code: string | undefined): string {
+  switch (code) {
+    case 'invalid':
+      return 'That license key was not recognized.'
+    case 'revoked':
+      return 'This license has been revoked.'
+    case 'expired':
+      return 'This license has expired.'
+    case 'seat_limit_reached':
+      return 'All seats on this license are in use.'
+    case 'network':
+      return 'Could not reach the license server. Check the server URL and your connection.'
+    default:
+      return code || 'Could not activate this license.'
+  }
+}
+
+/**
+ * Act 5 — License (MQA-281/282). Paste-key -> validate -> activate, in Métis's own voice — never a
+ * price or a checkout: the copy is deliberately "the key you were given", matching license-server's
+ * README ("no purchase, no price… keys are minted and handed out by an operator"). Rendered ONLY when
+ * the caller (OnboardingExperience below) has already decided `settings.licenseGateEnabled` is true;
+ * this component itself has no opinion on that, so it stays simple to reason about and to test.
+ *
+ * Never a dead end: Continue is ALWAYS enabled, activated or not. The real enforcement decision lives
+ * in main's checkLicenseGrace() (consulted at boot by App.tsx's <LicenseGate/>, gated on the separate
+ * LICENSE_ENFORCEMENT compile-time switch) — this scene's job is only to offer the paste-key flow at a
+ * natural point in the narrative, never to become a second, onboarding-only gate that could strand a
+ * trial user who has done nothing wrong.
+ */
+function ActLicense({
+  settings,
+  onContinue
+}: {
+  settings?: PublicSettings
+  onContinue: () => void
+}): JSX.Element {
+  const [serverUrl, setServerUrl] = useState(settings?.licenseServerUrl || '')
+  const [licenseKey, setLicenseKey] = useState('')
+  const [activating, setActivating] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [activated, setActivated] = useState(false)
+  const serverId = useId()
+  const keyId = useId()
+  const mountedRef = useRef(true)
+  useEffect(() => {
+    return () => {
+      mountedRef.current = false
+    }
+  }, [])
+
+  const activate = async (): Promise<void> => {
+    const url = serverUrl.trim()
+    const key = licenseKey.trim()
+    if (!url || !key) return
+    setActivating(true)
+    setError(null)
+    const r = await window.toto.licenseActivate({ serverUrl: url, licenseKey: key })
+    if (!mountedRef.current) return
+    setActivating(false)
+    if (r.ok) {
+      setLicenseKey('')
+      setActivated(true)
+    } else {
+      setError(licenseErrorMessage(r.error))
+    }
+  }
+
+  return (
+    <div key="license" className="scene-enter flex flex-col items-center gap-6">
+      <div className="flex flex-col items-center gap-1.5">
+        <p className="m-0 text-[11px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-ink-3)]">
+          One more thing
+        </p>
+        <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">Activate your license</h2>
+        <p className="m-0 max-w-[380px] text-[12.5px] leading-snug text-[color:var(--color-ink-2)]">
+          Your organization runs its own license server. Paste the key you were given — no key yet? You
+          can still continue on a trial and activate later from Settings.
+        </p>
+      </div>
+
+      <div className="flex w-full max-w-[360px] flex-col gap-2 text-left">
+        <label htmlFor={serverId} className="flex flex-col gap-1">
+          <span className="text-[11px] font-medium text-[color:var(--color-ink-3)]">License server URL</span>
+          <input
+            id={serverId}
+            value={serverUrl}
+            spellCheck={false}
+            autoComplete="off"
+            placeholder="https://license.your-company.com"
+            onChange={(e) => {
+              setServerUrl(e.target.value)
+              setError(null)
+              setActivated(false)
+            }}
+            className="no-drag focus-ring rounded-[10px] border border-white/10 bg-white/[0.04] px-3 py-2.5 text-[13px] text-[color:var(--color-ink)] placeholder:text-[color:var(--color-ink-3)]"
+          />
+        </label>
+        <label htmlFor={keyId} className="flex flex-col gap-1">
+          <span className="text-[11px] font-medium text-[color:var(--color-ink-3)]">License key</span>
+          <input
+            id={keyId}
+            type="password"
+            value={licenseKey}
+            spellCheck={false}
+            autoComplete="off"
+            placeholder="Paste the key you were given"
+            onChange={(e) => {
+              setLicenseKey(e.target.value)
+              setError(null)
+              setActivated(false)
+            }}
+            className="no-drag focus-ring rounded-[10px] border border-white/10 bg-white/[0.04] px-3 py-2.5 text-[13px] text-[color:var(--color-ink)] placeholder:text-[color:var(--color-ink-3)]"
+          />
+        </label>
+      </div>
+
+      {error && (
+        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--color-destructive,#ff8080)]">
+          <AlertCircle size={13} className="mt-px shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+      {!error && activated && (
+        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--color-accent-2)]">
+          <CircleCheck size={13} className="mt-px shrink-0" />
+          <span>Activated. You're all set.</span>
+        </div>
+      )}
+
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void activate()}
+          disabled={!serverUrl.trim() || !licenseKey.trim() || activating}
+          className="no-drag focus-ring flex items-center gap-1.5 rounded-full bg-[var(--color-accent)]/15 px-4 py-2 text-[12px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50"
+        >
+          {activating ? <Loader2 size={13} className="animate-spin" /> : <KeyRound size={13} />}
+          Activate
+        </button>
+        <button
+          type="button"
+          onClick={onContinue}
+          className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-6 text-[13px] font-semibold text-white hover:brightness-110"
+        >
+          Continue
+        </button>
+      </div>
+    </div>
   )
 }
 
@@ -584,7 +758,7 @@ export function OnboardingExperience({ onDone, onSkip, settings, patch }: Onboar
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setScene('personalize')}
+              onClick={() => setScene(settings?.licenseGateEnabled ? 'license' : 'personalize')}
               className={
                 'no-drag focus-ring h-10 rounded-full px-5 text-[13px] font-semibold ' +
                 (needsPerms
@@ -597,6 +771,12 @@ export function OnboardingExperience({ onDone, onSkip, settings, patch }: Onboar
           </div>
         </div>
       )}
+
+      {/* Act 5 (MQA-281/282) — skipped ENTIRELY when settings.licenseGateEnabled is false (the
+          default): the setup scene's Continue button above only ever routes here when that setting is
+          already true, so a normal user (licensing off) never sees this scene render, not even for a
+          frame. */}
+      {scene === 'license' && <ActLicense settings={settings} onContinue={() => setScene('personalize')} />}
 
       {scene === 'personalize' && (
         <div key="personalize" className="scene-enter flex flex-col items-center gap-6">
