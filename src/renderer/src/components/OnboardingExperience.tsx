@@ -5,11 +5,14 @@
  *
  * Deliberate constraints:
  * - No animation libraries — CSS transitions + staged `animation-delay` only, like the rest of the app.
- *   The one exception is Act 1's wordmark scramble (HeroWelcome below), which needs a per-frame text
- *   projection CSS cannot express — it's a small rAF loop over a pure helper in lib/scramble.ts, not a
- *   dependency.
+ *   The exceptions are Act 1's wordmark scramble (HeroWelcome below) and Act 2's synthetic cursor
+ *   (OnboardingDemoScene), both of which need a per-frame projection CSS cannot express — small rAF
+ *   loops over pure helpers in lib/scramble.ts and lib/synthetic-cursor.ts, not a dependency.
  * - Scene 4's checks are REAL (getPermissions / requestPermissionsUpfront / asrBundled) — a row only
  *   ever shows "ready" when it is actually true. Never fake the magic moment.
+ * - Act 2 (reveal) is the one deliberate exception to "never fake" — it drives Métis's REAL Bar/
+ *   Copilot/Answer/QuickActions components with a scripted fake meeting (MQA-277), guarded so fake data
+ *   can never persist and the demo can never see real data (MQA-278, @shared/demo-guard).
  * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
  *   needs comes back through onDone.
  */
@@ -20,6 +23,7 @@ import type { ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { MetisMark } from './MetisMark'
 import { Onboarding } from './Onboarding'
+import { OnboardingDemoScene } from './OnboardingDemoScene'
 import { isWindows } from '../lib/keys'
 import { useScrambleReveal } from '../lib/scramble'
 
@@ -28,8 +32,6 @@ export interface OnboardingExperienceProps {
   /** Optional escape hatch to the old flow while this one beds in. */
   onSkip?: () => void
 }
-
-const REVEAL: string[] = ['Grounded in your meeting, in your words.', 'On your device. Nothing uploaded.']
 
 /** Wave 5 — problem story (docs/ONBOARDING-EXPERIENCE.md Scene 2): staged lines, one at a time. */
 const PROBLEM_STORY: string[] = [
@@ -340,38 +342,14 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
       )}
 
       {scene === 'reveal' && (
-        <div key="reveal" className="scene-enter flex flex-col items-center gap-6">
-          <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">Here’s what that looks like.</h2>
-          {/* Representation of the live bar — a real transcript line, then the answer MATERIALIZES through
-              the glass (develop-in — the same blur-to-sharp idiom the real first-answer moment uses in
-              styles.css) after a beat, instead of appearing instantly. That beat is the whole point: it's
-              the one place in onboarding that should feel like it's actually thinking. */}
-          <div className="glass-strong fade-up w-full max-w-[520px] rounded-[16px] px-4 py-3 text-left">
-            <p className="m-0 text-[12px] text-[color:var(--color-ink-3)]">Example · THEM · just now</p>
-            <p className="m-0 mt-0.5 text-[13px] text-[color:var(--color-ink)]">“Can you recap where we left things last time?”</p>
-            <div className="develop-in mt-2 rounded-[10px] border border-white/10 bg-white/[0.04] px-3 py-2" style={{ animationDelay: '650ms', animationFillMode: 'backwards' }}>
-              <p className="m-0 text-[12px] leading-relaxed text-[color:var(--color-ink-2)]">
-                <Sparkles size={12} className="mr-1 inline text-[var(--color-accent-2)]" />
-                Three things were agreed last call: the revised timeline, the security review, and the intro to
-                their CTO. All three are done, so lead with that.
-              </p>
-            </div>
-          </div>
-          <div className="flex flex-col gap-1 text-[13px] text-[color:var(--color-ink-2)]">
-            {REVEAL.map((t, i) => (
-              <p key={t} className="fade-up m-0" style={{ animationDelay: `${900 + i * 240}ms`, animationFillMode: 'backwards' }}>
-                {t}
-              </p>
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={() => setScene('setup')}
-            className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-6 text-[13px] font-semibold text-white hover:brightness-110"
-          >
-            Set me up
-          </button>
-        </div>
+        <OnboardingDemoScene
+          onContinue={() => setScene('setup')}
+          // Skip-available-from-here (per the Act 2 brief): jumps straight to Personalize — unlike
+          // HeroWelcome's onSkip (which restarts the entire legacy flow from its own slide 1), this
+          // keeps everything already shown (Welcome, the problem story, the demo) and just gets the
+          // user to Start faster, bypassing the real permission checklist.
+          onSkipToEnd={() => setScene('personalize')}
+        />
       )}
 
       {scene === 'setup' && (
