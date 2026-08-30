@@ -527,30 +527,133 @@ input::placeholder {
   animation: scene-enter 420ms var(--ease-spring);
 }
 
-/* Onboarding hero — a slow breathing halo behind the Métis mark. Purple-only (no yellow, per brand),
-   restrained enough to read as "alive" rather than a loading spinner. */
-@keyframes mark-breathe {
-  0%,
+/* Act 1 (Welcome) hero — the Métis mark lands as a top-center "island" capsule (MQA-276). Three staged
+   beats, each its own keyframe so they can be tuned independently:
+     1. island-descend — the capsule drops in from above and settles, like the notch capsule reference
+        that inspired the FEEL of this moment (own timing/shape, not its assets or copy).
+     2. island-draw-sweep — a single comet sweeps the capsule's rim once, as if the outline is being
+        drawn on, using the same masked-conic-gradient + stepped-timing trick as `.rainbow-ring` /
+        `.aw-hidden-rainbow` above (cheap: ~24 repaints over the whole sweep, not one per frame), then
+        fades out — it never loops, so it costs nothing after the capsule has landed.
+     3. island-fill — the capsule's own background/border settle to a soft accent tint once the sweep
+        finishes, so there is a shape for the mark to sit inside before it fades in.
+   `--island-draw-angle` needs `@property` so the conic gradient's rotation is itself an interpolable,
+   compositable value (same reasoning as `--cl-rainbow-angle` above). */
+@keyframes island-descend {
+  0% {
+    opacity: 0;
+    transform: translateY(-22px) scale(0.62);
+  }
+  62% {
+    opacity: 1;
+    transform: translateY(2px) scale(1.04);
+  }
   100% {
-    opacity: 0.35;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 0.75;
-    transform: scale(1.12);
+    opacity: 1;
+    transform: translateY(0) scale(1);
   }
 }
-.mark-halo {
+@property --island-draw-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes island-draw-sweep {
+  from {
+    --island-draw-angle: 0deg;
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  to {
+    --island-draw-angle: 360deg;
+    opacity: 0;
+  }
+}
+@keyframes island-fill {
+  from {
+    background-color: transparent;
+    border-color: transparent;
+  }
+  to {
+    background-color: var(--color-accent-soft);
+    border-color: var(--color-hair-strong);
+  }
+}
+.island-capsule {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 76px;
+  height: 76px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  animation:
+    island-descend 560ms var(--ease-spring) both,
+    island-fill 360ms ease-out 440ms both;
 }
-.mark-halo::before {
+.island-capsule::before {
   content: '';
   position: absolute;
-  inset: -20px;
-  z-index: -1;
-  border-radius: 50%;
-  background: radial-gradient(circle, var(--color-accent-glow), transparent 70%);
-  animation: mark-breathe 3.2s ease-in-out infinite;
+  inset: -2px;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(from var(--island-draw-angle), transparent 0deg, var(--color-accent-2) 28deg, transparent 68deg);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: island-draw-sweep 620ms steps(30, end) 160ms both;
+}
+.island-capsule-mark {
+  display: inline-flex;
+  animation: fade-up 260ms var(--ease-spring) 560ms both;
+}
+/* Static end state for anyone whose OS asks for reduced motion — see the blanket
+   `prefers-reduced-motion` rule further down for why this needs an explicit override: that rule zeroes
+   animation-duration, and a 0ms animation driving an `@property`-typed custom value is not guaranteed by
+   spec to land on the keyframe's END value the way a plain opacity/transform animation reliably does. */
+@media (prefers-reduced-motion: reduce) {
+  .island-capsule {
+    animation: none;
+    opacity: 1;
+    transform: none;
+    background-color: var(--color-accent-soft);
+    border-color: var(--color-hair-strong);
+  }
+  .island-capsule::before {
+    animation: none;
+    opacity: 0;
+  }
+  .island-capsule-mark {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Act 1's wordmark — the one custom-face moment in this scene (Geist, already bundled/offline, the
+   app's one non-system face). Fixed min-height keeps the scramble from jittering the layout as glyph
+   widths change frame to frame while it resolves; everything else in the hero (tagline, byline, CTA)
+   stays on the system font stack per the "one custom face, rest system" brief. */
+.hero-wordmark {
+  font-weight: 650;
+  font-size: 30px;
+  letter-spacing: 0.01em;
+  color: var(--color-ink);
+  min-height: 1.2em;
+  line-height: 1.2em;
+}
+.hero-tagline,
+.hero-byline {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
 }
 
 /* "Develops like film" — the signature first-answer moment. When the streamed answer's first content
