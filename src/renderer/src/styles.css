@@ -949,15 +949,22 @@ input::placeholder {
 .onboard-act4::before {
   content: '';
   position: absolute;
-  inset: -48px -72px;
+  inset: -96px -80px 38%;
   z-index: 0;
   pointer-events: none;
   background: radial-gradient(
-    ellipse 72% 62% at 50% 42%,
-    rgba(255, 255, 255, 0.2),
-    rgba(214, 186, 255, 0.12) 44%,
-    transparent 74%
+    ellipse 88% 70% at 50% 12%,
+    rgba(255, 255, 255, 0.3),
+    rgba(214, 186, 255, 0.14) 40%,
+    transparent 72%
   );
+}
+/* Act 4 inherits the exclusive wash: drop the bottom-right 78% blob so the top stays the bright part. */
+.onboard-stage:has(.onboard-act4) {
+  background:
+    radial-gradient(1400px 820px at 50% 10%, color-mix(in srgb, #9a2bf0 46%, transparent), transparent 56%),
+    radial-gradient(1100px 640px at 18% 8%, color-mix(in srgb, #9a2bf0 34%, transparent), transparent 58%),
+    linear-gradient(165deg, #3a0b6b 0%, #7f00da 42%, #2a0848 100%);
 }
 .onboard-act4 > * {
   position: relative;

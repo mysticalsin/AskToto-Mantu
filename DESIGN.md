@@ -56,7 +56,7 @@ Onboarding music: a bundled, hardware-decoded `<audio>` of J.S. Bach, Goldberg V
 
 User-facing onboarding copy never uses an em dash (U+2014). Use a comma, period, colon, or parentheses.
 
-**Act 4 light.** Personalize (and Skip, which reuses the consent card) gets a local lighter veil behind the content (soft white/lavender). Do not bleach the exclusive purple stage. Headings and body stay high contrast. The "Last one" eyebrow is readable, not an ink-3 whisper. Mode tiles are quiet readable glass, not near-invisible `bg-white/[0.03]`.
+**Act 4 light.** Personalize (and Skip, which reuses the consent card) gets a local lighter veil behind the content (soft white/lavender). The bright mass sits at the **top** of the stage (heading), not the floor. Do not bleach the exclusive purple stage. Headings and body stay high contrast. The "Last one" eyebrow is readable, not an ink-3 whisper. Mode tiles are quiet readable glass, not near-invisible `bg-white/[0.03]`.
 
 **Tell the room.** After the Act 4 mode cards, before Continue, on the personalize scene: the **primary window**. Wider (~520–560), brighter glass (background white ~0.22, backdrop-filter ≤ 12px), generous padding. Title, spoken quote, why-line, and an ~18px checkbox must be readable at a glance. Mode picks recede. Not a seventh act, not a red legal banner, not a TOS, not a GDPR logo. The required `recordingConsent` checkbox (CMO-QA #1) still gates Continue. Quiet echo on Act 6 Ready (keep the Listen line; add the sample quote under it). Skip uses this same brighter card plus Get started (not legacy slides). Do not add a second checkbox. Pin this copy:
 
