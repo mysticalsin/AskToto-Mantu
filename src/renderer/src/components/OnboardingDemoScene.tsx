@@ -94,10 +94,10 @@ function useDemoElapsed(): number {
 
 function DemoRecapCard(): JSX.Element {
   return (
-    <div className="glass-strong scene-enter w-full max-w-[420px] rounded-[16px] px-4 py-3.5 text-left">
+    <div className="glass-strong scene-enter w-full max-w-[880px] rounded-[16px] px-4 py-3.5 text-left">
       <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
         <Sparkles size={11} className="text-[var(--color-accent-2)]" />
-        Recap · next steps
+        Mantu Intelligence
       </div>
       <p className="m-0 text-[14px] font-semibold text-[color:var(--color-ink)]">{DEMO_RECAP_HEADLINE}</p>
       <ul className="m-0 mt-2 flex flex-col gap-1.5 pl-0">
@@ -210,7 +210,7 @@ export function OnboardingDemoScene({
       <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">Here’s what that looks like.</h2>
 
       {!frame.meetingEnded ? (
-        <div ref={wrapRef} className="relative w-full max-w-[520px]">
+        <div ref={wrapRef} className="relative w-full max-w-[880px]">
           <Bar
             value=""
             onChange={() => {}}
@@ -264,7 +264,7 @@ export function OnboardingDemoScene({
       <button
         type="button"
         onClick={onContinue}
-        className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-6 text-[13px] font-semibold text-white hover:brightness-110"
+        className="onboard-cta no-drag focus-ring"
       >
         Set me up
       </button>

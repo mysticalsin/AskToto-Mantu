@@ -682,6 +682,37 @@ input::placeholder {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
 }
 
+/* Exclusive-stage primary CTAs — min 52×220, high contrast, hittable (DESIGN.md). */
+.onboard-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  min-width: 220px;
+  padding: 0 28px;
+  border: none;
+  border-radius: 999px;
+  background: #f4f4f5;
+  color: #09090b;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 16px rgba(244, 244, 245, 0.16);
+}
+.onboard-cta:hover:not(:disabled) {
+  filter: brightness(1.06);
+}
+.onboard-cta:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.onboard-cta--muted {
+  background: transparent;
+  color: var(--color-ink-2);
+  box-shadow: none;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
 /* Act 6 (Ready, MQA-283) — the narrative's closing ceremony. Tasteful, not a confetti cannon: one gleam
    sweep around the Métis mark (same conic-mask trick as Act 1's `.island-capsule::before` above, so the
    two bookend acts share a visual language) plus a handful of one-shot spark motes (positioned by

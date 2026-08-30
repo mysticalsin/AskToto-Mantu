@@ -70,6 +70,7 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
       // isDestroyed() -> true stops the handler before the reload, which needs a real BrowserWindow. The
       // reload itself is already pinned by c-main-fixes.contract.test.ts; this is about the reset above it.
       'const win = { webContents: { on: (evt, fn) => { if (evt === "render-process-gone") handler = fn } }, isDestroyed: () => true }',
+      'const onboardingExclusiveLive = () => false',
       ''
     ].join('\n')
     const driver = [
@@ -175,6 +176,7 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       'let userAnchorY = null',
       'const win = { getBounds: () => ({ ...current }), setBounds: (b) => { current = { ...current, ...b } } }',
       'const ensureWindow = () => win',
+      'const onboardingExclusiveLive = () => false',
       ''
     ].join('\n')
     const driver = ['', 'registerScreenListeners()', 'return { bounds: () => current, moveBy }'].join('\n')
@@ -251,6 +253,7 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       'const win = { getBounds: () => ({ ...current }), setBounds: (b) => { current = { ...current, ...b } } }',
       'const currentWidth = 880',
       `const lastBarHeight = ${TALL}`,
+      'const onboardingExclusiveLive = () => false',
       ''
     ].join('\n')
     const run = new Function('stubs', preamble + region + '\nsetWindowMode()\nreturn current') as (

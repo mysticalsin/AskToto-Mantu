@@ -14,6 +14,8 @@ import {
   topCenterPosition,
   topClamp,
   islandSafeTop,
+  exclusiveOnboardingBounds,
+  onboardingFitsWorkArea,
   ISLAND_NOTCH_STRUT_PX,
   type DisplayMetrics,
   type Rect
@@ -293,6 +295,7 @@ describe('DESIGN.md overlay contract', () => {
   it('names hover-down, exclusive fullscreen, large CTA, and Métis demo', () => {
     expect(design).toMatch(/expands \*\*down\*\*/)
     expect(design).toMatch(/exclusive fullscreen/)
+    expect(design).toMatch(/exclusiveOnboardingBounds/)
     expect(design).toMatch(/52×220|min 52/)
     expect(design).toMatch(/Métis/)
     expect(design).toMatch(/meeting \/ transcript \/ copilot \/ Intelligence/)
@@ -306,5 +309,72 @@ describe('island reveal/collapse wiring (index.ts)', () => {
     expect(index).toMatch(/revealedHeight = Math\.max\(b\.height, lastBarHeight, BAR_HEIGHT\)/)
     expect(index).toMatch(/const y = topClamp\('island', getDisplayMetrics\(display\), ISLAND_TOP_MARGIN\)/)
     expect(index).toMatch(/function resizeTo/)
+  })
+})
+
+describe('exclusive onboarding stage (never a mid-flow card)', () => {
+  // Tony live fail (Totos-Mac, 64c3967): Electron Métis Y=39 Width=880 Height=816 X=460.
+  const tonyCard: Rect = { x: 460, y: 39, width: 880, height: 816 }
+  const macbookBounds: Rect = { x: 0, y: 0, width: 1512, height: 982 }
+  const macbookWorkArea: Rect = { x: 0, y: 39, width: 1512, height: 943 }
+
+  it('exclusiveOnboardingBounds covers the display and is never smaller than the work area', () => {
+    const stage = exclusiveOnboardingBounds(macbookBounds, macbookWorkArea)
+    expect(stage.x).toBe(macbookBounds.x)
+    expect(stage.y).toBe(macbookBounds.y)
+    expect(stage.width).toBeGreaterThanOrEqual(macbookWorkArea.width)
+    expect(stage.height).toBeGreaterThanOrEqual(macbookWorkArea.height)
+    expect(onboardingFitsWorkArea(stage, macbookWorkArea)).toBe(true)
+  })
+
+  it('the 880×816 overlapping card fails the wiped-profile acceptance', () => {
+    expect(onboardingFitsWorkArea(tonyCard, macbookWorkArea)).toBe(false)
+  })
+
+  it('a work-area-sized window passes; a smaller mid-flow window does not', () => {
+    expect(onboardingFitsWorkArea(macbookWorkArea, macbookWorkArea)).toBe(true)
+    expect(onboardingFitsWorkArea({ x: 0, y: 0, width: 1511, height: 943 }, macbookWorkArea)).toBe(false)
+  })
+
+  it('index.ts applies the stage until onboardingDone, then exits to the island (never Math.min(680))', () => {
+    const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
+    expect(index).toMatch(/function applyExclusiveOnboardingStage/)
+    expect(index).toMatch(/function exitExclusiveOnboardingStage/)
+    expect(index).toMatch(/exclusiveOnboardingBounds/)
+    expect(index).toMatch(/setSimpleFullScreen\(true\)/)
+    expect(index).toMatch(/!cur\.onboardingDone && next\.onboardingDone/)
+    expect(index).toMatch(/exitExclusiveOnboardingStage\(\)/)
+    expect(index).toMatch(/if \(onboardingExclusiveLive\(\)\) \{\s*applyExclusiveOnboardingStage\(win\)/)
+    expect(index).not.toMatch(/Math\.min\(680/)
+    expect(index).toMatch(/islandTopCenter\(BAR_WIDTH, display, ISLAND_TOP_MARGIN\)/)
+  })
+
+  it('App fills the stage — OnboardingV2 is not wrapped in the overlapping Panel card', () => {
+    const app = readFileSync(join(__dirname, '../../renderer/src/App.tsx'), 'utf8')
+    const gate = app.slice(app.indexOf("settings && !settings.onboardingDone && DEMO == null"))
+    const block = gate.slice(0, gate.indexOf('const panelOpen'))
+    expect(block).toMatch(/<OnboardingV2/)
+    expect(block).not.toMatch(/<Panel>/)
+    expect(block).toMatch(/bg-\[#0c0c0e\]/)
+    expect(block).toMatch(/h-full min-h-0 w-full/)
+  })
+
+  it('primary onboarding CTAs use onboard-cta (min 52×220) and Act 2 is full-bar Métis + Intelligence', () => {
+    const experience = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingExperience.tsx'), 'utf8')
+    const demo = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingDemoScene.tsx'), 'utf8')
+    const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
+    expect(css).toMatch(/\.onboard-cta\s*\{/)
+    expect(css).toMatch(/min-height:\s*52px/)
+    expect(css).toMatch(/min-width:\s*220px/)
+    expect(experience).toMatch(/className="onboard-cta fade-up no-drag focus-ring"/)
+    expect(experience.match(/className="onboard-cta no-drag focus-ring"/g)?.length).toBeGreaterThanOrEqual(3)
+    expect(demo).toMatch(/onboard-cta/)
+    expect(demo).toMatch(/max-w-\[880px\]/)
+    expect(demo).toMatch(/Mantu Intelligence/)
+    expect(demo).not.toMatch(/max-w-\[520px\]/)
+    expect(demo).not.toMatch(/Recap · next steps/)
+    expect(demo).toMatch(/<Bar/)
+    expect(demo).toMatch(/<Copilot/)
+    expect(demo).not.toMatch(/terminal|xterm|pty/i)
   })
 })

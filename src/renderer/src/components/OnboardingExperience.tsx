@@ -169,7 +169,7 @@ function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => 
       <button
         type="button"
         onClick={onBegin}
-        className="fade-up no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-6 text-[13px] font-semibold text-white shadow-[0_2px_16px_var(--color-accent-glow)] hover:brightness-110"
+        className="onboard-cta fade-up no-drag focus-ring"
         style={{ animationDelay: '1000ms', animationFillMode: 'backwards' }}
       >
         Get Started
@@ -430,7 +430,7 @@ function ActLicense({
         <button
           type="button"
           onClick={onContinue}
-          className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-6 text-[13px] font-semibold text-white hover:brightness-110"
+          className="onboard-cta no-drag focus-ring"
         >
           Continue
         </button>
@@ -517,7 +517,7 @@ function ActReady({
         type="button"
         onClick={() => void onFinish()}
         disabled={busy}
-        className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-7 text-[13px] font-semibold text-white shadow-[0_2px_16px_var(--color-accent-glow)] hover:brightness-110 disabled:opacity-60"
+        className="onboard-cta no-drag focus-ring"
       >
         Get started
       </button>
@@ -732,7 +732,7 @@ export function OnboardingExperience({
           <button
             type="button"
             onClick={() => setScene('reveal')}
-            className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-6 text-[13px] font-semibold text-white hover:brightness-110"
+            className="onboard-cta no-drag focus-ring"
             style={{ animationDelay: `${200 + PROBLEM_STORY.length * 1100}ms` }}
           >
             Continue
@@ -886,10 +886,7 @@ export function OnboardingExperience({
               // enabled) has moved to sit between personalize and ready. See onboarding-flow.ts.
               onClick={() => setScene(sceneAfterSetup())}
               className={
-                'no-drag focus-ring h-10 rounded-full px-5 text-[13px] font-semibold ' +
-                (needsPerms
-                  ? 'text-[color:var(--color-ink-2)] hover:bg-white/10'
-                  : 'bg-[var(--color-accent)] text-white hover:brightness-110')
+                'onboard-cta no-drag focus-ring ' + (needsPerms ? 'onboard-cta--muted' : '')
               }
             >
               Continue
@@ -969,12 +966,7 @@ export function OnboardingExperience({
               // never finishes here directly any more. See onboarding-flow.ts.
               onClick={() => setScene(sceneAfterPersonalize(settings?.licenseGateEnabled))}
               disabled={!consent}
-              className={
-                'no-drag focus-ring h-10 rounded-full px-7 text-[13px] font-semibold text-white ' +
-                (consent
-                  ? 'bg-[var(--color-accent)] shadow-[0_2px_16px_var(--color-accent-glow)] hover:brightness-110'
-                  : 'cursor-not-allowed bg-white/10 opacity-60')
-              }
+              className={'onboard-cta no-drag focus-ring' + (consent ? '' : ' onboard-cta--muted')}
             >
               Continue
             </button>

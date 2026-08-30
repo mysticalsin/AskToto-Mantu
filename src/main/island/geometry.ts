@@ -197,3 +197,22 @@ export function recenterXForWidth(currentX: number, currentWidth: number, newWid
 export function slideWithinMargin(anchorY: number, height: number, workArea: Rect, margin: number): number {
   return clampWithMargin(anchorY, height, workArea.y, workArea.height, margin)
 }
+
+/**
+ * Exclusive onboarding stage: cover the display. Width/height are never smaller than the work
+ * area (Tony live fail: 880×816 card at Y=39). `bounds.y = 0` is correct HERE — the stage owns
+ * the display. The island y=0 ban applies only after `onboardingDone`.
+ */
+export function exclusiveOnboardingBounds(bounds: Rect, workArea: Rect): Rect {
+  return {
+    x: bounds.x,
+    y: bounds.y,
+    width: Math.max(bounds.width, workArea.width),
+    height: Math.max(bounds.height, workArea.height)
+  }
+}
+
+/** True when the window is at least as large as the display work area (wiped-profile acceptance). */
+export function onboardingFitsWorkArea(win: Rect, workArea: Rect): boolean {
+  return win.width >= workArea.width && win.height >= workArea.height
+}
