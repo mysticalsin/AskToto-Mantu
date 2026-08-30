@@ -1628,6 +1628,26 @@ function setMinimizedWidth(narrow: boolean): void {
  * Settings keeps the same top edge (so it grows downward from the bar) and centers horizontally,
  * clamped to the work area. Exiting restores the bar's width and last content height.
  */
+// Top margin (px) for the auto-hide peek anchor — how far below the work-area top edge the overlay hugs.
+// Small so the peek strip reads as pinned to the very top (Vibe-Island notch), with just enough gap to
+// clear a menu-bar/rounded-corner and leave room for the stealth glow halo not to be clipped at y=0.
+const AUTO_HIDE_TOP_MARGIN = 8
+
+/** Pin the overlay to the top-center of the display it is currently on, and re-arm the resizeTo anchor
+ *  there, so the auto-hide peek strip and the revealed bar both grow DOWNWARD from the top edge (the
+ *  clean default position for the Vibe-Island-style auto-hide). Uses getDisplayMatching(win bounds) so
+ *  it stays correct on the overlay's actual display in a multi-monitor setup. A pure setBounds — never
+ *  show()/focus() — so the user's foreground app keeps focus (the non-activating contract). */
+function anchorTopCenter(): void {
+  if (!win) return
+  const { workArea } = screen.getDisplayMatching(win.getBounds())
+  const b = win.getBounds()
+  const x = clampAxis(Math.round(workArea.x + (workArea.width - b.width) / 2), b.width, workArea.x, workArea.width)
+  const y = workArea.y + AUTO_HIDE_TOP_MARGIN
+  userAnchorY = y // resizeTo slides against this, so a growing bar returns to the top edge when it shrinks
+  win.setBounds({ x, y, width: b.width, height: b.height }, false)
+}
+
 // Re-center the compact bar on its current display. The old fixed 'settings' window-mode was removed —
 // settings renders as a panel under the bar now, so the window only ever lives in 'bar' mode.
 function setWindowMode(): void {
@@ -5464,6 +5484,10 @@ function registerIpc(): void {
   ipcMain.handle(IPC.windowMinimize, (e, narrow: unknown) => {
     assertMainWindow(e)
     setMinimizedWidth(!!narrow)
+  })
+  ipcMain.handle(IPC.windowAnchorTop, (e) => {
+    assertMainWindow(e)
+    anchorTopCenter()
   })
   // Renderer ErrorBoundary catch: persist via the same sink as onFatal's main-process crashes, so a
   // caught render-throw survives to disk instead of only reaching console (gated behind

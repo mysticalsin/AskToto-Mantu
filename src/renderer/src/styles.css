@@ -811,6 +811,94 @@ input::placeholder {
     0 0 16px -8px var(--color-accent-glow);
 }
 
+/* ── Auto-hide peek strip (MQA-274) ─────────────────────────────────────────────────────────
+   The slim, top-hugging capsule the overlay collapses to when idle and un-hovered (the Vibe-Island
+   resting "notch"). Deliberately small so the hugged window is a tiny top-center strip, not a wide
+   transparent click-trap. Springs into place with a compositor-cheap transform+opacity (reduced-motion
+   is honoured by the global rule at the bottom of this file, which zeroes the duration). */
+.overlay-peek {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 132px;
+  height: 15px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-top-color: rgba(255, 255, 255, 0.04);
+  border-radius: 0 0 999px 999px; /* flat top edge — it hugs the very top of the screen */
+  background: var(--aw-glass-bot);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(18px) saturate(140%);
+  box-shadow:
+    0 4px 12px -6px rgba(0, 0, 0, 0.55),
+    0 0 14px -8px var(--color-accent-glow);
+  cursor: pointer;
+  transform: translateY(0);
+  transition:
+    width 160ms var(--ease-spring),
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+  animation: overlay-peek-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.overlay-peek:hover {
+  width: 156px;
+  box-shadow:
+    0 5px 14px -6px rgba(0, 0, 0, 0.6),
+    0 0 18px -6px var(--color-accent-glow);
+}
+.overlay-peek__grip {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.overlay-peek__grip > span {
+  display: block;
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--color-ink-3);
+}
+/* Contained multi-colour hint while the overlay is hidden from screen capture (contentProtection on) —
+   the peek's own box can't afford the full aw-hidden-rainbow halo without the narrow hugged window
+   clipping it into a flat band, so this is a tighter version that stays inside the strip. */
+.overlay-peek--stealth {
+  border-color: rgba(175, 82, 222, 0.5);
+  box-shadow:
+    0 0 0 1px rgba(175, 82, 222, 0.5),
+    0 0 10px -2px rgba(127, 0, 218, 0.7),
+    0 0 14px 0 rgba(50, 173, 230, 0.35),
+    0 4px 12px -6px rgba(0, 0, 0, 0.5);
+}
+.overlay-peek--stealth .overlay-peek__grip > span {
+  background: rgba(219, 190, 255, 0.85);
+}
+@keyframes overlay-peek-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+/* The full bar's entrance when revealed from peek — a short spring slide-down + fade so the reveal
+   reads as the notch expanding, not a hard pop. Transform/opacity only (GPU compositor), reduced-motion
+   honoured by the global zeroing rule. */
+.overlay-reveal {
+  animation: overlay-reveal-in 240ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes overlay-reveal-in {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 /* markdown surface inside the answer panel */
 .md {
   font-size: 13.5px;

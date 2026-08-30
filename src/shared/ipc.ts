@@ -161,6 +161,10 @@ export const IPC = {
   windowQuit: 'window:quit',
   windowRelaunch: 'window:relaunch',
   windowMinimize: 'window:minimize',
+  // Vibe-Island auto-hide: pin the overlay to the top-center of its current display and re-arm the
+  // resizeTo anchor there, so the peek strip / revealed bar grow downward from the top edge. Never
+  // shows or focuses the window — a pure setBounds, so the user's foreground app keeps focus.
+  windowAnchorTop: 'window:anchorTop',
   // Renderer ErrorBoundary catch (React render-throw) → persisted crash-*.log, same sink as onFatal's
   // main-process crashes. Distinct from render-process-gone (whole renderer dies): this is a caught JS
   // exception the renderer survives, previously visible only via ASKTOTO_DEBUG_RENDERER console mirroring.
@@ -990,6 +994,12 @@ export const BaseSettingsSchema = z.object({
   // of what's behind), higher = more opaque/solid (easier to read over a busy desktop). Values above 1
   // simply saturate at fully opaque for the most solid backgrounds; nothing errors or clips oddly.
   overlayOpacity: z.number().min(0.3).max(1.5).default(1),
+  // Vibe-Island-style auto-hide: when on (default), the top-center overlay collapses to a slim peek strip
+  // hugging the top edge whenever the pointer isn't over it and nothing important is happening, then
+  // reveals the full bar on hover / on a forced event (recording, live suggestion, error toast). Reveal
+  // and collapse are pure content resizes of the always-on-top window — they never show/focus it, so the
+  // user's foreground app keeps focus (the non-activating notch contract). Off = the bar is always shown.
+  autoHideOverlay: z.boolean().default(true),
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('best'), // packaged builds use the bundled compact model for both modes
   // whisper = ~99 langs (default — safe for any locale; parakeet is European-only, which is why 1fa4d76
@@ -1429,6 +1439,7 @@ export const DEFAULT_SETTINGS: Settings = {
   instantSuggestions: true,
   backgroundScreenContext: false,
   overlayOpacity: 1,
+  autoHideOverlay: true,
   showFullTranscriptInReview: false,
   asrQuality: 'best',
   asrEngine: 'whisper',

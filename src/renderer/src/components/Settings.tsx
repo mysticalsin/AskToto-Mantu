@@ -5389,6 +5389,13 @@ export function Settings({
                     <MetisMark size={16} />
                     <span className="text-[12px] text-[color:var(--color-ink)]">This is how the overlay bar will look.</span>
                   </div>
+                  <ToggleRow
+                    label="Auto-hide overlay"
+                    desc="Collapse the bar to a slim strip at the top of the screen when you're not using it, and reveal it on hover. Never steals focus from the app you're in."
+                    on={settings.autoHideOverlay}
+                    onChange={(v) => patch({ autoHideOverlay: v })}
+                    disabled={settings.managedKeys.includes('autoHideOverlay')}
+                  />
                 </Section>
                 <Section
                   title="Language"

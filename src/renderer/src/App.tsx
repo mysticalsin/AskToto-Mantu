@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, startTransition } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, lazy, Suspense, startTransition } from 'react'
 import { Bar } from './components/Bar'
 import { ControlPill } from './components/ControlPill'
+import { OverlayPeek } from './components/OverlayPeek'
 import { Panel } from './components/Panel'
 import { OnboardingV2 } from './components/OnboardingExperience'
 // Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup. Answer and
@@ -23,6 +24,12 @@ import { MeetingOpenErrorToast } from './components/MeetingOpenErrorToast'
 import { QuickActions, type QuickKind } from './components/QuickActions'
 import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from './state'
 import { useWindowDrag } from './lib/window-drag'
+import {
+  AUTO_HIDE_GRACE_MS,
+  initialAutoHideState,
+  isRevealed as isOverlayRevealed,
+  reduceAutoHide
+} from './lib/overlay-autohide'
 import { useListen, playListenChime } from './lib/listen'
 import { transcriptToText, recapPersistAction } from './lib/transcript'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
@@ -492,6 +499,68 @@ export function App(): JSX.Element {
   const [updateReady, setUpdateReady] = useState<{ open: boolean; version?: string; notes?: string; percent?: number }>({ open: false })
   const [newMeetingToast, setNewMeetingToast] = useState(false)
   const [visibilityToast, setVisibilityToast] = useState<VisibilityToastState>(null)
+
+  // ── Vibe-Island-style auto-hide overlay (MQA-274) ──────────────────────────────────────────────
+  // The overlay collapses to a slim top-center peek strip whenever it's idle and the pointer isn't over
+  // it, then reveals the full bar on hover or on an important event. Reveal/collapse are PURE content
+  // resizes of the always-on-top window (never show()/focus()), so the user's foreground app keeps focus
+  // — the non-activating notch contract. The pure state machine lives in lib/overlay-autohide.ts.
+  const autoHideSetting = settings?.autoHideOverlay ?? true
+  // Auto-hide is in effect only in the plain idle bar surface: the setting is on, the overlay isn't
+  // collapsed to the control mini-pill, onboarding is finished, and the default bar view is showing with
+  // no answer/capture/meeting in flight. Every other surface (answers, the settings/history/review/agenda
+  // panels, the mini-pill, onboarding) stays fully shown.
+  const overlayIdle =
+    autoHideSetting &&
+    !minimized &&
+    !!settings?.onboardingDone &&
+    view === 'answer' &&
+    !ask.answer &&
+    !capturing &&
+    !listen.listening
+  // Force the bar open regardless of pointer position for the brief's "important events" — recording, an
+  // error/status toast — plus while the user is mid-interaction (has typed into the input). A live
+  // suggestion / recording start also flips `view` off the idle bar, which disables auto-hide anyway;
+  // listing them here keeps the force contract explicit and correct even if that coupling ever changes.
+  const autoHideForced =
+    listen.listening ||
+    updateReady.open ||
+    newMeetingToast ||
+    consentReminderOpen ||
+    !!visibilityToast ||
+    !!openMeetingError ||
+    input.trim().length > 0
+  const [autoHide, dispatchAutoHide] = useReducer(reduceAutoHide, autoHideSetting, initialAutoHideState)
+  useEffect(() => {
+    dispatchAutoHide({ type: 'set-enabled', enabled: overlayIdle })
+  }, [overlayIdle])
+  useEffect(() => {
+    dispatchAutoHide({ type: 'set-forced', forced: autoHideForced })
+  }, [autoHideForced])
+  // Grace timer: whenever a collapse is pending (the pointer left, or a force event ended), commit it
+  // after the grace window. Re-entering or a new force event flips graceArmed back off, whose cleanup
+  // cancels this — so the collapse never fires while the pointer is hovering or an event holds it open.
+  useEffect(() => {
+    if (!autoHide.graceArmed) return
+    const t = setTimeout(() => dispatchAutoHide({ type: 'grace-elapsed' }), AUTO_HIDE_GRACE_MS)
+    return () => clearTimeout(t)
+  }, [autoHide.graceArmed])
+  // Pin the overlay to the top-center of its display when auto-hide first becomes active (the clean
+  // default position). Fires only on the off→on transition — not on every peek — so a later deliberate
+  // drag is respected. anchorTop is a pure setBounds in main; it never shows/focuses the window.
+  const wasOverlayIdleRef = useRef(false)
+  useEffect(() => {
+    if (overlayIdle && !wasOverlayIdleRef.current) void window.toto.anchorTop()
+    wasOverlayIdleRef.current = overlayIdle
+  }, [overlayIdle])
+  const overlayRevealed = isOverlayRevealed(autoHide)
+  // Render the slim peek strip in place of the full bar only while auto-hide is active AND nothing is
+  // holding it revealed. `revealOverlay` is the click/keyboard fallback to the container's hover reveal.
+  const overlayPeeked = overlayIdle && !overlayRevealed
+  const revealOverlay = useCallback(() => dispatchAutoHide({ type: 'pointer-enter' }), [])
+  const onOverlayPointerEnter = useCallback(() => dispatchAutoHide({ type: 'pointer-enter' }), [])
+  const onOverlayPointerLeave = useCallback(() => dispatchAutoHide({ type: 'pointer-leave' }), [])
+
   // Idempotence latch for endReview() re-entry — see endReview's own comment for the exact hazard it
   // guards against. Cleared at the start of every fresh session (startListen) so a later stop can fire.
   const stoppingRef = useRef(false)
@@ -3058,6 +3127,10 @@ export function App(): JSX.Element {
     <div
       ref={setRoot}
       {...(minimized ? {} : windowDrag)}
+      // Auto-hide (MQA-274): pointer-enter reveals the full bar from the peek strip; pointer-leave arms
+      // the grace collapse back to peek. No-ops unless auto-hide is actually in effect (see the reducer).
+      onMouseEnter={onOverlayPointerEnter}
+      onMouseLeave={onOverlayPointerLeave}
       className={[
         'relative flex w-full flex-col gap-2',
         // Stealth (contentProtection) paints a multi-colour halo that spills ~34px past the widget via
@@ -3144,8 +3217,16 @@ export function App(): JSX.Element {
             }}
           />
         </div>
+      ) : overlayPeeked ? (
+        // Auto-hide resting state: the slim top-center peek strip. The window hugs it (data-hug-width),
+        // so it sits as a small notch at the top edge; hovering the root reveals the full bar below.
+        <OverlayPeek onReveal={revealOverlay} stealth={settings?.contentProtection ?? true} />
       ) : (
         <>
+          {/* overlay-reveal springs the bar down when it expands from the peek (idle auto-hide surface
+              only — every other view mounts the bar without the reveal flourish). `contents` keeps the
+              wrapper layout-transparent so the bar stays a direct flex child of the root as before. */}
+          <div className={overlayIdle ? 'overlay-reveal w-full' : 'contents'}>
           <Bar
             value={input}
             onChange={setInput}
@@ -3191,6 +3272,7 @@ export function App(): JSX.Element {
             canTogglePanel={canTogglePanel}
             focusSignal={focusSignal}
           />
+          </div>
           {/* Quick actions render as their own row UNDER the whole bar (including its toolbar), only
               while a meeting is actively being listened to — clean bar with nothing under it at launch
               and after a meeting ends (Review screen), per Tony's ask. */}
