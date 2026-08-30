@@ -614,7 +614,8 @@ export function brainToDashboard(b: BrainRead): DashboardData {
     }))
 
   const ingestErrors: IngestError[] = Object.entries(b.index.ingested ?? {})
-    .filter(([, v]) => !v.ok)
+    // Pending deferred ingest (ok:false, no error, attempts:0) is waiting for consolidation — not a failure.
+    .filter(([, v]) => !v.ok && !!(v.error || v.exhausted || (v.attempts ?? 0) > 0))
     .map(([file, v]) => ({ file, error: v.error ?? '' }))
 
   const status: StatusCounts = {

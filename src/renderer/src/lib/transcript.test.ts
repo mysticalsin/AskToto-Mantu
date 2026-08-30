@@ -87,9 +87,15 @@ describe('recapPersistAction', () => {
     expect(recapPersistAction(answer, target)).toBeNull()
   })
 
-  it('returns null when the answer settled with an error even if some text is present', () => {
+  it('returns null when the answer settled with an error and only a stub of text', () => {
     const answer = { text: 'partial', streaming: false, error: 'boom' }
     expect(recapPersistAction(answer, target)).toBeNull()
+  })
+
+  it('keeps a substantial streamed summary despite a trailing stream error', () => {
+    const text = 'A'.repeat(200)
+    const answer = { text, streaming: false, error: 'idle timeout' }
+    expect(recapPersistAction(answer, target)).toEqual({ file: 'meeting.md', text })
   })
 
   it('returns null when there is no answer at all', () => {

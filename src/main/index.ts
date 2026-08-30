@@ -132,7 +132,8 @@ import {
   localVisionPrivacyRequired,
   localPrimaryEligibleFor,
   pickPrimaryProvider,
-  allowCrossProviderFailover
+  allowCrossProviderFailover,
+  resolveRoutingMode
 } from './llm/local-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
@@ -196,6 +197,7 @@ import {
   brainLiveIngestProgress,
   ingestFailureCounts,
   ingestFailureDetails,
+  isPendingIngestRecord,
   resumeBackfillIfPending,
   reconcileMeetingsInBackground,
   settleCommitment,
@@ -982,7 +984,9 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
   // An imported recording is a summary task. If the user opted into Métis Local summaries and its
   // installer-owned runtime is ready, try it first so the transcript stays on-device. Cloud providers
   // remain the explicit fallback when local is disabled or unavailable.
-  const localSummaryReady = localEligibleFor({ mode: 'summary' }, settings, 'base', allowed)
+  // localPrimaryEligibleFor (not bare localEligibleFor) honors routingMode:'local' the same way live
+  // ask primary pick does — otherwise Routing mode → Local still forced every import recap through cloud.
+  const localSummaryReady = localPrimaryEligibleFor({ mode: 'summary' }, settings, 'base', allowed)
   // MQA-056: the same zero-config safety net (localLlm.fallback) the live-ask seams and brain ingest
   // already honour. Without it a revoked cloud key left the imported meeting with no summary at all —
   // while the very same file was being indexed on-device under the identical flag — and the "retry the
@@ -1290,9 +1294,13 @@ function publicSettings(): PublicSettings {
   // local-routing.ts's localBaseReady() so this snapshot and the live routing decision (attempt()/
   // pickFailover below) can never drift apart.
   const localReady = localBaseReady(s, allowed)
-  const localSuggestReady = localReady && s.localLlm.useFor.suggest
-  const localSummaryReady = localReady && s.localLlm.useFor.summary
-  const localVisionReady = localReady && s.localLlm.useFor.vision
+  // routingMode:'local' is a standing opt-in for every in-scope mode (see localPrimaryEligibleFor) —
+  // the per-task useFor toggles are only required under 'auto'. Without this, Settings → Routing mode
+  // → Local left the readiness chips and requireProvider() gates claiming Local was off.
+  const routingLocal = resolveRoutingMode(s) === 'local'
+  const localSuggestReady = localReady && (s.localLlm.useFor.suggest || routingLocal)
+  const localSummaryReady = localReady && (s.localLlm.useFor.summary || routingLocal)
+  const localVisionReady = localReady && (s.localLlm.useFor.vision || routingLocal)
   // "Local as safety net" is live: with zero cloud/CLI configured, meeting indexing and — through the
   // absolute floor — asks of ANY mode still run on-device (askStart's fallback seams + brain/ingest.ts's
   // last-resort candidate). Surfaced so renderer readiness gates match what routing will actually do:
@@ -3995,11 +4003,14 @@ function registerIpc(): void {
           })
       const eligible = (p: ProviderId): boolean => {
         if (tried.includes(p)) return false
-        // Métis Local replaces the generic key/model/vision checks with localEligibleFor — the SAME
-        // mode-scope gate the ineligible chain below enforces, so local can never become a failover
-        // target for an out-of-scope mode (answer/recap or escalated text) even though it's a keyless,
-        // always-vision-capable entry in PROVIDERS (PLAN.md §4.3: "enforced at BOTH gates").
-        if (p === 'local') return localEligibleFor(req, s, tier, allowed)
+        // Métis Local: routingMode-aware primary eligibility (localPrimaryEligibleFor) so Routing mode
+        // → Local can fail over / serve without per-mode useFor toggles. 'api' mode keeps local out of
+        // the healthy mid-walk (fallback/floor still catch last-resort below). Out-of-scope modes
+        // (answer/recap) stay ineligible here — same PLAN.md §4.3 both-gates contract.
+        if (p === 'local') {
+          if (resolveRoutingMode(s) === 'api') return false
+          return localPrimaryEligibleFor(req, s, tier, allowed)
+        }
         return (
           (!allowed || allowed.includes(p)) &&
           (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0) &&
@@ -4160,14 +4171,12 @@ function registerIpc(): void {
       // built-in. Resolved BEFORE the eligibility chain because a missing user endpoint is an eligibility
       // failure, not a stream failure.
       const baseURL = providerBaseUrl(provider, s)
-      // Métis Local replaces the ENTIRE generic key/model/vision chain below with localEligibleFor — the
-      // same mode-scope + readiness gate the settings snapshot and pickFailover's candidate filter use, so
-      // an out-of-scope request (answer/recap or escalated text) can never actually route to the local
-      // provider. Opted-in vision deliberately stays local at every tier so prompt complexity cannot
-      // silently turn a screenshot into a cloud upload.
+      // Métis Local: accept localPrimaryEligibleFor (routingMode-aware) plus the unchanged fallback/floor
+      // nets. Opted-in vision stays local at every tier so prompt complexity cannot silently turn a
+      // screenshot into a cloud upload.
       const ineligible =
         provider === 'local'
-          ? localEligibleFor(req, s, tier, allowed) ||
+          ? localPrimaryEligibleFor(req, s, tier, allowed) ||
             localFallbackEligibleFor(req, s, tier, allowed) ||
             // The answer-mode floor: pickFailover routes here when every cloud/CLI route is exhausted for an
             // out-of-scope mode (answer/recap). attempt() must accept it too, or the floor pickFailover
@@ -4301,6 +4310,7 @@ function registerIpc(): void {
           : baseIdleMs
       const startedAt = Date.now()
       let gotToken = false
+      let paintedLen = 0
       let ttftMs: number | undefined
       // Strips a reasoning model's inline <think>…</think> out of the answer stream (llm/think-strip.ts).
       // One per attempt: each leg/retry is its own stream, and the stripper carries position state.
@@ -4329,6 +4339,7 @@ function registerIpc(): void {
           }
         }
         gotToken = true
+        paintedLen += text.length
         win?.webContents.send(IPC.streamDelta, { id: req.id, text })
       }
       const handle = createStream({
@@ -4556,6 +4567,16 @@ function registerIpc(): void {
               // path already deleted its entry at the top of onError; without this the map kept the
               // HedgeRace and both handles alive for every hedged ask that ended in an error.
               if (race) streams.delete(req.id)
+              // Trailing stream error AFTER substantial visible output (claude-cli idle linger, etc.) —
+              // same keep-threshold as import-recap. Without this, Review blanked notes / autosave wrote
+              // an empty recap even though the summary had already streamed onto the screen.
+              if (gotToken && paintedLen >= 200) {
+                mainLog.warn(
+                  `[ask] keeping ${paintedLen}-char answer despite trailing stream error: ${friendly}`
+                )
+                win?.webContents.send(IPC.streamDone, { id: req.id })
+                return
+              }
               win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
             }
           }
@@ -4793,7 +4814,11 @@ function registerIpc(): void {
       ingestedFiles: Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([file]) => file),
       // 6d: failing-source filenames, the failed-side counterpart to ingestedFiles above — lets a
       // per-meeting indicator (indexed/pending/failed) be derived without a second, heavier IPC call.
-      failedFiles: Object.entries(idx.ingested).filter(([, v]) => !v.ok).map(([file]) => file),
+      // Pending (deferred for consolidation) is NOT a failure — same discriminator ingestFailureCounts
+      // already uses. Listing pending here painted every just-saved meeting as a red "failed" History dot.
+      failedFiles: Object.entries(idx.ingested)
+        .filter(([, v]) => !v.ok && !isPendingIngestRecord(v))
+        .map(([file]) => file),
       ...(failureDetails.length ? { failedDetails: failureDetails } : {}),
       backfillRequested: idx.backfillRequested,
       ...counts,

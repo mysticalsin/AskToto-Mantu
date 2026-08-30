@@ -378,11 +378,9 @@ describe('localBaseReady (feeds index.ts localReady, local*Ready, and the vision
     expect(localBaseReady(readySettings(), null)).toBe(false)
   })
 
-  // index.ts's publicSettings() derives localSuggestReady/localSummaryReady/localVisionReady as EXACTLY
-  // `localReady && useFor.<task>`, and visionReady/visionAvailable as `<generic cloud check> ||
-  // localVisionReady`. index.ts itself has no test harness (no index.test.ts in this repo — the Electron
-  // main entrypoint is never unit-tested directly), so this proves the derivation against the exported
-  // primitive those one-line expressions are built on, matching the wiring verbatim.
+  // index.ts's publicSettings() derives localSuggestReady/localSummaryReady/localVisionReady as
+  // `localReady && (useFor.<task> || routingMode==='local')`. Under 'auto' that is still exactly
+  // localReady && useFor.<task>.
   it('per-task *Ready flags = localBaseReady && the matching useFor toggle, independently', () => {
     const s = readySettings({ useFor: { suggest: true, summary: false, vision: true } })
     const localReady = localBaseReady(s, null)
@@ -390,6 +388,15 @@ describe('localBaseReady (feeds index.ts localReady, local*Ready, and the vision
     expect(localReady && s.localLlm.useFor.suggest).toBe(true)
     expect(localReady && s.localLlm.useFor.summary).toBe(false)
     expect(localReady && s.localLlm.useFor.vision).toBe(true)
+  })
+
+  it('routingMode local treats every in-scope task as Ready without per-mode useFor toggles', () => {
+    const s = routedSettings('local', { useFor: { suggest: false, summary: false, vision: false } })
+    const localReady = localBaseReady(s, null)
+    expect(localReady).toBe(true)
+    expect(localReady && (s.localLlm.useFor.suggest || resolveRoutingMode(s) === 'local')).toBe(true)
+    expect(localReady && (s.localLlm.useFor.summary || resolveRoutingMode(s) === 'local')).toBe(true)
+    expect(localReady && (s.localLlm.useFor.vision || resolveRoutingMode(s) === 'local')).toBe(true)
   })
 
   it('visionReady/visionAvailable OR: a local-only setup (no cloud vision provider configured at all) still resolves vision-ready', () => {

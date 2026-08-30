@@ -128,8 +128,9 @@ describe('the backup chain: free-first ordering + the on-device answer floor', (
     // The physical sim proved this: without localAnswerFloorEligibleFor in attempt()'s local ineligible
     // chain, an answer-mode failover to the floor was rejected with the "uses your cloud provider" message
     // instead of answering on-device. Both seams must agree on the floor.
+    // localPrimaryEligibleFor (routingMode-aware) replaced bare localEligibleFor at this seam.
     const chain = indexSrc.slice(indexSrc.indexOf('const ineligible ='), indexSrc.indexOf('const ineligible =') + 700)
-    expect(chain).toMatch(/localEligibleFor\(req, s, tier, allowed\) \|\|/)
+    expect(chain).toMatch(/localPrimaryEligibleFor\(req, s, tier, allowed\) \|\|/)
     expect(chain).toMatch(/localFallbackEligibleFor\(req, s, tier, allowed\) \|\|/)
     expect(chain).toMatch(/localAnswerFloorEligibleFor\(req, s, allowed\)/)
   })

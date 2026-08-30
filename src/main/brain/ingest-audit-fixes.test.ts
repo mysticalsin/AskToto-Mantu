@@ -35,7 +35,10 @@ const localBaseReadyMock = vi.hoisted(() =>
     return true
   })
 )
-vi.mock('../llm/local-routing', () => ({ localBaseReady: localBaseReadyMock }))
+vi.mock('../llm/local-routing', () => ({
+  localBaseReady: localBaseReadyMock,
+  resolveRoutingMode: (s: { routingMode?: string }) => s.routingMode ?? 'auto'
+}))
 
 // The sidecar's live state plus its attached-stream count — the two things brain ingest now reads before
 // it is willing to occupy a local slot (MQA-048). Everything else stays real.

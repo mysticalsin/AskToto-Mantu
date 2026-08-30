@@ -233,6 +233,7 @@ export const Review = memo(function Review({
   onRecapSaved,
   onDirtyChange,
   recapUnavailable,
+  finishingTranscript,
   coldCall
 }: {
   recap: AnswerState | null
@@ -288,6 +289,9 @@ export const Review = memo(function Review({
    *  fired and left to fail with a red error. Shown in place of the "writing detailed notes…" spinner,
    *  which would otherwise spin forever since no recap request was ever sent. */
   recapUnavailable?: { message: string; onOpenSettings?: () => void }
+  /** Live stop is still draining the last ASR windows — show "Finishing transcript…" instead of
+   *  pretending the LLM is already writing notes. */
+  finishingTranscript?: boolean
   /** Cold Calling Mode only (live session, see App.tsx maybeFireRecap): end-of-call coaching, fired
    *  automatically alongside the recap, plus the manual "Book meetings" action drafted from it. Session-
    *  only — not persisted, so a reopened past cold call never carries this. */
@@ -303,6 +307,7 @@ export const Review = memo(function Review({
   const [jsonCopied, flashJsonCopied] = useFlash(1500)
   const [exportError, setExportError] = useState<string | null>(null)
   const [transcriptOpen, setTranscriptOpen] = useState(!!showTranscript)
+  useEffect(() => setTranscriptOpen(!!showTranscript), [showTranscript])
   // Task MI-5 — confidential flag: excludes this meeting from every published wiki surface. Local state
   // seeded from the `confidential` prop (the meeting's actual saved value for a reopened past meeting;
   // false for a just-ended live one) and updated optimistically on toggle.
@@ -1044,6 +1049,13 @@ export const Review = memo(function Review({
           </div>
         ) : recap?.error ? (
           <div className="flex flex-col gap-2">
+            {/* Substantial streamed notes stay visible — a trailing idle-timeout used to hide them
+                behind the error alone and autosave used to wipe them. Show what we have + Retry. */}
+            {recapText.trim().length >= 40 && (
+              <div className="opacity-90">
+                <Markdown>{recapText}</Markdown>
+              </div>
+            )}
             <div className="text-[13px] text-[var(--color-danger)]">{recap.error}</div>
             {/* Scoped retry — replays just the recap request. Previously the only recovery was
                 "New meeting", which throws away the whole saved transcript. */}
@@ -1092,6 +1104,10 @@ export const Review = memo(function Review({
                 </TextButton>
               </div>
             )}
+          </div>
+        ) : finishingTranscript ? (
+          <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
+            <Spinner size={13} /> finishing transcript…
           </div>
         ) : (
           <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
