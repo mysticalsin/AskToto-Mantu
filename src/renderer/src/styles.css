@@ -838,6 +838,53 @@ input::placeholder {
   }
 }
 
+/* Act 2 (Demo) synthetic cursor (MQA-277) — a small drawn pointer the onboarding demo moves to (and
+   really clicks) the "What to say next" / "Fact-check" chips, so the scripted meeting reads as
+   something guiding YOUR attention rather than the UI changing on its own. Position is set every rAF
+   frame from JS (OnboardingDemoScene.tsx, via the pure easing in lib/synthetic-cursor.ts) as an inline
+   `transform: translate(x, y)` — no CSS transition on transform here, which would fight that per-frame
+   value and lag a full frame behind the measured target. The click itself gets a one-shot expanding
+   ring (same "static end-state, ::before/::after created fresh on mount" trick as .rec-dot's
+   mic-burst above), and the whole cursor is never rendered at all under prefers-reduced-motion — the
+   component checks the media query itself and skips straight to a static demo, matching Act 1's rule. */
+.demo-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-accent-2);
+  box-shadow:
+    0 0 0 3px rgba(127, 0, 218, 0.28),
+    0 2px 10px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  z-index: 40;
+}
+@keyframes demo-cursor-click {
+  from {
+    transform: scale(0.5);
+    opacity: 0.9;
+  }
+  to {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+.demo-cursor-press::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 2px solid var(--color-accent-2);
+  animation: demo-cursor-click 420ms ease-out forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .demo-cursor {
+    display: none;
+  }
+}
+
 /* ── Ask widget — Cluely-style two-row overlay, Mantu purple glass ──────────────────────────
    The hero input + ↵ on top, a slim toolbar below; answers expand inside it above the input.
    Glass technique: same 3-layer system as .glass — white tint → translucent fill → dark scrim.
