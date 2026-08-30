@@ -37,20 +37,33 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(css).toMatch(/mask-composite:\s*exclude/)
   })
 
-  it('Get Started and Next call play() in the click and restart the clip from 0', () => {
-    const play = vi.fn().mockResolvedValue(undefined)
-    const el = { currentTime: 12, play } as unknown as HTMLVideoElement
+  it('Get Started and Next call play() in the click, before seek or setState', () => {
+    const order: string[] = []
+    const el = {
+      currentTime: 12,
+      play: vi.fn(function (this: { currentTime: number }) {
+        order.push('play')
+        expect(this.currentTime).toBe(12)
+        return Promise.resolve()
+      })
+    } as unknown as HTMLVideoElement
     playOnboardingVideo(el, { restart: true })
+    order.push('seek')
+    expect(el.play).toHaveBeenCalledTimes(1)
     expect(el.currentTime).toBe(0)
-    expect(play).toHaveBeenCalledTimes(1)
-    playOnboardingVideo(null, { restart: true })
-    expect(play).toHaveBeenCalledTimes(1)
+    expect(order[0]).toBe('play')
 
-    expect(experience).toMatch(/playOnboardingVideo/)
-    expect(experience).toMatch(/playHero\(true\)/)
-    expect(experience).toMatch(/music\.start\(\)/)
+    const src = readFileSync(join(__dirname, './onboarding-hero-video.ts'), 'utf8')
+    expect(src).toMatch(/const playing = el\.play\(\)[\s\S]*?if \(opts\.restart\) el\.currentTime = 0/)
+    expect(src).not.toMatch(/currentTime = 0\s*\n\s*void el\.play/)
+    expect(src).not.toMatch(/await el\.play|setTimeout\(|queueMicrotask|requestAnimationFrame/)
+
+    expect(experience).toMatch(/onBegin=\{\(\) => \{\s*playHero\(true\)/)
+    expect(experience).toMatch(/playHero\(true\)\s*\n\s*music\.start\(\)/)
+    expect(experience).toMatch(/onboard-mute/)
+    expect(experience).not.toMatch(/prefersReducedMotion\(\)[\s\S]{0,80}onboard-mute/)
     const demo = readFileSync(join(__dirname, '../components/OnboardingDemoScene.tsx'), 'utf8')
-    expect(demo).toMatch(/onPlayVideo\?\.\(\)/)
+    expect(demo).toMatch(/onClick=\{\(\) => \{\s*onPlayVideo\?\.\(\)\s*\n\s*advance\(\)/)
     expect(demo).toMatch(/demoPlaybackAfterNext/)
     expect(demo).toMatch(/setLocalMs\(next\.localMs\)/)
     expect(demo).not.toMatch(/setTimeout\(/)

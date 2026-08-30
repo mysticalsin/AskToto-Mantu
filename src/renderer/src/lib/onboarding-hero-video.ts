@@ -5,12 +5,16 @@
 export const ONBOARDING_HERO_VIDEO_SRC =
   'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260714_113715_c7e0daa0-8bdd-4486-a2da-040901f8f0ea.mp4'
 
-/** Must run inside a user click. Autoplay policy will not start the clip from an effect. */
+/**
+ * Must run inside a user click. `play()` is the first media call so the user-gesture
+ * token is still live — do not seek, await, or setState first (autoplay policy).
+ */
 export function playOnboardingVideo(
   el: HTMLVideoElement | null | undefined,
   opts: { restart?: boolean } = {}
 ): void {
   if (!el) return
+  const playing = el.play()
   if (opts.restart) el.currentTime = 0
-  void el.play().catch(() => {})
+  void playing.catch(() => {})
 }
