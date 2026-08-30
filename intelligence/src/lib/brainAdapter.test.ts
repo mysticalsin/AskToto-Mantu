@@ -414,6 +414,21 @@ describe('brainToDashboard — warnings, ingest errors, status', () => {
     expect(dashboard.ingest_errors).toEqual([{ file: 'm5-corrupt.md', error: 'JSON parse failure on model output' }])
   })
 
+  it('does not treat a pending deferred ingest (no error, attempts 0) as an ingest error', () => {
+    const data = brainToDashboard({
+      ...FIXTURE,
+      index: {
+        ...FIXTURE.index,
+        ingested: {
+          ...FIXTURE.index.ingested,
+          'm6-pending.md': { at: 6, ok: false, attempts: 0 }
+        }
+      }
+    })
+    expect(data.ingest_errors.map((e) => e.file)).not.toContain('m6-pending.md')
+    expect(data.ingest_errors).toEqual([{ file: 'm5-corrupt.md', error: 'JSON parse failure on model output' }])
+  })
+
   it('computes status counts that match the fixture, and parity with entity array lengths', () => {
     expect(dashboard.status).toEqual({
       meetings: 4, // 5 ingested, 1 failed (ok:false) — only the 4 successful ones count

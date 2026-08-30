@@ -28,7 +28,7 @@ import { fnv1a } from '@shared/hash'
 import { alignQuote, verifyNumericFact, extractNumerals, numeralDerivable } from '@shared/grounding'
 import { getSettings, getApiKey, getAllowedProviders, setApiKey, setSettings } from '../store'
 import { createStream } from '../llm'
-import { localBaseReady } from '../llm/local-routing'
+import { localBaseReady, resolveRoutingMode } from '../llm/local-routing'
 import { verifyIntegrity } from '../llm/local-models'
 import { getState as localRuntimeState, activeStreams as localActiveStreams } from '../llm/local-runtime'
 import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
@@ -94,7 +94,13 @@ function hasUsableProvider(s: Settings): boolean {
  *  the LAST candidate after the whole cloud waterfall — so a meeting still gets indexed when every cloud
  *  provider is down or none is configured, instead of never being indexed at all. */
 function pickProviderCandidates(s: Settings): { provider: ProviderId; model: string; key: string }[] {
-  if (s.localLlm.useFor.summary && localBaseReady(s, getAllowedProviders())) {
+  // Exclusive on-device when the user opted Local summaries, set Routing mode → Local, or asked
+  // consolidation to prefer the on-device model — never waterfalls into cloud (would silently upload).
+  const preferOnDevice =
+    s.localLlm.useFor.summary ||
+    resolveRoutingMode(s) === 'local' ||
+    s.brainConsolidation.preferLocal
+  if (preferOnDevice && localBaseReady(s, getAllowedProviders())) {
     return [{ provider: 'local', model: s.localLlm.modelId, key: '' }]
   }
 
@@ -2353,9 +2359,10 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
  * Rebuild/resume paths keep using startBackfill() directly because they need the actual queued count
  * synchronously for their durable journal semantics.
  */
-/** Local calendar day as 'YYYY-MM-DD' — the unit dailyBackfillRunsRemaining buckets against. */
-function todayKey(): string {
-  return new Date().toISOString().slice(0, 10)
+/** Local calendar day as 'YYYY-MM-DD' — the unit dailyBackfillRunsRemaining buckets against.
+ *  Must use the LOCAL timezone (en-CA), not UTC: a 6pm Pacific pass must not burn "tomorrow"'s budget. */
+function todayKey(now = Date.now()): string {
+  return new Date(now).toLocaleDateString('en-CA')
 }
 
 /**

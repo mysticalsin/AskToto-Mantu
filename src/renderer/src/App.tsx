@@ -676,9 +676,9 @@ export function App(): JSX.Element {
           mode,
           startedAt: meetingStartRef.current,
           lines: listen.lines,
-          // Save the summary when we have one; a keyless (errored) recap saves an empty summary so the
-          // transcript is still kept. The Review screen shows the transcript from lines either way.
-          recap: answerError ? '' : answerText
+          // Save whatever summary text we have. A trailing stream error used to wipe a finished summary
+          // off disk (answerError ? '' : …) even when tokens had already painted — keep the notes.
+          recap: answerText.trim() ? answerText : ''
         })
         savedRef.current = id // pin only on success → failure can retry
         setSavedPath(r.path)
@@ -1780,7 +1780,11 @@ export function App(): JSX.Element {
     // anyway here would always dead-end in a red "No API key"-style error on the Review screen, even
     // though the user was explicitly told during onboarding that deciding on a provider later was fine.
     // Skip it and let Review show a neutral "connect a provider" affordance instead (recapUnavailable).
-    if (!settings?.providerReady) {
+    // Local-summary readiness (and the fallback safety net) count too — import already honored them;
+    // live stop used to skip and leave Notes empty when only Métis Local was ready.
+    const canSummarize =
+      !!settings?.providerReady || !!settings?.localSummaryReady || !!settings?.localFallbackReady
+    if (!canSummarize) {
       setRecapSkipped(true)
       ask.clear()
       // No recap means no recap-time auto-save fires — persist the transcript NOW (empty recap) so a
@@ -1793,23 +1797,42 @@ export function App(): JSX.Element {
       return
     }
     setRecapSkipped(false)
-    // Cascade the recap into Dust whenever it's configured, regardless of the active provider (e.g.
-    // Kimi handles everyday chat, Dust still writes the meeting notes) — no agentOverride needed, the
-    // normal think-tier resolution inside Dust already respects the user's own Thinking-agent pick.
+    // Prefer mode:'summary' (base tier, local-eligible) when Métis Local should win — live stop used to
+    // always fire mode:'recap' (think tier, out of local scope), so Routing mode → Local / Local summaries
+    // never actually ran on-device for the post-meeting notes. Import already picks summary when local.
+    const preferLocalSummary =
+      !!settings?.localSummaryReady ||
+      (!settings?.providerReady && !!settings?.localFallbackReady)
+    // Cascade into Dust whenever it's configured — UNLESS local summary is the intended path
+    // (mirrors Summarize quick action). Dust override used to silently beat Local on every stop.
     const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
     ask.run({
-      mode: 'recap',
+      mode: preferLocalSummary ? 'summary' : 'recap',
       transcript: tx,
-      // Inert server-side for mode:'recap' (the transcript alone builds the request) — but keeps
+      // Inert server-side for mode:'recap'/'summary' (the transcript alone builds the request) — but keeps
       // retryAnswer's replay-gate (ask.answer?.prompt) truthy so "Retry summary" works after a failure,
       // same reasoning as the Summarize quick action above.
       prompt: 'Summarize this meeting.',
-      ...(dustReady ? { providerOverride: 'dust' as const } : {})
+      ...(dustReady && !preferLocalSummary ? { providerOverride: 'dust' as const } : {})
     })
     // Cold Calling Mode's end-of-call coaching rides the same trigger as the recap (a real, non-empty,
     // provider-ready transcript) but is its own ask so a coaching failure can never blank the recap.
     if (mode === 'cold-call') generateColdCallCoaching()
-  }, [listen.listening, listen.text, listen.lines, ask.run, ask.clear, settings?.providerReady, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels, mode, generateColdCallCoaching])
+  }, [
+    listen.listening,
+    listen.text,
+    listen.lines,
+    ask.run,
+    ask.clear,
+    settings?.providerReady,
+    settings?.localSummaryReady,
+    settings?.localFallbackReady,
+    settings?.hasKeys,
+    settings?.dustWorkspaceId,
+    settings?.providerModels,
+    mode,
+    generateColdCallCoaching
+  ])
 
   // listen.listening flips true -> false exactly once (the moment the post-stop drain settles), so this
   // effect is what actually fires a recap armed by endReview below.
@@ -2160,20 +2183,32 @@ export function App(): JSX.Element {
     (file: string, lines: TranscriptLine[]) => {
       const transcript = transcriptToText(lines)
       if (!transcript) return // nothing to summarize (e.g. a silent recording)
-      // Cascade into Dust whenever it's configured, same as endReview's live recap — no agentOverride
-      // needed, Dust's own think-tier resolution already respects the user's Thinking-agent pick.
+      // Prefer local summary when ready (parity with live stop + Summarize). Always mode:'recap' used to
+      // force think-tier cloud and skip Métis Local entirely.
+      const preferLocalSummary =
+        !!settings?.localSummaryReady ||
+        (!settings?.providerReady && !!settings?.localFallbackReady)
       const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
       setRecapSaveError(null) // a retry must not carry the previous attempt's write failure on screen
       // Snapshot BEFORE run() — see recapGenPrevTextRef's comment above.
       recapGenPrevTextRef.current = recapGenAnswerRef.current?.text ?? ''
       recapGenRunIdRef.current = recapGen.run({
-        mode: 'recap',
+        mode: preferLocalSummary ? 'summary' : 'recap',
         transcript,
-        ...(dustReady ? { providerOverride: 'dust' as const } : {})
+        prompt: 'Summarize this meeting.',
+        ...(dustReady && !preferLocalSummary ? { providerOverride: 'dust' as const } : {})
       })
       setRecapGenTarget({ file })
     },
-    [recapGen.run, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels]
+    [
+      recapGen.run,
+      settings?.hasKeys,
+      settings?.dustWorkspaceId,
+      settings?.providerModels,
+      settings?.localSummaryReady,
+      settings?.localFallbackReady,
+      settings?.providerReady
+    ]
   )
 
   // Persist-on-settle effect for recapGen — mirrors the live auto-save effect above, but gated on
@@ -2215,11 +2250,12 @@ export function App(): JSX.Element {
           // Only release the target if a NEWER generation hasn't already taken it over — that one owns it
           // now and must not have it wiped out from under it by this older run settling late.
           if (recapGenRunIdRef.current === owningId) setRecapGenTarget(null)
-        } catch {
+        } catch (e) {
           // Persistence failure is rare. Deliberately do NOT clear recapGenTarget here: doing so would flip
           // Review's view back to the still-empty saved recap and the freshly generated text — the only
           // copy of it left — would vanish. Leaving the target set keeps recapGen's generated text on
           // screen instead; not retried automatically, same contract as the live-session save path.
+          setRecapSaveError(e instanceof Error ? e.message : 'Could not save the generated summary.')
         } finally {
           if (recapPersistingRef.current === owningId) recapPersistingRef.current = ''
         }
@@ -2737,9 +2773,10 @@ export function App(): JSX.Element {
         followupDraft={followup.answer}
         winsToggle={spotlightRefReady ? { on: includeWins, onToggle: setIncludeWins } : undefined}
         onGenerateFollowup={generateFollowup}
-        onGenerateRecap={pm ? () => { if (requireProvider()) generateSavedRecap(pm.file, pm.lines) } : undefined}
-        onRetryRecap={pm ? () => { if (requireProvider()) generateSavedRecap(pm.file, pm.lines) } : retryAnswer}
+        onGenerateRecap={pm ? () => { if (requireProvider('summary')) generateSavedRecap(pm.file, pm.lines) } : undefined}
+        onRetryRecap={pm ? () => { if (requireProvider('summary')) generateSavedRecap(pm.file, pm.lines) } : retryAnswer}
         mcpConnections={settings?.mcpConnections ?? []}
+        finishingTranscript={listen.listening}
         onOpenFolder={async () => {
           // openMeetingsFolder resolves to a non-empty error string on failure (folder missing/moved,
           // couldn't launch the OS file browser) instead of throwing — surface it instead of discarding

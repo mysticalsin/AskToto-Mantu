@@ -296,7 +296,8 @@ describe('MQA-143/144: the race reports the right provider and releases its hand
     expect(deletes.length).toBeGreaterThanOrEqual(4)
     const err = indexSrc.indexOf('win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })')
     expect(err).toBeGreaterThan(-1)
-    expect(indexSrc.slice(err - 320, err)).toMatch(/if \(race\) streams\.delete\(req\.id\)/)
+    // Looking further back: the keep-substantial-answer branch sits between the race delete and streamError.
+    expect(indexSrc.slice(err - 700, err)).toMatch(/if \(race\) streams\.delete\(req\.id\)/)
   })
 })
 

@@ -30,7 +30,9 @@ const ConsolidateStateSchema = z.object({
 type ConsolidateState = z.infer<typeof ConsolidateStateSchema>
 
 function todayKey(now = Date.now()): string {
-  return new Date(now).toISOString().slice(0, 10)
+  // Local calendar day — UTC midnight would roll the budget early for every timezone west of UTC
+  // (comment on ConsolidateState.date promises local; toISOString lied).
+  return new Date(now).toLocaleDateString('en-CA')
 }
 
 function emptyState(now: number): ConsolidateState {

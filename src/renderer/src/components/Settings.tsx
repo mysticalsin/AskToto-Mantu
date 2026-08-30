@@ -1838,7 +1838,10 @@ function LocalAiSection({
     }
   }, [])
 
-  const model = models?.[0]
+  const model =
+    models?.find((m) => m.id === settings.localLlm.modelId) ??
+    models?.find((m) => m.unavailableReason === 'downloading') ??
+    models?.[0]
   const downloading = model?.unavailableReason === 'downloading'
   const percent = Math.round((model?.downloadProgress ?? 0) * 100)
   // One wording for the blocked case, used by both the status strip and the card. It names the host that
