@@ -36,7 +36,7 @@ Primary CTAs (Get Started / Continue / Next) are **large** hit targets (min 52×
 
 Act 2 is a scripted **Métis** demo on the real product: meeting / transcript / copilot / Intelligence, fake data only. Not an mp4. Not coding terminals. Not Vibe Island strings. The recap uses the **chosen** built-in role's summary layout. Each `DEMO_STAGE` is one video: the current clip **plays by itself** (elapsedMs, synthetic cursor, chips, recap). **No auto-advance** to the next video. Next is the only way to change clips; it resets the rAF clock to 0 in the same click so the next clip plays immediately (it does not sit frozen at the previous hold). No 1100ms timer that jumps stages. Continue leaves the whole demo act.
 
-Get Started and every Next / Continue that shows a video call `video.play()` **inside that click** (browser autoplay policy) and restart the current clip from 0 so it actually starts. If the Act 1 atmosphere video stays mounted across acts, it keeps looping; if a new video mounts, `play()` it from the same click. Do not auto-skip beats.
+Get Started and every Next / Continue that shows a video call `video.play()` **as the first media call in that click** (browser autoplay policy). Do not `play()` after seek, after `setState`, or after the click stack returns. Then restart the current clip from 0 so it actually starts. If the Act 1 atmosphere video stays mounted across acts, it keeps looping; if a new video mounts, `play()` it from the same click. Do not auto-skip beats. `prefers-reduced-motion` may drop the video and pad motion; it must not hide the mute control.
 
 Welcome byline: `Tony Walteur` is a real link to his LinkedIn (`https://www.linkedin.com/in/tonywalteur/`). It opens in the system browser. Do not make the whole stage a link.
 
