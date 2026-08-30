@@ -42,22 +42,24 @@ export function onboardingMusicLoopEnvelope(
 }
 
 /**
- * Must run inside a user click. `play()` is the first media call so the user-gesture
- * token is still live — do not seek, await, or setState first (autoplay policy).
+ * `play()` is the first media call — do not seek, await, or setState first.
+ * Called on the portal-open mount (Electron usually allows autoplay). If play()
+ * rejects, the caller retries on the next user gesture.
  */
 export function playOnboardingAudio(
   el: HTMLAudioElement | null | undefined,
   opts: { restart?: boolean } = {}
-): void {
+): Promise<void> | undefined {
   if (!el) return
   const playing = el.play()
   if (opts.restart) el.currentTime = 0
   void playing.catch(() => {})
+  return playing
 }
 
 export interface OnboardingMusicBed {
   element: HTMLAudioElement
-  start: (opts?: { restart?: boolean }) => void
+  start: (opts?: { restart?: boolean }) => Promise<void> | undefined
   stop: () => void
   setMuted: (muted: boolean) => void
   isMuted: () => boolean
@@ -82,9 +84,7 @@ export function createOnboardingMusicBed(): OnboardingMusicBed {
 
   return {
     element: el,
-    start: (opts = {}) => {
-      playOnboardingAudio(el, opts)
-    },
+    start: (opts = {}) => playOnboardingAudio(el, opts),
     stop: () => {
       el.pause()
     },
