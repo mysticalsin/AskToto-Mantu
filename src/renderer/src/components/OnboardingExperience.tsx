@@ -24,7 +24,7 @@
  *   needs comes back through onDone.
  */
 import { useEffect, useRef, useState } from 'react'
-import { Check, Cloud, FolderLock, Mic, MonitorUp, Sparkles } from 'lucide-react'
+import { Check, Cloud, FolderLock, MessageSquare, Mic, MonitorUp, Sparkles, TrendingUp, UserSearch } from 'lucide-react'
 import type { ConversationMode, PermissionStatus, ProfileRecoveryResult, PublicSettings } from '@shared/ipc'
 import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
@@ -33,6 +33,15 @@ import { Onboarding } from './Onboarding'
 import { OnboardingDemoScene } from './OnboardingDemoScene'
 import { isWindows } from '../lib/keys'
 import { useScrambleReveal } from '../lib/scramble'
+import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
+
+// Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
+// one icon, everywhere it appears, rather than inventing a second icon language just for this scene.
+const PERSONA_ICONS: Record<OnboardingPersonaId, typeof MessageSquare> = {
+  general: MessageSquare,
+  sales: TrendingUp,
+  recruiting: UserSearch
+}
 
 export interface OnboardingExperienceProps {
   onDone: (result: { mode: ConversationMode; recordingConsent: boolean }) => void
@@ -591,30 +600,55 @@ export function OnboardingExperience({ onDone, onSkip, settings, patch }: Onboar
 
       {scene === 'personalize' && (
         <div key="personalize" className="scene-enter flex flex-col items-center gap-6">
-          <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">How will you use Métis?</h2>
+          <div className="flex flex-col items-center gap-1.5">
+            <p className="m-0 text-[11px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-ink-3)]">
+              Last one
+            </p>
+            <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">How should Métis show up?</h2>
+            <p className="m-0 max-w-[360px] text-[12.5px] leading-snug text-[color:var(--color-ink-2)]">
+              One pick shapes how it listens and what it says next — change it anytime in Settings.
+            </p>
+          </div>
           <div className="flex gap-3">
-            {(
-              [
-                { id: 'general', label: 'General', desc: 'Every meeting, every topic' },
-                { id: 'sales', label: 'Sales', desc: 'Deals, objections, next steps' },
-                { id: 'recruiting', label: 'Recruiting', desc: 'You interview: STAR probes, challenges' }
-              ] as Array<{ id: ConversationMode; label: string; desc: string }>
-            ).map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                onClick={() => setMode(m.id)}
-                className={
-                  'no-drag focus-ring w-[150px] rounded-[14px] border px-4 py-3 text-left transition-all duration-150 ' +
-                  (mode === m.id
-                    ? 'scale-[1.03] border-[var(--color-accent)] bg-[var(--color-accent-soft)] shadow-[0_2px_14px_var(--color-accent-glow)]'
-                    : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]')
-                }
-              >
-                <p className="m-0 text-[13px] font-semibold text-[color:var(--color-ink)]">{m.label}</p>
-                <p className="m-0 mt-0.5 text-[11px] leading-snug text-[color:var(--color-ink-2)]">{m.desc}</p>
-              </button>
-            ))}
+            {/* The onboarding personality beat (Act 4, Vibe-Island-teardown "the ONE emotional choice
+                after the heavy config step") — three refined cards over the plain three-button picker
+                this replaced, each naming the mode's real behavior change (`persona-vibe.ts`, honest and
+                unit-tested against the actual `DEFAULT_MODE_PROMPTS`) rather than inventing personality
+                settings that don't exist. Selection delight is a single one-shot ring (`.persona-select-
+                ring` below), keyed by `mode` so it retriggers fresh on every pick — same remount trick as
+                `.scene-enter`'s `key={scene}` — and folds into the global prefers-reduced-motion rule for
+                free (0ms duration = jumps straight to its end state, i.e. invisible). */}
+            {ONBOARDING_PERSONAS.map((p) => {
+              const Icon = PERSONA_ICONS[p.id]
+              const selected = mode === p.id
+              return (
+                <button
+                  key={p.id}
+                  type="button"
+                  aria-pressed={selected}
+                  onClick={() => setMode(p.id)}
+                  className={
+                    'no-drag focus-ring relative w-[164px] overflow-hidden rounded-[14px] border px-4 py-3.5 text-left transition-all duration-150 ' +
+                    (selected
+                      ? 'scale-[1.03] border-[var(--color-accent)] bg-[var(--color-accent-soft)] shadow-[0_2px_14px_var(--color-accent-glow)]'
+                      : 'border-white/10 bg-white/[0.03] hover:bg-white/[0.06]')
+                  }
+                >
+                  {selected && <span key={mode} aria-hidden="true" className="persona-select-ring" />}
+                  <div className="flex items-center gap-1.5">
+                    <Icon
+                      size={14}
+                      className={selected ? 'text-[color:var(--color-accent-2)]' : 'text-[color:var(--color-ink-3)]'}
+                    />
+                    <p className="m-0 text-[13px] font-semibold text-[color:var(--color-ink)]">{p.label}</p>
+                  </div>
+                  <p className="m-0 mt-1 text-[10.5px] font-medium uppercase tracking-[0.06em] text-[color:var(--color-accent-2)]">
+                    {p.vibe}
+                  </p>
+                  <p className="m-0 mt-1.5 text-[11px] leading-snug text-[color:var(--color-ink-2)]">{p.changes}</p>
+                </button>
+              )
+            })}
           </div>
           <div className="flex flex-col items-center gap-3">
             <label className="flex max-w-[420px] cursor-pointer items-start gap-2.5 rounded-[12px] border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-left">
