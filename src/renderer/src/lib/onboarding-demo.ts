@@ -193,10 +193,8 @@ export function demoFrameAt(elapsedMs: number): DemoFrame {
   }
 }
 
-/** Ordered stage-boundary milestones, exported for the reduced-motion stepper (component) — stepping
- *  straight to each of these (instead of interpolating continuously) shows the same beats in the same
- *  order with no glide/streaming motion, matching Act 1's reduced-motion rule ("a static resolved state,
- *  never stuck mid-animation"). */
+/** Ordered stage-boundary milestones. Act 2 click-to-advance maps a beat index onto these
+ *  (no timers). Same beats, one click each. */
 export const DEMO_STAGE_BOUNDARIES: readonly number[] = [
   DEMO_TIMING.line1,
   DEMO_TIMING.line2,
@@ -206,6 +204,22 @@ export const DEMO_STAGE_BOUNDARIES: readonly number[] = [
   DEMO_TIMING.recapStart,
   DEMO_TIMING.end
 ]
+
+/** Click-to-advance: elapsed ms for beat `i`. No timers. */
+export function demoElapsedAtBeat(i: number): number {
+  const last = DEMO_STAGE_BOUNDARIES.length - 1
+  const n = i < 0 ? 0 : i > last ? last : i
+  return DEMO_STAGE_BOUNDARIES[n]
+}
+
+export function nextDemoBeatIndex(i: number): number {
+  const last = DEMO_STAGE_BOUNDARIES.length - 1
+  return i >= last ? last : i + 1
+}
+
+export function demoHasNextBeat(i: number): boolean {
+  return i < DEMO_STAGE_BOUNDARIES.length - 1
+}
 
 /** Act 2 recap for the chosen role. Sales / recruiting / meeting (and the other six) are different layouts. */
 export function demoRecapMarkdown(mode: string): string {

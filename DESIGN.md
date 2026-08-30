@@ -20,11 +20,13 @@ Hover or click expands **down** from the safe peek to the full bar (same top edg
 Every act stays on one **exclusive fullscreen** until `onboardingDone`. Then destroy that stage and leave the small island. Do not shrink to a mid-flow card.
 Stage API: `exclusiveOnboardingBounds(display.bounds, display.workArea)`; exit only on `onboardingDone`.
 
-The stage is **warm, animated, exclusive, rich** — never a solid black void (`#000` / `#0c0c0e` fill). CSS-only motion (existing constraint). `prefers-reduced-motion` stays warm (static amber wash) but still.
+The stage is a **Mantu purple** brand wash (`#3A0B6B` / `#7F00DA` / `#9A2BF0`), animated, exclusive, rich — never a solid black void and never amber. CSS-only motion (existing constraint). `prefers-reduced-motion` stays purple (static wash) but still.
 
 Primary CTAs (Get Started / Continue / Next) are **large** hit targets (min 52×220), high contrast, bottom-safe, and visible.
 
-Act 2 is a scripted **Métis** demo on the real product: meeting / transcript / copilot / Intelligence, fake data only. Not coding terminals. Not Vibe Island strings. The recap uses the **chosen** built-in role's summary layout.
+Act 2 is a scripted **Métis** demo on the real product: meeting / transcript / copilot / Intelligence, fake data only. Not coding terminals. Not Vibe Island strings. The recap uses the **chosen** built-in role's summary layout. **No auto-advance.** Each beat waits for a click (Next, or anywhere on the stage). Continue leaves the whole demo act.
+
+Welcome byline: `Tony Walteur` is a real link to his LinkedIn (`https://www.linkedin.com/in/tonywalteur/`). It opens in the system browser. Do not make the whole stage a link.
 
 Act 3 shows on-device model **download/install progress** (weights already fetch via `ensureLocalModel` on app open). Never copy "not installed" as a dead state. If RAM-gated, say so honestly.
 

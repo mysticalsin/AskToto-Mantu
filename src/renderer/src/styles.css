@@ -682,7 +682,25 @@ input::placeholder {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
 }
 
-/* Exclusive onboarding stage — warm, animated, never a solid black void (DESIGN.md).
+/* Welcome byline name only — system browser via target=_blank → setWindowOpenHandler → openExternal. */
+.hero-byline-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 10px;
+  margin: 0 -4px;
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.hero-byline-link:hover {
+  color: #f4f4f5;
+  background: color-mix(in srgb, #9a2bf0 32%, transparent);
+}
+
+/* Exclusive onboarding stage — Mantu purple brand wash, never amber, never a black void (DESIGN.md).
    Viewport-fixed so simple-fullscreen + % height cannot collapse the paint to the
    window chrome color. */
 .onboard-stage {
@@ -694,9 +712,9 @@ input::placeholder {
   flex-direction: column;
   overflow: hidden;
   background:
-    radial-gradient(1200px 700px at 18% 12%, rgba(232, 140, 64, 0.42), transparent 58%),
-    radial-gradient(900px 600px at 88% 78%, rgba(180, 72, 28, 0.34), transparent 55%),
-    linear-gradient(165deg, #3a2416 0%, #5a3218 42%, #2c1810 100%);
+    radial-gradient(1200px 700px at 18% 12%, color-mix(in srgb, #9a2bf0 42%, transparent), transparent 58%),
+    radial-gradient(900px 600px at 88% 78%, color-mix(in srgb, #7f00da 36%, transparent), transparent 55%),
+    linear-gradient(165deg, #3a0b6b 0%, #7f00da 42%, #2a0848 100%);
 }
 .onboard-stage::before,
 .onboard-stage::after {
@@ -705,24 +723,26 @@ input::placeholder {
   border-radius: 50%;
   pointer-events: none;
   filter: blur(40px);
-  animation: onboard-warm-drift 18s ease-in-out infinite alternate;
+  animation: onboard-purple-drift 18s ease-in-out infinite alternate;
 }
 .onboard-stage::before {
   width: 46vw;
   height: 46vw;
   left: -8vw;
   top: -12vh;
-  background: rgba(255, 176, 92, 0.28);
+  background: #9a2bf0;
+  opacity: 0.32;
 }
 .onboard-stage::after {
   width: 40vw;
   height: 40vw;
   right: -6vw;
   bottom: -10vh;
-  background: rgba(214, 96, 42, 0.22);
+  background: #7f00da;
+  opacity: 0.26;
   animation-delay: -7s;
 }
-@keyframes onboard-warm-drift {
+@keyframes onboard-purple-drift {
   from {
     transform: translate3d(0, 0, 0) scale(1);
   }

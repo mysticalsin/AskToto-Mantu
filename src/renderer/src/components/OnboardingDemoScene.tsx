@@ -7,8 +7,8 @@
  * product respond before configuring anything.
  *
  * Architecture:
- * - lib/onboarding-demo.ts owns ALL the fake content and timing as a pure `demoFrameAt(elapsedMs)`
- *   projection — this component only drives a clock over it and renders whatever comes out.
+ * - lib/onboarding-demo.ts owns ALL the fake content as a pure `demoFrameAt(elapsedMs)` projection.
+ *   The scene maps a click-stepped beat index onto DEMO_STAGE_BOUNDARIES. No auto-advance.
  * - lib/synthetic-cursor.ts owns the pure easing math for the drawn cursor; this component only
  *   measures the target chip's real screen position each frame.
  * - SAFETY (MQA-278, see @shared/demo-guard + lib/onboarding-demo-guard.ts): this component flips a
@@ -26,8 +26,9 @@ import { QuickActions } from './QuickActions'
 import {
   DEMO_FACTCHECK_LABEL,
   demoRecapMarkdown,
-  DEMO_STAGE_BOUNDARIES,
-  DEMO_TIMING,
+  demoElapsedAtBeat,
+  demoHasNextBeat,
+  nextDemoBeatIndex,
   demoFrameAt,
   type DemoCursorTarget
 } from '../lib/onboarding-demo'
@@ -51,45 +52,20 @@ const CHIP_SELECTOR: Record<Exclude<DemoCursorTarget, 'none'>, string> = {
   factcheck: '[aria-label="Fact-check"]'
 }
 
-/** rAF-driven demo clock. Honors prefers-reduced-motion the same way lib/scramble.ts's
- *  `useScrambleReveal` does — but a demo has multiple beats to convey, not one word, so "skip straight
- *  to resolved" here means stepping through each named stage boundary instantly (no glide, no
- *  streaming) rather than jumping straight to the very end, which would just show the recap. */
-function useDemoElapsed(): number {
-  const [elapsed, setElapsed] = useState(0)
-  useEffect(() => {
-    if (prefersReducedMotion()) {
-      let cancelled = false
-      let i = 0
-      const timers: ReturnType<typeof setTimeout>[] = []
-      const step = (): void => {
-        if (cancelled || i >= DEMO_STAGE_BOUNDARIES.length) return
-        setElapsed(DEMO_STAGE_BOUNDARIES[i])
-        i += 1
-        if (i < DEMO_STAGE_BOUNDARIES.length) timers.push(setTimeout(step, 1100))
-      }
-      step()
-      return () => {
-        cancelled = true
-        timers.forEach(clearTimeout)
-      }
-    }
-    let raf = 0
-    let cancelled = false
-    const start = performance.now()
-    const tick = (now: number): void => {
-      if (cancelled) return
-      const e = now - start
-      setElapsed(e)
-      if (e < DEMO_TIMING.end) raf = requestAnimationFrame(tick)
-    }
-    raf = requestAnimationFrame(tick)
-    return () => {
-      cancelled = true
-      cancelAnimationFrame(raf)
-    }
-  }, [])
-  return elapsed
+/** Click-stepped beat index. No auto-step timers, no rAF clock. Tony watches each beat, then clicks Next. */
+function useDemoBeat(): {
+  elapsedMs: number
+  beat: number
+  hasNext: boolean
+  advance: () => void
+} {
+  const [beat, setBeat] = useState(0)
+  return {
+    elapsedMs: demoElapsedAtBeat(beat),
+    beat,
+    hasNext: demoHasNextBeat(beat),
+    advance: () => setBeat((i) => nextDemoBeatIndex(i))
+  }
 }
 
 function DemoRecapCard({ mode }: { mode: string }): JSX.Element {
@@ -113,7 +89,7 @@ export function OnboardingDemoScene({
   onSkipToEnd: () => void
 }): JSX.Element {
   const reducedMotion = prefersReducedMotion()
-  const elapsedMs = useDemoElapsed()
+  const { elapsedMs, hasNext, advance } = useDemoBeat()
   const frame = demoFrameAt(elapsedMs)
   const startedAtRef = useRef(Date.now())
   const wrapRef = useRef<HTMLDivElement>(null)
@@ -195,9 +171,24 @@ export function OnboardingDemoScene({
     )
 
   return (
-    <div key="reveal" className="scene-enter flex w-full flex-col items-center gap-6">
+    <div
+      key="reveal"
+      className={
+        'scene-enter flex w-full flex-1 flex-col items-center justify-center gap-6 ' +
+        (hasNext ? 'cursor-pointer' : '')
+      }
+      onClick={() => {
+        if (hasNext) advance()
+      }}
+    >
       <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">Here’s what that looks like.</h2>
-      <div className="flex max-w-[880px] flex-wrap justify-center gap-1.5">
+      <p className="m-0 text-[13px] text-[color:var(--color-ink-2)]">
+        {hasNext ? 'Click Next, or anywhere on the stage, for the next beat.' : 'That’s the full pass. Continue when you’re ready.'}
+      </p>
+      <div
+        className="flex max-w-[880px] flex-wrap justify-center gap-1.5"
+        onClick={(e) => e.stopPropagation()}
+      >
         {CONVERSATION_MODES.map((id) => (
           <button
             key={id}
@@ -216,7 +207,11 @@ export function OnboardingDemoScene({
       </div>
 
       {!frame.meetingEnded ? (
-        <div ref={wrapRef} className="relative w-full max-w-[880px]">
+        <div
+          ref={wrapRef}
+          className="relative w-full max-w-[880px]"
+          onClick={(e) => e.stopPropagation()}
+        >
           <Bar
             value=""
             onChange={() => {}}
@@ -264,25 +259,30 @@ export function OnboardingDemoScene({
           )}
         </div>
       ) : (
-        <DemoRecapCard mode={mode} />
+        <div onClick={(e) => e.stopPropagation()}>
+          <DemoRecapCard mode={mode} />
+        </div>
       )}
 
-      <button
-        type="button"
-        onClick={onContinue}
-        className="onboard-cta no-drag focus-ring"
-      >
-        Set me up
-      </button>
-      {/* Skip-available-from-here (per brief): jumps straight to Personalize, keeping everything already
-          shown (unlike Hero's "Skip the tour", which restarts the legacy flow from its own slide 1). */}
-      <button
-        type="button"
-        onClick={onSkipToEnd}
-        className="fade-up no-drag text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
-      >
-        Skip to the end
-      </button>
+      <div className="flex flex-col items-center gap-3" onClick={(e) => e.stopPropagation()}>
+        {hasNext && (
+          <button type="button" onClick={advance} className="onboard-cta no-drag focus-ring">
+            Next
+          </button>
+        )}
+        <button type="button" onClick={onContinue} className="onboard-cta no-drag focus-ring">
+          Set me up
+        </button>
+        {/* Skip-available-from-here (per brief): jumps straight to Personalize, keeping everything already
+            shown (unlike Hero's "Skip the tour", which restarts the legacy flow from its own slide 1). */}
+        <button
+          type="button"
+          onClick={onSkipToEnd}
+          className="fade-up no-drag text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
+        >
+          Skip to the end
+        </button>
+      </div>
     </div>
   )
 }
