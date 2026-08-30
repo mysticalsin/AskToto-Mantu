@@ -90,7 +90,8 @@ import {
   type LocalModelSummary,
   type PlatformPermissions,
   type UpdateCheckResult,
-  type McpConnectionKind
+  type McpConnectionKind,
+  type LicenseStatusResult
 } from '@shared/ipc'
 import {
   PROVIDERS,
@@ -6919,6 +6920,9 @@ function LicenseSection({
   const [error, setError] = useState<string | null>(null)
   const serverId = useId()
   const keyId = useId()
+  // Act 5 (MQA-281/282): lease/trial status, fetched via license:status (live-verified — never a raw
+  // settings echo, see licenseDisplayStatus in main/license.ts). null while the first read is pending.
+  const [status, setStatus] = useState<LicenseStatusResult | null>(null)
   // Guards state writes after unmount — activation is a real network round trip and the user can switch
   // Settings tabs before it resolves.
   const mountedRef = useRef(true)
@@ -6927,6 +6931,19 @@ function LicenseSection({
       mountedRef.current = false
     }
   }, [])
+
+  useEffect(() => {
+    let live = true
+    void window.toto.licenseStatus().then((s) => {
+      if (live) setStatus(s)
+    })
+    return () => {
+      live = false
+    }
+    // Re-read whenever the persisted license/lease fields this section can change actually change —
+    // an activation flips licenseValid/licenseLease, so this section's status line stays live without
+    // a poll loop.
+  }, [settings.licenseValid, settings.licenseLease, settings.licenseGateEnabled])
 
   const activate = async (): Promise<void> => {
     const url = serverUrl.trim()
@@ -6944,6 +6961,8 @@ function LicenseSection({
       // which carry the freshly-persisted state, so the UI updates without a full refetch.
       await patch({ licenseServerUrl: url })
       setLicenseKey('')
+      const s = await window.toto.licenseStatus()
+      if (mountedRef.current) setStatus(s)
     } else {
       setError(licenseErrorMessage(r.error))
     }
@@ -6999,6 +7018,27 @@ function LicenseSection({
             {settings.licenseSeatCap > 0
               ? ` · up to ${settings.licenseSeatCap} seat${settings.licenseSeatCap === 1 ? '' : 's'}`
               : ''}
+          </span>
+        </div>
+      )}
+      {/* Act 5 (MQA-281/282): the offline-lease / trial line. Deliberately independent of
+          settings.licenseValid above — a device can be covered by a signed lease (checked in even
+          without a live server round trip) or the local trial fallback while never having a
+          server-verified `licenseValid: true` at all, so this reads license:status's own
+          live-verified fields rather than reusing that flag. Silent (no line at all) whenever neither
+          applies, e.g. licensing is off and this device never started a trial. */}
+      {!error && status?.leaseExpiresAt != null && (
+        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-success)]">
+          <CircleCheck size={13} className="mt-px shrink-0" />
+          <span>Continue on your offline lease (expires {new Date(status.leaseExpiresAt).toLocaleDateString()}).</span>
+        </div>
+      )}
+      {!error && status?.leaseExpiresAt == null && status?.trialActive && (
+        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
+          <Timer size={13} className="mt-px shrink-0" />
+          <span>
+            Trial · {status.trialDaysRemaining} day{status.trialDaysRemaining === 1 ? '' : 's'} left. Paste a
+            license key above anytime to activate.
           </span>
         </div>
       )}
