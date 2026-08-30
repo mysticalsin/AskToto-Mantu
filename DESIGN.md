@@ -30,6 +30,8 @@ Stage API: `exclusiveOnboardingBounds(display.bounds, display.workArea)`; exit o
 
 The stage is a **Mantu purple** brand wash (`#3A0B6B` / `#7F00DA` / `#9A2BF0`), animated, exclusive, rich — never a solid black void and never amber. CSS-only motion (existing constraint). `prefers-reduced-motion` stays purple (static wash) but still.
 
+Act 1 (welcome) plays a full-viewport muted looping video behind the Métis mark (`object-cover`, z-0; UI z-10). A purple Mantu tint sits on the video. Not a Bloom or Axon landing page. If the video fails or motion is reduced, the purple wash stays. Get Started, Skip, and the Tony Walteur byline use liquid glass (backdrop blur, inset highlight, gradient-border). Steal the technique, not Bloom copy.
+
 Primary CTAs (Get Started / Continue / Next) are **large** hit targets (min 52×220), high contrast, bottom-safe, and visible.
 
 Act 2 is a scripted **Métis** demo on the real product: meeting / transcript / copilot / Intelligence, fake data only. Not an mp4. Not coding terminals. Not Vibe Island strings. The recap uses the **chosen** built-in role's summary layout. Each `DEMO_STAGE` is one video: the current clip **plays by itself** (elapsedMs, synthetic cursor, chips, recap). **No auto-advance** to the next video. Next is the only way to change clips; it resets the clock so the next clip plays from its start. No 1100ms timer that jumps stages. Continue leaves the whole demo act.

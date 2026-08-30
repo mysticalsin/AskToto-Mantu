@@ -67,6 +67,7 @@ import { useScrambleReveal } from '../lib/scramble'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
 import { sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
 import { createOnboardingMusicBed } from '../lib/onboarding-music'
+import { ONBOARDING_HERO_VIDEO_SRC } from '../lib/onboarding-hero-video'
 
 // Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
 // one icon, everywhere it appears, rather than inventing a second icon language just for this scene.
@@ -158,63 +159,83 @@ const WORDMARK = 'Métis'
  * rule (plus explicit end-state overrides below for the ones with a custom-property angle), and the
  * scramble hook checks the media query itself and skips straight to the resolved word.
  */
+function OnboardingHeroVideo(): JSX.Element | null {
+  const [failed, setFailed] = useState(false)
+  if (prefersReducedMotion() || failed) return null
+  return (
+    <div className="onboard-hero-video" aria-hidden="true">
+      <video
+        muted
+        loop
+        playsInline
+        autoPlay
+        preload="metadata"
+        src={ONBOARDING_HERO_VIDEO_SRC}
+        onError={() => setFailed(true)}
+      />
+      <div className="onboard-hero-video-tint" />
+    </div>
+  )
+}
+
 function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => void }): JSX.Element {
   const wordmark = useScrambleReveal(WORDMARK, 900)
   return (
-    <div className="scene-enter flex flex-col items-center gap-5">
-      <div className="island-capsule" aria-hidden="true">
-        <span className="island-capsule-mark">
-          <MetisMark size={40} />
-        </span>
-      </div>
-      <div className="flex flex-col items-center gap-2">
-        <h1
-          className="hero-wordmark m-0 select-none"
-          aria-label={WORDMARK}
-          style={{ fontFamily: 'var(--font-ui)' }}
-        >
-          <span aria-hidden="true">{wordmark}</span>
-        </h1>
-        <p
-          className="hero-tagline fade-up m-0 text-[14px] text-[color:var(--color-ink-2)]"
-          style={{ animationDelay: '900ms', animationFillMode: 'backwards' }}
-        >
-          Your on-device meeting copilot.
-        </p>
-      </div>
-      <button
-        type="button"
-        onClick={onBegin}
-        className="onboard-cta fade-up no-drag focus-ring"
-        style={{ animationDelay: '1000ms', animationFillMode: 'backwards' }}
-      >
-        Get Started
-      </button>
-      {onSkip && (
+    <>
+      <OnboardingHeroVideo />
+      <div className="relative z-10 scene-enter flex flex-col items-center gap-5">
+        <div className="hero-mark" aria-hidden="true">
+          <MetisMark size={96} />
+        </div>
+        <div className="flex flex-col items-center gap-2">
+          <h1
+            className="hero-wordmark m-0 select-none"
+            aria-label={WORDMARK}
+            style={{ fontFamily: 'var(--font-ui)' }}
+          >
+            <span aria-hidden="true">{wordmark}</span>
+          </h1>
+          <p
+            className="hero-tagline fade-up m-0 text-[14px] text-[color:var(--color-ink-2)]"
+            style={{ animationDelay: '900ms', animationFillMode: 'backwards' }}
+          >
+            Your on-device meeting copilot.
+          </p>
+        </div>
         <button
           type="button"
-          onClick={onSkip}
-          className="fade-up no-drag text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
-          style={{ animationDelay: '1150ms', animationFillMode: 'backwards' }}
+          onClick={onBegin}
+          className="onboard-cta onboard-glass fade-up no-drag focus-ring"
+          style={{ animationDelay: '1000ms', animationFillMode: 'backwards' }}
         >
-          Skip the tour
+          Get Started
         </button>
-      )}
-      <p
-        className="hero-byline fade-up m-0 text-[10px] tracking-wide text-[color:var(--color-ink-3)]"
-        style={{ animationDelay: '1300ms', animationFillMode: 'backwards' }}
-      >
-        Mantu ·{' '}
-        <a
-          href="https://www.linkedin.com/in/tonywalteur/"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="hero-byline-link no-drag focus-ring"
+        {onSkip && (
+          <button
+            type="button"
+            onClick={onSkip}
+            className="onboard-glass onboard-glass-chip fade-up no-drag focus-ring"
+            style={{ animationDelay: '1150ms', animationFillMode: 'backwards' }}
+          >
+            Skip the tour
+          </button>
+        )}
+        <p
+          className="hero-byline onboard-glass onboard-glass-chip fade-up m-0 text-[10px] tracking-wide"
+          style={{ animationDelay: '1300ms', animationFillMode: 'backwards' }}
         >
-          Tony Walteur
-        </a>
-      </p>
-    </div>
+          Mantu ·{' '}
+          <a
+            href="https://www.linkedin.com/in/tonywalteur/"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hero-byline-link no-drag focus-ring"
+          >
+            Tony Walteur
+          </a>
+        </p>
+      </div>
+    </>
   )
 }
 
