@@ -16,6 +16,12 @@ import {
   islandSafeTop,
   exclusiveOnboardingBounds,
   onboardingFitsWorkArea,
+  parkAfterExclusiveOnboarding,
+  overlayRestSize,
+  isForbiddenMidFlowCard,
+  shouldIgnoreResizeWhilePeekResting,
+  OVERLAY_HIDE_TARGET,
+  OVERLAY_ISLAND_PEEK,
   ISLAND_NOTCH_STRUT_PX,
   type DisplayMetrics,
   type Rect
@@ -297,6 +303,70 @@ describe('MQA-275 — clamp primitives (moved verbatim from index.ts)', () => {
   })
 })
 
+describe('after exclusive exit — park peek/hide, never 880×816', () => {
+  const tonyMac: DisplayMetrics = {
+    bounds: { x: 0, y: 0, width: 1512, height: 982 },
+    workArea: { x: 0, y: 39, width: 1512, height: 943 },
+    hasNotch: true,
+    notchWidth: 200,
+    menuBarHeight: 39,
+    source: 'helper'
+  }
+
+  it('hide parks a hug-width hide-target at islandSafeTop, never the 880×816 card', () => {
+    const park = parkAfterExclusiveOnboarding('hide', tonyMac, 8)
+    expect(park.y).toBe(39)
+    expect(park.y).toBeGreaterThanOrEqual(25)
+    expect(park.width).toBe(OVERLAY_HIDE_TARGET.width + 10)
+    expect(park.height).toBe(OVERLAY_HIDE_TARGET.height + 4)
+    expect(park.width).toBeLessThan(300)
+    expect(park.height).toBeLessThan(40)
+    expect(isForbiddenMidFlowCard(park)).toBe(false)
+    expect(isForbiddenMidFlowCard({ width: 880, height: 816 })).toBe(true)
+    expect(park.x).toBe(Math.round((1512 - park.width) / 2))
+  })
+
+  it('island parks the peek capsule at the same Y; bar keeps the classic rest', () => {
+    const island = parkAfterExclusiveOnboarding('island', tonyMac, 8)
+    expect(island.y).toBe(39)
+    expect(island.width).toBe(OVERLAY_ISLAND_PEEK.width + 10)
+    expect(island.height).toBe(OVERLAY_ISLAND_PEEK.height + 4)
+    expect(isForbiddenMidFlowCard(island)).toBe(false)
+    const bar = parkAfterExclusiveOnboarding('bar', tonyMac, 8)
+    expect(bar.width).toBe(880)
+    expect(bar.height).toBe(84)
+    expect(isForbiddenMidFlowCard(bar)).toBe(false)
+  })
+
+  it('path C strut: workArea.y 0 on a notch Mac never peeks at y=0', () => {
+    const flush: DisplayMetrics = {
+      ...tonyMac,
+      workArea: { x: 0, y: 0, width: 1512, height: 982 },
+      menuBarHeight: 0
+    }
+    const park = parkAfterExclusiveOnboarding('hide', flush, 8)
+    expect(park.y).toBe(ISLAND_NOTCH_STRUT_PX)
+    expect(park.y).not.toBe(0)
+  })
+
+  it('stale 816px measures are ignored while hide/island is resting', () => {
+    const peek = overlayRestSize('hide').height
+    expect(shouldIgnoreResizeWhilePeekResting(true, 816, peek)).toBe(true)
+    expect(shouldIgnoreResizeWhilePeekResting(true, peek, peek)).toBe(false)
+    expect(shouldIgnoreResizeWhilePeekResting(false, 816, peek)).toBe(false)
+  })
+
+  it('peek constants match the CSS hide-target and island capsule', () => {
+    const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
+    const hide = css.slice(css.indexOf('.overlay-hide-target {'), css.indexOf('.overlay-peek {'))
+    const peek = css.slice(css.indexOf('.overlay-peek {'), css.indexOf('.overlay-peek:hover'))
+    expect(hide).toMatch(new RegExp(`width:\\s*${OVERLAY_HIDE_TARGET.width}px`))
+    expect(hide).toMatch(new RegExp(`height:\\s*${OVERLAY_HIDE_TARGET.height}px`))
+    expect(peek).toMatch(new RegExp(`width:\\s*${OVERLAY_ISLAND_PEEK.width}px`))
+    expect(peek).toMatch(new RegExp(`height:\\s*${OVERLAY_ISLAND_PEEK.height}px`))
+  })
+})
+
 describe('DESIGN.md overlay contract', () => {
   const design = readFileSync(join(__dirname, '../../../DESIGN.md'), 'utf8')
 
@@ -391,7 +461,13 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(finish.indexOf('closeOnboardingPortal')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true })'))
     expect(index).toMatch(/if \(onboardingExclusiveLive\(\)\) \{\s*applyExclusiveOnboardingStage\(win\)/)
     expect(index).not.toMatch(/Math\.min\(680/)
-    expect(index).toMatch(/islandTopCenter\(BAR_WIDTH, display, ISLAND_TOP_MARGIN\)/)
+    const exit = index.slice(index.indexOf('function exitExclusiveOnboardingStage'), index.indexOf('function createWindow'))
+    expect(exit).toMatch(/parkAfterExclusiveOnboarding/)
+    expect(exit).toMatch(/applyOverlayAlwaysOnTop/)
+    expect(exit).toMatch(/setAlwaysOnTop\(true, 'screen-saver'\)/)
+    expect(exit).not.toMatch(/width: BAR_WIDTH, height: BAR_HEIGHT/)
+    expect(exit).not.toMatch(/currentWidth = BAR_WIDTH/)
+    expect(index).toMatch(/shouldIgnoreResizeWhilePeekResting/)
   })
 
   it('App fills the stage — OnboardingV2 is not wrapped in the overlapping Panel card', () => {
@@ -465,22 +541,30 @@ describe('overlay chrome modes (hide / island / bar)', () => {
   it('default is hide; Settings switches island and bar; hide rest + leave collapse', () => {
     const ipc = readFileSync(join(__dirname, '../../shared/ipc.ts'), 'utf8')
     const settings = readFileSync(join(__dirname, '../../renderer/src/components/Settings.tsx'), 'utf8')
+    const picker = readFileSync(join(__dirname, '../../renderer/src/components/OverlayChromePicker.tsx'), 'utf8')
     const app = readFileSync(join(__dirname, '../../renderer/src/App.tsx'), 'utf8')
     const peek = readFileSync(join(__dirname, '../../renderer/src/components/OverlayPeek.tsx'), 'utf8')
     const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
     const autohide = readFileSync(join(__dirname, '../../renderer/src/lib/overlay-autohide.ts'), 'utf8')
     expect(ipc).toMatch(/overlayLayout: z\.enum\(\['hide', 'island', 'bar'\]\)\.default\('hide'\)/)
     expect(ipc).toMatch(/overlayLayout: 'hide'/)
-    expect(settings).toMatch(/OVERLAY_LAYOUTS/)
+    expect(settings).toMatch(/OverlayChromePicker/)
     expect(settings).toMatch(/overlayLayout: id/)
-    expect(settings).toMatch(/aria-label="Overlay chrome"/)
-    expect(settings).toMatch(/Default/)
+    expect(picker).toMatch(/OVERLAY_LAYOUTS/)
+    expect(picker).toMatch(/aria-label="Overlay chrome"/)
+    expect(picker).toMatch(/Default/)
+    expect(picker).toMatch(/data-chrome-diagram=\{id\}/)
+    expect(picker).toMatch(/overlay-chrome-diagram--\$\{id\}/)
+    expect(css).toMatch(/\.overlay-chrome-diagram--hide/)
+    expect(css).toMatch(/\.overlay-chrome-diagram--island/)
+    expect(css).toMatch(/\.overlay-chrome-diagram--bar/)
     expect(settings).not.toMatch(/label="Auto-hide overlay"/)
     expect(app).toMatch(/parseOverlayLayout/)
     expect(app).toMatch(/overlayRestsHidden\(overlayLayout\) \? 'hide' : 'island'/)
     expect(app).toMatch(/pointer-leave/)
     expect(peek).toMatch(/rest === 'hide'/)
     expect(css).toMatch(/\.overlay-hide-target/)
+    expect(css).toMatch(/\.overlay-chrome-diagram--hide/)
     expect(autohide).toMatch(/case 'pointer-leave'/)
   })
 })

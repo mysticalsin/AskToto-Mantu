@@ -11,15 +11,15 @@ export const DEFAULT_OVERLAY_LAYOUT: OverlayLayout = 'hide'
 export const OVERLAY_LAYOUT_COPY: Record<OverlayLayout, { title: string; desc: string }> = {
   hide: {
     title: 'Hide',
-    desc: 'Fully hidden until the pointer is at the top. Then reveal down. Leave hides.'
+    desc: 'Hidden until you move to the top.'
   },
   island: {
     title: 'Island',
-    desc: 'Always-visible peek at the top. Hover expands down.'
+    desc: 'A small island stays visible. Hover opens it.'
   },
   bar: {
     title: 'Bar',
-    desc: 'Classic bar and pill. Always visible.'
+    desc: 'The bar stays on screen.'
   }
 }
 

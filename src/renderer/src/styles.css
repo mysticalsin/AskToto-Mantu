@@ -1634,6 +1634,84 @@ input::placeholder {
 .overlay-peek--stealth .overlay-peek__grip > span {
   background: rgba(219, 190, 255, 0.85);
 }
+.overlay-chrome-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.overlay-chrome-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid var(--cl-border);
+  background: rgba(255, 255, 255, 0.02);
+  text-align: left;
+  cursor: pointer;
+}
+.overlay-chrome-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.overlay-chrome-card--selected {
+  border-color: var(--cl-primary);
+  background: var(--cl-primary-soft);
+}
+.overlay-chrome-card__title {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cl-foreground);
+}
+.overlay-chrome-card__default {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--cl-muted-foreground);
+}
+.overlay-chrome-card__desc {
+  display: block;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--cl-muted-foreground);
+}
+.overlay-chrome-diagram {
+  position: relative;
+  height: 52px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #3a0b6b 0%, #1a0630 100%);
+}
+.overlay-chrome-diagram__desktop {
+  position: absolute;
+  inset: 10px 8px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.overlay-chrome-diagram__mark {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(214, 186, 255, 0.92);
+}
+.overlay-chrome-diagram--hide .overlay-chrome-diagram__mark {
+  width: 22px;
+  height: 3px;
+  border-radius: 0 0 4px 4px;
+  opacity: 0.28;
+}
+.overlay-chrome-diagram--island .overlay-chrome-diagram__mark {
+  width: 18px;
+  height: 6px;
+  border-radius: 0 0 999px 999px;
+}
+.overlay-chrome-diagram--bar .overlay-chrome-diagram__mark {
+  width: 72%;
+  height: 7px;
+  border-radius: 0 0 3px 3px;
+}
+
 @keyframes overlay-peek-in {
   from {
     opacity: 0;

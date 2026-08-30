@@ -65,12 +65,8 @@ import {
   type LucideIcon
 } from 'lucide-react'
 import { formatSavedTime, timeSavedFromTotals } from '@shared/time-saved'
-import {
-  OVERLAY_LAYOUTS,
-  OVERLAY_LAYOUT_COPY,
-  autoHideOverlayForLayout,
-  parseOverlayLayout
-} from '@shared/overlay-chrome'
+import { autoHideOverlayForLayout } from '@shared/overlay-chrome'
+import { OverlayChromePicker } from './OverlayChromePicker'
 import { formatResetPhrase } from '@shared/reset-time'
 import {
   DEFAULT_SHORTCUTS,
@@ -5401,50 +5397,16 @@ export function Settings({
                     <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
                       How Métis sits on the desktop. Changes apply now — no reinstall.
                     </p>
-                    <div
-                      role="radiogroup"
-                      aria-label="Overlay chrome"
-                      className="grid grid-cols-3 gap-1.5"
-                    >
-                      {OVERLAY_LAYOUTS.map((id) => {
-                        const selected = parseOverlayLayout(settings.overlayLayout) === id
-                        const locked = settings.managedKeys.includes('overlayLayout')
-                        return (
-                          <button
-                            key={id}
-                            type="button"
-                            role="radio"
-                            aria-checked={selected}
-                            disabled={locked}
-                            onClick={() =>
-                              patch({
-                                overlayLayout: id,
-                                autoHideOverlay: autoHideOverlayForLayout(id)
-                              })
-                            }
-                            className={
-                              'no-drag focus-ring rounded-[10px] border px-2 py-2 text-left ' +
-                              (selected
-                                ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]'
-                                : 'border-[var(--cl-border)] bg-white/[0.02] hover:bg-white/[0.05]') +
-                              (locked ? ' opacity-60' : '')
-                            }
-                          >
-                            <span className="block text-[12px] font-semibold text-[color:var(--cl-foreground)]">
-                              {OVERLAY_LAYOUT_COPY[id].title}
-                              {id === 'hide' ? (
-                                <span className="ml-1 text-[10px] font-medium text-[color:var(--cl-muted-foreground)]">
-                                  Default
-                                </span>
-                              ) : null}
-                            </span>
-                            <span className="mt-0.5 block text-[10px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                              {OVERLAY_LAYOUT_COPY[id].desc}
-                            </span>
-                          </button>
-                        )
-                      })}
-                    </div>
+                    <OverlayChromePicker
+                      value={settings.overlayLayout}
+                      locked={settings.managedKeys.includes('overlayLayout')}
+                      onChange={(id) =>
+                        patch({
+                          overlayLayout: id,
+                          autoHideOverlay: autoHideOverlayForLayout(id)
+                        })
+                      }
+                    />
                   </div>
                 </Section>
                 <Section

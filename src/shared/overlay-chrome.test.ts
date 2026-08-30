@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_OVERLAY_LAYOUT,
+  OVERLAY_LAYOUT_COPY,
   OVERLAY_LAYOUTS,
   autoHideOverlayForLayout,
   migrateOverlayLayout,
@@ -40,5 +41,19 @@ describe('overlay chrome modes', () => {
     expect(overlayUsesSafeTop('hide')).toBe(true)
     expect(overlayUsesSafeTop('island')).toBe(true)
     expect(overlayUsesSafeTop('bar')).toBe(false)
+  })
+
+  it('Settings captions say what each chrome does (no em dash, no Vibe Island)', () => {
+    expect(OVERLAY_LAYOUT_COPY.hide.title).toBe('Hide')
+    expect(OVERLAY_LAYOUT_COPY.hide.desc).toMatch(/Hidden until you move to the top/)
+    expect(OVERLAY_LAYOUT_COPY.island.title).toBe('Island')
+    expect(OVERLAY_LAYOUT_COPY.island.desc).toMatch(/small island stays visible/)
+    expect(OVERLAY_LAYOUT_COPY.bar.title).toBe('Bar')
+    expect(OVERLAY_LAYOUT_COPY.bar.desc).toMatch(/bar stays on screen/)
+    const all = Object.values(OVERLAY_LAYOUT_COPY)
+      .map((c) => `${c.title} ${c.desc}`)
+      .join(' ')
+    expect(all).not.toMatch(/\u2014/)
+    expect(all).not.toMatch(/Vibe Island/)
   })
 })

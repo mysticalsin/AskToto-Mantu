@@ -148,11 +148,14 @@ import {
   recenterXForWidth,
   refitToDisplay as islandRefitToDisplay,
   exclusiveOnboardingBounds,
+  overlayRestSize,
+  parkAfterExclusiveOnboarding,
+  shouldIgnoreResizeWhilePeekResting,
   topCenterPosition,
   topClamp
 } from './island/geometry'
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
-import { parseOverlayLayout, type OverlayLayout } from '@shared/overlay-chrome'
+import { overlayUsesHover, parseOverlayLayout, type OverlayLayout } from '@shared/overlay-chrome'
 
 // Lazy Speaker Intelligence singleton — building it probes the sherpa addon + embedding model, so defer
 // until the first THEM window with the feature enabled (never on the startup path).
@@ -541,6 +544,8 @@ let currentWidth = BAR_WIDTH // window width; narrows to PILL_WIDTH while collap
 // content height must never overwrite the remembered full-bar height, or expanding back out would apply
 // the tiny pill height first and squish/flash before the renderer's next resize report corrects it.
 let isMinimized = false
+// Hide/island rest after exclusive onboarding. Stale exclusive / 880×816 measures must not grow the park.
+let islandResting = false
 const streams = new Map<string, { abort: () => void }>()
 let importJobs: ImportJobManager | null = null
 let decoderWin: BrowserWindow | null = null
@@ -1404,6 +1409,7 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
   currentWidth = stage.width
   lastBarHeight = stage.height
   isMinimized = false
+  islandResting = false
   try {
     w.setFullScreenable?.(true)
     w.setBackgroundColor('#3A0B6B')
@@ -1422,7 +1428,7 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
   }
 }
 
-/** After onboardingDone only: leave exclusive fullscreen and park the small island (path A then C). */
+/** After onboardingDone only: leave exclusive fullscreen and park hide/island peek (never 880×816). */
 function exitExclusiveOnboardingStage(): void {
   if (!win || win.isDestroyed()) return
   try {
@@ -1437,13 +1443,25 @@ function exitExclusiveOnboardingStage(): void {
   } catch {
     /* ignore */
   }
-  currentWidth = BAR_WIDTH
-  lastBarHeight = BAR_HEIGHT
+  applyOverlayAlwaysOnTop(win)
   isMinimized = false
+  lastBarHeight = BAR_HEIGHT
   const display = screen.getDisplayMatching(win.getBounds())
-  const { x, y } = islandTopCenter(BAR_WIDTH, display, ISLAND_TOP_MARGIN)
-  userAnchorY = y
-  win.setBounds({ x, y, width: BAR_WIDTH, height: BAR_HEIGHT }, false)
+  const layout = liveOverlayLayout()
+  const park = parkAfterExclusiveOnboarding(layout, getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+  currentWidth = park.width
+  islandResting = overlayUsesHover(layout)
+  userAnchorY = park.y
+  win.setBounds(park, false)
+}
+
+function applyOverlayAlwaysOnTop(w: BrowserWindow): void {
+  try {
+    w.setAlwaysOnTop(true, 'screen-saver')
+    if (process.platform !== 'win32') w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  } catch {
+    /* headless / already destroyed */
+  }
 }
 
 function createWindow(): void {
@@ -1514,7 +1532,7 @@ function createWindow(): void {
 
   try {
   if (onboardingLive) applyExclusiveOnboardingStage(win, placementDisplay)
-  win.setAlwaysOnTop(true, 'screen-saver')
+  applyOverlayAlwaysOnTop(win)
   // setVisibleOnAllWorkspaces is a documented no-op on Windows (Electron: "This API does nothing on
   // Windows") — gate the call so it isn't dead code there. Windows has no public API for pinning a
   // window across Task View virtual desktops (that needs the native IVirtualDesktopManager COM
@@ -1656,6 +1674,8 @@ function resizeTo(height: number): void {
     applyExclusiveOnboardingStage(win)
     return
   }
+  const rest = overlayRestSize(liveOverlayLayout())
+  if (shouldIgnoreResizeWhilePeekResting(islandResting, height, rest.height)) return
   // Clamp + reposition against the display the OVERLAY is actually on (not the cursor's). Otherwise, on a
   // laptop + external monitor of different heights, a streaming answer clamps to the wrong monitor and the
   // window jumps vertically while the cursor sits on the other screen.
@@ -1739,6 +1759,7 @@ function anchorTopCenter(): void {
  *  safe Y. Leave collapse is the inverse (resizeTo with peek height, same Y). */
 function restoreBarWidth(): void {
   if (!win || onboardingExclusiveLive()) return
+  islandResting = false
   if (currentWidth === BAR_WIDTH) return
   const display = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
@@ -1755,6 +1776,14 @@ function setWindowMode(): void {
   if (!win) return
   if (onboardingExclusiveLive()) {
     applyExclusiveOnboardingStage(win)
+    return
+  }
+  if (islandResting) {
+    const display = screen.getDisplayMatching(win.getBounds())
+    const park = parkAfterExclusiveOnboarding(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+    currentWidth = park.width
+    userAnchorY = park.y
+    win.setBounds(park, false)
     return
   }
   const { workArea } = screen.getDisplayMatching(win.getBounds())
@@ -5616,7 +5645,9 @@ function registerIpc(): void {
     if (typeof payload?.width === 'number' && Number.isFinite(payload.width) && !onboardingExclusiveLive()) {
       // +10 (not the height report's +2) gives the pill's own box-shadow/glow room to render without
       // being hard-clipped at the window edge — see the .aw-pill / .aw-mark-glow comments in styles.css.
-      currentWidth = Math.max(120, Math.min(Math.ceil(payload.width) + 10, BAR_WIDTH))
+      const nextWidth = Math.max(120, Math.min(Math.ceil(payload.width) + 10, BAR_WIDTH))
+      const rest = overlayRestSize(liveOverlayLayout())
+      if (!islandResting || nextWidth <= rest.width + 24) currentWidth = nextWidth
     }
     // Same finite-number guard as width: a NaN/Infinity height from a renderer layout glitch would
     // otherwise reach resizeTo's Math.round/min/max unclamped, poisoning them to NaN and making

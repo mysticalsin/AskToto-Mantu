@@ -214,3 +214,51 @@ export function exclusiveOnboardingBounds(bounds: Rect, workArea: Rect): Rect {
 export function onboardingFitsWorkArea(win: Rect, workArea: Rect): boolean {
   return win.width >= workArea.width && win.height >= workArea.height
 }
+
+/** Hide-until-hover sliver — keep in lockstep with `.overlay-hide-target` in styles.css. */
+export const OVERLAY_HIDE_TARGET = { width: 168, height: 8 } as const
+/** Always-visible island peek — keep in lockstep with `.overlay-peek` in styles.css. */
+export const OVERLAY_ISLAND_PEEK = { width: 132, height: 15 } as const
+/** Matches the windowResize hug-width pad so the strip is not clipped. */
+export const OVERLAY_PEEK_WIDTH_PAD = 10
+export const OVERLAY_PEEK_HEIGHT_PAD = 4
+/** Classic idle bar — used only when chrome is `bar`. */
+export const OVERLAY_BAR_REST = { width: 880, height: 84 } as const
+
+/** Tony live fail after onboardingDone on 58f6972: 880×816 layer-0 card at Y=39. */
+export function isForbiddenMidFlowCard(win: Pick<Rect, 'width' | 'height'>): boolean {
+  return win.width === OVERLAY_BAR_REST.width && win.height >= 700
+}
+
+/** Rest size after exclusive exit. Hide/island are a hug-width peek, never the 880-wide bar. */
+export function overlayRestSize(layout: OverlayLayout): { width: number; height: number } {
+  if (layout === 'bar') return { width: OVERLAY_BAR_REST.width, height: OVERLAY_BAR_REST.height }
+  const rest = layout === 'hide' ? OVERLAY_HIDE_TARGET : OVERLAY_ISLAND_PEEK
+  return {
+    width: rest.width + OVERLAY_PEEK_WIDTH_PAD,
+    height: rest.height + OVERLAY_PEEK_HEIGHT_PAD
+  }
+}
+
+/**
+ * Park the overlay after exclusive onboarding ends. Width/height are peek or hide-target
+ * (or the classic bar). Y is islandSafeTop (path A / C). Never 880×816.
+ */
+export function parkAfterExclusiveOnboarding(
+  layout: OverlayLayout,
+  m: DisplayMetrics,
+  topMargin: number
+): Rect {
+  const size = overlayRestSize(layout)
+  const { x, y } = topCenterPosition(size.width, layout, m, topMargin)
+  return { x, y, width: size.width, height: size.height }
+}
+
+/** Stale exclusive / card measures must not grow a hide/island park back into 880×816. */
+export function shouldIgnoreResizeWhilePeekResting(
+  resting: boolean,
+  reportedHeight: number,
+  peekHeight: number
+): boolean {
+  return resting && reportedHeight > peekHeight + 24
+}

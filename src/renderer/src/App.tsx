@@ -574,9 +574,9 @@ export function App(): JSX.Element {
   // peek→revealed edge while auto-hide is active; a pure setBounds in main, no show/focus.
   const wasOverlayPeekedRef = useRef(false)
   useEffect(() => {
-    if (overlayIdle && wasOverlayPeekedRef.current && !overlayPeeked) void window.toto.revealWidth()
+    if (wasOverlayPeekedRef.current && !overlayPeeked) void window.toto.revealWidth()
     wasOverlayPeekedRef.current = overlayPeeked
-  }, [overlayPeeked, overlayIdle])
+  }, [overlayPeeked])
   const revealOverlay = useCallback(() => dispatchAutoHide({ type: 'pointer-enter' }), [])
   const onOverlayPointerEnter = useCallback(() => dispatchAutoHide({ type: 'pointer-enter' }), [])
   const onOverlayPointerLeave = useCallback(() => dispatchAutoHide({ type: 'pointer-leave' }), [])
