@@ -37,12 +37,15 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(videoBlock).not.toMatch(/filter:/)
   })
 
-  it('Get Started, Skip, and the Tony Walteur byline use liquid glass; logo stays Métis', () => {
+  it('Next, Skip, and the Tony Walteur byline use liquid glass; logo stays Métis', () => {
     expect(experience).toMatch(/onboard-cta onboard-glass/)
+    expect(experience).toMatch(/>\s*Next\s*</)
     expect(experience).toMatch(/Skip the tour/)
     expect(experience).toMatch(/onboard-glass onboard-glass-chip/)
     expect(experience).toMatch(/Tony Walteur/)
     expect(experience).toMatch(/<MetisMark size=\{96\}/)
+    expect(experience).toMatch(/<span aria-hidden="true">\{WORDMARK\}<\/span>/)
+    expect(experience).not.toMatch(/useScrambleReveal/)
     expect(css).toMatch(/\.onboard-glass\s*\{/)
     const glass = css.slice(css.indexOf('.onboard-glass {'), css.indexOf('.onboard-glass::before'))
     expect(glass).toMatch(/backdrop-filter:\s*blur\(12px\)/)
@@ -95,8 +98,8 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(src).not.toMatch(/currentTime = 0\s*\n\s*void el\.play/)
     expect(src).not.toMatch(/await el\.play|setTimeout\(|queueMicrotask|requestAnimationFrame/)
 
-    expect(experience).toMatch(/onBegin=\{\(\) => \{\s*playOnboardingMedia\(/)
-    expect(experience).toMatch(/playOnboardingMedia\(heroVideoRef\.current, music\.audio\(\), \{ restart: true \}\)/)
+    expect(experience).toMatch(/onBegin=\{\(\) => \{\s*playOnboardingVideo\(/)
+    expect(experience).toMatch(/playOnboardingVideo\(heroVideoRef\.current, \{ restart: true \}\)/)
     expect(experience).toMatch(/onboard-mute/)
     expect(experience).not.toMatch(/prefersReducedMotion\(\)[\s\S]{0,80}onboard-mute/)
     const demo = readFileSync(join(__dirname, '../components/OnboardingDemoScene.tsx'), 'utf8')

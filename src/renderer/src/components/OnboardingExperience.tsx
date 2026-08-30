@@ -6,9 +6,9 @@
  *
  * Deliberate constraints:
  * - No animation libraries — CSS transitions + staged `animation-delay` only, like the rest of the app.
- *   The exceptions are Act 1's wordmark scramble (HeroWelcome below) and Act 2's synthetic cursor
- *   (OnboardingDemoScene), both of which need a per-frame projection CSS cannot express — small rAF
- *   loops over pure helpers in lib/scramble.ts and lib/synthetic-cursor.ts, not a dependency.
+ *   The exception is Act 2's synthetic cursor (OnboardingDemoScene), which needs a per-frame
+ *   projection CSS cannot express — a small rAF loop over lib/synthetic-cursor.ts, not a dependency.
+ *   Act 1's Métis wordmark is static. No scramble.
  * - Scene 4's checks are REAL (getPermissions / requestPermissionsUpfront / asrBundled) — a row only
  *   ever shows "ready" when it is actually true. Never fake the magic moment.
  * - Act 2 (reveal) is the one deliberate exception to "never fake" — it drives Métis's REAL Bar/
@@ -31,7 +31,7 @@
  * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
  *   needs comes back through onDone.
  */
-import { useEffect, useId, useRef, useState, type Ref } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type Ref } from 'react'
 import {
   AlertCircle,
   Check,
@@ -62,7 +62,6 @@ import { PERMISSIONS_POLL_MS } from '../state'
 import { MetisMark } from './MetisMark'
 import { OnboardingDemoScene, prefetchOnboardingDemoChunks } from './OnboardingDemoScene'
 import { isWindows } from '../lib/keys'
-import { useScrambleReveal } from '../lib/scramble'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
 import { sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
 import { createOnboardingMusicBed } from '../lib/onboarding-music'
@@ -75,11 +74,7 @@ import {
   TELL_THE_ROOM_TITLE,
   TELL_THE_ROOM_WHY
 } from '../lib/onboarding-tell-the-room'
-import {
-  ONBOARDING_HERO_VIDEO_SRC,
-  playOnboardingMedia,
-  playOnboardingVideo
-} from '../lib/onboarding-hero-video'
+import { ONBOARDING_HERO_VIDEO_SRC, playOnboardingVideo } from '../lib/onboarding-hero-video'
 
 // Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
 // one icon, everywhere it appears, rather than inventing a second icon language just for this scene.
@@ -186,16 +181,8 @@ function TellTheRoomCard({
 }
 
 /**
- * Act 1 — Welcome (MQA-276). The Métis mark lands as a top-center "island" capsule and the wordmark
- * resolves out of scrambled glyphs, in the spirit of the notch-capsule materialization researched in
- * the Vibe Island teardown (motion FEEL only — own copy, own mark, own timing; see docs/qa/BUG-LEDGER.md
- * MQA-276 and the teardown PDF for the reference). Every beat is CSS keyframes (`.island-capsule` +
- * friends in styles.css, staged with `animation-delay` like the rest of this file) except the wordmark,
- * which is the one place a JS-driven effect earns its keep — `useScrambleReveal` (src/renderer/src/lib/
- * scramble.ts) is a small rAF loop over a pure, independently-tested projection function. Both honor
- * `prefers-reduced-motion`: the CSS keyframes fall out of the existing global `animation-duration: 0`
- * rule (plus explicit end-state overrides below for the ones with a custom-property angle), and the
- * scramble hook checks the media query itself and skips straight to the resolved word.
+ * Act 1 — Welcome. The Métis mark and wordmark land and stay. The wordmark is static.
+ * No scramble. The tagline may fade in once. Next starts the six-act tour.
  */
 function OnboardingHeroVideo({
   videoRef
@@ -228,7 +215,6 @@ function OnboardingHeroVideo({
 }
 
 function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => void }): JSX.Element {
-  const wordmark = useScrambleReveal(WORDMARK, 900)
   return (
     <>
       <div className="relative z-10 scene-enter flex flex-col items-center gap-5">
@@ -241,11 +227,11 @@ function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => 
             aria-label={WORDMARK}
             style={{ fontFamily: 'var(--font-ui)' }}
           >
-            <span aria-hidden="true">{wordmark}</span>
+            <span aria-hidden="true">{WORDMARK}</span>
           </h1>
           <p
             className="hero-tagline fade-up m-0 text-[14px] text-[color:var(--color-ink-2)]"
-            style={{ animationDelay: '900ms', animationFillMode: 'backwards' }}
+            style={{ animationDelay: '400ms', animationFillMode: 'backwards' }}
           >
             Your on-device meeting copilot.
           </p>
@@ -254,9 +240,9 @@ function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => 
           type="button"
           onClick={onBegin}
           className="onboard-cta onboard-glass fade-up no-drag focus-ring"
-          style={{ animationDelay: '1000ms', animationFillMode: 'backwards' }}
+          style={{ animationDelay: '550ms', animationFillMode: 'backwards' }}
         >
-          Get Started
+          Next
         </button>
         {onSkip && (
           <button
@@ -663,14 +649,17 @@ function prefersReducedMotion(): boolean {
     : false
 }
 
-/** Bach Aria bed. Do not start on mount (autoplay). play() on Get Started, same gesture as the video. */
+/** Bach Aria bed. Starts on the same mount as playPortalOpen. Video still play()s on Next. */
 function useOnboardingMusic(): {
   muted: boolean
   toggleMute: () => void
   audio: () => HTMLAudioElement | null
+  start: () => void
+  retryIfNeeded: () => void
 } {
   const [muted, setMuted] = useState(false)
   const bedRef = useRef<ReturnType<typeof createOnboardingMusicBed> | null>(null)
+  const pendingRetryRef = useRef(false)
   if (!bedRef.current && typeof Audio !== 'undefined') {
     bedRef.current = createOnboardingMusicBed()
   }
@@ -686,10 +675,32 @@ function useOnboardingMusic(): {
     bedRef.current?.setMuted(muted)
   }, [muted])
 
+  const start = useCallback(() => {
+    const playing = bedRef.current?.start()
+    void playing?.catch(() => {
+      pendingRetryRef.current = true
+    })
+  }, [])
+
+  const retryIfNeeded = useCallback(() => {
+    if (!pendingRetryRef.current) return
+    const playing = bedRef.current?.element.play()
+    void playing?.then(
+      () => {
+        pendingRetryRef.current = false
+      },
+      () => {
+        pendingRetryRef.current = true
+      }
+    )
+  }, [])
+
   return {
     muted,
     toggleMute: () => setMuted((m) => !m),
-    audio: () => bedRef.current?.element ?? null
+    audio: () => bedRef.current?.element ?? null,
+    start,
+    retryIfNeeded
   }
 }
 
@@ -705,6 +716,7 @@ export function OnboardingExperience({
 
   useEffect(() => {
     prefetchOnboardingDemoChunks()
+    music.start()
     playPortalOpen(music.muted)
   }, [])
   const [scene, setScene] = useState<Scene>('hero')
@@ -904,7 +916,8 @@ export function OnboardingExperience({
       {scene === 'hero' && (
         <HeroWelcome
           onBegin={() => {
-            playOnboardingMedia(heroVideoRef.current, music.audio(), { restart: true })
+            playOnboardingVideo(heroVideoRef.current, { restart: true })
+            music.retryIfNeeded()
             setScene('problem')
           }}
           onSkip={() => setScene('skip')}

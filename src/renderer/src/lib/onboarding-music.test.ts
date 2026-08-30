@@ -38,8 +38,7 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
     expect(production).not.toMatch(/function choirVoice|ONBOARDING_MUSIC_PAD_SECONDS/)
     expect(experience).not.toMatch(/synthesizeOnboardingPad|AudioContext/)
     expect(experience).toMatch(/createOnboardingMusicBed/)
-    expect(experience).toMatch(/playOnboardingMedia/)
-    expect(experience).not.toMatch(/void bed\.start\(\)/)
+    expect(experience).toMatch(/music\.start\(\)/)
     expect(experience).not.toMatch(/setReducedMotion/)
   })
 
@@ -63,6 +62,21 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
     expect(onboardingMusicLoopEnvelope(150, 300)).toBe(1)
     expect(onboardingMusicLoopEnvelope(1.2, 300, 2.4)).toBeGreaterThan(0.4)
     expect(onboardingMusicLoopEnvelope(1.2, 300, 2.4)).toBeLessThan(0.6)
+  })
+
+  it('starts the Aria on the same mount as playPortalOpen, not on Next', () => {
+    const mount = experience.slice(experience.indexOf('prefetchOnboardingDemoChunks()'))
+    const mountBlock = mount.slice(0, mount.indexOf('}, [])') + 6)
+    expect(mountBlock).toMatch(/music\.start\(\)/)
+    expect(mountBlock).toMatch(/playPortalOpen\(/)
+    expect(mountBlock.indexOf('music.start()')).toBeLessThan(mountBlock.indexOf('playPortalOpen'))
+    expect(mountBlock.indexOf('music.start()')).toBeGreaterThan(-1)
+    const begin = experience.slice(experience.indexOf('onBegin={() => {'))
+    const beginBlock = begin.slice(0, begin.indexOf('onSkip'))
+    expect(beginBlock).toMatch(/playOnboardingVideo\(/)
+    expect(beginBlock.indexOf('playOnboardingVideo')).toBeLessThan(beginBlock.indexOf('setScene'))
+    expect(beginBlock).not.toMatch(/music\.start\(\)/)
+    expect(experience).not.toMatch(/playOnboardingMedia/)
   })
 
   it('play() is the first media call — no seek before play()', () => {

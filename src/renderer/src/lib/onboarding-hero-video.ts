@@ -20,8 +20,8 @@ export function playOnboardingVideo(
 }
 
 /**
- * Get Started gesture: `audio.play()` then `video.play()` are the first media calls.
- * Seek / setState happen after both play()s. Next still uses playOnboardingVideo (play, then seek 0).
+ * Combined helper for tests / callers that still want both. Production hero starts the Aria
+ * on the portal-open mount (`bed.start()`). Next uses playOnboardingVideo (play, then seek 0).
  */
 export function playOnboardingMedia(
   video: HTMLVideoElement | null | undefined,
