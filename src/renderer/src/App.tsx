@@ -3100,6 +3100,8 @@ export function App(): JSX.Element {
     }
     return (
       <div ref={setRoot} {...windowDrag} className="onboard-stage">
+        <div className="onboard-stripes" aria-hidden="true" />
+        <div className="onboard-stripes onboard-stripes--b" aria-hidden="true" />
         <div className="relative z-10 flex h-full min-h-0 w-full flex-col">
           <OnboardingV2
             settings={settings}

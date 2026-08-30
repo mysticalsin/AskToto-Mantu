@@ -708,13 +708,73 @@ input::placeholder {
   min-width: 100vw;
   flex-direction: column;
   overflow: hidden;
+  isolation: isolate;
   background:
     radial-gradient(1200px 700px at 18% 12%, color-mix(in srgb, #9a2bf0 42%, transparent), transparent 58%),
     radial-gradient(900px 600px at 88% 78%, color-mix(in srgb, #7f00da 36%, transparent), transparent 55%),
     linear-gradient(165deg, #3a0b6b 0%, #7f00da 42%, #2a0848 100%);
 }
-/* Depth is the purple radial wash on .onboard-stage — no filter:blur drifting orbs. */
+
+/* Living stripe wash — compositor-only rotate. No filter:blur orbs. */
+.onboard-stripes,
+.onboard-stripes--b {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 220vmax;
+  height: 220vmax;
+  margin: -110vmax 0 0 -110vmax;
+  pointer-events: none;
+  z-index: 0;
+  will-change: transform;
+  background: repeating-linear-gradient(
+    -18deg,
+    #3a0b6b 0 56px,
+    #7f00da 56px 112px,
+    #9a2bf0 112px 160px,
+    rgba(255, 255, 255, 0.28) 160px 166px,
+    #3a0b6b 166px 220px
+  );
+  opacity: 0.36;
+  mix-blend-mode: overlay;
+  animation: onboard-stripe-spin 40s linear infinite;
+}
+.onboard-stripes--b {
+  opacity: 0.3;
+  mix-blend-mode: screen;
+  animation-name: onboard-stripe-spin-rev;
+  animation-duration: 70s;
+  background: repeating-linear-gradient(
+    24deg,
+    #7f00da 0 64px,
+    #3a0b6b 64px 120px,
+    #9a2bf0 120px 168px,
+    rgba(255, 255, 255, 0.2) 168px 174px,
+    #7f00da 174px 230px
+  );
+}
+@keyframes onboard-stripe-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes onboard-stripe-spin-rev {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(-360deg);
+  }
+}
 @media (prefers-reduced-motion: reduce) {
+  .onboard-stripes,
+  .onboard-stripes--b {
+    animation: none;
+    transform: rotate(0deg);
+  }
   .onboard-stage .scene-enter,
   .onboard-stage .fade-up {
     animation: none;

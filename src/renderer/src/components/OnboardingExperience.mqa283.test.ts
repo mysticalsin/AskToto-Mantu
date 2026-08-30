@@ -50,7 +50,7 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
 describe('MQA-283 — Ready\'s honest empty-state line (Métis\'s equivalent of "restart your sessions")', () => {
   it('states plainly that nothing is captured until Listen is pressed and the room is told', () => {
     expect(experienceSrc).toMatch(
-      /Métis is ready\. It starts listening only when you press Listen and tell the room — nothing is[\s\S]{0,20}captured before that\./
+      /Métis is ready\. It starts listening only when you press Listen and tell the room\. Nothing is[\s\S]{0,20}captured before that\./
     )
   })
 
@@ -66,7 +66,7 @@ describe('MQA-283 — Ready\'s honest empty-state line (Métis\'s equivalent of 
 describe('MQA-283 — adding a personal AI provider from Ready is optional, never a gate', () => {
   it('the provider link only renders when onOpenAiSettings was actually passed in', () => {
     expect(experienceSrc).toMatch(/\{onOpenAiSettings && \(/)
-    expect(experienceSrc).toMatch(/Add your own AI provider — optional, never required/)
+    expect(experienceSrc).toMatch(/Add your own AI provider \(optional, never required\)/)
   })
 
   it('the Get started CTA never depends on onOpenAiSettings, or on any provider state at all', () => {

@@ -291,8 +291,8 @@ export function aiRowStatus(
   if (!settings) return { state: 'checking', detail: '' }
   if (settings.providerReady) {
     return settings.provider === 'cloudflare'
-      ? { state: 'ready', detail: "Ready — Métis's built-in Cloudflare, no key needed" }
-      : { state: 'ready', detail: `Ready — ${PROVIDERS[settings.provider].label} configured` }
+      ? { state: 'ready', detail: "Ready: Métis's built-in Cloudflare, no key needed" }
+      : { state: 'ready', detail: `Ready: ${PROVIDERS[settings.provider].label} configured` }
   }
   return { state: 'action', detail: 'not configured yet' }
 }
@@ -451,7 +451,7 @@ function ActLicense({
         </p>
         <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">Activate your license</h2>
         <p className="m-0 max-w-[380px] text-[12.5px] leading-snug text-[color:var(--color-ink-2)]">
-          Your organization runs its own license server. Paste the key you were given — no key yet? You
+          Your organization runs its own license server. Paste the key you were given. No key yet? You
           can still continue on a trial and activate later from Settings.
         </p>
       </div>
@@ -597,7 +597,7 @@ function ActReady({
             AND the room has been told, which is exactly what the recording-consent checkbox back in
             personalize already committed the user to. */}
         <p className="m-0 max-w-[380px] text-[13px] leading-snug text-[color:var(--color-ink-2)]">
-          Métis is ready. It starts listening only when you press Listen and tell the room — nothing is
+          Métis is ready. It starts listening only when you press Listen and tell the room. Nothing is
           captured before that.
         </p>
       </div>
@@ -616,7 +616,7 @@ function ActReady({
           disabled={busy}
           className="no-drag focus-ring text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)] disabled:opacity-50"
         >
-          Add your own AI provider — optional, never required
+          Add your own AI provider (optional, never required)
         </button>
       )}
     </div>
@@ -967,8 +967,8 @@ export function OnboardingExperience({
                     <div className="mt-1.5 flex flex-wrap items-center gap-2">
                       <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
                         {isWindows
-                          ? "Windows is blocking the microphone — turn it back on in Privacy settings."
-                          : "macOS won't ask again once you've said no — turn it back on in Privacy settings."}
+                          ? "Windows is blocking the microphone. Turn it back on in Privacy settings."
+                          : "macOS won't ask again once you've said no. Turn it back on in Privacy settings."}
                       </span>
                       <button
                         type="button"
@@ -1015,7 +1015,7 @@ export function OnboardingExperience({
                   {r.key === 'screen' && settings && patch && (
                     <div className="mt-1.5 flex items-center justify-between gap-2 border-t border-white/10 pt-1.5">
                       <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                        Let Métis see your screen when you ask — on by default, your call.
+                        Let Métis see your screen when you ask (on by default, your call).
                       </span>
                       <MiniToggle
                         on={settings.screenAsk}
@@ -1026,12 +1026,12 @@ export function OnboardingExperience({
                   )}
                   {r.key === 'ai' && r.state === 'action' && (
                     <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                      You'll add a provider key on the next step — nothing else here needs one.
+                      You'll add a provider key on the next step. Nothing else here needs one.
                     </p>
                   )}
                   {r.key === 'ai' && r.state === 'ready' && (
                     <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                      Add your own provider key anytime in Settings — optional, never required.
+                      Add your own provider key anytime in Settings (optional, never required).
                     </p>
                   )}
                 </div>
@@ -1058,7 +1058,7 @@ export function OnboardingExperience({
               Métis is actually allowed to listen. */}
           {scanDone && (
             <p className="fade-up m-0 max-w-[360px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-              Métis only starts listening when you press Listen and tell the room — nothing is captured before that.
+              Métis only starts listening when you press Listen and tell the room. Nothing is captured before that.
             </p>
           )}
           <div className="flex items-center gap-2">
@@ -1088,7 +1088,7 @@ export function OnboardingExperience({
             </p>
             <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">How should Métis show up?</h2>
             <p className="m-0 max-w-[360px] text-[12.5px] leading-snug text-[color:var(--color-ink-2)]">
-              One pick shapes how it listens and what it says next — change it anytime in Settings.
+              One pick shapes how it listens and what it says next. Change it anytime in Settings.
             </p>
           </div>
           <div className="flex max-w-[920px] flex-wrap justify-center gap-3">
