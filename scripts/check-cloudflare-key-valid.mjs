@@ -34,6 +34,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { decryptProxyKey } from './lib/embedded-cloudflare-crypto.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const bundlePath = join(repoRoot, 'build', 'cloudflare-embed', 'key.json')
@@ -43,15 +44,20 @@ if (!existsSync(bundlePath)) {
   process.exit(0)
 }
 
+// The bundle ships ENCRYPTED (scripts/embed-cloudflare-key.mjs). Decrypt it here with the same material the
+// app uses so the probe below tests the ACTUAL key a fresh install will decrypt and send — not a stale
+// plaintext copy that no longer matches what shipped.
 let proxyKey
 try {
-  proxyKey = JSON.parse(readFileSync(bundlePath, 'utf8')).proxyKey
+  const blob = JSON.parse(readFileSync(bundlePath, 'utf8'))
+  proxyKey = decryptProxyKey(blob)
 } catch (e) {
-  console.error(`[check:cf-key] FAIL — build/cloudflare-embed/key.json is not readable JSON: ${e.message}`)
+  console.error(`[check:cf-key] FAIL — build/cloudflare-embed/key.json could not be read/decrypted: ${e.message}`)
+  console.error('[check:cf-key]   It must be the encrypted blob written by scripts/embed-cloudflare-key.mjs.')
   process.exit(1)
 }
 if (typeof proxyKey !== 'string' || !proxyKey.trim()) {
-  console.error('[check:cf-key] FAIL — key.json has no non-empty "proxyKey".')
+  console.error('[check:cf-key] FAIL — the embedded blob decrypted to no usable proxy key.')
   process.exit(1)
 }
 

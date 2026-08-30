@@ -92,22 +92,40 @@ already embeds its Kimi key (`src/main/cahe-embedded-key.ts`) — this is the ge
    (`cloudflare-proxy/src/index.ts`'s multi-key union). A labeled key is revoked independently, by
    removing just that entry, without touching any other user's key. Size it as a minimum-quota fallback
    on the Worker side, not a shared admin credential.
-2. Drop that value into `build/cloudflare-embed/key.json` (gitignored — never commit it) as
-   `{"proxyKey": "<value>"}`.
-3. Build with `METIS_EMBED_CLOUDFLARE_KEY=1 npm run dist:win` (or `release:build:win`). Without that env
-   var, `scripts/check-embedded-cloudflare-key.mjs` refuses the package outright rather than silently
-   shipping a key nobody meant to embed.
+2. Set that value as the `METIS_PROXY_KEY` build environment variable (a build **Secret** in CI, or an
+   exported shell var locally). It is read **only** from the environment — never a hardcoded value, never
+   a committed file. The predist/prebuild step `scripts/embed-cloudflare-key.mjs` then AES-256-GCM-encrypts
+   it into `build/cloudflare-embed/key.json` (gitignored). Only the **ciphertext** blob is written to disk;
+   the plaintext token is not. If the env var is unset, the step is a clean no-op (the normal keyless build).
+3. Build with `METIS_EMBED_CLOUDFLARE_KEY=1` set as well, e.g.
+   `METIS_PROXY_KEY=… METIS_EMBED_CLOUDFLARE_KEY=1 npm run dist:win` (or `release:build:win`, `dist`,
+   `release:build:mac`, or the Cahê chain). This is a deliberate **double opt-in**: `METIS_PROXY_KEY`
+   supplies the token, and `METIS_EMBED_CLOUDFLARE_KEY=1` authorizes packaging it. Without the second var,
+   `scripts/check-embedded-cloudflare-key.mjs` refuses the package outright rather than silently shipping a
+   key nobody meant to embed. That same gate proves the packaged blob is ciphertext (never a plaintext
+   `proxyKey` field) and that the decrypted token appears **nowhere** in the packaged app.
 
-The key is **extractable from the installer** — same rule as the "Métis does not ship a Cloudflare
-token" section above: `npx asar extract` (or, since this ships as a plain `extraResources` file outside
-the asar, just reading the file) recovers it in seconds. Nothing changes that. What makes this safe to
-ship is the key's SCOPE, not secrecy — a revocable, rate-limited, minimum-quota label — never the
-operator's real key.
+### The encryption, and its honest limits
 
-On first launch, `importEmbeddedCloudflareKey()` seeds the bundled key into the app's own encrypted
-keystore (the same AES file keystore a pasted key goes through) exactly once per profile, and never
-overwrites a key the user already has — their own paste (or an earlier seed) always wins, permanently,
-even across later updates.
+The blob is AES-256-GCM ciphertext. The key is derived (scrypt) from build-stable material — the appId plus
+an obfuscation secret that lives in `src/main/embedded-key-material.json` and therefore **ships inside the
+app**. That last fact is the whole caveat: because the decryption material travels with the binary, a
+determined attacker can re-derive the key and decrypt the blob. **This is obfuscation, not secrecy.** It
+raises the bar meaningfully over the old plaintext file — `npx asar extract` no longer hands you the token
+in two seconds, and a casual `strings` sweep finds nothing usable — but it does not make the token
+unextractable, and nothing compiled into a shipped client can. Do not describe it as "cannot be reverse
+engineered".
+
+The truly-secure option, where the token never ships at all, is the Worker proxy this document is about:
+users paste their own `METIS_PROXY_KEY`, and no key is embedded. The embedded key is a **convenience for a
+controlled audience** — which is exactly why what keeps it safe is its SCOPE (a revocable, rate-limited,
+minimum-quota `embedded-default` label), never this encryption and never the operator's real key.
+
+On first launch, `importEmbeddedCloudflareKey()` reads the blob, decrypts it **in memory**, and seeds the
+plaintext into the app's own encrypted keystore (the same AES file keystore a pasted key goes through)
+exactly once per profile. The decrypted value is never written to disk or logs as plaintext; only the
+keystore's own ciphertext lands on disk. It never overwrites a key the user already has — their own paste
+(or an earlier seed) always wins, permanently, even across later updates.
 
 ---
 
