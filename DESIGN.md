@@ -30,6 +30,15 @@ Hide and island: hover or click expands **down** from the rest strip to the full
 
 **Cursor watch (required).** macOS menu bar / Dynamic Island often does **not** deliver `mouseenter` to an Electron window, even at Y=0. Renderer `onMouseEnter` is not enough. Main polls `screen.getCursorScreenPoint()` every ~16-32ms on darwin and Windows top-edge while hide/island is resting and `onboardingDone`: cursor inside the hide/island rest rect → reveal; cursor in the rest strip **or** the revealed bar (+ small grace) → stay (never `setBounds` on a stay tick); cursor in neither → hide. No Accessibility / CGEvent tap required. Do not animate window y every frame.
 
+**Motion (Apple-grade).** Live Dynamic Island feel. Transform and opacity only. `--ease-spring: cubic-bezier(0.22, 1, 0.36, 1)`. The bar is **one surface** (no peek/bar React unmount pop).
+- **Reveal:** 320–380ms, `transform-origin: top center`, from `scale(0.92) translateY(-8px)` opacity 0.85 → full. One `setBounds` to the below-notch full bar (`islandSafeTop`) **before** the spring plays.
+- **Hide:** 280–340ms reverse spring, **then** park the rest rect. `overlayParkAfterHide` from the renderer on `transitionend` / `animationend`, with a **400ms** timeout fallback so a missed event cannot leave a stuck full bar. Do not `setBounds(park)` on the same tick as hide.
+- **Blur:** `backdrop-filter` only when the bar is **settled**, not during the spring.
+- **Reduced-motion:** skip the spring, instant size change, still no 24ms fight.
+- Leave grace stays ~500ms (`AUTO_HIDE_GRACE_MS`). Island hover may skip dwell (`pointer-enter` + `dwell-elapsed`).
+
+**Leave pill / Settings → Hide.** Pill mode may stay on screen. Putting chrome back on Hide must **disappear** (park `hoverRestHeight` at `display.bounds.y`, width 560). Do not `restoreBarWidth` / `setMinimizedWidth(false)` into a ~100px stub at `islandSafeTop`. Closing Settings after picking Hide, or closing Settings back to the idle overlay, parks hide when the pointer is not in the island or the bar. OverlayIdle + Hide + pointer not hovering renders the OverlayPeek hide pad, not a chopped Bar. Island may keep the visible peek. Bar keeps the full bar.
+
 **Island.** Always-visible peek capsule. May sit in the island / notch (same Y). Hover expands down. Leave returns to the peek. Hug-width is OK on the visible capsule only.
 
 **Bar.** Always the bar. No hide.

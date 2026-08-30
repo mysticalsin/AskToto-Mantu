@@ -323,6 +323,7 @@ const api = {
   revealWidth: (): Promise<void> => ipcRenderer.invoke(IPC.windowRevealWidth),
   onOverlayCursorHover: (cb: (d: { hovering: boolean }) => void): Unsub =>
     sub(IPC.overlayCursorHover, cb),
+  parkAfterHide: (): Promise<void> => ipcRenderer.invoke(IPC.overlayParkAfterHide),
   // A caught render-throw (ErrorBoundary) — fire-and-forget, best-effort. Main persists it to disk (same
   // sink as a main-process crash) so a field report survives without ASKTOTO_DEBUG_RENDERER devtools.
   reportCrash: (message: string, stack?: string, componentStack?: string): Promise<void> =>

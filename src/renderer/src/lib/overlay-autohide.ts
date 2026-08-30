@@ -59,6 +59,7 @@ export type AutoHideEvent =
   | { type: 'pointer-leave' }
   | { type: 'grace-elapsed' }
   | { type: 'dwell-elapsed' }
+  | { type: 'collapse-now' }
 
 /** Pure transition. Returns the SAME reference when nothing changes so a `useReducer` consumer doesn't
  *  re-render on a no-op event (e.g. a repeated pointer-enter, or set-enabled to the current value). */
@@ -107,6 +108,11 @@ export function reduceAutoHide(s: AutoHideState, e: AutoHideEvent): AutoHideStat
     case 'dwell-elapsed': {
       if (!s.hoverPending) return s
       return { ...s, hoverPending: false, hovering: true }
+    }
+    case 'collapse-now': {
+      // Leave pill / Settings → Hide: park immediately. Do not arm grace (that kept a stub bar).
+      if (!s.hovering && !s.graceArmed && !s.hoverPending) return s
+      return { ...s, hovering: false, hoverPending: false, graceArmed: false }
     }
     default:
       return s

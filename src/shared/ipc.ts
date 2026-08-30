@@ -171,6 +171,8 @@ export const IPC = {
   // Main-process cursor watch (darwin / Windows top-edge): menu-bar / Dynamic Island
   // often does not deliver mouseenter. Payload: { hovering: boolean }.
   overlayCursorHover: 'overlay:cursorHover',
+  // Renderer finished the hide spring (or 400ms fallback) — now park the rest rect.
+  overlayParkAfterHide: 'overlay:parkAfterHide',
   // Renderer ErrorBoundary catch (React render-throw) → persisted crash-*.log, same sink as onFatal's
   // main-process crashes. Distinct from render-process-gone (whole renderer dies): this is a caught JS
   // exception the renderer survives, previously visible only via ASKTOTO_DEBUG_RENDERER console mirroring.
