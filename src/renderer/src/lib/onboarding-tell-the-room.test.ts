@@ -12,7 +12,6 @@ import {
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
 const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
-const onboarding = readFileSync(join(__dirname, '../components/Onboarding.tsx'), 'utf8')
 const copy = readFileSync(join(__dirname, './onboarding-tell-the-room.ts'), 'utf8')
 
 function stripComments(src: string): string {
@@ -42,10 +41,10 @@ describe('tell the room — designed consent on personalize', () => {
     const personalize = experience.slice(experience.indexOf("scene === 'personalize'"))
     const block = personalize.slice(0, personalize.indexOf("scene === 'license'"))
     expect(block).toMatch(/ONBOARDING_PERSONAS\.map/)
-    expect(block.indexOf('onboard-glass onboard-tell-card')).toBeGreaterThan(block.indexOf('ONBOARDING_PERSONAS.map'))
-    expect(block.indexOf('TELL_THE_ROOM_CHECKBOX')).toBeGreaterThan(block.indexOf('onboard-tell-card'))
-    expect(block.indexOf('Continue')).toBeGreaterThan(block.indexOf('TELL_THE_ROOM_CHECKBOX'))
-    expect(block.match(/type="checkbox"/g)?.length).toBe(1)
+    expect(block.indexOf('TellTheRoomCard')).toBeGreaterThan(block.indexOf('ONBOARDING_PERSONAS.map'))
+    expect(block.indexOf('Continue')).toBeGreaterThan(block.indexOf('TellTheRoomCard'))
+    expect(experience.match(/function TellTheRoomCard/g)?.length).toBe(1)
+    expect(experience.match(/type="checkbox"/g)?.length).toBe(1)
     expect(block).toMatch(/disabled=\{\!consent\}/)
     expect(block).not.toMatch(/Ready when you are/)
     expect(css).toMatch(/\.onboard-tell-card\s*\{/)
@@ -60,10 +59,12 @@ describe('tell the room — designed consent on personalize', () => {
     expect(experience).toMatch(/TELL_THE_ROOM_QUOTE/)
   })
 
-  it('Skip-the-tour still requires the legacy slide 1 consent gate', () => {
-    expect(experience).toMatch(/initialStep=\{1\}/)
-    expect(experience).toMatch(/legacy-full/)
-    expect(onboarding).toMatch(/if \(!recordingConsent\)/)
-    expect(onboarding).toMatch(/disabled=\{busy \|\| !recordingConsent\}/)
+  it('Skip-the-tour still requires the tell-the-room checkbox before Get started', () => {
+    expect(experience).toMatch(/setScene\('skip'\)/)
+    const skip = experience.slice(experience.indexOf("scene === 'skip'"))
+    expect(skip).toMatch(/TellTheRoomCard/)
+    expect(skip).toMatch(/disabled=\{\!consent\}/)
+    expect(experience).not.toMatch(/legacy-full/)
+    expect(experience).not.toMatch(/from '\.\/Onboarding'/)
   })
 })

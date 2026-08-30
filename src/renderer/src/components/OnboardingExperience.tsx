@@ -60,13 +60,13 @@ import type { ConversationMode, LocalModelSummary, PermissionStatus, ProfileReco
 import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { MetisMark } from './MetisMark'
-import { Onboarding } from './Onboarding'
 import { OnboardingDemoScene, prefetchOnboardingDemoChunks } from './OnboardingDemoScene'
 import { isWindows } from '../lib/keys'
 import { useScrambleReveal } from '../lib/scramble'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
 import { sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
 import { createOnboardingMusicBed } from '../lib/onboarding-music'
+import { closeOnboardingPortal, playPortalOpen } from '../lib/onboarding-portal'
 import {
   TELL_THE_ROOM_CHECKBOX,
   TELL_THE_ROOM_LEAD,
@@ -101,7 +101,7 @@ export interface OnboardingExperienceProps {
    *  (`onboardingDone: true`) rather than racing an in-flight patch. OnboardingV2 below is the only
    *  caller and marks onboarding done inside this callback. */
   onDone: (result: { mode: ConversationMode; recordingConsent: boolean }) => void | Promise<void>
-  /** Optional escape hatch to the old flow while this one beds in. */
+  /** Optional. Unused: Skip stays on this exclusive stage (tell-the-room + Get started). */
   onSkip?: () => void
   /** Ready's OPTIONAL "Add your own AI provider" link (never a gate) — opens Settings' AI tab. Omitted
    *  in contexts with no Settings surface to open (the link itself does not render without it). */
@@ -158,6 +158,32 @@ function ActProgress({ scene }: { scene: Scene }): JSX.Element | null {
 }
 
 const WORDMARK = 'Métis'
+
+function TellTheRoomCard({
+  consent,
+  onConsent
+}: {
+  consent: boolean
+  onConsent: (next: boolean) => void
+}): JSX.Element {
+  return (
+    <div className="onboard-glass onboard-tell-card">
+      <h3>{TELL_THE_ROOM_TITLE}</h3>
+      <p>{TELL_THE_ROOM_LEAD}</p>
+      <p className="onboard-tell-quote">{TELL_THE_ROOM_QUOTE}</p>
+      <p className="onboard-tell-why">{TELL_THE_ROOM_WHY}</p>
+      <label className="onboard-tell-check">
+        <input
+          type="checkbox"
+          checked={consent}
+          onChange={(e) => onConsent(e.target.checked)}
+          className="no-drag mt-0.5 accent-[var(--color-accent)]"
+        />
+        <span>{TELL_THE_ROOM_CHECKBOX}</span>
+      </label>
+    </div>
+  )
+}
 
 /**
  * Act 1 — Welcome (MQA-276). The Métis mark lands as a top-center "island" capsule and the wordmark
@@ -236,7 +262,7 @@ function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => 
           <button
             type="button"
             onClick={onSkip}
-            className="onboard-glass onboard-glass-chip fade-up no-drag focus-ring"
+            className="onboard-glass onboard-glass-chip onboard-skip-chip fade-up no-drag focus-ring"
             style={{ animationDelay: '1150ms', animationFillMode: 'backwards' }}
           >
             Skip the tour
@@ -669,7 +695,6 @@ function useOnboardingMusic(): {
 
 export function OnboardingExperience({
   onDone,
-  onSkip,
   onOpenAiSettings,
   settings,
   patch
@@ -680,13 +705,13 @@ export function OnboardingExperience({
 
   useEffect(() => {
     prefetchOnboardingDemoChunks()
+    playPortalOpen(music.muted)
   }, [])
   const [scene, setScene] = useState<Scene>('hero')
   const [rows, setRows] = useState<SetupRow[]>([])
   const [mode, setMode] = useState<ConversationMode>('general')
-  // Recording-consent gate. Entering the legacy flow at its provider step skips legacy slide 1 — the
-  // ONLY place the consent checkbox lived — which silently persisted recordingConsent:false for every
-  // new-flow user (CMO-QA finding #1). The checkbox is therefore a REQUIRED gate here, before Start.
+  // Recording-consent gate (CMO-QA #1). Skip lands on the same tell-the-room card, never the legacy
+  // slides. Finish is blocked until this checkbox is checked, on both Ready and Skip Get started.
   const [consent, setConsent] = useState(false)
   const doneRef = useRef(false)
   // Tracks the last-seen screenRecording status across polls so a false→true flip mid-scene (the user
@@ -847,6 +872,7 @@ export function OnboardingExperience({
   const finish = async (): Promise<void> => {
     if (doneRef.current || !consent) return
     doneRef.current = true
+    await closeOnboardingPortal(music.muted, prefersReducedMotion())
     await onDone({ mode, recordingConsent: true })
   }
 
@@ -881,7 +907,7 @@ export function OnboardingExperience({
             playOnboardingMedia(heroVideoRef.current, music.audio(), { restart: true })
             setScene('problem')
           }}
-          onSkip={onSkip}
+          onSkip={() => setScene('skip')}
         />
       )}
 
@@ -925,10 +951,8 @@ export function OnboardingExperience({
             setScene('setup')
           }}
           onPlayVideo={() => playHero()}
-          // Skip-available-from-here (per the Act 2 brief): jumps straight to Personalize — unlike
-          // HeroWelcome's onSkip (which restarts the entire legacy flow from its own slide 1), this
-          // keeps everything already shown (Welcome, the problem story, the demo) and just gets the
-          // user to Start faster, bypassing the real permission checklist.
+          // Demo Skip jumps to Personalize (keep Welcome + story + demo, skip the checklist).
+          // Hero Skip is different: it leaves the six-act narrative for the tell-the-room skip screen.
           onSkipToEnd={() => setScene('personalize')}
         />
       )}
@@ -1141,21 +1165,7 @@ export function OnboardingExperience({
             })}
           </div>
           <div className="flex flex-col items-center gap-4">
-            <div className="onboard-glass onboard-tell-card">
-              <h3>{TELL_THE_ROOM_TITLE}</h3>
-              <p>{TELL_THE_ROOM_LEAD}</p>
-              <p className="onboard-tell-quote">{TELL_THE_ROOM_QUOTE}</p>
-              <p className="onboard-tell-why">{TELL_THE_ROOM_WHY}</p>
-              <label className="onboard-tell-check">
-                <input
-                  type="checkbox"
-                  checked={consent}
-                  onChange={(e) => setConsent(e.target.checked)}
-                  className="no-drag mt-0.5 accent-[var(--color-accent)]"
-                />
-                <span>{TELL_THE_ROOM_CHECKBOX}</span>
-              </label>
-            </div>
+            <TellTheRoomCard consent={consent} onConsent={setConsent} />
             <button
               type="button"
               // Act 6 re-point (MQA-283): advances to license (only if enabled) or straight to Ready —
@@ -1190,26 +1200,37 @@ export function OnboardingExperience({
       {scene === 'ready' && (
         <ActReady mode={mode} onFinish={finish} onOpenAiSettings={onOpenAiSettings} />
       )}
+
+      {scene === 'skip' && (
+        <div key="skip" className="scene-enter onboard-skip-screen flex flex-col items-center gap-6">
+          <div className="hero-mark" aria-hidden="true">
+            <MetisMark size={72} />
+          </div>
+          <TellTheRoomCard consent={consent} onConsent={setConsent} />
+          <button
+            type="button"
+            onClick={() => void finish()}
+            disabled={!consent}
+            className={'onboard-cta no-drag focus-ring' + (consent ? '' : ' onboard-cta--muted')}
+          >
+            Get started
+          </button>
+        </div>
+      )}
       </div>
     </div>
   )
 }
 
 /**
- * The full first-run flow: the six-act experience above, which now finishes onboarding ITSELF at its
- * own Ready act (MQA-283) — no more handoff to the legacy component's provider step for the completed-
- * narrative path. The legacy `Onboarding` component only renders for the "Skip the tour" escape hatch
- * below (`legacy-full`), unchanged from before.
+ * First-run flow. Finishes onboarding at Ready or Skip Get started.
+ * Skip stays on this exclusive stage (tell-the-room card). Does not mount Onboarding.tsx.
  */
 export function OnboardingV2({
   settings,
-  saveKey,
-  recoverEncryptedProfile,
   patch,
   onOpenAiSettings,
-  onDone,
-  signedIn,
-  signedInEmail
+  onDone
 }: {
   settings: PublicSettings
   saveKey?: (provider: ProviderId, k: string) => Promise<void>
@@ -1220,43 +1241,15 @@ export function OnboardingV2({
   signedIn?: boolean
   signedInEmail?: string
 }): JSX.Element {
-  // 'legacy-full' = the Skip path: the user opted out of the narrative, so they get the ENTIRE legacy
-  // flow from slide 1 — its consent gate included. Skipping must never skip consent (CMO-QA #1).
-  // No more 'provider' phase (MQA-283) — the experience's own Ready act finishes onboarding directly.
-  const [phase, setPhase] = useState<'experience' | 'legacy-full'>('experience')
-  if (phase === 'experience') {
-    return (
-      <OnboardingExperience
-        settings={settings}
-        patch={patch}
-        onOpenAiSettings={onOpenAiSettings}
-        onDone={async ({ mode, recordingConsent }) => {
-          // Act 6 re-point (MQA-283): finish onboarding HERE, at the end of the narrative's own Ready
-          // act, instead of handing off to the legacy provider/API-key step. The embedded-Cloudflare-
-          // default install (MQA-273) already makes a fresh install `providerReady` with zero user
-          // action, so that step is no longer required to complete onboarding — Ready's own optional
-          // "Add your own AI provider" link (wired to `onOpenAiSettings` above) is how it stays reachable.
-          await patch({ mode, recordingConsent, onboardingDone: true, onboardingDoneAt: Date.now() })
-          onDone()
-        }}
-        onSkip={() => setPhase('legacy-full')}
-      />
-    )
-  }
   return (
-    <Onboarding
+    <OnboardingExperience
       settings={settings}
-      saveKey={saveKey}
-      recoverEncryptedProfile={recoverEncryptedProfile}
       patch={patch}
       onOpenAiSettings={onOpenAiSettings}
-      onDone={onDone}
-      signedIn={signedIn}
-      signedInEmail={signedInEmail}
-      initialStep={1}
-      // legacy-full needs its own consent slide (1), but must not then walk slides 2-4 — that would
-      // make "Skip the tour" show MORE screens than just finishing the narrative experience does.
-      skipWalkthrough
+      onDone={async ({ mode, recordingConsent }) => {
+        await patch({ mode, recordingConsent, onboardingDone: true, onboardingDoneAt: Date.now() })
+        onDone()
+      }}
     />
   )
 }
