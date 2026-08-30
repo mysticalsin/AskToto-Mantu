@@ -627,8 +627,10 @@ function publishImportJob(job: ImportJob): void {
     })
     notification.on('click', () => {
       if (!win || win.isDestroyed()) createWindow()
-      win?.show()
-      win?.focus()
+      // Non-activating: clicking the notification surfaces the overlay but must not steal focus from
+      // whatever app the user was in (the island's "never steals focus" contract) — see showForAsk's
+      // doc comment for the one deliberate exception.
+      win?.showInactive()
     })
     notification.show()
   }
@@ -1718,10 +1720,27 @@ function ensureWindow(): BrowserWindow | null {
   return win
 }
 
+/**
+ * The ONE deliberate, user-initiated focus grab in this file (MQA-275 / Phase 1d of the island rebuild:
+ * "never steals focus" except a deliberate ask). `show()` (unlike `showInactive()`) activates the window
+ * on both macOS and Windows, stealing focus from whatever app the user was typing in — acceptable ONLY
+ * when the user just explicitly asked to type into the overlay (the `ask` hotkey, or the show/hide
+ * toggle's reveal, which always opens `ask` immediately after). Every other reveal in this file must call
+ * `showInactive()` instead — enforced by `no-show-steals-focus.contract.test.ts`, which greps this file
+ * for bare `.show()` calls and fails on any occurrence outside this function.
+ */
+function showForAsk(w: BrowserWindow): void {
+  w.show()
+  w.focus()
+}
+
 function sendHotkey(action: HotkeyAction): void {
   const w = ensureWindow()
   if (!w) return
-  if (!w.isVisible()) w.show()
+  if (!w.isVisible()) {
+    if (action === 'ask') showForAsk(w)
+    else w.showInactive()
+  }
   w.webContents.send(IPC.hotkey, action)
 }
 
@@ -2136,8 +2155,9 @@ function toggleVisible(): void {
   if (!w) return
   if (!hadNoWindow && w.isVisible()) w.hide()
   else {
-    w.show()
-    w.focus()
+    // Revealing via the show/hide hotkey always opens the ask input right after — the same deliberate,
+    // user-initiated focus grab as sendHotkey('ask'). See showForAsk's doc comment.
+    showForAsk(w)
     w.webContents.send(IPC.hotkey, 'ask')
   }
 }
@@ -2322,13 +2342,13 @@ function buildTrayMenu(): Menu {
   }
   return Menu.buildFromTemplate([
     { label: label('Show / Hide', 'hide'), click: toggleVisible },
+    // sendHotkey() already reveals the window itself (non-activating — see showForAsk's doc comment)
+    // when it isn't visible, so no separate show call is needed (or wanted) here.
     { label: 'Settings…', click: () => {
-      if (win && !win.isVisible()) win.show()
       sendHotkey('settings')
     } },
     { label: label('Listen / Stop listening', 'toggle-listen'), click: () => sendHotkey('toggle-listen') },
     { label: "Today's agenda", click: () => {
-      if (win && !win.isVisible()) win.show()
       sendHotkey('agenda')
     } },
     { label: label('New', 'reset'), click: () => sendHotkey('reset') },
@@ -5621,8 +5641,9 @@ if (!app.requestSingleInstanceLock()) {
     // no-opping forever. ensureWindow() also filters a destroyed-but-non-null window.
     const w = ensureWindow()
     if (!w) return
-    if (!w.isVisible()) w.show()
-    w.focus()
+    // Non-activating, same island contract as every other reveal (see showForAsk's doc comment) — a
+    // second launch attempt surfaces the overlay without stealing focus from the foreground app.
+    if (!w.isVisible()) w.showInactive()
   })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
@@ -6212,7 +6233,8 @@ if (!app.requestSingleInstanceLock()) {
 
   app.on('activate', () => {
     if (!win) createWindow()
-    else win.show()
+    // Non-activating (island contract) — a dock-icon click surfaces the overlay without stealing focus.
+    else win.showInactive()
   })
   }).catch((e) => {
     // console.error is a no-op in a packaged GUI build with no console — route to the real sinks (same
