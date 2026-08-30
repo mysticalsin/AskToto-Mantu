@@ -30,7 +30,7 @@ import {
   demoBeatHoldMs,
   demoHasNextBeat,
   demoPlaybackElapsed,
-  nextDemoBeatIndex,
+  demoPlaybackAfterNext,
   demoFrameAt,
   type DemoCursorTarget
 } from '../lib/onboarding-demo'
@@ -85,7 +85,11 @@ function useDemoPlayback(): {
     elapsedMs: demoPlaybackElapsed(beat, localMs),
     beat,
     hasNext: demoHasNextBeat(beat),
-    advance: () => setBeat((i) => nextDemoBeatIndex(i))
+    advance: () => {
+      const next = demoPlaybackAfterNext(beat)
+      setLocalMs(next.localMs)
+      setBeat(next.beat)
+    }
   }
 }
 
@@ -102,12 +106,14 @@ export function OnboardingDemoScene({
   mode,
   onSetMode,
   onContinue,
-  onSkipToEnd
+  onSkipToEnd,
+  onPlayVideo
 }: {
   mode: string
   onSetMode: (mode: BuiltinMode) => void
   onContinue: () => void
   onSkipToEnd: () => void
+  onPlayVideo?: () => void
 }): JSX.Element {
   const reducedMotion = prefersReducedMotion()
   const { elapsedMs, beat, hasNext, advance } = useDemoPlayback()
@@ -275,7 +281,14 @@ export function OnboardingDemoScene({
 
       <div className="flex flex-col items-center gap-3">
         {hasNext && (
-          <button type="button" onClick={advance} className="onboard-cta no-drag focus-ring">
+          <button
+            type="button"
+            onClick={() => {
+              onPlayVideo?.()
+              advance()
+            }}
+            className="onboard-cta no-drag focus-ring"
+          >
             Next
           </button>
         )}

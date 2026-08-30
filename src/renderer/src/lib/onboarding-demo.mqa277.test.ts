@@ -10,6 +10,7 @@ import {
   demoElapsedAtBeat,
   demoFrameAt,
   demoHasNextBeat,
+  demoPlaybackAfterNext,
   demoPlaybackElapsed,
   demoRecapMarkdown,
   demoStageAtBeat,
@@ -162,6 +163,19 @@ describe('MQA-277 — Act 2 (Demo) scripted timeline projector (demoFrameAt)', (
       expect(demoFrameAt(demoPlaybackElapsed(beat, 1e9)).stage).toBe(stage)
     }
     expect(demoStageAtBeat(nextDemoBeatIndex(0))).not.toBe(demoStageAtBeat(0))
+  })
+
+  it('Next starts the next clip at localMs 0 immediately — it does not sit frozen at the previous hold', () => {
+    const held = demoPlaybackElapsed(0, 1e9)
+    expect(held).toBe(demoBeatHoldMs(0))
+    const after = demoPlaybackAfterNext(0)
+    expect(after.beat).toBe(1)
+    expect(after.localMs).toBe(0)
+    const elapsed = demoPlaybackElapsed(after.beat, after.localMs)
+    expect(elapsed).toBe(demoBeatStartMs(1))
+    expect(elapsed).toBeLessThan(demoBeatHoldMs(1))
+    expect(demoFrameAt(elapsed).stage).toBe(demoStageAtBeat(1))
+    expect(demoPlaybackAfterNext(DEMO_STAGE_BOUNDARIES.length - 1).localMs).toBe(0)
   })
 
   it('the current video animates without a Next click (mid-clip elapsed is between start and hold)', () => {

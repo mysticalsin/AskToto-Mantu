@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
-import { ONBOARDING_HERO_VIDEO_SRC } from './onboarding-hero-video'
+import { describe, expect, it, vi } from 'vitest'
+import { ONBOARDING_HERO_VIDEO_SRC, playOnboardingVideo } from './onboarding-hero-video'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
 const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
@@ -35,6 +35,25 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(css).toMatch(/backdrop-filter:\s*blur/)
     expect(css).toMatch(/\.onboard-glass::before/)
     expect(css).toMatch(/mask-composite:\s*exclude/)
+  })
+
+  it('Get Started and Next call play() in the click and restart the clip from 0', () => {
+    const play = vi.fn().mockResolvedValue(undefined)
+    const el = { currentTime: 12, play } as unknown as HTMLVideoElement
+    playOnboardingVideo(el, { restart: true })
+    expect(el.currentTime).toBe(0)
+    expect(play).toHaveBeenCalledTimes(1)
+    playOnboardingVideo(null, { restart: true })
+    expect(play).toHaveBeenCalledTimes(1)
+
+    expect(experience).toMatch(/playOnboardingVideo/)
+    expect(experience).toMatch(/playHero\(true\)/)
+    expect(experience).toMatch(/music\.start\(\)/)
+    const demo = readFileSync(join(__dirname, '../components/OnboardingDemoScene.tsx'), 'utf8')
+    expect(demo).toMatch(/onPlayVideo\?\.\(\)/)
+    expect(demo).toMatch(/demoPlaybackAfterNext/)
+    expect(demo).toMatch(/setLocalMs\(next\.localMs\)/)
+    expect(demo).not.toMatch(/setTimeout\(/)
   })
 
   it('does not ship a Bloom or Axon landing page, and CSP pins only that media host', () => {

@@ -31,7 +31,7 @@
  * - Self-contained: mounts in place of the legacy tour via App's onboarding gate; everything the host
  *   needs comes back through onDone.
  */
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useRef, useState, type RefObject } from 'react'
 import {
   AlertCircle,
   Check,
@@ -67,7 +67,7 @@ import { useScrambleReveal } from '../lib/scramble'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
 import { sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
 import { createOnboardingMusicBed } from '../lib/onboarding-music'
-import { ONBOARDING_HERO_VIDEO_SRC } from '../lib/onboarding-hero-video'
+import { ONBOARDING_HERO_VIDEO_SRC, playOnboardingVideo } from '../lib/onboarding-hero-video'
 
 // Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
 // one icon, everywhere it appears, rather than inventing a second icon language just for this scene.
@@ -159,12 +159,17 @@ const WORDMARK = 'Métis'
  * rule (plus explicit end-state overrides below for the ones with a custom-property angle), and the
  * scramble hook checks the media query itself and skips straight to the resolved word.
  */
-function OnboardingHeroVideo(): JSX.Element | null {
+function OnboardingHeroVideo({
+  videoRef
+}: {
+  videoRef: RefObject<HTMLVideoElement | null>
+}): JSX.Element | null {
   const [failed, setFailed] = useState(false)
   if (prefersReducedMotion() || failed) return null
   return (
     <div className="onboard-hero-video" aria-hidden="true">
       <video
+        ref={videoRef}
         muted
         loop
         playsInline
@@ -182,7 +187,6 @@ function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => 
   const wordmark = useScrambleReveal(WORDMARK, 900)
   return (
     <>
-      <OnboardingHeroVideo />
       <div className="relative z-10 scene-enter flex flex-col items-center gap-5">
         <div className="hero-mark" aria-hidden="true">
           <MetisMark size={96} />
@@ -650,6 +654,8 @@ export function OnboardingExperience({
   patch
 }: OnboardingExperienceProps): JSX.Element {
   const music = useOnboardingMusic()
+  const heroVideoRef = useRef<HTMLVideoElement>(null)
+  const playHero = (restart = false): void => playOnboardingVideo(heroVideoRef.current, { restart })
   const [scene, setScene] = useState<Scene>('hero')
   const [rows, setRows] = useState<SetupRow[]>([])
   const [mode, setMode] = useState<ConversationMode>('general')
@@ -830,6 +836,7 @@ export function OnboardingExperience({
 
   return (
     <div className="relative flex h-full w-full select-none flex-col items-center px-10 text-center">
+      <OnboardingHeroVideo videoRef={heroVideoRef} />
       <button
         type="button"
         className="onboard-mute no-drag focus-ring"
@@ -846,6 +853,7 @@ export function OnboardingExperience({
       {scene === 'hero' && (
         <HeroWelcome
           onBegin={() => {
+            playHero(true)
             music.start()
             setScene('problem')
           }}
@@ -872,7 +880,10 @@ export function OnboardingExperience({
           </div>
           <button
             type="button"
-            onClick={() => setScene('reveal')}
+            onClick={() => {
+              playHero()
+              setScene('reveal')
+            }}
             className="onboard-cta no-drag focus-ring"
             style={{ animationDelay: `${200 + PROBLEM_STORY.length * 1100}ms` }}
           >
@@ -885,7 +896,11 @@ export function OnboardingExperience({
         <OnboardingDemoScene
           mode={mode}
           onSetMode={setMode}
-          onContinue={() => setScene('setup')}
+          onContinue={() => {
+            playHero()
+            setScene('setup')
+          }}
+          onPlayVideo={() => playHero()}
           // Skip-available-from-here (per the Act 2 brief): jumps straight to Personalize — unlike
           // HeroWelcome's onSkip (which restarts the entire legacy flow from its own slide 1), this
           // keeps everything already shown (Welcome, the problem story, the demo) and just gets the
@@ -1035,7 +1050,10 @@ export function OnboardingExperience({
               type="button"
               // Act 6 re-point (MQA-283): setup always advances to personalize now — license (when
               // enabled) has moved to sit between personalize and ready. See onboarding-flow.ts.
-              onClick={() => setScene(sceneAfterSetup())}
+              onClick={() => {
+                playHero()
+                setScene(sceneAfterSetup())
+              }}
               className={
                 'onboard-cta no-drag focus-ring ' + (needsPerms ? 'onboard-cta--muted' : '')
               }
@@ -1115,7 +1133,10 @@ export function OnboardingExperience({
               type="button"
               // Act 6 re-point (MQA-283): advances to license (only if enabled) or straight to Ready —
               // never finishes here directly any more. See onboarding-flow.ts.
-              onClick={() => setScene(sceneAfterPersonalize(settings?.licenseGateEnabled))}
+              onClick={() => {
+                playHero()
+                setScene(sceneAfterPersonalize(settings?.licenseGateEnabled))
+              }}
               disabled={!consent}
               className={'onboard-cta no-drag focus-ring' + (consent ? '' : ' onboard-cta--muted')}
             >
@@ -1129,7 +1150,15 @@ export function OnboardingExperience({
           settings.licenseGateEnabled is false (the default): personalize's Continue button above only
           ever routes here when that setting is already true, so a normal user (licensing off) never
           sees this scene render, not even for a frame. */}
-      {scene === 'license' && <ActLicense settings={settings} onContinue={() => setScene(sceneAfterLicense())} />}
+      {scene === 'license' && (
+        <ActLicense
+          settings={settings}
+          onContinue={() => {
+            playHero()
+            setScene(sceneAfterLicense())
+          }}
+        />
+      )}
 
       {scene === 'ready' && (
         <ActReady mode={mode} onFinish={finish} onOpenAiSettings={onOpenAiSettings} />

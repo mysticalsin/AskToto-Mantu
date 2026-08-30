@@ -28,16 +28,16 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
   })
 
   it('setup always advances to personalize — license no longer sits between setup and personalize', () => {
-    expect(experienceSrc).toMatch(/onClick=\{\(\) => setScene\(sceneAfterSetup\(\)\)\}/)
+    expect(experienceSrc).toMatch(/setScene\(sceneAfterSetup\(\)\)/)
     expect(experienceSrc).not.toMatch(/setScene\(settings\?\.licenseGateEnabled \? 'license' : 'personalize'\)/)
   })
 
   it('personalize routes to license (if enabled) or straight to ready — never finishes there directly', () => {
-    expect(experienceSrc).toMatch(/onClick=\{\(\) => setScene\(sceneAfterPersonalize\(settings\?\.licenseGateEnabled\)\)\}/)
+    expect(experienceSrc).toMatch(/setScene\(sceneAfterPersonalize\(settings\?\.licenseGateEnabled\)\)/)
   })
 
   it('license continues into ready, never back into personalize', () => {
-    expect(experienceSrc).toMatch(/onContinue=\{\(\) => setScene\(sceneAfterLicense\(\)\)\}/)
+    expect(experienceSrc).toMatch(/setScene\(sceneAfterLicense\(\)\)/)
     expect(experienceSrc).not.toMatch(/ActLicense settings=\{settings\} onContinue=\{\(\) => setScene\('personalize'\)\}/)
   })
 

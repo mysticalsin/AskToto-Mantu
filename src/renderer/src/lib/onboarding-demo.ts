@@ -246,6 +246,11 @@ export function nextDemoBeatIndex(i: number): number {
   return i >= last ? last : i + 1
 }
 
+/** Next click: new beat, clock at 0. Same-click so the clip plays instead of sitting at the old hold. */
+export function demoPlaybackAfterNext(beat: number): { beat: number; localMs: number } {
+  return { beat: nextDemoBeatIndex(beat), localMs: 0 }
+}
+
 export function demoHasNextBeat(i: number): boolean {
   return i < DEMO_STAGE_BOUNDARIES.length - 1
 }
