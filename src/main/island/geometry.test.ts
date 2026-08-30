@@ -278,6 +278,28 @@ describe('MQA-275 — clamp primitives (moved verbatim from index.ts)', () => {
   })
 })
 
+describe('DESIGN.md overlay contract', () => {
+  const design = readFileSync(join(__dirname, '../../../DESIGN.md'), 'utf8')
+
+  it('lives at the repo root and names path A then path C (never another y=0 push)', () => {
+    expect(design).toMatch(/workArea\.y/)
+    expect(design).toMatch(/Path A/)
+    expect(design).toMatch(/Path C/)
+    expect(design).toMatch(/strut/i)
+    expect(design).toMatch(/Never park at `display\.bounds\.y`/)
+    expect(design).toMatch(/Do not push `y = 0` again/)
+  })
+
+  it('names hover-down, exclusive fullscreen, large CTA, and Métis demo', () => {
+    expect(design).toMatch(/expands \*\*down\*\*/)
+    expect(design).toMatch(/exclusive fullscreen/)
+    expect(design).toMatch(/52×220|min 52/)
+    expect(design).toMatch(/Métis/)
+    expect(design).toMatch(/meeting \/ transcript \/ copilot \/ Intelligence/)
+    expect(design).toMatch(/Do not add or restyle overlay \/ onboarding UI unless it matches this document/)
+  })
+})
+
 describe('island reveal/collapse wiring (index.ts)', () => {
   it('restoreBarWidth grows height at the same topClamp Y; resizeTo pins that Y', () => {
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
