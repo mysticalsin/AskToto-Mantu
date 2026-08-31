@@ -961,7 +961,7 @@ export const BaseSettingsSchema = z.object({
   // simply saturate at fully opaque for the most solid backgrounds; nothing errors or clips oddly.
   overlayOpacity: z.number().min(0.3).max(1.5).default(1),
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
-  asrQuality: z.enum(['best', 'fast']).default('best'), // packaged builds use the bundled compact model for both modes
+  asrQuality: z.enum(['best', 'fast']).default('best'), // Best is default; Fast is a Settings power option (docs/asr/QUALITY.md)
   // whisper = ~99 langs (default — safe for any locale; parakeet is European-only, which is why 1fa4d76
   // moved the default off it); parakeet = 25 European languages, fastest; apple = on-device Apple Speech
   // (SFSpeechRecognizer via the mac-helper sidecar), opt-in, macOS 13+ only — see main/apple-speech.ts.
