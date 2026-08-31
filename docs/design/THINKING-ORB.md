@@ -4,7 +4,7 @@ Status: **active contract**. Implement only to this document.
 
 This is Métis's loading language. Every wait is a quiet caption in Métis type, then Jakub Antalik's MIT thinking orb. Never a bouncing logo. Never a CSS spinner. Never a looping brand mark. Never a purple-gradient hero. Never emoji.
 
-Starfield bed is a different PR. Overlay chrome geometry is a different PR. Do not fight either.
+Starfield bed is a different PR. Overlay chrome geometry is a different PR. The Bar / minimized pill circle is specified in [BAR-PILL.md](./BAR-PILL.md) (same package, size 64, idle `breathing`). Do not fight either.
 
 ## Source of truth
 

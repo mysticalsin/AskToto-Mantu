@@ -110,4 +110,4 @@ See [ONBOARDING-STARFIELD.md](./ONBOARDING-STARFIELD.md). Galaxy from frame one.
 See [THINKING-ORB.md](./THINKING-ORB.md). Caption then sphere. Word first.
 
 ## Bar sphere
-See [BAR-PILL.md](./BAR-PILL.md). The Bar control is a 52×52 Fit Studio glow core (idle `#b266e9` / `#e15cff` / `#8a00f8`). Same sphere when minimized. Not stuffed into overlay Hide/Island. Tony overrode Jarvis cyan on this control.
+See [BAR-PILL.md](./BAR-PILL.md). The Bar control is a 64×64 Jakub thinking-orb (`thinking-orbs`, theme `dark`). Idle `breathing`, listen `listening`, think `working`, fact-check `searching`, connecting `connecting`. Same circle when minimized. Not stuffed into overlay Hide/Island. Not a Fit Studio magenta core.
