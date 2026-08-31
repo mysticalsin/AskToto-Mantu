@@ -718,6 +718,24 @@ describe('license-server', () => {
     assert.equal(res.status, 200);
   });
 
+  it('HTTP responses send nosniff and frame-deny, and HSTS only when the request is HTTPS', async () => {
+    const httpRes = await fetch(`${baseUrl}/health`);
+    assert.equal(httpRes.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(httpRes.headers.get('x-frame-options'), 'DENY');
+    assert.equal(httpRes.headers.get('referrer-policy'), 'no-referrer');
+    assert.equal(httpRes.headers.get('strict-transport-security'), null);
+
+    const httpsRes = await fetch(`${baseUrl}/health`, { headers: { 'x-forwarded-proto': 'https' } });
+    assert.equal(httpsRes.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(httpsRes.headers.get('x-frame-options'), 'DENY');
+    assert.equal(httpsRes.headers.get('strict-transport-security'), 'max-age=31536000; includeSubDomains');
+
+    const ui = await fetch(`${baseUrl}/admin/ui`);
+    assert.equal(ui.status, 200);
+    assert.equal(ui.headers.get('x-frame-options'), 'DENY');
+    assert.equal(ui.headers.get('x-content-type-options'), 'nosniff');
+  });
+
   it('forged inbound webhook paths cannot create a license', async () => {
     seedLicense({ licenseKey: 'ATK-0000000000000000TEST', seatCap: 2 });
     const before = store.getAll().length;

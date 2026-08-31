@@ -74,6 +74,22 @@ function hashClientIp(ip) {
   return createHash('sha256').update(String(ip || 'unknown')).digest('hex').slice(0, 16);
 }
 
+const HSTS = 'max-age=31536000; includeSubDomains';
+
+function requestIsHttps(req) {
+  const proto = String(req.get('x-forwarded-proto') || '').split(',')[0].trim().toLowerCase();
+  return Boolean(req.secure || proto === 'https');
+}
+
+/** HSTS / nosniff / frame-deny on the HTTP surfaces. Not a Helmet kitchen-sink. */
+function securityHeaders(req, res, next) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  if (requestIsHttps(req)) res.setHeader('Strict-Transport-Security', HSTS);
+  next();
+}
+
 function badRequest(res, parseResult) {
   return res.status(400).json({
     ok: false,
@@ -191,6 +207,7 @@ export function createApp(store, auditLog, options = {}) {
   //    which a remote client cannot spoof.
   const trustProxy = process.env.TRUST_PROXY;
   app.set('trust proxy', trustProxy === '1' || trustProxy === 'true' ? 1 : false);
+  app.use(securityHeaders);
   app.use(express.json());
   const rateLimit = makeRateLimit();
   const adminLockout = makeAdminLockout();
