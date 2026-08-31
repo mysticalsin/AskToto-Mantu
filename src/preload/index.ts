@@ -302,8 +302,10 @@ const api = {
   setListeningState: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.listeningState, on),
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
 
-  // Métis Local (on-device LLM): read-only readiness for the model included in the installer.
+  // Métis Local (on-device LLM): readiness plus start/retry. Local AI `enabled` is routing only —
+  // this does not require toggling it on.
   localModelsList: (): Promise<LocalModelSummary[]> => ipcRenderer.invoke(IPC.localModelsList),
+  localModelsEnsure: (): Promise<{ ok: boolean }> => ipcRenderer.invoke(IPC.localModelsEnsure),
   // MQA-247: the high-accuracy transcription model, fetched on demand rather than shipped (1.61 GB would
   // put the installer over GitHub's 2 GiB per-asset limit). Paths never cross this boundary — the renderer
   // gets readiness, a status word, a fraction, and the byte count it must show before asking for consent.

@@ -73,6 +73,12 @@ describe('local model first-run downloader', () => {
     expect(source).toMatch(/if \(inFlight\) return inFlight/)
   })
 
+  it('follows Hugging Face CDN redirects instead of pinning the 302 body', () => {
+    expect(source).toMatch(/function fetchFollowingRedirects/)
+    expect(source).toMatch(/too many redirects/)
+    expect(source).toMatch(/refusing non-https redirect/)
+  })
+
   it('MQA-185 — routes the weight fetch through the proxy-aware transport, never node:https', () => {
     // node:https honours neither HTTP(S)_PROXY nor the OS/PAC proxy, and install-proxy.ts's
     // setGlobalDispatcher only rebinds undici's fetch. A node:https request here is the one outbound
@@ -174,10 +180,15 @@ describe('MQA-185/186 — the first-run fetch is proxy-aware and observable', ()
 
     await expect(ensureLocalModel('qwen3.5-0.8b')).resolves.toBe(false)
 
-    expect(localModelDownloadState()).toMatchObject({ modelId: 'qwen3.5-0.8b', status: 'failed' })
+    expect(localModelDownloadState()).toMatchObject({
+      modelId: 'qwen3.5-0.8b',
+      status: 'failed',
+      error: expect.stringMatching(/ETIMEDOUT/)
+    })
     expect(listModels(localModelDownloadState())[0]).toMatchObject({
       ready: false,
-      unavailableReason: 'download-failed'
+      unavailableReason: 'download-failed',
+      downloadError: expect.stringMatching(/ETIMEDOUT/)
     })
   })
 
@@ -278,6 +289,58 @@ describe('MQA-185/186 — the first-run fetch is proxy-aware and observable', ()
   it('MQA-186 — Local AI enabled does not gate the download (bytes land whenever the app opens)', () => {
     // Routing stays off by default; the transfer still runs so enabling Local later is instant.
     expect(shouldFetchWeights('qwen3.5-0.8b')).toBe(true)
+  })
+
+  it('MQA-186 — an advertised 8 GB machine (7.45 GiB raw) still fetches', () => {
+    ramState.totalMemBytes = 8e9
+    expect(shouldFetchWeights('qwen3.5-0.8b')).toBe(true)
+    expect(shouldFetchWeights('qwen3.5-4b')).toBe(true)
+  })
+
+  it('publishes downloading synchronously so Settings/onboarding never see a silent idle skip', async () => {
+    mockFetch.mockRejectedValue(new Error('aborted by test'))
+    const done = ensureLocalModel('qwen3.5-0.8b')
+    expect(localModelDownloadState()).toMatchObject({ modelId: 'qwen3.5-0.8b', status: 'downloading' })
+    expect(listModels(localModelDownloadState())[0]).toMatchObject({
+      unavailableReason: 'downloading'
+    })
+    await expect(done).resolves.toBe(false)
+  })
+
+  it('follows a Hugging Face 302 to the CDN instead of treating the redirect body as the weights', async () => {
+    mockFetch.mockImplementation((url: string) => {
+      if (url === 'https://huggingface.co/test/model.gguf') {
+        return Promise.resolve({
+          ok: false,
+          status: 302,
+          headers: new Headers({
+            location: 'https://cdn.example/model.gguf',
+            'content-length': '1032'
+          }),
+          body: null
+        })
+      }
+      if (url === 'https://cdn.example/model.gguf') {
+        return Promise.resolve(responseOf([CHUNK_A, CHUNK_B], GGUF.length))
+      }
+      if (url === 'https://huggingface.co/test/mmproj.gguf') {
+        return Promise.resolve({
+          ok: false,
+          status: 302,
+          headers: new Headers({
+            location: 'https://cdn.example/mmproj.gguf',
+            'content-length': '978'
+          }),
+          body: null
+        })
+      }
+      return Promise.resolve(responseOf([MMPROJ], MMPROJ.length))
+    })
+
+    await expect(ensureLocalModel('qwen3.5-0.8b')).resolves.toBe(true)
+    expect(mockFetch).toHaveBeenCalledWith('https://huggingface.co/test/model.gguf', expect.anything())
+    expect(mockFetch).toHaveBeenCalledWith('https://cdn.example/model.gguf', expect.anything())
+    expect(mockFetch).toHaveBeenCalledWith('https://cdn.example/mmproj.gguf', expect.anything())
   })
 
   it('MQA-186 — an already-provisioned model reports idle, not downloading', async () => {

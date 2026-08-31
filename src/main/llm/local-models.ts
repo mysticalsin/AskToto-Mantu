@@ -112,7 +112,7 @@ export function getModel(id: string): LocalModelEntry {
  * to fetch or load it, which is where "this machine is too small" is reported — one place, not two).
  */
 export function bestModelForMachine(): LocalModelEntry {
-  const ram = totalRamGB()
+  const ram = advertisedRamGB()
   // Ranked by WEIGHT SIZE, not by RAM floor: two entries can share a floor (both are 8 GB today, since
   // the 4B fits there once its context window is sized for it), and ranking on a tied key would fall back
   // to array order — silently picking the weaker model. Bytes are an unambiguous capability proxy.
@@ -208,6 +208,20 @@ function localAudit(event: LocalModelAuditEvent, detail: Record<string, unknown>
 function totalRamGB(): number {
   return totalmem() / 1024 ** 3
 }
+
+/**
+ * Advertised RAM class, not the raw GiB `totalmem()` returns.
+ *
+ * An 8 GB Mac or PC often reports 7.45–7.9 GiB (8×10^9 / 1024^3, plus firmware reservation). Comparing
+ * that raw figure against `minTotalRamGB: 8` then refuses the first-run fetch on the exact machine the
+ * 4B was sized for — Tony's "the local llm doesn’t even download". Ceil to the marketed GB so an 8 GB
+ * class machine qualifies; a 4 GB / 6 GB box still fails. Spawn sizing keeps the raw value so we do not
+ * GPU-offload on a squeezed machine.
+ */
+export function advertisedRamGB(bytes = totalmem()): number {
+  return Math.ceil(bytes / 1024 ** 3)
+}
+
 /** Same value, exported name used by spawnProfileFor's default argument (declared above it). */
 function freeRamGBValue(): number {
   return freemem() / 1024 ** 3
@@ -220,9 +234,9 @@ function totalRamGBValue(): number {
 /** Refuse a load when the machine cannot safely run the bundled model. */
 export function assertRamOk(id: string): void {
   const entry = getModel(id)
-  const available = totalRamGB()
+  const available = advertisedRamGB()
   if (available < entry.minTotalRamGB) {
-    throw new InsufficientRamError(id, entry.minTotalRamGB, available)
+    throw new InsufficientRamError(id, entry.minTotalRamGB, totalRamGB())
   }
 }
 
@@ -290,6 +304,8 @@ export interface LocalModelDownloadState {
   status: 'idle' | 'downloading' | 'failed'
   /** 0..1 across BOTH files, weighted by their pinned byte counts. Meaningful while `downloading`. */
   progress: number
+  /** Set while `status === 'failed'` — disk, HTTP, hash, or network. Omitted otherwise. */
+  error?: string
 }
 
 export type LocalModelUnavailableReason =
@@ -306,12 +322,14 @@ export interface LocalModelSummary {
   unavailableReason: LocalModelUnavailableReason | null
   /** 0..1 while `unavailableReason === 'downloading'`, 0 otherwise. */
   downloadProgress: number
+  /** Concrete refuse/fail reason while `unavailableReason === 'download-failed'`. */
+  downloadError: string | null
 }
 
 export function listModels(download?: LocalModelDownloadState): LocalModelSummary[] {
   return LOCAL_MODELS.map((model) => {
     const filesPresent = isDownloaded(model.id)
-    const enoughRam = totalRamGB() >= model.minTotalRamGB
+    const enoughRam = advertisedRamGB() >= model.minTotalRamGB
     const dl = download && download.modelId === model.id ? download : undefined
     // RAM is checked FIRST because it now decides whether the weights are fetched at all
     // (shouldFetchWeights in local-model-download.ts): below the floor nothing is downloading and nothing
@@ -331,7 +349,8 @@ export function listModels(download?: LocalModelDownloadState): LocalModelSummar
       minTotalRamGB: model.minTotalRamGB,
       ready: filesPresent && enoughRam,
       unavailableReason: reason,
-      downloadProgress: reason === 'downloading' ? (dl?.progress ?? 0) : 0
+      downloadProgress: reason === 'downloading' ? (dl?.progress ?? 0) : 0,
+      downloadError: reason === 'download-failed' ? (dl?.error ?? null) : null
     }
   })
 }

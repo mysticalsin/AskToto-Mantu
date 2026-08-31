@@ -84,6 +84,7 @@ function assertRoomFor(bytes: number, dir: string, file: string): void {
 const REQUEST_TIMEOUT_MS = 60_000
 const IDLE_TIMEOUT_MS = 120_000
 const MAX_ATTEMPTS = 3
+const MAX_REDIRECTS = 8
 
 const IDLE: LocalModelDownloadState = { modelId: null, status: 'idle', progress: 0 }
 
@@ -137,6 +138,28 @@ async function alreadyValid(path: string, spec: LocalModelFile): Promise<boolean
   return (await sha256Of(path)) === spec.sha256
 }
 
+/**
+ * Hugging Face `resolve/<commit>/` URLs 302 to the Xet/CDN host (us.aws.cdn.hf.co) with a ~1 KB
+ * text/plain body. If Electron `net.fetch` hands back that 302 instead of following it — observed as
+ * HTTP 302 or `server declared 1032 bytes` — the transfer never starts and Settings looks idle. Follow
+ * https Location hops ourselves; a fetch that already landed on 200 is a no-op.
+ */
+async function fetchFollowingRedirects(url: string, signal: AbortSignal): Promise<Response> {
+  let current = url
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const res = await net.fetch(current, { signal })
+    if (res.status < 300 || res.status >= 400) return res
+    const loc = res.headers.get('location')
+    if (!loc) return res
+    const next = new URL(loc, current).toString()
+    if (!/^https:\/\//i.test(next)) {
+      throw new Error(`refusing non-https redirect from ${current}`)
+    }
+    current = next
+  }
+  throw new Error(`too many redirects for ${url}`)
+}
+
 async function downloadOne(
   file: 'gguf' | 'mmproj',
   spec: LocalModelFile,
@@ -161,7 +184,7 @@ async function downloadOne(
   arm(REQUEST_TIMEOUT_MS, `${file}: request timeout for ${spec.url}`)
 
   try {
-    const res = await net.fetch(spec.url, { signal: ctrl.signal })
+    const res = await fetchFollowingRedirects(spec.url, ctrl.signal)
     if (!res.ok) throw new Error(`${file}: HTTP ${res.status} for ${spec.url}`)
 
     // Reject on the declared length before writing anything: a redirect to a login/error page or a
@@ -215,6 +238,12 @@ async function downloadOne(
  */
 export function ensureLocalModel(modelId: string): Promise<boolean> {
   if (inFlight) return inFlight
+  // Publish BEFORE the async work so the first localModels:list (Settings / onboarding, same tick as
+  // boot) reads `downloading` instead of idle/`not-downloaded`. A missed first poll used to freeze
+  // Settings on "Not downloaded yet" because it only re-armed while already `downloading`.
+  if (state.status !== 'downloading' || state.modelId !== modelId) {
+    state = { modelId, status: 'downloading', progress: 0 }
+  }
   inFlight = run(modelId).finally(() => {
     inFlight = null
   })
@@ -225,7 +254,10 @@ async function run(modelId: string): Promise<boolean> {
   let entry
   try {
     entry = getModel(modelId)
-  } catch {
+    assertRamOk(modelId)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    state = { modelId, status: 'failed', progress: 0, error: message }
     return false
   }
   const paths = modelPaths(modelId)
@@ -236,8 +268,13 @@ async function run(modelId: string): Promise<boolean> {
 
   const totalBytes = files.reduce((sum, f) => sum + f.spec.bytes, 0)
   let received = 0
-  const publish = (status: LocalModelDownloadState['status']): void => {
-    state = { modelId, status, progress: totalBytes ? Math.min(1, received / totalBytes) : 0 }
+  const publish = (status: LocalModelDownloadState['status'], error?: string): void => {
+    state = {
+      modelId,
+      status,
+      progress: totalBytes ? Math.min(1, received / totalBytes) : 0,
+      ...(status === 'failed' && error ? { error } : {})
+    }
   }
 
   const missing = []
@@ -275,16 +312,17 @@ async function run(modelId: string): Promise<boolean> {
       }
     }
     if (!ok) {
+      const error = lastErr instanceof Error ? lastErr.message : String(lastErr)
       auditLog('local.model.download_fail', {
         modelId,
         file: f.key,
-        error: lastErr instanceof Error ? lastErr.message : String(lastErr)
+        error
       })
       // Held at 'failed' rather than reset, because this is what Settings now reads: the card says the
       // fetch could not complete and names what has to be reachable, instead of the old "the bundled
       // model files are missing or incomplete — reinstall Métis", which no installer can satisfy
       // (MQA-187/191).
-      publish('failed')
+      publish('failed', error)
       return false
     }
   }
