@@ -1084,7 +1084,7 @@ export function OnboardingExperience({
                   )}
                 </div>
                 {r.state === 'checking' && (
-                  <InlineOrb kind="loading" />
+                  <AgentStatus kind="loading" size="inline" caption />
                 )}
                 {r.state === 'ready' && <Check size={16} className="mt-0.5 shrink-0 text-[var(--color-accent-2)]" />}
                 {r.state === 'action' && <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-ink-2)]">needed</span>}
