@@ -3,9 +3,12 @@ import {
   BAR_PILL_HEIGHT_PX,
   BAR_PILL_SIZE_PX,
   BAR_PILL_WIDTH_PX,
+  JARVIS_ELECTRON_MAX,
   JARVIS_ORB_COLOR,
   JARVIS_ORB_POINTS,
+  JARVIS_SPEAKING_COLOR,
   ORB_COLOR,
+  electronCountForMood,
   ORB_MOODS,
   ORB_NDC_SCALE,
   ORB_PERSPECTIVE_K,
@@ -48,20 +51,30 @@ describe('bar pill sentient circle', () => {
   })
 
   it('locks particle craft and the product color language', () => {
-    expect(JARVIS_ORB_POINTS).toBe(2000)
-    expect(ORB_COLOR.idle).toBe(0x7f00da)
-    expect(ORB_COLOR.thinking).toBe(0x9a2bf0)
-    expect(ORB_COLOR.factcheck).toBe(0x4ca8e8)
-    expect(ORB_COLOR.connecting).toBe(0x2a0a4a)
-    expect(JARVIS_ORB_COLOR).toBe(ORB_COLOR.factcheck)
+    expect(JARVIS_ORB_POINTS).toBeLessThan(400)
+    expect(JARVIS_ORB_POINTS).toBe(96)
+    expect(ORB_COLOR.idle).toBe(0x4ca8e8)
+    expect(ORB_COLOR.thinking).toBe(0x6ec4ff)
+    expect(ORB_COLOR.factcheck).toBe(0x5ab8f0)
+    expect(ORB_COLOR.connecting).toBe(0x2a6a9a)
+    expect(ORB_COLOR.connecting).not.toBe(0x2a0a4a)
+    expect(ORB_COLOR.idle).not.toBe(0x7f00da)
+    expect(JARVIS_SPEAKING_COLOR).toBe(0x5ab8f0)
+    expect(JARVIS_ORB_COLOR).toBe(ORB_COLOR.idle)
+    expect(JARVIS_ELECTRON_MAX).toBe(3)
+    expect(electronCountForMood('idle')).toBe(0)
+    expect(electronCountForMood('factcheck')).toBe(0)
+    expect(electronCountForMood('connecting')).toBe(0)
+    expect(electronCountForMood('thinking')).toBe(3)
     const idle = moodTint('idle')
     const fact = moodTint('factcheck')
     const think = moodTint('thinking')
     const conn = moodTint('connecting')
-    expect(idle.r).toBeGreaterThan(idle.g)
     expect(idle.b).toBeGreaterThan(idle.r)
+    expect(idle.g).toBeGreaterThan(idle.r)
     expect(fact.b).toBeGreaterThan(fact.r)
-    expect(think.r).toBeGreaterThan(idle.r)
+    expect(think.b).toBeGreaterThan(think.r)
+    expect(conn.b).toBeGreaterThan(conn.r)
     expect(conn.r + conn.g + conn.b).toBeLessThan(idle.r + idle.g + idle.b)
   })
 
@@ -102,7 +115,7 @@ describe('bar pill sentient circle', () => {
   it('listening does not change the 52 box or paint the sphere rec-dot red', () => {
     expect(orbBoxForMood('idle')).toEqual({ width: 52, height: 52 })
     expect(REC_DOT_COLOR).toBe(0xf0717a)
-    expect(ORB_COLOR.idle).toBe(0x7f00da)
+    expect(ORB_COLOR.idle).toBe(0x4ca8e8)
     expect(ORB_COLOR.thinking).not.toBe(REC_DOT_COLOR)
     expect(ORB_COLOR.factcheck).not.toBe(REC_DOT_COLOR)
     expect(ORB_COLOR.connecting).not.toBe(REC_DOT_COLOR)
