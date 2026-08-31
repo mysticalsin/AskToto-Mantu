@@ -1,7 +1,7 @@
 /**
  * Bar / minimized pill circle: Jakub thinking-orb on Métis dark glass.
- * Idle breathing. Listen listening. Think working. Size 64. Theme dark.
- * Real package. No WebGL marble. No Fit Studio magenta core.
+ * Idle solving. Listen listening. Think working. Size 64. Theme dark.
+ * No painted caption. Real package. No WebGL marble.
  */
 
 import type { OrbState } from 'thinking-orbs'
@@ -19,10 +19,45 @@ export const BAR_ORB_THEME = 'dark' as const
 export const BAR_ORB_SPEED = 1
 
 export const ORB_STATE: Record<OrbMood, OrbState> = {
-  idle: 'breathing',
+  idle: 'solving',
   thinking: 'working',
   factcheck: 'searching',
   connecting: 'connecting'
+}
+
+/** Package default labels. Must never paint on the Bar pill. */
+export const ORB_PAINTED_WORDS = [
+  'Solving…',
+  'Listening…',
+  'Working…',
+  'Breathing…',
+  'Searching…',
+  'Connecting…',
+  'Thinking…',
+  'Weaving…',
+  'Composing…',
+  'Shaping…'
+] as const
+
+export function sliceBarOrbMarkup(html: string): string {
+  const token = 'data-bar-pill-orb'
+  const at = html.indexOf(token)
+  if (at < 0) return ''
+  const start = html.lastIndexOf('<button', at)
+  const end = html.indexOf('</button>', at)
+  if (start < 0 || end < 0) return ''
+  return html.slice(start, end + '</button>'.length)
+}
+
+/** True if markup paints a playground caption/label (aria-label and title may stay). */
+export function orbHostPaintsText(html: string): boolean {
+  const host = sliceBarOrbMarkup(html) || html
+  const stripped = host
+    .replace(/aria-label="[^"]*"/g, '')
+    .replace(/title="[^"]*"/g, '')
+    .replace(/<canvas\b[^>]*>/g, '')
+  if (ORB_PAINTED_WORDS.some((word) => stripped.includes(word))) return true
+  return />(Solving|Listening|Working|Breathing)</.test(stripped)
 }
 
 export function isFixedCircle(width: number, height: number): boolean {
