@@ -208,6 +208,13 @@ function ensureDirs(settings: Settings): string {
 const jsonCache = new Map<string, { mtimeMs: number; size: number; value: unknown }>()
 const JSON_CACHE_MAX = 2000 // safety valve — see recall.ts's identical guard
 
+/** Bumps on every writeJson. Receipt Mode's match-key cache must not rely on directory mtime alone:
+ *  a same-ms rewrite (alias added to an existing entity) can leave mtime unchanged on a busy disk. */
+let _writeGen = 0
+export function brainWriteGeneration(): number {
+  return _writeGen
+}
+
 // Exported (unchanged otherwise) so the correction engine (src/main/brain/corrections.ts) can read/write
 // brain-relative JSON that doesn't fit a strict entity schema — a merged-away entity's tombstone
 // ({schema_version, id, merged_into}) and the `.brain/corrections.json` journal itself both go through
@@ -245,6 +252,7 @@ export async function writeJson(settings: Settings, rel: string, value: unknown)
   // byte-identical to what a fresh parse() of the written JSON would yield (zod defaults/transforms) —
   // and relying on mtime alone risks a same-mtime rapid write-then-read on low-resolution filesystems.
   jsonCache.delete(p)
+  _writeGen += 1
 }
 
 // MI-2.5 Fix C: the ONE serialization lane every read-modify-write mutation of `.brain/` entity files
