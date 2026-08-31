@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { bundledFfmpegPath, startFfmpegDecode, FFMPEG_CHUNK_SAMPLES } from './ffmpeg-decoder'
+import { IMPORT_NOT_MEDIA } from './import-magic'
 
 const root = join(process.cwd(), 'resources')
 const ffmpeg = bundledFfmpegPath(root)
@@ -105,5 +106,22 @@ describe('FFmpeg spawn failure', () => {
     expect(outcome).toBe('settled')
     expect(failures).toHaveLength(1)
     expect(failures[0].message).toMatch(/ENOENT/)
+  })
+
+  it('refuses an existing non-media file before spawn', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'asktoto-ff-magic-'))
+    temp.push(dir)
+    const html = join(dir, 'payload.mp3')
+    writeFileSync(html, '<!DOCTYPE html><script>alert(1)</script>')
+
+    const failures: Error[] = []
+    const decoder = startFfmpegDecode('/bin/false', html, 0, {
+      onChunk: async () => {},
+      onComplete: async () => {},
+      onError: async (error) => { failures.push(error) }
+    })
+    await decoder.completed
+    expect(failures).toHaveLength(1)
+    expect(failures[0].message).toBe(IMPORT_NOT_MEDIA)
   })
 })

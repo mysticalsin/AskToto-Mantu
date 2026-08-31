@@ -419,7 +419,7 @@ There is no public multipart HTTP upload. Import recap is markdown written by ma
 
 **Risk if missing:** "All files" + ffmpeg is a parser RCE class. An HTML/PE/PDF renamed to `.mp3` should never reach the decoder. A trusted original filename as a dest path would be path traversal; that dest path already does not exist.
 
-**Exact fix:** `sniffMediaFile()` / `isAudioOrVideoMagic()` on the first 16 bytes. Refuse before the job queues (`consumePickedAudio`) and again before `spawn` (`startFfmpegDecode`). Keep generated meeting names. No AV shipped.
+**Exact fix:** `sniffMediaFile()` / `isAudioOrVideoMagic()` on the first 16 bytes. Refuse before the job queues (`consumePickedAudio`) and again before `spawn` (`startFfmpegDecode`) when the source exists. Missing sources still fail at spawn (`ENOENT`) so import-error contracts stay intact. Keep generated meeting names. No AV shipped.
 
 **Status (post-fix): Present.** Residual: a crafted *valid* media file can still hit ffmpeg bugs. Magic bytes stop the wrong type, not a malicious MP4. Optional AV is still optional.
 
