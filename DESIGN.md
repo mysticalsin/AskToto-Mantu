@@ -8,7 +8,20 @@ Three modes in Settings (persist, no reinstall). Default on a fresh install is *
 
 1. **hide** (default). Fully hidden until the pointer is on the hardware camera / Dynamic Island square (top-center, on top of the camera housing), then reveal down. Leave that island hides. Windows: top-center of the display, **no fake notch**.
 2. **island**. The always-visible peek capsule (may sit in the island / notch). Hover the same camera square expands down. Leave that island returns to the peek. Island must never minimize to a second disk.
-3. **bar**. Classic bar. Always visible. Idle rest is the **full bar plus the sentient circle** (fixed size, never a lozenge / pill). The only layout that can collapse to that circle alone. Hide and Island must never grow a minimize-to-circle control, and any minimize call while those layouts are active is a no-op (do not jump Hide → Bar). The circle is invisible whenever the bar is invisible. Contract: `docs/design/BAR-PILL.md`.
+3. **bar**. Classic bar. Always visible. Idle rest is the **full bar plus the sentient sphere** (fixed 52×52, never a lozenge / pill / flattened disc). The only layout that can collapse to that same sphere. Hide and Island must never grow a minimize-to-circle control, and any minimize call while those layouts are active is a no-op (do not jump Hide → Bar). The sphere is invisible whenever the bar is invisible. Contract: `docs/design/BAR-PILL.md`.
+
+### Bar sphere (52, Bar only)
+
+The Bar control is a **glass volume**, not a status blob. Tony should feel a sphere looking back.
+
+- **Size.** `52×52` always. Aspect 1. Same box on idle, listen, think, fact-check, connecting, hover, and minimize. Never a 44-tall pill. Never flatten.
+- **One accent.** Idle is Mantu Bright Purple `#7F00DA`. Not a purple-gradient hero. Mood tints the volume; it does not change the box.
+- **Materials.** Glass shell (fresnel rim + one specular kiss) around a living core and Jarvis-style interior motion (constellation, electrons, slow breath). Perspective, not a 2D radial fill. Reduced-motion still looks spherical (lit still frame, not a disc).
+- **Moods.** Idle purple. Listen: denser pulse, rec-dot stays **red** (`#F0717A`) and readable on the glass (do not paint the sphere red). Think: brighter violet, higher energy. Fact-check: grounded blue `#4CA8E8`. Connecting: deep indigo, quieter. Priority: connecting > fact-check > think > idle. Listen is a motion overlay, not a fifth fill.
+- **Same sphere.** Minimize (Bar only) is this sphere, not a second disc. Windows: same sphere, top-center, no Mac-only look.
+- **Out of scope.** Island/Hide hit geometry (`src/main/island/geometry.ts`) is frozen. Hide stays 8×2. Island wakes only on the camera square.
+
+Do/don'ts, shader layers, and tests: `docs/design/BAR-PILL.md`. Quality hats: `docs/design/QUALITY.md`.
 
 Settings shows these as **cards with a tiny desktop diagram**, not three text radios. Hide: empty top-middle, faint hover hint, caption "Hidden until you move to the top." Island: small capsule at the top-middle, caption "A small island stays visible. Hover opens it." Bar: full bar at the top **plus a circle**, caption "The bar stays on screen." Selected card is obvious. Changes apply immediately. Closing Settings after picking Island or Hide must park the live overlay (`shouldForceParkOnBecameIdle` + `collapse-now` + `parkAfterHide`) so the user sees the notch rest, not a leftover full bar. No reinstall. Original Métis copy. No em dash. No Vibe Island trademark strings.
 

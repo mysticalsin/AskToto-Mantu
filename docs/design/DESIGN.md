@@ -109,5 +109,5 @@ See [ONBOARDING-STARFIELD.md](./ONBOARDING-STARFIELD.md). Galaxy from frame one.
 ## Thinking orbs
 See [THINKING-ORB.md](./THINKING-ORB.md). Caption then sphere. Word first.
 
-## Bar pill
-See [BAR-PILL.md](./BAR-PILL.md). Jarvis orb is Bar-minimized only. Not stuffed into overlay Hide/Island.
+## Bar sphere
+See [BAR-PILL.md](./BAR-PILL.md). The Bar control is a 52×52 glass volume (Jarvis 3D feel, Mantu `#7F00DA`). Same sphere when minimized. Not stuffed into overlay Hide/Island.

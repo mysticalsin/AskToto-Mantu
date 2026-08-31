@@ -24,11 +24,11 @@ Every hat must **PASS**. One **REJECT** fails the slice. This is the gate for th
 Fluid 60fps. Sentient, not a spinning demo blob.
 
 - Idle breath + per-particle drift (not a rigid mesh).
-- Listening: denser / pulse. Hover: lean. Reduced-motion: one still, alive-looking frame.
+- Listening: denser / pulse + red rec-dot on the glass. Hover: lean. Reduced-motion: one still **spherical** frame (glass + core + kiss), not a disc.
 - Spring expand/collapse (`--ease-spring`). No snap.
 - rAF does **not** read layout (`clientWidth`, `getBoundingClientRect`) or look up GL locations.
 
-**REJECT if** the orb is a single radial blob, or the frame loop does layout / `getUniformLocation`.
+**REJECT if** the orb is a single radial blob / flat CSS disc, or the frame loop does layout / `getUniformLocation`.
 
 ## Interaction
 
@@ -56,12 +56,13 @@ Apple-grade. Quiet luxury. Transparent edges. Fixed circle.
 
 - Same width and height (`BAR_PILL_SIZE_PX`). Aspect 1 on every mood. Bounding box constant.
 - Never a stadium, potato, or squashed capsule. Shader uses the same NDC scale for X and Y.
-- Idle is Mantu purple (`#7F00DA`). Fact-check is Jarvis cyan. Connecting is deep indigo. Thinking is brighter violet. Color is the only chrome change.
-- Luminous circular core under Jarvis particles (Fit Studio rest energy). Core is a disc, never a stadium.
+- Idle is Mantu purple (`#7F00DA`). Fact-check is grounded blue. Connecting is deep indigo. Thinking is brighter violet. Color tints the volume; the box never changes.
+- Glass volume: ray-sphere body, fresnel rim, one specular kiss, living core, Jarvis constellation. Not a 2D radial disc.
+- Rec-dot stays red and readable on the sphere while listening. Do not paint the sphere red.
 - Additive blending, connection lines, electrons. No glass chip of mic buttons. No dark fill.
-- Transparent around the circle. No scrollbar.
+- Transparent around the circle. No scrollbar. No CSS radial body.
 
-**REJECT if** rest is a filled chip, an opaque oval, or any flatten of the circle.
+**REJECT if** rest is a filled chip, a flat radial disc, an opaque oval, or any flatten of the circle.
 
 ## Stability
 
