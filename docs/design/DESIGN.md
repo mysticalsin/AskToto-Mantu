@@ -102,3 +102,12 @@ ClickUp and Plane use official simple-icons SVG paths (CC0; trademarks remain wi
 - Plane: simple-icons `plane` (commit `978656df6ce854ac04e45351059f8e3db7e34ef4`), official hex `#121212`, source https://plane.so/brand-logos/logo-with-wordmark.svg — `PlaneMark`. Near-black hex is painted as `currentColor` on dark glass so the official path still reads.
 
 See `docs/design/BRAIN-CONNECTORS.md`.
+
+## Starfield Close (onboarding bed)
+See [ONBOARDING-STARFIELD.md](./ONBOARDING-STARFIELD.md). Galaxy from frame one. Overlay hide/island stay out.
+
+## Thinking orbs
+See [THINKING-ORB.md](./THINKING-ORB.md). Caption then sphere. Word first.
+
+## Bar pill
+See [BAR-PILL.md](./BAR-PILL.md). Jarvis orb is Bar-minimized only. Not stuffed into overlay Hide/Island.
