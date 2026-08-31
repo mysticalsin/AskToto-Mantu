@@ -21,7 +21,9 @@ describe('cursor-in-rect (Mac Dynamic Island hover)', () => {
   it('point in the notch strip is a hit; Y=200 is not', () => {
     const rest = hoverWatchRestRect('hide', tonyMac)
     expect(rest.y).toBe(0)
-    expect(rest.height).toBeGreaterThanOrEqual(tonyMac.menuBarHeight)
+    expect(rest.height).toBeLessThan(tonyMac.menuBarHeight)
+    expect(rest.height).toBeLessThan(44)
+    expect(rest.width).toBe(tonyMac.notchWidth)
     expect(pointInRect({ x: 900, y: 12 }, rest)).toBe(true)
     expect(pointInRect({ x: 900, y: 200 }, rest)).toBe(false)
   })
