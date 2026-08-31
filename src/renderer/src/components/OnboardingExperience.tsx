@@ -394,6 +394,15 @@ export function setupAsrBlocksContinue(rows: SetupRow[]): boolean {
   return !asr || asr.state !== 'ready'
 }
 
+/** First-run cannot mark onboardingDone (Ready or Skip) while transcription files are missing. */
+export function firstRunCanFinish(input: { asrReady: boolean; consent: boolean }): boolean {
+  return input.asrReady && input.consent
+}
+
+export function asrStatusIsReady(status: AsrAssetsStatus | null | undefined): boolean {
+  return Boolean(status?.ready || status?.status === 'ready')
+}
+
 /** Act 3 — "scan first, then present a completed configuration": two DIFFERENT claims the scene makes,
  *  kept as one pure derivation so both stay honest and are each independently testable.
  *  `scanDone` only means every row has left 'checking' — safe to stop showing spinners and reveal the
@@ -626,17 +635,28 @@ const READY_SPARKS: ReadonlyArray<{ x: number; y: number; delay: number }> = [
 function ActReady({
   mode,
   onFinish,
-  onOpenAiSettings
+  onOpenAiSettings,
+  asrReady,
+  asrHint,
+  asrProgress,
+  showAsrRetry,
+  onRetryAsr
 }: {
   mode: ConversationMode
   onFinish: () => Promise<void>
   onOpenAiSettings?: () => void
+  asrReady: boolean
+  asrHint: string
+  asrProgress?: number
+  showAsrRetry: boolean
+  onRetryAsr: () => void
 }): JSX.Element {
   const [busy, setBusy] = useState(false)
   const persona = ONBOARDING_PERSONAS.find((p) => p.id === (mode as OnboardingPersonaId))
+  const blocked = busy || !asrReady
 
   const finishAndOpenAiSettings = async (): Promise<void> => {
-    if (busy) return
+    if (blocked) return
     setBusy(true)
     await onFinish()
     onOpenAiSettings?.()
@@ -670,11 +690,30 @@ function ActReady({
         </p>
         <p className="onboard-tell-quote onboard-tell-quote--echo fade-up">{TELL_THE_ROOM_QUOTE}</p>
       </div>
+      {!asrReady && (
+        <div className="flex w-full max-w-[360px] flex-col items-center gap-1.5">
+          <p className="m-0 text-[11px] leading-snug text-[color:var(--color-ink-3)]">{asrHint}</p>
+          {asrProgress != null && asrProgress > 0 && asrProgress < 1 && (
+            <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+              <div className="h-full rounded-full bg-[#9A2BF0]" style={{ width: `${Math.round(asrProgress * 100)}%` }} />
+            </div>
+          )}
+          {showAsrRetry && (
+            <button
+              type="button"
+              onClick={onRetryAsr}
+              className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
+            >
+              Try again
+            </button>
+          )}
+        </div>
+      )}
       <button
         type="button"
         onClick={() => void onFinish()}
-        disabled={busy}
-        className="onboard-cta no-drag focus-ring"
+        disabled={blocked}
+        className={'onboard-cta no-drag focus-ring' + (blocked ? ' onboard-cta--muted' : '')}
       >
         Get started
       </button>
@@ -682,7 +721,7 @@ function ActReady({
         <button
           type="button"
           onClick={() => void finishAndOpenAiSettings()}
-          disabled={busy}
+          disabled={blocked}
           className="no-drag focus-ring text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)] disabled:opacity-50"
         >
           Add your own AI provider (optional, never required)
@@ -786,7 +825,31 @@ export function OnboardingExperience({
   // Recording-consent gate (CMO-QA #1). Skip lands on the same tell-the-room card, never the legacy
   // slides. Finish is blocked until this checkbox is checked, on both Ready and Skip Get started.
   const [consent, setConsent] = useState(false)
+  const [asrStatus, setAsrStatus] = useState<AsrAssetsStatus>(IDLE_ASR_STATUS)
+  const asrReady = asrStatusIsReady(asrStatus)
+  const asrRow = asrAssetsRowStatus(asrStatus)
   const doneRef = useRef(false)
+
+  useEffect(() => {
+    let live = true
+    const apply = (s: AsrAssetsStatus): void => {
+      if (live) setAsrStatus(s)
+    }
+    void window.toto.asrAssetsEnsure().then(apply).catch(() => apply(IDLE_ASR_STATUS))
+    const poll = async (): Promise<void> => {
+      const s = await window.toto.asrAssetsStatus().catch(() => null)
+      if (s) apply(s)
+    }
+    const interval = setInterval(() => void poll(), PERMISSIONS_POLL_MS)
+    const unsub = window.toto.onImportAssetsProgress?.((d) => {
+      apply({ ...d, ready: d.status === 'ready' })
+    })
+    return () => {
+      live = false
+      clearInterval(interval)
+      unsub?.()
+    }
+  }, [])
   // Tracks the last-seen screenRecording status across polls so a false→true flip mid-scene (the user
   // just toggled it on in System Settings) can be told apart from "was already granted on mount" — only
   // the former needs a restart, since this process's ScreenCaptureKit handle never saw the earlier one.
@@ -882,14 +945,15 @@ export function OnboardingExperience({
     const poll = async (): Promise<void> => {
       const perms = await window.toto.getPermissions().catch(() => null)
       const models = await window.toto.localModelsList().catch(() => [])
-      const asrStatus = await window.toto.asrAssetsStatus().catch(() => null)
+      const asrStatusNow = await window.toto.asrAssetsStatus().catch(() => null)
       if (!live) return
+      if (asrStatusNow) setAsrStatus(asrStatusNow)
       const local =
         models.find((m) => m.unavailableReason === 'downloading') ??
         models.find((m) => m.id === settings?.localLlm.modelId) ??
         models[0]
       const lm = localModelRowStatus(local)
-      const asr = asrStatus ? asrAssetsRowStatus(asrStatus) : null
+      const asr = asrStatusNow ? asrAssetsRowStatus(asrStatusNow) : null
       setRows((rs) =>
         rs.map((r) => {
           if (r.key === 'asr' && asr) {
@@ -935,6 +999,7 @@ export function OnboardingExperience({
 
   const retryAsr = async (): Promise<void> => {
     const status = await window.toto.asrAssetsEnsure().catch(() => IDLE_ASR_STATUS)
+    setAsrStatus(status)
     const asr = asrAssetsRowStatus(status)
     setRows((rs) => rs.map((r) => (r.key === 'asr' ? { ...r, state: asr.state, detail: asr.detail, progress: asr.progress } : r)))
   }
@@ -963,7 +1028,7 @@ export function OnboardingExperience({
   // CTA, not personalize's Start (which now only advances to license/ready, see sceneAfterPersonalize).
   // Returns a promise so Ready's optional provider link can await it before opening Settings.
   const finish = async (): Promise<void> => {
-    if (doneRef.current || !consent) return
+    if (doneRef.current || !firstRunCanFinish({ asrReady, consent })) return
     doneRef.current = true
     music.stop()
     disposePortalAudio()
@@ -1315,7 +1380,16 @@ export function OnboardingExperience({
       )}
 
       {scene === 'ready' && (
-        <ActReady mode={mode} onFinish={finish} onOpenAiSettings={onOpenAiSettings} />
+        <ActReady
+          mode={mode}
+          onFinish={finish}
+          onOpenAiSettings={onOpenAiSettings}
+          asrReady={asrReady}
+          asrHint={asrRow.detail}
+          asrProgress={asrRow.progress}
+          showAsrRetry={asrRowNeedsRetry(asrRow)}
+          onRetryAsr={() => void retryAsr()}
+        />
       )}
 
       {scene === 'skip' && (
@@ -1324,11 +1398,36 @@ export function OnboardingExperience({
             <MetisMark size={72} />
           </div>
           <TellTheRoomCard consent={consent} onConsent={setConsent} />
+          {!asrReady && (
+            <div className="flex w-full max-w-[360px] flex-col items-center gap-1.5">
+              <p className="m-0 text-[11px] leading-snug text-[color:var(--color-ink-3)]">{asrRow.detail}</p>
+              {asrRow.progress != null && asrRow.progress > 0 && asrRow.progress < 1 && (
+                <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
+                  <div
+                    className="h-full rounded-full bg-[#9A2BF0]"
+                    style={{ width: `${Math.round(asrRow.progress * 100)}%` }}
+                  />
+                </div>
+              )}
+              {asrRowNeedsRetry(asrRow) && (
+                <button
+                  type="button"
+                  onClick={() => void retryAsr()}
+                  className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
+                >
+                  Try again
+                </button>
+              )}
+            </div>
+          )}
           <button
             type="button"
             onClick={() => void finish()}
-            disabled={!consent}
-            className={'onboard-cta no-drag focus-ring' + (consent ? '' : ' onboard-cta--muted')}
+            disabled={!firstRunCanFinish({ asrReady, consent })}
+            className={
+              'onboard-cta no-drag focus-ring' +
+              (firstRunCanFinish({ asrReady, consent }) ? '' : ' onboard-cta--muted')
+            }
           >
             Get started
           </button>

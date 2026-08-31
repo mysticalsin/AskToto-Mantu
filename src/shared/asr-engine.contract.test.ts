@@ -25,6 +25,8 @@ describe('ASR engine ship — Parakeet is the default', () => {
     expect(onboard).toMatch(/asrAssetsEnsure/)
     expect(onboard).toMatch(/asrAssetsStatus/)
     expect(onboard).toMatch(/setupAsrBlocksContinue/)
+    expect(onboard).toMatch(/firstRunCanFinish/)
+    expect(onboard).toMatch(/asrAssetsEnsure\(\)/)
     expect(onboard).not.toMatch(/models missing in this build/)
     expect(onboard).not.toMatch(/[Rr]einstall Métis/)
     expect(read('src/preload/index.ts')).toMatch(/asrAssetsStatus/)

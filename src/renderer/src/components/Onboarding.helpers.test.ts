@@ -16,6 +16,8 @@ import {
   localModelRowStatus,
   micRowStatus,
   setupAsrBlocksContinue,
+  firstRunCanFinish,
+  asrStatusIsReady,
   summarizeSetupRows,
   type SetupRow
 } from './OnboardingExperience'
@@ -328,6 +330,16 @@ describe('Act 3 — transcription files never skip', () => {
     expect(setupAsrBlocksContinue([asrRow('checking')])).toBe(true)
     expect(setupAsrBlocksContinue([asrRow('ready')])).toBe(false)
     expect(setupAsrBlocksContinue([])).toBe(true)
+  })
+
+  it('will not finish first-run (Ready or Skip) until files are ready and consent is given', () => {
+    expect(firstRunCanFinish({ asrReady: false, consent: true })).toBe(false)
+    expect(firstRunCanFinish({ asrReady: true, consent: false })).toBe(false)
+    expect(firstRunCanFinish({ asrReady: true, consent: true })).toBe(true)
+    expect(asrStatusIsReady({ ready: false, status: 'downloading', progress: 0.2, label: 'Getting transcription files…' })).toBe(
+      false
+    )
+    expect(asrStatusIsReady({ ready: true, status: 'ready', progress: 1, label: 'Transcription files ready' })).toBe(true)
   })
 })
 

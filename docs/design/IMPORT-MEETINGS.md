@@ -18,7 +18,7 @@ Parakeet is the **default** live ASR engine (`asrEngine: 'parakeet'` in `DEFAULT
 
 The settings file is a **sparse overlay**. A profile that never wrote `asrEngine` inherits the new default (existing users who never touched ASR migrate to Parakeet). A profile that explicitly chose `whisper` or `apple` keeps that key — do not clobber a deliberate choice.
 
-Act 3 (setup) **always** provisions Parakeet + the Whisper floor. It does not skip, and it never says “models missing in this build” or “reinstall.” It calls `asrAssetsEnsure` / polls `asrAssetsStatus` (bundled `resources/` first, then `userData` fetch with a visible meter). Continue on Act 3 stays disabled until the four Parakeet files and the Whisper floor are actually present. A failed fetch stays on the row with Try again.
+Onboarding **always** provisions Parakeet + the Whisper floor, starting the moment the exclusive stage mounts (not only Act 3). It does not skip, and it never says “models missing in this build” or “reinstall.” It calls `asrAssetsEnsure` / polls `asrAssetsStatus` (bundled `resources/` first, then `userData` fetch with a visible meter). Continue on Act 3, Skip’s Get started, and Ready’s Get started stay disabled until the four Parakeet files and the Whisper floor are actually present. `finish()` will not write `onboardingDone` while they are missing. A failed fetch stays on the row with Try again.
 
 `asrBundled` still means “the installer/repo `resources/` manifest is complete” (Listen’s `asr-model://` offline gate). Onboarding does **not** use that flag as a skip.
 
