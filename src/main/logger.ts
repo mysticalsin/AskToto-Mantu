@@ -154,6 +154,7 @@ export type AuditEvent =
   | 'capture.display_mismatch'
   | 'capture.blocked'
   | 'capture.failed'
+  | 'capture.check'
   | 'transcript.saved'
   | 'transcript.deleted'
   | 'transcript.renamed'

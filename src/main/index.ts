@@ -82,7 +82,8 @@ import {
   type ImportJobView,
   type ScreenContextResult,
   type DiagnosticsExportResult,
-  type RecallExportPlainResult
+  type RecallExportPlainResult,
+  ScreenCaptureCheckPayloadSchema
 } from '@shared/ipc'
 import {
   getSettings,
@@ -137,7 +138,8 @@ import {
   localPrimaryEligibleFor,
   pickPrimaryProvider,
   allowCrossProviderFailover,
-  resolveRoutingMode
+  resolveRoutingMode,
+  localRuntimeBinaryPresent
 } from './llm/local-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
@@ -327,6 +329,12 @@ import {
   readSavedFile
 } from './transcripts'
 import { getPlatformPermissions, probeScreenCapture, noteScreenCaptureOutcome } from './platform-perms'
+import { collectVisionStream, runScreenCaptureCheck } from './screen-capture-check'
+import {
+  VISION_CHECK_PROMPT,
+  VISION_CHECK_SYSTEM,
+  isApiVisionCandidate
+} from '@shared/screen-capture-check'
 import {
   listMeetings,
   searchMeetings,
@@ -2306,6 +2314,112 @@ function prewarmCapture(): void {
   })
 }
 
+function visionCheckContextFromSettings(): import('@shared/screen-capture-check').VisionCheckContext {
+  const s = getSettings()
+  let localWeightsReady = false
+  try {
+    localWeightsReady = localModelDownloaded(s.localLlm.modelId) && localRuntimeBinaryPresent()
+  } catch {
+    localWeightsReady = false
+  }
+  const provider = s.provider
+  const visionOk =
+    provider === 'dust' ? dustSelectedAgentVision(s.providerModels['dust']) : PROVIDERS[provider].vision
+  const configured =
+    provider === 'local'
+      ? false
+      : PROVIDERS[provider].kind === 'cli'
+        ? !!s.cliConnected[provider]
+        : getApiKey(provider).length > 0 &&
+          (provider !== 'dust' || !!s.dustWorkspaceId) &&
+          (!requiresUserBaseUrl(provider) || !!providerBaseUrl(provider, s))
+  const allowed = getAllowedProviders()
+  const orgOk = !allowed || allowed.includes(provider)
+  return {
+    localWeightsReady,
+    localEnabled: s.localLlm.enabled,
+    apiVisionReady: isApiVisionCandidate(provider, visionOk, configured && orgOk),
+    activeProvider: provider
+  }
+}
+
+/** Isolated vision ask for the Settings self-check. Never askStart, never overlay chat, never a teammate push. */
+function askVisionForScreenCheck(
+  backend: 'local' | 'api',
+  image: string
+): Promise<{ text: string; label: string }> {
+  const s = getSettings()
+  const req: AskStart = {
+    id: `screen-check-${Date.now()}`,
+    mode: 'vision',
+    prompt: VISION_CHECK_PROMPT,
+    image,
+    history: []
+  }
+  if (backend === 'local') {
+    return collectVisionStream((handlers) =>
+      createStream({
+        providerId: 'local',
+        kind: 'local',
+        apiKey: '',
+        model: s.localLlm.modelId,
+        temperature: 0,
+        idleMs: 90_000,
+        maxOutputTokens: 80,
+        system: VISION_CHECK_SYSTEM,
+        req,
+        handlers: {
+          onDelta: handlers.onDelta,
+          onDone: () => handlers.onDone(),
+          onError: handlers.onError
+        }
+      })
+    ).then((text) => ({ text, label: PROVIDERS.local.label }))
+  }
+  const provider = s.provider
+  if (provider === 'local') {
+    return Promise.reject(new Error('No API provider is selected.'))
+  }
+  const def = PROVIDERS[provider]
+  const key = def.kind === 'cli' ? '' : getApiKey(provider)
+  const model =
+    provider === 'dust'
+      ? (s.providerModels['dust'] || '').trim() || def.defaultModel
+      : applyInteractiveGuardrail(
+          provider,
+          'base',
+          resolveModelTier(
+            provider,
+            s.providerModels,
+            s.providerModelsThinking,
+            'base',
+            s.providerModelsDeep
+          ) || def.fastModel
+        )
+  return collectVisionStream((handlers) =>
+    createStream({
+      providerId: provider,
+      kind: def.kind,
+      apiKey: key,
+      baseURL: providerBaseUrl(provider, s),
+      workspaceId: s.dustWorkspaceId,
+      refreshDustAuth: provider === 'dust' ? makeRefreshDustAuth(s) : undefined,
+      model,
+      temperature: 0,
+      idleMs: 45_000,
+      maxOutputTokens: 80,
+      freshConversation: true,
+      system: VISION_CHECK_SYSTEM,
+      req,
+      handlers: {
+        onDelta: handlers.onDelta,
+        onDone: () => handlers.onDone(),
+        onError: handlers.onError
+      }
+    })
+  ).then((text) => ({ text, label: def.label }))
+}
+
 // --- Background screen preprocessing (M13) ---------------------------------------------------------------
 // On-device pre-analysis of the screen on window/content change, so a "what's on my screen" ask answers from
 // a pre-computed description instead of a cold capture + image round trip. All the privacy/cost guardrails
@@ -2967,6 +3081,31 @@ function registerIpc(): void {
     // boot reconcile picks it up there. This costs one no-op call to cover the case where it already did.
     refreshScreenPreprocess()
     return getPlatformPermissions()
+  })
+  // Settings / overlay self-check. First pass: existing OS probe. Second pass: real vision on local or API.
+  // Isolated from askStart — the result is never painted as a chat turn and never pushed to a teammate.
+  ipcMain.handle(IPC.screenCaptureCheck, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) {
+      return { ok: false, pass: 'probe' as const, message: 'Sign in with your Mantu account first.' }
+    }
+    const parsed = ScreenCaptureCheckPayloadSchema.parse(payload)
+    const result = await runScreenCaptureCheck(parsed.pass, {
+      probe: probeScreenCapture,
+      capture: async () => {
+        const shot = await getScreenshot('screen-check')
+        return { image: shot.image }
+      },
+      askVision: askVisionForScreenCheck,
+      context: visionCheckContextFromSettings()
+    })
+    auditLog('capture.check', {
+      pass: result.pass,
+      ok: result.ok,
+      backend: result.backend,
+      failedOver: result.failedOver === true
+    })
+    return result
   })
 
   ipcMain.handle(IPC.settingsSet, async (e, patch) => {
