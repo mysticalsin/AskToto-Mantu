@@ -2876,7 +2876,7 @@ function ProductConnectCard({
           </span>
         ) : (
           <button type="button" onClick={() => void runConnect()} disabled={connecting} className={primaryBtnStyle}>
-            {connecting ? <Loader2 size={12} className="animate-spin" /> : null}
+            {connecting ? <InlineOrb kind="connecting" /> : null}
             {connecting ? waitingLabel : 'Connect'}
           </button>
         )}
@@ -2981,7 +2981,7 @@ function ProductConnectCard({
                 disabled={!apiKey.trim() || state.phase === 'testing' || state.phase === 'saving' || connecting}
                 className={secondaryBtnStyle}
               >
-                {state.phase === 'testing' ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                {state.phase === 'testing' ? <InlineOrb kind="connecting" /> : <RefreshCw size={12} />}
                 Test connection
               </button>
               <button
@@ -2991,7 +2991,7 @@ function ProductConnectCard({
                 title={state.phase !== 'tested' ? 'Test the connection successfully first' : undefined}
                 className={primaryBtnStyle}
               >
-                {state.phase === 'saving' ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                {state.phase === 'saving' ? <InlineOrb kind="loading" /> : <Check size={12} />}
                 Save
               </button>
             </div>
