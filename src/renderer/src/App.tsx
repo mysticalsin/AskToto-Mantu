@@ -3171,7 +3171,7 @@ export function App(): JSX.Element {
     DEMO === 'copilot'
   // Screen-freshness chip when the active answer was grounded in a screenshot — Bar ticks its own label.
   const ctxCapturedAt = showingScreenChip ? screenCapturedAt : null
-  // Recording chrome (Heard live chip, timer, Pause/Stop, New meeting/Transcript pills, Quick Actions,
+  // Recording chrome (Heard live chip, timer, Pause/Stop, Transcript pill, Quick Actions,
   // the consent reminder, the listening glass tint) must vanish the INSTANT Stop is initiated — it must not
   // lag behind listen.listening, which stays true for up to DRAIN_CEILING_MS (4s) while listen.ts finishes
   // draining audio in the background (see listen.ts stop()). endReview() flips `view` to 'review'
