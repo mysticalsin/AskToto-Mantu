@@ -1,5 +1,5 @@
 /**
- * Scoped liquid-gooey host for CTA pills and thinking-orb slots.
+ * Scoped liquid-gooey host for CTA pills, thinking-orb slots, and the Act 4 selected mode card.
  * Pass-through under reduced-motion / no window. Never wraps the constellation bed.
  */
 import { useCallback, useState, type ReactNode } from 'react'

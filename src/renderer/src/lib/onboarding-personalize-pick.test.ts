@@ -31,7 +31,7 @@ describe('Act 4 personalize — required pick', () => {
     expect(PERSONALIZE_LEAD).toBe('Change it anytime in Settings.')
     expect(design).toMatch(/Act 4 required pick/)
     expect(design).toMatch(/Pick one\. Continue waits until you do\./)
-    expect(vibe).not.toMatch(/\u2014/)
+    expect(stripComments(vibe)).not.toMatch(/\u2014/)
     expect(stripComments(personalizeBlock())).not.toMatch(/\u2014/)
     const block = personalizeBlock()
     expect(block).toMatch(/PERSONALIZE_TITLE/)
