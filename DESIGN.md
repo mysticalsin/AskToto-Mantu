@@ -24,6 +24,8 @@ The Bar control is Jakub Antalik's thinking-orb on Métis dark glass, not a WebG
 
 Do/don'ts and tests: `docs/design/BAR-PILL.md`. Quality hats: `docs/design/QUALITY.md`.
 
+Spotlight Ref / Dust CLI: `docs/design/DESIGN.md` § CLI session and Spotlight Ref. This slice does not restyle the Bar orb. Island/Hide stay frozen. Overlay 58 stays frozen.
+
 ### Auto-answer
 
 Ambient copilot / auto-answer (suggest + speculative showSpec) stays on the overlay until Tony clicks the answer (dismiss/read, never send) or a new question is asked (typed ask, or a new ambient suggestion replacing it). No 4s TTL. No 7s ceiling. Never auto-send.
