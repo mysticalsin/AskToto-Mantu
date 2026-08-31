@@ -315,6 +315,12 @@ describe('SettingsSchema', () => {
     expect(DEFAULT_SETTINGS.mcpConnections).toEqual([])
   })
 
+  it('defaults planeClientId to empty (main-owned DCR cache)', () => {
+    expect(DEFAULT_SETTINGS.planeClientId).toBe('')
+    expect(SettingsSchema.parse({ ...DEFAULT_SETTINGS }).planeClientId).toBe('')
+    expect(IPC.mcpPlaneConnect).toBe('mcp:planeConnect')
+  })
+
   it('defaults asrQuality to best (live Whisper uses the large multilingual model)', () => {
     expect(DEFAULT_SETTINGS.asrQuality).toBe('best')
     // Schema default must match DEFAULT_SETTINGS — store.ts layers defaults under the user file, then

@@ -207,6 +207,8 @@ export const IPC = {
   // + PKCE flow (browser consent) and, on success, upserts an mcpConnections entry exactly like
   // mcpSaveConnection does for a pasted key. Reuses mcpDisconnect/mcpPush unchanged.
   mcpClickupConnect: 'mcp:clickupConnect',
+  // Plane Connect — same shape as ClickUp: one button, OAuth 2.1 + PKCE + DCR, pinned hosted MCP URL.
+  mcpPlaneConnect: 'mcp:planeConnect',
   licenseActivate: 'license:activate',
   licenseStatus: 'license:status',
   licenseGate: 'license:gate',
@@ -1042,6 +1044,9 @@ export const BaseSettingsSchema = z.object({
   // plain settings rather than mcpSecrets.ts. Registered once (main/mcp/clickupOAuth.ts) and cached here
   // so every later connect/reconnect reuses the same client instead of re-registering.
   clickupClientId: z.string().default(''),
+  // Plane DCR client_id — public, like clickupClientId. The matching client_secret is encrypted in
+  // mcpSecrets (`key-mcp-plane-client.bin`) because Plane's token endpoint requires client_secret_post.
+  planeClientId: z.string().default(''),
   // Métis Local uses a single on-device model. The preprocess is a persisted-settings migration for
   // releases that offered qwen3.5-2b; unknown ids fail validation and fall back safely in
   // main/store.ts instead of pointing llama-server at a file that can never exist.
@@ -1394,6 +1399,7 @@ export const DEFAULT_SETTINGS: Settings = {
   cliNoticeAck: false,
   mcpConnections: [],
   clickupClientId: '',
+  planeClientId: '',
   localLlm: {
     enabled: true,
     modelId: BUNDLED_LOCAL_MODEL_ID,

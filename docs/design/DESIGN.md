@@ -94,3 +94,11 @@ dashboard (PR 61) is a separate surface; this module is a small honest feed it c
 ## MCP write
 Outlook drafts and CRM notes are user-confirmed. Never auto-send. A disconnected connector shows
 Connect, it does not pretend a send happened.
+
+## Connector marks (Settings → Brain)
+ClickUp and Plane use official simple-icons SVG paths (CC0; trademarks remain with the brands). Do not invent marks or scrape PNGs.
+
+- ClickUp: simple-icons `clickup`, official hex `#7B68EE`, source https://clickup.com/brand — `ClickUpMark`.
+- Plane: simple-icons `plane` (commit `978656df6ce854ac04e45351059f8e3db7e34ef4`), official hex `#121212`, source https://plane.so/brand-logos/logo-with-wordmark.svg — `PlaneMark`. Near-black hex is painted as `currentColor` on dark glass so the official path still reads.
+
+See `docs/design/BRAIN-CONNECTORS.md`.
