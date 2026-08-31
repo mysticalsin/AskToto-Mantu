@@ -62,7 +62,11 @@ function languageDirective(
     isSummary && summarySel && summarySel !== 'auto' && summarySel !== 'same' ? summaryLanguage : outputLanguage
   const lang = (chosen || 'auto').trim()
   if (!lang || lang.toLowerCase() === 'auto') {
-    return '\n\nLANGUAGE: Respond in the main language of the conversation/input.'
+    // docs/asr/QUALITY.md — do not translate away unless the user asked.
+    if (isSummary) {
+      return '\n\nLANGUAGE: Write the recap/notes in the spoken language(s) of the transcript. If the meeting used more than one language, keep each attributed passage in the language it was spoken. Do not translate unless the user explicitly asked for a different summary language.'
+    }
+    return '\n\nLANGUAGE: Respond in the spoken language(s) of the conversation/input. Do not translate unless asked.'
   }
   return `\n\nLANGUAGE: Always respond in ${lang}, regardless of the input language.`
 }

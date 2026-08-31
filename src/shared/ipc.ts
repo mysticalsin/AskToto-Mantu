@@ -310,7 +310,9 @@ export const TranscriptLineSchema = z.object({
   // by commitLine so mixed-language meetings render "[conversation switches to …]" markers in the recap
   // prompt and the saved transcript (the LLM otherwise has no way to know a switch happened). Absent
   // when detection wasn't confident, and on every line saved before this field existed.
-  lang: z.string().optional()
+  lang: z.string().optional(),
+  // Streaming first-caption placeholder (docs/asr/QUALITY.md). Never persisted; transcriptToText drops it.
+  provisional: z.boolean().optional()
 })
 export type TranscriptLine = z.infer<typeof TranscriptLineSchema>
 

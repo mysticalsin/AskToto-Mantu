@@ -59,6 +59,14 @@ describe('transcriptToText', () => {
       'THEM: Hmm.\nYOU: Então vamos ver isso.\nTHEM: Ok.\nYOU: Vamos fechar assim.'
     )
   })
+
+  it('drops streaming provisional lines so recap/save never see a first-caption draft', () => {
+    const lines: TranscriptLine[] = [
+      { speaker: 'them', text: 'Then we close.', t: 1 },
+      { speaker: 'you', text: '…', t: 2, provisional: true }
+    ]
+    expect(transcriptToText(lines)).toBe('THEM: Then we close.')
+  })
 })
 
 describe('recapPersistAction', () => {
