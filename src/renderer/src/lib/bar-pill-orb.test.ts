@@ -4,6 +4,7 @@ import {
   BAR_PILL_SIZE_PX,
   BAR_PILL_WIDTH_PX,
   JARVIS_ELECTRON_MAX,
+  JARVIS_LINE_CHORDS,
   JARVIS_ORB_COLOR,
   JARVIS_ORB_POINTS,
   JARVIS_SPEAKING_COLOR,
@@ -52,7 +53,8 @@ describe('bar pill sentient circle', () => {
 
   it('locks particle craft and the product color language', () => {
     expect(JARVIS_ORB_POINTS).toBeLessThan(400)
-    expect(JARVIS_ORB_POINTS).toBe(96)
+    expect(JARVIS_ORB_POINTS).toBe(56)
+    expect(JARVIS_LINE_CHORDS).toEqual([1, 19])
     expect(ORB_COLOR.idle).toBe(0x4ca8e8)
     expect(ORB_COLOR.thinking).toBe(0x6ec4ff)
     expect(ORB_COLOR.factcheck).toBe(0x5ab8f0)
@@ -104,12 +106,12 @@ describe('bar pill sentient circle', () => {
     expect(max).toBeLessThan(0.02)
     expect(Math.abs(maxX - maxY)).toBeLessThan(0.08)
     const lines = connectionIndices(64)
-    expect(lines.length).toBe(64 * 3 * 2)
+    expect(lines.length).toBe(64 * 2 * 2)
     expect(lines.length % 2).toBe(0)
     const t0 = performance.now()
     const big = connectionIndices(2000)
     expect(performance.now() - t0).toBeLessThan(15)
-    expect(big.length).toBe(2000 * 3 * 2)
+    expect(big.length).toBe(2000 * 2 * 2)
   })
 
   it('listening does not change the 52 box or paint the sphere rec-dot red', () => {

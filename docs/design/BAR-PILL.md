@@ -36,11 +36,11 @@ A flat CSS disc, a single radial fill, or a 2D glow quad is a fail. That is a st
 
 One WebGL canvas, 52×52 CSS, DPR capped at 2. Transparent around the sphere. No dark chip. No CSS radial body.
 
-1. **Glass body** (ray-sphere, not a 2D disc). Camera on +Z. Equal X/Y scale. Radius fills ~0.90 of the box. Lambert wrap in the mood color + a darker far side so it has poles.
+1. **Glass body** (ray-sphere, not a 2D disc). Camera on +Z. Equal X/Y scale. Radius fills ~0.90 of the box. Lambert wrap in the mood color. Far side stays in the same blue (`mood * 0.62`), never crushed to teal (`mood * 0.16`). Idle must **read** `#4CA8E8`.
 2. **Living core.** Brighter mass near the center. Breath is uniform scale of intensity, never of the box. Caustic bands (two slow sin fields) live *inside* the volume.
 3. **Fresnel rim.** Thin bright edge. Reads as glass, not a sticker.
 4. **Specular kiss.** One tight highlight, upper-left (`light = normalize(-0.45, 0.72, 0.85)`). White, small. Not a looping sheen. Hover may lean the kiss a few degrees. Never squash the sphere to follow the pointer.
-5. **Quiet constellation.** Far below 2000 points (a sparse shell, not a snow globe). Additive, O(n) chords. Same NDC scale on X and Y. Sits on the glass, not a glitter fill inside. Idle lines are faint (`targetLineAmount` class ~0.15). Electrons **off at idle**. Thinking may draw at most 3 traveling dots.
+5. **Quiet constellation.** `JARVIS_ORB_POINTS` is **56**, not 2000 (a sparse shell, not a snow globe). Two faint chord families (`[1, 19]`). Additive, O(n) chords. Same NDC scale on X and Y (`ORB_NDC_SCALE` 0.86). Sits on the glass, not a glitter fill inside. Idle lines are faint (`targetLineAmount` class ~0.15). Electrons **off at idle**. Thinking may draw at most 3 traveling dots.
 6. **Rec-dot (listen only).** Existing red `#F0717A` (`.rec-dot`). 7×7, bottom-right of the 52 box, inside the circle. Dark ring so it reads on blue glass. Do **not** paint the sphere red.
 
 Reduced-motion: paint one still frame of layers 1–5 (and 6 if listening). The still frame must still look spherical: core, rim, kiss, constellation. A flat disc at t=0 is a fail. Missing WebGL falls back to a 2D **shaded sphere** (volume + kiss + rim + a few points), never a single radial blob.
@@ -61,7 +61,7 @@ Hover: lean (particles + kiss), not squash. Drag: skip lean. `document.hidden`: 
 
 ### Do
 
-- Idle on this sphere is Jarvis `#4CA8E8`. Not Mantu `#7F00DA`.
+- Idle on this sphere is Jarvis `#4CA8E8`. Not Mantu `#7F00DA`. Glass must read that hex, not murky teal.
 - Same sphere docked on the idle Bar and alone when minimized.
 - Windows: same sphere, top-center Bar. No notch, no Mac-only look.
 - Rec-dot stays red and readable.
