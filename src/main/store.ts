@@ -17,7 +17,8 @@ import {
   BaseSettingsSchema,
   SettingsSchema,
   type Settings,
-  type DustAgentsResponse
+  type DustAgentsResponse,
+  type DustAgent
 } from '@shared/ipc'
 import {
   PROVIDERS,
@@ -987,6 +988,32 @@ export function encryptionAvailable(): boolean {
   return true
 }
 
+/** Views merged for the agent picker and the Spotlight Ref gate. `list` is the user-pickable set;
+ *  `all` / `workspace` / `published` include managed agents that `view:list` can omit (Spotlight Ref
+ *  `GOr913Zr5V` is one). Without a `view` string @dust-tt/client 1.2.6 sends no query param and Dust
+ *  returns a restricted/empty set. */
+export const DUST_AGENT_LIST_VIEWS = ['all', 'workspace', 'published', 'list'] as const
+
+type DustAgentRaw = {
+  sId?: string
+  name?: string
+  description?: string
+  status?: string
+  model?: { providerId?: string; modelId?: string }
+}
+
+function mapActiveDustAgents(raw: DustAgentRaw[]): DustAgent[] {
+  return raw
+    .filter((a) => a && a.sId && (a.status === undefined || a.status === 'active'))
+    .map((a) => ({
+      sId: a.sId as string,
+      name: a.name || (a.sId as string),
+      description: a.description || '',
+      modelProviderId: a.model?.providerId,
+      modelId: a.model?.modelId
+    }))
+}
+
 /** List the user's Dust agents (for the dummy-proof agent picker). Uses the saved Dust key. */
 export async function listDustAgents(): Promise<DustAgentsResponse> {
   const settings = getSettings()
@@ -999,28 +1026,22 @@ export async function listDustAgents(): Promise<DustAgentsResponse> {
       { workspaceId: settings.dustWorkspaceId, apiKey: key },
       console
     )
-    // `view: 'list'` is REQUIRED — without it @dust-tt/client 1.2.6 only appends `view` to the querystring
-    // when it's a string, and the Dust endpoint then returns a restricted/empty set for no `view` param,
-    // leaving the picker with no agents to show (falls back to a bare text box). 'list' is the "all agents
-    // this user can pick" view (see node_modules/@dust-tt/client/dist/types.d.ts AgentConfigurationViewSchema).
-    const r = await api.getAgentConfigurations({ view: 'list' })
-    if (r.isErr()) return { ok: false, error: r.error.message }
-    const agents = (r.value as {
-      sId?: string
-      name?: string
-      description?: string
-      status?: string
-      model?: { providerId?: string; modelId?: string }
-    }[])
-      .filter((a) => a && a.sId && (a.status === undefined || a.status === 'active'))
-      .map((a) => ({
-        sId: a.sId as string,
-        name: a.name || (a.sId as string),
-        description: a.description || '',
-        modelProviderId: a.model?.providerId,
-        modelId: a.model?.modelId
-      }))
-      .sort((x, y) => x.name.localeCompare(y.name))
+    const bySid = new Map<string, DustAgent>()
+    let lastError: string | null = null
+    let anyOk = false
+    for (const view of DUST_AGENT_LIST_VIEWS) {
+      const r = await api.getAgentConfigurations({ view })
+      if (r.isErr()) {
+        lastError = r.error.message
+        continue
+      }
+      anyOk = true
+      for (const agent of mapActiveDustAgents(r.value as DustAgentRaw[])) {
+        if (!bySid.has(agent.sId)) bySid.set(agent.sId, agent)
+      }
+    }
+    if (!anyOk) return { ok: false, error: lastError || 'Could not load your Dust agents.' }
+    const agents = [...bySid.values()].sort((x, y) => x.name.localeCompare(y.name))
     // Cache each agent's vision capability by sId so the ask path can route a Dust screen question
     // natively (upload the screenshot) only when the SELECTED agent's model can actually read it — no
     // extra Dust round-trip at ask time (see dustSelectedAgentVision).

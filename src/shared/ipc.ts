@@ -1869,11 +1869,16 @@ export interface DustSessionProbe {
   incomplete?: boolean
 }
 
+/** Honest CLI session probe. Weekly-limit is signed-in, not disconnected. */
+export type CliSessionVerdict = 'missing' | 'signed-out' | 'weekly-limit' | 'live' | 'unknown'
+
 /** Result of a CLI provider detect/test operation (claude-cli, codex-cli). */
 export interface CliActionResult {
   ok: boolean
   version?: string
   error?: string
+  /** Present on Settings → Connect / session probe. Weekly-limit still has ok: true. */
+  session?: CliSessionVerdict
 }
 
 /** Result of an in-app CLI install attempt. needsTerminal → EACCES; fall back to setupCli. */
