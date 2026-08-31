@@ -103,9 +103,26 @@ Remaining work to actually use this in a licensed rollout:
 - Email delivery of keys (SMTP or a transactional provider) - today copy-paste from the
   dashboard is fine. Still open (not needed yet).
 
+## Phase 5 — member pass + offline-first JWS foundation (this change)
+
+Extends the same license product. Does not replace phone-home `/activate`.
+Enforcement stays compiled off (`LICENSE_ENFORCEMENT` and `LICENSE_UI_ENABLED`
+are both false; MQA-068). Selling stays closed.
+
+- Settings → Identity shows a Métis member pass (local serial / install id,
+  install date, member number or pending). Design contract:
+  `docs/design/IDENTITY-CARD.md`.
+- Offline-first Ed25519 JWS verify in main, cache in the OS secret store,
+  `LICENSE_ACTIVATION_OPEN=false`. Activate runs the real client path and
+  returns `ActivationUnavailable`.
+- Reserved server routes: `POST /v1/licenses/activate`,
+  `POST /v1/installs/register` (stubbed on `license-server/`). OpenAPI:
+  `docs/license-v1.openapi.yaml`.
+- Air-gap `license.metis` parser + verify, plus optional MDM path detect.
+  No live deploy and no payments in this phase.
+
 ## Explicitly out of scope
 
 - Payments/checkout (deals are closed by humans; a license is minted after the contract).
 - Per-user accounts inside a company (the unit is a machine seat under a company license).
-- Offline-signed license files (the phone-home model was chosen deliberately for revocation and
-  live seat control).
+- Taking payment or opening live activation (`LICENSE_ACTIVATION_OPEN` stays false).
