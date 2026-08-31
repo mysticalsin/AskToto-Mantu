@@ -237,8 +237,8 @@ Discord. Update `discord-webhook.txt` and recreate the container (chapter 2).
 ## 9. Monitoring
 
 - **Quick check, no auth:** `curl http://localhost:8420/health` →
-  `{ ok, version, uptimeSeconds, licenseCount }`. Wrong `licenseCount` = look
-  immediately.
+  `{ ok, version, uptimeSeconds }`. Fleet counts live on `GET /metrics`
+  (bearer `METRICS_TOKEN`), not on public health.
 - **Prometheus / Grafana / uptime bots:** `GET /metrics` with
   `Authorization: Bearer <metrics token>` — licenses by status, seats used
   vs. cap, expiring-soon count, uptime. Scrape config is in the README's

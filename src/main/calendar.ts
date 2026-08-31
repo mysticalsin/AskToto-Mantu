@@ -9,6 +9,7 @@
 import { getGraphToken } from './auth'
 import { auditLog } from './logger'
 import type { CalendarEvent, CalendarTodayResult } from '@shared/ipc'
+import { safeHref } from '@shared/safe-url'
 
 const GRAPH = 'https://graph.microsoft.com/v1.0'
 
@@ -72,7 +73,7 @@ function toEvent(ev: any): CalendarEvent {
     allDay: !!ev?.isAllDay,
     location: ev?.location?.displayName || undefined,
     online: !!ev?.onlineMeeting?.joinUrl,
-    joinUrl: ev?.onlineMeeting?.joinUrl || undefined,
+    joinUrl: safeHref(ev?.onlineMeeting?.joinUrl) || undefined,
     attendees: Array.isArray(ev?.attendees) ? ev.attendees.length : 0
   }
 }

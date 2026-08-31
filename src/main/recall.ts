@@ -1,6 +1,7 @@
 import { readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { exciseDeletedMeeting } from './brain/ingest'
-import { join, basename } from 'node:path'
+import { join } from 'node:path'
+import { safeMeetingBasename } from './meeting-path'
 import { resolveMeetingsFolder, decodeSaved, isEncryptedFile, writeSaved, formatTranscript, DEBRIEF_HEADING } from './transcripts'
 import { getSettings } from './store'
 import { detectLanguage } from '@shared/lang-id'
@@ -202,8 +203,8 @@ export async function listMeetings(): Promise<MeetingSummary[]> {
 export async function recallRead(file: string): Promise<RecallReadResult> {
   const folder = resolveMeetingsFolder(getSettings())
   // basename blocks path traversal (mirrors the recallOpen guard in index.ts).
-  const safeName = basename(file)
-  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+  const safeName = safeMeetingBasename(file)
+  if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
   const fullPath = join(folder, safeName)
@@ -313,8 +314,8 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
  */
 export async function deleteMeeting(file: string): Promise<{ ok: boolean; error?: string }> {
   const folder = resolveMeetingsFolder(getSettings())
-  const safeName = basename(file) // block traversal
-  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+  const safeName = safeMeetingBasename(file)
+  if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
   const fullPath = join(folder, safeName)
@@ -375,8 +376,8 @@ export async function renameMeeting(
   newTitle: string
 ): Promise<{ ok: boolean; error?: string }> {
   const folder = resolveMeetingsFolder(settings)
-  const safeName = basename(file) // block traversal
-  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+  const safeName = safeMeetingBasename(file)
+  if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
   const title = sanitizeRenameTitle(newTitle)
@@ -480,8 +481,8 @@ export async function updateMeetingRecap(
   newRecap: string
 ): Promise<{ ok: boolean; error?: string }> {
   const folder = resolveMeetingsFolder(settings)
-  const safeName = basename(file) // block traversal
-  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+  const safeName = safeMeetingBasename(file)
+  if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
 
@@ -556,8 +557,8 @@ export async function updateMeetingTranscript(
   lines: TranscriptLine[]
 ): Promise<{ ok: boolean; error?: string }> {
   const folder = resolveMeetingsFolder(settings)
-  const safeName = basename(file) // block traversal
-  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+  const safeName = safeMeetingBasename(file)
+  if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
 
@@ -618,8 +619,8 @@ export async function setMeetingCrmPushed(
   key: string
 ): Promise<{ ok: boolean; error?: string }> {
   const folder = resolveMeetingsFolder(settings)
-  const safeName = basename(file) // block traversal
-  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+  const safeName = safeMeetingBasename(file)
+  if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
   // The fingerprint is written into a YAML scalar, so it must not be able to carry a newline or a colon
@@ -670,8 +671,8 @@ export async function setMeetingConfidential(
   confidential: boolean
 ): Promise<{ ok: boolean; error?: string }> {
   const folder = resolveMeetingsFolder(settings)
-  const safeName = basename(file) // block traversal
-  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+  const safeName = safeMeetingBasename(file)
+  if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
 

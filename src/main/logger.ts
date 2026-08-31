@@ -226,6 +226,9 @@ export type AuditEvent =
   | 'llm.call'
   | 'time-saved.event'
   | 'outlook.draft'
+  // Attack-shaped events. Metadata only: bucket/reason, never keys, serials, tokens, or transcripts.
+  | 'security.rate_limited'
+  | 'security.ipc_denied'
 
 // Lazy actor resolver — set once by the main process (wired to authStatus().email) so every audit
 // record can carry the signed-in identity without logger.ts importing auth.ts (which would be

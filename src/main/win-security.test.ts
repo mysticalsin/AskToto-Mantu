@@ -28,7 +28,7 @@ import {
   WINDOWS_POWERSHELL,
   type AclProbe
 } from './win-security'
-import { getAllowedProviders, getLockedKeys } from './store'
+import { getAllowedProviders, getLockedKeys, resetAdminManagedCache } from './store'
 
 const REAL_PLATFORM = process.platform
 function setPlatform(p: NodeJS.Platform): void {
@@ -369,6 +369,7 @@ describe('policy accessors — the ACL probe is off the per-ask and per-tick pat
     writeFileSync(policy, JSON.stringify({ allowedProviders: ['dust'], lockedKeys: ['provider'] }))
     process.env.ProgramData = programData
     setPlatform('win32')
+    resetAdminManagedCache()
     probes.count = 0
   })
   afterEach(() => {

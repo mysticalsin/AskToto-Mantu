@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Readable } from 'node:stream'
 import { IMPORT_CHUNK_SECONDS } from '@shared/ipc'
+import { IMPORT_NOT_MEDIA, sniffMediaFile } from './import-magic'
 
 export const FFMPEG_SAMPLE_RATE = 16_000
 export const FFMPEG_CHUNK_SECONDS = IMPORT_CHUNK_SECONDS
@@ -97,6 +98,12 @@ export function startFfmpegDecode(
   skipThrough: number,
   callbacks: FfmpegDecodeCallbacks
 ): FfmpegDecoder {
+  // Missing sources still fail at spawn (ENOENT) so existing import-error
+  // contracts stay intact. Magic-byte sniff only runs when the file exists.
+  if (existsSync(sourcePath) && !sniffMediaFile(sourcePath)) {
+    const completed = callbacks.onError(new Error(IMPORT_NOT_MEDIA))
+    return { cancel: () => {}, completed }
+  }
   let child: ChildProcessByStdio<null, Readable, Readable>
   let cancelled = false
   try {

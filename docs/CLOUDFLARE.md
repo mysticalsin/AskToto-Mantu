@@ -109,6 +109,9 @@ keystore (the same AES file keystore a pasted key goes through) exactly once per
 overwrites a key the user already has — their own paste (or an earlier seed) always wins, permanently,
 even across later updates.
 
+To rotate a leaked installer key without expanding its scope: `npm run rotate:embedded-keys`
+(see `docs/security/EMBEDDED-KEY-ROTATION.md`). That command never writes an account token.
+
 ---
 
 ## Model ids: `{provider}/{model}`

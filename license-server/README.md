@@ -193,8 +193,9 @@ The server ships with a small admin dashboard, no separate deploy needed.
 Open `<your-server-url>/admin/ui` in a browser (e.g.
 `https://your-license-server.example.com/admin/ui`, or `http://localhost:8420/admin/ui`
 when running locally). Visiting `/admin` redirects there too. Paste in your
-`LICENSE_ADMIN_TOKEN` when prompted. It's stored only in that browser's
-`localStorage`, so you won't need to re-enter it next time on the same device.
+`LICENSE_ADMIN_TOKEN` when prompted. The server exchanges it for an
+`httpOnly` session cookie (`metis_admin_session`, SameSite=strict, 12 hours)
+so the token never sits in `localStorage`. Sign out clears the cookie.
 
 From the dashboard you can:
 
@@ -215,10 +216,10 @@ From the dashboard you can:
 - Switch to the audit log view to see every admin mutation (create, revoke,
   unrevoke, patch, seat free) with a timestamp and details.
 
-The page itself contains no secrets. Only the browser calling it needs the
-admin token, and every admin action still goes through the same
-bearer-token-gated API described below. Sign out from the header to clear
-the token from that browser.
+The page itself contains no secrets. The browser posts the admin token once
+to `POST /admin/session`; every later admin action uses the session cookie
+or, for CLI scripts, `Authorization: Bearer <LICENSE_ADMIN_TOKEN>`. Sign
+out from the header to clear the cookie.
 
 The CLI (`npm run generate-license`) still works exactly as before, it's the
 better option for scripting or batch-issuing licenses.
@@ -271,16 +272,18 @@ opens (`LICENSE_ACTIVATION_OPEN=false` in the app). They do not replace
 
 **`GET /health`** — unauthenticated, for uptime/monitoring checks.
 
-→ `{ ok: true, version, uptimeSeconds, licenseCount }` — `version` is this
-server's `package.json` version, `uptimeSeconds` is how long this server
-process has been up, `licenseCount` is the total number of licenses in the
-store.
+→ `{ ok: true, version, uptimeSeconds }` — `version` is this server's
+`package.json` version, `uptimeSeconds` is how long this server process has
+been up. Fleet size is on token-gated `GET /metrics`, not on this public
+route.
 
 ### Admin endpoints
 
-All require header `Authorization: Bearer <LICENSE_ADMIN_TOKEN>`. If the
-server has no `LICENSE_ADMIN_TOKEN` configured, every admin route returns
-`503` rather than silently allowing or denying.
+All require either header `Authorization: Bearer <LICENSE_ADMIN_TOKEN>`
+(CLI / scripts) or a valid `metis_admin_session` httpOnly cookie from
+`POST /admin/session`. If the server has no `LICENSE_ADMIN_TOKEN`
+configured, every admin route returns `503` rather than silently allowing
+or denying.
 
 The bearer token is the entire security model for these routes, so failed
 auth attempts are rate-limited per IP: after 10 failed attempts from one IP
@@ -290,6 +293,12 @@ successful auth from that IP clears its failure count. (The `503`
 admin-disabled response never counts as a failed attempt.) This is separate,
 in-process, per-server-instance state, independent of the `/activate`
 `/heartbeat` rate limiter.
+
+**`POST /admin/session`** — Bearer `LICENSE_ADMIN_TOKEN`. Sets `metis_admin_session` (httpOnly, SameSite=strict, 12h). → `{ ok: true }`
+
+**`GET /admin/session`** — cookie or Bearer. → `{ ok: true }` or `401`
+
+**`DELETE /admin/session`** — clears the cookie.
 
 **`POST /admin/licenses`** — `{ companyName, seatCap, expiresAt?, contactName?, contactEmail?, notes? }`
 → `{ licenseKey, companyName, seatCap, expiresAt }`
