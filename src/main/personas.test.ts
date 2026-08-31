@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildSystem } from './personas'
+import { ANSWER_FIRST_RAIL } from '@shared/answer-first'
 import type { AskStart, Profile } from '@shared/ipc'
 
 const EMPTY_PROFILE: Profile = { name: '', role: '', company: '', resume: '', jobDescription: '', notes: '' }
@@ -33,6 +34,15 @@ describe('buildSystem — grounding & trust', () => {
     expect(buildSystem(req('answer'), 'general', EMPTY_PROFILE, {}, [])).toContain('GROUNDING & HONESTY')
     expect(buildSystem(req('vision'), 'general', EMPTY_PROFILE, {}, [])).toContain('GROUNDING & HONESTY')
     expect(buildSystem(req('suggest'), 'meeting', EMPTY_PROFILE, {}, [])).not.toContain('GROUNDING & HONESTY')
+  })
+
+  it('appends ANSWER FIRST on typed/screen asks and never on suggest, recap, or summary', () => {
+    expect(buildSystem(req('answer'), 'general', EMPTY_PROFILE, {}, [])).toContain('ANSWER FIRST')
+    expect(buildSystem(req('vision'), 'general', EMPTY_PROFILE, {}, [])).toContain('ANSWER FIRST')
+    expect(buildSystem(req('suggest'), 'meeting', EMPTY_PROFILE, {}, [])).not.toContain('ANSWER FIRST')
+    expect(buildSystem(req('recap'), 'general', EMPTY_PROFILE, {}, [])).not.toContain('ANSWER FIRST')
+    expect(buildSystem(req('summary'), 'general', EMPTY_PROFILE, {}, [])).not.toContain('ANSWER FIRST')
+    expect(ANSWER_FIRST_RAIL).not.toMatch(/—/)
   })
 
   it('leads untrusted modes with the injection guard; a plain typed answer has none', () => {

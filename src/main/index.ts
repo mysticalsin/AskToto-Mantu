@@ -44,6 +44,9 @@ import {
   McpDisconnectPayloadSchema,
   McpPushPayloadSchema,
   McpConnectionKindSchema,
+  TimeSavedRecordPayloadSchema,
+  OutlookDraftPayloadSchema,
+  OutlookEventPayloadSchema,
   type McpConnection,
   type McpConnectionKind,
   LicenseActivatePayloadSchema,
@@ -283,6 +286,16 @@ import { asrManifestComplete } from './asr-manifest'
 import { isInsideResourceBase, realResourceBase } from './asr-model-path'
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli, checkCliSession } from './cli'
 import { connectMcp, pushToMcp } from './mcp/mcpClient'
+import { resolveWriteTargets } from './mcp/write-tools'
+import { appendTimeSavedEvent, summarizeTimeSaved } from './time-saved-log'
+import {
+  estimateEmailSummaryMinutes,
+  estimateMcpPushMinutes,
+  estimateNoteTakingMinutes,
+  estimateSecondBrainMinutes,
+  wordsFromTexts
+} from '@shared/time-saved-events'
+import { createOutlookDraft, createOutlookEvent, outlookWriteStatus } from './outlook-write'
 import { activateLicense, checkLicenseGrace, heartbeat } from './license'
 import {
   setMcpApiKey,
@@ -1119,6 +1132,10 @@ function initializeImportJobs(): void {
     deleteMeeting,
     enqueueIngest,
     recordMeetingSummarized,
+    recordTimeSavedNote: (words, file) => {
+      const mins = estimateNoteTakingMinutes(words)
+      if (mins > 0) appendTimeSavedEvent({ kind: 'note-taking', estimatedMinutes: mins, ids: { meeting: file } })
+    },
     generateRecap: runImportedRecap,
     updateRecap: async (file, recap) => {
       const result = await updateMeetingRecap(getSettings(), file, recap)
@@ -3110,6 +3127,14 @@ function registerIpc(): void {
       }
     }
     auditLog('mcp.push', { connectionId, tool: toolName, ok: r.ok })
+    if (r.ok) {
+      appendTimeSavedEvent({
+        kind: 'mcp-push',
+        estimatedMinutes: estimateMcpPushMinutes(),
+        connector: connectionId === 'bidstack' || connectionId === 'plane' || connectionId === 'clickup' ? connectionId : 'none',
+        ids: { tool: toolName }
+      })
+    }
     return r
   })
 
@@ -3163,6 +3188,66 @@ function registerIpc(): void {
     return authSignOut()
   })
   // --- Calendar ---
+  ipcMain.handle(IPC.timeSavedRead, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { savedMinutes: 0, byKind: { 'note-taking': 0, 'second-brain': 0, 'email-summary': 0, 'mcp-push': 0 }, events: 0, recent: [] }
+    return summarizeTimeSaved()
+  })
+  ipcMain.handle(IPC.timeSavedRecord, (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = TimeSavedRecordPayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid time-saved event.' }
+    return appendTimeSavedEvent({ kind: parsed.data.kind, estimatedMinutes: estimateEmailSummaryMinutes() })
+  })
+  ipcMain.handle(IPC.outlookWriteStatus, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { signedIn: false, canDraft: false, canEvent: false }
+    return outlookWriteStatus()
+  })
+  ipcMain.handle(IPC.outlookCreateDraft, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = OutlookDraftPayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid draft.' }
+    const r = await createOutlookDraft(parsed.data)
+    if (r.ok) {
+      appendTimeSavedEvent({
+        kind: 'mcp-push',
+        estimatedMinutes: estimateMcpPushMinutes(),
+        connector: 'outlook',
+        ids: { draft: r.id }
+      })
+    }
+    return r
+  })
+  ipcMain.handle(IPC.outlookCreateEvent, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = OutlookEventPayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid event.' }
+    const r = await createOutlookEvent(parsed.data)
+    if (r.ok) {
+      appendTimeSavedEvent({
+        kind: 'mcp-push',
+        estimatedMinutes: estimateMcpPushMinutes(),
+        connector: 'outlook',
+        ids: { draft: r.id }
+      })
+    }
+    return r
+  })
+  ipcMain.handle(IPC.mcpWriteTargets, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return []
+    const outlook = await outlookWriteStatus()
+    return resolveWriteTargets({
+      connections: getSettings().mcpConnections,
+      outlookSignedIn: outlook.signedIn,
+      outlookCanWrite: outlook.canDraft || outlook.canEvent
+    })
+  })
+
   ipcMain.handle(IPC.calendarToday, async (e, tz: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
@@ -4540,6 +4625,11 @@ function registerIpc(): void {
     // the live-meeting save path; the import path credits itself separately once its file is durable. A
     // rebuild never reaches here, so a meeting is counted once for its lifetime.
     recordMeetingSummarized(meetingDurationMin(m))
+    {
+      const words = wordsFromTexts(m.recap, ...m.lines.map((l) => l.text))
+      const mins = estimateNoteTakingMinutes(words)
+      if (mins > 0) appendTimeSavedEvent({ kind: 'note-taking', estimatedMinutes: mins, ids: { meeting: r.path } })
+    }
     void clearDraftTranscript(getSettings(), m.startedAt) // the real save landed — this autosave is now stale
     auditLog('transcript.saved', {
       mode: m.mode,
@@ -4898,6 +4988,10 @@ function registerIpc(): void {
     const n = SaveNoteSchema.parse(raw)
     const r = { path: await saveNote(getSettings(), n) }
     auditLog('note.saved', { mode: n.mode })
+    {
+      const mins = estimateNoteTakingMinutes(wordsFromTexts(n.question, n.answer))
+      if (mins > 0) appendTimeSavedEvent({ kind: 'note-taking', estimatedMinutes: mins, ids: { note: r.path } })
+    }
     scheduleRebuild()
     return r
   })
