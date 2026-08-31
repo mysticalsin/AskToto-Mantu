@@ -11,6 +11,7 @@ import {
   isFixedCircle,
   orbAspectRatio,
   orbBoxForMood,
+  orbHostPaintsText,
   pillClickShouldExpand,
   resolveBarOrbState,
   resolveOrbMood,
@@ -40,12 +41,9 @@ describe('bar pill thinking-orb circle', () => {
     }
   })
 
-  it('locks playground pixels: idle breathing, listen listening, think working', () => {
-    // orbs.jakubantalik.com 64px 1.00x — Tony stills:
-    // orb-breathing.png = sparse hollow ring = idle
-    // gallery-full.png = dense latitude globe = listen
-    // orb-working.png = scattered loose cluster = think
-    expect(resolveBarOrbState({ mood: 'idle' })).toBe('breathing')
+  it('locks playground pixels: idle solving, listen listening, think working', () => {
+    // orbs.jakubantalik.com 64px 1.00x — Tony Mac-show: solving is the rest circle.
+    expect(resolveBarOrbState({ mood: 'idle' })).toBe('solving')
     expect(resolveBarOrbState({ mood: 'idle', listening: true })).toBe('listening')
     expect(resolveBarOrbState({ mood: 'thinking' })).toBe('working')
     expect(BAR_PILL_SIZE_PX).toBe(64)
@@ -54,12 +52,12 @@ describe('bar pill thinking-orb circle', () => {
   })
 
   it('maps moods to Jakub thinking-orb states, monochrome dark', () => {
-    expect(ORB_STATE.idle).toBe('breathing')
+    expect(ORB_STATE.idle).toBe('solving')
     expect(ORB_STATE.thinking).toBe('working')
     expect(ORB_STATE.factcheck).toBe('searching')
     expect(ORB_STATE.connecting).toBe('connecting')
     expect(BAR_ORB_THEME).toBe('dark')
-    expect(resolveBarOrbState({ mood: 'idle' })).toBe('breathing')
+    expect(resolveBarOrbState({ mood: 'idle' })).toBe('solving')
     expect(resolveBarOrbState({ mood: 'thinking' })).toBe('working')
     expect(resolveBarOrbState({ mood: 'factcheck' })).toBe('searching')
     expect(resolveBarOrbState({ mood: 'connecting' })).toBe('connecting')
@@ -129,9 +127,18 @@ describe('bar pill thinking-orb circle', () => {
       getContext: () => null
     } as unknown as HTMLCanvasElement
     expect(() => {
-      paintOrbFirstFrame(canvas, 'breathing', BAR_PILL_SIZE_PX, true)
+      paintOrbFirstFrame(canvas, 'solving', BAR_PILL_SIZE_PX, true)
       paintOrbFirstFrame(canvas, 'listening', BAR_PILL_SIZE_PX, true)
       paintOrbFirstFrame(canvas, 'working', BAR_PILL_SIZE_PX, true)
     }).not.toThrow()
+  })
+
+  it('does not paint playground captions on the orb host', () => {
+    expect(orbHostPaintsText('<span class="aw-orb__host"><canvas></canvas></span>')).toBe(false)
+    expect(orbHostPaintsText('<span class="aw-orb__host">Solving…</span>')).toBe(true)
+    expect(orbHostPaintsText('<button data-bar-pill-orb aria-label="Solving…"><canvas></canvas></button>')).toBe(
+      false
+    )
+    expect(orbHostPaintsText('<button data-bar-pill-orb><span>Solving</span></button>')).toBe(true)
   })
 })

@@ -79,6 +79,8 @@ export function JarvisOrbButton({
           theme={BAR_ORB_THEME}
           speed={BAR_ORB_SPEED}
           className="aw-orb__canvas"
+          aria-hidden="true"
+          aria-label=""
         />
       </span>
       {showRec ? <span className="aw-orb__rec rec-dot" data-orb-rec aria-hidden="true" /> : null}
