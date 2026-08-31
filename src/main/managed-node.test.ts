@@ -16,11 +16,12 @@ import {
   vcredistQuietArgs
 } from './managed-node'
 
-const builderYml = readFileSync(join(__dirname, '../../electron-builder.yml'), 'utf8')
-const packageJson = readFileSync(join(__dirname, '../../package.json'), 'utf8')
+const builderYml = readFileSync(join(__dirname, '../../electron-builder.yml'), 'utf8').replace(/\r\n/g, '\n')
+const packageJson = readFileSync(join(__dirname, '../../package.json'), 'utf8').replace(/\r\n/g, '\n')
 
 function winExtraResourcesFromYml(yml: string): { from: string; to: string }[] {
-  const win = yml.split(/^win:\n/m)[1] || ''
+  const normalized = yml.replace(/\r\n/g, '\n')
+  const win = normalized.split(/^win:\n/m)[1] || ''
   const extra = win.split(/extraResources:\n/)[1] || ''
   const block = extra.split(/\n  [a-z]/)[0]
   const froms = [...block.matchAll(/from:\s+(\S+)/g)].map((m) => m[1])
@@ -35,6 +36,10 @@ describe('Windows packaging does not require a preinstalled Node', () => {
     expect(windowsPackIncludesVcRedist(extras)).toBe(true)
     expect(builderYml).toContain('resources/managed-node/win-x64')
     expect(builderYml).toContain('managed-node/win-x64')
+    // Windows checkouts checkout LF as CRLF — the parser must still find the win: extras.
+    const crlf = winExtraResourcesFromYml(builderYml.replace(/\n/g, '\r\n'))
+    expect(windowsPackIncludesManagedNode(crlf)).toBe(true)
+    expect(windowsPackIncludesVcRedist(crlf)).toBe(true)
   })
 
   it('predist:win fetches the portable Node so the next pack includes it', () => {

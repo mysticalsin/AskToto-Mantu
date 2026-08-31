@@ -17,7 +17,7 @@
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdtemp, rm } from 'node:fs/promises'
-import { join, isAbsolute } from 'node:path'
+import { join, isAbsolute, posix } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createInterface } from 'node:readline'
 import { app, shell } from 'electron'
@@ -137,7 +137,7 @@ export function npmGlobalBinCandidates(bin: string): string[] {
 export function posixUserBinCandidates(bin: string): string[] {
   const home = process.env.HOME ?? ''
   if (!home) return []
-  return [join(home, '.local', 'bin', bin), join(home, '.hermes', 'node', 'bin', bin)]
+  return [posix.join(home, '.local', 'bin', bin), posix.join(home, '.hermes', 'node', 'bin', bin)]
 }
 
 /**
