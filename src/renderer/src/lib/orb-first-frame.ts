@@ -9,9 +9,11 @@ export function paintOrbFirstFrame(
   canvas: HTMLCanvasElement,
   state: OrbState,
   size: OrbSize,
-  dark: boolean
+  dark: boolean,
+  minDpr = 1
 ): void {
-  const dpr = Math.min(2, (typeof devicePixelRatio !== 'undefined' && devicePixelRatio) || 1)
+  const reported = Math.min(2, (typeof devicePixelRatio !== 'undefined' && devicePixelRatio) || 1)
+  const dpr = Math.max(minDpr, reported)
   canvas.width = Math.round(size * dpr)
   canvas.height = Math.round(size * dpr)
   const ctx = canvas.getContext('2d')

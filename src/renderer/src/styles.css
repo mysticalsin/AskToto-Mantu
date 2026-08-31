@@ -2172,8 +2172,8 @@ html.metis-bar-land .aw-widget {
 .aw-orb {
   display: block;
   position: relative;
-  width: 51px;
-  height: 51px;
+  width: 41px;
+  height: 41px;
   flex-shrink: 0;
   padding: 0;
   margin: 0;
@@ -2193,8 +2193,8 @@ html.metis-bar-land .aw-widget {
 .aw-orb:hover,
 .aw-orb:active,
 .aw-orb:focus {
-  width: 51px;
-  height: 51px;
+  width: 41px;
+  height: 41px;
   border-radius: 50%;
 }
 .aw-orb[data-hug-width] {
@@ -2203,12 +2203,25 @@ html.metis-bar-land .aw-widget {
 .aw-orb[data-hug-width]:active {
   cursor: grabbing;
 }
-.aw-orb__host,
+/* Avatar stays 64 CSS + 2x backing. Visible 41 is a compositor scale, not a 1x bitmap shrink. */
+.aw-orb__host {
+  display: block;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 64px;
+  height: 64px;
+  border-radius: 0;
+  pointer-events: none;
+  background: transparent;
+  transform: translate(-50%, -50%) scale(calc(41 / 64));
+  transform-origin: center center;
+}
 .aw-orb__canvas,
 .aw-orb canvas {
   display: block;
-  width: 51px !important;
-  height: 51px !important;
+  width: 64px !important;
+  height: 64px !important;
   border-radius: 0;
   pointer-events: none;
   background: transparent;

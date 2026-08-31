@@ -1,7 +1,8 @@
 /**
  * Bar / minimized pill circle: Jakub thinking-orb on Métis dark glass.
  * Idle solving. Listen listening. Think working. Theme dark.
- * Package canvas is the 64 avatar. Visible CSS circle is ~20% smaller.
+ * Package canvas is the 64 avatar with a 2x backing store.
+ * Visible CSS circle is 41 (20% off the previous 51). No 1x CSS downscale.
  * No painted caption. Real package. No WebGL marble.
  */
 
@@ -9,12 +10,23 @@ import type { OrbState } from 'thinking-orbs'
 
 /** Package avatar preset. Do not pass a third canvas size to ThinkingOrb. */
 export const BAR_PILL_SIZE_PX = 64
-/** Visible Bar circle / hit target. 64 × 0.8, not a 52 canvas rewrite. */
-export const BAR_PILL_VISIBLE_PX = Math.round(BAR_PILL_SIZE_PX * 0.8)
+/** On-screen circle before this shrink. Take 20% off this, not off 64. */
+export const BAR_PILL_FROM_VISIBLE_PX = 51
+/** Visible Bar circle / hit target. 51 × 0.8. Not the package inline 20. */
+export const BAR_PILL_VISIBLE_PX = Math.round(BAR_PILL_FROM_VISIBLE_PX * 0.8)
 export const BAR_PILL_WIDTH_PX = BAR_PILL_VISIBLE_PX
 export const BAR_PILL_HEIGHT_PX = BAR_PILL_VISIBLE_PX
+/** 2x avatar backing. Do not CSS-downscale a 1x 64 bitmap into the 41 hole. */
+export const BAR_PILL_BACKING_DPR = 2
+export const BAR_PILL_BACKING_PX = BAR_PILL_SIZE_PX * BAR_PILL_BACKING_DPR
 /** Left Settings M. Locked square. Listen chrome must not squash this. */
 export const BAR_MARK_SIZE_PX = 30
+
+/** Backing DPR for the Bar orb. Always at least 2x the 64 avatar. */
+export function barOrbBackingDpr(devicePixelRatio = 1): number {
+  const reported = Math.min(BAR_PILL_BACKING_DPR, devicePixelRatio || 1)
+  return Math.max(BAR_PILL_BACKING_DPR, reported)
+}
 
 export const ORB_MOODS = ['idle', 'thinking', 'factcheck', 'connecting'] as const
 export type OrbMood = (typeof ORB_MOODS)[number]

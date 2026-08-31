@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { overlayAllowsMinimize, overlayDocksBarCircle, overlayShowsBarOrb, shouldForceParkOnBecameIdle } from '@shared/overlay-chrome'
 import {
   BAR_MARK_SIZE_PX,
+  BAR_PILL_BACKING_PX,
   BAR_PILL_HEIGHT_PX,
   BAR_PILL_SIZE_PX,
   BAR_PILL_VISIBLE_PX,
@@ -78,15 +79,20 @@ describe('BAR-PILL contract', () => {
     expect(css).not.toMatch(/scale\(0\.88\)/)
     expect(BAR_PILL_WIDTH_PX).toBe(BAR_PILL_HEIGHT_PX)
     expect(BAR_PILL_SIZE_PX).toBe(64)
-    expect(BAR_PILL_VISIBLE_PX).toBe(51)
+    expect(BAR_PILL_VISIBLE_PX).toBe(41)
     expect(BAR_PILL_WIDTH_PX).toBe(BAR_PILL_VISIBLE_PX)
-    expect(css).toMatch(/\.aw-orb \{[\s\S]*?width:\s*51px/)
-    expect(css).toMatch(/\.aw-orb \{[\s\S]*?height:\s*51px/)
+    expect(css).toMatch(/\.aw-orb \{[\s\S]*?width:\s*41px/)
+    expect(css).toMatch(/\.aw-orb \{[\s\S]*?height:\s*41px/)
     expect(css).toMatch(/\.aw-orb \{[\s\S]*?border-radius:\s*50%/)
     expect(css).toMatch(/\.aw-orb \{[\s\S]*?background:\s*transparent/)
-    expect(css).toMatch(/\.aw-orb__canvas[\s\S]*?width:\s*51px/)
-    expect(css).toMatch(/\.aw-orb__canvas[\s\S]*?height:\s*51px/)
+    expect(css).toMatch(/\.aw-orb__host \{[\s\S]*?width:\s*64px/)
+    expect(css).toMatch(/\.aw-orb__host \{[\s\S]*?height:\s*64px/)
+    expect(css).toMatch(/\.aw-orb__host \{[\s\S]*?scale\(calc\(41 \/ 64\)\)/)
+    expect(css).toMatch(/\.aw-orb__canvas[\s\S]*?width:\s*64px/)
+    expect(css).toMatch(/\.aw-orb__canvas[\s\S]*?height:\s*64px/)
     expect(css).toMatch(/\.aw-orb__canvas[\s\S]*?border-radius:\s*0/)
+    expect(css).not.toMatch(/\.aw-orb__canvas[\s\S]*?width:\s*41px/)
+    expect(css).not.toMatch(/\.aw-orb__canvas[\s\S]*?width:\s*51px/)
   })
 
   it('never flattens: thinking-orb circle, same scale on X and Y', () => {
@@ -143,10 +149,15 @@ describe('BAR-PILL contract', () => {
     expect(orbBtn).toMatch(/from 'thinking-orbs'/)
     expect(orbBtn).toMatch(/theme=\{BAR_ORB_THEME\}/)
     expect(orbBtn).toMatch(/size=\{BAR_PILL_SIZE_PX\}/)
-    expect(orbBtn).toMatch(/style=\{\{ width: BAR_PILL_VISIBLE_PX, height: BAR_PILL_VISIBLE_PX \}\}/)
+    expect(orbBtn).toMatch(/paintOrbFirstFrame\(canvas, orbState, BAR_PILL_SIZE_PX, true, BAR_PILL_BACKING_DPR\)/)
+    expect(orbBtn).toMatch(/data-orb-backing=\{BAR_PILL_BACKING_PX\}/)
+    expect(BAR_PILL_BACKING_PX).toBe(128)
     expect(orbBtn).not.toMatch(/size=\{BAR_PILL_VISIBLE_PX\}/)
+    expect(orbBtn).not.toMatch(/size=\{20\}/)
     expect(orbBtn).not.toMatch(/size=\{52\}/)
     expect(orbBtn).not.toMatch(/size=\{51\}/)
+    expect(orbBtn).not.toMatch(/size=\{41\}/)
+    expect(orbBtn).not.toMatch(/style=\{\{ width: BAR_PILL_VISIBLE_PX/)
     expect(orbBtn).toMatch(/aria-label=""/)
     expect(orbBtn).not.toMatch(/Solving…/)
     expect(orb).toMatch(/orbHostPaintsText/)
