@@ -54,6 +54,25 @@ function seatMeta(settings: OperatorRuntimeSettings): { seatHash: string; os: st
   }
 }
 
+export type OperatorCrmStatus =
+  | 'pending'
+  | 'in_progress'
+  | 'in_review'
+  | 'submitted'
+  | 'success'
+  | 'failed'
+  | 'expired'
+
+export interface OperatorCrmEvent {
+  id: string
+  status: OperatorCrmStatus
+  title?: string
+  connector?: string
+  meetingFile?: string
+  error?: string
+  ts?: number
+}
+
 function deviceId(): string {
   return hashOperatorId(getMachineId())
 }
@@ -153,6 +172,32 @@ export async function recordOperatorAsk(
     await signedPost(url, secret, '/v1/ingest', payload)
   } catch (e) {
     mainLog.warn('[operator] ingest failed:', e)
+  }
+}
+
+export async function recordOperatorCrmSend(
+  settings: OperatorRuntimeSettings,
+  event: OperatorCrmEvent
+): Promise<void> {
+  const url = resolveUrl(settings)
+  const secret = resolveSecret(settings)
+  if (!operatorUrlConfigured(settings) || !secret) return
+  const title = event.title?.replace(/\s+/g, ' ').trim().slice(0, 160)
+  const meetingFile = event.meetingFile?.replace(/^.*[/\\]/, '').slice(0, 80)
+  try {
+    await signedPost(url, secret, '/v1/ingest', {
+      event: 'crm',
+      id: event.id,
+      ts: event.ts ?? Date.now(),
+      status: event.status,
+      title: title || 'CRM send',
+      connector: event.connector || 'unknown',
+      ...(meetingFile ? { meetingFile } : {}),
+      ...(event.error ? { error: event.error.slice(0, 200) } : {}),
+      ...seatMeta(settings)
+    })
+  } catch (e) {
+    mainLog.warn('[operator] crm ingest failed:', e)
   }
 }
 

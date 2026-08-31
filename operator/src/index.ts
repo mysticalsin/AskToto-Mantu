@@ -1,10 +1,12 @@
 import { ADMIN_EMAILS, adminIdentity, unauthorized, type AccessCtx } from './access'
+import { asCrmStatus } from './crm'
 import { decryptPrompt, encryptPrompt, sha256Hex, signSkillPack } from './crypto'
+import { buildDashboard } from './dashboard'
+import { geoFromRequest, type CfGeo } from './geo'
 import { verifyIngestHmac } from './hmac'
 import { d1Store, type D1DatabaseLike } from './d1'
-import { memoryStore, type AskRow, type OperatorStore } from './store'
+import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './store'
 import { renderConsole } from './ui'
-import { aggregateCacheSlice, estimateCacheCost, formatUsdEstimate, type AskLogLine } from '../../src/shared/operator'
 
 export interface Env {
   DB?: D1DatabaseLike
@@ -20,11 +22,11 @@ export interface HandleOpts {
   store?: OperatorStore
   now?: number
   access?: AccessCtx['access']
+  geo?: CfGeo
 }
 
 const RATE_WINDOW_MS = 60_000
 const RATE_MAX = 90
-const ONLINE_MS = 2 * 60_000
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -77,9 +79,10 @@ export async function handleRequest(
     if (await store.hitRate(hmac.deviceId, now, RATE_WINDOW_MS, RATE_MAX)) {
       return json({ ok: false, error: 'rate limited' }, 429)
     }
-    if (url.pathname === '/v1/heartbeat') return heartbeat(store, hmac.deviceId, bodyText, now)
+    const geo = opts.geo ?? geoFromRequest(request)
+    if (url.pathname === '/v1/heartbeat') return heartbeat(store, hmac.deviceId, bodyText, now, geo)
     if (url.pathname === '/v1/skills/manifest') return manifest(store)
-    return ingest(store, env, hmac.deviceId, bodyText, now)
+    return ingest(store, env, hmac.deviceId, bodyText, now, geo)
   }
 
   return json({ ok: false, error: 'not found' }, 404)
@@ -94,10 +97,23 @@ async function adminRoute(
   now: number
 ): Promise<Response> {
   if (url.pathname === '/' && request.method === 'GET') {
-    return html(await consolePage(store, email, now))
+    const dash = await buildDashboard(store, email, now)
+    return html(renderConsole(dash))
+  }
+  if (url.pathname === '/v1/admin/dashboard' && request.method === 'GET') {
+    return json(stripSecrets(await buildDashboard(store, email, now)))
   }
   if (url.pathname === '/v1/admin/summary' && request.method === 'GET') {
-    return json({ ok: true, ...(await summary(store, now)) })
+    const dash = await buildDashboard(store, email, now)
+    return json({
+      ok: true,
+      live: dash.kpis.live,
+      dau: dash.kpis.dau,
+      wau: dash.kpis.wau,
+      costToday: dash.kpis.costToday,
+      hitRate: dash.kpis.cacheHit,
+      pending: dash.kpis.pendingDiffs
+    })
   }
   if (url.pathname === '/v1/admin/asks' && request.method === 'GET') {
     const asks = await store.listAsks(100)
@@ -195,6 +211,20 @@ async function adminRoute(
     await store.audit(crypto.randomUUID(), now, email, 'push', null, `${row.skill_id}@${nextVersion}`)
     return json({ ok: true, pushed: true, version: nextVersion, signed })
   }
+  const crmRetry = /^\/v1\/admin\/crm\/([^/]+)\/retry$/.exec(url.pathname)
+  if (crmRetry && request.method === 'POST') {
+    const row = await store.getCrm(crmRetry[1])
+    if (!row) return json({ ok: false, error: 'not found' }, 404)
+    if (row.status !== 'failed') return json({ ok: false, error: 'only Failed can retry' }, 400)
+    await store.upsertCrm({
+      ...row,
+      status: 'pending',
+      retry_requested: 1,
+      ts: now
+    })
+    await store.audit(crypto.randomUUID(), now, email, 'crm-retry', null, row.id)
+    return json({ ok: true, autoSend: false })
+  }
   return json({ ok: false, error: 'not found' }, 404)
 }
 
@@ -212,25 +242,44 @@ function skillPackBody(skillId: string, version: string, source: string): string
   return `---\nid: ${skillId}\nversion: ${version}\nlocked: true\n---\n\n${trimmed}\n`
 }
 
-async function heartbeat(store: OperatorStore, deviceId: string, bodyText: string, now: number): Promise<Response> {
+async function heartbeat(
+  store: OperatorStore,
+  deviceId: string,
+  bodyText: string,
+  now: number,
+  geo: CfGeo
+): Promise<Response> {
   const body = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {}
-  await store.upsertSeat({
+  await store.upsertSeat(seatFromBody(deviceId, body, now, geo))
+  await store.insertPulse({
+    id: crypto.randomUUID(),
     device_id: deviceId,
-    seat_hash: String(body.seatHash || deviceId),
-    os: String(body.os || 'unknown'),
-    app_version: String(body.appVersion || ''),
-    first_seen: now,
-    last_seen: now
+    ts: now,
+    kind: 'heartbeat',
+    country: geo.country,
+    city: geo.city
   })
+  await ingestCrmList(store, deviceId, body, now)
   return json({ ok: true })
 }
 
-async function ingest(store: OperatorStore, env: Env, deviceId: string, bodyText: string, now: number): Promise<Response> {
+async function ingest(
+  store: OperatorStore,
+  env: Env,
+  deviceId: string,
+  bodyText: string,
+  now: number,
+  geo: CfGeo
+): Promise<Response> {
   const body = JSON.parse(bodyText || '{}') as Record<string, unknown>
   const id = String(body.id || crypto.randomUUID())
   if (body.event === 'rating') {
     await store.updateAskRating(id, String(body.rating || ''))
     return json({ ok: true })
+  }
+  if (body.event === 'crm') {
+    await upsertCrmEvent(store, deviceId, body, now)
+    return json({ ok: true, id })
   }
   let cipher: string | null = null
   let iv: string | null = null
@@ -265,14 +314,15 @@ async function ingest(store: OperatorStore, env: Env, deviceId: string, bodyText
     preview: redactedPreview(question, str(body.mode) ?? undefined)
   }
   await store.insertAsk(row)
-  await store.upsertSeat({
+  await store.insertPulse({
+    id: crypto.randomUUID(),
     device_id: deviceId,
-    seat_hash: String(body.seatHash || deviceId),
-    os: String(body.os || 'unknown'),
-    app_version: String(body.appVersion || ''),
-    first_seen: now,
-    last_seen: now
+    ts: row.ts,
+    kind: 'ask',
+    country: geo.country,
+    city: geo.city
   })
+  await store.upsertSeat(seatFromBody(deviceId, body, now, geo))
   return json({ ok: true, id })
 }
 
@@ -289,87 +339,72 @@ async function manifest(store: OperatorStore): Promise<Response> {
   })
 }
 
-async function summary(store: OperatorStore, now: number): Promise<{
-  live: number
-  dau: number
-  costToday: string | null
-  hitRate: string | null
-  pending: number
-}> {
-  const seats = await store.listSeats()
-  const live = seats.filter((s) => now - s.last_seen < ONLINE_MS).length
-  const startDay = now - 24 * 60 * 60 * 1000
-  const dau = seats.filter((s) => s.last_seen >= startDay).length
-  const asks = await store.listAsks(2000)
-  const lines: AskLogLine[] = asks.map((a) => ({
-    ts: a.ts,
-    cacheRead: a.cache_read ?? undefined,
-    cacheWrite: a.cache_write ?? undefined,
-    cacheUncached: a.cache_uncached ?? undefined,
-    cacheStatus: (a.cache_status as AskLogLine['cacheStatus']) ?? undefined,
-    cacheTtl: (a.cache_ttl as AskLogLine['cacheTtl']) ?? undefined,
-    model: a.model ?? undefined,
-    provider: a.provider ?? undefined,
-    outputTokens: a.output_tokens ?? undefined
-  }))
-  const slice = aggregateCacheSlice(lines.filter((l) => l.ts && l.ts >= startDay))
-  let saved = 0
-  let anyCost = false
-  for (const a of asks.filter((x) => x.ts >= startDay)) {
-    const est = estimateCacheCost(
-      {
-        cacheRead: a.cache_read ?? undefined,
-        cacheWrite: a.cache_write ?? undefined,
-        cacheUncached: a.cache_uncached ?? undefined,
-        cacheStatus: (a.cache_status as AskLogLine['cacheStatus']) ?? undefined,
-        cacheTtl: (a.cache_ttl as AskLogLine['cacheTtl']) ?? undefined,
-        outputTokens: a.output_tokens ?? undefined
-      },
-      a.model || '',
-      a.provider || undefined
-    )
-    if (est) {
-      anyCost = true
-      saved += est.usd
-    }
-  }
-  const pending = (await store.listProposals()).filter((p) => p.status === 'pending').length
+function lastIndexAt(body: Record<string, unknown>): number | null {
+  return typeof body.lastIndexAt === 'number' && Number.isFinite(body.lastIndexAt) ? body.lastIndexAt : null
+}
+
+function seatFromBody(deviceId: string, body: Record<string, unknown>, now: number, geo: CfGeo): SeatRow {
   return {
-    live,
-    dau,
-    costToday: anyCost ? `${formatUsdEstimate(saved)}` : null,
-    hitRate: slice.hitRate == null ? null : `${Math.round(slice.hitRate * 100)}%`,
-    pending
+    device_id: deviceId,
+    seat_hash: String(body.seatHash || deviceId),
+    os: String(body.os || 'unknown'),
+    app_version: String(body.appVersion || ''),
+    first_seen: now,
+    last_seen: now,
+    country: geo.country,
+    city: geo.city,
+    lat: geo.lat,
+    lon: geo.lon,
+    last_index_at: lastIndexAt(body)
   }
 }
 
-async function consolePage(store: OperatorStore, email: string, now: number): Promise<string> {
-  const s = await summary(store, now)
-  const seats = (await store.listSeats()).map((row) => ({
-    device_id: row.device_id,
-    os: row.os,
-    app_version: row.app_version,
-    last_seen: row.last_seen,
-    online: now - row.last_seen < ONLINE_MS
-  }))
-  const asks = (await store.listAsks(40)).map((a) => ({
-    id: a.id,
-    ts: a.ts,
-    mode: a.mode || '',
-    preview: a.preview || 'Ask',
-    cache_status: a.cache_status || 'not-reported',
-    provider: a.provider || ''
-  }))
-  const proposals = (await store.listProposals()).map((p) => ({
-    id: p.id,
-    skill_id: p.skill_id,
-    from_version: p.from_version,
-    status: p.status,
-    rationale: p.rationale,
-    diff: p.diff,
-    evidence: JSON.parse(p.evidence_json || '[]') as string[]
-  }))
-  return renderConsole({ email, ...s, seats, asks, proposals })
+async function upsertCrmEvent(
+  store: OperatorStore,
+  deviceId: string,
+  body: Record<string, unknown>,
+  now: number
+): Promise<void> {
+  const status = asCrmStatus(body.status)
+  if (!status) return
+  const id = String(body.id || crypto.randomUUID())
+  const title = typeof body.title === 'string' ? body.title.replace(/\s+/g, ' ').trim().slice(0, 160) : 'CRM send'
+  const connector = typeof body.connector === 'string' ? body.connector.slice(0, 32) : 'unknown'
+  const meeting = typeof body.meetingFile === 'string' ? body.meetingFile.replace(/^.*[/\\]/, '').slice(0, 80) : null
+  const err = typeof body.error === 'string' ? body.error.slice(0, 200) : null
+  await store.upsertCrm({
+    id,
+    device_id: deviceId,
+    ts: typeof body.ts === 'number' ? body.ts : now,
+    status,
+    title: title || 'CRM send',
+    connector,
+    meeting_file: meeting,
+    last_error: err,
+    retry_requested: 0
+  })
+}
+
+async function ingestCrmList(
+  store: OperatorStore,
+  deviceId: string,
+  body: Record<string, unknown>,
+  now: number
+): Promise<void> {
+  if (!Array.isArray(body.crm)) return
+  for (const item of body.crm.slice(0, 40)) {
+    if (!item || typeof item !== 'object') continue
+    await upsertCrmEvent(store, deviceId, item as Record<string, unknown>, now)
+  }
+}
+
+function stripSecrets<T>(data: T): T {
+  return JSON.parse(
+    JSON.stringify(data, (key, value) => {
+      if (key === 'prompt_cipher' || key === 'prompt_iv' || key === 'question' || key === 'ip') return undefined
+      return value
+    })
+  ) as T
 }
 
 function str(v: unknown): string | null {

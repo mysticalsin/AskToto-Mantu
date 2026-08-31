@@ -279,7 +279,7 @@ import { buildSystem, buildSystemParts } from './personas'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
 import { isOpenAICloudCacheEligible, promptCacheKey as makePromptCacheKey } from '@shared/operator'
 import { loadVerifiedSkill, setModeSkillsOverlayRoot, skillLockHashForMode } from './mode-skills'
-import { recordOperatorAsk, recordOperatorRating, startOperatorRuntime } from './operator-ingest'
+import { recordOperatorAsk, recordOperatorCrmSend, recordOperatorRating, startOperatorRuntime } from './operator-ingest'
 import { startOperatorOverlayPoll } from './operator-overlay'
 import { initLogging, mainLog, auditLog } from './logger'
 import { consumeSecurityLimit, RATE_LIMIT_USER_MESSAGE, shouldSampleIpcDeny, takeHotPath, type SecurityLimitBucket } from './security-limits'
@@ -3817,6 +3817,18 @@ function registerIpc(): void {
       }
     }
     auditLog('mcp.push', { connectionId, tool: toolName, ok: r.ok })
+    const crmTitle = typeof args.title === 'string' ? args.title : undefined
+    const crmKey = `${connectionId}:${String(meetingFile || toolName)
+      .replace(/[^a-zA-Z0-9._-]+/g, '')
+      .slice(0, 48)}`
+    void recordOperatorCrmSend(getSettings(), {
+      id: crmKey,
+      status: r.ok ? 'success' : 'failed',
+      title: crmTitle,
+      connector: connectionId,
+      meetingFile,
+      error: r.ok ? undefined : r.error
+    })
     if (r.ok) {
       appendTimeSavedEvent({
         kind: 'mcp-push',
