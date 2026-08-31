@@ -17,6 +17,8 @@ import type { ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { MetisMark } from './MetisMark'
 import { Onboarding } from './Onboarding'
+import { OnboardingStarfield } from './OnboardingStarfield'
+import { shouldMountStarfield } from '../lib/onboarding-starfield-spec'
 import { isWindows } from '../lib/keys'
 
 export interface OnboardingExperienceProps {
@@ -91,6 +93,10 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
   // the former needs a restart, since this process's ScreenCaptureKit handle never saw the earlier one.
   const screenGrantedRef = useRef<boolean | null>(null)
   const [restarting, setRestarting] = useState(false)
+  const [starfieldFailed, setStarfieldFailed] = useState(false)
+  const [starfieldReady, setStarfieldReady] = useState(false)
+  const [starfieldPulse, setStarfieldPulse] = useState(0)
+  const bumpStarfield = (): void => setStarfieldPulse((n) => n + 1)
 
   // --- Setup scene: run the REAL checks the moment the scene mounts.
   useEffect(() => {
@@ -227,7 +233,17 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
   )
 
   return (
-    <div className="flex h-full w-full select-none flex-col items-center px-10 text-center">
+    <div
+      className="flex h-full w-full select-none flex-col items-center px-10 text-center"
+      data-starfield-ready={starfieldReady ? '1' : '0'}
+    >
+      {shouldMountStarfield(scene) && !starfieldFailed && (
+        <OnboardingStarfield
+          pulse={starfieldPulse}
+          onUnavailable={() => setStarfieldFailed(true)}
+          onFirstFrame={() => setStarfieldReady(true)}
+        />
+      )}
       <div className="flex h-9 shrink-0 items-center justify-center pt-3">
         <ActProgress scene={scene} />
       </div>
@@ -251,7 +267,10 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
           </div>
           <button
             type="button"
-            onClick={() => setScene('reveal')}
+            onClick={() => {
+              bumpStarfield()
+              setScene('reveal')
+            }}
             className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-6 text-[13px] font-semibold text-white shadow-[0_2px_16px_var(--color-accent-glow)] hover:brightness-110"
           >
             Begin
@@ -292,7 +311,10 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
           </div>
           <button
             type="button"
-            onClick={() => setScene('setup')}
+            onClick={() => {
+              bumpStarfield()
+              setScene('setup')
+            }}
             className="no-drag focus-ring h-10 rounded-full bg-[var(--color-accent)] px-6 text-[13px] font-semibold text-white hover:brightness-110"
           >
             Set me up
@@ -396,7 +418,10 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={() => setScene('personalize')}
+              onClick={() => {
+                bumpStarfield()
+                setScene('personalize')
+              }}
               className={
                 'no-drag focus-ring h-10 rounded-full px-5 text-[13px] font-semibold ' +
                 (needsPerms
