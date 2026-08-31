@@ -121,7 +121,8 @@ describe('MQA-275 — the notch clamp (topClamp)', () => {
     expect(topClamp('island', m, 8)).toBe(islandSafeTop(m))
     expect(topClamp('hide', m, 8)).toBe(islandSafeTop(m))
     expect(topClamp('hide', m, 8)).toBe(39)
-    expect(hoverRestHeight(m)).toBeGreaterThanOrEqual(m.menuBarHeight)
+    expect(hoverRestHeight(m)).toBeLessThan(m.menuBarHeight)
+    expect(hoverRestHeight(m)).toBeLessThan(44)
     expect(parkAfterExclusiveOnboarding('hide', m, 8).y).toBe(0)
   })
 
@@ -138,7 +139,8 @@ describe('MQA-275 — the notch clamp (topClamp)', () => {
     expect(topClamp('island', m, 8)).toBe(ISLAND_NOTCH_STRUT_PX)
     expect(topClamp('hide', m, 8)).toBe(ISLAND_NOTCH_STRUT_PX)
     expect(parkAfterExclusiveOnboarding('hide', m, 8).y).toBe(0)
-    expect(hoverRestHeight(m)).toBeGreaterThanOrEqual(ISLAND_NOTCH_STRUT_PX)
+    expect(hoverRestHeight(m)).toBeLessThan(ISLAND_NOTCH_STRUT_PX)
+    expect(hoverRestHeight(m)).toBeLessThan(44)
   })
 
   it('path C uses menuBarHeight when it is larger than the default strut', () => {
@@ -150,7 +152,7 @@ describe('MQA-275 — the notch clamp (topClamp)', () => {
       source: 'helper'
     })
     expect(islandSafeTop(m)).toBe(44)
-    expect(hoverRestHeight(m)).toBeGreaterThanOrEqual(44)
+    expect(hoverRestHeight(m)).toBeLessThan(44)
     expect(topClamp('hide', m, 8)).toBe(44)
     expect(parkAfterExclusiveOnboarding('hide', m, 8).y).toBe(0)
   })
@@ -228,7 +230,8 @@ describe('MQA-275 — the notch clamp (topClamp)', () => {
     expect(hoverRestTop(m)).toBe(0)
     expect(topClamp('hide', m, 8)).toBe(40)
     expect(topClamp('bar', m, 8)).toBe(40 + 8)
-    expect(hoverRestHeight(m)).toBeGreaterThanOrEqual(40)
+    expect(hoverRestHeight(m)).toBeLessThan(44)
+    expect(hoverRestHeight(m)).toBeLessThan(40)
     expect(parkAfterExclusiveOnboarding('hide', m, 8).y).toBe(0)
     expect(topClamp('hide', m, 8)).not.toBe(ISLAND_NOTCH_STRUT_PX)
   })
@@ -338,7 +341,9 @@ describe('MQA-275 — clamp primitives (moved verbatim from index.ts)', () => {
     expect(island!.y).toBe(second.bounds.y)
     const watch = hoverWatchRestRect('island', second)
     expect(watch.y).toBe(second.bounds.y)
-    expect(watch.height).toBeGreaterThanOrEqual(second.workArea.y)
+    expect(watch.width).toBe(second.notchWidth)
+    expect(watch.height).toBeLessThan(44)
+    expect(watch.height).toBeLessThan(second.workArea.y)
   })
 
   it('slideWithinMargin keeps a tall window inside the work area with margin on both edges', () => {
@@ -400,13 +405,16 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
     expect(isVisibleHideSlab({ width: 560, height: 103 })).toBe(true)
     expect(isForbiddenMidFlowCard(park)).toBe(false)
     expect(isForbiddenMidFlowCard({ width: 880, height: 816 })).toBe(true)
-    expect(watch.width).toBe(OVERLAY_HIDE_TARGET.width)
-    expect(watch.height).toBeGreaterThanOrEqual(tonyMac.menuBarHeight)
+    expect(watch.width).toBe(tonyMac.notchWidth)
+    expect(watch.width).toBeLessThan(OVERLAY_HIDE_TARGET.width)
+    expect(watch.height).toBeLessThan(tonyMac.menuBarHeight)
+    expect(watch.height).toBeLessThan(44)
     expect(watch.y).toBe(0)
     expect(watch).not.toEqual(park)
-    expect(watch.x).toBeLessThanOrEqual(900)
-    expect(watch.x + watch.width).toBeGreaterThan(900)
-    expect(900 >= watch.x && 12 >= watch.y && 12 < watch.y + watch.height).toBe(true)
+    const islandX = tonyMac.bounds.x + Math.round(tonyMac.bounds.width / 2)
+    expect(watch.x).toBeLessThanOrEqual(islandX)
+    expect(watch.x + watch.width).toBeGreaterThan(islandX)
+    expect(islandX >= watch.x && 12 >= watch.y && 12 < watch.y + watch.height).toBe(true)
   })
 
   it('island parks the peek capsule at the same Y; bar keeps the classic rest below the notch', () => {
@@ -432,7 +440,9 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
     const watch = hoverWatchRestRect('hide', flush)
     expect(park.y).toBe(0)
     expect(park.height).toBeLessThanOrEqual(8)
-    expect(watch.height).toBeGreaterThanOrEqual(ISLAND_NOTCH_STRUT_PX)
+    expect(watch.height).toBeLessThan(ISLAND_NOTCH_STRUT_PX)
+    expect(watch.height).toBeLessThan(44)
+    expect(watch.width).toBe(flush.notchWidth)
     expect(watch.y).toBe(0)
   })
 
