@@ -5,8 +5,12 @@ import { type StreamOptions, type StreamHandle, errMsg, idleWatchdog, userText, 
 import { noteHeadroomFromHeaders, type HeaderBag } from './usage-headroom'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-function openaiMessages(req: AskStart, system: string): any[] {
-  const msgs: any[] = [{ role: 'system', content: system }]
+function openaiMessages(req: AskStart, system: string, cacheBreakpoint = false): any[] {
+  const msgs: any[] = [
+    cacheBreakpoint
+      ? { role: 'system', content: [{ type: 'text', text: system, cache_control: { type: 'ephemeral' } }] }
+      : { role: 'system', content: system }
+  ]
   for (const t of req.history) msgs.push({ role: t.role, content: t.content })
   const text = userText(req)
   if (req.mode === 'vision' && req.image) {
@@ -111,8 +115,9 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
       const params: any = {
         model: opts.model,
         stream: true,
-        messages: openaiMessages(opts.req, opts.system)
+        messages: openaiMessages(opts.req, opts.system, !!opts.promptCacheKey)
       }
+      if (opts.promptCacheKey) params.prompt_cache_key = opts.promptCacheKey
       // Ask the provider to include token usage in the final stream chunk (else onDone reports blank).
       // Omitted on retry when the provider rejected it (isStreamOptionsRejection).
       if (includeUsage) params.stream_options = { include_usage: true }

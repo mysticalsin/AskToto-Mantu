@@ -110,12 +110,15 @@ export interface ImportJobManagerDeps {
   personaMode?: () => string
   now?: () => number
   newId?: () => string
-  /** How many recordings may decode at once. ASR stays mutexed. Default 2 so one huge file cannot
-   *  hold the only decoder slot while the rest sit idle. */
+  /** How many recordings may occupy the decode slot at once. ASR stays mutexed. Decode is a singleton
+   *  slot (FFmpeg and the hidden-window fallback cannot run two decoders). Recap never counts. */
   concurrency?: number
 }
 
-export const MAX_CONCURRENT_IMPORTS = 2
+/** One decode process/window at a time. Recap and ASR do not occupy this slot. */
+export const MAX_CONCURRENT_DECODES = 1
+/** @deprecated Use MAX_CONCURRENT_DECODES. Kept so existing imports keep compiling. */
+export const MAX_CONCURRENT_IMPORTS = MAX_CONCURRENT_DECODES
 
 const CHUNK_MS = IMPORT_CHUNK_SECONDS * 1_000
 const SAMPLE_RATE = 16_000
@@ -145,23 +148,26 @@ function copy<T>(value: T): T {
 }
 
 /**
- * Runs a small number of imports at once (default 2). Each success checkpoint is durable before the
- * decoder may submit the next chunk, so closing the overlay can never discard already-recognized speech.
- * ASR calls are mutexed so Parakeet / the Whisper host stay single-threaded.
+ * Decode slot is 1. Each success checkpoint is durable before the decoder may submit the next chunk,
+ * so closing the overlay can never discard already-recognized speech. ASR calls are mutexed so
+ * Parakeet / the Whisper host stay single-threaded. Recap runs after the decode slot is released.
  */
 export class ImportJobManager {
   private readonly jobs = new Map<string, ImportJob>()
   private readonly queue: string[] = []
   /** In-memory only: decoded PCM slabs per in-flight vad-v1 job (never persisted; resume re-decodes). */
   private readonly pcmByJob = new Map<string, { slabs: Float32Array[]; samples: number }>()
+  /** Jobs that currently occupy the singleton decode process/window. Recap never belongs here. */
+  private readonly decodeSlotIds = new Set<string>()
+  /** Jobs still doing decode, ASR, save, or recap. Used for cancel/onIdle, not for the decode slot. */
   private readonly activeJobIds = new Set<string>()
   private transcribeLock: Promise<void> = Promise.resolve()
   private loaded = false
   private readonly maxConcurrent: number
 
   constructor(private readonly deps: ImportJobManagerDeps) {
-    const n = deps.concurrency ?? MAX_CONCURRENT_IMPORTS
-    this.maxConcurrent = Number.isFinite(n) && n > 0 ? Math.min(4, Math.floor(n)) : 1
+    const n = deps.concurrency ?? MAX_CONCURRENT_DECODES
+    this.maxConcurrent = Number.isFinite(n) && n > 0 ? Math.min(1, Math.floor(n)) : 1
   }
 
   async start(source: ImportJobSource): Promise<ImportJob> {
@@ -307,13 +313,15 @@ export class ImportJobManager {
     await this.persist(job)
     await this.removeCheckpoint(job.jobId)
     await this.deps.onCancel?.(jobId)
+    this.takePcm(jobId)
+    await this.releaseDecodeSlot(jobId)
     if (this.activeJobIds.has(jobId)) {
-      this.takePcm(jobId)
       this.activeJobIds.delete(jobId)
-      // cancelAll() passes pump:false so draining one job can't promote the next queued job into
-      // 'decoding' before the loop has cancelled it too; it pumps once itself after everything is terminal.
-      if (opts.pump !== false) await this.pump()
+      this.maybeIdle()
     }
+    // cancelAll() passes pump:false so draining one job can't promote the next queued job into
+    // 'decoding' before the loop has cancelled it too; it pumps once itself after everything is terminal.
+    if (opts.pump !== false) await this.pump()
   }
 
   /** Permanently dismisses a terminal (failed/cancelled/done) job: drops it from memory and from the
@@ -431,9 +439,22 @@ export class ImportJobManager {
     return buf?.slabs ?? []
   }
 
+  /**
+   * The decoder process/window is gone. Free the singleton decode slot and start the next file
+   * immediately. ASR and recap keep running on this job and must not occupy the slot.
+   */
+  async releaseDecodeSlot(jobId: string): Promise<void> {
+    if (!this.decodeSlotIds.has(jobId)) return
+    this.decodeSlotIds.delete(jobId)
+    await this.pump()
+    this.maybeIdle()
+  }
+
   /** Called by the hidden decoder only after it has submitted every non-skipped chunk. */
   async finishDecoding(jobId: string, discoveredTotalChunks?: number): Promise<void> {
     const job = this.requireJob(jobId)
+    // Decoder already exited (FFmpeg onComplete / hidden-window close). Kick the next decode now.
+    await this.releaseDecodeSlot(jobId)
     if (job.state === 'cancelled' || terminal(job.state)) return
     if (job.pipeline === 'vad-v1') {
       await this.finishVadPipeline(job)
@@ -583,17 +604,9 @@ export class ImportJobManager {
       }
     }
 
-    // Plaud-style polish: stutter/punctuation cleanup, never a paraphrase. Fail-open by contract — the
-    // raw lines are already durable in the checkpoint, so a polish fault costs readability, not speech.
-    if (this.deps.polish) {
-      try {
-        const polished = await this.deps.polish(copy(job.lines))
-        if (Array.isArray(polished) && polished.length === job.lines.length) job.lines = polished
-      } catch {
-        /* keep raw */
-      }
-      if (this.isCancelled(job)) return
-    }
+    // Polish is not on the import critical path. Sequential LLM batches of 8 with a 120s idle made
+    // one meeting take forever before the summary even started. Recap writes first; polish, if kept,
+    // is fail-open after the recap (see finalize) and never blocks the next decode.
 
     await this.finalize(job)
   }
@@ -640,6 +653,17 @@ export class ImportJobManager {
         job.recapError = message(error)
       }
 
+      // Fail-open polish AFTER recap so the summary is never waiting on sequential cleanup batches.
+      // Cheap local-only polish can still tidy the saved lines; a throw leaves the raw transcript.
+      if (this.deps.polish) {
+        try {
+          const polished = await this.deps.polish(copy(job.lines))
+          if (Array.isArray(polished) && polished.length === job.lines.length) job.lines = polished
+        } catch {
+          /* keep raw */
+        }
+      }
+
       // Queue after the recap stage so Mantu Intelligence sees the durable transcript and summary together.
       if (await this.abandonIfCancelled(job, file)) return
       await this.deps.enqueueIngest(file)
@@ -668,10 +692,11 @@ export class ImportJobManager {
     } catch (error) {
       if (!this.isCancelled(job)) await this.fail(job, message(error))
     } finally {
+      await this.releaseDecodeSlot(job.jobId)
       if (this.activeJobIds.has(job.jobId)) {
         this.activeJobIds.delete(job.jobId)
         await this.pump()
-        if (!this.activeJobIds.size) this.deps.onIdle?.()
+        this.maybeIdle()
       }
     }
   }
@@ -705,11 +730,13 @@ export class ImportJobManager {
   }
 
   private enqueue(jobId: string): void {
-    if (!this.queue.includes(jobId) && !this.activeJobIds.has(jobId)) this.queue.push(jobId)
+    if (!this.queue.includes(jobId) && !this.decodeSlotIds.has(jobId) && !this.activeJobIds.has(jobId)) {
+      this.queue.push(jobId)
+    }
   }
 
   private async pump(): Promise<void> {
-    while (this.activeJobIds.size < this.maxConcurrent && this.queue.length) {
+    while (this.decodeSlotIds.size < this.maxConcurrent && this.queue.length) {
       const jobId = this.queue.shift()!
       const job = this.jobs.get(jobId)
       if (!job || terminal(job.state)) continue
@@ -722,6 +749,7 @@ export class ImportJobManager {
       // past segmentation. Legacy (non-vad-v1) jobs are untouched: their totalChunks IS the real slab
       // count and resuming from a non-zero cursor legitimately depends on it staying put.
       if (job.pipeline === 'vad-v1') job.totalChunks = 0
+      this.decodeSlotIds.add(jobId)
       this.activeJobIds.add(jobId)
       job.state = 'decoding'
       await this.persist(job)
@@ -730,8 +758,8 @@ export class ImportJobManager {
       } catch (error) {
         if (!this.isCancelled(job)) await this.fail(job, message(error))
       }
-      // A decoder runs asynchronously and calls finishDecoding/failDecoder later. Keep its slot and
-      // continue so a second recording can start instead of waiting behind a huge file.
+      // A decoder runs asynchronously and calls finishDecoding/failDecoder later. The decode slot stays
+      // occupied until releaseDecodeSlot — recap of an earlier job must not keep the next file waiting.
     }
   }
 
@@ -739,12 +767,18 @@ export class ImportJobManager {
     job.state = 'failed'
     job.error = error || 'Import failed.'
     await this.persist(job)
+    this.takePcm(job.jobId)
+    await this.releaseDecodeSlot(job.jobId)
     if (this.activeJobIds.has(job.jobId)) {
-      this.takePcm(job.jobId)
       this.activeJobIds.delete(job.jobId)
       await this.pump()
-      if (!this.activeJobIds.size) this.deps.onIdle?.()
+      this.maybeIdle()
     }
+  }
+
+  /** Whisper / Intelligence idle: no decode slot and no leftover ASR/recap work. */
+  private maybeIdle(): void {
+    if (!this.decodeSlotIds.size && !this.activeJobIds.size) this.deps.onIdle?.()
   }
 
   private async persist(job: ImportJob): Promise<void> {
