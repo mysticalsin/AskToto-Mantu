@@ -8,13 +8,13 @@ Three modes in Settings (persist, no reinstall). Default on a fresh install is *
 
 1. **hide** (default). Fully hidden until the pointer is on the hardware camera / Dynamic Island square (top-center, on top of the camera housing), then reveal down. Leave that island hides. Windows: top-center of the display, **no fake notch**.
 2. **island**. The always-visible peek capsule (may sit in the island / notch). Hover the same camera square expands down. Leave that island returns to the peek. Island must never minimize to a second disk.
-3. **bar**. Classic bar. Always visible. Idle rest is the **full bar plus the thinking-orb circle** (visible 51×51, package canvas 64, never a lozenge / pill / flattened disc). The only layout that can collapse to that same circle. Hide and Island must never grow a minimize-to-circle control, and any minimize call while those layouts are active is a no-op (do not jump Hide → Bar). The circle is invisible whenever the bar is invisible. Contract: `docs/design/BAR-PILL.md`.
+3. **bar**. Classic bar. Always visible. Idle rest is the **full bar plus the thinking-orb circle** (visible 41×41, package canvas 64 with 2x backing, never a lozenge / pill / flattened disc). The only layout that can collapse to that same circle. Hide and Island must never grow a minimize-to-circle control, and any minimize call while those layouts are active is a no-op (do not jump Hide → Bar). The circle is invisible whenever the bar is invisible. Contract: `docs/design/BAR-PILL.md`.
 
 ### Bar sphere (thinking-orb, Bar only)
 
 The Bar control is Jakub Antalik's thinking-orb on Métis dark glass, not a WebGL marble and not a status blob. Tony drags it while using apps.
 
-- **Size.** Visible host `51×51` (~20% smaller than the old 64 CSS). Package canvas stays the `64` avatar preset (`ThinkingOrb size={64}`). Aspect 1. Same visible box on idle, listen, think, fact-check, connecting, hover, and minimize. Never a 44-tall pill. Never flatten. Do not invent a third canvas size. Do not pass 51 or 52 to `size`.
+- **Size.** Visible host `41×41` (~20% smaller than the previous 51 CSS). Package canvas stays the `64` avatar preset (`ThinkingOrb size={64}`) with a **2x backing store** (128). Do not CSS-downscale a 1x bitmap into the 41 hole. Do not pass the package inline `20`. Aspect 1. Same visible box on idle, listen, think, fact-check, connecting, hover, and minimize. Never a 44-tall pill. Never flatten. Do not invent a third canvas size. Do not pass 41, 51, or 52 to `size`.
 - **no-squash M.** The left Settings M is a locked 30×30 circle. Listen / recording may expand the Bar. That M must not flatten, stretch into a capsule, or clip into a bar.
 - **Idle.** `solving` (playground Solving at 64, no caption). Theme `dark`: light dots, transparent host. Not Fit Studio magenta. Not Jarvis `#4CA8E8`.
 - **Materials.** Real `thinking-orbs` 2D canvas. Monochrome. No WebGL glitter. No Fit Studio glow core / bloom / specular kiss on this control. No invented particle constellation. No filled disc behind the ring.

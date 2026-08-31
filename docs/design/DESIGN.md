@@ -127,7 +127,7 @@ See [ONBOARDING-STARFIELD.md](./ONBOARDING-STARFIELD.md). Galaxy from frame one.
 See [THINKING-ORB.md](./THINKING-ORB.md). Caption then sphere. Word first.
 
 ## Bar sphere
-See [BAR-PILL.md](./BAR-PILL.md). The Bar control is a Jakub thinking-orb (`thinking-orbs`, theme `dark`): canvas 64, visible 51×51. Idle `solving` with no caption, listen `listening`, think `working`, fact-check `searching`, connecting `connecting`. Same circle when minimized. Left Settings M stays a circle (no-squash M). Not stuffed into overlay Hide/Island. Not a Fit Studio magenta core.
+See [BAR-PILL.md](./BAR-PILL.md). The Bar control is a Jakub thinking-orb (`thinking-orbs`, theme `dark`): canvas 64, 2x backing, visible 41×41. Idle `solving` with no caption, listen `listening`, think `working`, fact-check `searching`, connecting `connecting`. Same circle when minimized. Left Settings M stays a circle (no-squash M). Not stuffed into overlay Hide/Island. Not a Fit Studio magenta core.
 
 ## Auto-answer
 Ambient copilot / auto-answer stays until Tony clicks (dismiss/read, never send) or a new question replaces it. Not an ephemeral 4s/7s card.

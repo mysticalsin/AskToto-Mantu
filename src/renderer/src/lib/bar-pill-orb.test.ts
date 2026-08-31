@@ -4,10 +4,14 @@ import {
   BAR_ORB_SPEED,
   BAR_ORB_THEME,
   BAR_MARK_SIZE_PX,
+  BAR_PILL_BACKING_DPR,
+  BAR_PILL_BACKING_PX,
+  BAR_PILL_FROM_VISIBLE_PX,
   BAR_PILL_HEIGHT_PX,
   BAR_PILL_SIZE_PX,
   BAR_PILL_VISIBLE_PX,
   BAR_PILL_WIDTH_PX,
+  barOrbBackingDpr,
   ORB_MOODS,
   ORB_STATE,
   isFixedCircle,
@@ -25,8 +29,13 @@ import {
 describe('bar pill thinking-orb circle', () => {
   it('is a fixed circle: equal width and height, never a stadium', () => {
     expect(BAR_PILL_SIZE_PX).toBe(64)
-    expect(BAR_PILL_VISIBLE_PX).toBe(51)
-    expect(BAR_PILL_VISIBLE_PX).toBe(Math.round(BAR_PILL_SIZE_PX * 0.8))
+    expect(BAR_PILL_FROM_VISIBLE_PX).toBe(51)
+    expect(BAR_PILL_VISIBLE_PX).toBe(41)
+    expect(BAR_PILL_VISIBLE_PX).toBe(Math.round(BAR_PILL_FROM_VISIBLE_PX * 0.8))
+    expect(BAR_PILL_BACKING_DPR).toBe(2)
+    expect(BAR_PILL_BACKING_PX).toBe(128)
+    expect(barOrbBackingDpr(1)).toBe(2)
+    expect(barOrbBackingDpr(2)).toBe(2)
     expect(BAR_PILL_WIDTH_PX).toBe(BAR_PILL_HEIGHT_PX)
     expect(BAR_PILL_WIDTH_PX).toBe(BAR_PILL_VISIBLE_PX)
     expect(isFixedCircle(BAR_PILL_WIDTH_PX, BAR_PILL_HEIGHT_PX)).toBe(true)
