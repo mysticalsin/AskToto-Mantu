@@ -180,6 +180,12 @@ mac:
     # same hardenedRuntime pass that covers llama-server/ffmpeg. The mas target inherits this list.
     - from: resources/mac-helper
       to: mac-helper
+    # Portable official Node so the managed Dust CLI can load keytar (Electron-as-node cannot).
+    # Populated by scripts/fetch-managed-node.mjs mac before pack. The user never installs Node.
+    - from: resources/managed-node/darwin-arm64
+      to: managed-node/darwin-arm64
+    - from: resources/managed-node/darwin-x64
+      to: managed-node/darwin-x64
   # @electron/universal lipos any Mach-O that DIFFERS between the two sub-builds, and aborts on one
   # that is byte-identical in both unless it matches this pattern (upstream's name is misleading — the
   # rule is "identical across builds, so skip lipo", not "must be x64"). Every prebuilt native payload
@@ -265,6 +271,14 @@ win:
   extraResources:
     - from: resources/llama/win
       to: llama/win
+    # Portable official Node so the managed Dust CLI can load keytar (Electron-as-node cannot).
+    # Populated by scripts/fetch-managed-node.mjs before pack. The user never installs Node.
+    - from: resources/managed-node/win-x64
+      to: managed-node/win-x64
+    # VC++ runtime for keytar's native addon. Set up Dust / the next NSIS pack runs this silently
+    # if the addon cannot load — not a user homework step.
+    - from: resources/vcredist
+      to: vcredist
   # ASCII artifact/store ids on purpose: é in an .exe filename or AppX identity invites codepage,
   # globbing, and store-validation trouble. The installed app still displays as Métis (shortcutName).
   artifactName: Metis-Setup-${version}.${ext}

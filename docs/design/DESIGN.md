@@ -135,6 +135,16 @@ Ambient copilot / auto-answer stays until Tony clicks (dismiss/read, never send)
 ## CLI session and Spotlight Ref
 Settings → CLI Integration Connect is a zero-token session probe (`missing` / `signed-out` / `weekly-limit` / `live`). A Claude weekly cap is signed-in, not disconnected. Codex `login status` = Logged in is connected. Never auto-send a billed turn to connect.
 
-Spotlight Ref is locked to Dust agent `GOr913Zr5V`. The agent list used for that gate merges Dust views `all`, `workspace`, `published`, and `list` — `view:list` alone can omit a managed agent and must not show the reconnect dead-end on the workspace that hosts it. Fail only when that agent is truly absent from the connected workspace.
+### Managed Dust CLI (not web-only)
 
-Data and AI projects live on the Dust spaces / data-sources path (`fetchDustProjects`). On Totos-Mac: Settings → AI (confirm Dust workspace) → Spotlight Ref → ask "Data and AI projects". Record names returned. READY TO MERGE stays no until Devon Mac-shows that fetch.
+Spotlight Ref is a CLI call. The web REST picker (`listDustAgents` / view merge) must not be the only path and must not dead-end on reconnect copy.
+
+- **Install.** `MANAGED_CLIS.dust` is `@dust-tt/dust-cli` (verified 0.4.5: `bin.dust` = `dist/index.js`). Same `installManagedCli` pattern as claude/codex: fetch the npm tarball, sha512 integrity, zip-slip-safe unpack into `userData/managed-cli/dust`. No system `npm i -g`. The published tarball is not a single-file bundle: after unpack, install production deps with the **managed Node** `npm` into that package dir (still not global).
+- **Runtime.** `@dust-tt/dust-cli` statically imports `keytar` (native). `ELECTRON_RUN_AS_NODE` does not load a Node-ABI addon. Spawn the managed `dust` entry with a **vendored portable Node** (`userData/managed-node` or `resources/managed-node`), never a user-installed Node/Git/VC++ homework step. If the pack omitted the binary (dev checkout), Set up Dust fetches official Node 22.22.3 into userData after a sha256 check.
+- **Windows.** Ship portable Node (pinned `22.22.3` win-x64) under `resources/managed-node/win-x64` so the next pack includes it. If keytar cannot load without the VC++ runtime, ship `vc_redist.x64.exe` under `resources/vcredist` and run it from the Set up Dust / installer path (`/quiet /norestart`). One-click Set up Dust. No browser-only Windows path.
+- **Set up Dust.** Settings → AI → Set up Dust installs this CLI, then signs in (native OAuth or an existing CLI session). Copy must not say "No CLI".
+- **Invoke.** `dust chat --sId GOr913Zr5V -m <prompt>`. Also `-a "Spotlight Ref"`: 0.4.5 non-interactive chat (`-m`) selects by agent **name**, not `--sId` (confirmed in the published `dist/index.js`). Headless auth from the saved Métis Dust session: `--key` + `--workspaceId` (help also says `--wId` / `--api-key`) or `DUST_API_KEY` + `DUST_WORKSPACE_ID`. Seed keytar with that session before chat so 0.4.5 `getDustClient()` (keytar-only) works. Never `--with-tools` / `-t` (auto-approves every tool). Never auto-send.
+- **`--projectName`.** The CLI supports it (exact space name). Pass it only when `fetchDustProjects` / `matchDataAndAiProjects` returns a real name. Do not invent project names.
+- **Fail loud, correctly.** Missing CLI → install (or one-click Install), not "reconnect Dust to the workspace that has it". Agent truly absent from the CLI session → "The Spotlight Ref agent is not in this workspace." A `view:list` omission is not proof the agent is gone.
+
+Spotlight Ref is locked to Dust agent `GOr913Zr5V`. READY TO MERGE stays no until Devon Mac-shows Spotlight Ref returning Data and AI projects through the installed Dust CLI (not the REST-only picker).
