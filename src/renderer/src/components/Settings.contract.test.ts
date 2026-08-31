@@ -306,3 +306,54 @@ describe('MQA-164 — a failed update download leaves the Settings row with a wa
     expect(preload).toMatch(/onUpdateError: .*sub\(IPC\.updateError, cb\)/)
   })
 })
+
+describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', () => {
+  const product = blockAfter('function ProductConnectCard(', '\nfunction ClickupCard(')
+  const polo = blockAfter('function McpConnectionCard(', '\nconst primaryBtnStyle')
+  const intelligence = blockAfter('function IntelligenceTab(', '\nfunction GraphSection(')
+  const productCopy = product.replace(/^\s*\/\/.*$/gm, '')
+
+  it('ClickUp and Plane default cards have no MCP URL field', () => {
+    const clickup = blockAfter('function ClickupCard(', '\nfunction PlaneCard(')
+    const plane = blockAfter('function PlaneCard(', '\nfunction AgentPicker(')
+    expect(productCopy).not.toMatch(/MCP endpoint URL/)
+    expect(clickup).toMatch(/<ClickUpMark/)
+    expect(plane).toMatch(/<PlaneMark/)
+    expect(intelligence).toMatch(/<ClickupCard /)
+    expect(intelligence).toMatch(/<PlaneCard /)
+  })
+
+  it('ClickUp Connect is the default CTA — no endpoint or key input until Advanced opens', () => {
+    expect(product).toMatch(/\{connecting \? waitingLabel : 'Connect'\}/)
+    expect(product).toMatch(/advanced \? \(/)
+    expect(product).toMatch(/>API key</)
+    const keyInput = product.indexOf('type="password"')
+    const advancedGate = product.indexOf('{advanced ? (')
+    expect(keyInput).toBeGreaterThan(advancedGate)
+  })
+
+  it('Polo Pre-Sales still has the existing URL + key + Test + Save form', () => {
+    expect(polo).toMatch(/MCP endpoint URL/)
+    expect(polo).toMatch(/API key/)
+    expect(polo).toMatch(/Test connection/)
+    expect(polo).toMatch(/>Save</)
+    expect(intelligence).toMatch(/kind="bidstack"/)
+    expect(intelligence).toMatch(/defaultLabel="Polo Pre-Sales"/)
+    expect(intelligence).not.toMatch(/kind="plane"/)
+  })
+
+  it('never auto-sends: product-connect cards have no useEffect that connects or pushes', () => {
+    expect(product).not.toMatch(/useEffect/)
+    expect(product).not.toMatch(/mcpPush/)
+    expect(product).toMatch(/onClick=\{\(\) => void runConnect\(\)\}/)
+  })
+
+  it('official marks are the vendored simple-icons paths, not Lucide stand-ins', () => {
+    const clickup = readFileSync(join(__dirname, 'brand/ClickUpMark.tsx'), 'utf8')
+    const plane = readFileSync(join(__dirname, 'brand/PlaneMark.tsx'), 'utf8')
+    expect(clickup).toMatch(/#7B68EE/)
+    expect(clickup).toMatch(/M2 18\.439l3\.69-2\.828/)
+    expect(plane).toMatch(/currentColor/)
+    expect(plane).toMatch(/M0 5\.358a\.854/)
+  })
+})
