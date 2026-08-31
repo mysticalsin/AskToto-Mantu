@@ -288,6 +288,9 @@ describe('forwarding to the Cloudflare AI REST API', () => {
     // Only the two this file writes itself survive.
     expect(res.headers.get('content-type')).toBe('application/json')
     expect(res.headers.get('cache-control')).toBe('no-store')
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(res.headers.get('x-frame-options')).toBe('DENY')
+    expect(res.headers.get('strict-transport-security')).toBe('max-age=31536000; includeSubDomains')
   })
 })
 
@@ -408,6 +411,9 @@ describe('routing', () => {
     expect(text).not.toContain(ACCOUNT_TOKEN)
     expect(text).not.toContain(ACCOUNT_ID)
     expect(text).not.toContain(PROXY_KEY)
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(res.headers.get('x-frame-options')).toBe('DENY')
+    expect(res.headers.get('strict-transport-security')).toBe('max-age=31536000; includeSubDomains')
   })
 
   it('reports configured:false while secrets are still missing', async () => {

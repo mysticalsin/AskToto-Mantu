@@ -78,10 +78,25 @@ function presentedKey(request: Request): string {
   return match ? match[1].trim() : ''
 }
 
+const HSTS = 'max-age=31536000; includeSubDomains'
+
+function securityHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return {
+    'x-content-type-options': 'nosniff',
+    'x-frame-options': 'DENY',
+    'strict-transport-security': HSTS,
+    'referrer-policy': 'no-referrer',
+    ...extra
+  }
+}
+
 function jsonResponse(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' }
+    headers: securityHeaders({
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'no-store'
+    })
   })
 }
 
@@ -398,10 +413,10 @@ export default {
     // whatever Cloudflare attaches (gateway ids, ray ids, cookies) stays on this side of the Worker.
     return new Response(upstream.body, {
       status: upstream.status,
-      headers: {
+      headers: securityHeaders({
         'content-type': upstream.headers.get('content-type') ?? 'application/json; charset=utf-8',
         'cache-control': 'no-store'
-      }
+      })
     })
   }
 }

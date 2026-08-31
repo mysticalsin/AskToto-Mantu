@@ -474,3 +474,5 @@ No tonight action plan beyond this PR's patches — the two applicable controls 
 ## Out of scope (frozen)
 
 Overlay chrome, island geometry, onboarding, PR 58, identity card PR, Intelligence dashboards, latency / time-saved PRs. Pack and GitHub release stay last. No user-facing copy in this ship claims an AI author.
+
+The 20-point checklist (same PR, do not re-score the ten here) is `docs/security/AUDIT-20.md`.
