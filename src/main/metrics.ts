@@ -24,6 +24,10 @@ export interface AuditRecord {
   retry?: boolean
   inputTokens?: number
   outputTokens?: number
+  cacheRead?: number
+  cacheWrite?: number
+  cacheUncached?: number
+  cacheStatus?: string
 }
 
 /** Nearest-rank percentile of an already-collected sample. Returns null for an empty sample. */

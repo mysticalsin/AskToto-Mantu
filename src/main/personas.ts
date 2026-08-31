@@ -73,11 +73,18 @@ function languageDirective(
   return `\n\nLANGUAGE: Always respond in ${lang}, regardless of the input language.`
 }
 
+export interface SystemParts {
+  /** Byte-stable per session. Identity, mode prompt, locked skills, static rails, profile, docs. */
+  cachedPrefix: string
+  /** Per-turn system tail. Empty today: clocks, transcripts, L0, screenshots stay in userText(). */
+  volatile: string
+}
+
 /**
- * Mode + profile + imported-context aware system prompt. Each conversation mode uses its editable
- * prompt (settings.modePrompts override → built-in default). Untrusted-input modes get an injection guard.
+ * Split system prompt so the provider cache breakpoint sits on stable content only.
+ * Transcripts, clocks, meeting ids, L0, and screenshots must never enter `cachedPrefix`.
  */
-export function buildSystem(
+export function buildSystemParts(
   req: AskStart,
   mode: ConversationMode,
   profile: Profile,
@@ -86,7 +93,7 @@ export function buildSystem(
   outputLanguage?: string,
   summaryLanguage?: string,
   systemPrompt?: string
-): string {
+): SystemParts {
   const untrusted =
     req.mode === 'suggest' || req.mode === 'summary' || req.mode === 'recap' || req.mode === 'vision'
   const guard = untrusted ? INJECTION_GUARD : ''
@@ -96,11 +103,15 @@ export function buildSystem(
   const lead = guard ? guard.trimStart() + '\n\n' : ''
   const ctx = contextBlock(contextDocs)
   const lang = languageDirective(req.mode, outputLanguage, summaryLanguage)
-  // Optional global custom instruction (Settings → Personalize), prepended to every mode's system prompt.
+  // Personalize custom instruction is stable per machine: it belongs in the cached prefix.
   const prefix = systemPrompt && systemPrompt.trim() ? systemPrompt.trim() + '\n\n' : ''
 
-  if (req.mode === 'summary') return lead + prefix + SUMMARY_PROMPT + ctx + lang
-  if (req.mode === 'recap') return lead + prefix + recapPromptFor(mode) + ctx + lang
+  if (req.mode === 'summary') {
+    return { cachedPrefix: lead + prefix + SUMMARY_PROMPT + ctx + lang, volatile: '' }
+  }
+  if (req.mode === 'recap') {
+    return { cachedPrefix: lead + prefix + recapPromptFor(mode) + ctx + lang, volatile: '' }
+  }
 
   // Fact-check (mode:'answer', kind:'factcheck') has a strict "Respond in EXACTLY this format … VERDICT: …"
   // contract that parseVerdict depends on. The active mode's persona prompt (sales/interview/negotiation/…)
@@ -135,5 +146,35 @@ export function buildSystem(
   // mode's shipped skill plus the humanizer. Custom modes get the humanizer only. Fact-check skips
   // both so the VERDICT contract stays clean. User modePrompts cannot replace the skill body.
   const locked = req.kind === 'factcheck' ? '' : lockedSkillsAppendix(mode)
-  return lead + prefix + prompt + locked + profileTail + ctx + rail + answerFirst + lang
+  return {
+    cachedPrefix: lead + prefix + prompt + locked + profileTail + ctx + rail + answerFirst + lang,
+    volatile: ''
+  }
+}
+
+/**
+ * Mode + profile + imported-context aware system prompt. Each conversation mode uses its editable
+ * prompt (settings.modePrompts override → built-in default). Untrusted-input modes get an injection guard.
+ */
+export function buildSystem(
+  req: AskStart,
+  mode: ConversationMode,
+  profile: Profile,
+  modePrompts: Partial<Record<string, string>> | undefined,
+  contextDocs: { name: string; text: string }[] | undefined,
+  outputLanguage?: string,
+  summaryLanguage?: string,
+  systemPrompt?: string
+): string {
+  const parts = buildSystemParts(
+    req,
+    mode,
+    profile,
+    modePrompts,
+    contextDocs,
+    outputLanguage,
+    summaryLanguage,
+    systemPrompt
+  )
+  return parts.cachedPrefix + parts.volatile
 }
