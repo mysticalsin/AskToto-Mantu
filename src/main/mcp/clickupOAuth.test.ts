@@ -135,10 +135,10 @@ describe('clickupOAuth — OAuth 2.1 + PKCE connect flow', () => {
     setSettings({ clickupClientId: 'cached-portless-client' })
     expect(getSettings().clickupClientId).toBe('cached-portless-client')
 
-    let dcrBody: { redirect_uris?: string[] } | null = null
+    const capturedDcr: { redirect_uris?: string[] } = {}
     fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
       if (url.includes('/oauth/register')) {
-        dcrBody = JSON.parse(String(init?.body || '{}'))
+        Object.assign(capturedDcr, JSON.parse(String(init?.body || '{}')) as { redirect_uris?: string[] })
         return jsonResponse({ client_id: 'fresh-ported-client' })
       }
       if (url.includes('/oauth/token')) return jsonResponse(TOKEN_RESPONSE)
@@ -150,7 +150,7 @@ describe('clickupOAuth — OAuth 2.1 + PKCE connect flow', () => {
     await vi.waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1))
     const { redirectUri, state } = capturedAuthorizeParams()
     expect(redirectUri).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/callback$/)
-    expect(dcrBody?.redirect_uris).toEqual([redirectUri])
+    expect(capturedDcr.redirect_uris).toEqual([redirectUri])
     const authUrl = new URL(openExternal.mock.calls[0][0] as string)
     expect(authUrl.searchParams.get('client_id')).toBe('fresh-ported-client')
     expect(authUrl.searchParams.get('client_id')).not.toBe('cached-portless-client')
