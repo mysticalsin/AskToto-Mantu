@@ -1,7 +1,7 @@
 /**
- * Sentient 52 Fit Studio glass sphere for the Bar rest.
- * Volume: ray-sphere, volumetric core, one specular kiss, soft bloom.
- * Idle: #b266e9 / #e15cff / #8a00f8. No particle constellation.
+ * Sentient 52 Fit Studio glow core for the Bar rest.
+ * Volume: ray-sphere, luminous core, one specular kiss, soft bloom.
+ * Idle: #b266e9 / #e15cff / #8a00f8. Glow core only. No shards. No particles.
  * Bundled WebGL. No CDN. No Spline. Never flatten. Same sphere when minimized.
  */
 
@@ -139,7 +139,7 @@ function moodParams(mood: OrbMood, listening = false): MoodParams {
   return p
 }
 
-/** Ray-sphere glass body. Volume, fresnel, specular kiss, living core, soft bloom. Never a 2D disc. */
+/** Ray-sphere glow core. Volume, specular kiss, living core, soft bloom. Never shards. Never a 2D disc. */
 const SPHERE_VS = `
 attribute vec2 aQuad;
 varying vec2 vUv;
@@ -168,16 +168,10 @@ void main() {
   float b = dot(ro, rd);
   float c = dot(ro, ro) - ra * ra;
   float h = b * b - c;
-  float r2 = dot(vUv, vUv);
-  float ang = atan(vUv.y, vUv.x);
-  float rays = pow(max(0.0, sin(ang * 3.0 + 0.35)), 22.0);
-  rays += pow(max(0.0, sin(ang * 3.0 + 1.40)), 26.0) * 0.62;
-  float flare = rays * exp(-r2 * 1.65) * 0.34;
   if (h < 0.0) {
-    float bloom = exp(h * 6.2);
-    float halo = bloom * 0.78 + flare * 0.95;
-    if (halo < 0.014) discard;
-    gl_FragColor = vec4(mix(uDeep, uHot, 0.38 + flare), halo * uAlpha);
+    float bloom = exp(h * 5.2);
+    if (bloom < 0.012) discard;
+    gl_FragColor = vec4(mix(uDeep, uHot, 0.46), bloom * 0.86 * uAlpha);
     return;
   }
   h = sqrt(h);
@@ -188,24 +182,23 @@ void main() {
   vec3 view = -rd;
   vec3 light = normalize(vec3(-0.38 + uLeanX * 0.12, 0.52 + uLeanY * 0.10, 0.80));
   float thickness = max(0.0, tExit - tHit);
-  float vol = 1.0 - exp(-thickness * 1.12);
+  float vol = 1.0 - exp(-thickness * 1.08);
   float ndl = max(0.0, dot(n, light));
-  float wrap = 0.46 + 0.50 * (ndl * 0.48 + 0.52 * max(0.0, n.z));
-  float fresnel = pow(1.0 - max(0.0, dot(n, view)), 2.55);
+  float wrap = 0.50 + 0.46 * (ndl * 0.42 + 0.58 * max(0.0, n.z));
+  float fresnel = pow(1.0 - max(0.0, dot(n, view)), 2.7);
   vec3 hlf = normalize(light + view);
-  float spec = pow(max(0.0, dot(n, hlf)), 64.0);
-  float kiss = pow(max(0.0, dot(n, hlf)), 180.0);
-  float caustic = 0.5 + 0.5 * sin(p.x * 4.2 + uTime * 0.28 + p.z * 1.8) * sin(p.y * 3.4 - uTime * 0.18 + p.x * 1.2);
-  float core = exp(-dot(p.xy, p.xy) * 1.85) * uBreath;
-  vec3 col = mix(uDeep * 1.08, uColor * 1.14, wrap * 0.50 + vol * 0.42);
-  col = mix(col, uHot * 1.12, core * 0.86 + wrap * wrap * 0.12);
-  col += uHot * core * 0.58;
-  col += uColor * caustic * 0.03 * core;
-  col += vec3(1.0, 1.0, 1.0) * spec * 0.58;
-  col += vec3(1.0, 1.0, 1.0) * kiss * 0.52;
-  col += mix(uHot, vec3(1.0, 0.92, 1.0), 0.28) * fresnel * 0.18;
-  col += uHot * flare * 0.48;
-  float alpha = uAlpha * (0.58 + 0.28 * vol + 0.22 * core + 0.06 * fresnel);
+  float spec = pow(max(0.0, dot(n, hlf)), 72.0);
+  float kiss = pow(max(0.0, dot(n, hlf)), 200.0);
+  float caustic = 0.5 + 0.5 * sin(p.x * 3.4 + uTime * 0.22 + p.z * 1.4) * sin(p.y * 2.8 - uTime * 0.16);
+  float core = exp(-dot(p.xy, p.xy) * 1.55) * uBreath;
+  vec3 col = mix(uDeep * 1.06, uColor * 1.16, wrap * 0.42 + vol * 0.48);
+  col = mix(col, uHot * 1.18, core * 0.90);
+  col += uHot * core * 0.62;
+  col += uColor * caustic * 0.02 * core;
+  col += vec3(1.0, 1.0, 1.0) * spec * 0.52;
+  col += vec3(1.0, 1.0, 1.0) * kiss * 0.58;
+  col += mix(uHot, vec3(1.0, 0.90, 1.0), 0.22) * fresnel * 0.12;
+  float alpha = uAlpha * (0.48 + 0.30 * vol + 0.28 * core + 0.04 * fresnel);
   gl_FragColor = vec4(col, min(1.0, alpha));
 }
 `
@@ -422,19 +415,6 @@ function mountStill(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, op
     ctx.beginPath()
     ctx.arc(cx, cy, rad * 1.16, 0, Math.PI * 2)
     ctx.fill()
-    ctx.save()
-    ctx.globalCompositeOperation = 'lighter'
-    ctx.strokeStyle = rgba(glass.hot.r, glass.hot.g, glass.hot.b, 0.36)
-    ctx.lineWidth = Math.max(0.8, w / 90)
-    ctx.lineCap = 'round'
-    for (let i = 0; i < 6; i++) {
-      const a = (i * Math.PI) / 3 + 0.18
-      ctx.beginPath()
-      ctx.moveTo(cx, cy)
-      ctx.lineTo(cx + Math.cos(a) * rad * 0.98, cy + Math.sin(a) * rad * 0.98)
-      ctx.stroke()
-    }
-    ctx.restore()
     const body = ctx.createRadialGradient(cx - rad * 0.08, cy - rad * 0.12, rad * 0.04, cx, cy + rad * 0.06, rad)
     body.addColorStop(0, rgba(1, Math.min(1, glass.hot.g + 0.18), 1, 0.98))
     body.addColorStop(0.22, rgba(glass.hot.r, glass.hot.g, glass.hot.b, 0.96))

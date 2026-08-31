@@ -58,7 +58,7 @@ Apple-grade. Quiet luxury. Transparent edges. Fixed circle.
 - Never a stadium, potato, or squashed capsule. Shader uses the same scale for X and Y.
 - Idle is Fit Studio purple-magenta glass (`#b266e9` / `#e15cff` / `#8a00f8`), not Jarvis `#4CA8E8`. Thinking is hotter `#e15cff`. Fact-check may use a calm blue accent `#5AB8F0`. Connecting is dimmer purple `#8a00f8`, never indigo `#2A0A4A`. Color tints the volume; the box never changes.
 - No constellation. No electron chords. No glitter ball.
-- Energy volume: ray-sphere body, luminous core, indigo halo, one specular kiss, thin star flare. Not a 2D radial disc. Not a particle cloud.
+- Glow core: ray-sphere body, luminous magenta-violet core, indigo bloom, one specular kiss. Not shards. Not a 2D radial disc. Not a particle cloud.
 - Rec-dot stays red and readable on the sphere while listening. Do not paint the sphere red.
 - No glass chip of mic buttons. No dark fill.
 - Transparent around the circle. No scrollbar. No CSS radial body.
