@@ -44,7 +44,7 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
   })
 
   it('Next, Skip, and the Tony Walteur byline use liquid glass; logo stays Métis', () => {
-    expect(experience).toMatch(/onboard-cta onboard-glass/)
+    expect(experience).toMatch(/onboard-cta no-drag focus-ring/)
     expect(experience).toMatch(/>\s*Next\s*</)
     expect(experience).toMatch(/Skip the tour/)
     expect(experience).toMatch(/onboard-glass onboard-glass-chip/)
@@ -109,7 +109,7 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(experience).toMatch(/onboard-mute/)
     expect(experience).not.toMatch(/prefersReducedMotion\(\)[\s\S]{0,80}onboard-mute/)
     const demo = readFileSync(join(__dirname, '../components/OnboardingDemoScene.tsx'), 'utf8')
-    expect(demo).toMatch(/onClick=\{\(\) => \{\s*onPlayVideo\?\.\(\)\s*\n\s*advance\(\)/)
+    expect(demo).toMatch(/onClick=\{\(\) => \{\s*onPlayVideo\?\.\(\)\s*\n\s*if \(demoNextLeavesTour\(beat\)\) onContinue\(\)/)
     expect(demo).toMatch(/demoPlaybackAfterNext/)
     expect(demo).toMatch(/setLocalMs\(next\.localMs\)/)
     expect(demo).not.toMatch(/setTimeout\(/)

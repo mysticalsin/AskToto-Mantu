@@ -39,7 +39,6 @@ import {
   Cloud,
   FolderLock,
   KeyRound,
-  Loader2,
   MessageSquare,
   Mic,
   MonitorUp,
@@ -532,7 +531,7 @@ function ActLicense({
           disabled={!serverUrl.trim() || !licenseKey.trim() || activating}
           className="no-drag focus-ring flex items-center gap-1.5 rounded-full bg-[var(--color-accent)]/15 px-4 py-2 text-[12px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50"
         >
-          {activating ? <Loader2 size={13} className="animate-spin" /> : <KeyRound size={13} />}
+          {activating ? <InlineOrb kind="connecting" /> : <KeyRound size={13} />}
           Activate
         </button>
         <button
