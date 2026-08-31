@@ -1,14 +1,16 @@
 import { createHash } from 'node:crypto'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ConversationMode } from '@shared/ipc'
 import {
   composeLockedSkillsAppendix,
+  emptyOverlayLock,
   HUMANIZER_SKILL_ID,
   isBuiltinConversationMode,
   ModeSkillIntegrityError,
   modeSkillLock,
+  overlaySkillRelPath,
   parseSkillHeader,
   type LoadedSkill,
   type ModeSkillId,
@@ -58,6 +60,7 @@ export function verifySkillRaw(
 
 let skillsRootOverride: string | null = null
 let lockOverride: ModeSkillLock | null = null
+let overlayRoot: string | null = null
 const cache = new Map<string, LoadedSkill>()
 
 export function setModeSkillsRootForTests(root: string | null): void {
@@ -70,8 +73,17 @@ export function setModeSkillsLockForTests(lock: ModeSkillLock | null): void {
   cache.clear()
 }
 
+export function setModeSkillsOverlayRoot(root: string | null): void {
+  overlayRoot = root
+  cache.clear()
+}
+
 export function clearModeSkillsCacheForTests(): void {
   cache.clear()
+}
+
+export function getModeSkillsOverlayRoot(): string | null {
+  return overlayRoot
 }
 
 function findRepoRoot(startDir: string): string {
@@ -106,10 +118,37 @@ function lock(): ModeSkillLock {
   return lockOverride ?? modeSkillLock()
 }
 
+function readOverlayLock(): ModeSkillLock {
+  if (!overlayRoot) return emptyOverlayLock()
+  const p = join(overlayRoot, 'lock.json')
+  if (!existsSync(p)) return emptyOverlayLock()
+  try {
+    return JSON.parse(readFileSync(p, 'utf8')) as ModeSkillLock
+  } catch {
+    throw new ModeSkillIntegrityError('unknown', 'overlay lock unreadable')
+  }
+}
+
 export function loadVerifiedSkill(id: ModeSkillId): LoadedSkill {
-  const cacheKey = `${resolveSkillsRoot()}::${id}`
+  const overlay = overlayRoot
+  const cacheKey = `${resolveSkillsRoot()}::${overlay ?? ''}::${id}`
   const hit = cache.get(cacheKey)
   if (hit) return hit
+  if (overlay) {
+    const oLock = readOverlayLock()
+    const oEntry = oLock.skills[id]
+    const oAbs = join(overlay, overlaySkillRelPath(id))
+    const oExists = existsSync(oAbs)
+    if (oExists || oEntry) {
+      if (!oExists || !oEntry) {
+        throw new ModeSkillIntegrityError(id, 'overlay present without matching lock')
+      }
+      const raw = readFileSync(oAbs, 'utf8')
+      const loaded = verifySkillRaw(id, raw, oLock)
+      cache.set(cacheKey, loaded)
+      return loaded
+    }
+  }
   const entry = lock().skills[id]
   if (!entry) throw new Error(`No lock entry for skill ${id}`)
   const abs = join(resolveSkillsRoot(), entry.path)
@@ -120,6 +159,50 @@ export function loadVerifiedSkill(id: ModeSkillId): LoadedSkill {
   const loaded = verifySkillRaw(id, raw, lock())
   cache.set(cacheKey, loaded)
   return loaded
+}
+
+/**
+ * Write a verified overlay skill + lock entry. Callers must already trust the bytes
+ * (signed Operator pack). Tamper after write fails closed on the next load.
+ */
+export function applyOverlaySkillFile(id: ModeSkillId, raw: string): LoadedSkill {
+  if (!overlayRoot) {
+    throw new ModeSkillIntegrityError(id, 'overlay root not set')
+  }
+  if (raw.includes('\r')) {
+    throw new ModeSkillIntegrityError(id, 'CR in file; skills must be LF-only')
+  }
+  const header = parseSkillHeader(raw)
+  if (header.id !== id) {
+    throw new ModeSkillIntegrityError(id, `header id ${header.id} != ${id}`)
+  }
+  if (!header.locked) {
+    throw new ModeSkillIntegrityError(id, 'header locked is not true')
+  }
+  if (!header.body.trim()) {
+    throw new ModeSkillIntegrityError(id, 'empty body')
+  }
+  const digest = sha256Utf8(raw)
+  const lock = readOverlayLock()
+  lock.skills[id] = { path: overlaySkillRelPath(id), version: header.version, sha256: digest }
+  mkdirSync(join(overlayRoot, id), { recursive: true })
+  writeFileSync(join(overlayRoot, overlaySkillRelPath(id)), raw, 'utf8')
+  writeFileSync(join(overlayRoot, 'lock.json'), `${JSON.stringify(lock, null, 2)}\n`, 'utf8')
+  cache.clear()
+  return verifySkillRaw(id, raw, lock)
+}
+
+export function skillLockHashForMode(mode: ConversationMode): string {
+  const shipped = lock()
+  const overlay = overlayRoot ? readOverlayLock() : emptyOverlayLock()
+  const parts: string[] = []
+  const pick = (id: string): string => {
+    const e = overlay.skills[id] ?? shipped.skills[id]
+    return e ? `${id}:${e.version}:${e.sha256}` : id
+  }
+  if (isBuiltinConversationMode(mode)) parts.push(pick(mode))
+  parts.push(pick(HUMANIZER_SKILL_ID))
+  return sha256Utf8(parts.join('|')).slice(0, 16)
 }
 
 /** Locked appendix after the visible mode prompt. Custom modes: humanizer only. */

@@ -39,6 +39,11 @@ describe('vocabulary-corrections helpers', () => {
 })
 
 describe('searchSettingsTabs — settings search must find real section titles, not just tab labels', () => {
+  it('finds the Operator section (Privacy tab) by its exact title', () => {
+    expect(searchSettingsTabs('Operator').map((m) => m.id)).toContain('privacy')
+    expect(searchSettingsTabs('Operator URL').map((m) => m.id)).toContain('privacy')
+  })
+
   it('finds the "Conversation memory" section (Privacy tab) by its exact title', () => {
     const matches = searchSettingsTabs('Conversation memory')
     expect(matches.map((m) => m.id)).toContain('privacy')

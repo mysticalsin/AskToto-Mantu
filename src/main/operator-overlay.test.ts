@@ -1,0 +1,64 @@
+import { mkdtempSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi } from 'vitest'
+import { signSkillPack, sha256Hex } from '../../operator/src/crypto'
+import { TEST_SKILL_PRIVATE_KEY_PEM } from '../../operator/src/test-fixtures'
+import {
+  applyOverlaySkillFile,
+  clearModeSkillsCacheForTests,
+  loadVerifiedSkill,
+  setModeSkillsOverlayRoot,
+  setModeSkillsRootForTests
+} from './mode-skills'
+import { applySignedSkillPack } from './operator-overlay'
+import { verifyOperatorSkillPack } from './operator-skill-verify'
+
+vi.mock('electron', () => ({
+  app: { getPath: () => tmpdir(), getVersion: () => '1.8.0-test' }
+}))
+
+afterEach(() => {
+  setModeSkillsOverlayRoot(null)
+  setModeSkillsRootForTests(null)
+  clearModeSkillsCacheForTests()
+})
+
+describe('Approve without Push vs signed overlay', () => {
+  it('leaves the shipped skill in place until a verified pack is applied', async () => {
+    const shipped = loadVerifiedSkill('interview')
+    expect(shipped.version).toMatch(/^\d+\.\d+\.\d+$/)
+
+    const overlay = mkdtempSync(join(tmpdir(), 'metis-overlay-'))
+    setModeSkillsOverlayRoot(overlay)
+    expect(loadVerifiedSkill('interview').sha256).toBe(shipped.sha256)
+
+    expect(applySignedSkillPack('not-a-token')).toBe(false)
+    expect(loadVerifiedSkill('interview').sha256).toBe(shipped.sha256)
+
+    const body = `---\nid: interview\nversion: 9.9.9\nlocked: true\n---\n\nStay the candidate. Humanizer stays.\n`
+    const digest = await sha256Hex(body)
+    const signed = await signSkillPack(
+      { skillId: 'interview', version: '9.9.9', sha256: digest, body },
+      TEST_SKILL_PRIVATE_KEY_PEM
+    )
+    expect(verifyOperatorSkillPack(signed)?.version).toBe('9.9.9')
+    expect(applySignedSkillPack(signed)).toBe(true)
+    const overlaid = loadVerifiedSkill('interview')
+    expect(overlaid.version).toBe('9.9.9')
+    expect(overlaid.body).toContain('Stay the candidate')
+    expect(readFileSync(join(overlay, 'interview', 'SKILL.md'), 'utf8')).toBe(body)
+  })
+
+  it('refuses a pack whose hash does not match the body', async () => {
+    const overlay = mkdtempSync(join(tmpdir(), 'metis-overlay-bad-'))
+    setModeSkillsOverlayRoot(overlay)
+    const body = `---\nid: interview\nversion: 9.9.8\nlocked: true\n---\n\nbody\n`
+    const signed = await signSkillPack(
+      { skillId: 'interview', version: '9.9.8', sha256: '0'.repeat(64), body },
+      TEST_SKILL_PRIVATE_KEY_PEM
+    )
+    expect(applySignedSkillPack(signed)).toBe(false)
+    expect(() => applyOverlaySkillFile('interview', body.replace('body', 'tamper'))).toThrow()
+  })
+})
