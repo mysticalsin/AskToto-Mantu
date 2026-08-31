@@ -17,7 +17,7 @@ This file is the contract for one slice. Implement only what it names. Hide and 
 The Bar control is a **being**, not a badge. At 52px it must read as a glass sphere with mass: a highlight that says "I am round," a core that breathes, interior motion that is not the shell. Tony looks at it and it looks back.
 
 Reference (feel only, not a clone):
-- **Fit Studio energy volume** ([amaris-fit-studio.pages.dev](https://amaris-fit-studio.pages.dev/)): the sphere behind the black MANTU robot (Spline scene). Live look: soft luminous purple-magenta **core**, indigo/violet **halo**, thin radial **star flare**, translucent light volume, feathered edge. Not a hard marble. Not a particle constellation. Not cyan.
+- **Fit Studio glow core** ([amaris-fit-studio.pages.dev](https://amaris-fit-studio.pages.dev/)): the volumetric purple-magenta energy **behind** the black MANTU robot. The large scene has jagged shards and a distant constellation. At 52px the Bar control is that **glow core only**: soft volumetric glass, magenta-violet, bloom, one specular. Do not port the shards. Do not port the large-scene particle web.
 - Fit Studio fallback recipe (feel, not a string clone): `--grad: linear-gradient(100deg, #e15cff 0%, #b266e9 46%, #8a00f8 100%)`, accent `#b266e9` / `#8a00f8`, specular `radial-gradient(38% 38% at 36% 32%, white)`. Do not embed the Spline runtime.
 
 Tony rejected the particle constellation (glitter ball / fibonacci cloud / electron chords) and then rejected the quieter Jarvis-blue particle version. Idle is **not** `#4CA8E8`. A science viz is a fail.
@@ -38,15 +38,14 @@ A flat CSS disc, a single radial fill, or a 2D glow quad is a fail. That is a st
 
 One WebGL canvas, 52×52 CSS, DPR capped at 2. Transparent around the sphere. No dark chip. No CSS radial body.
 
-1. **Energy volume** (ray-sphere, not a 2D disc). Camera on +Z. Equal X/Y scale. Radius fills ~0.90 of the box. Translucent — the center holds, the edge feathers. Deep `#8a00f8` halo, mid `#b266e9`, hot `#e15cff` core. Not a painted marble.
-2. **Living core.** Brightest mass is the center (magenta-pink). Breath is uniform scale of intensity, never of the box. Soft internal caustic bands live *inside* the volume as light, not as points.
-3. **Indigo halo.** Soft violet bloom just outside the hit, still inside the 52 box. Feathered, not a sticker ring.
+1. **Glow core** (ray-sphere, not a 2D disc). Camera on +Z. Equal X/Y scale. Radius fills ~0.90 of the box. Soft volumetric glass — the center holds, the edge blooms. Deep `#8a00f8` halo, mid `#b266e9`, hot `#e15cff` core. Not a painted marble. Not jagged shards.
+2. **Living core.** Brightest mass is the center (magenta-pink). Breath is uniform scale of intensity, never of the box. Soft internal light lives *inside* the volume, not as points.
+3. **Indigo bloom.** Soft violet haze just outside the hit, still inside the 52 box. Feathered. This is the glow, not a sticker ring.
 4. **Specular kiss.** One tight highlight, upper-left (`~36% 30%`, `light = normalize(-0.38, 0.52, 0.80)`). White, small. Not a looping sheen. Hover may lean the kiss a few degrees. Never squash the sphere to follow the pointer.
-5. **Thin star flare.** A handful of radial rays from the core (shader spikes, not a point cloud). Subtle at 52px. Calm.
-6. **No constellation.** No fibonacci point cloud. No electron chords. No glitter ball.
-7. **Rec-dot (listen only).** Existing red `#F0717A` (`.rec-dot`). 7×7, bottom-right of the 52 box, inside the circle. Dark ring so it reads on purple glass. Do **not** paint the sphere red.
+5. **No shards. No constellation.** No star-flare spikes. No fibonacci point cloud. No electron chords. No glitter ball. The large-scene rays stay on Fit Studio.
+6. **Rec-dot (listen only).** Existing red `#F0717A` (`.rec-dot`). 7×7, bottom-right of the 52 box, inside the circle. Dark ring so it reads on purple glass. Do **not** paint the sphere red.
 
-Reduced-motion: paint one still frame of layers 1–5 (and 7 if listening). The still frame must still look spherical: core, halo, kiss, flare. A flat disc at t=0 is a fail. Missing WebGL falls back to a 2D **shaded energy volume** (core + halo + kiss + a few rays, Fit Studio stops), never a single radial blob and never a point cloud.
+Reduced-motion: paint one still frame of layers 1–4 (and 6 if listening). The still frame must still look spherical: core, bloom, kiss. A flat disc at t=0 is a fail. Missing WebGL falls back to a 2D **shaded glow core** (volume + kiss + bloom, Fit Studio stops), never a single radial blob and never a point cloud.
 
 ### Motion
 
@@ -152,10 +151,10 @@ Priority: `connecting` > `factcheck` > `thinking` > `idle`.
 
 From Fit Studio's sphere (Spline + `.orb-lite` fallback). Take the **look**. Do not embed Spline. Do not port Fit Studio copy or chrome. Métis stays Métis.
 
-- Ray-sphere energy volume, not `length(vUv)` disc falloff
-- Luminous magenta core + indigo halo + one specular kiss + thin star flare
+- Ray-sphere glow core, not `length(vUv)` disc falloff
+- Luminous magenta-violet core + indigo bloom + one specular kiss
 - Equal X/Y scale so the volume stays a sphere
-- Zero particle constellation. Zero electron chords.
+- Zero shards. Zero particle constellation. Zero electron chords.
 
 No `unpkg` / CDN. No Three.js from the network. Bundle the renderer.
 
@@ -171,7 +170,7 @@ No `unpkg` / CDN. No Three.js from the network. Bundle the renderer.
   - Fact-check: calm blue accent, same box
   - Connecting: dimmer purple, quieter breath, same box
   - Hover: slight awareness (kiss leans — lean, not squash)
-- **Reduced-motion:** one still **spherical** frame (core + halo + kiss + flare). Not a disc. Must not throw if WebGL is missing.
+- **Reduced-motion:** one still **spherical** frame (core + bloom + kiss). Not a disc. Must not throw if WebGL is missing.
 - **60fps / no jank:** one cheap WebGL rAF while the circle is mounted (docked on the idle bar, or alone when minimized). Cached GL locations. No layout reads in the frame loop. Hide/Island: **zero** orb rAF (`shouldRunOrbRaf` is false unless Bar). Setup is one quad. Pause when `document.hidden`.
 - **Click / drag latency:** expand is synchronous. Hover lean skipped while dragging. No `getBoundingClientRect` on pointer-move.
 - **Spring** is for the **Bar** expanding (`--ease-spring: cubic-bezier(0.22, 1, 0.36, 1)`), not for turning the circle into a lozenge. This spring is Bar-circle only. Do not reuse or restyle Hide/Island overlay-spring, peek hover, or park timing.
