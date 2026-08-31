@@ -23,7 +23,7 @@ Every hat must **PASS**. One **REJECT** fails the slice. This is the gate for th
 
 Fluid 60fps. Jakub thinking-orb, not a spinning demo blob.
 
-- Idle is `breathing` (calm ring). Listening is `listening` (waveform). Thinking is `working`. Reduced-motion: package static frame.
+- Idle is `solving` (no caption). Listening is `listening` (waveform). Thinking is `working`. Reduced-motion: package static frame.
 - Spring expand/collapse (`--ease-spring`). No snap.
 - No custom WebGL loop. No layout reads (`clientWidth`, `getBoundingClientRect`) in a frame loop we own.
 
@@ -55,11 +55,11 @@ Apple-grade. Quiet luxury. Light dots on dark glass. Fixed circle.
 
 - Same width and height (`BAR_PILL_SIZE_PX` 64). Aspect 1 on every mood. Bounding box constant.
 - Never a stadium, potato, or squashed capsule.
-- Idle is `breathing`, theme `dark`. Not Fit Studio `#b266e9`. Not Jarvis `#4CA8E8`.
+- Idle is `solving`, theme `dark`. Not Fit Studio `#b266e9`. Not Jarvis `#4CA8E8`. No painted "Solving…" word.
 - No constellation we invented. No electron chords. No glitter ball. No magenta core.
 - No rec-dot on this circle. Listen is the `listening` state.
 - No glass chip of mic buttons. No lozenge fill.
-- Transparent circular host. The Bar is the Métis glass. No scrollbar. No CSS radial Fit Studio body. No filled disc behind the breathing ring.
+- Transparent circular host. The Bar is the Métis glass. No scrollbar. No CSS radial Fit Studio body. No playground play button or copy.
 
 **REJECT if** rest is a filled lozenge, a flat radial disc, an opaque oval, a WebGL marble, or any flatten of the circle.
 

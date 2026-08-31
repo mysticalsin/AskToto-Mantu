@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { overlayAllowsMinimize } from '@shared/overlay-chrome'
+import { orbHostPaintsText } from '../lib/bar-pill-orb'
 import { Bar, type BarProps } from './Bar'
 
 function props(overrides: Partial<BarProps> = {}): BarProps {
@@ -41,6 +42,14 @@ describe('Bar minimize-to-circle is layout-gated', () => {
     expect(bar).toContain('Minimize to the orb')
     expect(hide).not.toContain('Minimize to the orb')
     expect(island).not.toContain('Minimize to the orb')
+  })
+
+  it('docks a solving thinking-orb at rest with no painted caption', () => {
+    const html = renderToStaticMarkup(<Bar {...props({ canMinimize: overlayAllowsMinimize('bar') })} />)
+    expect(html).toContain('data-bar-pill-orb')
+    expect(html).toContain('data-orb-state="solving"')
+    expect(orbHostPaintsText(html)).toBe(false)
+    expect(html).not.toContain('Solving…')
   })
 
   it('uses the listening thinking-orb on the docked 64 circle, not a second red disc', () => {
