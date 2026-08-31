@@ -73,6 +73,7 @@ describe('Update Intelligence pass — local first, API once', () => {
       }
     })
     createStreamMock.mockReset()
+    createStreamMock.mockImplementation(respondJson())
     localBaseReadyMock.mockReset()
     localBaseReadyMock.mockReturnValue(true)
     localRuntimeStateMock.mockReturnValue('stopped')
@@ -131,6 +132,7 @@ describe('Update Intelligence pass — local first, API once', () => {
 
   it('fails loud when Local is missing and no API is configured', () => {
     localBaseReadyMock.mockReturnValue(false)
+    writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ allowedProviders: ['anthropic'] }), 'utf8')
     writeFileSync(join(meetingsFolder, 'none.md'), '---\ndate: 2026-08-04\n---\nNo provider.', 'utf8')
     expect(startIntelligencePass()).toEqual({ queued: 0, error: INTELLIGENCE_PASS_NO_PROVIDER })
     expect(createStreamMock).not.toHaveBeenCalled()
@@ -169,8 +171,8 @@ describe('Update Intelligence pass — never auto, never auto-send', () => {
     expect(ingest).not.toMatch(/startIntelligencePass/)
     expect(consolidate).not.toMatch(/startIntelligencePass|intelligence-pass/)
     expect(index).toMatch(/IPC\.brainIntelligencePass/)
-    expect(index).not.toMatch(/reconcileMeetingsInBackground[\s\S]{0,200}startIntelligencePass/)
-    expect(index).not.toMatch(/runConsolidationIfDue[\s\S]{0,200}startIntelligencePass/)
+    expect([...index.matchAll(/startIntelligencePass\(/g)]).toHaveLength(1)
+    expect(index).toMatch(/return startIntelligencePass\(\)/)
   })
 
   it('never auto-sends mail or MCP from this pass', () => {

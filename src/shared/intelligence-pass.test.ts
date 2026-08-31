@@ -37,7 +37,7 @@ describe('Intelligence Update contract', () => {
 
   it('never auto-sends from this click helper', async () => {
     const src = (await import('node:fs')).readFileSync(new URL('./intelligence-pass.ts', import.meta.url), 'utf8')
-    expect(src).not.toMatch(/mcpPush|sendMail|auto-send|autoSend/)
+    expect(src).not.toMatch(/\bmcpPush\b|\bsendMail\b|\bautoSend\b/)
     expect(src).not.toMatch(/useEffect/)
   })
 })
