@@ -23,7 +23,7 @@ Every hat must **PASS**. One **REJECT** fails the slice. This is the gate for th
 
 Fluid 60fps. Sentient, not a spinning demo blob.
 
-- Idle breath + per-particle drift (not a rigid mesh).
+- Idle breath of the glass core (not a rigid mesh, not a particle cloud).
 - Listening: denser / pulse + red rec-dot on the glass. Hover: lean. Reduced-motion: one still **spherical** frame (glass + core + kiss), not a disc.
 - Spring expand/collapse (`--ease-spring`). No snap.
 - rAF does **not** read layout (`clientWidth`, `getBoundingClientRect`) or look up GL locations.
@@ -44,23 +44,23 @@ Insanely low latency on click and drag.
 
 - Orb rAF runs only while a Bar circle is mounted and should animate (docked idle or minimized rest).
 - Hide/Island: **zero** orb rAF (`shouldRunOrbRaf` is false).
-- Setup is O(n). No O(n²) neighbor scan on 2000 points.
+- Setup is one quad. No particle buffers. No O(n²) neighbor scan.
 - `document.hidden` pauses the loop. `destroy` cancels rAF.
-- No unpkg / CDN Three.js.
+- No unpkg / CDN Three.js. No Spline runtime.
 
-**REJECT if** Hide or Island can start the orb loop, or first minimize hitches on an n² scan.
+**REJECT if** Hide or Island can start the orb loop, or first minimize hitches on a particle setup.
 
 ## Visual
 
 Apple-grade. Quiet luxury. Transparent edges. Fixed circle.
 
 - Same width and height (`BAR_PILL_SIZE_PX`). Aspect 1 on every mood. Bounding box constant.
-- Never a stadium, potato, or squashed capsule. Shader uses the same NDC scale for X and Y.
-- Idle is Jarvis blue (`#4CA8E8`) and must **read** that hex, not murky teal. Thinking is `#6EC4FF`. Fact-check stays this blue family. Connecting is dimmer blue, never purple or indigo `#2A0A4A`. Color tints the volume; the box never changes.
-- Constellation is quiet (56 points, two chord families). Idle electron count is 0. Thinking may have at most 3 traveling dots.
-- Glass volume: ray-sphere body, fresnel rim, one specular kiss, living core, Jarvis constellation. Not a 2D radial disc.
+- Never a stadium, potato, or squashed capsule. Shader uses the same scale for X and Y.
+- Idle is Fit Studio purple-magenta glass (`#b266e9` / `#e15cff` / `#8a00f8`), not Jarvis `#4CA8E8`. Thinking is hotter `#e15cff`. Fact-check may use a calm blue accent `#5AB8F0`. Connecting is dimmer purple `#8a00f8`, never indigo `#2A0A4A`. Color tints the volume; the box never changes.
+- No constellation. No electron chords. No glitter ball.
+- Glass volume: ray-sphere body, fresnel rim, one specular kiss, living core, soft bloom. Not a 2D radial disc.
 - Rec-dot stays red and readable on the sphere while listening. Do not paint the sphere red.
-- Additive blending, connection lines, electrons. No glass chip of mic buttons. No dark fill.
+- No glass chip of mic buttons. No dark fill.
 - Transparent around the circle. No scrollbar. No CSS radial body.
 
 **REJECT if** rest is a filled chip, a flat radial disc, an opaque oval, or any flatten of the circle.

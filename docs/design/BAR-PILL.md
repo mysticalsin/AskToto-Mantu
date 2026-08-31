@@ -17,8 +17,10 @@ This file is the contract for one slice. Implement only what it names. Hide and 
 The Bar control is a **being**, not a badge. At 52px it must read as a glass sphere with mass: a highlight that says "I am round," a core that breathes, interior motion that is not the shell. Tony looks at it and it looks back.
 
 Reference (feel only, not a clone):
-- **Jarvis 3D sphere** (`mysticalsin/tonys-jarvis` `frontend/src/orb.ts`): perspective volume, quiet constellation, faint idle lines, electrons only while thinking (a handful). Idle color is Jarvis `#4CA8E8`. Port the sentience and that blue. Do not port voice, calendar, full-screen chrome, or product copy. Tony overrode Mantu purple on this control.
-- **Fit Studio** ([amaris-fit-studio.pages.dev](https://amaris-fit-studio.pages.dev/)): premium small rest. Use only if WebGL is missing. The shipped Bar circle prefers the Jarvis **volume**.
+- **Fit Studio energy glass** ([amaris-fit-studio.pages.dev](https://amaris-fit-studio.pages.dev/)): the sphere behind the robot (Spline scene, CSS fallback `.orb-lite`). Smooth luminous purple-magenta volume. Soft inner glow. One specular kiss at ~36% 30%. Soft outer bloom. Calm. That is the shipped look.
+- Fit Studio fallback recipe (feel, not a string clone): `--grad: linear-gradient(100deg, #e15cff 0%, #b266e9 46%, #8a00f8 100%)`, accent `#b266e9` / `#8a00f8`, specular `radial-gradient(38% 38% at 36% 32%, white)`. Do not embed the Spline runtime.
+
+Tony rejected the particle constellation (glitter ball / fibonacci cloud / electron chords) and then rejected the quieter Jarvis-blue particle version. Idle is **not** `#4CA8E8`. A science viz is a fail.
 
 A flat CSS disc, a single radial fill, or a 2D glow quad is a fail. That is a status blob. This slice replaces that blob on the **existing** Bar orb (`bar-pill-orb` / `JarvisOrbButton`). Do not invent a second orb.
 
@@ -36,44 +38,46 @@ A flat CSS disc, a single radial fill, or a 2D glow quad is a fail. That is a st
 
 One WebGL canvas, 52×52 CSS, DPR capped at 2. Transparent around the sphere. No dark chip. No CSS radial body.
 
-1. **Glass body** (ray-sphere, not a 2D disc). Camera on +Z. Equal X/Y scale. Radius fills ~0.90 of the box. Lambert wrap in the mood color. Far side stays in the same blue (`mood * 0.82`), never crushed to teal (`mood * 0.16`). Body alpha stays high (~0.94) so idle **reads** `#4CA8E8` on dark chrome, not a murky navy-through-glass teal.
-2. **Living core.** Brighter mass near the center. Breath is uniform scale of intensity, never of the box. Caustic bands (two slow sin fields) live *inside* the volume.
-3. **Fresnel rim.** Thin bright edge. Reads as glass, not a sticker.
-4. **Specular kiss.** One tight highlight, upper-left (`light = normalize(-0.45, 0.72, 0.85)`). White, small. Not a looping sheen. Hover may lean the kiss a few degrees. Never squash the sphere to follow the pointer.
-5. **Quiet constellation.** `JARVIS_ORB_POINTS` is **56**, not 2000 (a sparse shell, not a snow globe). Two faint chord families (`[1, 19]`). Additive, O(n) chords. Same NDC scale on X and Y (`ORB_NDC_SCALE` 0.86). Sits on the glass, not a glitter fill inside. Idle lines are faint (`targetLineAmount` class ~0.15). Electrons **off at idle**. Thinking may draw at most 3 traveling dots.
-6. **Rec-dot (listen only).** Existing red `#F0717A` (`.rec-dot`). 7×7, bottom-right of the 52 box, inside the circle. Dark ring so it reads on blue glass. Do **not** paint the sphere red.
+1. **Glass body** (ray-sphere, not a 2D disc). Camera on +Z. Equal X/Y scale. Radius fills ~0.90 of the box. Lambert wrap across the Fit Studio stops: deep `#8a00f8` on the far side, mid `#b266e9`, hot `#e15cff` on the lit face. Body alpha stays high (~0.92) so idle **reads** purple-magenta glass, not a navy disc.
+2. **Living core.** Brighter mass near the center. Breath is uniform scale of intensity, never of the box. Soft internal caustic bands (two slow sin fields) live *inside* the volume as glass, not as points.
+3. **Fresnel rim.** Thin bright lavender-magenta edge. Reads as translucent glass, not a sticker.
+4. **Specular kiss.** One tight highlight, upper-left, Fit Studio rest (`~36% 30%`, `light = normalize(-0.42, 0.58, 0.82)`). White, small. Not a looping sheen. Hover may lean the kiss a few degrees. Never squash the sphere to follow the pointer.
+5. **Soft outer bloom.** A faint purple haze just outside the hit, still inside the 52 box. Grounds the volume. Not a particle shell.
+6. **No constellation.** No fibonacci point cloud. No electron chords. No glitter ball. If any dust exists it must be nearly invisible ambient, not a craft you can count. Prefer zero particles.
+7. **Rec-dot (listen only).** Existing red `#F0717A` (`.rec-dot`). 7×7, bottom-right of the 52 box, inside the circle. Dark ring so it reads on purple glass. Do **not** paint the sphere red.
 
-Reduced-motion: paint one still frame of layers 1–5 (and 6 if listening). The still frame must still look spherical: core, rim, kiss, constellation. A flat disc at t=0 is a fail. Missing WebGL falls back to a 2D **shaded sphere** (volume + kiss + rim + a few points), never a single radial blob.
+Reduced-motion: paint one still frame of layers 1–5 (and 7 if listening). The still frame must still look spherical: core, rim, kiss, bloom. A flat disc at t=0 is a fail. Missing WebGL falls back to a 2D **shaded sphere** (volume + kiss + rim, Fit Studio stops), never a single radial blob and never a point cloud.
 
 ### Motion
 
 | State | Volume | Interior | Color |
 | --- | --- | --- | --- |
-| **idle** | Slow breath (~1.3 Hz, amp 0.018) | Quiet shell, faint lines, **0 electrons** | `#4CA8E8` |
-| **listen** | Slightly denser pulse | Same quiet shell | Idle blue. Rec-dot red on the glass. |
-| **think** | Faster breath (~2.2 Hz) | A few traveling dots (≤3) | `#6EC4FF` |
-| **fact-check** | Steady | Same blue family | `#5AB8F0` / `#4CA8E8` |
-| **connecting** | Quiet | Dimmer lines, 0 electrons | Dimmer blue (not `#2A0A4A`, not purple) |
+| **idle** | Slow breath (~1.3 Hz, amp 0.018) | Soft core, no particles | Fit Studio `#b266e9` (hot `#e15cff`, deep `#8a00f8`) |
+| **listen** | Slightly denser pulse | Same glass | Idle purple glass. Rec-dot red on the glass. |
+| **think** | Faster breath (~2.2 Hz) | Hotter core, still glass | `#e15cff` family |
+| **fact-check** | Steady | Same glass | Calm blue accent `#5AB8F0` (fact-check only) |
+| **connecting** | Quiet | Dimmer core | Dimmer purple `#8a00f8` (not indigo `#2A0A4A`) |
 
 `orbMood: 'idle' | 'thinking' | 'factcheck' | 'connecting'`. Listen is `listening: true` on the same handle (motion + rec-dot), not a fifth fill. Priority for fill: `connecting` > `factcheck` > `thinking` > `idle`.
 
-Hover: lean (particles + kiss), not squash. Drag: skip lean. `document.hidden`: pause rAF. Hide/Island: zero orb rAF.
+Hover: lean (kiss + volume), not squash. Drag: skip lean. `document.hidden`: pause rAF. Hide/Island: zero orb rAF.
 
 ### Do
 
-- Idle on this sphere is Jarvis `#4CA8E8`. Not Mantu `#7F00DA`. Glass must read that hex, not murky teal.
+- Idle on this sphere is Fit Studio purple-magenta glass (`#b266e9` / `#e15cff` / `#8a00f8`). Not Jarvis `#4CA8E8`. Product chrome elsewhere may still use `#7F00DA`; idle on this control is the Fit Studio accent, not that fill hex.
 - Same sphere docked on the idle Bar and alone when minimized.
 - Windows: same sphere, top-center Bar. No notch, no Mac-only look.
 - Rec-dot stays red and readable.
-- Compositor-cheap: cached GL locations, no layout reads in the frame loop, setup O(n).
+- Compositor-cheap: cached GL locations, no layout reads in the frame loop, setup is constant-time (one quad).
 
 ### Do not
 
 - Flatten on hover or minimize.
-- CSS `radial-gradient` as the body (that is the old disc).
-- Purple-gradient slop, rainbow foil, emoji, a second orb.
+- CSS `radial-gradient` as the body (that is the old disc). The WebGL / 2D fallback may shade a sphere; the CSS box stays transparent.
+- Particle constellation, fibonacci cloud, electron chords, glitter ball.
+- Rainbow foil, emoji, a second orb.
 - Paint the sphere rec-dot red.
-- Clone Jarvis copy, chrome, voice, or Three.js from a CDN. The idle **color** is the Git blue.
+- Embed Spline. Clone Fit Studio copy or chrome. Port Jarvis voice, calendar, or Three.js from a CDN.
 - Touch Island/Hide hit geometry (`src/main/island/geometry.ts` hit rects, `hoverRestWidth`, Teams-mute tests) except to keep them green.
 - Onboarding, Local LLM, Brain MCP, installers.
 
@@ -118,7 +122,7 @@ A **fixed sphere**. Same width and height, always. See Materials above.
 - Never a potato. Never a stadium. Never a squashed capsule. Never flatten.
 - Never change size. Not on idle, hover, listen, drag, or click-to-expand (the **Bar** expands; the sphere itself does not squash).
 - It does not wander. Position is the existing Bar-minimize rest.
-- Inside that fixed sphere, the glass, core, and constellation may move.
+- Inside that fixed sphere, the glass and core may breathe. The box does not.
 
 CSS: square box, `border-radius: 50%`, `background: transparent`. No dark fill. No scrollbar. No radial body.
 
@@ -128,10 +132,10 @@ Tight palette. Color tints the volume. No size change with state.
 
 | Mood | Hex family | When |
 | --- | --- | --- |
-| `idle` | Jarvis `#4CA8E8` | Standard. Rest. Default. Tony locked this from `orb.ts`. |
-| `factcheck` | Blue family `#5AB8F0` / `#4CA8E8` | Fact-check / cited answer. Do not snap to purple. |
-| `connecting` | Dimmer blue | Connecting handshake. Still glass. Not indigo, not purple. |
-| `thinking` | `#6EC4FF` | Thinking / ask in progress. A few electrons only. |
+| `idle` | Fit Studio `#b266e9` / `#e15cff` / `#8a00f8` | Standard. Rest. Default. Tony locked this from the Fit Studio sphere. |
+| `factcheck` | Calm blue `#5AB8F0` | Fact-check / cited answer. The only mood that may leave the purple family. |
+| `connecting` | Dimmer purple `#8a00f8` | Connecting handshake. Still glass. Not indigo `#2A0A4A`. |
+| `thinking` | Hot magenta `#e15cff` | Thinking / ask in progress. Hotter core, no traveling dots. |
 
 Listen is not a fill. Rec-dot stays `#F0717A` on the glass.
 
@@ -144,15 +148,14 @@ Wire from existing Bar signals (ask streaming, fact-check kind, listen chrome). 
 
 Priority: `connecting` > `factcheck` > `thinking` > `idle`.
 
-## Particle craft (look only)
+## Glass craft (look only)
 
-From Jarvis `frontend/src/orb.ts`. Take the **look**. Do not port Jarvis voice, calendar, Docker, or the full-screen overlay. Métis stays Métis.
+From Fit Studio's sphere (Spline + `.orb-lite` fallback). Take the **look**. Do not embed Spline. Do not port Fit Studio copy or chrome. Métis stays Métis.
 
-- Sparse points on a **unit sphere** (far below 2000; no X-stretch, no Y-squash)
-- Additive blending, faint idle lines, electrons only while thinking (≤3)
-- Idle breath + slow drift (uniform scale / lean — never squash)
-- Perspective: same X/Y scale, `1 / (1 - z * k)` so the cloud has depth
-- Glass body is a ray-sphere, not `length(vUv)` disc falloff
+- Ray-sphere glass body, not `length(vUv)` disc falloff
+- Soft volumetric core + one specular kiss + fresnel rim + faint bloom
+- Equal X/Y scale so the volume stays a sphere
+- Zero particle constellation. Zero electron chords.
 
 No `unpkg` / CDN. No Three.js from the network. Bundle the renderer.
 
@@ -162,14 +165,14 @@ No `unpkg` / CDN. No Three.js from the network. Bundle the renderer.
 - **Click** (not drag) expands to the full bar. Existing minimize → circle and expand → bar stay the API; this slice restyles the rest.
 - `useWindowDrag` already swallows the trailing click of a real drag. Keep that. A click that never crossed the dead-zone expands. A drag does not.
 - **Interior motion (sentient):**
-  - Idle: calm blue glass, quiet constellation, 0 electrons
-  - Listen: idle blue, rec-dot red on the glass
-  - Thinking: brighter blue `#6EC4FF`, at most 3 traveling dots
-  - Fact-check: same blue family, same box
-  - Connecting: dimmer blue, quieter breath, same box
-  - Hover: slight awareness (particles and kiss lean — lean, not squash)
-- **Reduced-motion:** one still **spherical** frame (glass + core + kiss + constellation). Not a disc. Must not throw if WebGL is missing.
-- **60fps / no jank:** one cheap WebGL rAF while the circle is mounted (docked on the idle bar, or alone when minimized). Cached GL locations. No layout reads in the frame loop. Hide/Island: **zero** orb rAF (`shouldRunOrbRaf` is false unless Bar). Setup is O(n), never an n² neighbor scan. Pause when `document.hidden`.
+  - Idle: calm purple-magenta glass, breathing core, no particles
+  - Listen: idle purple glass, rec-dot red on the glass
+  - Thinking: hotter magenta `#e15cff`, faster breath, still a volume
+  - Fact-check: calm blue accent, same box
+  - Connecting: dimmer purple, quieter breath, same box
+  - Hover: slight awareness (kiss leans — lean, not squash)
+- **Reduced-motion:** one still **spherical** frame (glass + core + kiss + bloom). Not a disc. Must not throw if WebGL is missing.
+- **60fps / no jank:** one cheap WebGL rAF while the circle is mounted (docked on the idle bar, or alone when minimized). Cached GL locations. No layout reads in the frame loop. Hide/Island: **zero** orb rAF (`shouldRunOrbRaf` is false unless Bar). Setup is one quad. Pause when `document.hidden`.
 - **Click / drag latency:** expand is synchronous. Hover lean skipped while dragging. No `getBoundingClientRect` on pointer-move.
 - **Spring** is for the **Bar** expanding (`--ease-spring: cubic-bezier(0.22, 1, 0.36, 1)`), not for turning the circle into a lozenge. This spring is Bar-circle only. Do not reuse or restyle Hide/Island overlay-spring, peek hover, or park timing.
 - Hide layout and Island layout must not grow a minimize control or a second disk. Hover hit is the camera island square only (DESIGN.md). Hide 8×2 paint and Island 132×15 paint stay.
@@ -200,4 +203,4 @@ No `unpkg` / CDN. No Three.js from the network. Bundle the renderer.
 - Shader is a ray-sphere (not `length(vUv)` disc falloff). CSS body is transparent (no radial fill).
 - Rec-dot is red `#F0717A` on the sphere while listening; the sphere fill is never rec-dot red.
 - Circle stays 52×52 on every mood including listen.
-- Idle fill is `#4CA8E8`. Particle count is far below 2000. Idle electron count is 0.
+- Idle fill is Fit Studio purple-family glass (`#b266e9`), not Jarvis `#4CA8E8`, not a particle-cloud contract.
