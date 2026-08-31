@@ -29,6 +29,7 @@ Default is **Best**. Fast is a Settings power option, not a silent floor.
 
 - Live captions must not wait on a 6 s monologue cap. Stream a first partial once enough speech is in the buffer; replace it when the turn ends.
 - Time-to-first-caption (TTFC) is speech-onset → first non-empty caption. Best quality must not feel stuck. Measure the scheduling budget in tests / `scripts/bench-asr-ttfc.mjs` (decode time is hardware-bound and is not faked).
+- Prewarm the quality the user will start with (default Best). Do not prewarm Fast and then swap to Best on first Listen.
 
 ## Echo and empty stalls
 

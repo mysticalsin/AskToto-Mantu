@@ -15,6 +15,10 @@ describe('ASR quality ship — Best default, Fast is a power option', () => {
     expect(read('src/renderer/src/App.tsx')).toMatch(/settings\?\.asrQuality \?\? 'best'/)
     expect(read('src/renderer/src/lib/listen.ts')).toMatch(/useRef<'best' \| 'fast'>\('best'\)/)
     expect(read('src/renderer/src/lib/listen.ts')).toMatch(/quality: 'best' \| 'fast' = 'best'/)
+    expect(read('src/renderer/src/lib/listen.ts')).toMatch(
+      /const warmQuality = asrQuality === 'fast' \? 'fast' : 'best'/
+    )
+    expect(read('src/renderer/src/App.tsx')).toMatch(/settings\?\.asrQuality \?\? 'best'/)
   })
 
   it('Settings copy names Fast as a power option and never presents silent Fast as Best', () => {
