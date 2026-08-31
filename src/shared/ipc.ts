@@ -55,6 +55,7 @@ export const IPC = {
   graphifyOpenGraph: 'graphify:openGraph',
   brainStatus: 'brain:status',
   brainBackfill: 'brain:backfill',
+  brainIntelligencePass: 'brain:intelligencePass',
   brainRead: 'brain:read',
   brainEntityNames: 'brain:entityNames',
   restoreEmbeddedCloudflareKey: 'settings:restoreEmbeddedCloudflareKey',

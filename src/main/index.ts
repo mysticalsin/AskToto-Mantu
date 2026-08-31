@@ -233,6 +233,7 @@ import {
   settleCommitment,
   startRebuild
 } from './brain/ingest'
+import { startIntelligencePass } from './brain/intelligence-pass'
 import { runConsolidationIfDue, scheduleConsolidation } from './brain/consolidate'
 import {
   renameEntity,
@@ -656,10 +657,11 @@ function denyIfLimited(bucket: SecurityLimitBucket): boolean {
   return true
 }
 
-/** brain:status/brain:read (pure reads) and brain:backfill/brain:field-decision (narrow, guarded writes —
- *  a backfill request, and promoting one already-`extracted` field the human reviewed) are ALSO callable
- *  from the Mantu Intelligence window's top frame; that preload exposes nothing beyond these four (see
- *  src/preload/intelligence.ts). Every other privileged write stays main-window-only via assertMainWindow. */
+/** brain:status/brain:read (pure reads) and brain:backfill/brain:intelligencePass/brain:field-decision
+ *  (narrow, guarded writes — a backfill request, the Update Intelligence pass, and promoting one
+ *  already-`extracted` field the human reviewed) are ALSO callable from the Mantu Intelligence window's
+ *  top frame; that preload exposes nothing beyond these (see src/preload/intelligence.ts). Every other
+ *  privileged write stays main-window-only via assertMainWindow. */
 function assertBrainReader(event: Electron.IpcMainInvokeEvent): void {
   const frame = event.senderFrame
   if (isIntelligenceSender(event.sender)) {
@@ -5534,6 +5536,12 @@ function registerIpc(): void {
     const r = requestBackfill()
     auditLog('brain.backfill.start', { queued: r.queued })
     return r
+  })
+  // Update Intelligence: explicit click only. Local first, configured API once. Never auto-send.
+  ipcMain.handle(IPC.brainIntelligencePass, (e) => {
+    assertBrainReader(e)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    return startIntelligencePass()
   })
   // Full rebuild: wipe the DERIVED store (entities/graph/extractions — never the source transcripts)
   // and re-extract everything with the current schema/prompt. This is the upgrade path for legacy
