@@ -4549,7 +4549,7 @@ function UpdatesSection(): JSX.Element {
         )}
         {result && !result.ok && <span className="text-[12px] text-[var(--color-danger)]">{result.error}</span>}
         <TextButton onClick={check} disabled={checking}>
-          {checking ? 'Checking…' : 'Check for updates'}
+          {checking ? <AgentStatus kind="searching" size="inline" caption /> : 'Check for updates'}
         </TextButton>
       </div>
     </Section>
@@ -6380,7 +6380,7 @@ function DiagnosticsSection(): JSX.Element {
     )
   }
   if (!m) {
-    return <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>
+    return <AgentStatus kind="searching" size="inline" caption />
   }
   if (m.answers === 0 && m.acceptance.up + m.acceptance.down === 0) {
     return (
@@ -6643,7 +6643,9 @@ function IntelligenceTab({
       >
         <div className="flex flex-col gap-1.5">
           {meetings === null ? (
-            <div className="cl-card px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>
+            <div className="cl-card px-3 py-2.5">
+              <AgentStatus kind="searching" size="inline" caption />
+            </div>
           ) : recent.length === 0 ? (
             <div className="cl-card px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)]">
               No meetings saved yet. They appear here as soon as one ends.
@@ -6812,7 +6814,7 @@ function GraphSection({
               className={status?.installed ? 'text-[color:var(--cl-primary)]' : 'text-[color:var(--cl-muted-foreground)]'}
             />
             {!status ? (
-              'Checking…'
+              <AgentStatus kind="loading" size="inline" caption />
             ) : !status.installed ? (
               <span className="text-[color:var(--cl-muted-foreground)]">
                 The optional knowledge-graph tool is not installed. Install graphifyy explicitly, then reopen Settings.

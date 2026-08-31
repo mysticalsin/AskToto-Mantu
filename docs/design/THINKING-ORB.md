@@ -26,9 +26,11 @@ Default composition, always in this order:
 1. A quiet caption in Métis UI type (`Geist` / `.font-ui`).
 2. The orb.
 
-Hero (full window, recap, ask rail, onboarding wait, empty-panel wait): caption + size **64**, generous padding, centered, no purple wash, no emoji. Apple-grade quiet luxury.
+Hero (full window, recap, ask rail, onboarding wait, empty-panel wait): caption + size **64**, generous padding, centered, no purple wash, no emoji. Apple-grade quiet luxury. The word is Geist regular (not bold), slight tracking, ink-2. The canvas sits on its own compositor layer (`isolation` / `contain`) so the 60fps orb does not hitch the glass.
 
-Inline (island, buttons, list rows, chips, determinate progress): size **20**. Caption optional when space is tight. Still no old spinner.
+Inline (island, buttons, list rows, chips, determinate progress): size **20**. Named status rows still show the word (Thinking, Listening, Searching, …) then the sphere. Caption may drop only on a tight button or icon slot. Still no old spinner.
+
+Onboarding **setup rows** (the checking / engine-download waits inside the setup scan): caption + 20px orb. Do not restyle the Act, portal, music, or hero video.
 
 Sizes 64 and 20 are separate designs in the package, not a scale factor. Do not pass other sizes.
 
