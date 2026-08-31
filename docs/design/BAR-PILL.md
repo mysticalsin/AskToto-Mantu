@@ -14,11 +14,11 @@ This file is the contract for one slice. Implement only what it names. Hide and 
 
 ## Consultant (feel)
 
-The Bar control is a **being** Tony can drag while using apps, not a badge and not a WebGL marble. At rest it is Jakub Antalik's `breathing` orb: a calm dotted ring that is always on. It lives on the Métis glass Bar (Settings overlay Bar) and as the minimized circle. Same circle both places.
+The Bar control is a **being** Tony can drag while using apps, not a badge and not a WebGL marble. At rest it is Jakub Antalik's `solving` orb: the playground Solving animation, always on, with no caption. It lives on the Métis glass Bar (Settings overlay Bar) and as the minimized circle. Same circle both places.
 
 Reference (the real package, not a clone):
 - **thinking-orbs** ([orbs.jakubantalik.com](https://orbs.jakubantalik.com/), `thinking-orbs@0.3.1` MIT). Dotted 2D canvas. Monochrome. Nine states. Two tuned sizes (`20` inline, `64` avatar). No WebGL. No `ctx.filter`.
-- Idle on this control is `breathing` (calm face-on ring). Listen is `listening` (waveform in the rings). Think is `working` (tilted orbits). Connecting is `connecting`. Fact-check is `searching` (scan meridian; it reads at 64).
+- Idle on this control is `solving` (playground Solving at 64, no "Solving…" word). Listen is `listening` (waveform in the rings). Think is `working` (tilted orbits). Connecting is `connecting`. Fact-check is `searching` (scan meridian; it reads at 64).
 - Theme is pinned `dark`: light dots on dark glass. The glass around the orb stays Métis chrome. The orb itself stays a circle.
 
 Tony rejected the Fit Studio glow-core WebGL marble (magenta volume, bloom, specular kiss) and the particle constellation (glitter ball / fibonacci cloud / electron chords). Idle is **not** `#4CA8E8` and **not** Fit Studio `#b266e9`. A science viz is a fail. A magenta core on this control is a fail.
@@ -38,7 +38,7 @@ A flat CSS disc, a single radial fill, or a 2D glow quad is a fail. That is a st
 
 ### Materials
 
-The real `ThinkingOrb` from `thinking-orbs`. One 2D canvas, 64×64 CSS, theme `dark`, speed `1`. Transparent around the dots so idle reads as the playground hollow ring, not a filled disc.
+The real `ThinkingOrb` from `thinking-orbs`. One 2D canvas, 64×64 CSS, theme `dark`, speed `1`. Transparent around the dots. No painted caption, no playground play button, no copy under the canvas.
 
 1. **Package orb.** Dotted 2D canvas. Monochrome light ink. State from the map below. Do not wrap it in WebGL. Do not add a magenta core, bloom, or specular kiss. Do not clip the canvas with `border-radius`.
 2. **Circular host.** Square box, `border-radius: 50%`, `background: transparent`. The Bar is the Métis glass. Never a lozenge. Dragging does not squash the orb.
@@ -53,7 +53,7 @@ Product mood stays `orbMood: 'idle' | 'thinking' | 'factcheck' | 'connecting'` p
 
 | Product | Package state | Feel |
 | --- | --- | --- |
-| **idle** (resting pill you drag) | `breathing` | Calm ring, always-on, movable chrome |
+| **idle** (resting pill you drag) | `solving` | Playground Solving, no text, movable chrome |
 | **listen** / capturing | `listening` | Waveform in the rings |
 | **thinking** / agent busy | `working` | Tilted orbits |
 | **connecting** | `connecting` | Constellation wiring |
@@ -67,16 +67,16 @@ resolveBarOrbState({ mood, listening })
   listening  → listening
   factcheck  → searching
   thinking   → working
-  idle       → breathing
+  idle       → solving
 ```
 
-If connecting is not on the Bar yet, keep the map and default `idle` → `breathing`. Do not build a fake product.
+If connecting is not on the Bar yet, keep the map and default `idle` → `solving`. Do not build a fake product.
 
 Hover: no squash, no lean that warps the circle. Drag: same circle, existing `useWindowDrag`. `document.hidden`: package pauses. Hide/Island: do not mount the orb (`shouldRunOrbRaf` is false unless Bar).
 
 ### Do
 
-- Idle on this circle is `breathing`, theme `dark`, size 64. Light dots on dark glass.
+- Idle on this circle is `solving`, theme `dark`, size 64. Light dots. No painted word.
 - Same circle docked on the idle Bar and alone when minimized.
 - Windows: same circle, top-center Bar. No notch, no Mac-only look.
 - Use the real package (`import { ThinkingOrb } from 'thinking-orbs'`). Vite bundles it. No unpkg. No CDN.
@@ -145,7 +145,7 @@ Monochrome thinking-orb. Theme `dark`. Color does not retint the dots. State cha
 
 | Mood | Package state | When |
 | --- | --- | --- |
-| `idle` | `breathing` | Standard. Rest. Default. Tony locked this as the movable chrome. |
+| `idle` | `solving` | Standard. Rest. Default. Tony locked Solving with no caption. |
 | `factcheck` | `searching` | Fact-check / cited answer. |
 | `connecting` | `connecting` | Connecting handshake. |
 | `thinking` | `working` | Thinking / ask in progress. |
@@ -163,7 +163,7 @@ Priority: `connecting` > `listening` > `factcheck` > `thinking` > `idle`.
 
 ## Glass craft (look only)
 
-From Jakub's playground at size 64, states `breathing` / `listening` / `working`. Take the **look**. Use the package. Do not clone strings.
+From Jakub's playground at size 64, state `solving` (idle), plus `listening` / `working`. Take the **look**. Use the package. Do not clone strings. Do not paint "Solving…".
 
 - Dotted 2D canvas, monochrome light ink, dark theme
 - Circle host of Métis glass
@@ -178,7 +178,7 @@ No `unpkg` / CDN. Bundle the package.
 - **Click** (not drag) expands to the full bar. Existing minimize → circle and expand → bar stay the API; this slice restyles the rest.
 - `useWindowDrag` already swallows the trailing click of a real drag. Keep that. A click that never crossed the dead-zone expands. A drag does not.
 - **Interior motion (package):**
-  - Idle: `breathing`
+  - Idle: `solving`
   - Listen: `listening`
   - Thinking: `working`
   - Fact-check: `searching`
@@ -216,4 +216,4 @@ No `unpkg` / CDN. Bundle the package.
 - Renderer is `ThinkingOrb` / package 2D canvas. No WebGL sphere shader. CSS body is circular glass, not a Fit Studio radial fill.
 - No rec-dot on this circle. Listen maps to `listening`.
 - Circle stays 64×64 on every mood including listen.
-- Idle maps to `breathing`. Think maps to `working`. Fact-check maps to `searching`. Connecting maps to `connecting`. Theme is `dark`.
+- Idle maps to `solving`. Think maps to `working`. Fact-check maps to `searching`. Connecting maps to `connecting`. Theme is `dark`. No visible text node in the orb host.
