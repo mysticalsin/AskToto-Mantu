@@ -165,9 +165,9 @@ function isConfigured(env: Env): boolean {
   return Boolean(env.CLOUDFLARE_API_TOKEN && env.CF_ACCOUNT_ID && keys && keys.length > 0)
 }
 
-/** In-isolate fixed window. A Worker isolate is not a shared store: this is the floor that stops a
- *  single leaked key from spending without bound in one isolate. AI Gateway remains the operator's
- *  fleet-wide cap when they configured one. */
+/** Best-effort durable window. Memory is the floor inside one isolate. `caches.default` (Cache API)
+ *  is the colo-local store so a new isolate still sees a recent count. AI Gateway remains the
+ *  operator's fleet-wide cap when they configured one. */
 export const PROXY_RL_WINDOW_MS = 60_000
 export const PROXY_RL_AUTH_MAX = 60
 export const PROXY_RL_UNAUTH_MAX = 30
@@ -175,24 +175,91 @@ export const PROXY_RL_UNAUTH_MAX = 30
 type RateBucket = { start: number; count: number }
 const rateBuckets = new Map<string, RateBucket>()
 
+export type ProxyRateCache = {
+  match(request: Request): Promise<Response | undefined>
+  put(request: Request, response: Response): Promise<void>
+}
+
+let injectedRateCache: ProxyRateCache | null = null
+
+/** Test seam. Production never calls this. */
+export function setProxyRateLimitCache(cache: ProxyRateCache | null): void {
+  injectedRateCache = cache
+}
+
 /** Test seam. Production never calls this. */
 export function resetProxyRateLimits(): void {
   rateBuckets.clear()
 }
 
-function consumeRateBucket(id: string, max: number, now = Date.now()): boolean {
-  const existing = rateBuckets.get(id)
-  if (!existing || now - existing.start >= PROXY_RL_WINDOW_MS) {
-    rateBuckets.set(id, { start: now, count: 1 })
+const RL_CACHE_ORIGIN = 'https://metis-proxy-rl.internal'
+
+function resolveRateCache(): ProxyRateCache | undefined {
+  if (injectedRateCache) return injectedRateCache
+  const cachesObj = (globalThis as { caches?: { default?: ProxyRateCache } }).caches
+  return cachesObj?.default
+}
+
+function rateCacheRequest(id: string): Request {
+  return new Request(`${RL_CACHE_ORIGIN}/${encodeURIComponent(id)}`)
+}
+
+async function readCachedBucket(cache: ProxyRateCache, id: string, now: number): Promise<RateBucket | null> {
+  try {
+    const hit = await cache.match(rateCacheRequest(id))
+    if (!hit) return null
+    const parsed = (await hit.json()) as { start?: unknown; count?: unknown }
+    if (typeof parsed.start !== 'number' || typeof parsed.count !== 'number') return null
+    if (now - parsed.start >= PROXY_RL_WINDOW_MS) return null
+    return { start: parsed.start, count: parsed.count }
+  } catch {
+    return null
+  }
+}
+
+async function writeCachedBucket(cache: ProxyRateCache, id: string, bucket: RateBucket): Promise<void> {
+  try {
+    await cache.put(
+      rateCacheRequest(id),
+      new Response(JSON.stringify(bucket), {
+        headers: {
+          'content-type': 'application/json',
+          'cache-control': `max-age=${Math.ceil(PROXY_RL_WINDOW_MS / 1000)}`
+        }
+      })
+    )
+  } catch {
+    /* memory still holds this isolate's count */
+  }
+}
+
+async function consumeRateBucket(id: string, max: number, now = Date.now()): Promise<boolean> {
+  const cache = resolveRateCache()
+  const cached = cache ? await readCachedBucket(cache, id, now) : null
+  const memory = rateBuckets.get(id)
+  const memoryFresh = memory && now - memory.start < PROXY_RL_WINDOW_MS ? memory : null
+  const existing = cached && memoryFresh
+    ? { start: Math.min(cached.start, memoryFresh.start), count: Math.max(cached.count, memoryFresh.count) }
+    : cached || memoryFresh
+
+  if (!existing) {
+    const next = { start: now, count: 1 }
+    rateBuckets.set(id, next)
     if (rateBuckets.size > 10_000) {
       for (const [key, bucket] of rateBuckets) {
         if (now - bucket.start >= PROXY_RL_WINDOW_MS) rateBuckets.delete(key)
       }
     }
+    if (cache) await writeCachedBucket(cache, id, next)
     return true
   }
-  if (existing.count >= max) return false
-  existing.count += 1
+  if (existing.count >= max) {
+    rateBuckets.set(id, existing)
+    return false
+  }
+  const next = { start: existing.start, count: existing.count + 1 }
+  rateBuckets.set(id, next)
+  if (cache) await writeCachedBucket(cache, id, next)
   return true
 }
 
@@ -281,13 +348,13 @@ export default {
     // between a scraped hostname and the bill.
     const presented = presentedKey(request)
     if (!presented || !(await matchesAnyKey(presented, keys))) {
-      if (!consumeRateBucket(`unauth:${callerIp(request)}`, PROXY_RL_UNAUTH_MAX)) {
+      if (!(await consumeRateBucket(`unauth:${callerIp(request)}`, PROXY_RL_UNAUTH_MAX))) {
         return rateLimitedResponse()
       }
       return errorResponse(401, 'Invalid proxy key.')
     }
 
-    if (!consumeRateBucket(await rateLimitIdForKey(presented), PROXY_RL_AUTH_MAX)) {
+    if (!(await consumeRateBucket(await rateLimitIdForKey(presented), PROXY_RL_AUTH_MAX))) {
       return rateLimitedResponse()
     }
 

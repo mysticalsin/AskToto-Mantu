@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import worker, { resetProxyRateLimits, PROXY_RL_AUTH_MAX, PROXY_RL_UNAUTH_MAX, type Env } from './index'
+import worker, {
+  resetProxyRateLimits,
+  setProxyRateLimitCache,
+  PROXY_RL_AUTH_MAX,
+  PROXY_RL_UNAUTH_MAX,
+  type Env,
+  type ProxyRateCache
+} from './index'
 
 /**
  * index.test.ts — the Worker's auth boundary and its forwarding contract, proven without a deploy.
@@ -86,7 +93,20 @@ function controllableStream(): {
 afterEach(() => {
   vi.unstubAllGlobals()
   resetProxyRateLimits()
+  setProxyRateLimitCache(null)
 })
+
+function memoryRateCache(): ProxyRateCache {
+  const map = new Map<string, Response>()
+  return {
+    async match(request) {
+      return map.get(new URL(request.url).pathname)
+    },
+    async put(request, response) {
+      map.set(new URL(request.url).pathname, response)
+    }
+  }
+}
 
 describe('caller authentication', () => {
   it('rejects a request with no Authorization header and never calls Cloudflare', async () => {
@@ -471,5 +491,22 @@ describe('routing', () => {
     expect(postHealth.status).toBe(405)
 
     expect(calls).toHaveLength(0)
+  })
+
+  it('shares the authenticated window across isolates via the Cache API', async () => {
+    const shared = memoryRateCache()
+    setProxyRateLimitCache(shared)
+    const calls = stubUpstream(new Response('{"ok":true}', { status: 200 }))
+
+    for (let i = 0; i < PROXY_RL_AUTH_MAX; i++) {
+      const res = await worker.fetch(chatRequest(), env())
+      expect(res.status).toBe(200)
+    }
+    resetProxyRateLimits()
+    setProxyRateLimitCache(shared)
+
+    const limited = await worker.fetch(chatRequest(), env())
+    expect(limited.status).toBe(429)
+    expect(calls.length).toBe(PROXY_RL_AUTH_MAX)
   })
 })
