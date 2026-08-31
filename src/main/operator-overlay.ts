@@ -60,8 +60,8 @@ export async function pullOperatorSkillManifest(settings: OverlayRuntimeSettings
 }
 
 /** Apply one signed pack. Returns false on bad signature, hash mismatch, or unknown skill. */
-export function applySignedSkillPack(token: string): boolean {
-  const pack = verifyOperatorSkillPack(token)
+export function applySignedSkillPack(token: string, publicKeyRaw?: string): boolean {
+  const pack = verifyOperatorSkillPack(token, publicKeyRaw)
   if (!pack) return false
   if (!isOverlaySkillId(pack.skillId)) return false
   try {
