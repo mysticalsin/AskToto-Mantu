@@ -164,6 +164,9 @@ describe('mcpSecrets — MCP connection API key storage, keyed by connectionId',
         expect(() => m.getMcpRefreshToken(id)).toThrow(/unsafe mcp connection id/i)
         expect(() => m.setMcpRefreshToken(id, 'v')).toThrow(/unsafe mcp connection id/i)
         expect(() => m.clearMcpRefreshToken(id)).toThrow(/unsafe mcp connection id/i)
+        expect(() => m.setMcpClientSecret(id, 'v')).toThrow(/unsafe mcp connection id/i)
+        expect(() => m.getMcpClientSecret(id)).toThrow(/unsafe mcp connection id/i)
+        expect(() => m.clearMcpClientSecret(id)).toThrow(/unsafe mcp connection id/i)
       }
     })
 
@@ -227,6 +230,23 @@ describe('mcpSecrets — MCP connection API key storage, keyed by connectionId',
       )
       const second = await import('./mcpSecrets')
       expect(second.getMcpRefreshToken('clickup')).toBe('reloaded-refresh-token')
+    })
+  })
+
+  describe('OAuth client-secret slot (Plane confidential DCR)', () => {
+    it('round-trips a client secret to key-mcp-plane-client.bin', async () => {
+      const { setMcpClientSecret, getMcpClientSecret } = await import('./mcpSecrets')
+      setMcpClientSecret('plane', 'plane-dcr-secret')
+      expect(getMcpClientSecret('plane')).toBe('plane-dcr-secret')
+      expect(existsSync(join(userData, 'key-mcp-plane-client.bin'))).toBe(true)
+    })
+
+    it('clearMcpClientSecret removes the file', async () => {
+      const { setMcpClientSecret, clearMcpClientSecret, getMcpClientSecret } = await import('./mcpSecrets')
+      setMcpClientSecret('plane', 'to-clear')
+      expect(clearMcpClientSecret('plane')).toBe(true)
+      expect(existsSync(join(userData, 'key-mcp-plane-client.bin'))).toBe(false)
+      expect(getMcpClientSecret('plane')).toBe('')
     })
   })
 

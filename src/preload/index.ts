@@ -367,6 +367,7 @@ const api = {
   // returns the same shape mcpTestConnection/mcpSaveConnection do — main has already persisted the
   // tokens and upserted the mcpConnections entry by the time this resolves.
   mcpClickupConnect: (): Promise<McpConnectResult> => ipcRenderer.invoke(IPC.mcpClickupConnect),
+  mcpPlaneConnect: (): Promise<McpConnectResult> => ipcRenderer.invoke(IPC.mcpPlaneConnect),
 
   licenseActivate: (payload: LicenseActivatePayload): Promise<LicenseActivateResult> =>
     ipcRenderer.invoke(IPC.licenseActivate, payload),

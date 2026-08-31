@@ -60,7 +60,6 @@ import {
   Settings2,
   Lock,
   Timer,
-  ListTree,
   Route,
   type LucideIcon
 } from 'lucide-react'
@@ -110,6 +109,8 @@ import {
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
 import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
+import { ClickUpMark } from './brand/ClickUpMark'
+import { PlaneMark } from './brand/PlaneMark'
 import { MetisMark } from './MetisMark'
 import { FieldHint, TextButton } from './ui'
 import { AgendaView } from './AgendaView'
@@ -2766,69 +2767,181 @@ const activePillStyle =
   'flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]'
 
 /**
- * ClickUp's connection card — same shell as McpConnectionCard (title/desc/Connected pill/tools list/
- * Reconnect+Disconnect) but a genuinely different trigger: there's no endpoint/key form to fill in and
- * Test/Save, ClickUp is OAuth-only (2.1 + PKCE). One "Connect ClickUp" button runs the whole browser
- * consent flow in main (window.toto.mcpClickupConnect) and, on success, main has already upserted the
- * mcpConnections entry — this component only reflects that state back, via the same `patch` callback
- * McpConnectionCard uses so both write through Settings' single settings-patch path.
+ * Product-connect card (ClickUp, Plane) — docs/design/BRAIN-CONNECTORS.md.
+ * Default: official logo, name, one line, Connect. No URL / key / slug / Test / Save.
+ * Advanced (closed on every mount): paste a key. Main pins the MCP URL.
+ * Connect / Test / Save / Disconnect fire only from an explicit click — never a useEffect.
  */
-function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p: Partial<PublicSettings>) => void }): JSX.Element {
-  const conn = settings.mcpConnections.find((c) => c.id === 'clickup')
+function ProductConnectCard({
+  settings,
+  patch,
+  kind,
+  title,
+  desc,
+  waitingLabel,
+  mark,
+  connect,
+  pinnedEndpoint,
+  apiKeyHint,
+  extraFields
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+  kind: 'clickup' | 'plane'
+  title: string
+  desc: string
+  waitingLabel: string
+  mark: JSX.Element
+  connect: () => Promise<{ ok: boolean; error?: string; tools?: string[] }>
+  pinnedEndpoint: string
+  apiKeyHint: string
+  extraFields?: { key: string; label: string; placeholder: string }[]
+}): JSX.Element {
+  const conn = settings.mcpConnections.find((c) => c.id === kind)
   const connected = conn?.connected ?? false
-  const [state, setState] = useState<{ phase: 'idle' | 'connecting' | 'error'; error: string | null }>({
-    phase: 'idle',
-    error: null
-  })
+  const [state, setState] = useState<{
+    phase: 'idle' | 'connecting' | 'testing' | 'tested' | 'saving' | 'error'
+    error: string | null
+    tools: string[] | null
+  }>({ phase: 'idle', error: null, tools: null })
+  const [advanced, setAdvanced] = useState(false)
+  const [apiKey, setApiKey] = useState('')
+  const [extraValues, setExtraValues] = useState<Record<string, string>>(
+    Object.fromEntries((extraFields ?? []).map((f) => [f.key, conn?.extraHeaders?.[f.key] || '']))
+  )
+  const keyId = useId()
 
-  const connect = async (): Promise<void> => {
-    setState({ phase: 'connecting', error: null })
-    // Opens the system browser for ClickUp's consent screen — never fired except from this explicit click.
-    const r = await window.toto.mcpClickupConnect()
+  const extraHeaders = (): Record<string, string> =>
+    Object.fromEntries(Object.entries(extraValues).filter(([, v]) => v.trim()).map(([k, v]) => [k, v.trim()]))
+
+  const runConnect = async (): Promise<void> => {
+    setState({ phase: 'connecting', error: null, tools: null })
+    const r = await connect()
     if (r.ok) {
       await patch({
         mcpConnections: [
-          ...settings.mcpConnections.filter((c) => c.id !== 'clickup'),
-          { id: 'clickup', kind: 'clickup', label: 'ClickUp', endpointUrl: '', connected: true, tools: r.tools ?? [], extraHeaders: {} }
+          ...settings.mcpConnections.filter((c) => c.id !== kind),
+          {
+            id: kind,
+            kind,
+            label: title,
+            endpointUrl: pinnedEndpoint,
+            connected: true,
+            tools: r.tools ?? [],
+            extraHeaders: extraHeaders()
+          }
         ]
       })
-      setState({ phase: 'idle', error: null })
+      setState({ phase: 'idle', error: null, tools: null })
     } else {
-      setState({ phase: 'error', error: r.error || 'Could not connect ClickUp.' })
+      setState({ phase: 'error', error: r.error || `Could not connect ${title}.`, tools: null })
+    }
+  }
+
+  const testKey = async (): Promise<void> => {
+    setState({ phase: 'testing', error: null, tools: null })
+    const r = await window.toto.mcpTestConnection({
+      connectionId: kind,
+      endpointUrl: pinnedEndpoint,
+      apiKey: apiKey.trim(),
+      extraHeaders: extraHeaders()
+    })
+    if (r.ok) {
+      setState({ phase: 'tested', error: null, tools: r.tools ?? [] })
+    } else {
+      setState({ phase: 'error', error: r.error || 'Could not connect.', tools: null })
+    }
+  }
+
+  const saveKey = async (): Promise<void> => {
+    setState((s) => ({ ...s, phase: 'saving' }))
+    const r = await window.toto.mcpSaveConnection({
+      connectionId: kind,
+      endpointUrl: pinnedEndpoint,
+      apiKey: apiKey.trim(),
+      extraHeaders: extraHeaders(),
+      label: title
+    })
+    if (r.ok) {
+      await patch({
+        mcpConnections: [
+          ...settings.mcpConnections.filter((c) => c.id !== kind),
+          {
+            id: kind,
+            kind,
+            label: title,
+            endpointUrl: pinnedEndpoint,
+            connected: true,
+            tools: r.tools ?? [],
+            extraHeaders: extraHeaders()
+          }
+        ]
+      })
+      setApiKey('')
+      setAdvanced(false)
+      setState({ phase: 'idle', error: null, tools: null })
+    } else {
+      setState({ phase: 'error', error: r.error || 'Could not save the connection.', tools: null })
     }
   }
 
   const disconnect = async (): Promise<void> => {
-    const r = await window.toto.mcpDisconnect({ connectionId: 'clickup' })
+    const r = await window.toto.mcpDisconnect({ connectionId: kind })
     await patch({
-      mcpConnections: settings.mcpConnections.map((c) => (c.id === 'clickup' ? { ...c, connected: false, tools: [] } : c))
+      mcpConnections: settings.mcpConnections.map((c) => (c.id === kind ? { ...c, connected: false, tools: [] } : c))
     })
-    setState(r.ok ? { phase: 'idle', error: null } : { phase: 'error', error: r.error || 'Disconnected, but cleanup failed.' })
+    setApiKey('')
+    if (!r.ok) {
+      setState({ phase: 'error', error: r.error || 'Disconnected, but cleanup failed.', tools: null })
+      return
+    }
+    setState({ phase: 'idle', error: null, tools: null })
   }
+
+  const connecting = state.phase === 'connecting'
 
   return (
     <div
+      data-connector={kind}
       className={[
         'flex flex-col gap-2 rounded-[10px] border p-3',
         connected ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40' : 'border-[var(--cl-border)] bg-white/[0.02]'
       ].join(' ')}
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex flex-col gap-0.5">
-          <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">ClickUp · task management</span>
-          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Push action items from a meeting recap to ClickUp as tasks. Manual and review-first: nothing sends automatically.
+      <div className="flex items-center gap-3">
+        {connected ? (
+          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-white/[0.06]">
+            {mark}
           </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void runConnect()}
+            disabled={connecting}
+            aria-label={`Connect ${title}`}
+            className="no-drag cl-focus flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-white/[0.06] hover:bg-white/[0.1] disabled:opacity-50"
+          >
+            {mark}
+          </button>
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{title}</div>
+          <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{desc}</div>
         </div>
         {connected ? (
           <span className={activePillStyle}>
             <CircleCheck size={12} /> Connected
           </span>
-        ) : null}
+        ) : (
+          <button type="button" onClick={() => void runConnect()} disabled={connecting} className={primaryBtnStyle}>
+            {connecting ? <Loader2 size={12} className="animate-spin" /> : null}
+            {connecting ? waitingLabel : 'Connect'}
+          </button>
+        )}
       </div>
 
       {connected ? (
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 pl-10">
           <span className="min-w-0 flex-1 truncate text-[11px] text-[color:var(--cl-muted-foreground)]">
             {conn && conn.tools.length > 0
               ? `${conn.tools.length} tool${conn.tools.length === 1 ? '' : 's'} available`
@@ -2836,11 +2949,11 @@ function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p:
           </span>
           <button
             type="button"
-            onClick={() => void connect()}
-            disabled={state.phase === 'connecting'}
+            onClick={() => void runConnect()}
+            disabled={connecting}
             className="no-drag cl-focus shrink-0 text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
           >
-            {state.phase === 'connecting' ? <Loader2 size={12} className="inline animate-spin" /> : 'Reconnect'}
+            {connecting ? <Loader2 size={12} className="inline animate-spin" /> : 'Reconnect'}
           </button>
           <button
             type="button"
@@ -2850,17 +2963,7 @@ function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p:
             Disconnect
           </button>
         </div>
-      ) : (
-        <button
-          type="button"
-          onClick={() => void connect()}
-          disabled={state.phase === 'connecting'}
-          className={secondaryBtnStyle}
-        >
-          {state.phase === 'connecting' ? <Loader2 size={12} className="animate-spin" /> : <Link2 size={12} />}
-          {state.phase === 'connecting' ? 'Waiting for ClickUp…' : 'Connect ClickUp'}
-        </button>
-      )}
+      ) : null}
 
       {state.phase === 'error' && state.error && (
         <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
@@ -2868,7 +2971,127 @@ function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p:
           <span>{state.error}</span>
         </div>
       )}
+      {state.phase === 'tested' && state.tools && (
+        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-success)]">
+          <CircleCheck size={13} className="mt-px shrink-0" />
+          <span>
+            Connected.{' '}
+            {state.tools.length > 0
+              ? `Found ${state.tools.length} tool${state.tools.length === 1 ? '' : 's'}: ${state.tools.join(', ')}`
+              : `${title} reported no tools for this key’s scope.`}
+          </span>
+        </div>
+      )}
+
+      <div>
+        <button
+          type="button"
+          onClick={() => setAdvanced((o) => !o)}
+          aria-expanded={advanced}
+          className="no-drag cl-focus flex items-center gap-1 text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+        >
+          <ChevronDown size={12} className={advanced ? 'rotate-180' : ''} />
+          Advanced
+        </button>
+        {advanced ? (
+          <div className="mt-2 flex flex-col gap-2">
+            <p className="text-[11px] text-[color:var(--cl-muted-foreground)]">Paste a key if you already have one.</p>
+            <div className="flex flex-col gap-1">
+              <label htmlFor={keyId} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+                API key
+              </label>
+              <input
+                id={keyId}
+                type="password"
+                value={apiKey}
+                onChange={(e) => {
+                  setApiKey(e.target.value)
+                  setState((s) => ({ ...s, phase: s.phase === 'tested' ? 'idle' : s.phase, error: null, tools: null }))
+                }}
+                placeholder={apiKeyHint}
+                className={'w-full ' + ctl}
+              />
+            </div>
+            {(extraFields ?? []).map((f) => {
+              const fieldId = `${keyId}-${f.key}`
+              return (
+                <div key={f.key} className="flex flex-col gap-1">
+                  <label htmlFor={fieldId} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+                    {f.label}
+                  </label>
+                  <input
+                    id={fieldId}
+                    value={extraValues[f.key] || ''}
+                    onChange={(e) => {
+                      setExtraValues((s) => ({ ...s, [f.key]: e.target.value }))
+                      setState((s) => ({ ...s, phase: s.phase === 'tested' ? 'idle' : s.phase, error: null, tools: null }))
+                    }}
+                    placeholder={f.placeholder}
+                    className={'w-full ' + ctl}
+                  />
+                </div>
+              )
+            })}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => void testKey()}
+                disabled={!apiKey.trim() || state.phase === 'testing' || state.phase === 'saving' || connecting}
+                className={secondaryBtnStyle}
+              >
+                {state.phase === 'testing' ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                Test connection
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveKey()}
+                disabled={state.phase !== 'tested'}
+                title={state.phase !== 'tested' ? 'Test the connection successfully first' : undefined}
+                className={primaryBtnStyle}
+              >
+                {state.phase === 'saving' ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+                Save
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
     </div>
+  )
+}
+
+function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p: Partial<PublicSettings>) => void }): JSX.Element {
+  return (
+    <ProductConnectCard
+      settings={settings}
+      patch={patch}
+      kind="clickup"
+      title="ClickUp"
+      desc="Tasks from a recap. Nothing sends itself."
+      waitingLabel="Waiting for ClickUp…"
+      mark={<ClickUpMark size={16} />}
+      connect={() => window.toto.mcpClickupConnect()}
+      pinnedEndpoint="https://mcp.clickup.com/mcp"
+      apiKeyHint="ClickUp API token (power option — Connect is the usual path)"
+    />
+  )
+}
+
+function PlaneCard({ settings, patch }: { settings: PublicSettings; patch: (p: Partial<PublicSettings>) => void }): JSX.Element {
+  return (
+    <ProductConnectCard
+      settings={settings}
+      patch={patch}
+      kind="plane"
+      title="Plane"
+      desc="Work items from a recap. Nothing sends itself."
+      waitingLabel="Waiting for Plane…"
+      mark={<PlaneMark size={16} />}
+      connect={() => window.toto.mcpPlaneConnect()}
+      pinnedEndpoint="https://mcp.plane.so/http/api-key/mcp"
+      apiKeyHint="Personal or workspace access token"
+      extraFields={[{ key: 'X-Workspace-slug', label: 'Workspace slug', placeholder: 'acme' }]}
+    />
   )
 }
 
@@ -6666,25 +6889,13 @@ function IntelligenceTab({
       <Section
         title="Plane"
         desc="Push meeting action items to Plane as work items — see Review → Book next steps. Manual and review-first: nothing sends automatically."
-        icon={ListTree}
       >
-        <McpConnectionCard
-          settings={settings}
-          patch={patch}
-          kind="plane"
-          defaultLabel="Plane"
-          title="Plane · task management"
-          desc="Push action items from a meeting recap to Plane as work items. Manual and review-first: nothing sends automatically."
-          endpointPlaceholder="https://mcp.plane.so/http/api-key/mcp"
-          apiKeyHint="Personal or workspace access token from Plane → Settings → API tokens"
-          extraFields={[{ key: 'X-Workspace-slug', label: 'Workspace slug', placeholder: 'acme' }]}
-        />
+        <PlaneCard settings={settings} patch={patch} />
       </Section>
 
       <Section
         title="ClickUp"
         desc="Push meeting action items to ClickUp as tasks — see Review → Book next steps. Manual and review-first: nothing sends automatically."
-        icon={ListTree}
       >
         <ClickupCard settings={settings} patch={patch} />
       </Section>
