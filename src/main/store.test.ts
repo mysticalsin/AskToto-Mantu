@@ -267,6 +267,21 @@ describe('store', () => {
     expect(getSettings().encryptTranscripts).toBe(true)
   })
 
+  it('migrates an existing install that never chose an ASR engine to Parakeet', () => {
+    // Sparse overlay: no asrEngine key means the user never touched the picker. Changing
+    // DEFAULT_SETTINGS.asrEngine to parakeet is the migration — do not write a one-shot flag.
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ provider: 'openai' }), 'utf8')
+    expect(getSettings().asrEngine).toBe('parakeet')
+  })
+
+  it('keeps a deliberate Whisper or Apple Speech choice', () => {
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ asrEngine: 'whisper' }), 'utf8')
+    expect(getSettings().asrEngine).toBe('whisper')
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ asrEngine: 'apple' }), 'utf8')
+    resetSettingsCacheForTests()
+    expect(getSettings().asrEngine).toBe('apple')
+  })
+
   it('respects an explicit prior opt-out of transcript encryption', () => {
     // A user who deliberately disabled encryption keeps that choice — flipping the DEFAULT must never
     // silently override an explicit user decision already persisted to disk.

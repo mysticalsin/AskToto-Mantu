@@ -264,7 +264,7 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
       post({
         type: 'error',
         message: bundled
-          ? 'The bundled transcription files are missing or damaged. Reinstall Métis from a complete installer.'
+          ? 'Could not load the transcription files. Check your connection and try Listen again.'
           : 'Could not load the transcription model. Check your internet connection and try Listen again.'
       })
     } finally {

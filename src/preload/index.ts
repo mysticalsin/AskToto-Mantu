@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import {
   IPC,
   type AskStart,
@@ -60,6 +60,8 @@ import {
   type LicenseConfigResult,
   type ImportAudioPickResult,
   type ImportAudioProgress,
+  type ImportAssetsProgress,
+  type AsrAssetsStatus,
   type ImportJobView,
   type LocalModelSummary,
   type ProfileRecoveryResult,
@@ -215,12 +217,27 @@ const api = {
   saveNote: (n: SaveNote): Promise<{ path: string }> => ipcRenderer.invoke(IPC.saveNote, n),
   // Import audio file: pick → hand off to the main-owned background job. The overlay never receives raw audio bytes.
   importAudioPick: (): Promise<ImportAudioPickResult> => ipcRenderer.invoke(IPC.importAudioPick),
+  importAudioDrop: (files: unknown[]): Promise<ImportAudioPickResult> => {
+    const paths: string[] = []
+    for (const file of files) {
+      try {
+        const path = webUtils.getPathForFile(file as never)
+        if (path) paths.push(path)
+      } catch {
+        /* skip a file the OS will not reveal */
+      }
+    }
+    return ipcRenderer.invoke(IPC.importAudioOffer, { paths })
+  },
   importAudioStart: (token: string): Promise<ImportJobView> => ipcRenderer.invoke(IPC.importAudioStart, { token }),
+  importAudioStartBatch: (tokens: string[]): Promise<ImportJobView[]> =>
+    ipcRenderer.invoke(IPC.importAudioStartBatch, { tokens }),
   importJobsList: (): Promise<ImportJobView[]> => ipcRenderer.invoke(IPC.importJobsList),
   importJobCancel: (jobId: string): Promise<void> => ipcRenderer.invoke(IPC.importJobCancel, { jobId }),
   importJobResume: (jobId: string): Promise<ImportJobView> => ipcRenderer.invoke(IPC.importJobResume, { jobId }),
   importJobRemove: (jobId: string): Promise<void> => ipcRenderer.invoke(IPC.importJobRemove, { jobId }),
   onImportAudioProgress: (cb: (d: ImportAudioProgress) => void): Unsub => sub(IPC.importAudioProgress, cb),
+  onImportAssetsProgress: (cb: (d: ImportAssetsProgress) => void): Unsub => sub(IPC.importAssetsProgress, cb),
   answerFeedback: (f: AnswerFeedback): Promise<void> => ipcRenderer.invoke(IPC.answerFeedback, f),
   readMetrics: (): Promise<EvalMetrics> => ipcRenderer.invoke(IPC.metricsRead),
   exportRecapJson: (markdown: string): Promise<RecapExport> =>
@@ -320,6 +337,8 @@ const api = {
     ipcRenderer.invoke(IPC.brainAttention),
   setListeningState: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.listeningState, on),
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
+  asrAssetsStatus: (): Promise<AsrAssetsStatus> => ipcRenderer.invoke(IPC.asrAssetsStatus),
+  asrAssetsEnsure: (): Promise<AsrAssetsStatus> => ipcRenderer.invoke(IPC.asrAssetsEnsure),
 
   // Métis Local (on-device LLM): readiness plus start/retry. Local AI `enabled` is routing only —
   // this does not require toggling it on.

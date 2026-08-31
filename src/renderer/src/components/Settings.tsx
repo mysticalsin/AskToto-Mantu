@@ -5957,7 +5957,7 @@ export function Settings({
                   <div className="flex flex-col gap-1.5 px-1 py-1">
                     <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
                       Transcription engine
-                      <FieldHint text="Parakeet: bundled NVIDIA Parakeet v3, very fast + accurate for 25 European languages. Whisper: bundled, handles ~99 languages, use it for non-European speech. Apple Speech: Apple's own on-device engine (SFSpeechRecognizer); no extra download, macOS 13+ only.">
+                      <FieldHint text="Parakeet is the default — bundled NVIDIA Parakeet v3, very fast + accurate for 25 European languages. Whisper handles ~99 languages; pick it for non-European speech. Apple Speech: Apple's own on-device engine (SFSpeechRecognizer); no extra download, macOS 13+ only.">
                         <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
                       </FieldHint>
                       <ManagedChip keys={settings.managedKeys} k="asrEngine" />

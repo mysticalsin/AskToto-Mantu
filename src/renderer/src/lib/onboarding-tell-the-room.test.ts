@@ -64,7 +64,7 @@ describe('tell the room — designed consent on personalize', () => {
   })
 
   it('Continue stays gated; finish still writes recordingConsent; Ready echoes the quote', () => {
-    expect(experience).toMatch(/if \(doneRef\.current \|\| !consent\) return/)
+    expect(experience).toMatch(/if \(doneRef\.current \|\| !firstRunCanFinish\(\{ asrReady, consent \}\)\) return/)
     expect(experience).toMatch(/onDone\(\{ mode, recordingConsent: true \}\)/)
     expect(experience).toMatch(/TELL_THE_ROOM_READY/)
     expect(experience).toMatch(/onboard-tell-quote--echo/)
@@ -75,7 +75,7 @@ describe('tell the room — designed consent on personalize', () => {
     expect(experience).toMatch(/setScene\('skip'\)/)
     const skip = experience.slice(experience.indexOf("scene === 'skip'"))
     expect(skip).toMatch(/TellTheRoomCard/)
-    expect(skip).toMatch(/disabled=\{\!consent\}/)
+    expect(skip).toMatch(/firstRunCanFinish\(\{ asrReady, consent \}\)/)
     expect(experience).not.toMatch(/legacy-full/)
     expect(experience).not.toMatch(/from '\.\/Onboarding'/)
   })

@@ -66,6 +66,8 @@ import {
   SetCrmPushedPayloadSchema,
   RecallBackfillSpeakersPayloadSchema,
   ImportAudioStartSchema,
+  ImportAudioStartBatchSchema,
+  ImportAudioOfferSchema,
   ImportJobIdSchema,
   ImportDecoderChunkSchema,
   ImportDecoderCompleteSchema,
@@ -80,6 +82,7 @@ import {
   type CalendarEvent,
   type AskStart,
   type ImportJobView,
+  type ImportAssetsProgress,
   type ScreenContextResult,
   type DiagnosticsExportResult,
   type RecallExportPlainResult,
@@ -309,8 +312,14 @@ import { resetLanguageFollow as resetImportLanguageFollow, whisperImportTranscri
 import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine } from './polish'
 import { detectLanguage as detectTextLanguage } from '@shared/lang-id'
 import type { TranscriptLine } from '@shared/ipc'
-import { pickAudioFile, consumePickedAudio } from './import-audio'
-import { ImportJobManager, type ImportJob } from './import-jobs'
+import { pickAudioFile, consumePickedAudio, offerAudioPaths } from './import-audio'
+import { ImportJobManager, MAX_CONCURRENT_IMPORTS, type ImportJob } from './import-jobs'
+import {
+  ensureImportAsrAssets,
+  asrAssetsProgress,
+  asrAssetsStatusSnapshot,
+  userDataAsrRoot
+} from './asr-bundled-ensure'
 import { EncryptedImportJobStore } from './import-job-store'
 import { bundledFfmpegPath, startFfmpegDecode, type FfmpegDecoder } from './ffmpeg-decoder'
 import {
@@ -686,6 +695,15 @@ function importJobView(job: ImportJob): ImportJobView {
   if (job.state === 'done') pct = 100
   else if (job.progressPct !== undefined) pct = Math.min(99, Math.max(0, Math.round(job.progressPct)))
   else if (job.totalChunks > 0) pct = Math.min(99, Math.round((job.cursor / job.totalChunks) * 100))
+  let queuePosition: number | undefined
+  if (job.state === 'queued' && importJobs) {
+    const waiting = importJobs
+      .list()
+      .filter((j) => j.state === 'queued')
+      .sort((a, b) => a.createdAt - b.createdAt)
+    const i = waiting.findIndex((j) => j.jobId === job.jobId)
+    if (i >= 0) queuePosition = i + 1
+  }
   return {
     jobId: job.jobId,
     title: job.title,
@@ -697,7 +715,20 @@ function importJobView(job: ImportJob): ImportJobView {
     recapError: job.recapError,
     file: job.file,
     createdAt: job.createdAt,
-    updatedAt: job.updatedAt
+    updatedAt: job.updatedAt,
+    queuePosition
+  }
+}
+
+function publishAsrAssetsProgress(progress = asrAssetsProgress()): void {
+  if (win && !win.isDestroyed()) {
+    const payload: ImportAssetsProgress = {
+      status: progress.status,
+      progress: progress.progress,
+      label: progress.label,
+      error: progress.error
+    }
+    win.webContents.send(IPC.importAssetsProgress, payload)
   }
 }
 
@@ -830,7 +861,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
         ffmpegDecoders.delete(id)
       }
     }
-    if (ffmpegDecoders.size) throw new Error('Another audio decoder is already active.')
+    if (ffmpegDecoders.size >= MAX_CONCURRENT_IMPORTS) throw new Error('Another audio decoder is already active.')
     // vad-v1 jobs: cursor counts WINDOWS (phase 2); a resume re-decodes the whole file (seconds of
     // ffmpeg) and the deterministic re-segmentation + window cursor skip the already-transcribed part.
     const skipThrough = job.pipeline === 'vad-v1' ? 0 : job.cursor
@@ -1276,7 +1307,14 @@ function initializeImportJobs(): void {
     onChange: publishImportJob,
     onCancel: closeImportDecoder,
     personaMode: () => getSettings().mode,
-    newId: () => randomBytes(16).toString('hex')
+    newId: () => randomBytes(16).toString('hex'),
+    concurrency: MAX_CONCURRENT_IMPORTS
+  })
+  void ensureImportAsrAssets((pct) => {
+    publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
+  }).catch((err) => {
+    mainLog.warn('[asr-assets] background ensure failed:', err instanceof Error ? err.message : err)
+    publishAsrAssetsProgress()
   })
 }
 
@@ -6012,12 +6050,36 @@ function registerIpc(): void {
     if (!requireAuth()) return { error: 'Not signed in.' }
     return pickAudioFile(win)
   })
+  ipcMain.handle(IPC.importAudioOffer, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { error: 'Not signed in.' }
+    const parsed = ImportAudioOfferSchema.safeParse(raw)
+    if (!parsed.success) return { error: 'Could not prepare the selected recordings.' }
+    return offerAudioPaths(parsed.data.paths)
+  })
   ipcMain.handle(IPC.importAudioStart, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportAudioStartSchema.parse(raw)
     if (!importJobs) throw new Error('Audio import service is unavailable.')
     return importJobView(await importJobs.start(consumePickedAudio(parsed.token)))
+  })
+  ipcMain.handle(IPC.importAudioStartBatch, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    const parsed = ImportAudioStartBatchSchema.parse(raw)
+    if (!importJobs) throw new Error('Audio import service is unavailable.')
+    const sources = []
+    const errors: string[] = []
+    for (const token of parsed.tokens) {
+      try {
+        sources.push(consumePickedAudio(token))
+      } catch (err) {
+        errors.push(err instanceof Error ? err.message : String(err))
+      }
+    }
+    if (!sources.length) throw new Error(errors[0] || 'Could not start the imports.')
+    return (await importJobs.startMany(sources)).map(importJobView)
   })
   ipcMain.handle(IPC.importJobsList, (e) => {
     assertMainWindow(e)
@@ -6827,12 +6889,26 @@ if (!app.requestSingleInstanceLock()) {
     const RES_BASE_REAL = realResourceBase(RES_BASE)
 
     // A packaged app is ALWAYS offline-only, even if its installer is corrupt/incomplete. Returning true
-    // keeps the worker's remote resolver disabled so missing assets fail locally with a reinstall message
-    // instead of silently downloading after install. Development may still use its explicit remote path.
+    // keeps the worker's remote resolver disabled so missing assets fail locally (runtime then fetches
+    // into userData) instead of silently downloading from a CDN. Development may still use its explicit remote path.
     const ASR_BUNDLED = app.isPackaged || asrManifestComplete(RES_BASE)
     ipcMain.handle(IPC.asrBundled, (e) => {
       assertMainWindow(e)
       return ASR_BUNDLED
+    })
+    ipcMain.handle(IPC.asrAssetsStatus, (e) => {
+      assertMainWindow(e)
+      return asrAssetsStatusSnapshot()
+    })
+    ipcMain.handle(IPC.asrAssetsEnsure, (e) => {
+      assertMainWindow(e)
+      void ensureImportAsrAssets((pct) => {
+        publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
+      }).catch((err) => {
+        mainLog.warn('[asr-assets] ensure failed:', err instanceof Error ? err.message : err)
+        publishAsrAssetsProgress()
+      })
+      return asrAssetsStatusSnapshot()
     })
 
     protocol.handle('asr-model', async (req) => {
@@ -6864,9 +6940,22 @@ if (!app.requestSingleInstanceLock()) {
           real = realpathSync(abs)
         } catch (e: unknown) {
           if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
-            return respond(null, { status: 404 })
+            // Incomplete installer: the same relative object may live in userData after auto-fetch.
+            try {
+              const fallbackAbs = resolve(userDataAsrRoot(), rel.replace(/^models\//, ''))
+              const fallbackReal = realpathSync(fallbackAbs)
+              const fallbackBase = realResourceBase(userDataAsrRoot())
+              if (isInsideResourceBase(fallbackBase, fallbackReal)) {
+                real = fallbackReal
+              } else {
+                return respond(null, { status: 404 })
+              }
+            } catch {
+              return respond(null, { status: 404 })
+            }
+          } else {
+            throw e
           }
-          throw e
         }
         // Path-traversal guard (separator-safe on Windows): reject any path that escapes RES_BASE.
         // Run the check against the real (symlink-resolved) path on BOTH sides, not the raw abs path.
