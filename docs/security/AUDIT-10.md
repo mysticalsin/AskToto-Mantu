@@ -308,6 +308,26 @@ Re-score after the patches. READY TO MERGE stays **no** until Devon reviews this
 
 ---
 
+## Phase 2 remediations (same PR, after this document)
+
+Shipped on this branch. Capture / `saveTranscript` / `parakeetFeed` / `armAudio` were not given a limiter.
+
+| Gap | Fix |
+|---|---|
+| `/deactivate` unthrottled | Same `makeRateLimit` instance as activate/heartbeat |
+| Worker spend | Per-hashed-key 60/min and unauthenticated-IP 30/min; 429 before the account token is used |
+| Generic webhook keys | `licenseEventView` truncates unless `LICENSE_WEBHOOK_FULL_KEYS=1` |
+| Public `licenseCount` | Removed from `GET /health` |
+| `askStart` / restore leaks | Constant error strings |
+| Ungated listening/ask IPC | `requireAuth()` on `listeningState`, `askResetContext`, `askCancel` |
+| Renderer can hammer outbound HTTP | `security-limits.ts` on license activate, MCP test/save/push, Graph calendar |
+| Silent attacks | License-server stderr on 429 / admin 401 / lockout (IP + route). Desktop `security.rate_limited` and `security.ipc_denied` (sampled) |
+| Settings cache served the wrong profile | Cache key includes settings path; admin-policy snapshot includes path + inode |
+
+**Post-fix fully in place: 3/10** (items 2, 4, 8). N/A still 2. Residuals for Devon: admin UI `localStorage` token, Worker isolate-local limiter, optional asar-embed keys, no SIEM forwarder.
+
+---
+
 ## Out of scope (frozen)
 
 Overlay chrome, island geometry, onboarding, PR 58, identity card PR, Intelligence dashboards, latency / time-saved PRs. Pack and GitHub release stay last. No user-facing copy in this ship claims an AI author.
