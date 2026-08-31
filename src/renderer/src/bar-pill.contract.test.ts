@@ -133,6 +133,8 @@ describe('BAR-PILL contract', () => {
     expect(orb).not.toMatch(/idle: 0x4ca8e8/)
     expect(orb).toMatch(/factcheck: 0x5ab8f0/)
     expect(orb).toMatch(/drawArrays\(gl\.TRIANGLE_STRIP, 0, 4\)/)
+    expect(orb).toMatch(/float flare/)
+    expect(orb).toMatch(/atan\(vUv\.y, vUv\.x\)/)
   })
 
   it('QUALITY hats: idle bar has no orb rAF; frame loop does no layout or GL lookups', () => {

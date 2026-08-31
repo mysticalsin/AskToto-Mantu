@@ -162,41 +162,51 @@ uniform float uTime;
 varying vec2 vUv;
 
 void main() {
-  vec3 ro = vec3(uLeanX * 0.12, uLeanY * 0.10, 2.15);
-  vec3 rd = normalize(vec3(vUv * 0.92, -1.55));
+  vec3 ro = vec3(uLeanX * 0.10, uLeanY * 0.08, 2.20);
+  vec3 rd = normalize(vec3(vUv * 0.94, -1.58));
   float ra = 0.90;
   float b = dot(ro, rd);
   float c = dot(ro, ro) - ra * ra;
   float h = b * b - c;
+  float r2 = dot(vUv, vUv);
+  float ang = atan(vUv.y, vUv.x);
+  float rays = pow(max(0.0, sin(ang * 3.0 + 0.35)), 20.0);
+  rays += pow(max(0.0, sin(ang * 3.0 + 1.40)), 24.0) * 0.55;
+  float flare = rays * exp(-r2 * 1.85) * 0.26;
   if (h < 0.0) {
-    float bloom = exp(h * 16.0);
-    if (bloom < 0.018) discard;
-    gl_FragColor = vec4(mix(uDeep, uColor, 0.42), bloom * 0.32 * uAlpha);
+    float bloom = exp(h * 9.5);
+    float halo = bloom * 0.48 + flare * 0.70;
+    if (halo < 0.016) discard;
+    gl_FragColor = vec4(mix(uDeep, uColor, 0.22 + flare), halo * uAlpha);
     return;
   }
   h = sqrt(h);
   float tHit = -b - h;
+  float tExit = -b + h;
   vec3 p = ro + rd * tHit;
   vec3 n = normalize(p);
   vec3 view = -rd;
-  vec3 light = normalize(vec3(-0.42 + uLeanX * 0.14, 0.58 + uLeanY * 0.10, 0.82));
+  vec3 light = normalize(vec3(-0.38 + uLeanX * 0.12, 0.52 + uLeanY * 0.10, 0.80));
+  float thickness = max(0.0, tExit - tHit);
+  float vol = 1.0 - exp(-thickness * 1.12);
   float ndl = max(0.0, dot(n, light));
-  float wrap = 0.36 + 0.58 * (ndl * 0.68 + 0.32 * max(0.0, n.z));
-  float fresnel = pow(1.0 - max(0.0, dot(n, view)), 2.35);
+  float wrap = 0.40 + 0.52 * (ndl * 0.52 + 0.48 * max(0.0, n.z));
+  float fresnel = pow(1.0 - max(0.0, dot(n, view)), 2.55);
   vec3 hlf = normalize(light + view);
-  float spec = pow(max(0.0, dot(n, hlf)), 48.0);
-  float kiss = pow(max(0.0, dot(n, hlf)), 130.0);
-  float caustic = 0.5 + 0.5 * sin(p.x * 5.2 + uTime * 0.34 + p.z * 2.1) * sin(p.y * 4.0 - uTime * 0.22 + p.x * 1.5);
-  float core = exp(-dot(p.xy, p.xy) * 2.7) * uBreath;
-  vec3 col = mix(uDeep, uColor, wrap);
-  col = mix(col, uHot, wrap * wrap * 0.58);
-  col += uHot * core * 0.30;
-  col += uColor * caustic * 0.055 * (0.40 + core);
-  col += vec3(0.97, 0.93, 1.0) * spec * 0.58;
-  col += vec3(1.0, 0.98, 1.0) * kiss * 0.42;
-  col += mix(uHot, vec3(0.95, 0.88, 1.0), 0.42) * fresnel * 0.40;
-  float alpha = uAlpha * (0.92 + 0.06 * fresnel + 0.04 * core);
-  gl_FragColor = vec4(col, alpha);
+  float spec = pow(max(0.0, dot(n, hlf)), 42.0);
+  float kiss = pow(max(0.0, dot(n, hlf)), 110.0);
+  float caustic = 0.5 + 0.5 * sin(p.x * 4.2 + uTime * 0.28 + p.z * 1.8) * sin(p.y * 3.4 - uTime * 0.18 + p.x * 1.2);
+  float core = exp(-dot(p.xy, p.xy) * 2.05) * uBreath;
+  vec3 col = mix(uDeep, uColor, wrap * 0.62 + vol * 0.32);
+  col = mix(col, uHot, core * 0.78 + wrap * wrap * 0.18);
+  col += uHot * core * 0.42;
+  col += uColor * caustic * 0.035 * core;
+  col += vec3(0.98, 0.94, 1.0) * spec * 0.36;
+  col += vec3(1.0, 0.98, 1.0) * kiss * 0.30;
+  col += mix(uHot, vec3(0.94, 0.86, 1.0), 0.32) * fresnel * 0.20;
+  col += uColor * flare * 0.40;
+  float alpha = uAlpha * (0.38 + 0.40 * vol + 0.32 * core + 0.08 * fresnel);
+  gl_FragColor = vec4(col, min(1.0, alpha));
 }
 `
 
@@ -392,7 +402,7 @@ function rgba(r: number, g: number, b: number, a: number): string {
   return `rgba(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(b * 255)},${a})`
 }
 
-/** Reduced-motion / no-GL still frame: shaded glass sphere, not a single radial blob, not a point cloud. */
+/** Reduced-motion / no-GL still frame: energy volume, not a single radial blob, not a point cloud. */
 function mountStill(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, opts: MountBarPillOrbOpts): BarPillOrbHandle {
   let mood: OrbMood = opts.mood ?? 'idle'
   const paint = (): void => {
@@ -404,38 +414,46 @@ function mountStill(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, op
     const cx = w * 0.5
     const cy = h * 0.5
     const rad = w * 0.45
-    const bloom = ctx.createRadialGradient(cx, cy, rad * 0.72, cx, cy, rad * 1.08)
-    bloom.addColorStop(0, rgba(glass.mid.r, glass.mid.g, glass.mid.b, 0))
-    bloom.addColorStop(0.55, rgba(glass.deep.r, glass.deep.g, glass.deep.b, 0.18))
+    const bloom = ctx.createRadialGradient(cx, cy, rad * 0.42, cx, cy, rad * 1.12)
+    bloom.addColorStop(0, rgba(glass.mid.r, glass.mid.g, glass.mid.b, 0.22))
+    bloom.addColorStop(0.55, rgba(glass.deep.r, glass.deep.g, glass.deep.b, 0.28))
     bloom.addColorStop(1, rgba(glass.deep.r, glass.deep.g, glass.deep.b, 0))
     ctx.fillStyle = bloom
     ctx.beginPath()
-    ctx.arc(cx, cy, rad * 1.08, 0, Math.PI * 2)
+    ctx.arc(cx, cy, rad * 1.12, 0, Math.PI * 2)
     ctx.fill()
-    const body = ctx.createRadialGradient(cx - rad * 0.22, cy - rad * 0.28, rad * 0.06, cx, cy + rad * 0.1, rad)
-    body.addColorStop(0, rgba(Math.min(1, glass.hot.r + 0.08), Math.min(1, glass.hot.g + 0.04), Math.min(1, glass.hot.b), 0.96))
-    body.addColorStop(0.38, rgba(glass.mid.r, glass.mid.g, glass.mid.b, 0.94))
-    body.addColorStop(0.78, rgba(glass.deep.r, glass.deep.g, glass.deep.b, 0.9))
-    body.addColorStop(1, rgba(glass.deep.r, glass.deep.g, glass.deep.b, 0.12))
+    ctx.save()
+    ctx.globalCompositeOperation = 'lighter'
+    ctx.strokeStyle = rgba(glass.hot.r, glass.hot.g, glass.hot.b, 0.28)
+    ctx.lineWidth = Math.max(0.8, w / 90)
+    ctx.lineCap = 'round'
+    for (let i = 0; i < 6; i++) {
+      const a = (i * Math.PI) / 3 + 0.18
+      ctx.beginPath()
+      ctx.moveTo(cx, cy)
+      ctx.lineTo(cx + Math.cos(a) * rad * 0.98, cy + Math.sin(a) * rad * 0.98)
+      ctx.stroke()
+    }
+    ctx.restore()
+    const body = ctx.createRadialGradient(cx - rad * 0.08, cy - rad * 0.12, rad * 0.04, cx, cy + rad * 0.06, rad)
+    body.addColorStop(0, rgba(Math.min(1, glass.hot.r + 0.12), Math.min(1, glass.hot.g + 0.08), 1, 0.96))
+    body.addColorStop(0.28, rgba(glass.hot.r, glass.hot.g, glass.hot.b, 0.88))
+    body.addColorStop(0.62, rgba(glass.mid.r, glass.mid.g, glass.mid.b, 0.72))
+    body.addColorStop(1, rgba(glass.deep.r, glass.deep.g, glass.deep.b, 0.08))
     ctx.fillStyle = body
     ctx.beginPath()
     ctx.arc(cx, cy, rad, 0, Math.PI * 2)
     ctx.fill()
     const kissX = cx - rad * 0.28
     const kissY = cy - rad * 0.4
-    const kiss = ctx.createRadialGradient(kissX, kissY, 0, kissX, kissY, rad * 0.3)
-    kiss.addColorStop(0, 'rgba(255,248,255,0.82)')
-    kiss.addColorStop(0.42, rgba(glass.hot.r, glass.hot.g, glass.hot.b, 0.2))
+    const kiss = ctx.createRadialGradient(kissX, kissY, 0, kissX, kissY, rad * 0.28)
+    kiss.addColorStop(0, 'rgba(255,248,255,0.78)')
+    kiss.addColorStop(0.42, rgba(glass.hot.r, glass.hot.g, glass.hot.b, 0.16))
     kiss.addColorStop(1, 'rgba(255,255,255,0)')
     ctx.fillStyle = kiss
     ctx.beginPath()
-    ctx.arc(kissX, kissY, rad * 0.3, 0, Math.PI * 2)
+    ctx.arc(kissX, kissY, rad * 0.28, 0, Math.PI * 2)
     ctx.fill()
-    ctx.strokeStyle = rgba(Math.min(1, glass.hot.r + 0.12), Math.min(1, glass.hot.g + 0.08), 1, 0.4)
-    ctx.lineWidth = Math.max(1, w / 52)
-    ctx.beginPath()
-    ctx.arc(cx, cy, rad * 0.96, 0, Math.PI * 2)
-    ctx.stroke()
   }
   paint()
   return {

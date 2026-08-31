@@ -2175,14 +2175,15 @@ html.metis-bar-land .aw-widget {
   flex-shrink: 0;
   padding: 0;
   margin: 0;
-  overflow: hidden;
+  overflow: visible;
   border: none;
   border-radius: 50%;
   background: transparent;
   box-shadow: none;
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
-  contain: paint;
+  contain: layout;
+  filter: drop-shadow(0 3px 8px rgba(138, 0, 248, 0.42));
   touch-action: none;
   cursor: pointer;
   transform-origin: center center;
