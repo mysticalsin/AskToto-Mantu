@@ -4,7 +4,8 @@ import type { TranscriptLine } from '@shared/ipc'
 import { isScreenCapturePermissionError, needsAppRelaunchForScreenCapture } from '@shared/screen-capture'
 import type { AnswerState } from '../state'
 import { Markdown } from './Markdown'
-import { TextButton, Spinner } from './ui'
+import { TextButton } from './ui'
+import { AgentStatus } from './AgentStatus'
 import { useFlash } from '../lib/useFlash'
 
 // Cap on how many transcript lines render live in the copilot panel — see the comment above transcriptRows.
@@ -194,9 +195,7 @@ export const Copilot = memo(function Copilot({
             )}
             <div className="flex items-center gap-1.5">
               {suggestion?.text && suggestion?.streaming && (
-                <span className="flex items-center gap-1 text-[11px] text-[color:var(--color-ink-3)]">
-                  <Spinner size={11} /> Updating…
-                </span>
+                <AgentStatus kind="working" size="inline" caption />
               )}
               {suggestion?.text && (
                 <TextButton
@@ -214,9 +213,7 @@ export const Copilot = memo(function Copilot({
         ) : suggestion?.text ? (
           <Markdown>{suggestion.text}</Markdown>
         ) : suggestion?.streaming ? (
-          <div className="flex items-center justify-center gap-2 text-[13px] text-[color:var(--color-ink-2)]">
-            <Spinner size={13} /> Thinking…
-          </div>
+          <AgentStatus kind="thinking" size="hero" />
         ) : (
           <div className="text-center text-[13px] leading-snug text-[color:var(--color-ink-2)]">
             {listening ? (
@@ -274,10 +271,12 @@ export const Copilot = memo(function Copilot({
         </div>
       )}
       {loading && (
-        <div className="flex items-center gap-2 text-[11px] text-[color:var(--color-ink-3)]">
-          <Spinner size={11} />
-          {loadingPct != null ? `Loading speech model… ${loadingPct}%` : 'Loading transcription model…'}
-        </div>
+        <AgentStatus
+          kind="loading-model"
+          size="inline"
+          caption
+          percent={loadingPct}
+        />
       )}
       {/* Transcript — hidden during the call; shown only when the user opens it (bar → Transcript). */}
       {showTx && (

@@ -39,7 +39,6 @@ import {
   Cloud,
   FolderLock,
   KeyRound,
-  Loader2,
   MessageSquare,
   Mic,
   MonitorUp,
@@ -60,6 +59,7 @@ import type { ConversationMode, LocalModelSummary, PermissionStatus, ProfileReco
 import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { MetisMark } from './MetisMark'
+import { AgentStatus, InlineOrb } from './AgentStatus'
 import { OnboardingDemoScene, prefetchOnboardingDemoChunks } from './OnboardingDemoScene'
 import { isWindows } from '../lib/keys'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
@@ -532,7 +532,7 @@ function ActLicense({
           disabled={!serverUrl.trim() || !licenseKey.trim() || activating}
           className="no-drag focus-ring flex items-center gap-1.5 rounded-full bg-[var(--color-accent)]/15 px-4 py-2 text-[12px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25 disabled:opacity-50"
         >
-          {activating ? <Loader2 size={13} className="animate-spin" /> : <KeyRound size={13} />}
+          {activating ? <InlineOrb kind="connecting" /> : <KeyRound size={13} />}
           Activate
         </button>
         <button
@@ -985,11 +985,14 @@ export function OnboardingExperience({
                   <p className="m-0 truncate text-[13px] text-[color:var(--color-ink)]">{r.label}</p>
                   {r.detail && <p className="m-0 text-[11px] text-[color:var(--color-ink-3)]">{r.detail}</p>}
                   {r.key === 'local' && r.progress != null && r.progress > 0 && r.progress < 1 && (
-                    <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
-                      <div
-                        className="h-full rounded-full bg-[#9A2BF0]"
-                        style={{ width: `${Math.round(r.progress * 100)}%` }}
-                      />
+                    <div className="mt-1.5 flex items-center gap-2">
+                      <AgentStatus kind="loading-model" size="inline" percent={Math.round(r.progress * 100)} />
+                      <div className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-white/10">
+                        <div
+                          className="h-full rounded-full bg-[#9A2BF0]"
+                          style={{ width: `${Math.round(r.progress * 100)}%` }}
+                        />
+                      </div>
                     </div>
                   )}
                   {/* Why-before-prompt: shown before the button that triggers the OS dialog / deep link, not
@@ -1081,7 +1084,7 @@ export function OnboardingExperience({
                   )}
                 </div>
                 {r.state === 'checking' && (
-                  <span className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-white/20 border-t-[var(--color-accent-2)]" />
+                  <InlineOrb kind="loading" />
                 )}
                 {r.state === 'ready' && <Check size={16} className="mt-0.5 shrink-0 text-[var(--color-accent-2)]" />}
                 {r.state === 'action' && <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-ink-2)]">needed</span>}

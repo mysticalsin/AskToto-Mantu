@@ -1856,11 +1856,6 @@ input::placeholder {
     animation-duration: 0ms !important;
     transition-duration: 0ms !important;
   }
-  /* Spinners must still signal loading without rotation — swap the spin for a gentle opacity pulse. */
-  .loading-spinner {
-    animation: asktoto-loading-pulse 1.2s ease-in-out infinite !important;
-    animation-duration: 1.2s !important;
-  }
   /* The recording dot is a liveness + consent signal — it must keep moving, not freeze. Opacity-only
      pulse (no scale) respects reduced-motion while still clearly reading as "we are live". */
   .rec-dot {
