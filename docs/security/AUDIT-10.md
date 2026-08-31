@@ -368,6 +368,109 @@ READY TO MERGE stays **no** until Devon reviews this document and the fixes. Pac
 
 ---
 
+## Extra: XSS / imports / payment webhooks
+
+Senior review of three high-risk issues. Written against this branch, then patched on the same PR. Overlay / onboarding / identity / Intelligence / latency / ASR engines were not used as a place to hide findings.
+
+### 1. XSS
+
+**Status (pre-fix): Partial**
+
+**Evidence:**
+
+| Sink | What it does | File + symbol |
+|---|---|---|
+| Answer markdown | Streamdown (`rehype-sanitize` + `rehype-harden` + `rehype-raw`). Model text, notes, recaps. | `src/renderer/src/components/Markdown.tsx` `Markdown` |
+| Shiki code | `dangerouslySetInnerHTML` after `sanitizeShikiHtml` | `CodeBlock.tsx` `Block` |
+| Recap PDF | `recapMarkdownToHtml` escapes text; hidden `data:text/html` window. **No CSP on the generated document** | `transcripts.ts` `recapMarkdownToHtml`, `index.ts` `IPC.recapPdf` |
+| Calendar join | Graph `joinUrl` painted as `<a href>` with `target=_blank`. **No scheme allow-list** | `calendar.ts` `toEvent`, `AgendaView.tsx` `EventRow` |
+| Admin dashboard | `innerHTML` of operator fields, every value through `escapeHtml` | `license-server/admin/index.html` |
+| CSP | Meta CSP on overlay, decoder, Intelligence. `script-src` has no `unsafe-inline`. Packaged DevTools off | `src/renderer/index.html`, `decoder.html`, `intelligence/index.html` |
+| Navigation | `will-navigate` pinned; `setWindowOpenHandler` opens `https:` only | `index.ts` `createWindow` |
+| webview | None | repo grep |
+
+**Risk if missing:** A coerced model fence or a Graph-supplied `javascript:` join URL runs in the privileged renderer. Recap PDF HTML without CSP is a second document that only the escaper protects.
+
+**Exact fix:** `safeHref()` allow-list (`http`/`https`/`mailto`) on markdown `<a>` and Graph `joinUrl`. CSP `script-src 'none'` on recap HTML. Contract: only CodeBlock uses `dangerouslySetInnerHTML`; no `webviewTag`.
+
+**Status (post-fix): Present.** Residual: Streamdown still parses raw HTML then sanitizes (their stack, not ours). Admin UI still assigns `innerHTML` after `escapeHtml` (operator origin).
+
+---
+
+### 2. File uploads / imports
+
+**Status (pre-fix): Partial**
+
+**Evidence:**
+
+| Control | Present? | File + symbol |
+|---|---|---|
+| Native picker, path never crosses IPC | Yes — opaque token | `import-audio.ts` `pickAudioFile` / `consumePickedAudio` |
+| Max size 500 MB | Yes | `MAX_SOURCE_BYTES` |
+| Size/mtime re-check | Yes | `consumePickedAudio` |
+| Extension filter | Yes, plus **"All files"** | `AUDIO_EXTENSIONS` |
+| Magic bytes / MIME | **No** — ffmpeg saw whatever the user picked | `ffmpeg-decoder.ts` `startFfmpegDecode` |
+| Output name | Generated `stamp-slug.md` or opaque hex. Original filename is title text only (`humanizeFilename` → `slug`) | `transcripts.ts` `saveMeeting` |
+| Store location | User meetings folder, not `resources/` / asar | `ensureMeetingsFolder` |
+| Execute the file | No `shell.openPath` / `exec` on the source | `IPC.importAudioStart` |
+| AV | No | N/A for a desktop importer |
+
+There is no public multipart HTTP upload. Import recap is markdown written by main after ASR, not an uploaded HTML file.
+
+**Risk if missing:** "All files" + ffmpeg is a parser RCE class. An HTML/PE/PDF renamed to `.mp3` should never reach the decoder. A trusted original filename as a dest path would be path traversal; that dest path already does not exist.
+
+**Exact fix:** `sniffMediaFile()` / `isAudioOrVideoMagic()` on the first 16 bytes. Refuse before the job queues (`consumePickedAudio`) and again before `spawn` (`startFfmpegDecode`). Keep generated meeting names. No AV shipped.
+
+**Status (post-fix): Present.** Residual: a crafted *valid* media file can still hit ffmpeg bugs. Magic bytes stop the wrong type, not a malicious MP4. Optional AV is still optional.
+
+---
+
+### 3. Payment / license webhooks
+
+**Status (pre-fix): N/A** (inbound payment webhooks do not exist — must be proven, not assumed)
+
+**Evidence:**
+
+- No Stripe, Lemon Squeezy, Svix, or inbound `/webhook` route in `license-server/lib/app.mjs`. License-granting POSTs are `POST /activate` (license key is the credential) and `POST /admin/licenses` (admin bearer or session cookie).
+- `LICENSE_WEBHOOK_URL` is **outbound only** (`webhooks.mjs` `createWebhooks` `deliver`). The server POSTs to Discord / a generic URL. HMAC `X-AskToto-Signature` is for the *receiver* to verify. Truncating keys is leak control, not inbound signature verify.
+- Fly/Caddy terminate TLS and reverse-proxy. They do not grant seats.
+- Desktop OAuth loopbacks bind `127.0.0.1` and do not create licenses.
+
+**Risk if missing:** A forged Stripe-shaped POST that fulfilled seats without a signature. That route is not there. Claiming N/A without a 404 test would be theater.
+
+**Exact fix:** No payment provider to wire. Add tests that `POST /webhook`, `/stripe`, `/stripe/webhook`, `/lemon`, `/hooks`, `/hooks/license` return 404 and do not grow the store. Source contract: no `app.post('/webhook|stripe|lemon|hooks')`.
+
+**Status (post-fix): N/A**, proven. If a payment provider is added later, this item becomes Missing until official-library signature verify + idempotency land *before* fulfillment.
+
+---
+
+### Extra score
+
+| # | Control | Status |
+|---|---|---|
+| 1 | XSS | **Present** |
+| 2 | File imports | **Present** |
+| 3 | Payment / license webhooks | **N/A** (no inbound payment webhook; 404 proof) |
+
+**Fully protected: 2 / 3.** N/A counted separately: 1.
+
+Highest-priority remaining residuals: ffmpeg parser bugs on real media; Streamdown's sanitizer as the markdown HTML gate; no AV.
+
+No tonight action plan beyond this PR's patches — the two applicable controls are Present, the third is proven N/A. READY TO MERGE stays **no**.
+
+---
+
+## Phase 3 remediations (same PR)
+
+| Gap | Fix | Tests |
+|---|---|---|
+| Graph / markdown `javascript:` hrefs | `src/shared/safe-url.ts` `safeHref` | `safe-url.test.ts`, `calendar.test.ts`, contract |
+| Recap PDF HTML had no CSP | `script-src 'none'` meta on `recapMarkdownToHtml` | `transcripts.test.ts` |
+| Import trusted extension only | Magic-byte sniff before queue and before ffmpeg | `import-magic.test.ts`, contract |
+| Inbound webhook assumed absent | 404 + store-unchanged + source contract | `license-server/server.test.mjs` |
+
+---
+
 ## Out of scope (frozen)
 
 Overlay chrome, island geometry, onboarding, PR 58, identity card PR, Intelligence dashboards, latency / time-saved PRs. Pack and GitHub release stay last. No user-facing copy in this ship claims an AI author.
