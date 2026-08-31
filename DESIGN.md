@@ -124,4 +124,4 @@ Métis voice. Do not clone Vibe Island strings.
 
 ## Operator
 
-Cloudflare Access control plane plus client prompt cache: `docs/design/OPERATOR.md`. Not overlay chrome. Not the Fly license-server.
+Cloudflare Access packed ops console plus client prompt cache: `docs/design/OPERATOR.md`. Map geo is `request.cf` only. Not overlay chrome. Not the Fly license-server.

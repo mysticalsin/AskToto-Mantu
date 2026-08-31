@@ -23,7 +23,7 @@ Do not wrangler deploy from CI with secrets.
 | Path | Who | Auth |
 | --- | --- | --- |
 | `/` | Tony in a browser | Cloudflare Access, then the Worker checks identity |
-| `/v1/admin/*` | Tony in a browser | Same Access + Worker identity check |
+| `/v1/admin/*` | Tony in a browser | Same Access + Worker identity check. Includes `/v1/admin/dashboard` and CRM retry. |
 | `POST /v1/ingest` | Métis desktop | HMAC only. Not Access. |
 | `POST /v1/heartbeat` | Métis desktop | HMAC only. Not Access. |
 | `GET /v1/skills/manifest` | Métis desktop | HMAC only. Not Access. |
@@ -82,7 +82,11 @@ npx wrangler@4 d1 execute metis-operator --file=schema.sql --remote
 npx wrangler@4 d1 execute metis-operator --file=schema.sql --local
 ```
 
-Prompt bodies are ciphertext only. The schema has no plaintext Ask column.
+If this D1 already exists from an earlier Operator draft, also apply `schema-alter.sql` (new seat geo columns, `pulses`, `crm_sends`). Skip any `ALTER` that already landed.
+
+Prompt bodies are ciphertext only. The schema has no plaintext Ask column. Geo is country ISO + optional city + optional lat/lon from Cloudflare `request.cf` on the Worker. Never store IP. The Electron client does not send coordinates.
+
+The hosted console is a packed dark ops page: 3-up KPI sparklines, scale/cost charts, a choropleth of unique devices, a change heatmap, a CRM send board (seven statuses are filters; Retry on Failed never auto-sends), redacted Asks, and Draft / Approve / Push. Empty map if no heartbeats. No sample visitors.
 
 ## Deploy
 

@@ -1,41 +1,52 @@
 ---
 project: Métis
 type: operator-control-plane-contract
-owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, client prompt-cache honesty
-does-not-own: overlay chrome (Bar / Island / Hide), Overlay 58, leftover Intelligence PR 61, onboarding, installer packing, Fly license-server, cloudflare-proxy AI token proxy
-ready-to-merge: no until Devon Mac-shows Access login as Tony, a second Claude ask with a real cache read, and a Push that the Mac applies as an overlay
+owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, client prompt-cache honesty, CRM send board
+does-not-own: overlay chrome (Bar / Island / Hide), Overlay 58, leftover Intelligence PR 61, onboarding, installer packing, Fly license-server, cloudflare-proxy AI token proxy, Bklit Studio
+ready-to-merge: no until CI is green and Devon opens Access as Tony and sees a real or honestly empty map
 audience: Tony Walteur only. Two emails. Nobody else.
 tokens:
   accent: "#7C8CF8"
-  accent-soft: "rgba(124,140,248,0.16)"
-  glass-fill: "rgba(20,20,22,0.55)"
-  glass-fill-strong: "rgba(16,16,18,0.72)"
-  glass-border: "rgba(255,255,255,0.12)"
-  text-primary: "rgba(255,255,255,0.95)"
-  text-secondary: "rgba(255,255,255,0.55)"
-  text-muted: "rgba(255,255,255,0.38)"
   ok: "#83C092"
   danger: "#F0717A"
+  bg: "#0a0a0b"
+  panel: "#111113"
   hair: "rgba(255,255,255,0.10)"
+  land: "#2a2a2e"
+  chart-1: "#1a1a1d"
+  chart-2: "#2a2a2e"
+  chart-3: "#52525b"
+  chart-4: "#a1a1aa"
+  chart-5: "#e4e4e7"
 typography:
-  ui: "Geist, -apple-system, system-ui, sans-serif"
+  ui: "Geist, Inter, system-ui, sans-serif"
   mono: "Geist Mono, ui-monospace, SFMono-Regular, monospace"
-  scale: { xs: 11, sm: 12, base: 13 }
-radius: { sm: 8, md: 12 }
-spacing: 4px-scale
+  eyebrows: "uppercase, letter-spaced, Geist Mono"
 ---
 
 # Operator control plane
 
-Tony's fleet console. How people use Métis, who is live, what Asks cost, whether prompt cache is hitting, which questions should sharpen a skill, and a signed push of that skill to every Mac and Windows seat.
+Tony's packed ops console. One page. Not a marketing site. How people use Métis, who is live, what Asks cost, whether prompt cache is hitting, where seats check in, which CRM sends are stuck, and a signed push of a skill to every Mac and Windows seat.
 
-This is not a Settings card. It is not a local analytics page that pretends to be the fleet. The product is a Cloudflare Worker named `metis-operator` under `operator/`. The Métis client keeps prompt caching on, and talks to this Worker only when Settings has an Operator URL.
+This is not a Settings card. It is not a local analytics page. The product is a Cloudflare Worker named `metis-operator` under `operator/`. The Métis client keeps prompt caching on, and talks to this Worker only when Settings has an Operator URL.
 
-Tokens: Métis glass from [`DESIGN.md`](./DESIGN.md). One accent `#7C8CF8`. No purple gradient. No emoji as icon. No lorem. No sample numbers. Empty states when the log is empty.
+## Pixel language
 
-Copy is original Métis. No em dashes in user-facing strings. Never identify as AI.
+Rebuild the density and chrome of the public Bklit blocks/charts look inside Operator. Do not vendor `@bklit` npm. Do not copy Studio (`ui.bklit.com/studio`). Do not clone the marketing site.
 
-Windows has no notch. The hosted console is a dense 7am operations page. The in-app Settings row is a power field plus an Open Operator link that launches the Access-gated URL in the system browser.
+- Near-black canvas, radial-dot grid, 1px hairline cards with crop-mark corners.
+- Geist Sans + Geist Mono. Uppercase letter-spaced eyebrows.
+- Default chart palette is monochrome (`--chart-1` through `--chart-5`). Color is the exception: mint trend/online, danger on Failed, one brand accent `#7C8CF8` for live dots and primary actions.
+- Chart-type tabs: solid light pill on the active tab.
+- KPI strip is 3-up. Big number, tiny mono sublabel, axis-free sparkline that bleeds to the card edge.
+- Map is a flat gray choropleth. No basemap tiles. No country labels. 5-step gray scale. Variants: land, analytics, graticule, hatch. Dark theme is the default.
+- Change activity is a GitHub-style contribution heatmap.
+- CRM send is a 7-status funnel used as **filters** on the real board, not a demo grid.
+- No Unsplash. No demo people. No placeholder visitors. Empty states say there is no ingest yet.
+
+Copy is original Métis. No em dashes in user-facing strings. Never identify as AI. No emoji as icon.
+
+Windows has no notch. Overlay chrome stays frozen. The in-app Settings row is a power field plus Open Operator in the system browser.
 
 ## Who this is for
 
@@ -44,7 +55,7 @@ Tony only. Cloudflare Access allowlist:
 - `tony.walteur@gmail.com`
 - `twalteur@amaris.com`
 
-Regular users never see a fleet dashboard. They may have an Operator URL configured by Tony. That only sends heartbeats and Ask metadata. It does not open the console.
+Regular users never see this console.
 
 ## What this is not
 
@@ -55,80 +66,68 @@ Regular users never see a fleet dashboard. They may have an Operator URL configu
 | `aria-intake-llm`, `notebooklm-mcp`, `partner-mcp`, `tco-supabase-keepalive` | Existing Workers. Do not touch. |
 | Overlay / Island / Hide / Bar | Frozen. Do not restyle. |
 | In-app Operator page | Removed. Do not leave a fake local fleet view. |
+| Bklit Studio | Proprietary. Do not copy. |
 
-New tree: `operator/`. New Worker name: `metis-operator`. Account already in use: `tony.walteur@gmail.com`, account id `294885a27b3cc0a1cbe5d0ccbe38de4f`.
+New tree: `operator/`. Worker name: `metis-operator`. Account already in use: `tony.walteur@gmail.com`, account id `294885a27b3cc0a1cbe5d0ccbe38de4f`.
 
 ## Security (hard)
 
 1. **Admin UI + `/v1/admin/*`.** Cloudflare Access. Worker also verifies identity via `ctx.access.getIdentity()` and/or `Cf-Access-Jwt-Assertion` JWKS. If Access did not run, admin routes return 401. No homemade password page. No `LICENSE_ADMIN_TOKEN` for this UI.
 
-2. **Device ingest.** `POST /v1/ingest`, `POST /v1/heartbeat`, `GET /v1/skills/manifest` are not behind Access (Electron cannot do the Access login). HMAC-SHA256: timestamp + nonce + deviceId + body hash, secret `OPERATOR_INGEST_SECRET` (Wrangler secret). Reject skew greater than 5 minutes. Rate limit per device. Replay nonce window.
+2. **Device ingest.** `POST /v1/ingest`, `POST /v1/heartbeat`, `GET /v1/skills/manifest` are not behind Access. HMAC-SHA256: timestamp + nonce + deviceId + body hash, secret `OPERATOR_INGEST_SECRET`. Reject skew greater than 5 minutes. Rate limit per device. Replay nonce window.
 
 3. **Prompts at rest.** AES-GCM with `OPERATOR_PROMPT_KEY` before D1. Decrypt only on an Access-authenticated admin GET. Every reveal is audit-logged (who, when, which ask id).
 
-4. **Never ingest** Listen transcripts, screen captures, audio, or API keys. Ask text + metadata only. Client redacts secrets before send.
+4. **Never ingest** Listen transcripts, screen captures, audio, or API keys. Ask text + metadata only. CRM ingest is title + status + connector. Never the recap body.
 
-5. **No secrets in git, logs, or PR bodies.** Wrangler secrets only. The skill-pack public key may be committed (it is a verify key, same rule as license leases).
+5. **No secrets in git, logs, or PR bodies.** Wrangler secrets only. Do not commit test private keys.
 
-6. **Path split.** Access protects `/` and `/v1/admin/*`. Ingest paths stay HMAC-only. How to set that in Zero Trust is in `operator/README.md`. Do not enable "Protect this Worker" for all traffic: that would lock Electron out.
+6. **Path split.** Access protects `/` and `/v1/admin/*`. Ingest stays HMAC-only. Do not enable "Protect this Worker" for all traffic.
 
-## Data
+## Console sections
 
-**Live seats.** last-seen under 2 minutes = online. DAU. Versions. OS (`darwin` / `win`). Hashed license seat id. App version.
+One ops console. Packed, still readable.
 
-**Cache.** `cacheRead` / `cacheWrite` / uncached tokens. TTFT hit vs miss. By provider and by mode. Real usage fields only. Missing = not reported. Never a fake $0.
+1. **KPI strip (real fields only).** Live seats (last-seen under 2 minutes), DAU, WAU (on the DAU card), app versions in field, cache hit rate, estimated cost today and 7d (labeled estimate, list price), pending skill diffs, last index time if a seat reported it. Missing usage is hidden or "not reported". Never a fake $0.
 
-**Cost.** Estimate from the published list-price table in `src/shared/operator.ts`. Every dollar figure is labeled "estimate, list price". Hide rather than show $0.00 when fields were not reported.
+2. **Scale.** Live line of heartbeats and Asks over 24h and 7d. Bar of version mix and OS mix.
 
-**Prompts.** Ask question text, mode, skill version, rating, outcome. Searchable. Default list is redacted. Click-to-reveal + audit.
+3. **Cost.** Stacked area of cache read vs write vs uncached tokens. Table by provider and mode. Missing usage = not reported, never $0 fake.
 
-**Change management.** Skill drafts, approvals, pushes, rollout, who (Tony email), when.
+4. **Change management.** Timeline of skill draft / approve / push / rollout, who (Tony email), when, version. App version adoption. Heatmap of that activity over 17 weeks. Empty cells are quiet days.
 
-**Skills.** Cluster recent prompts per mode. Draft a unified diff against the locked `SKILL.md` (or the current approved override). Tony edits. Approves. Pushes. Push writes a signed skill pack. Clients pull and apply as overlays (`userData/skills-overrides`) with an overlay lock. Never auto-apply a draft. Humanizer stays in every mode. Recruiting stays interviewer-of-record. Interview stays candidate-side.
+5. **MAP.** Choropleth of unique devices by country. Live-ish dots only from Cloudflare `request.cf` (country, city, lat/long). **No GPS from the Electron app. No raw IP in the UI.** Store country ISO + optional city. Empty map if no heartbeats, not a fake world of sample users.
+
+6. **Asks.** Redacted list. Click-to-reveal + audit.
+
+7. **Skills.** Draft / Approve / Push. Approve does not publish. Push signs a pack. Never auto-apply a draft.
+
+8. **CRM send.** Seven statuses are filters: Pending, In progress, In review, Submitted, Success, Failed, Expired. The board is real ingest rows. Explicit Retry on Failed asks the seat to confirm again. **Never auto-send.**
+
+## Geo ingest
+
+On each HMAC heartbeat (and Ask ingest), the Worker attaches geo from `request.cf`. The client body may send `seatHash`, `os`, `appVersion`, and optional `lastIndexAt`. The Worker ignores client `lat`, `lon`, `country`, `city`, and `ip`.
 
 ## Client (Métis)
 
-Prompt caching is always on for supported cloud APIs. It is a cost and latency win for everyone.
-
-### Cache (always)
+Prompt caching is always on for supported cloud APIs.
 
 - Anthropic: last stable system block with `cache_control: { type: 'ephemeral', ttl: '1h' }`. On 400, retry default ephemeral and record `ttl: '5m'`.
-- Record `cache_read_input_tokens`, `cache_creation_input_tokens`, and `input_tokens` as the uncached remainder.
-- OpenAI cloud only: `prompt_cache_key = metis:${mode}:${skillLockHash}` and an explicit breakpoint. On 400, retry once without those fields and mark the endpoint unsupported.
-- Local / llama / Dust / CLI: `cache: 'n/a'`. Keep llama `cache_prompt` slot pinning.
+- OpenAI cloud only: `prompt_cache_key = metis:${mode}:${skillLockHash}` and an explicit breakpoint. On 400, retry once without those fields.
+- Local / llama / Dust / CLI: `cache: 'n/a'`.
 - Prefix byte-stability: two `buildSystem` calls in one session with different transcripts must produce identical cached-prefix bytes.
 
-### Operator URL (off until configured)
+When Settings has an Operator URL:
 
-Settings → Privacy → Advanced:
+- Heartbeat about every 60s while the app is up. No coordinates.
+- After each Ask: metrics always; prompt text only if the Ask-text toggle is on.
+- After a CRM push attempt: status + title + connector. No recap body.
+- Poll skill manifest on launch and every 6 hours. Verify ed25519. Apply overlay only if signature and hash match.
 
-- Operator URL (https). Empty by default.
-- Send Ask text for skill improvement (default ON once a URL is set). Off sends metrics only.
-- Open Operator: system browser to the Access-gated URL.
-
-When a URL is set:
-
-- Heartbeat about every 60s while the app is up.
-- After each Ask: metrics always; prompt text only if the toggle is on.
-- Poll skill manifest on launch and every 6 hours. Verify ed25519 with the embedded operator public key. Apply overlay only if signature and hash match.
-
-`METIS_OPERATOR_URL` env may prefill the URL. Do not leave a local-only analytics page.
-
-## Worker UI
-
-Dense operations console. First paint:
-
-- Live count (last-seen < 2 min)
-- Cost today (estimate, list price)
-- Cache hit rate (real fields only)
-- Pending skill diffs
-
-Then: seats, asks (redacted), skill queue (pending / approved / pushed), change log.
-
-Empty: "No Asks on the fleet yet." Never invent a chart.
+`METIS_OPERATOR_URL` may prefill the URL. Do not leave a local-only analytics page.
 
 ## Ready to merge
 
-**READY TO MERGE: no** until Devon Mac-shows Access as Tony, a second Claude ask with a cache read, Draft / Approve / Push, and the Mac overlay version bump.
+**READY TO MERGE: no** until CI is green and Devon can open Access as Tony and see a real map or an honestly empty map, not demo data.
 
-Do not wrangler deploy from CI with secrets. Overlay chrome stays frozen. Do not merge.
+Do not wrangler deploy from CI with secrets. Overlay chrome stays frozen. Do not pack installers. Do not merge until that Mac show.

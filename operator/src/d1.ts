@@ -1,4 +1,5 @@
-import type { AskRow, OperatorStore, PackRow, ProposalRow, SeatRow } from './store'
+import type { CrmSendRow } from './crm'
+import type { AskRow, OperatorStore, PackRow, ProposalRow, PulseRow, SeatRow } from './store'
 
 interface D1Stmt {
   bind(...values: unknown[]): D1Stmt
@@ -12,6 +13,7 @@ export interface D1DatabaseLike {
 }
 
 const NONCE_TTL_MS = 10 * 60 * 1000
+const PULSE_TTL_MS = 8 * 24 * 60 * 60 * 1000
 
 export function d1Store(db: D1DatabaseLike): OperatorStore {
   return {
@@ -42,20 +44,37 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
     },
     async upsertSeat(row) {
       const prev = await db
-        .prepare('SELECT first_seen FROM seats WHERE device_id = ?')
+        .prepare('SELECT first_seen, country, city, lat, lon, last_index_at FROM seats WHERE device_id = ?')
         .bind(row.device_id)
-        .first<{ first_seen: number }>()
+        .first<Pick<SeatRow, 'first_seen' | 'country' | 'city' | 'lat' | 'lon' | 'last_index_at'>>()
       await db
         .prepare(
-          `INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen)
-           VALUES (?, ?, ?, ?, ?, ?)
+          `INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen, country, city, lat, lon, last_index_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(device_id) DO UPDATE SET
              seat_hash = excluded.seat_hash,
              os = excluded.os,
              app_version = excluded.app_version,
-             last_seen = excluded.last_seen`
+             last_seen = excluded.last_seen,
+             country = COALESCE(excluded.country, seats.country),
+             city = COALESCE(excluded.city, seats.city),
+             lat = COALESCE(excluded.lat, seats.lat),
+             lon = COALESCE(excluded.lon, seats.lon),
+             last_index_at = COALESCE(excluded.last_index_at, seats.last_index_at)`
         )
-        .bind(row.device_id, row.seat_hash, row.os, row.app_version, prev?.first_seen ?? row.first_seen, row.last_seen)
+        .bind(
+          row.device_id,
+          row.seat_hash,
+          row.os,
+          row.app_version,
+          prev?.first_seen ?? row.first_seen,
+          row.last_seen,
+          row.country,
+          row.city,
+          row.lat,
+          row.lon,
+          row.last_index_at
+        )
         .run()
     },
     async insertAsk(row) {
@@ -112,6 +131,20 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       const r = await db.prepare('SELECT * FROM seats').all<SeatRow>()
       return r.results
     },
+    async insertPulse(row) {
+      await db
+        .prepare('INSERT OR REPLACE INTO pulses (id, device_id, ts, kind, country, city) VALUES (?, ?, ?, ?, ?, ?)')
+        .bind(row.id, row.device_id, row.ts, row.kind, row.country, row.city)
+        .run()
+      await db.prepare('DELETE FROM pulses WHERE ts < ?').bind(row.ts - PULSE_TTL_MS).run()
+    },
+    async listPulses(since) {
+      const r = await db
+        .prepare('SELECT * FROM pulses WHERE ts >= ? ORDER BY ts ASC')
+        .bind(since)
+        .all<PulseRow>()
+      return r.results
+    },
     async listProposals() {
       const r = await db.prepare('SELECT * FROM proposals ORDER BY created_at DESC').all<ProposalRow>()
       return r.results
@@ -163,6 +196,40 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         )
         .bind(row.id, row.skill_id, row.version, row.sha256, row.body, row.signed, row.pushed_at, row.pushed_by)
         .run()
+    },
+    async upsertCrm(row) {
+      await db
+        .prepare(
+          `INSERT INTO crm_sends (id, device_id, ts, status, title, connector, meeting_file, last_error, retry_requested)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             ts = excluded.ts,
+             status = excluded.status,
+             title = excluded.title,
+             connector = excluded.connector,
+             meeting_file = excluded.meeting_file,
+             last_error = excluded.last_error,
+             retry_requested = CASE WHEN excluded.retry_requested = 1 THEN 1 ELSE crm_sends.retry_requested END`
+        )
+        .bind(
+          row.id,
+          row.device_id,
+          row.ts,
+          row.status,
+          row.title,
+          row.connector,
+          row.meeting_file,
+          row.last_error,
+          row.retry_requested
+        )
+        .run()
+    },
+    async getCrm(id) {
+      return (await db.prepare('SELECT * FROM crm_sends WHERE id = ?').bind(id).first<CrmSendRow>()) ?? null
+    },
+    async listCrm(limit) {
+      const r = await db.prepare('SELECT * FROM crm_sends ORDER BY ts DESC LIMIT ?').bind(limit).all<CrmSendRow>()
+      return r.results
     },
     async audit(id, ts, actor, action, askId, detail) {
       await db

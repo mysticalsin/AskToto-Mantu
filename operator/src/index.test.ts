@@ -248,3 +248,122 @@ describe('health', () => {
     expect(body.service).toBe('metis-operator')
   })
 })
+
+describe('packed console map and geo', () => {
+  it('renders an empty map when there are no heartbeats, never sample visitors', async () => {
+    const store = memoryStore()
+    const home = await handleRequest(
+      new Request('https://operator.test/'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    expect(home.status).toBe(200)
+    const page = await home.text()
+    expect(page).toContain('No heartbeats yet. The map stays empty until a seat checks in.')
+    expect(page).not.toMatch(/Unique Visitors|visitor traffic|\$6,525|1,344/)
+    expect(page).not.toMatch(/\b1\.2\.3\.4\b/)
+    const dash = await handleRequest(
+      new Request('https://operator.test/v1/admin/dashboard'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const body = (await dash.json()) as { map: { empty: boolean; countries: unknown[]; dots: unknown[] } }
+    expect(body.map.empty).toBe(true)
+    expect(body.map.countries).toEqual([])
+    expect(body.map.dots).toEqual([])
+  })
+
+  it('stores Cloudflare cf geo on heartbeat and ignores client coordinates and IP', async () => {
+    const store = memoryStore()
+    const req = await signedRequest(
+      '/v1/heartbeat',
+      JSON.stringify({
+        os: 'darwin',
+        appVersion: '1.8.0',
+        lat: 9,
+        lon: 9,
+        country: 'US',
+        city: 'Clientville',
+        ip: '203.0.113.9'
+      })
+    )
+    const res = await handleRequest(req, env(), {}, {
+      store,
+      now: NOW,
+      geo: { country: 'FR', city: 'Paris', lat: 48.857, lon: 2.351 }
+    })
+    expect(res.status).toBe(200)
+    const seats = await store.listSeats()
+    expect(seats[0]?.country).toBe('FR')
+    expect(seats[0]?.city).toBe('Paris')
+    expect(seats[0]?.lat).toBe(48.857)
+    expect(seats[0]?.lon).toBe(2.351)
+    const dash = await handleRequest(
+      new Request('https://operator.test/v1/admin/dashboard'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const text = await dash.text()
+    expect(text).not.toContain('203.0.113.9')
+    expect(text).not.toContain('Clientville')
+    const body = JSON.parse(text) as { map: { empty: boolean; countries: { iso: string; devices: number }[] } }
+    expect(body.map.empty).toBe(false)
+    expect(body.map.countries).toEqual([{ iso: 'FR', devices: 1 }])
+  })
+
+  it('leaves the map empty when the Worker has no request.cf', async () => {
+    const store = memoryStore()
+    const req = await signedRequest('/v1/heartbeat', JSON.stringify({ os: 'win', appVersion: '1.8.0' }))
+    expect((await handleRequest(req, env(), {}, { store, now: NOW })).status).toBe(200)
+    const dash = await handleRequest(
+      new Request('https://operator.test/v1/admin/dashboard'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const body = (await dash.json()) as { map: { empty: boolean; countries: unknown[] }; kpis: { live: number } }
+    expect(body.kpis.live).toBe(1)
+    expect(body.map.empty).toBe(true)
+    expect(body.map.countries).toEqual([])
+  })
+})
+
+describe('CRM send board', () => {
+  it('funnel counts are real rows; Retry on Failed does not auto-send', async () => {
+    const store = memoryStore()
+    const ingest = await signedRequest(
+      '/v1/ingest',
+      JSON.stringify({
+        event: 'crm',
+        id: 'crm-1',
+        status: 'failed',
+        title: 'Acme recap',
+        connector: 'bidstack'
+      })
+    )
+    expect((await handleRequest(ingest, env(), {}, { store, now: NOW })).status).toBe(200)
+    const dash = await handleRequest(
+      new Request('https://operator.test/v1/admin/dashboard'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const before = (await dash.json()) as { crm: { counts: Record<string, number>; rows: { status: string }[] } }
+    expect(before.crm.counts.failed).toBe(1)
+    expect(before.crm.rows[0]?.status).toBe('failed')
+    const retry = await handleRequest(
+      new Request('https://operator.test/v1/admin/crm/crm-1/retry', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    expect(retry.status).toBe(200)
+    expect(((await retry.json()) as { autoSend?: boolean }).autoSend).toBe(false)
+    const row = await store.getCrm('crm-1')
+    expect(row?.status).toBe('pending')
+    expect(row?.retry_requested).toBe(1)
+  })
+})

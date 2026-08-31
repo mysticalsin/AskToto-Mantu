@@ -1,3 +1,5 @@
+import { type CrmSendRow } from './crm'
+
 export interface SeatRow {
   device_id: string
   seat_hash: string
@@ -5,6 +7,11 @@ export interface SeatRow {
   app_version: string
   first_seen: number
   last_seen: number
+  country: string | null
+  city: string | null
+  lat: number | null
+  lon: number | null
+  last_index_at: number | null
 }
 
 export interface AskRow {
@@ -30,6 +37,15 @@ export interface AskRow {
   prompt_cipher: string | null
   prompt_iv: string | null
   preview: string | null
+}
+
+export interface PulseRow {
+  id: string
+  device_id: string
+  ts: number
+  kind: 'heartbeat' | 'ask'
+  country: string | null
+  city: string | null
 }
 
 export interface ProposalRow {
@@ -66,23 +82,32 @@ export interface OperatorStore {
   listAsks(limit: number): Promise<AskRow[]>
   getAsk(id: string): Promise<AskRow | null>
   listSeats(): Promise<SeatRow[]>
+  insertPulse(row: PulseRow): Promise<void>
+  listPulses(since: number): Promise<PulseRow[]>
   listProposals(): Promise<ProposalRow[]>
   getProposal(id: string): Promise<ProposalRow | null>
   putProposal(row: ProposalRow): Promise<void>
   listPacks(): Promise<PackRow[]>
   latestPacks(): Promise<PackRow[]>
   putPack(row: PackRow): Promise<void>
+  upsertCrm(row: CrmSendRow): Promise<void>
+  getCrm(id: string): Promise<CrmSendRow | null>
+  listCrm(limit: number): Promise<CrmSendRow[]>
   audit(id: string, ts: number, actor: string, action: string, askId: string | null, detail: string): Promise<void>
   listAudit(limit: number): Promise<{ ts: number; actor: string; action: string; ask_id: string | null; detail: string }[]>
 }
+
+const PULSE_TTL_MS = 8 * 24 * 60 * 60 * 1000
 
 export function memoryStore(): OperatorStore {
   const nonces = new Set<string>()
   const rates = new Map<string, { window_start: number; count: number }>()
   const seats = new Map<string, SeatRow>()
   const asks = new Map<string, AskRow>()
+  const pulses: PulseRow[] = []
   const proposals = new Map<string, ProposalRow>()
   const packs = new Map<string, PackRow>()
+  const crm = new Map<string, CrmSendRow>()
   const audits: { id: string; ts: number; actor: string; action: string; ask_id: string | null; detail: string }[] = []
 
   return {
@@ -104,7 +129,12 @@ export function memoryStore(): OperatorStore {
       const prev = seats.get(row.device_id)
       seats.set(row.device_id, {
         ...row,
-        first_seen: prev?.first_seen ?? row.first_seen
+        first_seen: prev?.first_seen ?? row.first_seen,
+        country: row.country ?? prev?.country ?? null,
+        city: row.city ?? prev?.city ?? null,
+        lat: row.lat ?? prev?.lat ?? null,
+        lon: row.lon ?? prev?.lon ?? null,
+        last_index_at: row.last_index_at ?? prev?.last_index_at ?? null
       })
     },
     async insertAsk(row) {
@@ -125,6 +155,16 @@ export function memoryStore(): OperatorStore {
     },
     async listSeats() {
       return [...seats.values()]
+    },
+    async insertPulse(row) {
+      pulses.push(row)
+      const cut = row.ts - PULSE_TTL_MS
+      for (let i = pulses.length - 1; i >= 0; i--) {
+        if (pulses[i].ts < cut) pulses.splice(i, 1)
+      }
+    },
+    async listPulses(since) {
+      return pulses.filter((p) => p.ts >= since)
     },
     async listProposals() {
       return [...proposals.values()].sort((a, b) => b.created_at - a.created_at)
@@ -148,6 +188,19 @@ export function memoryStore(): OperatorStore {
     },
     async putPack(row) {
       packs.set(row.id, row)
+    },
+    async upsertCrm(row) {
+      const prev = crm.get(row.id)
+      crm.set(row.id, {
+        ...row,
+        retry_requested: row.retry_requested || prev?.retry_requested || 0
+      })
+    },
+    async getCrm(id) {
+      return crm.get(id) ?? null
+    },
+    async listCrm(limit) {
+      return [...crm.values()].sort((a, b) => b.ts - a.ts).slice(0, limit)
     },
     async audit(id, ts, actor, action, askId, detail) {
       audits.push({ id, ts, actor, action, ask_id: askId, detail })
