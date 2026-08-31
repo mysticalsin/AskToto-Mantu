@@ -1099,7 +1099,9 @@ export function recapMarkdownToHtml(markdown: string, title?: string): string {
     'h1{font-size:20px;margin:0 0 4px}h2{font-size:14px;text-transform:uppercase;letter-spacing:.02em;' +
     'color:#444;margin:20px 0 8px}ul{margin:0 0 8px;padding-left:20px}li{margin-bottom:4px}p{margin:0 0 8px}'
   const heading = title ? `<h1>${escapeHtml(title)}</h1>` : ''
-  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><style>${style}</style></head><body>${heading}${body.join('\n')}</body></html>`
+  const csp =
+    "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
+  return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>${style}</style></head><body>${heading}${body.join('\n')}</body></html>`
 }
 
 /**

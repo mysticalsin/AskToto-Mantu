@@ -933,6 +933,8 @@ describe('parseRecapMarkdown', () => {
       expect(html).toContain('<li>Launch timeline</li>')
       expect(html).toContain('<li>Book the venue — Bob</li>')
       expect(html).not.toContain('<script')
+      expect(html).toMatch(/Content-Security-Policy/)
+      expect(html).toMatch(/script-src 'none'/)
     })
 
     it('closes every opened <ul> and never throws on junk input', () => {
