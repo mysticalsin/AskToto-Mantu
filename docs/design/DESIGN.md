@@ -91,6 +91,9 @@ ctx stay machine-aware (`inferenceThreads`, `spawnProfileFor`). Streaming stays 
 See [TIME-SAVED.md](./TIME-SAVED.md). Tokens, type, motion, do/don'ts live there. The Intelligence
 dashboard (PR 61) is a separate surface; this module is a small honest feed it can read later.
 
+## Operator
+See [OPERATOR.md](./OPERATOR.md). Cloudflare Access control plane (`operator/`, Worker `metis-operator`). Client keeps prompt cache on. Not overlay chrome. Not the Fly license-server. Not `cloudflare-proxy`.
+
 ## MCP write
 Outlook drafts and CRM notes are user-confirmed. Never auto-send. A disconnected connector shows
 Connect, it does not pretend a send happened.
