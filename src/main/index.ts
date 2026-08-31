@@ -168,7 +168,7 @@ import {
   shouldWatchOverlayCursor
 } from './island/cursor-watch'
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
-import { overlayUsesHover, parseOverlayLayout, type OverlayLayout } from '@shared/overlay-chrome'
+import { overlayAllowsMinimize, overlayUsesHover, parseOverlayLayout, type OverlayLayout } from '@shared/overlay-chrome'
 
 // Lazy Speaker Intelligence singleton — building it probes the sherpa addon + embedding model, so defer
 // until the first THEM window with the feature enabled (never on the startup path).
@@ -1804,6 +1804,8 @@ function resizeTo(height: number): void {
  *  auto-resize then settles the height to whichever surface is shown. */
 function setMinimizedWidth(narrow: boolean): void {
   if (onboardingExclusiveLive()) return
+  // Hide/Island: ignore collapse. Do not grow a pill and do not jump layout to Bar.
+  if (narrow && !overlayAllowsMinimize(liveOverlayLayout())) return
   // Flip BEFORE resizeTo so the pill's own resize reports (while narrow) never clobber lastBarHeight,
   // and so expanding restores the last real bar height instead of the pill's tiny one.
   if (narrow) {

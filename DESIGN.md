@@ -8,7 +8,7 @@ Three modes in Settings (persist, no reinstall). Default on a fresh install is *
 
 1. **hide** (default). Fully hidden until the pointer is in the Mac Dynamic Island / top-center notch strip, then reveal down. Leave hides. Windows: top-center of the display, **no fake notch**.
 2. **island**. The always-visible peek capsule (may sit in the island / notch). Hover expands down. Leave returns to the peek.
-3. **bar**. Classic bar and pill. Always visible.
+3. **bar**. Classic bar. Always visible. The only layout that can collapse to the sentient circle. Hide and Island must never grow a minimize-to-circle control, and any minimize call while those layouts are active is a no-op (do not jump Hide → Bar). The circle is invisible whenever the bar is invisible. Contract: `docs/design/BAR-PILL.md`.
 
 Settings shows these as **cards with a tiny desktop diagram**, not three text radios. Hide: empty top-middle, faint hover hint, caption "Hidden until you move to the top." Island: small capsule at the top-middle, caption "A small island stays visible. Hover opens it." Bar: full bar at the top, caption "The bar stays on screen." Selected card is obvious. Changes apply immediately. No reinstall. Original Métis copy. No em dash. No Vibe Island trademark strings.
 

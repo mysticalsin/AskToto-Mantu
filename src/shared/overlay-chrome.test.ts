@@ -6,6 +6,7 @@ import {
   autoHideOverlayForLayout,
   migrateOverlayLayout,
   overlayAllowsMinimize,
+  overlayShowsBarOrb,
   overlayRestsHidden,
   overlayUsesHover,
   overlayUsesSafeTop,
@@ -27,6 +28,12 @@ describe('overlay chrome modes', () => {
     expect(overlayAllowsMinimize('bar')).toBe(true)
     expect(overlayAllowsMinimize('hide')).toBe(false)
     expect(overlayAllowsMinimize('island')).toBe(false)
+    expect(overlayShowsBarOrb('hide', false)).toBe(false)
+    expect(overlayShowsBarOrb('hide', true)).toBe(false)
+    expect(overlayShowsBarOrb('island', false)).toBe(false)
+    expect(overlayShowsBarOrb('island', true)).toBe(false)
+    expect(overlayShowsBarOrb('bar', false)).toBe(false)
+    expect(overlayShowsBarOrb('bar', true)).toBe(true)
   })
 
   it('Settings can switch to island and bar without a reinstall (migrate keeps a saved layout)', () => {

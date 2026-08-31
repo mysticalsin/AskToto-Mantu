@@ -1,0 +1,138 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { describe, expect, it } from 'vitest'
+import { overlayAllowsMinimize, overlayShowsBarOrb } from '@shared/overlay-chrome'
+import { BAR_PILL_HEIGHT_PX, BAR_PILL_SIZE_PX, BAR_PILL_WIDTH_PX, ORB_MOODS, orbBoxForMood } from './lib/bar-pill-orb'
+
+const root = join(__dirname)
+const app = readFileSync(join(root, 'App.tsx'), 'utf8').replace(/\r\n/g, '\n')
+const pill = readFileSync(join(root, 'components', 'ControlPill.tsx'), 'utf8').replace(/\r\n/g, '\n')
+const bar = readFileSync(join(root, 'components', 'Bar.tsx'), 'utf8').replace(/\r\n/g, '\n')
+const css = readFileSync(join(root, 'styles.css'), 'utf8').replace(/\r\n/g, '\n')
+const peek = readFileSync(join(root, 'components', 'OverlayPeek.tsx'), 'utf8').replace(/\r\n/g, '\n')
+const index = readFileSync(join(__dirname, '../../main/index.ts'), 'utf8').replace(/\r\n/g, '\n')
+const geometry = readFileSync(join(__dirname, '../../main/island/geometry.ts'), 'utf8').replace(/\r\n/g, '\n')
+const watch = readFileSync(join(__dirname, '../../main/island/cursor-watch.ts'), 'utf8').replace(/\r\n/g, '\n')
+const contract = readFileSync(join(__dirname, '../../../docs/design/BAR-PILL.md'), 'utf8')
+const orb = readFileSync(join(root, 'lib', 'bar-pill-orb.ts'), 'utf8')
+
+describe('BAR-PILL contract', () => {
+  it('minimize-to-circle is bar-only', () => {
+    expect(overlayAllowsMinimize('bar')).toBe(true)
+    expect(overlayAllowsMinimize('hide')).toBe(false)
+    expect(overlayAllowsMinimize('island')).toBe(false)
+    expect(contract).toMatch(/overlayAllowsMinimize\(layout\) === \(layout === 'bar'\)/)
+    expect(contract).toMatch(/overlayShowsBarOrb\(layout, minimized\) === \(layout === 'bar' && minimized\)/)
+    expect(bar).toMatch(/canMinimize\?: boolean/)
+    expect(bar).toMatch(/props\.canMinimize !== false/)
+    expect(bar).toMatch(/Minimize to the orb/)
+    expect(app).toMatch(/canMinimize=\{canMinimize\}/)
+    expect(app).toMatch(/if \(!overlayAllowsMinimize\(overlayLayout\)\) return/)
+    expect(app).toMatch(/overlayShowsBarOrb\(overlayLayout, minimized\)/)
+    expect(index).toMatch(/if \(narrow && !overlayAllowsMinimize\(liveOverlayLayout\(\)\)\) return/)
+    expect(app).not.toMatch(/overlayLayout:\s*'bar'/)
+    expect(app).not.toMatch(/overlayLayout:\s*"bar"/)
+  })
+
+  it('visibility matches the bar: Hide/Island never show the circle; Bar expanded hides it', () => {
+    expect(overlayShowsBarOrb('hide', false)).toBe(false)
+    expect(overlayShowsBarOrb('hide', true)).toBe(false)
+    expect(overlayShowsBarOrb('island', false)).toBe(false)
+    expect(overlayShowsBarOrb('island', true)).toBe(false)
+    expect(overlayShowsBarOrb('bar', false)).toBe(false)
+    expect(overlayShowsBarOrb('bar', true)).toBe(true)
+    expect(app).toMatch(/showBarOrb \? \(/)
+    expect(app).toMatch(/<ControlPill/)
+    expect(peek).not.toMatch(/ControlPill|data-bar-pill-orb|mountBarPillOrb/)
+    expect(bar).not.toMatch(/data-bar-pill-orb|mountBarPillOrb/)
+    const pillMounts = app.split('<ControlPill').length - 1
+    expect(pillMounts).toBe(1)
+  })
+
+  it('bar+minimized renders the fixed sentient circle', () => {
+    expect(pill).toMatch(/data-bar-pill-orb/)
+    expect(pill).toMatch(/mountBarPillOrb/)
+    expect(pill).toMatch(/pillClickShouldExpand/)
+    expect(pill).toMatch(/orbMood/)
+    expect(css).toMatch(/\.aw-pill--orb/)
+    expect(css).toMatch(/bar-pill-spring-in/)
+    expect(BAR_PILL_WIDTH_PX).toBe(BAR_PILL_HEIGHT_PX)
+    expect(BAR_PILL_SIZE_PX).toBe(80)
+    expect(css).toMatch(/\.aw-pill--orb \{[\s\S]*?width:\s*80px/)
+    expect(css).toMatch(/\.aw-pill--orb \{[\s\S]*?height:\s*80px/)
+    expect(css).toMatch(/\.aw-pill--orb \{[\s\S]*?border-radius:\s*50%/)
+    expect(css).toMatch(/\.aw-pill-orb \{[\s\S]*?width:\s*80px/)
+    expect(css).toMatch(/\.aw-pill-orb \{[\s\S]*?height:\s*80px/)
+    expect(css).toMatch(/\.aw-pill-orb \{[\s\S]*?border-radius:\s*50%/)
+  })
+
+  it('never flattens: no capsule stretch, same NDC scale on X and Y', () => {
+    expect(orb).not.toMatch(/fibonacciCapsule/)
+    expect(orb).not.toMatch(/p\.x \* 0\.42,\s*p\.y \* 0\.88/)
+    expect(orb).toMatch(/p\.x \* uScale,\s*p\.y \* uScale/)
+    expect(orb).toMatch(/fibonacciSphere/)
+    expect(orb).toMatch(/CORE_VS/)
+    expect(orb).toMatch(/aQuad \* 0\.84 \* uBreath/)
+    expect(orb).toMatch(/ONE_MINUS_SRC_ALPHA/)
+    expect(orb).toMatch(/gl\.SRC_ALPHA, gl\.ONE/)
+    expect(css).toMatch(/data-orb-mood='idle'/)
+    expect(css).toMatch(/radial-gradient\(circle/)
+    for (const mood of ORB_MOODS) {
+      const box = orbBoxForMood(mood)
+      expect(box.width).toBe(BAR_PILL_SIZE_PX)
+      expect(box.height).toBe(BAR_PILL_SIZE_PX)
+    }
+  })
+
+  it('click expands and drag does not', () => {
+    expect(pill).toMatch(/onClick=\{\(\) => \{/)
+    expect(pill).toMatch(/pillClickShouldExpand\(dragMovedRef\.current\)/)
+    expect(pill).toMatch(/useWindowDrag/)
+  })
+
+  it('hide and island rest sizes and hover math stay put', () => {
+    expect(geometry).toMatch(/export const OVERLAY_HIDE_PARK = \{ width: 8, height: 2 \}/)
+    expect(geometry).toMatch(/export const OVERLAY_ISLAND_PEEK = \{ width: 132, height: 15 \}/)
+    expect(css).toMatch(/\.overlay-hide-target \{[\s\S]*?width:\s*8px/)
+    expect(css).toMatch(/\.overlay-hide-target \{[\s\S]*?height:\s*2px/)
+    expect(css).toMatch(/\.overlay-peek \{[\s\S]*?width:\s*132px/)
+    expect(css).toMatch(/\.overlay-peek \{[\s\S]*?height:\s*15px/)
+    expect(peek).toMatch(/overlay-hide-target/)
+    expect(watch).toMatch(/decideCursorWatch/)
+    expect(watch).toMatch(/overlayUsesHover/)
+    expect(index).toMatch(/const BAR_MIN_HEIGHT = 44/)
+  })
+
+  it('does not pull Three.js from unpkg at runtime', () => {
+    expect(pill).not.toMatch(/unpkg/)
+    expect(app).not.toMatch(/unpkg/)
+    expect(orb).not.toMatch(/unpkg\.com/)
+    expect(orb).not.toMatch(/cdn\.jsdelivr/)
+    expect(orb).toMatch(/JARVIS_ORB_POINTS = 2000/)
+    expect(orb).toMatch(/idle: 0x7f00da/)
+    expect(orb).toMatch(/factcheck: 0x4ca8e8/)
+  })
+
+  it('QUALITY hats: idle bar has no orb rAF; frame loop does no layout or GL lookups', () => {
+    const quality = readFileSync(join(__dirname, '../../../docs/design/QUALITY.md'), 'utf8')
+    expect(quality).toMatch(/## Motion/)
+    expect(quality).toMatch(/## Interaction/)
+    expect(quality).toMatch(/## Performance/)
+    expect(quality).toMatch(/## Visual/)
+    expect(quality).toMatch(/## Stability/)
+    expect(quality).toMatch(/REJECT/)
+    const paint = orb.slice(orb.indexOf('const paint = (now: number)'), orb.indexOf('const loopWanted'))
+    expect(paint).toContain('const paint = (now: number)')
+    expect(paint).not.toMatch(/getUniformLocation/)
+    expect(paint).not.toMatch(/getAttribLocation/)
+    expect(paint).not.toMatch(/clientWidth/)
+    expect(paint).not.toMatch(/getBoundingClientRect/)
+    expect(orb).toMatch(/shouldRunOrbRaf/)
+    expect(orb).toMatch(/Never an n² neighbor scan/)
+    expect(pill).not.toMatch(/getBoundingClientRect/)
+    expect(pill).toMatch(/if \(dragMovedRef\.current\) return/)
+    expect(css).toMatch(/\.aw-pill--orb \{[\s\S]*?background:\s*transparent/)
+    expect(app).toMatch(/showBarOrb/)
+    expect(app).not.toMatch(/mountBarPillOrb/)
+  })
+})

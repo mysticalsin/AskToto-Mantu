@@ -32,7 +32,13 @@ import {
   isRevealed as isOverlayRevealed,
   reduceAutoHide
 } from './lib/overlay-autohide'
-import { overlayAllowsMinimize, overlayRestsHidden, overlayUsesHover, parseOverlayLayout } from '@shared/overlay-chrome'
+import {
+  overlayAllowsMinimize,
+  overlayRestsHidden,
+  overlayShowsBarOrb,
+  overlayUsesHover,
+  parseOverlayLayout
+} from '@shared/overlay-chrome'
 import { resolveOrbMood } from './lib/bar-pill-orb'
 import {
   OVERLAY_PARK_FALLBACK_MS,
@@ -520,8 +526,9 @@ export function App(): JSX.Element {
   // resizes of the always-on-top window (never show()/focus()), so the user's foreground app keeps focus
   // — the non-activating notch contract. The pure state machine lives in lib/overlay-autohide.ts.
   const overlayLayout = parseOverlayLayout(settings?.overlayLayout)
+  const canMinimize = overlayAllowsMinimize(overlayLayout)
+  const showBarOrb = overlayShowsBarOrb(overlayLayout, minimized)
   const autoHideSetting = overlayUsesHover(overlayLayout)
-  const showBarOrb = minimized && overlayAllowsMinimize(overlayLayout)
   // Hover chrome (hide / island) is in effect only in the plain idle bar surface: the overlay isn't
   // collapsed to the control mini-pill, onboarding is finished, and the default bar view is showing with
   // no answer/capture/meeting in flight. Every other surface (answers, the settings/history/review/agenda
@@ -550,6 +557,12 @@ export function App(): JSX.Element {
   useEffect(() => {
     dispatchAutoHide({ type: 'set-enabled', enabled: overlayIdle })
   }, [overlayIdle])
+  // Leaving Bar while the Jarvis circle is up must drop it. Do not switch layout to keep it.
+  useEffect(() => {
+    if (!minimized || canMinimize) return
+    setMinimized(false)
+    void window.toto.minimize(false)
+  }, [minimized, canMinimize])
   useEffect(() => {
     dispatchAutoHide({ type: 'set-forced', forced: autoHideForced })
   }, [autoHideForced])
@@ -2263,6 +2276,8 @@ export function App(): JSX.Element {
     guardReviewNav(openSettingsDefault)
   }, [guardReviewNav, openSettingsDefault])
   const onBarMinimize = useCallback(() => {
+    // Hide/Island: ignore. Do not collapse to a pill and do not jump layout to Bar.
+    if (!overlayAllowsMinimize(overlayLayout)) return
     // Minimizing unmounts the entire Bar/Panel tree, including an open Review with an in-progress recap
     // edit — same dirty-guard the global Escape handler already runs before leaving Review (see
     // reviewDirtyRef's own comment above). Settings' own draft fields (API key / Dust / Bidstack inputs)
@@ -2271,8 +2286,8 @@ export function App(): JSX.Element {
       return
     }
     setMinimized(true)
-    void window.toto.minimize(true) // collapse to the control mini-pill
-  }, [])
+    void window.toto.minimize(true) // collapse to the Jarvis circle (Bar only)
+  }, [overlayLayout])
   // The bar's eye button is the visible/invisible toggle: whether the Métis window shows up on a
   // screen you share or record (contentProtection). Hidden by default — the invisible-copilot identity.
   // This is the intuitive meaning of an eye icon and what users reach for to "make it visible / hide it".
@@ -3333,6 +3348,7 @@ export function App(): JSX.Element {
             onHistory={onBarHistory}
             onSettings={onBarSettings}
             onMinimize={onBarMinimize}
+            canMinimize={canMinimize}
             stealth={settings?.contentProtection ?? true}
             onToggleStealth={onToggleStealth}
             stealthLocked={stealthLocked}
