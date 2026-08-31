@@ -200,12 +200,12 @@ void main() {
   float caustic = 0.5 + 0.5 * sin(p.x * 7.1 + uTime * 0.58 + p.z * 3.0) * sin(p.y * 6.3 - uTime * 0.41 + p.x * 2.1);
   float core = exp(-dot(p.xy, p.xy) * 3.2) * uBreath;
   vec3 mood = uColor;
-  vec3 col = mix(mood * 0.62, mood * 1.08, wrap);
-  col += mood * core * 0.45;
-  col += mood * caustic * 0.06 * (0.40 + core);
-  col += vec3(1.0) * spec * 0.85;
-  col += mix(mood, vec3(0.82, 0.94, 1.0), 0.40) * fresnel * 0.42;
-  float alpha = uAlpha * (0.80 + 0.16 * core + 0.12 * fresnel);
+  vec3 col = mix(mood * 0.82, mood * 1.12, wrap);
+  col += mood * core * 0.22;
+  col += mood * caustic * 0.035 * (0.35 + core);
+  col += vec3(0.92, 0.97, 1.0) * spec * 0.55;
+  col += mix(mood, vec3(0.78, 0.93, 1.0), 0.35) * fresnel * 0.32;
+  float alpha = uAlpha * (0.94 + 0.04 * fresnel);
   gl_FragColor = vec4(col, alpha);
 }
 `
@@ -582,7 +582,7 @@ function mountWebGL(gl: WebGLRenderingContext, canvas: HTMLCanvasElement, opts: 
     gl.uniform1f(sLoc.uLeanY, leanY)
     gl.uniform1f(sLoc.uTime, time)
     gl.uniform3f(sLoc.uColor, tint.r, tint.g, tint.b)
-    gl.uniform1f(sLoc.uAlpha, params.core)
+    gl.uniform1f(sLoc.uAlpha, Math.max(params.core, 0.94))
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
 
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE)
@@ -722,9 +722,9 @@ function mountStill(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, op
     const cy = h * 0.5
     const rad = w * 0.45
     const body = ctx.createRadialGradient(cx - rad * 0.22, cy - rad * 0.28, rad * 0.08, cx, cy + rad * 0.12, rad)
-    body.addColorStop(0, `rgba(${Math.min(255, r + 70)},${Math.min(255, g + 40)},${Math.min(255, b + 40)},0.92)`)
-    body.addColorStop(0.42, `rgba(${r},${g},${b},0.78)`)
-    body.addColorStop(0.78, `rgba(${Math.round(r * 0.58)},${Math.round(g * 0.68)},${Math.round(b * 0.82)},0.70)`)
+    body.addColorStop(0, `rgba(${Math.min(255, r + 40)},${Math.min(255, g + 28)},${Math.min(255, b + 22)},0.96)`)
+    body.addColorStop(0.42, `rgba(${r},${g},${b},0.94)`)
+    body.addColorStop(0.78, `rgba(${Math.round(r * 0.72)},${Math.round(g * 0.80)},${Math.round(b * 0.90)},0.88)`)
     body.addColorStop(1, `rgba(${r},${g},${b},0)`)
     ctx.fillStyle = body
     ctx.beginPath()
