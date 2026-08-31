@@ -36,7 +36,7 @@ A flat CSS disc, a single radial fill, or a 2D glow quad is a fail. That is a st
 
 One WebGL canvas, 52×52 CSS, DPR capped at 2. Transparent around the sphere. No dark chip. No CSS radial body.
 
-1. **Glass body** (ray-sphere, not a 2D disc). Camera on +Z. Equal X/Y scale. Radius fills ~0.90 of the box. Lambert wrap in the mood color. Far side stays in the same blue (`mood * 0.62`), never crushed to teal (`mood * 0.16`). Idle must **read** `#4CA8E8`.
+1. **Glass body** (ray-sphere, not a 2D disc). Camera on +Z. Equal X/Y scale. Radius fills ~0.90 of the box. Lambert wrap in the mood color. Far side stays in the same blue (`mood * 0.82`), never crushed to teal (`mood * 0.16`). Body alpha stays high (~0.94) so idle **reads** `#4CA8E8` on dark chrome, not a murky navy-through-glass teal.
 2. **Living core.** Brighter mass near the center. Breath is uniform scale of intensity, never of the box. Caustic bands (two slow sin fields) live *inside* the volume.
 3. **Fresnel rim.** Thin bright edge. Reads as glass, not a sticker.
 4. **Specular kiss.** One tight highlight, upper-left (`light = normalize(-0.45, 0.72, 0.85)`). White, small. Not a looping sheen. Hover may lean the kiss a few degrees. Never squash the sphere to follow the pointer.
