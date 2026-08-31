@@ -228,6 +228,18 @@ describe('Act 3 on-device model row', () => {
     expect(row.detail.toLowerCase()).not.toMatch(/not installed/)
   })
 
+  it('says so honestly when disk-gated, not "starting"', () => {
+    const row = localModelRowStatus({
+      ready: false,
+      unavailableReason: 'insufficient-disk',
+      downloadProgress: 0,
+      minTotalRamGB: 8
+    })
+    expect(row.state).toBe('action')
+    expect(row.detail).toMatch(/disk/i)
+    expect(row.detail.toLowerCase()).not.toMatch(/starting/)
+  })
+
   it('treats not-downloaded as starting the fetch, not a dead install state', () => {
     const row = localModelRowStatus({
       ready: false,

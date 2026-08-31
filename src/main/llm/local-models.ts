@@ -1,6 +1,6 @@
 import { app } from 'electron'
 import { createHash } from 'node:crypto'
-import { createReadStream, existsSync, statSync } from 'node:fs'
+import { createReadStream, existsSync, statSync, statfsSync } from 'node:fs'
 import { join } from 'node:path'
 import { freemem, totalmem } from 'node:os'
 import { auditLog, type AuditEvent } from '../logger'
@@ -240,6 +240,62 @@ export function assertRamOk(id: string): void {
   }
 }
 
+/**
+ * Spare room demanded on top of the weights. Same rationale as the downloader: a `.partial` write that
+ * fills the startup volume to zero does not fail politely (Chromium CHECK / SIGTRAP, observed 2026-08-24).
+ */
+export const DISK_HEADROOM_BYTES = 512 * 1024 * 1024
+
+function formatGb(n: number): string {
+  return `${(n / 1e9).toFixed(1)} GB`
+}
+
+/** Free bytes on the volume that holds `dir`, or null if unmeasurable (fail open). */
+export function volumeFreeBytes(dir: string): number | null {
+  try {
+    const fs = statfsSync(dir)
+    return fs.bavail * fs.bsize
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Why this machine cannot hold the weights right now, or null if the volume has room / cannot be
+ * measured. Used by listModels so a refused fetch is `insufficient-disk` instead of silent `not-downloaded`
+ * (Tony 2026-08-31: 99% full, Settings looked idle).
+ */
+export function diskShortageFor(id: string): string | null {
+  const entry = getModel(id)
+  const needed = entry.gguf.bytes + entry.mmproj.bytes + DISK_HEADROOM_BYTES
+  let free = volumeFreeBytes(modelPaths(id).dir)
+  if (free === null) {
+    try {
+      free = volumeFreeBytes(app.getPath('userData'))
+    } catch {
+      return null
+    }
+  }
+  if (free === null || free >= needed) return null
+  return (
+    `Not enough free disk space — needs ${formatGb(needed)} (${formatGb(entry.gguf.bytes + entry.mmproj.bytes)} of ` +
+    `weights plus ${formatGb(DISK_HEADROOM_BYTES)} of headroom) but only ${formatGb(free)} is available.`
+  )
+}
+
+/** Refuse a transfer the volume cannot hold, BEFORE a single byte is written. Unmeasurable → proceed. */
+export function assertRoomFor(bytes: number, dir: string, file: string): void {
+  const freeBytes = volumeFreeBytes(dir)
+  if (freeBytes === null) return
+  const needed = bytes + DISK_HEADROOM_BYTES
+  if (freeBytes >= needed) return
+  throw new Error(
+    `${file}: not enough free disk space — needs ${formatGb(needed)} (${formatGb(bytes)} of weights plus ` +
+      `${formatGb(DISK_HEADROOM_BYTES)} of headroom) but only ${formatGb(freeBytes)} is available. ` +
+      `Free up space and tap Retry.`
+  )
+}
+
 export interface LocalModelPaths {
   dir: string
   gguf: string
@@ -310,6 +366,7 @@ export interface LocalModelDownloadState {
 
 export type LocalModelUnavailableReason =
   | 'insufficient-ram'
+  | 'insufficient-disk'
   | 'downloading'
   | 'download-failed'
   | 'not-downloaded'
@@ -331,18 +388,20 @@ export function listModels(download?: LocalModelDownloadState): LocalModelSummar
     const filesPresent = isDownloaded(model.id)
     const enoughRam = advertisedRamGB() >= model.minTotalRamGB
     const dl = download && download.modelId === model.id ? download : undefined
-    // RAM is checked FIRST because it now decides whether the weights are fetched at all
-    // (shouldFetchWeights in local-model-download.ts): below the floor nothing is downloading and nothing
-    // ever will be, so reporting "not downloaded" would hide the only cause the user can act on.
+    const diskError = filesPresent ? null : diskShortageFor(model.id)
+    // RAM then disk, both independent of download state: a skipped fetch (boot never called
+    // ensureLocalModel, or assertRoomFor refused before net.fetch) must not read as idle `not-downloaded`.
     const reason: LocalModelUnavailableReason | null = !enoughRam
       ? 'insufficient-ram'
       : filesPresent
         ? null
         : dl?.status === 'downloading'
           ? 'downloading'
-          : dl?.status === 'failed'
-            ? 'download-failed'
-            : 'not-downloaded'
+          : diskError || (dl?.status === 'failed' && /not enough free disk/i.test(dl.error ?? ''))
+            ? 'insufficient-disk'
+            : dl?.status === 'failed'
+              ? 'download-failed'
+              : 'not-downloaded'
     return {
       id: model.id,
       label: model.label,
@@ -350,7 +409,10 @@ export function listModels(download?: LocalModelDownloadState): LocalModelSummar
       ready: filesPresent && enoughRam,
       unavailableReason: reason,
       downloadProgress: reason === 'downloading' ? (dl?.progress ?? 0) : 0,
-      downloadError: reason === 'download-failed' ? (dl?.error ?? null) : null
+      downloadError:
+        reason === 'download-failed' || reason === 'insufficient-disk'
+          ? (dl?.error ?? diskError ?? null)
+          : null
     }
   })
 }

@@ -78,6 +78,15 @@ describe('Local AI tells the truth about a model that is downloaded, not bundled
     expect(block).toMatch(/Unavailable/)
   })
 
+  it('a disk or RAM skip is a named refusal with Retry, not a silent idle', () => {
+    expect(block).toMatch(/unavailableReason === 'insufficient-disk'/)
+    expect(block).toMatch(/not enough free disk space/)
+    expect(block).toMatch(/insufficient-ram/)
+    expect(block).toMatch(/canRetry/)
+    expect(block).toMatch(/insufficient-disk/)
+    expect(block).toMatch(/Retry/)
+  })
+
   it('contains a Retry control for a failed or not-yet-started fetch, not delete/cancel', () => {
     expect(block).toMatch(/Retry/)
     expect(block).toMatch(/localModelsEnsure/)

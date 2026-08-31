@@ -4420,7 +4420,8 @@ function registerIpc(): void {
     const best = bestModelForMachine()
     const current = getSettings().localLlm.modelId
     const target = shouldFetchWeights(current) ? current : best.id
-    if (!shouldFetchWeights(target)) return { ok: false }
+    // Always invoke: RAM/disk gates inside ensureLocalModel record a visible refusal. Returning
+    // ok:false here without calling it left Settings idle after Retry on a skipped fetch.
     void ensureLocalModel(target)
       .then(() => refreshScreenPreprocess())
       .catch((err) => mainLog.warn('[localModels:ensure] provisioning failed:', err))
@@ -6384,6 +6385,11 @@ if (!app.requestSingleInstanceLock()) {
           warmLocalIfReady()
         })
         .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
+    } else {
+      // RAM gate kept — do not fetch. Still invoke so download state records the refusal; Settings
+      // must show "needs N GB RAM" + Retry, never a silent idle (Tony: disk/RAM skip looked like
+      // "doesn't even download").
+      void ensureLocalModel(best.id).catch((e) => mainLog.warn('[boot] local model refusal failed:', e))
     }
     setTimeout(warmLocalIfReady, 4000).unref?.()
   }

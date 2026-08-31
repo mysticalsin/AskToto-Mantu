@@ -1857,11 +1857,15 @@ function LocalAiSection({
 
   const model =
     models?.find((m) => m.unavailableReason === 'downloading') ??
+    models?.find((m) => m.unavailableReason === 'insufficient-disk' || m.unavailableReason === 'download-failed') ??
     models?.find((m) => m.id === settings.localLlm.modelId) ??
     models?.[0]
   const downloading = model?.unavailableReason === 'downloading'
   const canRetry =
-    model?.unavailableReason === 'download-failed' || model?.unavailableReason === 'not-downloaded'
+    model?.unavailableReason === 'download-failed' ||
+    model?.unavailableReason === 'not-downloaded' ||
+    model?.unavailableReason === 'insufficient-disk' ||
+    model?.unavailableReason === 'insufficient-ram'
   const percent = Math.round((model?.downloadProgress ?? 0) * 100)
   const retryFetch = (): void => {
     if (retrying) return
@@ -1913,6 +1917,10 @@ function LocalAiSection({
             ? 'Checking the on-device model...'
             : model?.unavailableReason === 'insufficient-ram'
               ? `Unavailable: the on-device model needs at least ${model.minTotalRamGB} GB RAM.`
+              : model?.unavailableReason === 'insufficient-disk'
+                ? model.downloadError
+                  ? `Could not download the on-device model: ${model.downloadError}`
+                  : 'Unavailable: not enough free disk space for the on-device model. Free up space and tap Retry.'
               : model?.unavailableReason === 'downloading'
                 ? `Downloading the on-device model... ${percent}%`
                 : model?.unavailableReason === 'download-failed'
@@ -1982,6 +1990,10 @@ function LocalAiSection({
               <p className="text-[11px] leading-snug text-[color:var(--cl-destructive)]">
                 {model.unavailableReason === 'insufficient-ram'
                   ? `This model needs at least ${model.minTotalRamGB} GB RAM.`
+                  : model.unavailableReason === 'insufficient-disk'
+                    ? model.downloadError
+                      ? `Could not download the on-device model: ${model.downloadError}`
+                      : 'Not enough free disk space for the on-device model. Free up space and tap Retry.'
                   : model.unavailableReason === 'download-failed'
                     ? model.downloadError
                       ? `Could not download the on-device model: ${model.downloadError}`
