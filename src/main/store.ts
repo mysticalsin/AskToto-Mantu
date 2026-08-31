@@ -493,6 +493,8 @@ function safeMtime(p: string): number {
 
 interface SettingsCache {
   value: Settings
+  /** userData/settings.json path. mtimes alone collide across temp profiles created in the same ms. */
+  path: string
   userMtime: number
   managedMtime: number
   adminMtime: number
@@ -500,9 +502,14 @@ interface SettingsCache {
 }
 let _settingsCache: SettingsCache | null = null
 
-function currentSettingsMtimes(): Pick<SettingsCache, 'userMtime' | 'managedMtime' | 'adminMtime' | 'caheEdition'> {
+function currentSettingsMtimes(): Pick<
+  SettingsCache,
+  'path' | 'userMtime' | 'managedMtime' | 'adminMtime' | 'caheEdition'
+> {
+  const file = settingsPath()
   return {
-    userMtime: safeMtime(settingsPath()),
+    path: file,
+    userMtime: safeMtime(file),
     managedMtime: safeMtime(join(dir(), 'managed-config.json')),
     adminMtime: safeMtime(adminManagedConfigPath()),
     caheEdition: isCaheEdition()
@@ -513,6 +520,7 @@ export function getSettings(): Settings {
   const m = currentSettingsMtimes()
   if (
     _settingsCache &&
+    _settingsCache.path === m.path &&
     _settingsCache.userMtime === m.userMtime &&
     _settingsCache.managedMtime === m.managedMtime &&
     _settingsCache.adminMtime === m.adminMtime &&
