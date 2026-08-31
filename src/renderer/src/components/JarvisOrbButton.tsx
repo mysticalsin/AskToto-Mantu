@@ -9,7 +9,7 @@ import {
 } from '../lib/bar-pill-orb'
 
 /**
- * Fixed-size sentient 52 glass sphere. Never a stadium pill.
+ * Fixed-size sentient 52 Fit Studio glass sphere. Never a stadium pill.
  * Docked on the idle Bar (click minimizes) or alone when minimized (click expands).
  */
 export function JarvisOrbButton({
