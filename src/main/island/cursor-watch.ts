@@ -8,12 +8,20 @@
 
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import { overlayUsesHover } from '@shared/overlay-chrome'
-import { HOVER_HIT_BAND_MAX_PX, type Rect } from './geometry'
+import { HOVER_ISLAND_HEIGHT_MAX_PX, HOVER_ISLAND_WIDTH_MAX_PX, type Rect } from './geometry'
 
-/** Ignore a leftover 80–120px pad on the rest rect. Reveal is the top strip only. */
+/** Ignore a leftover 560×44 menu-bar slab. Reveal is the camera island only. */
 function clampHoverRestRect(rect: Rect): Rect {
-  if (rect.height <= HOVER_HIT_BAND_MAX_PX) return rect
-  return { ...rect, height: HOVER_HIT_BAND_MAX_PX }
+  const width = Math.min(rect.width, HOVER_ISLAND_WIDTH_MAX_PX)
+  const height = Math.min(rect.height, HOVER_ISLAND_HEIGHT_MAX_PX)
+  if (width === rect.width && height === rect.height) return rect
+  const midX = rect.x + rect.width / 2
+  return {
+    x: Math.round(midX - width / 2),
+    y: rect.y,
+    width,
+    height
+  }
 }
 
 /** Poll while hide/island is resting. 16–32ms — one frame-ish, no Accessibility tap. */

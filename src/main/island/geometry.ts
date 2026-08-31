@@ -147,23 +147,24 @@ export function refitToDisplay(
  */
 export const ISLAND_NOTCH_STRUT_PX = 37
 
-/** Logical hide/island cursor-watch strip (not the parked window). Width cap 560. */
+/** Historical hide-slab detector only — never the cursor-watch size. */
 export const OVERLAY_HIDE_TARGET = { width: 560, height: 28 } as const
 /** Parked hide window: 1–8px fully transparent hairline. Watch uses hoverWatchRestRect, not this. */
 export const OVERLAY_HIDE_PARK = { width: 8, height: 2 } as const
 /** Always-visible island peek — keep in lockstep with `.overlay-peek` in styles.css. */
 export const OVERLAY_ISLAND_PEEK = { width: 132, height: 15 } as const
-/**
- * Hard ceiling on the Hide/Island cursor-watch band. Menu bar / notch is ~24–38
- * (Tony: typically 24–38, NOT 120). A leftover 80–120px pad into the window
- * hits Teams mute / camera / share. Kill that pad.
- */
-export const HOVER_HIT_BAND_MAX_PX = 44
+/** Camera / Dynamic Island square — typical Mac notch width, not a 560 menu-bar slab. */
+export const HOVER_ISLAND_WIDTH_MIN_PX = 180
+export const HOVER_ISLAND_WIDTH_MAX_PX = 250
+/** Camera housing only. 44px is the full menu bar and catches Teams under the island. */
+export const HOVER_ISLAND_HEIGHT_MAX_PX = 32
 /**
  * Typical Teams in-call chrome Y on a notch Mac: just under the menu bar,
  * never in the Dynamic Island. Must not hit hoverWatchRestRect.
  */
 export const TEAMS_MEETING_CHROME_Y = 48
+/** Under the camera island — typical Teams mute row. Must not hit. */
+export const TEAMS_UNDER_ISLAND_Y = 40
 /** Matches the windowResize hug-width pad so the island capsule is not clipped. */
 export const OVERLAY_PEEK_WIDTH_PAD = 10
 export const OVERLAY_PEEK_HEIGHT_PAD = 4
@@ -191,40 +192,40 @@ export function hoverRestTop(m: DisplayMetrics): number {
 }
 
 /**
- * Height of the hide/island hover strip. Menu-bar / notch inset only
- * (`workArea.y - bounds.y` or `menuBarHeight`, typically ~24–38). Never a 28px
- * floor that grows past a 24px menu bar, and never an 80–120px pad into the
- * window (Teams mute / camera / share live there). Path C (flush work area on a
- * notch Mac) still uses the strut so the hit rect covers the island. Windows has
- * no fake notch: only a real top inset, else the thin top-edge band.
+ * Height of the hide/island hover hit. Camera / Dynamic Island housing only —
+ * never the full 37–44 menu bar (Teams mute lives there) and never a 560-wide
+ * slab. Path C flush notch still hits the housing at bounds.y; revealed chrome
+ * uses the strut via islandSafeTop. Windows has no fake notch: a small
+ * top-center island, not the taskbar inset.
  */
 export function hoverHitBandHeight(m: DisplayMetrics): number {
-  const inset = Math.max(0, m.workArea.y - m.bounds.y, m.menuBarHeight || 0)
-  let height: number
-  if (inset > 0) height = inset
-  else if (m.hasNotch) height = Math.max(m.menuBarHeight || 0, ISLAND_NOTCH_STRUT_PX)
-  else height = OVERLAY_HIDE_TARGET.height
-  return Math.max(1, Math.min(height, HOVER_HIT_BAND_MAX_PX))
+  let housing: number
+  if (m.hasNotch) {
+    const inset = Math.max(0, m.workArea.y - m.bounds.y, m.menuBarHeight || 0)
+    housing = inset > 0 ? inset : Math.max(m.menuBarHeight || 0, OVERLAY_ISLAND_PEEK.height)
+  } else {
+    housing = OVERLAY_ISLAND_PEEK.height
+  }
+  return Math.max(1, Math.min(housing, HOVER_ISLAND_HEIGHT_MAX_PX))
 }
 
 export function hoverRestHeight(m: DisplayMetrics): number {
   return hoverHitBandHeight(m)
 }
 
-/** Hide pad width: at least the notch (min 220), cap 560. */
+/** Camera island width: real notchWidth, typically 180–250. Never 560. */
 export function hoverRestWidth(m: DisplayMetrics): number {
-  return Math.min(OVERLAY_HIDE_TARGET.width, Math.max(220, m.notchWidth || 0, OVERLAY_HIDE_TARGET.width))
+  const raw = m.notchWidth > 0 ? m.notchWidth : OVERLAY_ISLAND_PEEK.width
+  return Math.min(HOVER_ISLAND_WIDTH_MAX_PX, Math.max(HOVER_ISLAND_WIDTH_MIN_PX, raw))
 }
 
 /**
  * Logical rest rect the cursor watch hit-tests. Hide does NOT park the window here
- * (that was the visible 560×44 slab). Island keeps a smaller visible peek at the same Y;
- * the watch rect is still the top-center strip so hovering the hardware island still reveals.
+ * (that was the visible 560×44 slab). Island keeps a smaller visible peek at the same Y.
+ * The watch rect is the hardware camera / Dynamic Island square only.
  */
 export function hoverWatchRestRect(_layout: OverlayLayout, m: DisplayMetrics): Rect {
   const height = hoverRestHeight(m)
-  // Same top-center strip for hide and island watch — the visible island peek is narrower,
-  // but hovering the hardware island / notch must still hit.
   const width = hoverRestWidth(m)
   const x = clampAxis(
     Math.round(m.workArea.x + (m.workArea.width - width) / 2),
