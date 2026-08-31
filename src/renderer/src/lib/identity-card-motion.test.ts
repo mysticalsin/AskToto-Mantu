@@ -13,14 +13,19 @@ describe('member-pass motion', () => {
   it('spring steps toward the target instead of leaping linearly', () => {
     let pos = 0
     let vel = 0
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 8; i++) {
       const s = stepSpring(pos, vel, 180, 1 / 60)
       pos = s.pos
       vel = s.vel
     }
-    expect(pos).toBeGreaterThan(40)
-    expect(pos).toBeLessThan(180)
-    expect(vel).toBeGreaterThan(0)
+    expect(pos).toBeGreaterThan(5)
+    expect(pos).toBeLessThan(120)
+    for (let i = 0; i < 80; i++) {
+      const s = stepSpring(pos, vel, 180, 1 / 60)
+      pos = s.pos
+      vel = s.vel
+    }
+    expect(pos).toBeCloseTo(180, 0)
   })
 
   it('reduced motion produces no tilt', () => {
