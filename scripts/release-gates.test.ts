@@ -21,6 +21,9 @@ describe('installer branding', () => {
     expect(overlay).toContain('extends: ./electron-builder.yml')
     expect(overlay).toContain('productName: Métis')
     expect(overlay).toContain('executableName: Metis')
+    expect(overlay).toContain("!node_modules/sherpa-onnx-darwin-*{,/**/*}")
+    expect(overlay).toContain("!node_modules/sherpa-onnx-linux-*{,/**/*}")
+    expect(overlay).toContain("!node_modules/@img/sharp-linux-*{,/**/*}")
 
     for (const script of ['dist:win', 'dist:win:appx', 'release:build:win', 'release:win:store']) {
       expect(pkg.scripts[script]).toContain('--config electron-builder.win.yml')
