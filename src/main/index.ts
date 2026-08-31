@@ -1542,6 +1542,10 @@ function createWindow(): void {
     maximizable: false,
     minimizable: false,
     roundedCorners: !onboardingLive,
+    // macOS default min height can be ~44. Hide park is 8×2; without this, a display
+    // move reports 8×44 (Tony listwins) even after clampHeight lets 2px through.
+    minWidth: 1,
+    minHeight: 1,
     backgroundColor: onboardingLive ? '#3A0B6B' : '#00000000',
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
@@ -1556,6 +1560,12 @@ function createWindow(): void {
   })
 
   try {
+  // Frameless transparent windows on darwin still inherit an OS min (~44). Hide park is 8×2.
+  try {
+    win.setMinimumSize(1, 1)
+  } catch {
+    /* headless */
+  }
   if (onboardingLive) applyExclusiveOnboardingStage(win, placementDisplay)
   applyOverlayAlwaysOnTop(win)
   // setVisibleOnAllWorkspaces is a documented no-op on Windows (Electron: "This API does nothing on
@@ -1880,6 +1890,11 @@ function parkOverlayAfterHideSpring(): void {
   currentWidth = park.width
   islandResting = true
   userAnchorY = park.y
+  try {
+    win.setMinimumSize(1, 1)
+  } catch {
+    /* headless */
+  }
   win.setBounds(park, false)
   applyHideClickThrough()
 }
@@ -2387,13 +2402,20 @@ function registerScreenListeners(): void {
       applyExclusiveOnboardingStage(win)
       return
     }
+    // Hide/island already parked: re-apply the rest rect on the new display.
+    // Do not clampHeight (BAR_MIN_HEIGHT 44) or slide y into workArea (Tony live: 8×44 at Y=39).
+    // Hide at bounds.y is outside a notched workArea; that is the park, not "off-screen".
+    if (islandResting && overlayUsesHover(liveOverlayLayout())) {
+      overlayCursorWatchHovering = false
+      parkOverlayAfterHideSpring()
+      return
+    }
     const b = win.getBounds()
     const { workArea: wa } = screen.getDisplayMatching(b)
     // Height first, and BEFORE the reachability guard below. A window grown to fit a tall display keeps
     // that height when the display is unplugged or its resolution shrinks — and in that state it is
     // normally still partly visible, so the guard would skip exactly the case that leaves the overlay
     // hanging off the bottom of the remaining screen with resizable:false and no in-app fix.
-    // Hide hairline (2px) must survive this clamp — BAR_MIN_HEIGHT 44 is a sliver (Tony 8×44).
     const height = clampHeight(b.height, wa.height)
     const visible =
       b.x + b.width > wa.x && b.x < wa.x + wa.width && b.y + b.height > wa.y && b.y < wa.y + wa.height
