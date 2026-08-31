@@ -36,6 +36,7 @@ describe('scratch: queued import cascade (vad-v1)', () => {
     const started: string[] = []
     const manager = new ImportJobManager({
       store,
+      concurrency: 1,
       decode: (job: ImportJob) => {
         if (decoderAlive) throw new Error('Another audio decoder is already active.')
         decoderAlive = true
@@ -76,6 +77,7 @@ describe('scratch: queued import cascade (vad-v1)', () => {
     const started: string[] = []
     const manager = new ImportJobManager({
       store,
+      concurrency: 1,
       decode: (job: ImportJob) => {
         if (ffmpegDecoders.size) throw new Error('Another audio decoder is already active.')
         ffmpegDecoders.add(job.jobId)

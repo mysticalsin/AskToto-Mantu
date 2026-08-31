@@ -1,5 +1,5 @@
-import { describe, it, expect, afterEach, vi } from 'vitest'
-import { mkdtempSync, writeFileSync, rmSync, statSync } from 'node:fs'
+import { describe, it, expect, afterEach } from 'vitest'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -43,27 +43,22 @@ describe('offerAudioPaths', () => {
     expect(consumePickedAudio(picked.files![1].token).name).toBe('review.wav')
   })
 
-  it('skips a file over the 500 MB cap and still stages the rest', () => {
+  it('skips a folder and still stages the rest, and names the 500 MB per-file cap', () => {
     dir = mkdtempSync(join(tmpdir(), 'metis-import-big-'))
     const ok = join(dir, 'ok.mp3')
-    const big = join(dir, 'huge.mp3')
+    const folder = join(dir, 'not-a-file')
     writeId3(ok)
-    writeId3(big)
-    const real = statSync
-    vi.spyOn(require('node:fs'), 'statSync').mockImplementation((path: string, opts?: unknown) => {
-      if (path === big) {
-        return { isFile: () => true, size: MAX_SOURCE_BYTES + 1, mtimeMs: Date.now() }
-      }
-      return real(path, opts as never)
-    })
-    const picked = offerAudioPaths([ok, big])
+    mkdirSync(folder)
+    const picked = offerAudioPaths([ok, folder])
     expect(picked.files).toHaveLength(1)
     expect(picked.files![0].name).toBe('ok.mp3')
     expect(picked.skipped).toEqual([
-      expect.objectContaining({ name: 'huge.mp3', error: expect.stringMatching(/500 MB/) })
+      expect.objectContaining({ name: 'not-a-file', error: expect.stringMatching(/not a folder/) })
     ])
     expect(MAX_SOURCE_BYTES).toBe(500 * 1024 * 1024)
-    vi.restoreAllMocks()
+    expect(readFileSync(join(__dirname, 'import-audio.ts'), 'utf8')).toMatch(
+      /That file is larger than 500 MB\. Choose a smaller recording/
+    )
   })
 })
 
