@@ -9,45 +9,95 @@ mac-show: Totos-Mac / PR 66
 
 # Onboarding Starfield Close bed
 
-Tony Mac-showed PR 66 on Totos-Mac. The first image was a frozen poster, Aria was silent, copy vanished, Continue arrived late, Act 4 had a bleached white bar, Tell the room sat left of the bar, and the landing bar had no quieter dimension cue.
+Tony Mac-showed the combined onboarding on Totos-Mac and rejected it. This file is the contract after that show. Six-act copy stays locked. Overlay hide-park, island geometry, cursor-watch, and `BAR_MIN_HEIGHT` stay off limits (PR 58). Do not pack. Do not merge. READY TO MERGE stays no until Devon Mac-shows again.
 
-This file is the contract after that show. Six-act copy stays locked. Overlay hide-park, island geometry, cursor-watch, and `BAR_MIN_HEIGHT` stay off limits. Do not pack. Do not merge.
+## Outcome (verbatim intent, 2026-08-31)
 
-## Outcome (verbatim intent)
+1. Portal first paint: Métis logo on the **April 29** looping video. Keep it animated. Logo readable. Not the March 19 hillside-vortex clip.
+2. After Next/Start: Starfield Close is **purple stars on black space**. Not mint/jade/bone on navy.
+3. Next / Continue / Set me up are **always visible** on every act, full opacity. No hover-to-reveal. No fade-up on those CTAs.
+4. Overview / Topics / Q&A (Act 2 recap) is 60fps-class. Next advances on the first click. Set me up already worked; Next must too.
+5. Goldberg Aria **stops** when onboarding ends or the app closes. No leftover AudioContext.
 
-1. First image is **animated**. He needs to see the galaxy move from frame one.
-2. Goldberg Aria **must play** on exclusive-stage mount. Retry on first click and on Next.
-3. Space/starfield acts: Continue visible from the start. Text appears and **stays**. Next and Set me up stay on screen.
-4. When the Métis bar appears after the tour: quieter dimension-open (about 0.4–0.5× portal OPEN gain, shorter). Keep portal OPEN and CLOSE working.
-5. How should Métis show up: **no** light white rectangle at the top.
-6. Tell the room: text really **centered**, not stuck on the left of the bar.
-7. More animation on the logo landing and persona/setup pops. Must feel interactive. Reduced-motion: still land, no bounce.
+## Portal first paint (HARD)
 
-## Galaxy from frame one
-
-`shouldMountStarfield` includes `hero` (and the rest of the exclusive stage: problem, reveal, setup, personalize, license, ready, skip). Act 1 is a live mint/jade tunnel, not a poster.
+When the exclusive stage opens, the first thing on stage is the Métis mark over this looping bed:
 
 ```
-STARFIELD_SCENES = hero | problem | reveal | setup | personalize | license | ready | skip
+https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260429_115139_0fc6bd3d-3631-4d26-ab9b-28293887dcc9.mp4
+```
+
+- `ONBOARDING_HERO_VIDEO_SRC` is that URL. The March 19 clip (`hf_20260319_055001_…`) is gone.
+- `play()` on hero-video mount. Loop, muted, `object-fit: cover`. Do not freeze on frame 1. Kenburns may stay.
+- Starfield does **not** mount on `hero`. Video is the portal-open bed. After Next, video unmounts.
+- Logo stays on top (`z-index` above the video). Tint may stay so the mark reads.
+- Six-act order unchanged. Swap the bed, not the acts.
+
+## Starfield after that click (HARD)
+
+Space bed after Next/Start: purplish and black. Stars are Mantu purple. Background is black like space.
+
+```
+CONFIG.bgColor     = #05010a
+CONFIG.flameColor  = #9A2BF0
+CONFIG.flameColor2 = #7F00DA
+CONFIG.colorA      = #C084FC
+CONFIG.colorB      = #9A2BF0
+CONFIG.colorC      = #7F00DA
+```
+
+Clear / fog / scene background in the `#000` / `#05010a` range. Not `#0a0a24` navy. Not mint `#aef6cf` / jade `#5fe6a0` / bone `#eafff2`.
+
+```
+STARFIELD_SCENES = problem | setup | personalize | license | ready | skip
 shouldMountStarfield(scene) === STARFIELD_SCENES.includes(scene)
+shouldMountStarfield('hero') === false
+shouldMountStarfield('reveal') === false
 ```
 
-- Time-driven dive already specified below. No scrollbar. Canvas `pointer-events: none` under UI.
-- Keep the looping CloudFront hero video **if it actually plays**. Call `play()` on hero-video **mount**, not only on Next. Never leave a frozen first frame. Kenburns on a still is not enough.
-- Video stays mounted until `onFirstFrame` **or** WebGL fail. Canvas starts at opacity 0. Fail is an instant video-bed fallback — never a flash of black (`setClearColor` is `#0a0a24`, not `#000`).
-- Pixel ratio cap **1.5** (`STARFIELD_PIXEL_RATIO_CAP`). `powerPreference: 'high-performance'`, `alpha: false`. 2× Retina × 3 composers × 2 blooms hitches.
-- First composed frame is sync (not waiting on the next rAF). Seed `scroll`/`smooth` at `breath(0)` = 0.56. First dt is `1/60` so dive/drift/spin are already moving.
-- Appear must not hide the galaxy:
+`reveal` (Overview / Topics / Q&A plus the live Bar demo) drops the WebGL bed so the act stays 60fps-class and Next hit-tests. Time-driven dive, no scrollbar, pixel cap 1.5, seed dt 1/60, appear floor 1.15 — unchanged for scenes that mount the bed.
 
-```
-uOpacity = 1.15 + clamp(elapsedMs / 480, 0, 1) * 0.85   // 1.15 → 2. Frame 1 is already a field.
-```
+## Next / Continue / Set me up always visible (HARD)
+
+Those CTAs are on screen at all times, every act, **full opacity**.
+
+Forbidden on those buttons: hover-to-reveal, fade-up, `animation-delay` that leaves them at opacity 0, parent `.scene-enter` / `.onboard-portal-content` opacity 0, `pointer-events: none`, a canvas/video sitting above them.
+
+Required:
+
+- Class `onboard-cta`. Solid high-contrast pill (`#f4f4f5` / `#09090b`). Not `.onboard-glass` (glass on a video looks like hover-to-reveal).
+- `opacity: 1`, `pointer-events: auto`, `position: relative`, `z-index` above the video/starfield (`z-index: 0`).
+- Outside `.scene-enter`. No fade-up. Geometry test that once required fade-up on hero Next is wrong; keep fade-up off.
+- Stage chrome that holds the tour (`OnboardingExperience` root) is `z-index` above the beds.
+
+## Overview / Topics / Q&A — not laggy, Next clicks (HARD)
+
+Act 2 recap titles are Overview / Topics / Q&A (`demoRecapMarkdown`). That act was laggy and Next was dead. Set me up already called `onContinue`.
+
+- Next on a clip with a following beat: `advance()` (same as today).
+- Next on the last beat (recap): `onContinue()` — first click leaves Act 2. No stuck state.
+- `if (hasNext) advance()` alone is forbidden; last-beat Next must not be a no-op.
+- No starfield rAF on `reveal`. Buttons hit-test above any leftover canvas/video (`pointer-events: none` on beds).
+
+## Music dies on finish / quit (HARD)
+
+`createOnboardingMusicBed` still starts on exclusive mount, retries on first click and Next, and does not stop on scene change. Mute still zeros.
+
+`stop()` / teardown **ends playback** on all of:
+
+1. Onboarding complete (`finish` / Ready Get started)
+2. Skip Get started that leaves the tour
+3. React unmount / renderer destroy
+4. `pagehide` / `beforeunload`
+5. Portal AudioContext from OPEN/CLOSE/bar-land: `close()` after play; `disposePortalAudio()` on music stop
+
+`stop()` must `pause()`, zero volume, clear `src`, `load()`, and set `autoplay = false`. A leftover `Audio` / AudioContext after quit is a fail. Tests must call `stop()` and assert playback ended.
 
 ## Hard: no scroll, ever
 
-Forbidden: `#scroll-host`, "scroll ↓" / scroll-down hint, overflow auto/scroll on the bed, driving `scrollTarget` from page scroll, unpkg/jsdelivr three.
+Forbidden: `#scroll-host`, "scroll ↓", overflow auto/scroll on the bed, page-scroll dive, unpkg/jsdelivr three.
 
-Required: `html, body, #root` overflow hidden. Stage overflow hidden. Starfield wrapper + canvas `position: fixed; inset: 0; overflow: hidden; pointer-events: none`. Tunnel keeps moving on its own.
+Required: `html, body, #root` overflow hidden. Starfield wrapper + canvas `position: fixed; inset: 0; overflow: hidden; pointer-events: none`.
 
 ## Scroll stand-in
 
@@ -58,61 +108,14 @@ smooth += (scrollTarget - smooth) * 0.10
 scroll  += (smooth - scroll) * 0.06
 ```
 
-`nextBump` += 0.16 on Next/Continue, decays `exp(-dt * 2.4)`. Reduced motion: `scrollTarget = 0`, drift/spin at 12%.
-
-## Music (Goldberg Aria)
-
-`createOnboardingMusicBed` lives for the whole exclusive mount. Do not pause or destroy it on scene change. Mute chip still zeros gain. Portal SFX stay a separate AudioContext and must not call `audio.pause()` or `bed.stop()`.
-
-Required play path:
-
-1. `music.start()` on exclusive-stage mount (same effect as `playPortalOpen`).
-2. `playPortalOpen`, then `music.start()` again so a new portal AudioContext cannot leave the Aria paused.
-3. `music.start()` again on the first pointerdown/click on the stage (Mac autoplay often rejects mount play).
-4. `music.start()` on Next / Start / Continue (not only `retryIfNeeded`).
-5. `play()` is the first media call. Do not seek before play.
-6. Loop envelope floor **0.48** so the first sample is audible under portal OPEN (0.16). Mute still zeros. Portal must not `audio.pause()` / `bed.stop()`.
-
 ## Copy + CTAs stay
 
-- `.fade-up` uses `forwards` (or `both`). Problem-story lines use `both` (not `forwards` alone) so a delay cannot flash the line then vanish it when the keyframe starts at opacity 0.
-- Continue / Next / Set me up are **outside** `.scene-enter` and have no fade-up delay. Present from first paint of that act.
-- Problem Continue has no `${200 + PROBLEM_STORY.length * 1100}ms` delay. Line stagger may stay.
-- Demo (`OnboardingDemoScene`): heading, helper line, **Next**, and **Set me up** stay mounted for the whole clip. Do not `{hasNext && (` unmount Next when beats advance.
+- Problem lines use `both`. Continue / Next / Set me up outside `.scene-enter`.
+- Demo heading, helper, Next, Set me up stay mounted. No `{hasNext && (` around Next.
 
-## Act 4: no white rectangle
+## Act 4 / tell / bar-land / springs
 
-Starfield is the bed. Remove:
-
-- `.onboard-act4::before` white radial `rgba(255,255,255,0.48)` at 50% 12%
-- `.onboard-stage:has(.onboard-act4)` white wash `rgba(255,255,255,0.36)` at 50% 0%
-
-No bleached bar across the top. `onboarding-tell-the-room.test.ts` must pin the absence of that wash.
-
-## Tell the room centered
-
-`.onboard-tell-card` is centered in the stage (`margin-inline: auto`, `text-align: center`, `align-items: center`). Title, lead, quote, why, and checkbox row are centered. Quote stays a pill, still centered. Not `text-align: left` plus stretch that sticks the block to the left of the bar.
-
-## Bar appears = quieter dimension
-
-Portal OPEN gain 0.16 / CLOSE 0.12 stay the loud pair. Keep those animations working.
-
-When onboarding finishes and the island/bar lands:
-
-- SFX: shorter quieter dimension-open, **0.4–0.5× OPEN gain** (0.072), about 0.56s. Lives next to portal SFX in `onboarding-portal.ts` (`playBarLand`). Must not kill the Aria.
-- Visual: overlay-reveal spring on `.aw-widget` via `html.metis-bar-land` — `scale(0.92) translateY(-8px)`, 360ms, `transform-origin: top center`. Not clip-path. Not as loud or as long as exclusive open/close.
-- Do **not** change hide-park 8×2, island geometry, cursor-watch, `BAR_MIN_HEIGHT`, or hover math. Do not edit overlay chrome files for park/hover.
-
-## Interactive logos
-
-- Hero Métis mark: Vibe Island land (0.90 → 1.03 → 1, 520ms), not a 0.72→1.08 cartoon. Class `hero-mark` / `onboard-mark-land`.
-- Persona cards: pressable spring. Hover max `scale(1.02)`. Active `scale(0.98)`.
-- Setup rows: pop-in is opacity + translateY only (motion budget). Fill-mode `both`.
-- Reduced-motion: still land (opacity/translate to rest). No bounce, no scale overshoot.
-
-## Scene (unchanged geometry)
-
-CONFIG, LAYERS, shaders, three composers, pointer, per-frame drift/spin: same as the original Starfield Close spec. `three@0.143.0` vendored. WebGL1Renderer, antialias, VSMShadowMap.
+Unchanged from the prior pass: no white Act 4 wash, tell-the-room centered, bar-land overlay spring + 0.45× OPEN, mark 0.90→1.03→1, pop-in opacity+translate, persona hover `scale(1.02)`.
 
 ## Files
 
@@ -120,29 +123,29 @@ CONFIG, LAYERS, shaders, three composers, pointer, per-frame drift/spin: same as
 | --- | --- |
 | `docs/design/ONBOARDING-STARFIELD.md` | this contract |
 | `docs/ONBOARDING-EXPERIENCE.md` | Mac-show notes (layout/motion only) |
-| `src/renderer/src/lib/onboarding-starfield-spec.ts` | CONFIG, shaders, breath, mount predicate includes hero |
-| `src/renderer/src/lib/onboarding-starfield-engine.ts` | WebGL1 scene |
-| `src/renderer/src/components/OnboardingStarfield.tsx` | canvas host |
-| `OnboardingExperience.tsx` | mount on hero+, music start/retry, stay-visible copy |
-| `OnboardingDemoScene.tsx` | Next + Set me up stay mounted |
-| `onboarding-portal.ts` | quieter `playBarLand` (OPEN/CLOSE unchanged) |
-| `styles.css` | starfield, fade-up forwards, no Act 4 white wash, tell-card center, mark/persona springs, bar-land slit |
+| `onboarding-hero-video.ts` | April 29 portal-open clip |
+| `onboarding-starfield-spec.ts` | purple/black CONFIG, mount predicate skips hero + reveal |
+| `onboarding-starfield-engine.ts` | WebGL1 scene |
+| `OnboardingStarfield.tsx` | canvas host |
+| `OnboardingExperience.tsx` | hero video, music start/stop, stay-visible CTAs |
+| `OnboardingDemoScene.tsx` | Next advances recap; no starfield hitch |
+| `onboarding-music.ts` | start + real stop/teardown |
+| `onboarding-portal.ts` | OPEN/CLOSE/bar-land + dispose AudioContext |
+| `styles.css` | CTA solid + z-index, starfield, springs |
 
-Off limits: island geometry, cursor-watch, hide park, `BAR_MIN_HEIGHT`, overlay click sound, `onboarding-hero-video.ts` clip URL, six-act user-facing copy strings, version 1.8.1, pack, merge.
+Off limits: island geometry, cursor-watch, hide park, `BAR_MIN_HEIGHT`, overlay click sound, six-act user-facing copy strings, version 1.8.1, pack, merge, PR 58.
 
 ## Tests (must pass)
 
-1. Starfield mounts on `hero` (and the other exclusive scenes).
-2. Music `start()` is invoked on mount and again on Next (and first-click path exists).
-3. Problem Continue is present at t=0 (no 1100ms * lines delay on that button; outside `.scene-enter`).
-4. Problem fade-up uses `both`, not `forwards` alone or backwards-only.
-5. Demo Next + Set me up still mounted after playback beats (no `hasNext &&` around Next; outside `.scene-enter`).
-6. No white Act 4 top wash (`::before` 0.48 and `:has(.onboard-act4)` 0.36 gone).
-7. Tell-the-room card is centered (`text-align: center`).
-8. Dispose, WebGL fail → video already mounted, reduced-motion surge = 0, no unpkg, no scroll-host.
-9. Bar-land gain is 0.4–0.5× portal OPEN; OPEN/CLOSE gains unchanged. Bar-land visual is overlay spring, not clip-path.
-10. Pixel ratio cap 1.5, seed dt 1/60, appear floor 1.15, `onFirstFrame`, canvas opacity 0 until first compose.
+1. Portal-open video is the April 29 URL, not March 19.
+2. Starfield does not mount on `hero` or `reveal`; mounts on problem+.
+3. CONFIG is purple/black, not mint/jade.
+4. Continue / Next / Set me up: `onboard-cta`, no fade-up, no glass, opacity 1, outside `.scene-enter`.
+5. Demo last-beat Next calls `onContinue` (Overview/Topics/Q&A).
+6. `stop()` ends Aria playback; `finish` / unmount / pagehide invoke it.
+7. Dispose, reduced-motion surge = 0, no unpkg, no scroll-host.
+8. Bar-land gain 0.4–0.5× OPEN; pixel cap 1.5; appear floor 1.15.
 
 ## Quality
 
-Apple-grade. 60fps on Retina. No hitch or empty frame at hero mount. Aria audible under portal OPEN. Springs like Vibe Island, not toy CSS. Copy never vanishes. WebGL fail is an instant video bed. Defaults friendly. Power stays in Settings. No em dashes in user-facing copy. Never auto-send. Do not claim READY TO MERGE. Do not Mac-show from a cloud agent. Devon will Mac-show.
+Apple-grade. If a hat would reject, fail the round. 60fps on Retina. CTAs never hover-only. Next never dead. Aria never outlives the tour. Defaults friendly. No em dashes in user-facing copy. Never auto-send. Do not claim READY TO MERGE. Do not Mac-show from a cloud agent. Devon will Mac-show.

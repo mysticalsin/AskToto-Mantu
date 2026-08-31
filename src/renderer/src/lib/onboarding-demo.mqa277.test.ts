@@ -10,6 +10,7 @@ import {
   demoElapsedAtBeat,
   demoFrameAt,
   demoHasNextBeat,
+  demoNextLeavesTour,
   demoPlaybackAfterNext,
   demoPlaybackElapsed,
   demoRecapMarkdown,
@@ -149,6 +150,8 @@ describe('MQA-277 — Act 2 (Demo) scripted timeline projector (demoFrameAt)', (
     const last = DEMO_STAGE_BOUNDARIES.length - 1
     expect(nextDemoBeatIndex(last)).toBe(last)
     expect(demoHasNextBeat(last)).toBe(false)
+    expect(demoNextLeavesTour(last)).toBe(true)
+    expect(demoNextLeavesTour(0)).toBe(false)
     expect(demoElapsedAtBeat(last)).toBe(DEMO_TIMING.end)
 
     for (let beat = 0; beat < DEMO_STAGE_VIDEOS.length; beat++) {

@@ -4,13 +4,13 @@
  */
 
 export const CONFIG = {
-  bgColor: '#0a0a24',
-  flameColor: '#aee9ff',
-  flameColor2: '#c79bff',
-  flameAmt: 0.2,
-  colorA: '#aef6cf',
-  colorB: '#5fe6a0',
-  colorC: '#eafff2',
+  bgColor: '#05010a',
+  flameColor: '#9A2BF0',
+  flameColor2: '#7F00DA',
+  flameAmt: 0.16,
+  colorA: '#C084FC',
+  colorB: '#9A2BF0',
+  colorC: '#7F00DA',
   opacity: 2,
   pointSize: 50,
   brightness: 1.85,
@@ -52,10 +52,9 @@ export const IDLE_MS = 3000
 export const REDUCED_MOTION_SCALE = 0.12
 export const POINT_SIZE_INITIAL = 50
 
+/** After Next. Not hero (April 29 video) and not reveal (Overview/Topics/Q&A must stay 60fps). */
 export const STARFIELD_SCENES = [
-  'hero',
   'problem',
-  'reveal',
   'setup',
   'personalize',
   'license',

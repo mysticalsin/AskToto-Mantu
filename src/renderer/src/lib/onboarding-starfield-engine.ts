@@ -97,13 +97,13 @@ export function createStarfieldBed(
 
   renderer.shadowMap.enabled = true
   renderer.shadowMap.type = VSMShadowMap
-  renderer.setClearColor(0x0a0a24, 1)
+  renderer.setClearColor(0x05010a, 1)
   const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
   renderer.setPixelRatio(Math.min(dpr, STARFIELD_PIXEL_RATIO_CAP))
 
   const scene = new Scene()
   scene.background = new Color(CONFIG.bgColor)
-  scene.fog = new Fog(0x0a0a24, 0, 15)
+  scene.fog = new Fog(0x05010a, 0, 15)
 
   let { w, h } = viewSize(canvas)
   const camera = new PerspectiveCamera(45, w / h, 0.1, 80)

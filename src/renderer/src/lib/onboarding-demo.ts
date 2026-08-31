@@ -255,6 +255,11 @@ export function demoHasNextBeat(i: number): boolean {
   return i < DEMO_STAGE_BOUNDARIES.length - 1
 }
 
+/** Last beat is Overview / Topics / Q&A. Next must leave Act 2, not no-op. */
+export function demoNextLeavesTour(beat: number): boolean {
+  return !demoHasNextBeat(beat)
+}
+
 /** Act 2 recap for the chosen role. Sales / recruiting / meeting (and the other six) are different layouts. */
 export function demoRecapMarkdown(mode: string): string {
   switch (mode) {

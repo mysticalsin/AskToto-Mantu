@@ -1,7 +1,7 @@
 /**
  * Full-bleed Starfield Close canvas under the exclusive tour UI.
- * Mount on hero and the rest of the exclusive stage (see shouldMountStarfield). pointer-events: none.
- * Canvas stays opacity 0 until the first composed frame so the video bed never flashes black.
+ * Mount after Next (see shouldMountStarfield). Not on hero (April 29 video) and not on reveal.
+ * pointer-events: none. Canvas stays opacity 0 until the first composed frame.
  */
 import { useEffect, useRef } from 'react'
 import { createStarfieldBed, type StarfieldBed } from '../lib/onboarding-starfield-engine'
