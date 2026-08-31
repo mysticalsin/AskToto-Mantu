@@ -482,8 +482,11 @@ describe('store', () => {
 
       const result = await listDustAgents()
 
-      // (a) the regression fix: view:'list' must be passed, or Dust's endpoint silently
-      // restricts/empties the result set.
+      // (a) merge all/workspace/published/list so a managed Spotlight Ref agent omitted from
+      // view:list still appears. A missing `view` string still empties the Dust endpoint.
+      expect(getAgentConfigurations).toHaveBeenCalledWith({ view: 'all' })
+      expect(getAgentConfigurations).toHaveBeenCalledWith({ view: 'workspace' })
+      expect(getAgentConfigurations).toHaveBeenCalledWith({ view: 'published' })
       expect(getAgentConfigurations).toHaveBeenCalledWith({ view: 'list' })
 
       // (b) only 'active' and status-undefined agents survive the filter.
@@ -499,6 +502,31 @@ describe('store', () => {
         modelProviderId: 'anthropic',
         modelId: 'claude-sonnet'
       })
+    })
+
+    it('includes a managed Spotlight Ref agent from workspace/published/all even when view:list omits it', async () => {
+      getAgentConfigurations.mockImplementation(({ view }: { view: string }) => {
+        if (view === 'list') {
+          return Promise.resolve({
+            isErr: () => false,
+            value: [{ sId: 'user-pickable', name: 'My agent', status: 'active' }]
+          })
+        }
+        if (view === 'workspace' || view === 'published' || view === 'all') {
+          return Promise.resolve({
+            isErr: () => false,
+            value: [
+              { sId: 'user-pickable', name: 'My agent', status: 'active' },
+              { sId: 'GOr913Zr5V', name: 'Spotlight Ref', status: 'active' }
+            ]
+          })
+        }
+        return Promise.resolve({ isErr: () => true, error: { message: `unexpected view ${view}` } })
+      })
+
+      const result = await listDustAgents()
+      expect(result.ok).toBe(true)
+      expect(result.agents?.map((a) => a.sId).sort()).toEqual(['GOr913Zr5V', 'user-pickable'])
     })
   })
 

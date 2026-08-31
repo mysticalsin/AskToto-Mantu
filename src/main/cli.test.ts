@@ -35,8 +35,8 @@ vi.mock('node:child_process', async () => {
   return { execFile, spawn: h.spawnImpl }
 })
 
-import { CLI_CONFIGS, checkCliSession, cliEnv, resolveBin, idleWatchdog, runCliStream, testCli,
-  clearBinCache
+import { CLI_CONFIGS, checkCliSession, classifyCliStatusOutput, connectCliSession, cliEnv, resolveBin, idleWatchdog, runCliStream, testCli,
+  clearBinCache, posixUserBinCandidates
 } from './cli'
 
 /**
@@ -679,11 +679,31 @@ describe('checkCliSession — the zero-token liveness probe behind MQA-062', () 
     expect(await checkCliSession('codex-cli')).toBe('signed-out')
   })
 
-  it('treats a missing binary as signed-out — an uninstalled CLI cannot be connected', async () => {
+  it('treats a missing binary as missing — not signed-out, so Settings can say not installed', async () => {
     wire(async () => ({ stdout: '' }), null)
-    expect(await checkCliSession('claude-cli')).toBe('signed-out')
+    expect(await checkCliSession('claude-cli')).toBe('missing')
     // Confirmed absent means BOTH lookups answered null, not one.
     expect(h.execFileImpl.mock.calls.filter((c) => (c[1] as string[])?.[0] === '-lc')).toHaveLength(2)
+  })
+
+  it('reads a signed-in Claude weekly cap as weekly-limit, not signed-out', async () => {
+    wire(async () => ({
+      stdout: JSON.stringify({ loggedIn: true }),
+      stderr: 'weekly limit reached, resets Sep 4 3pm America/Toronto'
+    }))
+    expect(await checkCliSession('claude-cli')).toBe('weekly-limit')
+  })
+
+  it('reads a signed-in Codex weekly cap as weekly-limit, not signed-out', async () => {
+    wire(async () => ({ stdout: 'Logged in using ChatGPT\nYou have reached your weekly limit.\n' }))
+    expect(await checkCliSession('codex-cli')).toBe('weekly-limit')
+  })
+
+  it('reads Codex logged-in text on stderr even when the process exits non-zero', async () => {
+    wire(async () =>
+      Promise.reject(Object.assign(new Error('exited 1'), { stdout: '', stderr: 'Logged in using ChatGPT\n' }))
+    )
+    expect(await checkCliSession('codex-cli')).toBe('live')
   })
 
   it('does not retire a working CLI on a transient lookup failure', async () => {
@@ -733,5 +753,87 @@ describe('checkCliSession — the zero-token liveness probe behind MQA-062', () 
     const env = (probe?.[2] as { env?: NodeJS.ProcessEnv } | undefined)?.env
     expect(env?.ANTHROPIC_API_KEY).toBeUndefined()
     vi.unstubAllEnvs()
+  })
+})
+
+describe('classifyCliStatusOutput — weekly-limit vs signed-out vs live', () => {
+  it('claude: loggedIn true is live; false is signed-out; weekly banner on a login is weekly-limit', () => {
+    expect(classifyCliStatusOutput('claude-cli', JSON.stringify({ loggedIn: true }), '')).toBe('live')
+    expect(classifyCliStatusOutput('claude-cli', JSON.stringify({ loggedIn: false }), '')).toBe('signed-out')
+    expect(
+      classifyCliStatusOutput(
+        'claude-cli',
+        JSON.stringify({ loggedIn: true }),
+        'weekly limit reached, resets Sep 4'
+      )
+    ).toBe('weekly-limit')
+  })
+
+  it('codex: Logged in is live; Not logged in is signed-out; weekly + logged in is weekly-limit', () => {
+    expect(classifyCliStatusOutput('codex-cli', 'Logged in using ChatGPT\n', '')).toBe('live')
+    expect(classifyCliStatusOutput('codex-cli', 'Not logged in\n', '')).toBe('signed-out')
+    expect(
+      classifyCliStatusOutput('codex-cli', 'Logged in using ChatGPT\nweekly usage limit reached\n', '')
+    ).toBe('weekly-limit')
+  })
+})
+
+describe('connectCliSession — Settings Connect never auto-sends a billed turn', () => {
+  const REAL_PLATFORM = process.platform
+  let connectCliSessionFn: typeof connectCliSession
+
+  beforeEach(async () => {
+    Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    clearBinCache()
+    h.execFileImpl.mockReset()
+    h.spawnImpl.mockClear()
+    vi.resetModules()
+    connectCliSessionFn = (await import('./cli')).connectCliSession
+  })
+  afterEach(() => Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true }))
+
+  it('marks a weekly-capped Claude session connected without spawning a prompt', async () => {
+    h.execFileImpl.mockImplementation((_cmd: string, args: string[]) => {
+      if (args?.[0] === '-lc') return Promise.resolve({ stdout: '/usr/local/bin/claude\n', stderr: '' })
+      if (args?.[0] === 'auth') {
+        return Promise.resolve({
+          stdout: JSON.stringify({ loggedIn: true }),
+          stderr: 'weekly limit reached'
+        })
+      }
+      if (args?.[0] === '--version') return Promise.resolve({ stdout: '2.1.251\n', stderr: '' })
+      return Promise.reject(new Error(`unexpected execFile args: ${JSON.stringify(args)}`))
+    })
+    const r = await connectCliSessionFn('claude-cli')
+    expect(r.ok).toBe(true)
+    expect(r.session).toBe('weekly-limit')
+    expect(r.error).toMatch(/weekly/i)
+    expect(h.spawnImpl).not.toHaveBeenCalled()
+    expect(JSON.stringify(h.execFileImpl.mock.calls)).not.toContain('--disallowedTools')
+  })
+
+  it('marks a logged-in Codex session connected without spawning exec', async () => {
+    h.execFileImpl.mockImplementation((_cmd: string, args: string[]) => {
+      if (args?.[0] === '-lc') return Promise.resolve({ stdout: '/usr/local/bin/codex\n', stderr: '' })
+      if (args?.[0] === 'login') return Promise.resolve({ stdout: 'Logged in using ChatGPT\n', stderr: '' })
+      if (args?.[0] === '--version') return Promise.resolve({ stdout: '0.144.5\n', stderr: '' })
+      return Promise.reject(new Error(`unexpected execFile args: ${JSON.stringify(args)}`))
+    })
+    const r = await connectCliSessionFn('codex-cli')
+    expect(r.ok).toBe(true)
+    expect(r.session).toBe('live')
+    expect(h.spawnImpl).not.toHaveBeenCalled()
+  })
+})
+
+describe('posixUserBinCandidates', () => {
+  it('points at ~/.local/bin and ~/.hermes/node/bin for GUI PATH gaps', () => {
+    const prev = process.env.HOME
+    process.env.HOME = '/Users/tony'
+    expect(posixUserBinCandidates('claude')).toEqual([
+      '/Users/tony/.local/bin/claude',
+      '/Users/tony/.hermes/node/bin/claude'
+    ])
+    process.env.HOME = prev
   })
 })

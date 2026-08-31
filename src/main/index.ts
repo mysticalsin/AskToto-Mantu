@@ -364,7 +364,7 @@ import {
 } from './dust-oauth'
 import { asrManifestComplete } from './asr-manifest'
 import { isInsideResourceBase, realResourceBase } from './asr-model-path'
-import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli, checkCliSession } from './cli'
+import { detectCli, setupCli, installCli, loginCli, prewarmCli, checkCliSession, connectCliSession } from './cli'
 import { connectMcp, pushToMcp } from './mcp/mcpClient'
 import { resolveWriteTargets } from './mcp/write-tools'
 import { appendTimeSavedEvent, summarizeTimeSaved } from './time-saved-log'
@@ -1320,8 +1320,8 @@ function retireCli(provider: ProviderId, message: string): void {
  * at startup and whenever the AI settings tab opens.
  *
  * Throttled per provider because the probe spawns a (cheap, zero-token) child process and the settings
- * panel can be opened repeatedly. Only an explicit 'signed-out' retires the flag — see checkCliSession on
- * why 'unknown' must change nothing.
+ * panel can be opened repeatedly. Only an explicit 'signed-out' or 'missing' retires the flag — a
+ * weekly-limit stays connected. See checkCliSession on why 'unknown' must change nothing.
  */
 const CLI_SESSION_RECHECK_MS = 60_000
 const cliSessionCheckedAt = new Map<ProviderId, number>()
@@ -1344,7 +1344,7 @@ async function verifyCliSessions(now = Date.now()): Promise<void> {
         if (now - last < CLI_SESSION_RECHECK_MS) continue
         cliSessionCheckedAt.set(provider, now)
         const verdict = await checkCliSession(provider)
-        if (verdict !== 'signed-out') continue
+        if (verdict !== 'signed-out' && verdict !== 'missing') continue
         const s = getSettings()
         if (!s.cliConnected[provider]) continue // disconnected by the user while the probe ran
         setSettings({ cliConnected: { ...s.cliConnected, [provider]: false } })
@@ -3691,7 +3691,9 @@ function registerIpc(): void {
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const parsedProvider = ProviderIdSchema.safeParse(provider)
     const p = parsedProvider.success ? parsedProvider.data : 'claude-cli'
-    const r = await testCli(p)
+    // Zero-token session probe. A billed testCli turn would treat Claude's weekly cap as "not
+    // connected" and auto-send a prompt — Connect must never do that. Weekly-limit is ok: true.
+    const r = await connectCliSession(p)
     if (r.ok) {
       const s = getSettings()
       setSettings({ cliConnected: { ...s.cliConnected, [p]: true } })

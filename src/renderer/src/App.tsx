@@ -58,7 +58,7 @@ import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, LicenseG
 import { HOTKEY_ACTIONS } from '@shared/ipc'
 import { useTapControl } from './lib/tap/tap-control'
 import type { TapProfile } from './lib/tap/classify'
-import { PROVIDERS, isDustReady, providerBaseUrl, requiresUserBaseUrl } from '@shared/providers'
+import { PROVIDERS, isDustReady, isSpotlightRefReady, providerBaseUrl, requiresUserBaseUrl } from '@shared/providers'
 import { ASSIST_PROMPT, buildNoDecisionPrompt, EMAIL_RECAP_PROMPT, COLD_CALL_COACHING_PROMPT, BOOK_MEETING_PROMPT } from '@shared/prompts'
 import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import { detectNoDecisionEnding } from '@shared/wrapup'
@@ -1640,26 +1640,44 @@ export function App(): JSX.Element {
   // which would incorrectly block this even when Dust is fully configured but some OTHER provider (the
   // active one for everyday chat) happens to be unconfigured.
   const spotlightRef = useCallback(() => {
-    const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModelsSpotlightRef ?? {})
-    const refAgent = dustReady ? settings?.providerModelsSpotlightRef?.['dust'] ?? '' : ''
+    const hasKeys = settings?.hasKeys ?? {}
+    const workspaceId = settings?.dustWorkspaceId ?? ''
+    const spotlightModels = settings?.providerModelsSpotlightRef ?? {}
+    const refAgent = spotlightModels['dust'] ?? ''
     setView('answer')
     setCollapsed(false)
     setCaptureError(null)
-    if (!refAgent) {
-      ask.fail(spotlightRefUnavailableMessage(), 'Spotlight Ref')
-      return
-    }
-    const typed = input.trim()
-    const transcript = listen.text()
-    const prompt = buildSpotlightRefPrompt(transcript, typed)
-    ask.run({
-      mode: 'answer',
-      prompt: prompt + GUARD_LINE,
-      agentOverride: refAgent,
-      providerOverride: 'dust',
-      history: historyRef.current
-    })
-    setInput('')
+    // Credentials + locked sId first. Then confirm the agent is in the merged Dust list
+    // (all / workspace / published / list). view:list alone can omit a managed agent and must
+    // not dead-end a connected workspace. A failed/empty list is inconclusive — run the pin.
+    void (async () => {
+      if (!isDustReady(hasKeys, workspaceId, spotlightModels) || !refAgent) {
+        ask.fail(spotlightRefUnavailableMessage(), 'Spotlight Ref')
+        return
+      }
+      let agents: { sId: string }[] | null = null
+      try {
+        const listed = await window.toto.dustListAgents()
+        if (listed.ok && listed.agents && listed.agents.length > 0) agents = listed.agents
+      } catch {
+        agents = null
+      }
+      if (!isSpotlightRefReady(hasKeys, workspaceId, spotlightModels, agents)) {
+        ask.fail(spotlightRefUnavailableMessage(), 'Spotlight Ref')
+        return
+      }
+      const typed = input.trim()
+      const transcript = listen.text()
+      const prompt = buildSpotlightRefPrompt(transcript, typed)
+      ask.run({
+        mode: 'answer',
+        prompt: prompt + GUARD_LINE,
+        agentOverride: refAgent,
+        providerOverride: 'dust',
+        history: historyRef.current
+      })
+      setInput('')
+    })()
   }, [
     input,
     ask.fail,
@@ -1685,10 +1703,11 @@ export function App(): JSX.Element {
   // On by default when Spotlight Ref is reachable — the user asked for wins surfaced by default while
   // still being able to turn them off. Ignored when Spotlight Ref is not connected (nothing to ground).
   const [includeWins, setIncludeWins] = useState(true)
-  const spotlightRefReady = isDustReady(
+  const spotlightRefReady = isSpotlightRefReady(
     settings?.hasKeys ?? {},
     settings?.dustWorkspaceId ?? '',
-    settings?.providerModelsSpotlightRef ?? {}
+    settings?.providerModelsSpotlightRef ?? {},
+    null
   )
 
   // Best-effort one-shot lookup of relevant customer wins from the Spotlight Ref agent — the ONLY agent
@@ -3308,10 +3327,11 @@ export function App(): JSX.Element {
             thinkingOn={settings?.thinkingMode === 'always'}
             onToggleThinking={onToggleThinking}
             onSpotlightRef={spotlightRef}
-            spotlightReady={isDustReady(
+            spotlightReady={isSpotlightRefReady(
               settings?.hasKeys ?? {},
               settings?.dustWorkspaceId ?? '',
-              settings?.providerModelsSpotlightRef ?? {}
+              settings?.providerModelsSpotlightRef ?? {},
+              null
             )}
             onHistory={onBarHistory}
             onSettings={onBarSettings}
