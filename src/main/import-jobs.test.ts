@@ -828,7 +828,7 @@ describe('ImportJobManager', () => {
     expect(manager.list()).toEqual([])
   })
 
-  it('N sources produce N durable jobs and two start decoding so one huge file cannot hold the slot', async () => {
+  it('N sources produce N durable jobs and only one occupies the decode slot', async () => {
     let n = 0
     const { manager, decode } = createManager({
       newId: () => `job-${++n}`,
@@ -840,10 +840,44 @@ describe('ImportJobManager', () => {
       { ...source, name: 'wrap.mp3' }
     ])
     expect(jobs.map((j) => j.title)).toEqual(['Standup', 'Review', 'Wrap'])
-    expect(decode).toHaveBeenCalledTimes(2)
+    expect(decode).toHaveBeenCalledTimes(1)
     expect(manager.get('job-1')?.state).toBe('decoding')
-    expect(manager.get('job-2')?.state).toBe('decoding')
+    expect(manager.get('job-2')?.state).toBe('queued')
     expect(manager.get('job-3')?.state).toBe('queued')
+  })
+
+  it('second decode starts only after the first decoder is released; recap of A does not block decode of B', async () => {
+    let n = 0
+    let releaseRecap!: (value: string) => void
+    const generateRecap = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          releaseRecap = resolve
+        })
+    )
+    const { manager, decode } = createManager({
+      newId: () => `job-${++n}`,
+      generateRecap
+    })
+    await manager.startMany([
+      { ...source, name: 'first.m4a' },
+      { ...source, name: 'second.wav' }
+    ])
+    expect(decode).toHaveBeenCalledTimes(1)
+    expect(manager.get('job-1')?.state).toBe('decoding')
+    expect(manager.get('job-2')?.state).toBe('queued')
+
+    await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+    const finishing = manager.finishDecoding('job-1')
+    await vi.waitFor(() => expect(generateRecap).toHaveBeenCalled())
+    expect(decode).toHaveBeenCalledTimes(2)
+    expect(manager.get('job-2')?.state).toBe('decoding')
+    expect(manager.get('job-1')?.state).toBe('recapping')
+
+    releaseRecap('## Title: Standup\n## Decisions: None.')
+    await finishing
+    expect(manager.get('job-1')?.state).toBe('done')
+    expect(manager.get('job-2')?.state).toBe('decoding')
   })
 
   it('resume still re-queues a failed job after a multi-file start', async () => {
@@ -857,8 +891,7 @@ describe('ImportJobManager', () => {
     })
     const { manager } = createManager({
       decode,
-      newId: () => `job-${++n}`,
-      concurrency: 2
+      newId: () => `job-${++n}`
     })
     await manager.startMany([
       { ...source, name: 'first.m4a' },
@@ -866,9 +899,14 @@ describe('ImportJobManager', () => {
     ])
     expect(manager.get('job-1')?.state).toBe('failed')
     expect(manager.get('job-2')?.state).toBe('decoding')
+    expect(decode).toHaveBeenCalledTimes(2)
 
     const resumed = await manager.resume('job-1')
-    expect(resumed.state).toBe('decoding')
+    expect(resumed.state).toBe('queued')
+    expect(manager.get('job-2')?.state).toBe('decoding')
+    expect(decode).toHaveBeenCalledTimes(2)
+    await manager.releaseDecodeSlot('job-2')
+    expect(manager.get('job-1')?.state).toBe('decoding')
     expect(decode).toHaveBeenCalledTimes(3)
   })
 })
