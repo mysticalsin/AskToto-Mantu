@@ -1,5 +1,5 @@
 import express from 'express';
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -70,6 +70,10 @@ const adminPatchSchema = z
     { message: 'at least one field must be provided' }
   );
 
+function hashClientIp(ip) {
+  return createHash('sha256').update(String(ip || 'unknown')).digest('hex').slice(0, 16);
+}
+
 function badRequest(res, parseResult) {
   return res.status(400).json({
     ok: false,
@@ -98,7 +102,7 @@ function makeRateLimit() {
     } else if (b.count >= RL_MAX) {
       // Attack log: route + IP only. The license key is the credential; it does not belong in stderr.
       const route = typeof req.path === 'string' && req.path ? req.path : 'unknown';
-      console.warn(`[license-server] rate_limited route=${route} ip=${ip}`);
+      console.warn(`[license-server] rate_limited route=${route} ip_hash=${hashClientIp(ip)}`);
       return res.status(429).json({ ok: false, error: 'rate_limited' });
     } else {
       b.count += 1;
@@ -301,6 +305,56 @@ export function createApp(store, auditLog, options = {}) {
     return bearerMatches(req, process.env.LICENSE_ADMIN_TOKEN);
   }
 
+  const SESSION_COOKIE = 'metis_admin_session';
+  const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+  const sessions = new Map();
+
+  function parseCookieHeader(header) {
+    const out = {};
+    if (!header) return out;
+    for (const part of String(header).split(';')) {
+      const eq = part.indexOf('=');
+      if (eq === -1) continue;
+      const k = part.slice(0, eq).trim();
+      const v = part.slice(eq + 1).trim();
+      if (k) out[k] = decodeURIComponent(v);
+    }
+    return out;
+  }
+
+  function sessionCookieLine(id, req, maxAgeSec) {
+    const parts = [`${SESSION_COOKIE}=${id}`, 'HttpOnly', 'SameSite=Strict', 'Path=/', `Max-Age=${maxAgeSec}`];
+    if (req.secure || req.get('x-forwarded-proto') === 'https') parts.push('Secure');
+    return parts.join('; ');
+  }
+
+  function sessionIdFromReq(req) {
+    const raw = parseCookieHeader(req.get('cookie') || '')[SESSION_COOKIE];
+    if (!raw || !/^[a-f0-9]{64}$/.test(raw)) return null;
+    return raw;
+  }
+
+  function validSession(req) {
+    const id = sessionIdFromReq(req);
+    if (!id) return false;
+    const sess = sessions.get(id);
+    if (!sess || Date.now() >= sess.expiresAt) {
+      if (sess) sessions.delete(id);
+      return false;
+    }
+    return true;
+  }
+
+  function createSession() {
+    const now = Date.now();
+    for (const [id, sess] of sessions) {
+      if (now >= sess.expiresAt) sessions.delete(id);
+    }
+    const id = randomBytes(32).toString('hex');
+    sessions.set(id, { expiresAt: now + SESSION_TTL_MS });
+    return id;
+  }
+
   function requireAdmin(req, res, next) {
     if (!process.env.LICENSE_ADMIN_TOKEN) {
       // No token configured means every admin call is rejected regardless of what's presented — that's
@@ -311,24 +365,63 @@ export function createApp(store, auditLog, options = {}) {
         message: 'LICENSE_ADMIN_TOKEN is not set on this server — admin routes are disabled until it is configured.',
       });
     }
+    if (validSession(req)) return next();
     const ip = req.ip || req.socket?.remoteAddress || 'unknown';
     if (adminLockout.isLocked(ip)) {
-      console.warn(`[license-server] admin_lockout ip=${ip}`);
+      console.warn(`[license-server] admin_lockout ip_hash=${hashClientIp(ip)}`);
       return res.status(429).json({ ok: false, error: 'too_many_attempts' });
     }
     if (!isValidAdminToken(req)) {
       adminLockout.recordFailure(ip);
-      console.warn(`[license-server] admin_auth_failed ip=${ip}`);
+      console.warn(`[license-server] admin_auth_failed ip_hash=${hashClientIp(ip)}`);
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
     adminLockout.recordSuccess(ip);
     return next();
   }
 
-  // Static admin dashboard. The page itself carries no secrets — it's a
-  // token-gated client that prompts for the admin bearer token and calls the
-  // already-gated /admin/* API routes below with it — so serving it needs no
-  // auth of its own.
+  app.post('/admin/session', (req, res) => {
+    if (!process.env.LICENSE_ADMIN_TOKEN) {
+      return res.status(503).json({
+        ok: false,
+        error: 'admin_disabled',
+        message: 'LICENSE_ADMIN_TOKEN is not set on this server — admin routes are disabled until it is configured.',
+      });
+    }
+    const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+    if (adminLockout.isLocked(ip)) {
+      console.warn(`[license-server] admin_lockout ip_hash=${hashClientIp(ip)}`);
+      return res.status(429).json({ ok: false, error: 'too_many_attempts' });
+    }
+    if (!isValidAdminToken(req)) {
+      adminLockout.recordFailure(ip);
+      console.warn(`[license-server] admin_auth_failed ip_hash=${hashClientIp(ip)}`);
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+    adminLockout.recordSuccess(ip);
+    const id = createSession();
+    res.setHeader('Set-Cookie', sessionCookieLine(id, req, Math.floor(SESSION_TTL_MS / 1000)));
+    return res.json({ ok: true });
+  });
+
+  app.get('/admin/session', (req, res) => {
+    if (!process.env.LICENSE_ADMIN_TOKEN) {
+      return res.status(503).json({ ok: false, error: 'admin_disabled' });
+    }
+    if (validSession(req) || isValidAdminToken(req)) return res.json({ ok: true });
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  });
+
+  app.delete('/admin/session', (req, res) => {
+    const id = sessionIdFromReq(req);
+    if (id) sessions.delete(id);
+    res.setHeader('Set-Cookie', sessionCookieLine('', req, 0));
+    return res.json({ ok: true });
+  });
+
+  // Static admin dashboard. The page itself carries no secrets. The browser posts the admin
+  // token once to /admin/session, which sets an httpOnly session cookie. Subsequent /admin/*
+  // calls authenticate via that cookie or a Bearer token (CLI). Serving the HTML needs no auth.
   app.get('/admin/ui', (req, res) => {
     res.type('html').send(ADMIN_UI_HTML);
   });
