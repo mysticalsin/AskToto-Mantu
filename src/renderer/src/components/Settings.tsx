@@ -5296,7 +5296,8 @@ const TABS: {
       'polo pre-sales', 'crm', 'integrations', 'knowledge graph', 'plane', 'clickup',
       'task management', 'book next steps', 'action items', 'time saved', 'estimate',
       'consolidation', 'token', 'batch index', 'brain consolidation',
-      'batch index (1–2× / day)', 'prefer on-device model for consolidation'
+      'batch index (1–2× / day)', 'prefer on-device model for consolidation',
+      '06:00', '12:00', '18:00', 'America/Toronto', 'intelligence index'
     ]
   },
   {
@@ -6791,15 +6792,15 @@ function IntelligenceTab({
 
       <Section
         title="Brain consolidation"
-        desc="Index meetings in at most a few LLM passes per day instead of one extract per save — keeps the second brain token-efficient. Manual Index now still runs immediately."
+        desc="The Intelligence index runs at 06:00, 12:00, and 18:00 America/Toronto. If Métis was closed at a slot, the next launch catches up. This toggle only batches extra extracts between those named slots. Manual Update Intelligence still runs immediately."
         icon={Cpu}
       >
         <ToggleRow
           label="Batch index (1–2× / day)"
           desc={
             settings.brainConsolidation.enabled
-              ? `Up to ${settings.brainConsolidation.maxPassesPerDay} consolidation pass${settings.brainConsolidation.maxPassesPerDay === 1 ? '' : 'es'} per day. New meetings wait in a durable queue until the next pass.`
-              : 'Off: each saved meeting is indexed with an LLM extract as soon as it lands (higher token use).'
+              ? `Named slots stay 06:00, 12:00, and 18:00 America/Toronto. Up to ${settings.brainConsolidation.maxPassesPerDay} extra consolidation pass${settings.brainConsolidation.maxPassesPerDay === 1 ? '' : 'es'} may run between slots. New meetings still save immediately; extracts can wait for the next named pass.`
+              : 'Off: each saved meeting is indexed with an LLM extract as soon as it lands (higher token use). The named 06:00 / 12:00 / 18:00 America/Toronto index still runs.'
           }
           on={settings.brainConsolidation.enabled}
           onChange={(v) =>
