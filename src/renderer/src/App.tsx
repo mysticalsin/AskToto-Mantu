@@ -1655,17 +1655,9 @@ export function App(): JSX.Element {
         ask.fail(spotlightRefUnavailableMessage(), 'Spotlight Ref')
         return
       }
-      let agents: { sId: string }[] | null = null
-      try {
-        const listed = await window.toto.dustListAgents()
-        if (listed.ok && listed.agents && listed.agents.length > 0) agents = listed.agents
-      } catch {
-        agents = null
-      }
-      if (!isSpotlightRefReady(hasKeys, workspaceId, spotlightModels, agents)) {
-        ask.fail(spotlightRefUnavailableMessage(), 'Spotlight Ref')
-        return
-      }
+      // Do not gate on the REST agent picker / view:list — a managed agent omitted from
+      // that list is not a workspace-mismatch dead-end. Main spawns the managed Dust CLI;
+      // missing CLI installs, missing agent says the agent is not in this workspace.
       const typed = input.trim()
       const transcript = listen.text()
       const prompt = buildSpotlightRefPrompt(transcript, typed)

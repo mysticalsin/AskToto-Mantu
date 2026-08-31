@@ -687,8 +687,10 @@ export function isSpotlightRefReady(
   if (!isDustReady(hasKeys, dustWorkspaceId, providerModelsSpotlightRef)) return false
   const id = (providerModelsSpotlightRef['dust'] || '').trim()
   if (!id) return false
-  if (agents === null || agents.length === 0) return true
-  return agents.some((a) => a.sId === id)
+  // REST view:list (and even a merged list) can omit a managed agent. That is not proof the
+  // agent is gone — Spotlight Ref fails only when the Dust CLI session says so.
+  void agents
+  return true
 }
 
 /**

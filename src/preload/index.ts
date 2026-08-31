@@ -107,6 +107,15 @@ const api = {
   dustLoginPoll: (): Promise<DustDevicePollResult> => ipcRenderer.invoke(IPC.dustLoginPoll),
   dustLoginPickWorkspace: (workspaceId: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.dustLoginPickWorkspace, workspaceId),
+  dustInstallCli: (onProgress?: (line: string) => void): Promise<CliInstallResult> => {
+    const listener = (_e: unknown, d: { line: string }): void => {
+      onProgress?.(d.line)
+    }
+    ipcRenderer.on(IPC.dustInstallCliProgress, listener)
+    return ipcRenderer.invoke(IPC.dustInstallCli).finally(() => {
+      ipcRenderer.removeListener(IPC.dustInstallCliProgress, listener)
+    })
+  },
   cliDetect: (provider: ProviderId): Promise<CliActionResult> =>
     ipcRenderer.invoke(IPC.cliDetect, provider),
   cliSetup: (provider: ProviderId): Promise<{ ok: boolean; error?: string }> =>

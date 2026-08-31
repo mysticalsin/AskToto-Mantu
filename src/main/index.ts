@@ -346,6 +346,7 @@ import { runSelfTest } from './selftest'
 import { devEnv, devToolsEnabled } from './dev-env'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { importDustCliSession, refreshDustCliSession } from './dustcli'
+import { ensureManagedDustCli } from './dust-cli-chat'
 import {
   beginDustDeviceLogin,
   pollDustDeviceLoginOnce,
@@ -3475,6 +3476,27 @@ function registerIpc(): void {
   // cascade). importDustCliSession only READS the keychain — no rotation, no persist — and returns
   // booleans only (the token never crosses to the renderer). A present-but-expired token reports ok:true
   // (it is refreshable on the ask/list path); only a genuinely absent session reports ok:false.
+  ipcMain.handle(IPC.dustInstallCli, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const r = await ensureManagedDustCli((p) => {
+      const line =
+        p.phase === 'downloading' && p.totalBytes
+          ? `Downloading Dust CLI… ${Math.floor(((p.receivedBytes ?? 0) / p.totalBytes) * 100)}%`
+          : p.phase === 'resolving'
+            ? 'Finding the Dust CLI…'
+            : p.phase === 'verifying'
+              ? 'Verifying Dust CLI…'
+              : p.phase === 'extracting'
+                ? 'Installing Dust CLI…'
+                : p.phase === 'error'
+                  ? p.error || 'Dust CLI install failed.'
+                  : 'Dust CLI ready.'
+      win?.webContents.send(IPC.dustInstallCliProgress, { line })
+    })
+    return r.ok ? { ok: true } : { ok: false, error: r.error }
+  })
+
   ipcMain.handle(IPC.dustProbeSession, async (e) => {
     assertMainWindow(e)
     const s = await importDustCliSession()
