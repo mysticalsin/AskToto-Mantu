@@ -13,14 +13,14 @@ function sliceBetween(from: string, to: string): string {
 }
 
 describe('AUDIT-10 — askStart never forwards Error.message to the overlay', () => {
-  it('the outer catch sends a constant sentence', () => {
+  it('the outer catch sends a constant sentence except for skill-lock integrity', () => {
     const end = indexSrc.indexOf('ipcMain.handle(IPC.askCancel')
     expect(end).toBeGreaterThan(-1)
-    const body = indexSrc.slice(end - 280, end)
-    expect(body).toMatch(/\} catch \{/)
+    const body = indexSrc.slice(end - 420, end)
+    expect(body).toMatch(/isModeSkillIntegrityError\(err\)/)
     expect(body).toMatch(/message: 'Could not start the answer\.'/)
     expect(body).not.toMatch(/e\.message/)
-    expect(body).not.toMatch(/instanceof Error/)
+    expect(body).not.toMatch(/err\.message[\s\S]*Could not start the answer/)
   })
 })
 
