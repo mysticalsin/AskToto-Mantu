@@ -65,10 +65,19 @@ Live Listen’s `asr-model://` protocol keeps serving bundled files. If a bundle
 ### Jobs
 
 - N files → N `ImportJob`s. `startMany` creates them all, persists them, then pumps.
-- Concurrency **2**. Decode (FFmpeg) may run two recordings at once. ASR (`transcribe`) is mutexed so Parakeet / the Whisper host stay single-threaded. A 90-minute file cannot occupy the only decoder slot while a five-minute file sits idle.
+- **Decode slot = 1.** FFmpeg and the hidden-window fallback are singletons (`Another audio decoder is already active.`). The slot is released the moment the decoder process/window exits, then `pump()` starts the next decode **before** recap. Job A may transcribe or recap while Job B decodes. ASR stays mutexed. Recap never occupies the decode slot. Fail/cancel reap the slot and pump.
+- Concurrency **2** is wrong: two decodes cannot run. A 90-minute recap must not hold the next file at `queued`.
 - PCM buffers are **per job**. The old shared `this.pcm` would mix two decodes.
-- Hidden-window decoder fallback (no FFmpeg sidecar) stays one-at-a-time; the second job waits in `queued`.
+- Hidden-window decoder still throws if a live Listen session is active (`listeningActive`) or another decoder window is up.
 - Overlay close, quit, and fail still recover from `userData/import-jobs`. Resume is unchanged: failed, no meeting file yet, replay from the durable cursor.
+
+### Recap (background, one LLM call)
+
+- Save the transcript as soon as ASR finishes. Recap is one background call at the **summary/base** tier (not think/reasoning). Do not run sequential polish batches of 8 with a 120s idle before the summary.
+- Polish, if a test wires it, is fail-open **after** recap. Import wiring skips polish (it cannot be cheap).
+- Apple-grade recap: decisions, owners, next steps. Stable cached system prefix (`IMPORT_RECAP_SYSTEM_PREFIX`: no `Date.now`). Transcript is the variable suffix. Anthropic `cache_control` ttl `1h`; OpenAI `prompt_cache_key` + system breakpoint.
+- Prefer a connected API. Local only when `redactSensitive` or no API/CLI candidate. Keep a trailing-stream recap if `>= 200` chars. Max 3 attempts. “Summary needs attention” is not success when a provider exists.
+- Recap must not block the next decode. Import idle may start **one** Intelligence index pass (not a BrainView mount timer). See `docs/design/INTELLIGENCE-UPDATE.md`.
 
 ### UI
 
@@ -84,7 +93,7 @@ Recall, not overlay chrome. One accent, small type, glass cards.
 
 - Missing ASR in a fake `resourcesPath` no longer produces the reinstall string; `ensure` fetches or copies into userData and progress fires.
 - Picker options include `multiSelections`.
-- N offered files produce N jobs. Resume still works. Concurrency 2 starts a second decode while the first is still active; a third stays queued.
+- N offered files produce N jobs. Resume still works. Decode slot 1: the second decode starts only after the first decoder is released; recap of A does not block decode of B.
 - Layout/UX helpers for the queue (visible jobs, headline, picked-file list, drop filter).
 
 ## Out of scope
