@@ -18,13 +18,18 @@ class FakeChild extends EventEmitter {
 // directory instead of the packaged app's process.resourcesPath, which does not exist in this test
 // process — the RPC tests below never touch the filesystem it points at anyway (the child is fully faked).
 const electron = vi.hoisted(() => ({
-  app: { isPackaged: false },
+  app: { isPackaged: false, getPath: () => '/tmp/metis-test-user' },
+  net: { fetch: vi.fn() },
   utilityProcess: { fork: vi.fn() }
 }))
 const logger = vi.hoisted(() => ({ mainLog: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }))
 
 vi.mock('electron', () => electron)
 vi.mock('./logger', () => logger)
+vi.mock('./asr-bundled-ensure', () => ({
+  ensureWhisperFloorAssets: vi.fn(async () => undefined),
+  resolveWhisperModelsRoot: () => '/tmp/metis-test-models'
+}))
 
 import {
   applyInitLanguage,
@@ -387,10 +392,10 @@ describe('whisper-import utilityProcess RPC (MQA-234: transformers isolated into
     child.emit('message', {
       type: 'error',
       id: req.id,
-      message: 'The bundled transcription files are missing or damaged. Reinstall Métis from a complete installer.'
+      message: 'Could not load the transcription files. Check your connection and try again.'
     })
 
-    await expect(pending).rejects.toThrow(/Reinstall Métis/)
+    await expect(pending).rejects.toThrow(/Check your connection/)
   })
 
   it('resolves with the transcribed text on a matching result message', async () => {

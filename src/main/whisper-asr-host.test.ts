@@ -83,7 +83,7 @@ describe('whisper-asr-host — the isolated transformers child (MQA-234)', () =>
   // with nothing in it fails FAST (no network attempt — allowRemoteModels stays false) with a message an
   // end user can act on, mirroring parakeet.ts's/the pre-MQA-234 whisper-import.ts reinstall-guidance
   // pattern rather than leaking transformers.js's internal `local_files_only` wording.
-  it('a transcribe against an empty models dir fails fast with reinstall guidance, no network use (MQA-234, MQA-235)', async () => {
+  it('a transcribe against an empty models dir fails fast with an actionable message, no network use (MQA-234, MQA-235)', async () => {
     await loadHost()
     port.emit('message', { data: { type: 'init', modelsPath: tempDir } })
     port.emit('message', { data: { type: 'transcribe', id: 1, pcm: new Float32Array(16_000).buffer } })
@@ -92,7 +92,8 @@ describe('whisper-asr-host — the isolated transformers child (MQA-234)', () =>
 
     const msg = lastMessage()
     expect(msg).toMatchObject({ type: 'error', id: 1 })
-    expect(String(msg.message)).toMatch(/Reinstall Métis/)
+    expect(String(msg.message)).toMatch(/Check your connection/)
+    expect(String(msg.message)).not.toMatch(/[Rr]einstall/)
   }, 20_000)
 
   it('never imports sherpa — the whole point of process isolation is that this child never touches it (MQA-234)', () => {

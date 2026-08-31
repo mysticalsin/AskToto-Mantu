@@ -110,7 +110,12 @@ export interface ImportJobManagerDeps {
   personaMode?: () => string
   now?: () => number
   newId?: () => string
+  /** How many recordings may decode at once. ASR stays mutexed. Default 2 so one huge file cannot
+   *  hold the only decoder slot while the rest sit idle. */
+  concurrency?: number
 }
+
+export const MAX_CONCURRENT_IMPORTS = 2
 
 const CHUNK_MS = IMPORT_CHUNK_SECONDS * 1_000
 const SAMPLE_RATE = 16_000
@@ -140,44 +145,59 @@ function copy<T>(value: T): T {
 }
 
 /**
- * Serialises one CPU-bound import at a time. Each success checkpoint is durable before the decoder may
- * submit the next chunk, so closing the overlay can never discard already-recognized speech.
+ * Runs a small number of imports at once (default 2). Each success checkpoint is durable before the
+ * decoder may submit the next chunk, so closing the overlay can never discard already-recognized speech.
+ * ASR calls are mutexed so Parakeet / the Whisper host stay single-threaded.
  */
 export class ImportJobManager {
   private readonly jobs = new Map<string, ImportJob>()
   private readonly queue: string[] = []
-  /** In-memory only: decoded PCM slabs for the ACTIVE vad-v1 job (never persisted; resume re-decodes). */
-  private pcm: Float32Array[] = []
-  private pcmSamples = 0
-  private activeJobId: string | null = null
+  /** In-memory only: decoded PCM slabs per in-flight vad-v1 job (never persisted; resume re-decodes). */
+  private readonly pcmByJob = new Map<string, { slabs: Float32Array[]; samples: number }>()
+  private readonly activeJobIds = new Set<string>()
+  private transcribeLock: Promise<void> = Promise.resolve()
   private loaded = false
+  private readonly maxConcurrent: number
 
-  constructor(private readonly deps: ImportJobManagerDeps) {}
+  constructor(private readonly deps: ImportJobManagerDeps) {
+    const n = deps.concurrency ?? MAX_CONCURRENT_IMPORTS
+    this.maxConcurrent = Number.isFinite(n) && n > 0 ? Math.min(4, Math.floor(n)) : 1
+  }
 
   async start(source: ImportJobSource): Promise<ImportJob> {
-    const now = this.now()
-    const job: ImportJob = {
-      jobId: this.newId(),
-      sourcePath: source.path,
-      sourceName: source.name,
-      sourceSizeBytes: source.sizeBytes,
-      sourceMtimeMs: source.mtimeMs,
-      title: titleFromSource(source.name),
-      state: 'queued',
-      cursor: 0,
-      totalChunks: 0,
-      lines: [],
-      chunkSec: IMPORT_CHUNK_SECONDS,
-      pipeline: 'vad-v1',
-      ...(this.deps.personaMode ? { mode: this.deps.personaMode() } : {}),
-      createdAt: now,
-      updatedAt: now
+    const [job] = await this.startMany([source])
+    return job
+  }
+
+  /** Create N durable jobs, then pump so as many as `maxConcurrent` begin decoding. */
+  async startMany(sources: ImportJobSource[]): Promise<ImportJob[]> {
+    const started: string[] = []
+    for (const source of sources) {
+      const now = this.now()
+      const job: ImportJob = {
+        jobId: this.newId(),
+        sourcePath: source.path,
+        sourceName: source.name,
+        sourceSizeBytes: source.sizeBytes,
+        sourceMtimeMs: source.mtimeMs,
+        title: titleFromSource(source.name),
+        state: 'queued',
+        cursor: 0,
+        totalChunks: 0,
+        lines: [],
+        chunkSec: IMPORT_CHUNK_SECONDS,
+        pipeline: 'vad-v1',
+        ...(this.deps.personaMode ? { mode: this.deps.personaMode() } : {}),
+        createdAt: now,
+        updatedAt: now
+      }
+      this.jobs.set(job.jobId, job)
+      await this.persist(job)
+      this.enqueue(job.jobId)
+      started.push(job.jobId)
     }
-    this.jobs.set(job.jobId, job)
-    await this.persist(job)
-    this.enqueue(job.jobId)
     await this.pump()
-    return copy(this.requireJob(job.jobId))
+    return started.map((id) => copy(this.requireJob(id)))
   }
 
   /** Reloads unfinished jobs after an app restart. The caller verifies source identity before decoding. */
@@ -287,9 +307,9 @@ export class ImportJobManager {
     await this.persist(job)
     await this.removeCheckpoint(job.jobId)
     await this.deps.onCancel?.(jobId)
-    if (this.activeJobId === jobId) {
-      this.takePcm()
-      this.activeJobId = null
+    if (this.activeJobIds.has(jobId)) {
+      this.takePcm(jobId)
+      this.activeJobIds.delete(jobId)
       // cancelAll() passes pump:false so draining one job can't promote the next queued job into
       // 'decoding' before the loop has cancelled it too; it pumps once itself after everything is terminal.
       if (opts.pump !== false) await this.pump()
@@ -332,7 +352,7 @@ export class ImportJobManager {
     if (samples.length > 16_000 * (IMPORT_CHUNK_SECONDS + 5)) throw new Error('Decoded audio chunk is too large.')
     // vad-v1: cursor counts WINDOWS (phase 2), not slabs — order is enforced against the count of
     // slabs already buffered instead. Legacy keeps the original cursor-based replay/order contract.
-    const expectedSeq = job.pipeline === 'vad-v1' ? this.pcm.length : job.cursor
+    const expectedSeq = job.pipeline === 'vad-v1' ? this.pcmOf(job.jobId).slabs.length : job.cursor
     if (seq < expectedSeq) return // replay during resume: this checkpoint already exists
     if (seq !== expectedSeq) {
       await this.fail(job, `Decoded audio arrived out of order (expected chunk ${expectedSeq + 1}).`)
@@ -350,16 +370,17 @@ export class ImportJobManager {
     // backlog is transcribed slab-by-slab right here, then this and every later slab take the legacy
     // branch below.
     if (job.pipeline === 'vad-v1') {
-      if (this.pcmSamples + samples.length <= VAD_MAX_SAMPLES) {
+      const buf = this.pcmOf(job.jobId)
+      if (buf.samples + samples.length <= VAD_MAX_SAMPLES) {
         // Own copy: the decoder reuses its buffer across chunks.
-        this.pcm.push(samples.slice())
-        this.pcmSamples += samples.length
+        buf.slabs.push(samples.slice())
+        buf.samples += samples.length
         return
       }
       job.pipeline = undefined
       job.chunkSec = IMPORT_CHUNK_SECONDS
       await this.persist(job)
-      const backlog = this.takePcm()
+      const backlog = this.takePcm(job.jobId)
       let backlogSeq = 0
       for (const slab of backlog) {
         await this.legacyTranscribeSlab(job, backlogSeq++, slab)
@@ -394,12 +415,20 @@ export class ImportJobManager {
     await this.persist(job)
   }
 
-  /** Hand back and clear the buffered PCM for the active vad-v1 job. */
-  private takePcm(): Float32Array[] {
-    const slabs = this.pcm
-    this.pcm = []
-    this.pcmSamples = 0
-    return slabs
+  private pcmOf(jobId: string): { slabs: Float32Array[]; samples: number } {
+    let buf = this.pcmByJob.get(jobId)
+    if (!buf) {
+      buf = { slabs: [], samples: 0 }
+      this.pcmByJob.set(jobId, buf)
+    }
+    return buf
+  }
+
+  /** Hand back and clear the buffered PCM for one vad-v1 job. */
+  private takePcm(jobId: string): Float32Array[] {
+    const buf = this.pcmByJob.get(jobId)
+    this.pcmByJob.delete(jobId)
+    return buf?.slabs ?? []
   }
 
   /** Called by the hidden decoder only after it has submitted every non-skipped chunk. */
@@ -445,7 +474,7 @@ export class ImportJobManager {
    * window's real offset into the recording. A final polish pass (fail-open) cleans stutters before save.
    */
   private async finishVadPipeline(job: ImportJob): Promise<void> {
-    const slabs = this.takePcm()
+    const slabs = this.takePcm(job.jobId)
     const total = slabs.reduce((n, s2) => n + s2.length, 0)
     const pcm = new Float32Array(total)
     let off = 0
@@ -639,10 +668,10 @@ export class ImportJobManager {
     } catch (error) {
       if (!this.isCancelled(job)) await this.fail(job, message(error))
     } finally {
-      if (this.activeJobId === job.jobId) {
-        this.activeJobId = null
+      if (this.activeJobIds.has(job.jobId)) {
+        this.activeJobIds.delete(job.jobId)
         await this.pump()
-        if (!this.activeJobId) this.deps.onIdle?.()
+        if (!this.activeJobIds.size) this.deps.onIdle?.()
       }
     }
   }
@@ -654,28 +683,37 @@ export class ImportJobManager {
   }
 
   private async transcribeWithRetry(samples: Float32Array, opts?: { language?: string | null }): Promise<string> {
-    let last: unknown
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        return await this.deps.transcribe(samples, opts)
-      } catch (error) {
-        last = error
+    let release!: () => void
+    const prev = this.transcribeLock
+    this.transcribeLock = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await prev
+    try {
+      let last: unknown
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          return await this.deps.transcribe(samples, opts)
+        } catch (error) {
+          last = error
+        }
       }
+      throw last instanceof Error ? last : new Error(message(last))
+    } finally {
+      release()
     }
-    throw last instanceof Error ? last : new Error(message(last))
   }
 
   private enqueue(jobId: string): void {
-    if (!this.queue.includes(jobId) && this.activeJobId !== jobId) this.queue.push(jobId)
+    if (!this.queue.includes(jobId) && !this.activeJobIds.has(jobId)) this.queue.push(jobId)
   }
 
   private async pump(): Promise<void> {
-    if (this.activeJobId) return
-    while (this.queue.length) {
+    while (this.activeJobIds.size < this.maxConcurrent && this.queue.length) {
       const jobId = this.queue.shift()!
       const job = this.jobs.get(jobId)
       if (!job || terminal(job.state)) continue
-      this.takePcm() // a cancelled/failed predecessor must never leak its buffered audio into this job
+      this.takePcm(jobId) // leftover buffers from a prior attempt at THIS job must not mix with a resume
       // A vad-v1 job that failed mid-transcription already had `totalChunks` overwritten to the WINDOW
       // count by finishVadPipeline (phase 2). A resume always re-decodes from scratch (phase 1), whose
       // real decoder (index.ts's ffmpeg onChunk) always reports totalChunks 0 per slab — left un-reset,
@@ -684,7 +722,7 @@ export class ImportJobManager {
       // past segmentation. Legacy (non-vad-v1) jobs are untouched: their totalChunks IS the real slab
       // count and resuming from a non-zero cursor legitimately depends on it staying put.
       if (job.pipeline === 'vad-v1') job.totalChunks = 0
-      this.activeJobId = jobId
+      this.activeJobIds.add(jobId)
       job.state = 'decoding'
       await this.persist(job)
       try {
@@ -692,8 +730,8 @@ export class ImportJobManager {
       } catch (error) {
         if (!this.isCancelled(job)) await this.fail(job, message(error))
       }
-      // A decoder runs asynchronously and calls finishDecoding/failDecoder later. Keep its FIFO slot.
-      return
+      // A decoder runs asynchronously and calls finishDecoding/failDecoder later. Keep its slot and
+      // continue so a second recording can start instead of waiting behind a huge file.
     }
   }
 
@@ -701,11 +739,11 @@ export class ImportJobManager {
     job.state = 'failed'
     job.error = error || 'Import failed.'
     await this.persist(job)
-    if (this.activeJobId === job.jobId) {
-      this.takePcm()
-      this.activeJobId = null
+    if (this.activeJobIds.has(job.jobId)) {
+      this.takePcm(job.jobId)
+      this.activeJobIds.delete(job.jobId)
       await this.pump()
-      if (!this.activeJobId) this.deps.onIdle?.()
+      if (!this.activeJobIds.size) this.deps.onIdle?.()
     }
   }
 

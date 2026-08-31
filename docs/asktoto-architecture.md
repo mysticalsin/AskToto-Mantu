@@ -169,7 +169,7 @@ Shown inside the `<Copilot>` component's third section when `showTranscript` is 
 
 **Show/hide toggle.** The footer row shows "View transcript →" (chevron-right pill) while hidden; once expanded it shows "Hide transcript ↓". This is intentional: the transcript is secondary information during an active call. The primary surface is the suggestion card. Expanding the transcript is opt-in, not default, so the suggestion is never pushed off screen by a long transcript.
 
-**Model loading state.** While `loading` is true, the transcript section shows `<Spinner /> Loading transcription model…` (and a percentage when the worker reports one). Customer packages load installer-owned Whisper/Parakeet assets only; missing or damaged files fail locally with reinstall guidance and never trigger a model download.
+**Model loading state.** While `loading` is true, the transcript section shows `<Spinner /> Loading transcription model…` (and a percentage when the worker reports one). Customer packages load installer-owned Whisper/Parakeet assets first. If those files are missing, runtime fetches the reviewed payload into `userData` with visible progress — never a reinstall prompt.
 
 ---
 
@@ -224,7 +224,7 @@ Every failure state in Métis has three elements: what it shows, the exact copy,
 | **Provider can't read screen** | Answer error block | "This provider can't read screens. Switch to Claude or GPT in Settings." | Retry (won't help — copy is honest) + settings |
 | **Screen capture permission denied** | `captureError` state in App → Answer error | "Screen capture permission denied." (raw OS error) | `errorHint()` maps "can't read screen" → settings |
 | **Mic not granted** | `listen.error` → Copilot error zone | "Microphone not available. Grant access in System Settings → Privacy → Microphone." | Copilot error zone; no button (OS settings must be opened manually) |
-| **Bundled ASR files missing or damaged** | Copilot error zone | "The bundled transcription files are missing or damaged. Reinstall Métis from a complete installer." | Reinstall from a complete Métis installer; production never downloads a replacement model |
+| **Bundled ASR files missing or damaged** | Import queue + Copilot error zone | "Could not get the transcription files. Check your connection and try again." | Runtime fetches the reviewed Parakeet + Whisper-floor files into `userData` with visible progress. Never “reinstall the installer.” |
 | **Unclear audio / VAD silence** | Copilot footer when `listening && lines.length === 0` | "Waiting for speech…" | Passive — auto-resolves when audio arrives |
 | **No audio yet (not listening)** | Copilot footer | "not listening" | AudioLines icon in the Bar toolbar is the affordance |
 | **Save to OneDrive failed** | Review surface, `saveError` | `saveError` raw string + retry up to 5×. After max retries: "Couldn't save automatically. Use the Save button to try again." | Manual Save button in Review footer |
@@ -388,7 +388,7 @@ Two native binaries ship inside the packaged app, verified at **build time**, no
 
 ### C.4 Audio file import
 
-A second path into the same transcription pipeline. `main/import-audio.ts` opens a native file picker (common recording formats — wav/mp3/m4a/aac/ogg/flac/aiff/webm/opus/wma/amr/3gp/mp4 — capped at 500 MB) and hands the picked source to `main/import-jobs.ts`'s `ImportJobManager`, which owns decoding, transcription, checkpointing, saving, and recap generation as a background job queue. Decoding runs through the FFmpeg sidecar (C.3): the source file streams through FFmpeg as 16 kHz mono f32le PCM in 30-second chunks, at most one chunk held in memory at a time, then each chunk is fed through the same Whisper/Parakeet ASR path used for live audio — producing a normal saved meeting with a recap, indistinguishable from a live session's output. The renderer only ever sees the picked file's identity (path/name/size/mtime), never raw bytes; `src/renderer/src/lib/import-audio.ts` is the renderer-side hook that drives it.
+A second path into the same transcription pipeline. `main/import-audio.ts` opens a native multi-file picker (`openFile` + `multiSelections`; same formats, 500 MB per file) or accepts dropped paths from preload (`webUtils.getPathForFile` → opaque tokens). Each file becomes its own durable `ImportJob`. `ImportJobManager` runs up to two decodes at once (ASR mutexed) so one huge recording cannot hold the only decoder slot. Decoding runs through the FFmpeg sidecar (C.3): the source streams as 16 kHz mono f32le PCM, then each window is fed through the same Whisper/Parakeet ASR path used for live audio — producing a normal saved meeting with a recap. The renderer never sees a filesystem path: tokens and `ImportJobView` only. Missing Parakeet / Whisper-floor weights are provisioned by `npm run dev` and, at runtime, fetched into `userData` with visible progress — never a “reinstall the installer” error. See `docs/design/IMPORT-MEETINGS.md`.
 
 ### C.5 Brain pipeline (knowledge extraction)
 
@@ -1197,7 +1197,7 @@ Policy keys relevant to privacy/security:
 
 ### I.9 Local processing
 
-The packaged ASR path is fully on-device: Parakeet, Whisper, ONNX Runtime, and FFmpeg are installer-owned assets, and production fails locally if an integrity-checked asset is missing instead of downloading a replacement.
+The packaged ASR path is fully on-device: Parakeet, Whisper, ONNX Runtime, and FFmpeg are installer-owned assets. Pack scripts hard-fail if those files are missing after fetch. If a running app is somehow incomplete, it fetches the same reviewed files into `userData` with visible progress rather than asking the user to reinstall.
 
 The optional **Métis Local** master switch in Settings → AI is off by default. When enabled, independent toggles let the user process supported live suggestions, summaries, and screen-vision requests with an on-device Qwen3.5 model — 4B or 0.8B, chosen by host RAM — through the authenticated loopback-only `llama-server` sidecar. The native runtime is embedded in the same DMG/EXE, so no Ollama, Python or separate service is required. The weights and multimodal projector are **not**: at 3.58 GB for the 4B they would put a universal mac package past GitHub’s 2 GB per-asset release limit, so the app fetches them once per user profile on first run, size- and SHA-256-verified against a pinned immutable revision (MQA-146).
 

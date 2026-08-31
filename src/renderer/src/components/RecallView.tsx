@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import {
   Search,
   FolderOpen,
@@ -13,14 +13,15 @@ import {
   Pencil,
   Brain,
   Upload,
-  X,
   Lock
 } from 'lucide-react'
 import { TextButton } from './ui'
 import { AgentStatus, InlineOrb } from './AgentStatus'
 import { WorkProgressMeter } from './WorkProgressMeter'
-import { describeImportProgress, describeMeetingIndexProgress } from './work-progress'
+import { describeMeetingIndexProgress } from './work-progress'
 import { accelLabel } from '../lib/keys'
+import { ImportQueue } from './ImportQueue'
+import { isImportDropFile, pickedFiles, skippedImportMessage } from './import-queue'
 import type {
   MeetingSummary,
   RecallHit,
@@ -29,6 +30,7 @@ import type {
   CalendarTodayResult,
   CalendarEvent,
   ImportAudioPickResult,
+  ImportAssetsProgress,
   ImportJobView
 } from '@shared/ipc'
 
@@ -773,6 +775,8 @@ export function RecallView({
   /** Main-owned jobs survive navigation and overlay closure; this component only renders their live state. */
   const [importJobs, setImportJobs] = useState<ImportJobView[]>([])
   const [importError, setImportError] = useState<string | null>(null)
+  const [importAssets, setImportAssets] = useState<ImportAssetsProgress | null>(null)
+  const [importDragOver, setImportDragOver] = useState(false)
   /** T6 6d: per-meeting Mantu Intelligence status feed — indexed/failed filename sets plus whether a
    *  backfill is currently requested, everything meetingIndexStatus needs for the row dot. A separate
    *  poll from GraphBar's own brainStatus fetch below (that bar's busy/error/backfill-run state is local
@@ -959,14 +963,37 @@ export function RecallView({
       upsertImportJob(job)
       if (job.state === 'done') refreshList()
     })
+    const unsubAssets = window.toto.onImportAssetsProgress((progress) => {
+      if (!stale) setImportAssets(progress)
+    })
     return () => {
       stale = true
       unsub()
+      unsubAssets()
     }
   }, [refreshList, upsertImportJob])
 
-  // Pick only creates a single-use capability. The main process owns decoding, transcription, checkpointing,
-  // saving, and recap generation after this call returns, so the user is free to leave this view immediately.
+  const startPickedImports = useCallback(
+    async (picked: ImportAudioPickResult): Promise<void> => {
+      const files = pickedFiles(picked)
+      const skip = skippedImportMessage(picked)
+      if (skip) setImportError(skip)
+      if (!files.length) {
+        if (!skip) setImportError(picked.error || 'Could not prepare the selected recordings.')
+        return
+      }
+      try {
+        const started = await window.toto.importAudioStartBatch(files.map((file) => file.token))
+        for (const job of started) upsertImportJob(job)
+      } catch (e) {
+        setImportError(e instanceof Error ? e.message : 'Could not start the imports.')
+      }
+    },
+    [upsertImportJob]
+  )
+
+  // Pick only creates single-use capabilities. The main process owns decoding, transcription,
+  // checkpointing, saving, and recap generation after this call returns.
   const importAudio = useCallback(async (): Promise<void> => {
     setImportError(null)
     let picked: ImportAudioPickResult
@@ -977,16 +1004,39 @@ export function RecallView({
       return
     }
     if (picked.cancelled) return
-    if (!picked.token) {
-      setImportError(picked.error || 'Could not prepare the selected recording.')
-      return
-    }
-    try {
-      upsertImportJob(await window.toto.importAudioStart(picked.token))
-    } catch (e) {
-      setImportError(e instanceof Error ? e.message : 'Could not start the import.')
-    }
-  }, [upsertImportJob])
+    await startPickedImports(picked)
+  }, [startPickedImports])
+
+  const onImportDragOver = useCallback((e: DragEvent): void => {
+    if (![...e.dataTransfer.types].includes('Files')) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    setImportDragOver(true)
+  }, [])
+
+  const onImportDragLeave = useCallback((e: DragEvent): void => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return
+    setImportDragOver(false)
+  }, [])
+
+  const onImportDrop = useCallback(
+    async (e: DragEvent): Promise<void> => {
+      e.preventDefault()
+      setImportDragOver(false)
+      const files = [...e.dataTransfer.files].filter(isImportDropFile)
+      if (!files.length) {
+        setImportError('Drop audio or video recordings to import them.')
+        return
+      }
+      setImportError(null)
+      try {
+        await startPickedImports(await window.toto.importAudioDrop(files))
+      } catch (err) {
+        setImportError(err instanceof Error ? err.message : 'Could not import the dropped recordings.')
+      }
+    },
+    [startPickedImports]
+  )
 
   const cancelImport = useCallback((jobId: string): void => {
     void window.toto.importJobCancel(jobId).catch((error) => {
@@ -1095,7 +1145,12 @@ export function RecallView({
   }, [allGroups, showAll, totalCount])
 
   return (
-    <div className="flex h-full flex-col">
+    <div
+      className="flex h-full flex-col"
+      onDragOver={onImportDragOver}
+      onDragLeave={onImportDragLeave}
+      onDrop={(e) => void onImportDrop(e)}
+    >
       {/* ── HEADER ─────────────────────────────────────────────────────── */}
       <div className="mb-2 flex items-center gap-2">
         {onBack && (
@@ -1130,75 +1185,21 @@ export function RecallView({
         <TextButton
           icon={Upload}
           onClick={() => void importAudio()}
-          title="Import an audio recording. It keeps processing in the background while you navigate."
+          title="Import one or more recordings. They keep processing in the background while you navigate."
         >
-          Import audio
+          Import meetings
         </TextButton>
       </div>
-      {importError && (
-        <div className="mb-2 px-1 text-[11px] text-[var(--color-danger)]">{importError}</div>
-      )}
-      {importJobs
-        .filter((job) => (job.state !== 'done' || !!job.recapError) && job.state !== 'cancelled')
-        .map((job) => {
-          const progress = describeImportProgress(job)
-          return (
-            <div
-              key={job.jobId}
-              aria-busy={progress.active || undefined}
-              className="mb-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2"
-            >
-          <div className="flex items-center gap-2 text-[12px]">
-            <span className="min-w-0 flex-1 truncate font-medium text-[color:var(--color-ink)]">{job.title}</span>
-            <span className="shrink-0 text-[color:var(--color-ink-3)]">{progress.label}</span>
-            {job.state === 'failed' ? (
-              <>
-                <TextButton onClick={() => resumeImport(job.jobId)} title="Resume this import from its last saved transcript checkpoint">Resume</TextButton>
-                <TextButton
-                  icon={X}
-                  ariaLabel="Dismiss failed import"
-                  onClick={() => dismissImport(job.jobId)}
-                  title="Dismiss this failed import"
-                />
-              </>
-            ) : job.state === 'done' && job.recapError && job.file ? (
-              <>
-                <TextButton onClick={() => openMeeting(job.file!)} title="Open this meeting and retry its summary">Open meeting</TextButton>
-                <TextButton
-                  icon={X}
-                  ariaLabel="Dismiss this summary notice"
-                  onClick={() => dismissImport(job.jobId)}
-                  title="Dismiss, the transcript is already saved"
-                />
-              </>
-            ) : job.state !== 'done' ? (
-              <TextButton onClick={() => cancelImport(job.jobId)} title="Cancel this import">Cancel</TextButton>
-            ) : null}
-          </div>
-          {(progress.active || progress.percent !== null) && (
-            <div className="mt-1.5">
-              <div aria-atomic="true" aria-live="polite" className="text-[11px] text-[color:var(--color-ink-3)]">
-                {progress.detail}
-              </div>
-              <div className="mt-1 flex items-center gap-2">
-                {(progress.percent == null || progress.pulseAtFull) && (
-                  <InlineOrb kind={progress.pulseAtFull ? 'writing' : 'loading-model'} />
-                )}
-                <WorkProgressMeter
-                  active={progress.active}
-                  ariaLabel={`${job.title} import progress`}
-                  className="min-w-0 flex-1"
-                  percent={progress.percent}
-                  pulseAtFull={progress.pulseAtFull}
-                  valueText={progress.valueText}
-                />
-              </div>
-            </div>
-          )}
-          {job.error && <div className="mt-1 text-[11px] text-[var(--color-danger)]">{job.error}</div>}
-            </div>
-          )
-        })}
+      <ImportQueue
+        jobs={importJobs}
+        assets={importAssets}
+        dragOver={importDragOver}
+        error={importError}
+        onCancel={cancelImport}
+        onResume={resumeImport}
+        onDismiss={dismissImport}
+        onOpenMeeting={openMeeting}
+      />
 
       {/* ── UPCOMING CALENDAR SECTION ───────────────────────────────────── */}
       <UpcomingSection onConnectCalendar={onConnectCalendar} />
