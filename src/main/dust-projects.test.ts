@@ -19,7 +19,12 @@ describe('matchDataAndAiProjects', () => {
 
 describe('fetchDustProjects', () => {
   it('lists spaces then data sources and records the names Dust actually returned', async () => {
-    const fetchImpl = vi.fn(async (url: string) => {
+    const fetchImpl = vi.fn(async (url: string): Promise<{
+      ok: boolean
+      status: number
+      json: () => Promise<unknown>
+      text: () => Promise<string>
+    }> => {
       if (url.endsWith('/spaces')) {
         return {
           ok: true,

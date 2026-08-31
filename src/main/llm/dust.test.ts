@@ -7,11 +7,18 @@ vi.mock('electron', () => ({ app: { getPath: () => '/tmp' } }))
 vi.mock('../auth', () => ({ authStatus: () => ({ email: null, name: null }) }))
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
 
+type ManagedDustChatResult =
+  | { ok: true; text: string }
+  | { ok: false; kind: string; error: string }
+
 const managedDustChat = vi.hoisted(() =>
-  vi.fn(async () => ({ ok: true as const, text: 'Data and AI, AI wiki' }))
+  vi.fn<(opts: unknown) => Promise<ManagedDustChatResult>>(async () => ({
+    ok: true,
+    text: 'Data and AI, AI wiki'
+  }))
 )
 vi.mock('../dust-cli-chat', () => ({
-  runManagedDustChat: (...args: unknown[]) => managedDustChat(...args),
+  runManagedDustChat: (opts: unknown) => managedDustChat(opts),
   projectNameForDataAndAiAsk: () => undefined
 }))
 vi.mock('../dust-projects', () => ({
