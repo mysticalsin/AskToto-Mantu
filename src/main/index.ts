@@ -275,8 +275,12 @@ import {
   brainDir as brainStoreDir
 } from './brain/store'
 import { buildBrainContext } from './brain/context'
-import { buildSystem } from './personas'
-import { isModeSkillIntegrityError } from '@shared/mode-skills'
+import { buildSystem, buildSystemParts } from './personas'
+import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
+import { isOpenAICloudCacheEligible, promptCacheKey as makePromptCacheKey } from '@shared/operator'
+import { loadVerifiedSkill, setModeSkillsOverlayRoot, skillLockHashForMode } from './mode-skills'
+import { recordOperatorAsk, recordOperatorRating, startOperatorRuntime } from './operator-ingest'
+import { startOperatorOverlayPoll } from './operator-overlay'
 import { initLogging, mainLog, auditLog } from './logger'
 import { consumeSecurityLimit, RATE_LIMIT_USER_MESSAGE, shouldSampleIpcDeny, takeHotPath, type SecurityLimitBucket } from './security-limits'
 import { safeMeetingBasename } from './meeting-path'
@@ -3177,6 +3181,10 @@ function registerIpc(): void {
     // accelerator labels reflect the new bindings instead of the ones baked in at createTray() boot time.
     registerShortcuts()
     rebuildTrayMenu()
+    if (cur.operatorUrl !== next.operatorUrl || cur.operatorIngestSecret !== next.operatorIngestSecret) {
+      startOperatorRuntime(() => getSettings())
+      startOperatorOverlayPoll(() => getSettings())
+    }
     return publicSettings()
   })
 
@@ -3216,6 +3224,11 @@ function registerIpc(): void {
   })
 
   // --- Licensing (phone-home activation; see main/license.ts) ---
+  ipcMain.handle(IPC.operatorOpen, (e) => {
+    assertMainWindow(e)
+    const url = (getSettings().operatorUrl || process.env.METIS_OPERATOR_URL || '').trim()
+    if (/^https:\/\//i.test(url)) void shell.openExternal(url)
+  })
   ipcMain.handle(IPC.licenseActivate, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (denyIfLimited('license-activate')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
@@ -5018,6 +5031,7 @@ function registerIpc(): void {
         paintedLen += text.length
         win?.webContents.send(IPC.streamDelta, { id: req.id, text })
       }
+      const systemParts = buildSystemParts(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt)
       const handle = createStream({
         providerId: provider,
         kind: def.kind,
@@ -5035,7 +5049,11 @@ function registerIpc(): void {
         // undefined for every other provider, so their request bodies stay byte-identical.
         reasoningEffort: reasoningEffortFor(provider, tier, s.thinkingMode === 'always'),
         idleMs,
-        system: buildSystem(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt),
+        systemParts,
+        system: systemParts.cachedPrefix + systemParts.volatile,
+        promptCacheKey: isOpenAICloudCacheEligible(provider, def.kind, false)
+          ? makePromptCacheKey(s.mode, skillLockHashForMode(s.mode))
+          : undefined,
         req,
         handlers: {
           onDelta: (text) => {
@@ -5100,8 +5118,43 @@ function registerIpc(): void {
               ttftMs,
               totalMs: Date.now() - startedAt,
               inputTokens: u.inputTokens,
-              outputTokens: u.outputTokens
+              outputTokens: u.outputTokens,
+              cacheRead: u.cacheRead,
+              cacheWrite: u.cacheWrite,
+              cacheUncached: u.cacheUncached,
+              cacheStatus: u.cacheStatus,
+              cacheTtl: u.cacheTtl
             })
+            if (req.mode === 'answer' || req.mode === 'vision') {
+              let skillId: string | undefined
+              let skillVersion: string | undefined
+              try {
+                const skill = loadVerifiedSkill(isBuiltinConversationMode(s.mode) ? s.mode : 'humanizer')
+                skillId = skill.id
+                skillVersion = skill.version
+              } catch {
+                /* integrity errors already fail closed on the ask path */
+              }
+              void recordOperatorAsk(s, {
+                id: req.id,
+                mode: s.mode,
+                skillId,
+                skillVersion,
+                provider,
+                model,
+                ttftMs,
+                totalMs: Date.now() - startedAt,
+                inputTokens: u.inputTokens,
+                outputTokens: u.outputTokens,
+                cacheRead: u.cacheRead,
+                cacheWrite: u.cacheWrite,
+                cacheUncached: u.cacheUncached,
+                cacheStatus: u.cacheStatus,
+                cacheTtl: u.cacheTtl,
+                outcome: 'answered',
+                question: typeof req.prompt === 'string' ? req.prompt : undefined
+              })
+            }
             // The winning leg's success is the whole race's terminal outcome — drop the combined abort
             // registration set up before either leg started (see the hedge dispatch below).
             if (race) streams.delete(req.id)
@@ -5818,6 +5871,7 @@ function registerIpc(): void {
     const rating = r?.rating === 'up' || r?.rating === 'down' ? r.rating : null
     if (!rating) return
     auditLog('answer.feedback', { rating, kind: typeof r?.kind === 'string' ? r.kind : undefined })
+    void recordOperatorRating(getSettings(), rating)
   })
 
   // --- Import audio jobs (main-owned so navigation and overlay closure cannot interrupt them) ---
@@ -6315,6 +6369,18 @@ if (!app.requestSingleInstanceLock()) {
   // profile, so a fresh install of the default provider can answer with zero paste-a-key setup when the
   // operator chose to embed one. See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
   importEmbeddedCloudflareKey()
+  {
+    setModeSkillsOverlayRoot(join(app.getPath('userData'), 'skills-overrides'))
+    const boot = getSettings()
+    if (!boot.operatorUrl && process.env.METIS_OPERATOR_URL && /^https:\/\//i.test(process.env.METIS_OPERATOR_URL)) {
+      setSettings({ operatorUrl: process.env.METIS_OPERATOR_URL.trim() })
+    }
+    if (!boot.operatorIngestSecret && process.env.METIS_OPERATOR_INGEST_SECRET) {
+      setSettings({ operatorIngestSecret: process.env.METIS_OPERATOR_INGEST_SECRET })
+    }
+    startOperatorRuntime(() => getSettings())
+    startOperatorOverlayPoll(() => getSettings())
+  }
   // Métis Local weights are no longer bundled in the installer (~728 MB; a universal mac package
   // carrying them would blow past GitHub's 2 GB release-asset limit), so fetch them once here whenever
   // the app opens. Deliberately NOT awaited: this is a multi-GB download and startup must not wait on

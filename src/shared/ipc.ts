@@ -220,6 +220,7 @@ export const IPC = {
   mcpClickupConnect: 'mcp:clickupConnect',
   // Plane Connect — same shape as ClickUp: one button, OAuth 2.1 + PKCE + DCR, pinned hosted MCP URL.
   mcpPlaneConnect: 'mcp:planeConnect',
+  operatorOpen: 'operator:open',
   licenseActivate: 'license:activate',
   licenseStatus: 'license:status',
   licenseGate: 'license:gate',
@@ -724,7 +725,12 @@ export type StreamDelta = z.infer<typeof StreamDeltaSchema>
 export const StreamDoneSchema = z.object({
   id: z.string(),
   inputTokens: z.number().optional(),
-  outputTokens: z.number().optional()
+  outputTokens: z.number().optional(),
+  cacheRead: z.number().optional(),
+  cacheWrite: z.number().optional(),
+  cacheUncached: z.number().optional(),
+  cacheStatus: z.enum(['hit', 'write', 'n/a', 'not-reported']).optional(),
+  cacheTtl: z.enum(['1h', '5m', '30m']).optional()
 })
 export type StreamDone = z.infer<typeof StreamDoneSchema>
 
@@ -1269,7 +1275,16 @@ export const BaseSettingsSchema = z.object({
    *  onboarding demo (structurally IPC-free — see onboarding-demo.ts). Main-authoritative: stripped
    *  from renderer patches for the same reason as licenseLease — a plain settings patch must not be
    *  able to grant a fresh 14-day trial. */
-  trialStartedAt: z.number().nullable().default(null)
+  trialStartedAt: z.number().nullable().default(null),
+  // Operator control plane (Cloudflare Worker `metis-operator`). Empty URL = off. Not the Fly
+  // license-server and not cloudflare-proxy. Ingest secret is the HMAC shared with the Worker;
+  // it is a Wrangler secret on the server and a Settings power field here. Never commit it.
+  operatorUrl: z
+    .string()
+    .refine((v) => v === '' || /^https:\/\//i.test(v), 'Operator URL must be an https:// URL')
+    .default(''),
+  operatorIngestSecret: z.string().default(''),
+  sendAskText: z.boolean().default(true)
 })
 
 export const SettingsSchema = BaseSettingsSchema.refine(
@@ -1515,7 +1530,10 @@ export const DEFAULT_SETTINGS: Settings = {
   licenseLastValidatedAt: 0,
   licenseGateEnabled: false,
   licenseLease: '',
-  trialStartedAt: null
+  trialStartedAt: null,
+  operatorUrl: '',
+  operatorIngestSecret: '',
+  sendAskText: true
 }
 
 export const HOTKEY_ACTIONS: HotkeyAction[] = [
