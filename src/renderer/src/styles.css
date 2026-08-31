@@ -1583,7 +1583,7 @@ input::placeholder {
   flex: 0 0 auto;
   align-items: center;
   gap: 8px;
-  min-width: 72px;
+  min-width: 96px;
 }
 .aw-toolbar__transcript {
   flex: 0 0 auto;
