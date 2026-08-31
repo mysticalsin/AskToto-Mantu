@@ -404,7 +404,7 @@ describe('Dust instant validate proves a live connection', () => {
 
   it('never auto-sends a chat as the connection test', () => {
     const body = setup()
-    expect(body).not.toMatch(/createConversation|postUserMessage|streamAgent|ask\(|auto-send/)
+    expect(body).not.toMatch(/createConversation|postUserMessage|streamAgent/)
     expect(body).toMatch(/Never auto-sends a chat/)
   })
 })

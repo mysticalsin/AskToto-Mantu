@@ -166,7 +166,7 @@ describe('proveDustConnection', () => {
   it('never auto-sends — deps are only the key ping and the agent list', async () => {
     // Guard against a future "prove it with a real conversation" shortcut that would fire an ask.
     const src = readFileSync(join(__dirname, 'dust-validate.ts'), 'utf8')
-    expect(src).not.toMatch(/createConversation|postUserMessage|streamAgent|auto-send|sendMessage/)
+    expect(src).not.toMatch(/createConversation|postUserMessage|streamAgent|sendMessage/)
     expect(src).toMatch(/Never auto-sends/)
     expect(DUST_UNAUTHORIZED_ERROR).toMatch(/401/)
   })
