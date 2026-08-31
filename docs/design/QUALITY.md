@@ -1,21 +1,22 @@
 ---
 project: Métis
 type: overlay-quality-hats
-applies: Bar minimized Jarvis pill
+applies: Bar minimized sentient circle
 ship-bar: would Apple ship this overlay?
 ---
 
 # Overlay quality hats
 
-Every hat must **PASS**. One **REJECT** fails the slice. This is the gate for the Bar pill (`docs/design/BAR-PILL.md`). Hide park 8×2 and Island hover math are out of scope and must stay untouched.
+Every hat must **PASS**. One **REJECT** fails the slice. This is the gate for the Bar circle (`docs/design/BAR-PILL.md`). Hide park 8×2 and Island hover math are out of scope and must stay untouched.
 
 ## Contract
 
-- Jarvis pill mounts **only** when `overlayLayout === 'bar'` **and** minimized.
+- Sentient circle mounts **only** when `overlayShowsBarOrb` is true (`bar` **and** minimized).
+- Hide idle: no orb canvas. Island: no second circle. Bar expanded: full bar, no leftover disk.
 - Hide and Island: no minimize control, minimize is a no-op, no layout jump to Bar.
 - Click expands to the full bar. Drag does not expand.
 
-**REJECT if** the pill can appear on Hide/Island, or minimize switches layout.
+**REJECT if** the circle can appear on Hide/Island, or while the bar is gone, or minimize switches layout.
 
 ## Motion
 
@@ -40,7 +41,7 @@ Insanely low latency on click and drag.
 
 ## Performance
 
-- Orb rAF runs only while the Jarvis pill is mounted and should animate.
+- Orb rAF runs only while the Bar circle is mounted and should animate.
 - Idle full bar: **zero** orb rAF (`shouldRunOrbRaf` is false).
 - Setup is O(n). No O(n²) neighbor scan on 2000 points.
 - `document.hidden` pauses the loop. `destroy` cancels rAF.
@@ -50,13 +51,16 @@ Insanely low latency on click and drag.
 
 ## Visual
 
-Apple-grade. Quiet luxury. Transparent edges.
+Apple-grade. Quiet luxury. Transparent edges. Fixed circle.
 
-- Capsule of Jarvis cyan particles (`0x4ca8e8`), additive blending, connection lines, electrons.
-- No glass chip of mic buttons. No dark fill that reads as a blob.
-- Transparent around the pill. No scrollbar.
+- Same width and height (`BAR_PILL_SIZE_PX`). Aspect 1 on every mood. Bounding box constant.
+- Never a stadium, potato, or squashed capsule. Shader uses the same NDC scale for X and Y.
+- Idle is Mantu purple (`#7F00DA`). Fact-check is Jarvis cyan. Connecting is deep indigo. Thinking is brighter violet. Color is the only chrome change.
+- Luminous circular core under Jarvis particles (Fit Studio rest energy). Core is a disc, never a stadium.
+- Additive blending, connection lines, electrons. No glass chip of mic buttons. No dark fill.
+- Transparent around the circle. No scrollbar.
 
-**REJECT if** the resting pill is a filled chip or an opaque oval.
+**REJECT if** rest is a filled chip, an opaque oval, or any flatten of the circle.
 
 ## Stability
 

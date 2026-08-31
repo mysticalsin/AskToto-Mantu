@@ -185,8 +185,10 @@ export interface BarProps {
   captureAccel: string
   onSettings: () => void
   onHistory: () => void
-  /** Collapse the widget down to the floating control mini-pill. */
+  /** Collapse the widget down to the floating control mini-pill. Bar layout only. */
   onMinimize: () => void
+  /** Hide and Island must not show minimize-to-circle. Default true for isolated Bar tests. */
+  canMinimize?: boolean
   /** When true, the Métis window is hidden from screen capture & sharing (contentProtection). The
    *  eye button toggles this. Separate from Private View (whether Métis captures the user's screen). */
   stealth: boolean
@@ -751,9 +753,11 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                 <ChevronDown size={13} strokeWidth={ICON_STROKE} />
               </button>
             )}
-            <IconTool title="Minimize to a small pill" onClick={props.onMinimize} edgeRight>
-              <Minimize2 size={17} strokeWidth={ICON_STROKE} />
-            </IconTool>
+            {props.canMinimize !== false ? (
+              <IconTool title="Minimize to the orb" onClick={props.onMinimize} edgeRight>
+                <Minimize2 size={17} strokeWidth={ICON_STROKE} />
+              </IconTool>
+            ) : null}
             {/* Collapse-chevron: plain ghost, not aw-fill. Submit is the only accent-filled control.
                 Disabled (not hidden, so the toolbar doesn't jump) when there's nothing behind the bar
                 for it to reveal — e.g. idle with no answer/history/settings open. */}
@@ -774,7 +778,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
           </div>
         </div>
     ),
-    [props.onSettings, props.listening, props.onCapture, props.capturing, props.captureAccel, props.spotlightReady, props.onSpotlightRef, props.mode, props.customModes, modeOpen, props.thinkingOn, props.onToggleThinking, props.stealth, props.onToggleStealth, props.stealthLocked, props.onToggleListen, props.paused, props.startedAt, props.onTogglePause, props.onNewMeeting, props.transcriptShown, props.onTranscript, props.onHistory, props.onMinimize, props.canTogglePanel, props.panelOpen, props.onTogglePanel]
+    [props.onSettings, props.listening, props.onCapture, props.capturing, props.captureAccel, props.spotlightReady, props.onSpotlightRef, props.mode, props.customModes, modeOpen, props.thinkingOn, props.onToggleThinking, props.stealth, props.onToggleStealth, props.stealthLocked, props.onToggleListen, props.paused, props.startedAt, props.onTogglePause, props.onNewMeeting, props.transcriptShown, props.onTranscript, props.onHistory, props.onMinimize, props.canMinimize, props.canTogglePanel, props.panelOpen, props.onTogglePanel]
   )
 
   return (

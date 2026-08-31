@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { overlayAllowsMinimize } from '@shared/overlay-chrome'
 import { Bar, type BarProps } from './Bar'
 
 function props(overrides: Partial<BarProps> = {}): BarProps {
@@ -31,6 +32,17 @@ function props(overrides: Partial<BarProps> = {}): BarProps {
     ...overrides
   }
 }
+
+describe('Bar minimize-to-circle is layout-gated', () => {
+  it('shows the minimize control on bar and hides it on hide/island', () => {
+    const bar = renderToStaticMarkup(<Bar {...props({ canMinimize: overlayAllowsMinimize('bar') })} />)
+    const hide = renderToStaticMarkup(<Bar {...props({ canMinimize: overlayAllowsMinimize('hide') })} />)
+    const island = renderToStaticMarkup(<Bar {...props({ canMinimize: overlayAllowsMinimize('island') })} />)
+    expect(bar).toContain('Minimize to the orb')
+    expect(hide).not.toContain('Minimize to the orb')
+    expect(island).not.toContain('Minimize to the orb')
+  })
+})
 
 describe('Bar Spotlight Ref control', () => {
   it('keeps Spotlight Ref discoverable when Dust is not configured', () => {

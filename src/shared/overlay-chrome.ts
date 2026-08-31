@@ -49,9 +49,17 @@ export function autoHideOverlayForLayout(layout: OverlayLayout): boolean {
   return overlayUsesHover(layout)
 }
 
-/** Minimize-to-pill is Bar only. Hide and Island ignore minimize. */
+/** Minimize-to-circle is Bar only. Hide and Island ignore minimize. */
 export function overlayAllowsMinimize(layout: OverlayLayout): boolean {
   return layout === 'bar'
+}
+
+/**
+ * The sentient circle exists only as Bar's minimized rest.
+ * Hide idle and Island never show it — even if a leftover minimized flag is true.
+ */
+export function overlayShowsBarOrb(layout: OverlayLayout, minimized: boolean): boolean {
+  return layout === 'bar' && minimized
 }
 
 /**
