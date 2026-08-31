@@ -100,7 +100,12 @@ declare module 'three' {
   export class WebGLRenderer {
     domElement: HTMLCanvasElement
     shadowMap: { enabled: boolean; type: number }
-    constructor(params?: { canvas?: HTMLCanvasElement; antialias?: boolean })
+    constructor(params?: {
+      canvas?: HTMLCanvasElement
+      antialias?: boolean
+      alpha?: boolean
+      powerPreference?: 'default' | 'high-performance' | 'low-power'
+    })
     setPixelRatio(n: number): void
     setSize(w: number, h: number, updateStyle?: boolean): void
     setClearColor(color: number, alpha?: number): void

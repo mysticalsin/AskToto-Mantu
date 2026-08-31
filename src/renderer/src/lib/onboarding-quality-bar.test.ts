@@ -74,7 +74,9 @@ describe('Apple-grade quality bar — PR 66 re-pass', () => {
 
   it('Continue / Next / Set me up sit outside scene-enter on first paint of that act', () => {
     const hero = actSlice(experience, 'function HeroWelcome', "export type SetupRowState")
-    const heroCta = hero.slice(hero.indexOf('onboard-cta'), hero.indexOf('Skip the tour'))
+    const nextAt = hero.indexOf('onboard-cta')
+    const heroCta = hero.slice(nextAt, hero.indexOf('</button>', nextAt))
+    expect(heroCta).toMatch(/\bNext\b/)
     expect(heroCta).not.toMatch(/fade-up/)
     expect(heroCta).not.toMatch(/animationDelay/)
     expect(hero.indexOf('scene-enter')).toBeLessThan(hero.indexOf('onboard-cta'))
