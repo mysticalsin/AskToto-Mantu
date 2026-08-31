@@ -87,9 +87,13 @@ describe('clickupOAuth — OAuth 2.1 + PKCE connect flow', () => {
     return realFetch(u.toString())
   }
 
-  it('registers a client via DCR once, then reuses the cached client_id (no re-registration)', async () => {
-    fetchMock.mockImplementation(async (url: string) => {
-      if (url.includes('/oauth/register')) return jsonResponse(DCR_RESPONSE)
+  it('registers a fresh client per run whose DCR body is this run\'s exact ported loopback URI', async () => {
+    const dcrBodies: unknown[] = []
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes('/oauth/register')) {
+        dcrBodies.push(JSON.parse(String(init?.body || '{}')))
+        return jsonResponse({ client_id: `clickup-client-${dcrBodies.length}` })
+      }
       if (url.includes('/oauth/token')) return jsonResponse(TOKEN_RESPONSE)
       throw new Error(`unexpected fetch: ${url}`)
     })
@@ -99,23 +103,60 @@ describe('clickupOAuth — OAuth 2.1 + PKCE connect flow', () => {
     const first = runClickupOAuth()
     await vi.waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1))
     const { redirectUri, state } = capturedAuthorizeParams()
+    expect(redirectUri).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/callback$/)
+    expect(dcrBodies).toHaveLength(1)
+    expect(dcrBodies[0]).toMatchObject({
+      client_name: 'Métis',
+      redirect_uris: [redirectUri],
+      grant_types: ['authorization_code'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none'
+    })
     const cbRes = await hitCallback(redirectUri, { code: 'auth-code-1', state })
     expect(cbRes.status).toBe(200)
     const result = await first
     expect(result).toEqual({ ok: true, accessToken: 'clickup-at-1', refreshToken: 'clickup-rt-1' })
 
-    const registerCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes('/oauth/register'))
-    expect(registerCalls).toHaveLength(1)
-
-    // Second run: client_id is now cached in settings, so DCR must NOT be hit again.
+    // Second run: ephemeral port will differ, so DCR must run again with THAT run's URI — never reuse.
     openExternal.mockClear()
     const second = runClickupOAuth()
     await vi.waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1))
     const p2 = capturedAuthorizeParams()
+    expect(dcrBodies).toHaveLength(2)
+    expect((dcrBodies[1] as { redirect_uris: string[] }).redirect_uris).toEqual([p2.redirectUri])
     await hitCallback(p2.redirectUri, { code: 'auth-code-2', state: p2.state })
     await second
-    const registerCallsAfter = fetchMock.mock.calls.filter(([url]) => String(url).includes('/oauth/register'))
-    expect(registerCallsAfter).toHaveLength(1) // still 1 — not re-registered
+    const authUrl = new URL(openExternal.mock.calls[0][0] as string)
+    expect(authUrl.searchParams.get('client_id')).toBe('clickup-client-2')
+  })
+
+  it('does not reuse a cached client_id registered with a different (portless) URI', async () => {
+    const { setSettings, getSettings } = await import('../store')
+    setSettings({ clickupClientId: 'cached-portless-client' })
+    expect(getSettings().clickupClientId).toBe('cached-portless-client')
+
+    let dcrBody: { redirect_uris?: string[] } | null = null
+    fetchMock.mockImplementation(async (url: string, init?: RequestInit) => {
+      if (url.includes('/oauth/register')) {
+        dcrBody = JSON.parse(String(init?.body || '{}'))
+        return jsonResponse({ client_id: 'fresh-ported-client' })
+      }
+      if (url.includes('/oauth/token')) return jsonResponse(TOKEN_RESPONSE)
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+
+    const { runClickupOAuth } = await import('./clickupOAuth')
+    const flow = runClickupOAuth()
+    await vi.waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1))
+    const { redirectUri, state } = capturedAuthorizeParams()
+    expect(redirectUri).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/callback$/)
+    expect(dcrBody?.redirect_uris).toEqual([redirectUri])
+    const authUrl = new URL(openExternal.mock.calls[0][0] as string)
+    expect(authUrl.searchParams.get('client_id')).toBe('fresh-ported-client')
+    expect(authUrl.searchParams.get('client_id')).not.toBe('cached-portless-client')
+    await hitCallback(redirectUri, { code: 'auth-code-1', state })
+    await flow
+    expect(getSettings().clickupClientId).toBe('fresh-ported-client')
   })
 
   it('sends the PKCE verifier on the token exchange (not just the challenge on authorize)', async () => {
@@ -211,6 +252,51 @@ describe('clickupOAuth — OAuth 2.1 + PKCE connect flow', () => {
     await hitCallback(redirectUri, { code: 'stale-code', state })
     const result = await flow
     expect(result).toEqual({ ok: false, error: 'code expired' })
+  })
+
+  it('maps token invalid_client / redirect_uri to a human sentence, never the raw JSON blob', async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes('/oauth/register')) return jsonResponse(DCR_RESPONSE)
+      if (url.includes('/oauth/token')) {
+        return jsonResponse(
+          { error: 'invalid_client', error_description: 'redirect_uri is not registered for this client' },
+          false,
+          401
+        )
+      }
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    const { runClickupOAuth } = await import('./clickupOAuth')
+    const flow = runClickupOAuth()
+    await vi.waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1))
+    const { redirectUri, state } = capturedAuthorizeParams()
+    await hitCallback(redirectUri, { code: 'auth-code-1', state })
+    const result = await flow
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/callback address/i)
+    expect(result.error).not.toMatch(/\{/)
+    expect(result.error).not.toMatch(/invalid_client/)
+  })
+
+  it('maps a callback invalid_client / redirect_uri error to a human sentence', async () => {
+    fetchMock.mockImplementation(async (url: string) => {
+      if (url.includes('/oauth/register')) return jsonResponse(DCR_RESPONSE)
+      throw new Error(`unexpected fetch: ${url}`)
+    })
+    const { runClickupOAuth } = await import('./clickupOAuth')
+    const flow = runClickupOAuth()
+    await vi.waitFor(() => expect(openExternal).toHaveBeenCalledTimes(1))
+    const { redirectUri, state } = capturedAuthorizeParams()
+    await hitCallback(redirectUri, {
+      error: 'invalid_client',
+      error_description: 'redirect_uri is not registered for this client',
+      state
+    })
+    const result = await flow
+    expect(result.ok).toBe(false)
+    expect(result.error).toMatch(/callback address/i)
+    expect(result.error).not.toMatch(/\{/)
+    expect(result.error).not.toMatch(/invalid_client/)
   })
 
   it('single-flight: a second concurrent call is rejected while one flow is in progress', async () => {
@@ -310,6 +396,21 @@ describe('refreshClickupToken', () => {
     const { refreshClickupToken } = await import('./clickupOAuth')
     const r = await refreshClickupToken('old-rt')
     expect(r.ok).toBe(false)
+  })
+})
+
+describe('humanizeClickupOAuthError', () => {
+  it('maps Tony\'s live invalid_client / redirect_uri JSON blob to a human sentence', async () => {
+    const { humanizeClickupOAuthError } = await import('./clickupOAuth')
+    const blob =
+      '{"error":"invalid_client","error_description":"redirect_uri is not registered for this client","state":"7515cca659f4c87d9538deb1c1ce1f13"}'
+    const mapped = humanizeClickupOAuthError('', blob)
+    expect(mapped).toMatch(/callback address/i)
+    expect(mapped).toMatch(/Connect again/)
+    expect(mapped).not.toMatch(/\{/)
+    expect(mapped).not.toBe(blob)
+    expect(humanizeClickupOAuthError('invalid_client', 'redirect_uri is not registered for this client')).toBe(mapped)
+    expect(humanizeClickupOAuthError('invalid_client', '')).toMatch(/did not recognize this sign-in client/i)
   })
 })
 

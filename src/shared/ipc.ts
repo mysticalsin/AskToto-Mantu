@@ -1076,8 +1076,10 @@ export const BaseSettingsSchema = z.object({
   // migrateLegacyBidstackConnection in main/store.ts for how an existing user's data carries forward.
   mcpConnections: z.array(McpConnectionSchema).max(10).default([]),
   // ClickUp's Dynamic Client Registration (RFC 7591) client_id — public, not a secret, so it lives in
-  // plain settings rather than mcpSecrets.ts. Registered once (main/mcp/clickupOAuth.ts) and cached here
-  // so every later connect/reconnect reuses the same client instead of re-registering.
+  // plain settings rather than mcpSecrets.ts. ClickUp binds each client_id to the exact redirect_uri
+  // from that registration (no RFC 8252 port flexibility). Each Connect run in clickupOAuth.ts
+  // registers a fresh client with this run's loopback URI and stores the new id here for token refresh;
+  // a leftover portless/mismatched client_id is never reused for /authorize.
   clickupClientId: z.string().default(''),
   // Plane DCR client_id — public, like clickupClientId. The matching client_secret is encrypted in
   // mcpSecrets (`key-mcp-plane-client.bin`) because Plane's token endpoint requires client_secret_post.
