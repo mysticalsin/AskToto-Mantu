@@ -411,9 +411,10 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
     expect(watch.height).toBeLessThan(44)
     expect(watch.y).toBe(0)
     expect(watch).not.toEqual(park)
-    expect(watch.x).toBeLessThanOrEqual(900)
-    expect(watch.x + watch.width).toBeGreaterThan(900)
-    expect(900 >= watch.x && 12 >= watch.y && 12 < watch.y + watch.height).toBe(true)
+    const islandX = tonyMac.bounds.x + Math.round(tonyMac.bounds.width / 2)
+    expect(watch.x).toBeLessThanOrEqual(islandX)
+    expect(watch.x + watch.width).toBeGreaterThan(islandX)
+    expect(islandX >= watch.x && 12 >= watch.y && 12 < watch.y + watch.height).toBe(true)
   })
 
   it('island parks the peek capsule at the same Y; bar keeps the classic rest below the notch', () => {
