@@ -53,7 +53,7 @@ Insanely low latency on click and drag.
 
 Apple-grade. Quiet luxury. Light dots on dark glass. Fixed circle.
 
-- Same width and height (`BAR_PILL_SIZE_PX` 64). Aspect 1 on every mood. Bounding box constant.
+- Same width and height (`BAR_PILL_VISIBLE_PX` 51). Package canvas stays `BAR_PILL_SIZE_PX` 64. Aspect 1 on every mood. Bounding box constant.
 - Never a stadium, potato, or squashed capsule.
 - Idle is `solving`, theme `dark`. Not Fit Studio `#b266e9`. Not Jarvis `#4CA8E8`. No painted "Solving…" word.
 - No constellation we invented. No electron chords. No glitter ball. No magenta core.

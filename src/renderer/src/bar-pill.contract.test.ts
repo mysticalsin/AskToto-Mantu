@@ -2,7 +2,16 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { overlayAllowsMinimize, overlayDocksBarCircle, overlayShowsBarOrb, shouldForceParkOnBecameIdle } from '@shared/overlay-chrome'
-import { BAR_PILL_HEIGHT_PX, BAR_PILL_SIZE_PX, BAR_PILL_WIDTH_PX, ORB_MOODS, ORB_STATE, orbBoxForMood } from './lib/bar-pill-orb'
+import {
+  BAR_MARK_SIZE_PX,
+  BAR_PILL_HEIGHT_PX,
+  BAR_PILL_SIZE_PX,
+  BAR_PILL_VISIBLE_PX,
+  BAR_PILL_WIDTH_PX,
+  ORB_MOODS,
+  ORB_STATE,
+  orbBoxForMood
+} from './lib/bar-pill-orb'
 
 const root = join(__dirname)
 const app = readFileSync(join(root, 'App.tsx'), 'utf8').replace(/\r\n/g, '\n')
@@ -69,13 +78,15 @@ describe('BAR-PILL contract', () => {
     expect(css).not.toMatch(/scale\(0\.88\)/)
     expect(BAR_PILL_WIDTH_PX).toBe(BAR_PILL_HEIGHT_PX)
     expect(BAR_PILL_SIZE_PX).toBe(64)
-    expect(css).toMatch(/\.aw-orb \{[\s\S]*?width:\s*64px/)
-    expect(css).toMatch(/\.aw-orb \{[\s\S]*?height:\s*64px/)
+    expect(BAR_PILL_VISIBLE_PX).toBe(51)
+    expect(BAR_PILL_WIDTH_PX).toBe(BAR_PILL_VISIBLE_PX)
+    expect(css).toMatch(/\.aw-orb \{[\s\S]*?width:\s*51px/)
+    expect(css).toMatch(/\.aw-orb \{[\s\S]*?height:\s*51px/)
     expect(css).toMatch(/\.aw-orb \{[\s\S]*?border-radius:\s*50%/)
     expect(css).toMatch(/\.aw-orb \{[\s\S]*?background:\s*transparent/)
-    expect(css).toMatch(/\.aw-orb__canvas \{[\s\S]*?width:\s*64px/)
-    expect(css).toMatch(/\.aw-orb__canvas \{[\s\S]*?height:\s*64px/)
-    expect(css).toMatch(/\.aw-orb__canvas \{[\s\S]*?border-radius:\s*0/)
+    expect(css).toMatch(/\.aw-orb__canvas[\s\S]*?width:\s*51px/)
+    expect(css).toMatch(/\.aw-orb__canvas[\s\S]*?height:\s*51px/)
+    expect(css).toMatch(/\.aw-orb__canvas[\s\S]*?border-radius:\s*0/)
   })
 
   it('never flattens: thinking-orb circle, same scale on X and Y', () => {
@@ -92,8 +103,8 @@ describe('BAR-PILL contract', () => {
     expect(css).not.toMatch(/\.aw-orb__rec \{[\s\S]*?background:\s*#f0717a/)
     for (const mood of ORB_MOODS) {
       const box = orbBoxForMood(mood)
-      expect(box.width).toBe(BAR_PILL_SIZE_PX)
-      expect(box.height).toBe(BAR_PILL_SIZE_PX)
+      expect(box.width).toBe(BAR_PILL_VISIBLE_PX)
+      expect(box.height).toBe(BAR_PILL_VISIBLE_PX)
     }
   })
 
@@ -132,6 +143,10 @@ describe('BAR-PILL contract', () => {
     expect(orbBtn).toMatch(/from 'thinking-orbs'/)
     expect(orbBtn).toMatch(/theme=\{BAR_ORB_THEME\}/)
     expect(orbBtn).toMatch(/size=\{BAR_PILL_SIZE_PX\}/)
+    expect(orbBtn).toMatch(/style=\{\{ width: BAR_PILL_VISIBLE_PX, height: BAR_PILL_VISIBLE_PX \}\}/)
+    expect(orbBtn).not.toMatch(/size=\{BAR_PILL_VISIBLE_PX\}/)
+    expect(orbBtn).not.toMatch(/size=\{52\}/)
+    expect(orbBtn).not.toMatch(/size=\{51\}/)
     expect(orbBtn).toMatch(/aria-label=""/)
     expect(orbBtn).not.toMatch(/Solving…/)
     expect(orb).toMatch(/orbHostPaintsText/)
@@ -161,5 +176,23 @@ describe('BAR-PILL contract', () => {
     expect(orbBtn).toMatch(/shouldShowOrbRecDot/)
     expect(orb).toMatch(/shouldShowOrbRecDot/)
     expect(orb).not.toMatch(/REC_DOT_COLOR/)
+  })
+
+  it('Listen chrome must not squash the left Settings M', () => {
+    expect(BAR_MARK_SIZE_PX).toBe(30)
+    expect(bar).toMatch(/data-bar-mark/)
+    expect(bar).toMatch(/aw-bar-mark/)
+    expect(bar).toMatch(/<MantuMark size=\{BAR_MARK_SIZE_PX\} round/)
+    expect(bar).toMatch(/minmax\(30px,1fr\)/)
+    expect(bar).not.toMatch(/grid-cols-\[1fr_auto_1fr\]/)
+    expect(css).toMatch(/\.aw-bar-mark \{[\s\S]*?width:\s*30px/)
+    expect(css).toMatch(/\.aw-bar-mark \{[\s\S]*?height:\s*30px/)
+    expect(css).toMatch(/\.aw-bar-mark \{[\s\S]*?min-width:\s*30px/)
+    expect(css).toMatch(/\.aw-bar-mark \{[\s\S]*?min-height:\s*30px/)
+    expect(css).toMatch(/\.aw-bar-mark \{[\s\S]*?aspect-ratio:\s*1\s*\/\s*1/)
+    expect(css).toMatch(/\.aw-bar-mark \{[\s\S]*?border-radius:\s*50%/)
+    expect(css).toMatch(/\.aw-bar-mark \{[\s\S]*?flex-shrink:\s*0/)
+    expect(css).toMatch(/\.aw-bar-mark img \{[\s\S]*?max-width:\s*none/)
+    expect(contract).toMatch(/no-squash M/)
   })
 })
