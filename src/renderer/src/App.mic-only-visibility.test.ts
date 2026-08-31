@@ -44,11 +44,10 @@ describe('mic-only capture degradation stays visible', () => {
     expect(app).toMatch(/captureDegraded=\{listen\.captureDegraded\}/)
   })
 
-  it('the minimized control pill leans amber and tooltips the cause instead of a confident cyan orb', () => {
+  it('the minimized circle keeps mood color; degraded truth rides the tooltip, not a red/amber paint', () => {
     expect(pill).toMatch(/degradedNote\?: string \| null/)
-    expect(pill).toMatch(/moodFromListen\(listening, paused, !!degradedNote\)/)
     expect(pill).toMatch(/title=\{degradedNote \|\| 'Expand Métis'\}/)
-    expect(pill).toMatch(/data-orb-mood=\{mood\}/)
+    expect(pill).not.toMatch(/moodFromListen/)
     expect(app).toMatch(/degradedNote=\{listen\.captureDegraded\?\.note \?\? null\}/)
   })
 

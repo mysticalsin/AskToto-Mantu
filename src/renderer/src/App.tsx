@@ -32,7 +32,8 @@ import {
   isRevealed as isOverlayRevealed,
   reduceAutoHide
 } from './lib/overlay-autohide'
-import { overlayRestsHidden, overlayUsesHover, parseOverlayLayout } from '@shared/overlay-chrome'
+import { overlayAllowsMinimize, overlayRestsHidden, overlayUsesHover, parseOverlayLayout } from '@shared/overlay-chrome'
+import { resolveOrbMood } from './lib/bar-pill-orb'
 import {
   OVERLAY_PARK_FALLBACK_MS,
   overlayShowPeek,
@@ -520,6 +521,7 @@ export function App(): JSX.Element {
   // — the non-activating notch contract. The pure state machine lives in lib/overlay-autohide.ts.
   const overlayLayout = parseOverlayLayout(settings?.overlayLayout)
   const autoHideSetting = overlayUsesHover(overlayLayout)
+  const showBarOrb = minimized && overlayAllowsMinimize(overlayLayout)
   // Hover chrome (hide / island) is in effect only in the plain idle bar surface: the overlay isn't
   // collapsed to the control mini-pill, onboarding is finished, and the default bar view is showing with
   // no answer/capture/meeting in flight. Every other surface (answers, the settings/history/review/agenda
@@ -3262,36 +3264,16 @@ export function App(): JSX.Element {
           </div>
         )
       })()}
-      {minimized ? (
+      {showBarOrb ? (
         <div className="flex w-full justify-center">
           <ControlPill
-            // Gated the same way as Bar's `listening` below: the raw listen.listening flag stays true for
-            // up to DRAIN_CEILING_MS after Stop while audio finishes draining in the background, which
-            // otherwise left the minimized pill showing the pulsing red dot + a still-counting timer for
-            // several seconds after Stop — reading as "Stop didn't work".
-            listening={showListeningChrome}
-            paused={listen.paused}
-            // The minimized pill was the LAST place a capture degradation was visible — the pulsing red
-            // dot claimed "recording fine" while a whole side of the meeting was missing. Amber dot +
-            // tooltip; the note text carries the platform-specific cause.
+            orbMood={resolveOrbMood({
+              factcheck: ask.answer?.kind === 'factcheck' && !!ask.answer?.streaming,
+              thinking: !!(ask.answer?.streaming || suggest.answer?.streaming)
+            })}
+            // Tooltip only. Rec-dot stays elsewhere; do not paint this sphere red.
             degradedNote={listen.captureDegraded?.note ?? null}
-            startedAt={meetingStartRef.current}
-            onTogglePause={onTogglePause}
-            onToggleListen={toggleListen}
-            onExpand={() => {
-              setMinimized(false)
-              void window.toto.minimize(false)
-              if (autoHideSetting) {
-                dispatchAutoHide({ type: 'collapse-now' })
-                setOverlaySpring('rest')
-              }
-            }}
-            // Fully hide the window (a global hotkey restores it); reset so it reopens as the full widget.
-            onHide={() => {
-              setMinimized(false)
-              void window.toto.minimize(false)
-              void window.toto.hide()
-            }}
+            onExpand={unminimize}
           />
         </div>
       ) : overlayPeeked ? (

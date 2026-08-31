@@ -49,6 +49,11 @@ export function autoHideOverlayForLayout(layout: OverlayLayout): boolean {
   return overlayUsesHover(layout)
 }
 
+/** Minimize-to-pill is Bar only. Hide and Island ignore minimize. */
+export function overlayAllowsMinimize(layout: OverlayLayout): boolean {
+  return layout === 'bar'
+}
+
 /**
  * Map a sparse on-disk user layer onto a layout.
  * - Already has overlayLayout → keep it (Settings switch, no reinstall).
