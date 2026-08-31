@@ -33,15 +33,27 @@ describe('Answer provider attribution', () => {
   it('stays NEUTRAL while streaming — the provider is named only after the fact (MQA-269, revises MQA-053)', () => {
     // This test used to assert the opposite ("Asking your Dust agent…"). MQA-269 retired the streaming
     // byline deliberately: the row re-renders on every failover attempt, so naming the provider narrated
-    // each hop — the user watched the brand change mid-wait for a failover that had worked. The pulse dot
-    // still shows work is happening; `Answered by X` (asserted below) remains the one attribution
-    // surface, after the answer, when it is stable and true.
+    // each hop — the user watched the brand change mid-wait for a failover that had worked. The orb
+    // is the liveness signal; `Answered by X` remains the one attribution surface, after the answer,
+    // when it is stable and true.
     const html = renderToStaticMarkup(
       <Answer text="The previous answer, still on screen." streaming={true} error={null} provider="dust" />
     )
 
-    expect(html).toContain('Thinking…')
+    expect(html).toContain('Thinking')
+    expect(html).toContain('data-orb-state="working"')
     expect(html).not.toContain('Asking')
+  })
+
+  it('uses Thinking + solving on the first-token wait, not a pulse or skeleton', () => {
+    const html = renderToStaticMarkup(<Answer text="" streaming={true} error={null} />)
+    expect(html).toContain('Thinking')
+    expect(html).toContain('data-agent-status="thinking"')
+    expect(html).toContain('data-orb-state="solving"')
+    expect(html).toContain('data-orb-size="64"')
+    expect(html).not.toContain('Still working')
+    expect(html).not.toContain('shimmer')
+    expect(html).not.toContain('animate-pulse')
   })
 
   it('stays anonymous until streamMeta names a provider (MQA-053)', () => {

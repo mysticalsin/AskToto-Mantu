@@ -14,6 +14,7 @@ const AgendaView = lazy(() => import('./components/AgendaView').then((m) => ({ d
 const BrainView = lazy(() => import('./components/BrainView').then((m) => ({ default: m.BrainView })))
 const Answer = lazy(() => import('./components/Answer').then((m) => ({ default: m.Answer })))
 const Copilot = lazy(() => import('./components/Copilot').then((m) => ({ default: m.Copilot })))
+import { AgentStatus } from './components/AgentStatus'
 import { SignInWall } from './components/SignInWall'
 import { LicenseGate } from './components/LicenseGate'
 import { UpdateReadyToast } from './components/UpdateReadyToast'
@@ -3075,9 +3076,8 @@ export function App(): JSX.Element {
     }
     return (
       <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
-        <div className="glass flex h-[38px] w-full items-center gap-2.5 rounded-full px-4">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--color-accent)]" />
-          <span className="font-ui text-[12px] text-[color:var(--color-ink-3)]">Starting Métis…</span>
+        <div className="glass flex h-[38px] w-full items-center rounded-full px-4">
+          <AgentStatus kind="loading" size="inline" caption />
         </div>
       </div>
     )
@@ -3112,7 +3112,7 @@ export function App(): JSX.Element {
     if (view === 'settings') {
       return (
         <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
-          <Suspense fallback={<div className="cl-root rounded-2xl p-6 text-center text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>}>
+          <Suspense fallback={<div className="cl-root rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
             {settingsBody}
           </Suspense>
         </div>
@@ -3141,7 +3141,7 @@ export function App(): JSX.Element {
     if (view === 'settings') {
       return (
         <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
-          <Suspense fallback={<div className="cl-root rounded-2xl p-6 text-center text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>}>
+          <Suspense fallback={<div className="cl-root rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
             {settingsBody}
           </Suspense>
         </div>
@@ -3518,12 +3518,12 @@ export function App(): JSX.Element {
           {isPanelBody && panelOpen &&
             (view === 'settings' || DEMO === 'settings' ? (
               // Settings is its own self-contained panel — render directly under the bar (bar stays on top).
-              <Suspense fallback={<div className="cl-root rounded-2xl p-6 text-center text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>}>
+              <Suspense fallback={<div className="cl-root rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
                 {body}
               </Suspense>
             ) : (
               <Panel>
-                <Suspense fallback={<div className="p-4 text-center text-[12px] text-[color:var(--color-ink-3)]">Loading…</div>}>
+                <Suspense fallback={<div className="p-4"><AgentStatus kind="loading" size="hero" /></div>}>
                   {body}
                 </Suspense>
               </Panel>

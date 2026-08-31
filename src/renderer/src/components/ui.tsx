@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import type { LucideIcon } from 'lucide-react'
+import { AgentStatus } from './AgentStatus'
 
 export function IconButton({
   children,
@@ -149,19 +150,7 @@ export function FieldHint({ text, children }: { text: string; children: ReactNod
   )
 }
 
-export function Spinner({ size = 14 }: { size?: number }): JSX.Element {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      role="status"
-      aria-label="Loading"
-      className="loading-spinner animate-spin text-[color:var(--color-ink-2)]"
-      fill="none"
-    >
-      <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.25" strokeWidth="3" />
-      <path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-    </svg>
-  )
+/** Forgotten call sites cannot resurrect the SVG spinner. Prefer `AgentStatus` + kind at named waits. */
+export function Spinner({ kind = 'loading' }: { size?: number; kind?: import('../lib/agent-status').AgentStatusKind }): JSX.Element {
+  return <AgentStatus kind={kind} size="inline" caption={false} />
 }

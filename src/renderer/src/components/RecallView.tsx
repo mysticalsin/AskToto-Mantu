@@ -17,6 +17,7 @@ import {
   Lock
 } from 'lucide-react'
 import { TextButton } from './ui'
+import { AgentStatus, InlineOrb } from './AgentStatus'
 import { WorkProgressMeter } from './WorkProgressMeter'
 import { describeImportProgress, describeMeetingIndexProgress } from './work-progress'
 import { accelLabel } from '../lib/keys'
@@ -226,13 +227,16 @@ function GraphBar({
             )}
           </div>
           {backfilling && indexProgress && (
-            <WorkProgressMeter
-              active
-              ariaLabel="Mantu Intelligence meeting index progress"
-              className="mt-1.5"
-              percent={indexProgress.percent}
-              valueText={indexProgress.valueText}
-            />
+            <div className="mt-1.5 flex items-center gap-2">
+              {indexProgress.percent == null && <InlineOrb kind="searching" />}
+              <WorkProgressMeter
+                active
+                ariaLabel="Mantu Intelligence meeting index progress"
+                className="min-w-0 flex-1"
+                percent={indexProgress.percent}
+                valueText={indexProgress.valueText}
+              />
+            </div>
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
@@ -242,7 +246,7 @@ function GraphBar({
             disabled={busy || backfilling}
             title="Index every meeting (past + vault) into the brain"
           >
-            <RefreshCw size={11} className={busy || backfilling ? 'loading-spinner animate-spin' : ''} />
+            {busy || backfilling ? <InlineOrb kind="searching" /> : <RefreshCw size={11} />}
             {backfilling ? 'Mapping…' : busy ? 'Starting…' : 'Index meetings'}
           </TextButton>
           <TextButton onClick={() => void openDashboard()} title="Open the Mantu Intelligence dashboard">
@@ -384,7 +388,7 @@ function UpcomingSection({
     <div className="mb-1.5">
       <div className="mb-1 flex items-center justify-between px-1">
         <div className="cl-eyebrow flex items-center gap-1.5 text-[color:var(--color-ink-3)]">
-          <RefreshCw size={10} className={loading ? 'animate-spin' : ''} />
+          {loading ? <InlineOrb kind="searching" /> : <RefreshCw size={10} />}
           Upcoming
         </div>
         {!loading && res?.ok && (
@@ -1176,14 +1180,19 @@ export function RecallView({
               <div aria-atomic="true" aria-live="polite" className="text-[11px] text-[color:var(--color-ink-3)]">
                 {progress.detail}
               </div>
-              <WorkProgressMeter
-                active={progress.active}
-                ariaLabel={`${job.title} import progress`}
-                className="mt-1"
-                percent={progress.percent}
-                pulseAtFull={progress.pulseAtFull}
-                valueText={progress.valueText}
-              />
+              <div className="mt-1 flex items-center gap-2">
+                {(progress.percent == null || progress.pulseAtFull) && (
+                  <InlineOrb kind={progress.pulseAtFull ? 'writing' : 'loading-model'} />
+                )}
+                <WorkProgressMeter
+                  active={progress.active}
+                  ariaLabel={`${job.title} import progress`}
+                  className="min-w-0 flex-1"
+                  percent={progress.percent}
+                  pulseAtFull={progress.pulseAtFull}
+                  valueText={progress.valueText}
+                />
+              </div>
             </div>
           )}
           {job.error && <div className="mt-1 text-[11px] text-[var(--color-danger)]">{job.error}</div>}
@@ -1202,7 +1211,9 @@ export function RecallView({
       {/* ── DATE-GROUPED MEETING LIST ───────────────────────────────────── */}
       <div ref={listRef} tabIndex={-1} className="scroll-thin min-h-0 flex-1 overflow-y-auto pr-1">
         {loading ? (
-          <div className="py-2 text-[13px] text-[color:var(--color-ink-2)]">Loading…</div>
+          <div className="py-2">
+            <AgentStatus kind="searching" size="inline" caption />
+          </div>
         ) : items.length === 0 ? (
           <div className="py-2 text-[13px] text-[color:var(--color-ink-2)]">
             {q.trim()

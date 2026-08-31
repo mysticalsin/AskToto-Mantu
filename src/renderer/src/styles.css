@@ -1952,6 +1952,41 @@ html.metis-bar-land .aw-widget {
   word-break: break-word;
 }
 
+/* Luxury agent status — caption then thinking-orbs. Isolation keeps the 2D canvas on its own
+   compositor layer so the 60fps orb does not hitch the glass. The orb slot is reserved
+   (--orb-size) so the first frame cannot shift the word. No CSS keyframe spinner. */
+.agent-status {
+  isolation: isolate;
+}
+.agent-status__orb {
+  flex: 0 0 var(--orb-size, 64px);
+  width: var(--orb-size, 64px);
+  height: var(--orb-size, 64px);
+  contain: strict;
+}
+.agent-status canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  contain: strict;
+}
+.agent-status__word {
+  font-family: var(--font-ui);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--color-ink-2);
+}
+.agent-status--hero {
+  gap: 14px;
+  padding: 48px 32px;
+}
+.agent-status--hero .agent-status__word {
+  font-size: 15px;
+}
+.agent-status--inline .agent-status__word {
+  font-size: 12px;
+}
+
 @keyframes asktoto-loading-pulse {
   0%,
   100% {
@@ -1968,11 +2003,6 @@ html.metis-bar-land .aw-widget {
   *::after {
     animation-duration: 0ms !important;
     transition-duration: 0ms !important;
-  }
-  /* Spinners must still signal loading without rotation — swap the spin for a gentle opacity pulse. */
-  .loading-spinner {
-    animation: asktoto-loading-pulse 1.2s ease-in-out infinite !important;
-    animation-duration: 1.2s !important;
   }
   /* The recording dot is a liveness + consent signal — it must keep moving, not freeze. Opacity-only
      pulse (no scale) respects reduced-motion while still clearly reading as "we are live". */
