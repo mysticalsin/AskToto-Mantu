@@ -225,9 +225,8 @@ export interface AnswerState {
   // The badge above is already cleared by then; this is what lets the UI say WHY, instead of degrading
   // silently — the same contract the live capture path holds for a failed capture.
   screenMissed?: boolean
-  // True only for AMBIENT auto-suggestions (req.mode === 'suggest'). Gates the copilot auto-dismiss
-  // TTL: user-initiated turns on the same surface (typed questions, Assist, quick actions) must stay
-  // until the user acts — auto-wiping them 4-7s after they finish is data loss (and a WCAG 2.2.1 miss).
+  // True only for AMBIENT auto-suggestions (req.mode === 'suggest'). Marks the card as auto-answer.
+  // Ambient cards stay until Tony clicks or a new question replaces them. No TTL. Never auto-send.
   ephemeral?: boolean
   // Who is answering (from streamMeta, sent before any token) — lets the waiting UI name the brain
   // ("Asking your Dust agent…") instead of an anonymous spinner. Follows the latest retry/failover.
