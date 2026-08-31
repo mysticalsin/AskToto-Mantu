@@ -114,6 +114,10 @@ extraResources:
     to: ort
   - from: resources/runtime-assets-manifest.json
     to: runtime-assets-manifest.json
+  # Locked conversation-mode skills + shared humanizer. Hashed in src/shared/mode-skills.lock.json.
+  # Main verifies SHA-256 on load; a tampered file fails the ask out loud.
+  - from: skills
+    to: skills
   # Optional, disclosed installer-embedded Cloudflare proxy key (docs/CLOUDFLARE.md, src/main/
   # embedded-cloudflare-key.ts). build/cloudflare-embed/ is a real, always-present directory (tracked via
   # .gitkeep) that is EMPTY on a normal build — electron-builder copies whatever it finds, so packaging
