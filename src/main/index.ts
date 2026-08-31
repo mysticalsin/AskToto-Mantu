@@ -279,6 +279,7 @@ import {
 } from './brain/store'
 import { buildBrainContext } from './brain/context'
 import { buildSystem } from './personas'
+import { isModeSkillIntegrityError } from '@shared/mode-skills'
 import { initLogging, mainLog, auditLog } from './logger'
 import { consumeSecurityLimit, RATE_LIMIT_USER_MESSAGE, shouldSampleIpcDeny, takeHotPath, type SecurityLimitBucket } from './security-limits'
 import { safeMeetingBasename } from './meeting-path'
@@ -5533,10 +5534,14 @@ function registerIpc(): void {
     } else {
       attempt(skipDeadPrimary ?? primary, skipDeadPrimary ? [primary] : [])
     }
-    } catch {
+    } catch (err) {
       win?.webContents.send(IPC.streamError, {
         id,
-        message: 'Could not start the answer.'
+        message: isModeSkillIntegrityError(err)
+          ? err instanceof Error
+            ? err.message
+            : String(err)
+          : 'Could not start the answer.'
       })
     }
   })

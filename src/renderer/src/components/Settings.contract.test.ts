@@ -433,3 +433,24 @@ describe('Dust instant validate proves a live connection', () => {
     expect(body).toMatch(/Never auto-sends a chat/)
   })
 })
+
+describe('locked mode skills — Settings has no editor for shipped skill files', () => {
+  const personalize = blockAfter('function ModePromptEditor(', '\nconst TEXT_FILE_RE')
+
+  it('shows a read-only locked line and never edits skill files', () => {
+    expect(personalize).toMatch(/Operator skill v/)
+    expect(personalize).toMatch(/cannot be\s+edited, deleted, or overridden here/)
+    expect(personalize).toMatch(/modeSkillLock\(\)/)
+    expect(personalize).not.toMatch(/writeFileSync/)
+    expect(personalize).not.toMatch(/skills\/modes/)
+    expect(personalize).not.toMatch(/SKILL\.md/)
+    expect(personalize).not.toMatch(/onCommit=\{\(v\) => patch\(\{[^}]*skill/)
+  })
+
+  it('the prompt textarea still edits modePrompts only', () => {
+    expect(personalize).toMatch(/patch\(\{ modePrompts:/)
+    expect(source).not.toMatch(/modeSkills/)
+    expect(source).not.toMatch(/skillsRoot/)
+
+  })
+})

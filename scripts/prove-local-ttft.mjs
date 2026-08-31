@@ -32,6 +32,7 @@ import {
 import { dirname, join } from 'node:path'
 import { homedir } from 'node:os'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { composeLockedAppendix } from './lock-mode-skills.mjs'
 import { get as httpsGet } from 'node:https'
 import { execFileSync, spawn } from 'node:child_process'
 
@@ -125,7 +126,7 @@ const SUGGEST_LANGUAGE_DIRECTIVE =
 function buildSuggestSystemPrompt() {
   const lead = INJECTION_GUARD.trimStart() + '\n\n'
   const prefix = SYSTEM_PROMPT.trim() + '\n\n'
-  return lead + prefix + GENERAL_MODE_PROMPT + SUGGEST_LANGUAGE_DIRECTIVE
+  return lead + prefix + GENERAL_MODE_PROMPT + composeLockedAppendix('general') + SUGGEST_LANGUAGE_DIRECTIVE
 }
 
 function suggestUserText(transcriptTail) {
