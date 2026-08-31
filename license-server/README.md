@@ -263,10 +263,10 @@ the two apart (see below).
 
 **`GET /health`** — unauthenticated, for uptime/monitoring checks.
 
-→ `{ ok: true, version, uptimeSeconds, licenseCount }` — `version` is this
-server's `package.json` version, `uptimeSeconds` is how long this server
-process has been up, `licenseCount` is the total number of licenses in the
-store.
+→ `{ ok: true, version, uptimeSeconds }` — `version` is this server's
+`package.json` version, `uptimeSeconds` is how long this server process has
+been up. Fleet size is on token-gated `GET /metrics`, not on this public
+route.
 
 ### Admin endpoints
 

@@ -25,9 +25,8 @@ import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unl
 // Enterprise checkbox: DevTools stay reachable only where they are a development tool. No secret ever
 // reaches the renderer (publicSettings strips key material), but DevTools on a packaged build still
 // exposes in-memory renderer state (transcript text, screen-context strings) to anyone at the keyboard,
-// and every security questionnaire asks. ASKTOTO_DEVTOOLS=1 is the deliberate field-debugging override —
-// an env var a local user could set, which is fine: whoever controls the local environment already owns
-// this session; the control is about the DEFAULT posture, not about defeating a local admin.
+// and every security questionnaire asks. Packaged builds ignore ASKTOTO_DEVTOOLS: devEnv() returns
+// undefined once isPackagedBuild() is true, so there is no env backdoor in a shipped DMG/EXE.
 // Shared with intelligence.ts so every window in src/main gates on ONE decision — see
 // dev-env.ts's devToolsEnabled() for why this moved out of this file.
 const DEVTOOLS_ENABLED = devToolsEnabled()
@@ -206,6 +205,7 @@ import {
 import { buildBrainContext } from './brain/context'
 import { buildSystem } from './personas'
 import { initLogging, mainLog, auditLog } from './logger'
+import { consumeSecurityLimit, RATE_LIMIT_USER_MESSAGE, shouldSampleIpcDeny, type SecurityLimitBucket } from './security-limits'
 import { asrModelDownloadState, ensureHighTierAsrModel, isHighTierAsrModelReady, removeHighTierAsrModel } from './asr-model-download'
 import { asrModelBytes } from './asr-model-manifest'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
@@ -516,17 +516,34 @@ function brainStatusCounts(s: ReturnType<typeof getSettings>, revision: number):
   return counts
 }
 
+function noteIpcDenied(reason: 'no_window' | 'sender' | 'frame'): void {
+  if (!shouldSampleIpcDeny()) return
+  auditLog('security.ipc_denied', { reason })
+}
+
 /** Security: every privileged IPC handler must come from the main window's top frame.
  *  Compromised subframes, devtools, or unexpected webContents are rejected here. */
 function assertMainWindow(event: Electron.IpcMainInvokeEvent): void {
-  if (!win) throw new Error('Main window not available')
+  if (!win) {
+    noteIpcDenied('no_window')
+    throw new Error('Main window not available')
+  }
   if (event.sender !== win.webContents) {
+    noteIpcDenied('sender')
     throw new Error('IPC denied: sender is not the main window')
   }
   const frame = event.senderFrame
   if (!frame || frame.parent !== null || frame.url !== win.webContents.getURL()) {
+    noteIpcDenied('frame')
     throw new Error('IPC denied: not main frame')
   }
+}
+
+function denyIfLimited(bucket: SecurityLimitBucket): boolean {
+  const verdict = consumeSecurityLimit(bucket)
+  if (verdict.ok) return false
+  auditLog('security.rate_limited', { bucket })
+  return true
 }
 
 /** brain:status/brain:read (pure reads) and brain:backfill/brain:field-decision (narrow, guarded writes —
@@ -2673,6 +2690,7 @@ function registerIpc(): void {
   // --- Licensing (phone-home activation; see main/license.ts) ---
   ipcMain.handle(IPC.licenseActivate, async (e, payload: unknown) => {
     assertMainWindow(e)
+    if (denyIfLimited('license-activate')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
     // No requireAuth() here on purpose: license enforcement outranks SSO (see the boot-gate ordering in
     // App.tsx). If activation required a signed-in session, a device blocked by the license gate could
     // never activate before reaching the SSO screen — a sign-in-to-activate / activate-to-sign-in
@@ -2993,6 +3011,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.mcpTestConnection, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    if (denyIfLimited('mcp-outbound')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
     const parsed = McpTestConnectionPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
     return connectMcp(parsed.data.endpointUrl, parsed.data.apiKey, parsed.data.extraHeaders, mcpLabelFor(parsed.data.connectionId))
@@ -3004,6 +3023,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.mcpSaveConnection, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    if (denyIfLimited('mcp-outbound')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
     const parsed = McpSaveConnectionPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
     const { connectionId, endpointUrl, apiKey, extraHeaders, label } = parsed.data
@@ -3069,6 +3089,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.mcpPush, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    if (denyIfLimited('mcp-outbound')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
     const parsed = McpPushPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
     const { connectionId, toolName, args } = parsed.data
@@ -3166,6 +3187,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.calendarToday, async (e, tz: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    if (denyIfLimited('graph-calendar')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
     return calendarToday(typeof tz === 'string' ? tz : 'UTC')
   })
 
@@ -4499,16 +4521,17 @@ function registerIpc(): void {
     } else {
       attempt(skipDeadPrimary ?? primary, skipDeadPrimary ? [primary] : [])
     }
-    } catch (e) {
+    } catch {
       win?.webContents.send(IPC.streamError, {
         id,
-        message: e instanceof Error ? e.message : 'Could not start the answer.'
+        message: 'Could not start the answer.'
       })
     }
   })
 
   ipcMain.handle(IPC.askCancel, (e, id: string) => {
     assertMainWindow(e)
+    if (!requireAuth()) return
     streams.get(id)?.abort()
     streams.delete(id)
   })
@@ -4519,6 +4542,7 @@ function registerIpc(): void {
   // idle clock.
   ipcMain.handle(IPC.askResetContext, (e) => {
     assertMainWindow(e)
+    if (!requireAuth()) return
     resetDustConversation()
     lastPlainAskAt = 0
   })
@@ -5180,6 +5204,7 @@ function registerIpc(): void {
   // --- Listening state (tray icon + Dust conversation reset + power-save block) ---
   ipcMain.handle(IPC.listeningState, (e, on: unknown) => {
     assertMainWindow(e)
+    if (!requireAuth()) return
     listeningActive = !!on // fresh-question boundary (askStart) is suspended while a meeting is live
     setTrayRecording(!!on)
     setRecordingPowerSaveBlock(!!on)

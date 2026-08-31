@@ -165,6 +165,52 @@ function isConfigured(env: Env): boolean {
   return Boolean(env.CLOUDFLARE_API_TOKEN && env.CF_ACCOUNT_ID && keys && keys.length > 0)
 }
 
+/** In-isolate fixed window. A Worker isolate is not a shared store: this is the floor that stops a
+ *  single leaked key from spending without bound in one isolate. AI Gateway remains the operator's
+ *  fleet-wide cap when they configured one. */
+export const PROXY_RL_WINDOW_MS = 60_000
+export const PROXY_RL_AUTH_MAX = 60
+export const PROXY_RL_UNAUTH_MAX = 30
+
+type RateBucket = { start: number; count: number }
+const rateBuckets = new Map<string, RateBucket>()
+
+/** Test seam. Production never calls this. */
+export function resetProxyRateLimits(): void {
+  rateBuckets.clear()
+}
+
+function consumeRateBucket(id: string, max: number, now = Date.now()): boolean {
+  const existing = rateBuckets.get(id)
+  if (!existing || now - existing.start >= PROXY_RL_WINDOW_MS) {
+    rateBuckets.set(id, { start: now, count: 1 })
+    if (rateBuckets.size > 10_000) {
+      for (const [key, bucket] of rateBuckets) {
+        if (now - bucket.start >= PROXY_RL_WINDOW_MS) rateBuckets.delete(key)
+      }
+    }
+    return true
+  }
+  if (existing.count >= max) return false
+  existing.count += 1
+  return true
+}
+
+function callerIp(request: Request): string {
+  return request.headers.get('cf-connecting-ip') || request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown'
+}
+
+async function rateLimitIdForKey(presented: string): Promise<string> {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', encoder.encode(presented)))
+  let hex = ''
+  for (let i = 0; i < 8; i++) hex += digest[i]!.toString(16).padStart(2, '0')
+  return `auth:${hex}`
+}
+
+function rateLimitedResponse(): Response {
+  return errorResponse(429, 'Rate limited. Try again shortly.')
+}
+
 /**
  * Upstream failures are RE-STATED, never relayed.
  *
@@ -235,7 +281,14 @@ export default {
     // between a scraped hostname and the bill.
     const presented = presentedKey(request)
     if (!presented || !(await matchesAnyKey(presented, keys))) {
+      if (!consumeRateBucket(`unauth:${callerIp(request)}`, PROXY_RL_UNAUTH_MAX)) {
+        return rateLimitedResponse()
+      }
       return errorResponse(401, 'Invalid proxy key.')
+    }
+
+    if (!consumeRateBucket(await rateLimitIdForKey(presented), PROXY_RL_AUTH_MAX)) {
+      return rateLimitedResponse()
     }
 
     const upstreamUrl = `https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(
