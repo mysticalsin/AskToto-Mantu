@@ -40,6 +40,12 @@ import { BrainRecordPage, recordKey, sortAttentionItems, type BrainRecordRef, ty
 import { shouldAutoBackfill } from './brain-auto'
 import { brainStatusPollInterval, shouldRefreshAfterBrainStatus } from './brain-status-refresh'
 import { describeMeetingIndexProgress } from './work-progress'
+import { IntelligenceUpdateButton } from './IntelligenceUpdateButton'
+import {
+  INTELLIGENCE_PASS_EMPTY,
+  INTELLIGENCE_PASS_NO_PROVIDER,
+  startIntelligenceUpdateFromClick
+} from '@shared/intelligence-pass'
 
 /**
  * Mantu Intelligence — the second-brain dashboard over the meeting knowledge store (.brain/).
@@ -632,6 +638,21 @@ export function BrainView({
     }
   }, [refresh])
 
+  const runIntelligencePass = useCallback(async (): Promise<void> => {
+    setBackfilling(true)
+    try {
+      await startIntelligenceUpdateFromClick({
+        runPass: () => window.toto.brainIntelligencePass(),
+        refresh,
+        setError
+      })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBackfilling(false)
+    }
+  }, [refresh])
+
   // Existing meetings used to wait indefinitely for a manual "Index meetings" click. New saves already
   // enqueue themselves in the main process; this covers the backlog when the in-app Intelligence view is
   // opened and keeps the manual button as an explicit retry/recovery path.
@@ -794,6 +815,10 @@ export function BrainView({
             {record ? 'Record' : 'Your meeting knowledge, compounding. Grounded in transcripts, never invented.'}
           </div>
         </div>
+        <IntelligenceUpdateButton
+          running={backfilling || statusWorking}
+          onClick={() => void runIntelligencePass()}
+        />
         <button
           type="button"
           onClick={() => void refresh()}
@@ -892,23 +917,20 @@ export function BrainView({
             Build your intelligence from {meetings.length > 0 ? `${meetings.length} saved meeting${meetings.length === 1 ? '' : 's'}` : 'your meetings'}
           </div>
           <div className="max-w-[380px] text-[12px] leading-snug text-[color:var(--color-ink-3)]">
-            Métis extracts people, accounts, deals, and win/loss signals from every saved transcript into a
-            knowledge store your Dust agents can read. New meetings are ingested automatically, and existing
-            saved meetings start indexing when Mantu Intelligence opens.
+            {meetings.length > 0
+              ? 'Métis extracts people, accounts, deals, and win/loss signals from every saved transcript. Update Intelligence to run that pass now. Local AI is first, then your API if Local cannot run.'
+              : INTELLIGENCE_PASS_EMPTY}
           </div>
-          <button
-            type="button"
-            onClick={() => void startBackfill()}
-            disabled={backfilling || meetings.length === 0 || !canIndex}
-            className="no-drag focus-ring rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-[12px] font-semibold text-white hover:bg-[var(--color-accent-2)] disabled:opacity-50"
-          >
-            {backfilling ? 'Starting…' : 'Ingest my meetings'}
-          </button>
+          <IntelligenceUpdateButton
+            running={backfilling || statusWorking}
+            disabled={meetings.length === 0}
+            onClick={() => void runIntelligencePass()}
+          />
           {/* canIndex ORs in localFallbackReady — a local-only setup already indexes fine, so this must
               only claim "no provider" when NEITHER a cloud provider NOR the local safety net is live. */}
           {!canIndex && meetings.length > 0 && (
             <div className="flex flex-col items-center gap-0.5 text-[11px] text-[color:var(--color-ink-3)]">
-              <span>Connect an AI provider in Settings to build your intelligence.</span>
+              <span>{INTELLIGENCE_PASS_NO_PROVIDER}</span>
               {onOpenSettings && <TextButton onClick={onOpenSettings}>Open Settings</TextButton>}
             </div>
           )}
