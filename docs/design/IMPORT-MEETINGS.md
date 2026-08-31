@@ -42,7 +42,7 @@ The picker is `properties: ['openFile']` only. One token, one file. `ImportJobMa
 
 ### Runtime
 
-`src/main/asr-bundled-ensure.ts` is the only downloader.
+`src/main/asr-bundled-ensure.ts` is the only downloader. `scripts/check-offline-package.mjs` allowlists that one file for the sherpa-onnx archive URL (same shape as the Qwen first-run fetch). A second copy of the URL still fails the build.
 
 - **Bundled first.** Packaged: `process.resourcesPath/{asr,models}`. Dev: repo `resources/`.
 - **userData fallback.** `app.getPath('userData')/asr-models/…` when bundled files are missing (read-only installers, incomplete copy).
