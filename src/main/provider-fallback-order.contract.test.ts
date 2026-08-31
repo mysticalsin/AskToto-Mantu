@@ -67,7 +67,7 @@ describe('MQA-269 — the failover stops narrating itself', () => {
     // The row re-renders on every failover attempt; naming the provider made the brand flicker through
     // each hop. The after-the-fact `Answered by` byline is the one attribution surface.
     expect(ANSWER).not.toMatch(/Asking \$\{who\}/)
-    expect(ANSWER).toMatch(/`Answered by \$\{who\}`/)
+    expect(ANSWER).toMatch(/Answered by \{who\}/)
   })
 
   it('the thinking wait is a stable orb, not a brand or an elapsed-time hop (MQA-269)', () => {
