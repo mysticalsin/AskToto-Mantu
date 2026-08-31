@@ -32,10 +32,10 @@ describe('Local AI tells the truth about a model that is downloaded, not bundled
   // wording was wrong and legitimately quote it; that text never reaches a user.
   const copy = block.replace(/^\s*\/\/.*$/gm, '')
 
-  it('loads readiness metadata and exposes no runtime model management', () => {
-    // Still read-only: no download/cancel/delete controls and no extra IPC channel. The download state
-    // rides the existing localModels:list summary (see shared/ipc.ts LocalModelSummarySchema).
+  it('loads readiness metadata and exposes start/retry, not cancel/delete', () => {
+    // The download state rides localModels:list. Retry re-arms ensureLocalModel without toggling Local AI.
     expect(block).toMatch(/window\.toto\.localModelsList\(\)/)
+    expect(block).toMatch(/localModelsEnsure\(\)/)
     expect(block).not.toMatch(/localModelsDownload|localModelsCancel|localModelsDelete/)
   })
 
@@ -65,9 +65,10 @@ describe('Local AI tells the truth about a model that is downloaded, not bundled
     expect(block).toMatch(/next launch/i)
   })
 
-  it('MQA-187 — the card re-polls while a download is running instead of freezing on its mount snapshot', () => {
+  it('MQA-187 — the card re-polls while a download is running or has not started', () => {
     expect(block).toMatch(/setTimeout/)
     expect(block).toMatch(/'downloading'/)
+    expect(block).toMatch(/'not-downloaded'/)
   })
 
   it('still renders ready, unavailable and the RAM floor', () => {
@@ -77,10 +78,26 @@ describe('Local AI tells the truth about a model that is downloaded, not bundled
     expect(block).toMatch(/Unavailable/)
   })
 
-  it('contains no model download or delete controls', () => {
+  it('a disk or RAM skip is a named refusal with Retry, not a silent idle', () => {
+    expect(block).toMatch(/unavailableReason === 'insufficient-disk'/)
+    expect(block).toMatch(/not enough free disk space/)
+    expect(block).toMatch(/insufficient-ram/)
+    expect(block).toMatch(/canRetry/)
+    expect(block).toMatch(/insufficient-disk/)
+    expect(block).toMatch(/Retry/)
+  })
+
+  it('contains a Retry control for a failed or not-yet-started fetch, not delete/cancel', () => {
+    expect(block).toMatch(/Retry/)
+    expect(block).toMatch(/localModelsEnsure/)
     expect(block).not.toMatch(/>\s*Download\s*</)
     expect(block).not.toMatch(/>\s*Delete\s*</)
     expect(block).not.toMatch(/>\s*Cancel\s*</)
+  })
+
+  it('exposes an in-flight fetching state with progress', () => {
+    expect(block).toMatch(/Downloading \$\{percent\}%/)
+    expect(block).toMatch(/unavailableReason === 'downloading'/)
   })
 })
 

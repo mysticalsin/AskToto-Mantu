@@ -1822,9 +1822,11 @@ function LocalAiSection({
   patch: (p: Partial<PublicSettings>) => void
 }): JSX.Element {
   const [models, setModels] = useState<LocalModelSummary[] | null>(null)
+  const [retrying, setRetrying] = useState(false)
   // The weights are fetched on first run, not shipped, so this list is a moving target: a card opened
-  // during onboarding is looking at a download in progress. Poll while one is running so it reaches
-  // "Ready" on its own instead of freezing on the snapshot taken when the panel mounted (MQA-187).
+  // during onboarding is looking at a download in progress. Poll while one is running OR has not
+  // started yet so a late boot fetch (or a fetch that failed before the first read) cannot freeze the
+  // card on "Not downloaded yet" (MQA-187).
   useEffect(() => {
     let mounted = true
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -1833,10 +1835,16 @@ function LocalAiSection({
         (list) => {
           if (!mounted) return
           setModels(list)
-          if (list.some((m) => m.unavailableReason === 'downloading')) timer = setTimeout(read, 1500)
+          const moving = list.some(
+            (m) => m.unavailableReason === 'downloading' || m.unavailableReason === 'not-downloaded'
+          )
+          if (moving) timer = setTimeout(read, 1500)
         },
         () => {
-          if (mounted) setModels([])
+          if (mounted) {
+            setModels([])
+            timer = setTimeout(read, 1500)
+          }
         }
       )
     }
@@ -1848,11 +1856,28 @@ function LocalAiSection({
   }, [])
 
   const model =
-    models?.find((m) => m.id === settings.localLlm.modelId) ??
     models?.find((m) => m.unavailableReason === 'downloading') ??
+    models?.find((m) => m.unavailableReason === 'insufficient-disk' || m.unavailableReason === 'download-failed') ??
+    models?.find((m) => m.id === settings.localLlm.modelId) ??
     models?.[0]
   const downloading = model?.unavailableReason === 'downloading'
+  const canRetry =
+    model?.unavailableReason === 'download-failed' ||
+    model?.unavailableReason === 'not-downloaded' ||
+    model?.unavailableReason === 'insufficient-disk' ||
+    model?.unavailableReason === 'insufficient-ram'
   const percent = Math.round((model?.downloadProgress ?? 0) * 100)
+  const retryFetch = (): void => {
+    if (retrying) return
+    setRetrying(true)
+    void window.toto
+      .localModelsEnsure()
+      .catch(() => {})
+      .finally(() => {
+        setRetrying(false)
+        void window.toto.localModelsList().then(setModels, () => {})
+      })
+  }
   // One wording for the blocked case, used by both the status strip and the card. It names the host that
   // has to be reachable and when Métis tries again. The old copy said the files were "missing or
   // incomplete" and told the user to reinstall Métis — an instruction the build gate guarantees cannot
@@ -1892,10 +1917,16 @@ function LocalAiSection({
             ? 'Checking the on-device model...'
             : model?.unavailableReason === 'insufficient-ram'
               ? `Unavailable: the on-device model needs at least ${model.minTotalRamGB} GB RAM.`
+              : model?.unavailableReason === 'insufficient-disk'
+                ? model.downloadError
+                  ? `Could not download the on-device model: ${model.downloadError}`
+                  : 'Unavailable: not enough free disk space for the on-device model. Free up space and tap Retry.'
               : model?.unavailableReason === 'downloading'
                 ? `Downloading the on-device model... ${percent}%`
                 : model?.unavailableReason === 'download-failed'
-                  ? downloadFailedText
+                  ? model.downloadError
+                    ? `Could not download the on-device model: ${model.downloadError}`
+                    : downloadFailedText
                   : model?.unavailableReason === 'not-downloaded'
                     ? notDownloadedText
                     : !model?.ready
@@ -1959,10 +1990,21 @@ function LocalAiSection({
               <p className="text-[11px] leading-snug text-[color:var(--cl-destructive)]">
                 {model.unavailableReason === 'insufficient-ram'
                   ? `This model needs at least ${model.minTotalRamGB} GB RAM.`
+                  : model.unavailableReason === 'insufficient-disk'
+                    ? model.downloadError
+                      ? `Could not download the on-device model: ${model.downloadError}`
+                      : 'Not enough free disk space for the on-device model. Free up space and tap Retry.'
                   : model.unavailableReason === 'download-failed'
-                    ? downloadFailedText
+                    ? model.downloadError
+                      ? `Could not download the on-device model: ${model.downloadError}`
+                      : downloadFailedText
                     : notDownloadedText}
               </p>
+            )}
+            {canRetry && (
+              <TextButton icon={RotateCcw} onClick={retryFetch} disabled={retrying}>
+                {retrying ? 'Retrying…' : 'Retry'}
+              </TextButton>
             )}
           </div>
         ) : (

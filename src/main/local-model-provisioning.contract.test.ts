@@ -36,6 +36,19 @@ describe('MQA-186 — the first-run weight fetch is gated, and the gate is not a
     expect(boot).not.toMatch(/shouldFetchWeights\(best\.id, getSettings\(\)\.localLlm\.enabled\)/)
     // ...and the call it guards is the one that costs the bytes.
     expect(boot).toMatch(/ensureLocalModel\(best\.id\)/)
+    // First-run exclusive tour must not defer the fetch until onboardingDone.
+    expect(boot).not.toMatch(/onboardingDone[\s\S]{0,80}ensureLocalModel/)
+    expect(boot).not.toMatch(/ensureLocalModel[\s\S]{0,80}onboardingDone/)
+    // RAM skip still invokes ensureLocalModel so the refusal is recorded, not silent idle.
+    expect(boot).toMatch(/else \{/)
+    expect(boot).toMatch(/void ensureLocalModel\(best\.id\)\.catch/)
+  })
+
+  it('Settings/onboarding can re-arm the fetch without toggling Local AI', () => {
+    expect(src).toMatch(/ipcMain\.handle\(IPC\.localModelsEnsure/)
+    expect(src).toMatch(/shouldFetchWeights\(current\)/)
+    expect(src).toMatch(/ensureLocalModel\(target\)/)
+    expect(src).not.toMatch(/if \(!shouldFetchWeights\(target\)\) return \{ ok: false \}/)
   })
 
   it('turning Local AI on still re-arms the fetch as a second chance after a failed boot download', () => {
