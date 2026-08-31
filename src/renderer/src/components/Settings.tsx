@@ -109,6 +109,7 @@ import {
   type ProviderId
 } from '@shared/providers'
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
+import { modeSkillLock } from '@shared/mode-skills'
 import { LANGUAGE_OPTIONS } from '@shared/lang-id'
 import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
@@ -4668,6 +4669,13 @@ function ModePromptEditor({
         )}
         <ManagedChip keys={settings.managedKeys} k="modePrompts" />
       </div>
+      {isBuiltin && (
+        <p className="m-0 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+          Operator skill v{modeSkillLock().skills[mode]?.version ?? 'unknown'} is locked to this Métis
+          build. Your prompt above still applies. The skill runs in the background and cannot be
+          edited, deleted, or overridden here.
+        </p>
+      )}
     </div>
   )
 }
@@ -5242,7 +5250,7 @@ const TABS: {
     label: 'Modes & Display',
     icon: Wand2,
     desc: 'How Métis looks, and what each mode says.',
-    keywords: ['appearance', 'transparency', 'opacity', 'glass', 'modes', 'language', 'custom instructions', 'prompt']
+    keywords: ['appearance', 'transparency', 'opacity', 'glass', 'modes', 'language', 'custom instructions', 'prompt', 'operator skill']
   },
   {
     id: 'ai',

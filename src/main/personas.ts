@@ -8,6 +8,7 @@ import {
   retargetForTypedAsk
 } from '@shared/prompts'
 import { ANSWER_FIRST_RAIL } from '@shared/answer-first'
+import { lockedSkillsAppendix } from './mode-skills'
 
 function profileBlock(p: Profile): string {
   const parts: string[] = []
@@ -130,5 +131,9 @@ export function buildSystem(
   // Answer-first is the typed/screen contract. Live suggest keeps its spoken format; recap/summary
   // and fact-check have their own skeletons and must not pick up "first sentence is the answer".
   const answerFirst = typedAsk ? ANSWER_FIRST_RAIL : ''
-  return lead + prefix + prompt + profileTail + ctx + rail + answerFirst + lang
+  // Locked operator skills run AFTER the visible (user or default) prompt. Builtin modes get that
+  // mode's shipped skill plus the humanizer. Custom modes get the humanizer only. Fact-check skips
+  // both so the VERDICT contract stays clean. User modePrompts cannot replace the skill body.
+  const locked = req.kind === 'factcheck' ? '' : lockedSkillsAppendix(mode)
+  return lead + prefix + prompt + locked + profileTail + ctx + rail + answerFirst + lang
 }
