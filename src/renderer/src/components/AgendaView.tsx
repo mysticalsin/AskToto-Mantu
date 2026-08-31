@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { Calendar, Video, RefreshCw, ExternalLink, Users } from 'lucide-react'
 import type { CalendarEvent, CalendarTodayResult } from '@shared/ipc'
 import { safeHref } from '@shared/safe-url'
-import { Spinner } from './ui'
+import { AgentStatus, InlineOrb } from './AgentStatus'
 
 function fmtTime(iso: string): string {
   if (!iso) return ''
@@ -115,7 +115,7 @@ export function AgendaView(): JSX.Element {
   if (loading) {
     body = (
       <div className="flex items-center gap-2 px-1 py-6 text-[12px] text-[color:var(--color-ink-2)]">
-        <Spinner size={13} /> Loading agenda…
+        <AgentStatus kind="searching" size="inline" caption />
       </div>
     )
   } else if (res?.ok && res.events && res.events.length > 0) {
@@ -147,7 +147,7 @@ export function AgendaView(): JSX.Element {
           onClick={() => void connect()}
           className="no-drag focus-ring inline-flex items-center gap-2 rounded-xl bg-[var(--color-accent)] px-4 py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50"
         >
-          {connecting ? <Spinner size={13} /> : <Calendar size={14} />} Connect Outlook calendar
+          {connecting ? <InlineOrb kind="connecting" /> : <Calendar size={14} />} Connect Outlook calendar
         </button>
       </div>
     )
@@ -166,7 +166,7 @@ export function AgendaView(): JSX.Element {
             onClick={() => void connect()}
             className="no-drag focus-ring inline-flex items-center gap-2 rounded-xl bg-[var(--color-accent)] px-4 py-2 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50"
           >
-            {connecting ? <Spinner size={13} /> : <Calendar size={14} />} Sign in
+            {connecting ? <InlineOrb kind="connecting" /> : <Calendar size={14} />} Sign in
           </button>
         ) : (
           <button

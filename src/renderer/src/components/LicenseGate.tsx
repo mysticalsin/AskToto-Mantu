@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { AlertCircle, Check, Loader2, RefreshCw } from 'lucide-react'
+import { AlertCircle, Check, RefreshCw } from 'lucide-react'
+import { InlineOrb } from './AgentStatus'
 import { MantuLogo } from './MantuLogo'
 import type { PublicSettings } from '@shared/ipc'
 
@@ -168,11 +169,11 @@ export function LicenseGate({
           disabled={!serverUrl.trim() || !licenseKey.trim() || activating}
           className={primaryBtnStyle}
         >
-          {activating ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+          {activating ? <InlineOrb kind="connecting" /> : <Check size={12} />}
           Activate
         </button>
         <button type="button" onClick={() => void retry()} disabled={retrying} className={secondaryBtnStyle}>
-          {retrying ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+          {retrying ? <InlineOrb kind="loading" /> : <RefreshCw size={12} />}
           Retry
         </button>
       </div>

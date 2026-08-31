@@ -40,8 +40,20 @@ describe('Answer provider attribution', () => {
       <Answer text="The previous answer, still on screen." streaming={true} error={null} provider="dust" />
     )
 
-    expect(html).toContain('Thinking…')
+    expect(html).toContain('Thinking')
+    expect(html).toContain('data-orb-state="working"')
     expect(html).not.toContain('Asking')
+  })
+
+  it('uses Thinking + solving on the first-token wait, not a pulse or skeleton', () => {
+    const html = renderToStaticMarkup(<Answer text="" streaming={true} error={null} />)
+    expect(html).toContain('Thinking')
+    expect(html).toContain('data-agent-status="thinking"')
+    expect(html).toContain('data-orb-state="solving"')
+    expect(html).toContain('data-orb-size="64"')
+    expect(html).not.toContain('Still working')
+    expect(html).not.toContain('shimmer')
+    expect(html).not.toContain('animate-pulse')
   })
 
   it('stays anonymous until streamMeta names a provider (MQA-053)', () => {
