@@ -1,6 +1,6 @@
 /**
  * Sentient 52 glass sphere for the Bar rest.
- * Volume: Jarvis ray-sphere + constellation. Accent: Mantu #7F00DA.
+ * Volume: Jarvis ray-sphere + quiet constellation. Idle: #4CA8E8.
  * Bundled WebGL. No CDN. Never flatten. Same sphere when minimized.
  */
 
@@ -9,7 +9,7 @@ export const BAR_PILL_WIDTH_PX = BAR_PILL_SIZE_PX
 export const BAR_PILL_HEIGHT_PX = BAR_PILL_SIZE_PX
 
 /** Same NDC scale on X and Y so the cloud stays a sphere, not a lozenge. */
-export const ORB_NDC_SCALE = 0.78
+export const ORB_NDC_SCALE = 0.84
 /** Perspective divide on Z. Same k on X and Y. Never a flattened disc. */
 export const ORB_PERSPECTIVE_K = 0.42
 /** Ray-sphere radius in the glass body (fills the 52 box, never a pill). */
@@ -22,16 +22,26 @@ export type OrbMood = (typeof ORB_MOODS)[number]
 export type BarPillOrbMood = OrbMood
 
 export const ORB_COLOR: Record<OrbMood, number> = {
-  idle: 0x7f00da,
-  thinking: 0x9a2bf0,
-  factcheck: 0x4ca8e8,
-  connecting: 0x2a0a4a
+  idle: 0x4ca8e8,
+  thinking: 0x6ec4ff,
+  factcheck: 0x5ab8f0,
+  connecting: 0x2a6a9a
 }
 
-export const JARVIS_ORB_POINTS = 2000
-export const JARVIS_ELECTRON_COUNT = 8
-/** Fact-check mood only. Rest is Mantu purple. */
-export const JARVIS_ORB_COLOR = ORB_COLOR.factcheck
+/** Jarvis orb.ts speaking lerp. Blue family only. */
+export const JARVIS_SPEAKING_COLOR = 0x5ab8f0
+
+/** Sparse shell. 2000 on a 52px sphere is a snow globe. */
+export const JARVIS_ORB_POINTS = 96
+/** Jarvis thinking spawn cap. Idle draws none. */
+export const JARVIS_ELECTRON_MAX = 3
+export const JARVIS_ELECTRON_COUNT = JARVIS_ELECTRON_MAX
+/** Jarvis idle / rest. */
+export const JARVIS_ORB_COLOR = ORB_COLOR.idle
+
+export function electronCountForMood(mood: OrbMood): number {
+  return mood === 'thinking' ? JARVIS_ELECTRON_MAX : 0
+}
 
 export function isFixedCircle(width: number, height: number): boolean {
   return width === height && width === BAR_PILL_SIZE_PX
@@ -84,11 +94,7 @@ export function jarvisRgb(color: number): { r: number; g: number; b: number } {
 }
 
 export function moodTint(mood: OrbMood): { r: number; g: number; b: number } {
-  const c = jarvisRgb(ORB_COLOR[mood])
-  if (mood === 'factcheck') return { r: c.r * 0.72, g: c.g * 0.82, b: Math.min(1, c.b * 1.05) }
-  // Lift indigo so connecting is still a glass sphere, not a void.
-  if (mood === 'connecting') return { r: 0.24, g: 0.1, b: 0.46 }
-  return c
+  return jarvisRgb(ORB_COLOR[mood])
 }
 
 /** Fibonacci sphere. Deterministic so reduced-motion still frames match across mounts. */
@@ -108,7 +114,7 @@ export function fibonacciSphere(count: number): Float32Array {
 
 /**
  * O(n) constellation chords (ring + two skips). Never an n² neighbor scan —
- * that hitch on 2000 points fails the Performance hat.
+ * that hitch on a dense cloud fails the Performance hat.
  */
 export function connectionIndices(count: number, chords: readonly number[] = [1, 11, 29]): Uint16Array {
   const pairs = new Uint16Array(count * chords.length * 2)
@@ -140,12 +146,12 @@ type MoodParams = { breathAmp: number; speed: number; point: number; line: numbe
 
 function moodParams(mood: OrbMood, listening = false): MoodParams {
   let p: MoodParams
-  if (mood === 'thinking') p = { breathAmp: 0.028, speed: 1.32, point: 0.64, line: 0.24, density: 1.08, drift: 0.022, core: 0.78, electron: 0.7 }
-  else if (mood === 'factcheck') p = { breathAmp: 0.024, speed: 1.05, point: 0.22, line: 0.1, density: 0.92, drift: 0.018, core: 0.9, electron: 0.35 }
-  else if (mood === 'connecting') p = { breathAmp: 0.014, speed: 0.46, point: 0.36, line: 0.1, density: 0.86, drift: 0.008, core: 0.72, electron: 0.28 }
-  else p = { breathAmp: 0.022, speed: 0.8, point: 0.48, line: 0.16, density: 1, drift: 0.016, core: 0.82, electron: 0.55 }
+  if (mood === 'thinking') p = { breathAmp: 0.024, speed: 0.95, point: 0.28, line: 0.12, density: 0.85, drift: 0.014, core: 0.7, electron: 0.55 }
+  else if (mood === 'factcheck') p = { breathAmp: 0.02, speed: 0.7, point: 0.2, line: 0.08, density: 0.75, drift: 0.01, core: 0.72, electron: 0 }
+  else if (mood === 'connecting') p = { breathAmp: 0.012, speed: 0.4, point: 0.16, line: 0.06, density: 0.7, drift: 0.006, core: 0.64, electron: 0 }
+  else p = { breathAmp: 0.018, speed: 0.55, point: 0.18, line: 0.07, density: 0.72, drift: 0.008, core: 0.68, electron: 0 }
   if (listening && mood !== 'connecting') {
-    p = { ...p, breathAmp: Math.max(p.breathAmp, 0.03), density: p.density * 1.08, point: Math.min(1, p.point * 1.12) }
+    p = { ...p, breathAmp: Math.max(p.breathAmp, 0.022), density: p.density * 1.04, point: Math.min(1, p.point * 1.06) }
   }
   return p
 }
@@ -193,8 +199,8 @@ void main() {
   float core = exp(-dot(p.xy, p.xy) * 3.2) * uBreath;
   vec3 mood = uColor;
   vec3 col = mix(mood * 0.16, mood, wrap);
-  col += mood * core * 0.92;
-  col += mood * caustic * 0.20 * (0.45 + core);
+  col += mood * core * 0.70;
+  col += mood * caustic * 0.10 * (0.40 + core);
   col += vec3(1.0) * spec * 0.92;
   col += mix(mood, vec3(0.93, 0.88, 1.0), 0.52) * fresnel * 0.58;
   float alpha = uAlpha * (0.80 + 0.16 * core + 0.12 * fresnel);
@@ -604,19 +610,22 @@ function mountWebGL(gl: WebGLRenderingContext, canvas: HTMLCanvasElement, opts: 
     gl.uniform1f(pLoc.uAlpha, params.point)
     gl.drawArrays(gl.POINTS, 0, JARVIS_ORB_POINTS)
 
-    gl.useProgram(electronProg)
-    gl.bindBuffer(gl.ARRAY_BUFFER, electronBuf)
-    gl.enableVertexAttribArray(eLoc.aOrbit)
-    gl.vertexAttribPointer(eLoc.aOrbit, 4, gl.FLOAT, false, 0, 0)
-    gl.uniform1f(eLoc.uTime, time)
-    gl.uniform1f(eLoc.uBreath, breath)
-    gl.uniform1f(eLoc.uLeanX, leanX)
-    gl.uniform1f(eLoc.uLeanY, leanY)
-    gl.uniform1f(eLoc.uPointSize, electronPx * params.density)
-    gl.uniform1f(eLoc.uScale, ndc)
-    gl.uniform3f(eLoc.uColor, tint.r, tint.g, tint.b)
-    gl.uniform1f(eLoc.uAlpha, params.electron)
-    gl.drawArrays(gl.POINTS, 0, JARVIS_ELECTRON_COUNT)
+    const electrons = electronCountForMood(mood)
+    if (electrons > 0) {
+      gl.useProgram(electronProg)
+      gl.bindBuffer(gl.ARRAY_BUFFER, electronBuf)
+      gl.enableVertexAttribArray(eLoc.aOrbit)
+      gl.vertexAttribPointer(eLoc.aOrbit, 4, gl.FLOAT, false, 0, 0)
+      gl.uniform1f(eLoc.uTime, time)
+      gl.uniform1f(eLoc.uBreath, breath)
+      gl.uniform1f(eLoc.uLeanX, leanX)
+      gl.uniform1f(eLoc.uLeanY, leanY)
+      gl.uniform1f(eLoc.uPointSize, electronPx * params.density)
+      gl.uniform1f(eLoc.uScale, ndc)
+      gl.uniform3f(eLoc.uColor, tint.r, tint.g, tint.b)
+      gl.uniform1f(eLoc.uAlpha, params.electron)
+      gl.drawArrays(gl.POINTS, 0, electrons)
+    }
   }
 
   const loopWanted = (): boolean =>
