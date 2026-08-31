@@ -29,6 +29,7 @@ import {
   resolveModel,
   type ProviderId
 } from '@shared/providers'
+import { DUST_EMPTY_AGENTS_ERROR } from '@shared/dust-validate'
 import { mainLog } from './logger'
 import { caheEditionPolicy, isCaheEdition } from './cahe-edition'
 import {
@@ -925,15 +926,10 @@ export async function testApiKey(provider: ProviderId, key: string): Promise<Tes
       if (!settings.dustWorkspaceId) {
         return { ok: false, error: 'Add your Dust workspace ID in the Dust setup below first.' }
       }
-      const api = new DustAPI(
-        { url: settings.dustBaseUrl || def.baseUrl },
-        { workspaceId: settings.dustWorkspaceId, apiKey: trimmed },
-        console
-      )
-      // No `view` needed here — this call only checks r.isErr() to validate the credentials, it never
-      // reads r.value, so an empty/restricted agent list (the bug fixed in listDustAgents below) is harmless.
-      const r = await api.getAgentConfigurations({})
-      if (r.isErr()) return { ok: false, error: r.error.message }
+      // Same live list as listDustAgents — view:'list' plus a non-empty active set. A credential
+      // ping that ignored `view` used to succeed while the picker (and later asks) saw no agents.
+      const listed = await fetchDustAgentList(trimmed, settings)
+      if (!listed.ok) return { ok: false, error: listed.error }
     } else if (def.kind === 'anthropic') {
       const client = new Anthropic({ apiKey: trimmed })
       await client.messages.create({
@@ -987,16 +983,14 @@ export function encryptionAvailable(): boolean {
   return true
 }
 
-/** List the user's Dust agents (for the dummy-proof agent picker). Uses the saved Dust key. */
-export async function listDustAgents(): Promise<DustAgentsResponse> {
-  const settings = getSettings()
-  const key = getApiKey('dust')
-  if (!key) return { ok: false, error: 'Paste and Save your Dust API key first.' }
+/** Live Dust agent list for a specific key (testApiKey may pass an unsaved paste). */
+async function fetchDustAgentList(apiKey: string, settings: Settings): Promise<DustAgentsResponse> {
+  if (!apiKey) return { ok: false, error: 'Paste and Save your Dust API key first.' }
   if (!settings.dustWorkspaceId) return { ok: false, error: 'Add your Dust workspace ID first.' }
   try {
     const api = new DustAPI(
       { url: settings.dustBaseUrl || PROVIDERS.dust.baseUrl },
-      { workspaceId: settings.dustWorkspaceId, apiKey: key },
+      { workspaceId: settings.dustWorkspaceId, apiKey },
       console
     )
     // `view: 'list'` is REQUIRED — without it @dust-tt/client 1.2.6 only appends `view` to the querystring
@@ -1021,6 +1015,7 @@ export async function listDustAgents(): Promise<DustAgentsResponse> {
         modelId: a.model?.modelId
       }))
       .sort((x, y) => x.name.localeCompare(y.name))
+    if (agents.length === 0) return { ok: false, error: DUST_EMPTY_AGENTS_ERROR }
     // Cache each agent's vision capability by sId so the ask path can route a Dust screen question
     // natively (upload the screenshot) only when the SELECTED agent's model can actually read it — no
     // extra Dust round-trip at ask time (see dustSelectedAgentVision).
@@ -1029,6 +1024,11 @@ export async function listDustAgents(): Promise<DustAgentsResponse> {
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
+}
+
+/** List the user's Dust agents (for the dummy-proof agent picker). Uses the saved Dust key. */
+export async function listDustAgents(): Promise<DustAgentsResponse> {
+  return fetchDustAgentList(getApiKey('dust'), getSettings())
 }
 
 // Vision capability per Dust agent sId, populated on every agent list (listDustAgents above).

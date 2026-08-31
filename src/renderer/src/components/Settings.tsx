@@ -124,6 +124,14 @@ import { AgendaView } from './AgendaView'
 import { usePermissions } from '../state'
 import { displayAccelerator, isWindows } from '../lib/keys'
 import { decideDustLiveCheck } from '../lib/dust-live-check'
+import {
+  DUST_EMPTY_AGENTS_ERROR,
+  DUST_WORKSPACE_MISSING_SETUP_ERROR,
+  decideDustInstantValidate,
+  formatDustConnectedMessage,
+  proveDustConnection,
+  type DustInstantValidateResult
+} from '@shared/dust-validate'
 
 // Name the OS credential facility the way the user's own OS names it — "Keychain" is macOS-only, and
 // telling a Windows user to "restore Keychain access" names something their machine does not have. Two
@@ -3440,13 +3448,38 @@ function DustSetup({
   const spotlightAgent = settings.providerModelsSpotlightRef['dust'] ?? ''
   const keySaved = !!settings.hasKeys['dust']
   const hasWs = !!settings.dustWorkspaceId.trim()
-  const connected = keySaved && hasWs && !!agent
+  // Credentials on disk are not a live proof — green Connected / Use Dust wait for a non-empty agent list.
+  const listProved = !!agents && agents.length > 0 && !err
+  const connected = keySaved && hasWs && !!agent && listProved
   const selectedAgentName = agents?.find((a) => a.sId === agent)?.name
   const selectedAgent = agents?.find((a) => a.sId === agent)
   // Loaded the workspace's agents but the saved base agent isn't among them — the root cause of the
   // "Failed to retrieve agent message" ask failure. Warn + guide a one-click re-pick right at the picker.
   const storedAgentMissing = dustStoredAgentMissing(agent, agents)
   const selectedAgentRunsSonnet = !!selectedAgent && selectedAgent.modelProviderId === 'anthropic' && /sonnet/i.test(selectedAgent.modelId || '')
+
+  const applyDustValidate = (verdict: DustInstantValidateResult): void => {
+    if (verdict.ok) {
+      setCli({ busy: false, ok: true, msg: verdict.message })
+      setErr(null)
+      return
+    }
+    setCli({ busy: false, ok: false, msg: verdict.message })
+    setErr(verdict.message)
+  }
+
+  // Live-ping after OAuth finish / CLI import (key already persisted in main). testApiKey + listDustAgents
+  // (view:'list'); empty/restricted/401/dead session is not Connected. Never auto-sends a chat.
+  const proveAfterConnect = async (workspaceId: string, selectedAgentId = agent): Promise<DustInstantValidateResult> => {
+    const verdict = await proveDustConnection({
+      workspaceId,
+      selectedAgentId,
+      testApiKey: () => window.toto.testApiKey('dust', ''),
+      listAgents: () => loadAgents()
+    })
+    applyDustValidate(verdict)
+    return verdict
+  }
 
   // Import an existing `dust login` CLI session (token + workspace + region) from the keychain — the
   // migration path for a user who already has the CLI installed. The primary path is startDustOAuth below,
@@ -3497,8 +3530,8 @@ function DustSetup({
     } else {
       await patch({ provider: 'dust' })
     }
-    setCli({ busy: false, ok: true, msg: `Connected. Workspace ${r.workspaceId}. Loading agents…` })
-    await loadAgents()
+    setCli({ busy: false, ok: false, msg: 'Checking Dust connection…' })
+    await proveAfterConnect(r.workspaceId || settings.dustWorkspaceId, wsChanged ? DUST_BASE_AGENT_ID : agent)
   }
 
   const oauthIdle = { phase: 'idle' as const, userCode: null, verificationUri: null, intervalSec: 5, expiresAt: 0, workspaces: null, error: null }
@@ -3568,7 +3601,10 @@ function DustSetup({
     }
     setOauth(oauthIdle)
     await patch({ provider: 'dust' })
-    await loadAgents()
+    const verdict = await proveAfterConnect(sId)
+    if (!verdict.ok) {
+      setOauth({ ...oauthIdle, phase: 'error', error: verdict.message })
+    }
   }
 
   // Save a Dust API key (manual alternative to the CLI). Dust keeps its own key, independent of the
@@ -3576,14 +3612,31 @@ function DustSetup({
   const saveDustKey = async (): Promise<void> => {
     const k = dustKey.trim()
     if (!k) return
+    const workspaceId = settings.dustWorkspaceId.trim()
     setKeySaving(true)
     setErr(null)
     setRecoveryMessage(null)
     try {
+      if (!workspaceId) {
+        applyDustValidate({
+          ok: false,
+          reason: 'workspace-missing',
+          message: DUST_WORKSPACE_MISSING_SETUP_ERROR
+        })
+        return
+      }
+      // Prove the pasted key before persisting it — a bad key must fail in this card, not look Saved.
+      const test = await window.toto.testApiKey('dust', k)
+      if (!test.ok) {
+        applyDustValidate(decideDustInstantValidate({ workspaceId, test, list: test }, agent))
+        return
+      }
       await saveKey('dust', k)
       await patch({ provider: 'dust' }) // activate Dust so this key is used + the add-key CTA hides
       setDustKey('')
       setRecoveryAvailable(false)
+      const list = await loadAgents()
+      applyDustValidate(decideDustInstantValidate({ workspaceId, test, list }, agent))
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Could not save the Dust API key.'
       setErr(message)
@@ -3591,9 +3644,6 @@ function DustSetup({
     } finally {
       setKeySaving(false)
     }
-    // Validate immediately: load the agent list so a bad key/workspace surfaces its error here and now
-    // instead of a silent "Saved" green check that only fails later when the user reaches Step 4.
-    if (settings.dustWorkspaceId.trim()) void loadAgents()
   }
 
   const recoverProfileAndRetryDustKey = async (): Promise<void> => {
@@ -3683,17 +3733,19 @@ function DustSetup({
     if (Object.keys(next).length) patch(next)
   }
 
-  const loadAgents = async (): Promise<void> => {
+  const loadAgents = async (): Promise<{ ok: boolean; agents?: DustAgent[]; error?: string }> => {
     setLoading(true)
     setErr(null)
     const r = await window.toto.dustListAgents()
     setLoading(false)
-    if (r.ok && r.agents) {
+    if (r.ok && r.agents && r.agents.length > 0) {
       setAgents(r.agents)
-    } else {
-      setAgents(null)
-      setErr(r.error || 'Could not load your agents. Check the key + workspace, then retry.')
+      return r
     }
+    const error = r.error || (r.ok ? DUST_EMPTY_AGENTS_ERROR : 'Could not load your agents. Check the key + workspace, then retry.')
+    setAgents(r.ok && r.agents ? r.agents : null)
+    setErr(error)
+    return { ok: false, error, agents: r.agents }
   }
 
   // When Dust was already connected in a prior session (key + workspace saved), load the agent list on
@@ -3729,24 +3781,22 @@ function DustSetup({
       const decision = decideDustLiveCheck(await window.toto.dustProbeSession())
       if (decision === 'connected') return
       if (decision === 'needs-access') {
-        setCli({ busy: false, ok: false, msg: `Allow Métis to read your Dust CLI session in ${DUST_CREDENTIAL_STORE}, then Reconnect.` })
+        const msg = `Allow Métis to read your Dust CLI session in ${DUST_CREDENTIAL_STORE}, then Reconnect.`
+        setCli({ busy: false, ok: false, msg })
+        setErr(msg)
         return
       }
       if (decision === 'finish-workspace-pick') {
-        setCli({
-          busy: false,
-          ok: false,
-          msg: 'Almost there. Finish picking your workspace in the terminal from `dust login` (arrow keys, then Enter), then Reconnect.'
-        })
+        const msg = 'Almost there. Finish picking your workspace in the terminal from `dust login` (arrow keys, then Enter), then Reconnect.'
+        setCli({ busy: false, ok: false, msg })
+        setErr(msg)
         return
       }
       // decision === 'run-setup' — the saved CLI session is dead. Nudge toward a fix rather than silently
       // relaunching anything: there is no more in-app installer/terminal step for the CLI path to reopen.
-      setCli({
-        busy: false,
-        ok: false,
-        msg: 'Your Dust CLI session ended. Run `dust login` again and Reconnect — or use the automatic sign-in above.'
-      })
+      const msg = 'Your Dust CLI session ended. Run `dust login` again and Reconnect — or use the automatic sign-in above.'
+      setCli({ busy: false, ok: false, msg })
+      setErr(msg)
     })()
     // Probe once on mount for the already-connected case only; connectCli / disconnect handle the rest.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3790,10 +3840,44 @@ function DustSetup({
             click opens the browser for consent, then Métis's own workspace picker below finishes it. */}
         <div className="flex flex-col gap-2 rounded-[12px] border border-[var(--cl-primary)]/40 bg-[var(--cl-primary-soft)]/50 p-3.5">
           {keySaved && hasWs ? (
-            // Already connected → Reconnect (fresh sign-in) + Disconnect (full reset).
+            // Credentials exist → Reconnect / Disconnect. Green Connected only after a live agent list.
             <div className="flex items-center justify-between gap-2">
-              <span className="flex items-center gap-1.5 text-[12px] font-medium text-[color:var(--cl-success)]">
-                <CircleCheck size={14} /> Dust is connected.
+              <span
+                className={[
+                  'flex items-center gap-1.5 text-[12px] font-medium',
+                  err || (agents && agents.length === 0)
+                    ? 'text-[color:var(--cl-destructive)]'
+                    : listProved
+                      ? 'text-[color:var(--cl-success)]'
+                      : 'text-[color:var(--cl-muted-foreground)]'
+                ].join(' ')}
+              >
+                {err || (agents && agents.length === 0) ? (
+                  <>
+                    <AlertCircle size={14} />
+                    {err || DUST_EMPTY_AGENTS_ERROR}
+                  </>
+                ) : listProved && agents ? (
+                  <>
+                    <CircleCheck size={14} />
+                    {formatDustConnectedMessage({
+                      agentCount: agents.length,
+                      selectedName: selectedAgentName,
+                      selectedId: agent,
+                      workspaceId: settings.dustWorkspaceId
+                    })}
+                  </>
+                ) : loading ? (
+                  <>
+                    <InlineOrb kind="connecting" />
+                    Checking Dust connection…
+                  </>
+                ) : (
+                  <>
+                    <Info size={14} />
+                    Workspace saved. Load agents to verify the connection.
+                  </>
+                )}
               </span>
               <div className="flex items-center gap-2">
                 {locked && <span className={managedChipCls}>Managed by your organization</span>}
@@ -4070,7 +4154,13 @@ function DustSetup({
             </div>
             <button
               type="button"
-              onClick={loadAgents}
+              onClick={() =>
+                void (async () => {
+                  const list = await loadAgents()
+                  const test = await window.toto.testApiKey('dust', '')
+                  applyDustValidate(decideDustInstantValidate({ workspaceId: settings.dustWorkspaceId, test, list }, agent))
+                })()
+              }
               disabled={loading || !keySaved || !hasWs}
               title={!keySaved || !hasWs ? 'Save your key + workspace first' : 'Load your Dust agents'}
               className="no-drag cl-focus flex items-center gap-1 rounded-[8px] border border-[var(--cl-input)] bg-white/[0.04] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-40"
@@ -4162,7 +4252,7 @@ function DustSetup({
         <div
           className={[
             'cl-card flex items-center justify-between gap-2 px-3 py-2.5 text-[12px]',
-            storedAgentMissing
+            storedAgentMissing || (err && keySaved && hasWs)
               ? 'text-[color:var(--cl-destructive)]'
               : connected
                 ? 'text-[color:var(--cl-success)]'
@@ -4170,7 +4260,7 @@ function DustSetup({
           ].join(' ')}
         >
           <span className="flex items-center gap-2">
-            {storedAgentMissing ? (
+            {storedAgentMissing || (err && keySaved && hasWs) ? (
               <AlertCircle size={15} />
             ) : connected ? (
               <CircleCheck size={15} />
@@ -4179,11 +4269,15 @@ function DustSetup({
             )}
             {storedAgentMissing
               ? "The managed base agent isn't available in this workspace/region. Answers will fail. Check the pasted workspace and US/EU region."
-              : connected
-                ? `Workspace ${settings.dustWorkspaceId}. Base: ${selectedAgentName || agent}${
-                    thinkAgent ? `, Thinking: ${agents?.find((a) => a.sId === thinkAgent)?.name || thinkAgent}` : ' (thinking → same as base)'
-                  }.`
-                : 'Connect from the Dust CLI above, or finish steps 1–4.'}
+              : err && keySaved && hasWs
+                ? err
+                : connected
+                  ? `Workspace ${settings.dustWorkspaceId}. Base: ${selectedAgentName || agent}${
+                      thinkAgent ? `, Thinking: ${agents?.find((a) => a.sId === thinkAgent)?.name || thinkAgent}` : ' (thinking → same as base)'
+                    }.`
+                  : loading && keySaved && hasWs
+                    ? 'Checking Dust connection…'
+                    : 'Connect from the Dust CLI above, or finish steps 1–4.'}
           </span>
           {storedAgentMissing ? null : active ? (
             <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]">
