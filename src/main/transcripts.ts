@@ -19,6 +19,7 @@ import { encryptSecret, decryptSecret, useFileBackend } from './secrets'
 import { readTrustedAdminManaged, lockPathToCurrentUserWin32 } from './win-security'
 import { mainLog, auditLog } from './logger'
 import { devEnv, isPackagedBuild } from './dev-env'
+import { refuseIfDemoTagged } from '@shared/demo-guard'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -681,6 +682,8 @@ export function formatTranscript(lines: TranscriptLine[]): string {
 
 /** Save any single Q&A / answer as a Dust-readable markdown note. Returns the file path. */
 export async function saveNote(settings: Settings, n: SaveNote): Promise<string> {
+  // MQA-278 — refuses Act 2 onboarding-demo-tagged data before touching disk. See @shared/demo-guard.
+  refuseIfDemoTagged('saveNote', n.title, n.mode, n.question)
   const folder = ensureMeetingsFolder(settings)
   const started = Date.now()
   const title = cleanTitle(n.title || n.question || 'Note') || 'Note'
@@ -737,6 +740,8 @@ export function meetingDurationMin(m: { startedAt: number; lines: { t: number }[
 
 /** Write a meeting as Dust-readable markdown + frontmatter. Returns the file path. */
 export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<string> {
+  // MQA-278 — refuses Act 2 onboarding-demo-tagged data before touching disk. See @shared/demo-guard.
+  refuseIfDemoTagged('saveMeeting', m.title, m.mode)
   const folder = ensureMeetingsFolder(settings)
 
   // Guard against non-finite/out-of-range values (e.g. Infinity), not just falsy ones: Date's valid
@@ -1116,7 +1121,17 @@ export function parseRecapMarkdown(markdown: string): RecapExport {
   // unknown headings keep the strict whole-line key so a legitimate colon in prose isn't mis-split.
   const KNOWN = new Set([
     'title', 'tags', 'overview', 'topics', 'key q&a', 'key qa',
-    'decisions', 'action items', 'open questions', 'notable quotes'
+    'decisions', 'action items', 'next steps', 'follow-ups', 'follow ups',
+    'open questions', 'notable quotes', 'recap',
+    'outcome', 'key numbers', 'deal snapshot', 'buying signals', 'objections',
+    'what the seller must know', 'stakeholders', 'candidate', 'background',
+    'motivations', 'projects', 'compensation and contract', 'availability',
+    'ratings', 'strengths and concerns', 'role', 'questions and answers',
+    'examples given', 'next rounds', 'positions', 'interests', 'concessions',
+    'agreed terms', 'still open', 'what landed', 'audience questions',
+    'confusion or pushback', 'follow-ups promised', 'reported problem',
+    'steps tried', 'resolution', 'how the call went', 'qualifying facts',
+    'commitment'
   ])
   const sections: Record<string, string> = {}
   for (const part of md.split(/^##\s+/m)) {
@@ -1140,7 +1155,7 @@ export function parseRecapMarkdown(markdown: string): RecapExport {
     (text || '')
       .split('\n')
       .map((l) => l.replace(/^\s*[-*]\s+(\[[ xX]\]\s+)?/, '').trim()) // strip bullet + optional [ ]/[x] checkbox
-      .filter((l) => l.length > 0)
+      .filter((l) => l.length > 0 && !/^none\.?$/i.test(l))
 
   // Best-effort trailing "by <phrase>" clause on the OWNER-STRIPPED text (e.g. "Send the deck by Friday"
   // → dueDateText "Friday"). Never parsed into a Date — RECAP_PROMPT only asks the model for "an owner
@@ -1150,7 +1165,18 @@ export function parseRecapMarkdown(markdown: string): RecapExport {
     return by ? { text: by[1].trim(), dueDateText: by[2].trim() } : { text, dueDateText: null }
   }
 
-  const actionItems = bullets(sections['action items']).map((raw) => {
+  // Wave 1D / QA: SUMMARY_PROMPT uses "## Next steps" (and historically "**Follow-ups**"); RECAP_PROMPT
+  // uses "## Action items". Prefer the first non-empty body so local summaries feed Book-next-steps,
+  // wiki publish, and RecapExport the same way cloud recaps do.
+  const actionBody =
+    sections['action items'] ||
+    sections['next steps'] ||
+    sections['follow-ups'] ||
+    sections['follow ups'] ||
+    sections['follow-ups promised'] ||
+    sections['commitment'] ||
+    ''
+  const actionItems = bullets(actionBody).map((raw) => {
     // "Do the thing (Alice)". Non-greedy text + a paren-free owner anchored to the end, so a stray inner
     // paren (e.g. "(Alice (boss))") degrades gracefully to owner:null rather than a wrong split.
     const paren = raw.match(/^(.*?\S)\s*\(([^()]+)\)\s*$/)
@@ -1187,7 +1213,8 @@ export function parseRecapMarkdown(markdown: string): RecapExport {
   return {
     title24,
     tags,
-    overview: sections['overview'] || '',
+    // SUMMARY_PROMPT's first section used to be "**Recap**" / "## Recap"; RECAP uses "## Overview".
+    overview: sections['overview'] || sections['recap'] || '',
     topics: bullets(sections['topics']),
     keyQA: bullets(sections['key q&a'] || sections['key qa']),
     decisions: bullets(sections['decisions']),

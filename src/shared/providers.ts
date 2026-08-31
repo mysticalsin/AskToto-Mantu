@@ -403,9 +403,10 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   custom: {
     id: 'custom',
     label: 'Custom · OpenAI-compatible',
-    blurb: 'Point at any OpenAI-compatible endpoint you already run.',
+    blurb: 'Point at any OpenAI-compatible endpoint you already run — add more LLMs via API.',
     kind: 'openai',
-    tier: 'more',
+    // Featured alongside Cloudflare so adding another API endpoint is one click, not buried in "more".
+    tier: 'featured',
     baseUrl: '',
     models: [],
     defaultModel: '',

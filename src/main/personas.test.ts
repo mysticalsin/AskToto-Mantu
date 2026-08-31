@@ -50,18 +50,21 @@ describe('buildSystem — grounding & trust', () => {
   it('summary / recap use their dedicated prompts and skip the grounding rail', () => {
     const summary = buildSystem(req('summary'), 'general', EMPTY_PROFILE, {}, [])
     expect(summary).toContain('Summarize the conversation transcript')
-    expect(buildSystem(req('recap'), 'general', EMPTY_PROFILE, {}, [])).toContain('detailed post-meeting document')
+    const recap = buildSystem(req('recap'), 'general', EMPTY_PROFILE, {}, [])
+    expect(recap).toContain('You are Métis producing a General recap')
+    expect(recap).toContain('## Overview:')
     expect(summary).not.toContain('GROUNDING & HONESTY')
   })
 
-  it('recap is mode-aware: the active conversation mode appends its FOCUS block, general stays plain', () => {
+  it('recap uses the chosen role layout, not one skeleton plus MODE FOCUS', () => {
     const salesRecap = buildSystem(req('recap'), 'sales', EMPTY_PROFILE, {}, [])
-    expect(salesRecap).toContain('detailed post-meeting document') // section skeleton intact
-    expect(salesRecap).toContain('MODE FOCUS (Sales)')
+    expect(salesRecap).toContain('What the seller must know')
     expect(salesRecap).toMatch(/buying signals/i)
+    expect(salesRecap).not.toContain('MODE FOCUS')
 
     const generalRecap = buildSystem(req('recap'), 'general', EMPTY_PROFILE, {}, [])
     expect(generalRecap).not.toContain('MODE FOCUS')
+    expect(generalRecap).toContain('## Overview:')
 
     const customRecap = buildSystem(req('recap'), 'my-custom-mode', EMPTY_PROFILE, {}, [])
     expect(customRecap).not.toContain('MODE FOCUS')

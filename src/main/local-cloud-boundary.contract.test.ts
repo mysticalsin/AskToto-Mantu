@@ -50,12 +50,16 @@ describe('local processing privacy boundary', () => {
   // model, and the fastest answer wins. The zero delay is keyed on the BACKUP being local — never on the
   // primary's identity — so it holds for every provider rather than being special-cased to one.
   // Quality is safe because HedgeRace declares the winner on FIRST TOKEN, not on start order.
+  // Suggest uses a shorter paid-backup delay (HEDGE_DELAY_SUGGEST_MS) so live turns still fit the budget.
   it('races the on-device model from t=0 against ANY api primary, not just one provider', () => {
     const at = source.indexOf('const hedgeDelayMs')
     expect(at).toBeGreaterThan(-1)
-    const decl = source.slice(at, at + 160)
+    const decl = source.slice(at, at + 280)
     // Keyed on the BACKUP, so no provider name appears in the condition.
-    expect(decl).toMatch(/pickFailover\(\[primary\]\) === 'local' \? 0 : HEDGE_DELAY_MS/)
+    expect(decl).toMatch(/pickFailover\(\[primary\]\) === 'local'/)
+    expect(decl).toMatch(/\? 0/)
+    expect(decl).toMatch(/HEDGE_DELAY_SUGGEST_MS/)
+    expect(decl).toMatch(/HEDGE_DELAY_MS/)
     expect(decl).not.toMatch(/cloudflare|anthropic|openai/)
     const timerAt = source.indexOf('startHedgeLeg()', at)
     expect(timerAt).toBeGreaterThan(at)

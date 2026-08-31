@@ -47,6 +47,7 @@ import { DustAPI } from '@dust-tt/client'
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import { stripProxyFaultMarker } from './llm/retry'
+import { migrateOverlayLayout } from '@shared/overlay-chrome'
 
 const dir = () => app.getPath('userData')
 const settingsPath = () => join(dir(), 'settings.json')
@@ -211,6 +212,13 @@ function readAllowedFrom(p: string): string[] | null {
 // DACL-only change — which no mtime can reveal — is re-probed within the minute rather than never.
 const ADMIN_POLICY_REPROBE_MS = 60_000
 let _adminManagedCache: { mtime: number; at: number; content: string | null } | null = null
+
+/** Test-only: drop the admin-policy content snapshot between cases that redirect ProgramData /
+ *  recreate the policy file. Same class of flake as resetSettingsCacheForTests — mtime collision +
+ *  wall-clock TTL would otherwise serve a previous case's bytes (or skip the probe entirely). */
+export function resetAdminManagedCacheForTests(): void {
+  _adminManagedCache = null
+}
 
 function adminManagedContent(): string | null {
   const mtime = safeMtime(adminManagedConfigPath())
@@ -493,6 +501,7 @@ function safeMtime(p: string): number {
 
 interface SettingsCache {
   value: Settings
+  base: string
   userMtime: number
   managedMtime: number
   adminMtime: number
@@ -500,8 +509,20 @@ interface SettingsCache {
 }
 let _settingsCache: SettingsCache | null = null
 
-function currentSettingsMtimes(): Pick<SettingsCache, 'userMtime' | 'managedMtime' | 'adminMtime' | 'caheEdition'> {
+/** Test-only: drop the settings cache between cases that swap `app.getPath('userData')`. Redundant now
+ *  that the cache key includes the userData dir (see `base` below), but kept because existing suites call
+ *  it in beforeEach and an explicit reset is a harmless belt-and-braces. Production never swaps userData. */
+export function resetSettingsCacheForTests(): void {
+  _settingsCache = null
+}
+
+function currentSettingsMtimes(): Pick<SettingsCache, 'base' | 'userMtime' | 'managedMtime' | 'adminMtime' | 'caheEdition'> {
   return {
+    // The userData base dir is part of the key so a change of profile directory always misses the cache.
+    // In production `dir()` is constant (no behavior change); it is the test suites — each of which points
+    // app.getPath('userData') at a fresh temp dir per case — that would otherwise get a prior case's cached
+    // Settings when the fresh profile has no settings.json (all mtimes 0), causing order-dependent flakes.
+    base: dir(),
     userMtime: safeMtime(settingsPath()),
     managedMtime: safeMtime(join(dir(), 'managed-config.json')),
     adminMtime: safeMtime(adminManagedConfigPath()),
@@ -513,6 +534,7 @@ export function getSettings(): Settings {
   const m = currentSettingsMtimes()
   if (
     _settingsCache &&
+    _settingsCache.base === m.base &&
     _settingsCache.userMtime === m.userMtime &&
     _settingsCache.managedMtime === m.managedMtime &&
     _settingsCache.adminMtime === m.adminMtime &&
@@ -566,6 +588,8 @@ export function getSettings(): Settings {
   // touches the connection card (reconnect/disconnect/save), setSettings({ mcpConnections: [...] })
   // persists the new shape for real and the legacy keys become permanently inert.
   migrateLegacyBidstackConnection(raw)
+  const overlayLayout = migrateOverlayLayout(raw)
+  if (overlayLayout) raw.overlayLayout = overlayLayout
   // Locked keys are authoritative on READ too, not just on write: a value persisted before a lock (or a
   // hand-edited settings.json) must not override the managed/default value. Strip locked keys from the
   // user layer so org policy always wins. Runs AFTER every migration above so a migration's synthesized

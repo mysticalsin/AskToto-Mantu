@@ -12,7 +12,10 @@ import { readIndex, readMeetingExtraction } from './store'
 vi.mock('electron')
 
 const localBaseReadyMock = vi.hoisted(() => vi.fn(() => true))
-vi.mock('../llm/local-routing', () => ({ localBaseReady: localBaseReadyMock }))
+vi.mock('../llm/local-routing', () => ({
+  localBaseReady: localBaseReadyMock,
+  resolveRoutingMode: (s: { routingMode?: string }) => s.routingMode ?? 'auto'
+}))
 
 const createStreamMock = vi.hoisted(() =>
   vi.fn((opts: StreamOptions & { handlers: StreamHandlers }): StreamHandle => {

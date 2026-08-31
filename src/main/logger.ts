@@ -163,6 +163,9 @@ export type AuditEvent =
   | 'transcript.imported'
   // Speaker Intelligence (Phases A/B): a Teams-transcript name backfill actually resolved >=1 name.
   | 'transcript.speakers_backfilled'
+  // Speaker Intelligence (P2): the auto-enrollment flywheel folded >=1 session cluster's buffered
+  // embeddings into a permanent voiceprint under a Teams-VTT-resolved real name (see backfillSpeakerNames).
+  | 'speaker.auto_enrolled'
   | 'brain.commitment.settled'
   | 'brain.deal.outcome'
   | 'brain.entity.renamed'
@@ -183,6 +186,7 @@ export type AuditEvent =
   | 'provider.request'
   | 'provider.failed'
   | 'provider.retry'
+  | 'provider.failover'
   | 'provider.blocked'
   | 'net.proxy'
   | 'settings.changed'
@@ -208,6 +212,17 @@ export type AuditEvent =
   | 'dust.conversation'
   | 'brain.ingest'
   | 'brain.backfill.start'
+  // Wave 3 (main/brain/consolidate.ts): one batched extraction pass actually ran. Distinct from
+  // 'brain.ingest' (per-meeting) — this is the per-PASS marker metrics.ts counts against the
+  // maxPassesPerDay budget.
+  | 'brain.consolidation'
+  // Wave 4 (main/mcp/pushQueue.ts): an outbound CRM/task-manager action was queued, retried, sent, or
+  // dead-lettered — the audit trail for the push queue's own lifecycle, separate from 'mcp.push' (one
+  // live attempt).
+  | 'mcp.push.queued'
+  | 'mcp.push.retried'
+  | 'mcp.push.dead_letter'
+  | 'mcp.push.skipped_confidential'
   | 'local.runtime.start'
   | 'local.runtime.stop'
   | 'local.runtime.crash'

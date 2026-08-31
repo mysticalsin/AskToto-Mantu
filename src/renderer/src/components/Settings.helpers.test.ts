@@ -69,6 +69,14 @@ describe('searchSettingsTabs — settings search must find real section titles, 
     }
   })
 
+  it('Wave 5 — Speech / Brain labels and routing / consolidation search', () => {
+    expect(searchSettingsTabs('Speech').map((m) => m.id)).toContain('audio')
+    expect(searchSettingsTabs('Brain').map((m) => m.id)).toContain('intelligence')
+    expect(searchSettingsTabs('routing mode').map((m) => m.id)).toContain('ai')
+    expect(searchSettingsTabs('Brain consolidation').map((m) => m.id)).toContain('intelligence')
+    expect(searchSettingsTabs('batch index').map((m) => m.id)).toContain('intelligence')
+  })
+
   it('MQA-131: finds "Backups & limits" (AI tab) and the hedge toggle that lives inside it', () => {
     expect(searchSettingsTabs('Backups & limits').map((m) => m.id)).toContain('ai')
     expect(searchSettingsTabs('Race a backup provider').map((m) => m.id)).toContain('ai')
