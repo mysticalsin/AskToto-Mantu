@@ -2172,8 +2172,8 @@ html.metis-bar-land .aw-widget {
 .aw-orb {
   display: block;
   position: relative;
-  width: 64px;
-  height: 64px;
+  width: 51px;
+  height: 51px;
   flex-shrink: 0;
   padding: 0;
   margin: 0;
@@ -2193,8 +2193,8 @@ html.metis-bar-land .aw-widget {
 .aw-orb:hover,
 .aw-orb:active,
 .aw-orb:focus {
-  width: 64px;
-  height: 64px;
+  width: 51px;
+  height: 51px;
   border-radius: 50%;
 }
 .aw-orb[data-hug-width] {
@@ -2204,13 +2204,58 @@ html.metis-bar-land .aw-widget {
   cursor: grabbing;
 }
 .aw-orb__host,
-.aw-orb__canvas {
+.aw-orb__canvas,
+.aw-orb canvas {
   display: block;
-  width: 64px;
-  height: 64px;
+  width: 51px !important;
+  height: 51px !important;
   border-radius: 0;
   pointer-events: none;
   background: transparent;
+}
+
+/* Left Settings M: a locked circle. Listen / rec chrome may grow the Bar.
+   This slot must not shrink, stretch into a capsule, or clip into a bar. */
+.aw-bar-mark {
+  display: grid;
+  place-items: center;
+  flex: 0 0 30px;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  max-width: 30px;
+  max-height: 30px;
+  aspect-ratio: 1 / 1;
+  padding: 0;
+  margin: 0;
+  border: none;
+  background: transparent;
+  border-radius: 50%;
+  justify-self: start;
+  overflow: visible;
+  flex-shrink: 0;
+}
+.aw-bar-mark__disk {
+  display: block;
+  width: 30px;
+  height: 30px;
+  min-width: 30px;
+  min-height: 30px;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.aw-bar-mark img {
+  display: block;
+  width: 30px !important;
+  height: 30px !important;
+  max-width: none !important;
+  max-height: none;
+  object-fit: contain;
+  flex-shrink: 0;
+  border-radius: 50%;
 }
 .aw-orb[data-orb-mood='idle'],
 .aw-orb[data-orb-mood='thinking'],

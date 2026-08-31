@@ -1,14 +1,20 @@
 /**
  * Bar / minimized pill circle: Jakub thinking-orb on Métis dark glass.
- * Idle solving. Listen listening. Think working. Size 64. Theme dark.
+ * Idle solving. Listen listening. Think working. Theme dark.
+ * Package canvas is the 64 avatar. Visible CSS circle is ~20% smaller.
  * No painted caption. Real package. No WebGL marble.
  */
 
 import type { OrbState } from 'thinking-orbs'
 
+/** Package avatar preset. Do not pass a third canvas size to ThinkingOrb. */
 export const BAR_PILL_SIZE_PX = 64
-export const BAR_PILL_WIDTH_PX = BAR_PILL_SIZE_PX
-export const BAR_PILL_HEIGHT_PX = BAR_PILL_SIZE_PX
+/** Visible Bar circle / hit target. 64 × 0.8, not a 52 canvas rewrite. */
+export const BAR_PILL_VISIBLE_PX = Math.round(BAR_PILL_SIZE_PX * 0.8)
+export const BAR_PILL_WIDTH_PX = BAR_PILL_VISIBLE_PX
+export const BAR_PILL_HEIGHT_PX = BAR_PILL_VISIBLE_PX
+/** Left Settings M. Locked square. Listen chrome must not squash this. */
+export const BAR_MARK_SIZE_PX = 30
 
 export const ORB_MOODS = ['idle', 'thinking', 'factcheck', 'connecting'] as const
 export type OrbMood = (typeof ORB_MOODS)[number]
@@ -61,11 +67,11 @@ export function orbHostPaintsText(html: string): boolean {
 }
 
 export function isFixedCircle(width: number, height: number): boolean {
-  return width === height && width === BAR_PILL_SIZE_PX
+  return width === height && width === BAR_PILL_VISIBLE_PX
 }
 
 export function orbBoxForMood(_mood: OrbMood): { width: number; height: number } {
-  return { width: BAR_PILL_SIZE_PX, height: BAR_PILL_SIZE_PX }
+  return { width: BAR_PILL_VISIBLE_PX, height: BAR_PILL_VISIBLE_PX }
 }
 
 export function orbAspectRatio(width = BAR_PILL_WIDTH_PX, height = BAR_PILL_HEIGHT_PX): number {

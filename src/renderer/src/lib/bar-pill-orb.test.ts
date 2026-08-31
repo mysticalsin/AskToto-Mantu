@@ -3,8 +3,10 @@ import { paintOrbFirstFrame } from './orb-first-frame'
 import {
   BAR_ORB_SPEED,
   BAR_ORB_THEME,
+  BAR_MARK_SIZE_PX,
   BAR_PILL_HEIGHT_PX,
   BAR_PILL_SIZE_PX,
+  BAR_PILL_VISIBLE_PX,
   BAR_PILL_WIDTH_PX,
   ORB_MOODS,
   ORB_STATE,
@@ -22,11 +24,14 @@ import {
 
 describe('bar pill thinking-orb circle', () => {
   it('is a fixed circle: equal width and height, never a stadium', () => {
-    expect(BAR_PILL_WIDTH_PX).toBe(BAR_PILL_HEIGHT_PX)
-    expect(BAR_PILL_WIDTH_PX).toBe(BAR_PILL_SIZE_PX)
     expect(BAR_PILL_SIZE_PX).toBe(64)
+    expect(BAR_PILL_VISIBLE_PX).toBe(51)
+    expect(BAR_PILL_VISIBLE_PX).toBe(Math.round(BAR_PILL_SIZE_PX * 0.8))
+    expect(BAR_PILL_WIDTH_PX).toBe(BAR_PILL_HEIGHT_PX)
+    expect(BAR_PILL_WIDTH_PX).toBe(BAR_PILL_VISIBLE_PX)
     expect(isFixedCircle(BAR_PILL_WIDTH_PX, BAR_PILL_HEIGHT_PX)).toBe(true)
     expect(orbAspectRatio()).toBe(1)
+    expect(BAR_MARK_SIZE_PX).toBe(30)
     expect(shouldShowOrbRecDot(true)).toBe(false)
     expect(shouldShowOrbRecDot(false)).toBe(false)
   })
@@ -75,8 +80,8 @@ describe('bar pill thinking-orb circle', () => {
     expect(resolveOrbMood({ connecting: true, factcheck: true, thinking: true })).toBe('connecting')
   })
 
-  it('listening does not change the 64 box and does not add a rec-dot', () => {
-    expect(orbBoxForMood('idle')).toEqual({ width: 64, height: 64 })
+  it('listening does not change the visible circle and does not add a rec-dot', () => {
+    expect(orbBoxForMood('idle')).toEqual({ width: BAR_PILL_VISIBLE_PX, height: BAR_PILL_VISIBLE_PX })
     expect(shouldShowOrbRecDot(true)).toBe(false)
     expect(resolveBarOrbState({ mood: 'idle', listening: true })).toBe('listening')
   })
