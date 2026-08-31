@@ -7,6 +7,7 @@ const SURFACES = [
   'Copilot.tsx',
   'Review.tsx',
   'BrainView.tsx',
+  'IntelligenceUpdateButton.tsx',
   'BrainRecordPage.tsx',
   'Bar.tsx',
   'ControlBar.tsx',

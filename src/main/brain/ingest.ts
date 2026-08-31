@@ -69,6 +69,10 @@ import {
 import { applyCorrections, readAliasMap, resolveEntitySlug, replayCorrections, readCorrectionsJournalSafe } from './corrections'
 import { publishForExtraction, publishIndexes, publishAll } from './publish'
 import { refuseIfDemoTagged } from '@shared/demo-guard'
+import { pickIntelligencePassCandidates } from './intelligence-pass-route'
+
+/** Default ingest waterfall, or the Update Intelligence button's local-first then API-once route. */
+export type IngestRoute = 'default' | 'intelligence-pass'
 
 /**
  * Brain ingest — turns one saved transcript into a structured extraction, then merges it into the
@@ -96,7 +100,14 @@ function hasUsableProvider(s: Settings): boolean {
  *  keep on-device. Otherwise, when localLlm.fallback is on and local is ready, local is appended as
  *  the LAST candidate after the whole cloud waterfall — so a meeting still gets indexed when every cloud
  *  provider is down or none is configured, instead of never being indexed at all. */
-function pickProviderCandidates(s: Settings): { provider: ProviderId; model: string; key: string }[] {
+function pickProviderCandidates(
+  s: Settings,
+  route: IngestRoute = 'default'
+): { provider: ProviderId; model: string; key: string }[] {
+  // Update Intelligence button only: Local first when ready, configured API once as failover.
+  // Must not reuse the default cloud-first waterfall, or a ready Local would be skipped.
+  if (route === 'intelligence-pass') return pickIntelligencePassCandidates(s)
+
   // Exclusive on-device when the user opted Local summaries, set Routing mode → Local, or asked
   // consolidation to prefer the on-device model — never waterfalls into cloud (would silently upload).
   const preferOnDevice =
@@ -275,9 +286,10 @@ async function runCompletion(
   system: string,
   userText: string,
   id: string,
-  onlyProvider?: ProviderId
+  onlyProvider?: ProviderId,
+  route: IngestRoute = 'default'
 ): Promise<{ text: string; provider: ProviderId }> {
-  const candidates = pickProviderCandidates(s)
+  const candidates = pickProviderCandidates(s, route)
   const pool = onlyProvider ? candidates.filter((c) => c.provider === onlyProvider) : candidates
   if (pool.length === 0) throw new Error('No configured AI provider for brain ingest.')
   for (let i = 0; i < pool.length; i++) {
@@ -600,7 +612,8 @@ export const SELF_PERSON_NAME = 'You'
 async function extractMeeting(
   s: Settings,
   transcriptMd: string,
-  sourceFile: string
+  sourceFile: string,
+  route: IngestRoute = 'default'
 ): Promise<{ extraction: MeetingExtraction; preparedText: string }> {
   // Same redaction discipline as the live ask path (index.ts's askStart handler): the locally-saved
   // transcript file keeps the verbatim original on disk — only the copy sent to the cloud model for
@@ -616,7 +629,14 @@ async function extractMeeting(
     // failover walk instead — same as a first attempt.
     let servedBy: ProviderId | undefined
     const attempt = async (extra: string, pin?: ProviderId): Promise<MeetingExtraction> => {
-      const { text, provider } = await runCompletion(s, buildExtractionSystem(extra), user, `brain-${Date.now()}`, pin)
+      const { text, provider } = await runCompletion(
+        s,
+        buildExtractionSystem(extra),
+        user,
+        `brain-${Date.now()}`,
+        pin,
+        route
+      )
       servedBy = provider
       return parseExtractionPayload(text)
     }
@@ -1191,6 +1211,8 @@ type Job = {
   file: string
   source: 'meetings' | 'team'
   origin: 'live' | 'backfill'
+  /** Update Intelligence button only — Local first, configured API once. Live saves stay default. */
+  route?: IngestRoute
   /** Ingest-index identity. Undefined for the user's own meetings → basename(file), UNCHANGED. A team job
    *  (source: 'team') sets a folder-namespaced key ("team/<owner>/<file>") so a shared-folder transcript
    *  never collides in idx.ingested with an own meeting — or another member's file — of the same basename. */
@@ -1627,7 +1649,7 @@ async function runExtractionStage(job: Job): Promise<JobResult> {
       const savedExtraction = readMeetingExtraction(s, extractionSlug(jobKey(job)))
       if (savedExtraction) return { job, s, ok: true, x: savedExtraction, md, preparedText: prepareMeetingText(s, md) }
     }
-    const { extraction, preparedText } = await extractMeeting(s, md, job.file)
+    const { extraction, preparedText } = await extractMeeting(s, md, job.file, job.route ?? 'default')
     return { job, s, ok: true, x: extraction, md, preparedText }
   } catch (error) {
     return { job, s, ok: false, error }
@@ -2215,12 +2237,19 @@ export function resumeBackfillIfPending(): void {
  *  anything else already in flight — has fully finished (see registerDrainCallback's doc comment).
  *  Every other caller (the plain "Index meetings" button, resumeBackfillIfPending) omits it. */
 export type BackfillStartResult = { queued: number; deferred?: 'no-provider'; preparing?: boolean }
-export type BackfillStartOptions = { respectRetryBackoff?: boolean; allowSourceRefresh?: boolean }
+export type BackfillStartOptions = {
+  respectRetryBackoff?: boolean
+  allowSourceRefresh?: boolean
+  /** Update Intelligence button: stamp jobs so extraction uses local-first then API once. */
+  route?: IngestRoute
+}
 
 export function startBackfill(onDrained?: () => void | Promise<void>, options: BackfillStartOptions = {}): BackfillStartResult {
   const s = getSettings()
   const idx = readIndex(s)
-  const providerAvailable = hasUsableProvider(s)
+  const route = options.route ?? 'default'
+  const providerAvailable =
+    route === 'intelligence-pass' ? pickIntelligencePassCandidates(s).length > 0 : hasUsableProvider(s)
   if (!options.allowSourceRefresh && (idx.sourceRefreshRequested || hasMeetingSourceDrift(s, idx))) {
     void requestSourceRefresh(s).catch((e) => mainLog.warn('[brain] source refresh request failed:', e))
     return providerAvailable ? { queued: 0 } : { queued: 0, deferred: 'no-provider' }
@@ -2292,7 +2321,8 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
           source: 'meetings',
           origin: 'backfill',
           ...(sourceVersion ? { sourceVersion } : {}),
-          ...(strategy ? { strategy } : {})
+          ...(strategy ? { strategy } : {}),
+          ...(route !== 'default' ? { route } : {})
         })
       } else {
         // Leave the durable request flag in place. The source still needs a first extraction, but
@@ -2341,7 +2371,8 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
           key,
           label: owner,
           ...(sourceVersion ? { sourceVersion } : {}),
-          ...(strategy ? { strategy } : {})
+          ...(strategy ? { strategy } : {}),
+          ...(route !== 'default' ? { route } : {})
         })
       } else {
         deferredByProvider = true

@@ -91,6 +91,11 @@ ctx stay machine-aware (`inferenceThreads`, `spawnProfileFor`). Streaming stays 
 See [TIME-SAVED.md](./TIME-SAVED.md). Tokens, type, motion, do/don'ts live there. The Intelligence
 dashboard (PR 61) is a separate surface; this module is a small honest feed it can read later.
 
+## Intelligence Update
+See [INTELLIGENCE-UPDATE.md](./INTELLIGENCE-UPDATE.md). One **Update Intelligence** button starts a
+local-first agent pass (API once if Local is missing, refused, or errors) and refreshes the
+dashboard. The button is the trigger. Never auto-send. Not leftover PR 61.
+
 ## MCP write
 Outlook drafts and CRM notes are user-confirmed. Never auto-send. A disconnected connector shows
 Connect, it does not pretend a send happened.
