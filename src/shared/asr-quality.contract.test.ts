@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_SETTINGS, SettingsSchema } from './ipc'
 import { LANGUAGE_NAMES } from './lang-id'
 
-const root = join(__dirname, '..')
+const root = process.cwd()
 const read = (rel: string): string => readFileSync(join(root, rel), 'utf8').replace(/\r\n/g, '\n')
 
 describe('ASR quality ship — Best default, Fast is a power option', () => {
