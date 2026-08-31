@@ -2,7 +2,8 @@ import { JarvisOrbButton } from './JarvisOrbButton'
 import type { OrbMood } from '../lib/bar-pill-orb'
 
 /**
- * Bar-only minimized control: the same 64 thinking-orb as the docked Bar circle.
+ * Bar-only minimized control: the same thinking-orb as the docked Bar circle
+ * (64 canvas, ~20% smaller visible host).
  * Click (not drag) expands to the full bar. Hide/Island never mount this.
  */
 export function ControlPill({

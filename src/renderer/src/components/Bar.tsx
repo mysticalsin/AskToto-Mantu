@@ -27,7 +27,7 @@ import { formatScreenFreshness } from '@shared/perception'
 import { accelLabel } from '../lib/keys'
 import type { CaptureDegraded } from '../lib/listen'
 import { JarvisOrbButton } from './JarvisOrbButton'
-import type { OrbMood } from '../lib/bar-pill-orb'
+import { BAR_MARK_SIZE_PX, type OrbMood } from '../lib/bar-pill-orb'
 
 /** Single source of truth for toolbar icon stroke — prevents per-icon drift. */
 const ICON_STROKE = 1.85
@@ -576,17 +576,19 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
 
   const toolbarRow = useMemo(
     () => (
-        <div className="aw-toolbar grid grid-cols-[1fr_auto_1fr] items-center border-t border-[var(--color-hair-soft)] px-5 py-1">
-          {/* The Mantu mark IS the logo → opens Settings. (Quit/Hide live in the tray + hotkeys.) */}
+        <div className="aw-toolbar grid grid-cols-[minmax(30px,1fr)_auto_minmax(30px,1fr)] items-center border-t border-[var(--color-hair-soft)] px-5 py-1">
+          {/* The Mantu mark IS the logo → opens Settings. Locked circle: Listen chrome
+              may expand the Bar, but this M must not flatten, stretch, or clip into a bar. */}
           <button
             type="button"
             title="Settings"
             aria-label="Settings"
+            data-bar-mark
             onClick={props.onSettings}
-            className="no-drag focus-ring block flex-none justify-self-start rounded-[10px]"
+            className="aw-bar-mark no-drag focus-ring"
           >
-            <span className="aw-mark-glow block rounded-[10px]">
-              <MantuMark size={30} />
+            <span className="aw-bar-mark__disk aw-mark-glow">
+              <MantuMark size={BAR_MARK_SIZE_PX} round />
             </span>
           </button>
 

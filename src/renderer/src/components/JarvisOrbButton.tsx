@@ -6,6 +6,7 @@ import {
   BAR_ORB_SPEED,
   BAR_ORB_THEME,
   BAR_PILL_SIZE_PX,
+  BAR_PILL_VISIBLE_PX,
   pillClickShouldExpand,
   resolveBarOrbState,
   shouldShowOrbRecDot,
@@ -13,8 +14,8 @@ import {
 } from '../lib/bar-pill-orb'
 
 /**
- * Fixed 64 thinking-orb circle. Never a stadium pill.
- * Docked on the idle Bar (click minimizes) or alone when minimized (click expands).
+ * Thinking-orb circle. Package canvas stays 64 (avatar). Visible host is ~20% smaller.
+ * Never a stadium pill. Docked on the idle Bar or alone when minimized.
  */
 export function JarvisOrbButton({
   onActivate,
@@ -59,6 +60,7 @@ export function JarvisOrbButton({
       data-bar-pill-orb
       data-orb-mood={orbMood}
       data-orb-state={orbState}
+      data-orb-visible={BAR_PILL_VISIBLE_PX}
       data-orb-listening={listening || undefined}
       title={title}
       aria-label={ariaLabel}
@@ -79,6 +81,7 @@ export function JarvisOrbButton({
           theme={BAR_ORB_THEME}
           speed={BAR_ORB_SPEED}
           className="aw-orb__canvas"
+          style={{ width: BAR_PILL_VISIBLE_PX, height: BAR_PILL_VISIBLE_PX }}
           aria-hidden="true"
           aria-label=""
         />
