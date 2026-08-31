@@ -175,6 +175,9 @@ export const IPC = {
   permissionsGet: 'permissions:get',
   permissionsOpenSettings: 'permissions:openSettings',
   permissionsRequestUpfront: 'permissions:requestUpfront',
+  // Settings / overlay self-check: first pass is the OS probe; second pass is a real vision ask.
+  // Result stays on this device — never forwarded to a teammate, CRM, or askStart overlay chat.
+  screenCaptureCheck: 'permissions:screenCaptureCheck',
   listeningState: 'listening:state',
   asrBundled: 'asr:bundled',
   // Métis Local (on-device LLM): readiness metadata plus a start/retry that does not require toggling
@@ -1639,6 +1642,21 @@ export const TestApiKeyPayloadSchema = z.object({
   provider: ProviderIdSchema,
   key: z.string()
 })
+
+export const ScreenCaptureCheckPassSchema = z.enum(['probe', 'vision'])
+export const ScreenCaptureCheckPayloadSchema = z.object({
+  pass: ScreenCaptureCheckPassSchema
+})
+export const ScreenCaptureCheckResultSchema = z.object({
+  ok: z.boolean(),
+  pass: ScreenCaptureCheckPassSchema,
+  backend: z.enum(['probe', 'local', 'api']).optional(),
+  backendLabel: z.string().max(200).optional(),
+  failedOver: z.boolean().optional(),
+  message: z.string().max(2000),
+  preview: z.string().max(200).optional()
+})
+export type ScreenCaptureCheckResult = z.infer<typeof ScreenCaptureCheckResultSchema>
 
 export interface TestKeyResponse {
   ok: boolean

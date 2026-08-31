@@ -62,7 +62,8 @@ import {
   type ImportAudioProgress,
   type ImportJobView,
   type LocalModelSummary,
-  type ProfileRecoveryResult
+  type ProfileRecoveryResult,
+  type ScreenCaptureCheckResult
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 
@@ -83,6 +84,8 @@ const api = {
     ipcRenderer.invoke(IPC.permissionsOpenSettings, kind),
   requestPermissionsUpfront: (): Promise<PlatformPermissions> =>
     ipcRenderer.invoke(IPC.permissionsRequestUpfront),
+  screenCaptureCheck: (pass: 'probe' | 'vision'): Promise<ScreenCaptureCheckResult> =>
+    ipcRenderer.invoke(IPC.screenCaptureCheck, { pass }),
   setSettings: (patch: Partial<Settings> | import('@shared/ipc').SettingsPatch): Promise<PublicSettings> =>
     ipcRenderer.invoke(IPC.settingsSet, patch),
   recoverEncryptedProfile: (): Promise<ProfileRecoveryResult> => ipcRenderer.invoke(IPC.settingsRecoverProfile),
