@@ -66,6 +66,15 @@ describe('renderer pins Spotlight Ref to Dust but lets the generic follow-up cas
     expect(call).toMatch(/providerOverride: 'dust'/)
   })
 
+  it('spotlightRef does not dead-end on dustListAgents / reconnect copy', () => {
+    const start = appSrc.indexOf('const spotlightRef = useCallback')
+    const end = appSrc.indexOf('const generateFollowup = useCallback', start)
+    const body = appSrc.slice(start, end)
+    const executable = body.replace(/^\s*\/\/.*$/gm, '')
+    expect(executable).not.toMatch(/dustListAgents/)
+    expect(executable.toLowerCase()).not.toMatch(/reconnect/)
+  })
+
   it('generateFollowup drafts the email via the BASE Métis Dust agent (no agentOverride, failover-safe), else the active provider', () => {
     const call = appSrc.slice(
       appSrc.indexOf('const generateFollowup = useCallback'),

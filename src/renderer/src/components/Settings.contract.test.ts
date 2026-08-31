@@ -315,6 +315,25 @@ describe('MQA-164 — a failed update download leaves the Settings row with a wa
   })
 })
 
+describe('Set up Dust installs the managed CLI, then signs in', () => {
+  it('startDustOAuth calls dustInstallCli before dustLoginBegin', () => {
+    const body = blockAfter('const startDustOAuth = async', 'useEffect(() => {')
+    expect(body).toMatch(/window\.toto\.dustInstallCli\(\)/)
+    expect(body).toMatch(/window\.toto\.dustLoginBegin\(\)/)
+    expect(body.indexOf('dustInstallCli()')).toBeLessThan(body.indexOf('dustLoginBegin()'))
+    expect(body).toMatch(/Could not install the Dust CLI/)
+  })
+
+  it('the Set up Dust button copy is install, not reconnect / No CLI', () => {
+    const block = blockAfter("title={active ? 'Dust CLI · Your agents (active)'", '\nfunction getAudioChoices(')
+    const copy = block.replace(/^\s*\/\/.*$/gm, '')
+    expect(copy).toMatch(/Installing Dust CLI/)
+    expect(copy).toMatch(/Installs the Dust CLI, then opens your browser/)
+    expect(copy).not.toMatch(/No CLI/)
+    expect(copy.toLowerCase()).not.toMatch(/reconnect dust in settings/)
+  })
+})
+
 describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', () => {
   const product = blockAfter('function ProductConnectCard(', '\nfunction ClickupCard(')
   const polo = blockAfter('function McpConnectionCard(', '\nconst primaryBtnStyle')
