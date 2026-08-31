@@ -40,7 +40,13 @@ export function streamAnthropic(opts: StreamOptions): StreamHandle {
     ...(noTemperature ? {} : { temperature: opts.temperature }),
     // Cache the static system/profile/context prefix (ephemeral) so repeated glances + multi-turn skip
     // re-processing it — cuts time-to-first-token and cost. The volatile screenshot stays in the message.
-    system: [{ type: 'text', text: opts.system, cache_control: { type: 'ephemeral' } }],
+    system: [
+      {
+        type: 'text',
+        text: opts.system,
+        cache_control: opts.systemCacheTtl === '1h' ? { type: 'ephemeral', ttl: '1h' } : { type: 'ephemeral' }
+      }
+    ],
     messages: anthropicMessages(opts.req)
   })
   wd = idleWatchdog(() => {
