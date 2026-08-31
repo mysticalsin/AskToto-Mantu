@@ -2855,7 +2855,7 @@ function ProductConnectCard({
     >
       <div className="flex items-center gap-3">
         {connected ? (
-          <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-white/[0.06]">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] bg-white/[0.06]">
             {mark}
           </span>
         ) : (
@@ -2864,7 +2864,7 @@ function ProductConnectCard({
             onClick={() => void runConnect()}
             disabled={connecting}
             aria-label={`Connect ${title}`}
-            className="no-drag cl-focus flex h-7 w-7 shrink-0 items-center justify-center rounded-[8px] bg-white/[0.06] hover:bg-white/[0.1] disabled:opacity-50"
+            className="no-drag cl-focus flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] bg-white/[0.06] hover:bg-white/[0.1] disabled:opacity-50"
           >
             {mark}
           </button>
@@ -3014,7 +3014,7 @@ function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p:
       title="ClickUp"
       desc="Tasks from a recap. Nothing sends itself."
       waitingLabel="Waiting for ClickUp…"
-      mark={<ClickUpMark size={16} />}
+      mark={<ClickUpMark size={28} />}
       connect={() => window.toto.mcpClickupConnect()}
       pinnedEndpoint="https://mcp.clickup.com/mcp"
       apiKeyHint="ClickUp API token (power option — Connect is the usual path)"
@@ -3031,7 +3031,7 @@ function PlaneCard({ settings, patch }: { settings: PublicSettings; patch: (p: P
       title="Plane"
       desc="Work items from a recap. Nothing sends itself."
       waitingLabel="Waiting for Plane…"
-      mark={<PlaneMark size={16} />}
+      mark={<PlaneMark size={28} />}
       connect={() => window.toto.mcpPlaneConnect()}
       pinnedEndpoint="https://mcp.plane.so/http/api-key/mcp"
       apiKeyHint="Personal or workspace access token"
