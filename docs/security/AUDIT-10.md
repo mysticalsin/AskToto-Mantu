@@ -5,6 +5,7 @@
 **Method:** static review of current `main` (`ebb909d`). This document is the Phase 1 verdict. It was written before the Phase 2 patches in this PR.
 **Date:** 2026-08-31.
 **Reviewer stance:** hard gate before 1.8.1 DMG / native Mac / Windows EXE. Friendly checkbox theater is a fail.
+**Post-fix score (same PR):** 8/10 Present, 2 N/A. Phase 1 text below is the pre-patch verdict. The live score is in "Post-fix score (this PR)".
 
 Attack surface that actually exists:
 
@@ -324,7 +325,46 @@ Shipped on this branch. Capture / `saveTranscript` / `parakeetFeed` / `armAudio`
 | Silent attacks | License-server stderr on 429 / admin 401 / lockout (IP + route). Desktop `security.rate_limited` and `security.ipc_denied` (sampled) |
 | Settings cache served the wrong profile | Cache key includes settings path; admin-policy snapshot includes path + inode |
 
-**Post-fix fully in place: 3/10** (items 2, 4, 8). N/A still 2. Residuals for Devon: admin UI `localStorage` token, Worker isolate-local limiter, optional asar-embed keys, no SIEM forwarder.
+**Post-fix fully in place after the first patch set: 3/10** (items 2, 4, 8). N/A still 2.
+
+---
+
+## Phase 2b remediations (same PR — close the remaining Partials)
+
+Capture / ASR still never call `denyIfLimited`. Overflow on the live path is `takeHotPath`: same-tick drop, no wait.
+
+| Gap | Fix | Tests |
+|---|---|---|
+| Capture / save / ASR / arm uncapped | Token bucket in `security-limits.ts` (`takeHotPath`). asr-feed 40/20s⁻¹, save-transcript 8/0.5s⁻¹, capture-screen 6/0.25s⁻¹, arm-audio 10/1s⁻¹. Drop overflow; never block captions | `security-limits.test.ts`, `security-audit-10.contract.test.ts` |
+| Path / HTML / SQL / MCP leftovers | Shared `safeMeetingBasename()` on meeting-file IPC + `appendDebrief`. Shiki HTML through `sanitizeShikiHtml`. Contract: no sqlite/postgres in `src/main`. MCP refuses `data:` / `javascript:` | `meeting-path.test.ts`, `sanitize-html.test.ts`, `transcripts.test.ts`, `mcpClient.test.ts`, contract file |
+| Ungated disk/network IPC | `requireAuth()` on `localPrewarm`, `prewarmCapture`, `rendererCrash`, `updateCheck` / `updateDownload` / `updateInstall`. `license:activate` stays ungated (deadlock) | contract file |
+| Admin bearer in `localStorage` | `POST/GET/DELETE /admin/session` sets `metis_admin_session` httpOnly, SameSite=strict, Secure on HTTPS, 12h. `requireAdmin` accepts cookie **or** Bearer. Admin UI uses `credentials: 'same-origin'` only | `license-server/server.test.mjs` |
+| Worker limiter per-isolate | Best-effort Cache API (`caches.default`) with in-memory fallback; injectable cache for Node tests | `cloudflare-proxy/src/index.test.ts` |
+| Raw IPs in attack logs | License-server stderr uses `ip_hash=` (SHA-256 prefix). No tokens / serials / keys | `license-server/server.test.mjs` |
+| asar-embedded product keys | Still residual, not a FAIL. One-command rotation: `npm run rotate:embedded-keys` | `scripts/rotate-embedded-keys.test.ts`, `docs/security/EMBEDDED-KEY-ROTATION.md` |
+
+Packaged DevTools remain off (`devEnv` returns undefined when packaged). No change to overlay / onboarding / identity / Intelligence / latency / ASR engines.
+
+---
+
+## Post-fix score (this PR)
+
+| # | Control | Status |
+|---|---|---|
+| 1 | Rate limiting | **Present** — license `/activate` `/heartbeat` `/deactivate`; Worker per-key + unauth-IP (memory + Cache API); desktop outbound `denyIfLimited`; live path `takeHotPath` (non-blocking). Residual: license limiter is in-process (single Fly instance). Worker cache is colo-local, not a global store. |
+| 2 | Secrets server-side only | **Present** — residual: disclosed, revocable asar-embedded product keys. Rotation is `npm run rotate:embedded-keys`. Not operator live secrets. |
+| 3 | RLS / local access control | **N/A** |
+| 4 | Env files not committed | **Present** |
+| 5 | Input validation | **Present** — Zod + `safeMeetingBasename` + MCP scheme/SSRF + Shiki allow-list. Residual: sanitizer is Shiki-shaped, not a general HTML rewriter. No SQL exists. |
+| 6 | No public tables | **N/A** |
+| 7 | Auth on protected routes / IPC | **Present** — remaining disk/network handlers gated. Documented exception: `license:activate` / `license:gate` (SSO deadlock). Window chrome stays ungated on purpose. |
+| 8 | Production errors | **Present** |
+| 9 | Admin / debug locked | **Present** — httpOnly session cookie; Bearer still works for CLI. Admin HTML shell is public (no secrets). Packaged DevTools off. Residual: in-memory sessions (single instance). |
+| 10 | Attack logging | **Present** — license 429 / admin 401 / lockout with hashed IP; desktop `security.rate_limited` / `security.ipc_denied` (sampled). Residual: no SIEM forwarder; Worker limiter durability is Cache API best-effort. |
+
+**Fully in place: 8 / 10.** N/A counted separately: 2 (items 3 and 6).
+
+READY TO MERGE stays **no** until Devon reviews this document and the fixes. Pack / 1.8.1 stays last.
 
 ---
 
