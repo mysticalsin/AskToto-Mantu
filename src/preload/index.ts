@@ -56,6 +56,8 @@ import {
   type MemberActivatePayload,
   type MemberActivateResult,
   type MemberLicenseStatus,
+  type LicenseConfigPayload,
+  type LicenseConfigResult,
   type ImportAudioPickResult,
   type ImportAudioProgress,
   type ImportJobView,
@@ -73,6 +75,8 @@ function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
 
 const api = {
   getSettings: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.settingsGet),
+  /** Wave 2 — dismiss the one-shot last-failover chip after the user has seen it. */
+  dismissFailoverNotice: (): Promise<{ ok: true }> => ipcRenderer.invoke(IPC.dismissFailoverNotice),
   getPermissions: (): Promise<PlatformPermissions> => ipcRenderer.invoke(IPC.permissionsGet),
   getShortcutFailures: (): Promise<ShortcutFailure[]> => ipcRenderer.invoke(IPC.shortcutFailures),
   openPermissionSettings: (kind: 'microphone' | 'screenRecording'): Promise<void> =>
@@ -319,6 +323,14 @@ const api = {
   windowMoveBy: (dx: number, dy: number): Promise<void> =>
     ipcRenderer.invoke(IPC.windowMoveBy, { dx, dy }),
   minimize: (narrow: boolean): Promise<void> => ipcRenderer.invoke(IPC.windowMinimize, narrow),
+  // Auto-hide: pin the overlay to the top-center of its current display (grows downward from the top
+  // edge). Fire-and-forget; never shows/focuses the window, so the foreground app keeps focus.
+  anchorTop: (): Promise<void> => ipcRenderer.invoke(IPC.windowAnchorTop),
+  // Auto-hide reveal: widen the window back to the full bar width after the peek narrowed it.
+  revealWidth: (): Promise<void> => ipcRenderer.invoke(IPC.windowRevealWidth),
+  onOverlayCursorHover: (cb: (d: { hovering: boolean }) => void): Unsub =>
+    sub(IPC.overlayCursorHover, cb),
+  parkAfterHide: (): Promise<void> => ipcRenderer.invoke(IPC.overlayParkAfterHide),
   // A caught render-throw (ErrorBoundary) — fire-and-forget, best-effort. Main persists it to disk (same
   // sink as a main-process crash) so a field report survives without ASKTOTO_DEBUG_RENDERER devtools.
   reportCrash: (message: string, stack?: string, componentStack?: string): Promise<void> =>
@@ -400,7 +412,10 @@ const api = {
   memberLicenseVerifyCached: (): Promise<MemberLicenseStatus> =>
     ipcRenderer.invoke(IPC.memberLicenseVerifyCached),
   memberLicenseImportFile: (): Promise<MemberActivateResult> =>
-    ipcRenderer.invoke(IPC.memberLicenseImportFile)
+    ipcRenderer.invoke(IPC.memberLicenseImportFile),
+  // Act 5 — informational GET /license/config read, for the onboarding ActLicense scene.
+  licenseConfig: (payload: LicenseConfigPayload): Promise<LicenseConfigResult> =>
+    ipcRenderer.invoke(IPC.licenseConfig, payload)
 }
 
 contextBridge.exposeInMainWorld('toto', api)

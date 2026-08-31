@@ -121,12 +121,12 @@ describe('requireProvider(local?) call-site contract (H1)', () => {
     expect(requireProviderArgAfter("kind === 'explain'")).toBe('')
   })
 
-  it('onGenerateRecap fires generateSavedRecap -> mode "recap", always cloud -> stays bare', () => {
-    expect(requireProviderArgAfter('onGenerateRecap=')).toBe('')
+  it('onGenerateRecap fires generateSavedRecap (local-capable summary) -> requireProvider(\'summary\')', () => {
+    expect(requireProviderArgAfter('onGenerateRecap=')).toBe("'summary'")
   })
 
-  it('onRetryRecap fires generateSavedRecap -> mode "recap", always cloud -> stays bare', () => {
-    expect(requireProviderArgAfter('onRetryRecap=')).toBe('')
+  it('onRetryRecap fires generateSavedRecap (local-capable summary) -> requireProvider(\'summary\')', () => {
+    expect(requireProviderArgAfter('onRetryRecap=')).toBe("'summary'")
   })
 })
 

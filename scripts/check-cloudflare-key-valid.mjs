@@ -34,6 +34,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { decryptProxyKey } from './lib/embedded-cloudflare-crypto.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const bundlePath = join(repoRoot, 'build', 'cloudflare-embed', 'key.json')
@@ -43,27 +44,46 @@ if (!existsSync(bundlePath)) {
   process.exit(0)
 }
 
+// The bundle ships ENCRYPTED (scripts/embed-cloudflare-key.mjs). Decrypt it here with the same material the
+// app uses so the probe below tests the ACTUAL key a fresh install will decrypt and send — not a stale
+// plaintext copy that no longer matches what shipped.
 let proxyKey
+let embeddedBaseUrl = null
 try {
-  proxyKey = JSON.parse(readFileSync(bundlePath, 'utf8')).proxyKey
+  const blob = JSON.parse(readFileSync(bundlePath, 'utf8'))
+  const payload = decryptProxyKey(blob)
+  // The payload is EITHER a bare Worker proxy key OR a JSON {token,baseUrl} direct-Cloudflare credential.
+  if (typeof payload === 'string' && payload.trim().startsWith('{')) {
+    const obj = JSON.parse(payload)
+    proxyKey = typeof obj?.token === 'string' ? obj.token : ''
+    embeddedBaseUrl = typeof obj?.baseUrl === 'string' && obj.baseUrl.trim() ? obj.baseUrl.trim().replace(/\/+$/, '') : null
+  } else {
+    proxyKey = payload
+  }
 } catch (e) {
-  console.error(`[check:cf-key] FAIL — build/cloudflare-embed/key.json is not readable JSON: ${e.message}`)
+  console.error(`[check:cf-key] FAIL — build/cloudflare-embed/key.json could not be read/decrypted: ${e.message}`)
+  console.error('[check:cf-key]   It must be the encrypted blob written by scripts/embed-cloudflare-key.mjs.')
   process.exit(1)
 }
 if (typeof proxyKey !== 'string' || !proxyKey.trim()) {
-  console.error('[check:cf-key] FAIL — key.json has no non-empty "proxyKey".')
+  console.error('[check:cf-key] FAIL — the embedded blob decrypted to no usable credential.')
   process.exit(1)
 }
 
-// The default the app itself ships as cloudflareBaseUrl, read from source rather than duplicated here —
-// validating a different endpoint than the one users hit would proves nothing.
-const ipc = readFileSync(join(repoRoot, 'src', 'shared', 'ipc.ts'), 'utf8')
-const urlMatch = ipc.match(/export const METIS_WORKER_URL = '([^']+)'/)
-if (!urlMatch) {
-  console.error('[check:cf-key] FAIL — could not read METIS_WORKER_URL from src/shared/ipc.ts.')
-  process.exit(1)
+// Validate against the endpoint a fresh install will actually hit: the embedded DIRECT account endpoint
+// when the blob carries one, otherwise the Worker URL the app ships as the cloudflareBaseUrl default
+// (read from source, never duplicated here). Validating a different endpoint than users hit proves nothing.
+let baseForProbe = embeddedBaseUrl
+if (!baseForProbe) {
+  const ipc = readFileSync(join(repoRoot, 'src', 'shared', 'ipc.ts'), 'utf8')
+  const urlMatch = ipc.match(/export const METIS_WORKER_URL = '([^']+)'/)
+  if (!urlMatch) {
+    console.error('[check:cf-key] FAIL — could not read METIS_WORKER_URL from src/shared/ipc.ts.')
+    process.exit(1)
+  }
+  baseForProbe = urlMatch[1].replace(/\/+$/, '')
 }
-const endpoint = `${urlMatch[1].replace(/\/+$/, '')}/chat/completions`
+const endpoint = `${baseForProbe}/chat/completions`
 
 /** The model the app actually sends. `auto` is not a Workers AI id — the Worker forwards it and
  *  Cloudflare answers 400, which reads as a broken key when the key is fine. Read from the registry so

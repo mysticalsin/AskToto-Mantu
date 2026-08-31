@@ -12,9 +12,13 @@ import { useFlash } from '../lib/useFlash'
 const TRANSCRIPT_RENDER_LIMIT = 150
 
 /** One transcript bubble. Memoized so appending a new line only mounts/renders the new row — React.memo's
- *  default shallow-prop comparison is enough here because `line` is a stable, never-mutated object once
- *  committed (see listen.ts's commitLine), so every already-rendered row's props are referentially
- *  unchanged and its render is skipped entirely. */
+ *  default shallow-prop comparison is enough here because `line` is a stable object once committed (see
+ *  listen.ts's commitLine), so every already-rendered row's props are referentially unchanged and its
+ *  render is skipped entirely. Two exceptions, both REPLACE the line with a new object rather than
+ *  mutating it in place, so the identity change is exactly what tells this row to re-render: a provisional
+ *  "…" placeholder gets swapped for the real committed line (listen.ts's clearProvisional/commitLine), and
+ *  a Speaker Intelligence name can attach to an already-committed 'them' line slightly later (listen.ts's
+ *  attachSpeakerName, Whisper-engine only). */
 const TranscriptRow = memo(function TranscriptRow({ line }: { line: TranscriptLine }): JSX.Element {
   return (
     <div className={line.speaker === 'you' ? 'flex justify-end' : 'flex justify-start'}>
@@ -23,7 +27,12 @@ const TranscriptRow = memo(function TranscriptRow({ line }: { line: TranscriptLi
           'max-w-[82%] rounded-[var(--radius-xl)] px-3 py-1.5 text-[13px] leading-snug break-words',
           line.speaker === 'you'
             ? 'bg-[var(--color-accent-soft)] text-[color:var(--color-ink)]'
-            : 'bg-white/[0.06] text-[color:var(--color-ink)]'
+            : 'bg-white/[0.06] text-[color:var(--color-ink)]',
+          // ASR quality (1B.2b) — a provisional line is a "…" placeholder standing in for a window still
+          // decoding (see shared/ipc.ts's TranscriptLineSchema.provisional); fade it so it visibly reads
+          // as pending rather than a real, final transcribed line — it's replaced (not restyled) once
+          // the real text commits, so this class never lingers on an actual line.
+          line.provisional ? 'opacity-40' : ''
         ].join(' ')}
       >
         <span className="mr-1.5 text-[10px] font-semibold uppercase text-[color:var(--color-ink-3)]">

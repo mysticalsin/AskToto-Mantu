@@ -1,9 +1,13 @@
 # xcodegen spec for the Métis native app — roadmap step 1 (native-app/README.md).
 #
 # Generate + open the Xcode project:
-#     brew install xcodegen        # not on this machine yet
+#     brew install xcodegen
 #     cd native-app && xcodegen generate
 #     open Metis.xcodeproj         # run on a Mac, or an iOS/iPad simulator/device
+#
+# Release artifact (pure Mac native, NOT the Electron DMG):
+#     node scripts/build-native-mac.mjs
+#     → release/Metis-Native-<version>.zip  (contains Metis.app)
 #
 # One multiplatform app target depends on the local MetisKit package; only App/ (audio + windowing) is
 # platform-conditional. The app's LOGIC (MeetingController, Intelligence, App Intents) lives in MetisKit
@@ -22,20 +26,33 @@ packages:
 targets:
   Metis:
     type: application
-    supportedDestinations: [macOS, iOS]   # iPad is an iOS destination — a single multiplatform target
+    # Release packaging (scripts/build-native-mac.mjs) builds the macOS destination only and zips
+    # Metis.app as Metis-Native-<version>.zip — that is the pure Apple-native download, distinct from
+    # the Electron Metis-<version>.dmg. iOS remains a supported destination for local Xcode runs.
+    supportedDestinations: [macOS, iOS]
     sources:
       - App
     dependencies:
       - package: MetisKit
     settings:
       base:
+        PRODUCT_NAME: Metis
         PRODUCT_BUNDLE_IDENTIFIER: com.mantu.metis.native
-        MARKETING_VERSION: "0.1.0"
+        # Synced from package.json by scripts/build-native-mac.mjs before every release build.
+        MARKETING_VERSION: "1.7.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
         SWIFT_STRICT_CONCURRENCY: complete
         CODE_SIGN_STYLE: Automatic
         GENERATE_INFOPLIST_FILE: YES
+        # Branding lives in App/Assets.xcassets (AccentColor + AppIcon). Drop real icon PNGs into
+        # AppIcon.appiconset before an App Store build — the set ships as a valid scaffold today.
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
         INFOPLIST_KEY_CFBundleDisplayName: "Métis"
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.productivity"
         INFOPLIST_KEY_NSMicrophoneUsageDescription: "Métis transcribes meeting audio on-device to give you live suggestions and summaries."
+        # Speech recognition drives the on-device live transcript. Screen Recording (system-audio loopback,
+        # the two-sided macOS copilot) is TCC-managed with no Info.plist usage key — the OS shows its own
+        # prompt when ScreenCaptureKit first runs; onboarding explains it before that happens.
+        INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: "Métis converts meeting audio to text on-device so it can suggest what to say and summarize the call."

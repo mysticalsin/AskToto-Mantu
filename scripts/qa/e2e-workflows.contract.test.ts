@@ -81,20 +81,37 @@ describe('MQA-255 — the QA suite reports the build, not the environment', () =
  *
  * Observed on 2026-08-25 against the packaged 1.6.2 build on a genuinely fresh profile: six failures,
  * every one of them the guard arriving too late. The fix is ordering, so ordering is what is pinned.
+ *
+ * The e2e-honesty fold (armLocalFloor(), MQA-284's sibling QA fold) replaced the bare `localModelReady`
+ * boolean with a helper that actually ARMS the floor (enables the toggle + fallback, like a real user
+ * would) before reporting readiness, so the guard now reads `if (!floor.ready) return { __info }` and
+ * sits once at the top of the `try` block rather than immediately above every assert inside it — still
+ * strictly BEFORE every assert it guards, just no longer within a fixed 6-line lookback. The search below
+ * therefore walks back to the start of the enclosing `check(...)` block (not a fixed window) and accepts
+ * either guard form, so it still fails the moment a NEW assert is added with no guard anywhere above it
+ * in its own check — which is the actual defect this pins.
  */
 describe('MQA-256 — the on-device guard must run before the assert it exists to pre-empt', () => {
-  it('places a localModelReady guard ahead of every error assert', () => {
+  it('places a floor/localModelReady guard ahead of every error assert, somewhere in its own check block', () => {
     const lines = SUITE.split(/\r?\n/)
     const asserts: number[] = []
     lines.forEach((l, i) => {
       if (/^\s*assert\(!r\.error,/.test(l)) asserts.push(i)
     })
     expect(asserts.length).toBeGreaterThan(0)
+    const guardRe = /if \(!localModelReady\) return \{ __info|if \(!floor\.ready\) return \{ __info/
     for (const a of asserts) {
-      const above = lines.slice(Math.max(0, a - 6), a).join(' ')
+      let blockStart = 0
+      for (let i = a - 1; i >= 0; i--) {
+        if (/await check\(/.test(lines[i])) {
+          blockStart = i
+          break
+        }
+      }
+      const above = lines.slice(blockStart, a).join(' ')
       expect(
-        /if \(!localModelReady\) return \{ __info/.test(above),
-        `the error assert on line ${a + 1} has no on-device guard above it — a first-run profile reports it as an app failure`
+        guardRe.test(above),
+        `the error assert on line ${a + 1} has no on-device guard above it in its own check block — a first-run profile reports it as an app failure`
       ).toBe(true)
     }
   })
@@ -120,8 +137,10 @@ describe('MQA-257 — the bundling check must describe what the product actually
 
   it('checks the promise that IS made: ASR ships, and the LLM is ready or visibly arriving', () => {
     expect(SUITE).toMatch(/ASR ships bundled, and the on-device LLM is either ready or visibly arriving/)
-    // "neither ready nor downloading" stays a hard failure — that one is a real defect.
-    expect(SUITE).toMatch(/neither ready nor downloading/)
+    // "neither ready nor arriving" (renamed from "...nor downloading" once the check also learned to
+    // recognize a RAM-locked model as an honest non-defect, not just a downloading one — see the
+    // e2e-honesty fold's `ramLocked` guard) stays a hard failure — that one is a real defect.
+    expect(SUITE).toMatch(/neither ready nor arriving/)
   })
 })
 

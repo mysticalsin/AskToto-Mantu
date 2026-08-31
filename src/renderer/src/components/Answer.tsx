@@ -7,6 +7,7 @@ import { TextButton } from './ui'
 import { AgentStatus } from './AgentStatus'
 import { useFlash } from '../lib/useFlash'
 import { accelLabel } from '../lib/keys'
+import { isOnboardingDemoActive } from '../lib/onboarding-demo-guard'
 
 /** A fact-check verdict: parse a leading "VERDICT: <X>" line; the rest is the bulleted reasoning. */
 const VERDICTS: Record<string, { label: string; chip: string }> = {
@@ -92,13 +93,17 @@ export const Answer = memo(function Answer({
   const thinking = !text && streaming
 
   // Record the user's verdict on this answer. Metadata only (rating + kind) → audit log; no content sent.
+  // MQA-278: refuses while the Act 2 onboarding demo is on screen — nothing real should be written
+  // while a scripted, non-real screen is up, whether or not this particular answer's text is tagged.
   const rate = (r: 'up' | 'down'): void => {
+    if (isOnboardingDemoActive()) return
     setRated(r)
     void window.toto.answerFeedback({ rating: r, kind: kind ?? 'answer' })
   }
 
   const saveNote = (): void => {
-    if (!text) return
+    // MQA-278 — same demo-screen refusal as rate() above; see lib/onboarding-demo-guard.ts.
+    if (!text || isOnboardingDemoActive()) return
     // Save the user-facing label (the claim/question), NEVER the engineered prompt scaffold + guard line.
     const noteTitle = label || prompt || ''
     window.toto

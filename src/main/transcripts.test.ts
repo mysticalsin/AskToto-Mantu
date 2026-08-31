@@ -924,6 +924,39 @@ describe('parseRecapMarkdown', () => {
     expect(empty.markdown).toBe('not even markdown')
   })
 
+  it('Wave 1D / QA — SUMMARY_PROMPT "## Next steps" maps into actionItems', () => {
+    const md = `## Overview:
+Pricing defense for LATAM SAP.
+
+## Decisions:
+- Hold list price
+
+## Next steps:
+- Send revised quote by Friday (Alice)
+- Schedule security review
+
+## Open questions:
+- None.
+`
+    const r = parseRecapMarkdown(md)
+    expect(r.overview).toMatch(/Pricing defense/)
+    expect(r.decisions).toEqual(['Hold list price'])
+    expect(r.actionItems).toHaveLength(2)
+    expect(r.actionItems[0]).toMatchObject({ text: 'Send revised quote', owner: 'Alice', dueDateText: 'Friday' })
+    expect(r.actionItems[1]?.text).toBe('Schedule security review')
+    expect(r.openQuestions).toEqual([]) // "None." filtered
+  })
+
+  it('Wave 1D — "## Action items" still preferred when both sections exist', () => {
+    const r = parseRecapMarkdown(`## Action items:
+- From action items
+
+## Next steps:
+- From next steps
+`)
+    expect(r.actionItems.map((a) => a.text)).toEqual(['From action items'])
+  })
+
   describe('recapMarkdownToHtml', () => {
     it('converts headings and bullets to structured HTML, escaping unsafe characters', () => {
       const html = recapMarkdownToHtml(SAMPLE, 'Q3 Planning <sync>')

@@ -26,15 +26,21 @@ import {
   readTrustedAdminManaged,
   trustedAdminManagedPath,
   WINDOWS_POWERSHELL,
+  resetAclMemoForTests,
   type AclProbe
 } from './win-security'
-import { getAllowedProviders, getLockedKeys, resetAdminManagedCache } from './store'
+import { getAllowedProviders, getLockedKeys, resetAdminManagedCache, resetAdminManagedCacheForTests } from './store'
 
 const REAL_PLATFORM = process.platform
 function setPlatform(p: NodeJS.Platform): void {
   Object.defineProperty(process, 'platform', { value: p, configurable: true })
 }
 afterEach(() => Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true }))
+
+// The ACL verdict memo is a module singleton; clear it before every test so the probe-count assertions
+// in this file are order-independent (a prior test's still-valid memo would otherwise absorb the first
+// probe of the next test). Runs before each describe's own beforeEach.
+beforeEach(() => resetAclMemoForTests())
 
 // FileSystemRights: FullControl = 0x1F01FF, Modify = 0x301BF, ReadAndExecute = 0x1200A9, Write = 0x116.
 const FULL = 0x1f01ff
@@ -365,6 +371,8 @@ describe('policy accessors — the ACL probe is off the per-ask and per-tick pat
   const REAL_PROGRAM_DATA = process.env.ProgramData
 
   beforeEach(() => {
+    resetAclMemoForTests()
+    resetAdminManagedCacheForTests()
     mkdirSync(join(programData, 'Métis'), { recursive: true })
     writeFileSync(policy, JSON.stringify({ allowedProviders: ['dust'], lockedKeys: ['provider'] }))
     process.env.ProgramData = programData

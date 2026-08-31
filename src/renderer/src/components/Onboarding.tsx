@@ -130,7 +130,7 @@ export function providerReadyCopy(
 ): { label: string; hint: string } {
   const p = PROVIDERS[provider]
   const label = p?.label ?? 'AI provider'
-  if (opts?.alreadyConnected) return { label: `${label} connected`, hint: 'already set up — nothing to paste' }
+  if (opts?.alreadyConnected) return { label: `${label} connected`, hint: 'already set up, nothing to paste' }
   if (p?.kind === 'cli') return { label: `${label} connected`, hint: 'connect it to get live answers' }
   if (p?.kind === 'dust') return { label: `${label} connected`, hint: 'finish the one-click sign-in to get live answers' }
   return { label: `${label} API key`, hint: 'add your key to get live answers' }

@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, renameSync, s
 import { join, basename } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import type { Settings } from '@shared/ipc'
+import { invalidateMatchKeyDir, resetMatchKeyCacheForTests } from './match-key-cache'
 import {
   BrainIndexSchema,
   BrainGraphSchema,
@@ -487,23 +488,27 @@ export const writeMeetingExtraction = (s: Settings, fileSlug: string, v: Meeting
 
 export const readPerson = (s: Settings, slug: string): PersonEntity | null =>
   readJson(s, join('entities', 'person', `${slug}.json`), (v) => migratePerson(PersonEntitySchema.parse(v), slug))
-export const writePerson = (s: Settings, slug: string, v: PersonEntity): Promise<void> => {
+export const writePerson = async (s: Settings, slug: string, v: PersonEntity): Promise<void> => {
   ensureV1Backup(s)
-  return writeJson(s, join('entities', 'person', `${slug}.json`), v)
+  await writeJson(s, join('entities', 'person', `${slug}.json`), v)
+  // Receipt Mode match-key cache — alias edits must not wait on directory mtime (ask-path latency).
+  invalidateMatchKeyDir(join(brainDir(s), 'entities', 'person'))
 }
 
 export const readAccount = (s: Settings, slug: string): AccountEntity | null =>
   readJson(s, join('entities', 'account', `${slug}.json`), (v) => migrateAccount(AccountEntitySchema.parse(v), slug))
-export const writeAccount = (s: Settings, slug: string, v: AccountEntity): Promise<void> => {
+export const writeAccount = async (s: Settings, slug: string, v: AccountEntity): Promise<void> => {
   ensureV1Backup(s)
-  return writeJson(s, join('entities', 'account', `${slug}.json`), v)
+  await writeJson(s, join('entities', 'account', `${slug}.json`), v)
+  invalidateMatchKeyDir(join(brainDir(s), 'entities', 'account'))
 }
 
 export const readDeal = (s: Settings, slug: string): DealEntity | null =>
   readJson(s, join('entities', 'deal', `${slug}.json`), (v) => migrateDeal(DealEntitySchema.parse(v), slug))
-export const writeDeal = (s: Settings, slug: string, v: DealEntity): Promise<void> => {
+export const writeDeal = async (s: Settings, slug: string, v: DealEntity): Promise<void> => {
   ensureV1Backup(s)
-  return writeJson(s, join('entities', 'deal', `${slug}.json`), v)
+  await writeJson(s, join('entities', 'deal', `${slug}.json`), v)
+  invalidateMatchKeyDir(join(brainDir(s), 'entities', 'deal'))
 }
 
 /**
@@ -599,6 +604,7 @@ export function purgeBrain(settings: Settings, opts: { preserveCorrections?: boo
     preserve = !!opts.preserveCorrections && existsSync(journalPath)
     if (preserve) cpSync(journalPath, preserveTo)
     if (existsSync(root)) rmSync(root, { recursive: true, force: true })
+    resetMatchKeyCacheForTests() // Receipt Mode must not match against a wiped corpus
     if (preserve) {
       mkdirSync(root, { recursive: true })
       cpSync(preserveTo, journalPath)

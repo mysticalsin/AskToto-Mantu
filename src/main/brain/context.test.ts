@@ -35,7 +35,7 @@ vi.mock('./store', async (importOriginal) => {
   }
 })
 
-import { buildBrainContext } from './context'
+import { buildBrainContext, resetMatchKeyCacheForTests } from './context'
 import { writePerson, writeAccount, writeDeal } from './store'
 import { whenIndexWritesSettle } from './ingest'
 
@@ -62,6 +62,7 @@ describe('buildBrainContext — relevance pass cost (MQA-010)', () => {
   let s: Settings
 
   beforeEach(async () => {
+    resetMatchKeyCacheForTests()
     folder = mkdtempSync(join(tmpdir(), 'asktoto-brain-context-'))
     s = settingsFor(folder)
     for (const slug of PEOPLE) await writePerson(s, slug, personFor(slug))

@@ -28,7 +28,7 @@ import { fnv1a } from '@shared/hash'
 import { alignQuote, verifyNumericFact, extractNumerals, numeralDerivable } from '@shared/grounding'
 import { getSettings, getApiKey, getAllowedProviders, setApiKey, setSettings } from '../store'
 import { createStream } from '../llm'
-import { localBaseReady } from '../llm/local-routing'
+import { localBaseReady, resolveRoutingMode } from '../llm/local-routing'
 import { verifyIntegrity } from '../llm/local-models'
 import { getState as localRuntimeState, activeStreams as localActiveStreams } from '../llm/local-runtime'
 import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
@@ -68,6 +68,7 @@ import {
 } from './store'
 import { applyCorrections, readAliasMap, resolveEntitySlug, replayCorrections, readCorrectionsJournalSafe } from './corrections'
 import { publishForExtraction, publishIndexes, publishAll } from './publish'
+import { refuseIfDemoTagged } from '@shared/demo-guard'
 
 /**
  * Brain ingest — turns one saved transcript into a structured extraction, then merges it into the
@@ -96,7 +97,23 @@ function hasUsableProvider(s: Settings): boolean {
  *  the LAST candidate after the whole cloud waterfall — so a meeting still gets indexed when every cloud
  *  provider is down or none is configured, instead of never being indexed at all. */
 function pickProviderCandidates(s: Settings): { provider: ProviderId; model: string; key: string }[] {
-  if (s.localLlm.useFor.summary && localBaseReady(s, getAllowedProviders())) {
+  // Exclusive on-device when the user opted Local summaries, set Routing mode → Local, or asked
+  // consolidation to prefer the on-device model — never waterfalls into cloud (would silently upload).
+  const preferOnDevice =
+    s.localLlm.useFor.summary ||
+    resolveRoutingMode(s) === 'local' ||
+    s.brainConsolidation.preferLocal
+  if (preferOnDevice && localBaseReady(s, getAllowedProviders())) {
+    // MQA-018 (exclusive-local parity): honor the SAME session-long 'unavailable' lockout the fallback
+    // branch below already excludes, and that localOnlyRebuildBlocked's comment assumes is "already
+    // excluded upstream in pickProviderCandidates". This branch must NEVER waterfall to cloud (an explicit
+    // privacy choice) — but returning a `local` candidate while the runtime is in its restart-budget-
+    // exhausted lockout hands hasUsableProvider() the weakest possible evidence: it authorizes
+    // startRebuild's purge, then EVERY re-extraction fails against the dead runtime with nothing (cloud is
+    // off by choice) to catch it — a wiped brain that cannot rebuild until relaunch. Returning [] instead
+    // makes hasUsableProvider() false, so the rebuild refuses with its actionable error and the meeting
+    // stays unindexed (retried once the runtime recovers) — never uploaded.
+    if (localRuntimeState() === 'unavailable') return []
     return [{ provider: 'local', model: s.localLlm.modelId, key: '' }]
   }
 
@@ -1907,8 +1924,24 @@ function pump(): void {
  * extraction is allowed to start, so a quit/restart replays the meeting instead of losing it in RAM.
  * `force` is for an edited existing note such as a debrief: its prior successful extraction is no longer
  * current and must be replaced.
+ *
+ * Wave 3 (`deferred`, settings.brainConsolidation): when true, writes the exact same durable pending
+ * record as always — a quit right after Save still resumes it — but stops short of `queue.push` +
+ * `pump()`, so this one meeting does NOT trigger an immediate network-bound extraction. The file is not
+ * lost: it is still on disk, not marked `ok` in the index, so the next backfill scan (a periodic
+ * consolidation pass, or the user clicking "Index meetings" / rebuild) picks it up exactly like any other
+ * not-yet-ingested transcript — startBackfill's readdir scan finds it by content, independent of whether
+ * enqueueIngest ever ran for it at all.
  */
-export async function enqueueIngest(file: string, { force = false }: { force?: boolean } = {}): Promise<void> {
+export async function enqueueIngest(
+  file: string,
+  { force = false, deferred = false }: { force?: boolean; deferred?: boolean } = {}
+): Promise<void> {
+  // MQA-278 — refuses Act 2 onboarding-demo-tagged data before it can reach the private meeting brain.
+  // saveMeeting already refuses the same tag before a file could legitimately exist (see
+  // transcripts.ts), so this is belt-and-suspenders for any other caller that hands enqueueIngest a
+  // path directly. See @shared/demo-guard.
+  refuseIfDemoTagged('enqueueIngest', basename(file))
   const s = getSettings()
   const key = basename(file)
   const sourceVersion = meetingSourceVersion(file)
@@ -1944,6 +1977,7 @@ export async function enqueueIngest(file: string, { force = false }: { force?: b
     // cannot be recovered until the index store becomes writable again.
     mainLog.warn(`[brain] could not persist live ingest intent for ${key}: ${error instanceof Error ? error.message : String(error)}`)
   }
+  if (deferred) return
   queue.push({ file, source: 'meetings', origin: 'live', ...(sourceVersion ? { sourceVersion } : {}) })
   pump()
 }
@@ -2354,9 +2388,10 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
  * Rebuild/resume paths keep using startBackfill() directly because they need the actual queued count
  * synchronously for their durable journal semantics.
  */
-/** Local calendar day as 'YYYY-MM-DD' — the unit dailyBackfillRunsRemaining buckets against. */
-function todayKey(): string {
-  return new Date().toISOString().slice(0, 10)
+/** Local calendar day as 'YYYY-MM-DD' — the unit dailyBackfillRunsRemaining buckets against.
+ *  Must use the LOCAL timezone (en-CA), not UTC: a 6pm Pacific pass must not burn "tomorrow"'s budget. */
+function todayKey(now = Date.now()): string {
+  return new Date(now).toLocaleDateString('en-CA')
 }
 
 /**

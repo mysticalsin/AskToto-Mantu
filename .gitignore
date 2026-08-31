@@ -19,10 +19,12 @@ build/make-cahe.ps1
 
 # Optional installer-embedded Cloudflare proxy key (main build, every platform — see
 # src/main/embedded-cloudflare-key.ts + electron-builder.yml's extraResources + docs/CLOUDFLARE.md).
-# Same disclosed-and-scoped pattern as the Cahê key above: never commit the real key; only its own
-# labeled "embedded-default" entry in the Worker's METIS_PROXY_KEYS, never the operator's own key.
-# Ignore anything real dropped in this dir (key.json when embedding, or key.json.pending-deploy while
-# staged locally before the Worker-side label exists) — only .gitkeep is ever meant to be tracked.
+# The key is provided ONLY via the METIS_PROXY_KEY build env var and encrypted (AES-256-GCM) into key.json
+# by scripts/embed-cloudflare-key.mjs at build time — key.json therefore holds CIPHERTEXT, never the
+# plaintext token, and even so is never committed. Same disclosed-and-scoped pattern as the Cahê key above:
+# only its own labeled "embedded-default" entry in the Worker's METIS_PROXY_KEYS, never the operator's own
+# key. Ignore anything dropped in this dir (the generated key.json, or key.json.pending-deploy while staged
+# locally before the Worker-side label exists) — only .gitkeep is ever meant to be tracked.
 build/cloudflare-embed/*
 !build/cloudflare-embed/.gitkeep
 .vite/
@@ -101,6 +103,7 @@ resources/mac-helper/
 
 # Native app build artifacts
 native-app/MetisKit/.build/
+native-app/Metis.xcodeproj/
 native-app/**/*.xcodeproj/xcuserdata/
 
 # Packaged-app QA harness scratch output (.forge live E2E runs)

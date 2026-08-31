@@ -85,6 +85,7 @@ describe('MQA-261 — a removed shipped key has a way back', () => {
     // Without provenance the card's own advice ("paste your METIS_PROXY_KEY from your operator") is
     // impossible to follow on a self-serve install.
     expect(SETTINGS).toMatch(/came with Metis rather than from you/)
-    expect(SETTINGS).toMatch(/private but noticeably slower/)
+    expect(SETTINGS).toMatch(/shipped with a Cloudflare key/)
+    expect(SETTINGS).toMatch(/Restore it to keep Cloudflare answering/)
   })
 })

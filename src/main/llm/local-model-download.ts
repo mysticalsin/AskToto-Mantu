@@ -100,17 +100,15 @@ export function localModelDownloadState(): LocalModelDownloadState {
 }
 
 /**
- * Whether this machine should fetch the ~763 MB of weights at all.
+ * Whether this machine should fetch the on-device weights at all.
  *
- * Two reasons not to, both of which boot used to ignore — it fetched unconditionally (MQA-186):
- *   - Local AI is switched off. The transfer is then pure waste of the user's bandwidth, and the toggle
- *     is the only "not now" the product offers. Callers MUST re-arm on the OFF→ON edge: this module has
- *     no other trigger, so gating without re-arming would strand the user with no path to the weights.
+ * Weights are not in the installer (~730 MB+); the app starts the download whenever it opens so the
+ * model is ready the moment the user turns Local AI on. Local AI `enabled` only controls ROUTING —
+ * never whether bytes are fetched. One remaining reason not to fetch:
  *   - The machine is under the model's RAM floor. assertRamOk refuses every load below it, so the bytes
  *     could never be used; listModels() already reported such a machine `insufficient-ram`.
  */
-export function shouldFetchWeights(modelId: string, localAiEnabled: boolean): boolean {
-  if (!localAiEnabled) return false
+export function shouldFetchWeights(modelId: string): boolean {
   try {
     assertRamOk(modelId)
   } catch {

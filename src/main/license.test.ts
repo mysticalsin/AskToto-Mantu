@@ -2,8 +2,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { createPrivateKey, sign } from 'node:crypto'
 import { app } from 'electron'
 import type { Settings } from '@shared/ipc'
+import { tagAsDemo } from '@shared/demo-guard'
+import { devLeasePublicKeyForTests } from './license-lease-key'
+import { TRIAL_DAYS, TRIAL_MS } from './license-trial'
 
 vi.mock('electron')
 
@@ -19,7 +23,17 @@ vi.mock('./store', () => ({
   setSettings: (patch: Partial<Settings>) => setSettingsSpy(patch)
 }))
 
-import { activateLicense, heartbeat, checkLicenseGrace, getMachineId, normalizeServerUrl } from './license'
+import {
+  activateLicense,
+  heartbeat,
+  checkLicenseGrace,
+  getMachineId,
+  normalizeServerUrl,
+  verifyLease,
+  noteQualifyingUse,
+  licenseDisplayStatus,
+  fetchLicenseConfig
+} from './license'
 
 const DAY = 24 * 60 * 60 * 1000
 
@@ -33,8 +47,35 @@ function baseSettings(overrides: Partial<Settings> = {}): Settings {
     licenseValid: false,
     licenseLastValidatedAt: 0,
     licenseGateEnabled: false,
+    licenseLease: '',
+    trialStartedAt: null,
     ...overrides
   } as Settings
+}
+
+// Test-only fixture — the PRIVATE half of the DEV_LEASE_PUBLIC_KEY bundled in license-lease-key.ts (same
+// fixture license-lease-verify.test.ts uses). Only ever used here to sign a lease so checkLicenseGrace's
+// "prefer a valid lease" branch can be exercised against a genuinely-verifiable token.
+const FIXTURE_PRIVATE_KEY_PEM = Buffer.from(
+  'LS0tLS1CRUdJTiBQUklWQVRFIEtFWS0tLS0tCk1DNENBUUF3QlFZREsyVndCQ0lFSU5CMFVLNFVYU0xuNm1YSU9kaE45SWc1WW43QzFjVlpHMUpvdzJVcjYyeE0KLS0tLS1FTkQgUFJJVkFURSBLRVktLS0tLQo=',
+  'base64'
+).toString('utf8')
+
+function signTestLease(overrides: Partial<Record<string, unknown>> = {}): string {
+  const now = Date.now()
+  const payload = {
+    licenseKey: 'ATK-TEST1234',
+    machineId: 'machine-1',
+    companyName: 'Acme Corp',
+    seatCap: 5,
+    issuedAt: now,
+    notAfter: now + 14 * DAY,
+    ...overrides
+  }
+  const privateKey = createPrivateKey(FIXTURE_PRIVATE_KEY_PEM)
+  const payloadB64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
+  const signature = sign(null, Buffer.from(payloadB64, 'utf8'), privateKey)
+  return `${payloadB64}.${signature.toString('base64url')}`
 }
 
 function jsonResponse(body: unknown): Response {
@@ -337,6 +378,260 @@ describe('license.ts — phone-home activation', () => {
 
       expect(r).toEqual({ ok: false, error: 'invalid' })
       expect(testSettings.licenseValid).toBe(false)
+    })
+  })
+
+  describe('MQA-282 — verifyLease (client-side wrapper around license-lease-verify.ts)', () => {
+    it('verifies a genuinely-signed lease against the bundled dev public key', () => {
+      const token = signTestLease()
+      expect(verifyLease(token)?.licenseKey).toBe('ATK-TEST1234')
+    })
+
+    it('rejects a tampered lease and never throws', () => {
+      const token = signTestLease()
+      const tampered = token.slice(0, -4) + 'XXXX'
+      expect(verifyLease(tampered)).toBeNull()
+    })
+
+    it('rejects empty/missing input', () => {
+      expect(verifyLease('')).toBeNull()
+      expect(verifyLease(null)).toBeNull()
+      expect(verifyLease(undefined)).toBeNull()
+    })
+  })
+
+  describe('MQA-282 — checkLicenseGrace prefers a valid signed lease over the wall-clock grace', () => {
+    it('allows via the lease even when licenseValid is false and no trial has started', () => {
+      testSettings = baseSettings({
+        licenseGateEnabled: true,
+        licenseValid: false,
+        licenseLease: signTestLease({ notAfter: Date.now() + 5 * DAY })
+      })
+
+      const r = checkLicenseGrace()
+
+      expect(r.allowed).toBe(true)
+      expect(r.leaseExpiresAt).toBeGreaterThan(Date.now())
+      expect(fetchMock).not.toHaveBeenCalled() // lease check is fully offline
+    })
+
+    it('allows via the lease even when the wall-clock grace/hard-cap would otherwise have expired', () => {
+      // The exact scenario the lease exists for: a license that phoned home once, long enough ago
+      // that the 30-day wall-clock hard cap has passed, but whose signed lease is still inside its
+      // own (separately tracked) validity window.
+      testSettings = baseSettings({
+        licenseGateEnabled: true,
+        licenseValid: true,
+        licenseLastValidatedAt: Date.now() - 45 * DAY, // past HARD_CAP_MS
+        licenseLease: signTestLease({ notAfter: Date.now() + 2 * DAY })
+      })
+
+      const r = checkLicenseGrace()
+
+      expect(r).toEqual({ allowed: true, leaseExpiresAt: expect.any(Number) })
+      expect(fetchMock).not.toHaveBeenCalled() // never falls through to the heartbeat-triggering branch
+    })
+
+    it('an EXPIRED lease is not preferred — falls through to the wall-clock logic below it', () => {
+      testSettings = baseSettings({
+        licenseGateEnabled: true,
+        licenseValid: true,
+        licenseLastValidatedAt: Date.now() - 1 * DAY, // inside soft grace
+        licenseLease: signTestLease({ notAfter: Date.now() - 1000 }) // already expired
+      })
+
+      const r = checkLicenseGrace()
+
+      // Falls through to the (still-valid) wall-clock soft grace, not blocked outright.
+      expect(r).toEqual({ allowed: true })
+    })
+
+    it('a TAMPERED lease is not preferred — falls through exactly as if there were no lease at all', () => {
+      const good = signTestLease({ notAfter: Date.now() + 5 * DAY })
+      testSettings = baseSettings({
+        licenseGateEnabled: true,
+        licenseValid: false,
+        licenseLease: good.slice(0, -4) + 'XXXX'
+      })
+
+      const r = checkLicenseGrace()
+
+      expect(r).toEqual({ allowed: false, reason: 'not_activated' })
+    })
+  })
+
+  describe('MQA-281 — checkLicenseGrace: local trial fallback for a never-activated device', () => {
+    it('allows during an active trial, reporting daysRemaining', () => {
+      testSettings = baseSettings({
+        licenseGateEnabled: true,
+        licenseValid: false,
+        trialStartedAt: Date.now() - 3 * DAY
+      })
+
+      const r = checkLicenseGrace()
+
+      expect(r.allowed).toBe(true)
+      expect(r.trialActive).toBe(true)
+      expect(r.trialDaysRemaining).toBe(TRIAL_DAYS - 3)
+    })
+
+    it('blocks with reason trial_expired once the trial window has fully elapsed', () => {
+      testSettings = baseSettings({
+        licenseGateEnabled: true,
+        licenseValid: false,
+        trialStartedAt: Date.now() - (TRIAL_DAYS + 1) * DAY
+      })
+
+      const r = checkLicenseGrace()
+
+      expect(r).toEqual({ allowed: false, reason: 'trial_expired', trialDaysRemaining: 0 })
+    })
+
+    it('a real activation (licenseValid true) is never overridden by a stale trial timestamp', () => {
+      testSettings = baseSettings({
+        licenseGateEnabled: true,
+        licenseValid: true,
+        licenseLastValidatedAt: Date.now() - 1 * DAY,
+        trialStartedAt: Date.now() - (TRIAL_DAYS + 1) * DAY // would read as expired if consulted
+      })
+
+      const r = checkLicenseGrace()
+
+      // Wall-clock soft-grace path wins; the expired trial is never even consulted.
+      expect(r).toEqual({ allowed: true })
+    })
+  })
+
+  describe('MQA-281 — noteQualifyingUse: trial starts on FIRST qualifying use, never on install', () => {
+    it('starts the trial on a qualifying suggest result', () => {
+      testSettings = baseSettings({ trialStartedAt: null })
+
+      noteQualifyingUse('suggest', 'What should I say next?', 'transcript tail')
+
+      expect(testSettings.trialStartedAt).toBeGreaterThan(0)
+      expect(setSettingsSpy).toHaveBeenCalledWith({ trialStartedAt: expect.any(Number) })
+    })
+
+    it('starts the trial on a qualifying summary/recap result', () => {
+      testSettings = baseSettings({ trialStartedAt: null })
+      noteQualifyingUse('summary')
+      expect(testSettings.trialStartedAt).toBeGreaterThan(0)
+    })
+
+    it('does NOT start the trial for a plain answer/vision ask', () => {
+      testSettings = baseSettings({ trialStartedAt: null })
+
+      noteQualifyingUse('answer', 'a typed question')
+      noteQualifyingUse('vision', 'describe my screen')
+
+      expect(testSettings.trialStartedAt).toBeNull()
+      expect(setSettingsSpy).not.toHaveBeenCalled()
+    })
+
+    it('is a no-op once a trial has already started — never restarts or extends it', () => {
+      const startedAt = Date.now() - 5 * DAY
+      testSettings = baseSettings({ trialStartedAt: startedAt })
+
+      noteQualifyingUse('suggest')
+      noteQualifyingUse('summary')
+
+      expect(testSettings.trialStartedAt).toBe(startedAt)
+      expect(setSettingsSpy).not.toHaveBeenCalled()
+    })
+
+    it('MQA-278 belt-and-suspenders: a demo-tagged payload never starts a trial, even on a qualifying mode', () => {
+      // Act 2's onboarding demo cannot reach this call in practice (it never touches window.toto — see
+      // onboarding-demo.ts's own IPC-free contract test), but this proves the defensive check works
+      // directly: a demo-tagged prompt/transcript must refuse exactly like refuseIfDemoTagged does for
+      // saveMeeting/saveNote/enqueueIngest, so a future wiring mistake can't leak a demo "result" into
+      // a real trial start.
+      testSettings = baseSettings({ trialStartedAt: null })
+
+      noteQualifyingUse('suggest', tagAsDemo('a scripted demo prompt'), 'transcript tail')
+
+      expect(testSettings.trialStartedAt).toBeNull()
+      expect(setSettingsSpy).not.toHaveBeenCalled()
+    })
+
+    it('MQA-278: a demo tag anywhere in the tagged fields refuses, even mixed with a real-looking field', () => {
+      testSettings = baseSettings({ trialStartedAt: null })
+
+      noteQualifyingUse('summary', 'a real-looking prompt', tagAsDemo('but this transcript is fake'))
+
+      expect(testSettings.trialStartedAt).toBeNull()
+    })
+
+    it('never touches settings at all when nothing qualifies — not even a read-then-noop write', () => {
+      testSettings = baseSettings({ trialStartedAt: null })
+      noteQualifyingUse('answer')
+      expect(setSettingsSpy).not.toHaveBeenCalled()
+    })
+  })
+
+  describe('licenseDisplayStatus — live-verified status for Settings/LicenseGate copy', () => {
+    it('reports leaseExpiresAt from a valid lease, independent of licenseGateEnabled', () => {
+      testSettings = baseSettings({
+        licenseGateEnabled: false, // OFF — display status still works; it is not an enforcement check
+        licenseLease: signTestLease({ notAfter: Date.now() + 3 * DAY })
+      })
+
+      const status = licenseDisplayStatus()
+
+      expect(status.leaseExpiresAt).toBeGreaterThan(Date.now())
+    })
+
+    it('reports trialActive + daysRemaining for a never-activated device mid-trial', () => {
+      testSettings = baseSettings({ licenseValid: false, trialStartedAt: Date.now() - 2 * DAY })
+
+      const status = licenseDisplayStatus()
+
+      expect(status.trialActive).toBe(true)
+      expect(status.trialDaysRemaining).toBe(TRIAL_DAYS - 2)
+    })
+
+    it('never reports an active trial once a real activation exists, even with a stale trial timestamp', () => {
+      testSettings = baseSettings({ licenseValid: true, trialStartedAt: Date.now() - 2 * DAY })
+
+      const status = licenseDisplayStatus()
+
+      expect(status.trialActive).toBe(false)
+      expect(status.trialDaysRemaining).toBe(0)
+    })
+
+    it('is all-null/false/0 for a fresh, never-touched install', () => {
+      testSettings = baseSettings()
+      expect(licenseDisplayStatus()).toEqual({ leaseExpiresAt: null, trialActive: false, trialDaysRemaining: 0 })
+    })
+  })
+
+  describe('fetchLicenseConfig — informational GET /license/config read (ActLicense onboarding scene)', () => {
+    it('returns the server-declared pair on success', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({ ok: true, licenseEnforcement: false, licenseUiEnabled: false, drift: false })
+      )
+
+      const r = await fetchLicenseConfig('https://license.acme.test')
+
+      expect(r).toEqual({ ok: true, licenseEnforcement: false, licenseUiEnabled: false, drift: false })
+      expect(fetchMock).toHaveBeenCalledWith('https://license.acme.test/license/config', expect.anything())
+    })
+
+    it('normalizes a scheme-less URL before fetching, same convention as activate/heartbeat', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({ ok: true, licenseEnforcement: true, licenseUiEnabled: true, drift: false })
+      )
+
+      await fetchLicenseConfig('license.acme.test')
+
+      expect(fetchMock).toHaveBeenCalledWith('http://license.acme.test/license/config', expect.anything())
+    })
+
+    it('a network failure or malformed response reads as error:"network", never throws', async () => {
+      fetchMock.mockRejectedValue(new Error('offline'))
+      expect(await fetchLicenseConfig('https://license.acme.test')).toEqual({ ok: false, error: 'network' })
+
+      fetchMock.mockResolvedValue(jsonResponse({ unexpected: 'shape' }))
+      expect(await fetchLicenseConfig('https://license.acme.test')).toEqual({ ok: false, error: 'network' })
     })
   })
 })
