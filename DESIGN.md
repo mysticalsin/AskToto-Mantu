@@ -117,6 +117,8 @@ Act 3 shows on-device model **download/install progress** (weights already fetch
 
 Each built-in mode (`BUILTIN_MODE_LABELS`: general, meeting, sales, interview, recruiting, negotiation, presentation, support, cold-call) has its **own** recap section layout via `recapPromptFor` / `MODE_RECAP_LAYOUTS`. Not one generic skeleton plus a footnote. Sales focuses on next steps and what a seller must know. Recruiting is an interview sheet. Meeting is decisions and owners. Ship layouts for all nine.
 
+The Summary / recap body Tony reads after a session (Review inside `Panel`, plus History / Agenda / Brain in that same shell) must **fit or scroll**. Never clip under the overlay Bar, a fixed footer, window chrome, or a parent `overflow: hidden` with no scroller. `Panel` is the one overflow-y surface; its cap leaves room for Bar chrome (including the 64 thinking-orb), root padding, gap, resize quantization, and main's `workArea - 48` ceiling. Last paragraph, actions, and footer chips stay reachable. No "scroll here" hint.
+
 ## Copy
 
 Métis voice. Do not clone Vibe Island strings.

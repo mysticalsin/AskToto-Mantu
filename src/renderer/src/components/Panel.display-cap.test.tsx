@@ -52,7 +52,7 @@ describe('MQA-197 — the panel cap follows the overlay between displays', () =>
     dom.setAvailHeight(LAPTOP)
     dom.fireResize()
 
-    expect(seen).toEqual([LAPTOP - 160])
+    expect(seen).toEqual([PanelModule.panelMaxHeight(LAPTOP)])
     unsubscribe()
     expect(dom.listenerCount()).toBe(0)
   })
@@ -64,6 +64,6 @@ describe('MQA-197 — the panel cap follows the overlay between displays', () =>
         <div>review</div>
       </PanelModule.Panel>
     )
-    expect(html).toContain(`max-height:${LAPTOP - 160}px`)
+    expect(html).toContain(`max-height:${PanelModule.panelMaxHeight(LAPTOP)}px`)
   })
 })
