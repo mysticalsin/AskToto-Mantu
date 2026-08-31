@@ -32,7 +32,7 @@ function firstTokenPath(delta) {
   return { cleaned, ttft }
 }
 
-function run(): void {
+function run() {
   const ttfTs = []
   for (let i = 0; i < RUNS; i++) {
     ttfTs.push(firstTokenPath('Sure, 68').ttft)
