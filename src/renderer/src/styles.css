@@ -736,16 +736,6 @@ input::placeholder {
     radial-gradient(1200px 700px at 18% 12%, color-mix(in srgb, #9a2bf0 42%, transparent), transparent 58%),
     radial-gradient(900px 600px at 88% 78%, color-mix(in srgb, #7f00da 36%, transparent), transparent 55%),
     linear-gradient(165deg, #3a0b6b 0%, #7f00da 42%, #2a0848 100%);
-  -webkit-mask-image: radial-gradient(closest-side, rgb(0, 0, 0) 62%, rgba(0, 0, 0, 0.4) 82%, transparent 100%);
-  mask-image: radial-gradient(closest-side, rgb(0, 0, 0) 62%, rgba(0, 0, 0, 0.4) 82%, transparent 100%);
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
-  -webkit-mask-position: top center;
-  mask-position: top center;
-  -webkit-mask-size: 120px 36px;
-  mask-size: 120px 36px;
-  animation: onboard-portal-open 1280ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
-  will-change: mask-size, -webkit-mask-size;
 }
 @keyframes onboard-portal-open {
   from {
@@ -768,7 +758,16 @@ input::placeholder {
   }
 }
 .onboard-stage--portal-close {
+  -webkit-mask-image: radial-gradient(closest-side, rgb(0, 0, 0) 62%, rgba(0, 0, 0, 0.4) 82%, transparent 100%);
+  mask-image: radial-gradient(closest-side, rgb(0, 0, 0) 62%, rgba(0, 0, 0, 0.4) 82%, transparent 100%);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: top center;
+  mask-position: top center;
+  -webkit-mask-size: 280vmax 180vmax;
+  mask-size: 280vmax 180vmax;
   animation: onboard-portal-close 1220ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+  will-change: mask-size, -webkit-mask-size;
 }
 .onboard-portal-content {
   animation: onboard-portal-content-in 1280ms cubic-bezier(0.22, 1, 0.36, 1) both;

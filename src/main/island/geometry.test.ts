@@ -467,7 +467,7 @@ describe('DESIGN.md overlay contract', () => {
 
   it('names hover-down, exclusive fullscreen, large CTA, and Métis demo', () => {
     expect(design).toMatch(/expands \*\*down\*\*/)
-    expect(design).toMatch(/exclusive fullscreen/)
+    expect(design).toMatch(/visible exclusive stage|exclusiveOnboardingBounds/)
     expect(design).toMatch(/exclusiveOnboardingBounds/)
     expect(design).toMatch(/52×220|min 52/)
     expect(design).toMatch(/Métis/)
@@ -573,7 +573,10 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(index).toMatch(/function applyExclusiveOnboardingStage/)
     expect(index).toMatch(/function exitExclusiveOnboardingStage/)
     expect(index).toMatch(/exclusiveOnboardingBounds/)
-    expect(index).toMatch(/setSimpleFullScreen\(true\)/)
+    expect(index).not.toMatch(/setSimpleFullScreen\(true\)/)
+    expect(index).toMatch(/showOnboardingStage/)
+    expect(index).toMatch(/setSkipTaskbar\(false\)/)
+    expect(index).toMatch(/setHiddenInMissionControl\?\.\(false\)/)
     expect(index).toMatch(/!cur\.onboardingDone && next\.onboardingDone/)
     expect(index).toMatch(/exitExclusiveOnboardingStage\(\)/)
     const experience = readFileSync(join(__dirname, '../../renderer/src/components/OnboardingExperience.tsx'), 'utf8')

@@ -1406,7 +1406,19 @@ function publicSettings(): PublicSettings {
   }
 }
 
-/** Wiped-profile / mid-tour: exclusive fullscreen owns the display until onboardingDone. */
+/** First-run tour must steal focus so people can find and click it. Overlay after onboarding
+ *  still uses showInactive (see showForAsk / no-show-steals-focus.contract.test.ts). */
+function showOnboardingStage(w: BrowserWindow): void {
+  try {
+    w.show()
+    w.focus()
+    if (typeof w.moveTop === 'function') w.moveTop()
+  } catch {
+    /* headless */
+  }
+}
+
+/** Wiped-profile / mid-tour: exclusive visible stage owns the display until onboardingDone. */
 function onboardingExclusiveLive(): boolean {
   try {
     return !getSettings().onboardingDone
@@ -1415,7 +1427,7 @@ function onboardingExclusiveLive(): boolean {
   }
 }
 
-function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDisplayMatching(w.getBounds())): void {
+function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())): void {
   stopOverlayCursorWatch()
   const stage = exclusiveOnboardingBounds(display.bounds, display.workArea)
   currentWidth = stage.width
@@ -1428,21 +1440,33 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
     /* headless */
   }
   try {
-    w.setFullScreenable?.(true)
+    // Do not setSimpleFullScreen / kiosk: LSUIElement + a fullscreen space hides the tour
+    // from Mission Control and Cmd-Tab (Tony: onboarding felt like Hide). Cover the display
+    // as a regular always-on-top window on the user's current space.
+    if (process.platform === 'darwin' && typeof w.isSimpleFullScreen === 'function' && w.isSimpleFullScreen()) {
+      w.setSimpleFullScreen(false)
+    }
+    if (typeof w.isKiosk === 'function' && w.isKiosk()) w.setKiosk(false)
+    w.setFullScreenable?.(false)
     w.setBackgroundColor('#3A0B6B')
-    w.setBounds(stage)
+    w.setOpacity(1)
+    w.setBounds(stage, false)
+    w.setAlwaysOnTop(true, 'screen-saver')
+    w.setSkipTaskbar(false)
+    w.setHiddenInMissionControl?.(false)
+    if (process.platform !== 'win32') w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   } catch {
     /* headless / already destroyed */
   }
   try {
-    if (process.platform === 'darwin' && typeof w.setSimpleFullScreen === 'function') {
-      if (!w.isSimpleFullScreen()) w.setSimpleFullScreen(true)
-    } else if (process.platform === 'win32' && typeof w.setKiosk === 'function') {
-      if (!w.isKiosk()) w.setKiosk(true)
+    if (process.platform === 'darwin') {
+      app.dock?.show?.()
+      app.setActivationPolicy?.('regular')
     }
   } catch {
-    /* CI / Linux kiosk unsupported — bounds still cover the display */
+    /* headless / no Dock */
   }
+  showOnboardingStage(w)
 }
 
 /** After onboardingDone only: leave exclusive fullscreen and park hide/island peek (never 880×816). */
@@ -1457,8 +1481,18 @@ function exitExclusiveOnboardingStage(): void {
   try {
     win.setFullScreenable?.(false)
     win.setBackgroundColor('#00000000')
+    win.setSkipTaskbar(true)
+    win.setHiddenInMissionControl?.(true)
   } catch {
     /* ignore */
+  }
+  try {
+    if (process.platform === 'darwin') {
+      app.setActivationPolicy?.('accessory')
+      app.dock?.hide?.()
+    }
+  } catch {
+    /* headless / no Dock */
   }
   applyOverlayAlwaysOnTop(win)
   isMinimized = false
@@ -1538,7 +1572,7 @@ function createWindow(): void {
     resizable: false,
     movable: true,
     skipTaskbar: true,
-    fullscreenable: onboardingLive,
+    fullscreenable: false,
     maximizable: false,
     minimizable: false,
     roundedCorners: !onboardingLive,
@@ -1565,14 +1599,18 @@ function createWindow(): void {
   // only on the virtual desktop it was created on.
   if (process.platform !== 'win32') win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
   win.setContentProtection(contentProtectionOn())
-  win.setHiddenInMissionControl?.(true)
+  if (!onboardingLive) win.setHiddenInMissionControl?.(true)
   // Windows: the constructor's skipTaskbar:true is not durable — Electron/Windows re-adds the taskbar
   // button after certain show/restore/focus transitions (long-standing upstream quirk). Re-assert on
   // every transition that can resurrect it so the overlay NEVER appears in the taskbar (Tony, 2026-07-16:
-  // an overlay in the taskbar is pointless). Tray remains the discoverable affordance.
+  // an overlay in the taskbar is pointless). Tray remains the discoverable affordance. During the
+  // first-run tour, skipTaskbar stays off so people can find the window.
   if (process.platform === 'win32') {
     const overlay = win // capture THIS instance — the module-level `win` binding is reassignable
-    const reassertSkipTaskbar = (): void => overlay.setSkipTaskbar(true)
+    const reassertSkipTaskbar = (): void => {
+      if (onboardingExclusiveLive()) return
+      overlay.setSkipTaskbar(true)
+    }
     overlay.on('show', reassertSkipTaskbar)
     overlay.on('restore', reassertSkipTaskbar)
     overlay.on('focus', reassertSkipTaskbar)
@@ -1693,8 +1731,12 @@ function createWindow(): void {
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }
-  startOverlayCursorWatch()
-  applyHideClickThrough()
+  if (onboardingLive) {
+    applyExclusiveOnboardingStage(win, placementDisplay)
+  } else {
+    startOverlayCursorWatch()
+    applyHideClickThrough()
+  }
 }
 
 function resizeTo(height: number): void {
@@ -1985,13 +2027,11 @@ function ensureWindow(): BrowserWindow | null {
 }
 
 /**
- * The ONE deliberate, user-initiated focus grab in this file (MQA-275 / Phase 1d of the island rebuild:
- * "never steals focus" except a deliberate ask). `show()` (unlike `showInactive()`) activates the window
- * on both macOS and Windows, stealing focus from whatever app the user was typing in — acceptable ONLY
- * when the user just explicitly asked to type into the overlay (the `ask` hotkey, or the show/hide
- * toggle's reveal, which always opens `ask` immediately after). Every other reveal in this file must call
- * `showInactive()` instead — enforced by `no-show-steals-focus.contract.test.ts`, which greps this file
- * for bare `.show()` calls and fails on any occurrence outside this function.
+ * Overlay focus grab (MQA-275 / Phase 1d): "never steals focus" except a deliberate ask.
+ * `show()` activates the window — acceptable ONLY when the user just asked to type (ask hotkey /
+ * show-hide reveal). First-run onboarding uses `showOnboardingStage` instead (people must find the
+ * tour). Every other overlay reveal must call `showInactive()` — enforced by
+ * `no-show-steals-focus.contract.test.ts`.
  */
 function showForAsk(w: BrowserWindow): void {
   w.show()
@@ -6587,6 +6627,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.on('activate', () => {
     if (!win) createWindow()
+    else if (onboardingExclusiveLive()) showOnboardingStage(win)
     // Non-activating (island contract) — a dock-icon click surfaces the overlay without stealing focus.
     else win.showInactive()
   })
