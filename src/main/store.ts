@@ -493,6 +493,7 @@ function safeMtime(p: string): number {
 
 interface SettingsCache {
   value: Settings
+  userData: string
   userMtime: number
   managedMtime: number
   adminMtime: number
@@ -500,8 +501,12 @@ interface SettingsCache {
 }
 let _settingsCache: SettingsCache | null = null
 
-function currentSettingsMtimes(): Pick<SettingsCache, 'userMtime' | 'managedMtime' | 'adminMtime' | 'caheEdition'> {
+function currentSettingsMtimes(): Pick<
+  SettingsCache,
+  'userData' | 'userMtime' | 'managedMtime' | 'adminMtime' | 'caheEdition'
+> {
   return {
+    userData: dir(),
     userMtime: safeMtime(settingsPath()),
     managedMtime: safeMtime(join(dir(), 'managed-config.json')),
     adminMtime: safeMtime(adminManagedConfigPath()),
@@ -513,6 +518,7 @@ export function getSettings(): Settings {
   const m = currentSettingsMtimes()
   if (
     _settingsCache &&
+    _settingsCache.userData === m.userData &&
     _settingsCache.userMtime === m.userMtime &&
     _settingsCache.managedMtime === m.managedMtime &&
     _settingsCache.adminMtime === m.adminMtime &&
