@@ -134,6 +134,16 @@ export function meetingIndexStatus(
 // Knowledge-graph status bar — unchanged from original
 // ---------------------------------------------------------------------------
 
+function formatLastIndexedAt(at?: number): string {
+  if (!at || !Number.isFinite(at) || at <= 0) return ''
+  return new Date(at).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  })
+}
+
 function GraphBar({
   onOpenSettings,
   onDashboardOpen
@@ -150,8 +160,15 @@ function GraphBar({
   // Distinguishes the deferred "no-provider" error (fixable via Settings → AI) from any other backfill
   // failure (network blip, etc.) — only the former gets an Open Settings action below.
   const [noProvider, setNoProvider] = useState(false)
+  const applyStatus = (st: import('@shared/brain').BrainStatus | null): void => {
+    setBrain(st)
+    if (st?.error) setError(st.error)
+  }
   useEffect(() => {
-    void window.toto.brainStatus().then(setBrain).catch(() => {})
+    void window.toto
+      .brainStatus()
+      .then(applyStatus)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
   }, [])
 
   // Historical batches and newly saved/imported meetings both update in main. Keep a lightweight status
@@ -159,10 +176,14 @@ function GraphBar({
   // permanent 5s idle poll is cheaper and more reliable than a filesystem watcher over OneDrive.
   const backfillRunning = !!brain?.backfill?.running
   const liveRunning = !!brain?.live?.running
-  const brainWorking = backfillRunning || liveRunning
+  const preparing = !!brain?.backfill?.preparing
+  const brainWorking = backfillRunning || liveRunning || preparing || busy
   useEffect(() => {
     const iv = setInterval(() => {
-      void window.toto.brainStatus().then(setBrain).catch(() => {})
+      void window.toto
+        .brainStatus()
+        .then(applyStatus)
+        .catch((e) => setError(e instanceof Error ? e.message : String(e)))
     }, brainWorking ? 1000 : 5000)
     return () => clearInterval(iv)
   }, [brainWorking])
@@ -173,13 +194,16 @@ function GraphBar({
     setNoProvider(false)
     try {
       const result = await window.toto.brainBackfill()
-      if (result.deferred === 'no-provider') {
+      if (result.deferred === 'no-provider' || result.error) {
         // Main already OR's in the local safety net (ingest.ts's pickProviderCandidates appends the
         // on-device model as a last candidate when localLlm.fallback is on) — this deferral only ever
         // fires when NEITHER a cloud/CLI provider NOR local fallback is usable, so the message stays
         // accurate without the renderer re-deriving readiness itself.
-        setError('Connect an AI provider in Settings → AI, or enable Métis Local there to index meetings on this device.')
-        setNoProvider(true)
+        setError(
+          result.error ||
+            'Connect an AI provider in Settings → AI, or enable Métis Local there to index meetings on this device.'
+        )
+        setNoProvider(result.deferred === 'no-provider' || /provider/i.test(result.error || ''))
         return
       }
       setBrain(await window.toto.brainStatus())
@@ -196,10 +220,12 @@ function GraphBar({
     else onDashboardOpen?.()
   }
 
-  const backfilling = !!brain?.backfill?.running
+  const backfilling = !!brain?.backfill?.running || preparing
   const livePending = brain?.live?.pending ?? 0
   const backfillFailed = brain?.backfill?.failed ?? 0
   const indexProgress = brain?.backfill ? describeMeetingIndexProgress(brain.backfill) : null
+  const lastIndexed = formatLastIndexedAt(brain?.lastIndexedAt)
+  const updating = busy || backfilling || liveRunning
   return (
     <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2">
       <div className="flex items-center justify-between gap-2">
@@ -208,15 +234,17 @@ function GraphBar({
             <Network size={12} className="shrink-0 text-[var(--color-accent)]" />
             {error ? (
               <span className="text-[var(--color-danger)]">{error}</span>
-            ) : backfilling && indexProgress ? (
-              <span aria-atomic="true" aria-live="polite">{indexProgress.label}</span>
-            ) : liveRunning ? (
+            ) : updating ? (
               <span aria-atomic="true" aria-live="polite">
-                Updating Intelligence from {livePending} new meeting{livePending === 1 ? '' : 's'}…
+                {backfilling && indexProgress
+                  ? indexProgress.label
+                  : liveRunning
+                    ? `Updating Intelligence from ${livePending} new meeting${livePending === 1 ? '' : 's'}…`
+                    : 'Updating…'}
               </span>
             ) : backfillFailed > 0 && indexProgress ? (
               <span className="text-[var(--color-danger)]" role="alert">
-                {indexProgress.label}. Retry Index meetings after checking AI settings.
+                {indexProgress.label}. Retry Update Intelligence after checking AI settings.
               </span>
             ) : brain && brain.meetings > 0 ? (
               <>
@@ -228,16 +256,21 @@ function GraphBar({
               'Mantu Intelligence: build a brain from your meetings.'
             )}
           </div>
-          {backfilling && indexProgress && (
+          {lastIndexed && !error && !updating && (
+            <div className="mt-0.5 text-[10px] text-[color:var(--color-ink-3)]">Last indexed {lastIndexed}</div>
+          )}
+          {updating && (
             <div className="mt-1.5 flex items-center gap-2">
-              {indexProgress.percent == null && <InlineOrb kind="searching" />}
-              <WorkProgressMeter
-                active
-                ariaLabel="Mantu Intelligence meeting index progress"
-                className="min-w-0 flex-1"
-                percent={indexProgress.percent}
-                valueText={indexProgress.valueText}
-              />
+              <InlineOrb kind="searching" />
+              {backfilling && indexProgress && (
+                <WorkProgressMeter
+                  active
+                  ariaLabel="Mantu Intelligence meeting index progress"
+                  className="min-w-0 flex-1"
+                  percent={indexProgress.percent}
+                  valueText={indexProgress.valueText}
+                />
+              )}
             </div>
           )}
         </div>
@@ -245,11 +278,11 @@ function GraphBar({
           {noProvider && onOpenSettings && <TextButton onClick={onOpenSettings}>Open Settings</TextButton>}
           <TextButton
             onClick={() => void backfill()}
-            disabled={busy || backfilling}
-            title="Index every meeting (past + vault) into the brain"
+            disabled={busy}
+            title="Recap missing summaries and extract people, accounts, deals, coaching, and Today"
           >
-            {busy || backfilling ? <InlineOrb kind="searching" /> : <RefreshCw size={11} />}
-            {backfilling ? 'Mapping…' : busy ? 'Starting…' : 'Index meetings'}
+            {updating ? <InlineOrb kind="searching" /> : <RefreshCw size={11} />}
+            {updating ? 'Updating…' : 'Update Intelligence'}
           </TextButton>
           <TextButton onClick={() => void openDashboard()} title="Open the Mantu Intelligence dashboard">
             <ExternalLink size={11} /> Mantu Intelligence

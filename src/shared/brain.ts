@@ -592,6 +592,10 @@ export interface BrainStatus {
    *  index flag) — lets a per-meeting indicator distinguish "queued, not yet attempted" (pending) from a
    *  source with no ingest activity at all. */
   backfillRequested?: boolean
+  /** Last successful solid Intelligence index (06:00 / 12:00 / 18:00 America/Toronto or a catch-up). */
+  lastIndexedAt?: number
+  /** requireAuth / provider failures must surface here instead of a silent null. */
+  error?: string
 }
 
 /**

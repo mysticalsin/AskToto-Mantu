@@ -225,6 +225,8 @@ import {
   exciseDeletedMeeting,
   markBrainChanged,
   requestBackfill,
+  hasUnextractedMeetings,
+  countUnextractedMeetings,
   requestSourceRefresh,
   brainBackfillProgress,
   brainLiveIngestProgress,
@@ -234,9 +236,10 @@ import {
   resumeBackfillIfPending,
   reconcileMeetingsInBackground,
   settleCommitment,
-  startRebuild
+  startRebuild,
+  startBackfill
 } from './brain/ingest'
-import { runConsolidationIfDue, scheduleConsolidation } from './brain/consolidate'
+import { runConsolidationIfDue } from './brain/consolidate'
 import {
   renameEntity,
   mergeEntities,
@@ -309,7 +312,20 @@ import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine 
 import { detectLanguage as detectTextLanguage } from '@shared/lang-id'
 import type { TranscriptLine } from '@shared/ipc'
 import { pickAudioFile, consumePickedAudio, offerAudioPaths } from './import-audio'
-import { ImportJobManager, MAX_CONCURRENT_IMPORTS, type ImportJob } from './import-jobs'
+import { ImportJobManager, MAX_CONCURRENT_DECODES, type ImportJob } from './import-jobs'
+import {
+  runImportedRecap as runImportedRecapJob,
+  importedTranscriptText as formatImportedTranscriptText
+} from './import-recap'
+import {
+  scheduleIntelligenceIndex,
+  catchUpIntelligenceIndexIfNeeded,
+  runIntelligenceIndex,
+  setIntelligenceIndexWork,
+  lastIndexedAt,
+  classifyIntelligenceClick,
+  NO_PROVIDER_INDEX_COPY
+} from './brain/intelligence-index'
 import {
   ensureImportAsrAssets,
   asrAssetsProgress,
@@ -338,6 +354,7 @@ import {
 import { getPlatformPermissions, probeScreenCapture, noteScreenCaptureOutcome } from './platform-perms'
 import {
   listMeetings,
+  listMeetingsNeedingRecap,
   searchMeetings,
   recallRead,
   deleteMeeting,
@@ -849,7 +866,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
         ffmpegDecoders.delete(id)
       }
     }
-    if (ffmpegDecoders.size >= MAX_CONCURRENT_IMPORTS) throw new Error('Another audio decoder is already active.')
+    if (ffmpegDecoders.size >= MAX_CONCURRENT_DECODES) throw new Error('Another audio decoder is already active.')
     // vad-v1 jobs: cursor counts WINDOWS (phase 2); a resume re-decodes the whole file (seconds of
     // ffmpeg) and the deterministic re-segmentation + window cursor skip the already-transcribed part.
     const skipThrough = job.pipeline === 'vad-v1' ? 0 : job.cursor
@@ -863,6 +880,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
       onComplete: async (totalChunks) => {
         // Release the process slot before finishDecoding pumps the next FIFO job.
         ffmpegDecoders.delete(job.jobId)
+        await importJobs?.releaseDecodeSlot(job.jobId)
         await importJobs?.finishDecoding(job.jobId, totalChunks)
       },
       onError: async (error) => {
@@ -891,6 +909,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
       await closeImportDecoder(decoderJobId)
     }
   }
+  if (listeningActive) throw new Error('Another audio decoder is already active.')
   if (decoderWin && !decoderWin.isDestroyed()) throw new Error('Another audio decoder is already active.')
 
   decoderJobId = job.jobId
@@ -956,7 +975,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
 function importedTranscriptText(lines: ImportJob['lines']): string {
   // Diarization lands on line.name (enrolled profile or "Speaker N") — the recap prompt asks the model
   // to attribute by those labels, so erasing them here made every import look like one anonymous SPEAKER.
-  return lines.map((line) => `${line.name?.trim() || 'SPEAKER'}: ${line.text}`).join('\n')
+  return formatImportedTranscriptText(lines)
 }
 
 /** Text-side language name for one probe window's Parakeet decode, or null when inconclusive. */
@@ -1097,120 +1116,82 @@ async function runImportPolish(lines: TranscriptLine[]): Promise<TranscriptLine[
 }
 
 async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
-  const settings = getSettings()
-  const allowed = getAllowedProviders()
-  // An imported recording is a summary task. If the user opted into Métis Local summaries and its
-  // installer-owned runtime is ready, try it first so the transcript stays on-device. Cloud providers
-  // remain the explicit fallback when local is disabled or unavailable.
-  // localPrimaryEligibleFor (not bare localEligibleFor) honors routingMode:'local' the same way live
-  // ask primary pick does — otherwise Routing mode → Local still forced every import recap through cloud.
-  const localSummaryReady = localPrimaryEligibleFor({ mode: 'summary' }, settings, 'base', allowed)
-  // MQA-056: the same zero-config safety net (localLlm.fallback) the live-ask seams and brain ingest
-  // already honour. Without it a revoked cloud key left the imported meeting with no summary at all —
-  // while the very same file was being indexed on-device under the identical flag — and the "retry the
-  // summary" the card advises runs as mode:'recap', which is out of local's scope entirely. Strictly
-  // LAST, after every cloud/CLI candidate (including `custom`, which sorts after `local` in PROVIDERS),
-  // so the existing useFor.summary precedence above is untouched: cloud is still preferred when it works.
-  const localFallbackReady =
-    !localSummaryReady && localFallbackEligibleFor({ mode: 'summary' }, settings, 'base', allowed)
-  const ordered: ProviderId[] = [
-    ...(localSummaryReady ? (['local'] as ProviderId[]) : []),
-    ...(settings.dustWorkspaceId && getApiKey('dust') && settings.providerModels.dust ? (['dust'] as ProviderId[]) : []),
-    settings.provider,
-    ...(Object.keys(PROVIDERS) as ProviderId[])
-  ]
-  const deduped = [...new Set(ordered)]
-  const walk = localFallbackReady
-    ? [...deduped.filter((provider) => provider !== 'local'), 'local' as ProviderId]
-    : deduped
-  const candidates = walk.filter((provider) => {
-    const def = PROVIDERS[provider]
-    if (!def || (allowed && !allowed.includes(provider))) return false
-    if (provider === 'local') return localSummaryReady || localFallbackReady
-    if (def.kind === 'cli') return !!settings.cliConnected[provider]
-    if (!getApiKey(provider)) return false
-    // MQA-215: same rule as pickFailover and the brain-ingest walk. A provider whose endpoint the USER
-    // supplies (Custom, and Cloudflare's operator-deployed Worker) is not a candidate until it has one.
-    // Cloudflare ships a default model, so a stored METIS_PROXY_KEY alone would otherwise leave it in
-    // this waterfall as the LAST cloud candidate, and streamOpenAI's own guard message would become the
-    // lastError an import that failed for unrelated reasons reports back to the user.
-    if (requiresUserBaseUrl(provider) && !providerBaseUrl(provider, settings)) return false
-    if (provider === 'dust' && !settings.dustWorkspaceId) return false
-    return !!resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think', settings.providerModelsDeep)
+  return runImportedRecapJob(job, {
+    getSettings,
+    getApiKey,
+    getAllowedProviders,
+    providerBaseUrl,
+    redactSecrets,
+    createStream,
+    refreshDustAuth: (s) =>
+      makeRefreshDustAuth({
+        dustSessionOrigin: s.dustSessionOrigin,
+        dustWorkspaceId: s.dustWorkspaceId,
+        dustBaseUrl: s.dustBaseUrl
+      }),
+    logWarn: (message) => mainLog.warn(message)
   })
-  if (!candidates.length) return undefined
+}
 
-  const transcript = settings.redactSensitive ? redactSecrets(importedTranscriptText(job.lines)) : importedTranscriptText(job.lines)
-  // Persona pinned at import start (ImportJob.mode) — NOT the live settings.mode, which may have been
-  // switched while this job sat in the queue. Older checkpoints have no pin; they keep the live mode.
-  const personaMode = job.mode || settings.mode
-  let lastError: Error | null = null
-  for (const provider of candidates) {
-    const def = PROVIDERS[provider]
-    const local = provider === 'local'
-    const req: AskStart = { id: `import-recap-${job.jobId}`, mode: local ? 'summary' : 'recap', prompt: '', transcript, history: [] }
-    const key = local ? '' : getApiKey(provider)
-    const rawModel = local
-      ? settings.localLlm.modelId
-      : resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think', settings.providerModelsDeep)
-    const model = local ? rawModel : applyInteractiveGuardrail(provider, 'think', rawModel || def.defaultModel)
+async function recapMissingMeetingSummaries(): Promise<number> {
+  const needing = await listMeetingsNeedingRecap()
+  let n = 0
+  for (const m of needing) {
     try {
-      const recap = await new Promise<string>((resolveRecap, rejectRecap) => {
-        let text = ''
-        createStream({
-          providerId: provider,
-          kind: def.kind,
-          apiKey: key,
-          baseURL: local ? undefined : providerBaseUrl(provider, settings),
-          workspaceId: settings.dustWorkspaceId,
-          refreshDustAuth: provider === 'dust' ? makeRefreshDustAuth(settings) : undefined,
-          model,
-          temperature: settings.temperature,
-          // Same reasoning gate as the live stream (providers.ts reasoningEffortFor) — this path always
-          // resolves at the 'think' tier, so a reasoning-by-default model is asked for full effort.
-          reasoningEffort: reasoningEffortFor(provider, 'think', settings.thinkingMode === 'always'),
-          idleMs: 120_000,
-          freshConversation: true,
-          system:
-            buildSystem(req, personaMode, settings.profile, settings.modePrompts, settings.contextDocs[personaMode] || [], settings.outputLanguage, settings.summaryLanguage, settings.systemPrompt) +
-            (job.lines.some((l) => l.name)
-              ? '\n\nThis is an imported recording. Lines carry on-device voice-matched speaker labels (e.g. "Speaker 1" or an enrolled name) — attribute statements to those labels, never to YOU or THEM.'
-              : '\n\nThis is an imported recording with no speaker diarization. Do not attribute statements to YOU or THEM.'),
-          req,
-          handlers: {
-            onDelta: (delta) => {
-              text += delta
-            },
-            onDone: () => resolveRecap(text),
-            onError: (error) => {
-              // A trailing stream error AFTER the summary has streamed must not discard the summary.
-              // Seen live (2026-08-04) importing a real recording with the claude-cli provider: the CLI
-              // lingers after its final token, the idle watchdog then fires, and a complete recap was
-              // thrown away — transcript saved, Notes empty, recapError set. An idle timeout by
-              // definition means the model stopped producing long ago, so substantial accumulated text
-              // is a finished (or effectively finished) summary — keep it. Early/pre-token failures
-              // (no meaningful text yet) still reject into the provider waterfall exactly as before.
-              if (text.trim().length >= 200) {
-                mainLog.warn(`[import-recap] keeping ${text.trim().length}-char summary despite trailing stream error: ${error}`)
-                resolveRecap(text)
-                return
-              }
-              rejectRecap(new Error(error))
-            }
-          }
-        })
-      })
-      if (!recap.trim()) throw new Error('Summary provider returned an empty response.')
-      return recap.trim()
+      const recap = await runImportedRecap({
+        jobId: `index-${m.file}`,
+        lines: m.lines,
+        mode: m.mode
+      } as ImportJob)
+      if (recap?.trim()) {
+        const saved = await updateMeetingRecap(getSettings(), m.file, recap)
+        if (saved.ok) n += 1
+        else mainLog.error(`[intelligence-index] could not save recap for ${m.file}: ${saved.error}`)
+      }
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error))
+      mainLog.error(
+        `[intelligence-index] recap failed for ${m.file}:`,
+        error instanceof Error ? error.message : error
+      )
     }
   }
-  throw lastError ?? new Error('No configured AI provider could generate the imported summary.')
+  return n
+}
+
+function wireIntelligenceIndexWork(): void {
+  setIntelligenceIndexWork(async () => {
+    const recapped = await recapMissingMeetingSummaries()
+    const r = requestBackfill({ force: true })
+    const savedMeetings = (await listMeetings()).filter((m) => !m.locked).length
+    const unextracted = countUnextractedMeetings()
+    let result = { ...r, ran: true, recapped }
+    const verdict = classifyIntelligenceClick({
+      savedMeetings,
+      unextracted,
+      queued: result.queued,
+      preparing: result.preparing,
+      deferred: result.deferred,
+      upToDate: result.upToDate
+    })
+    if (verdict === 'illegal-empty') {
+      const forced = startBackfill(undefined, { force: true })
+      result = {
+        ...forced,
+        ran: true,
+        recapped,
+        preparing: forced.queued > 0 || forced.preparing || hasUnextractedMeetings()
+      }
+    }
+    if (result.deferred === 'no-provider') {
+      return { ...result, error: NO_PROVIDER_INDEX_COPY, recapped }
+    }
+    return result
+  })
 }
 
 function initializeImportJobs(): void {
   if (importJobs) return
+  wireIntelligenceIndexWork()
   importJobs = new ImportJobManager({
     store: new EncryptedImportJobStore(getSettings),
     decode: (job) => {
@@ -1276,9 +1257,16 @@ function initializeImportJobs(): void {
     // CAM++ extractor the live path uses; a fresh session is reset per job in `decode` above.
     speakerFor: async (samples) => getSpeakerId().labelWindow(samples)?.name ?? null,
     finalizeSpeakers: () => getSpeakerId().finalizeSession(),
-    polish: (lines) => runImportPolish(lines),
+    // Polish is skipped on import: sequential batches of 8 with a 120s idle made one meeting take
+    // forever before the summary. Recap writes first. Cheap polish can be run later if needed.
     // Free the whisper helper's model memory between imports; the next job spawns a fresh child.
-    onIdle: () => stopWhisperHost(),
+    // Import idle may start one Intelligence pass (not a BrainView mount timer).
+    onIdle: () => {
+      stopWhisperHost()
+      void runIntelligenceIndex('import-idle').catch((e) =>
+        mainLog.error('[intelligence-index] import-idle pass failed:', e)
+      )
+    },
     saveMeeting: (meeting) => saveMeeting(getSettings(), meeting),
     deleteMeeting,
     enqueueIngest,
@@ -1296,7 +1284,7 @@ function initializeImportJobs(): void {
     onCancel: closeImportDecoder,
     personaMode: () => getSettings().mode,
     newId: () => randomBytes(16).toString('hex'),
-    concurrency: MAX_CONCURRENT_IMPORTS
+    concurrency: MAX_CONCURRENT_DECODES
   })
   void ensureImportAsrAssets((pct) => {
     publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
@@ -2644,8 +2632,8 @@ let notifPrevPollMs = 0 // wall time of the previous notifier poll — used for 
 // — an OS quit, or an abrupt kill of a dev/driven instance — a resolve-in-flight can trip a SIGTRAP on
 // a blocking-pool thread (the shutdown-race crash class). Tracked here so will-quit cancels them ALL
 // before the rest of teardown, closing that race for good.
-const backgroundTimers: ReturnType<typeof setInterval>[] = []
-const trackTimer = (t: ReturnType<typeof setInterval>): ReturnType<typeof setInterval> => {
+const backgroundTimers: Array<ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>> = []
+const trackTimer = <T extends ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>>(t: T): T => {
   backgroundTimers.push(t)
   return t
 }
@@ -5526,7 +5514,20 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.brainStatus, (e) => {
     assertBrainReader(e)
-    if (!requireAuth()) return null
+    if (!requireAuth()) {
+      return {
+        meetings: 0,
+        ingestedFiles: [],
+        people: 0,
+        accounts: 0,
+        deals: 0,
+        nodes: 0,
+        edges: 0,
+        warnings: 0,
+        revision: 0,
+        error: 'Sign in with your Mantu account first.'
+      }
+    }
     const s = getSettings()
     const idx = readBrainIndex(s)
     const counts = brainStatusCounts(s, idx.revision)
@@ -5563,14 +5564,15 @@ function registerIpc(): void {
       // MQA-230: entity files can still hold items attributed to an already-deleted meeting until the
       // deferred source refresh runs (it needs a usable provider). Surfaced so the UI can say the
       // cleanup is pending instead of silently claiming the delete was complete.
-      cleanupPending: idx.sourceRefreshRequested === true
+      cleanupPending: idx.sourceRefreshRequested === true,
+      lastIndexedAt: lastIndexedAt(s)
     }
   })
-  ipcMain.handle(IPC.brainBackfill, (e) => {
+  ipcMain.handle(IPC.brainBackfill, async (e) => {
     assertBrainReader(e)
-    if (!requireAuth()) throw new Error('Not signed in.')
-    const r = requestBackfill()
-    auditLog('brain.backfill.start', { queued: r.queued })
+    if (!requireAuth()) throw new Error('Sign in with your Mantu account first.')
+    const r = await runIntelligenceIndex('click')
+    auditLog('brain.backfill.start', { queued: r.queued, recapped: r.recapped, reason: 'click' })
     return r
   })
   // Full rebuild: wipe the DERIVED store (entities/graph/extractions — never the source transcripts)
@@ -5955,6 +5957,7 @@ function registerIpc(): void {
     // handler's finally) runs too late and startImportDecoder's "already active" guard cascade-fails
     // every queued job. Mirrors the ffmpeg onComplete path, which frees its slot first for the same reason.
     await closeImportDecoder(parsed.jobId)
+    await importJobs.releaseDecodeSlot(parsed.jobId)
     try {
       await importJobs.finishDecoding(parsed.jobId)
     } finally {
@@ -5967,6 +5970,7 @@ function registerIpc(): void {
     if (parsed.jobId !== decoderJobId || !importJobs) throw new Error('Import decoder job mismatch.')
     // Same ordering requirement as importDecoderComplete above: free the slot before failDecoder can pump.
     await closeImportDecoder(parsed.jobId)
+    await importJobs.releaseDecodeSlot(parsed.jobId)
     try {
       await importJobs.failDecoder(parsed.jobId, parsed.error)
     } finally {
@@ -6947,12 +6951,17 @@ if (!app.requestSingleInstanceLock()) {
       // Registered here rather than alongside the timer so safe start skips the recurring brain work too,
       // not just the single resume — the reconcile tick reads the same index.json.
       trackTimer(setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS))
-      // Wave 3: batch brain LLM extraction into settings.brainConsolidation's daily pass budget instead
-      // of a round trip after every meeting. Hourly check, same "cheap enough to poll often, the budget
-      // does the real gating" shape as the reconcile tick above; runConsolidationIfDue itself no-ops
-      // instantly once today's passes are spent or the feature is off.
-      void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] initial consolidation check failed:', e))
-      scheduleConsolidation(60 * 60 * 1000, trackTimer)
+      // Product cadence is three named slots (06:00, 12:00, 18:00 America/Toronto), not an hourly
+      // consolidation poll. Catch up if Métis was closed across a slot; then arm the next timeout.
+      wireIntelligenceIndexWork()
+      void catchUpIntelligenceIndexIfNeeded().catch((e) =>
+        mainLog.error('[intelligence-index] launch catch-up failed:', e)
+      )
+      scheduleIntelligenceIndex(trackTimer)
+      // Hourly consolidation is demoted: the named slots own the extract pass. The helper stays
+      // imported so existing settings/tests keep compiling, and a manual budget check still no-ops
+      // when the feature is off.
+      void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e))
     }
     endBootWatch(app.getPath('userData'))
   }, 15_000)
