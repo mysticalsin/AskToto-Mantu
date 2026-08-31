@@ -23,9 +23,16 @@ describe('buildSystem — multilingual language policy', () => {
     expect(s).toMatch(/respond in Spanish/i)
   })
 
-  it("'auto' falls back to the conversation language", () => {
+  it("'auto' stays in the spoken language(s) and does not translate away", () => {
     const s = buildSystem(req('answer'), 'general', EMPTY_PROFILE, {}, [], 'auto')
-    expect(s).toMatch(/main language of the conversation/i)
+    expect(s).toMatch(/spoken language/i)
+    expect(s).toMatch(/do not translate unless asked/i)
+  })
+
+  it('recap auto keeps spoken language(s) including mixed meetings', () => {
+    const s = buildSystem(req('recap'), 'meeting', EMPTY_PROFILE, {}, [], 'auto')
+    expect(s).toMatch(/spoken language\(s\) of the transcript/i)
+    expect(s).toMatch(/do not translate unless the user explicitly asked/i)
   })
 })
 

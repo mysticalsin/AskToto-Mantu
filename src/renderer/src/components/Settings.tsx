@@ -106,6 +106,7 @@ import {
   type ProviderId
 } from '@shared/providers'
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
+import { LANGUAGE_OPTIONS } from '@shared/lang-id'
 import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
 import { MetisMark } from './MetisMark'
@@ -4167,10 +4168,6 @@ function MicPicker({
   )
 }
 
-const LANGUAGE_OPTIONS = [
-  'English', 'French', 'Spanish', 'German', 'Italian', 'Portuguese', 'Dutch',
-  'Polish', 'Arabic', 'Chinese', 'Japanese', 'Korean', 'Hindi', 'Russian', 'Turkish'
-]
 
 /** Settings → About → Diagnostics. Nothing in this app uploads anywhere (zero telemetry, crash upload
  *  off), so when support needs the log trail the user exports it themselves: main + audit logs, crash
@@ -5468,8 +5465,8 @@ export function Settings({
                     label="Best transcription quality"
                     desc={
                       asrBundled
-                        ? "This build doesn't include the larger GPU-accelerated model, so On and Off currently use the same on-device model."
-                        : 'This development build does not include packaged transcription assets. Provision them before testing offline transcription.'
+                        ? 'Default is Best. Fast is a power option. This installer ships the compact model — if Best cannot load, Métis runs Fast and says so below (never a silent Fast with a Best label). Download the high-accuracy model to restore Best.'
+                        : 'Default is Best (Whisper large multilingual, 60+ languages). Fast is a Settings power option for constrained machines.'
                     }
                     on={settings.asrQuality === 'best'}
                     onChange={(v) => patch({ asrQuality: v ? 'best' : 'fast' })}
@@ -5553,8 +5550,8 @@ export function Settings({
                   {(settings as SettingsWithAsrWebgpuFallback).asrWebgpuFallbackAt != null && (
                     <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
                       <span>
-                        Best-quality transcription needs a WebGPU-capable GPU; this device fell back to
-                        the fast model.
+                        Best was requested but is not running on this device — Fast is active. Download
+                        the high-accuracy model below, or keep Fast as a power option.
                       </span>
                       <TextButton
                         onClick={() =>

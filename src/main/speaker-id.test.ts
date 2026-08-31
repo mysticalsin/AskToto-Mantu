@@ -13,7 +13,7 @@ vi.mock('./logger', () => ({
   auditLog: vi.fn()
 }))
 
-import { createSpeakerId } from './speaker-id'
+import { createSpeakerId, isEchoBleed } from './speaker-id'
 
 /** Fake extractor: derives the "embedding" from the first sample value — window [v, ...] becomes a
  *  one-hot-ish vector along axis v, so tests choose voices by constructing windows. */
@@ -108,6 +108,90 @@ describe('labelWindow', () => {
     const id = makeId(dir)
     expect(id.labelWindow(new Float32Array(0))).toBeNull()
     expect(id.labelWindow(windowFor(0))!.name).toBe('Speaker 1')
+  })
+})
+
+describe('isEchoBleed — pure cosine-threshold check', () => {
+  it('is true for an identical voice, false for an orthogonal one', () => {
+    const a = Float32Array.from([1, 0, 0])
+    const b = Float32Array.from([1, 0, 0])
+    const c = Float32Array.from([0, 1, 0])
+    expect(isEchoBleed(a, b)).toBe(true)
+    expect(isEchoBleed(a, c)).toBe(false)
+  })
+
+  it('never fires when no operator centroid exists yet (degrade-to-off, not a throw)', () => {
+    expect(isEchoBleed(Float32Array.from([1, 0]), null)).toBe(false)
+  })
+
+  it('a near-miss below ECHO_THRESHOLD (~0.7) does not count as echo', () => {
+    const a = Float32Array.from([1, 0, 0])
+    const b = Float32Array.from([0.6, 0.8, 0])
+    expect(isEchoBleed(a, b)).toBe(false)
+  })
+})
+
+describe('echo defense — operator buffer + THEM-window echo detection', () => {
+  it('flags a THEM window that matches the live (this-session) operator buffer', () => {
+    const id = makeId(dir)
+    id.observeOperatorWindow(windowFor(3))
+    expect(id.labelWindow(windowFor(3))).toMatchObject({ echo: true })
+  })
+
+  it('does not over-trigger on a genuinely different voice', () => {
+    const id = makeId(dir)
+    id.observeOperatorWindow(windowFor(3))
+    const label = id.labelWindow(windowFor(5))
+    expect(label?.echo).toBeFalsy()
+    expect(label).toMatchObject({ source: 'cluster', name: 'Speaker 1' })
+  })
+
+  it('an echo-flagged window is never clustered (would poison Speaker N with the operator)', () => {
+    const id = makeId(dir)
+    id.observeOperatorWindow(windowFor(3))
+    id.labelWindow(windowFor(3))
+    expect(id.labelWindow(windowFor(5))).toMatchObject({ name: 'Speaker 1', source: 'cluster' })
+  })
+
+  it('degrades to no echo defense when the operator has no samples yet', () => {
+    const id = makeId(dir)
+    expect(id.labelWindow(windowFor(3))).toMatchObject({ source: 'cluster' })
+  })
+
+  it('resetSession clears the in-memory operator buffer (meeting boundary)', () => {
+    const id = makeId(dir)
+    id.observeOperatorWindow(windowFor(3))
+    expect(id.labelWindow(windowFor(3))).toMatchObject({ echo: true })
+    id.resetSession()
+    expect(id.labelWindow(windowFor(3))?.echo).toBeFalsy()
+  })
+})
+
+describe('speaker:embed — the Whisper-engine speaker-embedding tap (contract)', () => {
+  const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+  const preloadSrc = readFileSync(join(__dirname, '..', 'preload', 'index.ts'), 'utf8')
+
+  it('the IPC channel name exists and follows the parakeetFeed/appleSpeechFeed naming convention', () => {
+    const ipcSrc = readFileSync(join(__dirname, '..', 'shared', 'ipc.ts'), 'utf8')
+    expect(ipcSrc).toMatch(/speakerEmbed: 'speaker:embed'/)
+  })
+
+  it('the handler returns a best-effort { name?, echo? } shape, gated on Float32Array + size, and flags echo', () => {
+    const start = indexSrc.indexOf('ipcMain.handle(IPC.speakerEmbed')
+    expect(start).toBeGreaterThan(-1)
+    const body = indexSrc.slice(start, start + 1400)
+    expect(body).toMatch(/if \(!\(p\?\.samples instanceof Float32Array\)\) return \{\}/)
+    expect(body).toMatch(/if \(p\.samples\.length > 16_000 \* 30\) return \{\}/)
+    expect(body).toMatch(/getSpeakerId\(\)\.labelWindow\(p\.samples\)/)
+    expect(body).toMatch(/if \(label\?\.echo\) return \{ echo: true/)
+    expect(body).toMatch(/if \(label\) return \{ name: label\.name \}/)
+    expect(body).toMatch(/observeOperatorWindow\(p\.samples\)/)
+  })
+
+  it('the preload bridges it with the same {samples, speaker} payload shape as parakeetFeed', () => {
+    expect(preloadSrc).toMatch(
+      /speakerEmbed: \(samples: Float32Array, speaker: string\): Promise<\{ name\?: string; echo\?: boolean \}> =>\s*\n\s*ipcRenderer\.invoke\(IPC\.speakerEmbed, \{ samples, speaker \}\)/
+    )
   })
 })
 

@@ -17,6 +17,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { macHelperPath, macHelperPresent } from './mac-helper'
 import { mainLog } from './logger'
+import { APPLE_LOCALES } from '@shared/lang-id'
 
 const SAMPLE_RATE = 16000
 const TRANSCRIBE_TIMEOUT_MS = 15_000
@@ -28,33 +29,11 @@ export function appleSpeechAvailable(): boolean {
   return process.platform === 'darwin' && macHelperPresent()
 }
 
-/** Settings' asrLanguage display names → the BCP-47 locale SFSpeechRecognizer expects. One pragmatic
- *  regional pick per language (SFSpeechRecognizer has no region-less recognizers); the Swift helper
- *  still falls back to Locale.current → en-US when a Mac lacks the on-device model for the identifier.
- *  Kept in sync with Settings.tsx's LANGUAGE_OPTIONS. */
-const APPLE_LOCALES: Record<string, string> = {
-  English: 'en-US',
-  French: 'fr-FR',
-  Spanish: 'es-ES',
-  German: 'de-DE',
-  Italian: 'it-IT',
-  Portuguese: 'pt-BR',
-  Dutch: 'nl-NL',
-  Polish: 'pl-PL',
-  Arabic: 'ar-SA',
-  Chinese: 'zh-CN',
-  Japanese: 'ja-JP',
-  Korean: 'ko-KR',
-  Hindi: 'hi-IN',
-  Russian: 'ru-RU',
-  Turkish: 'tr-TR'
-}
-
 /** Map the asrLanguage setting to a recognizer locale, or undefined for 'auto'/unknown values (the
  *  helper then uses the Mac's system locale — the pre-existing behavior). */
 export function appleSpeechLocale(asrLanguage: string | undefined): string | undefined {
   if (!asrLanguage || asrLanguage === 'auto') return undefined
-  return APPLE_LOCALES[asrLanguage]
+  return (APPLE_LOCALES as Record<string, string>)[asrLanguage]
 }
 
 /** Encode one mono Float32 PCM window as a 44-byte-header 16-bit PCM WAV buffer (16kHz, matching the

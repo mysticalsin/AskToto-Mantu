@@ -541,6 +541,7 @@ function currentSettingsMtimes(): Pick<
 > {
   return {
     userPath: settingsPath(),
+
     userMtime: safeMtime(settingsPath()),
 
     managedMtime: safeMtime(join(dir(), 'managed-config.json')),
@@ -554,6 +555,7 @@ export function getSettings(): Settings {
   if (
     _settingsCache &&
     _settingsCache.userPath === m.userPath &&
+
     _settingsCache.userMtime === m.userMtime &&
     _settingsCache.managedMtime === m.managedMtime &&
     _settingsCache.adminMtime === m.adminMtime &&

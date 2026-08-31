@@ -30,3 +30,28 @@ describe('imported-recording recap survives a trailing stream error', () => {
     expect(jobsSrc).toMatch(/recapError/)
   })
 })
+
+// Diarized import lines carry line.name ("Jane Doe" / "Speaker N"). The recap prompt asks the model to
+// attribute by those labels — flattening every line to bare "SPEAKER:" erased attribution and made every
+// import look like one anonymous talker.
+describe('importedTranscriptText preserves diarization names for the recap prompt', () => {
+  it('formats each line as `${line.name || SPEAKER}: text`, not a hard-coded SPEAKER label', () => {
+    const start = indexSrc.indexOf('function importedTranscriptText')
+    expect(start).toBeGreaterThan(-1)
+    const body = indexSrc.slice(start, start + 500)
+    expect(body).toMatch(/\$\{line\.name\?\.trim\(\) \|\| 'SPEAKER'\}: \$\{line\.text\}/)
+    expect(body).not.toMatch(/`SPEAKER: \$\{line\.text\}`/)
+  })
+})
+
+describe('ASR echo defense returns echo:true so the renderer can act (Parakeet / Apple / Whisper)', () => {
+  it('parakeetFeed and appleSpeechFeed return { text: "", echo: true } on operator bleed', () => {
+    expect(indexSrc).toMatch(/if \(label\?\.echo\) return \{ text: '', echo: true \}/)
+  })
+
+  it('speakerEmbed returns { echo: true } so Whisper can drop the already-committed THEM line', () => {
+    const start = indexSrc.indexOf('ipcMain.handle(IPC.speakerEmbed')
+    const body = indexSrc.slice(start, start + 1200)
+    expect(body).toMatch(/if \(label\?\.echo\) return \{ echo: true/)
+  })
+})
