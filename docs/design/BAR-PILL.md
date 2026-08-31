@@ -5,7 +5,7 @@ slice: bar-pill
 owns: Bar layout + minimized sentient circle only
 does-not-own: hide park 8×2 paint, island peek 132×15 paint, BAR_MIN_HEIGHT, onboarding, starfield, thinking-orbs, ASR, identity
 owns-also: Bar idle docked circle; Hide/Island must not minimize
-notes: Island/Hide hover hit-band (menu-bar/notch strip only) lives in DESIGN.md + island/geometry. A leftover 80–120px pad is a bug.
+notes: Island/Hide hover hit is the camera / Dynamic Island square (DESIGN.md + island/geometry). A 560-wide or 44-tall slab is a bug.
 ---
 
 # Bar pill: sentient circle
@@ -20,8 +20,8 @@ Overlay chrome has three layouts. Minimize-to-circle is not a fourth layout and 
 
 | Layout | Rest | Minimize-to-circle |
 | --- | --- | --- |
-| **Hide** | Hover-to-reveal hairline (8×2 park). Reveal only from the menu-bar / notch top band, not a 80–120px pad. The bar is **invisible** at rest. | **Forbidden.** The circle is invisible at rest too. Hide the minimize control. `minimize(true)` is a **no-op**. Do not park an orb while Hide is idle. Do not float a sphere in the notch. On hover the bar reveals; never a Hide circle. |
-| **Island** | The small visible island (132×15) is already the rest. Hover the **top** menu-bar / notch strip. Teams mute / camera / share (below the menu bar) must never reveal Métis. | **Forbidden.** Do not add a second circle. Island stays the island. Same as Hide: no control, ignore minimize, no layout jump. |
+| **Hide** | Hover-to-reveal hairline (8×2 park). Reveal only from the hardware camera / Dynamic Island square, not a 560×44 menu-bar slab. The bar is **invisible** at rest. | **Forbidden.** The circle is invisible at rest too. Hide the minimize control. `minimize(true)` is a **no-op**. Do not park an orb while Hide is idle. Do not float a sphere in the notch. On hover the bar reveals; never a Hide circle. |
+| **Island** | The small visible island (132×15) is already the rest. Hover the camera square at the top center. Left/right menu-bar items and Teams mute / camera / share must never reveal Métis. | **Forbidden.** Do not add a second circle. Island stays the island. Same as Hide: no control, ignore minimize, no layout jump. |
 | **Bar** | The classic bar stays on screen **plus** the sentient circle docked on that bar (Fit Studio 52×52, never a lozenge / pill). | **Allowed — only here.** Click the docked circle to collapse to that circle alone. Click the rest circle to expand back to full bar + circle. Drag the rest circle moves. Position is the existing Bar-minimize rest (not a wanderer). Layout stays `bar`. |
 
 Visibility must match the bar. Uniform. No leftover floating orb.
@@ -108,7 +108,7 @@ The circle is transparent around the particles. No `unpkg` (or any CDN) at runti
 - **60fps / no jank:** one cheap WebGL rAF while the circle is mounted (docked on the idle bar, or alone when minimized). Cached GL locations. No layout reads in the frame loop. Hide/Island: **zero** orb rAF (`shouldRunOrbRaf` is false unless Bar). Setup is O(n), never an n² neighbor scan. Pause when `document.hidden`.
 - **Click / drag latency:** expand is synchronous. Hover lean skipped while dragging. No `getBoundingClientRect` on pointer-move.
 - **Spring** is for the **Bar** expanding (`--ease-spring: cubic-bezier(0.22, 1, 0.36, 1)`), not for turning the circle into a lozenge. This spring is Bar-circle only. Do not reuse or restyle Hide/Island overlay-spring, peek hover, or park timing.
-- Hide layout and Island layout must not grow a minimize control or a second disk. Hover hit-band is the menu-bar / notch strip only (DESIGN.md). Hide 8×2 paint and Island 132×15 paint stay.
+- Hide layout and Island layout must not grow a minimize control or a second disk. Hover hit is the camera island square only (DESIGN.md). Hide 8×2 paint and Island 132×15 paint stay.
 - Quality hats: `docs/design/QUALITY.md`. One REJECT fails the slice.
 
 ## Out of scope (do not touch)
@@ -127,7 +127,7 @@ The circle is transparent around the particles. No `unpkg` (or any CDN) at runti
 - Island: **no** extra orb (`overlayShowsBarOrb('island', *)` is false, `overlayDocksBarCircle('island')` is false).
 - Bar minimized: rest circle shown (`overlayShowsBarOrb('bar', true)` and `data-bar-pill-orb`).
 - Bar idle / expanded: circle **docked on the bar** (`overlayDocksBarCircle('bar')`), not a floating second disk and not a pill.
-- Hover hit band height ≤ menu-bar / notch strip. A Teams-control Y (below the menu bar) must not reveal. No 80–120px pad. `HOVER_HIT_BAND_MAX_PX`.
+- Hover hit is the camera island: width = `notchWidth` (~180–250, not 560), height = housing only (not 44). Left menu-bar misses. Y=40 and `TEAMS_MEETING_CHROME_Y` miss.
 - Settings close onto Island/Hide force-parks (`shouldForceParkOnBecameIdle`).
 - Aspect ratio **1** on every mood. Bounding box constant across moods. Size is 52, never scale-on-appear.
 - Click expands; drag does not expand.
