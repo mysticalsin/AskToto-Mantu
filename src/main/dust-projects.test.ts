@@ -90,7 +90,7 @@ describe('Devon Totos-Mac click path', () => {
     expect(DEVON_SPOTLIGHT_REF_MAC_PATH).toContain('Spotlight Ref')
     expect(DEVON_SPOTLIGHT_REF_MAC_PATH).toContain('Data and AI projects')
     expect(DEVON_SPOTLIGHT_REF_MAC_PATH).toContain('GOr913Zr5V')
-    expect(DEVON_SPOTLIGHT_REF_MAC_PATH).not.toMatch(/auto-send a prompt/)
+    expect(DEVON_SPOTLIGHT_REF_MAC_PATH).toContain('Never auto-send')
   })
 })
 
