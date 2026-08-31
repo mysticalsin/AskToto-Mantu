@@ -38,10 +38,10 @@ A flat CSS disc, a single radial fill, or a 2D glow quad is a fail. That is a st
 
 ### Materials
 
-The real `ThinkingOrb` from `thinking-orbs`. One 2D canvas, 64×64 CSS, theme `dark`, speed `1`. Transparent around the dots. The host button is a circle of Métis dark glass so the light dots read on any wallpaper.
+The real `ThinkingOrb` from `thinking-orbs`. One 2D canvas, 64×64 CSS, theme `dark`, speed `1`. Transparent around the dots so idle reads as the playground hollow ring, not a filled disc.
 
-1. **Package orb.** Dotted 2D canvas. Monochrome light ink. State from the map below. Do not wrap it in WebGL. Do not add a magenta core, bloom, or specular kiss.
-2. **Circular glass chrome.** Square box, `border-radius: 50%`. Dark glass (existing Métis fill / hair). Never a lozenge. Dragging does not squash the orb or the glass.
+1. **Package orb.** Dotted 2D canvas. Monochrome light ink. State from the map below. Do not wrap it in WebGL. Do not add a magenta core, bloom, or specular kiss. Do not clip the canvas with `border-radius`.
+2. **Circular host.** Square box, `border-radius: 50%`, `background: transparent`. The Bar is the Métis glass. Never a lozenge. Dragging does not squash the orb.
 3. **No rec-dot on this circle.** Listen is the `listening` state (waveform in the rings). A second red disc fights that state. The Bar Listen control may keep its own rec-dot; this circle does not.
 4. **No Fit Studio.** No `#b266e9` / `#e15cff` / `#8a00f8` core on this control. Product chrome elsewhere may still use `#7F00DA`.
 

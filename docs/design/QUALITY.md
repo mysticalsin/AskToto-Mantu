@@ -59,7 +59,7 @@ Apple-grade. Quiet luxury. Light dots on dark glass. Fixed circle.
 - No constellation we invented. No electron chords. No glitter ball. No magenta core.
 - No rec-dot on this circle. Listen is the `listening` state.
 - No glass chip of mic buttons. No lozenge fill.
-- Circular Métis glass around the orb. No scrollbar. No CSS radial Fit Studio body.
+- Transparent circular host. The Bar is the Métis glass. No scrollbar. No CSS radial Fit Studio body. No filled disc behind the breathing ring.
 
 **REJECT if** rest is a filled lozenge, a flat radial disc, an opaque oval, a WebGL marble, or any flatten of the circle.
 
