@@ -662,7 +662,7 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(css).not.toMatch(/\.onboard-stage\s*\{[^}]*#0c0c0e/)
     expect(css).not.toMatch(/\.onboard-stage\s*\{[^}]*#000(?:000)?\b/)
     expect(css).toMatch(/prefers-reduced-motion: reduce/)
-    expect(experience).toMatch(/className="onboard-cta onboard-glass fade-up no-drag focus-ring"/)
+    expect(experience).toMatch(/className="onboard-cta no-drag focus-ring"/)
     expect(experience.match(/className="onboard-cta no-drag focus-ring"/g)?.length).toBeGreaterThanOrEqual(3)
     expect(demo).toMatch(/onboard-cta/)
     expect(demo).toMatch(/max-w-\[880px\]/)

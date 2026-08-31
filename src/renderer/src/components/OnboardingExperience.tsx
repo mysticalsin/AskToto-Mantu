@@ -938,7 +938,7 @@ export function OnboardingExperience({
         <HeroWelcome
           onBegin={() => {
             playOnboardingVideo(heroVideoRef.current, { restart: true })
-            music.retryIfNeeded()
+            music.start()
             setScene('problem')
           }}
           onSkip={() => setScene('skip')}
