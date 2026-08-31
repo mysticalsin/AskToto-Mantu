@@ -194,3 +194,55 @@ describe('AUDIT-10 — Shiki HTML is sanitized before dangerouslySetInnerHTML', 
     expect(src).toMatch(/dangerouslySetInnerHTML/)
   })
 })
+
+describe('AUDIT-10 extra — XSS / import / webhook', () => {
+  it('the only renderer dangerouslySetInnerHTML is CodeBlock after sanitizeShikiHtml', () => {
+    const { readdirSync, statSync } = require('node:fs') as typeof import('node:fs')
+    const root = join(__dirname, '../renderer/src')
+    const hits: string[] = []
+    const stack = [root]
+    while (stack.length) {
+      const dir = stack.pop()!
+      for (const name of readdirSync(dir)) {
+        const full = join(dir, name)
+        if (statSync(full).isDirectory()) {
+          stack.push(full)
+          continue
+        }
+        if (!name.endsWith('.tsx') && !name.endsWith('.ts')) continue
+        const src = readFileSync(full, 'utf8')
+        if (src.includes('dangerouslySetInnerHTML') && !full.endsWith('CodeBlock.tsx')) hits.push(full)
+      }
+    }
+    expect(hits).toEqual([])
+  })
+
+  it('every HTML shell ships a CSP, and no BrowserWindow enables webviewTag', () => {
+    for (const rel of ['../renderer/index.html', '../renderer/decoder.html', '../../intelligence/index.html']) {
+      const html = readFileSync(join(__dirname, rel), 'utf8')
+      expect(html).toMatch(/http-equiv="Content-Security-Policy"/)
+      expect(html).toMatch(/script-src/)
+    }
+    expect(indexSrc).not.toMatch(/webviewTag:\s*true/)
+    expect(indexSrc).not.toMatch(/<webview/)
+  })
+
+  it('markdown links and Graph join URLs go through safeHref', () => {
+    const md = readFileSync(join(__dirname, '../renderer/src/components/Markdown.tsx'), 'utf8')
+    expect(md).toMatch(/safeHref\(href\)/)
+    const cal = readFileSync(join(__dirname, 'calendar.ts'), 'utf8')
+    expect(cal).toMatch(/safeHref\(ev\?\.onlineMeeting\?\.joinUrl\)/)
+    const agenda = readFileSync(join(__dirname, '../renderer/src/components/AgendaView.tsx'), 'utf8')
+    expect(agenda).toMatch(/safeHref\(ev\.joinUrl\)/)
+  })
+
+  it('import never feeds ffmpeg until magic bytes say media, and never opens the source', () => {
+    const pick = readFileSync(join(__dirname, 'import-audio.ts'), 'utf8')
+    expect(pick).toMatch(/sniffMediaFile\(pick\.path\)/)
+    const ff = readFileSync(join(__dirname, 'ffmpeg-decoder.ts'), 'utf8')
+    expect(ff.indexOf('sniffMediaFile(sourcePath)')).toBeLessThan(ff.indexOf('child = spawn('))
+    const start = sliceBetween('ipcMain.handle(IPC.importAudioStart', 'ipcMain.handle(IPC.importJobsList')
+    expect(start).not.toMatch(/shell\.openPath/)
+    expect(start).not.toMatch(/execFile|execSync/)
+  })
+})

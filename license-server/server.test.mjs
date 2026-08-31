@@ -717,6 +717,21 @@ describe('license-server', () => {
     const res = await fetch(`${baseUrl}/health`);
     assert.equal(res.status, 200);
   });
+
+  it('forged inbound webhook paths cannot create a license', async () => {
+    seedLicense({ licenseKey: 'ATK-0000000000000000TEST', seatCap: 2 });
+    const before = store.getAll().length;
+    for (const path of ['/webhook', '/stripe', '/stripe/webhook', '/lemon', '/hooks', '/hooks/license']) {
+      const r = await post(path, { licenseKey: 'ATK-FORGED-FROM-WEBHOOK0001', seatCap: 99, type: 'checkout.session.completed' });
+      assert.equal(r.status, 404, path);
+    }
+    assert.equal(store.getAll().length, before);
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const { dirname, join } = await import('node:path');
+    const appSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'lib', 'app.mjs'), 'utf8');
+    assert.doesNotMatch(appSrc, /app\.(post|put|patch)\('\/(webhook|stripe|lemon|hooks)/);
+  });
 });
 
 // With TRUST_PROXY unset (the safe default for a directly-exposed server), a spoofed X-Forwarded-For
