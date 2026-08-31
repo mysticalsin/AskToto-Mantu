@@ -3,16 +3,17 @@
  * a public key is safe to commit. The matching private key is a Wrangler secret
  * (OPERATOR_SKILL_PRIVATE_KEY) and is never in this repo.
  *
- * Dev placeholder lets CI verify the apply path. Production builds should replace
- * resources/operator/pubkey.json with the live public half.
+ * Dev placeholder is a public half only. The matching private key is not in this
+ * repo. Tests mint a fresh pair with generateKeyPairSync. Production builds
+ * should replace resources/operator/pubkey.json with the live public half.
  */
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 export const OPERATOR_SKILL_ALGORITHM = 'ed25519'
 
-/** Dev/test public key (JWK x). Matching private key lives only in operator/src/test-fixtures.ts. */
-const DEV_OPERATOR_PUBLIC_KEY = 'ahLO-YDwg2Z9RipORWu0kdUO4Ehw81FdwwUsfbN7DqI'
+/** Dev public key (JWK x). No matching private key is committed. */
+const DEV_OPERATOR_PUBLIC_KEY = '0782eTCPPOCzxP6yQ_LT8qcXS_t7vE-eDh_DpLf0cV0'
 
 function provisionedPath(): string {
   return join(process.resourcesPath, 'operator', 'pubkey.json')

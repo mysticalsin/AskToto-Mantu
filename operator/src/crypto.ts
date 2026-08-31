@@ -105,5 +105,6 @@ export async function verifySkillPack(token: string, publicKeyRaw: string): Prom
 
 function pemToPkcs8(pem: string): ArrayBuffer {
   const b64 = pem.replace(/-----BEGIN [^-]+-----/, '').replace(/-----END [^-]+-----/, '').replace(/\s+/g, '')
-  return b64ToBytes(b64).buffer
+  const bytes = b64ToBytes(b64)
+  return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)
 }

@@ -1,23 +1,31 @@
+import { generateKeyPairSync } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { handleRequest, type Env } from './index'
 import { hmacHex } from './hmac'
 import { decryptPrompt, sha256Hex, verifySkillPack } from './crypto'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
-import {
-  TEST_INGEST_SECRET,
-  TEST_PROMPT_KEY,
-  TEST_SKILL_PRIVATE_KEY_PEM,
-  TEST_SKILL_PUBLIC_KEY
-} from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
+
+function mintSkillKeys(): { privateKeyPem: string; publicKeyRaw: string } {
+  const pair = generateKeyPairSync('ed25519')
+  const jwk = pair.publicKey.export({ format: 'jwk' }) as { x?: string }
+  if (typeof jwk.x !== 'string' || !jwk.x) throw new Error('ed25519 jwk missing x')
+  return {
+    privateKeyPem: pair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+    publicKeyRaw: jwk.x
+  }
+}
+
+const SKILL_KEYS = mintSkillKeys()
 
 function env(overrides: Partial<Env> = {}): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
-    OPERATOR_SKILL_PRIVATE_KEY: TEST_SKILL_PRIVATE_KEY_PEM,
+    OPERATOR_SKILL_PRIVATE_KEY: SKILL_KEYS.privateKeyPem,
     ...overrides
   }
 }
@@ -225,7 +233,7 @@ describe('Approve vs Push', () => {
     const pushed = (await push.json()) as { pushed?: boolean; signed?: string }
     expect(pushed.pushed).toBe(true)
     expect(pushed.signed).toBeTruthy()
-    const verified = await verifySkillPack(pushed.signed!, TEST_SKILL_PUBLIC_KEY)
+    const verified = await verifySkillPack(pushed.signed!, SKILL_KEYS.publicKeyRaw)
     expect(verified?.skillId).toBe('interview')
     expect(verified?.body).toContain('Stay the candidate')
     expect((await store.latestPacks()).length).toBe(1)
