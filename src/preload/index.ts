@@ -61,6 +61,7 @@ import {
   type ImportAudioPickResult,
   type ImportAudioProgress,
   type ImportAssetsProgress,
+  type AsrAssetsStatus,
   type ImportJobView,
   type LocalModelSummary,
   type ProfileRecoveryResult
@@ -317,6 +318,8 @@ const api = {
     ipcRenderer.invoke(IPC.brainAttention),
   setListeningState: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.listeningState, on),
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
+  asrAssetsStatus: (): Promise<AsrAssetsStatus> => ipcRenderer.invoke(IPC.asrAssetsStatus),
+  asrAssetsEnsure: (): Promise<AsrAssetsStatus> => ipcRenderer.invoke(IPC.asrAssetsEnsure),
 
   // Métis Local (on-device LLM): read-only readiness for the model included in the installer.
   localModelsList: (): Promise<LocalModelSummary[]> => ipcRenderer.invoke(IPC.localModelsList),

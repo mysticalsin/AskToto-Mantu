@@ -9,8 +9,9 @@
  *   The exception is Act 2's synthetic cursor (OnboardingDemoScene), which needs a per-frame
  *   projection CSS cannot express — a small rAF loop over lib/synthetic-cursor.ts, not a dependency.
  *   Act 1's Métis wordmark is static. No scramble.
- * - Scene 4's checks are REAL (getPermissions / requestPermissionsUpfront / asrBundled) — a row only
- *   ever shows "ready" when it is actually true. Never fake the magic moment.
+ * - Scene 4's checks are REAL (getPermissions / requestPermissionsUpfront / asrAssetsStatus) — a row only
+ *   ever shows "ready" when it is actually true. Never fake the magic moment. Transcription files are
+ *   provisioned here (bundled or fetched into userData) — never skipped, never "reinstall".
  * - Act 2 (reveal) is the one deliberate exception to "never fake" — it drives Métis's REAL Bar/
  *   Copilot/Answer/QuickActions components with a scripted fake meeting (MQA-277), guarded so fake data
  *   can never persist and the demo can never see real data (MQA-278, @shared/demo-guard).
@@ -55,7 +56,14 @@ import {
   Volume2,
   VolumeX
 } from 'lucide-react'
-import type { ConversationMode, LocalModelSummary, PermissionStatus, ProfileRecoveryResult, PublicSettings } from '@shared/ipc'
+import type {
+  AsrAssetsStatus,
+  ConversationMode,
+  LocalModelSummary,
+  PermissionStatus,
+  ProfileRecoveryResult,
+  PublicSettings
+} from '@shared/ipc'
 import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { InlineOrb } from './AgentStatus'
@@ -342,6 +350,48 @@ export function localModelRowStatus(
   }
   if (model.ready) return { state: 'ready', detail: 'On-device model ready' }
   return { state: 'checking', detail: 'Checking the on-device model…' }
+}
+
+const IDLE_ASR_STATUS: AsrAssetsStatus = {
+  ready: false,
+  status: 'idle',
+  progress: 0,
+  label: 'Getting transcription files…'
+}
+
+/** Act 3 transcription row. Never skip a missing bundle. Never tell the user to reinstall. */
+export function asrAssetsRowStatus(
+  input: AsrAssetsStatus | null | undefined
+): { state: SetupRowState; detail: string; progress?: number } {
+  const s = input ?? IDLE_ASR_STATUS
+  if (s.ready || s.status === 'ready') {
+    return { state: 'ready', detail: 'Parakeet + Whisper ready' }
+  }
+  if (s.status === 'error') {
+    return {
+      state: 'action',
+      detail: s.error || s.label || 'Could not get the transcription files. Try again.'
+    }
+  }
+  if (s.status === 'downloading') {
+    return {
+      state: 'action',
+      detail: s.label || 'Getting transcription files…',
+      progress: s.progress
+    }
+  }
+  return { state: 'action', detail: s.label || 'Getting transcription files…' }
+}
+
+export function asrRowNeedsRetry(row: Pick<SetupRow, 'state' | 'detail'>): boolean {
+  if (row.state !== 'action') return false
+  return /could not get|try again|check your connection/i.test(row.detail ?? '')
+}
+
+/** First-run cannot leave Act 3 while Parakeet + Whisper-floor files are still missing. */
+export function setupAsrBlocksContinue(rows: SetupRow[]): boolean {
+  const asr = rows.find((r) => r.key === 'asr')
+  return !asr || asr.state !== 'ready'
 }
 
 /** Act 3 — "scan first, then present a completed configuration": two DIFFERENT claims the scene makes,
@@ -772,8 +822,10 @@ export function OnboardingExperience({
     void (async () => {
       const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
       await delay(500)
-      const bundled = await window.toto.asrBundled().catch(() => false)
-      set('asr', bundled ? 'ready' : 'action', bundled ? 'Parakeet + Whisper bundled' : 'models missing in this build')
+      void window.toto.asrAssetsEnsure().catch(() => {})
+      const asrStatus = await window.toto.asrAssetsStatus().catch(() => IDLE_ASR_STATUS)
+      const asr = asrAssetsRowStatus(asrStatus)
+      set('asr', asr.state, asr.detail, asr.progress)
       await delay(450)
       set('brain', 'ready', isWindows ? 'stays on this PC' : 'stays on this Mac')
       await delay(450)
@@ -830,14 +882,19 @@ export function OnboardingExperience({
     const poll = async (): Promise<void> => {
       const perms = await window.toto.getPermissions().catch(() => null)
       const models = await window.toto.localModelsList().catch(() => [])
+      const asrStatus = await window.toto.asrAssetsStatus().catch(() => null)
       if (!live) return
       const local =
         models.find((m) => m.unavailableReason === 'downloading') ??
         models.find((m) => m.id === settings?.localLlm.modelId) ??
         models[0]
       const lm = localModelRowStatus(local)
+      const asr = asrStatus ? asrAssetsRowStatus(asrStatus) : null
       setRows((rs) =>
         rs.map((r) => {
+          if (r.key === 'asr' && asr) {
+            return { ...r, state: asr.state, detail: asr.detail, progress: asr.progress }
+          }
           if (r.key === 'local') return { ...r, state: lm.state, detail: lm.detail, progress: lm.progress }
           if (!perms) return r
           if (r.key === 'mic') {
@@ -862,11 +919,25 @@ export function OnboardingExperience({
       )
     }
     const interval = setInterval(() => void poll(), PERMISSIONS_POLL_MS)
+    const unsub = window.toto.onImportAssetsProgress?.((d) => {
+      if (!live) return
+      const asr = asrAssetsRowStatus({ ...d, ready: d.status === 'ready' })
+      setRows((rs) =>
+        rs.map((r) => (r.key === 'asr' ? { ...r, state: asr.state, detail: asr.detail, progress: asr.progress } : r))
+      )
+    })
     return () => {
       live = false
       clearInterval(interval)
+      unsub?.()
     }
   }, [scene, settings?.localLlm.modelId])
+
+  const retryAsr = async (): Promise<void> => {
+    const status = await window.toto.asrAssetsEnsure().catch(() => IDLE_ASR_STATUS)
+    const asr = asrAssetsRowStatus(status)
+    setRows((rs) => rs.map((r) => (r.key === 'asr' ? { ...r, state: asr.state, detail: asr.detail, progress: asr.progress } : r)))
+  }
 
   const requestMic = async (): Promise<void> => {
     // Windows: main's requestPermissionsUpfront is a darwin no-op — the only thing that resolves mic
@@ -910,6 +981,7 @@ export function OnboardingExperience({
   const needsPerms = rows.some(
     (r) => (r.key === 'mic' || r.key === 'screen') && (r.state === 'action' || r.state === 'blocked' || r.state === 'restart')
   )
+  const asrBlocksContinue = setupAsrBlocksContinue(rows)
 
   return (
     <div
@@ -1003,7 +1075,7 @@ export function OnboardingExperience({
                 <div className="min-w-0 flex-1">
                   <p className="m-0 truncate text-[13px] text-[color:var(--color-ink)]">{r.label}</p>
                   {r.detail && <p className="m-0 text-[11px] text-[color:var(--color-ink-3)]">{r.detail}</p>}
-                  {r.key === 'local' && r.progress != null && r.progress > 0 && r.progress < 1 && (
+                  {(r.key === 'local' || r.key === 'asr') && r.progress != null && r.progress > 0 && r.progress < 1 && (
                     <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
                       <div
                         className="h-full rounded-full bg-[#9A2BF0]"
@@ -1013,6 +1085,20 @@ export function OnboardingExperience({
                   )}
                   {/* Why-before-prompt: shown before the button that triggers the OS dialog / deep link, not
                       after — so the user knows what they're being asked for before they're asked. */}
+                  {r.key === 'asr' && asrRowNeedsRetry(r) && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                        Transcription files download when you first set up Métis. Check your connection.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void retryAsr()}
+                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
+                      >
+                        Try again
+                      </button>
+                    </div>
+                  )}
                   {r.key === 'mic' && r.state === 'action' && (
                     <div className="mt-1.5 flex flex-wrap items-center gap-2">
                       <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
@@ -1127,17 +1213,26 @@ export function OnboardingExperience({
               Métis only starts listening when you press Listen and tell the room. Nothing is captured before that.
             </p>
           )}
+          {asrBlocksContinue && scanDone && (
+            <p className="fade-up m-0 max-w-[360px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+              Continue unlocks when the transcription files are ready.
+            </p>
+          )}
           <div className="flex items-center gap-2">
             <button
               type="button"
               // Act 6 re-point (MQA-283): setup always advances to personalize now — license (when
               // enabled) has moved to sit between personalize and ready. See onboarding-flow.ts.
+              // Transcription files must be on disk before first-run leaves this act.
+              disabled={asrBlocksContinue}
               onClick={() => {
+                if (setupAsrBlocksContinue(rows)) return
                 playHero()
                 setScene(sceneAfterSetup())
               }}
               className={
-                'onboard-cta no-drag focus-ring ' + (needsPerms ? 'onboard-cta--muted' : '')
+                'onboard-cta no-drag focus-ring ' +
+                (needsPerms || asrBlocksContinue ? 'onboard-cta--muted' : '')
               }
             >
               Continue

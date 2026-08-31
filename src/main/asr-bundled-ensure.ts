@@ -64,6 +64,11 @@ export function setAsrEnsureTestHooks(hooks: AsrEnsureTestHooks | null): void {
   testHooks = hooks
 }
 
+export function resetAsrEnsureStateForTests(): void {
+  inFlight = null
+  state = { status: 'idle', progress: 0, label: '' }
+}
+
 export function asrAssetsProgress(): AsrAssetsProgress {
   return state
 }
@@ -119,6 +124,21 @@ export function resolveWhisperModelsRoot(): string {
 
 export function importAsrAssetsReady(): boolean {
   return parakeetFilesReady(resolveParakeetDir()) && whisperFloorReady(resolveWhisperModelsRoot())
+}
+
+/** Renderer-safe snapshot: bundled or userData, never a reinstall string. */
+export function asrAssetsStatusSnapshot(): AsrAssetsProgress & { ready: boolean } {
+  if (importAsrAssetsReady()) {
+    return { ready: true, status: 'ready', progress: 1, label: 'Transcription files ready' }
+  }
+  const status = state.status === 'ready' ? 'idle' : state.status
+  return {
+    ready: false,
+    status,
+    progress: status === 'downloading' || status === 'error' ? state.progress : 0,
+    label: state.label || 'Getting transcription files…',
+    error: status === 'error' ? state.error : undefined
+  }
 }
 
 function publish(next: AsrAssetsProgress, onProgress?: (pct: number) => void): void {

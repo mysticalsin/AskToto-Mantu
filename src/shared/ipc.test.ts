@@ -331,6 +331,14 @@ describe('SettingsSchema', () => {
     const { asrQuality: _omit, ...withoutQuality } = DEFAULT_SETTINGS
     expect(SettingsSchema.parse(withoutQuality).asrQuality).toBe('best')
   })
+
+  it('defaults asrEngine to parakeet (schema + DEFAULT_SETTINGS stay identical)', () => {
+    expect(DEFAULT_SETTINGS.asrEngine).toBe('parakeet')
+    const { asrEngine: _omit, ...withoutEngine } = DEFAULT_SETTINGS
+    expect(SettingsSchema.parse(withoutEngine).asrEngine).toBe('parakeet')
+    expect(IPC.asrAssetsStatus).toBe('asr:assets-status')
+    expect(IPC.asrAssetsEnsure).toBe('asr:assets-ensure')
+  })
 })
 
 // Generalized MCP push connections (BidStack CRM + Plane "Book next steps") — McpConnectionSchema is the

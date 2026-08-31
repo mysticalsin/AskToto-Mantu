@@ -21,8 +21,10 @@ import {
   WHISPER_FLOOR_REQUIRED_FILES,
   ensureImportAsrAssets,
   importAsrAssetsReady,
+  asrAssetsStatusSnapshot,
   parakeetFilesReady,
   setAsrEnsureTestHooks,
+  resetAsrEnsureStateForTests,
   whisperFloorReady
 } from './asr-bundled-ensure'
 
@@ -35,6 +37,7 @@ describe('asr-bundled-ensure', () => {
     originalResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath')
     Object.defineProperty(process, 'resourcesPath', { configurable: true, value: paths.resources })
     setAsrEnsureTestHooks(null)
+    resetAsrEnsureStateForTests()
   })
 
   afterEach(() => {
@@ -72,5 +75,17 @@ describe('asr-bundled-ensure', () => {
     expect(importAsrAssetsReady()).toBe(true)
     expect(progress.some((n) => n > 0)).toBe(true)
     expect(ASR_ASSETS_MISSING).not.toMatch(/[Rr]einstall/)
+    const snap = asrAssetsStatusSnapshot()
+    expect(snap.ready).toBe(true)
+    expect(snap.status).toBe('ready')
+    expect(JSON.stringify(snap)).not.toMatch(/[Rr]einstall/)
+  })
+
+  it('status snapshot is not ready and never says reinstall when resources are empty', () => {
+    const snap = asrAssetsStatusSnapshot()
+    expect(snap.ready).toBe(false)
+    expect(snap.status).not.toBe('ready')
+    expect(JSON.stringify(snap)).not.toMatch(/[Rr]einstall/)
+    expect(snap.label).toMatch(/transcription files/i)
   })
 })
