@@ -27,16 +27,17 @@ const pkg = readFileSync(join(__dirname, '../../../../package.json'), 'utf8')
 
 const slice = [specSrc, engineSrc, componentSrc].join('\n')
 
-describe('Starfield Close — mount after Next/Start only', () => {
-  it('does not mount on Act 1 hero or Skip', () => {
-    expect(shouldMountStarfield('hero')).toBe(false)
-    expect(shouldMountStarfield('skip')).toBe(false)
+describe('Starfield Close — galaxy from frame one', () => {
+  it('mounts on hero and the rest of the exclusive stage', () => {
+    expect(shouldMountStarfield('hero')).toBe(true)
+    expect(shouldMountStarfield('skip')).toBe(true)
     for (const scene of STARFIELD_SCENES) {
       expect(shouldMountStarfield(scene)).toBe(true)
     }
+    expect(STARFIELD_SCENES).toContain('hero')
     expect(experienceSrc).toMatch(/shouldMountStarfield\(scene\) && !starfieldFailed/)
     expect(experienceSrc).toMatch(/<OnboardingStarfield/)
-    expect(experienceSrc).not.toMatch(/scene === 'hero' && <OnboardingStarfield/)
+    expect(experienceSrc).toMatch(/playOnboardingVideo\(el\)/)
     expect(experienceSrc).toMatch(/bumpStarfield\(\)/)
     expect(experienceSrc).toMatch(/setScene\('problem'\)/)
   })
@@ -92,10 +93,9 @@ describe('Starfield Close — time-driven dive, no page scroll', () => {
     expect(step.smooth).toBeCloseTo(0.1, 8)
     expect(step.scroll).toBeCloseTo(0.006, 8)
     expect(appearOpacity(0)).toBe(0)
-    expect(appearOpacity(300)).toBe(0)
-    expect(appearOpacity(1000)).toBeCloseTo((700 / 1400) * 2, 8)
-    expect(appearOpacity(1700)).toBe(2)
-    expect(appearOpacity(5000)).toBe(2)
+    expect(appearOpacity(240)).toBeCloseTo(1, 8)
+    expect(appearOpacity(480)).toBe(2)
+    expect(appearOpacity(2000)).toBe(2)
     expect(decayBump(NEXT_BUMP, 0)).toBe(NEXT_BUMP)
     expect(decayBump(NEXT_BUMP, 1)).toBeLessThan(NEXT_BUMP)
   })

@@ -531,7 +531,39 @@ input::placeholder {
   }
 }
 .fade-up {
-  animation: fade-up 180ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: fade-up 180ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes onboard-mark-land {
+  0% {
+    opacity: 0;
+    transform: scale(0.72) translateY(12px);
+  }
+  68% {
+    opacity: 1;
+    transform: scale(1.08) translateY(-3px);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+.onboard-mark-land {
+  animation: onboard-mark-land 640ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes onboard-pop-in {
+  from {
+    opacity: 0;
+    transform: scale(0.88) translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+.onboard-pop-in {
+  animation: onboard-pop-in 380ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 /* Onboarding act transition — each scene remounts keyed by name. Opacity + translate only
@@ -854,6 +886,19 @@ input::placeholder {
     animation: none;
     transform: none;
   }
+  .onboard-mark-land,
+  .onboard-pop-in,
+  .onboard-persona {
+    animation: fade-up 160ms ease-out both;
+  }
+  .onboard-persona:hover,
+  .onboard-persona:active {
+    transform: none;
+  }
+  html.metis-bar-land .aw-widget {
+    animation: none;
+    clip-path: none;
+  }
 }
 
 /* Act 1 welcome atmosphere — full viewport, under the UI. Purple wash remains if this is absent. */
@@ -891,7 +936,22 @@ input::placeholder {
     linear-gradient(165deg, color-mix(in srgb, #3a0b6b 62%, transparent), color-mix(in srgb, #7f00da 48%, transparent));
 }
 
-/* Starfield Close bed after Next/Start. Full-bleed, never a scroll host. Clicks pass through. */
+/* Quieter dimension peel when the bar lands after exclusive close. Not hide-park math. */
+@keyframes metis-bar-land {
+  from {
+    clip-path: inset(46% 38% 46% 38%);
+    opacity: 0.7;
+  }
+  to {
+    clip-path: inset(0 0 0 0);
+    opacity: 1;
+  }
+}
+html.metis-bar-land .aw-widget {
+  animation: metis-bar-land 560ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* Starfield Close bed. Full-bleed from Act 1. Never a scroll host. Clicks pass through. */
 .onboard-starfield {
   position: fixed;
   inset: 0;
@@ -972,32 +1032,11 @@ input::placeholder {
   gap: 28px;
 }
 
-/* Act 4 + Skip: local lift. Does not bleach the exclusive purple stage. */
+/* Act 4 + Skip. Starfield is the bed: no white top wash, no bleached rectangle. */
 .onboard-act4 {
   position: relative;
   width: min(100%, 920px);
   gap: 22px;
-}
-.onboard-act4::before {
-  content: '';
-  position: absolute;
-  inset: -96px -80px 38%;
-  z-index: 0;
-  pointer-events: none;
-  background: radial-gradient(
-    ellipse 88% 70% at 50% 12%,
-    rgba(255, 255, 255, 0.48),
-    rgba(214, 186, 255, 0.14) 40%,
-    transparent 72%
-  );
-}
-/* Act 4 inherits the exclusive wash: drop the bottom-right 78% blob so the top stays the bright part. */
-.onboard-stage:has(.onboard-act4) {
-  background:
-    radial-gradient(1200px 560px at 50% 0%, rgba(255, 255, 255, 0.36), rgba(214, 186, 255, 0.1) 40%, transparent 62%),
-    radial-gradient(1400px 820px at 50% 10%, color-mix(in srgb, #9a2bf0 46%, transparent), transparent 56%),
-    radial-gradient(1100px 640px at 18% 8%, color-mix(in srgb, #9a2bf0 34%, transparent), transparent 58%),
-    linear-gradient(165deg, #3a0b6b 0%, #7f00da 42%, #2a0848 100%);
 }
 .onboard-act4 > * {
   position: relative;
@@ -1032,6 +1071,15 @@ input::placeholder {
   justify-content: center;
   gap: 8px;
 }
+.onboard-persona:nth-child(1) { animation-delay: 40ms; }
+.onboard-persona:nth-child(2) { animation-delay: 80ms; }
+.onboard-persona:nth-child(3) { animation-delay: 120ms; }
+.onboard-persona:nth-child(4) { animation-delay: 160ms; }
+.onboard-persona:nth-child(5) { animation-delay: 200ms; }
+.onboard-persona:nth-child(6) { animation-delay: 240ms; }
+.onboard-persona:nth-child(7) { animation-delay: 280ms; }
+.onboard-persona:nth-child(8) { animation-delay: 320ms; }
+.onboard-persona:nth-child(9) { animation-delay: 360ms; }
 .onboard-persona {
   position: relative;
   width: 132px;
@@ -1042,9 +1090,15 @@ input::placeholder {
   padding: 10px 12px 11px;
   text-align: left;
   color: #f4f4f5;
+  animation: onboard-pop-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), background 160ms ease;
 }
 .onboard-persona:hover {
   background: rgba(255, 255, 255, 0.16);
+  transform: translateY(-2px) scale(1.03);
+}
+.onboard-persona:active {
+  transform: scale(0.96);
 }
 .onboard-persona.is-selected {
   border-color: rgba(244, 244, 245, 0.55);
@@ -1077,13 +1131,14 @@ input::placeholder {
   width: 100%;
   min-width: min(100%, 520px);
   max-width: 540px;
+  margin-inline: auto;
   flex-direction: column;
-  align-items: stretch;
+  align-items: center;
   gap: 16px;
   padding: 32px 30px 26px;
   border: none;
   border-radius: 22px;
-  text-align: left;
+  text-align: center;
   background: rgba(255, 255, 255, 0.22);
 }
 .onboard-tell-card h3 {
@@ -1100,7 +1155,8 @@ input::placeholder {
   color: rgba(255, 255, 255, 0.92);
 }
 .onboard-tell-quote {
-  margin: 0;
+  margin: 0 auto;
+  align-self: center;
   border-radius: 999px;
   padding: 12px 18px;
   background: rgba(255, 255, 255, 0.2);
@@ -1108,6 +1164,7 @@ input::placeholder {
   font-style: italic;
   font-weight: 500;
   line-height: 1.45;
+  text-align: center;
   color: #ffffff;
 }
 .onboard-tell-quote--echo {
@@ -1128,11 +1185,13 @@ input::placeholder {
   display: flex;
   cursor: pointer;
   align-items: flex-start;
+  justify-content: center;
   gap: 12px;
   padding-top: 6px;
   font-size: 15px;
   font-weight: 600;
   line-height: 1.4;
+  text-align: center;
   color: #ffffff;
 }
 .onboard-tell-check-box {

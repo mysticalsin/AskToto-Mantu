@@ -11,8 +11,12 @@ export const ONBOARDING_PORTAL_MS = ONBOARDING_PORTAL_CLOSE_MS
 export const ONBOARDING_PORTAL_SAMPLE_RATE = 22050
 export const ONBOARDING_PORTAL_OPEN_GAIN = 0.16
 export const ONBOARDING_PORTAL_CLOSE_GAIN = 0.12
+/** Quieter bar-land after the tour. 0.45× OPEN. Must not kill the Aria. */
+export const ONBOARDING_BAR_LAND_GAIN = 0.072
 export const ONBOARDING_PORTAL_OPEN_SECONDS = 1.28
 export const ONBOARDING_PORTAL_CLOSE_SECONDS = 1.22
+export const ONBOARDING_BAR_LAND_SECONDS = 0.56
+export const ONBOARDING_BAR_LAND_MS = 560
 
 function tone(freq: number, t: number): number {
   return Math.sin(2 * Math.PI * freq * t)
@@ -63,6 +67,26 @@ function sciFiClose(seconds: number, sampleRate: number): Float32Array {
 export const PORTAL_OPEN_SAMPLES = sciFiOpen(ONBOARDING_PORTAL_OPEN_SECONDS, ONBOARDING_PORTAL_SAMPLE_RATE)
 export const PORTAL_CLOSE_SAMPLES = sciFiClose(ONBOARDING_PORTAL_CLOSE_SECONDS, ONBOARDING_PORTAL_SAMPLE_RATE)
 
+/** Shorter rising slit. Same family as open, not a reverse close, not as long. */
+function sciFiBarLand(seconds: number, sampleRate: number): Float32Array {
+  const n = Math.max(1, Math.floor(sampleRate * seconds))
+  const out = new Float32Array(n)
+  for (let i = 0; i < n; i++) {
+    const u = i / (n - 1 || 1)
+    const t = i / sampleRate
+    const attack = u < 0.18 ? 0.5 - 0.5 * Math.cos(Math.PI * (u / 0.18)) : 1
+    const release = u > 0.55 ? 0.5 + 0.5 * Math.cos(Math.PI * ((u - 0.55) / 0.45)) : 1
+    const env = attack * release
+    const rise = u * u
+    const air = 220 + 420 * rise
+    const shimmer = tone(2860 + 980 * rise, t) * (0.14 + 0.1 * tone(6.2, t))
+    out[i] = (tone(air, t) * 0.58 + shimmer * 0.2) * env * 0.48
+  }
+  return out
+}
+
+export const PORTAL_BAR_LAND_SAMPLES = sciFiBarLand(ONBOARDING_BAR_LAND_SECONDS, ONBOARDING_PORTAL_SAMPLE_RATE)
+
 function playPrecomputed(samples: Float32Array, gain: number, muted: boolean): void {
   if (muted || typeof AudioContext === 'undefined') return
   const Ctor =
@@ -89,6 +113,18 @@ export function playPortalOpen(muted: boolean): void {
 
 export function playPortalClose(muted: boolean): void {
   playPrecomputed(PORTAL_CLOSE_SAMPLES, ONBOARDING_PORTAL_CLOSE_GAIN, muted)
+}
+
+export function playBarLand(muted: boolean): void {
+  playPrecomputed(PORTAL_BAR_LAND_SAMPLES, ONBOARDING_BAR_LAND_GAIN, muted)
+}
+
+export function requestBarLand(): void {
+  if (typeof document === 'undefined') return
+  document.documentElement.classList.add('metis-bar-land')
+  window.setTimeout(() => {
+    document.documentElement.classList.remove('metis-bar-land')
+  }, ONBOARDING_BAR_LAND_MS + 80)
 }
 
 export function requestOnboardingPortalClose(): void {

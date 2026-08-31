@@ -122,3 +122,17 @@ hero -> problem -> reveal -> setup -> personalize -> [license, only if licenseGa
   settings won't change."). It patches `onboardingDone: false` and closes the Settings panel — the
   same gate `App.tsx` checks on every render, so the very next render remounts the six-act experience
   fresh from hero, with no separate replay state machine to keep in sync.
+
+## Mac-show notes (PR 66, Totos-Mac)
+
+Layout and motion only. Six-act copy is unchanged.
+
+- Act 1 is a live Starfield Close tunnel from frame one (`shouldMountStarfield` includes `hero`). The March 19 CloudFront clip still `play()`s on mount under the canvas if it loads. Kenburns on a still is not the first image.
+- Goldberg Aria starts on exclusive mount and is retried on first click and on Next. Scene changes do not stop the bed. Portal OPEN/CLOSE stay a separate, louder pair.
+- Problem-story lines fade in and stay (`forwards`). Continue is visible immediately. Demo heading, helper, Next, and Set me up stay mounted for the whole clip.
+- Act 4 has no white top rectangle. Starfield is the bed.
+- Tell the room is centered in the stage (title, lead, quote pill, why, checkbox).
+- After finish, the bar lands with a quieter, shorter dimension-open (about half of portal OPEN). Hide-park 8×2 and hover math stay put.
+- Hero mark lands on a spring. Persona cards are pressable. Setup rows pop in. Reduced-motion still lands, without bounce.
+
+Canonical contract: `docs/design/ONBOARDING-STARFIELD.md`.

@@ -69,6 +69,8 @@ export function createOnboardingMusicBed(): OnboardingMusicBed {
   const el = new Audio(ONBOARDING_MUSIC_SRC)
   el.loop = true
   el.preload = 'auto'
+  el.autoplay = true
+  el.setAttribute('playsinline', '')
   el.volume = ONBOARDING_MUSIC_GAIN
   let muted = false
 

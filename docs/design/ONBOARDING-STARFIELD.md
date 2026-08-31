@@ -2,46 +2,53 @@
 project: Métis
 type: scene-contract
 scene: Layers.ai "Starfield Close"
-owner-slice: onboarding bed only
+owner-slice: exclusive onboarding tour bed + stay-visible chrome
 status: implement-exactly
+mac-show: Totos-Mac / PR 66
 ---
 
 # Onboarding Starfield Close bed
 
-One change: after Next (or Start) on Act 1, the rest of the exclusive tour sits on a full-bleed WebGL recreation of Layers.ai **Starfield Close**. The canvas is background only. Showcase videos, meeting-type chips, copy, Confirm, portal, and music do not change.
+Tony Mac-showed PR 66 on Totos-Mac. The first image was a frozen poster, Aria was silent, copy vanished, Continue arrived late, Act 4 had a bleached white bar, Tell the room sat left of the bar, and the landing bar had no quieter dimension cue.
 
-This file is the contract. Implementation must not invent scroll chrome, CDN three, overlay geometry, or Act copy.
+This file is the contract after that show. Six-act copy stays locked. Overlay hide-park, island geometry, cursor-watch, and `BAR_MIN_HEIGHT` stay off limits. Do not pack. Do not merge.
 
-## Outcome Tony signed
+## Outcome (verbatim intent)
 
-- Act 1 first image / March 19 hillside-vortex hero (`onboarding-hero-video.ts`) stays until the user clicks **Next** or **Start** on that first image.
-- After that click: mint / jade / bone star tunnel, twinkle, barrel roll, cursor parallax + star repel, bloom, complementary bg `#0a0a24`, cyan / violet corner flames.
-- The field is **under** the existing tour UI (video showcase, meeting-type chips, glass, copy). UI stays readable. Do not replace showcase videos with the starfield.
-- Skip the tour never mounts this bed (they did not start the tour).
-- Overlay PR 58 chrome stays untouched. New files + onboarding mount only.
+1. First image is **animated**. He needs to see the galaxy move from frame one.
+2. Goldberg Aria **must play** on exclusive-stage mount. Retry on first click and on Next.
+3. Space/starfield acts: Continue visible from the start. Text appears and **stays**. Next and Set me up stay on screen.
+4. When the Métis bar appears after the tour: quieter dimension-open (about 0.4–0.5× portal OPEN gain, shorter). Keep portal OPEN and CLOSE working.
+5. How should Métis show up: **no** light white rectangle at the top.
+6. Tell the room: text really **centered**, not stuck on the left of the bar.
+7. More animation on the logo landing and persona/setup pops. Must feel interactive. Reduced-motion: still land, no bounce.
+
+## Galaxy from frame one
+
+`shouldMountStarfield` includes `hero` (and the rest of the exclusive stage: problem, reveal, setup, personalize, license, ready, skip). Act 1 is a live mint/jade tunnel, not a poster.
+
+```
+STARFIELD_SCENES = hero | problem | reveal | setup | personalize | license | ready | skip
+shouldMountStarfield(scene) === STARFIELD_SCENES.includes(scene)
+```
+
+- Time-driven dive already specified below. No scrollbar. Canvas `pointer-events: none` under UI.
+- Keep the looping CloudFront hero video **if it actually plays**. Call `play()` on hero-video **mount**, not only on Next. Never leave a frozen first frame. Kenburns on a still is not enough.
+- Video sits under the starfield on hero. If WebGL1 fails, keep the video bed. Never blank the tour.
+- Appear must not hide the galaxy for a long hold:
+
+```
+appearProgress = clamp(elapsedMs / 480, 0, 1)
+uOpacity = appearProgress * CONFIG.opacity   // 0 → 2 in 480ms, no 300ms black hold
+```
 
 ## Hard: no scroll, ever
 
-Tony rejected a preview that waited on page scroll.
+Forbidden: `#scroll-host`, "scroll ↓" / scroll-down hint, overflow auto/scroll on the bed, driving `scrollTarget` from page scroll, unpkg/jsdelivr three.
 
-Forbidden:
+Required: `html, body, #root` overflow hidden. Stage overflow hidden. Starfield wrapper + canvas `position: fixed; inset: 0; overflow: hidden; pointer-events: none`. Tunnel keeps moving on its own.
 
-- `#scroll-host` (any id or class named scroll-host)
-- A "scroll ↓" hint, chevron, or caption
-- `overflow: auto` / `overflow: scroll` / `overflow-y: scroll` on the bed or onboarding root
-- Driving `scrollTarget` from `window.scrollY`, wheel, touch-pan, or a fake scroller
-- Loading three from unpkg, jsdelivr, or any runtime URL
-
-Required:
-
-- `html, body, #root` stay `overflow: hidden` (already true in `styles.css`; do not regress)
-- Exclusive stage already `overflow: hidden`. Do not add a scrollbar to onboarding.
-- Starfield wrapper + canvas: `position: fixed; inset: 0; overflow: hidden; pointer-events: none` so UI clicks pass through
-- The tunnel keeps moving on its own. Time-driven dive. Drift + spin every frame so it never reads as a still
-
-## Scroll stand-in (the only "scroll")
-
-Onboarding has no page scroll. Feed the Layers scroll pipeline this target, then the existing double-damp:
+## Scroll stand-in
 
 ```
 breath(t) = 0.42 + 0.28 * (0.5 + 0.5 * sin(t * 0.32))
@@ -50,189 +57,88 @@ smooth += (scrollTarget - smooth) * 0.10
 scroll  += (smooth - scroll) * 0.06
 ```
 
-`t` is seconds since the bed mounted. Period is ~19.6s. Range of `breath` is 0.42..0.70.
+`nextBump` += 0.16 on Next/Continue, decays `exp(-dt * 2.4)`. Reduced motion: `scrollTarget = 0`, drift/spin at 12%.
 
-`nextBump` starts at 0. A scene Next/Continue after the bed is up adds `+0.16`, then decays (`bump *= exp(-dt * 2.4)`). First Next may apply one bump on mount. Never required for motion; the breath is.
+## Music (Goldberg Aria)
 
-Reduced motion: `scrollTarget = 0` (no dive surge). Drift and spin still run at 12% of CONFIG so the field is very slow, still a bed, still readable.
+`createOnboardingMusicBed` lives for the whole exclusive mount. Do not pause or destroy it on scene change. Mute chip still zeros gain. Portal SFX stay a separate AudioContext and must not call `audio.pause()` or `bed.stop()`.
 
-## Appear
+Required play path:
 
-After Next/Start mount:
+1. `music.start()` on exclusive-stage mount (same effect as `playPortalOpen`).
+2. `music.start()` again on the first pointerdown/click on the stage (Mac autoplay often rejects mount play).
+3. `music.start()` on Next / Start / Continue (not only `retryIfNeeded`).
+4. `play()` is the first media call. Do not seek before play.
 
-```
-appearProgress = clamp((elapsedMs - 300) / 1400, 0, 1)
-uOpacity = appearProgress * CONFIG.opacity   // 0 → 2
-```
+## Copy + CTAs stay
 
-300ms delay, 1400ms fade, destination opacity 2.
+- `.fade-up` uses `forwards` (or `both`). Never `backwards` alone on problem-story lines. Text that fades in remains.
+- Problem Continue is visible immediately. No `${200 + PROBLEM_STORY.length * 1100}ms` delay on that button. Line stagger may stay.
+- Demo (`OnboardingDemoScene`): heading, helper line, **Next**, and **Set me up** stay mounted for the whole clip. Do not `{hasNext && (` unmount Next when beats advance.
+- Setup / personalize Continue stays (already mounted).
 
-## Files (this slice)
+## Act 4: no white rectangle
 
-Create only:
+Starfield is the bed. Remove:
+
+- `.onboard-act4::before` white radial `rgba(255,255,255,0.48)` at 50% 12%
+- `.onboard-stage:has(.onboard-act4)` white wash `rgba(255,255,255,0.36)` at 50% 0%
+
+No bleached bar across the top. `onboarding-tell-the-room.test.ts` must pin the absence of that wash.
+
+## Tell the room centered
+
+`.onboard-tell-card` is centered in the stage (`margin-inline: auto`, `text-align: center`, `align-items: center`). Title, lead, quote, why, and checkbox row are centered. Quote stays a pill, still centered. Not `text-align: left` plus stretch that sticks the block to the left of the bar.
+
+## Bar appears = quieter dimension
+
+Portal OPEN gain 0.16 / CLOSE 0.12 stay the loud pair. Keep those animations working.
+
+When onboarding finishes and the island/bar lands:
+
+- SFX: shorter quieter dimension-open, **0.4–0.5× OPEN gain** (0.072), about 0.56s. Lives next to portal SFX in `onboarding-portal.ts` (`playBarLand`). Must not kill the Aria.
+- Visual: brief portal-slit / dimension peel on `.aw-widget` via `html.metis-bar-land` (clip-path inset opening). Not as loud or as long as exclusive open/close.
+- Do **not** change hide-park 8×2, island geometry, cursor-watch, `BAR_MIN_HEIGHT`, or hover math. Do not edit overlay chrome files for park/hover.
+
+## Interactive logos
+
+- Hero Métis mark: real land spring (scale + settle), not a static dump. Class `hero-mark` / `onboard-mark-land`.
+- Persona cards: pressable spring (`:active` scale). Hover lift allowed.
+- Setup rows / meeting-type chips: pop-in stagger, fill-mode forwards. Not a dump.
+- Reduced-motion: still land (opacity/translate to rest). No bounce, no scale overshoot.
+
+## Scene (unchanged geometry)
+
+CONFIG, LAYERS, shaders, three composers, pointer, per-frame drift/spin: same as the original Starfield Close spec. `three@0.143.0` vendored. WebGL1Renderer, antialias, VSMShadowMap.
+
+## Files
 
 | Path | Role |
 | --- | --- |
 | `docs/design/ONBOARDING-STARFIELD.md` | this contract |
-| `src/renderer/src/lib/onboarding-starfield-spec.ts` | CONFIG, LAYERS, shaders verbatim, breath / damp / appear / mount predicate. No three. |
-| `src/renderer/src/lib/onboarding-starfield-engine.ts` | WebGL1 scene. Imports `three` from the local package (Vite-bundled). |
-| `src/renderer/src/lib/onboarding-starfield-spec.test.ts` | math + shader/CONFIG pins + no-scroll/no-CDN contracts |
-| `src/renderer/src/lib/onboarding-starfield-engine.test.ts` | dispose, WebGL fail, reduced-motion, no unpkg |
-| `src/renderer/src/components/OnboardingStarfield.tsx` | canvas host, rAF lifecycle, hide-pause, unmount dispose |
+| `docs/ONBOARDING-EXPERIENCE.md` | Mac-show notes (layout/motion only) |
+| `src/renderer/src/lib/onboarding-starfield-spec.ts` | CONFIG, shaders, breath, mount predicate includes hero |
+| `src/renderer/src/lib/onboarding-starfield-engine.ts` | WebGL1 scene |
+| `src/renderer/src/components/OnboardingStarfield.tsx` | canvas host |
+| `OnboardingExperience.tsx` | mount on hero+, music start/retry, stay-visible copy |
+| `OnboardingDemoScene.tsx` | Next + Set me up stay mounted |
+| `onboarding-portal.ts` | quieter `playBarLand` (OPEN/CLOSE unchanged) |
+| `styles.css` | starfield, fade-up forwards, no Act 4 white wash, tell-card center, mark/persona springs, bar-land slit |
 
-Allowed edits:
-
-- `OnboardingExperience.tsx` — mount the bed after Next/Start; keep hero video as WebGL-fail fallback; pulse on later Next/Continue. Do not rewrite Acts copy.
-- `styles.css` — only `.onboard-starfield` (+ canvas) rules. Do not touch overlay chrome, portal keyframes, hero video, or Act 4 wash.
-- `package.json` / lockfile — pin `three@0.143.0` in `devDependencies` (renderer deps are bundled). Exact version.
-
-Off limits (do not open to edit):
-
-- Island geometry, cursor-watch, hide park, `BAR_MIN_HEIGHT`, overlay click sound
-- Overlay chrome picker / peek / autohide / `App.tsx` overlay park
-- `onboarding-hero-video.ts` (March 19 CloudFront clip stays Act 1)
-- `onboarding-portal.ts`, `onboarding-music.ts`, CSP `media-src` / music
-- Act copy in Experience / demo / tell-the-room / persona-vibe
-- Version bump to 1.8.1. Do not pack. Do not merge.
-
-## Mount predicate
-
-```
-STARFIELD_SCENES = problem | reveal | setup | personalize | license | ready
-shouldMountStarfield(scene) === STARFIELD_SCENES.includes(scene)
-```
-
-- `hero`: Act 1 video only. No canvas.
-- `skip`: no canvas (Skip is not Next/Start).
-- After Next: mount canvas. If WebGL1 init throws or has no context: unmount canvas, show the existing hero video bed. Never blank the tour.
-
-## Three.js (local, r0.143.0)
-
-- Package `three@0.143.0`. Import `from 'three'` and `three/examples/jsm/...`.
-- Electron CSP `script-src 'self'` blocks unpkg. Never write a `<script src="https://unpkg.com/three...">` or dynamic import of a URL.
-- `WebGL1Renderer({ canvas, antialias: true })`
-- `renderer.shadowMap.enabled = true`; `renderer.shadowMap.type = VSMShadowMap`
-- Pixel ratio `min(devicePixelRatio, 2)`
-
-## CONFIG (exact)
-
-```
-CONFIG = {
-  bgColor: '#0a0a24',
-  flameColor: '#aee9ff',
-  flameColor2: '#c79bff',
-  flameAmt: 0.2,
-  colorA: '#aef6cf',
-  colorB: '#5fe6a0',
-  colorC: '#eafff2',
-  opacity: 2,
-  pointSize: 50,
-  brightness: 1.85,
-  drift: 2.35,
-  twinkle: 1,
-  spin: 0.03,
-  repelRadius: 5,
-  repelStrength: 0.35,
-  scrollPush: 8,
-  scrollDrift: 6,
-  scrollSpin: 0.1,
-  parallax: 0.6,
-}
-LAYERS = { NONE: 0, TORUS_SCENE: 1, BLOOM_SCENE: 2, ENTIRE_SCENE: 3 }
-```
-
-## Scene
-
-- `scene.background = 0x000000`
-- `scene.fog = Fog(0x000000, 0, 15)`
-- `PerspectiveCamera(45, aspect, 0.1, 80)` at `(0, 0, 5)`
-
-Points: count 4200, depth 30.
-
-- `x = (rand - 0.5) * 24`
-- `y = (rand - 0.5) * 16`
-- `z = (rand - 0.5) * 30`
-- `aPalette = floor(rand * 3)`
-- `aBright = 0.7 + rand * 0.6`
-- `aScale = 0.5 + pow(rand, 1.4) * 2.5`
-- `aPhase = rand`
-
-Attributes: `position`, `aScale`, `aPhase`, `aPalette`, `aBright`.
-
-`group` + `points` layers = `ENTIRE_SCENE` (`.set(3)`).
-
-`ShaderMaterial`: transparent, `depthWrite: false`, `AdditiveBlending`.
-
-Uniforms (initial):
-
-```
-uTime 0, uSize 50, uOpacity 0, uDrift 0, uDepth 30, uTwinkle 1,
-uCursor Vector3(0,0,0), uRepelRadius 5, uRepelStrength 0.35, uActivity 0,
-uColorA/B/C from hex, uBrightness 1.85
-```
-
-## Shaders (verbatim)
-
-Vertex, fragment, FinalPass vertex, FinalPass fragment: copy the strings in `onboarding-starfield-spec.ts` exactly as in the owner-slice prompt. Tests pin the full text. Do not "clean up" whitespace or uniforms.
-
-## Composers
-
-Three `EffectComposer`s, each starting with `RenderPass(scene, camera)`:
-
-1. **torusComposer** `renderToScreen = false`: RenderPass, `ShaderPass(GammaCorrectionShader)`, `UnrealBloomPass(size, 0.22, 0.2, 0)`, `ShaderPass(CopyShader)`
-2. **bloomComposer** `renderToScreen = false`: RenderPass, `UnrealBloomPass(size, 0.4, 0.55, 0)`, `ShaderPass(GammaCorrectionShader)`
-3. **finalComposer**: RenderPass, FinalPass `ShaderPass`. Wire `bloomTexture = bloomComposer.renderTarget1.texture`, `torusTexture = torusComposer.renderTarget1.texture`. `haloTexture`: 1×1 black `DataTexture` (never null).
-
-Per frame render:
-
-```
-camera.layers.set(TORUS_SCENE);  torusComposer.render()
-camera.layers.set(BLOOM_SCENE);  bloomComposer.render()
-camera.layers.set(ENTIRE_SCENE); finalComposer.render()
-```
-
-Resize all three composers + renderer + camera aspect.
-
-## Pointer (real mouse, not a scroller)
-
-Listen on `window` (`pointermove`), not the canvas.
-
-- NDC: `x = (clientX / w) * 2 - 1`, `y = -(clientY / h) * 2 + 1`
-- Unproject `z = 0.5`, intersect the `z = 0` plane, lerp world cursor `0.12`
-- Activity eases toward 1 at `0.06`; after 3s idle eases toward 0 at `0.06`
-- `uCursor` = world cursor; `uActivity` = activity
-
-## Per-frame motion
-
-`dt` in seconds. When `document.hidden`, skip updates (pause). Do not advance `t` while hidden.
-
-```
-uDrift += dt * ((reduced ? drift * 0.12 : drift) + scroll * scrollDrift)
-camera.position = (ndc.x * parallax, ndc.y * parallax, 5 - scroll * scrollPush)
-camera.lookAt(ndc.x * parallax, ndc.y * parallax, -10)
-group.rotation.z += dt * ((reduced ? spin * 0.12 : spin) + scroll * scrollSpin)
-finalPass.iTime = tSeconds
-```
-
-Drift + spin run every visible frame even if `scroll === 0`.
-
-## Lifecycle
-
-- Dispose: cancel rAF, remove window / visibility / resize listeners, dispose composers, geometry, material, halo texture, renderer; remove canvas.
-- Pause while the window is hidden (`visibilitychange` / `document.hidden`).
-- Reduced motion: still the bed; no dive; very slow field.
+Off limits: island geometry, cursor-watch, hide park, `BAR_MIN_HEIGHT`, overlay click sound, `onboarding-hero-video.ts` clip URL, six-act user-facing copy strings, version 1.8.1, pack, merge.
 
 ## Tests (must pass)
 
-1. Mount after Next/Start only (`shouldMountStarfield('hero')` and `'skip'` are false; tour scenes true). Experience source mounts `<OnboardingStarfield` only for those scenes, not Act 1.
-2. Dispose path exists and the React effect returns it.
-3. WebGL1 failure calls `onUnavailable` and Experience keeps `OnboardingHeroVideo` (never a blank stage).
-4. Reduced-motion breath target is 0; engine still constructs the field.
-5. No `unpkg`, `jsdelivr`, or `https://` three URL in spec/engine/component.
-6. No `#scroll-host`, no `scroll-host`, no `scroll ↓` / `scroll down` hint anywhere in this slice.
-7. CONFIG, LAYERS, and all four shader strings match this contract.
-8. `breathScrollTarget` / double-damp / `appearOpacity` match the formulas above.
+1. Starfield mounts on `hero` (and the other exclusive scenes).
+2. Music `start()` is invoked on mount and again on Next (and first-click path exists).
+3. Problem Continue is present at t=0 (no 1100ms * lines delay on that button).
+4. Problem fade-up uses forwards/both, not backwards-only.
+5. Demo Next + Set me up still mounted after playback beats (no `hasNext &&` around Next).
+6. No white Act 4 top wash (`::before` 0.48 and `:has(.onboard-act4)` 0.36 gone).
+7. Tell-the-room card is centered (`text-align: center`).
+8. Dispose, WebGL fail fallback, reduced-motion surge = 0, no unpkg, no scroll-host.
+9. Bar-land gain is 0.4–0.5× portal OPEN; OPEN/CLOSE gains unchanged.
 
 ## Quality
 
-Apple-grade, defaults friendly. Power stays in Settings. Do not dump Brain / ASR / Intelligence into this PR. No em dashes in user-facing copy (this bed adds none). Never auto-send. Do not claim READY TO MERGE.
+Apple-grade. Defaults friendly. Power stays in Settings. No em dashes in user-facing copy. Never auto-send. Do not claim READY TO MERGE. Devon will Mac-show.

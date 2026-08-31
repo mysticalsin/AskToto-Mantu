@@ -65,7 +65,7 @@ import { isWindows } from '../lib/keys'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
 import { sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
 import { createOnboardingMusicBed } from '../lib/onboarding-music'
-import { closeOnboardingPortal, playPortalOpen } from '../lib/onboarding-portal'
+import { closeOnboardingPortal, playBarLand, playPortalOpen, requestBarLand } from '../lib/onboarding-portal'
 import {
   TELL_THE_ROOM_CHECKBOX,
   TELL_THE_ROOM_LEAD,
@@ -193,8 +193,9 @@ function OnboardingHeroVideo({
 }): JSX.Element | null {
   const [failed, setFailed] = useState(false)
   useEffect(() => {
+    const el = typeof videoRef === 'object' && videoRef ? videoRef.current : null
+    playOnboardingVideo(el)
     return () => {
-      const el = typeof videoRef === 'object' && videoRef ? videoRef.current : null
       el?.pause()
     }
   }, [videoRef])
@@ -220,20 +221,20 @@ function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => 
   return (
     <>
       <div className="hero-welcome relative z-10 scene-enter flex flex-col items-center gap-5">
-        <div className="hero-mark fade-up" aria-hidden="true" style={{ animationDelay: '80ms', animationFillMode: 'backwards' }}>
+        <div className="hero-mark onboard-mark-land" aria-hidden="true">
           <MetisMark size={96} />
         </div>
         <div className="flex flex-col items-center gap-2">
           <h1
             className="hero-wordmark fade-up m-0 select-none"
             aria-label={WORDMARK}
-            style={{ fontFamily: 'var(--font-ui)', animationDelay: '160ms', animationFillMode: 'backwards' }}
+            style={{ fontFamily: 'var(--font-ui)', animationDelay: '160ms', animationFillMode: 'both' }}
           >
             <span aria-hidden="true">{WORDMARK}</span>
           </h1>
           <p
             className="hero-tagline fade-up m-0 text-[14px] text-[color:var(--color-ink-2)]"
-            style={{ animationDelay: '400ms', animationFillMode: 'backwards' }}
+            style={{ animationDelay: '400ms', animationFillMode: 'both' }}
           >
             Your on-device meeting copilot.
           </p>
@@ -242,7 +243,7 @@ function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => 
           type="button"
           onClick={onBegin}
           className="onboard-cta onboard-glass fade-up no-drag focus-ring"
-          style={{ animationDelay: '550ms', animationFillMode: 'backwards' }}
+          style={{ animationDelay: '550ms', animationFillMode: 'both' }}
         >
           Next
         </button>
@@ -251,14 +252,14 @@ function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => 
             type="button"
             onClick={onSkip}
             className="onboard-glass onboard-glass-chip onboard-skip-chip fade-up no-drag focus-ring"
-            style={{ animationDelay: '1150ms', animationFillMode: 'backwards' }}
+            style={{ animationDelay: '1150ms', animationFillMode: 'both' }}
           >
             Skip the tour
           </button>
         )}
         <p
           className="hero-byline onboard-glass onboard-glass-chip fade-up m-0 text-[10px] tracking-wide"
-          style={{ animationDelay: '1300ms', animationFillMode: 'backwards' }}
+          style={{ animationDelay: '1300ms', animationFillMode: 'both' }}
         >
           Mantu ·{' '}
           <a
@@ -651,7 +652,7 @@ function prefersReducedMotion(): boolean {
     : false
 }
 
-/** Bach Aria bed. Starts on the same mount as playPortalOpen. Video still play()s on Next. */
+/** Bach Aria bed. Starts on exclusive mount. Retries on first click and Next. Scene changes do not stop it. */
 function useOnboardingMusic(): {
   muted: boolean
   toggleMute: () => void
@@ -679,14 +680,6 @@ function useOnboardingMusic(): {
 
   const start = useCallback(() => {
     const playing = bedRef.current?.start()
-    void playing?.catch(() => {
-      pendingRetryRef.current = true
-    })
-  }, [])
-
-  const retryIfNeeded = useCallback(() => {
-    if (!pendingRetryRef.current) return
-    const playing = bedRef.current?.element.play()
     void playing?.then(
       () => {
         pendingRetryRef.current = false
@@ -696,6 +689,10 @@ function useOnboardingMusic(): {
       }
     )
   }, [])
+
+  const retryIfNeeded = useCallback(() => {
+    start()
+  }, [start])
 
   return {
     muted,
@@ -714,7 +711,10 @@ export function OnboardingExperience({
 }: OnboardingExperienceProps): JSX.Element {
   const music = useOnboardingMusic()
   const heroVideoRef = useRef<HTMLVideoElement>(null)
-  const playHero = (restart = false): void => playOnboardingVideo(heroVideoRef.current, { restart })
+  const playHero = (restart = false): void => {
+    playOnboardingVideo(heroVideoRef.current, { restart })
+    music.start()
+  }
 
   useEffect(() => {
     prefetchOnboardingDemoChunks()
@@ -890,6 +890,8 @@ export function OnboardingExperience({
     if (doneRef.current || !consent) return
     doneRef.current = true
     await closeOnboardingPortal(music.muted, prefersReducedMotion())
+    playBarLand(music.muted)
+    requestBarLand()
     await onDone({ mode, recordingConsent: true })
   }
 
@@ -903,7 +905,10 @@ export function OnboardingExperience({
   )
 
   return (
-    <div className="relative flex h-full w-full select-none flex-col items-center px-10 text-center">
+    <div
+      className="relative flex h-full w-full select-none flex-col items-center overflow-hidden px-10 text-center"
+      onPointerDown={music.start}
+    >
       {(scene === 'hero' || starfieldFailed) && <OnboardingHeroVideo videoRef={heroVideoRef} />}
       {shouldMountStarfield(scene) && !starfieldFailed && (
         <OnboardingStarfield pulse={starfieldPulse} onUnavailable={() => setStarfieldFailed(true)} />
@@ -925,7 +930,7 @@ export function OnboardingExperience({
         <HeroWelcome
           onBegin={() => {
             playOnboardingVideo(heroVideoRef.current, { restart: true })
-            music.retryIfNeeded()
+            music.start()
             bumpStarfield()
             setScene('problem')
           }}
@@ -942,8 +947,7 @@ export function OnboardingExperience({
                 className="fade-up m-0 text-[22px] font-medium leading-snug text-[color:var(--color-ink)]"
                 style={{
                   animationDelay: `${200 + i * 1100}ms`,
-                  animationFillMode: 'backwards',
-                  opacity: 1
+                  animationFillMode: 'forwards'
                 }}
               >
                 {line}
@@ -958,7 +962,6 @@ export function OnboardingExperience({
               setScene('reveal')
             }}
             className="onboard-cta no-drag focus-ring"
-            style={{ animationDelay: `${200 + PROBLEM_STORY.length * 1100}ms` }}
           >
             Continue
           </button>
@@ -991,8 +994,8 @@ export function OnboardingExperience({
             {rows.map((r, i) => (
               <div
                 key={r.key}
-                className="glass-strong fade-up flex items-start gap-3 rounded-[12px] px-3.5 py-2.5 text-left"
-                style={{ animationDelay: `${i * 70}ms`, animationFillMode: 'backwards' }}
+                className="glass-strong fade-up onboard-pop-in flex items-start gap-3 rounded-[12px] px-3.5 py-2.5 text-left"
+                style={{ animationDelay: `${i * 70}ms`, animationFillMode: 'forwards' }}
               >
                 <r.icon size={16} className="mt-0.5 shrink-0 text-[color:var(--color-ink-2)]" />
                 <div className="min-w-0 flex-1">
@@ -1221,7 +1224,7 @@ export function OnboardingExperience({
 
       {scene === 'skip' && (
         <div key="skip" className="scene-enter onboard-act4 onboard-skip-screen flex flex-col items-center">
-          <div className="hero-mark" aria-hidden="true">
+          <div className="hero-mark onboard-mark-land" aria-hidden="true">
             <MetisMark size={72} />
           </div>
           <TellTheRoomCard consent={consent} onConsent={setConsent} />

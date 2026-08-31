@@ -1,6 +1,6 @@
 /**
  * Full-bleed Starfield Close canvas under the exclusive tour UI.
- * Mount only after Next/Start (see shouldMountStarfield). pointer-events: none.
+ * Mount on hero and the rest of the exclusive stage (see shouldMountStarfield). pointer-events: none.
  */
 import { useEffect, useRef } from 'react'
 import { createStarfieldBed, type StarfieldBed } from '../lib/onboarding-starfield-engine'

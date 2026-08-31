@@ -34,8 +34,8 @@ export const LAYERS = {
 
 export const STAR_COUNT = 4200
 export const STAR_DEPTH = 30
-export const APPEAR_DELAY_MS = 300
-export const APPEAR_FADE_MS = 1400
+export const APPEAR_DELAY_MS = 0
+export const APPEAR_FADE_MS = 480
 export const NEXT_BUMP = 0.16
 export const BUMP_DECAY = 2.4
 export const DAMP_FAST = 0.1
@@ -47,12 +47,14 @@ export const REDUCED_MOTION_SCALE = 0.12
 export const POINT_SIZE_INITIAL = 50
 
 export const STARFIELD_SCENES = [
+  'hero',
   'problem',
   'reveal',
   'setup',
   'personalize',
   'license',
-  'ready'
+  'ready',
+  'skip'
 ] as const
 
 export type StarfieldScene = (typeof STARFIELD_SCENES)[number]
@@ -81,7 +83,7 @@ export function dampScroll(
   return { smooth: nextSmooth, scroll: nextScroll }
 }
 
-/** elapsed-300 / 1400, then * CONFIG.opacity so uOpacity reaches 2. */
+/** elapsed / 480, then * CONFIG.opacity so the galaxy is visible from frame one. */
 export function appearOpacity(elapsedMs: number): number {
   const progress = Math.min(1, Math.max(0, (elapsedMs - APPEAR_DELAY_MS) / APPEAR_FADE_MS))
   return progress * CONFIG.opacity

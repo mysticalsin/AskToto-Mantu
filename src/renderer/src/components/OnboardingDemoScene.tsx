@@ -284,18 +284,16 @@ export function OnboardingDemoScene({
       )}
 
       <div className="flex flex-col items-center gap-3">
-        {hasNext && (
-          <button
-            type="button"
-            onClick={() => {
-              onPlayVideo?.()
-              advance()
-            }}
-            className="onboard-cta no-drag focus-ring"
-          >
-            Next
-          </button>
-        )}
+        <button
+          type="button"
+          onClick={() => {
+            onPlayVideo?.()
+            if (hasNext) advance()
+          }}
+          className="onboard-cta no-drag focus-ring"
+        >
+          Next
+        </button>
         <button type="button" onClick={onContinue} className="onboard-cta no-drag focus-ring">
           Set me up
         </button>
