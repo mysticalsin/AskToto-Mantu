@@ -49,6 +49,10 @@ import {
   type LicenseActivateResult,
   type LicenseStatusResult,
   type LicenseGateVerdict,
+  type IdentitySnapshot,
+  type MemberActivatePayload,
+  type MemberActivateResult,
+  type MemberLicenseStatus,
   type ImportAudioPickResult,
   type ImportAudioProgress,
   type ImportJobView,
@@ -349,7 +353,16 @@ const api = {
   licenseStatus: (): Promise<LicenseStatusResult> => ipcRenderer.invoke(IPC.licenseStatus),
   // Boot-gate verdict — see the license:gate handler in main/index.ts for why this is a separate,
   // non-auth-gated channel from licenseStatus.
-  licenseGate: (): Promise<LicenseGateVerdict> => ipcRenderer.invoke(IPC.licenseGate)
+  licenseGate: (): Promise<LicenseGateVerdict> => ipcRenderer.invoke(IPC.licenseGate),
+  identitySnapshot: (): Promise<IdentitySnapshot> => ipcRenderer.invoke(IPC.identitySnapshot),
+  memberLicenseActivate: (payload: MemberActivatePayload): Promise<MemberActivateResult> =>
+    ipcRenderer.invoke(IPC.memberLicenseActivate, payload),
+  memberLicenseDeactivate: (): Promise<MemberLicenseStatus> => ipcRenderer.invoke(IPC.memberLicenseDeactivate),
+  memberLicenseStatus: (): Promise<MemberLicenseStatus> => ipcRenderer.invoke(IPC.memberLicenseStatus),
+  memberLicenseVerifyCached: (): Promise<MemberLicenseStatus> =>
+    ipcRenderer.invoke(IPC.memberLicenseVerifyCached),
+  memberLicenseImportFile: (): Promise<MemberActivateResult> =>
+    ipcRenderer.invoke(IPC.memberLicenseImportFile)
 }
 
 contextBridge.exposeInMainWorld('toto', api)

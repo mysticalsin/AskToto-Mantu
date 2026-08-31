@@ -207,6 +207,12 @@ export const IPC = {
   licenseActivate: 'license:activate',
   licenseStatus: 'license:status',
   licenseGate: 'license:gate',
+  identitySnapshot: 'identity:snapshot',
+  memberLicenseActivate: 'license:memberActivate',
+  memberLicenseDeactivate: 'license:memberDeactivate',
+  memberLicenseStatus: 'license:memberStatus',
+  memberLicenseVerifyCached: 'license:memberVerifyCached',
+  memberLicenseImportFile: 'license:memberImportFile',
   localAiStatus: 'local-ai:status',
   localTranscriptBegin: 'local-ai:transcript:begin',
   localTranscriptAppend: 'local-ai:transcript:append',
@@ -1927,6 +1933,16 @@ export interface LicenseGateVerdict {
   allowed: boolean
   reason?: 'not_activated' | 'expired_grace'
 }
+
+export {
+  LICENSE_ACTIVATION_OPEN,
+  MemberActivatePayloadSchema,
+  emptyLicenseStatus,
+  type IdentitySnapshot,
+  type MemberActivatePayload,
+  type MemberActivateResult,
+  type MemberLicenseStatus
+} from './license-types'
 
 export const CaptureResultSchema = z.object({
   /** base64 JPEG, no data: prefix */

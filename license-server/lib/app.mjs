@@ -589,6 +589,37 @@ export function createApp(store, auditLog, options = {}) {
     res.type('text/plain; version=0.0.4; charset=utf-8').send(`${lines.join('\n')}\n`);
   });
 
+  // Reserved v1 offline-first JWS contract. Selling is closed: these routes are the
+  // real interface and return activation_unavailable until LICENSE_ACTIVATION_OPEN
+  // is flipped AND a minting key is wired. Do not invent a second license product.
+  const v1ActivateSchema = z.object({
+    licenseKey: idString,
+    deviceIdHash: z.string().regex(/^[0-9a-f]{64}$/),
+    appVersion: z.string().trim().min(1).max(64),
+    os: z.string().trim().min(1).max(32),
+  });
+  const v1RegisterSchema = z.object({
+    installId: z.string().uuid(),
+    appVersion: z.string().trim().min(1).max(64),
+    os: z.string().trim().min(1).max(32),
+  });
+
+  function v1Unavailable(res) {
+    return res.status(503).json({ ok: false, error: 'activation_unavailable' });
+  }
+
+  app.post('/v1/licenses/activate', rateLimit, (req, res) => {
+    const parsed = v1ActivateSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed);
+    return v1Unavailable(res);
+  });
+
+  app.post('/v1/installs/register', rateLimit, (req, res) => {
+    const parsed = v1RegisterSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed);
+    return v1Unavailable(res);
+  });
+
   app.get('/health', (req, res) => {
     res.json({
       ok: true,

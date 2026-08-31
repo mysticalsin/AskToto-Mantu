@@ -77,4 +77,12 @@ describe('searchSettingsTabs — settings search must find real section titles, 
   it('finds the default NVIDIA NIM provider by name', () => {
     expect(searchSettingsTabs('NVIDIA').map((m) => m.id)).toContain('ai')
   })
+
+  it('finds the Identity tab by member pass, serial, and license', () => {
+    expect(searchSettingsTabs('Identity').map((m) => m.id)).toContain('profile')
+    expect(searchSettingsTabs('member pass').map((m) => m.id)).toContain('profile')
+    expect(searchSettingsTabs('serial').map((m) => m.id)).toContain('profile')
+    expect(searchSettingsTabs('About you').map((m) => m.id)).toContain('profile')
+    expect(searchSettingsTabs('License').map((m) => m.id)).toContain('profile')
+  })
 })

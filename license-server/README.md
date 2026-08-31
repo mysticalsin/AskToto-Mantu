@@ -261,6 +261,14 @@ the two apart (see below).
 - `{ ok: true }` on success
 - `{ ok: false, error: "not_found" }` — unknown license key, or machine wasn't activated
 
+**Reserved v1 (offline-first JWS, closed)** — `POST /v1/licenses/activate`
+`{ licenseKey, deviceIdHash, appVersion, os }` and `POST /v1/installs/register`
+`{ installId, appVersion, os }`. These are the real interface for the Métis
+member-pass foundation (`docs/license-v1.openapi.yaml`). They return
+`{ ok: false, error: "activation_unavailable" }` with HTTP 503 until selling
+opens (`LICENSE_ACTIVATION_OPEN=false` in the app). They do not replace
+`/activate`.
+
 **`GET /health`** — unauthenticated, for uptime/monitoring checks.
 
 → `{ ok: true, version, uptimeSeconds, licenseCount }` — `version` is this

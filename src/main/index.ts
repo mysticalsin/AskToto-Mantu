@@ -47,6 +47,7 @@ import {
   type McpConnection,
   type McpConnectionKind,
   LicenseActivatePayloadSchema,
+  MemberActivatePayloadSchema,
   SetDealOutcomePayloadSchema,
   EntityRenamePayloadSchema,
   EntityMergePayloadSchema,
@@ -283,7 +284,17 @@ import { asrManifestComplete } from './asr-manifest'
 import { isInsideResourceBase, realResourceBase } from './asr-model-path'
 import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli, checkCliSession } from './cli'
 import { connectMcp, pushToMcp } from './mcp/mcpClient'
-import { activateLicense, checkLicenseGrace, heartbeat } from './license'
+import {
+  activateLicense,
+  activateMemberLicense,
+  checkLicenseGrace,
+  deactivateMemberLicense,
+  heartbeat,
+  identitySnapshot,
+  importLicenseMetis,
+  memberLicenseStatus,
+  verifyCachedMemberLicense
+} from './license'
 import {
   setMcpApiKey,
   getMcpApiKey,
@@ -2722,6 +2733,60 @@ function registerIpc(): void {
     assertMainWindow(e)
     const verdict = checkLicenseGrace()
     return { gateEnabled: getSettings().licenseGateEnabled, ...verdict }
+  })
+
+  // Member pass (Phase 5). DTOs only — no JWS, no raw serial, no raw key returned.
+  ipcMain.handle(IPC.identitySnapshot, (e) => {
+    assertMainWindow(e)
+    return identitySnapshot()
+  })
+  ipcMain.handle(IPC.memberLicenseActivate, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    const parsed = MemberActivatePayloadSchema.safeParse(payload)
+    if (!parsed.success) {
+      const status = memberLicenseStatus()
+      return { ok: false, error: 'invalid', status: { ...status, error: 'invalid' } }
+    }
+    return activateMemberLicense(parsed.data.licenseKey)
+  })
+  ipcMain.handle(IPC.memberLicenseDeactivate, (e) => {
+    assertMainWindow(e)
+    return deactivateMemberLicense()
+  })
+  ipcMain.handle(IPC.memberLicenseStatus, (e) => {
+    assertMainWindow(e)
+    return memberLicenseStatus()
+  })
+  ipcMain.handle(IPC.memberLicenseVerifyCached, (e) => {
+    assertMainWindow(e)
+    return verifyCachedMemberLicense()
+  })
+  ipcMain.handle(IPC.memberLicenseImportFile, async (e) => {
+    assertMainWindow(e)
+    const win = BrowserWindow.fromWebContents(e.sender)
+    const picked = win
+      ? await dialog.showOpenDialog(win, {
+          title: 'Choose a license.metis file',
+          filters: [{ name: 'Métis license', extensions: ['metis'] }],
+          properties: ['openFile']
+        })
+      : await dialog.showOpenDialog({
+          title: 'Choose a license.metis file',
+          filters: [{ name: 'Métis license', extensions: ['metis'] }],
+          properties: ['openFile']
+        })
+    if (picked.canceled || !picked.filePaths[0]) {
+      const status = memberLicenseStatus()
+      return { ok: false, error: 'invalid', status }
+    }
+    let raw = ''
+    try {
+      raw = readFileSync(picked.filePaths[0], 'utf8')
+    } catch {
+      const status = memberLicenseStatus()
+      return { ok: false, error: 'invalid', status: { ...status, error: 'invalid' } }
+    }
+    return importLicenseMetis(raw, 'file')
   })
 
   // --- Provider API keys ---
