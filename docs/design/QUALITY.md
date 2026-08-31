@@ -11,10 +11,11 @@ Every hat must **PASS**. One **REJECT** fails the slice. This is the gate for th
 
 ## Contract
 
-- Sentient circle mounts **only** when `overlayShowsBarOrb` is true (`bar` **and** minimized).
-- Hide idle: no orb canvas. Island: no second circle. Bar expanded: full bar, no leftover disk.
+- Rest-only circle mounts when `overlayShowsBarOrb` is true (`bar` **and** minimized).
+- Bar idle docks the same circle on the full bar (`overlayDocksBarCircle`). Never a stadium pill. Never Minimize2.
+- Hide idle: no orb canvas. Island: no second circle.
 - Hide and Island: no minimize control, minimize is a no-op, no layout jump to Bar.
-- Click expands to the full bar. Drag does not expand.
+- Click the docked circle collapses to the rest circle. Click the rest circle expands to the full bar. Drag does not expand.
 
 **REJECT if** the circle can appear on Hide/Island, or while the bar is gone, or minimize switches layout.
 
@@ -41,13 +42,13 @@ Insanely low latency on click and drag.
 
 ## Performance
 
-- Orb rAF runs only while the Bar circle is mounted and should animate.
-- Idle full bar: **zero** orb rAF (`shouldRunOrbRaf` is false).
+- Orb rAF runs only while a Bar circle is mounted and should animate (docked idle or minimized rest).
+- Hide/Island: **zero** orb rAF (`shouldRunOrbRaf` is false).
 - Setup is O(n). No O(n²) neighbor scan on 2000 points.
 - `document.hidden` pauses the loop. `destroy` cancels rAF.
 - No unpkg / CDN Three.js.
 
-**REJECT if** an idle bar can start the orb loop, or first minimize hitches on an n² scan.
+**REJECT if** Hide or Island can start the orb loop, or first minimize hitches on an n² scan.
 
 ## Visual
 

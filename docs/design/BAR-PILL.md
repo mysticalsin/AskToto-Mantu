@@ -3,7 +3,9 @@ project: Métis
 type: overlay-slice-contract
 slice: bar-pill
 owns: Bar layout + minimized sentient circle only
-does-not-own: hide park, island hover, BAR_MIN_HEIGHT, cursor-watch, onboarding, starfield, thinking-orbs, ASR, identity
+does-not-own: hide park 8×2 paint, island peek 132×15 paint, BAR_MIN_HEIGHT, onboarding, starfield, thinking-orbs, ASR, identity
+owns-also: Bar idle docked circle; Hide/Island must not minimize
+notes: Island/Hide hover hit-band (menu-bar/notch strip only) lives in DESIGN.md + island/geometry. A leftover 80–120px pad is a bug.
 ---
 
 # Bar pill: sentient circle
@@ -18,34 +20,36 @@ Overlay chrome has three layouts. Minimize-to-circle is not a fourth layout and 
 
 | Layout | Rest | Minimize-to-circle |
 | --- | --- | --- |
-| **Hide** | Hover-to-reveal hairline (8×2 park). The bar is **invisible** at rest. | **Forbidden.** The circle is invisible at rest too. Hide the minimize control. `minimize(true)` is a **no-op**. Do not park an orb while Hide is idle. Do not float a sphere in the notch. On hover the bar reveals; the circle may exist only as that revealed Bar after the user minimizes **Bar**, never as Hide chrome. |
-| **Island** | The small visible island is already the minimized form. | **Forbidden.** Do not add a second circle. Island stays the island. Same as Hide: no control, ignore minimize, no layout jump. |
-| **Bar** | The classic bar stays on screen. | **Allowed — only here.** This is the only layout where the circle exists. Bar showing + minimized → circle showing. Bar showing + expanded → full bar, **no second disk**. Drag moves. Position is the existing Bar-minimize rest (not a wanderer). Click expands to the full bar (layout stays `bar`). |
+| **Hide** | Hover-to-reveal hairline (8×2 park). Reveal only from the menu-bar / notch top band, not a 80–120px pad. The bar is **invisible** at rest. | **Forbidden.** The circle is invisible at rest too. Hide the minimize control. `minimize(true)` is a **no-op**. Do not park an orb while Hide is idle. Do not float a sphere in the notch. On hover the bar reveals; never a Hide circle. |
+| **Island** | The small visible island (132×15) is already the rest. Hover the **top** menu-bar / notch strip. Teams mute / camera / share (below the menu bar) must never reveal Métis. | **Forbidden.** Do not add a second circle. Island stays the island. Same as Hide: no control, ignore minimize, no layout jump. |
+| **Bar** | The classic bar stays on screen **plus** the sentient circle docked on that bar (Fit Studio 52×52, never a lozenge / pill). | **Allowed — only here.** Click the docked circle to collapse to that circle alone. Click the rest circle to expand back to full bar + circle. Drag the rest circle moves. Position is the existing Bar-minimize rest (not a wanderer). Layout stays `bar`. |
 
 Visibility must match the bar. Uniform. No leftover floating orb.
 
 - If Settings Hide would leave the bar gone, the circle is gone.
 - If Settings Island is the visible rest, that island is the rest — not this circle.
-- If Settings Bar is up, the circle is the minimized rest of **that** layout only.
+- If Settings Bar is up, the circle lives on that bar (idle) or as the minimized rest (collapsed).
 
 Shared predicates (one source of truth for Settings, renderer, and main):
 
 ```
 overlayAllowsMinimize(layout) === (layout === 'bar')
+overlayDocksBarCircle(layout) === (layout === 'bar')
 overlayShowsBarOrb(layout, minimized) === (layout === 'bar' && minimized)
 ```
 
-- Bar renders the minimize control only when `overlayAllowsMinimize` is true.
-- `onBarMinimize` / `window.toto.minimize(true)` / main `setMinimizedWidth(true)` no-op when it is false.
-- Expanding (`minimize(false)`) still runs so a leftover circle cannot stick if layout leaves Bar.
+- Bar docks the circle (not Minimize2, not a stadium pill) when `overlayDocksBarCircle` is true.
+- The rest-only ControlPill mounts when `overlayShowsBarOrb` is true (Bar minimized). Hide/Island never.
+- `onBarMinimize` / `window.toto.minimize(true)` / main `setMinimizedWidth(true)` no-op when `overlayAllowsMinimize` is false.
+- Expanding (`minimize(false)`) still runs so a leftover rest circle cannot stick if layout leaves Bar.
 - Leaving Bar while minimized unminimizes and parks Hide/Island with existing rest math. That is not a layout jump.
-- The orb canvas (`data-bar-pill-orb`) mounts **only** when `overlayShowsBarOrb` is true.
+- Closing Settings onto Island/Hide parks immediately (`shouldForceParkOnBecameIdle`). Do not leave a full bar as the hover trigger.
 
 ## Shape (HARD — fail the round if violated)
 
 A **fixed circle**. Same width and height, always.
 
-- `BAR_PILL_WIDTH_PX === BAR_PILL_HEIGHT_PX === BAR_PILL_SIZE_PX`
+- `BAR_PILL_WIDTH_PX === BAR_PILL_HEIGHT_PX === BAR_PILL_SIZE_PX` (Fit Studio rest is **52**)
 - Aspect ratio is **1** on every mood.
 - Bounding box is **constant** across idle, thinking, factcheck, connecting, hover, listen, drag.
 - Never a potato. Never a stadium. Never a squashed capsule. Never flatten.
@@ -101,29 +105,31 @@ The circle is transparent around the particles. No `unpkg` (or any CDN) at runti
   - Connecting: deep indigo, quieter breath, same box
   - Hover: slight awareness (particles lean toward the pointer — lean, not squash)
 - **Reduced-motion:** one still but alive-looking **round** frame. No thrash. Must not throw if WebGL is missing.
-- **60fps / no jank:** one cheap WebGL rAF while the circle is mounted. Cached GL locations. No layout reads in the frame loop. **Idle full bar: zero orb rAF** (`shouldRunOrbRaf` is false). Setup is O(n), never an n² neighbor scan. Pause when `document.hidden`.
+- **60fps / no jank:** one cheap WebGL rAF while the circle is mounted (docked on the idle bar, or alone when minimized). Cached GL locations. No layout reads in the frame loop. Hide/Island: **zero** orb rAF (`shouldRunOrbRaf` is false unless Bar). Setup is O(n), never an n² neighbor scan. Pause when `document.hidden`.
 - **Click / drag latency:** expand is synchronous. Hover lean skipped while dragging. No `getBoundingClientRect` on pointer-move.
 - **Spring** is for the **Bar** expanding (`--ease-spring: cubic-bezier(0.22, 1, 0.36, 1)`), not for turning the circle into a lozenge. This spring is Bar-circle only. Do not reuse or restyle Hide/Island overlay-spring, peek hover, or park timing.
-- Hide layout and Island layout must not change size, hover, or rest.
+- Hide layout and Island layout must not grow a minimize control or a second disk. Hover hit-band is the menu-bar / notch strip only (DESIGN.md). Hide 8×2 paint and Island 132×15 paint stay.
 - Quality hats: `docs/design/QUALITY.md`. One REJECT fails the slice.
 
 ## Out of scope (do not touch)
 
-- Hide park `8×2` / `.overlay-hide-target`
-- Island peek `132×15` / island hover math / cursor-watch
+- Hide park `8×2` **paint** / `.overlay-hide-target` (hover **sensor** height is in scope if a leftover pad remains)
+- Island peek `132×15` **paint**
 - `BAR_MIN_HEIGHT` as hide floor
 - Onboarding, starfield, thinking-orbs, ASR, identity
 - Packing, merging, Hide → Bar auto-switch
 
 ## Tests (required)
 
-- Minimize control **absent** when `overlayLayout` is hide or island; **present** when bar.
+- Minimize control **absent** when `overlayLayout` is hide or island; Bar docks the circle, never Minimize2, never a stadium pill.
 - Calling minimize on hide/island is a **no-op** (renderer and main).
-- Hide idle: **no** orb canvas / no visible circle (`overlayShowsBarOrb('hide', *)` is false).
-- Island: **no** extra orb (`overlayShowsBarOrb('island', *)` is false).
-- Bar minimized: circle shown (`overlayShowsBarOrb('bar', true)` and `data-bar-pill-orb`).
-- Bar expanded: circle hidden (full bar, not a second disk).
-- Aspect ratio **1** on every mood. Bounding box constant across moods.
+- Hide idle: **no** orb canvas / no visible circle (`overlayShowsBarOrb('hide', *)` is false, `overlayDocksBarCircle('hide')` is false).
+- Island: **no** extra orb (`overlayShowsBarOrb('island', *)` is false, `overlayDocksBarCircle('island')` is false).
+- Bar minimized: rest circle shown (`overlayShowsBarOrb('bar', true)` and `data-bar-pill-orb`).
+- Bar idle / expanded: circle **docked on the bar** (`overlayDocksBarCircle('bar')`), not a floating second disk and not a pill.
+- Hover hit band height ≤ menu-bar / notch strip. A Teams-control Y (below the menu bar) must not reveal. No 80–120px pad. `HOVER_HIT_BAND_MAX_PX`.
+- Settings close onto Island/Hide force-parks (`shouldForceParkOnBecameIdle`).
+- Aspect ratio **1** on every mood. Bounding box constant across moods. Size is 52, never scale-on-appear.
 - Click expands; drag does not expand.
 - Reduced-motion does not throw.
-- Idle full bar does not run the orb rAF (`shouldRunOrbRaf`).
+- Hide/Island do not run the orb rAF (`shouldRunOrbRaf`). Bar may.
