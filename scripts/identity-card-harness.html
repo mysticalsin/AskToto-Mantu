@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Métis member pass harness</title>
+    <style>
+      :root {
+        --font-ui: Geist, -apple-system, system-ui, sans-serif;
+        --font-body: Inter, -apple-system, system-ui, sans-serif;
+        --cl-background: #1a0033;
+        --cl-foreground: #ffffff;
+        --cl-muted-foreground: #cdbfe3;
+        --cl-card: #291050;
+        --cl-primary: #7f00da;
+        --cl-border: rgba(255, 255, 255, 0.1);
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: #14012a;
+        color: var(--cl-foreground);
+        font-family: var(--font-body);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 32px 16px 48px;
+      }
+      h1 {
+        margin: 0 0 8px;
+        font-family: var(--font-ui);
+        font-size: 14px;
+        font-weight: 600;
+      }
+      .caption {
+        margin: 0 0 22px;
+        max-width: 360px;
+        text-align: center;
+        font-size: 11px;
+        color: var(--cl-muted-foreground);
+      }
+      .stage { width: 360px; perspective: 1200px; }
+      .pass {
+        position: relative;
+        width: 360px;
+        height: 227px;
+        transform-style: preserve-3d;
+        border-radius: 18px;
+        box-shadow: 0 18px 40px rgba(0, 0, 0, 0.45), 0 2px 12px rgba(127, 0, 218, 0.16);
+        transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1);
+      }
+      .face {
+        position: absolute;
+        inset: 0;
+        border-radius: 18px;
+        padding: 18px;
+        backface-visibility: hidden;
+        background:
+          linear-gradient(160deg, rgba(255, 255, 255, 0.07), transparent 42%),
+          linear-gradient(180deg, #291050 0%, #1a0033 72%);
+      }
+      .back { transform: rotateY(180deg); }
+      .rim {
+        pointer-events: none;
+        position: absolute;
+        inset: 0;
+        border-radius: 18px;
+        box-shadow:
+          inset 0 1px 0 rgba(196, 184, 212, 0.55),
+          inset 0 -1px 0 rgba(42, 24, 64, 0.85),
+          inset 1px 0 0 rgba(166, 77, 255, 0.18);
+      }
+      .sheen {
+        pointer-events: none;
+        position: absolute;
+        inset: 0;
+        border-radius: 18px;
+        mix-blend-mode: screen;
+        background: radial-gradient(120% 80% at 72% 28%, rgba(255, 255, 255, 0.2), rgba(166, 77, 255, 0.08) 36%, transparent 62%);
+      }
+      .top { display: flex; justify-content: space-between; align-items: center; }
+      .eyebrow {
+        font-family: var(--font-ui);
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        color: #b388f0;
+      }
+      .wordmark { margin-top: 10px; font-family: var(--font-ui); font-size: 15px; font-weight: 600; letter-spacing: -0.02em; }
+      .number { display: flex; align-items: baseline; gap: 8px; margin-top: 14px; }
+      .no { font-size: 12px; color: rgba(255, 255, 255, 0.56); }
+      .num { font-family: ui-monospace, SFMono-Regular, monospace; font-size: 28px; font-weight: 500; font-variant-numeric: tabular-nums; }
+      .meta { position: absolute; left: 18px; right: 18px; bottom: 16px; }
+      .device { margin-top: 3px; font-size: 12px; font-weight: 500; }
+      .serial { display: flex; justify-content: space-between; margin-top: 6px; font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px; font-variant-numeric: tabular-nums; }
+      .k { font-family: var(--font-ui); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: rgba(255, 255, 255, 0.56); }
+      .date { margin-top: 4px; font-size: 12px; color: rgba(255, 255, 255, 0.78); }
+      .copy { margin: 18px 0 0; font-size: 12px; line-height: 1.45; color: rgba(255, 255, 255, 0.78); }
+      .mark {
+        width: 22px; height: 22px; border-radius: 6px;
+        background: rgba(127, 0, 218, 0.35);
+        box-shadow: inset 0 0 0 1px rgba(179, 136, 240, 0.5);
+      }
+      .row { display: flex; gap: 10px; margin-top: 22px; }
+      button {
+        border: 0;
+        border-radius: 10px;
+        background: #7f00da;
+        color: #fff;
+        font: 500 12px var(--font-ui);
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Settings → Identity</h1>
+    <p class="caption">This is your Métis member pass. Drag to turn it over.</p>
+    <div class="stage">
+      <div class="pass" id="pass" data-face="front">
+        <div class="face">
+          <div class="top"><div class="mark" aria-hidden="true"></div><span class="eyebrow">Member</span></div>
+          <div class="wordmark">Métis</div>
+          <div class="number"><span class="no">Nº</span><span class="num">pending</span></div>
+          <div class="meta">
+            <div class="eyebrow">This device</div>
+            <div class="device">This device</div>
+            <div class="serial"><span class="k">Install ID</span><span>···A1B2</span></div>
+            <div class="date">Installed 19 Mar 2026</div>
+          </div>
+        </div>
+        <div class="face back">
+          <div class="top"><span class="eyebrow">License</span><span style="font:600 13px var(--font-ui)">Personal</span></div>
+          <p class="copy">Activation is not open yet. A key you enter is checked, then returned unused.</p>
+        </div>
+        <div class="sheen" id="sheen"></div>
+        <div class="rim"></div>
+      </div>
+    </div>
+    <div class="row">
+      <button type="button" id="front">Front</button>
+      <button type="button" id="back">Back</button>
+      <button type="button" id="tilt">Tilt</button>
+    </div>
+    <script>
+      const pass = document.getElementById('pass')
+      const sheen = document.getElementById('sheen')
+      document.getElementById('front').onclick = () => {
+        pass.dataset.face = 'front'
+        pass.style.transform = 'rotateX(0deg) rotateY(0deg)'
+      }
+      document.getElementById('back').onclick = () => {
+        pass.dataset.face = 'back'
+        pass.style.transform = 'rotateX(0deg) rotateY(180deg)'
+      }
+      document.getElementById('tilt').onclick = () => {
+        pass.dataset.face = 'tilt'
+        pass.style.transform = 'rotateX(-7deg) rotateY(11deg)'
+        sheen.style.background =
+          'radial-gradient(120% 80% at 78% 22%, rgba(255,255,255,0.22), rgba(166,77,255,0.10) 36%, transparent 62%)'
+      }
+    </script>
+  </body>
+</html>
