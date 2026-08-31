@@ -524,6 +524,8 @@ describe('appendDebrief (90-second off-record layer)', () => {
 
   it('refuses missing files and non-transcript files, and stays inside the meetings folder', async () => {
     expect((await appendDebrief(settings, 'nope.md', 'x')).ok).toBe(false)
+    expect((await appendDebrief(settings, 'index.md', 'x')).ok).toBe(false)
+    expect((await appendDebrief(settings, 'README.md', 'x')).ok).toBe(false)
     writeFileSync(join(folder, 'random.md'), '---\ntype: note\n---\nhello')
     expect((await appendDebrief(settings, 'random.md', 'x')).ok).toBe(false)
     const file = await saved()

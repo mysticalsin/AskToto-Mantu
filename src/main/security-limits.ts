@@ -1,11 +1,11 @@
 /**
- * In-process caps for outbound, renderer-triggered network from the main process.
+ * In-process caps for renderer-triggered work in the main process.
  *
- * Capture / save / ASR stay off this module on purpose: a meeting must never wait on a security
- * counter, and those handlers do not speak HTTP.
+ * Outbound HTTP (`consumeSecurityLimit`) is a fixed window: the handler returns a user-visible
+ * retry instead of hitting the remote. Live listen (`takeHotPath`) is a token bucket that never
+ * waits — overflow is dropped in the same tick so captions are never blocked behind a counter.
  *
- * Single-user desktop: one bucket per kind, not per OS user. A compromised renderer that loops
- * license:activate or mcp:push hits the cap here before the remote service does.
+ * Single-user desktop: one bucket per kind, not per OS user.
  */
 
 export type SecurityLimitBucket = 'license-activate' | 'mcp-outbound' | 'graph-calendar'
@@ -16,9 +16,21 @@ export const SECURITY_LIMITS: Record<SecurityLimitBucket, { max: number; windowM
   'graph-calendar': { max: 30, windowMs: 60_000 }
 }
 
+/** Live-listen / save / capture. Never used by `denyIfLimited`. */
+export type HotPathKind = 'asr-feed' | 'save-transcript' | 'capture-screen' | 'arm-audio'
+
+export const HOT_PATH_LIMITS: Record<HotPathKind, { burst: number; refillPerSec: number }> = {
+  'asr-feed': { burst: 40, refillPerSec: 20 },
+  'save-transcript': { burst: 8, refillPerSec: 0.5 },
+  'capture-screen': { burst: 6, refillPerSec: 0.25 },
+  'arm-audio': { burst: 10, refillPerSec: 1 }
+}
+
 type BucketState = { start: number; count: number }
+type HotState = { tokens: number; last: number }
 
 const buckets = new Map<SecurityLimitBucket, BucketState>()
+const hotBuckets = new Map<HotPathKind, HotState>()
 
 export function consumeSecurityLimit(
   bucket: SecurityLimitBucket,
@@ -37,9 +49,32 @@ export function consumeSecurityLimit(
   return { ok: true }
 }
 
+/**
+ * Non-blocking token bucket for the live listen path.
+ *
+ * Returns false in the same tick when empty. Never sleeps, never queues, never calls the network.
+ * A flooded renderer loses overflow chunks (drop-oldest-in-effect: the newest call is the one
+ * refused); captions keep moving.
+ */
+export function takeHotPath(kind: HotPathKind, now = Date.now()): boolean {
+  const spec = HOT_PATH_LIMITS[kind]
+  const existing = hotBuckets.get(kind)
+  if (!existing) {
+    hotBuckets.set(kind, { tokens: spec.burst - 1, last: now })
+    return true
+  }
+  const elapsedSec = Math.max(0, (now - existing.last) / 1000)
+  existing.tokens = Math.min(spec.burst, existing.tokens + elapsedSec * spec.refillPerSec)
+  existing.last = now
+  if (existing.tokens < 1) return false
+  existing.tokens -= 1
+  return true
+}
+
 /** Test seam. Production never calls this. */
 export function resetSecurityLimits(): void {
   buckets.clear()
+  hotBuckets.clear()
   lastIpcDenyAt = 0
 }
 
