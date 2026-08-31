@@ -2393,6 +2393,7 @@ function registerScreenListeners(): void {
     // that height when the display is unplugged or its resolution shrinks — and in that state it is
     // normally still partly visible, so the guard would skip exactly the case that leaves the overlay
     // hanging off the bottom of the remaining screen with resizable:false and no in-app fix.
+    // Hide hairline (2px) must survive this clamp — BAR_MIN_HEIGHT 44 is a sliver (Tony 8×44).
     const height = clampHeight(b.height, wa.height)
     const visible =
       b.x + b.width > wa.x && b.x < wa.x + wa.width && b.y + b.height > wa.y && b.y < wa.y + wa.height
