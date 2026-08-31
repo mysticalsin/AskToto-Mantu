@@ -14,6 +14,7 @@ import { basename } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import type { ImportAudioPickResult } from '@shared/ipc'
 import type { ImportJobSource } from './import-jobs'
+import { IMPORT_NOT_MEDIA, sniffMediaFile } from './import-magic'
 
 // Chromium's AudioContext does the actual capability check. Keep the picker broad enough for common
 // interview exports (including AIFF, WebM/Opus, WMA, MP4, and 3GP) instead of silently excluding them.
@@ -85,6 +86,9 @@ export function consumePickedAudio(token: string): ImportJobSource {
   }
   if (stat.size !== pick.sizeBytes || stat.mtimeMs !== pick.mtimeMs) {
     throw new Error('The selected recording changed after it was chosen. Choose it again.')
+  }
+  if (!sniffMediaFile(pick.path)) {
+    throw new Error(IMPORT_NOT_MEDIA)
   }
   return { path: pick.path, name: pick.name, sizeBytes: pick.sizeBytes, mtimeMs: pick.mtimeMs }
 }
