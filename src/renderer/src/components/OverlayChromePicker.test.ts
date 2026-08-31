@@ -21,6 +21,8 @@ describe('Settings overlay chrome cards', () => {
     expect(OVERLAY_LAYOUT_COPY.hide.desc).toBe('Hidden until you move to the top.')
     expect(OVERLAY_LAYOUT_COPY.island.desc).toBe('A small island stays visible. Hover opens it.')
     expect(OVERLAY_LAYOUT_COPY.bar.desc).toBe('The bar stays on screen.')
+    expect(picker).toMatch(/overlay-chrome-diagram__orb/)
+    expect(css).toMatch(/overlay-chrome-diagram__orb/)
   })
 
   it('switching overlayLayout patches settings immediately', () => {

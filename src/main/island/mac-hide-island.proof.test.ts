@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 import { decideCursorWatch, pointInRect } from './cursor-watch'
 import {
   OVERLAY_HIDE_PARK,
+  TEAMS_MEETING_CHROME_Y,
   hoverWatchRestRect,
   isVisibleHideSlab,
   parkedHoverReanchor,
@@ -66,6 +67,15 @@ describe('Mac-test Island hover', () => {
           revealed: false
         })
       ).toBe('reveal')
+      expect(pointInRect({ x: 900, y: TEAMS_MEETING_CHROME_Y }, rest)).toBe(false)
+      expect(
+        decideCursorWatch({
+          cursor: { x: 900, y: TEAMS_MEETING_CHROME_Y },
+          restRect: rest,
+          revealedRect: { x: 460, y: 39, width: 880, height: 84 },
+          revealed: false
+        })
+      ).toBe('stay')
     }
   })
 

@@ -37,7 +37,8 @@ import {
   overlayRestsHidden,
   overlayShowsBarOrb,
   overlayUsesHover,
-  parseOverlayLayout
+  parseOverlayLayout,
+  shouldForceParkOnBecameIdle
 } from '@shared/overlay-chrome'
 import { resolveOrbMood } from './lib/bar-pill-orb'
 import {
@@ -604,6 +605,15 @@ export function App(): JSX.Element {
     const reduced = prefersOverlayReducedMotion()
     const wasRevealed = wasRevealedRef.current
     wasRevealedRef.current = overlayRevealed
+    if (shouldForceParkOnBecameIdle({ becameIdle, usesHover: overlayUsesHover(overlayLayout) })) {
+      // Settings → Island/Hide must park now. A leftover full bar or Settings-tall
+      // window is a fat hover trigger (Teams mute / camera / share sit under it).
+      dispatchAutoHide({ type: 'collapse-now' })
+      setOverlaySpring('rest')
+      wasRevealedRef.current = false
+      void window.toto.parkAfterHide()
+      return
+    }
     if (becameIdle && !overlayRevealed) {
       // Left Settings / pill to Hide with the pointer out — park, no ~100px stub spring.
       setOverlaySpring('rest')
@@ -618,7 +628,7 @@ export function App(): JSX.Element {
       setOverlaySpring(next)
       if (next === 'rest') void window.toto.parkAfterHide()
     }
-  }, [overlayIdle, overlayRevealed])
+  }, [overlayIdle, overlayRevealed, overlayLayout])
   useEffect(() => {
     if (overlaySpring !== 'out') return
     const t = window.setTimeout(() => {
@@ -3292,7 +3302,7 @@ export function App(): JSX.Element {
           />
         </div>
       ) : overlayPeeked ? (
-        // Hide: wide hittable pad (no hug-width). Island: visible peek (hug-width).
+        // Hide: 8×2 hairline (cursor watch is the sensor). Island: visible peek (hug-width).
         <OverlayPeek
           rest={overlayRestsHidden(overlayLayout) ? 'hide' : 'island'}
           onReveal={revealOverlay}
@@ -3349,6 +3359,10 @@ export function App(): JSX.Element {
             onSettings={onBarSettings}
             onMinimize={onBarMinimize}
             canMinimize={canMinimize}
+            orbMood={resolveOrbMood({
+              factcheck: ask.answer?.kind === 'factcheck' && !!ask.answer?.streaming,
+              thinking: !!(ask.answer?.streaming || suggest.answer?.streaming)
+            })}
             stealth={settings?.contentProtection ?? true}
             onToggleStealth={onToggleStealth}
             stealthLocked={stealthLocked}

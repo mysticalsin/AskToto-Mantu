@@ -153,6 +153,17 @@ export const OVERLAY_HIDE_TARGET = { width: 560, height: 28 } as const
 export const OVERLAY_HIDE_PARK = { width: 8, height: 2 } as const
 /** Always-visible island peek — keep in lockstep with `.overlay-peek` in styles.css. */
 export const OVERLAY_ISLAND_PEEK = { width: 132, height: 15 } as const
+/**
+ * Hard ceiling on the Hide/Island cursor-watch band. Menu bar / notch is ~24–38
+ * (Tony: typically 24–38, NOT 120). A leftover 80–120px pad into the window
+ * hits Teams mute / camera / share. Kill that pad.
+ */
+export const HOVER_HIT_BAND_MAX_PX = 44
+/**
+ * Typical Teams in-call chrome Y on a notch Mac: just under the menu bar,
+ * never in the Dynamic Island. Must not hit hoverWatchRestRect.
+ */
+export const TEAMS_MEETING_CHROME_Y = 48
 /** Matches the windowResize hug-width pad so the island capsule is not clipped. */
 export const OVERLAY_PEEK_WIDTH_PAD = 10
 export const OVERLAY_PEEK_HEIGHT_PAD = 4
@@ -180,16 +191,24 @@ export function hoverRestTop(m: DisplayMetrics): number {
 }
 
 /**
- * Height of the hide/island hover strip. Covers the menu-bar / notch inset
- * (`workArea.y - bounds.y` or `menuBarHeight`, ~37-44). Path C (flush work area on a
- * notch Mac) still uses the strut so the hit rect covers the island. Windows has no
- * fake notch: only a real top inset, else the stealth pad height.
+ * Height of the hide/island hover strip. Menu-bar / notch inset only
+ * (`workArea.y - bounds.y` or `menuBarHeight`, typically ~24–38). Never a 28px
+ * floor that grows past a 24px menu bar, and never an 80–120px pad into the
+ * window (Teams mute / camera / share live there). Path C (flush work area on a
+ * notch Mac) still uses the strut so the hit rect covers the island. Windows has
+ * no fake notch: only a real top inset, else the thin top-edge band.
  */
-export function hoverRestHeight(m: DisplayMetrics): number {
+export function hoverHitBandHeight(m: DisplayMetrics): number {
   const inset = Math.max(0, m.workArea.y - m.bounds.y, m.menuBarHeight || 0)
-  if (inset > 0) return Math.max(inset, OVERLAY_HIDE_TARGET.height)
-  if (m.hasNotch) return Math.max(m.menuBarHeight || 0, ISLAND_NOTCH_STRUT_PX, OVERLAY_HIDE_TARGET.height)
-  return OVERLAY_HIDE_TARGET.height
+  let height: number
+  if (inset > 0) height = inset
+  else if (m.hasNotch) height = Math.max(m.menuBarHeight || 0, ISLAND_NOTCH_STRUT_PX)
+  else height = OVERLAY_HIDE_TARGET.height
+  return Math.max(1, Math.min(height, HOVER_HIT_BAND_MAX_PX))
+}
+
+export function hoverRestHeight(m: DisplayMetrics): number {
+  return hoverHitBandHeight(m)
 }
 
 /** Hide pad width: at least the notch (min 220), cap 560. */

@@ -55,11 +55,25 @@ export function overlayAllowsMinimize(layout: OverlayLayout): boolean {
 }
 
 /**
- * The sentient circle exists only as Bar's minimized rest.
+ * The sentient circle exists only as Bar chrome.
  * Hide idle and Island never show it — even if a leftover minimized flag is true.
  */
 export function overlayShowsBarOrb(layout: OverlayLayout, minimized: boolean): boolean {
   return layout === 'bar' && minimized
+}
+
+/** Bar idle docks the circle on the full bar. Hide/Island never. */
+export function overlayDocksBarCircle(layout: OverlayLayout): boolean {
+  return layout === 'bar'
+}
+
+/**
+ * Closing Settings (or leaving any non-idle surface) onto Hide/Island must park
+ * immediately. A leftover full bar or Settings-tall window is a fat hover trigger
+ * and reveals Métis when Tony hits Teams mute / camera / share.
+ */
+export function shouldForceParkOnBecameIdle(input: { becameIdle: boolean; usesHover: boolean }): boolean {
+  return input.becameIdle && input.usesHover
 }
 
 /**

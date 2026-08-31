@@ -14,6 +14,7 @@ function ChromeDiagram({ id }: { id: OverlayLayout }): JSX.Element {
     >
       <span className="overlay-chrome-diagram__desktop" />
       <span className="overlay-chrome-diagram__mark" />
+      {id === 'bar' ? <span className="overlay-chrome-diagram__orb" /> : null}
     </div>
   )
 }
