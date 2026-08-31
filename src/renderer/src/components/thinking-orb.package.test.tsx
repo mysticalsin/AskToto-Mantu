@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 import { ThinkingOrb } from 'thinking-orbs'
@@ -28,6 +30,16 @@ describe('thinking-orbs package (real renderer, no rewrite)', () => {
     const markup = renderToStaticMarkup(<AgentStatus kind="thinking" size="hero" />)
     expect(markup).toContain('Thinking')
     expect(markup).toContain('<canvas')
+    expect(markup).toContain('agent-status__orb')
     expect(markup).not.toContain('animate-spin')
+  })
+
+  it('paints the first orb frame in useLayoutEffect through the package engine', () => {
+    const src = readFileSync(resolve(__dirname, 'AgentStatus.tsx'), 'utf8')
+    expect(src).toMatch(/useLayoutEffect/)
+    expect(src).toMatch(/paintOrbFirstFrame/)
+    expect(src).toMatch(/agent-status__orb/)
+    expect(src).not.toMatch(/ctx\.filter/)
+    expect(src).not.toMatch(/webgl/i)
   })
 })
