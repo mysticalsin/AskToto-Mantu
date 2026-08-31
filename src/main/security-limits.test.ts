@@ -3,6 +3,8 @@ import {
   consumeSecurityLimit,
   resetSecurityLimits,
   SECURITY_LIMITS,
+  HOT_PATH_LIMITS,
+  takeHotPath,
   shouldSampleIpcDeny,
   RATE_LIMIT_USER_MESSAGE
 } from './security-limits'
@@ -39,10 +41,41 @@ describe('consumeSecurityLimit', () => {
     expect(consumeSecurityLimit('license-activate', t0).ok).toBe(true)
   })
 
-  it('does not define a capture or transcript bucket', () => {
+  it('does not define a capture or transcript bucket on the blocking outbound limiter', () => {
     expect(SECURITY_LIMITS).not.toHaveProperty('save-transcript')
     expect(SECURITY_LIMITS).not.toHaveProperty('parakeet-feed')
     expect(SECURITY_LIMITS).not.toHaveProperty('arm-audio')
+    expect(SECURITY_LIMITS).not.toHaveProperty('asr-feed')
+    expect(SECURITY_LIMITS).not.toHaveProperty('capture-screen')
+  })
+})
+
+describe('takeHotPath', () => {
+  it('admits a burst then refuses in the same tick, without waiting', () => {
+    const t0 = 5_000_000
+    const { burst } = HOT_PATH_LIMITS['asr-feed']
+    for (let i = 0; i < burst; i++) expect(takeHotPath('asr-feed', t0)).toBe(true)
+    expect(takeHotPath('asr-feed', t0)).toBe(false)
+    expect(takeHotPath('asr-feed', t0)).toBe(false)
+  })
+
+  it('refills over time so a real meeting is not starved', () => {
+    const t0 = 6_000_000
+    const { burst, refillPerSec } = HOT_PATH_LIMITS['asr-feed']
+    for (let i = 0; i < burst; i++) expect(takeHotPath('asr-feed', t0)).toBe(true)
+    expect(takeHotPath('asr-feed', t0)).toBe(false)
+    const afterOne = t0 + Math.ceil(1000 / refillPerSec)
+    expect(takeHotPath('asr-feed', afterOne)).toBe(true)
+  })
+
+  it('keeps kinds independent so an ASR flood cannot block a save', () => {
+    const t0 = 7_000_000
+    const asrBurst = HOT_PATH_LIMITS['asr-feed'].burst
+    for (let i = 0; i < asrBurst; i++) expect(takeHotPath('asr-feed', t0)).toBe(true)
+    expect(takeHotPath('asr-feed', t0)).toBe(false)
+    expect(takeHotPath('save-transcript', t0)).toBe(true)
+    expect(takeHotPath('capture-screen', t0)).toBe(true)
+    expect(takeHotPath('arm-audio', t0)).toBe(true)
   })
 })
 

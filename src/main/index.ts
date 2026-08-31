@@ -205,7 +205,8 @@ import {
 import { buildBrainContext } from './brain/context'
 import { buildSystem } from './personas'
 import { initLogging, mainLog, auditLog } from './logger'
-import { consumeSecurityLimit, RATE_LIMIT_USER_MESSAGE, shouldSampleIpcDeny, type SecurityLimitBucket } from './security-limits'
+import { consumeSecurityLimit, RATE_LIMIT_USER_MESSAGE, shouldSampleIpcDeny, takeHotPath, type SecurityLimitBucket } from './security-limits'
+import { safeMeetingBasename } from './meeting-path'
 import { asrModelDownloadState, ensureHighTierAsrModel, isHighTierAsrModelReady, removeHighTierAsrModel } from './asr-model-download'
 import { asrModelBytes } from './asr-model-manifest'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
@@ -2342,7 +2343,8 @@ async function backfillSpeakerNames(file: string): Promise<{ ok: boolean; named?
   if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
   try {
     const settings = getSettings()
-    const safeName = basename(file)
+    const safeName = safeMeetingBasename(file)
+    if (!safeName) return { ok: false, error: 'Invalid meeting file name.' }
     const read = await recallRead(safeName)
     if (!read.ok || !read.lines) return { ok: false, error: read.error || 'Meeting file not found.' }
     if (!read.startedAt) return { ok: false, error: 'This meeting has no recorded start time.' }
@@ -3206,9 +3208,9 @@ function registerIpc(): void {
   ipcMain.handle(IPC.recallExportPlain, async (e, file: unknown): Promise<RecallExportPlainResult> => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const safeName = basename(String(file ?? ''))
+    const safeName = safeMeetingBasename(file)
     // Same guard set as every recall.ts sibling: only meeting .md files, never the plaintext index/README.
-    if (!safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+    if (!safeName) {
       return { ok: false, error: 'Not a saved meeting file.' }
     }
     try {
@@ -3302,7 +3304,8 @@ function registerIpc(): void {
   ipcMain.handle(IPC.recallDelete, async (e, file: unknown, title: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const safeName = basename(String(file ?? ''))
+    const safeName = safeMeetingBasename(file)
+    if (!safeName) return { ok: false, error: 'Not a saved meeting file.' }
     const label = typeof title === 'string' && title.trim() ? title.trim() : 'this meeting'
     const dialogOpts = {
       type: 'warning' as const,
@@ -3443,9 +3446,9 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const p = raw as { file?: unknown; text?: unknown }
-    const safeName = basename(String(p?.file ?? ''))
+    const safeName = safeMeetingBasename(p?.file)
     const text = String(p?.text ?? '').slice(0, 8000)
-    if (!safeName.endsWith('.md') || !text.trim()) return { ok: false, error: 'Nothing to save.' }
+    if (!safeName || !text.trim()) return { ok: false, error: 'Nothing to save.' }
     const s = getSettings()
     const result = await appendDebrief(s, safeName, text)
     if (result.ok) {
@@ -3553,6 +3556,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.parakeetFeed, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return ''
+    if (!takeHotPath('asr-feed')) return ''
     const p = payload as { samples?: unknown; speaker?: unknown }
     if (!(p?.samples instanceof Float32Array)) return ''
     // Cap a single feed chunk generously above the renderer's real ~6s windows (WINDOW_SEC in listen.ts) at
@@ -3583,6 +3587,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.appleSpeechFeed, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return ''
+    if (!takeHotPath('asr-feed')) return ''
     const p = payload as { samples?: unknown; speaker?: unknown }
     if (!(p?.samples instanceof Float32Array)) return ''
     // Same defensive cap as parakeetFeed — see its own comment for why.
@@ -3641,6 +3646,7 @@ function registerIpc(): void {
   // routes through local-runtime.ts's own start()/audit calls when it actually spins the sidecar up.
   ipcMain.handle(IPC.localPrewarm, (e, payload: unknown) => {
     assertMainWindow(e)
+    if (!requireAuth()) return
     const parsed = LocalPrewarmPayloadSchema.safeParse(payload)
     if (!parsed.success) return
     const s = getSettings()
@@ -3660,11 +3666,13 @@ function registerIpc(): void {
   ipcMain.handle(IPC.captureScreen, async (event) => {
     assertMainWindow(event)
     if (!requireAuth()) throw new Error('Not signed in.')
+    if (!takeHotPath('capture-screen')) throw new Error('Could not capture the screen.')
     return getScreenshot()
   })
   // Pre-warm: prime the cache + spin up the OS capture pipeline so the next real vision ask is instant.
   ipcMain.handle(IPC.prewarmCapture, (e) => {
     assertMainWindow(e)
+    if (!requireAuth()) return
     prewarmCapture()
   })
   // Screen-ask fast-path: hand the renderer the freshest on-device screen description (or null). Non-null
@@ -4551,6 +4559,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.armAudio, (e, on: boolean) => {
     assertMainWindow(e)
     if (!requireAuth()) return
+    if (!takeHotPath('arm-audio')) return
     audioArmed = !!on
   })
 
@@ -4558,6 +4567,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.saveTranscript, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
+    if (!takeHotPath('save-transcript')) throw new Error('Could not save the transcript.')
     const m = SaveMeetingSchema.parse(raw)
     const r = { path: await saveMeeting(getSettings(), m) }
     // Time-saved: the meeting file just landed — credit it ONCE to the durable lifetime counters. This is
@@ -5174,11 +5184,11 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return ''
     const folder = resolveMeetingsFolder(getSettings())
-    const safeName = basename(String(file ?? '')) // basename blocks traversal
+    const safeName = safeMeetingBasename(file)
     // Only ever open Métis's own .md meeting transcripts. The meetings folder is user-chosen
     // (could be Desktop/Downloads), and shell.openPath launches the OS handler for whatever it finds,
     // which would execute a .command/.app/.exe. Mirror deleteMeeting()/debriefSave()'s .md guard.
-    if (!safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') return ''
+    if (!safeName) return ''
     const path = join(folder, safeName)
     const encrypted = isEncryptedFile(path)
     auditLog('recall.open', { encrypted })
@@ -5272,6 +5282,7 @@ function registerIpc(): void {
   // ASKTOTO_DEBUG_RENDERER, never on in a packaged build).
   ipcMain.handle(IPC.rendererCrash, (e, raw: unknown) => {
     assertMainWindow(e)
+    if (!requireAuth()) return
     const r = raw as { message?: unknown; stack?: unknown; componentStack?: unknown } | null
     const message = typeof r?.message === 'string' ? r.message : 'unknown renderer error'
     const stack = typeof r?.stack === 'string' ? r.stack : ''
@@ -5317,6 +5328,7 @@ function registerIpc(): void {
   // reach the download page. Never throws — failures come back as a short human-readable error.
   ipcMain.handle(IPC.updateCheck, (e) => {
     assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, current: '', error: 'Not signed in.' }
     return checkForUpdateNow()
   })
   // Settings "Update now" → kick the in-app download. Progress + ready then stream to the renderer via the
@@ -5324,10 +5336,12 @@ function registerIpc(): void {
   // this build cannot self-install so the UI shows the download-page link instead of a stuck button.
   ipcMain.handle(IPC.updateDownload, (e) => {
     assertMainWindow(e)
+    if (!requireAuth()) return { started: false, reason: 'Not signed in.' }
     return startUpdateDownload()
   })
   ipcMain.handle(IPC.updateInstall, (e) => {
     assertMainWindow(e)
+    if (!requireAuth()) return
     // Lazy-required (same pattern + rationale as updater.ts): a static import here put
     // electron-updater's whole require tree (~46ms) on every boot for a once-per-update button.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
