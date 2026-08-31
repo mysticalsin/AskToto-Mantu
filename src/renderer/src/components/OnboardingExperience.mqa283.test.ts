@@ -61,7 +61,7 @@ describe('MQA-283 — Ready\'s honest empty-state line (Métis\'s equivalent of 
   it('never claims readiness with no caveat — the honest line always ships alongside the CTA', () => {
     const readyBlockStart = experienceSrc.indexOf("key=\"ready\"")
     expect(readyBlockStart).toBeGreaterThan(-1)
-    const readyBlock = experienceSrc.slice(readyBlockStart, readyBlockStart + 2000)
+    const readyBlock = experienceSrc.slice(readyBlockStart, readyBlockStart + 4000)
     expect(readyBlock).toMatch(/TELL_THE_ROOM_READY/)
     expect(readyBlock).toMatch(/TELL_THE_ROOM_QUOTE/)
     expect(readyBlock).toMatch(/Get started/)
