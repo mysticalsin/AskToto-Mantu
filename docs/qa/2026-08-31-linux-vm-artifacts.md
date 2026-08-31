@@ -2,27 +2,47 @@
 
 Fail-closed. Every claim below is a command + exit_code + path.
 
-Worker is **not** Totos-Mac. Combined local show tree `45a1139` is not in this clone. Electron was not opened there. No installer pack on Tony's Mac. Overlay **PR 58 stays frozen** (OPEN draft, tip `33cf8ad`, tree matches `e6bc7bc`). READY TO MERGE: no. Do not grow or merge 58.
+Worker is **not** Totos-Mac. Combined local show tree `45a1139` is not in this clone. Electron was not opened there. No installer pack on Tony's Mac. Live `listwins` was not run.
 
-Land vehicle is **#70** (`cursor/land-upgrades-62-69-acda`) based on `main`. 62-69 only. No overlay-chrome / Hide / Island files in this tree vs main.
+## Product on `main`
 
-## 68 / 69 retarget
+`main` is `9dbcd2d`: overlay chrome **58** plus upgrades **62–69** as one product.
 
 ```
-command: gh pr view 68 --json baseRefName && gh pr view 69 --json baseRefName
+command: git log -1 --oneline origin/main
+exit_code: 0
 ```
 
-| PR | head | old base | new base |
+58 Hide 8×2 + Island hover is **not frozen**. Mac-test on this Linux VM is the vitest proof (`mac-hide-island.proof.test.ts` + geometry + cursor-watch), not Totos-Mac `listwins`.
+
+66 and 68 stay **in flight** as their own PRs (base `main`). Unique extras were **ported** onto this tree. Their heads were **not** merged (those heads still carry old 58 history).
+
+```
+command: gh pr view 66 --json baseRefName && gh pr view 68 --json baseRefName
+exit_code: 0
+```
+
+| PR | head | base | note |
 | --- | --- | --- | --- |
-| https://github.com/mysticalsin/AskToto-Mantu/pull/68 | `cursor/bar-pill-jarvis-orb-a612` | `cursor/overlay-chrome-island-f504` | `main` |
-| https://github.com/mysticalsin/AskToto-Mantu/pull/69 | `cursor/brain-connectors-a8ba` | `cursor/overlay-chrome-island-f504` | `main` |
+| https://github.com/mysticalsin/AskToto-Mantu/pull/66 | `cursor/onboarding-starfield-bed-5dc8` | `main` | extras ported; do not merge head |
+| https://github.com/mysticalsin/AskToto-Mantu/pull/68 | `cursor/bar-pill-jarvis-orb-a612` | `main` | extras ported; do not merge head |
 
-Their **heads still contain overlay 58 history**. Merging those heads into main would dump 58. Do **not** merge 68 or 69. Land the 68/69 *features* via #70, which does not contain 58 files.
+## Tests
 
 ```
-command: git diff --name-only origin/main...cursor/land-upgrades-62-69-acda | rg overlay-chrome
-exit_code: 1 (no matches)
+command: npm test
+exit_code: 0
+path: /opt/cursor/artifacts/npm-test-58-62-69.log
 ```
+
+331 files, 4060 passed, 18 skipped. Proxy: 28 passed.
+
+```
+command: npm run typecheck && npm run check:bugs
+exit_code: 0
+```
+
+typecheck OK (30 known test-type errors at baseline). check:bugs OK (284 tracked, 280 FIXED, 2 OPEN).
 
 ## Host
 
@@ -48,7 +68,7 @@ exit_code: 1 (all missing)
 path: /opt/cursor/artifacts/darwin-host-probe.log
 ```
 
-Do not fake a DMG.
+Do not fake a DMG. Devon owns Verifier.
 
 Three real paths if a Mac appears:
 
@@ -71,6 +91,8 @@ Packaged launch and packaged ASR were **not** run. wine is not Windows.
 
 ## Windows EXE (cross-compile on this Linux VM)
 
+Rebuilt on the combined `9dbcd2d` tree (app version **1.8.0**).
+
 ```
 command: npx electron-builder --config electron-builder.win.yml --win --x64 --publish never
 exit_code: 0
@@ -82,21 +104,19 @@ afterPack: `[check:packaged-runtime] OK win (pre-sign)`.
 `release/` is gitignored and each installer is **882 MB** (GitHub blob limit 100 MB). The binaries stay on this VM. sha256 is what is git-visible.
 
 ```
-command: sha256sum release/Metis-Setup-1.6.6.exe release/Metis-Portable-1.6.6.exe release/win-unpacked/Metis.exe
+command: sha256sum release/Metis-Setup-1.8.0.exe release/Metis-Portable-1.8.0.exe release/win-unpacked/Metis.exe
 exit_code: 0
-path: /opt/cursor/artifacts/win-exe-hashes.txt
+path: /opt/cursor/artifacts/win-exe-1.8.0.sha256
 ```
 
 | path | size | sha256 |
 | --- | --- | --- |
-| `/workspace/release/Metis-Setup-1.6.6.exe` | 882M | `80a9f9cb2e1e89128f7a4016d1b1b66a189d1d13d2cb7db4c6178153db26fe1f` |
-| `/workspace/release/Metis-Portable-1.6.6.exe` | 882M | `35fc57ce6ee89f89750bdfbfdefd532d45227473a29080b613484c4f19fa2178` |
-| `/workspace/release/win-unpacked/Metis.exe` | 202M | `35235b2011ff87f1b10529f92ccc246ab952241b21aece596cd10b744787c6c0` |
-
-`file`: Setup and Portable are PE32 Nullsoft installers. `win-unpacked/Metis.exe` is PE32+ x86-64.
+| `/workspace/release/Metis-Setup-1.8.0.exe` | 882M | `fb666be77e9b5891e9aeee6020c210c4f39e32192d04093d5512c6b788d4ce8c` |
+| `/workspace/release/Metis-Portable-1.8.0.exe` | 882M | `51a84072da54600a05a0229f4eb08fbda5c28ee3e25803251a3c1ad7e6f4d71e` |
+| `/workspace/release/win-unpacked/Metis.exe` | 202M | `c7973372b3f080f7d7cb0b5b38052ad1b5eaf41ac135b7163b391092c2f88fe6` |
 
 Not launch-proved. Not ASR-proved. Not signed for customers.
 
 ## Upgrades commit
 
-Branch `cursor/land-upgrades-62-69-acda`. Overlay 58 is not in this tree.
+Branch `cursor/land-upgrades-62-69-acda` landed on `main` at `9dbcd2d`.
