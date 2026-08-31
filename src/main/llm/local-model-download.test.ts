@@ -211,7 +211,8 @@ describe('MQA-185/186 — the first-run fetch is proxy-aware and observable', ()
     expect(localModelDownloadState()).toMatchObject({ modelId: 'qwen3.5-0.8b', status: 'failed' })
     expect(listModels(localModelDownloadState())[0]).toMatchObject({
       ready: false,
-      unavailableReason: 'download-failed'
+      unavailableReason: 'insufficient-disk',
+      downloadError: expect.stringMatching(/not enough free disk/i)
     })
   })
 
@@ -219,11 +220,13 @@ describe('MQA-185/186 — the first-run fetch is proxy-aware and observable', ()
     // Unmeasurable is not insufficient. If statfs throws — an exotic filesystem, a path that vanished
     // between mkdir and the check — the download proceeds. The post-write size and SHA-256 checks
     // still guard the result, so failing open here cannot let a bad file be kept.
-    expect(source).toContain('statfsSync(dir)')
-    const fn = source.slice(source.indexOf('function assertRoomFor'))
-    const body = fn.slice(0, fn.indexOf('const REQUEST_TIMEOUT_MS'))
+    const modelsSrc = readFileSync(join(REPO_ROOT, 'src', 'main', 'llm', 'local-models.ts'), 'utf8')
+    expect(modelsSrc).toContain('statfsSync(dir)')
+    const probe = modelsSrc.slice(modelsSrc.indexOf('export function volumeFreeBytes'))
+    const body = probe.slice(0, modelsSrc.indexOf('export function diskShortageFor') - modelsSrc.indexOf('export function volumeFreeBytes'))
     expect(body).toContain('catch {')
-    expect(body.slice(body.indexOf('catch {'))).toContain('return')
+    expect(body).toContain('return null')
+    expect(modelsSrc).toMatch(/if \(freeBytes === null\) return/)
   })
 
   it('MQA-186 — reports real progress while the transfer is in flight', async () => {

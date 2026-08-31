@@ -2007,7 +2007,7 @@ export const LocalModelSummarySchema = z
     minTotalRamGB: z.number(),
     ready: z.boolean(),
     unavailableReason: z
-      .enum(['insufficient-ram', 'downloading', 'download-failed', 'not-downloaded'])
+      .enum(['insufficient-ram', 'insufficient-disk', 'downloading', 'download-failed', 'not-downloaded'])
       .nullable(),
     /** 0..1 while `unavailableReason === 'downloading'`, 0 otherwise. */
     downloadProgress: z.number().min(0).max(1),

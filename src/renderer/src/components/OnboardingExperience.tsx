@@ -330,6 +330,12 @@ export function localModelRowStatus(
       detail: `This Mac needs at least ${model.minTotalRamGB} GB of memory for the on-device model.`
     }
   }
+  if (model.unavailableReason === 'insufficient-disk') {
+    return {
+      state: 'action',
+      detail: 'Not enough free disk space for the on-device model.'
+    }
+  }
   if (model.unavailableReason === 'downloading') {
     const pct = Math.round((model.downloadProgress ?? 0) * 100)
     return { state: 'action', detail: `Downloading ${pct}%`, progress: model.downloadProgress }
