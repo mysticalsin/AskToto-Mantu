@@ -213,20 +213,16 @@ describe('shouldProbeLanguageWindow — auto-language probe cadence (MQA-012)', 
 
   it('drops to the steady PROBE_EVERY cadence after the burst, not every window', () => {
     // Un-pinned probing must not become a per-window IPC round trip — same load as the pinned case.
-    expect([6, 7, 9, 10, 11].map((n) => shouldProbeLanguageWindow(n, false))).toEqual([
-      false,
-      false,
-      false,
-      false,
-      false
-    ])
+    expect([7, 9, 11].map((n) => shouldProbeLanguageWindow(n, false))).toEqual([false, false, false])
+    expect(shouldProbeLanguageWindow(6, false)).toBe(true) // 6 % 2 === 0
+    expect(shouldProbeLanguageWindow(8, false)).toBe(true)
   })
 
-  it('leaves the pinned re-probe cadence untouched (every 4th window, no opening burst)', () => {
+  it('leaves the pinned re-probe cadence untouched (every 2nd window, no opening burst)', () => {
     expect(shouldProbeLanguageWindow(1, true)).toBe(false)
+    expect(shouldProbeLanguageWindow(2, true)).toBe(true)
     expect(shouldProbeLanguageWindow(3, true)).toBe(false)
     expect(shouldProbeLanguageWindow(4, true)).toBe(true)
-    expect(shouldProbeLanguageWindow(8, true)).toBe(true)
   })
 
   it('is the cadence pump() actually uses', () => {
@@ -487,6 +483,29 @@ describe('advanceLanguageProbe — live first-pin needs SWITCH_AFTER (MQA-235)',
   it('is what useListen feeds into pinLanguage (source contract)', () => {
     expect(listenSrc).toMatch(/advanceLanguageProbe\(\{/)
     expect(listenSrc).toMatch(/workerRef\.current\?\.postMessage\(\{ type: 'pinLanguage', language: next\.pinnedLang \}\)/)
+  })
+
+  it('a mixed window confirms a mid-meeting switch immediately (does not keep the first pin forever)', () => {
+    const next = advanceLanguageProbe({
+      detected: 'English',
+      pinnedLang: 'French',
+      switchRun: null,
+      switchAfter: 2,
+      mixed: true
+    })
+    expect(next).toEqual({ pinnedLang: 'English', switchRun: null, shouldPin: true })
+  })
+
+  it('mixed evidence does not skip SWITCH_AFTER on the first pin', () => {
+    const next = advanceLanguageProbe({
+      detected: 'English',
+      pinnedLang: null,
+      switchRun: null,
+      switchAfter: 2,
+      mixed: true
+    })
+    expect(next.shouldPin).toBe(false)
+    expect(next.pinnedLang).toBeNull()
   })
 })
 
