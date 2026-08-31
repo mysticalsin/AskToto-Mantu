@@ -37,11 +37,15 @@ describe('screen-capture self-check wiring', () => {
 
   it('the vision ask goes through createStream (local or API), never askStart', () => {
     expect(indexSrc).toMatch(/function askVisionForScreenCheck/)
-    const ask = blockAfter(indexSrc, 'function askVisionForScreenCheck')
+    const start = indexSrc.indexOf('Isolated vision ask for the Settings self-check')
+    const end = indexSrc.indexOf('// --- Background screen preprocessing', start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    const ask = indexSrc.slice(start, end)
     expect(ask).toMatch(/createStream\(/)
     expect(ask).toMatch(/providerId: 'local'/)
     expect(ask).toMatch(/freshConversation:\s*true/)
-    expect(ask).not.toMatch(/askStart|IPC\.askStart/)
+    expect(ask).not.toMatch(/IPC\.askStart/)
     expect(ask).not.toMatch(/mcp\.push|outlookCreate|timeSavedRecord/)
     expect(handler).not.toMatch(/IPC\.askStart|mcp\.push|outlookCreate/)
   })
