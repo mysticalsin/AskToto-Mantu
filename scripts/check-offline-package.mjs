@@ -12,6 +12,9 @@ const testFile = /\.(?:test|spec)\.(?:ts|tsx|js|mjs)$/
 // use. Anywhere else it means a second, unaudited fetch path has appeared, which is exactly what this
 // gate exists to stop. Every other rule below is unchanged.
 const QWEN_DOWNLOAD_ALLOWED = ['src/main/llm/local-models.ts', 'src/main/llm/local-model-download.ts']
+// Import ASR: bundled resources first; userData fetch is the reviewed fallback when the installer
+// or a dev checkout is missing weights. Only this file may hold the sherpa-onnx archive URL.
+const PARAKEET_DOWNLOAD_ALLOWED = ['src/main/asr-bundled-ensure.ts']
 
 const forbidden = [
   {
@@ -19,7 +22,11 @@ const forbidden = [
     reason: 'runtime Qwen download URL outside the reviewed downloader',
     allow: QWEN_DOWNLOAD_ALLOWED
   },
-  { pattern: /sherpa-onnx\/releases\/download\/asr-models/i, reason: 'runtime Parakeet download URL' },
+  {
+    pattern: /sherpa-onnx\/releases\/download\/asr-models/i,
+    reason: 'runtime Parakeet download URL',
+    allow: PARAKEET_DOWNLOAD_ALLOWED
+  },
   { pattern: /bundled ASR load failed, retrying remote/i, reason: 'packaged ASR remote fallback' },
   { pattern: /localModels:(?:download|cancel|delete)/, reason: 'runtime local-model mutation IPC' },
   { pattern: /node-llama-cpp/, reason: 'superseded native binding backend' },
