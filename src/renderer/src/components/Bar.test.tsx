@@ -77,9 +77,26 @@ describe('Bar minimize-to-circle is layout-gated', () => {
       expect(html).toContain('rounded-full')
       expect(html).toMatch(/aria-label="Settings"/)
     }
-    expect(listen).toContain('w-[100px]')
+    expect(listen).not.toContain('w-[100px]')
     expect(listen).toContain('data-bar-mark')
+    expect(listen).toContain('data-bar-listen-timer')
+    expect(listen).not.toContain('New meeting')
     expect(listen).not.toMatch(/data-bar-mark[\s\S]{0,500}rounded-\[10px\]/)
+  })
+})
+
+describe('Bar listening toolbar does not stack New meeting on the timer', () => {
+  it('hides New meeting while listening and keeps Transcript + timer + orb', () => {
+    const listen = renderToStaticMarkup(<Bar {...props({ listening: true, canMinimize: true })} />)
+    const idle = renderToStaticMarkup(<Bar {...props({ listening: false, canMinimize: true })} />)
+
+    expect(listen).toContain('data-bar-listening="true"')
+    expect(listen).toContain('data-bar-listen-timer')
+    expect(listen).toContain('Transcript')
+    expect(listen).toContain('data-bar-pill-orb')
+    expect(listen).not.toContain('New meeting')
+    expect(idle).toContain('History')
+    expect(idle).not.toContain('data-bar-listen-timer')
   })
 })
 
