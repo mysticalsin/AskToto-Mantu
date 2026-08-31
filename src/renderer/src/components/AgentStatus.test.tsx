@@ -40,11 +40,20 @@ describe('AgentStatus composition', () => {
       expect(markup).toContain('data-size="64"')
       expect(markup).toContain('data-theme="dark"')
       expect(markup).toContain('data-speed="1"')
+      expect(markup).toContain('agent-status--hero')
+      expect(markup).toContain('agent-status__word')
       const captionAt = markup.indexOf(spec.caption)
       const orbAt = markup.indexOf('data-thinking-orb')
       expect(captionAt).toBeGreaterThan(-1)
       expect(orbAt).toBeGreaterThan(captionAt)
     }
+  })
+
+  it('keeps inline named waits as the word then the 20px sphere', () => {
+    const markup = html(<AgentStatus kind="listening" size="inline" caption />)
+    expect(markup).toContain('Listening')
+    expect(markup).toContain('data-orb-size="20"')
+    expect(markup.indexOf('Listening')).toBeLessThan(markup.indexOf('data-thinking-orb'))
   })
 
   it('uses size 20 for inline and omits the caption by default', () => {

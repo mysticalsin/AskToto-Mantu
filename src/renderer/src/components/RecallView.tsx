@@ -17,7 +17,7 @@ import {
   Lock
 } from 'lucide-react'
 import { TextButton } from './ui'
-import { InlineOrb } from './AgentStatus'
+import { AgentStatus, InlineOrb } from './AgentStatus'
 import { WorkProgressMeter } from './WorkProgressMeter'
 import { describeImportProgress, describeMeetingIndexProgress } from './work-progress'
 import { accelLabel } from '../lib/keys'
@@ -1211,7 +1211,9 @@ export function RecallView({
       {/* ── DATE-GROUPED MEETING LIST ───────────────────────────────────── */}
       <div ref={listRef} tabIndex={-1} className="scroll-thin min-h-0 flex-1 overflow-y-auto pr-1">
         {loading ? (
-          <div className="py-2 text-[13px] text-[color:var(--color-ink-2)]">Loading…</div>
+          <div className="py-2">
+            <AgentStatus kind="searching" size="inline" caption />
+          </div>
         ) : items.length === 0 ? (
           <div className="py-2 text-[13px] text-[color:var(--color-ink-2)]">
             {q.trim()

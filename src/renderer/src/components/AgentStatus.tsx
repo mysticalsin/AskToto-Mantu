@@ -41,28 +41,16 @@ export function AgentStatus({
       data-agent-status={kind}
       data-orb-state={spec.state}
       data-orb-size={String(orbSize)}
-      className={
-        hero
-          ? ['flex items-center justify-center gap-4 px-8 py-12', className].filter(Boolean).join(' ')
-          : ['inline-flex items-center gap-2', className].filter(Boolean).join(' ')
-      }
+      className={[
+        'agent-status',
+        hero ? 'agent-status--hero flex items-center justify-center' : 'agent-status--inline inline-flex items-center gap-2',
+        className
+      ]
+        .filter(Boolean)
+        .join(' ')}
     >
-      {showCaption && (
-        <span
-          className={
-            hero
-              ? 'font-ui text-[16px] font-medium tracking-tight text-[color:var(--color-ink-2)]'
-              : 'font-ui text-[12px] font-medium text-[color:var(--color-ink-2)]'
-          }
-        >
-          {captionText}
-        </span>
-      )}
-      {percentLabel && (
-        <span className="font-ui text-[12px] font-medium tabular-nums text-[color:var(--color-ink-2)]">
-          {percentLabel}
-        </span>
-      )}
+      {showCaption && <span className="agent-status__word">{captionText}</span>}
+      {percentLabel && <span className="agent-status__word tabular-nums">{percentLabel}</span>}
       <ThinkingOrb state={spec.state} size={orbSize} theme={theme} speed={1} aria-label={captionText} />
     </div>
   )

@@ -998,8 +998,8 @@ export const Review = memo(function Review({
                   click can't self-cancel the in-flight generation. */}
               {isPastMeeting && !recapText && !recap?.error && onGenerateRecap && (
                 <Chip onClick={onGenerateRecap} variant="accent" disabled={recap?.streaming}>
-                  {recap?.streaming ? <InlineOrb kind="writing" /> : <Sparkles size={13} />}
-                  {recap?.streaming ? 'Generating…' : 'Generate recap'}
+                  {recap?.streaming ? <AgentStatus kind="writing" size="inline" caption /> : <Sparkles size={13} />}
+                  {recap?.streaming ? null : 'Generate recap'}
                 </Chip>
               )}
               {/* Edit — past meetings only (a live session's recap is still owned by the ask state, and may

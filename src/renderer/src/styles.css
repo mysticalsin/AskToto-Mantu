@@ -827,6 +827,32 @@ input::placeholder {
   word-break: break-word;
 }
 
+/* Luxury agent status — caption then thinking-orbs. Isolation keeps the 2D canvas on its own
+   compositor layer so the 60fps orb does not hitch the glass. No CSS keyframe spinner. */
+.agent-status {
+  isolation: isolate;
+}
+.agent-status canvas {
+  display: block;
+  contain: strict;
+}
+.agent-status__word {
+  font-family: var(--font-ui);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  color: var(--color-ink-2);
+}
+.agent-status--hero {
+  gap: 14px;
+  padding: 48px 32px;
+}
+.agent-status--hero .agent-status__word {
+  font-size: 15px;
+}
+.agent-status--inline .agent-status__word {
+  font-size: 12px;
+}
+
 @keyframes asktoto-loading-pulse {
   0%,
   100% {
