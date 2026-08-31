@@ -169,8 +169,7 @@ void main() {
   float c = dot(ro, ro) - ra * ra;
   float h = b * b - c;
   if (h < 0.0) {
-    float d = length(vUv);
-    float bloom = exp(-pow((d - 0.82) * 13.0, 2.0));
+    float bloom = exp(h * 16.0);
     if (bloom < 0.018) discard;
     gl_FragColor = vec4(mix(uDeep, uColor, 0.42), bloom * 0.32 * uAlpha);
     return;
