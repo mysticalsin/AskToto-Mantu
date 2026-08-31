@@ -48,6 +48,18 @@ motion:
    Scrollable. Two modes: ANSWER (streamed markdown via streamdown) · LISTEN
    (live transcript left/right speaker + AI Suggestions cards).
 3. **Settings** — compact 320–360px glass card (API key, model, hotkeys, audio source, toggles).
+4. **Review / recap** — drops below the bar in the same Panel shell as History / Agenda / Brain.
+   Must **fit or scroll**. Never clip. `Panel` is the one overflow-y scroller (`html`/`body`/`#root`
+   stay hidden). Cap is screen-derived (`panelMaxHeight`), never `vh` / `innerHeight`: leave room for
+   the overlay Bar (64 thinking-orb included), root padding, the Bar–Panel gap, useAutoResize's grow
+   grid, and main's `workArea.height - 48` ceiling. Last paragraph, actions, and footer chips must be
+   reachable by trackpad/mouse. No nested transcript scroll trap. No "scroll here" hint.
+
+## Review / recap (never clip)
+The post-meeting **Summary** Tony opens after a session lives in Review inside `Panel`. Sibling
+recap/note bodies that share that shell follow the same rule: fit cleanly, or scroll to the last
+line. Safe-area / overlay Bar height is respected. Content never sits under the glass bar or the
+window frame. Defaults stay the friendly path.
 
 ## Rules (from §6.2 + Cluely fidelity)
 - ONE accent (`accent`). Everything else is white-alpha on dark glass.
