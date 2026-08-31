@@ -1,5 +1,6 @@
 import { vadWindowsFromPcm } from '@shared/vad'
 import { IMPORT_CHUNK_SECONDS, type SaveMeeting, type TranscriptLine } from '@shared/ipc'
+import { estimateNoteTakingMinutes, wordsFromTexts } from '@shared/time-saved-events'
 
 /**
  * Main-process import queue. It deliberately persists text checkpoints, not decoded PCM: raw audio is
@@ -100,6 +101,8 @@ export interface ImportJobManagerDeps {
   /** Credit the durable time-saved counters for one summarized meeting (main/store.ts). Optional so the
    *  import-jobs unit tests need not wire it; the live app always provides it. */
   recordMeetingSummarized?: (durationMin: number) => void
+  /** Honest note-taking estimate for an imported transcript (words / 180 wpm). */
+  recordTimeSavedNote?: (words: number, file: string) => void
   onChange?: (job: ImportJob) => void
   /** Resolve only after the owned decoder has stopped, preventing overlapping FIFO jobs. */
   onCancel?: (jobId: string) => void | Promise<void>
@@ -624,6 +627,10 @@ export class ImportJobManager {
       const ts = job.lines.map((l) => l.t).filter((t) => Number.isFinite(t))
       const durMin = ts.length ? Math.max(1, Math.round((Math.max(...ts) - Math.min(...ts)) / 60000)) : 0
       this.deps.recordMeetingSummarized?.(durMin)
+      {
+        const words = wordsFromTexts(...job.lines.map((l) => l.text))
+        if (estimateNoteTakingMinutes(words) > 0) this.deps.recordTimeSavedNote?.(words, file)
+      }
 
       job.progressPct = 100
       job.state = 'done'

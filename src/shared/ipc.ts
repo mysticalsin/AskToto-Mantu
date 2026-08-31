@@ -217,7 +217,13 @@ export const IPC = {
   localTranscriptBegin: 'local-ai:transcript:begin',
   localTranscriptAppend: 'local-ai:transcript:append',
   localTranscriptResync: 'local-ai:transcript:resync',
-  localTranscriptEnd: 'local-ai:transcript:end'
+  localTranscriptEnd: 'local-ai:transcript:end',
+  timeSavedRead: 'time-saved:read',
+  timeSavedRecord: 'time-saved:record',
+  outlookWriteStatus: 'outlook:writeStatus',
+  outlookCreateDraft: 'outlook:createDraft',
+  outlookCreateEvent: 'outlook:createEvent',
+  mcpWriteTargets: 'mcp:writeTargets'
 } as const
 
 /** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals. */
@@ -1857,6 +1863,26 @@ export interface McpPushResult {
   error?: string
   result?: unknown
 }
+
+/** Renderer may only record an email-summary. Main owns note-taking, second-brain, and mcp-push. */
+export const TimeSavedRecordPayloadSchema = z.object({
+  kind: z.literal('email-summary')
+})
+export type TimeSavedRecordPayload = z.infer<typeof TimeSavedRecordPayloadSchema>
+
+export const OutlookDraftPayloadSchema = z.object({
+  subject: z.string().max(200).default(''),
+  body: z.string().max(20_000).default('')
+})
+export type OutlookDraftPayload = z.infer<typeof OutlookDraftPayloadSchema>
+
+export const OutlookEventPayloadSchema = z.object({
+  subject: z.string().max(200).default(''),
+  body: z.string().max(20_000).default(''),
+  startIso: z.string().max(40).optional(),
+  endIso: z.string().max(40).optional()
+})
+export type OutlookEventPayload = z.infer<typeof OutlookEventPayloadSchema>
 
 // ─── Métis Local (on-device LLM) — bundled model readiness (see main/llm/local-models.ts) ─────────────
 // ipc.ts is bundled into the renderer too, so it cannot import local-models.ts (touches node:fs/electron

@@ -223,6 +223,9 @@ export type AuditEvent =
   | 'cahe.localai.seeded'
   // Support diagnosability: the user exported the log trail to a folder (metadata only — file count).
   | 'diagnostics.export'
+  | 'llm.call'
+  | 'time-saved.event'
+  | 'outlook.draft'
 
 // Lazy actor resolver — set once by the main process (wired to authStatus().email) so every audit
 // record can carry the signed-in identity without logger.ts importing auth.ts (which would be

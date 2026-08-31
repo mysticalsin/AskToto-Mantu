@@ -71,3 +71,26 @@ Implement to that contract only.
 ## Brand mark
 Métis = five-star constellation-M glyph (own SVG), dots + thin connectors, `text-primary`.
 NOT Cluely's logo. Wordmark "Métis" in Geist medium, tracking-tight.
+
+## Answer first (every LLM path)
+Typed and screen answers lead with the answer. No "sure", no restating the question, no "let's".
+System rail: `ANSWER_FIRST_RAIL` in `src/shared/answer-first.ts`, appended by `buildSystem` for
+answer/vision (not live suggest, not recap/summary, not fact-check). Post-filter:
+`stripLeadingFiller` / `AnswerFirstFilter` on the enterprise client stream. Tests lock both.
+
+## Enterprise LLM client
+Every provider (local llama-server, Apple FM, OpenAI-compatible, Anthropic, Dust, CLI) enters
+through `createStream` → `wrapEnterpriseStream`. Contract: hard timeout, cancel, retry-with-jitter
+primitives, fallback chain helper, streaming, TTFT/TTA metrics, circuit snapshot, secret redaction
+in logs. Fail closed on a hung call. Honest errors, never "Something went wrong".
+
+Local runtime stays llama.cpp sidecar (plus Apple FM when live). Do not swap it. Threads / GPU /
+ctx stay machine-aware (`inferenceThreads`, `spawnProfileFor`). Streaming stays on.
+
+## Time saved
+See [TIME-SAVED.md](./TIME-SAVED.md). Tokens, type, motion, do/don'ts live there. The Intelligence
+dashboard (PR 61) is a separate surface; this module is a small honest feed it can read later.
+
+## MCP write
+Outlook drafts and CRM notes are user-confirmed. Never auto-send. A disconnected connector shows
+Connect, it does not pretend a send happened.

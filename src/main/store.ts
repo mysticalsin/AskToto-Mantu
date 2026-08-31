@@ -210,16 +210,27 @@ function readAllowedFrom(p: string): string[] | null {
 // file's mtime, so an IT policy edit still lands without an app restart), plus a wall-clock ceiling so a
 // DACL-only change — which no mtime can reveal — is re-probed within the minute rather than never.
 const ADMIN_POLICY_REPROBE_MS = 60_000
-let _adminManagedCache: { mtime: number; at: number; content: string | null } | null = null
+let _adminManagedCache: { path: string; mtime: number; at: number; content: string | null } | null = null
 
 function adminManagedContent(): string | null {
-  const mtime = safeMtime(adminManagedConfigPath())
+  const file = adminManagedConfigPath()
+  const mtime = safeMtime(file)
   const now = Date.now()
   const c = _adminManagedCache
   // A clock set backwards must not extend the snapshot indefinitely — any negative age counts as stale.
-  if (c && c.mtime === mtime && now - c.at >= 0 && now - c.at < ADMIN_POLICY_REPROBE_MS) return c.content
+  // Path is part of the hit key: ProgramData / platform swaps (tests and a repaired profile) must not
+  // reuse another file's snapshot just because mtimes matched.
+  if (
+    c &&
+    c.path === file &&
+    c.mtime === mtime &&
+    now - c.at >= 0 &&
+    now - c.at < ADMIN_POLICY_REPROBE_MS
+  ) {
+    return c.content
+  }
   const content = readTrustedAdminManaged()
-  _adminManagedCache = { mtime, at: now, content }
+  _adminManagedCache = { path: file, mtime, at: now, content }
   return content
 }
 
@@ -493,6 +504,8 @@ function safeMtime(p: string): number {
 
 interface SettingsCache {
   value: Settings
+  /** userData/settings.json path. mtimes alone collide across temp profiles created in the same ms. */
+  path: string
   userMtime: number
   managedMtime: number
   adminMtime: number
@@ -500,9 +513,14 @@ interface SettingsCache {
 }
 let _settingsCache: SettingsCache | null = null
 
-function currentSettingsMtimes(): Pick<SettingsCache, 'userMtime' | 'managedMtime' | 'adminMtime' | 'caheEdition'> {
+function currentSettingsMtimes(): Pick<
+  SettingsCache,
+  'path' | 'userMtime' | 'managedMtime' | 'adminMtime' | 'caheEdition'
+> {
+  const file = settingsPath()
   return {
-    userMtime: safeMtime(settingsPath()),
+    path: file,
+    userMtime: safeMtime(file),
     managedMtime: safeMtime(join(dir(), 'managed-config.json')),
     adminMtime: safeMtime(adminManagedConfigPath()),
     caheEdition: isCaheEdition()
@@ -513,6 +531,7 @@ export function getSettings(): Settings {
   const m = currentSettingsMtimes()
   if (
     _settingsCache &&
+    _settingsCache.path === m.path &&
     _settingsCache.userMtime === m.userMtime &&
     _settingsCache.managedMtime === m.managedMtime &&
     _settingsCache.adminMtime === m.adminMtime &&

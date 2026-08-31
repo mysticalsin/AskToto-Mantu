@@ -36,6 +36,8 @@ import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
 // throws there (see llm/dust.ts's own note). dustcli.ts imports nothing from brain/, so no cycle.
 import { refreshDustCliSession } from '../dustcli'
 import { auditLog, mainLog } from '../logger'
+import { appendTimeSavedEvent } from '../time-saved-log'
+import { estimateSecondBrainMinutes } from '@shared/time-saved-events'
 import {
   slugify,
   commitmentKey,
@@ -1628,6 +1630,17 @@ async function finishJob(result: JobResult): Promise<void> {
     if (!result.ok) throw result.error
     await ingestExtraction(s, result.x, result.md, job.file, result.preparedText, job.sourceVersion, job.key, job.label)
     auditLog('brain.ingest', { ok: true, source: job.source })
+    {
+      // Time saved: 2 min per captured commitment, cap 15. Only when ingest actually extracted some.
+      const n = result.x.commitments?.length ?? 0
+      if (n > 0) {
+        appendTimeSavedEvent({
+          kind: 'second-brain',
+          estimatedMinutes: estimateSecondBrainMinutes(n),
+          ids: { meeting: job.file }
+        })
+      }
+    }
   } catch (e) {
     failed = true
     await updateIndex(s, (idx) => {
