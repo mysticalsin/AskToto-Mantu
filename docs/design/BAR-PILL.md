@@ -8,11 +8,74 @@ owns-also: Bar idle docked circle; Hide/Island must not minimize
 notes: Island/Hide hover hit is the camera / Dynamic Island square (DESIGN.md + island/geometry). A 560-wide or 44-tall slab is a bug.
 ---
 
-# Bar pill: sentient circle
+# Bar sphere: sentient 52 glass
 
 This file is the contract for one slice. Implement only what it names. Hide and Island overlay chrome stay exactly as they are.
 
-Tony's visual source for the **small rest** is the purple sentient orb at the bottom-right of [Amaris Fit Studio](https://amaris-fit-studio.pages.dev/). Round. Alive. Interior moves. Click opens it. Particle craft (look only) from `mysticalsin/tonys-jarvis`. Fit Studio **wins for small rest shape**. Jarvis cyan is a **mood color**, not the resting chrome.
+## Consultant (feel)
+
+The Bar control is a **being**, not a badge. At 52px it must read as a glass sphere with mass: a highlight that says "I am round," a core that breathes, interior motion that is not the shell. Tony looks at it and it looks back.
+
+Reference (feel only, not a clone):
+- **Jarvis 3D sphere** (`mysticalsin/jarvis2.0` `frontend/src/orb.ts`, same craft as `tonys-jarvis`): perspective volume, constellation, electrons, depth breath, idle / listen / think energy. Port the sentience. Do not port voice, calendar, cyan rest, full-screen chrome, or product copy.
+- **Fit Studio** ([amaris-fit-studio.pages.dev](https://amaris-fit-studio.pages.dev/)): premium small rest. Use only if WebGL is missing. The shipped Bar circle prefers the Jarvis **volume**.
+
+A flat CSS disc, a single radial fill, or a 2D glow quad is a fail. That is a status blob. This slice replaces that blob on the **existing** Bar orb (`bar-pill-orb` / `JarvisOrbButton`). Do not invent a second orb.
+
+## Craftsman (spec)
+
+### Size (HARD)
+
+- `BAR_PILL_WIDTH_PX === BAR_PILL_HEIGHT_PX === BAR_PILL_SIZE_PX === 52`
+- Aspect **1** on every mood. Bounding box constant.
+- Never a potato, stadium, lozenge, 44-tall pill, or flattened disc.
+- Never scale, squash, or stretch on hover, listen, drag, or minimize.
+- Minimize (Bar only) is **this** sphere. Not a different disc.
+
+### Materials (layers, back to front)
+
+One WebGL canvas, 52×52 CSS, DPR capped at 2. Transparent around the sphere. No dark chip. No CSS radial body.
+
+1. **Glass body** (ray-sphere, not a 2D disc). Camera on +Z. Equal X/Y scale. Radius fills ~0.90 of the box. Lambert wrap in the mood color + a darker far side so it has poles.
+2. **Living core.** Brighter mass near the center. Breath is uniform scale of intensity, never of the box. Caustic bands (two slow sin fields) live *inside* the volume.
+3. **Fresnel rim.** Thin bright edge. Reads as glass, not a sticker.
+4. **Specular kiss.** One tight highlight, upper-left (`light = normalize(-0.45, 0.72, 0.85)`). White, small. Not a looping sheen. Hover may lean the kiss a few degrees. Never squash the sphere to follow the pointer.
+5. **Constellation.** ~2000 points on a unit sphere, additive, O(n) chords, electrons. Same NDC scale on X and Y. Perspective divide so near points are larger. This is the Jarvis interior, sitting in the glass, not a flat stamp.
+6. **Rec-dot (listen only).** Existing red `#F0717A` (`.rec-dot`). 7×7, bottom-right of the 52 box, inside the circle. Dark ring so it reads on purple glass. Do **not** paint the sphere red.
+
+Reduced-motion: paint one still frame of layers 1–5 (and 6 if listening). The still frame must still look spherical: core, rim, kiss, constellation. A flat disc at t=0 is a fail. Missing WebGL falls back to a 2D **shaded sphere** (volume + kiss + rim + a few points), never a single radial blob.
+
+### Motion
+
+| State | Volume | Interior | Color |
+| --- | --- | --- | --- |
+| **idle** | Slow breath (~1.3 Hz, amp 0.022) | Drift + sparse lines | `#7F00DA` |
+| **listen** | Denser pulse (amp 0.030) | Tighter cloud, same box | Idle purple. Rec-dot red on the glass. |
+| **think** | Faster breath (~2.2 Hz, amp 0.028) | Denser points, more electrons | `#9A2BF0` |
+| **fact-check** | Steady (amp 0.024) | Cooler, clearer core | `#4CA8E8` |
+| **connecting** | Quiet (amp 0.014) | Dimmer lines | `#2A0A4A` (still a sphere, not a void) |
+
+`orbMood: 'idle' | 'thinking' | 'factcheck' | 'connecting'`. Listen is `listening: true` on the same handle (motion + rec-dot), not a fifth fill. Priority for fill: `connecting` > `factcheck` > `thinking` > `idle`.
+
+Hover: lean (particles + kiss), not squash. Drag: skip lean. `document.hidden`: pause rAF. Hide/Island: zero orb rAF.
+
+### Do
+
+- One accent family. Idle is `#7F00DA`.
+- Same sphere docked on the idle Bar and alone when minimized.
+- Windows: same sphere, top-center Bar. No notch, no Mac-only look.
+- Rec-dot stays red and readable.
+- Compositor-cheap: cached GL locations, no layout reads in the frame loop, setup O(n).
+
+### Do not
+
+- Flatten on hover or minimize.
+- CSS `radial-gradient` as the body (that is the old disc).
+- Purple-gradient slop, rainbow foil, emoji, a second orb.
+- Paint the sphere rec-dot red.
+- Clone Jarvis copy, chrome, cyan rest, voice, or Three.js from a CDN.
+- Touch Island/Hide hit geometry (`src/main/island/geometry.ts` hit rects, `hoverRestWidth`, Teams-mute tests) except to keep them green.
+- Onboarding, Local LLM, Brain MCP, installers.
 
 ## Layout (HARD)
 
@@ -22,7 +85,7 @@ Overlay chrome has three layouts. Minimize-to-circle is not a fourth layout and 
 | --- | --- | --- |
 | **Hide** | Hover-to-reveal hairline (8×2 park). Reveal only from the hardware camera / Dynamic Island square, not a 560×44 menu-bar slab. The bar is **invisible** at rest. | **Forbidden.** The circle is invisible at rest too. Hide the minimize control. `minimize(true)` is a **no-op**. Do not park an orb while Hide is idle. Do not float a sphere in the notch. On hover the bar reveals; never a Hide circle. |
 | **Island** | The small visible island (132×15) is already the rest. Hover the camera square at the top center. Left/right menu-bar items and Teams mute / camera / share must never reveal Métis. | **Forbidden.** Do not add a second circle. Island stays the island. Same as Hide: no control, ignore minimize, no layout jump. |
-| **Bar** | The classic bar stays on screen **plus** the sentient circle docked on that bar (Fit Studio 52×52, never a lozenge / pill). | **Allowed — only here.** Click the docked circle to collapse to that circle alone. Click the rest circle to expand back to full bar + circle. Drag the rest circle moves. Position is the existing Bar-minimize rest (not a wanderer). Layout stays `bar`. |
+| **Bar** | The classic bar stays on screen **plus** the sentient 52 sphere docked on that bar (never a lozenge / pill). | **Allowed — only here.** Click the docked sphere to collapse to that same sphere. Click the rest sphere to expand back to full bar + sphere. Drag the rest sphere moves. Position is the existing Bar-minimize rest (not a wanderer). Layout stays `bar`. |
 
 Visibility must match the bar. Uniform. No leftover floating orb.
 
@@ -47,64 +110,65 @@ overlayShowsBarOrb(layout, minimized) === (layout === 'bar' && minimized)
 
 ## Shape (HARD — fail the round if violated)
 
-A **fixed circle**. Same width and height, always.
+A **fixed sphere**. Same width and height, always. See Materials above.
 
-- `BAR_PILL_WIDTH_PX === BAR_PILL_HEIGHT_PX === BAR_PILL_SIZE_PX` (Fit Studio rest is **52**)
+- `BAR_PILL_WIDTH_PX === BAR_PILL_HEIGHT_PX === BAR_PILL_SIZE_PX` (**52**)
 - Aspect ratio is **1** on every mood.
 - Bounding box is **constant** across idle, thinking, factcheck, connecting, hover, listen, drag.
 - Never a potato. Never a stadium. Never a squashed capsule. Never flatten.
-- Never change size. Not on idle, hover, listen, drag, or click-to-expand (the **Bar** expands; the circle itself does not squash or scale into a lozenge).
-- It does not wander. Position is the existing Bar-minimize rest. No bounce / travel animation (lack of that is fine).
-- Inside that fixed circle, things **may** change: particles, robot/face, color. That interior motion is the product.
+- Never change size. Not on idle, hover, listen, drag, or click-to-expand (the **Bar** expands; the sphere itself does not squash).
+- It does not wander. Position is the existing Bar-minimize rest.
+- Inside that fixed sphere, the glass, core, and constellation may move.
 
-CSS: square box, `border-radius: 50%`, transparent around the particles. No dark fill. No scrollbar.
+CSS: square box, `border-radius: 50%`, `background: transparent`. No dark fill. No scrollbar. No radial body.
 
 ## Color language (product, not decoration)
 
-Tight palette. Do not invent a rainbow. Color is the **only** chrome change. No size change with state. Rec-dot stays the red recording mark elsewhere; do not paint this sphere red.
+Tight palette. Color tints the volume. No size change with state.
 
 | Mood | Hex family | When |
 | --- | --- | --- |
 | `idle` | Mantu purple `#7F00DA` | Standard. Rest. Default. |
-| `factcheck` | Grounded blue / `#4ca8e8` Jarvis cyan | Fact-check / Brain retrieval / cited answer in progress. Tony named this. |
-| `connecting` | Deep indigo `#2a0a4a` mix, not a new shape | Connecting (OAuth/MCP handshake). |
-| `thinking` | Soft violet brighter (`#9A2BF0` family), same circle, higher energy | Thinking / ask in progress (orb language, not a spinner). |
+| `factcheck` | Grounded blue `#4CA8E8` | Fact-check / cited answer in progress. |
+| `connecting` | Deep indigo `#2A0A4A` | Connecting (OAuth/MCP handshake). Still glass, not a black hole. |
+| `thinking` | Brighter violet `#9A2BF0` | Thinking / ask in progress. |
 
-API (one map, default idle purple):
+Listen is not a fill. Rec-dot stays `#F0717A` on the glass.
 
 ```
 orbMood: 'idle' | 'thinking' | 'factcheck' | 'connecting'
+listening?: boolean
 ```
 
-Wire from existing Métis signals if they are already on the Bar (ask streaming, fact-check kind, MCP handshake). If a signal is not on the Bar yet, keep the map and default `idle`. Do not build a fake fact-check product. Do not block on Brain work.
+Wire from existing Bar signals (ask streaming, fact-check kind, listen chrome). If connecting is not on the Bar yet, keep the map and default `idle`. Do not build a fake product.
 
 Priority: `connecting` > `factcheck` > `thinking` > `idle`.
 
 ## Particle craft (look only)
 
-From `mysticalsin/tonys-jarvis` (`frontend/src/orb.ts` / transparent WebGL orb). Take the **look**. Do not port Jarvis voice, calendar, Docker, or the full-screen desktop overlay. Métis stays Métis.
+From Jarvis `frontend/src/orb.ts`. Take the **look**. Do not port Jarvis voice, calendar, Docker, or the full-screen overlay. Métis stays Métis.
 
 - ~2000 points on a **unit sphere** (no X-stretch, no Y-squash)
-- Additive blending
-- Connection lines between nearby points
-- Electrons on slow orbits
-- Idle breath + slow particle drift (uniform scale / lean — never squash)
-- Shader projects X and Y with the **same** NDC scale
+- Additive blending, connection lines, electrons
+- Idle breath + slow drift (uniform scale / lean — never squash)
+- Perspective: same X/Y scale, `1 / (1 - z * k)` so the cloud has depth
+- Glass body is a ray-sphere, not `length(vUv)` disc falloff
 
-The circle is transparent around the particles. No `unpkg` (or any CDN) at runtime in Electron. If WebGL is used, vendor or bundle the renderer. Do not load Three.js from the network.
+No `unpkg` / CDN. No Three.js from the network. Bundle the renderer.
 
 ## Behavior (Bar + minimized only)
 
 - **Drag** anywhere on the display uses the existing bar move (`useWindowDrag` + main `moveBy`). The window stays where the user left it (same in-session persistence as the full bar). Do not invent a new settings key.
 - **Click** (not drag) expands to the full bar. Existing minimize → circle and expand → bar stay the API; this slice restyles the rest.
 - `useWindowDrag` already swallows the trailing click of a real drag. Keep that. A click that never crossed the dead-zone expands. A drag does not.
-- **Interior motion (almost sentient):**
-  - Idle: purple breath + slow drift
+- **Interior motion (sentient):**
+  - Idle: purple glass, slow breath, slow drift
+  - Listen: denser pulse, rec-dot red on the glass
   - Thinking: brighter violet, denser interior (same box)
-  - Fact-check: cyan, same box
+  - Fact-check: blue glass, same box
   - Connecting: deep indigo, quieter breath, same box
-  - Hover: slight awareness (particles lean toward the pointer — lean, not squash)
-- **Reduced-motion:** one still but alive-looking **round** frame. No thrash. Must not throw if WebGL is missing.
+  - Hover: slight awareness (particles and kiss lean — lean, not squash)
+- **Reduced-motion:** one still **spherical** frame (glass + core + kiss + constellation). Not a disc. Must not throw if WebGL is missing.
 - **60fps / no jank:** one cheap WebGL rAF while the circle is mounted (docked on the idle bar, or alone when minimized). Cached GL locations. No layout reads in the frame loop. Hide/Island: **zero** orb rAF (`shouldRunOrbRaf` is false unless Bar). Setup is O(n), never an n² neighbor scan. Pause when `document.hidden`.
 - **Click / drag latency:** expand is synchronous. Hover lean skipped while dragging. No `getBoundingClientRect` on pointer-move.
 - **Spring** is for the **Bar** expanding (`--ease-spring: cubic-bezier(0.22, 1, 0.36, 1)`), not for turning the circle into a lozenge. This spring is Bar-circle only. Do not reuse or restyle Hide/Island overlay-spring, peek hover, or park timing.
@@ -131,5 +195,8 @@ The circle is transparent around the particles. No `unpkg` (or any CDN) at runti
 - Settings close onto Island/Hide force-parks (`shouldForceParkOnBecameIdle`).
 - Aspect ratio **1** on every mood. Bounding box constant across moods. Size is 52, never scale-on-appear.
 - Click expands; drag does not expand.
-- Reduced-motion does not throw.
+- Reduced-motion does not throw and still looks spherical (glass + core + kiss, not a disc).
 - Hide/Island do not run the orb rAF (`shouldRunOrbRaf`). Bar may.
+- Shader is a ray-sphere (not `length(vUv)` disc falloff). CSS body is transparent (no radial fill).
+- Rec-dot is red `#F0717A` on the sphere while listening; the sphere fill is never rec-dot red.
+- Circle stays 52×52 on every mood including listen.
