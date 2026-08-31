@@ -330,6 +330,12 @@ export function localModelRowStatus(
       detail: `This Mac needs at least ${model.minTotalRamGB} GB of memory for the on-device model.`
     }
   }
+  if (model.unavailableReason === 'insufficient-disk') {
+    return {
+      state: 'action',
+      detail: 'Not enough free disk space for the on-device model.'
+    }
+  }
   if (model.unavailableReason === 'downloading') {
     const pct = Math.round((model.downloadProgress ?? 0) * 100)
     return { state: 'action', detail: `Downloading ${pct}%`, progress: model.downloadProgress }
@@ -814,6 +820,11 @@ export function OnboardingExperience({
         models.find((m) => m.unavailableReason === 'downloading') ??
         models.find((m) => m.id === settings?.localLlm.modelId) ??
         models[0]
+      // Boot starts the fetch in whenReady; if that was skipped or not yet visible, kick it here so
+      // the mandatory tour does not sit on "Starting…" forever. Does not require Local AI enabled.
+      if (local?.unavailableReason === 'not-downloaded' || local?.unavailableReason === 'download-failed') {
+        void window.toto.localModelsEnsure().catch(() => {})
+      }
       const lm = localModelRowStatus(local)
       set('local', lm.state, lm.detail, lm.progress)
     })()
@@ -835,6 +846,9 @@ export function OnboardingExperience({
         models.find((m) => m.unavailableReason === 'downloading') ??
         models.find((m) => m.id === settings?.localLlm.modelId) ??
         models[0]
+      if (local?.unavailableReason === 'not-downloaded') {
+        void window.toto.localModelsEnsure().catch(() => {})
+      }
       const lm = localModelRowStatus(local)
       setRows((rs) =>
         rs.map((r) => {
@@ -1003,12 +1017,23 @@ export function OnboardingExperience({
                 <div className="min-w-0 flex-1">
                   <p className="m-0 truncate text-[13px] text-[color:var(--color-ink)]">{r.label}</p>
                   {r.detail && <p className="m-0 text-[11px] text-[color:var(--color-ink-3)]">{r.detail}</p>}
-                  {r.key === 'local' && r.progress != null && r.progress > 0 && r.progress < 1 && (
+                  {r.key === 'local' && r.progress != null && (
                     <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
                       <div
                         className="h-full rounded-full bg-[#9A2BF0]"
                         style={{ width: `${Math.round(r.progress * 100)}%` }}
                       />
+                    </div>
+                  )}
+                  {r.key === 'local' && r.state === 'action' && r.progress == null && (
+                    <div className="mt-1.5">
+                      <button
+                        type="button"
+                        onClick={() => void window.toto.localModelsEnsure().catch(() => {})}
+                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
+                      >
+                        Retry
+                      </button>
                     </div>
                   )}
                   {/* Why-before-prompt: shown before the button that triggers the OS dialog / deep link, not

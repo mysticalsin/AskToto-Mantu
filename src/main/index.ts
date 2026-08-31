@@ -4414,6 +4414,21 @@ function registerIpc(): void {
     assertMainWindow(e)
     return listLocalModels(localModelDownloadState())
   })
+  // Start/retry the first-run fetch without flipping Local AI (routing). Boot already calls
+  // ensureLocalModel; this is the onboarding/Settings path when that was skipped or failed, and the
+  // Retry control when huggingface.co / disk / pin refused the transfer.
+  ipcMain.handle(IPC.localModelsEnsure, (e) => {
+    assertMainWindow(e)
+    const best = bestModelForMachine()
+    const current = getSettings().localLlm.modelId
+    const target = shouldFetchWeights(current) ? current : best.id
+    // Always invoke: RAM/disk gates inside ensureLocalModel record a visible refusal. Returning
+    // ok:false here without calling it left Settings idle after Retry on a skipped fetch.
+    void ensureLocalModel(target)
+      .then(() => refreshScreenPreprocess())
+      .catch((err) => mainLog.warn('[localModels:ensure] provisioning failed:', err))
+    return { ok: true }
+  })
 
   // MQA-247: the high-accuracy transcription model. Same shape as the LLM weights above — paths stay in
   // main, the renderer learns only readiness, a status word and a fraction.
@@ -6372,6 +6387,11 @@ if (!app.requestSingleInstanceLock()) {
           warmLocalIfReady()
         })
         .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
+    } else {
+      // RAM gate kept — do not fetch. Still invoke so download state records the refusal; Settings
+      // must show "needs N GB RAM" + Retry, never a silent idle (Tony: disk/RAM skip looked like
+      // "doesn't even download").
+      void ensureLocalModel(best.id).catch((e) => mainLog.warn('[boot] local model refusal failed:', e))
     }
     setTimeout(warmLocalIfReady, 4000).unref?.()
   }
