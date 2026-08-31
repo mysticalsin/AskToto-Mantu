@@ -3296,7 +3296,7 @@ export function App(): JSX.Element {
               factcheck: ask.answer?.kind === 'factcheck' && !!ask.answer?.streaming,
               thinking: !!(ask.answer?.streaming || suggest.answer?.streaming)
             })}
-            // Tooltip only. Rec-dot stays elsewhere; do not paint this sphere red.
+            listening={showListeningChrome}
             degradedNote={listen.captureDegraded?.note ?? null}
             onExpand={unminimize}
           />

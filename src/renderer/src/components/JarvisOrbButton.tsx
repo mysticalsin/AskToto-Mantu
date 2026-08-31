@@ -9,12 +9,13 @@ import {
 } from '../lib/bar-pill-orb'
 
 /**
- * Fixed-size sentient circle (Fit Studio 52×52). Never a stadium pill.
+ * Fixed-size sentient 52 glass sphere. Never a stadium pill.
  * Docked on the idle Bar (click minimizes) or alone when minimized (click expands).
  */
 export function JarvisOrbButton({
   onActivate,
   orbMood = 'idle',
+  listening = false,
   title,
   ariaLabel,
   enableDrag = false,
@@ -22,6 +23,7 @@ export function JarvisOrbButton({
 }: {
   onActivate: () => void
   orbMood?: OrbMood
+  listening?: boolean
   title: string
   ariaLabel: string
   enableDrag?: boolean
@@ -45,7 +47,7 @@ export function JarvisOrbButton({
       typeof window !== 'undefined' &&
       typeof window.matchMedia === 'function' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    const orb = mountBarPillOrb(canvas, { mood: orbMood, reducedMotion: reduced })
+    const orb = mountBarPillOrb(canvas, { mood: orbMood, listening, reducedMotion: reduced })
     orbRef.current = orb
     return () => {
       orb.destroy()
@@ -58,6 +60,10 @@ export function JarvisOrbButton({
   useEffect(() => {
     orbRef.current?.setMood(orbMood)
   }, [orbMood])
+
+  useEffect(() => {
+    orbRef.current?.setListening(listening)
+  }, [listening])
 
   const onPointerMove = (e: React.PointerEvent<HTMLButtonElement>): void => {
     if (dragMovedRef.current) return
@@ -73,6 +79,7 @@ export function JarvisOrbButton({
       data-hug-width={hugWidth || undefined}
       data-bar-pill-orb
       data-orb-mood={orbMood}
+      data-orb-listening={listening || undefined}
       title={title}
       aria-label={ariaLabel}
       onPointerDown={(e) => {
@@ -94,6 +101,7 @@ export function JarvisOrbButton({
         height={BAR_PILL_SIZE_PX * 2}
         aria-hidden="true"
       />
+      {listening ? <span className="aw-orb__rec rec-dot" data-orb-rec aria-hidden="true" /> : null}
     </button>
   )
 }
