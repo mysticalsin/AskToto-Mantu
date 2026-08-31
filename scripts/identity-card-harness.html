@@ -103,6 +103,28 @@
         box-shadow: inset 0 0 0 1px rgba(179, 136, 240, 0.5);
       }
       .row { display: flex; gap: 10px; margin-top: 22px; }
+      .license-panel {
+        width: 360px;
+        margin-top: 18px;
+        padding: 16px;
+        border-radius: 12px;
+        background: #291050;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+      }
+      .license-title { font: 600 13px var(--font-ui); }
+      .license-copy { margin: 8px 0 12px; font-size: 12px; color: var(--cl-muted-foreground); }
+      .license-label { display: block; font-size: 11px; color: var(--cl-muted-foreground); margin-bottom: 6px; }
+      #key {
+        width: 100%;
+        border: 1px solid rgba(255,255,255,0.14);
+        background: rgba(255,255,255,0.04);
+        color: #fff;
+        border-radius: 10px;
+        padding: 10px 12px;
+        font: 13px var(--font-body);
+      }
+      .activate { width: 100%; margin-top: 10px; }
+      .license-note { margin: 10px 0 0; font-size: 11px; color: #b388f0; }
       button {
         border: 0;
         border-radius: 10px;
@@ -125,8 +147,8 @@
           <div class="number"><span class="no">Nº</span><span class="num">pending</span></div>
           <div class="meta">
             <div class="eyebrow">This device</div>
-            <div class="device">This device</div>
-            <div class="serial"><span class="k">Install ID</span><span>···A1B2</span></div>
+            <div class="device">MacBook Pro</div>
+            <div class="serial"><span class="k">Serial</span><span>C02X · 1841 · KQ8L</span></div>
             <div class="date">Installed 19 Mar 2026</div>
           </div>
         </div>
@@ -138,6 +160,14 @@
         <div class="rim"></div>
       </div>
     </div>
+    <section class="license-panel" id="license-panel">
+      <div class="license-title">License</div>
+      <p class="license-copy">Activation is not open yet. A key you enter is checked, then returned unused.</p>
+      <label class="license-label" for="key">License key</label>
+      <input id="key" type="password" placeholder="Paste the license key you were given" value="" />
+      <button type="button" id="activate" class="activate">Activate</button>
+      <p class="license-note" id="activate-note" hidden>Activation is not open yet. Métis checked the key and did not apply it.</p>
+    </section>
     <div class="row">
       <button type="button" id="front">Front</button>
       <button type="button" id="back">Back</button>
@@ -156,9 +186,13 @@
       }
       document.getElementById('tilt').onclick = () => {
         pass.dataset.face = 'tilt'
-        pass.style.transform = 'rotateX(-7deg) rotateY(11deg)'
+        pass.style.transform = 'rotateX(-14deg) rotateY(22deg)'
         sheen.style.background =
-          'radial-gradient(120% 80% at 78% 22%, rgba(255,255,255,0.22), rgba(166,77,255,0.10) 36%, transparent 62%)'
+          'radial-gradient(120% 80% at 82% 18%, rgba(255,255,255,0.28), rgba(166,77,255,0.12) 34%, transparent 60%)'
+      }
+      document.getElementById('activate').onclick = () => {
+        document.getElementById('key').value = 'ATK-NOT-FOR-SALE'
+        document.getElementById('activate-note').hidden = false
       }
     </script>
   </body>

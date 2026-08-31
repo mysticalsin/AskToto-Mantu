@@ -135,12 +135,14 @@ export function defaultDeviceName(platform: NodeJS.Platform = process.platform):
 export function resolveDeviceIdentity(installId: string, platform: NodeJS.Platform = process.platform): DeviceIdentity {
   const hw = readHardwareIdentity(platform)
   const hardware = isUsableSerial(hw.serial)
+  const host = defaultDeviceName(platform)
   return {
     platform,
     serialKind: hardware ? 'hardware' : 'install',
     stableId: hardware ? clean(hw.serial) : installId,
     model: hw.model,
-    deviceName: hw.model || defaultDeviceName(platform)
+    // Hostname first (what the person named the machine). Model is the subtitle path.
+    deviceName: host
   }
 }
 
