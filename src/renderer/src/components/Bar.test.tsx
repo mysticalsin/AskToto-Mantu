@@ -48,19 +48,36 @@ describe('Bar minimize-to-circle is layout-gated', () => {
     const html = renderToStaticMarkup(<Bar {...props({ canMinimize: overlayAllowsMinimize('bar') })} />)
     expect(html).toContain('data-bar-pill-orb')
     expect(html).toContain('data-orb-state="solving"')
+    expect(html).toContain('data-orb-visible="51"')
     expect(orbHostPaintsText(html)).toBe(false)
     expect(html).not.toContain('Solving…')
   })
 
-  it('uses the listening thinking-orb on the docked 64 circle, not a second red disc', () => {
+  it('uses the listening thinking-orb on the docked visible circle, not a second red disc', () => {
     const html = renderToStaticMarkup(
       <Bar {...props({ canMinimize: overlayAllowsMinimize('bar'), listening: true })} />
     )
     expect(html).toContain('data-bar-pill-orb')
     expect(html).toContain('data-orb-listening')
     expect(html).toContain('data-orb-state="listening"')
+    expect(html).toContain('data-orb-visible="51"')
     expect(html).not.toContain('aw-orb__rec')
     expect(html).not.toContain('data-orb-mood="connecting"')
+  })
+
+  it('keeps the left Settings M a locked circle when Listen starts', () => {
+    const idle = renderToStaticMarkup(<Bar {...props()} />)
+    const listen = renderToStaticMarkup(<Bar {...props({ listening: true })} />)
+    for (const html of [idle, listen]) {
+      expect(html).toContain('data-bar-mark')
+      expect(html).toContain('aw-bar-mark')
+      expect(html).toContain('aw-bar-mark__disk')
+      expect(html).toContain('rounded-full')
+      expect(html).toMatch(/aria-label="Settings"/)
+    }
+    expect(listen).toContain('w-[100px]')
+    expect(listen).toContain('data-bar-mark')
+    expect(listen).not.toMatch(/data-bar-mark[\s\S]{0,500}rounded-\[10px\]/)
   })
 })
 
