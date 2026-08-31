@@ -121,3 +121,7 @@ Each built-in mode (`BUILTIN_MODE_LABELS`: general, meeting, sales, interview, r
 ## Copy
 
 Métis voice. Do not clone Vibe Island strings.
+
+## Operator
+
+Cloudflare Access control plane plus client prompt cache: `docs/design/OPERATOR.md`. Not overlay chrome. Not the Fly license-server.
