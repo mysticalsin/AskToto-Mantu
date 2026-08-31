@@ -1,7 +1,7 @@
 ---
 project: Métis
 type: overlay-quality-hats
-applies: Bar minimized sentient circle
+applies: Bar minimized thinking-orb circle
 ship-bar: would Apple ship this overlay?
 ---
 
@@ -21,54 +21,52 @@ Every hat must **PASS**. One **REJECT** fails the slice. This is the gate for th
 
 ## Motion
 
-Fluid 60fps. Sentient, not a spinning demo blob.
+Fluid 60fps. Jakub thinking-orb, not a spinning demo blob.
 
-- Idle breath of the glass core (not a rigid mesh, not a particle cloud).
-- Listening: denser / pulse + red rec-dot on the glass. Hover: lean. Reduced-motion: one still **spherical** frame (glass + core + kiss), not a disc.
+- Idle is `breathing` (calm ring). Listening is `listening` (waveform). Thinking is `working`. Reduced-motion: package static frame.
 - Spring expand/collapse (`--ease-spring`). No snap.
-- rAF does **not** read layout (`clientWidth`, `getBoundingClientRect`) or look up GL locations.
+- No custom WebGL loop. No layout reads (`clientWidth`, `getBoundingClientRect`) in a frame loop we own.
 
-**REJECT if** the orb is a single radial blob / flat CSS disc, or the frame loop does layout / `getUniformLocation`.
+**REJECT if** the orb is a Fit Studio magenta core, a WebGL marble, a single radial blob, or a particle constellation we invented.
 
 ## Interaction
 
 Insanely low latency on click and drag.
 
 - Expand is synchronous. No await, no layout read, no rAF work on the click path.
-- Drag uses existing `useWindowDrag` + `moveBy`. Hover lean is skipped while dragging.
+- Drag uses existing `useWindowDrag` + `moveBy`. Dragging does not squash the orb.
 - Pointer-move does not call `getBoundingClientRect`.
 
-**REJECT if** click or drag waits on measure, or hover math runs during a drag.
+**REJECT if** click or drag waits on measure, or the circle flattens while dragging.
 
 ## Performance
 
-- Orb rAF runs only while a Bar circle is mounted and should animate (docked idle or minimized rest).
+- Package clock runs only while a Bar circle is mounted (docked idle or minimized rest).
 - Hide/Island: **zero** orb rAF (`shouldRunOrbRaf` is false).
-- Setup is one quad. No particle buffers. No O(n²) neighbor scan.
-- `document.hidden` pauses the loop. `destroy` cancels rAF.
-- No unpkg / CDN Three.js. No Spline runtime.
+- Setup is the package 2D canvas. No WebGL program. No particle buffers we own. No O(n²) neighbor scan.
+- `document.hidden` pauses (package). Unmount cleans up.
+- No unpkg / CDN Three.js. No Spline runtime. No cloned thinking-orbs strings.
 
-**REJECT if** Hide or Island can start the orb loop, or first minimize hitches on a particle setup.
+**REJECT if** Hide or Island can start the orb loop, or first minimize hitches on a WebGL setup.
 
 ## Visual
 
-Apple-grade. Quiet luxury. Transparent edges. Fixed circle.
+Apple-grade. Quiet luxury. Light dots on dark glass. Fixed circle.
 
-- Same width and height (`BAR_PILL_SIZE_PX`). Aspect 1 on every mood. Bounding box constant.
-- Never a stadium, potato, or squashed capsule. Shader uses the same scale for X and Y.
-- Idle is Fit Studio purple-magenta glass (`#b266e9` / `#e15cff` / `#8a00f8`), not Jarvis `#4CA8E8`. Thinking is hotter `#e15cff`. Fact-check may use a calm blue accent `#5AB8F0`. Connecting is dimmer purple `#8a00f8`, never indigo `#2A0A4A`. Color tints the volume; the box never changes.
-- No constellation. No electron chords. No glitter ball.
-- Glow core: ray-sphere body, luminous magenta-violet core, indigo bloom, one specular kiss. Not shards. Not a 2D radial disc. Not a particle cloud.
-- Rec-dot stays red and readable on the sphere while listening. Do not paint the sphere red.
-- No glass chip of mic buttons. No dark fill.
-- Transparent around the circle. No scrollbar. No CSS radial body.
+- Same width and height (`BAR_PILL_SIZE_PX` 64). Aspect 1 on every mood. Bounding box constant.
+- Never a stadium, potato, or squashed capsule.
+- Idle is `breathing`, theme `dark`. Not Fit Studio `#b266e9`. Not Jarvis `#4CA8E8`.
+- No constellation we invented. No electron chords. No glitter ball. No magenta core.
+- No rec-dot on this circle. Listen is the `listening` state.
+- No glass chip of mic buttons. No lozenge fill.
+- Transparent circular host. The Bar is the Métis glass. No scrollbar. No CSS radial Fit Studio body. No filled disc behind the breathing ring.
 
-**REJECT if** rest is a filled chip, a flat radial disc, an opaque oval, or any flatten of the circle.
+**REJECT if** rest is a filled lozenge, a flat radial disc, an opaque oval, a WebGL marble, or any flatten of the circle.
 
 ## Stability
 
-- Missing WebGL must not throw.
-- One context per canvas (do not grab WebGL then 2D).
-- Visibility + destroy clean up listeners and rAF.
+- Missing canvas must not throw.
+- Reduced-motion is the package static frame.
+- Visibility + unmount clean up.
 
 **REJECT if** reduced-motion or a headless canvas throws.

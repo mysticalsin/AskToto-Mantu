@@ -2,81 +2,95 @@
 project: Métis
 type: overlay-slice-contract
 slice: bar-pill
-owns: Bar layout + minimized sentient circle only
-does-not-own: hide park 8×2 paint, island peek 132×15 paint, BAR_MIN_HEIGHT, onboarding, starfield, thinking-orbs, ASR, identity
+owns: Bar layout + minimized thinking-orb circle only
+does-not-own: hide park 8×2 paint, island peek 132×15 paint, BAR_MIN_HEIGHT, onboarding, starfield, AgentStatus captions, ASR, identity
 owns-also: Bar idle docked circle; Hide/Island must not minimize
 notes: Island/Hide hover hit is the camera / Dynamic Island square (DESIGN.md + island/geometry). A 560-wide or 44-tall slab is a bug.
 ---
 
-# Bar sphere: sentient 52 glass
+# Bar sphere: Jakub thinking-orb
 
 This file is the contract for one slice. Implement only what it names. Hide and Island overlay chrome stay exactly as they are.
 
 ## Consultant (feel)
 
-The Bar control is a **being**, not a badge. At 52px it must read as a glass sphere with mass: a highlight that says "I am round," a core that breathes, interior motion that is not the shell. Tony looks at it and it looks back.
+The Bar control is a **being** Tony can drag while using apps, not a badge and not a WebGL marble. At rest it is Jakub Antalik's `breathing` orb: a calm dotted ring that is always on. It lives on the Métis glass Bar (Settings overlay Bar) and as the minimized circle. Same circle both places.
 
-Reference (feel only, not a clone):
-- **Fit Studio glow core** ([amaris-fit-studio.pages.dev](https://amaris-fit-studio.pages.dev/)): the volumetric purple-magenta energy **behind** the black MANTU robot. The large scene has jagged shards and a distant constellation. At 52px the Bar control is that **glow core only**: soft volumetric glass, magenta-violet, bloom, one specular. Do not port the shards. Do not port the large-scene particle web.
-- Fit Studio fallback recipe (feel, not a string clone): `--grad: linear-gradient(100deg, #e15cff 0%, #b266e9 46%, #8a00f8 100%)`, accent `#b266e9` / `#8a00f8`, specular `radial-gradient(38% 38% at 36% 32%, white)`. Do not embed the Spline runtime.
+Reference (the real package, not a clone):
+- **thinking-orbs** ([orbs.jakubantalik.com](https://orbs.jakubantalik.com/), `thinking-orbs@0.3.1` MIT). Dotted 2D canvas. Monochrome. Nine states. Two tuned sizes (`20` inline, `64` avatar). No WebGL. No `ctx.filter`.
+- Idle on this control is `breathing` (calm face-on ring). Listen is `listening` (waveform in the rings). Think is `working` (tilted orbits). Connecting is `connecting`. Fact-check is `searching` (scan meridian; it reads at 64).
+- Theme is pinned `dark`: light dots on dark glass. The glass around the orb stays Métis chrome. The orb itself stays a circle.
 
-Tony rejected the particle constellation (glitter ball / fibonacci cloud / electron chords) and then rejected the quieter Jarvis-blue particle version. Idle is **not** `#4CA8E8`. A science viz is a fail.
+Tony rejected the Fit Studio glow-core WebGL marble (magenta volume, bloom, specular kiss) and the particle constellation (glitter ball / fibonacci cloud / electron chords). Idle is **not** `#4CA8E8` and **not** Fit Studio `#b266e9`. A science viz is a fail. A magenta core on this control is a fail.
 
-A flat CSS disc, a single radial fill, or a 2D glow quad is a fail. That is a status blob. This slice replaces that blob on the **existing** Bar orb (`bar-pill-orb` / `JarvisOrbButton`). Do not invent a second orb.
+A flat CSS disc, a single radial fill, or a 2D glow quad is a fail. That is a status blob. This slice replaces that blob on the **existing** Bar orb (`bar-pill-orb` / `JarvisOrbButton`). Do not invent a second orb. Do not rewrite Jakub's renderer. Do not copy their canvas strings.
 
 ## Craftsman (spec)
 
 ### Size (HARD)
 
-- `BAR_PILL_WIDTH_PX === BAR_PILL_HEIGHT_PX === BAR_PILL_SIZE_PX === 52`
+- `BAR_PILL_WIDTH_PX === BAR_PILL_HEIGHT_PX === BAR_PILL_SIZE_PX === 64`
+- 64 is the package **avatar** preset. Do not invent a third size. Do not pass 52. Do not scale 64 down to 52.
 - Aspect **1** on every mood. Bounding box constant.
 - Never a potato, stadium, lozenge, 44-tall pill, or flattened disc.
 - Never scale, squash, or stretch on hover, listen, drag, or minimize.
-- Minimize (Bar only) is **this** sphere. Not a different disc.
+- Minimize (Bar only) is **this** circle. Not a different disc.
 
-### Materials (layers, back to front)
+### Materials
 
-One WebGL canvas, 52×52 CSS, DPR capped at 2. Transparent around the sphere. No dark chip. No CSS radial body.
+The real `ThinkingOrb` from `thinking-orbs`. One 2D canvas, 64×64 CSS, theme `dark`, speed `1`. Transparent around the dots so idle reads as the playground hollow ring, not a filled disc.
 
-1. **Glow core** (ray-sphere, not a 2D disc). Camera on +Z. Equal X/Y scale. Radius fills ~0.90 of the box. Soft volumetric glass — the center holds, the edge blooms. Deep `#8a00f8` halo, mid `#b266e9`, hot `#e15cff` core. Not a painted marble. Not jagged shards.
-2. **Living core.** Brightest mass is the center (magenta-pink). Breath is uniform scale of intensity, never of the box. Soft internal light lives *inside* the volume, not as points.
-3. **Indigo bloom.** Soft violet haze just outside the hit, still inside the 52 box. Feathered. This is the glow, not a sticker ring.
-4. **Specular kiss.** One tight highlight, upper-left (`~36% 30%`, `light = normalize(-0.38, 0.52, 0.80)`). White, small. Not a looping sheen. Hover may lean the kiss a few degrees. Never squash the sphere to follow the pointer.
-5. **No shards. No constellation.** No star-flare spikes. No fibonacci point cloud. No electron chords. No glitter ball. The large-scene rays stay on Fit Studio.
-6. **Rec-dot (listen only).** Existing red `#F0717A` (`.rec-dot`). 7×7, bottom-right of the 52 box, inside the circle. Dark ring so it reads on purple glass. Do **not** paint the sphere red.
+1. **Package orb.** Dotted 2D canvas. Monochrome light ink. State from the map below. Do not wrap it in WebGL. Do not add a magenta core, bloom, or specular kiss. Do not clip the canvas with `border-radius`.
+2. **Circular host.** Square box, `border-radius: 50%`, `background: transparent`. The Bar is the Métis glass. Never a lozenge. Dragging does not squash the orb.
+3. **No rec-dot on this circle.** Listen is the `listening` state (waveform in the rings). A second red disc fights that state. The Bar Listen control may keep its own rec-dot; this circle does not.
+4. **No Fit Studio.** No `#b266e9` / `#e15cff` / `#8a00f8` core on this control. Product chrome elsewhere may still use `#7F00DA`.
 
-Reduced-motion: paint one still frame of layers 1–4 (and 6 if listening). The still frame must still look spherical: core, bloom, kiss. A flat disc at t=0 is a fail. Missing WebGL falls back to a 2D **shaded glow core** (volume + kiss + bloom, Fit Studio stops), never a single radial blob and never a point cloud.
+Reduced-motion: package static representative frame. Must not throw if canvas is missing. Do not invent a CSS fallback disc.
 
-### Motion
+### Motion / state map
 
-| State | Volume | Interior | Color |
-| --- | --- | --- | --- |
-| **idle** | Slow breath (~1.3 Hz, amp 0.018) | Soft core, no particles | Fit Studio `#b266e9` (hot `#e15cff`, deep `#8a00f8`) |
-| **listen** | Slightly denser pulse | Same glass | Idle purple glass. Rec-dot red on the glass. |
-| **think** | Faster breath (~2.2 Hz) | Hotter core, still glass | `#e15cff` family |
-| **fact-check** | Steady | Same glass | Calm blue accent `#5AB8F0` (fact-check only) |
-| **connecting** | Quiet | Dimmer core | Dimmer purple `#8a00f8` (not indigo `#2A0A4A`) |
+Product mood stays `orbMood: 'idle' | 'thinking' | 'factcheck' | 'connecting'` plus `listening?: boolean`. The package state is derived. Do not ask. Do not invent a fifth mood.
 
-`orbMood: 'idle' | 'thinking' | 'factcheck' | 'connecting'`. Listen is `listening: true` on the same handle (motion + rec-dot), not a fifth fill. Priority for fill: `connecting` > `factcheck` > `thinking` > `idle`.
+| Product | Package state | Feel |
+| --- | --- | --- |
+| **idle** (resting pill you drag) | `breathing` | Calm ring, always-on, movable chrome |
+| **listen** / capturing | `listening` | Waveform in the rings |
+| **thinking** / agent busy | `working` | Tilted orbits |
+| **connecting** | `connecting` | Constellation wiring |
+| **fact-check** | `searching` | Scan meridian; reads at 64 |
 
-Hover: lean (kiss + volume), not squash. Drag: skip lean. `document.hidden`: pause rAF. Hide/Island: zero orb rAF.
+Priority for the package state: `connecting` > `listening` > `factcheck` > `thinking` > `idle`.
+
+```
+resolveBarOrbState({ mood, listening })
+  connecting → connecting
+  listening  → listening
+  factcheck  → searching
+  thinking   → working
+  idle       → breathing
+```
+
+If connecting is not on the Bar yet, keep the map and default `idle` → `breathing`. Do not build a fake product.
+
+Hover: no squash, no lean that warps the circle. Drag: same circle, existing `useWindowDrag`. `document.hidden`: package pauses. Hide/Island: do not mount the orb (`shouldRunOrbRaf` is false unless Bar).
 
 ### Do
 
-- Idle on this sphere is Fit Studio purple-magenta glass (`#b266e9` / `#e15cff` / `#8a00f8`). Not Jarvis `#4CA8E8`. Product chrome elsewhere may still use `#7F00DA`; idle on this control is the Fit Studio accent, not that fill hex.
-- Same sphere docked on the idle Bar and alone when minimized.
-- Windows: same sphere, top-center Bar. No notch, no Mac-only look.
-- Rec-dot stays red and readable.
-- Compositor-cheap: cached GL locations, no layout reads in the frame loop, setup is constant-time (one quad).
+- Idle on this circle is `breathing`, theme `dark`, size 64. Light dots on dark glass.
+- Same circle docked on the idle Bar and alone when minimized.
+- Windows: same circle, top-center Bar. No notch, no Mac-only look.
+- Use the real package (`import { ThinkingOrb } from 'thinking-orbs'`). Vite bundles it. No unpkg. No CDN.
+- Compositor-cheap: package 2D canvas. First frame via existing `paintOrbFirstFrame` (package `MODE_DRAWS` / `resolvePreset`). No layout reads in a custom frame loop.
 
 ### Do not
 
 - Flatten on hover or minimize.
-- CSS `radial-gradient` as the body (that is the old disc). The WebGL / 2D fallback may shade a sphere; the CSS box stays transparent.
-- Particle constellation, fibonacci cloud, electron chords, glitter ball.
+- CSS `radial-gradient` as the body. WebGL marble. Fit Studio magenta core. Specular kiss on this control.
+- Particle constellation we invented, fibonacci cloud, electron chords, glitter ball.
 - Rainbow foil, emoji, a second orb.
-- Paint the sphere rec-dot red.
-- Embed Spline. Clone Fit Studio copy or chrome. Port Jarvis voice, calendar, or Three.js from a CDN.
+- Rec-dot on this circle (the `listening` state is the affordance).
+- Clone thinking-orbs strings or rewrite their renderer.
+- Embed Spline. Port Jarvis voice, calendar, or Three.js from a CDN.
 - Touch Island/Hide hit geometry (`src/main/island/geometry.ts` hit rects, `hoverRestWidth`, Teams-mute tests) except to keep them green.
 - Onboarding, Local LLM, Brain MCP, installers.
 
@@ -88,7 +102,7 @@ Overlay chrome has three layouts. Minimize-to-circle is not a fourth layout and 
 | --- | --- | --- |
 | **Hide** | Hover-to-reveal hairline (8×2 park). Reveal only from the hardware camera / Dynamic Island square, not a 560×44 menu-bar slab. The bar is **invisible** at rest. | **Forbidden.** The circle is invisible at rest too. Hide the minimize control. `minimize(true)` is a **no-op**. Do not park an orb while Hide is idle. Do not float a sphere in the notch. On hover the bar reveals; never a Hide circle. |
 | **Island** | The small visible island (132×15) is already the rest. Hover the camera square at the top center. Left/right menu-bar items and Teams mute / camera / share must never reveal Métis. | **Forbidden.** Do not add a second circle. Island stays the island. Same as Hide: no control, ignore minimize, no layout jump. |
-| **Bar** | The classic bar stays on screen **plus** the sentient 52 sphere docked on that bar (never a lozenge / pill). | **Allowed — only here.** Click the docked sphere to collapse to that same sphere. Click the rest sphere to expand back to full bar + sphere. Drag the rest sphere moves. Position is the existing Bar-minimize rest (not a wanderer). Layout stays `bar`. |
+| **Bar** | The classic bar stays on screen **plus** the thinking-orb circle docked on that bar (never a lozenge / pill). | **Allowed — only here.** Click the docked circle to collapse to that same circle. Click the rest circle to expand back to full bar + circle. Drag the rest circle moves. Position is the existing Bar-minimize rest (not a wanderer). Layout stays `bar`. |
 
 Visibility must match the bar. Uniform. No leftover floating orb.
 
@@ -113,30 +127,30 @@ overlayShowsBarOrb(layout, minimized) === (layout === 'bar' && minimized)
 
 ## Shape (HARD — fail the round if violated)
 
-A **fixed sphere**. Same width and height, always. See Materials above.
+A **fixed circle**. Same width and height, always.
 
-- `BAR_PILL_WIDTH_PX === BAR_PILL_HEIGHT_PX === BAR_PILL_SIZE_PX` (**52**)
+- `BAR_PILL_WIDTH_PX === BAR_PILL_HEIGHT_PX === BAR_PILL_SIZE_PX` (**64**)
 - Aspect ratio is **1** on every mood.
 - Bounding box is **constant** across idle, thinking, factcheck, connecting, hover, listen, drag.
 - Never a potato. Never a stadium. Never a squashed capsule. Never flatten.
-- Never change size. Not on idle, hover, listen, drag, or click-to-expand (the **Bar** expands; the sphere itself does not squash).
+- Never change size. Not on idle, hover, listen, drag, or click-to-expand (the **Bar** expands; the circle itself does not squash).
 - It does not wander. Position is the existing Bar-minimize rest.
-- Inside that fixed sphere, the glass and core may breathe. The box does not.
+- Inside that fixed circle, the package dots may breathe. The box does not.
 
-CSS: square box, `border-radius: 50%`, `background: transparent`. No dark fill. No scrollbar. No radial body.
+CSS: square box, `border-radius: 50%`. Dark glass chrome, not a lozenge. No scrollbar. No radial Fit Studio body.
 
 ## Color language (product, not decoration)
 
-Tight palette. Color tints the volume. No size change with state.
+Monochrome thinking-orb. Theme `dark`. Color does not retint the dots. State changes the animation, not the box.
 
-| Mood | Hex family | When |
+| Mood | Package state | When |
 | --- | --- | --- |
-| `idle` | Fit Studio `#b266e9` / `#e15cff` / `#8a00f8` | Standard. Rest. Default. Tony locked this from the Fit Studio sphere. |
-| `factcheck` | Calm blue `#5AB8F0` | Fact-check / cited answer. The only mood that may leave the purple family. |
-| `connecting` | Dimmer purple `#8a00f8` | Connecting handshake. Still glass. Not indigo `#2A0A4A`. |
-| `thinking` | Hot magenta `#e15cff` | Thinking / ask in progress. Hotter core, no traveling dots. |
+| `idle` | `breathing` | Standard. Rest. Default. Tony locked this as the movable chrome. |
+| `factcheck` | `searching` | Fact-check / cited answer. |
+| `connecting` | `connecting` | Connecting handshake. |
+| `thinking` | `working` | Thinking / ask in progress. |
 
-Listen is not a fill. Rec-dot stays `#F0717A` on the glass.
+Listen is not a fill. It is `listening` on the same handle.
 
 ```
 orbMood: 'idle' | 'thinking' | 'factcheck' | 'connecting'
@@ -145,34 +159,34 @@ listening?: boolean
 
 Wire from existing Bar signals (ask streaming, fact-check kind, listen chrome). If connecting is not on the Bar yet, keep the map and default `idle`. Do not build a fake product.
 
-Priority: `connecting` > `factcheck` > `thinking` > `idle`.
+Priority: `connecting` > `listening` > `factcheck` > `thinking` > `idle`.
 
 ## Glass craft (look only)
 
-From Fit Studio's sphere (Spline + `.orb-lite` fallback). Take the **look**. Do not embed Spline. Do not port Fit Studio copy or chrome. Métis stays Métis.
+From Jakub's playground at size 64, states `breathing` / `listening` / `working`. Take the **look**. Use the package. Do not clone strings.
 
-- Ray-sphere glow core, not `length(vUv)` disc falloff
-- Luminous magenta-violet core + indigo bloom + one specular kiss
-- Equal X/Y scale so the volume stays a sphere
-- Zero shards. Zero particle constellation. Zero electron chords.
+- Dotted 2D canvas, monochrome light ink, dark theme
+- Circle host of Métis glass
+- Equal width and height so the orb stays a circle
+- Zero WebGL glitter. Zero Fit Studio magenta core. Zero invented constellation.
 
-No `unpkg` / CDN. No Three.js from the network. Bundle the renderer.
+No `unpkg` / CDN. Bundle the package.
 
 ## Behavior (Bar + minimized only)
 
-- **Drag** anywhere on the display uses the existing bar move (`useWindowDrag` + main `moveBy`). The window stays where the user left it (same in-session persistence as the full bar). Do not invent a new settings key.
+- **Drag** anywhere on the display uses the existing bar move (`useWindowDrag` + main `moveBy`). The window stays where the user left it (same in-session persistence as the full bar). Do not invent a new settings key. Dragging does not squash the orb.
 - **Click** (not drag) expands to the full bar. Existing minimize → circle and expand → bar stay the API; this slice restyles the rest.
 - `useWindowDrag` already swallows the trailing click of a real drag. Keep that. A click that never crossed the dead-zone expands. A drag does not.
-- **Interior motion (sentient):**
-  - Idle: calm purple-magenta glass, breathing core, no particles
-  - Listen: idle purple glass, rec-dot red on the glass
-  - Thinking: hotter magenta `#e15cff`, faster breath, still a volume
-  - Fact-check: calm blue accent, same box
-  - Connecting: dimmer purple, quieter breath, same box
-  - Hover: slight awareness (kiss leans — lean, not squash)
-- **Reduced-motion:** one still **spherical** frame (core + bloom + kiss). Not a disc. Must not throw if WebGL is missing.
-- **60fps / no jank:** one cheap WebGL rAF while the circle is mounted (docked on the idle bar, or alone when minimized). Cached GL locations. No layout reads in the frame loop. Hide/Island: **zero** orb rAF (`shouldRunOrbRaf` is false unless Bar). Setup is one quad. Pause when `document.hidden`.
-- **Click / drag latency:** expand is synchronous. Hover lean skipped while dragging. No `getBoundingClientRect` on pointer-move.
+- **Interior motion (package):**
+  - Idle: `breathing`
+  - Listen: `listening`
+  - Thinking: `working`
+  - Fact-check: `searching`
+  - Connecting: `connecting`
+  - Hover: no squash
+- **Reduced-motion:** package static frame. Must not throw if canvas is missing.
+- **60fps / no jank:** package shared clock while the circle is mounted (docked on the idle bar, or alone when minimized). No custom WebGL loop. No layout reads in a frame loop. Hide/Island: **zero** orb rAF (`shouldRunOrbRaf` is false unless Bar). Pause when `document.hidden` (package).
+- **Click / drag latency:** expand is synchronous. No `getBoundingClientRect` on pointer-move.
 - **Spring** is for the **Bar** expanding (`--ease-spring: cubic-bezier(0.22, 1, 0.36, 1)`), not for turning the circle into a lozenge. This spring is Bar-circle only. Do not reuse or restyle Hide/Island overlay-spring, peek hover, or park timing.
 - Hide layout and Island layout must not grow a minimize control or a second disk. Hover hit is the camera island square only (DESIGN.md). Hide 8×2 paint and Island 132×15 paint stay.
 - Quality hats: `docs/design/QUALITY.md`. One REJECT fails the slice.
@@ -182,7 +196,7 @@ No `unpkg` / CDN. No Three.js from the network. Bundle the renderer.
 - Hide park `8×2` **paint** / `.overlay-hide-target` (hover **sensor** height is in scope if a leftover pad remains)
 - Island peek `132×15` **paint**
 - `BAR_MIN_HEIGHT` as hide floor
-- Onboarding, starfield, thinking-orbs, ASR, identity
+- Onboarding, starfield, AgentStatus caption map, ASR, identity
 - Packing, merging, Hide → Bar auto-switch
 
 ## Tests (required)
@@ -195,11 +209,11 @@ No `unpkg` / CDN. No Three.js from the network. Bundle the renderer.
 - Bar idle / expanded: circle **docked on the bar** (`overlayDocksBarCircle('bar')`), not a floating second disk and not a pill.
 - Hover hit is the camera island: width = `notchWidth` (~180–250, not 560), height = housing only (not 44). Left menu-bar misses. Y=40 and `TEAMS_MEETING_CHROME_Y` miss.
 - Settings close onto Island/Hide force-parks (`shouldForceParkOnBecameIdle`).
-- Aspect ratio **1** on every mood. Bounding box constant across moods. Size is 52, never scale-on-appear.
+- Aspect ratio **1** on every mood. Bounding box constant across moods. Size is 64, never scale-on-appear.
 - Click expands; drag does not expand.
-- Reduced-motion does not throw and still looks spherical (glass + core + kiss, not a disc).
+- Reduced-motion does not throw and still paints the package static frame (not a disc we invented).
 - Hide/Island do not run the orb rAF (`shouldRunOrbRaf`). Bar may.
-- Shader is a ray-sphere (not `length(vUv)` disc falloff). CSS body is transparent (no radial fill).
-- Rec-dot is red `#F0717A` on the sphere while listening; the sphere fill is never rec-dot red.
-- Circle stays 52×52 on every mood including listen.
-- Idle fill is Fit Studio purple-family glass (`#b266e9`), not Jarvis `#4CA8E8`, not a particle-cloud contract.
+- Renderer is `ThinkingOrb` / package 2D canvas. No WebGL sphere shader. CSS body is circular glass, not a Fit Studio radial fill.
+- No rec-dot on this circle. Listen maps to `listening`.
+- Circle stays 64×64 on every mood including listen.
+- Idle maps to `breathing`. Think maps to `working`. Fact-check maps to `searching`. Connecting maps to `connecting`. Theme is `dark`.

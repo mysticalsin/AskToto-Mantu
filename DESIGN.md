@@ -8,20 +8,20 @@ Three modes in Settings (persist, no reinstall). Default on a fresh install is *
 
 1. **hide** (default). Fully hidden until the pointer is on the hardware camera / Dynamic Island square (top-center, on top of the camera housing), then reveal down. Leave that island hides. Windows: top-center of the display, **no fake notch**.
 2. **island**. The always-visible peek capsule (may sit in the island / notch). Hover the same camera square expands down. Leave that island returns to the peek. Island must never minimize to a second disk.
-3. **bar**. Classic bar. Always visible. Idle rest is the **full bar plus the sentient sphere** (fixed 52×52, never a lozenge / pill / flattened disc). The only layout that can collapse to that same sphere. Hide and Island must never grow a minimize-to-circle control, and any minimize call while those layouts are active is a no-op (do not jump Hide → Bar). The sphere is invisible whenever the bar is invisible. Contract: `docs/design/BAR-PILL.md`.
+3. **bar**. Classic bar. Always visible. Idle rest is the **full bar plus the thinking-orb circle** (fixed 64×64, never a lozenge / pill / flattened disc). The only layout that can collapse to that same circle. Hide and Island must never grow a minimize-to-circle control, and any minimize call while those layouts are active is a no-op (do not jump Hide → Bar). The circle is invisible whenever the bar is invisible. Contract: `docs/design/BAR-PILL.md`.
 
-### Bar sphere (52, Bar only)
+### Bar sphere (64 thinking-orb, Bar only)
 
-The Bar control is a **glass volume**, not a status blob. Tony should feel a sphere looking back.
+The Bar control is Jakub Antalik's thinking-orb on Métis dark glass, not a WebGL marble and not a status blob. Tony drags it while using apps.
 
-- **Size.** `52×52` always. Aspect 1. Same box on idle, listen, think, fact-check, connecting, hover, and minimize. Never a 44-tall pill. Never flatten.
-- **Idle color (Tony override).** This control is Fit Studio purple-magenta glass, not Jarvis cyan. Idle / rest is `#b266e9` with hot `#e15cff` and deep `#8a00f8` (the sphere behind the robot on [amaris-fit-studio.pages.dev](https://amaris-fit-studio.pages.dev/)). Product chrome elsewhere may still use `#7F00DA`. This sphere does not use `#4CA8E8`.
-- **Materials.** Glow core only: soft volumetric glass, magenta-violet, bloom, one specular kiss (~36% 30%). Do not port Fit Studio's large-scene shards or particle web into 52px. No fibonacci cloud. Perspective ray-sphere, not a 2D radial fill. Reduced-motion still looks spherical (lit still frame, not a disc).
-- **Moods.** Idle `#b266e9`. Think hotter magenta `#e15cff` (faster breath, still glass). Fact-check may take a calm blue accent `#5AB8F0`. Connecting: dimmer purple `#8a00f8` (not indigo `#2A0A4A`). Listen: same idle glass, rec-dot stays **red** (`#F0717A`) on the glass. Priority: connecting > fact-check > think > idle.
-- **Same sphere.** Minimize (Bar only) is this sphere, not a second disc. Windows: same sphere, top-center, no Mac-only look.
+- **Size.** `64×64` always (package avatar preset). Aspect 1. Same box on idle, listen, think, fact-check, connecting, hover, and minimize. Never a 44-tall pill. Never flatten. Do not invent a third size.
+- **Idle.** `breathing` (sparse hollow dotted ring, always-on). Theme `dark`: light dots, transparent host. Not Fit Studio magenta. Not Jarvis `#4CA8E8`.
+- **Materials.** Real `thinking-orbs` 2D canvas. Monochrome. No WebGL glitter. No Fit Studio glow core / bloom / specular kiss on this control. No invented particle constellation. No filled disc behind the ring.
+- **Moods.** Idle `breathing`. Listen `listening` (waveform; no second red disc on this circle). Think `working`. Fact-check `searching`. Connecting `connecting`. Priority: connecting > listening > fact-check > think > idle.
+- **Same circle.** Minimize (Bar only) is this circle, not a second disc. Windows: same circle, top-center, no Mac-only look.
 - **Out of scope.** Island/Hide hit geometry (`src/main/island/geometry.ts`) is frozen. Hide stays 8×2. Island wakes only on the camera square.
 
-Do/don'ts, shader layers, and tests: `docs/design/BAR-PILL.md`. Quality hats: `docs/design/QUALITY.md`.
+Do/don'ts and tests: `docs/design/BAR-PILL.md`. Quality hats: `docs/design/QUALITY.md`.
 
 Settings shows these as **cards with a tiny desktop diagram**, not three text radios. Hide: empty top-middle, faint hover hint, caption "Hidden until you move to the top." Island: small capsule at the top-middle, caption "A small island stays visible. Hover opens it." Bar: full bar at the top **plus a circle**, caption "The bar stays on screen." Selected card is obvious. Changes apply immediately. Closing Settings after picking Island or Hide must park the live overlay (`shouldForceParkOnBecameIdle` + `collapse-now` + `parkAfterHide`) so the user sees the notch rest, not a leftover full bar. No reinstall. Original Métis copy. No em dash. No Vibe Island trademark strings.
 
