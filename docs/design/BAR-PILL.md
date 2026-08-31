@@ -29,11 +29,12 @@ A flat CSS disc, a single radial fill, or a 2D glow quad is a fail. That is a st
 
 ### Size (HARD)
 
-- Package canvas: `BAR_PILL_SIZE_PX === 64` (avatar preset). Pass `size={64}` only. Do not invent a third canvas size. Do not pass 51 or 52.
-- Visible host / hit target: `BAR_PILL_WIDTH_PX === BAR_PILL_HEIGHT_PX === BAR_PILL_VISIBLE_PX === 51` (64 × 0.8). Scale the **circle CSS**, not the canvas preset.
+- Package canvas: `BAR_PILL_SIZE_PX === 64` (avatar preset). Pass `size={64}` only. Do not invent a third canvas size. Do not pass 20, 41, 51, or 52.
+- Visible host / hit target: `BAR_PILL_WIDTH_PX === BAR_PILL_HEIGHT_PX === BAR_PILL_VISIBLE_PX === 41` (20% off the previous 51). The moving orb reads ~20% smaller than today's 51 CSS circle.
+- Backing: `BAR_PILL_BACKING_PX === 128` (2x the 64 avatar). Sharp dots. No muddy CSS downscale of a 1x 64 bitmap into the 41 hole. Canvas CSS stays 64. Visible 41 is a compositor scale (`scale(calc(41 / 64))`).
 - Aspect **1** on every mood. Bounding box constant at the visible size.
 - Never a potato, stadium, lozenge, 44-tall pill, or flattened disc.
-- Never squash or stretch on hover, listen, drag, or minimize. The rest size is 51 CSS, not a hover scale.
+- Never squash or stretch on hover, listen, drag, or minimize. The rest size is 41 CSS, not a hover scale.
 - Minimize (Bar only) is **this** circle. Not a different disc.
 
 ### no-squash M (HARD)
@@ -42,7 +43,7 @@ The left Settings mark (logo / M) is a locked 30×30 circle (`BAR_MARK_SIZE_PX`,
 
 ### Materials
 
-The real `ThinkingOrb` from `thinking-orbs`. One 2D canvas, package size 64, visible CSS 51×51, theme `dark`, speed `1`. Transparent around the dots. No painted caption, no playground play button, no copy under the canvas.
+The real `ThinkingOrb` from `thinking-orbs`. One 2D canvas, package size 64, 2x backing (128), visible CSS 41×41, theme `dark`, speed `1`. Transparent around the dots. No painted caption, no playground play button, no copy under the canvas.
 
 1. **Package orb.** Dotted 2D canvas. Monochrome light ink. State from the map below. Do not wrap it in WebGL. Do not add a magenta core, bloom, or specular kiss. Do not clip the canvas with `border-radius`.
 2. **Circular host.** Square box, `border-radius: 50%`, `background: transparent`. The Bar is the Métis glass. Never a lozenge. Dragging does not squash the orb.
@@ -80,7 +81,7 @@ Hover: no squash, no lean that warps the circle. Drag: same circle, existing `us
 
 ### Do
 
-- Idle on this circle is `solving`, theme `dark`, canvas 64, visible 51. Light dots. No painted word.
+- Idle on this circle is `solving`, theme `dark`, canvas 64, 2x backing, visible 41. Light dots. No painted word.
 - Same circle docked on the idle Bar and alone when minimized.
 - Windows: same circle, top-center Bar. No notch, no Mac-only look.
 - Use the real package (`import { ThinkingOrb } from 'thinking-orbs'`). Vite bundles it. No unpkg. No CDN.
@@ -133,7 +134,7 @@ overlayShowsBarOrb(layout, minimized) === (layout === 'bar' && minimized)
 
 A **fixed circle**. Same width and height, always.
 
-- Package canvas `BAR_PILL_SIZE_PX` (**64**). Visible box `BAR_PILL_WIDTH_PX === BAR_PILL_HEIGHT_PX === BAR_PILL_VISIBLE_PX` (**51**)
+- Package canvas `BAR_PILL_SIZE_PX` (**64**). 2x backing `BAR_PILL_BACKING_PX` (**128**). Visible box `BAR_PILL_WIDTH_PX === BAR_PILL_HEIGHT_PX === BAR_PILL_VISIBLE_PX` (**41**)
 - Aspect ratio is **1** on every mood.
 - Bounding box is **constant** across idle, thinking, factcheck, connecting, hover, listen, drag.
 - Never a potato. Never a stadium. Never a squashed capsule. Never flatten.
@@ -213,11 +214,11 @@ No `unpkg` / CDN. Bundle the package.
 - Bar idle / expanded: circle **docked on the bar** (`overlayDocksBarCircle('bar')`), not a floating second disk and not a pill.
 - Hover hit is the camera island: width = `notchWidth` (~180–250, not 560), height = housing only (not 44). Left menu-bar misses. Y=40 and `TEAMS_MEETING_CHROME_Y` miss.
 - Settings close onto Island/Hide force-parks (`shouldForceParkOnBecameIdle`).
-- Aspect ratio **1** on every mood. Bounding box constant across moods. Visible size is 51. Canvas stays 64. Never scale-on-appear. no-squash M on Listen.
+- Aspect ratio **1** on every mood. Bounding box constant across moods. Visible size is 41. Canvas stays 64 with 2x backing. Never scale-on-appear. no-squash M on Listen.
 - Click expands; drag does not expand.
 - Reduced-motion does not throw and still paints the package static frame (not a disc we invented).
 - Hide/Island do not run the orb rAF (`shouldRunOrbRaf`). Bar may.
 - Renderer is `ThinkingOrb` / package 2D canvas. No WebGL sphere shader. CSS body is circular glass, not a Fit Studio radial fill.
 - No rec-dot on this circle. Listen maps to `listening`.
-- Circle stays 51×51 visible (64 canvas) on every mood including listen.
+- Circle stays 41×41 visible (64 canvas, 128 backing) on every mood including listen.
 - Idle maps to `solving`. Think maps to `working`. Fact-check maps to `searching`. Connecting maps to `connecting`. Theme is `dark`. No visible text node in the orb host.

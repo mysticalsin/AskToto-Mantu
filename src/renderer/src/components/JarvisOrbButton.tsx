@@ -5,6 +5,8 @@ import { paintOrbFirstFrame } from '../lib/orb-first-frame'
 import {
   BAR_ORB_SPEED,
   BAR_ORB_THEME,
+  BAR_PILL_BACKING_DPR,
+  BAR_PILL_BACKING_PX,
   BAR_PILL_SIZE_PX,
   BAR_PILL_VISIBLE_PX,
   pillClickShouldExpand,
@@ -14,8 +16,8 @@ import {
 } from '../lib/bar-pill-orb'
 
 /**
- * Thinking-orb circle. Package canvas stays 64 (avatar). Visible host is ~20% smaller.
- * Never a stadium pill. Docked on the idle Bar or alone when minimized.
+ * Thinking-orb circle. Package canvas stays 64 (avatar) with 2x backing.
+ * Visible host is 41. Never a muddy 1x CSS downscale. Never a stadium pill.
  */
 export function JarvisOrbButton({
   onActivate,
@@ -49,7 +51,7 @@ export function JarvisOrbButton({
   useLayoutEffect(() => {
     const canvas = hostRef.current?.querySelector('canvas')
     if (!canvas) return
-    paintOrbFirstFrame(canvas, orbState, BAR_PILL_SIZE_PX, true)
+    paintOrbFirstFrame(canvas, orbState, BAR_PILL_SIZE_PX, true, BAR_PILL_BACKING_DPR)
   }, [orbState])
 
   return (
@@ -61,6 +63,7 @@ export function JarvisOrbButton({
       data-orb-mood={orbMood}
       data-orb-state={orbState}
       data-orb-visible={BAR_PILL_VISIBLE_PX}
+      data-orb-backing={BAR_PILL_BACKING_PX}
       data-orb-listening={listening || undefined}
       title={title}
       aria-label={ariaLabel}
@@ -81,7 +84,6 @@ export function JarvisOrbButton({
           theme={BAR_ORB_THEME}
           speed={BAR_ORB_SPEED}
           className="aw-orb__canvas"
-          style={{ width: BAR_PILL_VISIBLE_PX, height: BAR_PILL_VISIBLE_PX }}
           aria-hidden="true"
           aria-label=""
         />
