@@ -63,7 +63,8 @@ import {
   ListTree,
   type LucideIcon
 } from 'lucide-react'
-import { formatSavedTime, timeSavedFromTotals } from '@shared/time-saved'
+import { timeSavedFromTotals } from '@shared/time-saved'
+import { TimeSavedView } from './TimeSavedView'
 import { formatResetPhrase } from '@shared/reset-time'
 import {
   DEFAULT_SHORTCUTS,
@@ -5005,7 +5006,8 @@ const TABS: {
     desc: 'Your second brain: meetings, wiki, CRM, knowledge graph.',
     keywords: [
       'mantu intelligence', 'meetings & follow-up', 'published wiki', 'polo pre-sales', 'crm',
-      'knowledge graph', 'plane', 'clickup', 'task management', 'book next steps', 'action items'
+      'knowledge graph', 'plane', 'clickup', 'task management', 'book next steps', 'action items',
+      'time saved', 'estimate'
     ]
   },
   {
@@ -6287,25 +6289,21 @@ function TimeSavedSettings({
   return (
     <Section
       title="Time saved"
-      desc="An honest estimate of the meeting write-up Métis has done for you. Adjust the assumption below — the number is yours."
+      desc="An honest estimate of work Métis finished: notes, second-brain captures, email recaps, and pushes you confirmed. Adjust the meeting-note assumption below. The number is yours."
       icon={Timer}
     >
+      <TimeSavedView meetingWriteupMinutes={saved.savedMinutes} meetingCount={saved.meetings} />
       <div className="cl-card px-3.5 py-3">
+        <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-[color:var(--cl-muted-foreground)]">
+          Meeting-note assumption
+        </div>
         {saved.meetings === 0 ? (
           <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">
-            Summarize your first meeting and your time saved shows up here.
+            Summarize your first meeting and the write-up estimate shows up here.
           </div>
         ) : (
           <>
-            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-              <span className="font-ui text-[24px] font-semibold leading-none text-[color:var(--cl-foreground)]">
-                ≈ {formatSavedTime(saved.savedMinutes)}
-              </span>
-              <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
-                across {saved.meetings} meeting{saved.meetings === 1 ? '' : 's'} ({Math.round((saved.conversationMinutes / 60) * 10) / 10}h of conversation)
-              </span>
-            </div>
-            <div className="mt-3 flex flex-col gap-0.5 border-t border-[var(--cl-border)] pt-2">
+            <div className="flex flex-col gap-0.5">
               <NumberRow
                 label="Write-up time, as % of the meeting"
                 value={Math.round(a.writeupRatio * 100)}

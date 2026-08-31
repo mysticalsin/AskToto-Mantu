@@ -533,6 +533,12 @@ export const Review = memo(function Review({
   }, [followupDraft?.text, followupEdited])
 
   const [mailError, setMailError] = useState<string | null>(null)
+  const [outlook, setOutlook] = useState<{ signedIn: boolean; canDraft: boolean } | null>(null)
+  const [outlookDraft, setOutlookDraft] = useState<{ phase: 'idle' | 'saving' | 'saved' | 'error'; error: string | null }>({
+    phase: 'idle',
+    error: null
+  })
+  const recordedEmailIds = useRef(new Set<string>())
 
   // "Push to CRM" — manual, review-first: shows the exact payload before it ever leaves the app, then
   // fires a single MCP tool call to BidStack. Payload is deliberately thin: title, date, and the
@@ -759,6 +765,45 @@ export const Review = memo(function Review({
     window.toto
       .openMailDraft({ subject, body: followupText })
       .catch((e) => setMailError(`Couldn't open your mail app: ${e instanceof Error ? e.message : String(e)}`))
+  }
+
+  useEffect(() => {
+    let alive = true
+    void window.toto
+      .outlookWriteStatus()
+      .then((s) => {
+        if (alive) setOutlook({ signedIn: s.signedIn, canDraft: s.canDraft })
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  useEffect(() => {
+    const id = followupDraft?.id
+    if (!id || followupDraft.streaming || followupDraft.error || !followupDraft.text?.trim()) return
+    if (recordedEmailIds.current.has(id)) return
+    recordedEmailIds.current.add(id)
+    void window.toto.timeSavedRecord({ kind: 'email-summary' }).catch(() => {})
+  }, [followupDraft?.id, followupDraft?.streaming, followupDraft?.error, followupDraft?.text])
+
+  const createOutlookDraft = async (): Promise<void> => {
+    if (outlookDraft.phase === 'saving' || !followupText.trim()) return
+    if (!outlook?.signedIn || !outlook.canDraft) {
+      setOutlookDraft({
+        phase: 'error',
+        error: outlook?.signedIn
+          ? 'Outlook draft permission is not granted. Métis will not send mail. Use Open in Mail.'
+          : 'Connect Outlook in Settings → Calendar. Métis will not send mail.'
+      })
+      return
+    }
+    setOutlookDraft({ phase: 'saving', error: null })
+    const subject = meetingMeta?.title ? `Follow-up: ${meetingMeta.title}` : 'Follow-up'
+    const r = await window.toto.outlookCreateDraft({ subject, body: followupText })
+    if (r.ok) setOutlookDraft({ phase: 'saved', error: null })
+    else setOutlookDraft({ phase: 'error', error: r.error || 'Could not create the Outlook draft. Nothing was sent.' })
   }
 
   return (
@@ -1213,13 +1258,32 @@ export const Review = memo(function Review({
                 <TextButton onClick={openFollowupInMail} disabled={!followupText}>
                   <Mail size={11} /> Open in Mail
                 </TextButton>
+                {outlook?.signedIn && outlook.canDraft ? (
+                  <TextButton onClick={() => void createOutlookDraft()} disabled={!followupText || outlookDraft.phase === 'saving'}>
+                    <Mail size={11} /> {outlookDraft.phase === 'saved' ? 'Draft created' : 'Create Outlook draft'}
+                  </TextButton>
+                ) : (
+                  <TextButton
+                    onClick={() =>
+                      setOutlookDraft({
+                        phase: 'error',
+                        error: 'Connect Outlook in Settings → Calendar. Métis will not send mail.'
+                      })
+                    }
+                  >
+                    <Mail size={11} /> Connect Outlook
+                  </TextButton>
+                )}
                 <TextButton icon={RotateCcw} onClick={onGenerateFollowup}>
                   Regenerate
                 </TextButton>
               </div>
               {mailError && <div className="text-[11px] text-[var(--color-danger)]">{mailError}</div>}
+              {outlookDraft.phase === 'error' && outlookDraft.error && (
+                <div className="text-[11px] text-[var(--color-danger)]">{outlookDraft.error}</div>
+              )}
               <div className="text-[11px] text-[color:var(--color-ink-3)]">
-                Review before sending, and attach anything promised manually for now.
+                Review before sending. Outlook creates a draft only. Nothing sends itself.
               </div>
             </div>
           ) : null}

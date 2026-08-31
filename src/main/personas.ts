@@ -7,6 +7,7 @@ import {
   recapPromptFor,
   retargetForTypedAsk
 } from '@shared/prompts'
+import { ANSWER_FIRST_RAIL } from '@shared/answer-first'
 
 function profileBlock(p: Profile): string {
   const parts: string[] = []
@@ -122,5 +123,8 @@ export function buildSystem(
   // "lead with the answer / ask a clarifying question" guidance onto it corrupts the output that
   // parseVerdict expects (a preamble before "VERDICT:" gets dropped).
   const rail = (req.mode === 'answer' || req.mode === 'vision') && req.kind !== 'factcheck' ? GROUNDING_RAIL : ''
-  return lead + prefix + prompt + profileTail + ctx + rail + lang
+  // Answer-first is the typed/screen contract. Live suggest keeps its spoken format; recap/summary
+  // and fact-check have their own skeletons and must not pick up "first sentence is the answer".
+  const answerFirst = typedAsk ? ANSWER_FIRST_RAIL : ''
+  return lead + prefix + prompt + profileTail + ctx + rail + answerFirst + lang
 }
