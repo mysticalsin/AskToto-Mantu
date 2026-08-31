@@ -98,7 +98,9 @@ export function startFfmpegDecode(
   skipThrough: number,
   callbacks: FfmpegDecodeCallbacks
 ): FfmpegDecoder {
-  if (!sniffMediaFile(sourcePath)) {
+  // Missing sources still fail at spawn (ENOENT) so existing import-error
+  // contracts stay intact. Magic-byte sniff only runs when the file exists.
+  if (existsSync(sourcePath) && !sniffMediaFile(sourcePath)) {
     const completed = callbacks.onError(new Error(IMPORT_NOT_MEDIA))
     return { cancel: () => {}, completed }
   }
