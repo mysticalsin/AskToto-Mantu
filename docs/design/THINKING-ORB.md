@@ -4,7 +4,7 @@ Status: **active contract**. Implement only to this document.
 
 This is Métis's loading language. Every wait is a quiet caption in Métis type, then Jakub Antalik's MIT thinking orb. Never a bouncing logo. Never a CSS spinner. Never a looping brand mark. Never a purple-gradient hero. Never emoji.
 
-Constellation-grid bed and overlay chrome geometry are already on this branch. Do not restyle either. Do not fight the April 29 hero clip, locked copy, or mandatory tour.
+Constellation-grid bed and overlay chrome geometry are already on this branch. Do not restyle either. Do not fight the April 29 hero clip, locked copy, or mandatory tour. `liquid-gooey` may host the orb slot as a quiet droplet; it must not replace the orb.
 
 ## Source of truth
 

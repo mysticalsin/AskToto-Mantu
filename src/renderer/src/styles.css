@@ -566,20 +566,24 @@ input::placeholder {
   animation: onboard-pop-in 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
-/* Onboarding act transition — each scene remounts keyed by name. Opacity + translate only
-   (~300ms ease-out). No scale-down — compositor-only motion budget (DESIGN.md). */
+/* Onboarding act transition — each scene remounts keyed by name. Opacity + translate
+   with a short gooey overshoot (~360ms). Never a filled Liquid panel over the grid. */
 @keyframes scene-enter {
   from {
     opacity: 0;
-    transform: translateY(10px);
+    transform: translateY(12px) scale(0.985);
+  }
+  68% {
+    opacity: 1;
+    transform: translateY(-2px) scale(1.012);
   }
   to {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
   }
 }
 .scene-enter {
-  animation: scene-enter 300ms ease-out;
+  animation: scene-enter 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 /* Act 1 (Welcome) hero — the Métis mark lands as a top-center "island" capsule (MQA-276). Three staged
@@ -1277,6 +1281,24 @@ html.metis-bar-land .aw-widget {
 }
 .onboard-mute:hover {
   background: rgba(255, 255, 255, 0.18);
+}
+
+.gooey-surface {
+  display: inline-flex;
+  isolation: isolate;
+  vertical-align: middle;
+}
+.gooey-surface--cta .onboard-cta {
+  background: transparent;
+  box-shadow: none;
+}
+.gooey-surface--cta .onboard-cta--muted {
+  background: transparent;
+  border-color: transparent;
+}
+.gooey-surface--wait {
+  border-radius: 999px;
+  line-height: 0;
 }
 
 .onboard-cta:hover:not(:disabled) {

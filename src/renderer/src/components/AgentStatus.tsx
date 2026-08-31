@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef } from 'react'
 import { ThinkingOrb, type OrbTheme } from 'thinking-orbs'
 import { AGENT_STATUS, type AgentStatusKind } from '../lib/agent-status'
 import { paintOrbFirstFrame } from '../lib/orb-first-frame'
+import { GooeySurface } from './GooeySurface'
 
 export type { AgentStatusKind }
 
@@ -66,7 +67,9 @@ export function AgentStatus({
       {showCaption && <span className="agent-status__word">{captionText}</span>}
       {percentLabel && <span className="agent-status__word tabular-nums">{percentLabel}</span>}
       <span className="agent-status__orb" aria-hidden="true">
-        <ThinkingOrb state={spec.state} size={orbSize} theme={theme} speed={1} aria-label={captionText} />
+        <GooeySurface variant="wait">
+          <ThinkingOrb state={spec.state} size={orbSize} theme={theme} speed={1} aria-label={captionText} />
+        </GooeySurface>
       </span>
     </div>
   )

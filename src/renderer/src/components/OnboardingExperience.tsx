@@ -83,6 +83,7 @@ import {
 import { ONBOARDING_HERO_VIDEO_SRC, playOnboardingVideo } from '../lib/onboarding-hero-video'
 import { CONSTELLATION_CROSSFADE_MS, shouldMountConstellation } from '../lib/onboarding-constellation-spec'
 import { OnboardingConstellation } from './OnboardingConstellation'
+import { GooeySurface } from './GooeySurface'
 
 // Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
 // one icon, everywhere it appears, rather than inventing a second icon language just for this scene.
@@ -247,9 +248,11 @@ function HeroWelcome({ onBegin }: { onBegin: () => void }): JSX.Element {
             </p>
           </div>
         </div>
+        <GooeySurface variant="cta">
         <button type="button" onClick={onBegin} className="onboard-cta no-drag focus-ring">
           Next
         </button>
+        </GooeySurface>
         <p
           className="hero-byline onboard-glass onboard-glass-chip fade-up m-0 text-[10px] tracking-wide"
           style={{ animationDelay: '1300ms', animationFillMode: 'both' }}
@@ -524,6 +527,7 @@ function ActLicense({
 
       </div>
       <div className="flex items-center gap-2">
+        <GooeySurface variant="wait">
         <button
           type="button"
           onClick={() => void activate()}
@@ -533,6 +537,8 @@ function ActLicense({
           {activating ? <InlineOrb kind="connecting" /> : <KeyRound size={13} />}
           Activate
         </button>
+        </GooeySurface>
+        <GooeySurface variant="cta">
         <button
           type="button"
           onClick={onContinue}
@@ -540,6 +546,7 @@ function ActLicense({
         >
           Continue
         </button>
+        </GooeySurface>
       </div>
     </div>
   )
@@ -621,6 +628,7 @@ function ActReady({
         <p className="onboard-tell-quote onboard-tell-quote--echo fade-up">{TELL_THE_ROOM_QUOTE}</p>
       </div>
       </div>
+      <GooeySurface variant="cta">
       <button
         type="button"
         onClick={() => void onFinish()}
@@ -629,6 +637,7 @@ function ActReady({
       >
         Get started
       </button>
+      </GooeySurface>
       {onOpenAiSettings && (
         <button
           type="button"
@@ -970,6 +979,7 @@ export function OnboardingExperience({
               </p>
             ))}
           </div>
+          <GooeySurface variant="cta">
           <button
             type="button"
             onClick={() => {
@@ -980,6 +990,7 @@ export function OnboardingExperience({
           >
             Continue
           </button>
+          </GooeySurface>
         </div>
       )}
 
@@ -1139,6 +1150,7 @@ export function OnboardingExperience({
           )}
           </div>
           <div className="flex items-center gap-2">
+            <GooeySurface variant="cta" muted={needsPerms}>
             <button
               type="button"
               // Act 6 re-point (MQA-283): setup always advances to personalize now — license (when
@@ -1153,6 +1165,7 @@ export function OnboardingExperience({
             >
               Continue
             </button>
+            </GooeySurface>
           </div>
         </div>
       )}
@@ -1202,6 +1215,7 @@ export function OnboardingExperience({
             <TellTheRoomCard consent={consent} onConsent={setConsent} />
           </div>
           </div>
+          <GooeySurface variant="cta" muted={!consent}>
           <button
             type="button"
             // Act 6 re-point (MQA-283): advances to license (only if enabled) or straight to Ready —
@@ -1215,6 +1229,7 @@ export function OnboardingExperience({
           >
             Continue
           </button>
+          </GooeySurface>
         </div>
       )}
 

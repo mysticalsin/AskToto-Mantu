@@ -38,6 +38,7 @@ import {
 import { cursorPositionAt, type Point } from '../lib/synthetic-cursor'
 import { setOnboardingDemoActive } from '../lib/onboarding-demo-guard'
 import { ModeRecapView, modeRecapSections } from './ModeRecap'
+import { GooeySurface } from './GooeySurface'
 
 // Same weight rationale as App.tsx's own lazy Answer/Copilot: both pull in Markdown.tsx -> streamdown +
 // shiki/core, which has no reason to be in the eager boot chunk for a user who skips the tour.
@@ -285,6 +286,7 @@ export function OnboardingDemoScene({
       </div>
 
       <div className="flex flex-col items-center gap-3">
+        <GooeySurface variant="cta">
         <button
           type="button"
           onClick={() => {
@@ -296,9 +298,12 @@ export function OnboardingDemoScene({
         >
           Next
         </button>
+        </GooeySurface>
+        <GooeySurface variant="cta">
         <button type="button" onClick={onContinue} className="onboard-cta no-drag focus-ring">
           Set me up
         </button>
+        </GooeySurface>
       </div>
     </div>
   )
