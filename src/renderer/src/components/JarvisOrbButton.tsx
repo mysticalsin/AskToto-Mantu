@@ -1,15 +1,19 @@
-import { useEffect, useRef } from 'react'
+import { useLayoutEffect, useRef } from 'react'
+import { ThinkingOrb } from 'thinking-orbs'
 import { useWindowDrag } from '../lib/window-drag'
+import { paintOrbFirstFrame } from '../lib/orb-first-frame'
 import {
+  BAR_ORB_SPEED,
+  BAR_ORB_THEME,
   BAR_PILL_SIZE_PX,
-  mountBarPillOrb,
   pillClickShouldExpand,
-  type BarPillOrbHandle,
+  resolveBarOrbState,
+  shouldShowOrbRecDot,
   type OrbMood
 } from '../lib/bar-pill-orb'
 
 /**
- * Fixed-size sentient 52 Fit Studio glass sphere. Never a stadium pill.
+ * Fixed 64 thinking-orb circle. Never a stadium pill.
  * Docked on the idle Bar (click minimizes) or alone when minimized (click expands).
  */
 export function JarvisOrbButton({
@@ -29,9 +33,10 @@ export function JarvisOrbButton({
   enableDrag?: boolean
   hugWidth?: boolean
 }): JSX.Element {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-  const orbRef = useRef<BarPillOrbHandle | null>(null)
+  const hostRef = useRef<HTMLSpanElement>(null)
   const dragMovedRef = useRef(false)
+  const orbState = resolveBarOrbState({ mood: orbMood, listening })
+  const showRec = shouldShowOrbRecDot(listening)
 
   const drag = useWindowDrag(
     () => {
@@ -40,37 +45,11 @@ export function JarvisOrbButton({
     { armOnControls: true, deadZonePx: 14 }
   )
 
-  useEffect(() => {
-    const canvas = canvasRef.current
+  useLayoutEffect(() => {
+    const canvas = hostRef.current?.querySelector('canvas')
     if (!canvas) return
-    const reduced =
-      typeof window !== 'undefined' &&
-      typeof window.matchMedia === 'function' &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    const orb = mountBarPillOrb(canvas, { mood: orbMood, listening, reducedMotion: reduced })
-    orbRef.current = orb
-    return () => {
-      orb.destroy()
-      orbRef.current = null
-    }
-    // Mount once; mood/hover update through the handle.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
-
-  useEffect(() => {
-    orbRef.current?.setMood(orbMood)
-  }, [orbMood])
-
-  useEffect(() => {
-    orbRef.current?.setListening(listening)
-  }, [listening])
-
-  const onPointerMove = (e: React.PointerEvent<HTMLButtonElement>): void => {
-    if (dragMovedRef.current) return
-    const nx = (e.nativeEvent.offsetX / BAR_PILL_SIZE_PX) * 2 - 1
-    const ny = (e.nativeEvent.offsetY / BAR_PILL_SIZE_PX) * 2 - 1
-    orbRef.current?.setHover(nx, ny, true)
-  }
+    paintOrbFirstFrame(canvas, orbState, BAR_PILL_SIZE_PX, true)
+  }, [orbState])
 
   return (
     <button
@@ -79,6 +58,7 @@ export function JarvisOrbButton({
       data-hug-width={hugWidth || undefined}
       data-bar-pill-orb
       data-orb-mood={orbMood}
+      data-orb-state={orbState}
       data-orb-listening={listening || undefined}
       title={title}
       aria-label={ariaLabel}
@@ -86,22 +66,22 @@ export function JarvisOrbButton({
         dragMovedRef.current = false
         if (enableDrag) drag.onPointerDown(e)
       }}
-      onPointerMove={onPointerMove}
-      onPointerLeave={() => orbRef.current?.setHover(0, 0, false)}
       onClick={() => {
         if (enableDrag && !pillClickShouldExpand(dragMovedRef.current)) return
         onActivate()
       }}
       className="aw-orb no-drag focus-ring"
     >
-      <canvas
-        ref={canvasRef}
-        className="aw-orb__canvas"
-        width={BAR_PILL_SIZE_PX * 2}
-        height={BAR_PILL_SIZE_PX * 2}
-        aria-hidden="true"
-      />
-      {listening ? <span className="aw-orb__rec rec-dot" data-orb-rec aria-hidden="true" /> : null}
+      <span ref={hostRef} className="aw-orb__host" aria-hidden="true">
+        <ThinkingOrb
+          state={orbState}
+          size={BAR_PILL_SIZE_PX}
+          theme={BAR_ORB_THEME}
+          speed={BAR_ORB_SPEED}
+          className="aw-orb__canvas"
+        />
+      </span>
+      {showRec ? <span className="aw-orb__rec rec-dot" data-orb-rec aria-hidden="true" /> : null}
     </button>
   )
 }

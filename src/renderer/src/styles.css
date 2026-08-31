@@ -1759,8 +1759,10 @@ input::placeholder {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: #7f00da;
-  box-shadow: 0 0 6px 1px rgba(127, 0, 218, 0.55);
+  background: rgba(20, 16, 28, 0.72);
+  box-shadow:
+    inset 0 0 0 1.25px rgba(255, 255, 255, 0.72),
+    0 0 0 1px rgba(255, 255, 255, 0.12);
 }
 
 @keyframes overlay-peek-in {
@@ -2170,20 +2172,25 @@ html.metis-bar-land .aw-widget {
 .aw-orb {
   display: block;
   position: relative;
-  width: 52px;
-  height: 52px;
+  width: 64px;
+  height: 64px;
   flex-shrink: 0;
   padding: 0;
   margin: 0;
-  overflow: visible;
+  overflow: hidden;
   border: none;
   border-radius: 50%;
-  background: transparent;
-  box-shadow: none;
-  -webkit-backdrop-filter: none;
-  backdrop-filter: none;
+  background:
+    linear-gradient(var(--glass-tint-white), var(--glass-tint-white)),
+    linear-gradient(var(--glass-fill), var(--glass-fill)),
+    var(--glass-scrim-bar);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.1),
+    0 0 0 1px rgba(255, 255, 255, 0.04);
+  -webkit-backdrop-filter: blur(16px) saturate(var(--blur-saturate));
+  backdrop-filter: blur(16px) saturate(var(--blur-saturate));
   contain: layout;
-  filter: drop-shadow(0 3px 8px rgba(138, 0, 248, 0.42));
+  filter: none;
   touch-action: none;
   cursor: pointer;
   transform-origin: center center;
@@ -2191,8 +2198,8 @@ html.metis-bar-land .aw-widget {
 .aw-orb:hover,
 .aw-orb:active,
 .aw-orb:focus {
-  width: 52px;
-  height: 52px;
+  width: 64px;
+  height: 64px;
   border-radius: 50%;
 }
 .aw-orb[data-hug-width] {
@@ -2201,10 +2208,11 @@ html.metis-bar-land .aw-widget {
 .aw-orb[data-hug-width]:active {
   cursor: grabbing;
 }
+.aw-orb__host,
 .aw-orb__canvas {
   display: block;
-  width: 52px;
-  height: 52px;
+  width: 64px;
+  height: 64px;
   border-radius: 50%;
   pointer-events: none;
 }
@@ -2212,16 +2220,5 @@ html.metis-bar-land .aw-widget {
 .aw-orb[data-orb-mood='thinking'],
 .aw-orb[data-orb-mood='factcheck'],
 .aw-orb[data-orb-mood='connecting'] {
-  background: transparent;
-}
-.aw-orb__rec {
-  position: absolute;
-  right: 7px;
-  bottom: 8px;
-  width: 7px;
-  height: 7px;
   border-radius: 50%;
-  background: #f0717a;
-  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.5), 0 0 6px #f0717a;
-  pointer-events: none;
 }
