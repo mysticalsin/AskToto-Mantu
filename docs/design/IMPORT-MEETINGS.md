@@ -12,6 +12,16 @@ This is the design for two coupled product failures: Tony cannot import audio in
 2. Several meetings import in one gesture. Native picker uses `multiSelections`. Drop several files in one go. Each file is its own durable `ImportJob`. All start, run with a concurrency cap of 2 (so one huge file cannot hold the decoder slot forever), survive overlay close, and resume after fail or quit. The UI is a quiet queue: name, progress, resume, cancel, done.
 3. Renderer still never receives raw paths as a general filesystem read. Tokens or main-owned jobs only. 500 MB cap per file. Magic sniff stays.
 
+## Default engine and first-run download (Tony, 2026-08-31)
+
+Parakeet is the **default** live ASR engine (`asrEngine: 'parakeet'` in `DEFAULT_SETTINGS` and the Zod schema). Whisper and Apple stay available in Settings.
+
+The settings file is a **sparse overlay**. A profile that never wrote `asrEngine` inherits the new default (existing users who never touched ASR migrate to Parakeet). A profile that explicitly chose `whisper` or `apple` keeps that key — do not clobber a deliberate choice.
+
+Act 3 (setup) **always** provisions Parakeet + the Whisper floor. It does not skip, and it never says “models missing in this build” or “reinstall.” It calls `asrAssetsEnsure` / polls `asrAssetsStatus` (bundled `resources/` first, then `userData` fetch with a visible meter). Continue on Act 3 stays disabled until the four Parakeet files and the Whisper floor are actually present. A failed fetch stays on the row with Try again.
+
+`asrBundled` still means “the installer/repo `resources/` manifest is complete” (Listen’s `asr-model://` offline gate). Onboarding does **not** use that flag as a skip.
+
 READY TO MERGE stays **no** until Devon Mac-shows a real multi-file import with models present.
 
 ## Why the current path fails

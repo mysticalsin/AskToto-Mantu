@@ -563,7 +563,7 @@ export function useListen(
   // through a ref for the same reason as requestedQualityRef: fallback/retry re-inits fire long after
   // start() returned and must re-send the language the session was started with.
   const asrLanguageRef = useRef<string>('auto')
-  const engineRef = useRef<'whisper' | 'parakeet' | 'apple'>('whisper') // active ASR engine for this session
+  const engineRef = useRef<'whisper' | 'parakeet' | 'apple'>('parakeet') // active ASR engine for this session
   // Cached bundled-model flag: queried once from the main process and reused for every init message.
   // Fail closed on an IPC/preload error: installed builds must never turn a broken capability probe into
   // a remote model fetch. `false` is returned deliberately by the main process only for an unprovisioned
@@ -1598,7 +1598,7 @@ export function useListen(
     async (
       source: AudioSource,
       quality: 'best' | 'fast' = 'best',
-      engine: 'whisper' | 'parakeet' | 'apple' = 'whisper',
+      engine: 'whisper' | 'parakeet' | 'apple' = 'parakeet',
       language: string = 'auto'
     ): Promise<void> => {
       // Re-entrancy guard: a rapid double-click/double-hotkey calls start() twice before React re-renders

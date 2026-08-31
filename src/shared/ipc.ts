@@ -180,6 +180,10 @@ export const IPC = {
   permissionsRequestUpfront: 'permissions:requestUpfront',
   listeningState: 'listening:state',
   asrBundled: 'asr:bundled',
+  // Onboarding + Settings: live Parakeet/Whisper-floor readiness (bundled or userData). Distinct from
+  // asrBundled, which only answers “is the installer/repo resources/ manifest complete?”
+  asrAssetsStatus: 'asr:assets-status',
+  asrAssetsEnsure: 'asr:assets-ensure',
   // Métis Local (on-device LLM): read-only readiness metadata for the model bundled in the installer.
   localModelsList: 'localModels:list',
   // MQA-247: the high-accuracy transcription model. Its own pair rather than folded into the LLM
@@ -457,6 +461,11 @@ export interface ImportAssetsProgress {
   progress: number
   label: string
   error?: string
+}
+
+/** Onboarding / Settings snapshot of Parakeet + Whisper-floor readiness. */
+export interface AsrAssetsStatus extends ImportAssetsProgress {
+  ready: boolean
 }
 
 export type ImportJobState =
@@ -1049,12 +1058,14 @@ export const BaseSettingsSchema = z.object({
   overlayLayout: z.enum(['hide', 'island', 'bar']).default('hide'),
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('best'), // Best is default; Fast is a Settings power option (docs/asr/QUALITY.md)
-  // whisper = ~99 langs (default — safe for any locale; parakeet is European-only, which is why 1fa4d76
-  // moved the default off it); parakeet = 25 European languages, fastest; apple = on-device Apple Speech
-  // (SFSpeechRecognizer via the mac-helper sidecar), opt-in, macOS 13+ only — see main/apple-speech.ts.
+  // parakeet = default. NVIDIA Parakeet v3, fastest + accurate for 25 European languages.
+  // whisper = ~99 langs, opt-in for non-European speech. apple = on-device Apple Speech
+  // (SFSpeechRecognizer via the mac-helper sidecar), macOS 13+ only — see main/apple-speech.ts.
+  // Existing users who never wrote asrEngine inherit this default (sparse settings.json).
+  // An explicit whisper/apple override is never clobbered.
   // NOTE: this zod default is effectively dead — store.ts layers DEFAULT_SETTINGS under the user file
   // before parsing, so the key is always present. Keep both declarations identical so neither lies.
-  asrEngine: z.enum(['whisper', 'parakeet', 'apple']).default('whisper'),
+  asrEngine: z.enum(['whisper', 'parakeet', 'apple']).default('parakeet'),
   // Spoken-language hint for transcription: 'auto' (per-window detect) or a language display name from
   // Settings' LANGUAGE_OPTIONS ('Portuguese', …). Pins Whisper's decoder and Apple Speech's recognizer
   // locale; Parakeet always auto-detects. Exists because per-window auto-detect on the compact bundled
@@ -1508,7 +1519,7 @@ export const DEFAULT_SETTINGS: Settings = {
   overlayLayout: 'hide',
   showFullTranscriptInReview: false,
   asrQuality: 'best',
-  asrEngine: 'whisper',
+  asrEngine: 'parakeet',
   asrLanguage: 'auto',
   asrLastFallbackAt: null,
   asrWebgpuFallbackAt: null,

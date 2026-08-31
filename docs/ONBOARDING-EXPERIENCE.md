@@ -69,8 +69,11 @@ Consent line (the existing record-consent copy) sits HERE, as the last gate befo
   index.css). No animation libraries — stay dependency-free.
 - Scene 3 reuses the real `Bar` + answer-panel components in a sandbox container (no live mic) —
   authenticity beats a mockup.
-- Scene 4 wires: `platform-perms` IPC for mic/screen status+request, `asrBundled` flags,
-  brain-init status. Every row must reflect reality — the honesty rule.
+- Scene 4 / Act 3 wires: `platform-perms` IPC for mic/screen status+request, `asrAssetsStatus` /
+  `asrAssetsEnsure` for on-device transcription (progress, never skip, never “models missing in
+  this build”), brain-init status. Every row must reflect reality — the honesty rule. Continue
+  on this act is disabled until Parakeet + Whisper-floor files are present (bundled or fetched
+  into `userData`). `asrBundled` remains a resources-manifest probe for Listen, not a setup skip.
 - Sign-in (Microsoft/local) stays BEFORE the experience (it gates data), but restyle to match.
 - All copy through the i18n path like the rest of the renderer.
 

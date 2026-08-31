@@ -313,6 +313,7 @@ import { ImportJobManager, MAX_CONCURRENT_IMPORTS, type ImportJob } from './impo
 import {
   ensureImportAsrAssets,
   asrAssetsProgress,
+  asrAssetsStatusSnapshot,
   userDataAsrRoot
 } from './asr-bundled-ensure'
 import { EncryptedImportJobStore } from './import-job-store'
@@ -6698,6 +6699,20 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle(IPC.asrBundled, (e) => {
       assertMainWindow(e)
       return ASR_BUNDLED
+    })
+    ipcMain.handle(IPC.asrAssetsStatus, (e) => {
+      assertMainWindow(e)
+      return asrAssetsStatusSnapshot()
+    })
+    ipcMain.handle(IPC.asrAssetsEnsure, (e) => {
+      assertMainWindow(e)
+      void ensureImportAsrAssets((pct) => {
+        publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
+      }).catch((err) => {
+        mainLog.warn('[asr-assets] ensure failed:', err instanceof Error ? err.message : err)
+        publishAsrAssetsProgress()
+      })
+      return asrAssetsStatusSnapshot()
     })
 
     protocol.handle('asr-model', async (req) => {
