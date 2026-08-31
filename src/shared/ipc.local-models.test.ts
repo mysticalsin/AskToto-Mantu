@@ -11,8 +11,9 @@ describe('bundled local-model IPC contract', () => {
     downloadProgress: 0
   }
 
-  it('exposes only the read-only model list channel', () => {
+  it('exposes the list channel plus start/retry, and no cancel/delete/progress push', () => {
     expect(IPC.localModelsList).toBe('localModels:list')
+    expect(IPC.localModelsEnsure).toBe('localModels:ensure')
     expect(IPC).not.toHaveProperty('localModelsDownload')
     expect(IPC).not.toHaveProperty('localModelsCancel')
     expect(IPC).not.toHaveProperty('localModelsDelete')

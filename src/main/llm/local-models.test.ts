@@ -23,7 +23,9 @@ vi.mock('node:os', async (importOriginal) => {
 
 import {
   LOCAL_MODELS,
+  advertisedRamGB,
   assertRamOk,
+  bestModelForMachine,
   isDownloaded,
   listModels,
   modelPaths,
@@ -159,6 +161,17 @@ describe('bundled local model runtime', () => {
       setTotalMemGB(8)
       expect(() => assertRamOk('qwen3.5-0.8b')).not.toThrow()
     })
+
+    it('treats an advertised 8 GB machine (7.45 GiB raw) as eligible, not under-floor', () => {
+      // 8 × 10^9 / 1024^3 — what totalmem() returns on many 8 GB Macs/PCs. Raw compare against
+      // minTotalRamGB: 8 used to skip the first-run fetch entirely.
+      ramState.totalMemBytes = 8e9
+      expect(advertisedRamGB()).toBe(8)
+      expect(() => assertRamOk('qwen3.5-0.8b')).not.toThrow()
+      expect(() => assertRamOk('qwen3.5-4b')).not.toThrow()
+      expect(bestModelForMachine().id).toBe('qwen3.5-4b')
+      expect(listModels()[0].unavailableReason).not.toBe('insufficient-ram')
+    })
   })
 
   describe('bundled readiness metadata', () => {
@@ -178,7 +191,8 @@ describe('bundled local model runtime', () => {
           // MQA-187/191: "missing files" was rendered as a damaged install. With no download state to
           // fold in, a never-attempted fetch is exactly that and nothing stronger.
           unavailableReason: 'not-downloaded',
-          downloadProgress: 0
+          downloadProgress: 0,
+          downloadError: null
         }
       ])
 
@@ -197,7 +211,8 @@ describe('bundled local model runtime', () => {
           minTotalRamGB: model.minTotalRamGB,
           ready: true,
           unavailableReason: null,
-          downloadProgress: 0
+          downloadProgress: 0,
+          downloadError: null
         }
       ])
     })

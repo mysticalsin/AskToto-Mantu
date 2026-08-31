@@ -177,8 +177,10 @@ export const IPC = {
   permissionsRequestUpfront: 'permissions:requestUpfront',
   listeningState: 'listening:state',
   asrBundled: 'asr:bundled',
-  // Métis Local (on-device LLM): read-only readiness metadata for the model bundled in the installer.
+  // Métis Local (on-device LLM): readiness metadata plus a start/retry that does not require toggling
+  // Local AI (routing) on. Cancel/delete stay off the renderer — main owns the transfer.
   localModelsList: 'localModels:list',
+  localModelsEnsure: 'localModels:ensure',
   // MQA-247: the high-accuracy transcription model. Its own pair rather than folded into the LLM
   // channel above — different asset, different size, different consent, and a user may want one
   // and not the other.
@@ -2008,7 +2010,9 @@ export const LocalModelSummarySchema = z
       .enum(['insufficient-ram', 'downloading', 'download-failed', 'not-downloaded'])
       .nullable(),
     /** 0..1 while `unavailableReason === 'downloading'`, 0 otherwise. */
-    downloadProgress: z.number().min(0).max(1)
+    downloadProgress: z.number().min(0).max(1),
+    /** Concrete refuse/fail reason while `unavailableReason === 'download-failed'`. */
+    downloadError: z.string().max(2000).nullable().optional()
   })
   .strict()
 export type LocalModelSummary = z.infer<typeof LocalModelSummarySchema>
