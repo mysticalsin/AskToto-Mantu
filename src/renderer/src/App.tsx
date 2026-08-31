@@ -284,7 +284,8 @@ export function App(): JSX.Element {
     settings?.micDeviceId,
     settings?.asrEntityBias ? entityNames : undefined,
     // MQA-270 (B7): lets the whisper prewarm skip itself on parakeet/apple installs — see useListen.
-    settings?.asrEngine
+    settings?.asrEngine,
+    settings?.asrQuality ?? 'best'
   )
   // Surface a best-quality ASR downgrade (listen.qualityDegraded — WebGPU/large model unavailable) to Settings, mirroring the
   // onEngineFallback → asrLastFallbackAt wiring just above. Patches exactly once per transition to true —

@@ -480,7 +480,11 @@ export function useListen(
   // apple sessions instead of loading ~100 MB of worker + ORT wasm + whisper-base weights that start()
   // will immediately terminate. Optional and undefined-tolerant: undefined means "unknown yet", which
   // warms (the pre-existing behaviour) rather than guessing cold.
-  asrEngine?: string
+  asrEngine?: string,
+  // docs/asr/QUALITY.md — prewarm the quality the user will actually start with (default Best). A Fast
+  // prewarm + Best start() used to terminate the warm worker and reload, so first Listen on the default
+  // path sat behind a cold large-model load. Fast is a power option: only that setting prewarms Fast.
+  asrQuality?: 'best' | 'fast'
 ): ListenApi {
   const [state, setState] = useState({
     listening: false,
@@ -1970,8 +1974,10 @@ export function useListen(
         const bundled = await getAsrBundled()
         // Prewarm carries no language: the setting is only known per-session at start(), whose init
         // message updates the (already warm) worker's language before the first audio window.
-        ensureWorker().postMessage({ type: 'init', quality: 'fast', bundled })
-        loadedQualityRef.current = 'fast'
+        // Quality matches the Settings request (default Best) so first Listen is not a cold Best load.
+        const warmQuality = asrQuality === 'fast' ? 'fast' : 'best'
+        ensureWorker().postMessage({ type: 'init', quality: warmQuality, bundled })
+        loadedQualityRef.current = warmQuality
         if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
         workerIdleTimer.current = setTimeout(() => {
           workerRef.current?.terminate()
@@ -1986,7 +1992,7 @@ export function useListen(
     const ric = (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback
     const t = setTimeout(() => (ric ? ric(() => void warm()) : void warm()), 4000)
     return () => clearTimeout(t)
-  }, [ensureWorker, getAsrBundled, asrEngine])
+  }, [ensureWorker, getAsrBundled, asrEngine, asrQuality])
 
   // Mid-session spoken-language change (Settings → Audio while listening). The ref update covers every
   // engine's future reads; only a live Whisper worker needs an explicit nudge — a warm re-init whose
