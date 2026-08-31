@@ -282,10 +282,38 @@ async function fetchParakeet() {
   await extractTarBz2(archive, destDir)
   // Clean up archive
   try { unlinkSync(archive) } catch { /* ignore */ }
-  if (!requiredFiles.every(filePresent)) {
-    throw new Error('Parakeet model files missing after extraction — check the archive.')
-  }
+  assertRequiredAsrFiles(
+    requiredFiles,
+    'Parakeet model files missing after extraction — check the archive.'
+  )
   console.log('  [ok] parakeet model extracted')
+}
+
+/** Hard fail naming the four Parakeet files (and Whisper floor) a pack must ship. */
+export function assertRequiredAsrFiles(paths, headline) {
+  const missing = paths.filter((p) => !filePresent(p))
+  if (!missing.length) return
+  throw new Error(
+    `${headline}\n${missing.map((p) => `  missing: ${p.replace(REPO_ROOT, '.')}`).join('\n')}`
+  )
+}
+
+export function requiredParakeetPaths(res = RES) {
+  const modelDir = join(res, 'asr', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8')
+  return [
+    join(modelDir, 'encoder.int8.onnx'),
+    join(modelDir, 'decoder.int8.onnx'),
+    join(modelDir, 'joiner.int8.onnx'),
+    join(modelDir, 'tokens.txt')
+  ]
+}
+
+export function requiredWhisperFloorPaths(res = RES) {
+  const dest = join(res, 'models', 'Xenova', 'whisper-base')
+  return [
+    join(dest, 'onnx', 'encoder_model_quantized.onnx'),
+    join(dest, 'onnx', 'decoder_model_merged_quantized.onnx')
+  ]
 }
 
 // ─── 4. ONNX-runtime WASM blobs (copy from node_modules — no network) ────────
@@ -350,12 +378,21 @@ async function main() {
   await fetchParakeet()
   await copyOrtWasm()
 
+  assertRequiredAsrFiles(
+    [...requiredParakeetPaths(), ...requiredWhisperFloorPaths()],
+    'Required ASR assets missing after fetch.'
+  )
+
   // Required no-network integrity gate. Content-Length/non-empty checks above catch interrupted fetches;
   // this reviewed manifest also catches upstream drift or a same-size substitution before packaging.
   await import('./check-runtime-assets.mjs')
 
   console.log('\n=== fetch-models complete ===')
   console.log('Run `npm run dist` (or `npm run dist:win`) to package with bundled models.')
+}
+
+export async function ensureFetchModels() {
+  await main()
 }
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {

@@ -61,7 +61,7 @@ describe('Whisper worker bundled mode', () => {
     )
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(worker.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'error', message: expect.stringMatching(/Reinstall Métis/) })
+      expect.objectContaining({ type: 'error', message: expect.stringMatching(/Check your connection/) })
     )
   })
 

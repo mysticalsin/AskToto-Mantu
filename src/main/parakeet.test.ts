@@ -1,54 +1,89 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-const electron = vi.hoisted(() => ({ app: { isPackaged: true } }))
-const network = vi.hoisted(() => ({ httpsGet: vi.fn(), execFile: vi.fn() }))
+const paths = vi.hoisted(() => ({ resources: '', userData: '' }))
+const network = vi.hoisted(() => ({ httpsGet: vi.fn(), execFile: vi.fn(), fetch: vi.fn() }))
 
-vi.mock('electron', () => electron)
+vi.mock('electron', () => ({
+  app: {
+    isPackaged: true,
+    getPath: () => paths.userData
+  },
+  net: { fetch: network.fetch }
+}))
 vi.mock('node:https', () => ({ get: network.httpsGet }))
 vi.mock('node:child_process', () => ({ execFile: network.execFile }))
-vi.mock('./logger', () => ({ mainLog: { error: vi.fn() } }))
+vi.mock('./logger', () => ({ mainLog: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }))
 
 import { ensureParakeetModel, parakeetModelReady } from './parakeet'
+import { PARAKEET_REQUIRED_FILES, setAsrEnsureTestHooks } from './asr-bundled-ensure'
+
+function writeParakeet(dir: string): void {
+  mkdirSync(dir, { recursive: true })
+  for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dir, name), 'ok')
+}
 
 describe('bundled Parakeet runtime', () => {
-  let resourcesPath: string
   let originalResourcesPath: PropertyDescriptor | undefined
 
   beforeEach(() => {
-    resourcesPath = mkdtempSync(join(tmpdir(), 'metis-parakeet-test-'))
+    paths.resources = mkdtempSync(join(tmpdir(), 'metis-parakeet-res-'))
+    paths.userData = mkdtempSync(join(tmpdir(), 'metis-parakeet-ud-'))
     originalResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath')
-    Object.defineProperty(process, 'resourcesPath', { configurable: true, value: resourcesPath })
+    Object.defineProperty(process, 'resourcesPath', { configurable: true, value: paths.resources })
     network.httpsGet.mockClear()
     network.execFile.mockClear()
+    network.fetch.mockClear()
+    setAsrEnsureTestHooks(null)
   })
 
   afterEach(() => {
-    rmSync(resourcesPath, { recursive: true, force: true })
+    setAsrEnsureTestHooks(null)
+    rmSync(paths.resources, { recursive: true, force: true })
+    rmSync(paths.userData, { recursive: true, force: true })
     if (originalResourcesPath) Object.defineProperty(process, 'resourcesPath', originalResourcesPath)
     else delete (process as unknown as { resourcesPath?: string }).resourcesPath
     vi.unstubAllGlobals()
   })
 
-  it('fails locally with reinstall guidance when packaged assets are missing and performs no network/bootstrap work', async () => {
-    const fetchSpy = vi.fn()
+  it('missing asr in a fake resources dir no longer produces the reinstall string; ensure fetches into userData', async () => {
     const progressSpy = vi.fn()
-    vi.stubGlobal('fetch', fetchSpy)
+    setAsrEnsureTestHooks({
+      fetchParakeet: async (dest, onProgress) => {
+        writeParakeet(dest)
+        onProgress?.(40)
+        onProgress?.(100)
+      }
+    })
 
     expect(parakeetModelReady()).toBe(false)
-    await expect(ensureParakeetModel(progressSpy)).rejects.toThrow(/Reinstall Métis/)
+    await expect(ensureParakeetModel(progressSpy)).resolves.toBeUndefined()
+    expect(parakeetModelReady()).toBe(true)
+    expect(progressSpy).toHaveBeenCalled()
+    expect(readFileSync(join(__dirname, 'parakeet.ts'), 'utf8')).not.toMatch(/Reinstall Métis/)
+    await expect(ensureParakeetModel(progressSpy)).resolves.toBeUndefined()
+  })
 
-    expect(fetchSpy).not.toHaveBeenCalled()
-    expect(network.httpsGet).not.toHaveBeenCalled()
-    expect(network.execFile).not.toHaveBeenCalled()
-    expect(progressSpy).not.toHaveBeenCalled()
-    expect(readdirSync(resourcesPath)).toEqual([])
+  it('failed fetch is an honest connection error, never a reinstall demand', async () => {
+    setAsrEnsureTestHooks({
+      fetchParakeet: async () => {
+        throw new Error('network down')
+      }
+    })
+    await expect(ensureParakeetModel()).rejects.toThrow(/network down/)
+    try {
+      await ensureParakeetModel()
+      throw new Error('expected ensure to fail')
+    } catch (e) {
+      expect(String(e)).not.toMatch(/[Rr]einstall/)
+    }
   })
 
   it('keeps the production module free of downloader and extractor dependencies', () => {
     const source = readFileSync(join(__dirname, 'parakeet.ts'), 'utf8')
     expect(source).not.toMatch(/node:https|node:http|createWriteStream|execFile|MODEL_URL/)
+    expect(source).toMatch(/ensureParakeetAssets/)
   })
 })

@@ -93,12 +93,15 @@ export const IPC = {
   saveDraftTranscript: 'transcript:saveDraft',
   saveNote: 'note:save',
   importAudioPick: 'import-audio:pick',
+  importAudioOffer: 'import-audio:offer',
   importAudioStart: 'import-audio:start',
+  importAudioStartBatch: 'import-audio:start-batch',
   importJobsList: 'import-audio:jobs:list',
   importJobCancel: 'import-audio:job:cancel',
   importJobResume: 'import-audio:job:resume',
   importJobRemove: 'import-audio:job:remove',
   importAudioProgress: 'import-audio:progress',
+  importAssetsProgress: 'import-assets:progress',
   // Private channels used only by the sandboxed hidden decoder window. They are never bridged to the
   // interactive overlay preload.
   importDecoderChunk: 'import-decoder:chunk',
@@ -411,7 +414,20 @@ export const ImportAudioChunkSchema = z.object({
 })
 export type ImportAudioChunk = z.infer<typeof ImportAudioChunkSchema>
 
-/** Result of import-audio:pick. `token` is an opaque, single-use main-process capability, never a file path. */
+/** One accepted recording from import-audio:pick / offer. `token` is never a file path. */
+export interface ImportAudioPickedFile {
+  token: string
+  name: string
+  sizeBytes: number
+  mtimeMs: number
+}
+
+export interface ImportAudioSkippedFile {
+  name: string
+  error: string
+}
+
+/** Result of import-audio:pick or import-audio:offer. Tokens are opaque, single-use, never file paths. */
 export interface ImportAudioPickResult {
   cancelled?: boolean
   error?: string
@@ -419,10 +435,29 @@ export interface ImportAudioPickResult {
   name?: string
   sizeBytes?: number
   mtimeMs?: number
+  files?: ImportAudioPickedFile[]
+  skipped?: ImportAudioSkippedFile[]
 }
 
 export const ImportAudioStartSchema = z.object({ token: z.string().min(20).max(200) })
 export type ImportAudioStart = z.infer<typeof ImportAudioStartSchema>
+
+export const ImportAudioStartBatchSchema = z.object({
+  tokens: z.array(z.string().min(20).max(200)).min(1).max(50)
+})
+export type ImportAudioStartBatch = z.infer<typeof ImportAudioStartBatchSchema>
+
+export const ImportAudioOfferSchema = z.object({
+  paths: z.array(z.string().min(1).max(4096)).max(50)
+})
+export type ImportAudioOffer = z.infer<typeof ImportAudioOfferSchema>
+
+export interface ImportAssetsProgress {
+  status: 'idle' | 'downloading' | 'ready' | 'error'
+  progress: number
+  label: string
+  error?: string
+}
 
 export type ImportJobState =
   | 'queued'
