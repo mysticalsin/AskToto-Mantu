@@ -32,7 +32,7 @@ _Author: principal RT-AI engineer / product architect. Grounded in the live Mét
 - **Editable per-mode prompts + custom modes** — the user owns the assistant's behavior; not a black box.
 - **Transparent by design** — visible AI-active status, no stealth, no undetectability. We win on trust, which is the only durable moat for an always-listening tool.
 - **Connect-once enterprise context** — Dust + Claude CLI + Codex CLI bind once via the OS keychain and persist; add/remove API keys freely.
-- **Calm, Mantu-grade UI** — one pinned bar, an answer that grows below it, suggestions that auto-dismiss. It gets out of the way.
+- **Calm, Mantu-grade UI** — one pinned bar, an answer that grows below it, suggestions that stay until click or a new question. It gets out of the way.
 
 **What we will NOT build (trust/safety boundary).** No stealth / "undetectability" / hidden-from-the-room mode; no exam, interview, or meeting deception; no hidden or non-consensual recording; no evading the *other* participants' awareness; no OS/security-control bypass; no engagement dark patterns. Métis's content-protection only keeps the assistant's private answers out of *your own* outgoing screen-share — it is a privacy feature for the user, never a tool to deceive others. If a feature only makes sense for cheating, it doesn't ship.
 
@@ -201,11 +201,7 @@ The Assist card in Copilot is calm by design. Three controls govern when it fire
 
 **Trigger.** `onQuestionRef.current` fires on each `TranscriptLine` from `useListen`. Only `speaker === 'them'` lines trigger auto-suggest (the debounce is on the listener call site — the "other person said something" event). The prompt is `ASSIST_PROMPT` + last 4,000 chars of transcript + injection guard. If the provider is vision-capable, a screen capture is appended first.
 
-**Auto-dismiss.** Two timers run in parallel (App.tsx:236-252):
-- `SUGGESTION_TTL_MS = 4000` — starts when streaming ends; dismisses `SUGGESTION_TTL_MS` after the last token.
-- `SUGGESTION_MAX_MS = 7000` — starts when the suggestion ID first becomes non-null; fires unconditionally regardless of streaming state, capping a hung stream.
-
-Together these enforce a 4–7 s window. A suggestion never lingers past 7 s from first appearance.
+**Stay until click or a new question.** Ambient auto-answer has no TTL and no max-age. The card stays until Tony clicks it (dismiss/read via `clearAnswer`, never send-to-chat) or a new question is asked (typed ask, or a new ambient suggestion replacing it).
 
 **Non-interruption guard.** If the user is in Settings, Review, History, or Agenda, the auto-suggest fires and completes behind the scenes, but `setView('copilot')` is not called (App.tsx:298-302). The suggestion is queued on the copilot surface ready when they return. The user's active panel is never yanked away.
 
@@ -233,7 +229,7 @@ Every failure state in Métis has three elements: what it shows, the exact copy,
 | **No audio yet (not listening)** | Copilot footer | "not listening" | AudioLines icon in the Bar toolbar is the affordance |
 | **Save to OneDrive failed** | Review surface, `saveError` | `saveError` raw string + retry up to 5×. After max retries: "Couldn't save automatically. Use the Save button to try again." | Manual Save button in Review footer |
 | **Low confidence / unverifiable** | Fact-check UNVERIFIABLE badge | "Unverifiable" (neutral badge) + bullets explaining why | No recovery needed — verdict is final |
-| **Copilot suggestion streaming stuck** | Auto-dismissed after `SUGGESTION_MAX_MS` = 7 s | Never shown — card silently clears | User can press Assist again |
+| **Copilot suggestion streaming stuck** | Stays on screen until click or a new question | Card remains until Tony acts | User can press Assist again or ask something new |
 | **Sign-in failed (SSO)** | Onboarding Step 1 error | "Sign-in failed. Use a Mantu Microsoft account." | Same screen; retry both buttons remain active |
 | **No permission at onboarding** | Onboarding Step 2 checklist | "grant access when you first press Listen" / "needed for the other side of calls + screen capture" | Row stays amber until granted; no block on "Get started" |
 
@@ -2309,7 +2305,7 @@ provider-outage
 2. **Parallel, never sequential.** On a hotkey, fire screen capture, retrieval, transcript-summary, and the fast draft *at the same time*. The slowest one sets the latency, not the sum. A chain of model calls is a bug, not an architecture.
 3. **Quick answer first, verified answer second.** Show the fast-model draft immediately; let the strong/verifier model correct it in place. Most of the time the draft is right and the user already moved on — that's the win.
 4. **Grounded over clever.** A short answer with `[transcript 02:14]` beats a brilliant essay with no source. "I can't see that" is a *feature*. Hallucination is the one unforgivable failure for a tool people trust in front of clients.
-5. **Calm UI.** One pinned bar. Answer grows below it — the bar never jumps. Proactive suggestions are rare, high-confidence-only, and auto-dismiss in a few seconds. Never nag, never pulse for attention, never thank the user for talking to it.
+5. **Calm UI.** One pinned bar. Answer grows below it — the bar never jumps. Proactive suggestions are rare, high-confidence-only, and stay until click or a new question. Never nag, never pulse for attention, never thank the user for talking to it.
 6. **On-device first.** Transcription, VAD, and redaction run locally. Cloud is for reasoning, and only on text that survived redaction. This is latency, privacy, and offline resilience in one decision — and it's the trust moat.
 7. **Transparent, not stealthy.** Visible AI-active status. The content-protection toggle is framed as *your* privacy (your answers stay out of your own screen-share), never as hiding from the room. We refuse the cheating market on purpose; it's a worse business and a worse product.
 8. **Connect once, disconnect clean.** Dust, Claude CLI, and Codex CLI bind a single time through the OS keychain (`safeStorage`) and persist across restarts — surfaced in Settings → AI with a one-click Disconnect. API keys add/remove freely, stored encrypted, never in plaintext, never logged. Setup friction is where copilots die; pay it once.

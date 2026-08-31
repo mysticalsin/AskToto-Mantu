@@ -164,13 +164,6 @@ export function saveFailureReason(err: unknown): string {
   return raw
 }
 
-// How long a finished live copilot suggestion stays on screen before it auto-dismisses. Tony's call: a
-// suggestion should be glanceable and then get out of the way — 4 seconds, not lingering.
-const SUGGESTION_TTL_MS = 4000
-// Hard ceiling from when a suggestion first appears, so a stuck/never-finishing stream can't linger.
-// Tony: an assist must never stay on screen longer than 7 seconds.
-const SUGGESTION_MAX_MS = 7000
-
 // Dev-only visual seed for screenshots (?demo=answer|copilot|settings|onboarding|review). No-op in prod.
 const DEMO = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('demo') : null
 const DEMO_ANSWER = `## Quicksort in TypeScript
@@ -925,29 +918,8 @@ export function App(): JSX.Element {
     setFocusSignal((x) => x + 1)
   }, [ask.answer, suggest.answer, view])
 
-  // Live copilot suggestions are ephemeral — auto-dismiss SUGGESTION_TTL_MS after one finishes so the
-  // card doesn't linger over the call. ONLY ambient auto-suggestions (answer.ephemeral) count down:
-  // user-initiated turns on this surface (typed questions, Assist, quick actions) stay until the user
-  // acts — auto-wiping an answer someone asked for is data loss. The timer arms only once streaming
-  // ends; a new/updated suggestion re-runs this effect and resets it (the cleanup clears the timer).
-  useEffect(() => {
-    const a = suggest.answer
-    if (!a || !a.ephemeral || a.streaming) return // still streaming → wait before counting down
-    const t = setTimeout(() => suggest.clear(), SUGGESTION_TTL_MS)
-    return () => clearTimeout(t)
-  }, [suggest.answer, suggest.clear])
-
-  // Hard ceiling: arm a max-age timer the moment an AMBIENT suggestion first appears (null→non-null)
-  // or its identity changes (new suggestion). Fires regardless of streaming state so a stream that
-  // never finishes still gets cleared. The cleanup cancels the timer on identity change or unmount so
-  // each new suggestion gets a fresh SUGGESTION_MAX_MS budget.
-  const suggestId = suggest.answer?.ephemeral ? suggest.answer.id : null
-  useEffect(() => {
-    if (suggestId === null) return
-    const t = setTimeout(() => suggest.clear(), SUGGESTION_MAX_MS)
-    return () => clearTimeout(t)
-  }, [suggestId, suggest.clear])
-
+  // Ambient auto-answer stays until Tony clicks (clearAnswer / back) or a new question replaces it
+  // (new user ask, or a new ambient suggestion). No TTL. No max-age. Never auto-send.
   // Subtle sound cue when an Ask answer finishes (ready) or fails (error). Fires once on the
   // streaming→done edge, gated by the soundCues setting. Live copilot suggestions stay silent (ambient).
   const prevStreamingRef = useRef(false)
@@ -1606,22 +1578,8 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (!listen.listening) setShowSpec(false)
   }, [listen.listening])
-  // 3) The speculative suggestion shown via showSpec never touches suggest.answer, so the TTL/MAX-ceiling
-  //    effects above (both keyed on suggest.answer) have nothing to arm a timer on — without this, an
-  //    instant "What to say next" could sit on screen for the rest of the call, contradicting the same
-  //    4s/7s contract documented above. Mirrors that same two-effect shape: TTL arms once the shown answer
-  //    stops streaming, MAX arms the instant showSpec itself flips true (a hard ceiling from when the user
-  //    actually started seeing it, independent of any background regeneration underneath).
-  useEffect(() => {
-    if (!showSpec || !speculative.answer || speculative.answer.streaming) return
-    const t = setTimeout(() => setShowSpec(false), SUGGESTION_TTL_MS)
-    return () => clearTimeout(t)
-  }, [showSpec, speculative.answer])
-  useEffect(() => {
-    if (!showSpec) return
-    const t = setTimeout(() => setShowSpec(false), SUGGESTION_MAX_MS)
-    return () => clearTimeout(t)
-  }, [showSpec])
+  // 3) Speculative showSpec has no timer either. It stays until Tony clicks (clearAnswer) or a new
+  //    question replaces it (liveSuggestId above, or a new user ask). Never auto-send.
 
   const whatNext = useCallback(() => {
     // Gate on the suggest task: the dominant live-meeting route (transcript present) fires mode

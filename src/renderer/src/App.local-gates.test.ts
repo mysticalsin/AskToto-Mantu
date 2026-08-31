@@ -306,22 +306,28 @@ describe('Summarize screen-route mirrors askScreen\'s actual vision gate (findin
   })
 })
 
-describe('Speculative (showSpec) suggestion auto-dismiss (finding 4)', () => {
-  // The two pre-existing dismiss effects key on suggest.answer only; whatNext's instant path can show
-  // speculative.answer via showSpec without ever touching suggest.answer, so a second, mirrored pair keyed
-  // on showSpec itself is required to honor the same SUGGESTION_TTL_MS/SUGGESTION_MAX_MS contract.
+describe('Speculative (showSpec) suggestion stays until click or a new question (finding 4)', () => {
   const machineryBlock = blockBetween(
     '// Instant-suggestion machinery',
     'const whatNext = useCallback('
   )
 
-  it('a TTL effect keyed on showSpec dismisses the speculative suggestion once it stops streaming', () => {
-    expect(machineryBlock).toMatch(/if \(!showSpec \|\| !speculative\.answer \|\| speculative\.answer\.streaming\) return/)
-    expect(machineryBlock).toMatch(/setTimeout\(\(\) => setShowSpec\(false\), SUGGESTION_TTL_MS\)/)
+  it('does not arm a TTL or max-age timer on showSpec or suggest.answer', () => {
+    expect(source).not.toMatch(/SUGGESTION_TTL_MS/)
+    expect(source).not.toMatch(/SUGGESTION_MAX_MS/)
+    expect(source).not.toMatch(/setTimeout\(\(\) => suggest\.clear\(\)/)
+    expect(source).not.toMatch(/setTimeout\(\(\) => setShowSpec\(false\)/)
+    expect(machineryBlock).not.toMatch(/setTimeout\(\(\) => setShowSpec\(false\)/)
   })
 
-  it('a hard-ceiling effect keyed on showSpec fires regardless of streaming state', () => {
-    expect(machineryBlock).toMatch(/setTimeout\(\(\) => setShowSpec\(false\), SUGGESTION_MAX_MS\)/)
+  it('a new live suggestion still replaces the speculative card', () => {
+    expect(machineryBlock).toMatch(/if \(liveSuggestId\) setShowSpec\(false\)/)
+  })
+
+  it('click dismisses via clearAnswer and does not send the suggestion', () => {
+    const clearAnswer = blockBetween('const clearAnswer = useCallback(', 'const toggleTranscript = useCallback(')
+    expect(clearAnswer).toMatch(/suggest\.clear\(\)/)
+    expect(clearAnswer).not.toMatch(/ask\.run|suggest\.run|submit/)
   })
 })
 
