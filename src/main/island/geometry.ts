@@ -299,6 +299,23 @@ export function hideParkRect(m: DisplayMetrics): Rect {
   return { x, y: hoverRestTop(m), width, height }
 }
 
+/**
+ * Display topology change while hide/island is parked.
+ * Re-apply the rest rect on the NEW display. Never clampHeight (BAR_MIN_HEIGHT 44)
+ * and never slide y into workArea (Tony live after a display move: 8×44 at Y=39).
+ * Hide park at bounds.y is "off" the work area on a notch Mac (workArea.y ≈ 39);
+ * that is correct, not a reason to grow the hairline.
+ */
+export function parkedHoverReanchor(
+  layout: OverlayLayout,
+  resting: boolean,
+  nextDisplay: DisplayMetrics,
+  topMargin: number
+): Rect | null {
+  if (!resting || !overlayUsesHover(layout)) return null
+  return parkAfterExclusiveOnboarding(layout, nextDisplay, topMargin)
+}
+
 /** Tony live fails: 560×44 slab and 560×103 stub. Hide rest must not look like either. */
 export function isVisibleHideSlab(win: Pick<Rect, 'width' | 'height'>): boolean {
   return win.height > OVERLAY_HIDE_PARK.height || (win.width >= 220 && win.height >= 20)

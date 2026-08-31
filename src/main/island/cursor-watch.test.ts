@@ -47,6 +47,28 @@ describe('cursor-in-rect (Mac Dynamic Island hover)', () => {
     ).toBe('hide')
   })
 
+  it('after a display move, island hover at Y=12 still reveals (watch stays at bounds.y)', () => {
+    const second: DisplayMetrics = {
+      bounds: { x: 1800, y: 0, width: 1920, height: 1080 },
+      workArea: { x: 1800, y: 39, width: 1920, height: 1041 },
+      hasNotch: true,
+      notchWidth: 200,
+      menuBarHeight: 39,
+      source: 'helper'
+    }
+    const rest = hoverWatchRestRect('island', second)
+    expect(rest.y).toBe(second.bounds.y)
+    expect(rest.y).not.toBe(second.workArea.y)
+    expect(
+      decideCursorWatch({
+        cursor: { x: 1800 + 960, y: 12 },
+        restRect: rest,
+        revealedRect: { x: 1800 + 520, y: 39, width: 880, height: 84 },
+        revealed: false
+      })
+    ).toBe('reveal')
+  })
+
   it('does not treat a cursor at Y=12 as having left a macOS-clamped bar', () => {
     const rest = hoverWatchRestRect('hide', tonyMac)
     const revealed = { x: 460, y: 39, width: 880, height: 84 }

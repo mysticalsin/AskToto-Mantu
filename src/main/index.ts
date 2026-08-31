@@ -152,6 +152,7 @@ import {
   hoverWatchRestRect,
   overlayRestSize,
   parkAfterExclusiveOnboarding,
+  parkedHoverReanchor,
   shouldIgnoreResizeWhilePeekResting,
   shouldParkHoverRestAfterLeavingSurface,
   topCenterPosition,
@@ -1542,6 +1543,10 @@ function createWindow(): void {
     maximizable: false,
     minimizable: false,
     roundedCorners: !onboardingLive,
+    // macOS default min height can be ~44. Hide park is 8×2; without this, a display
+    // move reports 8×44 (Tony listwins) even after clampHeight lets 2px through.
+    minWidth: 1,
+    minHeight: 1,
     backgroundColor: onboardingLive ? '#3A0B6B' : '#00000000',
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
@@ -1556,6 +1561,12 @@ function createWindow(): void {
   })
 
   try {
+  // Frameless transparent windows on darwin still inherit an OS min (~44). Hide park is 8×2.
+  try {
+    win.setMinimumSize(1, 1)
+  } catch {
+    /* headless */
+  }
   if (onboardingLive) applyExclusiveOnboardingStage(win, placementDisplay)
   applyOverlayAlwaysOnTop(win)
   // setVisibleOnAllWorkspaces is a documented no-op on Windows (Electron: "This API does nothing on
@@ -1880,6 +1891,11 @@ function parkOverlayAfterHideSpring(): void {
   currentWidth = park.width
   islandResting = true
   userAnchorY = park.y
+  try {
+    win.setMinimumSize(1, 1)
+  } catch {
+    /* headless */
+  }
   win.setBounds(park, false)
   applyHideClickThrough()
 }
@@ -2386,6 +2402,23 @@ function registerScreenListeners(): void {
     if (onboardingExclusiveLive()) {
       applyExclusiveOnboardingStage(win)
       return
+    }
+    // Hide/island already parked: re-apply the rest rect on the new display.
+    // Do not clampHeight (BAR_MIN_HEIGHT 44) or slide y into workArea (Tony live: 8×44 at Y=39).
+    // Hide at bounds.y is outside a notched workArea; that is the park, not "off-screen".
+    {
+      const display = screen.getDisplayMatching(win.getBounds())
+      const park = parkedHoverReanchor(
+        liveOverlayLayout(),
+        islandResting,
+        getDisplayMetrics(display),
+        ISLAND_TOP_MARGIN
+      )
+      if (park) {
+        overlayCursorWatchHovering = false
+        parkOverlayAfterHideSpring()
+        return
+      }
     }
     const b = win.getBounds()
     const { workArea: wa } = screen.getDisplayMatching(b)

@@ -29,6 +29,7 @@ import {
   OVERLAY_ISLAND_PEEK,
   hideParkRect,
   isVisibleHideSlab,
+  parkedHoverReanchor,
   ISLAND_NOTCH_STRUT_PX,
   type DisplayMetrics,
   type Rect
@@ -312,6 +313,34 @@ describe('MQA-275 — clamp primitives (moved verbatim from index.ts)', () => {
     expect(moved.width).toBe(8)
   })
 
+  it('parked hide reanchor stays 8×2 at bounds.y after a display move, even from Tony 8×44 at Y=39', () => {
+    const second: DisplayMetrics = {
+      bounds: { x: 1800, y: 0, width: 1920, height: 1080 },
+      workArea: { x: 1800, y: 39, width: 1920, height: 1041 },
+      hasNotch: true,
+      notchWidth: 200,
+      menuBarHeight: 39,
+      source: 'helper'
+    }
+    expect(parkedHoverReanchor('bar', true, second, 8)).toBeNull()
+    expect(parkedHoverReanchor('hide', false, second, 8)).toBeNull()
+    const park = parkedHoverReanchor('hide', true, second, 8)
+    expect(park).not.toBeNull()
+    expect(park!.width).toBe(8)
+    expect(park!.height).toBe(2)
+    expect(park!.height).toBeLessThanOrEqual(8)
+    expect(park!.y).toBe(second.bounds.y)
+    expect(park!.y).not.toBe(second.workArea.y)
+    expect(isVisibleHideSlab(park!)).toBe(false)
+    const island = parkedHoverReanchor('island', true, second, 8)
+    expect(island).not.toBeNull()
+    expect(island!.height).toBeLessThan(44)
+    expect(island!.y).toBe(second.bounds.y)
+    const watch = hoverWatchRestRect('island', second)
+    expect(watch.y).toBe(second.bounds.y)
+    expect(watch.height).toBeGreaterThanOrEqual(second.workArea.y)
+  })
+
   it('slideWithinMargin keeps a tall window inside the work area with margin on both edges', () => {
     const y = slideWithinMargin(-100, 400, RETINA_WORK_AREA, 8)
     expect(y).toBe(RETINA_WORK_AREA.y + 8)
@@ -463,6 +492,9 @@ describe('DESIGN.md overlay contract', () => {
     expect(design).toMatch(/1–8px|1-8px/)
     expect(design).toMatch(/hoverWatchRestRect/)
     expect(design).toMatch(/transparent/)
+    expect(design).toMatch(/parkedHoverReanchor/)
+    expect(design).toMatch(/registerScreenListeners/)
+    expect(design).toMatch(/8×44/)
   })
 
   it('names hover-down, exclusive fullscreen, large CTA, and Métis demo', () => {
@@ -496,6 +528,7 @@ describe('DESIGN.md overlay contract', () => {
     expect(design).toMatch(/liquid glass/)
     expect(design).toMatch(/Do not add or restyle overlay \/ onboarding UI unless it matches this document/)
     expect(design).toMatch(/\*\*hide\*\* \(default\)/)
+    expect(design).toMatch(/Display move \(required\)/)
     expect(design).toMatch(/no fake notch/)
   })
 })
@@ -516,6 +549,13 @@ describe('island reveal/collapse wiring (index.ts)', () => {
     expect(index).toMatch(/setIgnoreMouseEvents/)
     expect(index).toMatch(/BAR_MIN_HEIGHT \(44\) must never grow it/)
     expect(index).toMatch(/applyHideClickThrough/)
+    expect(index).toMatch(/setMinimumSize\(1, 1\)/)
+    expect(index).toMatch(/minWidth: 1/)
+    expect(index).toMatch(/minHeight: 1/)
+    const reanchor = index.slice(index.indexOf('function registerScreenListeners'), index.indexOf('function toggleVisible'))
+    expect(reanchor).toMatch(/parkOverlayAfterHideSpring\(\)/)
+    expect(reanchor).toMatch(/parkedHoverReanchor/)
+    expect(reanchor.indexOf('parkOverlayAfterHideSpring')).toBeLessThan(reanchor.indexOf('const height = clampHeight'))
     const hideTick = index.slice(index.indexOf('function tickOverlayCursorWatch'), index.indexOf('function notifyOverlayCursorHover'))
     expect(hideTick).not.toMatch(/setBounds\(park/)
     expect(hideTick).not.toMatch(/parkAfterExclusiveOnboarding/)
