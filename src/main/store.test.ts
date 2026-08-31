@@ -424,6 +424,24 @@ describe('store', () => {
       setApiKey('dust', 'test-dust-key')
     })
 
+    it('empty or restricted list is not ok', async () => {
+      getAgentConfigurations.mockResolvedValue({ isErr: () => false, value: [] })
+      const result = await listDustAgents()
+      expect(getAgentConfigurations).toHaveBeenCalledWith({ view: 'list' })
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(/no agents/i)
+    })
+
+    it('archived-only list is empty after the active filter and is not ok', async () => {
+      getAgentConfigurations.mockResolvedValue({
+        isErr: () => false,
+        value: [{ sId: 'gone', name: 'Archived', status: 'archived' }]
+      })
+      const result = await listDustAgents()
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(/no agents/i)
+    })
+
     it('requests view:list and returns only active (and status-undefined) agents, mapped to picker shape', async () => {
       getAgentConfigurations.mockResolvedValue({
         isErr: () => false,
@@ -549,20 +567,61 @@ describe('store', () => {
       const managed = join(userData, 'managed-config.json')
       writeFileSync(managed, JSON.stringify({ allowedProviders: ['dust'] }), 'utf8')
       setSettings({ dustWorkspaceId: 'ws-1' })
-      getAgentConfigurations.mockResolvedValue({ isErr: () => false, value: [] })
+      getAgentConfigurations.mockResolvedValue({
+        isErr: () => false,
+        value: [{ sId: 'agent-1', name: 'Métis', status: 'active' }]
+      })
+
+      const result = await testApiKey('dust', 'test-dust-key')
+
+      expect(result.ok).toBe(true)
+      expect(getAgentConfigurations).toHaveBeenCalledWith({ view: 'list' })
+    })
+
+    it('does not gate providers when no allowedProviders policy is set (null = unrestricted)', async () => {
+      setSettings({ dustWorkspaceId: 'ws-1' })
+      getAgentConfigurations.mockResolvedValue({
+        isErr: () => false,
+        value: [{ sId: 'agent-1', name: 'Métis', status: 'active' }]
+      })
 
       const result = await testApiKey('dust', 'test-dust-key')
 
       expect(result.ok).toBe(true)
     })
+  })
 
-    it('does not gate providers when no allowedProviders policy is set (null = unrestricted)', async () => {
+  describe('testApiKey Dust live list', () => {
+    it('fails when Dust returns no agents — empty list is not a working connection', async () => {
       setSettings({ dustWorkspaceId: 'ws-1' })
       getAgentConfigurations.mockResolvedValue({ isErr: () => false, value: [] })
 
       const result = await testApiKey('dust', 'test-dust-key')
 
-      expect(result.ok).toBe(true)
+      expect(getAgentConfigurations).toHaveBeenCalledWith({ view: 'list' })
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(/no agents/i)
+    })
+
+    it('fails loud on 401 instead of reporting the key valid', async () => {
+      setSettings({ dustWorkspaceId: 'ws-1' })
+      getAgentConfigurations.mockResolvedValue({
+        isErr: () => true,
+        error: { message: '401 Unauthorized' }
+      })
+
+      const result = await testApiKey('dust', 'bad-key')
+
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(/401/)
+    })
+
+    it('refuses to test without a workspace', async () => {
+      setSettings({ dustWorkspaceId: '' })
+      const result = await testApiKey('dust', 'test-dust-key')
+      expect(result.ok).toBe(false)
+      expect(result.error).toMatch(/workspace/i)
+      expect(getAgentConfigurations).not.toHaveBeenCalled()
     })
   })
 
