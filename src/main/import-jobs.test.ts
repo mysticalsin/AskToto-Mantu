@@ -848,8 +848,12 @@ describe('ImportJobManager', () => {
 
   it('resume still re-queues a failed job after a multi-file start', async () => {
     let n = 0
+    let failedOnce = false
     const decode = vi.fn(async (job: ImportJob) => {
-      if (job.jobId === 'job-1') throw new Error('decoder died')
+      if (job.jobId === 'job-1' && !failedOnce) {
+        failedOnce = true
+        throw new Error('decoder died')
+      }
     })
     const { manager } = createManager({
       decode,
