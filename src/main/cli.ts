@@ -23,6 +23,7 @@ import { createInterface } from 'node:readline'
 import { app, shell } from 'electron'
 import { existsSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
+import type { StreamCacheUsage } from '@shared/operator'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS } from '@shared/providers'
 import type { CliActionResult, CliInstallResult } from '@shared/ipc'
@@ -460,7 +461,7 @@ export interface RunCliStreamOpts {
   idleMs?: number
   handlers: {
     onDelta: (text: string) => void
-    onDone: (u: Record<string, never>) => void
+    onDone: (u: StreamCacheUsage) => void
     onError: (message: string) => void
   }
 }

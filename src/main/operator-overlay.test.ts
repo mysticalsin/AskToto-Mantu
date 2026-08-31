@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it, vi } from 'vitest'
@@ -59,6 +59,13 @@ describe('Approve without Push vs signed overlay', () => {
       TEST_SKILL_PRIVATE_KEY_PEM
     )
     expect(applySignedSkillPack(signed)).toBe(false)
-    expect(() => applyOverlaySkillFile('interview', body.replace('body', 'tamper'))).toThrow()
+    expect(loadVerifiedSkill('interview').version).not.toBe('9.9.8')
+    const good = `---\nid: interview\nversion: 9.9.7\nlocked: true\n---\n\nStay the candidate.\n`
+    applyOverlaySkillFile('interview', good)
+    writeFileSync(join(overlay, 'interview', 'SKILL.md'), good.replace('candidate', 'tampered'), 'utf8')
+    expect(() => {
+      clearModeSkillsCacheForTests()
+      loadVerifiedSkill('interview')
+    }).toThrow(/hash mismatch/)
   })
 })

@@ -41,10 +41,8 @@ function isAdminPath(pathname: string): boolean {
   return pathname === '/' || pathname.startsWith('/v1/admin')
 }
 
-function redactedPreview(question: string | undefined, mode: string | undefined): string {
-  if (!question) return mode ? `${mode} ask` : 'Ask'
-  const clean = question.replace(/\s+/g, ' ').trim()
-  return (clean.slice(0, 42) + (clean.length > 42 ? '…' : '')).replace(/sk-[A-Za-z0-9_-]{8,}/g, '[redacted]')
+function redactedPreview(_question: string | undefined, mode: string | undefined): string {
+  return mode ? `${mode} ask` : 'Ask'
 }
 
 export async function handleRequest(

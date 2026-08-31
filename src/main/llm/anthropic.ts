@@ -82,11 +82,11 @@ export function streamAnthropic(opts: StreamOptions): StreamHandle {
       aborted = true
       stream.abort()
     }, opts.idleMs)
-    stream.on('text', (t) => {
+    stream.on('text', (t: string) => {
       wd.ping()
       opts.handlers.onDelta(t)
     })
-    stream.on('error', (e) => {
+    stream.on('error', (e: unknown) => {
       if (settled || aborted) return
       if (usedTtl === '1h' && isTtlRejection(e)) {
         wd.clear()
@@ -97,13 +97,13 @@ export function streamAnthropic(opts: StreamOptions): StreamHandle {
     })
     stream
       .finalMessage()
-      .then((m) => {
+      .then((m: { usage?: unknown }) => {
         if (settled) return
         settled = true
         wd.clear()
         opts.handlers.onDone(mapAnthropicUsage(m.usage, usedTtl))
       })
-      .catch((e) => {
+      .catch((e: unknown) => {
         if (settled || aborted) return
         if (usedTtl === '1h' && isTtlRejection(e)) {
           wd.clear()
