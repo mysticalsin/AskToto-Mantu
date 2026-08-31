@@ -35,8 +35,9 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(css).toMatch(/#7f00da/)
   })
 
-  it('unmounts the hero video after Act 1 so it is not compositing later', () => {
-    expect(experience).toMatch(/\{scene === 'hero' && <OnboardingHeroVideo/)
+  it('unmounts the hero video after Act 1 unless the starfield bed fails', () => {
+    expect(experience).toMatch(/\(scene === 'hero' \|\| starfieldFailed\) && <OnboardingHeroVideo/)
+    expect(experience).toMatch(/shouldMountStarfield\(scene\) && !starfieldFailed/)
     expect(experience).toMatch(/el\?\.pause\(\)/)
     const videoRule = css.slice(css.indexOf('.onboard-hero-video video'))
     const videoBlock = videoRule.slice(0, videoRule.indexOf('}', 8) + 1)
