@@ -200,11 +200,14 @@ export type AuditEvent =
   | 'mcp.connected'
   | 'mcp.disconnected'
   | 'mcp.push'
-  // ClickUp's OAuth 2.1+PKCE handshake itself (main/mcp/clickupOAuth.ts) — distinct from the generic
-  // mcp.connected above, which fires once the resulting token is actually saved.
+  // ClickUp / Plane OAuth 2.1+PKCE handshake itself (main/mcp/clickupOAuth.ts, planeOAuth.ts) —
+  // distinct from the generic mcp.connected above, which fires once the resulting token is actually saved.
   | 'clickup.oauth.state_mismatch'
   | 'clickup.oauth.denied'
   | 'clickup.oauth.failed'
+  | 'plane.oauth.state_mismatch'
+  | 'plane.oauth.denied'
+  | 'plane.oauth.failed'
   | 'dust.conversation'
   | 'brain.ingest'
   | 'brain.backfill.start'
