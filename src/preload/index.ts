@@ -136,6 +136,13 @@ const api = {
   brainStatus: (): Promise<import('@shared/brain').BrainStatus | null> =>
     ipcRenderer.invoke(IPC.brainStatus),
   brainBackfill: (): Promise<{ queued: number; deferred?: 'no-provider'; preparing?: boolean }> => ipcRenderer.invoke(IPC.brainBackfill),
+  brainIntelligencePass: (): Promise<{
+    queued: number
+    deferred?: 'no-provider'
+    preparing?: boolean
+    error?: string
+    upToDate?: boolean
+  }> => ipcRenderer.invoke(IPC.brainIntelligencePass),
   brainOpenDashboard: (): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.brainOpenDashboard),
   // MI-2.5 Fix F: `error` is set (queued: 0) when a purge failure aborts the rebuild before it starts.

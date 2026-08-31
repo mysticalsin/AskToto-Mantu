@@ -1,4 +1,47 @@
+import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
+
+const UPDATE_LABEL = 'Update Intelligence'
+const UPDATING_LABEL = 'Updating'
+
+function UpdateIntelligenceControl() {
+  const [running, setRunning] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  if (!window.intelligence?.runPass) return null
+
+  return (
+    <div className="win-no-drag flex max-w-[220px] flex-col items-end gap-1">
+      <button
+        type="button"
+        data-intelligence-update=""
+        disabled={running}
+        title="Update Intelligence from your meetings"
+        onClick={() => {
+          void (async () => {
+            setRunning(true)
+            setError(null)
+            try {
+              const result = await window.intelligence!.runPass!()
+              if (result.error) setError(result.error)
+            } catch (e) {
+              setError(e instanceof Error ? e.message : String(e))
+            } finally {
+              setRunning(false)
+            }
+          })()
+        }}
+        className="rounded-full bg-mantu px-3 py-1.5 text-xs font-semibold text-white shadow hover:brightness-110 disabled:opacity-60"
+      >
+        {running ? UPDATING_LABEL : UPDATE_LABEL}
+      </button>
+      {error && (
+        <p className="text-right text-[11px] leading-snug text-rose-300" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  )
+}
 
 const links = [
   { to: '/', label: 'Today', end: true },
@@ -50,14 +93,17 @@ export function NavBar() {
             </NavLink>
           ))}
         </nav>
-        {/* HashRouter + file:// packaging: a root-relative href navigates the top frame to the
-            filesystem root instead of the app's own route. Hash nav stays in-window and in-app. */}
-        <a
-          href="#/embed"
-          className="win-no-drag text-xs font-medium text-mantu-light hover:underline"
-        >
-          Compact embed view →
-        </a>
+        <div className="flex items-center gap-3">
+          <UpdateIntelligenceControl />
+          {/* HashRouter + file:// packaging: a root-relative href navigates the top frame to the
+              filesystem root instead of the app's own route. Hash nav stays in-window and in-app. */}
+          <a
+            href="#/embed"
+            className="win-no-drag text-xs font-medium text-mantu-light hover:underline"
+          >
+            Compact embed view →
+          </a>
+        </div>
       </div>
     </header>
   )

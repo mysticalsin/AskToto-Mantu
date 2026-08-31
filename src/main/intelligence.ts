@@ -22,7 +22,7 @@ export function syncIntelContentProtection(): void {
 /**
  * The Mantu Intelligence dashboard — a normal, resizable window (not the overlay). Loads the
  * bundled static build of the intelligence/ workspace; its own minimal preload (see
- * src/preload/intelligence.ts) exposes only read access to the brain via IPC, decrypted in main.
+ * src/preload/intelligence.ts) exposes read access plus the guarded Update Intelligence pass.
  */
 
 let intelWin: BrowserWindow | null = null
