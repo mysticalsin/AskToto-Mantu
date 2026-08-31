@@ -47,6 +47,7 @@ thinking-orbs stay the wait language (Thinking / Planning / Connecting / …). G
 1. **CTA.** Wrap each `onboard-cta` (Next / Continue / Set me up / Get started / Activate host) in `GooeySurface` `variant="cta"`. Button class stays on the `<button>` (always visible, min 52×220, no glass, no fade-up). Child background goes transparent so the liquid fill is the pill. Press: `scale` ~0.96, `transition="bouncy"`, `contentBlur: 0`.
 2. **Scene.** Do **not** wrap a scene in a filled Liquid group (that would paint a panel over the grid). Scene settle is CSS only: short overshoot on `.scene-enter` (transform + opacity). Crossfade clip → grid stays opacity-only 640ms.
 3. **Wait host.** Wrap the thinking-orb slot (`agent-status__orb`) in `GooeySurface` `variant="wait"`, fill `rgba(192, 132, 252, 0.16)`. Caption stays crisp outside the droplet. Orb canvas is never filtered.
+4. **Select.** Wrap only the chosen Act 4 mode card in `GooeySurface` `variant="select"`. Fill `rgba(154, 43, 240, 0.32)`. Soft purple rim shadow. Light waviness. The card keeps `is-selected` (stronger `#C084FC` border + glow + opacity pulse on `::after`). Unselected cards stay quieter and unwrapped. This is the choose morph, not a one-shot flash.
 
 ## Out of scope
 
@@ -67,7 +68,7 @@ thinking-orbs stay the wait language (Thinking / Planning / Connecting / …). G
 | `docs/design/GOOEY-MOTION.md` | this contract |
 | `gooey-motion.ts` | blur / contrast / fills / bounce pins |
 | `GooeySurface.tsx` | Liquid wrapper; pass-through when reduced |
-| `OnboardingExperience.tsx` / `OnboardingDemoScene.tsx` | CTA wraps |
+| `OnboardingExperience.tsx` / `OnboardingDemoScene.tsx` | CTA wraps; Act 4 selected card uses `variant="select"` |
 | `AgentStatus.tsx` | wait-host wrap around the orb slot |
 | `styles.css` | scene-enter overshoot; transparent CTA face on gooey host |
 

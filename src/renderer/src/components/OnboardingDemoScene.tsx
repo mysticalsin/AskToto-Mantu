@@ -156,7 +156,7 @@ export function OnboardingDemoScene({
   onContinue,
   onPlayVideo
 }: {
-  mode: string
+  mode: string | null
   onSetMode: (mode: BuiltinMode) => void
   onContinue: () => void
   onPlayVideo?: () => void
@@ -281,7 +281,7 @@ export function OnboardingDemoScene({
           )}
         </div>
       ) : (
-        <DemoRecapCard mode={mode} />
+        <DemoRecapCard mode={mode ?? 'general'} />
       )}
       </div>
 

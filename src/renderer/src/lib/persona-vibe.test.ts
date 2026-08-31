@@ -1,9 +1,24 @@
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
 import { CONVERSATION_MODES } from '@shared/ipc'
-import { ONBOARDING_PERSONAS, personaVibe } from './persona-vibe'
+import {
+  ONBOARDING_PERSONAS,
+  PERSONALIZE_LEAD,
+  PERSONALIZE_MUST_PICK,
+  PERSONALIZE_TITLE,
+  personaVibe
+} from './persona-vibe'
 
 describe('persona-vibe', () => {
+  it('pins Act 4 required-pick copy (no em dash)', () => {
+    expect(PERSONALIZE_TITLE).toBe('How should Métis show up?')
+    expect(PERSONALIZE_MUST_PICK).toBe('Pick one. Continue waits until you do.')
+    expect(PERSONALIZE_LEAD).toBe('Change it anytime in Settings.')
+    expect(PERSONALIZE_MUST_PICK).not.toMatch(/\u2014/)
+    expect(PERSONALIZE_LEAD).not.toMatch(/\u2014/)
+    expect(PERSONALIZE_TITLE).not.toMatch(/\u2014/)
+  })
+
   it('offers every built-in mode, so each role has a summary to demo', () => {
     expect(ONBOARDING_PERSONAS.map((p) => p.id).sort()).toEqual([...CONVERSATION_MODES].sort())
   })

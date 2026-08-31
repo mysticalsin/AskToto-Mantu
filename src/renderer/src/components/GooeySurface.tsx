@@ -45,8 +45,10 @@ export function GooeySurface({
       blur={GOOEY.blur}
       contrast={GOOEY.contrast}
       fill={fill}
-      shadow={variant === 'cta' && !muted ? GOOEY.ctaShadow : undefined}
-      waviness={variant === 'wait' ? 2 : 0}
+      shadow={
+        variant === 'cta' && !muted ? GOOEY.ctaShadow : variant === 'select' ? GOOEY.selectShadow : undefined
+      }
+      waviness={variant === 'wait' ? 2 : variant === 'select' ? 1 : 0}
       className={cls}
       data-gooey={variant}
       data-gooey-live="1"

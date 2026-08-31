@@ -35,11 +35,14 @@ describe('gooey micro-motion — contract and pins', () => {
       ctaFill: '#f4f4f5',
       ctaMutedFill: 'rgba(244, 244, 245, 0.10)',
       waitFill: 'rgba(192, 132, 252, 0.16)',
-      ctaShadow: '0 2px 16px rgba(244, 244, 245, 0.16)'
+      selectFill: 'rgba(154, 43, 240, 0.32)',
+      ctaShadow: '0 2px 16px rgba(244, 244, 245, 0.16)',
+      selectShadow: '0 0 0 1px rgba(192, 132, 252, 0.7), 0 10px 28px rgba(127, 0, 218, 0.45)'
     })
     expect(gooeyFill('cta')).toBe('#f4f4f5')
     expect(gooeyFill('cta', true)).toBe('rgba(244, 244, 245, 0.10)')
     expect(gooeyFill('wait')).toBe('rgba(192, 132, 252, 0.16)')
+    expect(gooeyFill('select')).toBe('rgba(154, 43, 240, 0.32)')
     expect(host).not.toMatch(/unsplash/i)
     expect(host).not.toMatch(/PlusMenu|round-btn/)
     expect(experience).not.toMatch(/unsplash/i)
@@ -48,6 +51,7 @@ describe('gooey micro-motion — contract and pins', () => {
 
   it('wraps CTAs and orb hosts; never the constellation bed', () => {
     expect(experience).toMatch(/<GooeySurface variant="cta">/)
+    expect(experience).toMatch(/<GooeySurface key=\{p\.id\} variant="select">/)
     expect(experience).toMatch(/className="onboard-cta no-drag focus-ring"/)
     expect(demo).toMatch(/<GooeySurface variant="cta">/)
     expect(agent).toMatch(/<GooeySurface variant="wait">/)

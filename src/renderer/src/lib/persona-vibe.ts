@@ -7,6 +7,11 @@ import type { BuiltinMode } from '@shared/ipc'
 
 export type OnboardingPersonaId = BuiltinMode
 
+/** Act 4. Required. No em dash. */
+export const PERSONALIZE_TITLE = 'How should Métis show up?'
+export const PERSONALIZE_MUST_PICK = 'Pick one. Continue waits until you do.'
+export const PERSONALIZE_LEAD = 'Change it anytime in Settings.'
+
 export interface PersonaVibe {
   id: OnboardingPersonaId
   label: string

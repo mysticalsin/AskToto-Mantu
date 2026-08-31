@@ -45,7 +45,7 @@ describe('tell the room — designed consent on personalize', () => {
     expect(block.indexOf('Continue')).toBeGreaterThan(block.indexOf('TellTheRoomCard'))
     expect(experience.match(/function TellTheRoomCard/g)?.length).toBe(1)
     expect(experience.match(/type="checkbox"/g)?.length).toBe(1)
-    expect(block).toMatch(/disabled=\{\!consent\}/)
+    expect(block).toMatch(/disabled=\{\!consent \|\| \!mode\}/)
     expect(block).not.toMatch(/Ready when you are/)
     expect(css).toMatch(/\.onboard-tell-card\s*\{/)
     expect(css).toMatch(/backdrop-filter:\s*blur\(12px\)/)
@@ -70,7 +70,7 @@ describe('tell the room — designed consent on personalize', () => {
   })
 
   it('Continue stays gated; finish still writes recordingConsent; Ready echoes the quote', () => {
-    expect(experience).toMatch(/if \(doneRef\.current \|\| !consent\) return/)
+    expect(experience).toMatch(/if \(doneRef\.current \|\| !consent \|\| !mode\) return/)
     expect(experience).toMatch(/onDone\(\{ mode, recordingConsent: true \}\)/)
     expect(experience).toMatch(/TELL_THE_ROOM_READY/)
     expect(experience).toMatch(/onboard-tell-quote--echo/)

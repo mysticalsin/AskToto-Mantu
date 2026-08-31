@@ -62,7 +62,13 @@ import { MetisMark } from './MetisMark'
 import { AgentStatus, InlineOrb } from './AgentStatus'
 import { OnboardingDemoScene, prefetchOnboardingDemoChunks } from './OnboardingDemoScene'
 import { isWindows } from '../lib/keys'
-import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
+import {
+  ONBOARDING_PERSONAS,
+  PERSONALIZE_LEAD,
+  PERSONALIZE_MUST_PICK,
+  PERSONALIZE_TITLE,
+  type OnboardingPersonaId
+} from '../lib/persona-vibe'
 import { sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
 import { createOnboardingMusicBed, finishOnboardingAudioThen } from '../lib/onboarding-music'
 import {
@@ -744,7 +750,7 @@ export function OnboardingExperience({
     return () => window.clearTimeout(id)
   }, [heroFading])
   const [rows, setRows] = useState<SetupRow[]>([])
-  const [mode, setMode] = useState<ConversationMode>('general')
+  const [mode, setMode] = useState<ConversationMode | null>(null)
   // Recording-consent gate (CMO-QA #1). Finish is blocked until this checkbox is checked on Ready.
   // There is no skip scene and no skip-the-tour hatch.
   const [consent, setConsent] = useState(false)
@@ -905,7 +911,7 @@ export function OnboardingExperience({
   // CTA, not personalize's Start (which now only advances to license/ready, see sceneAfterPersonalize).
   // Returns a promise so Ready's optional provider link can await it before opening Settings.
   const finish = async (): Promise<void> => {
-    if (doneRef.current || !consent) return
+    if (doneRef.current || !consent || !mode) return
     doneRef.current = true
     await finishOnboardingAudioThen(
       () => {
@@ -1175,32 +1181,22 @@ export function OnboardingExperience({
           <div className="scene-enter flex flex-col items-center gap-6">
           <div className="flex flex-col items-center gap-2">
             <p className="onboard-act4-kicker">Last one</p>
-            <h2 className="onboard-act4-title">How should Métis show up?</h2>
-            <p className="onboard-act4-lead">
-              One pick shapes how it listens and what it says next. Change it anytime in Settings.
-            </p>
+            <h2 className="onboard-act4-title">{PERSONALIZE_TITLE}</h2>
+            <p className="onboard-act4-must">{PERSONALIZE_MUST_PICK}</p>
+            <p className="onboard-act4-lead">{PERSONALIZE_LEAD}</p>
           </div>
-          <div className="onboard-persona-row">
-            {/* The onboarding personality beat (Act 4, Vibe-Island-teardown "the ONE emotional choice
-                after the heavy config step") — three refined cards over the plain three-button picker
-                this replaced, each naming the mode's real behavior change (`persona-vibe.ts`, honest and
-                unit-tested against the actual `DEFAULT_MODE_PROMPTS`) rather than inventing personality
-                settings that don't exist. Selection delight is a single one-shot ring (`.persona-select-
-                ring` below), keyed by `mode` so it retriggers fresh on every pick — same remount trick as
-                `.scene-enter`'s `key={scene}` — and folds into the global prefers-reduced-motion rule for
-                free (0ms duration = jumps straight to its end state, i.e. invisible). */}
+          <div className="onboard-persona-row" role="radiogroup" aria-label={PERSONALIZE_TITLE}>
             {ONBOARDING_PERSONAS.map((p) => {
               const Icon = PERSONA_ICONS[p.id]
               const selected = mode === p.id
-              return (
+              const card = (
                 <button
-                  key={p.id}
                   type="button"
-                  aria-pressed={selected}
+                  role="radio"
+                  aria-checked={selected}
                   onClick={() => setMode(p.id)}
                   className={'onboard-persona no-drag focus-ring' + (selected ? ' is-selected' : '')}
                 >
-                  {selected && <span key={mode} aria-hidden="true" className="persona-select-ring" />}
                   <div className="flex items-center gap-1.5">
                     <Icon size={13} className="text-[color:var(--color-ink)]" />
                     <p className="onboard-persona-label">{p.label}</p>
@@ -1209,23 +1205,33 @@ export function OnboardingExperience({
                   <p className="onboard-persona-changes">{p.changes}</p>
                 </button>
               )
+              return selected ? (
+                <GooeySurface key={p.id} variant="select">
+                  {card}
+                </GooeySurface>
+              ) : (
+                <span key={p.id} className="onboard-persona-slot">
+                  {card}
+                </span>
+              )
             })}
           </div>
           <div className="flex flex-col items-center gap-4">
             <TellTheRoomCard consent={consent} onConsent={setConsent} />
           </div>
           </div>
-          <GooeySurface variant="cta" muted={!consent}>
+          <GooeySurface variant="cta" muted={!consent || !mode}>
           <button
             type="button"
             // Act 6 re-point (MQA-283): advances to license (only if enabled) or straight to Ready —
             // never finishes here directly any more. See onboarding-flow.ts.
             onClick={() => {
+              if (!consent || !mode) return
               playHero()
               setScene(sceneAfterPersonalize(settings?.licenseGateEnabled))
             }}
-            disabled={!consent}
-            className={'onboard-cta no-drag focus-ring' + (consent ? '' : ' onboard-cta--muted')}
+            disabled={!consent || !mode}
+            className={'onboard-cta no-drag focus-ring' + (consent && mode ? '' : ' onboard-cta--muted')}
           >
             Continue
           </button>
@@ -1247,7 +1253,7 @@ export function OnboardingExperience({
         />
       )}
 
-      {scene === 'ready' && (
+      {scene === 'ready' && mode && (
         <ActReady mode={mode} onFinish={finish} onOpenAiSettings={onOpenAiSettings} />
       )}
       </div>
