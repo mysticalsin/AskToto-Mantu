@@ -19,11 +19,12 @@ The tour still reads as one luxury product: April 29 girl clip → purple conste
 
 - Live: https://gooey.jakubantalik.com/
 - Package: `liquid-gooey@0.2.1` MIT — https://github.com/Jakubantalik/Libraries/tree/main/packages/liquid-gooey
-- Install: `npm install liquid-gooey@0.2.1` (exact pin). Renderer `devDependency` (Vite bundles it).
+- Install: `npm install liquid-gooey@0.2.1` (exact pin). Commit `package.json` **and** `package-lock.json`. Renderer `devDependency` (Vite bundles it).
 - Do not rewrite their silhouette engine. Do not copy the playground. Do not add Unsplash or demo-page chrome from that site.
+- `GooeySurface` lazy-loads the package. Never `import { Liquid } from 'liquid-gooey'` at module top. Missing or thrown import falls back to the solid CTA / orb host. Constellation and orbs still show.
 
 ```tsx
-import { Liquid } from 'liquid-gooey'
+const Liquid = await loadLiquidGooey() // null if missing
 <Liquid blur={5} contrast={16} fill="#f4f4f5">
   <Liquid.Item morph={{ shape: true, bounce: 0.28, contentBlur: 0 }} transition="bouncy">
     {children}
@@ -59,7 +60,7 @@ thinking-orbs stay the wait language (Thinking / Planning / Connecting / …). G
 
 ## Reduced motion / fail
 
-`prefers-reduced-motion` and no-`window` (tests / SSR): `GooeySurface` is a pass-through. Package transitions also snap. Never throw. Never leave a blank hole.
+`prefers-reduced-motion`, no-`window` (tests / SSR), missing `liquid-gooey`, or a thrown dynamic import: `GooeySurface` is a pass-through. Vite also stubs the bare specifier if `node_modules` does not have the package. Never throw. Never leave a blank purple hole. The girl clip, constellation-grid, and thinking-orbs still mount.
 
 ## Files
 
@@ -67,14 +68,16 @@ thinking-orbs stay the wait language (Thinking / Planning / Connecting / …). G
 | --- | --- |
 | `docs/design/GOOEY-MOTION.md` | this contract |
 | `gooey-motion.ts` | blur / contrast / fills / bounce pins |
-| `GooeySurface.tsx` | Liquid wrapper; pass-through when reduced |
+| `GooeySurface.tsx` | Lazy Liquid wrapper; pass-through when reduced / missing package |
+| `gooey-liquid.ts` | dynamic import + catch; never static |
+| `src/shared/optional-liquid-gooey.ts` | Vite stub when `node_modules` lacks the package |
 | `OnboardingExperience.tsx` / `OnboardingDemoScene.tsx` | CTA wraps; Act 4 selected card uses `variant="select"` |
 | `AgentStatus.tsx` | wait-host wrap around the orb slot |
 | `styles.css` | scene-enter overshoot; transparent CTA face on gooey host |
 
 ## Tests (must pass)
 
-1. `liquid-gooey` is pinned `0.2.1` in package.json.
+1. `liquid-gooey` is pinned `0.2.1` in package.json and package-lock.json.
 2. CTAs still have `onboard-cta` on the button, outside `.scene-enter`.
 3. `OnboardingConstellation` / constellation engine never import `liquid-gooey`.
 4. AgentStatus still renders thinking-orbs (`data-thinking-orb` / canvas). Gooey does not replace the orb.

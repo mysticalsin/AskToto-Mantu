@@ -1,7 +1,39 @@
+import { createRequire } from 'node:module'
 import { resolve } from 'path'
 import { defineConfig } from 'electron-vite'
+import type { Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
+import {
+  LIQUID_GOOEY_ID,
+  loadOptionalLiquidGooeyStub,
+  resolveOptionalLiquidGooey
+} from './src/shared/optional-liquid-gooey'
+
+const require = createRequire(import.meta.url)
+
+function liquidGooeyInstalled(): boolean {
+  try {
+    require.resolve(LIQUID_GOOEY_ID)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** Missing liquid-gooey must not fail the renderer graph (Tony: purple void). */
+function optionalLiquidGooey(): Plugin {
+  const installed = liquidGooeyInstalled()
+  return {
+    name: 'optional-liquid-gooey',
+    resolveId(id) {
+      return resolveOptionalLiquidGooey(id, installed)
+    },
+    load(id) {
+      return loadOptionalLiquidGooeyStub(id) ?? undefined
+    }
+  }
+}
 
 // MQA-207. A V8 code cache is per-ARCHITECTURE: V8 only accepts cached data produced by a matching
 // V8 build. electron-vite emits exactly ONE out/main/index.jsc, compiled by spawning the build host's
@@ -76,7 +108,7 @@ export default defineConfig({
         '@shared': resolve(__dirname, 'src/shared')
       }
     },
-    plugins: [react(), tailwindcss()],
+    plugins: [optionalLiquidGooey(), react(), tailwindcss()],
     build: {
       // electron-vite defaults to minify:false — that shipped every bundle unminified (≈2x parse
       // bytes on the entry chunk and on every lazy view's first click). Main stays readable for

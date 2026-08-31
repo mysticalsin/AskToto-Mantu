@@ -19,6 +19,10 @@ describe('gooey micro-motion — contract and pins', () => {
     expect(GOOEY_PACKAGE).toBe('liquid-gooey')
     expect(GOOEY_PACKAGE_VERSION).toBe('0.2.1')
     expect(pkg).toMatch(/"liquid-gooey": "0\.2\.1"/)
+    const lock = readFileSync(join(__dirname, '../../../../package-lock.json'), 'utf8')
+    expect(lock).toMatch(/"node_modules\/liquid-gooey"/)
+    expect(lock).toMatch(/"version": "0\.2\.1"/)
+    expect(lock).toMatch(/liquid-gooey-0\.2\.1\.tgz/)
     expect(contract).toMatch(/https:\/\/gooey\.jakubantalik\.com\//)
     expect(design).toMatch(/liquid-gooey@0\.2\.1/)
     expect(design).toMatch(/GOOEY-MOTION\.md/)
@@ -61,6 +65,8 @@ describe('gooey micro-motion — contract and pins', () => {
     expect(constellationHost).not.toMatch(/GooeySurface/)
     expect(host).toMatch(/contentBlur: GOOEY\.contentBlur/)
     expect(host).toMatch(/shouldMountGooey/)
+    expect(host).not.toMatch(/from ['"]liquid-gooey['"]/)
+    expect(host).toMatch(/loadLiquidGooey/)
   })
 
   it('scene settle is CSS overshoot, not a filled Liquid panel', () => {

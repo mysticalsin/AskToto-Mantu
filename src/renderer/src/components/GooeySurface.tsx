@@ -1,15 +1,32 @@
 /**
  * Scoped liquid-gooey host for CTA pills, thinking-orb slots, and the Act 4 selected mode card.
- * Pass-through under reduced-motion / no window. Never wraps the constellation bed.
+ * Pass-through under reduced-motion / no window / missing package. Never wraps the constellation bed.
+ * Never static-imports liquid-gooey — a failed resolve must not purple-screen the tour.
  */
-import { useCallback, useState, type ReactNode } from 'react'
-import { Liquid } from 'liquid-gooey'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { loadLiquidGooey, type LiquidComponent } from '../lib/gooey-liquid'
 import { GOOEY, gooeyFill, shouldMountGooey, type GooeyVariant } from '../lib/gooey-motion'
 
 function prefersReducedMotion(): boolean {
   return typeof window !== 'undefined' && typeof window.matchMedia === 'function'
     ? window.matchMedia('(prefers-reduced-motion: reduce)').matches
     : false
+}
+
+function GooeyFallback({
+  className,
+  variant,
+  children
+}: {
+  className: string
+  variant: GooeyVariant
+  children: ReactNode
+}): JSX.Element {
+  return (
+    <div className={className} data-gooey={variant} data-gooey-live="0">
+      {children}
+    </div>
+  )
 }
 
 export function GooeySurface({
@@ -23,20 +40,31 @@ export function GooeySurface({
   className?: string
   children: ReactNode
 }): JSX.Element {
+  const [Liquid, setLiquid] = useState<LiquidComponent | null>(null)
   const [pressed, setPressed] = useState(false)
   const reduced = prefersReducedMotion()
-  const live = shouldMountGooey({ reducedMotion: reduced, hasWindow: typeof window !== 'undefined' })
+  const allowed = shouldMountGooey({ reducedMotion: reduced, hasWindow: typeof window !== 'undefined' })
   const fill = gooeyFill(variant, muted)
   const onDown = useCallback(() => setPressed(true), [])
   const onUp = useCallback(() => setPressed(false), [])
-
   const cls = ['gooey-surface', `gooey-surface--${variant}`, className].filter(Boolean).join(' ')
 
-  if (!live) {
+  useEffect(() => {
+    if (!allowed) return
+    let live = true
+    void loadLiquidGooey().then((comp) => {
+      if (live && comp) setLiquid(() => comp)
+    })
+    return () => {
+      live = false
+    }
+  }, [allowed])
+
+  if (!allowed || !Liquid) {
     return (
-      <div className={cls} data-gooey={variant} data-gooey-live="0">
+      <GooeyFallback className={cls} variant={variant}>
         {children}
-      </div>
+      </GooeyFallback>
     )
   }
 
