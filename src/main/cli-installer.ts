@@ -34,7 +34,9 @@ import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync 
 import { dirname, join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import { createHash, randomBytes } from 'node:crypto'
+import { spawn } from 'node:child_process'
 import { app } from 'electron'
+import { ensureManagedNode, resolveManagedNode } from './managed-node'
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
@@ -51,9 +53,11 @@ export interface CliInstallProgress {
 }
 
 export interface ManagedCliSpec {
-  id: 'claude' | 'codex'
+  id: 'claude' | 'codex' | 'dust'
   npmPackage: string
   binRelPath: string
+  /** Dust CLI is ESM + node_modules (keytar). Claude/Codex ship a self-contained JS entry. */
+  needsNpmInstall?: boolean
 }
 
 export type ManagedCliId = ManagedCliSpec['id']
@@ -71,6 +75,12 @@ export const MANAGED_CLIS: Record<ManagedCliId, ManagedCliSpec> = {
     // tarball once it's available — this mirrors claude's single-JS-entry layout but codex's bin
     // layout hasn't been verified directly.
     binRelPath: 'bin/codex.js'
+  },
+  dust: {
+    id: 'dust',
+    npmPackage: '@dust-tt/dust-cli',
+    binRelPath: 'dist/index.js',
+    needsNpmInstall: true
   }
 }
 
@@ -370,6 +380,14 @@ export async function installManagedCli(
       )
     }
 
+    if (spec.needsNpmInstall) {
+      throwIfAborted()
+      onProgress({ phase: 'extracting' })
+      // Dust CLI's production deps include keytar — need official Node, not Electron-as-node.
+      await ensureManagedNode()
+      await npmInstallProduction(join(tmpDir, 'package'), signal)
+    }
+
     throwIfAborted()
     rmSync(versionDir, { recursive: true, force: true }) // clear any stale prior extraction at this version
     renameSync(tmpDir, versionDir)
@@ -414,13 +432,71 @@ export function managedCliEntry(id: ManagedCliId): { entry: string; version: str
 /** The { command, args, env } to spawn `id`'s managed CLI, or null if it isn't installed. Runs Electron's
  *  own binary (process.execPath) as the interpreter: ELECTRON_RUN_AS_NODE='1' makes Electron boot as a
  *  plain Node.js runtime (its bundled Node core, currently >=22) instead of Electron/Chromium, so the JS
- *  entry point runs exactly as it would under a system `node` — without the user ever installing one. */
+ *  entry point runs exactly as it would under a system `node` — without the user ever installing one.
+ *  Dust uses a vendored portable Node when present so keytar's native addon can load. */
 export function managedCliCommand(id: ManagedCliId): { command: string; args: string[]; env: Record<string, string> } | null {
   const found = managedCliEntry(id)
   if (!found) return null
+  if (id === 'dust') {
+    const portable = resolveManagedNode()
+    if (portable) {
+      return { command: portable.node, args: [found.entry], env: {} }
+    }
+  }
   return {
     command: process.execPath,
     args: [found.entry],
     env: { ELECTRON_RUN_AS_NODE: '1' }
   }
+}
+
+const NPM_INSTALL_ARGS = ['install', '--omit=dev', '--no-fund', '--no-audit'] as const
+
+/** Resolve { command, args } for a local npm install using portable Node, never a system global npm. */
+export function npmInstallProductionSpawn(): { command: string; args: string[]; env: Record<string, string> } {
+  const portable = resolveManagedNode()
+  if (portable?.npm && existsSync(portable.npm)) {
+    return { command: portable.npm, args: [...NPM_INSTALL_ARGS], env: {} }
+  }
+  const node = portable?.node || process.execPath
+  const npmCli = [
+    join(dirname(node), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    join(dirname(node), 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  ].find((p) => existsSync(p))
+  const env = portable ? {} : { ELECTRON_RUN_AS_NODE: '1' }
+  return { command: node, args: [...(npmCli ? [npmCli] : []), ...NPM_INSTALL_ARGS], env }
+}
+
+/** Local `npm install --omit=dev` inside the extracted package — not `npm i -g`, not a system Node. */
+export function npmInstallProduction(packageDir: string, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const spec = npmInstallProductionSpawn()
+    const child = spawn(spec.command, spec.args, {
+      cwd: packageDir,
+      env: { ...process.env, CI: '1', ...spec.env },
+      windowsHide: true,
+      stdio: 'ignore'
+    })
+    const onAbort = (): void => {
+      child.kill('SIGTERM')
+      reject(new CliInstallAbortError())
+    }
+    signal?.addEventListener('abort', onAbort)
+    child.once('error', (err) => {
+      signal?.removeEventListener('abort', onAbort)
+      reject(err)
+    })
+    child.once('close', (code) => {
+      signal?.removeEventListener('abort', onAbort)
+      if (signal?.aborted) {
+        reject(new CliInstallAbortError())
+        return
+      }
+      if (code !== 0) {
+        reject(new Error(`npm install --omit=dev failed in ${packageDir} (exit ${code})`))
+        return
+      }
+      resolve()
+    })
+  })
 }

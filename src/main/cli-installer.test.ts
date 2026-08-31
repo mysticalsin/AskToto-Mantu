@@ -136,6 +136,16 @@ describe('installManagedCli — happy path', () => {
     // codex was never installed in this test — its command lookup must independently report null.
     expect(managedCliCommand('codex')).toBeNull()
   })
+
+  it('MANAGED_CLIS includes dust as a first-class install id', () => {
+    expect(MANAGED_CLIS.dust).toMatchObject({
+      id: 'dust',
+      npmPackage: '@dust-tt/dust-cli',
+      binRelPath: 'dist/index.js',
+      needsNpmInstall: true
+    })
+    expect(Object.keys(MANAGED_CLIS)).toEqual(expect.arrayContaining(['claude', 'codex', 'dust']))
+  })
 })
 
 describe('installManagedCli — integrity verification', () => {

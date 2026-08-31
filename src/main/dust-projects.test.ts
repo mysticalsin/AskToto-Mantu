@@ -91,6 +91,10 @@ describe('Devon Totos-Mac click path', () => {
     expect(DEVON_SPOTLIGHT_REF_MAC_PATH).toContain('Data and AI projects')
     expect(DEVON_SPOTLIGHT_REF_MAC_PATH).toContain('GOr913Zr5V')
     expect(DEVON_SPOTLIGHT_REF_MAC_PATH).toContain('Never auto-send')
+    expect(DEVON_SPOTLIGHT_REF_MAC_PATH).toContain('managed Dust CLI')
+    expect(DEVON_SPOTLIGHT_REF_MAC_PATH).toContain('--sId GOr913Zr5V')
+    expect(DEVON_SPOTLIGHT_REF_MAC_PATH).toContain('never --with-tools')
+    expect(DEVON_SPOTLIGHT_REF_MAC_PATH).toContain('READY TO MERGE stays no')
   })
 })
 

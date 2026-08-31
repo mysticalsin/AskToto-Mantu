@@ -49,6 +49,8 @@ export const IPC = {
   dustLoginBegin: 'dust:loginBegin',
   dustLoginPoll: 'dust:loginPoll',
   dustLoginPickWorkspace: 'dust:loginPickWorkspace',
+  dustInstallCli: 'dust:installCli',
+  dustInstallCliProgress: 'dust:installCli:progress',
   graphifyStatus: 'graphify:status',
   graphifyRebuild: 'graphify:rebuild',
   graphifyRelated: 'graphify:related',

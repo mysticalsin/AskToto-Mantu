@@ -83,6 +83,24 @@ resources/ffmpeg/*
 # reads extraResources if this is missing (same guarantee resources/ffmpeg relies on above).
 resources/llama/
 
+# Official Node + VC++ redist for the managed Dust CLI (keytar). Fetched by
+# scripts/fetch-managed-node.mjs before a Windows pack. Keep the directory markers.
+# Parent dirs must be un-ignored or git cannot re-include the .gitkeep files.
+resources/managed-node/*
+!resources/managed-node/.gitkeep
+!resources/managed-node/win-x64/
+resources/managed-node/win-x64/*
+!resources/managed-node/win-x64/.gitkeep
+!resources/managed-node/darwin-arm64/
+resources/managed-node/darwin-arm64/*
+!resources/managed-node/darwin-arm64/.gitkeep
+!resources/managed-node/darwin-x64/
+resources/managed-node/darwin-x64/*
+!resources/managed-node/darwin-x64/.gitkeep
+resources/vcredist/**
+!resources/vcredist/.gitkeep
+!resources/vcredist/README.md
+
 # Qwen model payload bundled into every installer. Build scripts fetch and SHA-256 verify these files;
 # Git tracks only the directory marker and notices, never the ~764 MB weights themselves.
 resources/local-llm/models/

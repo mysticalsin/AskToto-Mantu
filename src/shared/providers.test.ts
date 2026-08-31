@@ -157,8 +157,8 @@ describe('isSpotlightRefReady', () => {
   const listOnly = [{ sId: 'user-pickable' }]
   const allViews = [{ sId: 'user-pickable' }, { sId: 'GOr913Zr5V' }]
 
-  it('is true when GOr913Zr5V is in an all/workspace/published list even if view:list omits it', () => {
-    expect(isSpotlightRefReady(keys, 'ws_123', pin, listOnly)).toBe(false)
+  it('stays true when view:list omits the managed agent — REST omission is not a reconnect dead-end', () => {
+    expect(isSpotlightRefReady(keys, 'ws_123', pin, listOnly)).toBe(true)
     expect(isSpotlightRefReady(keys, 'ws_123', pin, allViews)).toBe(true)
   })
 

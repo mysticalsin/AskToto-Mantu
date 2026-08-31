@@ -202,7 +202,7 @@ export async function resolveBin(bin: string): Promise<string | null> {
  *  cached, so an install completing mid-session is picked up on the next ask; a system install appearing
  *  later still wins (probed first). */
 function managedBinFallback(bin: string): string | null {
-  const id = bin === 'claude' ? 'claude' : bin === 'codex' ? 'codex' : null
+  const id = bin === 'claude' ? 'claude' : bin === 'codex' ? 'codex' : bin === 'dust' ? 'dust' : null
   if (!id) return null
   try {
     return managedCliEntry(id)?.entry ?? null
@@ -1267,7 +1267,8 @@ async function managedInstall(
   provider: ProviderId,
   onProgress: (line: string) => void
 ): Promise<CliInstallResult> {
-  const id = provider === 'claude-cli' ? ('claude' as const) : provider === 'codex-cli' ? ('codex' as const) : null
+  const id =
+    provider === 'claude-cli' ? ('claude' as const) : provider === 'codex-cli' ? ('codex' as const) : null
   if (!id) return { ok: false, error: 'No installer for this provider.' }
   try {
     const result = await installManagedCli(id, (p) => {
