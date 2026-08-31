@@ -23,6 +23,16 @@
 //                     Intelligence toggle required — SFSpeechRecognizer has shipped on-device dictation
 //                     since macOS 13. Mirrors the batch-per-window contract the Parakeet ASR engine
 //                     already uses (see main/apple-speech.ts): one call in, one text result out.
+//
+//   screen-metrics    One-shot. Enumerates NSScreen.screens and prints ONE JSON object
+//                     {screens:[{displayID, frame, visibleFrame, safeAreaInsetTop, auxLeftWidth,
+//                     auxRightWidth, notchWidth, backingScaleFactor}, ...]} to stdout. Feeds the
+//                     Métis-island notch-aware top clamp (src/main/island/metrics.ts): displayID IS the
+//                     CGDirectDisplayID, which is exactly Electron's `Display.id` on macOS, so the
+//                     TypeScript side joins by id directly — no heuristic display matching needed.
+//                     `frame`/`visibleFrame` are AppKit rects (bottom-left origin) — the TS side must
+//                     NEVER treat them as Electron bounds/workArea (top-left origin); only the magnitude
+//                     fields (notchWidth, safeAreaInsetTop, backingScaleFactor) cross that boundary.
 import AppKit
 import Speech
 import Vision
@@ -203,11 +213,83 @@ func runTranscribe(path: String, localeIdentifier: String?) -> Never {
     exit(0)
 }
 
+// MARK: - screen-metrics
+
+struct ScreenMetric: Codable {
+    let displayID: UInt32
+    /// [x, y, width, height] — AppKit NSScreen coordinate space (origin bottom-left of the primary
+    /// screen). NOT Electron's Display.bounds coordinate space (origin top-left) — see this file's
+    /// header comment and island/metrics.ts's header for why the TS side never uses this for placement.
+    let frame: [Double]
+    /// Same shape as `frame`, minus the menu bar and Dock (AppKit's own `visibleFrame`).
+    let visibleFrame: [Double]
+    /// `NSScreen.safeAreaInsets.top` — the menu-bar/notch obstruction height, in points.
+    let safeAreaInsetTop: Double
+    /// `NSScreen.auxiliaryTopLeftArea.width`, or 0 when the API reports none (non-notch screen).
+    let auxLeftWidth: Double
+    /// `NSScreen.auxiliaryTopRightArea.width`, or 0 when the API reports none (non-notch screen).
+    let auxRightWidth: Double
+    /// 0 on a non-notch screen (both aux areas absent); otherwise `frame.width - (auxLeft + auxRight)`.
+    let notchWidth: Double
+    let backingScaleFactor: Double
+}
+
+struct ScreenMetricsResult: Codable {
+    let screens: [ScreenMetric]
+}
+
+/// `NSScreen.deviceDescription[.init("NSScreenNumber")]` IS the `CGDirectDisplayID` — the same id
+/// Electron's `Display.id` exposes on macOS (see Electron's own screen.ts), so main/island/metrics.ts
+/// joins on this value directly with no heuristic bounds-overlap matching required.
+private let screenNumberKey = NSDeviceDescriptionKey("NSScreenNumber")
+
+func runScreenMetrics() -> Never {
+    var screens: [ScreenMetric] = []
+    for screen in NSScreen.screens {
+        guard let number = screen.deviceDescription[screenNumberKey] as? NSNumber else { continue }
+        let frame = screen.frame
+        let visible = screen.visibleFrame
+        // auxiliaryTopLeftArea/auxiliaryTopRightArea are non-nil ONLY on a notched screen (macOS 12+);
+        // both nil means "no notch API surface at all" for this screen, which must report notchWidth 0 —
+        // NOT frame.width (which plugging 0-width aux areas into the subtraction below would produce).
+        let leftArea = screen.auxiliaryTopLeftArea
+        let rightArea = screen.auxiliaryTopRightArea
+        let leftWidth = Double(leftArea?.width ?? 0)
+        let rightWidth = Double(rightArea?.width ?? 0)
+        let notchWidth: Double = (leftArea == nil && rightArea == nil)
+            ? 0
+            : max(0, Double(frame.width) - (leftWidth + rightWidth))
+        screens.append(
+            ScreenMetric(
+                displayID: number.uint32Value,
+                frame: [Double(frame.origin.x), Double(frame.origin.y), Double(frame.width), Double(frame.height)],
+                visibleFrame: [
+                    Double(visible.origin.x), Double(visible.origin.y), Double(visible.width), Double(visible.height)
+                ],
+                safeAreaInsetTop: Double(screen.safeAreaInsets.top),
+                auxLeftWidth: leftWidth,
+                auxRightWidth: rightWidth,
+                notchWidth: notchWidth,
+                backingScaleFactor: Double(screen.backingScaleFactor)
+            )
+        )
+    }
+    let result = ScreenMetricsResult(screens: screens)
+    do {
+        let encoded = try JSONEncoder().encode(result)
+        FileHandle.standardOutput.write(encoded)
+        FileHandle.standardOutput.write("\n".data(using: .utf8)!)
+    } catch {
+        fail("screen-metrics: could not encode result: \(error.localizedDescription)")
+    }
+    exit(0)
+}
+
 // MARK: - entry point
 
 let arguments = CommandLine.arguments
 guard arguments.count >= 2 else {
-    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe> [path|-]")
+    fail("usage: metis-mac-helper <watch-frontmost|ocr|transcribe|screen-metrics> [path|-]")
 }
 switch arguments[1] {
 case "watch-frontmost":
@@ -219,6 +301,8 @@ case "transcribe":
         fail("usage: metis-mac-helper transcribe <wav-path> [locale]")
     }
     runTranscribe(path: arguments[2], localeIdentifier: arguments.count >= 4 ? arguments[3] : nil)
+case "screen-metrics":
+    runScreenMetrics()
 default:
     fail("unknown command: \(arguments[1])")
 }

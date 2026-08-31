@@ -42,7 +42,9 @@ function code(block: string): string {
 // the chain regressed.
 describe('MQA-030 — a keyless profile\'s auto-saved transcript is reachable by Disregard', () => {
   it('the no-provider branch saves through the live saver, not the fire-and-forget leave-path saver', () => {
-    const keylessBranch = blockBetween('if (!settings?.providerReady) {', 'setRecapSkipped(false)')
+    // canSummarize covers providerReady OR local summary/fallback readiness — keyless still hits this
+    // branch when none of those are true.
+    const keylessBranch = blockBetween('if (!canSummarize) {', 'setRecapSkipped(false)')
     expect(keylessBranch).toMatch(/saveLiveMeetingNowRef\.current\?\.\(listen\.lines, meetingStartRef\.current, ''\)/)
     // The bug verbatim: saveMeetingNow(Ref) here reports nothing back to the live session, so Disregard
     // has no path to delete.

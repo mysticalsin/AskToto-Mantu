@@ -494,6 +494,32 @@ input::placeholder {
   animation: mic-burst 0.55s ease-out forwards;
 }
 
+/* Onboarding Act 4 (Vibe/personality) — the one-shot selection-delight ring on a persona card
+   (OnboardingExperience.tsx's `personalize` scene). Same "one-shot expanding+fading ring, forwards, no
+   infinite" shape as `.rec-dot::before` above; the difference is that this element is keyed by `mode` in
+   the component rather than by a mount/unmount boolean, so React freshly remounts it (and retriggers the
+   animation) every time the selected persona actually changes, not on every render. Needs no explicit
+   prefers-reduced-motion override: the global `animation-duration: 0ms` rule further down makes it jump
+   straight to its (invisible) end state, which is exactly the desired reduced-motion behavior here. */
+@keyframes persona-select-ring {
+  0% {
+    opacity: 0.6;
+    transform: scale(0.92);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.3);
+  }
+}
+.persona-select-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  border: 1.5px solid var(--color-accent);
+  pointer-events: none;
+  animation: persona-select-ring 420ms var(--ease-spring) forwards;
+}
+
 @keyframes fade-up {
   from {
     opacity: 0;
@@ -508,49 +534,736 @@ input::placeholder {
   animation: fade-up 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* Onboarding act transition — each of the five scenes mounts keyed by its own name (see
-   OnboardingExperience.tsx), so React remounts the whole scene on every advance and this fires fresh
-   every time, unlike .fade-up alone (which only ever plays once, on the component's first mount). A
-   touch heavier than .fade-up — the extra scale + longer duration reads as one act closing before the
-   next opens, without needing an actual exit animation on the outgoing scene. */
+/* Onboarding act transition — each scene remounts keyed by name. Opacity + translate only
+   (~300ms ease-out). No scale-down — compositor-only motion budget (DESIGN.md). */
 @keyframes scene-enter {
   from {
     opacity: 0;
-    transform: translateY(14px) scale(0.97);
+    transform: translateY(10px);
   }
   to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.scene-enter {
+  animation: scene-enter 300ms ease-out;
+}
+
+/* Act 1 (Welcome) hero — the Métis mark lands as a top-center "island" capsule (MQA-276). Three staged
+   beats, each its own keyframe so they can be tuned independently:
+     1. island-descend — the capsule drops in from above and settles, like the notch capsule reference
+        that inspired the FEEL of this moment (own timing/shape, not its assets or copy).
+     2. island-draw-sweep — a single comet sweeps the capsule's rim once, as if the outline is being
+        drawn on, using the same masked-conic-gradient + stepped-timing trick as `.rainbow-ring` /
+        `.aw-hidden-rainbow` above (cheap: ~24 repaints over the whole sweep, not one per frame), then
+        fades out — it never loops, so it costs nothing after the capsule has landed.
+     3. island-fill — the capsule's own background/border settle to a soft accent tint once the sweep
+        finishes, so there is a shape for the mark to sit inside before it fades in.
+   `--island-draw-angle` needs `@property` so the conic gradient's rotation is itself an interpolable,
+   compositable value (same reasoning as `--cl-rainbow-angle` above). */
+@keyframes island-descend {
+  0% {
+    opacity: 0;
+    transform: translateY(-22px) scale(0.62);
+  }
+  62% {
+    opacity: 1;
+    transform: translateY(2px) scale(1.04);
+  }
+  100% {
     opacity: 1;
     transform: translateY(0) scale(1);
   }
 }
-.scene-enter {
-  animation: scene-enter 420ms var(--ease-spring);
+@property --island-draw-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
 }
-
-/* Onboarding hero — a slow breathing halo behind the Métis mark. Purple-only (no yellow, per brand),
-   restrained enough to read as "alive" rather than a loading spinner. */
-@keyframes mark-breathe {
-  0%,
-  100% {
-    opacity: 0.35;
-    transform: scale(1);
+@keyframes island-draw-sweep {
+  from {
+    --island-draw-angle: 0deg;
+    opacity: 0;
   }
-  50% {
-    opacity: 0.75;
-    transform: scale(1.12);
+  8% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  to {
+    --island-draw-angle: 360deg;
+    opacity: 0;
   }
 }
-.mark-halo {
+@keyframes island-fill {
+  from {
+    background-color: transparent;
+    border-color: transparent;
+  }
+  to {
+    background-color: var(--color-accent-soft);
+    border-color: var(--color-hair-strong);
+  }
+}
+.island-capsule {
   position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 76px;
+  height: 76px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  animation:
+    island-descend 560ms var(--ease-spring) both,
+    island-fill 360ms ease-out 440ms both;
 }
-.mark-halo::before {
+.island-capsule::before {
   content: '';
   position: absolute;
-  inset: -20px;
-  z-index: -1;
-  border-radius: 50%;
-  background: radial-gradient(circle, var(--color-accent-glow), transparent 70%);
-  animation: mark-breathe 3.2s ease-in-out infinite;
+  inset: -2px;
+  border-radius: inherit;
+  padding: 1.5px;
+  background: conic-gradient(from var(--island-draw-angle), transparent 0deg, var(--color-accent-2) 28deg, transparent 68deg);
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: island-draw-sweep 620ms steps(30, end) 160ms both;
+}
+.island-capsule-mark {
+  display: inline-flex;
+  animation: fade-up 260ms var(--ease-spring) 560ms both;
+}
+/* Static end state for anyone whose OS asks for reduced motion — see the blanket
+   `prefers-reduced-motion` rule further down for why this needs an explicit override: that rule zeroes
+   animation-duration, and a 0ms animation driving an `@property`-typed custom value is not guaranteed by
+   spec to land on the keyframe's END value the way a plain opacity/transform animation reliably does. */
+@media (prefers-reduced-motion: reduce) {
+  .island-capsule {
+    animation: none;
+    opacity: 1;
+    transform: none;
+    background-color: var(--color-accent-soft);
+    border-color: var(--color-hair-strong);
+  }
+  .island-capsule::before {
+    animation: none;
+    opacity: 0;
+  }
+  .island-capsule-mark {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Act 1's wordmark — the one custom-face moment in this scene (Geist, already bundled/offline, the
+   app's one non-system face). Fixed min-height keeps the scramble from jittering the layout as glyph
+   widths change frame to frame while it resolves; everything else in the hero (tagline, byline, CTA)
+   stays on the system font stack per the "one custom face, rest system" brief. */
+.hero-wordmark {
+  font-weight: 650;
+  font-size: 30px;
+  letter-spacing: 0.01em;
+  color: var(--color-ink);
+  min-height: 1.2em;
+  line-height: 1.2em;
+}
+.hero-tagline,
+.hero-byline {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+}
+
+/* Welcome byline name only — system browser via target=_blank → setWindowOpenHandler → openExternal. */
+.hero-byline-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 10px;
+  margin: 0 -4px;
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+.hero-byline-link:hover {
+  color: #f4f4f5;
+  background: color-mix(in srgb, #9a2bf0 32%, transparent);
+}
+
+/* Exclusive onboarding stage — Mantu purple brand wash, never amber, never a black void (DESIGN.md).
+   Viewport-fixed so simple-fullscreen + % height cannot collapse the paint to the
+   window chrome color. */
+.onboard-stage {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  min-height: 100vh;
+  min-width: 100vw;
+  flex-direction: column;
+  overflow: hidden;
+  isolation: isolate;
+  background:
+    radial-gradient(1200px 700px at 18% 12%, color-mix(in srgb, #9a2bf0 42%, transparent), transparent 58%),
+    radial-gradient(900px 600px at 88% 78%, color-mix(in srgb, #7f00da 36%, transparent), transparent 55%),
+    linear-gradient(165deg, #3a0b6b 0%, #7f00da 42%, #2a0848 100%);
+  -webkit-mask-image: radial-gradient(closest-side, rgb(0, 0, 0) 62%, rgba(0, 0, 0, 0.4) 82%, transparent 100%);
+  mask-image: radial-gradient(closest-side, rgb(0, 0, 0) 62%, rgba(0, 0, 0, 0.4) 82%, transparent 100%);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: top center;
+  mask-position: top center;
+  -webkit-mask-size: 120px 36px;
+  mask-size: 120px 36px;
+  animation: onboard-portal-open 1280ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  will-change: mask-size, -webkit-mask-size;
+}
+@keyframes onboard-portal-open {
+  from {
+    -webkit-mask-size: 120px 36px;
+    mask-size: 120px 36px;
+  }
+  to {
+    -webkit-mask-size: 280vmax 180vmax;
+    mask-size: 280vmax 180vmax;
+  }
+}
+@keyframes onboard-portal-close {
+  from {
+    -webkit-mask-size: 280vmax 180vmax;
+    mask-size: 280vmax 180vmax;
+  }
+  to {
+    -webkit-mask-size: 120px 36px;
+    mask-size: 120px 36px;
+  }
+}
+.onboard-stage--portal-close {
+  animation: onboard-portal-close 1220ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+.onboard-portal-content {
+  animation: onboard-portal-content-in 1280ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+@keyframes onboard-portal-content-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.onboard-stage--portal-close .onboard-portal-content {
+  animation: onboard-portal-content-out 1220ms cubic-bezier(0.4, 0, 0.2, 1) both;
+}
+@keyframes onboard-portal-content-out {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* Living stripe wash — compositor-only rotate. No filter:blur orbs. */
+.onboard-stripes,
+.onboard-stripes--b {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 220vmax;
+  height: 220vmax;
+  margin: -110vmax 0 0 -110vmax;
+  pointer-events: none;
+  z-index: 0;
+  will-change: transform;
+  background: repeating-linear-gradient(
+    -18deg,
+    #3a0b6b 0 56px,
+    #7f00da 56px 112px,
+    #9a2bf0 112px 160px,
+    rgba(255, 255, 255, 0.28) 160px 166px,
+    #3a0b6b 166px 220px
+  );
+  opacity: 0.36;
+  mix-blend-mode: overlay;
+  animation: onboard-stripe-spin 40s linear infinite;
+}
+.onboard-stripes--b {
+  opacity: 0.3;
+  mix-blend-mode: screen;
+  animation-name: onboard-stripe-spin-rev;
+  animation-duration: 70s;
+  background: repeating-linear-gradient(
+    24deg,
+    #7f00da 0 64px,
+    #3a0b6b 64px 120px,
+    #9a2bf0 120px 168px,
+    rgba(255, 255, 255, 0.2) 168px 174px,
+    #7f00da 174px 230px
+  );
+}
+@keyframes onboard-stripe-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes onboard-stripe-spin-rev {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(-360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .onboard-stage,
+  .onboard-stage--portal-close {
+    animation: none;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  .onboard-portal-content,
+  .onboard-stage--portal-close .onboard-portal-content {
+    animation: none;
+    opacity: 1;
+    transform: none;
+  }
+  .onboard-stripes,
+  .onboard-stripes--b {
+    animation: none;
+    transform: rotate(0deg);
+  }
+  .onboard-stage .scene-enter,
+  .onboard-stage .fade-up {
+    animation: none;
+  }
+  .onboard-hero-video video {
+    animation: none;
+    transform: none;
+  }
+}
+
+/* Act 1 welcome atmosphere — full viewport, under the UI. Purple wash remains if this is absent. */
+.onboard-hero-video {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.onboard-hero-video video {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+  animation: onboard-hero-kenburns 28s ease-in-out infinite alternate;
+  /* No CSS filter on the <video> — compositor-only motion budget. */
+}
+@keyframes onboard-hero-kenburns {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.045);
+  }
+}
+.hero-welcome {
+  transform: translateY(-16vh);
+}
+.onboard-hero-video-tint {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(1200px 700px at 18% 12%, color-mix(in srgb, #9a2bf0 28%, transparent), transparent 58%),
+    linear-gradient(165deg, color-mix(in srgb, #3a0b6b 62%, transparent), color-mix(in srgb, #7f00da 48%, transparent));
+}
+
+/* Liquid glass — backdrop blur, inset highlight, gradient-border ::before. Technique only. */
+.onboard-glass {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  color: #f4f4f5;
+  background: rgba(255, 255, 255, 0.12);
+  -webkit-backdrop-filter: blur(12px) saturate(160%);
+  backdrop-filter: blur(12px) saturate(160%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.06),
+    0 8px 28px rgba(58, 11, 107, 0.22);
+}
+.onboard-glass::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(165deg, rgba(255, 255, 255, 0.55), rgba(154, 43, 240, 0.35), rgba(255, 255, 255, 0.08));
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+.onboard-cta.onboard-glass {
+  background: rgba(255, 255, 255, 0.14);
+  color: #f4f4f5;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -1px 0 rgba(255, 255, 255, 0.06),
+    0 8px 28px rgba(58, 11, 107, 0.22);
+}
+.onboard-glass-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 16px;
+  border: none;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 500;
+  color: #f4f4f5;
+  cursor: pointer;
+}
+/* Hero Skip: quieter than Next. Never a raw text link. */
+.onboard-skip-chip {
+  min-height: 32px;
+  padding: 0 12px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  color: rgba(244, 244, 245, 0.58);
+}
+.onboard-skip-chip:hover {
+  color: rgba(244, 244, 245, 0.82);
+}
+.onboard-skip-screen {
+  width: min(100%, 560px);
+  gap: 28px;
+}
+
+/* Act 4 + Skip: local lift. Does not bleach the exclusive purple stage. */
+.onboard-act4 {
+  position: relative;
+  width: min(100%, 920px);
+  gap: 22px;
+}
+.onboard-act4::before {
+  content: '';
+  position: absolute;
+  inset: -96px -80px 38%;
+  z-index: 0;
+  pointer-events: none;
+  background: radial-gradient(
+    ellipse 88% 70% at 50% 12%,
+    rgba(255, 255, 255, 0.48),
+    rgba(214, 186, 255, 0.14) 40%,
+    transparent 72%
+  );
+}
+/* Act 4 inherits the exclusive wash: drop the bottom-right 78% blob so the top stays the bright part. */
+.onboard-stage:has(.onboard-act4) {
+  background:
+    radial-gradient(1200px 560px at 50% 0%, rgba(255, 255, 255, 0.36), rgba(214, 186, 255, 0.1) 40%, transparent 62%),
+    radial-gradient(1400px 820px at 50% 10%, color-mix(in srgb, #9a2bf0 46%, transparent), transparent 56%),
+    radial-gradient(1100px 640px at 18% 8%, color-mix(in srgb, #9a2bf0 34%, transparent), transparent 58%),
+    linear-gradient(165deg, #3a0b6b 0%, #7f00da 42%, #2a0848 100%);
+}
+.onboard-act4 > * {
+  position: relative;
+  z-index: 1;
+}
+.onboard-act4-kicker {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(244, 244, 245, 0.82);
+}
+.onboard-act4-title {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  color: #fafafa;
+}
+.onboard-act4-lead {
+  margin: 0;
+  max-width: 420px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: rgba(244, 244, 245, 0.88);
+}
+.onboard-persona-row {
+  display: flex;
+  max-width: 720px;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+}
+.onboard-persona {
+  position: relative;
+  width: 132px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.12);
+  padding: 10px 12px 11px;
+  text-align: left;
+  color: #f4f4f5;
+}
+.onboard-persona:hover {
+  background: rgba(255, 255, 255, 0.16);
+}
+.onboard-persona.is-selected {
+  border-color: rgba(244, 244, 245, 0.55);
+  background: rgba(255, 255, 255, 0.2);
+}
+.onboard-persona-label {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fafafa;
+}
+.onboard-persona-vibe {
+  margin: 4px 0 0;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: rgba(244, 244, 245, 0.72);
+}
+.onboard-persona-changes {
+  margin: 6px 0 0;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: rgba(244, 244, 245, 0.7);
+}
+
+/* Act 4: tell-the-room is the important window. Brighter, wider, same card on Skip. */
+.onboard-tell-card {
+  display: flex;
+  width: 100%;
+  min-width: min(100%, 520px);
+  max-width: 540px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 16px;
+  padding: 32px 30px 26px;
+  border: none;
+  border-radius: 22px;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.22);
+}
+.onboard-tell-card h3 {
+  margin: 0;
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -0.03em;
+  color: #ffffff;
+}
+.onboard-tell-card p {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.92);
+}
+.onboard-tell-quote {
+  margin: 0;
+  border-radius: 999px;
+  padding: 12px 18px;
+  background: rgba(255, 255, 255, 0.2);
+  font-size: 14px;
+  font-style: italic;
+  font-weight: 500;
+  line-height: 1.45;
+  color: #ffffff;
+}
+.onboard-tell-quote--echo {
+  max-width: 380px;
+  text-align: center;
+}
+.onboard-ready-screen {
+  gap: 28px;
+}
+.onboard-ready-screen h2 {
+  letter-spacing: -0.02em;
+}
+.onboard-tell-why {
+  font-size: 13.5px;
+  color: rgba(255, 255, 255, 0.82);
+}
+.onboard-tell-check {
+  display: flex;
+  cursor: pointer;
+  align-items: flex-start;
+  gap: 12px;
+  padding-top: 6px;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: #ffffff;
+}
+.onboard-tell-check-box {
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  min-height: 18px;
+  margin-top: 2px;
+}
+
+/* Exclusive-stage primary CTAs — min 52×220, high contrast, hittable (DESIGN.md). */
+.onboard-cta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 52px;
+  min-width: 220px;
+  padding: 0 28px;
+  border: none;
+  border-radius: 999px;
+  background: #f4f4f5;
+  color: #09090b;
+  font-size: 16px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 16px rgba(244, 244, 245, 0.16);
+}
+.onboard-mute {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 20;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #f4f4f5;
+  cursor: pointer;
+}
+.onboard-mute:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+
+.onboard-cta:hover:not(:disabled) {
+  transform: scale(1.02);
+}
+.onboard-cta:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.onboard-cta--muted {
+  background: transparent;
+  color: var(--color-ink-2);
+  box-shadow: none;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+/* Act 6 (Ready, MQA-283) — the narrative's closing ceremony. Tasteful, not a confetti cannon: one gleam
+   sweep around the Métis mark (same conic-mask trick as Act 1's `.island-capsule::before` above, so the
+   two bookend acts share a visual language) plus a handful of one-shot spark motes (positioned by
+   OnboardingExperience.tsx's READY_SPARKS via plain `left`/`top`, see `.ready-spark` below). Both are
+   one-shot / forwards — nothing loops, so the cost is a handful of repaints on scene mount, never an
+   ongoing one. Reduced motion needs the same explicit override `.island-capsule` does for the same
+   reason (an `@property`-typed angle is not guaranteed to land on its keyframe's end value at 0ms
+   duration); `.ready-spark` needs no override since it only ever animates opacity/transform, which the
+   blanket rule already handles correctly. */
+@property --ready-gleam-angle {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+@keyframes ready-gleam-sweep {
+  from {
+    --ready-gleam-angle: 0deg;
+    opacity: 0;
+  }
+  8% {
+    opacity: 1;
+  }
+  88% {
+    opacity: 1;
+  }
+  to {
+    --ready-gleam-angle: 720deg;
+    opacity: 0;
+  }
+}
+.ready-mark-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.ready-mark-wrap::before {
+  content: '';
+  position: absolute;
+  inset: -12px;
+  border-radius: 999px;
+  padding: 1.5px;
+  background: conic-gradient(
+    from var(--ready-gleam-angle),
+    transparent 0deg,
+    var(--color-accent-2) 24deg,
+    transparent 58deg,
+    transparent 190deg,
+    var(--color-accent) 216deg,
+    transparent 250deg
+  );
+  -webkit-mask:
+    linear-gradient(#000 0 0) content-box,
+    linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+  animation: ready-gleam-sweep 1400ms steps(60, end) 120ms both;
+}
+@keyframes ready-spark {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.3);
+  }
+  35% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(1.5);
+  }
+}
+.ready-spark {
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--color-accent-2);
+  pointer-events: none;
+  animation: ready-spark 900ms var(--ease-spring) both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ready-mark-wrap::before {
+    animation: none;
+    opacity: 0;
+  }
 }
 
 /* "Develops like film" — the signature first-answer moment. When the streamed answer's first content
@@ -578,6 +1291,12 @@ input::placeholder {
 .develop-in {
   animation: develop-in 280ms cubic-bezier(0.22, 1, 0.36, 1);
   will-change: filter, opacity, transform;
+}
+
+/* Onboarding never runs develop-in filter blur over the stage / leftover video. */
+.onboard-stage .develop-in {
+  animation: none;
+  filter: none;
 }
 
 /* Animated rainbow contour — shown around the ask bar while the agent is working (replaces the old
@@ -662,19 +1381,38 @@ input::placeholder {
   animation-timing-function: steps(24, end);
 }
 
-/* "Hidden from screen sharing" (stealth ON = contentProtection on) indicator — a calm, slow rainbow
-   contour so the user can see at a glance that the AskToto window won't appear on a screen they share
-   or record. Toggled by the bar's eye button. Same masked conic-gradient as the thinking ring, but
-   slower + a touch bolder so the two states stay distinct (fast = working, slow = hidden). */
+/* "Hidden from screen sharing" (stealth ON = contentProtection on) indicator — a multi-colour aurora
+   GLOW around the whole overlay so the user can see at a glance that Métis won't appear on a screen
+   they share or record. Toggled by the bar's eye button. Two layers: a crisp masked conic-gradient RIM
+   right on the edge, and a soft coloured HALO that spills outward past it (the "glow").
+
+   Why box-shadow for the halo and not a blurred pseudo-element: .aw-widget is `overflow:hidden` (for its
+   rounded blur backdrop), which clips every child/pseudo — a ::after halo would be cut off at the edge.
+   Only the element's OWN box-shadow is painted by the parent, OUTSIDE that clip, so it is the one thing
+   that can spill past the widget. The overlay root adds breathing room while stealth is on (App.tsx
+   `stealth-glow`) so the halo isn't clipped at the window boundary in turn.
+
+   Static, not spinning: an always-on indicator must never burn a per-frame repaint — animating the
+   conic angle or the box-shadow every frame is exactly the paint-storm this file fights elsewhere. A
+   rich static halo reads as a glow without one. */
 .aw-hidden-rainbow {
   position: relative;
+  /* Brand-violet core, cyan + magenta flanks → "multi-colour" without a per-frame gradient. Reaches
+     ~34px, which the stealth-glow root padding leaves room for. */
+  box-shadow:
+    0 0 0 1.5px rgba(175, 82, 222, 0.6),
+    0 0 12px 0 rgba(175, 82, 222, 0.85),
+    0 0 20px 2px rgba(127, 0, 218, 0.6),
+    0 0 24px 4px rgba(50, 173, 230, 0.45),
+    0 0 28px 6px rgba(255, 45, 85, 0.38),
+    inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 .aw-hidden-rainbow::before {
   content: '';
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  padding: 2px;
+  padding: 2.5px;
   background: conic-gradient(
     from var(--cl-rainbow-angle),
     #ff3b30,
@@ -691,12 +1429,76 @@ input::placeholder {
     linear-gradient(#000 0 0);
   -webkit-mask-composite: xor;
   mask-composite: exclude;
-  /* Static, not spinning — an always-visible idle indicator has no business burning a compositor
-     animation for the whole time stealth is on. (This is exactly the look prefers-reduced-motion
-     used to fall back to; it's now the default for everyone.) */
   pointer-events: none;
   z-index: var(--z-ring);
-  opacity: 0.92;
+  filter: saturate(1.25);
+  opacity: 1;
+  /* A slow, gentle breathe so the rim reads as "alive" without a repaint storm. opacity is a
+     compositor-only property (its own layer), so this animates on the GPU — no per-frame paint,
+     unlike the conic-angle spin this indicator used to run. */
+  animation: aw-hidden-breathe 4.2s ease-in-out infinite;
+}
+@keyframes aw-hidden-breathe {
+  0%,
+  100% {
+    opacity: 0.82;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .aw-hidden-rainbow::before {
+    animation: none;
+    opacity: 1;
+  }
+}
+
+/* Act 2 (Demo) synthetic cursor (MQA-277) — a small drawn pointer the onboarding demo moves to (and
+   really clicks) the "What to say next" / "Fact-check" chips, so the scripted meeting reads as
+   something guiding YOUR attention rather than the UI changing on its own. Position is set every rAF
+   frame from JS (OnboardingDemoScene.tsx, via the pure easing in lib/synthetic-cursor.ts) as an inline
+   `transform: translate(x, y)` — no CSS transition on transform here, which would fight that per-frame
+   value and lag a full frame behind the measured target. The click itself gets a one-shot expanding
+   ring (same "static end-state, ::before/::after created fresh on mount" trick as .rec-dot's
+   mic-burst above), and the whole cursor is never rendered at all under prefers-reduced-motion — the
+   component checks the media query itself and skips straight to a static demo, matching Act 1's rule. */
+.demo-cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--color-accent-2);
+  box-shadow:
+    0 0 0 3px rgba(127, 0, 218, 0.28),
+    0 2px 10px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+  z-index: 40;
+}
+@keyframes demo-cursor-click {
+  from {
+    transform: scale(0.5);
+    opacity: 0.9;
+  }
+  to {
+    transform: scale(2.2);
+    opacity: 0;
+  }
+}
+.demo-cursor-press::after {
+  content: '';
+  position: absolute;
+  inset: -6px;
+  border-radius: 50%;
+  border: 2px solid var(--color-accent-2);
+  animation: demo-cursor-click 420ms ease-out forwards;
+}
+@media (prefers-reduced-motion: reduce) {
+  .demo-cursor {
+    display: none;
+  }
 }
 
 /* ── Ask widget — Cluely-style two-row overlay, Mantu purple glass ──────────────────────────
@@ -773,6 +1575,216 @@ input::placeholder {
   box-shadow:
     0 6px 16px -8px rgba(0, 0, 0, 0.55),
     0 0 16px -8px var(--color-accent-glow);
+}
+
+/* ── Auto-hide peek strip (MQA-274) ─────────────────────────────────────────────────────────
+   The slim, top-hugging capsule the overlay collapses to when idle and un-hovered (the Vibe-Island
+   resting "notch"). Deliberately small so the hugged window is a tiny top-center strip, not a wide
+   transparent click-trap. Springs into place with a compositor-cheap transform+opacity (reduced-motion
+   is honoured by the global rule at the bottom of this file, which zeroes the duration). */
+/* Hide rest: 1–8px fully transparent hairline. Cursor watch is the sensor, not this paint. */
+.overlay-hide-target {
+  display: block;
+  width: 8px;
+  height: 2px;
+  min-width: 0;
+  min-height: 0;
+  max-width: 8px;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  opacity: 1;
+  pointer-events: none;
+  cursor: default;
+}
+
+.overlay-peek {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 132px;
+  height: 15px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-top-color: rgba(255, 255, 255, 0.04);
+  border-radius: 0 0 999px 999px; /* flat top edge — it hugs the very top of the screen */
+  background: var(--aw-glass-bot);
+  -webkit-backdrop-filter: blur(18px) saturate(140%);
+  backdrop-filter: blur(18px) saturate(140%);
+  box-shadow:
+    0 4px 12px -6px rgba(0, 0, 0, 0.55),
+    0 0 14px -8px var(--color-accent-glow);
+  cursor: pointer;
+  transform: translateY(0);
+  transition:
+    width 160ms var(--ease-spring),
+    background-color 160ms ease,
+    box-shadow 160ms ease;
+  animation: overlay-peek-in 220ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.overlay-peek:hover {
+  width: 156px;
+  box-shadow:
+    0 5px 14px -6px rgba(0, 0, 0, 0.6),
+    0 0 18px -6px var(--color-accent-glow);
+}
+.overlay-peek__grip {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.overlay-peek__grip > span {
+  display: block;
+  width: 3px;
+  height: 3px;
+  border-radius: 999px;
+  background: var(--color-ink-3);
+}
+/* Contained multi-colour hint while the overlay is hidden from screen capture (contentProtection on) —
+   the peek's own box can't afford the full aw-hidden-rainbow halo without the narrow hugged window
+   clipping it into a flat band, so this is a tighter version that stays inside the strip. */
+.overlay-peek--stealth {
+  border-color: rgba(175, 82, 222, 0.5);
+  box-shadow:
+    0 0 0 1px rgba(175, 82, 222, 0.5),
+    0 0 10px -2px rgba(127, 0, 218, 0.7),
+    0 0 14px 0 rgba(50, 173, 230, 0.35),
+    0 4px 12px -6px rgba(0, 0, 0, 0.5);
+}
+.overlay-peek--stealth .overlay-peek__grip > span {
+  background: rgba(219, 190, 255, 0.85);
+}
+.overlay-chrome-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.overlay-chrome-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid var(--cl-border);
+  background: rgba(255, 255, 255, 0.02);
+  text-align: left;
+  cursor: pointer;
+}
+.overlay-chrome-card:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+.overlay-chrome-card--selected {
+  border-color: var(--cl-primary);
+  background: var(--cl-primary-soft);
+}
+.overlay-chrome-card__title {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cl-foreground);
+}
+.overlay-chrome-card__default {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--cl-muted-foreground);
+}
+.overlay-chrome-card__desc {
+  display: block;
+  font-size: 10px;
+  line-height: 1.35;
+  color: var(--cl-muted-foreground);
+}
+.overlay-chrome-diagram {
+  position: relative;
+  height: 52px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #3a0b6b 0%, #1a0630 100%);
+}
+.overlay-chrome-diagram__desktop {
+  position: absolute;
+  inset: 10px 8px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.06);
+}
+.overlay-chrome-diagram__mark {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(214, 186, 255, 0.92);
+}
+.overlay-chrome-diagram--hide .overlay-chrome-diagram__mark {
+  width: 22px;
+  height: 3px;
+  border-radius: 0 0 4px 4px;
+  opacity: 0.28;
+}
+.overlay-chrome-diagram--island .overlay-chrome-diagram__mark {
+  width: 18px;
+  height: 6px;
+  border-radius: 0 0 999px 999px;
+}
+.overlay-chrome-diagram--bar .overlay-chrome-diagram__mark {
+  width: 72%;
+  height: 7px;
+  border-radius: 0 0 3px 3px;
+}
+
+@keyframes overlay-peek-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+/* One-surface hide/reveal spring. Transform + opacity only. Window bounds change once on reveal
+   and once after the hide spring (park). Reduced-motion zeroes duration via the global rule. */
+.overlay-spring {
+  transform-origin: top center;
+  will-change: transform, opacity;
+}
+.overlay-spring--in {
+  animation: overlay-spring-in 360ms var(--ease-spring) both;
+}
+.overlay-spring--out {
+  animation: overlay-spring-out 320ms var(--ease-spring) both;
+}
+.overlay-spring--settled {
+  transform: none;
+  opacity: 1;
+}
+.overlay-spring--in .glass,
+.overlay-spring--out .glass,
+.overlay-spring--in .glass-strong,
+.overlay-spring--out .glass-strong {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+@keyframes overlay-spring-in {
+  from {
+    opacity: 0.85;
+    transform: scale(0.92) translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+@keyframes overlay-spring-out {
+  from {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  to {
+    opacity: 0.85;
+    transform: scale(0.92) translateY(-8px);
+  }
 }
 
 /* markdown surface inside the answer panel */

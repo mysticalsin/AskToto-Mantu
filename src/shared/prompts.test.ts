@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
   RECAP_PROMPT,
-  MODE_RECAP_FOCUS,
   recapPromptFor,
   EMAIL_RECAP_PROMPT,
   MEETING_BRIEF_PROMPT,
@@ -13,33 +12,31 @@ import {
   COLD_CALL_COACHING_PROMPT,
   BOOK_MEETING_PROMPT
 } from './prompts'
-
-// Section skeleton transcripts.ts / recall.ts depend on (see prompts.ts's RECAP_PROMPT doc comment).
-// This exact list, in this exact order, must never change shape when mode focus is appended.
-const RECAP_SECTION_HEADINGS = [
-  '## Title:',
-  '## Tags:',
-  '## Overview:',
-  '## Topics:',
-  '## Key Q&A:',
-  '## Decisions:',
-  '## Action items:',
-  '## Open questions:',
-  '## Notable quotes:'
-]
+import { MODE_RECAP_LAYOUTS, recapLayoutHeadings } from './mode-recap'
+import { CONVERSATION_MODES } from './ipc'
 
 describe('recapPromptFor', () => {
-  it('sales: contains the unchanged section skeleton AND the sales focus block', () => {
-    const s = recapPromptFor('sales')
-    for (const heading of RECAP_SECTION_HEADINGS) expect(s).toContain(heading)
-    expect(s).toContain('MODE FOCUS (Sales)')
-    expect(s).toMatch(/buying signals/i)
-    expect(s).toMatch(/objection/i)
-  })
-
-  it('general returns the plain recap base, unchanged', () => {
-    expect(recapPromptFor('general')).toBe(RECAP_PROMPT)
-    expect(recapPromptFor('general')).not.toContain('MODE FOCUS')
+  it('sales vs recruiting vs meeting are different section layouts, not one skeleton plus a footnote', () => {
+    const sales = recapPromptFor('sales')
+    const recruiting = recapPromptFor('recruiting')
+    const meeting = recapPromptFor('meeting')
+    expect(sales).not.toContain('MODE FOCUS')
+    expect(recruiting).not.toContain('MODE FOCUS')
+    expect(meeting).not.toContain('MODE FOCUS')
+    expect(sales).toContain('## What the seller must know:')
+    expect(sales).toContain('## Next steps:')
+    expect(sales).not.toContain('## Ratings:')
+    expect(recruiting).toContain('## Ratings:')
+    expect(recruiting).toContain('## Strengths and concerns:')
+    expect(recruiting).not.toContain('## What the seller must know:')
+    expect(meeting).toContain('## Decisions:')
+    expect(meeting).toContain('## Action items:')
+    expect(meeting).toContain('## Key numbers:')
+    expect(meeting).not.toContain('## What the seller must know:')
+    expect(meeting).not.toContain('## Ratings:')
+    expect(sales).not.toBe(recruiting)
+    expect(sales).not.toBe(meeting)
+    expect(recruiting).not.toBe(meeting)
   })
 
   it('an unknown custom mode id falls back to the plain recap base', () => {
@@ -48,26 +45,29 @@ describe('recapPromptFor', () => {
     expect(s).not.toContain('MODE FOCUS')
   })
 
-  it('every built-in mode with a focus keeps the section skeleton intact', () => {
-    for (const mode of Object.keys(MODE_RECAP_FOCUS)) {
+  it('every built-in mode has its own layout and recapPromptFor uses those headings', () => {
+    for (const mode of CONVERSATION_MODES) {
       const s = recapPromptFor(mode)
-      for (const heading of RECAP_SECTION_HEADINGS) expect(s).toContain(heading)
+      for (const heading of recapLayoutHeadings(mode)) expect(s).toContain(heading)
+      expect(MODE_RECAP_LAYOUTS[mode].length).toBeGreaterThanOrEqual(4)
     }
   })
 
-  it('interview, negotiation, presentation, support each append their own distinct focus', () => {
-    expect(recapPromptFor('interview')).toMatch(/candidate-relevant exchanges/i)
-    expect(recapPromptFor('negotiation')).toMatch(/positions.*interests/i)
-    expect(recapPromptFor('presentation')).toMatch(/audience question/i)
-    expect(recapPromptFor('support')).toMatch(/reported problem/i)
-    expect(recapPromptFor('meeting')).toMatch(/decisions.*owns/i)
-    expect(recapPromptFor('cold-call')).toMatch(/objection/i)
+  it('interview, negotiation, presentation, support, cold-call each have distinct headings', () => {
+    expect(recapPromptFor('interview')).toContain('## Questions and answers:')
+    expect(recapPromptFor('negotiation')).toContain('## Positions:')
+    expect(recapPromptFor('presentation')).toContain('## Audience questions:')
+    expect(recapPromptFor('support')).toContain('## Reported problem:')
+    expect(recapPromptFor('cold-call')).toContain('## How the call went:')
   })
 
-  it('focus text never uses banned AI-tell words or em-dashes', () => {
+  it('layout instructions never use banned AI-tell words or em-dashes', () => {
     const banned = /\b(delve|leverage|robust|comprehensive|seamless)\b|—/i
-    for (const focus of Object.values(MODE_RECAP_FOCUS)) {
-      expect(focus).not.toMatch(banned)
+    for (const layout of Object.values(MODE_RECAP_LAYOUTS)) {
+      for (const section of layout) {
+        expect(section.instruction).not.toMatch(banned)
+        expect(section.heading).not.toMatch(banned)
+      }
     }
   })
 })
