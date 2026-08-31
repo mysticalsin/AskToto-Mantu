@@ -56,7 +56,8 @@ Apple-grade. Quiet luxury. Transparent edges. Fixed circle.
 
 - Same width and height (`BAR_PILL_SIZE_PX`). Aspect 1 on every mood. Bounding box constant.
 - Never a stadium, potato, or squashed capsule. Shader uses the same NDC scale for X and Y.
-- Idle is Mantu purple (`#7F00DA`). Fact-check is grounded blue. Connecting is deep indigo. Thinking is brighter violet. Color tints the volume; the box never changes.
+- Idle is Jarvis blue (`#4CA8E8`). Thinking is `#6EC4FF`. Fact-check stays this blue family. Connecting is dimmer blue, never purple or indigo `#2A0A4A`. Color tints the volume; the box never changes.
+- Constellation is quiet (far below 2000 points). Idle electron count is 0. Thinking may have at most 3 traveling dots.
 - Glass volume: ray-sphere body, fresnel rim, one specular kiss, living core, Jarvis constellation. Not a 2D radial disc.
 - Rec-dot stays red and readable on the sphere while listening. Do not paint the sphere red.
 - Additive blending, connection lines, electrons. No glass chip of mic buttons. No dark fill.
