@@ -107,7 +107,9 @@ Renderer-only dependency: keep `thinking-orbs` in `devDependencies` (Vite bundle
 
 - Apple-grade. Smooth. Defaults friendly. One logical change.
 - Motion 60fps-class, speed `1`.
-- `prefers-reduced-motion` must not throw (package static frame).
+- Caption then sphere in one composition. The orb slot is reserved (`--orb-size`) so the first paint cannot shift the word.
+- First orb frame on the same tick as the caption: `useLayoutEffect` paints one frame through the package `MODE_DRAWS` / `resolvePreset` exports. Do not rewrite their renderer. Do not wait for their `useEffect`.
+- `prefers-reduced-motion` must not throw (package static frame at t=0.6, also the first-frame pose).
 - Unmount pauses (package). Wrapper must unmount cleanly.
-- No leftover `.loading-spinner`, `animate-spin`, or `@keyframes` spinner on the replaced surfaces.
+- No leftover `.loading-spinner`, `animate-spin`, `Loader2`, or `@keyframes` spinner on the replaced surfaces.
 - Tests: each mapped kind renders the right caption + orb state; reduced-motion does not throw; unmount does not throw; named surfaces no longer contain the old SVG spinner markup.

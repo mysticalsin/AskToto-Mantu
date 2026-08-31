@@ -70,9 +70,15 @@ describe('MQA-269 — the failover stops narrating itself', () => {
     expect(ANSWER).toMatch(/`Answered by \$\{who\}`/)
   })
 
-  it('the thinking label keeps the elapsed counter and drops the brand', () => {
-    // The counter is what prevents the frozen-spinner read; the provider name is not.
-    expect(ANSWER).toMatch(/Still working… \(\$\{thinkingSecs\}s\)/)
+  it('the thinking wait is a stable orb, not a brand or an elapsed-time hop (MQA-269)', () => {
+    // The wait re-renders on every failover attempt. Naming the provider made the brand flicker.
+    // Elapsed-time coaching ("Still working… (Ns)") was the old liveness signal — swapping that
+    // string as seconds tick is a layout jump. Liveness is now the thinking orb; the word stays
+    // Thinking. The after-the-fact `Answered by` byline is the one attribution surface.
+    expect(ANSWER).toMatch(/<AgentStatus kind="thinking" size="hero"/)
+    expect(ANSWER).toMatch(/<AgentStatus kind="working" size="inline" caption/)
+    expect(ANSWER).not.toMatch(/Still working/)
+    expect(ANSWER).not.toMatch(/thinkingSecs/)
     // The retired phrase survives in the comment recording WHY it was retired — that history must stay.
     // What must not exist is the template literal that rendered it.
     expect(ANSWER).not.toMatch(/\$\{who\} is on it/)

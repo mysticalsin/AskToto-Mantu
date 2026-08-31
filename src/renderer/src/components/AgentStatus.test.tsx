@@ -21,7 +21,9 @@ vi.mock('thinking-orbs', () => ({
       'data-speed': String(props.speed),
       'aria-label': props['aria-label'],
       role: 'img'
-    })
+    }),
+  resolvePreset: () => ({ mode: 'orbits', speed: 1, opts: {} }),
+  MODE_DRAWS: { orbits: () => {} }
 }))
 
 function html(node: ReactNode): string {
@@ -42,6 +44,8 @@ describe('AgentStatus composition', () => {
       expect(markup).toContain('data-speed="1"')
       expect(markup).toContain('agent-status--hero')
       expect(markup).toContain('agent-status__word')
+      expect(markup).toContain('agent-status__orb')
+      expect(markup).toContain('--orb-size:64px')
       const captionAt = markup.indexOf(spec.caption)
       const orbAt = markup.indexOf('data-thinking-orb')
       expect(captionAt).toBeGreaterThan(-1)

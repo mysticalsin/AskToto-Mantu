@@ -7,11 +7,17 @@ const SURFACES = [
   'Copilot.tsx',
   'Review.tsx',
   'BrainView.tsx',
+  'BrainRecordPage.tsx',
   'Bar.tsx',
+  'ControlBar.tsx',
   'AgendaView.tsx',
   'SignInWall.tsx',
   'LicenseGate.tsx',
   'Settings.tsx',
+  'RecallView.tsx',
+  'ReviewEntityStrip.tsx',
+  'Onboarding.tsx',
+  'OnboardingExperience.tsx',
   'ui.tsx'
 ]
 

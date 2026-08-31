@@ -1,5 +1,7 @@
+import { useLayoutEffect, useRef } from 'react'
 import { ThinkingOrb, type OrbTheme } from 'thinking-orbs'
 import { AGENT_STATUS, type AgentStatusKind } from '../lib/agent-status'
+import { paintOrbFirstFrame } from '../lib/orb-first-frame'
 
 export type { AgentStatusKind }
 
@@ -32,15 +34,27 @@ export function AgentStatus({
   const captionText = typeof caption === 'string' ? caption : spec.caption
   const percentLabel = determinate ? `${Math.max(0, Math.min(100, Math.round(percent)))}%` : null
   const hero = size === 'hero' && !determinate
+  const hostRef = useRef<HTMLDivElement>(null)
+
+  // Package paints in useEffect (after the first browser paint). Layout-phase
+  // paint puts the first sphere on the same tick as the caption — reserved slot,
+  // no blank-canvas hop.
+  useLayoutEffect(() => {
+    const canvas = hostRef.current?.querySelector('canvas')
+    if (!canvas) return
+    paintOrbFirstFrame(canvas, spec.state, orbSize, theme !== 'light')
+  }, [spec.state, orbSize, theme])
 
   return (
     <div
+      ref={hostRef}
       role="status"
       aria-live="polite"
       aria-busy="true"
       data-agent-status={kind}
       data-orb-state={spec.state}
       data-orb-size={String(orbSize)}
+      style={{ ['--orb-size' as string]: `${orbSize}px` }}
       className={[
         'agent-status',
         hero ? 'agent-status--hero flex items-center justify-center' : 'agent-status--inline inline-flex items-center gap-2',
@@ -51,7 +65,9 @@ export function AgentStatus({
     >
       {showCaption && <span className="agent-status__word">{captionText}</span>}
       {percentLabel && <span className="agent-status__word tabular-nums">{percentLabel}</span>}
-      <ThinkingOrb state={spec.state} size={orbSize} theme={theme} speed={1} aria-label={captionText} />
+      <span className="agent-status__orb" aria-hidden="true">
+        <ThinkingOrb state={spec.state} size={orbSize} theme={theme} speed={1} aria-label={captionText} />
+      </span>
     </div>
   )
 }
