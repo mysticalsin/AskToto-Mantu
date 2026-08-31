@@ -836,7 +836,9 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
 }
 
 function importedTranscriptText(lines: ImportJob['lines']): string {
-  return lines.map((line) => `SPEAKER: ${line.text}`).join('\n')
+  // Diarization lands on line.name (enrolled profile or "Speaker N") — the recap prompt asks the model
+  // to attribute by those labels, so erasing them here made every import look like one anonymous SPEAKER.
+  return lines.map((line) => `${line.name?.trim() || 'SPEAKER'}: ${line.text}`).join('\n')
 }
 
 /** Text-side language name for one probe window's Parakeet decode, or null when inconclusive. */
@@ -3719,12 +3721,21 @@ function registerIpc(): void {
     // ("Jane Doe" from an enrolled profile, else a stable "Speaker N" session label). Same PCM buffer the
     // ASR just consumed — no extra capture. Strictly additive and best-effort: any failure or the feature
     // being off/unprovisioned attaches no name and the line renders exactly as before.
-    if (text && p.speaker === 'them' && getSettings().speakerId.enabled) {
+    if (p.speaker === 'them' && getSettings().speakerId.enabled) {
       try {
         const label = getSpeakerId().labelWindow(p.samples)
-        if (label) return { text, name: label.name }
+        // P2 echo defense: this window is the operator's OWN voice bleeding through the loopback —
+        // drop the transcribed text rather than mislabel the operator's words as THEM.
+        if (label?.echo) return { text: '', echo: true }
+        if (text && label) return { text, name: label.name }
       } catch (err) {
         mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
+      }
+    } else if (p.speaker === 'you' && getSettings().speakerId.enabled) {
+      try {
+        getSpeakerId().observeOperatorWindow(p.samples)
+      } catch (err) {
+        mainLog.warn('[speaker-id] operator observe failed', err instanceof Error ? err.message : String(err))
       }
     }
     return { text }
@@ -3744,15 +3755,46 @@ function registerIpc(): void {
     if (p.samples.length > 16_000 * 30) return ''
     // Spoken-language hint (Settings → Audio) pins the recognizer locale; 'auto' keeps system locale.
     const text = await appleSpeechTranscribe(p.samples, appleSpeechLocale(getSettings().asrLanguage))
-    if (text && p.speaker === 'them' && getSettings().speakerId.enabled) {
+    if (p.speaker === 'them' && getSettings().speakerId.enabled) {
       try {
         const label = getSpeakerId().labelWindow(p.samples)
-        if (label) return { text, name: label.name }
+        if (label?.echo) return { text: '', echo: true } // see parakeetFeed's identical echo-defense comment above
+        if (text && label) return { text, name: label.name }
       } catch (err) {
         mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
       }
+    } else if (p.speaker === 'you' && getSettings().speakerId.enabled) {
+      try {
+        getSpeakerId().observeOperatorWindow(p.samples)
+      } catch (err) {
+        mainLog.warn('[speaker-id] operator observe failed', err instanceof Error ? err.message : String(err))
+      }
     }
     return { text }
+  })
+
+  // Speaker Intelligence — Whisper's speaker-embedding tap. Whisper runs in a renderer Worker with no
+  // main-process round trip of its own, so listen.ts calls this after commit with the same window PCM.
+  ipcMain.handle(IPC.speakerEmbed, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return {}
+    const p = payload as { samples?: unknown; speaker?: unknown }
+    if (!(p?.samples instanceof Float32Array)) return {}
+    if (p.samples.length > 16_000 * 30) return {}
+    if (!getSettings().speakerId.enabled) return {}
+    try {
+      if (p.speaker === 'them') {
+        const label = getSpeakerId().labelWindow(p.samples)
+        // Echo bleed: Whisper already committed the line — return echo:true so the renderer can drop it.
+        if (label?.echo) return { echo: true as const }
+        if (label) return { name: label.name }
+      } else if (p.speaker === 'you') {
+        getSpeakerId().observeOperatorWindow(p.samples)
+      }
+    } catch (err) {
+      mainLog.warn('[speaker-id] embed failed', err instanceof Error ? err.message : String(err))
+    }
+    return {}
   })
 
   // --- Métis Local (on-device LLM): model readiness metadata ---

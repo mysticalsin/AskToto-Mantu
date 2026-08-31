@@ -6,6 +6,7 @@ vi.mock('electron', () => ({ app: { isPackaged: false, getPath: () => '/tmp' } }
 vi.mock('./logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }, auditLog: vi.fn() }))
 
 import { encodeWav16kMono, appleSpeechAvailable, appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
+import { LANGUAGE_NAMES } from '@shared/lang-id'
 
 const REPO_ROOT = process.cwd()
 
@@ -81,11 +82,7 @@ describe('appleSpeechLocale', () => {
   it('maps every Settings language display name to a BCP-47 recognizer locale', () => {
     // Mirrors Settings.tsx's LANGUAGE_OPTIONS — a name missing here would silently fall back to the
     // system locale, exactly the mismatch the spoken-language setting exists to prevent.
-    const names = [
-      'English', 'French', 'Spanish', 'German', 'Italian', 'Portuguese', 'Dutch',
-      'Polish', 'Arabic', 'Chinese', 'Japanese', 'Korean', 'Hindi', 'Russian', 'Turkish'
-    ]
-    for (const name of names) {
+    for (const name of LANGUAGE_NAMES) {
       expect(appleSpeechLocale(name), name).toMatch(/^[a-z]{2}-[A-Z]{2}$/)
     }
     expect(appleSpeechLocale('Portuguese')).toBe('pt-BR')
