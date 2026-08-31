@@ -47,6 +47,15 @@ describe('paintOrbFirstFrame (package engine, not a rewrite)', () => {
     }
   })
 
+  it('keeps a 2x avatar backing when the window reports 1x DPR', () => {
+    vi.stubGlobal('devicePixelRatio', 1)
+    const canvas = stubCanvas()
+    paintOrbFirstFrame(canvas, 'solving', 64, true, 2)
+    expect(canvas.width).toBe(128)
+    expect(canvas.height).toBe(128)
+    vi.unstubAllGlobals()
+  })
+
   it('uses the package static pose when reduced-motion is on', () => {
     const matchMedia = vi.fn().mockReturnValue({ matches: true })
     vi.stubGlobal('matchMedia', matchMedia)
