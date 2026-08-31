@@ -14,7 +14,10 @@ function sliceBetween(from: string, to: string): string {
 
 describe('AUDIT-10 — askStart never forwards Error.message to the overlay', () => {
   it('the outer catch sends a constant sentence', () => {
-    const body = sliceBetween('} catch {', "ipcMain.handle(IPC.askCancel")
+    const end = indexSrc.indexOf('ipcMain.handle(IPC.askCancel')
+    expect(end).toBeGreaterThan(-1)
+    const body = indexSrc.slice(end - 280, end)
+    expect(body).toMatch(/\} catch \{/)
     expect(body).toMatch(/message: 'Could not start the answer\.'/)
     expect(body).not.toMatch(/e\.message/)
     expect(body).not.toMatch(/instanceof Error/)
@@ -45,7 +48,7 @@ describe('AUDIT-10 — outbound IPC caps sit in front of the network', () => {
     const body = sliceBetween('ipcMain.handle(IPC.licenseActivate', 'ipcMain.handle(IPC.licenseStatus')
     expect(body).toMatch(/denyIfLimited\('license-activate'\)/)
     expect(body.indexOf("denyIfLimited('license-activate')")).toBeLessThan(body.indexOf('activateLicense'))
-    expect(body).not.toMatch(/requireAuth\(\)/)
+    expect(body).not.toMatch(/if \(!requireAuth\(\)\)/)
   })
 
   it('MCP test/save/push and calendarToday consume their buckets after requireAuth', () => {

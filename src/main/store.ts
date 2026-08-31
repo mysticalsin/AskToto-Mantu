@@ -210,16 +210,49 @@ function readAllowedFrom(p: string): string[] | null {
 // file's mtime, so an IT policy edit still lands without an app restart), plus a wall-clock ceiling so a
 // DACL-only change — which no mtime can reveal — is re-probed within the minute rather than never.
 const ADMIN_POLICY_REPROBE_MS = 60_000
-let _adminManagedCache: { mtime: number; at: number; content: string | null } | null = null
+let _adminManagedCache: {
+  path: string
+  mtime: number
+  dev: number
+  ino: number
+  at: number
+  content: string | null
+} | null = null
+
+function adminPolicyIdentity(p: string): { path: string; mtime: number; dev: number; ino: number } {
+  try {
+    const st = statSync(p)
+    return { path: p, mtime: st.mtimeMs, dev: st.dev, ino: st.ino }
+  } catch {
+    return { path: p, mtime: 0, dev: 0, ino: 0 }
+  }
+}
+
+/** Test seam: drop the machine-policy snapshot so a rebuilt %ProgramData% fixture is re-probed. */
+export function resetAdminManagedCache(): void {
+  _adminManagedCache = null
+}
 
 function adminManagedContent(): string | null {
-  const mtime = safeMtime(adminManagedConfigPath())
+  const id = adminPolicyIdentity(adminManagedConfigPath())
   const now = Date.now()
   const c = _adminManagedCache
   // A clock set backwards must not extend the snapshot indefinitely — any negative age counts as stale.
-  if (c && c.mtime === mtime && now - c.at >= 0 && now - c.at < ADMIN_POLICY_REPROBE_MS) return c.content
+  // Path + dev + inode belong in the key: a delete-and-replace (or a test that rebuilds %ProgramData%)
+  // can reuse the previous mtime on a fast filesystem, and that must not keep serving the old bytes.
+  if (
+    c &&
+    c.path === id.path &&
+    c.mtime === id.mtime &&
+    c.dev === id.dev &&
+    c.ino === id.ino &&
+    now - c.at >= 0 &&
+    now - c.at < ADMIN_POLICY_REPROBE_MS
+  ) {
+    return c.content
+  }
   const content = readTrustedAdminManaged()
-  _adminManagedCache = { mtime, at: now, content }
+  _adminManagedCache = { ...id, at: now, content }
   return content
 }
 
@@ -493,6 +526,7 @@ function safeMtime(p: string): number {
 
 interface SettingsCache {
   value: Settings
+  userPath: string
   userMtime: number
   managedMtime: number
   adminMtime: number
@@ -500,8 +534,12 @@ interface SettingsCache {
 }
 let _settingsCache: SettingsCache | null = null
 
-function currentSettingsMtimes(): Pick<SettingsCache, 'userMtime' | 'managedMtime' | 'adminMtime' | 'caheEdition'> {
+function currentSettingsMtimes(): Pick<
+  SettingsCache,
+  'userPath' | 'userMtime' | 'managedMtime' | 'adminMtime' | 'caheEdition'
+> {
   return {
+    userPath: settingsPath(),
     userMtime: safeMtime(settingsPath()),
     managedMtime: safeMtime(join(dir(), 'managed-config.json')),
     adminMtime: safeMtime(adminManagedConfigPath()),
@@ -513,6 +551,7 @@ export function getSettings(): Settings {
   const m = currentSettingsMtimes()
   if (
     _settingsCache &&
+    _settingsCache.userPath === m.userPath &&
     _settingsCache.userMtime === m.userMtime &&
     _settingsCache.managedMtime === m.managedMtime &&
     _settingsCache.adminMtime === m.adminMtime &&
