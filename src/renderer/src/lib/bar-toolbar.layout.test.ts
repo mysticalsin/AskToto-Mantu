@@ -19,8 +19,8 @@ import {
 
 const barSrc = readFileSync(join(__dirname, '../components/Bar.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const css = readFileSync(join(__dirname, '../styles.css'), 'utf8').replace(/\r\n/g, '\n')
-const design = readFileSync(join(__dirname, '../../../DESIGN.md'), 'utf8')
-const contract = readFileSync(join(__dirname, '../../../docs/design/BAR-PILL.md'), 'utf8')
+const design = readFileSync(join(__dirname, '../../../../DESIGN.md'), 'utf8')
+const contract = readFileSync(join(__dirname, '../../../../docs/design/BAR-PILL.md'), 'utf8')
 
 function barProps(overrides: Partial<BarProps> = {}): BarProps {
   return {

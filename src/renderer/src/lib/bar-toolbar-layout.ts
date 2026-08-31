@@ -16,7 +16,7 @@ export const BAR_TOOLBAR_ROW_HEIGHT_PX = 41
 export const BAR_TOOLBAR_MARK_PX = 30
 
 /** Intrinsic listening chrome that must not shrink under the icon cluster. */
-export const BAR_TOOLBAR_TIMER_MIN_PX = 72
+export const BAR_TOOLBAR_TIMER_MIN_PX = 96
 export const BAR_TOOLBAR_TRANSCRIPT_MIN_PX = 108
 export const BAR_TOOLBAR_TRANSCRIPT_ICON_PX = 32
 export const BAR_TOOLBAR_ORB_PX = 41
