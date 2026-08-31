@@ -237,6 +237,8 @@ describe('license-server', () => {
     // A license record missing its key is invalid -> 400, store untouched.
     const bad = await post('/admin/restore', { licenses: [{ companyName: 'No Key', seatCap: 1, activations: [] }] }, adminHeaders());
     assert.equal(bad.status, 400);
+    assert.deepEqual(bad.json, { ok: false, error: 'invalid_request' });
+    assert.equal(Object.prototype.hasOwnProperty.call(bad.json, 'message'), false);
     const still = await get('/admin/export', adminHeaders());
     assert.equal(still.json.licenses.length, 1);
     assert.equal(still.json.licenses[0].licenseKey, 'ATK-0000000000000000TEST');
@@ -281,6 +283,16 @@ describe('license-server', () => {
     const retry = await post('/activate', { licenseKey: 'ATK-0000000000000000TEST', machineId: 'machine-2' });
     assert.equal(retry.json.ok, true);
     assert.equal(retry.json.seatsUsed, 1);
+  });
+
+  it('rate-limits a burst of /deactivate calls (429 after the window cap)', async () => {
+    seedLicense({ seatCap: 1000 });
+    let sawLimited = false;
+    for (let i = 0; i < 30; i++) {
+      const r = await post('/deactivate', { licenseKey: 'ATK-0000000000000000TEST', machineId: 'm-' + i });
+      if (r.status === 429) { sawLimited = true; break; }
+    }
+    assert.equal(sawLimited, true, 'a burst well over the per-minute cap must be rate-limited');
   });
 
   it('rejects an unknown license key', async () => {
@@ -604,7 +616,7 @@ describe('license-server', () => {
     assert.equal(afterReenable.status, 200);
   });
 
-  it('GET /health returns version, uptimeSeconds, and licenseCount alongside ok:true', async () => {
+  it('GET /health returns version and uptimeSeconds, and does not disclose licenseCount', async () => {
     seedLicense({ licenseKey: 'ATK-HEALTH-0000000000001' });
     seedLicense({ licenseKey: 'ATK-HEALTH-0000000000002' });
 
@@ -617,7 +629,8 @@ describe('license-server', () => {
     assert.match(json.version, /^\d+\.\d+\.\d+/);
     assert.equal(typeof json.uptimeSeconds, 'number');
     assert.ok(json.uptimeSeconds >= 0);
-    assert.equal(json.licenseCount, 2);
+    assert.equal(json.licenseCount, undefined);
+    assert.equal(Object.prototype.hasOwnProperty.call(json, 'licenseCount'), false);
   });
 
   it('GET /health requires no auth', async () => {

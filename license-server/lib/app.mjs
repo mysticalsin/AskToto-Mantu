@@ -78,7 +78,7 @@ function badRequest(res, parseResult) {
   });
 }
 
-// Fixed-window rate limiter for the two unauthenticated public endpoints (/activate, /heartbeat).
+// Fixed-window rate limiter for the unauthenticated public endpoints (/activate, /heartbeat, /deactivate).
 // Without it, anyone who learns a licenseKey can spam /activate with fresh random machineIds and burn
 // every seat, locking out the real machines. Keyed on client IP + licenseKey so one noisy caller can't
 // starve a different company's license. In-process (no dependency, no Redis) — correct for the single
@@ -96,6 +96,9 @@ function makeRateLimit() {
     if (!b || now - b.start >= RL_WINDOW_MS) {
       buckets.set(key, { start: now, count: 1 });
     } else if (b.count >= RL_MAX) {
+      // Attack log: route + IP only. The license key is the credential; it does not belong in stderr.
+      const route = typeof req.path === 'string' && req.path ? req.path : 'unknown';
+      console.warn(`[license-server] rate_limited route=${route} ip=${ip}`);
       return res.status(429).json({ ok: false, error: 'rate_limited' });
     } else {
       b.count += 1;
@@ -254,7 +257,7 @@ export function createApp(store, auditLog, options = {}) {
     return res.json(successPayload(license));
   });
 
-  app.post('/deactivate', (req, res) => {
+  app.post('/deactivate', rateLimit, (req, res) => {
     const parsed = deactivateSchema.safeParse(req.body);
     if (!parsed.success) return badRequest(res, parsed);
     const { licenseKey, machineId } = parsed.data;
@@ -310,10 +313,12 @@ export function createApp(store, auditLog, options = {}) {
     }
     const ip = req.ip || req.socket?.remoteAddress || 'unknown';
     if (adminLockout.isLocked(ip)) {
+      console.warn(`[license-server] admin_lockout ip=${ip}`);
       return res.status(429).json({ ok: false, error: 'too_many_attempts' });
     }
     if (!isValidAdminToken(req)) {
       adminLockout.recordFailure(ip);
+      console.warn(`[license-server] admin_auth_failed ip=${ip}`);
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
     adminLockout.recordSuccess(ip);
@@ -509,8 +514,8 @@ export function createApp(store, auditLog, options = {}) {
     let count;
     try {
       count = store.replaceAll(incoming);
-    } catch (err) {
-      return res.status(400).json({ ok: false, error: 'invalid_request', message: err.message });
+    } catch {
+      return res.status(400).json({ ok: false, error: 'invalid_request' });
     }
     auditLog.record({ action: 'restore', licenseKey: '(all)', details: { restoredCount: count, snapshot: snapshotPath && path.basename(snapshotPath) } });
     webhooks.emit('store.restored', { details: { restoredCount: count } });
@@ -590,11 +595,11 @@ export function createApp(store, auditLog, options = {}) {
   });
 
   app.get('/health', (req, res) => {
+    // Public liveness only. Fleet size lives on token-gated /metrics — do not advertise it here.
     res.json({
       ok: true,
       version: PACKAGE_VERSION,
       uptimeSeconds: (Date.now() - startedAt) / 1000,
-      licenseCount: store.getAll().length,
     });
   });
 

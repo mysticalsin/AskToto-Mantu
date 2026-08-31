@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import worker, { type Env } from './index'
+import worker, { resetProxyRateLimits, PROXY_RL_AUTH_MAX, PROXY_RL_UNAUTH_MAX, type Env } from './index'
 
 /**
  * index.test.ts — the Worker's auth boundary and its forwarding contract, proven without a deploy.
@@ -85,6 +85,7 @@ function controllableStream(): {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  resetProxyRateLimits()
 })
 
 describe('caller authentication', () => {
@@ -416,6 +417,39 @@ describe('routing', () => {
     expect(JSON.parse(text)).not.toHaveProperty('keys')
     expect(JSON.parse(text)).not.toHaveProperty('keyCount')
     expect(text).not.toContain(PROXY_KEY)
+  })
+
+  it('rate-limits an authenticated burst before spending the account token', async () => {
+    const calls = stubUpstream(new Response('{"ok":true}', { status: 200 }))
+
+    let limited = 0
+    for (let i = 0; i < PROXY_RL_AUTH_MAX + 5; i++) {
+      const res = await worker.fetch(chatRequest(), env())
+      if (res.status === 429) {
+        limited += 1
+        const text = await res.text()
+        expect(text).not.toContain(ACCOUNT_TOKEN)
+        expect(text).not.toContain(PROXY_KEY)
+        expect(JSON.parse(text).error.message).toMatch(/Rate limited/)
+      } else {
+        expect(res.status).toBe(200)
+      }
+    }
+    expect(limited).toBeGreaterThanOrEqual(5)
+    expect(calls.length).toBe(PROXY_RL_AUTH_MAX)
+  })
+
+  it('rate-limits unauthenticated guesses without calling Cloudflare', async () => {
+    const calls = stubUpstream(new Response('{}', { status: 200 }))
+
+    let limited = 0
+    for (let i = 0; i < PROXY_RL_UNAUTH_MAX + 5; i++) {
+      const res = await worker.fetch(chatRequest('wrong-key'), env())
+      if (res.status === 429) limited += 1
+      else expect(res.status).toBe(401)
+    }
+    expect(limited).toBeGreaterThanOrEqual(5)
+    expect(calls).toHaveLength(0)
   })
 
   it('404s an unknown path and 405s the wrong method, never reaching Cloudflare', async () => {
