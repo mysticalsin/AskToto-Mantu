@@ -73,8 +73,26 @@ const MAC_TARGZ_FIXTURE =
   '/yh7/pUUPABvJ5/w5/4zc4BGNbSqYdRw7doJf57kv50t4vwa5/5nvMs/l4P8CxSU/yVoIt21DWdTuZOJYMKFte9IEARBDLkBO5LV' +
   'pwASAAA='
 
-// win32-only: on macOS/Linux extractArchive deliberately still calls the system `tar`, which PATH is the
-// correct way to find.
+describe('zip release assets extract in-process on every host', () => {
+  it('extracts a .zip without calling tar (GNU tar on Linux cannot read zip)', () => {
+    const scratch = mkdtempSync(join(tmpdir(), 'metis-llama-extract-zip-any-'))
+    const archive = join(scratch, 'llama-b9957-bin-win-cpu-x64.zip')
+    writeFileSync(archive, Buffer.from(WIN_ZIP_FIXTURE, 'base64'))
+    const destination = join(scratch, 'out')
+    mkdirSync(destination, { recursive: true })
+
+    try {
+      extractArchive(archive, destination)
+      const binary = join(destination, 'llama-b9957', 'llama-server.exe')
+      expect(existsSync(binary)).toBe(true)
+      expect(existsSync(join(destination, 'llama-b9957', 'ggml.dll'))).toBe(true)
+    } finally {
+      rmSync(scratch, { recursive: true, force: true })
+    }
+  })
+})
+
+// tar.gz still goes through System32 bsdtar on Windows so PATH cannot pick GNU tar.
 const winOnly = process.platform === 'win32' ? describe : describe.skip
 
 winOnly('Windows archive extraction is PATH-independent', () => {
