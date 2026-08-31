@@ -177,6 +177,13 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       'const win = { getBounds: () => ({ ...current }), setBounds: (b) => { current = { ...current, ...b } } }',
       'const ensureWindow = () => win',
       'const onboardingExclusiveLive = () => false',
+      'const islandResting = false',
+      'const liveOverlayLayout = () => "bar"',
+      'const parkedHoverReanchor = () => null',
+      'const getDisplayMetrics = () => ({})',
+      'const ISLAND_TOP_MARGIN = 8',
+      'let overlayCursorWatchHovering = false',
+      'function parkOverlayAfterHideSpring() {}',
       ''
     ].join('\n')
     const driver = ['', 'registerScreenListeners()', 'return { bounds: () => current, moveBy }'].join('\n')
