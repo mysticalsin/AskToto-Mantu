@@ -1859,7 +1859,7 @@ export function App(): JSX.Element {
     void listen.start(
       settings?.audioSource ?? 'both',
       settings?.asrQuality ?? 'best',
-      settings?.asrEngine ?? 'whisper',
+      settings?.asrEngine ?? 'parakeet',
       settings?.asrLanguage ?? 'auto'
     )
   }, [

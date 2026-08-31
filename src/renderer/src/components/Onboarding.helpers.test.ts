@@ -9,7 +9,18 @@ import {
   ssoSignInVerdict
 } from './Onboarding'
 import { Sparkles } from 'lucide-react'
-import { aiRowStatus, localModelRowStatus, micRowStatus, summarizeSetupRows, type SetupRow } from './OnboardingExperience'
+import {
+  aiRowStatus,
+  asrAssetsRowStatus,
+  asrRowNeedsRetry,
+  localModelRowStatus,
+  micRowStatus,
+  setupAsrBlocksContinue,
+  firstRunCanFinish,
+  asrStatusIsReady,
+  summarizeSetupRows,
+  type SetupRow
+} from './OnboardingExperience'
 
 describe('providerTileDisabledReason — step-5 provider tiles must not misreport why they are disabled', () => {
   it('is null (tappable) when nothing blocks the tile', () => {
@@ -288,6 +299,71 @@ describe('MQA-279 — Act 3 config-complete state: "scan first, then present" mu
   })
 })
 
+describe('Act 3 — transcription files never skip', () => {
+  const asrRow = (state: SetupRow['state']): SetupRow => ({
+    key: 'asr',
+    label: 'On-device transcription',
+    icon: Sparkles,
+    state
+  })
+
+  it('marks Parakeet + Whisper ready when assets are present', () => {
+    expect(asrAssetsRowStatus({ ready: true, status: 'ready', progress: 1, label: 'Transcription files ready' })).toEqual({
+      state: 'ready',
+      detail: 'Parakeet + Whisper ready'
+    })
+  })
+
+  it('shows download progress instead of skipping a missing bundle', () => {
+    const row = asrAssetsRowStatus({
+      ready: false,
+      status: 'downloading',
+      progress: 0.42,
+      label: 'Getting transcription files…'
+    })
+    expect(row.state).toBe('action')
+    expect(row.detail).toMatch(/Getting transcription files/)
+    expect(row.progress).toBe(0.42)
+    expect(row.detail).not.toMatch(/missing in this build/i)
+    expect(row.detail).not.toMatch(/reinstall/i)
+  })
+
+  it('keeps the row on action with a retryable error, never reinstall copy', () => {
+    const row = asrAssetsRowStatus({
+      ready: false,
+      status: 'error',
+      progress: 0.1,
+      label: 'Could not get the transcription files. Check your connection and try again.',
+      error: 'Could not get the transcription files. Check your connection and try again.'
+    })
+    expect(row.state).toBe('action')
+    expect(row.detail).not.toMatch(/reinstall/i)
+    expect(asrRowNeedsRetry(row)).toBe(true)
+  })
+
+  it('idle-and-missing still means getting files, never skipped', () => {
+    expect(asrAssetsRowStatus({ ready: false, status: 'idle', progress: 0, label: '' }).state).toBe('action')
+    expect(asrAssetsRowStatus(null).detail).toMatch(/Getting transcription files/)
+  })
+
+  it('blocks Continue until the asr row is ready', () => {
+    expect(setupAsrBlocksContinue([asrRow('action')])).toBe(true)
+    expect(setupAsrBlocksContinue([asrRow('checking')])).toBe(true)
+    expect(setupAsrBlocksContinue([asrRow('ready')])).toBe(false)
+    expect(setupAsrBlocksContinue([])).toBe(true)
+  })
+
+  it('will not finish first-run (Ready or Skip) until files are ready and consent is given', () => {
+    expect(firstRunCanFinish({ asrReady: false, consent: true })).toBe(false)
+    expect(firstRunCanFinish({ asrReady: true, consent: false })).toBe(false)
+    expect(firstRunCanFinish({ asrReady: true, consent: true })).toBe(true)
+    expect(asrStatusIsReady({ ready: false, status: 'downloading', progress: 0.2, label: 'Getting transcription files…' })).toBe(
+      false
+    )
+    expect(asrStatusIsReady({ ready: true, status: 'ready', progress: 1, label: 'Transcription files ready' })).toBe(true)
+  })
+})
+
 describe('MQA-201 — scene 4 never fakes a check', () => {
   // docs/ONBOARDING-EXPERIENCE.md: "Rows animate from spinner -> state, using REAL signals ... (only show
   // rows that are actually true - never fake a check.)" The acceleration row was an unconditional
@@ -304,14 +380,18 @@ describe('MQA-201 — scene 4 never fakes a check', () => {
   })
 
   it('every remaining setup row is derived from a real signal', () => {
-    // asrBundled / getPermissions, plus the two rows whose verdict is a platform fact the renderer
+    // asrAssetsStatus / getPermissions, plus the two rows whose verdict is a platform fact the renderer
     // genuinely knows (the brain path, and Windows having no per-app screen-recording permission).
-    expect(src).toMatch(/window\.toto\.asrBundled\(\)/)
+    expect(src).toMatch(/window\.toto\.asrAssetsStatus\(\)/)
+    expect(src).toMatch(/window\.toto\.asrAssetsEnsure\(\)/)
     expect(src).toMatch(/window\.toto\.getPermissions\(\)/)
     expect(src).toMatch(/micRowStatus\(perms\?\.microphone\)/)
     expect(src).toMatch(/window\.toto\.localModelsList\(\)/)
     expect(src).toMatch(/localModelRowStatus/)
+    expect(src).toMatch(/asrAssetsRowStatus/)
     expect(src).not.toMatch(/not installed/)
+    expect(src).not.toMatch(/models missing in this build/)
+    expect(src).not.toMatch(/asrBundled\(\)/)
   })
 
   it('Wave 5 — includes the staged problem story before the reveal', () => {

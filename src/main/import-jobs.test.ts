@@ -394,7 +394,7 @@ describe('ImportJobManager', () => {
   it('the >90min overflow degrade flips pipeline to legacy and drains the buffered backlog through legacyTranscribeSlab (structural pin)', () => {
     const src = readFileSync(join(__dirname, 'import-jobs.ts'), 'utf8')
     expect(src).toMatch(/job\.pipeline\s*=\s*undefined/)
-    expect(src).toMatch(/const backlog = this\.takePcm\(\)/)
+    expect(src).toMatch(/const backlog = this\.takePcm\(job\.jobId\)/)
     expect(src).toMatch(/legacyTranscribeSlab\(job, backlogSeq\+\+, slab\)/)
   })
 
@@ -826,5 +826,49 @@ describe('ImportJobManager', () => {
     await manager.remove('job-1')
 
     expect(manager.list()).toEqual([])
+  })
+
+  it('N sources produce N durable jobs and two start decoding so one huge file cannot hold the slot', async () => {
+    let n = 0
+    const { manager, decode } = createManager({
+      newId: () => `job-${++n}`,
+      concurrency: 2
+    })
+    const jobs = await manager.startMany([
+      { ...source, name: 'standup.m4a' },
+      { ...source, name: 'review.wav' },
+      { ...source, name: 'wrap.mp3' }
+    ])
+    expect(jobs.map((j) => j.title)).toEqual(['Standup', 'Review', 'Wrap'])
+    expect(decode).toHaveBeenCalledTimes(2)
+    expect(manager.get('job-1')?.state).toBe('decoding')
+    expect(manager.get('job-2')?.state).toBe('decoding')
+    expect(manager.get('job-3')?.state).toBe('queued')
+  })
+
+  it('resume still re-queues a failed job after a multi-file start', async () => {
+    let n = 0
+    let failedOnce = false
+    const decode = vi.fn(async (job: ImportJob) => {
+      if (job.jobId === 'job-1' && !failedOnce) {
+        failedOnce = true
+        throw new Error('decoder died')
+      }
+    })
+    const { manager } = createManager({
+      decode,
+      newId: () => `job-${++n}`,
+      concurrency: 2
+    })
+    await manager.startMany([
+      { ...source, name: 'first.m4a' },
+      { ...source, name: 'second.wav' }
+    ])
+    expect(manager.get('job-1')?.state).toBe('failed')
+    expect(manager.get('job-2')?.state).toBe('decoding')
+
+    const resumed = await manager.resume('job-1')
+    expect(resumed.state).toBe('decoding')
+    expect(decode).toHaveBeenCalledTimes(3)
   })
 })

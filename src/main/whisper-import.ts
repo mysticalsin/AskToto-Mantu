@@ -11,20 +11,18 @@
  * request; index.ts's transcribe seam keeps its existing "engine choice must never fail an import"
  * Parakeet fallback, exactly as before.
  */
-import { app, utilityProcess, type UtilityProcess } from 'electron'
+import { utilityProcess, type UtilityProcess } from 'electron'
 import { join } from 'node:path'
 import { detectLanguage, LANGUAGE_NAMES } from '@shared/lang-id'
 import { collapseRepeatedPhrase } from '@shared/transcript-filter'
 import { mainLog } from './logger'
 import { getSettings, setSettings } from './store'
 import { asrModelRoot } from './asr-model-download'
+import { ensureWhisperFloorAssets, resolveWhisperModelsRoot } from './asr-bundled-ensure'
 
-/** resources/models — same directory the renderer's asr-model:// protocol serves from. Resolved here
- *  and handed to the child in its init message, so the child needs no packaged/dev path logic. */
+/** resources/models — or userData/asr-models when the floor was fetched after install. */
 function modelsDir(): string {
-  const REPO_ROOT = join(__dirname, '..', '..')
-  const base = app.isPackaged ? process.resourcesPath : join(REPO_ROOT, 'resources')
-  return join(base, 'models')
+  return resolveWhisperModelsRoot()
 }
 
 // ── Whisper utilityProcess client ────────────────────────────────────────────────────────────────────
@@ -359,6 +357,7 @@ export function finalizeDecodedText(rawText: string): string {
  * the recording's language before window 1 decodes (see probeLanguage above).
  */
 export async function whisperImportTranscribe(samples: Float32Array, language: string, probe?: LanguageProbe): Promise<string> {
+  await ensureWhisperFloorAssets()
   applyInitLanguage(language)
   await probeLanguage(samples, probe)
   await reprobeForSwitch(samples, probe)

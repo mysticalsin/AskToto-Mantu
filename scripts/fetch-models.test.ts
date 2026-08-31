@@ -54,7 +54,20 @@ describe('ASR model downloader', () => {
 
     expect(source).toMatch(/export function fetchStream/)
     expect(source).toMatch(/export async function download/)
+    expect(source).toMatch(/export function assertRequiredAsrFiles/)
+    expect(source).toMatch(/encoder\.int8\.onnx/)
+    expect(source).toMatch(/decoder\.int8\.onnx/)
+    expect(source).toMatch(/joiner\.int8\.onnx/)
+    expect(source).toMatch(/tokens\.txt/)
     expect(source).toMatch(/if \(process\.argv\[1\] === fileURLToPath\(import\.meta\.url\)\)/)
+  })
+
+  it('npm run dev provisions ASR assets when they are absent', () => {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+    expect(pkg.scripts.dev).toMatch(/ensure-asr-assets/)
+    const ensure = readFileSync(new URL('./ensure-asr-assets.mjs', import.meta.url), 'utf8')
+    expect(ensure).toMatch(/encoder\.int8\.onnx/)
+    expect(ensure).toMatch(/fetch-models\.mjs/)
   })
 
   it('bounds a connection that never sends response headers and retries clearly', async () => {

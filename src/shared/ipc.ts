@@ -96,12 +96,15 @@ export const IPC = {
   saveDraftTranscript: 'transcript:saveDraft',
   saveNote: 'note:save',
   importAudioPick: 'import-audio:pick',
+  importAudioOffer: 'import-audio:offer',
   importAudioStart: 'import-audio:start',
+  importAudioStartBatch: 'import-audio:start-batch',
   importJobsList: 'import-audio:jobs:list',
   importJobCancel: 'import-audio:job:cancel',
   importJobResume: 'import-audio:job:resume',
   importJobRemove: 'import-audio:job:remove',
   importAudioProgress: 'import-audio:progress',
+  importAssetsProgress: 'import-assets:progress',
   // Private channels used only by the sandboxed hidden decoder window. They are never bridged to the
   // interactive overlay preload.
   importDecoderChunk: 'import-decoder:chunk',
@@ -183,6 +186,10 @@ export const IPC = {
   screenCaptureCheck: 'permissions:screenCaptureCheck',
   listeningState: 'listening:state',
   asrBundled: 'asr:bundled',
+  // Onboarding + Settings: live Parakeet/Whisper-floor readiness (bundled or userData). Distinct from
+  // asrBundled, which only answers “is the installer/repo resources/ manifest complete?”
+  asrAssetsStatus: 'asr:assets-status',
+  asrAssetsEnsure: 'asr:assets-ensure',
   // Métis Local (on-device LLM): readiness metadata plus a start/retry that does not require toggling
   // Local AI (routing) on. Cancel/delete stay off the renderer — main owns the transfer.
   localModelsList: 'localModels:list',
@@ -419,7 +426,20 @@ export const ImportAudioChunkSchema = z.object({
 })
 export type ImportAudioChunk = z.infer<typeof ImportAudioChunkSchema>
 
-/** Result of import-audio:pick. `token` is an opaque, single-use main-process capability, never a file path. */
+/** One accepted recording from import-audio:pick / offer. `token` is never a file path. */
+export interface ImportAudioPickedFile {
+  token: string
+  name: string
+  sizeBytes: number
+  mtimeMs: number
+}
+
+export interface ImportAudioSkippedFile {
+  name: string
+  error: string
+}
+
+/** Result of import-audio:pick or import-audio:offer. Tokens are opaque, single-use, never file paths. */
 export interface ImportAudioPickResult {
   cancelled?: boolean
   error?: string
@@ -427,10 +447,34 @@ export interface ImportAudioPickResult {
   name?: string
   sizeBytes?: number
   mtimeMs?: number
+  files?: ImportAudioPickedFile[]
+  skipped?: ImportAudioSkippedFile[]
 }
 
 export const ImportAudioStartSchema = z.object({ token: z.string().min(20).max(200) })
 export type ImportAudioStart = z.infer<typeof ImportAudioStartSchema>
+
+export const ImportAudioStartBatchSchema = z.object({
+  tokens: z.array(z.string().min(20).max(200)).min(1).max(50)
+})
+export type ImportAudioStartBatch = z.infer<typeof ImportAudioStartBatchSchema>
+
+export const ImportAudioOfferSchema = z.object({
+  paths: z.array(z.string().min(1).max(4096)).max(50)
+})
+export type ImportAudioOffer = z.infer<typeof ImportAudioOfferSchema>
+
+export interface ImportAssetsProgress {
+  status: 'idle' | 'downloading' | 'ready' | 'error'
+  progress: number
+  label: string
+  error?: string
+}
+
+/** Onboarding / Settings snapshot of Parakeet + Whisper-floor readiness. */
+export interface AsrAssetsStatus extends ImportAssetsProgress {
+  ready: boolean
+}
 
 export type ImportJobState =
   | 'queued'
@@ -1022,12 +1066,14 @@ export const BaseSettingsSchema = z.object({
   overlayLayout: z.enum(['hide', 'island', 'bar']).default('hide'),
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('best'), // Best is default; Fast is a Settings power option (docs/asr/QUALITY.md)
-  // whisper = ~99 langs (default — safe for any locale; parakeet is European-only, which is why 1fa4d76
-  // moved the default off it); parakeet = 25 European languages, fastest; apple = on-device Apple Speech
-  // (SFSpeechRecognizer via the mac-helper sidecar), opt-in, macOS 13+ only — see main/apple-speech.ts.
+  // parakeet = default. NVIDIA Parakeet v3, fastest + accurate for 25 European languages.
+  // whisper = ~99 langs, opt-in for non-European speech. apple = on-device Apple Speech
+  // (SFSpeechRecognizer via the mac-helper sidecar), macOS 13+ only — see main/apple-speech.ts.
+  // Existing users who never wrote asrEngine inherit this default (sparse settings.json).
+  // An explicit whisper/apple override is never clobbered.
   // NOTE: this zod default is effectively dead — store.ts layers DEFAULT_SETTINGS under the user file
   // before parsing, so the key is always present. Keep both declarations identical so neither lies.
-  asrEngine: z.enum(['whisper', 'parakeet', 'apple']).default('whisper'),
+  asrEngine: z.enum(['whisper', 'parakeet', 'apple']).default('parakeet'),
   // Spoken-language hint for transcription: 'auto' (per-window detect) or a language display name from
   // Settings' LANGUAGE_OPTIONS ('Portuguese', …). Pins Whisper's decoder and Apple Speech's recognizer
   // locale; Parakeet always auto-detects. Exists because per-window auto-detect on the compact bundled
@@ -1483,7 +1529,7 @@ export const DEFAULT_SETTINGS: Settings = {
   overlayLayout: 'hide',
   showFullTranscriptInReview: false,
   asrQuality: 'best',
-  asrEngine: 'whisper',
+  asrEngine: 'parakeet',
   asrLanguage: 'auto',
   asrLastFallbackAt: null,
   asrWebgpuFallbackAt: null,
