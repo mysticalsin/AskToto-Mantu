@@ -5,6 +5,7 @@ import {
   OVERLAY_LAYOUTS,
   autoHideOverlayForLayout,
   migrateOverlayLayout,
+  overlayAllowsMinimize,
   overlayRestsHidden,
   overlayUsesHover,
   overlayUsesSafeTop,
@@ -23,6 +24,9 @@ describe('overlay chrome modes', () => {
     expect(overlayUsesHover('island')).toBe(true)
     expect(overlayUsesHover('bar')).toBe(false)
     expect(autoHideOverlayForLayout('bar')).toBe(false)
+    expect(overlayAllowsMinimize('bar')).toBe(true)
+    expect(overlayAllowsMinimize('hide')).toBe(false)
+    expect(overlayAllowsMinimize('island')).toBe(false)
   })
 
   it('Settings can switch to island and bar without a reinstall (migrate keeps a saved layout)', () => {

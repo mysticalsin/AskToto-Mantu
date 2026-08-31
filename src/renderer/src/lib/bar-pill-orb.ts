@@ -1,22 +1,53 @@
 /**
- * Jarvis-look particle orb for the Bar minimized pill.
- * Look from mysticalsin/tonys-jarvis (2000 points, 0x4ca8e8, additive,
- * connections, electrons, idle drift). Bundled WebGL. No CDN.
+ * Sentient particle circle for the Bar minimized rest.
+ * Shape: Fit Studio bottom-right orb (fixed sphere). Craft: tonys-jarvis.
+ * Bundled WebGL. No CDN. Never flatten.
  */
 
-export const JARVIS_ORB_COLOR = 0x4ca8e8
+export const BAR_PILL_SIZE_PX = 80
+export const BAR_PILL_WIDTH_PX = BAR_PILL_SIZE_PX
+export const BAR_PILL_HEIGHT_PX = BAR_PILL_SIZE_PX
+
+/** Same NDC scale on X and Y so the cloud stays a sphere, not a lozenge. */
+export const ORB_NDC_SCALE = 0.78
+
+export const ORB_MOODS = ['idle', 'thinking', 'factcheck', 'connecting'] as const
+export type OrbMood = (typeof ORB_MOODS)[number]
+export type BarPillOrbMood = OrbMood
+
+export const ORB_COLOR: Record<OrbMood, number> = {
+  idle: 0x7f00da,
+  thinking: 0x9a2bf0,
+  factcheck: 0x4ca8e8,
+  connecting: 0x2a0a4a
+}
+
 export const JARVIS_ORB_POINTS = 2000
 export const JARVIS_ELECTRON_COUNT = 8
-export const BAR_PILL_WIDTH_PX = 144
-export const BAR_PILL_HEIGHT_PX = 52
+/** Fact-check mood only. Rest is Mantu purple. */
+export const JARVIS_ORB_COLOR = ORB_COLOR.factcheck
 
-export type BarPillOrbMood = 'idle' | 'listening' | 'paused' | 'degraded'
+export function isFixedCircle(width: number, height: number): boolean {
+  return width === height && width === BAR_PILL_SIZE_PX
+}
 
-export function moodFromListen(listening: boolean, paused: boolean, degraded: boolean): BarPillOrbMood {
-  if (!listening) return 'idle'
-  if (paused) return 'paused'
-  if (degraded) return 'degraded'
-  return 'listening'
+export function orbBoxForMood(_mood: OrbMood): { width: number; height: number } {
+  return { width: BAR_PILL_SIZE_PX, height: BAR_PILL_SIZE_PX }
+}
+
+export function orbAspectRatio(width = BAR_PILL_WIDTH_PX, height = BAR_PILL_HEIGHT_PX): number {
+  return height === 0 ? 0 : width / height
+}
+
+export function resolveOrbMood(input: {
+  connecting?: boolean
+  factcheck?: boolean
+  thinking?: boolean
+}): OrbMood {
+  if (input.connecting) return 'connecting'
+  if (input.factcheck) return 'factcheck'
+  if (input.thinking) return 'thinking'
+  return 'idle'
 }
 
 /** Click expands. A real drag must not. */
@@ -25,7 +56,7 @@ export function pillClickShouldExpand(didDrag: boolean): boolean {
 }
 
 /**
- * Orb rAF is allowed only on the mounted Bar pill. Idle full bar, Hide, Island,
+ * Orb rAF is allowed only on the mounted Bar circle. Idle full bar, Hide, Island,
  * reduced-motion, and a hidden document must not run a frame loop.
  */
 export function shouldRunOrbRaf(input: {
@@ -41,15 +72,14 @@ export function shouldAnimateOrb(reducedMotion: boolean): boolean {
   return !reducedMotion
 }
 
-export function jarvisRgb(color = JARVIS_ORB_COLOR): { r: number; g: number; b: number } {
+export function jarvisRgb(color: number): { r: number; g: number; b: number } {
   return { r: ((color >> 16) & 255) / 255, g: ((color >> 8) & 255) / 255, b: (color & 255) / 255 }
 }
 
-export function moodTint(mood: BarPillOrbMood): { r: number; g: number; b: number } {
-  const base = jarvisRgb()
-  if (mood === 'degraded') return { r: 0.98, g: 0.78, b: 0.46 }
-  if (mood === 'paused') return { r: base.r * 0.72, g: base.g * 0.72, b: base.b * 0.78 }
-  return base
+export function moodTint(mood: OrbMood): { r: number; g: number; b: number } {
+  const c = jarvisRgb(ORB_COLOR[mood])
+  if (mood === 'factcheck') return { r: c.r * 0.72, g: c.g * 0.82, b: Math.min(1, c.b * 1.05) }
+  return c
 }
 
 /** Fibonacci sphere. Deterministic so reduced-motion still frames match across mounts. */
@@ -63,16 +93,6 @@ export function fibonacciSphere(count: number): Float32Array {
     out[i * 3] = Math.cos(theta) * radius
     out[i * 3 + 1] = y
     out[i * 3 + 2] = Math.sin(theta) * radius
-  }
-  return out
-}
-
-/** Stretch a unit sphere into a capsule so the cloud reads as a pill, not a ball. */
-export function fibonacciCapsule(count: number, aspect = 2.28): Float32Array {
-  const out = fibonacciSphere(count)
-  for (let i = 0; i < count; i++) {
-    out[i * 3] *= aspect
-    out[i * 3 + 1] *= 0.9
   }
   return out
 }
@@ -94,25 +114,53 @@ export function connectionIndices(count: number, chords: readonly number[] = [1,
 }
 
 export interface BarPillOrbHandle {
-  setMood: (mood: BarPillOrbMood) => void
+  setMood: (mood: OrbMood) => void
   setHover: (nx: number, ny: number, active: boolean) => void
   setReducedMotion: (reduced: boolean) => void
   destroy: () => void
 }
 
 export interface MountBarPillOrbOpts {
-  mood?: BarPillOrbMood
+  mood?: OrbMood
   reducedMotion?: boolean
 }
 
-type MoodParams = { breathAmp: number; speed: number; point: number; line: number; density: number; drift: number }
+type MoodParams = { breathAmp: number; speed: number; point: number; line: number; density: number; drift: number; core: number; electron: number }
 
-function moodParams(mood: BarPillOrbMood): MoodParams {
-  if (mood === 'listening') return { breathAmp: 0.05, speed: 1.5, point: 0.94, line: 0.4, density: 1.22, drift: 0.028 }
-  if (mood === 'paused') return { breathAmp: 0.016, speed: 0.5, point: 0.52, line: 0.14, density: 0.82, drift: 0.008 }
-  if (mood === 'degraded') return { breathAmp: 0.038, speed: 1.12, point: 0.8, line: 0.26, density: 1.04, drift: 0.02 }
-  return { breathAmp: 0.026, speed: 0.82, point: 0.7, line: 0.2, density: 1, drift: 0.018 }
+function moodParams(mood: OrbMood): MoodParams {
+  if (mood === 'thinking') return { breathAmp: 0.028, speed: 1.32, point: 0.64, line: 0.24, density: 1.08, drift: 0.022, core: 0.78, electron: 0.7 }
+  if (mood === 'factcheck') return { breathAmp: 0.024, speed: 1.05, point: 0.22, line: 0.1, density: 0.92, drift: 0.018, core: 0.9, electron: 0.35 }
+  if (mood === 'connecting') return { breathAmp: 0.014, speed: 0.46, point: 0.36, line: 0.1, density: 0.86, drift: 0.008, core: 0.72, electron: 0.28 }
+  return { breathAmp: 0.022, speed: 0.8, point: 0.48, line: 0.16, density: 1, drift: 0.016, core: 0.82, electron: 0.55 }
 }
+
+/** Fit Studio luminous disc. Same X/Y scale. Lives inside the fixed circle. */
+const CORE_VS = `
+attribute vec2 aQuad;
+uniform float uBreath;
+uniform float uLeanX;
+uniform float uLeanY;
+varying vec2 vUv;
+void main() {
+  vec2 p = aQuad * 0.84 * uBreath;
+  p += vec2(uLeanX, uLeanY) * 0.05;
+  gl_Position = vec4(p, 0.0, 1.0);
+  vUv = aQuad;
+}
+`
+
+const CORE_FS = `
+precision mediump float;
+uniform vec3 uColor;
+uniform float uAlpha;
+varying vec2 vUv;
+void main() {
+  float d = length(vUv);
+  if (d > 1.0) discard;
+  float core = exp(-d * d * 2.35);
+  gl_FragColor = vec4(uColor, core * uAlpha);
+}
+`
 
 const POINT_VS = `
 attribute vec3 aPos;
@@ -123,6 +171,7 @@ uniform float uLeanX;
 uniform float uLeanY;
 uniform float uPointSize;
 uniform float uDrift;
+uniform float uScale;
 varying float vAlpha;
 void main() {
   float ca = cos(uTime * 0.16);
@@ -133,7 +182,7 @@ void main() {
   p.x += uLeanX * (0.16 + p.z * 0.10);
   p.y += uLeanY * (0.12 + p.z * 0.07);
   p *= uBreath;
-  gl_Position = vec4(p.x * 0.42, p.y * 0.88, p.z * 0.14, 1.0);
+  gl_Position = vec4(p.x * uScale, p.y * uScale, p.z * 0.16, 1.0);
   float depth = 0.52 + 0.48 * (0.5 + 0.5 * p.z);
   vAlpha = depth;
   gl_PointSize = uPointSize * (0.62 + 0.48 * depth);
@@ -162,6 +211,7 @@ uniform float uBreath;
 uniform float uLeanX;
 uniform float uLeanY;
 uniform float uDrift;
+uniform float uScale;
 varying float vAlpha;
 void main() {
   float ca = cos(uTime * 0.16);
@@ -172,7 +222,7 @@ void main() {
   p.x += uLeanX * (0.16 + p.z * 0.10);
   p.y += uLeanY * (0.12 + p.z * 0.07);
   p *= uBreath;
-  gl_Position = vec4(p.x * 0.42, p.y * 0.88, p.z * 0.14, 1.0);
+  gl_Position = vec4(p.x * uScale, p.y * uScale, p.z * 0.16, 1.0);
   vAlpha = 0.32 + 0.4 * (0.5 + 0.5 * p.z);
 }
 `
@@ -194,6 +244,7 @@ uniform float uBreath;
 uniform float uLeanX;
 uniform float uLeanY;
 uniform float uPointSize;
+uniform float uScale;
 varying float vAlpha;
 void main() {
   float a = aOrbit.z + uTime * aOrbit.y;
@@ -201,7 +252,7 @@ void main() {
   p.x += uLeanX * 0.14;
   p.y += uLeanY * 0.10;
   p *= uBreath;
-  gl_Position = vec4(p.x * 0.42, p.y * 0.88, p.z * 0.14, 1.0);
+  gl_Position = vec4(p.x * uScale, p.y * uScale, p.z * 0.16, 1.0);
   vAlpha = 0.92;
   gl_PointSize = uPointSize;
 }
@@ -246,6 +297,7 @@ type PointLocs = {
   uLeanY: WebGLUniformLocation
   uPointSize: WebGLUniformLocation
   uDrift: WebGLUniformLocation
+  uScale: WebGLUniformLocation
   uColor: WebGLUniformLocation
   uAlpha: WebGLUniformLocation
 }
@@ -258,6 +310,7 @@ type LineLocs = {
   uLeanX: WebGLUniformLocation
   uLeanY: WebGLUniformLocation
   uDrift: WebGLUniformLocation
+  uScale: WebGLUniformLocation
   uColor: WebGLUniformLocation
   uAlpha: WebGLUniformLocation
 }
@@ -269,6 +322,16 @@ type ElectronLocs = {
   uLeanX: WebGLUniformLocation
   uLeanY: WebGLUniformLocation
   uPointSize: WebGLUniformLocation
+  uScale: WebGLUniformLocation
+  uColor: WebGLUniformLocation
+  uAlpha: WebGLUniformLocation
+}
+
+type CoreLocs = {
+  aQuad: number
+  uBreath: WebGLUniformLocation
+  uLeanX: WebGLUniformLocation
+  uLeanY: WebGLUniformLocation
   uColor: WebGLUniformLocation
   uAlpha: WebGLUniformLocation
 }
@@ -280,9 +343,10 @@ function pointLocs(gl: WebGLRenderingContext, p: WebGLProgram): PointLocs | null
   const uLeanY = gl.getUniformLocation(p, 'uLeanY')
   const uPointSize = gl.getUniformLocation(p, 'uPointSize')
   const uDrift = gl.getUniformLocation(p, 'uDrift')
+  const uScale = gl.getUniformLocation(p, 'uScale')
   const uColor = gl.getUniformLocation(p, 'uColor')
   const uAlpha = gl.getUniformLocation(p, 'uAlpha')
-  if (!uTime || !uBreath || !uLeanX || !uLeanY || !uPointSize || !uDrift || !uColor || !uAlpha) return null
+  if (!uTime || !uBreath || !uLeanX || !uLeanY || !uPointSize || !uDrift || !uScale || !uColor || !uAlpha) return null
   return {
     aPos: gl.getAttribLocation(p, 'aPos'),
     aSeed: gl.getAttribLocation(p, 'aSeed'),
@@ -292,6 +356,7 @@ function pointLocs(gl: WebGLRenderingContext, p: WebGLProgram): PointLocs | null
     uLeanY,
     uPointSize,
     uDrift,
+    uScale,
     uColor,
     uAlpha
   }
@@ -303,9 +368,10 @@ function lineLocs(gl: WebGLRenderingContext, p: WebGLProgram): LineLocs | null {
   const uLeanX = gl.getUniformLocation(p, 'uLeanX')
   const uLeanY = gl.getUniformLocation(p, 'uLeanY')
   const uDrift = gl.getUniformLocation(p, 'uDrift')
+  const uScale = gl.getUniformLocation(p, 'uScale')
   const uColor = gl.getUniformLocation(p, 'uColor')
   const uAlpha = gl.getUniformLocation(p, 'uAlpha')
-  if (!uTime || !uBreath || !uLeanX || !uLeanY || !uDrift || !uColor || !uAlpha) return null
+  if (!uTime || !uBreath || !uLeanX || !uLeanY || !uDrift || !uScale || !uColor || !uAlpha) return null
   return {
     aPos: gl.getAttribLocation(p, 'aPos'),
     aSeed: gl.getAttribLocation(p, 'aSeed'),
@@ -314,9 +380,20 @@ function lineLocs(gl: WebGLRenderingContext, p: WebGLProgram): LineLocs | null {
     uLeanX,
     uLeanY,
     uDrift,
+    uScale,
     uColor,
     uAlpha
   }
+}
+
+function coreLocs(gl: WebGLRenderingContext, p: WebGLProgram): CoreLocs | null {
+  const uBreath = gl.getUniformLocation(p, 'uBreath')
+  const uLeanX = gl.getUniformLocation(p, 'uLeanX')
+  const uLeanY = gl.getUniformLocation(p, 'uLeanY')
+  const uColor = gl.getUniformLocation(p, 'uColor')
+  const uAlpha = gl.getUniformLocation(p, 'uAlpha')
+  if (!uBreath || !uLeanX || !uLeanY || !uColor || !uAlpha) return null
+  return { aQuad: gl.getAttribLocation(p, 'aQuad'), uBreath, uLeanX, uLeanY, uColor, uAlpha }
 }
 
 function electronLocs(gl: WebGLRenderingContext, p: WebGLProgram): ElectronLocs | null {
@@ -325,9 +402,10 @@ function electronLocs(gl: WebGLRenderingContext, p: WebGLProgram): ElectronLocs 
   const uLeanX = gl.getUniformLocation(p, 'uLeanX')
   const uLeanY = gl.getUniformLocation(p, 'uLeanY')
   const uPointSize = gl.getUniformLocation(p, 'uPointSize')
+  const uScale = gl.getUniformLocation(p, 'uScale')
   const uColor = gl.getUniformLocation(p, 'uColor')
   const uAlpha = gl.getUniformLocation(p, 'uAlpha')
-  if (!uTime || !uBreath || !uLeanX || !uLeanY || !uPointSize || !uColor || !uAlpha) return null
+  if (!uTime || !uBreath || !uLeanX || !uLeanY || !uPointSize || !uScale || !uColor || !uAlpha) return null
   return {
     aOrbit: gl.getAttribLocation(p, 'aOrbit'),
     uTime,
@@ -335,19 +413,20 @@ function electronLocs(gl: WebGLRenderingContext, p: WebGLProgram): ElectronLocs 
     uLeanX,
     uLeanY,
     uPointSize,
+    uScale,
     uColor,
     uAlpha
   }
 }
 
 function packCloud(count: number): { interleaved: Float32Array; lines: Uint16Array } {
-  const pos = fibonacciCapsule(count)
+  const pos = fibonacciSphere(count)
   const interleaved = new Float32Array(count * 4)
   for (let i = 0; i < count; i++) {
     interleaved[i * 4] = pos[i * 3]
     interleaved[i * 4 + 1] = pos[i * 3 + 1]
     interleaved[i * 4 + 2] = pos[i * 3 + 2]
-    interleaved[i * 4 + 3] = ((i * 0.61803398875) % 1)
+    interleaved[i * 4 + 3] = (i * 0.61803398875) % 1
   }
   return { interleaved, lines: connectionIndices(count) }
 }
@@ -365,19 +444,21 @@ function electronOrbits(): Float32Array {
 
 function sizeOnce(canvas: HTMLCanvasElement): void {
   const dpr = Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 2)
-  canvas.width = Math.round(BAR_PILL_WIDTH_PX * dpr)
-  canvas.height = Math.round(BAR_PILL_HEIGHT_PX * dpr)
+  canvas.width = Math.round(BAR_PILL_SIZE_PX * dpr)
+  canvas.height = Math.round(BAR_PILL_SIZE_PX * dpr)
 }
 
 function mountWebGL(gl: WebGLRenderingContext, canvas: HTMLCanvasElement, opts: MountBarPillOrbOpts): BarPillOrbHandle | null {
   const pointProg = program(gl, POINT_VS, POINT_FS)
   const lineProg = program(gl, LINE_VS, LINE_FS)
   const electronProg = program(gl, ELECTRON_VS, POINT_FS)
-  if (!pointProg || !lineProg || !electronProg) return null
+  const coreProg = program(gl, CORE_VS, CORE_FS)
+  if (!pointProg || !lineProg || !electronProg || !coreProg) return null
   const pLoc = pointLocs(gl, pointProg)
   const lLoc = lineLocs(gl, lineProg)
   const eLoc = electronLocs(gl, electronProg)
-  if (!pLoc || !lLoc || !eLoc) return null
+  const cLoc = coreLocs(gl, coreProg)
+  if (!pLoc || !lLoc || !eLoc || !cLoc) return null
 
   sizeOnce(canvas)
   gl.viewport(0, 0, canvas.width, canvas.height)
@@ -392,12 +473,15 @@ function mountWebGL(gl: WebGLRenderingContext, canvas: HTMLCanvasElement, opts: 
   const electronBuf = gl.createBuffer()
   gl.bindBuffer(gl.ARRAY_BUFFER, electronBuf)
   gl.bufferData(gl.ARRAY_BUFFER, electronOrbits(), gl.STATIC_DRAW)
+  const coreBuf = gl.createBuffer()
+  gl.bindBuffer(gl.ARRAY_BUFFER, coreBuf)
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW)
 
   gl.enable(gl.BLEND)
   gl.blendFunc(gl.SRC_ALPHA, gl.ONE)
   gl.disable(gl.DEPTH_TEST)
 
-  let mood: BarPillOrbMood = opts.mood ?? 'idle'
+  let mood: OrbMood = opts.mood ?? 'idle'
   let params = moodParams(mood)
   let tint = moodTint(mood)
   let reduced = !!opts.reducedMotion
@@ -408,9 +492,10 @@ function mountWebGL(gl: WebGLRenderingContext, canvas: HTMLCanvasElement, opts: 
   let raf = 0
   let alive = true
   const t0 = typeof performance !== 'undefined' ? performance.now() : 0
-  const pointPx = canvas.height / 40
-  const electronPx = canvas.height / 15
+  const pointPx = canvas.height / 36
+  const electronPx = canvas.height / 14
   const stride = 16
+  const ndc = ORB_NDC_SCALE
 
   const bindCloud = (pos: number, seed: number): void => {
     gl.bindBuffer(gl.ARRAY_BUFFER, cloudBuf)
@@ -429,11 +514,23 @@ function mountWebGL(gl: WebGLRenderingContext, canvas: HTMLCanvasElement, opts: 
     gl.clear(gl.COLOR_BUFFER_BIT)
     const elapsed = (now - t0) / 1000
     const time = reduced ? 0.4 : elapsed * params.speed
-    const pulse = mood === 'listening' && !reduced ? 1 + Math.sin(elapsed * 3.1) * 0.06 : 1
-    const breath = reduced ? 1 : (1 + Math.sin(elapsed * (mood === 'listening' ? 2.35 : 1.32)) * params.breathAmp) * pulse
+    const breath = reduced ? 1 : 1 + Math.sin(elapsed * (mood === 'thinking' ? 2.2 : 1.28)) * params.breathAmp
     leanX += (targetLeanX - leanX) * 0.12
     leanY += (targetLeanY - leanY) * 0.12
 
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
+    gl.useProgram(coreProg)
+    gl.bindBuffer(gl.ARRAY_BUFFER, coreBuf)
+    gl.enableVertexAttribArray(cLoc.aQuad)
+    gl.vertexAttribPointer(cLoc.aQuad, 2, gl.FLOAT, false, 0, 0)
+    gl.uniform1f(cLoc.uBreath, breath)
+    gl.uniform1f(cLoc.uLeanX, leanX)
+    gl.uniform1f(cLoc.uLeanY, leanY)
+    gl.uniform3f(cLoc.uColor, tint.r, tint.g, tint.b)
+    gl.uniform1f(cLoc.uAlpha, params.core)
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4)
+
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE)
     gl.useProgram(lineProg)
     bindCloud(lLoc.aPos, lLoc.aSeed)
     gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, lineIdx)
@@ -442,6 +539,7 @@ function mountWebGL(gl: WebGLRenderingContext, canvas: HTMLCanvasElement, opts: 
     gl.uniform1f(lLoc.uLeanX, leanX)
     gl.uniform1f(lLoc.uLeanY, leanY)
     gl.uniform1f(lLoc.uDrift, params.drift)
+    gl.uniform1f(lLoc.uScale, ndc)
     gl.uniform3f(lLoc.uColor, tint.r, tint.g, tint.b)
     gl.uniform1f(lLoc.uAlpha, params.line)
     gl.drawElements(gl.LINES, cloud.lines.length, gl.UNSIGNED_SHORT, 0)
@@ -454,6 +552,7 @@ function mountWebGL(gl: WebGLRenderingContext, canvas: HTMLCanvasElement, opts: 
     gl.uniform1f(pLoc.uLeanY, leanY)
     gl.uniform1f(pLoc.uPointSize, pointPx * params.density)
     gl.uniform1f(pLoc.uDrift, params.drift)
+    gl.uniform1f(pLoc.uScale, ndc)
     gl.uniform3f(pLoc.uColor, tint.r, tint.g, tint.b)
     gl.uniform1f(pLoc.uAlpha, params.point)
     gl.drawArrays(gl.POINTS, 0, JARVIS_ORB_POINTS)
@@ -467,8 +566,9 @@ function mountWebGL(gl: WebGLRenderingContext, canvas: HTMLCanvasElement, opts: 
     gl.uniform1f(eLoc.uLeanX, leanX)
     gl.uniform1f(eLoc.uLeanY, leanY)
     gl.uniform1f(eLoc.uPointSize, electronPx * params.density)
+    gl.uniform1f(eLoc.uScale, ndc)
     gl.uniform3f(eLoc.uColor, tint.r, tint.g, tint.b)
-    gl.uniform1f(eLoc.uAlpha, 0.95)
+    gl.uniform1f(eLoc.uAlpha, params.electron)
     gl.drawArrays(gl.POINTS, 0, JARVIS_ELECTRON_COUNT)
   }
 
@@ -530,27 +630,39 @@ function mountWebGL(gl: WebGLRenderingContext, canvas: HTMLCanvasElement, opts: 
       gl.deleteBuffer(cloudBuf)
       gl.deleteBuffer(lineIdx)
       gl.deleteBuffer(electronBuf)
+      gl.deleteBuffer(coreBuf)
       gl.deleteProgram(pointProg)
       gl.deleteProgram(lineProg)
       gl.deleteProgram(electronProg)
+      gl.deleteProgram(coreProg)
     }
   }
 }
 
 function mountStill(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, opts: MountBarPillOrbOpts): BarPillOrbHandle {
-  let mood: BarPillOrbMood = opts.mood ?? 'idle'
+  let mood: OrbMood = opts.mood ?? 'idle'
   const paint = (): void => {
     sizeOnce(canvas)
     const w = canvas.width
     const h = canvas.height
     ctx.clearRect(0, 0, w, h)
-    ctx.globalCompositeOperation = 'lighter'
     const tint = moodTint(mood)
-    const pts = fibonacciCapsule(96)
+    const cx = w * 0.5
+    const cy = h * 0.5
+    const glow = ctx.createRadialGradient(cx, cy, 0, cx, cy, w * 0.48)
+    glow.addColorStop(0, `rgba(${Math.round(tint.r * 255)},${Math.round(tint.g * 255)},${Math.round(tint.b * 255)},0.72)`)
+    glow.addColorStop(0.45, `rgba(${Math.round(tint.r * 255)},${Math.round(tint.g * 255)},${Math.round(tint.b * 255)},0.28)`)
+    glow.addColorStop(1, `rgba(${Math.round(tint.r * 255)},${Math.round(tint.g * 255)},${Math.round(tint.b * 255)},0)`)
+    ctx.fillStyle = glow
+    ctx.beginPath()
+    ctx.arc(cx, cy, w * 0.48, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.globalCompositeOperation = 'lighter'
+    const pts = fibonacciSphere(96)
     const color = `rgba(${Math.round(tint.r * 255)},${Math.round(tint.g * 255)},${Math.round(tint.b * 255)},`
     for (let i = 0; i < 96; i++) {
-      const x = (pts[i * 3] * 0.42 + 1) * 0.5 * w
-      const y = (1 - (pts[i * 3 + 1] * 0.88 + 1) * 0.5) * h
+      const x = (pts[i * 3] * ORB_NDC_SCALE + 1) * 0.5 * w
+      const y = (1 - (pts[i * 3 + 1] * ORB_NDC_SCALE + 1) * 0.5) * h
       const z = pts[i * 3 + 2]
       const a = 0.18 + 0.35 * (0.5 + 0.5 * z)
       ctx.fillStyle = `${color}${a})`

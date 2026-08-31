@@ -1,38 +1,30 @@
 import { useEffect, useRef } from 'react'
 import { useWindowDrag } from '../lib/window-drag'
 import {
-  BAR_PILL_HEIGHT_PX,
-  BAR_PILL_WIDTH_PX,
+  BAR_PILL_SIZE_PX,
   mountBarPillOrb,
-  moodFromListen,
   pillClickShouldExpand,
   type BarPillOrbHandle,
-  type BarPillOrbMood
+  type OrbMood
 } from '../lib/bar-pill-orb'
 
 /**
- * Bar minimized control: Jarvis sentient particle capsule.
- * Click (not drag) expands to the full bar. Listen mood lives in the orb, not a chip of buttons.
+ * Bar-only minimized control: Fit Studio sentient circle.
+ * Click (not drag) expands to the full bar. Hide/Island never mount this.
  */
 export function ControlPill({
   onExpand,
-  listening,
-  paused,
+  orbMood = 'idle',
   degradedNote
 }: {
   onExpand: () => void
-  onHide: () => void
-  onToggleListen: () => void
-  onTogglePause: () => void
-  listening: boolean
-  paused: boolean
+  orbMood?: OrbMood
+  /** Tooltip only. Rec-dot stays elsewhere; do not paint this sphere red. */
   degradedNote?: string | null
-  startedAt: number
 }): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const orbRef = useRef<BarPillOrbHandle | null>(null)
   const dragMovedRef = useRef(false)
-  const mood: BarPillOrbMood = moodFromListen(listening, paused, !!degradedNote)
 
   const drag = useWindowDrag(
     () => {
@@ -48,7 +40,7 @@ export function ControlPill({
       typeof window !== 'undefined' &&
       typeof window.matchMedia === 'function' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches
-    const orb = mountBarPillOrb(canvas, { mood, reducedMotion: reduced })
+    const orb = mountBarPillOrb(canvas, { mood: orbMood, reducedMotion: reduced })
     orbRef.current = orb
     return () => {
       orb.destroy()
@@ -59,8 +51,16 @@ export function ControlPill({
   }, [])
 
   useEffect(() => {
-    orbRef.current?.setMood(mood)
-  }, [mood])
+    orbRef.current?.setMood(orbMood)
+  }, [orbMood])
+
+  const onPointerMove = (e: React.PointerEvent<HTMLButtonElement>): void => {
+    // Skip lean while dragging — do not measure, do not fight moveBy.
+    if (dragMovedRef.current) return
+    const nx = (e.nativeEvent.offsetX / BAR_PILL_SIZE_PX) * 2 - 1
+    const ny = (e.nativeEvent.offsetY / BAR_PILL_SIZE_PX) * 2 - 1
+    orbRef.current?.setHover(nx, ny, true)
+  }
 
   return (
     <button
@@ -68,25 +68,28 @@ export function ControlPill({
       type="button"
       data-hug-width
       data-bar-pill-orb
-      data-orb-mood={mood}
+      data-orb-mood={orbMood}
       title={degradedNote || 'Expand Métis'}
       aria-label="Expand Métis"
-      className="aw-pill aw-pill--orb no-drag focus-ring"
-      onPointerDown={() => {
+      onPointerDown={(e) => {
         dragMovedRef.current = false
+        drag.onPointerDown(e)
       }}
-      onPointerMove={(e) => {
-        if (dragMovedRef.current) return
-        const nx = (e.nativeEvent.offsetX / BAR_PILL_WIDTH_PX) * 2 - 1
-        const ny = (e.nativeEvent.offsetY / BAR_PILL_HEIGHT_PX) * 2 - 1
-        orbRef.current?.setHover(nx, ny, true)
-      }}
+      onPointerMove={onPointerMove}
       onPointerLeave={() => orbRef.current?.setHover(0, 0, false)}
       onClick={() => {
-        if (pillClickShouldExpand(dragMovedRef.current)) onExpand()
+        if (!pillClickShouldExpand(dragMovedRef.current)) return
+        onExpand()
       }}
+      className="aw-pill aw-pill--orb focus-ring"
     >
-      <canvas ref={canvasRef} className="aw-pill-orb" width={BAR_PILL_WIDTH_PX} height={BAR_PILL_HEIGHT_PX} />
+      <canvas
+        ref={canvasRef}
+        className="aw-pill-orb"
+        width={BAR_PILL_SIZE_PX * 2}
+        height={BAR_PILL_SIZE_PX * 2}
+        aria-hidden="true"
+      />
     </button>
   )
 }
