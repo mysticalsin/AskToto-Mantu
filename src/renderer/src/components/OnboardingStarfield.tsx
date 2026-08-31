@@ -1,6 +1,7 @@
 /**
  * Full-bleed Starfield Close canvas under the exclusive tour UI.
- * Mount after Next (see shouldMountStarfield). Not on hero (April 29 video) and not on reveal.
+ * Retired. After hero the bed is OnboardingConstellation (2D canvas).
+ * shouldMountStarfield is always false. Kept so the three.js engine stays unused.
  * pointer-events: none. Canvas stays opacity 0 until the first composed frame.
  */
 import { useEffect, useRef } from 'react'

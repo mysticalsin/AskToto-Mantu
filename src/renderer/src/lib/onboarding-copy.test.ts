@@ -14,6 +14,20 @@ const files = [
   join(__dirname, './onboarding-portal.ts')
 ]
 
+describe('onboarding locked copy — punchy second-brain lines', () => {
+  it('pins the hero tagline and three problem lines; old four lines are gone', () => {
+    const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
+    expect(experience).toMatch(/Your second brain in the corner\./)
+    expect(experience).toMatch(/Never lose the room\./)
+    expect(experience).toMatch(/Métis remembers every word of the meeting\./)
+    expect(experience).toMatch(/When the question lands, you already have the answer\./)
+    expect(experience).not.toMatch(/Your on-device meeting copilot\./)
+    expect(experience).not.toMatch(/You're in the meeting\./)
+    expect(experience).not.toMatch(/You know that you know it\./)
+    expect(experience).not.toMatch(/and the moment passes/)
+  })
+})
+
 describe('onboarding user-facing copy — no em dash (U+2014)', () => {
   it('strips U+2014 from OnboardingExperience, onboarding-demo, and helper pins', () => {
     for (const path of files) {

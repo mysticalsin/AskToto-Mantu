@@ -9,10 +9,10 @@ export const ONBOARDING_PORTAL_CLOSE_MS = 1220
 /** Close wait before onboardingDone. Exclusive exit must not beat the collapse. */
 export const ONBOARDING_PORTAL_MS = ONBOARDING_PORTAL_CLOSE_MS
 export const ONBOARDING_PORTAL_SAMPLE_RATE = 22050
-export const ONBOARDING_PORTAL_OPEN_GAIN = 0.16
-export const ONBOARDING_PORTAL_CLOSE_GAIN = 0.12
-/** Quieter bar-land after the tour. 0.45× OPEN. Must not kill the Aria. */
-export const ONBOARDING_BAR_LAND_GAIN = 0.072
+export const ONBOARDING_PORTAL_OPEN_GAIN = 0.192
+export const ONBOARDING_PORTAL_CLOSE_GAIN = 0.144
+/** Quieter bar-land after the tour. 0.45× OPEN, then +20% with the other one-shots. */
+export const ONBOARDING_BAR_LAND_GAIN = 0.0864
 export const ONBOARDING_PORTAL_OPEN_SECONDS = 1.28
 export const ONBOARDING_PORTAL_CLOSE_SECONDS = 1.22
 export const ONBOARDING_BAR_LAND_SECONDS = 0.56

@@ -340,8 +340,7 @@ export function Onboarding({
   signedIn,
   signedInEmail,
   initialStep,
-  initialConsent,
-  skipWalkthrough
+  initialConsent
 }: {
   settings: PublicSettings
   saveKey?: (provider: ProviderId, k: string) => Promise<void>
@@ -365,9 +364,7 @@ export function Onboarding({
   /** Consent already affirmed upstream (OnboardingV2's checkbox). Seeds recordingConsent at mount so a
    *  not-yet-propagated patch can't make finish() re-persist `false`. Undefined = read from settings. */
   initialConsent?: boolean
-  /** OnboardingV2's "Skip the tour" path: the user explicitly opted out of the walkthrough, so after
-   *  consent (slide 1, still required) jump straight to the provider step (5) instead of slides 2-4 —
-   *  otherwise Skip lands on MORE screens than actually completing the narrative experience does. */
+  /** Ignored. The exclusive tour is mandatory; the skip-the-tour hatch is gone. */
   skipWalkthrough?: boolean
 }): JSX.Element {
   // initialConsent overrides the persisted value at mount: OnboardingV2 enters this component at the
@@ -492,7 +489,7 @@ export function Onboarding({
           return
         }
       }
-      setStep(skipWalkthrough ? 5 : 2)
+      setStep(2)
     } catch (e) {
       if (!abandonedSsoRef.current) setErr(e instanceof Error ? e.message : 'Could not continue.')
     } finally {

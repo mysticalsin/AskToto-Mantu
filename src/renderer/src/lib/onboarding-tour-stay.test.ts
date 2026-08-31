@@ -6,7 +6,7 @@ import {
   ONBOARDING_PORTAL_CLOSE_GAIN,
   ONBOARDING_PORTAL_OPEN_GAIN
 } from './onboarding-portal'
-import { shouldMountStarfield } from './onboarding-starfield-spec'
+import { shouldMountConstellation, shouldMountStarfield } from './onboarding-constellation-spec'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
 const demo = readFileSync(join(__dirname, '../components/OnboardingDemoScene.tsx'), 'utf8')
@@ -14,10 +14,12 @@ const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
 const portal = readFileSync(join(__dirname, './onboarding-portal.ts'), 'utf8')
 
 describe('Mac-show tour stay-visible + quieter bar land', () => {
-  it('starfield mounts on hero', () => {
+  it('constellation-grid mounts after hero; three.js does not', () => {
     expect(shouldMountStarfield('hero')).toBe(false)
-    expect(shouldMountStarfield('problem')).toBe(true)
-    expect(experience).toMatch(/shouldMountStarfield\(scene\) && !starfieldFailed/)
+    expect(shouldMountStarfield('problem')).toBe(false)
+    expect(shouldMountConstellation('hero')).toBe(false)
+    expect(shouldMountConstellation('problem')).toBe(true)
+    expect(experience).toMatch(/shouldMountConstellation\(scene\) && !gridFailed/)
   })
 
   it('problem Continue is present at t=0 and lines stay with both', () => {
@@ -61,11 +63,11 @@ describe('Mac-show tour stay-visible + quieter bar land', () => {
   })
 
   it('bar-land is quieter than portal open; open/close stay the loud pair', () => {
-    expect(ONBOARDING_PORTAL_OPEN_GAIN).toBe(0.16)
-    expect(ONBOARDING_PORTAL_CLOSE_GAIN).toBe(0.12)
-    expect(ONBOARDING_BAR_LAND_GAIN).toBeCloseTo(0.16 * 0.45, 8)
-    expect(ONBOARDING_BAR_LAND_GAIN).toBeGreaterThanOrEqual(0.16 * 0.4)
-    expect(ONBOARDING_BAR_LAND_GAIN).toBeLessThanOrEqual(0.16 * 0.5)
+    expect(ONBOARDING_PORTAL_OPEN_GAIN).toBe(0.192)
+    expect(ONBOARDING_PORTAL_CLOSE_GAIN).toBe(0.144)
+    expect(ONBOARDING_BAR_LAND_GAIN).toBeCloseTo(0.192 * 0.45, 8)
+    expect(ONBOARDING_BAR_LAND_GAIN).toBeGreaterThanOrEqual(0.192 * 0.4)
+    expect(ONBOARDING_BAR_LAND_GAIN).toBeLessThanOrEqual(0.192 * 0.5)
     expect(portal).toMatch(/function sciFiBarLand/)
     expect(portal).toMatch(/playBarLand/)
     expect(experience).toMatch(/playBarLand\(music\.muted\)/)

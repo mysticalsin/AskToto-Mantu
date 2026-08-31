@@ -52,20 +52,13 @@ export const IDLE_MS = 3000
 export const REDUCED_MOTION_SCALE = 0.12
 export const POINT_SIZE_INITIAL = 50
 
-/** After Next. Not hero (April 29 video) and not reveal (Overview/Topics/Q&A must stay 60fps). */
-export const STARFIELD_SCENES = [
-  'problem',
-  'setup',
-  'personalize',
-  'license',
-  'ready',
-  'skip'
-] as const
+/** Retired after Tony's constellation-grid override. Three.js must not mount after hero. */
+export const STARFIELD_SCENES = [] as const
 
-export type StarfieldScene = (typeof STARFIELD_SCENES)[number]
+export type StarfieldScene = never
 
-export function shouldMountStarfield(scene: string): boolean {
-  return (STARFIELD_SCENES as readonly string[]).includes(scene)
+export function shouldMountStarfield(_scene: string): boolean {
+  return false
 }
 
 /** Time-driven dive. t is seconds. Reduced motion: no surge. */

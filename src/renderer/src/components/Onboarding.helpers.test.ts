@@ -295,7 +295,8 @@ describe('MQA-201 — scene 4 never fakes a check', () => {
 
   it('Wave 5 — includes the staged problem story before the reveal', () => {
     expect(src).toMatch(/scene === 'problem'/)
-    expect(src).toMatch(/You're in the meeting\./)
+    expect(src).toMatch(/Never lose the room\./)
+    expect(src).not.toMatch(/You're in the meeting\./)
     expect(src).toMatch(/GUIDED_SCENES: Scene\[\] = \['problem', 'reveal', 'setup', 'personalize'\]/)
   })
 

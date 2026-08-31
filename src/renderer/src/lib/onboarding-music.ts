@@ -11,7 +11,7 @@ export const ONBOARDING_MUSIC_SRC = new URL(
   `../assets/music/${ONBOARDING_MUSIC_FILE}`,
   import.meta.url
 ).href
-export const ONBOARDING_MUSIC_GAIN = 0.3
+export const ONBOARDING_MUSIC_GAIN = 0.255
 export const ONBOARDING_MUSIC_FADE_SECONDS = 2.4
 /** First samples are audible under portal OPEN (0.16). Mute still zeros. Loop still dips. */
 export const ONBOARDING_MUSIC_ENVELOPE_FLOOR = 0.48
@@ -91,7 +91,7 @@ export function createOnboardingMusicBed(): OnboardingMusicBed {
   const el = new Audio(ONBOARDING_MUSIC_SRC)
   el.loop = true
   el.preload = 'auto'
-  el.autoplay = true
+  el.autoplay = false
   el.setAttribute('playsinline', '')
   el.volume = ONBOARDING_MUSIC_GAIN
   let muted = false
@@ -114,6 +114,7 @@ export function createOnboardingMusicBed(): OnboardingMusicBed {
     if (typeof window !== 'undefined') {
       window.removeEventListener('pagehide', stop)
       window.removeEventListener('beforeunload', stop)
+      window.removeEventListener('unload', stop)
     }
   }
 
@@ -121,6 +122,7 @@ export function createOnboardingMusicBed(): OnboardingMusicBed {
   if (typeof window !== 'undefined') {
     window.addEventListener('pagehide', stop)
     window.addEventListener('beforeunload', stop)
+    window.addEventListener('unload', stop)
   }
 
   return {
@@ -135,5 +137,18 @@ export function createOnboardingMusicBed(): OnboardingMusicBed {
       applyVolume()
     },
     isMuted: () => muted
+  }
+}
+
+/** Stop first, then run work. Stop again in finally so onDone throwing cannot leave Aria playing. */
+export async function finishOnboardingAudioThen(
+  stop: () => void,
+  work: () => void | Promise<void>
+): Promise<void> {
+  stop()
+  try {
+    await work()
+  } finally {
+    stop()
   }
 }

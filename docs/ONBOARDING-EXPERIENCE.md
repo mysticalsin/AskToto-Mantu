@@ -22,7 +22,7 @@ Their flow is a **five-act narrative**, not a settings wizard:
 
 ## The Métis translation (goddess motif, meeting copilot)
 
-Five scenes, full-window, keyboard/click to advance, ~40s total, skippable at every step.
+Five scenes, full-window, keyboard/click to advance, ~40s total. The tour is mandatory. No Skip the tour.
 
 ### Scene 1 — Hero
 Constellation animation: the Métis goddess mark draws itself from star-points (SVG stroke
@@ -32,12 +32,11 @@ Three bullets (fade in sequence): "Answers grounded in YOUR meeting" · "Everyth
 never uploaded" · "Visible to everyone on the call". CTA: **Begin**.
 
 ### Scene 2 — Problem story (staged lines, one at a time, dark screen, large type)
-> "You're in the meeting."
-> "The question lands on you."
-> "You know that you know it."
-> "…and the moment passes."
-Timing: ~1.2s per line, ease-in, previous lines dim to 40%. This is the emotional core — do not
-rush it, do not add UI.
+> "Never lose the room."
+> "Métis remembers every word of the meeting."
+> "When the question lands, you already have the answer."
+Timing: ~1.2s per line, ease-in, stay on (`both`). Punchy. Second-brain / teammate-in-the-corner.
+Do not rush it, do not add UI, do not keep the old four lines.
 
 ### Scene 3 — Reveal (the turn)
 The Métis bar slides up from the bottom (the REAL Bar component, live), a simulated transcript
@@ -77,9 +76,9 @@ Consent line (the existing record-consent copy) sits HERE, as the last gate befo
 
 ## Implementation status (2026-07-18)
 Shipped as OnboardingExperience.tsx + OnboardingV2 wrapper (legacy entered at provider step).
-Consent is a REQUIRED checkbox gating Start in Scene 5 (per spec; restored after CMO-QA finding #1 —
-the Skip path routes through the full legacy flow so it hits legacy slide 1's consent instead).
-Calendar row cut from Scene 4. Demo transcript is mode-agnostic with an explicit Example label.
+Consent is a REQUIRED checkbox gating Start in Scene 5 (per spec; restored after CMO-QA finding #1).
+The tour is mandatory: no Skip the tour, no skip scene, no skip-the-tour legacy hatch.
+Calendar row cut from Scene 4. Demo recap is Overview / Topics / Q&A as text over the constellation-grid.
 
 ## Implementation status — Act 6 "Ready" + the tail re-point (MQA-283)
 The narrative grew a sixth, terminal act closing out the flow the teardown's own canonical order
@@ -107,8 +106,7 @@ hero -> problem -> reveal -> setup -> personalize -> [license, only if licenseGa
   `Onboarding.tsx` component entered at its provider/API-key step (`initialStep={5}`) — forcing a
   config screen for something already configured on every fresh install. That hop is gone: the
   experience now finishes itself at Ready. `OnboardingV2`'s `phase` state dropped its `'provider'`
-  member (`'experience' | 'legacy-full'` only); the legacy component is only ever entered now via the
-  "Skip the tour" escape hatch, at its own slide 1, consent gate included.
+  member. The legacy `Onboarding.tsx` skip-the-tour hatch is gone. The tour is mandatory.
 - **License order.** Act 5's license scene (MQA-281/282, `settings.licenseGateEnabled`, default off)
   moved from between `setup` and `personalize` to between `personalize` and `ready`, matching the
   teardown's own act order. It is still skipped entirely — not even rendered for a frame — whenever
@@ -125,12 +123,13 @@ hero -> problem -> reveal -> setup -> personalize -> [license, only if licenseGa
 
 ## Mac-show notes (PR 66, Totos-Mac)
 
-Layout and motion only. Six-act copy is unchanged.
+Mandatory punchy tour on the purple constellation-grid bed. Overlay chrome stays off limits.
 
-- Portal first paint is the Métis mark on the April 29 looping CloudFront clip. Starfield does not mount on hero. After Next, Starfield Close is purple stars on `#05010a` space. Reveal (Overview / Topics / Q&A) drops the WebGL bed.
-- Goldberg Aria starts on exclusive mount, is re-`start()`ed after portal OPEN, and is retried on first click and on Next. `stop()` / `haltOnboardingAudio` ends it on finish, Skip Get started, unmount, pagehide, and beforeunload. Mute still zeros. Scene changes do not stop the bed.
+- Portal first paint is the Métis mark on the April 29 looping CloudFront clip. After Next, crossfade into a purple 2D constellation-grid bed (spring-mass, mouse recede, no demo title). Three.js starfield does not mount after hero. One 2D context for the rest of the tour.
+- Hero tagline: "Your second brain in the corner." Problem story is the three locked lines. No Skip the tour.
+- Goldberg Aria starts on exclusive mount, is re-`start()`ed after portal OPEN, and is retried on first click and on Next. `stop()` / `haltOnboardingAudio` ends it on finish, unmount, pagehide, beforeunload, unload, and if `onDone` throws. Mute still zeros. Scene changes do not stop the bed. No second autoplaying Audio on re-render.
 - Problem-story lines fade in and stay (`both`). Continue / Next / Set me up are solid `onboard-cta` pills, full opacity, outside `.scene-enter`, never glass or fade-up. Last-beat Next leaves Act 2.
-- Act 4 has no white top rectangle. Starfield is the bed.
+- Act 4 has no white top rectangle. The constellation-grid is the bed.
 - Tell the room is centered in the stage (title, lead, quote pill, why, checkbox).
 - After finish, the bar lands with the overlay-reveal spring (`scale(0.92) translateY(-8px)`, 360ms) and a quieter, shorter dimension-open (about half of portal OPEN). Hide-park 8×2 and hover math stay put.
 - Hero mark lands 0.90→1.03→1 in 520ms. Persona hover is `scale(1.02)`. Setup rows are opacity + translate only. Reduced-motion still lands, without bounce.

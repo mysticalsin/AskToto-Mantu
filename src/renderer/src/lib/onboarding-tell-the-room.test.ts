@@ -77,11 +77,10 @@ describe('tell the room — designed consent on personalize', () => {
     expect(experience).toMatch(/TELL_THE_ROOM_QUOTE/)
   })
 
-  it('Skip-the-tour still requires the tell-the-room checkbox before Get started', () => {
-    expect(experience).toMatch(/setScene\('skip'\)/)
-    const skip = experience.slice(experience.indexOf("scene === 'skip'"))
-    expect(skip).toMatch(/TellTheRoomCard/)
-    expect(skip).toMatch(/disabled=\{\!consent\}/)
+  it('tour is mandatory: no skip scene remains as a consent hatch', () => {
+    expect(experience).not.toMatch(/setScene\('skip'\)/)
+    expect(experience).not.toMatch(/Skip the tour/)
+    expect(experience).toMatch(/TellTheRoomCard/)
     expect(experience).not.toMatch(/legacy-full/)
     expect(experience).not.toMatch(/from '\.\/Onboarding'/)
   })

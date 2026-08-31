@@ -47,7 +47,8 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
   it('mute zeros volume; reduced-motion is not a mute switch', () => {
     expect(onboardingMusicGain(true)).toBe(0)
     expect(onboardingMusicGain(false)).toBe(ONBOARDING_MUSIC_GAIN)
-    expect(ONBOARDING_MUSIC_GAIN).toBe(0.3)
+    expect(ONBOARDING_MUSIC_GAIN).toBe(0.255)
+    expect(ONBOARDING_MUSIC_GAIN).toBeCloseTo(0.3 * 0.85, 8)
     expect(ONBOARDING_MUSIC_GAIN).toBeGreaterThan(0.2)
     expect(ONBOARDING_MUSIC_GAIN).toBeLessThan(0.4)
     expect(production).not.toMatch(/ONBOARDING_MUSIC_REDUCED_GAIN/)
@@ -78,7 +79,7 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
     expect(mountBlock.lastIndexOf('music.start()')).toBeGreaterThan(mountBlock.indexOf('playPortalOpen'))
     expect(mountBlock.indexOf('music.start()')).toBeGreaterThan(-1)
     const begin = experience.slice(experience.indexOf('onBegin={() => {'))
-    const beginBlock = begin.slice(0, begin.indexOf('onSkip'))
+    const beginBlock = begin.slice(0, begin.indexOf('scene === \'problem\''))
     expect(beginBlock).toMatch(/playOnboardingVideo\(/)
     expect(beginBlock).toMatch(/music\.start\(\)/)
     expect(beginBlock.indexOf('playOnboardingVideo')).toBeLessThan(beginBlock.indexOf('setScene'))
@@ -127,8 +128,31 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
     expect(production).toMatch(/pagehide/)
     expect(production).toMatch(/beforeunload/)
     const finish = experience.slice(experience.indexOf('const finish = async'))
-    expect(finish.indexOf('music.stop()')).toBeGreaterThan(-1)
-    expect(finish.indexOf('music.stop()')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true })'))
+    expect(finish).toMatch(/finishOnboardingAudioThen/)
+    expect(finish.indexOf('finishOnboardingAudioThen')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true })'))
     expect(finish).toMatch(/disposePortalAudio\(\)/)
+    expect(experience).not.toMatch(/Skip the tour/)
+    expect(experience).not.toMatch(/setScene\('skip'\)/)
+  })
+
+  it('finish stops playback even if onDone throws, and start no-ops after stop', async () => {
+    const { finishOnboardingAudioThen } = await import('./onboarding-music')
+    let stops = 0
+    await expect(
+      finishOnboardingAudioThen(
+        () => {
+          stops += 1
+        },
+        async () => {
+          throw new Error('onDone failed')
+        }
+      )
+    ).rejects.toThrow('onDone failed')
+    expect(stops).toBe(2)
+
+    expect(production).toMatch(/if \(stopped\) return/)
+    expect(production).toMatch(/el\.autoplay = false/)
+    expect(experience).toMatch(/if \(typeof Audio === 'undefined'\) return/)
+    expect(experience).toMatch(/const bed = createOnboardingMusicBed\(\)/)
   })
 })

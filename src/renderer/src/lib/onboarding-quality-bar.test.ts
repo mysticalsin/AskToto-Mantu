@@ -95,11 +95,10 @@ describe('Apple-grade quality bar — PR 66 re-pass', () => {
     expect(nextBlock).not.toMatch(/\{hasNext && \(/)
   })
 
-  it('portal video is hero-only; starfield is purple/black after Next; recap drops the bed', () => {
-    expect(experience).toMatch(/scene === 'hero' && <OnboardingHeroVideo/)
-    expect(engine).toMatch(/canvas\.style\.opacity = '0'/)
-    expect(engine).toMatch(/setClearColor\(0x05010a/)
-    expect(css).toMatch(/\.onboard-starfield canvas \{[\s\S]*?opacity:\s*0/)
+  it('portal video is hero-first; purple constellation-grid crossfades in after Next', () => {
+    expect(experience).toMatch(/scene === 'hero' \|\| heroFading/)
+    expect(experience).toMatch(/OnboardingConstellation/)
+    expect(css).toMatch(/\.onboard-constellation/)
     expect(css).toMatch(/\.onboard-cta \{[\s\S]*?opacity:\s*1/)
     expect(css).toMatch(/\.onboard-cta \{[\s\S]*?pointer-events:\s*auto/)
   })

@@ -64,7 +64,7 @@ import { OnboardingDemoScene, prefetchOnboardingDemoChunks } from './OnboardingD
 import { isWindows } from '../lib/keys'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
 import { sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
-import { createOnboardingMusicBed } from '../lib/onboarding-music'
+import { createOnboardingMusicBed, finishOnboardingAudioThen } from '../lib/onboarding-music'
 import {
   closeOnboardingPortal,
   disposePortalAudio,
@@ -81,8 +81,8 @@ import {
   TELL_THE_ROOM_WHY
 } from '../lib/onboarding-tell-the-room'
 import { ONBOARDING_HERO_VIDEO_SRC, playOnboardingVideo } from '../lib/onboarding-hero-video'
-import { shouldMountStarfield } from '../lib/onboarding-starfield-spec'
-import { OnboardingStarfield } from './OnboardingStarfield'
+import { CONSTELLATION_CROSSFADE_MS, shouldMountConstellation } from '../lib/onboarding-constellation-spec'
+import { OnboardingConstellation } from './OnboardingConstellation'
 
 // Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
 // one icon, everywhere it appears, rather than inventing a second icon language just for this scene.
@@ -104,8 +104,7 @@ export interface OnboardingExperienceProps {
    *  (`onboardingDone: true`) rather than racing an in-flight patch. OnboardingV2 below is the only
    *  caller and marks onboarding done inside this callback. */
   onDone: (result: { mode: ConversationMode; recordingConsent: boolean }) => void | Promise<void>
-  /** Optional. Unused: Skip stays on this exclusive stage (tell-the-room + Get started). */
-  onSkip?: () => void
+  /** Unused. The tour is mandatory. Kept so older callers still compile. */
   /** Ready's OPTIONAL "Add your own AI provider" link (never a gate) — opens Settings' AI tab. Omitted
    *  in contexts with no Settings surface to open (the link itself does not render without it). */
   onOpenAiSettings?: () => void
@@ -121,10 +120,9 @@ export interface OnboardingExperienceProps {
 
 /** Wave 5 — problem story (docs/ONBOARDING-EXPERIENCE.md Scene 2): staged lines, one at a time. */
 const PROBLEM_STORY: string[] = [
-  "You're in the meeting.",
-  'The question lands on you.',
-  'You know that you know it.',
-  '…and the moment passes.'
+  'Never lose the room.',
+  'Métis remembers every word of the meeting.',
+  'When the question lands, you already have the answer.'
 ]
 
 // 'license' (Act 5, MQA-281/282) is deliberately NOT in GUIDED_SCENES below — see ActProgress's
@@ -193,9 +191,11 @@ function TellTheRoomCard({
  * No scramble. The tagline may fade in once. Next starts the six-act tour.
  */
 function OnboardingHeroVideo({
-  videoRef
+  videoRef,
+  fading
 }: {
   videoRef: Ref<HTMLVideoElement>
+  fading?: boolean
 }): JSX.Element | null {
   const [failed, setFailed] = useState(false)
   useEffect(() => {
@@ -207,7 +207,7 @@ function OnboardingHeroVideo({
   }, [videoRef])
   if (prefersReducedMotion() || failed) return null
   return (
-    <div className="onboard-hero-video" aria-hidden="true">
+    <div className={'onboard-hero-video' + (fading ? ' onboard-hero-video--out' : '')} aria-hidden="true">
       <video
         ref={videoRef}
         muted
@@ -223,7 +223,7 @@ function OnboardingHeroVideo({
   )
 }
 
-function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => void }): JSX.Element {
+function HeroWelcome({ onBegin }: { onBegin: () => void }): JSX.Element {
   return (
     <>
       <div className="hero-welcome relative z-10 flex flex-col items-center gap-5">
@@ -243,23 +243,13 @@ function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => 
               className="hero-tagline fade-up m-0 text-[14px] text-[color:var(--color-ink-2)]"
               style={{ animationDelay: '400ms', animationFillMode: 'both' }}
             >
-              Your on-device meeting copilot.
+              Your second brain in the corner.
             </p>
           </div>
         </div>
         <button type="button" onClick={onBegin} className="onboard-cta no-drag focus-ring">
           Next
         </button>
-        {onSkip && (
-          <button
-            type="button"
-            onClick={onSkip}
-            className="onboard-glass onboard-glass-chip onboard-skip-chip fade-up no-drag focus-ring"
-            style={{ animationDelay: '1150ms', animationFillMode: 'both' }}
-          >
-            Skip the tour
-          </button>
-        )}
         <p
           className="hero-byline onboard-glass onboard-glass-chip fade-up m-0 text-[10px] tracking-wide"
           style={{ animationDelay: '1300ms', animationFillMode: 'both' }}
@@ -671,13 +661,13 @@ function useOnboardingMusic(): {
   const [muted, setMuted] = useState(false)
   const bedRef = useRef<ReturnType<typeof createOnboardingMusicBed> | null>(null)
   const pendingRetryRef = useRef(false)
-  if (!bedRef.current && typeof Audio !== 'undefined') {
-    bedRef.current = createOnboardingMusicBed()
-  }
 
   useEffect(() => {
+    if (typeof Audio === 'undefined') return
+    const bed = createOnboardingMusicBed()
+    bedRef.current = bed
     return () => {
-      bedRef.current?.stop()
+      bed.stop()
       bedRef.current = null
       disposePortalAudio()
     }
@@ -737,13 +727,17 @@ export function OnboardingExperience({
     music.start()
   }, [])
   const [scene, setScene] = useState<Scene>('hero')
-  const [starfieldFailed, setStarfieldFailed] = useState(false)
-  const [starfieldPulse, setStarfieldPulse] = useState(0)
-  const bumpStarfield = (): void => setStarfieldPulse((n) => n + 1)
+  const [gridFailed, setGridFailed] = useState(false)
+  const [heroFading, setHeroFading] = useState(false)
+  useEffect(() => {
+    if (!heroFading) return
+    const id = window.setTimeout(() => setHeroFading(false), CONSTELLATION_CROSSFADE_MS)
+    return () => window.clearTimeout(id)
+  }, [heroFading])
   const [rows, setRows] = useState<SetupRow[]>([])
   const [mode, setMode] = useState<ConversationMode>('general')
-  // Recording-consent gate (CMO-QA #1). Skip lands on the same tell-the-room card, never the legacy
-  // slides. Finish is blocked until this checkbox is checked, on both Ready and Skip Get started.
+  // Recording-consent gate (CMO-QA #1). Finish is blocked until this checkbox is checked on Ready.
+  // There is no skip scene and no skip-the-tour hatch.
   const [consent, setConsent] = useState(false)
   const doneRef = useRef(false)
   // Tracks the last-seen screenRecording status across polls so a false→true flip mid-scene (the user
@@ -904,12 +898,18 @@ export function OnboardingExperience({
   const finish = async (): Promise<void> => {
     if (doneRef.current || !consent) return
     doneRef.current = true
-    music.stop()
-    disposePortalAudio()
-    await closeOnboardingPortal(music.muted, prefersReducedMotion())
-    playBarLand(music.muted)
-    requestBarLand()
-    await onDone({ mode, recordingConsent: true })
+    await finishOnboardingAudioThen(
+      () => {
+        music.stop()
+        disposePortalAudio()
+      },
+      async () => {
+        await closeOnboardingPortal(music.muted, prefersReducedMotion())
+        playBarLand(music.muted)
+        requestBarLand()
+        await onDone({ mode, recordingConsent: true })
+      }
+    )
   }
 
   const { scanDone, allReady } = summarizeSetupRows(rows)
@@ -926,9 +926,9 @@ export function OnboardingExperience({
       className="onboard-tour relative z-10 flex h-full w-full select-none flex-col items-center overflow-hidden px-10 text-center"
       onPointerDown={music.start}
     >
-      {scene === 'hero' && <OnboardingHeroVideo videoRef={heroVideoRef} />}
-      {shouldMountStarfield(scene) && !starfieldFailed && (
-        <OnboardingStarfield pulse={starfieldPulse} onUnavailable={() => setStarfieldFailed(true)} />
+      {(scene === 'hero' || heroFading) && <OnboardingHeroVideo videoRef={heroVideoRef} fading={heroFading} />}
+      {shouldMountConstellation(scene) && !gridFailed && (
+        <OnboardingConstellation onUnavailable={() => setGridFailed(true)} />
       )}
       <button
         type="button"
@@ -948,10 +948,9 @@ export function OnboardingExperience({
           onBegin={() => {
             playOnboardingVideo(heroVideoRef.current, { restart: true })
             music.start()
-            bumpStarfield()
             setScene('problem')
+            setHeroFading(true)
           }}
-          onSkip={() => setScene('skip')}
         />
       )}
 
@@ -975,7 +974,6 @@ export function OnboardingExperience({
             type="button"
             onClick={() => {
               playHero()
-              bumpStarfield()
               setScene('reveal')
             }}
             className="onboard-cta no-drag focus-ring"
@@ -991,16 +989,11 @@ export function OnboardingExperience({
           onSetMode={setMode}
           onContinue={() => {
             playHero()
-            bumpStarfield()
             setScene('setup')
           }}
           onPlayVideo={() => {
             playHero()
-            bumpStarfield()
           }}
-          // Demo Skip jumps to Personalize (keep Welcome + story + demo, skip the checklist).
-          // Hero Skip is different: it leaves the six-act narrative for the tell-the-room skip screen.
-          onSkipToEnd={() => setScene('personalize')}
         />
       )}
 
@@ -1149,7 +1142,6 @@ export function OnboardingExperience({
               // enabled) has moved to sit between personalize and ready. See onboarding-flow.ts.
               onClick={() => {
                 playHero()
-                bumpStarfield()
                 setScene(sceneAfterSetup())
               }}
               className={
@@ -1213,7 +1205,6 @@ export function OnboardingExperience({
             // never finishes here directly any more. See onboarding-flow.ts.
             onClick={() => {
               playHero()
-              bumpStarfield()
               setScene(sceneAfterPersonalize(settings?.licenseGateEnabled))
             }}
             disabled={!consent}
@@ -1233,7 +1224,6 @@ export function OnboardingExperience({
           settings={settings}
           onContinue={() => {
             playHero()
-            bumpStarfield()
             setScene(sceneAfterLicense())
           }}
         />
@@ -1242,31 +1232,14 @@ export function OnboardingExperience({
       {scene === 'ready' && (
         <ActReady mode={mode} onFinish={finish} onOpenAiSettings={onOpenAiSettings} />
       )}
-
-      {scene === 'skip' && (
-        <div key="skip" className="scene-enter onboard-act4 onboard-skip-screen flex flex-col items-center">
-          <div className="hero-mark onboard-mark-land" aria-hidden="true">
-            <MetisMark size={72} />
-          </div>
-          <TellTheRoomCard consent={consent} onConsent={setConsent} />
-          <button
-            type="button"
-            onClick={() => void finish()}
-            disabled={!consent}
-            className={'onboard-cta no-drag focus-ring' + (consent ? '' : ' onboard-cta--muted')}
-          >
-            Get started
-          </button>
-        </div>
-      )}
       </div>
     </div>
   )
 }
 
 /**
- * First-run flow. Finishes onboarding at Ready or Skip Get started.
- * Skip stays on this exclusive stage (tell-the-room card). Does not mount Onboarding.tsx.
+ * First-run flow. Finishes onboarding at Ready Get started.
+ * The tour is mandatory. Does not mount Onboarding.tsx.
  */
 export function OnboardingV2({
   settings,

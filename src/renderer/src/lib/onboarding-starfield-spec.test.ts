@@ -28,20 +28,15 @@ const pkg = readFileSync(join(__dirname, '../../../../package.json'), 'utf8')
 const slice = [specSrc, engineSrc, componentSrc].join('\n')
 
 describe('Starfield Close — after Next, not on hero or recap', () => {
-  it('skips hero (April 29 video) and reveal (Overview/Topics/Q&A)', () => {
+  it('three.js starfield is retired after hero; constellation-grid takes the bed', () => {
     expect(shouldMountStarfield('hero')).toBe(false)
     expect(shouldMountStarfield('reveal')).toBe(false)
-    expect(shouldMountStarfield('problem')).toBe(true)
-    expect(shouldMountStarfield('skip')).toBe(true)
-    for (const scene of STARFIELD_SCENES) {
-      expect(shouldMountStarfield(scene)).toBe(true)
-    }
-    expect(STARFIELD_SCENES).not.toContain('hero')
-    expect(STARFIELD_SCENES).not.toContain('reveal')
-    expect(experienceSrc).toMatch(/shouldMountStarfield\(scene\) && !starfieldFailed/)
-    expect(experienceSrc).toMatch(/<OnboardingStarfield/)
+    expect(shouldMountStarfield('problem')).toBe(false)
+    expect(STARFIELD_SCENES).toEqual([])
+    expect(experienceSrc).toMatch(/shouldMountConstellation\(scene\) && !gridFailed/)
+    expect(experienceSrc).toMatch(/<OnboardingConstellation/)
+    expect(experienceSrc).not.toMatch(/<OnboardingStarfield/)
     expect(experienceSrc).toMatch(/playOnboardingVideo\(el\)/)
-    expect(experienceSrc).toMatch(/bumpStarfield\(\)/)
     expect(experienceSrc).toMatch(/setScene\('problem'\)/)
   })
 })
@@ -132,14 +127,11 @@ describe('Starfield Close — local three, no CDN', () => {
   })
 })
 
-describe('Starfield Close — WebGL fail keeps the video bed', () => {
-  it('video stays until first frame or fail; never a cleared-black canvas', () => {
-    expect(experienceSrc).toMatch(/scene === 'hero' && <OnboardingHeroVideo/)
-    expect(experienceSrc).toMatch(/onUnavailable=\{\(\) => setStarfieldFailed\(true\)\}/)
-    expect(componentSrc).toMatch(/onUnavailableRef\.current\(\)/)
-    expect(engineSrc).toMatch(/canvas\.style\.opacity = '0'/)
-    expect(engineSrc).toMatch(/canvas\.style\.opacity = '1'/)
-    expect(engineSrc).toMatch(/setClearColor\(0x05010a/)
-    expect(engineSrc).not.toMatch(/setClearColor\(0x0a0a24/)
+describe('Starfield Close — retired after hero; grid owns the fail path', () => {
+  it('experience never mounts OnboardingStarfield; grid fail keeps the video bed', () => {
+    expect(experienceSrc).toMatch(/scene === 'hero' \|\| heroFading/)
+    expect(experienceSrc).toMatch(/onUnavailable=\{\(\) => setGridFailed\(true\)\}/)
+    expect(experienceSrc).not.toMatch(/<OnboardingStarfield/)
+    expect(experienceSrc).not.toMatch(/setWebglFailed/)
   })
 })

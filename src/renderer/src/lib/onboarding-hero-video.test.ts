@@ -37,8 +37,8 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
   })
 
   it('plays the April 29 clip only on the portal-open hero, then unmounts', () => {
-    expect(experience).toMatch(/scene === 'hero' && <OnboardingHeroVideo/)
-    expect(experience).toMatch(/shouldMountStarfield\(scene\) && !starfieldFailed/)
+    expect(experience).toMatch(/scene === 'hero' \|\| heroFading/)
+    expect(experience).toMatch(/shouldMountConstellation\(scene\) && !gridFailed/)
     expect(experience).toMatch(/el\?\.pause\(\)/)
     const videoRule = css.slice(css.indexOf('.onboard-hero-video video'))
     const videoBlock = videoRule.slice(0, videoRule.indexOf('}', 8) + 1)
@@ -49,7 +49,7 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(experience).toMatch(/onboard-glass onboard-glass-chip/)
     expect(experience).not.toMatch(/onboard-cta onboard-glass/)
     expect(experience).toMatch(/>\s*Next\s*</)
-    expect(experience).toMatch(/Skip the tour/)
+    expect(experience).not.toMatch(/Skip the tour/)
     expect(experience).toMatch(/onboard-glass onboard-glass-chip/)
     expect(experience).toMatch(/Tony Walteur/)
     expect(experience).toMatch(/<MetisMark size=\{96\}/)
