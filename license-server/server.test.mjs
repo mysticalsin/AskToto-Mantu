@@ -324,6 +324,86 @@ describe('license-server', () => {
     assert.equal(json.error, 'admin_disabled');
   });
 
+  it('exchanges a bearer token for an httpOnly session cookie that can call admin APIs', async () => {
+    const res = await fetch(`${baseUrl}/admin/session`, {
+      method: 'POST',
+      headers: { ...adminHeaders(), 'content-type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(res.status, 200);
+    const setCookie = res.headers.getSetCookie();
+    const line = setCookie.find((c) => c.startsWith('metis_admin_session='));
+    assert.ok(line, 'Set-Cookie must include metis_admin_session');
+    assert.match(line, /HttpOnly/i);
+    assert.match(line, /SameSite=Strict/i);
+    assert.doesNotMatch(line, new RegExp(ADMIN_TOKEN));
+    const id = /metis_admin_session=([a-f0-9]{64})/.exec(line)?.[1];
+    assert.ok(id);
+    const list = await get('/admin/licenses', { cookie: `metis_admin_session=${id}` });
+    assert.equal(list.status, 200);
+    assert.ok(Array.isArray(list.json));
+
+    const check = await get('/admin/session', { cookie: `metis_admin_session=${id}` });
+    assert.equal(check.status, 200);
+    assert.equal(check.json.ok, true);
+  });
+
+  it('marks the session cookie Secure on HTTPS and forgets it on DELETE', async () => {
+    const res = await fetch(`${baseUrl}/admin/session`, {
+      method: 'POST',
+      headers: { ...adminHeaders(), 'content-type': 'application/json', 'x-forwarded-proto': 'https' },
+      body: '{}',
+    });
+    assert.equal(res.status, 200);
+    const line = res.headers.getSetCookie().find((c) => c.startsWith('metis_admin_session='));
+    assert.match(line, /Secure/i);
+    const id = /metis_admin_session=([a-f0-9]{64})/.exec(line)?.[1];
+
+    const gone = await del('/admin/session', { cookie: `metis_admin_session=${id}` });
+    assert.equal(gone.status, 200);
+    const after = await get('/admin/licenses', { cookie: `metis_admin_session=${id}` });
+    assert.equal(after.status, 401);
+  });
+
+  it('admin UI HTML never stores the bearer in localStorage', async () => {
+    const res = await fetch(`${baseUrl}/admin/ui`);
+    assert.equal(res.status, 200);
+    const html = await res.text();
+    assert.doesNotMatch(html, /localStorage/);
+    assert.match(html, /\/admin\/session/);
+    assert.match(html, /credentials: 'same-origin'/);
+  });
+
+  it('attack logs hash the client IP and never print the raw address, token, or license key', async () => {
+    const lines = [];
+    const orig = console.warn;
+    console.warn = (...args) => {
+      lines.push(args.map(String).join(' '));
+    };
+    try {
+      await get('/admin/licenses', { ...adminHeaders('wrong-token'), 'x-forwarded-for': '203.0.113.88' });
+      seedLicense({ seatCap: 1000 });
+      for (let i = 0; i < 30; i++) {
+        const r = await post(
+          '/activate',
+          { licenseKey: 'ATK-0000000000000000TEST', machineId: 'log-' + i },
+          { 'x-forwarded-for': '198.51.100.44' }
+        );
+        if (r.status === 429) break;
+      }
+    } finally {
+      console.warn = orig;
+    }
+    const joined = lines.join('\n');
+    assert.match(joined, /admin_auth_failed ip_hash=[a-f0-9]{16}/);
+    assert.match(joined, /rate_limited route=\/activate ip_hash=[a-f0-9]{16}/);
+    assert.doesNotMatch(joined, /203\.0\.113\.88/);
+    assert.doesNotMatch(joined, /198\.51\.100\.44/);
+    assert.doesNotMatch(joined, /wrong-token/);
+    assert.doesNotMatch(joined, /test-admin-token/);
+    assert.doesNotMatch(joined, /ATK-0000000000000000TEST/);
+  });
+
   it('admin can create a license and it round-trips through list/detail/patch', async () => {
     const created = await post(
       '/admin/licenses',
