@@ -3,6 +3,8 @@ import {
   AskStartSchema,
   CaptureResultSchema,
   ScreenContextResultSchema,
+  ScreenCaptureCheckPayloadSchema,
+  ScreenCaptureCheckResultSchema,
   SettingsSchema,
   DEFAULT_SETTINGS,
   IPC,
@@ -146,6 +148,28 @@ describe('CaptureResultSchema', () => {
     if (parsed.success) {
       expect(parsed.data.capturedAt).toBe(1_700_000_000_000)
     }
+  })
+})
+
+describe('screen-capture self-check IPC', () => {
+  it('accepts probe and vision passes only', () => {
+    expect(ScreenCaptureCheckPayloadSchema.safeParse({ pass: 'probe' }).success).toBe(true)
+    expect(ScreenCaptureCheckPayloadSchema.safeParse({ pass: 'vision' }).success).toBe(true)
+    expect(ScreenCaptureCheckPayloadSchema.safeParse({ pass: 'retry' }).success).toBe(false)
+    expect(IPC.screenCaptureCheck).toBe('permissions:screenCaptureCheck')
+  })
+
+  it('names the backend that answered and stays a local result', () => {
+    const parsed = ScreenCaptureCheckResultSchema.safeParse({
+      ok: true,
+      pass: 'vision',
+      backend: 'local',
+      backendLabel: 'Métis Local · on-device',
+      failedOver: false,
+      message: 'Métis Local · on-device can see the screen.',
+      preview: 'a Settings window'
+    })
+    expect(parsed.success).toBe(true)
   })
 })
 
