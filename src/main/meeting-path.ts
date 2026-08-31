@@ -9,7 +9,9 @@ const BOOKKEEPING = new Set(['index.md', 'README.md'])
  * regenerates itself (`index.md`, `README.md`) are never a meeting. Empty / non-.md names are refused.
  */
 export function safeMeetingBasename(file: unknown): string | null {
-  const safeName = basename(String(file ?? ''))
+  // Node's basename() only splits on the host separator. A renderer can still send
+  // `..\..\secret.md` with backslashes; normalize both so the allow-list is the same on Linux CI and Windows.
+  const safeName = basename(String(file ?? '').replace(/\\/g, '/'))
   if (!safeName || safeName === '.' || safeName === '..') return null
   if (!safeName.endsWith('.md')) return null
   if (BOOKKEEPING.has(safeName)) return null
