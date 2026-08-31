@@ -131,3 +131,10 @@ See [BAR-PILL.md](./BAR-PILL.md). The Bar control is a Jakub thinking-orb (`thin
 
 ## Auto-answer
 Ambient copilot / auto-answer stays until Tony clicks (dismiss/read, never send) or a new question replaces it. Not an ephemeral 4s/7s card.
+
+## CLI session and Spotlight Ref
+Settings → CLI Integration Connect is a zero-token session probe (`missing` / `signed-out` / `weekly-limit` / `live`). A Claude weekly cap is signed-in, not disconnected. Codex `login status` = Logged in is connected. Never auto-send a billed turn to connect.
+
+Spotlight Ref is locked to Dust agent `GOr913Zr5V`. The agent list used for that gate merges Dust views `all`, `workspace`, `published`, and `list` — `view:list` alone can omit a managed agent and must not show the reconnect dead-end on the workspace that hosts it. Fail only when that agent is truly absent from the connected workspace.
+
+Data and AI projects live on the Dust spaces / data-sources path (`fetchDustProjects`). On Totos-Mac: Settings → AI (confirm Dust workspace) → Spotlight Ref → ask "Data and AI projects". Record names returned. READY TO MERGE stays no until Devon Mac-shows that fetch.

@@ -299,6 +299,14 @@ describe('MQA-062 — CLI Integration verifies the real session when the panel o
   })
 })
 
+describe('CLI Connect treats a weekly cap as signed-in, not disconnected', () => {
+  it('the Connect handler keeps weekly-limit on the done path', () => {
+    const body = blockAfter("const connect = async (id: 'claude-cli' | 'codex-cli')", 'const cancel =')
+    expect(body).toMatch(/r\.session === 'weekly-limit'/)
+    expect(body).toMatch(/phase: 'done'/)
+  })
+})
+
 // MQA-164 — the in-app download had no failure path: main logged the electron-updater 'error' and told
 // nobody, so UpdatesSection stayed in phase 'downloading' — a progress bar that could never move again,
 // with its own download-page fallback ("Always reachable so the user is never stranded") hidden, because

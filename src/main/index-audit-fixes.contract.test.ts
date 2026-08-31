@@ -180,9 +180,9 @@ describe('MQA-062 — a dead CLI session stops reporting itself as connected', (
   })
 
   it('retires ONLY on an explicit signed-out verdict, never on an unreadable probe', () => {
-    // checkCliSession is deliberately three-valued; treating 'unknown' as negative would disconnect a
-    // working CLI whenever its version changed its status output.
-    expect(sweep()).toMatch(/if \(verdict !== 'signed-out'\) continue/)
+    // checkCliSession is multi-valued; treating 'unknown' or 'weekly-limit' as negative would
+    // disconnect a working (or merely capped) CLI. Only signed-out and missing retire the flag.
+    expect(sweep()).toMatch(/if \(verdict !== 'signed-out' && verdict !== 'missing'\) continue/)
   })
 
   it('re-reads the flag after the await, so a user Disconnect during the probe is not undone', () => {
