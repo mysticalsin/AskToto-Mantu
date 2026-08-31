@@ -1,3 +1,4 @@
+# PRODUCT: Métis for Windows (Electron .exe). Dispatch: release/latest.yml -> electron-updater. See docs/PLATFORM-MAP.md.
 # Windows-only display-name overlay. The base productName must remain ASCII so Chromium can resolve
 # macOS helper bundle paths reliably. Windows can show the accented brand while its executable stays
 # ASCII for filesystem, updater, and enterprise-deployment compatibility.

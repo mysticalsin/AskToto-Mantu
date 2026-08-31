@@ -1,0 +1,10 @@
+{
+  "_comment": "Obfuscation material for the OPTIONAL installer-embedded Cloudflare proxy key (docs/CLOUDFLARE.md, src/main/embedded-cloudflare-key.ts). This is NOT a secret in the cryptographic sense: it is the passphrase + KDF/cipher parameters that both the build-time encryptor (scripts/embed-cloudflare-key.mjs) and the runtime decryptor read, so it necessarily ships inside the app. Committing it changes nothing about the security posture — a key encrypted with material that also ships is OBFUSCATED, not secret (see the honesty note in embedded-cloudflare-key.ts and the report). It only raises the bar above a plaintext file that `npx asar extract` reads in seconds. The truly-secure option remains the Worker proxy, where the account token never ships at all.",
+  "version": 1,
+  "algorithm": "aes-256-gcm",
+  "kdf": "scrypt",
+  "aad": "metis-cloudflare-embed:v1",
+  "appId": "com.mantu.asktoto",
+  "obfuscationSecret": "metis::cloudflare-embed::9f3c2a71e4b84d0f8c6e5a2b1d7f0934::do-not-treat-as-secret",
+  "scrypt": { "N": 16384, "r": 8, "p": 1, "keylen": 32, "maxmem": 67108864 }
+}

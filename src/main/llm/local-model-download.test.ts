@@ -268,15 +268,16 @@ describe('MQA-185/186 — the first-run fetch is proxy-aware and observable', ()
     expect(localModelDownloadState().status).toBe('idle')
   })
 
-  it('MQA-186 — does not fetch 763 MB onto a machine that can never load it', () => {
+  it('MQA-186 — does not fetch onto a machine that can never load it', () => {
     ramState.totalMemBytes = 4 * 1024 ** 3
-    expect(shouldFetchWeights('qwen3.5-0.8b', true)).toBe(false)
+    expect(shouldFetchWeights('qwen3.5-0.8b')).toBe(false)
     ramState.totalMemBytes = 8 * 1024 ** 3
-    expect(shouldFetchWeights('qwen3.5-0.8b', true)).toBe(true)
+    expect(shouldFetchWeights('qwen3.5-0.8b')).toBe(true)
   })
 
-  it('MQA-186 — Local AI switched off is a real deferral: no download is started', () => {
-    expect(shouldFetchWeights('qwen3.5-0.8b', false)).toBe(false)
+  it('MQA-186 — Local AI enabled does not gate the download (bytes land whenever the app opens)', () => {
+    // Routing stays off by default; the transfer still runs so enabling Local later is instant.
+    expect(shouldFetchWeights('qwen3.5-0.8b')).toBe(true)
   })
 
   it('MQA-186 — an already-provisioned model reports idle, not downloading', async () => {

@@ -66,6 +66,8 @@ import {
 } from 'lucide-react'
 import { timeSavedFromTotals } from '@shared/time-saved'
 import { TimeSavedView } from './TimeSavedView'
+import { autoHideOverlayForLayout } from '@shared/overlay-chrome'
+import { OverlayChromePicker } from './OverlayChromePicker'
 import { formatResetPhrase } from '@shared/reset-time'
 import {
   DEFAULT_SHORTCUTS,
@@ -91,7 +93,8 @@ import {
   type LocalModelSummary,
   type PlatformPermissions,
   type UpdateCheckResult,
-  type McpConnectionKind
+  type McpConnectionKind,
+  type LicenseStatusResult
 } from '@shared/ipc'
 import {
   PROVIDERS,
@@ -1101,8 +1104,8 @@ function AiSection({
       )}
       {canRestoreEmbedded && (
         <div className="mt-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
-          Metis shipped with a Cloudflare key. Without it, questions fall back to the on-device model,
-          which is private but noticeably slower.
+          Metis shipped with a Cloudflare key. Restore it to keep Cloudflare answering — or add another
+          provider&apos;s API key below.
         </div>
       )}
       {restoreMsg && (
@@ -1554,6 +1557,49 @@ function ResilienceSection({
       icon={ShieldCheck}
     >
       <div className="flex flex-col gap-3">
+        {/* Wave 2 (docs/PROVIDER-ROUTING-POLICY.md): the top-level policy, separate from Local AI's own
+            "use for suggestions/summaries/screenshots" toggles above, which stay how 'auto' picks a mode. */}
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-1.5 text-[13px] text-[color:var(--cl-foreground)]">
+            <Route size={14} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />
+            Routing mode
+          </div>
+          <div className="flex gap-1.5">
+            {(
+              [
+                ['local', 'Local'],
+                ['auto', 'Auto'],
+                ['api', 'API']
+              ] as const
+            ).map(([m, label]) => {
+              const on = settings.routingMode === m
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => patch({ routingMode: m })}
+                  aria-pressed={on}
+                  className={[
+                    'no-drag cl-focus flex-1 rounded-[8px] border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
+                    on
+                      ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)] text-[color:var(--cl-foreground)]'
+                      : 'border-[var(--cl-border)] bg-white/[0.02] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.05]'
+                  ].join(' ')}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            {settings.routingMode === 'local'
+              ? 'Prefer Métis Local for every eligible ask (live suggestions, summaries, screenshots) and escalate to your cloud provider only on a hard failure.'
+              : settings.routingMode === 'api'
+                ? "Use your configured provider / backup order below. The on-device model still answers as the last resort when it's enabled as a safety net and everything else is exhausted."
+                : 'Auto (default): health, headroom, free-tier exhaustion and each task\u2019s Local AI toggle below decide, per ask.'}
+          </span>
+        </div>
+
         <div className="rounded-[10px] border border-[var(--cl-border)] bg-white/[0.02] p-3">
           {limited.length === 0 ? (
             <div className="flex items-center gap-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
@@ -1801,7 +1847,10 @@ function LocalAiSection({
     }
   }, [])
 
-  const model = models?.[0]
+  const model =
+    models?.find((m) => m.id === settings.localLlm.modelId) ??
+    models?.find((m) => m.unavailableReason === 'downloading') ??
+    models?.[0]
   const downloading = model?.unavailableReason === 'downloading'
   const percent = Math.round((model?.downloadProgress ?? 0) * 100)
   // One wording for the blocked case, used by both the status strip and the card. It names the host that
@@ -1810,20 +1859,31 @@ function LocalAiSection({
   // work, because no installer contains the weights (MQA-188/191).
   const downloadFailedText =
     'Could not download the on-device model. Métis retries on the next launch — check that huggingface.co is reachable from this network.'
-  const notDownloadedText = 'Not downloaded yet. Métis fetches the on-device model automatically on first run.'
+  const notDownloadedText =
+    'Not downloaded yet. Métis fetches the on-device model automatically when the app opens (~730 MB).'
 
   return (
     <Section
       title="Local AI"
-      desc="Runs a small model on this device. Live suggestions, summaries, Mantu Intelligence extraction, and screenshot reads stay local."
+      desc="Optional on-device model. Off by default for answering — Cloudflare and any API keys you add stay primary. The model downloads in the background when Métis opens so enabling Local later is instant."
       icon={Cpu}
     >
       <div className="flex flex-col gap-3">
         <ToggleRow
           label="Enable Métis Local"
-          desc="Métis downloads the model (~730 MB) once, on first run — it is not part of the installer. Turning this off skips that download."
+          desc="Use the on-device model for suggestions, summaries, and screenshot reads. The weights download automatically when Métis opens (not part of the installer). Cloudflare and your other API providers stay available."
           on={settings.localLlm.enabled}
-          onChange={(v) => patch({ localLlm: { ...settings.localLlm, enabled: v } })}
+          onChange={(v) =>
+            patch({
+              localLlm: {
+                ...settings.localLlm,
+                enabled: v,
+                // Arm the safety net with the opt-in so a just-enabled Local install can still answer
+                // when every cloud provider is exhausted.
+                ...(v ? { fallback: true } : {})
+              }
+            })
+          }
         />
 
         <div className="flex items-center gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.02] px-3 py-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
@@ -5194,15 +5254,21 @@ const TABS: {
       'thinking mode', 'model', 'other providers', 'model provider', 'cli integration',
       'fallback', 'indexing fallback', 'offline indexing',
       'backups & limits', 'nvidia', 'nim', 'race a backup provider', 'hedge',
-      'cloudflare', 'worker', 'ai gateway', 'workers ai', 'metis_proxy_key'
+      'cloudflare', 'worker', 'ai gateway', 'workers ai', 'metis_proxy_key',
+      'routing mode', 'routing', 'local', 'api', 'auto'
     ]
   },
   {
+    // Wave 5 Settings IA: user-facing label "Speech" (plan: AI · Speech · Brain · Integrations · Privacy).
+    // Tab id stays 'audio' so persisted deep-links / managed-config and every `tab === 'audio'` guard keep working.
     id: 'audio',
-    label: 'Audio',
+    label: 'Speech',
     icon: Mic,
     desc: 'What Métis listens to, and how it hears you.',
-    keywords: ['microphone', 'listen to', 'in meetings', 'vocabulary corrections', 'transcription', 'asr']
+    keywords: [
+      'audio', 'speech', 'microphone', 'listen to', 'in meetings', 'vocabulary corrections',
+      'transcription', 'asr', 'parakeet', 'whisper', 'apple speech', 'speaker identification'
+    ]
   },
   {
     id: 'calendar',
@@ -5218,17 +5284,19 @@ const TABS: {
     desc: 'Where meetings are saved, and how long they stay.',
     keywords: ['meetings & transcripts', 'folder', 'retention', 'danger zone', 'delete', 'ingest']
   },
-  // Label shortened to keep all nine tabs on ONE line at the overlay's width — the MantuMark icon already
-  // signals "Mantu"; the tab id stays 'intelligence' so nothing else changes.
   {
+    // Wave 5: label "Brain" — CRM/MCP push lives here as Integrations content under the same tab
+    // (overlay width cannot afford a tenth tab). Keywords keep old "Intelligence" / CRM search hits.
     id: 'intelligence',
-    label: 'Intelligence',
+    label: 'Brain',
     icon: MantuMark,
-    desc: 'Your second brain: meetings, wiki, CRM, knowledge graph.',
+    desc: 'Your second brain: meetings, wiki, CRM push, knowledge graph.',
     keywords: [
-      'mantu intelligence', 'meetings & follow-up', 'published wiki', 'polo pre-sales', 'crm',
-      'knowledge graph', 'plane', 'clickup', 'task management', 'book next steps', 'action items',
-      'time saved', 'estimate'
+      'mantu intelligence', 'intelligence', 'brain', 'meetings & follow-up', 'published wiki',
+      'polo pre-sales', 'crm', 'integrations', 'knowledge graph', 'plane', 'clickup',
+      'task management', 'book next steps', 'action items', 'time saved', 'estimate',
+      'consolidation', 'token', 'batch index', 'brain consolidation',
+      'batch index (1–2× / day)', 'prefer on-device model for consolidation'
     ]
   },
   {
@@ -5556,6 +5624,22 @@ export function Settings({
                   <div className="glass-strong mt-1 flex items-center gap-2 rounded-[12px] px-3 py-2.5">
                     <MetisMark size={16} />
                     <span className="text-[12px] text-[color:var(--color-ink)]">This is how the overlay bar will look.</span>
+                  </div>
+                  <div className="mt-3 px-1">
+                    <p className="m-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">Overlay chrome</p>
+                    <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                      How Métis sits on the desktop. Changes apply now — no reinstall.
+                    </p>
+                    <OverlayChromePicker
+                      value={settings.overlayLayout}
+                      locked={settings.managedKeys.includes('overlayLayout')}
+                      onChange={(id) =>
+                        patch({
+                          overlayLayout: id,
+                          autoHideOverlay: autoHideOverlayForLayout(id)
+                        })
+                      }
+                    />
                   </div>
                 </Section>
                 <Section
@@ -6288,15 +6372,24 @@ export function Settings({
       <footer className="cl-footer flex h-14 shrink-0 items-center gap-2 rounded-b-2xl px-4">
         <button
           type="button"
+          // Act 6 (Ready, MQA-283): "Replay onboarding" — re-arms the SAME gate App.tsx checks
+          // (`!settings.onboardingDone`), so the very next render remounts the six-act experience fresh
+          // from hero, exactly like a first run. Nothing else is touched: no other setting is cleared.
+          // App.tsx's onboarding gate special-cases `view === 'settings'` to keep showing THIS panel
+          // over the gate (so the Ready scene's "Add your own AI provider" link can open Settings
+          // without the gate stealing focus back) — so without closing Settings here too, the user
+          // would click Replay and see nothing change until they also hit Done. Call onClose so the
+          // gate is what they land on immediately, matching what "Replay" promises.
           onClick={() => {
-            if (window.confirm("Show the intro tour again? Your settings won't change.")) {
+            if (window.confirm("Replay onboarding from the start? Your settings won't change.")) {
               patch({ onboardingDone: false })
+              onClose?.()
             }
           }}
           className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.03] px-3 py-2 text-[12px] text-[color:var(--cl-foreground)] transition-colors hover:border-[var(--cl-input)] hover:bg-white/[0.08]"
         >
           <RotateCcw size={13} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />
-          Reset onboarding
+          Replay onboarding
         </button>
         <button
           type="button"
@@ -6697,6 +6790,58 @@ function IntelligenceTab({
       <GraphSection settings={settings} patch={patch} />
 
       <Section
+        title="Brain consolidation"
+        desc="Index meetings in at most a few LLM passes per day instead of one extract per save — keeps the second brain token-efficient. Manual Index now still runs immediately."
+        icon={Cpu}
+      >
+        <ToggleRow
+          label="Batch index (1–2× / day)"
+          desc={
+            settings.brainConsolidation.enabled
+              ? `Up to ${settings.brainConsolidation.maxPassesPerDay} consolidation pass${settings.brainConsolidation.maxPassesPerDay === 1 ? '' : 'es'} per day. New meetings wait in a durable queue until the next pass.`
+              : 'Off: each saved meeting is indexed with an LLM extract as soon as it lands (higher token use).'
+          }
+          on={settings.brainConsolidation.enabled}
+          onChange={(v) =>
+            patch({ brainConsolidation: { ...settings.brainConsolidation, enabled: v } })
+          }
+        />
+        {settings.brainConsolidation.enabled && (
+          <>
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <span className="text-[12px] text-[color:var(--cl-foreground)]">Max passes per day</span>
+              <select
+                className="no-drag cl-focus rounded-lg border border-[var(--cl-input)] bg-white/[0.04] px-2 py-1 text-[12px]"
+                value={settings.brainConsolidation.maxPassesPerDay}
+                onChange={(e) =>
+                  patch({
+                    brainConsolidation: {
+                      ...settings.brainConsolidation,
+                      maxPassesPerDay: Number(e.target.value) as 1 | 2 | 3 | 4
+                    }
+                  })
+                }
+              >
+                {[1, 2, 3, 4].map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <ToggleRow
+              label="Prefer on-device model for consolidation"
+              desc="When Métis Local is ready, use it for batch extracts before burning cloud tokens."
+              on={settings.brainConsolidation.preferLocal}
+              onChange={(v) =>
+                patch({ brainConsolidation: { ...settings.brainConsolidation, preferLocal: v } })
+              }
+            />
+          </>
+        )}
+      </Section>
+
+      <Section
         title="Published wiki (Dust-readable)"
         desc="Mirrors your CRM-corrected brain (account/people/deal pages and meeting note cards) as plain markdown under a wiki/ folder next to your meetings, so Dust and other agents can read it."
         icon={FileText}
@@ -7015,6 +7160,9 @@ function LicenseSection({
   const [error, setError] = useState<string | null>(null)
   const serverId = useId()
   const keyId = useId()
+  // Act 5 (MQA-281/282): lease/trial status, fetched via license:status (live-verified — never a raw
+  // settings echo, see licenseDisplayStatus in main/license.ts). null while the first read is pending.
+  const [status, setStatus] = useState<LicenseStatusResult | null>(null)
   // Guards state writes after unmount — activation is a real network round trip and the user can switch
   // Settings tabs before it resolves.
   const mountedRef = useRef(true)
@@ -7023,6 +7171,19 @@ function LicenseSection({
       mountedRef.current = false
     }
   }, [])
+
+  useEffect(() => {
+    let live = true
+    void window.toto.licenseStatus().then((s) => {
+      if (live) setStatus(s)
+    })
+    return () => {
+      live = false
+    }
+    // Re-read whenever the persisted license/lease fields this section can change actually change —
+    // an activation flips licenseValid/licenseLease, so this section's status line stays live without
+    // a poll loop.
+  }, [settings.licenseValid, settings.licenseLease, settings.licenseGateEnabled])
 
   const activate = async (): Promise<void> => {
     const url = serverUrl.trim()
@@ -7040,6 +7201,8 @@ function LicenseSection({
       // which carry the freshly-persisted state, so the UI updates without a full refetch.
       await patch({ licenseServerUrl: url })
       setLicenseKey('')
+      const s = await window.toto.licenseStatus()
+      if (mountedRef.current) setStatus(s)
     } else {
       setError(licenseErrorMessage(r.error))
     }
@@ -7095,6 +7258,27 @@ function LicenseSection({
             {settings.licenseSeatCap > 0
               ? ` · up to ${settings.licenseSeatCap} seat${settings.licenseSeatCap === 1 ? '' : 's'}`
               : ''}
+          </span>
+        </div>
+      )}
+      {/* Act 5 (MQA-281/282): the offline-lease / trial line. Deliberately independent of
+          settings.licenseValid above — a device can be covered by a signed lease (checked in even
+          without a live server round trip) or the local trial fallback while never having a
+          server-verified `licenseValid: true` at all, so this reads license:status's own
+          live-verified fields rather than reusing that flag. Silent (no line at all) whenever neither
+          applies, e.g. licensing is off and this device never started a trial. */}
+      {!error && status?.leaseExpiresAt != null && (
+        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-success)]">
+          <CircleCheck size={13} className="mt-px shrink-0" />
+          <span>Continue on your offline lease (expires {new Date(status.leaseExpiresAt).toLocaleDateString()}).</span>
+        </div>
+      )}
+      {!error && status?.leaseExpiresAt == null && status?.trialActive && (
+        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
+          <Timer size={13} className="mt-px shrink-0" />
+          <span>
+            Trial · {status.trialDaysRemaining} day{status.trialDaysRemaining === 1 ? '' : 's'} left. Paste a
+            license key above anytime to activate.
           </span>
         </div>
       )}

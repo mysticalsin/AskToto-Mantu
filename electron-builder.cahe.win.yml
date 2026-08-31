@@ -1,3 +1,4 @@
+# PRODUCT: Métis for Windows — Cahê pilot edition. Separate appId, NO shared update feed. See docs/PLATFORM-MAP.md.
 # Cahê is a Windows-only pilot edition. It inherits the reviewed Windows payload, but has its own
 # application identity and installer name so it cannot reuse standard Métis state or releases.
 extends: ./electron-builder.win.yml

@@ -55,3 +55,18 @@ describe('ASR echo defense returns echo:true so the renderer can act (Parakeet /
     expect(body).toMatch(/if \(label\?\.echo\) return \{ echo: true/)
   })
 })
+
+describe('live ask keeps a substantial answer after a trailing stream error', () => {
+  it('onError settles as streamDone when paintedLen >= 200 (parity with import-recap)', () => {
+    expect(indexSrc).toMatch(/if \(gotToken && paintedLen >= 200\)/)
+    expect(indexSrc).toMatch(/keeping \$\{paintedLen\}-char answer despite trailing stream error/)
+    expect(indexSrc).toMatch(/IPC\.streamDone, \{ id: req\.id \}/)
+  })
+})
+
+describe('brain status failedFiles excludes pending deferred ingest', () => {
+  it('filters with isPendingIngestRecord so consolidation-queued meetings are not red "failed"', () => {
+    expect(indexSrc).toMatch(/failedFiles: Object\.entries\(idx\.ingested\)/)
+    expect(indexSrc).toMatch(/!v\.ok && !isPendingIngestRecord\(v\)/)
+  })
+})

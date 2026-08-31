@@ -14,6 +14,9 @@ export function transcriptToText(lines: TranscriptLine[]): string {
   const out: string[] = []
   let prevLang: string | undefined
   for (const l of lines) {
+    // ASR quality (1B.2b) — a provisional line is a UI-only "…" placeholder for a window still being
+    // transcribed (see shared/ipc.ts's TranscriptLineSchema.provisional). It must never reach the recap
+    // prompt or a saved transcript — real text for the SAME speech replaces it once decode settles.
     if (l.provisional) continue
     if (l.lang && prevLang && l.lang !== prevLang) out.push(`[conversation switches to ${l.lang}]`)
     if (l.lang) prevLang = l.lang
@@ -32,6 +35,10 @@ export function recapPersistAction(
   target: { file: string } | null
 ): { file: string; text: string } | null {
   if (!target || !answer) return null
-  if (answer.streaming || answer.error || !answer.text) return null
+  if (answer.streaming) return null
+  // Trailing stream errors after a finished summary used to block persist (and blank Notes on disk).
+  // Keep substantial streamed text — same 200-char bar as import-recap / live ask keep-threshold.
+  if (answer.error && answer.text.trim().length < 200) return null
+  if (!answer.text.trim()) return null
   return { file: target.file, text: answer.text }
 }

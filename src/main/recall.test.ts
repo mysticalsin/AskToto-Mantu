@@ -4,7 +4,7 @@ import { join, basename } from 'node:path'
 import { tmpdir } from 'node:os'
 import { safeStorage } from 'electron'
 import { saveMeeting, isEncryptedFile } from './transcripts'
-import { listMeetings, deleteMeeting, recallRead, searchMeetings, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap, renameMeeting, setMeetingCrmPushed } from './recall'
+import { listMeetings, deleteMeeting, recallRead, searchMeetings, deleteAllMeetings, sweepExpiredMeetings, updateMeetingRecap, renameMeeting, setMeetingCrmPushed, setMeetingConfidential, isMeetingConfidentialOnDisk } from './recall'
 import type { Settings, SaveMeeting } from '@shared/ipc'
 
 /**
@@ -958,5 +958,34 @@ describe('setMeetingCrmPushed — the durable "already pushed to the CRM" marker
     expect(await setMeetingCrmPushed(testSettings, basename(file), 'enc1')).toEqual({ ok: true })
     expect(isEncryptedFile(file)).toBe(true) // still encrypted — never silently downgraded to cleartext
     expect((await recallRead(basename(file))).crmPushedKey).toBe('enc1')
+  })
+})
+
+describe('isMeetingConfidentialOnDisk — MCP push defense-in-depth', () => {
+  let folder: string
+  const meeting: SaveMeeting = {
+    title: 'Secret pricing',
+    mode: 'meeting',
+    startedAt: 1_700_000_000_000,
+    lines: [{ speaker: 'them', text: 'Keep this internal', t: 1_700_000_000_000 }],
+    recap: 'Internal only.'
+  }
+
+  beforeEach(() => {
+    folder = mkdtempSync(join(tmpdir(), 'asktoto-recall-conf-'))
+    testSettings = { meetingsFolder: folder, encryptTranscripts: false } as Settings
+  })
+  afterEach(() => rmSync(folder, { recursive: true, force: true }))
+
+  it('is false for a normal meeting and true after setMeetingConfidential', async () => {
+    const file = await saveMeeting(testSettings, meeting)
+    expect(isMeetingConfidentialOnDisk(testSettings, basename(file))).toBe(false)
+    expect(await setMeetingConfidential(testSettings, basename(file), true)).toEqual({ ok: true })
+    expect(isMeetingConfidentialOnDisk(testSettings, basename(file))).toBe(true)
+  })
+
+  it('fails closed on a missing or path-traversal file name', () => {
+    expect(isMeetingConfidentialOnDisk(testSettings, 'no-such-meeting.md')).toBe(true)
+    expect(isMeetingConfidentialOnDisk(testSettings, '../escape.md')).toBe(true)
   })
 })

@@ -208,12 +208,61 @@ export function localPrewarmEligible(
 }
 
 /**
+ * Wave 2 (docs/PROVIDER-ROUTING-POLICY.md): the top-level routing policy, layered ONTO the existing
+ * per-mode/per-task gates below rather than replacing them — 'auto' must stay byte-identical to
+ * pre-Wave-2 behavior. Coerced (not a bare field read): a settings object persisted before this field
+ * existed — or a test fixture that never set it — carries no `routingMode` at all, and a stray
+ * `undefined` reaching a switch/comparison chain is exactly the class of bug safeIsDownloaded/safeRamOk
+ * above exist to avoid for the local gates themselves.
+ */
+export function resolveRoutingMode(s: { routingMode?: Settings['routingMode'] }): 'local' | 'api' | 'auto' {
+  return s.routingMode ?? 'auto'
+}
+
+/**
+ * The FIRST-attempt local eligibility pickPrimaryProvider actually consults, with routingMode layered on
+ * top of localEligibleFor. Every OTHER local gate (localFallbackEligibleFor, localAnswerFloorEligibleFor,
+ * localBaseReady) is deliberately untouched by routingMode — the "never fully stuck" floor from
+ * localLlm.fallback must hold exactly the same in 'local'/'api'/'auto', only which provider gets the
+ * FIRST attempt changes.
+ *
+ *  - 'auto' (default): unchanged — localEligibleFor's normal per-mode useFor opt-in.
+ *  - 'local': the user has declared a standing preference, so this bypasses the per-mode useFor toggle
+ *    (useFor under 'auto' means "opt this ONE mode into local-first"; routingMode:'local' IS that opt-in,
+ *    for every in-scope mode at once) — but keeps the mode-scope + tier gates that decide whether local
+ *    can actually SERVE the request. An out-of-scope mode (answer/recap) or an escalated tier still picks
+ *    cloud first here, exactly as in 'auto'; only a hard failure of that cloud attempt falls through to
+ *    local, via the unchanged fallback/floor gates below this function.
+ *  - 'api': local may never win the primary pick, full stop — the whole point of pinning to API mode.
+ *    Local still answers as the last-resort safety net when localLlm.fallback is on and every configured
+ *    provider is exhausted; that guarantee lives in localFallbackEligibleFor/localAnswerFloorEligibleFor,
+ *    neither of which this function touches.
+ */
+export function localPrimaryEligibleFor(
+  req: { mode: AskMode },
+  s: Pick<Settings, 'localLlm' | 'routingMode'>,
+  tier: ModelTier,
+  allowed: string[] | null
+): boolean {
+  const mode = resolveRoutingMode(s)
+  if (mode === 'api') return false
+  if (mode === 'local') {
+    if (!isLocalScopedMode(req.mode)) return false
+    if (req.mode !== 'vision' && tier !== 'base') return false
+    return localBaseReady(s, allowed)
+  }
+  return localEligibleFor(req, s, tier, allowed)
+}
+
+/**
  * Precedence for the FIRST provider an ask attempts (index.ts's entry point, PLAN.md §4.3 "Routing
  * precedence, explicit"): an opted-in screenshot privacy policy wins first; otherwise an explicit
  * providerOverride wins (Dust cascades, Spotlight Ref); else 'local' when it's eligible for this specific
  * request; else the CLI-priority primary; else the user's globally active provider. cliPrimary deliberately
  * LOSES to a locally-eligible request — Métis Local is meant to short-circuit even a connected CLI
- * subscription for in-scope suggest/summary/vision asks.
+ * subscription for in-scope suggest/summary/vision asks. `localEligible` is expected to already be
+ * routingMode-aware (see localPrimaryEligibleFor) — this function itself stays a plain boolean-precedence
+ * table so its own tests need no Settings fixture at all.
  */
 export function pickPrimaryProvider(
   providerOverride: ProviderId | undefined,

@@ -20,7 +20,11 @@ function whisperWorkletUrl(): string {
   return _workletUrl
 }
 const WINDOW_SEC = 6
-const MAX_QUEUE = 24 // ~2.4 min of audio; drop oldest if the model is slow/failed to load
+// ASR quality (1B.2a) — ~3.2 min of audio; drop oldest under backpressure if the model is slow/failed to
+// load. Bumped from 24 (a small headroom increase, still bounded memory: ≤6s * 16kHz mono Float32Arrays,
+// worst case ~12 MB total) since trimQueue below can now spend a LITTLE more room protecting the newest
+// window of each speaker rather than trimming right up against the edge.
+const MAX_QUEUE = 32
 const PARAKEET_FEED_TIMEOUT_MS = 5000 // a single Parakeet window shouldn't take longer than this to transcribe
 // ── Whisper 'auto' language probe (PROVEN FACT 2026-08-05, direct probe): transformers.js's whisper NEVER
 // auto-detects on an un-pinned decode — it logs "No language specified - defaulting to English" and
@@ -33,6 +37,14 @@ const PARAKEET_FEED_TIMEOUT_MS = 5000 // a single Parakeet window shouldn't take
 // that message latches: never un-pin once pinned; explicit settings languages are never probed at all).
 const PROBE_WINDOW_BUDGET = 5 // probe EVERY one of the opening windows this densely, then drop to PROBE_EVERY
 const PROBE_MIN_WORDS = 8 // a near-empty window ("Hello") can only mislead — wait for real substance
+// 1B.2c — shouldProbeLanguageWindow already keeps probing forever past PROBE_WINDOW_BUDGET when no pin
+// has landed (see its own block comment), but every one of those probes still had to clear PROBE_MIN_WORDS
+// (8) — a meeting whose opening minute is entirely short utterances ("Sim.", "Tá bom.", "Oi, oi.") never
+// produces a single qualifying window, so the FIRST pin could be delayed indefinitely even though the
+// probe cadence itself never gave up. Once the opening budget is spent with no pin yet, lower the bar for
+// that FIRST pin only (a shakier signal beats staying wrongly latched to English for the rest of the
+// meeting) — see probeMinWords below. Once pinned, re-probes go back to the normal, stricter gate.
+const PROBE_MIN_WORDS_AGGRESSIVE = 5
 const PROBE_EVERY = 2 // once pinned, re-probe often enough to catch a mid-meeting / mid-sentence switch
 const SWITCH_AFTER = 2 // consecutive confirming re-probes required before actually re-pinning
 // Cross-line half of the repetition-loop guard (intra-line half = collapseRepeatedPhrase): a looping
@@ -102,6 +114,16 @@ export function shouldProbeLanguageWindow(windowIndex: number, pinned: boolean):
 }
 
 /**
+ * Exported for unit testing — the pure minimum-substance gate behind probeLanguageWindow (see
+ * PROBE_MIN_WORDS_AGGRESSIVE's block comment above). Only the FIRST pin ever gets the lower bar: once
+ * `pinned` is true this returns the normal, stricter PROBE_MIN_WORDS regardless of windowIndex, so a
+ * genuine mid-meeting language switch still needs real substance to re-pin, exactly as before.
+ */
+export function probeMinWords(pinned: boolean, windowIndex: number): number {
+  return !pinned && windowIndex > PROBE_WINDOW_BUDGET ? PROBE_MIN_WORDS_AGGRESSIVE : PROBE_MIN_WORDS
+}
+
+/**
  * Live language pin / re-pin confirmation (MQA-235 for live).
  *
  * Import already majority-votes before the first pin because window 0 is often a wrong-language
@@ -151,7 +173,33 @@ export function feedEmptyIsEcho(res: string | { text: string; name?: string; ech
 }
 
 /**
- * Exported for unit testing — the pure staleness decision behind probeLanguageWindow's `.then` (see
+ * Exported for unit testing — the pure trim behind pushAudio's backpressure guard (1B.2a). Bounds the
+ * queue to maxLen by dropping the OLDEST windows first, same as before — but a naive drop-the-front trim
+ * can silently erase every queued window of one speaker's channel when the other channel produced a
+ * longer burst just ahead of it (e.g. five consecutive THEM windows queued right before a stale YOU one)
+ * even though there was still room to keep one of each. So the newest already-queued window of EACH
+ * speaker present is protected from the trim; oldest-first dropping still applies to everything else, so
+ * a single-speaker backlog (the common case) trims exactly as it always did.
+ */
+export function trimQueue<T extends { speaker: string }>(queue: readonly T[], maxLen: number): T[] {
+  if (queue.length <= maxLen) return queue.slice()
+  const lastIndexOfSpeaker = new Map<string, number>()
+  queue.forEach((job, i) => lastIndexOfSpeaker.set(job.speaker, i))
+  const protectedIdx = new Set(lastIndexOfSpeaker.values())
+  let excess = queue.length - maxLen
+  const kept: T[] = []
+  for (let i = 0; i < queue.length; i++) {
+    if (excess > 0 && !protectedIdx.has(i)) {
+      excess--
+      continue
+    }
+    kept.push(queue[i])
+  }
+  return kept
+}
+
+/**
+ * Exported for unit testing — the pure staleness decision behind probeLanguageWindow's `.then` (see)
  * useListen below). A probe is a fire-and-forget IPC round trip with no timeout whose first call of a
  * session pays the multi-second sherpa model load (parakeetRelease frees it between meetings), so it can
  * still be in flight when the user stops and starts a new meeting. `live` alone cannot express that:
@@ -591,6 +639,20 @@ export function useListen(
   micDeviceIdRef.current = micDeviceId ?? ''
   const linesRef = useRef<TranscriptLine[]>([])
   linesRef.current = lines
+  // ASR quality (1B.2b) — the interim/provisional bubble currently shown while pump() has a window
+  // dequeued and is decoding it. pump() processes windows strictly one at a time (the `busy` gate), so at
+  // most one decode is ever in flight — a single ref (not a per-speaker map) is enough to track it.
+  const provisionalRef = useRef<{ t: number; speaker: Speaker } | null>(null)
+  // Speaker Intelligence (1C.2) — a raw-audio COPY of the 'them' window currently in flight through the
+  // Whisper worker, stashed here right before its buffer transfers to the worker (postMessage's transfer
+  // list detaches it — see pump() below), so the 'text' response handler can still hand the exact same
+  // samples to window.toto.speakerEmbed. Whisper processes one window at a time same as pump() above, so
+  // this single ref is enough; null whenever the in-flight window is 'you' (never labeled) or absent.
+  const pendingWhisperEmbedRef = useRef<Float32Array | null>(null)
+  // Epoch stamped when the Whisper audio window was posted — the worker reply is async and can land
+  // after stop()/start() of the next meeting; without this check commitLine would paste into the new
+  // transcript (liveRef is true again). Same class as the Parakeet/Apple jobEpoch guards in pump().
+  const pendingWhisperEpochRef = useRef(0)
   // Trailing run of consecutive 'them' speech (joined) since the last 'you' turn or last auto-answer fire.
   // The auto-answer endpoints on this COALESCED turn rather than a single VAD window, so a question split
   // across windows by a mid-sentence hesitation pause (more likely now the endpoint is a snappy 0.6s) still
@@ -610,11 +672,52 @@ export function useListen(
   const probeWindowCountRef = useRef(0)
   const probeSwitchRunRef = useRef<{ lang: string; count: number } | null>(null)
 
+  // ASR quality (1B.2b) — shows a "…" placeholder for the speaker whose window pump() just dequeued and
+  // started decoding, so the live transcript doesn't sit blank while a slow/backlogged model works
+  // through the queue. `provisional: true` is the entire contract (see TranscriptLineSchema's own doc
+  // comment): transcriptToText/save both filter it out, so a decode that never resolves (e.g. a worker
+  // crash mid-window) can only ever leave a UI-only placeholder behind, never touch the saved transcript.
+  const beginProvisional = useCallback((sp: Speaker): void => {
+    const t = Date.now()
+    provisionalRef.current = { t, speaker: sp }
+    const line: TranscriptLine = { speaker: sp, text: '…', t, provisional: true }
+    const next = [...linesRef.current, line]
+    linesRef.current = next
+    setLines(next)
+  }, [])
+  // Removes the provisional bubble (if any is still showing) — called at every point a window's decode
+  // has SETTLED, whether that produced a real line or not (silence, a dropped duplicate, a decode error),
+  // so the placeholder never lingers once there is nothing left to wait for. A no-op when clear()/stop()
+  // already wiped `lines` out from under it.
+  const clearProvisional = useCallback((): void => {
+    const p = provisionalRef.current
+    if (!p) return
+    provisionalRef.current = null
+    const next = linesRef.current.filter((l) => !(l.provisional && l.t === p.t))
+    if (next.length === linesRef.current.length) return
+    linesRef.current = next
+    setLines(next)
+  }, [])
+  // Speaker Intelligence (1C.2) — attaches a name resolved AFTER the fact (the Whisper speakerEmbed round
+  // trip finishes after the line already committed) to the specific line it belongs to, identified by the
+  // `t` timestamp commitLine returned when it committed. Guarded on `!l.name` so a slow/duplicate resolve
+  // can never clobber a name the line already has.
+  const attachSpeakerName = useCallback((t: number, name: string): void => {
+    const idx = linesRef.current.findIndex((l) => l.t === t && l.speaker === 'them' && !l.name)
+    if (idx < 0) return
+    const next = linesRef.current.slice()
+    next[idx] = { ...next[idx], name }
+    linesRef.current = next
+    setLines(next)
+  }, [])
+
   // Add a transcribed line + fire the auto-answer hook. Shared by the Whisper worker and Parakeet paths.
   // `name` is the optional Speaker Intelligence label (main-side voice embedding on THEM windows) — the
-  // same additive field the Teams-VTT backfill writes, so render/save paths need no change.
-  const pendingWhisperEmbedRef = useRef<Float32Array | null>(null)
-
+  // same additive field the Teams-VTT backfill writes, so render/save paths need no change. Returns the
+  // committed line's `t` (its identity for attachSpeakerName above) so a caller can attach a
+  // Speaker-Intelligence name once it resolves later — null on every path that did NOT commit a line
+  // (phantom text, a suppressed dupe run, or a dead/stopped session), so a caller can skip that follow-up
+  // work entirely instead of resolving a name for a line that was never shown.
   const commitLine = useCallback((text: string, speaker: Speaker, name?: string, provisional?: boolean): number | null => {
     // Drop phantom/hallucinated lines + non-speech sound-event captions ("[BELL RINGS]", "(applause)",
     // "♪♪♪") before touching state — so they never display live, never reach the recap, never get saved.
@@ -625,57 +728,53 @@ export function useListen(
     for (const { re, to } of correctionsRef.current) corrected = corrected.replace(re, to)
     // Entity-casing bias runs AFTER corrections so an explicit user correction always wins.
     if (entityCasingRef.current.length) corrected = applyEntityCasingCompiled(entityCasingRef.current, corrected)
-    if (corrected && liveRef.current) {
-      // Cross-line repetition-loop guard: same normalized line, same speaker, window after window.
-      const key = repeatKey(corrected)
-      const run = repeatRunRef.current
-      if (key && run.key === key && run.speaker === (speaker || 'you')) {
-        run.count += 1
-        if (run.count > MAX_CONSECUTIVE_DUPES) return null // keep counting so the whole run stays suppressed
-      } else {
-        repeatRunRef.current = { key, speaker: speaker || 'you', count: 1 }
-      }
-      // Tag the line's spoken language (conservative: undefined unless confident) so mixed-language
-      // meetings can render switch markers for the recap LLM and the saved transcript. Computed here —
-      // the single chokepoint — so Parakeet and Apple Speech lines get tagged exactly like Whisper's.
-      const lang = detectLanguage(corrected).lang ?? undefined
-      const line: TranscriptLine = {
-        speaker: speaker || 'you',
-        text: corrected,
-        t: Date.now(),
-        ...(name ? { name } : {}),
-        ...(lang ? { lang } : {}),
-        ...(provisional ? { provisional: true } : {})
-      }
-      // A final window replaces any streaming partial from the same speaker; a newer partial replaces
-      // the previous one so TTFC stays one live caption, not a stack of drafts.
-      const withoutStale = linesRef.current.filter(
-        (l) => !(l.provisional && l.speaker === line.speaker)
-      )
-      const next = [...withoutStale, line]
-      linesRef.current = next
-      setLines(next)
-      // Auto-answer endpoints on the COALESCED 'them' turn (themRunRef), not a single VAD window: a 'you'
-      // line hands the turn back (clear the run); a 'them' line extends it. Fire once the joined run reads
-      // as a complete question, then consume the run so a continued sentence doesn't re-fire mid-thought.
-      if (provisional) {
-        linesRef.current = next
-        setLines(next)
-        return line.t
-      }
-      if (line.speaker === 'them') {
-        themRunRef.current = themRunRef.current ? `${themRunRef.current} ${line.text}` : line.text
-        if (themRunRef.current.length > 600) themRunRef.current = themRunRef.current.slice(-600) // bound memory
-        if (isQuestion(themRunRef.current)) {
-          themRunRef.current = ''
-          onQRef.current?.(line)
-        }
-      } else {
-        themRunRef.current = ''
-      }
-      return line.t
+    if (!corrected || !liveRef.current) return null
+    // Cross-line repetition-loop guard: same normalized line, same speaker, window after window.
+    const key = repeatKey(corrected)
+    const run = repeatRunRef.current
+    if (key && run.key === key && run.speaker === (speaker || 'you')) {
+      run.count += 1
+      if (run.count > MAX_CONSECUTIVE_DUPES) return null // keep counting so the whole run stays suppressed
+    } else {
+      repeatRunRef.current = { key, speaker: speaker || 'you', count: 1 }
     }
-    return null
+    // Tag the line's spoken language (conservative: undefined unless confident) so mixed-language
+    // meetings can render switch markers for the recap LLM and the saved transcript. Computed here —
+    // the single chokepoint — so Parakeet and Apple Speech lines get tagged exactly like Whisper's.
+    const lang = detectLanguage(corrected).lang ?? undefined
+    const line: TranscriptLine = {
+      speaker: speaker || 'you',
+      text: corrected,
+      t: Date.now(),
+      ...(name ? { name } : {}),
+      ...(lang ? { lang } : {}),
+      ...(provisional ? { provisional: true } : {})
+    }
+    // A final window replaces any streaming partial from the same speaker; a newer partial replaces
+    // the previous one so TTFC stays one live caption, not a stack of drafts.
+    const withoutStale = linesRef.current.filter(
+      (l) => !(l.provisional && l.speaker === line.speaker)
+    )
+    const next = [...withoutStale, line]
+    // Update the ref synchronously BEFORE firing onQ, so text() (read inside the handler) already
+    // includes the line that triggered the auto-answer.
+    linesRef.current = next
+    setLines(next)
+    // Auto-answer endpoints on the COALESCED 'them' turn (themRunRef), not a single VAD window: a 'you'
+    // line hands the turn back (clear the run); a 'them' line extends it. Fire once the joined run reads
+    // as a complete question, then consume the run so a continued sentence doesn't re-fire mid-thought.
+    if (provisional) return line.t
+    if (line.speaker === 'them') {
+      themRunRef.current = themRunRef.current ? `${themRunRef.current} ${line.text}` : line.text
+      if (themRunRef.current.length > 600) themRunRef.current = themRunRef.current.slice(-600) // bound memory
+      if (isQuestion(themRunRef.current)) {
+        themRunRef.current = ''
+        onQRef.current?.(line)
+      }
+    } else {
+      themRunRef.current = ''
+    }
+    return line.t
   }, [])
 
   // Probes ONE window through Parakeet (main-side IPC, language-agnostic) to pin/re-pin the live Whisper
@@ -705,8 +804,10 @@ export function useListen(
         )
           return
         const text = typeof res === 'string' ? res : res.text
-        // A near-empty window ("Hello") can only mislead — wait for a window with real substance.
-        if (text.trim().split(/\s+/).filter(Boolean).length < PROBE_MIN_WORDS) return
+        // A near-empty window ("Hello") can only mislead — wait for a window with real substance. The bar
+        // itself relaxes (once) if the opening probe burst spent PROBE_WINDOW_BUDGET windows without ever
+        // pinning — see probeMinWords/PROBE_MIN_WORDS_AGGRESSIVE's block comment above.
+        if (text.trim().split(/\s+/).filter(Boolean).length < probeMinWords(probePinnedRef.current, probeWindowCountRef.current)) return
         const found = detectLanguages(text)
         const detected = found.primary
         if (!detected) return
@@ -739,6 +840,14 @@ export function useListen(
     if (!readyRef.current || busy.current || queue.current.length === 0) return
     const job = queue.current.shift() as { audio: Float32Array; speaker: Speaker; partial?: boolean }
     busy.current = true
+    // Stamp the session epoch at dequeue so an in-flight decode that lands after stop()/start() of the
+    // NEXT meeting cannot commitLine into the wrong transcript (liveRef is true again for the new
+    // session — epoch is the only reliable "same meeting" check; same class as MQA-157 for probes).
+    const jobEpoch = sessionEpochRef.current
+    // ASR quality (1B.2b) — show the "…" placeholder for this speaker the instant decode actually BEGINS
+    // (not merely queued), so its timing matches when real speech was captured rather than however long
+    // it sat behind a backlog.
+    beginProvisional(job.speaker)
     if (engineRef.current === 'parakeet') {
       // Parakeet runs in the MAIN process (native addon) — hand the window over IPC, get text back.
       // Race against a timeout so a hung IPC can't stall the queue. On a real failure (reject or timeout)
@@ -750,6 +859,7 @@ export function useListen(
       )
       void Promise.race([feed, timeout])
         .then((res) => {
+          if (sessionEpochRef.current !== jobEpoch) return // meeting moved on — drop stale text
           // Normalize both feed shapes: bare string (legacy/error paths) and {text, name?} (Speaker
           // Intelligence labels THEM windows main-side — see SPEAKER-INTELLIGENCE-PLAN §3).
           const text = typeof res === 'string' ? res : res.text
@@ -776,6 +886,7 @@ export function useListen(
           }
         })
         .catch((err) => {
+          if (sessionEpochRef.current !== jobEpoch) return
           parakeetFailures.current += 1
           console.warn(
             `[listen] parakeet window failed (${parakeetFailures.current}/${PARAKEET_MAX_FAILURES}):`,
@@ -784,6 +895,7 @@ export function useListen(
           if (parakeetFailures.current >= PARAKEET_MAX_FAILURES) fallBackToWhisper()
         })
         .finally(() => {
+          clearProvisional() // this window has settled one way or another — the placeholder's job is done
           busy.current = false
           pump()
         })
@@ -800,6 +912,7 @@ export function useListen(
       )
       void Promise.race([feed, timeout])
         .then((res) => {
+          if (sessionEpochRef.current !== jobEpoch) return
           const text = typeof res === 'string' ? res : res.text
           const speakerName = typeof res === 'string' ? undefined : res.name
           parakeetFailures.current = 0 // success (even empty) resets the IPC-failure streak
@@ -819,6 +932,7 @@ export function useListen(
           }
         })
         .catch((err) => {
+          if (sessionEpochRef.current !== jobEpoch) return
           parakeetFailures.current += 1
           console.warn(
             `[listen] apple speech window failed (${parakeetFailures.current}/${PARAKEET_MAX_FAILURES}):`,
@@ -827,6 +941,7 @@ export function useListen(
           if (parakeetFailures.current >= PARAKEET_MAX_FAILURES) fallBackToWhisper()
         })
         .finally(() => {
+          clearProvisional()
           busy.current = false
           pump()
         })
@@ -845,12 +960,21 @@ export function useListen(
       }
     }
     if (!workerRef.current) {
+      // beginProvisional already showed "…" — clear it so a missing worker never leaves a stuck placeholder.
+      clearProvisional()
       busy.current = false
       return
     }
-    // Copy before the transfer list detaches job.audio — speakerEmbed needs the same PCM after decode.
+    // Speaker Intelligence (1C.2) — Whisper has no in-band speaker tap the way Parakeet/Apple's IPC feed
+    // does, so a THEM window's audio must be COPIED here, before its buffer transfers to the worker below
+    // (postMessage's transfer list detaches job.audio.buffer synchronously), so the 'text' response
+    // handler can still hand the exact same samples to window.toto.speakerEmbed afterwards.
     if (job.speaker === 'them') pendingWhisperEmbedRef.current = job.audio.slice()
-    else void window.toto.speakerEmbed(job.audio.slice(), 'you').catch(() => {})
+    else {
+      pendingWhisperEmbedRef.current = null
+      void window.toto.speakerEmbed(job.audio.slice(), 'you').catch(() => {})
+    }
+    pendingWhisperEpochRef.current = jobEpoch
     workerRef.current.postMessage(
       { type: 'audio', audio: job.audio, speaker: job.speaker, partial: !!job.partial },
       [job.audio.buffer]
@@ -858,7 +982,7 @@ export function useListen(
     // fallBackToWhisper (called in the parakeet .catch above) is forward-declared below and intentionally
     // omitted from deps: pump → fallBackToWhisper → ensureWorker → pump is a cycle, so listing it would TDZ
     // at render. All four callbacks are stable (created once), so pump's captured reference never goes stale.
-  }, [commitLine, probeLanguageWindow])
+  }, [commitLine, probeLanguageWindow, beginProvisional, clearProvisional])
 
   const ensureWorker = useCallback((): Worker => {
     if (workerRef.current) return workerRef.current
@@ -895,6 +1019,14 @@ export function useListen(
         // armNetworkRetry is defined further down (after ensureWorker) and forward-referenced via closure
         // — same pattern as pump → fallBackToWhisper above. It only runs later, once this handler actually
         // fires, by which point it's fully initialized; deliberately omitted from this useCallback's deps.
+        if (pendingWhisperEpochRef.current !== sessionEpochRef.current) {
+          // Stale decode from a previous meeting — drop without touching live UI/error state.
+          clearProvisional()
+          pendingWhisperEmbedRef.current = null
+          busy.current = false
+          pump()
+          return
+        }
         if (!armNetworkRetry(m.message ?? '')) {
           const note = m.message ?? 'transcription error'
           // armNetworkRetry declines once the model is loaded because this is a per-window decode
@@ -904,36 +1036,43 @@ export function useListen(
           if (readyRef.current) decodeNoteRef.current = note
           setState((s) => ({ ...s, error: note, loading: false }))
         }
+        clearProvisional() // this window has settled (with an error) — the placeholder's job is done
+        pendingWhisperEmbedRef.current = null
         busy.current = false
         pump()
       } else if (m.type === 'text') {
+        clearProvisional() // this window has settled — replace the placeholder with the real line below
         const embedAudio = pendingWhisperEmbedRef.current
         pendingWhisperEmbedRef.current = null
+        if (pendingWhisperEpochRef.current !== sessionEpochRef.current) {
+          // Meeting moved on while this window decoded — never commit into the new transcript.
+          busy.current = false
+          pump()
+          return
+        }
         const committedAt = commitLine(
           m.text || '',
           (m.speaker as Speaker) || 'you',
           undefined,
           !!m.partial
         )
-        // Echo defense (parity with Parakeet/Apple): operator bleed through loopback must not stay
-        // labeled as THEM. Whisper already committed the text before embed returns — drop the line.
+        // Speaker Intelligence (1C.2) — fire-and-forget AFTER the line already committed: never blocks
+        // the live decode, and a slow/failed round trip just leaves the line unlabeled (the pre-P2
+        // outcome). Only for 'them' windows that actually produced a line — nothing to attach a name to
+        // otherwise (silence, a suppressed dupe, or a 'you' window, which is never labeled).
         if (committedAt !== null && !m.partial && (m.speaker as Speaker) === 'them' && embedAudio) {
           void window.toto
             .speakerEmbed(embedAudio, 'them')
             .then((res) => {
+              // Echo defense (parity with Parakeet/Apple): operator bleed through loopback must not stay
+              // labeled as THEM. Whisper already committed the text before embed returns — drop the line.
               if (res?.echo) {
                 const next = linesRef.current.filter((line) => line.t !== committedAt)
                 linesRef.current = next
                 setLines(next)
                 return
               }
-              if (res?.name) {
-                const named = linesRef.current.map((line) =>
-                  line.t === committedAt ? { ...line, name: res.name } : line
-                )
-                linesRef.current = named
-                setLines(named)
-              }
+              if (res?.name) attachSpeakerName(committedAt, res.name)
             })
             .catch(() => {})
         }
@@ -956,6 +1095,8 @@ export function useListen(
       liveRef.current = false
       pausedRef.current = false
       queue.current = []
+      provisionalRef.current = null // no decode is ever coming back to replace it now
+      pendingWhisperEmbedRef.current = null
       themRunRef.current = '' // crash wipes the in-progress 'them' question turn (parity with stop()/start())
       closeChannel('you')
       closeChannel('them')
@@ -1058,8 +1199,10 @@ export function useListen(
       if (!liveRef.current || pausedRef.current) return
       queue.current.push({ audio, speaker: sp, partial })
       if (queue.current.length > MAX_QUEUE) {
-        const dropped = queue.current.length - MAX_QUEUE
-        queue.current.splice(0, dropped) // bound memory; drop oldest
+        const before = queue.current.length
+        // bound memory; drop oldest, but never the newest window of either speaker — see trimQueue.
+        queue.current = trimQueue(queue.current, MAX_QUEUE)
+        const dropped = before - queue.current.length
         // Backpressure: transcription is falling behind capture, so audio windows are being lost (corrupts
         // the recap). Logged rather than silently swallowed so it's diagnosable instead of an invisible gap.
         console.warn(`[listen] audio backpressure: dropped ${dropped} window(s) (queue > ${MAX_QUEUE})`)
@@ -1490,6 +1633,8 @@ export function useListen(
         stoppingRef.current = false
         sessionEpochRef.current += 1
         queue.current = []
+        provisionalRef.current = null // fresh session — no carried-over placeholder from the previous one
+        pendingWhisperEmbedRef.current = null
         busy.current = false
         liveRef.current = true
         wantsSystemRef.current = source === 'system' || source === 'both'
@@ -1889,6 +2034,8 @@ export function useListen(
       liveRef.current = false
       disarmNetworkRetry() // session over — a pending 'online' retry must not fire into the next one
       queue.current = [] // drop anything still undispatched past the ceiling so it can't leak into the next session
+      clearProvisional() // a decode still in flight at the ceiling never gets to replace its placeholder
+      pendingWhisperEmbedRef.current = null
       themRunRef.current = '' // run after the drain: any final flushed question already fired while liveRef was true
       closeChannel('you')
       closeChannel('them')
@@ -1927,6 +2074,7 @@ export function useListen(
 
   const clear = useCallback((): void => {
     setLines([])
+    provisionalRef.current = null // wiping the transcript also drops any still-showing placeholder
     themRunRef.current = '' // wiping the transcript also drops any in-progress 'them' question turn
   }, [])
 

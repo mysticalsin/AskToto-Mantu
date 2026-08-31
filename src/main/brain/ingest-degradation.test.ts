@@ -29,7 +29,10 @@ const localBaseReadyMock = vi.hoisted(() =>
     return true
   })
 )
-vi.mock('../llm/local-routing', () => ({ localBaseReady: localBaseReadyMock }))
+vi.mock('../llm/local-routing', () => ({
+  localBaseReady: localBaseReadyMock,
+  resolveRoutingMode: (s: { routingMode?: string }) => s.routingMode ?? 'auto'
+}))
 
 // The sidecar's live lifecycle state. Real llama-server latches 'unavailable' for the rest of the session
 // once its restart budget is exhausted (local-runtime.ts) — the condition MQA-018 is about. Only getState

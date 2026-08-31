@@ -125,6 +125,7 @@ describe('isEchoBleed — pure cosine-threshold check', () => {
   })
 
   it('a near-miss below ECHO_THRESHOLD (~0.7) does not count as echo', () => {
+    // Same magnitude on the shared axis, enough off-axis energy to land the cosine below 0.7.
     const a = Float32Array.from([1, 0, 0])
     const b = Float32Array.from([0.6, 0.8, 0])
     expect(isEchoBleed(a, b)).toBe(false)
@@ -134,7 +135,7 @@ describe('isEchoBleed — pure cosine-threshold check', () => {
 describe('echo defense — operator buffer + THEM-window echo detection', () => {
   it('flags a THEM window that matches the live (this-session) operator buffer', () => {
     const id = makeId(dir)
-    id.observeOperatorWindow(windowFor(3))
+    id.observeOperatorWindow(windowFor(3)) // a 'you' (mic) window seeds the operator's own voiceprint
     expect(id.labelWindow(windowFor(3))).toMatchObject({ echo: true })
   })
 
@@ -149,7 +150,8 @@ describe('echo defense — operator buffer + THEM-window echo detection', () => 
   it('an echo-flagged window is never clustered (would poison Speaker N with the operator)', () => {
     const id = makeId(dir)
     id.observeOperatorWindow(windowFor(3))
-    id.labelWindow(windowFor(3))
+    id.labelWindow(windowFor(3)) // echo — must be a no-op for clustering
+    // The next genuinely-new voice still opens "Speaker 1", proving no cluster was created above.
     expect(id.labelWindow(windowFor(5))).toMatchObject({ name: 'Speaker 1', source: 'cluster' })
   })
 
@@ -165,9 +167,82 @@ describe('echo defense — operator buffer + THEM-window echo detection', () => 
     id.resetSession()
     expect(id.labelWindow(windowFor(3))?.echo).toBeFalsy()
   })
+
+  it('resetSession flushes a well-populated operator buffer into a persisted profile (meeting boundary)', () => {
+    const id = makeId(dir)
+    id.observeOperatorWindow(windowFor(3))
+    id.observeOperatorWindow(windowFor(3))
+    id.observeOperatorWindow(windowFor(3))
+    id.resetSession()
+    // Internal-only: the operator's own voiceprint never shows up as a "person" a user could see/delete.
+    const fresh = makeId(dir)
+    expect(fresh.listProfiles()).toEqual([])
+    expect(fresh.labelWindow(windowFor(3))).toMatchObject({ echo: true })
+  })
+
+  it('does not persist an operator profile from a too-short session (quality gate)', () => {
+    const id = makeId(dir)
+    id.observeOperatorWindow(windowFor(3))
+    id.resetSession()
+    const fresh = makeId(dir)
+    expect(fresh.labelWindow(windowFor(3))?.echo).toBeFalsy()
+  })
+
+  it('the reserved operator profile name can never be deleted through the public API', () => {
+    const id = makeId(dir)
+    id.observeOperatorWindow(windowFor(3))
+    id.observeOperatorWindow(windowFor(3))
+    id.observeOperatorWindow(windowFor(3))
+    id.resetSession()
+    expect(id.deleteProfile('__operator__')).toBe(false)
+  })
+})
+
+describe('autoEnrollFromLabeledWindows — Teams-VTT auto-enrollment flywheel (P2 §3.4)', () => {
+  it('folds a well-populated live cluster into a permanent voiceprint under the resolved name', () => {
+    const id = makeId(dir)
+    for (let i = 0; i < 4; i++) id.labelWindow(windowFor(2)) // populates the "Speaker 1" embedding buffer
+    const enrolled = id.autoEnrollFromLabeledWindows([{ clusterLabel: 'Speaker 1', name: 'Jane Doe' }])
+    expect(enrolled).toBe(1)
+    expect(id.listProfiles()).toEqual([{ name: 'Jane Doe', samples: 4 }])
+    // The very next window from the same voice is now recognized by profile, not by cluster.
+    expect(id.labelWindow(windowFor(2))).toMatchObject({ name: 'Jane Doe', source: 'profile' })
+  })
+
+  it('skips a cluster below the quality gate (fewer than 3 buffered windows)', () => {
+    const id = makeId(dir)
+    id.labelWindow(windowFor(2))
+    id.labelWindow(windowFor(2))
+    expect(id.autoEnrollFromLabeledWindows([{ clusterLabel: 'Speaker 1', name: 'Jane Doe' }])).toBe(0)
+    expect(id.listProfiles()).toEqual([])
+  })
+
+  it('skips a cluster label with no buffered embeddings at all (stale/unknown label)', () => {
+    const id = makeId(dir)
+    expect(id.autoEnrollFromLabeledWindows([{ clusterLabel: 'Speaker 9', name: 'Nobody' }])).toBe(0)
+  })
+
+  it('ignores a blank resolved name', () => {
+    const id = makeId(dir)
+    for (let i = 0; i < 4; i++) id.labelWindow(windowFor(2))
+    expect(id.autoEnrollFromLabeledWindows([{ clusterLabel: 'Speaker 1', name: '   ' }])).toBe(0)
+  })
+
+  it('returns the count of names actually enrolled across several pairs', () => {
+    const id = makeId(dir)
+    for (let i = 0; i < 4; i++) id.labelWindow(windowFor(2)) // "Speaker 1"
+    for (let i = 0; i < 4; i++) id.labelWindow(windowFor(5)) // "Speaker 2"
+    const enrolled = id.autoEnrollFromLabeledWindows([
+      { clusterLabel: 'Speaker 1', name: 'Jane Doe' },
+      { clusterLabel: 'Speaker 2', name: 'Bob Smith' }
+    ])
+    expect(enrolled).toBe(2)
+    expect(new Set(id.listProfiles().map((p) => p.name))).toEqual(new Set(['Jane Doe', 'Bob Smith']))
+  })
 })
 
 describe('speaker:embed — the Whisper-engine speaker-embedding tap (contract)', () => {
+  // index.ts has no unit harness (see MQA-043's test above), so this pins the wiring against the source.
   const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
   const preloadSrc = readFileSync(join(__dirname, '..', 'preload', 'index.ts'), 'utf8')
 
@@ -179,13 +254,18 @@ describe('speaker:embed — the Whisper-engine speaker-embedding tap (contract)'
   it('the handler returns a best-effort { name?, echo? } shape, gated on Float32Array + size, and flags echo', () => {
     const start = indexSrc.indexOf('ipcMain.handle(IPC.speakerEmbed')
     expect(start).toBeGreaterThan(-1)
-    const body = indexSrc.slice(start, start + 1400)
+    const body = indexSrc.slice(start, start + 2500)
     expect(body).toMatch(/if \(!\(p\?\.samples instanceof Float32Array\)\) return \{\}/)
     expect(body).toMatch(/if \(p\.samples\.length > 16_000 \* 30\) return \{\}/)
-    expect(body).toMatch(/getSpeakerId\(\)\.labelWindow\(p\.samples\)/)
+    // 70 wires getSpeakerId().labelWindow; 58 wraps the same call as labelThemAudio. Accept either
+    // until index.ts is unioned — both reach speaker-id.labelWindow.
+    expect(body).toMatch(/getSpeakerId\(\)\.labelWindow\(p\.samples\)|labelThemAudio\(p\.samples\)/)
+    // Echo must surface as echo:true so the renderer can drop the already-committed Whisper THEM line
+    // (silent skip used to leave operator loopback bleed labeled as THEM).
     expect(body).toMatch(/if \(label\?\.echo\) return \{ echo: true/)
     expect(body).toMatch(/if \(label\) return \{ name: label\.name \}/)
-    expect(body).toMatch(/observeOperatorWindow\(p\.samples\)/)
+    expect(body).toMatch(/observeOperatorWindow\(p\.samples\)|observeOperatorAudio\(p\.samples\)/)
+    expect(body).toMatch(/return \{\}\s*\n\s*\}\)/)
   })
 
   it('the preload bridges it with the same {samples, speaker} payload shape as parakeetFeed', () => {

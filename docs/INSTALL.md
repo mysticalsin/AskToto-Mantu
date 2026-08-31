@@ -2,7 +2,8 @@
 
 Métis ships as normal desktop installers:
 
-- macOS: `.dmg`
+- macOS (Electron): `.dmg` — the cross-platform overlay app
+- macOS (native): `Metis-Native-*.zip` — pure SwiftUI Apple Intelligence app (`native-app/`); unzip and open `Metis.app`
 - Windows: x64 setup `.exe`, plus a portable `.exe` for no-install testing
 
 ## Download And Install
@@ -13,8 +14,10 @@ Métis ships as normal desktop installers:
    is not a collaborator.
 2. Download the latest file for your OS.
 3. Install:
-   - macOS: run the one-line install below — it needs no approval step. From the `.dmg`, open it and
+   - macOS Electron: run the one-line install below — it needs no approval step. From the `.dmg`, open it and
      double-click `Install Metis.command` instead of dragging, and read the macOS section below first.
+   - macOS native (SwiftUI): download `Metis-Native-*.zip`, unzip, open `Metis.app`. This is a separate
+     Apple-Intelligence product — not the Electron DMG.
    - Windows: run `Metis-Setup-*.exe`.
    - Windows no-install test: run `Metis-Portable-*.exe`. The portable exe never auto-updates —
      electron-updater only supports the NSIS-installed app — so redownload it from the releases
