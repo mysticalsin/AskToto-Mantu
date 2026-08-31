@@ -115,8 +115,9 @@ describe('hover hit is the camera / Dynamic Island square only', () => {
     }
   })
 
-  it('a leftover 560×44 slab is clamped to the camera island so menu-bar and Teams miss', () => {
-    const fat = { x: 620, y: 0, width: 560, height: 44 }
+  it('a leftover 560×44 (or full-width) slab is clamped to the camera island so menu-bar and Teams miss', () => {
+    const fat = { x: 0, y: 0, width: TOTOS_MAC.bounds.width, height: 44 }
+    expect(fat.width).toBeGreaterThanOrEqual(560)
     expect(pointInRect(LEFT_MENU_BAR, fat)).toBe(true)
     expect(pointInRect({ x: NOTCH_CENTER.x, y: TEAMS_UNDER_ISLAND_Y }, fat)).toBe(true)
     expect(
