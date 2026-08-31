@@ -57,6 +57,13 @@ motion:
 - Drag region: the bar background is `-webkit-app-region: drag`; inputs/buttons `no-drag`.
 - Pixel target: side-by-side with Cluely, a stranger can't tell which is which (minus brand).
 
+## Identity (Settings → Identity)
+The Métis member pass and license foundation live under Settings → Identity.
+They are **not** overlay chrome. Tokens, motion, copy, and do/don'ts are
+binding in [`IDENTITY-CARD.md`](IDENTITY-CARD.md). One accent: Mantu Bright
+Purple `#7F00DA` (the live Settings token, not the overlay indigo above).
+Implement to that contract only.
+
 ## Anti-slop (do NOT)
 - No purple-gradient hero, no generic card-in-card-in-card, no emoji UI, no rounded-3xl everything,
   no drop-shadow on text, no 6-line text wraps. Match Cluely's restraint.
