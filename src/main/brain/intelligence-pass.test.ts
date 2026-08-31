@@ -132,7 +132,7 @@ describe('Update Intelligence pass — local first, API once', () => {
 
   it('fails loud when Local is missing and no API is configured', () => {
     localBaseReadyMock.mockReturnValue(false)
-    writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ allowedProviders: ['anthropic'] }), 'utf8')
+    writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ allowedProviders: [] }), 'utf8')
     writeFileSync(join(meetingsFolder, 'none.md'), '---\ndate: 2026-08-04\n---\nNo provider.', 'utf8')
     expect(startIntelligencePass()).toEqual({ queued: 0, error: INTELLIGENCE_PASS_NO_PROVIDER })
     expect(createStreamMock).not.toHaveBeenCalled()
