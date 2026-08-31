@@ -15,9 +15,9 @@ Three modes in Settings (persist, no reinstall). Default on a fresh install is *
 The Bar control is a **glass volume**, not a status blob. Tony should feel a sphere looking back.
 
 - **Size.** `52×52` always. Aspect 1. Same box on idle, listen, think, fact-check, connecting, hover, and minimize. Never a 44-tall pill. Never flatten.
-- **One accent.** Idle is Mantu Bright Purple `#7F00DA`. Not a purple-gradient hero. Mood tints the volume; it does not change the box.
-- **Materials.** Glass shell (fresnel rim + one specular kiss) around a living core and Jarvis-style interior motion (constellation, electrons, slow breath). Perspective, not a 2D radial fill. Reduced-motion still looks spherical (lit still frame, not a disc).
-- **Moods.** Idle purple. Listen: denser pulse, rec-dot stays **red** (`#F0717A`) and readable on the glass (do not paint the sphere red). Think: brighter violet, higher energy. Fact-check: grounded blue `#4CA8E8`. Connecting: deep indigo, quieter. Priority: connecting > fact-check > think > idle. Listen is a motion overlay, not a fifth fill.
+- **Idle color (Tony override).** This control is Jarvis blue, not Mantu purple. Idle / rest is `#4CA8E8` (`0x4ca8e8` from `frontend/src/orb.ts`). Product chrome elsewhere may still use `#7F00DA`. This sphere does not.
+- **Materials.** Glass shell (fresnel rim + one specular kiss) around a quiet living core. Constellation is sparse and sits on the shell, not a glitter fill inside the ball. Electrons are off at idle. Perspective, not a 2D radial fill. Reduced-motion still looks spherical (lit still frame, not a disc).
+- **Moods.** Idle `#4CA8E8`. Think `#6EC4FF` (a few traveling dots, never a storm). Speaking-adjacent `#5AB8F0` (blue family). Fact-check stays this blue family. Connecting: dimmer blue, still a sphere (not indigo `#2A0A4A`, not purple). Listen: same idle blue, rec-dot stays **red** (`#F0717A`) on the glass. Priority: connecting > fact-check > think > idle.
 - **Same sphere.** Minimize (Bar only) is this sphere, not a second disc. Windows: same sphere, top-center, no Mac-only look.
 - **Out of scope.** Island/Hide hit geometry (`src/main/island/geometry.ts`) is frozen. Hide stays 8×2. Island wakes only on the camera square.
 

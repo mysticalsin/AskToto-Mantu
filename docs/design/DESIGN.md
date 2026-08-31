@@ -110,4 +110,4 @@ See [ONBOARDING-STARFIELD.md](./ONBOARDING-STARFIELD.md). Galaxy from frame one.
 See [THINKING-ORB.md](./THINKING-ORB.md). Caption then sphere. Word first.
 
 ## Bar sphere
-See [BAR-PILL.md](./BAR-PILL.md). The Bar control is a 52×52 glass volume (Jarvis 3D feel, Mantu `#7F00DA`). Same sphere when minimized. Not stuffed into overlay Hide/Island.
+See [BAR-PILL.md](./BAR-PILL.md). The Bar control is a 52×52 glass volume (Jarvis idle `#4CA8E8`). Same sphere when minimized. Not stuffed into overlay Hide/Island. Tony overrode Mantu purple on this control only.

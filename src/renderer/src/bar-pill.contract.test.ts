@@ -126,9 +126,13 @@ describe('BAR-PILL contract', () => {
     expect(app).not.toMatch(/unpkg/)
     expect(orb).not.toMatch(/unpkg\.com/)
     expect(orb).not.toMatch(/cdn\.jsdelivr/)
-    expect(orb).toMatch(/JARVIS_ORB_POINTS = 2000/)
-    expect(orb).toMatch(/idle: 0x7f00da/)
-    expect(orb).toMatch(/factcheck: 0x4ca8e8/)
+    expect(orb).toMatch(/JARVIS_ORB_POINTS = 96/)
+    expect(orb).not.toMatch(/JARVIS_ORB_POINTS = 2000/)
+    expect(orb).toMatch(/idle: 0x4ca8e8/)
+    expect(orb).not.toMatch(/idle: 0x7f00da/)
+    expect(orb).toMatch(/factcheck: 0x5ab8f0/)
+    expect(orb).toMatch(/electronCountForMood/)
+    expect(orb).toMatch(/JARVIS_ELECTRON_MAX = 3/)
   })
 
   it('QUALITY hats: idle bar has no orb rAF; frame loop does no layout or GL lookups', () => {
