@@ -2169,6 +2169,7 @@ html.metis-bar-land .aw-widget {
 
 .aw-orb {
   display: block;
+  position: relative;
   width: 52px;
   height: 52px;
   flex-shrink: 0;
@@ -2206,15 +2207,20 @@ html.metis-bar-land .aw-widget {
   border-radius: 50%;
   pointer-events: none;
 }
-.aw-orb[data-orb-mood='idle'] {
-  background: radial-gradient(circle at 50% 50%, rgb(127 0 218 / 0.22) 0%, rgb(127 0 218 / 0.08) 46%, transparent 70%);
-}
-.aw-orb[data-orb-mood='thinking'] {
-  background: radial-gradient(circle at 50% 50%, rgb(154 43 240 / 0.28) 0%, rgb(154 43 240 / 0.1) 46%, transparent 70%);
-}
-.aw-orb[data-orb-mood='factcheck'] {
-  background: radial-gradient(circle at 50% 50%, rgb(76 168 232 / 0.22) 0%, rgb(76 168 232 / 0.08) 46%, transparent 70%);
-}
+.aw-orb[data-orb-mood='idle'],
+.aw-orb[data-orb-mood='thinking'],
+.aw-orb[data-orb-mood='factcheck'],
 .aw-orb[data-orb-mood='connecting'] {
-  background: radial-gradient(circle at 50% 50%, rgb(42 10 74 / 0.34) 0%, rgb(42 10 74 / 0.12) 46%, transparent 70%);
+  background: transparent;
+}
+.aw-orb__rec {
+  position: absolute;
+  right: 7px;
+  bottom: 8px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #f0717a;
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.5), 0 0 6px #f0717a;
+  pointer-events: none;
 }

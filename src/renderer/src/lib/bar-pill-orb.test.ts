@@ -8,6 +8,9 @@ import {
   ORB_COLOR,
   ORB_MOODS,
   ORB_NDC_SCALE,
+  ORB_PERSPECTIVE_K,
+  REC_DOT_COLOR,
+  SPHERE_RADIUS,
   connectionIndices,
   fibonacciSphere,
   isFixedCircle,
@@ -28,6 +31,10 @@ describe('bar pill sentient circle', () => {
     expect(isFixedCircle(BAR_PILL_WIDTH_PX, BAR_PILL_HEIGHT_PX)).toBe(true)
     expect(orbAspectRatio()).toBe(1)
     expect(ORB_NDC_SCALE).toBeGreaterThan(0)
+    expect(ORB_PERSPECTIVE_K).toBeGreaterThan(0)
+    expect(SPHERE_RADIUS).toBe(0.9)
+    expect(REC_DOT_COLOR).toBe(0xf0717a)
+    expect(ORB_COLOR.idle).not.toBe(REC_DOT_COLOR)
   })
 
   it('aspect ratio is 1 and bounding box is constant on every mood', () => {
@@ -92,6 +99,15 @@ describe('bar pill sentient circle', () => {
     expect(big.length).toBe(2000 * 3 * 2)
   })
 
+  it('listening does not change the 52 box or paint the sphere rec-dot red', () => {
+    expect(orbBoxForMood('idle')).toEqual({ width: 52, height: 52 })
+    expect(REC_DOT_COLOR).toBe(0xf0717a)
+    expect(ORB_COLOR.idle).toBe(0x7f00da)
+    expect(ORB_COLOR.thinking).not.toBe(REC_DOT_COLOR)
+    expect(ORB_COLOR.factcheck).not.toBe(REC_DOT_COLOR)
+    expect(ORB_COLOR.connecting).not.toBe(REC_DOT_COLOR)
+  })
+
   it('click expands and drag does not', () => {
     expect(pillClickShouldExpand(false)).toBe(true)
     expect(pillClickShouldExpand(true)).toBe(false)
@@ -130,6 +146,7 @@ describe('bar pill sentient circle', () => {
       orb.setMood('thinking')
       orb.setMood('factcheck')
       orb.setMood('connecting')
+      orb.setListening(true)
       orb.setHover(0.4, -0.2, true)
       orb.setReducedMotion(true)
       orb.destroy()

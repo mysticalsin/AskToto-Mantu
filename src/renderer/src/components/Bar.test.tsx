@@ -42,6 +42,17 @@ describe('Bar minimize-to-circle is layout-gated', () => {
     expect(hide).not.toContain('Minimize to the orb')
     expect(island).not.toContain('Minimize to the orb')
   })
+
+  it('puts a red rec-dot on the docked 52 sphere while listening', () => {
+    const html = renderToStaticMarkup(
+      <Bar {...props({ canMinimize: overlayAllowsMinimize('bar'), listening: true })} />
+    )
+    expect(html).toContain('data-bar-pill-orb')
+    expect(html).toContain('data-orb-listening')
+    expect(html).toContain('aw-orb__rec')
+    expect(html).toContain('rec-dot')
+    expect(html).not.toContain('data-orb-mood="connecting"')
+  })
 })
 
 describe('Bar Spotlight Ref control', () => {
