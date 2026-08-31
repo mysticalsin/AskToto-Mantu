@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import type { Settings } from '@shared/ipc'
 import type { MeetingRef, PersonEntity, AccountEntity, DealEntity, ProvenanceState } from '@shared/brain'
 import { RENDERABLE_PROVENANCE_STATES } from '@shared/brain'
-import { listEntities, readPerson, readAccount, readDeal, slugify, brainDir } from './store'
+import { listEntities, readPerson, readAccount, readDeal, slugify, brainDir, brainWriteGeneration } from './store'
 
 /**
  * Receipt Mode (innovation #3) — assemble the slice of the meeting brain that is RELEVANT to the
@@ -82,7 +82,10 @@ const ENTITY_READERS: Record<EntityKind, (s: Settings, slug: string) => { id: st
  * mid-rebuild invalidates the entry instead of being swallowed by it. Only keys are cached: entity
  * CONTENT still comes from readPerson/readAccount/readDeal on every ask.
  */
-const matchKeyCache = new Map<string, { mtimeMs: number; entries: { slug: string; keys: string[] }[] }>()
+const matchKeyCache = new Map<
+  string,
+  { mtimeMs: number; gen: number; entries: { slug: string; keys: string[] }[] }
+>()
 
 function entityDirMtime(dir: string): number {
   try {
@@ -97,15 +100,16 @@ function entityDirMtime(dir: string): number {
 function matchedSlugs(s: Settings, kind: EntityKind, hay: string): string[] {
   const dir = join(brainDir(s), 'entities', kind)
   const mtimeMs = entityDirMtime(dir)
+  const gen = brainWriteGeneration()
   let cached = matchKeyCache.get(dir)
-  if (!cached || cached.mtimeMs !== mtimeMs) {
+  if (!cached || cached.mtimeMs !== mtimeMs || cached.gen !== gen) {
     const read = ENTITY_READERS[kind]
     const entries: { slug: string; keys: string[] }[] = []
     for (const slug of listEntities(s, kind)) {
       const e = read(s, slug)
       if (e) entries.push({ slug, keys: matchKeys(e.id, e.aliases) })
     }
-    cached = { mtimeMs: entityDirMtime(dir), entries }
+    cached = { mtimeMs: entityDirMtime(dir), gen, entries }
     matchKeyCache.set(dir, cached)
   }
   return cached.entries.filter((e) => e.keys.some((k) => slugInText(k, hay))).map((e) => e.slug)

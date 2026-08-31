@@ -45,6 +45,9 @@ import {
   type McpPushPayload,
   type McpConnectResult,
   type McpPushResult,
+  type TimeSavedRecordPayload,
+  type OutlookDraftPayload,
+  type OutlookEventPayload,
   type LicenseActivatePayload,
   type LicenseActivateResult,
   type LicenseStatusResult,
@@ -347,6 +350,28 @@ const api = {
   // returns the same shape mcpTestConnection/mcpSaveConnection do — main has already persisted the
   // tokens and upserted the mcpConnections entry by the time this resolves.
   mcpClickupConnect: (): Promise<McpConnectResult> => ipcRenderer.invoke(IPC.mcpClickupConnect),
+  timeSavedRead: (): Promise<{
+    savedMinutes: number
+    byKind: Record<'note-taking' | 'second-brain' | 'email-summary' | 'mcp-push', number>
+    events: number
+    recent: Array<{
+      kind: 'note-taking' | 'second-brain' | 'email-summary' | 'mcp-push'
+      timestamp: number
+      estimatedMinutes: number
+      connector?: 'bidstack' | 'plane' | 'clickup' | 'outlook' | 'none'
+    }>
+  }> => ipcRenderer.invoke(IPC.timeSavedRead),
+  timeSavedRecord: (payload: TimeSavedRecordPayload): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.timeSavedRecord, payload),
+  outlookWriteStatus: (): Promise<{ signedIn: boolean; canDraft: boolean; canEvent: boolean }> =>
+    ipcRenderer.invoke(IPC.outlookWriteStatus),
+  outlookCreateDraft: (payload: OutlookDraftPayload): Promise<{ ok: boolean; error?: string; needsConsent?: boolean }> =>
+    ipcRenderer.invoke(IPC.outlookCreateDraft, payload),
+  outlookCreateEvent: (payload: OutlookEventPayload): Promise<{ ok: boolean; error?: string; needsConsent?: boolean }> =>
+    ipcRenderer.invoke(IPC.outlookCreateEvent, payload),
+  mcpWriteTargets: (): Promise<
+    Array<{ ready: boolean; intent: string; action: string; label: string; reason?: string }>
+  > => ipcRenderer.invoke(IPC.mcpWriteTargets),
 
   licenseActivate: (payload: LicenseActivatePayload): Promise<LicenseActivateResult> =>
     ipcRenderer.invoke(IPC.licenseActivate, payload),
