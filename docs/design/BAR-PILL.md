@@ -39,7 +39,24 @@ A flat CSS disc, a single radial fill, or a 2D glow quad is a fail. That is a st
 
 ### no-squash M (HARD)
 
-The left Settings mark (logo / M) is a locked 30×30 circle (`BAR_MARK_SIZE_PX`, `rounded-full`, `aspect-ratio: 1`). Listen / recording may expand the Bar for rec chrome. That M must not flatten, stretch into a capsule, or clip into a bar. Same for any other circular chrome in that left slot. Left grid track is `minmax(30px, 1fr)`. Image `max-width: none` so Tailwind preflight cannot squash it.
+The left Settings mark (logo / M) is a locked 30×30 circle (`BAR_MARK_SIZE_PX`, `rounded-full`, `aspect-ratio: 1`). Listen / recording may expand the Bar for rec chrome. That M must not flatten, stretch into a capsule, or clip into a bar. Same for any other circular chrome in that left slot. The mark sits in a locked 30px flex slot (`flex: 0 0 30px`), never a competing `1fr` track that can underflow. Image `max-width: none` so Tailwind preflight cannot squash it.
+
+### Toolbar reserved boxes (HARD — overlap is a ship blocker)
+
+Tony live fail: overlay Bar while listening, the elapsed timer + pause sat on top of "+ New meeting". Production overlay width is `BAR_OVERLAY_WIDTH_PX` === `BAR_WIDTH` **880**.
+
+The toolbar is one flex row. Each control owns an in-flow reserved box. Do not absolutely stack siblings. Do not use negative margins. Do not let overflow paint on a neighbor. Do not steal 100px with a dummy spacer to keep icons centered.
+
+| State | Reserved, left to right |
+| --- | --- |
+| **Idle** | locked M 30×30 · icon cluster + Listen · History · orb 41 · chevron |
+| **Listening** | locked M 30×30 · icon cluster + rec-dot · timer + pause (one slot) · Transcript · orb 41 · chevron |
+
+Listening is already a meeting. **Do not** put "+ New meeting" on this cramped row. Keep that action after Stop / on Review / History. Timer + pause share one reserved slot. Transcript, orb, and chevron stay. The orb look is out of scope (do not restyle).
+
+If 880 is still tight, shrink Transcript to icon-only (tooltip keeps the name) **before** allowing overlap. Overlap fails the slice.
+
+Tests: at production overlay width, toolbar children `getBoundingClientRect` must not intersect while listening. New meeting is absent from the listening row. Timer/pause must not intersect Transcript or the orb. Idle must not clip the M.
 
 ### Materials
 
@@ -215,6 +232,7 @@ No `unpkg` / CDN. Bundle the package.
 - Hover hit is the camera island: width = `notchWidth` (~180–250, not 560), height = housing only (not 44). Left menu-bar misses. Y=40 and `TEAMS_MEETING_CHROME_Y` miss.
 - Settings close onto Island/Hide force-parks (`shouldForceParkOnBecameIdle`).
 - Aspect ratio **1** on every mood. Bounding box constant across moods. Visible size is 41. Canvas stays 64 with 2x backing. Never scale-on-appear. no-squash M on Listen.
+- Listening toolbar at production overlay width 880: no child `getBoundingClientRect` intersection. No "+ New meeting" in that row. Timer/pause do not intersect Transcript or the orb. No 100px dummy spacer.
 - Click expands; drag does not expand.
 - Reduced-motion does not throw and still paints the package static frame (not a disc we invented).
 - Hide/Island do not run the orb rAF (`shouldRunOrbRaf`). Bar may.
@@ -222,3 +240,4 @@ No `unpkg` / CDN. Bundle the package.
 - No rec-dot on this circle. Listen maps to `listening`.
 - Circle stays 41×41 visible (64 canvas, 128 backing) on every mood including listen.
 - Idle maps to `solving`. Think maps to `working`. Fact-check maps to `searching`. Connecting maps to `connecting`. Theme is `dark`. No visible text node in the orb host.
+- Listening Bar: reserved boxes only (M · tools · timer/pause · Transcript · orb · chevron). Overlap is a ship blocker.
