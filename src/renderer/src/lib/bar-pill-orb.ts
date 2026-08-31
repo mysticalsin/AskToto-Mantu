@@ -108,7 +108,7 @@ export function moodGlass(mood: OrbMood): {
 
 export function isPurpleFamilyIdle(color = ORB_COLOR.idle): boolean {
   const t = hexRgb(color)
-  return color === FIT_STUDIO_MID && t.r > 0.55 && t.b > 0.7 && t.g < t.r && color !== 0x4ca8e8
+  return color === FIT_STUDIO_MID && t.r > 0.55 && t.b > 0.7 && t.g < t.r
 }
 
 export interface BarPillOrbHandle {
