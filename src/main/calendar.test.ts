@@ -113,3 +113,40 @@ describe('calendarToday — bounded Graph fetch (MQA-189)', () => {
     await expect(pending).resolves.toEqual({ ok: false, error: 'Calendar unavailable — try again.' })
   })
 })
+
+describe('calendarToday — join URL allow-list', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.clearAllMocks()
+  })
+
+  it('keeps an https Teams join URL and drops javascript:/file: payloads', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        json: async () => ({
+          value: [
+            {
+              subject: 'Standup',
+              start: { dateTime: '2026-08-08T10:00:00' },
+              end: { dateTime: '2026-08-08T10:30:00' },
+              onlineMeeting: { joinUrl: 'https://teams.microsoft.com/l/meetup-join/abc' }
+            },
+            {
+              subject: 'Evil',
+              start: { dateTime: '2026-08-08T11:00:00' },
+              end: { dateTime: '2026-08-08T11:30:00' },
+              onlineMeeting: { joinUrl: 'javascript:alert(1)' }
+            }
+          ]
+        })
+      }))
+    )
+    const res = await calendarToday('UTC')
+    expect(res.ok).toBe(true)
+    expect(res.events?.[0]?.joinUrl).toMatch(/^https:\/\/teams\.microsoft\.com\//)
+    expect(res.events?.[1]?.joinUrl).toBeUndefined()
+  })
+})

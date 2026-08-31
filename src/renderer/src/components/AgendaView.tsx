@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Calendar, Video, RefreshCw, ExternalLink, Users } from 'lucide-react'
 import type { CalendarEvent, CalendarTodayResult } from '@shared/ipc'
+import { safeHref } from '@shared/safe-url'
 import { Spinner } from './ui'
 
 function fmtTime(iso: string): string {
@@ -11,6 +12,7 @@ function fmtTime(iso: string): string {
 }
 
 function EventRow({ ev }: { ev: CalendarEvent }): JSX.Element {
+  const joinHref = ev.online ? safeHref(ev.joinUrl) : null
   return (
     <div className="flex items-start gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2.5">
       <div className="w-[64px] shrink-0 pt-0.5 text-right">
@@ -30,9 +32,9 @@ function EventRow({ ev }: { ev: CalendarEvent }): JSX.Element {
               <Users size={11} /> {ev.attendees}
             </span>
           )}
-          {ev.online && ev.joinUrl && (
+          {joinHref && (
             <a
-              href={ev.joinUrl}
+              href={joinHref}
               target="_blank"
               rel="noopener noreferrer"
               className="no-drag inline-flex items-center gap-1 text-[color:var(--color-accent-text)] hover:underline"
