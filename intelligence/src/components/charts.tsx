@@ -4,7 +4,7 @@
 // (every series count here is ≤4), and every component renders an honest empty state instead of a
 // misleading zero-value chart when it has nothing to draw.
 
-import { motion } from 'framer-motion'
+import { motion, useReducedMotion } from 'framer-motion'
 import { CountUp } from './CountUp'
 
 const MANTU_GRADIENT = 'linear-gradient(to right, var(--color-mantu), var(--color-mantu-light))'
@@ -29,7 +29,7 @@ export function StatTile({
       initial={{ opacity: 0, y: 10 }}
       animate={{ opacity: 1, y: 0 }}
       whileHover={{ y: -3 }}
-      className="rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5"
+      className="intel-glass p-5"
     >
       <div className="text-3xl font-bold text-white/95">
         {value === null ? (
@@ -94,6 +94,7 @@ function shortWeekLabel(iso: string): string {
 /** A mini vertical bar chart of meeting counts per week (meetingsPerWeek's buckets). Fixed pixel width,
  *  meant to sit inside an `overflow-x-auto` wrapper rather than stretch/distort. */
 export function WeeklyBars({ buckets }: { buckets: { weekStartISO: string; count: number }[] }) {
+  const reduced = useReducedMotion()
   if (buckets.length === 0) return <div className="text-xs text-white/50">No meetings recorded yet.</div>
 
   const max = Math.max(1, ...buckets.map((b) => b.count))
@@ -106,25 +107,38 @@ export function WeeklyBars({ buckets }: { buckets: { weekStartISO: string; count
   return (
     <div className="overflow-x-auto">
       <svg width={totalW} height={totalH} viewBox={`0 0 ${totalW} ${totalH}`} className="block">
-        <line x1={0} y1={chartH} x2={totalW} y2={chartH} stroke="rgba(255,255,255,0.12)" strokeWidth={1} />
+        {[0.25, 0.5, 0.75, 1].map((t) => (
+          <line
+            key={t}
+            x1={0}
+            y1={chartH * t}
+            x2={totalW}
+            y2={chartH * t}
+            className="intel-chart-grid"
+            strokeWidth={1}
+          />
+        ))}
         {buckets.map((b, i) => {
-          const h = Math.max((b.count / max) * (chartH - 6), b.count > 0 ? 3 : 0)
+          const h = Math.max((b.count / max) * (chartH - 6), b.count > 0 ? 3 : 2)
           const x = i * (barW + gap)
           const y = chartH - h
           const showLabel = i % 3 === 0 || i === buckets.length - 1
           return (
             <g key={b.weekStartISO}>
-              <rect
+              <motion.rect
                 x={x}
                 y={y}
                 width={barW}
                 height={h}
-                rx={3}
-                fill="var(--color-mantu-light)"
-                opacity={b.count === 0 ? 0.12 : 0.85}
+                rx={b.count === 0 ? 1 : 4}
+                className={b.count === 0 ? 'intel-chart-track' : 'intel-chart-mark'}
+                initial={reduced ? false : { scaleY: 0 }}
+                animate={{ scaleY: 1 }}
+                transition={{ type: 'spring', stiffness: 380, damping: 30, delay: reduced ? 0 : Math.min(i, 11) * 0.03 }}
+                style={{ transformBox: 'fill-box', transformOrigin: 'bottom' }}
               >
                 <title>{`Week of ${shortWeekLabel(b.weekStartISO)}: ${b.count} meeting${b.count === 1 ? '' : 's'}`}</title>
-              </rect>
+              </motion.rect>
               {showLabel && (
                 <text x={x + barW / 2} y={totalH - 4} textAnchor="middle" fontSize="8" fill="rgba(255,255,255,0.55)">
                   {shortWeekLabel(b.weekStartISO)}

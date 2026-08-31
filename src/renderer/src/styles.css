@@ -339,10 +339,11 @@ html.shot-bg-light #root {
 .work-progress {
   position: relative;
   isolation: isolate;
-  height: 5px;
+  height: 6px;
   overflow: hidden;
   border-radius: var(--radius-pill);
   background: rgba(255, 255, 255, 0.09);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 .work-progress__value {
   position: absolute;
@@ -350,7 +351,10 @@ html.shot-bg-light #root {
   z-index: 1;
   transform-origin: left center;
   border-radius: inherit;
-  background: linear-gradient(90deg, var(--color-accent), var(--color-accent-2));
+  /* Single mark hue + white specular. Not a second purple, not a rainbow. */
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.32), transparent 58%),
+    var(--color-accent-2);
   will-change: transform;
   transition: transform 360ms var(--ease-spring), opacity 150ms var(--ease-spring);
 }
@@ -868,5 +872,107 @@ input::placeholder {
     transform: translateX(0);
     animation: work-progress-reduced-pulse 1.2s var(--ease-spring) infinite !important;
     animation-duration: 1.2s !important;
+  }
+  .intel-shimmer::after {
+    animation: none !important;
+  }
+}
+
+/* ── Mantu Intelligence cards + charts (glance, record, History strip) ──────
+   Liquid-glass cards and single-hue marks. Overlay chrome (.glass / .glass-strong)
+   is untouched. Tokens only; no purple-gradient slop. */
+.intel-glass {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-hair);
+  background:
+    linear-gradient(165deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.015) 46%, transparent 70%),
+    linear-gradient(var(--glass-fill-elevated), var(--glass-fill-elevated));
+  box-shadow:
+    0 10px 28px rgba(0, 0, 0, 0.28),
+    0 1px 0 rgba(255, 255, 255, 0.1) inset,
+    0 -10px 22px rgba(0, 0, 0, 0.16) inset;
+  -webkit-backdrop-filter: blur(16px) saturate(140%);
+  backdrop-filter: blur(16px) saturate(140%);
+}
+.intel-glass--tile {
+  padding-inline: 8px;
+}
+.intel-glass--accent {
+  background:
+    linear-gradient(165deg, rgba(255, 255, 255, 0.08), transparent 55%),
+    linear-gradient(var(--color-accent-soft), var(--color-accent-soft)),
+    linear-gradient(var(--glass-fill-elevated), var(--glass-fill-elevated));
+}
+.intel-glass--danger {
+  border-color: color-mix(in oklab, var(--color-danger) 38%, var(--color-hair));
+  background:
+    linear-gradient(165deg, rgba(255, 255, 255, 0.06), transparent 50%),
+    linear-gradient(var(--color-danger-soft), var(--color-danger-soft)),
+    linear-gradient(var(--glass-fill-elevated), var(--glass-fill-elevated));
+}
+.intel-empty-mark {
+  border-radius: 14px;
+  background: var(--color-accent-soft);
+  box-shadow: 0 0 0 1px color-mix(in oklab, var(--color-accent-2) 28%, transparent);
+}
+.intel-chart-grid {
+  stroke: var(--color-hair);
+}
+.intel-chart-mark {
+  fill: var(--color-accent-2);
+}
+.intel-chart-track {
+  fill: rgba(255, 255, 255, 0.08);
+}
+.intel-chart-tooltip {
+  pointer-events: none;
+  position: absolute;
+  bottom: calc(100% - 6px);
+  z-index: var(--z-popover);
+  min-width: 112px;
+  padding: 6px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-hair);
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.02)),
+    var(--glass-fill-strong);
+  box-shadow: var(--shadow-float);
+  font-size: 10px;
+  line-height: 1.35;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+.intel-mag-track {
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
+}
+.intel-mag-fill {
+  border-radius: inherit;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.28), transparent 60%),
+    var(--color-accent-2);
+  transform-origin: left center;
+}
+.intel-shimmer {
+  position: relative;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.05);
+}
+.intel-shimmer::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.12), transparent);
+  transform: translateX(-100%);
+  animation: intel-shimmer-sweep 1.4s var(--ease-spring) infinite;
+}
+@keyframes intel-shimmer-sweep {
+  to {
+    transform: translateX(100%);
   }
 }

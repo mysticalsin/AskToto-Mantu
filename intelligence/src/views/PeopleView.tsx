@@ -138,7 +138,7 @@ export function PeopleView({ data }: Props) {
           className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3"
         >
           <div className="lg:col-span-1 space-y-4">
-            <div className="rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5">
+            <div className="intel-glass p-5">
               <h2 className="text-lg font-semibold text-white/90">{person.name}</h2>
               <dl className="mt-3 space-y-2 text-sm">
                 <Row
@@ -172,14 +172,14 @@ export function PeopleView({ data }: Props) {
               </dl>
             </div>
 
-            <div className="rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5">
+            <div className="intel-glass p-5">
               <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-white/60">
                 Meeting history
               </h3>
               <Timeline meetings={person.meetings ?? []} emptyText="No meetings mapped to this person yet." />
             </div>
 
-            <div className="rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5">
+            <div className="intel-glass p-5">
               <div className="mb-3 flex items-baseline justify-between">
                 <h3 className="text-sm font-semibold uppercase tracking-wide text-white/60">Commitments</h3>
                 <span className="text-[11px] text-white/40">

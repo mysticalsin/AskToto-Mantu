@@ -17,7 +17,7 @@ export function NavBar() {
     // OS title bar above it (CSS-only — no JS drag here, since the vis-network graph view and selectable
     // text below would fight a JS pointer-based drag). Every interactive child opts back out via
     // win-no-drag so its clicks still land.
-    <header className="win-drag sticky top-0 z-20 border-b border-[var(--color-mantu-border)] bg-[var(--color-mantu-bg)]/90 backdrop-blur">
+    <header className="win-drag sticky top-0 z-20 border-b border-[var(--color-mantu-border)] bg-[var(--color-mantu-bg)]/78 backdrop-blur-xl">
       <div className="mx-auto flex max-w-7xl items-center justify-between px-6 py-3">
         <div className="flex items-center gap-3">
           {/* Real Mantu "M" mark (same asset as the app icon), not the favicon's stylized bolt shape.

@@ -198,7 +198,7 @@ function GraphBar({
   const backfillFailed = brain?.backfill?.failed ?? 0
   const indexProgress = brain?.backfill ? describeMeetingIndexProgress(brain.backfill) : null
   return (
-    <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2">
+    <div className="intel-glass px-3 py-2.5">
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0 flex-1 text-[11px] text-[color:var(--color-ink-2)]">
           <div className="flex items-center gap-1.5">
@@ -494,7 +494,7 @@ const MeetingRow = memo(function MeetingRow({
       ? 'Indexed in Mantu Intelligence'
       : indexStatus === 'failed'
         ? // FIX 4: name the actual reason when it's known, instead of a generic message.
-          `Intelligence extraction failed${indexError ? `: ${indexError}` : ''} — retry from Mantu Intelligence`
+          `Intelligence extraction failed${indexError ? `: ${indexError}` : ''}. Retry from Mantu Intelligence`
         : 'Queued for Mantu Intelligence indexing'
 
   return (
@@ -1142,7 +1142,7 @@ export function RecallView({
             <div
               key={job.jobId}
               aria-busy={progress.active || undefined}
-              className="mb-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2"
+              className="mb-2 intel-glass px-3 py-2.5"
             >
           <div className="flex items-center gap-2 text-[12px]">
             <span className="min-w-0 flex-1 truncate font-medium text-[color:var(--color-ink)]">{job.title}</span>
@@ -1202,12 +1202,19 @@ export function RecallView({
       {/* ── DATE-GROUPED MEETING LIST ───────────────────────────────────── */}
       <div ref={listRef} tabIndex={-1} className="scroll-thin min-h-0 flex-1 overflow-y-auto pr-1">
         {loading ? (
-          <div className="py-2 text-[13px] text-[color:var(--color-ink-2)]">Loading…</div>
+          <div className="intel-glass px-3 py-4 text-[13px] text-[color:var(--color-ink-3)]">
+            Loading your meetings…
+          </div>
         ) : items.length === 0 ? (
-          <div className="py-2 text-[13px] text-[color:var(--color-ink-2)]">
-            {q.trim()
-              ? 'No matching meetings.'
-              : 'No meetings saved yet. Finish one with End & review.'}
+          <div className="intel-glass px-3 py-5 text-center">
+            <div className="text-[13px] font-semibold text-[color:var(--color-ink)]">
+              {q.trim() ? 'No matching meetings' : 'No meetings saved yet'}
+            </div>
+            <div className="mt-1 text-[12px] text-[color:var(--color-ink-3)]">
+              {q.trim()
+                ? 'Try a person, account, or a phrase from the transcript.'
+                : 'Finish one with End & review and it will land here.'}
+            </div>
           </div>
         ) : (
           <>

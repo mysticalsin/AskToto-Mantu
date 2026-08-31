@@ -21,14 +21,16 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, { error: E
   render(): ReactNode {
     if (this.state.error) {
       return (
-        <div className="mx-auto max-w-xl px-6 py-16 text-center">
-          <p className="text-sm text-rose-300">This view hit an error and couldn&rsquo;t render.</p>
-          <p className="mt-2 break-words text-xs text-white/40 [overflow-wrap:anywhere]">
-            {this.state.error.message}
-          </p>
-          <p className="mt-3 text-xs text-white/50">
-            Switch tabs or reload. The rest of the dashboard is unaffected.
-          </p>
+        <div className="mx-auto max-w-xl px-6 py-16">
+          <div className="intel-glass px-5 py-6 text-center">
+            <p className="text-sm font-medium text-rose-300">This view hit an error and couldn&rsquo;t render.</p>
+            <p className="mt-2 break-words text-xs text-white/40 [overflow-wrap:anywhere]">
+              {this.state.error.message}
+            </p>
+            <p className="mt-3 text-xs text-white/50">
+              Switch tabs or reload. The rest of the dashboard is unaffected.
+            </p>
+          </div>
         </div>
       )
     }

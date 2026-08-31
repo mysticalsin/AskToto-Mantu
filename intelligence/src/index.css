@@ -67,3 +67,28 @@ body {
   content-visibility: auto;
   contain-intrinsic-size: 0 52px;
 }
+
+/* Intelligence liquid glass: same craft as the in-app glance, Mantu tokens only. */
+.intel-glass {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid var(--color-mantu-border);
+  background:
+    linear-gradient(165deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.015) 46%, transparent 70%),
+    var(--color-mantu-surface);
+  box-shadow:
+    0 12px 32px rgba(0, 0, 0, 0.28),
+    0 1px 0 rgba(255, 255, 255, 0.08) inset,
+    0 -12px 24px rgba(0, 0, 0, 0.18) inset;
+}
+.intel-chart-grid {
+  stroke: var(--color-mantu-border);
+}
+.intel-chart-mark {
+  fill: var(--color-mantu-light);
+}
+.intel-chart-track {
+  fill: rgba(255, 255, 255, 0.08);
+}

@@ -64,3 +64,63 @@ motion:
 ## Brand mark
 Métis = five-star constellation-M glyph (own SVG), dots + thin connectors, `text-primary`.
 NOT Cluely's logo. Wordmark "Métis" in Geist medium, tracking-tight.
+
+---
+
+# Mantu Intelligence dashboard (this slice)
+
+Scope: the second-brain surfaces only. Overlay chrome, onboarding, portal, hero video, and PR 58
+island/bar files stay frozen. Settings IA, Brain MCP logo-tap, and ASR are out.
+
+Surfaces in this slice:
+1. **Glance** (`BrainView`) — in-window Intelligence panel over `.brain/`.
+2. **Record** (`BrainRecordPage`) — person / account / deal drill-down.
+3. **History strip** (`RecallView` GraphBar + import meters) — the door into Intelligence.
+4. **Meter** (`WorkProgressMeter`) — truthful index/import progress, shared by glance and History.
+5. **Full window** (`intelligence/`) — the dedicated Mantu Intelligence dashboard.
+
+## Hats
+- **PM** — one logical change: visual + motion. No new IA, no new ingest, no auto-send.
+- **Design** — original Métis copy. Taste of bklit charts, kokonut liquid glass, and motion.dev
+  springs. Not a clone, not a component dump.
+- **UX** — FACTUAL vs PREDICTIVE stays readable. Empty / loading / error are designed states.
+  Status is icon + label + color, never color alone. Never invented percentages.
+- **UI** — tokens only (`--color-ink`, `--color-accent-2`, glass, `--ease-spring`). Single-hue
+  magnitude marks. No purple-gradient slop.
+- **QA** — BrainView / BrainRecordPage / RecallView tests stay green. READY TO MERGE stays no
+  until Devon Mac-shows the glance, the record page, and the full window.
+- **Security** — no new network, no new IPC, no secrets. `motion` is MIT, pinned. bklit is a
+  taste reference only (MIT); we do not vendor their source.
+
+## Chart language (bklit taste, Métis marks)
+Composable plot: Grid → Bar → XAxis → Tooltip. Thin marks, rounded data ends, recessive axes.
+Magnitude is one hue (`--color-accent-2`). Zero columns are a faint track, not a fake value.
+Hover/focus opens a real tooltip (week + meeting count). Selective direct labels stay on the
+busiest week and this week only. Status colors (`success` / mixed amber / `danger`) are reserved
+for state chips that also carry an icon and a label.
+
+## Surfaces (kokonut craft bar)
+Intelligence cards are **liquid glass**, not flat `bg-white/[0.02]` tiles:
+- specular top-left sheen, hairline border, inset rim, soft lift
+- same glass family as the overlay, but a card radius (`--radius-lg`), never a pill bar
+- one accent, white-alpha type, dense chrome
+
+Empty, loading, and error frames keep the page identity (title + standfirst) and say what is
+missing or broken in product words. An empty Attention queue stays a quiet line: good news, not
+a gap.
+
+## Motion (motion.dev)
+Enter: spring, compositor-class (`transform` / `opacity` only). Stagger on first paint, capped.
+Hover lift on tiles is a short spring. No layout animation on polling content (status refresh
+must not re-play the entrance). `prefers-reduced-motion: reduce` snaps to opacity-only or still.
+
+`WorkProgressMeter` stays honest: fill = a real checkpoint. The moving pulse only means "alive".
+Fill is a single mark hue plus a white specular, not a second purple.
+
+## Copy
+Métis voice. No em dashes in user-facing strings. Never identify as AI. Estimates stay marked
+as estimates (time-saved card keeps `≈` and the word "estimate").
+
+## Anti-slop
+No rainbow charts, no invented win-rate percents, no card-in-card-in-card, no emoji UI, no
+default shadcn purple gradient, no template dump from kokonut or bklit.

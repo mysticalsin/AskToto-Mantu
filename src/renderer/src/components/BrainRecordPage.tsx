@@ -193,7 +193,7 @@ function FieldCard<T>({
   }
 
   return (
-    <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
+    <div className="intel-glass px-3 py-2.5">
       <div className="mb-1 flex items-center justify-between gap-2">
         <span className="text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
           {label}
@@ -292,7 +292,7 @@ function MoneyCard({
   )
 
   return (
-    <div className="flex flex-col gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
+    <div className="flex flex-col gap-2 intel-glass px-3 py-2.5">
       <div className="text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">Deal value</div>
       <Row label="Amount" field="amount" mode={amountMode} rawValue={deal.amount?.value} />
       <Row label="Close date" field="close_date" mode={dateMode} rawValue={deal.close_date?.value} />
@@ -385,7 +385,8 @@ export function BrainRecordPage({
 
   if (!entity) {
     return (
-      <div className="flex flex-col items-center gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-4 py-8 text-center text-[12px] text-[color:var(--color-ink-3)]">
+      <div className="intel-glass flex flex-col items-center gap-2 px-4 py-8 text-center text-[12px] text-[color:var(--color-ink-3)]">
+        <div className="text-[13px] font-semibold text-[color:var(--color-ink)]">This record is gone</div>
         This record no longer exists. It may have been merged into another entity.
       </div>
     )
@@ -481,7 +482,7 @@ export function BrainRecordPage({
   return (
     <div className="flex flex-col gap-3">
       {recentMerge && mergeBannerApplies(recentMerge, recordRef) && (
-        <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-[var(--color-accent-soft)] px-3 py-2 text-[12px] text-[color:var(--color-ink-2)]">
+        <div className="flex items-center justify-between gap-2 intel-glass intel-glass--accent px-3 py-2 text-[12px] text-[color:var(--color-ink-2)]">
           <span>
             Merged {recentMerge.fromLabel} into {recentMerge.intoLabel}.
           </span>
@@ -495,7 +496,7 @@ export function BrainRecordPage({
       )}
 
       {/* Header */}
-      <div className="flex flex-col gap-1.5 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-3">
+      <div className="flex flex-col gap-1.5 intel-glass px-3 py-3">
         {renaming ? (
           <div className="flex flex-col gap-1.5">
             <input
@@ -691,7 +692,7 @@ export function BrainRecordPage({
       )}
 
       {/* Same as… merge picker */}
-      <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
+      <div className="intel-glass px-3 py-2.5">
         <div className="mb-1.5 flex items-center justify-between">
           <span className="text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
             Same as…
@@ -757,7 +758,7 @@ export function BrainRecordPage({
 
       {/* Open commitments */}
       {openCommitments.length > 0 && (
-        <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
+        <div className="intel-glass px-3 py-2.5">
           <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
             Open commitments
           </div>
@@ -801,7 +802,7 @@ export function BrainRecordPage({
 
       {/* Meeting timeline */}
       {meetings.length > 0 && (
-        <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
+        <div className="intel-glass px-3 py-2.5">
           <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
             Meetings
           </div>

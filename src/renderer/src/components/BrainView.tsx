@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowLeft,
-  Brain,
   Building2,
   CalendarCheck,
   CalendarClock,
@@ -39,6 +38,17 @@ import { BrainRecordPage, recordKey, sortAttentionItems, type BrainRecordRef, ty
 import { shouldAutoBackfill } from './brain-auto'
 import { brainStatusPollInterval, shouldRefreshAfterBrainStatus } from './brain-status-refresh'
 import { describeMeetingIndexProgress } from './work-progress'
+import {
+  IntelCard,
+  IntelEmpty,
+  IntelError,
+  IntelLoading,
+  IntelSectionTitle,
+  IntelStatTile
+} from './intel/IntelGlass'
+import { SectorBars, WeeklyBars } from './intel/IntelCharts'
+
+export { computeWeeklyBars, type WeeklyBarData } from './intel/IntelCharts'
 
 /**
  * Mantu Intelligence — the second-brain dashboard over the meeting knowledge store (.brain/).
@@ -66,17 +76,6 @@ const VELOCITY_META = {
   'no-hard-date-found': { label: 'No date', color: 'var(--color-ink-3)', Icon: CalendarX }
 } as const
 
-/** ISO-week (Mon-anchored) start for a date, as a ms timestamp. */
-function weekStart(ms: number): number {
-  const d = new Date(ms)
-  d.setHours(0, 0, 0, 0)
-  const day = (d.getDay() + 6) % 7 // Mon=0 … Sun=6
-  d.setDate(d.getDate() - day)
-  return d.getTime()
-}
-
-const WEEKS_SHOWN = 12
-
 /**
  * The honest "time saved" card. Deliberately NOT styled like the measured KPI tiles beside it — it shows
  * an "≈", the word "estimate", and the assumption it rests on, because unlike meeting/people/deal counts
@@ -97,17 +96,17 @@ function TimeSavedCard({
   const saved = timeSavedFromTotals(usageStats, assumptions)
   if (saved.meetings === 0) {
     return (
-      <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3.5 py-3">
+      <IntelCard className="px-3.5 py-3" delay={0.02}>
         <div className="flex items-center gap-2 text-[color:var(--color-ink-3)]">
           <Timer size={14} />
           <span className="text-[12px]">Summarize your first meeting to see the time you save.</span>
         </div>
-      </div>
+      </IntelCard>
     )
   }
   const convHours = Math.round((saved.conversationMinutes / 60) * 10) / 10
   return (
-    <div className="rounded-xl border border-[var(--color-hair-soft)] bg-gradient-to-b from-white/[0.04] to-white/[0.01] px-3.5 py-3">
+    <IntelCard className="px-3.5 py-3" delay={0.02}>
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-wide text-[color:var(--color-ink-3)]">
@@ -135,26 +134,7 @@ function TimeSavedCard({
           Adjust estimate <ChevronRight size={11} className="ml-0.5 inline align-middle" />
         </button>
       </div>
-    </div>
-  )
-}
-
-function StatTile({ value, label }: { value: number | string; label: string }): JSX.Element {
-  return (
-    <div className="flex min-w-0 flex-1 flex-col items-center gap-0.5 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-2 py-2.5">
-      <div className="font-ui text-[20px] font-semibold leading-none tracking-tight text-[color:var(--color-ink)]">
-        {value}
-      </div>
-      <div className="text-[10px] font-medium uppercase tracking-wide text-[color:var(--color-ink-3)]">{label}</div>
-    </div>
-  )
-}
-
-function SectionTitle({ children }: { children: React.ReactNode }): JSX.Element {
-  return (
-    <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
-      {children}
-    </div>
+    </IntelCard>
   )
 }
 
@@ -178,127 +158,6 @@ function Chip({
       <Icon size={11} strokeWidth={2.2} />
       {label}
     </span>
-  )
-}
-
-export interface WeeklyBarData {
-  weeks: { w: number; n: number }[]
-  max: number
-  maxIdx: number
-}
-
-/**
- * The WEEKS_SHOWN meetings-per-week columns (oldest first), the bar scale, and the busiest column.
- * Pure and `now`-injected so the bucketing is testable across a DST boundary. Exported for unit testing.
- */
-export function computeWeeklyBars(meetings: MeetingSummary[], now: number): WeeklyBarData {
-  // Step back seven CALENDAR days at a time instead of subtracting 7*24h: `weekStart` returns local
-  // Monday midnights, and consecutive local Monday midnights are 7d ± 1h apart across a DST
-  // transition. Fixed-millisecond columns therefore miss every bucket key on the far side of a
-  // transition (bars read zero) and, going into spring-forward, land on Sunday 23:00 — mislabelling
-  // the axis too. `setDate` preserves the wall-clock fields, so each column stays a real Monday 00:00.
-  const columns: number[] = []
-  const cursor = new Date(weekStart(now))
-  for (let i = 0; i < WEEKS_SHOWN; i++) {
-    columns.unshift(cursor.getTime())
-    cursor.setDate(cursor.getDate() - 7)
-  }
-  const counts = new Map<number, number>()
-  for (const m of meetings) {
-    const ms = Date.parse(m.date)
-    if (isNaN(ms)) continue
-    const w = weekStart(ms)
-    counts.set(w, (counts.get(w) || 0) + 1)
-  }
-  // No range guard needed: a bucket outside the 12 columns is simply never read.
-  const weeks = columns.map((w) => ({ w, n: counts.get(w) || 0 }))
-  const max = Math.max(1, ...weeks.map((x) => x.n))
-  const maxIdx = weeks.reduce((best, x, i) => (x.n > weeks[best].n ? i : best), 0)
-  return { weeks, max, maxIdx }
-}
-
-/** Meetings-per-week bars: single hue, thin marks, rounded data ends, native tooltips per bar. */
-function WeeklyBars({ meetings }: { meetings: MeetingSummary[] }): JSX.Element {
-  const { weeks, max, maxIdx } = useMemo(() => computeWeeklyBars(meetings, Date.now()), [meetings])
-
-  const W = 480
-  const H = 64
-  const gap = 6
-  const bw = (W - gap * (WEEKS_SHOWN - 1)) / WEEKS_SHOWN
-  const fmt = (w: number): string =>
-    new Date(w).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-
-  return (
-    <div>
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        preserveAspectRatio="none"
-        className="block h-[64px] w-full"
-        role="img"
-        aria-label="Meetings per week"
-      >
-        {weeks.map(({ w, n }, i) => {
-          const h = n === 0 ? 2 : Math.max(4, (n / max) * (H - 14))
-          const x = i * (bw + gap)
-          return (
-            <g key={w}>
-              <rect
-                x={x}
-                y={H - h}
-                width={bw}
-                height={h}
-                rx={n === 0 ? 1 : 4}
-                fill={n === 0 ? 'rgba(255,255,255,0.08)' : 'var(--color-accent-2)'}
-              >
-                <title>{`Week of ${fmt(w)}: ${n} meeting${n === 1 ? '' : 's'}`}</title>
-              </rect>
-              {/* Selective direct labels: only the busiest week and the current week carry a number. */}
-              {n > 0 && (i === maxIdx || i === WEEKS_SHOWN - 1) && (
-                <text
-                  x={x + bw / 2}
-                  y={H - h - 4}
-                  textAnchor="middle"
-                  className="fill-[color:var(--color-ink-2)]"
-                  fontSize={10}
-                  fontWeight={600}
-                >
-                  {n}
-                </text>
-              )}
-            </g>
-          )
-        })}
-      </svg>
-      <div className="mt-0.5 flex justify-between text-[9px] text-[color:var(--color-ink-3)]">
-        <span>{fmt(weeks[0].w)}</span>
-        <span>this week</span>
-      </div>
-    </div>
-  )
-}
-
-/** Horizontal magnitude bars (accounts per sector) — label left, single-hue track, count right. */
-function SectorBars({ sectors }: { sectors: { sector: string; n: number }[] }): JSX.Element {
-  const max = Math.max(1, ...sectors.map((s) => s.n))
-  return (
-    <div className="flex flex-col gap-1.5">
-      {sectors.map(({ sector, n }) => (
-        <div key={sector} className="flex items-center gap-2" title={`${sector}: ${n} account${n === 1 ? '' : 's'}`}>
-          <div className="w-32 shrink-0 truncate text-right text-[11px] capitalize text-[color:var(--color-ink-3)]">
-            {sector.replace(/-/g, ' ')}
-          </div>
-          <div className="h-[6px] min-w-[24px] flex-1 overflow-hidden rounded-full bg-white/[0.05]">
-            <div
-              className="h-full rounded-full bg-[var(--color-accent-2)]"
-              style={{ width: `${(n / max) * 100}%` }}
-            />
-          </div>
-          <div className="min-w-[1.25rem] shrink-0 text-right text-[11px] font-semibold text-[color:var(--color-ink-2)]">
-            {n}
-          </div>
-        </div>
-      ))}
-    </div>
   )
 }
 
@@ -328,7 +187,7 @@ function DealRow({
   }, [closed])
   return (
     <div
-      className={`flex flex-col gap-1 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2 ${closed ? 'opacity-60' : ''}`}
+      className={`flex flex-col gap-1 intel-glass px-3 py-2 ${closed ? 'opacity-60' : ''}`}
     >
       <div className="flex items-center gap-2">
         <div className="min-w-0 flex-1 truncate text-[13px] font-semibold text-[color:var(--color-ink)]">
@@ -803,15 +662,11 @@ export function BrainView({
         </button>
       </div>
 
-      {error && (
-        <div className="rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] text-[var(--color-danger)]">
-          {error}
-        </div>
-      )}
+      {error && <IntelError compact body={error} />}
 
       {durableFailed > 0 && !bf?.running && (
         <div
-          className="rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-2 text-[11px] text-[var(--color-danger)]"
+          className="intel-glass intel-glass--danger px-3 py-2 text-[11px] text-[var(--color-danger)]"
           role="alert"
         >
           <div className="flex items-center justify-between gap-2">
@@ -819,7 +674,7 @@ export function BrainView({
               <AlertTriangle size={13} className="shrink-0" />
               <span>
                 {topError
-                  ? `Your AI provider is failing: ${topError} — check Settings → AI`
+                  ? `Your AI provider is failing: ${topError}. Check Settings → AI`
                   : indexProgress?.label ?? 'Some meetings need attention.'}
               </span>
             </div>
@@ -861,9 +716,7 @@ export function BrainView({
       )}
 
       {loading && !data ? (
-        <div className="flex items-center justify-center gap-2 py-10 text-[12px] text-[color:var(--color-ink-3)]">
-          <Spinner size={14} /> Reading the brain…
-        </div>
+        <IntelLoading />
       ) : record && data ? (
         <BrainRecordPage
           // Force a genuine remount on every record change (incl. direct record→record transitions:
@@ -885,38 +738,33 @@ export function BrainView({
         />
       ) : ingested === 0 && !bf?.running && !live?.running ? (
         /* Empty state — the brain has not ingested anything yet. */
-        <div className="flex flex-col items-center gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-6 py-8 text-center">
-          <Brain size={28} className="text-[color:var(--color-accent-2)]" />
-          <div className="text-[13px] font-semibold text-[color:var(--color-ink)]">
-            Build your intelligence from {meetings.length > 0 ? `${meetings.length} saved meeting${meetings.length === 1 ? '' : 's'}` : 'your meetings'}
-          </div>
-          <div className="max-w-[380px] text-[12px] leading-snug text-[color:var(--color-ink-3)]">
-            Métis extracts people, accounts, deals, and win/loss signals from every saved transcript into a
-            knowledge store your Dust agents can read. New meetings are ingested automatically, and existing
-            saved meetings start indexing when Mantu Intelligence opens.
-          </div>
-          <button
-            type="button"
-            onClick={() => void startBackfill()}
-            disabled={backfilling || meetings.length === 0 || !canIndex}
-            className="no-drag focus-ring rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-[12px] font-semibold text-white hover:bg-[var(--color-accent-2)] disabled:opacity-50"
-          >
-            {backfilling ? 'Starting…' : 'Ingest my meetings'}
-          </button>
-          {/* canIndex ORs in localFallbackReady — a local-only setup already indexes fine, so this must
-              only claim "no provider" when NEITHER a cloud provider NOR the local safety net is live. */}
-          {!canIndex && meetings.length > 0 && (
-            <div className="flex flex-col items-center gap-0.5 text-[11px] text-[color:var(--color-ink-3)]">
-              <span>Connect an AI provider in Settings to build your intelligence.</span>
-              {onOpenSettings && <TextButton onClick={onOpenSettings}>Open Settings</TextButton>}
-            </div>
-          )}
-        </div>
+        <IntelEmpty
+          title={`Build your intelligence from ${meetings.length > 0 ? `${meetings.length} saved meeting${meetings.length === 1 ? '' : 's'}` : 'your meetings'}`}
+          body="Métis extracts people, accounts, deals, and win/loss signals from every saved transcript into a knowledge store your Dust agents can read. New meetings are ingested automatically, and existing saved meetings start indexing when Mantu Intelligence opens."
+          action={
+            <>
+              <button
+                type="button"
+                onClick={() => void startBackfill()}
+                disabled={backfilling || meetings.length === 0 || !canIndex}
+                className="no-drag focus-ring rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-[12px] font-semibold text-white hover:bg-[var(--color-accent-2)] disabled:opacity-50"
+              >
+                {backfilling ? 'Starting…' : 'Ingest my meetings'}
+              </button>
+              {!canIndex && meetings.length > 0 && (
+                <div className="flex flex-col items-center gap-0.5 text-[11px] text-[color:var(--color-ink-3)]">
+                  <span>Connect an AI provider in Settings to build your intelligence.</span>
+                  {onOpenSettings && <TextButton onClick={onOpenSettings}>Open Settings</TextButton>}
+                </div>
+              )}
+            </>
+          }
+        />
       ) : (
         <>
           {/* Backfill progress + drift note */}
           {bf?.running ? (
-            <div className="rounded-xl border border-[var(--color-hair-soft)] bg-[var(--color-accent-soft)] px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
+            <div className="intel-glass intel-glass--accent px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
               <div className="flex items-center gap-2">
                 <Spinner size={12} />
                 <span aria-atomic="true" aria-live="polite">{indexProgress?.label ?? 'Mapping meetings…'}</span>
@@ -930,7 +778,7 @@ export function BrainView({
               />
             </div>
           ) : live?.running ? (
-            <div className="rounded-xl border border-[var(--color-hair-soft)] bg-[var(--color-accent-soft)] px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
+            <div className="intel-glass intel-glass--accent px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
               <div className="flex items-center gap-2">
                 <Spinner size={12} />
                 <span aria-atomic="true" aria-live="polite">
@@ -939,7 +787,7 @@ export function BrainView({
               </div>
             </div>
           ) : notIngested > 0 ? (
-            <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-1.5 text-[11px] text-[color:var(--color-ink-3)]">
+            <div className="flex items-center justify-between gap-2 intel-glass px-3 py-1.5 text-[11px] text-[color:var(--color-ink-3)]">
               <span>
                 {notIngested} saved meeting{notIngested === 1 ? '' : 's'} not in the brain yet.
                 {!canIndex && ' Connect an AI provider in Settings to ingest them.'}
@@ -968,11 +816,11 @@ export function BrainView({
 
           {/* FACTUAL — KPI tiles */}
           <div className="flex gap-2">
-            <StatTile value={ingested} label="Meetings" />
-            <StatTile value={status?.people ?? 0} label="People" />
-            <StatTile value={status?.accounts ?? 0} label="Accounts" />
-            <StatTile value={status?.deals ?? 0} label="Deals" />
-            <StatTile value={status?.edges ?? 0} label="Connections" />
+            <IntelStatTile value={ingested} label="Meetings" delay={0.04} />
+            <IntelStatTile value={status?.people ?? 0} label="People" delay={0.06} />
+            <IntelStatTile value={status?.accounts ?? 0} label="Accounts" delay={0.08} />
+            <IntelStatTile value={status?.deals ?? 0} label="Deals" delay={0.1} />
+            <IntelStatTile value={status?.edges ?? 0} label="Connections" delay={0.12} />
           </div>
 
           {/* Ingested, but nothing extracted — explain the 0/0/0 instead of leaving bare zeros that read
@@ -982,7 +830,7 @@ export function BrainView({
             (status?.people ?? 0) === 0 &&
             (status?.accounts ?? 0) === 0 &&
             (status?.deals ?? 0) === 0 && (
-              <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5 text-[12px] leading-snug text-[color:var(--color-ink-3)]">
+              <div className="intel-glass px-3 py-2.5 text-[12px] leading-snug text-[color:var(--color-ink-3)]">
                 Meetings are ingested, but no people, accounts, or deals were extracted yet. Usually the
                 transcripts are short or don&rsquo;t name clients. Longer, client-facing meetings will fill this in.
               </div>
@@ -1005,7 +853,7 @@ export function BrainView({
             {attention.length === 0 ? (
               <div className="text-[12px] text-[color:var(--color-ink-3)]">Nothing needs a look right now.</div>
             ) : (
-              <div className="flex flex-col gap-1 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
+              <div className="flex flex-col gap-1 intel-glass px-3 py-2.5">
                 {sortAttentionItems(attention)
                   .slice(0, 8)
                   .map((item, i) => (
@@ -1034,17 +882,17 @@ export function BrainView({
           </div>
 
           {/* FACTUAL — volume + sectors */}
-          <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
-            <SectionTitle>Meetings per week</SectionTitle>
+          <div className="intel-glass px-3 py-2.5">
+            <IntelSectionTitle>Meetings per week</IntelSectionTitle>
             <WeeklyBars meetings={meetings} />
           </div>
 
           {sectors.length > 0 && (
-            <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
-              <SectionTitle>
+            <div className="intel-glass px-3 py-2.5">
+              <IntelSectionTitle>
                 <Building2 size={11} className="mr-1 inline" />
                 Accounts by sector
-              </SectionTitle>
+              </IntelSectionTitle>
               <SectorBars sectors={sectors} />
             </div>
           )}
@@ -1055,12 +903,12 @@ export function BrainView({
             <div
               ref={openPromisesRef}
               tabIndex={-1}
-              className="focus-ring rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5"
+              className="focus-ring intel-glass px-3 py-2.5"
             >
-              <SectionTitle>
+              <IntelSectionTitle>
                 <CalendarCheck size={11} className="mr-1 inline" />
                 Open promises
-              </SectionTitle>
+              </IntelSectionTitle>
               <div className="flex flex-col gap-1">
                 {openPromises.map((c) => {
                   const days = c.date ? Math.max(0, Math.floor((Date.now() - Date.parse(c.date)) / 86400000)) : null
@@ -1138,12 +986,12 @@ export function BrainView({
 
           {/* MARS WEEK — the weekly-report section: this week's facts, ready to file. */}
           {mars.meetings.length > 0 && (
-            <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
+            <div className="intel-glass px-3 py-2.5">
               <div className="mb-1.5 flex items-center justify-between">
-                <SectionTitle>
+                <IntelSectionTitle>
                   <ClipboardList size={11} className="mr-1 inline" />
                   Mars week: {mars.weekStart} → {mars.weekEnd}
-                </SectionTitle>
+                </IntelSectionTitle>
                 <button
                   type="button"
                   onClick={() => {
@@ -1243,11 +1091,11 @@ export function BrainView({
 
           {/* SILENCE DETECTOR — accounts going quiet: dropped themes, vanished champions, cooling, dark */}
           {silence.length > 0 && (
-            <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
-              <SectionTitle>
+            <div className="intel-glass px-3 py-2.5">
+              <IntelSectionTitle>
                 <VolumeX size={11} className="mr-1 inline" />
                 Going quiet: what accounts stopped saying
-              </SectionTitle>
+              </IntelSectionTitle>
               <div className="flex flex-col gap-1.5">
                 {silence.map((s) => (
                   <div key={s.account} className="text-[12px]">
@@ -1299,7 +1147,7 @@ export function BrainView({
           {/* PREDICTIVE — opportunities */}
           {deals.length > 0 && (
             <div>
-              <SectionTitle>Opportunities: win read &amp; momentum</SectionTitle>
+              <IntelSectionTitle>Opportunities: win read &amp; momentum</IntelSectionTitle>
               <div className="flex flex-col gap-1.5">
                 {deals.map((d) => (
                   <DealRow
@@ -1316,11 +1164,11 @@ export function BrainView({
 
           {/* FACTUAL — people */}
           {people.length > 0 && (
-            <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
-              <SectionTitle>
+            <div className="intel-glass px-3 py-2.5">
+              <IntelSectionTitle>
                 <Users size={11} className="mr-1 inline" />
                 People you meet
-              </SectionTitle>
+              </IntelSectionTitle>
               <div className="flex flex-col gap-1">
                 {people.map((p) => (
                   <div key={p.name} className="flex items-center gap-2 text-[12px]">
@@ -1374,11 +1222,11 @@ export function BrainView({
               lint slice). The replay-failure warning string is filtered out of the lint list below to
               avoid duplication. */}
           {(status?.corruptionBlocked || data?.index.replayError) && (
-            <div className="rounded-xl border border-[var(--color-danger)]/40 bg-[var(--color-danger)]/10 px-3 py-2.5">
-              <SectionTitle>
+            <div className="intel-glass intel-glass--danger px-3 py-2.5">
+              <IntelSectionTitle>
                 <AlertTriangle size={11} className="mr-1 inline" />
                 Corrections paused
-              </SectionTitle>
+              </IntelSectionTitle>
               <div className="text-[11px] text-[color:var(--color-ink-2)]">
                 {data?.index.replayError
                   ? `A rebuild could not re-apply your saved corrections: ${data.index.replayError}`
@@ -1400,8 +1248,8 @@ export function BrainView({
               attributed to it inside entity files wait on the next source refresh (needs a usable
               provider). Say so — a silent wait reads as a completed delete. */}
           {status?.cleanupPending && (
-            <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
-              Cleanup after a deleted meeting is pending — references to it are removed automatically the
+            <div className="intel-glass px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
+              Cleanup after a deleted meeting is pending. References to it are removed automatically the
               next time indexing runs.
             </div>
           )}
@@ -1411,11 +1259,11 @@ export function BrainView({
           {(() => {
             const lint = (data?.index.warnings ?? []).filter((w) => !w.includes('re-apply your saved corrections'))
             return lint.length > 0 ? (
-              <div className="rounded-xl border border-[var(--color-danger)]/20 bg-[var(--color-danger)]/5 px-3 py-2">
-                <SectionTitle>
+              <div className="intel-glass intel-glass--danger px-3 py-2">
+                <IntelSectionTitle>
                   <AlertTriangle size={11} className="mr-1 inline" />
                   Needs a human read
-                </SectionTitle>
+                </IntelSectionTitle>
                 <ul className="flex list-disc flex-col gap-0.5 pl-4 text-[11px] text-[color:var(--color-ink-3)]">
                   {lint.slice(0, 5).map((w, i) => (
                     <li key={i}>{w}</li>
@@ -1436,7 +1284,7 @@ export function BrainView({
                   else onDashboardOpen?.()
                 })
             }}
-            className="no-drag focus-ring flex items-center justify-center gap-1.5 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2 text-[11px] font-semibold text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink)]"
+            className="no-drag focus-ring flex items-center justify-center gap-1.5 intel-glass px-3 py-2 text-[11px] font-semibold text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink)]"
           >
             <ExternalLink size={12} /> Open the full Mantu Intelligence dashboard
           </button>

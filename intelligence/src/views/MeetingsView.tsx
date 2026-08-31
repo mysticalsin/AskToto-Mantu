@@ -4,6 +4,7 @@ import type { DashboardData, MeetingFeedRow } from '../types/data'
 import { bandColor, bandLabel } from '../lib/format'
 import { meetingsPerWeek } from '../lib/momentum'
 import { slug } from '../lib/slug'
+import { WeeklyBars } from '../components/charts'
 
 interface Props {
   data: DashboardData
@@ -47,45 +48,21 @@ export function MeetingsView({ data }: Props) {
         {density.undated > 0 ? `, ${density.undated} undated (excluded from the cadence strip below)` : ''}.
       </p>
 
-      <div className="mt-6 rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-4">
+      <div className="intel-glass mt-6 p-4">
         <div className="mb-2 flex items-center justify-between text-[11px] uppercase tracking-wide text-white/40">
           <span>Meeting cadence: last 12 weeks</span>
           {maxCount > 0 && <span className="text-white/30">peak {maxCount}/wk</span>}
         </div>
         {meetings.length === 0 ? (
-          <p className="text-xs italic text-white/30">No meetings ingested yet.</p>
+          <p className="text-xs text-white/40">No meetings ingested yet.</p>
         ) : (
-          <div className="overflow-x-auto">
-            <svg viewBox="0 0 360 40" width="100%" height="40" preserveAspectRatio="none" className="min-w-[360px]">
-              {density.buckets.map((b, i) => {
-                const barW = 360 / density.buckets.length
-                const h = maxCount > 0 ? (b.count / maxCount) * 32 : 0
-                return (
-                  <rect
-                    key={b.weekStartISO}
-                    x={i * barW + barW * 0.15}
-                    y={36 - h}
-                    width={barW * 0.7}
-                    height={b.count > 0 ? Math.max(h, 2) : 0.5}
-                    fill="var(--color-mantu-light)"
-                    opacity={b.count > 0 ? 0.9 : 0.2}
-                  >
-                    <title>{`Week of ${b.weekStartISO}: ${b.count} meeting${b.count === 1 ? '' : 's'}`}</title>
-                  </rect>
-                )
-              })}
-            </svg>
-            <div className="mt-1 flex justify-between text-[10px] text-white/25">
-              <span>{humanizeDate(density.buckets[0].weekStartISO)}</span>
-              <span>now</span>
-            </div>
-          </div>
+          <WeeklyBars buckets={density.buckets} />
         )}
       </div>
 
       <div className="mt-6 space-y-2">
         {meetings.length === 0 ? (
-          <p className="rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-6 text-center text-sm text-white/30">
+          <p className="intel-glass p-6 text-center text-sm text-white/40">
             No meetings ingested yet.
           </p>
         ) : (

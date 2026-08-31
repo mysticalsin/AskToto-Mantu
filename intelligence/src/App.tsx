@@ -21,18 +21,27 @@ const GraphView = lazy(() => import('./views/GraphView').then((m) => ({ default:
 function LoadingOrError({ loading, error }: { loading: boolean; error: string | null }) {
   if (loading) {
     return (
-      <div className="flex h-64 items-center justify-center text-sm text-white/40">
-        Loading dashboard data…
+      <div className="mx-auto max-w-7xl px-6 py-16">
+        <div className="text-sm text-white/50">Opening Mantu Intelligence…</div>
+        <div className="mt-6 grid grid-cols-2 gap-4 md:grid-cols-4">
+          {Array.from({ length: 4 }, (_, i) => (
+            <div key={i} className="intel-glass h-24 animate-pulse" />
+          ))}
+        </div>
+        <div className="intel-glass mt-4 h-40 animate-pulse" />
       </div>
     )
   }
   if (error) {
     return (
-      <div className="mx-auto max-w-xl px-6 py-16 text-center">
+      <div className="mx-auto max-w-xl px-6 py-16">
         {/* The messages thrown upstream already name their own source (a data.json status, a dead
             brain bridge). Prefixing every one with "Failed to load data.json" told a user inside
-            Métis — where data.json is never read — to go fix a file that is not involved. */}
-        <p className="text-sm text-rose-300">{error}</p>
+            Métis, where data.json is never read, to go fix a file that is not involved. */}
+        <div className="intel-glass px-5 py-6 text-center">
+          <p className="text-sm font-medium text-rose-300">Intelligence could not load</p>
+          <p className="mt-2 text-sm text-white/60">{error}</p>
+        </div>
       </div>
     )
   }

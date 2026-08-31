@@ -358,7 +358,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function Card({ children }: { children: React.ReactNode }) {
   return (
-    <div className="rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5">
+    <div className="intel-glass p-5">
       {children}
     </div>
   )

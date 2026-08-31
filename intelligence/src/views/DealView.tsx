@@ -144,7 +144,7 @@ export function DealView({ data }: Props) {
       return (
         <div className="mx-auto max-w-7xl px-6 py-8">
           <h1 className="text-2xl font-semibold text-white/95">Deal breakdown</h1>
-          <div className="mt-6 rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-6 text-sm text-white/60">
+          <div className="mt-6 intel-glass p-6 text-sm text-white/60">
             No deal named &ldquo;{bidParam}&rdquo;. It may have been renamed or merged. {' '}
             <button
               onClick={() => selectDeal(data.deals[0].bid_id)}
@@ -223,7 +223,7 @@ export function DealView({ data }: Props) {
           className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-3"
         >
           <div className="lg:col-span-1 space-y-4">
-            <div className="rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5">
+            <div className="intel-glass p-5">
               <h2 className="text-lg font-semibold text-white/90">{deal.display_name}</h2>
               <dl className="mt-3 space-y-2 text-sm">
                 <Row
@@ -307,14 +307,14 @@ export function DealView({ data }: Props) {
               </dl>
             </div>
 
-            <div className="rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5">
+            <div className="intel-glass p-5">
               <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-white/60">
                 Meeting history
               </h3>
               <Timeline meetings={deal.meetings ?? []} emptyText="No meetings mapped to this deal yet." />
             </div>
 
-            <div className="rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5">
+            <div className="intel-glass p-5">
               <div className="mb-3 flex items-baseline justify-between">
                 <h3 className="text-sm font-semibold uppercase tracking-wide text-white/60">
                   Commitments
@@ -371,7 +371,7 @@ export function DealView({ data }: Props) {
               </div>
             </div>
 
-            <div className="rounded-xl border border-[var(--color-mantu-border)] bg-[var(--color-mantu-surface)] p-5">
+            <div className="intel-glass p-5">
               <h3 className="mb-3 text-sm font-semibold uppercase tracking-wide text-white/60">
                 Call-grade timeline
               </h3>
