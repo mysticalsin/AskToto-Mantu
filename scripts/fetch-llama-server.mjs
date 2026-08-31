@@ -244,12 +244,14 @@ function findDirContaining(root, filename, depth = 3) {
  *  absolute System32 bsdtar, which has zlib linked in and needs no external filter process.
  *  macOS/Linux keep the system `tar`, which auto-detects both containers from an -xf invocation. */
 export function extractArchive(archivePath, destDir) {
-  if (process.platform !== 'win32') {
-    execFileSync('tar', ['-xf', archivePath, '-C', destDir], { stdio: 'inherit' })
-    return
-  }
+  // GNU tar on Linux does not auto-detect zip. bsdtar on macOS does. Win zips
+  // must inflate in-process on every host so a Linux cross-build can provision them.
   if (archivePath.toLowerCase().endsWith('.zip')) {
     extractZip(archivePath, destDir)
+    return
+  }
+  if (process.platform !== 'win32') {
+    execFileSync('tar', ['-xf', archivePath, '-C', destDir], { stdio: 'inherit' })
     return
   }
   execFileSync(WINDOWS_SYSTEM_TAR, ['-xf', archivePath, '-C', destDir], { stdio: 'inherit' })
