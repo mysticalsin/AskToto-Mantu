@@ -100,7 +100,10 @@ const BOTTOM_RESERVE_PX = 48
  *  this module stays the single source of the reserve constant while index.ts keeps owning its own named
  *  floor. */
 export function clampHeight(height: number, areaHeight: number, minHeight: number): number {
-  return Math.max(minHeight, Math.min(height, areaHeight - BOTTOM_RESERVE_PX))
+  // Hide park is OVERLAY_HIDE_PARK (2px). BAR_MIN_HEIGHT 44 must not grow it into a
+  // visible sliver after a display move (Tony live: 8×44 at Y=39 on the second display).
+  const floor = height <= OVERLAY_HIDE_PARK.height ? height : minHeight
+  return Math.max(floor, Math.min(height, areaHeight - BOTTOM_RESERVE_PX))
 }
 
 /** True if, positioned at (x, y), at least `margin` px of the window overlaps the work area of at least

@@ -299,6 +299,19 @@ describe('MQA-275 — clamp primitives (moved verbatim from index.ts)', () => {
     expect(clampHeight(500, 1000, 44)).toBe(500)
   })
 
+  it('does not grow a hide hairline to BAR_MIN_HEIGHT 44 on a display move', () => {
+    expect(OVERLAY_HIDE_PARK.height).toBeLessThanOrEqual(8)
+    expect(clampHeight(OVERLAY_HIDE_PARK.height, 1080, 44)).toBe(OVERLAY_HIDE_PARK.height)
+    expect(clampHeight(2, 943, 44)).toBe(2)
+    expect(clampHeight(2, 943, 44)).toBeLessThanOrEqual(8)
+    expect(clampHeight(10, 1080, 44)).toBe(44)
+    const second: Rect = { x: 1800, y: 39, width: 1920, height: 1041 }
+    const moved = refitToDisplay({ x: 2761, y: 39, width: 8, height: 2 }, 2, second, 1, 44, 40)
+    expect(moved.height).toBe(2)
+    expect(moved.height).toBeLessThanOrEqual(8)
+    expect(moved.width).toBe(8)
+  })
+
   it('slideWithinMargin keeps a tall window inside the work area with margin on both edges', () => {
     const y = slideWithinMargin(-100, 400, RETINA_WORK_AREA, 8)
     expect(y).toBe(RETINA_WORK_AREA.y + 8)
