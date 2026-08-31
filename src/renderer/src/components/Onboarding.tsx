@@ -673,7 +673,9 @@ export function Onboarding({
       await connectDust({
         select: () => choose('dust'),
         importCli: () => window.toto.dustImportCli(),
-        setupCli: () => void window.toto.dustLoginBegin(),
+        setupCli: () => {
+          void window.toto.dustInstallCli().then(() => window.toto.dustLoginBegin())
+        },
         // Re-patching the provider we just set is the renderer's only way to pull main's post-import
         // snapshot (setSettings answers with it) — settings are otherwise refetched on window 'focus'
         // alone, which this path never triggers.

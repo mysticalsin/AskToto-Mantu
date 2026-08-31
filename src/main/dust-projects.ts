@@ -26,12 +26,13 @@ export function matchDataAndAiProjects(projects: readonly DustProject[]): DustPr
 export const DEVON_SPOTLIGHT_REF_MAC_PATH = [
   'Totos-Mac: open Métis.',
   'Settings (gear) → AI.',
-  'Dust card: confirm the workspace is the one that hosts Spotlight Ref (managed agent GOr913Zr5V). If the agent name/sId shows, Dust is on that workspace — do not reconnect to a different one.',
+  'Dust card: Set up Dust automatically — this installs the managed Dust CLI into userData/managed-cli/dust, then signs in. Confirm the workspace hosts Spotlight Ref (GOr913Zr5V). Do not treat a REST view:list omission as a reason to reconnect.',
   'CLI Integration: Connect Claude Code. Expect Connected, or "Signed in. Weekly usage limit reached" — never "not connected" for a weekly cap. Never auto-send a prompt.',
   'CLI Integration: Connect Codex. Expect Connected (codex login status = Logged in using ChatGPT). If it fails while the terminal says logged in, that is a Métis probe bug.',
   'Close Settings. Click Spotlight Ref on the bar.',
   'Ask: Data and AI projects.',
-  'Record the project / space / data-source names the agent returns. Do not invent a list.'
+  'Métis must spawn managed dust chat --sId GOr913Zr5V -m … (never --with-tools). Record the project names the CLI agent returns. Do not invent a list.',
+  'READY TO MERGE stays no until this Mac-show through the installed Dust CLI.'
 ].join('\n')
 
 type FetchLike = (input: string, init?: { headers?: Record<string, string> }) => Promise<{

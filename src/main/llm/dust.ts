@@ -10,6 +10,8 @@ import { attachScreenshot, type DustFileContentFragment } from './dust-attachmen
 import { redactSecrets } from '@shared/redact'
 import { dustAgentUnavailableMessage } from '@shared/quick-actions'
 import { DUST_SPOTLIGHT_REF_AGENT_ID } from '@shared/ipc'
+import { runManagedDustChat, projectNameForDataAndAiAsk } from '../dust-cli-chat'
+import { fetchDustProjects, matchDataAndAiProjects } from '../dust-projects'
 
 /**
  * Logger for the @dust-tt/client. It logs several EXPECTED, already-handled conditions straight to
@@ -243,6 +245,59 @@ export function streamDust(opts: StreamOptions): StreamHandle {
     fail('Timed out — no response from the agent.')
     controller.abort()
   }, opts.idleMs)
+
+  // Spotlight Ref is a CLI call (managed `dust chat --sId GOr913Zr5V -m …`), not the REST picker.
+  if (opts.model === DUST_SPOTLIGHT_REF_AGENT_ID) {
+    void (async () => {
+      try {
+        const prompt = userText(opts.req)
+        let projectName: string | undefined
+        try {
+          const projects = await fetchDustProjects({
+            apiKey: opts.apiKey,
+            workspaceId: opts.workspaceId || '',
+            baseUrl: opts.baseURL
+          })
+          if (projects.ok) {
+            projectName = projectNameForDataAndAiAsk(
+              prompt,
+              matchDataAndAiProjects(projects.projects).map((p) => p.name)
+            )
+          }
+        } catch {
+          /* --projectName is optional; never invent a name */
+        }
+        const r = await runManagedDustChat({
+          message: prompt,
+          apiKey: opts.apiKey,
+          workspaceId: opts.workspaceId || '',
+          baseUrl: opts.baseURL,
+          projectName
+        })
+        if (controller.signal.aborted || settled) return
+        if (!r.ok) {
+          fail(r.error)
+          return
+        }
+        gotToken = true
+        wd.ping()
+        opts.handlers.onDelta(r.text)
+        if (!settled) {
+          settled = true
+          wd.clear()
+          opts.handlers.onDone({})
+        }
+      } catch (e) {
+        fail(errMsg(e))
+      }
+    })()
+    return {
+      abort: () => {
+        wd.clear()
+        controller.abort()
+      }
+    }
+  }
   // Dust agents run with their own instructions and never receive opts.system. So fold EVERYTHING
   // the user configured (mode prompt, profile, imported context documents, and the anti-injection
   // guard) into the message itself — otherwise the model ignores what they sent.

@@ -3363,9 +3363,8 @@ function DustSetup({
     msg: null,
     ok: false
   })
-  // Native OAuth sign-in state machine (main/dust-oauth.ts) — no CLI, no system Node.js. 'waiting' polls
-  // dustLoginPoll every intervalSec until the user finishes the browser consent; 'picking' shows the
-  // returned workspace list; 'polling' here means "finishing with the chosen workspace", not device polling.
+  // Native OAuth sign-in after the managed Dust CLI is installed. 'starting' covers CLI install +
+  // device-code mint. 'waiting' polls dustLoginPoll until the browser consent finishes.
   type DustOAuthPhase = 'idle' | 'starting' | 'waiting' | 'picking' | 'finishing' | 'error'
   const [oauth, setOauth] = useState<{
     phase: DustOAuthPhase
@@ -3422,7 +3421,7 @@ function DustSetup({
 
   // Import an existing `dust login` CLI session (token + workspace + region) from the keychain — the
   // migration path for a user who already has the CLI installed. The primary path is startDustOAuth below,
-  // which needs neither the CLI nor system Node.js.
+  // which installs the managed Dust CLI then signs in (native OAuth). No system Node.js.
   const connectCli = async (): Promise<void> => {
     setCli({ busy: true, msg: null, ok: false })
     const r = await window.toto.dustImportCli()
@@ -3478,6 +3477,15 @@ function DustSetup({
   // Step 1: mint a device code, open the browser consent page. Step 2 (polling) is the effect below.
   const startDustOAuth = async (): Promise<void> => {
     setOauth({ ...oauthIdle, phase: 'starting' })
+    const installed = await window.toto.dustInstallCli()
+    if (!installed.ok) {
+      setOauth({
+        ...oauthIdle,
+        phase: 'error',
+        error: installed.error || 'Could not install the Dust CLI.'
+      })
+      return
+    }
     const r = await window.toto.dustLoginBegin()
     // The device code deliberately never reaches the renderer — main keeps it and polls with its own
     // copy (see the dustLoginBegin handler). The user code is what this screen actually needs.
@@ -3758,8 +3766,8 @@ function DustSetup({
       icon={Link2}
     >
       <div className="flex flex-col gap-4">
-        {/* PRIMARY — native OAuth sign-in (main/dust-oauth.ts): no CLI install, no system Node.js. One
-            click opens the browser for consent, then Métis's own workspace picker below finishes it. */}
+        {/* PRIMARY — install the managed Dust CLI, then native OAuth (main/dust-oauth.ts). One
+            click installs @dust-tt/dust-cli into userData and opens the browser for consent. */}
         <div className="flex flex-col gap-2 rounded-[12px] border border-[var(--cl-primary)]/40 bg-[var(--cl-primary-soft)]/50 p-3.5">
           {keySaved && hasWs ? (
             // Already connected → Reconnect (fresh sign-in) + Disconnect (full reset).
@@ -3850,10 +3858,10 @@ function DustSetup({
                 className="no-drag cl-focus flex w-full items-center justify-center gap-2 rounded-[10px] bg-[var(--cl-primary)] px-4 py-3 text-[14px] font-semibold text-white hover:opacity-90 disabled:opacity-50"
               >
                 {oauth.phase === 'starting' ? <InlineOrb kind="connecting" /> : <Wand2 size={16} />}
-                {oauth.phase === 'starting' ? 'Starting sign-in…' : 'Set up Dust automatically'}
+                {oauth.phase === 'starting' ? 'Installing Dust CLI…' : 'Set up Dust automatically'}
               </button>
               <span className="text-center text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                Opens your browser to sign in, then pick your workspace here. No CLI, no key to copy.
+                Installs the Dust CLI, then opens your browser to sign in and pick your workspace.
                 {locked && <span className={'ml-1 ' + managedChipCls}>Managed by your organization</span>}
               </span>
               <button
@@ -4127,10 +4135,7 @@ function DustSetup({
             {spotlightAgentMissing && (
               <div className="flex items-start gap-1.5 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-2.5 py-1.5 text-[11px] leading-snug text-[color:var(--cl-destructive)]">
                 <Info size={13} className="mt-0.5 shrink-0" />
-                <span>
-                  The Spotlight Ref agent is not in this workspace. Connect or reconnect Dust in Settings → AI
-                  to the workspace that has it.
-                </span>
+                <span>The Spotlight Ref agent is not in this workspace.</span>
               </div>
             )}
             <div className={'w-full opacity-60 ' + ctl}>
