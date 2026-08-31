@@ -18,7 +18,6 @@ Hide and island **rest in** the Mac menu-bar / Dynamic Island strip so hovering 
 
 - **Hide/island watch rect.** `y = display.bounds.y` (0 on the built-in Retina). Height covers that strip (`workArea.y` / `menuBarHeight`, ~37-44). Width at least the notch (min ~220, cap ~560), top-center. Cursor watch hit-tests this rect. The parked **hide window** is not this strip.
 - **Hide park (invisible).** 1–8px fully transparent hairline (or click-through). Not a 44px tint, not a 103px stub, not a 560-wide glass chip. Apple Hide is gone until the pointer enters the island. `clampHeight` / `BAR_MIN_HEIGHT` 44 must not grow this rest after a display move — stay 8×2 on every display.
-- **Display move (required).** `registerScreenListeners` must re-park hide/island with `parkOverlayAfterHideSpring` / `parkedHoverReanchor`. Do not treat a hide rest at `bounds.y` as off-screen against `workArea.y` (~39) and slide it. Do not `clampHeight` a parked hide. Window `minWidth`/`minHeight` is 1 so darwin does not report 8×44.
 - **Path A.** Electron `display.workArea.y` is the first unobstructed row under the notch / menu bar — used by **bar** chrome (`workArea.y + margin`) and as the strip **height** for hide/island. Do not park hide/island *below* the island at `workArea.y` (Tony live: Y=39 pad never intersects the island).
 - **Path C.** When `workArea.y` is 0 on a notched display, hide/island still rest at `bounds.y` with a strut-tall strip (`menuBarHeight`, or 37px) so the hit rect covers the notch. Bar still floats; never a fake notch on Windows.
 
