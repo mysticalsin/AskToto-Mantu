@@ -73,7 +73,9 @@ Consent line (the existing record-consent copy) sits HERE, as the last gate befo
   `asrAssetsEnsure` for on-device transcription (progress, never skip, never “models missing in
   this build”), brain-init status. Every row must reflect reality — the honesty rule. Continue
   on this act is disabled until Parakeet + Whisper-floor files are present (bundled or fetched
-  into `userData`). `asrBundled` remains a resources-manifest probe for Listen, not a setup skip.
+  into `userData`). Skip’s Get started and Ready’s Get started use the same gate — first-run
+  cannot write `onboardingDone` while those files are missing. `asrBundled` remains a
+  resources-manifest probe for Listen, not a setup skip.
 - Sign-in (Microsoft/local) stays BEFORE the experience (it gates data), but restyle to match.
 - All copy through the i18n path like the rest of the renderer.
 

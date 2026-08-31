@@ -75,7 +75,7 @@ describe('tell the room — designed consent on personalize', () => {
     expect(experience).toMatch(/setScene\('skip'\)/)
     const skip = experience.slice(experience.indexOf("scene === 'skip'"))
     expect(skip).toMatch(/TellTheRoomCard/)
-    expect(skip).toMatch(/disabled=\{\!consent\}/)
+    expect(skip).toMatch(/firstRunCanFinish\(\{ asrReady, consent \}\)/)
     expect(experience).not.toMatch(/legacy-full/)
     expect(experience).not.toMatch(/from '\.\/Onboarding'/)
   })
