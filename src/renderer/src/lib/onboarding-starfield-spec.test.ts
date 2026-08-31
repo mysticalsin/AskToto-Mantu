@@ -88,12 +88,13 @@ describe('Starfield Close — time-driven dive, no page scroll', () => {
     expect(breathScrollTarget(12, true)).toBe(0)
   })
 
-  it('double-damps 0.10 then 0.06 and fades opacity to 2', () => {
+  it('double-damps 0.10 then 0.06 and floors opacity so frame 1 is a field', () => {
     const step = dampScroll(0, 0, 1)
     expect(step.smooth).toBeCloseTo(0.1, 8)
     expect(step.scroll).toBeCloseTo(0.006, 8)
-    expect(appearOpacity(0)).toBe(0)
-    expect(appearOpacity(240)).toBeCloseTo(1, 8)
+    expect(appearOpacity(0)).toBeCloseTo(1.15, 8)
+    expect(appearOpacity(0)).toBeGreaterThan(1)
+    expect(appearOpacity(240)).toBeCloseTo(1.575, 8)
     expect(appearOpacity(480)).toBe(2)
     expect(appearOpacity(2000)).toBe(2)
     expect(decayBump(NEXT_BUMP, 0)).toBe(NEXT_BUMP)
@@ -129,9 +130,15 @@ describe('Starfield Close — local three, no CDN', () => {
 })
 
 describe('Starfield Close — WebGL fail keeps the video bed', () => {
-  it('Experience remounts the hero video when the bed is unavailable', () => {
-    expect(experienceSrc).toMatch(/\(scene === 'hero' \|\| starfieldFailed\) && <OnboardingHeroVideo/)
+  it('video stays until first frame or fail; never a cleared-black canvas', () => {
+    expect(experienceSrc).toMatch(/\(!starfieldReady \|\| starfieldFailed\) && <OnboardingHeroVideo/)
     expect(experienceSrc).toMatch(/onUnavailable=\{\(\) => setStarfieldFailed\(true\)\}/)
+    expect(experienceSrc).toMatch(/onFirstFrame=\{\(\) => setStarfieldReady\(true\)\}/)
     expect(componentSrc).toMatch(/onUnavailableRef\.current\(\)/)
+    expect(componentSrc).toMatch(/onFirstFrame/)
+    expect(engineSrc).toMatch(/canvas\.style\.opacity = '0'/)
+    expect(engineSrc).toMatch(/canvas\.style\.opacity = '1'/)
+    expect(engineSrc).toMatch(/setClearColor\(0x0a0a24/)
+    expect(engineSrc).not.toMatch(/setClearColor\(0x000000/)
   })
 })

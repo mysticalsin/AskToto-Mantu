@@ -34,12 +34,13 @@ shouldMountStarfield(scene) === STARFIELD_SCENES.includes(scene)
 
 - Time-driven dive already specified below. No scrollbar. Canvas `pointer-events: none` under UI.
 - Keep the looping CloudFront hero video **if it actually plays**. Call `play()` on hero-video **mount**, not only on Next. Never leave a frozen first frame. Kenburns on a still is not enough.
-- Video sits under the starfield on hero. If WebGL1 fails, keep the video bed. Never blank the tour.
-- Appear must not hide the galaxy for a long hold:
+- Video stays mounted until `onFirstFrame` **or** WebGL fail. Canvas starts at opacity 0. Fail is an instant video-bed fallback — never a flash of black (`setClearColor` is `#0a0a24`, not `#000`).
+- Pixel ratio cap **1.5** (`STARFIELD_PIXEL_RATIO_CAP`). `powerPreference: 'high-performance'`, `alpha: false`. 2× Retina × 3 composers × 2 blooms hitches.
+- First composed frame is sync (not waiting on the next rAF). Seed `scroll`/`smooth` at `breath(0)` = 0.56. First dt is `1/60` so dive/drift/spin are already moving.
+- Appear must not hide the galaxy:
 
 ```
-appearProgress = clamp(elapsedMs / 480, 0, 1)
-uOpacity = appearProgress * CONFIG.opacity   // 0 → 2 in 480ms, no 300ms black hold
+uOpacity = 1.15 + clamp(elapsedMs / 480, 0, 1) * 0.85   // 1.15 → 2. Frame 1 is already a field.
 ```
 
 ## Hard: no scroll, ever
@@ -66,16 +67,18 @@ scroll  += (smooth - scroll) * 0.06
 Required play path:
 
 1. `music.start()` on exclusive-stage mount (same effect as `playPortalOpen`).
-2. `music.start()` again on the first pointerdown/click on the stage (Mac autoplay often rejects mount play).
-3. `music.start()` on Next / Start / Continue (not only `retryIfNeeded`).
-4. `play()` is the first media call. Do not seek before play.
+2. `playPortalOpen`, then `music.start()` again so a new portal AudioContext cannot leave the Aria paused.
+3. `music.start()` again on the first pointerdown/click on the stage (Mac autoplay often rejects mount play).
+4. `music.start()` on Next / Start / Continue (not only `retryIfNeeded`).
+5. `play()` is the first media call. Do not seek before play.
+6. Loop envelope floor **0.48** so the first sample is audible under portal OPEN (0.16). Mute still zeros. Portal must not `audio.pause()` / `bed.stop()`.
 
 ## Copy + CTAs stay
 
-- `.fade-up` uses `forwards` (or `both`). Never `backwards` alone on problem-story lines. Text that fades in remains.
-- Problem Continue is visible immediately. No `${200 + PROBLEM_STORY.length * 1100}ms` delay on that button. Line stagger may stay.
+- `.fade-up` uses `forwards` (or `both`). Problem-story lines use `both` (not `forwards` alone) so a delay cannot flash the line then vanish it when the keyframe starts at opacity 0.
+- Continue / Next / Set me up are **outside** `.scene-enter` and have no fade-up delay. Present from first paint of that act.
+- Problem Continue has no `${200 + PROBLEM_STORY.length * 1100}ms` delay. Line stagger may stay.
 - Demo (`OnboardingDemoScene`): heading, helper line, **Next**, and **Set me up** stay mounted for the whole clip. Do not `{hasNext && (` unmount Next when beats advance.
-- Setup / personalize Continue stays (already mounted).
 
 ## Act 4: no white rectangle
 
@@ -97,14 +100,14 @@ Portal OPEN gain 0.16 / CLOSE 0.12 stay the loud pair. Keep those animations wor
 When onboarding finishes and the island/bar lands:
 
 - SFX: shorter quieter dimension-open, **0.4–0.5× OPEN gain** (0.072), about 0.56s. Lives next to portal SFX in `onboarding-portal.ts` (`playBarLand`). Must not kill the Aria.
-- Visual: brief portal-slit / dimension peel on `.aw-widget` via `html.metis-bar-land` (clip-path inset opening). Not as loud or as long as exclusive open/close.
+- Visual: overlay-reveal spring on `.aw-widget` via `html.metis-bar-land` — `scale(0.92) translateY(-8px)`, 360ms, `transform-origin: top center`. Not clip-path. Not as loud or as long as exclusive open/close.
 - Do **not** change hide-park 8×2, island geometry, cursor-watch, `BAR_MIN_HEIGHT`, or hover math. Do not edit overlay chrome files for park/hover.
 
 ## Interactive logos
 
-- Hero Métis mark: real land spring (scale + settle), not a static dump. Class `hero-mark` / `onboard-mark-land`.
-- Persona cards: pressable spring (`:active` scale). Hover lift allowed.
-- Setup rows / meeting-type chips: pop-in stagger, fill-mode forwards. Not a dump.
+- Hero Métis mark: Vibe Island land (0.90 → 1.03 → 1, 520ms), not a 0.72→1.08 cartoon. Class `hero-mark` / `onboard-mark-land`.
+- Persona cards: pressable spring. Hover max `scale(1.02)`. Active `scale(0.98)`.
+- Setup rows: pop-in is opacity + translateY only (motion budget). Fill-mode `both`.
 - Reduced-motion: still land (opacity/translate to rest). No bounce, no scale overshoot.
 
 ## Scene (unchanged geometry)
@@ -131,14 +134,15 @@ Off limits: island geometry, cursor-watch, hide park, `BAR_MIN_HEIGHT`, overlay 
 
 1. Starfield mounts on `hero` (and the other exclusive scenes).
 2. Music `start()` is invoked on mount and again on Next (and first-click path exists).
-3. Problem Continue is present at t=0 (no 1100ms * lines delay on that button).
-4. Problem fade-up uses forwards/both, not backwards-only.
-5. Demo Next + Set me up still mounted after playback beats (no `hasNext &&` around Next).
+3. Problem Continue is present at t=0 (no 1100ms * lines delay on that button; outside `.scene-enter`).
+4. Problem fade-up uses `both`, not `forwards` alone or backwards-only.
+5. Demo Next + Set me up still mounted after playback beats (no `hasNext &&` around Next; outside `.scene-enter`).
 6. No white Act 4 top wash (`::before` 0.48 and `:has(.onboard-act4)` 0.36 gone).
 7. Tell-the-room card is centered (`text-align: center`).
-8. Dispose, WebGL fail fallback, reduced-motion surge = 0, no unpkg, no scroll-host.
-9. Bar-land gain is 0.4–0.5× portal OPEN; OPEN/CLOSE gains unchanged.
+8. Dispose, WebGL fail → video already mounted, reduced-motion surge = 0, no unpkg, no scroll-host.
+9. Bar-land gain is 0.4–0.5× portal OPEN; OPEN/CLOSE gains unchanged. Bar-land visual is overlay spring, not clip-path.
+10. Pixel ratio cap 1.5, seed dt 1/60, appear floor 1.15, `onFirstFrame`, canvas opacity 0 until first compose.
 
 ## Quality
 
-Apple-grade. Defaults friendly. Power stays in Settings. No em dashes in user-facing copy. Never auto-send. Do not claim READY TO MERGE. Devon will Mac-show.
+Apple-grade. 60fps on Retina. No hitch or empty frame at hero mount. Aria audible under portal OPEN. Springs like Vibe Island, not toy CSS. Copy never vanishes. WebGL fail is an instant video bed. Defaults friendly. Power stays in Settings. No em dashes in user-facing copy. Never auto-send. Do not claim READY TO MERGE. Do not Mac-show from a cloud agent. Devon will Mac-show.

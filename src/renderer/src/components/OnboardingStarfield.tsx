@@ -1,6 +1,7 @@
 /**
  * Full-bleed Starfield Close canvas under the exclusive tour UI.
  * Mount on hero and the rest of the exclusive stage (see shouldMountStarfield). pointer-events: none.
+ * Canvas stays opacity 0 until the first composed frame so the video bed never flashes black.
  */
 import { useEffect, useRef } from 'react'
 import { createStarfieldBed, type StarfieldBed } from '../lib/onboarding-starfield-engine'
@@ -13,23 +14,31 @@ function prefersReducedMotion(): boolean {
 
 export function OnboardingStarfield({
   pulse,
-  onUnavailable
+  onUnavailable,
+  onFirstFrame
 }: {
   pulse: number
   onUnavailable: () => void
+  onFirstFrame?: () => void
 }): JSX.Element {
   const wrapRef = useRef<HTMLDivElement>(null)
   const bedRef = useRef<StarfieldBed | null>(null)
   const onUnavailableRef = useRef(onUnavailable)
+  const onFirstFrameRef = useRef(onFirstFrame)
   onUnavailableRef.current = onUnavailable
+  onFirstFrameRef.current = onFirstFrame
 
   useEffect(() => {
     const wrap = wrapRef.current
     if (!wrap) return
     const canvas = document.createElement('canvas')
     canvas.setAttribute('aria-hidden', 'true')
+    canvas.style.opacity = '0'
     wrap.appendChild(canvas)
-    const bed = createStarfieldBed(canvas, { reducedMotion: prefersReducedMotion() })
+    const bed = createStarfieldBed(canvas, {
+      reducedMotion: prefersReducedMotion(),
+      onFirstFrame: () => onFirstFrameRef.current?.()
+    })
     if (!bed) {
       canvas.remove()
       onUnavailableRef.current()

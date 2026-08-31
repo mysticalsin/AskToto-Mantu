@@ -36,6 +36,12 @@ export const STAR_COUNT = 4200
 export const STAR_DEPTH = 30
 export const APPEAR_DELAY_MS = 0
 export const APPEAR_FADE_MS = 480
+/** First WebGL frame is already a field. Ramps 1.15 → 2 so frame 1 is never empty. */
+export const APPEAR_OPACITY_FLOOR = 1.15
+/** Retina × 3 composers × 2 blooms hitch at 2×. Cap keeps 60fps-class on a 2x Mac. */
+export const STARFIELD_PIXEL_RATIO_CAP = 1.5
+/** First paint uses a 60fps dt so dive/drift/spin are already moving, not a still. */
+export const STARFIELD_SEED_DT = 1 / 60
 export const NEXT_BUMP = 0.16
 export const BUMP_DECAY = 2.4
 export const DAMP_FAST = 0.1
@@ -83,10 +89,10 @@ export function dampScroll(
   return { smooth: nextSmooth, scroll: nextScroll }
 }
 
-/** elapsed / 480, then * CONFIG.opacity so the galaxy is visible from frame one. */
+/** Floor + ramp so frame 1 is a field, then settles at CONFIG.opacity. Never starts at 0. */
 export function appearOpacity(elapsedMs: number): number {
   const progress = Math.min(1, Math.max(0, (elapsedMs - APPEAR_DELAY_MS) / APPEAR_FADE_MS))
-  return progress * CONFIG.opacity
+  return APPEAR_OPACITY_FLOOR + progress * (CONFIG.opacity - APPEAR_OPACITY_FLOOR)
 }
 
 export const STARFIELD_VERTEX_SHADER = `uniform float uTime; uniform float uSize; uniform float uDrift; uniform float uDepth; uniform float uTwinkle;

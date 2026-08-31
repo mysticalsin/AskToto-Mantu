@@ -220,31 +220,28 @@ function OnboardingHeroVideo({
 function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => void }): JSX.Element {
   return (
     <>
-      <div className="hero-welcome relative z-10 scene-enter flex flex-col items-center gap-5">
-        <div className="hero-mark onboard-mark-land" aria-hidden="true">
-          <MetisMark size={96} />
+      <div className="hero-welcome relative z-10 flex flex-col items-center gap-5">
+        <div className="scene-enter flex flex-col items-center gap-5">
+          <div className="hero-mark onboard-mark-land" aria-hidden="true">
+            <MetisMark size={96} />
+          </div>
+          <div className="flex flex-col items-center gap-2">
+            <h1
+              className="hero-wordmark fade-up m-0 select-none"
+              aria-label={WORDMARK}
+              style={{ fontFamily: 'var(--font-ui)', animationDelay: '160ms', animationFillMode: 'both' }}
+            >
+              <span aria-hidden="true">{WORDMARK}</span>
+            </h1>
+            <p
+              className="hero-tagline fade-up m-0 text-[14px] text-[color:var(--color-ink-2)]"
+              style={{ animationDelay: '400ms', animationFillMode: 'both' }}
+            >
+              Your on-device meeting copilot.
+            </p>
+          </div>
         </div>
-        <div className="flex flex-col items-center gap-2">
-          <h1
-            className="hero-wordmark fade-up m-0 select-none"
-            aria-label={WORDMARK}
-            style={{ fontFamily: 'var(--font-ui)', animationDelay: '160ms', animationFillMode: 'both' }}
-          >
-            <span aria-hidden="true">{WORDMARK}</span>
-          </h1>
-          <p
-            className="hero-tagline fade-up m-0 text-[14px] text-[color:var(--color-ink-2)]"
-            style={{ animationDelay: '400ms', animationFillMode: 'both' }}
-          >
-            Your on-device meeting copilot.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={onBegin}
-          className="onboard-cta onboard-glass fade-up no-drag focus-ring"
-          style={{ animationDelay: '550ms', animationFillMode: 'both' }}
-        >
+        <button type="button" onClick={onBegin} className="onboard-cta onboard-glass no-drag focus-ring">
           Next
         </button>
         {onSkip && (
@@ -467,7 +464,8 @@ function ActLicense({
   }
 
   return (
-    <div key="license" className="scene-enter flex flex-col items-center gap-6">
+    <div key="license" className="flex flex-col items-center gap-6">
+      <div className="scene-enter flex flex-col items-center gap-6">
       <div className="flex flex-col items-center gap-1.5">
         <p className="m-0 text-[11px] font-medium uppercase tracking-[0.14em] text-[color:var(--color-ink-3)]">
           One more thing
@@ -528,6 +526,7 @@ function ActLicense({
         </div>
       )}
 
+      </div>
       <div className="flex items-center gap-2">
         <button
           type="button"
@@ -597,7 +596,8 @@ function ActReady({
   }
 
   return (
-    <div key="ready" className="scene-enter onboard-ready-screen flex flex-col items-center">
+    <div key="ready" className="onboard-ready-screen flex flex-col items-center">
+      <div className="scene-enter flex flex-col items-center">
       <div className="ready-mark-wrap" aria-hidden="true">
         {READY_SPARKS.map((s, i) => (
           <span
@@ -623,6 +623,7 @@ function ActReady({
           {TELL_THE_ROOM_READY}
         </p>
         <p className="onboard-tell-quote onboard-tell-quote--echo fade-up">{TELL_THE_ROOM_QUOTE}</p>
+      </div>
       </div>
       <button
         type="button"
@@ -720,9 +721,11 @@ export function OnboardingExperience({
     prefetchOnboardingDemoChunks()
     music.start()
     playPortalOpen(music.muted)
+    music.start()
   }, [])
   const [scene, setScene] = useState<Scene>('hero')
   const [starfieldFailed, setStarfieldFailed] = useState(false)
+  const [starfieldReady, setStarfieldReady] = useState(false)
   const [starfieldPulse, setStarfieldPulse] = useState(0)
   const bumpStarfield = (): void => setStarfieldPulse((n) => n + 1)
   const [rows, setRows] = useState<SetupRow[]>([])
@@ -909,9 +912,13 @@ export function OnboardingExperience({
       className="relative flex h-full w-full select-none flex-col items-center overflow-hidden px-10 text-center"
       onPointerDown={music.start}
     >
-      {(scene === 'hero' || starfieldFailed) && <OnboardingHeroVideo videoRef={heroVideoRef} />}
+      {(!starfieldReady || starfieldFailed) && <OnboardingHeroVideo videoRef={heroVideoRef} />}
       {shouldMountStarfield(scene) && !starfieldFailed && (
-        <OnboardingStarfield pulse={starfieldPulse} onUnavailable={() => setStarfieldFailed(true)} />
+        <OnboardingStarfield
+          pulse={starfieldPulse}
+          onUnavailable={() => setStarfieldFailed(true)}
+          onFirstFrame={() => setStarfieldReady(true)}
+        />
       )}
       <button
         type="button"
@@ -939,15 +946,15 @@ export function OnboardingExperience({
       )}
 
       {scene === 'problem' && (
-        <div key="problem" className="scene-enter flex flex-col items-center gap-8">
-          <div className="flex max-w-[420px] flex-col gap-3 text-left">
+        <div key="problem" className="flex flex-col items-center gap-8">
+          <div className="scene-enter flex max-w-[420px] flex-col gap-3 text-left">
             {PROBLEM_STORY.map((line, i) => (
               <p
                 key={line}
                 className="fade-up m-0 text-[22px] font-medium leading-snug text-[color:var(--color-ink)]"
                 style={{
                   animationDelay: `${200 + i * 1100}ms`,
-                  animationFillMode: 'forwards'
+                  animationFillMode: 'both'
                 }}
               >
                 {line}
@@ -988,14 +995,15 @@ export function OnboardingExperience({
       )}
 
       {scene === 'setup' && (
-        <div key="setup" className="scene-enter flex flex-col items-center gap-6">
+        <div key="setup" className="flex flex-col items-center gap-6">
+          <div className="scene-enter flex w-full flex-col items-center gap-6">
           <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">Your setup</h2>
           <div className="flex w-full max-w-[440px] flex-col gap-2">
             {rows.map((r, i) => (
               <div
                 key={r.key}
                 className="glass-strong fade-up onboard-pop-in flex items-start gap-3 rounded-[12px] px-3.5 py-2.5 text-left"
-                style={{ animationDelay: `${i * 70}ms`, animationFillMode: 'forwards' }}
+                style={{ animationDelay: `${i * 70}ms`, animationFillMode: 'both' }}
               >
                 <r.icon size={16} className="mt-0.5 shrink-0 text-[color:var(--color-ink-2)]" />
                 <div className="min-w-0 flex-1">
@@ -1123,6 +1131,7 @@ export function OnboardingExperience({
               Métis only starts listening when you press Listen and tell the room. Nothing is captured before that.
             </p>
           )}
+          </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -1144,7 +1153,8 @@ export function OnboardingExperience({
       )}
 
       {scene === 'personalize' && (
-        <div key="personalize" className="scene-enter onboard-act4 flex flex-col items-center">
+        <div key="personalize" className="onboard-act4 flex flex-col items-center">
+          <div className="scene-enter flex flex-col items-center gap-6">
           <div className="flex flex-col items-center gap-2">
             <p className="onboard-act4-kicker">Last one</p>
             <h2 className="onboard-act4-title">How should Métis show up?</h2>
@@ -1185,21 +1195,22 @@ export function OnboardingExperience({
           </div>
           <div className="flex flex-col items-center gap-4">
             <TellTheRoomCard consent={consent} onConsent={setConsent} />
-            <button
-              type="button"
-              // Act 6 re-point (MQA-283): advances to license (only if enabled) or straight to Ready —
-              // never finishes here directly any more. See onboarding-flow.ts.
-              onClick={() => {
-                playHero()
-                bumpStarfield()
-                setScene(sceneAfterPersonalize(settings?.licenseGateEnabled))
-              }}
-              disabled={!consent}
-              className={'onboard-cta no-drag focus-ring' + (consent ? '' : ' onboard-cta--muted')}
-            >
-              Continue
-            </button>
           </div>
+          </div>
+          <button
+            type="button"
+            // Act 6 re-point (MQA-283): advances to license (only if enabled) or straight to Ready —
+            // never finishes here directly any more. See onboarding-flow.ts.
+            onClick={() => {
+              playHero()
+              bumpStarfield()
+              setScene(sceneAfterPersonalize(settings?.licenseGateEnabled))
+            }}
+            disabled={!consent}
+            className={'onboard-cta no-drag focus-ring' + (consent ? '' : ' onboard-cta--muted')}
+          >
+            Continue
+          </button>
         </div>
       )}
 

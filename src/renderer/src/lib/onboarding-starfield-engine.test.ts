@@ -47,6 +47,17 @@ describe('Starfield Close engine — dispose, fail, reduced-motion, no fetch', (
     expect(engineSrc).not.toMatch(/unpkg|jsdelivr/)
   })
 
+  it('caps pixel ratio, seeds the dive, and composes frame 1 before the next rAF', () => {
+    expect(engineSrc).toMatch(/STARFIELD_PIXEL_RATIO_CAP/)
+    expect(engineSrc).toMatch(/STARFIELD_SEED_DT/)
+    expect(engineSrc).toMatch(/powerPreference: 'high-performance'/)
+    expect(engineSrc).toMatch(/alpha: false/)
+    expect(engineSrc).toMatch(/breathScrollTarget\(0, reducedMotion\)/)
+    expect(engineSrc).toMatch(/const dt = firstFrame \? STARFIELD_SEED_DT : rawDt/)
+    expect(engineSrc).toMatch(/opts\.onFirstFrame\?\.\(\)/)
+    expect(engineSrc).toMatch(/window\.addEventListener\('resize', onResize\)\s*tick\(\)/)
+  })
+
   it('wires three composers, ENTIRE_SCENE points, and a 1x1 black halo', () => {
     expect(engineSrc).toMatch(/torusComposer\.renderToScreen = false/)
     expect(engineSrc).toMatch(/bloomComposer\.renderToScreen = false/)

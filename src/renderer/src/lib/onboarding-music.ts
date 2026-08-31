@@ -13,6 +13,8 @@ export const ONBOARDING_MUSIC_SRC = new URL(
 ).href
 export const ONBOARDING_MUSIC_GAIN = 0.3
 export const ONBOARDING_MUSIC_FADE_SECONDS = 2.4
+/** First samples are audible under portal OPEN (0.16). Mute still zeros. Loop still dips. */
+export const ONBOARDING_MUSIC_ENVELOPE_FLOOR = 0.48
 
 /** Mute is silence. Reduced-motion is not a parameter — it must not duck or mute the piano. */
 export function onboardingMusicGain(muted: boolean): number {
@@ -30,15 +32,15 @@ export function onboardingMusicLoopEnvelope(
 ): number {
   if (!Number.isFinite(duration) || duration <= 0) return 1
   const fade = Math.min(fadeSeconds, duration / 2)
+  let raw = 1
   if (currentTime < fade) {
     const u = currentTime / fade
-    return 0.5 - 0.5 * Math.cos(Math.PI * u)
-  }
-  if (currentTime > duration - fade) {
+    raw = 0.5 - 0.5 * Math.cos(Math.PI * u)
+  } else if (currentTime > duration - fade) {
     const u = (duration - currentTime) / fade
-    return 0.5 - 0.5 * Math.cos(Math.PI * u)
+    raw = 0.5 - 0.5 * Math.cos(Math.PI * u)
   }
-  return 1
+  return Math.max(ONBOARDING_MUSIC_ENVELOPE_FLOOR, raw)
 }
 
 /**

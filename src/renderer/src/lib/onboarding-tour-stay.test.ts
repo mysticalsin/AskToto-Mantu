@@ -19,12 +19,17 @@ describe('Mac-show tour stay-visible + quieter bar land', () => {
     expect(experience).toMatch(/shouldMountStarfield\(scene\) && !starfieldFailed/)
   })
 
-  it('problem Continue is present at t=0 and lines stay with forwards', () => {
+  it('problem Continue is present at t=0 and lines stay with both', () => {
     const problem = experience.slice(experience.indexOf("scene === 'problem'"), experience.indexOf("scene === 'reveal'"))
     expect(problem).toMatch(/>\s*Continue\s*</)
     expect(problem).not.toMatch(/PROBLEM_STORY\.length \* 1100/)
-    expect(problem).toMatch(/animationFillMode: 'forwards'/)
+    expect(problem).toMatch(/animationFillMode: 'both'/)
+    expect(problem).not.toMatch(/animationFillMode: 'forwards'/)
     expect(problem).not.toMatch(/animationFillMode: 'backwards'/)
+    const continueAt = problem.indexOf('>Continue<') >= 0 ? problem.indexOf('>Continue<') : problem.search(/>\s*Continue\s*</)
+    const sceneEnterAt = problem.indexOf('scene-enter')
+    expect(sceneEnterAt).toBeGreaterThanOrEqual(0)
+    expect(continueAt).toBeGreaterThan(sceneEnterAt)
     expect(css).toMatch(/\.fade-up \{\s*animation: fade-up 180ms[^;]*forwards/)
   })
 
@@ -65,5 +70,11 @@ describe('Mac-show tour stay-visible + quieter bar land', () => {
     expect(experience).toMatch(/requestBarLand\(\)/)
     expect(css).toMatch(/html\.metis-bar-land \.aw-widget/)
     expect(css).toMatch(/@keyframes metis-bar-land/)
+    const landStart = css.indexOf('@keyframes metis-bar-land')
+    const land = css.slice(landStart, css.indexOf('html.metis-bar-land .aw-widget', landStart))
+    expect(land).toMatch(/scale\(0\.92\) translateY\(-8px\)/)
+    expect(land).not.toMatch(/clip-path/)
+    expect(css).toMatch(/html\.metis-bar-land \.aw-widget \{[\s\S]*?transform-origin:\s*top center/)
+    expect(css).toMatch(/html\.metis-bar-land \.aw-widget \{[\s\S]*?animation: metis-bar-land 360ms/)
   })
 })

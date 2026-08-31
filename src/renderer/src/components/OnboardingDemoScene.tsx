@@ -210,7 +210,8 @@ export function OnboardingDemoScene({
     )
 
   return (
-    <div key="reveal" className="scene-enter flex w-full flex-1 flex-col items-center justify-center gap-6">
+    <div key="reveal" className="flex w-full flex-1 flex-col items-center justify-center gap-6">
+      <div className="scene-enter flex w-full flex-col items-center justify-center gap-6">
       <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">Here’s what that looks like.</h2>
       <p className="m-0 text-[13px] text-[color:var(--color-ink-2)]">
         {hasNext
@@ -282,6 +283,7 @@ export function OnboardingDemoScene({
       ) : (
         <DemoRecapCard mode={mode} />
       )}
+      </div>
 
       <div className="flex flex-col items-center gap-3">
         <button

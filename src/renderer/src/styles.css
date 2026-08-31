@@ -537,11 +537,11 @@ input::placeholder {
 @keyframes onboard-mark-land {
   0% {
     opacity: 0;
-    transform: scale(0.72) translateY(12px);
+    transform: scale(0.9) translateY(8px);
   }
-  68% {
+  62% {
     opacity: 1;
-    transform: scale(1.08) translateY(-3px);
+    transform: scale(1.03) translateY(-2px);
   }
   100% {
     opacity: 1;
@@ -549,21 +549,21 @@ input::placeholder {
   }
 }
 .onboard-mark-land {
-  animation: onboard-mark-land 640ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: onboard-mark-land 520ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 @keyframes onboard-pop-in {
   from {
     opacity: 0;
-    transform: scale(0.88) translateY(8px);
+    transform: translateY(8px);
   }
   to {
     opacity: 1;
-    transform: scale(1) translateY(0);
+    transform: translateY(0);
   }
 }
 .onboard-pop-in {
-  animation: onboard-pop-in 380ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: onboard-pop-in 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 /* Onboarding act transition — each scene remounts keyed by name. Opacity + translate only
@@ -897,7 +897,8 @@ input::placeholder {
   }
   html.metis-bar-land .aw-widget {
     animation: none;
-    clip-path: none;
+    transform: none;
+    opacity: 1;
   }
 }
 
@@ -936,19 +937,20 @@ input::placeholder {
     linear-gradient(165deg, color-mix(in srgb, #3a0b6b 62%, transparent), color-mix(in srgb, #7f00da 48%, transparent));
 }
 
-/* Quieter dimension peel when the bar lands after exclusive close. Not hide-park math. */
+/* Quieter bar land — same overlay-reveal spring as DESIGN.md, shorter than exclusive open. */
 @keyframes metis-bar-land {
   from {
-    clip-path: inset(46% 38% 46% 38%);
-    opacity: 0.7;
+    opacity: 0.85;
+    transform: scale(0.92) translateY(-8px);
   }
   to {
-    clip-path: inset(0 0 0 0);
     opacity: 1;
+    transform: scale(1) translateY(0);
   }
 }
 html.metis-bar-land .aw-widget {
-  animation: metis-bar-land 560ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  transform-origin: top center;
+  animation: metis-bar-land 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
 }
 
 /* Starfield Close bed. Full-bleed from Act 1. Never a scroll host. Clicks pass through. */
@@ -964,6 +966,7 @@ html.metis-bar-land .aw-widget {
   width: 100%;
   height: 100%;
   pointer-events: none;
+  opacity: 0;
 }
 
 /* Liquid glass — backdrop blur, inset highlight, gradient-border ::before. Technique only. */
@@ -1090,15 +1093,15 @@ html.metis-bar-land .aw-widget {
   padding: 10px 12px 11px;
   text-align: left;
   color: #f4f4f5;
-  animation: onboard-pop-in 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: onboard-pop-in 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
   transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1), background 160ms ease;
 }
 .onboard-persona:hover {
   background: rgba(255, 255, 255, 0.16);
-  transform: translateY(-2px) scale(1.03);
+  transform: translateY(-2px) scale(1.02);
 }
 .onboard-persona:active {
-  transform: scale(0.96);
+  transform: scale(0.98);
 }
 .onboard-persona.is-selected {
   border-color: rgba(244, 244, 245, 0.55);

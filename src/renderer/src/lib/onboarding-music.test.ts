@@ -2,6 +2,7 @@ import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  ONBOARDING_MUSIC_ENVELOPE_FLOOR,
   ONBOARDING_MUSIC_FADE_SECONDS,
   ONBOARDING_MUSIC_FILE,
   ONBOARDING_MUSIC_GAIN,
@@ -55,10 +56,13 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
     expect(experience).not.toMatch(/prefersReducedMotion\(\)[\s\S]{0,40}setMuted/)
   })
 
-  it('loops with a cosine fade at both ends', () => {
+  it('loops with a cosine fade at both ends, floored so the first sample is audible', () => {
     expect(ONBOARDING_MUSIC_FADE_SECONDS).toBeGreaterThan(1)
-    expect(onboardingMusicLoopEnvelope(0, 300)).toBeCloseTo(0, 5)
-    expect(onboardingMusicLoopEnvelope(300, 300)).toBeCloseTo(0, 5)
+    expect(ONBOARDING_MUSIC_ENVELOPE_FLOOR).toBeCloseTo(0.48, 8)
+    expect(onboardingMusicLoopEnvelope(0, 300)).toBe(ONBOARDING_MUSIC_ENVELOPE_FLOOR)
+    expect(onboardingMusicLoopEnvelope(300, 300)).toBe(ONBOARDING_MUSIC_ENVELOPE_FLOOR)
+    expect(onboardingMusicLoopEnvelope(0, 300) * ONBOARDING_MUSIC_GAIN).toBeGreaterThan(0.12)
+    expect(onboardingMusicLoopEnvelope(0, 300) * ONBOARDING_MUSIC_GAIN).toBeLessThan(0.16)
     expect(onboardingMusicLoopEnvelope(150, 300)).toBe(1)
     expect(onboardingMusicLoopEnvelope(1.2, 300, 2.4)).toBeGreaterThan(0.4)
     expect(onboardingMusicLoopEnvelope(1.2, 300, 2.4)).toBeLessThan(0.6)
@@ -70,6 +74,7 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
     expect(mountBlock).toMatch(/music\.start\(\)/)
     expect(mountBlock).toMatch(/playPortalOpen\(/)
     expect(mountBlock.indexOf('music.start()')).toBeLessThan(mountBlock.indexOf('playPortalOpen'))
+    expect(mountBlock.lastIndexOf('music.start()')).toBeGreaterThan(mountBlock.indexOf('playPortalOpen'))
     expect(mountBlock.indexOf('music.start()')).toBeGreaterThan(-1)
     const begin = experience.slice(experience.indexOf('onBegin={() => {'))
     const beginBlock = begin.slice(0, begin.indexOf('onSkip'))

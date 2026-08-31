@@ -44,6 +44,8 @@ import {
   STAR_COUNT,
   STAR_DEPTH,
   STARFIELD_FRAGMENT_SHADER,
+  STARFIELD_PIXEL_RATIO_CAP,
+  STARFIELD_SEED_DT,
   STARFIELD_VERTEX_SHADER
 } from './onboarding-starfield-spec'
 
@@ -55,6 +57,7 @@ export interface StarfieldBed {
 export interface StarfieldBedOptions {
   reducedMotion?: boolean
   now?: () => number
+  onFirstFrame?: () => void
 }
 
 function viewSize(canvas: HTMLCanvasElement): { w: number; h: number } {
@@ -77,10 +80,16 @@ export function createStarfieldBed(
 ): StarfieldBed | null {
   const reducedMotion = opts.reducedMotion === true
   const nowFn = opts.now ?? (() => performance.now())
+  canvas.style.opacity = '0'
 
   let renderer: WebGL1Renderer
   try {
-    renderer = new WebGL1Renderer({ canvas, antialias: true })
+    renderer = new WebGL1Renderer({
+      canvas,
+      antialias: true,
+      alpha: false,
+      powerPreference: 'high-performance'
+    })
     if (!renderer.getContext()) return null
   } catch {
     return null
@@ -88,12 +97,13 @@ export function createStarfieldBed(
 
   renderer.shadowMap.enabled = true
   renderer.shadowMap.type = VSMShadowMap
-  renderer.setClearColor(0x000000, 1)
-  renderer.setPixelRatio(Math.min(typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1, 2))
+  renderer.setClearColor(0x0a0a24, 1)
+  const dpr = typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1
+  renderer.setPixelRatio(Math.min(dpr, STARFIELD_PIXEL_RATIO_CAP))
 
   const scene = new Scene()
-  scene.background = new Color(0x000000)
-  scene.fog = new Fog(0x000000, 0, 15)
+  scene.background = new Color(CONFIG.bgColor)
+  scene.fog = new Fog(0x0a0a24, 0, 15)
 
   let { w, h } = viewSize(canvas)
   const camera = new PerspectiveCamera(45, w / h, 0.1, 80)
@@ -128,7 +138,7 @@ export function createStarfieldBed(
     uniforms: {
       uTime: { value: 0 },
       uSize: { value: CONFIG.pointSize },
-      uOpacity: { value: 0 },
+      uOpacity: { value: appearOpacity(0) },
       uDrift: { value: 0 },
       uDepth: { value: STAR_DEPTH },
       uTwinkle: { value: CONFIG.twinkle },
@@ -212,10 +222,12 @@ export function createStarfieldBed(
   let activity = 0
   let lastMove = nowFn()
   let bump = 0
-  let smooth = reducedMotion ? 0 : 0.42
-  let scroll = reducedMotion ? 0 : 0.42
+  const seeded = breathScrollTarget(0, reducedMotion)
+  let smooth = seeded
+  let scroll = seeded
   let raf = 0
   let disposed = false
+  let firstFrame = true
   const started = nowFn()
   let lastTick = started
 
@@ -237,10 +249,11 @@ export function createStarfieldBed(
       return
     }
     const now = nowFn()
-    const dt = Math.min(0.05, Math.max(0, (now - lastTick) / 1000))
+    const rawDt = Math.min(0.05, Math.max(0, (now - lastTick) / 1000))
+    const dt = firstFrame ? STARFIELD_SEED_DT : rawDt
     lastTick = now
-    const elapsedMs = now - started
-    const t = elapsedMs / 1000
+    const elapsedMs = firstFrame ? 0 : now - started
+    const t = firstFrame ? STARFIELD_SEED_DT : elapsedMs / 1000
 
     bump = decayBump(bump, dt)
     const target = breathScrollTarget(t, reducedMotion) + bump
@@ -282,11 +295,17 @@ export function createStarfieldBed(
     bloomComposer.render()
     camera.layers.set(LAYERS.ENTIRE_SCENE)
     finalComposer.render()
+
+    if (firstFrame) {
+      firstFrame = false
+      canvas.style.opacity = '1'
+      opts.onFirstFrame?.()
+    }
   }
 
   window.addEventListener('pointermove', onPointerMove, { passive: true })
   window.addEventListener('resize', onResize)
-  raf = requestAnimationFrame(tick)
+  tick()
 
   return {
     nudge: () => {
