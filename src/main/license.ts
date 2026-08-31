@@ -185,3 +185,19 @@ export function checkLicenseGrace(): LicenseGraceResult {
 
   return { allowed: false, reason: 'expired_grace' }
 }
+
+// Member-pass foundation (Phase 5). Extends this module; does not replace phone-home above.
+// LICENSE_ACTIVATION_OPEN=false — Activate is honest ActivationUnavailable. See
+// src/main/license/activate.ts and docs/design/IDENTITY-CARD.md.
+export {
+  activate as activateMemberLicense,
+  deactivate as deactivateMemberLicense,
+  status as memberLicenseStatus,
+  verifyCached as verifyCachedMemberLicense,
+  identitySnapshot,
+  importLicenseMetis,
+  maybeRegisterInstall
+} from './license/activate'
+export { hashDeviceId, formatSerialDisplay, resolveDeviceIdentity } from './license/device'
+export { verifyLicenseJws, signLicenseJws } from './license/jws'
+export { LICENSE_ACTIVATION_OPEN } from '@shared/license-types'
