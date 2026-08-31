@@ -15,6 +15,7 @@ import { Check, FolderLock, Mic, MonitorUp, Sparkles } from 'lucide-react'
 import type { ConversationMode, PermissionStatus, ProfileRecoveryResult, PublicSettings } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
+import { InlineOrb } from './AgentStatus'
 import { MetisMark } from './MetisMark'
 import { Onboarding } from './Onboarding'
 import { OnboardingStarfield } from './OnboardingStarfield'
@@ -399,7 +400,9 @@ export function OnboardingExperience({ onDone, onSkip }: OnboardingExperiencePro
                   )}
                 </div>
                 {r.state === 'checking' && (
-                  <span className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin rounded-full border-2 border-white/20 border-t-[var(--color-accent-2)]" />
+                  <span className="mt-0.5 shrink-0">
+                    <InlineOrb kind="loading" />
+                  </span>
                 )}
                 {r.state === 'ready' && <Check size={16} className="mt-0.5 shrink-0 text-[var(--color-accent-2)]" />}
                 {r.state === 'action' && <span className="mt-0.5 shrink-0 text-[11px] font-medium text-[color:var(--color-ink-2)]">needed</span>}
