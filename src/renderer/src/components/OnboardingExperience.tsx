@@ -65,7 +65,13 @@ import { isWindows } from '../lib/keys'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
 import { sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
 import { createOnboardingMusicBed } from '../lib/onboarding-music'
-import { closeOnboardingPortal, playBarLand, playPortalOpen, requestBarLand } from '../lib/onboarding-portal'
+import {
+  closeOnboardingPortal,
+  disposePortalAudio,
+  playBarLand,
+  playPortalOpen,
+  requestBarLand
+} from '../lib/onboarding-portal'
 import {
   TELL_THE_ROOM_CHECKBOX,
   TELL_THE_ROOM_LEAD,
@@ -241,7 +247,7 @@ function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => 
             </p>
           </div>
         </div>
-        <button type="button" onClick={onBegin} className="onboard-cta onboard-glass no-drag focus-ring">
+        <button type="button" onClick={onBegin} className="onboard-cta no-drag focus-ring">
           Next
         </button>
         {onSkip && (
@@ -659,6 +665,7 @@ function useOnboardingMusic(): {
   toggleMute: () => void
   audio: () => HTMLAudioElement | null
   start: () => void
+  stop: () => void
   retryIfNeeded: () => void
 } {
   const [muted, setMuted] = useState(false)
@@ -672,6 +679,7 @@ function useOnboardingMusic(): {
     return () => {
       bedRef.current?.stop()
       bedRef.current = null
+      disposePortalAudio()
     }
   }, [])
 
@@ -695,11 +703,16 @@ function useOnboardingMusic(): {
     start()
   }, [start])
 
+  const stop = useCallback(() => {
+    bedRef.current?.stop()
+  }, [])
+
   return {
     muted,
     toggleMute: () => setMuted((m) => !m),
     audio: () => bedRef.current?.element ?? null,
     start,
+    stop,
     retryIfNeeded
   }
 }
@@ -725,7 +738,6 @@ export function OnboardingExperience({
   }, [])
   const [scene, setScene] = useState<Scene>('hero')
   const [starfieldFailed, setStarfieldFailed] = useState(false)
-  const [starfieldReady, setStarfieldReady] = useState(false)
   const [starfieldPulse, setStarfieldPulse] = useState(0)
   const bumpStarfield = (): void => setStarfieldPulse((n) => n + 1)
   const [rows, setRows] = useState<SetupRow[]>([])
@@ -892,6 +904,8 @@ export function OnboardingExperience({
   const finish = async (): Promise<void> => {
     if (doneRef.current || !consent) return
     doneRef.current = true
+    music.stop()
+    disposePortalAudio()
     await closeOnboardingPortal(music.muted, prefersReducedMotion())
     playBarLand(music.muted)
     requestBarLand()
@@ -909,16 +923,12 @@ export function OnboardingExperience({
 
   return (
     <div
-      className="relative flex h-full w-full select-none flex-col items-center overflow-hidden px-10 text-center"
+      className="onboard-tour relative z-10 flex h-full w-full select-none flex-col items-center overflow-hidden px-10 text-center"
       onPointerDown={music.start}
     >
-      {(!starfieldReady || starfieldFailed) && <OnboardingHeroVideo videoRef={heroVideoRef} />}
+      {scene === 'hero' && <OnboardingHeroVideo videoRef={heroVideoRef} />}
       {shouldMountStarfield(scene) && !starfieldFailed && (
-        <OnboardingStarfield
-          pulse={starfieldPulse}
-          onUnavailable={() => setStarfieldFailed(true)}
-          onFirstFrame={() => setStarfieldReady(true)}
-        />
+        <OnboardingStarfield pulse={starfieldPulse} onUnavailable={() => setStarfieldFailed(true)} />
       )}
       <button
         type="button"

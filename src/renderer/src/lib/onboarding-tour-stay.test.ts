@@ -15,7 +15,8 @@ const portal = readFileSync(join(__dirname, './onboarding-portal.ts'), 'utf8')
 
 describe('Mac-show tour stay-visible + quieter bar land', () => {
   it('starfield mounts on hero', () => {
-    expect(shouldMountStarfield('hero')).toBe(true)
+    expect(shouldMountStarfield('hero')).toBe(false)
+    expect(shouldMountStarfield('problem')).toBe(true)
     expect(experience).toMatch(/shouldMountStarfield\(scene\) && !starfieldFailed/)
   })
 
@@ -37,7 +38,8 @@ describe('Mac-show tour stay-visible + quieter bar land', () => {
     expect(demo).toMatch(/>\s*Next\s*</)
     expect(demo).toMatch(/>\s*Set me up\s*</)
     expect(demo).not.toMatch(/\{hasNext && \(/)
-    expect(demo).toMatch(/if \(hasNext\) advance\(\)/)
+    expect(demo).toMatch(/demoNextLeavesTour\(beat\)/)
+    expect(demo).toMatch(/onContinue\(\)/)
     expect(demo).toMatch(/Here’s what that looks like/)
   })
 

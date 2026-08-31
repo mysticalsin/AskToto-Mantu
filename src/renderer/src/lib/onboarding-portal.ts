@@ -87,6 +87,8 @@ function sciFiBarLand(seconds: number, sampleRate: number): Float32Array {
 
 export const PORTAL_BAR_LAND_SAMPLES = sciFiBarLand(ONBOARDING_BAR_LAND_SECONDS, ONBOARDING_PORTAL_SAMPLE_RATE)
 
+const livePortalContexts: AudioContext[] = []
+
 function playPrecomputed(samples: Float32Array, gain: number, muted: boolean): void {
   if (muted || typeof AudioContext === 'undefined') return
   const Ctor =
@@ -94,6 +96,7 @@ function playPrecomputed(samples: Float32Array, gain: number, muted: boolean): v
     (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
   if (!Ctor) return
   const ctx = new Ctor()
+  livePortalContexts.push(ctx)
   const buffer = ctx.createBuffer(1, samples.length, ONBOARDING_PORTAL_SAMPLE_RATE)
   buffer.getChannelData(0).set(samples)
   const src = ctx.createBufferSource()
@@ -103,8 +106,23 @@ function playPrecomputed(samples: Float32Array, gain: number, muted: boolean): v
   src.connect(g)
   g.connect(ctx.destination)
   const playing = ctx.resume()
+  src.onended = () => {
+    void ctx.close().catch(() => {})
+  }
   src.start()
   void playing.catch(() => {})
+}
+
+/** Close leftover portal whoosh contexts. Call when the Aria bed stops. */
+export function disposePortalAudio(): void {
+  for (const ctx of livePortalContexts) {
+    try {
+      if (ctx.state !== 'closed') void ctx.close()
+    } catch {
+      /* already closed */
+    }
+  }
+  livePortalContexts.length = 0
 }
 
 export function playPortalOpen(muted: boolean): void {

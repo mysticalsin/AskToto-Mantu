@@ -32,6 +32,7 @@ import {
   demoPlaybackElapsed,
   demoPlaybackAfterNext,
   demoFrameAt,
+  demoNextLeavesTour,
   type DemoCursorTarget
 } from '../lib/onboarding-demo'
 import { cursorPositionAt, type Point } from '../lib/synthetic-cursor'
@@ -290,7 +291,8 @@ export function OnboardingDemoScene({
           type="button"
           onClick={() => {
             onPlayVideo?.()
-            if (hasNext) advance()
+            if (demoNextLeavesTour(beat)) onContinue()
+            else advance()
           }}
           className="onboard-cta no-drag focus-ring"
         >

@@ -1,9 +1,10 @@
 /**
- * Act 1 atmosphere only. March 19 clip (taller than 16:9). Not bundled; the exclusive
+ * Portal-open bed. April 29 looping clip under the Métis mark. Not bundled; the exclusive
  * stage purple wash is the fallback if CloudFront fails or prefers-reduced-motion is on.
+ * March 19 hillside-vortex is retired.
  */
 export const ONBOARDING_HERO_VIDEO_SRC =
-  'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260319_055001_8e16d972-3b2b-441c-86ad-2901a54682f9.mp4'
+  'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260429_115139_0fc6bd3d-3631-4d26-ab9b-28293887dcc9.mp4'
 
 /**
  * Must run inside a user click. `play()` is the first media call so the user-gesture

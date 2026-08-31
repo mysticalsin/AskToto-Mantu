@@ -784,7 +784,7 @@ input::placeholder {
 }
 @keyframes onboard-portal-content-in {
   from {
-    opacity: 0;
+    opacity: 1;
     transform: translateY(8px);
   }
   to {
@@ -903,6 +903,9 @@ input::placeholder {
 }
 
 /* Act 1 welcome atmosphere — full viewport, under the UI. Purple wash remains if this is absent. */
+.onboard-tour {
+  z-index: 10;
+}
 .onboard-hero-video {
   position: fixed;
   inset: 0;
@@ -1205,8 +1208,11 @@ html.metis-bar-land .aw-widget {
   margin-top: 2px;
 }
 
-/* Exclusive-stage primary CTAs — min 52×220, high contrast, hittable (DESIGN.md). */
+/* Exclusive-stage primary CTAs — min 52×220, always visible, hittable (DESIGN.md).
+   Solid pill. Never glass, never fade-up, never hover-to-reveal. */
 .onboard-cta {
+  position: relative;
+  z-index: 5;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1215,6 +1221,8 @@ html.metis-bar-land .aw-widget {
   padding: 0 28px;
   border: none;
   border-radius: 999px;
+  opacity: 1;
+  pointer-events: auto;
   background: #f4f4f5;
   color: #09090b;
   font-size: 16px;

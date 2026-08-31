@@ -27,14 +27,17 @@ const pkg = readFileSync(join(__dirname, '../../../../package.json'), 'utf8')
 
 const slice = [specSrc, engineSrc, componentSrc].join('\n')
 
-describe('Starfield Close — galaxy from frame one', () => {
-  it('mounts on hero and the rest of the exclusive stage', () => {
-    expect(shouldMountStarfield('hero')).toBe(true)
+describe('Starfield Close — after Next, not on hero or recap', () => {
+  it('skips hero (April 29 video) and reveal (Overview/Topics/Q&A)', () => {
+    expect(shouldMountStarfield('hero')).toBe(false)
+    expect(shouldMountStarfield('reveal')).toBe(false)
+    expect(shouldMountStarfield('problem')).toBe(true)
     expect(shouldMountStarfield('skip')).toBe(true)
     for (const scene of STARFIELD_SCENES) {
       expect(shouldMountStarfield(scene)).toBe(true)
     }
-    expect(STARFIELD_SCENES).toContain('hero')
+    expect(STARFIELD_SCENES).not.toContain('hero')
+    expect(STARFIELD_SCENES).not.toContain('reveal')
     expect(experienceSrc).toMatch(/shouldMountStarfield\(scene\) && !starfieldFailed/)
     expect(experienceSrc).toMatch(/<OnboardingStarfield/)
     expect(experienceSrc).toMatch(/playOnboardingVideo\(el\)/)
@@ -46,13 +49,13 @@ describe('Starfield Close — galaxy from frame one', () => {
 describe('Starfield Close — CONFIG, layers, shaders verbatim', () => {
   it('pins CONFIG and LAYERS', () => {
     expect(CONFIG).toEqual({
-      bgColor: '#0a0a24',
-      flameColor: '#aee9ff',
-      flameColor2: '#c79bff',
-      flameAmt: 0.2,
-      colorA: '#aef6cf',
-      colorB: '#5fe6a0',
-      colorC: '#eafff2',
+      bgColor: '#05010a',
+      flameColor: '#9A2BF0',
+      flameColor2: '#7F00DA',
+      flameAmt: 0.16,
+      colorA: '#C084FC',
+      colorB: '#9A2BF0',
+      colorC: '#7F00DA',
       opacity: 2,
       pointSize: 50,
       brightness: 1.85,
@@ -131,14 +134,12 @@ describe('Starfield Close — local three, no CDN', () => {
 
 describe('Starfield Close — WebGL fail keeps the video bed', () => {
   it('video stays until first frame or fail; never a cleared-black canvas', () => {
-    expect(experienceSrc).toMatch(/\(!starfieldReady \|\| starfieldFailed\) && <OnboardingHeroVideo/)
+    expect(experienceSrc).toMatch(/scene === 'hero' && <OnboardingHeroVideo/)
     expect(experienceSrc).toMatch(/onUnavailable=\{\(\) => setStarfieldFailed\(true\)\}/)
-    expect(experienceSrc).toMatch(/onFirstFrame=\{\(\) => setStarfieldReady\(true\)\}/)
     expect(componentSrc).toMatch(/onUnavailableRef\.current\(\)/)
-    expect(componentSrc).toMatch(/onFirstFrame/)
     expect(engineSrc).toMatch(/canvas\.style\.opacity = '0'/)
     expect(engineSrc).toMatch(/canvas\.style\.opacity = '1'/)
-    expect(engineSrc).toMatch(/setClearColor\(0x0a0a24/)
-    expect(engineSrc).not.toMatch(/setClearColor\(0x000000/)
+    expect(engineSrc).toMatch(/setClearColor\(0x05010a/)
+    expect(engineSrc).not.toMatch(/setClearColor\(0x0a0a24/)
   })
 })

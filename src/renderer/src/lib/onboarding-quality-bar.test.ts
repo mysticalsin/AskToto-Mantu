@@ -78,6 +78,7 @@ describe('Apple-grade quality bar — PR 66 re-pass', () => {
     const heroCta = hero.slice(nextAt, hero.indexOf('</button>', nextAt))
     expect(heroCta).toMatch(/\bNext\b/)
     expect(heroCta).not.toMatch(/fade-up/)
+    expect(heroCta).not.toMatch(/onboard-glass/)
     expect(heroCta).not.toMatch(/animationDelay/)
     expect(hero.indexOf('scene-enter')).toBeLessThan(hero.indexOf('onboard-cta'))
     expect(hero.lastIndexOf('</div>', hero.indexOf('onboard-cta'))).toBeGreaterThan(hero.indexOf('scene-enter'))
@@ -90,13 +91,16 @@ describe('Apple-grade quality bar — PR 66 re-pass', () => {
     expect(demo).toMatch(/scene-enter/)
     expect(demo.search(/>\s*Next\s*</)).toBeGreaterThan(demo.lastIndexOf('scene-enter', demo.search(/>\s*Next\s*</)))
     expect(demo).toMatch(/>\s*Set me up\s*</)
+    expect(demo).toMatch(/demoNextLeavesTour\(beat\)/)
     expect(nextBlock).not.toMatch(/\{hasNext && \(/)
   })
 
-  it('WebGL fail is an instant video bed; canvas never paints black first', () => {
-    expect(experience).toMatch(/\(!starfieldReady \|\| starfieldFailed\) && <OnboardingHeroVideo/)
+  it('portal video is hero-only; starfield is purple/black after Next; recap drops the bed', () => {
+    expect(experience).toMatch(/scene === 'hero' && <OnboardingHeroVideo/)
     expect(engine).toMatch(/canvas\.style\.opacity = '0'/)
-    expect(engine).toMatch(/onFirstFrame/)
+    expect(engine).toMatch(/setClearColor\(0x05010a/)
     expect(css).toMatch(/\.onboard-starfield canvas \{[\s\S]*?opacity:\s*0/)
+    expect(css).toMatch(/\.onboard-cta \{[\s\S]*?opacity:\s*1/)
+    expect(css).toMatch(/\.onboard-cta \{[\s\S]*?pointer-events:\s*auto/)
   })
 })

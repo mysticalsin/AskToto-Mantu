@@ -6,6 +6,7 @@ import {
   ONBOARDING_MUSIC_FADE_SECONDS,
   ONBOARDING_MUSIC_FILE,
   ONBOARDING_MUSIC_GAIN,
+  haltOnboardingAudio,
   onboardingMusicGain,
   onboardingMusicLoopEnvelope,
   playOnboardingAudio
@@ -103,5 +104,31 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
     expect(el.currentTime).toBe(0)
     expect(order[0]).toBe('play')
     expect(production).toMatch(/const playing = el\.play\(\)[\s\S]*?if \(opts\.restart\) el\.currentTime = 0/)
+  })
+
+  it('stop/teardown actually ends playback and finish invokes it', () => {
+    const el = {
+      autoplay: true,
+      loop: true,
+      volume: 0.3,
+      src: 'blob:aria',
+      pause: vi.fn(),
+      load: vi.fn(),
+      removeAttribute: vi.fn()
+    } as unknown as HTMLAudioElement
+    haltOnboardingAudio(el)
+    expect(el.pause).toHaveBeenCalledTimes(1)
+    expect(el.autoplay).toBe(false)
+    expect(el.loop).toBe(false)
+    expect(el.volume).toBe(0)
+    expect(el.src).toBe('')
+    expect(el.load).toHaveBeenCalled()
+    expect(production).toMatch(/function haltOnboardingAudio/)
+    expect(production).toMatch(/pagehide/)
+    expect(production).toMatch(/beforeunload/)
+    const finish = experience.slice(experience.indexOf('const finish = async'))
+    expect(finish.indexOf('music.stop()')).toBeGreaterThan(-1)
+    expect(finish.indexOf('music.stop()')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true })'))
+    expect(finish).toMatch(/disposePortalAudio\(\)/)
   })
 })

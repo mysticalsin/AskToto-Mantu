@@ -14,8 +14,9 @@ const html = readFileSync(join(__dirname, '../../index.html'), 'utf8')
 describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
   it('uses Tony’s first-slide clip, muted loop autoplay, object-cover, z-0 under the UI', () => {
     expect(ONBOARDING_HERO_VIDEO_SRC).toBe(
-      'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260319_055001_8e16d972-3b2b-441c-86ad-2901a54682f9.mp4'
+      'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260429_115139_0fc6bd3d-3631-4d26-ab9b-28293887dcc9.mp4'
     )
+    expect(ONBOARDING_HERO_VIDEO_SRC).not.toMatch(/hf_20260319_055001/)
     expect(ONBOARDING_HERO_VIDEO_SRC).not.toMatch(/hf_20260714_113715_c7e0daa0/)
     expect(ONBOARDING_HERO_VIDEO_SRC).not.toMatch(/hf_20260411_104032_69319010/)
     expect(experience).toMatch(/ONBOARDING_HERO_VIDEO_SRC/)
@@ -35,8 +36,8 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(css).toMatch(/#7f00da/)
   })
 
-  it('keeps the hero video until the starfield first frame, or forever on fail', () => {
-    expect(experience).toMatch(/\(!starfieldReady \|\| starfieldFailed\) && <OnboardingHeroVideo/)
+  it('plays the April 29 clip only on the portal-open hero, then unmounts', () => {
+    expect(experience).toMatch(/scene === 'hero' && <OnboardingHeroVideo/)
     expect(experience).toMatch(/shouldMountStarfield\(scene\) && !starfieldFailed/)
     expect(experience).toMatch(/el\?\.pause\(\)/)
     const videoRule = css.slice(css.indexOf('.onboard-hero-video video'))
@@ -44,8 +45,9 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(videoBlock).not.toMatch(/filter:/)
   })
 
-  it('Next, Skip, and the Tony Walteur byline use liquid glass; logo stays Métis', () => {
-    expect(experience).toMatch(/onboard-cta onboard-glass/)
+  it('Skip and the Tony Walteur byline use liquid glass; Next is a solid CTA; logo stays Métis', () => {
+    expect(experience).toMatch(/onboard-glass onboard-glass-chip/)
+    expect(experience).not.toMatch(/onboard-cta onboard-glass/)
     expect(experience).toMatch(/>\s*Next\s*</)
     expect(experience).toMatch(/Skip the tour/)
     expect(experience).toMatch(/onboard-glass onboard-glass-chip/)
@@ -111,7 +113,7 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(experience).not.toMatch(/prefersReducedMotion\(\)[\s\S]{0,80}onboard-mute/)
     const demo = readFileSync(join(__dirname, '../components/OnboardingDemoScene.tsx'), 'utf8')
     expect(demo).toMatch(/onPlayVideo\?\.\(\)/)
-    expect(demo).toMatch(/if \(hasNext\) advance\(\)/)
+    expect(demo).toMatch(/demoNextLeavesTour\(beat\)/)
     expect(demo).toMatch(/demoPlaybackAfterNext/)
     expect(demo).toMatch(/setLocalMs\(next\.localMs\)/)
     expect(demo).not.toMatch(/setTimeout\(/)

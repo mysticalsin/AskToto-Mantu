@@ -67,6 +67,26 @@ export interface OnboardingMusicBed {
   isMuted: () => boolean
 }
 
+/** Ends playback for real. Pause alone left the Aria running after quit. */
+export function haltOnboardingAudio(el: HTMLAudioElement | null | undefined): void {
+  if (!el) return
+  el.autoplay = false
+  el.loop = false
+  try {
+    el.pause()
+  } catch {
+    /* already dead */
+  }
+  el.volume = 0
+  el.removeAttribute('src')
+  el.src = ''
+  try {
+    el.load()
+  } catch {
+    /* empty src load is the teardown */
+  }
+}
+
 export function createOnboardingMusicBed(): OnboardingMusicBed {
   const el = new Audio(ONBOARDING_MUSIC_SRC)
   el.loop = true
@@ -75,23 +95,41 @@ export function createOnboardingMusicBed(): OnboardingMusicBed {
   el.setAttribute('playsinline', '')
   el.volume = ONBOARDING_MUSIC_GAIN
   let muted = false
+  let stopped = false
 
   const applyVolume = (): void => {
-    if (muted) {
+    if (muted || stopped) {
       el.volume = 0
       return
     }
     el.volume = ONBOARDING_MUSIC_GAIN * onboardingMusicLoopEnvelope(el.currentTime, el.duration)
   }
 
+  const stop = (): void => {
+    if (stopped) return
+    stopped = true
+    muted = true
+    haltOnboardingAudio(el)
+    el.removeEventListener('timeupdate', applyVolume)
+    if (typeof window !== 'undefined') {
+      window.removeEventListener('pagehide', stop)
+      window.removeEventListener('beforeunload', stop)
+    }
+  }
+
   el.addEventListener('timeupdate', applyVolume)
+  if (typeof window !== 'undefined') {
+    window.addEventListener('pagehide', stop)
+    window.addEventListener('beforeunload', stop)
+  }
 
   return {
     element: el,
-    start: (opts = {}) => playOnboardingAudio(el, opts),
-    stop: () => {
-      el.pause()
+    start: (opts = {}) => {
+      if (stopped) return
+      return playOnboardingAudio(el, opts)
     },
+    stop,
     setMuted: (next) => {
       muted = next
       applyVolume()
