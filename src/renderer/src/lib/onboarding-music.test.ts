@@ -2,9 +2,11 @@ import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import {
+  ONBOARDING_MUSIC_ENVELOPE_FLOOR,
   ONBOARDING_MUSIC_FADE_SECONDS,
   ONBOARDING_MUSIC_FILE,
   ONBOARDING_MUSIC_GAIN,
+  haltOnboardingAudio,
   onboardingMusicGain,
   onboardingMusicLoopEnvelope,
   playOnboardingAudio
@@ -55,28 +57,35 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
     expect(experience).not.toMatch(/prefersReducedMotion\(\)[\s\S]{0,40}setMuted/)
   })
 
-  it('loops with a cosine fade at both ends', () => {
+  it('loops with a cosine fade at both ends, floored so the first sample is audible', () => {
     expect(ONBOARDING_MUSIC_FADE_SECONDS).toBeGreaterThan(1)
-    expect(onboardingMusicLoopEnvelope(0, 300)).toBeCloseTo(0, 5)
-    expect(onboardingMusicLoopEnvelope(300, 300)).toBeCloseTo(0, 5)
+    expect(ONBOARDING_MUSIC_ENVELOPE_FLOOR).toBeCloseTo(0.48, 8)
+    expect(onboardingMusicLoopEnvelope(0, 300)).toBe(ONBOARDING_MUSIC_ENVELOPE_FLOOR)
+    expect(onboardingMusicLoopEnvelope(300, 300)).toBe(ONBOARDING_MUSIC_ENVELOPE_FLOOR)
+    expect(onboardingMusicLoopEnvelope(0, 300) * ONBOARDING_MUSIC_GAIN).toBeGreaterThan(0.12)
+    expect(onboardingMusicLoopEnvelope(0, 300) * ONBOARDING_MUSIC_GAIN).toBeLessThan(0.16)
     expect(onboardingMusicLoopEnvelope(150, 300)).toBe(1)
     expect(onboardingMusicLoopEnvelope(1.2, 300, 2.4)).toBeGreaterThan(0.4)
     expect(onboardingMusicLoopEnvelope(1.2, 300, 2.4)).toBeLessThan(0.6)
   })
 
-  it('starts the Aria on the same mount as playPortalOpen, not on Next', () => {
+  it('starts the Aria on exclusive mount and retries on Next and first click', () => {
     const mount = experience.slice(experience.indexOf('prefetchOnboardingDemoChunks()'))
     const mountBlock = mount.slice(0, mount.indexOf('}, [])') + 6)
     expect(mountBlock).toMatch(/music\.start\(\)/)
     expect(mountBlock).toMatch(/playPortalOpen\(/)
     expect(mountBlock.indexOf('music.start()')).toBeLessThan(mountBlock.indexOf('playPortalOpen'))
+    expect(mountBlock.lastIndexOf('music.start()')).toBeGreaterThan(mountBlock.indexOf('playPortalOpen'))
     expect(mountBlock.indexOf('music.start()')).toBeGreaterThan(-1)
     const begin = experience.slice(experience.indexOf('onBegin={() => {'))
     const beginBlock = begin.slice(0, begin.indexOf('onSkip'))
     expect(beginBlock).toMatch(/playOnboardingVideo\(/)
+    expect(beginBlock).toMatch(/music\.start\(\)/)
     expect(beginBlock.indexOf('playOnboardingVideo')).toBeLessThan(beginBlock.indexOf('setScene'))
-    expect(beginBlock).not.toMatch(/music\.start\(\)/)
+    expect(experience).toMatch(/onPointerDown=\{music\.start\}/)
+    expect(experience).toMatch(/music\.start\(\)/)
     expect(experience).not.toMatch(/playOnboardingMedia/)
+    expect(experience).not.toMatch(/bedRef\.current\?\.stop\(\)[\s\S]{0,40}setScene/)
   })
 
   it('play() is the first media call — no seek before play()', () => {
@@ -95,5 +104,31 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
     expect(el.currentTime).toBe(0)
     expect(order[0]).toBe('play')
     expect(production).toMatch(/const playing = el\.play\(\)[\s\S]*?if \(opts\.restart\) el\.currentTime = 0/)
+  })
+
+  it('stop/teardown actually ends playback and finish invokes it', () => {
+    const el = {
+      autoplay: true,
+      loop: true,
+      volume: 0.3,
+      src: 'blob:aria',
+      pause: vi.fn(),
+      load: vi.fn(),
+      removeAttribute: vi.fn()
+    } as unknown as HTMLAudioElement
+    haltOnboardingAudio(el)
+    expect(el.pause).toHaveBeenCalledTimes(1)
+    expect(el.autoplay).toBe(false)
+    expect(el.loop).toBe(false)
+    expect(el.volume).toBe(0)
+    expect(el.src).toBe('')
+    expect(el.load).toHaveBeenCalled()
+    expect(production).toMatch(/function haltOnboardingAudio/)
+    expect(production).toMatch(/pagehide/)
+    expect(production).toMatch(/beforeunload/)
+    const finish = experience.slice(experience.indexOf('const finish = async'))
+    expect(finish.indexOf('music.stop()')).toBeGreaterThan(-1)
+    expect(finish.indexOf('music.stop()')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true })'))
+    expect(finish).toMatch(/disposePortalAudio\(\)/)
   })
 })
