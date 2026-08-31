@@ -14,7 +14,6 @@ import {
   Pause,
   Play,
   Square,
-  Plus,
   Brain,
   FileSearch
 } from 'lucide-react'
@@ -112,7 +111,7 @@ export const ElapsedClock = memo(function ElapsedClock({
   return (
     <span
       className={[
-        'tabular-nums text-[12px] font-medium',
+        'inline-block min-w-[5ch] tabular-nums text-[12px] font-medium',
         paused ? 'text-[color:var(--color-ink-3)]' : 'text-[color:var(--color-danger)]'
       ].join(' ')}
     >
@@ -227,7 +226,8 @@ export interface BarProps {
   onTranscript?: () => void
   /** Whether the live transcript panel is currently shown, so the button label reads Hide vs Show. */
   transcriptShown?: boolean
-  /** Start a fresh meeting from the bar (ends + saves the current one, then begins a new session). */
+  /** Start a fresh meeting (ends + saves the current one). Not rendered on the listening
+   *  toolbar row — that row is already a meeting. Review / History / after Stop keep the action. */
   onNewMeeting?: () => void
   /** When true, calling prewarmCapture() on input focus is permitted (pass visionReady && screenAsk). */
   canPrewarm?: boolean
@@ -576,7 +576,11 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
 
   const toolbarRow = useMemo(
     () => (
-        <div className="aw-toolbar grid grid-cols-[minmax(30px,1fr)_auto_minmax(30px,1fr)] items-center border-t border-[var(--color-hair-soft)] px-5 py-1">
+        <div
+          className="aw-toolbar border-t border-[var(--color-hair-soft)]"
+          data-bar-toolbar
+          data-bar-listening={props.listening ? 'true' : 'false'}
+        >
           {/* The Mantu mark IS the logo → opens Settings. Locked circle: Listen chrome
               may expand the Bar, but this M must not flatten, stretch, or clip into a bar. */}
           <button
@@ -592,12 +596,9 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
             </span>
           </button>
 
-          {/* Centered tools — the grid's auto middle track. While listening, the timer/pause/stop slot on
-              the right is mirrored by an equal-width spacer on the left, so the icons stay put when a
-              meeting starts AND the group's midpoint stays on the window's centerline (a one-sided slot
-              dragged the whole cluster ~58px left of center). Idle, neither side renders. */}
-          <div className="flex min-w-0 items-center justify-center gap-4">
-            {props.listening && <span aria-hidden className="w-[100px] flex-none" />}
+          {/* Icon cluster. No dummy 100px spacer — that stole width and collided with the
+              right reserved slots at production overlay width. Tools flex in leftover space. */}
+          <div className="aw-toolbar__tools" data-bar-tools>
             <IconTool
               title={props.captureAccel ? `Capture screen (${accelLabel(props.captureAccel)})` : 'Capture screen'}
               onClick={props.onCapture}
@@ -688,13 +689,16 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                 <AudioLines size={19} strokeWidth={ICON_STROKE} />
               )}
             </IconTool>
-            {/* Timer + pause + stop — rendered only while listening, mirrored by the spacer at the
-                cluster's other end so the icons between them never move. */}
+          </div>
+
+          {/* Right reserved slots. Listening is already a meeting: no "+ New meeting" here
+              (that action stays after Stop / on Review / History). Timer + pause own one box. */}
+          <div className="aw-toolbar__actions" data-bar-actions>
             {props.listening && (
-              <div className="flex w-[100px] flex-none items-center gap-2">
+              <div className="aw-toolbar__timer" data-bar-listen-timer>
                   <ElapsedClock startedAt={props.startedAt} paused={props.paused} />
                   {/* Pause suspends capture (mic + system audio stay warm, nothing is finalized/saved) —
-                      distinct from Stop (the danger dot above), which ends the meeting and saves it. */}
+                      distinct from Stop (the danger rec-dot in the tools cluster), which ends the meeting. */}
                   <button
                     type="button"
                     title={props.paused ? 'Resume recording' : 'Pause recording'}
@@ -708,7 +712,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                       <Pause size={16} strokeWidth={ICON_STROKE} />
                     )}
                   </button>
-                  {/* Stop — ends the meeting (recap + save), identical to the rec-dot above; an explicit
+                  {/* Stop — ends the meeting (recap + save), identical to the rec-dot; an explicit
                       square makes "end" discoverable next to Pause instead of hiding behind the dot. */}
                   <button
                     type="button"
@@ -721,38 +725,23 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                   </button>
               </div>
             )}
-          </div>
-
-          {/* Right: History/Transcript pill(s) + Minimize-to-pill + collapse-chevron (ghost).
-              No separate Hide button — global ⌘\ and tray handle that. */}
-          <div className="flex flex-none items-center justify-self-end gap-1.5">
-            {/* Live pivot: New meeting + Transcript when listening, History otherwise */}
             {props.listening ? (
-              <>
                 <button
                   type="button"
-                  title="Save this meeting and start a fresh one"
-                  onClick={props.onNewMeeting}
-                  className="no-drag focus-ring flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-[var(--color-accent-soft)] px-3 py-1.5 text-[13px] font-semibold leading-none text-[color:var(--color-accent-text)] ring-1 ring-inset ring-[var(--color-accent)]/30 transition-colors duration-[var(--duration-hover)] hover:bg-[var(--color-accent)]/25 hover:ring-[var(--color-accent)]/50"
-                >
-                  <Plus size={14} strokeWidth={2.5} />
-                  New meeting
-                </button>
-                <button
-                  type="button"
+                  data-bar-transcript
                   title={props.transcriptShown ? 'Hide the live transcript' : 'Show the live transcript'}
                   onClick={props.onTranscript}
-                  className="no-drag focus-ring mr-0.5 flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-white/[0.05] px-2.5 py-1.5 text-[13px] font-semibold leading-none text-[color:var(--color-ink-2)] transition-colors duration-[var(--duration-hover)] hover:bg-white/[0.1] hover:text-[color:var(--color-ink)]"
+                  className="aw-toolbar__transcript no-drag focus-ring flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-white/[0.05] px-2.5 py-1.5 text-[13px] font-semibold leading-none text-[color:var(--color-ink-2)] transition-colors duration-[var(--duration-hover)] hover:bg-white/[0.1] hover:text-[color:var(--color-ink)]"
                 >
                   <FileText size={13} strokeWidth={ICON_STROKE} />
-                  Transcript
+                  <span className="aw-toolbar__transcript-copy">Transcript</span>
                 </button>
-              </>
             ) : (
               <button
                 type="button"
+                data-bar-history
                 onClick={props.onHistory}
-                className="no-drag focus-ring mr-0.5 flex items-center gap-1.5 rounded-full bg-white/[0.05] px-3 py-1.5 text-[13px] font-semibold text-[color:var(--color-ink-2)] transition-colors duration-[var(--duration-hover)] hover:bg-white/[0.1] hover:text-[color:var(--color-ink)]"
+                className="no-drag focus-ring flex items-center gap-1.5 rounded-full bg-white/[0.05] px-3 py-1.5 text-[13px] font-semibold text-[color:var(--color-ink-2)] transition-colors duration-[var(--duration-hover)] hover:bg-white/[0.1] hover:text-[color:var(--color-ink)]"
               >
                 History
                 <ChevronDown size={13} strokeWidth={ICON_STROKE} />
@@ -772,6 +761,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                 for it to reveal — e.g. idle with no answer/history/settings open. */}
             <button
               type="button"
+              data-bar-chevron
               title={!props.canTogglePanel ? 'Nothing to expand yet' : props.panelOpen ? 'Collapse' : 'Expand'}
               aria-label={props.panelOpen ? 'Collapse' : 'Expand'}
               aria-disabled={!props.canTogglePanel}
@@ -787,7 +777,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
           </div>
         </div>
     ),
-    [props.onSettings, props.listening, props.onCapture, props.capturing, props.captureAccel, props.spotlightReady, props.onSpotlightRef, props.mode, props.customModes, modeOpen, props.thinkingOn, props.onToggleThinking, props.stealth, props.onToggleStealth, props.stealthLocked, props.onToggleListen, props.paused, props.startedAt, props.onTogglePause, props.onNewMeeting, props.transcriptShown, props.onTranscript, props.onHistory, props.onMinimize, props.canMinimize, props.orbMood, props.canTogglePanel, props.panelOpen, props.onTogglePanel]
+    [props.onSettings, props.listening, props.onCapture, props.capturing, props.captureAccel, props.spotlightReady, props.onSpotlightRef, props.mode, props.customModes, modeOpen, props.thinkingOn, props.onToggleThinking, props.stealth, props.onToggleStealth, props.stealthLocked, props.onToggleListen, props.paused, props.startedAt, props.onTogglePause, props.transcriptShown, props.onTranscript, props.onHistory, props.onMinimize, props.canMinimize, props.orbMood, props.canTogglePanel, props.panelOpen, props.onTogglePanel]
   )
 
   return (
