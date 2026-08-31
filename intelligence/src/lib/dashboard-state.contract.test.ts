@@ -62,7 +62,8 @@ describe('MQA-221 — a failed refresh is never swallowed behind a good snapshot
     // Live-brain mode throws "Live brain bridge unavailable ..."; prefixing that with a data.json
     // failure sent the user to fix a file that is not involved.
     expect(app).not.toMatch(/Failed to load data\.json: \{error\}/)
-    expect(app).toMatch(/<p className="text-sm text-rose-300">\{error\}<\/p>/)
+    expect(app).toMatch(/\{error\}/)
+    expect(app).toMatch(/Intelligence could not load/)
   })
 })
 
