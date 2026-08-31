@@ -31,6 +31,7 @@ import {
   Wand2,
   ShieldCheck,
   Info,
+  IdCard,
   X,
   Search,
   RefreshCw,
@@ -107,6 +108,7 @@ import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
 import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
 import { MetisMark } from './MetisMark'
+import { IdentitySection } from './IdentitySection'
 import { FieldHint, TextButton } from './ui'
 import { AgendaView } from './AgendaView'
 import { usePermissions } from '../state'
@@ -5018,14 +5020,25 @@ const TABS: {
       'recording consent', 'sensitive data', 'redact', 'permissions', 'usage'
     ]
   },
-  // Profile + Keybinds merged: both are "how Métis is set up for YOU" (who you are / how you drive it).
-  // Labeled just "Profile" so all nine tabs fit one line; keybinds live inside this tab.
+  // Identity + About you + Keybinds: the member pass is the hero; who you are and how you
+  // drive Métis stay on the same tab so we do not add a tenth pill. Tab id stays `profile`.
   {
     id: 'profile',
-    label: 'Profile',
-    icon: User,
-    desc: 'Who you are, your license, and your keybinds.',
-    keywords: ['about you', 'license', 'keyboard shortcuts', 'hotkeys', 'tap control']
+    label: 'Identity',
+    icon: IdCard,
+    desc: 'Your member pass, who you are, and your keybinds.',
+    keywords: [
+      'identity',
+      'member pass',
+      'member number',
+      'serial',
+      'install date',
+      'about you',
+      'license',
+      'keyboard shortcuts',
+      'hotkeys',
+      'tap control'
+    ]
   },
   {
     id: 'about',
@@ -5901,6 +5914,7 @@ export function Settings({
 
             {tab === 'profile' && (
               <div className="flex flex-col gap-6">
+                <IdentitySection />
                 <Section title="About you" desc="Used for interview and sales modes. The more detail, the better the answers." icon={User}>
                   <ProfileEditor
                     profile={settings.profile}

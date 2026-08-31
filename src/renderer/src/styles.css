@@ -870,3 +870,197 @@ input::placeholder {
     animation-duration: 1.2s !important;
   }
 }
+
+/* ── Métis member pass (Settings → Identity). Contract: docs/design/IDENTITY-CARD.md ── */
+.metis-identity {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  padding: 4px 0 2px;
+}
+.metis-identity-caption {
+  margin: 0;
+  max-width: 360px;
+  text-align: center;
+  font-family: var(--font-body);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--cl-muted-foreground);
+}
+.metis-pass-stage {
+  width: 100%;
+  max-width: 360px;
+  perspective: 1200px;
+  perspective-origin: 50% 50%;
+}
+.metis-pass {
+  --pass-accent: #7f00da;
+  --pass-accent-bright: #a64dff;
+  --pass-accent-text: #b388f0;
+  --pass-ink: #ffffff;
+  --pass-ink-2: rgba(255, 255, 255, 0.78);
+  --pass-ink-3: rgba(255, 255, 255, 0.56);
+  --pass-metal: #c4b8d4;
+  --pass-metal-dark: #2a1840;
+  --pass-glass: #1a0033;
+  --pass-glass-lift: #291050;
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1.586 / 1;
+  transform-style: preserve-3d;
+  border-radius: 18px;
+  cursor: grab;
+  outline: none;
+  box-shadow:
+    0 18px 40px rgba(0, 0, 0, 0.45),
+    0 2px 12px rgba(127, 0, 218, 0.16);
+}
+.metis-pass:active {
+  cursor: grabbing;
+}
+.metis-pass:focus-visible {
+  box-shadow:
+    0 18px 40px rgba(0, 0, 0, 0.45),
+    0 0 0 2px var(--pass-accent-text),
+    0 0 0 6px rgba(127, 0, 218, 0.28);
+}
+.metis-pass-face {
+  position: absolute;
+  inset: 0;
+  border-radius: 18px;
+  padding: 18px 18px 16px;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  background:
+    linear-gradient(160deg, rgba(255, 255, 255, 0.07), transparent 42%),
+    linear-gradient(180deg, var(--pass-glass-lift) 0%, var(--pass-glass) 72%);
+  color: var(--pass-ink);
+  overflow: hidden;
+}
+.metis-pass-back {
+  transform: rotateY(180deg);
+}
+.metis-pass-rim {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  border-radius: 18px;
+  box-shadow:
+    inset 0 1px 0 rgba(196, 184, 212, 0.55),
+    inset 0 -1px 0 rgba(42, 24, 64, 0.85),
+    inset 1px 0 0 rgba(166, 77, 255, 0.18),
+    inset -1px 0 0 rgba(42, 24, 64, 0.4);
+}
+.metis-pass-sheen {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  border-radius: 18px;
+  mix-blend-mode: screen;
+}
+.metis-pass-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.metis-pass-eyebrow {
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--pass-accent-text);
+}
+.metis-pass-wordmark {
+  margin-top: 10px;
+  font-family: var(--font-ui);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.metis-pass-number {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-top: 14px;
+}
+.metis-pass-no {
+  font-family: var(--font-ui);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--pass-ink-3);
+}
+.metis-pass-num {
+  font-family: ui-monospace, 'Geist Mono', SFMono-Regular, monospace;
+  font-size: 28px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.03em;
+  line-height: 1;
+}
+.metis-pass-meta {
+  position: absolute;
+  left: 18px;
+  right: 18px;
+  bottom: 16px;
+}
+.metis-pass-device {
+  margin-top: 3px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--pass-ink);
+}
+.metis-pass-serial {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 6px;
+  font-family: ui-monospace, 'Geist Mono', SFMono-Regular, monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.metis-pass-k {
+  color: var(--pass-ink-3);
+  font-family: var(--font-ui);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.metis-pass-v {
+  color: var(--pass-ink-2);
+}
+.metis-pass-date {
+  margin-top: 4px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--pass-ink-2);
+}
+.metis-pass-edition {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  font-weight: 600;
+}
+.metis-pass-copy {
+  margin: 18px 0 0;
+  font-family: var(--font-body);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--pass-ink-2);
+}
+.metis-pass-copy--soft {
+  color: var(--pass-ink-3);
+}
+.metis-pass--static .metis-pass-sheen {
+  background: transparent !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  .metis-pass {
+    transition: none;
+  }
+}
