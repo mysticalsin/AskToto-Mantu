@@ -237,6 +237,8 @@ describe('license-server', () => {
     // A license record missing its key is invalid -> 400, store untouched.
     const bad = await post('/admin/restore', { licenses: [{ companyName: 'No Key', seatCap: 1, activations: [] }] }, adminHeaders());
     assert.equal(bad.status, 400);
+    assert.deepEqual(bad.json, { ok: false, error: 'invalid_request' });
+    assert.equal(Object.prototype.hasOwnProperty.call(bad.json, 'message'), false);
     const still = await get('/admin/export', adminHeaders());
     assert.equal(still.json.licenses.length, 1);
     assert.equal(still.json.licenses[0].licenseKey, 'ATK-0000000000000000TEST');
@@ -283,6 +285,16 @@ describe('license-server', () => {
     assert.equal(retry.json.seatsUsed, 1);
   });
 
+  it('rate-limits a burst of /deactivate calls (429 after the window cap)', async () => {
+    seedLicense({ seatCap: 1000 });
+    let sawLimited = false;
+    for (let i = 0; i < 30; i++) {
+      const r = await post('/deactivate', { licenseKey: 'ATK-0000000000000000TEST', machineId: 'm-' + i });
+      if (r.status === 429) { sawLimited = true; break; }
+    }
+    assert.equal(sawLimited, true, 'a burst well over the per-minute cap must be rate-limited');
+  });
+
   it('rejects an unknown license key', async () => {
     const { json } = await post('/activate', { licenseKey: 'ATK-DOESNOTEXIST00000000', machineId: 'machine-1' });
     assert.deepEqual(json, { ok: false, error: 'invalid' });
@@ -310,6 +322,86 @@ describe('license-server', () => {
     const { status, json } = await get('/admin/licenses', adminHeaders());
     assert.equal(status, 503);
     assert.equal(json.error, 'admin_disabled');
+  });
+
+  it('exchanges a bearer token for an httpOnly session cookie that can call admin APIs', async () => {
+    const res = await fetch(`${baseUrl}/admin/session`, {
+      method: 'POST',
+      headers: { ...adminHeaders(), 'content-type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(res.status, 200);
+    const setCookie = res.headers.getSetCookie();
+    const line = setCookie.find((c) => c.startsWith('metis_admin_session='));
+    assert.ok(line, 'Set-Cookie must include metis_admin_session');
+    assert.match(line, /HttpOnly/i);
+    assert.match(line, /SameSite=Strict/i);
+    assert.doesNotMatch(line, new RegExp(ADMIN_TOKEN));
+    const id = /metis_admin_session=([a-f0-9]{64})/.exec(line)?.[1];
+    assert.ok(id);
+    const list = await get('/admin/licenses', { cookie: `metis_admin_session=${id}` });
+    assert.equal(list.status, 200);
+    assert.ok(Array.isArray(list.json));
+
+    const check = await get('/admin/session', { cookie: `metis_admin_session=${id}` });
+    assert.equal(check.status, 200);
+    assert.equal(check.json.ok, true);
+  });
+
+  it('marks the session cookie Secure on HTTPS and forgets it on DELETE', async () => {
+    const res = await fetch(`${baseUrl}/admin/session`, {
+      method: 'POST',
+      headers: { ...adminHeaders(), 'content-type': 'application/json', 'x-forwarded-proto': 'https' },
+      body: '{}',
+    });
+    assert.equal(res.status, 200);
+    const line = res.headers.getSetCookie().find((c) => c.startsWith('metis_admin_session='));
+    assert.match(line, /Secure/i);
+    const id = /metis_admin_session=([a-f0-9]{64})/.exec(line)?.[1];
+
+    const gone = await del('/admin/session', { cookie: `metis_admin_session=${id}` });
+    assert.equal(gone.status, 200);
+    const after = await get('/admin/licenses', { cookie: `metis_admin_session=${id}` });
+    assert.equal(after.status, 401);
+  });
+
+  it('admin UI HTML never stores the bearer in localStorage', async () => {
+    const res = await fetch(`${baseUrl}/admin/ui`);
+    assert.equal(res.status, 200);
+    const html = await res.text();
+    assert.doesNotMatch(html, /localStorage/);
+    assert.match(html, /\/admin\/session/);
+    assert.match(html, /credentials: 'same-origin'/);
+  });
+
+  it('attack logs hash the client IP and never print the raw address, token, or license key', async () => {
+    const lines = [];
+    const orig = console.warn;
+    console.warn = (...args) => {
+      lines.push(args.map(String).join(' '));
+    };
+    try {
+      await get('/admin/licenses', { ...adminHeaders('wrong-token'), 'x-forwarded-for': '203.0.113.88' });
+      seedLicense({ seatCap: 1000 });
+      for (let i = 0; i < 30; i++) {
+        const r = await post(
+          '/activate',
+          { licenseKey: 'ATK-0000000000000000TEST', machineId: 'log-' + i },
+          { 'x-forwarded-for': '198.51.100.44' }
+        );
+        if (r.status === 429) break;
+      }
+    } finally {
+      console.warn = orig;
+    }
+    const joined = lines.join('\n');
+    assert.match(joined, /admin_auth_failed ip_hash=[a-f0-9]{16}/);
+    assert.match(joined, /rate_limited route=\/activate ip_hash=[a-f0-9]{16}/);
+    assert.doesNotMatch(joined, /203\.0\.113\.88/);
+    assert.doesNotMatch(joined, /198\.51\.100\.44/);
+    assert.doesNotMatch(joined, /wrong-token/);
+    assert.doesNotMatch(joined, /test-admin-token/);
+    assert.doesNotMatch(joined, /ATK-0000000000000000TEST/);
   });
 
   it('admin can create a license and it round-trips through list/detail/patch', async () => {
@@ -604,7 +696,7 @@ describe('license-server', () => {
     assert.equal(afterReenable.status, 200);
   });
 
-  it('GET /health returns version, uptimeSeconds, and licenseCount alongside ok:true', async () => {
+  it('GET /health returns version and uptimeSeconds, and does not disclose licenseCount', async () => {
     seedLicense({ licenseKey: 'ATK-HEALTH-0000000000001' });
     seedLicense({ licenseKey: 'ATK-HEALTH-0000000000002' });
 
@@ -617,12 +709,46 @@ describe('license-server', () => {
     assert.match(json.version, /^\d+\.\d+\.\d+/);
     assert.equal(typeof json.uptimeSeconds, 'number');
     assert.ok(json.uptimeSeconds >= 0);
-    assert.equal(json.licenseCount, 2);
+    assert.equal(json.licenseCount, undefined);
+    assert.equal(Object.prototype.hasOwnProperty.call(json, 'licenseCount'), false);
   });
 
   it('GET /health requires no auth', async () => {
     const res = await fetch(`${baseUrl}/health`);
     assert.equal(res.status, 200);
+  });
+
+  it('HTTP responses send nosniff and frame-deny, and HSTS only when the request is HTTPS', async () => {
+    const httpRes = await fetch(`${baseUrl}/health`);
+    assert.equal(httpRes.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(httpRes.headers.get('x-frame-options'), 'DENY');
+    assert.equal(httpRes.headers.get('referrer-policy'), 'no-referrer');
+    assert.equal(httpRes.headers.get('strict-transport-security'), null);
+
+    const httpsRes = await fetch(`${baseUrl}/health`, { headers: { 'x-forwarded-proto': 'https' } });
+    assert.equal(httpsRes.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(httpsRes.headers.get('x-frame-options'), 'DENY');
+    assert.equal(httpsRes.headers.get('strict-transport-security'), 'max-age=31536000; includeSubDomains');
+
+    const ui = await fetch(`${baseUrl}/admin/ui`);
+    assert.equal(ui.status, 200);
+    assert.equal(ui.headers.get('x-frame-options'), 'DENY');
+    assert.equal(ui.headers.get('x-content-type-options'), 'nosniff');
+  });
+
+  it('forged inbound webhook paths cannot create a license', async () => {
+    seedLicense({ licenseKey: 'ATK-0000000000000000TEST', seatCap: 2 });
+    const before = store.getAll().length;
+    for (const path of ['/webhook', '/stripe', '/stripe/webhook', '/lemon', '/hooks', '/hooks/license']) {
+      const r = await post(path, { licenseKey: 'ATK-FORGED-FROM-WEBHOOK0001', seatCap: 99, type: 'checkout.session.completed' });
+      assert.equal(r.status, 404, path);
+    }
+    assert.equal(store.getAll().length, before);
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const { dirname, join } = await import('node:path');
+    const appSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'lib', 'app.mjs'), 'utf8');
+    assert.doesNotMatch(appSrc, /app\.(post|put|patch)\('\/(webhook|stripe|lemon|hooks)/);
   });
 });
 

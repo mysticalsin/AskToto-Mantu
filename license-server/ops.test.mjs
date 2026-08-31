@@ -12,7 +12,7 @@ import { createApp } from './lib/app.mjs';
 import { createStore } from './lib/store.mjs';
 import { createAuditLog } from './lib/audit.mjs';
 import { createBackupManager } from './lib/backups.mjs';
-import { createWebhooks, isDiscordWebhookUrl, formatDiscordPayload } from './lib/webhooks.mjs';
+import { createWebhooks, isDiscordWebhookUrl, formatDiscordPayload, licenseEventView } from './lib/webhooks.mjs';
 import { computeAnalytics } from './lib/license.mjs';
 
 const ADMIN_TOKEN = 'test-admin-token';
@@ -322,6 +322,27 @@ describe('ops layer', () => {
     assert.equal(calls[1].embeds, undefined);
   });
 
+  it('licenseEventView truncates the key unless LICENSE_WEBHOOK_FULL_KEYS is set', () => {
+    const license = {
+      licenseKey: 'ATK-HY2JVMZ3P3JF8CGAQWPR',
+      companyName: 'Mantu',
+      seatCap: 2,
+      activations: [],
+      expiresAt: null,
+      revoked: false,
+    };
+    const prev = process.env.LICENSE_WEBHOOK_FULL_KEYS;
+    delete process.env.LICENSE_WEBHOOK_FULL_KEYS;
+    try {
+      assert.equal(licenseEventView(license).licenseKey, 'ATK-HY2J…QWPR');
+      process.env.LICENSE_WEBHOOK_FULL_KEYS = '1';
+      assert.equal(licenseEventView(license).licenseKey, 'ATK-HY2JVMZ3P3JF8CGAQWPR');
+    } finally {
+      if (prev === undefined) delete process.env.LICENSE_WEBHOOK_FULL_KEYS;
+      else process.env.LICENSE_WEBHOOK_FULL_KEYS = prev;
+    }
+  });
+
   it('retries a 429 rate-limit response instead of dropping the event', async () => {
     const limited = await startReceiver((record, n) => (n === 1 ? 429 : 200));
     try {
@@ -351,9 +372,11 @@ describe('ops layer', () => {
       assert.equal(receiver.requests.length, 1);
       const delivery = receiver.requests[0];
       const payload = JSON.parse(delivery.body);
-      assert.equal(payload.event, 'license.created');
-      assert.equal(payload.license.companyName, 'Hook Co');
-      assert.equal(payload.license.seatCap, 3);
+    assert.equal(payload.event, 'license.created');
+    assert.equal(payload.license.companyName, 'Hook Co');
+    assert.equal(payload.license.seatCap, 3);
+    assert.ok(!delivery.body.includes(created.json.licenseKey), 'generic webhooks must not carry the full activatable key');
+    assert.match(payload.license.licenseKey, /^ATK-[0-9A-Z]{4}…[0-9A-Z]{4}$/);
 
       const expected = `sha256=${createHmac('sha256', WEBHOOK_SECRET).update(delivery.body).digest('hex')}`;
       assert.equal(delivery.headers['x-asktoto-signature'], expected);
