@@ -2,7 +2,7 @@ import { JarvisOrbButton } from './JarvisOrbButton'
 import type { OrbMood } from '../lib/bar-pill-orb'
 
 /**
- * Bar-only minimized control: the same 52 glass sphere as the docked Bar circle.
+ * Bar-only minimized control: the same 64 thinking-orb as the docked Bar circle.
  * Click (not drag) expands to the full bar. Hide/Island never mount this.
  */
 export function ControlPill({
@@ -14,7 +14,7 @@ export function ControlPill({
   onExpand: () => void
   orbMood?: OrbMood
   listening?: boolean
-  /** Tooltip only. Rec-dot stays red on the sphere. */
+  /** Tooltip only. Listen is the listening orb, not a rec-dot on this circle. */
   degradedNote?: string | null
 }): JSX.Element {
   return (
