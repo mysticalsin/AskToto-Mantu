@@ -8,7 +8,13 @@
 
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import { overlayUsesHover } from '@shared/overlay-chrome'
-import type { Rect } from './geometry'
+import { HOVER_HIT_BAND_MAX_PX, type Rect } from './geometry'
+
+/** Ignore a leftover 80–120px pad on the rest rect. Reveal is the top strip only. */
+function clampHoverRestRect(rect: Rect): Rect {
+  if (rect.height <= HOVER_HIT_BAND_MAX_PX) return rect
+  return { ...rect, height: HOVER_HIT_BAND_MAX_PX }
+}
 
 /** Poll while hide/island is resting. 16–32ms — one frame-ish, no Accessibility tap. */
 export const CURSOR_WATCH_INTERVAL_MS = 24
@@ -48,11 +54,12 @@ export function decideCursorWatch(input: {
   revealed: boolean
   gracePx?: number
 }): CursorWatchDecision {
+  const restRect = clampHoverRestRect(input.restRect)
   if (!input.revealed) {
-    return pointInRect(input.cursor, input.restRect) ? 'reveal' : 'stay'
+    return pointInRect(input.cursor, restRect) ? 'reveal' : 'stay'
   }
   const leave = inflateRect(input.revealedRect, input.gracePx ?? CURSOR_LEAVE_GRACE_PX)
-  if (pointInRect(input.cursor, input.restRect) || pointInRect(input.cursor, leave)) return 'stay'
+  if (pointInRect(input.cursor, restRect) || pointInRect(input.cursor, leave)) return 'stay'
   return 'hide'
 }
 

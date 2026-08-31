@@ -1748,6 +1748,20 @@ input::placeholder {
   height: 7px;
   border-radius: 0 0 3px 3px;
 }
+.overlay-chrome-diagram__orb {
+  display: none;
+}
+.overlay-chrome-diagram--bar .overlay-chrome-diagram__orb {
+  display: block;
+  position: absolute;
+  top: 8px;
+  right: 16%;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #7f00da;
+  box-shadow: 0 0 6px 1px rgba(127, 0, 218, 0.55);
+}
 
 @keyframes overlay-peek-in {
   from {
@@ -2153,10 +2167,11 @@ html.metis-bar-land .aw-widget {
   opacity: 0;
 }
 
-.aw-pill--orb {
+.aw-orb {
   display: block;
-  width: 80px;
-  height: 80px;
+  width: 52px;
+  height: 52px;
+  flex-shrink: 0;
   padding: 0;
   margin: 0;
   overflow: hidden;
@@ -2168,46 +2183,38 @@ html.metis-bar-land .aw-widget {
   backdrop-filter: none;
   contain: paint;
   touch-action: none;
-  cursor: grab;
-  animation: bar-pill-spring-in 360ms var(--ease-spring, cubic-bezier(0.22, 1, 0.36, 1)) both;
+  cursor: pointer;
   transform-origin: center center;
 }
-.aw-pill--orb:hover,
-.aw-pill--orb:active,
-.aw-pill--orb:focus {
-  width: 80px;
-  height: 80px;
+.aw-orb:hover,
+.aw-orb:active,
+.aw-orb:focus {
+  width: 52px;
+  height: 52px;
   border-radius: 50%;
 }
-.aw-pill--orb:active {
+.aw-orb[data-hug-width] {
+  cursor: grab;
+}
+.aw-orb[data-hug-width]:active {
   cursor: grabbing;
 }
-.aw-pill-orb {
+.aw-orb__canvas {
   display: block;
-  width: 80px;
-  height: 80px;
+  width: 52px;
+  height: 52px;
   border-radius: 50%;
   pointer-events: none;
 }
-.aw-pill--orb[data-orb-mood='idle'] {
+.aw-orb[data-orb-mood='idle'] {
   background: radial-gradient(circle at 50% 50%, rgb(127 0 218 / 0.22) 0%, rgb(127 0 218 / 0.08) 46%, transparent 70%);
 }
-.aw-pill--orb[data-orb-mood='thinking'] {
+.aw-orb[data-orb-mood='thinking'] {
   background: radial-gradient(circle at 50% 50%, rgb(154 43 240 / 0.28) 0%, rgb(154 43 240 / 0.1) 46%, transparent 70%);
 }
-.aw-pill--orb[data-orb-mood='factcheck'] {
+.aw-orb[data-orb-mood='factcheck'] {
   background: radial-gradient(circle at 50% 50%, rgb(76 168 232 / 0.22) 0%, rgb(76 168 232 / 0.08) 46%, transparent 70%);
 }
-.aw-pill--orb[data-orb-mood='connecting'] {
+.aw-orb[data-orb-mood='connecting'] {
   background: radial-gradient(circle at 50% 50%, rgb(42 10 74 / 0.34) 0%, rgb(42 10 74 / 0.12) 46%, transparent 70%);
-}
-@keyframes bar-pill-spring-in {
-  from {
-    transform: scale(0.88);
-    opacity: 0.72;
-  }
-  to {
-    transform: scale(1);
-    opacity: 1;
-  }
 }

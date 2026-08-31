@@ -97,10 +97,10 @@ describe('bar pill sentient circle', () => {
     expect(pillClickShouldExpand(true)).toBe(false)
   })
 
-  it('orb rAF is off when the bar is idle', () => {
+  it('orb rAF runs on a Bar circle and is off on Hide/Island', () => {
     expect(
       shouldRunOrbRaf({ minimized: false, barLayout: true, reducedMotion: false, documentHidden: false })
-    ).toBe(false)
+    ).toBe(true)
     expect(
       shouldRunOrbRaf({ minimized: true, barLayout: false, reducedMotion: false, documentHidden: false })
     ).toBe(false)

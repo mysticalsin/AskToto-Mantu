@@ -4,7 +4,7 @@
  * Bundled WebGL. No CDN. Never flatten.
  */
 
-export const BAR_PILL_SIZE_PX = 80
+export const BAR_PILL_SIZE_PX = 52
 export const BAR_PILL_WIDTH_PX = BAR_PILL_SIZE_PX
 export const BAR_PILL_HEIGHT_PX = BAR_PILL_SIZE_PX
 
@@ -56,8 +56,8 @@ export function pillClickShouldExpand(didDrag: boolean): boolean {
 }
 
 /**
- * Orb rAF is allowed only on the mounted Bar circle. Idle full bar, Hide, Island,
- * reduced-motion, and a hidden document must not run a frame loop.
+ * Orb rAF is allowed only on a mounted Bar circle (docked idle or minimized rest).
+ * Hide, Island, reduced-motion, and a hidden document must not run a frame loop.
  */
 export function shouldRunOrbRaf(input: {
   minimized: boolean
@@ -65,7 +65,8 @@ export function shouldRunOrbRaf(input: {
   reducedMotion: boolean
   documentHidden: boolean
 }): boolean {
-  return input.minimized && input.barLayout && !input.reducedMotion && !input.documentHidden
+  void input.minimized
+  return input.barLayout && !input.reducedMotion && !input.documentHidden
 }
 
 export function shouldAnimateOrb(reducedMotion: boolean): boolean {

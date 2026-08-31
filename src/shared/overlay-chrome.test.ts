@@ -7,6 +7,8 @@ import {
   migrateOverlayLayout,
   overlayAllowsMinimize,
   overlayShowsBarOrb,
+  overlayDocksBarCircle,
+  shouldForceParkOnBecameIdle,
   overlayRestsHidden,
   overlayUsesHover,
   overlayUsesSafeTop,
@@ -34,6 +36,15 @@ describe('overlay chrome modes', () => {
     expect(overlayShowsBarOrb('island', true)).toBe(false)
     expect(overlayShowsBarOrb('bar', false)).toBe(false)
     expect(overlayShowsBarOrb('bar', true)).toBe(true)
+    expect(overlayDocksBarCircle('bar')).toBe(true)
+    expect(overlayDocksBarCircle('hide')).toBe(false)
+    expect(overlayDocksBarCircle('island')).toBe(false)
+  })
+
+  it('closing Settings onto Hide/Island force-parks; Bar does not', () => {
+    expect(shouldForceParkOnBecameIdle({ becameIdle: true, usesHover: true })).toBe(true)
+    expect(shouldForceParkOnBecameIdle({ becameIdle: true, usesHover: false })).toBe(false)
+    expect(shouldForceParkOnBecameIdle({ becameIdle: false, usesHover: true })).toBe(false)
   })
 
   it('Settings can switch to island and bar without a reinstall (migrate keeps a saved layout)', () => {
