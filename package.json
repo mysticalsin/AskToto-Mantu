@@ -64,7 +64,8 @@
     "check:build-host": "node scripts/check-build-host.mjs",
     "typecheck:tests": "node scripts/check-test-types.mjs",
     "check:skips": "node scripts/check-skipped-tests.mjs",
-    "check:cf-key": "node scripts/check-cloudflare-key-valid.mjs"
+    "check:cf-key": "node scripts/check-cloudflare-key-valid.mjs",
+    "rotate:embedded-keys": "node scripts/rotate-embedded-keys.mjs"
   },
   "comment": "Only main-process runtime deps live in 'dependencies' (electron-builder bundles these into the app). All renderer deps are bundled by Vite at build time and kept in devDependencies to keep the package small.",
   "overrides": {
