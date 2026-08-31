@@ -25,8 +25,9 @@ import { existsSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS } from '@shared/providers'
-import type { CliActionResult, CliInstallResult } from '@shared/ipc'
+import type { CliActionResult, CliInstallResult, CliSessionVerdict } from '@shared/ipc'
 import { managedCliEntry, installManagedCli } from './cli-installer'
+import { classifyExhaustion } from './llm/exhaustion'
 
 const execFileAsync = promisify(execFile)
 
@@ -129,6 +130,16 @@ export function npmGlobalBinCandidates(bin: string): string[] {
   return [join(appData, 'npm', `${bin}.cmd`), join(appData, 'npm', `${bin}.exe`)]
 }
 
+/** Well-known user bin folders a GUI Electron process often misses. Login-shell `command -v` should
+ *  already see these when PATH is set in `.zprofile`, but Tony's CLIs live in `~/.local/bin` and a
+ *  non-interactive `-lc` does not source `.zshrc`. Probe the folders directly so Settings → Connect
+ *  does not report "not installed" for a binary the terminal can see. */
+export function posixUserBinCandidates(bin: string): string[] {
+  const home = process.env.HOME ?? ''
+  if (!home) return []
+  return [join(home, '.local', 'bin', bin), join(home, '.hermes', 'node', 'bin', bin)]
+}
+
 /**
  * Resolve a CLI binary to its absolute path.
  * A packaged Electron app runs with a minimal PATH. On macOS/Linux the login shell loads the full
@@ -175,7 +186,13 @@ export async function resolveBin(bin: string): Promise<string | null> {
     if (resolved !== null) binCache.set(bin, resolved)
     if (resolved !== null) return resolved
   } catch {
-    /* fall through to the managed-CLI probe */
+    /* fall through to the user-bin + managed-CLI probes */
+  }
+  for (const candidate of posixUserBinCandidates(bin)) {
+    if (existsSync(candidate)) {
+      binCache.set(bin, candidate)
+      return candidate
+    }
   }
   return managedBinFallback(bin)
 }
@@ -750,12 +767,65 @@ const SESSION_PROBE_TIMEOUT_MS = 8_000
  * Both were exercised live against the installed CLIs before this was written — `claude auth status`
  * takes no `--output-format` flag, it is already JSON.
  *
- * Three-valued ON PURPOSE, and 'unknown' is the safe default. A false "signed out" verdict would retire a
- * perfectly good connection and send the user to reconnect for no reason, so anything this probe cannot
- * read confidently — an unrecognised output shape, a CLI version without the subcommand, a timeout —
- * answers 'unknown' and changes nothing. Only an explicit negative retires the flag.
+ * Five-valued ON PURPOSE. 'unknown' is the safe default for an unreadable probe — a false "signed out"
+ * would retire a live connection. 'missing' is distinct from 'signed-out' so Settings can say
+ * "not installed" instead of "log in". 'weekly-limit' is signed-in-but-capped: Claude's weekly cap
+ * (and the same wording from Codex) must never look like "not connected".
+ *
+ * Only an explicit 'signed-out' or 'missing' retires the flag. A weekly cap stays connected.
  */
-export async function checkCliSession(provider: ProviderId): Promise<'live' | 'signed-out' | 'unknown'> {
+export type { CliSessionVerdict }
+
+/** Pure classifier for `claude auth status` / `codex login status` text. Exported so tests can lock
+ *  weekly-limit vs signed-out vs live without spawning a child. */
+export function classifyCliStatusOutput(
+  provider: 'claude-cli' | 'codex-cli',
+  stdout: string,
+  stderr: string,
+  opts: { timedOut?: boolean; failed?: boolean } = {}
+): Exclude<CliSessionVerdict, 'missing'> {
+  if (opts.timedOut) return 'unknown'
+  const text = `${stdout}\n${stderr}`
+  const exhaustion = classifyExhaustion(text)
+  const weekly = exhaustion?.reason === 'weekly usage limit' || /weekly (usage )?limit/i.test(text)
+
+  if (provider === 'claude-cli') {
+    const loggedIn = parseClaudeLoggedIn(stdout) ?? parseClaudeLoggedIn(stderr)
+    if (loggedIn === false) return 'signed-out'
+    if (loggedIn === true) return weekly ? 'weekly-limit' : 'live'
+    // Devon live (Totos-Mac): running a signed-in-but-capped `claude` prints the weekly-limit banner
+    // even when the JSON shape is missing or mixed into the banner. That is not a logout.
+    if (weekly) return 'weekly-limit'
+    return 'unknown'
+  }
+
+  if (/\bnot logged in\b/i.test(text)) return 'signed-out'
+  const loggedIn = /\blogged in\b/i.test(text)
+  if (loggedIn) return weekly ? 'weekly-limit' : 'live'
+  if (weekly) return 'weekly-limit'
+  // Codex uses a non-zero exit for "no session" when the line is empty. Only treat that as signed-out
+  // after we have already scanned stdout+stderr — a logged-in status on stderr used to look signed-out.
+  if (opts.failed) return 'signed-out'
+  return 'unknown'
+}
+
+function parseClaudeLoggedIn(text: string): boolean | undefined {
+  const trimmed = text.trim()
+  if (!trimmed) return undefined
+  try {
+    const parsed: unknown = JSON.parse(trimmed)
+    const loggedIn = (parsed as { loggedIn?: unknown }).loggedIn
+    if (loggedIn === true) return true
+    if (loggedIn === false) return false
+  } catch {
+    /* banner + JSON on the same stream */
+  }
+  const m = text.match(/"loggedIn"\s*:\s*(true|false)/)
+  if (m) return m[1] === 'true'
+  return undefined
+}
+
+export async function checkCliSession(provider: ProviderId): Promise<CliSessionVerdict> {
   const cfg = CLI_CONFIGS[provider]
   if (!cfg) return 'unknown'
 
@@ -769,7 +839,7 @@ export async function checkCliSession(provider: ProviderId): Promise<'live' | 's
   // A genuinely uninstalled CLI answers null both times; a hiccup answers once.
   let absBin = await resolveBin(cfg.bin)
   if (!absBin) absBin = await resolveBin(cfg.bin)
-  if (!absBin) return 'signed-out'
+  if (!absBin) return 'missing'
 
   const args = provider === 'claude-cli' ? ['auth', 'status'] : ['login', 'status']
   let spawnTarget: { command: string; args: string[]; env?: Record<string, string>; windowsVerbatimArguments?: boolean }
@@ -779,7 +849,10 @@ export async function checkCliSession(provider: ProviderId): Promise<'live' | 's
     return 'unknown' // refusing an unsafe shim path is not evidence about the session
   }
 
-  let stdout: string
+  let stdout = ''
+  let stderr = ''
+  let failed = false
+  let timedOut = false
   try {
     const r = await execFileAsync(spawnTarget.command, spawnTarget.args, {
       windowsHide: true,
@@ -790,29 +863,46 @@ export async function checkCliSession(provider: ProviderId): Promise<'live' | 's
       env: { ...cliEnv(provider), ...spawnTarget.env }
     })
     stdout = String(r.stdout ?? '')
+    stderr = String(r.stderr ?? '')
   } catch (e) {
-    // A non-zero exit is how codex reports "not logged in". claude answers 0 either way and puts the
-    // verdict in its JSON, so for claude a throw here is a malfunctioning probe, not a verdict.
-    const timedOut = (e as { killed?: boolean }).killed === true
-    if (timedOut || provider === 'claude-cli') return 'unknown'
-    return 'signed-out'
+    const err = e as { killed?: boolean; stdout?: unknown; stderr?: unknown }
+    timedOut = err.killed === true
+    stdout = String(err.stdout ?? '')
+    stderr = String(err.stderr ?? '')
+    failed = true
   }
 
-  if (provider === 'claude-cli') {
-    try {
-      const parsed: unknown = JSON.parse(stdout)
-      const loggedIn = (parsed as { loggedIn?: unknown }).loggedIn
-      if (loggedIn === true) return 'live'
-      if (loggedIn === false) return 'signed-out'
-    } catch {
-      /* not the JSON shape this version emits — fall through to 'unknown' */
+  const kind = provider === 'claude-cli' ? 'claude-cli' : 'codex-cli'
+  return classifyCliStatusOutput(kind, stdout, stderr, { timedOut, failed })
+}
+
+/**
+ * Settings → Connect / onboarding confirmation. Zero-token: never sends a billed prompt.
+ * A weekly cap is connected (ok: true) with honest copy. Missing and signed-out stay disconnected.
+ */
+export async function connectCliSession(provider: ProviderId): Promise<CliActionResult> {
+  const cfg = CLI_CONFIGS[provider]
+  const label = PROVIDERS[provider]?.label ?? provider
+  if (!cfg) return { ok: false, session: 'unknown', error: `${label}: unsupported CLI provider.` }
+
+  const session = await checkCliSession(provider)
+  if (session === 'live' || session === 'weekly-limit') {
+    const detected = await detectCli(provider)
+    return {
+      ok: true,
+      session,
+      version: detected.version,
+      error:
+        session === 'weekly-limit'
+          ? `${label} is signed in. Weekly usage limit reached — this is not disconnected. Asks wait until the cap resets.`
+          : undefined
     }
-    return 'unknown'
   }
-  // codex prints e.g. "Logged in using ChatGPT" on success; only an explicit negative is a verdict.
-  if (/\bnot logged in\b/i.test(stdout)) return 'signed-out'
-  if (/\blogged in\b/i.test(stdout)) return 'live'
-  return 'unknown'
+  if (session === 'missing') return { ok: false, session, error: `${label} is not installed.` }
+  if (session === 'signed-out') {
+    return { ok: false, session, error: `${label} is installed but not signed in.` }
+  }
+  return { ok: false, session, error: `Could not confirm the ${label} session.` }
 }
 
 // ─── testCli ─────────────────────────────────────────────────────────────────────

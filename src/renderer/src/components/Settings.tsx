@@ -2164,7 +2164,14 @@ function CliIntegration({
       // skip the patch if the user switched to a different provider tile on the AiSection grid while
       // this install was running — a finished install must never silently revert that in-panel pick.
       if (mountedRef.current && providerRef.current === startProvider) patch({ provider: id })
-      setState(id, { phase: 'done', msg: null, version: testResult.version ?? null })
+      setState(id, {
+        phase: 'done',
+        msg:
+          testResult.session === 'weekly-limit'
+            ? testResult.error || 'Signed in. Weekly usage limit reached — not disconnected.'
+            : null,
+        version: testResult.version ?? null
+      })
       return
     }
 
@@ -2185,8 +2192,16 @@ function CliIntegration({
     const r = await window.toto.cliTest(id)
     if (r.ok) {
       // Same stale-resolution + provider-switch guard as runInstall above.
+      // Weekly-limit is signed-in: Connect succeeds and we say so, instead of looking disconnected.
       if (mountedRef.current && providerRef.current === startProvider) patch({ provider: id })
-      setState(id, { phase: 'done', msg: null, version: r.version ?? null })
+      setState(id, {
+        phase: 'done',
+        msg:
+          r.session === 'weekly-limit'
+            ? r.error || 'Signed in. Weekly usage limit reached — not disconnected.'
+            : null,
+        version: r.version ?? null
+      })
     } else {
       setState(id, {
         phase: 'error',
@@ -2309,10 +2324,10 @@ function CliIntegration({
         )}
 
         {/* Connected version info */}
-        {st.phase === 'done' && st.version && (
+        {st.phase === 'done' && (st.version || st.msg) && (
           <span className="text-[11px] text-[color:var(--cl-success)]">
             <CircleCheck size={12} className="mr-1 inline" />
-            {st.version}
+            {st.msg || st.version}
           </span>
         )}
 
@@ -3402,6 +3417,7 @@ function DustSetup({
   // Loaded the workspace's agents but the saved base agent isn't among them — the root cause of the
   // "Failed to retrieve agent message" ask failure. Warn + guide a one-click re-pick right at the picker.
   const storedAgentMissing = dustStoredAgentMissing(agent, agents)
+  const spotlightAgentMissing = dustStoredAgentMissing(spotlightAgent, agents)
   const selectedAgentRunsSonnet = !!selectedAgent && selectedAgent.modelProviderId === 'anthropic' && /sonnet/i.test(selectedAgent.modelId || '')
 
   // Import an existing `dust login` CLI session (token + workspace + region) from the keychain — the
@@ -4108,6 +4124,15 @@ function DustSetup({
               Spotlight Ref agent · finds sales references for the live use case
               <span className={managedChipCls}>Managed by your organization</span>
             </span>
+            {spotlightAgentMissing && (
+              <div className="flex items-start gap-1.5 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-2.5 py-1.5 text-[11px] leading-snug text-[color:var(--cl-destructive)]">
+                <Info size={13} className="mt-0.5 shrink-0" />
+                <span>
+                  The Spotlight Ref agent is not in this workspace. Connect or reconnect Dust in Settings → AI
+                  to the workspace that has it.
+                </span>
+              </div>
+            )}
             <div className={'w-full opacity-60 ' + ctl}>
               {spotlightAgent ? agents?.find((a) => a.sId === spotlightAgent)?.name ?? spotlightAgent : 'Not configured yet'}
             </div>
