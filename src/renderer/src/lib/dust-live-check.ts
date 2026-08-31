@@ -4,7 +4,9 @@
  * `dust logout`, cleared the keychain, or the CLI session may be gone — so opening Settings must verify
  * the real session instead of taking "already connected" for granted.
  *
- *  - `connected`            — the probe found a live session (token minted / read OK). Nothing to do.
+ *  - `connected`            — the probe found a live CLI session (token minted / read OK). That is NOT
+ *                             a Dust API proof — Settings must still instant-validate via testApiKey +
+ *                             listDustAgents (view:'list') before painting green Connected.
  *  - `needs-access`         — the keychain read was BLOCKED (user hasn't allowed Métis to read the Dust
  *                             CLI item). The session likely still exists; prompt to allow + reconnect.
  *                             Do NOT re-run setup — reinstalling / re-logging-in here would be wrong and

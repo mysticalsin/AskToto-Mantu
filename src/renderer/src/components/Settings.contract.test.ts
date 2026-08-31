@@ -357,3 +357,54 @@ describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', ()
     expect(plane).toMatch(/M0 5\.358a\.854/)
   })
 })
+
+// Instant validate: Dust connect must live-ping and fail loud. No green Connected from a saved key
+// alone, and never an auto-sent chat as the "proof".
+describe('Dust instant validate proves a live connection', () => {
+  const setup = (): string => blockAfter('function DustSetup(', '\nfunction getAudioChoices(')
+  const copy = (): string => setup().replace(/^\s*\/\/.*$/gm, '')
+
+  it('CLI import does not paint ok:true / Loading agents before the live prove', () => {
+    const connect = blockAfter('const connectCli = async ()', '\n  const oauthIdle')
+    expect(connect).not.toMatch(/ok:\s*true[\s\S]{0,80}Loading agents/)
+    expect(connect).toMatch(/proveAfterConnect/)
+    expect(connect).toMatch(/Checking Dust connection/)
+  })
+
+  it('OAuth workspace pick awaits the live prove and fails the oauth phase on error', () => {
+    const pick = blockAfter('const pickDustWorkspace = async', '\n  // Save a Dust API key')
+    expect(pick).toMatch(/proveAfterConnect/)
+    expect(pick).toMatch(/if \(!verdict\.ok\)/)
+    expect(pick).toMatch(/phase: 'error'/)
+  })
+
+  it('Save API key tests the pasted key before persisting and does not fire-and-forget loadAgents', () => {
+    const save = blockAfter('const saveDustKey = async', '\n  const recoverProfileAndRetryDustKey')
+    expect(save).toMatch(/window\.toto\.testApiKey\('dust', k\)/)
+    expect(save.indexOf("testApiKey('dust', k)")).toBeLessThan(save.indexOf("saveKey('dust', k)"))
+    expect(save).toMatch(/decideDustInstantValidate/)
+    expect(save).not.toMatch(/void loadAgents\(\)/)
+    expect(save).toMatch(/DUST_WORKSPACE_MISSING_SETUP_ERROR/)
+  })
+
+  it('loadAgents treats an empty list as a failure, not a loaded picker', () => {
+    const load = blockAfter('const loadAgents = async', '\n  // When Dust was already connected')
+    expect(load).toMatch(/r\.agents\.length > 0/)
+    expect(load).toMatch(/DUST_EMPTY_AGENTS_ERROR/)
+  })
+
+  it('green Connected requires a proved agent list and shows the count, not a static "Dust is connected."', () => {
+    const body = copy()
+    expect(body).not.toMatch(/Dust is connected\./)
+    expect(body).not.toMatch(/Connected\. Loading agents/)
+    expect(body).toMatch(/formatDustConnectedMessage/)
+    expect(body).toMatch(/listProved/)
+    expect(setup()).toMatch(/Checking Dust connection/)
+  })
+
+  it('never auto-sends a chat as the connection test', () => {
+    const body = setup()
+    expect(body).not.toMatch(/createConversation|postUserMessage|streamAgent|ask\(|auto-send/)
+    expect(body).toMatch(/Never auto-sends a chat/)
+  })
+})
