@@ -14,12 +14,17 @@ files:
   - '!node_modules/@dust-tt/client/node_modules/express-rate-limit{,/**/*}'
   - '!node_modules/@dust-tt/client/node_modules/ip-address{,/**/*}'
   - '!node_modules/sherpa-onnx-darwin-*{,/**/*}'
+  # Linux host leftovers (this Cloud VM, ubuntu CI) must stay out of the Windows asar. afterPack
+  # can prune unpacked dirs, but dangling asar references to sherpa-onnx-linux-* fail the runtime gate.
+  - '!node_modules/sherpa-onnx-linux-*{,/**/*}'
   # sharp installs its native binaries per-host: building on macOS leaves darwin packages in
   # node_modules that a Windows install can never load; predist:win force-installs the win32-x64
   # pair (same pattern as check-sherpa-platform's addon provisioning) and these keep the darwin
-  # copies out of the Windows installer.
+  # copies out of the Windows installer. Same for linux hosts.
   - '!node_modules/@img/sharp-darwin-*{,/**/*}'
   - '!node_modules/@img/sharp-libvips-darwin-*{,/**/*}'
+  - '!node_modules/@img/sharp-linux-*{,/**/*}'
+  - '!node_modules/@img/sharp-libvips-linux-*{,/**/*}'
   - '!out/**/*.map'
   - '!**/*.d.ts'
 win:
