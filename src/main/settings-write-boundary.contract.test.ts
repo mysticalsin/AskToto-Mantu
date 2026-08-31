@@ -85,10 +85,10 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
   // FIRST one is decorative: a caller can mint its own WorkOS device code out-of-band, skip begin, and
   // drive poll -> pickWorkspace to install attacker-controlled Dust tokens as this user's credential.
   it('MQA-133: every Dust login handler gates on requireAuth(), not just the begin step', () => {
-    for (const channel of ['dustLoginBegin', 'dustLoginPoll', 'dustLoginPickWorkspace']) {
+    for (const channel of ['dustLoginBegin', 'dustLoginPoll', 'dustLoginPickWorkspace', 'dustInstallCli']) {
       const start = indexSrc.indexOf(`ipcMain.handle(IPC.${channel}`)
       expect(start, `${channel} handler not found`).toBeGreaterThan(-1)
-      const body = indexSrc.slice(start, start + 700)
+      const body = indexSrc.slice(start, start + 900)
       expect(body, `${channel} must call assertMainWindow`).toMatch(/assertMainWindow\(e\)/)
       expect(body, `${channel} must gate on requireAuth`).toMatch(/if \(!requireAuth\(\)\)/)
     }

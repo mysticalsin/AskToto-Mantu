@@ -89,11 +89,12 @@ describe('quick action request planning', () => {
     expect(fromTranscript).toContain('THEM: we need SOC2')
   })
 
-  it('spotlight ref unavailable message gives the reachable managed-agent remedy', () => {
+  it('spotlight ref unavailable message asks to Set up Dust / install the CLI, not reconnect', () => {
     const msg = spotlightRefUnavailableMessage()
-    expect(msg).toContain('Spotlight Ref agent')
+    expect(msg).toContain('Set up Dust')
     expect(msg).toContain('Settings')
-    expect(msg.toLowerCase()).toContain('reconnect')
+    expect(msg.toLowerCase()).toContain('cli')
+    expect(msg.toLowerCase()).not.toContain('reconnect')
     expect(msg.toLowerCase()).not.toContain('pick')
   })
 
@@ -110,7 +111,8 @@ describe('quick action request planning', () => {
     // workspace that actually has the Spotlight Ref agent.
     const msg = dustAgentUnavailableMessage(true)
     expect(msg).toContain('Spotlight Ref')
-    expect(msg).toContain('Settings')
+    expect(msg.toLowerCase()).toContain('not in this workspace')
+    expect(msg.toLowerCase()).not.toContain('reconnect')
     expect(msg.toLowerCase()).not.toContain('pick one')
   })
 })
