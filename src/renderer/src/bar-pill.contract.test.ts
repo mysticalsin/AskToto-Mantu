@@ -72,9 +72,10 @@ describe('BAR-PILL contract', () => {
     expect(css).toMatch(/\.aw-orb \{[\s\S]*?width:\s*64px/)
     expect(css).toMatch(/\.aw-orb \{[\s\S]*?height:\s*64px/)
     expect(css).toMatch(/\.aw-orb \{[\s\S]*?border-radius:\s*50%/)
+    expect(css).toMatch(/\.aw-orb \{[\s\S]*?background:\s*transparent/)
     expect(css).toMatch(/\.aw-orb__canvas \{[\s\S]*?width:\s*64px/)
     expect(css).toMatch(/\.aw-orb__canvas \{[\s\S]*?height:\s*64px/)
-    expect(css).toMatch(/\.aw-orb__canvas \{[\s\S]*?border-radius:\s*50%/)
+    expect(css).toMatch(/\.aw-orb__canvas \{[\s\S]*?border-radius:\s*0/)
   })
 
   it('never flattens: thinking-orb circle, same scale on X and Y', () => {

@@ -15,8 +15,8 @@ Three modes in Settings (persist, no reinstall). Default on a fresh install is *
 The Bar control is Jakub Antalik's thinking-orb on Métis dark glass, not a WebGL marble and not a status blob. Tony drags it while using apps.
 
 - **Size.** `64×64` always (package avatar preset). Aspect 1. Same box on idle, listen, think, fact-check, connecting, hover, and minimize. Never a 44-tall pill. Never flatten. Do not invent a third size.
-- **Idle.** `breathing` (calm ring, always-on). Theme `dark`: light dots on dark glass. Not Fit Studio magenta. Not Jarvis `#4CA8E8`.
-- **Materials.** Real `thinking-orbs` 2D canvas. Monochrome. No WebGL glitter. No Fit Studio glow core / bloom / specular kiss on this control. No invented particle constellation.
+- **Idle.** `breathing` (sparse hollow dotted ring, always-on). Theme `dark`: light dots, transparent host. Not Fit Studio magenta. Not Jarvis `#4CA8E8`.
+- **Materials.** Real `thinking-orbs` 2D canvas. Monochrome. No WebGL glitter. No Fit Studio glow core / bloom / specular kiss on this control. No invented particle constellation. No filled disc behind the ring.
 - **Moods.** Idle `breathing`. Listen `listening` (waveform; no second red disc on this circle). Think `working`. Fact-check `searching`. Connecting `connecting`. Priority: connecting > listening > fact-check > think > idle.
 - **Same circle.** Minimize (Bar only) is this circle, not a second disc. Windows: same circle, top-center, no Mac-only look.
 - **Out of scope.** Island/Hide hit geometry (`src/main/island/geometry.ts`) is frozen. Hide stays 8×2. Island wakes only on the camera square.

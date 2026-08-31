@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { paintOrbFirstFrame } from './orb-first-frame'
 import {
+  BAR_ORB_SPEED,
   BAR_ORB_THEME,
   BAR_PILL_HEIGHT_PX,
   BAR_PILL_SIZE_PX,
@@ -37,6 +38,19 @@ describe('bar pill thinking-orb circle', () => {
       expect(box).toEqual(rest)
       expect(orbAspectRatio(box.width, box.height)).toBe(1)
     }
+  })
+
+  it('locks playground pixels: idle breathing, listen listening, think working', () => {
+    // orbs.jakubantalik.com 64px 1.00x — Tony stills:
+    // orb-breathing.png = sparse hollow ring = idle
+    // gallery-full.png = dense latitude globe = listen
+    // orb-working.png = scattered loose cluster = think
+    expect(resolveBarOrbState({ mood: 'idle' })).toBe('breathing')
+    expect(resolveBarOrbState({ mood: 'idle', listening: true })).toBe('listening')
+    expect(resolveBarOrbState({ mood: 'thinking' })).toBe('working')
+    expect(BAR_PILL_SIZE_PX).toBe(64)
+    expect(BAR_ORB_THEME).toBe('dark')
+    expect(BAR_ORB_SPEED).toBe(1)
   })
 
   it('maps moods to Jakub thinking-orb states, monochrome dark', () => {
