@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Check, Pencil, X } from 'lucide-react'
 import type { BrainRead, Confidence, EntityKind, MeetingExtraction } from '@shared/brain'
-import { Chip, TextButton, Spinner } from './ui'
+import { Chip, TextButton } from './ui'
+import { InlineOrb } from './AgentStatus'
 
 /**
  * "Entities in this meeting" strip (Task MI-3) — the moment-of-truth correction surface. Renders one
@@ -249,7 +250,7 @@ export function ReviewEntityStrip({ file }: { file: string | null }): JSX.Elemen
               variant="accent"
               disabled={saving || !draft.trim() || draft.trim() === editingChip.name}
             >
-              {saving ? <Spinner size={12} /> : <Check size={12} />}
+              {saving ? <InlineOrb kind="loading" /> : <Check size={12} />}
               {saving ? 'Saving' : 'Save'}
             </Chip>
             <TextButton onClick={() => setEditing(null)} disabled={saving}>

@@ -12,7 +12,8 @@ import type {
 } from '@shared/brain'
 import { BandSchema, SectorSchema } from '@shared/brain'
 import type { AttentionItem } from '@shared/ipc'
-import { Chip, TextButton, Spinner } from './ui'
+import { Chip, TextButton } from './ui'
+import { InlineOrb } from './AgentStatus'
 
 /** Which entity the record page is currently showing — BrainView owns this as in-component navigation
  *  state (no router), matching how it already handles internal sections. */
@@ -220,7 +221,7 @@ function FieldCard<T>({
             {pending !== null ? (
               <>
                 <span>{formatValue(pending)}</span>
-                <Spinner size={11} />
+                <InlineOrb kind="loading" />
               </>
             ) : field ? (
               formatValue(field.value)
@@ -284,7 +285,7 @@ function MoneyCard({
         </span>
         {mode.kind === 'unverified' && (
           <TextButton onClick={() => void pinExtracted(field, rawValue)} disabled={pinning === field}>
-            {pinning === field ? <Spinner size={11} /> : <Check size={11} />} Pin to confirm
+            {pinning === field ? <InlineOrb kind="loading" /> : <Check size={11} />} Pin to confirm
           </TextButton>
         )}
       </div>
@@ -527,7 +528,7 @@ export function BrainRecordPage({
             {renameError && <div className="text-[11px] text-[var(--color-danger)]">{renameError}</div>}
             <div className="flex items-center gap-1">
               <Chip onClick={() => void saveRename()} variant="accent" disabled={renameSaving || !nameDraft.trim()}>
-                {renameSaving ? <Spinner size={12} /> : <Check size={12} />} Save
+                {renameSaving ? <InlineOrb kind="loading" /> : <Check size={12} />} Save
               </Chip>
               <TextButton onClick={() => setRenaming(false)} disabled={renameSaving}>
                 <X size={11} /> Cancel
@@ -743,7 +744,7 @@ export function BrainRecordPage({
                 {mergeError && <div className="text-[11px] text-[var(--color-danger)]">{mergeError}</div>}
                 <div className="flex items-center gap-1">
                   <Chip onClick={() => void confirmMerge()} variant="accent" disabled={merging}>
-                    {merging ? <Spinner size={12} /> : <Combine size={12} />} Confirm merge
+                    {merging ? <InlineOrb kind="loading" /> : <Combine size={12} />} Confirm merge
                   </Chip>
                   <TextButton onClick={() => setMergeTarget(null)} disabled={merging}>
                     Back

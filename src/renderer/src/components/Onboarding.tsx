@@ -18,7 +18,6 @@ import {
   KeyRound,
   Building2,
   ChevronDown,
-  Loader2
 } from 'lucide-react'
 import { DEFAULT_SHORTCUTS } from '@shared/ipc'
 import type {
@@ -32,6 +31,7 @@ import type {
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS, filterAllowedProviders } from '@shared/providers'
 import { MetisMark } from './MetisMark'
+import { InlineOrb } from './AgentStatus'
 import { accelLabel, isWindows } from '../lib/keys'
 
 /** Microsoft 4-square glyph (no lucide equivalent). */
@@ -203,7 +203,7 @@ function ProviderOption({
             </span>
           ) : disabledReason === 'busy' ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[10px] font-medium text-[color:var(--color-ink-2)]">
-              <Loader2 size={10} className="animate-spin" /> Checking…
+              <InlineOrb kind="loading" /> Checking…
             </span>
           ) : (
             badge && (
@@ -957,7 +957,7 @@ export function Onboarding({
             busy ? 'cursor-not-allowed opacity-50' : ''
           ].join(' ')}
         >
-          {busy ? <Loader2 size={16} className="animate-spin" /> : <MsLogo size={16} />}
+          {busy ? <InlineOrb kind="connecting" /> : <MsLogo size={16} />}
           {busy ? 'Waiting for your browser…' : 'Sign in with Microsoft'}
         </button>
         {busy && (

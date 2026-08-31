@@ -32,7 +32,8 @@ import {
 } from '@shared/time-saved'
 import { buildMarsWeek, renderMarsMarkdown } from '@shared/mars'
 import { MantuMark } from './MantuMark'
-import { Spinner, TextButton } from './ui'
+import { TextButton } from './ui'
+import { AgentStatus, InlineOrb } from './AgentStatus'
 import { WorkProgressMeter } from './WorkProgressMeter'
 import { useFlash } from '../lib/useFlash'
 import { BrainRecordPage, recordKey, sortAttentionItems, type BrainRecordRef, type RecentMerge } from './BrainRecordPage'
@@ -799,7 +800,7 @@ export function BrainView({
           title="Refresh"
           className="no-drag focus-ring grid h-7 w-7 place-items-center rounded-lg text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink)]"
         >
-          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+          {loading ? <InlineOrb kind="searching" /> : <RefreshCw size={13} />}
         </button>
       </div>
 
@@ -861,8 +862,8 @@ export function BrainView({
       )}
 
       {loading && !data ? (
-        <div className="flex items-center justify-center gap-2 py-10 text-[12px] text-[color:var(--color-ink-3)]">
-          <Spinner size={14} /> Reading the brain…
+        <div className="flex items-center justify-center py-10">
+          <AgentStatus kind="searching" size="hero" />
         </div>
       ) : record && data ? (
         <BrainRecordPage
@@ -918,7 +919,7 @@ export function BrainView({
           {bf?.running ? (
             <div className="rounded-xl border border-[var(--color-hair-soft)] bg-[var(--color-accent-soft)] px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
               <div className="flex items-center gap-2">
-                <Spinner size={12} />
+                <InlineOrb kind="searching" />
                 <span aria-atomic="true" aria-live="polite">{indexProgress?.label ?? 'Mapping meetings…'}</span>
               </div>
               <WorkProgressMeter
@@ -932,7 +933,7 @@ export function BrainView({
           ) : live?.running ? (
             <div className="rounded-xl border border-[var(--color-hair-soft)] bg-[var(--color-accent-soft)] px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
               <div className="flex items-center gap-2">
-                <Spinner size={12} />
+                <InlineOrb kind="searching" />
                 <span aria-atomic="true" aria-live="polite">
                   Updating Intelligence from {live.pending} new meeting{live.pending === 1 ? '' : 's'}…
                 </span>

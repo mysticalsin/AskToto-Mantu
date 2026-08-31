@@ -1,5 +1,6 @@
 import { useState } from 'react'
-import { Loader2, ShieldCheck, AlertCircle } from 'lucide-react'
+import { ShieldCheck, AlertCircle } from 'lucide-react'
+import { AgentStatus, InlineOrb } from './AgentStatus'
 import type { AuthStatus, SignInResult } from '@shared/ipc'
 import { MantuLogo } from './MantuLogo'
 
@@ -147,7 +148,7 @@ export function SignInWall({
             disabled={busy}
             className="no-drag cl-focus flex w-[280px] items-center justify-center gap-2.5 rounded-[12px] bg-[var(--cl-primary)] px-5 py-3 text-[14px] font-semibold text-white shadow-[0_6px_24px_-8px_var(--cl-primary)] transition hover:brightness-110 disabled:opacity-60"
           >
-            {busy ? <Loader2 size={17} className="animate-spin" /> : <MsLogo size={18} />}
+            {busy ? <InlineOrb kind="connecting" /> : <MsLogo size={18} />}
             {busy ? 'Waiting for your browser…' : 'Sign in with Microsoft'}
           </button>
 
@@ -230,8 +231,7 @@ export function SignInWall({
 
               {resetPhase === 'busy' && (
                 <p className="flex items-center gap-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
-                  <Loader2 size={13} className="animate-spin" />
-                  Resetting…
+                  <AgentStatus kind="loading" size="inline" caption />
                 </p>
               )}
             </div>

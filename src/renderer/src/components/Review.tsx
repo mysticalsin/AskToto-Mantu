@@ -7,6 +7,7 @@ import { talkStats } from '@shared/talkstats'
 import { fnv1a } from '@shared/hash'
 import { Markdown } from './Markdown'
 import { Chip, TextButton, Spinner } from './ui'
+import { AgentStatus, InlineOrb } from './AgentStatus'
 import { ReviewEntityStrip } from './ReviewEntityStrip'
 import { useFlash } from '../lib/useFlash'
 import { accelLabel } from '../lib/keys'
@@ -964,7 +965,7 @@ export const Review = memo(function Review({
                   {debriefState === 'error' ? 'Could not save. Try again.' : 'Impressions, not transcript. 90 seconds, then move on.'}
                 </span>
                 <TextButton onClick={() => void saveDebrief()} disabled={!debrief.trim() || debriefState === 'saving'}>
-                  {debriefState === 'saving' ? <Spinner size={11} /> : <Save size={11} />}
+                  {debriefState === 'saving' ? <InlineOrb kind="writing" /> : <Save size={11} />}
                   Save debrief
                 </TextButton>
               </div>
@@ -982,7 +983,7 @@ export const Review = memo(function Review({
             // Edit mode toolbar: Save / Cancel. Replaces Copy/Export, which don't apply mid-edit.
             <div className="flex items-center gap-1">
               <Chip onClick={() => void saveRecap()} variant="accent" disabled={recapSaving}>
-                {recapSaving ? <Spinner size={13} /> : <Check size={13} />}
+                {recapSaving ? <InlineOrb kind="writing" /> : <Check size={13} />}
                 {recapSaving ? 'Saving' : 'Save'}
               </Chip>
               <TextButton onClick={cancelEditRecap} disabled={recapSaving}>
@@ -997,7 +998,7 @@ export const Review = memo(function Review({
                   click can't self-cancel the in-flight generation. */}
               {isPastMeeting && !recapText && !recap?.error && onGenerateRecap && (
                 <Chip onClick={onGenerateRecap} variant="accent" disabled={recap?.streaming}>
-                  {recap?.streaming ? <Spinner size={13} /> : <Sparkles size={13} />}
+                  {recap?.streaming ? <InlineOrb kind="writing" /> : <Sparkles size={13} />}
                   {recap?.streaming ? 'Generating…' : 'Generate recap'}
                 </Chip>
               )}
@@ -1029,7 +1030,7 @@ export const Review = memo(function Review({
                       disabled={recap?.streaming}
                       title="Regenerate this summary from the transcript"
                     >
-                      {recap?.streaming ? <Spinner size={11} /> : <RotateCcw size={11} />}
+                      {recap?.streaming ? <InlineOrb kind="writing" /> : <RotateCcw size={11} />}
                       {recap?.streaming ? 'Regenerating' : 'Regenerate'}
                     </TextButton>
                   )}
@@ -1038,7 +1039,7 @@ export const Review = memo(function Review({
                     {jsonCopied ? 'Copied' : 'Export JSON'}
                   </TextButton>
                   <TextButton onClick={exportPdf} disabled={pdfBusy} title="Save this summary as a PDF">
-                    {pdfBusy ? <Spinner size={11} /> : <FileText size={11} />}
+                    {pdfBusy ? <InlineOrb kind="loading" /> : <FileText size={11} />}
                     Export PDF
                   </TextButton>
                 </>
@@ -1101,9 +1102,7 @@ export const Review = memo(function Review({
         ) : recap?.streaming ? (
           // A past meeting's retroactive "Generate recap" (or a just-finished import) is in flight —
           // recap here is recapGen's live streaming answer, not the static (still-empty) saved recap.
-          <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
-            <Spinner size={13} /> writing detailed notes…
-          </div>
+          <AgentStatus kind="writing" size="hero" />
         ) : isPastMeeting ? (
           // A past meeting saved without a recap (e.g. a keyless summary failure) and nothing generating
           // right now. Not a spinner — the work is long over; offer to add notes instead.
@@ -1129,9 +1128,7 @@ export const Review = memo(function Review({
             )}
           </div>
         ) : (
-          <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
-            <Spinner size={13} /> writing detailed notes…
-          </div>
+          <AgentStatus kind="writing" size="hero" />
         )}
       </section>
 
@@ -1160,9 +1157,7 @@ export const Review = memo(function Review({
                   ) : coldCall.booking ? (
                     <div className="flex flex-col gap-2">
                       {coldCall.booking.streaming && !coldCall.booking.text ? (
-                        <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
-                          <Spinner size={13} /> drafting outreach…
-                        </div>
+                        <AgentStatus kind="writing" size="inline" caption />
                       ) : (
                         <Markdown>{coldCall.booking.text}</Markdown>
                       )}
@@ -1181,9 +1176,7 @@ export const Review = memo(function Review({
               )}
             </div>
           ) : coldCall.coaching?.streaming ? (
-            <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
-              <Spinner size={13} /> coaching notes…
-            </div>
+            <AgentStatus kind="writing" size="hero" />
           ) : (
             // coaching === null means it was never STARTED (the call ended with nothing transcribed, so
             // generateColdCallCoaching returned early). Showing the spinner here — as this branch used to —
@@ -1236,9 +1229,7 @@ export const Review = memo(function Review({
               </div>
             </div>
           ) : followupDraft?.streaming && !followupText ? (
-            <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
-              <Spinner size={13} /> drafting follow-up…
-            </div>
+            <AgentStatus kind="writing" size="hero" />
           ) : followupDraft ? (
             <div className="flex flex-col gap-2">
               <textarea
@@ -1375,7 +1366,7 @@ export const Review = memo(function Review({
                     variant="accent"
                     disabled={pushState.phase === 'sending'}
                   >
-                    {pushState.phase === 'sending' ? <Spinner size={13} /> : <Send size={13} />}
+                    {pushState.phase === 'sending' ? <InlineOrb kind="connecting" /> : <Send size={13} />}
                     {pushState.phase === 'sending' ? 'Pushing…' : 'Confirm push'}
                   </Chip>
                 )}
@@ -1410,9 +1401,7 @@ export const Review = memo(function Review({
           {nextStepsOpen && (
             <div className="flex flex-col gap-3">
               {nextStepsLoading ? (
-                <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
-                  <Spinner size={13} /> reading action items…
-                </div>
+                <AgentStatus kind="searching" size="inline" caption />
               ) : nextStepsFetchError ? (
                 <div className="flex items-start gap-1.5 text-[11px] text-[var(--color-danger)]">
                   <AlertCircle size={13} className="mt-px shrink-0" />
@@ -1522,7 +1511,7 @@ export const Review = memo(function Review({
                                   </span>
                                 ) : status?.phase === 'sending' ? (
                                   <span className="flex items-center gap-1 text-[color:var(--color-ink-3)]">
-                                    <Spinner size={11} /> Sending
+                                    <InlineOrb kind="connecting" /> Sending
                                   </span>
                                 ) : null}
                               </div>
@@ -1542,7 +1531,7 @@ export const Review = memo(function Review({
 
                   <div className="flex items-center gap-1.5">
                     <Chip onClick={() => void confirmNextSteps()} variant="accent" disabled={pushingNextSteps}>
-                      {pushingNextSteps ? <Spinner size={13} /> : <ListTree size={13} />}
+                      {pushingNextSteps ? <InlineOrb kind="connecting" /> : <ListTree size={13} />}
                       {pushingNextSteps ? 'Pushing…' : 'Confirm push'}
                     </Chip>
                     <TextButton onClick={() => setNextStepsOpen(false)}>Cancel</TextButton>

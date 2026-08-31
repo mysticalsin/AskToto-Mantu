@@ -21,7 +21,7 @@ import {
 } from 'lucide-react'
 import { MantuMark } from './MantuMark'
 import { ModePicker } from './ModePicker'
-import { Spinner } from './ui'
+import { InlineOrb } from './AgentStatus'
 import { modeLabel } from '@shared/ipc'
 import type { ConversationMode, CustomMode } from '@shared/ipc'
 import { formatScreenFreshness } from '@shared/perception'
@@ -591,7 +591,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
               onClick={props.onCapture}
               onMouseEnter={() => { if (props.canPrewarm) void window.toto.prewarmCapture() }}
             >
-              {props.capturing ? <Spinner size={19} /> : <Image size={19} strokeWidth={ICON_STROKE} />}
+              {props.capturing ? <InlineOrb kind="working" /> : <Image size={19} strokeWidth={ICON_STROKE} />}
             </IconTool>
             {/* Spotlight Ref stays visible so users can discover it before configuring Dust. The
                 unavailable click path names the required setup instead of silently hiding the tool. */}

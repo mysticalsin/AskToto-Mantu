@@ -26,7 +26,6 @@ import {
   FolderCog,
   AlertCircle,
   Trash2,
-  Loader2,
   Cpu,
   Wand2,
   ShieldCheck,
@@ -115,6 +114,7 @@ import { PlaneMark } from './brand/PlaneMark'
 import { MetisMark } from './MetisMark'
 import { IdentitySection } from './IdentitySection'
 import { FieldHint, TextButton } from './ui'
+import { AgentStatus, InlineOrb } from './AgentStatus'
 import { AgendaView } from './AgendaView'
 import { usePermissions } from '../state'
 import { displayAccelerator, isWindows } from '../lib/keys'
@@ -1037,7 +1037,7 @@ function AiSection({
           }
           className="no-drag cl-focus flex items-center gap-1 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50"
         >
-          {test.status === 'loading' ? <Loader2 size={14} className="animate-spin" /> : null}
+          {test.status === 'loading' ? <InlineOrb kind="connecting" /> : null}
           Test
         </button>
         {envKeyActive ? (
@@ -1151,7 +1151,7 @@ function AiSection({
             disabled={recoveryBusy}
             className="no-drag cl-focus inline-flex w-fit items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-50"
           >
-            {recoveryBusy ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+            {recoveryBusy ? <InlineOrb kind="loading" /> : <RotateCcw size={13} />}
             {recoveryBusy ? 'Creating new profile…' : 'Create new local profile & retry'}
           </button>
           {recoveryMessage && <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">{recoveryMessage}</div>}
@@ -1851,7 +1851,7 @@ function LocalAiSection({
 
         {models === null ? (
           <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
-            <Loader2 size={12} className="animate-spin" /> Checking the on-device model...
+            <AgentStatus kind="loading-model" size="inline" caption />
           </div>
         ) : model ? (
           <div
@@ -1883,7 +1883,7 @@ function LocalAiSection({
                       : 'bg-[var(--cl-destructive)]/10 text-[color:var(--cl-destructive)]'
                 ].join(' ')}
               >
-                {model.ready ? <CircleCheck size={12} /> : downloading ? <Loader2 size={12} className="animate-spin" /> : <AlertCircle size={12} />}
+                {model.ready ? <CircleCheck size={12} /> : downloading ? <InlineOrb kind="loading-model" /> : <AlertCircle size={12} />}
                 {model.ready ? 'Ready' : downloading ? `Downloading ${percent}%` : 'Unavailable'}
               </span>
             </div>
@@ -2225,7 +2225,7 @@ function CliIntegration({
         {/* Installing — live progress */}
         {st.phase === 'installing' && (
           <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
-            <Loader2 size={12} className="shrink-0 animate-spin" />
+            <InlineOrb kind="loading" />
             <span className="min-w-0 flex-1 truncate">{st.msg ?? 'Installing…'}</span>
           </div>
         )}
@@ -2245,10 +2245,7 @@ function CliIntegration({
 
         {/* Connecting spinner */}
         {st.phase === 'connecting' && (
-          <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
-            <Loader2 size={12} className="shrink-0 animate-spin" />
-            <span>Connecting…</span>
-          </div>
+          <AgentStatus kind="connecting" size="inline" caption />
         )}
 
         {/* Connected version info */}
@@ -2666,7 +2663,7 @@ function McpConnectionCard({
               disabled={!endpointUrl.trim() || !apiKey.trim() || testState.phase === 'testing' || testState.phase === 'saving'}
               className={secondaryBtnStyle}
             >
-              {testState.phase === 'testing' ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+              {testState.phase === 'testing' ? <InlineOrb kind="connecting" /> : <RefreshCw size={12} />}
               Test connection
             </button>
             <button
@@ -2676,7 +2673,7 @@ function McpConnectionCard({
               title={testState.phase !== 'tested' ? 'Test the connection successfully first' : undefined}
               className={primaryBtnStyle}
             >
-              {testState.phase === 'saving' ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+              {testState.phase === 'saving' ? <InlineOrb kind="loading" /> : <Check size={12} />}
               Save
             </button>
             <button
@@ -2898,7 +2895,7 @@ function ProductConnectCard({
             disabled={connecting}
             className="no-drag cl-focus shrink-0 text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
           >
-            {connecting ? <Loader2 size={12} className="inline animate-spin" /> : 'Reconnect'}
+            {connecting ? <InlineOrb kind="connecting" /> : 'Reconnect'}
           </button>
           <button
             type="button"
@@ -3121,7 +3118,7 @@ function AgentPicker({
     if (loading) {
       return (
         <div className={['flex w-full items-center gap-2 opacity-70', ctl].join(' ')}>
-          <Loader2 size={13} className="animate-spin" /> Loading agents…
+          <AgentStatus kind="searching" size="inline" caption />
         </div>
       )
     }
@@ -3703,7 +3700,7 @@ function DustSetup({
                   title="Sign in again to Dust"
                   className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
                 >
-                  {oauth.phase !== 'idle' ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                  {oauth.phase !== 'idle' ? <InlineOrb kind="connecting" /> : <RefreshCw size={13} />}
                   Reconnect
                 </button>
                 <button
@@ -3722,7 +3719,7 @@ function DustSetup({
             // Waiting on the browser consent step — show the code in case the browser needs it re-typed,
             // and a way out in case the user closed the tab or the browser never opened.
             <div className="flex flex-col items-center gap-2 text-center">
-              <Loader2 size={16} className="animate-spin text-[color:var(--cl-primary)]" />
+              <AgentStatus kind="connecting" size="hero" />
               <span className="text-[13px] font-medium text-[color:var(--cl-foreground)]">Waiting for you to finish in your browser…</span>
               {oauth.userCode && (
                 <span className="rounded-[8px] bg-black/20 px-3 py-1 font-mono text-[15px] tracking-widest text-[color:var(--cl-foreground)]">
@@ -3766,7 +3763,7 @@ function DustSetup({
             </div>
           ) : oauth.phase === 'finishing' ? (
             <div className="flex items-center justify-center gap-2 py-2 text-[13px] text-[color:var(--cl-muted-foreground)]">
-              <Loader2 size={16} className="animate-spin" /> Finishing sign-in…
+              <AgentStatus kind="connecting" size="inline" caption />
             </div>
           ) : (
             <>
@@ -3776,7 +3773,7 @@ function DustSetup({
                 disabled={oauth.phase === 'starting' || locked}
                 className="no-drag cl-focus flex w-full items-center justify-center gap-2 rounded-[10px] bg-[var(--cl-primary)] px-4 py-3 text-[14px] font-semibold text-white hover:opacity-90 disabled:opacity-50"
               >
-                {oauth.phase === 'starting' ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
+                {oauth.phase === 'starting' ? <InlineOrb kind="connecting" /> : <Wand2 size={16} />}
                 {oauth.phase === 'starting' ? 'Starting sign-in…' : 'Set up Dust automatically'}
               </button>
               <span className="text-center text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
@@ -3789,7 +3786,7 @@ function DustSetup({
                 disabled={cli.busy || locked}
                 className="no-drag cl-focus mx-auto flex items-center gap-1.5 text-[11px] text-[color:var(--cl-muted-foreground)] underline disabled:opacity-50"
               >
-                {cli.busy && <Loader2 size={11} className="animate-spin" />}
+                {cli.busy && <InlineOrb kind="connecting" />}
                 Already signed in with the Dust CLI? Import that session
               </button>
             </>
@@ -3824,7 +3821,7 @@ function DustSetup({
               disabled={recoveryBusy}
               className="no-drag cl-focus inline-flex w-fit items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-50"
             >
-              {recoveryBusy ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+              {recoveryBusy ? <InlineOrb kind="loading" /> : <RotateCcw size={13} />}
               {recoveryBusy ? 'Creating new profile…' : 'Create new local profile & retry'}
             </button>
             {recoveryMessage && <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">{recoveryMessage}</div>}
@@ -3944,7 +3941,7 @@ function DustSetup({
                 disabled={keySaving || !dustKey.trim() || (locked && active)}
                 className="no-drag cl-focus flex items-center gap-1 rounded-[10px] bg-[var(--cl-primary)] px-3 py-2.5 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
               >
-                {keySaving ? <Loader2 size={14} className="animate-spin" /> : null} Save
+                {keySaving ? <InlineOrb kind="loading" /> : null} Save
               </button>
               {locked ? (
                 <span className={managedChipCls}>Managed by your organization</span>
@@ -3974,7 +3971,7 @@ function DustSetup({
               title={!keySaved || !hasWs ? 'Save your key + workspace first' : 'Load your Dust agents'}
               className="no-drag cl-focus flex items-center gap-1 rounded-[8px] border border-[var(--cl-input)] bg-white/[0.04] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-40"
             >
-              {loading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+              {loading ? <InlineOrb kind="searching" /> : <RefreshCw size={13} />}
               {agents ? 'Refresh' : 'Load my agents'}
             </button>
           </div>
@@ -6862,7 +6859,7 @@ function GraphSection({
               disabled={busy || status?.building || !status?.installed || !status?.backend}
               className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] bg-[var(--cl-primary)] px-3 py-2 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
             >
-              <RefreshCw size={13} className={busy || status?.building ? 'animate-spin' : ''} /> Rebuild now
+              {busy || status?.building ? <InlineOrb kind="loading" /> : <RefreshCw size={13} />} Rebuild now
             </button>
             {status?.hasGraph && (
               <button
@@ -7106,7 +7103,7 @@ function LicenseSection({
         disabled={!serverUrl.trim() || !licenseKey.trim() || activating}
         className={primaryBtnStyle}
       >
-        {activating ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+        {activating ? <InlineOrb kind="connecting" /> : <Check size={12} />}
         Activate
       </button>
 
@@ -7279,7 +7276,7 @@ function CalendarTab({
       <Section title="Microsoft / Outlook" desc="Connect your work Microsoft account to see Outlook calendar events." icon={Calendar}>
         <div className="flex flex-col gap-2">
           {authStatus === null && (
-            <Loader2 size={14} className="animate-spin text-[color:var(--cl-muted-foreground)]" />
+            <InlineOrb kind="connecting" />
           )}
 
           {isOutlookConnected && (
@@ -7306,7 +7303,7 @@ function CalendarTab({
                 onClick={() => void signInOutlook()}
                 className="no-drag cl-focus flex items-center justify-center gap-2 rounded-[8px] bg-[var(--cl-primary)] px-3 py-2 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
               >
-                {outlookBusy ? <Loader2 size={14} className="animate-spin" /> : null}
+                {outlookBusy ? <InlineOrb kind="connecting" /> : null}
                 Connect Microsoft account
               </button>
               <div className="flex items-center justify-between">
@@ -7362,7 +7359,7 @@ function CalendarTab({
                   disabled={savingOutlook || azureLocked}
                   className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
                 >
-                  {savingOutlook ? <Loader2 size={13} className="animate-spin" /> : null}
+                  {savingOutlook ? <InlineOrb kind="loading" /> : null}
                   Save IDs
                 </button>
                 {showOutlookSetup && (
