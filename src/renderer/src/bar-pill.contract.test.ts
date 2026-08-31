@@ -77,11 +77,9 @@ describe('BAR-PILL contract', () => {
     expect(css).toMatch(/\.aw-orb__canvas \{[\s\S]*?border-radius:\s*50%/)
   })
 
-  it('never flattens: no capsule stretch, same NDC scale on X and Y', () => {
+  it('never flattens: ray-sphere glass, same scale on X and Y', () => {
     expect(orb).not.toMatch(/fibonacciCapsule/)
     expect(orb).not.toMatch(/p\.x \* 0\.42,\s*p\.y \* 0\.88/)
-    expect(orb).toMatch(/p\.x \* uScale \* persp,\s*p\.y \* uScale \* persp/)
-    expect(orb).toMatch(/fibonacciSphere/)
     expect(orb).toMatch(/SPHERE_VS/)
     expect(orb).toMatch(/SPHERE_FS/)
     expect(orb).toMatch(/float ra = 0\.90/)
@@ -91,7 +89,6 @@ describe('BAR-PILL contract', () => {
     expect(orb).not.toMatch(/CORE_VS/)
     expect(orb).not.toMatch(/length\(vUv\)/)
     expect(orb).toMatch(/ONE_MINUS_SRC_ALPHA/)
-    expect(orb).toMatch(/gl\.SRC_ALPHA, gl\.ONE/)
     expect(css).toMatch(/data-orb-mood='idle'/)
     expect(css).not.toMatch(/\.aw-orb\[data-orb-mood='idle'\] \{[\s\S]*?radial-gradient/)
     expect(css).toMatch(/\.aw-orb__rec \{[\s\S]*?background:\s*#f0717a/)
@@ -121,22 +118,21 @@ describe('BAR-PILL contract', () => {
     expect(index).toMatch(/const BAR_MIN_HEIGHT = 44/)
   })
 
-  it('does not pull Three.js from unpkg at runtime', () => {
+  it('does not pull Three.js or Spline from the network', () => {
     expect(pill).not.toMatch(/unpkg/)
     expect(app).not.toMatch(/unpkg/)
     expect(orb).not.toMatch(/unpkg\.com/)
     expect(orb).not.toMatch(/cdn\.jsdelivr/)
-    expect(orb).toMatch(/JARVIS_ORB_POINTS = 56/)
-    expect(orb).not.toMatch(/JARVIS_ORB_POINTS = 2000/)
-    expect(orb).not.toMatch(/JARVIS_ORB_POINTS = 96/)
-    expect(orb).toMatch(/mix\(mood \* 0\.82/)
-    expect(orb).not.toMatch(/mix\(mood \* 0\.16/)
-    expect(orb).not.toMatch(/mix\(mood \* 0\.62/)
-    expect(orb).toMatch(/idle: 0x4ca8e8/)
+    expect(orb).not.toMatch(/spline\.design/)
+    expect(orb).not.toMatch(/JARVIS_ORB_POINTS/)
+    expect(orb).not.toMatch(/fibonacciSphere/)
+    expect(orb).not.toMatch(/electronCountForMood/)
+    expect(orb).toMatch(/FIT_STUDIO_MID/)
+    expect(orb).toMatch(/idle: FIT_STUDIO_MID/)
     expect(orb).not.toMatch(/idle: 0x7f00da/)
+    expect(orb).not.toMatch(/idle: 0x4ca8e8/)
     expect(orb).toMatch(/factcheck: 0x5ab8f0/)
-    expect(orb).toMatch(/electronCountForMood/)
-    expect(orb).toMatch(/JARVIS_ELECTRON_MAX = 3/)
+    expect(orb).toMatch(/drawArrays\(gl\.TRIANGLE_STRIP, 0, 4\)/)
   })
 
   it('QUALITY hats: idle bar has no orb rAF; frame loop does no layout or GL lookups', () => {
@@ -155,6 +151,7 @@ describe('BAR-PILL contract', () => {
     expect(paint).not.toMatch(/getBoundingClientRect/)
     expect(orb).toMatch(/shouldRunOrbRaf/)
     expect(orb).toMatch(/Never an n² neighbor scan/)
+    expect(orb).not.toMatch(/gl\.drawArrays\(gl\.POINTS/)
     expect(orbBtn).not.toMatch(/getBoundingClientRect/)
     expect(orbBtn).toMatch(/if \(dragMovedRef\.current\) return/)
     expect(css).toMatch(/\.aw-orb \{[\s\S]*?background:\s*transparent/)
