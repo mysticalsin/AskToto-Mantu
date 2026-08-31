@@ -111,3 +111,6 @@ See [THINKING-ORB.md](./THINKING-ORB.md). Caption then sphere. Word first.
 
 ## Bar sphere
 See [BAR-PILL.md](./BAR-PILL.md). The Bar control is a 64×64 Jakub thinking-orb (`thinking-orbs`, theme `dark`). Idle `solving` with no caption, listen `listening`, think `working`, fact-check `searching`, connecting `connecting`. Same circle when minimized. Not stuffed into overlay Hide/Island. Not a Fit Studio magenta core.
+
+## Auto-answer
+Ambient copilot / auto-answer stays until Tony clicks (dismiss/read, never send) or a new question replaces it. Not an ephemeral 4s/7s card.

@@ -23,6 +23,10 @@ The Bar control is Jakub Antalik's thinking-orb on Métis dark glass, not a WebG
 
 Do/don'ts and tests: `docs/design/BAR-PILL.md`. Quality hats: `docs/design/QUALITY.md`.
 
+### Auto-answer
+
+Ambient copilot / auto-answer (suggest + speculative showSpec) stays on the overlay until Tony clicks the answer (dismiss/read, never send) or a new question is asked (typed ask, or a new ambient suggestion replacing it). No 4s TTL. No 7s ceiling. Never auto-send.
+
 Settings shows these as **cards with a tiny desktop diagram**, not three text radios. Hide: empty top-middle, faint hover hint, caption "Hidden until you move to the top." Island: small capsule at the top-middle, caption "A small island stays visible. Hover opens it." Bar: full bar at the top **plus a circle**, caption "The bar stays on screen." Selected card is obvious. Changes apply immediately. Closing Settings after picking Island or Hide must park the live overlay (`shouldForceParkOnBecameIdle` + `collapse-now` + `parkAfterHide`) so the user sees the notch rest, not a leftover full bar. No reinstall. Original Métis copy. No em dash. No Vibe Island trademark strings.
 
 ## Island Y
