@@ -9,7 +9,7 @@ export const BAR_PILL_WIDTH_PX = BAR_PILL_SIZE_PX
 export const BAR_PILL_HEIGHT_PX = BAR_PILL_SIZE_PX
 
 /** Same NDC scale on X and Y so the cloud stays a sphere, not a lozenge. */
-export const ORB_NDC_SCALE = 0.84
+export const ORB_NDC_SCALE = 0.86
 /** Perspective divide on Z. Same k on X and Y. Never a flattened disc. */
 export const ORB_PERSPECTIVE_K = 0.42
 /** Ray-sphere radius in the glass body (fills the 52 box, never a pill). */
@@ -31,8 +31,10 @@ export const ORB_COLOR: Record<OrbMood, number> = {
 /** Jarvis orb.ts speaking lerp. Blue family only. */
 export const JARVIS_SPEAKING_COLOR = 0x5ab8f0
 
-/** Sparse shell. 2000 on a 52px sphere is a snow globe. */
-export const JARVIS_ORB_POINTS = 96
+/** Sparse shell. 2000 on a 52px sphere is a snow globe. Quiet constellation. */
+export const JARVIS_ORB_POINTS = 56
+/** Ring + one skip. Three families on 56 points still glitter. */
+export const JARVIS_LINE_CHORDS = [1, 19] as const
 /** Jarvis thinking spawn cap. Idle draws none. */
 export const JARVIS_ELECTRON_MAX = 3
 export const JARVIS_ELECTRON_COUNT = JARVIS_ELECTRON_MAX
@@ -113,10 +115,10 @@ export function fibonacciSphere(count: number): Float32Array {
 }
 
 /**
- * O(n) constellation chords (ring + two skips). Never an n² neighbor scan —
+ * O(n) constellation chords (ring + one skip). Never an n² neighbor scan —
  * that hitch on a dense cloud fails the Performance hat.
  */
-export function connectionIndices(count: number, chords: readonly number[] = [1, 11, 29]): Uint16Array {
+export function connectionIndices(count: number, chords: readonly number[] = JARVIS_LINE_CHORDS): Uint16Array {
   const pairs = new Uint16Array(count * chords.length * 2)
   let w = 0
   for (let i = 0; i < count; i++) {
@@ -146,10 +148,10 @@ type MoodParams = { breathAmp: number; speed: number; point: number; line: numbe
 
 function moodParams(mood: OrbMood, listening = false): MoodParams {
   let p: MoodParams
-  if (mood === 'thinking') p = { breathAmp: 0.024, speed: 0.95, point: 0.28, line: 0.12, density: 0.85, drift: 0.014, core: 0.7, electron: 0.55 }
-  else if (mood === 'factcheck') p = { breathAmp: 0.02, speed: 0.7, point: 0.2, line: 0.08, density: 0.75, drift: 0.01, core: 0.72, electron: 0 }
-  else if (mood === 'connecting') p = { breathAmp: 0.012, speed: 0.4, point: 0.16, line: 0.06, density: 0.7, drift: 0.006, core: 0.64, electron: 0 }
-  else p = { breathAmp: 0.018, speed: 0.55, point: 0.18, line: 0.07, density: 0.72, drift: 0.008, core: 0.68, electron: 0 }
+  if (mood === 'thinking') p = { breathAmp: 0.024, speed: 0.95, point: 0.22, line: 0.08, density: 0.78, drift: 0.01, core: 0.78, electron: 0.5 }
+  else if (mood === 'factcheck') p = { breathAmp: 0.02, speed: 0.7, point: 0.16, line: 0.05, density: 0.68, drift: 0.007, core: 0.76, electron: 0 }
+  else if (mood === 'connecting') p = { breathAmp: 0.012, speed: 0.4, point: 0.12, line: 0.04, density: 0.62, drift: 0.005, core: 0.7, electron: 0 }
+  else p = { breathAmp: 0.018, speed: 0.55, point: 0.12, line: 0.04, density: 0.62, drift: 0.006, core: 0.76, electron: 0 }
   if (listening && mood !== 'connecting') {
     p = { ...p, breathAmp: Math.max(p.breathAmp, 0.022), density: p.density * 1.04, point: Math.min(1, p.point * 1.06) }
   }
@@ -191,18 +193,18 @@ void main() {
   vec3 view = -rd;
   vec3 light = normalize(vec3(-0.45 + uLeanX * 0.16, 0.72 + uLeanY * 0.12, 0.85));
   float ndl = max(0.0, dot(n, light));
-  float wrap = 0.20 + 0.68 * (ndl * 0.62 + 0.38 * max(0.0, n.z));
+  float wrap = 0.42 + 0.50 * (ndl * 0.62 + 0.38 * max(0.0, n.z));
   float fresnel = pow(1.0 - max(0.0, dot(n, view)), 2.55);
   vec3 hlf = normalize(light + view);
-  float spec = pow(max(0.0, dot(n, hlf)), 52.0);
+  float spec = pow(max(0.0, dot(n, hlf)), 56.0);
   float caustic = 0.5 + 0.5 * sin(p.x * 7.1 + uTime * 0.58 + p.z * 3.0) * sin(p.y * 6.3 - uTime * 0.41 + p.x * 2.1);
   float core = exp(-dot(p.xy, p.xy) * 3.2) * uBreath;
   vec3 mood = uColor;
-  vec3 col = mix(mood * 0.16, mood, wrap);
-  col += mood * core * 0.70;
-  col += mood * caustic * 0.10 * (0.40 + core);
-  col += vec3(1.0) * spec * 0.92;
-  col += mix(mood, vec3(0.93, 0.88, 1.0), 0.52) * fresnel * 0.58;
+  vec3 col = mix(mood * 0.62, mood * 1.08, wrap);
+  col += mood * core * 0.45;
+  col += mood * caustic * 0.06 * (0.40 + core);
+  col += vec3(1.0) * spec * 0.85;
+  col += mix(mood, vec3(0.82, 0.94, 1.0), 0.40) * fresnel * 0.42;
   float alpha = uAlpha * (0.80 + 0.16 * core + 0.12 * fresnel);
   gl_FragColor = vec4(col, alpha);
 }
@@ -722,7 +724,7 @@ function mountStill(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, op
     const body = ctx.createRadialGradient(cx - rad * 0.22, cy - rad * 0.28, rad * 0.08, cx, cy + rad * 0.12, rad)
     body.addColorStop(0, `rgba(${Math.min(255, r + 70)},${Math.min(255, g + 40)},${Math.min(255, b + 40)},0.92)`)
     body.addColorStop(0.42, `rgba(${r},${g},${b},0.78)`)
-    body.addColorStop(0.78, `rgba(${Math.round(r * 0.35)},${Math.round(g * 0.22)},${Math.round(b * 0.45)},0.62)`)
+    body.addColorStop(0.78, `rgba(${Math.round(r * 0.58)},${Math.round(g * 0.68)},${Math.round(b * 0.82)},0.70)`)
     body.addColorStop(1, `rgba(${r},${g},${b},0)`)
     ctx.fillStyle = body
     ctx.beginPath()
@@ -742,9 +744,9 @@ function mountStill(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, op
     ctx.arc(cx, cy, rad * 0.96, 0, Math.PI * 2)
     ctx.stroke()
     ctx.globalCompositeOperation = 'lighter'
-    const pts = fibonacciSphere(96)
+    const pts = fibonacciSphere(JARVIS_ORB_POINTS)
     const color = `rgba(${r},${g},${b},`
-    for (let i = 0; i < 96; i++) {
+    for (let i = 0; i < JARVIS_ORB_POINTS; i++) {
       const z = pts[i * 3 + 2]
       const persp = 1 / (1 - z * ORB_PERSPECTIVE_K)
       const x = (pts[i * 3] * ORB_NDC_SCALE * persp + 1) * 0.5 * w
