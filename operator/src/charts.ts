@@ -1,4 +1,5 @@
 import { WORLD_PATHS } from './world-paths'
+import { stripMapBands } from './map-bands'
 import type { MapCountry, MapDot, MixBar, SeriesPoint, TokenPoint } from './dashboard'
 
 const MONO = ['#2a2a2e', '#3f3f46', '#71717a', '#a1a1aa', '#e4e4e7']
@@ -134,7 +135,7 @@ export function choropleth(
         : variant === 'hatch' && n > 0
           ? `url(#hatch-${Math.min(4, Math.max(1, Math.ceil((n / Math.max(max, 1)) * 4)))})`
           : scaleColor(n, max)
-    land += `<path data-iso="${iso}" d="${d}" fill="${fill}" />`
+    land += `<path data-iso="${iso}" d="${stripMapBands(d)}" fill="${fill}" />`
   }
   let grid = ''
   if (variant === 'graticule') {
