@@ -61,6 +61,37 @@ describe('Answer provider attribution', () => {
 
     expect(html).not.toContain('Answered by')
   })
+
+  it('shows a Claude / model chip for Cloud CLI — not a local model name', () => {
+    const html = renderToStaticMarkup(
+      <Answer
+        text="Here is the answer."
+        streaming={false}
+        error={null}
+        provider="claude-cli"
+        model="sonnet"
+      />
+    )
+    expect(html).toContain('Claude')
+    expect(html).toContain('sonnet')
+    expect(html).toContain('data-answer-source="claude"')
+    expect(html).not.toContain('Métis Local')
+    expect(html).not.toContain('qwen')
+    expect(html).not.toContain('Answered by')
+  })
+
+  it('shows Claude / haiku and Claude / opus for the other Cloud CLI slugs', () => {
+    const haiku = renderToStaticMarkup(
+      <Answer text="Fast." streaming={false} error={null} provider="claude-cli" model="haiku" />
+    )
+    const opus = renderToStaticMarkup(
+      <Answer text="Deep." streaming={false} error={null} provider="claude-cli" model="opus" />
+    )
+    expect(haiku).toContain('haiku')
+    expect(opus).toContain('opus')
+    expect(haiku).toContain('Claude')
+    expect(opus).toContain('Claude')
+  })
 })
 
 describe('Answer error hints', () => {

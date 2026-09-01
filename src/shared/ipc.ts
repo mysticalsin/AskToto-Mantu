@@ -738,6 +738,10 @@ export const StreamMetaSchema = z.object({
   id: z.string(),
   provider: ProviderIdSchema,
   tier: z.enum(['base', 'think', 'deep']),
+  /** Model / agent id this attempt actually sent. Optional so older main builds stay parseable.
+   *  The answer chip uses this to show e.g. Claude / sonnet — never a local Qwen id when Cloud CLI
+   *  answered. Dust agent sIds are still sent here; the chip only pretty-prints Claude slugs. */
+  model: z.string().optional(),
   /** Whether THIS answer is really grounded in the user's screen. Sent only where main is the authority:
    *  a screen fast-path ask (wantsScreenContext) carries an INTENT flag, never the description itself, so
    *  only main knows whether its on-device cache still had one at send time — and Retry/"Go deeper" replay

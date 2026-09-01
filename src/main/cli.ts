@@ -842,7 +842,7 @@ export async function testCli(provider: ProviderId): Promise<CliActionResult> {
     // Code's allow list is additive over the user's own settings.json, so a bypassPermissions config
     // would leave their auto-approved tools live for this turn. An absent '--model' is the same
     // premium-default inheritance buildArgs floors to sonnet, and it would also report "connected"
-    // for a model the interactive path (which is pinned to Sonnet) never actually uses.
+    // without proving the binary can take --model. Interactive asks pick haiku/sonnet/opus per tier.
     testArgs = [
       '-p',
       '--output-format',

@@ -631,17 +631,70 @@ export function resolveModelTier(
   return base || def.fastModel || def.defaultModel || ''
 }
 
-/** Cost/safety guardrail (per Tony): the CLI provider only ever answers as Sonnet in the interactive
- *  ask flow, never Haiku, never Opus, regardless of routeTier's escalation (hard/coding questions,
- *  factcheck, or thinkingMode 'always' would otherwise reach Opus here). The direct Anthropic API
- *  key's base/think tiers are pinned to Haiku/Sonnet so a stray providerModels edit can't drift them.
- *  Deep tier is deliberately EXEMPT on both: that's the Graph extraction pipeline's reserved path to
- *  Opus (brain/ingest.ts and graphify.ts call resolveModelTier directly and never reach this function). */
+/**
+ * Cost/safety guardrail for the interactive ask flow (DESIGN.md Cloud CLI routing).
+ *
+ * claude-cli and the direct Anthropic API share the same tier shape so a stray providerModels
+ * edit cannot drift the everyday path: base → Haiku, think → Sonnet. Deep is deliberately
+ * EXEMPT on both — coding / hard questions (and the Graph extraction pipeline, which calls
+ * resolveModelTier directly and never reaches this function) stay on Opus.
+ *
+ * claude-cli slugs are the Claude Code aliases already in PROVIDERS['claude-cli']
+ * (haiku / sonnet / opus), not the dated API ids.
+ */
 export function applyInteractiveGuardrail(id: ProviderId, tier: ModelTier, model: string): string {
-  if (id === 'claude-cli') return PROVIDERS['claude-cli'].thinkModel ?? 'sonnet'
+  if (id === 'claude-cli' && tier === 'base') return PROVIDERS['claude-cli'].fastModel
+  if (id === 'claude-cli' && tier === 'think') return PROVIDERS['claude-cli'].thinkModel ?? model
   if (id === 'anthropic' && tier === 'base') return PROVIDERS.anthropic.fastModel
   if (id === 'anthropic' && tier === 'think') return PROVIDERS.anthropic.thinkModel ?? model
   return model
+}
+
+const CLI_SESSION_PROVIDERS = ['claude-cli', 'codex-cli'] as const
+export type CliSessionProvider = (typeof CLI_SESSION_PROVIDERS)[number]
+
+export function isCliSessionProvider(id: ProviderId): id is CliSessionProvider {
+  return (CLI_SESSION_PROVIDERS as readonly string[]).includes(id)
+}
+
+/**
+ * Settings Connect / a successful CLI test: mark the session connected AND make it the active
+ * Ask provider. A Connected badge with `settings.provider` still on local / Dust / another API
+ * is a fake Connected — Asks would not go through `runCliStream`.
+ */
+export function connectCliSession(
+  provider: CliSessionProvider,
+  cliConnected: Record<string, boolean>
+): { cliConnected: Record<string, boolean>; provider: CliSessionProvider } {
+  return {
+    cliConnected: { ...cliConnected, [provider]: true },
+    provider
+  }
+}
+
+/** Short Claude family slug for the answer chip (Claude / haiku). Unknown ids pass through. */
+export function claudeModelSlug(model: string | undefined): string {
+  const m = (model || '').trim()
+  if (!m) return ''
+  if (/haiku/i.test(m)) return 'haiku'
+  if (/sonnet/i.test(m)) return 'sonnet'
+  if (/opus/i.test(m)) return 'opus'
+  return m
+}
+
+/**
+ * Visible "who answered" chip. Claude (API or Cloud CLI) is named Claude plus the model slug so
+ * the user can see it is not Métis Local / Dust / Kimi. Other providers keep their registry label
+ * and do not invent a model name.
+ */
+export function answerSourceChip(
+  id: ProviderId,
+  model?: string
+): { brand: string; model: string } {
+  if (id === 'claude-cli' || id === 'anthropic') {
+    return { brand: 'Claude', model: claudeModelSlug(model) }
+  }
+  return { brand: PROVIDERS[id]?.label ?? id, model: '' }
 }
 
 /** Is Dust configured with valid credentials right now — independent of whether it's the globally active

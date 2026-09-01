@@ -357,3 +357,20 @@ describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', ()
     expect(plane).toMatch(/M0 5\.358a\.854/)
   })
 })
+
+describe('Cloud CLI Connect — cliConnected AND provider, not a fake Connected badge', () => {
+  const connect = (): string => blockAfter('const connect = async (id: \'claude-cli\' | \'codex-cli\')', 'const cancel =')
+  const install = (): string =>
+    blockAfter('const runInstall = async (id: \'claude-cli\' | \'codex-cli\')', 'const connect = async')
+
+  it('Connect calls connectCliSession so Ask uses claude-cli', () => {
+    const body = connect()
+    expect(body).toMatch(/window\.toto\.cliTest\(id\)/)
+    expect(body).toMatch(/patch\(connectCliSession\(id, cliConnected\)\)/)
+    expect(body).not.toMatch(/patch\(\{ provider: id \}\)/)
+  })
+
+  it('a successful auto-install uses the same connectCliSession patch', () => {
+    expect(install()).toMatch(/patch\(connectCliSession\(id, cliConnected\)\)/)
+  })
+})

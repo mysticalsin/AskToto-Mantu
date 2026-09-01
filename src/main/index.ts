@@ -422,6 +422,8 @@ import {
   requiresUserBaseUrl,
   resolveModelTier,
   applyInteractiveGuardrail,
+  connectCliSession,
+  isCliSessionProvider,
   reasoningEffortFor,
   type ProviderId,
   type ProviderDef
@@ -3549,9 +3551,10 @@ function registerIpc(): void {
     const parsedProvider = ProviderIdSchema.safeParse(provider)
     const p = parsedProvider.success ? parsedProvider.data : 'claude-cli'
     const r = await testCli(p)
-    if (r.ok) {
+    if (r.ok && isCliSessionProvider(p)) {
       const s = getSettings()
-      setSettings({ cliConnected: { ...s.cliConnected, [p]: true } })
+      // Connect must switch the active Ask provider — a cliConnected flag alone is a fake Connected.
+      setSettings(connectCliSession(p, s.cliConnected))
     }
     return r
   })
@@ -4824,9 +4827,8 @@ function registerIpc(): void {
           : req.agentOverride && provider === 'dust'
             ? req.agentOverride
             : resolveModelTier(provider, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep)
-      // Guardrail (per Tony): CLI is Sonnet-only, Anthropic base/think are pinned to Haiku/Sonnet — both
-      // regardless of what routeTier or a user's providerModels override picked. Opus stays reachable only
-      // through the Graph pipeline (brain/ingest.ts, graphify.ts), which never calls this function.
+      // Guardrail: claude-cli and Anthropic base/think pin to Haiku/Sonnet. Deep stays Opus
+      // (DESIGN.md Cloud CLI routing). Graph ingest never calls this function.
       model = applyInteractiveGuardrail(provider, tier, model)
       // Dust interactive speed pin: think/deep Dust AGENTS run server-side orchestration before their
       // first token (measured 6.6-28.3s TTFT vs ~2.6s for the base agent) — unusable mid-conversation.
@@ -4936,11 +4938,11 @@ function registerIpc(): void {
         return
       }
       auditLog('provider.request', { provider, model, mode: req.mode, tier, retry: attempted.length > 0 })
-      // Tell the waiting UI WHO is answering ("Asking your Dust agent…") — re-sent on retry/failover so
-      // the display follows the live attempt. Metadata only (provider id + tier), never the model/agent id.
+      // Tell the waiting UI WHO is answering — re-sent on retry/failover so the display follows the live
+      // attempt. Includes the model so the answer chip can show Claude / haiku|sonnet|opus.
       // A leg that has already lost the race says nothing: its announcement would overwrite the winner's.
       if (!race || !race.gate.isLoser(race.leg)) {
-        win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier, usedScreen: screenGrounded })
+        win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier, model, usedScreen: screenGrounded })
       }
       // Per-tier idle budget: a live suggest gives up fast to stay real-time; recaps + deep answers get the
       // full headroom. Bounds time-to-first-token and triggers failover when a provider stalls before a token.
@@ -5008,7 +5010,7 @@ function registerIpc(): void {
             // Re-assert WHO actually answered. Both legs announce themselves when they start, so if
             // the backup started second and the primary then won, the UI's last streamMeta named the
             // loser — the answer would be attributed to a provider that produced none of it.
-            win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier, usedScreen: screenGrounded })
+            win?.webContents.send(IPC.streamMeta, { id: req.id, provider, tier, model, usedScreen: screenGrounded })
           }
         }
         gotToken = true

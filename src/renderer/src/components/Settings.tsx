@@ -104,6 +104,7 @@ import {
   parseDustUrl,
   resolveModelTier,
   applyInteractiveGuardrail,
+  connectCliSession,
   isDustReady,
   dustStoredAgentMissing,
   type ProviderId
@@ -792,8 +793,9 @@ function AiSection({
   // "heavy" but not "hard" prompts) instead of silently collapsing it into the base/deep story.
   const thinkModelName = resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think')
   // The real ask flow (main/index.ts) always runs the resolved model through applyInteractiveGuardrail
-  // before calling the provider — e.g. claude-cli is pinned to Sonnet for every tier. The caption must
-  // show that same guarded result, not the raw tier, or it names a model that never actually answers.
+  // before calling the provider — claude-cli base/think/deep are Haiku/Sonnet/Opus, matching anthropic.
+  // The caption must show that same guarded result, not the raw tier, or it names a model that never
+  // actually answers.
   const guardedBaseModelName = applyInteractiveGuardrail(provider, 'base', baseModelName)
   const deepModelName = resolveModelTier(
     provider,
@@ -2058,12 +2060,6 @@ function CliIntegration({
   const provider = settings.provider
   const cliConnected = settings.cliConnected ?? {}
   const locked = settings.managedKeys.includes('provider')
-  // Latest `settings.provider`, readable from inside runInstall/connect's async continuations — mirrors
-  // AiSection's providerRef guard. Captures the provider when an install/connect starts, then compares
-  // once the awaited call resolves, so a completed CLI install/connect can't silently revert an
-  // in-panel provider switch the user made on the AiSection grid while it was running.
-  const providerRef = useRef(provider)
-  providerRef.current = provider
   // Independent of `locked`: an org can restrict the data-residency allowlist (settings.allowedProviders)
   // without also locking the 'provider' managed key. Gate the CLI quick-select cards the same way the
   // provider tiles are gated, so a disallowed provider can't be activated from here either.
@@ -2129,8 +2125,6 @@ function CliIntegration({
 
   // Step 2: user clicks Continue → install silently, then connect
   const runInstall = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
-    // Capture which provider was active when this install run started — see the patch() call below.
-    const startProvider = providerRef.current
     setState(id, { phase: 'installing', msg: 'Installing…', version: null })
 
     const installResult = await window.toto.cliInstall(id, (line) => {
@@ -2160,10 +2154,11 @@ function CliIntegration({
     if (testResult.ok) {
       // Guard against a stale in-flight install/test resolving after the user switched tabs (unmounting
       // this card) — without this, a late resolution here can re-activate a provider the user already
-      // disconnected in the meantime (see disconnectCli). Mirrors setState's own mountedRef guard. Also
-      // skip the patch if the user switched to a different provider tile on the AiSection grid while
-      // this install was running — a finished install must never silently revert that in-panel pick.
-      if (mountedRef.current && providerRef.current === startProvider) patch({ provider: id })
+      // disconnected in the meantime (see disconnectCli). Mirrors setState's own mountedRef guard.
+      // Connect itself must still switch the active Ask provider (DESIGN.md Cloud CLI routing): a
+      // Connected badge with Asks going to local / Dust is a fake Connected. main's cliTest already
+      // persisted connectCliSession; this patch keeps the panel in sync on the same tick.
+      if (mountedRef.current) patch(connectCliSession(id, cliConnected))
       setState(id, { phase: 'done', msg: null, version: testResult.version ?? null })
       return
     }
@@ -2179,13 +2174,11 @@ function CliIntegration({
 
   // Connect button (setup-opened / error): re-run test only
   const connect = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
-    // Capture which provider was active when this connect attempt started — see the patch() call below.
-    const startProvider = providerRef.current
     setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
     const r = await window.toto.cliTest(id)
     if (r.ok) {
-      // Same stale-resolution + provider-switch guard as runInstall above.
-      if (mountedRef.current && providerRef.current === startProvider) patch({ provider: id })
+      // Same connectCliSession patch as runInstall — cliConnected AND provider, so Ask uses this CLI.
+      if (mountedRef.current) patch(connectCliSession(id, cliConnected))
       setState(id, { phase: 'done', msg: null, version: r.version ?? null })
     } else {
       setState(id, {

@@ -1,6 +1,6 @@
 import { memo, useState } from 'react'
 import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown, Eye, EyeOff, X } from 'lucide-react'
-import { PROVIDERS, type ProviderId } from '@shared/providers'
+import { answerSourceChip, PROVIDERS, type ProviderId } from '@shared/providers'
 import { isScreenCapturePermissionError, needsAppRelaunchForScreenCapture } from '@shared/screen-capture'
 import { Markdown } from './Markdown'
 import { TextButton } from './ui'
@@ -53,6 +53,7 @@ export const Answer = memo(function Answer({
   kind,
   usedScreen,
   provider,
+  model,
   onRetry,
   onGoDeeper,
   captureAccel
@@ -75,6 +76,8 @@ export const Answer = memo(function Answer({
   /** Who is answering (from streamMeta) — names the brain in the waiting state instead of an anonymous
    *  spinner ("Asking your Dust agent…"). */
   provider?: ProviderId
+  /** Model this answer actually used (from streamMeta). Claude answers show Claude / haiku|sonnet|opus. */
+  model?: string
   onRetry?: () => void
   onGoDeeper?: () => void
   /** The LIVE, resolved screen-capture accelerator (settings.shortcuts.capture, or the shipped default),
@@ -199,13 +202,30 @@ export const Answer = memo(function Answer({
   // onward `thinking` is false and an attribution rendered only there is never seen again — precisely when a
   // silent failover has re-routed the ask to a provider other than the one Settings still shows as active.
   const who = provider === 'dust' ? 'your Dust agent' : provider ? PROVIDERS[provider]?.label : undefined
+  const chip = provider ? answerSourceChip(provider, model) : null
+  const claudeChip = chip && chip.brand === 'Claude'
   // Byline on the answer itself: names the brain that actually produced this text, so a failover away from
   // the configured provider is visible instead of silent, and a request streaming under a stale previous
-  // answer still says who is working on it.
-  const attribution = who ? (
+  // answer still says who is working on it. Cloud CLI / Anthropic show a Claude / model chip so the user
+  // can see Claude answered — not Métis Local.
+  const attribution = who || claudeChip ? (
     <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--color-ink-3)]">
       {streaming ? (
         <AgentStatus kind="working" size="inline" caption />
+      ) : claudeChip ? (
+        <span
+          data-answer-source="claude"
+          aria-label={chip.model ? `Claude / ${chip.model}` : 'Claude'}
+          className="inline-flex items-center gap-1 rounded-full border border-[var(--color-hair-soft)] bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium text-[color:var(--color-ink-2)]"
+        >
+          {chip.brand}
+          {chip.model ? (
+            <>
+              <span className="font-normal opacity-50">/</span>
+              {chip.model}
+            </>
+          ) : null}
+        </span>
       ) : (
         <>
           <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-accent)]" />

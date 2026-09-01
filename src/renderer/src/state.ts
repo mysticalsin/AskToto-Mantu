@@ -233,6 +233,8 @@ export interface AnswerState {
   // ("Asking your Dust agent…") instead of an anonymous spinner. Follows the latest retry/failover.
   provider?: ProviderId
   tier?: 'base' | 'think' | 'deep'
+  /** Model this attempt actually sent — drives the Claude / sonnet (etc.) chip on the answer. */
+  model?: string
 }
 
 export interface AskRequest {
@@ -354,6 +356,7 @@ export function useAsk(): {
               ...a,
               provider: m.provider,
               tier: m.tier,
+              ...(m.model === undefined ? {} : { model: m.model }),
               // Screen grounding is MAIN's verdict, not ours: run() below can only set usedScreen from
               // the INTENT flag it sent, and on the fast path main decides at send time whether its
               // on-device description still existed (MQA-180). Absent = no verdict (plain/vision asks),

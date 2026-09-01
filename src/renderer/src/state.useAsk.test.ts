@@ -334,6 +334,16 @@ describe("MQA-180 — the screen badge follows main's verdict, not the renderer'
     expect(view.result.answer?.usedScreen).toBe(true)
     expect(view.result.answer?.provider).toBe('anthropic')
   })
+
+  it('stores the model from streamMeta so the answer chip can say Claude / sonnet', async () => {
+    const view = renderAsk()
+    const id = view.result.run({ mode: 'answer', prompt: 'hello' })
+    await host.__settle()
+    toto.__fireMeta({ id, provider: 'claude-cli', tier: 'think', model: 'sonnet' })
+    await host.__settle()
+    expect(view.result.answer?.provider).toBe('claude-cli')
+    expect(view.result.answer?.model).toBe('sonnet')
+  })
 })
 
 describe('MQA-182 — a request that produced nothing stops claiming it viewed the screen', () => {

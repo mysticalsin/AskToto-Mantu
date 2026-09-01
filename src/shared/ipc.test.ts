@@ -949,4 +949,15 @@ describe('StreamMetaSchema migration guard', () => {
     expect(StreamMetaSchema.safeParse({ id: 'ask-1', tier: 'base' }).success).toBe(false)
     expect(StreamMetaSchema.safeParse({ id: 'ask-1', provider: 'anthropic', tier: 'fast' }).success).toBe(false)
   })
+
+  it('accepts the optional model used by the Claude / slug chip', () => {
+    const parsed = StreamMetaSchema.parse({
+      id: 'ask-1',
+      provider: 'claude-cli',
+      tier: 'deep',
+      model: 'opus'
+    })
+    expect(parsed.model).toBe('opus')
+    expect(StreamMetaSchema.parse({ id: 'ask-1', provider: 'claude-cli', tier: 'base' }).model).toBeUndefined()
+  })
 })

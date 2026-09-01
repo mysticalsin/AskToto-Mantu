@@ -101,6 +101,13 @@ describe('CLI_CONFIGS — security-critical arg arrays (must never relax)', () =
     expect(args[args.indexOf('--model') + 1]).toBe('opus') // a real model passes through unchanged
   })
 
+  it('claude-cli passes haiku / sonnet / opus through --model (no Sonnet lock in argv)', () => {
+    for (const slug of ['haiku', 'sonnet', 'opus'] as const) {
+      const args = CLI_CONFIGS['claude-cli']!.buildArgs({ model: slug, system: '', prompt: 'hi' })
+      expect(args[args.indexOf('--model') + 1]).toBe(slug)
+    }
+  })
+
   it('claude-cli sends the prompt via stdin (never argv) and floors an empty model to "sonnet"', () => {
     const args = CLI_CONFIGS['claude-cli']!.buildArgs({ model: '', system: '', prompt: 'hello' })
     expect(args[0]).toBe('-p') // print/non-interactive mode; the prompt is read from stdin
@@ -600,7 +607,7 @@ describe('testCli — the connection probe spawns under the same lockdown as a r
     expect(args[di + 1]).toBe('*')
     const mi = args.indexOf('--model')
     expect(mi).toBeGreaterThan(-1)
-    expect(args[mi + 1]).toBe('sonnet') // the interactive ask is pinned to Sonnet — test what ships
+    expect(args[mi + 1]).toBe('sonnet') // connect probe uses sonnet; live asks pick haiku/sonnet/opus per tier
     expect(args).not.toContain('Reply with OK') // the probe prompt still goes via stdin, not argv
 
     stdout.write('OK')

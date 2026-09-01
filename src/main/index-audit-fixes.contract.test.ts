@@ -352,6 +352,22 @@ describe('MQA-081 — a wrong-monitor capture is flagged and keyed to the displa
   })
 })
 
+describe('Cloud CLI Connect — cliTest persists connectCliSession, not a lone cliConnected flag', () => {
+  const handler = (): string => sliceBetween('ipcMain.handle(IPC.cliTest', 'ipcMain.handle(IPC.cliVerifySessions')
+
+  it('sets cliConnected AND provider so Ask uses the connected CLI', () => {
+    const body = handler()
+    expect(body).toMatch(/setSettings\(connectCliSession\(p, s\.cliConnected\)\)/)
+    expect(body).not.toMatch(/setSettings\(\{ cliConnected: \{ \.\.\.s\.cliConnected, \[p\]: true \} \}\)/)
+  })
+
+  it('every stream:meta announcement includes the model the chip displays', () => {
+    const sends = indexSrc.match(/send\(IPC\.streamMeta, \{[^}]*\}\)/g) ?? []
+    expect(sends.length).toBeGreaterThanOrEqual(2)
+    for (const send of sends) expect(send).toMatch(/\bmodel\b/)
+  })
+})
+
 describe('MQA-090 — the hidden-window decoder reaps a finished job before refusing the next one', () => {
   it('mirrors the ffmpeg branch: a terminal job cannot block the next FIFO job with a false "already active"', () => {
     const beforeGuard = sliceBetween('  if (ffmpeg) {', '  if (decoderWin && !decoderWin.isDestroyed()) throw new Error')

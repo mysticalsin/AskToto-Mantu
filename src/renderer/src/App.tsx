@@ -2995,6 +2995,7 @@ export function App(): JSX.Element {
         kind={ask.answer?.kind}
         usedScreen={ask.answer?.usedScreen}
         provider={ask.answer?.provider}
+        model={ask.answer?.model}
         // ask.fail() (the quick-action "unavailable" paths) always sets prompt:'' — there's nothing for
         // retryAnswer to replay, so the button must not render at all instead of looking clickable and
         // silently doing nothing (retryAnswer's own `if (!p) return` already knew this; the button just

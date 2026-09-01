@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { isDustReady, dustStoredAgentMissing, applyInteractiveGuardrail, parseDustUrl, detectProvider, filterAllowedProviders, migrateRetiredModelId, migrateRetiredModelMap, providerBaseUrl, reasoningEffortFor, requiresUserBaseUrl, resolveModelTier, PROVIDERS, PROVIDER_IDS, dustAgentVision } from './providers'
+import { isDustReady, dustStoredAgentMissing, applyInteractiveGuardrail, answerSourceChip, claudeModelSlug, connectCliSession, parseDustUrl, detectProvider, filterAllowedProviders, migrateRetiredModelId, migrateRetiredModelMap, providerBaseUrl, reasoningEffortFor, requiresUserBaseUrl, resolveModelTier, PROVIDERS, PROVIDER_IDS, dustAgentVision } from './providers'
 
 // MQA-001 (docs/qa/BUG-LEDGER.md): the registry shipped DeepSeek's retired 'deepseek-chat' /
 // 'deepseek-reasoner' ids as its defaults after their 2026-07-24 discontinuation date. If these tests
@@ -146,10 +146,27 @@ describe('dustStoredAgentMissing', () => {
 })
 
 describe('applyInteractiveGuardrail', () => {
-  it('locks claude-cli to Sonnet for every tier, ignoring the resolved model', () => {
-    expect(applyInteractiveGuardrail('claude-cli', 'base', 'haiku')).toBe('sonnet')
-    expect(applyInteractiveGuardrail('claude-cli', 'think', 'sonnet')).toBe('sonnet')
-    expect(applyInteractiveGuardrail('claude-cli', 'deep', 'opus')).toBe('sonnet')
+  it('does not pin every claude-cli tier to Sonnet — same Haiku / Sonnet / Opus shape as anthropic', () => {
+    expect(PROVIDERS['claude-cli'].fastModel).toBe('haiku')
+    expect(PROVIDERS['claude-cli'].thinkModel).toBe('sonnet')
+    expect(PROVIDERS['claude-cli'].deepModel).toBe('opus')
+    expect(applyInteractiveGuardrail('claude-cli', 'base', 'opus')).toBe(PROVIDERS['claude-cli'].fastModel)
+    expect(applyInteractiveGuardrail('claude-cli', 'think', 'opus')).toBe(PROVIDERS['claude-cli'].thinkModel)
+    expect(applyInteractiveGuardrail('claude-cli', 'deep', 'opus')).toBe('opus')
+  })
+
+  it('maps claude-cli deep to opus and leaves a resolved opus untouched', () => {
+    expect(resolveModelTier('claude-cli', {}, {}, 'deep', {})).toBe('opus')
+    expect(applyInteractiveGuardrail('claude-cli', 'deep', resolveModelTier('claude-cli', {}, {}, 'deep', {}))).toBe(
+      'opus'
+    )
+  })
+
+  it('maps claude-cli base to the registry fast model (haiku)', () => {
+    expect(resolveModelTier('claude-cli', {}, {}, 'base')).toBe('haiku')
+    expect(applyInteractiveGuardrail('claude-cli', 'base', resolveModelTier('claude-cli', {}, {}, 'base'))).toBe(
+      'haiku'
+    )
   })
 
   it('pins anthropic base tier to the Haiku id regardless of the resolved model', () => {
@@ -172,6 +189,41 @@ describe('applyInteractiveGuardrail', () => {
     expect(applyInteractiveGuardrail('openai', 'base', 'gpt-4o-mini')).toBe('gpt-4o-mini')
     expect(applyInteractiveGuardrail('dust', 'think', 'agent_abc')).toBe('agent_abc')
     expect(applyInteractiveGuardrail('codex-cli', 'base', '')).toBe('')
+  })
+})
+
+describe('connectCliSession — Connect is not a fake Connected badge', () => {
+  it('sets cliConnected AND provider so Ask uses claude-cli', () => {
+    const patch = connectCliSession('claude-cli', { 'codex-cli': true })
+    expect(patch.cliConnected['claude-cli']).toBe(true)
+    expect(patch.cliConnected['codex-cli']).toBe(true)
+    expect(patch.provider).toBe('claude-cli')
+  })
+
+  it('does not leave the previous API provider as the active Ask route', () => {
+    const patch = connectCliSession('claude-cli', {})
+    expect(patch.provider).not.toBe('local')
+    expect(patch.provider).not.toBe('dust')
+    expect(patch.provider).not.toBe('kimi')
+    expect(patch.provider).not.toBe('cloudflare')
+  })
+})
+
+describe('answerSourceChip — Cloud CLI reads as Claude, not a local model', () => {
+  it('names Claude plus the CLI slug (haiku / sonnet / opus)', () => {
+    expect(answerSourceChip('claude-cli', 'haiku')).toEqual({ brand: 'Claude', model: 'haiku' })
+    expect(answerSourceChip('claude-cli', 'sonnet')).toEqual({ brand: 'Claude', model: 'sonnet' })
+    expect(answerSourceChip('claude-cli', 'opus')).toEqual({ brand: 'Claude', model: 'opus' })
+    expect(claudeModelSlug('claude-sonnet-4-6')).toBe('sonnet')
+    expect(answerSourceChip('anthropic', 'claude-haiku-4-5-20251001')).toEqual({ brand: 'Claude', model: 'haiku' })
+  })
+
+  it('never labels a Cloud CLI answer as Métis Local or a Qwen id', () => {
+    const chip = answerSourceChip('claude-cli', 'sonnet')
+    expect(chip.brand).toBe('Claude')
+    expect(chip.brand).not.toMatch(/local/i)
+    expect(chip.model).not.toMatch(/qwen/i)
+    expect(answerSourceChip('local', 'qwen3.5-0.8b').brand).toMatch(/Local/)
   })
 })
 
