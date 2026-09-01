@@ -103,3 +103,19 @@ Each built-in mode (`BUILTIN_MODE_LABELS`: general, meeting, sales, interview, r
 ## Copy
 
 Métis voice. Do not clone Vibe Island strings.
+
+## Cloud CLI routing
+
+Cloud CLI is provider id `claude-cli`. It is the local `claude` binary talking to Anthropic cloud. It is not Métis Local, not Dust, and not Kimi.
+
+**Connect.** Settings → CLI Integration → Connect calls `connectCliSession('claude-cli')`. Success writes `cliConnected['claude-cli'] = true` and `provider = 'claude-cli'` in the same patch (main persists both; the renderer applies the same patch so the Active badge is not a lie). A Connected badge with Asks still going to local / Dust / another API is a bug. After Connect, every Ask answer is routed through `runCliStream` / `CLI_CONFIGS['claude-cli']`.
+
+**Tiers.** Same shape as the Anthropic API provider, mapped to Claude Code slugs already in `PROVIDERS['claude-cli']`:
+
+- base (fast) → `haiku`
+- think (heavier) → `sonnet`
+- deep (coding / hard) → `opus`
+
+`applyInteractiveGuardrail` must not pin every claude-cli tier to Sonnet. Deep stays Opus. Overlay, Island, onboarding, and pack stay frozen.
+
+**Attribution.** The finished answer shows a provider + model chip from `streamMeta` (Claude / haiku, Claude / sonnet, Claude / opus) so the user can see Claude answered.
