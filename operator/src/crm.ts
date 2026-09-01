@@ -10,6 +10,17 @@ export const CRM_STATUSES = [
 
 export type CrmStatus = (typeof CRM_STATUSES)[number]
 
+/** Dashboard option order from the StatusDemo paste. Filters, not a demo grid. */
+export const CRM_FILTER_ORDER: readonly CrmStatus[] = [
+  'pending',
+  'failed',
+  'success',
+  'in_progress',
+  'in_review',
+  'expired',
+  'submitted'
+]
+
 export const CRM_STATUS_LABEL: Record<CrmStatus, string> = {
   pending: 'Pending',
   in_progress: 'In progress',

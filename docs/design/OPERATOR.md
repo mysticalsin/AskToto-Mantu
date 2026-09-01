@@ -41,7 +41,7 @@ Rebuild the density and chrome of the public Bklit blocks/charts look inside Ope
 - KPI strip is 3-up. Big number, tiny mono sublabel, axis-free sparkline that bleeds to the card edge.
 - Map is a flat gray choropleth. No basemap tiles. No country labels. 5-step gray scale. Variants: land, analytics, graticule, hatch. Dark theme is the default.
 - Change activity is a GitHub-style contribution heatmap.
-- CRM send is a 7-status funnel used as **filters** on the real board, not a demo grid.
+- CRM send statuses are **dashboard filter chips** on the real board (paste order: pending, failed, success, in-progress, in-review, expired, submitted). Not a StatusDemo grid.
 - No Unsplash. No demo people. No placeholder visitors. Empty states say there is no ingest yet.
 
 Copy is original Métis. No em dashes in user-facing strings. Never identify as AI. No emoji as icon.

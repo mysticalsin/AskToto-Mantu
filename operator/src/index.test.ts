@@ -492,13 +492,16 @@ describe('CRM send board', () => {
     expect(html).toContain('data-status="failed"')
     expect(html).toContain('status-badge')
     expect(html).toContain('Submitted')
-    expect(html).toContain('data-crm-filter="pending"')
-    expect(html).toContain('data-crm-filter="in_progress"')
-    expect(html).toContain('data-crm-filter="in_review"')
-    expect(html).toContain('data-crm-filter="submitted"')
-    expect(html).toContain('data-crm-filter="success"')
-    expect(html).toContain('data-crm-filter="failed"')
-    expect(html).toContain('data-crm-filter="expired"')
+    expect([...html.matchAll(/data-crm-filter="([^"]+)"/g)].map((m) => m[1])).toEqual([
+      'all',
+      'pending',
+      'failed',
+      'success',
+      'in_progress',
+      'in_review',
+      'expired',
+      'submitted'
+    ])
     expect(html).toContain('Landed today')
     expect(html).toContain('Funnel by connector')
     expect(html).not.toContain('Submited')
