@@ -16,7 +16,15 @@ import type { BrainRead, BrainStatus, EntityKind } from '@shared/brain'
 const api = {
   getData: (): Promise<BrainRead> => ipcRenderer.invoke('brain:read'),
   getStatus: (): Promise<BrainStatus | null> => ipcRenderer.invoke('brain:status'),
-  backfill: (): Promise<{ queued: number; deferred?: 'no-provider'; preparing?: boolean }> => ipcRenderer.invoke('brain:backfill'),
+  backfill: (): Promise<{
+    queued: number
+    deferred?: 'no-provider'
+    preparing?: boolean
+    error?: string
+    recapped?: number
+    upToDate?: boolean
+    lastIndexedAt?: number
+  }> => ipcRenderer.invoke('brain:backfill'),
   runPass: (): Promise<{
     queued: number
     deferred?: 'no-provider'

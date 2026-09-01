@@ -508,6 +508,7 @@ export function BrainView({
       ])
       setData(read)
       setStatus(st)
+      if (st?.error) setError(st.error)
       setMeetings(list)
       setAttention(att.items)
       setProviderReady(settings.providerReady)
@@ -526,7 +527,9 @@ export function BrainView({
 
   const refreshStatus = useCallback(async (): Promise<void> => {
     try {
-      setStatus(await window.toto.brainStatus())
+      const st = await window.toto.brainStatus()
+      setStatus(st)
+      if (st?.error) setError(st.error)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -602,7 +605,8 @@ export function BrainView({
   // a full read is only needed when work settles, so this stays responsive without re-reading the brain.
   const backfillRunning = !!status?.backfill?.running
   const liveRunning = !!status?.live?.running
-  const statusWorking = backfillRunning || liveRunning
+  const preparing = !!status?.backfill?.preparing
+  const statusWorking = backfillRunning || liveRunning || preparing
   useEffect(() => {
     void refreshStatus()
     const t = setInterval(() => void refreshStatus(), brainStatusPollInterval(statusWorking))
@@ -624,10 +628,14 @@ export function BrainView({
 
   const startBackfill = useCallback(async (): Promise<void> => {
     setBackfilling(true)
+    setError(null)
     try {
       const result = await window.toto.brainBackfill()
-      if (result.deferred === 'no-provider') {
-        setError('Connect an AI provider in Settings → AI, or enable Métis Local there to index meetings on this device.')
+      if (result.deferred === 'no-provider' || result.error) {
+        setError(
+          result.error ||
+            'Connect an AI provider in Settings → AI, or enable Métis Local there to index meetings on this device.'
+        )
         return
       }
       await refresh()
@@ -812,7 +820,11 @@ export function BrainView({
             Mantu Intelligence
           </div>
           <div className="text-[11px] text-[color:var(--color-ink-3)]">
-            {record ? 'Record' : 'Your meeting knowledge, compounding. Grounded in transcripts, never invented.'}
+            {record
+              ? 'Record'
+              : status?.lastIndexedAt
+                ? `Last indexed ${new Date(status.lastIndexedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+                : 'Your meeting knowledge, compounding. Grounded in transcripts, never invented.'}
           </div>
         </div>
         <IntelligenceUpdateButton
@@ -821,11 +833,13 @@ export function BrainView({
         />
         <button
           type="button"
-          onClick={() => void refresh()}
-          title="Refresh"
-          className="no-drag focus-ring grid h-7 w-7 place-items-center rounded-lg text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink)]"
+          onClick={() => void startBackfill()}
+          disabled={backfilling}
+          title="Recap missing summaries and extract people, accounts, deals, coaching, and Today"
+          className="no-drag focus-ring flex h-7 items-center gap-1 rounded-lg px-2 text-[11px] font-semibold text-[color:var(--color-ink-2)] hover:bg-white/[0.06] hover:text-[color:var(--color-ink)] disabled:opacity-50"
         >
-          {loading ? <InlineOrb kind="searching" /> : <RefreshCw size={13} />}
+          {backfilling || statusWorking ? <InlineOrb kind="searching" /> : <RefreshCw size={13} />}
+          {backfilling || statusWorking ? 'Updating…' : 'Update Intelligence'}
         </button>
       </div>
 
@@ -845,7 +859,7 @@ export function BrainView({
               <AlertTriangle size={13} className="shrink-0" />
               <span>
                 {topError
-                  ? `Your AI provider is failing: ${topError} — check Settings → AI`
+                  ? `Your AI provider is failing: ${topError}. Check Settings → AI`
                   : indexProgress?.label ?? 'Some meetings need attention.'}
               </span>
             </div>
@@ -909,7 +923,7 @@ export function BrainView({
           onUndoMerge={() => void undoMerge()}
           onDismissMerge={() => setRecentMerge(null)}
         />
-      ) : ingested === 0 && !bf?.running && !live?.running ? (
+      ) : ingested === 0 && !bf?.running && !live?.running && !backfilling && !preparing ? (
         /* Empty state — the brain has not ingested anything yet. */
         <div className="flex flex-col items-center gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-6 py-8 text-center">
           <Brain size={28} className="text-[color:var(--color-accent-2)]" />
@@ -924,7 +938,7 @@ export function BrainView({
           <IntelligenceUpdateButton
             running={backfilling || statusWorking}
             disabled={meetings.length === 0}
-            onClick={() => void runIntelligencePass()}
+            onClick={() => void startBackfill()}
           />
           {/* canIndex ORs in localFallbackReady — a local-only setup already indexes fine, so this must
               only claim "no provider" when NEITHER a cloud provider NOR the local safety net is live. */}
@@ -942,7 +956,7 @@ export function BrainView({
             <div className="rounded-xl border border-[var(--color-hair-soft)] bg-[var(--color-accent-soft)] px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
               <div className="flex items-center gap-2">
                 <InlineOrb kind="searching" />
-                <span aria-atomic="true" aria-live="polite">{indexProgress?.label ?? 'Mapping meetings…'}</span>
+                <span aria-atomic="true" aria-live="polite">{indexProgress?.label ?? 'Updating…'}</span>
               </div>
               <WorkProgressMeter
                 active
@@ -972,10 +986,10 @@ export function BrainView({
                 <button
                   type="button"
                   onClick={() => void startBackfill()}
-                  disabled={backfilling || !canIndex}
+                  disabled={backfilling}
                   className="no-drag focus-ring shrink-0 rounded-full bg-white/[0.06] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink-2)] hover:bg-white/10 disabled:opacity-50"
                 >
-                  {backfilling ? 'Starting…' : 'Ingest now'}
+                  {backfilling || statusWorking ? 'Updating…' : 'Update Intelligence'}
                 </button>
               </span>
             </div>

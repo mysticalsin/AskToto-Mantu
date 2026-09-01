@@ -220,6 +220,7 @@ export type AuditEvent =
   // 'brain.ingest' (per-meeting) — this is the per-PASS marker metrics.ts counts against the
   // maxPassesPerDay budget.
   | 'brain.consolidation'
+  | 'brain.intelligence_index'
   // Wave 4 (main/mcp/pushQueue.ts): an outbound CRM/task-manager action was queued, retried, sent, or
   // dead-lettered — the audit trail for the push queue's own lifecycle, separate from 'mcp.push' (one
   // live attempt).

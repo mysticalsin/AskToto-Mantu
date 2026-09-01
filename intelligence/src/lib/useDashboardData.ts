@@ -100,7 +100,19 @@ export function useDashboardData(): State {
               revision?: number
               backfill?: { running?: boolean }
               live?: { running?: boolean }
+              error?: string
             } | null
+            if (st?.error) {
+              consecutiveNulls = 0
+              if (!cancelled)
+                setState((prev) => ({
+                  data: prev.data,
+                  loading: false,
+                  error: prev.data ? null : st.error!,
+                  stale: prev.data ? st.error! : null
+                }))
+              return
+            }
             if (!st) {
               consecutiveNulls += 1
               if (consecutiveNulls >= MAX_CONSECUTIVE_NULLS) clearInterval(iv!)

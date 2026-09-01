@@ -146,7 +146,15 @@ const api = {
   graphifyOpenGraph: (): Promise<string> => ipcRenderer.invoke(IPC.graphifyOpenGraph),
   brainStatus: (): Promise<import('@shared/brain').BrainStatus | null> =>
     ipcRenderer.invoke(IPC.brainStatus),
-  brainBackfill: (): Promise<{ queued: number; deferred?: 'no-provider'; preparing?: boolean }> => ipcRenderer.invoke(IPC.brainBackfill),
+  brainBackfill: (): Promise<{
+    queued: number
+    deferred?: 'no-provider'
+    preparing?: boolean
+    error?: string
+    recapped?: number
+    upToDate?: boolean
+    lastIndexedAt?: number
+  }> => ipcRenderer.invoke(IPC.brainBackfill),
   brainIntelligencePass: (): Promise<{
     queued: number
     deferred?: 'no-provider'

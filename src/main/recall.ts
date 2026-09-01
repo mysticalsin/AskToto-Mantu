@@ -185,6 +185,32 @@ async function readMeetingUncached(path: string, file: string): Promise<Read | n
   }
 }
 
+/** Recap body is missing or blank. Used by the solid Intelligence pass to write summaries that never landed. */
+export function meetingTextNeedsRecap(text: string): boolean {
+  if (!text.trim()) return true
+  const startMatch = text.match(/^## Notes & follow-ups[\r\n]+/m)
+  if (!startMatch) return true
+  const afterStart = text.slice(startMatch.index! + startMatch[0].length)
+  const endIdx = afterStart.search(/^## Full transcript/m)
+  const recap = (endIdx === -1 ? afterStart : afterStart.slice(0, endIdx)).trim()
+  return recap.length === 0
+}
+
+export async function listMeetingsNeedingRecap(): Promise<Array<{ file: string; mode: string; lines: TranscriptLine[] }>> {
+  const folder = resolveMeetingsFolder(getSettings())
+  const files = await meetingFiles(folder)
+  const out: Array<{ file: string; mode: string; lines: TranscriptLine[] }> = []
+  for (const f of files) {
+    const read = await readMeeting(folder, f)
+    if (!read || read.sum.locked) continue
+    if (!meetingTextNeedsRecap(read.text)) continue
+    const parsed = await recallRead(f)
+    if (!parsed.ok || !parsed.lines?.length) continue
+    out.push({ file: f, mode: parsed.mode || read.sum.mode || 'meeting', lines: parsed.lines })
+  }
+  return out
+}
+
 /** Newest-first list of saved meetings. */
 export async function listMeetings(): Promise<MeetingSummary[]> {
   const folder = resolveMeetingsFolder(getSettings())
