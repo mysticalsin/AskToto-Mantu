@@ -103,6 +103,12 @@ ClickUp and Plane use official simple-icons SVG paths (CC0; trademarks remain wi
 
 See `docs/design/BRAIN-CONNECTORS.md`.
 
+## Other providers (Settings → AI)
+The Other providers row is logo-first. Company mark only; name is `aria-label`
+and appears in the details after a click. Binding contract:
+[`OTHER-PROVIDERS.md`](OTHER-PROVIDERS.md). Do not ship name chips
+(GPT / OpenAI / NVIDIA NIM / DeepSeek / MiniMax) as the default row.
+
 ## Starfield Close (onboarding bed)
 See [ONBOARDING-STARFIELD.md](./ONBOARDING-STARFIELD.md). Galaxy from frame one. Overlay hide/island stay out.
 
