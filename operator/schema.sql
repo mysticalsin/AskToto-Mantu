@@ -13,7 +13,10 @@ CREATE TABLE IF NOT EXISTS seats (
   city TEXT,
   lat REAL,
   lon REAL,
-  last_index_at INTEGER
+  last_index_at INTEGER,
+  hostname TEXT,
+  sso_email TEXT,
+  license TEXT
 );
 
 CREATE TABLE IF NOT EXISTS asks (
@@ -55,6 +58,33 @@ CREATE TABLE IF NOT EXISTS pulses (
 
 CREATE INDEX IF NOT EXISTS pulses_ts ON pulses(ts);
 CREATE INDEX IF NOT EXISTS pulses_kind_ts ON pulses(kind, ts);
+
+CREATE TABLE IF NOT EXISTS events (
+  id TEXT PRIMARY KEY,
+  ts INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  actor TEXT,
+  device_id TEXT,
+  country TEXT,
+  detail TEXT
+);
+
+CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
+CREATE INDEX IF NOT EXISTS events_kind_ts ON events(kind, ts);
+
+CREATE TABLE IF NOT EXISTS vault_keys (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  label TEXT NOT NULL,
+  last4 TEXT NOT NULL,
+  cipher TEXT NOT NULL,
+  iv TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  created_by TEXT NOT NULL,
+  rotated_at INTEGER,
+  revoked_at INTEGER
+);
 
 CREATE TABLE IF NOT EXISTS crm_sends (
   id TEXT PRIMARY KEY,

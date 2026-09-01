@@ -1,3 +1,4 @@
+import { sanitizeOperatorHostname, sanitizeOperatorSsoEmail } from '../../src/shared/operator'
 import { ADMIN_EMAILS, adminIdentity, unauthorized, type AccessCtx } from './access'
 import { asCrmStatus } from './crm'
 import { decryptPrompt, encryptPrompt, sha256Hex, signSkillPack } from './crypto'
@@ -5,6 +6,7 @@ import { buildDashboard } from './dashboard'
 import { geoFromRequest, type CfGeo } from './geo'
 import { verifyIngestHmac } from './hmac'
 import { d1Store, type D1DatabaseLike } from './d1'
+import { looksLikeSecret } from './redact'
 import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './store'
 import { renderConsole } from './ui'
 
@@ -97,11 +99,11 @@ async function adminRoute(
   now: number
 ): Promise<Response> {
   if (url.pathname === '/' && request.method === 'GET') {
-    const dash = await buildDashboard(store, email, now)
+    const dash = await buildDashboard(store, email, now, keyFlags(env))
     return html(renderConsole(dash))
   }
   if (url.pathname === '/v1/admin/dashboard' && request.method === 'GET') {
-    return json(stripSecrets(await buildDashboard(store, email, now)))
+    return json(stripSecrets(await buildDashboard(store, email, now, keyFlags(env))))
   }
   if (url.pathname === '/v1/admin/summary' && request.method === 'GET') {
     const dash = await buildDashboard(store, email, now)
@@ -252,14 +254,25 @@ async function heartbeat(
   geo: CfGeo
 ): Promise<Response> {
   const body = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {}
-  await store.upsertSeat(seatFromBody(deviceId, body, now, geo))
+  const seat = seatFromBody(deviceId, body, now, geo)
+  await store.upsertSeat(seat)
+  const pulseId = crypto.randomUUID()
   await store.insertPulse({
-    id: crypto.randomUUID(),
+    id: pulseId,
     device_id: deviceId,
     ts: now,
     kind: 'heartbeat',
     country: geo.country,
     city: geo.city
+  })
+  await store.insertEvent({
+    id: pulseId,
+    ts: now,
+    kind: 'heartbeat',
+    actor: seat.sso_email,
+    device_id: deviceId,
+    country: geo.country,
+    detail: safeEventDetail(seat.os)
   })
   await ingestCrmList(store, deviceId, body, now)
   const retries = await store.listCrmRetries(deviceId)
@@ -278,11 +291,31 @@ async function ingest(
   const id = String(body.id || crypto.randomUUID())
   if (body.event === 'rating') {
     await store.updateAskRating(id, String(body.rating || ''))
+    const seat = seatFromBody(deviceId, body, now, geo)
+    await store.insertEvent({
+      id: crypto.randomUUID(),
+      ts: now,
+      kind: 'rating',
+      actor: seat.sso_email,
+      device_id: deviceId,
+      country: geo.country,
+      detail: safeEventDetail(String(body.rating || 'rating'))
+    })
     return json({ ok: true })
   }
   if (body.event === 'crm') {
     if (body.confidential === true) return json({ ok: true, id, ingested: false })
     await upsertCrmEvent(store, deviceId, body, now)
+    const seat = seatFromBody(deviceId, body, now, geo)
+    await store.insertEvent({
+      id: crypto.randomUUID(),
+      ts: now,
+      kind: 'crm',
+      actor: seat.sso_email,
+      device_id: deviceId,
+      country: geo.country,
+      detail: safeEventDetail(String(body.status || body.connector || 'crm'))
+    })
     return json({ ok: true, id })
   }
   let cipher: string | null = null
@@ -318,15 +351,26 @@ async function ingest(
     preview: redactedPreview(question, str(body.mode) ?? undefined)
   }
   await store.insertAsk(row)
+  const pulseId = crypto.randomUUID()
   await store.insertPulse({
-    id: crypto.randomUUID(),
+    id: pulseId,
     device_id: deviceId,
     ts: row.ts,
     kind: 'ask',
     country: geo.country,
     city: geo.city
   })
-  await store.upsertSeat(seatFromBody(deviceId, body, now, geo))
+  const seat = seatFromBody(deviceId, body, now, geo)
+  await store.upsertSeat(seat)
+  await store.insertEvent({
+    id: pulseId,
+    ts: row.ts,
+    kind: 'ask',
+    actor: seat.sso_email,
+    device_id: deviceId,
+    country: geo.country,
+    detail: safeEventDetail(row.mode || row.cache_status || 'ask')
+  })
   return json({ ok: true, id })
 }
 
@@ -359,7 +403,25 @@ function seatFromBody(deviceId: string, body: Record<string, unknown>, now: numb
     city: geo.city,
     lat: geo.lat,
     lon: geo.lon,
-    last_index_at: lastIndexAt(body)
+    last_index_at: lastIndexAt(body),
+    hostname: sanitizeOperatorHostname(body.hostname),
+    sso_email: sanitizeOperatorSsoEmail(body.ssoEmail),
+    license: typeof body.license === 'string' && !looksLikeSecret(body.license) ? body.license.slice(0, 32) : null
+  }
+}
+
+function safeEventDetail(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const s = raw.trim().slice(0, 48)
+  if (!s || looksLikeSecret(s)) return null
+  return s
+}
+
+function keyFlags(env: Env) {
+  return {
+    ingestBound: Boolean(env.OPERATOR_INGEST_SECRET),
+    promptBound: Boolean(env.OPERATOR_PROMPT_KEY),
+    skillBound: Boolean(env.OPERATOR_SKILL_PRIVATE_KEY)
   }
 }
 

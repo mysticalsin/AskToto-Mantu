@@ -1,6 +1,7 @@
 import { aggregateCacheSlice, estimateCacheCost, formatUsdEstimate, type AskLogLine } from '../../src/shared/operator'
 import { CRM_STATUSES, type CrmSendRow, type CrmStatus } from './crm'
-import type { OperatorStore, PulseRow, SeatRow } from './store'
+import { looksLikeSecret, safeChips, type SafeChip } from './redact'
+import type { EventRow, OperatorStore, PulseRow, SeatRow, VaultKeyMeta } from './store'
 
 export const ONLINE_MS = 2 * 60 * 1000
 const HOUR = 60 * 60 * 1000
@@ -117,6 +118,42 @@ export interface DashboardPayload {
       action: string | null
     }[]
   }
+  events: ConsoleEvent[]
+  profiles: ProfileRow[]
+  keys: {
+    ingestBound: boolean
+    promptBound: boolean
+    skillBound: boolean
+    vault: VaultKeyMeta[]
+  }
+}
+
+export interface ConsoleEvent {
+  id: string
+  ts: number
+  name: string
+  hostname: string | null
+  email: string | null
+  chips: SafeChip[]
+}
+
+export interface ProfileRow {
+  device: string
+  hostname: string | null
+  email: string | null
+  os: string
+  appVersion: string
+  country: string | null
+  city: string | null
+  lastSeen: number
+  live: boolean
+  license: string | null
+}
+
+export type DashboardKeyFlags = {
+  ingestBound: boolean
+  promptBound: boolean
+  skillBound: boolean
 }
 
 export type CrmLanding = {
@@ -278,7 +315,44 @@ function uniqueSeats(seats: SeatRow[], since: number): number {
   return ids.size
 }
 
-export async function buildDashboard(store: OperatorStore, email: string, now: number): Promise<DashboardPayload> {
+function displayProfile(seat: SeatRow | undefined): { hostname: string | null; email: string | null } {
+  return {
+    hostname: seat?.hostname && !looksLikeSecret(seat.hostname) ? seat.hostname : null,
+    email: seat?.sso_email && !looksLikeSecret(seat.sso_email) ? seat.sso_email : null
+  }
+}
+
+function eventFromStored(row: EventRow, seatsById: Map<string, SeatRow>): ConsoleEvent {
+  const seat = row.device_id ? seatsById.get(row.device_id) : undefined
+  const who = displayProfile(seat)
+  return {
+    id: row.id,
+    ts: row.ts,
+    name: looksLikeSecret(row.kind) ? 'event' : row.kind,
+    hostname: who.hostname,
+    email: who.email || (row.actor && !looksLikeSecret(row.actor) ? row.actor : null),
+    chips: safeChips({
+      country: row.country,
+      os: seat?.os,
+      detail: row.detail
+    })
+  }
+}
+
+function mergeEvents(stored: ConsoleEvent[], extra: ConsoleEvent[]): ConsoleEvent[] {
+  const by = new Map<string, ConsoleEvent>()
+  for (const e of [...stored, ...extra]) {
+    if (!by.has(e.id)) by.set(e.id, e)
+  }
+  return [...by.values()].sort((a, b) => b.ts - a.ts).slice(0, 80)
+}
+
+export async function buildDashboard(
+  store: OperatorStore,
+  email: string,
+  now: number,
+  keys: DashboardKeyFlags = { ingestBound: false, promptBound: false, skillBound: false }
+): Promise<DashboardPayload> {
   const seats = await store.listSeats()
   const asks = await store.listAsks(2000)
   const pulses = await store.listPulses(now - 7 * DAY)
@@ -286,6 +360,9 @@ export async function buildDashboard(store: OperatorStore, email: string, now: n
   const audit = await store.listAudit(80)
   const crm = await store.listCrm(200)
   const packs = await store.listPacks()
+  const storedEvents = await store.listEvents(80)
+  const vault = await store.listVaultMeta()
+  const seatsById = new Map(seats.map((s) => [s.device_id, s]))
 
   const live = seats.filter((s) => now - s.last_seen < ONLINE_MS).length
   const dau = uniqueSeats(seats, now - DAY)
@@ -490,6 +567,68 @@ export async function buildDashboard(store: OperatorStore, email: string, now: n
         remoteUrl: r.remote_url,
         meetingHash: r.meeting_hash,
         action: r.action
+      }))
+    },
+    events: mergeEvents(
+      storedEvents.map((e) => eventFromStored(e, seatsById)),
+      [
+        ...asks.slice(0, 40).map((a) => {
+          const who = displayProfile(seatsById.get(a.device_id))
+          return {
+            id: `ask-${a.id}`,
+            ts: a.ts,
+            name: 'ask',
+            hostname: who.hostname,
+            email: who.email,
+            chips: safeChips({
+              mode: a.mode,
+              provider: a.provider,
+              cache: a.cache_status,
+              os: seatsById.get(a.device_id)?.os
+            })
+          }
+        }),
+        ...crm.slice(0, 40).map((r) => {
+          const who = displayProfile(seatsById.get(r.device_id))
+          return {
+            id: `crm-${r.id}`,
+            ts: r.ts,
+            name: 'crm',
+            hostname: who.hostname,
+            email: who.email,
+            chips: safeChips({
+              status: r.status,
+              connector: r.connector,
+              action: r.action
+            })
+          }
+        })
+      ]
+    ),
+    profiles: seats
+      .slice()
+      .sort((a, b) => b.last_seen - a.last_seen)
+      .map((s) => ({
+        device: s.device_id.slice(0, 8),
+        hostname: s.hostname && !looksLikeSecret(s.hostname) ? s.hostname : null,
+        email: s.sso_email && !looksLikeSecret(s.sso_email) ? s.sso_email : null,
+        os: s.os,
+        appVersion: s.app_version,
+        country: s.country,
+        city: s.city,
+        lastSeen: s.last_seen,
+        live: now - s.last_seen < ONLINE_MS,
+        license: s.license && !looksLikeSecret(s.license) ? s.license : null
+      })),
+    keys: {
+      ingestBound: keys.ingestBound,
+      promptBound: keys.promptBound,
+      skillBound: keys.skillBound,
+      vault: vault.map((v) => ({
+        provider: looksLikeSecret(v.provider) ? 'provider' : v.provider,
+        label: looksLikeSecret(v.label) ? 'key' : v.label,
+        last4: /^\w{2,8}$/.test(v.last4) ? v.last4 : '----',
+        status: v.status
       }))
     }
   }

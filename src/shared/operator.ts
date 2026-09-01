@@ -348,3 +348,19 @@ export function aggregateCacheSlice(lines: AskLogLine[]): OperatorCacheSlice {
     ttftNaP95Ms: percentile(na, 95)
   }
 }
+
+/** Seat hostname from `os.hostname()`. Letters, digits, dot, hyphen, underscore. Max 64. */
+export function sanitizeOperatorHostname(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const host = raw.trim().slice(0, 64)
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(host)) return null
+  return host
+}
+
+/** SSO email from the seat session. Never invent one. Max 120. */
+export function sanitizeOperatorSsoEmail(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const email = raw.trim().toLowerCase().slice(0, 120)
+  if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(email)) return null
+  return email
+}
