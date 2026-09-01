@@ -78,12 +78,19 @@ export function dustInboxPath(vaultPath: string): string {
   return join(vaultPath, ...DUST_VAULT_INBOX_SEGMENTS)
 }
 
+/** Compare / look up vault paths across POSIX and Windows separators. */
+export function normalizeVaultPath(path: string): string {
+  return path.replace(/[\\/]+/g, '/').replace(/\/+$/, '') || '/'
+}
+
 function unique(paths: string[]): string[] {
   const seen = new Set<string>()
   const out: string[] = []
   for (const p of paths) {
-    if (!p || seen.has(p)) continue
-    seen.add(p)
+    if (!p) continue
+    const key = normalizeVaultPath(p)
+    if (seen.has(key)) continue
+    seen.add(key)
     out.push(p)
   }
   return out

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { join } from 'node:path'
+import { join, win32 } from 'node:path'
 import {
   AI_SECOND_BRAIN_VAULT_NAME,
   DUST_VAULT_INBOX_REL,
@@ -7,6 +7,7 @@ import {
   createSecondBrainVault,
   detectSecondBrainVault,
   dustInboxPath,
+  normalizeVaultPath,
   preferredCreatePath,
   type PathKind,
   type SecondBrainEnv,
@@ -24,10 +25,14 @@ function env(partial: Partial<SecondBrainEnv> = {}): SecondBrainEnv {
   }
 }
 
+/** Fixtures stay POSIX; path.join on win32 uses `\`. Look up by normalized separators. */
 function memFs(map: Record<string, PathKind | string[]>): VaultFs {
+  const normalized = Object.fromEntries(
+    Object.entries(map).map(([k, v]) => [normalizeVaultPath(k), v])
+  )
   return {
     inspect(path: string) {
-      const hit = map[path]
+      const hit = normalized[normalizeVaultPath(path)]
       if (Array.isArray(hit)) return { kind: 'dir', names: hit }
       if (hit === 'dir') return { kind: 'dir', names: [] }
       if (hit === 'offline') return { kind: 'offline' }
@@ -35,6 +40,10 @@ function memFs(map: Record<string, PathKind | string[]>): VaultFs {
       return { kind: 'absent' }
     }
   }
+}
+
+function expectPath(actual: string | undefined, posix: string): void {
+  expect(actual === undefined ? actual : normalizeVaultPath(actual)).toBe(normalizeVaultPath(posix))
 }
 
 describe('second-brain vault paths', () => {
@@ -49,22 +58,38 @@ describe('second-brain vault paths', () => {
       env({ oneDriveRoots: ['/Users/tony/OneDrive'] }),
       ['/Users/tony/Library/CloudStorage/OneDrive-Mantu']
     )
-    expect(paths[0]).toBe(
+    expectPath(
+      paths[0],
       '/Users/tony/Library/CloudStorage/OneDrive-Mantu/Documents/AI Second Brain'
     )
-    expect(paths).toContain('/Users/tony/OneDrive/Documents/AI Second Brain')
-    expect(paths).toContain('/Users/tony/OneDrive/AI Second Brain')
-    expect(paths[paths.length - 1]).toBe('/Users/tony/Documents/AI Second Brain')
+    expect(paths.map(normalizeVaultPath)).toContain(
+      normalizeVaultPath('/Users/tony/OneDrive/Documents/AI Second Brain')
+    )
+    expect(paths.map(normalizeVaultPath)).toContain(
+      normalizeVaultPath('/Users/tony/OneDrive/AI Second Brain')
+    )
+    expectPath(paths[paths.length - 1], '/Users/tony/Documents/AI Second Brain')
   })
 
   it('prefers OneDrive Documents for create when OneDrive is present', () => {
-    expect(
-      preferredCreatePath(env({ oneDriveRoots: ['/Users/tony/OneDrive'] }), [])
-    ).toBe('/Users/tony/OneDrive/Documents/AI Second Brain')
-    expect(preferredCreatePath(env(), ['/Users/tony/Library/CloudStorage/OneDrive-Personal'])).toBe(
+    expectPath(
+      preferredCreatePath(env({ oneDriveRoots: ['/Users/tony/OneDrive'] }), []),
+      '/Users/tony/OneDrive/Documents/AI Second Brain'
+    )
+    expectPath(
+      preferredCreatePath(env(), ['/Users/tony/Library/CloudStorage/OneDrive-Personal']),
       '/Users/tony/Library/CloudStorage/OneDrive-Personal/Documents/AI Second Brain'
     )
-    expect(preferredCreatePath(env(), [])).toBe('/Users/tony/Documents/AI Second Brain')
+    expectPath(preferredCreatePath(env(), []), '/Users/tony/Documents/AI Second Brain')
+  })
+
+  it('treats slash and backslash as the same vault path', () => {
+    expect(normalizeVaultPath('\\Users\\tony\\OneDrive\\Documents\\AI Second Brain')).toBe(
+      normalizeVaultPath('/Users/tony/OneDrive/Documents/AI Second Brain')
+    )
+    const posix = '/Users/tony/Documents/AI Second Brain'
+    const fs = memFs({ [posix]: 'dir' })
+    expect(fs.inspect(win32.join('/Users/tony/Documents', 'AI Second Brain')).kind).toBe('dir')
   })
 })
 
@@ -80,7 +105,7 @@ describe('detectSecondBrainVault', () => {
       })
     )
     expect(r.status).toBe('found')
-    expect(r.path).toBe(vault)
+    expectPath(r.path, vault)
   })
 
   it('finds ~/Documents/AI Second Brain when OneDrive is not installed', () => {
@@ -92,7 +117,7 @@ describe('detectSecondBrainVault', () => {
       })
     )
     expect(r.status).toBe('found')
-    expect(r.path).toBe('/Users/tony/Documents/AI Second Brain')
+    expectPath(r.path, '/Users/tony/Documents/AI Second Brain')
   })
 
   it('does not require .obsidian inside the folder', () => {
@@ -106,7 +131,7 @@ describe('detectSecondBrainVault', () => {
       })
     )
     expect(r.status).toBe('found')
-    expect(r.path).toBe('/Users/tony/OneDrive/Documents/AI Second Brain')
+    expectPath(r.path, '/Users/tony/OneDrive/Documents/AI Second Brain')
   })
 
   it('returns not-found plus a typical create path when the vault is absent and OneDrive is readable', () => {
@@ -120,7 +145,7 @@ describe('detectSecondBrainVault', () => {
     )
     expect(r.status).toBe('not-found')
     expect(r.path).toBeUndefined()
-    expect(r.suggestedPath).toBe('/Users/tony/OneDrive/Documents/AI Second Brain')
+    expectPath(r.suggestedPath, '/Users/tony/OneDrive/Documents/AI Second Brain')
   })
 
   it('returns offline when CloudStorage exists but cannot be listed (do not fake a vault)', () => {
@@ -155,7 +180,7 @@ describe('detectSecondBrainVault', () => {
       })
     )
     expect(r.status).toBe('found')
-    expect(r.path).toBe(personal)
+    expectPath(r.path, personal)
   })
 })
 
@@ -167,9 +192,10 @@ describe('createSecondBrainVault', () => {
         made.push(p)
       }
     })
-    expect(r).toEqual({ ok: true, path: '/Users/tony/Documents/AI Second Brain' })
-    expect(made[0]).toBe('/Users/tony/Documents/AI Second Brain')
-    expect(made[1]).toBe(join('/Users/tony/Documents/AI Second Brain', '00_Inbox', 'from-dust'))
+    expect(r.ok).toBe(true)
+    if (r.ok) expectPath(r.path, '/Users/tony/Documents/AI Second Brain')
+    expectPath(made[0], '/Users/tony/Documents/AI Second Brain')
+    expectPath(made[1], join('/Users/tony/Documents/AI Second Brain', '00_Inbox', 'from-dust'))
     expect(made.join(' ')).not.toMatch(/Métis Second Brain|Metis Second Brain/)
   })
 
