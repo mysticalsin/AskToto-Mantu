@@ -79,15 +79,27 @@ describe('quality bar: overlay chrome stays a separate slice', () => {
 })
 
 describe('quality bar: login', () => {
-  it('keeps Access allowlist and rejects everyone else', async () => {
+  it('serves HTML login on browser GET / and JSON 401 only on APIs', async () => {
     expect([...ADMIN_EMAILS].sort()).toEqual(['tony.walteur@gmail.com', 'twalteur@amaris.com'].sort())
     const store = memoryStore()
     const denied = await handleRequest(new Request('https://operator.test/'), env(), {}, { store, now: NOW })
-    expect(denied.status).toBe(401)
-    expect(await denied.json()).toEqual({ ok: false, error: 'Access required' })
+    expect(denied.headers.get('content-type')).toMatch(/text\/html/)
+    const loginHtml = await denied.text()
+    expect(loginHtml).toContain('data-login="1"')
+    expect(loginHtml).toContain('type="password"')
+    expect(loginHtml).not.toContain('Access required')
+
+    const api = await handleRequest(
+      new Request('https://operator.test/v1/admin/dashboard'),
+      env(),
+      {},
+      { store, now: NOW }
+    )
+    expect(api.status).toBe(401)
+    expect(await api.json()).toEqual({ ok: false, error: 'Access required' })
 
     const other = await handleRequest(
-      new Request('https://operator.test/'),
+      new Request('https://operator.test/v1/admin/summary'),
       env(),
       { access: access('other@example.com') },
       { store, now: NOW }
@@ -105,7 +117,7 @@ describe('quality bar: login', () => {
       expect(ok.headers.get('content-type')).toMatch(/text\/html/)
       const page = await ok.text()
       expect(page).toContain('data-nav="overview"')
-      expect(page).not.toContain('password')
+      expect(page).not.toContain('data-login="1"')
     }
   })
 })

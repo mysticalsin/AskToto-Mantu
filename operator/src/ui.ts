@@ -471,6 +471,7 @@ svg path { vector-effect: non-scaling-stroke; }
     <div class="rail-foot">
       <div class="who">${esc(data.email)}</div>
       <button class="theme-btn" id="theme-btn" type="button">Theme</button>
+      <form method="post" action="/logout"><button class="theme-btn" type="submit">Sign out</button></form>
     </div>
   </aside>
   <div class="main">
@@ -719,7 +720,7 @@ svg path { vector-effect: non-scaling-stroke; }
 </div>
 <script>
 async function api(path, body) {
-  const r = await fetch(path, { method: body ? 'POST' : 'GET', headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined })
+  const r = await fetch(path, { method: body ? 'POST' : 'GET', credentials: 'same-origin', headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined })
   return r.json()
 }
 const titles = {
@@ -809,5 +810,76 @@ document.querySelectorAll('[data-retry]').forEach((b) => b.addEventListener('cli
   location.reload()
 }))
 </script>
+</body></html>`
+}
+
+/** First paint for an unauthenticated browser GET of /. Never JSON. */
+export function renderLogin(error?: string): string {
+  const err = error
+    ? `<p class="login-err" role="alert">${esc(error)}</p>`
+    : ''
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Métis Operator</title>
+<style>
+@import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.min.css');
+@import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.min.css');
+:root, [data-theme="dark"] {
+  --bg: #0a0a0b; --panel: #111113; --hair: rgba(255,255,255,0.10);
+  --ink: rgba(255,255,255,0.94); --ink2: rgba(255,255,255,0.55); --ink3: rgba(255,255,255,0.38);
+  --accent: #7C8CF8; --danger: #F0717A;
+  --mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
+  --sans: 'Geist', Geist, Inter, system-ui, sans-serif;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f4f4f5; --panel: #ffffff; --hair: rgba(15,15,17,0.10);
+    --ink: #18181b; --ink2: rgba(24,24,27,0.62); --ink3: rgba(24,24,27,0.42);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; color: var(--ink); font: 13px/1.45 var(--sans); background: var(--bg); }
+.login {
+  min-height: 100%; display: grid; place-items: center; padding: 24px;
+}
+.login-card {
+  width: min(360px, 100%); background: var(--panel); border: 1px solid var(--hair);
+  border-radius: 12px; padding: 22px 20px 20px;
+}
+.login-card p.eyebrow {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--ink3); margin: 0 0 6px;
+}
+.login-card h1 { margin: 0 0 16px; font-size: 18px; font-weight: 650; letter-spacing: -0.03em; }
+.login-card label {
+  display: block; font-size: 11px; color: var(--ink2); margin: 0 0 4px;
+}
+.login-card input {
+  width: 100%; border: 1px solid var(--hair); background: var(--bg); color: var(--ink);
+  border-radius: 8px; padding: 8px 10px; font: 13px var(--sans); margin: 0 0 12px;
+}
+.login-card button {
+  width: 100%; border: 0; background: var(--accent); color: #fff;
+  border-radius: 8px; padding: 9px 12px; font: 600 13px var(--sans); cursor: pointer;
+}
+.login-err { color: var(--danger); font-size: 12px; margin: 0 0 10px; }
+.login-note { margin: 12px 0 0; font-size: 11px; color: var(--ink3); }
+</style>
+</head>
+<body>
+  <main class="login" data-login="1">
+    <form class="login-card" method="post" action="/login" autocomplete="on">
+      <p class="eyebrow">Operator</p>
+      <h1>Sign in</h1>
+      ${err}
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" required autocomplete="username">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" required autocomplete="current-password">
+      <button type="submit">Sign in</button>
+      <p class="login-note">Tony only. Two emails. The console stays closed until this form succeeds.</p>
+    </form>
+  </main>
 </body></html>`
 }

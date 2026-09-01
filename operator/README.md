@@ -12,7 +12,7 @@ This Worker is **not** the AI token proxy (`cloudflare-proxy/`, Worker `metis-cl
 
 New Worker name: `metis-operator`. Cloudflare account already in use: `tony.walteur@gmail.com`, account id `294885a27b3cc0a1cbe5d0ccbe38de4f`.
 
-The admin UI is Access-gated. Only two emails can open it. Electron devices never see Access; they HMAC-sign ingest.
+The admin UI is for Tony only. Browser GET `/` serves an email+password login when Cloudflare Access did not run. Only two emails can sign in. Electron devices never see that form; they HMAC-sign ingest.
 
 Do not enable **Protect this Worker** for all traffic. That would lock the Mac and Windows clients out.
 
@@ -22,14 +22,15 @@ Do not wrangler deploy from CI with secrets.
 
 | Path | Who | Auth |
 | --- | --- | --- |
-| `/` | Tony in a browser | Cloudflare Access, then the Worker checks identity |
-| `/v1/admin/*` | Tony in a browser | Same Access + Worker identity check. Includes `/v1/admin/dashboard` and CRM retry. |
+| `/` | Tony in a browser | HTML login (email + `OPERATOR_ADMIN_PASSWORD`) if no Access/session. Console after sign-in. JSON 401 only when `Accept: application/json`. |
+| `/login` | Tony in a browser | POST email+password. Sets HttpOnly session cookie. |
+| `/v1/admin/*` | Tony in a browser | Session cookie or Access identity. JSON 401 if missing. Includes `/v1/admin/dashboard` and CRM retry. |
 | `POST /v1/ingest` | Métis desktop | HMAC only. Not Access. |
 | `POST /v1/heartbeat` | Métis desktop | HMAC only. Not Access. |
 | `GET /v1/skills/manifest` | Métis desktop | HMAC only. Not Access. |
 | `GET /health` | Anyone | Open. Says whether secrets are bound, never what they are. |
 
-If Access is missing on an admin route, the Worker returns 401 even when a valid ingest HMAC is present. There is no password page and no `LICENSE_ADMIN_TOKEN`.
+If identity is missing on `/v1/admin/*`, the Worker returns JSON 401 even when a valid ingest HMAC is present. Browser GET `/` is the login HTML, not that JSON. No `LICENSE_ADMIN_TOKEN`.
 
 ## Secrets (Wrangler only)
 
@@ -40,6 +41,7 @@ Never put these in git, logs, PR bodies, or `wrangler.jsonc`.
 | `OPERATOR_INGEST_SECRET` | HMAC-SHA256 shared with each Métis seat (Settings → Privacy → Ingest secret, or `METIS_OPERATOR_INGEST_SECRET`). |
 | `OPERATOR_PROMPT_KEY` | 32-byte AES-GCM key, base64. Encrypts Ask text before D1. |
 | `OPERATOR_SKILL_PRIVATE_KEY` | Ed25519 PKCS8 PEM (or base64 of that PEM). Signs skill packs. The public half is committed in `src/main/operator-skill-key.ts`. |
+| `OPERATOR_ADMIN_PASSWORD` | Shared password for the two Tony emails on the Operator login HTML. |
 
 Generate locally, then `secret put` (hidden prompt, not a shell argument):
 
