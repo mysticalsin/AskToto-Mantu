@@ -50,7 +50,7 @@ vi.mock('node:child_process', async (importActual) => {
 // The self-contained installer (cli-installer.ts) — the fallback the npm-failure paths now route to
 // instead of telling the user to install Node (one-click onboarding, 2026-07-16).
 const managedMock = vi.hoisted(() => ({
-  managedCliEntry: vi.fn((): { entry: string; version: string } | null => null),
+  managedCliEntry: vi.fn((_id?: string): { entry: string; version: string } | null => null),
   installManagedCli: vi.fn(
     async (_id: string, onProgress: (p: { phase: string }) => void): Promise<{ entry: string; version: string }> => {
       onProgress({ phase: 'downloading' })
@@ -466,11 +466,10 @@ describe('Dust Connect — Windows privilege + detect (Quality)', () => {
     setPlatform('win32')
     binProbe.hit = false
     clearBinCache()
-    managedMock.managedCliEntry.mockImplementation((id: string) =>
-      id === 'dust'
-        ? { entry: 'C:\\Users\\tony\\AppData\\Roaming\\Metis\\managed-cli\\dust\\0.4.5\\package\\dist\\index.js', version: '0.4.5' }
-        : null
-    )
+    managedMock.managedCliEntry.mockImplementation((_id?: string) => ({
+      entry: 'C:\\Users\\tony\\AppData\\Roaming\\Metis\\managed-cli\\dust\\0.4.5\\package\\dist\\index.js',
+      version: '0.4.5'
+    }))
     const { resolveDustBin } = await import('./cli')
     const { existsSync } = await import('node:fs')
     // existsSync is mocked via binProbe — force a hit for the managed path only.
@@ -478,6 +477,6 @@ describe('Dust Connect — Windows privilege + detect (Quality)', () => {
     const bin = await resolveDustBin()
     expect(bin).toMatch(/managed-cli/)
     expect(existsSync).toBeTypeOf('function')
-    managedMock.managedCliEntry.mockImplementation(() => null)
+    managedMock.managedCliEntry.mockImplementation((_id?: string) => null)
   })
 })

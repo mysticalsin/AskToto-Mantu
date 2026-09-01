@@ -136,7 +136,13 @@ async function loadDustCli(bin: string): Promise<{
   vi.doMock('electron', () => ({ app: { getPath: (): string => '/tmp' }, shell: { openPath: vi.fn() } }))
   vi.doMock('./dust-secret-store', () => ({
     DUST_KEYCHAIN_SERVICE: 'dust-cli',
-    readDustSecret: async (): Promise<{ value: null; accessDenied: boolean }> => ({ value: null, accessDenied: false })
+    readDustSecret: async (): Promise<{ value: null; accessDenied: boolean }> => ({ value: null, accessDenied: false }),
+    readDustSessionSecrets: async () => ({
+      access_token: { value: null, accessDenied: false },
+      workspace_sid: { value: null, accessDenied: false },
+      region: { value: null, accessDenied: false },
+      privilegeSpawns: 1
+    })
   }))
   vi.doMock('./cli', async () => {
     const actualCli = await vi.importActual<typeof import('./cli')>('./cli')

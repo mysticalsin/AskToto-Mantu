@@ -4074,8 +4074,7 @@ function DustSetup({
             </div>
           )}
           <span className="pl-7 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Get one at dust.tt → Settings → API Keys (admin). Or use “Set up Dust automatically” above,
-            no key needed.
+            Get one at dust.tt → Settings → API Keys (admin). Or use Connect above, no key needed.
           </span>
         </div>
         </div>
