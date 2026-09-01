@@ -5,6 +5,7 @@ import type { Settings } from '@shared/ipc'
 import { getMachineId } from './license'
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
 import { mainLog } from './logger'
+import type { OperatorCrmEvent } from './operator-crm'
 
 const HEARTBEAT_MS = 60_000
 const ASK_TEXT_CAP = 4_000
@@ -54,30 +55,22 @@ function seatMeta(settings: OperatorRuntimeSettings): { seatHash: string; os: st
   }
 }
 
-export type OperatorCrmStatus =
-  | 'pending'
-  | 'in_progress'
-  | 'in_review'
-  | 'submitted'
-  | 'success'
-  | 'failed'
-  | 'expired'
+export type { OperatorCrmEvent, OperatorCrmStatus } from './operator-crm'
 
-export interface OperatorCrmEvent {
-  id: string
-  status: OperatorCrmStatus
-  title?: string
-  connector?: string
-  meetingFile?: string
-  error?: string
-  ts?: number
+export interface OperatorRuntimeHooks {
+  onCrmRetry?: (ids: string[]) => Promise<void>
 }
 
 function deviceId(): string {
   return hashOperatorId(getMachineId())
 }
 
-async function signedPost(url: string, secret: string, path: string, bodyObj: Record<string, unknown>): Promise<void> {
+async function signedPost(
+  url: string,
+  secret: string,
+  path: string,
+  bodyObj: Record<string, unknown>
+): Promise<{ ok: boolean; json: unknown }> {
   const body = JSON.stringify(bodyObj)
   const headers = {
     'content-type': 'application/json',
@@ -87,28 +80,53 @@ async function signedPost(url: string, secret: string, path: string, bodyObj: Re
   if (!res.ok) {
     mainLog.warn(`[operator] ${path} ${res.status}`)
   }
+  let parsed: unknown = null
+  try {
+    parsed = JSON.parse(await res.text())
+  } catch {
+    parsed = null
+  }
+  return { ok: res.ok, json: parsed }
 }
 
-export async function operatorHeartbeat(settings: OperatorRuntimeSettings): Promise<boolean> {
+function retryIdsFromHeartbeat(json: unknown): string[] {
+  if (!json || typeof json !== 'object') return []
+  const retry = (json as { retry?: unknown }).retry
+  if (!Array.isArray(retry)) return []
+  return [...new Set(retry.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 80))]
+}
+
+export async function operatorHeartbeat(
+  settings: OperatorRuntimeSettings
+): Promise<{ ok: boolean; retry: string[] }> {
   const url = resolveUrl(settings)
   const secret = resolveSecret(settings)
-  if (!operatorUrlConfigured(settings) || !secret) return false
+  if (!operatorUrlConfigured(settings) || !secret) return { ok: false, retry: [] }
   try {
-    await signedPost(url, secret, '/v1/heartbeat', seatMeta(settings))
-    return true
+    const res = await signedPost(url, secret, '/v1/heartbeat', seatMeta(settings))
+    return { ok: res.ok, retry: retryIdsFromHeartbeat(res.json) }
   } catch (e) {
     mainLog.warn('[operator] heartbeat failed:', e)
-    return false
+    return { ok: false, retry: [] }
   }
 }
 
-export function startOperatorRuntime(getSettings: () => OperatorRuntimeSettings): void {
+export function startOperatorRuntime(
+  getSettings: () => OperatorRuntimeSettings,
+  hooks?: OperatorRuntimeHooks
+): void {
   stopOperatorRuntime()
   const settings = getSettings()
   if (!operatorUrlConfigured(settings) || !resolveSecret(settings)) return
-  void operatorHeartbeat(settings)
+  const tick = async (): Promise<void> => {
+    const beat = await operatorHeartbeat(getSettings())
+    if (beat.retry.length && hooks?.onCrmRetry) {
+      await hooks.onCrmRetry(beat.retry)
+    }
+  }
+  void tick()
   heartbeatTimer = setInterval(() => {
-    void operatorHeartbeat(getSettings())
+    void tick()
   }, HEARTBEAT_MS)
   if (typeof heartbeatTimer === 'object' && heartbeatTimer && 'unref' in heartbeatTimer) {
     heartbeatTimer.unref()
@@ -183,7 +201,6 @@ export async function recordOperatorCrmSend(
   const secret = resolveSecret(settings)
   if (!operatorUrlConfigured(settings) || !secret) return
   const title = event.title?.replace(/\s+/g, ' ').trim().slice(0, 160)
-  const meetingFile = event.meetingFile?.replace(/^.*[/\\]/, '').slice(0, 80)
   try {
     await signedPost(url, secret, '/v1/ingest', {
       event: 'crm',
@@ -192,7 +209,12 @@ export async function recordOperatorCrmSend(
       status: event.status,
       title: title || 'CRM send',
       connector: event.connector || 'unknown',
-      ...(meetingFile ? { meetingFile } : {}),
+      ...(event.meetingHash ? { meetingHash: event.meetingHash } : {}),
+      ...(event.action ? { action: event.action } : {}),
+      ...(typeof event.attempt === 'number' ? { attempt: event.attempt } : {}),
+      ...(typeof event.latencyMs === 'number' ? { latencyMs: event.latencyMs } : {}),
+      ...(event.remoteId ? { remoteId: event.remoteId } : {}),
+      ...(event.remoteUrl ? { remoteUrl: event.remoteUrl } : {}),
       ...(event.error ? { error: event.error.slice(0, 200) } : {}),
       ...seatMeta(settings)
     })

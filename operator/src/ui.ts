@@ -7,7 +7,8 @@ import {
   sparklineLine,
   stackedTokens
 } from './charts'
-import { CRM_STATUS_LABEL, CRM_STATUSES } from './crm'
+import { statusBadge, STATUS_BADGE_CSS } from './components/ui/status-badge'
+import { CRM_STATUSES } from './crm'
 import type { DashboardPayload } from './dashboard'
 
 const CSS = `
@@ -116,10 +117,18 @@ textarea { min-height: 120px; }
 .legend i { display: inline-block; width: 10px; height: 2px; background: var(--chart-5); vertical-align: middle; margin-right: 4px; }
 .legend i.ask { background: var(--accent); }
 .funnel { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.crm-funnel { display: grid; gap: 6px; margin: 0 0 10px; }
+.crm-funnel-row { display: grid; grid-template-columns: 88px 1fr auto; gap: 8px; align-items: center; }
+.crm-funnel-track { height: 6px; background: rgba(255,255,255,0.06); border: 1px solid var(--hair); position: relative; overflow: hidden; }
+.crm-funnel-ok { position: absolute; inset: 0 auto 0 0; background: var(--ok); opacity: 0.7; }
+.crm-funnel-fail { position: absolute; inset: 0 0 0 auto; background: var(--danger); opacity: 0.7; }
+.crm-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0 0 10px; }
+.crm-kpis .n { font-size: 22px; margin-top: 4px; }
+.remote a { color: var(--accent); }
 .heat-wrap { display: flex; gap: 16px; align-items: flex-start; }
 .heat-meta { font-family: var(--mono); font-size: 10px; color: var(--ink3); }
 @media (max-width: 980px) {
-  .kpis, .grid-2, .grid-3 { grid-template-columns: 1fr; }
+  .kpis, .grid-2, .grid-3, .crm-kpis { grid-template-columns: 1fr; }
 }
 `
 
@@ -157,17 +166,48 @@ export function renderConsole(data: DashboardPayload): string {
     graticule: choropleth(data.map.countries, data.map.dots, 'graticule'),
     hatch: choropleth(data.map.countries, data.map.dots, 'hatch')
   }
+  const canRetry = (status: string): boolean => status === 'failed' || status === 'expired'
   const crmRows = data.crm.rows
-    .map(
-      (r) => `<tr data-status="${esc(r.status)}">
-        <td><span class="pill">${esc(CRM_STATUS_LABEL[r.status])}</span></td>
-        <td>${esc(r.title)}</td>
-        <td class="muted">${esc(r.connector)}</td>
+    .map((r) => {
+      const remote = r.remoteUrl
+        ? `<a href="${esc(r.remoteUrl)}" rel="noreferrer">${esc(r.remoteId || 'open')}</a>`
+        : r.remoteId
+          ? esc(r.remoteId)
+          : ''
+      const retry =
+        canRetry(r.status)
+          ? `<button data-retry="${esc(r.id)}">Retry</button>`
+          : r.retryRequested
+            ? '<span class="muted">retry asked</span>'
+            : ''
+      return `<tr data-status="${esc(r.status)}">
+        <td>${statusBadge(r.status)}</td>
+        <td>${esc(r.title)}${r.error ? `<div class="muted">${esc(r.error)}</div>` : ''}</td>
+        <td class="muted">${esc(r.connector)}${r.action ? ` · ${esc(r.action)}` : ''}</td>
+        <td class="muted remote">${remote}</td>
+        <td class="muted">${r.attempt || ''}</td>
+        <td class="muted">${esc(r.meetingHash || '')}</td>
         <td class="muted">${esc(when(r.ts))}</td>
-        <td class="muted">${esc(r.device)}</td>
-        <td>${r.status === 'failed' ? `<button data-retry="${esc(r.id)}">Retry</button>` : r.retryRequested ? '<span class="muted">retry asked</span>' : ''}</td>
+        <td>${retry}</td>
       </tr>`
-    )
+    })
+    .join('')
+  const landing = data.crm.landing
+  const failRate = landing.failRatePct == null ? 'hidden' : `${landing.failRatePct}%`
+  const funnelRows = data.crm.funnel
+    .map((f) => {
+      const att = Math.max(f.attempted, 1)
+      const okW = Math.round((f.success / att) * 100)
+      const failW = Math.round((f.failed / att) * 100)
+      return `<div class="crm-funnel-row">
+        <span class="muted">${esc(f.connector)}</span>
+        <div class="crm-funnel-track" title="attempted ${f.attempted}">
+          <span class="crm-funnel-ok" style="width:${okW}%"></span>
+          <span class="crm-funnel-fail" style="width:${failW}%"></span>
+        </div>
+        <span class="muted">${f.attempted} att · ${f.submitted} sub · ${f.success} ok · ${f.failed} fail</span>
+      </div>`
+    })
     .join('')
   const askRows = data.asks
     .map(
@@ -219,7 +259,7 @@ export function renderConsole(data: DashboardPayload): string {
     .join('')
   const funnelTabs = CRM_STATUSES.map(
     (s) =>
-      `<button class="tab${s === 'pending' ? '' : ''}" data-crm-filter="${s}">${esc(CRM_STATUS_LABEL[s])} ${data.crm.counts[s]}</button>`
+      `<button class="tab" data-crm-filter="${s}">${statusBadge(s)} ${data.crm.counts[s]}</button>`
   ).join('')
   const indexHint =
     k.lastIndexAt != null ? `last index ${when(k.lastIndexAt)}` : 'last index not reported'
@@ -228,7 +268,7 @@ export function renderConsole(data: DashboardPayload): string {
 <html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Métis Operator</title>
-<style>${CSS}
+<style>${CSS}${STATUS_BADGE_CSS}
 .kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 svg path { vector-effect: non-scaling-stroke; }
 #spark-defs { position: absolute; width: 0; height: 0; }
@@ -352,22 +392,6 @@ svg path { vector-effect: non-scaling-stroke; }
       }
     </article>
     <article class="card">
-      <p class="eyebrow">CRM send</p>
-      <div class="funnel tabs" id="crm-filters">
-        <button class="tab on" data-crm-filter="all">All ${data.crm.rows.length}</button>
-        ${funnelTabs}
-      </div>
-      ${
-        crmRows
-          ? `<table id="crm-table"><thead><tr><th>Status</th><th>Title</th><th>Connector</th><th>When</th><th>Seat</th><th></th></tr></thead><tbody>${crmRows}</tbody></table>
-             <div class="sub muted" style="padding-bottom:8px">Filters on the real board. Retry on Failed asks the seat to confirm again. Never auto-send.</div>`
-          : '<div class="empty">No CRM sends on the fleet yet.</div>'
-      }
-    </article>
-  </section>
-
-  <section class="grid-2">
-    <article class="card">
       <p class="eyebrow">Asks</p>
       ${
         askRows
@@ -376,15 +400,41 @@ svg path { vector-effect: non-scaling-stroke; }
       }
       <div id="reveal" class="muted" style="padding:8px 0"></div>
     </article>
-    <article class="card">
-      <div class="row" style="margin-bottom:8px">
-        <p class="eyebrow" style="margin:0">Skills</p>
-        <button data-draft="interview">Draft interview</button>
-        <button data-draft="recruiting">Draft recruiting</button>
-        <button data-draft="support">Draft support</button>
-      </div>
-      ${props || '<div class="empty">No skill upgrades waiting. Use Ask in a mode, then Draft.</div>'}
-    </article>
+  </section>
+
+  <section class="card" style="padding-bottom:10px">
+    <p class="eyebrow">CRM landing</p>
+    <div class="crm-kpis">
+      ${kpiCard({ title: 'Landed today', value: String(landing.landedToday), sub: 'success with a CRM id when the connector returned one', spark: '' })}
+      ${kpiCard({ title: 'Fail rate', value: failRate, sub: 'failed + expired over attempted', spark: '' })}
+      ${kpiCard({ title: 'Retries', value: String(landing.retries), sub: 'Tony Retry or attempt over 1', spark: '' })}
+      ${kpiCard({ title: 'Dead letters', value: String(landing.deadLetters), sub: 'max attempts, Expired', spark: '' })}
+    </div>
+    ${
+      funnelRows
+        ? `<p class="eyebrow">Funnel by connector</p><div class="crm-funnel">${funnelRows}</div>`
+        : ''
+    }
+    <div class="funnel tabs" id="crm-filters">
+      <button class="tab on" data-crm-filter="all">All ${data.crm.rows.length}</button>
+      ${funnelTabs}
+    </div>
+    ${
+      crmRows
+        ? `<table id="crm-table"><thead><tr><th>Status</th><th>Title</th><th>Connector</th><th>Remote</th><th>Try</th><th>Meeting</th><th>When</th><th></th></tr></thead><tbody>${crmRows}</tbody></table>
+           <div class="sub muted" style="padding-bottom:8px">Seven status chips filter real ingest. Retry on Failed or Expired tells that seat to processDue that id. Never auto-send from Intelligence, import, or index.</div>`
+        : '<div class="empty">No CRM sends on the fleet yet.</div>'
+    }
+  </section>
+
+  <section class="card" style="padding-bottom:10px">
+    <div class="row" style="margin-bottom:8px">
+      <p class="eyebrow" style="margin:0">Skills</p>
+      <button data-draft="interview">Draft interview</button>
+      <button data-draft="recruiting">Draft recruiting</button>
+      <button data-draft="support">Draft support</button>
+    </div>
+    ${props || '<div class="empty">No skill upgrades waiting. Use Ask in a mode, then Draft.</div>'}
   </section>
 </div>
 <script>

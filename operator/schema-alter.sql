@@ -34,3 +34,10 @@ CREATE TABLE IF NOT EXISTS crm_sends (
 
 CREATE INDEX IF NOT EXISTS crm_sends_ts ON crm_sends(ts);
 CREATE INDEX IF NOT EXISTS crm_sends_status ON crm_sends(status);
+
+ALTER TABLE crm_sends ADD COLUMN meeting_hash TEXT;
+ALTER TABLE crm_sends ADD COLUMN attempt INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE crm_sends ADD COLUMN latency_ms INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE crm_sends ADD COLUMN remote_id TEXT;
+ALTER TABLE crm_sends ADD COLUMN remote_url TEXT;
+ALTER TABLE crm_sends ADD COLUMN action TEXT;

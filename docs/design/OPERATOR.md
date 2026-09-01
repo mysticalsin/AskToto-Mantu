@@ -78,7 +78,7 @@ New tree: `operator/`. Worker name: `metis-operator`. Account already in use: `t
 
 3. **Prompts at rest.** AES-GCM with `OPERATOR_PROMPT_KEY` before D1. Decrypt only on an Access-authenticated admin GET. Every reveal is audit-logged (who, when, which ask id).
 
-4. **Never ingest** Listen transcripts, screen captures, audio, or API keys. Ask text + metadata only. CRM ingest is title + status + connector. Never the recap body.
+4. **Never ingest** Listen transcripts, screen captures, audio, or API keys. Ask text + metadata only. CRM ingest is id, connector, meeting **hash** (never a filesystem path), status, attempt, lastError, latencyMs, and remote id/URL if the connector returned one. Never the recap body. Confidential actions stay unsent and are not ingested.
 
 5. **No secrets in git, logs, or PR bodies.** Wrangler secrets only. Do not commit test private keys.
 
@@ -102,7 +102,9 @@ One ops console. Packed, still readable.
 
 7. **Skills.** Draft / Approve / Push. Approve does not publish. Push signs a pack. Never auto-apply a draft.
 
-8. **CRM send.** Seven statuses are filters: Pending, In progress, In review, Submitted, Success, Failed, Expired. The board is real ingest rows. Explicit Retry on Failed asks the seat to confirm again. **Never auto-send.**
+8. **CRM landing.** Packed table plus KPI (landed today, fail rate, retries, dead letters). Funnel by connector: attempted → submitted → success vs failed. Seven status chips are **filters** on real ingest, not a StatusDemo grid: Pending, In progress, In review, Submitted, Success, Failed, Expired. Each row is a StatusBadge (`operator/src/components/ui/status-badge.ts`, Métis glass, lucide paths). Failed and Expired show Retry. Tony Retry (Access only) sets `retry_requested` and the next HMAC heartbeat returns that id so the seat `requeue` + `processDue` / `processIds` it. Bounded backoff stays in `pushQueue`. **Never auto-send** from Intelligence, import, or the 3x daily index. Only the existing explicit user send path enqueues. Operator Retry is also explicit (Tony).
+
+Copy is **Submitted**, never Submited. No `bg-orange-50`. No Unsplash. No repo-root `/components/ui` dump.
 
 ## Geo ingest
 
@@ -121,7 +123,8 @@ When Settings has an Operator URL:
 
 - Heartbeat about every 60s while the app is up. No coordinates.
 - After each Ask: metrics always; prompt text only if the Ask-text toggle is on.
-- After a CRM push attempt: status + title + connector. No recap body.
+- After an explicit CRM / MCP write (`crm-note`, `create_task`, `update_deal`, `log_note`, ClickUp, BidStack/Polo, Plane): HMAC ingest with status, attempt, latency, meeting hash, remote id if any. Confidential writes never enqueue and never ingest.
+- Heartbeat response may include `retry: string[]` for ids Tony marked Retry. The seat processes those ids only. Local `pushQueue` backoff still applies to the original failed user send.
 - Poll skill manifest on launch and every 6 hours. Verify ed25519. Apply overlay only if signature and hash match.
 
 `METIS_OPERATOR_URL` may prefill the URL. Do not leave a local-only analytics page.

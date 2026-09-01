@@ -65,6 +65,8 @@ describe('AUDIT-10 — outbound IPC caps sit in front of the network', () => {
     const push = sliceBetween('ipcMain.handle(IPC.mcpPush', 'ipcMain.handle(IPC.mcpClickupConnect')
     expect(push).toMatch(/denyIfLimited\('mcp-outbound'\)/)
     expect(push).toMatch(/const conn = s\.mcpConnections\.find/)
+    expect(push.indexOf('skipped_confidential')).toBeLessThan(push.indexOf('recordOperatorCrmSend'))
+    expect(push.indexOf('skipped_confidential')).toBeLessThan(push.indexOf('pushQueue.enqueue'))
 
     const cal = sliceBetween('ipcMain.handle(IPC.calendarToday', 'ipcMain.handle(IPC.recallRead')
     expect(cal).toMatch(/denyIfLimited\('graph-calendar'\)/)

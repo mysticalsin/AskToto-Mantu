@@ -1,4 +1,4 @@
-import type { CrmSendRow } from './crm'
+import { normalizeCrmRow, type CrmSendRow } from './crm'
 import type { AskRow, OperatorStore, PackRow, ProposalRow, PulseRow, SeatRow } from './store'
 
 interface D1Stmt {
@@ -200,16 +200,24 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
     async upsertCrm(row) {
       await db
         .prepare(
-          `INSERT INTO crm_sends (id, device_id, ts, status, title, connector, meeting_file, last_error, retry_requested)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO crm_sends (
+             id, device_id, ts, status, title, connector, meeting_file, meeting_hash,
+             last_error, retry_requested, attempt, latency_ms, remote_id, remote_url, action
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              ts = excluded.ts,
              status = excluded.status,
              title = excluded.title,
              connector = excluded.connector,
              meeting_file = excluded.meeting_file,
+             meeting_hash = excluded.meeting_hash,
              last_error = excluded.last_error,
-             retry_requested = CASE WHEN excluded.retry_requested = 1 THEN 1 ELSE crm_sends.retry_requested END`
+             retry_requested = excluded.retry_requested,
+             attempt = excluded.attempt,
+             latency_ms = excluded.latency_ms,
+             remote_id = excluded.remote_id,
+             remote_url = excluded.remote_url,
+             action = excluded.action`
         )
         .bind(
           row.id,
@@ -219,17 +227,34 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
           row.title,
           row.connector,
           row.meeting_file,
+          row.meeting_hash,
           row.last_error,
-          row.retry_requested
+          row.retry_requested,
+          row.attempt,
+          row.latency_ms,
+          row.remote_id,
+          row.remote_url,
+          row.action
         )
         .run()
     },
     async getCrm(id) {
-      return (await db.prepare('SELECT * FROM crm_sends WHERE id = ?').bind(id).first<CrmSendRow>()) ?? null
+      const row = await db.prepare('SELECT * FROM crm_sends WHERE id = ?').bind(id).first<CrmSendRow>()
+      return row ? normalizeCrmRow(row) : null
     },
     async listCrm(limit) {
       const r = await db.prepare('SELECT * FROM crm_sends ORDER BY ts DESC LIMIT ?').bind(limit).all<CrmSendRow>()
-      return r.results
+      return r.results.map(normalizeCrmRow)
+    },
+    async listCrmRetries(deviceId) {
+      const r = await db
+        .prepare(
+          `SELECT * FROM crm_sends
+           WHERE device_id = ? AND retry_requested = 1 AND status IN ('pending', 'failed', 'expired')`
+        )
+        .bind(deviceId)
+        .all<CrmSendRow>()
+      return r.results.map(normalizeCrmRow)
     },
     async audit(id, ts, actor, action, askId, detail) {
       await db
