@@ -128,3 +128,7 @@ The Summary / recap body Tony reads after a session (Review inside `Panel`, plus
 ## Copy
 
 Métis voice. Do not clone Vibe Island strings.
+
+## Operator
+
+Cloudflare Access packed ops console plus client prompt cache: `docs/design/OPERATOR.md`. Map geo is `request.cf` only. Not overlay chrome. Not the Fly license-server.

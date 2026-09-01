@@ -130,3 +130,24 @@ export function lockedModeSkillIdIn(system: string): string | null {
   const m = system.match(/--- LOCKED MODE SKILL \(([\w-]+) v/)
   return m?.[1] ?? null
 }
+
+export function emptyOverlayLock(): ModeSkillLock {
+  return { schemaVersion: MODE_SKILL_LOCK_SCHEMA_VERSION, algorithm: MODE_SKILL_HASH_ALGORITHM, skills: {} }
+}
+
+export function overlaySkillRelPath(id: string): string {
+  return `${id}/SKILL.md`
+}
+
+export function bumpSkillVersion(version: string): string {
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(version.trim())
+  if (!m) return '1.0.1'
+  return `${m[1]}.${m[2]}.${Number(m[3]) + 1}`
+}
+
+export function setSkillHeaderVersion(raw: string, version: string): string {
+  const m = SKILL_HEADER_RE.exec(raw)
+  if (!m) return raw
+  const header = m[1].replace(/^version:\s*.*$/m, `version: ${version}`)
+  return `---\n${header}\n---\n${raw.slice(m[0].length)}`
+}

@@ -339,7 +339,7 @@ describe('runCliStream — kill-on-result settles without waiting for child exit
     stdout.write(`${JSON.stringify({ type: 'result', subtype: 'success' })}\n`)
     await vi.waitFor(() => expect(onDone).toHaveBeenCalledTimes(1))
 
-    expect(onDone).toHaveBeenCalledWith({})
+    expect(onDone).toHaveBeenCalledWith({ cacheStatus: 'n/a' })
     expect(onError).not.toHaveBeenCalled()
     // No 'close' was ever emitted on the child — onDone fired from the result line, not from process
     // exit — and the same signal spawn() was given is now aborted, which is what tears the child down

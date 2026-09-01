@@ -453,6 +453,28 @@ describe('Dust instant validate proves a live connection', () => {
   })
 })
 
+describe('Operator control plane lives on Cloudflare, not in Settings', () => {
+  it('exposes Operator URL, ingest secret, Ask-text toggle, and Open Operator', () => {
+    expect(source).toMatch(/Operator URL/)
+    expect(source).toMatch(/Ingest secret/)
+    expect(source).toMatch(/Send Ask text for skill improvement/)
+    expect(source).toMatch(/Open Operator/)
+    expect(source).toMatch(/operatorOpen/)
+    expect(source).toMatch(/Listen transcripts and screens never send/)
+  })
+
+  it('does not keep a local-only Operator tools dashboard or fake fleet numbers', () => {
+    expect(source).not.toMatch(/operatorTools/)
+    expect(source).not.toMatch(/Operator tools/)
+    expect(source).not.toMatch(/local analytics page that pretends/)
+    expect(source).not.toMatch(/DAU/)
+    expect(source).not.toMatch(/cache hit rate/)
+    const operator = blockAfter('title="Operator"', '\n            {tab === \'meetings\'')
+    expect(operator).not.toMatch(/—/)
+    expect(operator).not.toMatch(/I am an AI|as an AI|AI assistant/i)
+  })
+})
+
 describe('locked mode skills — Settings has no editor for shipped skill files', () => {
   const personalize = blockAfter('function ModePromptEditor(', '\nconst TEXT_FILE_RE')
 

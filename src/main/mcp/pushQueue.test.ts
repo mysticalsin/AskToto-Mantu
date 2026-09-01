@@ -8,7 +8,7 @@ vi.mock('../logger', () => ({
   auditLog: vi.fn()
 }))
 
-import { createPushQueue } from './pushQueue'
+import { createPushQueue, outboundActionId } from './pushQueue'
 import { auditLog } from '../logger'
 
 let dir: string
@@ -176,6 +176,32 @@ describe('processDue — success and retry', () => {
       skippedConfidential: 0
     })
     expect(pushFn).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('operator requeue', () => {
+  it('requeue of a dead letter makes the id due again; confidential stays unsent', async () => {
+    let now = 0
+    const q = makeQueue({ now: () => now, maxAttempts: 1 })
+    const action = q.enqueue(baseInput)
+    await q.processDue(async () => ({ ok: false, error: 'boom' }))
+    expect(q.get(action.id)?.deadLetter).toBe(true)
+    const again = q.requeue(action.id)
+    expect(again?.deadLetter).toBeUndefined()
+    expect(again?.attempts).toBe(0)
+    const r = await q.processIds([action.id], async () => ({ ok: true, result: { id: 'cu-9' } }))
+    expect(r.succeeded).toBe(1)
+    expect(r.results[0]?.result).toEqual({ id: 'cu-9' })
+
+    const secret = q.enqueue({ ...baseInput, payload: { title: 'nope' }, confidential: true })
+    expect(q.requeue(secret.id)).toBeNull()
+    const skipped = await q.processIds([secret.id], async () => ({ ok: true }))
+    expect(skipped.skippedConfidential).toBe(1)
+  })
+
+  it('outboundActionId is stable for the same content', () => {
+    expect(outboundActionId(baseInput)).toBe(outboundActionId(baseInput))
+    expect(outboundActionId({ ...baseInput, payload: { title: 'other' } })).not.toBe(outboundActionId(baseInput))
   })
 })
 

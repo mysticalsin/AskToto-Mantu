@@ -1,10 +1,13 @@
 import type { AskStart } from '@shared/ipc'
 import type { ProviderKind, ProviderId } from '@shared/providers'
+import type { StreamCacheUsage } from '@shared/operator'
+
+export type { StreamCacheUsage }
 
 /** Stream callbacks the orchestrator wires to the renderer IPC bridge. */
 export interface StreamHandlers {
   onDelta: (text: string) => void
-  onDone: (u: { inputTokens?: number; outputTokens?: number }) => void
+  onDone: (u: StreamCacheUsage) => void
   onError: (message: string) => void
 }
 
@@ -45,6 +48,10 @@ export interface StreamOptions {
    */
   freshConversation?: boolean
   system: string
+  /** Stable / volatile split for provider prompt cache. `system` stays the concatenation. */
+  systemParts?: { cachedPrefix: string; volatile: string }
+  /** OpenAI cloud only: `metis:${mode}:${skillLockHash}`. No PII, no timestamp. */
+  promptCacheKey?: string
   req: AskStart
   handlers: StreamHandlers
   /**

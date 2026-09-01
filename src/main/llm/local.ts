@@ -162,7 +162,7 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
     onDone: (u) => {
       releaseStream()
       markActivity()
-      opts.handlers.onDone(u)
+      opts.handlers.onDone({ ...u, cacheStatus: 'n/a', cacheRead: undefined, cacheWrite: undefined, cacheUncached: undefined })
     },
     onError: (message) => {
       releaseStream()
