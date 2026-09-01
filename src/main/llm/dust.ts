@@ -9,9 +9,10 @@ import { type StreamOptions, type StreamHandle, errMsg, idleWatchdog, userText }
 import { attachScreenshot, type DustFileContentFragment } from './dust-attachments'
 import { redactSecrets } from '@shared/redact'
 import { dustAgentUnavailableMessage } from '@shared/quick-actions'
-import { DUST_SPOTLIGHT_REF_AGENT_ID } from '@shared/ipc'
+import { DUST_BASE_AGENT_ID, DUST_SPOTLIGHT_REF_AGENT_ID } from '@shared/ipc'
 import { runManagedDustChat, projectNameForDataAndAiAsk } from '../dust-cli-chat'
 import { fetchDustProjects, matchDataAndAiProjects } from '../dust-projects'
+import { importDustCliSession } from '../dustcli'
 
 /**
  * Logger for the @dust-tt/client. It logs several EXPECTED, already-handled conditions straight to
@@ -226,6 +227,35 @@ function dustContext(): Record<string, unknown> {
 }
 
 /**
+ * A general Dust question (not the Spotlight Ref references template). When Spotlight Ref is
+ * missing from the CLI session, these may fall back to the base Métis agent via REST.
+ */
+export function isGeneralDustAsk(prompt: string): boolean {
+  const p = prompt.trim()
+  if (!p) return false
+  return !/sales references or case studies|search our references/i.test(p)
+}
+
+/** Prefer stored Settings creds; if either is missing, import the Dust CLI session from keytar. */
+export async function resolveSpotlightDustCreds(opts: {
+  apiKey?: string
+  workspaceId?: string
+  baseURL?: string
+}): Promise<{ apiKey: string; workspaceId: string; baseURL?: string }> {
+  let apiKey = (opts.apiKey || '').trim()
+  let workspaceId = (opts.workspaceId || '').trim()
+  let baseURL = opts.baseURL
+  if (apiKey && workspaceId) return { apiKey, workspaceId, baseURL }
+  const session = await importDustCliSession()
+  if (session.ok && session.token && session.workspaceId) {
+    if (!apiKey) apiKey = session.token
+    if (!workspaceId) workspaceId = session.workspaceId
+    if (!baseURL) baseURL = session.baseUrl
+  }
+  return { apiKey, workspaceId, baseURL }
+}
+
+/**
  * Dust routes through one of the user's own agents (the "model" is the agent sId). The agent's own
  * instructions/tools/retrieval govern the reply, so our system prompt is folded into the message instead.
  */
@@ -247,36 +277,58 @@ export function streamDust(opts: StreamOptions): StreamHandle {
   }, opts.idleMs)
 
   // Spotlight Ref is a CLI call (managed `dust chat --sId GOr913Zr5V -m …`), not the REST picker.
+  // Missing Settings keys → import the Dust CLI session. Missing binary → ensureManagedDustCli
+  // inside runManagedDustChat. Agent truly absent → fail-loud (optional REST Métis for a general ask).
   if (opts.model === DUST_SPOTLIGHT_REF_AGENT_ID) {
+    let restAbort: (() => void) | null = null
     void (async () => {
       try {
         const prompt = userText(opts.req)
+        const creds = await resolveSpotlightDustCreds({
+          apiKey: opts.apiKey,
+          workspaceId: opts.workspaceId,
+          baseURL: opts.baseURL
+        })
+        if (controller.signal.aborted || settled) return
         let projectName: string | undefined
-        try {
-          const projects = await fetchDustProjects({
-            apiKey: opts.apiKey,
-            workspaceId: opts.workspaceId || '',
-            baseUrl: opts.baseURL
-          })
-          if (projects.ok) {
-            projectName = projectNameForDataAndAiAsk(
-              prompt,
-              matchDataAndAiProjects(projects.projects).map((p) => p.name)
-            )
+        if (creds.apiKey && creds.workspaceId) {
+          try {
+            const projects = await fetchDustProjects({
+              apiKey: creds.apiKey,
+              workspaceId: creds.workspaceId,
+              baseUrl: creds.baseURL
+            })
+            if (projects.ok) {
+              projectName = projectNameForDataAndAiAsk(
+                prompt,
+                matchDataAndAiProjects(projects.projects).map((p) => p.name)
+              )
+            }
+          } catch {
+            /* --projectName is optional; never invent a name */
           }
-        } catch {
-          /* --projectName is optional; never invent a name */
         }
         const r = await runManagedDustChat({
           message: prompt,
-          apiKey: opts.apiKey,
-          workspaceId: opts.workspaceId || '',
-          baseUrl: opts.baseURL,
+          apiKey: creds.apiKey,
+          workspaceId: creds.workspaceId,
+          baseUrl: creds.baseURL,
           projectName
         })
         if (controller.signal.aborted || settled) return
         if (!r.ok) {
-          fail(r.error)
+          if (r.kind === 'missing-agent' && isGeneralDustAsk(prompt) && creds.apiKey && creds.workspaceId) {
+            const rest = streamDust({
+              ...opts,
+              model: DUST_BASE_AGENT_ID,
+              apiKey: creds.apiKey,
+              workspaceId: creds.workspaceId,
+              baseURL: creds.baseURL
+            })
+            restAbort = rest.abort
+            return
+          }
+          fail(r.kind === 'missing-agent' ? dustAgentUnavailableMessage(true) : r.error)
           return
         }
         gotToken = true
@@ -295,6 +347,7 @@ export function streamDust(opts: StreamOptions): StreamHandle {
       abort: () => {
         wd.clear()
         controller.abort()
+        restAbort?.()
       }
     }
   }

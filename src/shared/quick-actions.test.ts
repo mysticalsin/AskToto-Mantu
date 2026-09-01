@@ -5,10 +5,12 @@ import {
   buildWhatNextPrompt,
   chooseQuickActionRoute,
   dustAgentUnavailableMessage,
+  planSpotlightRefAsk,
   quickActionUnavailableMessage,
   spotlightRefUnavailableMessage,
   transcriptHasContent
 } from './quick-actions'
+import { DUST_SPOTLIGHT_REF_AGENT_ID } from './ipc'
 
 describe('quick action request planning', () => {
   it('routes what-to-say-next to the live suggest path when transcript exists', () => {
@@ -77,6 +79,19 @@ describe('quick action request planning', () => {
   it('screen what-next asks for a useful answer even without transcript', () => {
     expect(buildWhatNextPrompt('', 'screen')).toContain('visible on my screen')
     expect(buildWhatNextPrompt('', 'screen')).not.toContain('"""\n\n"""')
+  })
+
+  it('click with hasKeys.dust false still runs with GOr913Zr5V', () => {
+    const planned = planSpotlightRefAsk({
+      typed: 'Fintech onboarding',
+      transcript: '',
+      hasKeys: { dust: false }
+    })
+    expect(planned.providerOverride).toBe('dust')
+    expect(planned.agentOverride).toBe(DUST_SPOTLIGHT_REF_AGENT_ID)
+    expect(planned.agentOverride).toBe('GOr913Zr5V')
+    expect(planned.mode).toBe('answer')
+    expect(planned.prompt).toContain('Fintech onboarding')
   })
 
   it('spotlight ref prefers typed input over transcript, and asks for references either way', () => {

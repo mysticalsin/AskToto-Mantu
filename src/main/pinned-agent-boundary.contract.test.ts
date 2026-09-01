@@ -62,8 +62,21 @@ describe('pinned Dust-agent requests never fail over to a generic provider', () 
 describe('renderer pins Spotlight Ref to Dust but lets the generic follow-up cascade fail over', () => {
   it('spotlightRef forces BOTH the locked agent and the Dust provider', () => {
     const call = sliceCall(appSrc, 'const spotlightRef = useCallback', 'ask.run(')
-    expect(call).toMatch(/agentOverride: refAgent/)
+    expect(call).toMatch(/agentOverride: DUST_SPOTLIGHT_REF_AGENT_ID/)
     expect(call).toMatch(/providerOverride: 'dust'/)
+  })
+
+  it('spotlightRef does not ask.fail(spotlightRefUnavailableMessage) before ask.run', () => {
+    const start = appSrc.indexOf('const spotlightRef = useCallback')
+    expect(start).toBeGreaterThan(-1)
+    const runAt = appSrc.indexOf('ask.run(', start)
+    expect(runAt).toBeGreaterThan(start)
+    const beforeRun = appSrc.slice(start, runAt)
+    expect(beforeRun).not.toMatch(/ask\.fail\(\s*spotlightRefUnavailableMessage/)
+    expect(beforeRun).not.toMatch(/isDustReady\(/)
+    // Updating paints immediately: no await / async wrapper before ask.run.
+    expect(beforeRun).not.toMatch(/void \(async/)
+    expect(beforeRun).not.toMatch(/\bawait\b/)
   })
 
   it('spotlightRef does not dead-end on dustListAgents / reconnect copy', () => {
@@ -73,6 +86,18 @@ describe('renderer pins Spotlight Ref to Dust but lets the generic follow-up cas
     const executable = body.replace(/^\s*\/\/.*$/gm, '')
     expect(executable).not.toMatch(/dustListAgents/)
     expect(executable.toLowerCase()).not.toMatch(/reconnect/)
+    expect(executable).not.toMatch(/spotlightRefUnavailableMessage/)
+  })
+
+  it('Spotlight Ref pinned asks skip the stored-key and workspace ineligible gates', () => {
+    expect(indexSrc).toMatch(
+      /const spotlightRefPinned = provider === 'dust' && req\.agentOverride === DUST_SPOTLIGHT_REF_AGENT_ID/
+    )
+    const start = indexSrc.indexOf('const spotlightRefPinned')
+    expect(start).toBeGreaterThan(-1)
+    const region = indexSrc.slice(start, start + 2200)
+    expect(region).toMatch(/!spotlightRefPinned && def\.kind !== 'cli' && !key/)
+    expect(region).toMatch(/!spotlightRefPinned && provider === 'dust' && !s\.dustWorkspaceId/)
   })
 
   it('generateFollowup drafts the email via the BASE Métis Dust agent (no agentOverride, failover-safe), else the active provider', () => {

@@ -1,3 +1,5 @@
+import { DUST_SPOTLIGHT_REF_AGENT_ID } from './ipc'
+
 export type QuickActionKind = 'factcheck' | 'whatnext' | 'explain' | 'summarize'
 
 export type QuickActionTransport = 'suggest' | 'text' | 'screen' | 'local-error'
@@ -88,6 +90,30 @@ export function buildSpotlightRefPrompt(transcript: string, typed: string): stri
     context +
     '\n"""'
   )
+}
+
+/**
+ * Spotlight Ref click payload. Always pins Dust + GOr913Zr5V.
+ * `hasKeys` is accepted so tests can prove a click with `hasKeys.dust === false` still runs —
+ * it is never a pre-gate. Main imports the Dust CLI session / installs the CLI.
+ */
+export function planSpotlightRefAsk(opts: {
+  typed: string
+  transcript: string
+  hasKeys?: Partial<Record<string, boolean>>
+}): {
+  mode: 'answer'
+  prompt: string
+  agentOverride: typeof DUST_SPOTLIGHT_REF_AGENT_ID
+  providerOverride: 'dust'
+} {
+  void opts.hasKeys
+  return {
+    mode: 'answer',
+    prompt: buildSpotlightRefPrompt(opts.transcript, opts.typed),
+    agentOverride: DUST_SPOTLIGHT_REF_AGENT_ID,
+    providerOverride: 'dust'
+  }
 }
 
 export function spotlightRefUnavailableMessage(): string {

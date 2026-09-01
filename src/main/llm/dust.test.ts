@@ -1,11 +1,21 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { type AskStart, DUST_SPOTLIGHT_REF_AGENT_ID } from '@shared/ipc'
-import { streamDust, resetDustConversation } from './dust'
+import { streamDust, resetDustConversation, isGeneralDustAsk, resolveSpotlightDustCreds } from './dust'
 import type { StreamHandlers } from './shared'
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp' } }))
 vi.mock('../auth', () => ({ authStatus: () => ({ email: null, name: null }) }))
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
+
+const importSession = vi.hoisted(() =>
+  vi.fn(async (): Promise<{ ok: boolean; token?: string; workspaceId?: string; baseUrl?: string; error?: string }> => ({
+    ok: false,
+    error: 'no session'
+  }))
+)
+vi.mock('../dustcli', () => ({
+  importDustCliSession: () => importSession()
+}))
 
 type ManagedDustChatResult =
   | { ok: true; text: string }
@@ -129,6 +139,8 @@ describe('Dust conversation continuity (one conversation per meeting)', () => {
     streamErrOnce = null
     managedDustChat.mockReset()
     managedDustChat.mockResolvedValue({ ok: true, text: 'Data and AI, AI wiki' })
+    importSession.mockReset()
+    importSession.mockResolvedValue({ ok: false, error: 'no session' })
   })
 
   it('reuses the same conversation for a second sequential message in the same meeting', async () => {
@@ -345,13 +357,20 @@ describe('streamDust surfaces a stale-agent error as an actionable re-pick messa
   it('maps a stale SPOTLIGHT agent to a Spotlight-specific remedy, not the base picker hint', async () => {
     // Spotlight Ref is a managed CLI call. When that agent is gone from the CLI session, fail loud
     // with "not in this workspace" — never reconnect-workspace or "pick one in Settings".
+    // Use the references template so this is NOT a general-ask REST fallback.
     resetDustConversation()
     managedDustChat.mockResolvedValue({
       ok: false,
       kind: 'missing-agent',
       error: 'The Spotlight Ref agent is not in this workspace.'
     })
-    const opts = baseOpts({ model: DUST_SPOTLIGHT_REF_AGENT_ID })
+    const opts = baseOpts({
+      model: DUST_SPOTLIGHT_REF_AGENT_ID,
+      req: {
+        mode: 'answer',
+        prompt: 'search our references and tell me what relevant sales references or case studies we have'
+      } as AskStart
+    })
     streamDust(opts)
     for (let i = 0; i < 500 && !mockOf(opts.handlers.onError).mock.calls.length; i++) {
       await new Promise((r) => setImmediate(r))
@@ -362,5 +381,90 @@ describe('streamDust surfaces a stale-agent error as an actionable re-pick messa
     expect(msg.toLowerCase()).toContain('not in this workspace')
     expect(msg.toLowerCase()).not.toContain('reconnect')
     expect(msg).not.toContain('Failed to retrieve agent message')
+  })
+})
+
+describe('streamDust Spotlight Ref CLI session import', () => {
+  beforeEach(() => {
+    resetDustConversation()
+    calls.create = 0
+    managedDustChat.mockReset()
+    managedDustChat.mockResolvedValue({ ok: true, text: 'Data and AI, AI wiki' })
+    importSession.mockReset()
+    importSession.mockResolvedValue({ ok: false, error: 'no session' })
+  })
+
+  it('imports the Dust CLI session when apiKey/workspaceId are missing, then runs GOr913Zr5V', async () => {
+    importSession.mockResolvedValue({
+      ok: true,
+      token: 'cli-token',
+      workspaceId: 'cli-ws',
+      baseUrl: 'https://dust.tt'
+    })
+    const opts = baseOpts({
+      model: DUST_SPOTLIGHT_REF_AGENT_ID,
+      apiKey: '',
+      workspaceId: ''
+    })
+    streamDust(opts)
+    await waitDone(opts.handlers)
+    expect(importSession).toHaveBeenCalled()
+    expect(managedDustChat).toHaveBeenCalledTimes(1)
+    const call = managedDustChat.mock.calls[0][0] as { apiKey: string; workspaceId: string }
+    expect(call.apiKey).toBe('cli-token')
+    expect(call.workspaceId).toBe('cli-ws')
+  })
+
+  it('does not import the CLI session when Settings already has key + workspace', async () => {
+    const opts = baseOpts({ model: DUST_SPOTLIGHT_REF_AGENT_ID })
+    streamDust(opts)
+    await waitDone(opts.handlers)
+    expect(importSession).not.toHaveBeenCalled()
+    expect(managedDustChat).toHaveBeenCalledTimes(1)
+  })
+
+  it('falls back to REST Métis when Spotlight Ref is missing and the prompt is a general ask', async () => {
+    managedDustChat.mockResolvedValue({
+      ok: false,
+      kind: 'missing-agent',
+      error: 'The Spotlight Ref agent is not in this workspace.'
+    })
+    const opts = baseOpts({
+      model: DUST_SPOTLIGHT_REF_AGENT_ID,
+      req: { mode: 'answer', prompt: 'what is our Q3 plan?' } as AskStart
+    })
+    streamDust(opts)
+    await waitDone(opts.handlers)
+    expect(calls.create).toBe(1)
+    expect(opts.handlers.onDone).toHaveBeenCalled()
+    expect(opts.handlers.onError).not.toHaveBeenCalled()
+  })
+})
+
+describe('isGeneralDustAsk / resolveSpotlightDustCreds', () => {
+  it('treats the Spotlight Ref references template as not a general ask', () => {
+    expect(isGeneralDustAsk('search our references and tell me sales references or case studies')).toBe(false)
+    expect(isGeneralDustAsk('what is our Q3 plan?')).toBe(true)
+    expect(isGeneralDustAsk('')).toBe(false)
+  })
+
+  it('returns stored creds without reading keytar when both are present', async () => {
+    importSession.mockReset()
+    const creds = await resolveSpotlightDustCreds({ apiKey: 'k', workspaceId: 'ws', baseURL: 'https://dust.tt' })
+    expect(creds).toEqual({ apiKey: 'k', workspaceId: 'ws', baseURL: 'https://dust.tt' })
+    expect(importSession).not.toHaveBeenCalled()
+  })
+
+  it('imports the CLI session when Settings creds are blank', async () => {
+    importSession.mockResolvedValue({
+      ok: true,
+      token: 'from-keytar',
+      workspaceId: 'ws-keytar',
+      baseUrl: 'https://eu.dust.tt'
+    })
+    const creds = await resolveSpotlightDustCreds({ apiKey: '', workspaceId: '' })
+    expect(creds.apiKey).toBe('from-keytar')
+    expect(creds.workspaceId).toBe('ws-keytar')
+    expect(creds.baseURL).toBe('https://eu.dust.tt')
   })
 })

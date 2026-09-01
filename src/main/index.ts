@@ -74,6 +74,7 @@ import {
   ProviderIdSchema,
   DEFAULT_SHORTCUTS,
   ASK_MEMORY_IDLE_MS,
+  DUST_SPOTLIGHT_REF_AGENT_ID,
   type HotkeyAction,
   type ShortcutFailure,
   type PublicSettings,
@@ -4870,6 +4871,9 @@ function registerIpc(): void {
       // built-in. Resolved BEFORE the eligibility chain because a missing user endpoint is an eligibility
       // failure, not a stream failure.
       const baseURL = providerBaseUrl(provider, s)
+      // Spotlight Ref is a managed Dust CLI call. streamDust imports the CLI session when
+      // apiKey/workspaceId are missing — do not dead-end here on stored Settings keys.
+      const spotlightRefPinned = provider === 'dust' && req.agentOverride === DUST_SPOTLIGHT_REF_AGENT_ID
       // Métis Local: accept localPrimaryEligibleFor (routingMode-aware) plus the unchanged fallback/floor
       // nets. Opted-in vision stays local at every tier so prompt complexity cannot silently turn a
       // screenshot into a cloud upload.
@@ -4887,7 +4891,7 @@ function registerIpc(): void {
               : 'Métis Local handles live suggestions, summaries and screenshots — this request type uses your cloud provider.'
           : def.kind === 'cli' && !s.cliConnected[provider]
             ? `${def.label} is not connected. Open Settings → CLI Integration to set it up.`
-            : def.kind !== 'cli' && !key
+            : !spotlightRefPinned && def.kind !== 'cli' && !key
               ? `No API key for ${def.label}. Open Settings (gear) and add it.`
               : def.kind !== 'cli' && !model
                 ? provider === 'dust'
@@ -4900,7 +4904,7 @@ function registerIpc(): void {
                   ? `No endpoint URL set for ${def.label}. Open Settings → Advanced and add it.`
                   : req.mode === 'vision' && !providerVisionOk(provider)
                     ? `${def.label} can't read screenshots. ${visionSwitchAdvice(provider)}`
-                    : provider === 'dust' && !s.dustWorkspaceId
+                    : !spotlightRefPinned && provider === 'dust' && !s.dustWorkspaceId
                       ? 'Add your Dust workspace ID in Settings → AI → Dust setup.'
                       : ''
       if (ineligible) {

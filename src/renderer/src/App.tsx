@@ -53,7 +53,7 @@ import {
 import { useListen, playListenChime } from './lib/listen'
 import { transcriptToText, recapPersistAction } from './lib/transcript'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
-import { DEFAULT_SHORTCUTS, ASK_MEMORY_IDLE_MS } from '@shared/ipc'
+import { DEFAULT_SHORTCUTS, ASK_MEMORY_IDLE_MS, DUST_SPOTLIGHT_REF_AGENT_ID } from '@shared/ipc'
 import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, LicenseGateVerdict } from '@shared/ipc'
 import { HOTKEY_ACTIONS } from '@shared/ipc'
 import { useTapControl } from './lib/tap/tap-control'
@@ -69,10 +69,9 @@ import {
   buildExplainPrompt,
   buildFactCheckClaimPrompt,
   buildWhatNextPrompt,
-  buildSpotlightRefPrompt,
   chooseQuickActionRoute,
+  planSpotlightRefAsk,
   quickActionUnavailableMessage,
-  spotlightRefUnavailableMessage,
   transcriptHasContent
 } from '@shared/quick-actions'
 
@@ -1635,50 +1634,29 @@ export function App(): JSX.Element {
     tryAdoptSpeculative
   ])
 
-  // Spotlight Ref only ever uses the locked Dust agent — never the globally active provider — so its
-  // readiness gate is Dust's own credentials (isDustReady), not requireProvider()/settings.providerReady,
-  // which would incorrectly block this even when Dust is fully configured but some OTHER provider (the
-  // active one for everyday chat) happens to be unconfigured.
+  // Spotlight Ref always ask.run's the locked Dust CLI agent (GOr913Zr5V). Do not pre-gate on
+  // isDustReady / hasKeys.dust — that fired spotlightRefUnavailableMessage before the CLI ran
+  // and dead-ended Tony while the managed Dust CLI was already installed. Main imports the CLI
+  // session (or installs the CLI) and only then fails with missing-cli / auth / agent-absent copy.
+  // ask.run paints Updating immediately (streaming: true).
   const spotlightRef = useCallback(() => {
-    const hasKeys = settings?.hasKeys ?? {}
-    const workspaceId = settings?.dustWorkspaceId ?? ''
-    const spotlightModels = settings?.providerModelsSpotlightRef ?? {}
-    const refAgent = spotlightModels['dust'] ?? ''
     setView('answer')
     setCollapsed(false)
     setCaptureError(null)
-    // Credentials + locked sId first. Then confirm the agent is in the merged Dust list
-    // (all / workspace / published / list). view:list alone can omit a managed agent and must
-    // not dead-end a connected workspace. A failed/empty list is inconclusive — run the pin.
-    void (async () => {
-      if (!isDustReady(hasKeys, workspaceId, spotlightModels) || !refAgent) {
-        ask.fail(spotlightRefUnavailableMessage(), 'Spotlight Ref')
-        return
-      }
-      // Do not gate on the REST agent picker / view:list — a managed agent omitted from
-      // that list is not a workspace-mismatch dead-end. Main spawns the managed Dust CLI;
-      // missing CLI installs, missing agent says the agent is not in this workspace.
-      const typed = input.trim()
-      const transcript = listen.text()
-      const prompt = buildSpotlightRefPrompt(transcript, typed)
-      ask.run({
-        mode: 'answer',
-        prompt: prompt + GUARD_LINE,
-        agentOverride: refAgent,
-        providerOverride: 'dust',
-        history: historyRef.current
-      })
-      setInput('')
-    })()
-  }, [
-    input,
-    ask.fail,
-    ask.run,
-    listen.text,
-    settings?.hasKeys,
-    settings?.dustWorkspaceId,
-    settings?.providerModelsSpotlightRef
-  ])
+    const planned = planSpotlightRefAsk({
+      typed: input.trim(),
+      transcript: listen.text(),
+      hasKeys: settings?.hasKeys
+    })
+    ask.run({
+      mode: 'answer',
+      prompt: planned.prompt + GUARD_LINE,
+      agentOverride: DUST_SPOTLIGHT_REF_AGENT_ID,
+      providerOverride: 'dust',
+      history: historyRef.current
+    })
+    setInput('')
+  }, [input, ask.run, listen.text, settings?.hasKeys])
 
   // Review screen's "Generate follow-up" — there is no separate follow-up agent; the Métis base Dust
   // agent (default, see DUST_BASE_AGENT_ID) drafts follow-ups too. Renders inline on Review (no view
