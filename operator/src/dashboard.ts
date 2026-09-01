@@ -1,5 +1,5 @@
 import { aggregateCacheSlice, estimateCacheCost, formatUsdEstimate, type AskLogLine } from '../../src/shared/operator'
-import { CRM_STATUSES, type CrmStatus } from './crm'
+import { CRM_STATUSES, type CrmSendRow, type CrmStatus } from './crm'
 import type { OperatorStore, PulseRow, SeatRow } from './store'
 
 export const ONLINE_MS = 2 * 60 * 1000
@@ -98,6 +98,8 @@ export interface DashboardPayload {
   }[]
   crm: {
     counts: Record<CrmStatus, number>
+    landing: CrmLanding
+    funnel: CrmFunnelByConnector[]
     rows: {
       id: string
       status: CrmStatus
@@ -107,8 +109,29 @@ export interface DashboardPayload {
       error: string | null
       retryRequested: boolean
       device: string
+      attempt: number
+      latencyMs: number
+      remoteId: string | null
+      remoteUrl: string | null
+      meetingHash: string | null
+      action: string | null
     }[]
   }
+}
+
+export type CrmLanding = {
+  landedToday: number
+  failRatePct: number | null
+  retries: number
+  deadLetters: number
+}
+
+export type CrmFunnelByConnector = {
+  connector: string
+  attempted: number
+  submitted: number
+  success: number
+  failed: number
 }
 
 function buckets(now: number, count: number, step: number): number[] {
@@ -194,6 +217,57 @@ function costForAsks(
     }
   }
   return any ? formatUsdEstimate(usd) : null
+}
+
+export function emptyCrmLanding(): CrmLanding {
+  return { landedToday: 0, failRatePct: null, retries: 0, deadLetters: 0 }
+}
+
+function startOfUtcDay(now: number): number {
+  const d = new Date(now)
+  return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+}
+
+export function crmLandingKpis(rows: CrmSendRow[], now = Date.now()): CrmLanding {
+  const dayStart = startOfUtcDay(now)
+  let landedToday = 0
+  let attempted = 0
+  let failedOrDead = 0
+  let retries = 0
+  let deadLetters = 0
+  for (const row of rows) {
+    if (row.status === 'success' && row.ts >= dayStart) landedToday += 1
+    if (row.status !== 'pending') attempted += 1
+    if (row.status === 'failed' || row.status === 'expired') failedOrDead += 1
+    if (row.status === 'expired') deadLetters += 1
+    if (row.retry_requested === 1 || row.attempt > 1) retries += 1
+  }
+  return {
+    landedToday,
+    failRatePct: attempted === 0 ? null : Math.round((failedOrDead / attempted) * 1000) / 10,
+    retries,
+    deadLetters
+  }
+}
+
+export function crmFunnelByConnector(rows: CrmSendRow[]): CrmFunnelByConnector[] {
+  const by = new Map<string, CrmFunnelByConnector>()
+  for (const row of rows) {
+    const connector = row.connector.trim() || 'unknown'
+    const cur = by.get(connector) ?? {
+      connector,
+      attempted: 0,
+      submitted: 0,
+      success: 0,
+      failed: 0
+    }
+    if (row.status !== 'pending') cur.attempted += 1
+    if (row.status === 'submitted' || row.status === 'in_review' || row.status === 'success') cur.submitted += 1
+    if (row.status === 'success') cur.success += 1
+    if (row.status === 'failed' || row.status === 'expired') cur.failed += 1
+    by.set(connector, cur)
+  }
+  return [...by.values()].sort((a, b) => b.attempted - a.attempted || a.connector.localeCompare(b.connector))
 }
 
 function uniqueSeats(seats: SeatRow[], since: number): number {
@@ -399,6 +473,8 @@ export async function buildDashboard(store: OperatorStore, email: string, now: n
     })),
     crm: {
       counts,
+      landing: crmLandingKpis(crm, now),
+      funnel: crmFunnelByConnector(crm),
       rows: crm.map((r) => ({
         id: r.id,
         status: r.status,
@@ -407,7 +483,13 @@ export async function buildDashboard(store: OperatorStore, email: string, now: n
         ts: r.ts,
         error: r.last_error,
         retryRequested: r.retry_requested === 1,
-        device: r.device_id.slice(0, 8)
+        device: r.device_id.slice(0, 8),
+        attempt: r.attempt,
+        latencyMs: r.latency_ms,
+        remoteId: r.remote_id,
+        remoteUrl: r.remote_url,
+        meetingHash: r.meeting_hash,
+        action: r.action
       }))
     }
   }

@@ -93,6 +93,7 @@ export interface OperatorStore {
   upsertCrm(row: CrmSendRow): Promise<void>
   getCrm(id: string): Promise<CrmSendRow | null>
   listCrm(limit: number): Promise<CrmSendRow[]>
+  listCrmRetries(deviceId: string): Promise<CrmSendRow[]>
   audit(id: string, ts: number, actor: string, action: string, askId: string | null, detail: string): Promise<void>
   listAudit(limit: number): Promise<{ ts: number; actor: string; action: string; ask_id: string | null; detail: string }[]>
 }
@@ -190,17 +191,21 @@ export function memoryStore(): OperatorStore {
       packs.set(row.id, row)
     },
     async upsertCrm(row) {
-      const prev = crm.get(row.id)
-      crm.set(row.id, {
-        ...row,
-        retry_requested: row.retry_requested || prev?.retry_requested || 0
-      })
+      crm.set(row.id, row)
     },
     async getCrm(id) {
       return crm.get(id) ?? null
     },
     async listCrm(limit) {
       return [...crm.values()].sort((a, b) => b.ts - a.ts).slice(0, limit)
+    },
+    async listCrmRetries(deviceId) {
+      return [...crm.values()].filter(
+        (r) =>
+          r.device_id === deviceId &&
+          r.retry_requested === 1 &&
+          (r.status === 'pending' || r.status === 'failed' || r.status === 'expired')
+      )
     },
     async audit(id, ts, actor, action, askId, detail) {
       audits.push({ id, ts, actor, action, ask_id: askId, detail })

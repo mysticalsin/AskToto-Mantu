@@ -355,7 +355,9 @@ describe('CRM send board', () => {
       { access: tonyAccess },
       { store, now: NOW }
     )
-    const before = (await dash.json()) as { crm: { counts: Record<string, number>; rows: { status: string }[] } }
+    const before = (await dash.json()) as {
+      crm: { counts: Record<string, number>; rows: { status: string }[]; landing: { deadLetters: number } }
+    }
     expect(before.crm.counts.failed).toBe(1)
     expect(before.crm.rows[0]?.status).toBe('failed')
     const retry = await handleRequest(
@@ -369,5 +371,140 @@ describe('CRM send board', () => {
     const row = await store.getCrm('crm-1')
     expect(row?.status).toBe('pending')
     expect(row?.retry_requested).toBe(1)
+  })
+
+  it('confidential CRM events are not ingested', async () => {
+    const store = memoryStore()
+    const ingest = await signedRequest(
+      '/v1/ingest',
+      JSON.stringify({
+        event: 'crm',
+        id: 'secret-1',
+        status: 'success',
+        title: 'Confidential recap',
+        connector: 'clickup',
+        confidential: true
+      })
+    )
+    const res = await handleRequest(ingest, env(), {}, { store, now: NOW })
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { ingested?: boolean }).ingested).toBe(false)
+    expect(await store.getCrm('secret-1')).toBeNull()
+  })
+
+  it('success row stores the remote CRM id, never a meeting path', async () => {
+    const store = memoryStore()
+    const ingest = await signedRequest(
+      '/v1/ingest',
+      JSON.stringify({
+        event: 'crm',
+        id: 'crm-ok',
+        status: 'success',
+        title: 'Acme recap',
+        connector: 'plane',
+        meetingHash: 'aabbccddeeff0011',
+        remoteId: 'deal-99',
+        remoteUrl: 'https://crm.example/deal-99',
+        meetingFile: '/Users/tony/secret/Acme.md'
+      })
+    )
+    expect((await handleRequest(ingest, env(), {}, { store, now: NOW })).status).toBe(200)
+    const row = await store.getCrm('crm-ok')
+    expect(row?.remote_id).toBe('deal-99')
+    expect(row?.remote_url).toBe('https://crm.example/deal-99')
+    expect(row?.meeting_hash).toBe('aabbccddeeff0011')
+    expect(row?.meeting_file).toBeNull()
+    const dash = await handleRequest(
+      new Request('https://operator.test/v1/admin/dashboard'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const body = (await dash.json()) as { crm: { rows: { remoteId: string; meetingHash: string }[] } }
+    expect(body.crm.rows[0]?.remoteId).toBe('deal-99')
+    expect(JSON.stringify(body)).not.toContain('/Users/tony')
+  })
+
+  it('Retry does not fire without Access', async () => {
+    const store = memoryStore()
+    const ingest = await signedRequest(
+      '/v1/ingest',
+      JSON.stringify({ event: 'crm', id: 'crm-1', status: 'failed', title: 'Acme', connector: 'bidstack' })
+    )
+    expect((await handleRequest(ingest, env(), {}, { store, now: NOW })).status).toBe(200)
+    const retry = await handleRequest(
+      new Request('https://operator.test/v1/admin/crm/crm-1/retry', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}'
+      }),
+      env(),
+      {},
+      { store, now: NOW }
+    )
+    expect(retry.status).toBe(401)
+    expect((await store.getCrm('crm-1'))?.retry_requested).toBe(0)
+  })
+
+  it('Access Retry puts the id on the next heartbeat pull', async () => {
+    const store = memoryStore()
+    const ingest = await signedRequest(
+      '/v1/ingest',
+      JSON.stringify({ event: 'crm', id: 'crm-1', status: 'failed', title: 'Acme', connector: 'bidstack' })
+    )
+    expect((await handleRequest(ingest, env(), {}, { store, now: NOW })).status).toBe(200)
+    await handleRequest(
+      new Request('https://operator.test/v1/admin/crm/crm-1/retry', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}'
+      }),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const beat = await signedRequest('/v1/heartbeat', JSON.stringify({ os: 'darwin', appVersion: '1.8.0' }))
+    const res = await handleRequest(beat, env(), {}, { store, now: NOW })
+    expect(((await res.json()) as { retry?: string[] }).retry).toEqual(['crm-1'])
+  })
+
+  it('console HTML uses StatusBadge, Retry on Failed, and no StatusDemo', async () => {
+    const store = memoryStore()
+    for (const status of ['pending', 'in_progress', 'in_review', 'submitted', 'success', 'failed', 'expired']) {
+      const ingest = await signedRequest(
+        '/v1/ingest',
+        JSON.stringify({
+          event: 'crm',
+          id: `row-${status}`,
+          status,
+          title: `${status} send`,
+          connector: 'clickup',
+          ...(status === 'success' ? { remoteId: 'cu-1' } : {})
+        }),
+        { nonce: `n-${status}` }
+      )
+      expect((await handleRequest(ingest, env(), {}, { store, now: NOW })).status).toBe(200)
+    }
+    const page = await handleRequest(new Request('https://operator.test/'), env(), { access: tonyAccess }, { store, now: NOW })
+    const html = await page.text()
+    expect(html).toContain('data-retry="row-failed"')
+    expect(html).toContain('data-retry="row-expired"')
+    expect(html).toContain('data-status="failed"')
+    expect(html).toContain('status-badge')
+    expect(html).toContain('Submitted')
+    expect(html).toContain('data-crm-filter="pending"')
+    expect(html).toContain('data-crm-filter="in_progress"')
+    expect(html).toContain('data-crm-filter="in_review"')
+    expect(html).toContain('data-crm-filter="submitted"')
+    expect(html).toContain('data-crm-filter="success"')
+    expect(html).toContain('data-crm-filter="failed"')
+    expect(html).toContain('data-crm-filter="expired"')
+    expect(html).toContain('Landed today')
+    expect(html).toContain('Funnel by connector')
+    expect(html).not.toContain('Submited')
+    expect(html).not.toContain('StatusDemo')
+    expect(html).not.toContain('bg-orange-50')
+    expect(html).not.toContain('unsplash')
+    expect(html).not.toContain('Unsplash')
   })
 })

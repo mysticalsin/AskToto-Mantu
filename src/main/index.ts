@@ -280,6 +280,7 @@ import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mo
 import { isOpenAICloudCacheEligible, promptCacheKey as makePromptCacheKey } from '@shared/operator'
 import { loadVerifiedSkill, setModeSkillsOverlayRoot, skillLockHashForMode } from './mode-skills'
 import { recordOperatorAsk, recordOperatorCrmSend, recordOperatorRating, startOperatorRuntime } from './operator-ingest'
+import { buildCrmIngestEvent, meetingFileHash, shouldIngestCrm } from './operator-crm'
 import { startOperatorOverlayPoll } from './operator-overlay'
 import { initLogging, mainLog, auditLog } from './logger'
 import { consumeSecurityLimit, RATE_LIMIT_USER_MESSAGE, shouldSampleIpcDeny, takeHotPath, type SecurityLimitBucket } from './security-limits'
@@ -372,7 +373,7 @@ import {
   wordsFromTexts
 } from '@shared/time-saved-events'
 import { createOutlookDraft, createOutlookEvent, outlookWriteStatus } from './outlook-write'
-import { pushQueue, type OutboundAction, type OutboundActionKind } from './mcp/pushQueue'
+import { outboundActionId, pushQueue, type OutboundAction, type OutboundActionKind } from './mcp/pushQueue'
 import {
   activateLicense,
   activateMemberLicense,
@@ -2870,6 +2871,12 @@ function purgeGraphIfEncryptedAndStale(reason: string): void {
 }
 let lastAppliedManagedSnapshot: string | null = null
 
+let applyOperatorCrmRetries: (ids: string[]) => Promise<void> = async () => {}
+
+function operatorRuntimeHooks(): { onCrmRetry: (ids: string[]) => Promise<void> } {
+  return { onCrmRetry: (ids) => applyOperatorCrmRetries(ids) }
+}
+
 function registerIpc(): void {
   // --- Settings & permissions ---
   ipcMain.handle(IPC.settingsGet, (e) => {
@@ -3182,7 +3189,7 @@ function registerIpc(): void {
     registerShortcuts()
     rebuildTrayMenu()
     if (cur.operatorUrl !== next.operatorUrl || cur.operatorIngestSecret !== next.operatorIngestSecret) {
-      startOperatorRuntime(() => getSettings())
+      startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
       startOperatorOverlayPoll(() => getSettings())
     }
     return publicSettings()
@@ -3652,6 +3659,46 @@ function registerIpc(): void {
     return pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, action.toolName, action.payload, conn.label)
   }
 
+  applyOperatorCrmRetries = async (ids: string[]) => {
+    const unique = [...new Set(ids.filter(Boolean))]
+    if (!unique.length) return
+    const settings = getSettings()
+    for (const id of unique) {
+      const action = pushQueue.requeue(id)
+      if (!action) continue
+      const title = typeof action.payload.title === 'string' ? action.payload.title : undefined
+      const started = Date.now()
+      await recordOperatorCrmSend(settings, {
+        id,
+        status: 'in_progress',
+        title,
+        connector: action.kind,
+        meetingHash: meetingFileHash(action.meetingFile),
+        action: action.action,
+        attempt: 1
+      })
+      const batch = await pushQueue.processIds([id], retryOutboundAction)
+      const one = batch.results[0]
+      if (!one || one.skippedConfidential) continue
+      await recordOperatorCrmSend(
+        settings,
+        buildCrmIngestEvent({
+          id,
+          ok: one.ok,
+          deadLetter: one.deadLetter,
+          title,
+          connector: action.kind,
+          meetingFile: action.meetingFile,
+          action: action.action,
+          attempt: one.attempts || 1,
+          latencyMs: Date.now() - started,
+          result: one.result,
+          error: one.error
+        })
+      )
+    }
+  }
+
   // Same minute-ish cadence as the brain reconcile tick (BRAIN_RECONCILE_MS, set up below in
   // app.whenReady) — cheap enough to poll often, and pushQueue.processDue itself no-ops instantly when
   // the queue is empty or every due action is still cooling down on backoff. Lives here (registerIpc),
@@ -3787,6 +3834,7 @@ function registerIpc(): void {
       return { ok: false, error: `Unknown ${conn.label} tool.` }
     }
     const apiKey = getMcpApiKey(connectionId)
+    const started = Date.now()
     let r = await pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, toolName, args, conn.label)
     // ClickUp-only: its credential is an OAuth access token, not a pasted key that only changes when the
     // user edits it — a 401 here can mean the token simply expired. Attempt exactly one refresh + retry
@@ -3818,17 +3866,31 @@ function registerIpc(): void {
     }
     auditLog('mcp.push', { connectionId, tool: toolName, ok: r.ok })
     const crmTitle = typeof args.title === 'string' ? args.title : undefined
-    const crmKey = `${connectionId}:${String(meetingFile || toolName)
-      .replace(/[^a-zA-Z0-9._-]+/g, '')
-      .slice(0, 48)}`
-    void recordOperatorCrmSend(getSettings(), {
-      id: crmKey,
-      status: r.ok ? 'success' : 'failed',
-      title: crmTitle,
-      connector: connectionId,
-      meetingFile,
-      error: r.ok ? undefined : r.error
+    const meetingBase = meetingFile ? meetingFile.split(/[/\\]/).pop() || meetingFile : undefined
+    const actionKind = inferPushActionKind(toolName)
+    const crmId = outboundActionId({
+      kind: conn.kind,
+      toolName,
+      meetingFile: meetingBase,
+      payload: args
     })
+    if (shouldIngestCrm(false)) {
+      void recordOperatorCrmSend(
+        getSettings(),
+        buildCrmIngestEvent({
+          id: crmId,
+          ok: r.ok,
+          title: crmTitle,
+          connector: connectionId,
+          meetingFile: meetingBase,
+          action: actionKind,
+          attempt: 1,
+          latencyMs: Date.now() - started,
+          result: r.result,
+          error: r.error
+        })
+      )
+    }
     if (r.ok) {
       appendTimeSavedEvent({
         kind: 'mcp-push',
@@ -3840,11 +3902,12 @@ function registerIpc(): void {
     // Wave 4: a FAILURE also goes into the durable retry queue. Idempotent enqueue.
     if (!r.ok) {
       pushQueue.enqueue({
+        id: crmId,
         kind: conn.kind,
-        action: inferPushActionKind(toolName),
+        action: actionKind,
         toolName,
         payload: args,
-        ...(meetingFile ? { meetingFile: meetingFile.split(/[/\\]/).pop() || meetingFile } : {}),
+        ...(meetingBase ? { meetingFile: meetingBase } : {}),
         confidential: argConfidential || diskConfidential
       })
     }
@@ -6390,8 +6453,6 @@ if (!app.requestSingleInstanceLock()) {
     if (!boot.operatorIngestSecret && process.env.METIS_OPERATOR_INGEST_SECRET) {
       setSettings({ operatorIngestSecret: process.env.METIS_OPERATOR_INGEST_SECRET })
     }
-    startOperatorRuntime(() => getSettings())
-    startOperatorOverlayPoll(() => getSettings())
   }
   // Métis Local weights are no longer bundled in the installer (~728 MB; a universal mac package
   // carrying them would blow past GitHub's 2 GB release-asset limit), so fetch them once here whenever
@@ -6893,6 +6954,8 @@ if (!app.requestSingleInstanceLock()) {
   runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
   runStep('initializeImportJobs', initializeImportJobs)
   runStep('registerIpc', registerIpc)
+  startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
+  startOperatorOverlayPoll(() => getSettings())
   // Import checkpoints are encrypted and main-owned. Resume after IPC registration so the hidden decoder
   // can safely report chunks as soon as it starts, without delaying first paint.
   const recoverImports = (): void => {

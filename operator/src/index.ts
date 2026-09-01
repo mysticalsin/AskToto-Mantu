@@ -215,7 +215,9 @@ async function adminRoute(
   if (crmRetry && request.method === 'POST') {
     const row = await store.getCrm(crmRetry[1])
     if (!row) return json({ ok: false, error: 'not found' }, 404)
-    if (row.status !== 'failed') return json({ ok: false, error: 'only Failed can retry' }, 400)
+    if (row.status !== 'failed' && row.status !== 'expired') {
+      return json({ ok: false, error: 'only Failed or Expired can retry' }, 400)
+    }
     await store.upsertCrm({
       ...row,
       status: 'pending',
@@ -260,7 +262,8 @@ async function heartbeat(
     city: geo.city
   })
   await ingestCrmList(store, deviceId, body, now)
-  return json({ ok: true })
+  const retries = await store.listCrmRetries(deviceId)
+  return json({ ok: true, retry: retries.map((r) => r.id) })
 }
 
 async function ingest(
@@ -278,6 +281,7 @@ async function ingest(
     return json({ ok: true })
   }
   if (body.event === 'crm') {
+    if (body.confidential === true) return json({ ok: true, id, ingested: false })
     await upsertCrmEvent(store, deviceId, body, now)
     return json({ ok: true, id })
   }
@@ -359,19 +363,40 @@ function seatFromBody(deviceId: string, body: Record<string, unknown>, now: numb
   }
 }
 
+function meetingHashFromBody(body: Record<string, unknown>): string | null {
+  if (typeof body.meetingHash === 'string' && /^[a-f0-9]{16,64}$/i.test(body.meetingHash.trim())) {
+    return body.meetingHash.trim().toLowerCase().slice(0, 16)
+  }
+  if (typeof body.meetingFile === 'string') {
+    const base = body.meetingFile.replace(/^.*[/\\]/, '').trim()
+    if (!base) return null
+    // Never persist a path or basename. Fold a legacy field into a short hash later on the client.
+    if (/^[a-f0-9]{16,64}$/i.test(base)) return base.toLowerCase().slice(0, 16)
+  }
+  return null
+}
+
 async function upsertCrmEvent(
   store: OperatorStore,
   deviceId: string,
   body: Record<string, unknown>,
   now: number
 ): Promise<void> {
+  if (body.confidential === true) return
   const status = asCrmStatus(body.status)
   if (!status) return
   const id = String(body.id || crypto.randomUUID())
   const title = typeof body.title === 'string' ? body.title.replace(/\s+/g, ' ').trim().slice(0, 160) : 'CRM send'
   const connector = typeof body.connector === 'string' ? body.connector.slice(0, 32) : 'unknown'
-  const meeting = typeof body.meetingFile === 'string' ? body.meetingFile.replace(/^.*[/\\]/, '').slice(0, 80) : null
   const err = typeof body.error === 'string' ? body.error.slice(0, 200) : null
+  const remoteId = typeof body.remoteId === 'string' ? body.remoteId.slice(0, 80) : null
+  const remoteUrl =
+    typeof body.remoteUrl === 'string' && /^https:\/\//i.test(body.remoteUrl) ? body.remoteUrl.slice(0, 300) : null
+  const action = typeof body.action === 'string' ? body.action.slice(0, 32) : null
+  const attempt = typeof body.attempt === 'number' && Number.isFinite(body.attempt) ? Math.max(0, Math.floor(body.attempt)) : 0
+  const latencyMs =
+    typeof body.latencyMs === 'number' && Number.isFinite(body.latencyMs) ? Math.max(0, Math.floor(body.latencyMs)) : 0
+  const prev = await store.getCrm(id)
   await store.upsertCrm({
     id,
     device_id: deviceId,
@@ -379,9 +404,15 @@ async function upsertCrmEvent(
     status,
     title: title || 'CRM send',
     connector,
-    meeting_file: meeting,
+    meeting_file: null,
+    meeting_hash: meetingHashFromBody(body) ?? prev?.meeting_hash ?? null,
     last_error: err,
-    retry_requested: 0
+    retry_requested: 0,
+    attempt: attempt || prev?.attempt || 0,
+    latency_ms: latencyMs || prev?.latency_ms || 0,
+    remote_id: remoteId ?? prev?.remote_id ?? null,
+    remote_url: remoteUrl ?? prev?.remote_url ?? null,
+    action: action ?? prev?.action ?? null
   })
 }
 

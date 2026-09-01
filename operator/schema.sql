@@ -64,8 +64,14 @@ CREATE TABLE IF NOT EXISTS crm_sends (
   title TEXT NOT NULL,
   connector TEXT NOT NULL,
   meeting_file TEXT,
+  meeting_hash TEXT,
   last_error TEXT,
-  retry_requested INTEGER NOT NULL DEFAULT 0
+  retry_requested INTEGER NOT NULL DEFAULT 0,
+  attempt INTEGER NOT NULL DEFAULT 0,
+  latency_ms INTEGER NOT NULL DEFAULT 0,
+  remote_id TEXT,
+  remote_url TEXT,
+  action TEXT
 );
 
 CREATE INDEX IF NOT EXISTS crm_sends_ts ON crm_sends(ts);
