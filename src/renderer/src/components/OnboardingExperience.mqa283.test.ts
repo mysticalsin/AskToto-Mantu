@@ -45,7 +45,10 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
 
   it('a ready scene renders ActReady, wired to the real finish() and the optional AI-settings link', () => {
     expect(experienceSrc).toMatch(/scene === 'ready'/)
-    expect(experienceSrc).toMatch(/<ActReady mode=\{mode\} onFinish=\{finish\} onOpenAiSettings=\{onOpenAiSettings\} \/>/)
+    expect(experienceSrc).toMatch(/<ActReady/)
+    expect(experienceSrc).toMatch(/onFinish=\{finish\}/)
+    expect(experienceSrc).toMatch(/onOpenAiSettings=\{onOpenAiSettings\}/)
+    expect(experienceSrc).toMatch(/asrReady=\{asrReady\}/)
   })
 })
 
@@ -58,7 +61,7 @@ describe('MQA-283 — Ready\'s honest empty-state line (Métis\'s equivalent of 
   it('never claims readiness with no caveat — the honest line always ships alongside the CTA', () => {
     const readyBlockStart = experienceSrc.indexOf("key=\"ready\"")
     expect(readyBlockStart).toBeGreaterThan(-1)
-    const readyBlock = experienceSrc.slice(readyBlockStart, readyBlockStart + 2000)
+    const readyBlock = experienceSrc.slice(readyBlockStart, readyBlockStart + 4000)
     expect(readyBlock).toMatch(/TELL_THE_ROOM_READY/)
     expect(readyBlock).toMatch(/TELL_THE_ROOM_QUOTE/)
     expect(readyBlock).toMatch(/Get started/)
@@ -72,7 +75,7 @@ describe('MQA-283 — adding a personal AI provider from Ready is optional, neve
   })
 
   it('the Get started CTA never depends on onOpenAiSettings, or on any provider state at all', () => {
-    const ctaMatch = experienceSrc.match(/onClick=\{\(\) => void onFinish\(\)\}\s*\n\s*disabled=\{busy\}/)
+    const ctaMatch = experienceSrc.match(/onClick=\{\(\) => void onFinish\(\)\}\s*\n\s*disabled=\{blocked\}/)
     expect(ctaMatch).not.toBeNull()
   })
 })

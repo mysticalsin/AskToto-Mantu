@@ -1645,7 +1645,15 @@ export function useListen(
         crashedRef.current = false // fresh session — re-enable stop()'s teardown after any prior crash
         parakeetFailures.current = 0 // reset the failure streak so a new session gets a clean shot at Parakeet
         parakeetEmptyRunRef.current = 0 // clear the empty-window run counter for a fresh session
-        engineRef.current = engine
+        // Whisper is the default working engine. When the high-accuracy Parakeet files are on disk,
+        // this meeting uses them. A prior session's fallback must not latch leftover meetings to Whisper.
+        let selected = engine
+        if (selected !== 'apple') {
+          const st = await window.toto.parakeetStatus().catch(() => ({ ready: false }))
+          selected = st.ready ? 'parakeet' : 'whisper'
+        }
+        engineRef.current = selected
+        engine = selected
         themRunRef.current = '' // fresh session → no carried-over 'them' question turn
         repeatRunRef.current = { key: '', speaker: '', count: 0 } // fresh session → no carried-over dupe run
         // Fresh session → no carried-over Parakeet language pin (mirrors whisper.worker.ts's own

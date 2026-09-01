@@ -62,7 +62,8 @@ import {
   type ImportAudioProgress,
   type ImportJobView,
   type LocalModelSummary,
-  type ProfileRecoveryResult
+  type ProfileRecoveryResult,
+  type AsrAssetsStatus
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 
@@ -301,6 +302,9 @@ const api = {
     ipcRenderer.invoke(IPC.brainAttention),
   setListeningState: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.listeningState, on),
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
+  asrAssetsStatus: (): Promise<AsrAssetsStatus> => ipcRenderer.invoke(IPC.asrAssetsStatus),
+  asrAssetsEnsure: (): Promise<AsrAssetsStatus> => ipcRenderer.invoke(IPC.asrAssetsEnsure),
+  onAsrAssetsProgress: (cb: (d: AsrAssetsStatus) => void): Unsub => sub(IPC.asrAssetsProgress, cb),
 
   // Métis Local (on-device LLM): read-only readiness for the model included in the installer.
   localModelsList: (): Promise<LocalModelSummary[]> => ipcRenderer.invoke(IPC.localModelsList),

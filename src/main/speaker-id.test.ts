@@ -6,7 +6,10 @@ import { join } from 'node:path'
 
 // Mutable so the parakeet suite below can flip to the packaged layout (resourcesPath) without a second
 // mock registration — vi.mock is hoisted per file, one electron stub has to serve both suites.
-const electron = vi.hoisted(() => ({ app: { isPackaged: false, getPath: () => '/tmp' } }))
+const electron = vi.hoisted(() => ({
+  app: { isPackaged: false, getPath: () => '/tmp' },
+  net: { fetch: vi.fn() }
+}))
 vi.mock('electron', () => electron)
 vi.mock('./logger', () => ({
   mainLog: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },

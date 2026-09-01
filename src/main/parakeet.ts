@@ -1,34 +1,34 @@
 /**
  * Parakeet v3 ASR engine (NVIDIA NeMo TDT, 25 European languages, auto-detect) running on-device in the
- * MAIN process via the sherpa-onnx-node native addon (N-API — loads in Electron without a rebuild). It is
- * the opt-in "fastest, European" alternative to the default Whisper engine; if anything here is missing or
- * fails, the renderer silently falls back to Whisper, so this can never break live transcription.
+ * MAIN process via the sherpa-onnx-node native addon (N-API — loads in Electron without a rebuild).
+ * Whisper is the default engine so a meeting always works when these weights are absent. After
+ * onboarding downloads the high-accuracy Parakeet artifact, listen/import resolve to this engine
+ * when the files exist on disk.
  *
- * The model ships BUNDLED in the app's resources (resources/asr, populated by
- * `npm run fetch-models` before packaging) and loads straight from disk with zero network use — see
- * modelDir() below. Missing assets are a build/package failure; runtime never downloads or extracts a
- * replacement after installation.
+ * Weights may be bundled (resources/asr via fetch-models) or fetched into userData during onboarding.
  */
-import { app } from 'electron'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { setFlagsFromString } from 'node:v8'
 import { runInNewContext } from 'node:vm'
 import { mainLog } from './logger'
+import {
+  ASR_ASSETS_MISSING,
+  PARAKEET_MODEL_NAME,
+  ensureParakeetAssets,
+  highAccuracyParakeetReady,
+  resolveParakeetDir
+} from './asr-bundled-ensure'
 
-const MODEL_NAME = 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8'
 const SAMPLE_RATE = 16000
 
 /**
  * Return the model directory, preferring the bundled copy shipped inside the app's resources.
- * In packaged builds, resources/asr/<MODEL_NAME> is extracted by electron-builder extraResources.
- * In dev, resources/asr/<MODEL_NAME> lives at the repo root (populated by `npm run fetch-models`).
- * A missing file remains missing so status/ensure can fail closed and expose the packaging defect.
+ * Falls back to a userData copy written by onboarding ensure when the installer or checkout
+ * is missing weights.
  */
 function modelDir(): string {
-  const REPO_ROOT = join(__dirname, '..', '..')
-  const bundledBase = app.isPackaged ? process.resourcesPath : join(REPO_ROOT, 'resources')
-  return join(bundledBase, 'asr', MODEL_NAME)
+  return resolveParakeetDir()
 }
 function modelFiles(): { encoder: string; decoder: string; joiner: string; tokens: string } {
   const d = modelDir()
@@ -84,10 +84,16 @@ export function parakeetAddonError(): string | null {
   return addonLoadError
 }
 
-/** Require the bundled Parakeet payload. Runtime never downloads missing model files. */
-export async function ensureParakeetModel(_onProgress?: (pct: number) => void): Promise<void> {
+/** Require high-accuracy Parakeet weights. Bundled first; otherwise fetch into userData. */
+export async function ensureParakeetModel(onProgress?: (pct: number) => void): Promise<void> {
   if (parakeetModelReady()) return
-  throw new Error('Bundled Parakeet model assets are missing. Reinstall Métis from a complete installer.')
+  await ensureParakeetAssets(onProgress)
+  if (parakeetModelReady()) return
+  throw new Error(ASR_ASSETS_MISSING)
+}
+
+export function highAccuracyParakeetInstalled(): boolean {
+  return highAccuracyParakeetReady()
 }
 
 /** Construct (once) the offline recognizer for the Parakeet transducer model. */
@@ -190,3 +196,5 @@ export function parakeetRelease(): void {
   }
   collectNativeGarbage()
 }
+
+export { PARAKEET_MODEL_NAME }

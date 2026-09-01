@@ -37,6 +37,7 @@ import { existsSync, readFileSync, writeFileSync, renameSync, mkdirSync } from '
 import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import { mainLog } from './logger'
+import { resolveSpeakerModelsRoot, speakerWeightsPath } from './asr-bundled-ensure'
 import {
   createSpeakerClusterer,
   cosineSimilarity,
@@ -113,21 +114,7 @@ export interface SpeakerIdDeps {
 }
 
 export function speakerModelPath(): string {
-  const base = app.isPackaged
-    ? join(process.resourcesPath, 'models')
-    : join(findRepoRoot(__dirname), 'resources', 'models')
-  return join(base, 'speaker', 'embedding.onnx')
-}
-
-function findRepoRoot(startDir: string): string {
-  let dir = startDir
-  for (let i = 0; i < 6; i++) {
-    if (existsSync(join(dir, 'package.json'))) return dir
-    const parent = dirname(dir)
-    if (parent === dir) break
-    dir = parent
-  }
-  return startDir
+  return speakerWeightsPath(resolveSpeakerModelsRoot())
 }
 
 /** Build the real sherpa extractor, or null when the model/addon is unavailable. Mirrors parakeet.ts's

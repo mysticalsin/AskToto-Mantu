@@ -1,8 +1,14 @@
 # Métis live transcript quality
 
-Product contract for live and import ASR. Overlay chrome, island geometry, onboarding, identity card, Intelligence dashboards, and time-saved accounting are out of scope.
+Product contract for live and import ASR. Overlay chrome, island geometry, identity card, Intelligence dashboards, and time-saved accounting are out of scope.
 
 Default is **Best**. Fast is a Settings power option, not a silent floor.
+
+## Engine
+
+- `asrEngine` defaults to **Whisper** so a meeting always has a working engine when Parakeet weights are absent.
+- During onboarding the high-accuracy Parakeet artifact must download and finish on disk (plus speaker weights). Fail loud with Retry. Never continue as if Parakeet is ready.
+- After those files exist, listen and import use Parakeet. A failed first decode must not mark leftover meetings Whisper-only while the model is still installed.
 
 ## Default path
 

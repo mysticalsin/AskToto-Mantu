@@ -76,7 +76,7 @@ describe('onboarding portal pill + skip path', () => {
     const skip = experience.slice(experience.indexOf("scene === 'skip'"))
     expect(skip).toMatch(/TellTheRoomCard/)
     expect(skip).toMatch(/Get started/)
-    expect(skip).toMatch(/disabled=\{\!consent\}/)
+    expect(skip).toMatch(/firstRunCanFinish\(\{ asrReady, consent \}\)/)
     expect(skip).toMatch(/onClick=\{\(\) => void finish\(\)\}/)
     expect(skip).not.toMatch(/from '\.\/Onboarding'/)
     expect(experience).toMatch(/recordingConsent: true/)

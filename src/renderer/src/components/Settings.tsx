@@ -5836,7 +5836,8 @@ export function Settings({
                   {settings.asrLastFallbackAt != null && (
                     <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
                       <span>
-                        Parakeet failed and auto-switched to Whisper for the rest of a recent meeting.{' '}
+                        Parakeet failed and auto-switched to Whisper for the rest of that meeting. Later
+                        meetings still use Parakeet when the high-accuracy files are on disk.{' '}
                         {new Date(settings.asrLastFallbackAt).toLocaleString()}.
                       </span>
                       <TextButton onClick={() => patch({ asrLastFallbackAt: null })}>Dismiss</TextButton>

@@ -9,7 +9,18 @@ import {
   ssoSignInVerdict
 } from './Onboarding'
 import { Sparkles } from 'lucide-react'
-import { aiRowStatus, localModelRowStatus, micRowStatus, summarizeSetupRows, type SetupRow } from './OnboardingExperience'
+import {
+  aiRowStatus,
+  asrAssetsRowStatus,
+  asrRowNeedsRetry,
+  asrStatusIsReady,
+  firstRunCanFinish,
+  localModelRowStatus,
+  micRowStatus,
+  setupAsrBlocksContinue,
+  summarizeSetupRows,
+  type SetupRow
+} from './OnboardingExperience'
 
 describe('providerTileDisabledReason — step-5 provider tiles must not misreport why they are disabled', () => {
   it('is null (tappable) when nothing blocks the tile', () => {
@@ -285,7 +296,8 @@ describe('MQA-201 — scene 4 never fakes a check', () => {
   it('every remaining setup row is derived from a real signal', () => {
     // asrBundled / getPermissions, plus the two rows whose verdict is a platform fact the renderer
     // genuinely knows (the brain path, and Windows having no per-app screen-recording permission).
-    expect(src).toMatch(/window\.toto\.asrBundled\(\)/)
+    expect(src).toMatch(/window\.toto\.asrAssetsStatus\(\)/)
+    expect(src).toMatch(/window\.toto\.asrAssetsEnsure\(\)/)
     expect(src).toMatch(/window\.toto\.getPermissions\(\)/)
     expect(src).toMatch(/micRowStatus\(perms\?\.microphone\)/)
     expect(src).toMatch(/window\.toto\.localModelsList\(\)/)
@@ -350,5 +362,40 @@ describe('MQA-263 — a build that ships connected must say so', () => {
 
   it('treats the second argument as optional, so existing call sites keep working', () => {
     expect(providerReadyCopy('anthropic')).toEqual(providerReadyCopy('anthropic', {}))
+  })
+})
+
+describe('high-accuracy Parakeet onboarding finish gate', () => {
+  it('will not mark ready until ready:true — a stub status is not enough', () => {
+    expect(asrStatusIsReady(undefined)).toBe(false)
+    expect(asrStatusIsReady({ ready: false, status: 'ready', progress: 1, label: 'Connected' })).toBe(false)
+    expect(asrStatusIsReady({ ready: false, status: 'idle', progress: 0, label: 'Getting…' })).toBe(false)
+    expect(asrStatusIsReady({ ready: true, status: 'ready', progress: 1, label: 'High-accuracy Parakeet ready' })).toBe(
+      true
+    )
+  })
+
+  it('will not finish first-run until the high-accuracy files are ready and consent is checked', () => {
+    expect(firstRunCanFinish({ asrReady: false, consent: true })).toBe(false)
+    expect(firstRunCanFinish({ asrReady: true, consent: false })).toBe(false)
+    expect(firstRunCanFinish({ asrReady: true, consent: true })).toBe(true)
+  })
+
+  it('blocks Continue while the ASR row is not ready', () => {
+    expect(setupAsrBlocksContinue([{ key: 'asr', label: 't', icon: Sparkles, state: 'action' }])).toBe(true)
+    expect(setupAsrBlocksContinue([{ key: 'asr', label: 't', icon: Sparkles, state: 'ready' }])).toBe(false)
+  })
+
+  it('shows Retry after a failed download', () => {
+    const row = asrAssetsRowStatus({
+      ready: false,
+      status: 'error',
+      progress: 0.2,
+      label: 'Could not get the high-accuracy Parakeet files. Check your connection and try again.',
+      error: 'Could not get the high-accuracy Parakeet files. Check your connection and try again.'
+    })
+    expect(row.state).toBe('action')
+    expect(asrRowNeedsRetry(row)).toBe(true)
+    expect(row.detail).toMatch(/try again/i)
   })
 })

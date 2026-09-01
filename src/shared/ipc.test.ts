@@ -324,6 +324,14 @@ describe('SettingsSchema', () => {
     expect(IPC.mcpPlaneConnect).toBe('mcp:planeConnect')
   })
 
+  it('defaults asrEngine to whisper so a meeting always has a working engine', () => {
+    expect(DEFAULT_SETTINGS.asrEngine).toBe('whisper')
+    const { asrEngine: _omit, ...withoutEngine } = DEFAULT_SETTINGS
+    expect(SettingsSchema.parse(withoutEngine).asrEngine).toBe('whisper')
+    expect(IPC.asrAssetsEnsure).toBe('asr:assets-ensure')
+    expect(IPC.asrAssetsStatus).toBe('asr:assets-status')
+  })
+
   it('defaults asrQuality to best (live Whisper uses the large multilingual model)', () => {
     expect(DEFAULT_SETTINGS.asrQuality).toBe('best')
     // Schema default must match DEFAULT_SETTINGS — store.ts layers defaults under the user file, then

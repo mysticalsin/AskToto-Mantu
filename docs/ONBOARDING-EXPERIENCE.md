@@ -48,7 +48,9 @@ line appears, a suggestion materializes in the answer panel:
 ### Scene 4 — "Your setup" (the magic moment — live, real checks)
 Rows animate from spinner → state, using REAL signals (all already exposed via IPC):
 - Apple Silicon acceleration — ✓ detected
-- On-device transcription (Parakeet + Whisper) — ✓ bundled, ready
+- On-device transcription — high-accuracy Parakeet must finish downloading onto disk (plus speaker
+  weights). Ready only when those files exist. Download failure shows Retry. Skip / Get started stay
+  blocked. Whisper remains the default working engine if Parakeet is absent after a failed download.
 - Local meeting brain — ✓ initialized
 - Microphone — request inline (platform-perms) → ✓
 - Screen context — request inline → ✓ (or "later" without blocking)

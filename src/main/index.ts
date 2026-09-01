@@ -300,6 +300,12 @@ import {
   parakeetRelease,
   parakeetAddonError
 } from './parakeet'
+import { resolveLeftoverAsrEngine } from './asr-engine-policy'
+import {
+  asrAssetsProgress,
+  asrAssetsStatusSnapshot,
+  ensureHighAccuracyParakeet
+} from './asr-bundled-ensure'
 import { appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
 import { resetLanguageFollow as resetImportLanguageFollow, whisperImportTranscribe, stopWhisperHost } from './whisper-import'
 import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine } from './polish'
@@ -1192,9 +1198,13 @@ function initializeImportJobs(): void {
       return startImportDecoder(job)
     },
     transcribe: async (samples, opts) => {
-      const engine = getSettings().asrEngine
+      // Re-resolve every leftover job from disk. A failed first Parakeet decode must not flip the
+      // rest of the queue to Whisper while the high-accuracy model is installed.
+      const engine = resolveLeftoverAsrEngine({
+        requested: getSettings().asrEngine,
+        parakeetReady: parakeetModelReady()
+      })
       if (engine === 'parakeet') {
-        await ensureParakeetModel()
         return parakeetTranscribe(samples)
       }
       // 'whisper' and 'apple' both route to the bundled Whisper transcriber for imports. Apple's
@@ -6635,6 +6645,26 @@ if (!app.requestSingleInstanceLock()) {
     ipcMain.handle(IPC.asrBundled, (e) => {
       assertMainWindow(e)
       return ASR_BUNDLED
+    })
+    const publishAsrAssets = (status = asrAssetsStatusSnapshot()): void => {
+      if (win && !win.isDestroyed()) win.webContents.send(IPC.asrAssetsProgress, status)
+    }
+    ipcMain.handle(IPC.asrAssetsStatus, (e) => {
+      assertMainWindow(e)
+      return asrAssetsStatusSnapshot()
+    })
+    ipcMain.handle(IPC.asrAssetsEnsure, async (e) => {
+      assertMainWindow(e)
+      try {
+        await ensureHighAccuracyParakeet((pct) => {
+          publishAsrAssets({ ...asrAssetsProgress(), progress: pct / 100, ready: false })
+        })
+      } catch {
+        /* snapshot carries the error — onboarding shows Retry */
+      }
+      const snap = asrAssetsStatusSnapshot()
+      publishAsrAssets(snap)
+      return snap
     })
 
     protocol.handle('asr-model', async (req) => {

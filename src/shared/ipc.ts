@@ -177,6 +177,11 @@ export const IPC = {
   permissionsRequestUpfront: 'permissions:requestUpfront',
   listeningState: 'listening:state',
   asrBundled: 'asr:bundled',
+  // Onboarding: live high-accuracy Parakeet readiness (bundled or userData). Distinct from
+  // asrBundled, which only answers “is the installer/repo resources/ manifest complete?”
+  asrAssetsStatus: 'asr:assets-status',
+  asrAssetsEnsure: 'asr:assets-ensure',
+  asrAssetsProgress: 'asr:assets-progress',
   // Métis Local (on-device LLM): read-only readiness metadata for the model bundled in the installer.
   localModelsList: 'localModels:list',
   // MQA-247: the high-accuracy transcription model. Its own pair rather than folded into the LLM
@@ -467,6 +472,16 @@ export interface ImportAudioChunkResult {
  *  button's progress label in RecallView. */
 export interface ImportAudioProgress {
   job: ImportJobView
+}
+
+/** Onboarding snapshot of high-accuracy Parakeet (+ speaker weights) readiness. `ready` is only
+ *  true when the required files exist on disk. */
+export interface AsrAssetsStatus {
+  ready: boolean
+  status: 'idle' | 'downloading' | 'ready' | 'error'
+  progress: number
+  label: string
+  error?: string
 }
 
 /** Main validates every one of these payloads again and accepts them only from the dedicated decoder. */
@@ -1014,9 +1029,9 @@ export const BaseSettingsSchema = z.object({
   overlayLayout: z.enum(['hide', 'island', 'bar']).default('hide'),
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('best'), // Best is default; Fast is a Settings power option (docs/asr/QUALITY.md)
-  // whisper = ~99 langs (default — safe for any locale; parakeet is European-only, which is why 1fa4d76
-  // moved the default off it); parakeet = 25 European languages, fastest; apple = on-device Apple Speech
-  // (SFSpeechRecognizer via the mac-helper sidecar), opt-in, macOS 13+ only — see main/apple-speech.ts.
+  // whisper = default working engine so a meeting always transcribes when Parakeet weights are absent.
+  // After onboarding the high-accuracy Parakeet files are on disk, listen/import resolve to parakeet
+  // (see main/asr-engine-policy.ts). apple = on-device Apple Speech, opt-in, macOS 13+ only.
   // NOTE: this zod default is effectively dead — store.ts layers DEFAULT_SETTINGS under the user file
   // before parsing, so the key is always present. Keep both declarations identical so neither lies.
   asrEngine: z.enum(['whisper', 'parakeet', 'apple']).default('whisper'),
