@@ -89,7 +89,7 @@ function fakeChild(): {
 
 describe('CLI_CONFIGS — security-critical arg arrays (must never relax)', () => {
   it('claude-cli locks tools fully down: --allowedTools "" and --disallowedTools "*", single turn', () => {
-    const args = CLI_CONFIGS['claude-cli']!.buildArgs({ model: 'opus', system: 'sys', prompt: 'hi' })
+    const args = CLI_CONFIGS['claude-cli']!.buildArgs({ model: 'opus' })
     const ai = args.indexOf('--allowedTools')
     expect(ai).toBeGreaterThan(-1)
     expect(args[ai + 1]).toBe('') // no tools allowed
@@ -103,13 +103,13 @@ describe('CLI_CONFIGS — security-critical arg arrays (must never relax)', () =
 
   it('claude-cli passes haiku / sonnet / opus through --model (no Sonnet lock in argv)', () => {
     for (const slug of ['haiku', 'sonnet', 'opus'] as const) {
-      const args = CLI_CONFIGS['claude-cli']!.buildArgs({ model: slug, system: '', prompt: 'hi' })
+      const args = CLI_CONFIGS['claude-cli']!.buildArgs({ model: slug })
       expect(args[args.indexOf('--model') + 1]).toBe(slug)
     }
   })
 
   it('claude-cli sends the prompt via stdin (never argv) and floors an empty model to "sonnet"', () => {
-    const args = CLI_CONFIGS['claude-cli']!.buildArgs({ model: '', system: '', prompt: 'hello' })
+    const args = CLI_CONFIGS['claude-cli']!.buildArgs({ model: '' })
     expect(args[0]).toBe('-p') // print/non-interactive mode; the prompt is read from stdin
     expect(args).not.toContain('hello') // confidential content must NEVER appear in argv (ps-visible)
     expect(args).not.toContain('--append-system-prompt')
@@ -121,7 +121,7 @@ describe('CLI_CONFIGS — security-critical arg arrays (must never relax)', () =
   })
 
   it('codex-cli disables the shell tool, skips git checks, sandboxes via exec, and keeps content off argv', () => {
-    const args = CLI_CONFIGS['codex-cli']!.buildArgs({ model: 'gpt', system: 'sys', prompt: 'hi' })
+    const args = CLI_CONFIGS['codex-cli']!.buildArgs({ model: 'gpt' })
     expect(args[0]).toBe('exec')
     expect(args).toContain('--json')
     expect(args).toContain('--skip-git-repo-check')

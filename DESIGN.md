@@ -108,7 +108,7 @@ Métis voice. Do not clone Vibe Island strings.
 
 Cloud CLI is provider id `claude-cli`. It is the local `claude` binary talking to Anthropic cloud. It is not Métis Local, not Dust, and not Kimi.
 
-**Connect.** Settings → CLI Integration → Connect calls `connectCliSession('claude-cli')`. Success writes `cliConnected['claude-cli'] = true` and `provider = 'claude-cli'` in the same patch (main persists both; the renderer applies the same patch so the Active badge is not a lie). A Connected badge with Asks still going to local / Dust / another API is a bug. After Connect, every Ask answer is routed through `runCliStream` / `CLI_CONFIGS['claude-cli']`.
+**Connect.** Settings → CLI Integration → Connect is approve → `runInstall` (install if missing, login if signed out), then `connectCliSession('claude-cli')` only when the session is live. Success writes `cliConnected['claude-cli'] = true` and `provider = 'claude-cli'` in the same patch (main persists both; the renderer applies the same patch so the Active badge is not a lie). Connect is not a re-test-only badge (`cliTest` + patch). A Connected badge with Asks still going to local / Dust / another API is a bug. After Connect, every Ask answer is routed through `runCliStream` / `CLI_CONFIGS['claude-cli']`.
 
 **Tiers.** Same shape as the Anthropic API provider, mapped to Claude Code slugs already in `PROVIDERS['claude-cli']`:
 
