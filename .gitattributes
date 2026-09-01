@@ -10,3 +10,6 @@ resources/local-ai/licenses/*.md text eol=lf
 # Keep its upstream LF bytes intact so the hash pin in scripts/local-model-assets.mjs verifies on
 # Windows checkouts where core.autocrlf would otherwise rewrite it (LF->CRLF) and fail check:local-model.
 resources/local-llm/*.txt -text
+
+# Mode skills are hashed LF-only. Pin checkout so Windows CI does not rewrite them.
+skills/**/*.md text eol=lf

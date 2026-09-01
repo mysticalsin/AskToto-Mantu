@@ -108,6 +108,9 @@ See [INTELLIGENCE-UPDATE.md](./INTELLIGENCE-UPDATE.md). One **Update Intelligenc
 local-first agent pass (API once if Local is missing, refused, or errors) and refreshes the
 dashboard. The button is the trigger. Never auto-send. Not leftover PR 61.
 
+## Operator
+See [OPERATOR.md](./OPERATOR.md). Cloudflare Access packed ops console (`operator/`, Worker `metis-operator`). Client keeps prompt cache on. Map geo comes from `request.cf`, never from the app. Not overlay chrome. Not the Fly license-server. Not `cloudflare-proxy`.
+
 ## MCP write
 Outlook drafts and CRM notes are user-confirmed. Never auto-send. A disconnected connector shows
 Connect, it does not pretend a send happened.

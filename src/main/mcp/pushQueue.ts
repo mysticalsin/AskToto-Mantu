@@ -59,6 +59,7 @@ export interface EnqueueInput {
 export interface PushResult {
   ok: boolean
   error?: string
+  result?: unknown
 }
 
 export interface PushQueueDeps {
@@ -81,9 +82,15 @@ function backoffFor(attempts: number): number {
 /** Deterministic id from the action's own content — same kind+toolName+meetingFile+payload enqueued
  *  twice (e.g. mcp:push's own failure-path enqueue running again after a renderer retry) collapses to
  *  the SAME queue entry instead of sending the same CRM write twice. */
-function contentId(input: Pick<EnqueueInput, 'kind' | 'toolName' | 'meetingFile' | 'payload'>): string {
+export function outboundActionId(
+  input: Pick<EnqueueInput, 'kind' | 'toolName' | 'meetingFile' | 'payload'>
+): string {
   const basis = JSON.stringify([input.kind, input.toolName, input.meetingFile ?? '', input.payload])
   return createHash('sha256').update(basis).digest('hex').slice(0, 24)
+}
+
+function contentId(input: Pick<EnqueueInput, 'kind' | 'toolName' | 'meetingFile' | 'payload'>): string {
+  return outboundActionId(input)
 }
 
 /** "Check payload or flag": a caller may mark an action confidential either directly (enqueue's own
@@ -126,21 +133,41 @@ function sanitizeAction(raw: unknown): OutboundAction | null {
   return out
 }
 
+export interface ProcessDueResult {
+  processed: number
+  succeeded: number
+  deadLettered: number
+  skippedConfidential: number
+}
+
+export interface ProcessIdResult {
+  id: string
+  ok: boolean
+  error?: string
+  deadLetter: boolean
+  attempts: number
+  skippedConfidential: boolean
+  result?: unknown
+}
+
 export interface PushQueue {
   enqueue: (input: EnqueueInput) => OutboundAction
   /** Attempts every due, non-confidential, non-dead-lettered action via `pushFn`. Never throws — a
    *  `pushFn` rejection is treated the same as `{ ok: false, error }`. Single-flight: a second call
    *  while one is in progress returns zeros immediately (never double-sends the same action). */
-  processDue: (pushFn: (action: OutboundAction) => Promise<PushResult>) => Promise<{
-    processed: number
-    succeeded: number
-    deadLettered: number
-    skippedConfidential: number
-  }>
+  processDue: (pushFn: (action: OutboundAction) => Promise<PushResult>) => Promise<ProcessDueResult>
+  /** Tony Operator Retry: process these ids now (still confidential-blocked, still bounded). */
+  processIds: (
+    ids: string[],
+    pushFn: (action: OutboundAction) => Promise<PushResult>
+  ) => Promise<ProcessDueResult & { results: ProcessIdResult[] }>
+  get: (id: string) => OutboundAction | undefined
+  /** Clear dead-letter and make due. Confidential rows stay unsent. */
+  requeue: (id: string) => OutboundAction | null
   pending: () => OutboundAction[]
 }
 
-const EMPTY_RESULT = { processed: 0, succeeded: 0, deadLettered: 0, skippedConfidential: 0 }
+const EMPTY_RESULT: ProcessDueResult = { processed: 0, succeeded: 0, deadLettered: 0, skippedConfidential: 0 }
 
 export function createPushQueue(deps: PushQueueDeps = {}): PushQueue {
   const storePath = deps.storePath ?? (() => join(app.getPath('userData'), 'mcp-push-queue.json'))
@@ -196,10 +223,11 @@ export function createPushQueue(deps: PushQueueDeps = {}): PushQueue {
     return action
   }
 
-  async function processDue(
-    pushFn: (action: OutboundAction) => Promise<PushResult>
-  ): Promise<{ processed: number; succeeded: number; deadLettered: number; skippedConfidential: number }> {
-    if (processing) return { ...EMPTY_RESULT }
+  async function runBatch(
+    pushFn: (action: OutboundAction) => Promise<PushResult>,
+    onlyIds: Set<string> | null
+  ): Promise<ProcessDueResult & { results: ProcessIdResult[] }> {
+    if (processing) return { ...EMPTY_RESULT, results: [] }
     processing = true
     try {
       const list = load()
@@ -208,13 +236,24 @@ export function createPushQueue(deps: PushQueueDeps = {}): PushQueue {
       let succeeded = 0
       let deadLettered = 0
       let skippedConfidential = 0
-      for (const action of list) {
-        if (action.deadLetter || action.nextAt > t) continue
-        // Never process if the meeting is confidential — checked on every tick, not only at enqueue time,
-        // so this holds even if a future caller ever mutates payload/confidential after enqueueing.
+      const results: ProcessIdResult[] = []
+      for (const action of [...list]) {
+        if (onlyIds) {
+          if (!onlyIds.has(action.id)) continue
+        } else if (action.deadLetter || action.nextAt > t) {
+          continue
+        }
         if (isConfidential(action)) {
           skippedConfidential++
           auditLog('mcp.push.skipped_confidential', { kind: action.kind, action: action.action })
+          results.push({
+            id: action.id,
+            ok: false,
+            error: 'confidential',
+            deadLetter: !!action.deadLetter,
+            attempts: action.attempts,
+            skippedConfidential: true
+          })
           continue
         }
         processed++
@@ -228,10 +267,16 @@ export function createPushQueue(deps: PushQueueDeps = {}): PushQueue {
           succeeded++
           const idx = list.indexOf(action)
           if (idx !== -1) list.splice(idx, 1)
+          results.push({
+            id: action.id,
+            ok: true,
+            deadLetter: false,
+            attempts: action.attempts,
+            skippedConfidential: false,
+            result: result.result
+          })
           continue
         }
-        // Coerce before increment — a corrupt in-memory attempts (should be impossible after sanitize,
-        // but defend the hot path anyway) must never become NaN and retry forever.
         const prev = Number.isFinite(action.attempts) ? action.attempts : 0
         action.attempts = prev + 1
         action.lastError = result.error
@@ -243,19 +288,63 @@ export function createPushQueue(deps: PushQueueDeps = {}): PushQueue {
           action.nextAt = now() + backoffFor(action.attempts)
           auditLog('mcp.push.retried', { kind: action.kind, action: action.action, attempts: action.attempts })
         }
+        results.push({
+          id: action.id,
+          ok: false,
+          error: result.error,
+          deadLetter: !!action.deadLetter,
+          attempts: action.attempts,
+          skippedConfidential: false
+        })
       }
       save()
-      return { processed, succeeded, deadLettered, skippedConfidential }
+      return { processed, succeeded, deadLettered, skippedConfidential, results }
     } finally {
       processing = false
     }
+  }
+
+  async function processDue(
+    pushFn: (action: OutboundAction) => Promise<PushResult>
+  ): Promise<ProcessDueResult> {
+    const r = await runBatch(pushFn, null)
+    return {
+      processed: r.processed,
+      succeeded: r.succeeded,
+      deadLettered: r.deadLettered,
+      skippedConfidential: r.skippedConfidential
+    }
+  }
+
+  async function processIds(
+    ids: string[],
+    pushFn: (action: OutboundAction) => Promise<PushResult>
+  ): Promise<ProcessDueResult & { results: ProcessIdResult[] }> {
+    return runBatch(pushFn, new Set(ids.filter(Boolean)))
+  }
+
+  function get(id: string): OutboundAction | undefined {
+    return load().find((a) => a.id === id)
+  }
+
+  function requeue(id: string): OutboundAction | null {
+    const list = load()
+    const action = list.find((a) => a.id === id)
+    if (!action) return null
+    if (isConfidential(action)) return null
+    delete action.deadLetter
+    action.attempts = 0
+    action.nextAt = now()
+    save()
+    auditLog('mcp.push.operator_requeue', { kind: action.kind, action: action.action })
+    return action
   }
 
   function pending(): OutboundAction[] {
     return [...load()]
   }
 
-  return { enqueue, processDue, pending }
+  return { enqueue, processDue, processIds, get, requeue, pending }
 }
 
 /** Process-wide singleton — the queue main/index.ts's mcp:push handler and the retry timer both use. */

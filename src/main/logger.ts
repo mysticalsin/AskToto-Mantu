@@ -227,6 +227,7 @@ export type AuditEvent =
   | 'mcp.push.retried'
   | 'mcp.push.dead_letter'
   | 'mcp.push.skipped_confidential'
+  | 'mcp.push.operator_requeue'
   | 'local.runtime.start'
   | 'local.runtime.stop'
   | 'local.runtime.crash'

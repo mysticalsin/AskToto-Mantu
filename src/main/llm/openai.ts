@@ -1,12 +1,35 @@
 import OpenAI from 'openai'
 import type { AskStart } from '@shared/ipc'
+import { isOpenAICloudCacheEligible, mapOpenAIUsage, unsupportedCacheUsage } from '@shared/operator'
 import { PROVIDERS, requiresUserBaseUrl, type ProviderId } from '@shared/providers'
 import { type StreamOptions, type StreamHandle, errMsg, idleWatchdog, userText, imageMime, VISION_GUARD } from './shared'
 import { noteHeadroomFromHeaders, type HeaderBag } from './usage-headroom'
 
+/** Endpoints that 400'd on prompt-cache fields. Retry without them and stay stripped. */
+const cacheUnsupported = new Set<string>()
+
+export function resetOpenAICacheSupportForTests(): void {
+  cacheUnsupported.clear()
+}
+
+export function markOpenAICacheUnsupportedForTests(endpoint: string): void {
+  cacheUnsupported.add(endpoint)
+}
+
+function cacheEndpointKey(opts: StreamOptions): string {
+  return `${opts.providerId}::${opts.baseURL || 'api.openai.com'}`
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any */
-function openaiMessages(req: AskStart, system: string): any[] {
-  const msgs: any[] = [{ role: 'system', content: system }]
+function openaiMessages(req: AskStart, system: string, breakpoint = false, cachedPrefix?: string, volatile?: string): any[] {
+  const systemContent =
+    breakpoint && cachedPrefix !== undefined
+      ? [
+          { type: 'text', text: cachedPrefix, prompt_cache_breakpoint: true },
+          ...(volatile ? [{ type: 'text', text: volatile }] : [])
+        ]
+      : system
+  const msgs: any[] = [{ role: 'system', content: systemContent }]
   for (const t of req.history) msgs.push({ role: t.role, content: t.content })
   const text = userText(req)
   if (req.mode === 'vision' && req.image) {
@@ -50,6 +73,17 @@ function isReasoningEffortRejection(e: unknown): boolean {
 function isResponseFormatRejection(e: unknown): boolean {
   const body = rejectionBody(e)
   return !!body && (body.includes('response_format') || body.includes('json_schema') || body.includes('grammar'))
+}
+function isPromptCacheRejection(e: unknown): boolean {
+  const body = rejectionBody(e)
+  return (
+    !!body &&
+    (body.includes('prompt_cache') ||
+      body.includes('cache_key') ||
+      body.includes('prompt_cache_key') ||
+      body.includes('prompt_cache_options') ||
+      body.includes('prompt_cache_breakpoint'))
+  )
 }
 
 /** Resolve the completion ceiling without changing established cloud-provider budgets. */
@@ -103,15 +137,25 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
 
     // Inner function: build params + run the streaming loop. `includeUsage` controls whether
     // stream_options.include_usage is sent — some providers 400 on it, triggering a retry without it.
+    const wantCache =
+      isOpenAICloudCacheEligible(opts.providerId, opts.kind, !!opts.llamaSlotOptions) &&
+      !cacheUnsupported.has(cacheEndpointKey(opts))
     const doStream = async (
       includeUsage: boolean,
       includeEffort: boolean,
-      includeResponseFormat = true
-    ): Promise<{ inputTokens?: number; outputTokens?: number; sawReasoning: boolean; sawContent: boolean }> => {
+      includeResponseFormat = true,
+      includePromptCache = wantCache
+    ): Promise<{ usage: ReturnType<typeof mapOpenAIUsage>; sawReasoning: boolean; sawContent: boolean }> => {
+      const cachedPrefix = opts.systemParts?.cachedPrefix ?? opts.system
+      const volatile = opts.systemParts?.volatile ?? ''
       const params: any = {
         model: opts.model,
         stream: true,
-        messages: openaiMessages(opts.req, opts.system)
+        messages: openaiMessages(opts.req, opts.system, includePromptCache, cachedPrefix, volatile)
+      }
+      if (includePromptCache) {
+        if (opts.promptCacheKey) params.prompt_cache_key = opts.promptCacheKey
+        params.prompt_cache_options = { mode: 'explicit', ttl: '30m' }
       }
       // Ask the provider to include token usage in the final stream chunk (else onDone reports blank).
       // Omitted on retry when the provider rejected it (isStreamOptionsRejection).
@@ -144,7 +188,7 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
 
       type ChatStream = AsyncIterable<{
         choices?: { delta?: { content?: string; reasoning_content?: string } }[]
-        usage?: { prompt_tokens?: number; completion_tokens?: number }
+        usage?: unknown
       }>
       const apiCall = client.chat.completions.create(params, { signal: controller.signal })
       // Budget pre-emption: snapshot the provider's rate-limit headers (returned on EVERY response,
@@ -162,7 +206,7 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
       } else {
         stream = (await apiCall) as unknown as ChatStream
       }
-      let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined
+      let usage: unknown
       let sawReasoning = false
       let sawContent = false
       for await (const chunk of stream) {
@@ -180,33 +224,45 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
           sawContent = true
           opts.handlers.onDelta(d)
         }
-        const u = (chunk as { usage?: typeof usage }).usage
+        const u = (chunk as { usage?: unknown }).usage
         if (u) usage = u
       }
-      return { inputTokens: usage?.prompt_tokens, outputTokens: usage?.completion_tokens, sawReasoning, sawContent }
+      const mapped = includePromptCache ? mapOpenAIUsage(usage) : unsupportedCacheUsage(
+        (usage as { prompt_tokens?: number } | undefined)?.prompt_tokens,
+        (usage as { completion_tokens?: number } | undefined)?.completion_tokens
+      )
+      return { usage: mapped, sawReasoning, sawContent }
     }
 
     try {
-      let usageResult: { inputTokens?: number; outputTokens?: number; sawReasoning: boolean; sawContent: boolean }
-      // Both optional params are sent first; on a param rejection, drop ONLY the one the provider named,
-      // then (if the retry trips the other) drop both. Never drop a param the provider actually accepted —
-      // that's what silently killed reasoning_effort when only stream_options was rejected. Parameter
-      // rejections arrive before any content, so re-running the stream can't duplicate output.
+      let usageResult: { usage: ReturnType<typeof mapOpenAIUsage>; sawReasoning: boolean; sawContent: boolean }
+      // Optional params are sent first; on a param rejection, drop ONLY the one the provider named.
+      // Prompt-cache fields join the same ladder: a 400 strips them once and marks the endpoint
+      // unsupported so later asks do not keep paying the extra round trip.
       try {
-        usageResult = await doStream(true, true)
+        usageResult = await doStream(true, true, true, wantCache)
       } catch (e1) {
         if (controller.signal.aborted) throw e1
         const dropUsage = isStreamOptionsRejection(e1)
         const dropEffort = isReasoningEffortRejection(e1)
         const dropFormat = isResponseFormatRejection(e1)
-        if (!dropUsage && !dropEffort && !dropFormat) throw e1
+        const dropCache = isPromptCacheRejection(e1)
+        if (!dropUsage && !dropEffort && !dropFormat && !dropCache) throw e1
+        if (dropCache) cacheUnsupported.add(cacheEndpointKey(opts))
         try {
-          usageResult = await doStream(!dropUsage, !dropEffort, !dropFormat)
+          usageResult = await doStream(!dropUsage, !dropEffort, !dropFormat, wantCache && !dropCache)
         } catch (e2) {
           if (controller.signal.aborted) throw e2
-          if (!isStreamOptionsRejection(e2) && !isReasoningEffortRejection(e2) && !isResponseFormatRejection(e2))
+          const dropCache2 = isPromptCacheRejection(e2)
+          if (dropCache2) cacheUnsupported.add(cacheEndpointKey(opts))
+          if (
+            !isStreamOptionsRejection(e2) &&
+            !isReasoningEffortRejection(e2) &&
+            !isResponseFormatRejection(e2) &&
+            !dropCache2
+          )
             throw e2
-          usageResult = await doStream(false, false, false)
+          usageResult = await doStream(false, false, false, false)
         }
       }
       wd.clear()
@@ -218,8 +274,7 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
         opts.handlers.onError('The model produced only reasoning and no answer — try again or raise the token budget.')
         return
       }
-      // Report real usage only if the provider included it; never a fabricated chunk count.
-      opts.handlers.onDone({ inputTokens: usageResult.inputTokens, outputTokens: usageResult.outputTokens })
+      opts.handlers.onDone(usageResult.usage)
     } catch (e) {
       wd.clear()
       if (controller.signal.aborted) return

@@ -505,7 +505,7 @@ export function streamDust(opts: StreamOptions): StreamHandle {
         if (!settled) {
           settled = true
           wd.clear()
-          opts.handlers.onDone({})
+          opts.handlers.onDone({ cacheStatus: 'n/a' })
         }
         return
       }
@@ -513,7 +513,7 @@ export function streamDust(opts: StreamOptions): StreamHandle {
     if (!settled) {
       settled = true
       wd.clear()
-      opts.handlers.onDone({})
+      opts.handlers.onDone({ cacheStatus: 'n/a' })
     }
   }
   void (async () => {

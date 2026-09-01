@@ -13,14 +13,17 @@ function sliceBetween(from: string, to: string): string {
 }
 
 describe('AUDIT-10 — askStart never forwards Error.message to the overlay', () => {
-  it('the outer catch sends a constant sentence', () => {
+  it('the outer catch sends a constant sentence except for skill-lock integrity', () => {
+    const start = indexSrc.lastIndexOf('ipcMain.handle(IPC.askStart')
     const end = indexSrc.indexOf('ipcMain.handle(IPC.askCancel')
-    expect(end).toBeGreaterThan(-1)
-    const body = indexSrc.slice(end - 280, end)
-    expect(body).toMatch(/\} catch \{/)
-    expect(body).toMatch(/message: 'Could not start the answer\.'/)
-    expect(body).not.toMatch(/e\.message/)
-    expect(body).not.toMatch(/instanceof Error/)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    const body = indexSrc.slice(start, end)
+    const catchBlock = body.slice(body.lastIndexOf('} catch (err)'))
+    expect(catchBlock).toMatch(/isModeSkillIntegrityError\(err\)/)
+    expect(catchBlock).toMatch(/'Could not start the answer\.'/)
+    expect(catchBlock).not.toMatch(/e\.message/)
+    expect(catchBlock).toMatch(/\? err instanceof Error\s*\? err\.message/)
   })
 })
 
@@ -62,6 +65,8 @@ describe('AUDIT-10 — outbound IPC caps sit in front of the network', () => {
     const push = sliceBetween('ipcMain.handle(IPC.mcpPush', 'ipcMain.handle(IPC.mcpClickupConnect')
     expect(push).toMatch(/denyIfLimited\('mcp-outbound'\)/)
     expect(push).toMatch(/const conn = s\.mcpConnections\.find/)
+    expect(push.indexOf('skipped_confidential')).toBeLessThan(push.indexOf('recordOperatorCrmSend'))
+    expect(push.indexOf('skipped_confidential')).toBeLessThan(push.indexOf('pushQueue.enqueue'))
 
     const cal = sliceBetween('ipcMain.handle(IPC.calendarToday', 'ipcMain.handle(IPC.recallRead')
     expect(cal).toMatch(/denyIfLimited\('graph-calendar'\)/)
