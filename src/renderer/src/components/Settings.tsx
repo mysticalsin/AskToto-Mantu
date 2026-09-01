@@ -2265,24 +2265,12 @@ function CliIntegration({
     await continueAfterBinary(id, detected.version ?? null, true)
   }
 
-  // One Connect click: detect → (consent+install if missing) → login if signed out → live.
-  // Already installed + live is detect + switch. Never a billed one-turn probe.
-  const connect = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
+  // Labeled Connect (Cloud CLI and Codex): always the full runInstall path.
+  // Approve first, then Continue → cliInstall (no-op if present) → login if signed out → live.
+  // Never a re-test-only badge (no billed one-turn probe, no detect+switch skip).
+  const connect = (id: 'claude-cli' | 'codex-cli'): void => {
     connectGenRef.current += 1
-    setState(id, { phase: 'connecting', msg: 'Checking…', version: null })
-    const detected = await window.toto.cliDetect(id)
-    const first = nextCliConnectStep({
-      binaryPresent: detected.ok,
-      session: null,
-      installAttempted: false,
-      installOk: null,
-      loginAttempted: false
-    })
-    if (first.action === 'install') {
-      setState(id, { phase: 'confirming', msg: null, version: null })
-      return
-    }
-    await continueAfterBinary(id, detected.version ?? null, false)
+    setState(id, { phase: 'confirming', msg: null, version: null })
   }
 
   const cancel = (id: 'claude-cli' | 'codex-cli'): void => {
@@ -2328,8 +2316,8 @@ function CliIntegration({
         : 'Routes questions through your local OpenAI Codex CLI install. Uses your ChatGPT or API account.'
     const confirmMsg =
       id === 'claude-cli'
-        ? 'Métis will install the official Claude Code CLI on this device. Approve to continue. No silent install.'
-        : 'Métis will install the official OpenAI Codex CLI on this device. Approve to continue. No silent install.'
+        ? 'Métis will install the official Claude Code CLI if it is missing, then sign you in. Approve to continue. No silent install.'
+        : 'Métis will install the official OpenAI Codex CLI if it is missing, then sign you in. Approve to continue. No silent install.'
 
     return (
       <div

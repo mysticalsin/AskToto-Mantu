@@ -360,23 +360,32 @@ describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', ()
 
 describe('Cloud CLI + Codex CLI one-click Connect', () => {
   const cli = (): string => blockAfter('function CliIntegration(', '\nfunction McpConnectionCard(')
-  const connect = (): string => blockAfter('const connect = async (id: \'claude-cli\' | \'codex-cli\')', 'const cancel =')
+  const connect = (): string => blockAfter('const connect = (id: \'claude-cli\' | \'codex-cli\')', 'const cancel =')
   const install = (): string =>
-    blockAfter('const runInstall = async (id: \'claude-cli\' | \'codex-cli\')', 'const connect = async')
+    blockAfter('const runInstall = async (id: \'claude-cli\' | \'codex-cli\')', 'const connect = (id:')
 
-  it('missing binary triggers the install path after consent, not a Connected badge', () => {
-    const body = connect()
-    expect(body).toMatch(/window\.toto\.cliDetect\(id\)/)
-    expect(body).toMatch(/nextCliConnectStep/)
+  it('labeled Connect is approve, then the runInstall path — not a re-test-only badge', () => {
+    const body = connect().replace(/^\s*\/\/.*$/gm, '')
     expect(body).toMatch(/phase: 'confirming'/)
-    expect(install()).toMatch(/window\.toto\.cliInstall\(id/)
+    expect(body).not.toMatch(/cliTest/)
+    expect(body).not.toMatch(/cliDetect/)
+    expect(body).not.toMatch(/continueAfterBinary/)
+    const copy = cli().replace(/^\s*\/\/.*$/gm, '')
+    expect(copy).toMatch(/onClick=\{\(\) => void connect\(id\)\}/)
+    expect(copy).toMatch(/onClick=\{\(\) => void runInstall\(id\)\}/)
+    expect(copy).toMatch(/isConnected \? 'Reconnect' : 'Connect'/)
+    expect(copy).not.toMatch(/Set up automatically/)
   })
 
-  it('Connect never bills — detect + checkCliSession only, never testCli', () => {
+  it('missing binary triggers install on the runInstall path', () => {
+    expect(install()).toMatch(/window\.toto\.cliInstall\(id/)
+    expect(install()).toMatch(/nextCliConnectStep/)
+  })
+
+  it('Connect never bills — runInstall uses checkCliSession, never testCli', () => {
     const body = cli().replace(/^\s*\/\/.*$/gm, '')
     expect(body).toMatch(/window\.toto\.cliCheckSession\(id\)/)
     expect(body).not.toMatch(/cliTest/)
-    expect(connect().replace(/^\s*\/\/.*$/gm, '')).not.toMatch(/cliTest/)
     expect(install().replace(/^\s*\/\/.*$/gm, '')).not.toMatch(/cliTest/)
   })
 
@@ -385,11 +394,5 @@ describe('Cloud CLI + Codex CLI one-click Connect', () => {
     expect(body).toMatch(/cliConnectPatchIfLive\(id, cliConnected, session\)/)
     expect(body).not.toMatch(/connectCliSession\(/)
     expect(body).not.toMatch(/patch\(\{ provider: id \}\)/)
-  })
-
-  it('idle primary is Connect (both CLIs), not Set up automatically', () => {
-    const copy = cli().replace(/^\s*\/\/.*$/gm, '')
-    expect(copy).toMatch(/isConnected \? 'Reconnect' : 'Connect'/)
-    expect(copy).not.toMatch(/Set up automatically/)
   })
 })
