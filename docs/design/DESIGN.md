@@ -111,3 +111,6 @@ See [THINKING-ORB.md](./THINKING-ORB.md). Caption then sphere. Word first.
 
 ## Bar pill
 See [BAR-PILL.md](./BAR-PILL.md). Jarvis orb is Bar-minimized only. Not stuffed into overlay Hide/Island.
+
+## Dust Connect
+See [DUST-CONNECT.md](./DUST-CONNECT.md). One Mac/Windows consent. After Connect, installed = live. Overlay and pack stay out.
