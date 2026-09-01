@@ -62,6 +62,8 @@ Tony only. Cloudflare Access allowlist:
 
 Regular users never see this console.
 
+Live `workers.dev` does not wrap `/` in a Cloudflare Access redirect today. The Worker itself must serve the login HTML so Tony can open the console. Access JWT remains a valid second identity path. Do not weaken the allowlist.
+
 ## What this is not
 
 | Surface | Job |
@@ -78,7 +80,9 @@ New tree: `operator/`. Worker name: `metis-operator`. Account already in use: `t
 
 ## Security (hard)
 
-1. **Admin UI + `/v1/admin/*`.** Cloudflare Access. Worker also verifies identity via `ctx.access.getIdentity()` and/or `Cf-Access-Jwt-Assertion` JWKS. If Access did not run, admin routes return 401. No homemade password page. No `LICENSE_ADMIN_TOKEN` for this UI.
+1. **Admin UI (`/` and hash routes).** First paint is never JSON. An unauthenticated browser GET of `/` (including `/#events`, `/#profiles`, `/#realtime`) serves the Operator **login HTML** (email + password). Allowlist stays `tony.walteur@gmail.com` and `twalteur@amaris.com`. Password is the Wrangler secret `OPERATOR_ADMIN_PASSWORD`. Successful login sets an HttpOnly session cookie (HMAC over email + expiry, signed with that secret). The console HTML (sidebar, map, events, profiles, realtime) loads only after Access identity **or** a valid session. Cloudflare Access JWT (`ctx.access.getIdentity()` / `Cf-Access-Jwt-Assertion`) still counts as identity when present. Do not open the console unauthenticated. No `LICENSE_ADMIN_TOKEN`.
+
+   **JSON 401** (`{"ok":false,"error":"Access required"}`) is only for API/JSON requests when identity is missing: `Accept: application/json` (and no HTML), or any `/v1/*` path (admin APIs and ingest). Ingest still requires HMAC; a missing Access session does not unlock ingest.
 
 2. **Device ingest.** `POST /v1/ingest`, `POST /v1/heartbeat`, `GET /v1/skills/manifest` are not behind Access. HMAC-SHA256: timestamp + nonce + deviceId + body hash, secret `OPERATOR_INGEST_SECRET`. Reject skew greater than 5 minutes. Rate limit per device. Replay nonce window.
 
@@ -88,7 +92,7 @@ New tree: `operator/`. Worker name: `metis-operator`. Account already in use: `t
 
 5. **No secrets in git, logs, PR bodies, or the Events page.** Wrangler secrets only. Do not commit test private keys. Events HTML must never render a token-shaped string (JWT, `Bearer`, `sk-`, 64-char hex HMAC, long base64). Fail the tests if one appears.
 
-6. **Path split.** Access protects `/` and `/v1/admin/*`. Ingest stays HMAC-only. Do not enable "Protect this Worker" for all traffic.
+6. **Path split.** Browser `/` is the login or the console. `/v1/admin/*` stays API (JSON, identity required). Ingest stays HMAC-only. Do not enable "Protect this Worker" for all traffic (that would hide login and lock seats). Live first paint: `curl GET /` returns `text/html` login, not JSON Access required. `GET /health` stays 200. `GET /v1/admin/*` without identity stays 401 JSON.
 
 7. **Keys page.** Show presence / last4 / status only. Never cipher, iv, prompt bodies, ingest secret, skill PEM, or provider keys from the seat.
 
@@ -195,13 +199,13 @@ Tony 6:17 PM ET. After **every** Operator change, run the Operator tests **and**
 | Contract | Still true |
 | --- | --- |
 | Overlay chrome | Island / Hide / Bar files are frozen. Do not edit them from an Operator slice. |
-| Login | Cloudflare Access only. Allowlist stays `tony.walteur@gmail.com` and `twalteur@amaris.com`. `/` and `/v1/admin/*` are 401 without identity. No homemade password page. |
+| Login | Browser GET `/` without identity is `text/html` email+password login. Allowlist stays `tony.walteur@gmail.com` and `twalteur@amaris.com`. Password is `OPERATOR_ADMIN_PASSWORD`. JSON 401 only for `Accept: application/json` or `/v1/*`. Console never loads unauthenticated. |
 | Map data | Unique devices by country from Cloudflare `request.cf` only. Client `lat` / `lon` / `country` / `city` / `ip` are ignored. No GPS. No IP in the UI. No sample dots. Empty world if no devices. |
 | Token-free events | `#events` never renders a token-shaped string (JWT, `Bearer`, `sk-`, 64-char hex HMAC, long base64). Tests fail if one appears. |
 
 If a map or sidebar fix would require touching overlay chrome, **stop and report**. Do not mix slices.
 
-Gate: `npm run test:operator:quality-bar` (`scripts/operator-quality-bar.mjs`). That script (1) fails if this Operator slice also edits a frozen overlay path, (2) runs the existing Island/Hide chrome unit tests, (3) runs `npm run test:operator` (login, map contract, token-free events), (4) probes live `/` is still 401 Access required. `npm run test:operator` alone is the Worker unit suite and is what CI already chains.
+Gate: `npm run test:operator:quality-bar` (`scripts/operator-quality-bar.mjs`). That script (1) fails if this Operator slice also edits a frozen overlay path, (2) runs the existing Island/Hide chrome unit tests, (3) runs `npm run test:operator` (login, map contract, token-free events), (4) probes live `/` is `text/html` login, `/health` is 200, `/v1/admin/dashboard` is 401 JSON. `npm run test:operator` alone is the Worker unit suite and is what CI already chains.
 
 Frozen overlay chrome (do not edit from this product):
 
