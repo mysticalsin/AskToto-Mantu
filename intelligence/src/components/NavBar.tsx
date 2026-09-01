@@ -1,4 +1,5 @@
 import { NavLink } from 'react-router-dom'
+import { IntelligenceUpdateButton } from './IntelligenceUpdateButton'
 
 const links = [
   { to: '/', label: 'Today', end: true },
@@ -52,12 +53,15 @@ export function NavBar() {
         </nav>
         {/* HashRouter + file:// packaging: a root-relative href navigates the top frame to the
             filesystem root instead of the app's own route. Hash nav stays in-window and in-app. */}
-        <a
-          href="#/embed"
-          className="win-no-drag text-xs font-medium text-mantu-light hover:underline"
-        >
-          Compact embed view →
-        </a>
+        <div className="flex items-center gap-3">
+          <IntelligenceUpdateButton />
+          <a
+            href="#/embed"
+            className="win-no-drag text-xs font-medium text-mantu-light hover:underline"
+          >
+            Compact embed view →
+          </a>
+        </div>
       </div>
     </header>
   )

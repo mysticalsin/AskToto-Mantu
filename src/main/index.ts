@@ -225,7 +225,6 @@ import {
   exciseDeletedMeeting,
   markBrainChanged,
   requestBackfill,
-  hasUnextractedMeetings,
   countUnextractedMeetings,
   requestSourceRefresh,
   brainBackfillProgress,
@@ -312,7 +311,7 @@ import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine 
 import { detectLanguage as detectTextLanguage } from '@shared/lang-id'
 import type { TranscriptLine } from '@shared/ipc'
 import { pickAudioFile, consumePickedAudio, offerAudioPaths } from './import-audio'
-import { ImportJobManager, MAX_CONCURRENT_DECODES, type ImportJob } from './import-jobs'
+import { ImportJobManager, MAX_CONCURRENT_DECODES, decoderSlotIsStale, type ImportJob } from './import-jobs'
 import {
   runImportedRecap as runImportedRecapJob,
   importedTranscriptText as formatImportedTranscriptText
@@ -324,7 +323,8 @@ import {
   setIntelligenceIndexWork,
   lastIndexedAt,
   classifyIntelligenceClick,
-  NO_PROVIDER_INDEX_COPY
+  NO_PROVIDER_INDEX_COPY,
+  SIGN_IN_INDEX_COPY
 } from './brain/intelligence-index'
 import {
   ensureImportAsrAssets,
@@ -806,15 +806,38 @@ async function closeImportDecoder(jobId: string): Promise<void> {
   const ffmpeg = ffmpegDecoders.get(jobId)
   if (ffmpeg) {
     ffmpeg.cancel()
-    await ffmpeg.completed
+    await ffmpeg.completed.catch(() => {})
     ffmpegDecoders.delete(jobId)
     return
   }
-  if (!decoderWin || decoderWin.isDestroyed() || decoderJobId !== jobId) return
+  if (!decoderWin || decoderJobId !== jobId) return
+  const win = decoderWin
   closingDecoderJobId = jobId
   rejectSourceAck(new Error('Import decoder closed.'))
   rejectDecoderReady(new Error('Import decoder closed.'))
-  decoderWin.destroy()
+  // Null the singleton before destroy() finishes so pump() can start the next file. A late
+  // 'closed' handler must not see these globals and fail the newer job.
+  decoderWin = null
+  decoderJobId = null
+  decoderExpectedUrl = ''
+  if (win.isDestroyed()) {
+    closingDecoderJobId = null
+    return
+  }
+  await new Promise<void>((resolve) => {
+    let settled = false
+    const done = (): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      closingDecoderJobId = null
+      resolve()
+    }
+    const timer = setTimeout(done, 2_000)
+    win.once('closed', done)
+    win.destroy()
+    if (win.isDestroyed()) done()
+  })
 }
 
 function bundledImportFfmpeg(): string | null {
@@ -861,7 +884,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
     for (const [id, stale] of ffmpegDecoders) {
       if (id === job.jobId) continue
       const staleState = importJobs?.get(id)?.state
-      if (staleState === 'failed' || staleState === 'cancelled' || staleState === 'done' || staleState === undefined) {
+      if (decoderSlotIsStale(staleState)) {
         stale.cancel()
         ffmpegDecoders.delete(id)
       }
@@ -905,7 +928,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
   // behind it, dies with a false "Another audio decoder is already active."
   if (decoderWin && !decoderWin.isDestroyed() && decoderJobId && decoderJobId !== job.jobId) {
     const staleState = importJobs?.get(decoderJobId)?.state
-    if (staleState === 'failed' || staleState === 'cancelled' || staleState === 'done' || staleState === undefined) {
+    if (decoderSlotIsStale(staleState)) {
       await closeImportDecoder(decoderJobId)
     }
   }
@@ -1158,16 +1181,25 @@ async function recapMissingMeetingSummaries(): Promise<number> {
   return n
 }
 
+function intelligenceDashboardIsEmpty(): boolean {
+  const s = getSettings()
+  const idx = readBrainIndex(s)
+  const counts = brainStatusCounts(s, idx.revision)
+  return counts.people === 0 && counts.accounts === 0 && counts.deals === 0
+}
+
 function wireIntelligenceIndexWork(): void {
-  setIntelligenceIndexWork(async () => {
-    const recapped = await recapMissingMeetingSummaries()
+  setIntelligenceIndexWork(async (reason) => {
+    const recapP = recapMissingMeetingSummaries()
     const r = requestBackfill({ force: true })
     const savedMeetings = (await listMeetings()).filter((m) => !m.locked).length
     const unextracted = countUnextractedMeetings()
-    let result = { ...r, ran: true, recapped }
+    const emptyDashboard = intelligenceDashboardIsEmpty()
+    let result = { ...r, ran: true, recapped: 0 }
     const verdict = classifyIntelligenceClick({
       savedMeetings,
       unextracted,
+      emptyDashboard,
       queued: result.queued,
       preparing: result.preparing,
       deferred: result.deferred,
@@ -1178,14 +1210,31 @@ function wireIntelligenceIndexWork(): void {
       result = {
         ...forced,
         ran: true,
-        recapped,
-        preparing: forced.queued > 0 || forced.preparing || hasUnextractedMeetings()
+        recapped: 0,
+        preparing: true,
+        upToDate: false
       }
     }
     if (result.deferred === 'no-provider') {
-      return { ...result, error: NO_PROVIDER_INDEX_COPY, recapped }
+      void recapP.catch((e) =>
+        mainLog.error('[intelligence-index] background recap failed:', e instanceof Error ? e.message : e)
+      )
+      return { ...result, error: NO_PROVIDER_INDEX_COPY, recapped: 0 }
     }
-    return result
+    // Click and import-idle must not wait on sequential recaps — extract starts now; recap writes
+    // in the background. Named slots can afford to await the summaries.
+    if (reason === 'click' || reason === 'import-idle') {
+      void recapP
+        .then((n) => {
+          if (n) mainLog.info(`[intelligence-index] background recap wrote ${n} summary(ies)`)
+        })
+        .catch((e) =>
+          mainLog.error('[intelligence-index] background recap failed:', e instanceof Error ? e.message : e)
+        )
+      return result
+    }
+    const recapped = await recapP
+    return { ...result, recapped }
   })
 }
 
@@ -5570,7 +5619,7 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.brainBackfill, async (e) => {
     assertBrainReader(e)
-    if (!requireAuth()) throw new Error('Sign in with your Mantu account first.')
+    if (!requireAuth()) return { ran: false, queued: 0, error: SIGN_IN_INDEX_COPY }
     const r = await runIntelligenceIndex('click')
     auditLog('brain.backfill.start', { queued: r.queued, recapped: r.recapped, reason: 'click' })
     return r
