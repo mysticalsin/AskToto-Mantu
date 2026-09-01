@@ -19,6 +19,8 @@ import { TextButton } from './ui'
 import { AgentStatus, InlineOrb } from './AgentStatus'
 import { WorkProgressMeter } from './WorkProgressMeter'
 import { describeMeetingIndexProgress } from './work-progress'
+import { IntelligenceUpdateButton } from './IntelligenceUpdateButton'
+import { runIntelligenceUpdateClick } from '../lib/intelligence-update'
 import { accelLabel } from '../lib/keys'
 import { ImportQueue } from './ImportQueue'
 import { isImportDropFile, pickedFiles, skippedImportMessage } from './import-queue'
@@ -193,22 +195,13 @@ function GraphBar({
     setError(null)
     setNoProvider(false)
     try {
-      const result = await window.toto.brainBackfill()
-      if (result.deferred === 'no-provider' || result.error) {
-        // Main already OR's in the local safety net (ingest.ts's pickProviderCandidates appends the
-        // on-device model as a last candidate when localLlm.fallback is on) — this deferral only ever
-        // fires when NEITHER a cloud/CLI provider NOR local fallback is usable, so the message stays
-        // accurate without the renderer re-deriving readiness itself.
-        setError(
-          result.error ||
-            'Connect an AI provider in Settings → AI, or enable Métis Local there to index meetings on this device.'
-        )
-        setNoProvider(result.deferred === 'no-provider' || /provider/i.test(result.error || ''))
+      const { error: clickError } = await runIntelligenceUpdateClick(() => window.toto.brainBackfill())
+      if (clickError) {
+        setError(clickError)
+        setNoProvider(/provider/i.test(clickError))
         return
       }
       setBrain(await window.toto.brainStatus())
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
     }
@@ -276,14 +269,12 @@ function GraphBar({
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {noProvider && onOpenSettings && <TextButton onClick={onOpenSettings}>Open Settings</TextButton>}
-          <TextButton
-            onClick={() => void backfill()}
+          <IntelligenceUpdateButton
+            variant="text"
+            updating={updating}
             disabled={busy}
-            title="Recap missing summaries and extract people, accounts, deals, coaching, and Today"
-          >
-            {updating ? <InlineOrb kind="searching" /> : <RefreshCw size={11} />}
-            {updating ? 'Updating…' : 'Update Intelligence'}
-          </TextButton>
+            onClick={() => void backfill()}
+          />
           <TextButton onClick={() => void openDashboard()} title="Open the Mantu Intelligence dashboard">
             <ExternalLink size={11} /> Mantu Intelligence
           </TextButton>

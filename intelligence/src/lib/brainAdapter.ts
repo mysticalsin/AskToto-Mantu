@@ -154,7 +154,7 @@ declare global {
     intelligence?: {
       getData: () => Promise<BrainRead>
       getStatus: () => Promise<unknown>
-      backfill: () => Promise<{ queued: number }>
+      backfill: () => Promise<{ queued: number; deferred?: string; preparing?: boolean; error?: string }>
       runPass?: () => Promise<{ queued: number; error?: string; upToDate?: boolean }>
       // Dashboard suggestion accept/dismiss (deferred CRM pattern 3) — see src/preload/intelligence.ts
       // in the host app for the real signature this mirrors.

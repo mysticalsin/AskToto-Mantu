@@ -25,10 +25,15 @@ export type IntelligenceIndexReason = 'click' | 'schedule' | 'catch-up' | 'impor
 export const NO_PROVIDER_INDEX_COPY =
   'Connect an AI provider in Settings → AI, or enable Métis Local there to index meetings on this device.'
 
-/** Click contract: unextracted meetings must queue work or preparing, never a silent upToDate. */
+export const SIGN_IN_INDEX_COPY = 'Sign in with your Mantu account first.'
+
+/** Click contract: unextracted meetings or an empty Today/coaching/relationships dashboard
+ *  with saved meetings must queue work or preparing, never a silent upToDate. */
 export function classifyIntelligenceClick(input: {
   savedMeetings: number
   unextracted?: number
+  /** True when people + accounts + deals (Today / coaching / relationships inputs) are all empty. */
+  emptyDashboard?: boolean
   queued: number
   preparing?: boolean
   deferred?: string
@@ -39,7 +44,8 @@ export function classifyIntelligenceClick(input: {
   if (input.deferred === 'no-provider') return 'no-provider'
   if (input.queued > 0 || input.preparing) return 'working'
   const unextracted = input.unextracted ?? 0
-  if (unextracted > 0 && (input.upToDate || input.queued === 0)) return 'illegal-empty'
+  const emptyBrain = unextracted > 0 || (input.savedMeetings > 0 && input.emptyDashboard === true)
+  if (emptyBrain && (input.upToDate || input.queued === 0)) return 'illegal-empty'
   return 'upToDate'
 }
 
@@ -204,14 +210,14 @@ export async function runIntelligenceIndex(
   try {
     const work = indexWork
     if (!work) {
-      const result = startBackfill()
+      const result = startBackfill(undefined, { force: true })
       if (result.deferred === 'no-provider') {
         mainLog.error('[intelligence-index] no AI provider is configured; index pass cannot extract meetings')
         await writeIntelligenceIndexState({
           lastSuccessAt: readIntelligenceIndexState(s).lastSuccessAt,
           lastError: 'No AI provider is configured to index meetings.'
         }, s)
-        return { ...result, ran: false, error: 'Connect an AI provider in Settings → AI, or enable Métis Local there to index meetings on this device.', lastIndexedAt: lastIndexedAt(s) }
+        return { ...result, ran: false, error: NO_PROVIDER_INDEX_COPY, lastIndexedAt: lastIndexedAt(s) }
       }
       const now = Date.now()
       await writeIntelligenceIndexState({ lastSuccessAt: now }, s)

@@ -14,7 +14,6 @@ import {
   FileWarning,
   HelpCircle,
   Minus,
-  RefreshCw,
   Timer,
   TrendingUp,
   Users,
@@ -41,11 +40,7 @@ import { shouldAutoBackfill } from './brain-auto'
 import { brainStatusPollInterval, shouldRefreshAfterBrainStatus } from './brain-status-refresh'
 import { describeMeetingIndexProgress } from './work-progress'
 import { IntelligenceUpdateButton } from './IntelligenceUpdateButton'
-import {
-  INTELLIGENCE_PASS_EMPTY,
-  INTELLIGENCE_PASS_NO_PROVIDER,
-  startIntelligenceUpdateFromClick
-} from '@shared/intelligence-pass'
+import { NO_PROVIDER_INDEX_COPY, runIntelligenceUpdateClick } from '../lib/intelligence-update'
 
 /**
  * Mantu Intelligence — the second-brain dashboard over the meeting knowledge store (.brain/).
@@ -630,32 +625,12 @@ export function BrainView({
     setBackfilling(true)
     setError(null)
     try {
-      const result = await window.toto.brainBackfill()
-      if (result.deferred === 'no-provider' || result.error) {
-        setError(
-          result.error ||
-            'Connect an AI provider in Settings → AI, or enable Métis Local there to index meetings on this device.'
-        )
+      const { error: clickError } = await runIntelligenceUpdateClick(() => window.toto.brainBackfill())
+      if (clickError) {
+        setError(clickError)
         return
       }
       await refresh()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBackfilling(false)
-    }
-  }, [refresh])
-
-  const runIntelligencePass = useCallback(async (): Promise<void> => {
-    setBackfilling(true)
-    try {
-      await startIntelligenceUpdateFromClick({
-        runPass: () => window.toto.brainIntelligencePass(),
-        refresh,
-        setError
-      })
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBackfilling(false)
     }
@@ -828,19 +803,10 @@ export function BrainView({
           </div>
         </div>
         <IntelligenceUpdateButton
-          running={backfilling || statusWorking}
-          onClick={() => void runIntelligencePass()}
-        />
-        <button
-          type="button"
-          onClick={() => void startBackfill()}
+          updating={backfilling || statusWorking}
           disabled={backfilling}
-          title="Recap missing summaries and extract people, accounts, deals, coaching, and Today"
-          className="no-drag focus-ring flex h-7 items-center gap-1 rounded-lg px-2 text-[11px] font-semibold text-[color:var(--color-ink-2)] hover:bg-white/[0.06] hover:text-[color:var(--color-ink)] disabled:opacity-50"
-        >
-          {backfilling || statusWorking ? <InlineOrb kind="searching" /> : <RefreshCw size={13} />}
-          {backfilling || statusWorking ? 'Updating…' : 'Update Intelligence'}
-        </button>
+          onClick={() => void startBackfill()}
+        />
       </div>
 
       {error && (
@@ -876,14 +842,14 @@ export function BrainView({
                   {failuresExpanded ? 'Hide' : 'Details'}
                 </button>
               )}
-              <button
-                type="button"
-                onClick={() => void startBackfill()}
+              <IntelligenceUpdateButton
+                variant="retry"
+                idleLabel="Retry index"
+                updating={backfilling || statusWorking}
                 disabled={backfilling}
-                className="no-drag focus-ring shrink-0 rounded-full bg-white/[0.08] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-white/[0.14] disabled:opacity-50"
-              >
-                Retry index
-              </button>
+                onClick={() => void startBackfill()}
+                title="Retry the Intelligence index"
+              />
             </span>
           </div>
           {failuresExpanded && (status?.failedDetails?.length ?? 0) > 0 && (
@@ -933,18 +899,19 @@ export function BrainView({
           <div className="max-w-[380px] text-[12px] leading-snug text-[color:var(--color-ink-3)]">
             {meetings.length > 0
               ? 'Métis extracts people, accounts, deals, and win/loss signals from every saved transcript. Update Intelligence to run that pass now. Local AI is first, then your API if Local cannot run.'
-              : INTELLIGENCE_PASS_EMPTY}
+              : 'Save a meeting, then use Update Intelligence to build your knowledge from the transcript.'}
           </div>
           <IntelligenceUpdateButton
-            running={backfilling || statusWorking}
-            disabled={meetings.length === 0}
+            variant="accent"
+            updating={backfilling || statusWorking}
+            disabled={backfilling || meetings.length === 0}
             onClick={() => void startBackfill()}
           />
           {/* canIndex ORs in localFallbackReady — a local-only setup already indexes fine, so this must
               only claim "no provider" when NEITHER a cloud provider NOR the local safety net is live. */}
           {!canIndex && meetings.length > 0 && (
             <div className="flex flex-col items-center gap-0.5 text-[11px] text-[color:var(--color-ink-3)]">
-              <span>{INTELLIGENCE_PASS_NO_PROVIDER}</span>
+              <span>{NO_PROVIDER_INDEX_COPY}</span>
               {onOpenSettings && <TextButton onClick={onOpenSettings}>Open Settings</TextButton>}
             </div>
           )}
@@ -983,14 +950,12 @@ export function BrainView({
               </span>
               <span className="flex shrink-0 items-center gap-1">
                 {!canIndex && onOpenSettings && <TextButton onClick={onOpenSettings}>Open Settings</TextButton>}
-                <button
-                  type="button"
-                  onClick={() => void startBackfill()}
+                <IntelligenceUpdateButton
+                  variant="retry"
+                  updating={backfilling || statusWorking}
                   disabled={backfilling}
-                  className="no-drag focus-ring shrink-0 rounded-full bg-white/[0.06] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink-2)] hover:bg-white/10 disabled:opacity-50"
-                >
-                  {backfilling || statusWorking ? 'Updating…' : 'Update Intelligence'}
-                </button>
+                  onClick={() => void startBackfill()}
+                />
               </span>
             </div>
           ) : null}

@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { IMPORT_CHUNK_SECONDS, type TranscriptLine } from '@shared/ipc'
 import { vadWindowsFromPcm } from '@shared/vad'
-import { ImportJobManager, type ImportJob, type ImportJobStore } from './import-jobs'
+import { ImportJobManager, decoderSlotIsStale, type ImportJob, type ImportJobStore } from './import-jobs'
 
 class MemoryStore implements ImportJobStore {
   readonly jobs = new Map<string, ImportJob>()
@@ -908,5 +908,51 @@ describe('ImportJobManager', () => {
     await manager.releaseDecodeSlot('job-2')
     expect(manager.get('job-1')?.state).toBe('decoding')
     expect(decode).toHaveBeenCalledTimes(3)
+  })
+
+  it('decoderSlotIsStale is true for every non-decode state so recap cannot hold the next file', () => {
+    expect(decoderSlotIsStale('decoding')).toBe(false)
+    expect(decoderSlotIsStale('transcribing')).toBe(true)
+    expect(decoderSlotIsStale('saving')).toBe(true)
+    expect(decoderSlotIsStale('recapping')).toBe(true)
+    expect(decoderSlotIsStale('done')).toBe(true)
+    expect(decoderSlotIsStale('failed')).toBe(true)
+    expect(decoderSlotIsStale('cancelled')).toBe(true)
+    expect(decoderSlotIsStale('queued')).toBe(true)
+    expect(decoderSlotIsStale(undefined)).toBe(true)
+  })
+
+  it('starts job 2 the instant job 1 decode fails', async () => {
+    let n = 0
+    const decode = vi.fn(async (job: ImportJob) => {
+      if (job.jobId === 'job-1') throw new Error('decoder died')
+    })
+    const { manager } = createManager({
+      decode,
+      newId: () => `job-${++n}`
+    })
+    await manager.startMany([
+      { ...source, name: 'first.m4a' },
+      { ...source, name: 'second.wav' }
+    ])
+    expect(manager.get('job-1')?.state).toBe('failed')
+    expect(manager.get('job-2')?.state).toBe('decoding')
+    expect(decode).toHaveBeenCalledTimes(2)
+  })
+
+  it('starts job 2 after job 1 is cancelled mid-decode', async () => {
+    let n = 0
+    const { manager, decode } = createManager({
+      newId: () => `job-${++n}`
+    })
+    await manager.startMany([
+      { ...source, name: 'first.m4a' },
+      { ...source, name: 'second.wav' }
+    ])
+    expect(decode).toHaveBeenCalledTimes(1)
+    await manager.cancel('job-1')
+    expect(manager.get('job-1')?.state).toBe('cancelled')
+    expect(manager.get('job-2')?.state).toBe('decoding')
+    expect(decode).toHaveBeenCalledTimes(2)
   })
 })

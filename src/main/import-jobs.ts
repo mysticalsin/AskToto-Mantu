@@ -133,6 +133,12 @@ const LANGUAGE_VOTE_PROBES = 5
 
 const terminal = (state: ImportJobState): boolean => state === 'done' || state === 'failed' || state === 'cancelled'
 
+/** The singleton decoder may be reaped once the job is no longer in the decode phase.
+ *  Transcribing / saving / recapping must not keep the next file waiting. */
+export function decoderSlotIsStale(state: ImportJobState | undefined): boolean {
+  return state !== 'decoding'
+}
+
 function titleFromSource(name: string): string {
   const base = name.replace(/\.[^./\\]+$/, '')
   const words = base.replace(/[-_]+/g, ' ').replace(/\s+/g, ' ').trim()

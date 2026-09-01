@@ -31,7 +31,7 @@ function speechSlab(): Float32Array {
 }
 
 describe('scratch: queued import cascade (vad-v1)', () => {
-  it('hidden-window ordering: completing job A fails queued job B while its decoder is still alive', async () => {
+  it('hidden-window ordering: close the decoder then release the slot so B decodes', async () => {
     let decoderAlive = false // mirrors decoderWin lifetime in index.ts (browser-fallback decoder)
     const started: string[] = []
     const manager = new ImportJobManager({
@@ -53,18 +53,17 @@ describe('scratch: queued import cascade (vad-v1)', () => {
     const jobB = await manager.start(source('b.m4a'))
     expect(started).toEqual([jobA.jobId]) // B queued behind A
 
-    // The BROWSER-fallback decoder path closes its hidden window only AFTER finishDecoding returns
-    // (finally block) — and finishDecoding now runs the whole ASR phase, so B is pumped while A's
-    // decoder is still alive and must fail loudly rather than hang.
+    // Production importDecoderComplete closes the hidden window, then releaseDecodeSlot, then
+    // finishDecoding (ASR + recap). Recap of A must not keep B at queued.
     await manager.acceptDecodedChunk(jobA.jobId, 0, 0, speechSlab())
-    await manager.finishDecoding(jobA.jobId)
-    decoderAlive = false // closeImportDecoder runs only now (finally block)
+    decoderAlive = false
+    await manager.releaseDecodeSlot(jobA.jobId)
+    const finishing = manager.finishDecoding(jobA.jobId)
+    await finishing
 
     expect(manager.get(jobA.jobId)?.state).toBe('done')
-    const b = manager.get(jobB.jobId)
-    expect(b?.state).toBe('failed')
-    expect(b?.error).toBe('Another audio decoder is already active.')
-    expect(started).toEqual([jobA.jobId]) // B never got a decoder
+    expect(manager.get(jobB.jobId)?.state).toBe('decoding')
+    expect(started).toEqual([jobA.jobId, jobB.jobId])
   })
 
   it('ffmpeg ordering: a phase-2 ASR failure on A does NOT cascade — the slot is already free, B decodes', async () => {
