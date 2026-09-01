@@ -1,7 +1,11 @@
 import { spawn } from 'node:child_process'
 import type { DustCliImport } from '@shared/ipc'
-import { killWindowsProcessTree, resolveBin, resolveSpawnTarget } from './cli'
-import { DUST_KEYCHAIN_SERVICE, readDustSessionSecrets } from './dust-secret-store'
+import { killWindowsProcessTree, resolveBin, resolveDustBin, resolveSpawnTarget } from './cli'
+import {
+  DUST_KEYCHAIN_SERVICE,
+  peekDustSessionSecretsCache,
+  readDustSessionSecrets
+} from './dust-secret-store'
 
 
 /**
@@ -31,11 +35,14 @@ function regionToBaseUrl(region: string | null): string {
 /** Imported fields plus the bearer token (kept out of the renderer-facing DustCliImport). */
 export type DustCliSession = DustCliImport & { token?: string }
 
-export async function importDustCliSession(service: string = DUST_KEYCHAIN_SERVICE): Promise<DustCliSession> {
-  // ONE secret-store spawn (docs/design/DUST-CONNECT.md). Three sequential find-generic-password
-  // lookups each showed a Mac login-password dialog — Tony, 1 Sep 2026. Windows CredRead is the
-  // same class: one process, not three.
-  const secrets = await readDustSessionSecrets(service)
+export async function importDustCliSession(
+  service: string = DUST_KEYCHAIN_SERVICE,
+  opts?: { force?: boolean }
+): Promise<DustCliSession> {
+  // ONE secret-store spawn, then in-process cache (docs/design/DUST-CONNECT.md). Overlay-68 Mac:
+  // import, Reconnect, and the isDustReady probe each hit Keychain ACL — three passwords. After the
+  // first Allow, later callers reuse the cached session. `{ force: true }` is the 401 mint path only.
+  const secrets = await readDustSessionSecrets(service, opts)
   const token = secrets.access_token
   const workspace = secrets.workspace_sid
   const region = secrets.region
@@ -127,14 +134,24 @@ function runDustStatus(target: ReturnType<typeof resolveSpawnTarget>): Promise<v
   })
 }
 
-export async function refreshDustCliSession(): Promise<DustCliSession> {
+export async function refreshDustCliSession(opts?: { forceMint?: boolean }): Promise<DustCliSession> {
   if (refreshInflight) return refreshInflight
   if (lastRefresh && lastRefresh.session.ok && Date.now() - lastRefresh.at < REFRESH_RESULT_TTL_MS) {
     return lastRefresh.session
   }
+  // Connect / Reconnect / Settings probe: reuse the session from the first Allow. Do not spawn
+  // `dust status` (keytar ACL on the install helper / PATH dust) or a second Keychain read.
+  if (!opts?.forceMint) {
+    const cached = peekDustSessionSecretsCache()
+    if (cached?.access_token.value && cached.workspace_sid.value) {
+      const s = await importDustCliSession()
+      lastRefresh = { at: Date.now(), session: s }
+      return s
+    }
+  }
   refreshInflight = (async () => {
     try {
-      const bin = await resolveBin('dust')
+      const bin = (await resolveDustBin()) ?? (await resolveBin('dust'))
       if (bin) {
         try {
           // CI=1 suppresses the spinner / update-check UI; the timeout bounds the network round-trip.
@@ -148,7 +165,7 @@ export async function refreshDustCliSession(): Promise<DustCliSession> {
           // ignore — fall through and re-read the session regardless of exit code
         }
       }
-      const s = await importDustCliSession()
+      const s = await importDustCliSession(DUST_KEYCHAIN_SERVICE, { force: true })
       lastRefresh = { at: Date.now(), session: s }
       return s
     } finally {

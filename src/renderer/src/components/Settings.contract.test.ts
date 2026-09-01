@@ -368,9 +368,9 @@ describe('Dust Connect — one consent, installed = connected (DUST-CONNECT)', (
     expect(setup).toMatch(/dustRowCopy/)
   })
 
-  it('the labeled Connect button is Connect, not a Connected badge over a missing CLI', () => {
+  it('the primary button is Set up Dust automatically — not a Connected badge over a missing CLI', () => {
     const copy = setup.replace(/^\s*\/\/.*$/gm, '')
-    expect(copy).toMatch(/: 'Connect'/)
+    expect(copy).toMatch(/: 'Set up Dust automatically'/)
     expect(copy).toMatch(/dustCliReady && keySaved && hasWs/)
     expect(copy).toMatch(/dustRow\.headline/)
   })

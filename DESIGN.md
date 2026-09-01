@@ -110,6 +110,6 @@ Settings → Dust CLI. Overlay, Island, onboarding, Aria, and pack stay frozen. 
 
 **One consent.** Connect is one user approval on Mac (one Keychain / osascript / authorization dialog) and at most one elevation on Windows (UAC / Credential Manager). Install, `dust login`, and session import must not each spawn their own privileged child. A Connect that asks for the login password three times is a bug.
 
-**Installed = connected.** After a successful Connect, detect uses the same binary Connect just wrote (managed `userData/managed-cli/dust`, then `~/.hermes`, then PATH). Status is installed + live in the same refresh. Copy must not say Connected and "Dust CLI is not yet installed" together. A Connected badge with a missing or dead binary is a fail. Workspace after login is **Mantu** when that workspace is in the signed-in list.
+**Installed = connected.** After a successful Connect, detect uses the same binary Connect just wrote (managed `userData/managed-cli/dust`, then `~/.hermes/node/bin`, then `~/.hermes/bin`, then PATH). Status is installed + live in the same refresh. Copy must not say Connected and "Dust CLI is not yet installed" together. A Connected badge with a missing or dead binary is a fail. Workspace after login is **Mantu** when that workspace is in the signed-in list.
 
 See [`docs/design/DUST-CONNECT.md`](docs/design/DUST-CONNECT.md).

@@ -15,6 +15,7 @@ vi.mock('electron', () => ({
 // The self-contained installer is irrelevant here but is imported by cli.ts at module load.
 vi.mock('./cli-installer', () => ({
   managedCliEntry: vi.fn(() => null),
+  findManagedDustEntry: vi.fn(() => null),
   installManagedCli: vi.fn()
 }))
 

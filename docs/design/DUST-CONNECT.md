@@ -8,9 +8,9 @@ Tony (Mac, 1 Sep 2026, 5:05pm ET): Connect said Connected, then macOS asked for 
 
 1. **Connect is one sequence.** Settings Connect (or Set up Dust) runs install → login → session import under **one** consent session. It is not three privileged spawns (Electron helper, managed npm prefix / `sudo npm i -g`, `dust login`, then a separate keychain import).
 2. **One OS prompt.**
-   - macOS: at most one Keychain / osascript / authorization dialog for the whole sequence. Three `security find-generic-password` processes (access_token, workspace_sid, region) is the bug.
-   - Windows: at most one UAC. Credential Manager reads do not prompt. `npm i -g` into a system prefix is forbidden on this path (that is a second elevation). Managed install writes under userData.
-3. **Same binary.** Detect uses the binary Connect just installed, in this order: `userData/managed-cli/dust` → `~/.hermes/bin/dust` (`.cmd` / `.exe` on Windows) → PATH. A PATH-only `dust` miss after a managed install is a bug.
+   - macOS: at most one Keychain / osascript / authorization dialog for the whole sequence. Overlay-68: install helper, session import, and the isDustReady/Reconnect probe were three Keychain ACL reads. After the first Allow, the session is cached in-process — import, probe, and reconnect must not spawn again.
+   - Windows: at most one UAC. Credential Manager reads do not prompt; they still share the same in-process cache (one CredRead, not three). `npm i -g` into a system prefix is forbidden on this path (that is a second elevation). Managed install writes under userData.
+3. **Same binary.** Detect uses the binary Connect just installed, in this order: `userData/managed-cli/dust` → `~/.hermes/node/bin/dust` (Tony's PATH on Mac) → `~/.hermes/bin/dust` → PATH. A PATH-only `dust` miss after a managed install is a bug.
 4. **Live in one refresh.** After Connect succeeds, status is `installed` and `live` together. `isDustReady` (key + workspace + agent) and the row detect (`resolveDustBin`) must agree. Fake Connected is a fail.
 5. **Honest copy.** The row cannot say Connected and "Dust CLI is not yet installed" in the same state. Missing binary → not connected. Connected → installed + live, plus the workspace name.
 6. **Mantu.** After login, if the signed-in list includes a workspace named Mantu, that is the workspace. Do not leave the picker on a random other workspace.
@@ -22,7 +22,8 @@ Tony (Mac, 1 Sep 2026, 5:05pm ET): Connect said Connected, then macOS asked for 
 | --- | --- | --- |
 | Install | `sudo npm i -g`, Windows UAC to a global prefix, a second helper | Tarball into `userData/managed-cli/dust`. No elevation. |
 | Login | A second Terminal / osascript / UAC | Browser Dust consent (native OAuth) or an already-present CLI session. Not an OS password. |
-| Import | Three Keychain reads, three CredRead processes | One batched secret-store spawn per consent session. |
+| Import | Three Keychain reads, three CredRead processes | One batched secret-store spawn per consent session, then in-process cache. |
+| Probe / Reconnect | A second Keychain ACL after Connect | Cache hit. `privilegeSpawns: 0`. |
 
 `countDustPrivilegeSpawns` is 1 for the install+login+import sequence in the mock. Windows Quality covers the same counter (UAC + CredRead + npm-global) even without a GUI box.
 

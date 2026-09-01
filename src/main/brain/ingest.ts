@@ -205,7 +205,7 @@ function isIngestTransportFailure(err: unknown): boolean {
  * burn the rotating refresh token.
  */
 async function refreshDustAuthForIngest(): Promise<{ apiKey: string; workspaceId?: string; baseURL?: string } | null> {
-  const fresh = await refreshDustCliSession()
+  const fresh = await refreshDustCliSession({ forceMint: true })
   if (!fresh.ok || !fresh.token || !fresh.workspaceId) return null
   setApiKey('dust', fresh.token)
   const baseURL = fresh.baseUrl || 'https://dust.tt'

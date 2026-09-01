@@ -144,7 +144,8 @@ export function preferMantuWorkspace(
 }
 
 /**
- * Detect order after Connect: the managed copy Connect wrote, then ~/.hermes, then PATH names.
+ * Detect order after Connect: the managed copy Connect wrote, then Hermes node/bin (Tony's PATH
+ * dust is ~/.hermes/node/bin/dust), then ~/.hermes/bin, then PATH names.
  * PATH is last so a stale `where dust` miss cannot hide a just-installed managed binary.
  */
 export function dustBinCandidates(opts: {
@@ -154,15 +155,17 @@ export function dustBinCandidates(opts: {
   managedEntry?: string | null
 }): string[] {
   const win = opts.platform === 'win32'
+  const sep = win ? '\\' : '/'
   const names = win ? ['dust.cmd', 'dust.exe'] : ['dust']
   const out: string[] = []
   if (opts.managedEntry) out.push(opts.managedEntry)
-  const managedJs = win
-    ? `${opts.userData}\\managed-cli\\dust`
-    : `${opts.userData}/managed-cli/dust`
-  if (!opts.managedEntry) out.push(managedJs)
-  for (const name of names) {
-    out.push(win ? `${opts.home}\\.hermes\\bin\\${name}` : `${opts.home}/.hermes/bin/${name}`)
+  const managedRoot = `${opts.userData}${sep}managed-cli${sep}dust`
+  if (!opts.managedEntry) out.push(managedRoot)
+  else if (!out.includes(managedRoot)) out.push(managedRoot)
+  for (const dir of [`${opts.home}${sep}.hermes${sep}node${sep}bin`, `${opts.home}${sep}.hermes${sep}bin`]) {
+    for (const name of names) {
+      out.push(`${dir}${sep}${name}`)
+    }
   }
   out.push(...names)
   return out

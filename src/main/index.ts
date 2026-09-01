@@ -456,7 +456,7 @@ function makeRefreshDustAuth(current: {
       if (!fresh.ok || !fresh.token) return null
       return { apiKey: fresh.token, workspaceId: current.dustWorkspaceId, baseURL: current.dustBaseUrl }
     }
-    const fresh = await refreshDustCliSession()
+    const fresh = await refreshDustCliSession({ forceMint: true })
     if (!fresh.ok || !fresh.token || !fresh.workspaceId) return null
     setApiKey('dust', fresh.token)
     const baseURL = fresh.baseUrl || 'https://dust.tt'
@@ -3437,7 +3437,7 @@ function registerIpc(): void {
         const fresh = await refreshDustOAuthSession()
         if (!fresh.ok || !fresh.token) return r
       } else {
-        const s = await refreshDustCliSession()
+        const s = await refreshDustCliSession({ forceMint: true })
         if (!s.ok || !s.token || !s.workspaceId) return r
         setApiKey('dust', s.token)
         setSettings({ dustWorkspaceId: s.workspaceId, dustBaseUrl: s.baseUrl || 'https://dust.tt', dustTokenMintedAt: Date.now() })
@@ -6760,7 +6760,7 @@ if (!app.requestSingleInstanceLock()) {
         })
       return
     }
-    void refreshDustCliSession()
+    void refreshDustCliSession({ forceMint: true })
       .then((fresh) => {
         if (!fresh.ok || !fresh.token || !fresh.workspaceId) return
         setApiKey('dust', fresh.token)

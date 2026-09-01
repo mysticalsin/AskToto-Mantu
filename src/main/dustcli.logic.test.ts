@@ -18,10 +18,21 @@ const store = vi.hoisted(() => ({
   reads: new Map<string, { value: string | null; accessDenied?: boolean }>()
 }))
 
+const cache = vi.hoisted(() => ({
+  peek: null as null | {
+    access_token: { value: string | null; accessDenied: boolean }
+    workspace_sid: { value: string | null; accessDenied: boolean }
+    region: { value: string | null; accessDenied: boolean }
+    privilegeSpawns: number
+  }
+}))
+
 vi.mock('./dust-secret-store', () => ({
   DUST_KEYCHAIN_SERVICE: 'dust-cli',
+  peekDustSessionSecretsCache: vi.fn(() => cache.peek),
   readDustSecret: vi.fn(async (account: string) => store.reads.get(account) ?? { value: null }),
   readDustSessionSecrets: vi.fn(async () => {
+    if (cache.peek) return { ...cache.peek, privilegeSpawns: 0 }
     const field = (account: string) => store.reads.get(account) ?? { value: null, accessDenied: false }
     return {
       access_token: field('access_token'),
@@ -34,10 +45,11 @@ vi.mock('./dust-secret-store', () => ({
 vi.mock('./cli', () => ({
   killWindowsProcessTree: vi.fn(),
   resolveBin: vi.fn(async () => null),
+  resolveDustBin: vi.fn(async () => null),
   resolveSpawnTarget: vi.fn(() => null)
 }))
 
-import { importDustCliSession } from './dustcli'
+import { importDustCliSession, refreshDustCliSession } from './dustcli'
 
 /** Seed the fake keychain exactly as `dust login` would leave it. */
 function seed(entries: Record<string, string | null | { accessDenied: true }>): void {
@@ -48,7 +60,10 @@ function seed(entries: Record<string, string | null | { accessDenied: true }>): 
 }
 
 describe('MQA-252 — importDustCliSession decisions, on every platform', () => {
-  beforeEach(() => store.reads.clear())
+  beforeEach(() => {
+    store.reads.clear()
+    cache.peek = null
+  })
 
   it('reports no session when the keychain is empty — not an error, a not-signed-in', () => {
     seed({})
@@ -107,5 +122,20 @@ describe('MQA-252 — importDustCliSession decisions, on every platform', () => 
     seed({ access_token: 'secret-token', workspace_sid: null })
     const r = await importDustCliSession()
     expect(JSON.stringify(r)).not.toContain('secret-token')
+  })
+
+  it('Reconnect / probe reuse the in-process session — no second dust status or Keychain read', async () => {
+    cache.peek = {
+      access_token: { value: 'tok', accessDenied: false },
+      workspace_sid: { value: 'ws_mantu', accessDenied: false },
+      region: { value: 'us', accessDenied: false },
+      privilegeSpawns: 1
+    }
+    const first = await refreshDustCliSession()
+    const again = await refreshDustCliSession()
+    expect(first.ok).toBe(true)
+    expect(first.token).toBe('tok')
+    expect(again.ok).toBe(true)
+    expect(again.token).toBe('tok')
   })
 })

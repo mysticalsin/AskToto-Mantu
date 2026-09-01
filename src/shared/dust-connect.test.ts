@@ -164,7 +164,11 @@ describe('dustBinCandidates — managed, then hermes, then PATH', () => {
       managedEntry: '/Users/tony/Library/Application Support/Métis/managed-cli/dust/0.4.5/package/dist/index.js'
     })
     expect(list[0]).toContain('managed-cli/dust')
+    expect(list.some((p) => p.endsWith('/.hermes/node/bin/dust'))).toBe(true)
     expect(list.some((p) => p.endsWith('/.hermes/bin/dust'))).toBe(true)
+    expect(list.indexOf('/Users/tony/.hermes/node/bin/dust')).toBeLessThan(
+      list.indexOf('/Users/tony/.hermes/bin/dust')
+    )
     expect(list[list.length - 1]).toBe('dust')
   })
 
@@ -176,7 +180,8 @@ describe('dustBinCandidates — managed, then hermes, then PATH', () => {
       managedEntry: 'C:\\Users\\tony\\AppData\\Roaming\\Metis\\managed-cli\\dust\\0.4.5\\package\\dist\\index.js'
     })
     expect(list[0]).toContain('managed-cli')
-    expect(list.some((p) => p.includes('.hermes') && p.endsWith('dust.cmd'))).toBe(true)
+    expect(list.some((p) => p.includes('.hermes\\node\\bin') && p.endsWith('dust.cmd'))).toBe(true)
+    expect(list.some((p) => p.includes('.hermes\\bin') && p.endsWith('dust.cmd'))).toBe(true)
     expect(list).toContain('dust.cmd')
     expect(list).toContain('dust.exe')
   })

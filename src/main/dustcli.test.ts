@@ -3,6 +3,7 @@ import { execFile, execFileSync } from 'node:child_process'
 import { EventEmitter } from 'node:events'
 import { promisify } from 'node:util'
 import { importDustCliSession } from './dustcli'
+import { clearDustSessionSecretsCache } from './dust-secret-store'
 
 const exec = promisify(execFile)
 
@@ -54,6 +55,10 @@ async function setSession(fields: Record<string, string>): Promise<void> {
 describe.runIf(canKeychain)('importDustCliSession (real keychain)', () => {
   afterAll(async () => {
     await delAll()
+    clearDustSessionSecretsCache(TEST_SERVICE)
+  })
+  afterEach(() => {
+    clearDustSessionSecretsCache(TEST_SERVICE)
   })
 
   it('reports no session when the keychain is empty', async () => {
@@ -136,6 +141,8 @@ async function loadDustCli(bin: string): Promise<{
   vi.doMock('electron', () => ({ app: { getPath: (): string => '/tmp' }, shell: { openPath: vi.fn() } }))
   vi.doMock('./dust-secret-store', () => ({
     DUST_KEYCHAIN_SERVICE: 'dust-cli',
+    peekDustSessionSecretsCache: (): null => null,
+    clearDustSessionSecretsCache: (): void => {},
     readDustSecret: async (): Promise<{ value: null; accessDenied: boolean }> => ({ value: null, accessDenied: false }),
     readDustSessionSecrets: async () => ({
       access_token: { value: null, accessDenied: false },
@@ -146,7 +153,11 @@ async function loadDustCli(bin: string): Promise<{
   }))
   vi.doMock('./cli', async () => {
     const actualCli = await vi.importActual<typeof import('./cli')>('./cli')
-    return { ...actualCli, resolveBin: async (): Promise<string> => bin }
+    return {
+      ...actualCli,
+      resolveBin: async (): Promise<string> => bin,
+      resolveDustBin: async (): Promise<string> => bin
+    }
   })
   const mod = await import('./dustcli')
   return { refreshDustCliSession: mod.refreshDustCliSession, spawnImpl, execFileImpl }

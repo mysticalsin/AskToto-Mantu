@@ -248,6 +248,49 @@ export function winCredReadSessionSpawnSpec(service: string = DUST_KEYCHAIN_SERV
   }
 }
 
+/** In-process session after the first Allow. Import, probe, and reconnect share this — no second Keychain ACL. */
+const sessionCache = new Map<string, DustSessionSecrets>()
+const sessionInflight = new Map<string, Promise<DustSessionSecrets>>()
+
+function sessionDenied(s: DustSessionSecrets): boolean {
+  return s.access_token.accessDenied || s.workspace_sid.accessDenied || s.region.accessDenied
+}
+
+function cloneSession(s: DustSessionSecrets, privilegeSpawns: number): DustSessionSecrets {
+  return {
+    access_token: { ...s.access_token },
+    workspace_sid: { ...s.workspace_sid },
+    region: { ...s.region },
+    privilegeSpawns
+  }
+}
+
+/** Test + 401 mint: drop the in-process cache so the next read hits the OS store. */
+export function clearDustSessionSecretsCache(service?: string): void {
+  if (service) {
+    sessionCache.delete(service)
+    sessionInflight.delete(service)
+    return
+  }
+  sessionCache.clear()
+  sessionInflight.clear()
+}
+
+export function peekDustSessionSecretsCache(
+  service: string = DUST_KEYCHAIN_SERVICE
+): DustSessionSecrets | null {
+  const hit = sessionCache.get(service)
+  return hit ? cloneSession(hit, 0) : null
+}
+
+/** After the first Allow — import, probe, and reconnect share this in-process session. */
+export function rememberDustSessionSecrets(
+  service: string,
+  secrets: DustSessionSecrets
+): void {
+  if (!sessionDenied(secrets)) sessionCache.set(service, cloneSession(secrets, secrets.privilegeSpawns))
+}
+
 function emptySession(accessDenied: boolean, privilegeSpawns: number): DustSessionSecrets {
   const miss: DustSecretRead = { value: null, accessDenied }
   return {
@@ -283,11 +326,12 @@ function parseSessionJson(raw: string, accessDenied: boolean, privilegeSpawns: n
 }
 
 /**
- * Read access_token + workspace_sid + region in ONE privileged spawn.
- * Mac: one osascript / Security.framework query. Windows: one CredRead powershell.
- * Sequential per-account reads are the triple password bug — do not call this in a loop.
+ * Read access_token + workspace_sid + region in ONE privileged spawn, then cache in-process.
+ * Overlay-68 Mac: install helper, import, and isDustReady/reconnect each hit Keychain ACL — three
+ * passwords. After the first Allow, later callers (probe, reconnect, a second import) return the
+ * cached session with privilegeSpawns: 0. Denial is not cached so Reconnect can ask again.
  */
-export async function readDustSessionSecrets(
+async function readDustSessionSecretsFromOs(
   service: string = DUST_KEYCHAIN_SERVICE
 ): Promise<DustSessionSecrets> {
   if (process.platform === 'darwin') {
@@ -314,4 +358,31 @@ export async function readDustSessionSecrets(
     SESSION_ACCOUNTS.map((account) => readLinux(account, service))
   )
   return { access_token: token, workspace_sid: workspace, region, privilegeSpawns: 1 }
+}
+
+export async function readDustSessionSecrets(
+  service: string = DUST_KEYCHAIN_SERVICE,
+  opts?: { force?: boolean }
+): Promise<DustSessionSecrets> {
+  if (!opts?.force) {
+    const cached = sessionCache.get(service)
+    if (cached && !sessionDenied(cached)) return cloneSession(cached, 0)
+
+    const pending = sessionInflight.get(service)
+    if (pending) {
+      const shared = await pending
+      return cloneSession(shared, sessionDenied(shared) ? shared.privilegeSpawns : 0)
+    }
+  }
+
+  const work = readDustSessionSecretsFromOs(service)
+    .then((secrets) => {
+      if (!sessionDenied(secrets)) sessionCache.set(service, secrets)
+      return secrets
+    })
+    .finally(() => {
+      sessionInflight.delete(service)
+    })
+  sessionInflight.set(service, work)
+  return work
 }

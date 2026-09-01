@@ -26,7 +26,8 @@ import { randomBytes } from 'node:crypto'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS } from '@shared/providers'
 import type { CliActionResult, CliInstallResult } from '@shared/ipc'
-import { managedCliEntry, installManagedCli } from './cli-installer'
+import { findManagedDustEntry, managedCliEntry, installManagedCli } from './cli-installer'
+import { dustBinCandidates } from '@shared/dust-connect'
 
 const execFileAsync = promisify(execFile)
 
@@ -194,23 +195,41 @@ function managedBinFallback(bin: string): string | null {
   }
 }
 
-/** Hermes-managed dust shims (user-owned prefix, never a sudo/UAC global). */
+/** Hermes-managed dust shims. Tony's PATH is ~/.hermes/node/bin/dust, not ~/.hermes/bin/dust. */
 export function hermesDustCandidates(home: string = homedir(), platform: NodeJS.Platform = process.platform): string[] {
   const win = platform === 'win32'
-  const dir = join(home, '.hermes', 'bin')
-  return win ? [join(dir, 'dust.cmd'), join(dir, 'dust.exe')] : [join(dir, 'dust')]
+  const dirs = [join(home, '.hermes', 'node', 'bin'), join(home, '.hermes', 'bin')]
+  const out: string[] = []
+  for (const dir of dirs) {
+    if (win) out.push(join(dir, 'dust.cmd'), join(dir, 'dust.exe'))
+    else out.push(join(dir, 'dust'))
+  }
+  return out
 }
 
 /**
- * The binary Dust Connect just installed. Managed userData first, then ~/.hermes, then PATH.
+ * The binary Dust Connect just installed. Managed userData first (current.json or the unpacked
+ * tree), then ~/.hermes/node/bin, then ~/.hermes/bin, then PATH.
  * A PATH-only miss after a managed install is the "Connected but not yet installed" bug.
  */
 export async function resolveDustBin(): Promise<string | null> {
+  let userData = ''
   try {
-    const managed = managedCliEntry('dust')?.entry
-    if (managed && existsSync(managed)) return managed
+    const managed = findManagedDustEntry()
+    if (managed?.entry && existsSync(managed.entry)) return managed.entry
+    userData = app.getPath('userData')
   } catch {
     /* app.getPath can throw in tests that did not mock electron — fall through */
+  }
+  const home = homedir()
+  for (const candidate of dustBinCandidates({
+    platform: process.platform,
+    userData,
+    home,
+    managedEntry: null
+  })) {
+    if (candidate === 'dust' || candidate === 'dust.cmd' || candidate === 'dust.exe') continue
+    if (existsSync(candidate)) return candidate
   }
   for (const candidate of hermesDustCandidates()) {
     if (existsSync(candidate)) return candidate

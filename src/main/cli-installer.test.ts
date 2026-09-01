@@ -13,6 +13,7 @@ import { app } from 'electron'
 import {
   installManagedCli,
   managedCliEntry,
+  findManagedDustEntry,
   managedCliCommand,
   MANAGED_CLIS,
   ensurePackageJsonDeps,
@@ -326,5 +327,27 @@ describe('managed Dust CLI — pin + missing diff', () => {
       (await import('node:fs')).readFileSync(join(userData, 'managed-cli', 'dust', version, 'package', 'package.json'), 'utf8')
     )
     expect(pkg.dependencies.diff).toBeTruthy()
+  })
+})
+
+describe('findManagedDustEntry — detect the Connect tree, not only PATH dust', () => {
+  let userData: string
+  beforeEach(() => {
+    userData = mkdtempSync(join(tmpdir(), 'asktoto-managed-dust-'))
+    vi.mocked(app.getPath).mockImplementation((name: string) => (name === 'userData' ? userData : '/tmp'))
+  })
+  afterEach(() => {
+    rmSync(userData, { recursive: true, force: true })
+  })
+
+  it('finds userData/managed-cli/dust even when current.json is missing', async () => {
+    const { mkdirSync, writeFileSync } = await import('node:fs')
+    const entry = join(userData, 'managed-cli', 'dust', DUST_CLI_PINNED_VERSION, 'package', 'dist', 'index.js')
+    mkdirSync(join(entry, '..'), { recursive: true })
+    writeFileSync(entry, 'module.exports = {}\n')
+    expect(managedCliEntry('dust')).toBeNull()
+    const found = findManagedDustEntry(userData)
+    expect(found?.entry).toBe(entry)
+    expect(found?.version).toBe(DUST_CLI_PINNED_VERSION)
   })
 })

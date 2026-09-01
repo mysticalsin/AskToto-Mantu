@@ -3895,7 +3895,7 @@ function DustSetup({
                 className="no-drag cl-focus flex w-full items-center justify-center gap-2 rounded-[10px] bg-[var(--cl-primary)] px-4 py-3 text-[14px] font-semibold text-white hover:opacity-90 disabled:opacity-50"
               >
                 {oauth.phase === 'starting' ? <InlineOrb kind="connecting" /> : <Wand2 size={16} />}
-                {oauth.phase === 'starting' ? 'Installing Dust CLI…' : 'Connect'}
+                {oauth.phase === 'starting' ? 'Installing Dust CLI…' : 'Set up Dust automatically'}
               </button>
               <span className="text-center text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
                 {dustCliStatus.installed

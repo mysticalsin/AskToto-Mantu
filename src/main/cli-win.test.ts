@@ -51,6 +51,7 @@ vi.mock('node:child_process', async (importActual) => {
 // instead of telling the user to install Node (one-click onboarding, 2026-07-16).
 const managedMock = vi.hoisted(() => ({
   managedCliEntry: vi.fn((_id?: string): { entry: string; version: string } | null => null),
+  findManagedDustEntry: vi.fn((_userData?: string): { entry: string; version: string } | null => null),
   installManagedCli: vi.fn(
     async (_id: string, onProgress: (p: { phase: string }) => void): Promise<{ entry: string; version: string }> => {
       onProgress({ phase: 'downloading' })
@@ -457,19 +458,31 @@ describe('Dust Connect — Windows privilege + detect (Quality)', () => {
       managedEntry: 'C:\\Users\\tony\\AppData\\Roaming\\Metis\\managed-cli\\dust\\0.4.5\\package\\dist\\index.js'
     })
     expect(list[0]).toContain('managed-cli\\dust')
-    expect(list.some((p) => p.includes('.hermes') && p.endsWith('dust.cmd'))).toBe(true)
+    expect(list.some((p) => p.includes('.hermes\\node\\bin') && p.endsWith('dust.cmd'))).toBe(true)
+    expect(list.some((p) => p.includes('.hermes\\bin') && p.endsWith('dust.cmd'))).toBe(true)
     expect(list.some((p) => /Roaming\\npm\\dust/i.test(p))).toBe(false)
     expect(dustConnectDetectOrder('C:\\ud', 'C:\\Users\\tony', 'win32').length).toBeGreaterThan(1)
+  })
+
+  it('hermes candidates put ~/.hermes/node/bin ahead of ~/.hermes/bin (Tony PATH)', async () => {
+    const { hermesDustCandidates } = await import('./cli')
+    const list = hermesDustCandidates('C:\\Users\\tony', 'win32')
+    expect(list[0]).toBe(join('C:\\Users\\tony', '.hermes', 'node', 'bin', 'dust.cmd'))
+    expect(list.some((p) => p.includes('.hermes\\bin\\dust.cmd') || p.endsWith(join('.hermes', 'bin', 'dust.cmd')))).toBe(
+      true
+    )
   })
 
   it('resolveDustBin prefers the managed entry after Connect, even when PATH dust misses', async () => {
     setPlatform('win32')
     binProbe.hit = false
     clearBinCache()
-    managedMock.managedCliEntry.mockImplementation((_id?: string) => ({
+    const managed = {
       entry: 'C:\\Users\\tony\\AppData\\Roaming\\Metis\\managed-cli\\dust\\0.4.5\\package\\dist\\index.js',
       version: '0.4.5'
-    }))
+    }
+    managedMock.managedCliEntry.mockImplementation((_id?: string) => managed)
+    managedMock.findManagedDustEntry.mockImplementation(() => managed)
     const { resolveDustBin } = await import('./cli')
     const { existsSync } = await import('node:fs')
     // existsSync is mocked via binProbe — force a hit for the managed path only.
@@ -478,5 +491,6 @@ describe('Dust Connect — Windows privilege + detect (Quality)', () => {
     expect(bin).toMatch(/managed-cli/)
     expect(existsSync).toBeTypeOf('function')
     managedMock.managedCliEntry.mockImplementation((_id?: string) => null)
+    managedMock.findManagedDustEntry.mockImplementation(() => null)
   })
 })

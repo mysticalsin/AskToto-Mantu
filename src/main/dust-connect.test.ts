@@ -18,7 +18,8 @@ vi.mock('electron', () => ({
 
 vi.mock('./cli-installer', () => ({
   installManagedCli: h.installManagedCli,
-  managedCliEntry: () => h.managedCliEntry()
+  managedCliEntry: () => h.managedCliEntry(),
+  findManagedDustEntry: () => h.managedCliEntry()
 }))
 
 vi.mock('./dustcli', () => ({
@@ -81,6 +82,21 @@ describe('runDustConnectInstall — one consent, installed = live', () => {
     expect(r.needsLogin).toBe(true)
     expect(r.privilegeSpawns).toBe(1)
     expect(h.setApiKey).not.toHaveBeenCalled()
+  })
+
+  it('detect order lists managed userData then ~/.hermes/node/bin (Tony PATH), not only PATH dust', async () => {
+    const { dustConnectDetectOrder } = await import('./dust-connect')
+    const list = dustConnectDetectOrder(
+      '/Users/tony/Library/Application Support/Métis',
+      '/Users/tony',
+      'darwin'
+    )
+    expect(list.some((p) => p.includes('managed-cli') && p.includes('dust'))).toBe(true)
+    expect(list.some((p) => p.endsWith('/.hermes/node/bin/dust'))).toBe(true)
+    const managedIdx = list.findIndex((p) => p.includes('managed-cli'))
+    const hermesNode = list.findIndex((p) => p.endsWith('/.hermes/node/bin/dust'))
+    expect(managedIdx).toBeGreaterThanOrEqual(0)
+    expect(hermesNode).toBeGreaterThan(managedIdx)
   })
 
   it('Mac and Windows privilege plans are 1, never three elevations', () => {

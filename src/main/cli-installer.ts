@@ -30,7 +30,7 @@
  * commonly carry — so those do not break extraction of the regular files/dirs we actually need.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import { createHash, randomBytes } from 'node:crypto'
@@ -465,6 +465,41 @@ export function managedCliEntry(id: ManagedCliId): { entry: string; version: str
   } catch {
     return null
   }
+}
+
+/**
+ * Detect the Dust CLI Connect just unpacked when current.json is missing or stale.
+ * Overlay-68: Settings said "not yet installed" because detect only looked at PATH `dust`
+ * (`~/.hermes/node/bin/dust`) and never at userData/managed-cli/dust.
+ */
+export function findManagedDustEntry(userData?: string): { entry: string; version: string } | null {
+  const pointed = ((): { entry: string; version: string } | null => {
+    try {
+      return managedCliEntry('dust')
+    } catch {
+      return null
+    }
+  })()
+  if (pointed) return pointed
+  let root: string
+  try {
+    root = userData ? join(userData, 'managed-cli', 'dust') : installRoot('dust')
+  } catch {
+    return null
+  }
+  const spec = MANAGED_CLIS.dust
+  const pinned = join(root, DUST_CLI_PINNED_VERSION, 'package', spec.binRelPath)
+  if (existsSync(pinned)) return { entry: pinned, version: DUST_CLI_PINNED_VERSION }
+  try {
+    const versions = readdirSync(root).filter((name) => !name.startsWith('.') && name !== 'current.json')
+    for (const version of versions.sort().reverse()) {
+      const entry = join(root, version, 'package', spec.binRelPath)
+      if (existsSync(entry)) return { entry, version }
+    }
+  } catch {
+    /* no managed tree */
+  }
+  return null
 }
 
 /** The { command, args, env } to spawn `id`'s managed CLI, or null if it isn't installed. Runs Electron's

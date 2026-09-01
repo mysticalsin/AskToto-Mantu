@@ -54,6 +54,51 @@ describe('winCredReadSpawnSpec — powershell is pinned to System32', () => {
   })
 })
 
+describe('in-process session cache — one Allow for import + probe + reconnect', () => {
+  const service = 'asktoto-dust-cache-test'
+
+  it('import + probe + reconnect after the first Allow are privilegeSpawns 0 (no second Keychain)', async () => {
+    const {
+      clearDustSessionSecretsCache,
+      peekDustSessionSecretsCache,
+      readDustSessionSecrets,
+      rememberDustSessionSecrets
+    } = await import('./dust-secret-store')
+    clearDustSessionSecretsCache(service)
+    rememberDustSessionSecrets(service, {
+      access_token: { value: 'tok', accessDenied: false },
+      workspace_sid: { value: 'ws_mantu', accessDenied: false },
+      region: { value: 'us', accessDenied: false },
+      privilegeSpawns: 1
+    })
+    const importHit = await readDustSessionSecrets(service)
+    const probeHit = await readDustSessionSecrets(service)
+    const reconnectHit = await readDustSessionSecrets(service)
+    expect(importHit.privilegeSpawns).toBe(0)
+    expect(probeHit.privilegeSpawns).toBe(0)
+    expect(reconnectHit.privilegeSpawns).toBe(0)
+    expect(importHit.access_token.value).toBe('tok')
+    expect(probeHit.workspace_sid.value).toBe('ws_mantu')
+    expect(reconnectHit.access_token.value).toBe('tok')
+    expect(peekDustSessionSecretsCache(service)?.privilegeSpawns).toBe(0)
+    clearDustSessionSecretsCache(service)
+  })
+
+  it('does not cache a Keychain denial — Reconnect can ask again', async () => {
+    const { clearDustSessionSecretsCache, peekDustSessionSecretsCache, rememberDustSessionSecrets } =
+      await import('./dust-secret-store')
+    clearDustSessionSecretsCache(service)
+    rememberDustSessionSecrets(service, {
+      access_token: { value: null, accessDenied: true },
+      workspace_sid: { value: null, accessDenied: true },
+      region: { value: null, accessDenied: true },
+      privilegeSpawns: 1
+    })
+    expect(peekDustSessionSecretsCache(service)).toBeNull()
+    clearDustSessionSecretsCache(service)
+  })
+})
+
 describe('one-consent Dust session read (DUST-CONNECT)', () => {
   it('Mac JXA is one osascript, not three security finds', () => {
     const spec = macDustSessionSpawnSpec()
