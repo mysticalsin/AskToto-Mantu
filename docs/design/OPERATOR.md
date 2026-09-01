@@ -201,7 +201,7 @@ Tony 6:17 PM ET. After **every** Operator change, run the Operator tests **and**
 
 If a map or sidebar fix would require touching overlay chrome, **stop and report**. Do not mix slices.
 
-Gate: `npm run test:operator` (runs `scripts/operator-quality-bar.mjs`). That script (1) fails if any frozen overlay path differs from the merge base, (2) runs the existing Island/Hide chrome unit tests, (3) runs the Operator vitest suite (login, map contract, token-free events).
+Gate: `npm run test:operator:quality-bar` (`scripts/operator-quality-bar.mjs`). That script (1) fails if this Operator slice also edits a frozen overlay path, (2) runs the existing Island/Hide chrome unit tests, (3) runs `npm run test:operator` (login, map contract, token-free events), (4) probes live `/` is still 401 Access required. `npm run test:operator` alone is the Worker unit suite and is what CI already chains.
 
 Frozen overlay chrome (do not edit from this product):
 
