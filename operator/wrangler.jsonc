@@ -7,7 +7,7 @@
     {
       "binding": "DB",
       "database_name": "metis-operator",
-      "database_id": "REPLACE_AFTER_D1_CREATE"
+      "database_id": "8eb5a081-594c-407c-9470-6a5aa28b9f7c"
     }
   ]
 }

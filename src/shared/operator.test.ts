@@ -6,6 +6,8 @@ import {
   mapAnthropicUsage,
   mapOpenAIUsage,
   operatorUrlConfigured,
+  sanitizeOperatorHostname,
+  sanitizeOperatorSsoEmail,
   shouldSendAskText,
   unsupportedCacheUsage
 } from './operator'
@@ -118,5 +120,18 @@ describe('cacheBadge', () => {
   it('does not treat missing as a hit', () => {
     expect(cacheBadge({ cacheStatus: 'not-reported' })).toBe('not-reported')
     expect(cacheBadge({ cacheRead: 10 })).toBe('hit')
+  })
+})
+
+describe('operator seat identity', () => {
+  it('keeps a real hostname and SSO email and drops junk', () => {
+    expect(sanitizeOperatorHostname('Tonys-MacBook-Pro')).toBe('Tonys-MacBook-Pro')
+    expect(sanitizeOperatorHostname('Tony.walteur-pc')).toBe('Tony.walteur-pc')
+    expect(sanitizeOperatorHostname('not a host')).toBeNull()
+    expect(sanitizeOperatorHostname('')).toBeNull()
+    expect(sanitizeOperatorSsoEmail('Twalteur@amaris.com')).toBe('twalteur@amaris.com')
+    expect(sanitizeOperatorSsoEmail('Tony.walteur@gmail.com')).toBe('tony.walteur@gmail.com')
+    expect(sanitizeOperatorSsoEmail('not-an-email')).toBeNull()
+    expect(sanitizeOperatorSsoEmail('sk-ant-api03-abcdefghijklmnopqrstuvwxyz')).toBeNull()
   })
 })

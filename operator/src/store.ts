@@ -12,6 +12,26 @@ export interface SeatRow {
   lat: number | null
   lon: number | null
   last_index_at: number | null
+  hostname: string | null
+  sso_email: string | null
+  license: string | null
+}
+
+export interface EventRow {
+  id: string
+  ts: number
+  kind: string
+  actor: string | null
+  device_id: string | null
+  country: string | null
+  detail: string | null
+}
+
+export interface VaultKeyMeta {
+  provider: string
+  label: string
+  last4: string
+  status: string
 }
 
 export interface AskRow {
@@ -96,6 +116,9 @@ export interface OperatorStore {
   listCrmRetries(deviceId: string): Promise<CrmSendRow[]>
   audit(id: string, ts: number, actor: string, action: string, askId: string | null, detail: string): Promise<void>
   listAudit(limit: number): Promise<{ ts: number; actor: string; action: string; ask_id: string | null; detail: string }[]>
+  insertEvent(row: EventRow): Promise<void>
+  listEvents(limit: number): Promise<EventRow[]>
+  listVaultMeta(): Promise<VaultKeyMeta[]>
 }
 
 const PULSE_TTL_MS = 8 * 24 * 60 * 60 * 1000
@@ -110,6 +133,8 @@ export function memoryStore(): OperatorStore {
   const packs = new Map<string, PackRow>()
   const crm = new Map<string, CrmSendRow>()
   const audits: { id: string; ts: number; actor: string; action: string; ask_id: string | null; detail: string }[] = []
+  const events = new Map<string, EventRow>()
+  const vault: VaultKeyMeta[] = []
 
   return {
     async takeNonce(nonce) {
@@ -135,7 +160,10 @@ export function memoryStore(): OperatorStore {
         city: row.city ?? prev?.city ?? null,
         lat: row.lat ?? prev?.lat ?? null,
         lon: row.lon ?? prev?.lon ?? null,
-        last_index_at: row.last_index_at ?? prev?.last_index_at ?? null
+        last_index_at: row.last_index_at ?? prev?.last_index_at ?? null,
+        hostname: row.hostname ?? prev?.hostname ?? null,
+        sso_email: row.sso_email ?? prev?.sso_email ?? null,
+        license: row.license ?? prev?.license ?? null
       })
     },
     async insertAsk(row) {
@@ -212,6 +240,15 @@ export function memoryStore(): OperatorStore {
     },
     async listAudit(limit) {
       return audits.slice(-limit).reverse()
+    },
+    async insertEvent(row) {
+      events.set(row.id, row)
+    },
+    async listEvents(limit) {
+      return [...events.values()].sort((a, b) => b.ts - a.ts).slice(0, limit)
+    },
+    async listVaultMeta() {
+      return [...vault]
     }
   }
 }

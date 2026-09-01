@@ -1,5 +1,5 @@
 import { normalizeCrmRow, type CrmSendRow } from './crm'
-import type { AskRow, OperatorStore, PackRow, ProposalRow, PulseRow, SeatRow } from './store'
+import type { AskRow, EventRow, OperatorStore, PackRow, ProposalRow, PulseRow, SeatRow, VaultKeyMeta } from './store'
 
 interface D1Stmt {
   bind(...values: unknown[]): D1Stmt
@@ -44,13 +44,13 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
     },
     async upsertSeat(row) {
       const prev = await db
-        .prepare('SELECT first_seen, country, city, lat, lon, last_index_at FROM seats WHERE device_id = ?')
+        .prepare('SELECT first_seen FROM seats WHERE device_id = ?')
         .bind(row.device_id)
-        .first<Pick<SeatRow, 'first_seen' | 'country' | 'city' | 'lat' | 'lon' | 'last_index_at'>>()
+        .first<Pick<SeatRow, 'first_seen'>>()
       await db
         .prepare(
-          `INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen, country, city, lat, lon, last_index_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen, country, city, lat, lon, last_index_at, hostname, sso_email, license)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(device_id) DO UPDATE SET
              seat_hash = excluded.seat_hash,
              os = excluded.os,
@@ -60,7 +60,10 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
              city = COALESCE(excluded.city, seats.city),
              lat = COALESCE(excluded.lat, seats.lat),
              lon = COALESCE(excluded.lon, seats.lon),
-             last_index_at = COALESCE(excluded.last_index_at, seats.last_index_at)`
+             last_index_at = COALESCE(excluded.last_index_at, seats.last_index_at),
+             hostname = COALESCE(excluded.hostname, seats.hostname),
+             sso_email = COALESCE(excluded.sso_email, seats.sso_email),
+             license = COALESCE(excluded.license, seats.license)`
         )
         .bind(
           row.device_id,
@@ -73,7 +76,10 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
           row.city,
           row.lat,
           row.lon,
-          row.last_index_at
+          row.last_index_at,
+          row.hostname,
+          row.sso_email,
+          row.license
         )
         .run()
     },
@@ -129,7 +135,12 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
     },
     async listSeats() {
       const r = await db.prepare('SELECT * FROM seats').all<SeatRow>()
-      return r.results
+      return r.results.map((s) => ({
+        ...s,
+        hostname: s.hostname ?? null,
+        sso_email: s.sso_email ?? null,
+        license: s.license ?? null
+      }))
     },
     async insertPulse(row) {
       await db
@@ -267,6 +278,27 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         .prepare('SELECT ts, actor, action, ask_id, detail FROM audit ORDER BY ts DESC LIMIT ?')
         .bind(limit)
         .all<{ ts: number; actor: string; action: string; ask_id: string | null; detail: string }>()
+      return r.results
+    },
+    async insertEvent(row) {
+      await db
+        .prepare(
+          'INSERT OR REPLACE INTO events (id, ts, kind, actor, device_id, country, detail) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        )
+        .bind(row.id, row.ts, row.kind, row.actor, row.device_id, row.country, row.detail)
+        .run()
+    },
+    async listEvents(limit) {
+      const r = await db
+        .prepare('SELECT id, ts, kind, actor, device_id, country, detail FROM events ORDER BY ts DESC LIMIT ?')
+        .bind(limit)
+        .all<EventRow>()
+      return r.results
+    },
+    async listVaultMeta() {
+      const r = await db
+        .prepare('SELECT provider, label, last4, status FROM vault_keys ORDER BY created_at DESC')
+        .all<VaultKeyMeta>()
       return r.results
     }
   }

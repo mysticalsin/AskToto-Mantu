@@ -1,6 +1,15 @@
 import { app } from 'electron'
+import { hostname } from 'node:os'
 import { redactSecrets } from '@shared/redact'
-import { operatorUrlConfigured, shouldSendAskText, type AskLogLine, type StreamCacheUsage } from '@shared/operator'
+import {
+  operatorUrlConfigured,
+  sanitizeOperatorHostname,
+  sanitizeOperatorSsoEmail,
+  shouldSendAskText,
+  type AskLogLine,
+  type StreamCacheUsage
+} from '@shared/operator'
+import { authStatus } from './auth'
 import type { Settings } from '@shared/ipc'
 import { getMachineId } from './license'
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
@@ -46,12 +55,27 @@ function osLabel(): 'darwin' | 'win' | string {
   return process.platform
 }
 
-function seatMeta(settings: OperatorRuntimeSettings): { seatHash: string; os: string; appVersion: string } {
+export function seatMeta(settings: OperatorRuntimeSettings): {
+  seatHash: string
+  os: string
+  appVersion: string
+  hostname?: string
+  ssoEmail?: string
+} {
   const rawSeat = settings.licenseKey?.trim() || getMachineId()
+  const host = sanitizeOperatorHostname(hostname())
+  let email: string | null = null
+  try {
+    email = sanitizeOperatorSsoEmail(authStatus().email)
+  } catch {
+    email = null
+  }
   return {
     seatHash: hashOperatorId(rawSeat),
     os: osLabel(),
-    appVersion: app.getVersion()
+    appVersion: app.getVersion(),
+    ...(host ? { hostname: host } : {}),
+    ...(email ? { ssoEmail: email } : {})
   }
 }
 
