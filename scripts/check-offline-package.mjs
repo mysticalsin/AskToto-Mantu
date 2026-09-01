@@ -19,7 +19,14 @@ const forbidden = [
     reason: 'runtime Qwen download URL outside the reviewed downloader',
     allow: QWEN_DOWNLOAD_ALLOWED
   },
-  { pattern: /sherpa-onnx\/releases\/download\/asr-models/i, reason: 'runtime Parakeet download URL' },
+  {
+    pattern: /sherpa-onnx\/releases\/download\/asr-models/i,
+    reason: 'runtime Parakeet download URL',
+    // Onboarding must fetch the real high-accuracy Parakeet archive when
+    // bundled resources are absent. Only this reviewed downloader may hold
+    // the URL; ready stays false until the extracted weights exist on disk.
+    allow: ['src/main/asr-bundled-ensure.ts'],
+  },
   { pattern: /bundled ASR load failed, retrying remote/i, reason: 'packaged ASR remote fallback' },
   { pattern: /localModels:(?:download|cancel|delete)/, reason: 'runtime local-model mutation IPC' },
   { pattern: /node-llama-cpp/, reason: 'superseded native binding backend' },
