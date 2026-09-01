@@ -202,3 +202,21 @@ Off limits: `src/main/island/geometry.ts`, hide park, cursor-watch, `BAR_MIN_HEI
 ### Quality
 
 Apple-grade. If a hat would reject a blinking tour or a fake vault, fail the round. No em dashes in user-facing copy. Never auto-send. Do not claim READY TO MERGE.
+
+## Onboarding close-audio + CTA visible from start
+
+Tony, 1 Sep 2026 5:03pm ET. Two live bugs. Overlay hide/island frozen. No pack. No EXE/DMG/native. Do not merge. READY TO MERGE stays no.
+
+### Close audio (HARD)
+
+The Goldberg Aria (and any Howl / HTMLAudioElement / portal bed that plays the tour) **stops the instant onboarding closes**. Fail-closed. Every close path ends playback: dismiss, finish (Ready Get started), skip Get started, Escape, overlay hide of the exclusive tour, React unmount, `visibilitychange` hidden, `pagehide` / `beforeunload`.
+
+`stop()` / `haltOnboardingAudio` must `pause()`, reset `currentTime` to 0, zero volume, clear `src`, `load()`, and set `autoplay` / `loop` false. No leftover loop after the stage is gone. Scene changes do not stop the bed. Mute still zeros. Overlay Island / CLI Connect / pack stay off limits.
+
+### Post-lady Continue always visible (HARD)
+
+After the first lady (Act 1 hero video) the next act is the space / starfield problem step. Continue and every required click target on that step are **on-screen and readable from first paint**. No `opacity: 0`, no hover-to-reveal, no pointer-events-only fade, no `animation-fill-mode: both` that starts hidden, no framer-motion `initial: { opacity: 0 }`.
+
+Real cause to fix (not just the hover hypothesis): the Starfield Close canvas is `position: fixed; z-index: 0` with an opaque clear. In-flow tour chrome sits in a lower paint layer, so Continue is behind the bed until `:hover { transform }` promotes a compositor layer. Required: `.onboard-tour-slot` and `.onboard-cta` are `position: relative`, `z-index` above the bed, `opacity: 1`, `pointer-events: auto`. Hover may scale. Hover must not be the reveal.
+
+Do not make other steps worse. Persona tiles and later Continues stay full-opacity from their first paint too (no pop-in that starts at opacity 0).
