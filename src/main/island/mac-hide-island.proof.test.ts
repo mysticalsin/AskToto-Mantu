@@ -7,9 +7,12 @@ import { describe, expect, it } from 'vitest'
 import { decideCursorWatch, pointInRect } from './cursor-watch'
 import {
   OVERLAY_HIDE_PARK,
+  hideParkTop,
   hoverWatchRestRect,
+  isLeftoverParkY,
   isVisibleHideSlab,
   parkedHoverReanchor,
+  restoreParkAfterShow,
   type DisplayMetrics
 } from './geometry'
 
@@ -49,6 +52,47 @@ describe('Mac-test Hide 8×2 after a display move', () => {
 
   it('bar layout does not steal the hide re-park path', () => {
     expect(parkedHoverReanchor('bar', true, SECOND, 8)).toBeNull()
+  })
+})
+
+describe('Mac-test Hide park leftover after Show (880×105 at Y=39)', () => {
+  it('Hide park is 8×2 at bounds.y, never leftover Y=39', () => {
+    const park = restoreParkAfterShow('hide', TOTOS_MAC, { width: 880, height: 105, y: 39 }, 8)
+    expect(park.width).toBe(8)
+    expect(park.height).toBe(2)
+    expect(park.width).toBe(OVERLAY_HIDE_PARK.width)
+    expect(park.height).toBe(OVERLAY_HIDE_PARK.height)
+    expect(park.y).toBe(hideParkTop(TOTOS_MAC))
+    expect(park.y).toBe(TOTOS_MAC.bounds.y)
+    expect(park.y).toBe(0)
+    expect(park.y).not.toBe(39)
+    expect(isLeftoverParkY(39, TOTOS_MAC)).toBe(true)
+    expect(isLeftoverParkY(park.y, TOTOS_MAC)).toBe(false)
+    expect(isVisibleHideSlab(park)).toBe(false)
+  })
+
+  it('post-Show leftover 880×105 at Y=39 restores Hide 8×2; island hover hit is unchanged', () => {
+    const leftover = { x: 460, y: 39, width: 880, height: 105 }
+    const park = restoreParkAfterShow('hide', TOTOS_MAC, leftover, 8)
+    expect(park).toEqual({
+      x: park.x,
+      y: 0,
+      width: 8,
+      height: 2
+    })
+    expect(park.width).not.toBe(880)
+    expect(park.height).not.toBe(105)
+    const rest = hoverWatchRestRect('hide', TOTOS_MAC)
+    expect(rest.y).toBe(0)
+    expect(pointInRect({ x: 900, y: 12 }, rest)).toBe(true)
+    expect(
+      decideCursorWatch({
+        cursor: { x: 900, y: 12 },
+        restRect: rest,
+        revealedRect: leftover,
+        revealed: false
+      })
+    ).toBe('reveal')
   })
 })
 

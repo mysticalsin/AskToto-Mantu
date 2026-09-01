@@ -287,6 +287,16 @@ export function overlayRestSize(layout: OverlayLayout, m?: DisplayMetrics): { wi
   }
 }
 
+/** Hide park Y tucks under the notch at `bounds.y`. Never leftover `workArea.y` (~39). */
+export function hideParkTop(m: DisplayMetrics): number {
+  return hoverRestTop(m)
+}
+
+/** True when Y is the leftover revealed row (`workArea.y` ≈ 39), not the hide park. */
+export function isLeftoverParkY(y: number, m: DisplayMetrics): boolean {
+  return y === m.workArea.y && m.workArea.y !== m.bounds.y
+}
+
 /** Parked hide window: tiny, fully transparent. Cursor watch still uses hoverWatchRestRect. */
 export function hideParkRect(m: DisplayMetrics): Rect {
   const { width, height } = OVERLAY_HIDE_PARK
@@ -296,7 +306,26 @@ export function hideParkRect(m: DisplayMetrics): Rect {
     m.workArea.x,
     m.workArea.width
   )
-  return { x, y: hoverRestTop(m), width, height }
+  return { x, y: hideParkTop(m), width, height }
+}
+
+/**
+ * After Show (revealed bar — live leftover 880×105 at Y≈39) Hide/park must restore
+ * the hover rest. Leftover size and leftover Y must not leak into the park.
+ * Island hover still uses hoverWatchRestRect (camera/notch square), not this window.
+ */
+export function restoreParkAfterShow(
+  layout: OverlayLayout,
+  m: DisplayMetrics,
+  leftover: Pick<Rect, 'width' | 'height' | 'y'>,
+  topMargin: number
+): Rect {
+  // leftover is the revealed Show window (live 880×105 at Y=39). It must not win.
+  void leftover
+  const park = parkAfterExclusiveOnboarding(layout, m, topMargin)
+  if (layout === 'hide') return hideParkRect(m)
+  if (layout === 'island') return { ...park, y: hideParkTop(m) }
+  return park
 }
 
 /**
@@ -340,7 +369,7 @@ export function parkAfterExclusiveOnboarding(
       m.workArea.x,
       m.workArea.width
     )
-    return { x, y: hoverRestTop(m), width: size.width, height: size.height }
+    return { x, y: hideParkTop(m), width: size.width, height: size.height }
   }
   const { x, y } = topCenterPosition(size.width, layout, m, topMargin)
   return { x, y, width: size.width, height: size.height }
