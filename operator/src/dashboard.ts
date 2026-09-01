@@ -225,16 +225,22 @@ export async function buildDashboard(store: OperatorStore, email: string, now: n
 
   const hourStarts = buckets(now, 24, HOUR)
   const dayStarts = buckets(now, 7, DAY)
-  const hours24: SeriesPoint[] = hourStarts.map((t) => ({
-    t,
-    heartbeats: countIn(pulses, t, t + HOUR, 'heartbeat'),
-    asks: countIn(pulses, t, t + HOUR, 'ask')
-  }))
-  const days7: SeriesPoint[] = dayStarts.map((t) => ({
-    t,
-    heartbeats: countIn(pulses, t, t + DAY, 'heartbeat'),
-    asks: countIn(pulses, t, t + DAY, 'ask')
-  }))
+  const hours24: SeriesPoint[] = hourStarts.map((t, i) => {
+    const end = i === hourStarts.length - 1 ? now + 1 : t + HOUR
+    return {
+      t,
+      heartbeats: countIn(pulses, t, end, 'heartbeat'),
+      asks: countIn(pulses, t, end, 'ask')
+    }
+  })
+  const days7: SeriesPoint[] = dayStarts.map((t, i) => {
+    const end = i === dayStarts.length - 1 ? now + 1 : t + DAY
+    return {
+      t,
+      heartbeats: countIn(pulses, t, end, 'heartbeat'),
+      asks: countIn(pulses, t, end, 'ask')
+    }
+  })
 
   const todayAsks = asks.filter((a) => a.ts >= now - DAY)
   const weekAsks = asks.filter((a) => a.ts >= now - 7 * DAY)

@@ -309,9 +309,13 @@ describe('packed console map and geo', () => {
     const text = await dash.text()
     expect(text).not.toContain('203.0.113.9')
     expect(text).not.toContain('Clientville')
-    const body = JSON.parse(text) as { map: { empty: boolean; countries: { iso: string; devices: number }[] } }
+    const body = JSON.parse(text) as {
+      map: { empty: boolean; countries: { iso: string; devices: number }[] }
+      scale: { hours24: { heartbeats: number }[] }
+    }
     expect(body.map.empty).toBe(false)
     expect(body.map.countries).toEqual([{ iso: 'FR', devices: 1 }])
+    expect(body.scale.hours24.at(-1)?.heartbeats).toBe(1)
   })
 
   it('leaves the map empty when the Worker has no request.cf', async () => {

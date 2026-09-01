@@ -71,7 +71,7 @@ export function bars(items: MixBar[], w = 520, h = 140): string {
   if (!items.length) return `<div class="empty">No seats in the field yet.</div>`
   const max = Math.max(...items.map((i) => i.value), 1)
   const gap = 8
-  const bw = Math.max(8, (w - gap * (items.length + 1)) / items.length)
+  const bw = Math.min(28, Math.max(8, (w - gap * (items.length + 1)) / items.length))
   const rects = items
     .slice(0, 12)
     .map((it, i) => {
