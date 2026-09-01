@@ -357,3 +357,34 @@ describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', ()
     expect(plane).toMatch(/M0 5\.358a\.854/)
   })
 })
+
+describe('Dust Connect — one consent, installed = connected (DUST-CONNECT)', () => {
+  const setup = blockAfter('function DustSetup({', '\nfunction getAudioChoices(')
+
+  it('Connect installs then signs in — not three privileged steps', () => {
+    expect(setup).toMatch(/window\.toto\.dustConnect\(\)/)
+    expect(setup).toMatch(/window\.toto\.dustDetect\(\)/)
+    expect(setup).toMatch(/preferMantuWorkspace/)
+    expect(setup).toMatch(/dustRowCopy/)
+  })
+
+  it('the labeled Connect button is Connect, not a Connected badge over a missing CLI', () => {
+    const copy = setup.replace(/^\s*\/\/.*$/gm, '')
+    expect(copy).toMatch(/>Connect</)
+    expect(copy).toMatch(/dustCliReady && keySaved && hasWs/)
+    expect(copy).toMatch(/dustRow\.headline/)
+  })
+
+  it('cannot say Connected and not-yet-installed from the same helper', async () => {
+    const { dustRowCopy, dustRowCopyIsHonest } = await import('@shared/dust-connect')
+    const lie = { installed: false, live: true, workspaceId: 'ws' }
+    const copy = dustRowCopy(lie)
+    expect(copy.headline).toMatch(/not yet installed/i)
+    expect(copy.headline).not.toMatch(/connected/i)
+    expect(dustRowCopyIsHonest(lie, copy)).toBe(true)
+    const ok = dustRowCopy({ installed: true, live: true, workspaceName: 'Mantu' })
+    expect(ok.headline).toMatch(/connected/i)
+    expect(ok.headline).toMatch(/Mantu/)
+    expect(ok.headline).not.toMatch(/not yet installed/i)
+  })
+})

@@ -430,3 +430,54 @@ describe('installCli — Windows npm-not-found detection (cmd.exe phrasing, not 
     expect(managedMock.installManagedCli).toHaveBeenCalledWith('claude', expect.any(Function))
   })
 })
+
+describe('Dust Connect — Windows privilege + detect (Quality)', () => {
+  afterEach(() => {
+    setPlatform(REAL_PLATFORM)
+    binProbe.hit = null
+    clearBinCache()
+  })
+
+  it('install+login sequence is one consent, never UAC + npm-global + helper', async () => {
+    const { mockDustConnectPrivilegeSequence } = await import('./dust-connect')
+    const plan = mockDustConnectPrivilegeSequence('win32')
+    expect(plan.privilegeSpawns).toBe(1)
+    expect(plan.kinds).not.toContain('uac')
+    expect(plan.kinds).not.toContain('npm-global')
+    expect(plan.kinds).not.toContain('sudo')
+  })
+
+  it('detect order is managed userData, then ~/.hermes, then PATH — not a global npm prefix', async () => {
+    const { dustConnectDetectOrder } = await import('./dust-connect')
+    const { dustBinCandidates } = await import('@shared/dust-connect')
+    const list = dustBinCandidates({
+      platform: 'win32',
+      userData: 'C:\\Users\\tony\\AppData\\Roaming\\Metis',
+      home: 'C:\\Users\\tony',
+      managedEntry: 'C:\\Users\\tony\\AppData\\Roaming\\Metis\\managed-cli\\dust\\0.4.5\\package\\dist\\index.js'
+    })
+    expect(list[0]).toContain('managed-cli\\dust')
+    expect(list.some((p) => p.includes('.hermes') && p.endsWith('dust.cmd'))).toBe(true)
+    expect(list.some((p) => /Roaming\\npm\\dust/i.test(p))).toBe(false)
+    expect(dustConnectDetectOrder('C:\\ud', 'C:\\Users\\tony', 'win32').length).toBeGreaterThan(1)
+  })
+
+  it('resolveDustBin prefers the managed entry after Connect, even when PATH dust misses', async () => {
+    setPlatform('win32')
+    binProbe.hit = false
+    clearBinCache()
+    managedMock.managedCliEntry.mockImplementation((id: string) =>
+      id === 'dust'
+        ? { entry: 'C:\\Users\\tony\\AppData\\Roaming\\Metis\\managed-cli\\dust\\0.4.5\\package\\dist\\index.js', version: '0.4.5' }
+        : null
+    )
+    const { resolveDustBin } = await import('./cli')
+    const { existsSync } = await import('node:fs')
+    // existsSync is mocked via binProbe — force a hit for the managed path only.
+    binProbe.hit = true
+    const bin = await resolveDustBin()
+    expect(bin).toMatch(/managed-cli/)
+    expect(existsSync).toBeTypeOf('function')
+    managedMock.managedCliEntry.mockImplementation(() => null)
+  })
+})

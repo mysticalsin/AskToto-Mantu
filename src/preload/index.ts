@@ -21,6 +21,8 @@ import {
   type TestKeyResponse,
   type DustAgentsResponse,
   type DustCliImport,
+  type DustConnectResult,
+  type DustDetectResult,
   type DustDeviceLoginStart,
   type DustDevicePollResult,
   type DustSessionProbe,
@@ -98,6 +100,8 @@ const api = {
   dustListAgents: (): Promise<DustAgentsResponse> => ipcRenderer.invoke(IPC.dustListAgents),
   dustImportCli: (): Promise<DustCliImport> => ipcRenderer.invoke(IPC.dustImportCli),
   dustProbeSession: (): Promise<DustSessionProbe> => ipcRenderer.invoke(IPC.dustProbeSession),
+  dustConnect: (): Promise<DustConnectResult> => ipcRenderer.invoke(IPC.dustConnect),
+  dustDetect: (): Promise<DustDetectResult> => ipcRenderer.invoke(IPC.dustDetect),
   // Native OAuth sign-in (no CLI, no system Node.js) — begin opens the browser + returns the user code to
   // show; poll is called repeatedly at the returned interval until it resolves 'ok' with a workspace list;
   // pickWorkspace finishes the login with the chosen workspace. Tokens never cross to the renderer, and

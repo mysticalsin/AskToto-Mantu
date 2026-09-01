@@ -122,6 +122,12 @@ import { AgendaView } from './AgendaView'
 import { usePermissions } from '../state'
 import { displayAccelerator, isWindows } from '../lib/keys'
 import { decideDustLiveCheck } from '../lib/dust-live-check'
+import {
+  dustRowCopy,
+  isDustCliConnected,
+  preferMantuWorkspace,
+  type DustConnectStatus
+} from '@shared/dust-connect'
 
 // Name the OS credential facility the way the user's own OS names it — "Keychain" is macOS-only, and
 // telling a Windows user to "restore Keychain access" names something their machine does not have. Two
@@ -3396,7 +3402,14 @@ function DustSetup({
   const spotlightAgent = settings.providerModelsSpotlightRef['dust'] ?? ''
   const keySaved = !!settings.hasKeys['dust']
   const hasWs = !!settings.dustWorkspaceId.trim()
-  const connected = keySaved && hasWs && !!agent
+  const [dustCliStatus, setDustCliStatus] = useState<DustConnectStatus>({ installed: false, live: false })
+  const dustCliReady = isDustCliConnected(dustCliStatus)
+  const connected = keySaved && hasWs && !!agent && dustCliReady
+  const dustRow = dustRowCopy({
+    ...dustCliStatus,
+    workspaceId: settings.dustWorkspaceId,
+    workspaceName: dustCliStatus.workspaceName
+  })
   const selectedAgentName = agents?.find((a) => a.sId === agent)?.name
   const selectedAgent = agents?.find((a) => a.sId === agent)
   // Loaded the workspace's agents but the saved base agent isn't among them — the root cause of the
@@ -3407,9 +3420,32 @@ function DustSetup({
   // Import an existing `dust login` CLI session (token + workspace + region) from the keychain — the
   // migration path for a user who already has the CLI installed. The primary path is startDustOAuth below,
   // which needs neither the CLI nor system Node.js.
+  const refreshDustDetect = async (): Promise<void> => {
+    const d = await window.toto.dustDetect()
+    setDustCliStatus({
+      installed: d.installed,
+      live: d.live,
+      workspaceId: d.workspaceId || settings.dustWorkspaceId,
+      workspaceName: d.workspaceName
+    })
+  }
+
   const connectCli = async (): Promise<void> => {
     setCli({ busy: true, msg: null, ok: false })
-    const r = await window.toto.dustImportCli()
+    const installed = await window.toto.dustConnect()
+    if (installed.privilegeSpawns > 1) {
+      setCli({ busy: false, ok: false, msg: 'Connect asked for more than one password. Try again.' })
+      return
+    }
+    if (installed.ok && installed.live) {
+      await refreshDustDetect()
+      setCli({ busy: false, ok: true, msg: dustRowCopy(installed).headline })
+      await loadAgents()
+      return
+    }
+    const r = installed.needsLogin
+      ? await window.toto.dustImportCli()
+      : installed
     if (!r.ok) {
       // Blocked Keychain read, not a missing session — ask to allow access, same as the mount-time live
       // check below (decideDustLiveCheck), instead of misdirecting into a needless re-login.
@@ -3454,6 +3490,7 @@ function DustSetup({
       await patch({ provider: 'dust' })
     }
     setCli({ busy: false, ok: true, msg: `Connected. Workspace ${r.workspaceId}. Loading agents…` })
+    await refreshDustDetect()
     await loadAgents()
   }
 
@@ -3462,6 +3499,22 @@ function DustSetup({
   // Step 1: mint a device code, open the browser consent page. Step 2 (polling) is the effect below.
   const startDustOAuth = async (): Promise<void> => {
     setOauth({ ...oauthIdle, phase: 'starting' })
+    const installed = await window.toto.dustConnect()
+    if (!installed.installed) {
+      setOauth({
+        ...oauthIdle,
+        phase: 'error',
+        error: installed.error || 'Dust CLI is not yet installed.'
+      })
+      return
+    }
+    await refreshDustDetect()
+    if (installed.live && installed.workspaceId) {
+      setOauth(oauthIdle)
+      await patch({ provider: 'dust' })
+      await loadAgents()
+      return
+    }
     const r = await window.toto.dustLoginBegin()
     // The device code deliberately never reaches the renderer — main keeps it and polls with its own
     // copy (see the dustLoginBegin handler). The user code is what this screen actually needs.
@@ -3499,7 +3552,13 @@ function DustSetup({
       } else if (r.status === 'slow_down') {
         timer = setTimeout(() => void tick(intervalSec), (intervalSec + 5) * 1000)
       } else if (r.status === 'ok') {
-        setOauth((o) => (o.phase === 'waiting' ? { ...o, phase: 'picking', workspaces: r.workspaces ?? [] } : o))
+        const workspaces = r.workspaces ?? []
+        const mantu = preferMantuWorkspace(workspaces)
+        if (mantu && workspaces.some((w) => /^mantu$/i.test(w.name.trim()))) {
+          await pickDustWorkspace(mantu.sId)
+          return
+        }
+        setOauth((o) => (o.phase === 'waiting' ? { ...o, phase: 'picking', workspaces } : o))
       } else {
         setOauth((o) => (o.phase === 'waiting' ? { ...o, phase: 'error', error: r.error || 'Dust sign-in failed.' } : o))
       }
@@ -3524,6 +3583,7 @@ function DustSetup({
     }
     setOauth(oauthIdle)
     await patch({ provider: 'dust' })
+    await refreshDustDetect()
     await loadAgents()
   }
 
@@ -3656,6 +3716,7 @@ function DustSetup({
   // mount — otherwise reopening Settings shows raw agent sIds instead of names and the Thinking-agent
   // control degrades from a dropdown to a bare text input until a manual refresh.
   useEffect(() => {
+    void refreshDustDetect()
     if (keySaved && hasWs && agents === null && !loading) void loadAgents()
     // loadAgents is stable enough for this mount-on-connect check; re-run only when connection state flips.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3745,11 +3806,11 @@ function DustSetup({
         {/* PRIMARY — native OAuth sign-in (main/dust-oauth.ts): no CLI install, no system Node.js. One
             click opens the browser for consent, then Métis's own workspace picker below finishes it. */}
         <div className="flex flex-col gap-2 rounded-[12px] border border-[var(--cl-primary)]/40 bg-[var(--cl-primary-soft)]/50 p-3.5">
-          {keySaved && hasWs ? (
-            // Already connected → Reconnect (fresh sign-in) + Disconnect (full reset).
+          {dustCliReady && keySaved && hasWs ? (
+            // Installed + live in one refresh — never "Connected" with a missing CLI.
             <div className="flex items-center justify-between gap-2">
               <span className="flex items-center gap-1.5 text-[12px] font-medium text-[color:var(--cl-success)]">
-                <CircleCheck size={14} /> Dust is connected.
+                <CircleCheck size={14} /> {dustRow.headline}
               </span>
               <div className="flex items-center gap-2">
                 {locked && <span className={managedChipCls}>Managed by your organization</span>}
@@ -3834,10 +3895,12 @@ function DustSetup({
                 className="no-drag cl-focus flex w-full items-center justify-center gap-2 rounded-[10px] bg-[var(--cl-primary)] px-4 py-3 text-[14px] font-semibold text-white hover:opacity-90 disabled:opacity-50"
               >
                 {oauth.phase === 'starting' ? <InlineOrb kind="connecting" /> : <Wand2 size={16} />}
-                {oauth.phase === 'starting' ? 'Starting sign-in…' : 'Set up Dust automatically'}
+                {oauth.phase === 'starting' ? 'Installing Dust CLI…' : 'Connect'}
               </button>
               <span className="text-center text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                Opens your browser to sign in, then pick your workspace here. No CLI, no key to copy.
+                {dustCliStatus.installed
+                  ? 'Opens your browser to sign in, then picks the Mantu workspace.'
+                  : dustRow.headline}
                 {locked && <span className={'ml-1 ' + managedChipCls}>Managed by your organization</span>}
               </span>
               <button
@@ -4136,10 +4199,10 @@ function DustSetup({
             {storedAgentMissing
               ? "The managed base agent isn't available in this workspace/region. Answers will fail. Check the pasted workspace and US/EU region."
               : connected
-                ? `Workspace ${settings.dustWorkspaceId}. Base: ${selectedAgentName || agent}${
+                ? `${dustRow.headline}. Base: ${selectedAgentName || agent}${
                     thinkAgent ? `, Thinking: ${agents?.find((a) => a.sId === thinkAgent)?.name || thinkAgent}` : ' (thinking → same as base)'
                   }.`
-                : 'Connect from the Dust CLI above, or finish steps 1–4.'}
+                : dustRow.headline}
           </span>
           {storedAgentMissing ? null : active ? (
             <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]">

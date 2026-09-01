@@ -45,6 +45,9 @@ export const IPC = {
   dustListAgents: 'dust:listAgents',
   dustImportCli: 'dust:importCli',
   dustProbeSession: 'dust:probeSession',
+  // One-consent Connect: managed install + batched session import (docs/design/DUST-CONNECT.md).
+  dustConnect: 'dust:connect',
+  dustDetect: 'dust:detect',
   // Native OAuth sign-in (no CLI, no system Node.js) — see main/dust-oauth.ts.
   dustLoginBegin: 'dust:loginBegin',
   dustLoginPoll: 'dust:loginPoll',
@@ -1867,6 +1870,32 @@ export interface DustSessionProbe {
   /** true when access_token is present but workspace_sid is missing — the user finished the browser
    *  OAuth step of `dust login` but not the separate terminal workspace-picker step. */
   incomplete?: boolean
+}
+
+/** One-consent Dust Connect (install + import). Privilege spawn count is 1 for the sequence. */
+export interface DustConnectResult {
+  ok: boolean
+  installed: boolean
+  live: boolean
+  workspaceId?: string
+  workspaceName?: string
+  baseUrl?: string
+  privilegeSpawns: number
+  needsLogin?: boolean
+  accessDenied?: boolean
+  incomplete?: boolean
+  version?: string
+  error?: string
+}
+
+/** Detect the same binary Connect installed (managed / ~/.hermes / PATH). */
+export interface DustDetectResult {
+  installed: boolean
+  live: boolean
+  bin: string | null
+  workspaceId?: string
+  workspaceName?: string
+  version?: string
 }
 
 /** Result of a CLI provider detect/test operation (claude-cli, codex-cli). */

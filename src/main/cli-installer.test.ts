@@ -10,7 +10,16 @@ import { createHash } from 'node:crypto'
 vi.mock('electron')
 
 import { app } from 'electron'
-import { installManagedCli, managedCliEntry, managedCliCommand, MANAGED_CLIS, type CliInstallProgress } from './cli-installer'
+import {
+  installManagedCli,
+  managedCliEntry,
+  managedCliCommand,
+  MANAGED_CLIS,
+  ensurePackageJsonDeps,
+  DUST_CLI_PINNED_VERSION,
+  DUST_CLI_ENSURE_PACKAGES,
+  type CliInstallProgress
+} from './cli-installer'
 
 // ─── tarBuilder test helper: hand-assembled ustar tar buffer ────────────────────────
 // Mirrors exactly the field layout cli-installer.ts's vendored reader expects (name @0/100,
@@ -260,5 +269,62 @@ describe('installManagedCli — download ETA', () => {
     // The very first sample (0 bytes received) can't have a rate yet; a later one must.
     expect(downloadEvents[0].etaMs).toBeNull()
     expect(downloadEvents.some((p) => typeof p.etaMs === 'number' && Number.isFinite(p.etaMs))).toBe(true)
+  })
+})
+
+describe('managed Dust CLI — pin + missing diff', () => {
+  it('pins @dust-tt/dust-cli 0.4.5 and ensures the diff runtime dep', () => {
+    expect(MANAGED_CLIS.dust.npmPackage).toBe('@dust-tt/dust-cli')
+    expect(MANAGED_CLIS.dust.binRelPath).toBe('dist/index.js')
+    expect(MANAGED_CLIS.dust.pinVersion).toBe(DUST_CLI_PINNED_VERSION)
+    expect(DUST_CLI_PINNED_VERSION).toBe('0.4.5')
+    expect(MANAGED_CLIS.dust.ensurePackages).toEqual([...DUST_CLI_ENSURE_PACKAGES])
+  })
+
+  it('adds a missing diff dependency so a 0.4.6-style tarball is not a dead binary', () => {
+    const raw = JSON.stringify({ name: '@dust-tt/dust-cli', version: '0.4.6', dependencies: { keytar: '7.9.0' } })
+    const patched = ensurePackageJsonDeps(raw, ['diff'])
+    expect(patched.added).toEqual(['diff'])
+    expect(JSON.parse(patched.json).dependencies.diff).toBeTruthy()
+  })
+
+  it('does not rewrite package.json when diff is already declared', () => {
+    const raw = JSON.stringify({ name: '@dust-tt/dust-cli', version: '0.4.5', dependencies: { diff: '^5.2.0' } })
+    const patched = ensurePackageJsonDeps(raw, ['diff'])
+    expect(patched.added).toEqual([])
+    expect(patched.json).toBe(raw)
+  })
+
+  it('installs dust from the pinned packument URL, not /latest', async () => {
+    const version = DUST_CLI_PINNED_VERSION
+    const tgz = gzipSync(
+      buildTarball([
+        { name: 'package/dist/index.js', content: '#!/usr/bin/env node\nconsole.log("dust")\n' },
+        {
+          name: 'package/package.json',
+          content: JSON.stringify({ name: '@dust-tt/dust-cli', version, dependencies: {} })
+        }
+      ])
+    )
+    const registryJson = {
+      version,
+      dist: { tarball: 'https://example.invalid/dust-cli-0.4.5.tgz', integrity: sha512Integrity(tgz) }
+    }
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes(`/${version}`)) return registryResponse(registryJson)
+      if (url.includes('/latest')) throw new Error('must not fetch latest — 0.4.6 is missing diff')
+      return new Response(tgz, { status: 200, headers: { 'content-length': String(tgz.length) } })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await installManagedCli('dust', () => {})
+    expect(result.version).toBe(version)
+    expect(existsSync(result.entry)).toBe(true)
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/latest'))).toBe(false)
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes(`/${version}`))).toBe(true)
+    const pkg = JSON.parse(
+      (await import('node:fs')).readFileSync(join(userData, 'managed-cli', 'dust', version, 'package', 'package.json'), 'utf8')
+    )
+    expect(pkg.dependencies.diff).toBeTruthy()
   })
 })

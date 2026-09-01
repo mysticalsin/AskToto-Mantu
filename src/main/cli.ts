@@ -18,7 +18,7 @@ import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { join, isAbsolute } from 'node:path'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { createInterface } from 'node:readline'
 import { app, shell } from 'electron'
 import { existsSync, writeFileSync } from 'node:fs'
@@ -185,13 +185,37 @@ export async function resolveBin(bin: string): Promise<string | null> {
  *  cached, so an install completing mid-session is picked up on the next ask; a system install appearing
  *  later still wins (probed first). */
 function managedBinFallback(bin: string): string | null {
-  const id = bin === 'claude' ? 'claude' : bin === 'codex' ? 'codex' : null
+  const id = bin === 'claude' ? 'claude' : bin === 'codex' ? 'codex' : bin === 'dust' ? 'dust' : null
   if (!id) return null
   try {
     return managedCliEntry(id)?.entry ?? null
   } catch {
     return null
   }
+}
+
+/** Hermes-managed dust shims (user-owned prefix, never a sudo/UAC global). */
+export function hermesDustCandidates(home: string = homedir(), platform: NodeJS.Platform = process.platform): string[] {
+  const win = platform === 'win32'
+  const dir = join(home, '.hermes', 'bin')
+  return win ? [join(dir, 'dust.cmd'), join(dir, 'dust.exe')] : [join(dir, 'dust')]
+}
+
+/**
+ * The binary Dust Connect just installed. Managed userData first, then ~/.hermes, then PATH.
+ * A PATH-only miss after a managed install is the "Connected but not yet installed" bug.
+ */
+export async function resolveDustBin(): Promise<string | null> {
+  try {
+    const managed = managedCliEntry('dust')?.entry
+    if (managed && existsSync(managed)) return managed
+  } catch {
+    /* app.getPath can throw in tests that did not mock electron — fall through */
+  }
+  for (const candidate of hermesDustCandidates()) {
+    if (existsSync(candidate)) return candidate
+  }
+  return resolveBin('dust')
 }
 
 /** Env for spawning a CLI. For claude-cli, strip Claude-Code session + proxy vars so the spawned

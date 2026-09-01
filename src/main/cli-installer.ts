@@ -51,12 +51,20 @@ export interface CliInstallProgress {
 }
 
 export interface ManagedCliSpec {
-  id: 'claude' | 'codex'
+  id: 'claude' | 'codex' | 'dust'
   npmPackage: string
   binRelPath: string
+  /** When set, fetch this packument instead of /latest (Dust 0.4.6 shipped without `diff`). */
+  pinVersion?: string
+  /** Runtime packages the published tarball imports but may omit from dependencies. */
+  ensurePackages?: string[]
 }
 
 export type ManagedCliId = ManagedCliSpec['id']
+
+/** Known-good Dust CLI. 0.4.6 (and any latest that drops `diff`) looks dead after unpack. */
+export const DUST_CLI_PINNED_VERSION = '0.4.5'
+export const DUST_CLI_ENSURE_PACKAGES = ['diff'] as const
 
 export const MANAGED_CLIS: Record<ManagedCliId, ManagedCliSpec> = {
   claude: {
@@ -71,6 +79,13 @@ export const MANAGED_CLIS: Record<ManagedCliId, ManagedCliSpec> = {
     // tarball once it's available — this mirrors claude's single-JS-entry layout but codex's bin
     // layout hasn't been verified directly.
     binRelPath: 'bin/codex.js'
+  },
+  dust: {
+    id: 'dust',
+    npmPackage: '@dust-tt/dust-cli',
+    binRelPath: 'dist/index.js',
+    pinVersion: DUST_CLI_PINNED_VERSION,
+    ensurePackages: [...DUST_CLI_ENSURE_PACKAGES]
   }
 }
 
@@ -187,12 +202,45 @@ interface NpmLatestMeta {
 /** The npm registry's per-version packument lookup. Scoped package names contain a literal '/' between
  *  scope and name, which must be percent-encoded (the registry treats an unescaped '/' as a path
  *  separator); the leading '@' is conventionally left unescaped. */
-function registryLatestUrl(npmPackage: string): string {
-  return `https://registry.npmjs.org/${npmPackage.replace('/', '%2f')}/latest`
+function registryPackumentUrl(npmPackage: string, pinVersion?: string): string {
+  const encoded = npmPackage.replace('/', '%2f')
+  return pinVersion
+    ? `https://registry.npmjs.org/${encoded}/${pinVersion}`
+    : `https://registry.npmjs.org/${encoded}/latest`
 }
 
-async function fetchLatestMeta(npmPackage: string, signal: AbortSignal | undefined): Promise<NpmLatestMeta> {
-  const res = await fetch(registryLatestUrl(npmPackage), { signal })
+/**
+ * Patch package.json so a published tarball that `require`s a package it forgot to declare
+ * (Dust CLI 0.4.6 / `diff`) still gets that dep before we call the binary live.
+ */
+export function ensurePackageJsonDeps(
+  raw: string,
+  packages: readonly string[]
+): { json: string; added: string[] } {
+  let parsed: { dependencies?: Record<string, string> }
+  try {
+    parsed = JSON.parse(raw) as { dependencies?: Record<string, string> }
+  } catch {
+    return { json: raw, added: [] }
+  }
+  const deps = { ...(parsed.dependencies ?? {}) }
+  const added: string[] = []
+  for (const name of packages) {
+    if (!deps[name]) {
+      deps[name] = '*'
+      added.push(name)
+    }
+  }
+  if (added.length === 0) return { json: raw, added }
+  return { json: JSON.stringify({ ...parsed, dependencies: deps }, null, 2), added }
+}
+
+async function fetchLatestMeta(
+  npmPackage: string,
+  signal: AbortSignal | undefined,
+  pinVersion?: string
+): Promise<NpmLatestMeta> {
+  const res = await fetch(registryPackumentUrl(npmPackage, pinVersion), { signal })
   if (!res.ok) {
     throw new Error(`npm registry lookup failed for ${npmPackage}: HTTP ${res.status}`)
   }
@@ -347,7 +395,7 @@ export async function installManagedCli(
   try {
     throwIfAborted()
     onProgress({ phase: 'resolving' })
-    const meta = await fetchLatestMeta(spec.npmPackage, signal)
+    const meta = await fetchLatestMeta(spec.npmPackage, signal, spec.pinVersion)
 
     throwIfAborted()
     const buf = await downloadTarball(meta.tarball, onProgress, signal)
@@ -368,6 +416,14 @@ export async function installManagedCli(
       throw new Error(
         `installManagedCli: expected entry '${spec.binRelPath}' is missing from ${spec.npmPackage}@${meta.version}`
       )
+    }
+
+    if (spec.ensurePackages?.length) {
+      const pkgPath = join(tmpDir, 'package', 'package.json')
+      if (existsSync(pkgPath)) {
+        const patched = ensurePackageJsonDeps(readFileSync(pkgPath, 'utf8'), spec.ensurePackages)
+        if (patched.added.length) writeFileSync(pkgPath, patched.json, 'utf8')
+      }
     }
 
     throwIfAborted()

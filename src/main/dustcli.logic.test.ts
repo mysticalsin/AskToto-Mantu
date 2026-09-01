@@ -20,7 +20,16 @@ const store = vi.hoisted(() => ({
 
 vi.mock('./dust-secret-store', () => ({
   DUST_KEYCHAIN_SERVICE: 'dust-cli',
-  readDustSecret: vi.fn(async (account: string) => store.reads.get(account) ?? { value: null })
+  readDustSecret: vi.fn(async (account: string) => store.reads.get(account) ?? { value: null }),
+  readDustSessionSecrets: vi.fn(async () => {
+    const field = (account: string) => store.reads.get(account) ?? { value: null, accessDenied: false }
+    return {
+      access_token: field('access_token'),
+      workspace_sid: field('workspace_sid'),
+      region: field('region'),
+      privilegeSpawns: 1
+    }
+  })
 }))
 vi.mock('./cli', () => ({
   killWindowsProcessTree: vi.fn(),

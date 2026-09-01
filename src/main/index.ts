@@ -346,6 +346,7 @@ import { runSelfTest } from './selftest'
 import { devEnv, devToolsEnabled } from './dev-env'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { importDustCliSession, refreshDustCliSession } from './dustcli'
+import { detectDustCli, runDustConnectInstall } from './dust-connect'
 import {
   beginDustDeviceLogin,
   pollDustDeviceLoginOnce,
@@ -3465,6 +3466,21 @@ function registerIpc(): void {
       dustSessionOrigin: 'cli'
     })
     return { ok: true, workspaceId: s.workspaceId, baseUrl: s.baseUrl }
+  })
+
+  ipcMain.handle(IPC.dustConnect, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, installed: false, live: false, privilegeSpawns: 0, error: 'Sign in with your Mantu account first.' }
+    return runDustConnectInstall()
+  })
+
+  ipcMain.handle(IPC.dustDetect, async (e) => {
+    assertMainWindow(e)
+    const s = getSettings()
+    return detectDustCli({
+      hasKey: hasApiKey('dust'),
+      workspaceId: s.dustWorkspaceId
+    })
   })
 
   // Read-only session probe for the Settings-open live check. CRITICALLY this does NOT call
