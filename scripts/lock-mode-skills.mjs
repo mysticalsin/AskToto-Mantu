@@ -62,10 +62,9 @@ export function parseSkillHeader(raw) {
 
 export function readSkillFile(absPath) {
   if (!existsSync(absPath)) throw new Error(`Skill file missing: ${absPath}`)
-  const raw = readFileSync(absPath, 'utf8')
-  if (raw.includes('\r')) {
-    throw new Error(`Skill file must be LF-only (found CR): ${absPath}`)
-  }
+  // Windows checkouts with core.autocrlf rewrite LF to CRLF. Hash the LF form so
+  // `npm test`'s --check matches the committed lock on every host.
+  const raw = readFileSync(absPath, 'utf8').replace(/\r\n/g, '\n').replace(/\r/g, '\n')
   const header = parseSkillHeader(raw)
   return { raw, ...header }
 }

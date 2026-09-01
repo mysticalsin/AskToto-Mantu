@@ -29,6 +29,25 @@ describe('lock-mode-skills', () => {
     expect(custom).toContain('LOCKED HUMANIZER')
   })
 
+  it('CRLF on disk hashes the same as the committed LF lock', () => {
+    const { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync } = require('node:fs') as typeof import('node:fs')
+    const { tmpdir } = require('node:os') as typeof import('node:os')
+    const { join } = require('node:path') as typeof import('node:path')
+    const dir = mkdtempSync(join(tmpdir(), 'skill-crlf-'))
+    try {
+      for (const rel of ['humanizer/SKILL.md', ...['interview','recruiting','meeting','sales','negotiation','presentation','support','general','cold-call'].map((id) => `modes/${id}/SKILL.md`)]) {
+        const src = join(process.cwd(), 'skills', rel)
+        const dest = join(dir, rel)
+        mkdirSync(join(dest, '..'), { recursive: true })
+        writeFileSync(dest, readFileSync(src, 'utf8').replace(/\n/g, '\r\n'))
+      }
+      const { buildLock } = require('./lock-mode-skills.mjs') as typeof import('./lock-mode-skills.mjs')
+      expect(diffLock(buildLock(dir), readLock())).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('the lock file is schemaVersion 1 sha256', () => {
     const lock = JSON.parse(readFileSync(LOCK_PATH, 'utf8'))
     expect(lock.schemaVersion).toBe(1)
