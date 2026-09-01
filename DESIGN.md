@@ -119,3 +119,17 @@ Cloud CLI is provider id `claude-cli`. It is the local `claude` binary talking t
 `applyInteractiveGuardrail` must not pin every claude-cli tier to Sonnet. Deep stays Opus. Overlay, Island, onboarding, and pack stay frozen.
 
 **Attribution.** The finished answer shows a provider + model chip from `streamMeta` (Claude / haiku, Claude / sonnet, Claude / opus) so the user can see Claude answered.
+
+## Cloud CLI + Codex CLI one-click install and auth
+
+Settings → CLI Integration → **Connect** is one click for both `claude-cli` (Cloud CLI / Claude Code) and `codex-cli` (Codex CLI). Overlay, Island, onboarding, and pack stay frozen.
+
+1. **Consent.** If the binary is missing, Métis asks for approval before installing. No silent install. Already-installed + live session skips this: detect + switch only.
+2. **Install.** Official Claude Code CLI (`@anthropic-ai/claude-code`) or official Codex CLI (`@openai/codex`), or the self-contained managed installer when npm is absent. Progress stays in the same Settings row. Fail loud. Never show Connected on a missing binary.
+3. **Login.** If signed out, Métis starts the CLI login (browser / device code). The user approves once. The session is imported. Connect does **not** send a billed turn (`detectCli` + `checkCliSession` only — never `testCli`).
+4. **Live only.** `connectCliSession(provider)` runs only when `checkCliSession === 'live'`. That writes `cliConnected[provider] = true` and `provider` so every Ask goes through that CLI. A Connected badge without a live session is a bug.
+5. **Already set up.** Installed + live → detect + switch. Zero extra steps.
+6. **Routing.** Cloud CLI: Haiku (fast) / Sonnet (think) / Opus (coding and deep). Codex CLI: the Codex default for fast (omit `-m`); `gpt-5.5` for think/deep when the CLI accepts it.
+7. **Chip.** The finished answer shows Claude / haiku|sonnet|opus or Codex / default|gpt-5.5.
+
+Windows and macOS both. `installCli` / `loginCli` / setup-script already exist in `src/main/cli.ts`; Settings Connect walks missing → install → login → live.
