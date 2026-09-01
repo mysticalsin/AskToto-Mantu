@@ -4,3 +4,5 @@
  */
 export const TEST_INGEST_SECRET = 'operator-ingest-secret-for-tests'
 export const TEST_PROMPT_KEY = Buffer.alloc(32, 7).toString('base64')
+/** Test-only Worker admin password. Not a production secret. */
+export const TEST_ADMIN_PASSWORD = 'operator-admin-password-for-tests'

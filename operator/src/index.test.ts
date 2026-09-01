@@ -125,13 +125,14 @@ describe('HMAC ingest', () => {
 })
 
 describe('Access on admin routes', () => {
-  it('returns 401 on / and /v1/admin/* when Access identity is missing, even with a valid HMAC', async () => {
+  it('returns 401 JSON on /v1/admin/* when identity is missing, even with a valid HMAC', async () => {
     const store = memoryStore()
     const admin = await signedRequest('/v1/admin/summary', JSON.stringify({}), { method: 'GET' })
     const res = await handleRequest(admin, env(), {}, { store, now: NOW })
     expect(res.status).toBe(401)
-    const home = await signedRequest('/', '', { method: 'GET' })
-    expect((await handleRequest(home, env(), {}, { store, now: NOW })).status).toBe(401)
+    expect(await res.json()).toEqual({ ok: false, error: 'Access required' })
+    const homeJson = new Request('https://operator.test/', { headers: { accept: 'application/json' } })
+    expect((await handleRequest(homeJson, env(), {}, { store, now: NOW })).status).toBe(401)
   })
 
   it('rejects a non-allowlisted Access email', async () => {

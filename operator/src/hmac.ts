@@ -11,7 +11,7 @@ export async function hmacHex(secret: string, message: string): Promise<string> 
   return [...sig].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-function timingSafeEqualHex(a: string, b: string): boolean {
+export function timingSafeEqualHex(a: string, b: string): boolean {
   if (a.length !== b.length) return false
   let diff = 0
   for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i)

@@ -138,14 +138,18 @@ function probeLiveLogin() {
     if (healthCode !== '200' || !healthBody.includes('"service":"metis-operator"')) {
       fail(`live /health must stay 200 without Access (got ${healthCode})`)
     }
-    const root = run('curl', ['-sS', '-o', '-', '-w', '\n%{http_code}', `${host}/`]).trim()
-    const rootLines = root.split('\n')
-    const rootCode = rootLines.at(-1)
-    const rootBody = rootLines.slice(0, -1).join('\n')
-    if (rootCode !== '401' || !rootBody.includes('Access required')) {
-      fail(`live / must stay 401 Access required without identity (got ${rootCode})`)
+    const root = run('curl', ['-sS', '-D', '-', '-o', '-', `${host}/`])
+    if (!/content-type:\s*text\/html/i.test(root) || !/data-login="1"/.test(root) || !/type="password"/.test(root)) {
+      fail(`live / must be text/html login, not JSON Access required`)
     }
-    console.log(`✓ Live login contract: ${host}/health 200, ${host}/ 401 Access required`)
+    if (/"ok":\s*false/.test(root) && /Access required/.test(root) && !/data-login/.test(root)) {
+      fail(`live / first paint is still JSON 401`)
+    }
+    const api = run('curl', ['-sS', '-D', '-', '-o', '-', `${host}/v1/admin/dashboard`])
+    if (!/HTTP\/\S+\s+401/.test(api) || !/application\/json/i.test(api) || !/Access required/.test(api)) {
+      fail(`live /v1/admin/dashboard must stay 401 JSON without identity`)
+    }
+    console.log(`✓ Live login contract: ${host}/health 200, ${host}/ text/html login, ${host}/v1/admin/dashboard 401 JSON`)
   } catch (err) {
     fail(`live login probe failed: ${err instanceof Error ? err.message : String(err)}`)
   }
