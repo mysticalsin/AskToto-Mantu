@@ -1,5 +1,8 @@
-import { sha256Hex } from './crypto'
+import { bytesToB64url, b64urlToBytes, sha256Hex } from './crypto'
 import { hmacHex, timingSafeEqualHex } from './hmac'
+
+const enc = new TextEncoder()
+const dec = new TextDecoder()
 
 export const ADMIN_EMAILS = ['tony.walteur@gmail.com', 'twalteur@amaris.com'] as const
 
@@ -43,8 +46,9 @@ export async function passwordMatches(given: string, secret: string): Promise<bo
 export async function mintSessionCookie(email: string, secret: string, now: number): Promise<string> {
   const exp = now + SESSION_TTL_MS
   const norm = normalizeAdminEmail(email)
+  const packed = bytesToB64url(enc.encode(norm))
   const sig = await hmacHex(secret, `${norm}.${exp}`)
-  const value = `${encodeURIComponent(norm)}.${exp}.${sig}`
+  const value = `${packed}.${exp}.${sig}`
   return `${SESSION_COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
 }
 
@@ -62,7 +66,12 @@ export async function emailFromSessionCookie(
   if (!raw) return null
   const parts = raw.split('.')
   if (parts.length !== 3) return null
-  const email = normalizeAdminEmail(decodeURIComponent(parts[0] || ''))
+  let email = ''
+  try {
+    email = normalizeAdminEmail(dec.decode(b64urlToBytes(parts[0] || '')))
+  } catch {
+    return null
+  }
   const exp = Number(parts[1])
   const sig = parts[2] || ''
   if (!isAdminEmail(email) || !Number.isFinite(exp) || exp <= now) return null
