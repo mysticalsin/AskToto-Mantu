@@ -14,10 +14,13 @@ function prefersReducedMotion(): boolean {
 
 export function OnboardingStarfield({
   pulse,
+  active = true,
   onUnavailable,
   onFirstFrame
 }: {
   pulse: number
+  /** Keep the bed mounted after hero. Pause (no remount flash) on reveal. */
+  active?: boolean
   onUnavailable: () => void
   onFirstFrame?: () => void
 }): JSX.Element {
@@ -55,6 +58,10 @@ export function OnboardingStarfield({
   useEffect(() => {
     bedRef.current?.nudge()
   }, [pulse])
+
+  useEffect(() => {
+    bedRef.current?.setActive(active)
+  }, [active])
 
   return <div ref={wrapRef} className="onboard-starfield" aria-hidden="true" />
 }

@@ -17,21 +17,21 @@ describe('Mac-show tour stay-visible + quieter bar land', () => {
   it('starfield mounts on hero', () => {
     expect(shouldMountStarfield('hero')).toBe(false)
     expect(shouldMountStarfield('problem')).toBe(true)
-    expect(experience).toMatch(/shouldMountStarfield\(scene\) && !starfieldFailed/)
+    expect(experience).toMatch(/active=\{shouldMountStarfield\(scene\)\}/)
+    expect(experience).toMatch(/scene !== 'hero' && !starfieldFailed/)
   })
 
-  it('problem Continue is present at t=0 and lines stay with both', () => {
+  it('problem Continue is present at t=0 and lines never hide behind fade-up', () => {
     const problem = experience.slice(experience.indexOf("scene === 'problem'"), experience.indexOf("scene === 'reveal'"))
     expect(problem).toMatch(/>\s*Continue\s*</)
     expect(problem).not.toMatch(/PROBLEM_STORY\.length \* 1100/)
-    expect(problem).toMatch(/animationFillMode: 'both'/)
-    expect(problem).not.toMatch(/animationFillMode: 'forwards'/)
-    expect(problem).not.toMatch(/animationFillMode: 'backwards'/)
+    expect(problem).not.toMatch(/fade-up/)
+    expect(problem).not.toMatch(/animationFillMode/)
     const continueAt = problem.indexOf('>Continue<') >= 0 ? problem.indexOf('>Continue<') : problem.search(/>\s*Continue\s*</)
     const sceneEnterAt = problem.indexOf('scene-enter')
     expect(sceneEnterAt).toBeGreaterThanOrEqual(0)
     expect(continueAt).toBeGreaterThan(sceneEnterAt)
-    expect(css).toMatch(/\.fade-up \{\s*animation: fade-up 180ms[^;]*forwards/)
+    expect(css).toMatch(/\.onboard-stage \.fade-up \{\s*animation:\s*none/)
   })
 
   it('demo Next and Set me up stay mounted after beats', () => {

@@ -1142,6 +1142,29 @@ input::placeholder {
   margin-top: 2px;
 }
 
+/* DESIGN.md Onboarding second brain + no-flash: copy and CTAs never start hidden.
+   Portal open/close stays the one ceremonial pair. Per-step fade-up / opacity-0 scene-enter is a blink. */
+.onboard-stage .fade-up {
+  animation: none;
+  opacity: 1;
+  transform: none;
+}
+.onboard-stage .scene-enter {
+  animation: none;
+  opacity: 1;
+  transform: none;
+}
+.onboard-tour-slot {
+  display: flex;
+  width: 100%;
+  min-height: 28rem;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+}
+
 /* Exclusive-stage primary CTAs — min 52×220, high contrast, hittable (DESIGN.md). */
 .onboard-cta {
   display: inline-flex;

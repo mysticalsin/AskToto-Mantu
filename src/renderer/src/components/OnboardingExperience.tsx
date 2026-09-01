@@ -49,13 +49,21 @@ import {
   CalendarDays,
   Handshake,
   Headphones,
+  Library,
   Phone,
   Presentation,
   Users,
   Volume2,
   VolumeX
 } from 'lucide-react'
-import type { ConversationMode, LocalModelSummary, PermissionStatus, ProfileRecoveryResult, PublicSettings } from '@shared/ipc'
+import type {
+  ConversationMode,
+  LocalModelSummary,
+  PermissionStatus,
+  ProfileRecoveryResult,
+  PublicSettings,
+  SecondBrainDetectResult
+} from '@shared/ipc'
 import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { InlineOrb } from './AgentStatus'
@@ -140,7 +148,7 @@ function ActProgress({ scene }: { scene: Scene }): JSX.Element | null {
   const idx = GUIDED_SCENES.indexOf(scene)
   if (idx < 0) return null
   return (
-    <div className="fade-up flex items-center gap-1.5" aria-hidden="true">
+    <div className="flex items-center gap-1.5" aria-hidden="true">
       {GUIDED_SCENES.map((s, i) => (
         <span
           key={s}
@@ -225,17 +233,10 @@ function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => 
             <MetisMark size={96} />
           </div>
           <div className="flex flex-col items-center gap-2">
-            <h1
-              className="hero-wordmark fade-up m-0 select-none"
-              aria-label={WORDMARK}
-              style={{ fontFamily: 'var(--font-ui)', animationDelay: '160ms', animationFillMode: 'both' }}
-            >
+            <h1 className="hero-wordmark m-0 select-none" aria-label={WORDMARK} style={{ fontFamily: 'var(--font-ui)' }}>
               <span aria-hidden="true">{WORDMARK}</span>
             </h1>
-            <p
-              className="hero-tagline fade-up m-0 text-[14px] text-[color:var(--color-ink-2)]"
-              style={{ animationDelay: '400ms', animationFillMode: 'both' }}
-            >
+            <p className="hero-tagline m-0 text-[14px] text-[color:var(--color-ink-2)]">
               Your on-device meeting copilot.
             </p>
           </div>
@@ -247,16 +248,12 @@ function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => 
           <button
             type="button"
             onClick={onSkip}
-            className="onboard-glass onboard-glass-chip onboard-skip-chip fade-up no-drag focus-ring"
-            style={{ animationDelay: '1150ms', animationFillMode: 'backwards' }}
+            className="onboard-glass onboard-glass-chip onboard-skip-chip no-drag focus-ring"
           >
             Skip the tour
           </button>
         )}
-        <p
-          className="hero-byline onboard-glass onboard-glass-chip fade-up m-0 text-[10px] tracking-wide"
-          style={{ animationDelay: '1300ms', animationFillMode: 'backwards' }}
-        >
+        <p className="hero-byline onboard-glass onboard-glass-chip m-0 text-[10px] tracking-wide">
           Mantu ·{' '}
           <a
             href="https://www.linkedin.com/in/tonywalteur/"
@@ -342,6 +339,18 @@ export function localModelRowStatus(
   }
   if (model.ready) return { state: 'ready', detail: 'On-device model ready' }
   return { state: 'checking', detail: 'Checking the on-device model…' }
+}
+
+/** Act 3 vault row. found = that Obsidian vault is the source of truth. offline ≠ create. */
+export function vaultRowStatus(
+  result: SecondBrainDetectResult | null | undefined
+): { state: SetupRowState; detail: string } {
+  if (!result) return { state: 'checking', detail: '' }
+  if (result.status === 'found') return { state: 'ready', detail: 'Using your AI Second Brain vault.' }
+  if (result.status === 'offline') {
+    return { state: 'action', detail: 'OneDrive is not available. Retry when it is online.' }
+  }
+  return { state: 'action', detail: 'No AI Second Brain vault yet. Create one at this path?' }
 }
 
 /** Act 3 — "scan first, then present a completed configuration": two DIFFERENT claims the scene makes,
@@ -607,7 +616,7 @@ function ActReady({
       <div className="flex flex-col items-center gap-2">
         <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">You’re all set.</h2>
         {persona && (
-          <p className="fade-up m-0 text-[11px] font-medium uppercase tracking-[0.08em] text-[color:var(--color-accent-2)]">
+          <p className="m-0 text-[11px] font-medium uppercase tracking-[0.08em] text-[color:var(--color-accent-2)]">
             {persona.label} mode
           </p>
         )}
@@ -618,7 +627,7 @@ function ActReady({
         <p className="m-0 max-w-[380px] text-[13px] leading-snug text-[color:var(--color-ink-2)]">
           {TELL_THE_ROOM_READY}
         </p>
-        <p className="onboard-tell-quote onboard-tell-quote--echo fade-up">{TELL_THE_ROOM_QUOTE}</p>
+        <p className="onboard-tell-quote onboard-tell-quote--echo">{TELL_THE_ROOM_QUOTE}</p>
       </div>
       <button
         type="button"
@@ -742,6 +751,63 @@ export function OnboardingExperience({
   // the former needs a restart, since this process's ScreenCaptureKit handle never saw the earlier one.
   const screenGrantedRef = useRef<boolean | null>(null)
   const [restarting, setRestarting] = useState(false)
+  const [vault, setVault] = useState<SecondBrainDetectResult | null>(null)
+  const [vaultBusy, setVaultBusy] = useState(false)
+
+  useEffect(() => {
+    let live = true
+    void window.toto
+      .secondBrainDetect()
+      .then((r) => {
+        if (!live) return
+        setVault(r)
+        if (r.status === 'found' && r.path) patch?.({ secondBrainVaultPath: r.path })
+      })
+      .catch(() => {
+        if (live) setVault({ status: 'not-found', suggestedPath: '', reason: 'Could not look for the vault.' })
+      })
+    return () => {
+      live = false
+    }
+  }, [])
+
+  useEffect(() => {
+    const v = vaultRowStatus(vault)
+    setRows((rs) => rs.map((r) => (r.key === 'vault' ? { ...r, state: v.state, detail: v.detail } : r)))
+  }, [vault])
+
+  const retryVault = async (): Promise<void> => {
+    if (vaultBusy) return
+    setVaultBusy(true)
+    try {
+      const r = await window.toto.secondBrainDetect()
+      setVault(r)
+      if (r.status === 'found' && r.path) patch?.({ secondBrainVaultPath: r.path })
+    } catch {
+      setVault({ status: 'offline', suggestedPath: vault?.suggestedPath || '', reason: 'OneDrive is not available' })
+    } finally {
+      setVaultBusy(false)
+    }
+  }
+
+  const createVault = async (): Promise<void> => {
+    if (vaultBusy) return
+    setVaultBusy(true)
+    try {
+      const r = await window.toto.secondBrainCreate()
+      setVault(r)
+      if (r.ok && r.path) patch?.({ secondBrainVaultPath: r.path })
+    } catch {
+      setVault({
+        status: 'not-found',
+        suggestedPath: vault?.suggestedPath || '',
+        reason: 'Could not create the vault.'
+      })
+    } finally {
+      setVaultBusy(false)
+    }
+  }
+
   // --- Setup scene: run the REAL checks the moment the scene mounts.
   useEffect(() => {
     if (scene !== 'setup') return
@@ -755,6 +821,7 @@ export function OnboardingExperience({
       // onboarding. docs/ONBOARDING-EXPERIENCE.md's rule is to show only rows that are actually true.
       { key: 'asr', label: 'On-device transcription', icon: Sparkles, state: 'checking' },
       { key: 'brain', label: 'Private meeting brain', icon: FolderLock, state: 'checking' },
+      { key: 'vault', label: 'Second brain', icon: Library, state: 'checking' },
       { key: 'mic', label: 'Microphone', icon: Mic, state: 'checking' },
       { key: 'screen', label: 'Screen context', icon: MonitorUp, state: 'checking' },
       // Act 3 (MQA-279): AI readiness, derived from the SAME `providerReady`/`provider` publicSettings()
@@ -776,6 +843,8 @@ export function OnboardingExperience({
       set('asr', bundled ? 'ready' : 'action', bundled ? 'Parakeet + Whisper bundled' : 'models missing in this build')
       await delay(450)
       set('brain', 'ready', isWindows ? 'stays on this PC' : 'stays on this Mac')
+      const vaultHit = vaultRowStatus(vault)
+      set('vault', vaultHit.state, vaultHit.detail)
       await delay(450)
       const perms = await window.toto.getPermissions().catch(() => null)
       const mic = micRowStatus(perms?.microphone)
@@ -917,8 +986,12 @@ export function OnboardingExperience({
       onPointerDown={music.start}
     >
       {scene === 'hero' && <OnboardingHeroVideo videoRef={heroVideoRef} />}
-      {shouldMountStarfield(scene) && !starfieldFailed && (
-        <OnboardingStarfield pulse={starfieldPulse} onUnavailable={() => setStarfieldFailed(true)} />
+      {scene !== 'hero' && !starfieldFailed && (
+        <OnboardingStarfield
+          pulse={starfieldPulse}
+          active={shouldMountStarfield(scene)}
+          onUnavailable={() => setStarfieldFailed(true)}
+        />
       )}
       <button
         type="button"
@@ -932,7 +1005,7 @@ export function OnboardingExperience({
       <div className="flex h-9 shrink-0 items-center justify-center pt-3">
         <ActProgress scene={scene} />
       </div>
-      <div className="flex w-full flex-1 flex-col items-center justify-center gap-6">
+      <div className="onboard-tour-slot">
       {scene === 'hero' && (
         <HeroWelcome
           onBegin={() => {
@@ -947,16 +1020,8 @@ export function OnboardingExperience({
       {scene === 'problem' && (
         <div key="problem" className="flex flex-col items-center gap-8">
           <div className="scene-enter flex max-w-[420px] flex-col gap-3 text-left">
-            {PROBLEM_STORY.map((line, i) => (
-              <p
-                key={line}
-                className="fade-up m-0 text-[22px] font-medium leading-snug text-[color:var(--color-ink)]"
-                style={{
-                  animationDelay: `${200 + i * 1100}ms`,
-                  animationFillMode: 'both',
-                  opacity: 1
-                }}
-              >
+            {PROBLEM_STORY.map((line) => (
+              <p key={line} className="m-0 text-[22px] font-medium leading-snug text-[color:var(--color-ink)]">
                 {line}
               </p>
             ))}
@@ -993,11 +1058,10 @@ export function OnboardingExperience({
         <div key="setup" className="scene-enter flex flex-col items-center gap-6">
           <h2 className="m-0 text-[22px] font-semibold text-[color:var(--color-ink)]">Your setup</h2>
           <div className="flex w-full max-w-[440px] flex-col gap-2">
-            {rows.map((r, i) => (
+            {rows.map((r) => (
               <div
                 key={r.key}
-                className="glass-strong fade-up flex items-start gap-3 rounded-[12px] px-3.5 py-2.5 text-left"
-                style={{ animationDelay: `${i * 70}ms`, animationFillMode: 'backwards' }}
+                className="glass-strong flex items-start gap-3 rounded-[12px] px-3.5 py-2.5 text-left"
               >
                 <r.icon size={16} className="mt-0.5 shrink-0 text-[color:var(--color-ink-2)]" />
                 <div className="min-w-0 flex-1">
@@ -1088,6 +1152,38 @@ export function OnboardingExperience({
                       />
                     </div>
                   )}
+                  {r.key === 'vault' && r.state === 'action' && vault?.status === 'offline' && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                        OneDrive is not available. Retry when it is online. Métis will not invent a vault.
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void retryVault()}
+                        disabled={vaultBusy}
+                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25 disabled:opacity-60"
+                      >
+                        {vaultBusy ? 'Retrying…' : 'Retry'}
+                      </button>
+                    </div>
+                  )}
+                  {r.key === 'vault' && r.state === 'action' && vault?.status === 'not-found' && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                      <span className="text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+                        {vault.suggestedPath
+                          ? `Create AI Second Brain at ${vault.suggestedPath}. Dust will write to 00_Inbox/from-dust/.`
+                          : 'Create an AI Second Brain vault. Dust will write to 00_Inbox/from-dust/.'}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void createVault()}
+                        disabled={vaultBusy}
+                        className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25 disabled:opacity-60"
+                      >
+                        {vaultBusy ? 'Creating…' : 'Create vault'}
+                      </button>
+                    </div>
+                  )}
                   {r.key === 'ai' && r.state === 'action' && (
                     <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
                       You'll add a provider key on the next step. Nothing else here needs one.
@@ -1114,7 +1210,7 @@ export function OnboardingExperience({
             ))}
           </div>
           {allReady && (
-            <p className="fade-up m-0 text-[14px] font-medium text-[color:var(--color-ink)]">
+            <p className="m-0 text-[14px] font-medium text-[color:var(--color-ink)]">
               Everything’s ready. Nothing to configure.
             </p>
           )}
@@ -1123,7 +1219,7 @@ export function OnboardingExperience({
               Ready. True the moment scanning settles, regardless of allReady: nothing above changes when
               Métis is actually allowed to listen. */}
           {scanDone && (
-            <p className="fade-up m-0 max-w-[360px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
+            <p className="m-0 max-w-[360px] text-[11px] leading-snug text-[color:var(--color-ink-3)]">
               Métis only starts listening when you press Listen and tell the room. Nothing is captured before that.
             </p>
           )}

@@ -286,6 +286,7 @@ describe('MQA-201 — scene 4 never fakes a check', () => {
     // asrBundled / getPermissions, plus the two rows whose verdict is a platform fact the renderer
     // genuinely knows (the brain path, and Windows having no per-app screen-recording permission).
     expect(src).toMatch(/window\.toto\.asrBundled\(\)/)
+    expect(src).toMatch(/window\.toto\.secondBrainDetect\(\)/)
     expect(src).toMatch(/window\.toto\.getPermissions\(\)/)
     expect(src).toMatch(/micRowStatus\(perms\?\.microphone\)/)
     expect(src).toMatch(/window\.toto\.localModelsList\(\)/)

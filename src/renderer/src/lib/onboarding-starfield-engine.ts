@@ -51,6 +51,7 @@ import {
 
 export interface StarfieldBed {
   nudge: () => void
+  setActive: (on: boolean) => void
   dispose: () => void
 }
 
@@ -227,6 +228,7 @@ export function createStarfieldBed(
   let scroll = seeded
   let raf = 0
   let disposed = false
+  let active = true
   let firstFrame = true
   const started = nowFn()
   let lastTick = started
@@ -242,7 +244,7 @@ export function createStarfieldBed(
   }
 
   const tick = (): void => {
-    if (disposed) return
+    if (disposed || !active) return
     raf = requestAnimationFrame(tick)
     if (typeof document !== 'undefined' && document.hidden) {
       lastTick = nowFn()
@@ -310,6 +312,17 @@ export function createStarfieldBed(
   return {
     nudge: () => {
       bump += NEXT_BUMP
+    },
+    setActive: (on: boolean) => {
+      if (on === active || disposed) return
+      active = on
+      canvas.style.opacity = on && !firstFrame ? '1' : '0'
+      if (on) {
+        lastTick = nowFn()
+        tick()
+      } else {
+        cancelAnimationFrame(raf)
+      }
     },
     dispose: () => {
       if (disposed) return

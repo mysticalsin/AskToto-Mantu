@@ -324,8 +324,15 @@ import {
   isEncryptedFile,
   decryptToTemp,
   sweepStaleTempFiles,
-  readSavedFile
+  readSavedFile,
+  detectOneDrive
 } from './transcripts'
+import {
+  createSecondBrainVault,
+  detectSecondBrainVault,
+  liveSecondBrainEnv,
+  nodeVaultFs
+} from './second-brain-vault'
 import { getPlatformPermissions, probeScreenCapture, noteScreenCaptureOutcome } from './platform-perms'
 import {
   listMeetings,
@@ -6005,6 +6012,35 @@ function registerIpc(): void {
     const r = win ? await dialog.showOpenDialog(win, openDialogOpts) : await dialog.showOpenDialog(openDialogOpts)
     if (!r.canceled && r.filePaths[0]) setSettings({ meetingsFolder: r.filePaths[0] })
     return publicSettings()
+  })
+
+  // Onboarding / Settings: map OneDrive for an existing "AI Second Brain" vault. Read-only probe.
+  // Offline is honest (no mkdir). Auth not required: same class as permissionsGet / asrBundled.
+  ipcMain.handle(IPC.secondBrainDetect, (e) => {
+    assertMainWindow(e)
+    return detectSecondBrainVault(liveSecondBrainEnv(detectOneDrive()), nodeVaultFs())
+  })
+
+  ipcMain.handle(IPC.secondBrainCreate, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) {
+      const blocked = detectSecondBrainVault(liveSecondBrainEnv(detectOneDrive()), nodeVaultFs())
+      return { ok: false, ...blocked }
+    }
+    const env = liveSecondBrainEnv(detectOneDrive())
+    const fs = nodeVaultFs()
+    const first = detectSecondBrainVault(env, fs)
+    if (first.status === 'found') {
+      setSettings({ secondBrainVaultPath: first.path })
+      return { ok: true, ...first }
+    }
+    if (first.status === 'offline') {
+      return { ok: false, ...first }
+    }
+    const made = createSecondBrainVault(first.suggestedPath)
+    if (!made.ok) return { ok: false, status: 'offline' as const, suggestedPath: first.suggestedPath, reason: made.reason }
+    setSettings({ secondBrainVaultPath: made.path })
+    return { ok: true, status: 'found' as const, path: made.path, suggestedPath: first.suggestedPath }
   })
 
   // Team transcripts: pick a shared folder whose meeting transcripts are ALSO ingested into this brain

@@ -62,7 +62,9 @@ import {
   type ImportAudioProgress,
   type ImportJobView,
   type LocalModelSummary,
-  type ProfileRecoveryResult
+  type ProfileRecoveryResult,
+  type SecondBrainCreateResult,
+  type SecondBrainDetectResult
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 
@@ -207,6 +209,8 @@ const api = {
   exportRecapJson: (markdown: string): Promise<RecapExport> =>
     ipcRenderer.invoke(IPC.exportRecapJson, markdown),
   pickFolder: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.pickFolder),
+  secondBrainDetect: (): Promise<SecondBrainDetectResult> => ipcRenderer.invoke(IPC.secondBrainDetect),
+  secondBrainCreate: (): Promise<SecondBrainCreateResult> => ipcRenderer.invoke(IPC.secondBrainCreate),
   addTeamTranscriptFolder: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.addTeamTranscriptFolder),
   removeTeamTranscriptFolder: (folder: string): Promise<PublicSettings> =>
     ipcRenderer.invoke(IPC.removeTeamTranscriptFolder, folder),

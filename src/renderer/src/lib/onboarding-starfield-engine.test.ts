@@ -25,6 +25,7 @@ describe('Starfield Close engine — dispose, fail, reduced-motion, no fetch', (
   it('disposes rAF, composers, and renderer on the React unmount path', () => {
     expect(componentSrc).toMatch(/bed\.dispose\(\)/)
     expect(componentSrc).toMatch(/return \(\) => \{\s*bed\.dispose\(\)/)
+    expect(engineSrc).toMatch(/setActive: \(on: boolean\)/)
     expect(engineSrc).toMatch(/cancelAnimationFrame\(raf\)/)
     expect(engineSrc).toMatch(/disposeComposer\(torusComposer\)/)
     expect(engineSrc).toMatch(/disposeComposer\(bloomComposer\)/)

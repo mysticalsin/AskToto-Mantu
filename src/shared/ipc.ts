@@ -108,6 +108,8 @@ export const IPC = {
   importDecoderSourceAck: 'import-decoder:source-ack',
   exportRecapJson: 'recap:export-json',
   pickFolder: 'folder:pick',
+  secondBrainDetect: 'second-brain:detect',
+  secondBrainCreate: 'second-brain:create',
   addTeamTranscriptFolder: 'team-folder:add',
   removeTeamTranscriptFolder: 'team-folder:remove',
   openPath: 'path:open',
@@ -969,6 +971,11 @@ export const BaseSettingsSchema = z.object({
   screenAsk: z.boolean().default(true),
   showLiveTranscript: z.boolean().default(false),
   meetingsFolder: z.string().default(''),
+  // Existing Obsidian vault "AI Second Brain" (OneDrive Documents or ~/Documents). Empty until onboarding
+  // finds or the user creates it. Not a second meetings folder. See DESIGN.md "Onboarding second brain".
+  secondBrainVaultPath: z.string().default(''),
+  // Dust writes notes into that vault at 00_Inbox/from-dust/. Default ON. Devon owns the writer.
+  dustWriteToVault: z.boolean().default(true),
   // Shared folders (e.g. a team OneDrive folder each member's Métis saves into) whose meeting transcripts
   // are ALSO auto-ingested into this brain, attributed by the folder's own name. Centralizes the team's
   // transcripts without touching the user's own meetings folder. Scanned by the same OneDrive-friendly
@@ -1456,6 +1463,8 @@ export const DEFAULT_SETTINGS: Settings = {
   screenAsk: true,
   showLiveTranscript: false,
   meetingsFolder: '',
+  secondBrainVaultPath: '',
+  dustWriteToVault: true,
   teamTranscriptFolders: [],
   autoSaveTranscripts: false,
   launchAtLogin: false,
@@ -1761,6 +1770,22 @@ export interface RecallReadResult {
    *  meeting pushed before the last relaunch does not offer to push itself again. Absent = never pushed;
    *  a DIFFERENT fingerprint means the recap was edited since, which correctly re-arms the chip. */
   crmPushedKey?: string
+}
+
+/** Result of second-brain:detect / create. Offline is not not-found: do not mkdir a fake vault. */
+export type SecondBrainStatus = 'found' | 'not-found' | 'offline'
+export interface SecondBrainDetectResult {
+  status: SecondBrainStatus
+  path?: string
+  suggestedPath: string
+  reason?: string
+}
+export interface SecondBrainCreateResult {
+  ok: boolean
+  status: SecondBrainStatus
+  path?: string
+  suggestedPath: string
+  reason?: string
 }
 
 /** Result of update:check — the manual Settings-driven check against the public releases feed. Exists

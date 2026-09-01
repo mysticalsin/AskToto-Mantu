@@ -5293,6 +5293,7 @@ const TABS: {
     desc: 'Your second brain: meetings, wiki, CRM push, knowledge graph.',
     keywords: [
       'mantu intelligence', 'intelligence', 'brain', 'meetings & follow-up', 'published wiki',
+      'second brain', 'obsidian', 'onedrive', 'vault', 'dust write',
       'polo pre-sales', 'crm', 'integrations', 'knowledge graph', 'plane', 'clickup',
       'task management', 'book next steps', 'action items', 'time saved', 'estimate',
       'consolidation', 'token', 'batch index', 'brain consolidation',
@@ -6669,6 +6670,120 @@ function TimeSavedSettings({
   )
 }
 
+function SecondBrainVaultSection({
+  settings,
+  patch
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+}): JSX.Element {
+  const [busy, setBusy] = useState(false)
+  const [hint, setHint] = useState<string | null>(null)
+  const path = settings.secondBrainVaultPath
+  const suggestedRef = useRef('')
+
+  useEffect(() => {
+    let live = true
+    void window.toto.secondBrainDetect().then((r) => {
+      if (!live) return
+      suggestedRef.current = r.suggestedPath
+      if (r.status === 'found' && r.path && !settings.secondBrainVaultPath) {
+        patch({ secondBrainVaultPath: r.path })
+      }
+      if (r.status === 'offline') setHint('OneDrive is not available. Retry when it is online.')
+    })
+    return () => {
+      live = false
+    }
+  }, [])
+
+  const retry = async (): Promise<void> => {
+    setBusy(true)
+    setHint(null)
+    try {
+      const r = await window.toto.secondBrainDetect()
+      suggestedRef.current = r.suggestedPath
+      if (r.status === 'found' && r.path) {
+        patch({ secondBrainVaultPath: r.path })
+        setHint(null)
+      } else if (r.status === 'offline') {
+        setHint('OneDrive is not available. Retry when it is online.')
+      } else {
+        setHint(r.suggestedPath ? `No vault yet. Create one at ${r.suggestedPath}.` : 'No AI Second Brain vault yet.')
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const create = async (): Promise<void> => {
+    setBusy(true)
+    setHint(null)
+    try {
+      const r = await window.toto.secondBrainCreate()
+      if (r.ok && r.path) {
+        patch({ secondBrainVaultPath: r.path })
+        setHint(null)
+      } else if (r.status === 'offline') {
+        setHint('OneDrive is not available. Retry when it is online.')
+      } else {
+        setHint(r.reason || 'Could not create the vault.')
+      }
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Section
+      title="Second brain vault"
+      desc="Your Obsidian vault named AI Second Brain. If Métis finds it on OneDrive or in Documents, that vault is the source of truth. Dust writes into 00_Inbox/from-dust/ when the toggle is on."
+      icon={FolderOpen}
+    >
+      <div className="cl-card px-3 py-2.5">
+        <div className="flex items-center gap-2">
+          <FolderOpen size={15} className="shrink-0 text-[color:var(--cl-primary)]" />
+          <span className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]" title={path || suggestedRef.current}>
+            {path || 'No vault mapped yet'}
+          </span>
+          <ManagedChip keys={settings.managedKeys} k="secondBrainVaultPath" />
+        </div>
+        <div className="mt-2 flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={busy || settings.managedKeys.includes('secondBrainVaultPath')}
+            onClick={() => void retry()}
+            className="no-drag cl-focus flex items-center gap-1 rounded-lg bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.1] disabled:opacity-60"
+          >
+            <RefreshCw size={12} /> Retry
+          </button>
+          {!path && (
+            <button
+              type="button"
+              disabled={busy || settings.managedKeys.includes('secondBrainVaultPath')}
+              onClick={() => void create()}
+              className="no-drag cl-focus flex items-center gap-1 rounded-lg bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.1] disabled:opacity-60"
+            >
+              <FolderCog size={12} /> Create vault
+            </button>
+          )}
+        </div>
+        {hint && (
+          <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
+            <AlertCircle size={12} className="shrink-0" /> {hint}
+          </div>
+        )}
+      </div>
+      <ToggleRow
+        label="Dust writes into this vault"
+        desc="On by default. Notes land in 00_Inbox/from-dust/. Dust and Claude CLI writers ship separately."
+        on={settings.dustWriteToVault}
+        onChange={(v) => patch({ dustWriteToVault: v })}
+      />
+    </Section>
+  )
+}
+
 function IntelligenceTab({
   settings,
   patch,
@@ -6840,6 +6955,8 @@ function IntelligenceTab({
           </>
         )}
       </Section>
+
+      <SecondBrainVaultSection settings={settings} patch={patch} />
 
       <Section
         title="Published wiki (Dust-readable)"
