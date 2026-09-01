@@ -114,6 +114,7 @@ import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
 import { ClickUpMark } from './brand/ClickUpMark'
 import { PlaneMark } from './brand/PlaneMark'
+import { OtherProviderMark } from './brand/OtherProviderMarks'
 import { MetisMark } from './MetisMark'
 import { IdentitySection } from './IdentitySection'
 import { FieldHint, TextButton } from './ui'
@@ -462,8 +463,49 @@ export function Section({
   )
 }
 
-/** One selectable provider tile — shared by the always-visible "featured" grid and the collapsed
- *  "Experience: more models" grid, so both stay visually identical. */
+/** Quiet logo tile for Settings → AI → Other providers. Name is aria-label only.
+ *  Binding: docs/design/OTHER-PROVIDERS.md. */
+function OtherProviderLogoTile({
+  id,
+  active,
+  hasKey,
+  locked,
+  onSelect
+}: {
+  id: ProviderId
+  active: boolean
+  hasKey: boolean
+  locked: boolean
+  onSelect: () => void
+}): JSX.Element {
+  return (
+    <button
+      type="button"
+      aria-label={PROVIDERS[id].label}
+      aria-pressed={active}
+      disabled={locked}
+      onClick={onSelect}
+      className={[
+        'no-drag cl-focus relative flex h-[52px] w-[52px] items-center justify-center rounded-[12px] border transition-colors duration-[var(--duration-hover)]',
+        active
+          ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]'
+          : 'border-[var(--cl-border)] bg-transparent hover:bg-white/[0.05]',
+        locked ? 'cursor-not-allowed opacity-60' : ''
+      ].join(' ')}
+    >
+      <OtherProviderMark id={id} size={28} />
+      {hasKey ? (
+        <span
+          aria-hidden="true"
+          className="absolute bottom-1.5 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-[color:var(--cl-success)]"
+        />
+      ) : null}
+    </button>
+  )
+}
+
+/** Named card for the collapsed "Experience: more models" grid only. Other providers
+ *  use OtherProviderLogoTile — do not put labels back on that row. */
 function ProviderTile({
   id,
   active,
@@ -1382,16 +1424,24 @@ function AiSection({
       {/* Featured API providers — same prominence as the CLI cards above, so picking GPT/Grok/Kimi/
           Gemini doesn't require digging into a collapsed section. */}
       <Section title="Other providers" desc="Bring your own key from another provider." icon={Network}>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="flex flex-wrap gap-3">
           {featured.map((id) => (
-            <ProviderTile
+            <OtherProviderLogoTile
               key={id}
               id={id}
               active={id === provider}
-              recommended={id === recommended}
               hasKey={!!settings.hasKeys[id]}
               locked={locked}
-              onSelect={() => patch({ provider: id })}
+              onSelect={() =>
+                // Custom's SettingsSchema refine requires customBaseUrl to already be a valid https://
+                // URL whenever provider === 'custom'. Seed the same placeholder the more-models tile
+                // uses so a logo click is not silently reverted.
+                patch(
+                  id === 'custom' && !/^https:\/\//i.test(settings.customBaseUrl)
+                    ? { provider: id, customBaseUrl: 'https://your-endpoint/v1' }
+                    : { provider: id }
+                )
+              }
             />
           ))}
         </div>
@@ -1402,7 +1452,7 @@ function AiSection({
         )}
       </Section>
 
-      {isFeatured && keyEntrySection}
+      {isFeatured && <div className="fade-up">{keyEntrySection}</div>}
 
       <ExpandableSection
         title="Experience: more models"
@@ -5250,10 +5300,10 @@ const TABS: {
     icon: Cpu,
     desc: 'Provider, API keys, local model, and thinking mode.',
     keywords: [
-      'provider', 'api key', 'anthropic', 'openai', 'dust', 'claude code', 'codex', 'local ai',
+      'provider', 'api key', 'anthropic', 'openai', 'gpt', 'dust', 'claude code', 'codex', 'local ai',
       'thinking mode', 'model', 'other providers', 'model provider', 'cli integration',
       'fallback', 'indexing fallback', 'offline indexing',
-      'backups & limits', 'nvidia', 'nim', 'race a backup provider', 'hedge',
+      'backups & limits', 'nvidia', 'nim', 'deepseek', 'minimax', 'kimi', 'race a backup provider', 'hedge',
       'cloudflare', 'worker', 'ai gateway', 'workers ai', 'metis_proxy_key',
       'routing mode', 'routing', 'local', 'api', 'auto'
     ]

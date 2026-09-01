@@ -86,6 +86,12 @@ describe('searchSettingsTabs — settings search must find real section titles, 
     expect(searchSettingsTabs('NVIDIA').map((m) => m.id)).toContain('ai')
   })
 
+  it('finds other-provider companies after the logo-first row hid their chips', () => {
+    for (const q of ['GPT', 'OpenAI', 'DeepSeek', 'MiniMax', 'Kimi']) {
+      expect(searchSettingsTabs(q).map((m) => m.id), `search "${q}"`).toContain('ai')
+    }
+  })
+
   it('finds the Identity tab by member pass, serial, and license', () => {
     expect(searchSettingsTabs('Identity').map((m) => m.id)).toContain('profile')
     expect(searchSettingsTabs('member pass').map((m) => m.id)).toContain('profile')

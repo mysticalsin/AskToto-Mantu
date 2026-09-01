@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { pickReadyProvider, detectHint } from './Settings'
+import { PROVIDERS, PROVIDER_IDS } from '../../../shared/providers'
 
 // Normalize CRLF → LF: on a Windows checkout Settings.tsx has \r\n line endings, and a marker whose
 // newline sits mid-string (e.g. finding 5's '))}\n          </div>') would never match '))}\r\n...'.
@@ -355,5 +356,75 @@ describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', ()
     expect(clickup).toMatch(/M2 18\.439l3\.69-2\.828/)
     expect(plane).toMatch(/currentColor/)
     expect(plane).toMatch(/M0 5\.358a\.854/)
+  })
+})
+
+// docs/design/OTHER-PROVIDERS.md — logo-first Other providers row. No Settings render harness;
+// pin the source the way BRAIN-CONNECTORS does.
+describe('OTHER-PROVIDERS — logo-first row', () => {
+  const row = blockAfter('<Section title="Other providers"', '{isFeatured && <div className="fade-up">{keyEntrySection}</div>}')
+  const tile = blockAfter('function OtherProviderLogoTile(', '\nfunction ProviderTile(')
+  const tileCopy = tile.replace(/^\s*\/\/.*$/gm, '')
+  const rowCopy = row.replace(/^\s*\/\/.*$/gm, '')
+  const marks = readFileSync(join(__dirname, 'brand/OtherProviderMarks.tsx'), 'utf8')
+
+  it('maps each featured other-provider to a logo tile, not a named ProviderTile', () => {
+    expect(row).toMatch(/featured\.map\(\(id\) => \(/)
+    expect(row).toMatch(/<OtherProviderLogoTile/)
+    expect(row).not.toMatch(/<ProviderTile/)
+  })
+
+  it('accessible name is aria-label from the registry; no visible label on the tile', () => {
+    expect(tile).toMatch(/aria-label=\{PROVIDERS\[id\]\.label\}/)
+    expect(tile).toMatch(/<button/)
+    expect(tile).toMatch(/cl-focus/)
+    expect(tile).toMatch(/<OtherProviderMark/)
+    const visible = tileCopy.replace(/aria-label=\{PROVIDERS\[id\]\.label\}/g, '')
+    expect(visible).not.toMatch(/\{PROVIDERS\[id\]\.label\}/)
+    expect(visible).not.toMatch(/\{PROVIDERS\[id\]\.blurb\}/)
+  })
+
+  it('the default row has no GPT / OpenAI / NVIDIA NIM / DeepSeek / MiniMax name chips', () => {
+    expect(rowCopy).not.toMatch(/GPT/)
+    expect(rowCopy).not.toMatch(/OpenAI/)
+    expect(rowCopy).not.toMatch(/NVIDIA/)
+    expect(rowCopy).not.toMatch(/DeepSeek/)
+    expect(rowCopy).not.toMatch(/MiniMax/)
+    expect(rowCopy).not.toMatch(/Best pick/)
+  })
+
+  it('click still enables the provider and seeds Custom\'s endpoint so the write survives', () => {
+    expect(row).toMatch(/patch\(/)
+    expect(row).toMatch(/provider: id/)
+    expect(row).toMatch(/id === 'custom'/)
+    expect(row).toMatch(/customBaseUrl:\s*'https:\/\//)
+  })
+
+  it('existing key / endpoint fields still open under the row after a featured click', () => {
+    expect(source).toMatch(/\{isFeatured && <div className="fade-up">\{keyEntrySection\}<\/div>\}/)
+  })
+
+  it('marks are local currentColor SVG, not remote hotlinks or Lucide brands', () => {
+    expect(marks).toMatch(/openai: OpenAiMark/)
+    expect(marks).toMatch(/nvidia: NvidiaMark/)
+    expect(marks).toMatch(/deepseek: DeepSeekMark/)
+    expect(marks).toMatch(/minimax: MiniMaxMark/)
+    expect(marks).toMatch(/kimi: KimiMark/)
+    expect(marks).toMatch(/cloudflare: CloudflareMark/)
+    expect(marks).toMatch(/custom: CustomEndpointMark/)
+    expect(marks).toMatch(/fill="currentColor"/)
+    expect(marks).not.toMatch(/src=["']https?:/)
+    expect(marks).not.toMatch(/from 'lucide-react'/)
+  })
+
+  it('every current featured other-provider has a local mark so each logo tile is reachable', () => {
+    const featuredOther = PROVIDER_IDS.filter((id) => {
+      const p = PROVIDERS[id]
+      return p.tier === 'featured' && id !== 'anthropic' && p.kind !== 'local' && p.kind !== 'cli'
+    })
+    expect(featuredOther.length).toBeGreaterThan(0)
+    for (const id of featuredOther) {
+      expect(marks, `missing mark for ${id}`).toMatch(new RegExp(`${id}: [A-Z]`))
+    }
   })
 })
