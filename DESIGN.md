@@ -70,6 +70,8 @@ Hide and island: hover or click expands **down** from the camera island to the f
 
 `createWindow` when `onboardingDone` + hide/island parks this rest rect immediately (same as exclusive exit). Never boot at 880×84 and hope hug wins. Never rest as 880×816. Never hug hide down to 120px.
 
+**Show then Hide/park.** After Show the live bar can sit at `islandSafeTop` (Y≈39) and grow to ~880×105. Hide/park must restore Hide **8×2** at `bounds.y` via `restoreParkAfterShow`. Do not leave leftover Y=39 (peeks or collides under the hardware island). Do not leave 880×105. Island hover stays the camera/notch square (`hoverWatchRestRect`); do not change that hit.
+
 ## After exclusive exit
 
 When `onboardingDone` flips true, `exitExclusiveOnboardingStage` leaves exclusive fullscreen and parks the default **hide** rest (or island / bar if Settings already chose one). Never an **880×816** mid-flow card. Never a 120×50 pill for hide. Re-apply `setAlwaysOnTop(true, 'screen-saver')` (the level exclusive used). Hide parks a 1–8px transparent rest; `hoverWatchRestRect` still covers the camera island (`y = display.bounds.y`, width = `notchWidth` ~180–250, height = camera housing only). Island is the peek capsule at the same Y. Bar keeps `workArea.y + margin`. Auto-resize must not grow hide into a 44px/103px slab or 880×816. Then destroy the exclusive stage. Do not leave layer 0. Start the cursor watch when layout is hide/island.

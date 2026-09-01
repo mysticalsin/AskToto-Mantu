@@ -32,8 +32,11 @@ import {
   OVERLAY_HIDE_PARK,
   OVERLAY_ISLAND_PEEK,
   hideParkRect,
+  hideParkTop,
+  isLeftoverParkY,
   isVisibleHideSlab,
   parkedHoverReanchor,
+  restoreParkAfterShow,
   ISLAND_NOTCH_STRUT_PX,
   type DisplayMetrics,
   type Rect
@@ -464,6 +467,31 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
     expect(shouldIgnoreResizeWhilePeekResting(true, hairline, hairline)).toBe(false)
   })
 
+  it('post-Show leftover 880×105 at Y=39 restores Hide 8×2 at bounds.y, never leftover Y', () => {
+    const leftover: Rect = { x: 460, y: 39, width: 880, height: 105 }
+    const park = restoreParkAfterShow('hide', tonyMac, leftover, 8)
+    expect(OVERLAY_HIDE_PARK).toEqual({ width: 8, height: 2 })
+    expect(hideParkTop(tonyMac)).toBe(tonyMac.bounds.y)
+    expect(hideParkTop(tonyMac)).toBe(0)
+    expect(park.width).toBe(8)
+    expect(park.height).toBe(2)
+    expect(park.y).toBe(0)
+    expect(park.y).not.toBe(39)
+    expect(park.y).not.toBe(leftover.y)
+    expect(park.width).not.toBe(leftover.width)
+    expect(park.height).not.toBe(leftover.height)
+    expect(isLeftoverParkY(leftover.y, tonyMac)).toBe(true)
+    expect(isLeftoverParkY(park.y, tonyMac)).toBe(false)
+    expect(isVisibleHideSlab(park)).toBe(false)
+    expect(isVisibleHideSlab(leftover)).toBe(true)
+    const island = restoreParkAfterShow('island', tonyMac, leftover, 8)
+    expect(island.y).toBe(0)
+    expect(island.width).toBe(OVERLAY_ISLAND_PEEK.width + 10)
+    expect(island.height).toBe(OVERLAY_ISLAND_PEEK.height + 4)
+    expect(island.width).not.toBe(880)
+    expect(island.height).not.toBe(105)
+  })
+
   it('leaving pill/Settings parks hide when the pointer is not in the island/bar', () => {
     expect(shouldParkHoverRestAfterLeavingSurface({ layout: 'hide', pointerInIslandOrBar: false })).toBe(true)
     expect(shouldParkHoverRestAfterLeavingSurface({ layout: 'island', pointerInIslandOrBar: false })).toBe(true)
@@ -509,6 +537,8 @@ describe('DESIGN.md overlay contract', () => {
     expect(design).toMatch(/parkedHoverReanchor/)
     expect(design).toMatch(/registerScreenListeners/)
     expect(design).toMatch(/8×44/)
+    expect(design).toMatch(/restoreParkAfterShow/)
+    expect(design).toMatch(/880×105|880x105/)
   })
 
   it('names hover-down, exclusive fullscreen, large CTA, and Métis demo', () => {
@@ -563,7 +593,16 @@ describe('island reveal/collapse wiring (index.ts)', () => {
     expect(index).toMatch(/setIgnoreMouseEvents/)
     expect(index).toMatch(/BAR_MIN_HEIGHT \(44\) must never grow it/)
     expect(index).toMatch(/applyHideClickThrough/)
+    expect(index).toMatch(/restoreParkAfterShow/)
     expect(index).toMatch(/setMinimumSize\(1, 1\)/)
+    const toggle = index.slice(index.indexOf('function toggleVisible'), index.indexOf('const shortcutActions'))
+    expect(toggle).toMatch(/restoreBarWidth\(\)/)
+    expect(toggle).toMatch(/parkOverlayAfterHideSpring\(\)/)
+    expect(toggle).toMatch(/overlayUsesHover/)
+    expect(toggle).toMatch(/w\.hide\(\)/)
+    const parkIpc = index.slice(index.indexOf('ipcMain.handle(IPC.overlayParkAfterHide'), index.indexOf('ipcMain.handle(IPC.rendererCrash'))
+    expect(parkIpc).toMatch(/overlayCursorWatchHovering = false/)
+    expect(parkIpc).toMatch(/parkOverlayAfterHideSpring\(\)/)
     expect(index).toMatch(/minWidth: 1/)
     expect(index).toMatch(/minHeight: 1/)
     const reanchor = index.slice(index.indexOf('function registerScreenListeners'), index.indexOf('function toggleVisible'))

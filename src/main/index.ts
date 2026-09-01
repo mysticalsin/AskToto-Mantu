@@ -174,6 +174,7 @@ import {
   overlayRestSize,
   parkAfterExclusiveOnboarding,
   parkedHoverReanchor,
+  restoreParkAfterShow,
   shouldIgnoreResizeWhilePeekResting,
   shouldParkHoverRestAfterLeavingSurface,
   topCenterPosition,
@@ -2139,7 +2140,9 @@ function parkOverlayAfterHideSpring(): void {
   const layout = liveOverlayLayout()
   if (!overlayUsesHover(layout)) return
   const display = screen.getDisplayMatching(win.getBounds())
-  const park = parkAfterExclusiveOnboarding(layout, getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+  // Leftover Show (880×105 at Y=39) must not stick. Restore Hide 8×2 / island peek at bounds.y.
+  const leftover = win.getBounds()
+  const park = restoreParkAfterShow(layout, getDisplayMetrics(display), leftover, ISLAND_TOP_MARGIN)
   currentWidth = park.width
   islandResting = true
   userAnchorY = park.y
@@ -2813,6 +2816,23 @@ function toggleVisible(): void {
   const hadNoWindow = !win || win.isDestroyed()
   const w = ensureWindow()
   if (!w) return
+  // Hide/island: Show reveals the bar; Hide/park restores 8×2 (or island peek) at bounds.y.
+  // Do not Electron-hide a leftover 880×105 at Y=39 — that was the Mac-show stuck window.
+  if (!onboardingExclusiveLive() && overlayUsesHover(liveOverlayLayout())) {
+    const hidden = hadNoWindow || !w.isVisible()
+    if (hidden || islandResting) {
+      showForAsk(w)
+      restoreBarWidth()
+      overlayCursorWatchHovering = true
+      notifyOverlayCursorHover(true)
+      w.webContents.send(IPC.hotkey, 'ask')
+      return
+    }
+    overlayCursorWatchHovering = false
+    parkOverlayAfterHideSpring()
+    notifyOverlayCursorHover(false)
+    return
+  }
   if (!hadNoWindow && w.isVisible()) w.hide()
   else {
     // Revealing via the show/hide hotkey always opens the ask input right after — the same deliberate,
@@ -6815,6 +6835,9 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.overlayParkAfterHide, (e) => {
     assertMainWindow(e)
+    // Renderer already chose park (hide spring / 400ms fallback). Do not keep leftover 880×105
+    // because a stale cursor-watch hover flag skipped setBounds.
+    overlayCursorWatchHovering = false
     parkOverlayAfterHideSpring()
   })
   // Renderer ErrorBoundary catch: persist via the same sink as onFatal's main-process crashes, so a
