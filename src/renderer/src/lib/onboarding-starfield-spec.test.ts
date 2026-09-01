@@ -38,7 +38,8 @@ describe('Starfield Close — after Next, not on hero or recap', () => {
     }
     expect(STARFIELD_SCENES).not.toContain('hero')
     expect(STARFIELD_SCENES).not.toContain('reveal')
-    expect(experienceSrc).toMatch(/shouldMountStarfield\(scene\) && !starfieldFailed/)
+    expect(experienceSrc).toMatch(/scene !== 'hero' && !starfieldFailed/)
+    expect(experienceSrc).toMatch(/active=\{shouldMountStarfield\(scene\)\}/)
     expect(experienceSrc).toMatch(/<OnboardingStarfield/)
     expect(experienceSrc).toMatch(/playOnboardingVideo\(/)
     expect(experienceSrc).toMatch(/setStarfieldPulse/)
