@@ -188,6 +188,31 @@ When Settings has an Operator URL:
 
 `METIS_OPERATOR_URL` may prefill the URL. Do not leave a local-only analytics page.
 
+## Quality bar (do not break X while improving Y)
+
+Tony 6:17 PM ET. After **every** Operator change, run the Operator tests **and** prove these four contracts still hold. A green sidebar or map is not enough if login, overlay chrome, map ingest, or Events redaction moved.
+
+| Contract | Still true |
+| --- | --- |
+| Overlay chrome | Island / Hide / Bar files are frozen. Do not edit them from an Operator slice. |
+| Login | Cloudflare Access only. Allowlist stays `tony.walteur@gmail.com` and `twalteur@amaris.com`. `/` and `/v1/admin/*` are 401 without identity. No homemade password page. |
+| Map data | Unique devices by country from Cloudflare `request.cf` only. Client `lat` / `lon` / `country` / `city` / `ip` are ignored. No GPS. No IP in the UI. No sample dots. Empty world if no devices. |
+| Token-free events | `#events` never renders a token-shaped string (JWT, `Bearer`, `sk-`, 64-char hex HMAC, long base64). Tests fail if one appears. |
+
+If a map or sidebar fix would require touching overlay chrome, **stop and report**. Do not mix slices.
+
+Gate: `npm run test:operator` (runs `scripts/operator-quality-bar.mjs`). That script (1) fails if any frozen overlay path differs from the merge base, (2) runs the existing Island/Hide chrome unit tests, (3) runs the Operator vitest suite (login, map contract, token-free events).
+
+Frozen overlay chrome (do not edit from this product):
+
+- `src/shared/overlay-chrome.ts` and its test
+- `src/renderer/src/components/OverlayChromePicker.tsx` and its test
+- `src/renderer/src/components/OverlayPeek.tsx` and its test
+- `src/renderer/src/lib/overlay-motion.ts` and its test
+- `src/renderer/src/lib/overlay-autohide.ts` and its test
+- `src/main/overlay-placement.contract.test.ts`
+- `src/main/island/` (geometry, hover hit, cursor watch, mac hide/island proofs)
+
 ## Ready to merge
 
 **READY TO MERGE: no.** CI must be green. Overlay chrome stays frozen. Do not pack EXE/DMG. Do not bump app version. Do not merge from this change. Deploy the Worker with wrangler so the live `workers.dev` host shows the new UI. Devon still opens Access as Tony on a Mac before any merge.
