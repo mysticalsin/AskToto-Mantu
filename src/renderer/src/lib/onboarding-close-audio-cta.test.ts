@@ -83,25 +83,28 @@ describe('closing onboarding stops audio', () => {
     ])
 
     vi.stubGlobal('Audio', FakeAudio)
-    const listeners = new Map<string, EventListener>()
-    const add = vi.spyOn(window, 'addEventListener').mockImplementation((type, fn) => {
-      listeners.set(String(type), fn as EventListener)
-    })
-    const docAdd = vi.spyOn(document, 'addEventListener').mockImplementation((type, fn) => {
-      listeners.set(String(type), fn as EventListener)
-    })
+    const listeners = new Map<string, (e: { type: string; key?: string }) => void>()
+    const target = {
+      visibilityState: 'hidden' as Document['visibilityState'],
+      addEventListener: (type: string, fn: (e: { type: string }) => void) => {
+        listeners.set(type, fn)
+      },
+      removeEventListener: vi.fn()
+    }
+    vi.stubGlobal('window', target)
+    vi.stubGlobal('document', target)
     const bed = createOnboardingMusicBed()
     expect(listeners.has('pagehide')).toBe(true)
     expect(listeners.has('beforeunload')).toBe(true)
     expect(listeners.has('keydown')).toBe(true)
     expect(listeners.has('visibilitychange')).toBe(true)
 
-    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
-    listeners.get('visibilitychange')?.(new Event('visibilitychange'))
-    expect(bed.element.pause).toHaveBeenCalled()
+    listeners.get('visibilitychange')?.({ type: 'visibilitychange' })
+    expect(bed.element.pause).toHaveBeenCalledTimes(1)
 
-    add.mockRestore()
-    docAdd.mockRestore()
+    const escBed = createOnboardingMusicBed()
+    listeners.get('keydown')?.({ type: 'keydown', key: 'Escape' })
+    expect(escBed.element.pause).toHaveBeenCalledTimes(1)
   })
 
   it('finish, skip Get started, and unmount invoke music.stop', () => {

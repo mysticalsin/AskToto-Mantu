@@ -132,7 +132,7 @@ export function createOnboardingMusicBed(): OnboardingMusicBed {
 
   const onCloseEvent = (e: Event): void => {
     const vis = typeof document !== 'undefined' ? document.visibilityState : undefined
-    const key = e instanceof KeyboardEvent ? e.key : undefined
+    const key = typeof (e as KeyboardEvent).key === 'string' ? (e as KeyboardEvent).key : undefined
     if (shouldStopOnboardingMusicOnEvent({ type: e.type, key, visibilityState: vis })) stop()
   }
 
