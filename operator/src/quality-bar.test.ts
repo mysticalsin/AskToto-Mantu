@@ -124,8 +124,9 @@ describe('quality bar: map data contract', () => {
     )
     const emptyHtml = await emptyHome.text()
     expect(emptyHtml).toContain('No heartbeats yet. The map stays empty until a seat checks in.')
+    expect(emptyHtml).toContain('not sample dots')
     expect(emptyHtml).not.toContain('class="dot"')
-    expect(emptyHtml).not.toMatch(/sample dots|Unique Visitors|1,344/)
+    expect(emptyHtml).not.toMatch(/Unique Visitors|visitor traffic|\$6,525|\b1,344\b/)
     const emptyDash = (await (
       await handleRequest(
         new Request('https://operator.test/v1/admin/dashboard'),
