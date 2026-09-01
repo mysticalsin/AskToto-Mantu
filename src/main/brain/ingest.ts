@@ -87,7 +87,7 @@ export type IngestRoute = 'default' | 'intelligence-pass'
 /** Cheap "is any provider usable at all" check — reuses pickProvider's own resolution logic so the two
  *  can never drift out of sync. Used to bail out of backfill work BEFORE burning a queued job (and its
  *  one reinforcement retry) on a call that's guaranteed to reject with "No configured AI provider". */
-function hasUsableProvider(s: Settings): boolean {
+export function hasUsableProvider(s: Settings): boolean {
   return pickProvider(s) !== null
 }
 
@@ -1822,6 +1822,35 @@ function hasMeetingSourceDrift(s: Settings, idx: BrainIndex): boolean {
  * still lacks a successful index record. Treat an unavailable folder conservatively too: OneDrive
  * Files On-Demand can make it disappear briefly, and clearing the flag then would strand the work.
  */
+/** Saved meeting files that do not yet have a successful ingest record. Used by Update Intelligence
+ *  so queued:0 + upToDate is illegal when the vault has meetings and the brain is empty. */
+export function countUnextractedMeetings(s: Settings = getSettings()): number {
+  const idx = readIndex(s)
+  let n = 0
+  const folder = resolveMeetingsFolder(s)
+  try {
+    if (existsSync(folder)) {
+      for (const f of readdirSync(folder)) {
+        if (isMeetingTranscriptFile(f) && !idx.ingested[f]?.ok) n++
+      }
+    }
+    for (const teamFolder of s.teamTranscriptFolders ?? []) {
+      if (!teamFolder || !existsSync(teamFolder)) continue
+      const owner = basename(teamFolder) || 'team'
+      for (const f of readdirSync(teamFolder)) {
+        if (isMeetingTranscriptFile(f) && !idx.ingested[`team/${owner}/${f}`]?.ok) n++
+      }
+    }
+  } catch {
+    /* unreadable folder: treat as unknown, not empty */
+  }
+  return n
+}
+
+export function hasUnextractedMeetings(s: Settings = getSettings()): boolean {
+  return countUnextractedMeetings(s) > 0
+}
+
 function hasIncompleteMeetingSource(s: Settings, idx: BrainIndex): boolean {
   const folder = resolveMeetingsFolder(s)
   try {
@@ -2236,13 +2265,21 @@ export function resumeBackfillIfPending(): void {
  *  `onDrained` (Task MI-2, brain:rebuildAll only): fires once every job this call queues — plus
  *  anything else already in flight — has fully finished (see registerDrainCallback's doc comment).
  *  Every other caller (the plain "Index meetings" button, resumeBackfillIfPending) omits it. */
-export type BackfillStartResult = { queued: number; deferred?: 'no-provider'; preparing?: boolean }
+export type BackfillStartResult = {
+  queued: number
+  deferred?: 'no-provider'
+  preparing?: boolean
+  /** True only when there is genuinely nothing to extract. Illegal when unextracted meetings exist. */
+  upToDate?: boolean
+}
 export type BackfillStartOptions = {
   respectRetryBackoff?: boolean
   allowSourceRefresh?: boolean
+  force?: boolean
   /** Update Intelligence button: stamp jobs so extraction uses local-first then API once. */
   route?: IngestRoute
 }
+
 
 export function startBackfill(onDrained?: () => void | Promise<void>, options: BackfillStartOptions = {}): BackfillStartResult {
   const s = getSettings()
@@ -2250,7 +2287,7 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
   const route = options.route ?? 'default'
   const providerAvailable =
     route === 'intelligence-pass' ? pickIntelligencePassCandidates(s).length > 0 : hasUsableProvider(s)
-  if (!options.allowSourceRefresh && (idx.sourceRefreshRequested || hasMeetingSourceDrift(s, idx))) {
+  if (!options.force && !options.allowSourceRefresh && (idx.sourceRefreshRequested || hasMeetingSourceDrift(s, idx))) {
     void requestSourceRefresh(s).catch((e) => mainLog.warn('[brain] source refresh request failed:', e))
     return providerAvailable ? { queued: 0 } : { queued: 0, deferred: 'no-provider' }
   }
@@ -2450,9 +2487,16 @@ function consumeDailyBackfillRun(s: Settings): boolean {
 
 export function requestBackfill(options: BackfillStartOptions = {}): BackfillStartResult {
   const s = getSettings()
+  const unextracted = hasUnextractedMeetings(s)
   // Preserve the existing synchronous no-provider contract so the renderer can show the actionable
   // setup guidance immediately, while retaining the durable resume flag.
-  if (!hasUsableProvider(s)) return startBackfill(undefined, options)
+  if (!hasUsableProvider(s)) {
+    const r = startBackfill(undefined, options)
+    if (unextracted && r.queued === 0 && r.deferred !== 'no-provider') {
+      return { queued: 0, deferred: 'no-provider' }
+    }
+    return r
+  }
   if (backfillPreparing || sourceRefreshRunning) return { queued: 0, preparing: true }
   // A control cannot normally be clicked during an active run, but keep this guard authoritative for
   // re-entrant IPC callers too. There is already a real batch whose progress will be reported.
@@ -2462,13 +2506,15 @@ export function requestBackfill(options: BackfillStartOptions = {}): BackfillSta
     // what makes "Retry index" work after the user pastes a fresh key, instead of silently reporting a
     // batch that can never move while the progress bar stays frozen.
     if (!hasJobsInFlight()) pump()
-    return { queued: 0 }
+    return { queued: 0, preparing: true }
   }
-  // A batch already dispatched today keeps running/resuming freely (the guard above owns that) — this
-  // only stops a NEW scan/dispatch cycle once 3 have started today. respectRetryBackoff callers (the 60s
-  // reconcile tick) are exactly the repeat callers this exists to bound; an explicit user click still
-  // reports 0 queued rather than throwing, so the dashboard reads it the same as "nothing to do right now".
-  if (!consumeDailyBackfillRun(s)) return { queued: 0 }
+  // Named 06:00 / 12:00 / 18:00 America/Toronto slots and an explicit Update Intelligence click
+  // bypass the old 3-per-day reconcile budget. queued:0 + upToDate is illegal when meetings
+  // exist but have not been extracted.
+  if (!options.force && !consumeDailyBackfillRun(s)) {
+    if (unextracted) return { queued: 0, preparing: true }
+    return { queued: 0, upToDate: true }
+  }
 
   backfillPreparing = true
   const idx = readIndex(s)
@@ -2484,6 +2530,7 @@ export function requestBackfill(options: BackfillStartOptions = {}): BackfillSta
       backfillPreparing = false
     }
   })
+  if (unextracted) return { queued: 0, preparing: true }
   return { queued: 0, preparing: true }
 }
 

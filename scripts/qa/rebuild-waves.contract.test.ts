@@ -39,7 +39,7 @@ describe('QA rebuild contracts — Wave 3 consolidation', () => {
   it('saveTranscript defers ingest when brainConsolidation.enabled', () => {
     const main = read('src/main/index.ts')
     expect(main).toMatch(/deferred:\s*getSettings\(\)\.brainConsolidation\.enabled/)
-    expect(main).toMatch(/scheduleConsolidation|runConsolidationIfDue/)
+    expect(main).toMatch(/scheduleIntelligenceIndex|runIntelligenceIndex|runConsolidationIfDue/)
   })
 })
 

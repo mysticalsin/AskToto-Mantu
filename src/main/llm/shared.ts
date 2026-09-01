@@ -50,8 +50,17 @@ export interface StreamOptions {
   system: string
   /** Stable / volatile split for provider prompt cache. `system` stays the concatenation. */
   systemParts?: { cachedPrefix: string; volatile: string }
-  /** OpenAI cloud only: `metis:${mode}:${skillLockHash}`. No PII, no timestamp. */
+  /**
+   * OpenAI-compatible prompt cache key. Operator uses `metis:${mode}:${skillLockHash}`.
+   * Import recap also sets this so the stable system prefix can reuse a cached prompt.
+   * No PII, no timestamp.
+   */
   promptCacheKey?: string
+  /**
+   * Anthropic cache_control ttl for the system block. Import recap uses '1h'. Other callers
+   * leave this unset and keep the default ephemeral (5m) breakpoint.
+   */
+  systemCacheTtl?: '1h'
   req: AskStart
   handlers: StreamHandlers
   /**
