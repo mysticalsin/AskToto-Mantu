@@ -20,6 +20,25 @@ describe('hidden-window decoder stays a live singleton', () => {
     expect(indexSrc).toMatch(/await importJobs\.releaseDecodeSlot\(parsed\.jobId\)/)
     expect(indexSrc).toMatch(/ffmpegDecoders\.delete\(job\.jobId\)/)
   })
+
+  it('nulls the hidden-window singleton before destroy so the next decode is not already-active', () => {
+    const start = indexSrc.indexOf('async function closeImportDecoder')
+    expect(start).toBeGreaterThan(-1)
+    const body = indexSrc.slice(start, indexSrc.indexOf('function bundledImportFfmpeg'))
+    expect(body).toMatch(/decoderWin = null/)
+    expect(body).toMatch(/decoderJobId = null/)
+    expect(body.indexOf('decoderWin = null')).toBeLessThan(body.indexOf('win.destroy()'))
+    expect(indexSrc).toMatch(/decoderSlotIsStale\(staleState\)/)
+  })
+
+  it('brain:backfill returns the sign-in copy instead of throwing, so the button cannot look dead', () => {
+    const start = indexSrc.indexOf('ipcMain.handle(IPC.brainBackfill')
+    expect(start).toBeGreaterThan(-1)
+    const body = indexSrc.slice(start, start + 500)
+    expect(body).toMatch(/SIGN_IN_INDEX_COPY/)
+    expect(body).not.toMatch(/throw new Error\('Sign in with your Mantu account first\.'\)/)
+    expect(body).toMatch(/runIntelligenceIndex\('click'\)/)
+  })
 })
 
 describe('import idle may start one Intelligence pass', () => {
@@ -28,6 +47,8 @@ describe('import idle may start one Intelligence pass', () => {
     expect(indexSrc).toMatch(/scheduleIntelligenceIndex\(trackTimer\)/)
     expect(indexSrc).toMatch(/catchUpIntelligenceIndexIfNeeded/)
     expect(brainView).toMatch(/shouldAutoBackfill/)
+    expect(brainView).toMatch(/IntelligenceUpdateButton/)
+    expect(brainView).toMatch(/runIntelligenceUpdateClick/)
     expect(brainView).not.toMatch(/setInterval\(\(\) => void startBackfill/)
     expect(brainView).not.toMatch(/setInterval\(\(\) => \{\s*void startBackfill/)
   })

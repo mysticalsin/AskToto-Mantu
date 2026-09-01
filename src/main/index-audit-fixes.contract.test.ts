@@ -362,6 +362,7 @@ describe('MQA-090 — the hidden-window decoder reaps a finished job before refu
     )
     expect(beforeGuard).toMatch(/const staleState = importJobs\?\.get\(decoderJobId\)\?\.state/)
     expect(beforeGuard).toMatch(/await closeImportDecoder\(decoderJobId\)/)
+    expect(beforeGuard).toMatch(/decoderSlotIsStale\(staleState\)/)
   })
 
   it('still refuses a genuinely live decoder', () => {
