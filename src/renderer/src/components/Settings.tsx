@@ -1424,7 +1424,7 @@ function AiSection({
       {/* Featured API providers — same prominence as the CLI cards above, so picking GPT/Grok/Kimi/
           Gemini doesn't require digging into a collapsed section. */}
       <Section title="Other providers" desc="Bring your own key from another provider." icon={Network}>
-        <div className="flex flex-wrap gap-3">
+        <div className="grid grid-cols-4 gap-3">
           {featured.map((id) => (
             <OtherProviderLogoTile
               key={id}
