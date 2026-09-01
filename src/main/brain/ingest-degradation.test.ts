@@ -195,7 +195,7 @@ describe('brain ingest — provider-degradation paths', () => {
   it('MQA-029: indexes through a connected CLI provider that has no configured model id', async () => {
     writeFileSync(join(meetingsFolder, 'codex-only.md'), '---\ndate: 2026-02-03\n---\nAcme pricing call.', 'utf8')
     // The Codex-only install: no API keys, Local AI excluded by policy, so codex-cli is the ONLY thing
-    // that can index this meeting. PROVIDERS['codex-cli'] ships models: [] — resolveModelTier returns ''.
+    // that can index this meeting. Graph ingest uses the deep tier — Codex's stronger model when set.
     allowProviders(['codex-cli'])
     setSettings({ cliConnected: { 'codex-cli': true } })
     createStreamMock.mockImplementation(respondJson())
@@ -206,8 +206,7 @@ describe('brain ingest — provider-degradation paths', () => {
     expect(readIndex(getSettings()).ingested['codex-only.md']?.ok).toBe(true)
     expect(createStreamMock).toHaveBeenCalledTimes(1)
     expect(createStreamMock.mock.calls[0][0].providerId).toBe('codex-cli')
-    // Passed through empty exactly as resolved: cli.ts omits -m entirely and lets Codex use its default.
-    expect(createStreamMock.mock.calls[0][0].model).toBe('')
+    expect(createStreamMock.mock.calls[0][0].model).toBe('gpt-5.5')
   })
 
   // ── MQA-018 ────────────────────────────────────────────────────────────────

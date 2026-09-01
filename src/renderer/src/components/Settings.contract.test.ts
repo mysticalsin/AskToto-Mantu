@@ -358,19 +358,38 @@ describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', ()
   })
 })
 
-describe('Cloud CLI Connect — cliConnected AND provider, not a fake Connected badge', () => {
+describe('Cloud CLI + Codex CLI one-click Connect', () => {
+  const cli = (): string => blockAfter('function CliIntegration(', '\nfunction McpConnectionCard(')
   const connect = (): string => blockAfter('const connect = async (id: \'claude-cli\' | \'codex-cli\')', 'const cancel =')
   const install = (): string =>
     blockAfter('const runInstall = async (id: \'claude-cli\' | \'codex-cli\')', 'const connect = async')
 
-  it('Connect calls connectCliSession so Ask uses claude-cli', () => {
+  it('missing binary triggers the install path after consent, not a Connected badge', () => {
     const body = connect()
-    expect(body).toMatch(/window\.toto\.cliTest\(id\)/)
-    expect(body).toMatch(/patch\(connectCliSession\(id, cliConnected\)\)/)
+    expect(body).toMatch(/window\.toto\.cliDetect\(id\)/)
+    expect(body).toMatch(/nextCliConnectStep/)
+    expect(body).toMatch(/phase: 'confirming'/)
+    expect(install()).toMatch(/window\.toto\.cliInstall\(id/)
+  })
+
+  it('Connect never bills — detect + checkCliSession only, never testCli', () => {
+    const body = cli().replace(/^\s*\/\/.*$/gm, '')
+    expect(body).toMatch(/window\.toto\.cliCheckSession\(id\)/)
+    expect(body).not.toMatch(/cliTest/)
+    expect(connect().replace(/^\s*\/\/.*$/gm, '')).not.toMatch(/cliTest/)
+    expect(install().replace(/^\s*\/\/.*$/gm, '')).not.toMatch(/cliTest/)
+  })
+
+  it('fake Connected is impossible without a live session', () => {
+    const body = cli()
+    expect(body).toMatch(/cliConnectPatchIfLive\(id, cliConnected, session\)/)
+    expect(body).not.toMatch(/connectCliSession\(/)
     expect(body).not.toMatch(/patch\(\{ provider: id \}\)/)
   })
 
-  it('a successful auto-install uses the same connectCliSession patch', () => {
-    expect(install()).toMatch(/patch\(connectCliSession\(id, cliConnected\)\)/)
+  it('idle primary is Connect (both CLIs), not Set up automatically', () => {
+    const copy = cli().replace(/^\s*\/\/.*$/gm, '')
+    expect(copy).toMatch(/isConnected \? 'Reconnect' : 'Connect'/)
+    expect(copy).not.toMatch(/Set up automatically/)
   })
 })

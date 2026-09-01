@@ -203,19 +203,19 @@ export const Answer = memo(function Answer({
   // silent failover has re-routed the ask to a provider other than the one Settings still shows as active.
   const who = provider === 'dust' ? 'your Dust agent' : provider ? PROVIDERS[provider]?.label : undefined
   const chip = provider ? answerSourceChip(provider, model) : null
-  const claudeChip = chip && chip.brand === 'Claude'
+  const namedChip = chip && (chip.brand === 'Claude' || chip.brand === 'Codex')
   // Byline on the answer itself: names the brain that actually produced this text, so a failover away from
   // the configured provider is visible instead of silent, and a request streaming under a stale previous
   // answer still says who is working on it. Cloud CLI / Anthropic show a Claude / model chip so the user
   // can see Claude answered — not Métis Local.
-  const attribution = who || claudeChip ? (
+  const attribution = who || namedChip ? (
     <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--color-ink-3)]">
       {streaming ? (
         <AgentStatus kind="working" size="inline" caption />
-      ) : claudeChip ? (
+      ) : namedChip ? (
         <span
-          data-answer-source="claude"
-          aria-label={chip.model ? `Claude / ${chip.model}` : 'Claude'}
+          data-answer-source={chip.brand.toLowerCase()}
+          aria-label={chip.model ? `${chip.brand} / ${chip.model}` : chip.brand}
           className="inline-flex items-center gap-1 rounded-full border border-[var(--color-hair-soft)] bg-white/[0.04] px-2 py-0.5 text-[10px] font-medium text-[color:var(--color-ink-2)]"
         >
           {chip.brand}

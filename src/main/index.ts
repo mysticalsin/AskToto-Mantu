@@ -3545,6 +3545,13 @@ function registerIpc(): void {
     const parsed = ProviderIdSchema.safeParse(provider)
     return detectCli(parsed.success ? parsed.data : 'claude-cli')
   })
+  // Settings Connect: zero-token session probe. Must not be cliTest (that bills a turn).
+  ipcMain.handle(IPC.cliCheckSession, async (e, provider: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return 'unknown'
+    const parsed = ProviderIdSchema.safeParse(provider)
+    return checkCliSession(parsed.success ? parsed.data : 'claude-cli')
+  })
   ipcMain.handle(IPC.cliTest, async (e, provider: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }

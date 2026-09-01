@@ -92,6 +92,16 @@ describe('Answer provider attribution', () => {
     expect(haiku).toContain('Claude')
     expect(opus).toContain('Claude')
   })
+
+  it('shows a Codex / model chip so the answering CLI is visible', () => {
+    const html = renderToStaticMarkup(
+      <Answer text="Here is the answer." streaming={false} error={null} provider="codex-cli" model="gpt-5.5" />
+    )
+    expect(html).toContain('Codex')
+    expect(html).toContain('gpt-5.5')
+    expect(html).toContain('data-answer-source="codex"')
+    expect(html).not.toContain('Métis Local')
+  })
 })
 
 describe('Answer error hints', () => {

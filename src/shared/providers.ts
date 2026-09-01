@@ -290,10 +290,11 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
     kind: 'cli',
     tier: 'cli',
     baseUrl: '',
-    models: [],
+    models: ['gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini'],
     defaultModel: '',
-    fastModel: '',
-    thinkModel: '',
+    fastModel: '', // omit -m — the CLI's own default (fast)
+    thinkModel: 'gpt-5.5', // stronger model when the CLI accepts it
+    deepModel: 'gpt-5.5',
     keyHint: '',
     keyPattern: '',
     vision: false,
@@ -693,6 +694,9 @@ export function answerSourceChip(
 ): { brand: string; model: string } {
   if (id === 'claude-cli' || id === 'anthropic') {
     return { brand: 'Claude', model: claudeModelSlug(model) }
+  }
+  if (id === 'codex-cli') {
+    return { brand: 'Codex', model: (model || '').trim() || 'default' }
   }
   return { brand: PROVIDERS[id]?.label ?? id, model: '' }
 }

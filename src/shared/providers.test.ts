@@ -225,6 +225,11 @@ describe('answerSourceChip — Cloud CLI reads as Claude, not a local model', ()
     expect(chip.model).not.toMatch(/qwen/i)
     expect(answerSourceChip('local', 'qwen3.5-0.8b').brand).toMatch(/Local/)
   })
+
+  it('names Codex plus the model (or default when the CLI omitted -m)', () => {
+    expect(answerSourceChip('codex-cli', '')).toEqual({ brand: 'Codex', model: 'default' })
+    expect(answerSourceChip('codex-cli', 'gpt-5.5')).toEqual({ brand: 'Codex', model: 'gpt-5.5' })
+  })
 })
 
 describe('parseDustUrl agent-id extraction (only unambiguous agent sources)', () => {

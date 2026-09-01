@@ -189,6 +189,9 @@ export const IPC = {
   // per-slot KV cache stays hot between real suggest requests. See LocalPrewarmPayloadSchema.
   localPrewarm: 'local:prewarm',
   cliDetect: 'cli:detect',
+  /** Zero-token status probe (`claude auth status` / `codex login status`). Connect uses this
+   *  instead of cliTest so a Settings click never bills a turn. */
+  cliCheckSession: 'cli:check-session',
   cliSetup: 'cli:setup',
   cliTest: 'cli:test',
   cliInstall: 'cli:install',

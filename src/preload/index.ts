@@ -109,6 +109,8 @@ const api = {
     ipcRenderer.invoke(IPC.dustLoginPickWorkspace, workspaceId),
   cliDetect: (provider: ProviderId): Promise<CliActionResult> =>
     ipcRenderer.invoke(IPC.cliDetect, provider),
+  cliCheckSession: (provider: ProviderId): Promise<'live' | 'signed-out' | 'unknown'> =>
+    ipcRenderer.invoke(IPC.cliCheckSession, provider),
   cliSetup: (provider: ProviderId): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.cliSetup, provider),
   cliTest: (provider: ProviderId): Promise<CliActionResult> =>

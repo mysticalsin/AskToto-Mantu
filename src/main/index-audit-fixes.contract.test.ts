@@ -361,6 +361,12 @@ describe('Cloud CLI Connect — cliTest persists connectCliSession, not a lone c
     expect(body).not.toMatch(/setSettings\(\{ cliConnected: \{ \.\.\.s\.cliConnected, \[p\]: true \} \}\)/)
   })
 
+  it('Settings Connect has a zero-token session probe and does not use it to bill', () => {
+    const check = sliceBetween('ipcMain.handle(IPC.cliCheckSession', 'ipcMain.handle(IPC.cliTest')
+    expect(check).toMatch(/checkCliSession/)
+    expect(check).not.toMatch(/testCli/)
+  })
+
   it('every stream:meta announcement includes the model the chip displays', () => {
     const sends = indexSrc.match(/send\(IPC\.streamMeta, \{[^}]*\}\)/g) ?? []
     expect(sends.length).toBeGreaterThanOrEqual(2)

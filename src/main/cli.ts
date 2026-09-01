@@ -1010,7 +1010,7 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
         'echo ----------------------------------------',
         'call claude',
         'echo.',
-        'echo Done. Go back to Metis and click Connect again.',
+        'echo Done. Return to Metis. It will finish connecting when you are signed in.',
         'pause'
       ]
     } else if (provider === 'codex-cli') {
@@ -1040,7 +1040,7 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
         'echo Step 2/2  Signing in to OpenAI Codex...',
         'call codex login',
         'echo.',
-        'echo Done. Go back to Metis and click Connect again.',
+        'echo Done. Return to Metis. It will finish connecting when you are signed in.',
         'pause'
       ]
     } else {
@@ -1061,7 +1061,7 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
       'echo; echo "Step 2/2  Signing in to Claude (type /login at the prompt below)…"',
       'echo "────────────────────────────────────────────────"',
       'claude',
-      'echo; echo "✓ Done. Go back to Métis and click \\"Connect\\" again."',
+      'echo; echo "Done. Return to Metis. It will finish connecting when you are signed in."',
       'echo "You can close this window."'
     ]
   } else if (provider === 'codex-cli') {
@@ -1078,7 +1078,7 @@ export async function setupCli(provider: ProviderId): Promise<{ ok: boolean; err
       ...npmInstallWithDiagnosis('@openai/codex', 'Step 1/2  Installing OpenAI Codex CLI (npm i -g @openai/codex)…'),
       'echo; echo "Step 2/2  Signing in to OpenAI Codex…"',
       'codex login',
-      'echo; echo "✓ Done. Go back to Métis and click \\"Connect\\" again."',
+      'echo; echo "Done. Return to Metis. It will finish connecting when you are signed in."',
       'echo "You can close this window."'
     ]
   } else {
@@ -1345,7 +1345,7 @@ export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; err
         'echo ----------------------------------------',
         'call claude',
         'echo.',
-        'echo Done. Go back to Metis and click Connect again.',
+        'echo Done. Return to Metis. It will finish connecting when you are signed in.',
         'pause'
       ]
     } else if (provider === 'codex-cli') {
@@ -1359,7 +1359,7 @@ export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; err
         'echo ----------------------------------------',
         'call codex login',
         'echo.',
-        'echo Done. Go back to Metis and click Connect again.',
+        'echo Done. Return to Metis. It will finish connecting when you are signed in.',
         'pause'
       ]
     } else {
@@ -1375,7 +1375,7 @@ export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; err
       'echo "Type /login at the prompt below and follow the instructions."',
       'echo "────────────────────────────────────────────────"',
       'claude',
-      'echo; echo "✓ Done. Go back to Métis and click \\"Connect\\" again."',
+      'echo; echo "Done. Return to Metis. It will finish connecting when you are signed in."',
       'echo "You can close this window."'
     ]
   } else if (provider === 'codex-cli') {
@@ -1388,7 +1388,7 @@ export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; err
       'echo "Follow the instructions below to sign in."',
       'echo "────────────────────────────────────────────────"',
       'codex login',
-      'echo; echo "✓ Done. Go back to Métis and click \\"Connect\\" again."',
+      'echo; echo "Done. Return to Metis. It will finish connecting when you are signed in."',
       'echo "You can close this window."'
     ]
   } else {

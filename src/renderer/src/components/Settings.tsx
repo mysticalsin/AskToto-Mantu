@@ -104,11 +104,11 @@ import {
   parseDustUrl,
   resolveModelTier,
   applyInteractiveGuardrail,
-  connectCliSession,
   isDustReady,
   dustStoredAgentMissing,
   type ProviderId
 } from '@shared/providers'
+import { cliConnectPatchIfLive, nextCliConnectStep, type CliSessionVerdict } from '@shared/cli-connect'
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
 import { LANGUAGE_OPTIONS } from '@shared/lang-id'
 import { MantuLogo } from './MantuLogo'
@@ -2045,10 +2045,22 @@ function StepBadge({ n, done }: { n: number; done?: boolean }): JSX.Element {
 // ---------------------------------------------------------------------------
 
 type CliCardState = {
-  phase: 'idle' | 'confirming' | 'installing' | 'setup-opened' | 'connecting' | 'done' | 'error' | 'install-error'
+  phase:
+    | 'idle'
+    | 'confirming'
+    | 'installing'
+    | 'setup-opened'
+    | 'waiting-login'
+    | 'connecting'
+    | 'done'
+    | 'error'
+    | 'install-error'
   msg: string | null
   version: string | null
 }
+
+const CLI_LOGIN_POLL_MS = 2_000
+const CLI_LOGIN_POLL_TRIES = 90 // ~3 minutes — login windows are slow on purpose
 
 function CliIntegration({
   settings,
@@ -2067,7 +2079,7 @@ function CliIntegration({
   const isAllowed = (id: ProviderId): boolean => !orgAllowed || orgAllowed.includes(id)
 
   // Guards every setState below against firing after this component unmounts (e.g. the user closes
-  // Settings while runInstall's cliInstall/cliTest awaits are still in flight — those IPC calls keep
+  // Settings while runInstall's cliInstall/cliDetect awaits are still in flight — those IPC calls keep
   // running to completion in the main process regardless of whether this card is still on screen).
   const mountedRef = useRef(true)
   useEffect(() => {
@@ -2118,12 +2130,72 @@ function CliIntegration({
     id === 'claude-cli' ? setClaudeState(s) : setCodexState(s)
   }
 
-  // Step 1: show inline confirm prompt
-  const startSetup = (id: 'claude-cli' | 'codex-cli'): void => {
-    setState(id, { phase: 'confirming', msg: null, version: null })
+  // Bumps on cancel so an in-flight login poll cannot mark Connected after the user walked away.
+  const connectGenRef = useRef(0)
+
+  const applyLive = (id: 'claude-cli' | 'codex-cli', session: CliSessionVerdict, version?: string | null): boolean => {
+    const patchBody = cliConnectPatchIfLive(id, cliConnected, session)
+    if (!patchBody) return false
+    if (mountedRef.current) patch(patchBody)
+    setState(id, { phase: 'done', msg: null, version: version ?? null })
+    return true
   }
 
-  // Step 2: user clicks Continue → install silently, then connect
+  const startLoginAndWait = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
+    const gen = connectGenRef.current
+    setState(id, {
+      phase: 'waiting-login',
+      msg: 'Sign in through the window that opened. Métis will finish connecting when the session is live.',
+      version: null
+    })
+    await window.toto.cliLogin(id)
+    for (let i = 0; i < CLI_LOGIN_POLL_TRIES; i++) {
+      if (!mountedRef.current || connectGenRef.current !== gen) return
+      const session = await window.toto.cliCheckSession(id)
+      const step = nextCliConnectStep({
+        binaryPresent: true,
+        session,
+        installAttempted: true,
+        installOk: true,
+        loginAttempted: true
+      })
+      if (step.action === 'connect' && applyLive(id, session)) return
+      await new Promise((r) => setTimeout(r, CLI_LOGIN_POLL_MS))
+    }
+    if (!mountedRef.current || connectGenRef.current !== gen) return
+    setState(id, {
+      phase: 'error',
+      msg: 'Still signed out. Finish signing in, then click Connect.',
+      version: null
+    })
+  }
+
+  const continueAfterBinary = async (
+    id: 'claude-cli' | 'codex-cli',
+    version: string | null,
+    installAttempted: boolean
+  ): Promise<void> => {
+    setState(id, { phase: 'connecting', msg: 'Checking sign-in…', version: null })
+    const session = await window.toto.cliCheckSession(id)
+    const step = nextCliConnectStep({
+      binaryPresent: true,
+      session,
+      installAttempted,
+      installOk: installAttempted ? true : null,
+      loginAttempted: false
+    })
+    if (step.action === 'connect') {
+      applyLive(id, session, version)
+      return
+    }
+    if (step.action === 'login' || step.action === 'wait-login') {
+      await startLoginAndWait(id)
+      return
+    }
+    setState(id, { phase: 'error', msg: 'Could not confirm a live CLI session.', version: null })
+  }
+
+  // After consent: official install, then a zero-token session probe.
   const runInstall = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
     setState(id, { phase: 'installing', msg: 'Installing…', version: null })
 
@@ -2131,65 +2203,90 @@ function CliIntegration({
       setState(id, { phase: 'installing', msg: line, version: null })
     })
 
+    const afterInstall = nextCliConnectStep({
+      binaryPresent: false,
+      session: null,
+      installAttempted: true,
+      installOk: installResult.ok && !installResult.needsTerminal,
+      loginAttempted: false
+    })
+
     if (installResult.needsTerminal) {
-      // Needs sudo / elevated perms — fall back to Terminal
       window.toto.cliSetup(id)
       setState(id, {
-        phase: 'setup-opened',
-        msg: 'Finish the login in the window that opened, then come back and press Connect.',
+        phase: 'waiting-login',
+        msg: 'Finish the install and sign-in in the window that opened. Métis will connect when the session is live.',
+        version: null
+      })
+      const gen = connectGenRef.current
+      for (let i = 0; i < CLI_LOGIN_POLL_TRIES; i++) {
+        if (!mountedRef.current || connectGenRef.current !== gen) return
+        const detected = await window.toto.cliDetect(id)
+        if (detected.ok) {
+          await continueAfterBinary(id, detected.version ?? null, true)
+          return
+        }
+        await new Promise((r) => setTimeout(r, CLI_LOGIN_POLL_MS))
+      }
+      if (!mountedRef.current || connectGenRef.current !== gen) return
+      setState(id, {
+        phase: 'install-error',
+        msg: 'The CLI is still missing. Finish the install, then click Connect.',
         version: null
       })
       return
     }
 
-    if (!installResult.ok) {
-      setState(id, { phase: 'install-error', msg: installResult.error || 'Installation failed.', version: null })
+    if (!installResult.ok || afterInstall.action === 'fail') {
+      setState(id, {
+        phase: 'install-error',
+        msg: installResult.error || 'Installation failed. The CLI is not connected.',
+        version: null
+      })
       return
     }
 
-    // Install succeeded — test connection
-    setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
-    const testResult = await window.toto.cliTest(id)
-
-    if (testResult.ok) {
-      // Guard against a stale in-flight install/test resolving after the user switched tabs (unmounting
-      // this card) — without this, a late resolution here can re-activate a provider the user already
-      // disconnected in the meantime (see disconnectCli). Mirrors setState's own mountedRef guard.
-      // Connect itself must still switch the active Ask provider (DESIGN.md Cloud CLI routing): a
-      // Connected badge with Asks going to local / Dust is a fake Connected. main's cliTest already
-      // persisted connectCliSession; this patch keeps the panel in sync on the same tick.
-      if (mountedRef.current) patch(connectCliSession(id, cliConnected))
-      setState(id, { phase: 'done', msg: null, version: testResult.version ?? null })
-      return
-    }
-
-    // Not logged in — open login flow
-    window.toto.cliLogin(id)
-    setState(id, {
-      phase: 'setup-opened',
-      msg: 'Installed. Sign in through the window that opened, then come back and press Connect.',
-      version: null
+    const detected = await window.toto.cliDetect(id)
+    const stillMissing = nextCliConnectStep({
+      binaryPresent: detected.ok,
+      session: null,
+      installAttempted: true,
+      installOk: true,
+      loginAttempted: false
     })
+    if (stillMissing.action === 'fail') {
+      setState(id, {
+        phase: 'install-error',
+        msg: 'Install finished but the CLI binary is still missing. It is not connected.',
+        version: null
+      })
+      return
+    }
+    await continueAfterBinary(id, detected.version ?? null, true)
   }
 
-  // Connect button (setup-opened / error): re-run test only
+  // One Connect click: detect → (consent+install if missing) → login if signed out → live.
+  // Already installed + live is detect + switch. Never a billed one-turn probe.
   const connect = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
-    setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
-    const r = await window.toto.cliTest(id)
-    if (r.ok) {
-      // Same connectCliSession patch as runInstall — cliConnected AND provider, so Ask uses this CLI.
-      if (mountedRef.current) patch(connectCliSession(id, cliConnected))
-      setState(id, { phase: 'done', msg: null, version: r.version ?? null })
-    } else {
-      setState(id, {
-        phase: 'error',
-        msg: r.error || 'Could not connect. Finish signing in, then try again.',
-        version: null
-      })
+    connectGenRef.current += 1
+    setState(id, { phase: 'connecting', msg: 'Checking…', version: null })
+    const detected = await window.toto.cliDetect(id)
+    const first = nextCliConnectStep({
+      binaryPresent: detected.ok,
+      session: null,
+      installAttempted: false,
+      installOk: null,
+      loginAttempted: false
+    })
+    if (first.action === 'install') {
+      setState(id, { phase: 'confirming', msg: null, version: null })
+      return
     }
+    await continueAfterBinary(id, detected.version ?? null, false)
   }
 
   const cancel = (id: 'claude-cli' | 'codex-cli'): void => {
+    connectGenRef.current += 1
     setState(id, { phase: 'idle', msg: null, version: null })
   }
 
@@ -2231,8 +2328,8 @@ function CliIntegration({
         : 'Routes questions through your local OpenAI Codex CLI install. Uses your ChatGPT or API account.'
     const confirmMsg =
       id === 'claude-cli'
-        ? 'Make sure you are signed in to your Claude (Pro or Max) account on this device before continuing.'
-        : 'Make sure you are signed in to your ChatGPT or OpenAI account on this device before continuing.'
+        ? 'Métis will install the official Claude Code CLI on this device. Approve to continue. No silent install.'
+        : 'Métis will install the official OpenAI Codex CLI on this device. Approve to continue. No silent install.'
 
     return (
       <div
@@ -2283,8 +2380,8 @@ function CliIntegration({
           </div>
         )}
 
-        {/* After setup opened in Terminal */}
-        {st.phase === 'setup-opened' && st.msg && (
+        {/* After setup opened in Terminal / waiting for login */}
+        {(st.phase === 'setup-opened' || st.phase === 'waiting-login') && st.msg && (
           <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">{st.msg}</span>
         )}
 
@@ -2314,12 +2411,12 @@ function CliIntegration({
           <div className="flex gap-2">
             <button
               type="button"
-              onClick={() => startSetup(id)}
+              onClick={() => void connect(id)}
               disabled={cardLocked}
               className={primaryBtn}
             >
               <Link2 size={12} />
-              {isConnected ? 'Reconnect' : 'Set up automatically'}
+              {isConnected ? 'Reconnect' : 'Connect'}
             </button>
             {isConnected && (
               <button
@@ -2336,18 +2433,20 @@ function CliIntegration({
           </div>
         )}
 
-        {/* Connect button — visible in setup-opened or error phases */}
-        {(st.phase === 'setup-opened' || st.phase === 'error') && (
+        {/* Retry Connect — error after login wait, or leftover setup-opened */}
+        {(st.phase === 'setup-opened' || st.phase === 'error' || st.phase === 'waiting-login') && (
           <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => void connect(id)}
-              disabled={cardLocked}
-              className={primaryBtn}
-            >
-              <Link2 size={12} />
-              Connect
-            </button>
+            {st.phase !== 'waiting-login' && (
+              <button
+                type="button"
+                onClick={() => void connect(id)}
+                disabled={cardLocked}
+                className={primaryBtn}
+              >
+                <Link2 size={12} />
+                Connect
+              </button>
+            )}
             <button type="button" onClick={() => cancel(id)} className={secondaryBtn}>
               Cancel
             </button>
@@ -2377,7 +2476,7 @@ function CliIntegration({
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() => startSetup(id)}
+              onClick={() => void connect(id)}
               disabled={cardLocked}
               className="no-drag cl-focus text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)] disabled:opacity-50"
             >
@@ -2400,7 +2499,7 @@ function CliIntegration({
   return (
     <Section
       title="CLI Integration"
-      desc="Claude Code and Codex route through your own local install of that tool. It has to be on this device. Set up automatically installs it (via npm i -g) if it's missing, or connects straight away if it's already there."
+      desc="Claude Code and Codex route through your own local install of that tool. Connect installs the official CLI if it is missing (after you approve), opens login if you are signed out, and switches every Ask to that CLI when the session is live."
       icon={Link2}
     >
       <div className="flex flex-col gap-3">
