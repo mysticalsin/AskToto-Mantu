@@ -111,3 +111,94 @@ See [THINKING-ORB.md](./THINKING-ORB.md). Caption then sphere. Word first.
 
 ## Bar pill
 See [BAR-PILL.md](./BAR-PILL.md). Jarvis orb is Bar-minimized only. Not stuffed into overlay Hide/Island.
+
+## Onboarding second brain + no-flash
+
+Tony, 1 Sep 2026. Fail closed on a glitchy tour. Do this slice before any EXE / DMG / native pack. Overlay hide / island / bar geometry stays frozen (`src/main/island/geometry.ts` is not in this slice). Do not pack. Do not merge. READY TO MERGE stays no. Leave Dust / Claude CLI write plumbing to Devon.
+
+### Outcome
+
+1. The exclusive tour is visually stable. No fade-up that hides or blinks copy. No flashing background. No layout jump between steps. Primary CTAs (Next / Continue / Get started / Set me up) stay full-opacity from first paint of that act.
+2. During onboarding, Métis maps OneDrive for an existing Obsidian vault named **AI Second Brain**. Typical paths: `Library/CloudStorage/OneDrive-*/Documents/AI Second Brain` and `~/Documents/AI Second Brain` (Windows: OneDrive `Documents/AI Second Brain` plus `~/Documents/AI Second Brain`). If that vault is found, it is the single source of truth. Do not create a competing vault. If it is not found, offer to create one at that path.
+3. Dust write-in defaults **ON** into that vault at `00_Inbox/from-dust/`. If a Reagan / writer setting already exists, default it ON too. Do not invent a Reagan product. Published wiki remains Dust-readable when published (existing `publishBrainPages` lock: explicit opt-in, schema default false).
+4. OneDrive offline is honest: not-found + retry. Never mkdir a fake vault to look successful.
+
+### No-flash (HARD)
+
+The 31 Aug starfield pass already forbids fade-up on primary CTAs. This slice extends that to the whole tour surface.
+
+Forbidden on the exclusive stage after first paint of an act:
+
+- `.fade-up` (or any `animation-fill-mode: both` / `backwards` that starts at `opacity: 0`) on copy, CTAs, skip, byline, setup rows, or Ready lines. Fade-up that hides then reveals is a blink. Fail.
+- `.scene-enter` that interpolates opacity from 0. Translate-only is allowed if copy stays readable (`opacity: 1`) the whole time.
+- Remounting or pulsing the starfield bed on every scene change so the canvas drops to opacity 0 and pops back. One bed after hero. Nudge is fine. A black flash is not.
+- A flashing stage wash (do not toggle stripe layers, portal mask, or background gradient per step).
+- Layout jump: guided acts share one reserved-height slot (`.onboard-tour-slot`). Act dots already sit in a reserved `h-9` row. Do not let heading / CTA / card height collapse the slot between problem, setup, personalize, and ready.
+
+Required:
+
+- Primary CTAs: class `onboard-cta`, `opacity: 1`, `pointer-events: auto`, outside `.scene-enter`, no `fade-up`, no `.onboard-glass`. Tests must not require fade-up on those buttons (the old geometry check that wanted fade-up on hero Next is still wrong).
+- Problem lines are visible immediately. Staged 1100ms hide/reveal is a blink. Keep the four lines. Do not hide them.
+- `prefers-reduced-motion` already zeros onboard fade-up / scene-enter. The default path must be as stable as that reduced-motion end state for copy and CTAs.
+
+Portal open / close (mask + content fade on first mount and on Get started) stays. That is one ceremonial pair, not a per-step flash.
+
+### Second brain vault (HARD)
+
+Name is fixed: `AI Second Brain`. Not "Métis Second Brain". Not a second Obsidian vault next to an existing one.
+
+Probe, in order, and stop at the first readable hit:
+
+1. Each `~/Library/CloudStorage/OneDrive-*/Documents/AI Second Brain` (skip `OneDrive-SharedLibraries-*` first, then any `OneDrive*`).
+2. `{OneDrive root}/Documents/AI Second Brain` and `{OneDrive root}/AI Second Brain` (Windows env roots + `~/OneDrive`).
+3. `~/Documents/AI Second Brain`.
+
+A readable directory at that name is enough. Do not require `.obsidian` (the user may not have opened Obsidian on this machine). `readdir` must succeed. `ENOENT` is absent. `EIO` / `EBUSY` / `EPERM` / `ENOTCONN` on a present OneDrive path is **offline**, not absent.
+
+Statuses:
+
+| Status | UI | Persist | Create |
+|---|---|---|---|
+| `found` | "Using your AI Second Brain vault." Show the path. | Set `secondBrainVaultPath` to that path. | Never. That vault is the source of truth. |
+| `not-found` | Offer to create at the preferred typical path (OneDrive Documents when OneDrive is actually available, else `~/Documents/AI Second Brain`). | Only after the user accepts. | mkdir that path plus `00_Inbox/from-dust/`. Nothing else. |
+| `offline` | Honest: OneDrive is not available. Retry. | Do not write a path. | Do not mkdir. Do not fall through to a local fake vault. |
+
+Retry re-runs the same probe. Skip the tour still uses a found vault (detect on mount / finish). Skip does not create. Continue past setup while offline leaves `secondBrainVaultPath` empty.
+
+Do not point `meetingsFolder` at the vault. Encrypted transcripts stay in the meetings folder. The vault is the second-brain home for Dust inbox notes. Do not invent a parallel vault for those notes.
+
+### Defaults
+
+| Key | Default | Notes |
+|---|---|---|
+| `secondBrainVaultPath` | `''` | Set only when found or user-created. |
+| `dustWriteToVault` | `true` | Inbox relative path is `00_Inbox/from-dust`. Devon owns the Dust / Claude CLI writer. This slice only locks the flag and path. |
+| Reagan / writer | — | There is no Reagan product or writer setting in this repo. Do not add one. |
+| `publishBrainPages` | `false` | Existing lock (QA #9). Wiki pages are Dust-readable **when** published. Do not derive ON from encryption or from this vault map. |
+
+Settings → Brain may show the vault path, Retry, Create, and the Dust write-in toggle. Same honesty rules.
+
+### Files
+
+| Path | Role |
+|---|---|
+| `docs/design/DESIGN.md` | this section (written first) |
+| `src/main/second-brain-vault.ts` | probe / preferred path / inbox join (no Electron UI) |
+| `src/shared/ipc.ts` | settings + detect/create IPC |
+| `OnboardingExperience.tsx` | stable tour + vault row |
+| `styles.css` | no-flash onboard rules + reserved slot |
+| Settings Brain | path + retry + write-in toggle |
+
+Off limits: `src/main/island/geometry.ts`, hide park, cursor-watch, `BAR_MIN_HEIGHT`, Dust/Claude CLI write implementation, pack, merge.
+
+### Tests (must pass)
+
+1. Primary onboard CTAs have no `fade-up` class. Tests must not require fade-up on those CTAs.
+2. Onboard copy / setup rows / problem lines do not use fade-up that starts at opacity 0.
+3. Vault detect: found / not-found / offline (OneDrive unreadable ≠ create). Preferred create path. Inbox path is `00_Inbox/from-dust`.
+4. `dustWriteToVault` defaults true on schema + `DEFAULT_SETTINGS`.
+5. `publishBrainPages` stays false by default (existing lock).
+
+### Quality
+
+Apple-grade. If a hat would reject a blinking tour or a fake vault, fail the round. No em dashes in user-facing copy. Never auto-send. Do not claim READY TO MERGE.
