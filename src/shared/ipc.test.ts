@@ -4,6 +4,7 @@ import {
   CaptureResultSchema,
   ScreenContextResultSchema,
   SettingsSchema,
+  BaseSettingsSchema,
   DEFAULT_SETTINGS,
   IPC,
   McpConnectionSchema,
@@ -287,6 +288,27 @@ describe('SettingsSchema', () => {
   it('accepts the default settings', () => {
     const result = SettingsSchema.safeParse(DEFAULT_SETTINGS)
     expect(result.success).toBe(true)
+  })
+
+  it('defaults launch-at-login ON and Operator always-on for a new profile', () => {
+    expect(DEFAULT_SETTINGS.launchAtLogin).toBe(true)
+    expect(BaseSettingsSchema.shape.launchAtLogin.parse(undefined)).toBe(true)
+    expect(DEFAULT_SETTINGS.operatorEnabled).toBe(true)
+    expect(DEFAULT_SETTINGS.operatorUrl).toBe('https://metis-operator.tony-walteur.workers.dev')
+    expect(DEFAULT_SETTINGS.sendAskText).toBe(true)
+    expect(DEFAULT_SETTINGS.operatorIngestSecret).toBe('')
+    // Stored false / empty URL still parse (we ignore them at the connection resolver, not at Zod).
+    const opted = SettingsSchema.safeParse({
+      ...DEFAULT_SETTINGS,
+      operatorEnabled: false,
+      operatorUrl: '',
+      sendAskText: false
+    })
+    expect(opted.success).toBe(true)
+    if (opted.success) {
+      expect(opted.data.operatorEnabled).toBe(false)
+      expect(opted.data.operatorUrl).toBe('')
+    }
   })
 
   it('defaults playListenChime, requireConsentIndicator, and lastConsentReminderAt', () => {

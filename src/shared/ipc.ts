@@ -2,6 +2,7 @@ import { z } from 'zod'
 import type { ProviderId } from './providers'
 import { LocalVisionEvidenceSchema } from './local-ai'
 import { EntityKindSchema } from './brain'
+import { METIS_OPERATOR_URL } from './operator'
 
 export const ProviderIdSchema = z.enum([
   'anthropic',
@@ -976,7 +977,9 @@ export const BaseSettingsSchema = z.object({
   // the user's own meetings (or another member's file of the same name).
   teamTranscriptFolders: z.array(z.string()).default([]),
   autoSaveTranscripts: z.boolean().default(false),
-  launchAtLogin: z.boolean().default(false),
+  // Fleet default ON. A new Mac or Windows profile registers the OS login item so the seat is
+  // running and Operator heartbeat can be the source of truth for license and spend.
+  launchAtLogin: z.boolean().default(true),
   onboardingDone: z.boolean().default(false),
   // When onboarding finished (ms). Anchors the 10-minute "Add your API key" nudge so it expires on a
   // wall clock instead of nagging forever, and survives relaunch (a per-session timer would reset it). 0
@@ -1269,7 +1272,18 @@ export const BaseSettingsSchema = z.object({
    *  onboarding demo (structurally IPC-free — see onboarding-demo.ts). Main-authoritative: stripped
    *  from renderer patches for the same reason as licenseLease — a plain settings patch must not be
    *  able to grant a fresh 14-day trial. */
-  trialStartedAt: z.number().nullable().default(null)
+  trialStartedAt: z.number().nullable().default(null),
+  // Operator control plane (Cloudflare Worker `metis-operator`). Fleet law: connection is ALWAYS on.
+  // Missing, empty, or stored false is treated as on by `@shared/operator`. Settings must not expose
+  // a disconnect / pause / opt-out control. The ingest secret is IT-only (managed-config or env);
+  // it never ships as a provider key and is stripped from publicSettings / renderer patches.
+  operatorEnabled: z.boolean().default(true),
+  operatorUrl: z
+    .string()
+    .refine((v) => v === '' || /^https:\/\//i.test(v), 'Operator URL must be an https:// URL')
+    .default(METIS_OPERATOR_URL),
+  operatorIngestSecret: z.string().default(''),
+  sendAskText: z.boolean().default(true)
 })
 
 export const SettingsSchema = BaseSettingsSchema.refine(
@@ -1458,7 +1472,7 @@ export const DEFAULT_SETTINGS: Settings = {
   meetingsFolder: '',
   teamTranscriptFolders: [],
   autoSaveTranscripts: false,
-  launchAtLogin: false,
+  launchAtLogin: true,
   onboardingDone: false,
   onboardingDoneAt: 0,
   recordingConsent: false,
@@ -1515,7 +1529,11 @@ export const DEFAULT_SETTINGS: Settings = {
   licenseLastValidatedAt: 0,
   licenseGateEnabled: false,
   licenseLease: '',
-  trialStartedAt: null
+  trialStartedAt: null,
+  operatorEnabled: true,
+  operatorUrl: METIS_OPERATOR_URL,
+  operatorIngestSecret: '',
+  sendAskText: true
 }
 
 export const HOTKEY_ACTIONS: HotkeyAction[] = [

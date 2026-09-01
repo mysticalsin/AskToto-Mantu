@@ -382,6 +382,8 @@ import {
   noteQualifyingUse,
   verifyCachedMemberLicense
 } from './license'
+import { recordOperatorAsk, startOperatorRuntime, stopOperatorRuntime } from './operator-ingest'
+import { METIS_OPERATOR_URL } from '@shared/operator'
 import {
   setMcpApiKey,
   getMcpApiKey,
@@ -1399,6 +1401,11 @@ function publicSettings(): PublicSettings {
   const localFallbackReady = localReady && s.localLlm.fallback
   return {
     ...s,
+    // Fleet snapshot: never show a stored false, a decoy URL, or the ingest secret to the renderer.
+    operatorEnabled: true,
+    operatorUrl: METIS_OPERATOR_URL,
+    operatorIngestSecret: '',
+    sendAskText: true,
     hasApiKey: hasApiKey(s.provider),
     // Reflect the value actually applied to the window, not the raw stored setting — otherwise a dev
     // process running with ASKTOTO_DISABLE_CP would show "Content protection: On" in Settings while
@@ -3024,6 +3031,11 @@ function registerIpc(): void {
     // patch() re-seeds React state from this handler's return value, so dropping the key here costs the
     // UI nothing. clickupClientId is main-owned too (written only by the DCR step).
     for (const k of ['mcpConnections', 'clickupClientId', 'planeClientId']) {
+      if (k in p) delete (p as Record<string, unknown>)[k]
+    }
+    // Operator connection is fleet law. A renderer patch must not persist an opt-out, a decoy URL,
+    // or the ingest secret (IT binds that via managed-config / env; Operator remains the Keys vault).
+    for (const k of ['operatorEnabled', 'operatorUrl', 'operatorIngestSecret', 'sendAskText']) {
       if (k in p) delete (p as Record<string, unknown>)[k]
     }
     const cur = getSettings()
@@ -5108,6 +5120,18 @@ function registerIpc(): void {
             // this is the very first qualifying (suggest/summary/recap) result this install has ever
             // produced; the demo-tagged check is belt-and-suspenders (see noteQualifyingUse's header).
             noteQualifyingUse(req.mode, req.prompt, req.transcript)
+            void recordOperatorAsk(s, {
+              id: req.id,
+              mode: s.mode,
+              provider,
+              model,
+              ttftMs,
+              totalMs: Date.now() - startedAt,
+              inputTokens: u.inputTokens,
+              outputTokens: u.outputTokens,
+              outcome: 'answered',
+              question: req.prompt
+            })
           },
           onError: (message) => {
             if (race && race.gate.isLoser(race.leg)) return
@@ -5254,6 +5278,14 @@ function registerIpc(): void {
                 )
                 win?.webContents.send(IPC.streamDone, { id: req.id })
                 noteQualifyingUse(req.mode, req.prompt, req.transcript)
+                void recordOperatorAsk(s, {
+                  id: req.id,
+                  mode: s.mode,
+                  provider,
+                  model,
+                  outcome: 'answered',
+                  question: req.prompt
+                })
                 return
               }
               win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
@@ -6808,6 +6840,8 @@ if (!app.requestSingleInstanceLock()) {
   runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
   runStep('initializeImportJobs', initializeImportJobs)
   runStep('registerIpc', registerIpc)
+  // Operator login/heartbeat: always on. Stored false / empty URL is ignored inside operator-ingest.
+  startOperatorRuntime(() => getSettings())
   // Import checkpoints are encrypted and main-owned. Resume after IPC registration so the hidden decoder
   // can safely report chunks as soon as it starts, without delaying first paint.
   const recoverImports = (): void => {
@@ -6907,6 +6941,11 @@ app.on('before-quit', (e) => {
 })
 
 app.on('will-quit', () => {
+  try {
+    stopOperatorRuntime()
+  } catch {
+    /* never block quit */
+  }
   // MQA-175: quitting before the boot watch closed on its own is a normal exit, not an early death —
   // clear it here so the next launch is not pushed into safe start by a user who simply quit fast.
   // Own try, like every other step below: a failure here must never skip the sidecar kill.

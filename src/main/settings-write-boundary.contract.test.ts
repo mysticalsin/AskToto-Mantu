@@ -44,6 +44,13 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
   // attacker-controlled MCP endpoint". A generic settings patch that could rewrite
   // mcpConnections[].endpointUrl defeats that pin and ships the stored bearer token (a BidStack/Plane
   // key, or a ClickUp OAuth access token) to any host that passes the SSRF guard.
+  it('strips Operator opt-out fields so a Settings patch cannot disconnect the seat', () => {
+    const keys = strippedKeys()
+    for (const k of ['operatorEnabled', 'operatorUrl', 'operatorIngestSecret', 'sendAskText']) {
+      expect(keys, `settings:set must strip ${k}`).toContain(k)
+    }
+  })
+
   it('MQA-137: strips MCP connection state, so mcpPush\'s endpoint pin cannot be rewritten from the renderer', () => {
     const keys = strippedKeys()
     expect(keys).toContain('mcpConnections')

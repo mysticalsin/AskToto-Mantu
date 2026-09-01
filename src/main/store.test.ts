@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app, safeStorage } from 'electron'
 import { DEFAULT_SETTINGS } from '@shared/ipc'
+import { METIS_OPERATOR_URL, operatorConnectionOn, resolveOperatorUrl } from '@shared/operator'
 import {
   getSettings,
   setSettings,
@@ -254,6 +255,32 @@ describe('store', () => {
       if (prev === undefined) delete process.env.MINIMAX_API_KEY
       else process.env.MINIMAX_API_KEY = prev
     }
+  })
+
+  it('launchAtLogin defaults to true for a new or sparse profile (Mac + Windows)', () => {
+    expect(getSettings().launchAtLogin).toBe(true)
+    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ provider: 'openai' }), 'utf8')
+    resetSettingsCacheForTests()
+    expect(getSettings().launchAtLogin).toBe(true)
+  })
+
+  it('persisted Operator opt-out / false is stored but treated as on by the resolver', () => {
+    writeFileSync(
+      join(userData, 'settings.json'),
+      JSON.stringify({
+        operatorEnabled: false,
+        operatorUrl: '',
+        sendAskText: false
+      }),
+      'utf8'
+    )
+    resetSettingsCacheForTests()
+    const s = getSettings()
+    expect(s.operatorEnabled).toBe(false)
+    expect(s.operatorUrl).toBe('')
+    expect(s.sendAskText).toBe(false)
+    expect(operatorConnectionOn(s)).toBe(true)
+    expect(resolveOperatorUrl(s, {})).toBe(METIS_OPERATOR_URL)
   })
 
   it('encryptTranscripts defaults to true for an existing install that never touched the toggle', () => {
