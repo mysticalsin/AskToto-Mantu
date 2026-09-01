@@ -67,6 +67,14 @@ export interface OnboardingMusicBed {
   isMuted: () => boolean
 }
 
+/** Close-path events that must halt the tour bed. Fail-closed: leftover loop is a bug. */
+export const ONBOARDING_MUSIC_CLOSE_EVENTS = [
+  'pagehide',
+  'beforeunload',
+  'visibilitychange',
+  'keydown'
+] as const
+
 /** Ends playback for real. Pause alone left the Aria running after quit. */
 export function haltOnboardingAudio(el: HTMLAudioElement | null | undefined): void {
   if (!el) return
@@ -77,6 +85,11 @@ export function haltOnboardingAudio(el: HTMLAudioElement | null | undefined): vo
   } catch {
     /* already dead */
   }
+  try {
+    el.currentTime = 0
+  } catch {
+    /* detached / empty src */
+  }
   el.volume = 0
   el.removeAttribute('src')
   el.src = ''
@@ -85,6 +98,18 @@ export function haltOnboardingAudio(el: HTMLAudioElement | null | undefined): vo
   } catch {
     /* empty src load is the teardown */
   }
+}
+
+/** True when the tour is no longer on screen: tab/window hide, overlay hide, or Escape. */
+export function shouldStopOnboardingMusicOnEvent(e: {
+  type: string
+  key?: string
+  visibilityState?: string
+}): boolean {
+  if (e.type === 'pagehide' || e.type === 'beforeunload') return true
+  if (e.type === 'visibilitychange') return e.visibilityState === 'hidden'
+  if (e.type === 'keydown') return e.key === 'Escape'
+  return false
 }
 
 export function createOnboardingMusicBed(): OnboardingMusicBed {
@@ -105,6 +130,12 @@ export function createOnboardingMusicBed(): OnboardingMusicBed {
     el.volume = ONBOARDING_MUSIC_GAIN * onboardingMusicLoopEnvelope(el.currentTime, el.duration)
   }
 
+  const onCloseEvent = (e: Event): void => {
+    const vis = typeof document !== 'undefined' ? document.visibilityState : undefined
+    const key = e instanceof KeyboardEvent ? e.key : undefined
+    if (shouldStopOnboardingMusicOnEvent({ type: e.type, key, visibilityState: vis })) stop()
+  }
+
   const stop = (): void => {
     if (stopped) return
     stopped = true
@@ -112,15 +143,23 @@ export function createOnboardingMusicBed(): OnboardingMusicBed {
     haltOnboardingAudio(el)
     el.removeEventListener('timeupdate', applyVolume)
     if (typeof window !== 'undefined') {
-      window.removeEventListener('pagehide', stop)
-      window.removeEventListener('beforeunload', stop)
+      window.removeEventListener('pagehide', onCloseEvent)
+      window.removeEventListener('beforeunload', onCloseEvent)
+      window.removeEventListener('keydown', onCloseEvent)
+    }
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', onCloseEvent)
     }
   }
 
   el.addEventListener('timeupdate', applyVolume)
   if (typeof window !== 'undefined') {
-    window.addEventListener('pagehide', stop)
-    window.addEventListener('beforeunload', stop)
+    window.addEventListener('pagehide', onCloseEvent)
+    window.addEventListener('beforeunload', onCloseEvent)
+    window.addEventListener('keydown', onCloseEvent)
+  }
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onCloseEvent)
   }
 
   return {

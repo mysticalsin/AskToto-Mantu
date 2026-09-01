@@ -1002,7 +1002,7 @@ export function OnboardingExperience({
       >
         {music.muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
       </button>
-      <div className="flex h-9 shrink-0 items-center justify-center pt-3">
+      <div className="onboard-tour-chrome flex h-9 shrink-0 items-center justify-center pt-3">
         <ActProgress scene={scene} />
       </div>
       <div className="onboard-tour-slot">
@@ -1018,7 +1018,7 @@ export function OnboardingExperience({
       )}
 
       {scene === 'problem' && (
-        <div key="problem" className="flex flex-col items-center gap-8">
+        <div key="problem" className="onboard-post-lady flex flex-col items-center gap-8">
           <div className="scene-enter flex max-w-[420px] flex-col gap-3 text-left">
             {PROBLEM_STORY.map((line) => (
               <p key={line} className="m-0 text-[22px] font-medium leading-snug text-[color:var(--color-ink)]">
