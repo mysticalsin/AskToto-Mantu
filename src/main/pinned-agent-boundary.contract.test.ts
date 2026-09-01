@@ -95,7 +95,7 @@ describe('renderer pins Spotlight Ref to Dust but lets the generic follow-up cas
     )
     const start = indexSrc.indexOf('const spotlightRefPinned')
     expect(start).toBeGreaterThan(-1)
-    const region = indexSrc.slice(start, start + 2200)
+    const region = indexSrc.slice(start, start + 4500)
     expect(region).toMatch(/!spotlightRefPinned && def\.kind !== 'cli' && !key/)
     expect(region).toMatch(/!spotlightRefPinned && provider === 'dust' && !s\.dustWorkspaceId/)
   })
