@@ -88,6 +88,6 @@ export const STATUS_BADGE_CSS = `
 .status-in_progress { color: #7dd3fc; border-color: rgba(125,211,252,0.28); }
 .status-in_review { color: #facc15; border-color: rgba(250,204,21,0.28); }
 .status-expired { color: #a1a1aa; border-color: rgba(161,161,170,0.28); }
-.status-submitted { color: var(--accent); border-color: rgba(124,140,248,0.28); }
+.status-submitted { color: #a78bfa; border-color: rgba(167,139,250,0.32); }
 .tab.on .status-badge { background: rgba(10,10,11,0.06); }
 `

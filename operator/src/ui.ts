@@ -8,7 +8,7 @@ import {
   stackedTokens
 } from './charts'
 import { statusBadge, STATUS_BADGE_CSS } from './components/ui/status-badge'
-import { CRM_STATUSES } from './crm'
+import { CRM_FILTER_ORDER } from './crm'
 import type { DashboardPayload } from './dashboard'
 
 const CSS = `
@@ -257,9 +257,9 @@ export function renderConsole(data: DashboardPayload): string {
       </div>`
     )
     .join('')
-  const funnelTabs = CRM_STATUSES.map(
+  const funnelTabs = CRM_FILTER_ORDER.map(
     (s) =>
-      `<button class="tab" data-crm-filter="${s}">${statusBadge(s)} ${data.crm.counts[s]}</button>`
+      `<button class="tab" data-crm-filter="${s}" type="button">${statusBadge(s)} ${data.crm.counts[s]}</button>`
   ).join('')
   const indexHint =
     k.lastIndexAt != null ? `last index ${when(k.lastIndexAt)}` : 'last index not reported'
