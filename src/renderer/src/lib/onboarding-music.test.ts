@@ -112,12 +112,14 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
       loop: true,
       volume: 0.3,
       src: 'blob:aria',
+      currentTime: 42,
       pause: vi.fn(),
       load: vi.fn(),
       removeAttribute: vi.fn()
     } as unknown as HTMLAudioElement
     haltOnboardingAudio(el)
     expect(el.pause).toHaveBeenCalledTimes(1)
+    expect(el.currentTime).toBe(0)
     expect(el.autoplay).toBe(false)
     expect(el.loop).toBe(false)
     expect(el.volume).toBe(0)
