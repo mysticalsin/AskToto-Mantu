@@ -1,7 +1,7 @@
 /**
  * Métis onboarding as an EXPERIENCE — six-act narrative per docs/ONBOARDING-EXPERIENCE.md, now that
  * Act 6 (Ready, MQA-283) closes it out: hero → staged problem story → reveal → live environment-scan
- * magic moment → personalization/vibe → [license, optional] → Ready → finish (anatomy extracted from
+ * magic moment → personalization/vibe → [license, optional] → appearance → Ready → finish (anatomy extracted from
  * the Vibe Island reference Tony supplied: welcome → demo → config → vibe → license → ready).
  *
  * Deliberate constraints:
@@ -56,16 +56,19 @@ import {
   VolumeX
 } from 'lucide-react'
 import type { ConversationMode, LocalModelSummary, PermissionStatus, ProfileRecoveryResult, PublicSettings } from '@shared/ipc'
+import type { OverlayLayout } from '@shared/overlay-chrome'
 import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { InlineOrb } from './AgentStatus'
 import { MetisMark } from './MetisMark'
 import { OnboardingDemoScene, prefetchOnboardingDemoChunks } from './OnboardingDemoScene'
 import { OnboardingStarfield } from './OnboardingStarfield'
+import { OnboardingAppearance } from './OnboardingAppearance'
 import { shouldMountStarfield } from '../lib/onboarding-starfield-spec'
 import { isWindows } from '../lib/keys'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
-import { sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
+import { sceneAfterAppearance, sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
+import { appearanceSettingsPatch, seedOnboardingAppearance } from '../lib/onboarding-appearance'
 import { createOnboardingMusicBed } from '../lib/onboarding-music'
 import { closeOnboardingPortal, disposePortalAudio, playBarLand, playPortalOpen, requestBarLand } from '../lib/onboarding-portal'
 import {
@@ -733,6 +736,12 @@ export function OnboardingExperience({
   }, [scene])
   const [rows, setRows] = useState<SetupRow[]>([])
   const [mode, setMode] = useState<ConversationMode>('general')
+  const [appearance, setAppearance] = useState<OverlayLayout>(() => seedOnboardingAppearance(settings))
+  const pickAppearance = (id: OverlayLayout): void => {
+    setAppearance(id)
+    patch?.(appearanceSettingsPatch(id))
+  }
+  const appearanceLocked = Boolean(settings?.managedKeys?.includes('overlayLayout'))
   // Recording-consent gate (CMO-QA #1). Skip lands on the same tell-the-room card, never the legacy
   // slides. Finish is blocked until this checkbox is checked, on both Ready and Skip Get started.
   const [consent, setConsent] = useState(false)
@@ -889,7 +898,7 @@ export function OnboardingExperience({
   }
 
   // Act 6 (Ready, MQA-283): this is now the narrative's actual finish — invoked from the Ready scene's
-  // CTA, not personalize's Start (which now only advances to license/ready, see sceneAfterPersonalize).
+  // CTA, not personalize's Start (which now only advances to license/appearance, see sceneAfterPersonalize).
   // Returns a promise so Ready's optional provider link can await it before opening Settings.
   const finish = async (): Promise<void> => {
     if (doneRef.current || !consent) return
@@ -1190,7 +1199,7 @@ export function OnboardingExperience({
             <TellTheRoomCard consent={consent} onConsent={setConsent} />
             <button
               type="button"
-              // Act 6 re-point (MQA-283): advances to license (only if enabled) or straight to Ready —
+              // Act 6 re-point (MQA-283): advances to license (only if enabled) or the appearance ask —
               // never finishes here directly any more. See onboarding-flow.ts.
               onClick={() => {
                 playHero()
@@ -1219,15 +1228,32 @@ export function OnboardingExperience({
         />
       )}
 
+      {scene === 'appearance' && (
+        <div key="appearance" className="flex w-full flex-col items-center">
+          <OnboardingAppearance
+            value={appearance}
+            locked={appearanceLocked}
+            onChange={pickAppearance}
+            onContinue={() => {
+              playHero()
+              setScene(sceneAfterAppearance())
+            }}
+          />
+        </div>
+      )}
+
       {scene === 'ready' && (
         <ActReady mode={mode} onFinish={finish} onOpenAiSettings={onOpenAiSettings} />
       )}
 
       {scene === 'skip' && (
         <div key="skip" className="scene-enter onboard-act4 onboard-skip-screen flex flex-col items-center">
-          <div className="hero-mark" aria-hidden="true">
-            <MetisMark size={72} />
-          </div>
+          <OnboardingAppearance
+            value={appearance}
+            locked={appearanceLocked}
+            compact
+            onChange={pickAppearance}
+          />
           <TellTheRoomCard consent={consent} onConsent={setConsent} />
           <button
             type="button"

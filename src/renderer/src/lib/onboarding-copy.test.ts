@@ -11,7 +11,9 @@ const files = [
   join(__dirname, './onboarding-demo.ts'),
   join(__dirname, './persona-vibe.ts'),
   join(__dirname, './onboarding-tell-the-room.ts'),
-  join(__dirname, './onboarding-portal.ts')
+  join(__dirname, './onboarding-portal.ts'),
+  join(__dirname, './onboarding-appearance.ts'),
+  join(__dirname, '../components/OnboardingAppearance.tsx')
 ]
 
 describe('onboarding user-facing copy — no em dash (U+2014)', () => {
