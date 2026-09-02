@@ -49,6 +49,13 @@ export interface MapDot {
   lon: number
   city: string | null
   country: string
+  /** Full device_id — signature key for the live map marker. */
+  device: string
+  hostname: string | null
+  email: string | null
+  os: string
+  appVersion: string
+  lastSeen: number
 }
 
 export interface OpsTiles {
@@ -684,7 +691,21 @@ export async function buildDashboard(
     .sort((a, b) => b.devices - a.devices)
   const dots: MapDot[] = liveSeats
     .filter((s) => s.lat != null && s.lon != null && s.country)
-    .map((s) => ({ lat: s.lat as number, lon: s.lon as number, city: s.city, country: s.country as string }))
+    .map((s) => {
+      const who = displayProfile(s)
+      return {
+        lat: s.lat as number,
+        lon: s.lon as number,
+        city: s.city && !looksLikeSecret(s.city) ? s.city : null,
+        country: s.country as string,
+        device: s.device_id,
+        hostname: who.hostname,
+        email: who.email,
+        os: s.os || '',
+        appVersion: s.app_version || '',
+        lastSeen: s.last_seen
+      }
+    })
 
   const heatStart = now - 17 * 7 * DAY
   const heatmap = Array.from({ length: 17 * 7 }, () => 0)

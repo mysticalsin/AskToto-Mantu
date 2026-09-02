@@ -227,17 +227,6 @@ export function blueArea(
   </svg>`
 }
 
-type Region = { id: string; x: number; y: number; isos: string[] }
-
-const REGIONS: Region[] = [
-  { id: 'na', x: 200, y: 130, isos: ['US', 'CA', 'MX', 'GT', 'BZ', 'HN', 'SV', 'NI', 'CR', 'PA', 'CU', 'HT', 'DO', 'JM', 'PR'] },
-  { id: 'sa', x: 300, y: 340, isos: ['BR', 'AR', 'CL', 'PE', 'CO', 'VE', 'EC', 'BO', 'PY', 'UY', 'GY', 'SR'] },
-  { id: 'eu', x: 520, y: 115, isos: ['GB', 'IE', 'FR', 'DE', 'ES', 'PT', 'IT', 'NL', 'BE', 'CH', 'AT', 'PL', 'SE', 'NO', 'FI', 'DK', 'CZ', 'HU', 'RO', 'GR', 'UA', 'RU'] },
-  { id: 'af', x: 530, y: 270, isos: ['MA', 'DZ', 'TN', 'EG', 'LY', 'SD', 'NG', 'GH', 'CI', 'SN', 'KE', 'ET', 'TZ', 'UG', 'ZA', 'AO', 'CD', 'CM'] },
-  { id: 'as', x: 760, y: 155, isos: ['TR', 'SA', 'AE', 'IL', 'IQ', 'IR', 'IN', 'PK', 'BD', 'CN', 'JP', 'KR', 'TW', 'HK', 'TH', 'VN', 'ID', 'MY', 'PH', 'SG', 'MN'] },
-  { id: 'oc', x: 870, y: 380, isos: ['AU', 'NZ', 'PG', 'FJ'] }
-]
-
 /** Bklit stat-card-choropleth-01 chrome. Intensity by seat count. No sample dots. */
 export function choroplethMini(countries: MapCountry[], cls = 'stat-choro'): string {
   const by = new Map(countries.map((c) => [c.iso, c.devices]))
@@ -270,37 +259,51 @@ export function shoeyLandSvg(cls = 'world shoey-world'): string {
 
 export const SHOEY_LAND_SVG = shoeyLandSvg()
 
+function seatSignaturePrimary(dot: MapDot): string {
+  if (dot.email) return dot.email
+  if (dot.hostname) return dot.hostname
+  const id = dot.device
+  return id.length > 10 ? `${id.slice(0, 8)}…` : id
+}
+
+function seatSignatureMeta(dot: MapDot): string {
+  const place = [dot.city, countryName(dot.country)].filter(Boolean).join(', ')
+  return [place, dot.os || '', dot.appVersion ? `v${dot.appVersion}` : ''].filter(Boolean).join(' · ')
+}
+
+/** Full world + per-seat signature markers. No regional count pills. Empty world when no live seats. */
 export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world shoey-world'): string {
-  const by = new Map(countries.map((c) => [c.iso, c.devices]))
-  const empty = countries.length === 0 && dots.length === 0
+  void countries
+  const empty = dots.length === 0
   const marks = empty
     ? ''
     : dots
-        .map((dot) => {
+        .map((dot, i) => {
           const p = project(dot.lat, dot.lon)
-          return `<circle class="seat-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4.2" fill="${SHOEY_DOT}" stroke="#fff" stroke-width="1.2" />`
+          const bump = i % 4
+          const lx = Math.min(900, Math.max(12, p.x + 12))
+          const ly = Math.min(478, Math.max(18, p.y - 14 - bump * 20))
+          const sig = seatSignaturePrimary(dot)
+          const meta = seatSignatureMeta(dot)
+          const w = Math.min(280, Math.max(92, 20 + sig.length * 6.1))
+          const h = meta ? 30 : 20
+          return `<g class="seat-mark" data-device="${escapeXml(dot.device)}" data-sig="${escapeXml(sig)}">
+      <circle class="seat-ring" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="10" fill="none" stroke="${SHOEY_DOT}" stroke-width="1.15" opacity="0.28"/>
+      <circle class="seat-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4.4" fill="${SHOEY_DOT}" stroke="#fff" stroke-width="1.2"/>
+      <g class="seat-sig" transform="translate(${lx.toFixed(1)},${ly.toFixed(1)})">
+        <rect class="seat-sig-bg" x="0" y="${(-h / 2).toFixed(1)}" width="${w.toFixed(1)}" height="${h}" rx="6" fill="#fff" stroke="#E5E5E5"/>
+        <text class="seat-sig-name" x="8" y="${meta ? -1 : 4}" font-size="11" font-weight="650" fill="#18181B">${escapeXml(sig)}</text>
+        ${meta ? `<text class="seat-sig-meta" x="8" y="12" font-size="9" fill="#71717A">${escapeXml(meta)}</text>` : ''}
+      </g>
+    </g>`
         })
         .join('')
-  const pills = empty
-    ? ''
-    : REGIONS.map((reg) => {
-        const present = reg.isos.filter((iso) => (by.get(iso) ?? 0) > 0)
-        const seats = present.reduce((n, iso) => n + (by.get(iso) ?? 0), 0)
-        if (!seats) return ''
-        const label = present.length === 1 ? countryName(present[0]) : `${present.length} countries`
-        const w = Math.max(96, 36 + label.length * 6.4)
-        return `<g class="pill-g" transform="translate(${reg.x},${reg.y})">
-          <rect x="0" y="-13" width="${w}" height="26" rx="13" fill="#fff" stroke="#E5E5E5"/>
-          <circle cx="12" cy="0" r="4" fill="${SHOEY_PILL}"/>
-          <text x="22" y="4" font-size="11" font-weight="650" fill="#18181B">${seats}</text>
-          <line x1="42" y1="-7" x2="42" y2="7" stroke="#E5E5E5"/>
-          <text x="48" y="4" font-size="11" fill="#71717A">${escapeXml(label)}</text>
-        </g>`
-      }).join('')
   const caption = empty
-    ? `<div class="empty map-empty">No heartbeats yet. The map stays empty until a seat checks in. Empty is an empty world, not sample dots.</div>`
+    ? `<div class="empty map-empty">No live Métis seats yet. The map stays empty until a seat checks in. Empty is an empty world, not sample dots.</div>`
     : ''
-  const svg = shoeyLandSvg(cls).replace('</svg>', `${marks}${pills}</svg>`)
+  const svg = shoeyLandSvg(cls)
+    .replace('aria-label="Unique seats by country"', 'aria-label="Live Métis seats across the globe"')
+    .replace('</svg>', `${marks}</svg>`)
   return `${caption}${svg}`
 }
 

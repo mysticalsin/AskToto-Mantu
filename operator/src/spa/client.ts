@@ -116,7 +116,7 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
     if (!fresh) return
     var old = root.querySelector('svg.world')
     if (old && old.querySelectorAll) {
-      old.querySelectorAll('circle.seat-dot, circle.dot, g.pill-g').forEach(function (n) {
+      old.querySelectorAll('g.seat-mark, circle.seat-dot, circle.dot, g.pill-g').forEach(function (n) {
         fresh.appendChild(n)
       })
     }

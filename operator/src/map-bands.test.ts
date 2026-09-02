@@ -15,7 +15,18 @@ describe('map band artifacts', () => {
     expect(findBandSubpaths(stripMapBands(WORLD_PATHS.FJ))).toEqual([])
     const svg = choropleth(
       [{ iso: 'CA', devices: 2 }],
-      [{ lat: 45.5, lon: -73.5, city: 'Longueuil', country: 'CA' }],
+      [{
+        lat: 45.5,
+        lon: -73.5,
+        city: 'Longueuil',
+        country: 'CA',
+        device: 'dev-ca-1',
+        hostname: 'Tonys-MacBook-Pro',
+        email: 'twalteur@amaris.com',
+        os: 'darwin',
+        appVersion: '1.8.2',
+        lastSeen: Date.now()
+      }],
       'analytics'
     )
     expect(findBandSubpaths(svg)).toEqual([])
