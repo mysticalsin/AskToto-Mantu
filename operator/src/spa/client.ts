@@ -105,14 +105,14 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
     var dark = document.documentElement.getAttribute('data-theme') === 'dark'
     var land = dark ? '#3f3f46' : '#E5E7EB'
     var ocean = dark ? '#0a0a0b' : '#FFFFFF'
-    var stroke = dark ? '#111827' : '#9CA3AF'
+    var stroke = dark ? '#111827' : '#6B7280'
     root.querySelectorAll('.world-ocean').forEach(function (r) {
       r.setAttribute('fill', ocean)
     })
     root.querySelectorAll('path[data-iso]').forEach(function (p) {
       p.setAttribute('fill', land)
       p.setAttribute('stroke', stroke)
-      p.setAttribute('stroke-width', '0.8')
+      p.setAttribute('stroke-width', '1.15')
       p.setAttribute('class', ((p.getAttribute('class') || '') + ' world-land').trim())
     })
     var svg = root.querySelector('svg.shoey-world')

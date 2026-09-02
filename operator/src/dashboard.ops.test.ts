@@ -117,7 +117,7 @@ describe('overview ops tiles from real ingest only', () => {
     }
     const dash = await buildDashboard(store, 'tony.walteur@gmail.com', NOW)
     expect(dash.ops.live30).toBe(2)
-    expect(dash.ops.liveNow).toBe(0)
+    expect(dash.ops.liveNow).toBe(2)
     expect(dash.map.empty).toBe(false)
     expect(dash.map.countries).toEqual([{ iso: 'CA', devices: 2 }])
     expect(dash.map.dots).toHaveLength(2)

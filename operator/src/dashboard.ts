@@ -199,6 +199,7 @@ export interface ProfileRow {
   country: string | null
   city: string | null
   lastSeen: number
+  firstSeen: number
   live: boolean
   live30: boolean
   license: string | null
@@ -363,13 +364,14 @@ export function crmFunnelByConnector(rows: CrmSendRow[]): CrmFunnelByConnector[]
 }
 
 /** Seats seen via last_seen, heartbeat pulses, or heartbeat events in the last 30 minutes. */
-export function liveSeatIds30(
+export function liveSeatIdsSince(
   seats: SeatRow[],
   pulses: PulseRow[],
   events: EventRow[],
-  now: number
+  now: number,
+  windowMs: number
 ): Set<string> {
-  const cutoff = now - LIVE30_MS
+  const cutoff = now - windowMs
   const ids = new Set<string>()
   for (const s of seats) {
     if (s.last_seen >= cutoff) ids.add(s.device_id)
@@ -381,6 +383,15 @@ export function liveSeatIds30(
     if (e.kind === 'heartbeat' && e.ts >= cutoff && e.device_id) ids.add(e.device_id)
   }
   return ids
+}
+
+export function liveSeatIds30(
+  seats: SeatRow[],
+  pulses: PulseRow[],
+  events: EventRow[],
+  now: number
+): Set<string> {
+  return liveSeatIdsSince(seats, pulses, events, now, LIVE30_MS)
 }
 
 /** Unique devices per minute for the last 30 minutes. Last bucket gets liveCount if clocks left every minute empty. */
@@ -535,7 +546,7 @@ export async function buildDashboard(
   const vault = await store.listVaultMeta()
   const seatsById = new Map(seats.map((s) => [s.device_id, s]))
 
-  const live = seats.filter((s) => now - s.last_seen < ONLINE_MS).length
+  const live = liveSeatIdsSince(seats, pulses, storedEvents, now, ONLINE_MS).size
   const dau = uniqueSeats(seats, now - DAY)
   const wau = uniqueSeats(seats, now - 7 * DAY)
   const versions = new Set(seats.map((s) => s.app_version).filter(Boolean)).size
@@ -694,7 +705,15 @@ export async function buildDashboard(
     const end = i === dayStarts.length - 1 ? now + 1 : t + DAY
     return weekAsks.filter((a) => a.ts >= t && a.ts < end && (a.mode || '').toLowerCase() === 'recap').length
   })
-  const tokenSeries = tokens.map((p) => p.read + p.write + p.uncached)
+  const tokenSeries = hourStarts.map((t) => {
+    let n = 0
+    for (const a of asks) {
+      if (a.ts < t || a.ts >= t + HOUR) continue
+      const s = sumAskTokens(a)
+      if (s != null) n += s
+    }
+    return n
+  })
   const ops: OpsTiles = {
     uniqueSessions: wau,
     sessionsDay: dau,
@@ -857,6 +876,7 @@ export async function buildDashboard(
         country: s.country,
         city: s.city,
         lastSeen: s.last_seen,
+        firstSeen: s.first_seen,
         live: now - s.last_seen < ONLINE_MS,
         live30: liveIds.has(s.device_id),
         license: s.license && !looksLikeSecret(s.license) ? s.license : null

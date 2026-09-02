@@ -17,7 +17,7 @@ function env(): Env {
 }
 
 describe('Cloudflare Overview fail-loud', () => {
-  it('shows the missing-token error when no Cloudflare connection exists', async () => {
+  it('shows 0 Cloudflare KPIs and a Keys login CTA, not a token-missing banner', async () => {
     const store = memoryStore()
     const html = await handleRequest(
       new Request('https://operator.test/'),
@@ -27,7 +27,9 @@ describe('Cloudflare Overview fail-loud', () => {
     ).then((r) => r.text())
     expect(html).toContain('data-cf-overview')
     expect(html).toContain(CF_TOKEN_MISSING)
-    expect(html).toContain('data-cf-error')
+    expect(html).toContain('data-cf-idle')
+    expect(html).not.toContain('data-cf-error')
+    expect(html).not.toContain('Cloudflare token missing')
     expect(html).not.toContain('Seats keep their own keys')
     const dash = (await (
       await handleRequest(

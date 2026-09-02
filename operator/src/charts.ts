@@ -174,7 +174,7 @@ const SHOEY_BLUE = '#2563EB'
 /** OpenPanel Shoey realtime land. Must stay this literal so curl /assets proof can see it. */
 export const SHOEY_LAND = '#E5E7EB'
 const SHOEY_OCEAN = '#FFFFFF'
-const SHOEY_LAND_STROKE = '#9CA3AF'
+const SHOEY_LAND_STROKE = '#6B7280'
 const SHOEY_DOT = '#111827'
 const SHOEY_PILL = '#10B981'
 
@@ -260,7 +260,7 @@ export function shoeyLandSvg(cls = 'world shoey-world'): string {
   for (const [iso, d] of Object.entries(WORLD_PATHS)) {
     const painted = stripMapBands(d)
     if (!painted) continue
-    land += `<path class="world-land" data-iso="${iso}" d="${painted}" fill="${SHOEY_LAND}" stroke="${SHOEY_LAND_STROKE}" stroke-width="0.8" />`
+    land += `<path class="world-land" data-iso="${iso}" d="${painted}" fill="${SHOEY_LAND}" stroke="${SHOEY_LAND_STROKE}" stroke-width="1.15" />`
   }
   return `<svg class="${cls}" viewBox="0 0 1000 500" role="img" aria-label="Unique seats by country">
     <rect class="world-ocean" width="1000" height="500" fill="${SHOEY_OCEAN}"/>
