@@ -17,7 +17,7 @@ export const CONSOLE_CSS = `/* Métis Operator SPA — Shoey Overview / Realtime
   --live: #10B981;
   --land: #E5E7EB;
   --ocean: #FFFFFF;
-  --land-stroke: #9CA3AF;
+  --land-stroke: #6B7280;
   --chart-1: #EFF6FF;
   --chart-2: #BFDBFE;
   --chart-3: #60A5FA;
@@ -259,8 +259,8 @@ a { color: var(--accent); text-decoration: none; }
 .world.shoey-world .world-ocean { fill: #FFFFFF; }
 .world.shoey-world path.world-land, .world.shoey-world path[data-iso] {
   fill: #E5E7EB !important;
-  stroke: #9CA3AF !important;
-  stroke-width: 0.8;
+  stroke: #6B7280 !important;
+  stroke-width: 1.15;
   vector-effect: none;
 }
 [data-theme="dark"] .world.shoey-world { background: #0a0a0b; }
@@ -365,6 +365,9 @@ textarea { min-height: 120px; }
   grid-template-columns: 44px 1.3fr 1.2fr 1.3fr 110px 88px 92px;
   gap: 8px; align-items: center;
   padding: 10px 14px;
+}
+.sess-head, .sess-row {
+  grid-template-columns: 130px 1fr 1.2fr 1fr 1fr 88px;
 }
 .seat-head {
   font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase;

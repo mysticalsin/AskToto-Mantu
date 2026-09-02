@@ -51,6 +51,14 @@ function field(value: string | null | undefined): string {
 }
 
 function renderCloudflare(cf: CloudflareOverview): string {
+  if (!cf.connected) {
+    return `<div class="kpis" data-cf-idle>
+      ${kpiCard({ title: 'Requests', value: '0', sub: `${cf.worker} · ${cf.range}`, spark: '' })}
+      ${kpiCard({ title: 'Errors', value: '0', sub: cf.worker, spark: '' })}
+      ${kpiCard({ title: 'CPU', value: '0', sub: 'cpuTimeMs', spark: '' })}
+    </div>
+    <div class="sub muted" style="padding-bottom:8px">Connect Cloudflare (login) on Keys. No token on seats. Worker ${esc(cf.worker)}.</div>`
+  }
   if (cf.error) {
     return `<div class="fail-loud" data-cf-error>${esc(cf.error)}</div>
       <div class="sub muted" style="padding-bottom:8px">Worker ${esc(cf.worker)}. Connect Cloudflare (login) on Keys. No token on seats.</div>`
@@ -232,12 +240,6 @@ function seatStatus(lastSeen: number, now: number): { id: 'active' | 'paused' | 
   return { id: 'inactive', label: 'Inactive' }
 }
 
-function freshnessPct(lastSeen: number, now: number): number {
-  const age = Math.max(0, now - lastSeen)
-  const window = 30 * 60 * 1000
-  return Math.max(6, Math.round((1 - Math.min(age, window) / window) * 100))
-}
-
 function emptyPage(id: string, title: string, hook: string): string {
   return `<section class="page wrap" data-page="${id}" hidden>
     <div class="empty-card">
@@ -304,9 +306,16 @@ function eventStats(events: ConsoleEvent[]): string {
   return `<p class="eyebrow">Live ingest</p>${rows}`
 }
 
+function sessionPath(events: ConsoleEvent[], which: 'entry' | 'exit'): string {
+  if (!events.length) return 'heartbeat'
+  const row = which === 'entry' ? events[events.length - 1] : events[0]
+  const name = looksLikeSecret(row.name) ? 'event' : row.name
+  return name || 'heartbeat'
+}
+
 function renderSeatTable(rows: ProfileRow[], events: ConsoleEvent[], now: number): string {
-  const head = `<div class="seat-head" aria-hidden="true">
-      <div>No</div><div>Seat / computer</div><div>Location</div><div>Identity</div><div>Last seen</div><div>Live</div><div>Status</div>
+  const head = `<div class="seat-head sess-head" aria-hidden="true">
+      <div>Started</div><div>Session id</div><div>Profile</div><div>Entry page</div><div>Exit page</div><div>Duration</div>
     </div>`
   if (!rows.length) {
     return `<div class="seat-card" data-seat-table>${head}<div class="empty" style="padding:28px 16px">No seats on the fleet yet. Heartbeats will fill this. Empty is an empty card, not sample servers.</div>
@@ -320,32 +329,35 @@ function renderSeatTable(rows: ProfileRow[], events: ConsoleEvent[], now: number
   </div>`
   }
   const body = rows
-    .map((r, i) => {
+    .map((r) => {
       const status = seatStatus(r.lastSeen, now)
       const name = r.hostname || r.email || `seat ${r.device}`
       const identity = r.email || r.hostname || MISSING
       const loc = [r.city, r.country].filter((v) => v && !looksLikeSecret(v)).join(' · ')
-      const meter = freshnessPct(r.lastSeen, now)
-      const recent = events
+      const mine = events
         .filter((e) => (r.hostname && e.hostname === r.hostname) || (r.email && e.email === r.email))
+        .sort((a, b) => b.ts - a.ts)
+      const recent = mine
         .slice(0, 6)
         .map((e) => `${ago(e.ts, now)} · ${looksLikeSecret(e.name) ? 'event' : e.name}`)
         .join(' | ')
       const detail = [
         `OS ${r.os || MISSING} · ${r.appVersion || MISSING}`,
         `License ${r.license && !looksLikeSecret(r.license) ? r.license : MISSING} · IP ${MISSING}`,
-        `Last seen ${when(r.lastSeen)}`,
+        `${loc || MISSING} · Last seen ${when(r.lastSeen)}`,
+        `Status ${status.label}`,
         recent ? `Recent: ${recent}` : 'No recent heartbeats for this seat.'
       ].join(' · ')
-      const no = String(i + 1).padStart(2, '0')
-      return `<div class="seat-row" data-seat-row data-q="${esc(`${name} ${loc} ${identity} ${r.os}`.toLowerCase())}" data-country="${esc(r.country || '')}" data-os="${esc(r.os)}" data-seat-name="${esc(name)}" data-seat-detail="${esc(detail)}">
-        <div class="seat-no">${no}</div>
-        <div class="seat-name">${osBadge(r.os)} ${field(r.hostname)}</div>
-        <div class="seat-loc">${r.country ? `<span class="seat-flag">${esc(r.country)}</span>` : ''}${loc ? esc(loc) : MISSING}</div>
-        <div>${identity === MISSING ? MISSING : esc(identity)}</div>
-        <div class="muted">${esc(ago(r.lastSeen, now))}</div>
-        <div class="seat-meter" title="Heartbeat freshness"><i style="width:${meter}%"></i></div>
-        <div><span class="seat-status ${status.id}">${status.label}</span></div>
+      const started = r.firstSeen || r.lastSeen
+      const dur = formatDuration(Math.max(0, r.lastSeen - started) || null)
+      const q = `${name} ${r.device} ${identity} ${r.os} heartbeat`.toLowerCase()
+      return `<div class="seat-row sess-row" data-seat-row data-q="${esc(q)}" data-country="${esc(r.country || '')}" data-os="${esc(r.os)}" data-seat-name="${esc(name)}" data-seat-detail="${esc(detail)}">
+        <div class="muted">${esc(when(started))}</div>
+        <div class="event-name">${esc(r.device)}</div>
+        <div>${osBadge(r.os)} ${identity === MISSING ? MISSING : esc(identity)}</div>
+        <div class="muted">${esc(sessionPath(mine, 'entry'))}</div>
+        <div class="muted">${esc(sessionPath(mine, 'exit'))}</div>
+        <div>${esc(dur)}</div>
       </div>`
     })
     .join('')
@@ -628,14 +640,15 @@ export function renderConsole(data: DashboardPayload): string {
     </section>
 
     <section class="page wrap" data-page="sessions" hidden>
-      <div class="ev-head">
-        <div>
-          <h3 class="rt-h">Sessions</h3>
-          <p class="muted ev-sub">Seats that checked in. Computer and SSO email from the seat. Missing fields are ${MISSING}, never invented.</p>
-        </div>
-        <span class="live-events"><i></i>${data.profiles.length} seats</span>
+      <div class="page-hero">
+        <h3 class="page-title">Sessions</h3>
+        <p class="page-sub">Access all your sessions here</p>
       </div>
-      <input class="table-search" id="sessions-search" type="search" placeholder="Search sessions" autocomplete="off">
+      <div class="page-toolbar">
+        <input class="table-search toolbar-search" id="sessions-search" type="search" placeholder="Search" autocomplete="off">
+        <button class="tool" type="button">Filters</button>
+        <button class="tool page-view" type="button">View</button>
+      </div>
       ${renderSeatTable(data.profiles, data.events, data.now)}
       <div class="empty" id="sessions-empty" hidden>No sessions match that search.</div>
     </section>
