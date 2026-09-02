@@ -255,14 +255,10 @@ export function localPrimaryEligibleFor(
 }
 
 /**
- * Precedence for the FIRST provider an ask attempts (index.ts's entry point, PLAN.md §4.3 "Routing
- * precedence, explicit"): an opted-in screenshot privacy policy wins first; otherwise an explicit
- * providerOverride wins (Dust cascades, Spotlight Ref); else 'local' when it's eligible for this specific
- * request; else the CLI-priority primary; else the user's globally active provider. cliPrimary deliberately
- * LOSES to a locally-eligible request — Métis Local is meant to short-circuit even a connected CLI
- * subscription for in-scope suggest/summary/vision asks. `localEligible` is expected to already be
- * routingMode-aware (see localPrimaryEligibleFor) — this function itself stays a plain boolean-precedence
- * table so its own tests need no Settings fixture at all.
+ * Precedence for the FIRST provider an ask attempts (OPERATOR.md routing law + PLAN.md §4.3):
+ * screenshot privacy pin wins; otherwise an explicit providerOverride (Dust retrieval / Spotlight Ref);
+ * else a connected working CLI (subscription first — Local is not a bypass of a working CLI);
+ * else Métis Local when eligible; else the globally active provider.
  */
 export function pickPrimaryProvider(
   providerOverride: ProviderId | undefined,
@@ -273,8 +269,8 @@ export function pickPrimaryProvider(
 ): ProviderId {
   if (localVisionRequired) return 'local'
   if (providerOverride) return providerOverride
-  if (localEligible) return 'local'
   if (cliPrimary) return cliPrimary
+  if (localEligible) return 'local'
   return activeProvider
 }
 

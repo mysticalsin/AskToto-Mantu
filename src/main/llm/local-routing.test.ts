@@ -417,8 +417,8 @@ describe('pickPrimaryProvider', () => {
     expect(pickPrimaryProvider('dust', true, 'claude-cli', 'anthropic')).toBe('dust')
   })
 
-  it('local wins over cliPrimary when eligible (Métis Local short-circuits even a connected CLI subscription)', () => {
-    expect(pickPrimaryProvider(undefined, true, 'claude-cli', 'anthropic')).toBe('local')
+  it('cliPrimary wins over local when a CLI is connected (subscription first, OPERATOR.md)', () => {
+    expect(pickPrimaryProvider(undefined, true, 'claude-cli', 'anthropic')).toBe('claude-cli')
   })
 
   it('cliPrimary wins when local is not eligible for this request', () => {

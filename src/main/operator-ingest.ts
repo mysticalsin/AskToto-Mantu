@@ -29,6 +29,8 @@ export interface OperatorRuntimeSettings {
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 let lastAskId: string | null = null
 let fetchImpl: typeof fetch = fetch
+/** In-memory funded providers from the last heartbeat. Never a secret. Never persisted. */
+let lastFundedProviders: string[] = []
 
 export function setOperatorFetchForTests(fn: typeof fetch | null): void {
   fetchImpl = fn ?? fetch
@@ -120,6 +122,35 @@ function retryIdsFromHeartbeat(json: unknown): string[] {
   return [...new Set(retry.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 80))]
 }
 
+function fundedProvidersFromHeartbeat(json: unknown): string[] {
+  if (!json || typeof json !== 'object') return []
+  const funded = (json as { fundedProviders?: unknown }).fundedProviders
+  if (!Array.isArray(funded)) return []
+  return [
+    ...new Set(
+      funded.filter(
+        (id): id is string =>
+          typeof id === 'string' &&
+          id.length > 0 &&
+          id.length <= 40 &&
+          id !== 'dust' &&
+          id !== 'local' &&
+          id !== 'claude-cli' &&
+          id !== 'codex-cli' &&
+          id !== 'cloudflare-account'
+      )
+    )
+  ]
+}
+
+export function operatorFundedProviders(): string[] {
+  return lastFundedProviders
+}
+
+export function setOperatorFundedProvidersForTests(ids: string[]): void {
+  lastFundedProviders = [...ids]
+}
+
 export async function operatorHeartbeat(
   settings: OperatorRuntimeSettings
 ): Promise<{ ok: boolean; retry: string[] }> {
@@ -128,6 +159,7 @@ export async function operatorHeartbeat(
   if (!operatorUrlConfigured(settings) || !secret) return { ok: false, retry: [] }
   try {
     const res = await signedPost(url, secret, '/v1/heartbeat', seatMeta(settings))
+    if (res.ok) lastFundedProviders = fundedProvidersFromHeartbeat(res.json)
     return { ok: res.ok, retry: retryIdsFromHeartbeat(res.json) }
   } catch (e) {
     mainLog.warn('[operator] heartbeat failed:', e)

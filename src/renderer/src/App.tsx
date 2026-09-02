@@ -2694,11 +2694,11 @@ export function App(): JSX.Element {
           return
         }
         // Cascade into Dust whenever it's configured, regardless of the active provider — same reasoning
-        // as the meeting recap (endReview) above — UNLESS the user's own local-summary setup is ready:
-        // Métis Local already wins this request at the routing layer (localPrimary outranks cliPrimary),
-        // so forcing providerOverride:'dust' here would silently override that choice with a cloud round
-        // trip the user didn't ask for.
+        // as the meeting recap (endReview) above — UNLESS a connected CLI should win (OPERATOR.md) or
+        // the user's own local-summary setup is ready. Forcing providerOverride:'dust' here would
+        // silently override subscription-first routing with a Dust chat hop the law forbids.
         const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
+        const cliReady = !!settings?.cliConnected?.['claude-cli'] || !!settings?.cliConnected?.['codex-cli']
         const id = ask.run({
           mode: 'summary',
           transcript,
@@ -2708,7 +2708,7 @@ export function App(): JSX.Element {
           // deeper"/"Retry" are dead buttons on every Summarize answer. Also doubles as the clean label
           // Answer.tsx falls back to when no explicit `label` is set.
           prompt: 'Summarize the conversation so far.',
-          ...(dustReady && !settings?.localSummaryReady ? { providerOverride: 'dust' as const } : {})
+          ...(dustReady && !settings?.localSummaryReady && !cliReady ? { providerOverride: 'dust' as const } : {})
         })
         pendingUserRef.current = { id, q: 'Summarize the conversation so far.' } // record for follow-up continuity
       }
@@ -2726,6 +2726,7 @@ export function App(): JSX.Element {
       settings?.dustWorkspaceId,
       settings?.providerModels,
       settings?.localSummaryReady,
+      settings?.cliConnected,
       suggest.run,
       ask.run,
       ask.fail,
