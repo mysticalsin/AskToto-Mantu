@@ -145,6 +145,15 @@ export function ImportQueue({
                 </div>
               </div>
             )}
+            {job.state === 'recapping' && job.recapPartial && (
+              <div
+                aria-live="off"
+                className="mt-1 line-clamp-2 text-[11px] text-[color:var(--color-ink-3)]"
+                title="Summary so far"
+              >
+                {job.recapPartial.slice(-280)}
+              </div>
+            )}
             {job.error && <div className="mt-1 text-[11px] text-[var(--color-danger)]">{job.error}</div>}
           </div>
         )

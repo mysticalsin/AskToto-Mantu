@@ -1985,12 +1985,21 @@ export function App(): JSX.Element {
     // indefinitely instead of ever letting it land.
     if (stoppingRef.current) return
     stoppingRef.current = true
+    // Warm the on-device summarizer NOW when it will write the notes: the recap cannot fire until the
+    // post-stop drain settles (up to 6 s on Parakeet/Apple), and that window used to be dead time before a
+    // cold ~730 MB load. Main gates on the same summary-readiness rule maybeFireRecap uses plus a RAM floor.
+    const localWillSummarize =
+      !!settings?.localSummaryReady || (!settings?.providerReady && !!settings?.localFallbackReady)
+    if (localWillSummarize) {
+      const tail = listen.text().slice(-6000)
+      if (tail.trim()) void window.toto.localPrewarm(tail, 'summary').catch(() => {})
+    }
     listen.stop()
     setView('review')
     setCollapsed(false)
     pendingRecapRef.current = true
     maybeFireRecap() // covers the rare case where listen.listening is already false (no drain pending)
-  }, [listen.stop, maybeFireRecap])
+  }, [listen.stop, listen.text, maybeFireRecap, settings?.localSummaryReady, settings?.providerReady, settings?.localFallbackReady])
 
   const toggleListen = useCallback(() => {
     if (listen.listening) void endReview()

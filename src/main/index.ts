@@ -32,6 +32,7 @@ import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unl
 const DEVTOOLS_ENABLED = devToolsEnabled()
 import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
+import { freemem } from 'node:os'
 import {
   IPC,
   AskStartSchema,
@@ -142,7 +143,8 @@ import {
   pickPrimaryProvider,
   allowCrossProviderFailover,
   resolveRoutingMode,
-  localRuntimeBinaryPresent
+  localRuntimeBinaryPresent,
+  PREWARM_MIN_FREE_RAM_GB
 } from './llm/local-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
@@ -323,7 +325,8 @@ import { pickAudioFile, consumePickedAudio, offerAudioPaths } from './import-aud
 import { ImportJobManager, MAX_CONCURRENT_DECODES, decoderSlotIsStale, type ImportJob } from './import-jobs'
 import {
   runImportedRecap as runImportedRecapJob,
-  importedTranscriptText as formatImportedTranscriptText
+  importedTranscriptText as formatImportedTranscriptText,
+  pickImportRecapCandidates
 } from './import-recap'
 import {
   scheduleIntelligenceIndex,
@@ -740,6 +743,7 @@ function importJobView(job: ImportJob): ImportJobView {
     pct,
     error: job.error,
     recapError: job.recapError,
+    recapPartial: job.recapPartial,
     file: job.file,
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
@@ -1160,7 +1164,7 @@ async function runImportPolish(lines: TranscriptLine[]): Promise<TranscriptLine[
   return out
 }
 
-async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
+async function runImportedRecap(job: ImportJob, onPartial?: (text: string) => void): Promise<string | undefined> {
   return runImportedRecapJob(job, {
     getSettings,
     getApiKey,
@@ -1175,7 +1179,23 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
         dustBaseUrl: s.dustBaseUrl
       }),
     logWarn: (message) => mainLog.warn(message)
-  })
+  }, onPartial)
+}
+
+/**
+ * Import: when the on-device model is the recap candidate (redactSensitive on, or no API/CLI ready),
+ * start it while ASR is still running so the ~730 MB cold load hides behind transcription instead of
+ * being appended to the tail of every default-profile import. Same free-RAM floor as the other
+ * unattended warms (MQA-270): never spawn a second large model next to the whisper helper on a tight box.
+ */
+function prewarmImportRecap(): void {
+  const s = getSettings()
+  const first = pickImportRecapCandidates(s, { getApiKey, getAllowedProviders, providerBaseUrl })[0]
+  if (first !== 'local') return
+  if (freemem() / 1024 ** 3 < PREWARM_MIN_FREE_RAM_GB) return
+  void ensureLocalRuntimeStarted(s.localLlm.modelId, false).catch((err) =>
+    mainLog.warn('[import-recap] prewarm failed', err instanceof Error ? err.message : String(err))
+  )
 }
 
 async function recapMissingMeetingSummaries(): Promise<number> {
@@ -1347,6 +1367,7 @@ function initializeImportJobs(): void {
       if (mins > 0) appendTimeSavedEvent({ kind: 'note-taking', estimatedMinutes: mins, ids: { meeting: file } })
     },
     generateRecap: runImportedRecap,
+    prewarmRecap: prewarmImportRecap,
     updateRecap: async (file, recap) => {
       const result = await updateMeetingRecap(getSettings(), file, recap)
       if (!result.ok) throw new Error(result.error || 'Could not save the imported summary.')
@@ -4812,7 +4833,15 @@ function registerIpc(): void {
     const s = getSettings()
     // publicSettings().providerReady is the same "can a cloud/CLI provider actually answer" test the ask
     // path uses — when it is false, local is what will serve the next suggest, so it is worth warming.
-    if (!localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady)) return
+    // intent 'summary' (Stop pressed, notes about to be written on-device) uses the summary-readiness
+    // rule the renderer's maybeFireRecap picks mode:'summary' by, under the same free-RAM floor.
+    const pub = publicSettings()
+    const summaryIntent = parsed.data.intent === 'summary'
+    const eligible = summaryIntent
+      ? (pub.localSummaryReady || (!pub.providerReady && pub.localFallbackReady)) &&
+        freemem() / 1024 ** 3 >= PREWARM_MIN_FREE_RAM_GB
+      : localPrewarmEligible(s, getAllowedProviders(), pub.providerReady)
+    if (!eligible) return
     // Warm the EXACT same [system, user] prefix a real suggest request sends (F4 hardening) — built by
     // the SAME helper (llm/prewarm.ts) a unit test cross-checks against buildSystem()/userText() directly,
     // so any future drift between the live suggest path and what prewarm warms fails a test.

@@ -362,7 +362,8 @@ const api = {
   // Fire-and-forget: keep the local sidecar's per-slot KV cache hot while a meeting is live (PLAN.md
   // §4.4's pre-warm path). The renderer never learns the sidecar's port/key — this only ever sends
   // transcript text; main resolves the runtime/model/session key on its own.
-  localPrewarm: (text: string): Promise<void> => ipcRenderer.invoke(IPC.localPrewarm, { text }),
+  localPrewarm: (text: string, intent?: 'suggest' | 'summary'): Promise<void> =>
+    ipcRenderer.invoke(IPC.localPrewarm, intent ? { text, intent } : { text }),
 
   resize: (height: number, width?: number): Promise<void> =>
     ipcRenderer.invoke(IPC.windowResize, { height, width }),

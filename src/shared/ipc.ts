@@ -498,6 +498,8 @@ export interface ImportJobView {
   pct: number | null
   error?: string
   recapError?: string
+  /** Summary text streamed so far while `state === 'recapping'`; absent otherwise. */
+  recapPartial?: string
   file?: string
   createdAt: number
   updatedAt: number
@@ -2119,7 +2121,11 @@ export type LocalModelSummary = z.infer<typeof LocalModelSummarySchema>
  *  stays hot between real suggest requests. The renderer already clips this to the same ~6000-char tail
  *  the suggest mode itself sends (llm/shared.ts's `.slice(-6000)`) before it ever reaches IPC; the 24000
  *  cap here is defense-in-depth against a compromised/malfunctioning renderer, not the real bound. */
-export const LocalPrewarmPayloadSchema = z.object({ text: z.string().min(1).max(24_000) })
+export const LocalPrewarmPayloadSchema = z.object({
+  text: z.string().min(1).max(24_000),
+  /** 'summary' warms the on-device summarizer at Stop when local will write the notes; default 'suggest'. */
+  intent: z.enum(['suggest', 'summary']).optional()
+})
 export type LocalPrewarmPayload = z.infer<typeof LocalPrewarmPayloadSchema>
 
 

@@ -96,6 +96,32 @@ describe('runImportedRecap critical path', () => {
   })
 })
 
+describe('runImportedRecap streams partial text to the caller', () => {
+  it('reports the cumulative summary on every delta', async () => {
+    const createStream = vi.fn((opts: { handlers: { onDelta: (d: string) => void; onDone: () => void } }) => {
+      opts.handlers.onDelta('## Over')
+      opts.handlers.onDelta('view')
+      opts.handlers.onDone()
+      return { abort: () => {} }
+    })
+    const partials: string[] = []
+    const recap = await runImportedRecap(
+      { jobId: 'j2', lines: [{ speaker: 'unknown', text: 'we decided to ship', t: 1 }], mode: 'meeting' },
+      {
+        getSettings: () => settings(),
+        getApiKey: () => 'sk-test',
+        getAllowedProviders: () => null,
+        providerBaseUrl: () => '',
+        redactSecrets: (t) => t,
+        createStream: createStream as never
+      },
+      (text) => partials.push(text)
+    )
+    expect(partials).toEqual(['## Over', '## Overview'])
+    expect(recap).toBe('## Overview')
+  })
+})
+
 describe('import recap is not polish-first', () => {
   it('import-jobs finalize recaps before any polish pass', () => {
     const src = readFileSync(join(__dirname, 'import-jobs.ts'), 'utf8')

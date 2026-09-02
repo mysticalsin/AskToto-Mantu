@@ -425,8 +425,47 @@ describe('ImportJobManager', () => {
     // than racing an empty-recap version of the same import.
     expect(enqueueIngest).toHaveBeenCalledTimes(1)
     expect(enqueueIngest).toHaveBeenCalledWith('saved-import.md')
-    expect(generateRecap).toHaveBeenCalledWith(expect.objectContaining({ file: 'saved-import.md' }))
+    expect(generateRecap).toHaveBeenCalledWith(expect.objectContaining({ file: 'saved-import.md' }), expect.any(Function))
     expect(updateRecap).toHaveBeenCalledWith('saved-import.md', '## Overview\n\nImported summary')
+    expect(manager.get('job-1')?.state).toBe('done')
+  })
+
+  it('fires prewarmRecap once, before the first window is transcribed', async () => {
+    const prewarmRecap = vi.fn()
+    const { manager, transcribe } = createManager({ prewarmRecap })
+    await manager.start(source)
+    await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+    await manager.finishDecoding('job-1')
+    expect(prewarmRecap).toHaveBeenCalledTimes(1)
+    expect(transcribe).toHaveBeenCalled()
+    expect(prewarmRecap.mock.invocationCallOrder[0]).toBeLessThan(transcribe.mock.invocationCallOrder[0])
+  })
+
+  it('streams recapPartial to onChange while recapping and never into the checkpoint', async () => {
+    const generateRecap = vi.fn(async (_job: unknown, onPartial?: (text: string) => void) => {
+      onPartial?.('## Over')
+      onPartial?.('## Overview')
+      return '## Overview'
+    })
+    const seen: Array<{ state: string; recapPartial?: string }> = []
+    const { manager, store } = createManager({
+      generateRecap,
+      onChange: (job) => seen.push({ state: job.state, recapPartial: job.recapPartial })
+    })
+    const saved: unknown[] = []
+    const origSave = store.save.bind(store)
+    store.save = async (job) => {
+      saved.push(job)
+      return origSave(job)
+    }
+    await manager.start(source)
+    await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+    await manager.finishDecoding('job-1')
+    // The first partial publishes immediately (the throttle window starts at 0); the card saw the text.
+    expect(seen.some((v) => v.state === 'recapping' && v.recapPartial === '## Over')).toBe(true)
+    // Nothing persisted ever carried the streaming text, and the finished job no longer holds it.
+    expect(saved.every((j) => !(j as { recapPartial?: string }).recapPartial)).toBe(true)
+    expect(manager.get('job-1')?.recapPartial).toBeUndefined()
     expect(manager.get('job-1')?.state).toBe('done')
   })
 

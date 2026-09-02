@@ -43,6 +43,9 @@ export interface ImportJob {
   file?: string
   error?: string
   recapError?: string
+  /** Summary text streamed so far while `state === 'recapping'`. In-memory only: published to the card
+   *  through onChange, stripped before the checkpoint is written, cleared once the recap lands. */
+  recapPartial?: string
   /** Persona (settings.mode) captured at import start. The recap step runs later, queue-ordered — without
    * this pin a persona switch mid-queue would shape an unrelated import's summary. Absent on jobs
    * checkpointed by older builds; consumers fall back to the live mode. */
@@ -95,8 +98,13 @@ export interface ImportJobManagerDeps {
   deleteMeeting?: (file: string) => Promise<unknown>
   /** Persists the background-intelligence intent before extraction starts; may resolve after local I/O. */
   enqueueIngest: (file: string) => void | Promise<void>
-  /** Returns a persisted-meeting recap or undefined when no provider is configured. */
-  generateRecap: (job: ImportJob) => Promise<string | undefined>
+  /** Returns a persisted-meeting recap or undefined when no provider is configured. `onPartial` receives
+   *  the cumulative streamed text so the card can show the summary as it arrives. */
+  generateRecap: (job: ImportJob, onPartial?: (text: string) => void) => Promise<string | undefined>
+  /** Fired once per job right before the first window is transcribed. The wiring starts the on-device
+   *  summarizer when it is the recap candidate, so its cold load hides behind ASR instead of being
+   *  appended to the end of a multi-minute import. Must be cheap and must never throw. */
+  prewarmRecap?: () => void
   updateRecap: (file: string, recap: string) => Promise<void>
   /** Credit the durable time-saved counters for one summarized meeting (main/store.ts). Optional so the
    *  import-jobs unit tests need not wire it; the live app always provides it. */
@@ -119,6 +127,9 @@ export interface ImportJobManagerDeps {
 export const MAX_CONCURRENT_DECODES = 1
 /** @deprecated Use MAX_CONCURRENT_DECODES. Kept so existing imports keep compiling. */
 export const MAX_CONCURRENT_IMPORTS = MAX_CONCURRENT_DECODES
+
+/** Minimum spacing between recapPartial publications to the renderer while a summary streams. */
+const RECAP_PARTIAL_PUBLISH_MS = 400
 
 const CHUNK_MS = IMPORT_CHUNK_SECONDS * 1_000
 const SAMPLE_RATE = 16_000
@@ -556,6 +567,13 @@ export class ImportJobManager {
       if (best && bestCount >= 2) votedLanguage = best
     }
 
+    if (job.cursor < windows.length) {
+      try {
+        this.deps.prewarmRecap?.()
+      } catch {
+        /* a prewarm is an optimization; the import never depends on it */
+      }
+    }
     for (let i = job.cursor; i < windows.length; i++) {
       if (this.isCancelled(job)) return
       const w = windows[i]
@@ -646,7 +664,17 @@ export class ImportJobManager {
       job.state = 'recapping'
       await this.persist(job)
       try {
-        const recap = await this.deps.generateRecap(copy(job))
+        // Stream the summary into the card: publish at most every RECAP_PARTIAL_PUBLISH_MS so a fast
+        // local model does not turn into an IPC storm. The partial never reaches the checkpoint.
+        let lastPartialAt = 0
+        const recap = await this.deps.generateRecap(copy(job), (partial) => {
+          job.recapPartial = partial
+          const at = this.now()
+          if (at - lastPartialAt < RECAP_PARTIAL_PUBLISH_MS) return
+          lastPartialAt = at
+          this.deps.onChange?.(copy(job))
+        })
+        delete job.recapPartial
         if (await this.abandonIfCancelled(job, file)) return
         if (recap?.trim()) {
           await this.deps.updateRecap(file, recap)
@@ -789,7 +817,9 @@ export class ImportJobManager {
 
   private async persist(job: ImportJob): Promise<void> {
     job.updatedAt = this.now()
-    await this.deps.store.save(copy(job))
+    const stored = copy(job)
+    delete stored.recapPartial // in-memory streaming text; a checkpoint must stay small and recap-free
+    await this.deps.store.save(stored)
     this.deps.onChange?.(copy(job))
   }
 

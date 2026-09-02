@@ -145,7 +145,10 @@ export interface RunImportedRecapDeps {
 
 export async function runImportedRecap(
   job: Pick<ImportJob, 'jobId' | 'lines' | 'mode'>,
-  deps: RunImportedRecapDeps
+  deps: RunImportedRecapDeps,
+  /** Cumulative summary text so far. Lets the import card show the recap as it streams instead of a
+   *  blank 99% for up to three serial attempts of 120 s idle each. */
+  onPartial?: (text: string) => void
 ): Promise<string | undefined> {
   const settings = deps.getSettings()
   const candidates = pickImportRecapCandidates(settings, deps)
@@ -190,6 +193,7 @@ export async function runImportedRecap(
           handlers: {
             onDelta: (delta) => {
               text += delta
+              onPartial?.(text)
             },
             onDone: () => resolveRecap(text),
             onError: (error) => {
