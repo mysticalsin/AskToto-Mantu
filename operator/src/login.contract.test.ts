@@ -66,7 +66,26 @@ describe('unauth console GET is 302 to Cloudflare Access, never a password form'
   })
 
   it('unauth GET of every console path is 302, not 404', async () => {
-    const paths = ['/licenses', '/devices', '/map', '/cloudflare', '/overview', '/events']
+    const paths = [
+      '/licenses',
+      '/devices',
+      '/map',
+      '/cloudflare',
+      '/overview',
+      '/events',
+      '/dashboards',
+      '/insights',
+      '/pages',
+      '/seo',
+      '/realtime',
+      '/sessions',
+      '/profiles',
+      '/groups',
+      '/cohorts',
+      '/settings',
+      '/references',
+      '/notifications'
+    ]
     for (const path of paths) {
       const res = await handleRequest(new Request(`https://operator.test${path}`), env(), {}, {
         store: memoryStore(),

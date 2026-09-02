@@ -170,6 +170,124 @@ export function choropleth(
   </svg>`
 }
 
+const SHOEY_BLUE = '#2563EB'
+const SHOEY_LAND = '#E8E8E8'
+const SHOEY_DOT = '#1e293b'
+const SHOEY_PILL = '#10B981'
+
+export function blueBars(values: number[], w = 220, h = 36): string {
+  if (!values.length || values.every((v) => v === 0)) {
+    return `<svg class="spark bars" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><line x1="0" y1="${h - 2}" x2="${w}" y2="${h - 2}" stroke="#EDEDED" /></svg>`
+  }
+  const max = Math.max(...values, 1)
+  const gap = 1.5
+  const n = values.length
+  const bw = Math.max(1.5, (w - gap * (n + 1)) / n)
+  const rects = values
+    .map((v, i) => {
+      const bh = Math.max(1.2, (v / max) * (h - 4))
+      const x = gap + i * (bw + gap)
+      return `<rect x="${x.toFixed(1)}" y="${(h - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${SHOEY_BLUE}" rx="0.6" />`
+    })
+    .join('')
+  return `<svg class="spark bars" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${rects}</svg>`
+}
+
+export function blueArea(
+  values: number[],
+  labels: string[] = [],
+  w = 860,
+  h = 220
+): string {
+  if (!values.length || values.every((v) => v === 0)) {
+    return `<div class="empty">No seats in this window.</div>`
+  }
+  const max = Math.max(...values, 1)
+  const step = values.length > 1 ? w / (values.length - 1) : w
+  const pts = values.map((v, i) => `${(i * step).toFixed(1)},${(h - 28 - (v / max) * (h - 40)).toFixed(1)}`)
+  const fill = `M0,${h - 24} L${pts.join(' L')} L${w},${h - 24} Z`
+  const ticks = labels
+    .map((lab, i) => {
+      if (!lab) return ''
+      const x = i * step
+      return `<text x="${x.toFixed(1)}" y="${h - 8}" class="tick" text-anchor="${i === 0 ? 'start' : i === labels.length - 1 ? 'end' : 'middle'}">${escapeXml(lab)}</text>`
+    })
+    .join('')
+  const yMax = max >= 1000 ? `${Math.round(max / 1000)}k` : String(Math.round(max))
+  return `<svg class="chart area" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <text x="8" y="14" class="tick">${escapeXml(yMax)}</text>
+    <text x="8" y="${h - 30}" class="tick">0</text>
+    <path d="${fill}" fill="url(#shoey-fill)" />
+    <path d="M${pts.join(' L')}" fill="none" stroke="${SHOEY_BLUE}" stroke-width="1.6" />
+    ${ticks}
+  </svg>`
+}
+
+type Region = { id: string; x: number; y: number; isos: string[] }
+
+const REGIONS: Region[] = [
+  { id: 'na', x: 200, y: 130, isos: ['US', 'CA', 'MX', 'GT', 'BZ', 'HN', 'SV', 'NI', 'CR', 'PA', 'CU', 'HT', 'DO', 'JM', 'PR'] },
+  { id: 'sa', x: 300, y: 340, isos: ['BR', 'AR', 'CL', 'PE', 'CO', 'VE', 'EC', 'BO', 'PY', 'UY', 'GY', 'SR'] },
+  { id: 'eu', x: 520, y: 115, isos: ['GB', 'IE', 'FR', 'DE', 'ES', 'PT', 'IT', 'NL', 'BE', 'CH', 'AT', 'PL', 'SE', 'NO', 'FI', 'DK', 'CZ', 'HU', 'RO', 'GR', 'UA', 'RU'] },
+  { id: 'af', x: 530, y: 270, isos: ['MA', 'DZ', 'TN', 'EG', 'LY', 'SD', 'NG', 'GH', 'CI', 'SN', 'KE', 'ET', 'TZ', 'UG', 'ZA', 'AO', 'CD', 'CM'] },
+  { id: 'as', x: 760, y: 155, isos: ['TR', 'SA', 'AE', 'IL', 'IQ', 'IR', 'IN', 'PK', 'BD', 'CN', 'JP', 'KR', 'TW', 'HK', 'TH', 'VN', 'ID', 'MY', 'PH', 'SG', 'MN'] },
+  { id: 'oc', x: 870, y: 380, isos: ['AU', 'NZ', 'PG', 'FJ'] }
+]
+
+export function shoeyWorld(countries: MapCountry[], dots: MapDot[]): string {
+  const by = new Map(countries.map((c) => [c.iso, c.devices]))
+  const empty = countries.length === 0 && dots.length === 0
+  let land = ''
+  for (const [iso, d] of Object.entries(WORLD_PATHS)) {
+    land += `<path data-iso="${iso}" d="${stripMapBands(d)}" fill="${SHOEY_LAND}" stroke="#F5F5F5" stroke-width="0.4" />`
+  }
+  const marks = empty
+    ? ''
+    : dots
+        .map((dot) => {
+          const p = project(dot.lat, dot.lon)
+          return `<circle class="seat-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.1" fill="${SHOEY_DOT}" />`
+        })
+        .join('')
+  const pills = empty
+    ? ''
+    : REGIONS.map((reg) => {
+        const present = reg.isos.filter((iso) => (by.get(iso) ?? 0) > 0)
+        const seats = present.reduce((n, iso) => n + (by.get(iso) ?? 0), 0)
+        if (!seats) return ''
+        const label = present.length === 1 ? countryName(present[0]) : `${present.length} countries`
+        return `<g class="pill-g" transform="translate(${reg.x},${reg.y})">
+          <rect x="0" y="-12" width="${Math.max(92, 28 + label.length * 6.2)}" height="24" rx="12" fill="#fff" stroke="#E5E5E5"/>
+          <circle cx="12" cy="0" r="4" fill="${SHOEY_PILL}"/>
+          <text x="22" y="4" font-size="11" font-weight="650" fill="#18181B">${seats}</text>
+          <line x1="44" y1="-7" x2="44" y2="7" stroke="#E5E5E5"/>
+          <text x="50" y="4" font-size="10" fill="#71717A">${escapeXml(label)}</text>
+        </g>`
+      }).join('')
+  const caption = empty
+    ? `<div class="empty map-empty">No heartbeats yet. The map stays empty until a seat checks in.</div>`
+    : ''
+  return `${caption}<svg class="world shoey-world" viewBox="0 0 1000 500" role="img" aria-label="Unique seats by country">
+    <rect width="1000" height="500" fill="#F5F5F5"/>
+    ${land}${marks}${pills}
+  </svg>`
+}
+
+function countryName(iso: string): string {
+  const names: Record<string, string> = {
+    US: 'United States',
+    CA: 'Canada',
+    BR: 'Brazil',
+    GB: 'United Kingdom',
+    FR: 'France',
+    DE: 'Germany',
+    AU: 'Australia',
+    JP: 'Japan',
+    IN: 'India'
+  }
+  return names[iso] || iso
+}
+
 function escapeXml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;')
 }
