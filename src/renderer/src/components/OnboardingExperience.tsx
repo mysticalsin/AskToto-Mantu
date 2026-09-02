@@ -71,12 +71,12 @@ import { PERMISSIONS_POLL_MS } from '../state'
 import { InlineOrb } from './AgentStatus'
 import { MetisMark } from './MetisMark'
 import { OnboardingDemoScene, prefetchOnboardingDemoChunks } from './OnboardingDemoScene'
-import { OnboardingStarfield } from './OnboardingStarfield'
 import { OnboardingAppearance } from './OnboardingAppearance'
-import { shouldMountStarfield } from '../lib/onboarding-starfield-spec'
+import { KineticGrid } from './onboarding/KineticGrid'
+import { shouldMountKineticGrid } from '../lib/onboarding-kinetic-grid'
 import { isWindows } from '../lib/keys'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
-import { sceneAfterAppearance, sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
+import { canMarkOnboardingDone, sceneAfterAppearance, sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
 import { appearanceSettingsPatch, seedOnboardingAppearance } from '../lib/onboarding-appearance'
 import { createOnboardingMusicBed, haltAllOnboardingAudio } from '../lib/onboarding-music'
 import { closeOnboardingPortal, disposePortalAudio, playBarLand, playPortalOpen, requestBarLand } from '../lib/onboarding-portal'
@@ -88,7 +88,7 @@ import {
   TELL_THE_ROOM_TITLE,
   TELL_THE_ROOM_WHY
 } from '../lib/onboarding-tell-the-room'
-import { ONBOARDING_HERO_VIDEO_SRC, playOnboardingVideo } from '../lib/onboarding-hero-video'
+import { ONBOARDING_HERO_VIDEO_SRC } from '../lib/onboarding-hero-video'
 
 // Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
 // one icon, everywhere it appears, rather than inventing a second icon language just for this scene.
@@ -110,8 +110,7 @@ export interface OnboardingExperienceProps {
    *  (`onboardingDone: true`) rather than racing an in-flight patch. OnboardingV2 below is the only
    *  caller and marks onboarding done inside this callback. */
   onDone: (result: { mode: ConversationMode; recordingConsent: boolean }) => void | Promise<void>
-  /** Optional. Unused: Skip stays on this exclusive stage (tell-the-room + Get started). */
-  onSkip?: () => void
+  /** Unused. Skip is gone — the tour must be completed. */
   /** Ready's OPTIONAL "Add your own AI provider" link (never a gate) — opens Settings' AI tab. Omitted
    *  in contexts with no Settings surface to open (the link itself does not render without it). */
   onOpenAiSettings?: () => void
@@ -228,7 +227,7 @@ function OnboardingHeroVideo({
   )
 }
 
-function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => void }): JSX.Element {
+function HeroWelcome({ onBegin }: { onBegin: () => void }): JSX.Element {
   return (
     <>
       <div className="hero-welcome relative z-10 flex flex-col items-center gap-5">
@@ -255,16 +254,6 @@ function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => 
         <button type="button" onClick={onBegin} className="onboard-cta no-drag focus-ring">
           Next
         </button>
-        {onSkip && (
-          <button
-            type="button"
-            onClick={onSkip}
-            className="onboard-glass onboard-glass-chip onboard-skip-chip fade-up no-drag focus-ring"
-            style={{ animationDelay: '1150ms', animationFillMode: 'backwards' }}
-          >
-            Skip the tour
-          </button>
-        )}
         <p
           className="hero-byline onboard-glass onboard-glass-chip fade-up m-0 text-[10px] tracking-wide"
           style={{ animationDelay: '1300ms', animationFillMode: 'backwards' }}
@@ -410,7 +399,7 @@ export function setupAsrBlocksContinue(rows: SetupRow[]): boolean {
   return !asr || asr.state !== 'ready'
 }
 
-/** First-run cannot mark onboardingDone (Ready or Skip) while transcription files are missing. */
+/** First-run cannot mark onboardingDone until Ready, files are ready, and consent is given. */
 export function firstRunCanFinish(input: { asrReady: boolean; consent: boolean }): boolean {
   return input.asrReady && input.consent
 }
@@ -821,8 +810,7 @@ export function OnboardingExperience({
 }: OnboardingExperienceProps): JSX.Element {
   const music = useOnboardingMusic()
   const heroVideoRef = useRef<HTMLVideoElement>(null)
-  const playHero = (restart = false): void => {
-    playOnboardingVideo(heroVideoRef.current, { restart })
+  const playHero = (): void => {
     music.start()
   }
 
@@ -833,11 +821,6 @@ export function OnboardingExperience({
     music.start()
   }, [])
   const [scene, setScene] = useState<Scene>('hero')
-  const [starfieldFailed, setStarfieldFailed] = useState(false)
-  const [starfieldPulse, setStarfieldPulse] = useState(0)
-  useEffect(() => {
-    setStarfieldPulse((n) => n + 1)
-  }, [scene])
   const [rows, setRows] = useState<SetupRow[]>([])
   const [mode, setMode] = useState<ConversationMode>('general')
   const [appearance, setAppearance] = useState<OverlayLayout>(() => seedOnboardingAppearance(settings))
@@ -846,8 +829,7 @@ export function OnboardingExperience({
     patch?.(appearanceSettingsPatch(id))
   }
   const appearanceLocked = Boolean(settings?.managedKeys?.includes('overlayLayout'))
-  // Recording-consent gate (CMO-QA #1). Skip lands on the same tell-the-room card, never the legacy
-  // slides. Finish is blocked until this checkbox is checked, on both Ready and Skip Get started.
+  // Recording-consent gate (CMO-QA #1). Finish is blocked until this checkbox is checked on Ready.
   const [consent, setConsent] = useState(false)
   const [asrStatus, setAsrStatus] = useState<AsrAssetsStatus>(IDLE_ASR_STATUS)
   const asrReady = asrStatusIsReady(asrStatus)
@@ -1068,7 +1050,7 @@ export function OnboardingExperience({
   // CTA, not personalize's Start (which now only advances to license/appearance, see sceneAfterPersonalize).
   // Returns a promise so Ready's optional provider link can await it before opening Settings.
   const finish = async (): Promise<void> => {
-    if (doneRef.current || !firstRunCanFinish({ asrReady, consent })) return
+    if (doneRef.current || !canMarkOnboardingDone({ scene, asrReady, consent })) return
     doneRef.current = true
     haltAllOnboardingAudio()
     music.stop()
@@ -1095,9 +1077,7 @@ export function OnboardingExperience({
       onPointerDown={music.start}
     >
       {scene === 'hero' && <OnboardingHeroVideo videoRef={heroVideoRef} />}
-      {shouldMountStarfield(scene) && !starfieldFailed && (
-        <OnboardingStarfield pulse={starfieldPulse} onUnavailable={() => setStarfieldFailed(true)} />
-      )}
+      {shouldMountKineticGrid(scene) && <KineticGrid />}
       <button
         type="button"
         className="onboard-mute no-drag focus-ring"
@@ -1114,11 +1094,9 @@ export function OnboardingExperience({
       {scene === 'hero' && (
         <HeroWelcome
           onBegin={() => {
-            playOnboardingVideo(heroVideoRef.current, { restart: true })
             music.start()
             setScene('problem')
           }}
-          onSkip={() => setScene('skip')}
         />
       )}
 
@@ -1161,9 +1139,6 @@ export function OnboardingExperience({
             setScene('setup')
           }}
           onPlayVideo={() => playHero()}
-          // Demo Skip jumps to Personalize (keep Welcome + story + demo, skip the checklist).
-          // Hero Skip is different: it leaves the six-act narrative for the tell-the-room skip screen.
-          onSkipToEnd={() => setScene('personalize')}
         />
       )}
 
@@ -1458,58 +1433,14 @@ export function OnboardingExperience({
         />
       )}
 
-      {scene === 'skip' && (
-        <div key="skip" className="scene-enter onboard-act4 onboard-skip-screen flex flex-col items-center">
-          <OnboardingAppearance
-            value={appearance}
-            locked={appearanceLocked}
-            compact
-            onChange={pickAppearance}
-          />
-          <TellTheRoomCard consent={consent} onConsent={setConsent} />
-          {!asrReady && (
-            <div className="flex w-full max-w-[360px] flex-col items-center gap-1.5">
-              <p className="m-0 text-[11px] leading-snug text-[color:var(--color-ink-3)]">{asrRow.detail}</p>
-              {asrRow.progress != null && asrRow.progress > 0 && asrRow.progress < 1 && (
-                <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
-                  <div
-                    className="h-full rounded-full bg-[#9A2BF0]"
-                    style={{ width: `${Math.round(asrRow.progress * 100)}%` }}
-                  />
-                </div>
-              )}
-              {asrRowNeedsRetry(asrRow) && (
-                <button
-                  type="button"
-                  onClick={() => void retryAsr()}
-                  className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
-                >
-                  Try again
-                </button>
-              )}
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={() => void finish()}
-            disabled={!firstRunCanFinish({ asrReady, consent })}
-            className={
-              'onboard-cta no-drag focus-ring' +
-              (firstRunCanFinish({ asrReady, consent }) ? '' : ' onboard-cta--muted')
-            }
-          >
-            Get started
-          </button>
-        </div>
-      )}
       </div>
     </div>
   )
 }
 
 /**
- * First-run flow. Finishes onboarding at Ready or Skip Get started.
- * Skip stays on this exclusive stage (tell-the-room card). Does not mount Onboarding.tsx.
+ * First-run flow. Finishes onboarding only at Ready Get started.
+ * There is no Skip. Does not mount Onboarding.tsx.
  */
 export function OnboardingV2({
   settings,

@@ -28,7 +28,15 @@ export type OnboardingScene =
   | 'license'
   | 'appearance'
   | 'ready'
-  | 'skip'
+
+/** Ready Get started is the only path that may persist onboardingDone. */
+export function canMarkOnboardingDone(input: {
+  scene: OnboardingScene | string
+  asrReady: boolean
+  consent: boolean
+}): boolean {
+  return input.scene === 'ready' && input.asrReady && input.consent
+}
 
 /** setup's Continue always lands on personalize now — license (when enabled) has moved to sit AFTER
  *  personalize instead of between setup and personalize. */
