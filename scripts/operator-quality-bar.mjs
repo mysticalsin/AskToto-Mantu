@@ -175,7 +175,26 @@ function probeLiveLogin() {
     if (!/HTTP\/\S+\s+401/.test(postKeys) || /HTTP\/\S+\s+404/.test(postKeys)) {
       fail(`live POST /v1/admin/keys must stay 401, not 404`)
     }
-    console.log(`✓ Live login contract: ${host}/health 200, ${host}/ and ${host}/keys 302 Access, POST /v1/admin/keys 401 JSON`)
+    const asset = run('curl', [
+      '-sS',
+      '-D',
+      '-',
+      '-o',
+      '-',
+      '--max-redirs',
+      '0',
+      `${host}/assets/index.js`
+    ])
+    if (!/HTTP\/\S+\s+200/.test(asset)) {
+      fail(`live /assets/index.js must be 200, not Access 302 (got headers+body probe)`)
+    }
+    if (!/content-type:\s*.*(javascript|css)/i.test(asset)) {
+      fail(`live /assets/index.js must be javascript or css, not text/html`)
+    }
+    if (/content-type:\s*text\/html/i.test(asset) || /cdn-cgi\/access\/login/i.test(asset)) {
+      fail(`live /assets/index.js is still wrapped by Cloudflare Access`)
+    }
+    console.log(`✓ Live login contract: ${host}/health 200, ${host}/ and ${host}/keys 302 Access, ${host}/assets/index.js 200 js, POST /v1/admin/keys 401 JSON`)
   } catch (err) {
     fail(`live login probe failed: ${err instanceof Error ? err.message : String(err)}`)
   }

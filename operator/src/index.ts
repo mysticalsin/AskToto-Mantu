@@ -27,6 +27,7 @@ import {
 } from './keys'
 import { looksLikeSecret } from './redact'
 import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './store'
+import { isPublicAssetPath, publicAssetResponse } from './assets'
 import { renderConsole } from './ui'
 
 export interface Env {
@@ -83,6 +84,10 @@ export async function handleRequest(
       service: 'metis-operator',
       configured: Boolean(env.OPERATOR_INGEST_SECRET && env.OPERATOR_PROMPT_KEY)
     })
+  }
+
+  if (isPublicAssetPath(url.pathname)) {
+    return publicAssetResponse(url.pathname) ?? json({ ok: false, error: 'not found' }, 404)
   }
 
   if (url.pathname === '/logout' && request.method === 'POST') {

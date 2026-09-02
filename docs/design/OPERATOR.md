@@ -133,6 +133,7 @@ Prove (tests + live curl, no follow):
 | Unauth `GET /` | **302**. Not HTML password form. No `data-login="1"`. No `type="password"` card |
 | Unauth `POST /v1/admin/keys` | **401** JSON `{ok:false,error:Access required}`. Not 404 |
 | `GET /health` | **200** JSON. Open. Not Access |
+| `GET /assets` `GET /assets/*` (hashed JS/CSS bundles) | **200** with real `content-type` (`application/javascript` or `text/css`). **Not** Access 302 HTML. Edge Bypass + Worker must not 302. |
 | `HEAD /` | May 401 JSON. Do not require HTML |
 
 After Access JWT is present (`Cf-Access-Jwt-Assertion`, or `ctx.access.getIdentity()` when the edge already wrapped the request):
@@ -157,6 +158,7 @@ Machine auth is unchanged. Do not put CLI tokens in the vault. Do not invent a s
 | --- | --- |
 | `POST /v1/ingest` `POST /v1/heartbeat` `GET /v1/skills/manifest` | HMAC only. Not Access. Not JWT |
 | `GET /health` | Open 200 |
+| `GET /assets` `GET /assets/*` | Open 200 JS/CSS. Not Access. Worker must not 302 |
 | `GET/POST /v1/admin/*` | Access JWT / `getIdentity()` + allowlist. Unauth = 401 JSON |
 
 Do **not** enable Zero Trust **"Protect this Worker"** on `metis-operator` for all traffic. That wraps HMAC ingest and locks seats.
@@ -189,6 +191,7 @@ Hostname-wide Allow would wrap HMAC ingest. So the layout is: one Allow app on t
 | `Métis Operator heartbeat` | `…/v1/heartbeat` | Bypass everyone |
 | `Métis Operator skills manifest` | `…/v1/skills/manifest` | Bypass everyone |
 | `Métis Operator admin API` | `…/v1/admin` | Bypass everyone (Worker JWT + allowlist) |
+| `Métis Operator assets` | `…/assets` (prefix: `/assets` and `/assets/*`) | Bypass everyone. Static JS/CSS. Not a login gate |
 
 **C. Policy (Allow, Tony emails only)**
 
@@ -214,7 +217,8 @@ POLICY_AUD=<aud from the Métis Operator app>
 - Do not click **Protect this Worker** on `metis-operator`.
 - Do not put `OPERATOR_ADMIN_PASSWORD` back as a login. The secret may remain bound; the Worker must not read it for a session cookie.
 - Do not put CLI tokens in the vault.
-- Do not drop the Bypass apps on ingest or `/health`.
+- Do not drop the Bypass apps on ingest, `/health`, or `/assets`.
+- Do not 302 `/assets` or `/assets/*` from the Worker. Those stay 200 JS/CSS unauthenticated so the browser can load chrome after Access on `/`.
 
 ## What this is not (explicit non-goals)
 
@@ -505,7 +509,7 @@ Tony 6:17 PM ET (login, overlay, map, events) plus Tony 8:03–8:05 PM ET (routi
 | Contract | Still true |
 | --- | --- |
 | Overlay chrome | Island / Hide / Bar files are frozen. Do not edit them from an Operator slice. |
-| Login | Unauth GET `/` and `/keys` (and the other console paths) are **302** to Cloudflare Access login (`Location` has `login` + `next` or an Access login URL). Allowlist stays `twalteur@amaris.com` and `tony.walteur@gmail.com`. No homemade password form. Unauth `POST /v1/admin/keys` is 401 JSON. `/health` is 200. Console never loads unauthenticated. Fail loud (503) if `TEAM_DOMAIN` is unset. |
+| Login | Unauth GET `/` and `/keys` (and the other console paths) are **302** to Cloudflare Access login (`Location` has `login` + `next` or an Access login URL). Allowlist stays `twalteur@amaris.com` and `tony.walteur@gmail.com`. No homemade password form. Unauth `POST /v1/admin/keys` is 401 JSON. `/health` is 200. `GET /assets` and `GET /assets/index.js` are **200** javascript/css, not Access HTML. Console never loads unauthenticated. Fail loud (503) if `TEAM_DOMAIN` is unset. |
 | Map data | Unique devices by country from Cloudflare `request.cf` only. Client `lat` / `lon` / `country` / `city` / `ip` are ignored. No GPS. No IP in the UI. No sample dots. Empty world if no devices. |
 | Token-free events | `#events` never renders a token-shaped string (JWT, `Bearer`, `sk-`, 64-char hex HMAC, long base64). Tests fail if one appears. |
 | Routing | Connected working CLI is first for every user question. Other CLI next if both connected (last-clicked primary). Operator API keys only after quota or rate limit. Dust is retrieval only. |
