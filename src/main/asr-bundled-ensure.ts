@@ -14,9 +14,11 @@ import { promisify } from 'node:util'
 import { Readable } from 'node:stream'
 import {
   BUNDLE_GOT_LOGIN_HTML,
+  BUNDLE_NETWORK,
   bundleFailureUserMessage,
   bundleKindForUrl,
   inspectBundleResponse,
+  looksLikeAccessRedirect,
   looksLikeHtmlBytes
 } from '@shared/bundle-response'
 import { mainLog } from './logger'
@@ -47,6 +49,27 @@ export const WHISPER_FLOOR_REQUIRED_FILES = [
 const HF_BASE = `https://huggingface.co/${WHISPER_FLOOR_ID}/resolve/main`
 const REQUEST_TIMEOUT_MS = 60_000
 const IDLE_TIMEOUT_MS = 120_000
+const MAX_REDIRECTS = 8
+
+/** Follow https hops. Access 302 HTML is never a bundle. */
+export async function fetchBundleResponse(
+  url: string,
+  signal: AbortSignal,
+  fetchImpl: typeof net.fetch = net.fetch
+): Promise<Response> {
+  let current = url
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const res = await fetchImpl(current, { signal })
+    if (res.status < 300 || res.status >= 400) return res
+    const loc = res.headers.get('location')
+    if (!loc) return res
+    if (looksLikeAccessRedirect(loc)) throw new Error(BUNDLE_GOT_LOGIN_HTML)
+    const next = new URL(loc, current).toString()
+    if (!/^https:\/\//i.test(next)) throw new Error(BUNDLE_NETWORK)
+    current = next
+  }
+  throw new Error(BUNDLE_NETWORK)
+}
 
 export const ASR_ASSETS_MISSING =
   'Could not get the transcription files. Check your connection and try again.'
@@ -189,7 +212,7 @@ async function downloadTo(url: string, dest: string, onChunk?: (n: number, total
   arm(REQUEST_TIMEOUT_MS, `request timeout for ${url}`)
 
   try {
-    const res = await net.fetch(url, { signal: ctrl.signal })
+    const res = await fetchBundleResponse(url, ctrl.signal)
     const inspected = inspectBundleResponse({
       status: res.status,
       contentType: res.headers.get('content-type'),

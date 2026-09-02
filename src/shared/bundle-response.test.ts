@@ -10,6 +10,7 @@ import {
   isHtmlContentType,
   isRetryableBundleMessage,
   looksLikeAccessLoginHtml,
+  looksLikeAccessRedirect,
   looksLikeHtml,
   looksLikeHtmlBytes
 } from './bundle-response'
@@ -97,6 +98,11 @@ describe('bundle-response — Access HTML is never a successful bundle', () => {
     expect(isRetryableBundleMessage(BUNDLE_NOT_JS)).toBe(true)
     expect(isRetryableBundleMessage(BUNDLE_DISK)).toBe(true)
     expect(isRetryableBundleMessage('Getting transcription files…')).toBe(false)
+  })
+
+  it('only treats Cloudflare Access locations as login redirects', () => {
+    expect(looksLikeAccessRedirect('https://team.cloudflareaccess.com/cdn-cgi/access/login')).toBe(true)
+    expect(looksLikeAccessRedirect('https://cdn.hf.co/x/encoder.int8.onnx')).toBe(false)
   })
 
   it('classifies Operator /assets/*.js as a JS bundle', () => {

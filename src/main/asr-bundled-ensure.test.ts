@@ -23,6 +23,7 @@ import {
   WHISPER_FLOOR_ID,
   WHISPER_FLOOR_REQUIRED_FILES,
   ensureImportAsrAssets,
+  fetchBundleResponse,
   importAsrAssetsReady,
   asrAssetsStatusSnapshot,
   parakeetFilesReady,
@@ -101,6 +102,36 @@ describe('asr-bundled-ensure', () => {
     for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dir, name), html)
     expect(parakeetFilesReady(dir)).toBe(false)
     expect(importAsrAssetsReady()).toBe(false)
+  })
+
+  it('follows a https CDN hop and refuses an Access 302', async () => {
+    const ok = new Response(new Uint8Array([1, 2, 3, 4]), {
+      status: 200,
+      headers: { 'content-type': 'application/octet-stream' }
+    })
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(null, {
+          status: 302,
+          headers: { location: 'https://cdn.example/model.tar.bz2' }
+        })
+      )
+      .mockResolvedValueOnce(ok)
+    const landed = await fetchBundleResponse('https://github.com/x/model.tar.bz2', new AbortController().signal, fetchImpl)
+    expect(landed.status).toBe(200)
+    expect(fetchImpl).toHaveBeenCalledTimes(2)
+
+    const access = vi.fn().mockResolvedValueOnce(
+      new Response(null, {
+        status: 302,
+        headers: { location: 'https://team.cloudflareaccess.com/cdn-cgi/access/login' }
+      })
+    )
+    await expect(
+      fetchBundleResponse('https://operator.test/assets/client.js', new AbortController().signal, access)
+    ).rejects.toThrow(/login page/)
+    expect(access).toHaveBeenCalledOnce()
   })
 
   it('download of Access HTML fails loud and does not write a fake bundle', async () => {
