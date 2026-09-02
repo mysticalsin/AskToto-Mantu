@@ -54,8 +54,8 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(device_id) DO UPDATE SET
              seat_hash = excluded.seat_hash,
-             os = excluded.os,
-             app_version = excluded.app_version,
+             os = CASE WHEN excluded.os IS NULL OR excluded.os = '' OR excluded.os = 'unknown' THEN seats.os ELSE excluded.os END,
+             app_version = CASE WHEN excluded.app_version IS NULL OR excluded.app_version = '' THEN seats.app_version ELSE excluded.app_version END,
              last_seen = excluded.last_seen,
              country = COALESCE(excluded.country, seats.country),
              city = COALESCE(excluded.city, seats.city),

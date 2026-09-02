@@ -476,8 +476,8 @@ function seatFromBody(deviceId: string, body: Record<string, unknown>, now: numb
   return {
     device_id: deviceId,
     seat_hash: String(body.seatHash || deviceId),
-    os: String(body.os || 'unknown'),
-    app_version: String(body.appVersion || ''),
+    os: typeof body.os === 'string' && body.os.trim() && body.os !== 'unknown' ? body.os.trim() : '',
+    app_version: typeof body.appVersion === 'string' ? body.appVersion.trim() : '',
     first_seen: now,
     last_seen: now,
     country: geo.country,

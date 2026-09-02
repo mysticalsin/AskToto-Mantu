@@ -192,6 +192,33 @@ describe('map has no repeating horizontal band', () => {
   })
 })
 
+describe('events keep seat OS after a later ask ingest', () => {
+  it('does not wipe darwin when an ask arrives without os', async () => {
+    const store = memoryStore()
+    const hb = await signedRequest(
+      '/v1/heartbeat',
+      JSON.stringify({ os: 'darwin', appVersion: '1.8.2', hostname: 'Tonys-MacBook-Pro' }),
+      { deviceId: 'mac-keep-os' }
+    )
+    expect((await handleRequest(hb, env(), {}, { store, now: NOW, geo: { country: 'CA', city: 'Longueuil', lat: 45.5, lon: -73.5 } })).status).toBe(200)
+    const ask = await signedRequest(
+      '/v1/ingest',
+      JSON.stringify({ id: 'ask-keep-os', provider: 'claude-cli', mode: 'answer' }),
+      { deviceId: 'mac-keep-os', nonce: 'ask-keep-os' }
+    )
+    expect((await handleRequest(ask, env(), {}, { store, now: NOW, geo: { country: 'CA', city: 'Longueuil', lat: 45.5, lon: -73.5 } })).status).toBe(200)
+    const html = await handleRequest(
+      new Request('https://operator.test/'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    ).then((r) => r.text())
+    const events = eventsHtml(html)
+    expect(events).toContain('darwin')
+    expect(events).toContain('Tonys-MacBook-Pro')
+  })
+})
+
 describe('events never render token-like strings', () => {
   it('drops bearer, sk-, JWT, and HMAC-shaped values from the events page', async () => {
     const store = memoryStore()
