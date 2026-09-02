@@ -216,6 +216,7 @@ export type AuditEvent =
   | 'dust.conversation'
   | 'brain.ingest'
   | 'brain.backfill.start'
+  | 'brain.intelligencePass.start'
   // Wave 3 (main/brain/consolidate.ts): one batched extraction pass actually ran. Distinct from
   // 'brain.ingest' (per-meeting) — this is the per-PASS marker metrics.ts counts against the
   // maxPassesPerDay budget.
