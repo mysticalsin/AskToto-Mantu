@@ -131,7 +131,10 @@ See `docs/design/BRAIN-CONNECTORS.md`.
 See [ONBOARDING-APPEARANCE.md](./ONBOARDING-APPEARANCE.md). Tony ask: Hidden (default, mouse to top, click to trigger) vs Island vs Bar. Live preview. Persist existing overlay. Hide 8×2 and Island hover stay out.
 
 ## Starfield Close (onboarding bed)
-See [ONBOARDING-STARFIELD.md](./ONBOARDING-STARFIELD.md). Galaxy from frame one. Overlay hide/island stay out.
+See [ONBOARDING-STARFIELD.md](./ONBOARDING-STARFIELD.md). **Superseded after the lady beat** by [ONBOARDING-KINETIC-GRID.md](./ONBOARDING-KINETIC-GRID.md). Starfield / space-with-moving-lights does not mount after Next. Overlay hide/island stay out.
+
+## Onboarding KineticGrid
+See [ONBOARDING-KINETIC-GRID.md](./ONBOARDING-KINETIC-GRID.md). Lady+universe first. KineticGrid only after that. No Skip. Tile warp, not stage slide.
 
 ## Exclusive onboarding window (opaque)
 While `!onboardingDone`, the BrowserWindow is **opaque** Mantu purple (`transparent: false`, `#3A0B6B`). Mac `setSimpleFullScreen` on a transparent window composites as a dead black void (Totos-Mac 044c0f1). After `onboardingDone` the overlay is transparent again. Replay re-enters opaque exclusive and halts Goldberg first.
