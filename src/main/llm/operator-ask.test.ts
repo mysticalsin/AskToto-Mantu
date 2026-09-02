@@ -54,6 +54,35 @@ describe('streamOperatorAsk', () => {
     expect(h.onDelta).toHaveBeenCalledWith('hi')
   })
 
+  it('fails loud when Operator returns Access login HTML instead of a stream', async () => {
+    const onError = vi.fn()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response(
+          '<!DOCTYPE html><html><body>Sign in · Cloudflare Access https://team.cloudflareaccess.com</body></html>',
+          { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }
+        )
+      )
+    )
+    await new Promise<void>((resolve) => {
+      onError.mockImplementation(() => resolve())
+      streamOperatorAsk({
+        providerId: 'anthropic',
+        kind: 'anthropic',
+        apiKey: '',
+        viaOperator: true,
+        operatorTransport: { url: 'https://operator.test', secret: 'ingest-secret' },
+        model: 'claude-haiku-4-5-20251001',
+        temperature: 0.2,
+        system: 'sys',
+        req,
+        handlers: { onDelta: vi.fn(), onDone: vi.fn(), onError }
+      })
+    })
+    expect(String(onError.mock.calls[0]?.[0])).toMatch(/login page/)
+  })
+
   it('fails loud when Operator transport is missing — does not invent a seat key', async () => {
     const onError = vi.fn()
     await new Promise<void>((resolve) => {

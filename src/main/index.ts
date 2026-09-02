@@ -7256,14 +7256,16 @@ if (!app.requestSingleInstanceLock()) {
       assertMainWindow(e)
       return asrAssetsStatusSnapshot()
     })
-    ipcMain.handle(IPC.asrAssetsEnsure, (e) => {
+    ipcMain.handle(IPC.asrAssetsEnsure, async (e) => {
       assertMainWindow(e)
-      void ensureImportAsrAssets((pct) => {
-        publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
-      }).catch((err) => {
+      try {
+        await ensureImportAsrAssets((pct) => {
+          publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
+        })
+      } catch (err) {
         mainLog.warn('[asr-assets] ensure failed:', err instanceof Error ? err.message : err)
         publishAsrAssetsProgress()
-      })
+      }
       return asrAssetsStatusSnapshot()
     })
 

@@ -17,6 +17,7 @@ import {
   ASR_ASSETS_MISSING,
   PARAKEET_MODEL_NAME,
   ensureParakeetAssets,
+  parakeetFilesReady,
   resolveParakeetDir
 } from './asr-bundled-ensure'
 
@@ -40,10 +41,9 @@ function modelFiles(): { encoder: string; decoder: string; joiner: string; token
   }
 }
 
-/** True when all model files are present on disk (engine can be constructed without a download). */
+/** True when all model files are present and are real weights — not Access login HTML. */
 export function parakeetModelReady(): boolean {
-  const f = modelFiles()
-  return existsSync(f.encoder) && existsSync(f.decoder) && existsSync(f.joiner) && existsSync(f.tokens)
+  return parakeetFilesReady(modelDir())
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
