@@ -2946,7 +2946,9 @@ function ProductConnectCard({
         <div className="flex items-center gap-3 pl-10">
           <span className="min-w-0 flex-1 truncate text-[11px] text-[color:var(--cl-muted-foreground)]">
             {conn && conn.tools.length > 0
-              ? `${conn.tools.length} tool${conn.tools.length === 1 ? '' : 's'} available`
+              ? kind === 'clickup' && conn.clickupListName
+                ? `Tasks go to ${conn.clickupListName}`
+                : `${conn.tools.length} tool${conn.tools.length === 1 ? '' : 's'} available`
               : 'Connected — no tools reported for this account.'}
           </span>
           <button

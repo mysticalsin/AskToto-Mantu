@@ -372,6 +372,21 @@ describe('McpConnectionSchema', () => {
     expect(McpConnectionSchema.safeParse({ id: 'clickup', kind: 'clickup', label: 'ClickUp' }).success).toBe(true)
   })
 
+  it('stores the last ClickUp list on the connection (destination is main-owned)', () => {
+    const r = McpConnectionSchema.safeParse({
+      id: 'clickup',
+      kind: 'clickup',
+      label: 'ClickUp',
+      clickupListId: '901419032720',
+      clickupListName: 'Project 1'
+    })
+    expect(r.success).toBe(true)
+    if (r.success) {
+      expect(r.data.clickupListId).toBe('901419032720')
+      expect(r.data.clickupListName).toBe('Project 1')
+    }
+  })
+
   it('rejects an unknown kind and an empty id/label', () => {
     expect(McpConnectionSchema.safeParse({ id: 'x', kind: 'jira', label: 'Jira' }).success).toBe(false)
     expect(McpConnectionSchema.safeParse({ id: '', kind: 'bidstack', label: 'X' }).success).toBe(false)

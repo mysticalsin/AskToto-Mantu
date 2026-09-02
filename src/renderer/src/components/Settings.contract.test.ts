@@ -348,6 +348,10 @@ describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', ()
     expect(product).toMatch(/onClick=\{\(\) => void runConnect\(\)\}/)
   })
 
+  it('ClickUp connected line names the destination list when known', () => {
+    expect(product).toMatch(/Tasks go to \$\{conn\.clickupListName\}/)
+  })
+
   it('official marks are the vendored simple-icons paths, not Lucide stand-ins', () => {
     const clickup = readFileSync(join(__dirname, 'brand/ClickUpMark.tsx'), 'utf8')
     const plane = readFileSync(join(__dirname, 'brand/PlaneMark.tsx'), 'utf8')

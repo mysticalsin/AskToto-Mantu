@@ -23,21 +23,12 @@
  *   code_challenge_methods_supported: ["S256"]
  *   token_endpoint_auth_methods_supported: ["none"]  — public client, no client_secret
  *
- * DCR redirect_uri / loopback port: registered once as a portless loopback URI
- * (http://127.0.0.1/callback) and the run-time redirect_uri (with this run's actual ephemeral port) is
- * sent to /authorize without re-registering. This follows RFC 8252 §7.3, which the MCP Authorization
- * spec normatively requires authorization servers to honor for native/public clients: "the authorization
- * server MUST allow any port to be specified at the time of the request for loopback IP redirect URIs...
- * and MUST compare loopback redirect URIs without regard to the port."
- *
- * VERIFIED against the live server (2026-08-15), both halves:
- *   - POST /oauth/register with exactly the body below → 200, client_id issued,
- *     token_endpoint_auth_method "none" echoed back (public client, no secret to store).
- *   - GET /oauth/authorize with the SAME client_id but redirect_uri=http://127.0.0.1:53187/callback →
- *     302 to ClickUp's consent page, our ported redirect_uri preserved verbatim inside its own signed
- *     state JWT. So registering portless and racing on an ephemeral port is accepted, not rejected.
- * If that ever changes, connect fails with a typed { ok:false, error } — never a crash — and the fix is
- * to register a fresh client per run using this run's exact port instead of caching client_id.
+ * DCR redirect_uri / loopback port (PR 73): ClickUp hashes registered URIs into the client_id JWT
+ * and exact-matches /authorize. RFC 8252 §7.3 port-flexible loopback is NOT honored. Bind the
+ * loopback server first, then DCR-register THAT run's `http://127.0.0.1:<port>/callback`. Never reuse
+ * a leftover portless/mismatched cached client_id for /authorize. Overwrite the cache only after a
+ * successful DCR. Failures surface a human sentence, never the raw JSON blob
+ * `{"error":"invalid_client","error_description":"redirect_uri is not registered for this client"}`.
  */
 
 import { shell } from 'electron'
@@ -79,6 +70,29 @@ export interface TokenResult {
   refreshToken?: string
 }
 
+const CLICKUP_REDIRECT_MISMATCH =
+  'ClickUp rejected this sign-in because the callback address does not match the one Métis registered. Click Connect again.'
+const CLICKUP_INVALID_CLIENT = 'ClickUp did not recognize this sign-in client. Click Connect again.'
+const CLICKUP_GENERIC = 'ClickUp rejected the sign-in request.'
+
+/**
+ * Map a ClickUp OAuth error code/description to a single human sentence. Live /authorize mismatch
+ * returns the JSON blob `{"error":"invalid_client","error_description":"redirect_uri is not
+ * registered for this client"}` in the browser; we never pass that blob (or any raw JSON) through to
+ * Brain. Safe to call with either half empty.
+ */
+export function humanizeClickupOAuthError(code: string, description = ''): string {
+  const hay = `${code} ${description}`.toLowerCase()
+  if (/redirect_uri/.test(hay) || /not registered/.test(hay)) return CLICKUP_REDIRECT_MISMATCH
+  if (code === 'invalid_client' || /invalid_client/.test(hay)) return CLICKUP_INVALID_CLIENT
+  const desc = description.trim()
+  if (!desc || desc.startsWith('{') || desc.startsWith('[')) {
+    if (/access_denied/.test(hay)) return 'ClickUp sign-in was denied.'
+    return code ? `ClickUp rejected the request (${code}).` : CLICKUP_GENERIC
+  }
+  return desc
+}
+
 /** POST helper shared by the code exchange and the refresh exchange — same endpoint, same error
  *  handling, different grant. Never throws: every failure path returns { ok: false, error }. */
 async function postTokenRequest(body: URLSearchParams): Promise<TokenResult> {
@@ -95,7 +109,7 @@ async function postTokenRequest(body: URLSearchParams): Promise<TokenResult> {
     if (!res.ok || !accessToken) {
       const desc = typeof json?.error_description === 'string' ? json.error_description : ''
       const code = typeof json?.error === 'string' ? json.error : ''
-      return { ok: false, error: desc || (code ? `ClickUp rejected the request (${code}).` : 'ClickUp rejected the sign-in request.') }
+      return { ok: false, error: humanizeClickupOAuthError(code, desc) }
     }
     return {
       ok: true,
@@ -137,22 +151,20 @@ export async function refreshClickupToken(refreshToken: string): Promise<TokenRe
 }
 
 /**
- * Dynamic Client Registration (RFC 7591) — resolves a client_id, registering once and caching it in
- * settings (public, not a secret) so every later connect/reconnect reuses it. Returns null when
- * registration fails or the response carries no usable client_id; callers must treat null as "ClickUp
- * OAuth cannot proceed right now" rather than fabricating a client_id.
+ * Dynamic Client Registration (RFC 7591) for THIS run's exact loopback redirect_uri. Always POSTs a
+ * fresh client — never reuses getSettings().clickupClientId — because ClickUp exact-matches the
+ * registered URI (see file header). A leftover portless/mismatched cached id is overwritten only
+ * after a usable client_id comes back, so a failed DCR does not wipe a still-valid refresh client.
+ * Returns null when registration fails; callers must not fabricate a client_id.
  */
-async function ensureClickupClientId(): Promise<string | null> {
-  const cached = (getSettings().clickupClientId || '').trim()
-  if (cached) return cached
+async function registerClickupClient(redirectUri: string): Promise<string | null> {
   try {
     const res = await fetch(REGISTER_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({
         client_name: 'Métis',
-        // Portless loopback redirect URI — RFC 8252 §7.3 / MCP Authorization spec (see file header).
-        redirect_uris: ['http://127.0.0.1/callback'],
+        redirect_uris: [redirectUri],
         grant_types: ['authorization_code'],
         response_types: ['code'],
         token_endpoint_auth_method: 'none'
@@ -232,21 +244,18 @@ export function releaseClickupTokenLock(): void {
 export async function runClickupOAuth(): Promise<TokenResult> {
   if (!tryAcquireClickupTokenLock()) return { ok: false, error: 'A ClickUp sign-in is already in progress.' }
   try {
-    const clientId = await ensureClickupClientId()
-    if (!clientId) {
-      return { ok: false, error: 'ClickUp did not accept the automatic sign-in registration request. Try again later.' }
-    }
-
     const { verifier, challenge } = generatePkce()
     const state = randomBytes(16).toString('hex')
+    let clientId = ''
 
     const captured = await new Promise<{ code: string; redirectUri: string }>((resolve, reject) => {
       let redirectUri = ''
       const server = createServer((req, res) => {
         const url = new URL(req.url || '/', 'http://localhost')
         const c = url.searchParams.get('code')
-        const err = url.searchParams.get('error_description') || url.searchParams.get('error')
-        if (!c && !err) {
+        const errCode = url.searchParams.get('error') || ''
+        const errDesc = url.searchParams.get('error_description') || ''
+        if (!c && !errCode && !errDesc) {
           res.writeHead(204)
           res.end()
           return
@@ -264,7 +273,7 @@ export async function runClickupOAuth(): Promise<TokenResult> {
         clearTimeout(timer)
         server.close()
         if (c) resolve({ code: c, redirectUri })
-        else reject(new Error(err || 'No authorization code returned.'))
+        else reject(new Error(humanizeClickupOAuthError(errCode, errDesc || 'No authorization code returned.')))
       })
       server.on('error', reject)
       const timer = setTimeout(() => {
@@ -278,6 +287,14 @@ export async function runClickupOAuth(): Promise<TokenResult> {
         // browser's callback to an address the server never bound stalls or drops the code (see auth.ts).
         redirectUri = `http://127.0.0.1:${port}/callback`
         try {
+          const registered = await registerClickupClient(redirectUri)
+          if (!registered) {
+            clearTimeout(timer)
+            server.close()
+            reject(new Error('ClickUp did not accept the automatic sign-in registration request. Try again later.'))
+            return
+          }
+          clientId = registered
           const authUrl = buildAuthorizeUrl(clientId, redirectUri, challenge, state)
           await shell.openExternal(authUrl)
         } catch (e) {
@@ -296,7 +313,7 @@ export async function runClickupOAuth(): Promise<TokenResult> {
     return result
   } catch (e) {
     auditLog('clickup.oauth.failed', { reason: coarseOAuthFailure(e) })
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    return { ok: false, error: humanizeClickupOAuthError('', e instanceof Error ? e.message : String(e)) }
   } finally {
     releaseClickupTokenLock()
   }
