@@ -174,6 +174,58 @@ describe('admin keys write / rotate / revoke', () => {
     expect(blob).not.toContain('sk-proj-oldkey')
   })
 
+  it('mints a session cookie on Access console GET that authorizes POST /v1/admin/keys', async () => {
+    const store = memoryStore()
+    const home = await handleRequest(
+      new Request('https://operator.test/'),
+      env(),
+      { access: tony },
+      { store, now: NOW }
+    )
+    expect(home.status).toBe(200)
+    const setCookie = home.headers.get('set-cookie') || ''
+    expect(setCookie).toContain('metis_operator_session=')
+    expect(setCookie).toMatch(/HttpOnly/)
+    expect(setCookie).toMatch(/SameSite=Lax/)
+    const sessionPair = setCookie.split(';')[0]
+
+    const created = await handleRequest(
+      new Request('https://operator.test/v1/admin/keys', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', cookie: sessionPair },
+        body: JSON.stringify({
+          provider: 'anthropic',
+          label: 'qa-walk',
+          secret: 'sk-ant-api03-TESTKEYONLY-not-a-real-secret-zz42'
+        })
+      }),
+      env(),
+      {},
+      { store, now: NOW }
+    )
+    expect(created.status).toBe(200)
+    const written = (await created.json()) as { ok: boolean; last4: string; error?: string }
+    expect(written.ok).toBe(true)
+    expect(written.last4).toBe('zz42')
+    expect(written.error).toBeUndefined()
+
+    const forged = await handleRequest(
+      new Request('https://operator.test/v1/admin/keys', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          cookie: 'metis_operator_session=v1|9999999999999|tony.walteur@gmail.com|deadbeef'
+        },
+        body: JSON.stringify({ provider: 'anthropic', secret: 'sk-ant-api03-TESTKEYONLY-nope' })
+      }),
+      env(),
+      {},
+      { store, now: NOW }
+    )
+    expect(forged.status).toBe(401)
+    expect(await forged.json()).toEqual({ ok: false, error: 'Access required' })
+  })
+
   it('requires Tony identity and never serves keys to a stranger', async () => {
     const denied = await handleRequest(
       new Request('https://operator.test/v1/admin/keys', {

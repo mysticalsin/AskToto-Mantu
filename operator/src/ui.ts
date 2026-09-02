@@ -278,7 +278,9 @@ function renderEvents(events: ConsoleEvent[], now: number): string {
       const profile = e.hostname || e.email || null
       const place = [e.city, e.country].filter((v) => v && !looksLikeSecret(v)).join(' · ')
       const browser = e.browser && !looksLikeSecret(e.browser) ? e.browser : null
-      const q = `${name} ${profile || ''} ${place} ${e.os || ''} ${browser || ''}`.toLowerCase()
+      const chips = e.chips.map((c) => `${c.key} ${c.value}`).join(' ')
+      const path = e.chips.find((c) => c.key === 'path')?.value || '/'
+      const q = `${name} ${path} ${profile || ''} ${place} ${e.os || ''} ${browser || ''} ${chips}`.toLowerCase()
       return `<div class="event" data-event="${esc(e.id)}" data-q="${esc(q)}">
         <div class="event-time">${esc(ago(e.ts, now))}</div>
         <div class="event-name">${esc(name)}</div>

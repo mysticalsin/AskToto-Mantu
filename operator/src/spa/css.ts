@@ -353,6 +353,13 @@ textarea { min-height: 120px; }
 .live { display: inline-block; padding: 1px 7px; border-radius: 999px; background: #18181b; color: #fff; font: 10px var(--mono); letter-spacing: 0.08em; }
 [data-theme="dark"] .live { background: #f4f4f5; color: #0a0a0b; }
 .page[hidden] { display: none !important; }
+.event[hidden],
+.vol-row[hidden],
+.seat-row[hidden],
+.sess-row[hidden],
+[data-nt-row][hidden] {
+  display: none !important;
+}
 .seat-card {
   border: 1px solid color-mix(in srgb, var(--hair) 80%, transparent);
   background: var(--panel);

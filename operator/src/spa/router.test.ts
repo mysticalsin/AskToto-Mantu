@@ -1,7 +1,7 @@
 import { createContext, runInContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
 import { PATHNAME_STRIP_JS } from './client'
-import { SPA_JS } from './manifest'
+import { SPA_CSS, SPA_JS } from './manifest'
 
 const PAGES = [
   'overview',
@@ -133,9 +133,86 @@ describe('hashed SPA router (#104)', () => {
     expect(SPA_JS).toContain("var next = cur === 'dark' ? 'light' : 'dark'")
     expect(SPA_JS).not.toContain("cur === 'light' ? ''")
     expect(SPA_JS).toContain('events-empty')
+    expect(SPA_JS).toContain('function applyEventsFilter')
+    expect(SPA_JS).toContain("evSearch.addEventListener('search', applyEventsFilter)")
+    expect(SPA_JS).toContain("e.key === 'Enter'")
     expect(SPA_JS).toContain('applyNtFilter')
     expect(SPA_JS).toContain('key-msg-settings')
     expect(SPA_JS).toContain("accept: 'application/json'")
+    expect(SPA_JS).toContain('Access required. Sign in with Cloudflare Access and retry Add.')
+    expect(SPA_CSS).toContain('.event[hidden]')
+    expect(SPA_CSS).toContain('display: none !important')
+  })
+
+  it('applyEventsFilter hides non-matching heartbeat rows and shows empty state', () => {
+    const rows = [
+      {
+        hidden: false,
+        getAttribute(name: string) {
+          return name === 'data-q' ? 'heartbeat / tonys-macbook-pro longueuil ca darwin path /' : null
+        }
+      },
+      {
+        hidden: false,
+        getAttribute(name: string) {
+          return name === 'data-q' ? 'heartbeat / other-pc toronto ca windows path /' : null
+        }
+      }
+    ]
+    const empty = { hidden: true }
+    const listeners: Record<string, Array<(ev?: { preventDefault: () => void; key: string }) => void>> = {}
+    const evSearch = {
+      value: '',
+      addEventListener(type: string, fn: (ev?: { preventDefault: () => void; key: string }) => void) {
+        ;(listeners[type] ||= []).push(fn)
+      }
+    }
+    const document = {
+      documentElement: {
+        theme: 'light',
+        setAttribute() {},
+        getAttribute() {
+          return null
+        }
+      },
+      querySelectorAll(sel: string) {
+        if (sel === '#events-list .event[data-q]') return rows
+        return []
+      },
+      getElementById(id: string) {
+        if (id === 'events-search') return evSearch
+        if (id === 'events-empty') return empty
+        return null
+      }
+    }
+    const windowObj = {
+      addEventListener() {},
+      route: undefined as undefined | ((to?: string) => void)
+    }
+    const ctx = createContext({
+      window: windowObj,
+      self: windowObj,
+      document,
+      location: { hash: '#events', pathname: '/' },
+      fetch: async () => ({ json: async () => ({ ok: false }), text: async () => '' }),
+      localStorage: { getItem: () => null, setItem: () => {} }
+    })
+    runInContext(SPA_JS, ctx)
+    evSearch.value = 'zzzznomatch'
+    for (const fn of listeners.input || []) fn()
+    expect(rows.every((row) => row.hidden)).toBe(true)
+    expect(empty.hidden).toBe(false)
+
+    evSearch.value = 'darwin'
+    for (const fn of listeners.input || []) fn()
+    expect(rows[0].hidden).toBe(false)
+    expect(rows[1].hidden).toBe(true)
+    expect(empty.hidden).toBe(true)
+
+    evSearch.value = 'zzzznomatch'
+    for (const fn of listeners.keydown || []) fn({ preventDefault() {}, key: 'Enter' })
+    expect(rows.every((row) => row.hidden)).toBe(true)
+    expect(empty.hidden).toBe(false)
   })
 
   it('hashed SPA embeds world land so paintShoeyMap can inject path[data-iso]', () => {
