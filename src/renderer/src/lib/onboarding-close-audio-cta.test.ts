@@ -71,11 +71,11 @@ describe('closing onboarding hard-stops the Goldberg Aria', () => {
     expect(el.play).not.toHaveBeenCalled()
   })
 
-  it('Act 6 Ready, Skip Get started, unmount, and Replay call haltAll before the onboardingDone patch', () => {
+  it('Act 6 Ready, unmount, and Replay call haltAll before the onboardingDone patch', () => {
     const finish = experience.slice(experience.indexOf('const finish = async'))
     expect(finish.indexOf('haltAllOnboardingAudio()')).toBeGreaterThan(-1)
     expect(finish.indexOf('haltAllOnboardingAudio()')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true })'))
-    expect(experience).toMatch(/onClick=\{\(\) => void finish\(\)\}/)
+    expect(experience).toMatch(/canMarkOnboardingDone\(\{ scene, asrReady, consent \}\)/)
     expect(experience).toMatch(/return \(\) => \{\s*haltAllOnboardingAudio\(\)/)
     expect(experience).not.toMatch(/if \(!bedRef\.current && typeof Audio/)
 
@@ -172,7 +172,7 @@ describe('post-lady Continue is visible without hover', () => {
 
     expect(css).toMatch(/\.onboard-tour-slot,\s*\n\s*\.onboard-tour-chrome \{\s*position:\s*relative;\s*z-index:\s*2/)
     expect(css).toMatch(/\.onboard-post-lady,\s*\n\s*\.onboard-post-lady \.onboard-cta \{[\s\S]*?opacity:\s*1/)
-    expect(css).toMatch(/\.onboard-starfield \{\s*[\s\S]*?z-index:\s*0/)
+    expect(css).toMatch(/\.onboard-kinetic-grid \{\s*[\s\S]*?z-index:\s*0/)
     expect(experience).toMatch(/onboard-tour-chrome/)
   })
 

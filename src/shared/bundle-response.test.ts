@@ -98,6 +98,10 @@ describe('bundle-response — Access HTML is never a successful bundle', () => {
     expect(isRetryableBundleMessage(BUNDLE_NOT_JS)).toBe(true)
     expect(isRetryableBundleMessage(BUNDLE_DISK)).toBe(true)
     expect(isRetryableBundleMessage('Getting transcription files…')).toBe(false)
+    expect(bundleFailureUserMessage(new Error('incomplete download: got 12 of 40 bytes'))).toBe(
+      BUNDLE_NETWORK
+    )
+    expect(isRetryableBundleMessage('incomplete download')).toBe(true)
   })
 
   it('only treats Cloudflare Access locations as login redirects', () => {

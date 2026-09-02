@@ -27,21 +27,20 @@ const pkg = readFileSync(join(__dirname, '../../../../package.json'), 'utf8')
 
 const slice = [specSrc, engineSrc, componentSrc].join('\n')
 
-describe('Starfield Close — after Next, not on hero or recap', () => {
-  it('skips hero (April 29 video) and reveal (Overview/Topics/Q&A)', () => {
+describe('Starfield Close — dead after the lady beat', () => {
+  it('never mounts on any tour scene; KineticGrid owns the bed after hero', () => {
     expect(shouldMountStarfield('hero')).toBe(false)
     expect(shouldMountStarfield('reveal')).toBe(false)
-    expect(shouldMountStarfield('problem')).toBe(true)
-    expect(shouldMountStarfield('skip')).toBe(true)
+    expect(shouldMountStarfield('problem')).toBe(false)
+    expect(shouldMountStarfield('skip')).toBe(false)
     for (const scene of STARFIELD_SCENES) {
-      expect(shouldMountStarfield(scene)).toBe(true)
+      expect(shouldMountStarfield(scene)).toBe(false)
     }
     expect(STARFIELD_SCENES).not.toContain('hero')
     expect(STARFIELD_SCENES).not.toContain('reveal')
-    expect(experienceSrc).toMatch(/shouldMountStarfield\(scene\) && !starfieldFailed/)
-    expect(experienceSrc).toMatch(/<OnboardingStarfield/)
-    expect(experienceSrc).toMatch(/playOnboardingVideo\(/)
-    expect(experienceSrc).toMatch(/setStarfieldPulse/)
+    expect(experienceSrc).not.toMatch(/shouldMountStarfield/)
+    expect(experienceSrc).not.toMatch(/<OnboardingStarfield/)
+    expect(experienceSrc).toMatch(/shouldMountKineticGrid\(scene\) && <KineticGrid/)
     expect(experienceSrc).toMatch(/setScene\('problem'\)/)
   })
 })
@@ -132,13 +131,11 @@ describe('Starfield Close — local three, no CDN', () => {
   })
 })
 
-describe('Starfield Close — WebGL fail keeps the video bed', () => {
-  it('video stays until first frame or fail; never a cleared-black canvas', () => {
+describe('Starfield Close — leftover engine must not slide the stage', () => {
+  it('hero video is lady-only; leftover engine has no ndc camera parallax', () => {
     expect(experienceSrc).toMatch(/scene === 'hero' && <OnboardingHeroVideo/)
-    expect(experienceSrc).toMatch(/onUnavailable=\{\(\) => setStarfieldFailed\(true\)\}/)
-    expect(componentSrc).toMatch(/onUnavailableRef\.current\(\)/)
-    expect(engineSrc).toMatch(/canvas\.style\.opacity = '0'/)
-    expect(engineSrc).toMatch(/canvas\.style\.opacity = '1'/)
+    expect(engineSrc).not.toMatch(/ndc\.x \* CONFIG\.parallax/)
+    expect(engineSrc).toMatch(/camera\.position\.set\(0, 0, 5 - scroll \* CONFIG\.scrollPush\)/)
     expect(engineSrc).toMatch(/setClearColor\(0x05010a/)
     expect(engineSrc).not.toMatch(/setClearColor\(0x0a0a24/)
   })

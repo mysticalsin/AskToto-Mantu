@@ -6,6 +6,7 @@ import {
   ONBOARDING_PORTAL_CLOSE_GAIN,
   ONBOARDING_PORTAL_OPEN_GAIN
 } from './onboarding-portal'
+import { shouldMountKineticGrid } from './onboarding-kinetic-grid'
 import { shouldMountStarfield } from './onboarding-starfield-spec'
 
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
@@ -14,10 +15,13 @@ const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
 const portal = readFileSync(join(__dirname, './onboarding-portal.ts'), 'utf8')
 
 describe('Mac-show tour stay-visible + quieter bar land', () => {
-  it('starfield mounts on hero', () => {
+  it('KineticGrid mounts after the lady beat, never starfield', () => {
     expect(shouldMountStarfield('hero')).toBe(false)
-    expect(shouldMountStarfield('problem')).toBe(true)
-    expect(experience).toMatch(/shouldMountStarfield\(scene\) && !starfieldFailed/)
+    expect(shouldMountStarfield('problem')).toBe(false)
+    expect(shouldMountKineticGrid('hero')).toBe(false)
+    expect(shouldMountKineticGrid('problem')).toBe(true)
+    expect(experience).toMatch(/shouldMountKineticGrid\(scene\) && <KineticGrid/)
+    expect(experience).not.toMatch(/shouldMountStarfield/)
   })
 
   it('problem Continue is present at t=0 and lines stay with both', () => {
