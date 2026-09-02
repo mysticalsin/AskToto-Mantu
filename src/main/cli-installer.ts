@@ -463,7 +463,7 @@ export function npmInstallProductionSpawn(): { command: string; args: string[]; 
     join(dirname(node), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
     join(dirname(node), 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
   ].find((p) => existsSync(p))
-  const env = portable ? {} : { ELECTRON_RUN_AS_NODE: '1' }
+  const env: Record<string, string> = portable ? {} : { ELECTRON_RUN_AS_NODE: '1' }
   return { command: node, args: [...(npmCli ? [npmCli] : []), ...NPM_INSTALL_ARGS], env }
 }
 

@@ -30,7 +30,7 @@ describe('fetchDustProjects', () => {
               { sId: 'spc_sales', name: 'Sales', kind: 'regular' }
             ]
           }),
-          text: async () => ''
+          text: async (): Promise<string> => ''
         }
       }
       if (url.includes('/spaces/spc_data/data_sources')) {
