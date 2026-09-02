@@ -57,17 +57,23 @@ describe('admin keys write / rotate / revoke', () => {
     expect(JSON.stringify(body)).not.toContain(secret)
     expect(JSON.stringify(body)).not.toMatch(/\"cipher\"|\"iv\"/)
 
-    const html = await handleRequest(
+    const home = await handleRequest(
       new Request('https://operator.test/'),
       env(),
       { access: tony },
       { store, now: NOW }
-    ).then((r) => r.text())
+    )
+    expect(home.status).toBe(200)
+    expect(home.headers.get('content-type')).toMatch(/text\/html/)
+    const html = await home.text()
     expect(html).toContain('··xx99')
     expect(html).not.toContain(secret)
     expect(html).not.toContain('Seats keep their own keys')
     expect(html).toContain('Add an API')
+    expect(html).toContain('id="key-add"')
     expect(html).toContain('name="accountId"')
+    expect(html).toContain('data-page="keys"')
+    expect(html).toContain('data-page="map"')
   })
 
   it('rejects CLI and Dust as vault providers', async () => {

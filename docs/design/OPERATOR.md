@@ -311,6 +311,7 @@ UI on `#keys`: add / rotate / revoke. Show last4 (`··abcd`). Never a paste-bac
 **Seat funding (no raw key on the seat).**
 
 - Heartbeat and/or a dedicated HMAC admin-to-seat payload tells the seat `fundedProviders: ProviderId[]` (ids Operator can pay for right now). Never a secret.
+- **Tony 10:14 PM ET.** After `#keys` add (last4 only in UI, AES-GCM at rest), every seat heartbeat must include that provider in `fundedProviders`. Devices just work. Ask uses Operator-hosted keys only AFTER Claude/Codex CLI quota or rate limit. Dust is retrieval only. Never CLI tokens in the vault. Prove: unauth `POST /v1/admin/keys` 401; identity `GET /` is `text/html` 200 with add/rotate/revoke; heartbeat lists `fundedProviders` after a key is stored.
 - When the routing table reaches order 3, the seat requests a **short-lived use** from Operator over HMAC (`POST /v1/use` or equivalent). Operator decrypts the vault row in Worker memory, performs or brokers the provider call, and returns tokens/stream to the seat. The renderer never sees the grant or the raw key.
 - Seats must not persist those cloud API keys in Settings / keystore. Existing seat-stored Tony keys are a migration debt for a later implement slice, not a feature.
 - Fail closed if Operator cannot issue a use (vault empty, revoked, identity wrong, HMAC fail). Honest error. No leftover seat key.

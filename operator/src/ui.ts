@@ -1014,7 +1014,24 @@ svg path { vector-effect: non-scaling-stroke; }
     <section class="page wrap" data-page="settings" hidden>
       <article class="card" style="padding-bottom:10px">
         <p class="eyebrow">Settings</p>
-        <div class="sub muted" style="padding-bottom:8px">Keys fund seats. last4 only. Cloudflare connect lives here. No homemade password.</div>
+        <div class="sub muted" style="padding-bottom:8px">Keys fund seats. Add an API once. last4 only. Heartbeats list fundedProviders. Seats never hold the raw key.</div>
+        <p class="eyebrow" style="margin-top:14px">Add an API</p>
+        <form class="key-form" id="key-add-settings" autocomplete="off">
+          <div class="row">
+            <select name="provider" required>
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="gemini">Gemini</option>
+              <option value="nvidia">NVIDIA NIM</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="minimax">MiniMax</option>
+            </select>
+            <input name="label" type="text" placeholder="Label" maxlength="80">
+            <input name="secret" type="password" placeholder="API key" required autocomplete="off">
+            <button class="primary" type="submit">Add</button>
+          </div>
+        </form>
+        <p><a href="#keys">Open Keys</a> for rotate / revoke and Cloudflare.</p>
       </article>
     </section>
 
@@ -1210,14 +1227,18 @@ function showKey(j) {
   if (j && j.ok) keyMsg.textContent = j.last4 ? ('saved ··' + j.last4) : (j.status || 'ok')
   else keyMsg.textContent = (j && j.error) || 'failed'
 }
-const addForm = document.getElementById('key-add')
-if (addForm) addForm.addEventListener('submit', async (e) => {
-  e.preventDefault()
-  const fd = new FormData(addForm)
-  const j = await api('/v1/admin/keys', { provider: fd.get('provider'), label: fd.get('label'), secret: fd.get('secret') })
-  if (j && j.ok) location.reload()
-  else showKey(j)
-})
+function bindKeyAdd(form) {
+  if (!form) return
+  form.addEventListener('submit', async (e) => {
+    e.preventDefault()
+    const fd = new FormData(form)
+    const j = await api('/v1/admin/keys', { provider: fd.get('provider'), label: fd.get('label'), secret: fd.get('secret') })
+    if (j && j.ok) location.reload()
+    else showKey(j)
+  })
+}
+bindKeyAdd(document.getElementById('key-add'))
+bindKeyAdd(document.getElementById('key-add-settings'))
 const cfForm = document.getElementById('cf-add')
 if (cfForm) cfForm.addEventListener('submit', async (e) => {
   e.preventDefault()
