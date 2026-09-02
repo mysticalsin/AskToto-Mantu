@@ -458,29 +458,19 @@ export function renderConsole(data: DashboardPayload): string {
   void sparklineLine
 
   const live30 = ops.live30
-  const live30Series = ops.liveSeries
+  const live30Series = ops.live30Series
   const world = shoeyWorld(data.map.countries, data.map.dots)
-  const geoRows = data.profiles
+  const liveProfiles = data.profiles.filter((p) => p.live30)
+  const geoRows = liveProfiles
     .filter((p) => p.country || p.city)
     .map((p) => ({
       name: [p.city, p.country].filter(Boolean).join(' · ') || '(Not set)',
       views: 1,
-      sess: p.live ? 1 : 0
+      sess: 1
     }))
-  const crmMix = mixRows(data.crm.funnel.map((f) => ({ label: f.connector, value: f.attempted })))
-  const listenRows = mixRows(
-    data.events
-      .filter((e) => /listen|recap/i.test(e.name))
-      .map((e) => ({ label: e.name, value: 1 }))
-  )
-  const modeRows = mixRows(data.asks.map((a) => ({ label: a.mode || 'ask', value: 1 })).reduce((acc, row) => {
-    const hit = acc.find((x) => x.label === row.label)
-    if (hit) hit.value += 1
-    else acc.push(row)
-    return acc
-  }, [] as { label: string; value: number }[]))
-  const skillRows = mixRows(data.proposals.map((p) => ({ label: p.skill_id, value: 1 })))
-  const stream = data.events.slice(0, 24)
+  const stream = data.events.filter((e) => e.name === 'heartbeat').slice(0, 24)
+  const refRows = live30 ? [{ name: '(Not set)', views: live30, sess: live30 }] : []
+  const pathRows = mixRows(stream.map((e) => ({ label: e.name, value: 1 })))
 
   return `<!doctype html>
 <html lang="en" data-theme="light"><head>
@@ -577,23 +567,23 @@ export function renderConsole(data: DashboardPayload): string {
         ${volumeTable(
           'geo',
           [{ id: 'geo', label: 'Geo' }],
-          { geo: geoRows.length ? geoRows : [] },
+          { geo: geoRows },
           'Search geo',
-          { value: 'Events', sess: 'Sessions' },
+          { value: 'Sessions', sess: 'Seats' },
           'blue'
         )}
         ${volumeTable(
           'rt-refs',
           [{ id: 'refs', label: 'Referrals' }],
-          { refs: crmMix.length ? crmMix : listenRows },
+          { refs: refRows },
           'Search referrals',
-          { value: 'Events', sess: 'Sessions' },
+          { value: 'Sessions', sess: 'Seats' },
           'blue'
         )}
         ${volumeTable(
           'rt-paths',
           [{ id: 'path', label: 'Paths' }],
-          { path: modeRows },
+          { path: pathRows },
           'Search paths',
           { value: 'Events', sess: 'Sessions' },
           'blue'

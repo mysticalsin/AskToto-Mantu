@@ -5,8 +5,10 @@ import { looksLikeSecret, safeChips, type SafeChip } from './redact'
 import type { EventRow, OperatorStore, PulseRow, SeatRow, VaultKeyMeta } from './store'
 
 export const ONLINE_MS = 2 * 60 * 1000
+export const LIVE30_MS = 30 * 60 * 1000
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
+const MINUTE = 60 * 1000
 
 export interface SeriesPoint {
   t: number
@@ -53,6 +55,8 @@ export interface OpsTiles {
   sessionsDay: number
   liveNow: number
   live30: number
+  /** 30 one-minute unique-device buckets. Realtime sparkline, not the 24h Overview series. */
+  live30Series: number[]
   timeSaved: string | null
   durationMs: number | null
   meetings: number
@@ -196,6 +200,7 @@ export interface ProfileRow {
   city: string | null
   lastSeen: number
   live: boolean
+  live30: boolean
   license: string | null
 }
 
@@ -355,6 +360,52 @@ export function crmFunnelByConnector(rows: CrmSendRow[]): CrmFunnelByConnector[]
     by.set(connector, cur)
   }
   return [...by.values()].sort((a, b) => b.attempted - a.attempted || a.connector.localeCompare(b.connector))
+}
+
+/** Seats seen via last_seen, heartbeat pulses, or heartbeat events in the last 30 minutes. */
+export function liveSeatIds30(
+  seats: SeatRow[],
+  pulses: PulseRow[],
+  events: EventRow[],
+  now: number
+): Set<string> {
+  const cutoff = now - LIVE30_MS
+  const ids = new Set<string>()
+  for (const s of seats) {
+    if (s.last_seen >= cutoff) ids.add(s.device_id)
+  }
+  for (const p of pulses) {
+    if (p.kind === 'heartbeat' && p.ts >= cutoff && p.device_id) ids.add(p.device_id)
+  }
+  for (const e of events) {
+    if (e.kind === 'heartbeat' && e.ts >= cutoff && e.device_id) ids.add(e.device_id)
+  }
+  return ids
+}
+
+/** Unique devices per minute for the last 30 minutes. Last bucket gets liveCount if clocks left every minute empty. */
+export function live30MinuteSeries(
+  pulses: PulseRow[],
+  events: EventRow[],
+  now: number,
+  liveCount = 0
+): number[] {
+  const buckets = Array.from({ length: 30 }, () => new Set<string>())
+  const start = now - LIVE30_MS
+  const place = (ts: number, id: string | null): void => {
+    if (!id || ts < start || ts > now) return
+    const i = Math.min(29, Math.max(0, Math.floor((ts - start) / MINUTE)))
+    buckets[i].add(id)
+  }
+  for (const p of pulses) {
+    if (p.kind === 'heartbeat') place(p.ts, p.device_id)
+  }
+  for (const e of events) {
+    if (e.kind === 'heartbeat') place(e.ts, e.device_id)
+  }
+  const series = buckets.map((s) => s.size)
+  if (liveCount > 0 && series.every((v) => v === 0)) series[29] = liveCount
+  return series
 }
 
 function uniqueSeats(seats: SeatRow[], since: number): number {
@@ -580,8 +631,10 @@ export async function buildDashboard(
     estimate: r.anyCost ? formatUsdEstimate(r.usd) : null
   }))
 
+  const liveIds = liveSeatIds30(seats, pulses, storedEvents, now)
+  const liveSeats = seats.filter((s) => liveIds.has(s.device_id))
   const countryMap = new Map<string, Set<string>>()
-  for (const s of seats) {
+  for (const s of liveSeats) {
     if (!s.country) continue
     const set = countryMap.get(s.country) ?? new Set<string>()
     set.add(s.device_id)
@@ -590,7 +643,7 @@ export async function buildDashboard(
   const countries: MapCountry[] = [...countryMap.entries()]
     .map(([iso, set]) => ({ iso, devices: set.size }))
     .sort((a, b) => b.devices - a.devices)
-  const dots: MapDot[] = seats
+  const dots: MapDot[] = liveSeats
     .filter((s) => s.lat != null && s.lon != null && s.country)
     .map((s) => ({ lat: s.lat as number, lon: s.lon as number, city: s.city, country: s.country as string }))
 
@@ -612,7 +665,8 @@ export async function buildDashboard(
   for (const row of crm) counts[row.status]++
 
   const landing = crmLandingKpis(crm, now)
-  const live30 = seats.filter((s) => now - s.last_seen <= 30 * 60 * 1000).length
+  const live30 = liveIds.size
+  const live30Series = live30MinuteSeries(pulses, storedEvents, now, live30)
   const durationMs = medianMs(weekAsks.map((a) => a.total_ms).filter((n): n is number => n != null && n > 0))
   let tokenSum = 0
   let tokenAny = false
@@ -646,6 +700,7 @@ export async function buildDashboard(
     sessionsDay: dau,
     liveNow: live,
     live30,
+    live30Series,
     timeSaved: null,
     durationMs,
     meetings,
@@ -803,6 +858,7 @@ export async function buildDashboard(
         city: s.city,
         lastSeen: s.last_seen,
         live: now - s.last_seen < ONLINE_MS,
+        live30: liveIds.has(s.device_id),
         license: s.license && !looksLikeSecret(s.license) ? s.license : null
       })),
     keys: {

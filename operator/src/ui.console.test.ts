@@ -107,6 +107,17 @@ describe('product sidebar (#105)', () => {
     const realtime = html.slice(html.indexOf('data-page="realtime"'), html.indexOf('data-page="events"'))
     expect(realtime).not.toContain('data-stat-card=')
     expect(realtime).not.toContain('data-bklit=')
+    expect(realtime).toContain('id="map-root"')
+    expect(realtime).toContain('id="rt-stream"')
+    expect(realtime).toContain('>Geo<')
+    expect(realtime).toContain('>Referrals<')
+    expect(realtime).toContain('>Paths<')
+    expect(realtime).not.toContain('ANALYTICS')
+    expect(realtime).not.toContain('GRATICULE')
+    expect(realtime).not.toContain('HATCH')
+    expect(realtime).not.toContain('/checkout')
+    expect(realtime).not.toContain('/products/sneakers')
+    expect(realtime).not.toContain('clickup')
     expect(html).not.toContain('not reported')
     expect(html).toContain('data-stat-card="tokens"')
     expect(html).toMatch(/data-stat-card="tokens"[\s\S]*?<div class="lbl">tokens<\/div>/)
@@ -181,6 +192,7 @@ describe('product sidebar (#105)', () => {
       {},
       { store: memoryStore(), now: NOW }
     ).then((r) => r.text())
+    expect(css).toContain('.rt-map { min-width: 0; min-height: 480px; }')
     expect(css).toContain('grid-template-columns: 185px 1fr')
     expect(css).toContain('font: 12px/1.4')
     const js = await handleRequest(
@@ -361,5 +373,63 @@ describe('profiles hostname and SSO email', () => {
     const seats = await store.listSeats()
     expect(seats[0]?.hostname).toBeNull()
     expect(seats[0]?.sso_email).toBeNull()
+  })
+})
+
+describe('realtime main pane is live heartbeats, not leftover OpenPanel', () => {
+  it('unique seats, sparkline bars, and map land share the same 30-min heartbeat set', async () => {
+    const store = memoryStore()
+    const stale = NOW - 2 * 60 * 60 * 1000
+    for (const id of ['mac-a', 'mac-b'] as const) {
+      await store.upsertSeat({
+        device_id: id,
+        seat_hash: `seat-${id}`,
+        os: 'darwin',
+        app_version: '1.8.2',
+        first_seen: stale,
+        last_seen: stale,
+        country: 'CA',
+        city: 'Longueuil',
+        lat: 45.531,
+        lon: -73.518,
+        last_index_at: null,
+        hostname: 'Tonys-MacBook-Pro',
+        sso_email: 'twalteur@amaris.com',
+        license: 'approved'
+      })
+      await store.insertPulse({
+        id: `pulse-${id}`,
+        device_id: id,
+        ts: NOW - 45_000,
+        kind: 'heartbeat',
+        country: 'CA',
+        city: 'Longueuil'
+      })
+      await store.insertEvent({
+        id: `ev-${id}`,
+        ts: NOW - 45_000,
+        kind: 'heartbeat',
+        actor: 'twalteur@amaris.com',
+        device_id: id,
+        country: 'CA',
+        detail: 'darwin'
+      })
+    }
+    const html = await page(store)
+    const realtime = html.slice(html.indexOf('data-page="realtime"'), html.indexOf('data-page="events"'))
+    expect(realtime).toMatch(/class="n rt-n">2</)
+    expect(realtime).toContain('<rect')
+    expect(realtime).toContain('fill="#2563EB"')
+    expect(realtime).toContain('fill="#E5E7EB"')
+    expect(realtime).toContain('class="world-land"')
+    expect(realtime).toContain('class="world-ocean"')
+    expect(realtime).toContain('Canada')
+    expect(realtime).toContain('Longueuil')
+    expect(realtime).toContain('heartbeat')
+    expect(realtime).toContain('(Not set)')
+    expect(realtime).not.toContain('/checkout')
+    expect(realtime).not.toContain('/products/sneakers')
+    expect(realtime).not.toContain('clickup')
+    expect(html.match(/id="map-root"/g)?.length).toBe(1)
   })
 })

@@ -77,6 +77,56 @@ describe('overview ops tiles from real ingest only', () => {
     expect(dash.map.empty).toBe(false)
   })
 
+  it('counts stale last_seen seats that still heartbeated in the last 30 min', async () => {
+    const store = memoryStore()
+    const stale = NOW - 2 * 60 * 60 * 1000
+    for (const id of ['dev-a', 'dev-b'] as const) {
+      await store.upsertSeat({
+        device_id: id,
+        seat_hash: `seat-${id}`,
+        os: 'darwin',
+        app_version: '1.8.2',
+        first_seen: stale,
+        last_seen: stale,
+        country: 'CA',
+        city: 'Longueuil',
+        lat: 45.5,
+        lon: -73.5,
+        last_index_at: null,
+        hostname: 'Tonys-MacBook-Pro',
+        sso_email: 'twalteur@amaris.com',
+        license: 'approved'
+      })
+      await store.insertPulse({
+        id: `pulse-${id}`,
+        device_id: id,
+        ts: NOW - 45_000,
+        kind: 'heartbeat',
+        country: 'CA',
+        city: 'Longueuil'
+      })
+      await store.insertEvent({
+        id: `ev-${id}`,
+        ts: NOW - 45_000,
+        kind: 'heartbeat',
+        actor: 'twalteur@amaris.com',
+        device_id: id,
+        country: 'CA',
+        detail: 'darwin'
+      })
+    }
+    const dash = await buildDashboard(store, 'tony.walteur@gmail.com', NOW)
+    expect(dash.ops.live30).toBe(2)
+    expect(dash.ops.liveNow).toBe(0)
+    expect(dash.map.empty).toBe(false)
+    expect(dash.map.countries).toEqual([{ iso: 'CA', devices: 2 }])
+    expect(dash.map.dots).toHaveLength(2)
+    expect(dash.ops.live30Series).toHaveLength(30)
+    expect(dash.ops.live30Series.some((v) => v > 0)).toBe(true)
+    expect(dash.ops.live30Series.reduce((a, b) => a + b, 0)).toBe(2)
+    expect(dash.profiles.filter((p) => p.live30)).toHaveLength(2)
+  })
+
   it('does not invent listen minutes or tokens when nothing was reported', async () => {
     const dash = await buildDashboard(memoryStore(), 'tony.walteur@gmail.com', NOW)
     expect(dash.ops.timeSaved).toBeNull()
