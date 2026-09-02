@@ -17,6 +17,7 @@ import { missingCloudflareOverview, pullCloudflareOverview, type CloudflareOverv
 import { asCrmStatus } from './crm'
 import { decryptPrompt, encryptPrompt, sha256Hex, signSkillPack } from './crypto'
 import { buildDashboard } from './dashboard'
+import { applyUsageImport, planUsageImport } from './usage-import'
 import { geoFromRequest, type CfGeo } from './geo'
 import { verifyIngestHmac } from './hmac'
 import { d1Store, type D1DatabaseLike } from './d1'
@@ -222,6 +223,22 @@ async function adminRoute(
     await store.audit(crypto.randomUUID(), now, email, 'reveal', row.id, 'ask text')
     return json({ ok: true, id: row.id, question })
   }
+
+  if (url.pathname === '/v1/admin/usage/import' && request.method === 'POST') {
+    const body = (await request.json().catch(() => null)) as
+      | { amountCsv?: unknown; costCsv?: unknown; amount?: unknown; cost?: unknown }
+      | null
+    const amountCsv = typeof body?.amountCsv === 'string' ? body.amountCsv : typeof body?.amount === 'string' ? body.amount : ''
+    const costCsv = typeof body?.costCsv === 'string' ? body.costCsv : typeof body?.cost === 'string' ? body.cost : ''
+    if (!amountCsv.trim() || !costCsv.trim()) {
+      return json({ ok: false, error: 'amountCsv and costCsv required' }, 400)
+    }
+    const plan = planUsageImport(amountCsv, costCsv, now)
+    if (!plan.asks.length) return json({ ok: false, error: 'no usage rows parsed' }, 400)
+    const result = await applyUsageImport(store, plan, email)
+    return json({ ok: true, ...result })
+  }
+
   if (url.pathname === '/v1/admin/skills/draft' && request.method === 'POST') {
     const body = await request.json().catch(() => ({})) as { skillId?: string }
     const skillId = body.skillId || 'general'

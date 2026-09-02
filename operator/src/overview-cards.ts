@@ -225,6 +225,30 @@ export function renderOverviewMini10(data: DashboardPayload): string {
     chip('CLI asks', formatCompact(cli)),
     chip('Operator-key asks', formatCompact(op))
   ].join('')
-  return `<div class="ov-10" data-overview-cards="10">${cards.join('')}</div>
-    <div class="ov-chips">${chips}</div>`
+  const usage = data.usageWindow
+  const landed = Boolean(usage && (ops.tokens || ops.apiCalls))
+  const liveBanner = usage
+    ? `<div class="ov-live" data-usage-landed="${landed ? '1' : '0'}" data-usage-from="${esc(usage.from)}" data-usage-to="${esc(usage.to)}">
+        <span class="ov-live-dot" aria-hidden="true"></span>
+        <span class="ov-live-label">Live usage</span>
+        <span class="ov-live-range">${esc(usage.from)} → ${esc(usage.to)}</span>
+        <span class="ov-live-meta">${esc(formatCompact(usage.count))} asks landed</span>
+      </div>`
+    : `<div class="ov-live ov-live-idle" data-usage-landed="0">
+        <span class="ov-live-dot" aria-hidden="true"></span>
+        <span class="ov-live-label">Overview</span>
+        <span class="ov-live-meta">Waiting on heartbeats and asks</span>
+      </div>`
+  const cardsHtml = cards
+    .map((html) => {
+      if (!landed) return html
+      if (html.includes('data-stat-card="tokens"') || html.includes('data-stat-card="api-calls"')) {
+        return html.replace('class="stat-card"', 'class="stat-card stat-card-landed"')
+      }
+      return html
+    })
+    .join('')
+  return `${liveBanner}
+    <div class="ov-10" data-overview-cards="10" data-overview-job="live-kpis">${cardsHtml}</div>
+    <div class="ov-chips" data-overview-secondary="1">${chips}</div>`
 }

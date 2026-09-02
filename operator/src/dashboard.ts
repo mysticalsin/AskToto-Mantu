@@ -3,6 +3,7 @@ import { CRM_STATUSES, type CrmSendRow, type CrmStatus } from './crm'
 import { missingCloudflareOverview, type CloudflareOverview } from './cloudflare'
 import { looksLikeSecret, safeChips, type SafeChip } from './redact'
 import type { EventRow, OperatorStore, PulseRow, SeatRow, VaultKeyMeta } from './store'
+import { billedUsdFromOutcome, usageWindowFromAsks } from './usage-import'
 
 export const ONLINE_MS = 2 * 60 * 1000
 export const LIVE30_MS = 30 * 60 * 1000
@@ -175,6 +176,7 @@ export interface DashboardPayload {
     vault: VaultKeyMeta[]
   }
   cloudflare: CloudflareOverview
+  usageWindow: { from: string; to: string; count: number } | null
 }
 
 export interface ConsoleEvent {
@@ -288,11 +290,20 @@ function costForAsks(
     output_tokens: number | null
     model: string | null
     provider: string | null
+    outcome?: string | null
   }[]
 ): string | null {
   let usd = 0
   let any = false
+  let billed = false
   for (const a of asks) {
+    const billedUsd = billedUsdFromOutcome(a.outcome)
+    if (billedUsd != null) {
+      any = true
+      billed = true
+      usd += billedUsd
+      continue
+    }
     const est = estimateCacheCost(
       {
         cacheRead: a.cache_read ?? undefined,
@@ -310,7 +321,14 @@ function costForAsks(
       usd += est.usd
     }
   }
-  return any ? formatUsdEstimate(usd) : null
+  if (!any) return null
+  return billed ? formatUsdBilled(usd) : formatUsdEstimate(usd)
+}
+
+function formatUsdBilled(n: number): string {
+  const abs = Math.abs(n)
+  if (abs > 0 && abs < 0.01) return `${n < 0 ? '-' : ''}$0.01`
+  return `$${abs.toFixed(2)}`
 }
 
 export function emptyCrmLanding(): CrmLanding {
@@ -913,6 +931,7 @@ export async function buildDashboard(
       workers: cloudflare.workers.filter((w) => !looksLikeSecret(w)),
       d1Name: cloudflare.d1Name && !looksLikeSecret(cloudflare.d1Name) ? cloudflare.d1Name : null,
       d1Id: cloudflare.d1Id && !looksLikeSecret(cloudflare.d1Id) ? cloudflare.d1Id : null
-    }
+    },
+    usageWindow: usageWindowFromAsks(asks)
   }
 }
