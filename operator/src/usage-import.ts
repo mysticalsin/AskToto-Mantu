@@ -314,11 +314,31 @@ export function billedUsdFromOutcome(outcome: string | null | undefined): number
 }
 
 export function usageWindowFromAsks(
-  asks: { mode: string | null; preview: string | null; ts: number }[]
-): { from: string; to: string; count: number } | null {
+  asks: {
+    mode: string | null
+    preview: string | null
+    ts: number
+    input_tokens?: number | null
+    output_tokens?: number | null
+    outcome?: string | null
+  }[]
+): { from: string; to: string; count: number; tokens: number; costUsd: number } | null {
   const rows = asks.filter((a) => a.mode === USAGE_MODE || a.preview === USAGE_PREVIEW)
   if (!rows.length) return null
   const times = rows.map((a) => a.ts).sort((a, b) => a - b)
   const fmt = (ts: number): string => new Date(ts).toISOString().slice(0, 10)
-  return { from: fmt(times[0]), to: fmt(times[times.length - 1]), count: rows.length }
+  let tokens = 0
+  let costUsd = 0
+  for (const a of rows) {
+    tokens += (a.input_tokens ?? 0) + (a.output_tokens ?? 0)
+    const billed = billedUsdFromOutcome(a.outcome)
+    if (billed != null) costUsd += billed
+  }
+  return {
+    from: fmt(times[0]),
+    to: fmt(times[times.length - 1]),
+    count: rows.length,
+    tokens,
+    costUsd
+  }
 }

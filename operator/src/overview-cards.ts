@@ -226,13 +226,19 @@ export function renderOverviewMini10(data: DashboardPayload): string {
     chip('Operator-key asks', formatCompact(op))
   ].join('')
   const usage = data.usageWindow
-  const landed = Boolean(usage && (ops.tokens || ops.apiCalls))
+  const landed = Boolean(usage && (ops.tokens || ops.apiCalls || usage.tokens || usage.count))
   const liveBanner = usage
-    ? `<div class="ov-live" data-usage-landed="${landed ? '1' : '0'}" data-usage-from="${esc(usage.from)}" data-usage-to="${esc(usage.to)}">
-        <span class="ov-live-dot" aria-hidden="true"></span>
-        <span class="ov-live-label">Live usage</span>
-        <span class="ov-live-range">${esc(usage.from)} → ${esc(usage.to)}</span>
-        <span class="ov-live-meta">${esc(formatCompact(usage.count))} asks landed</span>
+    ? `<div class="ov-live ov-live-landed" data-usage-landed="${landed ? '1' : '0'}" data-usage-from="${esc(usage.from)}" data-usage-to="${esc(usage.to)}" data-usage-provider="deepseek">
+        <div class="ov-live-main">
+          <span class="ov-live-dot" aria-hidden="true"></span>
+          <span class="ov-live-label">DeepSeek usage imported</span>
+          <span class="ov-live-range">${esc(usage.from)} → ${esc(usage.to)}</span>
+        </div>
+        <div class="ov-live-stats" data-usage-stats="1">
+          <span class="ov-live-stat" data-usage-stat="asks"><b>${esc(formatCompact(usage.count))}</b> asks</span>
+          <span class="ov-live-stat" data-usage-stat="tokens"><b>${esc(formatCompact(usage.tokens))}</b> tokens</span>
+          <span class="ov-live-stat" data-usage-stat="cost"><b>$${usage.costUsd.toFixed(2)}</b> billed</span>
+        </div>
       </div>`
     : `<div class="ov-live ov-live-idle" data-usage-landed="0">
         <span class="ov-live-dot" aria-hidden="true"></span>
