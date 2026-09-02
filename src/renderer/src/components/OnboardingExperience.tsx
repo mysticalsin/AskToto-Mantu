@@ -1154,7 +1154,10 @@ export function OnboardingExperience({
                 <div className="min-w-0 flex-1">
                   <p className="m-0 truncate text-[13px] text-[color:var(--color-ink)]">{r.label}</p>
                   {r.detail && <p className="m-0 text-[11px] text-[color:var(--color-ink-3)]">{r.detail}</p>}
-                  {(r.key === 'local' || r.key === 'asr') && r.progress != null && r.progress > 0 && r.progress < 1 && (
+                  {/* Local weights: bar visible at 0% while waiting on the first chunk, so the first-run fetch
+                      never looks idle. ASR files: only once bytes land (progress 0 there means not started). */}
+                  {((r.key === 'local' && r.progress != null && r.progress < 1) ||
+                    (r.key === 'asr' && r.progress != null && r.progress < 1 && r.progress > 0)) && (
                     <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
                       <div
                         className="h-full rounded-full bg-[#9A2BF0]"

@@ -104,7 +104,7 @@ describe('MQA-190 — the OS proxy probe must never hold boot open', () => {
     await vi.advanceTimersByTimeAsync(0)
 
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(2)
-    const late = setGlobalDispatcher.mock.calls[1][0] as FakeProxyAgent
+    const late = setGlobalDispatcher.mock.calls[1][0] as InstanceType<typeof FakeProxyAgent>
     expect(late).toBeInstanceOf(FakeProxyAgent)
     expect(late.uri).toBe('http://corp-proxy.internal:8080')
   })
@@ -113,6 +113,6 @@ describe('MQA-190 — the OS proxy probe must never hold boot open', () => {
     resolveProxy.mockResolvedValue('PROXY fast-proxy.corp:3128')
     await Promise.all([installProxyAwareFetch(), vi.advanceTimersByTimeAsync(0)])
     expect(setGlobalDispatcher).toHaveBeenCalledTimes(1)
-    expect((setGlobalDispatcher.mock.calls[0][0] as FakeProxyAgent).uri).toBe('http://fast-proxy.corp:3128')
+    expect((setGlobalDispatcher.mock.calls[0][0] as InstanceType<typeof FakeProxyAgent>).uri).toBe('http://fast-proxy.corp:3128')
   })
 })

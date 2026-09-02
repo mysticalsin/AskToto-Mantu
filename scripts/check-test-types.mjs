@@ -45,7 +45,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
  * providerId that does not exist ('claude-api'), and FIVE more `{ gguf, mmproj }` omissions — the same
  * `-c undefined` shape, in a third file.
  */
-const BASELINE = 30
+const BASELINE = 28
 
 let output = ''
 try {

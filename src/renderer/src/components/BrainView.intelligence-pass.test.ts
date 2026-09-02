@@ -8,9 +8,10 @@ const brainView = readFileSync(resolve(__dirname, 'BrainView.tsx'), 'utf8')
 describe('BrainView Intelligence Update wiring', () => {
   it('shows the Update Intelligence button and starts the pass on click', () => {
     expect(brainView).toContain('IntelligenceUpdateButton')
-    expect(brainView).toContain('startIntelligenceUpdateFromClick')
-    expect(brainView).toContain('brainIntelligencePass')
-    expect(brainView).toMatch(/onClick=\{\(\) => void runIntelligencePass\(\)\}/)
+    // 811fed9: the click routes through runIntelligenceUpdateClick -> brain:backfill and returns a
+    // structured sign-in / no-provider error instead of throwing, so the button can never look dead.
+    expect(brainView).toContain('runIntelligenceUpdateClick(() => window.toto.brainBackfill())')
+    expect(brainView).toMatch(/onClick=\{\(\) => void startBackfill\(\)\}/)
   })
 
   it('does not auto-start this pass on mount or from the backlog gate', () => {
