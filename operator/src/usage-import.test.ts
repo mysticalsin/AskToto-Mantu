@@ -39,17 +39,24 @@ describe('DeepSeek usage import → Overview', () => {
     const plan = planUsageImport(amountCsv, costCsv, now)
     await applyUsageImport(store, plan, 'tony.walteur@gmail.com')
     const dash = await buildDashboard(store, 'tony.walteur@gmail.com', now)
-    expect(dash.usageWindow).toEqual({ from: '2026-08-11', to: '2026-09-02', count: plan.asks.length })
+    expect(dash.usageWindow).toMatchObject({
+      from: '2026-08-11',
+      to: '2026-09-02',
+      count: plan.asks.length,
+      tokens: plan.totals.tokens
+    })
+    expect(dash.usageWindow?.costUsd).toBeCloseTo(plan.totals.costUsd, 6)
     expect(dash.ops.apiCalls).toBeGreaterThan(0)
     expect(dash.ops.tokens).toBeGreaterThan(0)
     expect(dash.ops.operatorAsks).toBeGreaterThan(0)
     expect(dash.kpis.cost7d).toMatch(/^\$/)
     const html = renderOverviewMini10(dash)
     expect(html).toContain('data-usage-landed="1"')
+    expect(html).toContain('DeepSeek usage imported')
     expect(html).toContain('2026-08-11')
     expect(html).toContain('2026-09-02')
+    expect(html).toContain('data-usage-stat="tokens"')
     expect(html).toContain('data-overview-cards="10"')
     expect(html).toContain('stat-card-landed')
-    expect(html).toContain('Live usage')
   })
 })

@@ -176,7 +176,7 @@ export interface DashboardPayload {
     vault: VaultKeyMeta[]
   }
   cloudflare: CloudflareOverview
-  usageWindow: { from: string; to: string; count: number } | null
+  usageWindow: { from: string; to: string; count: number; tokens: number; costUsd: number } | null
 }
 
 export interface ConsoleEvent {
