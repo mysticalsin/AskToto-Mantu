@@ -160,7 +160,7 @@ describe('MQA-062 — a dead CLI session stops reporting itself as connected', (
     const helper = sliceBetween('function retireCli(', 'function publicSettings()')
     expect(helper).toMatch(/if \(PROVIDERS\[provider\]\.kind !== 'cli' \|\| !isAuthFailure\(message\)\) return/)
     expect(helper).toMatch(/if \(!s\.cliConnected\[provider\]\) return/)
-    expect(helper).toMatch(/setSettings\(\{ cliConnected: \{ \.\.\.s\.cliConnected, \[provider\]: false \} \}\)/)
+    expect(helper).toMatch(/setSettings\(\{ cliConnected: nextConnected, lastClickedCli: nextLast \}\)/)
   })
 
   it('names the real remedy instead of sending CLI users to re-enter an API key they never had', () => {

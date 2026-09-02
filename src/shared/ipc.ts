@@ -1066,6 +1066,8 @@ export const BaseSettingsSchema = z.object({
   asrEntityBias: z.boolean().default(true),
   // CLI provider connection state. Keyed by ProviderId ('claude-cli', 'codex-cli').
   cliConnected: z.record(z.string(), z.boolean()).default({}),
+  // Last Connect click in Settings → CLI Integration. When both CLIs are connected, this one is primary.
+  lastClickedCli: z.enum(['claude-cli', 'codex-cli']).nullable().default(null),
   // Epoch ms of the last Dust CLI token import. Gates the startup eager refresh: while the ~1h OAuth
   // token is still fresh, launch does NOT touch the Dust CLI keychain item (each `security` read can
   // cost a macOS keychain password prompt on identity-unstable dev builds). 0 = never imported.
@@ -1499,6 +1501,7 @@ export const DEFAULT_SETTINGS: Settings = {
   asrCorrections: [],
   asrEntityBias: true,
   cliConnected: {},
+  lastClickedCli: null,
   dustTokenMintedAt: 0,
   cliNoticeAck: false,
   mcpConnections: [],

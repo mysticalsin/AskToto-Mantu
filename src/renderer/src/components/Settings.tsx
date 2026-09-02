@@ -2206,6 +2206,10 @@ function CliIntegration({
   const disconnectCli = (id: 'claude-cli' | 'codex-cli'): void => {
     const nextConnected = { ...cliConnected, [id]: false }
     const next: Partial<PublicSettings> = { cliConnected: nextConnected }
+    if (settings.lastClickedCli === id) {
+      const other = id === 'claude-cli' ? 'codex-cli' : 'claude-cli'
+      next.lastClickedCli = nextConnected[other] ? other : null
+    }
     if (provider === id)
       next.provider = pickReadyProvider(
         id,

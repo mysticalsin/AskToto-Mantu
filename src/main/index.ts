@@ -139,6 +139,8 @@ import {
   allowCrossProviderFailover,
   resolveRoutingMode
 } from './llm/local-routing'
+import { isCliProviderId, isDustChatForbidden, pickWorkingCliPrimary, workingCliOrder } from '@shared/ask-routing'
+import { operatorFundedProviders } from './operator-ingest'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText } from './mac-helper'
@@ -1303,7 +1305,14 @@ function retireCli(provider: ProviderId, message: string): void {
   if (PROVIDERS[provider].kind !== 'cli' || !isAuthFailure(message)) return
   const s = getSettings()
   if (!s.cliConnected[provider]) return
-  setSettings({ cliConnected: { ...s.cliConnected, [provider]: false } })
+  const nextConnected = { ...s.cliConnected, [provider]: false }
+  const nextLast =
+    s.lastClickedCli === provider
+      ? (isCliProviderId(provider) && nextConnected[provider === 'claude-cli' ? 'codex-cli' : 'claude-cli']
+          ? (provider === 'claude-cli' ? 'codex-cli' : 'claude-cli')
+          : null)
+      : s.lastClickedCli
+  setSettings({ cliConnected: nextConnected, lastClickedCli: nextLast })
   mainLog.warn(`[cli] ${provider} rejected our credentials — marking it disconnected`)
 }
 
@@ -3574,7 +3583,9 @@ function registerIpc(): void {
     const r = await testCli(p)
     if (r.ok) {
       const s = getSettings()
-      setSettings({ cliConnected: { ...s.cliConnected, [p]: true } })
+      const next: Partial<typeof s> = { cliConnected: { ...s.cliConnected, [p]: true } }
+      if (isCliProviderId(p)) next.lastClickedCli = p
+      setSettings(next)
     }
     return r
   })
@@ -4767,6 +4778,8 @@ function registerIpc(): void {
           })
       const eligible = (p: ProviderId): boolean => {
         if (tried.includes(p)) return false
+        // Dust is retrieval only. Never a general-chat failover unless this ask was pinned to Dust.
+        if (isDustChatForbidden(p, req.providerOverride === 'dust')) return false
         // Métis Local: routingMode-aware primary eligibility (localPrimaryEligibleFor) so Routing mode
         // → Local can fail over / serve without per-mode useFor toggles. 'api' mode keeps local out of
         // the healthy mid-walk (fallback/floor still catch last-resort below). Out-of-scope modes
@@ -4797,6 +4810,17 @@ function registerIpc(): void {
       // is about to 429 (usage-headroom.ts). Fail-open — unknown headroom never demotes — and folded into
       // the `healthy` filter ONLY, so a budget-blocked provider is still reachable as the last resort below.
       const budgetBlocked = (p: ProviderId): boolean => s.resilience.budgetPreempt && isBudgetExhausted(p)
+      // OPERATOR.md order 2: the other connected CLI is next after last-clicked quota / rate limit.
+      const cliNext = workingCliOrder({
+        cliConnected: s.cliConnected,
+        lastClickedCli: s.lastClickedCli,
+        allowed
+      }).find((p) => eligible(p) && !isCoolingDown(p) && !budgetBlocked(p))
+      if (cliNext) return cliNext
+      const fundedNext = operatorFundedProviders().find(
+        (p) => p in PROVIDERS && eligible(p as ProviderId) && !isCoolingDown(p as ProviderId) && !budgetBlocked(p as ProviderId)
+      )
+      if (fundedNext) return fundedNext as ProviderId
       // MQA-003: prefer a provider whose credentials have NOT just been rejected and that has budget left.
       const healthy = order.find((p) => eligible(p) && !isCoolingDown(p) && !budgetBlocked(p))
       if (healthy) return healthy
@@ -5396,20 +5420,14 @@ function registerIpc(): void {
       else streams.set(req.id, handle)
     }
 
-    // Honor the CLI-vs-API priority for the FIRST provider tried: 'cli' prefers a connected CLI integration
-    // (Claude, then Codex) so the user's local subscription is used before any metered API. Otherwise — and
-    // whenever no CLI is connected — the user's explicitly-chosen `provider` stays primary (unchanged).
-    // req.providerOverride wins over all of that: it means "this specific request must go to provider X"
-    // (e.g. cascading a recap/follow-up/Spotlight-Ref request into Dust) regardless of what's globally active.
-    const cliPrimary =
-      s.providerPriority === 'cli'
-        ? (['claude-cli', 'codex-cli'] as ProviderId[]).find(
-            (p) => s.cliConnected[p] && (!allowed || allowed.includes(p))
-          )
-        : undefined
-    // Métis Local outranks cliPrimary (but never providerOverride): an in-scope suggest/summary/vision ask
-    // routes to the on-device model first whenever it's eligible right now (PLAN.md §4.3 "Routing
-    // precedence, explicit") — see local-routing.ts's pickPrimaryProvider for the exact precedence rule.
+    // OPERATOR.md: a connected working CLI wins every user question (last-clicked primary).
+    // req.providerOverride still wins (Dust retrieval / Spotlight Ref). Local is not a bypass of a working CLI.
+    const cliPrimary = pickWorkingCliPrimary({
+      cliConnected: s.cliConnected,
+      lastClickedCli: s.lastClickedCli,
+      allowed
+    })
+    // pickPrimaryProvider: privacy pin → override → CLI → local → active provider.
     // localPrimaryEligibleFor (not the bare localEligibleFor) layers Wave 2's routingMode on top: 'api'
     // forces this false so local can never win the first-attempt pick, 'local' relaxes the per-mode
     // useFor toggle, 'auto' is byte-identical to the old localEligibleFor call.
