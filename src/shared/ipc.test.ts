@@ -211,6 +211,12 @@ describe('AskStart screen fast-path fields (M13)', () => {
 })
 
 describe('SettingsSchema', () => {
+  it('defaults lastClickedCli to null — not a secret, not a vault row', () => {
+    expect(DEFAULT_SETTINGS.lastClickedCli).toBeNull()
+    const { lastClickedCli: _last, ...withoutLast } = DEFAULT_SETTINGS
+    expect(SettingsSchema.parse(withoutLast).lastClickedCli).toBeNull()
+  })
+
   it('defaults the time-saved usage counters and assumption, and a profile without them parses', () => {
     const s = SettingsSchema.parse(DEFAULT_SETTINGS)
     expect(s.usageStats).toEqual({ meetingsSummarized: 0, conversationMinutes: 0, firstMeetingAt: 0 })

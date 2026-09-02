@@ -61,6 +61,31 @@ async function signedRequest(
   })
 }
 
+describe('Operator /v1/ask HMAC', () => {
+  it('rejects a bad signature and never calls an upstream model', async () => {
+    const store = memoryStore()
+    const req = await signedRequest(
+      '/v1/ask',
+      JSON.stringify({ provider: 'anthropic', model: 'claude-haiku-4-5-20251001', messages: [{ role: 'user', content: 'hi' }] }),
+      { sig: 'ab'.repeat(32) }
+    )
+    const res = await handleRequest(
+      req,
+      env({ ANTHROPIC_API_KEY: 'sk-ant-worker-secret' }),
+      {},
+      {
+        store,
+        now: NOW,
+        fetchImpl: async () => {
+          throw new Error('must not call upstream')
+        }
+      }
+    )
+    expect(res.status).toBe(401)
+    expect(await res.text()).not.toContain('sk-ant-worker-secret')
+  })
+})
+
 describe('HMAC ingest', () => {
   it('accepts a valid signature and stores ciphertext, not plaintext', async () => {
     const store = memoryStore()
@@ -444,6 +469,19 @@ describe('CRM send board', () => {
     )
     expect(retry.status).toBe(401)
     expect((await store.getCrm('crm-1'))?.retry_requested).toBe(0)
+  })
+
+  it('heartbeat advertises fundedProviders IDs only and never the raw key', async () => {
+    const store = memoryStore()
+    const beat = await signedRequest('/v1/heartbeat', JSON.stringify({ os: 'darwin', appVersion: '1.8.2' }))
+    const res = await handleRequest(beat, env({ ANTHROPIC_API_KEY: 'sk-ant-worker-secret' }), {}, { store, now: NOW })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok?: boolean; fundedProviders?: string[] }
+    expect(body.ok).toBe(true)
+    expect(body.fundedProviders).toEqual(['anthropic'])
+    const raw = JSON.stringify(body)
+    expect(raw).not.toContain('sk-ant-worker-secret')
+    expect(raw).not.toContain('ANTHROPIC_API_KEY')
   })
 
   it('Access Retry puts the id on the next heartbeat pull', async () => {

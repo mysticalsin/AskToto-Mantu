@@ -144,6 +144,14 @@ import {
   resolveRoutingMode,
   localRuntimeBinaryPresent
 } from './llm/local-routing'
+import {
+  isCliProviderId,
+  isDustChatForbidden,
+  nextAskRoute,
+  nextLastClickedCli,
+  pickWorkingCliPrimary,
+  workingCliOrder
+} from '@shared/ask-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText } from './mac-helper'
@@ -288,7 +296,14 @@ import { buildSystem, buildSystemParts } from './personas'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
 import { isOpenAICloudCacheEligible, promptCacheKey as makePromptCacheKey } from '@shared/operator'
 import { loadVerifiedSkill, setModeSkillsOverlayRoot, skillLockHashForMode } from './mode-skills'
-import { recordOperatorAsk, recordOperatorCrmSend, recordOperatorRating, startOperatorRuntime } from './operator-ingest'
+import {
+  operatorAskTransport,
+  operatorFundedProviders,
+  recordOperatorAsk,
+  recordOperatorCrmSend,
+  recordOperatorRating,
+  startOperatorRuntime
+} from './operator-ingest'
 import { buildCrmIngestEvent, meetingFileHash, shouldIngestCrm } from './operator-crm'
 import { startOperatorOverlayPoll } from './operator-overlay'
 import { initLogging, mainLog, auditLog } from './logger'
@@ -1390,7 +1405,11 @@ function retireCli(provider: ProviderId, message: string): void {
   if (PROVIDERS[provider].kind !== 'cli' || !isAuthFailure(message)) return
   const s = getSettings()
   if (!s.cliConnected[provider]) return
-  setSettings({ cliConnected: { ...s.cliConnected, [provider]: false } })
+  const nextConnected = { ...s.cliConnected, [provider]: false }
+  setSettings({
+    cliConnected: nextConnected,
+    lastClickedCli: nextLastClickedCli(s.lastClickedCli, provider, nextConnected)
+  })
   mainLog.warn(`[cli] ${provider} rejected our credentials — marking it disconnected`)
 }
 
@@ -1430,7 +1449,11 @@ async function verifyCliSessions(now = Date.now()): Promise<void> {
         if (verdict !== 'signed-out' && verdict !== 'missing') continue
         const s = getSettings()
         if (!s.cliConnected[provider]) continue // disconnected by the user while the probe ran
-        setSettings({ cliConnected: { ...s.cliConnected, [provider]: false } })
+        const nextConnected = { ...s.cliConnected, [provider]: false }
+        setSettings({
+          cliConnected: nextConnected,
+          lastClickedCli: nextLastClickedCli(s.lastClickedCli, provider, nextConnected)
+        })
         mainLog.warn(`[cli] ${provider} is no longer signed in — marking it disconnected`)
       }
     } catch (error) {
@@ -1460,20 +1483,26 @@ function publicSettings(): PublicSettings {
   // every ask).
   const allowed = getAllowedProviders()
   const providerReady =
-    (!allowed || allowed.includes(s.provider)) &&
-    (activeDef.kind === 'cli'
-      ? !!s.cliConnected[s.provider]
-      : hasApiKey(s.provider) &&
-        (s.provider === 'dust'
-          ? !!s.dustWorkspaceId.trim() && !!s.providerModels.dust
-          : s.provider === 'custom'
-            ? /^https:\/\//i.test(s.customBaseUrl) && !!s.providerModels.custom
-            : // Cloudflare ships a default model but NO endpoint (the operator's own Worker), so the
-              // https URL is the whole extra setup step. Unlike Custom it needs no model check —
-              // resolveModelTier always yields the registry default.
-              s.provider === 'cloudflare'
-              ? /^https:\/\//i.test(s.cloudflareBaseUrl)
-              : true))
+    ((!allowed || allowed.includes(s.provider)) &&
+      (activeDef.kind === 'cli'
+        ? !!s.cliConnected[s.provider]
+        : hasApiKey(s.provider) &&
+          (s.provider === 'dust'
+            ? !!s.dustWorkspaceId.trim() && !!s.providerModels.dust
+            : s.provider === 'custom'
+              ? /^https:\/\//i.test(s.customBaseUrl) && !!s.providerModels.custom
+              : // Cloudflare ships a default model but NO endpoint (the operator's own Worker), so the
+                // https URL is the whole extra setup step. Unlike Custom it needs no model check —
+                // resolveModelTier always yields the registry default.
+                s.provider === 'cloudflare'
+                ? /^https:\/\//i.test(s.cloudflareBaseUrl)
+                : true))) ||
+    nextAskRoute({
+      cliConnected: s.cliConnected,
+      lastClickedCli: s.lastClickedCli,
+      allowed,
+      fundedProviders: operatorFundedProviders()
+    }).tier !== 'fail'
   // Métis Local readiness (PLAN.md §4.3) — task-independent base, then one per in-scope task. Derived by
   // local-routing.ts's localBaseReady() so this snapshot and the live routing decision (attempt()/
   // pickFailover below) can never drift apart.
@@ -1520,7 +1549,9 @@ function publicSettings(): PublicSettings {
         (p) =>
           (p === 'dust' ? dustSelectedAgentVision(s.providerModels['dust']) : PROVIDERS[p].vision) &&
           (!allowed || allowed.includes(p)) &&
-          (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : hasApiKey(p)) &&
+          (PROVIDERS[p].kind === 'cli'
+            ? !!s.cliConnected[p]
+            : hasApiKey(p) || operatorFundedProviders().includes(p)) &&
           // A key alone is not reachability. Cloudflare (and custom) answer at an endpoint the operator
           // supplies, so a stored METIS_PROXY_KEY with no Worker URL yet is a provider that can never be
           // reached — and advertising vision on it makes the app CAPTURE THE USER'S SCREEN, and prewarm
@@ -3823,7 +3854,9 @@ function registerIpc(): void {
     const r = await connectCliSession(p)
     if (r.ok) {
       const s = getSettings()
-      setSettings({ cliConnected: { ...s.cliConnected, [p]: true } })
+      const next: Partial<typeof s> = { cliConnected: { ...s.cliConnected, [p]: true } }
+      if (isCliProviderId(p)) next.lastClickedCli = p
+      setSettings(next)
     }
     return r
   })
@@ -4978,7 +5011,9 @@ function registerIpc(): void {
         (p) => p !== blocked && p !== 'local' && providerVisionOk(p) && (!allowed || allowed.includes(p))
       )
       const ready = candidates.find((p) =>
-        PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0
+        PROVIDERS[p].kind === 'cli'
+          ? !!s.cliConnected[p]
+          : getApiKey(p).length > 0 || operatorFundedProviders().includes(p)
       )
       const target = ready ?? candidates[0]
       if (target)
@@ -5031,6 +5066,8 @@ function registerIpc(): void {
           })
       const eligible = (p: ProviderId): boolean => {
         if (tried.includes(p)) return false
+        // Dust is retrieval only. Never a general-chat failover unless this ask was pinned to Dust.
+        if (isDustChatForbidden(p, req.providerOverride === 'dust')) return false
         // Métis Local: routingMode-aware primary eligibility (localPrimaryEligibleFor) so Routing mode
         // → Local can fail over / serve without per-mode useFor toggles. 'api' mode keeps local out of
         // the healthy mid-walk (fallback/floor still catch last-resort below). Out-of-scope modes
@@ -5041,7 +5078,9 @@ function registerIpc(): void {
         }
         return (
           (!allowed || allowed.includes(p)) &&
-          (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0) &&
+          (PROVIDERS[p].kind === 'cli'
+            ? !!s.cliConnected[p]
+            : getApiKey(p).length > 0 || operatorFundedProviders().includes(p)) &&
           // A provider whose endpoint the USER supplies (Custom, Cloudflare's operator Worker) is only a
           // candidate once it actually has one. Cloudflare ships a default model, so without this check a
           // key alone would make it eligible and the walk would hand the request to streamOpenAI with no
@@ -5061,6 +5100,21 @@ function registerIpc(): void {
       // is about to 429 (usage-headroom.ts). Fail-open — unknown headroom never demotes — and folded into
       // the `healthy` filter ONLY, so a budget-blocked provider is still reachable as the last resort below.
       const budgetBlocked = (p: ProviderId): boolean => s.resilience.budgetPreempt && isBudgetExhausted(p)
+      // OPERATOR.md order 2: the other connected CLI is next after last-clicked quota / rate limit.
+      const cliNext = workingCliOrder({
+        cliConnected: s.cliConnected,
+        lastClickedCli: s.lastClickedCli,
+        allowed
+      }).find((p) => eligible(p) && !isCoolingDown(p) && !budgetBlocked(p))
+      if (cliNext) return cliNext
+      const fundedNext = operatorFundedProviders().find(
+        (p) =>
+          p in PROVIDERS &&
+          eligible(p as ProviderId) &&
+          !isCoolingDown(p as ProviderId) &&
+          !budgetBlocked(p as ProviderId)
+      )
+      if (fundedNext) return fundedNext as ProviderId
       // MQA-003: prefer a provider whose credentials have NOT just been rejected and that has budget left.
       const healthy = order.find((p) => eligible(p) && !isCoolingDown(p) && !budgetBlocked(p))
       if (healthy) return healthy
@@ -5168,7 +5222,14 @@ function registerIpc(): void {
       }
       // Métis Local is keyless: its per-session sidecar key lives only in local-runtime.ts memory, never
       // on disk (getApiKey('local') always resolves empty, by design — see store.ts's ENV_VAR entry).
+      // Operator-funded providers are also keyless on the seat — the Worker holds the raw LLM key.
       const key = provider === 'local' ? localRuntime.sessionKey() : getApiKey(provider)
+      const viaOperator =
+        provider !== 'local' &&
+        def.kind !== 'cli' &&
+        !key &&
+        operatorFundedProviders().includes(provider)
+      const operatorTransport = viaOperator ? operatorAskTransport(s) : null
       const tier = routeTier(req, s.thinkingMode)
       // Métis Local's "model" is the local-models.ts manifest id the sidecar loads — settings.localLlm.
       // modelId, NOT the generic per-provider tier resolution (which would otherwise fall back to
@@ -5216,7 +5277,9 @@ function registerIpc(): void {
               : 'Métis Local handles live suggestions, summaries and screenshots — this request type uses your cloud provider.'
           : def.kind === 'cli' && !s.cliConnected[provider]
             ? `${def.label} is not connected. Open Settings → CLI Integration to set it up.`
-            : def.kind !== 'cli' && !key
+            : viaOperator && !operatorTransport
+              ? 'Operator is not reachable. Check Operator URL in Settings.'
+              : def.kind !== 'cli' && !key && !viaOperator
               ? `No API key for ${def.label}. Open Settings (gear) and add it.`
               : def.kind !== 'cli' && !model
                 ? provider === 'dust'
@@ -5374,7 +5437,9 @@ function registerIpc(): void {
       const handle = createStream({
         providerId: provider,
         kind: def.kind,
-        apiKey: key,
+        apiKey: viaOperator ? '' : key,
+        viaOperator,
+        operatorTransport: operatorTransport ?? undefined,
         baseURL,
         workspaceId: s.dustWorkspaceId,
         // Dust OAuth tokens (imported from the local CLI) expire after ~1h. On a pre-token 401 the
@@ -5660,17 +5725,23 @@ function registerIpc(): void {
       else streams.set(req.id, handle)
     }
 
-    // Honor the CLI-vs-API priority for the FIRST provider tried: 'cli' prefers a connected CLI integration
-    // (Claude, then Codex) so the user's local subscription is used before any metered API. Otherwise — and
-    // whenever no CLI is connected — the user's explicitly-chosen `provider` stays primary (unchanged).
-    // req.providerOverride wins over all of that: it means "this specific request must go to provider X"
-    // (e.g. cascading a recap/follow-up/Spotlight-Ref request into Dust) regardless of what's globally active.
-    const cliPrimary =
-      s.providerPriority === 'cli'
-        ? (['claude-cli', 'codex-cli'] as ProviderId[]).find(
-            (p) => s.cliConnected[p] && (!allowed || allowed.includes(p))
-          )
-        : undefined
+    // OPERATOR.md: a connected working CLI wins every user question (last-clicked primary).
+    // req.providerOverride still wins (Dust retrieval / Spotlight Ref).
+    const cliPrimary = pickWorkingCliPrimary({
+      cliConnected: s.cliConnected,
+      lastClickedCli: s.lastClickedCli,
+      allowed
+    })
+    const operatorRoute = nextAskRoute({
+      cliConnected: s.cliConnected,
+      lastClickedCli: s.lastClickedCli,
+      allowed,
+      fundedProviders: operatorFundedProviders()
+    })
+    const routedActive =
+      !cliPrimary && operatorRoute.tier === 'operator' && operatorRoute.provider in PROVIDERS
+        ? (operatorRoute.provider as ProviderId)
+        : s.provider
     // Métis Local outranks cliPrimary (but never providerOverride): an in-scope suggest/summary/vision ask
     // routes to the on-device model first whenever it's eligible right now (PLAN.md §4.3 "Routing
     // precedence, explicit") — see local-routing.ts's pickPrimaryProvider for the exact precedence rule.
@@ -5683,7 +5754,7 @@ function registerIpc(): void {
       req.providerOverride,
       localPrimaryEligible,
       cliPrimary,
-      s.provider,
+      routedActive,
       localVisionRequired
     )
     // MQA-003: when the primary's credentials were just rejected — OR its live budget is nearly spent

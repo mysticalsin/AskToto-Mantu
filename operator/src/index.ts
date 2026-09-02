@@ -7,6 +7,8 @@ import { verifyIngestHmac } from './hmac'
 import { d1Store, type D1DatabaseLike } from './d1'
 import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './store'
 import { renderConsole } from './ui'
+import { fundedProvidersFromEnv } from './funded'
+import { handleOperatorAsk } from './ask'
 
 export interface Env {
   DB?: D1DatabaseLike
@@ -16,6 +18,18 @@ export interface Env {
   OPERATOR_SKILL_PUBLIC_KEY?: string
   TEAM_DOMAIN?: string
   POLICY_AUD?: string
+  ANTHROPIC_API_KEY?: string
+  OPENAI_API_KEY?: string
+  NVIDIA_API_KEY?: string
+  DEEPSEEK_API_KEY?: string
+  DASHSCOPE_API_KEY?: string
+  MINIMAX_API_KEY?: string
+  KIMI_API_KEY?: string
+  OPENROUTER_API_KEY?: string
+  GROQ_API_KEY?: string
+  MISTRAL_API_KEY?: string
+  XAI_API_KEY?: string
+  GEMINI_API_KEY?: string
 }
 
 export interface HandleOpts {
@@ -23,6 +37,7 @@ export interface HandleOpts {
   now?: number
   access?: AccessCtx['access']
   geo?: CfGeo
+  fetchImpl?: typeof fetch
 }
 
 const RATE_WINDOW_MS = 60_000
@@ -72,7 +87,12 @@ export async function handleRequest(
     return adminRoute(request, url, env, store, ident.email, now)
   }
 
-  if (url.pathname === '/v1/ingest' || url.pathname === '/v1/heartbeat' || url.pathname === '/v1/skills/manifest') {
+  if (
+    url.pathname === '/v1/ingest' ||
+    url.pathname === '/v1/heartbeat' ||
+    url.pathname === '/v1/skills/manifest' ||
+    url.pathname === '/v1/ask'
+  ) {
     const bodyText = request.method === 'GET' ? '' : await request.text()
     const hmac = await verifyIngestHmac(request, bodyText, env.OPERATOR_INGEST_SECRET, now, (n) => store.takeNonce(n, now))
     if (!hmac.ok) return json({ ok: false, error: hmac.error }, hmac.status)
@@ -80,8 +100,9 @@ export async function handleRequest(
       return json({ ok: false, error: 'rate limited' }, 429)
     }
     const geo = opts.geo ?? geoFromRequest(request)
-    if (url.pathname === '/v1/heartbeat') return heartbeat(store, hmac.deviceId, bodyText, now, geo)
+    if (url.pathname === '/v1/heartbeat') return heartbeat(store, hmac.deviceId, bodyText, now, geo, env)
     if (url.pathname === '/v1/skills/manifest') return manifest(store)
+    if (url.pathname === '/v1/ask') return handleOperatorAsk(bodyText, env as unknown as Record<string, unknown>, opts.fetchImpl ?? fetch)
     return ingest(store, env, hmac.deviceId, bodyText, now, geo)
   }
 
@@ -249,7 +270,8 @@ async function heartbeat(
   deviceId: string,
   bodyText: string,
   now: number,
-  geo: CfGeo
+  geo: CfGeo,
+  env: Env
 ): Promise<Response> {
   const body = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {}
   await store.upsertSeat(seatFromBody(deviceId, body, now, geo))
@@ -263,7 +285,11 @@ async function heartbeat(
   })
   await ingestCrmList(store, deviceId, body, now)
   const retries = await store.listCrmRetries(deviceId)
-  return json({ ok: true, retry: retries.map((r) => r.id) })
+  return json({
+    ok: true,
+    retry: retries.map((r) => r.id),
+    fundedProviders: fundedProvidersFromEnv(env as unknown as Record<string, unknown>)
+  })
 }
 
 async function ingest(
