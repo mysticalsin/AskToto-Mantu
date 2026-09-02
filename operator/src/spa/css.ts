@@ -55,25 +55,6 @@ a { color: var(--accent); text-decoration: none; }
 }
 .rail-brand h1 { margin: 0; font-size: 13px; font-weight: 650; letter-spacing: -0.03em; }
 .rail-brand .chev { color: var(--ink3); font-size: 11px; }
-.create-btn {
-  display: flex; align-items: center; justify-content: space-between;
-  width: 100%; border: 0; background: #18181B; color: #fff;
-  border-radius: 8px; padding: 7px 8px; font: 600 12px var(--sans); cursor: pointer;
-}
-.create-menu {
-  display: none; margin: 0; padding: 8px 10px; border: 1px solid var(--hair);
-  border-radius: 8px; background: var(--panel); color: var(--ink2); font-size: 12px;
-}
-.create-menu.open { display: block; }
-.rail-search {
-  width: 100%; border: 1px solid var(--hair); background: var(--panel); color: var(--ink);
-  border-radius: 8px; padding: 7px 10px; font: 12px var(--sans);
-}
-.rail-search::placeholder { color: var(--ink3); }
-.kbd {
-  float: right; font: 10px var(--mono); color: var(--ink3);
-  border: 1px solid var(--hair); border-radius: 4px; padding: 1px 5px; margin-top: -22px; margin-right: 8px;
-}
 .rail nav { display: flex; flex-direction: column; gap: 14px; flex: 1; }
 .nav-sec { display: flex; flex-direction: column; gap: 1px; }
 .nav-sec p {

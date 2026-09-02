@@ -39,3 +39,5 @@ export const SPA_JS_NAME = `operator-${SPA_JS_HASH}.js`
 export const SPA_CSS_NAME = `operator-${SPA_CSS_HASH}.css`
 export const SPA_JS_PATH = `/assets/${SPA_JS_NAME}`
 export const SPA_CSS_PATH = `/assets/${SPA_CSS_NAME}`
+/** Ultron / QA curl this name. Same Shoey bundle as the hashed file. Not a stub. */
+export const SPA_INDEX_JS_PATH = '/assets/index.js'
