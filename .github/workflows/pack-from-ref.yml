@@ -440,14 +440,16 @@ jobs:
           fi
 
           # Draft is OK — this off-main pack does not flip the release public. Tony/Ultron publish
-          # the draft after reviewing the signed assets.
-          if [ "$repo" = "$GITHUB_REPOSITORY" ]; then
-            gh release create "$tag" --repo "$repo" --draft --target "${{ inputs.git_ref }}" \
+          # the draft after reviewing the signed assets. Same-repo tags must point at the packed
+          # SHA (this job already checked out git_ref), never at the publish repo's default branch.
+          packed_sha=$(git rev-parse HEAD)
+          if [ "${repo,,}" = "${GITHUB_REPOSITORY,,}" ]; then
+            gh release create "$tag" --repo "$repo" --draft --target "$packed_sha" \
               --title "Métis $tag" \
-              --notes "Signed Métis desktop installers for macOS Apple Silicon and Windows x64 (packed from ${{ inputs.git_ref }})."
+              --notes "Signed Métis desktop installers for macOS Apple Silicon and Windows x64 (packed from ${{ inputs.git_ref }} @ ${packed_sha})."
           else
             gh release create "$tag" --repo "$repo" --draft --title "Métis $tag" \
-              --notes "Signed Métis desktop installers for macOS Apple Silicon and Windows x64 (packed from ${{ inputs.git_ref }})."
+              --notes "Signed Métis desktop installers for macOS Apple Silicon and Windows x64 (packed from ${{ inputs.git_ref }} @ ${packed_sha})."
           fi
 
           assert_draft
