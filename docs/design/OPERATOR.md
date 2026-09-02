@@ -5,7 +5,7 @@ owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, cli
 does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, installer packing, Fly license-server, Goldberg Aria, cloudflare-proxy AI token proxy, Bklit Studio
 ready-to-merge: no
 implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing, access-login, shoey-map
-this-slice: hashed-spa
+this-slice: metis-rail
 audience: Tony Walteur only. Two emails. Nobody else.
 tokens:
   accent: "#2563EB"
@@ -35,13 +35,17 @@ Tony's ops console. How people use Métis, who is live, what Asks cost, whether 
 
 This is not a Settings card. It is not a local analytics page. The product is a Cloudflare Worker named `metis-operator` under `operator/`. The Métis client keeps prompt caching on, and talks to this Worker only when Settings has an Operator URL.
 
-Live URL: `https://metis-operator.tony-walteur.workers.dev/`. Console paths (`/`, `/keys`, `/licenses`, `/devices`, `/map`, `/cloudflare`, and the hash-equivalent paths) are first-class. After Access identity, hash routes (`#events`, `#profiles`, `#realtime`) remain the in-page product pages. Data is real Operator D1 / HMAC ingest only.
+Live URL: `https://metis-operator.tony-walteur.workers.dev/`. This is **Métis Operator** (AI fleet: seats, Asks, heartbeats, tokens, API calls, Listen, devices, countries). It is not a Shoey e-commerce / SEO demo. After Access identity, the in-page product pages are `#overview`, `#realtime`, `#events`, `#sessions`, `#notifications`, `#keys`, `#settings`. Data is real Operator D1 / HMAC ingest only.
 
 ## Product law (Tony 8:03–8:05 PM ET, VOID 10:32 PM ET)
 
 **Goal.** Tony holds LLM API keys in Operator. End-user Métis just works. Keep the product in Métis (seats, Asks, licenses, skills, Listen, recap, keys, devices).
 
-**Tony 10:32 PM ET VOID, then 9/2 AM ET re-lock.** Rail labels stay **full** Shoey Analytics + Manage (the slim-nav cut is void). Do **not** pixel-clone Pages / SEO / Groups / Cohorts / Dashboards / Insights / Reports **destinations** — honest empty with a Métis hook. Clone **#map after Access login** as Shoey Realtime (proof: `shoey-realtime.png`, `shoey-map.png`). Overview stays the Shoey 8-tile KPI grid (`shoey-overview.png`) plus the required Métis ops tiles from **live heartbeats / Asks / CRM only**. Do not invent a different layout.
+**Tony 11:28 PM ET America/Toronto, signed in.** Access login is **PASS**. Full OpenPanel leftover nav is **void**. Do **not** keep SEO, Pages, Insights, Profiles, Groups, Cohorts, Dashboards, References, or any other leftover section in the rail or as a `data-page`. Fail loud if those labels remain.
+
+**Rail (KEEP only, Métis labels, Shoey-like taskbar chrome):** Overview, Realtime, Events, Sessions, Notifications, Keys, Settings. Drop the rest.
+
+Copy **page chrome** from Shoey (`/realtime`, `/events/events`, `/sessions`, `/notifications/notifications`, overview fold). Fill with **live Métis** heartbeats / Asks / CRM. **0 LLM tokens**. No fake dots. `#map` after JWT is Realtime.
 
 **P0 hashed SPA** (2026-09-02). The 97-byte `METIS_OPERATOR` stub is **void**. Authenticated HTML must `<script src="/assets/operator-<hash>.js">` and `<link>` the hashed CSS. Unauth `GET /assets/operator-<hash>.js` (and CSS) is **200** with `content-length` ≫ 97 and real Shoey chrome (Overview / Realtime / Events strings). Unknown `/assets/index.js` / `/assets/client.js` are **404**, not another stub. Unauth `GET /` and `GET /keys` stay **302** Cloudflare Access. `GET /health` 200 JSON. Do **not** edit overlay `DESIGN.md`. This file is the Operator design contract.
 
@@ -57,14 +61,14 @@ Content is Métis, not sneakers. Real data only. No fake keys, no stub map, no s
 
 Pixel-clone the **Shoey demo chrome**. Do not invent a different Operator layout. Do not vendor OpenPanel, Bklit, or Studio source. Do not paint shoe SKUs or sample visitors.
 
-**Sidebar (white, ~185px, hairline `#EDEDED` right border) — same labels, same grouping, same chrome:**
+**Sidebar (white, ~185px, hairline `#EDEDED` right border) — Shoey taskbar chrome, Métis labels only:**
 
 - Workspace selector: Métis (not Shoey) + chevron.
 - `+ Create report` (primary, dropdown). Honest empty until a real Métis report exists. Never a fake report.
 - `Ask AI anything…` search with `⌘ J`. Filters the rail. Does not invent answers.
-- **Analytics:** Overview, Dashboards, Insights, Pages, SEO, Realtime, Events, Sessions, Profiles, Groups, Cohorts.
-- **Manage:** Settings, References, Notifications. Optional “Back to workspace” = Access sign-out.
-- Footer chrome: Give feedback, Docs, star, profile. Support / Pay links may stay as Métis Support Us copy or be omitted if they would be fake storefront.
+- **KEEP:** Overview, Realtime, Events, Sessions, Notifications, Keys, Settings.
+- **MUST GO (fail loud):** SEO, Pages, Insights, Profiles, Groups, Cohorts, Dashboards, References, and any other leftover OpenPanel / e-commerce section.
+- Optional “Back to workspace” = Access sign-out.
 
 **Overview (match `shoey-overview.png`, then Tony 9/2 AM tiles):**
 
@@ -105,11 +109,15 @@ Pixel-clone the **Shoey demo chrome**. Do not invent a different Operator layout
 - Bottom three tables: Geo, Referrals, Paths. Columns **Events** / **Sessions** with inline blue bars. Never Views/Sess on this page. Never `/products/sneakers`.
 - Dense **11–12px** type. Blue accent `#2563EB`. `#map` after JWT **is** this Realtime board, not a login card and not a choropleth-tab cut.
 
-**Empty destinations.** Dashboards, Insights, Pages, SEO, Sessions, Groups, Cohorts, Settings (beyond Keys), References, Notifications, Create report: **honest empty states with a real Métis hook**. Never fake rows.
+**Sessions** clones Shoey `/sessions` chrome and lists real seats (hostname, SSO email, OS, version, last seen). Missing fields are `—`, never invented people.
+
+**Notifications** clones Shoey `/notifications` chrome and lists real failed CRM sends and pending skill diffs only. Empty = honest empty. Never fake alerts.
+
+**Empty leftovers.** Do not ship Dashboards / Insights / Pages / SEO / Profiles / Groups / Cohorts / References pages. Settings beyond Keys stays a short Keys fund-seats note. Create report stays honest empty. Never fake rows.
 
 Light SaaS default (white cards, `#EDEDED` borders, ~8px radius). Inter-like sans. Color is blue charts + green live. Overlay chrome stays frozen.
 
-Copy is original Métis. Never identify as AI. No emoji as icon. User-facing sentences stay free of em dashes except the Profiles missing-field placeholder (`—`).
+Copy is original Métis. Never identify as AI. No emoji as icon. User-facing sentences stay free of em dashes except the Sessions missing-field placeholder (`—`).
 
 Windows has no notch. The in-app Settings row is a power field plus Open Operator in the system browser.
 
@@ -544,7 +552,7 @@ Tony 6:17 PM ET (login, overlay, map, events) plus Tony 8:03–8:05 PM ET (routi
 | Keys last4 | `#keys` and `/v1/admin/keys` never echo a secret, cipher, iv, CF token, or grant. UI last4 only. Seats are not told they keep Tony's cloud keys. |
 | CLI not in vault | `claude-cli` / `codex-cli` stay kind `cli`. Settings CLI Integration unchanged. No CLI token in `vault_keys`. |
 | Cloudflare fail-loud | Overview Worker/D1/analytics for `metis-operator` errors visibly when the token is missing. No CF token on seats. |
-| Shoey chrome + Métis nouns | Rail mirrors Shoey Analytics + Manage + Create report. Overview is 8 KPI cards + area chart + two tables. Realtime is 30-min seats + world + green pills. Empty destinations are honest. No shoe SKUs. No sample visitors. |
+| Shoey chrome + Métis nouns | Rail is Overview / Realtime / Events / Sessions / Notifications / Keys / Settings only. Overview is 8 KPI cards + area chart + two tables. Realtime is 30-min seats + world + green pills. No SEO / Pages / Insights leftovers. No shoe SKUs. No sample visitors. |
 
 If a map or sidebar fix would require touching overlay chrome, **stop and report**. Do not mix slices.
 
@@ -562,6 +570,6 @@ Frozen overlay chrome (do not edit from this product):
 
 ## Ready to merge
 
-**READY TO MERGE: no.** Shoey Overview / Realtime / Events on live heartbeats. Access login already live. Overlay leftover stays Wed 10am. No pack. No merge. Ultron tests before stamp. Do not pack EXE/DMG. Do not bump app version (`1.8.3` stays). Goldberg Aria stays frozen.
+**READY TO MERGE: no.** Métis-only rail after Tony signed in. Hashed SPA still P0. Overlay leftover stays Wed 10am. No pack. No merge. Ultron tests before stamp. Do not pack EXE/DMG. Do not bump app version (`1.8.3` stays). Goldberg Aria stays frozen.
 
 `POST /v1/use` (Operator-brokered provider calls) and migrating leftover seat-stored Tony cloud keys stay a later slice. Heartbeat lists funded providers only. Seats never persist a raw Operator key or CF token.
