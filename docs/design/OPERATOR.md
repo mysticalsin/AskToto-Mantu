@@ -5,7 +5,7 @@ owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, cli
 does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, installer packing, Fly license-server, Goldberg Aria, cloudflare-proxy AI token proxy, Bklit Studio
 ready-to-merge: no
 implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing, access-login, shoey-map
-this-slice: metis-rail
+this-slice: overview-bklit-10
 audience: Tony Walteur only. Two emails. Nobody else.
 tokens:
   accent: "#2563EB"
@@ -45,7 +45,9 @@ Live URL: `https://metis-operator.tony-walteur.workers.dev/`. This is **Métis O
 
 **Rail (KEEP only, Métis labels, Shoey-like taskbar chrome):** Overview, Realtime, Events, Sessions, Notifications, Keys, Settings. Drop the rest.
 
-Copy **page chrome** from Shoey (`/realtime`, `/events/events`, `/sessions`, `/notifications/notifications`, overview fold). Fill with **live Métis** heartbeats / Asks / CRM. **0 LLM tokens**. No fake dots. `#map` after JWT is Realtime.
+**Tony 11:32 PM ET addendum — Overview only.** Copy **Bklit UI mini KPI cards** (`@bklit/stat-card-area-01`, `stat-card-line-01`, `stat-card-choropleth-01`, plus ring / gauge / live-line if a metric needs them). **Not** a full chart gallery dump. **Not** on Realtime / Events / Sessions / Notifications.
+
+Copy **page chrome** from Shoey for Realtime / Events / Sessions / Notifications. Fill every page with **live Métis** heartbeats / Asks / CRM. **0 LLM tokens**. No fake dots. `#map` after JWT is Realtime.
 
 **P0 hashed SPA** (2026-09-02). The 97-byte `METIS_OPERATOR` stub is **void**. Authenticated HTML must `<script src="/assets/operator-<hash>.js">` and `<link>` the hashed CSS. Unauth `GET /assets/operator-<hash>.js` (and CSS) is **200** with `content-length` ≫ 97 and real Shoey chrome (Overview / Realtime / Events strings). Unknown `/assets/index.js` / `/assets/client.js` are **404**, not another stub. Unauth `GET /` and `GET /keys` stay **302** Cloudflare Access. `GET /health` 200 JSON. Do **not** edit overlay `DESIGN.md`. This file is the Operator design contract.
 
@@ -59,7 +61,7 @@ Content is Métis, not sneakers. Real data only. No fake keys, no stub map, no s
 
 ## Pixel language (Shoey chrome, Métis nouns)
 
-Pixel-clone the **Shoey demo chrome**. Do not invent a different Operator layout. Do not vendor OpenPanel, Bklit, or Studio source. Do not paint shoe SKUs or sample visitors.
+Pixel-clone **Shoey page chrome** on Realtime / Events / Sessions / Notifications. On **Overview only**, copy **Bklit mini KPI card chrome** (compact title, trend badge, NumberFlow-sized value, axis-free sparkline). Do not vendor OpenPanel / Bklit / Studio React or visx. Do not paint shoe SKUs or sample visitors.
 
 **Sidebar (white, ~185px, hairline `#EDEDED` right border) — Shoey taskbar chrome, Métis labels only:**
 
@@ -70,36 +72,28 @@ Pixel-clone the **Shoey demo chrome**. Do not invent a different Operator layout
 - **MUST GO (fail loud):** SEO, Pages, Insights, Profiles, Groups, Cohorts, Dashboards, References, and any other leftover OpenPanel / e-commerce section.
 - Optional “Back to workspace” = Access sign-out.
 
-**Overview (match `shoey-overview.png`, then Tony 9/2 AM tiles):**
+**Overview (Tony 11:32 PM ET — Bklit mini-10 only):**
 
-- Header toolbar: Last 7 days (calendar), Day (clock), Filters (funnel), center search `Try: "last 7 days, mobile only"` (Métis: seats / macOS / Windows / Listen), live green-dot count, Private + lock.
-- **Eight KPI cards** in a 2×4 grid (Shoey fold). Each: uppercase title, large number, % change (green up / red down) or honest **not reported**, mini **blue** (`#2563EB`) bar chart. **0 LLM tokens** to render. No model call. No generated copy.
-- Required Métis numbers (heartbeat / Ask / CRM ingest only). Missing ingest = **not reported**, never `0` as a fake:
+- Header toolbar stays Shoey-like: Last 7 days, Day, Filters, search, live count, Private.
+- **Exactly 10 mini cards.** Compact Bklit stat-card chrome. **0 LLM tokens.** No model call. No generated copy. No full chart gallery (no large Unique-seats area, no Scale/Change dump, no extra chart studio).
+- Required Métis numbers (heartbeat / Ask / CRM ingest only). Missing ingest = **not reported**, never `0` as a fake.
 
-| Tile | Real source | Fake forbidden |
-| --- | --- | --- |
-| Unique sessions | Unique seats in the 7-day window (WAU) | Sample 55K visitors |
-| Sessions / day | Unique seats last 24h (DAU) | Invented sessions |
-| Live now | Seats with heartbeat inside `ONLINE_MS` (2 min) | Sample live 159 |
-| Live · 30 min | Unique seats `last_seen` ≤ 30 min | Sample 30-min bar |
-| Time saved | Seat `timeSaved` is **not ingested**. Tile = **not reported** until a real HMAC field exists | Fake minutes |
-| Duration | Median Ask `total_ms` when any Ask reported it | Fake 18s |
-| Meetings | CRM rows with a meeting hash, or CRM success | Invented meetings |
-| Tokens | Sum of reported Ask input / output / cache tokens | Fake 0 tokens |
-| API calls | Ask count in the window | Shoe pageviews |
-| Listen minutes | **Not ingested.** Tile = **not reported** | Fake Listen clock |
-| Recap count | Asks with `mode=recap` plus events named recap | Fake recap SKUs |
-| Cost by provider | Existing cost table (list-price estimate or not reported) | Fake `$0` |
-| CLI vs Operator-key | Ask `provider` `claude-cli` / `codex-cli` vs vault LLM ids | Guessed split |
-| CRM fail rate | Failed + expired over attempted | Fake 28.6% |
-| Mac vs Windows | Seat `os` mix | Invented OS |
-| Version mix | Seat `app_version` mix | Invented versions |
-| Country map | `request.cf` seats only, same world as Realtime | Sample dots |
+| # | Card | Bklit chrome | Real source |
+| --- | --- | --- | --- |
+| 1 | Unique sessions | `stat-card-area-01` | WAU seats |
+| 2 | Sessions / day | `stat-card-line-01` | DAU seats |
+| 3 | Live now | gauge or live-line | Heartbeat inside `ONLINE_MS` |
+| 4 | Time saved | ring | **not reported** until HMAC field exists |
+| 5 | Tokens | area | Sum of reported Ask tokens |
+| 6 | API calls | line | Ask count |
+| 7 | Listen minutes | area | **not reported** until listen minutes ingest |
+| 8 | Recaps | line | `mode=recap` + recap events |
+| 9 | CLI vs Operator-key asks | ring | `claude-cli` / `codex-cli` vs vault LLM ids |
+| 10 | Countries | `stat-card-choropleth-01` | `request.cf` seats only. No sample dots |
 
-- Large **Unique seats** area chart (thin blue line, soft blue fill). Y from real series. X is real dates. Empty window = empty chart, not a sample plateau.
-- Two tabbed tables with search + relative-volume bars:
-  - Left Shoey Refs / Urls / Types / Source / Medium / Campaign / Term / Content → Métis **connectors / CRM / Listen / recap**.
-  - Right Shoey Pages / Entries / Exits → Métis **modes / skills / use cases / paths**. Never `/products/sneakers`.
+- Extra **chips** under the 10 (not more KPI cards): Mac vs Windows, cost by provider, CRM fail rate, version mix, session duration, meetings. Live · 30 min stays on Realtime.
+- Fake forbidden: sample visitors, invented sessions, fake Listen clock, fake `$0`, sample dots, shoe pageviews.
+- Do not add SEO / Pages / Insights.
 
 **Realtime + map (match `shoey-realtime.png` and `shoey-map.png`):**
 
@@ -405,7 +399,7 @@ The left rail **mirrors Shoey**. Same labels, same grouping, same chrome. Search
 
 | Route | Label | Group | What Tony sees |
 | --- | --- | --- | --- |
-| `#overview` (default) | Overview | Analytics | Shoey Overview: 8 KPI cards, Unique seats area chart, two tabbed tables. Métis nouns only |
+| `#overview` (default) | Overview | Analytics | Bklit mini-10 KPI cards from live heartbeats. Extra chips. No chart gallery. Métis nouns only |
 | `#dashboards` | Dashboards | Analytics | Honest empty. Hook: saved Métis views (seats / Asks / Listen) when a real report exists |
 | `#insights` | Insights | Analytics | Honest empty. Hook: Ask cost / cache / security issues when reported |
 | `#pages` | Pages | Analytics | Honest empty or real mode / skill / use-case paths. Never shoe SKUs |
@@ -552,7 +546,7 @@ Tony 6:17 PM ET (login, overlay, map, events) plus Tony 8:03–8:05 PM ET (routi
 | Keys last4 | `#keys` and `/v1/admin/keys` never echo a secret, cipher, iv, CF token, or grant. UI last4 only. Seats are not told they keep Tony's cloud keys. |
 | CLI not in vault | `claude-cli` / `codex-cli` stay kind `cli`. Settings CLI Integration unchanged. No CLI token in `vault_keys`. |
 | Cloudflare fail-loud | Overview Worker/D1/analytics for `metis-operator` errors visibly when the token is missing. No CF token on seats. |
-| Shoey chrome + Métis nouns | Rail is Overview / Realtime / Events / Sessions / Notifications / Keys / Settings only. Overview is 8 KPI cards + area chart + two tables. Realtime is 30-min seats + world + green pills. No SEO / Pages / Insights leftovers. No shoe SKUs. No sample visitors. |
+| Shoey chrome + Métis nouns | Rail is Overview / Realtime / Events / Sessions / Notifications / Keys / Settings only. Overview is exactly 10 Bklit mini cards + chips. Realtime / Events / Sessions / Notifications stay Shoey page chrome. No SEO / Pages / Insights leftovers. No shoe SKUs. No sample visitors. |
 
 If a map or sidebar fix would require touching overlay chrome, **stop and report**. Do not mix slices.
 
