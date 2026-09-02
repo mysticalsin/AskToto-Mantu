@@ -51,4 +51,13 @@ describe('bundled Parakeet runtime', () => {
     const source = readFileSync(join(__dirname, 'parakeet.ts'), 'utf8')
     expect(source).not.toMatch(/node:https|node:http|createWriteStream|execFile|MODEL_URL/)
   })
+
+  it('MQA-285 — ensureParakeetModel constructs the recognizer so first Listen is not a cold sherpa load', () => {
+    const source = readFileSync(join(__dirname, 'parakeet.ts'), 'utf8')
+    const fn = source.slice(
+      source.indexOf('export async function ensureParakeetModel'),
+      source.indexOf('function getRecognizer')
+    )
+    expect(fn).toMatch(/getRecognizer\(\)/)
+  })
 })

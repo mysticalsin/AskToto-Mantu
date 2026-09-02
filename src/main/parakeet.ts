@@ -84,10 +84,17 @@ export function parakeetAddonError(): string | null {
   return addonLoadError
 }
 
-/** Require the bundled Parakeet payload. Runtime never downloads missing model files. */
+/** Require the bundled Parakeet payload. Runtime never downloads missing model files.
+ *  Also constructs the recognizer (MQA-285) so first Listen is not a multi-second sherpa load. */
 export async function ensureParakeetModel(_onProgress?: (pct: number) => void): Promise<void> {
-  if (parakeetModelReady()) return
-  throw new Error('Bundled Parakeet model assets are missing. Reinstall Métis from a complete installer.')
+  if (!parakeetModelReady()) {
+    throw new Error('Bundled Parakeet model assets are missing. Reinstall Métis from a complete installer.')
+  }
+  if (!getRecognizer()) {
+    throw new Error(
+      addonLoadError ? `parakeet native addon unavailable: ${addonLoadError}` : 'parakeet recognizer unavailable'
+    )
+  }
 }
 
 /** Construct (once) the offline recognizer for the Parakeet transducer model. */

@@ -1990,12 +1990,16 @@ export function App(): JSX.Element {
     // indefinitely instead of ever letting it land.
     if (stoppingRef.current) return
     stoppingRef.current = true
+    // MQA-285: recap/write must not block the Stop click. Warm the on-device sidecar in the background
+    // with the transcript we have now so drain + recap do not pay a cold model load. listen.stop() is
+    // itself a sync kickoff (drain is async); never await it here.
+    void window.toto.localPrewarm(listen.text().trim().slice(-6000) || 'warm')
     listen.stop()
     setView('review')
     setCollapsed(false)
     pendingRecapRef.current = true
     maybeFireRecap() // covers the rare case where listen.listening is already false (no drain pending)
-  }, [listen.stop, maybeFireRecap])
+  }, [listen.stop, listen.text, maybeFireRecap])
 
   const toggleListen = useCallback(() => {
     if (listen.listening) void endReview()

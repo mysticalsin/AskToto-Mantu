@@ -68,18 +68,19 @@ describe('MQA-270 (B9) — full GPU offload requires FREE ram, not just total', 
   })
 })
 
-describe('MQA-270 (B7) — the whisper prewarm is engine-gated and releases itself', () => {
-  it('skips the ~100 MB warm when the configured engine is not whisper', () => {
-    expect(LISTEN).toMatch(/if \(asrEngine && asrEngine !== 'whisper'\) return/)
+describe('MQA-270 (B7) — the whisper prewarm is engine-gated (MQA-285 keeps a hot engine)', () => {
+  it('skips the ~100 MB whisper warm when the configured engine is apple', () => {
+    expect(LISTEN).toMatch(/if \(asrEngine === 'apple'\) return/)
   })
 
-  it('arms the idle release after warming, so a never-Listen session frees the worker', () => {
-    // The release timer existed but was only armed by start()'s failure branch and stop()'s teardown —
-    // the prewarm called neither, so launch-and-never-Listen held the memory for the whole session.
-    const at = LISTEN.indexOf("if (asrEngine && asrEngine !== 'whisper') return")
+  it('does not idle-unload a prewarmed engine (MQA-285)', () => {
+    // B7 originally armed WORKER_IDLE_RELEASE_MS after prewarm. That made first Listen (and recap)
+    // a cold start if the user waited ~3 min — the opposite of click-to-transcript. Unmount still
+    // tears the worker down; prewarm/stop must not.
+    const at = LISTEN.indexOf("if (asrEngine === 'apple') return")
     const block = LISTEN.slice(at, at + 1600)
-    expect(block).toMatch(/WORKER_IDLE_RELEASE_MS/)
-    expect(block).toMatch(/workerRef\.current\?\.terminate\(\)/)
+    expect(block).not.toMatch(/WORKER_IDLE_RELEASE_MS/)
+    expect(block).not.toMatch(/workerRef\.current\?\.terminate\(\)/)
   })
 })
 
