@@ -2,10 +2,14 @@ import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, star
 import { Bar } from './components/Bar'
 import { ControlPill } from './components/ControlPill'
 import { Panel } from './components/Panel'
-import { OnboardingV2 } from './components/OnboardingExperience'
 // Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup. Answer and
 // Copilot pull in Markdown.tsx -> streamdown + shiki/core, which have no reason to parse/execute before
 // the user has asked anything — deferring them keeps that weight out of the eager boot chunk.
+// OnboardingV2 pulls OnboardingExperience + the provider-setup tree. Returning users never render it;
+// a static import still parsed that tree on every launch. First-run pays one local chunk, same as Settings.
+const OnboardingV2 = lazy(() =>
+  import('./components/OnboardingExperience').then((m) => ({ default: m.OnboardingV2 }))
+)
 const Settings = lazy(() => import('./components/Settings').then((m) => ({ default: m.Settings })))
 const Review = lazy(() => import('./components/Review').then((m) => ({ default: m.Review })))
 const RecallView = lazy(() => import('./components/RecallView').then((m) => ({ default: m.RecallView })))
@@ -2954,16 +2958,18 @@ export function App(): JSX.Element {
     return (
       <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
         <Panel>
-          <OnboardingV2
-            settings={settings}
-            saveKey={saveKey}
-            recoverEncryptedProfile={recoverEncryptedProfile}
-            patch={patch}
-            onOpenAiSettings={() => openSettings('ai')}
-            onDone={() => void refresh()}
-            signedIn={auth.status?.signedIn}
-            signedInEmail={auth.status?.email}
-          />
+          <Suspense fallback={<div className="cl-root rounded-2xl p-6 text-center text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>}>
+            <OnboardingV2
+              settings={settings}
+              saveKey={saveKey}
+              recoverEncryptedProfile={recoverEncryptedProfile}
+              patch={patch}
+              onOpenAiSettings={() => openSettings('ai')}
+              onDone={() => void refresh()}
+              signedIn={auth.status?.signedIn}
+              signedInEmail={auth.status?.email}
+            />
+          </Suspense>
         </Panel>
       </div>
     )

@@ -22,5 +22,7 @@ files:
   - '!node_modules/@img/sharp-libvips-darwin-*{,/**/*}'
   - '!out/**/*.map'
   - '!**/*.d.ts'
+  # Same complete-allowlist rule as mac.files — restating MQA-270's dead Vite wasm exclusion.
+  - '!out/renderer/assets/ort-wasm-*.wasm'
 win:
   executableName: Metis

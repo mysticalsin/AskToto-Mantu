@@ -9,6 +9,8 @@ const LISTEN = readFileSync(join(__dirname, '..', '..', 'renderer', 'src', 'lib'
 const TOAST = readFileSync(join(__dirname, '..', '..', 'renderer', 'src', 'components', 'UpdateReadyToast.tsx'), 'utf8')
 const CODEBLOCK = readFileSync(join(__dirname, '..', '..', 'renderer', 'src', 'components', 'CodeBlock.tsx'), 'utf8')
 const BUILDER = readFileSync(join(__dirname, '..', '..', '..', 'electron-builder.yml'), 'utf8')
+const BUILDER_WIN = readFileSync(join(__dirname, '..', '..', '..', 'electron-builder.win.yml'), 'utf8')
+const ORT_WASM_EXCLUDE = /!out\/renderer\/assets\/ort-wasm-\*\.wasm/
 
 const BASE = { gguf: 'm.gguf', vision: false, mmproj: 'p.gguf', ctxSize: 8192, parallel: 2, gpuLayers: 0 }
 
@@ -100,8 +102,17 @@ describe('MQA-270 (B2/B3) — markdown stays out of the boot chunk', () => {
 
 describe('MQA-270 (B6) — the dead ORT wasm copy stays out of the asar', () => {
   it('excludes the Vite-emitted duplicate, never the live resources/ort copy', () => {
-    expect(BUILDER).toMatch(/!out\/renderer\/assets\/ort-wasm-\*\.wasm/)
+    expect(BUILDER).toMatch(ORT_WASM_EXCLUDE)
     // resources/ort is the copy asr-model://ort/ actually serves — check-packaged-runtime pins it.
     expect(BUILDER).not.toMatch(/!resources\/ort/)
+  })
+
+  it('repeats the exclusion on every complete allowlist (mac.files and win files override the root)', () => {
+    // electron-builder treats a target-specific `files` list as the complete app allowlist.
+    // The root exclusion is a no-op on those targets unless restated.
+    const macFiles = BUILDER.slice(BUILDER.indexOf('mac:'))
+    expect(macFiles).toMatch(ORT_WASM_EXCLUDE)
+    expect(BUILDER_WIN).toMatch(ORT_WASM_EXCLUDE)
+    expect(BUILDER_WIN).not.toMatch(/!resources\/ort/)
   })
 })

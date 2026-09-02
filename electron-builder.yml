@@ -143,6 +143,9 @@ mac:
     # sherpa-onnx-node select the right one by process.arch at load time.
     - '!out/**/*.map'
     - '!**/*.d.ts'
+    # Target `files` replaces the root allowlist, so MQA-270's Vite-emitted ORT wasm exclusion must
+    # be restated here or the 20.6 MB duplicate rides in every mac asar.
+    - '!out/renderer/assets/ort-wasm-*.wasm'
   # ASCII everywhere on disk (see the productName + win notes): the .app bundle is Metis.app, its helper
   # bundles are "Metis Helper*.app" (required — see productName), and the .dmg/.zip assets + latest-mac.yml
   # URLs stay accent-free. The app still DISPLAYS as Métis via extendInfo.CFBundleDisplayName.
