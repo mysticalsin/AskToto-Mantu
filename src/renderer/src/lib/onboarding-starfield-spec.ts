@@ -59,14 +59,14 @@ export const STARFIELD_SCENES = [
   'personalize',
   'license',
   'appearance',
-  'ready',
-  'skip'
+  'ready'
 ] as const
 
 export type StarfieldScene = (typeof STARFIELD_SCENES)[number]
 
-export function shouldMountStarfield(scene: string): boolean {
-  return (STARFIELD_SCENES as readonly string[]).includes(scene)
+/** Dead. Lady+universe then KineticGrid. Never mount the WebGL space bed. */
+export function shouldMountStarfield(_scene: string): boolean {
+  return false
 }
 
 /** Time-driven dive. t is seconds. Reduced motion: no surge. */

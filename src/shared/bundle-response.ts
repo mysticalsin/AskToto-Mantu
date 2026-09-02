@@ -145,6 +145,7 @@ export function bundleFailureUserMessage(err: unknown): string {
   }
   if (/not javascript|not a script|HTTP not JS/i.test(trimmed)) return BUNDLE_NOT_JS
   if (/ENOSPC|no space|disk space|EACCES|EPERM|EROFS/i.test(trimmed)) return BUNDLE_DISK
+  if (/incomplete download|got \d+ of \d+ bytes/i.test(trimmed)) return BUNDLE_NETWORK
   if (/HTTP \d+|network|fetch|ENOTFOUND|ECONN|ETIMEDOUT|timeout|abort|offline|socket|dns/i.test(trimmed)) {
     return BUNDLE_NETWORK
   }
@@ -152,7 +153,7 @@ export function bundleFailureUserMessage(err: unknown): string {
 }
 
 export function isRetryableBundleMessage(detail: string | null | undefined): boolean {
-  return /could not|try again|check your connection|login page|not javascript|not a script|disk space|access/i.test(
+  return /could not|try again|check your connection|login page|not javascript|not a script|disk space|access|incomplete download/i.test(
     detail ?? ''
   )
 }
