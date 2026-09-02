@@ -129,13 +129,6 @@ function reported(value: string | number | null | undefined, format?: (n: number
   return value
 }
 
-function formatDuration(ms: number | null): string {
-  if (ms == null) return '0'
-  if (ms < 1000) return `${Math.round(ms)}ms`
-  if (ms < 60_000) return `${Math.round(ms / 1000)}s`
-  return `${Math.round(ms / 60_000)}m`
-}
-
 function formatPct(n: number | null): string {
   if (n == null) return '0%'
   return `${n}%`
@@ -311,8 +304,73 @@ function eventStats(events: ConsoleEvent[]): string {
 function sessionPath(events: ConsoleEvent[], which: 'entry' | 'exit'): string {
   if (!events.length) return 'heartbeat'
   const row = which === 'entry' ? events[events.length - 1] : events[0]
+  const path = row.chips.find((c) => c.key === 'path')?.value
+  if (path && path !== '/' && !looksLikeSecret(path)) return path
   const name = looksLikeSecret(row.name) ? 'event' : row.name
   return name || 'heartbeat'
+}
+
+function sessionDuration(ms: number): string {
+  if (ms < 1000) return '0s'
+  if (ms < 60_000) {
+    const s = ms / 1000
+    return s < 10 && s % 1 >= 0.05 ? `${Math.round(s * 10) / 10}s` : `${Math.round(s)}s`
+  }
+  return `${Math.round(ms / 60_000)}m`
+}
+
+function heartbeatFreshness(lastSeen: number, now: number): number {
+  const age = now - lastSeen
+  if (age <= ONLINE_MS) return 100
+  if (age <= 30 * 60 * 1000) return Math.max(36, Math.round(100 - (age / (30 * 60 * 1000)) * 64))
+  const hours = age / (60 * 60 * 1000)
+  return Math.max(8, Math.round(28 - Math.min(20, hours)))
+}
+
+const AVATAR_PASTELS = ['#BBF7D0', '#BFDBFE', '#FBCFE8', '#FDE68A', '#DDD6FE', '#FED7AA']
+
+function seatAvatar(seed: string): string {
+  let h = 0
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0
+  const bg = AVATAR_PASTELS[h % AVATAR_PASTELS.length]
+  const initial = (seed.replace(/[^A-Za-z0-9]/g, '')[0] || 'M').toUpperCase()
+  return `<span class="sess-avatar" style="background:${bg}" aria-hidden="true">${esc(initial)}</span>`
+}
+
+function iconSearch(): string {
+  return '<svg class="tool-ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.4 10.4L14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>'
+}
+
+function iconFilter(): string {
+  return '<svg class="tool-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3.5h12L9.5 9v4l-3 1.2V9L2 3.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>'
+}
+
+function iconView(): string {
+  return '<svg class="tool-ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="9" y="2" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="2" y="9" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="9" y="9" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>'
+}
+
+function seatOverlayChrome(): string {
+  return `<div class="seat-overlay" id="seat-overlay" hidden>
+      <div class="seat-overlay-head">
+        <div>
+          <p class="eyebrow">Seat <span data-seat-no></span></p>
+          <h4 data-seat-title>Seat</h4>
+        </div>
+        <button type="button" id="seat-overlay-close">Close</button>
+      </div>
+      <div class="seat-overlay-grid" data-seat-body></div>
+    </div>`
+}
+
+function eventsForSeat(events: ConsoleEvent[], r: ProfileRow): ConsoleEvent[] {
+  return events
+    .filter(
+      (e) =>
+        (e.device && e.device === r.device) ||
+        (r.hostname && e.hostname === r.hostname) ||
+        (r.email && e.email === r.email)
+    )
+    .sort((a, b) => b.ts - a.ts)
 }
 
 function renderSeatTable(rows: ProfileRow[], events: ConsoleEvent[], now: number): string {
@@ -321,57 +379,44 @@ function renderSeatTable(rows: ProfileRow[], events: ConsoleEvent[], now: number
     </div>`
   if (!rows.length) {
     return `<div class="seat-card" data-seat-table>${head}<div class="empty" style="padding:28px 16px">No seats on the fleet yet. Heartbeats will fill this. Empty is an empty card, not sample servers.</div>
-    <div class="seat-overlay" id="seat-overlay" hidden>
-      <div class="row" style="justify-content:space-between">
-        <h4 data-seat-title>Seat</h4>
-        <button type="button" id="seat-overlay-close">Close</button>
-      </div>
-      <div data-seat-body></div>
-    </div>
+    ${seatOverlayChrome()}
   </div>`
   }
   const body = rows
-    .map((r) => {
+    .map((r, i) => {
       const status = seatStatus(r.lastSeen, now)
-      const name = r.hostname || r.email || `seat ${r.device}`
-      const identity = r.email || r.hostname || MISSING
-      const loc = [r.city, r.country].filter((v) => v && !looksLikeSecret(v)).join(' · ')
-      const mine = events
-        .filter((e) => (r.hostname && e.hostname === r.hostname) || (r.email && e.email === r.email))
-        .sort((a, b) => b.ts - a.ts)
+      const computer = r.hostname && !looksLikeSecret(r.hostname) ? r.hostname : MISSING
+      const identity = r.email && !looksLikeSecret(r.email) ? r.email : computer
+      const loc = [r.city, r.country].filter((v) => v && !looksLikeSecret(v)).join(' · ') || MISSING
+      const license = r.license && !looksLikeSecret(r.license) ? r.license : MISSING
+      const mine = eventsForSeat(events, r)
       const recent = mine
         .slice(0, 6)
         .map((e) => `${ago(e.ts, now)} · ${looksLikeSecret(e.name) ? 'event' : e.name}`)
         .join(' | ')
-      const detail = [
-        `OS ${r.os || MISSING} · ${r.appVersion || MISSING}`,
-        `License ${r.license && !looksLikeSecret(r.license) ? r.license : MISSING} · IP ${MISSING}`,
-        `${loc || MISSING} · Last seen ${when(r.lastSeen)}`,
-        `Status ${status.label}`,
-        recent ? `Recent: ${recent}` : 'No recent heartbeats for this seat.'
-      ].join(' · ')
       const started = r.firstSeen || r.lastSeen
-      const dur = formatDuration(Math.max(0, r.lastSeen - started) || null)
-      const q = `${name} ${r.device} ${identity} ${r.os} heartbeat`.toLowerCase()
-      return `<div class="seat-row sess-row" data-seat-row data-q="${esc(q)}" data-country="${esc(r.country || '')}" data-os="${esc(r.os)}" data-seat-name="${esc(name)}" data-seat-detail="${esc(detail)}">
-        <div class="muted">${esc(when(started))}</div>
-        <div class="event-name">${esc(r.device)}</div>
-        <div>${osBadge(r.os)} ${identity === MISSING ? MISSING : esc(identity)}</div>
-        <div class="muted">${esc(sessionPath(mine, 'entry'))}</div>
-        <div class="muted">${esc(sessionPath(mine, 'exit'))}</div>
+      const entry = sessionPath(mine, 'entry')
+      const exit = sessionPath(mine, 'exit')
+      const dur = sessionDuration(Math.max(0, r.lastSeen - started))
+      const meter = heartbeatFreshness(r.lastSeen, now)
+      const bars = (mine.length ? mine.slice(0, 8).map((e) => e.ts) : [r.lastSeen])
+        .map((t) => String(heartbeatFreshness(t, now)))
+        .join(',')
+      const q = `${computer} ${r.device} ${identity} ${r.os} ${entry} ${exit} ${loc} ${status.label} ${license}`.toLowerCase()
+      const no = String(i + 1).padStart(2, '0')
+      return `<div class="seat-row sess-row" data-seat-row data-q="${esc(q)}" data-country="${esc(r.country || '')}" data-os="${esc(r.os)}" data-seat-name="${esc(computer)}" data-seat-computer="${esc(computer)}" data-seat-identity="${esc(identity)}" data-seat-location="${esc(loc)}" data-seat-ip="${MISSING}" data-seat-license="${esc(license)}" data-seat-status="${esc(status.label)}" data-seat-status-id="${status.id}" data-seat-meter="${meter}" data-seat-bars="${esc(bars)}" data-seat-last="${esc(when(r.lastSeen))}" data-seat-version="${esc(r.appVersion || MISSING)}" data-seat-session="${esc(r.device)}" data-seat-recent="${esc(recent)}" data-seat-no="${no}">
+        <div class="muted">${esc(ago(started, now))}</div>
+        <div class="sess-id" title="${esc(r.device)}">${esc(r.device)}${r.device.length >= 8 ? '…' : ''}</div>
+        <div class="sess-profile">${seatAvatar(computer === MISSING ? r.device : computer)} ${osBadge(r.os)} <span class="sess-host">${computer === MISSING ? MISSING : esc(computer)}</span></div>
+        <div class="muted">${esc(entry)}</div>
+        <div class="muted">${esc(exit)}</div>
         <div>${esc(dur)}</div>
       </div>`
     })
     .join('')
   return `<div class="seat-card" data-seat-table>
     ${head}${body}
-    <div class="seat-overlay" id="seat-overlay" hidden>
-      <div class="row" style="justify-content:space-between">
-        <h4 data-seat-title>Seat</h4>
-        <button type="button" id="seat-overlay-close">Close</button>
-      </div>
-      <div data-seat-body></div>
-    </div>
+    ${seatOverlayChrome()}
   </div>`
 }
 
@@ -647,9 +692,12 @@ export function renderConsole(data: DashboardPayload): string {
         <p class="page-sub">Access all your sessions here</p>
       </div>
       <div class="page-toolbar">
-        <input class="table-search toolbar-search" id="sessions-search" type="search" placeholder="Search" autocomplete="off">
-        <button class="tool" type="button">Filters</button>
-        <button class="tool page-view" type="button">View</button>
+        <label class="search-wrap">
+          ${iconSearch()}
+          <input class="table-search toolbar-search" id="sessions-search" type="search" placeholder="Search ..." autocomplete="off">
+        </label>
+        <button class="tool" type="button" id="sessions-filters">${iconFilter()} Filters</button>
+        <button class="tool page-view" type="button">${iconView()} View</button>
       </div>
       ${renderSeatTable(data.profiles, data.events, data.now)}
       <div class="empty" id="sessions-empty" hidden>No sessions match that search.</div>
