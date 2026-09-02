@@ -4,6 +4,7 @@ import {
   dustIsGeneralChat,
   isDustChatForbidden,
   nextAskRoute,
+  operatorFundsProvider,
   pickWorkingCliPrimary,
   workingCliOrder
 } from './ask-routing'
@@ -63,6 +64,13 @@ describe('OPERATOR.md Ask routing law', () => {
     ).toEqual({ provider: 'anthropic', tier: 'operator' })
   })
 
+  it('never treats CLI or Dust as Operator-funded', () => {
+    expect(operatorFundsProvider('anthropic', ['anthropic'])).toBe(true)
+    expect(operatorFundsProvider('claude-cli', ['claude-cli', 'anthropic'])).toBe(false)
+    expect(operatorFundsProvider('dust', ['dust'])).toBe(false)
+    expect(operatorFundsProvider('openai', [])).toBe(false)
+  })
+
   it('fails honestly when no CLI and no funded Operator provider remain', () => {
     expect(
       nextAskRoute({
@@ -71,6 +79,15 @@ describe('OPERATOR.md Ask routing law', () => {
         fundedProviders: []
       })
     ).toEqual({ provider: '', tier: 'fail' })
+  })
+
+  it('treats heartbeat-funded providers as Operator routes after CLI exhaust', () => {
+    expect(
+      nextAskRoute({
+        cliConnected: {},
+        fundedProviders: ['anthropic']
+      })
+    ).toEqual({ provider: 'anthropic', tier: 'operator' })
   })
 
   it('honors the org allowlist and ignores a disconnected last-clicked CLI', () => {

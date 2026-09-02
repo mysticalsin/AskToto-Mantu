@@ -12,6 +12,7 @@ import {
 import { authStatus } from './auth'
 import type { Settings } from '@shared/ipc'
 import { getMachineId } from './license'
+import { operatorFundsProvider } from '@shared/ask-routing'
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
 import { mainLog } from './logger'
 import type { OperatorCrmEvent } from './operator-crm'
@@ -95,14 +96,15 @@ async function signedPost(
   url: string,
   secret: string,
   path: string,
-  bodyObj: Record<string, unknown>
-): Promise<{ ok: boolean; json: unknown }> {
+  bodyObj: Record<string, unknown>,
+  signal?: AbortSignal
+): Promise<{ ok: boolean; json: unknown; status: number }> {
   const body = JSON.stringify(bodyObj)
   const headers = {
     'content-type': 'application/json',
     ...operatorHmacHeaders(secret, deviceId(), body)
   }
-  const res = await fetchImpl(`${url}${path}`, { method: 'POST', headers, body })
+  const res = await fetchImpl(`${url}${path}`, { method: 'POST', headers, body, signal })
   if (!res.ok) {
     mainLog.warn(`[operator] ${path} ${res.status}`)
   }
@@ -112,7 +114,7 @@ async function signedPost(
   } catch {
     parsed = null
   }
-  return { ok: res.ok, json: parsed }
+  return { ok: res.ok, json: parsed, status: res.status }
 }
 
 function retryIdsFromHeartbeat(json: unknown): string[] {
@@ -145,6 +147,81 @@ function fundedProvidersFromHeartbeat(json: unknown): string[] {
 
 export function operatorFundedProviders(): string[] {
   return lastFundedProviders
+}
+
+export function operatorBrokerConfigured(settings: OperatorRuntimeSettings, env = process.env): boolean {
+  return operatorUrlConfigured(settings, env) && !!resolveSecret(settings, env)
+}
+
+export function operatorCanBroker(provider: string, settings: OperatorRuntimeSettings): boolean {
+  return operatorBrokerConfigured(settings) && operatorFundsProvider(provider, lastFundedProviders)
+}
+
+export type OperatorUseResult =
+  | { ok: true; text: string; inputTokens?: number; outputTokens?: number }
+  | { ok: false; error: string }
+
+export async function operatorUseAsk(
+  settings: OperatorRuntimeSettings,
+  body: {
+    provider: string
+    model: string
+    system?: string
+    messages: { role: 'user' | 'assistant'; content: string }[]
+    temperature?: number
+    maxTokens?: number
+  },
+  signal?: AbortSignal
+): Promise<OperatorUseResult> {
+  const url = resolveUrl(settings)
+  const secret = resolveSecret(settings)
+  if (!operatorUrlConfigured(settings) || !secret) {
+    return { ok: false, error: 'Operator cannot issue a use' }
+  }
+  if (!operatorFundsProvider(body.provider, lastFundedProviders)) {
+    return { ok: false, error: 'Operator cannot issue a use' }
+  }
+  try {
+    const res = await signedPost(
+      url,
+      secret,
+      '/v1/use',
+      {
+        provider: body.provider,
+        model: body.model,
+        system: body.system || '',
+        messages: body.messages,
+        ...(typeof body.temperature === 'number' ? { temperature: body.temperature } : {}),
+        ...(typeof body.maxTokens === 'number' ? { maxTokens: body.maxTokens } : {})
+      },
+      signal
+    )
+    const json = res.json
+    if (!res.ok || !json || typeof json !== 'object') {
+      const err = json && typeof json === 'object' && typeof (json as { error?: unknown }).error === 'string'
+        ? (json as { error: string }).error
+        : 'Operator cannot issue a use'
+      return { ok: false, error: err }
+    }
+    const text = typeof (json as { text?: unknown }).text === 'string' ? (json as { text: string }).text : ''
+    if (!text) return { ok: false, error: 'Operator returned an empty answer' }
+    return {
+      ok: true,
+      text,
+      inputTokens:
+        typeof (json as { inputTokens?: unknown }).inputTokens === 'number'
+          ? (json as { inputTokens: number }).inputTokens
+          : undefined,
+      outputTokens:
+        typeof (json as { outputTokens?: unknown }).outputTokens === 'number'
+          ? (json as { outputTokens: number }).outputTokens
+          : undefined
+    }
+  } catch (e) {
+    if (signal?.aborted) return { ok: false, error: 'Cancelled.' }
+    mainLog.warn('[operator] use failed:', e)
+    return { ok: false, error: 'Operator cannot issue a use' }
+  }
 }
 
 export function setOperatorFundedProvidersForTests(ids: string[]): void {

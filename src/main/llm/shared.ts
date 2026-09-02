@@ -69,6 +69,12 @@ export interface StreamOptions {
    * (openai.ts's rejection ladder) rather than failing the request.
    */
   responseFormat?: { type: 'json_object' }
+  /**
+   * Ask path only: no local API key, provider is Operator-funded. createStream then HMAC-POSTs /v1/use.
+   * Never set on brain ingest / import polish. Never a vault secret.
+   */
+  operatorBroker?: boolean
+  operator?: { operatorUrl?: string; operatorIngestSecret?: string }
 }
 
 export const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
