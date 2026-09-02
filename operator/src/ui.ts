@@ -629,7 +629,7 @@ export function renderConsole(data: DashboardPayload): string {
 
     <section class="page wrap" data-page="overview">
       ${renderOverviewMini10(data)}
-      <article class="card" style="padding-bottom:10px" data-cf-overview>
+      <article class="card ov-cf-secondary" style="padding-bottom:10px" data-cf-overview>
         <p class="eyebrow">Cloudflare</p>
         ${renderCloudflare(data.cloudflare)}
       </article>

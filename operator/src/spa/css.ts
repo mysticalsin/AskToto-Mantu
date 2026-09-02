@@ -130,6 +130,38 @@ a { color: var(--accent); text-decoration: none; }
 .stat-choro-wrap { margin: 6px -12px 0; height: 78px; overflow: hidden; }
 .stat-choro { display: block; width: 100%; height: 78px; }
 .ov-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.ov-live {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  padding: 8px 12px; border: 1px solid var(--hair); border-radius: 10px;
+  background: linear-gradient(180deg, rgba(37,99,235,0.06), transparent);
+}
+.ov-live-idle { background: var(--panel); }
+.ov-live-dot {
+  width: 8px; height: 8px; border-radius: 99px; background: var(--live);
+  box-shadow: 0 0 0 0 rgba(34,197,94,0.55);
+  animation: ovPulse 1.8s ease-out infinite;
+}
+.ov-live-idle .ov-live-dot { background: var(--ink3); animation: none; box-shadow: none; }
+.ov-live-label { font: 600 12px var(--sans); color: var(--ink); letter-spacing: -0.02em; }
+.ov-live-range { font: 600 12px var(--mono); color: var(--ink); }
+.ov-live-meta { font: 12px var(--sans); color: var(--ink2); }
+.ov-chips { opacity: 0.92; }
+.stat-card-landed {
+  border-color: rgba(37,99,235,0.35);
+  animation: ovLand 700ms ease-out;
+}
+.ov-cf-secondary { margin-top: 8px; opacity: 0.92; }
+@keyframes ovPulse {
+  0% { box-shadow: 0 0 0 0 rgba(34,197,94,0.45); }
+  70% { box-shadow: 0 0 0 8px rgba(34,197,94,0); }
+  100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+}
+@keyframes ovLand {
+  from { transform: translateY(4px); opacity: 0.55; }
+  to { transform: none; opacity: 1; }
+}
+
 .ov-chip {
   display: inline-flex; align-items: center; gap: 6px;
   border: 1px solid var(--hair); border-radius: 999px; padding: 4px 10px;
