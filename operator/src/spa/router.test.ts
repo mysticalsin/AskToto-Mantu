@@ -119,4 +119,12 @@ describe('hashed SPA router (#104)', () => {
     expect(title.textContent).toBe('Realtime')
     expect(pages.find((p) => p.getAttribute('data-page') === 'overview')?.hidden).toBe(true)
   })
+
+  it('hashed SPA embeds world land so paintShoeyMap can inject path[data-iso]', () => {
+    expect(SPA_JS).toContain('ensureShoeyLand')
+    expect(SPA_JS).toContain('paintShoeyMap')
+    expect(SPA_JS).toMatch(/data-iso=\\?"CA\\?"/)
+    expect(SPA_JS).toMatch(/world-ocean/)
+    expect((SPA_JS.match(/data-iso=/g) || []).length).toBeGreaterThan(50)
+  })
 })

@@ -1,6 +1,6 @@
 import { OPERATOR_D1_ID, OPERATOR_D1_NAME, OPERATOR_WORKER } from './vault'
 
-export const CF_TOKEN_MISSING = 'Cloudflare token missing. Connect it on Keys.'
+export const CF_TOKEN_MISSING = 'Connect Cloudflare (login) on Keys.'
 export const CF_TOKEN_REJECTED = 'Cloudflare API rejected the token. Rotate it on Keys.'
 
 export type CloudflareOverview = {

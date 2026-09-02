@@ -56,9 +56,9 @@ function renderCloudflare(cf: CloudflareOverview): string {
       <div class="sub muted" style="padding-bottom:8px">Worker ${esc(cf.worker)}. Connect Cloudflare (login) on Keys. No token on seats.</div>`
   }
   const workers = cf.workers.length ? cf.workers.map((w) => esc(w)).join(', ') : 'none listed'
-  const req = cf.requests == null ? 'not reported' : String(cf.requests)
-  const err = cf.errors == null ? 'not reported' : String(cf.errors)
-  const cpu = cf.cpuMs == null ? 'not reported' : `${cf.cpuMs} ms`
+  const req = cf.requests == null ? '0' : String(cf.requests)
+  const err = cf.errors == null ? '0' : String(cf.errors)
+  const cpu = cf.cpuMs == null ? '0' : `${cf.cpuMs} ms`
   return `<div class="kpis">
       ${kpiCard({ title: 'Requests', value: req, sub: `${cf.worker} · ${cf.range}`, spark: '' })}
       ${kpiCard({ title: 'Errors', value: err, sub: cf.worker, spark: '' })}
@@ -96,13 +96,13 @@ function renderNav(): string {
 }
 
 function seriesDelta(values: number[]): { text: string; cls: string } {
-  if (values.length < 4) return { text: 'not reported', cls: 'flat' }
+  if (values.length < 4) return { text: '0%', cls: 'flat' }
   const mid = Math.floor(values.length / 2)
   const a = values.slice(0, mid).reduce((n, v) => n + v, 0) / mid
   const b = values.slice(mid).reduce((n, v) => n + v, 0) / (values.length - mid)
-  if (a === 0) return { text: 'not reported', cls: 'flat' }
+  if (a === 0) return { text: '0%', cls: 'flat' }
   const pct = ((b - a) / a) * 100
-  if (!Number.isFinite(pct)) return { text: 'not reported', cls: 'flat' }
+  if (!Number.isFinite(pct)) return { text: '0%', cls: 'flat' }
   const rounded = Math.abs(pct) < 0.05 ? 0 : Math.round(pct * 10) / 10
   if (rounded === 0) return { text: '0%', cls: 'flat' }
   const sign = rounded > 0 ? '↑' : '↓'
@@ -116,20 +116,20 @@ function formatCompact(n: number): string {
 }
 
 function reported(value: string | number | null | undefined, format?: (n: number) => string): string {
-  if (value == null) return 'not reported'
+  if (value == null) return '0'
   if (typeof value === 'number') return format ? format(value) : formatCompact(value)
   return value
 }
 
 function formatDuration(ms: number | null): string {
-  if (ms == null) return 'not reported'
+  if (ms == null) return '0'
   if (ms < 1000) return `${Math.round(ms)}ms`
   if (ms < 60_000) return `${Math.round(ms / 1000)}s`
   return `${Math.round(ms / 60_000)}m`
 }
 
 function formatPct(n: number | null): string {
-  if (n == null) return 'not reported'
+  if (n == null) return '0%'
   return `${n}%`
 }
 

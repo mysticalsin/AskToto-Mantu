@@ -1,3 +1,4 @@
+import { SHOEY_LAND_SVG } from '../charts'
 import { CONSOLE_CSS } from './css'
 import { CONSOLE_JS, PATHNAME_STRIP_JS } from './client'
 
@@ -41,3 +42,9 @@ export const SPA_JS_PATH = `/assets/${SPA_JS_NAME}`
 export const SPA_CSS_PATH = `/assets/${SPA_CSS_NAME}`
 /** Ultron / QA curl this name. Same Shoey bundle as the hashed file. Not a stub. */
 export const SPA_INDEX_JS_PATH = '/assets/index.js'
+
+/** Public world land. path[data-iso] for every country. Access must not wrap this. */
+export const SPA_WORLD_SVG = SHOEY_LAND_SVG
+export const SPA_WORLD_SVG_HASH = contentHash(SPA_WORLD_SVG)
+export const SPA_WORLD_SVG_PATH = `/assets/world-${SPA_WORLD_SVG_HASH}.svg`
+export const SPA_WORLD_INDEX_PATH = '/assets/world.svg'

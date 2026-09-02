@@ -15,31 +15,31 @@ function formatCompact(n: number): string {
 }
 
 function reported(value: string | number | null | undefined): string {
-  if (value == null) return 'not reported'
+  if (value == null) return '0'
   if (typeof value === 'number') return formatCompact(value)
   return value
 }
 
 function formatDuration(ms: number | null): string {
-  if (ms == null) return 'not reported'
+  if (ms == null) return '0'
   if (ms < 1000) return `${Math.round(ms)}ms`
   if (ms < 60_000) return `${Math.round(ms / 1000)}s`
   return `${Math.round(ms / 60_000)}m`
 }
 
 function formatPct(n: number | null): string {
-  if (n == null) return 'not reported'
+  if (n == null) return '0%'
   return `${n}%`
 }
 
 function trend(values: number[]): { text: string; cls: string } {
-  if (values.length < 4) return { text: 'not reported', cls: 'flat' }
+  if (values.length < 4) return { text: '0%', cls: 'flat' }
   const mid = Math.floor(values.length / 2)
   const a = values.slice(0, mid).reduce((n, v) => n + v, 0) / mid
   const b = values.slice(mid).reduce((n, v) => n + v, 0) / (values.length - mid)
-  if (a === 0) return { text: 'not reported', cls: 'flat' }
+  if (a === 0) return { text: '0%', cls: 'flat' }
   const pct = ((b - a) / a) * 100
-  if (!Number.isFinite(pct)) return { text: 'not reported', cls: 'flat' }
+  if (!Number.isFinite(pct)) return { text: '0%', cls: 'flat' }
   const rounded = Math.abs(pct) < 0.05 ? 0 : Math.round(pct * 10) / 10
   if (rounded === 0) return { text: '0%', cls: 'flat' }
   return { text: `${rounded > 0 ? '+' : ''}${rounded}%`, cls: rounded > 0 ? 'up' : 'down' }
@@ -160,7 +160,7 @@ export function renderOverviewMini10(data: DashboardPayload): string {
       id: 'tokens',
       title: 'Tokens',
       value: reported(ops.tokens),
-      unit: 'asks',
+      unit: 'tokens',
       kind: 'area',
       series: ops.tokenSeries,
       chart: sparklineArea(ops.tokenSeries, 280, 72)
@@ -195,7 +195,7 @@ export function renderOverviewMini10(data: DashboardPayload): string {
     statCard({
       id: 'cli-vs-key',
       title: 'CLI vs Operator-key asks',
-      value: split ? `${cli} / ${op}` : 'not reported',
+      value: `${cli} / ${op}`,
       unit: 'cli · key',
       kind: 'ring',
       series: [],
@@ -211,12 +211,12 @@ export function renderOverviewMini10(data: DashboardPayload): string {
       chart: `<div class="stat-choro-wrap">${choroplethMini(countries)}</div>`
     })
   ]
-  const cost = data.kpis.cost7d ?? 'not reported'
+  const cost = data.kpis.cost7d ?? '0'
   const chips = [
-    chip('Mac vs Windows', data.scale.os.map((o) => `${o.label} ${o.value}`).join(' · ') || 'not reported'),
+    chip('Mac vs Windows', data.scale.os.map((o) => `${o.label} ${o.value}`).join(' · ') || '0'),
     chip('Cost by provider', cost),
     chip('CRM fail', formatPct(ops.crmFailRate)),
-    chip('Version mix', data.scale.versions.map((v) => `${v.label} ${v.value}`).join(' · ') || 'not reported'),
+    chip('Version mix', data.scale.versions.map((v) => `${v.label} ${v.value}`).join(' · ') || '0'),
     chip('Duration', formatDuration(ops.durationMs)),
     chip('Meetings', formatCompact(ops.meetings)),
     chip('Live · 30 min', formatCompact(ops.live30)),

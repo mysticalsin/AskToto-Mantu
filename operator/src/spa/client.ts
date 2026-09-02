@@ -1,3 +1,5 @@
+import { SHOEY_LAND_SVG } from '../charts'
+
 /** Exact served statement. Regex literal: slash, caret, backslash, slash, slash. */
 export const PATHNAME_STRIP_JS = "location.pathname.replace(/^\\//, '')"
 
@@ -6,6 +8,7 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
  * Content-hashed chrome. Authenticated HTML script-src this file.
  * 0 LLM tokens. Live heartbeats only. Fail loud: this is not a METIS_OPERATOR stub.
  * Shoey land fill #E5E7EB. Events columns: Created at, Name, Profile, Country, OS, Browser.
+ * World SVG is embedded: path[data-iso] land. paintShoeyMap injects it if HTML omitted it.
  */
 (function metisOperatorSpa() {
   'use strict'
@@ -60,9 +63,33 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
   }
   window.route = route
 
+  var SHOEY_LAND_SVG = ${JSON.stringify(SHOEY_LAND_SVG)}
+
+  function ensureShoeyLand(root) {
+    if (root.querySelector('path[data-iso]')) return
+    var box = document.createElement('div')
+    box.innerHTML = SHOEY_LAND_SVG
+    var fresh = box.querySelector('svg.shoey-world')
+    if (!fresh) return
+    var old = root.querySelector('svg.world')
+    if (old && old.querySelectorAll) {
+      old.querySelectorAll('circle.seat-dot, circle.dot, g.pill-g').forEach(function (n) {
+        fresh.appendChild(n)
+      })
+    }
+    if (old && typeof old.replaceWith === 'function') {
+      old.replaceWith(fresh)
+    } else if (old && old.parentNode && old.parentNode.replaceChild) {
+      old.parentNode.replaceChild(fresh, old)
+    } else {
+      root.insertBefore(fresh, root.firstChild)
+    }
+  }
+
   function paintShoeyMap() {
     var root = document.getElementById('map-root')
     if (!root) return
+    ensureShoeyLand(root)
     var dark = document.documentElement.getAttribute('data-theme') === 'dark'
     var land = dark ? '#3f3f46' : '#E5E7EB'
     var ocean = dark ? '#0a0a0b' : '#FFFFFF'

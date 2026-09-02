@@ -253,15 +253,25 @@ export function choroplethMini(countries: MapCountry[], cls = 'stat-choro'): str
   </svg>`
 }
 
-export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world shoey-world'): string {
-  const by = new Map(countries.map((c) => [c.iso, c.devices]))
-  const empty = countries.length === 0 && dots.length === 0
+/** Ocean + every Natural Earth country. No seats. paintShoeyMap paints this if HTML omitted it. */
+export function shoeyLandSvg(cls = 'world shoey-world'): string {
   let land = ''
   for (const [iso, d] of Object.entries(WORLD_PATHS)) {
     const painted = stripMapBands(d)
     if (!painted) continue
     land += `<path class="world-land" data-iso="${iso}" d="${painted}" fill="${SHOEY_LAND}" stroke="${SHOEY_LAND_STROKE}" stroke-width="0.8" />`
   }
+  return `<svg class="${cls}" viewBox="0 0 1000 500" role="img" aria-label="Unique seats by country">
+    <rect class="world-ocean" width="1000" height="500" fill="${SHOEY_OCEAN}"/>
+    ${land}
+  </svg>`
+}
+
+export const SHOEY_LAND_SVG = shoeyLandSvg()
+
+export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world shoey-world'): string {
+  const by = new Map(countries.map((c) => [c.iso, c.devices]))
+  const empty = countries.length === 0 && dots.length === 0
   const marks = empty
     ? ''
     : dots
@@ -289,10 +299,8 @@ export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world
   const caption = empty
     ? `<div class="empty map-empty">No heartbeats yet. The map stays empty until a seat checks in. Empty is an empty world, not sample dots.</div>`
     : ''
-  return `${caption}<svg class="${cls}" viewBox="0 0 1000 500" role="img" aria-label="Unique seats by country">
-    <rect class="world-ocean" width="1000" height="500" fill="${SHOEY_OCEAN}"/>
-    ${land}${marks}${pills}
-  </svg>`
+  const svg = shoeyLandSvg(cls).replace('</svg>', `${marks}${pills}</svg>`)
+  return `${caption}${svg}`
 }
 
 function countryName(iso: string): string {
