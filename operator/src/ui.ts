@@ -619,7 +619,7 @@ export function renderConsole(data: DashboardPayload): string {
           </article>
         </div>
         <article class="card rt-map" style="padding:0;overflow:hidden">
-          <div id="map-root" style="position:relative">${world}</div>
+          <div id="map-root" data-land="inline" style="position:relative">${world}</div>
         </article>
       </div>
       <div class="grid-3">
@@ -628,7 +628,7 @@ export function renderConsole(data: DashboardPayload): string {
           [{ id: 'geo', label: 'Geo' }],
           { geo: geoRows },
           'Search geo',
-          { value: 'Sessions', sess: 'Seats' },
+          { value: 'Events', sess: 'Sessions' },
           'blue'
         )}
         ${volumeTable(
@@ -636,7 +636,7 @@ export function renderConsole(data: DashboardPayload): string {
           [{ id: 'refs', label: 'Referrals' }],
           { refs: refRows },
           'Search referrals',
-          { value: 'Sessions', sess: 'Seats' },
+          { value: 'Events', sess: 'Sessions' },
           'blue'
         )}
         ${volumeTable(
@@ -663,9 +663,12 @@ export function renderConsole(data: DashboardPayload): string {
       <div class="page-toolbar">
         <span class="listen-pill" data-live-events="${data.events.length}"><i></i>Listening</span>
         <button class="tool" type="button">Date range</button>
-        <button class="tool" type="button" id="events-filters">Filters</button>
-        <input class="table-search toolbar-search" id="events-search" type="search" placeholder="Search events" autocomplete="off">
-        <button class="tool page-view" type="button">View</button>
+        <button class="tool" type="button" id="events-filters">${iconFilter()} Filters</button>
+        <label class="search-wrap">
+          ${iconSearch()}
+          <input class="table-search toolbar-search" id="events-search" type="search" placeholder="Search ..." autocomplete="off">
+        </label>
+        <button class="tool page-view" type="button">${iconView()} View</button>
       </div>
       <article class="card ev-table-card table-frame" data-ev-pane="events" style="padding-bottom:10px">
         <div id="events-list">${renderEvents(data.events, data.now)}</div>
@@ -713,12 +716,15 @@ export function renderConsole(data: DashboardPayload): string {
         <button class="page-tab" type="button" data-nt-tab="rules">Rules</button>
       </div>
       <div class="page-toolbar">
-        <input class="table-search toolbar-search" id="nt-search" type="search" placeholder="Search" autocomplete="off">
+        <label class="search-wrap">
+          ${iconSearch()}
+          <input class="table-search toolbar-search" id="nt-search" type="search" placeholder="Search ..." autocomplete="off">
+        </label>
         <button class="tool" type="button">Created at</button>
-        <button class="tool page-view" type="button">View</button>
+        <button class="tool page-view" type="button">${iconView()} View</button>
       </div>
       <div data-nt-pane="notifications">
-        <div class="funnel tabs" id="crm-filters">
+        <div class="tabs" id="crm-filters">
           <button class="tab on" data-crm-filter="all">All ${data.crm.rows.length}</button>
           ${funnelTabs}
         </div>

@@ -254,7 +254,7 @@ export function choroplethMini(countries: MapCountry[], cls = 'stat-choro'): str
   </svg>`
 }
 
-/** Ocean + every Natural Earth country. No seats. paintShoeyMap paints this if HTML omitted it. */
+/** Ocean + every Natural Earth country. Inlined into #map-root HTML. paintShoeyMap only restyles theme. */
 export function shoeyLandSvg(cls = 'world shoey-world'): string {
   let land = ''
   for (const [iso, d] of Object.entries(WORLD_PATHS)) {
@@ -262,7 +262,7 @@ export function shoeyLandSvg(cls = 'world shoey-world'): string {
     if (!painted) continue
     land += `<path class="world-land" data-iso="${iso}" d="${painted}" fill="${SHOEY_LAND}" stroke="${SHOEY_LAND_STROKE}" stroke-width="1.15" />`
   }
-  return `<svg class="${cls}" viewBox="0 0 1000 500" role="img" aria-label="Unique seats by country">
+  return `<svg class="${cls}" viewBox="0 0 1000 500" width="1000" height="500" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Unique seats by country" data-land="${SHOEY_LAND}">
     <rect class="world-ocean" width="1000" height="500" fill="${SHOEY_OCEAN}"/>
     ${land}
   </svg>`

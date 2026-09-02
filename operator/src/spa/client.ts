@@ -8,7 +8,7 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
  * Content-hashed chrome. Authenticated HTML script-src this file.
  * 0 LLM tokens. Live heartbeats only. Fail loud: this is not a METIS_OPERATOR stub.
  * Shoey land fill #E5E7EB. Events columns: Created at, Name, Profile, Country, OS, Browser.
- * World SVG is embedded: path[data-iso] land. paintShoeyMap injects it if HTML omitted it.
+ * World land is inlined in #map-root HTML as path[data-iso]. paintShoeyMap only restyles theme.
  */
 (function metisOperatorSpa() {
   'use strict'
@@ -82,6 +82,7 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
 
   function ensureShoeyLand(root) {
     if (root.querySelector('path[data-iso]')) return
+    // HTML already inlines land (#map-root[data-land=inline]). This is a last-resort restyle helper, not the map.
     var box = document.createElement('div')
     box.innerHTML = SHOEY_LAND_SVG
     var fresh = box.querySelector('svg.shoey-world')
