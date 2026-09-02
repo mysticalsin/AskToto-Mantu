@@ -2341,6 +2341,11 @@ html.metis-bar-land .aw-widget {
   opacity: 0;
 }
 
+.onboard-stage:has(.onboard-kinetic-grid) .onboard-stripes,
+.onboard-stage:has(.onboard-kinetic-grid) .onboard-stripes--b {
+  display: none;
+  animation: none;
+}
 .onboard-kinetic-grid {
   position: fixed;
   inset: 0;
