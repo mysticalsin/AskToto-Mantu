@@ -257,11 +257,19 @@ function dayLabel(ts: number): string {
   return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
 
+function emptyData(copy = 'We could not find any data here yet'): string {
+  return `<div class="empty-data">
+      <div class="empty-dash" aria-hidden="true"></div>
+      <strong>No data</strong>
+      <p>${esc(copy)}</p>
+    </div>`
+}
+
 function renderEvents(events: ConsoleEvent[], now: number): string {
   const head = `<div class="event event-head" aria-hidden="true">
       <div>Created at</div><div>Name</div><div>Profile</div><div>Country</div><div>OS</div><div>Browser</div>
     </div>`
-  if (!events.length) return `${head}<div class="empty">No events yet.</div>`
+  if (!events.length) return `${head}${emptyData('No events yet.')}`
   const rows = events
     .map((e) => {
       const name = looksLikeSecret(e.name) ? 'event' : e.name
@@ -275,11 +283,25 @@ function renderEvents(events: ConsoleEvent[], now: number): string {
         <div class="event-profile">${field(profile)}</div>
         <div class="event-country">${place ? esc(place) : MISSING}</div>
         <div class="event-os">${e.os ? `${osIcon(e.os)} ${esc(e.os)}` : MISSING}</div>
-        <div class="event-os">${browser ? esc(browser) : MISSING}</div>
+        <div class="event-browser">${browser ? esc(browser) : MISSING}</div>
       </div>`
     })
     .join('')
   return `${head}${rows}`
+}
+
+function eventStats(events: ConsoleEvent[]): string {
+  const counts = new Map<string, number>()
+  for (const e of events) {
+    const name = looksLikeSecret(e.name) ? 'event' : e.name
+    counts.set(name, (counts.get(name) || 0) + 1)
+  }
+  if (!counts.size) return emptyData()
+  const rows = [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([name, n]) => `<div class="stat-line"><span>${esc(name)}</span><b>${n}</b></div>`)
+    .join('')
+  return `<p class="eyebrow">Live ingest</p>${rows}`
 }
 
 function renderSeatTable(rows: ProfileRow[], events: ConsoleEvent[], now: number): string {
@@ -382,23 +404,6 @@ export function renderConsole(data: DashboardPayload): string {
         <td class="muted">${esc(when(r.ts))}</td>
         <td>${retry}</td>
       </tr>`
-    })
-    .join('')
-  const landing = data.crm.landing
-  const failRate = landing.failRatePct == null ? 'hidden' : `${landing.failRatePct}%`
-  const funnelRows = data.crm.funnel
-    .map((f) => {
-      const att = Math.max(f.attempted, 1)
-      const okW = Math.round((f.success / att) * 100)
-      const failW = Math.round((f.failed / att) * 100)
-      return `<div class="crm-funnel-row">
-        <span class="muted">${esc(f.connector)}</span>
-        <div class="crm-funnel-track" title="attempted ${f.attempted}">
-          <span class="crm-funnel-ok" style="width:${okW}%"></span>
-          <span class="crm-funnel-fail" style="width:${failW}%"></span>
-        </div>
-        <span class="muted">${f.attempted} att · ${f.submitted} sub · ${f.success} ok · ${f.failed} fail</span>
-      </div>`
     })
     .join('')
   const funnelTabs = CRM_FILTER_ORDER.map(
@@ -597,18 +602,38 @@ export function renderConsole(data: DashboardPayload): string {
     </section>
 
     <section class="page wrap" data-page="events" hidden>
-      <div class="ev-head">
-        <div>
-          <h3 class="rt-h">Events</h3>
-          <p class="muted ev-sub">Seat heartbeats and Asks. Token-free.</p>
-        </div>
-        <span class="live-events" data-live-events="${data.events.length}"><i></i>${data.events.length} events</span>
+      <div class="page-hero">
+        <h3 class="page-title">Events</h3>
+        <p class="page-sub">Paginate through your events, conversions and overall stats</p>
       </div>
-      <div class="tabs ev-tabs"><button class="tab on" type="button">Events</button></div>
-      <article class="card ev-table-card" style="padding-bottom:10px">
-        <input class="table-search" id="events-search" type="search" placeholder="Search events" autocomplete="off">
+      <div class="page-tabs" role="tablist">
+        <button class="page-tab on" type="button" data-ev-tab="events">Events</button>
+        <button class="page-tab" type="button" data-ev-tab="conversions">Conversions</button>
+        <button class="page-tab" type="button" data-ev-tab="stats">Stats</button>
+      </div>
+      <div class="page-toolbar">
+        <span class="listen-pill" data-live-events="${data.events.length}"><i></i>Listening</span>
+        <button class="tool" type="button">Date range</button>
+        <button class="tool" type="button" id="events-filters">Filters</button>
+        <input class="table-search toolbar-search" id="events-search" type="search" placeholder="Search events" autocomplete="off">
+        <button class="tool page-view" type="button">View</button>
+      </div>
+      <article class="card ev-table-card table-frame" data-ev-pane="events" style="padding-bottom:10px">
         <div id="events-list">${renderEvents(data.events, data.now)}</div>
-        <div class="empty" id="events-empty" hidden>No events match that search.</div>
+        <div class="empty" id="events-empty" hidden>${emptyData('No events match that search.')}</div>
+      </article>
+      <article class="card table-frame" data-ev-pane="conversions" hidden>
+        ${
+          data.events.some((e) => /^ask$/i.test(e.name))
+            ? renderEvents(
+                data.events.filter((e) => /^ask$/i.test(e.name)),
+                data.now
+              )
+            : emptyData('No Asks yet. Heartbeats stay on Events.')
+        }
+      </article>
+      <article class="card table-frame" data-ev-pane="stats" hidden>
+        ${eventStats(data.events)}
       </article>
     </section>
 
@@ -626,41 +651,42 @@ export function renderConsole(data: DashboardPayload): string {
     </section>
 
     <section class="page wrap" data-page="notifications" hidden>
-      <div class="nt-head">
-        <div>
-          <h3 class="rt-h">Notifications</h3>
-          <p class="muted nt-sub">Failed CRM sends and pending skill diffs. Honest empty. Never fake alerts.</p>
-        </div>
+      <div class="page-hero nt-head">
+        <h3 class="page-title">Notifications</h3>
+        <p class="page-sub nt-sub">See notifications and manage your rules when to get notifications</p>
       </div>
-      <article class="card" style="padding-bottom:10px">
-        <div class="crm-kpis">
-          ${kpiCard({ title: 'Landed today', value: String(landing.landedToday), sub: 'success with a CRM id when the connector returned one', spark: '' })}
-          ${kpiCard({ title: 'Fail rate', value: failRate, sub: 'failed + expired over attempted', spark: '' })}
-          ${kpiCard({ title: 'Retries', value: String(landing.retries), sub: 'Tony Retry or attempt over 1', spark: '' })}
-          ${kpiCard({ title: 'Dead letters', value: String(landing.deadLetters), sub: 'max attempts, Expired', spark: '' })}
-        </div>
-        ${funnelRows ? `<p class="eyebrow">Funnel by connector</p><div class="crm-funnel">${funnelRows}</div>` : ''}
-        <input class="table-search" id="nt-search" type="search" placeholder="Search notifications" autocomplete="off">
+      <div class="page-tabs underline" role="tablist">
+        <button class="page-tab on" type="button" data-nt-tab="notifications">Notifications</button>
+        <button class="page-tab" type="button" data-nt-tab="rules">Rules</button>
+      </div>
+      <div class="page-toolbar">
+        <input class="table-search toolbar-search" id="nt-search" type="search" placeholder="Search" autocomplete="off">
+        <button class="tool" type="button">Created at</button>
+        <button class="tool page-view" type="button">View</button>
+      </div>
+      <div data-nt-pane="notifications">
         <div class="funnel tabs" id="crm-filters">
           <button class="tab on" data-crm-filter="all">All ${data.crm.rows.length}</button>
           ${funnelTabs}
         </div>
-        <table id="nt-table">
-          <thead><tr><th>Title</th><th>Integration</th><th>Country</th><th>OS</th><th>Browser</th><th>Profile</th><th>Created at</th></tr></thead>
-          <tbody>
-            ${
-              notifyRows ||
-              ''
-            }
-            <tr data-nt-empty ${notifyRows ? 'hidden' : ''}><td colspan="7" class="empty">No data. We could not find any notifications here yet.</td></tr>
-          </tbody>
-        </table>
-        ${
-          crmRows
-            ? `<table id="crm-table" hidden><thead><tr><th>Status</th><th>Title</th><th>Connector</th><th>Remote</th><th>Try</th><th>Meeting</th><th>When</th><th></th></tr></thead><tbody>${crmRows}</tbody></table>`
-            : ''
-        }
-      </article>
+        <article class="card table-frame" style="padding-bottom:10px">
+          <table id="nt-table">
+            <thead><tr><th>Title</th><th>Integration</th><th>Country</th><th>OS</th><th>Browser</th><th>Profile</th><th>Created at</th></tr></thead>
+            <tbody>
+              ${notifyRows || ''}
+              <tr data-nt-empty ${notifyRows ? 'hidden' : ''}><td colspan="7">${emptyData()}</td></tr>
+            </tbody>
+          </table>
+          ${
+            crmRows
+              ? `<table id="crm-table" hidden><thead><tr><th>Status</th><th>Title</th><th>Connector</th><th>Remote</th><th>Try</th><th>Meeting</th><th>When</th><th></th></tr></thead><tbody>${crmRows}</tbody></table>`
+              : ''
+          }
+        </article>
+      </div>
+      <div data-nt-pane="rules" hidden>
+        <article class="card table-frame">${emptyData('No rules yet.')}</article>
+      </div>
     </section>
 
     <section class="page wrap" data-page="map" hidden data-alias="realtime"></section>

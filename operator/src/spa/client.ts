@@ -170,6 +170,28 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
       syncEmpty('#events-list .event[data-q]', 'events-empty')
     })
   }
+  var evFilters = document.getElementById('events-filters')
+  if (evFilters && evSearch) {
+    evFilters.addEventListener('click', function () { evSearch.focus() })
+  }
+  document.querySelectorAll('[data-ev-tab]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var id = b.getAttribute('data-ev-tab') || 'events'
+      document.querySelectorAll('[data-ev-tab]').forEach(function (x) { x.classList.toggle('on', x === b) })
+      document.querySelectorAll('[data-ev-pane]').forEach(function (pane) {
+        pane.hidden = pane.getAttribute('data-ev-pane') !== id
+      })
+    })
+  })
+  document.querySelectorAll('[data-nt-tab]').forEach(function (b) {
+    b.addEventListener('click', function () {
+      var id = b.getAttribute('data-nt-tab') || 'notifications'
+      document.querySelectorAll('[data-nt-tab]').forEach(function (x) { x.classList.toggle('on', x === b) })
+      document.querySelectorAll('[data-nt-pane]').forEach(function (pane) {
+        pane.hidden = pane.getAttribute('data-nt-pane') !== id
+      })
+    })
+  })
 
   var sessSearch = document.getElementById('sessions-search')
   if (sessSearch) {
