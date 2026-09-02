@@ -5,7 +5,7 @@ owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, cli
 does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, installer packing, Fly license-server, Goldberg Aria, cloudflare-proxy AI token proxy, Bklit Studio
 ready-to-merge: no
 implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing, access-login, shoey-map
-this-slice: shoey-telemetry
+this-slice: hashed-spa
 audience: Tony Walteur only. Two emails. Nobody else.
 tokens:
   accent: "#2563EB"
@@ -43,7 +43,7 @@ Live URL: `https://metis-operator.tony-walteur.workers.dev/`. Console paths (`/`
 
 **Tony 10:32 PM ET VOID, then 9/2 AM ET re-lock.** Rail labels stay **full** Shoey Analytics + Manage (the slim-nav cut is void). Do **not** pixel-clone Pages / SEO / Groups / Cohorts / Dashboards / Insights / Reports **destinations** — honest empty with a Métis hook. Clone **#map after Access login** as Shoey Realtime (proof: `shoey-realtime.png`, `shoey-map.png`). Overview stays the Shoey 8-tile KPI grid (`shoey-overview.png`) plus the required Métis ops tiles from **live heartbeats / Asks / CRM only**. Do not invent a different layout.
 
-**P0 Access is LIVE** (2026-09-01 11:07pm America/Toronto). Unauth `GET /` and `GET /keys` 302 to Cloudflare Access. `GET /health` 200 JSON. `GET /assets*` 200 JS/CSS. Do **not** spend more time on Access bypass. Do not edit overlay `DESIGN.md`. This file is the Operator design contract.
+**P0 hashed SPA** (2026-09-02). The 97-byte `METIS_OPERATOR` stub is **void**. Authenticated HTML must `<script src="/assets/operator-<hash>.js">` and `<link>` the hashed CSS. Unauth `GET /assets/operator-<hash>.js` (and CSS) is **200** with `content-length` ≫ 97 and real Shoey chrome (Overview / Realtime / Events strings). Unknown `/assets/index.js` / `/assets/client.js` are **404**, not another stub. Unauth `GET /` and `GET /keys` stay **302** Cloudflare Access. `GET /health` 200 JSON. Do **not** edit overlay `DESIGN.md`. This file is the Operator design contract.
 
 Content is Métis, not sneakers. Real data only. No fake keys, no stub map, no shoe SKUs (`/products/sneakers` and commerce sample rows are forbidden).
 
@@ -158,7 +158,7 @@ Prove (tests + live curl, no follow):
 | Unauth `GET /` | **302**. Not HTML password form. No `data-login="1"`. No `type="password"` card |
 | Unauth `POST /v1/admin/keys` | **401** JSON `{ok:false,error:Access required}`. Not 404 |
 | `GET /health` | **200** JSON. Open. Not Access |
-| `GET /assets` `GET /assets/*` (hashed JS/CSS bundles) | **200** with real `content-type` (`application/javascript` or `text/css`). **Not** Access 302 HTML. Edge Bypass + Worker must not 302. |
+| `GET /assets/operator-<hash>.js` and `.css` | **200** real hashed SPA (`content-length` ≫ 97, Shoey Overview / Realtime / Events). **Not** Access 302. **Not** the 97-byte stub. Edge Bypass + Worker must not 302. Unknown asset names **404** (fail loud). |
 | `HEAD /` | May 401 JSON. Do not require HTML |
 
 After Access JWT is present (`Cf-Access-Jwt-Assertion`, or `ctx.access.getIdentity()` when the edge already wrapped the request):
@@ -183,7 +183,7 @@ Machine auth is unchanged. Do not put CLI tokens in the vault. Do not invent a s
 | --- | --- |
 | `POST /v1/ingest` `POST /v1/heartbeat` `GET /v1/skills/manifest` | HMAC only. Not Access. Not JWT |
 | `GET /health` | Open 200 |
-| `GET /assets` `GET /assets/*` | Open 200 JS/CSS. Not Access. Worker must not 302 |
+| `GET /assets/operator-<hash>.*` | Open 200 real JS/CSS. Not Access. Worker must not 302. Stubs 404 |
 | `GET/POST /v1/admin/*` | Access JWT / `getIdentity()` + allowlist. Unauth = 401 JSON |
 
 Do **not** enable Zero Trust **"Protect this Worker"** on `metis-operator` for all traffic. That wraps HMAC ingest and locks seats.
@@ -243,11 +243,11 @@ POLICY_AUD=<aud from the Métis Operator app>
 - Do not put `OPERATOR_ADMIN_PASSWORD` back as a login. The secret may remain bound; the Worker must not read it for a session cookie.
 - Do not put CLI tokens in the vault.
 - Do not drop the Bypass apps on ingest, `/health`, or `/assets`.
-- Do not 302 `/assets` or `/assets/*` from the Worker. Those stay 200 JS/CSS unauthenticated so the browser can load chrome after Access on `/`.
+- Do not 302 `/assets` or `/assets/*` from the Worker. Hashed SPA files stay 200 JS/CSS unauthenticated so the browser can hydrate after Access on `/`. Do not ship the `METIS_OPERATOR` stub.
 
 ## What this is not (explicit non-goals)
 
-This slice implements **Shoey chrome on live heartbeats** after Access (P0 login already live). Keys vault / Cloudflare connect / CLI-first routing already exist. Keys last4 / fund-seats stay required so devices spend dashboard keys after CLI quota. Full Shoey destination polish is Wed 10:00am. Overlay leftover stays Wed 10am. No pack. No version bump. Overlay chrome stays frozen. **0 LLM tokens** to render Overview, Realtime, or Events.
+This slice ships the **hashed SPA** after Access. P0 is the real `/assets/operator-<hash>.js` + CSS, not Access bypass. Keys vault / Cloudflare connect / CLI-first routing already exist. Keys last4 / fund-seats stay required so devices spend dashboard keys after CLI quota. Full Shoey destination polish is Wed 10:00am. Overlay leftover stays Wed 10am. No pack. No version bump. Overlay chrome stays frozen. **0 LLM tokens** to render Overview, Realtime, or Events.
 
 | Surface | Job |
 | --- | --- |
@@ -537,7 +537,7 @@ Tony 6:17 PM ET (login, overlay, map, events) plus Tony 8:03–8:05 PM ET (routi
 | Contract | Still true |
 | --- | --- |
 | Overlay chrome | Island / Hide / Bar files are frozen. Do not edit them from an Operator slice. |
-| Login | Unauth GET `/` and `/keys` (and the other console paths) are **302** to Cloudflare Access login (`Location` has `login` + `next` or an Access login URL). Allowlist stays `twalteur@amaris.com` and `tony.walteur@gmail.com`. No homemade password form. Unauth `POST /v1/admin/keys` is 401 JSON. `/health` is 200. `GET /assets` and `GET /assets/index.js` are **200** javascript/css, not Access HTML. Console never loads unauthenticated. Fail loud (503) if `TEAM_DOMAIN` is unset. |
+| Login | Unauth GET `/` and `/keys` (and the other console paths) are **302** to Cloudflare Access login (`Location` has `login` + `next` or an Access login URL). Allowlist stays `twalteur@amaris.com` and `tony.walteur@gmail.com`. No homemade password form. Unauth `POST /v1/admin/keys` is 401 JSON. `/health` is 200. Authenticated HTML `script-src`s `/assets/operator-<hash>.js`. Unauth GET of that hashed JS/CSS is **200** real chrome (≫ 97 bytes), not Access HTML and not the stub. Console never loads unauthenticated. Fail loud (503) if `TEAM_DOMAIN` is unset. |
 | Map data | Unique devices by country from Cloudflare `request.cf` only. Client `lat` / `lon` / `country` / `city` / `ip` are ignored. No GPS. No IP in the UI. No sample dots. Empty world if no devices. |
 | Token-free events | `#events` never renders a token-shaped string (JWT, `Bearer`, `sk-`, 64-char hex HMAC, long base64). Tests fail if one appears. |
 | Routing | Connected working CLI is first for every user question. Other CLI next if both connected (last-clicked primary). Operator API keys only after quota or rate limit. Dust is retrieval only. |
