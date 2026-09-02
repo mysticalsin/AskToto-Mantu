@@ -23,8 +23,8 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
     expect(experienceSrc).toMatch(/onboardingDone: true, onboardingDoneAt: Date\.now\(\)/)
   })
 
-  it('Skip stays on the exclusive stage and does not mount legacy Onboarding.tsx', () => {
-    expect(experienceSrc).toMatch(/setScene\('skip'\)/)
+  it('there is no Skip path and the live tree does not mount legacy Onboarding.tsx', () => {
+    expect(experienceSrc).not.toMatch(/setScene\('skip'\)/)
     expect(experienceSrc).not.toMatch(/from '\.\/Onboarding'/)
     expect(experienceSrc).not.toMatch(/initialStep=\{phase === 'legacy-full' \? 1 : 5\}/)
   })

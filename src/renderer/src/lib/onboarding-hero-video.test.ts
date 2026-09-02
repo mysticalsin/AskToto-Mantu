@@ -14,7 +14,7 @@ const html = readFileSync(join(__dirname, '../../index.html'), 'utf8')
 describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
   it('uses Tony’s first-slide clip, muted loop autoplay, object-cover, z-0 under the UI', () => {
     expect(ONBOARDING_HERO_VIDEO_SRC).toBe(
-      'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260319_055001_8e16d972-3b2b-441c-86ad-2901a54682f9.mp4'
+      'https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_20260429_115139_0fc6bd3d-3631-4d26-ab9b-28293887dcc9.mp4'
     )
     expect(ONBOARDING_HERO_VIDEO_SRC).not.toMatch(/hf_20260714_113715_c7e0daa0/)
     expect(ONBOARDING_HERO_VIDEO_SRC).not.toMatch(/hf_20260411_104032_69319010/)
@@ -43,10 +43,10 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(videoBlock).not.toMatch(/filter:/)
   })
 
-  it('Next, Skip, and the Tony Walteur byline use liquid glass; logo stays Métis', () => {
+  it('Next and the Tony Walteur byline use liquid glass; logo stays Métis; no Skip', () => {
     expect(experience).toMatch(/onboard-cta no-drag focus-ring/)
     expect(experience).toMatch(/>\s*Next\s*</)
-    expect(experience).toMatch(/Skip the tour/)
+    expect(experience).not.toMatch(/Skip the tour/)
     expect(experience).toMatch(/onboard-glass onboard-glass-chip/)
     expect(experience).toMatch(/Tony Walteur/)
     expect(experience).toMatch(/<MetisMark size=\{96\}/)
@@ -104,8 +104,8 @@ describe('Act 1 welcome video + liquid glass (not a Bloom/Axon page)', () => {
     expect(src).not.toMatch(/currentTime = 0\s*\n\s*void el\.play/)
     expect(src).not.toMatch(/await el\.play|setTimeout\(|queueMicrotask|requestAnimationFrame/)
 
-    expect(experience).toMatch(/onBegin=\{\(\) => \{\s*playOnboardingVideo\(/)
-    expect(experience).toMatch(/playOnboardingVideo\(heroVideoRef\.current, \{ restart: true \}\)/)
+    expect(experience).toMatch(/onBegin=\{\(\) => \{\s*music\.start\(\)/)
+    expect(experience).toMatch(/setScene\('problem'\)/)
     expect(experience).toMatch(/onboard-mute/)
     expect(experience).not.toMatch(/prefersReducedMotion\(\)[\s\S]{0,80}onboard-mute/)
     const demo = readFileSync(join(__dirname, '../components/OnboardingDemoScene.tsx'), 'utf8')

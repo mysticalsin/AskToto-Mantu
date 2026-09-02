@@ -537,7 +537,7 @@ describe('DESIGN.md overlay contract', () => {
     expect(design).toMatch(/Act 4 light/)
     expect(design).toMatch(/GDPR/)
     expect(design).toMatch(/Portal/)
-    expect(design).toMatch(/Skip the tour/)
+    expect(design).toMatch(/No Skip/)
     expect(design).toMatch(/full-viewport muted looping video/)
     expect(design).toMatch(/liquid glass/)
     expect(design).toMatch(/Do not add or restyle overlay \/ onboarding UI unless it matches this document/)

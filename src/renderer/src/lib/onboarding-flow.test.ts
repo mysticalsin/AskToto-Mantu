@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { sceneAfterAppearance, sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup } from './onboarding-flow'
+import {
+  canMarkOnboardingDone,
+  sceneAfterAppearance,
+  sceneAfterLicense,
+  sceneAfterPersonalize,
+  sceneAfterSetup
+} from './onboarding-flow'
 
 describe('MQA-283 — Act 6 (Ready) tail re-point: setup always lands on personalize', () => {
   it('never routes to license from setup any more (that hop moved after personalize)', () => {
@@ -33,5 +39,15 @@ describe('appearance ask sits between personalize/license and Ready', () => {
 
   it('appearance continues into ready', () => {
     expect(sceneAfterAppearance()).toBe('ready')
+  })
+})
+
+describe('canMarkOnboardingDone — Ready is the only finish', () => {
+  it('rejects every scene except completed Ready', () => {
+    expect(canMarkOnboardingDone({ scene: 'ready', asrReady: true, consent: true })).toBe(true)
+    expect(canMarkOnboardingDone({ scene: 'hero', asrReady: true, consent: true })).toBe(false)
+    expect(canMarkOnboardingDone({ scene: 'skip', asrReady: true, consent: true })).toBe(false)
+    expect(canMarkOnboardingDone({ scene: 'ready', asrReady: false, consent: true })).toBe(false)
+    expect(canMarkOnboardingDone({ scene: 'ready', asrReady: true, consent: false })).toBe(false)
   })
 })

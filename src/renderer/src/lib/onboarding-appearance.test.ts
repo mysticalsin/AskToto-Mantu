@@ -14,7 +14,8 @@ import {
   reduceAppearancePreview,
   seedOnboardingAppearance
 } from './onboarding-appearance'
-import { shouldMountStarfield, STARFIELD_SCENES } from './onboarding-starfield-spec'
+import { shouldMountKineticGrid, KINETIC_GRID_SCENES } from './onboarding-kinetic-grid'
+import { shouldMountStarfield } from './onboarding-starfield-spec'
 import { sceneAfterAppearance, sceneAfterLicense, sceneAfterPersonalize } from './onboarding-flow'
 
 const appearanceLib = readFileSync(join(__dirname, './onboarding-appearance.ts'), 'utf8')
@@ -108,19 +109,20 @@ describe('onboarding appearance — live preview, no lag', () => {
 })
 
 describe('onboarding appearance — scene hop is a tail beat', () => {
-  it('sits after personalize/license and before Ready; skip mounts the picker', () => {
+  it('sits after personalize/license and before Ready; KineticGrid is the bed, not skip', () => {
     expect(sceneAfterPersonalize(false)).toBe('appearance')
     expect(sceneAfterPersonalize(true)).toBe('license')
     expect(sceneAfterLicense()).toBe('appearance')
     expect(sceneAfterAppearance()).toBe('ready')
-    expect(STARFIELD_SCENES).toContain('appearance')
-    expect(shouldMountStarfield('appearance')).toBe(true)
+    expect(KINETIC_GRID_SCENES).toContain('appearance')
+    expect(shouldMountKineticGrid('appearance')).toBe(true)
+    expect(shouldMountStarfield('appearance')).toBe(false)
     expect(shouldMountStarfield('hero')).toBe(false)
     expect(shouldMountStarfield('reveal')).toBe(false)
     expect(experience).toMatch(/GUIDED_SCENES: Scene\[\] = \['problem', 'reveal', 'setup', 'personalize'\]/)
     expect(experience).toMatch(/scene === 'appearance'/)
     expect(experience).toMatch(/<OnboardingAppearance/)
-    expect(experience).toMatch(/scene === 'skip'[\s\S]*<OnboardingAppearance/)
+    expect(experience).not.toMatch(/scene === 'skip'/)
   })
 })
 

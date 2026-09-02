@@ -21,7 +21,7 @@ const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
 const portalSrc = readFileSync(join(__dirname, './onboarding-portal.ts'), 'utf8')
 const stageBlock = css.slice(css.indexOf('.onboard-stage {'), css.indexOf('.onboard-stripes,'))
 
-describe('onboarding portal pill + skip path', () => {
+describe('onboarding portal pill + Ready-only finish', () => {
   it('precomputes different sci-fi open and close buffers at module load', () => {
     expect(PORTAL_OPEN_SAMPLES.length / ONBOARDING_PORTAL_SAMPLE_RATE).toBeGreaterThanOrEqual(1.1)
     expect(PORTAL_CLOSE_SAMPLES.length / ONBOARDING_PORTAL_SAMPLE_RATE).toBeGreaterThanOrEqual(1.1)
@@ -64,21 +64,16 @@ describe('onboarding portal pill + skip path', () => {
     expect(onboardingPortalWaitMs(false)).toBe(ONBOARDING_PORTAL_CLOSE_MS)
   })
 
-  it('Skip does not mount Onboarding.tsx and still requires recordingConsent before finish', () => {
+  it('Ready is the only finish; does not mount Onboarding.tsx; recordingConsent still required', () => {
     const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
     expect(experience).not.toMatch(/from '\.\/Onboarding'/)
     expect(experience).not.toMatch(/<Onboarding[\s>]/)
     expect(experience).not.toMatch(/legacy-full/)
     expect(app).not.toMatch(/from '\.\/components\/Onboarding'/)
-    expect(experience).toMatch(/setScene\('skip'\)/)
-    expect(experience).toMatch(/scene === 'skip'/)
-    expect(experience).toMatch(/onboard-skip-chip/)
-    const skip = experience.slice(experience.indexOf("scene === 'skip'"))
-    expect(skip).toMatch(/TellTheRoomCard/)
-    expect(skip).toMatch(/Get started/)
-    expect(skip).toMatch(/firstRunCanFinish\(\{ asrReady, consent \}\)/)
-    expect(skip).toMatch(/onClick=\{\(\) => void finish\(\)\}/)
-    expect(skip).not.toMatch(/from '\.\/Onboarding'/)
+    expect(experience).not.toMatch(/setScene\('skip'\)/)
+    expect(experience).not.toMatch(/scene === 'skip'/)
+    expect(experience).not.toMatch(/onboard-skip-chip/)
+    expect(experience).toMatch(/canMarkOnboardingDone\(\{ scene, asrReady, consent \}\)/)
     expect(experience).toMatch(/recordingConsent: true/)
     expect(experience).toMatch(/onboardingDone: true/)
     const v2 = experience.slice(experience.indexOf('export function OnboardingV2'))
