@@ -90,7 +90,9 @@ describe('MQA-283 — Replay onboarding in Settings re-arms the same gate a firs
   it('does not reset any other setting — replay must not silently wipe unrelated config', () => {
     const idx = settingsSrc.indexOf('Replay onboarding from the start?')
     expect(idx).toBeGreaterThan(-1)
-    const block = settingsSrc.slice(idx - 200, idx + 200)
+    const block = settingsSrc.slice(idx - 200, idx + 280)
+    expect(block).toMatch(/haltAllOnboardingAudio\(\)/)
+    expect(block.indexOf('haltAllOnboardingAudio()')).toBeLessThan(block.indexOf('patch({ onboardingDone: false })'))
     expect(block).toMatch(/patch\(\{ onboardingDone: false \}\)/)
     expect(block).not.toMatch(/onboardingDoneAt/)
   })

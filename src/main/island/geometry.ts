@@ -366,6 +366,22 @@ export function parkAfterExclusiveOnboarding(
   return { x, y, width: size.width, height: size.height }
 }
 
+/**
+ * First-paint window bounds. While `!onboardingDone` this is the exclusive stage —
+ * never Hide/Island 8×2 park. Overlay geometry must not change until onboardingDone.
+ */
+export function firstPaintOverlayBounds(input: {
+  onboardingDone: boolean
+  bounds: Rect
+  workArea: Rect
+  layout: OverlayLayout
+  metrics: DisplayMetrics
+  topMargin: number
+}): Rect {
+  if (!input.onboardingDone) return exclusiveOnboardingBounds(input.bounds, input.workArea)
+  return parkAfterExclusiveOnboarding(input.layout, input.metrics, input.topMargin)
+}
+
 /** Stale exclusive / card measures must not grow a hide/island park back into 880×816.
  *  Also swallows the ~100px hide stub (Tony live: 560×103 at Y=39) while resting. */
 export function shouldIgnoreResizeWhilePeekResting(
