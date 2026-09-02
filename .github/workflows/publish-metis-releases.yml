@@ -13,6 +13,8 @@ on:
         required: true
         type: string
         default: v1.8.4
+  release:
+    types: [published]
 
 permissions:
   contents: read
@@ -22,6 +24,10 @@ jobs:
     name: Mirror release to Metis-Releases
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    # Only mirror version tags (ignore drafts already filtered by `published`)
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v'))
     steps:
       - name: Require publish token
         env:
@@ -35,10 +41,20 @@ jobs:
           fi
           echo "TOKEN=$token" >> "$GITHUB_ENV"
 
+      - name: Resolve tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          tag="${INPUT_TAG:-$RELEASE_TAG}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Mirroring $tag"
+
       - name: Download source release assets
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
           mkdir -p feed && cd feed
@@ -48,8 +64,7 @@ jobs:
       - name: Publish / replace Metis-Releases tag
         env:
           GH_TOKEN: ${{ env.TOKEN }}
-          TAG: ${{ inputs.tag }}
-          VERSION: ${{ inputs.tag }}
+          TAG: ${{ steps.tag.outputs.tag }}
         run: |
           set -euo pipefail
           version="${TAG#v}"
