@@ -1,8 +1,11 @@
 import {
   bars,
+  blueArea,
+  blueBars,
   choropleth,
   dualLine,
   heatmapGrid,
+  shoeyWorld,
   sparklineArea,
   sparklineLine,
   stackedTokens
@@ -11,7 +14,7 @@ import { statusBadge, STATUS_BADGE_CSS } from './components/ui/status-badge'
 import { CRM_FILTER_ORDER } from './crm'
 import type { CloudflareOverview } from './cloudflare'
 import type { ConsoleEvent, DashboardPayload, ProfileRow } from './dashboard'
-import { FORBIDDEN_NAV, NAV_IDS, NAV_SECTIONS } from './nav'
+import { EXTRA_PAGES, FORBIDDEN_NAV, NAV_IDS, NAV_SECTIONS } from './nav'
 import { looksLikeSecret } from './redact'
 
 const MISSING = '—'
@@ -19,135 +22,165 @@ const MISSING = '—'
 const CSS = `
 @import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.min.css');
 @import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.min.css');
-:root, [data-theme="dark"] {
+:root {
+  --bg: #FFFFFF;
+  --panel: #FFFFFF;
+  --hair: #EDEDED;
+  --ink: #18181B;
+  --ink2: #71717A;
+  --ink3: #A1A1AA;
+  --accent: #2563EB;
+  --ok: #16A34A;
+  --danger: #DC2626;
+  --live: #10B981;
+  --land: #E8E8E8;
+  --chart-1: #EFF6FF;
+  --chart-2: #BFDBFE;
+  --chart-3: #60A5FA;
+  --chart-4: #2563EB;
+  --chart-5: #1D4ED8;
+  --nav: #FFFFFF;
+  --nav-on: #F4F4F5;
+  --mono: ui-monospace, SFMono-Regular, 'Geist Mono', monospace;
+  --sans: Inter, Geist, system-ui, sans-serif;
+}
+[data-theme="dark"] {
   --bg: #0a0a0b;
   --panel: #111113;
   --hair: rgba(255,255,255,0.10);
   --ink: rgba(255,255,255,0.94);
   --ink2: rgba(255,255,255,0.55);
   --ink3: rgba(255,255,255,0.38);
-  --accent: #7C8CF8;
-  --ok: #83C092;
-  --danger: #F0717A;
   --land: #2a2a2e;
-  --chart-1: #1a1a1d;
-  --chart-2: #2a2a2e;
-  --chart-3: #52525b;
-  --chart-4: #a1a1aa;
-  --chart-5: #e4e4e7;
   --nav: #0d0d0f;
   --nav-on: rgba(255,255,255,0.08);
-  --dot: rgba(255,255,255,0.055);
-  --mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
-  --sans: 'Geist', Geist, Inter, system-ui, sans-serif;
-}
-[data-theme="light"] {
-  --bg: #f4f4f5;
-  --panel: #ffffff;
-  --hair: rgba(15,15,17,0.10);
-  --ink: #18181b;
-  --ink2: rgba(24,24,27,0.62);
-  --ink3: rgba(24,24,27,0.42);
-  --land: #d4d4d8;
-  --chart-1: #e4e4e7;
-  --chart-2: #d4d4d8;
-  --chart-3: #a1a1aa;
-  --chart-4: #52525b;
-  --chart-5: #18181b;
-  --nav: #fafafa;
-  --nav-on: rgba(15,15,17,0.06);
-  --dot: rgba(15,15,17,0.08);
-}
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    --bg: #f4f4f5;
-    --panel: #ffffff;
-    --hair: rgba(15,15,17,0.10);
-    --ink: #18181b;
-    --ink2: rgba(24,24,27,0.62);
-    --ink3: rgba(24,24,27,0.42);
-    --land: #d4d4d8;
-    --chart-1: #e4e4e7;
-    --chart-2: #d4d4d8;
-    --chart-3: #a1a1aa;
-    --chart-4: #52525b;
-    --chart-5: #18181b;
-    --nav: #fafafa;
-    --nav-on: rgba(15,15,17,0.06);
-    --dot: rgba(15,15,17,0.08);
-  }
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; color: var(--ink); font: 12px/1.45 var(--sans); }
-body {
-  background-color: var(--bg);
-  background-image: radial-gradient(var(--dot) 1px, transparent 1px);
-  background-size: 14px 14px;
-}
+html, body { margin: 0; height: 100%; color: var(--ink); font: 13px/1.45 var(--sans); }
+body { background: var(--bg); }
 a { color: var(--accent); text-decoration: none; }
-.shell { display: grid; grid-template-columns: 228px 1fr; min-height: 100%; }
+.shell { display: grid; grid-template-columns: 240px 1fr; min-height: 100%; }
 .rail {
   display: flex; flex-direction: column; gap: 10px;
   background: var(--nav); border-right: 1px solid var(--hair);
   padding: 14px 12px 16px; min-height: 100vh; position: sticky; top: 0;
 }
-.rail-brand { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.rail-brand { display: flex; align-items: center; gap: 8px; }
+.rail-logo {
+  width: 28px; height: 28px; border-radius: 999px; background: #2563EB; color: #fff;
+  display: grid; place-items: center; font: 700 10px/1 var(--sans); letter-spacing: -0.04em;
+}
 .rail-brand h1 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.03em; }
+.rail-brand .chev { color: var(--ink3); font-size: 11px; }
+.create-btn {
+  display: flex; align-items: center; justify-content: space-between;
+  width: 100%; border: 0; background: #18181B; color: #fff;
+  border-radius: 8px; padding: 8px 10px; font: 600 13px var(--sans); cursor: pointer;
+}
+.create-menu {
+  display: none; margin: 0; padding: 8px 10px; border: 1px solid var(--hair);
+  border-radius: 8px; background: var(--panel); color: var(--ink2); font-size: 12px;
+}
+.create-menu.open { display: block; }
 .rail-search {
   width: 100%; border: 1px solid var(--hair); background: var(--panel); color: var(--ink);
   border-radius: 8px; padding: 7px 10px; font: 12px var(--sans);
 }
 .rail-search::placeholder { color: var(--ink3); }
+.kbd {
+  float: right; font: 10px var(--mono); color: var(--ink3);
+  border: 1px solid var(--hair); border-radius: 4px; padding: 1px 5px; margin-top: -22px; margin-right: 8px;
+}
 .rail nav { display: flex; flex-direction: column; gap: 14px; flex: 1; }
-.nav-sec { display: flex; flex-direction: column; gap: 2px; }
+.nav-sec { display: flex; flex-direction: column; gap: 1px; }
 .nav-sec p {
-  font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
-  text-transform: uppercase; color: var(--ink3); margin: 0 6px 4px;
+  font-size: 11px; letter-spacing: 0.02em; color: var(--ink3); margin: 8px 8px 4px; font-weight: 550;
 }
 .nav-item {
   display: block; padding: 7px 8px; border-radius: 8px; color: var(--ink);
-  font-size: 13px; font-weight: 550;
+  font-size: 13px; font-weight: 500;
 }
 .nav-item:hover { background: var(--nav-on); }
-.nav-item.on { background: var(--nav-on); font-weight: 650; }
+.nav-item.on { background: var(--nav-on); font-weight: 600; }
 .rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding-top: 12px; }
+.rail-utils { display: flex; gap: 8px; flex-wrap: wrap; }
+.rail-utils a, .rail-utils button { color: var(--ink2); font-size: 11px; background: none; border: 0; cursor: pointer; padding: 0; }
 .who { font-family: var(--mono); font-size: 10px; color: var(--ink2); word-break: break-all; }
 .theme-btn {
   border: 1px solid var(--hair); background: transparent; color: var(--ink2);
   font: 11px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
   padding: 6px 8px; border-radius: 8px; cursor: pointer;
 }
-.main { min-width: 0; }
+.main { min-width: 0; background: #FAFAFA; }
 .top {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
-  padding: 12px 16px; border-bottom: 1px solid var(--hair);
-  background: color-mix(in srgb, var(--bg) 86%, transparent); position: sticky; top: 0; z-index: 4;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 16px; border-bottom: 1px solid var(--hair); background: #fff;
+  position: sticky; top: 0; z-index: 4;
 }
+.top-left, .top-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tool {
+  border: 1px solid var(--hair); background: #fff; color: var(--ink);
+  border-radius: 8px; padding: 6px 10px; font: 12px var(--sans); cursor: pointer;
+}
+.top-search {
+  flex: 1; min-width: 180px; border: 1px solid var(--hair); background: #fff; color: var(--ink);
+  border-radius: 8px; padding: 7px 12px; font: 12px var(--sans);
+}
+.live-dot {
+  display: inline-flex; align-items: center; gap: 6px; font: 12px/1 var(--sans); color: var(--ink);
+  border: 1px solid var(--hair); border-radius: 999px; padding: 5px 10px; background: #fff;
+}
+.live-dot i { width: 7px; height: 7px; border-radius: 99px; background: var(--live); display: inline-block; }
 .top h2 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -0.03em; }
 .eyebrow {
-  font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
-  text-transform: uppercase; color: var(--ink3); margin: 0 0 8px;
+  font-size: 10px; letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--ink3); margin: 0 0 8px; font-weight: 600;
 }
-.wrap { padding: 12px 16px 36px; display: grid; gap: 12px; }
-.kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.wrap { padding: 14px 16px 36px; display: grid; gap: 12px; }
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
 .card {
   position: relative;
   background: var(--panel);
   border: 1px solid var(--hair);
+  border-radius: 8px;
   padding: 10px 12px 0;
   overflow: hidden;
 }
-.card::before, .card::after {
-  content: ''; position: absolute; width: 8px; height: 8px; pointer-events: none;
-  border-color: color-mix(in srgb, var(--ink) 28%, transparent); border-style: solid;
-}
-.card::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
-.card::after { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
 .card h3 { margin: 0; font-size: 13px; font-weight: 600; }
 .kpi-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
-.kpi .n { font-size: 28px; font-weight: 650; letter-spacing: -0.04em; line-height: 1; margin-top: 10px; }
+.kpi { padding-bottom: 8px; }
+.kpi .eyebrow { margin-bottom: 4px; }
+.kpi .n { font-size: 28px; font-weight: 650; letter-spacing: -0.04em; line-height: 1; margin-top: 6px; }
+.delta { font-size: 11px; font-weight: 600; }
+.delta.up { color: var(--ok); }
+.delta.down { color: var(--danger); }
+.delta.flat { color: var(--ink3); }
+.rt-grid { display: grid; grid-template-columns: 280px 1fr; gap: 12px; }
+.rt-stream { display: flex; flex-direction: column; gap: 2px; max-height: 280px; overflow: auto; }
+.rt-row {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 2px; border-bottom: 1px solid var(--hair); font-size: 12px;
+}
+.rt-row .ago { color: var(--ink3); font-size: 11px; }
+.vol { position: relative; }
+.vol-row {
+  display: grid; grid-template-columns: 1fr 56px 48px; gap: 8px; align-items: center;
+  padding: 6px 8px; position: relative; font-size: 12px;
+}
+.vol-bar {
+  position: absolute; inset: 2px auto 2px 0; background: #F4F4F5; border-radius: 4px; z-index: 0;
+}
+.vol-row > * { position: relative; z-index: 1; }
+.table-card .tabs { margin: 0 0 8px; }
+.table-search {
+  width: 100%; border: 1px solid var(--hair); border-radius: 8px; padding: 6px 10px;
+  font: 12px var(--sans); margin-bottom: 8px;
+}
+.empty-card { background: #fff; border: 1px solid var(--hair); border-radius: 8px; padding: 28px 20px; }
+.empty-card h3 { margin: 0 0 6px; font-size: 16px; }
+.empty-card p { margin: 0; color: var(--ink2); }
 .kpi .sub { font-family: var(--mono); font-size: 10px; color: var(--ink3); margin: 4px 0 8px; }
 .spark { display: block; width: calc(100% + 24px); margin: 0 -12px; height: 56px; }
 .chart { display: block; width: 100%; height: 140px; }
@@ -227,7 +260,7 @@ textarea { min-height: 120px; }
 @media (max-width: 980px) {
   .shell { grid-template-columns: 1fr; }
   .rail { position: relative; min-height: auto; }
-  .kpis, .grid-2, .grid-3, .crm-kpis, .event { grid-template-columns: 1fr; }
+  .kpis, .grid-2, .grid-3, .crm-kpis, .event, .rt-grid { grid-template-columns: 1fr; }
 }
 `
 
@@ -290,6 +323,98 @@ function renderNav(): string {
     return `<div class="nav-sec"><p>${esc(sec.label)}</p>${items}</div>`
   }).join('')
   return `<nav id="rail-nav">${sections}</nav>`
+}
+
+function seriesDelta(values: number[]): { text: string; cls: string } {
+  if (values.length < 4) return { text: 'not reported', cls: 'flat' }
+  const mid = Math.floor(values.length / 2)
+  const a = values.slice(0, mid).reduce((n, v) => n + v, 0) / mid
+  const b = values.slice(mid).reduce((n, v) => n + v, 0) / (values.length - mid)
+  if (a === 0) return { text: 'not reported', cls: 'flat' }
+  const pct = ((b - a) / a) * 100
+  if (!Number.isFinite(pct)) return { text: 'not reported', cls: 'flat' }
+  const rounded = Math.abs(pct) < 0.05 ? 0 : Math.round(pct * 10) / 10
+  if (rounded === 0) return { text: '0%', cls: 'flat' }
+  const sign = rounded > 0 ? '↑' : '↓'
+  return { text: `${sign} ${Math.abs(rounded)}%`, cls: rounded > 0 ? 'up' : 'down' }
+}
+
+function formatCompact(n: number): string {
+  if (n >= 1_000_000) return `${Math.round(n / 100_000) / 10}M`
+  if (n >= 1000) return `${Math.round(n / 100) / 10}K`
+  return String(n)
+}
+
+function shoeyKpi(title: string, value: string, series: number[]): string {
+  const d = seriesDelta(series)
+  return `<article class="card kpi">
+    <p class="eyebrow">${esc(title)}</p>
+    <div class="kpi-top">
+      <div class="n">${esc(value)}</div>
+      <span class="delta ${d.cls}">${esc(d.text)}</span>
+    </div>
+    ${blueBars(series)}
+  </article>`
+}
+
+function volumeTable(
+  id: string,
+  tabs: { id: string; label: string }[],
+  groups: Record<string, { name: string; views: number; sess: number }[]>,
+  searchPh: string
+): string {
+  const tabBtns = tabs
+    .map((t, i) => `<button class="tab${i === 0 ? ' on' : ''}" data-vol-tab="${id}:${t.id}" type="button">${esc(t.label)}</button>`)
+    .join('')
+  const panes = tabs
+    .map((t, i) => {
+      const rows = groups[t.id] || []
+      const max = Math.max(1, ...rows.map((r) => r.views))
+      const body = rows.length
+        ? rows
+            .map((r) => {
+              const w = Math.round((r.views / max) * 100)
+              return `<div class="vol-row" data-q="${esc(r.name.toLowerCase())}">
+                <span class="vol-bar" style="width:${w}%"></span>
+                <span>${esc(r.name)}</span>
+                <span class="muted">${r.views}</span>
+                <span class="muted">${r.sess}</span>
+              </div>`
+            })
+            .join('')
+        : `<div class="empty">No ${esc(t.label.toLowerCase())} in this window.</div>`
+      return `<div data-vol-pane="${id}:${t.id}" ${i === 0 ? '' : 'hidden'}>
+        <div class="vol-row muted" style="font-size:10px;letter-spacing:0.08em;text-transform:uppercase">
+          <span></span><span>Views</span><span>Sess</span>
+        </div>
+        ${body}
+      </div>`
+    })
+    .join('')
+  return `<article class="card table-card" style="padding-bottom:10px">
+    <div class="tabs">${tabBtns}</div>
+    <input class="table-search" data-vol-search="${id}" type="search" placeholder="${esc(searchPh)}" autocomplete="off">
+    ${panes}
+  </article>`
+}
+
+function emptyPage(id: string, title: string, hook: string): string {
+  return `<section class="page wrap" data-page="${id}" hidden>
+    <div class="empty-card">
+      <h3>${esc(title)}</h3>
+      <p>${esc(hook)}</p>
+    </div>
+  </section>`
+}
+
+function mixRows(items: { label: string; value: number }[]): { name: string; views: number; sess: number }[] {
+  return items
+    .filter((i) => i.label && !looksLikeSecret(i.label))
+    .map((i) => ({ name: i.label, views: i.value, sess: i.value }))
+}
+
+function dayLabel(ts: number): string {
+  return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
 
 function renderEvents(events: ConsoleEvent[]): string {
@@ -475,6 +600,46 @@ export function renderConsole(data: DashboardPayload): string {
 
   void FORBIDDEN_NAV
   void NAV_IDS
+  void EXTRA_PAGES
+  void indexHint
+  void sparklineArea
+  void sparklineLine
+
+  const asks7 = data.scale.days7.reduce((n, p) => n + p.asks, 0)
+  const asksSeries = data.scale.days7.map((p) => p.asks)
+  const asksPerSeat = k.dau > 0 && asks7 > 0 ? (asks7 / k.dau).toFixed(1) : 'not reported'
+  const hitPct = k.cacheHit && k.cacheHit.endsWith('%') ? Number(k.cacheHit.slice(0, -1)) : null
+  const missVal = hitPct == null ? 'not reported' : `${Math.max(0, Math.round(100 - hitPct))}%`
+  const missSeries = k.hitSeries.map((v) => (v > 0 ? Math.max(0, 100 - v) : 0))
+  const live30 = data.profiles.filter((p) => data.now - p.lastSeen <= 30 * 60 * 1000).length
+  const live30Series = k.liveSeries
+  const costVal = k.cost7d ?? 'not reported'
+  const areaVals = data.scale.days7.map((p) => p.heartbeats)
+  const areaLabs = data.scale.days7.map((p, i) =>
+    i === 0 || i === data.scale.days7.length - 1 || i % 2 === 0 ? dayLabel(p.t) : ''
+  )
+  const world = shoeyWorld(data.map.countries, data.map.dots)
+  const geoRows = data.profiles
+    .filter((p) => p.country || p.city)
+    .map((p) => ({
+      name: [p.city, p.country].filter(Boolean).join(' · ') || '(Not set)',
+      views: 1,
+      sess: p.live ? 1 : 0
+    }))
+  const crmMix = mixRows(data.crm.funnel.map((f) => ({ label: f.connector, value: f.attempted })))
+  const listenRows = mixRows(
+    data.events
+      .filter((e) => /listen|recap/i.test(e.name))
+      .map((e) => ({ label: e.name, value: 1 }))
+  )
+  const modeRows = mixRows(data.asks.map((a) => ({ label: a.mode || 'ask', value: 1 })).reduce((acc, row) => {
+    const hit = acc.find((x) => x.label === row.label)
+    if (hit) hit.value += 1
+    else acc.push(row)
+    return acc
+  }, [] as { label: string; value: number }[]))
+  const skillRows = mixRows(data.proposals.map((p) => ({ label: p.skill_id, value: 1 })))
+  const stream = data.events.slice(0, 24)
 
   return `<!doctype html>
 <html lang="en"><head>
@@ -488,56 +653,111 @@ svg path { vector-effect: non-scaling-stroke; }
 <body>
 <svg id="spark-defs"><defs>
   <linearGradient id="spark-fill" x1="0" x2="0" y1="0" y2="1">
-    <stop offset="0" stop-color="#e4e4e7" stop-opacity="0.28"/>
-    <stop offset="1" stop-color="#e4e4e7" stop-opacity="0"/>
+    <stop offset="0" stop-color="#2563EB" stop-opacity="0.28"/>
+    <stop offset="1" stop-color="#2563EB" stop-opacity="0"/>
+  </linearGradient>
+  <linearGradient id="shoey-fill" x1="0" x2="0" y1="0" y2="1">
+    <stop offset="0" stop-color="#2563EB" stop-opacity="0.22"/>
+    <stop offset="1" stop-color="#2563EB" stop-opacity="0"/>
   </linearGradient>
 </defs></svg>
 <div class="shell">
   <aside class="rail">
-    <div class="rail-brand"><h1>Métis</h1></div>
-    <input class="rail-search" id="nav-search" type="search" placeholder="Search" autocomplete="off">
+    <div class="rail-brand">
+      <span class="rail-logo">M</span>
+      <h1>Métis</h1>
+      <span class="chev">▾</span>
+    </div>
+    <button class="create-btn" id="create-report" type="button">+ Create report <span>▾</span></button>
+    <div class="create-menu" id="create-menu">No reports yet. Overview and Realtime are the live Métis views.</div>
+    <div>
+      <input class="rail-search" id="nav-search" type="search" placeholder="Ask AI anything…" autocomplete="off">
+      <span class="kbd">⌘ J</span>
+    </div>
     ${renderNav()}
     <div class="rail-foot">
+      <div class="rail-utils">
+        <a href="#notifications">Give feedback</a>
+        <a href="#references">Docs</a>
+        <form method="post" action="/logout"><button type="submit">Back to workspace</button></form>
+      </div>
       <div class="who">${esc(data.email)}</div>
       <button class="theme-btn" id="theme-btn" type="button">Theme</button>
-      <form method="post" action="/logout"><button class="theme-btn" type="submit">Sign out</button></form>
     </div>
   </aside>
   <div class="main">
     <header class="top">
-      <h2 id="page-title">Overview</h2>
-      <span class="live">LIVE ${k.live}</span>
+      <div class="top-left">
+        <button class="tool" type="button">Last 7 days</button>
+        <button class="tool" type="button">Day</button>
+        <button class="tool" type="button">Filters</button>
+      </div>
+      <input class="top-search" type="search" placeholder='Try: "last 7 days, seats only"' autocomplete="off">
+      <div class="top-right">
+        <span class="live-dot"><i></i>${live30}</span>
+        <button class="tool" type="button">Private</button>
+      </div>
+      <h2 id="page-title" hidden>Overview</h2>
     </header>
 
     <section class="page wrap" data-page="overview">
-      <p class="eyebrow">Fleet</p>
       <div class="kpis">
-        ${kpiCard({ title: 'Live seats', value: String(k.live), sub: 'last-seen under 2 minutes', spark: sparklineLine(k.liveSeries) })}
-        ${kpiCard({ title: 'DAU', value: String(k.dau), sub: `WAU ${k.wau}`, spark: sparklineArea(k.dauSeries) })}
-        ${kpiCard({
-          title: 'API cost',
-          value: k.costToday ?? 'hidden',
-          sub: k.cost7d ? `7d ${k.cost7d} · estimate, list price` : 'estimate, list price · not reported',
-          spark: sparklineArea(k.costSeries)
-        })}
-        ${kpiCard({
-          title: 'Prompt cache',
-          value: k.cacheHit ?? 'not reported',
-          sub: 'real provider fields only',
-          spark: sparklineLine(k.hitSeries)
-        })}
-        ${kpiCard({
-          title: 'Versions in field',
-          value: String(k.versions),
-          sub: indexHint,
-          spark: bars(data.scale.versions.slice(0, 6), 220, 56)
-        })}
-        ${kpiCard({
-          title: 'Pending diffs',
-          value: String(k.pendingDiffs),
-          sub: 'Approve then Push',
-          spark: sparklineLine(data.change.heatmap.slice(-24))
-        })}
+        ${shoeyKpi('Unique seats', formatCompact(k.dau), k.dauSeries)}
+        ${shoeyKpi('Live seats', formatCompact(k.live), k.liveSeries)}
+        ${shoeyKpi('Asks', formatCompact(asks7), asksSeries)}
+        ${shoeyKpi('Asks per seat', asksPerSeat, asksSeries)}
+        ${shoeyKpi('Cache miss', missVal, missSeries)}
+        ${shoeyKpi('Latency', 'not reported', [])}
+        ${shoeyKpi('Cost', costVal, k.costSeries)}
+        ${shoeyKpi('Live · 30 min', formatCompact(live30), live30Series)}
+      </div>
+
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">Unique seats</p>
+        ${blueArea(areaVals, areaLabs)}
+      </article>
+
+      <div class="grid-2">
+        ${volumeTable(
+          'refs',
+          [
+            { id: 'crm', label: 'CRM' },
+            { id: 'listen', label: 'Listen' },
+            { id: 'recap', label: 'Recap' },
+            { id: 'connectors', label: 'Connectors' },
+            { id: 'source', label: 'Source' },
+            { id: 'medium', label: 'Medium' },
+            { id: 'campaign', label: 'Campaign' },
+            { id: 'term', label: 'Term' },
+            { id: 'content', label: 'Content' }
+          ],
+          {
+            crm: crmMix,
+            listen: listenRows,
+            recap: listenRows.filter((r) => /recap/i.test(r.name)),
+            connectors: crmMix,
+            source: [],
+            medium: [],
+            campaign: [],
+            term: [],
+            content: []
+          },
+          'Search refs'
+        )}
+        ${volumeTable(
+          'paths',
+          [
+            { id: 'modes', label: 'Modes' },
+            { id: 'skills', label: 'Skills' },
+            { id: 'usecases', label: 'Use cases' }
+          ],
+          {
+            modes: modeRows,
+            skills: skillRows,
+            usecases: mixRows(data.events.map((e) => ({ label: e.name, value: 1 })))
+          },
+          'Search pages'
+        )}
       </div>
 
       <div class="grid-2">
@@ -634,19 +854,77 @@ svg path { vector-effect: non-scaling-stroke; }
     </section>
 
     <section class="page wrap" data-page="realtime" hidden>
+      <div class="rt-grid">
+        <div>
+          <article class="card kpi" style="padding-bottom:10px">
+            <p class="eyebrow">Unique seats last 30 min</p>
+            <div class="n">${formatCompact(live30)}</div>
+            ${blueBars(live30Series, 240, 48)}
+          </article>
+          <article class="card" style="padding:8px 10px 10px;margin-top:10px">
+            <div class="rt-stream" id="rt-stream">
+              ${
+                stream.length
+                  ? stream
+                      .map((e) => {
+                        const name = looksLikeSecret(e.name) ? 'event' : e.name
+                        const ago = data.now - e.ts < 90_000 ? 'just now' : when(e.ts)
+                        const os = e.chips.find((c) => c.key === 'os')?.value || ''
+                        return `<div class="rt-row">
+                          <span>${esc(name)}</span>
+                          <span class="ago">${esc(ago)}${os ? ` · ${esc(os)}` : ''}</span>
+                        </div>`
+                      })
+                      .join('')
+                  : '<div class="empty">No live events yet.</div>'
+              }
+            </div>
+          </article>
+        </div>
+        <article class="card" style="padding:0;overflow:hidden">
+          <div id="map-root" style="position:relative">${world}</div>
+        </article>
+      </div>
+      <div class="grid-3">
+        ${volumeTable(
+          'geo',
+          [{ id: 'geo', label: 'Country / City' }],
+          { geo: geoRows.length ? geoRows : [] },
+          'Search geo'
+        )}
+        ${volumeTable(
+          'rt-refs',
+          [{ id: 'refs', label: 'Referrer' }],
+          { refs: crmMix.length ? crmMix : listenRows },
+          'Search referrals'
+        )}
+        ${volumeTable(
+          'rt-paths',
+          [{ id: 'path', label: 'Path' }],
+          { path: modeRows },
+          'Search paths'
+        )}
+      </div>
+    </section>
+
+    ${emptyPage('dashboards', 'Dashboards', 'No saved Métis views yet. A dashboard will list seats, Asks, and Listen once a report exists.')}
+    ${emptyPage('insights', 'Insights', 'No Ask cost, cache, or security issues reported yet.')}
+    ${emptyPage('pages', 'Pages', 'No mode, skill, or use-case paths yet. Never sample commerce URLs.')}
+    ${emptyPage('seo', 'SEO', 'No public Métis or wiki surfaces reported yet.')}
+    <section class="page wrap" data-page="sessions" hidden>
       <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Live seats</p>
+        <p class="eyebrow">Sessions</p>
         ${
           liveSeats.length
             ? renderProfiles(liveSeats)
-            : '<div class="empty">No live seats in the last two minutes.</div>'
+            : '<div class="empty">No seat sessions in this window. Heartbeats will fill this.</div>'
         }
       </article>
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Live stream</p>
-        <div id="rt-stream">${renderEvents(data.events.slice(0, 30))}</div>
-      </article>
     </section>
+    ${emptyPage('groups', 'Groups', 'No license, workspace, or OS groups reported yet.')}
+    ${emptyPage('cohorts', 'Cohorts', 'No DAU / WAU seat cohorts yet. Heartbeats will fill this.')}
+    ${emptyPage('references', 'References', 'No signed skill refs yet.')}
+    ${emptyPage('notifications', 'Notifications', landing.deadLetters || k.pendingDiffs ? `${k.pendingDiffs} pending skill diffs. ${landing.deadLetters} dead CRM letters.` : 'No failed CRM sends or pending skill diffs to surface.')}
 
     <section class="page wrap" data-page="events" hidden>
       <article class="card" style="padding-bottom:10px">
@@ -665,16 +943,18 @@ svg path { vector-effect: non-scaling-stroke; }
 
     <section class="page wrap" data-page="map" hidden>
       <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Map</p>
+        <p class="eyebrow">Unique seats</p>
         <div class="tabs" id="map-tabs">
+          <button class="tab on" data-map="shoey">Realtime</button>
+          <button class="tab" data-map="analytics">Analytics</button>
           <button class="tab" data-map="land">Land</button>
-          <button class="tab on" data-map="analytics">Analytics</button>
           <button class="tab" data-map="graticule">Graticule</button>
           <button class="tab" data-map="hatch">Hatch</button>
         </div>
         <div id="map-root" style="position:relative">
+          <div data-map-pane="shoey">${world}</div>
+          <div data-map-pane="analytics" hidden>${maps.analytics}</div>
           <div data-map-pane="land" hidden>${maps.land}</div>
-          <div data-map-pane="analytics">${maps.analytics}</div>
           <div data-map-pane="graticule" hidden>${maps.graticule}</div>
           <div data-map-pane="hatch" hidden>${maps.hatch}</div>
         </div>
@@ -728,6 +1008,27 @@ svg path { vector-effect: non-scaling-stroke; }
           <button data-draft="support">Draft support</button>
         </div>
         ${props || '<div class="empty">No skill upgrades waiting. Use Ask in a mode, then Draft.</div>'}
+      </article>
+    </section>
+
+    <section class="page wrap" data-page="settings" hidden>
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">Settings</p>
+        <div class="sub muted" style="padding-bottom:8px">Keys fund seats. last4 only. Cloudflare connect lives here. No homemade password.</div>
+      </article>
+    </section>
+
+    <section class="page wrap" data-page="devices" hidden>
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">Devices</p>
+        ${renderProfiles(data.profiles)}
+      </article>
+    </section>
+
+    <section class="page wrap" data-page="cloudflare" hidden>
+      <article class="card" style="padding-bottom:10px" data-cf-page>
+        <p class="eyebrow">Cloudflare</p>
+        ${renderCloudflare(data.cloudflare)}
       </article>
     </section>
 
@@ -791,19 +1092,46 @@ async function api(path, body) {
   return r.json()
 }
 const titles = {
-  overview: 'Overview', realtime: 'Realtime', events: 'Events', profiles: 'Profiles',
-  map: 'Map', macos: 'macOS', windows: 'Windows', licenses: 'Licenses', skills: 'Skills', keys: 'Keys'
+  overview: 'Overview', dashboards: 'Dashboards', insights: 'Insights', pages: 'Pages', seo: 'SEO',
+  realtime: 'Realtime', events: 'Events', sessions: 'Sessions', profiles: 'Profiles', groups: 'Groups',
+  cohorts: 'Cohorts', settings: 'Settings', references: 'References', notifications: 'Notifications',
+  map: 'Realtime', macos: 'macOS', windows: 'Windows', licenses: 'Licenses', skills: 'Skills',
+  keys: 'Keys', devices: 'Devices', cloudflare: 'Cloudflare'
 }
 function route() {
   const raw = (location.hash || '#overview').replace('#', '')
-  const id = titles[raw] ? raw : 'overview'
+  const requested = titles[raw] ? raw : 'overview'
+  const id = requested === 'settings' ? 'keys' : requested
   document.querySelectorAll('[data-page]').forEach((p) => { p.hidden = p.getAttribute('data-page') !== id })
-  document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('on', a.getAttribute('data-nav') === id))
+  const navOn = requested === 'map' || requested === 'realtime' ? 'realtime' : (requested === 'keys' || requested === 'settings' || requested === 'cloudflare' || requested === 'licenses' ? 'settings' : requested === 'devices' ? 'profiles' : requested)
+  document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('on', a.getAttribute('data-nav') === navOn))
   const t = document.getElementById('page-title')
   if (t) t.textContent = titles[id]
 }
 window.addEventListener('hashchange', route)
+if (!location.hash) {
+  const path = location.pathname.replace(/^\//, '')
+  if (path && titles[path]) location.hash = '#' + path
+}
 route()
+const createBtn = document.getElementById('create-report')
+const createMenu = document.getElementById('create-menu')
+if (createBtn && createMenu) createBtn.addEventListener('click', () => createMenu.classList.toggle('open'))
+document.querySelectorAll('[data-vol-tab]').forEach((b) => b.addEventListener('click', () => {
+  const key = b.getAttribute('data-vol-tab') || ''
+  const group = key.split(':')[0]
+  document.querySelectorAll('[data-vol-tab^="' + group + ':"]').forEach((x) => x.classList.toggle('on', x === b))
+  document.querySelectorAll('[data-vol-pane^="' + group + ':"]').forEach((p) => { p.hidden = p.getAttribute('data-vol-pane') !== key })
+}))
+document.querySelectorAll('[data-vol-search]').forEach((input) => {
+  input.addEventListener('input', () => {
+    const q = input.value.trim().toLowerCase()
+    const id = input.getAttribute('data-vol-search')
+    document.querySelectorAll('[data-vol-pane^="' + id + ':"] .vol-row[data-q]').forEach((row) => {
+      row.hidden = Boolean(q) && !(row.getAttribute('data-q') || '').includes(q)
+    })
+  })
+})
 const search = document.getElementById('nav-search')
 if (search) search.addEventListener('input', () => {
   const q = search.value.trim().toLowerCase()

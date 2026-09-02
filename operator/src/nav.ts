@@ -4,43 +4,56 @@ export const NAV_SECTIONS = [
     label: 'Analytics',
     items: [
       { id: 'overview', label: 'Overview' },
+      { id: 'dashboards', label: 'Dashboards' },
+      { id: 'insights', label: 'Insights' },
+      { id: 'pages', label: 'Pages' },
+      { id: 'seo', label: 'SEO' },
       { id: 'realtime', label: 'Realtime' },
       { id: 'events', label: 'Events' },
+      { id: 'sessions', label: 'Sessions' },
       { id: 'profiles', label: 'Profiles' },
-      { id: 'map', label: 'Map' }
+      { id: 'groups', label: 'Groups' },
+      { id: 'cohorts', label: 'Cohorts' }
     ]
   },
   {
-    id: 'fleet',
-    label: 'Fleet',
+    id: 'manage',
+    label: 'Manage',
     items: [
-      { id: 'macos', label: 'macOS' },
-      { id: 'windows', label: 'Windows' },
-      { id: 'licenses', label: 'Licenses' }
-    ]
-  },
-  {
-    id: 'ops',
-    label: 'Ops',
-    items: [
-      { id: 'skills', label: 'Skills' },
-      { id: 'keys', label: 'Keys' }
+      { id: 'settings', label: 'Settings' },
+      { id: 'references', label: 'References' },
+      { id: 'notifications', label: 'Notifications' }
     ]
   }
 ] as const
 
 export type NavId =
   | 'overview'
+  | 'dashboards'
+  | 'insights'
+  | 'pages'
+  | 'seo'
   | 'realtime'
   | 'events'
+  | 'sessions'
   | 'profiles'
-  | 'map'
-  | 'macos'
-  | 'windows'
-  | 'licenses'
-  | 'skills'
-  | 'keys'
+  | 'groups'
+  | 'cohorts'
+  | 'settings'
+  | 'references'
+  | 'notifications'
 
 export const NAV_IDS: NavId[] = NAV_SECTIONS.flatMap((s) => s.items.map((i) => i.id))
 
 export const FORBIDDEN_NAV = ['scale', 'change', 'console'] as const
+
+export const EXTRA_PAGES = [
+  'keys',
+  'licenses',
+  'devices',
+  'map',
+  'skills',
+  'macos',
+  'windows',
+  'cloudflare'
+] as const

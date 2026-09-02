@@ -16,7 +16,17 @@ export const CONSOLE_PATHS = [
   '/macos',
   '/windows',
   '/skills',
-  '/login'
+  '/login',
+  '/dashboards',
+  '/insights',
+  '/pages',
+  '/seo',
+  '/sessions',
+  '/groups',
+  '/cohorts',
+  '/settings',
+  '/references',
+  '/notifications'
 ] as const
 
 export type AccessCtx = {

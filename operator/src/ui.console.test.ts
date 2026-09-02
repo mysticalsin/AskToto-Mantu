@@ -74,6 +74,29 @@ describe('product sidebar', () => {
       expect(html).toContain(`data-page="${id}"`)
     }
   })
+
+  it('mirrors Shoey chrome with Métis nouns and no shoe SKUs', async () => {
+    const html = await page()
+    expect(html).toContain('+ Create report')
+    expect(html).toContain('Ask AI anything')
+    expect(html).toContain('Unique seats')
+    expect(html).toContain('Asks per seat')
+    expect(html).toContain('Live · 30 min')
+    expect(html).toContain('Unique seats last 30 min')
+    expect(html).toContain('data-nav="dashboards"')
+    expect(html).toContain('data-nav="insights"')
+    expect(html).toContain('data-nav="pages"')
+    expect(html).toContain('data-nav="seo"')
+    expect(html).toContain('data-nav="groups"')
+    expect(html).toContain('data-nav="cohorts"')
+    expect(html).toContain('data-nav="settings"')
+    expect(html).toContain('data-nav="references"')
+    expect(html).toContain('data-nav="notifications"')
+    expect(html).not.toContain('/products/sneakers')
+    expect(html).not.toMatch(/heroku\.com|bitbucket\.com/)
+    expect(html).not.toContain('data-nav="map"')
+    expect(html).not.toContain('data-nav="macos"')
+  })
 })
 
 describe('map has no repeating horizontal band', () => {
