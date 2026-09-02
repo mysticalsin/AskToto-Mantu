@@ -2,8 +2,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const anthropic = readFileSync(join(__dirname, 'anthropic.ts'), 'utf8')
-const openai = readFileSync(join(__dirname, 'openai.ts'), 'utf8')
+// LF-normalized: a Windows autocrlf checkout hands back CRLF and the multi-line regexes below miss.
+const anthropic = readFileSync(join(__dirname, 'anthropic.ts'), 'utf8').replace(/\r\n/g, '\n')
+const openai = readFileSync(join(__dirname, 'openai.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 describe('Anthropic prompt-cache contract', () => {
   it('puts 1h ephemeral cache_control on the last stable system block', () => {
