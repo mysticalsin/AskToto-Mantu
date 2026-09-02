@@ -24,6 +24,19 @@ describe('hashed SPA router', () => {
     expect(() => new Function(SPA_JS)).not.toThrow()
     expect(SPA_JS).toContain('window.route = route')
     expect(SPA_JS).toContain("requested === 'map' ? 'realtime'")
+
+    const open = PATHNAME_STRIP_JS.indexOf('(')
+    const comma = PATHNAME_STRIP_JS.lastIndexOf(',')
+    const literal = PATHNAME_STRIP_JS.slice(open + 1, comma)
+    expect(literal.charAt(0)).toBe('/')
+    expect(literal.charAt(1)).toBe('^')
+    expect(literal.charAt(2)).toBe('\\')
+    expect(literal.charAt(3)).toBe('/')
+    expect(literal.charAt(4)).toBe('/')
+    expect(literal.length).toBe(5)
+    const re = new Function(`return ${literal}`)() as RegExp
+    expect('/keys'.replace(re, '')).toBe('keys')
+    expect('realtime'.replace(re, '')).toBe('realtime')
   })
 
   it('window.route is a function and swaps the main body for every KEEP page', () => {
