@@ -10,6 +10,7 @@ import {
   unauthorized,
   type AccessCtx
 } from './access'
+import { redirectToCloudflareLogin, redirectToKeysAfterCloudflareLogin } from './cloudflare-connect'
 import { missingCloudflareOverview, pullCloudflareOverview, type CloudflareOverview } from './cloudflare'
 import { asCrmStatus } from './crm'
 import { decryptPrompt, encryptPrompt, sha256Hex, signSkillPack } from './crypto'
@@ -132,6 +133,8 @@ async function adminRoute(
   opts: HandleOpts = {}
 ): Promise<Response> {
   if (isConsolePath(url.pathname) && request.method === 'GET') {
+    if (url.pathname === '/cloudflare/connect') return redirectToCloudflareLogin(request)
+    if (url.pathname === '/cloudflare/callback') return redirectToKeysAfterCloudflareLogin()
     const dash = await buildDashboard(store, email, now, keyFlags(env), await cloudflareForDashboard(store, env, opts, now))
     return html(renderConsole(dash))
   }
