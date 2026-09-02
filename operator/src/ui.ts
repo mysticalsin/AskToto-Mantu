@@ -31,6 +31,20 @@ function when(ts: number): string {
   return new Date(ts).toISOString().replace('T', ' ').slice(0, 16)
 }
 
+function ago(ts: number, now: number): string {
+  const d = now - ts
+  if (d < 90_000) return 'just now'
+  if (d < 3_600_000) {
+    const m = Math.max(1, Math.round(d / 60_000))
+    return m === 1 ? '1 minute ago' : `${m} minutes ago`
+  }
+  if (d < 86_400_000) {
+    const h = Math.max(1, Math.round(d / 3_600_000))
+    return h === 1 ? '1 hour ago' : `${h} hours ago`
+  }
+  return when(ts)
+}
+
 function field(value: string | null | undefined): string {
   if (!value || looksLikeSecret(value)) return MISSING
   return esc(value)
@@ -216,35 +230,27 @@ function dayLabel(ts: number): string {
   return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
 
-function eventNameRollup(events: ConsoleEvent[]): { name: string; views: number; sess: number }[] {
-  const by = new Map<string, number>()
-  for (const e of events) {
-    const name = looksLikeSecret(e.name) ? 'event' : e.name
-    by.set(name, (by.get(name) ?? 0) + 1)
-  }
-  return [...by.entries()]
-    .map(([name, n]) => ({ name, views: n, sess: n }))
-    .sort((a, b) => b.views - a.views)
-}
-
-function renderEvents(events: ConsoleEvent[]): string {
-  if (!events.length) return '<div class="empty">No events yet.</div>'
-  return events
+function renderEvents(events: ConsoleEvent[], now: number): string {
+  const head = `<div class="event event-head" aria-hidden="true">
+      <div>Created at</div><div>Name</div><div>Profile</div><div>Country</div><div>OS</div>
+    </div>`
+  if (!events.length) return `${head}<div class="empty">No events yet.</div>`
+  const rows = events
     .map((e) => {
       const name = looksLikeSecret(e.name) ? 'event' : e.name
-      const chips = e.chips
-        .filter((c) => !looksLikeSecret(c.key) && !looksLikeSecret(c.value))
-        .map((c) => `<span class="chip">${esc(c.key)} ${esc(c.value)}</span>`)
-        .join('')
-      const profile = e.hostname || e.email || MISSING
-      return `<div class="event" data-event="${esc(e.id)}" data-q="${esc(`${name} ${profile}`.toLowerCase())}">
+      const profile = e.hostname || e.email || null
+      const place = [e.city, e.country].filter((v) => v && !looksLikeSecret(v)).join(' · ')
+      const q = `${name} ${profile || ''} ${place} ${e.os || ''}`.toLowerCase()
+      return `<div class="event" data-event="${esc(e.id)}" data-q="${esc(q)}">
+        <div class="event-time">${esc(ago(e.ts, now))}</div>
         <div class="event-name">${esc(name)}</div>
-        <div class="event-profile">${field(profile === MISSING ? null : profile)}</div>
-        <div class="event-chips">${chips}</div>
-        <div class="event-time">${esc(when(e.ts))}</div>
+        <div class="event-profile">${field(profile)}</div>
+        <div class="event-country">${place ? esc(place) : MISSING}</div>
+        <div class="event-os">${e.os ? `${osIcon(e.os)} ${esc(e.os)}` : MISSING}</div>
       </div>`
     })
     .join('')
+  return `${head}${rows}`
 }
 
 function renderProfiles(rows: ProfileRow[], osFilter?: string): string {
@@ -441,10 +447,10 @@ export function renderConsole(data: DashboardPayload): string {
     <section class="page wrap" data-page="realtime" hidden>
       <div class="rt-grid">
         <div>
-          <article class="card kpi" style="padding-bottom:10px">
-            <p class="eyebrow">Unique seats last 30 min</p>
-            <div class="n">${formatCompact(live30)}</div>
-            ${blueBars(live30Series, 240, 48)}
+          <article class="card kpi rt-unique" style="padding-bottom:10px">
+            <h3 class="rt-h">Unique seats last 30 min</h3>
+            <div class="n rt-n">${formatCompact(live30)}</div>
+            ${blueBars(live30Series, 280, 56)}
           </article>
           <article class="card" style="padding:8px 10px 10px;margin-top:10px">
             <div class="rt-stream" id="rt-stream">
@@ -499,21 +505,18 @@ export function renderConsole(data: DashboardPayload): string {
     </section>
 
     <section class="page wrap" data-page="events" hidden>
-      <div class="ev-grid">
-        ${volumeTable(
-          'ev-names',
-          [{ id: 'names', label: 'Events' }],
-          { names: eventNameRollup(data.events) },
-          'Search events',
-          { value: 'Events', sess: 'Sessions' },
-          'blue'
-        )}
-        <article class="card" style="padding-bottom:10px">
-          <div class="tabs"><button class="tab on" type="button">Events</button></div>
-          <input class="table-search" id="events-search" type="search" placeholder="Search events" autocomplete="off">
-          <div id="events-list">${renderEvents(data.events)}</div>
-        </article>
+      <div class="ev-head">
+        <div>
+          <h3 class="rt-h">Events</h3>
+          <p class="muted ev-sub">Seat heartbeats and Asks. Token-free.</p>
+        </div>
+        <span class="live-events" data-live-events="${data.events.length}"><i></i>${data.events.length} events</span>
       </div>
+      <div class="tabs ev-tabs"><button class="tab on" type="button">Events</button></div>
+      <article class="card ev-table-card" style="padding-bottom:10px">
+        <input class="table-search" id="events-search" type="search" placeholder="Search events" autocomplete="off">
+        <div id="events-list">${renderEvents(data.events, data.now)}</div>
+      </article>
     </section>
 
     <section class="page wrap" data-page="sessions" hidden>

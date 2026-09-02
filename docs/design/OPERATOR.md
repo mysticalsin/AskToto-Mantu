@@ -419,11 +419,13 @@ Section eyebrow on the rail: **Métis**. No Analytics leftover groups. No Fleet.
 
 ## Events
 
-`#events` **is** `https://demo.openpanel.dev/demo/shoey/events/events`. Token-free. **0 LLM tokens** to render.
+`#events` **is** `https://demo.openpanel.dev/demo/shoey/events/events` (Tony 10:39 PM ET refine). Token-free. **0 LLM tokens** to render.
 
-Layout: search, left **event-name rollup** (name + count + inline bar from real rows), right **event stream**. Each stream row: **name**, **profile** (hostname or SSO email, else `—`), **properties as chips**, **time**.
+Layout matches that Shoey Events table: title, Events tab only (no Conversions / Stats leftover), green live count from real rows, search, then **Created at · Name · Profile · Country · OS**. Created at is relative (`just now`). Profile is hostname or SSO email, else `—`. Country is city · ISO from `request.cf` / seat. OS only when the seat reported it. No browser column unless a seat sent one.
 
-Sources are real ingest only: heartbeat, ask, crm, rating, skill draft/approve/push, listen/recap when a seat sent that kind. Property chips are safe metadata only (mode, os, country, cache badge, connector, status, app version).
+Do **not** edit overlay `DESIGN.md`. This file is the Operator contract.
+
+Sources are real ingest only: heartbeat, ask, crm, rating, skill draft/approve/push, listen/recap when a seat sent that kind.
 
 **Token-free.** The renderer drops any value that looks like a token, API key, HMAC secret, JWT, or bearer string. Tests fail if a token-shaped string is present in the Events HTML.
 
@@ -441,9 +443,9 @@ Empty list: "No events yet." Never sample commerce events.
 
 `#realtime` **is** `https://demo.openpanel.dev/demo/shoey/realtime` (proof: `shoey-realtime.png`, `shoey-map.png`). Layout is not optional.
 
-1. Unique seats last 30 min (large number + blue bars from real heartbeat buckets).
+1. Unique seats last 30 min (sentence-case title + large count + blue bars from real heartbeat buckets).
 2. Activity stream from D1 (`listen`, `ask`, `recap`, skill, CRM). Relative time. OS / browser / device icons only when the seat reported them.
-3. World: light gray land, navy seat dots, green country pills (`N` seats · `K` countries in that cluster). `request.cf` only.
+3. World: Shoey land `#E5E7EB`, ocean `#F5F5F5`, charcoal seat dots from `request.cf` only, green country pills (`N` seats · `K` countries). No sample dots.
 4. Bottom three tables: Geo, Referrals (CRM / Listen / connectors), Paths (modes / skills / use cases).
 
 Poll `/v1/admin/dashboard` while the page is open. No sample dots. No invented sessions. No shoe paths.

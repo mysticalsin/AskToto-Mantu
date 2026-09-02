@@ -179,6 +179,9 @@ export interface ConsoleEvent {
   name: string
   hostname: string | null
   email: string | null
+  country: string | null
+  city: string | null
+  os: string | null
   chips: SafeChip[]
 }
 
@@ -429,6 +432,9 @@ function eventFromStored(row: EventRow, seatsById: Map<string, SeatRow>): Consol
     name: looksLikeSecret(row.kind) ? 'event' : row.kind,
     hostname: who.hostname,
     email: who.email || (row.actor && !looksLikeSecret(row.actor) ? row.actor : null),
+    country: row.country && !looksLikeSecret(row.country) ? row.country : seat?.country || null,
+    city: seat?.city && !looksLikeSecret(seat.city) ? seat.city : null,
+    os: seat?.os && seat.os !== 'unknown' && !looksLikeSecret(seat.os) ? seat.os : null,
     chips: safeChips({
       country: row.country,
       os: seat?.os,
@@ -740,29 +746,37 @@ export async function buildDashboard(
       storedEvents.map((e) => eventFromStored(e, seatsById)),
       [
         ...asks.slice(0, 40).map((a) => {
-          const who = displayProfile(seatsById.get(a.device_id))
+          const seat = seatsById.get(a.device_id)
+          const who = displayProfile(seat)
           return {
             id: `ask-${a.id}`,
             ts: a.ts,
             name: 'ask',
             hostname: who.hostname,
             email: who.email,
+            country: seat?.country || null,
+            city: seat?.city || null,
+            os: seat?.os && seat.os !== 'unknown' ? seat.os : null,
             chips: safeChips({
               mode: a.mode,
               provider: a.provider,
               cache: a.cache_status,
-              os: seatsById.get(a.device_id)?.os
+              os: seat?.os
             })
           }
         }),
         ...crm.slice(0, 40).map((r) => {
-          const who = displayProfile(seatsById.get(r.device_id))
+          const seat = seatsById.get(r.device_id)
+          const who = displayProfile(seat)
           return {
             id: `crm-${r.id}`,
             ts: r.ts,
             name: 'crm',
             hostname: who.hostname,
             email: who.email,
+            country: seat?.country || null,
+            city: seat?.city || null,
+            os: seat?.os && seat.os !== 'unknown' ? seat.os : null,
             chips: safeChips({
               status: r.status,
               connector: r.connector,

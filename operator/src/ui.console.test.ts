@@ -137,6 +137,14 @@ describe('product sidebar (#105)', () => {
     expect(html).toContain('data-alias="realtime"')
     expect(html).toContain('>Events</span><span>Sessions</span>')
     expect(html).toContain('class="world shoey-world"')
+    const eventsPage = html.slice(html.indexOf('data-page="events"'), html.indexOf('data-page="sessions"'))
+    expect(eventsPage).toContain('Created at')
+    expect(eventsPage).toContain('>Name<')
+    expect(eventsPage).toContain('>Profile<')
+    expect(eventsPage).toContain('>Country<')
+    expect(eventsPage).toContain('>OS<')
+    expect(eventsPage).not.toContain('Conversions')
+    expect(eventsPage).not.toContain('screen_view')
     expect(html).toContain('id="key-add"')
     const css = await handleRequest(
       new Request(`https://operator.test${SPA_CSS_PATH}`),
