@@ -445,7 +445,7 @@ Section eyebrow on the rail: **Métis**. No Analytics leftover groups. No Fleet.
 
 `#events` **is** `https://demo.openpanel.dev/demo/shoey/events/events` (Tony 10:39 PM ET refine). Token-free. **0 LLM tokens** to render.
 
-Layout matches that Shoey Events table: title, Events tab only (no Conversions / Stats leftover), green live count from real rows, search, then **Created at · Name · Profile · Country · OS · Browser**. Created at is relative (`just now`). Profile is hostname or SSO email, else `—`. Country is city · ISO from `request.cf` / seat. OS only when the seat reported it. Browser is `—` unless a seat sent one (Electron usually has none). Never invent Chrome or Safari.
+Layout matches that Shoey Events main pane: title, subtitle, tabs **Events | Conversions | Stats**, Listening pill, Date range, Filters, View, then **Created at · Name · Profile · Country · OS · Browser**. Created at is relative (`just now`). Profile is hostname or SSO email, else `—`. Country is city · ISO from `request.cf` / seat. OS only when the seat reported it. Browser is `—` unless a seat sent one (Electron usually has none). Never invent Chrome or Safari. Conversions / Stats are chrome panes over live Métis Asks / ingest counts — never shoe checkout rows.
 
 Do **not** edit overlay `DESIGN.md`. This file is the Operator contract.
 
