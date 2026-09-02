@@ -83,8 +83,8 @@ describe('product sidebar', () => {
 
   it('mirrors Shoey chrome with Métis nouns and no shoe SKUs', async () => {
     const html = await page()
-    expect(html).toContain('+ Create report')
-    expect(html).toContain('Ask AI anything')
+    expect(html).not.toContain('+ Create report')
+    expect(html).not.toContain('Ask AI anything')
     expect(html).toContain('Unique seats')
     expect(html).toContain('Unique sessions')
     expect(html).toContain('Sessions / day')

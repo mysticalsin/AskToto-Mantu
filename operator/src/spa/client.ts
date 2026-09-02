@@ -1,3 +1,6 @@
+/** Exact served statement. Regex literal: slash, caret, backslash, slash, slash. */
+export const PATHNAME_STRIP_JS = "location.pathname.replace(/^\\//, '')"
+
 /** Shoey chrome. Hashed and served at /assets/operator-<hash>.js. Not a stub. */
 export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime / Events
  * Content-hashed chrome. Authenticated HTML script-src this file.
@@ -29,7 +32,17 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
     notifications: 'Notifications', keys: 'Keys', settings: 'Settings', map: 'Realtime'
   }
 
-  function route() {
+  function route(to) {
+    if (typeof to === 'string') {
+      var next = to
+      if (next.charAt(0) === '#') next = next.slice(1)
+      if (next.charAt(0) === '/') next = next.slice(1)
+      if (!next) next = 'overview'
+      if (titles[next] || next === 'map') {
+        var want = '#' + next
+        if (location.hash !== want) location.hash = want
+      }
+    }
     var raw = (location.hash || '#overview').replace('#', '')
     var requested = titles[raw] ? raw : 'overview'
     var id = requested === 'map' ? 'realtime' : requested
@@ -43,19 +56,14 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
     var t = document.getElementById('page-title')
     if (t) t.textContent = titles[id]
   }
+  window.route = route
 
   window.addEventListener('hashchange', route)
   if (!location.hash) {
-    var path = location.pathname.replace(/^\\//, '')
+    var path = ${PATHNAME_STRIP_JS}
     if (path && titles[path]) location.hash = '#' + path
   }
   route()
-
-  var createBtn = document.getElementById('create-report')
-  var createMenu = document.getElementById('create-menu')
-  if (createBtn && createMenu) {
-    createBtn.addEventListener('click', function () { createMenu.classList.toggle('open') })
-  }
 
   document.querySelectorAll('[data-vol-tab]').forEach(function (b) {
     b.addEventListener('click', function () {
@@ -86,17 +94,6 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
       var q = evSearch.value.trim().toLowerCase()
       document.querySelectorAll('#events-list .event').forEach(function (row) {
         row.hidden = Boolean(q) && !(row.getAttribute('data-q') || '').includes(q)
-      })
-    })
-  }
-
-  var search = document.getElementById('nav-search')
-  if (search) {
-    search.addEventListener('input', function () {
-      var q = search.value.trim().toLowerCase()
-      document.querySelectorAll('[data-nav]').forEach(function (a) {
-        var hit = !q || (a.textContent || '').toLowerCase().includes(q)
-        a.hidden = !hit
       })
     })
   }

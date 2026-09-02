@@ -407,12 +407,6 @@ export function renderConsole(data: DashboardPayload): string {
       <h1>Métis</h1>
       <span class="chev">▾</span>
     </div>
-    <button class="create-btn" id="create-report" type="button">+ Create report <span>▾</span></button>
-    <div class="create-menu" id="create-menu">No reports yet. Overview and Realtime are the live Métis views.</div>
-    <div>
-      <input class="rail-search" id="nav-search" type="search" placeholder="Ask AI anything…" autocomplete="off">
-      <span class="kbd">⌘ J</span>
-    </div>
     ${renderNav()}
     <div class="rail-foot">
       <div class="rail-utils">
