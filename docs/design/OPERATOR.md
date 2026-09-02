@@ -61,7 +61,7 @@ Content is Métis, not sneakers. Real data only. No fake keys, no stub map, no s
 2. **Subscription first.** If Claude CLI (Cloud / Cloud Code, provider `claude-cli`) or Codex CLI (`codex-cli`) is connected and working, every user question routes there first. Operator-hosted API keys are fallback after quota or rate limit only.
 3. **Dust is retrieval only.** Second brain, Métis published wiki, Spotlight Ref. Never general chat.
 4. **CLI auth stays on the seat.** Settings → CLI Integration (`installCli` / `loginCli` / `testCli` / `cliConnected`) is unchanged. CLI kind stays `cli`. No API key. Do not fold CLI tokens into the Operator vault.
-5. **Cloudflare is an Operator connection**, not a seat secret. Account ID + API token live in the vault (last4 only). Overview pulls Workers, D1, and analytics for `metis-operator`. Fail loud if the token is missing.
+5. **Cloudflare is an Operator connection**, not a seat secret. Connect is a **login redirect** (`/cloudflare/connect` → `dash.cloudflare.com/login`). Not Account ID + token paste. last4 only in the vault. Overview pulls Workers, D1, and analytics for `metis-operator`. Fail loud if the token is missing.
 
 ## Pixel language (Shoey chrome, Métis nouns)
 
@@ -324,7 +324,7 @@ Operator is the source of truth for Tony's provider keys. `#keys` is where Tony 
 
 **Allowlist of vault providers (LLM).** `anthropic`, `openai`, `gemini`, `nvidia`, `deepseek`, `minimax`, plus other cloud `ProviderId`s that take an API key (`qwen`, `kimi`, `openrouter`, `groq`, `mistral`, `grok`, `custom`). Not `claude-cli`. Not `codex-cli`. Not `dust`. Not `local`.
 
-**Cloudflare is a connection row**, same vault table, provider `cloudflare-account` (Account ID + API token). See Cloudflare connect. It is not an LLM chat key and not the existing seat `cloudflare` AI Gateway provider.
+**Cloudflare is a connection row**, same vault table, provider `cloudflare-account`. Connect is a login redirect. It is not an LLM chat key and not the existing seat `cloudflare` AI Gateway provider.
 
 **Admin API (identity required: the two Tony emails).**
 
@@ -353,8 +353,9 @@ Tony connects Cloudflare **on Operator**, not on a seat.
 
 | Field | Where | UI |
 | --- | --- | --- |
-| Account ID | Vault row `cloudflare-account` | Shown as-is (not a secret) |
-| API token | Same row, AES-GCM | last4 only |
+| Connect | GET `/cloudflare/connect` | **302 login redirect** to `dash.cloudflare.com/login`. Not Account ID + token paste. |
+| Callback | GET `/cloudflare/callback` | 303 `/#keys` after Cloudflare login |
+| API token | Vault row `cloudflare-account`, AES-GCM | last4 only. Never a paste field. |
 | Token on a seat | Forbidden | — |
 
 **Pull into Overview** (range-aware, same calm charts as the KPI strip), scoped to this product:
@@ -406,7 +407,7 @@ The left rail keeps Shoey taskbar chrome and Métis labels only. Every KEEP item
 | `#events` | Events | Event name, profile, chips, time. Token-free. Real ingest |
 | `#sessions` | Sessions | Real seats from heartbeat. Hostname / SSO / em dash. Never invented visitors |
 | `#notifications` | Notifications | Failed CRM / pending skill diffs. Honest empty otherwise |
-| `#keys` | Keys | last4 add / rotate / revoke. Cloudflare Account ID + token. Seats never hold raw keys |
+| `#keys` | Keys | last4 add / rotate / revoke. Cloudflare login redirect (not Account ID + token paste). Seats never hold raw keys |
 | `#settings` | Settings | Keys fund-seats note + Theme. No second password |
 | `#map` | (alias) | Same Realtime body. `window.route('map')` highlights Realtime |
 
