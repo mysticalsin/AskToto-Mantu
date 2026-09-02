@@ -522,6 +522,7 @@ describe('realtime main pane is live heartbeats, not leftover OpenPanel', () => 
     const html = await page(store)
     const realtime = html.slice(html.indexOf('data-page="realtime"'), html.indexOf('data-page="events"'))
     expect(realtime).toMatch(/class="n rt-n">2</)
+    expect(html).toMatch(/class="live-dot"><i><\/i>2</)
     expect(realtime).toContain('<rect')
     expect(realtime).toContain('fill="#2563EB"')
     expect(realtime).not.toContain('stroke="#EDEDED"')
