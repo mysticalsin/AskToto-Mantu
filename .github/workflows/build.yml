@@ -46,6 +46,10 @@ jobs:
       # silently shipping again. Runs before the suite — it is fast and its failure is unambiguous.
       - run: npm run check:bugs
       - run: npm run build
+      # bar-toolbar.layout.test.ts measures the listening Bar in a real Chromium (fe540ce). Playwright
+      # ships without a browser; without this step the suite dies at browserType.launch on every leg.
+      # Only the headless shell (~100 MB), not the full Chromium build.
+      - run: npx playwright install chromium-headless-shell
       - run: npm test
 
   security:
