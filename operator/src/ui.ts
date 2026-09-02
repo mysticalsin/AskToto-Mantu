@@ -1,24 +1,235 @@
 import {
   bars,
-  blueArea,
-  blueBars,
+  choropleth,
   dualLine,
   heatmapGrid,
-  shoeyWorld,
   sparklineArea,
   sparklineLine,
   stackedTokens
 } from './charts'
-import { statusBadge } from './components/ui/status-badge'
-import { renderOverviewMini10 } from './overview-cards'
-import { SPA_CSS_PATH, SPA_JS_PATH } from './spa/manifest'
+import { statusBadge, STATUS_BADGE_CSS } from './components/ui/status-badge'
 import { CRM_FILTER_ORDER } from './crm'
 import type { CloudflareOverview } from './cloudflare'
-import { ONLINE_MS, type ConsoleEvent, type DashboardPayload, type ProfileRow } from './dashboard'
-import { EXTRA_PAGES, FORBIDDEN_NAV, NAV_IDS, NAV_SECTIONS } from './nav'
+import type { ConsoleEvent, DashboardPayload, ProfileRow } from './dashboard'
+import { FORBIDDEN_NAV, NAV_IDS, NAV_SECTIONS } from './nav'
 import { looksLikeSecret } from './redact'
 
 const MISSING = '—'
+
+const CSS = `
+@import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.min.css');
+@import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.min.css');
+:root, [data-theme="dark"] {
+  --bg: #0a0a0b;
+  --panel: #111113;
+  --hair: rgba(255,255,255,0.10);
+  --ink: rgba(255,255,255,0.94);
+  --ink2: rgba(255,255,255,0.55);
+  --ink3: rgba(255,255,255,0.38);
+  --accent: #7C8CF8;
+  --ok: #83C092;
+  --danger: #F0717A;
+  --land: #2a2a2e;
+  --chart-1: #1a1a1d;
+  --chart-2: #2a2a2e;
+  --chart-3: #52525b;
+  --chart-4: #a1a1aa;
+  --chart-5: #e4e4e7;
+  --nav: #0d0d0f;
+  --nav-on: rgba(255,255,255,0.08);
+  --dot: rgba(255,255,255,0.055);
+  --mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
+  --sans: 'Geist', Geist, Inter, system-ui, sans-serif;
+}
+[data-theme="light"] {
+  --bg: #f4f4f5;
+  --panel: #ffffff;
+  --hair: rgba(15,15,17,0.10);
+  --ink: #18181b;
+  --ink2: rgba(24,24,27,0.62);
+  --ink3: rgba(24,24,27,0.42);
+  --land: #d4d4d8;
+  --chart-1: #e4e4e7;
+  --chart-2: #d4d4d8;
+  --chart-3: #a1a1aa;
+  --chart-4: #52525b;
+  --chart-5: #18181b;
+  --nav: #fafafa;
+  --nav-on: rgba(15,15,17,0.06);
+  --dot: rgba(15,15,17,0.08);
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f4f4f5;
+    --panel: #ffffff;
+    --hair: rgba(15,15,17,0.10);
+    --ink: #18181b;
+    --ink2: rgba(24,24,27,0.62);
+    --ink3: rgba(24,24,27,0.42);
+    --land: #d4d4d8;
+    --chart-1: #e4e4e7;
+    --chart-2: #d4d4d8;
+    --chart-3: #a1a1aa;
+    --chart-4: #52525b;
+    --chart-5: #18181b;
+    --nav: #fafafa;
+    --nav-on: rgba(15,15,17,0.06);
+    --dot: rgba(15,15,17,0.08);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; color: var(--ink); font: 12px/1.45 var(--sans); }
+body {
+  background-color: var(--bg);
+  background-image: radial-gradient(var(--dot) 1px, transparent 1px);
+  background-size: 14px 14px;
+}
+a { color: var(--accent); text-decoration: none; }
+.shell { display: grid; grid-template-columns: 228px 1fr; min-height: 100%; }
+.rail {
+  display: flex; flex-direction: column; gap: 10px;
+  background: var(--nav); border-right: 1px solid var(--hair);
+  padding: 14px 12px 16px; min-height: 100vh; position: sticky; top: 0;
+}
+.rail-brand { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.rail-brand h1 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.03em; }
+.rail-search {
+  width: 100%; border: 1px solid var(--hair); background: var(--panel); color: var(--ink);
+  border-radius: 8px; padding: 7px 10px; font: 12px var(--sans);
+}
+.rail-search::placeholder { color: var(--ink3); }
+.rail nav { display: flex; flex-direction: column; gap: 14px; flex: 1; }
+.nav-sec { display: flex; flex-direction: column; gap: 2px; }
+.nav-sec p {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--ink3); margin: 0 6px 4px;
+}
+.nav-item {
+  display: block; padding: 7px 8px; border-radius: 8px; color: var(--ink);
+  font-size: 13px; font-weight: 550;
+}
+.nav-item:hover { background: var(--nav-on); }
+.nav-item.on { background: var(--nav-on); font-weight: 650; }
+.rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding-top: 12px; }
+.who { font-family: var(--mono); font-size: 10px; color: var(--ink2); word-break: break-all; }
+.theme-btn {
+  border: 1px solid var(--hair); background: transparent; color: var(--ink2);
+  font: 11px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
+  padding: 6px 8px; border-radius: 8px; cursor: pointer;
+}
+.main { min-width: 0; }
+.top {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
+  padding: 12px 16px; border-bottom: 1px solid var(--hair);
+  background: color-mix(in srgb, var(--bg) 86%, transparent); position: sticky; top: 0; z-index: 4;
+}
+.top h2 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -0.03em; }
+.eyebrow {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--ink3); margin: 0 0 8px;
+}
+.wrap { padding: 12px 16px 36px; display: grid; gap: 12px; }
+.kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
+.card {
+  position: relative;
+  background: var(--panel);
+  border: 1px solid var(--hair);
+  padding: 10px 12px 0;
+  overflow: hidden;
+}
+.card::before, .card::after {
+  content: ''; position: absolute; width: 8px; height: 8px; pointer-events: none;
+  border-color: color-mix(in srgb, var(--ink) 28%, transparent); border-style: solid;
+}
+.card::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
+.card::after { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
+.card h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.kpi-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+.kpi .n { font-size: 28px; font-weight: 650; letter-spacing: -0.04em; line-height: 1; margin-top: 10px; }
+.kpi .sub { font-family: var(--mono); font-size: 10px; color: var(--ink3); margin: 4px 0 8px; }
+.spark { display: block; width: calc(100% + 24px); margin: 0 -12px; height: 56px; }
+.chart { display: block; width: 100%; height: 140px; }
+.world { display: block; width: 100%; height: auto; max-height: 420px; }
+.heat { display: block; width: 100%; max-width: 280px; height: auto; }
+.grat { stroke: color-mix(in srgb, var(--ink) 18%, transparent); stroke-width: 0.6; }
+.dot { fill: var(--accent); stroke: var(--bg); stroke-width: 0.8; }
+.tick { fill: var(--ink3); font-size: 9px; font-family: var(--mono); }
+.tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
+.tab {
+  border: 1px solid transparent; background: transparent; color: var(--ink2);
+  font: 11px/1 var(--mono); letter-spacing: 0.04em; text-transform: uppercase;
+  padding: 4px 9px; border-radius: 999px; cursor: pointer;
+}
+.tab.on { background: var(--chart-5); color: var(--bg); }
+[data-theme="light"] .tab.on, :root:not([data-theme="dark"]) .tab.on { color: #0a0a0b; background: #18181b; }
+.pill {
+  display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 10px;
+  font-family: var(--mono); border: 1px solid var(--hair); color: var(--ink2);
+}
+.pill.up, .pill.hit { color: var(--ok); }
+.pill.down { color: var(--danger); }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--hair);
+  font-family: var(--mono); font-size: 10px; color: var(--ink2); background: var(--nav-on);
+}
+.empty { color: var(--ink2); font-size: 12px; padding: 10px 0 12px; }
+.fail-loud { color: var(--danger); font-size: 13px; font-weight: 600; padding: 10px 0 12px; }
+.key-form { display: grid; gap: 8px; margin: 0 0 14px; }
+.key-form .row input, .key-form .row select {
+  border: 1px solid var(--hair); background: var(--bg); color: var(--ink);
+  border-radius: 8px; padding: 6px 8px; font: 12px var(--sans); min-width: 120px;
+}
+.map-empty { position: absolute; left: 12px; top: 42px; z-index: 1; }
+table { width: 100%; border-collapse: collapse; }
+th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--hair); font-size: 12px; vertical-align: top; }
+th { color: var(--ink3); font-weight: 500; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
+button, .btn {
+  background: transparent; color: var(--ink); border: 1px solid var(--hair);
+  padding: 4px 9px; font-size: 11px; cursor: pointer; border-radius: 999px;
+}
+button.primary { background: var(--chart-5); color: var(--bg); border-color: transparent; font-weight: 600; }
+button.danger { color: var(--danger); }
+pre, textarea {
+  width: 100%; background: color-mix(in srgb, var(--bg) 70%, #000); color: var(--ink);
+  border: 1px solid var(--hair); padding: 8px; font: 11px var(--mono);
+}
+textarea { min-height: 120px; }
+.row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.muted { color: var(--ink2); }
+.legend { display: flex; gap: 12px; font-family: var(--mono); font-size: 10px; color: var(--ink3); padding: 6px 0 10px; }
+.legend i { display: inline-block; width: 10px; height: 2px; background: var(--chart-5); vertical-align: middle; margin-right: 4px; }
+.legend i.ask { background: var(--accent); }
+.funnel { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.crm-funnel { display: grid; gap: 6px; margin: 0 0 10px; }
+.crm-funnel-row { display: grid; grid-template-columns: 88px 1fr auto; gap: 8px; align-items: center; }
+.crm-funnel-track { height: 6px; background: var(--nav-on); border: 1px solid var(--hair); position: relative; overflow: hidden; }
+.crm-funnel-ok { position: absolute; inset: 0 auto 0 0; background: var(--ok); opacity: 0.7; }
+.crm-funnel-fail { position: absolute; inset: 0 0 0 auto; background: var(--danger); opacity: 0.7; }
+.crm-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0 0 10px; }
+.crm-kpis .n { font-size: 22px; margin-top: 4px; }
+.remote a { color: var(--accent); }
+.heat-wrap { display: flex; gap: 16px; align-items: flex-start; }
+.heat-meta { font-family: var(--mono); font-size: 10px; color: var(--ink3); }
+.event {
+  display: grid; grid-template-columns: 140px 160px 1fr 88px; gap: 10px; align-items: start;
+  padding: 10px 4px; border-bottom: 1px solid var(--hair);
+}
+.event-name { font-weight: 650; }
+.event-profile { color: var(--ink2); }
+.event-chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.event-time { font-family: var(--mono); font-size: 10px; color: var(--ink3); text-align: right; }
+.live { display: inline-block; padding: 1px 7px; border-radius: 999px; background: #111; color: #fff; font: 10px var(--mono); letter-spacing: 0.08em; }
+[data-theme="light"] .live { background: #18181b; }
+.page[hidden] { display: none !important; }
+@media (max-width: 980px) {
+  .shell { grid-template-columns: 1fr; }
+  .rail { position: relative; min-height: auto; }
+  .kpis, .grid-2, .grid-3, .crm-kpis, .event { grid-template-columns: 1fr; }
+}
+`
 
 function esc(s: unknown): string {
   return String(s ?? '')
@@ -31,42 +242,20 @@ function when(ts: number): string {
   return new Date(ts).toISOString().replace('T', ' ').slice(0, 16)
 }
 
-function ago(ts: number, now: number): string {
-  const d = now - ts
-  if (d < 90_000) return 'just now'
-  if (d < 3_600_000) {
-    const m = Math.max(1, Math.round(d / 60_000))
-    return m === 1 ? '1 minute ago' : `${m} minutes ago`
-  }
-  if (d < 86_400_000) {
-    const h = Math.max(1, Math.round(d / 3_600_000))
-    return h === 1 ? '1 hour ago' : `${h} hours ago`
-  }
-  return when(ts)
-}
-
 function field(value: string | null | undefined): string {
   if (!value || looksLikeSecret(value)) return MISSING
   return esc(value)
 }
 
 function renderCloudflare(cf: CloudflareOverview): string {
-  if (!cf.connected) {
-    return `<div class="kpis" data-cf-idle>
-      ${kpiCard({ title: 'Requests', value: '0', sub: `${cf.worker} · ${cf.range}`, spark: '' })}
-      ${kpiCard({ title: 'Errors', value: '0', sub: cf.worker, spark: '' })}
-      ${kpiCard({ title: 'CPU', value: '0', sub: 'cpuTimeMs', spark: '' })}
-    </div>
-    <div class="sub muted" style="padding-bottom:8px">Connect Cloudflare (login) on Keys. No token on seats. Worker ${esc(cf.worker)}.</div>`
-  }
   if (cf.error) {
     return `<div class="fail-loud" data-cf-error>${esc(cf.error)}</div>
-      <div class="sub muted" style="padding-bottom:8px">Worker ${esc(cf.worker)}. Connect Cloudflare (login) on Keys. No token on seats.</div>`
+      <div class="sub muted" style="padding-bottom:8px">Worker ${esc(cf.worker)}. Connect Account ID and API token on Keys. No token on seats.</div>`
   }
   const workers = cf.workers.length ? cf.workers.map((w) => esc(w)).join(', ') : 'none listed'
-  const req = cf.requests == null ? '0' : String(cf.requests)
-  const err = cf.errors == null ? '0' : String(cf.errors)
-  const cpu = cf.cpuMs == null ? '0' : `${cf.cpuMs} ms`
+  const req = cf.requests == null ? 'not reported' : String(cf.requests)
+  const err = cf.errors == null ? 'not reported' : String(cf.errors)
+  const cpu = cf.cpuMs == null ? 'not reported' : `${cf.cpuMs} ms`
   return `<div class="kpis">
       ${kpiCard({ title: 'Requests', value: req, sub: `${cf.worker} · ${cf.range}`, spark: '' })}
       ${kpiCard({ title: 'Errors', value: err, sub: cf.worker, spark: '' })}
@@ -103,321 +292,45 @@ function renderNav(): string {
   return `<nav id="rail-nav">${sections}</nav>`
 }
 
-function seriesDelta(values: number[]): { text: string; cls: string } | null {
-  if (values.length < 4) return null
-  const mid = Math.floor(values.length / 2)
-  const a = values.slice(0, mid).reduce((n, v) => n + v, 0) / mid
-  const b = values.slice(mid).reduce((n, v) => n + v, 0) / (values.length - mid)
-  if (a < 1) return null
-  const pct = ((b - a) / a) * 100
-  if (!Number.isFinite(pct) || Math.abs(pct) > 400) return null
-  const rounded = Math.abs(pct) < 0.05 ? 0 : Math.round(pct * 10) / 10
-  if (rounded === 0) return null
-  const sign = rounded > 0 ? '↑' : '↓'
-  return { text: `${sign} ${Math.abs(rounded)}%`, cls: rounded > 0 ? 'up' : 'down' }
-}
-
-function formatCompact(n: number): string {
-  if (n >= 1_000_000) return `${Math.round(n / 100_000) / 10}M`
-  if (n >= 1000) return `${Math.round(n / 100) / 10}K`
-  return String(n)
-}
-
-function reported(value: string | number | null | undefined, format?: (n: number) => string): string {
-  if (value == null) return '0'
-  if (typeof value === 'number') return format ? format(value) : formatCompact(value)
-  return value
-}
-
-function formatPct(n: number | null): string {
-  if (n == null) return '0%'
-  return `${n}%`
-}
-
-function shoeyKpi(title: string, value: string, series: number[]): string {
-  const d = seriesDelta(series)
-  return `<article class="card kpi">
-    <p class="eyebrow">${esc(title)}</p>
-    <div class="kpi-top">
-      <div class="n">${esc(value)}</div>
-      ${d ? `<span class="delta ${d.cls}">${esc(d.text)}</span>` : ''}
-    </div>
-    ${blueBars(series)}
-  </article>`
-}
-
-function volumeTable(
-  id: string,
-  tabs: { id: string; label: string }[],
-  groups: Record<string, { name: string; views: number; sess: number }[]>,
-  searchPh: string,
-  cols: { value: string; sess: string } = { value: 'Views', sess: 'Sess' },
-  bar: 'gray' | 'blue' = 'gray'
-): string {
-  const tabBtns = tabs
-    .map((t, i) => `<button class="tab${i === 0 ? ' on' : ''}" data-vol-tab="${id}:${t.id}" type="button">${esc(t.label)}</button>`)
-    .join('')
-  const barCls = bar === 'blue' ? 'vol-bar blue' : 'vol-bar'
-  const panes = tabs
-    .map((t, i) => {
-      const rows = rollupVol(groups[t.id] || [])
-      const max = Math.max(1, ...rows.map((r) => r.views))
-      const body = rows.length
-        ? rows
-            .map((r) => {
-              const w = Math.round((r.views / max) * 100)
-              return `<div class="vol-row" data-q="${esc(r.name.toLowerCase())}">
-                <span class="${barCls}" style="width:${w}%"></span>
-                <span>${esc(r.name)}</span>
-                <span class="muted">${r.views}</span>
-                <span class="muted">${r.sess}</span>
-              </div>`
-            })
-            .join('')
-        : `<div class="empty">No ${esc(t.label.toLowerCase())} in this window.</div>`
-      return `<div data-vol-pane="${id}:${t.id}" ${i === 0 ? '' : 'hidden'}>
-        <div class="vol-row muted" style="font-size:10px;letter-spacing:0.08em;text-transform:uppercase">
-          <span></span><span>${esc(cols.value)}</span><span>${esc(cols.sess)}</span>
-        </div>
-        ${body}
-      </div>`
-    })
-    .join('')
-  return `<article class="card table-card" style="padding-bottom:10px">
-    <div class="tabs">${tabBtns}</div>
-    <input class="table-search" data-vol-search="${id}" type="search" placeholder="${esc(searchPh)}" autocomplete="off">
-    ${panes}
-  </article>`
-}
-
-function rollupVol(rows: { name: string; views: number; sess: number }[]): { name: string; views: number; sess: number }[] {
-  const by = new Map<string, { name: string; views: number; sess: number }>()
-  for (const row of rows) {
-    const hit = by.get(row.name)
-    if (hit) {
-      hit.views += row.views
-      hit.sess += row.sess
-    } else {
-      by.set(row.name, { ...row })
-    }
-  }
-  return [...by.values()].sort((a, b) => b.views - a.views)
-}
-
-function osIcon(os: string): string {
-  const k = os.toLowerCase()
-  if (k.includes('darwin') || k.includes('mac')) return '<i class="ic-mac" title="macOS"></i>'
-  if (k.includes('win')) return '<i class="ic-win" title="Windows"></i>'
-  if (!os) return ''
-  return '<i class="ic-desk" title="device"></i>'
-}
-
-function osKind(os: string): 'mac' | 'windows' | 'linux' | 'desk' {
-  const k = os.toLowerCase()
-  if (k.includes('darwin') || k.includes('mac')) return 'mac'
-  if (k.includes('win')) return 'windows'
-  if (k.includes('linux')) return 'linux'
-  return 'desk'
-}
-
-function osBadge(os: string): string {
-  const kind = osKind(os)
-  const label = kind === 'desk' ? 'os' : kind
-  return `<span class="os-badge ${kind}" title="${esc(os || 'os')}">${label === 'windows' ? 'win' : label}</span>`
-}
-
-function seatStatus(lastSeen: number, now: number): { id: 'active' | 'paused' | 'inactive'; label: string } {
-  const age = now - lastSeen
-  if (age <= ONLINE_MS) return { id: 'active', label: 'Active' }
-  if (age <= 30 * 60 * 1000) return { id: 'paused', label: 'Paused' }
-  return { id: 'inactive', label: 'Inactive' }
-}
-
-function emptyPage(id: string, title: string, hook: string): string {
-  return `<section class="page wrap" data-page="${id}" hidden>
-    <div class="empty-card">
-      <h3>${esc(title)}</h3>
-      <p>${esc(hook)}</p>
-    </div>
-  </section>`
-}
-
-function mixRows(items: { label: string; value: number }[]): { name: string; views: number; sess: number }[] {
-  return items
-    .filter((i) => i.label && !looksLikeSecret(i.label))
-    .map((i) => ({ name: i.label, views: i.value, sess: i.value }))
-}
-
-function dayLabel(ts: number): string {
-  return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
-}
-
-function emptyData(copy = 'We could not find any data here yet'): string {
-  return `<div class="empty-data">
-      <div class="empty-dash" aria-hidden="true"></div>
-      <strong>No data</strong>
-      <p>${esc(copy)}</p>
-    </div>`
-}
-
-function renderEvents(events: ConsoleEvent[], now: number): string {
-  const head = `<div class="event event-head" aria-hidden="true">
-      <div>Created at</div><div>Name</div><div>Profile</div><div>Country</div><div>OS</div><div>Browser</div>
-    </div>`
-  if (!events.length) return `${head}${emptyData('No events yet.')}`
-  const rows = events
+function renderEvents(events: ConsoleEvent[]): string {
+  if (!events.length) return '<div class="empty">No events yet.</div>'
+  return events
     .map((e) => {
       const name = looksLikeSecret(e.name) ? 'event' : e.name
-      const profile = e.hostname || e.email || null
-      const place = [e.city, e.country].filter((v) => v && !looksLikeSecret(v)).join(' · ')
-      const browser = e.browser && !looksLikeSecret(e.browser) ? e.browser : null
-      const chips = e.chips.map((c) => `${c.key} ${c.value}`).join(' ')
-      const path = e.chips.find((c) => c.key === 'path')?.value || '/'
-      const q = `${name} ${path} ${profile || ''} ${place} ${e.os || ''} ${browser || ''} ${chips}`.toLowerCase()
-      return `<div class="event" data-event="${esc(e.id)}" data-q="${esc(q)}">
-        <div class="event-time">${esc(ago(e.ts, now))}</div>
+      const chips = e.chips
+        .filter((c) => !looksLikeSecret(c.key) && !looksLikeSecret(c.value))
+        .map((c) => `<span class="chip">${esc(c.key)} ${esc(c.value)}</span>`)
+        .join('')
+      const profile = e.hostname || e.email || MISSING
+      return `<div class="event" data-event="${esc(e.id)}">
         <div class="event-name">${esc(name)}</div>
-        <div class="event-profile">${field(profile)}</div>
-        <div class="event-country">${place ? esc(place) : MISSING}</div>
-        <div class="event-os">${e.os ? `${osIcon(e.os)} ${esc(e.os)}` : MISSING}</div>
-        <div class="event-browser">${browser ? esc(browser) : MISSING}</div>
+        <div class="event-profile">${field(profile === MISSING ? null : profile)}</div>
+        <div class="event-chips">${chips}</div>
+        <div class="event-time">${esc(when(e.ts))}</div>
       </div>`
     })
     .join('')
-  return `${head}${rows}`
 }
 
-function eventStats(events: ConsoleEvent[]): string {
-  const counts = new Map<string, number>()
-  for (const e of events) {
-    const name = looksLikeSecret(e.name) ? 'event' : e.name
-    counts.set(name, (counts.get(name) || 0) + 1)
-  }
-  if (!counts.size) return emptyData()
-  const rows = [...counts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .map(([name, n]) => `<div class="stat-line"><span>${esc(name)}</span><b>${n}</b></div>`)
-    .join('')
-  return `<p class="eyebrow">Live ingest</p>${rows}`
-}
-
-function sessionPath(events: ConsoleEvent[], which: 'entry' | 'exit'): string {
-  if (!events.length) return 'heartbeat'
-  const row = which === 'entry' ? events[events.length - 1] : events[0]
-  const path = row.chips.find((c) => c.key === 'path')?.value
-  if (path && path !== '/' && !looksLikeSecret(path)) return path
-  const name = looksLikeSecret(row.name) ? 'event' : row.name
-  return name || 'heartbeat'
-}
-
-function sessionDuration(ms: number): string {
-  if (ms < 1000) return '0s'
-  if (ms < 60_000) {
-    const s = ms / 1000
-    return s < 10 && s % 1 >= 0.05 ? `${Math.round(s * 10) / 10}s` : `${Math.round(s)}s`
-  }
-  return `${Math.round(ms / 60_000)}m`
-}
-
-function heartbeatFreshness(lastSeen: number, now: number): number {
-  const age = now - lastSeen
-  if (age <= ONLINE_MS) return 100
-  if (age <= 30 * 60 * 1000) return Math.max(36, Math.round(100 - (age / (30 * 60 * 1000)) * 64))
-  const hours = age / (60 * 60 * 1000)
-  return Math.max(8, Math.round(28 - Math.min(20, hours)))
-}
-
-const AVATAR_PASTELS = ['#BBF7D0', '#BFDBFE', '#FBCFE8', '#FDE68A', '#DDD6FE', '#FED7AA']
-
-function seatAvatar(seed: string): string {
-  let h = 0
-  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0
-  const bg = AVATAR_PASTELS[h % AVATAR_PASTELS.length]
-  const initial = (seed.replace(/[^A-Za-z0-9]/g, '')[0] || 'M').toUpperCase()
-  return `<span class="sess-avatar" style="background:${bg}" aria-hidden="true">${esc(initial)}</span>`
-}
-
-function iconSearch(): string {
-  return '<svg class="tool-ic" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M10.4 10.4L14 14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>'
-}
-
-function iconFilter(): string {
-  return '<svg class="tool-ic" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 3.5h12L9.5 9v4l-3 1.2V9L2 3.5z" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>'
-}
-
-function iconView(): string {
-  return '<svg class="tool-ic" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="2" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="9" y="2" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="2" y="9" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/><rect x="9" y="9" width="5" height="5" rx="1" fill="none" stroke="currentColor" stroke-width="1.3"/></svg>'
-}
-
-function seatOverlayChrome(): string {
-  return `<div class="seat-overlay" id="seat-overlay" hidden>
-      <div class="seat-overlay-head">
-        <div>
-          <p class="eyebrow">Seat <span data-seat-no></span></p>
-          <h4 data-seat-title>Seat</h4>
-        </div>
-        <button type="button" id="seat-overlay-close">Close</button>
-      </div>
-      <div class="seat-overlay-grid" data-seat-body></div>
-    </div>`
-}
-
-function eventsForSeat(events: ConsoleEvent[], r: ProfileRow): ConsoleEvent[] {
-  return events
-    .filter(
-      (e) =>
-        (e.device && e.device === r.device) ||
-        (r.hostname && e.hostname === r.hostname) ||
-        (r.email && e.email === r.email)
+function renderProfiles(rows: ProfileRow[], osFilter?: string): string {
+  const filtered = osFilter
+    ? rows.filter((r) => (osFilter === 'darwin' ? r.os === 'darwin' : r.os === 'win' || r.os === 'win32' || r.os === 'windows'))
+    : rows
+  if (!filtered.length) return '<div class="empty">No seats on the fleet yet.</div>'
+  const body = filtered
+    .map(
+      (r) => `<tr data-country="${esc(r.country || '')}" data-os="${esc(r.os)}">
+        <td>${field(r.hostname)}</td>
+        <td>${field(r.email)}</td>
+        <td class="muted">${esc(r.os)}</td>
+        <td class="muted">${esc(r.appVersion)}</td>
+        <td class="muted">${esc(r.country || MISSING)}${r.city ? ` · ${esc(r.city)}` : ''}</td>
+        <td class="muted">${esc(when(r.lastSeen))}</td>
+        <td>${r.live ? '<span class="pill up">live</span>' : '<span class="muted">idle</span>'}</td>
+      </tr>`
     )
-    .sort((a, b) => b.ts - a.ts)
-}
-
-function renderSeatTable(rows: ProfileRow[], events: ConsoleEvent[], now: number): string {
-  const head = `<div class="seat-head sess-head" aria-hidden="true">
-      <div>Started</div><div>Session id</div><div>Profile</div><div>Entry page</div><div>Exit page</div><div>Duration</div>
-    </div>`
-  if (!rows.length) {
-    return `<div class="seat-card" data-seat-table>${head}<div class="empty" style="padding:28px 16px">No seats on the fleet yet. Heartbeats will fill this. Empty is an empty card, not sample servers.</div>
-    ${seatOverlayChrome()}
-  </div>`
-  }
-  const body = rows
-    .map((r, i) => {
-      const status = seatStatus(r.lastSeen, now)
-      const computer = r.hostname && !looksLikeSecret(r.hostname) ? r.hostname : MISSING
-      const identity = r.email && !looksLikeSecret(r.email) ? r.email : computer
-      const loc = [r.city, r.country].filter((v) => v && !looksLikeSecret(v)).join(' · ') || MISSING
-      const license = r.license && !looksLikeSecret(r.license) ? r.license : MISSING
-      const mine = eventsForSeat(events, r)
-      const recent = mine
-        .slice(0, 6)
-        .map((e) => `${ago(e.ts, now)} · ${looksLikeSecret(e.name) ? 'event' : e.name}`)
-        .join(' | ')
-      const started = r.firstSeen || r.lastSeen
-      const entry = sessionPath(mine, 'entry')
-      const exit = sessionPath(mine, 'exit')
-      const dur = sessionDuration(Math.max(0, r.lastSeen - started))
-      const meter = heartbeatFreshness(r.lastSeen, now)
-      const bars = (mine.length ? mine.slice(0, 8).map((e) => e.ts) : [r.lastSeen])
-        .map((t) => String(heartbeatFreshness(t, now)))
-        .join(',')
-      const q = `${computer} ${r.device} ${identity} ${r.os} ${entry} ${exit} ${loc} ${status.label} ${license}`.toLowerCase()
-      const no = String(i + 1).padStart(2, '0')
-      return `<div class="seat-row sess-row" data-seat-row data-q="${esc(q)}" data-country="${esc(r.country || '')}" data-os="${esc(r.os)}" data-seat-name="${esc(computer)}" data-seat-computer="${esc(computer)}" data-seat-identity="${esc(identity)}" data-seat-location="${esc(loc)}" data-seat-ip="${MISSING}" data-seat-license="${esc(license)}" data-seat-status="${esc(status.label)}" data-seat-status-id="${status.id}" data-seat-meter="${meter}" data-seat-bars="${esc(bars)}" data-seat-last="${esc(when(r.lastSeen))}" data-seat-version="${esc(r.appVersion || MISSING)}" data-seat-session="${esc(r.device)}" data-seat-recent="${esc(recent)}" data-seat-no="${no}">
-        <div class="muted">${esc(ago(started, now))}</div>
-        <div class="sess-id" title="${esc(r.device)}">${esc(r.device)}${r.device.length >= 8 ? '…' : ''}</div>
-        <div class="sess-profile">${seatAvatar(computer === MISSING ? r.device : computer)} ${osBadge(r.os)} <span class="sess-host">${computer === MISSING ? MISSING : esc(computer)}</span></div>
-        <div class="muted">${esc(entry)}</div>
-        <div class="muted">${esc(exit)}</div>
-        <div>${esc(dur)}</div>
-      </div>`
-    })
     .join('')
-  return `<div class="seat-card" data-seat-table>
-    ${head}${body}
-    ${seatOverlayChrome()}
-  </div>`
+  return `<table><thead><tr><th>Computer</th><th>SSO email</th><th>OS</th><th>Version</th><th>Country</th><th>Seen</th><th></th></tr></thead><tbody>${body}</tbody></table>`
 }
 
 function renderLicenses(rows: ProfileRow[]): string {
@@ -438,7 +351,12 @@ function renderLicenses(rows: ProfileRow[]): string {
 
 export function renderConsole(data: DashboardPayload): string {
   const k = data.kpis
-  const ops = data.ops
+  const maps = {
+    land: choropleth(data.map.countries, data.map.dots, 'land'),
+    analytics: choropleth(data.map.countries, data.map.dots, 'analytics'),
+    graticule: choropleth(data.map.countries, data.map.dots, 'graticule'),
+    hatch: choropleth(data.map.countries, data.map.dots, 'hatch')
+  }
   const canRetry = (status: string): boolean => status === 'failed' || status === 'expired'
   const crmRows = data.crm.rows
     .map((r) => {
@@ -465,10 +383,78 @@ export function renderConsole(data: DashboardPayload): string {
       </tr>`
     })
     .join('')
+  const landing = data.crm.landing
+  const failRate = landing.failRatePct == null ? 'hidden' : `${landing.failRatePct}%`
+  const funnelRows = data.crm.funnel
+    .map((f) => {
+      const att = Math.max(f.attempted, 1)
+      const okW = Math.round((f.success / att) * 100)
+      const failW = Math.round((f.failed / att) * 100)
+      return `<div class="crm-funnel-row">
+        <span class="muted">${esc(f.connector)}</span>
+        <div class="crm-funnel-track" title="attempted ${f.attempted}">
+          <span class="crm-funnel-ok" style="width:${okW}%"></span>
+          <span class="crm-funnel-fail" style="width:${failW}%"></span>
+        </div>
+        <span class="muted">${f.attempted} att · ${f.submitted} sub · ${f.success} ok · ${f.failed} fail</span>
+      </div>`
+    })
+    .join('')
+  const askRows = data.asks
+    .map(
+      (a) => `<tr>
+        <td>${esc(a.mode)}</td>
+        <td>${esc(a.preview)}</td>
+        <td><span class="pill ${esc(a.cache_status)}">${esc(a.cache_status)}</span></td>
+        <td class="muted">${esc(a.provider)}</td>
+        <td><button data-reveal="${esc(a.id)}">Reveal</button></td>
+      </tr>`
+    )
+    .join('')
+  const costRows = data.cost.table
+    .map(
+      (r) => `<tr>
+        <td>${esc(r.provider)}</td>
+        <td>${esc(r.mode)}</td>
+        <td>${r.asks}</td>
+        <td>${r.read == null ? 'not reported' : r.read}</td>
+        <td>${r.write == null ? 'not reported' : r.write}</td>
+        <td>${r.uncached == null ? 'not reported' : r.uncached}</td>
+        <td>${r.estimate ?? 'not reported'}</td>
+      </tr>`
+    )
+    .join('')
+  const timeline = data.change.timeline
+    .map(
+      (t) => `<tr>
+        <td class="muted">${esc(when(t.ts))}</td>
+        <td>${esc(t.action)}</td>
+        <td class="muted">${esc(t.actor)}</td>
+        <td>${esc(t.detail)}</td>
+      </tr>`
+    )
+    .join('')
+  const props = data.proposals
+    .map(
+      (p) => `<div class="card" data-proposal="${esc(p.id)}">
+        <div class="row"><strong>${esc(p.skill_id)}</strong> <span class="pill">${esc(p.status)}</span> <span class="muted">from ${esc(p.from_version)}</span></div>
+        <div class="muted">${esc(p.rationale)}</div>
+        <div class="muted">${esc(p.created_by)} · ${esc(when(p.created_at))}</div>
+        <textarea data-diff="${esc(p.id)}">${esc(p.diff)}</textarea>
+        <div class="row">
+          ${p.status === 'pending' ? `<button class="primary" data-approve="${esc(p.id)}">Approve</button><button class="danger" data-reject="${esc(p.id)}">Reject</button>` : ''}
+          ${p.status === 'approved' ? `<button class="primary" data-push="${esc(p.id)}">Push</button>` : ''}
+        </div>
+      </div>`
+    )
+    .join('')
   const funnelTabs = CRM_FILTER_ORDER.map(
     (s) =>
       `<button class="tab" data-crm-filter="${s}" type="button">${statusBadge(s)} ${data.crm.counts[s]}</button>`
   ).join('')
+  const indexHint =
+    k.lastIndexAt != null ? `last index ${when(k.lastIndexAt)}` : 'last index not reported'
+  const liveSeats = data.profiles.filter((p) => p.live)
   const vaultRows = data.keys.vault
     .map(
       (v) => `<tr data-key="${esc(v.id)}">
@@ -476,114 +462,171 @@ export function renderConsole(data: DashboardPayload): string {
         <td>${esc(v.label)}</td>
         <td class="muted">··${esc(v.last4)}</td>
         <td>${esc(v.status)}</td>
-        <td>${v.status === 'revoked' ? '' : `<button data-rotate="${esc(v.id)}">Rotate</button>`}</td>
-        <td>${v.status === 'revoked' ? '' : `<button class="danger" data-revoke="${esc(v.id)}">Revoke</button>`}</td>
+        <td>${
+          v.status === 'revoked'
+            ? ''
+            : `<button data-rotate="${esc(v.id)}">Rotate</button><button class="danger" data-revoke="${esc(v.id)}">Revoke</button>`
+        }</td>
       </tr>`
     )
     .join('')
-  const notifyRows = [
-    ...data.crm.rows.map((r) => {
-      const seat = data.profiles.find((p) => r.device && p.device === r.device)
-      return `<tr data-status="${esc(r.status)}" data-nt-row>
-        <td>${esc(r.title)}</td>
-        <td class="muted">${esc(r.connector)}</td>
-        <td class="muted">${esc(seat?.country || MISSING)}</td>
-        <td class="muted">${esc(seat?.os || MISSING)}</td>
-        <td class="muted">${MISSING}</td>
-        <td class="muted">${field(seat?.hostname || seat?.email)}</td>
-        <td class="muted">${esc(ago(r.ts, data.now))}</td>
-      </tr>`
-    }),
-    ...data.proposals
-      .filter((p) => p.status === 'pending' || p.status === 'draft')
-      .map(
-        (p) => `<tr data-status="${esc(p.status)}" data-nt-row>
-        <td>${esc(p.skill_id)} ${esc(p.status)}</td>
-        <td class="muted">skill</td>
-        <td class="muted">${MISSING}</td>
-        <td class="muted">${MISSING}</td>
-        <td class="muted">${MISSING}</td>
-        <td class="muted">${field(p.created_by)}</td>
-        <td class="muted">${esc(ago(p.created_at, data.now))}</td>
-      </tr>`
-      )
-  ].join('')
+  const mapCaption =
+    'Unique devices by country from Cloudflare request.cf. No GPS from the app. No IP. Click a country to filter the fleet table. Empty is an empty world, not sample dots.'
+
   void FORBIDDEN_NAV
   void NAV_IDS
-  void EXTRA_PAGES
-  void renderLicenses
-  void shoeyKpi
-  void sparklineArea
-  void sparklineLine
-
-  const live30 = ops.live30
-  const live30Series = ops.live30Series
-  const world = shoeyWorld(data.map.countries, data.map.dots)
-  const liveProfiles = data.profiles.filter((p) => p.live30)
-  const geoRows = liveProfiles
-    .filter((p) => p.country || p.city)
-    .map((p) => ({
-      name: [p.city, p.country].filter(Boolean).join(' · ') || '(Not set)',
-      views: 1,
-      sess: 1
-    }))
-  const stream = data.events.filter((e) => e.name === 'heartbeat').slice(0, 24)
-  const refRows = live30 ? [{ name: '(Not set)', views: live30, sess: live30 }] : []
-  const pathRows = mixRows(stream.map((e) => ({ label: e.name, value: 1 })))
 
   return `<!doctype html>
-<html lang="en" data-theme="light"><head>
+<html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Métis Operator</title>
-<link rel="stylesheet" href="${SPA_CSS_PATH}">
-<script src="${SPA_JS_PATH}" defer></script>
+<style>${CSS}${STATUS_BADGE_CSS}
+svg path { vector-effect: non-scaling-stroke; }
+#spark-defs { position: absolute; width: 0; height: 0; }
+</style>
 </head>
 <body>
 <svg id="spark-defs"><defs>
   <linearGradient id="spark-fill" x1="0" x2="0" y1="0" y2="1">
-    <stop offset="0" stop-color="#2563EB" stop-opacity="0.28"/>
-    <stop offset="1" stop-color="#2563EB" stop-opacity="0"/>
-  </linearGradient>
-  <linearGradient id="shoey-fill" x1="0" x2="0" y1="0" y2="1">
-    <stop offset="0" stop-color="#2563EB" stop-opacity="0.22"/>
-    <stop offset="1" stop-color="#2563EB" stop-opacity="0"/>
+    <stop offset="0" stop-color="#e4e4e7" stop-opacity="0.28"/>
+    <stop offset="1" stop-color="#e4e4e7" stop-opacity="0"/>
   </linearGradient>
 </defs></svg>
 <div class="shell">
   <aside class="rail">
-    <div class="rail-brand">
-      <span class="rail-logo">M</span>
-      <h1>Métis</h1>
-      <span class="chev">▾</span>
-    </div>
+    <div class="rail-brand"><h1>Métis</h1></div>
+    <input class="rail-search" id="nav-search" type="search" placeholder="Search" autocomplete="off">
     ${renderNav()}
     <div class="rail-foot">
-      <div class="rail-utils">
-        <a href="#notifications">Give feedback</a>
-        <a href="#settings">Docs</a>
-        <form method="post" action="/logout"><button type="submit">Back to workspace</button></form>
-      </div>
       <div class="who">${esc(data.email)}</div>
       <button class="theme-btn" id="theme-btn" type="button">Theme</button>
+      <form method="post" action="/logout"><button class="theme-btn" type="submit">Sign out</button></form>
     </div>
   </aside>
   <div class="main">
     <header class="top">
-      <div class="top-left">
-        <button class="tool" type="button">Last 7 days</button>
-        <button class="tool" type="button">Day</button>
-        <button class="tool" type="button">Filters</button>
-      </div>
-      <input class="top-search" type="search" placeholder='Try: "last 7 days, seats only"' autocomplete="off">
-      <div class="top-right">
-        <span class="live-dot"><i></i>${live30}</span>
-        <button class="tool" type="button">Private</button>
-      </div>
-      <h2 id="page-title" hidden>Overview</h2>
+      <h2 id="page-title">Overview</h2>
+      <span class="live">LIVE ${k.live}</span>
     </header>
 
     <section class="page wrap" data-page="overview">
-      ${renderOverviewMini10(data)}
+      <p class="eyebrow">Fleet</p>
+      <div class="kpis">
+        ${kpiCard({ title: 'Live seats', value: String(k.live), sub: 'last-seen under 2 minutes', spark: sparklineLine(k.liveSeries) })}
+        ${kpiCard({ title: 'DAU', value: String(k.dau), sub: `WAU ${k.wau}`, spark: sparklineArea(k.dauSeries) })}
+        ${kpiCard({
+          title: 'API cost',
+          value: k.costToday ?? 'hidden',
+          sub: k.cost7d ? `7d ${k.cost7d} · estimate, list price` : 'estimate, list price · not reported',
+          spark: sparklineArea(k.costSeries)
+        })}
+        ${kpiCard({
+          title: 'Prompt cache',
+          value: k.cacheHit ?? 'not reported',
+          sub: 'real provider fields only',
+          spark: sparklineLine(k.hitSeries)
+        })}
+        ${kpiCard({
+          title: 'Versions in field',
+          value: String(k.versions),
+          sub: indexHint,
+          spark: bars(data.scale.versions.slice(0, 6), 220, 56)
+        })}
+        ${kpiCard({
+          title: 'Pending diffs',
+          value: String(k.pendingDiffs),
+          sub: 'Approve then Push',
+          spark: sparklineLine(data.change.heatmap.slice(-24))
+        })}
+      </div>
+
+      <div class="grid-2">
+        <article class="card">
+          <p class="eyebrow">Scale</p>
+          <div class="tabs">
+            <button class="tab on" data-scale="24h">24h</button>
+            <button class="tab" data-scale="7d">7d</button>
+          </div>
+          <div id="scale-24">${dualLine(data.scale.hours24)}</div>
+          <div id="scale-7" hidden>${dualLine(data.scale.days7)}</div>
+          <div class="legend"><span><i></i>heartbeats</span><span><i class="ask"></i>Asks</span></div>
+        </article>
+        <article class="card">
+          <p class="eyebrow">Mix</p>
+          <div class="grid-2" style="gap:8px">
+            <div>
+              <div class="sub muted">App version</div>
+              ${bars(data.scale.versions, 240, 140)}
+            </div>
+            <div>
+              <div class="sub muted">OS</div>
+              ${bars(data.scale.os, 240, 140)}
+            </div>
+          </div>
+        </article>
+      </div>
+
+      <div class="grid-2">
+        <article class="card">
+          <p class="eyebrow">Cost tokens</p>
+          ${stackedTokens(data.cost.tokens)}
+          <div class="legend"><span><i></i>cache read</span><span class="muted">write / uncached underneath</span></div>
+        </article>
+        <article class="card">
+          <p class="eyebrow">Cost by provider</p>
+          ${
+            data.cost.table.length
+              ? `<table><thead><tr><th>Provider</th><th>Mode</th><th>Asks</th><th>Read</th><th>Write</th><th>Uncached</th><th>Estimate</th></tr></thead><tbody>${costRows}</tbody></table>
+                 <div class="sub muted" style="padding-bottom:8px">estimate, list price. Missing usage is not reported, never $0.</div>`
+              : '<div class="empty">No Asks with usage on the fleet yet.</div>'
+          }
+        </article>
+      </div>
+
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">Change</p>
+        <div class="heat-wrap">
+          ${heatmapGrid(data.change.heatmap)}
+          <div class="heat-meta">Skill draft / approve / push and rollouts over 17 weeks. Empty cells are quiet days, not sample activity.</div>
+        </div>
+        ${
+          timeline
+            ? `<table><thead><tr><th>When</th><th>Action</th><th>Who</th><th>Version</th></tr></thead><tbody>${timeline}</tbody></table>`
+            : '<div class="empty">No skill changes yet.</div>'
+        }
+      </article>
+
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">Asks</p>
+        ${
+          askRows
+            ? `<table><thead><tr><th>Mode</th><th>Preview</th><th>Cache</th><th>Provider</th><th></th></tr></thead><tbody>${askRows}</tbody></table>`
+            : '<div class="empty">No Asks on the fleet yet.</div>'
+        }
+        <div id="reveal" class="muted" style="padding:8px 0"></div>
+      </article>
+
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">CRM landing</p>
+        <div class="crm-kpis">
+          ${kpiCard({ title: 'Landed today', value: String(landing.landedToday), sub: 'success with a CRM id when the connector returned one', spark: '' })}
+          ${kpiCard({ title: 'Fail rate', value: failRate, sub: 'failed + expired over attempted', spark: '' })}
+          ${kpiCard({ title: 'Retries', value: String(landing.retries), sub: 'Tony Retry or attempt over 1', spark: '' })}
+          ${kpiCard({ title: 'Dead letters', value: String(landing.deadLetters), sub: 'max attempts, Expired', spark: '' })}
+        </div>
+        ${funnelRows ? `<p class="eyebrow">Funnel by connector</p><div class="crm-funnel">${funnelRows}</div>` : ''}
+        <div class="funnel tabs" id="crm-filters">
+          <button class="tab on" data-crm-filter="all">All ${data.crm.rows.length}</button>
+          ${funnelTabs}
+        </div>
+        ${
+          crmRows
+            ? `<table id="crm-table"><thead><tr><th>Status</th><th>Title</th><th>Connector</th><th>Remote</th><th>Try</th><th>Meeting</th><th>When</th><th></th></tr></thead><tbody>${crmRows}</tbody></table>
+               <div class="sub muted" style="padding-bottom:8px">Seven status chips filter real ingest. Retry on Failed or Expired tells that seat to processDue that id. Never auto-send from Intelligence, import, or index.</div>`
+            : '<div class="empty">No CRM sends on the fleet yet.</div>'
+        }
+      </article>
+
       <article class="card" style="padding-bottom:10px" data-cf-overview>
         <p class="eyebrow">Cloudflare</p>
         ${renderCloudflare(data.cloudflare)}
@@ -591,164 +634,102 @@ export function renderConsole(data: DashboardPayload): string {
     </section>
 
     <section class="page wrap" data-page="realtime" hidden>
-      <div class="rt-grid">
-        <div>
-          <article class="card kpi rt-unique" style="padding-bottom:10px">
-            <h3 class="rt-h">Unique seats last 30 min</h3>
-            <div class="n rt-n">${formatCompact(live30)}</div>
-            ${blueBars(live30Series, 280, 56)}
-          </article>
-          <article class="card" style="padding:8px 10px 10px;margin-top:10px">
-            <div class="rt-stream" id="rt-stream">
-              ${
-                stream.length
-                  ? stream
-                      .map((e) => {
-                        const name = looksLikeSecret(e.name) ? 'event' : e.name
-                        const ago = data.now - e.ts < 90_000 ? 'just now' : when(e.ts)
-                        const os = e.chips.find((c) => c.key === 'os')?.value || ''
-                        return `<div class="rt-row">
-                          <span>${esc(name)}<span class="rt-ics">${osIcon(os)}</span></span>
-                          <span class="ago">${esc(ago)}</span>
-                        </div>`
-                      })
-                      .join('')
-                  : '<div class="empty">No live events yet.</div>'
-              }
-            </div>
-          </article>
-        </div>
-        <article class="card rt-map" style="padding:0;overflow:hidden">
-          <div id="map-root" data-land="inline" style="position:relative">${world}</div>
-        </article>
-      </div>
-      <div class="grid-3">
-        ${volumeTable(
-          'geo',
-          [{ id: 'geo', label: 'Geo' }],
-          { geo: geoRows },
-          'Search geo',
-          { value: 'Events', sess: 'Sessions' },
-          'blue'
-        )}
-        ${volumeTable(
-          'rt-refs',
-          [{ id: 'refs', label: 'Referrals' }],
-          { refs: refRows },
-          'Search referrals',
-          { value: 'Events', sess: 'Sessions' },
-          'blue'
-        )}
-        ${volumeTable(
-          'rt-paths',
-          [{ id: 'path', label: 'Paths' }],
-          { path: pathRows },
-          'Search paths',
-          { value: 'Events', sess: 'Sessions' },
-          'blue'
-        )}
-      </div>
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">Live seats</p>
+        ${
+          liveSeats.length
+            ? renderProfiles(liveSeats)
+            : '<div class="empty">No live seats in the last two minutes.</div>'
+        }
+      </article>
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">Live stream</p>
+        <div id="rt-stream">${renderEvents(data.events.slice(0, 30))}</div>
+      </article>
     </section>
 
     <section class="page wrap" data-page="events" hidden>
-      <div class="page-hero">
-        <h3 class="page-title">Events</h3>
-        <p class="page-sub">Paginate through your events, conversions and overall stats</p>
-      </div>
-      <div class="page-tabs" role="tablist">
-        <button class="page-tab on" type="button" data-ev-tab="events">Events</button>
-        <button class="page-tab" type="button" data-ev-tab="conversions">Conversions</button>
-        <button class="page-tab" type="button" data-ev-tab="stats">Stats</button>
-      </div>
-      <div class="page-toolbar">
-        <span class="listen-pill" data-live-events="${data.events.length}"><i></i>Listening</span>
-        <button class="tool" type="button">Date range</button>
-        <button class="tool" type="button" id="events-filters">${iconFilter()} Filters</button>
-        <label class="search-wrap">
-          ${iconSearch()}
-          <input class="table-search toolbar-search" id="events-search" type="search" placeholder="Search ..." autocomplete="off">
-        </label>
-        <button class="tool page-view" type="button">${iconView()} View</button>
-      </div>
-      <article class="card ev-table-card table-frame" data-ev-pane="events" style="padding-bottom:10px">
-        <div id="events-list">${renderEvents(data.events, data.now)}</div>
-        <div class="empty" id="events-empty" hidden>${emptyData('No events match that search.')}</div>
-      </article>
-      <article class="card table-frame" data-ev-pane="conversions" hidden>
-        ${
-          data.events.some((e) => /^ask$/i.test(e.name))
-            ? renderEvents(
-                data.events.filter((e) => /^ask$/i.test(e.name)),
-                data.now
-              )
-            : emptyData('No Asks yet. Heartbeats stay on Events.')
-        }
-      </article>
-      <article class="card table-frame" data-ev-pane="stats" hidden>
-        ${eventStats(data.events)}
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">Events</p>
+        <div id="events-list">${renderEvents(data.events)}</div>
       </article>
     </section>
 
-    <section class="page wrap" data-page="sessions" hidden>
-      <div class="page-hero">
-        <h3 class="page-title">Sessions</h3>
-        <p class="page-sub">Access all your sessions here</p>
-      </div>
-      <div class="page-toolbar">
-        <label class="search-wrap">
-          ${iconSearch()}
-          <input class="table-search toolbar-search" id="sessions-search" type="search" placeholder="Search ..." autocomplete="off">
-        </label>
-        <button class="tool" type="button" id="sessions-filters">${iconFilter()} Filters</button>
-        <button class="tool page-view" type="button">${iconView()} View</button>
-      </div>
-      ${renderSeatTable(data.profiles, data.events, data.now)}
-      <div class="empty" id="sessions-empty" hidden>No sessions match that search.</div>
+    <section class="page wrap" data-page="profiles" hidden>
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">People</p>
+        <div class="sub muted" style="padding-bottom:8px">Computer and SSO email from the seat. Missing fields are ${MISSING}, never invented.</div>
+        ${renderProfiles(data.profiles)}
+      </article>
     </section>
 
-    <section class="page wrap" data-page="notifications" hidden>
-      <div class="page-hero nt-head">
-        <h3 class="page-title">Notifications</h3>
-        <p class="page-sub nt-sub">See notifications and manage your rules when to get notifications</p>
-      </div>
-      <div class="page-tabs underline" role="tablist">
-        <button class="page-tab on" type="button" data-nt-tab="notifications">Notifications</button>
-        <button class="page-tab" type="button" data-nt-tab="rules">Rules</button>
-      </div>
-      <div class="page-toolbar">
-        <label class="search-wrap">
-          ${iconSearch()}
-          <input class="table-search toolbar-search" id="nt-search" type="search" placeholder="Search ..." autocomplete="off">
-        </label>
-        <button class="tool" type="button">Created at</button>
-        <button class="tool page-view" type="button">${iconView()} View</button>
-      </div>
-      <div data-nt-pane="notifications">
-        <div class="tabs" id="crm-filters">
-          <button class="tab on" data-crm-filter="all">All ${data.crm.rows.length}</button>
-          ${funnelTabs}
+    <section class="page wrap" data-page="map" hidden>
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">Map</p>
+        <div class="tabs" id="map-tabs">
+          <button class="tab" data-map="land">Land</button>
+          <button class="tab on" data-map="analytics">Analytics</button>
+          <button class="tab" data-map="graticule">Graticule</button>
+          <button class="tab" data-map="hatch">Hatch</button>
         </div>
-        <article class="card table-frame" style="padding-bottom:10px">
-          <table id="nt-table">
-            <thead><tr><th>Title</th><th>Integration</th><th>Country</th><th>OS</th><th>Browser</th><th>Profile</th><th>Created at</th></tr></thead>
-            <tbody>
-              ${notifyRows || ''}
-              <tr data-nt-empty ${notifyRows ? 'hidden' : ''}><td colspan="7">${emptyData()}</td></tr>
-            </tbody>
-          </table>
-          ${
-            crmRows
-              ? `<table id="crm-table" hidden><thead><tr><th>Status</th><th>Title</th><th>Connector</th><th>Remote</th><th>Try</th><th>Meeting</th><th>When</th><th></th></tr></thead><tbody>${crmRows}</tbody></table>`
-              : ''
-          }
-        </article>
-      </div>
-      <div data-nt-pane="rules" hidden>
-        <article class="card table-frame">${emptyData('No rules yet.')}</article>
-      </div>
+        <div id="map-root" style="position:relative">
+          <div data-map-pane="land" hidden>${maps.land}</div>
+          <div data-map-pane="analytics">${maps.analytics}</div>
+          <div data-map-pane="graticule" hidden>${maps.graticule}</div>
+          <div data-map-pane="hatch" hidden>${maps.hatch}</div>
+        </div>
+        <div class="sub muted" style="padding-bottom:8px">${esc(mapCaption)}</div>
+        <table id="map-fleet"><thead><tr><th>Computer</th><th>SSO email</th><th>OS</th><th>Version</th><th>Country</th><th>Seen</th><th></th></tr></thead>
+        <tbody>${
+          data.profiles
+            .map(
+              (r) => `<tr data-country="${esc(r.country || '')}">
+                <td>${field(r.hostname)}</td>
+                <td>${field(r.email)}</td>
+                <td class="muted">${esc(r.os)}</td>
+                <td class="muted">${esc(r.appVersion)}</td>
+                <td class="muted">${esc(r.country || MISSING)}</td>
+                <td class="muted">${esc(when(r.lastSeen))}</td>
+                <td></td>
+              </tr>`
+            )
+            .join('') || `<tr><td colspan="7" class="empty">No seats on the fleet yet.</td></tr>`
+        }</tbody></table>
+      </article>
     </section>
 
-    <section class="page wrap" data-page="map" hidden data-alias="realtime"></section>
+    <section class="page wrap" data-page="macos" hidden>
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">macOS</p>
+        ${renderProfiles(data.profiles, 'darwin')}
+      </article>
+    </section>
+
+    <section class="page wrap" data-page="windows" hidden>
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">Windows</p>
+        ${renderProfiles(data.profiles, 'win')}
+      </article>
+    </section>
+
+    <section class="page wrap" data-page="licenses" hidden>
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">Licenses</p>
+        ${renderLicenses(data.profiles)}
+      </article>
+    </section>
+
+    <section class="page wrap" data-page="skills" hidden>
+      <article class="card" style="padding-bottom:10px">
+        <div class="row" style="margin-bottom:8px">
+          <p class="eyebrow" style="margin:0">Skills</p>
+          <button data-draft="interview">Draft interview</button>
+          <button data-draft="recruiting">Draft recruiting</button>
+          <button data-draft="support">Draft support</button>
+        </div>
+        ${props || '<div class="empty">No skill upgrades waiting. Use Ask in a mode, then Draft.</div>'}
+      </article>
+    </section>
 
     <section class="page wrap" data-page="keys" hidden>
       <article class="card" style="padding-bottom:10px">
@@ -787,52 +768,219 @@ export function renderConsole(data: DashboardPayload): string {
           </div>
         </form>
         <p class="eyebrow">Cloudflare connection</p>
-        <div class="sub muted" style="padding-bottom:8px">Login redirect. Not Account ID + token paste. Seats never hold a Cloudflare token.</div>
-        <p><a class="btn primary" id="cf-connect" href="/cloudflare/connect">Connect Cloudflare</a></p>
-        <p class="eyebrow" style="margin-top:14px">Vault</p>
-        <table id="vault-table">
-          <thead><tr><th>Provider</th><th>Label</th><th>Last4</th><th>Status</th><th>Rotate</th><th>Revoke</th></tr></thead>
-          <tbody>
-            ${
-              vaultRows ||
-              `<tr data-vault-empty><td colspan="6" class="empty">No provider keys on Operator yet. Add an API. Rotate and Revoke land on each row. Seats never hold the raw key.</td></tr>`
-            }
-          </tbody>
-        </table>
-        <div id="key-msg" class="key-msg" role="status"></div>
-      </article>
-    </section>
-
-    <section class="page wrap" data-page="settings" hidden>
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Settings</p>
-        <div class="sub muted" style="padding-bottom:8px">Keys fund seats. Add an API once. last4 only. Heartbeats list fundedProviders. Seats never hold the raw key.</div>
-        <p class="eyebrow" style="margin-top:14px">Add an API</p>
-        <form class="key-form" id="key-add-settings" autocomplete="off">
+        <form class="key-form" id="cf-add" autocomplete="off">
           <div class="row">
-            <select name="provider" required>
-              <option value="anthropic">Anthropic</option>
-              <option value="openai">OpenAI</option>
-              <option value="gemini">Gemini</option>
-              <option value="nvidia">NVIDIA NIM</option>
-              <option value="deepseek">DeepSeek</option>
-              <option value="minimax">MiniMax</option>
-            </select>
-            <input name="label" type="text" placeholder="Label" maxlength="80">
-            <input name="secret" type="password" placeholder="API key" required autocomplete="off">
-            <button class="primary" type="submit">Add</button>
+            <input name="accountId" type="text" placeholder="Account ID" required maxlength="40">
+            <input name="token" type="password" placeholder="API token" required autocomplete="off">
+            <button class="primary" type="submit">Connect</button>
           </div>
         </form>
-        <div id="key-msg-settings" class="key-msg" role="status"></div>
-        <p><a href="#keys">Open Keys</a> for rotate / revoke and Cloudflare.</p>
-      </article>
-      <article class="card" style="padding-bottom:10px" data-cf-page>
-        <p class="eyebrow">Cloudflare</p>
-        ${renderCloudflare(data.cloudflare)}
+        ${
+          vaultRows
+            ? `<p class="eyebrow" style="margin-top:14px">Vault</p><table><thead><tr><th>Provider</th><th>Label</th><th>Last4</th><th>Status</th><th></th></tr></thead><tbody>${vaultRows}</tbody></table>`
+            : '<div class="empty">No provider keys on Operator yet. Add an API or Cloudflare here so seats can be funded.</div>'
+        }
+        <div id="key-msg" class="muted" style="padding:8px 0"></div>
       </article>
     </section>
   </div>
 </div>
+<script>
+async function api(path, body) {
+  const r = await fetch(path, { method: body ? 'POST' : 'GET', credentials: 'same-origin', headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined })
+  return r.json()
+}
+const titles = {
+  overview: 'Overview', realtime: 'Realtime', events: 'Events', profiles: 'Profiles',
+  map: 'Map', macos: 'macOS', windows: 'Windows', licenses: 'Licenses', skills: 'Skills', keys: 'Keys'
+}
+function route() {
+  const raw = (location.hash || '#overview').replace('#', '')
+  const id = titles[raw] ? raw : 'overview'
+  document.querySelectorAll('[data-page]').forEach((p) => { p.hidden = p.getAttribute('data-page') !== id })
+  document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('on', a.getAttribute('data-nav') === id))
+  const t = document.getElementById('page-title')
+  if (t) t.textContent = titles[id]
+}
+window.addEventListener('hashchange', route)
+route()
+const search = document.getElementById('nav-search')
+if (search) search.addEventListener('input', () => {
+  const q = search.value.trim().toLowerCase()
+  document.querySelectorAll('[data-nav]').forEach((a) => {
+    const hit = !q || (a.textContent || '').toLowerCase().includes(q)
+    a.hidden = !hit
+  })
+})
+const themeBtn = document.getElementById('theme-btn')
+function applyTheme(v) {
+  if (v) document.documentElement.setAttribute('data-theme', v)
+  else document.documentElement.removeAttribute('data-theme')
+}
+try { applyTheme(localStorage.getItem('metis-operator-theme')) } catch (e) {}
+if (themeBtn) themeBtn.addEventListener('click', () => {
+  const cur = document.documentElement.getAttribute('data-theme')
+  const next = cur === 'dark' ? 'light' : cur === 'light' ? '' : 'dark'
+  applyTheme(next)
+  try { if (next) localStorage.setItem('metis-operator-theme', next); else localStorage.removeItem('metis-operator-theme') } catch (e) {}
+})
+document.querySelectorAll('[data-scale]').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('[data-scale]').forEach((x) => x.classList.toggle('on', x === b))
+  document.getElementById('scale-24').hidden = b.getAttribute('data-scale') !== '24h'
+  document.getElementById('scale-7').hidden = b.getAttribute('data-scale') !== '7d'
+}))
+document.querySelectorAll('[data-map]').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('[data-map]').forEach((x) => x.classList.toggle('on', x === b))
+  const v = b.getAttribute('data-map')
+  document.querySelectorAll('[data-map-pane]').forEach((p) => { p.hidden = p.getAttribute('data-map-pane') !== v })
+}))
+document.querySelectorAll('#map-root path[data-iso]').forEach((p) => p.addEventListener('click', () => {
+  const iso = p.getAttribute('data-iso')
+  document.querySelectorAll('#map-fleet tbody tr').forEach((tr) => {
+    tr.hidden = Boolean(iso) && tr.getAttribute('data-country') !== iso
+  })
+}))
+document.querySelectorAll('[data-crm-filter]').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('[data-crm-filter]').forEach((x) => x.classList.toggle('on', x === b))
+  const f = b.getAttribute('data-crm-filter')
+  document.querySelectorAll('#crm-table tbody tr').forEach((tr) => {
+    tr.hidden = f !== 'all' && tr.getAttribute('data-status') !== f
+  })
+}))
+document.querySelectorAll('[data-reveal]').forEach((b) => b.addEventListener('click', async () => {
+  const id = b.getAttribute('data-reveal')
+  const j = await api('/v1/admin/asks/' + id)
+  document.getElementById('reveal').textContent = j.ok ? (j.question || '(empty)') : (j.error || 'reveal failed')
+}))
+document.querySelectorAll('[data-approve]').forEach((b) => b.addEventListener('click', async () => {
+  const id = b.getAttribute('data-approve')
+  const diff = document.querySelector('[data-diff="' + id + '"]').value
+  await api('/v1/admin/skills/' + id + '/approve', { diff })
+  location.reload()
+}))
+document.querySelectorAll('[data-reject]').forEach((b) => b.addEventListener('click', async () => {
+  const id = b.getAttribute('data-reject')
+  await api('/v1/admin/skills/' + id + '/reject', { reason: 'rejected in console' })
+  location.reload()
+}))
+document.querySelectorAll('[data-push]').forEach((b) => b.addEventListener('click', async () => {
+  const id = b.getAttribute('data-push')
+  await api('/v1/admin/skills/' + id + '/push', {})
+  location.reload()
+}))
+document.querySelectorAll('[data-draft]').forEach((b) => b.addEventListener('click', async () => {
+  await api('/v1/admin/skills/draft', { skillId: b.getAttribute('data-draft') })
+  location.reload()
+}))
+document.querySelectorAll('[data-retry]').forEach((b) => b.addEventListener('click', async () => {
+  await api('/v1/admin/crm/' + b.getAttribute('data-retry') + '/retry', {})
+  location.reload()
+}))
+const keyMsg = document.getElementById('key-msg')
+function showKey(j) {
+  if (!keyMsg) return
+  if (j && j.ok) keyMsg.textContent = j.last4 ? ('saved ··' + j.last4) : (j.status || 'ok')
+  else keyMsg.textContent = (j && j.error) || 'failed'
+}
+const addForm = document.getElementById('key-add')
+if (addForm) addForm.addEventListener('submit', async (e) => {
+  e.preventDefault()
+  const fd = new FormData(addForm)
+  const j = await api('/v1/admin/keys', { provider: fd.get('provider'), label: fd.get('label'), secret: fd.get('secret') })
+  if (j && j.ok) location.reload()
+  else showKey(j)
+})
+const cfForm = document.getElementById('cf-add')
+if (cfForm) cfForm.addEventListener('submit', async (e) => {
+  e.preventDefault()
+  const fd = new FormData(cfForm)
+  const j = await api('/v1/admin/keys', { provider: 'cloudflare-account', accountId: fd.get('accountId'), token: fd.get('token') })
+  if (j && j.ok) location.reload()
+  else showKey(j)
+})
+document.querySelectorAll('[data-rotate]').forEach((b) => b.addEventListener('click', async () => {
+  const secret = window.prompt('New secret or token')
+  if (!secret) return
+  const j = await api('/v1/admin/keys/' + b.getAttribute('data-rotate') + '/rotate', { secret })
+  if (j && j.ok) location.reload()
+  else showKey(j)
+}))
+document.querySelectorAll('[data-revoke]').forEach((b) => b.addEventListener('click', async () => {
+  const j = await api('/v1/admin/keys/' + b.getAttribute('data-revoke') + '/revoke', {})
+  if (j && j.ok) location.reload()
+  else showKey(j)
+}))
+</script>
 </body></html>`
 }
 
+/** First paint for an unauthenticated browser GET of /. Never JSON. */
+export function renderLogin(error?: string): string {
+  const err = error
+    ? `<p class="login-err" role="alert">${esc(error)}</p>`
+    : ''
+  return `<!doctype html>
+<html lang="en"><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Métis Operator</title>
+<style>
+@import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.min.css');
+@import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.min.css');
+:root, [data-theme="dark"] {
+  --bg: #0a0a0b; --panel: #111113; --hair: rgba(255,255,255,0.10);
+  --ink: rgba(255,255,255,0.94); --ink2: rgba(255,255,255,0.55); --ink3: rgba(255,255,255,0.38);
+  --accent: #7C8CF8; --danger: #F0717A;
+  --mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
+  --sans: 'Geist', Geist, Inter, system-ui, sans-serif;
+}
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme="dark"]) {
+    --bg: #f4f4f5; --panel: #ffffff; --hair: rgba(15,15,17,0.10);
+    --ink: #18181b; --ink2: rgba(24,24,27,0.62); --ink3: rgba(24,24,27,0.42);
+  }
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; color: var(--ink); font: 13px/1.45 var(--sans); background: var(--bg); }
+.login {
+  min-height: 100%; display: grid; place-items: center; padding: 24px;
+}
+.login-card {
+  width: min(360px, 100%); background: var(--panel); border: 1px solid var(--hair);
+  border-radius: 12px; padding: 22px 20px 20px;
+}
+.login-card p.eyebrow {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
+  text-transform: uppercase; color: var(--ink3); margin: 0 0 6px;
+}
+.login-card h1 { margin: 0 0 16px; font-size: 18px; font-weight: 650; letter-spacing: -0.03em; }
+.login-card label {
+  display: block; font-size: 11px; color: var(--ink2); margin: 0 0 4px;
+}
+.login-card input {
+  width: 100%; border: 1px solid var(--hair); background: var(--bg); color: var(--ink);
+  border-radius: 8px; padding: 8px 10px; font: 13px var(--sans); margin: 0 0 12px;
+}
+.login-card button {
+  width: 100%; border: 0; background: var(--accent); color: #fff;
+  border-radius: 8px; padding: 9px 12px; font: 600 13px var(--sans); cursor: pointer;
+}
+.login-err { color: var(--danger); font-size: 12px; margin: 0 0 10px; }
+.login-note { margin: 12px 0 0; font-size: 11px; color: var(--ink3); }
+</style>
+</head>
+<body>
+  <main class="login" data-login="1">
+    <form class="login-card" method="post" action="/login" autocomplete="on">
+      <p class="eyebrow">Operator</p>
+      <h1>Sign in</h1>
+      ${err}
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" required autocomplete="username">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" required autocomplete="current-password">
+      <button type="submit">Sign in</button>
+      <p class="login-note">Tony only. Two emails. The console stays closed until this form succeeds.</p>
+    </form>
+  </main>
+</body></html>`
+}
