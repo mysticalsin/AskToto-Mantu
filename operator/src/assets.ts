@@ -1,38 +1,36 @@
+import { SPA_CSS, SPA_CSS_PATH, SPA_JS, SPA_JS_PATH } from './spa/manifest'
+
 /** Public chrome. Access must not wrap these. Worker must not 302 them. */
 
-export const ASSET_INDEX_PATH = '/assets/index.js'
-
-export const ASSET_INDEX_JS = `/* Métis Operator chrome */
-self.METIS_OPERATOR = self.METIS_OPERATOR || { asset: 'index.js' };
-`
-
-export const ASSET_INDEX_CSS = `/* Métis Operator chrome */\n:root{--metis-operator:1}\n`
+export { SPA_CSS_PATH, SPA_JS_PATH }
 
 export function isPublicAssetPath(pathname: string): boolean {
   if (pathname === '/favicon.ico') return true
   return pathname === '/assets' || pathname.startsWith('/assets/')
 }
 
-function contentTypeFor(pathname: string): string {
-  if (pathname === '/favicon.ico') return 'image/x-icon'
-  if (pathname.endsWith('.css')) return 'text/css; charset=utf-8'
-  return 'application/javascript; charset=utf-8'
+function headers(type: string, immutable: boolean): HeadersInit {
+  return {
+    'content-type': type,
+    'cache-control': immutable ? 'public, max-age=31536000, immutable' : 'public, max-age=60'
+  }
 }
 
 export function publicAssetResponse(pathname: string): Response | null {
-  if (!isPublicAssetPath(pathname)) return null
-  const type = contentTypeFor(pathname)
-  const body =
-    pathname === '/favicon.ico'
-      ? ''
-      : pathname.endsWith('.css')
-        ? ASSET_INDEX_CSS
-        : ASSET_INDEX_JS
-  return new Response(body, {
-    status: 200,
-    headers: {
-      'content-type': type,
-      'cache-control': 'public, max-age=60'
-    }
-  })
+  if (pathname === '/favicon.ico') {
+    return new Response('', { status: 200, headers: headers('image/x-icon', false) })
+  }
+  if (pathname === SPA_JS_PATH) {
+    return new Response(SPA_JS, {
+      status: 200,
+      headers: headers('application/javascript; charset=utf-8', true)
+    })
+  }
+  if (pathname === SPA_CSS_PATH) {
+    return new Response(SPA_CSS, {
+      status: 200,
+      headers: headers('text/css; charset=utf-8', true)
+    })
+  }
+  return null
 }

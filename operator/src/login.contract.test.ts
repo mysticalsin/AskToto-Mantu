@@ -4,6 +4,7 @@ import { handleRequest, type Env } from './index'
 import { memoryStore } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_TEAM_DOMAIN } from './test-fixtures'
 import { tokenPatternForTests } from './redact'
+import { SPA_CSS_PATH, SPA_JS_PATH } from './spa/manifest'
 
 const NOW = 1_725_000_000_000
 
@@ -96,20 +97,27 @@ describe('unauth console GET is 302 to Cloudflare Access, never a password form'
     }
   })
 
-  it('unauth GET /assets and /assets/index.js are 200 javascript, not Access HTML', async () => {
-    for (const path of ['/assets', '/assets/index.js', '/assets/operator-9f3c.js']) {
-      const res = await handleRequest(new Request(`https://operator.test${path}`), env(), {}, {
-        store: memoryStore(),
-        now: NOW
-      })
-      expect(res.status, path).toBe(200)
-      const type = res.headers.get('content-type') || ''
-      expect(type, path).toMatch(/javascript|css/)
-      expect(type, path).not.toMatch(/text\/html/)
-      const body = await res.text()
-      expect(body, path).not.toMatch(/302 Found|cloudflareaccess|cdn-cgi\/access/)
-      expect(body, path).toContain('Métis Operator')
-    }
+  it('unauth GET hashed SPA JS/CSS are 200 real files, not Access HTML or a stub', async () => {
+    const js = await handleRequest(new Request(`https://operator.test${SPA_JS_PATH}`), env(), {}, {
+      store: memoryStore(),
+      now: NOW
+    })
+    expect(js.status).toBe(200)
+    expect(js.headers.get('content-type') || '').toMatch(/javascript/)
+    const jsBody = await js.text()
+    expect(jsBody.length).toBeGreaterThan(97)
+    expect(jsBody).toContain('Shoey')
+    expect(jsBody).toContain('Overview')
+    expect(jsBody).toContain('Realtime')
+    expect(jsBody).not.toMatch(/cdn-cgi\/access/)
+
+    const css = await handleRequest(new Request(`https://operator.test${SPA_CSS_PATH}`), env(), {}, {
+      store: memoryStore(),
+      now: NOW
+    })
+    expect(css.status).toBe(200)
+    expect(css.headers.get('content-type') || '').toMatch(/text\/css/)
+    expect((await css.text()).length).toBeGreaterThan(97)
   })
 
   it('unauth POST /v1/admin/keys is 401 not 404', async () => {
@@ -165,6 +173,8 @@ describe('unauth console GET is 302 to Cloudflare Access, never a password form'
       const html = await home.text()
       expect(html).toContain('data-nav="overview"')
       expect(html).toContain('data-nav="events"')
+      expect(html).toContain(`<script src="${SPA_JS_PATH}"`)
+      expect(html).toContain(`<link rel="stylesheet" href="${SPA_CSS_PATH}"`)
       expect(html).toContain(email)
       expect(html).not.toContain('data-login="1"')
       expect(html).not.toContain('action="/login"')

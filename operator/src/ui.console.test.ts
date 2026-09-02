@@ -8,6 +8,7 @@ import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from './test-fixtures'
 import { findBandSubpaths } from './map-bands'
 import { NAV_IDS } from './nav'
 import { tokenPatternForTests } from './redact'
+import { SPA_CSS_PATH, SPA_JS_PATH } from './spa/manifest'
 
 const NOW = 1_725_000_000_000
 
@@ -107,13 +108,29 @@ describe('product sidebar', () => {
     expect(html).not.toMatch(/heroku\.com|bitbucket\.com/)
     expect(html).not.toContain('data-nav="map"')
     expect(html).not.toContain('data-nav="macos"')
-    expect(html).toContain('grid-template-columns: 185px 1fr')
-    expect(html).toContain('font: 12px/1.4')
+    expect(html).toContain(`<link rel="stylesheet" href="${SPA_CSS_PATH}">`)
+    expect(html).toContain(`<script src="${SPA_JS_PATH}" defer>`)
+    expect(html).not.toContain('self.METIS_OPERATOR =')
+    expect(html).not.toContain('<style>')
     expect(html).toContain('data-alias="realtime"')
-    expect(html).toContain("requested === 'map' ? 'realtime'")
     expect(html).toContain('>Events</span><span>Sessions</span>')
     expect(html).toContain('class="world shoey-world"')
     expect(html).toContain('id="key-add"')
+    const css = await handleRequest(
+      new Request(`https://operator.test${SPA_CSS_PATH}`),
+      env(),
+      {},
+      { store: memoryStore(), now: NOW }
+    ).then((r) => r.text())
+    expect(css).toContain('grid-template-columns: 185px 1fr')
+    expect(css).toContain('font: 12px/1.4')
+    const js = await handleRequest(
+      new Request(`https://operator.test${SPA_JS_PATH}`),
+      env(),
+      {},
+      { store: memoryStore(), now: NOW }
+    ).then((r) => r.text())
+    expect(js).toContain("requested === 'map' ? 'realtime'")
   })
 })
 
