@@ -25,6 +25,13 @@ describe('write tool discovery', () => {
     expect(pickWriteTool(['list_deals', 'push_meeting_recap', 'ping'], 'crm-note')).toBe('push_meeting_recap')
     expect(pickWriteTool(['list_deals'], 'crm-note')).toBeUndefined()
   })
+
+  it('never picks attach_task_file for next-steps; create_task wins even if attach is first', () => {
+    expect(isWriteToolName('clickup_attach_task_file')).toBe(false)
+    expect(
+      pickWriteTool(['clickup_attach_task_file', 'clickup_create_task', 'clickup_get_list'], 'next-steps')
+    ).toBe('clickup_create_task')
+  })
 })
 
 describe('resolveWriteTargets — honest connect, never a fake send', () => {

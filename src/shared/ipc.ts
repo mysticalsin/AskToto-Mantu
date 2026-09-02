@@ -233,6 +233,9 @@ export const IPC = {
   // + PKCE flow (browser consent) and, on success, upserts an mcpConnections entry exactly like
   // mcpSaveConnection does for a pasted key. Reuses mcpDisconnect/mcpPush unchanged.
   mcpClickupConnect: 'mcp:clickupConnect',
+  // Names the last/connected ClickUp list without creating a task. Used when the seat was already
+  // connected before dest storage existed, so Review can show `Task in {list}` before Confirm.
+  mcpClickupDiscoverDestination: 'mcp:clickupDiscoverDestination',
   // Plane Connect — same shape as ClickUp: one button, OAuth 2.1 + PKCE + DCR, pinned hosted MCP URL.
   mcpPlaneConnect: 'mcp:planeConnect',
   operatorOpen: 'operator:open',
@@ -826,11 +829,9 @@ const BundledLocalModelIdSchema = z.preprocess(
 )
 
 // ─── MCP connections (generalized from the single BidStack connection) ──────────────────────────────
-// 'clickup' is schema-reserved only: ClickUp's remote MCP server is OAuth-2.1-with-PKCE only (no bearer
-// API-key path), a materially different auth shape than mcpClient.ts implements today, so it ships as
-// its own scoped follow-up. Keeping the enum member here now means the persisted-settings shape never
-// has to change again when that follow-up lands (Build Law rule 7) — there's just no UI/IPC wiring for
-// it yet.
+// 'clickup' is a first-class connection: OAuth 2.1 + PKCE (clickupOAuth.ts, PR 73 loopback DCR) and
+// post-meeting create-task (docs/design/CLICKUP-PUSH.md). The access token is a bearer key on
+// mcpClient.ts like any other connection.
 export const McpConnectionKindSchema = z.enum(['bidstack', 'clickup', 'plane'])
 export type McpConnectionKind = z.infer<typeof McpConnectionKindSchema>
 
@@ -854,7 +855,11 @@ export const McpConnectionSchema = z.object({
   // requires `X-Workspace-slug` alongside the bearer token. Generic (not `planeWorkspaceSlug`) because
   // it's a mechanical transport concern, not a Plane-specific business field, and BidStack already
   // proves the "zero extra headers" case — two real shapes justify the generalization.
-  extraHeaders: z.record(z.string(), z.string()).default({})
+  extraHeaders: z.record(z.string(), z.string()).default({}),
+  // ClickUp last-successful list (main-owned; renderer cannot patch mcpConnections). Empty until
+  // Connect discovers one or a create-task lands. See docs/design/CLICKUP-PUSH.md.
+  clickupListId: z.string().max(40).optional(),
+  clickupListName: z.string().max(120).optional()
 })
 export type McpConnection = z.infer<typeof McpConnectionSchema>
 
@@ -1129,7 +1134,7 @@ export const BaseSettingsSchema = z.object({
   dustTokenMintedAt: z.number().default(0),
   // Whether the user has acknowledged the CLI integration notice banner.
   cliNoticeAck: z.boolean().default(false),
-  // Named MCP connections — CRM (BidStack) and task managers (Plane; ClickUp is schema-reserved only,
+  // Named MCP connections — CRM (BidStack) and task managers (Plane, ClickUp). One connection per kind
   // see McpConnectionKindSchema). One connection per kind (id === kind in v1). API keys themselves are
   // NOT stored here; they go through the same encrypted-file mechanism as provider keys, via
   // main/mcp/mcpSecrets.ts (kept out of the ProviderId union — these are push credentials, not LLM
@@ -2058,6 +2063,8 @@ export interface McpConnectResult {
   ok: boolean
   error?: string
   tools?: string[]
+  clickupListId?: string
+  clickupListName?: string
 }
 
 /** Result of pushing to an MCP tool. */
@@ -2065,6 +2072,8 @@ export interface McpPushResult {
   ok: boolean
   error?: string
   result?: unknown
+  destinationName?: string
+  taskUrl?: string
 }
 
 /** Renderer may only record an email-summary. Main owns note-taking, second-brain, and mcp-push. */

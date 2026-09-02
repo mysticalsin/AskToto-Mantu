@@ -416,6 +416,15 @@ import { isInsideResourceBase, realResourceBase } from './asr-model-path'
 import { detectCli, setupCli, installCli, loginCli, prewarmCli, checkCliSession, connectCliSession } from './cli'
 import { connectMcp, pushToMcp } from './mcp/mcpClient'
 import { resolveWriteTargets } from './mcp/write-tools'
+import {
+  discoverClickupList,
+  loudClickupError,
+  parseTaskUrl,
+  prepareClickupPush,
+  savedClickupList,
+  upsertClickupDestination,
+  type ClickupList
+} from './mcp/clickupPush'
 import { appendTimeSavedEvent, summarizeTimeSaved } from './time-saved-log'
 import {
   estimateEmailSummaryMinutes,
@@ -3891,7 +3900,7 @@ function registerIpc(): void {
   // Generalized from the old single-connection BidStack-only handlers (Settings → Mantu Intelligence
   // cards + Review's "Push to CRM" / "Book next steps"). `connectionId` identifies WHICH
   // settings.mcpConnections entry a call targets (id === kind in v1 — see McpConnectionSchema in
-  // shared/ipc.ts). ClickUp has no handler here — it's schema-reserved only (see McpConnectionKindSchema).
+  // shared/ipc.ts). ClickUp OAuth Connect + create-task push live here (docs/design/CLICKUP-PUSH.md).
 
   // Default display label for a connection id BEFORE it has ever been saved (so "Test connection" —
   // which runs before any persistence — still gets a real label for its error/log messages instead of
@@ -3906,6 +3915,20 @@ function registerIpc(): void {
     if (existing?.label) return existing.label
     const kind = McpConnectionKindSchema.safeParse(connectionId)
     return kind.success ? MCP_KIND_LABELS[kind.data] : connectionId
+  }
+
+  function persistClickupList(list: ClickupList): void {
+    const s = getSettings()
+    setSettings({ mcpConnections: upsertClickupDestination(s.mcpConnections, list) })
+  }
+
+  async function discoverListForClickup(conn: McpConnection): Promise<{ ok: true; list: ClickupList } | { ok: false; error: string }> {
+    const apiKey = getMcpApiKey(conn.id)
+    return discoverClickupList({
+      tools: conn.tools,
+      saved: savedClickupList(conn),
+      callTool: (toolName, args) => pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, toolName, args, conn.label)
+    })
   }
 
   // Wave 4: mcp:push's own MCP tool names are per-connection and user/operator-configured — there is no
@@ -4038,6 +4061,7 @@ function registerIpc(): void {
     try {
       setMcpApiKey(connectionId, apiKey)
       const s = getSettings()
+      const existing = s.mcpConnections.find((c) => c.id === connectionId)
       const entry: McpConnection = {
         id: connectionId,
         kind: kindParsed.data,
@@ -4045,9 +4069,20 @@ function registerIpc(): void {
         endpointUrl: endpointUrl.trim(),
         connected: true,
         tools: r.tools ?? [],
-        extraHeaders
+        extraHeaders,
+        ...(connectionId === 'clickup'
+          ? { clickupListId: existing?.clickupListId, clickupListName: existing?.clickupListName }
+          : {})
       }
       setSettings({ mcpConnections: [...s.mcpConnections.filter((c) => c.id !== connectionId), entry] })
+      if (connectionId === 'clickup') {
+        const dest = await discoverListForClickup(entry)
+        if (dest.ok) {
+          persistClickupList(dest.list)
+          auditLog('mcp.connected', { connectionId, tools: (r.tools ?? []).length })
+          return { ...r, clickupListId: dest.list.id, clickupListName: dest.list.name }
+        }
+      }
     } catch (error) {
       return { ok: false as const, error: error instanceof Error ? error.message : `Could not store the ${label} API key.` }
     }
@@ -4091,7 +4126,9 @@ function registerIpc(): void {
     if (denyIfLimited('mcp-outbound')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
     const parsed = McpPushPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
-    const { connectionId, toolName, args, meetingFile } = parsed.data
+    const { connectionId, meetingFile } = parsed.data
+    let toolName = parsed.data.toolName
+    let args = parsed.data.args
     const s = getSettings()
     // Wave 4 / QA defense-in-depth: never push confidential meetings. Prefer disk frontmatter over the
     // renderer flag — a buggy UI could omit args.confidential. Unreadable files fail closed.
@@ -4109,9 +4146,24 @@ function registerIpc(): void {
     if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(connectionId)) {
       return { ok: false, error: `${mcpLabelFor(connectionId)} is not connected. Set it up in Settings → Mantu Intelligence first.` }
     }
+    let clickupList: ClickupList | undefined
+    if (connectionId === 'clickup') {
+      const dest = await discoverListForClickup(conn)
+      if (!dest.ok) return dest
+      clickupList = dest.list
+      const prepared = prepareClickupPush({
+        tools: conn.tools,
+        list: dest.list,
+        rendererTool: toolName,
+        rendererArgs: args
+      })
+      if (!prepared.ok) return prepared
+      toolName = prepared.toolName
+      args = prepared.args
+    }
     // Only a tool the user actually saw and picked when the connection was tested/saved may be invoked —
     // otherwise a compromised or buggy renderer call could reach an unintended (possibly destructive) MCP
-    // tool on the user's live connection.
+    // tool on the user's live connection. ClickUp create-task is remapped above from the saved tools list.
     if (!conn.tools.includes(toolName)) {
       return { ok: false, error: `Unknown ${conn.label} tool.` }
     }
@@ -4192,6 +4244,13 @@ function registerIpc(): void {
         ...(meetingBase ? { meetingFile: meetingBase } : {}),
         confidential: argConfidential || diskConfidential
       })
+      if (connectionId === 'clickup' && r.error) {
+        r = { ...r, error: loudClickupError(r.error, r.error) }
+      }
+    }
+    if (r.ok && connectionId === 'clickup' && clickupList) {
+      persistClickupList(clickupList)
+      return { ...r, destinationName: clickupList.name, taskUrl: parseTaskUrl(r.result) }
     }
     return r
   })
@@ -4216,14 +4275,39 @@ function registerIpc(): void {
         endpointUrl: CLICKUP_MCP_ENDPOINT,
         connected: true,
         tools: r.tools ?? [],
-        extraHeaders: {}
+        extraHeaders: {},
+        clickupListId: savedClickupList(s.mcpConnections.find((c) => c.id === 'clickup'))?.id,
+        clickupListName: savedClickupList(s.mcpConnections.find((c) => c.id === 'clickup'))?.name
       }
       setSettings({ mcpConnections: [...s.mcpConnections.filter((c) => c.id !== 'clickup'), entry] })
+      const dest = await discoverListForClickup(entry)
+      if (dest.ok) {
+        persistClickupList(dest.list)
+        auditLog('mcp.connected', { connectionId: 'clickup', tools: (r.tools ?? []).length })
+        return { ...r, clickupListId: dest.list.id, clickupListName: dest.list.name }
+      }
     } catch (error) {
       return { ok: false as const, error: error instanceof Error ? error.message : 'Could not store the ClickUp connection.' }
     }
     auditLog('mcp.connected', { connectionId: 'clickup', tools: (r.tools ?? []).length })
     return r
+  })
+
+  // Names the destination without creating a task. Review calls this on Push to ClickUp (user click)
+  // when the seat is already connected but has no stored list — Confirm stays disabled until named.
+  ipcMain.handle(IPC.mcpClickupDiscoverDestination, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    if (denyIfLimited('mcp-outbound')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
+    const s = getSettings()
+    const conn = s.mcpConnections.find((c) => c.id === 'clickup')
+    if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey('clickup')) {
+      return { ok: false, error: 'ClickUp is not connected. Set it up in Settings → Mantu Intelligence first.' }
+    }
+    const dest = await discoverListForClickup(conn)
+    if (!dest.ok) return dest
+    persistClickupList(dest.list)
+    return { ok: true as const, clickupListId: dest.list.id, clickupListName: dest.list.name, tools: conn.tools }
   })
 
   ipcMain.handle(IPC.mcpPlaneConnect, async (e) => {

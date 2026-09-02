@@ -115,6 +115,10 @@ See [OPERATOR.md](./OPERATOR.md). Cloudflare Access packed ops console (`operato
 Outlook drafts and CRM notes are user-confirmed. Never auto-send. A disconnected connector shows
 Connect, it does not pretend a send happened.
 
+## ClickUp post-meeting push
+See [CLICKUP-PUSH.md](./CLICKUP-PUSH.md). Confirm creates a task in the last/connected list. Never
+attach a file. Destination is named on screen. Fail loud with ClickUp's error. OAuth redirect is PR 73.
+
 ## Connector marks (Settings → Brain)
 ClickUp and Plane use official simple-icons SVG paths (CC0; trademarks remain with the brands). Do not invent marks or scrape PNGs.
 
@@ -122,6 +126,9 @@ ClickUp and Plane use official simple-icons SVG paths (CC0; trademarks remain wi
 - Plane: simple-icons `plane` (commit `978656df6ce854ac04e45351059f8e3db7e34ef4`), official hex `#121212`, source https://plane.so/brand-logos/logo-with-wordmark.svg — `PlaneMark`. Near-black hex is painted as `currentColor` on dark glass so the official path still reads.
 
 See `docs/design/BRAIN-CONNECTORS.md`.
+
+## Onboarding appearance
+See [ONBOARDING-APPEARANCE.md](./ONBOARDING-APPEARANCE.md). Tony ask: Hidden (default, mouse to top, click to trigger) vs Island vs Bar. Live preview. Persist existing overlay. Hide 8×2 and Island hover stay out.
 
 ## Starfield Close (onboarding bed)
 See [ONBOARDING-STARFIELD.md](./ONBOARDING-STARFIELD.md). Galaxy from frame one. Overlay hide/island stay out.
