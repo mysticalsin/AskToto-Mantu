@@ -48,6 +48,47 @@ export interface MapDot {
   country: string
 }
 
+export interface OpsTiles {
+  uniqueSessions: number
+  sessionsDay: number
+  liveNow: number
+  live30: number
+  timeSaved: string | null
+  durationMs: number | null
+  meetings: number
+  tokens: number | null
+  apiCalls: number
+  listenMinutes: number | null
+  recapCount: number
+  cliAsks: number
+  operatorAsks: number
+  unknownAsks: number
+  crmFailRate: number | null
+  uniqueSeries: number[]
+  sessionsDaySeries: number[]
+  liveSeries: number[]
+  apiSeries: number[]
+  tokenSeries: number[]
+  recapSeries: number[]
+}
+
+const CLI_ASK = new Set(['claude-cli', 'codex-cli'])
+const OPERATOR_ASK = new Set([
+  'anthropic',
+  'openai',
+  'gemini',
+  'nvidia',
+  'deepseek',
+  'minimax',
+  'qwen',
+  'kimi',
+  'openrouter',
+  'groq',
+  'mistral',
+  'grok',
+  'custom'
+])
+
 export interface DashboardPayload {
   email: string
   now: number
@@ -66,6 +107,7 @@ export interface DashboardPayload {
     costSeries: number[]
     hitSeries: number[]
   }
+  ops: OpsTiles
   scale: {
     hours24: SeriesPoint[]
     days7: SeriesPoint[]
@@ -319,6 +361,58 @@ function uniqueSeats(seats: SeatRow[], since: number): number {
   return ids.size
 }
 
+function uniquePulses(pulses: PulseRow[], start: number, end: number): number {
+  const ids = new Set<string>()
+  for (const p of pulses) {
+    if (p.ts >= start && p.ts < end) ids.add(p.device_id)
+  }
+  return ids.size
+}
+
+function medianMs(values: number[]): number | null {
+  if (!values.length) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  return sorted[Math.floor((sorted.length - 1) / 2)] ?? null
+}
+
+function askRoute(provider: string | null): 'cli' | 'operator' | 'unknown' {
+  const id = (provider || '').trim().toLowerCase()
+  if (CLI_ASK.has(id)) return 'cli'
+  if (OPERATOR_ASK.has(id)) return 'operator'
+  return 'unknown'
+}
+
+function listenMinutesFromEvents(events: { kind: string; detail: string | null }[]): number | null {
+  let sum = 0
+  let any = false
+  for (const e of events) {
+    if (!/^listen$/i.test(e.kind)) continue
+    const m = /^(\d+(?:\.\d+)?)m$/.exec((e.detail || '').trim())
+    if (!m) continue
+    sum += Number(m[1])
+    any = true
+  }
+  return any ? sum : null
+}
+
+function sumAskTokens(a: {
+  input_tokens: number | null
+  output_tokens: number | null
+  cache_read: number | null
+  cache_write: number | null
+  cache_uncached: number | null
+}): number | null {
+  let n = 0
+  let any = false
+  for (const v of [a.input_tokens, a.output_tokens, a.cache_read, a.cache_write, a.cache_uncached]) {
+    if (v != null) {
+      n += v
+      any = true
+    }
+  }
+  return any ? n : null
+}
+
 function displayProfile(seat: SeatRow | undefined): { hostname: string | null; email: string | null } {
   return {
     hostname: seat?.hostname && !looksLikeSecret(seat.hostname) ? seat.hostname : null,
@@ -509,6 +603,60 @@ export async function buildDashboard(
   const counts = Object.fromEntries(CRM_STATUSES.map((s) => [s, 0])) as Record<CrmStatus, number>
   for (const row of crm) counts[row.status]++
 
+  const landing = crmLandingKpis(crm, now)
+  const live30 = seats.filter((s) => now - s.last_seen <= 30 * 60 * 1000).length
+  const durationMs = medianMs(weekAsks.map((a) => a.total_ms).filter((n): n is number => n != null && n > 0))
+  let tokenSum = 0
+  let tokenAny = false
+  for (const a of weekAsks) {
+    const t = sumAskTokens(a)
+    if (t != null) {
+      tokenSum += t
+      tokenAny = true
+    }
+  }
+  let cliAsks = 0
+  let operatorAsks = 0
+  let unknownAsks = 0
+  for (const a of weekAsks) {
+    const route = askRoute(a.provider)
+    if (route === 'cli') cliAsks++
+    else if (route === 'operator') operatorAsks++
+    else unknownAsks++
+  }
+  const recapCount =
+    weekAsks.filter((a) => (a.mode || '').toLowerCase() === 'recap').length +
+    storedEvents.filter((e) => /recap/i.test(e.kind)).length
+  const meetings = crm.filter((r) => r.meeting_hash || r.status === 'success').length
+  const recapSeries = dayStarts.map((t, i) => {
+    const end = i === dayStarts.length - 1 ? now + 1 : t + DAY
+    return weekAsks.filter((a) => a.ts >= t && a.ts < end && (a.mode || '').toLowerCase() === 'recap').length
+  })
+  const tokenSeries = tokens.map((p) => p.read + p.write + p.uncached)
+  const ops: OpsTiles = {
+    uniqueSessions: wau,
+    sessionsDay: dau,
+    liveNow: live,
+    live30,
+    timeSaved: null,
+    durationMs,
+    meetings,
+    tokens: tokenAny ? tokenSum : null,
+    apiCalls: weekAsks.length,
+    listenMinutes: listenMinutesFromEvents(storedEvents),
+    recapCount,
+    cliAsks,
+    operatorAsks,
+    unknownAsks,
+    crmFailRate: landing.failRatePct,
+    uniqueSeries: days7.map((p) => uniquePulses(pulses, p.t, p.t + DAY)),
+    sessionsDaySeries: days7.map((p) => uniquePulses(pulses, p.t, p.t + DAY)),
+    liveSeries: hours24.map((p) => p.heartbeats),
+    apiSeries: days7.map((p) => p.asks),
+    tokenSeries,
+    recapSeries
+  }
+
   return {
     email,
     now,
@@ -530,6 +678,7 @@ export async function buildDashboard(
         return slice.hitRate == null ? 0 : Math.round(slice.hitRate * 100)
       })
     },
+    ops,
     scale: {
       hours24,
       days7,
@@ -568,7 +717,7 @@ export async function buildDashboard(
     })),
     crm: {
       counts,
-      landing: crmLandingKpis(crm, now),
+      landing,
       funnel: crmFunnelByConnector(crm),
       rows: crm.map((r) => ({
         id: r.id,
