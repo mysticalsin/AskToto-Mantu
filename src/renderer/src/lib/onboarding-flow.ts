@@ -7,7 +7,7 @@
  * vibe -> license -> ready — rather than the config -> license -> vibe order Act 5 (MQA-281/282)
  * originally shipped with:
  *
- *   hero -> problem -> reveal -> setup -> personalize -> [license, only if enabled] -> ready -> finish
+ *   hero -> problem -> reveal -> setup -> personalize -> [license, only if enabled] -> appearance -> ready -> finish
  *
  * `license` stays optional and OFF by default (settings.licenseGateEnabled) exactly as Act 5 shipped it;
  * moving it after `personalize` only changes WHEN it can appear, never whether it does. `ready` is the
@@ -26,6 +26,7 @@ export type OnboardingScene =
   | 'setup'
   | 'personalize'
   | 'license'
+  | 'appearance'
   | 'ready'
   | 'skip'
 
@@ -35,15 +36,19 @@ export function sceneAfterSetup(): OnboardingScene {
   return 'personalize'
 }
 
-/** personalize's Start: the license act only when the self-hosted license gate is on, otherwise
- *  straight to Ready. Never the legacy provider/API-key step — that hop no longer exists in the
- *  narrative path (see module doc above). */
+/** personalize's Continue: the license act only when the self-hosted license gate is on, otherwise
+ *  the appearance ask. Never the legacy provider/API-key step — that hop no longer exists in the
+ *  narrative path (see module doc above). Ready stays after appearance. */
 export function sceneAfterPersonalize(licenseGateEnabled: boolean | null | undefined): OnboardingScene {
-  return licenseGateEnabled ? 'license' : 'ready'
+  return licenseGateEnabled ? 'license' : 'appearance'
 }
 
-/** license's Continue always lands on Ready now (it used to land back on personalize, which by
- *  definition already ran to get here). */
+/** license's Continue lands on the appearance ask (then Ready). */
 export function sceneAfterLicense(): OnboardingScene {
+  return 'appearance'
+}
+
+/** Appearance Continue always lands on Ready. Tail beat, not a seventh guided act. */
+export function sceneAfterAppearance(): OnboardingScene {
   return 'ready'
 }

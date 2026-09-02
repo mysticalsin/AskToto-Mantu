@@ -15,8 +15,9 @@ describe('Settings overlay chrome cards', () => {
     for (const id of OVERLAY_LAYOUTS) {
       expect(css).toMatch(`.overlay-chrome-diagram--${id}`)
     }
-    expect(picker).toMatch(/OVERLAY_LAYOUT_COPY\[id\]\.title/)
-    expect(picker).toMatch(/OVERLAY_LAYOUT_COPY\[id\]\.desc/)
+    expect(picker).toMatch(/copy\[id\]\.title/)
+    expect(picker).toMatch(/copy\[id\]\.desc/)
+    expect(picker).toMatch(/copy = OVERLAY_LAYOUT_COPY/)
     expect(picker).toMatch(/Hidden until you move to the top|OVERLAY_LAYOUT_COPY/)
     expect(OVERLAY_LAYOUT_COPY.hide.desc).toBe('Hidden until you move to the top.')
     expect(OVERLAY_LAYOUT_COPY.island.desc).toBe('A small island stays visible. Hover opens it.')
