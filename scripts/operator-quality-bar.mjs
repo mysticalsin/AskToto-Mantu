@@ -202,6 +202,13 @@ function probeLiveLogin() {
     if (hashedLen <= 97 || !/window\.route = route/.test(hashed) || !/Overview/.test(hashed)) {
       fail(`live ${spaMeta.path} is still the 97-byte stub (len=${hashedLen})`)
     }
+    const hashedBody = hashed.split(/\r?\n\r?\n/).slice(1).join('\n\n')
+    try {
+      // eslint-disable-next-line no-new-func
+      new Function(hashedBody)
+    } catch (err) {
+      fail(`live ${spaMeta.path} must parse (pathname strip regex regress): ${err instanceof Error ? err.message : String(err)}`)
+    }
     const stub = run('curl', [
       '-sS',
       '-D',
