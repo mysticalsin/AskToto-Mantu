@@ -26,13 +26,13 @@ export function operatorUrlConfigured(
   return /^https:\/\//i.test(url)
 }
 
-/** Ask-text toggle. Default ON once a URL is set; ignored when Operator is off. */
+/** Ask-text toggle. OFF unless explicitly enabled; ignored when Operator is off. Metrics always send. */
 export function shouldSendAskText(
   settings: { operatorUrl?: string; sendAskText?: boolean } | null | undefined,
   env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
 ): boolean {
   if (!operatorUrlConfigured(settings, env)) return false
-  return settings?.sendAskText !== false
+  return settings?.sendAskText === true
 }
 
 export function promptCacheKey(mode: string, skillLockHash: string): string {

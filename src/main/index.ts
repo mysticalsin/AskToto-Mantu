@@ -582,6 +582,8 @@ app.commandLine.appendSwitch('disable-renderer-backgrounding')
 
 // Transcript tail matched against brain entities per Ask (see the buildBrainContext call site).
 const BRAIN_CONTEXT_TRANSCRIPT_TAIL = 4000
+// Cap for the pre-sign-in import-recovery backoff (see recoverImports in whenReady).
+const IMPORT_RECOVER_BACKOFF_CAP_MS = 30_000
 const BAR_WIDTH = 880
 const BAR_HEIGHT = 84 // initial idle height of the slimmer two-row widget; useAutoResize grows it for answers
 const BAR_MIN_HEIGHT = 44 // floor for the resize clamp so the collapsed control mini-pill can shrink fully
@@ -1494,6 +1496,9 @@ function publicSettings(): PublicSettings {
   const localFallbackReady = localReady && s.localLlm.fallback
   return {
     ...s,
+    // Never the secret itself (fleet-shared HMAC key), only whether one is set. Same rule as API keys.
+    operatorIngestSecret: '',
+    operatorIngestSecretSet: !!s.operatorIngestSecret.trim(),
     hasApiKey: hasApiKey(s.provider),
     // Reflect the value actually applied to the window, not the raw stored setting — otherwise a dev
     // process running with ASKTOTO_DISABLE_CP would show "Content protection: On" in Settings while
@@ -4378,10 +4383,14 @@ function registerIpc(): void {
           /* a locked/absent file is skipped, and the manifest shows exactly what made it */
         }
       }
+      // Diagnostic logs plus the CURRENT audit generation only. The rotated `audit-<epoch>.log` archives
+      // (up to 20 x 5 MB) carry months of actor emails and meeting-title-derived basenames; a support
+      // bundle is for diagnosing the app, not for exporting who met whom. The manifest names what audit.log
+      // contains so the user decides with that in view.
       const logsDir = join(userData, 'logs')
       if (existsSync(logsDir)) {
         for (const f of readdirSync(logsDir)) {
-          if (/\.log$/.test(f)) copy(join(logsDir, f), f)
+          if (/^main(\.old)?\.log$/.test(f) || f === 'audit.log') copy(join(logsDir, f), f)
         }
       }
       for (const f of readdirSync(userData)) {
@@ -4399,8 +4408,12 @@ function registerIpc(): void {
         `files (${copied.length}):`,
         ...copied.map((f) => `  ${f}`),
         ``,
+        `audit.log (current generation only) records security events as metadata: the signed-in actor`,
+        `email and file basenames derived from meeting titles. Rotated audit archives are not included.`,
+        ``,
         `Deliberately NOT included: meeting transcripts, the .brain/ knowledge store, the wiki mirror,`,
-        `and settings.json — this bundle is for diagnosing the app, never for moving content.`
+        `settings.json, and rotated audit archives — this bundle is for diagnosing the app, never for`,
+        `moving content.`
       ].join('\n')
       writeFileSync(join(dest, 'MANIFEST.txt'), manifest, 'utf8')
       auditLog('diagnostics.export', { files: copied.length })
@@ -7304,9 +7317,13 @@ if (!app.requestSingleInstanceLock()) {
   startOperatorOverlayPoll(() => getSettings())
   // Import checkpoints are encrypted and main-owned. Resume after IPC registration so the hidden decoder
   // can safely report chunks as soon as it starts, without delaying first paint.
-  const recoverImports = (): void => {
+  // Until sign-in, back off exponentially (1 s, 2 s, ... capped at 30 s) instead of polling every second:
+  // requireAuth() on a managed Windows fleet re-runs the synchronous PowerShell ACL probe every 5 s
+  // (win-security.ts, 0.5 to 1.9 s each), so a 1 Hz loop while the sign-in wall was up blocked the main
+  // process for a large share of every 5 s window for as long as the user stayed signed out.
+  const recoverImports = (delayMs = 1000): void => {
     if (!requireAuth()) {
-      setTimeout(recoverImports, 1000)
+      setTimeout(() => recoverImports(Math.min(delayMs * 2, IMPORT_RECOVER_BACKOFF_CAP_MS)), delayMs)
       return
     }
     void importJobs?.recover().catch((error) => mainLog.warn('[import-jobs] recovery failed:', error))

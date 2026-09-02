@@ -316,7 +316,7 @@ describe('SettingsSchema', () => {
   it('defaults playListenChime, requireConsentIndicator, and lastConsentReminderAt', () => {
     expect(DEFAULT_SETTINGS.operatorUrl).toBe('')
     expect(DEFAULT_SETTINGS.operatorIngestSecret).toBe('')
-    expect(DEFAULT_SETTINGS.sendAskText).toBe(true)
+    expect(DEFAULT_SETTINGS.sendAskText).toBe(false) // off by default: question text is personal data
     expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, operatorUrl: 'http://not-https.example' }).success).toBe(
       false
     )

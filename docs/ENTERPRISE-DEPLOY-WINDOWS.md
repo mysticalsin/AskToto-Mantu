@@ -100,7 +100,13 @@ admin-owned (`src/main/win-security.ts`) — a non-admin user cannot plant polic
 - Transcription is on-device; audio never leaves the machine.
 - Transcripts are envelope-encrypted at rest (AES-256-GCM) by default; provider keys are encrypted
   via OS keychain (`safeStorage`). Keys are never exposed to the renderer process.
-- No telemetry, no crash-report upload — by design (`src/main/index.ts`).
+- No crash-report upload, and no product telemetry unless an Operator URL is configured
+  (`operatorUrl`, empty by default, may be prefilled by `METIS_OPERATOR_URL`). With a URL set, each seat
+  sends a heartbeat (seat hash, OS, app version) and per-Ask metrics (provider, model, latency, token and
+  cache counts) to that Cloudflare Worker over an HMAC-signed channel. Question text is sent only when
+  `sendAskText` is on; it is **off by default** and lockable. Listen transcripts, screens, audio, and keys
+  never send. Lock `operatorUrl`, `operatorIngestSecret`, and `sendAskText` in `managed-config.json` to
+  fix the fleet's posture (see `build/managed-config.enterprise.example.json`).
 - What leaves the device: prompts to the user-chosen AI provider; optional Dust/graph reads of the
   notes folder. See `README.md` §Security & privacy.
 

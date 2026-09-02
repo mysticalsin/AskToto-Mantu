@@ -1340,7 +1340,8 @@ export const BaseSettingsSchema = z.object({
     .refine((v) => v === '' || /^https:\/\//i.test(v), 'Operator URL must be an https:// URL')
     .default(''),
   operatorIngestSecret: z.string().default(''),
-  sendAskText: z.boolean().default(true)
+  // Off by default: question text is personal data leaving the device. Metrics still send.
+  sendAskText: z.boolean().default(false)
 })
 
 export const SettingsSchema = BaseSettingsSchema.refine(
@@ -1437,6 +1438,9 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
   managedKeys: z.array(z.string()).default([]),
   /** Providers whose key is set via an environment variable — in-app Remove is a no-op for these. */
   envKeys: z.array(z.string()).default([]),
+  /** The Operator ingest secret is a fleet-shared HMAC credential; publicSettings blanks the value and
+   *  reports only whether one is set, so a renderer compromise or devtools session cannot read it. */
+  operatorIngestSecretSet: z.boolean().default(false),
   loginItemOpenAtLogin: z.boolean().default(false),
   /** App version (e.g. from package.json/app.getVersion()), populated by main for the About screen.
    *  Optional — absent on older callers/tests that construct PublicSettings without it. */
@@ -1468,6 +1472,7 @@ export type SettingsPatch = Partial<
     | 'envKeys'
     | 'loginItemOpenAtLogin'
     | 'lastFailover'
+    | 'operatorIngestSecretSet'
   >
 >
 
@@ -1589,7 +1594,7 @@ export const DEFAULT_SETTINGS: Settings = {
   trialStartedAt: null,
   operatorUrl: '',
   operatorIngestSecret: '',
-  sendAskText: true
+  sendAskText: false
 }
 
 export const HOTKEY_ACTIONS: HotkeyAction[] = [

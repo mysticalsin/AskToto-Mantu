@@ -6247,12 +6247,18 @@ export function Settings({
                   </label>
                   <label className="flex flex-col gap-1 px-1 py-2">
                     <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Ingest secret</span>
+                    {/* Write-only: main never sends the stored secret back (operatorIngestSecretSet only). */}
                     <input
+                      key={settings.operatorIngestSecretSet ? 'secret-set' : 'secret-unset'}
                       type="password"
-                      value={settings.operatorIngestSecret || ''}
+                      defaultValue=""
                       spellCheck={false}
-                      autoComplete="off"
-                      placeholder="Same value as the Worker OPERATOR_INGEST_SECRET"
+                      autoComplete="new-password"
+                      placeholder={
+                        settings.operatorIngestSecretSet
+                          ? 'Secret is set. Type a new value to replace it.'
+                          : 'Same value as the Worker OPERATOR_INGEST_SECRET'
+                      }
                       disabled={settings.managedKeys.includes('operatorIngestSecret')}
                       onChange={(e) => patch({ operatorIngestSecret: e.target.value })}
                       className={`${ctl} w-full`}
@@ -6261,8 +6267,8 @@ export function Settings({
                   {/^https:\/\//i.test(settings.operatorUrl || '') && (
                     <ToggleRow
                       label="Send Ask text for skill improvement"
-                      desc="When on, the question text goes with the metrics so skills can be drafted. Metrics always send. Listen transcripts and screens never send."
-                      on={settings.sendAskText !== false}
+                      desc="Off by default. When on, the question text goes with the metrics so skills can be drafted. Metrics always send. Listen transcripts and screens never send."
+                      on={settings.sendAskText === true}
                       onChange={(v) => patch({ sendAskText: v })}
                       disabled={settings.managedKeys.includes('sendAskText')}
                     />

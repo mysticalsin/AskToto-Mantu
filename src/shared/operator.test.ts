@@ -108,7 +108,9 @@ describe('operatorUrlConfigured', () => {
 
   it('sends Ask text by default once a URL is set', () => {
     const url = { operatorUrl: 'https://metis-operator.example.workers.dev' }
-    expect(shouldSendAskText(url)).toBe(true)
+    // Off unless explicitly on: question text is personal data leaving the device.
+    expect(shouldSendAskText(url)).toBe(false)
+    expect(shouldSendAskText({ ...url, sendAskText: true })).toBe(true)
     expect(shouldSendAskText({ ...url, sendAskText: false })).toBe(false)
     expect(shouldSendAskText({ sendAskText: true })).toBe(false)
   })

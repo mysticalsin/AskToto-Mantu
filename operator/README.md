@@ -132,7 +132,7 @@ Settings → Privacy:
 
 - **Operator URL** (https). Empty by default. `METIS_OPERATOR_URL` may prefill.
 - **Ingest secret**. Same value as `OPERATOR_INGEST_SECRET`. `METIS_OPERATOR_INGEST_SECRET` may prefill.
-- **Send Ask text for skill improvement**. Default on once a URL is set. Off sends metrics only.
+- **Send Ask text for skill improvement**. Off by default, even with a URL set. Off sends metrics only. Question text is personal data; an admin can lock this key in `managed-config.json`.
 - **Open Operator**. System browser. Tony signs in with Access.
 
 While the app is up and both URL and secret are set:
