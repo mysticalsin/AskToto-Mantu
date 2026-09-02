@@ -10,6 +10,9 @@ import {
   buildOcrContext,
   macHelperPath,
   macHelperPresent,
+  macNoConstrainNodePath,
+  macNoConstrainDylibPath,
+  installMacNoConstrain,
   macScreenMetricsSpawnSpec,
   getMacScreenMetrics,
   extractScreenText,
@@ -78,6 +81,52 @@ describe('macHelperPath / macHelperPresent', () => {
   it('is never present on non-darwin platforms', () => {
     expect(macHelperPresent('win32')).toBe(false)
     expect(macHelperPresent('linux')).toBe(false)
+  })
+
+  it('resolves noconstrain .node and dylib next to the helper', () => {
+    expect(macNoConstrainNodePath().endsWith(join('resources', 'mac-helper', 'metis-noconstrain.node'))).toBe(true)
+    expect(macNoConstrainDylibPath().endsWith(join('resources', 'mac-helper', 'libmetis-noconstrain.dylib'))).toBe(true)
+  })
+
+  it('installMacNoConstrain is a no-op on this non-darwin host', () => {
+    expect(installMacNoConstrain()).toBe(false)
+  })
+})
+
+describe('metis-noconstrain source (Hide park Y=0 swizzle)', () => {
+  it('ships metis-noconstrain.m that replaces constrainFrameRect:toScreen:', () => {
+    const src = readFileSync(join(REPO_ROOT, 'native', 'mac-helper', 'metis-noconstrain.m'), 'utf8')
+    expect(src).toMatch(/constrainFrameRect:toScreen:/)
+    expect(src).toMatch(/metis_install_no_constrain/)
+    expect(src).toMatch(/method_setImplementation/)
+    expect(src).toMatch(/METIS_NOCONSTRAIN_NAPI/)
+    expect(src).toMatch(/NAPI_MODULE/)
+    expect(src).toMatch(/__attribute__\(\(constructor\)\)/)
+  })
+
+  it('build-mac-helper.mjs compiles the dylib and the in-process .node', () => {
+    const script = readFileSync(join(REPO_ROOT, 'scripts', 'build-mac-helper.mjs'), 'utf8')
+    expect(script).toMatch(/libmetis-noconstrain\.dylib/)
+    expect(script).toMatch(/metis-noconstrain\.node/)
+    expect(script).toMatch(/metis-noconstrain\.m/)
+    expect(script).toMatch(/METIS_NOCONSTRAIN_NAPI/)
+    expect(script).toMatch(/-dynamiclib/)
+    expect(script).toMatch(/-bundle/)
+    expect(script).toContain("join(repoRoot, 'native', 'mac-helper', 'metis-noconstrain.m')")
+  })
+
+  it('check-mac-helper.mjs requires the dylib and the .node on mac', () => {
+    const script = readFileSync(join(REPO_ROOT, 'scripts', 'check-mac-helper.mjs'), 'utf8')
+    expect(script).toMatch(/libmetis-noconstrain\.dylib/)
+    expect(script).toMatch(/metis-noconstrain\.node/)
+  })
+
+  it('index.ts loads the swizzle before createWindow', () => {
+    const index = readFileSync(join(REPO_ROOT, 'src', 'main', 'index.ts'), 'utf8')
+    expect(index).toMatch(/installMacNoConstrain/)
+    const create = index.slice(index.indexOf('function createWindow'), index.indexOf('function resizeTo'))
+    expect(create.indexOf('installMacNoConstrain()')).toBeGreaterThan(-1)
+    expect(create.indexOf('installMacNoConstrain()')).toBeLessThan(create.indexOf('new BrowserWindow'))
   })
 })
 

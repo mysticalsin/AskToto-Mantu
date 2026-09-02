@@ -77,6 +77,39 @@ export function macHelperPresent(platform: NodeJS.Platform = process.platform): 
   return platform === 'darwin' && existsSync(macHelperPath())
 }
 
+/** Packaged extraResources vs repo checkout — same dual path as macHelperPath. */
+export function macNoConstrainNodePath(): string {
+  if (app.isPackaged) return join(process.resourcesPath, 'mac-helper', 'metis-noconstrain.node')
+  return join(findRepoRoot(__dirname), 'resources', 'mac-helper', 'metis-noconstrain.node')
+}
+
+export function macNoConstrainDylibPath(): string {
+  if (app.isPackaged) return join(process.resourcesPath, 'mac-helper', 'libmetis-noconstrain.dylib')
+  return join(findRepoRoot(__dirname), 'resources', 'mac-helper', 'libmetis-noconstrain.dylib')
+}
+
+/**
+ * Load the N-API swizzle in-process so packaged hardened-runtime Electron parks Hide at bounds.y
+ * without DYLD_INSERT_LIBRARIES. No-op on non-darwin or when the .node was not built.
+ */
+export function installMacNoConstrain(): boolean {
+  if (process.platform !== 'darwin') return false
+  const addon = macNoConstrainNodePath()
+  if (!existsSync(addon)) {
+    mainLog.warn('[noconstrain] metis-noconstrain.node missing — Hide park Y may clamp to workArea.y')
+    return false
+  }
+  try {
+    // Init() runs metis_install_no_constrain(). process.dlopen survives electron-vite bundling.
+    const mod: { exports: unknown } = { exports: {} }
+    process.dlopen(mod, addon)
+    return true
+  } catch (e) {
+    mainLog.warn('[noconstrain] dlopen failed', e instanceof Error ? e.message : String(e))
+    return false
+  }
+}
+
 /** Spawn spec for the darwin foreground watcher, or null when the helper isn't available (the watcher
  *  then returns its inert handle, exactly the pre-helper mac behavior). */
 export function macWatcherSpawnSpec(): { command: string; args: string[] } | null {

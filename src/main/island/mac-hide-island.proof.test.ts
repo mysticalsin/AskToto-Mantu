@@ -101,6 +101,8 @@ describe('Mac-test Hide park leftover after Show (880×105 at Y=39)', () => {
   it('createWindow is type panel on darwin when !onboardingLive; exclusive stays normal', () => {
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
     const create = index.slice(index.indexOf('function createWindow'), index.indexOf('function resizeTo'))
+    expect(create).toMatch(/installMacNoConstrain\(\)/)
+    expect(create.indexOf('installMacNoConstrain()')).toBeLessThan(create.indexOf('new BrowserWindow'))
     expect(create).toMatch(/process\.platform === 'darwin' && !onboardingLive \? \{ type: 'panel' as const \}/)
     const apply = index.slice(
       index.indexOf('function applyExclusiveOnboardingStage'),

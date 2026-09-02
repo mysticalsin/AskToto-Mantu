@@ -61,6 +61,8 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
   it('createWindow uses firstPaintOverlayBounds for constructor size', () => {
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
     const create = index.slice(index.indexOf('function createWindow'), index.indexOf('function resizeTo'))
+    expect(create).toMatch(/installMacNoConstrain\(\)/)
+    expect(create.indexOf('installMacNoConstrain()')).toBeLessThan(create.indexOf('new BrowserWindow'))
     expect(create).toMatch(/firstPaintOverlayBounds/)
     expect(create).toMatch(/width: firstPaint.width/)
     expect(create).toMatch(/height: firstPaint.height/)

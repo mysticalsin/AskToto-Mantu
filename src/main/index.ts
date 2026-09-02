@@ -154,7 +154,7 @@ import {
 } from '@shared/ask-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
-import { extractScreenText } from './mac-helper'
+import { extractScreenText, installMacNoConstrain } from './mac-helper'
 import { createSpeakerId, type SpeakerId, type SpeakerLabel } from './speaker-id'
 import {
   clampAxis,
@@ -1737,6 +1737,9 @@ function applyOverlayAlwaysOnTop(w: BrowserWindow): void {
 }
 
 function createWindow(): void {
+  // Packaged darwin: swizzle constrainFrameRect before any BrowserWindow exists.
+  // DYLD_INSERT is show-tree only; hardened-runtime needs the in-process .node.
+  installMacNoConstrain()
   // Idempotent: `second-instance` is registered before app-ready and can call ensureWindow() while boot's
   // own runStep('createWindow') is still queued behind its awaits. Without this, the boot step would
   // overwrite `win` with a second BrowserWindow and orphan the first one — still visible, still
@@ -7098,6 +7101,7 @@ if (!app.requestSingleInstanceLock()) {
   })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
+  installMacNoConstrain()
   await installProxyAwareFetch() // route provider fetch through the env/OS proxy so Dust etc. work behind a corporate proxy
   // Warm the CLI binary cache at boot when a CLI provider is connected, so the session's FIRST CLI ask
   // doesn't stall on the login-shell PATH lookup (it only ran on sign-in before — i.e. once ever).

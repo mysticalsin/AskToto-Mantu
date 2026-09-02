@@ -539,6 +539,11 @@ describe('DESIGN.md overlay contract', () => {
     expect(design).toMatch(/8×44/)
     expect(design).toMatch(/restoreParkAfterShow/)
     expect(design).toMatch(/createHideParkWindow/)
+    expect(design).toMatch(/type: 'panel'/)
+    expect(design).toMatch(/!onboardingLive/)
+    expect(design).toMatch(/installMacNoConstrain/)
+    expect(design).toMatch(/metis-noconstrain\.node/)
+    expect(design).toMatch(/DYLD_INSERT/)
     expect(design).toMatch(/880×105|880x105/)
   })
 
