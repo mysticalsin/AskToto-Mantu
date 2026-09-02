@@ -82,3 +82,9 @@ export function nextAskRoute(input: {
 export function dustIsGeneralChat(): false {
   return false
 }
+
+/** True when heartbeat listed this id as Operator-funded. Never CLI, Dust, local, or CF account. */
+export function operatorFundsProvider(id: string, funded: string[] | undefined): boolean {
+  if (!id || isCliProviderId(id) || id === 'dust' || id === 'local' || id === 'cloudflare-account') return false
+  return (funded ?? []).includes(id)
+}

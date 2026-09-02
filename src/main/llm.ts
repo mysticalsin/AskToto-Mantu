@@ -4,6 +4,7 @@ import { streamDust } from './llm/dust'
 import { streamAnthropic } from './llm/anthropic'
 import { streamOpenAI } from './llm/openai'
 import { streamLocal } from './llm/local'
+import { streamOperatorUse } from './llm/operator-use'
 import { wrapEnterpriseStream } from './llm/enterprise-client'
 import { auditLog } from './logger'
 
@@ -34,7 +35,14 @@ export function dispatchStream(opts: StreamOptions): StreamHandle {
  * post-filter, secret-redacted errors. Strategies below this still own wire format.
  */
 export function createStream(opts: StreamOptions): StreamHandle {
-  return wrapEnterpriseStream(dispatchStream, opts, {
+  const dispatch = opts.operatorBroker
+    ? (o: StreamOptions): StreamHandle =>
+        streamOperatorUse({
+          ...o,
+          operator: o.operator ?? {}
+        })
+    : dispatchStream
+  return wrapEnterpriseStream(dispatch, opts, {
     onMetrics: (m) =>
       auditLog('llm.call', {
         provider: m.providerId,

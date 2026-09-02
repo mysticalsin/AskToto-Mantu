@@ -140,7 +140,7 @@ import {
   resolveRoutingMode
 } from './llm/local-routing'
 import { isCliProviderId, isDustChatForbidden, pickWorkingCliPrimary, workingCliOrder } from '@shared/ask-routing'
-import { operatorFundedProviders } from './operator-ingest'
+import { operatorCanBroker, operatorFundedProviders } from './operator-ingest'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText } from './mac-helper'
@@ -4790,7 +4790,7 @@ function registerIpc(): void {
         }
         return (
           (!allowed || allowed.includes(p)) &&
-          (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0) &&
+          (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0 || operatorCanBroker(p, s)) &&
           // A provider whose endpoint the USER supplies (Custom, Cloudflare's operator Worker) is only a
           // candidate once it actually has one. Cloudflare ships a default model, so without this check a
           // key alone would make it eligible and the walk would hand the request to streamOpenAI with no
@@ -4976,8 +4976,10 @@ function registerIpc(): void {
               : 'Métis Local handles live suggestions, summaries and screenshots — this request type uses your cloud provider.'
           : def.kind === 'cli' && !s.cliConnected[provider]
             ? `${def.label} is not connected. Open Settings → CLI Integration to set it up.`
-            : def.kind !== 'cli' && !key
+            : def.kind !== 'cli' && !key && !operatorCanBroker(provider, s)
               ? `No API key for ${def.label}. Open Settings (gear) and add it.`
+              : def.kind !== 'cli' && !key && req.mode === 'vision'
+                ? `${def.label} is Operator-funded and cannot receive screenshots. Ask without a screen capture.`
               : def.kind !== 'cli' && !model
                 ? provider === 'dust'
                   ? `No ${tier === 'think' ? 'thinking' : 'base'} Dust agent set. Open Settings → Connect Dust and pick your agents.`
@@ -5135,6 +5137,8 @@ function registerIpc(): void {
         providerId: provider,
         kind: def.kind,
         apiKey: key,
+        operatorBroker: !key && operatorCanBroker(provider, s),
+        operator: { operatorUrl: s.operatorUrl, operatorIngestSecret: s.operatorIngestSecret },
         baseURL,
         workspaceId: s.dustWorkspaceId,
         // Dust OAuth tokens (imported from the local CLI) expire after ~1h. On a pre-token 401 the
