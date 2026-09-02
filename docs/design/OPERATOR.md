@@ -5,7 +5,7 @@ owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, cli
 does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, installer packing, Fly license-server, Goldberg Aria, cloudflare-proxy AI token proxy, Bklit Studio
 ready-to-merge: no
 implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing, access-login, shoey-map
-this-slice: overview-bklit-10
+this-slice: router-parse-spa
 audience: Tony Walteur only. Two emails. Nobody else.
 tokens:
   accent: "#2563EB"
@@ -49,7 +49,11 @@ Live URL: `https://metis-operator.tony-walteur.workers.dev/`. This is **Métis O
 
 Copy **page chrome** from Shoey for Realtime / Events / Sessions / Notifications. Fill every page with **live Métis** heartbeats / Asks / CRM. **0 LLM tokens**. No fake dots. `#map` after JWT is Realtime.
 
-**P0 hashed SPA** (2026-09-02). The 97-byte `METIS_OPERATOR` stub is **void**. Authenticated HTML must `<script src="/assets/operator-<hash>.js">` and `<link>` the hashed CSS. Unauth `GET /assets/operator-<hash>.js` (and CSS) is **200** with `content-length` ≫ 97 and real Shoey chrome (Overview / Realtime / Events strings). Unknown `/assets/index.js` / `/assets/client.js` are **404**, not another stub. Unauth `GET /` and `GET /keys` stay **302** Cloudflare Access. `GET /health` 200 JSON. Do **not** edit overlay `DESIGN.md`. This file is the Operator design contract.
+**P0 hashed SPA + live router** (Tony 11:39 PM ET walk). The 97-byte `METIS_OPERATOR` stub is **void**. Authenticated HTML must `<script src="/assets/operator-<hash>.js">` and `<link>` the hashed CSS. Unauth `GET /assets/operator-<hash>.js` (and CSS) is **200** with `content-length` ≫ 97 and real Shoey chrome (Overview / Realtime / Events strings). Unknown `/assets/index.js` / `/assets/client.js` are **404**, not another stub. Unauth `GET /` and `GET /keys` stay **302** Cloudflare Access. `GET /health` 200 JSON. Do **not** edit overlay `DESIGN.md`. This file is the Operator design contract.
+
+**Router law.** The hashed JS must parse. After it runs, `window.route` is a function. `route('/')`, `route('realtime')`, `route('events')`, `route('sessions')`, `route('notifications')`, `route('keys')`, and `route('settings')` swap the main body (`[data-page]` hidden). Clicking `#realtime` shows the Realtime map body, not Overview. Hash-only nav with the body stuck on Overview is **FAIL**.
+
+Path strip in the shipped JS is exactly `location.pathname.replace(/^\//, '')`. Regex literal: slash, caret, backslash, slash, slash. Meaning: at start of string, a single `/`. Replace with `''`. A syntax/parse test must compile the shipped JS (`new Function`) so this regex cannot regress. Do not document, comment, or test any other pathname-replace spelling.
 
 Content is Métis, not sneakers. Real data only. No fake keys, no stub map, no shoe SKUs (`/products/sneakers` and commerce sample rows are forbidden).
 
@@ -66,10 +70,8 @@ Pixel-clone **Shoey page chrome** on Realtime / Events / Sessions / Notification
 **Sidebar (white, ~185px, hairline `#EDEDED` right border) — Shoey taskbar chrome, Métis labels only:**
 
 - Workspace selector: Métis (not Shoey) + chevron.
-- `+ Create report` (primary, dropdown). Honest empty until a real Métis report exists. Never a fake report.
-- `Ask AI anything…` search with `⌘ J`. Filters the rail. Does not invent answers.
-- **KEEP:** Overview, Realtime, Events, Sessions, Notifications, Keys, Settings.
-- **MUST GO (fail loud):** SEO, Pages, Insights, Profiles, Groups, Cohorts, Dashboards, References, and any other leftover OpenPanel / e-commerce section.
+- **KEEP:** Overview, Realtime, Events, Sessions, Notifications, Keys, Settings. Keys is a first-class rail item (add / rotate / revoke last4).
+- **MUST GO (fail loud):** SEO, Pages, Insights, Profiles, Groups, Cohorts, Dashboards, References, Create report, Ask AI, and any other leftover OpenPanel / e-commerce section.
 - Optional “Back to workspace” = Access sign-out.
 
 **Overview (Tony 11:32 PM ET — Bklit mini-10 only):**
@@ -107,7 +109,7 @@ Pixel-clone **Shoey page chrome** on Realtime / Events / Sessions / Notification
 
 **Notifications** clones Shoey `/notifications` chrome and lists real failed CRM sends and pending skill diffs only. Empty = honest empty. Never fake alerts.
 
-**Empty leftovers.** Do not ship Dashboards / Insights / Pages / SEO / Profiles / Groups / Cohorts / References pages. Settings beyond Keys stays a short Keys fund-seats note. Create report stays honest empty. Never fake rows.
+**Empty leftovers.** Do not ship Dashboards / Insights / Pages / SEO / Profiles / Groups / Cohorts / References pages. Settings beyond Keys stays a short Keys fund-seats note. Never fake rows.
 
 Light SaaS default (white cards, `#EDEDED` borders, ~8px radius). Inter-like sans. Color is blue charts + green live. Overlay chrome stays frozen.
 
@@ -395,33 +397,24 @@ Tony connects Cloudflare **on Operator**, not on a seat.
 
 Kill the two-level leftover (Overview in the header, Scale / Change under CONSOLE). Kill the slim Métis rail (Analytics: Overview / Realtime / Events / Profiles / Map · Fleet · Ops). Tony 10:32 voided that cut.
 
-The left rail **mirrors Shoey**. Same labels, same grouping, same chrome. Search filters the list. Every item has a page. Destinations without ingest yet are **honest empty** with a Métis hook, never fake rows.
+The left rail keeps Shoey taskbar chrome and Métis labels only. Every KEEP item has a page. Destinations without ingest yet are honest empty, never fake rows.
 
-| Route | Label | Group | What Tony sees |
-| --- | --- | --- | --- |
-| `#overview` (default) | Overview | Analytics | Bklit mini-10 KPI cards from live heartbeats. Extra chips. No chart gallery. Métis nouns only |
-| `#dashboards` | Dashboards | Analytics | Honest empty. Hook: saved Métis views (seats / Asks / Listen) when a real report exists |
-| `#insights` | Insights | Analytics | Honest empty. Hook: Ask cost / cache / security issues when reported |
-| `#pages` | Pages | Analytics | Honest empty or real mode / skill / use-case paths. Never shoe SKUs |
-| `#seo` | SEO | Analytics | Honest empty. Hook: public Métis / wiki surfaces when we have them |
-| `#realtime` | Realtime | Analytics | Shoey Realtime: 30-min unique seats, blue bars, stream, world + green pills, Geo / Referrals / Paths |
-| `#events` | Events | Analytics | Event name, profile, chips, time. Token-free. Real ingest |
-| `#sessions` | Sessions | Analytics | Honest empty or real seat sessions from heartbeat. Never invented visitors |
-| `#profiles` | Profiles | Analytics | Computer / hostname + SSO email. Real ingest only |
-| `#groups` | Groups | Analytics | Honest empty. Hook: license / workspace / OS groups when reported |
-| `#cohorts` | Cohorts | Analytics | Honest empty. Hook: DAU / WAU seat cohorts from real heartbeats |
-| `#settings` | Settings | Manage | Keys + Cloudflare connect (last4, fund seats). Theme. No second password |
-| `#references` | References | Manage | Honest empty. Hook: skill refs / signed packs |
-| `#notifications` | Notifications | Manage | Honest empty. Hook: failed CRM / pending skill diffs |
-| `#keys` | (URL `/keys`) | via Settings | Same Keys form. Path Ultron hits. Must 302 when unauth |
-| `#licenses` | (URL `/licenses`) | via Settings / Profiles | Seat license status. Never a raw license key |
-| `#devices` | (URL `/devices`) | via Profiles | Fleet seats |
-| `#map` | (URL `/map`) | = Realtime map | Same Shoey world as `#realtime` |
-| `#skills` | (URL, not a Shoey label) | via Pages / Settings | Draft / Approve / Push. Not a fake nav extra on the Shoey rail |
+| Route | Label | What Tony sees |
+| --- | --- | --- |
+| `#overview` (default) | Overview | Exactly 10 Bklit mini KPI cards from live heartbeats. Extra chips. No chart gallery |
+| `#realtime` | Realtime | Shoey Realtime: 30-min unique seats, blue bars, stream, world + green pills, Geo / Referrals / Paths |
+| `#events` | Events | Event name, profile, chips, time. Token-free. Real ingest |
+| `#sessions` | Sessions | Real seats from heartbeat. Hostname / SSO / em dash. Never invented visitors |
+| `#notifications` | Notifications | Failed CRM / pending skill diffs. Honest empty otherwise |
+| `#keys` | Keys | last4 add / rotate / revoke. Cloudflare Account ID + token. Seats never hold raw keys |
+| `#settings` | Settings | Keys fund-seats note + Theme. No second password |
+| `#map` | (alias) | Same Realtime body. `window.route('map')` highlights Realtime |
 
-Create report is the sidebar primary. It does not add a fake report. `#macos` / `#windows` remain hash filters on Profiles / Sessions, not extra rail labels.
+MUST GO (fail loud if a data-nav or data-page remains): dashboards, insights, pages, seo, profiles, groups, cohorts, references. No Create report. No Ask AI.
 
-Section eyebrows on the rail: **Analytics** then **Manage**. No Fleet. No Ops. No CONSOLE. The rail is the Shoey chrome.
+`#macos` / `#windows` remain hash filters on Sessions, not extra rail labels.
+
+Section eyebrow on the rail: **Métis**. No Analytics leftover groups. No Fleet. No Ops. No CONSOLE. The rail is Shoey taskbar chrome with Métis labels only.
 
 ## Events
 
@@ -464,9 +457,9 @@ Paint like Shoey: light land `#F5F5F5`, charcoal dots, green pills. Still strip 
 
 Click a country / pill to filter Geo + the fleet table. Caption: unique seats by country from Cloudflare `request.cf`. No GPS. No IP.
 
-## Overview (Shoey 8-up + Tony ops tiles)
+## Overview (Bklit mini-10 only)
 
-`#overview` **is** `https://demo.openpanel.dev/demo/shoey` Overview (proof: `shoey-overview.png`). Eight KPI cards, one Unique seats area chart, two tabbed tables, then the required Métis ops strip (Listen / recap / CLI vs key / CRM fail / Mac vs Windows / version mix / country map / cost by provider). Scale / Mix / Cost / Change / Asks / CRM stay **below** that Shoey fold. They are not nav orphans and they do not replace the Shoey fold.
+`#overview` is **exactly 10** Bklit mini KPI cards from live heartbeats (Tony 11:32 PM ET). Not the old Shoey 8-up gallery. Not SEO / Pages / Insights. Extra Métis chips (Mac vs Windows, cost by provider, CRM fail, version mix, session duration, meetings) sit under the 10.
 
 **Render law.** Overview, Realtime, and Events are D1 + `request.cf` HTML. **Spend 0 LLM tokens.** No model, no generated sentences, no invented dots or numbers. If a field was never ingested, the tile says **not reported** (never `0` pretending to be a measurement).
 
@@ -564,6 +557,6 @@ Frozen overlay chrome (do not edit from this product):
 
 ## Ready to merge
 
-**READY TO MERGE: no.** Métis-only rail after Tony signed in. Hashed SPA still P0. Overlay leftover stays Wed 10am. No pack. No merge. Ultron tests before stamp. Do not pack EXE/DMG. Do not bump app version (`1.8.3` stays). Goldberg Aria stays frozen.
+**READY TO MERGE: no.** Live router + hashed SPA still P0 after the 11:39 PM ET walk. Overlay leftover stays Wed 10am. No pack. No merge. Ultron tests before stamp. Do not pack EXE/DMG. Do not bump app version (`1.8.3` stays). Goldberg Aria stays frozen.
 
 `POST /v1/use` (Operator-brokered provider calls) and migrating leftover seat-stored Tony cloud keys stay a later slice. Heartbeat lists funded providers only. Seats never persist a raw Operator key or CF token.
