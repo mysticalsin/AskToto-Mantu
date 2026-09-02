@@ -3,6 +3,8 @@
  * at bounds.y (Tony listwins), and Island hover at Y=12 must still reveal.
  * This is geometry + cursor-watch. Live Totos-Mac listwins is not this Linux host.
  */
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { decideCursorWatch, pointInRect } from './cursor-watch'
 import {
@@ -94,6 +96,24 @@ describe('Mac-test Hide park leftover after Show (880×105 at Y=39)', () => {
         revealed: false
       })
     ).toBe('reveal')
+  })
+
+  it('live apply path parks Hide via restoreParkAfterShow + applyParkBounds, not workArea.y', () => {
+    const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
+    const parkSpring = index.slice(
+      index.indexOf('function parkOverlayAfterHideSpring'),
+      index.indexOf('function applyHideClickThrough')
+    )
+    expect(parkSpring).toMatch(/restoreParkAfterShow/)
+    expect(parkSpring).toMatch(/applyParkBounds\(win, park\)/)
+    expect(parkSpring).not.toMatch(/islandSafeTop/)
+    expect(parkSpring).not.toMatch(/workArea\.y/)
+    const applyPark = index.slice(index.indexOf('function applyParkBounds'), index.indexOf('function createWindow'))
+    expect(applyPark).toMatch(/applyOverlayAlwaysOnTop\(w\)/)
+    expect(applyPark.indexOf('applyOverlayAlwaysOnTop(w)')).toBeLessThan(applyPark.indexOf('w.setBounds(park, false)'))
+    expect(applyPark).toMatch(/liveY === park\.y/)
+    expect(applyPark).toMatch(/setAlwaysOnTop\(true, 'screen-saver'\)/)
+    expect(applyPark).toMatch(/visibleOnFullScreen: true/)
   })
 })
 

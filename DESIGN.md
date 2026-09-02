@@ -70,7 +70,7 @@ Hide and island: hover or click expands **down** from the camera island to the f
 
 `createWindow` when `onboardingDone` + hide/island parks this rest rect immediately (same as exclusive exit). Never boot at 880×84 and hope hug wins. Never rest as 880×816. Never hug hide down to 120px.
 
-**Show then Hide/park.** After Show the live bar can sit at `islandSafeTop` (Y≈39) and grow to ~880×105. Hide/park must restore Hide **8×2** at `bounds.y` via `restoreParkAfterShow`. Do not leave leftover Y=39 (peeks or collides under the hardware island). Do not leave 880×105. Island hover stays the camera/notch square (`hoverWatchRestRect`); do not change that hit.
+**Show then Hide/park.** After Show the live bar can sit at `islandSafeTop` (Y≈39) and grow to ~880×105. Hide/park must restore Hide **8×2** at `bounds.y` via `restoreParkAfterShow`. Re-assert `applyOverlayAlwaysOnTop` immediately before and after `setBounds(park)` (`applyParkBounds`); if `getBounds().y` is still `workArea.y` (~39), setAlwaysOnTop screen-saver + visible-on-all-workspaces and `setBounds(park)` again — macOS clamps y=0 to 39 after Show. Do not leave leftover Y=39 (peeks or collides under the hardware island). Do not leave 880×105. Island hover stays the camera/notch square (`hoverWatchRestRect`); do not change that hit.
 
 ## After exclusive exit
 

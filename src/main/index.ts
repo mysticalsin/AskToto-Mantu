@@ -1709,7 +1709,7 @@ function exitExclusiveOnboardingStage(): void {
   currentWidth = park.width
   islandResting = overlayUsesHover(layout)
   userAnchorY = park.y
-  win.setBounds(park, false)
+  applyParkBounds(win, park)
   startOverlayCursorWatch()
   applyHideClickThrough()
 }
@@ -1721,6 +1721,32 @@ function applyOverlayAlwaysOnTop(w: BrowserWindow): void {
   } catch {
     /* headless / already destroyed */
   }
+}
+
+/**
+ * Park hide/island at `park.y` (`bounds.y`). After Show, macOS clamps `setBounds(y=0)`
+ * to `workArea.y` (~39) unless screen-saver + visible-on-all-workspaces is re-asserted
+ * immediately before and after the write. If getBounds().y still misses, re-assert and
+ * setBounds again (Tony live 8:23am ET: 8×2 at Y=39).
+ */
+function applyParkBounds(w: BrowserWindow, park: Electron.Rectangle): void {
+  applyOverlayAlwaysOnTop(w)
+  w.setBounds(park, false)
+  applyOverlayAlwaysOnTop(w)
+  let liveY: number
+  try {
+    liveY = w.getBounds().y
+  } catch {
+    return
+  }
+  if (liveY === park.y) return
+  try {
+    w.setAlwaysOnTop(true, 'screen-saver')
+    if (process.platform !== 'win32') w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  } catch {
+    /* headless */
+  }
+  w.setBounds(park, false)
 }
 
 function createWindow(): void {
@@ -2151,7 +2177,7 @@ function parkOverlayAfterHideSpring(): void {
   } catch {
     /* headless */
   }
-  win.setBounds(park, false)
+  applyParkBounds(win, park)
   applyHideClickThrough()
 }
 
@@ -2225,7 +2251,7 @@ function setWindowMode(): void {
     const park = parkAfterExclusiveOnboarding(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
     currentWidth = park.width
     userAnchorY = park.y
-    win.setBounds(park, false)
+    applyParkBounds(win, park)
     applyHideClickThrough()
     return
   }

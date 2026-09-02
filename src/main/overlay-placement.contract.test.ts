@@ -275,3 +275,55 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
     expect(height).toBeLessThanOrEqual(LAPTOP_ALONE.workArea.height - 48)
   })
 })
+
+describe('live Hide park apply path — macOS clamp leftover Y=39', () => {
+  it('applyParkBounds retries setBounds at park.y after the first write clamps to workArea.y', async () => {
+    const region = await toJs(
+      sliceBetween(
+        'function applyOverlayAlwaysOnTop(w: BrowserWindow): void {',
+        'function createWindow(): void {'
+      )
+    )
+    const preamble = [
+      'const { start, park, clampY } = stubs',
+      'let current = { ...start }',
+      'let writes = 0',
+      'let alwaysOnTop = []',
+      'let visibleOnAll = []',
+      'const win = {',
+      '  getBounds: () => ({ ...current }),',
+      '  setBounds: (b) => {',
+      '    writes += 1',
+      '    current = { ...current, ...b }',
+      '    if (writes === 1 && b.y === park.y) current.y = clampY',
+      '  },',
+      '  setAlwaysOnTop: (flag, level) => { alwaysOnTop.push([flag, level]) },',
+      '  setVisibleOnAllWorkspaces: (flag, opts) => { visibleOnAll.push([flag, opts]) }',
+      '}',
+      'const process = { platform: "darwin" }',
+      ''
+    ].join('\n')
+    const driver = [
+      '',
+      'applyParkBounds(win, park)',
+      'return { bounds: current, writes, alwaysOnTop, visibleOnAll }'
+    ].join('\n')
+    const run = new Function('stubs', preamble + region + driver) as (stubs: unknown) => {
+      bounds: { x: number; y: number; width: number; height: number }
+      writes: number
+      alwaysOnTop: unknown[]
+      visibleOnAll: unknown[]
+    }
+    const park = { x: 896, y: 0, width: 8, height: 2 }
+    const after = run({
+      start: { x: 460, y: 39, width: 880, height: 105 },
+      park,
+      clampY: 39
+    })
+    expect(after.bounds).toMatchObject({ width: 8, height: 2, y: 0, x: 896 })
+    expect(after.bounds.y).not.toBe(39)
+    expect(after.writes).toBeGreaterThanOrEqual(2)
+    expect(after.alwaysOnTop.some((call) => call[0] === true && call[1] === 'screen-saver')).toBe(true)
+    expect(after.visibleOnAll.some((call) => call[0] === true && (call[1] as { visibleOnFullScreen?: boolean }).visibleOnFullScreen)).toBe(true)
+  })
+})
