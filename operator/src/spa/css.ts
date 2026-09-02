@@ -211,9 +211,11 @@ a { color: var(--accent); text-decoration: none; }
 .delta.up { color: var(--ok); }
 .delta.down { color: var(--danger); }
 .delta.flat { color: var(--ink3); }
-.rt-grid { display: grid; grid-template-columns: minmax(240px, 32%) minmax(0, 1fr); gap: 16px; align-items: stretch; }
-.rt-map { min-width: 0; min-height: 380px; }
-.rt-stream { display: flex; flex-direction: column; gap: 2px; max-height: 360px; overflow: auto; }
+.rt-grid { display: grid; grid-template-columns: minmax(220px, 28%) minmax(0, 1fr); gap: 16px; align-items: stretch; }
+.rt-map { min-width: 0; min-height: 480px; }
+.rt-map #map-root { min-height: 480px; height: 100%; }
+.rt-map .world.shoey-world { min-height: 480px; max-height: none; }
+.rt-stream { display: flex; flex-direction: column; gap: 2px; max-height: 420px; overflow: auto; }
 .rt-row {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
   padding: 6px 2px; border-bottom: 1px solid var(--hair); font-size: 11px;

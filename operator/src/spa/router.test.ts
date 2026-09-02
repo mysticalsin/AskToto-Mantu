@@ -139,8 +139,10 @@ describe('hashed SPA router (#104)', () => {
   })
 
   it('hashed SPA embeds world land so paintShoeyMap can inject path[data-iso]', () => {
+    expect(SPA_JS.length).toBeGreaterThan(8611)
     expect(SPA_JS).toContain('ensureShoeyLand')
     expect(SPA_JS).toContain('paintShoeyMap')
+    expect(SPA_JS).toContain('#E5E7EB')
     expect(SPA_JS).toMatch(/data-iso=\\?"CA\\?"/)
     expect(SPA_JS).toMatch(/world-ocean/)
     expect((SPA_JS.match(/data-iso=/g) || []).length).toBeGreaterThan(50)
