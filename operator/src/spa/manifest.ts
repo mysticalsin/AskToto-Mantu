@@ -1,5 +1,5 @@
 import { CONSOLE_CSS } from './css'
-import { CONSOLE_JS } from './client'
+import { CONSOLE_JS, PATHNAME_STRIP_JS } from './client'
 
 const MIN_SPA_BYTES = 2000
 
@@ -25,6 +25,12 @@ if (SPA_JS.length < MIN_SPA_BYTES || SPA_CSS.length < MIN_SPA_BYTES) {
 }
 if (SPA_JS.includes('self.METIS_OPERATOR =') && SPA_JS.length < 500) {
   throw new Error('Métis Operator refused to ship METIS_OPERATOR stub')
+}
+if (!SPA_JS.includes(PATHNAME_STRIP_JS)) {
+  throw new Error('Métis Operator refused to ship a pathname strip that will not parse')
+}
+if (!SPA_JS.includes('window.route = route')) {
+  throw new Error('Métis Operator refused to ship a SPA without window.route')
 }
 
 export const SPA_JS_HASH = contentHash(SPA_JS)

@@ -175,7 +175,34 @@ function probeLiveLogin() {
     if (!/HTTP\/\S+\s+401/.test(postKeys) || /HTTP\/\S+\s+404/.test(postKeys)) {
       fail(`live POST /v1/admin/keys must stay 401, not 404`)
     }
-    const asset = run('curl', [
+    const spaMeta = JSON.parse(
+      run('npx', [
+        'tsx',
+        '-e',
+        "import { SPA_JS_PATH, SPA_JS } from './operator/src/spa/manifest.ts'; process.stdout.write(JSON.stringify({ path: SPA_JS_PATH, bytes: SPA_JS.length, route: SPA_JS.includes('window.route = route') }))"
+      ])
+    )
+    const hashed = run('curl', [
+      '-sS',
+      '-D',
+      '-',
+      '-o',
+      '-',
+      '--max-redirs',
+      '0',
+      `${host}${spaMeta.path}`
+    ])
+    const hashedLen = Number((hashed.match(/content-length:\s*(\d+)/i) || [])[1] || 0)
+    if (!/HTTP\/\S+\s+200/.test(hashed)) {
+      fail(`live ${spaMeta.path} must be 200 real JS, not Access 302`)
+    }
+    if (!/content-type:\s*.*javascript/i.test(hashed)) {
+      fail(`live ${spaMeta.path} must be application/javascript`)
+    }
+    if (hashedLen <= 97 || !/window\.route = route/.test(hashed) || !/Overview/.test(hashed)) {
+      fail(`live ${spaMeta.path} is still the 97-byte stub (len=${hashedLen})`)
+    }
+    const stub = run('curl', [
       '-sS',
       '-D',
       '-',
@@ -185,16 +212,16 @@ function probeLiveLogin() {
       '0',
       `${host}/assets/index.js`
     ])
-    if (!/HTTP\/\S+\s+200/.test(asset)) {
-      fail(`live /assets/index.js must be 200, not Access 302 (got headers+body probe)`)
+    if (/HTTP\/\S+\s+200/.test(stub) && /self\.METIS_OPERATOR =/.test(stub)) {
+      fail('live /assets/index.js is still the 97-byte stub')
     }
-    if (!/content-type:\s*.*(javascript|css)/i.test(asset)) {
-      fail(`live /assets/index.js must be javascript or css, not text/html`)
+    if (/HTTP\/\S+\s+302/.test(stub) && /cdn-cgi\/access\/login/i.test(stub)) {
+      fail('live /assets/index.js is wrapped by Cloudflare Access')
     }
-    if (/content-type:\s*text\/html/i.test(asset) || /cdn-cgi\/access\/login/i.test(asset)) {
-      fail(`live /assets/index.js is still wrapped by Cloudflare Access`)
+    if (!/HTTP\/\S+\s+404/.test(stub)) {
+      fail('live /assets/index.js must 404 (unknown name), not another stub')
     }
-    console.log(`✓ Live login contract: ${host}/health 200, ${host}/ and ${host}/keys 302 Access, ${host}/assets/index.js 200 js, POST /v1/admin/keys 401 JSON`)
+    console.log(`✓ Live login contract: ${host}/health 200, ${host}/ and ${host}/keys 302 Access, ${host}${spaMeta.path} 200 js ≫ 97, POST /v1/admin/keys 401 JSON`)
   } catch (err) {
     fail(`live login probe failed: ${err instanceof Error ? err.message : String(err)}`)
   }
