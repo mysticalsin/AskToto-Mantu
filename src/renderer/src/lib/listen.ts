@@ -1614,7 +1614,7 @@ export function useListen(
         requestedQualityRef.current = quality
         asrLanguageRef.current = language
         if (workerIdleTimer.current) {
-          clearTimeout(workerIdleTimer.current) // re-arming before the idle release fires: keep the worker warm
+          clearTimeout(workerIdleTimer.current)
           workerIdleTimer.current = null
         }
         // A stop() may still be draining — cancel its initial kickoff timer and reset the stopping guard so

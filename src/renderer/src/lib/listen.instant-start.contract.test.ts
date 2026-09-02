@@ -25,10 +25,18 @@ function blockBetween(src: string, from: string, to: string): string {
   return src.slice(start, end)
 }
 
-const startBody = blockBetween(SRC, 'const start = useCallback(', 'const closeChannel = useCallback')
-const prewarm = blockBetween(SRC, '// MQA-285: prewarm at app ready', '// Mid-session spoken-language change')
-const finishTeardown = blockBetween(SRC, 'const finishTeardown = (): void => {', 'const waitForDrain = (): void => {')
-const endReview = blockBetween(APP, 'const endReview = useCallback(', 'const toggleListen = useCallback(')
+/** Drop `//` comments so order assertions cannot fire on the prose that documents the contract. */
+function codeOnly(s: string): string {
+  return s
+    .split('\n')
+    .filter((l) => !l.trim().startsWith('//'))
+    .join('\n')
+}
+
+const startBody = codeOnly(blockBetween(SRC, 'const start = useCallback(', 'const closeChannel = useCallback'))
+const prewarm = codeOnly(blockBetween(SRC, '// MQA-285: prewarm at app ready', '// Mid-session spoken-language change'))
+const finishTeardown = codeOnly(blockBetween(SRC, 'const finishTeardown = (): void => {', 'const waitForDrain = (): void => {'))
+const endReview = codeOnly(blockBetween(APP, 'const endReview = useCallback(', 'const toggleListen = useCallback('))
 
 describe('MQA-285 — same-turn capture: acquireMic before any await in start()', () => {
   it('kicks acquireMic() before the first await so the click gesture covers getUserMedia', () => {
