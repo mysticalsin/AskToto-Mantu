@@ -5,7 +5,7 @@ owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, cli
 does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, installer packing, Fly license-server, Goldberg Aria, cloudflare-proxy AI token proxy, Bklit Studio
 ready-to-merge: no
 implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing, access-login, shoey-map
-this-slice: live-index-js
+this-slice: bklit-registry-spa
 audience: Tony Walteur only. Two emails. Nobody else.
 tokens:
   accent: "#2563EB"
@@ -16,10 +16,15 @@ tokens:
   panel: "#FFFFFF"
   hair: "#EDEDED"
   ink: "#18181B"
-  land: "#F5F5F5"
+  ocean: "#BFDBFE"
+  land: "#334155"
+  land-stroke: "#F8FAFC"
   chart: "#2563EB"
   nav-on: "#F4F4F5"
   pill: "#10B981"
+  dark-ocean: "#0B1220"
+  dark-land: "#94A3B8"
+  dark-land-stroke: "#020617"
 typography:
   ui: "Inter, Geist, system-ui, sans-serif"
   mono: "ui-monospace, SFMono-Regular, monospace"
@@ -45,11 +50,13 @@ Live URL: `https://metis-operator.tony-walteur.workers.dev/`. This is **Métis O
 
 **Rail (KEEP only, Métis labels, Shoey-like taskbar chrome):** Overview, Realtime, Events, Sessions, Notifications, Keys, Settings. Drop the rest.
 
-**Tony 11:32 PM ET addendum — Overview only.** Copy **Bklit UI mini KPI cards** (`@bklit/stat-card-area-01`, `stat-card-line-01`, `stat-card-choropleth-01`, plus ring / gauge / live-line if a metric needs them). **Not** a full chart gallery dump. **Not** on Realtime / Events / Sessions / Notifications.
+**Tony 11:32 PM ET addendum — Overview only.** Exactly **10 real Bklit minis** from live heartbeats. **Not** Unique Seats leftover cards. **Not** on Realtime / Events / Sessions / Notifications.
 
 Copy **page chrome** from Shoey for Realtime / Events / Sessions / Notifications. Fill every page with **live Métis** heartbeats / Asks / CRM. **0 LLM tokens**. No fake dots. `#map` after JWT is Realtime.
 
-**P0 hashed SPA + live router** (Tony 11:39 PM ET walk, Bob Ultron FAIL). The 97-byte `METIS_OPERATOR` stub is **void**. Authenticated HTML must `<script src="/assets/operator-<hash>.js">` and `<link>` the hashed CSS. Unauth `GET /assets/operator-<hash>.js` (and CSS) is **200** with `content-length` ≫ 97 and real Shoey chrome (Overview / Realtime / Events strings). Unauth `GET /assets/index.js` is the **same** Shoey bundle: **200** `application/javascript`, bytes ≫ 97, `window.route` present, not a stub, not 404 JSON. Unknown `/assets/client.js` stays **404**. Unauth `GET /` and `GET /keys` stay **302** Cloudflare Access. `GET /health` 200 JSON. Do **not** edit overlay `DESIGN.md`. This file is the Operator design contract.
+**Tony 12:29 AM ET (Bob FAIL).** Realtime click may swap the body and still **FAIL** if the world is blank except a Canada pill. Land masses must paint. Light land fill is the literal `#E5E7EB`. Dark land is charcoal `#3f3f46`. Ocean is white / near-black, not the same gray as land. Charcoal seat dots from `request.cf` only. `window.route('realtime')` must restyle those paths so Tony sees a world, not a label on white.
+
+**P0 hashed SPA + live router.** The 97-byte `METIS_OPERATOR` stub is **void**. The 8611-byte bundle that lacks `Created at` and `#E5E7EB` is also **void**. Unauth `GET /assets/index.js` is **200** `application/javascript`, bytes ≫ 8k, contains `#E5E7EB`, `Created at`, `window.route`, and the seven nav labels. No `SEO` string. Unknown `/assets/client.js` stays **404**. Unauth `GET /` and `GET /keys` stay **302** Cloudflare Access. `GET /health` 200 JSON. Do **not** edit overlay `DESIGN.md`. This file is the Operator design contract.
 
 **Router law.** The hashed JS must parse. After it runs, `window.route` is a function. `route('/')`, `route('realtime')`, `route('events')`, `route('sessions')`, `route('notifications')`, `route('keys')`, and `route('settings')` swap the main body (`[data-page]` hidden). Clicking `#realtime` shows the Realtime map body, not Overview. Hash-only nav with the body stuck on Overview is **FAIL**.
 
@@ -65,7 +72,7 @@ Content is Métis, not sneakers. Real data only. No fake keys, no stub map, no s
 
 ## Pixel language (Shoey chrome, Métis nouns)
 
-Pixel-clone **Shoey page chrome** on Realtime / Events / Sessions / Notifications. On **Overview only**, copy **Bklit mini KPI card chrome** (compact title, trend badge, NumberFlow-sized value, axis-free sparkline). Do not vendor OpenPanel / Bklit / Studio React or visx. Do not paint shoe SKUs or sample visitors.
+Pixel-clone **Shoey page chrome** on Realtime / Events / Sessions / Notifications. On **Overview only**, the 10 Bklit minis. Do not paint shoe SKUs or sample visitors. Do not ship Unique Seats leftover cards on Realtime.
 
 **Sidebar (white, ~185px, hairline `#EDEDED` right border) — Shoey taskbar chrome, Métis labels only:**
 
@@ -101,11 +108,11 @@ Pixel-clone **Shoey page chrome** on Realtime / Events / Sessions / Notification
 
 - Top-left card: “Unique seats last 30 min” + large count + blue bars.
 - Left activity stream: real events (`listen`, `ask`, `recap`, `session_start` if ingested, skill). “just now” / relative time. Browser / OS / device icons from real seat fields only.
-- Right ~60% of the main pane: light-gray world (land `#F3F4F6`, ocean `#F5F5F5`). Navy/charcoal **seat** dots from `request.cf` only. Green country **pills** (`[green dot] N | K countries`) like Shoey Unique visitors. No GPS. No IP. No sample dots.
+- Right ~60% of the main pane: **visible** world. Light: land `#E5E7EB`, ocean `#FFFFFF`, land stroke `#9CA3AF`. Dark: land charcoal `#3f3f46`, ocean `#0a0a0b`. Charcoal **seat** dots from `request.cf` only. Green country **pills**. A Canada label on a blank ocean is **FAIL**. No GPS. No IP. No sample dots.
 - Bottom three tables: Geo, Referrals, Paths. Columns **Events** / **Sessions** with inline blue bars. Never Views/Sess on this page. Never `/products/sneakers`.
 - Dense **11–12px** type. Blue accent `#2563EB`. `#map` after JWT **is** this Realtime board, not a login card and not a choropleth-tab cut.
 
-**Sessions** clones Shoey `/sessions` chrome and lists real seats (hostname, SSO email, OS, version, last seen). Missing fields are `—`, never invented people.
+**Sessions** clones Shoey `/sessions` chrome and lists real seats in the **Seat details table** (below). Missing fields are `—`, never invented people. Empty fleet is an empty card. No `defaultServers`. No Frankfurt fake IPs.
 
 **Notifications** clones Shoey `/notifications` chrome and lists real failed CRM sends and pending skill diffs only. Empty = honest empty. Never fake alerts.
 
@@ -402,11 +409,11 @@ The left rail keeps Shoey taskbar chrome and Métis labels only. Every KEEP item
 
 | Route | Label | What Tony sees |
 | --- | --- | --- |
-| `#overview` (default) | Overview | Exactly 10 Bklit mini KPI cards from live heartbeats. Extra chips. No chart gallery |
-| `#realtime` | Realtime | Shoey Realtime: 30-min unique seats, blue bars, stream, world + green pills, Geo / Referrals / Paths |
-| `#events` | Events | Event name, profile, chips, time. Token-free. Real ingest |
-| `#sessions` | Sessions | Real seats from heartbeat. Hostname / SSO / em dash. Never invented visitors |
-| `#notifications` | Notifications | Failed CRM / pending skill diffs. Honest empty otherwise |
+| `#overview` (default) | Overview | Exactly 10 Bklit mini KPI cards from live heartbeats. No Unique Seats leftover cards |
+| `#realtime` | Realtime | Shoey Realtime: 30-min unique seats, blue bars, stream, **visible** world `#E5E7EB` + charcoal dots + green pills, Geo / Referrals / Paths |
+| `#events` | Events | Shoey table: Created at · Name · Profile · Country · OS · Browser. Token-free. Real ingest |
+| `#sessions` | Sessions | Seat details table from live heartbeats. Never invented visitors |
+| `#notifications` | Notifications | Shoey chrome. Failed CRM / pending skill diffs. Honest empty otherwise |
 | `#keys` | Keys | last4 add / rotate / revoke. Cloudflare login redirect (not Account ID + token paste). Seats never hold raw keys |
 | `#settings` | Settings | Keys fund-seats note + Theme. No second password |
 | `#map` | (alias) | Same Realtime body. `window.route('map')` highlights Realtime |
@@ -421,7 +428,7 @@ Section eyebrow on the rail: **Métis**. No Analytics leftover groups. No Fleet.
 
 `#events` **is** `https://demo.openpanel.dev/demo/shoey/events/events` (Tony 10:39 PM ET refine). Token-free. **0 LLM tokens** to render.
 
-Layout matches that Shoey Events table: title, Events tab only (no Conversions / Stats leftover), green live count from real rows, search, then **Created at · Name · Profile · Country · OS**. Created at is relative (`just now`). Profile is hostname or SSO email, else `—`. Country is city · ISO from `request.cf` / seat. OS only when the seat reported it. No browser column unless a seat sent one.
+Layout matches that Shoey Events table: title, Events tab only (no Conversions / Stats leftover), green live count from real rows, search, then **Created at · Name · Profile · Country · OS · Browser**. Created at is relative (`just now`). Profile is hostname or SSO email, else `—`. Country is city · ISO from `request.cf` / seat. OS only when the seat reported it. Browser is `—` unless a seat sent one (Electron usually has none). Never invent Chrome or Safari.
 
 Do **not** edit overlay `DESIGN.md`. This file is the Operator contract.
 
@@ -445,7 +452,7 @@ Empty list: "No events yet." Never sample commerce events.
 
 1. Unique seats last 30 min (sentence-case title + large count + blue bars from real heartbeat buckets).
 2. Activity stream from D1 (`listen`, `ask`, `recap`, skill, CRM). Relative time. OS / browser / device icons only when the seat reported them.
-3. World: Shoey land `#E5E7EB`, ocean `#F5F5F5`, charcoal seat dots from `request.cf` only, green country pills (`N` seats · `K` countries). No sample dots.
+3. World: **visible** Shoey land `#E5E7EB` on white ocean `#FFFFFF` (dark: charcoal `#3f3f46` on `#0a0a0b`). Land stroke `#9CA3AF` so continents read at a glance. Charcoal seat dots from `request.cf` only. Green country pills. A pill with no land is **FAIL**. No sample dots.
 4. Bottom three tables: Geo, Referrals (CRM / Listen / connectors), Paths (modes / skills / use cases).
 
 Poll `/v1/admin/dashboard` while the page is open. No sample dots. No invented sessions. No shoe paths.
@@ -456,13 +463,35 @@ Poll `/v1/admin/dashboard` while the page is open. No sample dots. No invented s
 
 Unique seats by country from Cloudflare `request.cf` (country, city, lat/long). **No GPS from the Electron app. No raw IP in the UI.** Store country ISO + optional city. Empty map if no heartbeats, not a fake world of sample users.
 
-Paint like Shoey: light land `#F5F5F5`, charcoal dots, green pills. Still strip Natural Earth date-line slivers (Russia leftover across Canada, Fiji leftover across the southern ocean) before SVG paint. Tests fail if a repeating horizontal band artifact remains.
+Paint like Shoey and make it **readable**: light land `#E5E7EB`, white ocean, charcoal dots, green pills. Dark theme uses charcoal land. Do not use `#E5E7EB` land on `#F5F5F5` ocean (that is the washed-out scribble). Do not use `vector-effect: non-scaling-stroke` on world land (0.45px strokes vanish). Still strip Natural Earth date-line slivers (Russia leftover across Canada, Fiji leftover across the southern ocean) before SVG paint. Tests fail if a repeating horizontal band artifact remains. Shipped `/assets/index.js` must contain the `#E5E7EB` land fill so curl proof cannot lie.
 
 Click a country / pill to filter Geo + the fleet table. Caption: unique seats by country from Cloudflare `request.cf`. No GPS. No IP.
 
+## Seat details table
+
+Sessions and the Realtime fleet details read like the 21st.dev ServerManagementTable (shadcn card, numbered rows, hover lift, in-card overlay). Port the **visual language** only. Do **not** ship `defaultServers`, Frankfurt fake IPs, or due dates in 2027. Do **not** stand up a greenfield Next.js app.
+
+Empty fleet: empty card. No sample dots.
+
+| ServerManagementTable field | Métis heartbeat field | Notes |
+| --- | --- | --- |
+| No | row index `01`… | Display only |
+| Server / name | `hostname` (computer) | `—` if missing |
+| OS circle | `os` | `darwin` → mac, `win32` / `windows` → windows, `linux` → linux |
+| Location (flag + city) | `request.cf` `city` + `country` | Worker attaches geo. Never client GPS |
+| Identity | `ssoEmail` or last-seen hostname | Never a raw key, grant, or ingest secret |
+| IP | none | Operator does not store IP. Show `—`. Never invent an address |
+| Due date / last seen | `last_seen` | Heartbeat timestamp |
+| CPU meter | heartbeat freshness, or Listen minutes when ingested | **Not** fake CPU. Missing Listen = freshness only |
+| Status pill | derived from `last_seen` | **Active** inside `ONLINE_MS` (2 min). **Paused** inside 30 min. **Inactive** older |
+| License | `license` on the seat | `—` if missing |
+| Row overlay | last seen, OS, version, country, recent heartbeat / ask events | Real ingest. Never fake logs |
+
+Card chrome: `border-border/30` analog (`1px` hairline), `bg-card` analog (`--panel`), rounded. Hover lifts the row. Click opens an in-card overlay. `prefers-reduced-motion` skips the lift. Light and dark theme restyle this table.
+
 ## Overview (Bklit mini-10 only)
 
-`#overview` is **exactly 10** Bklit mini KPI cards from live heartbeats (Tony 11:32 PM ET). Not the old Shoey 8-up gallery. Not SEO / Pages / Insights. Extra Métis chips (Mac vs Windows, cost by provider, CRM fail, version mix, session duration, meetings) sit under the 10.
+`#overview` is **exactly 10** Bklit mini KPI cards from live heartbeats (Tony 11:32 PM ET). Not Unique Seats leftover cards. Not the old Shoey 8-up gallery. Not SEO / Pages / Insights. Extra Métis chips may sit under the 10. They must not appear on the four Shoey pages.
 
 **Render law.** Overview, Realtime, and Events are D1 + `request.cf` HTML. **Spend 0 LLM tokens.** No model, no generated sentences, no invented dots or numbers. If a field was never ingested, the tile says **not reported** (never `0` pretending to be a measurement).
 
