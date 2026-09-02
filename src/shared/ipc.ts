@@ -218,6 +218,9 @@ export const IPC = {
   // + PKCE flow (browser consent) and, on success, upserts an mcpConnections entry exactly like
   // mcpSaveConnection does for a pasted key. Reuses mcpDisconnect/mcpPush unchanged.
   mcpClickupConnect: 'mcp:clickupConnect',
+  // Names the last/connected ClickUp list without creating a task. Used when the seat was already
+  // connected before dest storage existed, so Review can show `Task in {list}` before Confirm.
+  mcpClickupDiscoverDestination: 'mcp:clickupDiscoverDestination',
   // Plane Connect — same shape as ClickUp: one button, OAuth 2.1 + PKCE + DCR, pinned hosted MCP URL.
   mcpPlaneConnect: 'mcp:planeConnect',
   licenseActivate: 'license:activate',

@@ -276,6 +276,18 @@ describe('Review.tsx — ClickUp create-task destination (CLICKUP-PUSH.md)', () 
     expect(clickupBranch).not.toMatch(/project ID/)
   })
 
+  it('names an already-connected dest on Push click, never a mount effect', () => {
+    expect(src).toMatch(/mcpClickupDiscoverDestination/)
+    expect(src).toMatch(/void ensureClickupDest\(\)/)
+    const effects = src.match(/useEffect\(\(\) => \{[\s\S]*?\n  \}, \[[^\]]*\]\)/g) ?? []
+    expect(effects.length).toBeGreaterThan(0)
+    for (const block of effects) {
+      expect(block).not.toMatch(/mcpPush/)
+      expect(block).not.toMatch(/mcpClickupDiscoverDestination/)
+      expect(block).not.toMatch(/mcpClickupConnect/)
+    }
+  })
+
   it('never auto-sends: no useEffect calls mcpPush', () => {
     const effects = src.match(/useEffect\(\(\) => \{[\s\S]*?\n  \}, \[[^\]]*\]\)/g) ?? []
     expect(effects.length).toBeGreaterThan(0)

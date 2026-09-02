@@ -3732,7 +3732,11 @@ function registerIpc(): void {
       setSettings({ mcpConnections: [...s.mcpConnections.filter((c) => c.id !== connectionId), entry] })
       if (connectionId === 'clickup') {
         const dest = await discoverListForClickup(entry)
-        if (dest.ok) persistClickupList(dest.list)
+        if (dest.ok) {
+          persistClickupList(dest.list)
+          auditLog('mcp.connected', { connectionId, tools: (r.tools ?? []).length })
+          return { ...r, clickupListId: dest.list.id, clickupListName: dest.list.name }
+        }
       }
     } catch (error) {
       return { ok: false as const, error: error instanceof Error ? error.message : `Could not store the ${label} API key.` }
@@ -3914,6 +3918,23 @@ function registerIpc(): void {
     }
     auditLog('mcp.connected', { connectionId: 'clickup', tools: (r.tools ?? []).length })
     return r
+  })
+
+  // Names the destination without creating a task. Review calls this on Push to ClickUp (user click)
+  // when the seat is already connected but has no stored list — Confirm stays disabled until named.
+  ipcMain.handle(IPC.mcpClickupDiscoverDestination, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    if (denyIfLimited('mcp-outbound')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
+    const s = getSettings()
+    const conn = s.mcpConnections.find((c) => c.id === 'clickup')
+    if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey('clickup')) {
+      return { ok: false, error: 'ClickUp is not connected. Set it up in Settings → Mantu Intelligence first.' }
+    }
+    const dest = await discoverListForClickup(conn)
+    if (!dest.ok) return dest
+    persistClickupList(dest.list)
+    return { ok: true as const, clickupListId: dest.list.id, clickupListName: dest.list.name, tools: conn.tools }
   })
 
   ipcMain.handle(IPC.mcpPlaneConnect, async (e) => {

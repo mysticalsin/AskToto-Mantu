@@ -322,6 +322,7 @@ describe('SettingsSchema', () => {
     expect(DEFAULT_SETTINGS.planeClientId).toBe('')
     expect(SettingsSchema.parse({ ...DEFAULT_SETTINGS }).planeClientId).toBe('')
     expect(IPC.mcpPlaneConnect).toBe('mcp:planeConnect')
+    expect(IPC.mcpClickupDiscoverDestination).toBe('mcp:clickupDiscoverDestination')
   })
 
   it('defaults asrQuality to best (live Whisper uses the large multilingual model)', () => {

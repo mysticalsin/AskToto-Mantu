@@ -48,6 +48,8 @@ Do not invent a Métis Inbox. Do not default to "Get Started with ClickUp" unles
 
 Review copies the resolved name. If name is still empty after connect, show `ClickUp could not name the destination.` and disable Confirm — never a silent push.
 
+Already-connected seats that predate dest storage: the **Push to ClickUp** click (or Book next steps open) asks main to name the dest the same way Connect does. That is a user click, not a mount `useEffect`, and it is not a create-task. Confirm still creates the task.
+
 ## Wire
 
 ClickUp MCP is `https://mcp.clickup.com/mcp` (already pinned). OAuth is PR 73: bind loopback first, DCR-register **this run's** `http://127.0.0.1:<port>/callback`, never reuse a portless cached `client_id` for `/authorize`. Humanize `invalid_client` / `redirect_uri`. Do not re-invent Connect.
@@ -98,3 +100,4 @@ No `useEffect`, timer, mount, Intelligence pass, or import job may call `mcpPush
 6. No `useEffect` in Review calls `mcpPush`.
 7. PR 73 OAuth: DCR body is this run's ported URI; cached portless client_id is not reused; `invalid_client` maps to a human sentence.
 8. Overlay / Operator / Listen / appearance / Aria files are not in the diff.
+9. Already-connected dest: Review names the list via a discover IPC on Push click, never a `useEffect` calling `mcpPush` or discover.

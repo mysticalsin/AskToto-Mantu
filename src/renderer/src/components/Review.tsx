@@ -648,7 +648,10 @@ export const Review = memo(function Review({
     [mcpConnections]
   )
   const clickupConn = mcpConnections?.find((c) => c.kind === 'clickup' && c.connected)
-  const clickupDestName = (clickupConn?.clickupListName || clickupConn?.clickupListId || '').trim()
+  const [clickupResolvedDest, setClickupResolvedDest] = useState('')
+  const [clickupResolving, setClickupResolving] = useState(false)
+  const clickupDiscoveringRef = useRef(false)
+  const clickupDestName = (clickupResolvedDest || clickupConn?.clickupListName || clickupConn?.clickupListId || '').trim()
   const [clickupOpen, setClickupOpen] = useState(false)
   const [clickupState, setClickupState] = useState<{ phase: CrmPushPhase; error: string | null; destinationName?: string; taskUrl?: string }>({
     phase: 'idle',
@@ -657,7 +660,34 @@ export const Review = memo(function Review({
   useEffect(() => {
     setClickupOpen(false)
     setClickupState({ phase: 'idle', error: null })
+    setClickupResolvedDest('')
+    setClickupResolving(false)
+    clickupDiscoveringRef.current = false
   }, [savedPath])
+
+  const ensureClickupDest = async (): Promise<void> => {
+    if (!clickupConn) return
+    if (clickupDestName || clickupDiscoveringRef.current) return
+    clickupDiscoveringRef.current = true
+    setClickupResolving(true)
+    try {
+      const r = await window.toto.mcpClickupDiscoverDestination()
+      const named = (r.clickupListName || r.clickupListId || '').trim()
+      if (r.ok && named) {
+        setClickupResolvedDest(named)
+        setClickupState((s) =>
+          s.phase === 'error' && /could not name the destination/i.test(s.error || '')
+            ? { phase: 'idle', error: null }
+            : s
+        )
+      } else {
+        setClickupState({ phase: 'error', error: r.error || 'ClickUp could not name the destination.' })
+      }
+    } finally {
+      clickupDiscoveringRef.current = false
+      setClickupResolving(false)
+    }
+  }
 
   const sendToClickup = async (): Promise<void> => {
     if (clickupState.phase === 'sending' || !clickupConn) return
@@ -744,6 +774,7 @@ export const Review = memo(function Review({
 
   const openNextSteps = async (): Promise<void> => {
     setNextStepsOpen(true)
+    void ensureClickupDest()
     // Lazy-fetch, and re-fetch when the recap has changed since the cache was built — mirrors the CRM
     // panel's cost discipline without letting it serve items that no longer match what the user sees.
     if (nextStepsLoading || (nextStepsData && nextStepsSource === recapText)) return
@@ -1490,7 +1521,13 @@ export const Review = memo(function Review({
               <Send size={12} /> ClickUp
             </div>
             {!clickupOpen && clickupState.phase !== 'sent' && !confidentialFlag && (
-              <Chip onClick={() => setClickupOpen(true)} variant="accent">
+              <Chip
+                onClick={() => {
+                  setClickupOpen(true)
+                  void ensureClickupDest()
+                }}
+                variant="accent"
+              >
                 <Send size={13} /> Push to ClickUp
               </Chip>
             )}
@@ -1513,7 +1550,11 @@ export const Review = memo(function Review({
           ) : clickupOpen ? (
             <div className="flex flex-col gap-2">
               <div className="text-[12px] text-[color:var(--color-ink-2)]">
-                {clickupDestName ? `Task in ${clickupDestName}` : 'ClickUp could not name the destination.'}
+                {clickupResolving
+                  ? 'Finding the ClickUp list…'
+                  : clickupDestName
+                    ? `Task in ${clickupDestName}`
+                    : 'ClickUp could not name the destination.'}
               </div>
               <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3 text-[12px]">
                 <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
@@ -1537,7 +1578,7 @@ export const Review = memo(function Review({
                 </div>
               )}
               <div className="flex items-center gap-1.5">
-                {clickupDestName ? (
+                {clickupDestName && !clickupResolving ? (
                   <Chip
                     onClick={() => void sendToClickup()}
                     variant="accent"
@@ -1641,9 +1682,11 @@ export const Review = memo(function Review({
                             <div className="flex flex-col gap-1.5 pl-6">
                               {conn.kind === 'clickup' ? (
                                 <div className="text-[11px] text-[color:var(--color-ink-2)]">
-                                  {clickupDestName
-                                    ? `Task in ${clickupDestName}`
-                                    : 'ClickUp could not name the destination.'}
+                                  {clickupResolving
+                                    ? 'Finding the ClickUp list…'
+                                    : clickupDestName
+                                      ? `Task in ${clickupDestName}`
+                                      : 'ClickUp could not name the destination.'}
                                 </div>
                               ) : (
                                 <>
