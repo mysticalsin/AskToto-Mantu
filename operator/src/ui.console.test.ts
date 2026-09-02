@@ -252,6 +252,7 @@ describe('product sidebar (#105)', () => {
     expect(js).toContain('function applyEventsFilter')
     expect(js).toContain("e.key === 'Enter'")
     expect(css).toContain('.event[hidden]')
+    expect(css).toContain('.event.is-hidden')
     expect(css).toContain('display: none !important')
     expect(js).toContain('applyNtFilter')
     expect(js).toContain("ntFilter === 'all' || status === ntFilter")

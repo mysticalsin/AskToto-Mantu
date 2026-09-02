@@ -89,6 +89,10 @@ describe('hashed SPA router (#104)', () => {
         if (sel === '[data-nav]') return navs
         return []
       },
+      querySelector() {
+        return null
+      },
+      addEventListener() {},
       getElementById(id: string) {
         return id === 'page-title' ? title : null
       }
@@ -144,8 +148,14 @@ describe('hashed SPA router (#104)', () => {
     expect(SPA_CSS).toContain('.seat-hbars')
     expect(SPA_JS).toContain('key-msg-settings')
     expect(SPA_JS).toContain("accept: 'application/json'")
+    expect(SPA_JS).toContain("credentials: 'include'")
+    expect(SPA_JS).toContain("headers.authorization = 'Bearer ' + sessionBearer")
+    expect(SPA_JS).toContain("fetch('/session'")
+    expect(SPA_JS).toContain('function ensureSession')
     expect(SPA_JS).toContain('Access required. Sign in with Cloudflare Access and retry Add.')
+    expect(SPA_JS).toContain("classList.toggle('is-hidden', !hit)")
     expect(SPA_CSS).toContain('.event[hidden]')
+    expect(SPA_CSS).toContain('.event.is-hidden')
     expect(SPA_CSS).toContain('display: none !important')
   })
 
@@ -153,12 +163,20 @@ describe('hashed SPA router (#104)', () => {
     const rows = [
       {
         hidden: false,
+        classList: { toggle() {} },
+        style: { display: '' },
+        setAttribute() {},
+        removeAttribute() {},
         getAttribute(name: string) {
           return name === 'data-q' ? 'heartbeat / tonys-macbook-pro longueuil ca darwin path /' : null
         }
       },
       {
         hidden: false,
+        classList: { toggle() {} },
+        style: { display: '' },
+        setAttribute() {},
+        removeAttribute() {},
         getAttribute(name: string) {
           return name === 'data-q' ? 'heartbeat / other-pc toronto ca windows path /' : null
         }
@@ -184,6 +202,10 @@ describe('hashed SPA router (#104)', () => {
         if (sel === '#events-list .event[data-q]') return rows
         return []
       },
+      querySelector(sel: string) {
+        return sel === 'meta[name="metis-session"]' ? null : null
+      },
+      addEventListener() {},
       getElementById(id: string) {
         if (id === 'events-search') return evSearch
         if (id === 'events-empty') return empty

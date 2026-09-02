@@ -21,20 +21,46 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
     hydrate: 'post-access'
   }
 
+  var sessionBearer = ''
+
+  async function ensureSession() {
+    if (sessionBearer) return
+    try {
+      var ping = await fetch('/session', {
+        method: 'GET',
+        credentials: 'include',
+        headers: { accept: 'application/json' }
+      })
+      var issued = ping.headers && ping.headers.get && ping.headers.get('X-Metis-Session')
+      if (issued) sessionBearer = issued
+      var pingText = await ping.text()
+      try {
+        var pingJson = JSON.parse(pingText)
+        if (pingJson && pingJson.session) sessionBearer = pingJson.session
+      } catch (e) {}
+    } catch (e) {}
+  }
+
   async function api(path, body) {
+    await ensureSession()
     var r
+    var headers = { accept: 'application/json' }
+    if (body) headers['content-type'] = 'application/json'
+    if (sessionBearer) headers.authorization = 'Bearer ' + sessionBearer
     try {
       r = await fetch(path, {
         method: body ? 'POST' : 'GET',
-        credentials: 'same-origin',
-        headers: body
-          ? { 'content-type': 'application/json', accept: 'application/json' }
-          : { accept: 'application/json' },
+        credentials: 'include',
+        headers: headers,
         body: body ? JSON.stringify(body) : undefined
       })
     } catch (e) {
       return { ok: false, error: 'network failed' }
     }
+    try {
+      var issued = r.headers && r.headers.get && r.headers.get('X-Metis-Session')
+      if (issued) sessionBearer = issued
+    } catch (e) {}
     var text = await r.text()
     try {
       return JSON.parse(text)
@@ -75,6 +101,7 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
     var t = document.getElementById('page-title')
     if (t) t.textContent = titles[id]
     if (id === 'realtime') paintShoeyMap()
+    if (id === 'events') applyEventsFilter()
   }
   window.route = route
 
@@ -166,10 +193,16 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
 
   var evSearch = document.getElementById('events-search')
   function applyEventsFilter() {
-    if (!evSearch) return
-    var q = evSearch.value.trim().toLowerCase()
+    var input = document.getElementById('events-search') || evSearch
+    var q = String(input && input.value || '').trim().toLowerCase()
     document.querySelectorAll('#events-list .event[data-q]').forEach(function (row) {
-      row.hidden = Boolean(q) && !(row.getAttribute('data-q') || '').includes(q)
+      var hay = (row.getAttribute('data-q') || '').toLowerCase()
+      var hit = !q || hay.indexOf(q) >= 0
+      row.hidden = !hit
+      if (row.classList && row.classList.toggle) row.classList.toggle('is-hidden', !hit)
+      if (row.style) row.style.display = hit ? '' : 'none'
+      if (!hit && row.setAttribute) row.setAttribute('hidden', 'hidden')
+      if (hit && row.removeAttribute) row.removeAttribute('hidden')
     })
     syncEmpty('#events-list .event[data-q]', 'events-empty')
   }
@@ -181,6 +214,16 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
         e.preventDefault()
         applyEventsFilter()
       }
+    })
+  }
+  if (document.addEventListener) {
+    document.addEventListener('input', function (e) {
+      var t = e && e.target
+      if (t && t.id === 'events-search') applyEventsFilter()
+    })
+    document.addEventListener('search', function (e) {
+      var t = e && e.target
+      if (t && t.id === 'events-search') applyEventsFilter()
     })
   }
   var evFilters = document.getElementById('events-filters')

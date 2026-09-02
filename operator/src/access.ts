@@ -30,7 +30,8 @@ export const CONSOLE_PATHS = [
   '/cohorts',
   '/settings',
   '/references',
-  '/notifications'
+  '/notifications',
+  '/session'
 ] as const
 
 export type AccessCtx = {
@@ -148,22 +149,41 @@ export function accessJwtFromRequest(request: Request): string | null {
   return null
 }
 
-export async function mintSessionCookie(email: string, now: number, secret: string): Promise<string> {
+export async function mintSessionToken(email: string, now: number, secret: string): Promise<string> {
   const exp = now + SESSION_TTL_MS
   const payload = `v1|${exp}|${normalizeAdminEmail(email)}`
   const sig = await hmacHex(secret, `metis-operator-session:${payload}`)
-  const maxAge = Math.floor(SESSION_TTL_MS / 1000)
-  return `${SESSION_COOKIE}=${payload}|${sig}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`
+  return `${payload}|${sig}`
 }
 
-export async function verifySessionCookie(
-  request: Request,
+export function sessionCookieHeader(token: string): string {
+  const maxAge = Math.floor(SESSION_TTL_MS / 1000)
+  return `${SESSION_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`
+}
+
+export async function mintSessionCookie(email: string, now: number, secret: string): Promise<string> {
+  return sessionCookieHeader(await mintSessionToken(email, now, secret))
+}
+
+export function sessionTokenFromRequest(request: Request): string | null {
+  const auth = (request.headers.get('authorization') || '').trim()
+  const bearer = /^Bearer\s+(\S+)/i.exec(auth)
+  if (bearer?.[1]) {
+    try {
+      return decodeURIComponent(bearer[1])
+    } catch {
+      return bearer[1]
+    }
+  }
+  return cookieValue(request, SESSION_COOKIE)
+}
+
+export async function verifySessionToken(
+  raw: string | null | undefined,
   secret: string | undefined,
   now: number
 ): Promise<string | null> {
-  if (!secret?.trim()) return null
-  const raw = cookieValue(request, SESSION_COOKIE)
-  if (!raw) return null
+  if (!secret?.trim() || !raw) return null
   const parts = raw.split('|')
   if (parts.length !== 4 || parts[0] !== 'v1') return null
   const exp = Number(parts[1])
@@ -173,6 +193,14 @@ export async function verifySessionCookie(
   const expected = await hmacHex(secret, `metis-operator-session:v1|${exp}|${email}`)
   if (!timingSafeEqualHex(expected, sig)) return null
   return email
+}
+
+export async function verifySessionCookie(
+  request: Request,
+  secret: string | undefined,
+  now: number
+): Promise<string | null> {
+  return verifySessionToken(sessionTokenFromRequest(request), secret, now)
 }
 
 export async function resolveAdminIdentity(

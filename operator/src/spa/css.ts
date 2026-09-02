@@ -369,6 +369,7 @@ textarea { min-height: 120px; }
 [data-theme="dark"] .live { background: #f4f4f5; color: #0a0a0b; }
 .page[hidden] { display: none !important; }
 .event[hidden],
+.event.is-hidden,
 .vol-row[hidden],
 .seat-row[hidden],
 .sess-row[hidden],
