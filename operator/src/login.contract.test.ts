@@ -96,6 +96,22 @@ describe('unauth console GET is 302 to Cloudflare Access, never a password form'
     }
   })
 
+  it('unauth GET /assets and /assets/index.js are 200 javascript, not Access HTML', async () => {
+    for (const path of ['/assets', '/assets/index.js', '/assets/operator-9f3c.js']) {
+      const res = await handleRequest(new Request(`https://operator.test${path}`), env(), {}, {
+        store: memoryStore(),
+        now: NOW
+      })
+      expect(res.status, path).toBe(200)
+      const type = res.headers.get('content-type') || ''
+      expect(type, path).toMatch(/javascript|css/)
+      expect(type, path).not.toMatch(/text\/html/)
+      const body = await res.text()
+      expect(body, path).not.toMatch(/302 Found|cloudflareaccess|cdn-cgi\/access/)
+      expect(body, path).toContain('Métis Operator')
+    }
+  })
+
   it('unauth POST /v1/admin/keys is 401 not 404', async () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/keys', { method: 'POST', body: '{}' }),
