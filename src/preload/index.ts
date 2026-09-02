@@ -187,6 +187,15 @@ const api = {
   addTeamTranscriptFolder: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.addTeamTranscriptFolder),
   removeTeamTranscriptFolder: (folder: string): Promise<PublicSettings> =>
     ipcRenderer.invoke(IPC.removeTeamTranscriptFolder, folder),
+  // Hunt OneDrive/Documents/Desktop for an existing `.brain/` / published wiki and reconnect it.
+  discoverSecondBrains: (): Promise<import('@shared/ipc').SecondBrainCandidate[]> =>
+    ipcRenderer.invoke(IPC.discoverSecondBrains),
+  connectSecondBrain: (
+    folder: string
+  ): Promise<
+    | { ok: true; path: string; settings: PublicSettings }
+    | { ok: false; error: string; settings: PublicSettings }
+  > => ipcRenderer.invoke(IPC.connectSecondBrain, folder),
   // shell.openPath resolves to '' on success or a non-empty OS error string on failure — callers need the
   // string to surface a failure (e.g. a deleted/unmounted meetings folder), not just fire-and-forget it.
   openMeetingsFolder: (): Promise<string> => ipcRenderer.invoke(IPC.openPath),

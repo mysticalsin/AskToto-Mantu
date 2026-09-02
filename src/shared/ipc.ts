@@ -108,6 +108,9 @@ export const IPC = {
   pickFolder: 'folder:pick',
   addTeamTranscriptFolder: 'team-folder:add',
   removeTeamTranscriptFolder: 'team-folder:remove',
+  // Hunt OneDrive/Documents/Desktop for an existing `.brain/` / `wiki/` second brain and reconnect it.
+  discoverSecondBrains: 'brain:discover-second-brains',
+  connectSecondBrain: 'brain:connect-second-brain',
   openPath: 'path:open',
   openBrainForClaude: 'brain:open-for-claude',
   recallList: 'recall:list',
@@ -1688,6 +1691,18 @@ export interface RecallExportPlainResult {
   path?: string
   cancelled?: boolean
   error?: string
+}
+
+/** One hit from brain:discover-second-brains — an on-device meetings folder that already looks like a
+ *  Métis second brain (`.brain/` and/or published `wiki/`). */
+export interface SecondBrainCandidate {
+  path: string
+  label: string
+  hasBrain: boolean
+  hasWiki: boolean
+  meetingCount: number
+  isCurrent: boolean
+  signals: string[]
 }
 
 /** Result of recall:backfillSpeakers (Speaker Intelligence) — `named` is how many transcript lines

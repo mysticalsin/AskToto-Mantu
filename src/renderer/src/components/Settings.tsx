@@ -4994,7 +4994,7 @@ const TABS: {
     label: 'Meetings',
     icon: FolderOpen,
     desc: 'Where meetings are saved, and how long they stay.',
-    keywords: ['meetings & transcripts', 'folder', 'retention', 'danger zone', 'delete', 'ingest']
+    keywords: ['meetings & transcripts', 'folder', 'retention', 'danger zone', 'delete', 'ingest', 'second brain', 'find brain', 'onedrive']
   },
   // Label shortened to keep all nine tabs on ONE line at the overlay's width — the MantuMark icon already
   // signals "Mantu"; the tab id stays 'intelligence' so nothing else changes.
@@ -5109,6 +5109,13 @@ export function Settings({
   // openMeetingsFolder resolves a non-empty string on failure (e.g. the folder was deleted/unmounted) —
   // surface it instead of silently discarding it (was `void window.toto.openMeetingsFolder()`).
   const [meetingsFolderErr, setMeetingsFolderErr] = useState<string | null>(null)
+  const [brainHunt, setBrainHunt] = useState<
+    | { status: 'idle' }
+    | { status: 'scanning' }
+    | { status: 'done'; hits: import('@shared/ipc').SecondBrainCandidate[] }
+    | { status: 'error'; message: string }
+  >({ status: 'idle' })
+  const [brainConnectBusy, setBrainConnectBusy] = useState<string | null>(null)
   // App reuses the same Settings instance across opens (no remount), so a later requireProvider redirect
   // that passes a new initialTab (e.g. 'ai') would otherwise leave `tab` stuck on whatever tab was open
   // before — re-sync whenever the caller hands us a fresh target tab.
@@ -5783,6 +5790,127 @@ export function Settings({
                   {meetingsFolderErr && (
                     <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
                       <AlertCircle size={12} className="shrink-0" /> {meetingsFolderErr}
+                    </div>
+                  )}
+                </div>
+                <div className="cl-card mt-2 px-3 py-2.5">
+                  <div className="flex items-center gap-2">
+                    <Search size={15} className="shrink-0 text-[color:var(--cl-primary)]" />
+                    <span className="min-w-0 flex-1 text-[12px] text-[color:var(--cl-foreground)]">
+                      Find second brain on this device
+                    </span>
+                    <ManagedChip keys={settings.managedKeys} k="meetingsFolder" />
+                  </div>
+                  <p className="mt-1 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                    Scans OneDrive, Documents, Desktop, and common folders for an existing Métis{' '}
+                    <span className="text-[color:var(--cl-foreground)]">.brain</span> store or published{' '}
+                    <span className="text-[color:var(--cl-foreground)]">wiki</span>, then reconnects it as
+                    your meetings folder.
+                  </p>
+                  <div className="mt-2">
+                    <button
+                      type="button"
+                      disabled={
+                        settings.managedKeys.includes('meetingsFolder') || brainHunt.status === 'scanning'
+                      }
+                      onClick={() => {
+                        setBrainHunt({ status: 'scanning' })
+                        void window.toto
+                          .discoverSecondBrains()
+                          .then((hits) => setBrainHunt({ status: 'done', hits }))
+                          .catch((err: unknown) =>
+                            setBrainHunt({
+                              status: 'error',
+                              message: err instanceof Error ? err.message : 'Scan failed'
+                            })
+                          )
+                      }}
+                      className={[
+                        'no-drag cl-focus flex items-center gap-1 rounded-lg bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.1]',
+                        settings.managedKeys.includes('meetingsFolder') || brainHunt.status === 'scanning'
+                          ? 'opacity-60 cursor-not-allowed'
+                          : ''
+                      ].join(' ')}
+                    >
+                      <Search size={12} />
+                      {brainHunt.status === 'scanning' ? 'Scanning…' : 'Hunt on this device'}
+                    </button>
+                  </div>
+                  {brainHunt.status === 'error' && (
+                    <div className="mt-1.5 flex items-center gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
+                      <AlertCircle size={12} className="shrink-0" /> {brainHunt.message}
+                    </div>
+                  )}
+                  {brainHunt.status === 'done' && brainHunt.hits.length === 0 && (
+                    <p className="mt-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
+                      No second brain found in the usual places. Use Change folder if it lives somewhere else.
+                    </p>
+                  )}
+                  {brainHunt.status === 'done' && brainHunt.hits.length > 0 && (
+                    <div className="mt-2 flex flex-col gap-1.5">
+                      {brainHunt.hits.map((hit) => (
+                        <div
+                          key={hit.path}
+                          className="flex flex-col gap-1 rounded-lg bg-white/[0.04] px-2 py-1.5"
+                        >
+                          <div className="flex items-center gap-2">
+                            <FolderOpen size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />
+                            <span
+                              className="min-w-0 flex-1 truncate text-[12px] text-[color:var(--cl-foreground)]"
+                              title={hit.path}
+                            >
+                              {hit.label}
+                              {hit.isCurrent ? ' · current' : ''}
+                            </span>
+                            {!hit.isCurrent && (
+                              <button
+                                type="button"
+                                disabled={
+                                  settings.managedKeys.includes('meetingsFolder') ||
+                                  brainConnectBusy === hit.path
+                                }
+                                onClick={() => {
+                                  setBrainConnectBusy(hit.path)
+                                  void window.toto
+                                    .connectSecondBrain(hit.path)
+                                    .then(async (r) => {
+                                      if (!r.ok) {
+                                        setMeetingsFolderErr(r.error)
+                                        return
+                                      }
+                                      setMeetingsFolderErr(null)
+                                      void patch({})
+                                      setBrainHunt({
+                                        status: 'done',
+                                        hits: brainHunt.hits.map((h) => ({
+                                          ...h,
+                                          isCurrent: h.path === hit.path
+                                        }))
+                                      })
+                                    })
+                                    .finally(() => setBrainConnectBusy(null))
+                                }}
+                                className="no-drag cl-focus shrink-0 rounded-md bg-white/[0.08] px-2 py-1 text-[11px] text-[color:var(--cl-foreground)] hover:bg-white/[0.12] disabled:opacity-60"
+                              >
+                                {brainConnectBusy === hit.path ? 'Connecting…' : 'Use this brain'}
+                              </button>
+                            )}
+                          </div>
+                          <p className="truncate pl-5 text-[10px] text-[color:var(--cl-muted-foreground)]" title={hit.path}>
+                            {hit.path}
+                          </p>
+                          <div className="flex flex-wrap gap-1 pl-5">
+                            {hit.signals.map((s) => (
+                              <span
+                                key={s}
+                                className="rounded bg-white/[0.06] px-1.5 py-0.5 text-[10px] text-[color:var(--cl-muted-foreground)]"
+                              >
+                                {s}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   )}
                 </div>
