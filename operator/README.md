@@ -26,6 +26,7 @@ Do not wrangler deploy from CI with secrets.
 | `/v1/admin/*` | Tony in a browser | Access JWT + allowlist. JSON 401 if missing. Includes `/v1/admin/dashboard`, `/v1/admin/keys` write/rotate/revoke, and CRM retry. |
 | `POST /v1/ingest` | Métis desktop | HMAC only. Not Access. |
 | `POST /v1/heartbeat` | Métis desktop | HMAC only. Not Access. |
+| `POST /v1/use` | Métis desktop | HMAC only. Not Access. Brokers a funded Ask. Never returns a raw vault secret. |
 | `GET /v1/skills/manifest` | Métis desktop | HMAC only. Not Access. |
 | `GET /health` | Anyone | Open. Says whether secrets are bound, never what they are. |
 
@@ -105,7 +106,7 @@ Zero Trust org `tony-walteur` and the Access apps are created. Tony completes On
 
 1. Team `tony-walteur` → `TEAM_DOMAIN=https://tony-walteur.cloudflareaccess.com`.
 2. Self-hosted app **Métis Operator** on `metis-operator.tony-walteur.workers.dev` (Allow, two Tony emails).
-3. Bypass apps on `/health`, `/v1/ingest`, `/v1/heartbeat`, `/v1/skills/manifest`, and `/v1/admin` (Worker returns 401 JSON on admin).
+3. Bypass apps on `/health`, `/v1/ingest`, `/v1/heartbeat`, `/v1/use`, `/v1/skills/manifest`, and `/v1/admin` (Worker returns 401 JSON on admin).
 4. One-time PIN IdP. Do not click **Protect this Worker**.
 5. Bind `POLICY_AUD` (Métis Operator AUD) as a Worker secret.
 

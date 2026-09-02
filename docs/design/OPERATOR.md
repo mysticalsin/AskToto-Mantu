@@ -4,8 +4,8 @@ type: operator-control-plane-contract
 owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, client prompt-cache honesty, CRM send board, Tony LLM keys vault, Cloudflare account connect, seat funding signal, Ask routing law
 does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, installer packing, Fly license-server, Goldberg Aria, cloudflare-proxy AI token proxy, Bklit Studio
 ready-to-merge: no
-implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing, access-login, shoey-map
-this-slice: bklit-registry-spa
+implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing, access-login, shoey-map, v1-use
+this-slice: keys-fund-seats
 audience: Tony Walteur only. Two emails. Nobody else.
 tokens:
   accent: "#2563EB"
@@ -192,7 +192,7 @@ Machine auth is unchanged. Do not put CLI tokens in the vault. Do not invent a s
 
 | Path | Auth |
 | --- | --- |
-| `POST /v1/ingest` `POST /v1/heartbeat` `GET /v1/skills/manifest` | HMAC only. Not Access. Not JWT |
+| `POST /v1/ingest` `POST /v1/heartbeat` `GET /v1/skills/manifest` `POST /v1/use` | HMAC only. Not Access. Not JWT |
 | `GET /health` | Open 200 |
 | `GET /assets/operator-<hash>.*` | Open 200 real JS/CSS. Not Access. Worker must not 302. Stubs 404 |
 | `GET/POST /v1/admin/*` | Access JWT / `getIdentity()` + allowlist. Unauth = 401 JSON |
@@ -225,6 +225,7 @@ Hostname-wide Allow would wrap HMAC ingest. So the layout is: one Allow app on t
 | `Métis Operator health` | `…/health` | Bypass everyone |
 | `Métis Operator ingest` | `…/v1/ingest` | Bypass everyone |
 | `Métis Operator heartbeat` | `…/v1/heartbeat` | Bypass everyone |
+| `Métis Operator use` | `…/v1/use` | Bypass everyone. HMAC broker. Never a raw vault secret |
 | `Métis Operator skills manifest` | `…/v1/skills/manifest` | Bypass everyone |
 | `Métis Operator admin API` | `…/v1/admin` | Bypass everyone (Worker JWT + allowlist) |
 | `Métis Operator assets` | `…/assets` (prefix: `/assets` and `/assets/*`) | Bypass everyone. Static JS/CSS. Not a login gate |
@@ -383,7 +384,7 @@ Tony connects Cloudflare **on Operator**, not on a seat.
 
    **JSON 401** (`{"ok":false,"error":"Access required"}`) is for `/v1/admin/*` (and other `/v1/*` admin JSON) when identity is missing. Ingest still requires HMAC; a missing Access JWT does not unlock ingest. Unauth `POST /v1/admin/keys` is 401, not 404.
 
-2. **Device ingest.** `POST /v1/ingest`, `POST /v1/heartbeat`, `GET /v1/skills/manifest` are not behind Access. HMAC-SHA256: timestamp + nonce + deviceId + body hash, secret `OPERATOR_INGEST_SECRET`. Reject skew greater than 5 minutes. Rate limit per device. Replay nonce window. A later implement slice may add HMAC `POST /v1/use` for short-lived funded Asks; that path stays HMAC-only and must never return a raw vault secret.
+2. **Device ingest.** `POST /v1/ingest`, `POST /v1/heartbeat`, `GET /v1/skills/manifest`, `POST /v1/use` are not behind Access. HMAC-SHA256: timestamp + nonce + deviceId + body hash, secret `OPERATOR_INGEST_SECRET`. Reject skew greater than 5 minutes. Rate limit per device. Replay nonce window. `POST /v1/use` decrypts the vault row in Worker memory, brokers the provider call, and returns answer text only. Never a raw vault secret, cipher, iv, last4, or grant. Screenshots are rejected. Fail closed if Operator cannot issue a use.
 
 3. **Prompts at rest.** AES-GCM with `OPERATOR_PROMPT_KEY` before D1. Decrypt only on an Access-authenticated admin GET. Every reveal is audit-logged (who, when, which ask id).
 
@@ -591,4 +592,4 @@ Frozen overlay chrome (do not edit from this product):
 
 **READY TO MERGE: no.** Live router + hashed SPA still P0 after the 11:39 PM ET walk. Overlay leftover stays Wed 10am. No pack. No merge. Ultron tests before stamp. Do not pack EXE/DMG. Do not bump app version (`1.8.3` stays). Goldberg Aria stays frozen.
 
-`POST /v1/use` (Operator-brokered provider calls) and migrating leftover seat-stored Tony cloud keys stay a later slice. Heartbeat lists funded providers only. Seats never persist a raw Operator key or CF token.
+Migrating leftover seat-stored Tony cloud keys stays a later slice. `POST /v1/use` is live: HMAC, vault decrypt in Worker memory, brokered completion, text only. Seats never persist a raw Operator key or CF token.

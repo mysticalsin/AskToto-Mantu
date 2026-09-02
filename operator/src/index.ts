@@ -30,6 +30,7 @@ import { looksLikeSecret } from './redact'
 import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './store'
 import { isPublicAssetPath, publicAssetResponse } from './assets'
 import { renderConsole } from './ui'
+import { handleUse } from './use'
 
 export interface Env {
   DB?: D1DatabaseLike
@@ -48,6 +49,7 @@ export interface HandleOpts {
   access?: AccessCtx['access']
   geo?: CfGeo
   cfFetch?: typeof fetch
+  providerFetch?: typeof fetch
 }
 
 const RATE_WINDOW_MS = 60_000
@@ -107,7 +109,12 @@ export async function handleRequest(
     return redirectToAccess(request, env)
   }
 
-  if (url.pathname === '/v1/ingest' || url.pathname === '/v1/heartbeat' || url.pathname === '/v1/skills/manifest') {
+  if (
+    url.pathname === '/v1/ingest' ||
+    url.pathname === '/v1/heartbeat' ||
+    url.pathname === '/v1/skills/manifest' ||
+    url.pathname === '/v1/use'
+  ) {
     const bodyText = request.method === 'GET' ? '' : await request.text()
     const hmac = await verifyIngestHmac(request, bodyText, env.OPERATOR_INGEST_SECRET, now, (n) => store.takeNonce(n, now))
     if (!hmac.ok) return json({ ok: false, error: hmac.error }, hmac.status)
@@ -117,6 +124,10 @@ export async function handleRequest(
     const geo = opts.geo ?? geoFromRequest(request)
     if (url.pathname === '/v1/heartbeat') return heartbeat(store, hmac.deviceId, bodyText, now, geo)
     if (url.pathname === '/v1/skills/manifest') return manifest(store)
+    if (url.pathname === '/v1/use') {
+      if (request.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405)
+      return handleUse(store, env, hmac.deviceId, bodyText, now, opts.providerFetch ?? opts.cfFetch ?? fetch)
+    }
     return ingest(store, env, hmac.deviceId, bodyText, now, geo)
   }
 
