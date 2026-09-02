@@ -4,8 +4,8 @@ type: operator-control-plane-contract
 owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, client prompt-cache honesty, CRM send board, Tony LLM keys vault, Cloudflare account connect, seat funding signal, Ask routing law
 does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, installer packing, Fly license-server, Goldberg Aria, cloudflare-proxy AI token proxy, Bklit Studio
 ready-to-merge: no
-implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing, access-login
-this-slice: shoey-map
+implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing, access-login, shoey-map
+this-slice: shoey-telemetry
 audience: Tony Walteur only. Two emails. Nobody else.
 tokens:
   accent: "#2563EB"
@@ -41,7 +41,9 @@ Live URL: `https://metis-operator.tony-walteur.workers.dev/`. Console paths (`/`
 
 **Goal.** Tony holds LLM API keys in Operator. End-user Métis just works. Keep the product in Métis (seats, Asks, licenses, skills, Listen, recap, keys, devices).
 
-**Tony 10:32 PM ET VOID, then re-tightened.** Rail labels stay Shoey. Do **not** pixel-clone Pages / SEO / Groups / Cohorts / Dashboards / Insights / Reports destinations this slice — honest empty with a Métis hook. Clone **#map after Access login** as Shoey Realtime (proof: `shoey-realtime.png`, `shoey-map.png`). Overview stays the 8-tile KPI grid (`shoey-overview.png`). Do not invent a different layout.
+**Tony 10:32 PM ET VOID, then 9/2 AM ET re-lock.** Rail labels stay **full** Shoey Analytics + Manage (the slim-nav cut is void). Do **not** pixel-clone Pages / SEO / Groups / Cohorts / Dashboards / Insights / Reports **destinations** — honest empty with a Métis hook. Clone **#map after Access login** as Shoey Realtime (proof: `shoey-realtime.png`, `shoey-map.png`). Overview stays the Shoey 8-tile KPI grid (`shoey-overview.png`) plus the required Métis ops tiles from **live heartbeats / Asks / CRM only**. Do not invent a different layout.
+
+**P0 Access is LIVE** (2026-09-01 11:07pm America/Toronto). Unauth `GET /` and `GET /keys` 302 to Cloudflare Access. `GET /health` 200 JSON. `GET /assets*` 200 JS/CSS. Do **not** spend more time on Access bypass. Do not edit overlay `DESIGN.md`. This file is the Operator design contract.
 
 Content is Métis, not sneakers. Real data only. No fake keys, no stub map, no shoe SKUs (`/products/sneakers` and commerce sample rows are forbidden).
 
@@ -64,12 +66,34 @@ Pixel-clone the **Shoey demo chrome**. Do not invent a different Operator layout
 - **Manage:** Settings, References, Notifications. Optional “Back to workspace” = Access sign-out.
 - Footer chrome: Give feedback, Docs, star, profile. Support / Pay links may stay as Métis Support Us copy or be omitted if they would be fake storefront.
 
-**Overview (match `shoey-overview.png`):**
+**Overview (match `shoey-overview.png`, then Tony 9/2 AM tiles):**
 
 - Header toolbar: Last 7 days (calendar), Day (clock), Filters (funnel), center search `Try: "last 7 days, mobile only"` (Métis: seats / macOS / Windows / Listen), live green-dot count, Private + lock.
-- **Eight KPI cards** in a 2×4 grid. Each: uppercase title, large number, % change (green up / red down) or honest “not reported”, mini **blue** (`#2563EB`) bar chart.
+- **Eight KPI cards** in a 2×4 grid (Shoey fold). Each: uppercase title, large number, % change (green up / red down) or honest **not reported**, mini **blue** (`#2563EB`) bar chart. **0 LLM tokens** to render. No model call. No generated copy.
+- Required Métis numbers (heartbeat / Ask / CRM ingest only). Missing ingest = **not reported**, never `0` as a fake:
+
+| Tile | Real source | Fake forbidden |
+| --- | --- | --- |
+| Unique sessions | Unique seats in the 7-day window (WAU) | Sample 55K visitors |
+| Sessions / day | Unique seats last 24h (DAU) | Invented sessions |
+| Live now | Seats with heartbeat inside `ONLINE_MS` (2 min) | Sample live 159 |
+| Live · 30 min | Unique seats `last_seen` ≤ 30 min | Sample 30-min bar |
+| Time saved | Seat `timeSaved` is **not ingested**. Tile = **not reported** until a real HMAC field exists | Fake minutes |
+| Duration | Median Ask `total_ms` when any Ask reported it | Fake 18s |
+| Meetings | CRM rows with a meeting hash, or CRM success | Invented meetings |
+| Tokens | Sum of reported Ask input / output / cache tokens | Fake 0 tokens |
+| API calls | Ask count in the window | Shoe pageviews |
+| Listen minutes | **Not ingested.** Tile = **not reported** | Fake Listen clock |
+| Recap count | Asks with `mode=recap` plus events named recap | Fake recap SKUs |
+| Cost by provider | Existing cost table (list-price estimate or not reported) | Fake `$0` |
+| CLI vs Operator-key | Ask `provider` `claude-cli` / `codex-cli` vs vault LLM ids | Guessed split |
+| CRM fail rate | Failed + expired over attempted | Fake 28.6% |
+| Mac vs Windows | Seat `os` mix | Invented OS |
+| Version mix | Seat `app_version` mix | Invented versions |
+| Country map | `request.cf` seats only, same world as Realtime | Sample dots |
+
 - Large **Unique seats** area chart (thin blue line, soft blue fill). Y from real series. X is real dates. Empty window = empty chart, not a sample plateau.
-- Two bottom tabbed tables with search + relative-volume bars:
+- Two tabbed tables with search + relative-volume bars:
   - Left Shoey Refs / Urls / Types / Source / Medium / Campaign / Term / Content → Métis **connectors / CRM / Listen / recap**.
   - Right Shoey Pages / Entries / Exits → Métis **modes / skills / use cases / paths**. Never `/products/sneakers`.
 
@@ -223,7 +247,7 @@ POLICY_AUD=<aud from the Métis Operator app>
 
 ## What this is not (explicit non-goals)
 
-This slice implements **Cloudflare Access login + first Shoey visual** (Overview and/or Realtime). Keys vault / Cloudflare connect / CLI-first routing already exist. Keys last4 / fund-seats stay required after login. Full Shoey parity (every empty destination polished) is Wed 10:00am. No pack. No version bump. Overlay chrome stays frozen.
+This slice implements **Shoey chrome on live heartbeats** after Access (P0 login already live). Keys vault / Cloudflare connect / CLI-first routing already exist. Keys last4 / fund-seats stay required so devices spend dashboard keys after CLI quota. Full Shoey destination polish is Wed 10:00am. Overlay leftover stays Wed 10am. No pack. No version bump. Overlay chrome stays frozen. **0 LLM tokens** to render Overview, Realtime, or Events.
 
 | Surface | Job |
 | --- | --- |
@@ -399,11 +423,11 @@ Section eyebrows on the rail: **Analytics** then **Manage**. No Fleet. No Ops. N
 
 ## Events
 
-`#events` is a live event list in the spirit of `https://demo.openpanel.dev/demo/shoey/events/events`.
+`#events` **is** `https://demo.openpanel.dev/demo/shoey/events/events`. Token-free. **0 LLM tokens** to render.
 
-Each row: **name**, **profile** (hostname or SSO email, else `—`), **properties as chips**, **time**.
+Layout: search, left **event-name rollup** (name + count + inline bar from real rows), right **event stream**. Each stream row: **name**, **profile** (hostname or SSO email, else `—`), **properties as chips**, **time**.
 
-Sources are real ingest: heartbeat, ask, crm, rating, skill draft/approve/push. Property chips are safe metadata only (mode, os, country, cache badge, connector, status, app version).
+Sources are real ingest only: heartbeat, ask, crm, rating, skill draft/approve/push, listen/recap when a seat sent that kind. Property chips are safe metadata only (mode, os, country, cache badge, connector, status, app version).
 
 **Token-free.** The renderer drops any value that looks like a token, API key, HMAC secret, JWT, or bearer string. Tests fail if a token-shaped string is present in the Events HTML.
 
@@ -438,26 +462,28 @@ Paint like Shoey: light land `#F5F5F5`, charcoal dots, green pills. Still strip 
 
 Click a country / pill to filter Geo + the fleet table. Caption: unique seats by country from Cloudflare `request.cf`. No GPS. No IP.
 
-## Overview (Shoey 8-up + tables)
+## Overview (Shoey 8-up + Tony ops tiles)
 
-`#overview` **is** `https://demo.openpanel.dev/demo/shoey` Overview (proof: `shoey-overview.png`). Eight KPI cards, one Unique seats area chart, two tabbed tables. Scale / Mix / Cost / Change / Asks / CRM may remain **below** that Shoey fold as extra Métis widgets. They are not nav orphans and they do not replace the Shoey fold.
+`#overview` **is** `https://demo.openpanel.dev/demo/shoey` Overview (proof: `shoey-overview.png`). Eight KPI cards, one Unique seats area chart, two tabbed tables, then the required Métis ops strip (Listen / recap / CLI vs key / CRM fail / Mac vs Windows / version mix / country map / cost by provider). Scale / Mix / Cost / Change / Asks / CRM stay **below** that Shoey fold. They are not nav orphans and they do not replace the Shoey fold.
+
+**Render law.** Overview, Realtime, and Events are D1 + `request.cf` HTML. **Spend 0 LLM tokens.** No model, no generated sentences, no invented dots or numbers. If a field was never ingested, the tile says **not reported** (never `0` pretending to be a measurement).
 
 | Shoey chrome | Métis field (real only) | Fake forbidden |
 | --- | --- | --- |
-| Unique visitors | Unique / live seats (DAU on the card or adjacent) | Sample 55K visitors |
-| Sessions | DAU / WAU seats | Invented sessions |
-| Pageviews | Asks | Shoe pageviews |
-| Pages per session | Asks per seat (Asks / DAU when both real) | Invented ratio |
-| Bounce rate | Cache miss or CRM fail rate when reported | Fake 28.6% |
-| Session duration | Ask latency / TTFT when reported | Fake 18s |
-| Revenue | Cost estimate (list price) or **not reported** | Fake `0 $` |
-| Live · 30 min | Unique seats last 30 minutes | Sample live 159 |
+| Unique visitors | Unique sessions = unique seats in the 7-day window | Sample 55K visitors |
+| Sessions | Sessions / day = unique seats last 24h | Invented sessions |
+| Pageviews | API calls = Ask count | Shoe pageviews |
+| Pages per session | Duration = median Ask `total_ms` when reported | Invented ratio / fake 18s |
+| Bounce rate | CRM fail rate when attempted > 0 | Fake 28.6% |
+| Session duration | Time saved = **not reported** until HMAC ingest exists | Fake saved minutes |
+| Revenue | Tokens (sum of reported Ask tokens) or cost estimate | Fake `0 $` / fake 0 tokens |
+| Live · 30 min | Unique seats last 30 minutes (also the live-now header dot) | Sample live 159 |
 | Refs table | CRM / Listen / recap / connectors | heroku.com / eBay sample |
 | Pages table | Modes / skills / use cases / API paths | `/products/sneakers` |
 
 Range like Shoey (Last 7 days / Day). Missing usage is hidden or "not reported". Never a fake $0.
 
-1. **KPI strip (real fields only).** The eight cards above. Sparklines are blue bars, not monochrome 3-up. Live seats, DAU, WAU, Asks, cache, cost, latency, 30-min unique. Pending skill diffs and last index stay available on Insights / Change below the fold.
+1. **KPI strip (real fields only).** The eight cards above. Sparklines are blue bars, not monochrome 3-up. Extra strip under the fold: Live now (2 min), Meetings (CRM meeting hash / success), Listen minutes (**not reported**), Recap count, CLI asks vs Operator-key asks, country map from `request.cf`. Pending skill diffs and last index stay available on Insights / Change below the fold.
 
 2. **Scale.** Live line of heartbeats and Asks over the selected range. Stays a widget.
 
@@ -536,6 +562,6 @@ Frozen overlay chrome (do not edit from this product):
 
 ## Ready to merge
 
-**READY TO MERGE: no.** Access login + first Shoey visual (Overview / Realtime). Full Shoey parity Wed 10:00am with 1.8.3. Overlay leftover Mac-show Wed 10am. No pack. No merge tonight. Ultron tests before stamp. Do not pack EXE/DMG. Do not bump app version (`1.8.3` stays). Goldberg Aria stays frozen.
+**READY TO MERGE: no.** Shoey Overview / Realtime / Events on live heartbeats. Access login already live. Overlay leftover stays Wed 10am. No pack. No merge. Ultron tests before stamp. Do not pack EXE/DMG. Do not bump app version (`1.8.3` stays). Goldberg Aria stays frozen.
 
 `POST /v1/use` (Operator-brokered provider calls) and migrating leftover seat-stored Tony cloud keys stay a later slice. Heartbeat lists funded providers only. Seats never persist a raw Operator key or CF token.
