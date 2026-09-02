@@ -21,6 +21,13 @@ export interface StreamOptions {
   providerId: ProviderId
   kind: ProviderKind
   apiKey: string
+  /**
+   * When true, Ask goes through Operator /v1/ask. The Worker holds the raw LLM key.
+   * The seat must leave apiKey empty and never persist a leased secret.
+   */
+  viaOperator?: boolean
+  /** HMAC target for viaOperator. URL + ingest secret only — never an LLM key. */
+  operatorTransport?: { url: string; secret: string }
   baseURL?: string
   /** Dust workspace id (only used when kind === 'dust'). */
   workspaceId?: string

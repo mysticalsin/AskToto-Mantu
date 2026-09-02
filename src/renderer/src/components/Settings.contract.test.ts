@@ -322,6 +322,8 @@ describe('Set up automatically shows an honest status chip', () => {
     expect(install()).toMatch(/window\.toto\.cliInstall\(id/)
     expect(install()).toMatch(/window\.toto\.cliTest\(id\)/)
     expect(install()).toMatch(/window\.toto\.cliLogin\(id\)/)
+    expect(body).toMatch(/lastClickedCli/)
+    expect(body).toMatch(/CLI Integration/)
   })
 
   it('a click without a working binary cannot show Connected', () => {

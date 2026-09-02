@@ -167,7 +167,8 @@ describe('MQA-228 — the screenshot-incapable advice respects the org allowlist
     // Candidate filter: vision-capable AND on the allowlist (null allowlist = unrestricted), never local.
     expect(body).toMatch(/p !== blocked && p !== 'local' && providerVisionOk\(p\) && \(!allowed \|\| allowed\.includes\(p\)\)/)
     // Immediately-actionable first: a keyed / CLI-connected candidate outranks a merely-allowed one.
-    expect(body).toMatch(/PROVIDERS\[p\]\.kind === 'cli' \? !!s\.cliConnected\[p\] : getApiKey\(p\)\.length > 0/)
+    expect(body).toMatch(/PROVIDERS\[p\]\.kind === 'cli'/)
+    expect(body).toMatch(/getApiKey\(p\)\.length > 0 \|\| operatorFundedProviders\(\)\.includes\(p\)/)
   })
 
   it('a policy that leaves no vision route says so, instead of advising an impossible switch', () => {
