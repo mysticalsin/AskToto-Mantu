@@ -72,6 +72,8 @@ describe('unauth console GET is 302 to Cloudflare Access, never a password form'
       '/devices',
       '/map',
       '/cloudflare',
+      '/cloudflare/connect',
+      '/cloudflare/callback',
       '/overview',
       '/events',
       '/dashboards',

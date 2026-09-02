@@ -39,7 +39,7 @@ function field(value: string | null | undefined): string {
 function renderCloudflare(cf: CloudflareOverview): string {
   if (cf.error) {
     return `<div class="fail-loud" data-cf-error>${esc(cf.error)}</div>
-      <div class="sub muted" style="padding-bottom:8px">Worker ${esc(cf.worker)}. Connect Account ID and API token on Keys. No token on seats.</div>`
+      <div class="sub muted" style="padding-bottom:8px">Worker ${esc(cf.worker)}. Connect Cloudflare (login) on Keys. No token on seats.</div>`
   }
   const workers = cf.workers.length ? cf.workers.map((w) => esc(w)).join(', ') : 'none listed'
   const req = cf.requests == null ? 'not reported' : String(cf.requests)
@@ -341,11 +341,8 @@ export function renderConsole(data: DashboardPayload): string {
         <td>${esc(v.label)}</td>
         <td class="muted">··${esc(v.last4)}</td>
         <td>${esc(v.status)}</td>
-        <td>${
-          v.status === 'revoked'
-            ? ''
-            : `<button data-rotate="${esc(v.id)}">Rotate</button><button class="danger" data-revoke="${esc(v.id)}">Revoke</button>`
-        }</td>
+        <td>${v.status === 'revoked' ? '' : `<button data-rotate="${esc(v.id)}">Rotate</button>`}</td>
+        <td>${v.status === 'revoked' ? '' : `<button class="danger" data-revoke="${esc(v.id)}">Revoke</button>`}</td>
       </tr>`
     )
     .join('')
@@ -593,18 +590,18 @@ export function renderConsole(data: DashboardPayload): string {
           </div>
         </form>
         <p class="eyebrow">Cloudflare connection</p>
-        <form class="key-form" id="cf-add" autocomplete="off">
-          <div class="row">
-            <input name="accountId" type="text" placeholder="Account ID" required maxlength="40">
-            <input name="token" type="password" placeholder="API token" required autocomplete="off">
-            <button class="primary" type="submit">Connect</button>
-          </div>
-        </form>
-        ${
-          vaultRows
-            ? `<p class="eyebrow" style="margin-top:14px">Vault</p><table><thead><tr><th>Provider</th><th>Label</th><th>Last4</th><th>Status</th><th></th></tr></thead><tbody>${vaultRows}</tbody></table>`
-            : '<div class="empty">No provider keys on Operator yet. Add an API or Cloudflare here so seats can be funded.</div>'
-        }
+        <div class="sub muted" style="padding-bottom:8px">Login redirect. Not Account ID + token paste. Seats never hold a Cloudflare token.</div>
+        <p><a class="btn primary" id="cf-connect" href="/cloudflare/connect">Connect Cloudflare</a></p>
+        <p class="eyebrow" style="margin-top:14px">Vault</p>
+        <table id="vault-table">
+          <thead><tr><th>Provider</th><th>Label</th><th>Last4</th><th>Status</th><th>Rotate</th><th>Revoke</th></tr></thead>
+          <tbody>
+            ${
+              vaultRows ||
+              `<tr data-vault-empty><td colspan="6" class="empty">No provider keys on Operator yet. Add an API. Rotate and Revoke land on each row. Seats never hold the raw key.</td></tr>`
+            }
+          </tbody>
+        </table>
         <div id="key-msg" class="muted" style="padding:8px 0"></div>
       </article>
     </section>

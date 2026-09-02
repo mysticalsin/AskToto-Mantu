@@ -9,6 +9,8 @@ export const CONSOLE_PATHS = [
   '/devices',
   '/map',
   '/cloudflare',
+  '/cloudflare/connect',
+  '/cloudflare/callback',
   '/overview',
   '/events',
   '/profiles',

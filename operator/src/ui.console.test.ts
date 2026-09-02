@@ -63,7 +63,7 @@ function eventsHtml(html: string): string {
   return start >= 0 && end > start ? html.slice(start, end) : html
 }
 
-describe('product sidebar', () => {
+describe('product sidebar (#105)', () => {
   it('fills the rail with real Operator routes and has no Scale/Change leftover', async () => {
     const html = await page()
     const nav = [...html.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1])

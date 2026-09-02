@@ -214,21 +214,6 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
   bindKeyAdd(document.getElementById('key-add'))
   bindKeyAdd(document.getElementById('key-add-settings'))
 
-  var cfForm = document.getElementById('cf-add')
-  if (cfForm) {
-    cfForm.addEventListener('submit', async function (e) {
-      e.preventDefault()
-      var fd = new FormData(cfForm)
-      var j = await api('/v1/admin/keys', {
-        provider: 'cloudflare-account',
-        accountId: fd.get('accountId'),
-        token: fd.get('token')
-      })
-      if (j && j.ok) location.reload()
-      else showKey(j)
-    })
-  }
-
   document.querySelectorAll('[data-rotate]').forEach(function (b) {
     b.addEventListener('click', async function () {
       var secret = window.prompt('New secret or token')

@@ -111,6 +111,7 @@ function chip(label: string, value: string): string {
   return `<span class="ov-chip"><b>${esc(label)}</b> ${esc(value)}</span>`
 }
 
+/** Issue 106: exactly 10 Bklit mini KPI cards from live heartbeats. 0 LLM tokens. */
 export function renderOverviewMini10(data: DashboardPayload): string {
   const ops = data.ops
   const countries = data.map.countries

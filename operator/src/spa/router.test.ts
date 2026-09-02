@@ -17,7 +17,7 @@ function pathnameStripNeedle(): string {
   return ['location.pathname.replace(', '/', '^', '\\', '/', '/', ", '')"].join('')
 }
 
-describe('hashed SPA router', () => {
+describe('hashed SPA router (#104)', () => {
   it('compiles: shipped JS parses and keeps the pathname strip that will parse', () => {
     expect(pathnameStripNeedle()).toBe(PATHNAME_STRIP_JS)
     expect(SPA_JS).toContain(PATHNAME_STRIP_JS)
