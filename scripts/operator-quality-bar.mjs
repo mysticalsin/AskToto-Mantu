@@ -175,6 +175,28 @@ function probeLiveLogin() {
     if (!/HTTP\/\S+\s+401/.test(postKeys) || /HTTP\/\S+\s+404/.test(postKeys)) {
       fail(`live POST /v1/admin/keys must stay 401, not 404`)
     }
+    const use = run('curl', [
+      '-sS',
+      '-D',
+      '-',
+      '-o',
+      '-',
+      '--max-redirs',
+      '0',
+      '-X',
+      'POST',
+      '-H',
+      'content-type: application/json',
+      '-d',
+      '{}',
+      `${host}/v1/use`
+    ])
+    if (/HTTP\/\S+\s+302/.test(use) && /cdn-cgi\/access\/login/i.test(use)) {
+      fail('live POST /v1/use is wrapped by Cloudflare Access')
+    }
+    if (!/HTTP\/\S+\s+401/.test(use) || !/missing HMAC/.test(use)) {
+      fail('live POST /v1/use must be HMAC 401 JSON, not Access HTML')
+    }
     const spaMeta = JSON.parse(
       run('npx', [
         'tsx',
