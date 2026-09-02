@@ -189,7 +189,17 @@ describe('product sidebar (#105)', () => {
     expect(sessionsPage).toContain('Entry page')
     expect(sessionsPage).toContain('Exit page')
     expect(sessionsPage).toContain('Duration')
+    expect(sessionsPage).toContain('placeholder="Search ..."')
+    expect(sessionsPage).toContain('id="sessions-filters"')
+    expect(sessionsPage).toContain('Filters</button>')
+    expect(sessionsPage).toContain('View</button>')
+    expect(sessionsPage).toContain('id="seat-overlay"')
+    expect(sessionsPage).not.toContain('id="map-root"')
+    expect(sessionsPage).not.toContain('Anonymous')
     expect(sessionsPage).not.toContain('/products/sneakers')
+    expect(sessionsPage).not.toContain('/products/shoes')
+    expect(sessionsPage).not.toContain('defaultServers')
+    expect(sessionsPage).not.toContain('Frankfurt')
     const notesPage = html.slice(html.indexOf('data-page="notifications"'), html.indexOf('data-page="map"'))
     expect(notesPage).toContain('>Title<')
     expect(notesPage).toContain('>Integration<')
@@ -231,6 +241,13 @@ describe('product sidebar (#105)', () => {
     expect(css).toContain('display: none !important')
     expect(js).toContain('applyNtFilter')
     expect(js).toContain("ntFilter === 'all' || status === ntFilter")
+    expect(js).toContain('function applySessionsFilter')
+    expect(js).toContain('function fillSeatOverlay')
+    expect(js).toContain("addSeatField(body, 'Computer'")
+    expect(js).toContain("addSeatField(body, 'IP'")
+    expect(css).toContain('.sess-avatar')
+    expect(css).toContain('.seat-hbars')
+    expect(css).toContain('.search-wrap')
   })
 })
 
@@ -346,6 +363,56 @@ describe('events never render token-like strings', () => {
     expect(events).not.toContain('Bearer')
     expect(events).not.toContain('sk-ant-')
     expect(events).toContain('data-event=')
+  })
+})
+
+describe('sessions pane is live Métis seats, not Shoey demo rows', () => {
+  it('lists computer name, OS, real paths, and structured overlay fields', async () => {
+    const store = memoryStore()
+    await store.upsertSeat({
+      device_id: 'device-a',
+      seat_hash: 'seat-a',
+      os: 'darwin',
+      app_version: '1.8.2',
+      first_seen: NOW - 31_000,
+      last_seen: NOW,
+      country: 'CA',
+      city: 'Longueuil',
+      lat: 45.5,
+      lon: -73.5,
+      last_index_at: null,
+      hostname: 'Tonys-MacBook-Pro',
+      sso_email: 'twalteur@amaris.com',
+      license: 'approved'
+    })
+    await store.insertEvent({
+      id: 'ev-path',
+      ts: NOW - 20_000,
+      kind: 'heartbeat',
+      actor: 'twalteur@amaris.com',
+      device_id: 'device-a',
+      country: 'CA',
+      detail: 'listen /settings darwin'
+    })
+    const html = await page(store)
+    const sessionsPage = html.slice(html.indexOf('data-page="sessions"'), html.indexOf('data-page="notifications"'))
+    expect(sessionsPage).toContain('Tonys-MacBook-Pro')
+    expect(sessionsPage).toContain('data-os="darwin"')
+    expect(sessionsPage).toContain('data-seat-computer="Tonys-MacBook-Pro"')
+    expect(sessionsPage).toContain('data-seat-location="Longueuil · CA"')
+    expect(sessionsPage).toContain('data-seat-ip="—"')
+    expect(sessionsPage).toContain('data-seat-license="approved"')
+    expect(sessionsPage).toContain('data-seat-status="Active"')
+    expect(sessionsPage).toContain('data-seat-status-id="active"')
+    expect(sessionsPage).toContain('data-seat-meter="100"')
+    expect(sessionsPage).toContain('data-seat-bars=')
+    expect(sessionsPage).toContain('/settings')
+    expect(sessionsPage).toContain('31s')
+    expect(sessionsPage).not.toContain('Anonymous')
+    expect(sessionsPage).not.toContain('/products/shoes/casual')
+    expect(sessionsPage).not.toContain('/blog/how-to-choose-th')
+    expect(sessionsPage).not.toMatch(/\b(?:\d{1,3}\.){3}\d{1,3}\b/)
+    expect(sessionsPage).not.toContain('id="map-root"')
   })
 })
 

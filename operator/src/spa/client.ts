@@ -206,14 +206,23 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
   })
 
   var sessSearch = document.getElementById('sessions-search')
-  if (sessSearch) {
-    sessSearch.addEventListener('input', function () {
-      var q = sessSearch.value.trim().toLowerCase()
-      document.querySelectorAll('[data-seat-row]').forEach(function (row) {
-        row.hidden = Boolean(q) && !(row.getAttribute('data-q') || '').includes(q)
-      })
-      syncEmpty('[data-seat-row]', 'sessions-empty')
+  function applySessionsFilter() {
+    var q = sessSearch ? sessSearch.value.trim().toLowerCase() : ''
+    document.querySelectorAll('[data-seat-row]').forEach(function (row) {
+      row.hidden = Boolean(q) && !(row.getAttribute('data-q') || '').includes(q)
     })
+    syncEmpty('[data-seat-row]', 'sessions-empty')
+  }
+  if (sessSearch) {
+    sessSearch.addEventListener('input', applySessionsFilter)
+    sessSearch.addEventListener('search', applySessionsFilter)
+    sessSearch.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') { e.preventDefault(); applySessionsFilter() }
+    })
+  }
+  var sessFilters = document.getElementById('sessions-filters')
+  if (sessFilters && sessSearch) {
+    sessFilters.addEventListener('click', function () { sessSearch.focus() })
   }
 
   var ntFilter = 'all'
@@ -255,25 +264,68 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
     })
   }
 
-  document.querySelectorAll('[data-seat-row]').forEach(function (row) {
-    row.addEventListener('click', function () {
-      var overlay = document.getElementById('seat-overlay')
-      if (!overlay) return
-      overlay.hidden = false
-      var title = overlay.querySelector('[data-seat-title]')
-      var body = overlay.querySelector('[data-seat-body]')
-      if (title) title.textContent = row.getAttribute('data-seat-name') || 'Seat'
-      if (body) {
-        var raw = row.getAttribute('data-seat-detail') || ''
-        body.textContent = ''
-        raw.split(' · ').forEach(function (line) {
-          var p = document.createElement('div')
-          p.className = 'muted'
-          p.textContent = line
-          body.appendChild(p)
-        })
-      }
+  function addSeatField(body, label, value, wide) {
+    var field = document.createElement('div')
+    field.className = wide ? 'seat-field seat-overlay-wide' : 'seat-field'
+    var k = document.createElement('span')
+    k.className = 'lbl'
+    k.textContent = label
+    var v = document.createElement('span')
+    v.className = 'val'
+    v.textContent = value
+    field.appendChild(k)
+    field.appendChild(v)
+    body.appendChild(field)
+    return field
+  }
+  function fillSeatOverlay(row) {
+    var overlay = document.getElementById('seat-overlay')
+    if (!overlay) return
+    overlay.hidden = false
+    var title = overlay.querySelector('[data-seat-title]')
+    var no = overlay.querySelector('[data-seat-no]')
+    var body = overlay.querySelector('[data-seat-body]')
+    var computer = row.getAttribute('data-seat-computer') || '—'
+    if (title) title.textContent = computer
+    if (no) no.textContent = row.getAttribute('data-seat-no') || ''
+    if (!body) return
+    body.textContent = ''
+    addSeatField(body, 'Computer', computer)
+    addSeatField(body, 'OS', row.getAttribute('data-os') || '—')
+    addSeatField(body, 'Location', row.getAttribute('data-seat-location') || '—')
+    addSeatField(body, 'IP', row.getAttribute('data-seat-ip') || '—')
+    addSeatField(body, 'License', row.getAttribute('data-seat-license') || '—')
+    addSeatField(body, 'Identity', row.getAttribute('data-seat-identity') || '—')
+    addSeatField(body, 'Last seen', row.getAttribute('data-seat-last') || '—')
+    addSeatField(body, 'Version', row.getAttribute('data-seat-version') || '—')
+    var statusField = addSeatField(body, 'Status', '')
+    var pill = document.createElement('span')
+    var statusId = row.getAttribute('data-seat-status-id') || 'inactive'
+    pill.className = 'seat-status ' + statusId
+    pill.textContent = row.getAttribute('data-seat-status') || 'Inactive'
+    statusField.querySelector('.val').appendChild(pill)
+    var meterField = addSeatField(body, 'Heartbeat', '', true)
+    var meter = document.createElement('div')
+    meter.className = 'seat-meter'
+    var fill = document.createElement('i')
+    fill.style.width = (row.getAttribute('data-seat-meter') || '8') + '%'
+    meter.appendChild(fill)
+    meterField.querySelector('.val').appendChild(meter)
+    var barsField = addSeatField(body, 'Heartbeat bars', '', true)
+    var hbars = document.createElement('div')
+    hbars.className = 'seat-hbars'
+    ;(row.getAttribute('data-seat-bars') || '8').split(',').forEach(function (n) {
+      var bar = document.createElement('i')
+      var v = Math.max(8, Math.min(100, parseInt(n, 10) || 8))
+      bar.style.height = v + '%'
+      hbars.appendChild(bar)
     })
+    barsField.querySelector('.val').appendChild(hbars)
+    var recent = row.getAttribute('data-seat-recent') || ''
+    addSeatField(body, 'Recent', recent || 'No recent heartbeats for this seat.', true)
+  }
+  document.querySelectorAll('[data-seat-row]').forEach(function (row) {
+    row.addEventListener('click', function () { fillSeatOverlay(row) })
   })
   var seatClose = document.getElementById('seat-overlay-close')
   if (seatClose) {

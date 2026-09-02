@@ -181,6 +181,7 @@ export interface ConsoleEvent {
   id: string
   ts: number
   name: string
+  device: string | null
   hostname: string | null
   email: string | null
   country: string | null
@@ -499,6 +500,7 @@ function eventFromStored(row: EventRow, seatsById: Map<string, SeatRow>): Consol
     id: row.id,
     ts: row.ts,
     name: looksLikeSecret(row.kind) ? 'event' : row.kind,
+    device: row.device_id ? row.device_id.slice(0, 8) : null,
     hostname: who.hostname,
     email: who.email || (row.actor && !looksLikeSecret(row.actor) ? row.actor : null),
     country: row.country && !looksLikeSecret(row.country) ? row.country : seat?.country || null,
@@ -835,6 +837,7 @@ export async function buildDashboard(
             id: `ask-${a.id}`,
             ts: a.ts,
             name: 'ask',
+            device: a.device_id.slice(0, 8),
             hostname: who.hostname,
             email: who.email,
             country: seat?.country || null,
@@ -857,6 +860,7 @@ export async function buildDashboard(
             id: `crm-${r.id}`,
             ts: r.ts,
             name: 'crm',
+            device: r.device_id.slice(0, 8),
             hostname: who.hostname,
             email: who.email,
             country: seat?.country || null,
