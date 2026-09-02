@@ -555,26 +555,41 @@ export function renderConsole(data: DashboardPayload): string {
   const live30Series = ops.live30Series
   const world = shoeyWorld(data.map.countries, data.map.dots)
   const liveProfiles = data.profiles.filter((p) => p.live30)
-    const geoByCountry = new Map<string, { name: string; views: number; sess: number }>()
-  for (const p of liveProfiles) {
-    const cc = p.country && !looksLikeSecret(p.country) ? p.country.trim().toUpperCase() : ''
-    if (!cc && !(p.city && !looksLikeSecret(p.city))) continue
-    const key = cc || '(Not set)'
-    const label = cc
-      ? `${flagMark(cc)} ${countryName(cc) || cc}`
-      : '(Not set)'
-    const hit = geoByCountry.get(key)
-    if (hit) {
-      hit.views += 1
-      hit.sess += 1
-    } else {
-      geoByCountry.set(key, { name: label, views: 1, sess: 1 })
-    }
-  }
-  const geoRows = [...geoByCountry.values()].sort((a, b) => b.views - a.views)
-  const stream = data.events.filter((e) => e.name === 'heartbeat').slice(0, 24)
-  const refRows = live30 ? [{ name: '(Not set)', views: live30, sess: live30 }] : []
-  const pathRows = mixRows(stream.map((e) => ({ label: e.name, value: 1 })))
+
+  const roster = liveProfiles.length
+    ? liveProfiles
+        .map((p) => {
+          const computer = p.hostname && !looksLikeSecret(p.hostname) ? p.hostname : MISSING
+          const identity =
+            p.email && !looksLikeSecret(p.email) ? p.email : computer !== MISSING ? computer : p.device
+          const place = [p.city, p.country ? countryName(p.country) || p.country : '']
+            .filter((v) => v && !looksLikeSecret(v))
+            .join(' · ') || MISSING
+          const ago = data.now - p.lastSeen < 90_000 ? 'just now' : when(p.lastSeen)
+          const version = p.appVersion && !looksLikeSecret(p.appVersion) ? p.appVersion : MISSING
+          const q = [identity, computer, place, p.os, p.device].join(' ').toLowerCase()
+          return `<div class="rt-seat" data-device="${esc(p.device)}" data-q="${esc(q)}">
+            <div class="rt-seat-top">
+              ${seatAvatar(identity === MISSING ? p.device : identity)}
+              ${osBadge(p.os)}
+              <div class="rt-seat-who">
+                <div class="rt-seat-sig">${identity === MISSING ? MISSING : esc(identity)}</div>
+                ${
+                  computer !== MISSING && computer !== identity
+                    ? `<div class="rt-seat-host">${esc(computer)}</div>`
+                    : ''
+                }
+              </div>
+              <span class="rt-seat-ago">${esc(ago)}</span>
+            </div>
+            <div class="rt-seat-meta">
+              <span>${esc(place)}</span>
+              <span>v${esc(version)}</span>
+            </div>
+          </div>`
+        })
+        .join('')
+    : '<div class="rt-roster-empty empty">No live Métis seats in the last 30 minutes. Heartbeats land on Events.</div>'
 
   return `<!doctype html>
 <html lang="en" data-theme="light"><head>
@@ -636,73 +651,36 @@ export function renderConsole(data: DashboardPayload): string {
     </section>
 
     <section class="page wrap" data-page="realtime" hidden>
-      <div class="page-hero" data-map-dashboard>
-        <h3 class="page-title">Map and dashboard</h3>
-        <p class="page-sub">Users per countries and live seats from heartbeats. Map dots are Cloudflare request.cf only.</p>
+      <div class="page-hero" data-live-map>
+        <h3 class="page-title">Live map</h3>
+        <p class="page-sub">Every Métis seat active in the last 30 minutes, with a signature so you know who they are. Map pins use Cloudflare request.cf only. Heartbeats stream on Events.</p>
       </div>
-      <div class="rt-grid">
-        <div>
-          <article class="card kpi rt-unique" style="padding-bottom:10px">
-            <h3 class="rt-h">Unique seats last 30 min</h3>
-            <div class="n rt-n">${formatCompact(live30)}</div>
-            ${blueBars(live30Series, 280, 56)}
-          </article>
-          <article class="card" style="padding:8px 10px 10px;margin-top:10px">
-            <div class="rt-stream" id="rt-stream">
-              ${
-                stream.length
-                  ? stream
-                      .map((e) => {
-                        const name = looksLikeSecret(e.name) ? 'event' : e.name
-                        const ago = data.now - e.ts < 90_000 ? 'just now' : when(e.ts)
-                        const os = e.chips.find((c) => c.key === 'os')?.value || ''
-                        return `<div class="rt-row">
-                          <span>${esc(name)}<span class="rt-ics">${osIcon(os)}</span></span>
-                          <span class="ago">${esc(ago)}</span>
-                        </div>`
-                      })
-                      .join('')
-                  : '<div class="empty">No live events yet.</div>'
-              }
+      <div class="rt-stage">
+        <article class="rt-map-full">
+          <div class="rt-hud">
+            <div class="rt-hud-kpi">
+              <span class="rt-hud-lbl">Unique seats last 30 min</span>
+              <div class="n rt-n">${formatCompact(live30)}</div>
+              ${blueBars(live30Series, 280, 56)}
             </div>
-          </article>
-        </div>
-        <article class="card rt-map" style="padding:0;overflow:hidden">
+          </div>
           <div id="map-root" data-land="inline" style="position:relative">${world}</div>
         </article>
-      </div>
-      <div class="grid-3">
-        ${volumeTable(
-          'geo',
-          [{ id: 'geo', label: 'Users per countries' }],
-          { geo: geoRows },
-          'Search countries',
-          { value: 'Events', sess: 'Sessions' },
-          'blue'
-        )}
-        ${volumeTable(
-          'rt-refs',
-          [{ id: 'refs', label: 'Referrals' }],
-          { refs: refRows },
-          'Search referrals',
-          { value: 'Events', sess: 'Sessions' },
-          'blue'
-        )}
-        ${volumeTable(
-          'rt-paths',
-          [{ id: 'path', label: 'Paths' }],
-          { path: pathRows },
-          'Search paths',
-          { value: 'Events', sess: 'Sessions' },
-          'blue'
-        )}
+        <aside class="rt-roster" id="rt-roster" aria-label="Live seat signatures">
+          <div class="rt-roster-head">
+            <h3 class="rt-h">Live seats</h3>
+            <span class="rt-roster-count">${formatCompact(live30)}</span>
+          </div>
+          <div class="rt-roster-list">${roster}</div>
+        </aside>
       </div>
     </section>
+
 
     <section class="page wrap" data-page="events" hidden>
       <div class="page-hero">
         <h3 class="page-title">Events</h3>
-        <p class="page-sub">Paginate through your events, conversions and overall stats</p>
+        <p class="page-sub">Heartbeats, asks, and conversions as they land. Live seat geography stays on Realtime.</p>
       </div>
       <div class="page-tabs" role="tablist">
         <button class="page-tab on" type="button" data-ev-tab="events">Events</button>

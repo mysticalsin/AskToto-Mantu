@@ -275,7 +275,7 @@ describe('packed console map and geo', () => {
     )
     expect(home.status).toBe(200)
     const page = await home.text()
-    expect(page).toContain('No heartbeats yet. The map stays empty until a seat checks in.')
+    expect(page).toContain('No live Métis seats yet. The map stays empty until a seat checks in. Empty is an empty world, not sample dots.')
     expect(page).not.toMatch(/Unique Visitors|visitor traffic|\$6,525|1,344/)
     expect(page).not.toMatch(/\b1\.2\.3\.4\b/)
     const dash = await handleRequest(

@@ -151,7 +151,7 @@ describe('quality bar: map data contract', () => {
       { store, now: NOW }
     )
     const emptyHtml = await emptyHome.text()
-    expect(emptyHtml).toContain('No heartbeats yet. The map stays empty until a seat checks in.')
+    expect(emptyHtml).toContain('No live Métis seats yet. The map stays empty until a seat checks in. Empty is an empty world, not sample dots.')
     expect(emptyHtml).toContain('not sample dots')
     expect(emptyHtml).not.toContain('class="dot"')
     expect(emptyHtml).not.toMatch(/Unique Visitors|visitor traffic|\$6,525|\b1,344\b/)
