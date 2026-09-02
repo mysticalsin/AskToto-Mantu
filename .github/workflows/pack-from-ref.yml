@@ -45,11 +45,15 @@ jobs:
           fetch-depth: 0
       # Intentionally no "tagged commit must be current origin/main" gate — that is why this
       # workflow exists. Still require package.json on git_ref to match release_tag.
+      # Actions ignores reserved GITHUB_* keys in env: (workflow_dispatch keeps
+      # GITHUB_REF_NAME=main). Export in the shell so check-version-parity.mjs sees v1.8.3.
       - name: Require release_tag to match package.json version
-        run: node scripts/check-version-parity.mjs
+        run: |
+          export GITHUB_REF_NAME="${{ inputs.release_tag }}"
+          node scripts/check-version-parity.mjs
         env:
           GITHUB_REF_NAME: ${{ inputs.release_tag }}
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
       - uses: actions/setup-node@v4
         with:
           node-version: 22.22.3
@@ -79,10 +83,12 @@ jobs:
       # see scripts/check-version-parity.mjs for the full failure mode. GITHUB_REF_NAME is the
       # workflow_dispatch release_tag (not the branch the workflow file lives on).
       - name: Verify tag matches package.json version
-        run: node scripts/check-version-parity.mjs
+        run: |
+          export GITHUB_REF_NAME="${{ inputs.release_tag }}"
+          node scripts/check-version-parity.mjs
         env:
           GITHUB_REF_NAME: ${{ inputs.release_tag }}
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
       # Restore the reviewed LGPL ffmpeg decoder binary (the manifest/license stay tracked in git) from
       # the ffmpeg-sidecar-v1 release in this repo. Cache the target binary directory so a
       # warm runner doesn't hit the GitHub API on every run; fall back to `gh release download` (built-in
@@ -240,10 +246,12 @@ jobs:
           fetch-depth: 0
       - name: Verify tag matches package.json version
         shell: bash
-        run: node scripts/check-version-parity.mjs
+        run: |
+          export GITHUB_REF_NAME="${{ inputs.release_tag }}"
+          node scripts/check-version-parity.mjs
         env:
           GITHUB_REF_NAME: ${{ inputs.release_tag }}
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN || secrets.GITHUB_TOKEN }}
       # Restore the reviewed LGPL ffmpeg decoder binary (the manifest/license stay tracked in git) from
       # the ffmpeg-sidecar-v1 release in this repo. Cache the target binary directory so a
       # warm runner doesn't hit the GitHub API on every run; fall back to `gh release download` (built-in
