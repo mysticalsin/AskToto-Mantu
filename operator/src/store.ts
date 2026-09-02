@@ -176,6 +176,8 @@ export function memoryStore(): OperatorStore {
       const prev = seats.get(row.device_id)
       seats.set(row.device_id, {
         ...row,
+        os: row.os && row.os !== 'unknown' ? row.os : prev?.os ?? row.os,
+        app_version: row.app_version || prev?.app_version || '',
         first_seen: prev?.first_seen ?? row.first_seen,
         country: row.country ?? prev?.country ?? null,
         city: row.city ?? prev?.city ?? null,
