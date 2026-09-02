@@ -26,10 +26,10 @@ export const KINETIC_RIPPLE_LIFE = 1.15
 export const KINETIC_GRID_SCENES = [
   'problem',
   'reveal',
+  'appearance',
   'setup',
   'personalize',
   'license',
-  'appearance',
   'ready'
 ] as const
 

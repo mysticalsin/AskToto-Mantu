@@ -98,7 +98,7 @@ export function OnboardingAppearance({
       }
     >
       <AppearanceLivePreview key={value} layout={value} />
-      <div className="flex flex-col items-center gap-2">
+      <div className="onboard-act4-heading flex flex-col items-center gap-2">
         <h2 className="onboard-act4-title">{ONBOARDING_APPEARANCE_HEADING}</h2>
         <p className="onboard-act4-lead">{ONBOARDING_APPEARANCE_LEAD}</p>
       </div>

@@ -127,8 +127,11 @@ ClickUp and Plane use official simple-icons SVG paths (CC0; trademarks remain wi
 
 See `docs/design/BRAIN-CONNECTORS.md`.
 
+## Onboarding flow
+See [ONBOARDING-FLOW.md](./ONBOARDING-FLOW.md). Order: hero → problem → reveal → appearance → setup → personalize → [license] → ready. Loading orb on Your setup. Act 4 heading contrast on KineticGrid.
+
 ## Onboarding appearance
-See [ONBOARDING-APPEARANCE.md](./ONBOARDING-APPEARANCE.md). Tony ask: Hidden (default, mouse to top, click to trigger) vs Island vs Bar. Live preview. Persist existing overlay. Hide 8×2 and Island hover stay out.
+See [ONBOARDING-APPEARANCE.md](./ONBOARDING-APPEARANCE.md). Tony ask: Hidden (default, mouse to top, click to trigger) vs Island vs Bar. Sits after the demo, before Your setup. Live preview. Persist existing overlay. Hide 8×2 and Island hover stay out.
 
 ## Starfield Close (onboarding bed)
 See [ONBOARDING-STARFIELD.md](./ONBOARDING-STARFIELD.md). **Superseded after the lady beat** by [ONBOARDING-KINETIC-GRID.md](./ONBOARDING-KINETIC-GRID.md). Starfield / space-with-moving-lights does not mount after Next. Overlay hide/island stay out.

@@ -4,41 +4,44 @@ import {
   sceneAfterAppearance,
   sceneAfterLicense,
   sceneAfterPersonalize,
+  sceneAfterReveal,
   sceneAfterSetup
 } from './onboarding-flow'
 
-describe('MQA-283 — Act 6 (Ready) tail re-point: setup always lands on personalize', () => {
-  it('never routes to license from setup any more (that hop moved after personalize)', () => {
+describe('MQA-283 — Ready stays the terminal act; appearance now sits after the demo', () => {
+  it('reveal continues into appearance', () => {
+    expect(sceneAfterReveal()).toBe('appearance')
+  })
+
+  it('appearance continues into setup', () => {
+    expect(sceneAfterAppearance()).toBe('setup')
+  })
+
+  it('setup continues into personalize', () => {
     expect(sceneAfterSetup()).toBe('personalize')
   })
-})
 
-describe('MQA-283 — personalize routes to license only when the gate is actually on', () => {
-  it('goes to appearance when licenseGateEnabled is off (the default)', () => {
-    expect(sceneAfterPersonalize(false)).toBe('appearance')
-    expect(sceneAfterPersonalize(undefined)).toBe('appearance')
-    expect(sceneAfterPersonalize(null)).toBe('appearance')
+  it('personalize goes to Ready when the license gate is off', () => {
+    expect(sceneAfterPersonalize(false)).toBe('ready')
+    expect(sceneAfterPersonalize(undefined)).toBe('ready')
+    expect(sceneAfterPersonalize(null)).toBe('ready')
   })
 
-  it('goes to license only when the gate is explicitly on', () => {
+  it('personalize goes to license only when the gate is on, never appearance', () => {
     expect(sceneAfterPersonalize(true)).toBe('license')
+    expect(sceneAfterPersonalize(true)).not.toBe('appearance')
+    expect(sceneAfterPersonalize(false)).not.toBe('appearance')
   })
 
-  it('never routes to a legacy provider/API-key step — no such scene exists in this union', () => {
-    expect(['hero', 'problem', 'reveal', 'setup', 'personalize', 'license', 'appearance', 'ready']).toContain(
+  it('license continues into Ready', () => {
+    expect(sceneAfterLicense()).toBe('ready')
+  })
+
+  it('never routes to a legacy provider/API-key step', () => {
+    expect(['hero', 'problem', 'reveal', 'appearance', 'setup', 'personalize', 'license', 'ready']).toContain(
       sceneAfterPersonalize(true)
     )
     expect(sceneAfterPersonalize(true)).not.toBe('provider')
-  })
-})
-
-describe('appearance ask sits between personalize/license and Ready', () => {
-  it('license continues into appearance', () => {
-    expect(sceneAfterLicense()).toBe('appearance')
-  })
-
-  it('appearance continues into ready', () => {
-    expect(sceneAfterAppearance()).toBe('ready')
   })
 })
 

@@ -16,7 +16,13 @@ import {
 } from './onboarding-appearance'
 import { shouldMountKineticGrid, KINETIC_GRID_SCENES } from './onboarding-kinetic-grid'
 import { shouldMountStarfield } from './onboarding-starfield-spec'
-import { sceneAfterAppearance, sceneAfterLicense, sceneAfterPersonalize } from './onboarding-flow'
+import {
+  sceneAfterAppearance,
+  sceneAfterLicense,
+  sceneAfterPersonalize,
+  sceneAfterReveal,
+  sceneAfterSetup
+} from './onboarding-flow'
 
 const appearanceLib = readFileSync(join(__dirname, './onboarding-appearance.ts'), 'utf8')
 const experience = readFileSync(join(__dirname, '../components/OnboardingExperience.tsx'), 'utf8')
@@ -108,18 +114,24 @@ describe('onboarding appearance — live preview, no lag', () => {
   })
 })
 
-describe('onboarding appearance — scene hop is a tail beat', () => {
-  it('sits after personalize/license and before Ready; KineticGrid is the bed, not skip', () => {
-    expect(sceneAfterPersonalize(false)).toBe('appearance')
+describe('onboarding appearance — scene hop sits after the demo', () => {
+  it('sits after the demo and before Your setup; KineticGrid is the bed, not skip', () => {
+    expect(sceneAfterReveal()).toBe('appearance')
+    expect(sceneAfterAppearance()).toBe('setup')
+    expect(sceneAfterSetup()).toBe('personalize')
+    expect(sceneAfterPersonalize(false)).toBe('ready')
     expect(sceneAfterPersonalize(true)).toBe('license')
-    expect(sceneAfterLicense()).toBe('appearance')
-    expect(sceneAfterAppearance()).toBe('ready')
+    expect(sceneAfterLicense()).toBe('ready')
     expect(KINETIC_GRID_SCENES).toContain('appearance')
+    expect(KINETIC_GRID_SCENES.indexOf('appearance')).toBeLessThan(KINETIC_GRID_SCENES.indexOf('setup'))
     expect(shouldMountKineticGrid('appearance')).toBe(true)
     expect(shouldMountStarfield('appearance')).toBe(false)
     expect(shouldMountStarfield('hero')).toBe(false)
     expect(shouldMountStarfield('reveal')).toBe(false)
-    expect(experience).toMatch(/GUIDED_SCENES: Scene\[\] = \['problem', 'reveal', 'setup', 'personalize'\]/)
+    expect(experience).toMatch(
+      /GUIDED_SCENES: Scene\[\] = \['problem', 'reveal', 'appearance', 'setup', 'personalize'\]/
+    )
+    expect(experience).toMatch(/setScene\(sceneAfterReveal\(\)\)/)
     expect(experience).toMatch(/scene === 'appearance'/)
     expect(experience).toMatch(/<OnboardingAppearance/)
     expect(experience).not.toMatch(/scene === 'skip'/)

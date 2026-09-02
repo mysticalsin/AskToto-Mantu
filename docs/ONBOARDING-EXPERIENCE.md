@@ -91,7 +91,7 @@ The narrative grew a sixth, terminal act closing out the flow the teardown's own
 uses (welcome→demo→config→vibe→license→ready):
 
 ```
-hero -> problem -> reveal -> setup -> personalize -> [license, only if licenseGateEnabled] -> ready -> finish
+hero -> problem -> reveal -> appearance -> setup -> personalize -> [license, only if licenseGateEnabled] -> ready -> finish
 ```
 
 - **Scene 6 — Ready.** A tasteful, Apple-grade closing beat: the Métis mark gets a one-shot conic
@@ -114,14 +114,12 @@ hero -> problem -> reveal -> setup -> personalize -> [license, only if licenseGa
   experience now finishes itself at Ready. `OnboardingV2`'s `phase` state dropped its `'provider'`
   member (`'experience' | 'legacy-full'` only); the legacy component is only ever entered now via the
   "Skip the tour" escape hatch, at its own slide 1, consent gate included.
-- **License order.** Act 5's license scene (MQA-281/282, `settings.licenseGateEnabled`, default off)
-  moved from between `setup` and `personalize` to between `personalize` and `ready`, matching the
-  teardown's own act order. It is still skipped entirely — not even rendered for a frame — whenever
-  the gate is off.
-- **Pure flow logic.** The three scene-transition rules governing this tail
-  (`sceneAfterSetup`/`sceneAfterPersonalize`/`sceneAfterLicense`) live in
-  `src/renderer/src/lib/onboarding-flow.ts`, independently unit-tested in
-  `onboarding-flow.test.ts` rather than only visible by reading JSX `onClick` handlers.
+- **Where it lives.** Appearance ("Where should Métis live?") sits right after the demo, then
+  Your setup, then personalize. License (when on) still sits after personalize. See
+  `docs/design/ONBOARDING-FLOW.md`.
+- **Pure flow logic.** Scene hops live in `src/renderer/src/lib/onboarding-flow.ts`
+  (`sceneAfterReveal` / `sceneAfterAppearance` / `sceneAfterSetup` / `sceneAfterPersonalize` /
+  `sceneAfterLicense`), independently unit-tested in `onboarding-flow.test.ts`.
 - **Replay in Settings.** The existing reset-onboarding footer action in `Settings.tsx` was
   relabelled "Replay onboarding" with honest confirm copy ("Replay onboarding from the start? Your
   settings won't change."). It patches `onboardingDone: false` and closes the Settings panel — the

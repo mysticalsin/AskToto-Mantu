@@ -33,7 +33,7 @@ https://d8j0ntlcm91z4.cloudfront.net/user_38xzZboKViGWJOttwIXH07lWA1P/hf_2026042
 ## After that beat — KineticGrid only (HARD)
 
 ```
-KINETIC_GRID_SCENES = problem | reveal | setup | personalize | license | appearance | ready
+KINETIC_GRID_SCENES = problem | reveal | appearance | setup | personalize | license | ready
 shouldMountKineticGrid(scene) === KINETIC_GRID_SCENES.includes(scene)
 shouldMountKineticGrid('hero') === false
 ```

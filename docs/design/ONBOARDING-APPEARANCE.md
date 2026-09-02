@@ -21,18 +21,20 @@ Tony asks Hidden vs Island vs Bar during onboarding, with a live preview and no 
 
 ## Placement (HARD)
 
-Tail beat, not a seventh narrative act.
+Guided act after the demo, before Your setup. See [ONBOARDING-FLOW.md](./ONBOARDING-FLOW.md).
 
 ```
-hero -> problem -> reveal -> setup -> personalize -> [license] -> appearance -> ready
+hero -> problem -> reveal -> appearance -> setup -> personalize -> [license] -> ready
 ```
 
-- `GUIDED_SCENES` stays `problem | reveal | setup | personalize`.
-- `sceneAfterPersonalize(false)` → `appearance` (was `ready`).
-- `sceneAfterLicense()` → `appearance`.
-- `sceneAfterAppearance()` → `ready`.
-- Skip screen includes the same picker + live preview, then Tell the room + Get started.
-- Starfield mounts: add `appearance` to `STARFIELD_SCENES`. Still skip `hero` and `reveal`.
+- `GUIDED_SCENES` is `problem | reveal | appearance | setup | personalize`.
+- `sceneAfterReveal()` → `appearance`.
+- `sceneAfterAppearance()` → `setup`.
+- `sceneAfterSetup()` → `personalize`.
+- `sceneAfterPersonalize(licenseGateEnabled)` → `license` or `ready`. Never appearance.
+- `sceneAfterLicense()` → `ready`.
+- There is no Skip screen.
+- KineticGrid mounts on appearance (and every scene after the lady beat). Starfield does not mount.
 
 ## Cards (HARD)
 
