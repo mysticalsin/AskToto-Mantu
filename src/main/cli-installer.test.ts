@@ -339,7 +339,7 @@ describe('installManagedCli — modern Claude Code native layout', () => {
 
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (input: RequestInfo | URL) => {
+      vi.fn(async (input: string | URL | Request) => {
         const url = String(input)
         if (url.includes(platformPathToken) && url.includes(`/${version}`)) {
           return registryResponse(platformMeta)

@@ -177,6 +177,7 @@ import {
   resolveEntitySlug
 } from './brain/corrections'
 import { publishEntity, removeFromWiki, publishAll, publishMeetingCard, removeWiki, wikiDir } from './brain/publish'
+import { discoverSecondBrains, inspectSecondBrainFolder } from './brain/discover'
 import { computeAttention } from './brain/attention'
 import {
   openIntelligenceWindow,
@@ -5131,6 +5132,31 @@ function registerIpc(): void {
     const current = getSettings().teamTranscriptFolders ?? []
     setSettings({ teamTranscriptFolders: current.filter((f) => f !== target) })
     return publicSettings()
+  })
+
+  // Hunt OneDrive/Documents/Desktop (etc.) for an existing `.brain/` / `wiki/` second brain so the
+  // user can reconnect it after a reinstall or folder reset — without a blind picker.
+  ipcMain.handle(IPC.discoverSecondBrains, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return []
+    return discoverSecondBrains(getSettings())
+  })
+  ipcMain.handle(IPC.connectSecondBrain, (e, folder: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false as const, error: 'Not signed in', settings: publicSettings() }
+    const target = typeof folder === 'string' ? folder.trim() : ''
+    if (!target) return { ok: false as const, error: 'No folder selected', settings: publicSettings() }
+    // Re-validate in main: never trust the renderer that a path is a second brain.
+    const hit = inspectSecondBrainFolder(target, resolveMeetingsFolder(getSettings()))
+    if (!hit) {
+      return {
+        ok: false as const,
+        error: 'That folder does not look like a Métis second brain',
+        settings: publicSettings()
+      }
+    }
+    setSettings({ meetingsFolder: hit.path })
+    return { ok: true as const, path: hit.path, settings: publicSettings() }
   })
 
   ipcMain.handle(IPC.openPath, (e) => {

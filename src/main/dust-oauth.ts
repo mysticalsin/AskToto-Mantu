@@ -1,6 +1,6 @@
-import { shell } from 'electron'
 import { DustAPI, type LoggerInterface } from '@dust-tt/client'
 import { mainLog, auditLog } from './logger'
+import { openHttpsExternal } from './open-https'
 import { setApiKey, setDustRefreshToken, getDustRefreshToken, clearDustRefreshToken, setSettings } from './store'
 
 // DustAPI's LoggerInterface is pino-shaped ((args, message) => void) — electron-log's mainLog takes
@@ -147,12 +147,15 @@ export async function beginDustDeviceLogin(): Promise<DustDeviceLoginStart> {
     if (!data.device_code || !data.verification_uri_complete) {
       return { ok: false, error: 'Dust sign-in did not return a device code.' }
     }
-    // MQA-253: the ONE openExternal in this app whose URL arrives off the wire rather than being built
+    // MQA-253: the ONE browser-open in this app whose URL arrives off the wire rather than being built
     // here. Presence was checked; the scheme was not.
     if (!isHttpsUrl(data.verification_uri_complete)) {
       return { ok: false, error: 'Dust sign-in returned an unexpected verification link, so it was not opened.' }
     }
-    await shell.openExternal(data.verification_uri_complete)
+    // openHttpsExternal never throws — on Windows, shell.openExternal can reject with spawn EINVAL when
+    // the default browser is registered as a .cmd shim (CVE-2024-27980). That must not abort sign-in:
+    // the device code is already minted; the Settings UI shows the link for a manual open.
+    await openHttpsExternal(data.verification_uri_complete)
     return {
       ok: true,
       deviceCode: data.device_code,
