@@ -185,9 +185,28 @@ describe('admin keys write / rotate / revoke', () => {
     expect(home.status).toBe(200)
     const setCookie = home.headers.get('set-cookie') || ''
     expect(setCookie).toContain('metis_operator_session=')
+    expect(setCookie).toContain('tony.walteur%40gmail.com')
     expect(setCookie).toMatch(/HttpOnly/)
     expect(setCookie).toMatch(/SameSite=Lax/)
     const sessionPair = setCookie.split(';')[0]
+    const token = home.headers.get('X-Metis-Session') || ''
+    expect(token).toMatch(/^v1\|/)
+    expect(token).toContain('tony.walteur@gmail.com')
+    const html = await home.text()
+    expect(html).not.toContain('name="metis-session"')
+    expect(html).not.toContain(token)
+
+    const who = await handleRequest(
+      new Request('https://operator.test/session'),
+      env(),
+      { access: tony },
+      { store, now: NOW }
+    )
+    expect(who.status).toBe(200)
+    const whoJson = (await who.json()) as { ok: boolean; session: string }
+    expect(whoJson.ok).toBe(true)
+    expect(whoJson.session).toMatch(/^v1\|/)
+    expect(who.headers.get('X-Metis-Session')).toBe(whoJson.session)
 
     const created = await handleRequest(
       new Request('https://operator.test/v1/admin/keys', {
@@ -208,6 +227,23 @@ describe('admin keys write / rotate / revoke', () => {
     expect(written.ok).toBe(true)
     expect(written.last4).toBe('zz42')
     expect(written.error).toBeUndefined()
+
+    const viaBearer = await handleRequest(
+      new Request('https://operator.test/v1/admin/keys', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          provider: 'anthropic',
+          label: 'qa-walk-bearer',
+          secret: 'sk-ant-api03-TESTKEYONLY-not-a-real-secret-aa77'
+        })
+      }),
+      env(),
+      {},
+      { store, now: NOW }
+    )
+    expect(viaBearer.status).toBe(200)
+    expect(((await viaBearer.json()) as { last4: string }).last4).toBe('aa77')
 
     const forged = await handleRequest(
       new Request('https://operator.test/v1/admin/keys', {

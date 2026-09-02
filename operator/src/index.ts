@@ -7,7 +7,8 @@ import {
   isConsolePath,
   redirectToAccess,
   resolveAdminIdentity,
-  mintSessionCookie,
+  mintSessionToken,
+  sessionCookieHeader,
   unauthorized,
   type AccessCtx
 } from './access'
@@ -105,8 +106,14 @@ export async function handleRequest(
       const res = await adminRoute(request, url, env, store, ident.email, now, opts)
       const secret = env.OPERATOR_PROMPT_KEY?.trim()
       if (!secret) return res
+      const token = await mintSessionToken(ident.email, now, secret)
       const headers = new Headers(res.headers)
-      headers.append('Set-Cookie', await mintSessionCookie(ident.email, now, secret))
+      headers.append('Set-Cookie', sessionCookieHeader(token))
+      headers.set('X-Metis-Session', token)
+      if (url.pathname === '/session') {
+        headers.set('content-type', 'application/json; charset=utf-8')
+        return new Response(JSON.stringify({ ok: true, session: token }), { status: 200, headers })
+      }
       return new Response(res.body, { status: res.status, headers })
     }
     if (ident.status === 'denied' || isAdminApiPath(url.pathname) || request.method !== 'GET') {
@@ -150,6 +157,7 @@ async function adminRoute(
   opts: HandleOpts = {}
 ): Promise<Response> {
   if (isConsolePath(url.pathname) && request.method === 'GET') {
+    if (url.pathname === '/session') return json({ ok: true })
     if (url.pathname === '/cloudflare/connect') return redirectToCloudflareLogin(request)
     if (url.pathname === '/cloudflare/callback') return redirectToKeysAfterCloudflareLogin()
     const dash = await buildDashboard(store, email, now, keyFlags(env), await cloudflareForDashboard(store, env, opts, now))
