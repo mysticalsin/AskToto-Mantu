@@ -15,15 +15,7 @@ This is a Windows-only Cahê pilot installer. It is intentionally separate from 
 1. Install `Metis-Windows-Cahe-Setup-<version>.exe`.
 2. Nothing to enter for Kimi. The installer carries Cahê's Kimi Code key (`resources/cahe/kimi.json`), and the first launch copies it once into the app's encrypted local profile. Verify under Settings → AI that Kimi Code shows as saved; if the pilot was built keyless (see **Build and verification**), paste the key there instead. Changing or removing the key later sticks — the seed never runs a second time.
 3. Complete the Windows microphone and screen-capture permissions prompts before testing live audio or screenshots.
-4. In Settings → Dust, select **Set up Dust automatically**. The app opens a console that installs `@dust-tt/dust-cli`, runs `dust login`, and asks the user to select a workspace. Leave that console open until it confirms the workspace selection; then return to Métis. Métis verifies/imports the session with `dust status` and loads the workspace agents.
-
-If Node.js/npm is missing, install a supported Node.js release first, then repeat the Dust setup. The manual equivalent is:
-
-```text
-npm install -g @dust-tt/dust-cli
-dust login
-dust status
-```
+4. In Settings → Dust, select **Set up Dust automatically**. Métis starts Dust's native browser sign-in (no Dust CLI, no system Node.js): your browser opens to approve access, then pick your workspace back in Métis. If the browser does not open, use the on-screen link / code.
 
 ## Build and verification
 
