@@ -14,7 +14,7 @@ import { renderOverviewMini10 } from './overview-cards'
 import { SPA_CSS_PATH, SPA_JS_PATH } from './spa/manifest'
 import { CRM_FILTER_ORDER } from './crm'
 import type { CloudflareOverview } from './cloudflare'
-import type { ConsoleEvent, DashboardPayload, ProfileRow } from './dashboard'
+import { ONLINE_MS, type ConsoleEvent, type DashboardPayload, type ProfileRow } from './dashboard'
 import { EXTRA_PAGES, FORBIDDEN_NAV, NAV_IDS, NAV_SECTIONS } from './nav'
 import { looksLikeSecret } from './redact'
 
@@ -211,6 +211,33 @@ function osIcon(os: string): string {
   return '<i class="ic-desk" title="device"></i>'
 }
 
+function osKind(os: string): 'mac' | 'windows' | 'linux' | 'desk' {
+  const k = os.toLowerCase()
+  if (k.includes('darwin') || k.includes('mac')) return 'mac'
+  if (k.includes('win')) return 'windows'
+  if (k.includes('linux')) return 'linux'
+  return 'desk'
+}
+
+function osBadge(os: string): string {
+  const kind = osKind(os)
+  const label = kind === 'desk' ? 'os' : kind
+  return `<span class="os-badge ${kind}" title="${esc(os || 'os')}">${label === 'windows' ? 'win' : label}</span>`
+}
+
+function seatStatus(lastSeen: number, now: number): { id: 'active' | 'paused' | 'inactive'; label: string } {
+  const age = now - lastSeen
+  if (age <= ONLINE_MS) return { id: 'active', label: 'Active' }
+  if (age <= 30 * 60 * 1000) return { id: 'paused', label: 'Paused' }
+  return { id: 'inactive', label: 'Inactive' }
+}
+
+function freshnessPct(lastSeen: number, now: number): number {
+  const age = Math.max(0, now - lastSeen)
+  const window = 30 * 60 * 1000
+  return Math.max(6, Math.round((1 - Math.min(age, window) / window) * 100))
+}
+
 function emptyPage(id: string, title: string, hook: string): string {
   return `<section class="page wrap" data-page="${id}" hidden>
     <div class="empty-card">
@@ -232,7 +259,7 @@ function dayLabel(ts: number): string {
 
 function renderEvents(events: ConsoleEvent[], now: number): string {
   const head = `<div class="event event-head" aria-hidden="true">
-      <div>Created at</div><div>Name</div><div>Profile</div><div>Country</div><div>OS</div>
+      <div>Created at</div><div>Name</div><div>Profile</div><div>Country</div><div>OS</div><div>Browser</div>
     </div>`
   if (!events.length) return `${head}<div class="empty">No events yet.</div>`
   const rows = events
@@ -240,38 +267,76 @@ function renderEvents(events: ConsoleEvent[], now: number): string {
       const name = looksLikeSecret(e.name) ? 'event' : e.name
       const profile = e.hostname || e.email || null
       const place = [e.city, e.country].filter((v) => v && !looksLikeSecret(v)).join(' · ')
-      const q = `${name} ${profile || ''} ${place} ${e.os || ''}`.toLowerCase()
+      const browser = e.browser && !looksLikeSecret(e.browser) ? e.browser : null
+      const q = `${name} ${profile || ''} ${place} ${e.os || ''} ${browser || ''}`.toLowerCase()
       return `<div class="event" data-event="${esc(e.id)}" data-q="${esc(q)}">
         <div class="event-time">${esc(ago(e.ts, now))}</div>
         <div class="event-name">${esc(name)}</div>
         <div class="event-profile">${field(profile)}</div>
         <div class="event-country">${place ? esc(place) : MISSING}</div>
         <div class="event-os">${e.os ? `${osIcon(e.os)} ${esc(e.os)}` : MISSING}</div>
+        <div class="event-os">${browser ? esc(browser) : MISSING}</div>
       </div>`
     })
     .join('')
   return `${head}${rows}`
 }
 
-function renderProfiles(rows: ProfileRow[], osFilter?: string): string {
-  const filtered = osFilter
-    ? rows.filter((r) => (osFilter === 'darwin' ? r.os === 'darwin' : r.os === 'win' || r.os === 'win32' || r.os === 'windows'))
-    : rows
-  if (!filtered.length) return '<div class="empty">No seats on the fleet yet.</div>'
-  const body = filtered
-    .map(
-      (r) => `<tr data-country="${esc(r.country || '')}" data-os="${esc(r.os)}">
-        <td>${field(r.hostname)}</td>
-        <td>${field(r.email)}</td>
-        <td class="muted">${esc(r.os)}</td>
-        <td class="muted">${esc(r.appVersion)}</td>
-        <td class="muted">${esc(r.country || MISSING)}${r.city ? ` · ${esc(r.city)}` : ''}</td>
-        <td class="muted">${esc(when(r.lastSeen))}</td>
-        <td>${r.live ? '<span class="pill up">live</span>' : '<span class="muted">idle</span>'}</td>
-      </tr>`
-    )
+function renderSeatTable(rows: ProfileRow[], events: ConsoleEvent[], now: number): string {
+  const head = `<div class="seat-head" aria-hidden="true">
+      <div>No</div><div>Seat / computer</div><div>Location</div><div>Identity</div><div>Last seen</div><div>Live</div><div>Status</div>
+    </div>`
+  if (!rows.length) {
+    return `<div class="seat-card" data-seat-table>${head}<div class="empty" style="padding:28px 16px">No seats on the fleet yet. Heartbeats will fill this. Empty is an empty card, not sample servers.</div>
+    <div class="seat-overlay" id="seat-overlay" hidden>
+      <div class="row" style="justify-content:space-between">
+        <h4 data-seat-title>Seat</h4>
+        <button type="button" id="seat-overlay-close">Close</button>
+      </div>
+      <div data-seat-body></div>
+    </div>
+  </div>`
+  }
+  const body = rows
+    .map((r, i) => {
+      const status = seatStatus(r.lastSeen, now)
+      const name = r.hostname || r.email || `seat ${r.device}`
+      const identity = r.email || r.hostname || MISSING
+      const loc = [r.city, r.country].filter((v) => v && !looksLikeSecret(v)).join(' · ')
+      const meter = freshnessPct(r.lastSeen, now)
+      const recent = events
+        .filter((e) => (r.hostname && e.hostname === r.hostname) || (r.email && e.email === r.email))
+        .slice(0, 6)
+        .map((e) => `${ago(e.ts, now)} · ${looksLikeSecret(e.name) ? 'event' : e.name}`)
+        .join(' | ')
+      const detail = [
+        `OS ${r.os || MISSING} · ${r.appVersion || MISSING}`,
+        `License ${r.license && !looksLikeSecret(r.license) ? r.license : MISSING} · IP ${MISSING}`,
+        `Last seen ${when(r.lastSeen)}`,
+        recent ? `Recent: ${recent}` : 'No recent heartbeats for this seat.'
+      ].join(' · ')
+      const no = String(i + 1).padStart(2, '0')
+      return `<div class="seat-row" data-seat-row data-country="${esc(r.country || '')}" data-os="${esc(r.os)}" data-seat-name="${esc(name)}" data-seat-detail="${esc(detail)}">
+        <div class="seat-no">${no}</div>
+        <div class="seat-name">${osBadge(r.os)} ${field(r.hostname)}</div>
+        <div class="seat-loc">${r.country ? `<span class="seat-flag">${esc(r.country)}</span>` : ''}${loc ? esc(loc) : MISSING}</div>
+        <div>${identity === MISSING ? MISSING : esc(identity)}</div>
+        <div class="muted">${esc(ago(r.lastSeen, now))}</div>
+        <div class="seat-meter" title="Heartbeat freshness"><i style="width:${meter}%"></i></div>
+        <div><span class="seat-status ${status.id}">${status.label}</span></div>
+      </div>`
+    })
     .join('')
-  return `<table><thead><tr><th>Computer</th><th>SSO email</th><th>OS</th><th>Version</th><th>Country</th><th>Seen</th><th></th></tr></thead><tbody>${body}</tbody></table>`
+  return `<div class="seat-card" data-seat-table>
+    ${head}${body}
+    <div class="seat-overlay" id="seat-overlay" hidden>
+      <div class="row" style="justify-content:space-between">
+        <h4 data-seat-title>Seat</h4>
+        <button type="button" id="seat-overlay-close">Close</button>
+      </div>
+      <div data-seat-body></div>
+    </div>
+  </div>`
 }
 
 function renderLicenses(rows: ProfileRow[]): string {
@@ -352,6 +417,33 @@ export function renderConsole(data: DashboardPayload): string {
       </tr>`
     )
     .join('')
+  const notifyRows = [
+    ...data.crm.rows.map((r) => {
+      const seat = data.profiles.find((p) => r.device && p.device === r.device)
+      return `<tr data-status="${esc(r.status)}">
+        <td>${esc(r.title)}</td>
+        <td class="muted">${esc(r.connector)}</td>
+        <td class="muted">${esc(seat?.country || MISSING)}</td>
+        <td class="muted">${esc(seat?.os || MISSING)}</td>
+        <td class="muted">${MISSING}</td>
+        <td class="muted">${field(seat?.hostname || seat?.email)}</td>
+        <td class="muted">${esc(ago(r.ts, data.now))}</td>
+      </tr>`
+    }),
+    ...data.proposals
+      .filter((p) => p.status === 'pending' || p.status === 'draft')
+      .map(
+        (p) => `<tr>
+        <td>${esc(p.skill_id)} ${esc(p.status)}</td>
+        <td class="muted">skill</td>
+        <td class="muted">${MISSING}</td>
+        <td class="muted">${MISSING}</td>
+        <td class="muted">${MISSING}</td>
+        <td class="muted">${field(p.created_by)}</td>
+        <td class="muted">${esc(ago(p.created_at, data.now))}</td>
+      </tr>`
+      )
+  ].join('')
   void FORBIDDEN_NAV
   void NAV_IDS
   void EXTRA_PAGES
@@ -520,21 +612,24 @@ export function renderConsole(data: DashboardPayload): string {
     </section>
 
     <section class="page wrap" data-page="sessions" hidden>
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Sessions</p>
-        <div class="sub muted" style="padding-bottom:8px">Seats that checked in. Computer and SSO email from the seat. Missing fields are ${MISSING}, never invented.</div>
-        ${
-          data.profiles.length
-            ? renderProfiles(data.profiles)
-            : '<div class="empty">No seat sessions in this window. Heartbeats will fill this.</div>'
-        }
-      </article>
+      <div class="ev-head">
+        <div>
+          <h3 class="rt-h">Sessions</h3>
+          <p class="muted ev-sub">Seats that checked in. Computer and SSO email from the seat. Missing fields are ${MISSING}, never invented.</p>
+        </div>
+        <span class="live-events"><i></i>${data.profiles.length} seats</span>
+      </div>
+      ${renderSeatTable(data.profiles, data.events, data.now)}
     </section>
 
     <section class="page wrap" data-page="notifications" hidden>
+      <div class="nt-head">
+        <div>
+          <h3 class="rt-h">Notifications</h3>
+          <p class="muted nt-sub">Failed CRM sends and pending skill diffs. Honest empty. Never fake alerts.</p>
+        </div>
+      </div>
       <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Notifications</p>
-        <div class="sub muted" style="padding-bottom:8px">Failed CRM sends and pending skill diffs. Honest empty. Never fake alerts.</div>
         <div class="crm-kpis">
           ${kpiCard({ title: 'Landed today', value: String(landing.landedToday), sub: 'success with a CRM id when the connector returned one', spark: '' })}
           ${kpiCard({ title: 'Fail rate', value: failRate, sub: 'failed + expired over attempted', spark: '' })}
@@ -546,10 +641,19 @@ export function renderConsole(data: DashboardPayload): string {
           <button class="tab on" data-crm-filter="all">All ${data.crm.rows.length}</button>
           ${funnelTabs}
         </div>
+        <table id="nt-table">
+          <thead><tr><th>Title</th><th>Integration</th><th>Country</th><th>OS</th><th>Browser</th><th>Profile</th><th>Created at</th></tr></thead>
+          <tbody>
+            ${
+              notifyRows ||
+              `<tr data-nt-empty><td colspan="7" class="empty">No data. We could not find any notifications here yet.</td></tr>`
+            }
+          </tbody>
+        </table>
         ${
           crmRows
-            ? `<table id="crm-table"><thead><tr><th>Status</th><th>Title</th><th>Connector</th><th>Remote</th><th>Try</th><th>Meeting</th><th>When</th><th></th></tr></thead><tbody>${crmRows}</tbody></table>`
-            : '<div class="empty">No failed CRM sends or pending skill diffs to surface.</div>'
+            ? `<table id="crm-table" hidden><thead><tr><th>Status</th><th>Title</th><th>Connector</th><th>Remote</th><th>Try</th><th>Meeting</th><th>When</th><th></th></tr></thead><tbody>${crmRows}</tbody></table>`
+            : ''
         }
       </article>
     </section>

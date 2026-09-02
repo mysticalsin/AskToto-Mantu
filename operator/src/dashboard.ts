@@ -182,6 +182,7 @@ export interface ConsoleEvent {
   country: string | null
   city: string | null
   os: string | null
+  browser: string | null
   chips: SafeChip[]
 }
 
@@ -435,6 +436,7 @@ function eventFromStored(row: EventRow, seatsById: Map<string, SeatRow>): Consol
     country: row.country && !looksLikeSecret(row.country) ? row.country : seat?.country || null,
     city: seat?.city && !looksLikeSecret(seat.city) ? seat.city : null,
     os: seat?.os && seat.os !== 'unknown' && !looksLikeSecret(seat.os) ? seat.os : null,
+    browser: null,
     chips: safeChips({
       country: row.country,
       os: seat?.os,
@@ -757,6 +759,7 @@ export async function buildDashboard(
             country: seat?.country || null,
             city: seat?.city || null,
             os: seat?.os && seat.os !== 'unknown' ? seat.os : null,
+            browser: null,
             chips: safeChips({
               mode: a.mode,
               provider: a.provider,
@@ -777,6 +780,7 @@ export async function buildDashboard(
             country: seat?.country || null,
             city: seat?.city || null,
             os: seat?.os && seat.os !== 'unknown' ? seat.os : null,
+            browser: null,
             chips: safeChips({
               status: r.status,
               connector: r.connector,

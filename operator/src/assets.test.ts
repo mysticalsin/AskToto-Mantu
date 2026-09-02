@@ -17,11 +17,15 @@ function env(): Env {
 
 describe('hashed SPA assets — fail loud if a stub ships', () => {
   it('bundle is real Shoey chrome, not the 97-byte METIS_OPERATOR stub', () => {
-    expect(SPA_JS.length).toBeGreaterThan(2000)
+    expect(SPA_JS.length).toBeGreaterThan(8000)
     expect(SPA_CSS.length).toBeGreaterThan(2000)
     expect(SPA_JS).toMatch(/Shoey|overview|realtime|events/i)
     expect(SPA_JS).toContain("requested === 'map' ? 'realtime'")
     expect(SPA_JS).toContain('window.route = route')
+    expect(SPA_JS).toContain('#E5E7EB')
+    expect(SPA_JS).toContain('Created at')
+    expect(SPA_JS).toContain('paintShoeyMap')
+    expect(SPA_JS).not.toMatch(/\bSEO\b/)
     expect(SPA_JS).toContain('key-add')
     expect(() => new Function(SPA_JS)).not.toThrow()
     expect(SPA_JS).not.toMatch(/self\.METIS_OPERATOR = self\.METIS_OPERATOR/)
@@ -56,6 +60,7 @@ describe('hashed SPA assets — fail loud if a stub ships', () => {
     const cssBody = await css.text()
     expect(cssBody.length).toBeGreaterThan(97)
     expect(cssBody).toContain('185px')
+    expect(cssBody).toContain('#E5E7EB')
     expect(cssBody).not.toMatch(/cloudflareaccess/)
 
     const index = await handleRequest(new Request(`https://operator.test${SPA_INDEX_JS_PATH}`), env(), {}, {

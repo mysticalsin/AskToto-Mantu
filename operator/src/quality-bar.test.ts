@@ -199,6 +199,7 @@ describe('quality bar: map data contract', () => {
     )
     const html = await live.text()
     expect(html).toContain('data-iso="CA"')
+    expect(html).toContain('#E5E7EB')
     expect(html).not.toContain('203.0.113.9')
     expect(html).not.toContain('SampleCity')
     const dash = (await (
