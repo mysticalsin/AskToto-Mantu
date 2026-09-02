@@ -17,8 +17,12 @@ import {
   hoverRestTop,
   hoverRestHeight,
   hoverWatchRestRect,
+  exclusiveMayUseSimpleFullScreen,
   exclusiveOnboardingBounds,
+  EXCLUSIVE_ONBOARDING_BACKGROUND,
   onboardingFitsWorkArea,
+  overlayWindowChrome,
+  OVERLAY_TRANSPARENT_BACKGROUND,
   parkAfterExclusiveOnboarding,
   overlayRestSize,
   isForbiddenMidFlowCard,
@@ -620,6 +624,7 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(index).toMatch(/function applyExclusiveOnboardingStage/)
     expect(index).toMatch(/function exitExclusiveOnboardingStage/)
     expect(index).toMatch(/exclusiveOnboardingBounds/)
+    expect(index).toMatch(/exclusiveMayUseSimpleFullScreen\(overlayWindowTransparent\)/)
     expect(index).toMatch(/setSimpleFullScreen\(true\)/)
     expect(index).toMatch(/!cur\.onboardingDone && next\.onboardingDone/)
     expect(index).toMatch(/exitExclusiveOnboardingStage\(\)/)
@@ -710,7 +715,24 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     const stageCss = css.slice(css.indexOf('.onboard-stage {'))
     expect(stageCss).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?animation:\s*none/)
     expect(stageCss).not.toMatch(/#3a2416|#5a3218|#2c1810|#f4b060/)
-    expect(index).toMatch(/backgroundColor: onboardingLive \? '#3A0B6B'/)
+    expect(overlayWindowChrome(true)).toEqual({
+      transparent: false,
+      backgroundColor: EXCLUSIVE_ONBOARDING_BACKGROUND,
+      fullscreenable: true,
+      roundedCorners: false
+    })
+    expect(overlayWindowChrome(false)).toEqual({
+      transparent: true,
+      backgroundColor: OVERLAY_TRANSPARENT_BACKGROUND,
+      fullscreenable: false,
+      roundedCorners: true
+    })
+    expect(exclusiveMayUseSimpleFullScreen(true)).toBe(false)
+    expect(exclusiveMayUseSimpleFullScreen(false)).toBe(true)
+    expect(index).toMatch(/overlayWindowChrome\(onboardingLive\)/)
+    expect(index).toMatch(/transparent: chrome\.transparent/)
+    expect(index).toMatch(/backgroundColor: chrome\.backgroundColor/)
+    expect(index).not.toMatch(/transparent:\s*true/)
   })
 })
 

@@ -164,7 +164,11 @@ import {
   recenterXForWidth,
   refitToDisplay as islandRefitToDisplay,
   exclusiveOnboardingBounds,
+  exclusiveMayUseSimpleFullScreen,
+  EXCLUSIVE_ONBOARDING_BACKGROUND,
   firstPaintOverlayBounds,
+  overlayWindowChrome,
+  OVERLAY_TRANSPARENT_BACKGROUND,
   hoverRestTop,
   hoverWatchRestRect,
   overlayRestSize,
@@ -1607,7 +1611,43 @@ function onboardingExclusiveLive(): boolean {
   }
 }
 
+/**
+ * Constructor `transparent` cannot be flipped later (Electron 39). Exclusive must be created
+ * opaque; overlay after onboardingDone must be created transparent. Recreate when they disagree.
+ */
+let overlayWindowTransparent = true
+let emittedAppStarted = false
+
+function leaveExclusiveOsFullscreen(w: BrowserWindow): void {
+  try {
+    if (typeof w.isSimpleFullScreen === 'function' && w.isSimpleFullScreen()) w.setSimpleFullScreen(false)
+    if (typeof w.isKiosk === 'function' && w.isKiosk()) w.setKiosk(false)
+  } catch {
+    /* headless */
+  }
+}
+
+/** Destroy the current overlay and build one whose constructor chrome matches onboardingExclusiveLive(). */
+function recreateOverlayWindow(): void {
+  const dying = win
+  win = null
+  if (dying && !dying.isDestroyed()) {
+    leaveExclusiveOsFullscreen(dying)
+    try {
+      dying.destroy()
+    } catch {
+      /* already gone */
+    }
+  }
+  createWindow()
+}
+
 function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDisplayMatching(w.getBounds())): void {
+  // Totos-Mac 044c0f1: simple-fullscreen on a transparent window is a 3600×2338 RGBA(0,0,0,0) void.
+  if (overlayWindowTransparent) {
+    recreateOverlayWindow()
+    return
+  }
   stopOverlayCursorWatch()
   const stage = exclusiveOnboardingBounds(display.bounds, display.workArea)
   currentWidth = stage.width
@@ -1621,15 +1661,23 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
   }
   try {
     w.setFullScreenable?.(true)
-    w.setBackgroundColor('#3A0B6B')
+    w.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
     w.setBounds(stage)
   } catch {
     /* headless / already destroyed */
   }
   try {
-    if (process.platform === 'darwin' && typeof w.setSimpleFullScreen === 'function') {
+    if (
+      exclusiveMayUseSimpleFullScreen(overlayWindowTransparent) &&
+      process.platform === 'darwin' &&
+      typeof w.setSimpleFullScreen === 'function'
+    ) {
       if (!w.isSimpleFullScreen()) w.setSimpleFullScreen(true)
-    } else if (process.platform === 'win32' && typeof w.setKiosk === 'function') {
+    } else if (
+      exclusiveMayUseSimpleFullScreen(overlayWindowTransparent) &&
+      process.platform === 'win32' &&
+      typeof w.setKiosk === 'function'
+    ) {
       if (!w.isKiosk()) w.setKiosk(true)
     }
   } catch {
@@ -1640,15 +1688,14 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
 /** After onboardingDone only: leave exclusive fullscreen and park hide/island peek (never 880×816). */
 function exitExclusiveOnboardingStage(): void {
   if (!win || win.isDestroyed()) return
-  try {
-    if (typeof win.isSimpleFullScreen === 'function' && win.isSimpleFullScreen()) win.setSimpleFullScreen(false)
-    if (typeof win.isKiosk === 'function' && win.isKiosk()) win.setKiosk(false)
-  } catch {
-    /* headless */
+  leaveExclusiveOsFullscreen(win)
+  if (!overlayWindowTransparent) {
+    recreateOverlayWindow()
+    return
   }
   try {
     win.setFullScreenable?.(false)
-    win.setBackgroundColor('#00000000')
+    win.setBackgroundColor(OVERLAY_TRANSPARENT_BACKGROUND)
   } catch {
     /* ignore */
   }
@@ -1693,7 +1740,10 @@ function createWindow(): void {
   //
   // Emitted here rather than at app-ready because reaching createWindow means the main process survived
   // module load, bytecode load, and boot — which is exactly the class of failure that shipped DOA twice.
-  auditLog('app.started', { version: app.getVersion(), platform: process.platform, arch: process.arch })
+  if (!emittedAppStarted) {
+    auditLog('app.started', { version: app.getVersion(), platform: process.platform, arch: process.arch })
+    emittedAppStarted = true
+  }
   // Crash/recovery guard: render-process-gone recovery and the boot-retry path both rebuild the window
   // from scratch, but isMinimized/currentWidth are module-level state that otherwise survives from before
   // the crash. If the overlay had been collapsed to the mini-pill (currentWidth === PILL_WIDTH) at the
@@ -1726,26 +1776,28 @@ function createWindow(): void {
     lastBarHeight = BAR_HEIGHT
     islandResting = overlayUsesHover(layout)
   }
+  const chrome = overlayWindowChrome(onboardingLive)
+  overlayWindowTransparent = chrome.transparent
   win = new BrowserWindow({
     width: firstPaint.width,
     height: firstPaint.height,
     x: firstPaint.x,
     y: firstPaint.y,
     frame: false,
-    transparent: true,
+    transparent: chrome.transparent,
     hasShadow: false, // panel paints its own shadow; window shadow would box the transparent area
     resizable: false,
     movable: true,
     skipTaskbar: true,
-    fullscreenable: onboardingLive,
+    fullscreenable: chrome.fullscreenable,
     maximizable: false,
     minimizable: false,
-    roundedCorners: !onboardingLive,
+    roundedCorners: chrome.roundedCorners,
     // macOS default min height can be ~44. Hide park is 8×2; without this, a display
     // move reports 8×44 (Tony listwins) even after clampHeight lets 2px through.
     minWidth: 1,
     minHeight: 1,
-    backgroundColor: onboardingLive ? '#3A0B6B' : '#00000000',
+    backgroundColor: chrome.backgroundColor,
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),

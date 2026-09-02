@@ -133,6 +133,9 @@ See [ONBOARDING-APPEARANCE.md](./ONBOARDING-APPEARANCE.md). Tony ask: Hidden (de
 ## Starfield Close (onboarding bed)
 See [ONBOARDING-STARFIELD.md](./ONBOARDING-STARFIELD.md). Galaxy from frame one. Overlay hide/island stay out.
 
+## Exclusive onboarding window (opaque)
+While `!onboardingDone`, the BrowserWindow is **opaque** Mantu purple (`transparent: false`, `#3A0B6B`). Mac `setSimpleFullScreen` on a transparent window composites as a dead black void (Totos-Mac 044c0f1). After `onboardingDone` the overlay is transparent again. Replay re-enters opaque exclusive and halts Goldberg first.
+
 ## Thinking orbs
 See [THINKING-ORB.md](./THINKING-ORB.md). Caption then sphere. Word first.
 

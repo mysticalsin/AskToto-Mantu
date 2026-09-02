@@ -74,6 +74,8 @@ Hide and island: hover or click expands **down** from the camera island to the f
 
 When `onboardingDone` flips true, `exitExclusiveOnboardingStage` leaves exclusive fullscreen and parks the default **hide** rest (or island / bar if Settings already chose one). Never an **880×816** mid-flow card. Never a 120×50 pill for hide. Re-apply `setAlwaysOnTop(true, 'screen-saver')` (the level exclusive used). Hide parks a 1–8px transparent rest; `hoverWatchRestRect` still covers the camera island (`y = display.bounds.y`, width = `notchWidth` ~180–250, height = camera housing only). Island is the peek capsule at the same Y. Bar keeps `workArea.y + margin`. Auto-resize must not grow hide into a 44px/103px slab or 880×816. Then destroy the exclusive stage. Do not leave layer 0. Start the cursor watch when layout is hide/island.
 
+Exclusive onboarding is an **opaque** Mantu purple window (`transparent: false`, `#3A0B6B`). Mac `setSimpleFullScreen` on a transparent `BrowserWindow` composites as a dead black void (Totos-Mac 044c0f1, 3600×2338 RGBA(0,0,0,0)). After `onboardingDone` the overlay is transparent again. Replay re-enters opaque exclusive and halts Goldberg first.
+
 ## Onboarding
 
 Every act stays on one **exclusive fullscreen** until `onboardingDone`. Then destroy that stage and leave the small island. Do not shrink to a mid-flow card.
