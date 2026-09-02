@@ -22,8 +22,8 @@ const experience = readFileSync(join(__dirname, '../components/OnboardingExperie
 const component = readFileSync(join(__dirname, '../components/OnboardingAppearance.tsx'), 'utf8')
 const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
 const design = readFileSync(join(__dirname, '../../../../DESIGN.md'), 'utf8')
-const geometry = readFileSync(join(__dirname, '../../main/island/geometry.ts'), 'utf8')
-const indexMain = readFileSync(join(__dirname, '../../main/index.ts'), 'utf8')
+const geometry = readFileSync(join(__dirname, '../../../main/island/geometry.ts'), 'utf8')
+const indexMain = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
 
 describe('onboarding appearance — persist existing overlay', () => {
   it('seeds Hidden on a fresh install and keeps a saved island or bar', () => {
@@ -125,12 +125,12 @@ describe('onboarding appearance — scene hop is a tail beat', () => {
 })
 
 describe('onboarding appearance — overlay park and Island hover stay out', () => {
-  it('does not edit Hide 8x2, Island peek, or PR 94 park leftover', () => {
+  it('does not edit Hide 8x2, Island peek, or overlay park leftover', () => {
     expect(geometry).toMatch(/export const OVERLAY_HIDE_PARK = \{ width: 8, height: 2 \}/)
     expect(geometry).toMatch(/export const OVERLAY_ISLAND_PEEK = \{ width: 132, height: 15 \}/)
     expect(design).toMatch(/Onboarding appearance \(Tony ask\)/)
     expect(appearanceLib).not.toMatch(/restoreParkAfterShow|OVERLAY_HIDE_PARK|hoverWatchRestRect/)
     expect(component).not.toMatch(/src\/main\/island/)
-    expect(indexMain).toMatch(/restoreParkAfterShow/)
+    expect(indexMain).not.toMatch(/from '\.\/onboarding-appearance'/)
   })
 })

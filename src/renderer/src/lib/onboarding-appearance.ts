@@ -1,5 +1,5 @@
 /**
- * Onboarding appearance picker — Hidden / Island / Bar.
+ * Onboarding appearance picker. Hidden, Island, Bar.
  * Contract: docs/design/ONBOARDING-APPEARANCE.md and DESIGN.md (Onboarding appearance).
  * Pure helpers so the ask, persist, and live preview can be tested without the exclusive stage.
  */
@@ -55,7 +55,6 @@ export function appearancePreviewInitialPhase(layout: OverlayLayout): Appearance
   return layout === 'bar' ? 'settled' : 'rest'
 }
 
-/** Hidden rest is empty. Island rest is the camera/notch square. Bar is always the mock bar. */
 export function appearancePreviewRestKind(layout: OverlayLayout): 'empty' | 'island' | 'bar' {
   if (layout === 'hide') return 'empty'
   if (layout === 'island') return 'island'
