@@ -76,7 +76,15 @@ import { KineticGrid } from './onboarding/KineticGrid'
 import { shouldMountKineticGrid } from '../lib/onboarding-kinetic-grid'
 import { isWindows } from '../lib/keys'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
-import { canMarkOnboardingDone, sceneAfterAppearance, sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
+import {
+  canMarkOnboardingDone,
+  sceneAfterAppearance,
+  sceneAfterLicense,
+  sceneAfterPersonalize,
+  sceneAfterReveal,
+  sceneAfterSetup,
+  type OnboardingScene
+} from '../lib/onboarding-flow'
 import { appearanceSettingsPatch, seedOnboardingAppearance } from '../lib/onboarding-appearance'
 import { createOnboardingMusicBed, haltAllOnboardingAudio } from '../lib/onboarding-music'
 import { closeOnboardingPortal, disposePortalAudio, playBarLand, playPortalOpen, requestBarLand } from '../lib/onboarding-portal'
@@ -132,17 +140,13 @@ const PROBLEM_STORY: string[] = [
   '…and the moment passes.'
 ]
 
-// 'license' (Act 5, MQA-281/282) is deliberately NOT in GUIDED_SCENES below — see ActProgress's
-// comment. It now appears between 'personalize' and 'ready' (Act 6's re-point, MQA-283, moved it from
-// its original setup->license->personalize position to match the six-act canonical order — see
-// onboarding-flow.ts), and only when settings.licenseGateEnabled is true (the non-default,
-// self-hosted-license-server case); every other user's flow is byte-for-byte the four-scene guided
-// sequence the MQA-201 regression test pins, now closed out by the 'ready' bookend below.
+// 'license' is deliberately NOT in GUIDED_SCENES. It only appears after personalize when
+// settings.licenseGateEnabled is true. Dots track the guided acts Tony walks:
+// problem → reveal → appearance → setup → personalize. See onboarding-flow.ts.
 type Scene = OnboardingScene
 
-// Hero and Ready are the bookends, not "steps" — like Onboarding.tsx's own slide 1/6 bookends, the dots
-// only track the guided acts in between.
-const GUIDED_SCENES: Scene[] = ['problem', 'reveal', 'setup', 'personalize']
+// Hero and Ready are the bookends. Dots track the guided acts in between.
+const GUIDED_SCENES: Scene[] = ['problem', 'reveal', 'appearance', 'setup', 'personalize']
 
 // Lives in its own reserved-height row above the scene content (see the render below) rather than an
 // absolute overlay — an overlay collided with scene headings that sit close to the top on taller scenes
@@ -276,7 +280,7 @@ function HeroWelcome({ onBegin }: { onBegin: () => void }): JSX.Element {
 // 'restart' = permission is actually granted, but this same-session ScreenCaptureKit handle never saw it
 // (macOS only applies a fresh Screen Recording grant to the NEXT launch) — needs a relaunch, not a prompt.
 // 'blocked' = the OS holds an explicit Deny, which no prompt can undo — only the privacy pane can.
-export type SetupRowState = 'checking' | 'ready' | 'action' | 'blocked' | 'restart' | 'skipped'
+export type SetupRowState = 'checking' | 'loading' | 'ready' | 'action' | 'blocked' | 'restart' | 'skipped'
 
 export interface SetupRow {
   key: string
@@ -338,14 +342,19 @@ export function localModelRowStatus(
     }
   }
   if (model.unavailableReason === 'downloading') {
-    const pct = Math.round((model.downloadProgress ?? 0) * 100)
-    return { state: 'action', detail: `Downloading ${pct}%`, progress: model.downloadProgress }
+    const p = model.downloadProgress
+    const real = p != null && p > 0 && p < 1
+    return {
+      state: 'loading',
+      detail: real ? `Downloading ${Math.round(p * 100)}%` : 'Downloading…',
+      progress: p
+    }
   }
   if (model.unavailableReason === 'download-failed') {
     return { state: 'action', detail: 'Download paused. Métis retries when the network is back.' }
   }
   if (model.unavailableReason === 'not-downloaded') {
-    return { state: 'action', detail: 'Starting the on-device download…' }
+    return { state: 'loading', detail: 'Starting the on-device download…' }
   }
   if (model.ready) return { state: 'ready', detail: 'On-device model ready' }
   return { state: 'checking', detail: 'Checking the on-device model…' }
@@ -372,14 +381,21 @@ export function asrAssetsRowStatus(
       detail: s.error || s.label || 'Could not get the transcription files. Try again.'
     }
   }
-  if (s.status === 'downloading') {
+  if (s.status === 'downloading' || s.status === 'idle') {
     return {
-      state: 'action',
+      state: 'loading',
       detail: s.label || 'Getting transcription files…',
       progress: s.progress
     }
   }
-  return { state: 'action', detail: s.label || 'Getting transcription files…' }
+  return { state: 'loading', detail: s.label || 'Getting transcription files…', progress: s.progress }
+}
+
+/** AgentStatus percent is 0–100. Only a real open interval (0, 1) becomes a determinate %. */
+export function setupRowLoadingPercent(progress: number | null | undefined): number | undefined {
+  if (progress == null || !Number.isFinite(progress)) return undefined
+  if (progress <= 0 || progress >= 1) return undefined
+  return Math.round(progress * 100)
 }
 
 export function asrRowNeedsRetry(row: Pick<SetupRow, 'state' | 'detail'>): boolean {
@@ -410,10 +426,9 @@ export function asrStatusIsReady(status: AsrAssetsStatus | null | undefined): bo
 
 /** Act 3 — "scan first, then present a completed configuration": two DIFFERENT claims the scene makes,
  *  kept as one pure derivation so both stay honest and are each independently testable.
- *  `scanDone` only means every row has left 'checking' — safe to stop showing spinners and reveal the
- *  Listen-only caveat, which is true whether or not anything still needs action.
- *  `allReady` is the stronger "nothing to configure" claim (MQA-201's rule: never true from a row that
- *  never actually resolved, and never true while something still needs 'action'/'blocked'/'restart'). */
+ *  `scanDone` only means every row has left 'checking' — loading (bytes moving) still counts as
+ *  scanned. Safe to reveal the Listen-only caveat. `allReady` stays false while any row is
+ *  loading / action / blocked / restart. */
 export interface SetupScanSummary {
   scanDone: boolean
   allReady: boolean
@@ -1136,7 +1151,7 @@ export function OnboardingExperience({
           onSetMode={setMode}
           onContinue={() => {
             playHero()
-            setScene('setup')
+            setScene(sceneAfterReveal())
           }}
           onPlayVideo={() => playHero()}
         />
@@ -1156,14 +1171,6 @@ export function OnboardingExperience({
                 <div className="min-w-0 flex-1">
                   <p className="m-0 truncate text-[13px] text-[color:var(--color-ink)]">{r.label}</p>
                   {r.detail && <p className="m-0 text-[11px] text-[color:var(--color-ink-3)]">{r.detail}</p>}
-                  {(r.key === 'local' || r.key === 'asr') && r.progress != null && r.progress > 0 && r.progress < 1 && (
-                    <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
-                      <div
-                        className="h-full rounded-full bg-[#9A2BF0]"
-                        style={{ width: `${Math.round(r.progress * 100)}%` }}
-                      />
-                    </div>
-                  )}
                   {r.key === 'local' && r.state === 'action' && r.progress == null && (
                     <div className="mt-1.5">
                       <button
@@ -1277,9 +1284,9 @@ export function OnboardingExperience({
                     </p>
                   )}
                 </div>
-                {r.state === 'checking' && (
+                {(r.state === 'checking' || r.state === 'loading') && (
                   <span className="mt-0.5 shrink-0">
-                    <InlineOrb kind="loading" />
+                    <InlineOrb kind="loading" percent={setupRowLoadingPercent(r.progress)} />
                   </span>
                 )}
                 {r.state === 'ready' && <Check size={16} className="mt-0.5 shrink-0 text-[var(--color-accent-2)]" />}
@@ -1335,7 +1342,7 @@ export function OnboardingExperience({
 
       {scene === 'personalize' && (
         <div key="personalize" className="scene-enter onboard-act4 flex flex-col items-center">
-          <div className="flex flex-col items-center gap-2">
+          <div className="onboard-act4-heading flex flex-col items-center gap-2">
             <p className="onboard-act4-kicker">Last one</p>
             <h2 className="onboard-act4-title">How should Métis show up?</h2>
             <p className="onboard-act4-lead">
@@ -1377,8 +1384,7 @@ export function OnboardingExperience({
             <TellTheRoomCard consent={consent} onConsent={setConsent} />
             <button
               type="button"
-              // Act 6 re-point (MQA-283): advances to license (only if enabled) or the appearance ask —
-              // never finishes here directly any more. See onboarding-flow.ts.
+              // Advances to license (only if enabled) or Ready. See onboarding-flow.ts.
               onClick={() => {
                 playHero()
                 setScene(sceneAfterPersonalize(settings?.licenseGateEnabled))

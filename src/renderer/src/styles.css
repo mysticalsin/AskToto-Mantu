@@ -989,7 +989,7 @@ input::placeholder {
   gap: 28px;
 }
 
-/* Act 4 + Skip. Starfield is the bed: no white top wash, no bleached rectangle. */
+/* Act 4 on KineticGrid #05010a. Local heading light only — not a full-stage white wash. */
 .onboard-act4 {
   position: relative;
   width: min(100%, 920px);
@@ -999,27 +999,52 @@ input::placeholder {
   position: relative;
   z-index: 1;
 }
+.onboard-act4-heading {
+  position: relative;
+}
+.onboard-act4-heading::before {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 0;
+  z-index: 0;
+  width: 420px;
+  height: 150px;
+  pointer-events: none;
+  transform: translate(-50%, -18%);
+  background: radial-gradient(
+    ellipse at 50% 28%,
+    rgba(255, 255, 255, 0.2),
+    rgba(196, 132, 252, 0.1) 42%,
+    transparent 72%
+  );
+}
+.onboard-act4-heading > * {
+  position: relative;
+  z-index: 1;
+}
 .onboard-act4-kicker {
   margin: 0;
-  font-size: 12px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 700;
   letter-spacing: 0.14em;
   text-transform: uppercase;
-  color: rgba(244, 244, 245, 0.82);
+  color: #ffffff;
 }
 .onboard-act4-title {
   margin: 0;
-  font-size: 26px;
-  font-weight: 650;
+  font-size: 28px;
+  font-weight: 700;
   letter-spacing: -0.03em;
-  color: #fafafa;
+  color: #ffffff;
 }
 .onboard-act4-lead {
   margin: 0;
   max-width: 420px;
-  font-size: 14px;
+  font-size: 15px;
+  font-weight: 500;
   line-height: 1.45;
-  color: rgba(244, 244, 245, 0.88);
+  color: rgba(255, 255, 255, 0.92);
 }
 .onboard-persona-row {
   display: flex;

@@ -89,7 +89,19 @@ Stage API: `exclusiveOnboardingBounds(display.bounds, display.workArea)`; exit o
 
 **No Skip.** Users cannot skip onboarding. There is no Skip the tour chip, no skip scene, no Skip to the end, and no path that sets `onboardingDone` without completing Ready. Replay after a completed tour (Settings) still works and still calls `haltAllOnboardingAudio()` first.
 
-**Onboarding appearance (Tony ask).** Before Ready, ask Hidden vs Island vs Bar. This is a tail beat, not a seventh narrative act (GUIDED_SCENES stays problem / reveal / setup / personalize). Six-act copy stays. License (when on) still sits between personalize and this ask. Ready stays the terminal act.
+**Onboarding flow (Tony 11:52–11:53pm).** Full contract: `docs/design/ONBOARDING-FLOW.md`.
+
+```
+hero → problem → reveal → appearance → setup → personalize → [license if enabled] → ready
+```
+
+GUIDED_SCENES is problem / reveal / appearance / setup / personalize. Reveal Continue uses `sceneAfterReveal()` → appearance. Appearance Continue → setup. Personalize Continue → license or Ready (never appearance). License → Ready. No Skip.
+
+**Your setup loading orb.** Downloading / idle transcription and downloading / starting on-device model are `SetupRowState 'loading'`, not `'action'`. They show the Jakub thinking-orb (`InlineOrb` / `AgentStatus` kind=loading). Real progress in (0, 1) becomes a determinate % next to the orb. Empty progress: orb only, no fake 0%. `'action'` / **needed** is user work only (Allow Microphone, disk full, Retry). Continue stays blocked until ASR is ready.
+
+**Act 4 heading on KineticGrid.** Kicker "Last one" and title "How should Métis show up?" must read on `#05010a`: near-white, stronger weight. A soft local light sits behind the heading cluster only. Tell the room stays the bright spotlight (`rgba(255,255,255,0.22)`). No full-stage white wash.
+
+**Onboarding appearance (Tony ask).** Right after the demo (reveal), ask Hidden vs Island vs Bar. Heading stays **Where should Métis live?** (`ONBOARDING_APPEARANCE_HEADING`). Ready stays the terminal act.
 
 - **Hidden** (default, selected on a fresh install). Card title **Hidden**. Caption: "Move to the top, then click to open." Mouse to the top, click to trigger. Not a hover-only demo.
 - **Island.** Card title **Island**. Caption stays "A small island stays visible. Hover opens it."

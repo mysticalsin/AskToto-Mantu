@@ -29,7 +29,10 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
     expect(experienceSrc).not.toMatch(/initialStep=\{phase === 'legacy-full' \? 1 : 5\}/)
   })
 
-  it('setup always advances to personalize — license no longer sits between setup and personalize', () => {
+  it('reveal advances to appearance, then setup, then personalize', () => {
+    expect(experienceSrc).toMatch(/setScene\(sceneAfterReveal\(\)\)/)
+    expect(experienceSrc).not.toMatch(/onContinue=\{\(\) => \{\s*playHero\(\)\s*\n\s*setScene\('setup'\)/)
+    expect(experienceSrc).toMatch(/setScene\(sceneAfterAppearance\(\)\)/)
     expect(experienceSrc).toMatch(/setScene\(sceneAfterSetup\(\)\)/)
     expect(experienceSrc).not.toMatch(/setScene\(settings\?\.licenseGateEnabled \? 'license' : 'personalize'\)/)
   })

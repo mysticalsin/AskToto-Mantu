@@ -89,6 +89,15 @@ describe('starfield is not mounted after the lady beat', () => {
     expect(ONBOARDING_HERO_VIDEO_SRC).toMatch(/hf_20260429_115139_0fc6bd3d/)
     expect(ONBOARDING_HERO_VIDEO_SRC).not.toMatch(/hf_20260319_055001/)
     expect(experience).toMatch(/\{scene === 'hero' && <OnboardingHeroVideo/)
+    expect(KINETIC_GRID_SCENES).toEqual([
+      'problem',
+      'reveal',
+      'appearance',
+      'setup',
+      'personalize',
+      'license',
+      'ready'
+    ])
     expect(shouldMountKineticGrid('hero')).toBe(false)
     expect(shouldMountStarfield('hero')).toBe(false)
     for (const scene of KINETIC_GRID_SCENES) {
