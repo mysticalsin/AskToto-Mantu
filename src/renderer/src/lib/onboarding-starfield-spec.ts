@@ -58,6 +58,7 @@ export const STARFIELD_SCENES = [
   'setup',
   'personalize',
   'license',
+  'appearance',
   'ready',
   'skip'
 ] as const

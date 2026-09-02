@@ -33,7 +33,7 @@ Spotlight Ref / Dust CLI: `docs/design/DESIGN.md` § CLI session and Spotlight R
 
 Ambient copilot / auto-answer (suggest + speculative showSpec) stays on the overlay until Tony clicks the answer (dismiss/read, never send) or a new question is asked (typed ask, or a new ambient suggestion replacing it). No 4s TTL. No 7s ceiling. Never auto-send.
 
-Settings shows these as **cards with a tiny desktop diagram**, not three text radios. Hide: empty top-middle, faint hover hint, caption "Hidden until you move to the top." Island: small capsule at the top-middle, caption "A small island stays visible. Hover opens it." Bar: full bar at the top **plus a circle**, caption "The bar stays on screen." Selected card is obvious. Changes apply immediately. Closing Settings after picking Island or Hide must park the live overlay (`shouldForceParkOnBecameIdle` + `collapse-now` + `parkAfterHide`) so the user sees the notch rest, not a leftover full bar. No reinstall. Original Métis copy. No em dash. No Vibe Island trademark strings.
+Settings shows these as **cards with a tiny desktop diagram**, not three text radios. Hide: empty top-middle, faint hover hint, caption "Hidden until you move to the top." Island: small capsule at the top-middle, caption "A small island stays visible. Hover opens it." Bar: full bar at the top **plus a circle**, caption "The bar stays on screen." Selected card is obvious. Changes apply immediately. Closing Settings after picking Island or Hide must park the live overlay (`shouldForceParkOnBecameIdle` + `collapse-now` + `parkAfterHide`) so the user sees the notch rest, not a leftover full bar. No reinstall. Original Métis copy. No em dash. No Vibe Island trademark strings. Onboarding asks the same three before Ready (see **Onboarding appearance** below and `docs/design/ONBOARDING-APPEARANCE.md`).
 
 ## Island Y
 
@@ -85,7 +85,25 @@ Stage API: `exclusiveOnboardingBounds(display.bounds, display.workArea)`; exit o
 
 **Portal close.** When `onboardingDone` is about to flip (Ready or Skip Get started): reverse the same soft pill into the top-center island (1.1–1.4s), play the CLOSE tone with the collapse, then exit exclusive fullscreen and park path A (`Y >= 25`). Do not snap to a 120×50 hole while the stage is still full-bleed. Do not call `setSimpleFullScreen(false)` before the close has been seen (or reduced-motion skip). Renderer plays close, then persists `onboardingDone` so main can `exitExclusiveOnboardingStage`. Do not leave a 1800×1169 hole or a `y=0` peek.
 
-**Skip the tour.** Skip leaves the six-act narrative but stays on the exclusive Métis stage. It is one screen: the Tell the room glass card (same copy, required checkbox) plus Get started. Same portal close. `recordingConsent` still required (CMO-QA #1). Do not mount the legacy `Onboarding.tsx` slides for Skip. Hero Skip is a quiet secondary glass chip, never louder than **Next**.
+**Skip the tour.** Skip leaves the six-act narrative but stays on the exclusive Métis stage. It is one screen: the appearance picker (same three cards + live preview, Hidden default), the Tell the room glass card (same copy, required checkbox), plus Get started. Same portal close. `recordingConsent` still required (CMO-QA #1). Do not mount the legacy `Onboarding.tsx` slides for Skip. Hero Skip is a quiet secondary glass chip, never louder than **Next**.
+
+**Onboarding appearance (Tony ask).** Before Ready, ask Hidden vs Island vs Bar. This is a tail beat, not a seventh narrative act (GUIDED_SCENES stays problem / reveal / setup / personalize). Six-act copy stays. License (when on) still sits between personalize and this ask. Ready stays the terminal act.
+
+- **Hidden** (default, selected on a fresh install). Card title **Hidden**. Caption: "Move to the top, then click to open." Mouse to the top, click to trigger. Not a hover-only demo.
+- **Island.** Card title **Island**. Caption stays "A small island stays visible. Hover opens it."
+- **Bar.** Card title **Bar**. Caption stays "The bar stays on screen."
+
+Live preview sits at the **top** of the exclusive stage (where the real chrome will live). Picking a card switches the preview on the same tick. No lag: compositor-only (`transform` + `opacity`), same spring as overlay (`--ease-spring`, 320–380ms in / 280–340ms out). No `setBounds`. No real `Bar`. No Listen. No Jarvis orb. No WebGL. No rAF. Reduced-motion: instant swap, still no layout animation.
+
+Hidden preview starts empty (faint top-center hint only). Click the top strip to spring the mock bar. Island preview is the camera / notch **square capsule** at top-center (not a wide bar); hover expands, leave returns to the square. Bar preview is the full mock bar, always on.
+
+Persist the existing overlay setting. Seed from `settings.overlayLayout` (replay / already-chosen island or bar stays selected). Patch `overlayLayout` + `autoHideOverlay` on the click, immediately. `finish()` / `onDone` must not write `overlayLayout`. Replay onboarding must not reset it. Managed `overlayLayout` locks the cards and still previews the locked value.
+
+Do **not** change Hide park **8×2**, Island hover (camera / notch square, `hoverWatchRestRect` at `bounds.y`), cursor-watch, or overlay park leftover (PR 94). After exclusive exit, park the layout they picked using the existing rest surfaces. Windows: no fake notch in the preview either.
+
+Original Métis copy. No em dash. No Vibe Island trademark strings. Continue is `onboard-cta`, always visible, full opacity. Appearance scene mounts the Starfield Close bed (not hero, not reveal).
+
+Out of scope: Operator, Listen, ClickUp, overlay park PR 94, pack, Goldberg Aria, merge. READY TO MERGE stays no until Tony Mac-shows.
 
 The stage is a **Mantu purple** brand wash (`#3A0B6B` / `#7F00DA` / `#9A2BF0`), exclusive, rich — never a solid black void and never amber. Depth is the purple radial wash plus two oversized GPU stripe layers (repeating linear-gradient bands in that palette, plus a thin light sheen). The layers rotate opposite directions with `transform: rotate` only (~40s and ~70s linear infinite), `mix-blend-mode` screen/overlay, opacity ~0.28–0.4, `will-change: transform`, `pointer-events: none`. They cover the full stage after Act 1 unmounts the hero video. No `filter: blur` drifting orbs. `prefers-reduced-motion` freezes rotation at 0deg and **keeps the stripe pattern** (still not a flat fill).
 
