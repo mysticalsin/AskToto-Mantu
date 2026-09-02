@@ -469,7 +469,7 @@ Empty list: "No events yet." Never sample commerce events.
 
 1. Unique seats last 30 min (sentence-case title + large count + blue bars from real heartbeat buckets).
 2. Activity stream from D1 (`listen`, `ask`, `recap`, skill, CRM). Relative time. OS / browser / device icons only when the seat reported them.
-3. World: **visible** Shoey land `#E5E7EB` on white ocean `#FFFFFF` (dark: charcoal `#3f3f46` on `#0a0a0b`). Land stroke `#9CA3AF` so continents read at a glance. Charcoal seat dots from `request.cf` only. Green country pills. A pill with no land is **FAIL**. No sample dots.
+3. World: **visible** Shoey land `#E5E7EB` on white ocean `#FFFFFF` (dark: charcoal `#3f3f46` on `#0a0a0b`). Land stroke `#9CA3AF` so continents read at a glance. Charcoal seat dots from `request.cf` only. Green country pills. Land is `path[data-iso]` inside `#map-root` HTML (`data-land="inline"`). A fill function on empty HTML is **FAIL**. A pill with no land is **FAIL**. No sample dots.
 4. Bottom three tables: Geo, Referrals (CRM / Listen / connectors), Paths (modes / skills / use cases).
 
 Poll `/v1/admin/dashboard` while the page is open. No sample dots. No invented sessions. No shoe paths.

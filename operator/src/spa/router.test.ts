@@ -220,7 +220,7 @@ describe('hashed SPA router (#104)', () => {
     expect(empty.hidden).toBe(false)
   })
 
-  it('hashed SPA embeds world land so paintShoeyMap can inject path[data-iso]', () => {
+  it('hashed SPA embeds world land so theme restyle can paint path[data-iso]', () => {
     expect(SPA_JS.length).toBeGreaterThan(8611)
     expect(SPA_JS).toContain('ensureShoeyLand')
     expect(SPA_JS).toContain('paintShoeyMap')
