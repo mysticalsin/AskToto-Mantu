@@ -98,6 +98,18 @@ describe('Mac-test Hide park leftover after Show (880×105 at Y=39)', () => {
     ).toBe('reveal')
   })
 
+  it('createWindow is type panel on darwin when !onboardingLive; exclusive stays normal', () => {
+    const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
+    const create = index.slice(index.indexOf('function createWindow'), index.indexOf('function resizeTo'))
+    expect(create).toMatch(/process\.platform === 'darwin' && !onboardingLive \? \{ type: 'panel' as const \}/)
+    const apply = index.slice(
+      index.indexOf('function applyExclusiveOnboardingStage'),
+      index.indexOf('function exitExclusiveOnboardingStage')
+    )
+    expect(apply).not.toMatch(/type: 'panel'/)
+    expect(apply).toMatch(/setSimpleFullScreen\(true\)/)
+  })
+
   it('live Hide park uses createHideParkWindow, not the exclusive/Show BrowserWindow', () => {
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
     const ctor = index.slice(index.indexOf('function createHideParkWindow'), index.indexOf('function showHideParkWindow'))

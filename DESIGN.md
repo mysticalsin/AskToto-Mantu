@@ -68,7 +68,7 @@ Hide and island: hover or click expands **down** from the camera island to the f
 
 **Bar.** Always the bar. No hide.
 
-`createWindow` when `onboardingDone` + hide/island parks this rest rect immediately (same as exclusive exit). Never boot at 880×84 and hope hug wins. Never rest as 880×816. Never hug hide down to 120px.
+`createWindow` when `onboardingDone` + hide/island parks this rest rect immediately (same as exclusive exit). On darwin that constructor is `type: 'panel'` (`!onboardingLive`); exclusive onboarding stays type normal; Windows stays normal. Never boot at 880×84 and hope hug wins. Never rest as 880×816. Never hug hide down to 120px.
 
 **Show then Hide/park.** After Show the live bar can sit at `islandSafeTop` (Y≈39) and grow to ~880×105. Hide/park must restore Hide **8×2** at `bounds.y` via `restoreParkAfterShow` on a **dedicated** `createHideParkWindow` (darwin `type: 'panel'`, `enableLargerThanScreen`). That window never enters exclusive fullscreen — `constrainFrameRect` on the exclusive/Show window clamps `setBounds(y=0)` to `workArea.y` (~39). Hide the main overlay while the hairline is up. Show/`restoreBarWidth` hides the park window and reveals the bar at `islandSafeTop`. Island hover stays the camera/notch square (`hoverWatchRestRect`); do not change that hit.
 

@@ -601,6 +601,8 @@ describe('island reveal/collapse wiring (index.ts)', () => {
     expect(index).toMatch(/showHideParkWindow/)
     expect(index).toMatch(/hideHideParkWindow/)
     expect(index).toMatch(/setMinimumSize\(1, 1\)/)
+    const createWin = index.slice(index.indexOf('function createWindow'), index.indexOf('function resizeTo'))
+    expect(createWin).toMatch(/process\.platform === 'darwin' && !onboardingLive \? \{ type: 'panel' as const \}/)
     const hideParkCtor = index.slice(index.indexOf('function createHideParkWindow'), index.indexOf('function showHideParkWindow'))
     expect(hideParkCtor).toMatch(/enableLargerThanScreen: true/)
     expect(hideParkCtor).toMatch(/type: 'panel'/)
