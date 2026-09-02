@@ -207,8 +207,11 @@ a { color: var(--accent); text-decoration: none; }
 .spark { display: block; width: calc(100% + 24px); margin: 0 -12px; height: 56px; }
 .chart { display: block; width: 100%; height: 140px; }
 .world { display: block; width: 100%; height: auto; max-height: 420px; }
-.world.shoey-world { max-height: none; min-height: 380px; height: 100%; background: #FFFFFF; }
-.world.shoey-world.ov { min-height: 180px; max-height: 220px; }
+.world.shoey-world {
+  width: 100%; height: auto; max-height: none; min-height: 0;
+  aspect-ratio: 2 / 1; background: #FFFFFF;
+}
+.world.shoey-world.ov { min-height: 0; max-height: 220px; }
 .world.shoey-world .world-ocean { fill: #FFFFFF; }
 .world.shoey-world path.world-land, .world.shoey-world path[data-iso] {
   fill: #E5E7EB !important;

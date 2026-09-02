@@ -1,7 +1,16 @@
 import { describe, expect, it } from 'vitest'
 import { handleRequest, type Env } from './index'
 import { memoryStore } from './store'
-import { SPA_CSS, SPA_CSS_PATH, SPA_INDEX_JS_PATH, SPA_JS, SPA_JS_PATH } from './spa/manifest'
+import {
+  SPA_CSS,
+  SPA_CSS_PATH,
+  SPA_INDEX_JS_PATH,
+  SPA_JS,
+  SPA_JS_PATH,
+  SPA_WORLD_INDEX_PATH,
+  SPA_WORLD_SVG,
+  SPA_WORLD_SVG_PATH
+} from './spa/manifest'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_TEAM_DOMAIN } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
@@ -17,7 +26,7 @@ function env(): Env {
 
 describe('hashed SPA assets — fail loud if a stub ships', () => {
   it('bundle is real Shoey chrome, not the 97-byte METIS_OPERATOR stub', () => {
-    expect(SPA_JS.length).toBeGreaterThan(8000)
+    expect(SPA_JS.length).toBeGreaterThan(40000)
     expect(SPA_CSS.length).toBeGreaterThan(2000)
     expect(SPA_JS).toMatch(/Shoey|overview|realtime|events/i)
     expect(SPA_JS).toContain("requested === 'map' ? 'realtime'")
@@ -25,6 +34,12 @@ describe('hashed SPA assets — fail loud if a stub ships', () => {
     expect(SPA_JS).toContain('#E5E7EB')
     expect(SPA_JS).toContain('Created at')
     expect(SPA_JS).toContain('paintShoeyMap')
+    expect(SPA_JS).toMatch(/data-iso=\\?"CA\\?"/)
+    expect(SPA_JS).toMatch(/world-ocean/)
+    expect(SPA_JS).toContain('ensureShoeyLand')
+    expect(SPA_WORLD_SVG).toContain('data-iso="CA"')
+    expect(SPA_WORLD_SVG).toContain('path class="world-land"')
+    expect((SPA_WORLD_SVG.match(/data-iso="/g) || []).length).toBeGreaterThan(50)
     expect(SPA_JS).not.toMatch(/\bSEO\b/)
     expect(SPA_JS).toContain('key-add')
     expect(() => new Function(SPA_JS)).not.toThrow()
@@ -73,8 +88,29 @@ describe('hashed SPA assets — fail loud if a stub ships', () => {
     expect(indexBody.length).toBeGreaterThan(97)
     expect(indexBody).toBe(jsBody)
     expect(indexBody).toContain('window.route = route')
+    expect(indexBody).toContain('paintShoeyMap')
+    expect(indexBody).toMatch(/data-iso=\\?"CA\\?"/)
     expect(indexBody).not.toMatch(/self\.METIS_OPERATOR = self\.METIS_OPERATOR/)
     expect(() => new Function(indexBody)).not.toThrow()
+
+    const world = await handleRequest(new Request(`https://operator.test${SPA_WORLD_INDEX_PATH}`), env(), {}, {
+      store: memoryStore(),
+      now: NOW
+    })
+    expect(world.status).toBe(200)
+    expect(world.headers.get('content-type') || '').toMatch(/svg/)
+    const worldBody = await world.text()
+    expect(worldBody).toBe(SPA_WORLD_SVG)
+    expect(worldBody).toContain('data-iso="CA"')
+    expect(worldBody).toContain('class="world-ocean"')
+    expect((worldBody.match(/data-iso="/g) || []).length).toBeGreaterThan(50)
+
+    const hashedWorld = await handleRequest(new Request(`https://operator.test${SPA_WORLD_SVG_PATH}`), env(), {}, {
+      store: memoryStore(),
+      now: NOW
+    })
+    expect(hashedWorld.status).toBe(200)
+    expect(await hashedWorld.text()).toBe(worldBody)
 
     for (const path of ['/assets', '/assets/client.js', '/assets/operator-9f3c.js']) {
       const res = await handleRequest(new Request(`https://operator.test${path}`), env(), {}, {
