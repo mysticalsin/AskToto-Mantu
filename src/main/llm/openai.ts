@@ -157,7 +157,6 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
         if (opts.promptCacheKey) params.prompt_cache_key = opts.promptCacheKey
         params.prompt_cache_options = { mode: 'explicit', ttl: '30m' }
       }
-      if (opts.promptCacheKey) params.prompt_cache_key = opts.promptCacheKey
       // Ask the provider to include token usage in the final stream chunk (else onDone reports blank).
       // Omitted on retry when the provider rejected it (isStreamOptionsRejection).
       if (includeUsage) params.stream_options = { include_usage: true }

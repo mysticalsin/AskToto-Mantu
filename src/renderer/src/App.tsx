@@ -63,6 +63,7 @@ import { ASSIST_PROMPT, buildNoDecisionPrompt, EMAIL_RECAP_PROMPT, COLD_CALL_COA
 import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import { detectNoDecisionEnding } from '@shared/wrapup'
 import { transcriptStateKey } from '@shared/hash'
+import { SUGGEST_TRANSCRIPT_TAIL_CHARS } from '@shared/transcript-tail'
 import {
   FACT_CHECK_SCREEN_PROMPT,
   LOCAL_SCREEN_SUMMARY_PROMPT,
@@ -973,7 +974,7 @@ export function App(): JSX.Element {
     // Prefer a finished shadow suggestion (zero LLM wait) — same adopt rule as the manual "What to say
     // next" button. Only hit the network when nothing speculative is ready for this transcript state.
     if (tryAdoptSpeculative()) return
-    suggest.run({ mode: 'suggest', transcript: listen.text() })
+    suggest.run({ mode: 'suggest', transcript: listen.text().slice(-SUGGEST_TRANSCRIPT_TAIL_CHARS) })
   }
 
   // No-Decision Honk (innovation #5): once per meeting, when the conversation sounds like it's wrapping
@@ -1463,7 +1464,7 @@ export function App(): JSX.Element {
     setView('copilot')
     setCollapsed(false)
     if (tryAdoptSpeculative()) return // pre-generated answer already ready — paint it with no round trip
-    suggest.run({ mode: 'suggest', transcript: listen.text() })
+    suggest.run({ mode: 'suggest', transcript: listen.text().slice(-SUGGEST_TRANSCRIPT_TAIL_CHARS) })
   }, [suggest.run, listen.text, requireProvider, tryAdoptSpeculative])
 
   // Instant-suggestion machinery (settings.instantSuggestions, default on):
@@ -1483,7 +1484,9 @@ export function App(): JSX.Element {
     const everyMs = (settings?.suggestEverySec ?? 8) * 1000
     if (lines.length === w.lineCount || Date.now() - w.at < everyMs) return
     if (ask.answer?.streaming || suggest.answer?.streaming || speculative.answer?.streaming) return
-    const transcript = listen.text()
+    // Only the tail crosses IPC: main reads the last 6 000 chars for the suggest line, and the watermark
+    // key already hashes a bounded tail, so a whole-meeting payload every 8 s bought nothing.
+    const transcript = listen.text().slice(-SUGGEST_TRANSCRIPT_TAIL_CHARS)
     specWatermarkRef.current = { lineCount: lines.length, at: Date.now(), key: transcriptStateKey(transcript) }
     speculative.run({ mode: 'suggest', transcript })
   }, [

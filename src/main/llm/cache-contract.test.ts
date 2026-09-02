@@ -27,6 +27,15 @@ describe('OpenAI prompt-cache contract', () => {
     expect(openai).toMatch(/isOpenAICloudCacheEligible/)
   })
 
+  it('sets prompt_cache_key only inside the includePromptCache branch', () => {
+    // A second, unconditional assignment used to survive every rung of the drop-on-400 ladder, so an
+    // endpoint that rejects the unknown param (import recap sends the key to every provider) burned
+    // three serial round trips and still failed.
+    const assignments = openai.match(/params\.prompt_cache_key = opts\.promptCacheKey/g) ?? []
+    expect(assignments).toHaveLength(1)
+    expect(openai).toMatch(/if \(includePromptCache\) \{\n\s+if \(opts\.promptCacheKey\) params\.prompt_cache_key/)
+  })
+
   it('on 400 strips cache fields once and marks the endpoint unsupported', () => {
     expect(openai).toMatch(/isPromptCacheRejection/)
     expect(openai).toMatch(/cacheUnsupported\.add/)

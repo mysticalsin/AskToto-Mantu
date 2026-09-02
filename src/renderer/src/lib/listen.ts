@@ -730,13 +730,18 @@ export function useListen(
     if (entityCasingRef.current.length) corrected = applyEntityCasingCompiled(entityCasingRef.current, corrected)
     if (!corrected || !liveRef.current) return null
     // Cross-line repetition-loop guard: same normalized line, same speaker, window after window.
-    const key = repeatKey(corrected)
-    const run = repeatRunRef.current
-    if (key && run.key === key && run.speaker === (speaker || 'you')) {
-      run.count += 1
-      if (run.count > MAX_CONSECUTIVE_DUPES) return null // keep counting so the whole run stays suppressed
-    } else {
-      repeatRunRef.current = { key, speaker: speaker || 'you', count: 1 }
+    // Provisional (streaming partial) lines never count: a partial and its final carry the same key, so
+    // counting both consumed the MAX_CONSECUTIVE_DUPES budget twice per turn and silently dropped a
+    // genuinely repeated short reply ("Yes." ... "Yes.").
+    if (!provisional) {
+      const key = repeatKey(corrected)
+      const run = repeatRunRef.current
+      if (key && run.key === key && run.speaker === (speaker || 'you')) {
+        run.count += 1
+        if (run.count > MAX_CONSECUTIVE_DUPES) return null // keep counting so the whole run stays suppressed
+      } else {
+        repeatRunRef.current = { key, speaker: speaker || 'you', count: 1 }
+      }
     }
     // Tag the line's spoken language (conservative: undefined unless confident) so mixed-language
     // meetings can render switch markers for the recap LLM and the saved transcript. Computed here —
@@ -838,7 +843,14 @@ export function useListen(
 
   const pump = useCallback((): void => {
     if (!readyRef.current || busy.current || queue.current.length === 0) return
-    const job = queue.current.shift() as { audio: Float32Array; speaker: Speaker; partial?: boolean }
+    // A streaming partial that is still queued when a later window from the same speaker has already
+    // arrived is superseded: its output would be replaced milliseconds after it lands (commitLine drops
+    // provisional lines on the next final), so decoding it only delays everything behind it.
+    let job = queue.current.shift() as { audio: Float32Array; speaker: Speaker; partial?: boolean }
+    while (job.partial && queue.current.some((later) => later.speaker === job.speaker)) {
+      if (queue.current.length === 0) break
+      job = queue.current.shift() as { audio: Float32Array; speaker: Speaker; partial?: boolean }
+    }
     busy.current = true
     // Stamp the session epoch at dequeue so an in-flight decode that lands after stop()/start() of the
     // NEXT meeting cannot commitLine into the wrong transcript (liveRef is true again for the new
@@ -882,7 +894,9 @@ export function useListen(
             }
           } else {
             parakeetEmptyRunRef.current = 0
-            commitLine(text, job.speaker, speakerName)
+            // A streaming partial (1.2 s into the turn) is provisional, exactly as on the Whisper path:
+            // the final window replaces it. Committing it as final duplicated most lines on this engine.
+            commitLine(text, job.speaker, speakerName, !!job.partial)
           }
         })
         .catch((err) => {
@@ -928,7 +942,9 @@ export function useListen(
             }
           } else {
             parakeetEmptyRunRef.current = 0
-            commitLine(text, job.speaker, speakerName)
+            // A streaming partial (1.2 s into the turn) is provisional, exactly as on the Whisper path:
+            // the final window replaces it. Committing it as final duplicated most lines on this engine.
+            commitLine(text, job.speaker, speakerName, !!job.partial)
           }
         })
         .catch((err) => {

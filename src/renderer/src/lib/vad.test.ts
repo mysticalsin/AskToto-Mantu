@@ -348,3 +348,43 @@ describe('windows system-audio retry watcher (MQA-041)', () => {
     expect(listenSrc).toMatch(/if \(p\?\.screenRecording === 'granted' && !channels\.current\.them\)/)
   })
 })
+
+// The partial scorer used to re-run an O(fill) energy pass plus isSpeechLikeWindow (sort + allocations)
+// on EVERY 128-sample quantum once the buffer passed PARTIAL_SAMPLES and the window was not yet
+// keepable: the entire idle state of the loopback channel while only you are talking, on the realtime
+// audio thread. A rejected partial now waits PARTIAL_COOLDOWN_SAMPLES before it is re-scored.
+describe('whisper worklet partial scoring is rate-limited on a non-keepable buffer', () => {
+  it('re-scores a rejected partial a few times per second, not per quantum', () => {
+    let Registered: (new () => { process: (inputs: Float32Array[][]) => boolean; keepable: (n: number) => boolean }) | null =
+      null
+    class FakeProcessor {
+      port = { onmessage: null as ((e: MessageEvent) => void) | null, postMessage: (): void => {} }
+    }
+    new Function('AudioWorkletProcessor', 'registerProcessor', 'sampleRate', WHISPER_WORKLET_SRC)(
+      FakeProcessor,
+      (_name: string, cls: new () => { process: (inputs: Float32Array[][]) => boolean; keepable: (n: number) => boolean }): void =>
+        void (Registered = cls),
+      SR
+    )
+    if (!Registered) throw new Error('worklet source registered no processor')
+    const w = new Registered()
+    let scored = 0
+    const keepable = w.keepable.bind(w)
+    w.keepable = (n: number): boolean => {
+      scored += 1
+      return keepable(n)
+    }
+    // 6 s of a steady non-speech bed (a quiet unmodulated tone: energy above EMIT_RMS, no envelope
+    // spread, so isSpeechLikeWindow rejects it every time). Fill runs from 0 to the 6 s hard cap.
+    const quantum = new Float32Array(FRAME)
+    const quanta = Math.round((6 * SR) / FRAME)
+    for (let i = 0; i < quanta; i++) {
+      for (let j = 0; j < FRAME; j++) quantum[j] = 0.02 * Math.sin((2 * Math.PI * 440 * (i * FRAME + j)) / SR)
+      w.process([[quantum]])
+    }
+    // Without the cooldown: one score per quantum past 1.2 s, ~600. With it: one per 0.4 s, ~12, plus the
+    // one score emit() itself pays at the cap.
+    expect(scored).toBeLessThan(40)
+    expect(scored).toBeGreaterThan(3)
+  })
+})

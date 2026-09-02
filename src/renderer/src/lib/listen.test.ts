@@ -625,3 +625,26 @@ describe('feedEmptyIsEcho — echo silence is not an ASR stall', () => {
     expect(listenSrc).toMatch(/if \(res\?\.echo\) \{\s*\n\s*const next = linesRef\.current\.filter/)
   })
 })
+
+// Streaming partials on the IPC engines. The worklet emits a partial ~1.2 s into every turn and the
+// final at the endpoint; only the Whisper branch used to forward the flag, so on Parakeet and Apple
+// (the default engine) every utterance committed twice: a truncated prefix line, then the full line.
+describe('Parakeet and Apple partials are provisional, like Whisper (transcript duplication)', () => {
+  it('both IPC branches pass the partial flag into commitLine', () => {
+    const calls = listenSrc.match(/commitLine\(text, job\.speaker, speakerName, !!job\.partial\)/g) ?? []
+    expect(calls).toHaveLength(2)
+    expect(listenSrc).not.toMatch(/commitLine\(text, job\.speaker, speakerName\)\n/)
+  })
+
+  it('the cross-line repeat guard does not count provisional lines', () => {
+    // A partial and its final carry the same repeatKey; counting both consumed MAX_CONSECUTIVE_DUPES
+    // twice per turn and dropped a genuinely repeated short reply.
+    expect(listenSrc).toMatch(/if \(!provisional\) \{\n\s+const key = repeatKey\(corrected\)/)
+  })
+
+  it('pump skips a queued partial that a later window from the same speaker has superseded', () => {
+    expect(listenSrc).toMatch(
+      /while \(job\.partial && queue\.current\.some\(\(later\) => later\.speaker === job\.speaker\)\)/
+    )
+  })
+})

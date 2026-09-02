@@ -25,6 +25,7 @@ export const WHISPER_WORKLET_SRC = `
 const SAMPLE_RATE = 16000
 const MAX_SAMPLES = SAMPLE_RATE * 6   // hard cap per window (long monologue → forced cut)
 const PARTIAL_SAMPLES = ${FIRST_PARTIAL_SAMPLES} // first caption before the 6s cap (docs/asr/QUALITY.md)
+const PARTIAL_COOLDOWN_SAMPLES = SAMPLE_RATE * 0.4 // re-score a rejected partial a few times a second, not per quantum
 const EMIT_RMS = 0.005                // whole-window energy below this → drop (silence; ASR hallucinates on it)
 const makeVad = ${makeVad.toString()}
 const isSpeechLikeWindow = ${isSpeechLikeWindow.toString()}
@@ -32,10 +33,15 @@ class WhisperWorklet extends AudioWorkletProcessor {
   constructor() {
     super()
     // Pre-allocated window; each ~128-sample quantum copies in at \`fill\`. A per-instance VAD decides when
-    // the turn has ended; we then emit one transferable copy — O(1) per quantum, zero steady-state alloc.
+    // the turn has ended; we then emit one transferable copy. Per quantum this is O(128) plus the VAD;
+    // the only O(fill) work is the partial score, rate-limited by PARTIAL_COOLDOWN_SAMPLES.
     this.buf = new Float32Array(MAX_SAMPLES)
     this.fill = 0
     this.partialSent = false
+    // Sample offset before which emitPartial() must not re-scan. A rejected partial (silence, a steady
+    // non-speech bed) used to be re-scored on EVERY 128-sample quantum with an O(fill) energy pass plus
+    // isSpeechLikeWindow's sort and allocations, on the realtime audio thread. Cooldown 0.4 s instead.
+    this.nextPartialAt = 0
     this.vad = makeVad()
     this.port.onmessage = (e) => {
       if (e.data === 'flush') this.emit() // stop(): flush whatever's buffered before teardown
@@ -49,8 +55,8 @@ class WhisperWorklet extends AudioWorkletProcessor {
     return isSpeechLikeWindow(this.buf, n)
   }
   emitPartial() {
-    if (this.partialSent || this.fill < PARTIAL_SAMPLES) return
-    if (!this.keepable(this.fill)) return
+    if (this.partialSent || this.fill < PARTIAL_SAMPLES || this.fill < this.nextPartialAt) return
+    if (!this.keepable(this.fill)) { this.nextPartialAt = this.fill + PARTIAL_COOLDOWN_SAMPLES; return }
     this.partialSent = true
     const chunk = this.buf.slice(0, this.fill)
     this.port.postMessage({ audio: chunk, partial: true }, [chunk.buffer])
@@ -59,6 +65,7 @@ class WhisperWorklet extends AudioWorkletProcessor {
     const n = this.fill
     this.fill = 0
     this.partialSent = false
+    this.nextPartialAt = 0
     this.vad.reset()
     if (!this.keepable(n)) return
     const chunk = this.buf.slice(0, n)

@@ -472,6 +472,7 @@ import { routeTier } from '@shared/routing'
 import { HedgeRace, HEDGE_DELAY_MS, HEDGE_DELAY_SUGGEST_MS, type HedgeLeg } from './llm/hedge'
 import { ThinkStripper } from './llm/think-strip'
 import { redactSecrets } from '@shared/redact'
+import { SUGGEST_TRANSCRIPT_TAIL_CHARS as SUGGEST_TRANSCRIPT_TAIL } from '@shared/transcript-tail'
 import { isSafeAccelerator } from '@shared/accelerator'
 import { formatResetPhrase } from '@shared/reset-time'
 import { applySpeakerNames, clusterNamePairsFromAlignment } from '@shared/transcript-align'
@@ -579,6 +580,8 @@ crashReporter.start({ uploadToServer: false })
 // deprioritizing the (hidden) renderer that hosts the transcription worker. Must run before app ready.
 app.commandLine.appendSwitch('disable-renderer-backgrounding')
 
+// Transcript tail matched against brain entities per Ask (see the buildBrainContext call site).
+const BRAIN_CONTEXT_TRANSCRIPT_TAIL = 4000
 const BAR_WIDTH = 880
 const BAR_HEIGHT = 84 // initial idle height of the slimmer two-row widget; useAutoResize grows it for answers
 const BAR_MIN_HEIGHT = 44 // floor for the resize clamp so the collapsed control mini-pill can shrink fully
@@ -4883,6 +4886,12 @@ function registerIpc(): void {
     // Local-first redaction (brief section I): strip high-confidence secrets from the captured transcript
     // before it leaves the device for a cloud model. Only the auto-captured transcript — never the user's
     // own typed prompt, and never the locally-saved meeting file (which keeps the verbatim original).
+    // The spoken suggest line only ever reads the last SUGGEST_TRANSCRIPT_TAIL chars (llm/shared.ts), so
+    // clip BEFORE redaction: redactSecrets is ~20 global regex passes on the main thread, and the renderer
+    // shipped the whole meeting every suggest tick. Recap/summary keep the full transcript.
+    if (req.mode === 'suggest' && req.transcript && req.transcript.length > SUGGEST_TRANSCRIPT_TAIL) {
+      req.transcript = req.transcript.slice(-SUGGEST_TRANSCRIPT_TAIL)
+    }
     if (s.redactSensitive && req.transcript) req.transcript = redactSecrets(req.transcript)
     // screenContext is a MAIN-ONLY field (like brainContext): never trust a value the renderer sent. Clear
     // it unconditionally after parse, then set it below strictly from main's own on-device screen cache.
@@ -4908,7 +4917,11 @@ function registerIpc(): void {
     // material with no citation/anti-fabrication guardrail attached — gate identically to the rail.
     if (req.mode === 'answer' && req.kind !== 'factcheck') {
       try {
-        const hit = buildBrainContext(s, `${req.prompt}\n${req.transcript ?? ''}`)
+        // Match entities against the question plus the recent transcript tail, not the whole meeting:
+        // buildBrainContext NFKD-normalizes the haystack and runs one includes() per entity key per kind,
+        // so a 1 MB transcript against a few hundred entities is a pre-dispatch stall on every ask, and an
+        // account named 80 minutes ago is not what this question is about.
+        const hit = buildBrainContext(s, `${req.prompt}\n${(req.transcript ?? '').slice(-BRAIN_CONTEXT_TRANSCRIPT_TAIL)}`)
         req.brainContext = hit.block || undefined
       } catch (err) {
         console.warn('[brain] context assembly failed', err)
