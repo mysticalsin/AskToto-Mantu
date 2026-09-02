@@ -1,0 +1,16 @@
+{
+  "name": "metis-operator",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-31",
+  "observability": { "enabled": true },
+  "vars": {
+    "TEAM_DOMAIN": "https://tony-walteur.cloudflareaccess.com"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "metis-operator",
+      "database_id": "8eb5a081-594c-407c-9470-6a5aa28b9f7c"
+    }
+  ]
+}
