@@ -42,8 +42,10 @@ export const CONSOLE_CSS = `/* Métis Operator SPA — Shoey Overview / Realtime
   --nav-on: rgba(255,255,255,0.08);
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; color: var(--ink); font: 12px/1.4 var(--sans); }
-body { background: var(--bg); }
+html { color-scheme: light; }
+html[data-theme="dark"] { color-scheme: dark; }
+html, body { margin: 0; height: 100%; color: var(--ink); background: var(--bg); font: 12px/1.4 var(--sans); }
+body { background: var(--bg); color: var(--ink); }
 a { color: var(--accent); text-decoration: none; }
 .shell { display: grid; grid-template-columns: 185px 1fr; min-height: 100%; }
 .rail {
@@ -110,18 +112,18 @@ a { color: var(--accent); text-decoration: none; }
 .ov-10 { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
 .stat-card {
   background: var(--panel); border: 1px solid var(--hair); border-radius: 10px;
-  padding: 12px 12px 0; overflow: hidden; min-width: 0;
+  padding: 12px 12px 0; overflow: hidden; min-width: 0; color: var(--ink);
 }
 .stat-card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
-.stat-card h3 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.02em; }
+.stat-card h3 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink); }
 .trend-badge {
   font: 600 11px var(--sans); padding: 2px 7px; border-radius: 999px;
   border: 1px solid rgba(22,163,74,0.2); background: rgba(22,163,74,0.08); color: #16A34A;
 }
 .trend-badge.down { border-color: rgba(220,38,38,0.2); background: rgba(220,38,38,0.08); color: #DC2626; }
-.trend-badge.flat { border-color: var(--hair); background: #FAFAFA; color: var(--ink3); }
+.trend-badge.flat { border-color: var(--hair); background: var(--nav-on); color: var(--ink2); }
 .stat-flow { display: flex; align-items: baseline; gap: 8px; margin: 10px 0 4px; }
-.stat-flow .n { font-size: 28px; font-weight: 650; letter-spacing: -0.04em; line-height: 1; }
+.stat-flow .n { font-size: 28px; font-weight: 650; letter-spacing: -0.04em; line-height: 1; color: var(--ink); }
 .stat-flow .lbl { font-size: 11px; color: var(--ink2); }
 .stat-card .spark, .stat-card .stat-spark { display: block; width: calc(100% + 24px); margin: 6px -12px 0; height: 72px; }
 .stat-gauge, .stat-ring { height: 64px; margin-left: auto; margin-right: auto; width: 88px; }
@@ -158,12 +160,13 @@ a { color: var(--accent); text-decoration: none; }
   border-radius: 8px;
   padding: 10px 12px 0;
   overflow: hidden;
+  color: var(--ink);
 }
-.card h3 { margin: 0; font-size: 13px; font-weight: 600; }
+.card h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--ink); }
 .kpi-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 .kpi { padding-bottom: 8px; }
 .kpi .eyebrow { margin-bottom: 4px; }
-.kpi .n { font-size: 28px; font-weight: 650; letter-spacing: -0.04em; line-height: 1; margin-top: 6px; }
+.kpi .n { font-size: 28px; font-weight: 650; letter-spacing: -0.04em; line-height: 1; margin-top: 6px; color: var(--ink); }
 .rt-h { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -0.03em; color: var(--ink); }
 .rt-n { font-size: 44px !important; margin-top: 8px !important; letter-spacing: -0.05em; }
 .rt-unique { padding-top: 14px; }
@@ -191,14 +194,16 @@ a { color: var(--accent); text-decoration: none; }
   padding: 5px 8px; position: relative; font-size: 11px;
 }
 .vol-bar {
-  position: absolute; inset: 2px auto 2px 0; background: #F4F4F5; border-radius: 4px; z-index: 0;
+  position: absolute; inset: 2px auto 2px 0; background: var(--nav-on); border-radius: 4px; z-index: 0;
 }
 .vol-bar.blue { background: #DBEAFE; }
+[data-theme="dark"] .vol-bar.blue { background: rgba(37,99,235,0.28); }
 .vol-row > * { position: relative; z-index: 1; }
 .table-card .tabs { margin: 0 0 8px; }
 .table-search {
   width: 100%; border: 1px solid var(--hair); border-radius: 8px; padding: 6px 10px;
   font: 12px var(--sans); margin-bottom: 8px;
+  background: var(--panel); color: var(--ink);
 }
 .empty-card { background: var(--panel); border: 1px solid var(--hair); border-radius: 8px; padding: 28px 20px; }
 .empty-card h3 { margin: 0 0 6px; font-size: 16px; }
@@ -238,8 +243,9 @@ a { color: var(--accent); text-decoration: none; }
   font: 11px/1 var(--mono); letter-spacing: 0.04em; text-transform: uppercase;
   padding: 4px 9px; border-radius: 999px; cursor: pointer;
 }
-.tab.on { background: var(--chart-5); color: var(--bg); }
-[data-theme="light"] .tab.on, :root:not([data-theme="dark"]) .tab.on { color: #0a0a0b; background: #18181b; }
+.tab.on { background: #18181b; color: #ffffff; }
+[data-theme="dark"] .tab.on { background: #f4f4f5; color: #0a0a0b; }
+.tab.on .status-badge { color: inherit; border-color: currentColor; background: transparent; }
 .pill {
   display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 10px;
   font-family: var(--mono); border: 1px solid var(--hair); color: var(--ink2);
@@ -266,7 +272,10 @@ button, .btn {
   background: transparent; color: var(--ink); border: 1px solid var(--hair);
   padding: 4px 9px; font-size: 11px; cursor: pointer; border-radius: 999px;
 }
-button.primary { background: var(--chart-5); color: var(--bg); border-color: transparent; font-weight: 600; }
+button.primary { background: var(--chart-5); color: #ffffff; border-color: transparent; font-weight: 600; }
+.key-msg { padding: 8px 0; font-size: 12px; }
+.key-msg.ok { color: var(--ok); font-weight: 600; }
+article[data-cf-overview], article[data-cf-page] { background: var(--panel); color: var(--ink); }
 button.danger { color: var(--danger); }
 pre, textarea {
   width: 100%; background: color-mix(in srgb, var(--bg) 70%, #000); color: var(--ink);
@@ -302,8 +311,8 @@ textarea { min-height: 120px; }
 .event-country, .event-os { color: var(--ink2); }
 .event-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .event-time { font-family: var(--sans); font-size: 12px; color: var(--ink3); text-align: left; }
-.live { display: inline-block; padding: 1px 7px; border-radius: 999px; background: #111; color: #fff; font: 10px var(--mono); letter-spacing: 0.08em; }
-[data-theme="light"] .live { background: #18181b; }
+.live { display: inline-block; padding: 1px 7px; border-radius: 999px; background: #18181b; color: #fff; font: 10px var(--mono); letter-spacing: 0.08em; }
+[data-theme="dark"] .live { background: #f4f4f5; color: #0a0a0b; }
 .page[hidden] { display: none !important; }
 .seat-card {
   border: 1px solid color-mix(in srgb, var(--hair) 80%, transparent);

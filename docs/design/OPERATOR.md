@@ -12,19 +12,35 @@ tokens:
   live: "#10B981"
   ok: "#16A34A"
   danger: "#DC2626"
-  bg: "#FFFFFF"
-  panel: "#FFFFFF"
-  hair: "#EDEDED"
-  ink: "#18181B"
-  ocean: "#BFDBFE"
-  land: "#334155"
-  land-stroke: "#F8FAFC"
   chart: "#2563EB"
-  nav-on: "#F4F4F5"
   pill: "#10B981"
-  dark-ocean: "#0B1220"
-  dark-land: "#94A3B8"
-  dark-land-stroke: "#020617"
+  light:
+    bg: "#FFFFFF"
+    panel: "#FFFFFF"
+    hair: "#EDEDED"
+    ink: "#18181B"
+    ink2: "#71717A"
+    nav: "#FFFFFF"
+    nav-on: "#F4F4F5"
+    tab-on-bg: "#18181B"
+    tab-on-ink: "#FFFFFF"
+    land: "#E5E7EB"
+    ocean: "#FFFFFF"
+    land-stroke: "#9CA3AF"
+  dark:
+    bg: "#0a0a0b"
+    panel: "#111113"
+    hair: "rgba(255,255,255,0.10)"
+    ink: "rgba(255,255,255,0.94)"
+    ink2: "rgba(255,255,255,0.55)"
+    nav: "#0d0d0f"
+    nav-on: "rgba(255,255,255,0.08)"
+    tab-on-bg: "#F4F4F5"
+    tab-on-ink: "#0a0a0b"
+    land: "#3f3f46"
+    ocean: "#0a0a0b"
+    land-stroke: "#111827"
+theme: "two-state light ↔ dark. Never an empty data-theme. Every THEME click must change appearance."
 typography:
   ui: "Inter, Geist, system-ui, sans-serif"
   mono: "ui-monospace, SFMono-Regular, monospace"
@@ -85,7 +101,7 @@ Pixel-clone **Shoey page chrome** on Realtime / Events / Sessions / Notification
 
 - Header toolbar stays Shoey-like: Last 7 days, Day, Filters, search, live count, Private.
 - **Exactly 10 mini cards.** Compact Bklit stat-card chrome. **0 LLM tokens.** No model call. No generated copy. No full chart gallery (no large Unique-seats area, no Scale/Change dump, no extra chart studio).
-- Required Métis numbers (heartbeat / Ask / CRM ingest only). Missing ingest = **not reported**, never `0` as a fake.
+- Required Métis numbers (heartbeat / Ask / CRM ingest only). Cards show a real number or **0**. Never a contradictory `not reported` badge on a card that already has a value. Empty vault = Tokens **0 tokens**. Live now 0 seats never shows a huge % delta.
 
 | # | Card | Bklit chrome | Real source |
 | --- | --- | --- | --- |

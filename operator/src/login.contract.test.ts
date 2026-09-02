@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ADMIN_EMAILS, accessLoginLocation, accessTeamDomain } from './access'
+import { ADMIN_EMAILS, accessJwtFromRequest, accessLoginLocation, accessTeamDomain } from './access'
 import { handleRequest, type Env } from './index'
 import { memoryStore } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_TEAM_DOMAIN } from './test-fixtures'
@@ -120,6 +120,15 @@ describe('unauth console GET is 302 to Cloudflare Access, never a password form'
     expect(css.status).toBe(200)
     expect(css.headers.get('content-type') || '').toMatch(/text\/css/)
     expect((await css.text()).length).toBeGreaterThan(97)
+  })
+
+  it('reads the Access session JWT from the CF_Authorization cookie', () => {
+    const req = new Request('https://operator.test/v1/admin/keys', {
+      method: 'POST',
+      headers: { cookie: 'other=1; CF_Authorization=header.payload.sig; extra=2' }
+    })
+    expect(accessJwtFromRequest(req)).toBe('header.payload.sig')
+    expect(accessJwtFromRequest(new Request('https://operator.test/v1/admin/keys'))).toBeNull()
   })
 
   it('unauth POST /v1/admin/keys is 401 not 404', async () => {
