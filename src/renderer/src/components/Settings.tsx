@@ -2996,7 +2996,7 @@ function ProductConnectCard({
   desc: string
   waitingLabel: string
   mark: JSX.Element
-  connect: () => Promise<{ ok: boolean; error?: string; tools?: string[] }>
+  connect: () => Promise<{ ok: boolean; error?: string; tools?: string[]; clickupListId?: string; clickupListName?: string }>
   pinnedEndpoint: string
   apiKeyHint: string
   extraFields?: { key: string; label: string; placeholder: string }[]
@@ -3032,7 +3032,10 @@ function ProductConnectCard({
             endpointUrl: pinnedEndpoint,
             connected: true,
             tools: r.tools ?? [],
-            extraHeaders: extraHeaders()
+            extraHeaders: extraHeaders(),
+            ...(kind === 'clickup' && (r.clickupListId || r.clickupListName)
+              ? { clickupListId: r.clickupListId, clickupListName: r.clickupListName }
+              : {})
           }
         ]
       })
@@ -3077,7 +3080,10 @@ function ProductConnectCard({
             endpointUrl: pinnedEndpoint,
             connected: true,
             tools: r.tools ?? [],
-            extraHeaders: extraHeaders()
+            extraHeaders: extraHeaders(),
+            ...(kind === 'clickup' && (r.clickupListId || r.clickupListName)
+              ? { clickupListId: r.clickupListId, clickupListName: r.clickupListName }
+              : {})
           }
         ]
       })
@@ -3148,7 +3154,9 @@ function ProductConnectCard({
         <div className="flex items-center gap-3 pl-10">
           <span className="min-w-0 flex-1 truncate text-[11px] text-[color:var(--cl-muted-foreground)]">
             {conn && conn.tools.length > 0
-              ? `${conn.tools.length} tool${conn.tools.length === 1 ? '' : 's'} available`
+              ? kind === 'clickup' && conn.clickupListName
+                ? `Tasks go to ${conn.clickupListName}`
+                : `${conn.tools.length} tool${conn.tools.length === 1 ? '' : 's'} available`
               : 'Connected — no tools reported for this account.'}
           </span>
           <button

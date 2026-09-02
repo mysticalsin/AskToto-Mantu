@@ -284,7 +284,7 @@ export const Review = memo(function Review({
    *  rendered as a button when isPastMeeting && the recap is empty. */
   onGenerateRecap?: () => void
   /** Named MCP push connections (Settings → Mantu Intelligence) — BidStack (kind 'bidstack') gates
-   *  "Push to CRM" below; every other connected, non-BidStack kind (Plane today) gates "Book next steps". */
+   *  "Push to CRM"; ClickUp gates "Push to ClickUp"; other connected kinds (Plane) gate "Book next steps". */
   mcpConnections?: McpConnection[]
   /** Opens a "Recent meetings" row as a read-only past-meeting Review (same handler History uses). */
   onOpenPastMeeting?: (file: string) => void
@@ -640,10 +640,89 @@ export const Review = memo(function Review({
     }
   }
   // "Book next steps" — manual, review-first, same discipline as "Push to CRM": nothing sends until the
-  // user reviews the exact per-item payload and clicks Confirm. Gated on at least one connected,
-  // non-BidStack mcpConnections entry (Plane today — ClickUp has no UI/IPC wiring yet, see
-  // McpConnectionKindSchema in shared/ipc.ts).
-  const taskConnections = useMemo(() => (mcpConnections ?? []).filter((c) => c.kind !== 'bidstack' && c.connected), [mcpConnections])
+  // user reviews the exact per-item payload and clicks Confirm. Plane stays here. ClickUp recap push is
+  // the dedicated "Push to ClickUp" panel (create-task, named list) — next steps still allow per-item
+  // tasks into that same list.
+  const taskConnections = useMemo(
+    () => (mcpConnections ?? []).filter((c) => c.kind !== 'bidstack' && c.connected),
+    [mcpConnections]
+  )
+  const clickupConn = mcpConnections?.find((c) => c.kind === 'clickup' && c.connected)
+  const [clickupResolvedDest, setClickupResolvedDest] = useState('')
+  const [clickupResolving, setClickupResolving] = useState(false)
+  const clickupDiscoveringRef = useRef(false)
+  const clickupDestName = (clickupResolvedDest || clickupConn?.clickupListName || clickupConn?.clickupListId || '').trim()
+  const [clickupOpen, setClickupOpen] = useState(false)
+  const [clickupState, setClickupState] = useState<{ phase: CrmPushPhase; error: string | null; destinationName?: string; taskUrl?: string }>({
+    phase: 'idle',
+    error: null
+  })
+  useEffect(() => {
+    setClickupOpen(false)
+    setClickupState({ phase: 'idle', error: null })
+    setClickupResolvedDest('')
+    setClickupResolving(false)
+    clickupDiscoveringRef.current = false
+  }, [savedPath])
+
+  const ensureClickupDest = async (): Promise<void> => {
+    if (!clickupConn) return
+    if (clickupDestName || clickupDiscoveringRef.current) return
+    clickupDiscoveringRef.current = true
+    setClickupResolving(true)
+    try {
+      const r = await window.toto.mcpClickupDiscoverDestination()
+      const named = (r.clickupListName || r.clickupListId || '').trim()
+      if (r.ok && named) {
+        setClickupResolvedDest(named)
+        setClickupState((s) =>
+          s.phase === 'error' && /could not name the destination/i.test(s.error || '')
+            ? { phase: 'idle', error: null }
+            : s
+        )
+      } else {
+        setClickupState({ phase: 'error', error: r.error || 'ClickUp could not name the destination.' })
+      }
+    } finally {
+      clickupDiscoveringRef.current = false
+      setClickupResolving(false)
+    }
+  }
+
+  const sendToClickup = async (): Promise<void> => {
+    if (clickupState.phase === 'sending' || !clickupConn) return
+    if (confidentialFlag) {
+      setClickupState({ phase: 'error', error: 'This meeting is marked confidential — ClickUp push is blocked.' })
+      return
+    }
+    if (!clickupDestName) {
+      setClickupState({ phase: 'error', error: 'ClickUp could not name the destination.' })
+      return
+    }
+    const file = savedPath
+    setClickupState({ phase: 'sending', error: null })
+    const r = await window.toto.mcpPush({
+      connectionId: 'clickup',
+      toolName: 'clickup_create_task',
+      args: {
+        name: crmPayload.title,
+        title: crmPayload.title,
+        description: crmPayload.summary,
+        confidential: confidentialFlag
+      },
+      ...(file ? { meetingFile: file.split(/[/\\]/).pop() || file } : {})
+    })
+    if (r.ok) {
+      setClickupState({
+        phase: 'sent',
+        error: null,
+        destinationName: r.destinationName || clickupDestName,
+        taskUrl: r.taskUrl
+      })
+    } else {
+      setClickupState({ phase: 'error', error: r.error || 'ClickUp rejected the task.' })
+    }
+  }
   const [nextStepsOpen, setNextStepsOpen] = useState(false)
   const [nextStepsData, setNextStepsData] = useState<RecapExport['actionItems'] | null>(null)
   const [nextStepsLoading, setNextStepsLoading] = useState(false)
@@ -695,6 +774,7 @@ export const Review = memo(function Review({
 
   const openNextSteps = async (): Promise<void> => {
     setNextStepsOpen(true)
+    void ensureClickupDest()
     // Lazy-fetch, and re-fetch when the recap has changed since the cache was built — mirrors the CRM
     // panel's cost discipline without letting it serve items that no longer match what the user sees.
     if (nextStepsLoading || (nextStepsData && nextStepsSource === recapText)) return
@@ -726,7 +806,7 @@ export const Review = memo(function Review({
   const nextStepArgs = (item: RecapExport['actionItems'][number], i: number, connId: string): NextStepArgs => {
     const title = (itemTitle[i] ?? item.text).trim().slice(0, 300) || item.text.slice(0, 300)
     const description = nextStepDescription(item)
-    const target = (connTarget[connId] || '').trim()
+    const target = connId === 'clickup' ? '' : (connTarget[connId] || '').trim()
     return target ? { title, description, project_id: target } : { title, description }
   }
 
@@ -761,7 +841,7 @@ export const Review = memo(function Review({
     const conns = taskConnections.filter((c) => connChecked[c.id] ?? true)
     for (const { item, i } of items) {
       for (const conn of conns) {
-        const tool = connTool[conn.id] || conn.tools[0]
+        const tool = conn.kind === 'clickup' ? 'clickup_create_task' : connTool[conn.id] || conn.tools[0]
         if (!tool) continue
         const args = nextStepArgs(item, i, conn.id)
         const key = `${i}:${conn.id}`
@@ -1434,6 +1514,95 @@ export const Review = memo(function Review({
         </section>
       )}
 
+      {recapText && !recap?.error && !editingRecap && clickupConn && (
+        <section aria-live="polite">
+          <div className="mb-1.5 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+              <Send size={12} /> ClickUp
+            </div>
+            {!clickupOpen && clickupState.phase !== 'sent' && !confidentialFlag && (
+              <Chip
+                onClick={() => {
+                  setClickupOpen(true)
+                  void ensureClickupDest()
+                }}
+                variant="accent"
+              >
+                <Send size={13} /> Push to ClickUp
+              </Chip>
+            )}
+            {confidentialFlag && (
+              <span className="text-[11px] text-[color:var(--color-ink-3)]">ClickUp push blocked (confidential)</span>
+            )}
+          </div>
+
+          {clickupState.phase === 'sent' ? (
+            <div className="flex flex-col gap-1 text-[13px] text-[var(--color-success)]">
+              <div className="flex items-center gap-1.5">
+                <Check size={13} /> Created in {clickupState.destinationName || clickupDestName || 'ClickUp'}.
+              </div>
+              {clickupState.taskUrl ? (
+                <a href={clickupState.taskUrl} className="text-[11px] text-[color:var(--color-ink-2)] underline" target="_blank" rel="noreferrer">
+                  {clickupState.taskUrl}
+                </a>
+              ) : null}
+            </div>
+          ) : clickupOpen ? (
+            <div className="flex flex-col gap-2">
+              <div className="text-[12px] text-[color:var(--color-ink-2)]">
+                {clickupResolving
+                  ? 'Finding the ClickUp list…'
+                  : clickupDestName
+                    ? `Task in ${clickupDestName}`
+                    : 'ClickUp could not name the destination.'}
+              </div>
+              <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3 text-[12px]">
+                <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+                  Payload preview
+                </div>
+                <div className="flex flex-col gap-1 text-[color:var(--color-ink-2)]">
+                  <div>
+                    <span className="text-[color:var(--color-ink-3)]">Name: </span>
+                    {crmPayload.title}
+                  </div>
+                  <div className="text-[color:var(--color-ink-3)]">Description:</div>
+                  <div className="scroll-thin max-h-32 overflow-y-auto whitespace-pre-wrap rounded-lg bg-white/[0.03] p-2 text-[color:var(--color-ink)]">
+                    {crmPayload.summary || '(empty)'}
+                  </div>
+                </div>
+              </div>
+              {clickupState.phase === 'error' && clickupState.error && (
+                <div className="flex items-start gap-1.5 text-[11px] text-[var(--color-danger)]">
+                  <AlertCircle size={13} className="mt-px shrink-0" />
+                  <span>{clickupState.error}</span>
+                </div>
+              )}
+              <div className="flex items-center gap-1.5">
+                {clickupDestName && !clickupResolving ? (
+                  <Chip
+                    onClick={() => void sendToClickup()}
+                    variant="accent"
+                    disabled={clickupState.phase === 'sending'}
+                  >
+                    {clickupState.phase === 'sending' ? <InlineOrb kind="connecting" /> : <Send size={13} />}
+                    {clickupState.phase === 'sending' ? 'Pushing…' : 'Confirm push'}
+                  </Chip>
+                ) : null}
+                <TextButton
+                  onClick={() => {
+                    setClickupOpen(false)
+                    setClickupState({ phase: 'idle', error: null })
+                  }}
+                  disabled={clickupState.phase === 'sending'}
+                >
+                  Cancel
+                </TextButton>
+              </div>
+            </div>
+          ) : null}
+        </section>
+      )}
+
       {recapText && !recap?.error && !editingRecap && taskConnections.length > 0 && (
         <section aria-live="polite">
           <div className="mb-1.5 flex items-center justify-between">
@@ -1511,29 +1680,41 @@ export const Review = memo(function Review({
                           </label>
                           {checked && (
                             <div className="flex flex-col gap-1.5 pl-6">
-                              {conn.tools.length > 0 ? (
-                                <select
-                                  value={tool}
-                                  onChange={(e) => setConnTool((s) => ({ ...s, [conn.id]: e.target.value }))}
-                                  className="no-drag rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.02] px-2 py-1.5 text-[12px] text-[color:var(--color-ink)]"
-                                >
-                                  {conn.tools.map((t) => (
-                                    <option key={t} value={t}>
-                                      {t}
-                                    </option>
-                                  ))}
-                                </select>
-                              ) : (
-                                <div className="text-[11px] text-[var(--color-danger)]">
-                                  {conn.label} has no tools in this key's scope, so there's nothing to push to.
+                              {conn.kind === 'clickup' ? (
+                                <div className="text-[11px] text-[color:var(--color-ink-2)]">
+                                  {clickupResolving
+                                    ? 'Finding the ClickUp list…'
+                                    : clickupDestName
+                                      ? `Task in ${clickupDestName}`
+                                      : 'ClickUp could not name the destination.'}
                                 </div>
+                              ) : (
+                                <>
+                                  {conn.tools.length > 0 ? (
+                                    <select
+                                      value={tool}
+                                      onChange={(e) => setConnTool((s) => ({ ...s, [conn.id]: e.target.value }))}
+                                      className="no-drag rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.02] px-2 py-1.5 text-[12px] text-[color:var(--color-ink)]"
+                                    >
+                                      {conn.tools.map((t) => (
+                                        <option key={t} value={t}>
+                                          {t}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  ) : (
+                                    <div className="text-[11px] text-[var(--color-danger)]">
+                                      {conn.label} has no tools in this key's scope, so there's nothing to push to.
+                                    </div>
+                                  )}
+                                  <input
+                                    value={connTarget[conn.id] || ''}
+                                    onChange={(e) => setConnTarget((s) => ({ ...s, [conn.id]: e.target.value }))}
+                                    placeholder={`${conn.label} project ID (optional)`}
+                                    className="w-full rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.02] px-2 py-1.5 text-[12px] text-[color:var(--color-ink)]"
+                                  />
+                                </>
                               )}
-                              <input
-                                value={connTarget[conn.id] || ''}
-                                onChange={(e) => setConnTarget((s) => ({ ...s, [conn.id]: e.target.value }))}
-                                placeholder={`${conn.label} project ID (optional)`}
-                                className="w-full rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.02] px-2 py-1.5 text-[12px] text-[color:var(--color-ink)]"
-                              />
                             </div>
                           )}
                         </div>
@@ -1568,6 +1749,9 @@ export const Review = memo(function Review({
                                 ) : null}
                               </div>
                               <div className="text-[color:var(--color-ink)]">{args.title}</div>
+                              {conn.kind === 'clickup' && clickupDestName ? (
+                                <div className="mt-0.5 text-[11px] text-[color:var(--color-ink-3)]">Task in {clickupDestName}</div>
+                              ) : null}
                               <div className="mt-0.5 whitespace-pre-wrap text-[color:var(--color-ink-2)]">{args.description}</div>
                               {status?.phase === 'error' && status.error && (
                                 <div className="mt-1 flex items-start gap-1.5 text-[11px] text-[var(--color-danger)]">
