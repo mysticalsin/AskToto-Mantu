@@ -188,7 +188,8 @@ export function blueBars(values: number[], w = 220, h = 36): string {
   const bw = Math.max(1.5, (w - gap * (n + 1)) / n)
   const rects = values
     .map((v, i) => {
-      const bh = Math.max(1.2, (v / max) * (h - 4))
+      if (v <= 0) return ''
+      const bh = Math.max(2.4, (v / max) * (h - 4))
       const x = gap + i * (bw + gap)
       return `<rect x="${x.toFixed(1)}" y="${(h - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${SHOEY_BLUE}" rx="0.6" />`
     })
