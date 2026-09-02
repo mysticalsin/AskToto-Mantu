@@ -127,6 +127,37 @@ describe('overview ops tiles from real ingest only', () => {
     expect(dash.profiles.filter((p) => p.live30)).toHaveLength(2)
   })
 
+  it('does not paint a Canada pill next to Unique seats 0 when last_seen is stale', async () => {
+    const store = memoryStore()
+    const stale = NOW - 8 * 60 * 60 * 1000
+    for (const id of ['dev-a', 'dev-b'] as const) {
+      await store.upsertSeat({
+        device_id: id,
+        seat_hash: `seat-${id}`,
+        os: 'darwin',
+        app_version: '1.8.2',
+        first_seen: stale,
+        last_seen: stale,
+        country: 'CA',
+        city: 'Longueuil',
+        lat: 45.5,
+        lon: -73.5,
+        last_index_at: null,
+        hostname: 'Tonys-MacBook-Pro',
+        sso_email: 'twalteur@amaris.com',
+        license: 'approved'
+      })
+    }
+    const dash = await buildDashboard(store, 'tony.walteur@gmail.com', NOW)
+    expect(dash.ops.live30).toBe(0)
+    expect(dash.ops.liveNow).toBe(0)
+    expect(dash.map.empty).toBe(true)
+    expect(dash.map.countries).toEqual([])
+    expect(dash.map.dots).toEqual([])
+    expect(dash.ops.live30Series).toEqual(Array.from({ length: 30 }, () => 0))
+    expect(dash.profiles.filter((p) => p.live30)).toHaveLength(0)
+  })
+
   it('does not invent listen minutes or tokens when nothing was reported', async () => {
     const dash = await buildDashboard(memoryStore(), 'tony.walteur@gmail.com', NOW)
     expect(dash.ops.timeSaved).toBeNull()
