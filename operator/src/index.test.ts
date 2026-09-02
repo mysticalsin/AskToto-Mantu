@@ -132,7 +132,21 @@ describe('Access on admin routes', () => {
     expect(res.status).toBe(401)
     expect(await res.json()).toEqual({ ok: false, error: 'Access required' })
     const homeJson = new Request('https://operator.test/', { headers: { accept: 'application/json' } })
-    expect((await handleRequest(homeJson, env(), {}, { store, now: NOW })).status).toBe(401)
+    const home = await handleRequest(
+      homeJson,
+      { ...env(), TEAM_DOMAIN: 'https://tony-walteur.cloudflareaccess.com' },
+      {},
+      { store, now: NOW }
+    )
+    expect(home.status).toBe(302)
+    expect(home.headers.get('location') || '').toMatch(/login/i)
+    const postKeys = await handleRequest(
+      new Request('https://operator.test/v1/admin/keys', { method: 'POST', body: '{}' }),
+      env(),
+      {},
+      { store, now: NOW }
+    )
+    expect(postKeys.status).toBe(401)
   })
 
   it('rejects a non-allowlisted Access email', async () => {

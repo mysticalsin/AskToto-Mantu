@@ -140,35 +140,32 @@ Do **not** enable Zero Trust **"Protect this Worker"** on `metis-operator` for a
 
 ### Zero Trust app Tony must have
 
-This repo **cannot** create the Access application. Account `294885a27b3cc0a1cbe5d0ccbe38de4f` (`tony.walteur@gmail.com`) returns `access.api.error.not_enabled` on `/accounts/{id}/access/apps` and `/access/organizations`. Tony must Enable Access in the dashboard, then create the app. The Worker still 302s and verifies JWT. It does not keep the password form until he does.
+Account `294885a27b3cc0a1cbe5d0ccbe38de4f` started this slice with Access **not enabled**. The org and apps were created from the Operator slice (API). Tony still completes login in a browser (One-time PIN to one of the two emails). The Worker 302s and verifies JWT. It does not keep a password form.
 
-**A. Enable Zero Trust / Access**
-
-1. Open [Zero Trust](https://one.dash.cloudflare.com/) on account `294885a27b3cc0a1cbe5d0ccbe38de4f` (or Cloudflare Dashboard → Zero Trust).
-2. Click **Enable Access** if the banner is up.
-3. Team / auth domain **must** be `tony-walteur` so `TEAM_DOMAIN` is `https://tony-walteur.cloudflareaccess.com`. If Tony picks another team name, he must set Worker var/secret `TEAM_DOMAIN` to `https://<that-team>.cloudflareaccess.com` and redeploy. Unset team = Worker 503, not a password form.
-
-**B. Self-hosted application**
-
-Zero Trust → Access → Applications → Add an application → **Self-hosted**.
+**A. Zero Trust org (done)**
 
 | Field | Value |
 | --- | --- |
-| Name | `Métis Operator` |
-| Session duration | `24h` |
-| Application domain | `metis-operator.tony-walteur.workers.dev` |
-| Type | Self-hosted (public hostname). **Not** a Worker-wide destination. **Not** "all workers" |
+| Name | `Métis` |
+| Auth domain / team | `tony-walteur` |
+| `TEAM_DOMAIN` | `https://tony-walteur.cloudflareaccess.com` |
+| Session | `24h` |
+| IdP | One-time PIN (`One-time PIN`) |
 
-Path destinations (protect console + admin API only):
+If Tony later changes the team name, he must set Worker `TEAM_DOMAIN` to `https://<that-team>.cloudflareaccess.com` and redeploy. Unset team = Worker 503, not a password form.
 
-| Protect (yes) | Do not protect |
-| --- | --- |
-| `metis-operator.tony-walteur.workers.dev/` | `…/health` |
-| `…/keys` `…/licenses` `…/devices` `…/map` `…/cloudflare` | `…/v1/ingest` |
-| `…/overview` `…/events` `…/profiles` `…/realtime` `…/macos` `…/windows` `…/skills` | `…/v1/heartbeat` |
-| `…/v1/admin` and `…/v1/admin*` | `…/v1/skills/manifest` |
+**B. Self-hosted applications (done)**
 
-If the UI only takes one domain plus a path prefix, use two apps or two destinations: (1) the site root / named console paths, (2) `/v1/admin*`. Never a single app that matches `/v1/*`.
+Hostname-wide Allow would wrap HMAC ingest. So the layout is: one Allow app on the hostname, plus **more-specific Bypass** apps for machine paths. `/v1/admin*` is Bypass at the edge so the Worker can return **401 JSON** (not a CF login HTML). Do **not** click Protect this Worker.
+
+| App | Domain | Policy |
+| --- | --- | --- |
+| `Métis Operator` | `metis-operator.tony-walteur.workers.dev` | Allow, emails `twalteur@amaris.com` + `tony.walteur@gmail.com` |
+| `Métis Operator health` | `…/health` | Bypass everyone |
+| `Métis Operator ingest` | `…/v1/ingest` | Bypass everyone |
+| `Métis Operator heartbeat` | `…/v1/heartbeat` | Bypass everyone |
+| `Métis Operator skills manifest` | `…/v1/skills/manifest` | Bypass everyone |
+| `Métis Operator admin API` | `…/v1/admin` | Bypass everyone (Worker JWT + allowlist) |
 
 **C. Policy (Allow, Tony emails only)**
 
@@ -178,25 +175,23 @@ If the UI only takes one domain plus a path prefix, use two apps or two destinat
 | Action | Allow |
 | Include | Emails: `twalteur@amaris.com`, `tony.walteur@gmail.com` |
 | Require / Exclude | Empty. No other emails. No `Everyone`. No `@amaris.com` domain-wide |
-| Identity | One-time PIN and/or Google. Those two emails must be able to receive the PIN or use Google |
+| Identity | One-time PIN. Those two emails must receive the PIN |
 
 **D. Bind AUD on the Worker**
 
-After save, the application **AUD** (Application Audience) is on the app settings page. Set Worker secret/var:
+`TEAM_DOMAIN` is a Wrangler `vars` value (`https://tony-walteur.cloudflareaccess.com`). `POLICY_AUD` is the **Métis Operator** application audience. Bind it as a Worker secret. Do not commit `POLICY_AUD`.
 
 ```
 TEAM_DOMAIN=https://tony-walteur.cloudflareaccess.com
 POLICY_AUD=<aud from the Métis Operator app>
 ```
 
-`npx wrangler@4 secret put TEAM_DOMAIN` and `secret put POLICY_AUD` from `operator/`. Do not commit `POLICY_AUD`. `TEAM_DOMAIN` may be a Wrangler `vars` value (`https://tony-walteur.cloudflareaccess.com`) so unauth 302 works before AUD exists.
-
 **E. Forbidden**
 
 - Do not click **Protect this Worker** on `metis-operator`.
 - Do not put `OPERATOR_ADMIN_PASSWORD` back as a login. The secret may remain bound; the Worker must not read it for a session cookie.
 - Do not put CLI tokens in the vault.
-- Do not protect ingest or `/health`.
+- Do not drop the Bypass apps on ingest or `/health`.
 
 ## What this is not (explicit non-goals)
 
