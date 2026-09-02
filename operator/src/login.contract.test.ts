@@ -1,137 +1,173 @@
 import { describe, expect, it } from 'vitest'
-import { ADMIN_EMAILS, SESSION_COOKIE } from './access'
+import { ADMIN_EMAILS, accessLoginLocation, accessTeamDomain } from './access'
 import { handleRequest, type Env } from './index'
 import { memoryStore } from './store'
-import { TEST_ADMIN_PASSWORD, TEST_INGEST_SECRET, TEST_PROMPT_KEY } from './test-fixtures'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_TEAM_DOMAIN } from './test-fixtures'
 import { tokenPatternForTests } from './redact'
 
 const NOW = 1_725_000_000_000
 
-function env(): Env {
+function env(extra: Partial<Env> = {}): Env {
   return {
     OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
     OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
     OPERATOR_SKILL_PRIVATE_KEY: 'unused',
-    OPERATOR_ADMIN_PASSWORD: TEST_ADMIN_PASSWORD
+    TEAM_DOMAIN: TEST_TEAM_DOMAIN,
+    ...extra
   }
 }
 
-function cookieFrom(res: Response): string {
-  const raw = res.headers.get('set-cookie') || ''
-  const match = raw.match(new RegExp(`${SESSION_COOKIE}=([^;]+)`))
-  if (!match) return ''
-  return `${SESSION_COOKIE}=${match[1]}`
+function access(email: string) {
+  return { getIdentity: async () => ({ email }) }
 }
 
-describe('browser GET / is HTML login, never JSON Access required', () => {
-  it('serves text/html login for an unauthenticated GET /', async () => {
+function locationOf(res: Response): string {
+  return res.headers.get('location') || ''
+}
+
+function isAccessLoginRedirect(loc: string, path: string): boolean {
+  if (!/login/i.test(loc)) return false
+  const decoded = decodeURIComponent(loc)
+  return decoded.includes(`next=${path}`) || decoded.includes(path)
+}
+
+describe('unauth console GET is 302 to Cloudflare Access, never a password form', () => {
+  it('builds an Access login URL with next and redirect_url', () => {
+    expect(accessTeamDomain(TEST_TEAM_DOMAIN)).toBe(TEST_TEAM_DOMAIN)
+    expect(accessTeamDomain(undefined)).toBeNull()
+    expect(accessTeamDomain('http://evil.example')).toBeNull()
+    const loc = accessLoginLocation(new Request('https://operator.test/keys'), TEST_TEAM_DOMAIN)
+    expect(loc).toContain('/cdn-cgi/access/login/operator.test')
+    expect(isAccessLoginRedirect(loc, '/keys')).toBe(true)
+  })
+
+  it('unauth GET / is 302, not HTML password form', async () => {
     const res = await handleRequest(new Request('https://operator.test/'), env(), {}, {
       store: memoryStore(),
       now: NOW
     })
-    expect(res.status).toBe(200)
-    expect(res.headers.get('content-type')).toMatch(/text\/html/)
-    const html = await res.text()
-    expect(html).toContain('data-login="1"')
-    expect(html).toContain('type="email"')
-    expect(html).toContain('type="password"')
-    expect(html).toContain('Sign in')
-    expect(html).not.toContain('Access required')
-    expect(html).not.toMatch(/\{"ok":\s*false/)
-    expect(html).not.toMatch(tokenPatternForTests())
-    expect(html).not.toContain('Jane Doe')
-    expect(html).not.toContain('visitor@')
+    expect(res.status).toBe(302)
+    expect(isAccessLoginRedirect(locationOf(res), '/')).toBe(true)
+    const body = await res.text()
+    expect(body).not.toContain('data-login="1"')
+    expect(body).not.toContain('type="password"')
+    expect(body).not.toContain('Sign in')
+    expect(body).not.toMatch(tokenPatternForTests())
   })
 
-  it('returns JSON 401 for Accept application/json on / and for /v1/admin without identity', async () => {
-    const store = memoryStore()
-    const jsonHome = await handleRequest(
-      new Request('https://operator.test/', { headers: { accept: 'application/json' } }),
-      env(),
-      {},
-      { store, now: NOW }
-    )
-    expect(jsonHome.status).toBe(401)
-    expect(jsonHome.headers.get('content-type')).toMatch(/application\/json/)
-    expect(await jsonHome.json()).toEqual({ ok: false, error: 'Access required' })
-
-    const api = await handleRequest(
-      new Request('https://operator.test/v1/admin/dashboard'),
-      env(),
-      {},
-      { store, now: NOW }
-    )
-    expect(api.status).toBe(401)
-    expect(api.headers.get('content-type')).toMatch(/application\/json/)
-    expect(await api.json()).toEqual({ ok: false, error: 'Access required' })
+  it('unauth GET /keys is 302 with next=/keys, not 404 JSON', async () => {
+    const res = await handleRequest(new Request('https://operator.test/keys'), env(), {}, {
+      store: memoryStore(),
+      now: NOW
+    })
+    expect(res.status).toBe(302)
+    expect(isAccessLoginRedirect(locationOf(res), '/keys')).toBe(true)
+    expect(await res.text()).not.toContain('not found')
   })
 
-  it('signs in allowlisted emails with the Worker password and then serves the console', async () => {
-    for (const email of ADMIN_EMAILS) {
-      const store = memoryStore()
-      const posted = await handleRequest(
-        new Request('https://operator.test/login', {
-          method: 'POST',
-          headers: { 'content-type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({ email, password: TEST_ADMIN_PASSWORD }).toString()
-        }),
-        env(),
-        {},
-        { store, now: NOW }
-      )
-      expect(posted.status, email).toBe(303)
-      expect(posted.headers.get('location')).toBe('/')
-      const cookie = cookieFrom(posted)
-      expect(cookie).toContain(SESSION_COOKIE)
-      expect(cookie).not.toContain(TEST_ADMIN_PASSWORD)
-
-      const consolePage = await handleRequest(
-        new Request('https://operator.test/', { headers: { cookie } }),
-        env(),
-        {},
-        { store, now: NOW }
-      )
-      expect(consolePage.status, email).toBe(200)
-      const html = await consolePage.text()
-      expect(html).toContain('data-nav="overview"')
-      expect(html).toContain('data-nav="realtime"')
-      expect(html).toContain('data-nav="events"')
-      expect(html).toContain('data-nav="profiles"')
-      expect(html).toContain('data-page="map"')
-      expect(html).toContain(email)
-      expect(html).not.toContain('data-login="1"')
+  it('unauth GET of every console path is 302, not 404', async () => {
+    const paths = ['/licenses', '/devices', '/map', '/cloudflare', '/overview', '/events']
+    for (const path of paths) {
+      const res = await handleRequest(new Request(`https://operator.test${path}`), env(), {}, {
+        store: memoryStore(),
+        now: NOW
+      })
+      expect(res.status, path).toBe(302)
+      expect(isAccessLoginRedirect(locationOf(res), path), path).toBe(true)
     }
   })
 
-  it('rejects a non-allowlisted email and a wrong password, and never opens the console', async () => {
-    const store = memoryStore()
-    const stranger = await handleRequest(
-      new Request('https://operator.test/login', {
-        method: 'POST',
-        headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ email: 'other@example.com', password: TEST_ADMIN_PASSWORD }).toString()
-      }),
+  it('unauth POST /v1/admin/keys is 401 not 404', async () => {
+    const res = await handleRequest(
+      new Request('https://operator.test/v1/admin/keys', { method: 'POST', body: '{}' }),
       env(),
       {},
-      { store, now: NOW }
+      { store: memoryStore(), now: NOW }
     )
-    expect(stranger.status).toBe(200)
-    expect(stranger.headers.get('set-cookie')).toBeNull()
-    expect(await stranger.text()).toContain('Sign-in failed')
+    expect(res.status).toBe(401)
+    expect(res.headers.get('content-type')).toMatch(/application\/json/)
+    expect(await res.json()).toEqual({ ok: false, error: 'Access required' })
+  })
 
-    const wrong = await handleRequest(
+  it('fails loud (503) when TEAM_DOMAIN is unset, and does not serve a password form', async () => {
+    const res = await handleRequest(
+      new Request('https://operator.test/keys'),
+      env({ TEAM_DOMAIN: undefined }),
+      {},
+      { store: memoryStore(), now: NOW }
+    )
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({
+      ok: false,
+      error: 'Cloudflare Access is misconfigured: TEAM_DOMAIN is unset'
+    })
+  })
+
+  it('fails loud when a JWT is present but POLICY_AUD is unset', async () => {
+    const res = await handleRequest(
+      new Request('https://operator.test/', { headers: { 'cf-access-jwt-assertion': 'header.payload.sig' } }),
+      env({ POLICY_AUD: undefined }),
+      {},
+      { store: memoryStore(), now: NOW }
+    )
+    expect(res.status).toBe(503)
+    expect(await res.json()).toEqual({
+      ok: false,
+      error: 'Cloudflare Access is misconfigured: POLICY_AUD is unset'
+    })
+  })
+
+  it('serves the console after Access identity for allowlisted emails, including /keys', async () => {
+    for (const email of ADMIN_EMAILS) {
+      const store = memoryStore()
+      const home = await handleRequest(
+        new Request('https://operator.test/'),
+        env(),
+        { access: access(email) },
+        { store, now: NOW }
+      )
+      expect(home.status, email).toBe(200)
+      const html = await home.text()
+      expect(html).toContain('data-nav="overview"')
+      expect(html).toContain('data-nav="events"')
+      expect(html).toContain(email)
+      expect(html).not.toContain('data-login="1"')
+      expect(html).not.toContain('action="/login"')
+
+      const keys = await handleRequest(
+        new Request('https://operator.test/keys'),
+        env(),
+        { access: access(email) },
+        { store, now: NOW }
+      )
+      expect(keys.status, email).toBe(200)
+      expect(keys.headers.get('content-type')).toMatch(/text\/html/)
+    }
+  })
+
+  it('rejects a non-allowlisted Access email and never opens the console', async () => {
+    const res = await handleRequest(
+      new Request('https://operator.test/'),
+      env(),
+      { access: access('other@example.com') },
+      { store: memoryStore(), now: NOW }
+    )
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ ok: false, error: 'Access required' })
+  })
+
+  it('does not accept POST /login as a password fallback', async () => {
+    const res = await handleRequest(
       new Request('https://operator.test/login', {
         method: 'POST',
         headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({ email: 'tony.walteur@gmail.com', password: 'nope' }).toString()
+        body: 'email=tony.walteur@gmail.com&password=anything'
       }),
       env(),
       {},
-      { store, now: NOW }
+      { store: memoryStore(), now: NOW }
     )
-    expect(wrong.status).toBe(200)
-    expect(wrong.headers.get('set-cookie')).toBeNull()
-    const home = await handleRequest(new Request('https://operator.test/'), env(), {}, { store, now: NOW })
-    expect(await home.text()).toContain('data-login="1"')
+    expect(res.status).toBe(401)
+    expect(res.headers.get('set-cookie')).toBeNull()
   })
 })

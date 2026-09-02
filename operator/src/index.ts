@@ -1,14 +1,13 @@
 import { sanitizeOperatorHostname, sanitizeOperatorSsoEmail } from '../../src/shared/operator'
 import {
   ADMIN_EMAILS,
-  adminIdentity,
   clearSessionCookie,
-  isAdminEmail,
-  mintSessionCookie,
-  normalizeAdminEmail,
-  passwordMatches,
+  accessMisconfigured,
+  isAdminApiPath,
+  isConsolePath,
+  redirectToAccess,
+  resolveAdminIdentity,
   unauthorized,
-  wantsJson,
   type AccessCtx
 } from './access'
 import { missingCloudflareOverview, pullCloudflareOverview, type CloudflareOverview } from './cloudflare'
@@ -28,7 +27,7 @@ import {
 } from './keys'
 import { looksLikeSecret } from './redact'
 import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './store'
-import { renderConsole, renderLogin } from './ui'
+import { renderConsole } from './ui'
 
 export interface Env {
   DB?: D1DatabaseLike
@@ -36,7 +35,6 @@ export interface Env {
   OPERATOR_PROMPT_KEY: string
   OPERATOR_SKILL_PRIVATE_KEY: string
   OPERATOR_SKILL_PUBLIC_KEY?: string
-  OPERATOR_ADMIN_PASSWORD?: string
   OPERATOR_VAULT_KEY?: string
   TEAM_DOMAIN?: string
   POLICY_AUD?: string
@@ -64,10 +62,6 @@ function html(body: string): Response {
   return new Response(body, { headers: { 'content-type': 'text/html; charset=utf-8' } })
 }
 
-function isAdminPath(pathname: string): boolean {
-  return pathname === '/' || pathname.startsWith('/v1/admin')
-}
-
 function redactedPreview(_question: string | undefined, mode: string | undefined): string {
   return mode ? `${mode} ask` : 'Ask'
 }
@@ -91,28 +85,20 @@ export async function handleRequest(
     })
   }
 
-  if (url.pathname === '/login' && request.method === 'POST') {
-    return handleLogin(request, env, store, now)
-  }
   if (url.pathname === '/logout' && request.method === 'POST') {
     return new Response(null, { status: 303, headers: { Location: '/', 'Set-Cookie': clearSessionCookie() } })
   }
-  if (url.pathname === '/login' && request.method === 'GET') {
-    if (wantsJson(request)) return unauthorized()
-    const ident = await adminIdentity(request, accessCtx, env, now)
-    if (ident) return new Response(null, { status: 303, headers: { Location: '/' } })
-    return html(renderLogin())
-  }
 
-  if (isAdminPath(url.pathname)) {
-    const ident = await adminIdentity(request, accessCtx, env, now)
-    if (!ident) {
-      if (url.pathname === '/' && request.method === 'GET' && !wantsJson(request)) {
-        return html(renderLogin())
-      }
+  if (isConsolePath(url.pathname) || isAdminApiPath(url.pathname)) {
+    const ident = await resolveAdminIdentity(request, accessCtx, env)
+    if (ident.status === 'misconfigured') return accessMisconfigured(ident.error)
+    if (ident.status === 'ok') {
+      return adminRoute(request, url, env, store, ident.email, now, opts)
+    }
+    if (ident.status === 'denied' || isAdminApiPath(url.pathname) || request.method !== 'GET') {
       return unauthorized()
     }
-    return adminRoute(request, url, env, store, ident.email, now, opts)
+    return redirectToAccess(request, env)
   }
 
   if (url.pathname === '/v1/ingest' || url.pathname === '/v1/heartbeat' || url.pathname === '/v1/skills/manifest') {
@@ -131,44 +117,6 @@ export async function handleRequest(
   return json({ ok: false, error: 'not found' }, 404)
 }
 
-const LOGIN_WINDOW_MS = 60_000
-const LOGIN_MAX = 10
-
-async function handleLogin(
-  request: Request,
-  env: Env,
-  store: OperatorStore,
-  now: number
-): Promise<Response> {
-  const ip = request.headers.get('cf-connecting-ip') || 'unknown'
-  if (await store.hitRate(`login:${ip}`, now, LOGIN_WINDOW_MS, LOGIN_MAX)) {
-    return html(renderLogin('Sign-in failed'))
-  }
-  const { email, password } = await readLoginBody(request)
-  const secret = env.OPERATOR_ADMIN_PASSWORD || ''
-  const emailOk = isAdminEmail(email)
-  const passOk = await passwordMatches(password, secret)
-  if (!emailOk || !passOk) return html(renderLogin('Sign-in failed'))
-  const cookie = await mintSessionCookie(normalizeAdminEmail(email), secret, now)
-  return new Response(null, { status: 303, headers: { Location: '/', 'Set-Cookie': cookie } })
-}
-
-async function readLoginBody(request: Request): Promise<{ email: string; password: string }> {
-  const ct = request.headers.get('content-type') || ''
-  if (ct.includes('application/json')) {
-    const body = (await request.json().catch(() => ({}))) as { email?: unknown; password?: unknown }
-    return {
-      email: typeof body.email === 'string' ? body.email : '',
-      password: typeof body.password === 'string' ? body.password : ''
-    }
-  }
-  const form = await request.formData().catch(() => null)
-  return {
-    email: form && typeof form.get('email') === 'string' ? String(form.get('email')) : '',
-    password: form && typeof form.get('password') === 'string' ? String(form.get('password')) : ''
-  }
-}
-
 async function adminRoute(
   request: Request,
   url: URL,
@@ -178,7 +126,7 @@ async function adminRoute(
   now: number,
   opts: HandleOpts = {}
 ): Promise<Response> {
-  if (url.pathname === '/' && request.method === 'GET') {
+  if (isConsolePath(url.pathname) && request.method === 'GET') {
     const dash = await buildDashboard(store, email, now, keyFlags(env), await cloudflareForDashboard(store, env, opts, now))
     return html(renderConsole(dash))
   }

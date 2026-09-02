@@ -79,24 +79,40 @@ describe('quality bar: overlay chrome stays a separate slice', () => {
 })
 
 describe('quality bar: login', () => {
-  it('serves HTML login on browser GET / and JSON 401 only on APIs', async () => {
+  it('302s unauth console GET to Access and keeps admin APIs at 401 JSON', async () => {
     expect([...ADMIN_EMAILS].sort()).toEqual(['tony.walteur@gmail.com', 'twalteur@amaris.com'].sort())
     const store = memoryStore()
-    const denied = await handleRequest(new Request('https://operator.test/'), env(), {}, { store, now: NOW })
-    expect(denied.headers.get('content-type')).toMatch(/text\/html/)
-    const loginHtml = await denied.text()
-    expect(loginHtml).toContain('data-login="1"')
-    expect(loginHtml).toContain('type="password"')
-    expect(loginHtml).not.toContain('Access required')
+    const configured = {
+      ...env(),
+      TEAM_DOMAIN: 'https://tony-walteur.cloudflareaccess.com'
+    }
+    const denied = await handleRequest(new Request('https://operator.test/'), configured, {}, { store, now: NOW })
+    expect(denied.status).toBe(302)
+    const loc = denied.headers.get('location') || ''
+    expect(loc).toMatch(/login/i)
+    expect(decodeURIComponent(loc)).toMatch(/next=\//)
+    expect(await denied.text()).not.toContain('data-login="1"')
+
+    const keys = await handleRequest(new Request('https://operator.test/keys'), configured, {}, { store, now: NOW })
+    expect(keys.status).toBe(302)
+    expect(decodeURIComponent(keys.headers.get('location') || '')).toMatch(/next=\/keys/)
 
     const api = await handleRequest(
       new Request('https://operator.test/v1/admin/dashboard'),
-      env(),
+      configured,
       {},
       { store, now: NOW }
     )
     expect(api.status).toBe(401)
     expect(await api.json()).toEqual({ ok: false, error: 'Access required' })
+
+    const postKeys = await handleRequest(
+      new Request('https://operator.test/v1/admin/keys', { method: 'POST', body: '{}' }),
+      configured,
+      {},
+      { store, now: NOW }
+    )
+    expect(postKeys.status).toBe(401)
 
     const other = await handleRequest(
       new Request('https://operator.test/v1/admin/summary'),

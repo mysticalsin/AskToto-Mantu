@@ -138,18 +138,44 @@ function probeLiveLogin() {
     if (healthCode !== '200' || !healthBody.includes('"service":"metis-operator"')) {
       fail(`live /health must stay 200 without Access (got ${healthCode})`)
     }
-    const root = run('curl', ['-sS', '-D', '-', '-o', '-', `${host}/`])
-    if (!/content-type:\s*text\/html/i.test(root) || !/data-login="1"/.test(root) || !/type="password"/.test(root)) {
-      fail(`live / must be text/html login, not JSON Access required`)
+    const root = run('curl', ['-sS', '-D', '-', '-o', '/dev/null', `${host}/`])
+    if (!/HTTP\/\S+\s+302/.test(root) || !/location:\s*.*login/i.test(root)) {
+      fail(`live / must 302 to Cloudflare Access login, not an HTML password form`)
     }
-    if (/"ok":\s*false/.test(root) && /Access required/.test(root) && !/data-login/.test(root)) {
-      fail(`live / first paint is still JSON 401`)
+    if (/data-login="1"/i.test(root) || /type="password"/i.test(root)) {
+      fail(`live / still serves the homemade password form`)
+    }
+    const keys = run('curl', ['-sS', '-D', '-', '-o', '/dev/null', `${host}/keys`])
+    if (!/HTTP\/\S+\s+302/.test(keys) || !/location:\s*.*login/i.test(keys)) {
+      fail(`live /keys must 302 to Access login, not 404 JSON`)
+    }
+    const keysLoc = (keys.match(/location:\s*(\S+)/i) || [])[1] || ''
+    const decodedKeys = decodeURIComponent(keysLoc)
+    if (!decodedKeys.includes('/keys') && !/next=\/keys/.test(decodedKeys)) {
+      fail(`live /keys Location must carry next=/keys or /keys (got ${keysLoc})`)
     }
     const api = run('curl', ['-sS', '-D', '-', '-o', '-', `${host}/v1/admin/dashboard`])
     if (!/HTTP\/\S+\s+401/.test(api) || !/application\/json/i.test(api) || !/Access required/.test(api)) {
       fail(`live /v1/admin/dashboard must stay 401 JSON without identity`)
     }
-    console.log(`✓ Live login contract: ${host}/health 200, ${host}/ text/html login, ${host}/v1/admin/dashboard 401 JSON`)
+    const postKeys = run('curl', [
+      '-sS',
+      '-D',
+      '-',
+      '-o',
+      '-',
+      '-X',
+      'POST',
+      '-H',
+      'content-type: application/json',
+      '-d',
+      '{}',
+      `${host}/v1/admin/keys`
+    ])
+    if (!/HTTP\/\S+\s+401/.test(postKeys) || /HTTP\/\S+\s+404/.test(postKeys)) {
+      fail(`live POST /v1/admin/keys must stay 401, not 404`)
+    }
+    console.log(`✓ Live login contract: ${host}/health 200, ${host}/ and ${host}/keys 302 Access, POST /v1/admin/keys 401 JSON`)
   } catch (err) {
     fail(`live login probe failed: ${err instanceof Error ? err.message : String(err)}`)
   }

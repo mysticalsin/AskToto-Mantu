@@ -1,13 +1,23 @@
-import { bytesToB64url, b64urlToBytes, sha256Hex } from './crypto'
-import { hmacHex, timingSafeEqualHex } from './hmac'
-
-const enc = new TextEncoder()
-const dec = new TextDecoder()
-
 export const ADMIN_EMAILS = ['tony.walteur@gmail.com', 'twalteur@amaris.com'] as const
 
 export const SESSION_COOKIE = 'metis_operator_session'
-export const SESSION_TTL_MS = 24 * 60 * 60 * 1000
+
+export const CONSOLE_PATHS = [
+  '/',
+  '/keys',
+  '/licenses',
+  '/devices',
+  '/map',
+  '/cloudflare',
+  '/overview',
+  '/events',
+  '/profiles',
+  '/realtime',
+  '/macos',
+  '/windows',
+  '/skills',
+  '/login'
+] as const
 
 export type AccessCtx = {
   access?: { getIdentity: () => Promise<{ email?: string } | null | undefined> }
@@ -16,8 +26,13 @@ export type AccessCtx = {
 export type AdminEnv = {
   TEAM_DOMAIN?: string
   POLICY_AUD?: string
-  OPERATOR_ADMIN_PASSWORD?: string
 }
+
+export type IdentityResult =
+  | { status: 'ok'; email: string }
+  | { status: 'none' }
+  | { status: 'denied' }
+  | { status: 'misconfigured'; error: string }
 
 export function normalizeAdminEmail(raw: string): string {
   return raw.trim().toLowerCase()
@@ -25,6 +40,14 @@ export function normalizeAdminEmail(raw: string): string {
 
 export function isAdminEmail(raw: string): boolean {
   return (ADMIN_EMAILS as readonly string[]).includes(normalizeAdminEmail(raw))
+}
+
+export function isConsolePath(pathname: string): boolean {
+  return (CONSOLE_PATHS as readonly string[]).includes(pathname)
+}
+
+export function isAdminApiPath(pathname: string): boolean {
+  return pathname.startsWith('/v1/admin')
 }
 
 /** JSON 401 only for /v1/* or Accept: application/json (no HTML preferred). */
@@ -37,85 +60,75 @@ export function wantsJson(request: Request): boolean {
   return accept.indexOf('application/json') < accept.indexOf('text/html')
 }
 
-export async function passwordMatches(given: string, secret: string): Promise<boolean> {
-  const a = await sha256Hex(given || '\0')
-  const b = await sha256Hex(secret || '\0')
-  return Boolean(given) && Boolean(secret) && timingSafeEqualHex(a, b)
+export function accessTeamDomain(raw?: string): string | null {
+  if (!raw) return null
+  const trimmed = raw.trim()
+  if (!trimmed) return null
+  try {
+    const u = new URL(trimmed)
+    if (u.protocol !== 'https:') return null
+    if (!u.hostname.endsWith('.cloudflareaccess.com')) return null
+    if (u.hostname === 'cloudflareaccess.com') return null
+    return `${u.protocol}//${u.host}`
+  } catch {
+    return null
+  }
 }
 
-export async function mintSessionCookie(email: string, secret: string, now: number): Promise<string> {
-  const exp = now + SESSION_TTL_MS
-  const norm = normalizeAdminEmail(email)
-  const packed = bytesToB64url(enc.encode(norm))
-  const sig = await hmacHex(secret, `${norm}.${exp}`)
-  const value = `${packed}.${exp}.${sig}`
-  return `${SESSION_COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}`
+export function accessLoginLocation(request: Request, teamDomain: string): string {
+  const url = new URL(request.url)
+  const login = new URL(`${teamDomain}/cdn-cgi/access/login/${url.host}`)
+  login.searchParams.set('redirect_url', url.toString())
+  login.searchParams.set('next', url.pathname)
+  return login.toString()
+}
+
+export function accessMisconfigured(error: string): Response {
+  return Response.json({ ok: false, error }, { status: 503 })
+}
+
+export function redirectToAccess(request: Request, env: AdminEnv): Response {
+  const team = accessTeamDomain(env.TEAM_DOMAIN)
+  if (!team) {
+    return accessMisconfigured('Cloudflare Access is misconfigured: TEAM_DOMAIN is unset')
+  }
+  return new Response(null, { status: 302, headers: { Location: accessLoginLocation(request, team) } })
 }
 
 export function clearSessionCookie(): string {
   return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`
 }
 
-export async function emailFromSessionCookie(
-  request: Request,
-  secret: string,
-  now: number
-): Promise<string | null> {
-  if (!secret) return null
-  const raw = cookieValue(request, SESSION_COOKIE)
-  if (!raw) return null
-  const parts = raw.split('.')
-  if (parts.length !== 3) return null
-  let email = ''
-  try {
-    email = normalizeAdminEmail(dec.decode(b64urlToBytes(parts[0] || '')))
-  } catch {
-    return null
-  }
-  const exp = Number(parts[1])
-  const sig = parts[2] || ''
-  if (!isAdminEmail(email) || !Number.isFinite(exp) || exp <= now) return null
-  const expected = await hmacHex(secret, `${email}.${exp}`)
-  if (!timingSafeEqualHex(sig, expected)) return null
-  return email
-}
-
-function cookieValue(request: Request, name: string): string | null {
-  const header = request.headers.get('cookie') || ''
-  for (const part of header.split(';')) {
-    const i = part.indexOf('=')
-    if (i < 0) continue
-    if (part.slice(0, i).trim() !== name) continue
-    return part.slice(i + 1).trim()
-  }
-  return null
-}
-
-export async function adminIdentity(
+export async function resolveAdminIdentity(
   request: Request,
   ctx: AccessCtx,
-  env: AdminEnv,
-  now = Date.now()
-): Promise<{ email: string } | null> {
+  env: AdminEnv
+): Promise<IdentityResult> {
   if (ctx.access) {
     try {
       const identity = await ctx.access.getIdentity()
       const email = identity?.email?.trim().toLowerCase()
-      if (email && isAdminEmail(email)) return { email }
+      if (email) {
+        if (isAdminEmail(email)) return { status: 'ok', email }
+        return { status: 'denied' }
+      }
     } catch {
-      /* fall through */
+      /* fall through to JWT */
     }
   }
   const jwt = request.headers.get('cf-access-jwt-assertion')
-  if (jwt && env.TEAM_DOMAIN && env.POLICY_AUD) {
-    const email = await verifyAccessJwt(jwt, env.TEAM_DOMAIN, env.POLICY_AUD)
-    if (email && isAdminEmail(email)) return { email }
+  if (jwt) {
+    if (!accessTeamDomain(env.TEAM_DOMAIN)) {
+      return { status: 'misconfigured', error: 'Cloudflare Access is misconfigured: TEAM_DOMAIN is unset' }
+    }
+    if (!env.POLICY_AUD?.trim()) {
+      return { status: 'misconfigured', error: 'Cloudflare Access is misconfigured: POLICY_AUD is unset' }
+    }
+    const email = await verifyAccessJwt(jwt, accessTeamDomain(env.TEAM_DOMAIN)!, env.POLICY_AUD.trim())
+    if (email && isAdminEmail(email)) return { status: 'ok', email }
+    return { status: 'denied' }
   }
-  if (env.OPERATOR_ADMIN_PASSWORD) {
-    const email = await emailFromSessionCookie(request, env.OPERATOR_ADMIN_PASSWORD, now)
-    if (email) return { email }
-  }
-  return null
+  return { status: 'none' }
 }
 
 async function verifyAccessJwt(token: string, teamDomain: string, aud: string): Promise<string | null> {
