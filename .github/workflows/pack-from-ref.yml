@@ -1,0 +1,466 @@
+name: Pack from ref
+
+# Off-main signed pack path. The Release workflow (release.yml) only runs on v* tags and
+# requires HEAD == origin/main, so it cannot pack a version that lives on a branch/SHA
+# (e.g. 1.8.3) while origin/main is still an older version. This workflow is
+# workflow_dispatch-only: checkout git_ref, require package.json to match release_tag,
+# run the same quality + signed macOS/Windows pack as Release (same secrets, same
+# signing, same ffmpeg sidecar, same electron-builder, same verify-signing /
+# packaged-runtime checks), then create or update a GitHub Release (draft is OK)
+# on publish_repo. Do not use Cahê Windows (Kimi-key edition).
+on:
+  workflow_dispatch:
+    inputs:
+      git_ref:
+        description: 'Branch or SHA to checkout and pack'
+        required: true
+        type: string
+      release_tag:
+        description: 'Release tag to create or update (e.g. v1.8.3). Must match package.json version on git_ref.'
+        required: true
+        type: string
+      publish_repo:
+        description: 'GitHub repository that receives the signed release assets'
+        required: true
+        type: choice
+        options:
+          - mysticalsin/AskToto-Mantu
+          - mysticalsin/Metis-Releases
+        default: mysticalsin/AskToto-Mantu
+
+# A retry for the same tag + publish repo must never race another run while both mutate the same draft.
+concurrency:
+  group: metis-pack-from-ref-${{ inputs.publish_repo }}-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  pack-quality:
+    name: Pack source gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref }}
+          fetch-depth: 0
+      # Intentionally no "tagged commit must be current origin/main" gate — that is why this
+      # workflow exists. Still require package.json on git_ref to match release_tag.
+      - name: Require release_tag to match package.json version
+        run: node scripts/check-version-parity.mjs
+        env:
+          GITHUB_REF_NAME: ${{ inputs.release_tag }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: npm audit --audit-level=critical
+
+  pack-macos:
+    name: macOS signed pack
+    needs: pack-quality
+    runs-on: macos-latest
+    # Notarization blocks on Apple's queue, which is usually minutes but has had documented multi-hour
+    # degradations; 45 min was tight enough that a slow queue killed the job with no partial-progress
+    # recovery (retry re-downloads/rebuilds from scratch). 90 min gives the notarization wait real room
+    # without materially delaying detection of a genuinely stuck job.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref }}
+          fetch-depth: 0
+      # First step, before any build work starts: a tag that doesn't match package.json's version would
+      # make electron-builder publish onto/overwrite an existing release instead of creating a new one -
+      # see scripts/check-version-parity.mjs for the full failure mode. GITHUB_REF_NAME is the
+      # workflow_dispatch release_tag (not the branch the workflow file lives on).
+      - name: Verify tag matches package.json version
+        run: node scripts/check-version-parity.mjs
+        env:
+          GITHUB_REF_NAME: ${{ inputs.release_tag }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      # Restore the reviewed LGPL ffmpeg decoder binary (the manifest/license stay tracked in git) from
+      # the ffmpeg-sidecar-v1 release in this repo. Cache the target binary directory so a
+      # warm runner doesn't hit the GitHub API on every run; fall back to `gh release download` (built-in
+      # GITHUB_TOKEN, read-only, scoped to this repo) on a cache miss.
+      - uses: actions/cache@v4
+        id: ffmpeg-cache
+        with:
+          path: resources/ffmpeg/darwin-arm64
+          key: ffmpeg-sidecar-v1-darwin-arm64-${{ hashFiles('resources/ffmpeg/manifest.json') }}
+      - name: Provision ffmpeg sidecar (darwin-arm64)
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p resources/ffmpeg/darwin-arm64
+          if ! gh release download ffmpeg-sidecar-v1 --repo "$GITHUB_REPOSITORY" \
+               --pattern 'ffmpeg-darwin-arm64' \
+               --dir resources/ffmpeg --clobber; then
+            echo "::warning::Could not download the ffmpeg-sidecar-v1 release assets - falling through to the hard gate below."
+          elif [ -f resources/ffmpeg/ffmpeg-darwin-arm64 ]; then
+            mv resources/ffmpeg/ffmpeg-darwin-arm64 resources/ffmpeg/darwin-arm64/ffmpeg
+            chmod +x resources/ffmpeg/darwin-arm64/ffmpeg
+            # A freshly downloaded, unsigned Mach-O is quarantined by the OS, and Gatekeeper then
+            # kills it on exec - which is exactly what check-ffmpeg-sidecar.mjs does to read the
+            # licence banner. Safe to strip: that same script verifies the file against the reviewed
+            # sha256 in resources/ffmpeg/manifest.json before it is ever executed, so trust comes
+            # from the hash, not from the OS. build.yml has carried this line since the gate landed.
+            xattr -d com.apple.quarantine resources/ffmpeg/darwin-arm64/ffmpeg 2>/dev/null || true
+          fi
+      # Hard gate: fail loudly with the exact one-time seed command if provisioning above didn't produce a
+      # binary, instead of predist's check-ffmpeg-sidecar.mjs throwing a raw ENOENT deep inside the build.
+      - name: Require the ffmpeg sidecar to be present (darwin-arm64)
+        run: |
+          if [ ! -f "resources/ffmpeg/darwin-arm64/ffmpeg" ]; then
+            echo "::error::Missing resources/ffmpeg/darwin-arm64/ffmpeg and the ffmpeg-sidecar-v1 release could not provision it."
+            echo "::error::One-time seed (run once locally by a maintainer holding the reviewed binaries in resources/ffmpeg/):"
+            echo "::error::  cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64 && cp resources/ffmpeg/darwin-x64/ffmpeg /tmp/ffmpeg-darwin-x64 && cp resources/ffmpeg/win32-x64/ffmpeg.exe /tmp/ffmpeg-win32-x64.exe && gh release create ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-darwin-x64 /tmp/ffmpeg-win32-x64.exe --repo $GITHUB_REPOSITORY --title 'ffmpeg sidecar v1' --notes 'Reviewed LGPL-only ffmpeg binaries for CI provisioning (tracked manifest.json contains SHA256s).'"
+            exit 1
+          fi
+      # The Intel half of the universal build. Deliberately a SECOND cache entry with its own id and
+      # key rather than another path on the arm64 one: with a shared id, an arm64 cache hit would skip
+      # this download too, and the gate below would then fail a job that was one step from complete.
+      - uses: actions/cache@v4
+        id: ffmpeg-cache-x64
+        with:
+          path: resources/ffmpeg/darwin-x64
+          key: ffmpeg-sidecar-v1-darwin-x64-${{ hashFiles('resources/ffmpeg/manifest.json') }}
+      - name: Provision ffmpeg sidecar (darwin-x64)
+        if: steps.ffmpeg-cache-x64.outputs.cache-hit != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p resources/ffmpeg/darwin-x64
+          if ! gh release download ffmpeg-sidecar-v1 --repo "$GITHUB_REPOSITORY" \
+               --pattern 'ffmpeg-darwin-x64' \
+               --dir resources/ffmpeg --clobber; then
+            echo "::warning::Could not download the ffmpeg-sidecar-v1 release assets - falling through to the hard gate below."
+          elif [ -f resources/ffmpeg/ffmpeg-darwin-x64 ]; then
+            mv resources/ffmpeg/ffmpeg-darwin-x64 resources/ffmpeg/darwin-x64/ffmpeg
+            chmod +x resources/ffmpeg/darwin-x64/ffmpeg
+            # Same quarantine strip, same justification as the arm64 step above: the download is
+            # unsigned and quarantined, and trust comes from the reviewed sha256, not from Gatekeeper.
+            xattr -d com.apple.quarantine resources/ffmpeg/darwin-x64/ffmpeg 2>/dev/null || true
+          fi
+      # Hard gate for the second arch. Not optional and not droppable: package.json's predist checks
+      # `mac x64` as well as `mac arm64`, and check-packaged-runtime.mjs --arches=arm64,x64 hashes both
+      # out of the finished universal .app, so a missing Intel binary would only move the failure to the
+      # far side of 40 minutes of packaging.
+      - name: Require the ffmpeg sidecar to be present (darwin-x64)
+        run: |
+          if [ ! -f "resources/ffmpeg/darwin-x64/ffmpeg" ]; then
+            echo "::error::Missing resources/ffmpeg/darwin-x64/ffmpeg and the ffmpeg-sidecar-v1 release could not provision it."
+            echo "::error::This binary is cross-compiled on Apple Silicon by scripts/build-ffmpeg-sidecar-mac.sh x64 (needs nasm and Rosetta 2 on that Mac) - see resources/ffmpeg/manifest.json and docs/ENTERPRISE_RELEASE.md."
+            echo "::error::One-time seed (run once locally by a maintainer holding the reviewed binaries in resources/ffmpeg/):"
+            echo "::error::  cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64 && cp resources/ffmpeg/darwin-x64/ffmpeg /tmp/ffmpeg-darwin-x64 && cp resources/ffmpeg/win32-x64/ffmpeg.exe /tmp/ffmpeg-win32-x64.exe && gh release create ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-darwin-x64 /tmp/ffmpeg-win32-x64.exe --repo $GITHUB_REPOSITORY --title 'ffmpeg sidecar v1' --notes 'Reviewed LGPL-only ffmpeg binaries for CI provisioning (tracked manifest.json contains SHA256s).'"
+            echo "::error::Adding it to a release that already exists: gh release upload ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-x64 --clobber --repo $GITHUB_REPOSITORY"
+            exit 1
+          fi
+      # Hard gate: a pack run with these secrets missing must fail the job, not publish an unsigned build.
+      # electron-builder does not throw when it can't find a signing identity for a non-MAS build - it
+      # logs "skipped macOS application code signing" and continues (app-builder-lib/codeSign/
+      # macCodeSign.js reportError()), and `--publish always` has no idea signing was skipped.
+      - name: Require signing secrets before releasing
+        run: |
+          missing=()
+          [ -z "$GH_TOKEN" ] && missing+=(GH_TOKEN)
+          [ -z "$CSC_LINK" ] && missing+=(CSC_LINK)
+          [ -z "$CSC_KEY_PASSWORD" ] && missing+=(CSC_KEY_PASSWORD)
+          [ -z "$APPLE_ID" ] && missing+=(APPLE_ID)
+          [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] && missing+=(APPLE_APP_SPECIFIC_PASSWORD)
+          [ -z "$APPLE_TEAM_ID" ] && missing+=(APPLE_TEAM_ID)
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing release secret(s): ${missing[*]}. See docs/SIGNING.md / scripts/ship-setup.sh - refusing to publish an unsigned macOS release."
+            exit 1
+          fi
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      # Same model cache as build.yml (~1.3 GB fetched by predist -> scripts/fetch-models.mjs).
+      - uses: actions/cache@v4
+        with:
+          path: |
+            resources/models
+            resources/asr
+            resources/ort
+            resources/llama
+            resources/local-llm
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+      # Release scripts fetch and verify every runtime asset before packaging. The Qwen payload is embedded
+      # in the installer; installed application code contains no model download path.
+      - run: npm run release:build:mac
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      # Hard size gate before anything is published.
+      - run: npm run check:release
+        env:
+          ASKTOTO_ARTIFACTS_DIR: release
+      # Positively verify the built artifact is signed + notarized before it can reach the publish job.
+      - run: node scripts/verify-signing.mjs --require-notarized
+      - uses: actions/upload-artifact@v4
+        with:
+          name: metis-release-macos
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+            release/latest-mac.yml
+
+  pack-windows:
+    name: Windows signed pack
+    needs: pack-quality
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref }}
+          fetch-depth: 0
+      - name: Verify tag matches package.json version
+        shell: bash
+        run: node scripts/check-version-parity.mjs
+        env:
+          GITHUB_REF_NAME: ${{ inputs.release_tag }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+      # Restore the reviewed LGPL ffmpeg decoder binary (the manifest/license stay tracked in git) from
+      # the ffmpeg-sidecar-v1 release in this repo. Cache the target binary directory so a
+      # warm runner doesn't hit the GitHub API on every run; fall back to `gh release download` (built-in
+      # GITHUB_TOKEN, read-only, scoped to this repo) on a cache miss.
+      - uses: actions/cache@v4
+        id: ffmpeg-cache
+        with:
+          path: resources/ffmpeg/win32-x64
+          key: ffmpeg-sidecar-v1-win32-x64-${{ hashFiles('resources/ffmpeg/manifest.json') }}
+      - name: Provision ffmpeg sidecar (win32-x64)
+        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p resources/ffmpeg/win32-x64
+          if ! gh release download ffmpeg-sidecar-v1 --repo "$GITHUB_REPOSITORY" \
+               --pattern 'ffmpeg-win32-x64.exe' \
+               --dir resources/ffmpeg --clobber; then
+            echo "::warning::Could not download the ffmpeg-sidecar-v1 release assets - falling through to the hard gate below."
+          elif [ -f resources/ffmpeg/ffmpeg-win32-x64.exe ]; then
+            mv resources/ffmpeg/ffmpeg-win32-x64.exe resources/ffmpeg/win32-x64/ffmpeg.exe
+          fi
+      # Hard gate: the platform binary remains outside git while its reviewed manifest/license are tracked;
+      # fail here with the exact one-time seed command, before burning build/signing
+      # time, instead of failing deep inside `npm run release:win`.
+      - name: Require the ffmpeg sidecar to be present
+        shell: bash
+        run: |
+          if [ ! -f "resources/ffmpeg/win32-x64/ffmpeg.exe" ]; then
+            echo "::error::Missing resources/ffmpeg/win32-x64/ffmpeg.exe and the ffmpeg-sidecar-v1 release could not provision it."
+            echo "::error::One-time seed (run once locally by a maintainer holding the reviewed binaries in resources/ffmpeg/):"
+            echo "::error::  cp resources/ffmpeg/darwin-arm64/ffmpeg /tmp/ffmpeg-darwin-arm64 && cp resources/ffmpeg/darwin-x64/ffmpeg /tmp/ffmpeg-darwin-x64 && cp resources/ffmpeg/win32-x64/ffmpeg.exe /tmp/ffmpeg-win32-x64.exe && gh release create ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-arm64 /tmp/ffmpeg-darwin-x64 /tmp/ffmpeg-win32-x64.exe --repo $GITHUB_REPOSITORY --title 'ffmpeg sidecar v1' --notes 'Reviewed LGPL-only ffmpeg binaries for CI provisioning (tracked manifest.json contains SHA256s).'"
+            exit 1
+          fi
+      - name: Require signing secrets before releasing
+        shell: bash
+        run: |
+          missing=()
+          [ -z "$GH_TOKEN" ] && missing+=(GH_TOKEN)
+          [ -z "$WIN_CSC_LINK" ] && missing+=(WIN_CSC_LINK)
+          [ -z "$WIN_CSC_KEY_PASSWORD" ] && missing+=(WIN_CSC_KEY_PASSWORD)
+          [ -z "$WIN_CSC_EXPECTED_SUBJECT" ] && missing+=(WIN_CSC_EXPECTED_SUBJECT)
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error::Missing release secret(s): ${missing[*]}. See docs/SIGNING.md - refusing to publish an unsigned Windows release."
+            exit 1
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      # Same model cache as build.yml / pack-macos (~1.3 GB fetched by predist:win -> fetch-models.mjs).
+      - uses: actions/cache@v4
+        with:
+          path: |
+            resources/models
+            resources/asr
+            resources/ort
+            resources/llama
+            resources/local-llm
+          key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
+      # Release scripts fetch and verify every runtime asset before packaging. The Qwen payload is embedded
+      # in the installer; installed application code contains no model download path.
+      - run: npm run release:build:win
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
+      # Same pre-publication size gate as pack-macos.
+      - run: npm run check:release
+        env:
+          ASKTOTO_ARTIFACTS_DIR: release
+      - run: node scripts/verify-signing.mjs
+        env:
+          WIN_CSC_EXPECTED_SUBJECT: ${{ secrets.WIN_CSC_EXPECTED_SUBJECT }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: metis-release-windows
+          retention-days: 1
+          if-no-files-found: error
+          compression-level: 0
+          path: |
+            release/*.exe
+            release/*.blockmap
+            release/latest.yml
+
+  # Upload only after both signed native builds pass. Assets land on a draft (draft is OK); a
+  # retry for the same tag updates that draft rather than racing a public overwrite.
+  pack-publish:
+    name: Upload signed Mac + Windows release
+    needs: [pack-macos, pack-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.git_ref }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: metis-release-macos
+          path: release-bundle/macos
+      - uses: actions/download-artifact@v4
+        with:
+          name: metis-release-windows
+          path: release-bundle/windows
+      - name: Validate publish repo
+        id: publish-repo
+        run: |
+          repo="${{ inputs.publish_repo }}"
+          case "$repo" in
+            mysticalsin/AskToto-Mantu|mysticalsin/Metis-Releases) ;;
+            *)
+              echo "::error::publish_repo must be mysticalsin/AskToto-Mantu or mysticalsin/Metis-Releases (got: $repo)."
+              exit 1
+              ;;
+          esac
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
+      - name: Create or update draft, then upload the signed asset set
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          repo="${{ steps.publish-repo.outputs.repo }}"
+          tag="${{ inputs.release_tag }}"
+          version="${tag#v}"
+          shopt -s nullglob
+
+          required_files=(
+            "release-bundle/macos/Metis-${version}.dmg"
+            "release-bundle/macos/Metis-${version}.dmg.blockmap"
+            "release-bundle/macos/Metis-${version}.zip"
+            "release-bundle/macos/Metis-${version}.zip.blockmap"
+            "release-bundle/macos/latest-mac.yml"
+            "release-bundle/windows/Metis-Setup-${version}.exe"
+            "release-bundle/windows/Metis-Setup-${version}.exe.blockmap"
+            "release-bundle/windows/Metis-Portable-${version}.exe"
+            "release-bundle/windows/latest.yml"
+          )
+          for file in "${required_files[@]}"; do
+            [ -f "$file" ] || { echo "::error::Missing required release asset: $file"; exit 1; }
+          done
+
+          node scripts/check-update-metadata.mjs \
+            release-bundle/macos/latest-mac.yml \
+            release-bundle/windows/latest.yml
+
+          mapfile -t files < <(
+            find release-bundle/macos release-bundle/windows -mindepth 1 -maxdepth 1 -type f -print | LC_ALL=C sort
+          )
+          [ "${#files[@]}" -eq "${#required_files[@]}" ] || {
+            echo "::error::Release bundle contains missing or unexpected files."
+            printf '  %s\n' "${files[@]}"
+            exit 1
+          }
+          expected_assets=$(printf '%s\n' "${files[@]##*/}" | LC_ALL=C sort)
+          required_assets=$(printf '%s\n' "${required_files[@]##*/}" | LC_ALL=C sort)
+          [ "$expected_assets" = "$required_assets" ] || {
+            echo "::error::Release bundle does not exactly match the allowed asset set for $tag."
+            diff -u <(printf '%s\n' "$required_assets") <(printf '%s\n' "$expected_assets") || true
+            exit 1
+          }
+
+          assert_draft() {
+            local draft
+            draft=$(gh release view "$tag" --repo "$repo" --json isDraft --jq '.isDraft')
+            [ "$draft" = "true" ] || {
+              echo "::error::Refusing to mutate public release $tag on $repo."
+              exit 1
+            }
+          }
+
+          set +e
+          lookup=$(gh api "repos/$repo/releases/tags/$tag" --jq '.draft' 2>&1)
+          lookup_status=$?
+          set -e
+          if [ "$lookup_status" -eq 0 ]; then
+            [ "$lookup" = "true" ] || { echo "::error::Refusing to overwrite public release $tag"; exit 1; }
+            # A failed prior run can leave stale assets in its draft. Delete only the confirmed draft;
+            # retain the tag, then recreate a clean draft so no unreviewed asset can survive a retry.
+            assert_draft
+            gh release delete "$tag" --repo "$repo" --yes
+          elif ! grep -qi 'HTTP 404' <<<"$lookup"; then
+            echo "::error::Could not safely determine whether $tag already exists on $repo."
+            echo "$lookup"
+            exit 1
+          fi
+
+          # Draft is OK — this off-main pack does not flip the release public. Tony/Ultron publish
+          # the draft after reviewing the signed assets. Same-repo tags must point at the packed
+          # SHA (this job already checked out git_ref), never at the publish repo's default branch.
+          packed_sha=$(git rev-parse HEAD)
+          if [ "${repo,,}" = "${GITHUB_REPOSITORY,,}" ]; then
+            gh release create "$tag" --repo "$repo" --draft --target "$packed_sha" \
+              --title "Métis $tag" \
+              --notes "Signed Métis desktop installers for macOS Apple Silicon and Windows x64 (packed from ${{ inputs.git_ref }} @ ${packed_sha})."
+          else
+            gh release create "$tag" --repo "$repo" --draft --title "Métis $tag" \
+              --notes "Signed Métis desktop installers for macOS Apple Silicon and Windows x64 (packed from ${{ inputs.git_ref }} @ ${packed_sha})."
+          fi
+
+          assert_draft
+          gh release upload "$tag" "${files[@]}" --repo "$repo"
+
+          actual_assets=$(gh release view "$tag" --repo "$repo" --json assets --jq '.assets[].name' | LC_ALL=C sort)
+          [ "$actual_assets" = "$expected_assets" ] || {
+            echo "::error::Draft release asset set differs from the reviewed local bundle."
+            diff -u <(printf '%s\n' "$expected_assets") <(printf '%s\n' "$actual_assets") || true
+            exit 1
+          }
+
+          assert_draft
+          echo "Uploaded complete Mac + Windows draft release $tag on $repo with an exact ${#files[@]}-asset set."
