@@ -249,6 +249,31 @@ describe('health', () => {
   })
 })
 
+describe('device paths never redirect or answer HTML', () => {
+  // The seat fetches with redirect: 'manual' and refuses HTML (src/shared/operator-response.ts). The
+  // Worker side of that contract: signed or not, with or without Access, these paths are JSON and never
+  // a 3xx. A 302 on any of them can only come from Cloudflare Access wrapping the hostname, which is a
+  // deploy misconfiguration (operator/README.md, "Cloudflare Access").
+  it('signed and unsigned heartbeat, ingest, manifest, and /health are JSON, never 3xx', async () => {
+    const store = memoryStore()
+    const requests = [
+      await signedRequest('/v1/heartbeat', JSON.stringify({ os: 'darwin', appVersion: '1.8.0' })),
+      await signedRequest('/v1/ingest', JSON.stringify({ id: 'ask-json', mode: 'sales' })),
+      await signedRequest('/v1/skills/manifest', ''),
+      new Request('https://operator.test/v1/heartbeat', { method: 'POST', body: '{}' }),
+      new Request('https://operator.test/v1/skills/manifest'),
+      new Request('https://operator.test/health')
+    ]
+    for (const req of requests) {
+      const res = await handleRequest(req, env(), {}, { store, now: NOW })
+      expect(res.status === 200 || res.status === 401, req.url).toBe(true)
+      expect(res.headers.get('location'), req.url).toBeNull()
+      expect(res.headers.get('content-type'), req.url).toMatch(/application\/json/)
+      expect(await res.text(), req.url).not.toMatch(/<!doctype html|<html|cloudflareaccess/i)
+    }
+  })
+})
+
 describe('packed console map and geo', () => {
   it('renders an empty map when there are no heartbeats, never sample visitors', async () => {
     const store = memoryStore()

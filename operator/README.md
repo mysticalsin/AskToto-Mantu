@@ -31,6 +31,8 @@ Do not wrangler deploy from CI with secrets.
 
 If Access is missing on an admin route, the Worker returns 401 even when a valid ingest HMAC is present. There is no password page and no `LICENSE_ADMIN_TOKEN`.
 
+The Worker never answers a 3xx and never answers HTML on a device path. If a seat sees a 302 on `/v1/heartbeat`, `/v1/ingest`, or `/v1/skills/manifest`, Cloudflare Access is wrapping that path at the edge, before the Worker runs. The seat fetches with `redirect: 'manual'`, refuses the Access login page, and logs `[operator] <path> is behind Cloudflare Access`. Fix the Access app (next sections); there is nothing to fix in the Worker.
+
 ## Secrets (Wrangler only)
 
 Never put these in git, logs, PR bodies, or `wrangler.jsonc`.
@@ -103,15 +105,24 @@ This VM does not create a live Access hostname. After deploy, set Access by hand
 
 Zero Trust → Access → Applications → Add an application → Self-hosted.
 
-1. Application name: `Métis Operator`.
-2. Session duration: short (for example 24 hours).
-3. Domain: the Worker hostname (`metis-operator.<subdomain>.workers.dev`) **or** a custom hostname you attach later.
-4. Path policy 1: path `/` (and `/v1/admin` if the UI lets you add a second path). Protect `/` and `/v1/admin*`.
-5. Do **not** protect `/v1/ingest`, `/v1/heartbeat`, `/v1/skills/manifest`, or `/health`.
-6. Identity: One-time PIN or Google. Allowlist emails, only these two:
+An Access application on a domain with path `/` (or an empty path) protects the whole hostname. There is no way to protect exactly `/` and leave `/v1/ingest` open inside one application. The device paths are opened with a second application whose policy action is **Bypass**; Access applies the most specific path match first.
+
+1. Application name: `Métis Operator`. Session duration: short (for example 24 hours).
+2. Domain: the Worker hostname (`metis-operator.<subdomain>.workers.dev`) **or** a custom hostname you attach later. Leave the path empty (whole hostname).
+3. Policy: action **Allow**, identity One-time PIN or Google, include only these two emails:
    - `tony.walteur@gmail.com`
    - `twalteur@amaris.com`
-7. Do not add other emails. Do not use "Protect this Worker" on the Worker itself (that wraps every route).
+4. Second application, name `Métis Operator devices`, same hostname, one entry per public path: `/v1/ingest`, `/v1/heartbeat`, `/v1/skills/manifest`, `/health`. Policy: action **Bypass**, include **Everyone**. Those paths stay HMAC-only on the Worker.
+5. Do not add other emails. Do not use "Protect this Worker" on the Worker itself (that wraps every route with no bypass).
+
+Check from a shell with no cookies. The device paths must answer JSON, never `302`:
+
+```sh
+curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' https://metis-operator.<subdomain>.workers.dev/health
+curl -sS -o /dev/null -w '%{http_code} %{content_type}\n' -X POST https://metis-operator.<subdomain>.workers.dev/v1/heartbeat
+```
+
+Expected: `200 application/json` for `/health`, `401 application/json` for an unsigned heartbeat. A `302` on either means the Bypass application is missing or its path does not match.
 
 The Worker also calls `ctx.access.getIdentity()` and, if `TEAM_DOMAIN` + `POLICY_AUD` are set, verifies `Cf-Access-Jwt-Assertion` against the team JWKS. A request that never passed Access is 401.
 

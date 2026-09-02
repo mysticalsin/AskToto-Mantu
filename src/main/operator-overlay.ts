@@ -1,5 +1,6 @@
 import { HUMANIZER_SKILL_ID, isBuiltinConversationMode, type ModeSkillId } from '@shared/mode-skills'
 import { operatorUrlConfigured } from '@shared/operator'
+import { classifyOperatorReply, operatorReplyProblem } from '@shared/operator-response'
 import { applyOverlaySkillFile } from './mode-skills'
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
 import { getMachineId } from './license'
@@ -44,12 +45,19 @@ export async function pullOperatorSkillManifest(settings: OverlayRuntimeSettings
   const secret = resolveSecret(settings)
   if (!operatorUrlConfigured(settings) || !secret) return 0
   const headers = operatorHmacHeaders(secret, hashOperatorId(getMachineId()), '')
-  const res = await fetchImpl(`${url}/v1/skills/manifest`, { method: 'GET', headers })
-  if (!res.ok) {
-    mainLog.warn(`[operator] manifest ${res.status}`)
+  // redirect: 'manual' — see operator-ingest.ts signedPost. An Access login page is never a manifest.
+  const res = await fetchImpl(`${url}/v1/skills/manifest`, { method: 'GET', headers, redirect: 'manual' })
+  const reply = classifyOperatorReply({
+    status: res.status,
+    contentType: res.headers.get('content-type'),
+    location: res.headers.get('location'),
+    text: await res.text()
+  })
+  if (!reply.ok) {
+    mainLog.warn(operatorReplyProblem('/v1/skills/manifest', reply))
     return 0
   }
-  const data = (await res.json()) as { ok?: boolean; skills?: { signed?: string }[] }
+  const data = reply.json as { ok?: boolean; skills?: { signed?: string }[] }
   if (!data.ok || !Array.isArray(data.skills)) return 0
   let applied = 0
   for (const row of data.skills) {

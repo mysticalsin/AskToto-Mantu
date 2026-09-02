@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { redactSecrets } from '@shared/redact'
 import { operatorUrlConfigured, shouldSendAskText, type AskLogLine, type StreamCacheUsage } from '@shared/operator'
+import { classifyOperatorReply, operatorReplyProblem } from '@shared/operator-response'
 import type { Settings } from '@shared/ipc'
 import { getMachineId } from './license'
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
@@ -76,17 +77,17 @@ async function signedPost(
     'content-type': 'application/json',
     ...operatorHmacHeaders(secret, deviceId(), body)
   }
-  const res = await fetchImpl(`${url}${path}`, { method: 'POST', headers, body })
-  if (!res.ok) {
-    mainLog.warn(`[operator] ${path} ${res.status}`)
-  }
-  let parsed: unknown = null
-  try {
-    parsed = JSON.parse(await res.text())
-  } catch {
-    parsed = null
-  }
-  return { ok: res.ok, json: parsed }
+  // redirect: 'manual' — a Cloudflare Access 302 must surface as a failure, never be followed into a
+  // 200 login page that a lenient parse would report as a successful heartbeat.
+  const res = await fetchImpl(`${url}${path}`, { method: 'POST', headers, body, redirect: 'manual' })
+  const reply = classifyOperatorReply({
+    status: res.status,
+    contentType: res.headers.get('content-type'),
+    location: res.headers.get('location'),
+    text: await res.text()
+  })
+  if (!reply.ok) mainLog.warn(operatorReplyProblem(path, reply))
+  return { ok: reply.ok, json: reply.json }
 }
 
 function retryIdsFromHeartbeat(json: unknown): string[] {
