@@ -171,8 +171,8 @@ export function choropleth(
 }
 
 const SHOEY_BLUE = '#2563EB'
-const SHOEY_LAND = '#F3F4F6'
-const SHOEY_DOT = '#1e293b'
+const SHOEY_LAND = '#E5E7EB'
+const SHOEY_DOT = '#111827'
 const SHOEY_PILL = '#10B981'
 
 export function blueBars(values: number[], w = 220, h = 36): string {
@@ -255,14 +255,14 @@ export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world
   const empty = countries.length === 0 && dots.length === 0
   let land = ''
   for (const [iso, d] of Object.entries(WORLD_PATHS)) {
-    land += `<path data-iso="${iso}" d="${stripMapBands(d)}" fill="${SHOEY_LAND}" stroke="#F5F5F5" stroke-width="0.4" />`
+    land += `<path data-iso="${iso}" d="${stripMapBands(d)}" fill="${SHOEY_LAND}" stroke="#F3F4F6" stroke-width="0.45" />`
   }
   const marks = empty
     ? ''
     : dots
         .map((dot) => {
           const p = project(dot.lat, dot.lon)
-          return `<circle class="seat-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.1" fill="${SHOEY_DOT}" />`
+          return `<circle class="seat-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.8" fill="${SHOEY_DOT}" />`
         })
         .join('')
   const pills = empty
