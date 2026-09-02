@@ -5,7 +5,7 @@ owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, cli
 does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, installer packing, Fly license-server, Goldberg Aria, cloudflare-proxy AI token proxy, Bklit Studio
 ready-to-merge: no
 implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing, access-login, shoey-map
-this-slice: router-parse-spa
+this-slice: live-index-js
 audience: Tony Walteur only. Two emails. Nobody else.
 tokens:
   accent: "#2563EB"
@@ -49,7 +49,7 @@ Live URL: `https://metis-operator.tony-walteur.workers.dev/`. This is **Métis O
 
 Copy **page chrome** from Shoey for Realtime / Events / Sessions / Notifications. Fill every page with **live Métis** heartbeats / Asks / CRM. **0 LLM tokens**. No fake dots. `#map` after JWT is Realtime.
 
-**P0 hashed SPA + live router** (Tony 11:39 PM ET walk). The 97-byte `METIS_OPERATOR` stub is **void**. Authenticated HTML must `<script src="/assets/operator-<hash>.js">` and `<link>` the hashed CSS. Unauth `GET /assets/operator-<hash>.js` (and CSS) is **200** with `content-length` ≫ 97 and real Shoey chrome (Overview / Realtime / Events strings). Unknown `/assets/index.js` / `/assets/client.js` are **404**, not another stub. Unauth `GET /` and `GET /keys` stay **302** Cloudflare Access. `GET /health` 200 JSON. Do **not** edit overlay `DESIGN.md`. This file is the Operator design contract.
+**P0 hashed SPA + live router** (Tony 11:39 PM ET walk, Bob Ultron FAIL). The 97-byte `METIS_OPERATOR` stub is **void**. Authenticated HTML must `<script src="/assets/operator-<hash>.js">` and `<link>` the hashed CSS. Unauth `GET /assets/operator-<hash>.js` (and CSS) is **200** with `content-length` ≫ 97 and real Shoey chrome (Overview / Realtime / Events strings). Unauth `GET /assets/index.js` is the **same** Shoey bundle: **200** `application/javascript`, bytes ≫ 97, `window.route` present, not a stub, not 404 JSON. Unknown `/assets/client.js` stays **404**. Unauth `GET /` and `GET /keys` stay **302** Cloudflare Access. `GET /health` 200 JSON. Do **not** edit overlay `DESIGN.md`. This file is the Operator design contract.
 
 **Router law.** The hashed JS must parse. After it runs, `window.route` is a function. `route('/')`, `route('realtime')`, `route('events')`, `route('sessions')`, `route('notifications')`, `route('keys')`, and `route('settings')` swap the main body (`[data-page]` hidden). Clicking `#realtime` shows the Realtime map body, not Overview. Hash-only nav with the body stuck on Overview is **FAIL**.
 
