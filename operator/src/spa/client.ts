@@ -5,11 +5,12 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
  */
 (function metisOperatorSpa() {
   'use strict'
-  var pages = ['overview', 'realtime', 'events']
+  var pages = ['overview', 'realtime', 'events', 'sessions', 'notifications', 'keys', 'settings']
   self.METIS_OPERATOR_SPA = {
     chrome: 'shoey',
+    product: 'Métis Operator',
     pages: pages,
-    nav: ['Analytics', 'Manage'],
+    nav: pages,
     hydrate: 'post-access'
   }
 
@@ -24,25 +25,18 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
   }
 
   var titles = {
-    overview: 'Overview', dashboards: 'Dashboards', insights: 'Insights', pages: 'Pages', seo: 'SEO',
-    realtime: 'Realtime', events: 'Events', sessions: 'Sessions', profiles: 'Profiles', groups: 'Groups',
-    cohorts: 'Cohorts', settings: 'Settings', references: 'References', notifications: 'Notifications',
-    map: 'Realtime', macos: 'macOS', windows: 'Windows', licenses: 'Licenses', skills: 'Skills',
-    keys: 'Keys', devices: 'Devices', cloudflare: 'Cloudflare'
+    overview: 'Overview', realtime: 'Realtime', events: 'Events', sessions: 'Sessions',
+    notifications: 'Notifications', keys: 'Keys', settings: 'Settings', map: 'Realtime'
   }
 
   function route() {
     var raw = (location.hash || '#overview').replace('#', '')
     var requested = titles[raw] ? raw : 'overview'
-    var id = requested === 'settings' ? 'keys' : requested === 'map' ? 'realtime' : requested
+    var id = requested === 'map' ? 'realtime' : requested
     document.querySelectorAll('[data-page]').forEach(function (p) {
       p.hidden = p.getAttribute('data-page') !== id
     })
-    var navOn = requested === 'map' || requested === 'realtime'
-      ? 'realtime'
-      : (requested === 'keys' || requested === 'settings' || requested === 'cloudflare' || requested === 'licenses'
-        ? 'settings'
-        : requested === 'devices' ? 'profiles' : requested)
+    var navOn = requested === 'map' ? 'realtime' : requested
     document.querySelectorAll('[data-nav]').forEach(function (a) {
       a.classList.toggle('on', a.getAttribute('data-nav') === navOn)
     })

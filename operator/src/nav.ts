@@ -1,59 +1,43 @@
 export const NAV_SECTIONS = [
   {
-    id: 'analytics',
-    label: 'Analytics',
+    id: 'fleet',
+    label: 'Métis',
     items: [
       { id: 'overview', label: 'Overview' },
-      { id: 'dashboards', label: 'Dashboards' },
-      { id: 'insights', label: 'Insights' },
-      { id: 'pages', label: 'Pages' },
-      { id: 'seo', label: 'SEO' },
       { id: 'realtime', label: 'Realtime' },
       { id: 'events', label: 'Events' },
       { id: 'sessions', label: 'Sessions' },
-      { id: 'profiles', label: 'Profiles' },
-      { id: 'groups', label: 'Groups' },
-      { id: 'cohorts', label: 'Cohorts' }
-    ]
-  },
-  {
-    id: 'manage',
-    label: 'Manage',
-    items: [
-      { id: 'settings', label: 'Settings' },
-      { id: 'references', label: 'References' },
-      { id: 'notifications', label: 'Notifications' }
+      { id: 'notifications', label: 'Notifications' },
+      { id: 'keys', label: 'Keys' },
+      { id: 'settings', label: 'Settings' }
     ]
   }
 ] as const
 
 export type NavId =
   | 'overview'
-  | 'dashboards'
-  | 'insights'
-  | 'pages'
-  | 'seo'
   | 'realtime'
   | 'events'
   | 'sessions'
-  | 'profiles'
-  | 'groups'
-  | 'cohorts'
-  | 'settings'
-  | 'references'
   | 'notifications'
+  | 'keys'
+  | 'settings'
 
 export const NAV_IDS: NavId[] = NAV_SECTIONS.flatMap((s) => s.items.map((i) => i.id))
 
-export const FORBIDDEN_NAV = ['scale', 'change', 'console'] as const
-
-export const EXTRA_PAGES = [
-  'keys',
-  'licenses',
-  'devices',
-  'map',
-  'skills',
-  'macos',
-  'windows',
-  'cloudflare'
+/** OpenPanel / e-commerce leftovers. Fail loud if any remain in the rail or as a page. */
+export const FORBIDDEN_NAV = [
+  'scale',
+  'change',
+  'console',
+  'seo',
+  'pages',
+  'insights',
+  'profiles',
+  'groups',
+  'cohorts',
+  'dashboards',
+  'references'
 ] as const
+
+export const EXTRA_PAGES = ['map'] as const

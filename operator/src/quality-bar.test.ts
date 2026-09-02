@@ -63,7 +63,7 @@ function collectTs(dir: string): string[] {
 
 function eventsHtml(html: string): string {
   const start = html.indexOf('data-page="events"')
-  const end = html.indexOf('data-page="profiles"')
+  const end = html.indexOf('data-page="sessions"')
   return start >= 0 && end > start ? html.slice(start, end) : html
 }
 
