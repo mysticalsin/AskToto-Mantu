@@ -96,6 +96,13 @@ describe('product sidebar', () => {
     expect(html).not.toMatch(/heroku\.com|bitbucket\.com/)
     expect(html).not.toContain('data-nav="map"')
     expect(html).not.toContain('data-nav="macos"')
+    expect(html).toContain('grid-template-columns: 185px 1fr')
+    expect(html).toContain('font: 12px/1.4')
+    expect(html).toContain('data-alias="realtime"')
+    expect(html).toContain("requested === 'map' ? 'realtime'")
+    expect(html).toContain('>Events</span><span>Sessions</span>')
+    expect(html).toContain('class="world shoey-world"')
+    expect(html).toContain('id="key-add"')
   })
 })
 

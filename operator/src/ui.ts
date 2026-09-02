@@ -2,7 +2,6 @@ import {
   bars,
   blueArea,
   blueBars,
-  choropleth,
   dualLine,
   heatmapGrid,
   shoeyWorld,
@@ -33,7 +32,7 @@ const CSS = `
   --ok: #16A34A;
   --danger: #DC2626;
   --live: #10B981;
-  --land: #E8E8E8;
+  --land: #F3F4F6;
   --chart-1: #EFF6FF;
   --chart-2: #BFDBFE;
   --chart-3: #60A5FA;
@@ -56,26 +55,27 @@ const CSS = `
   --nav-on: rgba(255,255,255,0.08);
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; color: var(--ink); font: 13px/1.45 var(--sans); }
+html, body { margin: 0; height: 100%; color: var(--ink); font: 12px/1.4 var(--sans); }
 body { background: var(--bg); }
 a { color: var(--accent); text-decoration: none; }
-.shell { display: grid; grid-template-columns: 240px 1fr; min-height: 100%; }
+.shell { display: grid; grid-template-columns: 185px 1fr; min-height: 100%; }
 .rail {
-  display: flex; flex-direction: column; gap: 10px;
+  display: flex; flex-direction: column; gap: 8px;
   background: var(--nav); border-right: 1px solid var(--hair);
-  padding: 14px 12px 16px; min-height: 100vh; position: sticky; top: 0;
+  padding: 12px 10px 14px; min-height: 100vh; position: sticky; top: 0;
+  width: 185px;
 }
 .rail-brand { display: flex; align-items: center; gap: 8px; }
 .rail-logo {
   width: 28px; height: 28px; border-radius: 999px; background: #2563EB; color: #fff;
   display: grid; place-items: center; font: 700 10px/1 var(--sans); letter-spacing: -0.04em;
 }
-.rail-brand h1 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.03em; }
+.rail-brand h1 { margin: 0; font-size: 13px; font-weight: 650; letter-spacing: -0.03em; }
 .rail-brand .chev { color: var(--ink3); font-size: 11px; }
 .create-btn {
   display: flex; align-items: center; justify-content: space-between;
   width: 100%; border: 0; background: #18181B; color: #fff;
-  border-radius: 8px; padding: 8px 10px; font: 600 13px var(--sans); cursor: pointer;
+  border-radius: 8px; padding: 7px 8px; font: 600 12px var(--sans); cursor: pointer;
 }
 .create-menu {
   display: none; margin: 0; padding: 8px 10px; border: 1px solid var(--hair);
@@ -97,8 +97,8 @@ a { color: var(--accent); text-decoration: none; }
   font-size: 11px; letter-spacing: 0.02em; color: var(--ink3); margin: 8px 8px 4px; font-weight: 550;
 }
 .nav-item {
-  display: block; padding: 7px 8px; border-radius: 8px; color: var(--ink);
-  font-size: 13px; font-weight: 500;
+  display: block; padding: 6px 8px; border-radius: 6px; color: var(--ink);
+  font-size: 12px; font-weight: 500;
 }
 .nav-item:hover { background: var(--nav-on); }
 .nav-item.on { background: var(--nav-on); font-weight: 600; }
@@ -157,21 +157,29 @@ a { color: var(--accent); text-decoration: none; }
 .delta.up { color: var(--ok); }
 .delta.down { color: var(--danger); }
 .delta.flat { color: var(--ink3); }
-.rt-grid { display: grid; grid-template-columns: 280px 1fr; gap: 12px; }
-.rt-stream { display: flex; flex-direction: column; gap: 2px; max-height: 280px; overflow: auto; }
+.rt-grid { display: grid; grid-template-columns: minmax(220px, 2fr) minmax(0, 3fr); gap: 12px; align-items: stretch; }
+.rt-map { min-width: 0; }
+.rt-stream { display: flex; flex-direction: column; gap: 2px; max-height: 320px; overflow: auto; }
 .rt-row {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 7px 2px; border-bottom: 1px solid var(--hair); font-size: 12px;
+  padding: 6px 2px; border-bottom: 1px solid var(--hair); font-size: 11px;
 }
-.rt-row .ago { color: var(--ink3); font-size: 11px; }
+.rt-row .ago { color: var(--ink3); font-size: 11px; white-space: nowrap; }
+.rt-ics { display: inline-flex; gap: 3px; margin-left: 6px; vertical-align: middle; }
+.ic-mac, .ic-win, .ic-desk {
+  display: inline-block; width: 12px; height: 12px; border-radius: 2px; background: #2563EB;
+}
+.ic-win { background: #0A84FF; }
+.ic-desk { background: #71717A; }
 .vol { position: relative; }
 .vol-row {
-  display: grid; grid-template-columns: 1fr 56px 48px; gap: 8px; align-items: center;
-  padding: 6px 8px; position: relative; font-size: 12px;
+  display: grid; grid-template-columns: 1fr 56px 64px; gap: 8px; align-items: center;
+  padding: 5px 8px; position: relative; font-size: 11px;
 }
 .vol-bar {
   position: absolute; inset: 2px auto 2px 0; background: #F4F4F5; border-radius: 4px; z-index: 0;
 }
+.vol-bar.blue { background: #DBEAFE; }
 .vol-row > * { position: relative; z-index: 1; }
 .table-card .tabs { margin: 0 0 8px; }
 .table-search {
@@ -185,6 +193,7 @@ a { color: var(--accent); text-decoration: none; }
 .spark { display: block; width: calc(100% + 24px); margin: 0 -12px; height: 56px; }
 .chart { display: block; width: 100%; height: 140px; }
 .world { display: block; width: 100%; height: auto; max-height: 420px; }
+.world.shoey-world { max-height: none; min-height: 280px; }
 .heat { display: block; width: 100%; max-width: 280px; height: auto; }
 .grat { stroke: color-mix(in srgb, var(--ink) 18%, transparent); stroke-width: 0.6; }
 .dot { fill: var(--accent); stroke: var(--bg); stroke-width: 0.8; }
@@ -217,7 +226,7 @@ a { color: var(--accent); text-decoration: none; }
 }
 .map-empty { position: absolute; left: 12px; top: 42px; z-index: 1; }
 table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--hair); font-size: 12px; vertical-align: top; }
+th, td { text-align: left; padding: 6px 6px; border-bottom: 1px solid var(--hair); font-size: 11px; vertical-align: top; }
 th { color: var(--ink3); font-weight: 500; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
 button, .btn {
   background: transparent; color: var(--ink); border: 1px solid var(--hair);
@@ -247,8 +256,8 @@ textarea { min-height: 120px; }
 .heat-wrap { display: flex; gap: 16px; align-items: flex-start; }
 .heat-meta { font-family: var(--mono); font-size: 10px; color: var(--ink3); }
 .event {
-  display: grid; grid-template-columns: 140px 160px 1fr 88px; gap: 10px; align-items: start;
-  padding: 10px 4px; border-bottom: 1px solid var(--hair);
+  display: grid; grid-template-columns: 140px 160px 1fr 88px; gap: 8px; align-items: start;
+  padding: 8px 4px; border-bottom: 1px solid var(--hair); font-size: 11px;
 }
 .event-name { font-weight: 650; }
 .event-profile { color: var(--ink2); }
@@ -361,21 +370,24 @@ function volumeTable(
   id: string,
   tabs: { id: string; label: string }[],
   groups: Record<string, { name: string; views: number; sess: number }[]>,
-  searchPh: string
+  searchPh: string,
+  cols: { value: string; sess: string } = { value: 'Views', sess: 'Sess' },
+  bar: 'gray' | 'blue' = 'gray'
 ): string {
   const tabBtns = tabs
     .map((t, i) => `<button class="tab${i === 0 ? ' on' : ''}" data-vol-tab="${id}:${t.id}" type="button">${esc(t.label)}</button>`)
     .join('')
+  const barCls = bar === 'blue' ? 'vol-bar blue' : 'vol-bar'
   const panes = tabs
     .map((t, i) => {
-      const rows = groups[t.id] || []
+      const rows = rollupVol(groups[t.id] || [])
       const max = Math.max(1, ...rows.map((r) => r.views))
       const body = rows.length
         ? rows
             .map((r) => {
               const w = Math.round((r.views / max) * 100)
               return `<div class="vol-row" data-q="${esc(r.name.toLowerCase())}">
-                <span class="vol-bar" style="width:${w}%"></span>
+                <span class="${barCls}" style="width:${w}%"></span>
                 <span>${esc(r.name)}</span>
                 <span class="muted">${r.views}</span>
                 <span class="muted">${r.sess}</span>
@@ -385,7 +397,7 @@ function volumeTable(
         : `<div class="empty">No ${esc(t.label.toLowerCase())} in this window.</div>`
       return `<div data-vol-pane="${id}:${t.id}" ${i === 0 ? '' : 'hidden'}>
         <div class="vol-row muted" style="font-size:10px;letter-spacing:0.08em;text-transform:uppercase">
-          <span></span><span>Views</span><span>Sess</span>
+          <span></span><span>${esc(cols.value)}</span><span>${esc(cols.sess)}</span>
         </div>
         ${body}
       </div>`
@@ -396,6 +408,28 @@ function volumeTable(
     <input class="table-search" data-vol-search="${id}" type="search" placeholder="${esc(searchPh)}" autocomplete="off">
     ${panes}
   </article>`
+}
+
+function rollupVol(rows: { name: string; views: number; sess: number }[]): { name: string; views: number; sess: number }[] {
+  const by = new Map<string, { name: string; views: number; sess: number }>()
+  for (const row of rows) {
+    const hit = by.get(row.name)
+    if (hit) {
+      hit.views += row.views
+      hit.sess += row.sess
+    } else {
+      by.set(row.name, { ...row })
+    }
+  }
+  return [...by.values()].sort((a, b) => b.views - a.views)
+}
+
+function osIcon(os: string): string {
+  const k = os.toLowerCase()
+  if (k.includes('darwin') || k.includes('mac')) return '<i class="ic-mac" title="macOS"></i>'
+  if (k.includes('win')) return '<i class="ic-win" title="Windows"></i>'
+  if (!os) return ''
+  return '<i class="ic-desk" title="device"></i>'
 }
 
 function emptyPage(id: string, title: string, hook: string): string {
@@ -427,7 +461,7 @@ function renderEvents(events: ConsoleEvent[]): string {
         .map((c) => `<span class="chip">${esc(c.key)} ${esc(c.value)}</span>`)
         .join('')
       const profile = e.hostname || e.email || MISSING
-      return `<div class="event" data-event="${esc(e.id)}">
+      return `<div class="event" data-event="${esc(e.id)}" data-q="${esc(`${name} ${profile}`.toLowerCase())}">
         <div class="event-name">${esc(name)}</div>
         <div class="event-profile">${field(profile === MISSING ? null : profile)}</div>
         <div class="event-chips">${chips}</div>
@@ -476,12 +510,6 @@ function renderLicenses(rows: ProfileRow[]): string {
 
 export function renderConsole(data: DashboardPayload): string {
   const k = data.kpis
-  const maps = {
-    land: choropleth(data.map.countries, data.map.dots, 'land'),
-    analytics: choropleth(data.map.countries, data.map.dots, 'analytics'),
-    graticule: choropleth(data.map.countries, data.map.dots, 'graticule'),
-    hatch: choropleth(data.map.countries, data.map.dots, 'hatch')
-  }
   const canRetry = (status: string): boolean => status === 'failed' || status === 'expired'
   const crmRows = data.crm.rows
     .map((r) => {
@@ -595,9 +623,6 @@ export function renderConsole(data: DashboardPayload): string {
       </tr>`
     )
     .join('')
-  const mapCaption =
-    'Unique devices by country from Cloudflare request.cf. No GPS from the app. No IP. Click a country to filter the fleet table. Empty is an empty world, not sample dots.'
-
   void FORBIDDEN_NAV
   void NAV_IDS
   void EXTRA_PAGES
@@ -871,8 +896,8 @@ svg path { vector-effect: non-scaling-stroke; }
                         const ago = data.now - e.ts < 90_000 ? 'just now' : when(e.ts)
                         const os = e.chips.find((c) => c.key === 'os')?.value || ''
                         return `<div class="rt-row">
-                          <span>${esc(name)}</span>
-                          <span class="ago">${esc(ago)}${os ? ` · ${esc(os)}` : ''}</span>
+                          <span>${esc(name)}<span class="rt-ics">${osIcon(os)}</span></span>
+                          <span class="ago">${esc(ago)}</span>
                         </div>`
                       })
                       .join('')
@@ -881,28 +906,34 @@ svg path { vector-effect: non-scaling-stroke; }
             </div>
           </article>
         </div>
-        <article class="card" style="padding:0;overflow:hidden">
+        <article class="card rt-map" style="padding:0;overflow:hidden">
           <div id="map-root" style="position:relative">${world}</div>
         </article>
       </div>
       <div class="grid-3">
         ${volumeTable(
           'geo',
-          [{ id: 'geo', label: 'Country / City' }],
+          [{ id: 'geo', label: 'Geo' }],
           { geo: geoRows.length ? geoRows : [] },
-          'Search geo'
+          'Search geo',
+          { value: 'Events', sess: 'Sessions' },
+          'blue'
         )}
         ${volumeTable(
           'rt-refs',
-          [{ id: 'refs', label: 'Referrer' }],
+          [{ id: 'refs', label: 'Referrals' }],
           { refs: crmMix.length ? crmMix : listenRows },
-          'Search referrals'
+          'Search referrals',
+          { value: 'Events', sess: 'Sessions' },
+          'blue'
         )}
         ${volumeTable(
           'rt-paths',
-          [{ id: 'path', label: 'Path' }],
+          [{ id: 'path', label: 'Paths' }],
           { path: modeRows },
-          'Search paths'
+          'Search paths',
+          { value: 'Events', sess: 'Sessions' },
+          'blue'
         )}
       </div>
     </section>
@@ -928,7 +959,8 @@ svg path { vector-effect: non-scaling-stroke; }
 
     <section class="page wrap" data-page="events" hidden>
       <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Events</p>
+        <div class="tabs"><button class="tab on" type="button">Events</button></div>
+        <input class="table-search" id="events-search" type="search" placeholder="Search events" autocomplete="off">
         <div id="events-list">${renderEvents(data.events)}</div>
       </article>
     </section>
@@ -941,42 +973,7 @@ svg path { vector-effect: non-scaling-stroke; }
       </article>
     </section>
 
-    <section class="page wrap" data-page="map" hidden>
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Unique seats</p>
-        <div class="tabs" id="map-tabs">
-          <button class="tab on" data-map="shoey">Realtime</button>
-          <button class="tab" data-map="analytics">Analytics</button>
-          <button class="tab" data-map="land">Land</button>
-          <button class="tab" data-map="graticule">Graticule</button>
-          <button class="tab" data-map="hatch">Hatch</button>
-        </div>
-        <div id="map-root" style="position:relative">
-          <div data-map-pane="shoey">${world}</div>
-          <div data-map-pane="analytics" hidden>${maps.analytics}</div>
-          <div data-map-pane="land" hidden>${maps.land}</div>
-          <div data-map-pane="graticule" hidden>${maps.graticule}</div>
-          <div data-map-pane="hatch" hidden>${maps.hatch}</div>
-        </div>
-        <div class="sub muted" style="padding-bottom:8px">${esc(mapCaption)}</div>
-        <table id="map-fleet"><thead><tr><th>Computer</th><th>SSO email</th><th>OS</th><th>Version</th><th>Country</th><th>Seen</th><th></th></tr></thead>
-        <tbody>${
-          data.profiles
-            .map(
-              (r) => `<tr data-country="${esc(r.country || '')}">
-                <td>${field(r.hostname)}</td>
-                <td>${field(r.email)}</td>
-                <td class="muted">${esc(r.os)}</td>
-                <td class="muted">${esc(r.appVersion)}</td>
-                <td class="muted">${esc(r.country || MISSING)}</td>
-                <td class="muted">${esc(when(r.lastSeen))}</td>
-                <td></td>
-              </tr>`
-            )
-            .join('') || `<tr><td colspan="7" class="empty">No seats on the fleet yet.</td></tr>`
-        }</tbody></table>
-      </article>
-    </section>
+    <section class="page wrap" data-page="map" hidden data-alias="realtime"></section>
 
     <section class="page wrap" data-page="macos" hidden>
       <article class="card" style="padding-bottom:10px">
@@ -1118,7 +1115,7 @@ const titles = {
 function route() {
   const raw = (location.hash || '#overview').replace('#', '')
   const requested = titles[raw] ? raw : 'overview'
-  const id = requested === 'settings' ? 'keys' : requested
+  const id = requested === 'settings' ? 'keys' : requested === 'map' ? 'realtime' : requested
   document.querySelectorAll('[data-page]').forEach((p) => { p.hidden = p.getAttribute('data-page') !== id })
   const navOn = requested === 'map' || requested === 'realtime' ? 'realtime' : (requested === 'keys' || requested === 'settings' || requested === 'cloudflare' || requested === 'licenses' ? 'settings' : requested === 'devices' ? 'profiles' : requested)
   document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('on', a.getAttribute('data-nav') === navOn))
@@ -1149,6 +1146,13 @@ document.querySelectorAll('[data-vol-search]').forEach((input) => {
     })
   })
 })
+const evSearch = document.getElementById('events-search')
+if (evSearch) evSearch.addEventListener('input', () => {
+  const q = evSearch.value.trim().toLowerCase()
+  document.querySelectorAll('#events-list .event').forEach((row) => {
+    row.hidden = Boolean(q) && !(row.getAttribute('data-q') || '').includes(q)
+  })
+})
 const search = document.getElementById('nav-search')
 if (search) search.addEventListener('input', () => {
   const q = search.value.trim().toLowerCase()
@@ -1174,15 +1178,10 @@ document.querySelectorAll('[data-scale]').forEach((b) => b.addEventListener('cli
   document.getElementById('scale-24').hidden = b.getAttribute('data-scale') !== '24h'
   document.getElementById('scale-7').hidden = b.getAttribute('data-scale') !== '7d'
 }))
-document.querySelectorAll('[data-map]').forEach((b) => b.addEventListener('click', () => {
-  document.querySelectorAll('[data-map]').forEach((x) => x.classList.toggle('on', x === b))
-  const v = b.getAttribute('data-map')
-  document.querySelectorAll('[data-map-pane]').forEach((p) => { p.hidden = p.getAttribute('data-map-pane') !== v })
-}))
 document.querySelectorAll('#map-root path[data-iso]').forEach((p) => p.addEventListener('click', () => {
   const iso = p.getAttribute('data-iso')
-  document.querySelectorAll('#map-fleet tbody tr').forEach((tr) => {
-    tr.hidden = Boolean(iso) && tr.getAttribute('data-country') !== iso
+  document.querySelectorAll('[data-vol-pane="geo:geo"] .vol-row[data-q]').forEach((row) => {
+    row.hidden = Boolean(iso) && !(row.getAttribute('data-q') || '').toUpperCase().includes(iso)
   })
 }))
 document.querySelectorAll('[data-crm-filter]').forEach((b) => b.addEventListener('click', () => {

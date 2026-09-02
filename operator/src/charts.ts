@@ -171,7 +171,7 @@ export function choropleth(
 }
 
 const SHOEY_BLUE = '#2563EB'
-const SHOEY_LAND = '#E8E8E8'
+const SHOEY_LAND = '#F3F4F6'
 const SHOEY_DOT = '#1e293b'
 const SHOEY_PILL = '#10B981'
 
@@ -256,16 +256,17 @@ export function shoeyWorld(countries: MapCountry[], dots: MapDot[]): string {
         const seats = present.reduce((n, iso) => n + (by.get(iso) ?? 0), 0)
         if (!seats) return ''
         const label = present.length === 1 ? countryName(present[0]) : `${present.length} countries`
+        const w = Math.max(96, 36 + label.length * 6.4)
         return `<g class="pill-g" transform="translate(${reg.x},${reg.y})">
-          <rect x="0" y="-12" width="${Math.max(92, 28 + label.length * 6.2)}" height="24" rx="12" fill="#fff" stroke="#E5E5E5"/>
+          <rect x="0" y="-13" width="${w}" height="26" rx="13" fill="#fff" stroke="#E5E5E5"/>
           <circle cx="12" cy="0" r="4" fill="${SHOEY_PILL}"/>
           <text x="22" y="4" font-size="11" font-weight="650" fill="#18181B">${seats}</text>
-          <line x1="44" y1="-7" x2="44" y2="7" stroke="#E5E5E5"/>
-          <text x="50" y="4" font-size="10" fill="#71717A">${escapeXml(label)}</text>
+          <line x1="42" y1="-7" x2="42" y2="7" stroke="#E5E5E5"/>
+          <text x="48" y="4" font-size="11" fill="#71717A">${escapeXml(label)}</text>
         </g>`
       }).join('')
   const caption = empty
-    ? `<div class="empty map-empty">No heartbeats yet. The map stays empty until a seat checks in.</div>`
+    ? `<div class="empty map-empty">No heartbeats yet. The map stays empty until a seat checks in. Empty is an empty world, not sample dots.</div>`
     : ''
   return `${caption}<svg class="world shoey-world" viewBox="0 0 1000 500" role="img" aria-label="Unique seats by country">
     <rect width="1000" height="500" fill="#F5F5F5"/>

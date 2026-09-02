@@ -5,7 +5,7 @@ owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, cli
 does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, installer packing, Fly license-server, Goldberg Aria, cloudflare-proxy AI token proxy, Bklit Studio
 ready-to-merge: no
 implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing, access-login
-this-slice: shoey-visual
+this-slice: shoey-map
 audience: Tony Walteur only. Two emails. Nobody else.
 tokens:
   accent: "#2563EB"
@@ -41,7 +41,7 @@ Live URL: `https://metis-operator.tony-walteur.workers.dev/`. Console paths (`/`
 
 **Goal.** Tony holds LLM API keys in Operator. End-user Métis just works. Keep the product in Métis (seats, Asks, licenses, skills, Listen, recap, keys, devices).
 
-**Tony 10:32 PM ET VOID.** The earlier line “do not clone Pages / SEO / Groups / Cohorts / Dashboards / Insights / Reports” is **void**. Operator must look **exactly** like `https://demo.openpanel.dev/demo/shoey` (proof: `shoey-overview.png`, `shoey-realtime.png`, `shoey-map.png`). Visual proof is side-by-side with that demo. Do not invent a different layout.
+**Tony 10:32 PM ET VOID, then re-tightened.** Rail labels stay Shoey. Do **not** pixel-clone Pages / SEO / Groups / Cohorts / Dashboards / Insights / Reports destinations this slice — honest empty with a Métis hook. Clone **#map after Access login** as Shoey Realtime (proof: `shoey-realtime.png`, `shoey-map.png`). Overview stays the 8-tile KPI grid (`shoey-overview.png`). Do not invent a different layout.
 
 Content is Métis, not sneakers. Real data only. No fake keys, no stub map, no shoe SKUs (`/products/sneakers` and commerce sample rows are forbidden).
 
@@ -55,7 +55,7 @@ Content is Métis, not sneakers. Real data only. No fake keys, no stub map, no s
 
 Pixel-clone the **Shoey demo chrome**. Do not invent a different Operator layout. Do not vendor OpenPanel, Bklit, or Studio source. Do not paint shoe SKUs or sample visitors.
 
-**Sidebar (white, hairline `#EDEDED` right border) — same labels, same grouping, same chrome:**
+**Sidebar (white, ~185px, hairline `#EDEDED` right border) — same labels, same grouping, same chrome:**
 
 - Workspace selector: Métis (not Shoey) + chevron.
 - `+ Create report` (primary, dropdown). Honest empty until a real Métis report exists. Never a fake report.
@@ -77,8 +77,9 @@ Pixel-clone the **Shoey demo chrome**. Do not invent a different Operator layout
 
 - Top-left card: “Unique seats last 30 min” + large count + blue bars.
 - Left activity stream: real events (`listen`, `ask`, `recap`, `session_start` if ingested, skill). “just now” / relative time. Browser / OS / device icons from real seat fields only.
-- Right: light-gray world (`#F5F5F5`). Navy/charcoal **seat** dots from `request.cf` only. Green country **pills** (`[green dot] N | K countries`) like Shoey Unique visitors. No GPS. No IP. No sample dots.
-- Bottom three tables: Geo (Country / City), Referrals (CRM / Listen / connectors), Paths (modes / skills / use cases).
+- Right ~60% of the main pane: light-gray world (land `#F3F4F6`, ocean `#F5F5F5`). Navy/charcoal **seat** dots from `request.cf` only. Green country **pills** (`[green dot] N | K countries`) like Shoey Unique visitors. No GPS. No IP. No sample dots.
+- Bottom three tables: Geo, Referrals, Paths. Columns **Events** / **Sessions** with inline blue bars. Never Views/Sess on this page. Never `/products/sneakers`.
+- Dense **11–12px** type. Blue accent `#2563EB`. `#map` after JWT **is** this Realtime board, not a login card and not a choropleth-tab cut.
 
 **Empty destinations.** Dashboards, Insights, Pages, SEO, Sessions, Groups, Cohorts, Settings (beyond Keys), References, Notifications, Create report: **honest empty states with a real Métis hook**. Never fake rows.
 
@@ -427,7 +428,7 @@ Empty list: "No events yet." Never sample commerce events.
 
 Poll `/v1/admin/dashboard` while the page is open. No sample dots. No invented sessions. No shoe paths.
 
-`#map` is the same visual (Realtime map), not a separate slim choropleth cut.
+`#map` after Access identity **is** this Realtime board (`data-page="realtime"`). `/map` and `#map` highlight Realtime in the rail. Do not paint a second choropleth-tab page.
 
 ## Map (seats, not a stub)
 
