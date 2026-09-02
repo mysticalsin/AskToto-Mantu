@@ -4,11 +4,15 @@
  * fully working `claude`/`codex` entry point without ever opening a terminal or installing Node.
  *
  * HOW THIS AVOIDS REQUIRING NODE: the npm package is fetched straight from the registry as a tarball and
- * unpacked into userData — no `npm` invocation at all. Running the resulting `cli.js` needs a JS runtime;
- * Electron's own binary IS a JS runtime (V8 + a bundled Node core) and, when spawned with the
- * ELECTRON_RUN_AS_NODE=1 env var, boots as a plain Node.js process instead of Electron/Chromium — so
- * `process.execPath` (this app's own executable) can run the installed entry point directly (see
- * managedCliCommand below). This is a documented Electron capability, not a private trick.
+ * unpacked into userData — no `npm` invocation at all.
+ *
+ * Two Claude Code layouts are supported:
+ *   - Legacy (`cli.js`): run under Electron's embedded Node via ELECTRON_RUN_AS_NODE=1.
+ *   - Modern (2.1.150+): the wrapper package only ships a tiny `bin/claude.exe` stub; the real binary
+ *     lives in an optional platform package (`@anthropic-ai/claude-code-win32-x64`, …). We download that
+ *     platform tarball at the same version, replace the stub, and spawn the native binary directly
+ *     (no Node). This is what broke Windows EXE "Install Claude Code" with
+ *     `expected entry 'cli.js' is missing` — latest npm no longer ships `cli.js`.
  *
  * SECURITY INVARIANTS (never relax):
  *   - Tarball bytes are verified against the npm registry's published `dist.integrity` (sha512) BEFORE
@@ -30,11 +34,24 @@
  * commonly carry — so those do not break extraction of the regular files/dirs we actually need.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync
+} from 'node:fs'
 import { dirname, join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import { createHash, randomBytes } from 'node:crypto'
 import { app } from 'electron'
+
+/** Platform native binaries are tens of MB; the wrapper's bin/claude.exe stub is ~500 bytes. */
+export const MIN_NATIVE_CLI_BYTES = 1024
 
 function errMsg(e: unknown): string {
   return e instanceof Error ? e.message : String(e)
@@ -62,16 +79,77 @@ export const MANAGED_CLIS: Record<ManagedCliId, ManagedCliSpec> = {
   claude: {
     id: 'claude',
     npmPackage: '@anthropic-ai/claude-code',
+    // Fallback for legacy tarballs / tests. Modern releases declare bin in package.json (bin/claude.exe).
     binRelPath: 'cli.js'
   },
   codex: {
     id: 'codex',
     npmPackage: '@openai/codex',
-    // TODO-verify: confirm the real packaged entry point by inspecting an actual @openai/codex npm
-    // tarball once it's available — this mirrors claude's single-JS-entry layout but codex's bin
-    // layout hasn't been verified directly.
+    // Still a JS entry on current @openai/codex — verified against latest npm bin field.
     binRelPath: 'bin/codex.js'
   }
+}
+
+/** True when the installed entry is a JS script (needs ELECTRON_RUN_AS_NODE). Native .exe/.bin are false. */
+export function isJsCliEntry(entryPath: string): boolean {
+  return /\.[cm]?js$/i.test(entryPath)
+}
+
+/**
+ * Map host platform → Claude Code's optional native package (mirrors install.cjs / cli-wrapper.cjs in
+ * `@anthropic-ai/claude-code`). Exported for unit tests.
+ */
+export function resolveClaudeNativePlatform(
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+  musl = false
+): { npmPackage: string; binaryName: string } | null {
+  const prefix = '@anthropic-ai/claude-code'
+  if (platform === 'win32' && arch === 'x64') return { npmPackage: `${prefix}-win32-x64`, binaryName: 'claude.exe' }
+  if (platform === 'win32' && (arch === 'arm64' || arch === 'arm')) {
+    return { npmPackage: `${prefix}-win32-arm64`, binaryName: 'claude.exe' }
+  }
+  if (platform === 'darwin' && arch === 'arm64') return { npmPackage: `${prefix}-darwin-arm64`, binaryName: 'claude' }
+  if (platform === 'darwin' && arch === 'x64') return { npmPackage: `${prefix}-darwin-x64`, binaryName: 'claude' }
+  if (platform === 'linux' && arch === 'x64') {
+    return { npmPackage: `${prefix}-linux-x64${musl ? '-musl' : ''}`, binaryName: 'claude' }
+  }
+  if (platform === 'linux' && arch === 'arm64') {
+    return { npmPackage: `${prefix}-linux-arm64${musl ? '-musl' : ''}`, binaryName: 'claude' }
+  }
+  return null
+}
+
+/** Best-effort musl detection (Electron desktop Linux is almost always glibc). */
+function detectLinuxMusl(): boolean {
+  if (process.platform !== 'linux') return false
+  try {
+    // Node's diagnostic report: glibcVersionRuntime is absent on musl hosts.
+    const report = process.report?.getReport?.() as
+      | { header?: { glibcVersionRuntime?: string } }
+      | string
+      | undefined
+    if (!report || typeof report === 'string') return false
+    return report.header?.glibcVersionRuntime === undefined
+  } catch {
+    return false
+  }
+}
+
+/** Read package.json "bin" field inside an extracted npm package/ directory. */
+function readPackageBinRel(packageDir: string): string | null {
+  try {
+    const raw = readFileSync(join(packageDir, 'package.json'), 'utf8')
+    const pkg = JSON.parse(raw) as { bin?: string | Record<string, string> }
+    if (typeof pkg.bin === 'string') return pkg.bin.replace(/^\.\//, '')
+    if (pkg.bin && typeof pkg.bin === 'object') {
+      const preferred = pkg.bin.claude || pkg.bin.codex || Object.values(pkg.bin)[0]
+      return typeof preferred === 'string' ? preferred.replace(/^\.\//, '') : null
+    }
+  } catch {
+    /* missing / malformed package.json — caller falls back to spec.binRelPath */
+  }
+  return null
 }
 
 function installRoot(id: ManagedCliId): string {
@@ -187,21 +265,37 @@ interface NpmLatestMeta {
 /** The npm registry's per-version packument lookup. Scoped package names contain a literal '/' between
  *  scope and name, which must be percent-encoded (the registry treats an unescaped '/' as a path
  *  separator); the leading '@' is conventionally left unescaped. */
-function registryLatestUrl(npmPackage: string): string {
-  return `https://registry.npmjs.org/${npmPackage.replace('/', '%2f')}/latest`
+function registryPackageUrl(npmPackage: string, version?: string): string {
+  const base = `https://registry.npmjs.org/${npmPackage.replace('/', '%2f')}`
+  return version ? `${base}/${encodeURIComponent(version)}` : `${base}/latest`
+}
+
+async function fetchPackageMeta(
+  npmPackage: string,
+  signal: AbortSignal | undefined,
+  version?: string
+): Promise<NpmLatestMeta> {
+  const res = await fetch(registryPackageUrl(npmPackage, version), { signal })
+  if (!res.ok) {
+    throw new Error(
+      `npm registry lookup failed for ${npmPackage}${version ? `@${version}` : ''}: HTTP ${res.status}`
+    )
+  }
+  const json = (await res.json()) as { version?: unknown; dist?: { tarball?: unknown; integrity?: unknown } }
+  const resolvedVersion = json.version
+  const dist = json.dist
+  if (
+    typeof resolvedVersion !== 'string' ||
+    typeof dist?.tarball !== 'string' ||
+    typeof dist?.integrity !== 'string'
+  ) {
+    throw new Error(`npm registry response for ${npmPackage} is missing version/dist.tarball/dist.integrity`)
+  }
+  return { version: resolvedVersion, tarball: dist.tarball, integrity: dist.integrity }
 }
 
 async function fetchLatestMeta(npmPackage: string, signal: AbortSignal | undefined): Promise<NpmLatestMeta> {
-  const res = await fetch(registryLatestUrl(npmPackage), { signal })
-  if (!res.ok) {
-    throw new Error(`npm registry lookup failed for ${npmPackage}: HTTP ${res.status}`)
-  }
-  const json = (await res.json()) as { version?: unknown; dist?: { tarball?: unknown; integrity?: unknown } }
-  const { version, dist } = json
-  if (typeof version !== 'string' || typeof dist?.tarball !== 'string' || typeof dist?.integrity !== 'string') {
-    throw new Error(`npm registry response for ${npmPackage} is missing version/dist.tarball/dist.integrity`)
-  }
-  return { version, tarball: dist.tarball, integrity: dist.integrity }
+  return fetchPackageMeta(npmPackage, signal)
 }
 
 /** Verify the downloaded tarball bytes against npm's published `dist.integrity` (a Subresource-Integrity
@@ -363,10 +457,64 @@ export async function installManagedCli(
     mkdirSync(tmpDir, { recursive: true })
     extractTarball(buf, tmpDir)
 
-    const entryInTmp = join(tmpDir, 'package', spec.binRelPath)
+    const packageDir = join(tmpDir, 'package')
+    const binRel = readPackageBinRel(packageDir) ?? spec.binRelPath
+
+    // Modern Claude Code: package.json bin points at a native stub (bin/claude.exe). Fetch the matching
+    // platform package at the SAME version and overwrite the stub with the real binary — same job npm's
+    // postinstall (install.cjs) does, but without invoking npm/Node on the user's machine.
+    if (!isJsCliEntry(binRel)) {
+      if (id !== 'claude') {
+        throw new Error(
+          `installManagedCli: ${spec.npmPackage}@${meta.version} declares a native bin ('${binRel}') but Métis only knows how to resolve Claude Code platform packages`
+        )
+      }
+      const platform = resolveClaudeNativePlatform(process.platform, process.arch, detectLinuxMusl())
+      if (!platform) {
+        throw new Error(
+          `installManagedCli: Claude Code has no native build for ${process.platform}-${process.arch}`
+        )
+      }
+
+      throwIfAborted()
+      onProgress({ phase: 'resolving' })
+      const platMeta = await fetchPackageMeta(platform.npmPackage, signal, meta.version)
+
+      throwIfAborted()
+      const platBuf = await downloadTarball(platMeta.tarball, onProgress, signal)
+
+      throwIfAborted()
+      onProgress({ phase: 'verifying' })
+      verifyIntegrity(platBuf, platMeta.integrity)
+
+      throwIfAborted()
+      onProgress({ phase: 'extracting' })
+      const platTmp = join(tmpDir, 'platform')
+      mkdirSync(platTmp, { recursive: true })
+      extractTarball(platBuf, platTmp)
+
+      const nativeSrc = join(platTmp, 'package', platform.binaryName)
+      if (!existsSync(nativeSrc)) {
+        throw new Error(
+          `installManagedCli: expected native binary '${platform.binaryName}' is missing from ${platform.npmPackage}@${meta.version}`
+        )
+      }
+      if (statSync(nativeSrc).size < MIN_NATIVE_CLI_BYTES) {
+        throw new Error(
+          `installManagedCli: native binary from ${platform.npmPackage}@${meta.version} is too small — refusing to install a stub`
+        )
+      }
+
+      const nativeDest = join(packageDir, binRel)
+      mkdirSync(dirname(nativeDest), { recursive: true })
+      copyFileSync(nativeSrc, nativeDest)
+      if (process.platform !== 'win32') chmodSync(nativeDest, 0o755)
+    }
+
+    const entryInTmp = join(packageDir, binRel)
     if (!existsSync(entryInTmp)) {
       throw new Error(
-        `installManagedCli: expected entry '${spec.binRelPath}' is missing from ${spec.npmPackage}@${meta.version}`
+        `installManagedCli: expected entry '${binRel}' is missing from ${spec.npmPackage}@${meta.version}`
       )
     }
 
@@ -375,7 +523,7 @@ export async function installManagedCli(
     renameSync(tmpDir, versionDir)
     tmpDir = null // ownership transferred to versionDir — nothing left for the catch block to clean up
 
-    const entry = join(versionDir, 'package', spec.binRelPath)
+    const entry = join(versionDir, 'package', binRel)
     writeCurrentPointerAtomic(id, { version: meta.version, entry })
 
     onProgress({ phase: 'done' })
@@ -411,16 +559,18 @@ export function managedCliEntry(id: ManagedCliId): { entry: string; version: str
   }
 }
 
-/** The { command, args, env } to spawn `id`'s managed CLI, or null if it isn't installed. Runs Electron's
- *  own binary (process.execPath) as the interpreter: ELECTRON_RUN_AS_NODE='1' makes Electron boot as a
- *  plain Node.js runtime (its bundled Node core, currently >=22) instead of Electron/Chromium, so the JS
- *  entry point runs exactly as it would under a system `node` — without the user ever installing one. */
+/** The { command, args, env } to spawn `id`'s managed CLI, or null if it isn't installed.
+ *  - JS entries (legacy cli.js / Codex): Electron's own binary as Node via ELECTRON_RUN_AS_NODE=1.
+ *  - Native entries (modern Claude Code .exe / unix binary): spawn the binary directly — no Node. */
 export function managedCliCommand(id: ManagedCliId): { command: string; args: string[]; env: Record<string, string> } | null {
   const found = managedCliEntry(id)
   if (!found) return null
-  return {
-    command: process.execPath,
-    args: [found.entry],
-    env: { ELECTRON_RUN_AS_NODE: '1' }
+  if (isJsCliEntry(found.entry)) {
+    return {
+      command: process.execPath,
+      args: [found.entry],
+      env: { ELECTRON_RUN_AS_NODE: '1' }
+    }
   }
+  return { command: found.entry, args: [], env: {} }
 }

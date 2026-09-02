@@ -181,9 +181,9 @@ export async function resolveBin(bin: string): Promise<string | null> {
 }
 
 /** Last-resort resolution: the in-app one-click install (cli-installer.ts). Returns the managed entry
- *  script path — resolveSpawnTarget() recognizes it and runs it on Electron's embedded Node. Never
- *  cached, so an install completing mid-session is picked up on the next ask; a system install appearing
- *  later still wins (probed first). */
+ *  path (legacy cli.js OR a native Claude Code binary). resolveSpawnTarget() runs JS entries on
+ *  Electron's embedded Node and native binaries directly. Never cached, so an install completing
+ *  mid-session is picked up on the next ask; a system install appearing later still wins (probed first). */
 function managedBinFallback(bin: string): string | null {
   const id = bin === 'claude' ? 'claude' : bin === 'codex' ? 'codex' : null
   if (!id) return null
