@@ -85,7 +85,7 @@ function fail(msg) {
   process.exit(1)
 }
 
-const OPERATOR_SLICE = ['operator/', 'docs/design/OPERATOR.md']
+const OPERATOR_SLICE = ['operator/', 'docs/design/OPERATOR.md', 'docs/design/OPERATOR-OPENPANEL.md']
 
 function checkOverlayFrozen() {
   const missing = FROZEN_OVERLAY_CHROME.filter((p) => !existsSync(join(ROOT, p)))

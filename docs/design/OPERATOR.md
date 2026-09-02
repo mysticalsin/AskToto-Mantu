@@ -2,9 +2,10 @@
 project: Métis
 type: operator-control-plane-contract
 owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, client prompt-cache honesty, CRM send board, Tony LLM keys vault, Cloudflare account connect, seat funding signal, Ask routing law
-does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, installer packing, Fly license-server, Goldberg Aria, cloudflare-proxy AI token proxy, OpenPanel Pages/Funnels, Bklit Studio
+does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, appearance PR 98, Listen PR 99, ClickUp PR 97, installer packing, Fly license-server, Goldberg Aria, cloudflare-proxy AI token proxy, OpenPanel Pages/SEO/Groups/Cohorts/Dashboards/Insights/Reports builder, Bklit Studio
 ready-to-merge: no
 implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing
+openpanel-visual: OPERATOR-OPENPANEL.md
 audience: Tony Walteur only. Two emails. Nobody else.
 tokens:
   accent: "#7C8CF8"
@@ -49,14 +50,16 @@ Live URL: `https://metis-operator.tony-walteur.workers.dev/`. Hash routes (`#eve
 
 ## Pixel language
 
-Copy the **density and calm luxury** of OpenPanel (overview metrics, realtime, events, profiles). Adapt those surfaces to Métis seats, Asks, licenses, and skills. Do not pixel-clone Shoey commerce. Do not vendor OpenPanel, Bklit, or Studio. Do not add OpenPanel Pages or Funnels.
+Copy the **density and calm luxury** of OpenPanel (overview metrics, realtime, events, profiles). Adapt those surfaces to Métis seats, Asks, licenses, and skills. Do not vendor OpenPanel, Bklit, or Studio. Do not add OpenPanel Pages, SEO, Groups, Cohorts, Dashboards, Insights, or a Reports builder. Do not clone Shoey commerce copy (sneakers, visitors, pageviews).
+
+Tony 10:05 PM ET: `#map` must be a **visual clone** of Shoey Realtime. That contract lives in [`OPERATOR-OPENPANEL.md`](OPERATOR-OPENPANEL.md) and wins on Map chrome.
 
 - Product sidebar, not a two-level leftover. One filled rail. Hash-routed pages. Search filters the rail.
-- Light and dark both ship. Default follows `prefers-color-scheme`. Toggle persists in `localStorage`.
-- Geist Sans + Geist Mono. Uppercase letter-spaced eyebrows.
-- Hairline cards. Monochrome charts (`--chart-1` through `--chart-5`). Color is the exception: mint online, danger on Failed, accent `#7C8CF8` for live dots and primary actions.
-- KPI strip is 3-up on Overview. Big number, tiny mono sublabel, axis-free sparkline.
-- Map is a flat choropleth. No basemap tiles. No country labels. 5-step gray scale. **No repeating horizontal band artifacts** (strip date-line slivers from Natural Earth paths before paint).
+- Light and dark both ship. Default follows `prefers-color-scheme`. Toggle persists in `localStorage`. `#map` reads as Light SaaS (white cards, `#E5E7EB` hairlines) even if the rest of the console is dark-capable.
+- Geist Sans + Geist Mono. Uppercase letter-spaced eyebrows on Overview widgets. Map hero uses small muted titles + large dark values (Shoey Realtime).
+- Hairline cards. Monochrome charts (`--chart-1` through `--chart-5`) on Overview. Color is the exception: mint online, danger on Failed, accent `#7C8CF8` for primary actions, **blue bars + teal map labels + navy dots** on `#map`.
+- KPI strip is 3-up on Overview unless a later slice restyles it per OPERATOR-OPENPANEL.md. Big number, tiny mono sublabel, axis-free sparkline.
+- **`#map` is Shoey Realtime layout**, not a toy globe: left unique-seats-30min + bars + activity stream; right light vector world with seat dots and country/city count labels; bottom Geo / Referrals / Paths tables with volume bars. No Land / Analytics / Graticule / Hatch tabs. No basemap tiles. **No repeating horizontal band artifacts** (strip date-line slivers from Natural Earth paths before paint).
 - CRM send statuses are **dashboard filter chips** on Overview (paste order: pending, failed, success, in-progress, in-review, expired, submitted). Not a StatusDemo grid.
 - No Unsplash. No demo people. No placeholder visitors. No sample map dots. Empty states say there is no ingest yet.
 
@@ -89,7 +92,7 @@ This slice implements the keys vault, Cloudflare connect, and CLI-first routing 
 | `cloudflare-proxy/` (`metis-cloudflare-proxy`) | Existing AI token proxy. Do not reuse. Do not put CF tokens or LLM keys there. |
 | `aria-intake-llm`, `notebooklm-mcp`, `partner-mcp`, `tco-supabase-keepalive` | Existing Workers. Do not touch. |
 | In-app Operator page | Removed. Do not leave a fake local fleet view. |
-| OpenPanel Pages / Funnels / Shoey commerce | Density reference only. Not a clone. Not Métis nouns. |
+| OpenPanel Pages / SEO / Groups / Cohorts / Dashboards / Insights / Reports / Funnels / Shoey commerce | Density reference only. `#map` clones Shoey Realtime **layout** (see OPERATOR-OPENPANEL.md). Nouns stay Métis. No leftover nav. |
 | Bklit Studio | Proprietary. Do not copy. |
 | Settings CLI Integration | Keep `installCli` / `loginCli` / `testCli` / `cliConnected`. Do not fold CLI tokens into the vault. |
 | Seat-stored Tony cloud keys | Forbidden under the new law. Seats keep CLI sessions and local/on-device only. |
@@ -230,7 +233,7 @@ The left rail is a real OpenPanel-like product sidebar. Filled sections that map
 | `#realtime` | Realtime | Live seats (last-seen under 2 minutes) and a live event stream |
 | `#events` | Events | OpenPanel-style list: event name, profile, property chips, time. Token-free |
 | `#profiles` | Profiles | People: computer/hostname + SSO email. Real ingest only |
-| `#map` | Map | Countries choropleth from `request.cf`. Click a country to filter the fleet table |
+| `#map` | Map | Shoey Realtime layout (OPERATOR-OPENPANEL.md): unique seats last 30 min + bars + stream, light world with seat dots and count labels, Geo / Referrals / Paths. `request.cf` only. Click a country to filter Geo |
 | `#skills` | Skills | Draft / Approve / Push |
 | `#licenses` | Licenses | Seat license status, version, OS. Never a raw license key |
 | `#keys` | Keys | Tony adds LLM APIs and Cloudflare. Write / rotate / revoke. last4 only. Not a presence-only table. No CLI tokens |
@@ -265,11 +268,13 @@ Empty list: "No events yet." Never sample commerce events.
 
 ## Map
 
-Choropleth of unique devices by country. Live-ish dots only from Cloudflare `request.cf` (country, city, lat/long). **No GPS from the Electron app. No raw IP in the UI.** Store country ISO + optional city. Empty map if no heartbeats, not a fake world of sample users.
+**Visual:** Shoey Realtime clone. Binding layout and test hooks are in [`OPERATOR-OPENPANEL.md`](OPERATOR-OPENPANEL.md). Do not ship the old Land / Analytics / Graticule / Hatch globe on `#map`.
+
+**Data:** unique devices by country/city. Live-ish dots only from Cloudflare `request.cf` (country, city, lat/long). **No GPS from the Electron app. No raw IP in the UI.** Store country ISO + optional city. Empty map if no heartbeats, not a fake world of sample users. Labels are seat counts, not pageviews. Activity is listen / ask / recap / skill from real ingest — never token strings, never sneakers paths.
 
 Natural Earth 110m country paths include date-line slivers that paint as gray horizontal bands (notably a Russia leftover across Canada and a Fiji leftover across the southern ocean). Strip those subpaths (full-width, near-zero height) before SVG paint. Tests fail if a repeating horizontal band artifact remains.
 
-Click a country to filter the fleet table on that page. Caption: unique devices by country from Cloudflare `request.cf`. No GPS. No IP.
+Click a country to filter the Geo table on that page. Caption: unique seats by country/city from Cloudflare `request.cf`. No GPS. No IP.
 
 ## Overview widgets (not nav)
 
@@ -338,7 +343,7 @@ Tony 6:17 PM ET (login, overlay, map, events) plus Tony 8:03–8:05 PM ET (routi
 | --- | --- |
 | Overlay chrome | Island / Hide / Bar files are frozen. Do not edit them from an Operator slice. |
 | Login | Browser GET `/` without identity is `text/html` email+password login. Allowlist stays `tony.walteur@gmail.com` and `twalteur@amaris.com`. Password is `OPERATOR_ADMIN_PASSWORD`. JSON 401 only for `Accept: application/json` or `/v1/*`. Console never loads unauthenticated. |
-| Map data | Unique devices by country from Cloudflare `request.cf` only. Client `lat` / `lon` / `country` / `city` / `ip` are ignored. No GPS. No IP in the UI. No sample dots. Empty world if no devices. |
+| Map data | Unique devices by country from Cloudflare `request.cf` only. Client `lat` / `lon` / `country` / `city` / `ip` are ignored. No GPS. No IP in the UI. No sample dots. Empty world if no devices. `#map` HTML is the Shoey Realtime structure in OPERATOR-OPENPANEL.md (live count, world, three tables). |
 | Token-free events | `#events` never renders a token-shaped string (JWT, `Bearer`, `sk-`, 64-char hex HMAC, long base64). Tests fail if one appears. |
 | Routing | Connected working CLI is first for every user question. Other CLI next if both connected (last-clicked primary). Operator API keys only after quota or rate limit. Dust is retrieval only. |
 | Keys last4 | `#keys` and `/v1/admin/keys` never echo a secret, cipher, iv, CF token, or grant. UI last4 only. Seats are not told they keep Tony's cloud keys. |
@@ -362,6 +367,6 @@ Frozen overlay chrome (do not edit from this product):
 
 ## Ready to merge
 
-**READY TO MERGE: no.** Keys write/rotate/revoke, Cloudflare connect + fail-loud Overview, heartbeat `fundedProviders`, and CLI-first last-clicked routing are implemented. Overlay chrome stays frozen. Goldberg Aria stays frozen. Do not pack EXE/DMG. Do not bump app version. Do not merge from this change until Devon opens the live Worker as Tony on a Mac.
+**READY TO MERGE: no.** Keys write/rotate/revoke, Cloudflare connect + fail-loud Overview, heartbeat `fundedProviders`, and CLI-first last-clicked routing are implemented. `#map` Shoey Realtime clone is specified in OPERATOR-OPENPANEL.md (Tony 10:05 PM). Overlay chrome stays frozen. Goldberg Aria stays frozen. Do not pack EXE/DMG. Do not bump app version. Do not merge from this change until Devon opens the live Worker as Tony on a Mac.
 
 `POST /v1/use` (Operator-brokered provider calls) and migrating leftover seat-stored Tony cloud keys stay a later slice. Heartbeat lists funded providers only. Seats never persist a raw Operator key or CF token.
