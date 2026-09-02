@@ -95,6 +95,10 @@ dashboard (PR 61) is a separate surface; this module is a small honest feed it c
 Outlook drafts and CRM notes are user-confirmed. Never auto-send. A disconnected connector shows
 Connect, it does not pretend a send happened.
 
+## ClickUp post-meeting push
+See [CLICKUP-PUSH.md](./CLICKUP-PUSH.md). Confirm creates a task in the last/connected list. Never
+attach a file. Destination is named on screen. Fail loud with ClickUp's error. OAuth redirect is PR 73.
+
 ## Connector marks (Settings → Brain)
 ClickUp and Plane use official simple-icons SVG paths (CC0; trademarks remain with the brands). Do not invent marks or scrape PNGs.
 
