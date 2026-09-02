@@ -172,6 +172,7 @@ import {
   hoverRestTop,
   hoverWatchRestRect,
   overlayRestSize,
+  hideParkRect,
   parkAfterExclusiveOnboarding,
   parkedHoverReanchor,
   restoreParkAfterShow,
@@ -642,6 +643,8 @@ function privateViewOn(): boolean {
 }
 
 let win: BrowserWindow | null = null
+/** Hide 8×2 hairline. Never exclusive fullscreen — that window's constrainFrameRect stays at workArea.y. */
+let hideParkWin: BrowserWindow | null = null
 let tray: Tray | null = null
 let audioArmed = false // loopback capture only granted during an explicit user-initiated Listen
 // Fresh-question boundary state (written by IPC.listeningState / IPC.askResetContext / IPC.askStart, all
@@ -1644,6 +1647,7 @@ function recreateOverlayWindow(): void {
 }
 
 function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDisplayMatching(w.getBounds())): void {
+  hideHideParkWindow()
   // Totos-Mac 044c0f1: simple-fullscreen on a transparent window is a 3600×2338 RGBA(0,0,0,0) void.
   if (overlayWindowTransparent) {
     recreateOverlayWindow()
@@ -1709,7 +1713,16 @@ function exitExclusiveOnboardingStage(): void {
   currentWidth = park.width
   islandResting = overlayUsesHover(layout)
   userAnchorY = park.y
-  win.setBounds(park, false)
+  if (layout === 'hide') {
+    showHideParkWindow(park)
+    try {
+      win.hide()
+    } catch {
+      /* headless */
+    }
+  } else {
+    win.setBounds(park, false)
+  }
   startOverlayCursorWatch()
   applyHideClickThrough()
 }
@@ -1785,6 +1798,7 @@ function createWindow(): void {
     x: firstPaint.x,
     y: firstPaint.y,
     frame: false,
+    ...(process.platform === 'darwin' && !onboardingLive ? { type: 'panel' as const } : {}),
     transparent: chrome.transparent,
     hasShadow: false, // panel paints its own shadow; window shadow would box the transparent area
     resizable: false,
@@ -1867,6 +1881,7 @@ function createWindow(): void {
     // a selected recording. Their checkpointed state resumes even if the entire app exits.
     if (win === self) {
       stopOverlayCursorWatch()
+      hideHideParkWindow()
       win = null
     }
   })
@@ -2134,6 +2149,95 @@ function pointerInIslandOrBar(opts?: { ignoreWindow?: boolean }): boolean {
   )
 }
 
+function hideHideParkWindow(): void {
+  if (!hideParkWin || hideParkWin.isDestroyed()) {
+    hideParkWin = null
+    return
+  }
+  try {
+    hideParkWin.hide()
+  } catch {
+    /* already gone */
+  }
+}
+
+function destroyHideParkWindow(): void {
+  hideHideParkWindow()
+  if (!hideParkWin || hideParkWin.isDestroyed()) {
+    hideParkWin = null
+    return
+  }
+  try {
+    hideParkWin.destroy()
+  } catch {
+    /* already gone */
+  }
+  hideParkWin = null
+}
+
+/**
+ * Dedicated Hide 8×2. Never exclusive fullscreen (that NSWindow latches constrainFrameRect
+ * to workArea.y). Constructor flags: darwin panel + enableLargerThanScreen.
+ */
+function createHideParkWindow(park: Electron.Rectangle): BrowserWindow {
+  destroyHideParkWindow()
+  const chrome = overlayWindowChrome(false)
+  hideParkWin = new BrowserWindow({
+    x: park.x,
+    y: park.y,
+    width: park.width,
+    height: park.height,
+    show: false,
+    frame: false,
+    ...(process.platform === 'darwin' ? { type: 'panel' as const } : {}),
+    enableLargerThanScreen: true,
+    transparent: chrome.transparent,
+    hasShadow: false,
+    resizable: false,
+    movable: false,
+    skipTaskbar: true,
+    fullscreenable: false,
+    maximizable: false,
+    minimizable: false,
+    roundedCorners: chrome.roundedCorners,
+    minWidth: 1,
+    minHeight: 1,
+    backgroundColor: chrome.backgroundColor,
+    acceptFirstMouse: true,
+    webPreferences: {
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      backgroundThrottling: false,
+      webSecurity: true
+    }
+  })
+  try {
+    hideParkWin.setMinimumSize(1, 1)
+  } catch {
+    /* headless */
+  }
+  try {
+    hideParkWin.setAlwaysOnTop(true, 'screen-saver')
+    if (process.platform !== 'win32') hideParkWin.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  } catch {
+    /* headless */
+  }
+  hideParkWin.setContentProtection(contentProtectionOn())
+  hideParkWin.setHiddenInMissionControl?.(true)
+  try {
+    hideParkWin.setIgnoreMouseEvents(true)
+  } catch {
+    /* headless */
+  }
+  return hideParkWin
+}
+
+function showHideParkWindow(park: Electron.Rectangle): void {
+  const parkWin = createHideParkWindow(park)
+  parkWin.showInactive()
+}
+
 function parkOverlayAfterHideSpring(): void {
   if (!win || win.isDestroyed() || onboardingExclusiveLive()) return
   if (overlayCursorWatchHovering) return
@@ -2146,6 +2250,16 @@ function parkOverlayAfterHideSpring(): void {
   currentWidth = park.width
   islandResting = true
   userAnchorY = park.y
+  if (layout === 'hide') {
+    // Path 1: hairline lives on a window that never entered exclusive fullscreen.
+    showHideParkWindow(park)
+    try {
+      win.hide()
+    } catch {
+      /* headless */
+    }
+    return
+  }
   try {
     win.setMinimumSize(1, 1)
   } catch {
@@ -2199,8 +2313,16 @@ function anchorTopCenter(): void {
  *  safe Y. Leave collapse is the inverse (resizeTo with peek height, same Y). */
 function restoreBarWidth(): void {
   if (!win || onboardingExclusiveLive()) return
+  hideHideParkWindow()
   islandResting = false
   applyHideClickThrough()
+  if (!win.isVisible()) {
+    try {
+      win.showInactive()
+    } catch {
+      /* headless */
+    }
+  }
   const display = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
   const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
@@ -2265,6 +2387,7 @@ function ensureWindow(): BrowserWindow | null {
  * for bare `.show()` calls and fails on any occurrence outside this function.
  */
 function showForAsk(w: BrowserWindow): void {
+  hideHideParkWindow()
   w.show()
   w.focus()
 }
@@ -2273,6 +2396,7 @@ function sendHotkey(action: HotkeyAction): void {
   const w = ensureWindow()
   if (!w) return
   if (!w.isVisible()) {
+    hideHideParkWindow()
     if (action === 'ask') showForAsk(w)
     else w.showInactive()
   }
@@ -2767,6 +2891,11 @@ function registerScreenListeners(): void {
     // Hide/island already parked: re-apply the rest rect on the new display.
     // Do not clampHeight (BAR_MIN_HEIGHT 44) or slide y into workArea (Tony live: 8×44 at Y=39).
     // Hide at bounds.y is outside a notched workArea; that is the park, not "off-screen".
+    if (hideParkWin && !hideParkWin.isDestroyed() && hideParkWin.isVisible()) {
+      const display = screen.getDisplayMatching(hideParkWin.getBounds())
+      showHideParkWindow(hideParkRect(getDisplayMetrics(display)))
+      return
+    }
     {
       const display = screen.getDisplayMatching(win.getBounds())
       const park = parkedHoverReanchor(
@@ -3203,6 +3332,7 @@ function registerIpc(): void {
     const managedSnap = managedEffectsSnapshot()
     if (lastAppliedManagedSnapshot !== null && managedSnap !== lastAppliedManagedSnapshot) {
       win?.setContentProtection(contentProtectionOn())
+      hideParkWin?.setContentProtection(contentProtectionOn())
       syncIntelContentProtection() // keep the dashboard window's Private View in lockstep with the overlay
       registerShortcuts()
       rebuildTrayMenu()
@@ -3460,7 +3590,16 @@ function registerIpc(): void {
           currentWidth = park.width
           islandResting = true
           userAnchorY = park.y
-          win.setBounds(park, false)
+          if (layout === 'hide') {
+            showHideParkWindow(park)
+            try {
+              win.hide()
+            } catch {
+              /* headless */
+            }
+          } else {
+            win.setBounds(park, false)
+          }
           applyHideClickThrough()
           notifyOverlayCursorHover(false)
         }
@@ -3512,6 +3651,7 @@ function registerIpc(): void {
       )
     }
     win?.setContentProtection(contentProtectionOn())
+    hideParkWin?.setContentProtection(contentProtectionOn())
     syncIntelContentProtection() // keep the dashboard window's Private View in lockstep with the overlay
     // Only reconfigure the OS login item when that setting actually changed. Calling it on every
     // unrelated save is wasteful and, on unsigned/dev builds, logs a noisy "Operation not permitted".

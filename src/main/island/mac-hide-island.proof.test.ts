@@ -3,6 +3,8 @@
  * at bounds.y (Tony listwins), and Island hover at Y=12 must still reveal.
  * This is geometry + cursor-watch. Live Totos-Mac listwins is not this Linux host.
  */
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { decideCursorWatch, pointInRect } from './cursor-watch'
 import {
@@ -94,6 +96,26 @@ describe('Mac-test Hide park leftover after Show (880×105 at Y=39)', () => {
         revealed: false
       })
     ).toBe('reveal')
+  })
+
+  it('live Hide park uses createHideParkWindow, not the exclusive/Show BrowserWindow', () => {
+    const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
+    const ctor = index.slice(index.indexOf('function createHideParkWindow'), index.indexOf('function showHideParkWindow'))
+    expect(ctor).toMatch(/type: 'panel'/)
+    expect(ctor).toMatch(/enableLargerThanScreen: true/)
+    expect(ctor).not.toMatch(/setSimpleFullScreen/)
+    expect(ctor).not.toMatch(/applyExclusiveOnboardingStage/)
+    const parkSpring = index.slice(
+      index.indexOf('function parkOverlayAfterHideSpring'),
+      index.indexOf('function applyHideClickThrough')
+    )
+    expect(parkSpring).toMatch(/restoreParkAfterShow/)
+    expect(parkSpring).toMatch(/showHideParkWindow\(park\)/)
+    expect(parkSpring).toMatch(/win\.hide\(\)/)
+    expect(parkSpring).not.toMatch(/islandSafeTop/)
+    const reveal = index.slice(index.indexOf('function restoreBarWidth'), index.indexOf('function setWindowMode'))
+    expect(reveal).toMatch(/hideHideParkWindow\(\)/)
+    expect(reveal).toMatch(/islandSafeTop|topClamp/)
   })
 })
 

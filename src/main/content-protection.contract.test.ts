@@ -111,6 +111,7 @@ describe('MQA-176 — every window Métis puts on screen is covered by the Priva
     // the import decoder and the recap-PDF printer are `show: false` and never composited.
     expect(audit.windows.sort()).toEqual([
       'index.ts: decoderWin',
+      'index.ts: hideParkWin',
       'index.ts: pdfWin',
       'index.ts: win',
       'intelligence.ts: intelWin'
