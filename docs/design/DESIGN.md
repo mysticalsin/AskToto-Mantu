@@ -103,6 +103,9 @@ ClickUp and Plane use official simple-icons SVG paths (CC0; trademarks remain wi
 
 See `docs/design/BRAIN-CONNECTORS.md`.
 
+## Onboarding appearance
+See [ONBOARDING-APPEARANCE.md](./ONBOARDING-APPEARANCE.md). Tony ask: Hidden (default, mouse to top, click to trigger) vs Island vs Bar. Live preview. Persist existing overlay. Hide 8×2 and Island hover stay out.
+
 ## Starfield Close (onboarding bed)
 See [ONBOARDING-STARFIELD.md](./ONBOARDING-STARFIELD.md). Galaxy from frame one. Overlay hide/island stay out.
 
