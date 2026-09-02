@@ -12,6 +12,7 @@ import { Sparkles } from 'lucide-react'
 import {
   aiRowStatus,
   asrAssetsRowStatus,
+  asrEnsureFailureStatus,
   asrRowNeedsRetry,
   localModelRowStatus,
   micRowStatus,
@@ -21,6 +22,7 @@ import {
   summarizeSetupRows,
   type SetupRow
 } from './OnboardingExperience'
+import { BUNDLE_GOT_LOGIN_HTML, BUNDLE_NOT_JS } from '@shared/bundle-response'
 
 describe('providerTileDisabledReason — step-5 provider tiles must not misreport why they are disabled', () => {
   it('is null (tappable) when nothing blocks the tile', () => {
@@ -339,6 +341,25 @@ describe('Act 3 — transcription files never skip', () => {
     expect(row.state).toBe('action')
     expect(row.detail).not.toMatch(/reinstall/i)
     expect(asrRowNeedsRetry(row)).toBe(true)
+  })
+
+  it('Access login HTML and HTTP-not-JS fail loud with Retry, never a dead idle', () => {
+    const html = asrAssetsRowStatus(asrEnsureFailureStatus(new Error(BUNDLE_GOT_LOGIN_HTML)))
+    expect(html.state).toBe('action')
+    expect(html.detail).toMatch(/login page/)
+    expect(asrRowNeedsRetry(html)).toBe(true)
+    const notJs = asrAssetsRowStatus(asrEnsureFailureStatus(new Error(BUNDLE_NOT_JS)))
+    expect(notJs.detail).toMatch(/not JavaScript/)
+    expect(asrRowNeedsRetry(notJs)).toBe(true)
+    expect(asrEnsureFailureStatus(new Error('fetch failed')).status).toBe('error')
+    expect(asrEnsureFailureStatus(new Error('fetch failed')).ready).toBe(false)
+  })
+
+  it('onboarding never swallows an ensure failure into a silent idle', () => {
+    const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+    expect(src).toMatch(/asrEnsureFailureStatus/)
+    expect(src).not.toMatch(/asrAssetsEnsure\(\)[\s\S]{0,80}IDLE_ASR_STATUS/)
+    expect(src).not.toMatch(/catch\(\(\) => apply\(IDLE_ASR_STATUS\)\)/)
   })
 
   it('idle-and-missing still means getting files, never skipped', () => {

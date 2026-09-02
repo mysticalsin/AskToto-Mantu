@@ -1,3 +1,9 @@
+import {
+  BUNDLE_GOT_LOGIN_HTML,
+  inspectBundleResponse,
+  isHtmlContentType,
+  looksLikeAccessRedirect
+} from '@shared/bundle-response'
 import { getMachineId } from '../license'
 import { hashOperatorId, operatorHmacHeaders } from '../operator-hmac-sign'
 import { mainLog } from '../logger'
@@ -48,6 +54,23 @@ export function streamOperatorAsk(opts: StreamOptions): StreamHandle {
       const res = await fetch(url, { method: 'POST', headers, body, signal: ac.signal })
       if (aborted) return
       const ctype = res.headers.get('content-type') || ''
+      const location = res.headers.get('location')
+      if (isHtmlContentType(ctype) || looksLikeAccessRedirect(location)) {
+        fail(BUNDLE_GOT_LOGIN_HTML)
+        return
+      }
+      if (res.ok) {
+        const inspected = inspectBundleResponse({
+          status: res.status,
+          contentType: ctype,
+          location,
+          expected: 'binary'
+        })
+        if (!inspected.ok) {
+          fail(inspected.message)
+          return
+        }
+      }
       if (!res.ok || !ctype.includes('text/event-stream')) {
         let message = `Operator ask failed (${res.status})`
         try {

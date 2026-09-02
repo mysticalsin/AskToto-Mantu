@@ -82,7 +82,7 @@ New tree: `operator/`. Worker name: `metis-operator`. Account already in use: `t
 
 5. **No secrets in git, logs, or PR bodies.** Wrangler secrets only. Do not commit test private keys.
 
-6. **Path split.** Access protects `/` and `/v1/admin/*`. Ingest stays HMAC-only. Do not enable "Protect this Worker" for all traffic.
+6. **Path split.** Access protects `/` and `/v1/admin/*`. Ingest stays HMAC-only. `/assets/*` is public JavaScript (the packed client). Do not enable "Protect this Worker" for all traffic. A Cloudflare Access 302 HTML page is never a successful bundle.
 
 ## Console sections
 

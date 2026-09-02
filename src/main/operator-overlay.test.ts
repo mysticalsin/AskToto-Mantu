@@ -9,7 +9,7 @@ import {
   setModeSkillsOverlayRoot,
   setModeSkillsRootForTests
 } from './mode-skills'
-import { applySignedSkillPack } from './operator-overlay'
+import { applySignedSkillPack, pullOperatorSkillManifest, setOperatorOverlayFetchForTests } from './operator-overlay'
 import { verifyOperatorSkillPack } from './operator-skill-verify'
 import {
   generateOperatorTestKeypair,
@@ -20,11 +20,34 @@ import {
 vi.mock('electron', () => ({
   app: { getPath: () => tmpdir(), getVersion: () => '1.8.0-test' }
 }))
+vi.mock('./license', () => ({ getMachineId: () => 'machine-test' }))
+vi.mock('./logger', () => ({ mainLog: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } }))
 
 afterEach(() => {
   setModeSkillsOverlayRoot(null)
   setModeSkillsRootForTests(null)
   clearModeSkillsCacheForTests()
+})
+
+describe('Operator skill manifest download', () => {
+  afterEach(() => {
+    setOperatorOverlayFetchForTests(null)
+  })
+
+  it('does not treat Access login HTML as a skill pack', async () => {
+    setOperatorOverlayFetchForTests(
+      async () =>
+        new Response(
+          '<!DOCTYPE html><html><body>Sign in · Cloudflare Access https://team.cloudflareaccess.com</body></html>',
+          { status: 200, headers: { 'content-type': 'text/html' } }
+        )
+    )
+    const applied = await pullOperatorSkillManifest({
+      operatorUrl: 'https://operator.test',
+      operatorIngestSecret: 'ingest-secret'
+    })
+    expect(applied).toBe(0)
+  })
 })
 
 describe('Approve without Push vs signed overlay', () => {

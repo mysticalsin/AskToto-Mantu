@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { redactSecrets } from '@shared/redact'
 import { filterFundedProviders } from '@shared/ask-routing'
+import { inspectBundleResponse } from '@shared/bundle-response'
 import { operatorUrlConfigured, shouldSendAskText, type AskLogLine, type StreamCacheUsage } from '@shared/operator'
 import type { Settings } from '@shared/ipc'
 import { getMachineId } from './license'
@@ -80,12 +81,24 @@ async function signedPost(
     ...operatorHmacHeaders(secret, deviceId(), body)
   }
   const res = await fetchImpl(`${url}${path}`, { method: 'POST', headers, body })
+  const text = await res.text()
+  const inspected = inspectBundleResponse({
+    status: res.status,
+    contentType: res.headers.get('content-type'),
+    location: res.headers.get('location'),
+    bodyPrefix: text.slice(0, 1024),
+    expected: 'json'
+  })
+  if (!inspected.ok) {
+    mainLog.warn(`[operator] ${path} ${inspected.message}`)
+    return { ok: false, json: null }
+  }
   if (!res.ok) {
     mainLog.warn(`[operator] ${path} ${res.status}`)
   }
   let parsed: unknown = null
   try {
-    parsed = JSON.parse(await res.text())
+    parsed = JSON.parse(text)
   } catch {
     parsed = null
   }

@@ -9,6 +9,7 @@ import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './st
 import { renderConsole } from './ui'
 import { fundedProvidersFromEnv } from './funded'
 import { handleOperatorAsk } from './ask'
+import { isPublicAssetPath, publicAssetResponse } from './assets'
 
 export interface Env {
   DB?: D1DatabaseLike
@@ -79,6 +80,12 @@ export async function handleRequest(
       service: 'metis-operator',
       configured: Boolean(env.OPERATOR_INGEST_SECRET && env.OPERATOR_PROMPT_KEY)
     })
+  }
+
+  // /assets/* is the packed client JS. Access must never wrap it — a 302 login HTML page is not a
+  // bundle. HMAC paths stay HMAC. Admin HTML stays Access.
+  if (isPublicAssetPath(url.pathname)) {
+    return publicAssetResponse(url.pathname)
   }
 
   if (isAdminPath(url.pathname)) {

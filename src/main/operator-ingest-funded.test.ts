@@ -44,6 +44,22 @@ describe('heartbeat fundedProviders — IDs only, never secrets', () => {
     expect(JSON.stringify(operatorFundedProviders())).not.toContain('ingest-secret')
   })
 
+  it('does not treat Access login HTML as a successful heartbeat', async () => {
+    setOperatorFetchForTests(
+      async () =>
+        new Response(
+          '<!DOCTYPE html><html><body>Sign in · Cloudflare Access https://team.cloudflareaccess.com</body></html>',
+          { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } }
+        )
+    )
+    const beat = await operatorHeartbeat({
+      operatorUrl: 'https://operator.test',
+      operatorIngestSecret: 'ingest-secret'
+    })
+    expect(beat.ok).toBe(false)
+    expect(operatorFundedProviders()).toEqual([])
+  })
+
   it('Ask transport is URL + ingest secret only — never an LLM key', () => {
     const t = operatorAskTransport({
       operatorUrl: 'https://operator.test',

@@ -66,6 +66,14 @@ describe('bundled Parakeet runtime', () => {
     await expect(ensureParakeetModel(progressSpy)).resolves.toBeUndefined()
   })
 
+  it('Access login HTML on disk is not a ready Parakeet model', () => {
+    const dir = join(paths.userData, 'asr-models', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8')
+    mkdirSync(dir, { recursive: true })
+    const html = '<!DOCTYPE html><html><body>cloudflareaccess.com Sign in</body></html>'
+    for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dir, name), html)
+    expect(parakeetModelReady()).toBe(false)
+  })
+
   it('failed fetch is an honest connection error, never a reinstall demand', async () => {
     setAsrEnsureTestHooks({
       fetchParakeet: async () => {

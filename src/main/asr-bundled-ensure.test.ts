@@ -14,8 +14,11 @@ vi.mock('electron', () => ({
 }))
 vi.mock('./logger', () => ({ mainLog: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }))
 
+import { net } from 'electron'
+import { BUNDLE_GOT_LOGIN_HTML } from '@shared/bundle-response'
 import {
   ASR_ASSETS_MISSING,
+  PARAKEET_MODEL_NAME,
   PARAKEET_REQUIRED_FILES,
   WHISPER_FLOOR_ID,
   WHISPER_FLOOR_REQUIRED_FILES,
@@ -23,6 +26,7 @@ import {
   importAsrAssetsReady,
   asrAssetsStatusSnapshot,
   parakeetFilesReady,
+  parakeetUserDir,
   setAsrEnsureTestHooks,
   resetAsrEnsureStateForTests,
   whisperFloorReady
@@ -87,5 +91,41 @@ describe('asr-bundled-ensure', () => {
     expect(snap.status).not.toBe('ready')
     expect(JSON.stringify(snap)).not.toMatch(/[Rr]einstall/)
     expect(snap.label).toMatch(/transcription files/i)
+  })
+
+  it('does not treat Access login HTML on disk as a ready Parakeet bundle', () => {
+    const dir = join(paths.userData, 'asr-models', PARAKEET_MODEL_NAME)
+    mkdirSync(dir, { recursive: true })
+    const html =
+      '<!DOCTYPE html><html><body>Sign in · Cloudflare Access https://team.cloudflareaccess.com</body></html>'
+    for (const name of PARAKEET_REQUIRED_FILES) writeFileSync(join(dir, name), html)
+    expect(parakeetFilesReady(dir)).toBe(false)
+    expect(importAsrAssetsReady()).toBe(false)
+  })
+
+  it('download of Access HTML fails loud and does not write a fake bundle', async () => {
+    const html =
+      '<!DOCTYPE html><html><head><title>Sign in</title></head><body>cloudflareaccess.com login</body></html>'
+    vi.mocked(net.fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ 'content-type': 'text/html; charset=utf-8', 'content-length': String(html.length) }),
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(html))
+          controller.close()
+        }
+      })
+    } as unknown as Response)
+
+    await expect(ensureImportAsrAssets()).rejects.toThrow(/login page|files/)
+    const dest = join(parakeetUserDir(), 'encoder.int8.onnx')
+    expect(parakeetFilesReady(parakeetUserDir())).toBe(false)
+    const snap = asrAssetsStatusSnapshot()
+    expect(snap.ready).toBe(false)
+    expect(snap.status).toBe('error')
+    expect(snap.error).toMatch(/login page|connection|files/)
+    expect(snap.error).toBe(BUNDLE_GOT_LOGIN_HTML)
+    expect(dest.endsWith('encoder.int8.onnx')).toBe(true)
   })
 })

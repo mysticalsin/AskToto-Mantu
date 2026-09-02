@@ -33,6 +33,7 @@
  *   needs comes back through onDone.
  */
 import { useCallback, useEffect, useId, useRef, useState, type Ref } from 'react'
+import { bundleFailureUserMessage, isRetryableBundleMessage } from '@shared/bundle-response'
 import {
   AlertCircle,
   Check,
@@ -394,7 +395,13 @@ export function asrAssetsRowStatus(
 
 export function asrRowNeedsRetry(row: Pick<SetupRow, 'state' | 'detail'>): boolean {
   if (row.state !== 'action') return false
-  return /could not get|try again|check your connection/i.test(row.detail ?? '')
+  return isRetryableBundleMessage(row.detail)
+}
+
+/** Ensure / status IPC failure. Never idle. Always Retry. */
+export function asrEnsureFailureStatus(err?: unknown): AsrAssetsStatus {
+  const message = bundleFailureUserMessage(err)
+  return { ready: false, status: 'error', progress: 0, label: message, error: message }
 }
 
 /** First-run cannot leave Act 3 while Parakeet + Whisper-floor files are still missing. */
@@ -852,7 +859,7 @@ export function OnboardingExperience({
     const apply = (s: AsrAssetsStatus): void => {
       if (live) setAsrStatus(s)
     }
-    void window.toto.asrAssetsEnsure().then(apply).catch(() => apply(IDLE_ASR_STATUS))
+    void window.toto.asrAssetsEnsure().then(apply).catch((err) => apply(asrEnsureFailureStatus(err)))
     const poll = async (): Promise<void> => {
       const s = await window.toto.asrAssetsStatus().catch(() => null)
       if (s) apply(s)
@@ -902,8 +909,16 @@ export function OnboardingExperience({
     void (async () => {
       const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
       await delay(500)
-      void window.toto.asrAssetsEnsure().catch(() => {})
-      const asrStatus = await window.toto.asrAssetsStatus().catch(() => IDLE_ASR_STATUS)
+      void window.toto
+        .asrAssetsEnsure()
+        .then((s) => {
+          if (live) setAsrStatus(s)
+        })
+        .catch((err) => {
+          if (!live) return
+          setAsrStatus(asrEnsureFailureStatus(err))
+        })
+      const asrStatus = await window.toto.asrAssetsStatus().catch((err) => asrEnsureFailureStatus(err))
       const asr = asrAssetsRowStatus(asrStatus)
       set('asr', asr.state, asr.detail, asr.progress)
       await delay(450)
@@ -1023,7 +1038,7 @@ export function OnboardingExperience({
   }, [scene, settings?.localLlm.modelId])
 
   const retryAsr = async (): Promise<void> => {
-    const status = await window.toto.asrAssetsEnsure().catch(() => IDLE_ASR_STATUS)
+    const status = await window.toto.asrAssetsEnsure().catch((err) => asrEnsureFailureStatus(err))
     setAsrStatus(status)
     const asr = asrAssetsRowStatus(status)
     setRows((rs) => rs.map((r) => (r.key === 'asr' ? { ...r, state: asr.state, detail: asr.detail, progress: asr.progress } : r)))

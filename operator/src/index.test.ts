@@ -274,6 +274,48 @@ describe('health', () => {
   })
 })
 
+describe('public /assets/* — never Access HTML', () => {
+  it('serves client.js without Access and never returns login HTML', async () => {
+    const res = await handleRequest(
+      new Request('https://operator.test/assets/client.js'),
+      env(),
+      {},
+      { store: memoryStore() }
+    )
+    expect(res.status).toBe(200)
+    expect(res.status).not.toBe(302)
+    expect(res.headers.get('content-type')).toMatch(/javascript/)
+    expect(res.headers.get('content-type')).not.toMatch(/html/)
+    const body = await res.text()
+    expect(body).toMatch(/metisOperatorClient/)
+    expect(body).not.toMatch(/<!doctype html|<html|cloudflareaccess|Sign in/i)
+  })
+
+  it('does not require Access identity even when Tony is signed in', async () => {
+    const res = await handleRequest(
+      new Request('https://operator.test/assets/client.js'),
+      env(),
+      { access: tonyAccess },
+      { store: memoryStore() }
+    )
+    expect(res.status).toBe(200)
+    expect(await res.text()).toMatch(/metisOperatorClient/)
+  })
+
+  it('missing /assets/* is JSON 404, not a 302 login page', async () => {
+    const res = await handleRequest(
+      new Request('https://operator.test/assets/index-dead.js'),
+      env(),
+      {},
+      { store: memoryStore() }
+    )
+    expect(res.status).toBe(404)
+    expect(res.status).not.toBe(302)
+    expect(res.headers.get('content-type')).toMatch(/json/)
+    expect(await res.text()).not.toMatch(/<!doctype html|<html|cloudflareaccess/i)
+  })
+})
+
 describe('packed console map and geo', () => {
   it('renders an empty map when there are no heartbeats, never sample visitors', async () => {
     const store = memoryStore()
