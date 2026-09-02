@@ -179,6 +179,18 @@ describe('product sidebar (#105)', () => {
       { store: memoryStore(), now: NOW }
     ).then((r) => r.text())
     expect(js).toContain("requested === 'map' ? 'realtime'")
+    expect(html).toContain('data-theme="light"')
+    expect(html).toContain('id="events-empty"')
+    expect(html).toContain('id="sessions-search"')
+    expect(html).toContain('id="nt-search"')
+    expect(html).toContain('data-nt-empty')
+    expect(css).toContain('[data-theme="dark"] .tab.on { background: #f4f4f5; color: #0a0a0b; }')
+    expect(css).toContain('.tab.on { background: #18181b; color: #ffffff; }')
+    expect(js).toContain("var next = cur === 'dark' ? 'light' : 'dark'")
+    expect(js).not.toContain("cur === 'light' ? ''")
+    expect(js).toContain("syncEmpty('#events-list .event[data-q]', 'events-empty')")
+    expect(js).toContain('applyNtFilter')
+    expect(js).toContain("ntFilter === 'all' || status === ntFilter")
   })
 })
 

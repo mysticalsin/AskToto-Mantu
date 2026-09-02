@@ -73,7 +73,7 @@ describe('overview ops tiles from real ingest only', () => {
     expect(dash.ops.unknownAsks).toBe(1)
     expect(dash.ops.recapCount).toBe(1)
     expect(dash.ops.listenMinutes).toBe(12)
-    expect(dash.ops.tokens).toBeGreaterThan(0)
+    expect(dash.ops.tokens).toBe(0)
     expect(dash.map.empty).toBe(false)
   })
 
@@ -81,7 +81,7 @@ describe('overview ops tiles from real ingest only', () => {
     const dash = await buildDashboard(memoryStore(), 'tony.walteur@gmail.com', NOW)
     expect(dash.ops.timeSaved).toBeNull()
     expect(dash.ops.listenMinutes).toBeNull()
-    expect(dash.ops.tokens).toBeNull()
+    expect(dash.ops.tokens).toBe(0)
     expect(dash.ops.durationMs).toBeNull()
     expect(dash.ops.apiCalls).toBe(0)
     expect(dash.ops.cliAsks).toBe(0)

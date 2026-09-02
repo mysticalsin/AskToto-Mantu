@@ -22,13 +22,25 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
   }
 
   async function api(path, body) {
-    var r = await fetch(path, {
-      method: body ? 'POST' : 'GET',
-      credentials: 'same-origin',
-      headers: body ? { 'content-type': 'application/json' } : {},
-      body: body ? JSON.stringify(body) : undefined
-    })
-    return r.json()
+    var r
+    try {
+      r = await fetch(path, {
+        method: body ? 'POST' : 'GET',
+        credentials: 'same-origin',
+        headers: body
+          ? { 'content-type': 'application/json', accept: 'application/json' }
+          : { accept: 'application/json' },
+        body: body ? JSON.stringify(body) : undefined
+      })
+    } catch (e) {
+      return { ok: false, error: 'network failed' }
+    }
+    var text = await r.text()
+    try {
+      return JSON.parse(text)
+    } catch (e) {
+      return { ok: false, error: text && text.slice(0, 180) || ('HTTP ' + r.status) }
+    }
   }
 
   var titles = {
@@ -137,33 +149,75 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
     })
   })
 
+  function syncEmpty(rowsSel, emptyId) {
+    var empty = document.getElementById(emptyId)
+    if (!empty) return
+    var rows = document.querySelectorAll(rowsSel)
+    var shown = 0
+    rows.forEach(function (row) {
+      if (!row.hidden) shown += 1
+    })
+    empty.hidden = shown > 0
+  }
+
   var evSearch = document.getElementById('events-search')
   if (evSearch) {
     evSearch.addEventListener('input', function () {
       var q = evSearch.value.trim().toLowerCase()
-      document.querySelectorAll('#events-list .event').forEach(function (row) {
+      document.querySelectorAll('#events-list .event[data-q]').forEach(function (row) {
         row.hidden = Boolean(q) && !(row.getAttribute('data-q') || '').includes(q)
       })
+      syncEmpty('#events-list .event[data-q]', 'events-empty')
     })
   }
 
+  var sessSearch = document.getElementById('sessions-search')
+  if (sessSearch) {
+    sessSearch.addEventListener('input', function () {
+      var q = sessSearch.value.trim().toLowerCase()
+      document.querySelectorAll('[data-seat-row]').forEach(function (row) {
+        row.hidden = Boolean(q) && !(row.getAttribute('data-q') || '').includes(q)
+      })
+      syncEmpty('[data-seat-row]', 'sessions-empty')
+    })
+  }
+
+  var ntFilter = 'all'
+  var ntSearch = document.getElementById('nt-search')
+  function applyNtFilter() {
+    var q = ntSearch ? ntSearch.value.trim().toLowerCase() : ''
+    document.querySelectorAll('#nt-table [data-nt-row]').forEach(function (row) {
+      var status = row.getAttribute('data-status') || ''
+      var text = (row.textContent || '').toLowerCase()
+      var statusOk = ntFilter === 'all' || status === ntFilter
+      var qOk = !q || text.includes(q)
+      row.hidden = !(statusOk && qOk)
+    })
+    var empty = document.querySelector('#nt-table [data-nt-empty]')
+    if (empty) {
+      var shown = 0
+      document.querySelectorAll('#nt-table [data-nt-row]').forEach(function (row) {
+        if (!row.hidden) shown += 1
+      })
+      empty.hidden = shown > 0
+    }
+  }
+  if (ntSearch) ntSearch.addEventListener('input', applyNtFilter)
+
   var themeBtn = document.getElementById('theme-btn')
   function applyTheme(v) {
-    if (v) document.documentElement.setAttribute('data-theme', v)
-    else document.documentElement.removeAttribute('data-theme')
+    var theme = v === 'dark' ? 'dark' : 'light'
+    document.documentElement.setAttribute('data-theme', theme)
   }
-  try { applyTheme(localStorage.getItem('metis-operator-theme')) } catch (e) {}
+  try { applyTheme(localStorage.getItem('metis-operator-theme') || 'light') } catch (e) { applyTheme('light') }
   paintShoeyMap()
   if (themeBtn) {
     themeBtn.addEventListener('click', function () {
       var cur = document.documentElement.getAttribute('data-theme')
-      var next = cur === 'dark' ? 'light' : cur === 'light' ? '' : 'dark'
+      var next = cur === 'dark' ? 'light' : 'dark'
       applyTheme(next)
       paintShoeyMap()
-      try {
-        if (next) localStorage.setItem('metis-operator-theme', next)
-        else localStorage.removeItem('metis-operator-theme')
-      } catch (e) {}
+      try { localStorage.setItem('metis-operator-theme', next) } catch (e) {}
     })
   }
 
@@ -215,9 +269,10 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
   document.querySelectorAll('[data-crm-filter]').forEach(function (b) {
     b.addEventListener('click', function () {
       document.querySelectorAll('[data-crm-filter]').forEach(function (x) { x.classList.toggle('on', x === b) })
-      var f = b.getAttribute('data-crm-filter')
+      ntFilter = b.getAttribute('data-crm-filter') || 'all'
+      applyNtFilter()
       document.querySelectorAll('#crm-table tbody tr').forEach(function (tr) {
-        tr.hidden = f !== 'all' && tr.getAttribute('data-status') !== f
+        tr.hidden = ntFilter !== 'all' && tr.getAttribute('data-status') !== ntFilter
       })
     })
   })
@@ -269,29 +324,34 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
     })
   })
 
-  var keyMsg = document.getElementById('key-msg')
-  function showKey(j) {
-    if (!keyMsg) return
-    if (j && j.ok) keyMsg.textContent = j.last4 ? ('saved ··' + j.last4) : (j.status || 'ok')
-    else keyMsg.textContent = (j && j.error) || 'failed'
+  function showKey(el, j) {
+    if (!el) return
+    if (j && j.ok) {
+      el.className = 'key-msg ok'
+      el.textContent = j.last4 ? ('saved ··' + j.last4) : (j.status || 'ok')
+    } else {
+      el.className = 'key-msg fail-loud'
+      el.textContent = (j && j.error) || 'Add failed'
+    }
   }
 
-  function bindKeyAdd(form) {
+  function bindKeyAdd(form, msgId) {
     if (!form) return
     form.addEventListener('submit', async function (e) {
       e.preventDefault()
+      var msg = document.getElementById(msgId || 'key-msg')
       var fd = new FormData(form)
       var j = await api('/v1/admin/keys', {
         provider: fd.get('provider'),
         label: fd.get('label'),
         secret: fd.get('secret')
       })
+      showKey(msg, j)
       if (j && j.ok) location.reload()
-      else showKey(j)
     })
   }
-  bindKeyAdd(document.getElementById('key-add'))
-  bindKeyAdd(document.getElementById('key-add-settings'))
+  bindKeyAdd(document.getElementById('key-add'), 'key-msg')
+  bindKeyAdd(document.getElementById('key-add-settings'), 'key-msg-settings')
 
   document.querySelectorAll('[data-rotate]').forEach(function (b) {
     b.addEventListener('click', async function () {
@@ -299,7 +359,7 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
       if (!secret) return
       var j = await api('/v1/admin/keys/' + b.getAttribute('data-rotate') + '/rotate', { secret: secret })
       if (j && j.ok) location.reload()
-      else showKey(j)
+      else showKey(document.getElementById('key-msg'), j)
     })
   })
 
@@ -307,7 +367,7 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
     b.addEventListener('click', async function () {
       var j = await api('/v1/admin/keys/' + b.getAttribute('data-revoke') + '/revoke', {})
       if (j && j.ok) location.reload()
-      else showKey(j)
+      else showKey(document.getElementById('key-msg'), j)
     })
   })
 })();

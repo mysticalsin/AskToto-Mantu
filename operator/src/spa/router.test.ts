@@ -75,6 +75,15 @@ describe('hashed SPA router (#104)', () => {
       }
     }
     const document = {
+      documentElement: {
+        theme: 'light',
+        setAttribute(name: string, value: string) {
+          if (name === 'data-theme') this.theme = value
+        },
+        getAttribute(name: string) {
+          return name === 'data-theme' ? this.theme : null
+        }
+      },
       querySelectorAll(sel: string) {
         if (sel === '[data-page]') return pages
         if (sel === '[data-nav]') return navs
@@ -118,6 +127,15 @@ describe('hashed SPA router (#104)', () => {
     expect(visible()).toEqual(['realtime'])
     expect(title.textContent).toBe('Realtime')
     expect(pages.find((p) => p.getAttribute('data-page') === 'overview')?.hidden).toBe(true)
+  })
+
+  it('THEME is two-state light↔dark and Events/Notifications filters are wired', () => {
+    expect(SPA_JS).toContain("var next = cur === 'dark' ? 'light' : 'dark'")
+    expect(SPA_JS).not.toContain("cur === 'light' ? ''")
+    expect(SPA_JS).toContain('events-empty')
+    expect(SPA_JS).toContain('applyNtFilter')
+    expect(SPA_JS).toContain('key-msg-settings')
+    expect(SPA_JS).toContain("accept: 'application/json'")
   })
 
   it('hashed SPA embeds world land so paintShoeyMap can inject path[data-iso]', () => {

@@ -408,7 +408,7 @@ function sumAskTokens(a: {
 }): number | null {
   let n = 0
   let any = false
-  for (const v of [a.input_tokens, a.output_tokens, a.cache_read, a.cache_write, a.cache_uncached]) {
+  for (const v of [a.input_tokens, a.output_tokens]) {
     if (v != null) {
       n += v
       any = true
@@ -649,7 +649,7 @@ export async function buildDashboard(
     timeSaved: null,
     durationMs,
     meetings,
-    tokens: tokenAny ? tokenSum : null,
+    tokens: vault.some((v) => v.status === 'active') && tokenAny ? tokenSum : 0,
     apiCalls: weekAsks.length,
     listenMinutes: listenMinutesFromEvents(storedEvents),
     recapCount,

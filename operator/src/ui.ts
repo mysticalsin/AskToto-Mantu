@@ -95,16 +95,16 @@ function renderNav(): string {
   return `<nav id="rail-nav">${sections}</nav>`
 }
 
-function seriesDelta(values: number[]): { text: string; cls: string } {
-  if (values.length < 4) return { text: '0%', cls: 'flat' }
+function seriesDelta(values: number[]): { text: string; cls: string } | null {
+  if (values.length < 4) return null
   const mid = Math.floor(values.length / 2)
   const a = values.slice(0, mid).reduce((n, v) => n + v, 0) / mid
   const b = values.slice(mid).reduce((n, v) => n + v, 0) / (values.length - mid)
-  if (a === 0) return { text: '0%', cls: 'flat' }
+  if (a < 1) return null
   const pct = ((b - a) / a) * 100
-  if (!Number.isFinite(pct)) return { text: '0%', cls: 'flat' }
+  if (!Number.isFinite(pct) || Math.abs(pct) > 400) return null
   const rounded = Math.abs(pct) < 0.05 ? 0 : Math.round(pct * 10) / 10
-  if (rounded === 0) return { text: '0%', cls: 'flat' }
+  if (rounded === 0) return null
   const sign = rounded > 0 ? '↑' : '↓'
   return { text: `${sign} ${Math.abs(rounded)}%`, cls: rounded > 0 ? 'up' : 'down' }
 }
@@ -139,7 +139,7 @@ function shoeyKpi(title: string, value: string, series: number[]): string {
     <p class="eyebrow">${esc(title)}</p>
     <div class="kpi-top">
       <div class="n">${esc(value)}</div>
-      <span class="delta ${d.cls}">${esc(d.text)}</span>
+      ${d ? `<span class="delta ${d.cls}">${esc(d.text)}</span>` : ''}
     </div>
     ${blueBars(series)}
   </article>`
@@ -316,7 +316,7 @@ function renderSeatTable(rows: ProfileRow[], events: ConsoleEvent[], now: number
         recent ? `Recent: ${recent}` : 'No recent heartbeats for this seat.'
       ].join(' · ')
       const no = String(i + 1).padStart(2, '0')
-      return `<div class="seat-row" data-seat-row data-country="${esc(r.country || '')}" data-os="${esc(r.os)}" data-seat-name="${esc(name)}" data-seat-detail="${esc(detail)}">
+      return `<div class="seat-row" data-seat-row data-q="${esc(`${name} ${loc} ${identity} ${r.os}`.toLowerCase())}" data-country="${esc(r.country || '')}" data-os="${esc(r.os)}" data-seat-name="${esc(name)}" data-seat-detail="${esc(detail)}">
         <div class="seat-no">${no}</div>
         <div class="seat-name">${osBadge(r.os)} ${field(r.hostname)}</div>
         <div class="seat-loc">${r.country ? `<span class="seat-flag">${esc(r.country)}</span>` : ''}${loc ? esc(loc) : MISSING}</div>
@@ -420,7 +420,7 @@ export function renderConsole(data: DashboardPayload): string {
   const notifyRows = [
     ...data.crm.rows.map((r) => {
       const seat = data.profiles.find((p) => r.device && p.device === r.device)
-      return `<tr data-status="${esc(r.status)}">
+      return `<tr data-status="${esc(r.status)}" data-nt-row>
         <td>${esc(r.title)}</td>
         <td class="muted">${esc(r.connector)}</td>
         <td class="muted">${esc(seat?.country || MISSING)}</td>
@@ -433,7 +433,7 @@ export function renderConsole(data: DashboardPayload): string {
     ...data.proposals
       .filter((p) => p.status === 'pending' || p.status === 'draft')
       .map(
-        (p) => `<tr>
+        (p) => `<tr data-status="${esc(p.status)}" data-nt-row>
         <td>${esc(p.skill_id)} ${esc(p.status)}</td>
         <td class="muted">skill</td>
         <td class="muted">${MISSING}</td>
@@ -478,7 +478,7 @@ export function renderConsole(data: DashboardPayload): string {
   const stream = data.events.slice(0, 24)
 
   return `<!doctype html>
-<html lang="en"><head>
+<html lang="en" data-theme="light"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Métis Operator</title>
 <link rel="stylesheet" href="${SPA_CSS_PATH}">
@@ -608,6 +608,7 @@ export function renderConsole(data: DashboardPayload): string {
       <article class="card ev-table-card" style="padding-bottom:10px">
         <input class="table-search" id="events-search" type="search" placeholder="Search events" autocomplete="off">
         <div id="events-list">${renderEvents(data.events, data.now)}</div>
+        <div class="empty" id="events-empty" hidden>No events match that search.</div>
       </article>
     </section>
 
@@ -619,7 +620,9 @@ export function renderConsole(data: DashboardPayload): string {
         </div>
         <span class="live-events"><i></i>${data.profiles.length} seats</span>
       </div>
+      <input class="table-search" id="sessions-search" type="search" placeholder="Search sessions" autocomplete="off">
       ${renderSeatTable(data.profiles, data.events, data.now)}
+      <div class="empty" id="sessions-empty" hidden>No sessions match that search.</div>
     </section>
 
     <section class="page wrap" data-page="notifications" hidden>
@@ -637,6 +640,7 @@ export function renderConsole(data: DashboardPayload): string {
           ${kpiCard({ title: 'Dead letters', value: String(landing.deadLetters), sub: 'max attempts, Expired', spark: '' })}
         </div>
         ${funnelRows ? `<p class="eyebrow">Funnel by connector</p><div class="crm-funnel">${funnelRows}</div>` : ''}
+        <input class="table-search" id="nt-search" type="search" placeholder="Search notifications" autocomplete="off">
         <div class="funnel tabs" id="crm-filters">
           <button class="tab on" data-crm-filter="all">All ${data.crm.rows.length}</button>
           ${funnelTabs}
@@ -646,8 +650,9 @@ export function renderConsole(data: DashboardPayload): string {
           <tbody>
             ${
               notifyRows ||
-              `<tr data-nt-empty><td colspan="7" class="empty">No data. We could not find any notifications here yet.</td></tr>`
+              ''
             }
+            <tr data-nt-empty ${notifyRows ? 'hidden' : ''}><td colspan="7" class="empty">No data. We could not find any notifications here yet.</td></tr>
           </tbody>
         </table>
         ${
@@ -709,7 +714,7 @@ export function renderConsole(data: DashboardPayload): string {
             }
           </tbody>
         </table>
-        <div id="key-msg" class="muted" style="padding:8px 0"></div>
+        <div id="key-msg" class="key-msg" role="status"></div>
       </article>
     </section>
 
@@ -733,6 +738,7 @@ export function renderConsole(data: DashboardPayload): string {
             <button class="primary" type="submit">Add</button>
           </div>
         </form>
+        <div id="key-msg-settings" class="key-msg" role="status"></div>
         <p><a href="#keys">Open Keys</a> for rotate / revoke and Cloudflare.</p>
       </article>
       <article class="card" style="padding-bottom:10px" data-cf-page>

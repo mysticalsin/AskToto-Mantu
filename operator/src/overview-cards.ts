@@ -32,16 +32,17 @@ function formatPct(n: number | null): string {
   return `${n}%`
 }
 
-function trend(values: number[]): { text: string; cls: string } {
-  if (values.length < 4) return { text: '0%', cls: 'flat' }
+function trend(values: number[], current?: number): { text: string; cls: string } | null {
+  if (current === 0) return null
+  if (values.length < 4) return null
   const mid = Math.floor(values.length / 2)
   const a = values.slice(0, mid).reduce((n, v) => n + v, 0) / mid
   const b = values.slice(mid).reduce((n, v) => n + v, 0) / (values.length - mid)
-  if (a === 0) return { text: '0%', cls: 'flat' }
+  if (a < 1) return null
   const pct = ((b - a) / a) * 100
-  if (!Number.isFinite(pct)) return { text: '0%', cls: 'flat' }
+  if (!Number.isFinite(pct) || Math.abs(pct) > 400) return null
   const rounded = Math.abs(pct) < 0.05 ? 0 : Math.round(pct * 10) / 10
-  if (rounded === 0) return { text: '0%', cls: 'flat' }
+  if (rounded === 0) return null
   return { text: `${rounded > 0 ? '+' : ''}${rounded}%`, cls: rounded > 0 ? 'up' : 'down' }
 }
 
@@ -93,11 +94,12 @@ function statCard(opts: {
   series: number[]
   chart: string
 }): string {
-  const d = trend(opts.series)
+  const current = Number(opts.value.replace(/[^\d.-]/g, ''))
+  const d = trend(opts.series, Number.isFinite(current) ? current : undefined)
   return `<article class="stat-card" data-stat-card="${esc(opts.id)}" data-bklit="${esc(opts.kind)}">
     <div class="stat-card-head">
       <h3>${esc(opts.title)}</h3>
-      <span class="trend-badge ${d.cls}">${esc(d.text)}</span>
+      ${d ? `<span class="trend-badge ${d.cls}">${esc(d.text)}</span>` : ''}
     </div>
     <div class="stat-flow">
       <div class="n">${esc(opts.value)}</div>

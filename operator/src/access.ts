@@ -111,6 +111,27 @@ export function clearSessionCookie(): string {
   return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`
 }
 
+/** CF Access JWT from the assertion header or the CF_Authorization session cookie. */
+export function accessJwtFromRequest(request: Request): string | null {
+  const header = request.headers.get('cf-access-jwt-assertion')?.trim()
+  if (header) return header
+  const cookie = request.headers.get('cookie') || ''
+  for (const part of cookie.split(';')) {
+    const eq = part.indexOf('=')
+    if (eq < 0) continue
+    const name = part.slice(0, eq).trim()
+    if (name !== 'CF_Authorization' && name !== 'CF_AppSession') continue
+    const value = part.slice(eq + 1).trim()
+    if (!value) continue
+    try {
+      return decodeURIComponent(value)
+    } catch {
+      return value
+    }
+  }
+  return null
+}
+
 export async function resolveAdminIdentity(
   request: Request,
   ctx: AccessCtx,
@@ -128,7 +149,7 @@ export async function resolveAdminIdentity(
       /* fall through to JWT */
     }
   }
-  const jwt = request.headers.get('cf-access-jwt-assertion')
+  const jwt = accessJwtFromRequest(request)
   if (jwt) {
     if (!accessTeamDomain(env.TEAM_DOMAIN)) {
       return { status: 'misconfigured', error: 'Cloudflare Access is misconfigured: TEAM_DOMAIN is unset' }
