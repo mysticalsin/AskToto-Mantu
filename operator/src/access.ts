@@ -273,10 +273,6 @@ async function verifyAccessJwt(token: string, teamDomain: string, aud: string): 
     if (!audiences.includes(aud)) return null
     const email = payload.email?.trim().toLowerCase() || payload.identity?.email?.trim().toLowerCase()
     if (email) return email
-    // TEMP agent verify (cursor-agent-overview-verify service token). Remove after live Overview proof.
-    if (payload.common_name === '6abe12488b0f6d603cb9f22ce8b2ad87.access') {
-      return ADMIN_EMAILS[0]
-    }
     return null
   } catch {
     return null
