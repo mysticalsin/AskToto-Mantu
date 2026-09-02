@@ -5,6 +5,7 @@ owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, cli
 does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, installer packing, Fly license-server, Goldberg Aria, cloudflare-proxy AI token proxy, OpenPanel Pages/Funnels, Bklit Studio
 ready-to-merge: no
 implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing
+this-slice: access-login
 audience: Tony Walteur only. Two emails. Nobody else.
 tokens:
   accent: "#7C8CF8"
@@ -35,7 +36,7 @@ Tony's ops console. How people use Métis, who is live, what Asks cost, whether 
 
 This is not a Settings card. It is not a local analytics page. The product is a Cloudflare Worker named `metis-operator` under `operator/`. The Métis client keeps prompt caching on, and talks to this Worker only when Settings has an Operator URL.
 
-Live URL: `https://metis-operator.tony-walteur.workers.dev/`. Hash routes (`#events`, `#profiles`, `#realtime`) are the product pages. Data is real Operator D1 / HMAC ingest only.
+Live URL: `https://metis-operator.tony-walteur.workers.dev/`. Console paths (`/`, `/keys`, `/licenses`, `/devices`, `/map`, `/cloudflare`, and the hash-equivalent paths) are first-class. After Access identity, hash routes (`#events`, `#profiles`, `#realtime`) remain the in-page product pages. Data is real Operator D1 / HMAC ingest only.
 
 ## Product law (Tony 8:03–8:05 PM ET)
 
@@ -66,18 +67,140 @@ Windows has no notch. Overlay chrome stays frozen. The in-app Settings row is a 
 
 ## Who this is for
 
-Tony only. Cloudflare Access allowlist:
+Tony only. Cloudflare Access allowlist (Worker + Zero Trust policy, both required):
 
-- `tony.walteur@gmail.com`
 - `twalteur@amaris.com`
+- `tony.walteur@gmail.com`
 
-Regular users never see this console.
+Regular users never see this console. Ultron and curl are not a browser password form. They must see a **302 to Cloudflare Access login**, then a JWT.
 
-Live `workers.dev` does not wrap `/` in a Cloudflare Access redirect today. The Worker itself must serve the login HTML so Tony can open the console. Access JWT remains a valid second identity path. Do not weaken the allowlist.
+## Login / Cloudflare Access (this slice)
+
+**This slice is login only.** Replace the homemade email+password card. Do not implement Shoey `#map`. Do not restyle Keys / fund-seats. Ultron retests login, then orders Keys, then map.
+
+### Worker law (must ship)
+
+Unauthenticated **GET** of any console path must **302** to Cloudflare Access login. Not 404 JSON `{ok:false,error:not found}`. Not `text/html` with `data-login="1"`. Not a self-hosted email+password card. Not a second password. Not `OPERATOR_ADMIN_PASSWORD` as a fallback.
+
+Console GET paths (exact, plus any later console path added to the Worker):
+
+| Path | Notes |
+| --- | --- |
+| `/` | Overview / console shell |
+| `/keys` | Path Ultron hits. Must 302 when unauth. After JWT, same console HTML (no Keys restyle in this slice) |
+| `/licenses` | Same |
+| `/devices` | Same (fleet) |
+| `/map` | Same. Do not clone Shoey in this slice |
+| `/cloudflare` | Same |
+| `/overview` `/events` `/profiles` `/realtime` `/macos` `/windows` `/skills` | Hash-equivalent paths. Same 302 / same console after JWT |
+
+**302 Location** (Worker builds this; do not enable "Protect this Worker" for all traffic):
+
+```
+{TEAM_DOMAIN}/cdn-cgi/access/login/{hostname}?redirect_url={urlencoded original URL}&next={urlencoded path}
+```
+
+`TEAM_DOMAIN` is `https://<team>.cloudflareaccess.com`. `hostname` is the request host (`metis-operator.tony-walteur.workers.dev`). `next` is the original path (`/keys`). `redirect_url` is the original absolute URL.
+
+Prove (tests + live curl, no follow):
+
+| Request | Must be |
+| --- | --- |
+| Unauth `GET /keys` | **302**. `Location` contains `login` and `next=/keys` (or `redirect_url` with `/keys`, or a Cloudflare Access login URL) |
+| Unauth `GET /` | **302**. Not HTML password form. No `data-login="1"`. No `type="password"` card |
+| Unauth `POST /v1/admin/keys` | **401** JSON `{ok:false,error:Access required}`. Not 404 |
+| `GET /health` | **200** JSON. Open. Not Access |
+| `HEAD /` | May 401 JSON. Do not require HTML |
+
+After Access JWT is present (`Cf-Access-Jwt-Assertion`, or `ctx.access.getIdentity()` when the edge already wrapped the request):
+
+1. Verify JWT against `{TEAM_DOMAIN}/cdn-cgi/access/certs` (RS256) and `POLICY_AUD`.
+2. Allow only `twalteur@amaris.com` and `tony.walteur@gmail.com`. Any other email is 401.
+3. Then serve the existing console HTML (or `/v1/admin/*` JSON). Do not open the console unauthenticated.
+
+**Fail loud if Access is misconfigured.** No homemade form as fallback.
+
+| Condition | Console GET | `/v1/admin/*` |
+| --- | --- | --- |
+| `TEAM_DOMAIN` unset / not `https://*.cloudflareaccess.com` | **503** `{ok:false,error:"Cloudflare Access is misconfigured: TEAM_DOMAIN is unset"}` | 401 Access required (API stays 401, not 404) |
+| JWT present, `POLICY_AUD` unset | **503** `{ok:false,error:"Cloudflare Access is misconfigured: POLICY_AUD is unset"}` | 503 same |
+| JWT present, verify fail / wrong AUD | 401 Access required | 401 |
+| JWT email not allowlisted | 401 Access required | 401 |
+| No JWT, `TEAM_DOMAIN` set | **302** Access login | 401 |
+
+Machine auth is unchanged. Do not put CLI tokens in the vault. Do not invent a second password.
+
+| Path | Auth |
+| --- | --- |
+| `POST /v1/ingest` `POST /v1/heartbeat` `GET /v1/skills/manifest` | HMAC only. Not Access. Not JWT |
+| `GET /health` | Open 200 |
+| `GET/POST /v1/admin/*` | Access JWT / `getIdentity()` + allowlist. Unauth = 401 JSON |
+
+Do **not** enable Zero Trust **"Protect this Worker"** on `metis-operator` for all traffic. That wraps HMAC ingest and locks seats.
+
+### Zero Trust app Tony must have
+
+This repo **cannot** create the Access application. Account `294885a27b3cc0a1cbe5d0ccbe38de4f` (`tony.walteur@gmail.com`) returns `access.api.error.not_enabled` on `/accounts/{id}/access/apps` and `/access/organizations`. Tony must Enable Access in the dashboard, then create the app. The Worker still 302s and verifies JWT. It does not keep the password form until he does.
+
+**A. Enable Zero Trust / Access**
+
+1. Open [Zero Trust](https://one.dash.cloudflare.com/) on account `294885a27b3cc0a1cbe5d0ccbe38de4f` (or Cloudflare Dashboard → Zero Trust).
+2. Click **Enable Access** if the banner is up.
+3. Team / auth domain **must** be `tony-walteur` so `TEAM_DOMAIN` is `https://tony-walteur.cloudflareaccess.com`. If Tony picks another team name, he must set Worker var/secret `TEAM_DOMAIN` to `https://<that-team>.cloudflareaccess.com` and redeploy. Unset team = Worker 503, not a password form.
+
+**B. Self-hosted application**
+
+Zero Trust → Access → Applications → Add an application → **Self-hosted**.
+
+| Field | Value |
+| --- | --- |
+| Name | `Métis Operator` |
+| Session duration | `24h` |
+| Application domain | `metis-operator.tony-walteur.workers.dev` |
+| Type | Self-hosted (public hostname). **Not** a Worker-wide destination. **Not** "all workers" |
+
+Path destinations (protect console + admin API only):
+
+| Protect (yes) | Do not protect |
+| --- | --- |
+| `metis-operator.tony-walteur.workers.dev/` | `…/health` |
+| `…/keys` `…/licenses` `…/devices` `…/map` `…/cloudflare` | `…/v1/ingest` |
+| `…/overview` `…/events` `…/profiles` `…/realtime` `…/macos` `…/windows` `…/skills` | `…/v1/heartbeat` |
+| `…/v1/admin` and `…/v1/admin*` | `…/v1/skills/manifest` |
+
+If the UI only takes one domain plus a path prefix, use two apps or two destinations: (1) the site root / named console paths, (2) `/v1/admin*`. Never a single app that matches `/v1/*`.
+
+**C. Policy (Allow, Tony emails only)**
+
+| Field | Value |
+| --- | --- |
+| Policy name | `Tony only` |
+| Action | Allow |
+| Include | Emails: `twalteur@amaris.com`, `tony.walteur@gmail.com` |
+| Require / Exclude | Empty. No other emails. No `Everyone`. No `@amaris.com` domain-wide |
+| Identity | One-time PIN and/or Google. Those two emails must be able to receive the PIN or use Google |
+
+**D. Bind AUD on the Worker**
+
+After save, the application **AUD** (Application Audience) is on the app settings page. Set Worker secret/var:
+
+```
+TEAM_DOMAIN=https://tony-walteur.cloudflareaccess.com
+POLICY_AUD=<aud from the Métis Operator app>
+```
+
+`npx wrangler@4 secret put TEAM_DOMAIN` and `secret put POLICY_AUD` from `operator/`. Do not commit `POLICY_AUD`. `TEAM_DOMAIN` may be a Wrangler `vars` value (`https://tony-walteur.cloudflareaccess.com`) so unauth 302 works before AUD exists.
+
+**E. Forbidden**
+
+- Do not click **Protect this Worker** on `metis-operator`.
+- Do not put `OPERATOR_ADMIN_PASSWORD` back as a login. The secret may remain bound; the Worker must not read it for a session cookie.
+- Do not put CLI tokens in the vault.
+- Do not protect ingest or `/health`.
 
 ## What this is not (explicit non-goals)
 
-This slice implements the keys vault, Cloudflare connect, and CLI-first routing law. No pack. No version bump. Overlay chrome stays frozen.
+This slice implements **Cloudflare Access login only**. Keys vault / Cloudflare connect / CLI-first routing already exist. No Keys-fund-seats restyle. No Shoey `#map`. No pack. No version bump. Overlay chrome stays frozen.
 
 | Surface | Job |
 | --- | --- |
@@ -170,7 +293,7 @@ UI on `#keys`: add / rotate / revoke. Show last4 (`··abcd`). Never a paste-bac
 - Seats must not persist those cloud API keys in Settings / keystore. Existing seat-stored Tony keys are a migration debt for a later implement slice, not a feature.
 - Fail closed if Operator cannot issue a use (vault empty, revoked, identity wrong, HMAC fail). Honest error. No leftover seat key.
 
-**At rest.** AES-GCM in D1 (`cipher` + `iv`). Wrangler secret `OPERATOR_VAULT_KEY` (32-byte key, base64), separate from `OPERATOR_PROMPT_KEY`. Decrypt only inside an Access/session-authenticated write/rotate or an HMAC-authenticated use. Every write / rotate / revoke is audit-logged (who, when, key id, provider, last4). Never log the secret.
+**At rest.** AES-GCM in D1 (`cipher` + `iv`). Wrangler secret `OPERATOR_VAULT_KEY` (32-byte key, base64), separate from `OPERATOR_PROMPT_KEY`. Decrypt only inside an Access-authenticated write/rotate or an HMAC-authenticated use. Every write / rotate / revoke is audit-logged (who, when, key id, provider, last4). Never log the secret.
 
 ## Cloudflare connect contract
 
@@ -196,9 +319,9 @@ Tony connects Cloudflare **on Operator**, not on a seat.
 
 ## Security (hard)
 
-1. **Admin UI (`/` and hash routes).** First paint is never JSON. An unauthenticated browser GET of `/` (including `/#events`, `/#profiles`, `/#realtime`) serves the Operator **login HTML** (email + password). Allowlist stays `tony.walteur@gmail.com` and `twalteur@amaris.com`. Password is the Wrangler secret `OPERATOR_ADMIN_PASSWORD`. Successful login sets an HttpOnly session cookie (HMAC over email + expiry, signed with that secret). The console HTML (sidebar, map, events, profiles, realtime) loads only after Access identity **or** a valid session. Cloudflare Access JWT (`ctx.access.getIdentity()` / `Cf-Access-Jwt-Assertion`) still counts as identity when present. Do not open the console unauthenticated. No `LICENSE_ADMIN_TOKEN`.
+1. **Admin UI (console GET paths).** Unauthenticated GET of `/`, `/keys`, `/licenses`, `/devices`, `/map`, `/cloudflare`, and the other console paths **302**s to Cloudflare Access login (`TEAM_DOMAIN/cdn-cgi/access/login/{host}?redirect_url=…&next={path}`). Not a homemade email+password card. Not 404 JSON. Not `OPERATOR_ADMIN_PASSWORD`. After `Cf-Access-Jwt-Assertion` (or `ctx.access.getIdentity()`) and allowlist (`twalteur@amaris.com`, `tony.walteur@gmail.com`), serve the existing console HTML. Fail loud (503) if `TEAM_DOMAIN` is unset, or if a JWT is present and `POLICY_AUD` is unset. Do not open the console unauthenticated. No `LICENSE_ADMIN_TOKEN`.
 
-   **JSON 401** (`{"ok":false,"error":"Access required"}`) is only for API/JSON requests when identity is missing: `Accept: application/json` (and no HTML), or any `/v1/*` path (admin APIs and ingest). Ingest still requires HMAC; a missing Access session does not unlock ingest.
+   **JSON 401** (`{"ok":false,"error":"Access required"}`) is for `/v1/admin/*` (and other `/v1/*` admin JSON) when identity is missing. Ingest still requires HMAC; a missing Access JWT does not unlock ingest. Unauth `POST /v1/admin/keys` is 401, not 404.
 
 2. **Device ingest.** `POST /v1/ingest`, `POST /v1/heartbeat`, `GET /v1/skills/manifest` are not behind Access. HMAC-SHA256: timestamp + nonce + deviceId + body hash, secret `OPERATOR_INGEST_SECRET`. Reject skew greater than 5 minutes. Rate limit per device. Replay nonce window. A later implement slice may add HMAC `POST /v1/use` for short-lived funded Asks; that path stays HMAC-only and must never return a raw vault secret.
 
@@ -208,7 +331,7 @@ Tony connects Cloudflare **on Operator**, not on a seat.
 
 5. **No secrets in git, logs, PR bodies, or the Events page.** Wrangler secrets only. Do not commit test private keys. Events HTML must never render a token-shaped string (JWT, `Bearer`, `sk-`, 64-char hex HMAC, long base64). Fail the tests if one appears.
 
-6. **Path split.** Browser `/` is the login or the console. `/v1/admin/*` stays API (JSON, identity required). Ingest stays HMAC-only. Do not enable "Protect this Worker" for all traffic (that would hide login and lock seats). Live first paint: `curl GET /` returns `text/html` login, not JSON Access required. `GET /health` stays 200. `GET /v1/admin/*` without identity stays 401 JSON.
+6. **Path split.** Browser console GET is Access 302 or the console. `/v1/admin/*` stays API (JSON, Access JWT required). Ingest stays HMAC-only. Do not enable "Protect this Worker" for all traffic (that would lock seats). Live first paint: `curl -sI GET /` and `GET /keys` are **302** to Access login, not an HTML password form, not 404 JSON. `GET /health` stays 200. `POST /v1/admin/keys` without identity stays 401 JSON.
 
 7. **Keys page.** Show presence / last4 / status only. Never cipher, iv, prompt bodies, ingest secret, skill PEM, raw provider keys, CF tokens, or short-lived use grants. Admin write/rotate/revoke is allowed; the HTML and JSON responses still last4-only.
 
@@ -337,7 +460,7 @@ Tony 6:17 PM ET (login, overlay, map, events) plus Tony 8:03–8:05 PM ET (routi
 | Contract | Still true |
 | --- | --- |
 | Overlay chrome | Island / Hide / Bar files are frozen. Do not edit them from an Operator slice. |
-| Login | Browser GET `/` without identity is `text/html` email+password login. Allowlist stays `tony.walteur@gmail.com` and `twalteur@amaris.com`. Password is `OPERATOR_ADMIN_PASSWORD`. JSON 401 only for `Accept: application/json` or `/v1/*`. Console never loads unauthenticated. |
+| Login | Unauth GET `/` and `/keys` (and the other console paths) are **302** to Cloudflare Access login (`Location` has `login` + `next` or an Access login URL). Allowlist stays `twalteur@amaris.com` and `tony.walteur@gmail.com`. No homemade password form. Unauth `POST /v1/admin/keys` is 401 JSON. `/health` is 200. Console never loads unauthenticated. Fail loud (503) if `TEAM_DOMAIN` is unset. |
 | Map data | Unique devices by country from Cloudflare `request.cf` only. Client `lat` / `lon` / `country` / `city` / `ip` are ignored. No GPS. No IP in the UI. No sample dots. Empty world if no devices. |
 | Token-free events | `#events` never renders a token-shaped string (JWT, `Bearer`, `sk-`, 64-char hex HMAC, long base64). Tests fail if one appears. |
 | Routing | Connected working CLI is first for every user question. Other CLI next if both connected (last-clicked primary). Operator API keys only after quota or rate limit. Dust is retrieval only. |
@@ -348,7 +471,7 @@ Tony 6:17 PM ET (login, overlay, map, events) plus Tony 8:03–8:05 PM ET (routi
 
 If a map or sidebar fix would require touching overlay chrome, **stop and report**. Do not mix slices.
 
-Gate: `npm run test:operator:quality-bar` (`scripts/operator-quality-bar.mjs`). That script (1) fails if this Operator slice also edits a frozen overlay path, (2) runs the existing Island/Hide chrome unit tests, (3) runs `npm run test:operator` (login, map contract, token-free events), (4) probes live `/` is `text/html` login, `/health` is 200, `/v1/admin/dashboard` is 401 JSON. `npm run test:operator` alone is the Worker unit suite and is what CI already chains.
+Gate: `npm run test:operator:quality-bar` (`scripts/operator-quality-bar.mjs`). That script (1) fails if this Operator slice also edits a frozen overlay path, (2) runs the existing Island/Hide chrome unit tests, (3) runs `npm run test:operator` (Access 302 login, map contract, token-free events), (4) probes live `/` and `/keys` are 302 to Access login, `/health` is 200, `/v1/admin/dashboard` and `POST /v1/admin/keys` are 401 JSON. `npm run test:operator` alone is the Worker unit suite and is what CI already chains.
 
 Frozen overlay chrome (do not edit from this product):
 
@@ -362,6 +485,6 @@ Frozen overlay chrome (do not edit from this product):
 
 ## Ready to merge
 
-**READY TO MERGE: no.** Keys write/rotate/revoke, Cloudflare connect + fail-loud Overview, heartbeat `fundedProviders`, and CLI-first last-clicked routing are implemented. Overlay chrome stays frozen. Goldberg Aria stays frozen. Do not pack EXE/DMG. Do not bump app version. Do not merge from this change until Devon opens the live Worker as Tony on a Mac.
+**READY TO MERGE: no.** This slice is Cloudflare Access login only. Overlay leftover Mac-show Wed 10am. No pack. No merge. Ultron retests login, then orders Keys, then map. Do not pack EXE/DMG. Do not bump app version (`1.8.3` stays). Goldberg Aria stays frozen.
 
 `POST /v1/use` (Operator-brokered provider calls) and migrating leftover seat-stored Tony cloud keys stay a later slice. Heartbeat lists funded providers only. Seats never persist a raw Operator key or CF token.
