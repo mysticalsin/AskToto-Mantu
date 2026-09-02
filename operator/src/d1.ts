@@ -1,5 +1,6 @@
 import { normalizeCrmRow, type CrmSendRow } from './crm'
-import type { AskRow, EventRow, OperatorStore, PackRow, ProposalRow, PulseRow, SeatRow, VaultKeyMeta } from './store'
+import type { AskRow, EventRow, OperatorStore, PackRow, ProposalRow, PulseRow, SeatRow, VaultKeyRow } from './store'
+import { toVaultMeta } from './store'
 
 interface D1Stmt {
   bind(...values: unknown[]): D1Stmt
@@ -297,9 +298,54 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
     },
     async listVaultMeta() {
       const r = await db
-        .prepare('SELECT provider, label, last4, status FROM vault_keys ORDER BY created_at DESC')
-        .all<VaultKeyMeta>()
+        .prepare(
+          `SELECT id, provider, label, last4, cipher, iv, status, created_at, created_by, rotated_at, revoked_at
+           FROM vault_keys ORDER BY created_at DESC`
+        )
+        .all<VaultKeyRow>()
+      return r.results.map(toVaultMeta)
+    },
+    async listVaultRows() {
+      const r = await db
+        .prepare(
+          `SELECT id, provider, label, last4, cipher, iv, status, created_at, created_by, rotated_at, revoked_at
+           FROM vault_keys ORDER BY created_at DESC`
+        )
+        .all<VaultKeyRow>()
       return r.results
+    },
+    async getVaultKey(id) {
+      return (
+        (await db
+          .prepare(
+            `SELECT id, provider, label, last4, cipher, iv, status, created_at, created_by, rotated_at, revoked_at
+             FROM vault_keys WHERE id = ?`
+          )
+          .bind(id)
+          .first<VaultKeyRow>()) ?? null
+      )
+    },
+    async putVaultKey(row) {
+      await db
+        .prepare(
+          `INSERT OR REPLACE INTO vault_keys (
+            id, provider, label, last4, cipher, iv, status, created_at, created_by, rotated_at, revoked_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          row.id,
+          row.provider,
+          row.label,
+          row.last4,
+          row.cipher,
+          row.iv,
+          row.status,
+          row.created_at,
+          row.created_by,
+          row.rotated_at,
+          row.revoked_at
+        )
+        .run()
     }
   }
 }

@@ -24,7 +24,7 @@ Do not wrangler deploy from CI with secrets.
 | --- | --- | --- |
 | `/` | Tony in a browser | HTML login (email + `OPERATOR_ADMIN_PASSWORD`) if no Access/session. Console after sign-in. JSON 401 only when `Accept: application/json`. |
 | `/login` | Tony in a browser | POST email+password. Sets HttpOnly session cookie. |
-| `/v1/admin/*` | Tony in a browser | Session cookie or Access identity. JSON 401 if missing. Includes `/v1/admin/dashboard` and CRM retry. |
+| `/v1/admin/*` | Tony in a browser | Session cookie or Access identity. JSON 401 if missing. Includes `/v1/admin/dashboard`, `/v1/admin/keys` write/rotate/revoke, and CRM retry. |
 | `POST /v1/ingest` | Métis desktop | HMAC only. Not Access. |
 | `POST /v1/heartbeat` | Métis desktop | HMAC only. Not Access. |
 | `GET /v1/skills/manifest` | Métis desktop | HMAC only. Not Access. |
@@ -42,12 +42,14 @@ Never put these in git, logs, PR bodies, or `wrangler.jsonc`.
 | `OPERATOR_PROMPT_KEY` | 32-byte AES-GCM key, base64. Encrypts Ask text before D1. |
 | `OPERATOR_SKILL_PRIVATE_KEY` | Ed25519 PKCS8 PEM (or base64 of that PEM). Signs skill packs. The public half is committed in `src/main/operator-skill-key.ts`. |
 | `OPERATOR_ADMIN_PASSWORD` | Shared password for the two Tony emails on the Operator login HTML. |
+| `OPERATOR_VAULT_KEY` | 32-byte AES-GCM key, base64. Encrypts LLM API keys and the Cloudflare account token in D1. Separate from `OPERATOR_PROMPT_KEY`. |
 
 Generate locally, then `secret put` (hidden prompt, not a shell argument):
 
 ```sh
 openssl rand -base64 32          # OPERATOR_INGEST_SECRET
 openssl rand -base64 32          # OPERATOR_PROMPT_KEY (must decode to 32 bytes)
+openssl rand -base64 32          # OPERATOR_VAULT_KEY (must decode to 32 bytes)
 openssl genpkey -algorithm Ed25519 -out skill.pem
 # public JWK x, for resources/operator/pubkey.json on a production build:
 node -e "const {createPrivateKey,createPublicKey}=require('crypto');const fs=require('fs');const pub=createPublicKey(createPrivateKey(fs.readFileSync('skill.pem')));console.log(pub.export({format:'jwk'}).x)"
@@ -59,6 +61,8 @@ npx wrangler@4 login
 npx wrangler@4 secret put OPERATOR_INGEST_SECRET
 npx wrangler@4 secret put OPERATOR_PROMPT_KEY
 npx wrangler@4 secret put OPERATOR_SKILL_PRIVATE_KEY
+npx wrangler@4 secret put OPERATOR_VAULT_KEY
+npx wrangler@4 secret put OPERATOR_ADMIN_PASSWORD
 ```
 
 Optional Access JWT fallback vars (after you create the Access app):

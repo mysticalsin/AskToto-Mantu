@@ -28,10 +28,28 @@ export interface EventRow {
 }
 
 export interface VaultKeyMeta {
+  id: string
   provider: string
   label: string
   last4: string
   status: string
+  createdAt: number
+  rotatedAt: number | null
+  revokedAt: number | null
+}
+
+export interface VaultKeyRow {
+  id: string
+  provider: string
+  label: string
+  last4: string
+  cipher: string
+  iv: string
+  status: string
+  created_at: number
+  created_by: string
+  rotated_at: number | null
+  revoked_at: number | null
 }
 
 export interface AskRow {
@@ -119,6 +137,9 @@ export interface OperatorStore {
   insertEvent(row: EventRow): Promise<void>
   listEvents(limit: number): Promise<EventRow[]>
   listVaultMeta(): Promise<VaultKeyMeta[]>
+  listVaultRows(): Promise<VaultKeyRow[]>
+  getVaultKey(id: string): Promise<VaultKeyRow | null>
+  putVaultKey(row: VaultKeyRow): Promise<void>
 }
 
 const PULSE_TTL_MS = 8 * 24 * 60 * 60 * 1000
@@ -134,7 +155,7 @@ export function memoryStore(): OperatorStore {
   const crm = new Map<string, CrmSendRow>()
   const audits: { id: string; ts: number; actor: string; action: string; ask_id: string | null; detail: string }[] = []
   const events = new Map<string, EventRow>()
-  const vault: VaultKeyMeta[] = []
+  const vault = new Map<string, VaultKeyRow>()
 
   return {
     async takeNonce(nonce) {
@@ -248,7 +269,31 @@ export function memoryStore(): OperatorStore {
       return [...events.values()].sort((a, b) => b.ts - a.ts).slice(0, limit)
     },
     async listVaultMeta() {
-      return [...vault]
+      return [...vault.values()]
+        .sort((a, b) => b.created_at - a.created_at)
+        .map(toVaultMeta)
+    },
+    async listVaultRows() {
+      return [...vault.values()].sort((a, b) => b.created_at - a.created_at)
+    },
+    async getVaultKey(id) {
+      return vault.get(id) ?? null
+    },
+    async putVaultKey(row) {
+      vault.set(row.id, row)
     }
+  }
+}
+
+export function toVaultMeta(row: VaultKeyRow): VaultKeyMeta {
+  return {
+    id: row.id,
+    provider: row.provider,
+    label: row.label,
+    last4: row.last4,
+    status: row.status,
+    createdAt: row.created_at,
+    rotatedAt: row.rotated_at,
+    revokedAt: row.revoked_at
   }
 }
