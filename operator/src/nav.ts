@@ -43,4 +43,15 @@ export type NavId =
 
 export const NAV_IDS: NavId[] = NAV_SECTIONS.flatMap((s) => s.items.map((i) => i.id))
 
-export const FORBIDDEN_NAV = ['scale', 'change', 'console'] as const
+export const FORBIDDEN_NAV = [
+  'scale',
+  'change',
+  'console',
+  'pages',
+  'seo',
+  'groups',
+  'cohorts',
+  'dashboards',
+  'insights',
+  'reports'
+] as const

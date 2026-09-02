@@ -1,6 +1,5 @@
 import {
   bars,
-  choropleth,
   dualLine,
   heatmapGrid,
   sparklineArea,
@@ -11,6 +10,7 @@ import { statusBadge, STATUS_BADGE_CSS } from './components/ui/status-badge'
 import { CRM_FILTER_ORDER } from './crm'
 import type { CloudflareOverview } from './cloudflare'
 import type { ConsoleEvent, DashboardPayload, ProfileRow } from './dashboard'
+import { MAP_PAGE_CSS, renderMapPage } from './map-page'
 import { FORBIDDEN_NAV, NAV_IDS, NAV_SECTIONS } from './nav'
 import { looksLikeSecret } from './redact'
 
@@ -229,6 +229,7 @@ textarea { min-height: 120px; }
   .rail { position: relative; min-height: auto; }
   .kpis, .grid-2, .grid-3, .crm-kpis, .event { grid-template-columns: 1fr; }
 }
+${MAP_PAGE_CSS}
 `
 
 function esc(s: unknown): string {
@@ -351,12 +352,6 @@ function renderLicenses(rows: ProfileRow[]): string {
 
 export function renderConsole(data: DashboardPayload): string {
   const k = data.kpis
-  const maps = {
-    land: choropleth(data.map.countries, data.map.dots, 'land'),
-    analytics: choropleth(data.map.countries, data.map.dots, 'analytics'),
-    graticule: choropleth(data.map.countries, data.map.dots, 'graticule'),
-    hatch: choropleth(data.map.countries, data.map.dots, 'hatch')
-  }
   const canRetry = (status: string): boolean => status === 'failed' || status === 'expired'
   const crmRows = data.crm.rows
     .map((r) => {
@@ -470,9 +465,6 @@ export function renderConsole(data: DashboardPayload): string {
       </tr>`
     )
     .join('')
-  const mapCaption =
-    'Unique devices by country from Cloudflare request.cf. No GPS from the app. No IP. Click a country to filter the fleet table. Empty is an empty world, not sample dots.'
-
   void FORBIDDEN_NAV
   void NAV_IDS
 
@@ -663,40 +655,7 @@ svg path { vector-effect: non-scaling-stroke; }
       </article>
     </section>
 
-    <section class="page wrap" data-page="map" hidden>
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Map</p>
-        <div class="tabs" id="map-tabs">
-          <button class="tab" data-map="land">Land</button>
-          <button class="tab on" data-map="analytics">Analytics</button>
-          <button class="tab" data-map="graticule">Graticule</button>
-          <button class="tab" data-map="hatch">Hatch</button>
-        </div>
-        <div id="map-root" style="position:relative">
-          <div data-map-pane="land" hidden>${maps.land}</div>
-          <div data-map-pane="analytics">${maps.analytics}</div>
-          <div data-map-pane="graticule" hidden>${maps.graticule}</div>
-          <div data-map-pane="hatch" hidden>${maps.hatch}</div>
-        </div>
-        <div class="sub muted" style="padding-bottom:8px">${esc(mapCaption)}</div>
-        <table id="map-fleet"><thead><tr><th>Computer</th><th>SSO email</th><th>OS</th><th>Version</th><th>Country</th><th>Seen</th><th></th></tr></thead>
-        <tbody>${
-          data.profiles
-            .map(
-              (r) => `<tr data-country="${esc(r.country || '')}">
-                <td>${field(r.hostname)}</td>
-                <td>${field(r.email)}</td>
-                <td class="muted">${esc(r.os)}</td>
-                <td class="muted">${esc(r.appVersion)}</td>
-                <td class="muted">${esc(r.country || MISSING)}</td>
-                <td class="muted">${esc(when(r.lastSeen))}</td>
-                <td></td>
-              </tr>`
-            )
-            .join('') || `<tr><td colspan="7" class="empty">No seats on the fleet yet.</td></tr>`
-        }</tbody></table>
-      </article>
-    </section>
+    ${renderMapPage(data)}
 
     <section class="page wrap" data-page="macos" hidden>
       <article class="card" style="padding-bottom:10px">
@@ -829,15 +788,10 @@ document.querySelectorAll('[data-scale]').forEach((b) => b.addEventListener('cli
   document.getElementById('scale-24').hidden = b.getAttribute('data-scale') !== '24h'
   document.getElementById('scale-7').hidden = b.getAttribute('data-scale') !== '7d'
 }))
-document.querySelectorAll('[data-map]').forEach((b) => b.addEventListener('click', () => {
-  document.querySelectorAll('[data-map]').forEach((x) => x.classList.toggle('on', x === b))
-  const v = b.getAttribute('data-map')
-  document.querySelectorAll('[data-map-pane]').forEach((p) => { p.hidden = p.getAttribute('data-map-pane') !== v })
-}))
-document.querySelectorAll('#map-root path[data-iso]').forEach((p) => p.addEventListener('click', () => {
+document.querySelectorAll('#map-root path[data-iso], #map-root .map-callout').forEach((p) => p.addEventListener('click', () => {
   const iso = p.getAttribute('data-iso')
-  document.querySelectorAll('#map-fleet tbody tr').forEach((tr) => {
-    tr.hidden = Boolean(iso) && tr.getAttribute('data-country') !== iso
+  document.querySelectorAll('[data-map-geo] tbody tr, .activity-list .activity').forEach((el) => {
+    el.hidden = Boolean(iso) && el.getAttribute('data-country') !== iso
   })
 }))
 document.querySelectorAll('[data-crm-filter]').forEach((b) => b.addEventListener('click', () => {

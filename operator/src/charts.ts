@@ -1,6 +1,6 @@
 import { WORLD_PATHS } from './world-paths'
 import { stripMapBands } from './map-bands'
-import type { MapCountry, MapDot, MixBar, SeriesPoint, TokenPoint } from './dashboard'
+import type { MapCountry, MapDot, MapLabel, MixBar, SeriesPoint, TokenPoint } from './dashboard'
 
 const MONO = ['#2a2a2e', '#3f3f46', '#71717a', '#a1a1aa', '#e4e4e7']
 
@@ -116,6 +116,63 @@ function scaleColor(devices: number, max: number): string {
   if (max <= 0 || devices <= 0) return 'var(--land)'
   const step = Math.min(4, Math.max(1, Math.ceil((devices / max) * 4)))
   return MONO[step]
+}
+
+export function minuteBars(values: number[], w = 240, h = 44): string {
+  const n = values.length || 30
+  const gap = 1.5
+  const bw = Math.max(2, (w - gap * (n - 1)) / n)
+  const max = Math.max(1, ...values)
+  const rects = (values.length ? values : Array.from({ length: 30 }, () => 0))
+    .map((v, i) => {
+      const bh = v <= 0 ? 1.5 : Math.max(3, (v / max) * (h - 2))
+      const x = i * (bw + gap)
+      const y = h - bh
+      return `<rect class="min-bar" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${bw.toFixed(2)}" height="${bh.toFixed(2)}" rx="1" />`
+    })
+    .join('')
+  return `<svg class="min-bars" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true">${rects}</svg>`
+}
+
+export function shoeyWorld(_countries: MapCountry[], dots: MapDot[], labels: MapLabel[]): string {
+  let land = ''
+  for (const [iso, d] of Object.entries(WORLD_PATHS)) {
+    land += `<path data-iso="${iso}" d="${stripMapBands(d)}" fill="var(--map-land)" />`
+  }
+  const marks = dots
+    .map((dot) => {
+      const p = project(dot.lat, dot.lon)
+      return `<circle class="dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="2.8" data-iso="${escapeXml(dot.country)}" />`
+    })
+    .join('')
+  const callouts = placeCallouts(labels)
+    .map((l) => {
+      const p = project(l.lat, l.lon)
+      return `<g class="map-callout" data-iso="${escapeXml(l.iso)}" data-kind="${l.kind}">
+        <line class="map-leader" x1="${p.x.toFixed(1)}" y1="${p.y.toFixed(1)}" x2="${l.lx.toFixed(1)}" y2="${l.ly.toFixed(1)}" />
+        <circle class="map-label-dot" cx="${l.lx.toFixed(1)}" cy="${l.ly.toFixed(1)}" r="9" />
+        <text class="map-label-n" x="${l.lx.toFixed(1)}" y="${l.ly.toFixed(1)}" text-anchor="middle" dy="3.2">${l.count}</text>
+        <text class="map-label-name" x="${(l.lx + 13).toFixed(1)}" y="${l.ly.toFixed(1)}" dy="3.4">${escapeXml(l.name)}</text>
+      </g>`
+    })
+    .join('')
+  return `<svg class="world shoey-world" viewBox="0 0 1000 500" role="img" aria-label="Unique seats by country">
+    ${land}${marks}${callouts}
+  </svg>`
+}
+
+function placeCallouts(labels: MapLabel[]): (MapLabel & { lx: number; ly: number })[] {
+  const placed: (MapLabel & { lx: number; ly: number })[] = []
+  for (const label of labels) {
+    const p = project(label.lat, label.lon)
+    let lx = Math.min(960, Math.max(28, p.x + (p.x > 700 ? -56 : 36)))
+    let ly = Math.min(480, Math.max(18, p.y - 18))
+    for (const other of placed) {
+      if (Math.abs(other.lx - lx) < 90 && Math.abs(other.ly - ly) < 18) ly += 20
+    }
+    placed.push({ ...label, lx, ly })
+  }
+  return placed
 }
 
 export function choropleth(

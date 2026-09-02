@@ -146,8 +146,14 @@ describe('quality bar: map data contract', () => {
         { access: access('tony.walteur@gmail.com') },
         { store, now: NOW }
       )
-    ).json()) as { map: { empty: boolean; countries: unknown[]; dots: unknown[] } }
-    expect(emptyDash.map).toEqual({ empty: true, countries: [], dots: [] })
+    ).json()) as {
+      map: { empty: boolean; countries: unknown[]; dots: unknown[]; uniqueSeats30m: number; geo: unknown[] }
+    }
+    expect(emptyDash.map.empty).toBe(true)
+    expect(emptyDash.map.countries).toEqual([])
+    expect(emptyDash.map.dots).toEqual([])
+    expect(emptyDash.map.uniqueSeats30m).toBe(0)
+    expect(emptyDash.map.geo).toEqual([])
 
     const spoof = await signedRequest(
       '/v1/heartbeat',

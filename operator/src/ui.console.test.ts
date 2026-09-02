@@ -67,8 +67,10 @@ describe('product sidebar', () => {
     const html = await page()
     const nav = [...html.matchAll(/data-nav="([^"]+)"/g)].map((m) => m[1])
     expect(nav).toEqual([...NAV_IDS])
-    expect(html).not.toMatch(/data-nav="(scale|change)"/)
+    expect(html).not.toMatch(/data-nav="(scale|change|pages|seo|groups|cohorts|dashboards|insights|reports)"/)
     expect(html).not.toMatch(/>CONSOLE</)
+    expect(html).not.toMatch(/>Pages</)
+    expect(html).not.toMatch(/>SEO</)
     expect(html).not.toContain('orphan')
     for (const id of NAV_IDS) {
       expect(html).toContain(`data-page="${id}"`)

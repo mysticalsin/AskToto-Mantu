@@ -5,7 +5,7 @@ owns: Métis Operator #map visual clone of OpenPanel Shoey Realtime, adapted to 
 does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, appearance PR 98, Listen PR 99, ClickUp PR 97, Goldberg Aria, installer packing, Fly license-server, cloudflare-proxy, OpenPanel Pages/SEO/Groups/Cohorts/Dashboards/Insights/Reports builder, Shoey commerce copy
 supersedes: OPERATOR.md "Map is a flat choropleth / do not pixel-clone Shoey" for the #map page chrome only
 ready-to-merge: no
-implemented: design-only
+implemented: map-shoey-realtime
 audience: Tony Walteur only. Two emails. Nobody else.
 reference:
   live-operator: "https://metis-operator.tony-walteur.workers.dev/#map"

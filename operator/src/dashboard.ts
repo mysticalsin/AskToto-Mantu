@@ -1,12 +1,15 @@
 import { aggregateCacheSlice, estimateCacheCost, formatUsdEstimate, type AskLogLine } from '../../src/shared/operator'
+import { countryName, osLabel } from './countries'
 import { CRM_STATUSES, type CrmSendRow, type CrmStatus } from './crm'
 import { missingCloudflareOverview, type CloudflareOverview } from './cloudflare'
 import { looksLikeSecret, safeChips, type SafeChip } from './redact'
-import type { EventRow, OperatorStore, PulseRow, SeatRow, VaultKeyMeta } from './store'
+import type { AskRow, EventRow, OperatorStore, PulseRow, SeatRow, VaultKeyMeta } from './store'
 
 export const ONLINE_MS = 2 * 60 * 1000
 const HOUR = 60 * 60 * 1000
 const DAY = 24 * HOUR
+const MINUTE = 60 * 1000
+const THIRTY_MIN = 30 * MINUTE
 
 export interface SeriesPoint {
   t: number
@@ -48,6 +51,24 @@ export interface MapDot {
   country: string
 }
 
+export interface MapLabel {
+  lat: number
+  lon: number
+  count: number
+  name: string
+  iso: string
+  kind: 'country' | 'city'
+}
+
+export interface MapVolumeRow {
+  key: string
+  label: string
+  mark: string
+  country: string | null
+  events: number
+  seats: number
+}
+
 export interface DashboardPayload {
   email: string
   now: number
@@ -85,6 +106,15 @@ export interface DashboardPayload {
     countries: MapCountry[]
     dots: MapDot[]
     empty: boolean
+    uniqueSeats30m: number
+    bars30m: number[]
+    stream: ConsoleEvent[]
+    geo: MapVolumeRow[]
+    referrals: MapVolumeRow[]
+    referralKind: 'provider' | 'os'
+    paths: MapVolumeRow[]
+    pathKind: 'skill' | 'kind'
+    labels: MapLabel[]
   }
   asks: { id: string; ts: number; mode: string; preview: string; cache_status: string; provider: string }[]
   proposals: {
@@ -326,13 +356,22 @@ function displayProfile(seat: SeatRow | undefined): { hostname: string | null; e
   }
 }
 
+/** Honest display name for Map / Events. Heartbeat is omitted by the caller. */
+export function activityName(kind: string | null | undefined): string {
+  const raw = (kind || '').trim().toLowerCase()
+  if (!raw || looksLikeSecret(raw)) return 'event'
+  if (raw === 'crm') return 'recap'
+  if (raw === 'draft' || raw === 'approve' || raw === 'push') return 'skill'
+  return raw
+}
+
 function eventFromStored(row: EventRow, seatsById: Map<string, SeatRow>): ConsoleEvent {
   const seat = row.device_id ? seatsById.get(row.device_id) : undefined
   const who = displayProfile(seat)
   return {
     id: row.id,
     ts: row.ts,
-    name: looksLikeSecret(row.kind) ? 'event' : row.kind,
+    name: activityName(row.kind),
     hostname: who.hostname,
     email: who.email || (row.actor && !looksLikeSecret(row.actor) ? row.actor : null),
     chips: safeChips({
@@ -509,6 +548,53 @@ export async function buildDashboard(
   const counts = Object.fromEntries(CRM_STATUSES.map((s) => [s, 0])) as Record<CrmStatus, number>
   for (const row of crm) counts[row.status]++
 
+  const events = mergeEvents(
+    storedEvents.map((e) => eventFromStored(e, seatsById)),
+    [
+      ...asks.slice(0, 40).map((a) => {
+        const who = displayProfile(seatsById.get(a.device_id))
+        return {
+          id: `ask-${a.id}`,
+          ts: a.ts,
+          name: 'ask',
+          hostname: who.hostname,
+          email: who.email,
+          chips: safeChips({
+            mode: a.mode,
+            provider: a.provider,
+            cache: a.cache_status,
+            os: seatsById.get(a.device_id)?.os
+          })
+        }
+      }),
+      ...crm.slice(0, 40).map((r) => {
+        const who = displayProfile(seatsById.get(r.device_id))
+        return {
+          id: `crm-${r.id}`,
+          ts: r.ts,
+          name: activityName('crm'),
+          hostname: who.hostname,
+          email: who.email,
+          chips: safeChips({
+            status: r.status,
+            connector: r.connector,
+            action: r.action
+          })
+        }
+      }),
+      ...audit
+        .filter((a) => a.action === 'draft' || a.action === 'approve' || a.action === 'push')
+        .map((a) => ({
+          id: `skill-${a.ts}-${a.action}`,
+          ts: a.ts,
+          name: 'skill',
+          hostname: null as string | null,
+          email: a.actor && !looksLikeSecret(a.actor) ? a.actor : null,
+          chips: safeChips({ action: a.action, detail: a.detail })
+        }))
+    ]
+  )
+
   return {
     email,
     now,
@@ -542,11 +628,7 @@ export async function buildDashboard(
       heatmap,
       adoption: mix(seats.map((s) => s.app_version))
     },
-    map: {
-      countries,
-      dots,
-      empty: countries.length === 0 && dots.length === 0
-    },
+    map: buildMapSurface({ countries, dots, seats, pulses, storedEvents, asks, events, now }),
     asks: asks.slice(0, 40).map((a) => ({
       id: a.id,
       ts: a.ts,
@@ -587,42 +669,7 @@ export async function buildDashboard(
         action: r.action
       }))
     },
-    events: mergeEvents(
-      storedEvents.map((e) => eventFromStored(e, seatsById)),
-      [
-        ...asks.slice(0, 40).map((a) => {
-          const who = displayProfile(seatsById.get(a.device_id))
-          return {
-            id: `ask-${a.id}`,
-            ts: a.ts,
-            name: 'ask',
-            hostname: who.hostname,
-            email: who.email,
-            chips: safeChips({
-              mode: a.mode,
-              provider: a.provider,
-              cache: a.cache_status,
-              os: seatsById.get(a.device_id)?.os
-            })
-          }
-        }),
-        ...crm.slice(0, 40).map((r) => {
-          const who = displayProfile(seatsById.get(r.device_id))
-          return {
-            id: `crm-${r.id}`,
-            ts: r.ts,
-            name: 'crm',
-            hostname: who.hostname,
-            email: who.email,
-            chips: safeChips({
-              status: r.status,
-              connector: r.connector,
-              action: r.action
-            })
-          }
-        })
-      ]
-    ),
+    events,
     profiles: seats
       .slice()
       .sort((a, b) => b.last_seen - a.last_seen)
@@ -658,4 +705,195 @@ export async function buildDashboard(
       d1Id: cloudflare.d1Id && !looksLikeSecret(cloudflare.d1Id) ? cloudflare.d1Id : null
     }
   }
+}
+
+function buildMapSurface(input: {
+  countries: MapCountry[]
+  dots: MapDot[]
+  seats: SeatRow[]
+  pulses: PulseRow[]
+  storedEvents: EventRow[]
+  asks: AskRow[]
+  events: ConsoleEvent[]
+  now: number
+}): DashboardPayload['map'] {
+  const { countries, dots, seats, pulses, storedEvents, asks, events, now } = input
+  const since = now - THIRTY_MIN
+  const pulseIds = new Set(pulses.filter((p) => p.ts >= since).map((p) => p.device_id))
+  for (const s of seats) {
+    if (s.last_seen >= since) pulseIds.add(s.device_id)
+  }
+
+  const bars30m = Array.from({ length: 30 }, (_, i) => {
+    const start = now - (30 - i) * MINUTE
+    const end = i === 29 ? now + 1 : start + MINUTE
+    let n = 0
+    for (const p of pulses) {
+      if (p.ts >= start && p.ts < end) n++
+    }
+    return n
+  })
+
+  const stream = events.filter((e) => e.name !== 'heartbeat').slice(0, 30)
+
+  const geoBuckets = new Map<string, { country: string; city: string | null; devices: Set<string>; events: number }>()
+  for (const s of seats) {
+    if (!s.country) continue
+    const city = s.city || null
+    const key = `${s.country}\0${city || ''}`
+    const cur = geoBuckets.get(key) ?? { country: s.country, city, devices: new Set<string>(), events: 0 }
+    cur.devices.add(s.device_id)
+    geoBuckets.set(key, cur)
+  }
+  for (const e of storedEvents) {
+    if (!e.country || e.kind === 'heartbeat') continue
+    const seat = seats.find((s) => s.device_id === e.device_id)
+    const city = seat?.city || null
+    const key = `${e.country}\0${city || ''}`
+    const cur = geoBuckets.get(key) ?? { country: e.country, city, devices: new Set<string>(), events: 0 }
+    cur.events += 1
+    if (e.device_id) cur.devices.add(e.device_id)
+    geoBuckets.set(key, cur)
+  }
+  const geo: MapVolumeRow[] = [...geoBuckets.values()]
+    .map((g) => ({
+      key: `${g.country}:${g.city || ''}`,
+      label: g.city ? `${countryName(g.country)} / ${g.city}` : countryName(g.country),
+      mark: g.country,
+      country: g.country,
+      events: g.events,
+      seats: g.devices.size
+    }))
+    .sort((a, b) => b.seats - a.seats || b.events - a.events || a.label.localeCompare(b.label))
+
+  const asksWithProvider = asks.filter((a) => a.provider && !looksLikeSecret(a.provider))
+  let referrals: MapVolumeRow[]
+  let referralKind: 'provider' | 'os'
+  if (asksWithProvider.length) {
+    referralKind = 'provider'
+    referrals = volumeBy(
+      asksWithProvider.map((a) => ({
+        label: a.provider as string,
+        device: a.device_id,
+        mark: a.provider as string
+      }))
+    )
+  } else {
+    referralKind = 'os'
+    referrals = volumeBy(
+      seats.map((s) => ({
+        label: osLabel(s.os),
+        device: s.device_id,
+        mark: osLabel(s.os)
+      }))
+    )
+  }
+
+  const asksWithSkill = asks.filter((a) => a.skill_id && !looksLikeSecret(a.skill_id))
+  let paths: MapVolumeRow[]
+  let pathKind: 'skill' | 'kind'
+  if (asksWithSkill.length) {
+    pathKind = 'skill'
+    paths = volumeBy(
+      asksWithSkill.map((a) => ({
+        label: a.skill_id as string,
+        device: a.device_id,
+        mark: a.skill_id as string
+      }))
+    )
+  } else {
+    pathKind = 'kind'
+    paths = volumeBy(
+      storedEvents
+        .filter((e) => e.kind !== 'heartbeat')
+        .map((e) => ({
+          label: activityName(e.kind),
+          device: e.device_id || 'unknown',
+          mark: activityName(e.kind)
+        }))
+    )
+  }
+
+  const labels = mapLabels(seats)
+
+  return {
+    countries,
+    dots,
+    empty: countries.length === 0 && dots.length === 0,
+    uniqueSeats30m: pulseIds.size,
+    bars30m,
+    stream,
+    geo,
+    referrals,
+    referralKind,
+    paths,
+    pathKind,
+    labels
+  }
+}
+
+function volumeBy(rows: { label: string; device: string; mark: string }[]): MapVolumeRow[] {
+  const by = new Map<string, { label: string; mark: string; devices: Set<string>; events: number }>()
+  for (const r of rows) {
+    const label = r.label.trim() || 'unknown'
+    const cur = by.get(label) ?? { label, mark: r.mark, devices: new Set<string>(), events: 0 }
+    cur.events += 1
+    cur.devices.add(r.device)
+    by.set(label, cur)
+  }
+  return [...by.values()]
+    .map((g) => ({
+      key: g.label,
+      label: g.label,
+      mark: g.mark,
+      country: null,
+      events: g.events,
+      seats: g.devices.size
+    }))
+    .sort((a, b) => b.events - a.events || b.seats - a.seats || a.label.localeCompare(b.label))
+}
+
+function mapLabels(seats: SeatRow[]): MapLabel[] {
+  const country = new Map<string, { lat: number; lon: number; n: number; count: number }>()
+  const city = new Map<string, { lat: number; lon: number; n: number; count: number; iso: string; name: string }>()
+  for (const s of seats) {
+    if (!s.country || s.lat == null || s.lon == null) continue
+    const c = country.get(s.country) ?? { lat: 0, lon: 0, n: 0, count: 0 }
+    c.lat += s.lat
+    c.lon += s.lon
+    c.n += 1
+    c.count += 1
+    country.set(s.country, c)
+    if (s.city) {
+      const key = `${s.country}\0${s.city}`
+      const t = city.get(key) ?? { lat: 0, lon: 0, n: 0, count: 0, iso: s.country, name: s.city }
+      t.lat += s.lat
+      t.lon += s.lon
+      t.n += 1
+      t.count += 1
+      city.set(key, t)
+    }
+  }
+  const labels: MapLabel[] = []
+  for (const [iso, c] of country) {
+    labels.push({
+      lat: c.lat / c.n,
+      lon: c.lon / c.n,
+      count: c.count,
+      name: countryName(iso),
+      iso,
+      kind: 'country'
+    })
+  }
+  for (const t of city.values()) {
+    labels.push({
+      lat: t.lat / t.n,
+      lon: t.lon / t.n,
+      count: t.count,
+      name: t.name,
+      iso: t.iso,
+      kind: 'city'
+    })
+  }
+  return labels.sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)).slice(0, 12)
 }
