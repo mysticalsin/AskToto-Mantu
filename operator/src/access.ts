@@ -1,3 +1,5 @@
+import { hmacHex, timingSafeEqualHex } from './hmac'
+
 export const ADMIN_EMAILS = ['tony.walteur@gmail.com', 'twalteur@amaris.com'] as const
 
 export const SESSION_COOKIE = 'metis_operator_session'
@@ -38,6 +40,7 @@ export type AccessCtx = {
 export type AdminEnv = {
   TEAM_DOMAIN?: string
   POLICY_AUD?: string
+  OPERATOR_PROMPT_KEY?: string
 }
 
 export type IdentityResult =
@@ -107,20 +110,18 @@ export function redirectToAccess(request: Request, env: AdminEnv): Response {
   return new Response(null, { status: 302, headers: { Location: accessLoginLocation(request, team) } })
 }
 
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000
+
 export function clearSessionCookie(): string {
   return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`
 }
 
-/** CF Access JWT from the assertion header or the CF_Authorization session cookie. */
-export function accessJwtFromRequest(request: Request): string | null {
-  const header = request.headers.get('cf-access-jwt-assertion')?.trim()
-  if (header) return header
+function cookieValue(request: Request, name: string): string | null {
   const cookie = request.headers.get('cookie') || ''
   for (const part of cookie.split(';')) {
     const eq = part.indexOf('=')
     if (eq < 0) continue
-    const name = part.slice(0, eq).trim()
-    if (name !== 'CF_Authorization' && name !== 'CF_AppSession') continue
+    if (part.slice(0, eq).trim() !== name) continue
     const value = part.slice(eq + 1).trim()
     if (!value) continue
     try {
@@ -132,10 +133,53 @@ export function accessJwtFromRequest(request: Request): string | null {
   return null
 }
 
+function looksLikeJwt(raw: string | null | undefined): raw is string {
+  return Boolean(raw && raw.split('.').length === 3)
+}
+
+/** CF Access JWT from the assertion header or the CF_Authorization session cookie. */
+export function accessJwtFromRequest(request: Request): string | null {
+  const header = request.headers.get('cf-access-jwt-assertion')?.trim()
+  if (looksLikeJwt(header)) return header
+  const authorization = cookieValue(request, 'CF_Authorization')
+  if (looksLikeJwt(authorization)) return authorization
+  const appSession = cookieValue(request, 'CF_AppSession')
+  if (looksLikeJwt(appSession)) return appSession
+  return null
+}
+
+export async function mintSessionCookie(email: string, now: number, secret: string): Promise<string> {
+  const exp = now + SESSION_TTL_MS
+  const payload = `v1|${exp}|${normalizeAdminEmail(email)}`
+  const sig = await hmacHex(secret, `metis-operator-session:${payload}`)
+  const maxAge = Math.floor(SESSION_TTL_MS / 1000)
+  return `${SESSION_COOKIE}=${payload}|${sig}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${maxAge}`
+}
+
+export async function verifySessionCookie(
+  request: Request,
+  secret: string | undefined,
+  now: number
+): Promise<string | null> {
+  if (!secret?.trim()) return null
+  const raw = cookieValue(request, SESSION_COOKIE)
+  if (!raw) return null
+  const parts = raw.split('|')
+  if (parts.length !== 4 || parts[0] !== 'v1') return null
+  const exp = Number(parts[1])
+  const email = normalizeAdminEmail(parts[2] || '')
+  const sig = (parts[3] || '').toLowerCase()
+  if (!Number.isFinite(exp) || exp < now || !isAdminEmail(email) || !sig) return null
+  const expected = await hmacHex(secret, `metis-operator-session:v1|${exp}|${email}`)
+  if (!timingSafeEqualHex(expected, sig)) return null
+  return email
+}
+
 export async function resolveAdminIdentity(
   request: Request,
   ctx: AccessCtx,
-  env: AdminEnv
+  env: AdminEnv,
+  now = Date.now()
 ): Promise<IdentityResult> {
   if (ctx.access) {
     try {
@@ -146,7 +190,7 @@ export async function resolveAdminIdentity(
         return { status: 'denied' }
       }
     } catch {
-      /* fall through to JWT */
+      /* fall through to JWT / minted session */
     }
   }
   const jwt = accessJwtFromRequest(request)
@@ -159,8 +203,10 @@ export async function resolveAdminIdentity(
     }
     const email = await verifyAccessJwt(jwt, accessTeamDomain(env.TEAM_DOMAIN)!, env.POLICY_AUD.trim())
     if (email && isAdminEmail(email)) return { status: 'ok', email }
-    return { status: 'denied' }
   }
+  const sessionEmail = await verifySessionCookie(request, env.OPERATOR_PROMPT_KEY, now)
+  if (sessionEmail) return { status: 'ok', email: sessionEmail }
+  if (jwt) return { status: 'denied' }
   return { status: 'none' }
 }
 
@@ -192,10 +238,11 @@ async function verifyAccessJwt(token: string, teamDomain: string, aud: string): 
     const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/'))) as {
       aud?: string | string[]
       email?: string
+      identity?: { email?: string }
     }
     const audiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud]
     if (!audiences.includes(aud)) return null
-    return payload.email?.trim().toLowerCase() ?? null
+    return payload.email?.trim().toLowerCase() || payload.identity?.email?.trim().toLowerCase() || null
   } catch {
     return null
   }

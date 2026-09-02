@@ -39,7 +39,10 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
     try {
       return JSON.parse(text)
     } catch (e) {
-      return { ok: false, error: text && text.slice(0, 180) || ('HTTP ' + r.status) }
+      if (!text || looksLikeAccessHtml(text)) {
+        return { ok: false, error: 'Access required. Sign in with Cloudflare Access and retry Add.' }
+      }
+      return { ok: false, error: text.slice(0, 180) || ('HTTP ' + r.status) }
     }
   }
 
@@ -161,13 +164,22 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
   }
 
   var evSearch = document.getElementById('events-search')
+  function applyEventsFilter() {
+    if (!evSearch) return
+    var q = evSearch.value.trim().toLowerCase()
+    document.querySelectorAll('#events-list .event[data-q]').forEach(function (row) {
+      row.hidden = Boolean(q) && !(row.getAttribute('data-q') || '').includes(q)
+    })
+    syncEmpty('#events-list .event[data-q]', 'events-empty')
+  }
   if (evSearch) {
-    evSearch.addEventListener('input', function () {
-      var q = evSearch.value.trim().toLowerCase()
-      document.querySelectorAll('#events-list .event[data-q]').forEach(function (row) {
-        row.hidden = Boolean(q) && !(row.getAttribute('data-q') || '').includes(q)
-      })
-      syncEmpty('#events-list .event[data-q]', 'events-empty')
+    evSearch.addEventListener('input', applyEventsFilter)
+    evSearch.addEventListener('search', applyEventsFilter)
+    evSearch.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter') {
+        e.preventDefault()
+        applyEventsFilter()
+      }
     })
   }
   var evFilters = document.getElementById('events-filters')
@@ -346,6 +358,11 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
     })
   })
 
+  function looksLikeAccessHtml(text) {
+    var t = String(text || '').toLowerCase()
+    return t.indexOf('<!doctype') >= 0 || t.indexOf('<html') >= 0 || t.indexOf('cf-access') >= 0
+  }
+
   function showKey(el, j) {
     if (!el) return
     if (j && j.ok) {
@@ -353,7 +370,11 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
       el.textContent = j.last4 ? ('saved ··' + j.last4) : (j.status || 'ok')
     } else {
       el.className = 'key-msg fail-loud'
-      el.textContent = (j && j.error) || 'Add failed'
+      var err = (j && j.error) || 'Add failed'
+      if (err === 'Access required' || looksLikeAccessHtml(err)) {
+        err = 'Access required. Sign in with Cloudflare Access and retry Add.'
+      }
+      el.textContent = err
     }
   }
 

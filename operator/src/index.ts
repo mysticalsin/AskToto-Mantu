@@ -7,6 +7,7 @@ import {
   isConsolePath,
   redirectToAccess,
   resolveAdminIdentity,
+  mintSessionCookie,
   unauthorized,
   type AccessCtx
 } from './access'
@@ -98,10 +99,15 @@ export async function handleRequest(
   }
 
   if (isConsolePath(url.pathname) || isAdminApiPath(url.pathname)) {
-    const ident = await resolveAdminIdentity(request, accessCtx, env)
+    const ident = await resolveAdminIdentity(request, accessCtx, env, now)
     if (ident.status === 'misconfigured') return accessMisconfigured(ident.error)
     if (ident.status === 'ok') {
-      return adminRoute(request, url, env, store, ident.email, now, opts)
+      const res = await adminRoute(request, url, env, store, ident.email, now, opts)
+      const secret = env.OPERATOR_PROMPT_KEY?.trim()
+      if (!secret) return res
+      const headers = new Headers(res.headers)
+      headers.append('Set-Cookie', await mintSessionCookie(ident.email, now, secret))
+      return new Response(res.body, { status: res.status, headers })
     }
     if (ident.status === 'denied' || isAdminApiPath(url.pathname) || request.method !== 'GET') {
       return unauthorized()
@@ -345,7 +351,7 @@ async function heartbeat(
     actor: seat.sso_email,
     device_id: deviceId,
     country: geo.country,
-    detail: safeEventDetail(seat.os)
+    detail: safeEventDetail([seat.os, typeof body.path === 'string' ? body.path : '/'].filter(Boolean).join(' '))
   })
   await ingestCrmList(store, deviceId, body, now)
   const retries = await store.listCrmRetries(deviceId)

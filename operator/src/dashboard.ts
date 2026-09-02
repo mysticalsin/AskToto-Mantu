@@ -486,6 +486,12 @@ function displayProfile(seat: SeatRow | undefined): { hostname: string | null; e
   }
 }
 
+function eventPath(detail: string | null | undefined): string {
+  if (!detail) return '/'
+  const token = detail.split(/\s+/).find((part) => part.startsWith('/') && !looksLikeSecret(part))
+  return token || '/'
+}
+
 function eventFromStored(row: EventRow, seatsById: Map<string, SeatRow>): ConsoleEvent {
   const seat = row.device_id ? seatsById.get(row.device_id) : undefined
   const who = displayProfile(seat)
@@ -502,7 +508,8 @@ function eventFromStored(row: EventRow, seatsById: Map<string, SeatRow>): Consol
     chips: safeChips({
       country: row.country,
       os: seat?.os,
-      detail: row.detail
+      detail: row.detail,
+      path: eventPath(row.detail)
     })
   }
 }
@@ -838,7 +845,8 @@ export async function buildDashboard(
               mode: a.mode,
               provider: a.provider,
               cache: a.cache_status,
-              os: seat?.os
+              os: seat?.os,
+              path: '/'
             })
           }
         }),
@@ -858,7 +866,8 @@ export async function buildDashboard(
             chips: safeChips({
               status: r.status,
               connector: r.connector,
-              action: r.action
+              action: r.action,
+              path: '/'
             })
           }
         })

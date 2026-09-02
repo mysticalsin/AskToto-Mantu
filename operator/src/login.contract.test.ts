@@ -129,6 +129,10 @@ describe('unauth console GET is 302 to Cloudflare Access, never a password form'
     })
     expect(accessJwtFromRequest(req)).toBe('header.payload.sig')
     expect(accessJwtFromRequest(new Request('https://operator.test/v1/admin/keys'))).toBeNull()
+    const mixed = new Request('https://operator.test/v1/admin/keys', {
+      headers: { cookie: 'CF_AppSession=not-a-jwt; CF_Authorization=header.payload.sig' }
+    })
+    expect(accessJwtFromRequest(mixed)).toBe('header.payload.sig')
   })
 
   it('unauth POST /v1/admin/keys is 401 not 404', async () => {
