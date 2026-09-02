@@ -1,8 +1,8 @@
-import { SPA_CSS, SPA_CSS_PATH, SPA_JS, SPA_JS_PATH } from './spa/manifest'
+import { SPA_CSS, SPA_CSS_PATH, SPA_INDEX_JS_PATH, SPA_JS, SPA_JS_PATH } from './spa/manifest'
 
 /** Public chrome. Access must not wrap these. Worker must not 302 them. */
 
-export { SPA_CSS_PATH, SPA_JS_PATH }
+export { SPA_CSS_PATH, SPA_INDEX_JS_PATH, SPA_JS_PATH }
 
 export function isPublicAssetPath(pathname: string): boolean {
   if (pathname === '/favicon.ico') return true
@@ -20,10 +20,10 @@ export function publicAssetResponse(pathname: string): Response | null {
   if (pathname === '/favicon.ico') {
     return new Response('', { status: 200, headers: headers('image/x-icon', false) })
   }
-  if (pathname === SPA_JS_PATH) {
+  if (pathname === SPA_JS_PATH || pathname === SPA_INDEX_JS_PATH) {
     return new Response(SPA_JS, {
       status: 200,
-      headers: headers('application/javascript; charset=utf-8', true)
+      headers: headers('application/javascript; charset=utf-8', pathname === SPA_JS_PATH)
     })
   }
   if (pathname === SPA_CSS_PATH) {

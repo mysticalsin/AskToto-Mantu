@@ -209,7 +209,7 @@ function probeLiveLogin() {
     } catch (err) {
       fail(`live ${spaMeta.path} must parse (pathname strip regex regress): ${err instanceof Error ? err.message : String(err)}`)
     }
-    const stub = run('curl', [
+    const index = run('curl', [
       '-sS',
       '-D',
       '-',
@@ -219,16 +219,43 @@ function probeLiveLogin() {
       '0',
       `${host}/assets/index.js`
     ])
-    if (/HTTP\/\S+\s+200/.test(stub) && /self\.METIS_OPERATOR =/.test(stub)) {
-      fail('live /assets/index.js is still the 97-byte stub')
-    }
-    if (/HTTP\/\S+\s+302/.test(stub) && /cdn-cgi\/access\/login/i.test(stub)) {
+    const indexLen = Number((index.match(/content-length:\s*(\d+)/i) || [])[1] || 0)
+    if (/HTTP\/\S+\s+302/.test(index) && /cdn-cgi\/access\/login/i.test(index)) {
       fail('live /assets/index.js is wrapped by Cloudflare Access')
     }
-    if (!/HTTP\/\S+\s+404/.test(stub)) {
-      fail('live /assets/index.js must 404 (unknown name), not another stub')
+    if (/HTTP\/\S+\s+404/.test(index)) {
+      fail('live /assets/index.js must be 200 real JS, not 404 JSON')
     }
-    console.log(`✓ Live login contract: ${host}/health 200, ${host}/ and ${host}/keys 302 Access, ${host}${spaMeta.path} 200 js ≫ 97, POST /v1/admin/keys 401 JSON`)
+    if (!/HTTP\/\S+\s+200/.test(index) || !/content-type:\s*.*javascript/i.test(index)) {
+      fail('live /assets/index.js must be 200 application/javascript')
+    }
+    if (indexLen <= 97 || (/self\.METIS_OPERATOR =/.test(index) && indexLen < 500)) {
+      fail(`live /assets/index.js is still the 97-byte stub (len=${indexLen})`)
+    }
+    if (!/window\.route = route/.test(index)) {
+      fail('live /assets/index.js must assign window.route')
+    }
+    const indexBody = index.split(/\r?\n\r?\n/).slice(1).join('\n\n')
+    try {
+      // eslint-disable-next-line no-new-func
+      new Function(indexBody)
+    } catch (err) {
+      fail(`live /assets/index.js must parse: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    const unknown = run('curl', [
+      '-sS',
+      '-D',
+      '-',
+      '-o',
+      '-',
+      '--max-redirs',
+      '0',
+      `${host}/assets/client.js`
+    ])
+    if (!/HTTP\/\S+\s+404/.test(unknown)) {
+      fail('live /assets/client.js must 404 (unknown name), not another stub')
+    }
+    console.log(`✓ Live login contract: ${host}/health 200, ${host}/ and ${host}/keys 302 Access, ${host}/assets/index.js ${indexLen} js ≫ 97, ${host}${spaMeta.path} 200 js ≫ 97, POST /v1/admin/keys 401 JSON`)
   } catch (err) {
     fail(`live login probe failed: ${err instanceof Error ? err.message : String(err)}`)
   }

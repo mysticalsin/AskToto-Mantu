@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { handleRequest, type Env } from './index'
 import { memoryStore } from './store'
-import { SPA_CSS, SPA_CSS_PATH, SPA_JS, SPA_JS_PATH } from './spa/manifest'
+import { SPA_CSS, SPA_CSS_PATH, SPA_INDEX_JS_PATH, SPA_JS, SPA_JS_PATH } from './spa/manifest'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_TEAM_DOMAIN } from './test-fixtures'
 
 const NOW = 1_725_000_000_000
@@ -32,7 +32,7 @@ describe('hashed SPA assets — fail loud if a stub ships', () => {
     expect(SPA_CSS_PATH).toMatch(/^\/assets\/operator-[0-9a-f]{12}\.css$/)
   })
 
-  it('unauth GET hashed JS/CSS are 200 real files; stubs and unknown names 404', async () => {
+  it('unauth GET hashed JS/CSS and /assets/index.js are 200 real files; unknown names 404', async () => {
     const js = await handleRequest(new Request(`https://operator.test${SPA_JS_PATH}`), env(), {}, {
       store: memoryStore(),
       now: NOW
@@ -58,7 +58,20 @@ describe('hashed SPA assets — fail loud if a stub ships', () => {
     expect(cssBody).toContain('185px')
     expect(cssBody).not.toMatch(/cloudflareaccess/)
 
-    for (const path of ['/assets', '/assets/index.js', '/assets/client.js', '/assets/operator-9f3c.js']) {
+    const index = await handleRequest(new Request(`https://operator.test${SPA_INDEX_JS_PATH}`), env(), {}, {
+      store: memoryStore(),
+      now: NOW
+    })
+    expect(index.status).toBe(200)
+    expect(index.headers.get('content-type') || '').toMatch(/javascript/)
+    const indexBody = await index.text()
+    expect(indexBody.length).toBeGreaterThan(97)
+    expect(indexBody).toBe(jsBody)
+    expect(indexBody).toContain('window.route = route')
+    expect(indexBody).not.toMatch(/self\.METIS_OPERATOR = self\.METIS_OPERATOR/)
+    expect(() => new Function(indexBody)).not.toThrow()
+
+    for (const path of ['/assets', '/assets/client.js', '/assets/operator-9f3c.js']) {
       const res = await handleRequest(new Request(`https://operator.test${path}`), env(), {}, {
         store: memoryStore(),
         now: NOW
