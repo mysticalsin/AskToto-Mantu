@@ -9,7 +9,9 @@ vi.mock('./logger', () => ({ auditLog: vi.fn(), mainLog: { warn: vi.fn(), error:
 const cliMock = vi.hoisted(() => ({ runCliStream: vi.fn(() => ({ abort: vi.fn() })) }))
 vi.mock('./cli', () => cliMock)
 
-const operatorAskMock = vi.hoisted(() => ({ streamOperatorAsk: vi.fn(() => ({ abort: vi.fn() })) }))
+const operatorAskMock = vi.hoisted(() => ({
+  streamOperatorAsk: vi.fn((_opts: { apiKey: string }) => ({ abort: vi.fn() }))
+}))
 vi.mock('./llm/operator-ask', () => operatorAskMock)
 
 // Anthropic stub whose stream never emits and whose finalMessage never resolves → forces the idle watchdog.
@@ -71,7 +73,7 @@ describe('createStream — routing', () => {
     })
     expect(operatorAskMock.streamOperatorAsk).toHaveBeenCalledOnce()
     expect(anthro.ctor).not.toHaveBeenCalled()
-    const passed = operatorAskMock.streamOperatorAsk.mock.calls[0]?.[0]
+    const passed = operatorAskMock.streamOperatorAsk.mock.calls[0][0]
     expect(passed.apiKey).toBe('')
   })
 

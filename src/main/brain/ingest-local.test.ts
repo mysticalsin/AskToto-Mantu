@@ -57,7 +57,8 @@ describe('automatic brain ingest with Métis Local', () => {
       localLlm: {
         enabled: true,
         modelId: 'qwen3.5-0.8b',
-        useFor: { suggest: true, summary: true, vision: true }
+        useFor: { suggest: true, summary: true, vision: true },
+        fallback: false
       }
     })
     writeFileSync(

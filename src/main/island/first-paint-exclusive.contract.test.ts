@@ -18,7 +18,8 @@ function tonyMac(): DisplayMetrics {
     workArea: macbookWorkArea,
     hasNotch: true,
     notchWidth: 200,
-    menuBarHeight: 39
+    menuBarHeight: 39,
+    source: 'heuristic'
   }
 }
 
