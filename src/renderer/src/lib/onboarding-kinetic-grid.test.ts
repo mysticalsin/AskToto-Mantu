@@ -58,6 +58,7 @@ describe('KineticGrid file + Mantu colors + pointer-events none + no stage slide
     expect(JSON.stringify(KINETIC_COLORS)).not.toMatch(/#161618/)
     expect(JSON.stringify(KINETIC_COLORS)).not.toMatch(/#4C|blue/i)
     expect(css).toMatch(/\.onboard-kinetic-grid \{[\s\S]*?background:\s*#05010a/)
+    expect(css).toMatch(/\.onboard-stage:has\(\.onboard-kinetic-grid\) \.onboard-stripes/)
   })
 
   it('canvas and wrapper are pointer-events none; mouse warps tiles only', () => {
@@ -75,7 +76,7 @@ describe('KineticGrid file + Mantu colors + pointer-events none + no stage slide
     expect(experience).not.toMatch(/ndc\.x \* CONFIG\.parallax/)
     expect(engine).not.toMatch(/ndc\.x \* CONFIG\.parallax/)
     expect(engine).toMatch(/camera\.position\.set\(0, 0, 5 - scroll \* CONFIG\.scrollPush\)/)
-    const warp = tileWarp({ cx: 200, cy: 200, mx: 200, my: 200, width: 800, height: 600 })
+    const warp = tileWarp({ cx: 220, cy: 200, mx: 200, my: 200, width: 800, height: 600 })
     expect(warp.dx).not.toBe(0)
     expect(edgePinFactor(0, 0, 800, 600)).toBe(0)
     expect(lerp2({ x: 0, y: 0 }, { x: 10, y: 10 }, 0.5)).toEqual({ x: 5, y: 5 })
