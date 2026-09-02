@@ -234,7 +234,7 @@ const REGIONS: Region[] = [
   { id: 'oc', x: 870, y: 380, isos: ['AU', 'NZ', 'PG', 'FJ'] }
 ]
 
-export function shoeyWorld(countries: MapCountry[], dots: MapDot[]): string {
+export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world shoey-world'): string {
   const by = new Map(countries.map((c) => [c.iso, c.devices]))
   const empty = countries.length === 0 && dots.length === 0
   let land = ''
@@ -268,7 +268,7 @@ export function shoeyWorld(countries: MapCountry[], dots: MapDot[]): string {
   const caption = empty
     ? `<div class="empty map-empty">No heartbeats yet. The map stays empty until a seat checks in. Empty is an empty world, not sample dots.</div>`
     : ''
-  return `${caption}<svg class="world shoey-world" viewBox="0 0 1000 500" role="img" aria-label="Unique seats by country">
+  return `${caption}<svg class="${cls}" viewBox="0 0 1000 500" role="img" aria-label="Unique seats by country">
     <rect width="1000" height="500" fill="#F5F5F5"/>
     ${land}${marks}${pills}
   </svg>`

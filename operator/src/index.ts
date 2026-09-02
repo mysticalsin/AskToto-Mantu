@@ -366,6 +366,21 @@ async function ingest(
     })
     return json({ ok: true })
   }
+  if (body.event === 'listen' || body.event === 'recap') {
+    const seat = seatFromBody(deviceId, body, now, geo)
+    const minutes = num(body.minutes)
+    await store.insertEvent({
+      id,
+      ts: now,
+      kind: body.event,
+      actor: seat.sso_email,
+      device_id: deviceId,
+      country: geo.country,
+      detail: safeEventDetail(minutes != null ? `${minutes}m` : String(body.event))
+    })
+    await store.upsertSeat(seat)
+    return json({ ok: true, id })
+  }
   if (body.event === 'crm') {
     if (body.confidential === true) return json({ ok: true, id, ingested: false })
     await upsertCrmEvent(store, deviceId, body, now)

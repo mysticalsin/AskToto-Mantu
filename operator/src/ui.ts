@@ -138,6 +138,9 @@ a { color: var(--accent); text-decoration: none; }
 }
 .wrap { padding: 14px 16px 36px; display: grid; gap: 12px; }
 .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.kpis-extra { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+.ev-grid { display: grid; grid-template-columns: minmax(200px, 240px) 1fr; gap: 12px; align-items: start; }
+.ev-names { display: flex; flex-direction: column; gap: 2px; max-height: 560px; overflow: auto; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
 .card {
@@ -194,6 +197,7 @@ a { color: var(--accent); text-decoration: none; }
 .chart { display: block; width: 100%; height: 140px; }
 .world { display: block; width: 100%; height: auto; max-height: 420px; }
 .world.shoey-world { max-height: none; min-height: 280px; }
+.world.shoey-world.ov { min-height: 180px; max-height: 220px; }
 .heat { display: block; width: 100%; max-width: 280px; height: auto; }
 .grat { stroke: color-mix(in srgb, var(--ink) 18%, transparent); stroke-width: 0.6; }
 .dot { fill: var(--accent); stroke: var(--bg); stroke-width: 0.8; }
@@ -269,7 +273,7 @@ textarea { min-height: 120px; }
 @media (max-width: 980px) {
   .shell { grid-template-columns: 1fr; }
   .rail { position: relative; min-height: auto; }
-  .kpis, .grid-2, .grid-3, .crm-kpis, .event, .rt-grid { grid-template-columns: 1fr; }
+  .kpis, .kpis-extra, .grid-2, .grid-3, .crm-kpis, .event, .rt-grid, .ev-grid { grid-template-columns: 1fr; }
 }
 `
 
@@ -352,6 +356,24 @@ function formatCompact(n: number): string {
   if (n >= 1_000_000) return `${Math.round(n / 100_000) / 10}M`
   if (n >= 1000) return `${Math.round(n / 100) / 10}K`
   return String(n)
+}
+
+function reported(value: string | number | null | undefined, format?: (n: number) => string): string {
+  if (value == null) return 'not reported'
+  if (typeof value === 'number') return format ? format(value) : formatCompact(value)
+  return value
+}
+
+function formatDuration(ms: number | null): string {
+  if (ms == null) return 'not reported'
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`
+  return `${Math.round(ms / 60_000)}m`
+}
+
+function formatPct(n: number | null): string {
+  if (n == null) return 'not reported'
+  return `${n}%`
 }
 
 function shoeyKpi(title: string, value: string, series: number[]): string {
@@ -451,6 +473,17 @@ function dayLabel(ts: number): string {
   return new Date(ts).toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' })
 }
 
+function eventNameRollup(events: ConsoleEvent[]): { name: string; views: number; sess: number }[] {
+  const by = new Map<string, number>()
+  for (const e of events) {
+    const name = looksLikeSecret(e.name) ? 'event' : e.name
+    by.set(name, (by.get(name) ?? 0) + 1)
+  }
+  return [...by.entries()]
+    .map(([name, n]) => ({ name, views: n, sess: n }))
+    .sort((a, b) => b.views - a.views)
+}
+
 function renderEvents(events: ConsoleEvent[]): string {
   if (!events.length) return '<div class="empty">No events yet.</div>'
   return events
@@ -510,6 +543,7 @@ function renderLicenses(rows: ProfileRow[]): string {
 
 export function renderConsole(data: DashboardPayload): string {
   const k = data.kpis
+  const ops = data.ops
   const canRetry = (status: string): boolean => status === 'failed' || status === 'expired'
   const crmRows = data.crm.rows
     .map((r) => {
@@ -630,20 +664,15 @@ export function renderConsole(data: DashboardPayload): string {
   void sparklineArea
   void sparklineLine
 
-  const asks7 = data.scale.days7.reduce((n, p) => n + p.asks, 0)
-  const asksSeries = data.scale.days7.map((p) => p.asks)
-  const asksPerSeat = k.dau > 0 && asks7 > 0 ? (asks7 / k.dau).toFixed(1) : 'not reported'
-  const hitPct = k.cacheHit && k.cacheHit.endsWith('%') ? Number(k.cacheHit.slice(0, -1)) : null
-  const missVal = hitPct == null ? 'not reported' : `${Math.max(0, Math.round(100 - hitPct))}%`
-  const missSeries = k.hitSeries.map((v) => (v > 0 ? Math.max(0, 100 - v) : 0))
-  const live30 = data.profiles.filter((p) => data.now - p.lastSeen <= 30 * 60 * 1000).length
-  const live30Series = k.liveSeries
+  const live30 = ops.live30
+  const live30Series = ops.liveSeries
   const costVal = k.cost7d ?? 'not reported'
   const areaVals = data.scale.days7.map((p) => p.heartbeats)
   const areaLabs = data.scale.days7.map((p, i) =>
     i === 0 || i === data.scale.days7.length - 1 || i % 2 === 0 ? dayLabel(p.t) : ''
   )
   const world = shoeyWorld(data.map.countries, data.map.dots)
+  const overviewWorld = shoeyWorld(data.map.countries, data.map.dots, 'world shoey-world ov')
   const geoRows = data.profiles
     .filter((p) => p.country || p.city)
     .map((p) => ({
@@ -727,19 +756,31 @@ svg path { vector-effect: non-scaling-stroke; }
 
     <section class="page wrap" data-page="overview">
       <div class="kpis">
-        ${shoeyKpi('Unique seats', formatCompact(k.dau), k.dauSeries)}
-        ${shoeyKpi('Live seats', formatCompact(k.live), k.liveSeries)}
-        ${shoeyKpi('Asks', formatCompact(asks7), asksSeries)}
-        ${shoeyKpi('Asks per seat', asksPerSeat, asksSeries)}
-        ${shoeyKpi('Cache miss', missVal, missSeries)}
-        ${shoeyKpi('Latency', 'not reported', [])}
-        ${shoeyKpi('Cost', costVal, k.costSeries)}
+        ${shoeyKpi('Unique sessions', formatCompact(ops.uniqueSessions), ops.uniqueSeries)}
+        ${shoeyKpi('Sessions / day', formatCompact(ops.sessionsDay), ops.sessionsDaySeries)}
+        ${shoeyKpi('API calls', formatCompact(ops.apiCalls), ops.apiSeries)}
+        ${shoeyKpi('Duration', formatDuration(ops.durationMs), [])}
+        ${shoeyKpi('CRM fail rate', formatPct(ops.crmFailRate), [])}
+        ${shoeyKpi('Time saved', reported(ops.timeSaved), [])}
+        ${shoeyKpi('Tokens', reported(ops.tokens), ops.tokenSeries)}
         ${shoeyKpi('Live · 30 min', formatCompact(live30), live30Series)}
+      </div>
+      <div class="kpis-extra">
+        ${shoeyKpi('Live now', formatCompact(ops.liveNow), ops.liveSeries)}
+        ${shoeyKpi('Meetings', formatCompact(ops.meetings), [])}
+        ${shoeyKpi('Listen minutes', reported(ops.listenMinutes), [])}
+        ${shoeyKpi('Recap count', formatCompact(ops.recapCount), ops.recapSeries)}
+        ${shoeyKpi('CLI asks', formatCompact(ops.cliAsks), [])}
+        ${shoeyKpi('Operator-key asks', formatCompact(ops.operatorAsks), [])}
       </div>
 
       <article class="card" style="padding-bottom:10px">
         <p class="eyebrow">Unique seats</p>
         ${blueArea(areaVals, areaLabs)}
+      </article>
+      <article class="card" style="padding:0;overflow:hidden">
+        <p class="eyebrow" style="padding:10px 12px 0">Country map</p>
+        <div id="overview-map">${overviewWorld}</div>
       </article>
 
       <div class="grid-2">
@@ -800,11 +841,11 @@ svg path { vector-effect: non-scaling-stroke; }
           <p class="eyebrow">Mix</p>
           <div class="grid-2" style="gap:8px">
             <div>
-              <div class="sub muted">App version</div>
+              <div class="sub muted">Version mix</div>
               ${bars(data.scale.versions, 240, 140)}
             </div>
             <div>
-              <div class="sub muted">OS</div>
+              <div class="sub muted">Mac vs Windows</div>
               ${bars(data.scale.os, 240, 140)}
             </div>
           </div>
@@ -958,11 +999,21 @@ svg path { vector-effect: non-scaling-stroke; }
     ${emptyPage('notifications', 'Notifications', landing.deadLetters || k.pendingDiffs ? `${k.pendingDiffs} pending skill diffs. ${landing.deadLetters} dead CRM letters.` : 'No failed CRM sends or pending skill diffs to surface.')}
 
     <section class="page wrap" data-page="events" hidden>
-      <article class="card" style="padding-bottom:10px">
-        <div class="tabs"><button class="tab on" type="button">Events</button></div>
-        <input class="table-search" id="events-search" type="search" placeholder="Search events" autocomplete="off">
-        <div id="events-list">${renderEvents(data.events)}</div>
-      </article>
+      <div class="ev-grid">
+        ${volumeTable(
+          'ev-names',
+          [{ id: 'names', label: 'Events' }],
+          { names: eventNameRollup(data.events) },
+          'Search events',
+          { value: 'Events', sess: 'Sessions' },
+          'blue'
+        )}
+        <article class="card" style="padding-bottom:10px">
+          <div class="tabs"><button class="tab on" type="button">Events</button></div>
+          <input class="table-search" id="events-search" type="search" placeholder="Search events" autocomplete="off">
+          <div id="events-list">${renderEvents(data.events)}</div>
+        </article>
+      </div>
     </section>
 
     <section class="page wrap" data-page="profiles" hidden>
