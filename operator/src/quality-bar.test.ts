@@ -224,3 +224,20 @@ describe('quality bar: token-free events', () => {
     expect(events).not.toContain('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9')
   })
 })
+
+describe('quality bar: keys last4 and Cloudflare fail-loud', () => {
+  it('empty keys copy is retired and Overview fails loud without a CF token', async () => {
+    const store = memoryStore()
+    const html = await handleRequest(
+      new Request('https://operator.test/'),
+      env(),
+      { access: access('tony.walteur@gmail.com') },
+      { store, now: NOW }
+    ).then((r) => r.text())
+    expect(html).not.toContain('Seats keep their own keys')
+    expect(html).toContain('No provider keys on Operator yet')
+    expect(html).toContain('Cloudflare token missing. Connect it on Keys.')
+    expect(html).toContain('data-page="keys"')
+    expect(html).not.toMatch(tokenPatternForTests())
+  })
+})

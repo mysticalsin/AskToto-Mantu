@@ -9,6 +9,7 @@ import {
 } from './charts'
 import { statusBadge, STATUS_BADGE_CSS } from './components/ui/status-badge'
 import { CRM_FILTER_ORDER } from './crm'
+import type { CloudflareOverview } from './cloudflare'
 import type { ConsoleEvent, DashboardPayload, ProfileRow } from './dashboard'
 import { FORBIDDEN_NAV, NAV_IDS, NAV_SECTIONS } from './nav'
 import { looksLikeSecret } from './redact'
@@ -175,6 +176,12 @@ a { color: var(--accent); text-decoration: none; }
   font-family: var(--mono); font-size: 10px; color: var(--ink2); background: var(--nav-on);
 }
 .empty { color: var(--ink2); font-size: 12px; padding: 10px 0 12px; }
+.fail-loud { color: var(--danger); font-size: 13px; font-weight: 600; padding: 10px 0 12px; }
+.key-form { display: grid; gap: 8px; margin: 0 0 14px; }
+.key-form .row input, .key-form .row select {
+  border: 1px solid var(--hair); background: var(--bg); color: var(--ink);
+  border-radius: 8px; padding: 6px 8px; font: 12px var(--sans); min-width: 120px;
+}
 .map-empty { position: absolute; left: 12px; top: 42px; z-index: 1; }
 table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--hair); font-size: 12px; vertical-align: top; }
@@ -238,6 +245,23 @@ function when(ts: number): string {
 function field(value: string | null | undefined): string {
   if (!value || looksLikeSecret(value)) return MISSING
   return esc(value)
+}
+
+function renderCloudflare(cf: CloudflareOverview): string {
+  if (cf.error) {
+    return `<div class="fail-loud" data-cf-error>${esc(cf.error)}</div>
+      <div class="sub muted" style="padding-bottom:8px">Worker ${esc(cf.worker)}. Connect Account ID and API token on Keys. No token on seats.</div>`
+  }
+  const workers = cf.workers.length ? cf.workers.map((w) => esc(w)).join(', ') : 'none listed'
+  const req = cf.requests == null ? 'not reported' : String(cf.requests)
+  const err = cf.errors == null ? 'not reported' : String(cf.errors)
+  const cpu = cf.cpuMs == null ? 'not reported' : `${cf.cpuMs} ms`
+  return `<div class="kpis">
+      ${kpiCard({ title: 'Requests', value: req, sub: `${cf.worker} · ${cf.range}`, spark: '' })}
+      ${kpiCard({ title: 'Errors', value: err, sub: cf.worker, spark: '' })}
+      ${kpiCard({ title: 'CPU', value: cpu, sub: 'cpuTimeMs', spark: '' })}
+    </div>
+    <div class="sub muted" style="padding-bottom:8px">Workers: ${workers}. D1 ${esc(cf.d1Name || 'metis-operator')} ${esc(cf.d1Id || '')}.</div>`
 }
 
 function kpiCard(opts: {
@@ -433,11 +457,16 @@ export function renderConsole(data: DashboardPayload): string {
   const liveSeats = data.profiles.filter((p) => p.live)
   const vaultRows = data.keys.vault
     .map(
-      (v) => `<tr>
+      (v) => `<tr data-key="${esc(v.id)}">
         <td>${esc(v.provider)}</td>
         <td>${esc(v.label)}</td>
         <td class="muted">··${esc(v.last4)}</td>
         <td>${esc(v.status)}</td>
+        <td>${
+          v.status === 'revoked'
+            ? ''
+            : `<button data-rotate="${esc(v.id)}">Rotate</button><button class="danger" data-revoke="${esc(v.id)}">Revoke</button>`
+        }</td>
       </tr>`
     )
     .join('')
@@ -597,6 +626,11 @@ svg path { vector-effect: non-scaling-stroke; }
             : '<div class="empty">No CRM sends on the fleet yet.</div>'
         }
       </article>
+
+      <article class="card" style="padding-bottom:10px" data-cf-overview>
+        <p class="eyebrow">Cloudflare</p>
+        ${renderCloudflare(data.cloudflare)}
+      </article>
     </section>
 
     <section class="page wrap" data-page="realtime" hidden>
@@ -700,20 +734,53 @@ svg path { vector-effect: non-scaling-stroke; }
     <section class="page wrap" data-page="keys" hidden>
       <article class="card" style="padding-bottom:10px">
         <p class="eyebrow">Keys</p>
-        <div class="sub muted" style="padding-bottom:8px">Presence only. Never a secret value, HMAC, PEM, or bearer string.</div>
+        <div class="sub muted" style="padding-bottom:8px">Tony adds LLM APIs and Cloudflare here. last4 only. Never a secret, cipher, token, or grant. CLI tokens stay on the seat.</div>
         <table>
           <thead><tr><th>Binding</th><th>Status</th></tr></thead>
           <tbody>
             <tr><td>Ingest HMAC</td><td>${data.keys.ingestBound ? 'bound' : 'missing'}</td></tr>
             <tr><td>Prompt key</td><td>${data.keys.promptBound ? 'bound' : 'missing'}</td></tr>
             <tr><td>Skill signing</td><td>${data.keys.skillBound ? 'bound' : 'missing'}</td></tr>
+            <tr><td>Vault key</td><td>${data.keys.vaultBound ? 'bound' : 'missing'}</td></tr>
           </tbody>
         </table>
+        <p class="eyebrow" style="margin-top:14px">Add an API</p>
+        <form class="key-form" id="key-add" autocomplete="off">
+          <div class="row">
+            <select name="provider" required>
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="gemini">Gemini</option>
+              <option value="nvidia">NVIDIA NIM</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="minimax">MiniMax</option>
+              <option value="qwen">Qwen</option>
+              <option value="kimi">Kimi</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="groq">Groq</option>
+              <option value="mistral">Mistral</option>
+              <option value="grok">Grok</option>
+              <option value="custom">Custom</option>
+            </select>
+            <input name="label" type="text" placeholder="Label" maxlength="80">
+            <input name="secret" type="password" placeholder="API key" required autocomplete="off">
+            <button class="primary" type="submit">Add</button>
+          </div>
+        </form>
+        <p class="eyebrow">Cloudflare connection</p>
+        <form class="key-form" id="cf-add" autocomplete="off">
+          <div class="row">
+            <input name="accountId" type="text" placeholder="Account ID" required maxlength="40">
+            <input name="token" type="password" placeholder="API token" required autocomplete="off">
+            <button class="primary" type="submit">Connect</button>
+          </div>
+        </form>
         ${
           vaultRows
-            ? `<p class="eyebrow" style="margin-top:14px">Vault</p><table><thead><tr><th>Provider</th><th>Label</th><th>Last4</th><th>Status</th></tr></thead><tbody>${vaultRows}</tbody></table>`
-            : '<div class="empty">No provider keys stored on Operator. Seats keep their own keys.</div>'
+            ? `<p class="eyebrow" style="margin-top:14px">Vault</p><table><thead><tr><th>Provider</th><th>Label</th><th>Last4</th><th>Status</th><th></th></tr></thead><tbody>${vaultRows}</tbody></table>`
+            : '<div class="empty">No provider keys on Operator yet. Add an API or Cloudflare here so seats can be funded.</div>'
         }
+        <div id="key-msg" class="muted" style="padding:8px 0"></div>
       </article>
     </section>
   </div>
@@ -808,6 +875,40 @@ document.querySelectorAll('[data-draft]').forEach((b) => b.addEventListener('cli
 document.querySelectorAll('[data-retry]').forEach((b) => b.addEventListener('click', async () => {
   await api('/v1/admin/crm/' + b.getAttribute('data-retry') + '/retry', {})
   location.reload()
+}))
+const keyMsg = document.getElementById('key-msg')
+function showKey(j) {
+  if (!keyMsg) return
+  if (j && j.ok) keyMsg.textContent = j.last4 ? ('saved ··' + j.last4) : (j.status || 'ok')
+  else keyMsg.textContent = (j && j.error) || 'failed'
+}
+const addForm = document.getElementById('key-add')
+if (addForm) addForm.addEventListener('submit', async (e) => {
+  e.preventDefault()
+  const fd = new FormData(addForm)
+  const j = await api('/v1/admin/keys', { provider: fd.get('provider'), label: fd.get('label'), secret: fd.get('secret') })
+  if (j && j.ok) location.reload()
+  else showKey(j)
+})
+const cfForm = document.getElementById('cf-add')
+if (cfForm) cfForm.addEventListener('submit', async (e) => {
+  e.preventDefault()
+  const fd = new FormData(cfForm)
+  const j = await api('/v1/admin/keys', { provider: 'cloudflare-account', accountId: fd.get('accountId'), token: fd.get('token') })
+  if (j && j.ok) location.reload()
+  else showKey(j)
+})
+document.querySelectorAll('[data-rotate]').forEach((b) => b.addEventListener('click', async () => {
+  const secret = window.prompt('New secret or token')
+  if (!secret) return
+  const j = await api('/v1/admin/keys/' + b.getAttribute('data-rotate') + '/rotate', { secret })
+  if (j && j.ok) location.reload()
+  else showKey(j)
+}))
+document.querySelectorAll('[data-revoke]').forEach((b) => b.addEventListener('click', async () => {
+  const j = await api('/v1/admin/keys/' + b.getAttribute('data-revoke') + '/revoke', {})
+  if (j && j.ok) location.reload()
+  else showKey(j)
 }))
 </script>
 </body></html>`

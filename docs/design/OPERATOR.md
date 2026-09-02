@@ -4,6 +4,7 @@ type: operator-control-plane-contract
 owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, client prompt-cache honesty, CRM send board, Tony LLM keys vault, Cloudflare account connect, seat funding signal, Ask routing law
 does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, installer packing, Fly license-server, Goldberg Aria, cloudflare-proxy AI token proxy, OpenPanel Pages/Funnels, Bklit Studio
 ready-to-merge: no
+implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing
 audience: Tony Walteur only. Two emails. Nobody else.
 tokens:
   accent: "#7C8CF8"
@@ -76,7 +77,7 @@ Live `workers.dev` does not wrap `/` in a Cloudflare Access redirect today. The 
 
 ## What this is not (explicit non-goals)
 
-This slice is **DESIGN.md only**. No UI code. No Worker behavior change. No Electron change. No pack. No version bump.
+This slice implements the keys vault, Cloudflare connect, and CLI-first routing law. No pack. No version bump. Overlay chrome stays frozen.
 
 | Surface | Job |
 | --- | --- |
@@ -361,6 +362,6 @@ Frozen overlay chrome (do not edit from this product):
 
 ## Ready to merge
 
-**READY TO MERGE: no.** This revision is DESIGN only. No UI implementation. No Worker behavior change. No Electron change. No pack. No version bump. Overlay chrome stays frozen. Goldberg Aria stays frozen. Do not pack EXE/DMG. Do not merge from this change.
+**READY TO MERGE: no.** Keys write/rotate/revoke, Cloudflare connect + fail-loud Overview, heartbeat `fundedProviders`, and CLI-first last-clicked routing are implemented. Overlay chrome stays frozen. Goldberg Aria stays frozen. Do not pack EXE/DMG. Do not bump app version. Do not merge from this change until Devon opens the live Worker as Tony on a Mac.
 
-When a later slice implements the keys write API, seat funding, or Cloudflare pull: CI must be green, overlay files untouched, Events still token-free, `#keys` last4 only. Deploy the Worker with wrangler so the live `workers.dev` host shows the new UI. Devon still opens Access as Tony on a Mac before any merge.
+`POST /v1/use` (Operator-brokered provider calls) and migrating leftover seat-stored Tony cloud keys stay a later slice. Heartbeat lists funded providers only. Seats never persist a raw Operator key or CF token.

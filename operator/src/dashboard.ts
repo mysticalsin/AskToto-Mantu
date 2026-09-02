@@ -1,5 +1,6 @@
 import { aggregateCacheSlice, estimateCacheCost, formatUsdEstimate, type AskLogLine } from '../../src/shared/operator'
 import { CRM_STATUSES, type CrmSendRow, type CrmStatus } from './crm'
+import { missingCloudflareOverview, type CloudflareOverview } from './cloudflare'
 import { looksLikeSecret, safeChips, type SafeChip } from './redact'
 import type { EventRow, OperatorStore, PulseRow, SeatRow, VaultKeyMeta } from './store'
 
@@ -124,8 +125,10 @@ export interface DashboardPayload {
     ingestBound: boolean
     promptBound: boolean
     skillBound: boolean
+    vaultBound: boolean
     vault: VaultKeyMeta[]
   }
+  cloudflare: CloudflareOverview
 }
 
 export interface ConsoleEvent {
@@ -154,6 +157,7 @@ export type DashboardKeyFlags = {
   ingestBound: boolean
   promptBound: boolean
   skillBound: boolean
+  vaultBound: boolean
 }
 
 export type CrmLanding = {
@@ -347,11 +351,25 @@ function mergeEvents(stored: ConsoleEvent[], extra: ConsoleEvent[]): ConsoleEven
   return [...by.values()].sort((a, b) => b.ts - a.ts).slice(0, 80)
 }
 
+function sanitizeVaultMeta(v: VaultKeyMeta): VaultKeyMeta {
+  return {
+    id: v.id && !looksLikeSecret(v.id) ? v.id : 'key',
+    provider: looksLikeSecret(v.provider) ? 'provider' : v.provider,
+    label: looksLikeSecret(v.label) ? 'key' : v.label,
+    last4: /^\w{2,8}$/.test(v.last4) ? v.last4 : '----',
+    status: v.status,
+    createdAt: v.createdAt,
+    rotatedAt: v.rotatedAt,
+    revokedAt: v.revokedAt
+  }
+}
+
 export async function buildDashboard(
   store: OperatorStore,
   email: string,
   now: number,
-  keys: DashboardKeyFlags = { ingestBound: false, promptBound: false, skillBound: false }
+  keys: DashboardKeyFlags = { ingestBound: false, promptBound: false, skillBound: false, vaultBound: false },
+  cloudflare: CloudflareOverview = missingCloudflareOverview()
 ): Promise<DashboardPayload> {
   const seats = await store.listSeats()
   const asks = await store.listAsks(2000)
@@ -624,12 +642,20 @@ export async function buildDashboard(
       ingestBound: keys.ingestBound,
       promptBound: keys.promptBound,
       skillBound: keys.skillBound,
-      vault: vault.map((v) => ({
-        provider: looksLikeSecret(v.provider) ? 'provider' : v.provider,
-        label: looksLikeSecret(v.label) ? 'key' : v.label,
-        last4: /^\w{2,8}$/.test(v.last4) ? v.last4 : '----',
-        status: v.status
-      }))
+      vaultBound: keys.vaultBound,
+      vault: vault.map(sanitizeVaultMeta)
+    },
+    cloudflare: {
+      worker: cloudflare.worker,
+      connected: cloudflare.connected,
+      error: cloudflare.error,
+      requests: cloudflare.requests,
+      errors: cloudflare.errors,
+      cpuMs: cloudflare.cpuMs,
+      range: cloudflare.range,
+      workers: cloudflare.workers.filter((w) => !looksLikeSecret(w)),
+      d1Name: cloudflare.d1Name && !looksLikeSecret(cloudflare.d1Name) ? cloudflare.d1Name : null,
+      d1Id: cloudflare.d1Id && !looksLikeSecret(cloudflare.d1Id) ? cloudflare.d1Id : null
     }
   }
 }

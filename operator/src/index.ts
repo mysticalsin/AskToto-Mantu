@@ -11,12 +11,21 @@ import {
   wantsJson,
   type AccessCtx
 } from './access'
+import { missingCloudflareOverview, pullCloudflareOverview, type CloudflareOverview } from './cloudflare'
 import { asCrmStatus } from './crm'
 import { decryptPrompt, encryptPrompt, sha256Hex, signSkillPack } from './crypto'
 import { buildDashboard } from './dashboard'
 import { geoFromRequest, type CfGeo } from './geo'
 import { verifyIngestHmac } from './hmac'
 import { d1Store, type D1DatabaseLike } from './d1'
+import {
+  activeCloudflareAccount,
+  fundedProviders,
+  listKeysJson,
+  revokeVaultKey,
+  rotateVaultKey,
+  writeVaultKey
+} from './keys'
 import { looksLikeSecret } from './redact'
 import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './store'
 import { renderConsole, renderLogin } from './ui'
@@ -28,6 +37,7 @@ export interface Env {
   OPERATOR_SKILL_PRIVATE_KEY: string
   OPERATOR_SKILL_PUBLIC_KEY?: string
   OPERATOR_ADMIN_PASSWORD?: string
+  OPERATOR_VAULT_KEY?: string
   TEAM_DOMAIN?: string
   POLICY_AUD?: string
 }
@@ -37,6 +47,7 @@ export interface HandleOpts {
   now?: number
   access?: AccessCtx['access']
   geo?: CfGeo
+  cfFetch?: typeof fetch
 }
 
 const RATE_WINDOW_MS = 60_000
@@ -101,7 +112,7 @@ export async function handleRequest(
       }
       return unauthorized()
     }
-    return adminRoute(request, url, env, store, ident.email, now)
+    return adminRoute(request, url, env, store, ident.email, now, opts)
   }
 
   if (url.pathname === '/v1/ingest' || url.pathname === '/v1/heartbeat' || url.pathname === '/v1/skills/manifest') {
@@ -164,14 +175,41 @@ async function adminRoute(
   env: Env,
   store: OperatorStore,
   email: string,
-  now: number
+  now: number,
+  opts: HandleOpts = {}
 ): Promise<Response> {
   if (url.pathname === '/' && request.method === 'GET') {
-    const dash = await buildDashboard(store, email, now, keyFlags(env))
+    const dash = await buildDashboard(store, email, now, keyFlags(env), await cloudflareForDashboard(store, env, opts, now))
     return html(renderConsole(dash))
   }
   if (url.pathname === '/v1/admin/dashboard' && request.method === 'GET') {
-    return json(stripSecrets(await buildDashboard(store, email, now, keyFlags(env))))
+    return json(
+      stripSecrets(
+        await buildDashboard(store, email, now, keyFlags(env), await cloudflareForDashboard(store, env, opts, now))
+      )
+    )
+  }
+  if (url.pathname === '/v1/admin/keys' && request.method === 'GET') {
+    return json(stripSecrets({ ok: true, ...(await listKeysJson(store, keyFlags(env))) }))
+  }
+  if (url.pathname === '/v1/admin/keys' && request.method === 'POST') {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
+    const written = await writeVaultKey(store, env, email, now, body)
+    if (!written.ok) return json({ ok: false, error: written.error }, written.status)
+    return json(written)
+  }
+  const rotate = /^\/v1\/admin\/keys\/([^/]+)\/rotate$/.exec(url.pathname)
+  if (rotate && request.method === 'POST') {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
+    const out = await rotateVaultKey(store, env, email, now, rotate[1], body)
+    if (!out.ok) return json({ ok: false, error: out.error }, out.status)
+    return json(out)
+  }
+  const revoke = /^\/v1\/admin\/keys\/([^/]+)\/revoke$/.exec(url.pathname)
+  if (revoke && request.method === 'POST') {
+    const out = await revokeVaultKey(store, email, now, revoke[1])
+    if (!out.ok) return json({ ok: false, error: out.error }, out.status)
+    return json(out)
   }
   if (url.pathname === '/v1/admin/summary' && request.method === 'GET') {
     const dash = await buildDashboard(store, email, now)
@@ -344,7 +382,11 @@ async function heartbeat(
   })
   await ingestCrmList(store, deviceId, body, now)
   const retries = await store.listCrmRetries(deviceId)
-  return json({ ok: true, retry: retries.map((r) => r.id) })
+  return json({
+    ok: true,
+    retry: retries.map((r) => r.id),
+    fundedProviders: await fundedProviders(store)
+  })
 }
 
 async function ingest(
@@ -489,7 +531,28 @@ function keyFlags(env: Env) {
   return {
     ingestBound: Boolean(env.OPERATOR_INGEST_SECRET),
     promptBound: Boolean(env.OPERATOR_PROMPT_KEY),
-    skillBound: Boolean(env.OPERATOR_SKILL_PRIVATE_KEY)
+    skillBound: Boolean(env.OPERATOR_SKILL_PRIVATE_KEY),
+    vaultBound: Boolean(env.OPERATOR_VAULT_KEY)
+  }
+}
+
+async function cloudflareForDashboard(
+  store: OperatorStore,
+  env: Env,
+  opts: HandleOpts,
+  now: number
+): Promise<CloudflareOverview> {
+  const creds = await activeCloudflareAccount(store, env.OPERATOR_VAULT_KEY)
+  if (!creds) return missingCloudflareOverview()
+  try {
+    return await pullCloudflareOverview({
+      accountId: creds.accountId,
+      token: creds.token,
+      now,
+      fetchImpl: opts.cfFetch
+    })
+  } catch {
+    return { ...missingCloudflareOverview(), connected: true, error: 'Cloudflare pull failed.' }
   }
 }
 
@@ -562,7 +625,19 @@ async function ingestCrmList(
 function stripSecrets<T>(data: T): T {
   return JSON.parse(
     JSON.stringify(data, (key, value) => {
-      if (key === 'prompt_cipher' || key === 'prompt_iv' || key === 'question' || key === 'ip') return undefined
+      if (
+        key === 'prompt_cipher' ||
+        key === 'prompt_iv' ||
+        key === 'question' ||
+        key === 'ip' ||
+        key === 'cipher' ||
+        key === 'iv' ||
+        key === 'secret' ||
+        key === 'token' ||
+        key === 'grant'
+      ) {
+        return undefined
+      }
       return value
     })
   ) as T
