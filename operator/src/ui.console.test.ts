@@ -397,14 +397,16 @@ describe('realtime main pane is live heartbeats, not leftover OpenPanel', () => 
         sso_email: 'twalteur@amaris.com',
         license: 'approved'
       })
-      await store.insertPulse({
-        id: `pulse-${id}`,
-        device_id: id,
-        ts: NOW - 45_000,
-        kind: 'heartbeat',
-        country: 'CA',
-        city: 'Longueuil'
-      })
+      for (const offset of [45_000, 2 * 60_000, 8 * 60_000, 15 * 60_000] as const) {
+        await store.insertPulse({
+          id: `pulse-${id}-${offset}`,
+          device_id: id,
+          ts: NOW - offset,
+          kind: 'heartbeat',
+          country: 'CA',
+          city: 'Longueuil'
+        })
+      }
       await store.insertEvent({
         id: `ev-${id}`,
         ts: NOW - 45_000,
@@ -420,6 +422,8 @@ describe('realtime main pane is live heartbeats, not leftover OpenPanel', () => 
     expect(realtime).toMatch(/class="n rt-n">2</)
     expect(realtime).toContain('<rect')
     expect(realtime).toContain('fill="#2563EB"')
+    expect(realtime).not.toContain('stroke="#EDEDED"')
+    expect((realtime.match(/<rect [^>]*fill="#2563EB"/g) || []).length).toBeGreaterThanOrEqual(4)
     expect(realtime).toContain('fill="#E5E7EB"')
     expect(realtime).toContain('class="world-land"')
     expect(realtime).toContain('class="world-ocean"')
