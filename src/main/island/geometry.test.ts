@@ -637,10 +637,14 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(exit).not.toMatch(/currentWidth = BAR_WIDTH/)
     expect(index).toMatch(/shouldIgnoreResizeWhilePeekResting/)
     const create = index.slice(index.indexOf('function createWindow'), index.indexOf('function resizeTo'))
-    expect(create).toMatch(/parkAfterExclusiveOnboarding/)
-    expect(create).toMatch(/onboardingLive \? stage.width : restPark.width/)
+    expect(create).toMatch(/firstPaintOverlayBounds/)
+    expect(create).toMatch(/width: firstPaint.width/)
     expect(create).toMatch(/islandResting = overlayUsesHover\(layout\)/)
     expect(create).not.toMatch(/width: onboardingLive \? stage.width : BAR_WIDTH/)
+    expect(create).not.toMatch(/onboardingLive \? stage.width : restPark.width/)
+    const live = index.slice(index.indexOf('function onboardingExclusiveLive'), index.indexOf('function applyExclusiveOnboardingStage'))
+    expect(live).toMatch(/return true/)
+    expect(live).not.toMatch(/return false/)
   })
 
   it('App fills the stage — OnboardingV2 is not wrapped in the overlapping Panel card', () => {

@@ -307,6 +307,31 @@ describe('CLI Connect treats a weekly cap as signed-in, not disconnected', () =>
   })
 })
 
+describe('Set up automatically shows an honest status chip', () => {
+  const cli = (): string => blockAfter('function CliIntegration(', '\nfunction McpConnectionCard(')
+  const install = (): string =>
+    blockAfter('const runInstall = async (id: \'claude-cli\' | \'codex-cli\')', 'const connect = async')
+
+  it('keeps Set up automatically and walks install → login → Connected', () => {
+    const body = cli()
+    expect(body).toMatch(/Set up automatically/)
+    expect(body).toMatch(/data-cli-setup-chip/)
+    expect(body).toMatch(/Waiting for login/)
+    expect(body).toMatch(/canShowConnected/)
+    expect(body).toMatch(/nextCliSetupStep/)
+    expect(install()).toMatch(/window\.toto\.cliInstall\(id/)
+    expect(install()).toMatch(/window\.toto\.cliTest\(id\)/)
+    expect(install()).toMatch(/window\.toto\.cliLogin\(id\)/)
+  })
+
+  it('a click without a working binary cannot show Connected', () => {
+    const body = install()
+    expect(body).toMatch(/if \(!binaryPresent\)/)
+    expect(body).toMatch(/canShowConnected\(\{ binaryPresent, testOk \}\)/)
+    expect(body).not.toMatch(/phase: 'done'[\s\S]{0,80}binaryPresent: false/)
+  })
+})
+
 // MQA-164 — the in-app download had no failure path: main logged the electron-updater 'error' and told
 // nobody, so UpdatesSection stayed in phase 'downloading' — a progress bar that could never move again,
 // with its own download-page fallback ("Always reachable so the user is never stranded") hidden, because

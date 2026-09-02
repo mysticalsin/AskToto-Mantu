@@ -156,6 +156,7 @@ import {
   recenterXForWidth,
   refitToDisplay as islandRefitToDisplay,
   exclusiveOnboardingBounds,
+  firstPaintOverlayBounds,
   hoverRestTop,
   hoverWatchRestRect,
   overlayRestSize,
@@ -1561,7 +1562,8 @@ function onboardingExclusiveLive(): boolean {
   try {
     return !getSettings().onboardingDone
   } catch {
-    return false
+    // Fail closed to exclusive — parking Hide/Island 8×2 then jumping is the flash.
+    return true
   }
 }
 
@@ -1665,23 +1667,30 @@ function createWindow(): void {
   // parks hide/island at bounds.y (notch strip) so the hardware island can hit. getSettings() is file-keystore-safe here.
   const placementDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   const onboardingLive = onboardingExclusiveLive()
-  const stage = exclusiveOnboardingBounds(placementDisplay.bounds, placementDisplay.workArea)
   const layout = liveOverlayLayout()
-  const restPark = parkAfterExclusiveOnboarding(layout, getDisplayMetrics(placementDisplay), ISLAND_TOP_MARGIN)
+  const placementMetrics = getDisplayMetrics(placementDisplay)
+  const firstPaint = firstPaintOverlayBounds({
+    onboardingDone: !onboardingLive,
+    bounds: placementDisplay.bounds,
+    workArea: placementDisplay.workArea,
+    layout,
+    metrics: placementMetrics,
+    topMargin: ISLAND_TOP_MARGIN
+  })
   if (onboardingLive) {
-    currentWidth = stage.width
-    lastBarHeight = stage.height
+    currentWidth = firstPaint.width
+    lastBarHeight = firstPaint.height
     islandResting = false
   } else {
-    currentWidth = restPark.width
+    currentWidth = firstPaint.width
     lastBarHeight = BAR_HEIGHT
     islandResting = overlayUsesHover(layout)
   }
   win = new BrowserWindow({
-    width: onboardingLive ? stage.width : restPark.width,
-    height: onboardingLive ? stage.height : restPark.height,
-    x: onboardingLive ? stage.x : restPark.x,
-    y: onboardingLive ? stage.y : restPark.y,
+    width: firstPaint.width,
+    height: firstPaint.height,
+    x: firstPaint.x,
+    y: firstPaint.y,
     frame: false,
     transparent: true,
     hasShadow: false, // panel paints its own shadow; window shadow would box the transparent area

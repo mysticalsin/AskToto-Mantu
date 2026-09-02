@@ -74,7 +74,7 @@ import { shouldMountStarfield } from '../lib/onboarding-starfield-spec'
 import { isWindows } from '../lib/keys'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
 import { sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
-import { createOnboardingMusicBed } from '../lib/onboarding-music'
+import { createOnboardingMusicBed, haltAllOnboardingAudio } from '../lib/onboarding-music'
 import { closeOnboardingPortal, disposePortalAudio, playBarLand, playPortalOpen, requestBarLand } from '../lib/onboarding-portal'
 import {
   TELL_THE_ROOM_CHECKBOX,
@@ -755,12 +755,14 @@ function useOnboardingMusic(): {
   const [muted, setMuted] = useState(false)
   const bedRef = useRef<ReturnType<typeof createOnboardingMusicBed> | null>(null)
   const pendingRetryRef = useRef(false)
-  if (!bedRef.current && typeof Audio !== 'undefined') {
-    bedRef.current = createOnboardingMusicBed()
-  }
 
   useEffect(() => {
+    // Never create the bed during render — Strict Mode double-invoke leaks a second Aria.
+    if (typeof Audio !== 'undefined') {
+      bedRef.current = createOnboardingMusicBed()
+    }
     return () => {
+      haltAllOnboardingAudio()
       bedRef.current?.stop()
       bedRef.current = null
       disposePortalAudio()
@@ -1044,6 +1046,7 @@ export function OnboardingExperience({
   const finish = async (): Promise<void> => {
     if (doneRef.current || !firstRunCanFinish({ asrReady, consent })) return
     doneRef.current = true
+    haltAllOnboardingAudio()
     music.stop()
     disposePortalAudio()
     await closeOnboardingPortal(music.muted, prefersReducedMotion())
@@ -1080,10 +1083,10 @@ export function OnboardingExperience({
       >
         {music.muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
       </button>
-      <div className="flex h-9 shrink-0 items-center justify-center pt-3">
+      <div className="onboard-tour-chrome flex h-9 shrink-0 items-center justify-center pt-3">
         <ActProgress scene={scene} />
       </div>
-      <div className="flex w-full flex-1 flex-col items-center justify-center gap-6">
+      <div className="onboard-tour-slot flex w-full flex-1 flex-col items-center justify-center gap-6">
       {scene === 'hero' && (
         <HeroWelcome
           onBegin={() => {
@@ -1096,7 +1099,7 @@ export function OnboardingExperience({
       )}
 
       {scene === 'problem' && (
-        <div key="problem" className="flex flex-col items-center gap-8">
+        <div key="problem" className="onboard-post-lady flex flex-col items-center gap-8">
           <div className="scene-enter flex max-w-[420px] flex-col gap-3 text-left">
             {PROBLEM_STORY.map((line, i) => (
               <p
@@ -1488,6 +1491,7 @@ export function OnboardingV2({
       patch={patch}
       onOpenAiSettings={onOpenAiSettings}
       onDone={async ({ mode, recordingConsent }) => {
+        haltAllOnboardingAudio()
         await patch({ mode, recordingConsent, onboardingDone: true, onboardingDoneAt: Date.now() })
         onDone()
       }}
