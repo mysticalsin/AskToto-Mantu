@@ -5,6 +5,7 @@ export const PATHNAME_STRIP_JS = "location.pathname.replace(/^\\//, '')"
 export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime / Events
  * Content-hashed chrome. Authenticated HTML script-src this file.
  * 0 LLM tokens. Live heartbeats only. Fail loud: this is not a METIS_OPERATOR stub.
+ * Shoey land fill #E5E7EB. Events columns: Created at, Name, Profile, Country, OS, Browser.
  */
 (function metisOperatorSpa() {
   'use strict'
@@ -55,8 +56,29 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
     })
     var t = document.getElementById('page-title')
     if (t) t.textContent = titles[id]
+    if (id === 'realtime') paintShoeyMap()
   }
   window.route = route
+
+  function paintShoeyMap() {
+    var root = document.getElementById('map-root')
+    if (!root) return
+    var dark = document.documentElement.getAttribute('data-theme') === 'dark'
+    var land = dark ? '#3f3f46' : '#E5E7EB'
+    var ocean = dark ? '#0a0a0b' : '#FFFFFF'
+    var stroke = dark ? '#111827' : '#9CA3AF'
+    root.querySelectorAll('.world-ocean').forEach(function (r) {
+      r.setAttribute('fill', ocean)
+    })
+    root.querySelectorAll('path[data-iso]').forEach(function (p) {
+      p.setAttribute('fill', land)
+      p.setAttribute('stroke', stroke)
+      p.setAttribute('stroke-width', '0.8')
+      p.setAttribute('class', ((p.getAttribute('class') || '') + ' world-land').trim())
+    })
+    var svg = root.querySelector('svg.shoey-world')
+    if (svg) svg.setAttribute('data-land', '#E5E7EB')
+  }
 
   window.addEventListener('hashchange', route)
   if (!location.hash) {
@@ -104,15 +126,45 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
     else document.documentElement.removeAttribute('data-theme')
   }
   try { applyTheme(localStorage.getItem('metis-operator-theme')) } catch (e) {}
+  paintShoeyMap()
   if (themeBtn) {
     themeBtn.addEventListener('click', function () {
       var cur = document.documentElement.getAttribute('data-theme')
       var next = cur === 'dark' ? 'light' : cur === 'light' ? '' : 'dark'
       applyTheme(next)
+      paintShoeyMap()
       try {
         if (next) localStorage.setItem('metis-operator-theme', next)
         else localStorage.removeItem('metis-operator-theme')
       } catch (e) {}
+    })
+  }
+
+  document.querySelectorAll('[data-seat-row]').forEach(function (row) {
+    row.addEventListener('click', function () {
+      var overlay = document.getElementById('seat-overlay')
+      if (!overlay) return
+      overlay.hidden = false
+      var title = overlay.querySelector('[data-seat-title]')
+      var body = overlay.querySelector('[data-seat-body]')
+      if (title) title.textContent = row.getAttribute('data-seat-name') || 'Seat'
+      if (body) {
+        var raw = row.getAttribute('data-seat-detail') || ''
+        body.textContent = ''
+        raw.split(' · ').forEach(function (line) {
+          var p = document.createElement('div')
+          p.className = 'muted'
+          p.textContent = line
+          body.appendChild(p)
+        })
+      }
+    })
+  })
+  var seatClose = document.getElementById('seat-overlay-close')
+  if (seatClose) {
+    seatClose.addEventListener('click', function () {
+      var overlay = document.getElementById('seat-overlay')
+      if (overlay) overlay.hidden = true
     })
   }
 

@@ -171,7 +171,10 @@ export function choropleth(
 }
 
 const SHOEY_BLUE = '#2563EB'
-const SHOEY_LAND = '#E5E7EB'
+/** OpenPanel Shoey realtime land. Must stay this literal so curl /assets proof can see it. */
+export const SHOEY_LAND = '#E5E7EB'
+const SHOEY_OCEAN = '#FFFFFF'
+const SHOEY_LAND_STROKE = '#9CA3AF'
 const SHOEY_DOT = '#111827'
 const SHOEY_PILL = '#10B981'
 
@@ -255,14 +258,16 @@ export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world
   const empty = countries.length === 0 && dots.length === 0
   let land = ''
   for (const [iso, d] of Object.entries(WORLD_PATHS)) {
-    land += `<path data-iso="${iso}" d="${stripMapBands(d)}" fill="${SHOEY_LAND}" stroke="#F3F4F6" stroke-width="0.45" />`
+    const painted = stripMapBands(d)
+    if (!painted) continue
+    land += `<path class="world-land" data-iso="${iso}" d="${painted}" fill="${SHOEY_LAND}" stroke="${SHOEY_LAND_STROKE}" stroke-width="0.8" />`
   }
   const marks = empty
     ? ''
     : dots
         .map((dot) => {
           const p = project(dot.lat, dot.lon)
-          return `<circle class="seat-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="3.8" fill="${SHOEY_DOT}" />`
+          return `<circle class="seat-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4.2" fill="${SHOEY_DOT}" stroke="#fff" stroke-width="1.2" />`
         })
         .join('')
   const pills = empty
@@ -285,7 +290,7 @@ export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world
     ? `<div class="empty map-empty">No heartbeats yet. The map stays empty until a seat checks in. Empty is an empty world, not sample dots.</div>`
     : ''
   return `${caption}<svg class="${cls}" viewBox="0 0 1000 500" role="img" aria-label="Unique seats by country">
-    <rect width="1000" height="500" fill="#F5F5F5"/>
+    <rect class="world-ocean" width="1000" height="500" fill="${SHOEY_OCEAN}"/>
     ${land}${marks}${pills}
   </svg>`
 }
