@@ -234,6 +234,22 @@ const REGIONS: Region[] = [
   { id: 'oc', x: 870, y: 380, isos: ['AU', 'NZ', 'PG', 'FJ'] }
 ]
 
+/** Bklit stat-card-choropleth-01 chrome. Intensity by seat count. No sample dots. */
+export function choroplethMini(countries: MapCountry[], cls = 'stat-choro'): string {
+  const by = new Map(countries.map((c) => [c.iso, c.devices]))
+  const max = Math.max(1, ...countries.map((c) => c.devices))
+  let land = ''
+  for (const [iso, d] of Object.entries(WORLD_PATHS)) {
+    const n = by.get(iso) ?? 0
+    const fill = n ? `rgba(37,99,235,${(0.2 + (n / max) * 0.7).toFixed(2)})` : '#F3F4F6'
+    land += `<path data-iso="${iso}" d="${stripMapBands(d)}" fill="${fill}" stroke="#F5F5F5" stroke-width="0.35" />`
+  }
+  return `<svg class="${cls}" viewBox="0 0 1000 500" role="img" aria-label="Countries">
+    <rect width="1000" height="500" fill="#F8F8F8"/>
+    ${land}
+  </svg>`
+}
+
 export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world shoey-world'): string {
   const by = new Map(countries.map((c) => [c.iso, c.devices]))
   const empty = countries.length === 0 && dots.length === 0

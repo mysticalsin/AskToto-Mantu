@@ -10,6 +10,7 @@ import {
   stackedTokens
 } from './charts'
 import { statusBadge } from './components/ui/status-badge'
+import { renderOverviewMini10 } from './overview-cards'
 import { SPA_CSS_PATH, SPA_JS_PATH } from './spa/manifest'
 import { CRM_FILTER_ORDER } from './crm'
 import type { CloudflareOverview } from './cloudflare'
@@ -329,61 +330,10 @@ export function renderConsole(data: DashboardPayload): string {
       </div>`
     })
     .join('')
-  const askRows = data.asks
-    .map(
-      (a) => `<tr>
-        <td>${esc(a.mode)}</td>
-        <td>${esc(a.preview)}</td>
-        <td><span class="pill ${esc(a.cache_status)}">${esc(a.cache_status)}</span></td>
-        <td class="muted">${esc(a.provider)}</td>
-        <td><button data-reveal="${esc(a.id)}">Reveal</button></td>
-      </tr>`
-    )
-    .join('')
-  const costRows = data.cost.table
-    .map(
-      (r) => `<tr>
-        <td>${esc(r.provider)}</td>
-        <td>${esc(r.mode)}</td>
-        <td>${r.asks}</td>
-        <td>${r.read == null ? 'not reported' : r.read}</td>
-        <td>${r.write == null ? 'not reported' : r.write}</td>
-        <td>${r.uncached == null ? 'not reported' : r.uncached}</td>
-        <td>${r.estimate ?? 'not reported'}</td>
-      </tr>`
-    )
-    .join('')
-  const timeline = data.change.timeline
-    .map(
-      (t) => `<tr>
-        <td class="muted">${esc(when(t.ts))}</td>
-        <td>${esc(t.action)}</td>
-        <td class="muted">${esc(t.actor)}</td>
-        <td>${esc(t.detail)}</td>
-      </tr>`
-    )
-    .join('')
-  const props = data.proposals
-    .map(
-      (p) => `<div class="card" data-proposal="${esc(p.id)}">
-        <div class="row"><strong>${esc(p.skill_id)}</strong> <span class="pill">${esc(p.status)}</span> <span class="muted">from ${esc(p.from_version)}</span></div>
-        <div class="muted">${esc(p.rationale)}</div>
-        <div class="muted">${esc(p.created_by)} · ${esc(when(p.created_at))}</div>
-        <textarea data-diff="${esc(p.id)}">${esc(p.diff)}</textarea>
-        <div class="row">
-          ${p.status === 'pending' ? `<button class="primary" data-approve="${esc(p.id)}">Approve</button><button class="danger" data-reject="${esc(p.id)}">Reject</button>` : ''}
-          ${p.status === 'approved' ? `<button class="primary" data-push="${esc(p.id)}">Push</button>` : ''}
-        </div>
-      </div>`
-    )
-    .join('')
   const funnelTabs = CRM_FILTER_ORDER.map(
     (s) =>
       `<button class="tab" data-crm-filter="${s}" type="button">${statusBadge(s)} ${data.crm.counts[s]}</button>`
   ).join('')
-  const indexHint =
-    k.lastIndexAt != null ? `last index ${when(k.lastIndexAt)}` : 'last index not reported'
-  const liveSeats = data.profiles.filter((p) => p.live)
   const vaultRows = data.keys.vault
     .map(
       (v) => `<tr data-key="${esc(v.id)}">
@@ -402,19 +352,14 @@ export function renderConsole(data: DashboardPayload): string {
   void FORBIDDEN_NAV
   void NAV_IDS
   void EXTRA_PAGES
-  void indexHint
+  void renderLicenses
+  void shoeyKpi
   void sparklineArea
   void sparklineLine
 
   const live30 = ops.live30
   const live30Series = ops.liveSeries
-  const costVal = k.cost7d ?? 'not reported'
-  const areaVals = data.scale.days7.map((p) => p.heartbeats)
-  const areaLabs = data.scale.days7.map((p, i) =>
-    i === 0 || i === data.scale.days7.length - 1 || i % 2 === 0 ? dayLabel(p.t) : ''
-  )
   const world = shoeyWorld(data.map.countries, data.map.dots)
-  const overviewWorld = shoeyWorld(data.map.countries, data.map.dots, 'world shoey-world ov')
   const geoRows = data.profiles
     .filter((p) => p.country || p.city)
     .map((p) => ({
@@ -472,7 +417,7 @@ export function renderConsole(data: DashboardPayload): string {
     <div class="rail-foot">
       <div class="rail-utils">
         <a href="#notifications">Give feedback</a>
-        <a href="#references">Docs</a>
+        <a href="#settings">Docs</a>
         <form method="post" action="/logout"><button type="submit">Back to workspace</button></form>
       </div>
       <div class="who">${esc(data.email)}</div>
@@ -495,164 +440,7 @@ export function renderConsole(data: DashboardPayload): string {
     </header>
 
     <section class="page wrap" data-page="overview">
-      <div class="kpis">
-        ${shoeyKpi('Unique sessions', formatCompact(ops.uniqueSessions), ops.uniqueSeries)}
-        ${shoeyKpi('Sessions / day', formatCompact(ops.sessionsDay), ops.sessionsDaySeries)}
-        ${shoeyKpi('API calls', formatCompact(ops.apiCalls), ops.apiSeries)}
-        ${shoeyKpi('Duration', formatDuration(ops.durationMs), [])}
-        ${shoeyKpi('CRM fail rate', formatPct(ops.crmFailRate), [])}
-        ${shoeyKpi('Time saved', reported(ops.timeSaved), [])}
-        ${shoeyKpi('Tokens', reported(ops.tokens), ops.tokenSeries)}
-        ${shoeyKpi('Live · 30 min', formatCompact(live30), live30Series)}
-      </div>
-      <div class="kpis-extra">
-        ${shoeyKpi('Live now', formatCompact(ops.liveNow), ops.liveSeries)}
-        ${shoeyKpi('Meetings', formatCompact(ops.meetings), [])}
-        ${shoeyKpi('Listen minutes', reported(ops.listenMinutes), [])}
-        ${shoeyKpi('Recap count', formatCompact(ops.recapCount), ops.recapSeries)}
-        ${shoeyKpi('CLI asks', formatCompact(ops.cliAsks), [])}
-        ${shoeyKpi('Operator-key asks', formatCompact(ops.operatorAsks), [])}
-      </div>
-
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Unique seats</p>
-        ${blueArea(areaVals, areaLabs)}
-      </article>
-      <article class="card" style="padding:0;overflow:hidden">
-        <p class="eyebrow" style="padding:10px 12px 0">Country map</p>
-        <div id="overview-map">${overviewWorld}</div>
-      </article>
-
-      <div class="grid-2">
-        ${volumeTable(
-          'refs',
-          [
-            { id: 'crm', label: 'CRM' },
-            { id: 'listen', label: 'Listen' },
-            { id: 'recap', label: 'Recap' },
-            { id: 'connectors', label: 'Connectors' },
-            { id: 'source', label: 'Source' },
-            { id: 'medium', label: 'Medium' },
-            { id: 'campaign', label: 'Campaign' },
-            { id: 'term', label: 'Term' },
-            { id: 'content', label: 'Content' }
-          ],
-          {
-            crm: crmMix,
-            listen: listenRows,
-            recap: listenRows.filter((r) => /recap/i.test(r.name)),
-            connectors: crmMix,
-            source: [],
-            medium: [],
-            campaign: [],
-            term: [],
-            content: []
-          },
-          'Search refs'
-        )}
-        ${volumeTable(
-          'paths',
-          [
-            { id: 'modes', label: 'Modes' },
-            { id: 'skills', label: 'Skills' },
-            { id: 'usecases', label: 'Use cases' }
-          ],
-          {
-            modes: modeRows,
-            skills: skillRows,
-            usecases: mixRows(data.events.map((e) => ({ label: e.name, value: 1 })))
-          },
-          'Search pages'
-        )}
-      </div>
-
-      <div class="grid-2">
-        <article class="card">
-          <p class="eyebrow">Scale</p>
-          <div class="tabs">
-            <button class="tab on" data-scale="24h">24h</button>
-            <button class="tab" data-scale="7d">7d</button>
-          </div>
-          <div id="scale-24">${dualLine(data.scale.hours24)}</div>
-          <div id="scale-7" hidden>${dualLine(data.scale.days7)}</div>
-          <div class="legend"><span><i></i>heartbeats</span><span><i class="ask"></i>Asks</span></div>
-        </article>
-        <article class="card">
-          <p class="eyebrow">Mix</p>
-          <div class="grid-2" style="gap:8px">
-            <div>
-              <div class="sub muted">Version mix</div>
-              ${bars(data.scale.versions, 240, 140)}
-            </div>
-            <div>
-              <div class="sub muted">Mac vs Windows</div>
-              ${bars(data.scale.os, 240, 140)}
-            </div>
-          </div>
-        </article>
-      </div>
-
-      <div class="grid-2">
-        <article class="card">
-          <p class="eyebrow">Cost tokens</p>
-          ${stackedTokens(data.cost.tokens)}
-          <div class="legend"><span><i></i>cache read</span><span class="muted">write / uncached underneath</span></div>
-        </article>
-        <article class="card">
-          <p class="eyebrow">Cost by provider</p>
-          ${
-            data.cost.table.length
-              ? `<table><thead><tr><th>Provider</th><th>Mode</th><th>Asks</th><th>Read</th><th>Write</th><th>Uncached</th><th>Estimate</th></tr></thead><tbody>${costRows}</tbody></table>
-                 <div class="sub muted" style="padding-bottom:8px">estimate, list price. Missing usage is not reported, never $0.</div>`
-              : '<div class="empty">No Asks with usage on the fleet yet.</div>'
-          }
-        </article>
-      </div>
-
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Change</p>
-        <div class="heat-wrap">
-          ${heatmapGrid(data.change.heatmap)}
-          <div class="heat-meta">Skill draft / approve / push and rollouts over 17 weeks. Empty cells are quiet days, not sample activity.</div>
-        </div>
-        ${
-          timeline
-            ? `<table><thead><tr><th>When</th><th>Action</th><th>Who</th><th>Version</th></tr></thead><tbody>${timeline}</tbody></table>`
-            : '<div class="empty">No skill changes yet.</div>'
-        }
-      </article>
-
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Asks</p>
-        ${
-          askRows
-            ? `<table><thead><tr><th>Mode</th><th>Preview</th><th>Cache</th><th>Provider</th><th></th></tr></thead><tbody>${askRows}</tbody></table>`
-            : '<div class="empty">No Asks on the fleet yet.</div>'
-        }
-        <div id="reveal" class="muted" style="padding:8px 0"></div>
-      </article>
-
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">CRM landing</p>
-        <div class="crm-kpis">
-          ${kpiCard({ title: 'Landed today', value: String(landing.landedToday), sub: 'success with a CRM id when the connector returned one', spark: '' })}
-          ${kpiCard({ title: 'Fail rate', value: failRate, sub: 'failed + expired over attempted', spark: '' })}
-          ${kpiCard({ title: 'Retries', value: String(landing.retries), sub: 'Tony Retry or attempt over 1', spark: '' })}
-          ${kpiCard({ title: 'Dead letters', value: String(landing.deadLetters), sub: 'max attempts, Expired', spark: '' })}
-        </div>
-        ${funnelRows ? `<p class="eyebrow">Funnel by connector</p><div class="crm-funnel">${funnelRows}</div>` : ''}
-        <div class="funnel tabs" id="crm-filters">
-          <button class="tab on" data-crm-filter="all">All ${data.crm.rows.length}</button>
-          ${funnelTabs}
-        </div>
-        ${
-          crmRows
-            ? `<table id="crm-table"><thead><tr><th>Status</th><th>Title</th><th>Connector</th><th>Remote</th><th>Try</th><th>Meeting</th><th>When</th><th></th></tr></thead><tbody>${crmRows}</tbody></table>
-               <div class="sub muted" style="padding-bottom:8px">Seven status chips filter real ingest. Retry on Failed or Expired tells that seat to processDue that id. Never auto-send from Intelligence, import, or index.</div>`
-            : '<div class="empty">No CRM sends on the fleet yet.</div>'
-        }
-      </article>
-
+      ${renderOverviewMini10(data)}
       <article class="card" style="padding-bottom:10px" data-cf-overview>
         <p class="eyebrow">Cloudflare</p>
         ${renderCloudflare(data.cloudflare)}
@@ -719,25 +507,6 @@ export function renderConsole(data: DashboardPayload): string {
       </div>
     </section>
 
-    ${emptyPage('dashboards', 'Dashboards', 'No saved Métis views yet. A dashboard will list seats, Asks, and Listen once a report exists.')}
-    ${emptyPage('insights', 'Insights', 'No Ask cost, cache, or security issues reported yet.')}
-    ${emptyPage('pages', 'Pages', 'No mode, skill, or use-case paths yet. Never sample commerce URLs.')}
-    ${emptyPage('seo', 'SEO', 'No public Métis or wiki surfaces reported yet.')}
-    <section class="page wrap" data-page="sessions" hidden>
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Sessions</p>
-        ${
-          liveSeats.length
-            ? renderProfiles(liveSeats)
-            : '<div class="empty">No seat sessions in this window. Heartbeats will fill this.</div>'
-        }
-      </article>
-    </section>
-    ${emptyPage('groups', 'Groups', 'No license, workspace, or OS groups reported yet.')}
-    ${emptyPage('cohorts', 'Cohorts', 'No DAU / WAU seat cohorts yet. Heartbeats will fill this.')}
-    ${emptyPage('references', 'References', 'No signed skill refs yet.')}
-    ${emptyPage('notifications', 'Notifications', landing.deadLetters || k.pendingDiffs ? `${k.pendingDiffs} pending skill diffs. ${landing.deadLetters} dead CRM letters.` : 'No failed CRM sends or pending skill diffs to surface.')}
-
     <section class="page wrap" data-page="events" hidden>
       <div class="ev-grid">
         ${volumeTable(
@@ -756,86 +525,42 @@ export function renderConsole(data: DashboardPayload): string {
       </div>
     </section>
 
-    <section class="page wrap" data-page="profiles" hidden>
+    <section class="page wrap" data-page="sessions" hidden>
       <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">People</p>
-        <div class="sub muted" style="padding-bottom:8px">Computer and SSO email from the seat. Missing fields are ${MISSING}, never invented.</div>
-        ${renderProfiles(data.profiles)}
+        <p class="eyebrow">Sessions</p>
+        <div class="sub muted" style="padding-bottom:8px">Seats that checked in. Computer and SSO email from the seat. Missing fields are ${MISSING}, never invented.</div>
+        ${
+          data.profiles.length
+            ? renderProfiles(data.profiles)
+            : '<div class="empty">No seat sessions in this window. Heartbeats will fill this.</div>'
+        }
+      </article>
+    </section>
+
+    <section class="page wrap" data-page="notifications" hidden>
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">Notifications</p>
+        <div class="sub muted" style="padding-bottom:8px">Failed CRM sends and pending skill diffs. Honest empty. Never fake alerts.</div>
+        <div class="crm-kpis">
+          ${kpiCard({ title: 'Landed today', value: String(landing.landedToday), sub: 'success with a CRM id when the connector returned one', spark: '' })}
+          ${kpiCard({ title: 'Fail rate', value: failRate, sub: 'failed + expired over attempted', spark: '' })}
+          ${kpiCard({ title: 'Retries', value: String(landing.retries), sub: 'Tony Retry or attempt over 1', spark: '' })}
+          ${kpiCard({ title: 'Dead letters', value: String(landing.deadLetters), sub: 'max attempts, Expired', spark: '' })}
+        </div>
+        ${funnelRows ? `<p class="eyebrow">Funnel by connector</p><div class="crm-funnel">${funnelRows}</div>` : ''}
+        <div class="funnel tabs" id="crm-filters">
+          <button class="tab on" data-crm-filter="all">All ${data.crm.rows.length}</button>
+          ${funnelTabs}
+        </div>
+        ${
+          crmRows
+            ? `<table id="crm-table"><thead><tr><th>Status</th><th>Title</th><th>Connector</th><th>Remote</th><th>Try</th><th>Meeting</th><th>When</th><th></th></tr></thead><tbody>${crmRows}</tbody></table>`
+            : '<div class="empty">No failed CRM sends or pending skill diffs to surface.</div>'
+        }
       </article>
     </section>
 
     <section class="page wrap" data-page="map" hidden data-alias="realtime"></section>
-
-    <section class="page wrap" data-page="macos" hidden>
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">macOS</p>
-        ${renderProfiles(data.profiles, 'darwin')}
-      </article>
-    </section>
-
-    <section class="page wrap" data-page="windows" hidden>
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Windows</p>
-        ${renderProfiles(data.profiles, 'win')}
-      </article>
-    </section>
-
-    <section class="page wrap" data-page="licenses" hidden>
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Licenses</p>
-        ${renderLicenses(data.profiles)}
-      </article>
-    </section>
-
-    <section class="page wrap" data-page="skills" hidden>
-      <article class="card" style="padding-bottom:10px">
-        <div class="row" style="margin-bottom:8px">
-          <p class="eyebrow" style="margin:0">Skills</p>
-          <button data-draft="interview">Draft interview</button>
-          <button data-draft="recruiting">Draft recruiting</button>
-          <button data-draft="support">Draft support</button>
-        </div>
-        ${props || '<div class="empty">No skill upgrades waiting. Use Ask in a mode, then Draft.</div>'}
-      </article>
-    </section>
-
-    <section class="page wrap" data-page="settings" hidden>
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Settings</p>
-        <div class="sub muted" style="padding-bottom:8px">Keys fund seats. Add an API once. last4 only. Heartbeats list fundedProviders. Seats never hold the raw key.</div>
-        <p class="eyebrow" style="margin-top:14px">Add an API</p>
-        <form class="key-form" id="key-add-settings" autocomplete="off">
-          <div class="row">
-            <select name="provider" required>
-              <option value="anthropic">Anthropic</option>
-              <option value="openai">OpenAI</option>
-              <option value="gemini">Gemini</option>
-              <option value="nvidia">NVIDIA NIM</option>
-              <option value="deepseek">DeepSeek</option>
-              <option value="minimax">MiniMax</option>
-            </select>
-            <input name="label" type="text" placeholder="Label" maxlength="80">
-            <input name="secret" type="password" placeholder="API key" required autocomplete="off">
-            <button class="primary" type="submit">Add</button>
-          </div>
-        </form>
-        <p><a href="#keys">Open Keys</a> for rotate / revoke and Cloudflare.</p>
-      </article>
-    </section>
-
-    <section class="page wrap" data-page="devices" hidden>
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Devices</p>
-        ${renderProfiles(data.profiles)}
-      </article>
-    </section>
-
-    <section class="page wrap" data-page="cloudflare" hidden>
-      <article class="card" style="padding-bottom:10px" data-cf-page>
-        <p class="eyebrow">Cloudflare</p>
-        ${renderCloudflare(data.cloudflare)}
-      </article>
-    </section>
 
     <section class="page wrap" data-page="keys" hidden>
       <article class="card" style="padding-bottom:10px">
@@ -887,6 +612,34 @@ export function renderConsole(data: DashboardPayload): string {
             : '<div class="empty">No provider keys on Operator yet. Add an API or Cloudflare here so seats can be funded.</div>'
         }
         <div id="key-msg" class="muted" style="padding:8px 0"></div>
+      </article>
+    </section>
+
+    <section class="page wrap" data-page="settings" hidden>
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">Settings</p>
+        <div class="sub muted" style="padding-bottom:8px">Keys fund seats. Add an API once. last4 only. Heartbeats list fundedProviders. Seats never hold the raw key.</div>
+        <p class="eyebrow" style="margin-top:14px">Add an API</p>
+        <form class="key-form" id="key-add-settings" autocomplete="off">
+          <div class="row">
+            <select name="provider" required>
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="gemini">Gemini</option>
+              <option value="nvidia">NVIDIA NIM</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="minimax">MiniMax</option>
+            </select>
+            <input name="label" type="text" placeholder="Label" maxlength="80">
+            <input name="secret" type="password" placeholder="API key" required autocomplete="off">
+            <button class="primary" type="submit">Add</button>
+          </div>
+        </form>
+        <p><a href="#keys">Open Keys</a> for rotate / revoke and Cloudflare.</p>
+      </article>
+      <article class="card" style="padding-bottom:10px" data-cf-page>
+        <p class="eyebrow">Cloudflare</p>
+        ${renderCloudflare(data.cloudflare)}
       </article>
     </section>
   </div>

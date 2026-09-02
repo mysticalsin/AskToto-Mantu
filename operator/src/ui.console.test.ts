@@ -6,7 +6,7 @@ import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operato
 import { memoryStore } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from './test-fixtures'
 import { findBandSubpaths } from './map-bands'
-import { NAV_IDS } from './nav'
+import { FORBIDDEN_NAV, NAV_IDS } from './nav'
 import { tokenPatternForTests } from './redact'
 import { SPA_CSS_PATH, SPA_JS_PATH } from './spa/manifest'
 
@@ -59,7 +59,7 @@ async function page(store = memoryStore()): Promise<string> {
 
 function eventsHtml(html: string): string {
   const start = html.indexOf('data-page="events"')
-  const end = html.indexOf('data-page="profiles"')
+  const end = html.indexOf('data-page="sessions"')
   return start >= 0 && end > start ? html.slice(start, end) : html
 }
 
@@ -72,7 +72,12 @@ describe('product sidebar', () => {
     expect(html).not.toMatch(/>CONSOLE</)
     expect(html).not.toContain('orphan')
     for (const id of NAV_IDS) {
+      expect(html).toContain(`data-nav="${id}"`)
       expect(html).toContain(`data-page="${id}"`)
+    }
+    for (const id of FORBIDDEN_NAV) {
+      expect(html, id).not.toContain(`data-nav="${id}"`)
+      expect(html, id).not.toContain(`data-page="${id}"`)
     }
   })
 
@@ -88,22 +93,39 @@ describe('product sidebar', () => {
     expect(html).toContain('Listen minutes')
     expect(html).toContain('CLI asks')
     expect(html).toContain('Operator-key asks')
-    expect(html).toContain('Country map')
+    expect(html).toContain('CLI vs Operator-key asks')
+    expect(html).toContain('Countries')
     expect(html).toContain('Mac vs Windows')
     expect(html).toContain('Version mix')
+    expect(html).toContain('data-overview-cards="10"')
+    expect(html.match(/data-stat-card="/g)?.length).toBe(10)
+    expect(html).toContain('data-bklit="area"')
+    expect(html).toContain('data-bklit="line"')
+    expect(html).toContain('data-bklit="gauge"')
+    expect(html).toContain('data-bklit="ring"')
+    expect(html).toContain('data-bklit="choropleth"')
+    const realtime = html.slice(html.indexOf('data-page="realtime"'), html.indexOf('data-page="events"'))
+    expect(realtime).not.toContain('data-stat-card=')
+    expect(realtime).not.toContain('data-bklit=')
     expect(html).toContain('not reported')
     expect(html).not.toContain('Asks per seat')
     expect(html).toContain('Live · 30 min')
     expect(html).toContain('Unique seats last 30 min')
-    expect(html).toContain('data-nav="dashboards"')
-    expect(html).toContain('data-nav="insights"')
-    expect(html).toContain('data-nav="pages"')
-    expect(html).toContain('data-nav="seo"')
-    expect(html).toContain('data-nav="groups"')
-    expect(html).toContain('data-nav="cohorts"')
-    expect(html).toContain('data-nav="settings"')
-    expect(html).toContain('data-nav="references"')
+    expect(html).toContain('data-nav="overview"')
+    expect(html).toContain('data-nav="realtime"')
+    expect(html).toContain('data-nav="events"')
+    expect(html).toContain('data-nav="sessions"')
     expect(html).toContain('data-nav="notifications"')
+    expect(html).toContain('data-nav="keys"')
+    expect(html).toContain('data-nav="settings"')
+    expect(html).not.toContain('data-nav="dashboards"')
+    expect(html).not.toContain('data-nav="insights"')
+    expect(html).not.toContain('data-nav="pages"')
+    expect(html).not.toContain('data-nav="seo"')
+    expect(html).not.toContain('data-nav="groups"')
+    expect(html).not.toContain('data-nav="cohorts"')
+    expect(html).not.toContain('data-nav="profiles"')
+    expect(html).not.toContain('data-nav="references"')
     expect(html).not.toContain('/products/sneakers')
     expect(html).not.toMatch(/heroku\.com|bitbucket\.com/)
     expect(html).not.toContain('data-nav="map"')

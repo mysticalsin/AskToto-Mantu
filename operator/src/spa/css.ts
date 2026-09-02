@@ -122,6 +122,33 @@ a { color: var(--accent); text-decoration: none; }
 .wrap { padding: 14px 16px 36px; display: grid; gap: 12px; }
 .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .kpis-extra { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
+.ov-10 { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
+.stat-card {
+  background: #fff; border: 1px solid var(--hair); border-radius: 10px;
+  padding: 12px 12px 0; overflow: hidden; min-width: 0;
+}
+.stat-card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.stat-card h3 { margin: 0; font-size: 13px; font-weight: 600; letter-spacing: -0.02em; }
+.trend-badge {
+  font: 600 11px var(--sans); padding: 2px 7px; border-radius: 999px;
+  border: 1px solid rgba(22,163,74,0.2); background: rgba(22,163,74,0.08); color: #16A34A;
+}
+.trend-badge.down { border-color: rgba(220,38,38,0.2); background: rgba(220,38,38,0.08); color: #DC2626; }
+.trend-badge.flat { border-color: var(--hair); background: #FAFAFA; color: var(--ink3); }
+.stat-flow { display: flex; align-items: baseline; gap: 8px; margin: 10px 0 4px; }
+.stat-flow .n { font-size: 28px; font-weight: 650; letter-spacing: -0.04em; line-height: 1; }
+.stat-flow .lbl { font-size: 11px; color: var(--ink2); }
+.stat-card .spark, .stat-card .stat-spark { display: block; width: calc(100% + 24px); margin: 6px -12px 0; height: 72px; }
+.stat-gauge, .stat-ring { height: 64px; margin-left: auto; margin-right: auto; width: 88px; }
+.stat-choro-wrap { margin: 6px -12px 0; height: 78px; overflow: hidden; }
+.stat-choro { display: block; width: 100%; height: 78px; }
+.ov-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.ov-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  border: 1px solid var(--hair); border-radius: 999px; padding: 4px 10px;
+  font-size: 11px; color: var(--ink2); background: #fff;
+}
+.ov-chip b { color: var(--ink); font-weight: 600; }
 .ev-grid { display: grid; grid-template-columns: minmax(200px, 240px) 1fr; gap: 12px; align-items: start; }
 .ev-names { display: flex; flex-direction: column; gap: 2px; max-height: 560px; overflow: auto; }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -258,7 +285,7 @@ svg path { vector-effect: non-scaling-stroke; }
 @media (max-width: 980px) {
   .shell { grid-template-columns: 1fr; }
   .rail { position: relative; min-height: auto; }
-  .kpis, .kpis-extra, .grid-2, .grid-3, .crm-kpis, .event, .rt-grid, .ev-grid { grid-template-columns: 1fr; }
+  .kpis, .kpis-extra, .ov-10, .grid-2, .grid-3, .crm-kpis, .event, .rt-grid, .ev-grid { grid-template-columns: 1fr; }
 }
 ${STATUS_BADGE_CSS}
 `
