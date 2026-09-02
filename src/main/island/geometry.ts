@@ -287,6 +287,44 @@ export function exclusiveOnboardingBounds(bounds: Rect, workArea: Rect): Rect {
   }
 }
 
+/**
+ * Totos-Mac 1.8.3 tip 044c0f1: `transparent: true` + `setSimpleFullScreen(true)` composites as
+ * a 3600×2338 RGBA(0,0,0,0) void. Exclusive onboarding is opaque Mantu purple. After
+ * `onboardingDone` the overlay is transparent again. `transparent` is constructor-only
+ * (Electron 39) — enter/exit recreate the window when chrome no longer matches.
+ */
+export const EXCLUSIVE_ONBOARDING_BACKGROUND = '#3A0B6B'
+export const OVERLAY_TRANSPARENT_BACKGROUND = '#00000000'
+
+export interface OverlayWindowChrome {
+  transparent: boolean
+  backgroundColor: string
+  fullscreenable: boolean
+  roundedCorners: boolean
+}
+
+export function overlayWindowChrome(onboardingLive: boolean): OverlayWindowChrome {
+  if (onboardingLive) {
+    return {
+      transparent: false,
+      backgroundColor: EXCLUSIVE_ONBOARDING_BACKGROUND,
+      fullscreenable: true,
+      roundedCorners: false
+    }
+  }
+  return {
+    transparent: true,
+    backgroundColor: OVERLAY_TRANSPARENT_BACKGROUND,
+    fullscreenable: false,
+    roundedCorners: true
+  }
+}
+
+/** Mac simple-fullscreen on a transparent BrowserWindow is a dead black void. Never. */
+export function exclusiveMayUseSimpleFullScreen(transparent: boolean): boolean {
+  return transparent === false
+}
+
 /** True when the window is at least as large as the display work area (wiped-profile acceptance). */
 export function onboardingFitsWorkArea(win: Rect, workArea: Rect): boolean {
   return win.width >= workArea.width && win.height >= workArea.height

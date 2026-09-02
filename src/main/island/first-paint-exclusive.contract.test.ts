@@ -2,9 +2,13 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
+  exclusiveMayUseSimpleFullScreen,
   exclusiveOnboardingBounds,
+  EXCLUSIVE_ONBOARDING_BACKGROUND,
   firstPaintOverlayBounds,
+  overlayWindowChrome,
   OVERLAY_HIDE_PARK,
+  OVERLAY_TRANSPARENT_BACKGROUND,
   type DisplayMetrics,
   type Rect
 } from './geometry'
@@ -65,5 +69,57 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(create.indexOf('if (onboardingLive) applyExclusiveOnboardingStage')).toBeGreaterThan(
       create.indexOf('new BrowserWindow')
     )
+  })
+
+  it('exclusive onboarding window is opaque Mantu purple, not transparent', () => {
+    const live = overlayWindowChrome(true)
+    expect(live.transparent).toBe(false)
+    expect(live.backgroundColor).toBe(EXCLUSIVE_ONBOARDING_BACKGROUND)
+    expect(live.backgroundColor).toBe('#3A0B6B')
+    expect(live.backgroundColor).not.toBe(OVERLAY_TRANSPARENT_BACKGROUND)
+    expect(live.backgroundColor).not.toBe('#00000000')
+    expect(live.fullscreenable).toBe(true)
+    expect(live.roundedCorners).toBe(false)
+    expect(exclusiveMayUseSimpleFullScreen(live.transparent)).toBe(true)
+  })
+
+  it('after onboardingDone the overlay window is transparent again', () => {
+    const parked = overlayWindowChrome(false)
+    expect(parked.transparent).toBe(true)
+    expect(parked.backgroundColor).toBe(OVERLAY_TRANSPARENT_BACKGROUND)
+    expect(parked.backgroundColor).toBe('#00000000')
+    expect(parked.fullscreenable).toBe(false)
+    expect(parked.roundedCorners).toBe(true)
+    expect(exclusiveMayUseSimpleFullScreen(parked.transparent)).toBe(false)
+  })
+
+  it('createWindow and exclusive apply never simple-fullscreen a transparent window', () => {
+    const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
+    const create = index.slice(index.indexOf('function createWindow'), index.indexOf('function resizeTo'))
+    expect(create).toMatch(/overlayWindowChrome\(onboardingLive\)/)
+    expect(create).toMatch(/transparent: chrome\.transparent/)
+    expect(create).toMatch(/backgroundColor: chrome\.backgroundColor/)
+    expect(create).not.toMatch(/transparent:\s*true/)
+    expect(create).not.toMatch(/backgroundColor: onboardingLive \? '#3A0B6B'/)
+
+    const apply = index.slice(
+      index.indexOf('function applyExclusiveOnboardingStage'),
+      index.indexOf('function exitExclusiveOnboardingStage')
+    )
+    expect(apply).toMatch(/if \(overlayWindowTransparent\) \{\s*recreateOverlayWindow\(\)/)
+    expect(apply).toMatch(/exclusiveMayUseSimpleFullScreen\(overlayWindowTransparent\)/)
+    expect(apply).toMatch(/setSimpleFullScreen\(true\)/)
+    expect(apply.indexOf('exclusiveMayUseSimpleFullScreen(overlayWindowTransparent)')).toBeLessThan(
+      apply.indexOf('setSimpleFullScreen(true)')
+    )
+    expect(apply).toMatch(/setBackgroundColor\(EXCLUSIVE_ONBOARDING_BACKGROUND\)/)
+
+    const exit = index.slice(index.indexOf('function exitExclusiveOnboardingStage'), index.indexOf('function createWindow'))
+    expect(exit).toMatch(/if \(!overlayWindowTransparent\) \{\s*recreateOverlayWindow\(\)/)
+
+    const settings = readFileSync(join(__dirname, '../../renderer/src/components/Settings.tsx'), 'utf8')
+    const replay = settings.slice(settings.indexOf('Replay onboarding from the start?'))
+    expect(replay.indexOf('haltAllOnboardingAudio()')).toBeGreaterThan(-1)
+    expect(replay.indexOf('haltAllOnboardingAudio()')).toBeLessThan(replay.indexOf('patch({ onboardingDone: false })'))
   })
 })
