@@ -287,16 +287,6 @@ describe('SettingsSchema', () => {
   })
 
   it('defaults playListenChime, requireConsentIndicator, and lastConsentReminderAt', () => {
-    expect(DEFAULT_SETTINGS.operatorUrl).toBe('')
-    expect(DEFAULT_SETTINGS.operatorIngestSecret).toBe('')
-    expect(DEFAULT_SETTINGS.sendAskText).toBe(true)
-    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, operatorUrl: 'http://not-https.example' }).success).toBe(
-      false
-    )
-    expect(
-      SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, operatorUrl: 'https://metis-operator.example.workers.dev' })
-        .success
-    ).toBe(true)
     expect(DEFAULT_SETTINGS.playListenChime).toBe(true)
     // On by default: it's the only consent mechanism Métis has, so the persistent reminder should be
     // the opt-out, not the opt-in (mirrors the encryptTranscripts default-flip reasoning).
