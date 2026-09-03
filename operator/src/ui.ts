@@ -99,7 +99,8 @@ function renderNav(): string {
           `<a class="nav-item" data-nav="${item.id}" href="#${item.id}">${esc(item.label)}</a>`
       )
       .join('')
-    return `<div class="nav-sec"><p>${esc(sec.label)}</p>${items}</div>`
+    const heading = sec.label ? `<p>${esc(sec.label)}</p>` : ''
+    return `<div class="nav-sec">${heading}${items}</div>`
   }).join('')
   return `<nav id="rail-nav">${sections}</nav>`
 }
