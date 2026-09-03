@@ -5,8 +5,6 @@ import { filterFundedProviders } from '@shared/ask-routing'
 import { inspectBundleResponse } from '@shared/bundle-response'
 import {
   operatorUrlConfigured,
-  resolveOperatorIngestSecret,
-  resolveOperatorUrl,
   sanitizeOperatorHostname,
   sanitizeOperatorSsoEmail,
   shouldSendAskText,
@@ -48,11 +46,11 @@ export function stopOperatorRuntime(): void {
 }
 
 function resolveUrl(settings: OperatorRuntimeSettings, env = process.env): string {
-  return resolveOperatorUrl(settings, env)
+  return (settings.operatorUrl || env.METIS_OPERATOR_URL || '').trim().replace(/\/$/, '')
 }
 
 function resolveSecret(settings: OperatorRuntimeSettings, env = process.env): string {
-  return resolveOperatorIngestSecret(settings, env)
+  return (settings.operatorIngestSecret || env.METIS_OPERATOR_INGEST_SECRET || '').trim()
 }
 
 function osLabel(): 'darwin' | 'win' | string {

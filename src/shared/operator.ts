@@ -17,39 +17,16 @@ export interface StreamCacheUsage {
   cacheTtl?: CacheTtl
 }
 
-/**
- * Fleet Operator Worker. Every Métis seat worldwide heartbeats here unless Settings or
- * METIS_OPERATOR_URL points at another https Operator. Not a per-license allowlist.
- */
-export const DEFAULT_OPERATOR_URL = 'https://metis-operator.tony-walteur.workers.dev'
-
-/** Settings → env → fleet default. Always an https Operator URL for shipped seats. */
-export function resolveOperatorUrl(
-  settings: { operatorUrl?: string } | null | undefined,
-  env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
-): string {
-  const explicit = (settings?.operatorUrl || env.METIS_OPERATOR_URL || '').trim().replace(/\/$/, '')
-  if (/^https:\/\//i.test(explicit)) return explicit
-  return DEFAULT_OPERATOR_URL
-}
-
-/** Settings → env. Never commit a real secret; enterprise managed-config or CI env supplies it. */
-export function resolveOperatorIngestSecret(
-  settings: { operatorIngestSecret?: string } | null | undefined,
-  env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
-): string {
-  return (settings?.operatorIngestSecret || env.METIS_OPERATOR_INGEST_SECRET || '').trim()
-}
-
-/** True when an https Operator URL resolves (fleet default counts). */
+/** True when Settings (or METIS_OPERATOR_URL) points at the Cloudflare Operator Worker. */
 export function operatorUrlConfigured(
   settings: { operatorUrl?: string } | null | undefined,
   env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
 ): boolean {
-  return /^https:\/\//i.test(resolveOperatorUrl(settings, env))
+  const url = (settings?.operatorUrl || env.METIS_OPERATOR_URL || '').trim()
+  return /^https:\/\//i.test(url)
 }
 
-/** Ask-text toggle. Default ON once a URL resolves; ignored when Operator URL cannot resolve. */
+/** Ask-text toggle. Default ON once a URL is set; ignored when Operator is off. */
 export function shouldSendAskText(
   settings: { operatorUrl?: string; sendAskText?: boolean } | null | undefined,
   env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}

@@ -1,5 +1,5 @@
 import { inspectBundleResponse } from '@shared/bundle-response'
-import { operatorUrlConfigured, resolveOperatorIngestSecret, resolveOperatorUrl } from '@shared/operator'
+import { operatorUrlConfigured } from '@shared/operator'
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
 import { getMachineId } from './license'
 import { verifyOperatorSkillPack } from './operator-skill-verify'
@@ -41,11 +41,11 @@ export function stopOperatorOverlayPoll(): void {
 }
 
 function resolveUrl(settings: OverlayRuntimeSettings, env = process.env): string {
-  return resolveOperatorUrl(settings, env)
+  return (settings.operatorUrl || env.METIS_OPERATOR_URL || '').trim().replace(/\/$/, '')
 }
 
 function resolveSecret(settings: OverlayRuntimeSettings, env = process.env): string {
-  return resolveOperatorIngestSecret(settings, env)
+  return (settings.operatorIngestSecret || env.METIS_OPERATOR_INGEST_SECRET || '').trim()
 }
 
 export async function pullOperatorSkillManifest(settings: OverlayRuntimeSettings): Promise<number> {
