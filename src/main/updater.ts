@@ -1,4 +1,4 @@
-import { app, net, Notification, type BrowserWindow } from 'electron'
+import { app, BrowserWindow, net, Notification } from 'electron'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 // Via logger.ts, never `electron-log` directly: logger.ts is where the app's logging policy lives,
@@ -180,6 +180,56 @@ export async function checkForUpdateNow(): Promise<UpdateCheckResult> {
  *  included — and turning an untouched Settings row into a scary failure the user never asked for is
  *  worse than staying quiet, so only an in-flight download may raise a user-facing error. */
 let downloadInFlight = false
+
+/**
+ * True once the user has clicked Restart & install / Restart now. Métis is a tray overlay: its
+ * `window-all-closed` handler deliberately keeps the process alive, and `before-quit` can
+ * `preventDefault` to flush a live meeting. Both of those make electron-updater's `quitAndInstall`
+ * look like a no-op (windows close / hide, app stays in the menu bar, update never applies). Callers
+ * that tear the tray down and that skip the meeting-flush delay must consult this flag.
+ */
+let installingUpdate = false
+
+/** Whether a Restart & install is in progress — index.ts before-quit must not delay/cancel it. */
+export function isInstallingUpdate(): boolean {
+  return installingUpdate
+}
+
+/**
+ * Apply a downloaded update and relaunch (Settings / UpdateReadyToast "Restart & install").
+ *
+ * Must run OUTSIDE the IPC invoke turn (setImmediate) so the reply can finish, and must clear the
+ * tray-stay-alive / window-close blockers first — otherwise quitAndInstall closes the overlay and
+ * the process keeps running with no install (MQA-272). `isForceRunAfter: true` relaunches after the
+ * Windows NSIS installer; macOS ignores that flag but still needs the windows/tray teardown.
+ */
+export function installDownloadedUpdate(opts?: { onBeforeQuitAndInstall?: () => void }): void {
+  installingUpdate = true
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const { autoUpdater } = require('electron-updater') as typeof import('electron-updater')
+  setImmediate(() => {
+    try {
+      opts?.onBeforeQuitAndInstall?.()
+      // Overlay identity: without this the process survives every closed window and ShipIt/NSIS never runs.
+      app.removeAllListeners('window-all-closed')
+      for (const w of BrowserWindow.getAllWindows()) {
+        if (w.isDestroyed()) continue
+        w.removeAllListeners('close')
+        w.destroy()
+      }
+      autoUpdater.quitAndInstall(false, true)
+    } catch (e) {
+      installingUpdate = false
+      log.warn('[updater] quitAndInstall failed', e)
+      // autoInstallOnAppQuit is already true — a plain quit still applies a downloaded update.
+      try {
+        app.quit()
+      } catch {
+        /* ignore */
+      }
+    }
+  })
+}
 
 /** Result of asking the app to download-and-install an update in place (Settings → Update now). */
 export interface UpdateDownloadStart {

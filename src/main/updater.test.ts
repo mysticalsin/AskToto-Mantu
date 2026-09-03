@@ -14,7 +14,7 @@ vi.mock('./win-security', () => ({ readTrustedAdminManaged: vi.fn((): string | n
 // packaged app — the only fs read in this module, stubbed to a configured feed so the wiring runs.
 vi.mock('node:fs', () => ({ readFileSync: vi.fn(() => 'provider: github\nowner: mysticalsin\n') }))
 
-import { app, net, Notification, type BrowserWindow } from 'electron'
+import { app, net, Notification, BrowserWindow, type BrowserWindow as BrowserWindowType } from 'electron'
 import { IPC } from '@shared/ipc'
 import { shouldDisableAutoUpdate } from './cahe-edition'
 import { readTrustedAdminManaged } from './win-security'
@@ -26,7 +26,9 @@ import {
   isNewerVersion,
   parseLatestRelease,
   checkForUpdateNow,
-  startUpdateDownload
+  startUpdateDownload,
+  installDownloadedUpdate,
+  isInstallingUpdate
 } from './updater'
 
 /** Stand-in for electron-updater's AppUpdater: the same EventEmitter surface updater.ts wires to. */
@@ -35,6 +37,7 @@ class FakeAutoUpdater extends EventEmitter {
   autoDownload = false
   autoInstallOnAppQuit = false
   checkForUpdates = vi.fn(async (): Promise<{ downloadPromise?: Promise<unknown> | null } | null> => null)
+  quitAndInstall = vi.fn()
 }
 
 describe('configDisablesAutoUpdate — enterprise auto-update kill-switch', () => {
@@ -220,7 +223,7 @@ describe('MQA-164 — a failed update download reaches the renderer', () => {
   const electronApp = app as unknown as { isPackaged?: boolean; name?: string }
   const proc = process as NodeJS.Process & { resourcesPath?: string; windowsStore?: boolean }
   const send = vi.fn()
-  const win = { webContents: { send } } as unknown as BrowserWindow
+  const win = { webContents: { send } } as unknown as BrowserWindowType
   let fake: FakeAutoUpdater
   let moduleId: string
 
@@ -308,6 +311,75 @@ describe('MQA-164 — a failed update download reaches the renderer', () => {
     expect(vi.mocked(Notification)).toHaveBeenCalledWith(
       expect.objectContaining({ body: expect.stringContaining('1.5.5') })
     )
+  })
+})
+
+describe('MQA-272 — Restart & install actually quits the tray overlay to apply the update', () => {
+  let fake: FakeAutoUpdater
+  let moduleId: string
+  const electronApp = app as unknown as {
+    removeAllListeners: ReturnType<typeof vi.fn>
+    quit: ReturnType<typeof vi.fn>
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['setImmediate'] })
+    fake = new FakeAutoUpdater()
+    moduleId = require.resolve('electron-updater')
+    require.cache[moduleId] = { id: moduleId, filename: moduleId, loaded: true, exports: { autoUpdater: fake } } as never
+    vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([])
+    vi.mocked(electronApp.removeAllListeners).mockClear()
+    vi.mocked(electronApp.quit).mockClear()
+  })
+
+  afterEach(() => {
+    delete require.cache[moduleId]
+    vi.useRealTimers()
+  })
+
+  it('clears window-all-closed, destroys open windows, then quitAndInstall(false, true)', () => {
+    const destroy = vi.fn()
+    const removeClose = vi.fn()
+    vi.mocked(BrowserWindow.getAllWindows).mockReturnValue([
+      { isDestroyed: () => false, removeAllListeners: removeClose, destroy }
+    ])
+
+    expect(isInstallingUpdate()).toBe(false)
+    installDownloadedUpdate()
+    expect(isInstallingUpdate()).toBe(true)
+
+    // Still deferred — the IPC invoke reply must finish before we tear the process down.
+    expect(fake.quitAndInstall).not.toHaveBeenCalled()
+    vi.runAllTimers()
+
+    expect(electronApp.removeAllListeners).toHaveBeenCalledWith('window-all-closed')
+    expect(removeClose).toHaveBeenCalledWith('close')
+    expect(destroy).toHaveBeenCalled()
+    expect(fake.quitAndInstall).toHaveBeenCalledWith(false, true)
+  })
+
+  it('falls back to app.quit when quitAndInstall throws (autoInstallOnAppQuit still applies)', () => {
+    fake.quitAndInstall.mockImplementation(() => {
+      throw new Error('no update pending')
+    })
+    installDownloadedUpdate()
+    vi.runAllTimers()
+    expect(electronApp.quit).toHaveBeenCalled()
+    expect(isInstallingUpdate()).toBe(false)
+  })
+
+  it('index.ts wires Restart & install through installDownloadedUpdate and skips before-quit delay', async () => {
+    const { readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs')
+    const { join } = await vi.importActual<typeof import('node:path')>('node:path')
+    const src = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+    const installHandler = src.slice(src.indexOf('IPC.updateInstall'), src.indexOf('IPC.openMailDraft'))
+    expect(installHandler).toMatch(/quitFlushDone = true/)
+    expect(installHandler).toMatch(/tray\?\.destroy\(\)/)
+    expect(installHandler).toMatch(/installDownloadedUpdate\(\)/)
+    // Code must not call quitAndInstall directly — only via installDownloadedUpdate (comment may name it).
+    expect(installHandler.replace(/\/\/.*$/gm, '')).not.toMatch(/quitAndInstall\s*\(/)
+    const beforeQuit = src.slice(src.indexOf("app.on('before-quit'"), src.indexOf("app.on('will-quit'"))
+    expect(beforeQuit).toMatch(/isInstallingUpdate\(\)/)
   })
 })
 

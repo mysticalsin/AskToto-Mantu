@@ -10,7 +10,10 @@ export const app = {
   isReady: vi.fn(() => true),
   whenReady: vi.fn(() => Promise.resolve()),
   on: vi.fn(),
-  once: vi.fn()
+  once: vi.fn(),
+  // MQA-272 — installDownloadedUpdate tears down tray-stay-alive listeners then quits to apply.
+  removeAllListeners: vi.fn(),
+  quit: vi.fn()
 }
 
 export const safeStorage = {
@@ -42,7 +45,9 @@ export const ipcMain = {
   handle: vi.fn()
 }
 
-export const BrowserWindow = vi.fn()
+export const BrowserWindow = Object.assign(vi.fn(), {
+  getAllWindows: vi.fn(() => [] as Array<{ isDestroyed: () => boolean; removeAllListeners: (e: string) => void; destroy: () => void }>)
+})
 
 // Native OS notification. `new Notification(opts)` records the options on the mock, and the object it
 // returns carries a `show` spy, so a test can assert both that something was shown and what it said.
