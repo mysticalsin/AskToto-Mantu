@@ -204,7 +204,6 @@ export const IPC = {
   // + PKCE flow (browser consent) and, on success, upserts an mcpConnections entry exactly like
   // mcpSaveConnection does for a pasted key. Reuses mcpDisconnect/mcpPush unchanged.
   mcpClickupConnect: 'mcp:clickupConnect',
-  operatorOpen: 'operator:open',
   licenseActivate: 'license:activate',
   licenseStatus: 'license:status',
   licenseGate: 'license:gate',
@@ -1176,16 +1175,7 @@ export const BaseSettingsSchema = z.object({
   licenseExpiresAt: z.number().nullable().default(null),
   licenseValid: z.boolean().default(false),
   licenseLastValidatedAt: z.number().default(0),
-  licenseGateEnabled: z.boolean().default(false),
-  // Operator control plane (Cloudflare Worker `metis-operator`). Empty URL = off. Not the Fly
-  // license-server and not cloudflare-proxy. Ingest secret is the HMAC shared with the Worker;
-  // it is a Wrangler secret on the server and a Settings power field here. Never commit it.
-  operatorUrl: z
-    .string()
-    .refine((v) => v === '' || /^https:\/\//i.test(v), 'Operator URL must be an https:// URL')
-    .default(''),
-  operatorIngestSecret: z.string().default(''),
-  sendAskText: z.boolean().default(true)
+  licenseGateEnabled: z.boolean().default(false)
 })
 
 export const SettingsSchema = BaseSettingsSchema.refine(
@@ -1410,10 +1400,7 @@ export const DEFAULT_SETTINGS: Settings = {
   licenseExpiresAt: null,
   licenseValid: false,
   licenseLastValidatedAt: 0,
-  licenseGateEnabled: false,
-  operatorUrl: '',
-  operatorIngestSecret: '',
-  sendAskText: true
+  licenseGateEnabled: false
 }
 
 export const HOTKEY_ACTIONS: HotkeyAction[] = [
