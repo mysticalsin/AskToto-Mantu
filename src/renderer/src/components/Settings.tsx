@@ -63,7 +63,6 @@ import {
   ListTree,
   type LucideIcon
 } from 'lucide-react'
-import { DEFAULT_OPERATOR_URL } from '@shared/operator'
 import { formatSavedTime, timeSavedFromTotals } from '@shared/time-saved'
 import { formatResetPhrase } from '@shared/reset-time'
 import {
@@ -5735,7 +5734,7 @@ export function Settings({
                 </Section>
                 <Section
                   title="Operator"
-                  desc="Fleet heartbeat for every Métis seat. URL defaults to Tony's Operator Worker worldwide; the ingest secret comes from this field, METIS_OPERATOR_INGEST_SECRET, or managed-config. This is not a local analytics page."
+                  desc="Point this Mac at Tony's Operator Worker. Empty means no fleet heartbeat. This is not a local analytics page."
                   icon={Settings2}
                 >
                   <label className="flex flex-col gap-1 px-1 py-2">
@@ -5744,7 +5743,7 @@ export function Settings({
                       value={settings.operatorUrl || ''}
                       spellCheck={false}
                       autoComplete="off"
-                      placeholder={DEFAULT_OPERATOR_URL}
+                      placeholder="https://metis-operator.tony-walteur.workers.dev"
                       disabled={settings.managedKeys.includes('operatorUrl')}
                       onChange={(e) => patch({ operatorUrl: e.target.value.trim() })}
                       className={`${ctl} w-full`}
@@ -5763,7 +5762,7 @@ export function Settings({
                       className={`${ctl} w-full`}
                     />
                   </label>
-                  {/^https:\/\//i.test(settings.operatorUrl || DEFAULT_OPERATOR_URL) && (
+                  {/^https:\/\//i.test(settings.operatorUrl || '') && (
                     <ToggleRow
                       label="Send Ask text for skill improvement"
                       desc="When on, the question text goes with the metrics so skills can be drafted. Metrics always send. Listen transcripts and screens never send."
@@ -5772,7 +5771,7 @@ export function Settings({
                       disabled={settings.managedKeys.includes('sendAskText')}
                     />
                   )}
-                  {/^https:\/\//i.test(settings.operatorUrl || DEFAULT_OPERATOR_URL) && (
+                  {/^https:\/\//i.test(settings.operatorUrl || '') && (
                     <button
                       type="button"
                       onClick={() => void window.toto.operatorOpen()}

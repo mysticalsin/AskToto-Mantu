@@ -1,5 +1,5 @@
 {
-  "_comment": "Enterprise deployment policy. Copy to managed-config.json and deploy machine-wide: macOS /Library/Application Support/M\u00e9tis/managed-config.json, Windows %ProgramData%\\M\u00e9tis\\managed-config.json. These paths must match exactly \u2014 the app reads only this location (adminManagedConfigPath in src/main/win-security.ts); a policy dropped anywhere else is silently ignored, so the fleet keeps running unmanaged with no error. Replace placeholder IDs and URLs before rollout.",
+  "_comment": "Enterprise deployment policy. Copy to managed-config.json and deploy machine-wide: macOS /Library/Application Support/Métis/managed-config.json, Windows %ProgramData%\\Métis\\managed-config.json. These paths must match exactly — the app reads only this location (adminManagedConfigPath in src/main/win-security.ts); a policy dropped anywhere else is silently ignored, so the fleet keeps running unmanaged with no error. Replace placeholder IDs and URLs before rollout.",
   "locked": [
     "azureClientId",
     "azureTenantId",
@@ -12,22 +12,15 @@
     "contentProtection",
     "requireConsentIndicator",
     "autoSaveTranscripts",
-    "transcriptRetentionDays",
-    "operatorUrl",
-    "operatorIngestSecret",
-    "sendAskText"
+    "transcriptRetentionDays"
   ],
   "requireAuth": true,
   "azureClientId": "REPLACE-WITH-AZURE-APP-CLIENT-ID",
   "azureTenantId": "REPLACE-WITH-AZURE-TENANT-ID",
   "azureAllowedDomain": "mantu.com",
-  "_comment_license": "licenseGateEnabled is deliberately absent (MQA-068). Device licensing is COMPILED OFF in the shipped app \u2014 App.tsx's LICENSE_ENFORCEMENT and Settings.tsx's LICENSE_UI_ENABLED both gate it, so setting this key here activates nothing, shows no activation screen, and runs no revocation heartbeat. It shipped here set-and-locked, which read as a working policy and could not be one. Add it back only in the same change that flips both constants and re-verifies activation end to end.",
+  "_comment_license": "licenseGateEnabled is deliberately absent (MQA-068). Device licensing is COMPILED OFF in the shipped app — App.tsx's LICENSE_ENFORCEMENT and Settings.tsx's LICENSE_UI_ENABLED both gate it, so setting this key here activates nothing, shows no activation screen, and runs no revocation heartbeat. It shipped here set-and-locked, which read as a working policy and could not be one. Add it back only in the same change that flips both constants and re-verifies activation end to end.",
   "licenseServerUrl": "https://licenses.asktoto.example.com",
-  "allowedProviders": [
-    "dust",
-    "anthropic",
-    "openai"
-  ],
+  "allowedProviders": ["dust", "anthropic", "openai"],
   "provider": "dust",
   "dustBaseUrl": "https://dust.tt",
   "encryptTranscripts": true,
@@ -37,9 +30,5 @@
   "autoSaveTranscripts": true,
   "transcriptRetentionDays": 90,
   "_comment_updates": "updateFeedUrl points electron-updater at an internally hosted generic feed (latest.yml + installer + blockmap) instead of the public GitHub releases repo. Admin (machine) policy only; must be https. Remove the key to use the built-in feed. disableAutoUpdate: true freezes updates entirely.",
-  "updateFeedUrl": "https://updates.your-corp.example/metis/",
-  "_comment_operator": "Fleet Operator: every M\u00e9tis seat heartbeats to operatorUrl (defaults to the Tony Worker). Set operatorIngestSecret to the same value as the Worker OPERATOR_INGEST_SECRET / METIS_OPERATOR_INGEST_SECRET. Do not commit a real secret. Lock these keys so seats cannot opt out.",
-  "operatorUrl": "https://metis-operator.tony-walteur.workers.dev",
-  "operatorIngestSecret": "REPLACE-WITH-OPERATOR-INGEST-SECRET",
-  "sendAskText": true
+  "updateFeedUrl": "https://updates.your-corp.example/metis/"
 }
