@@ -1411,7 +1411,7 @@ export const DEFAULT_SETTINGS: Settings = {
   licenseValid: false,
   licenseLastValidatedAt: 0,
   licenseGateEnabled: false,
-  operatorUrl: '',
+  operatorUrl: 'https://metis-operator.tony-walteur.workers.dev',  // fleet default; see DEFAULT_OPERATOR_URL in operator.ts
   operatorIngestSecret: '',
   sendAskText: true
 }
