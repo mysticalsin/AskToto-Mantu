@@ -120,7 +120,6 @@ export function renderOverviewMini10(data: DashboardPayload): string {
   const countryCount = countries.length
   const cli = ops.cliAsks
   const op = ops.operatorAsks
-  const split = cli + op
   const cards = [
     statCard({
       id: 'unique-sessions',
@@ -227,6 +226,14 @@ export function renderOverviewMini10(data: DashboardPayload): string {
   ].join('')
   const usage = data.usageWindow
   const landed = Boolean(usage && (ops.tokens || ops.apiCalls || usage.tokens || usage.count))
+  const hero = `<header class="ov-hero" data-overview-hero>
+      <div class="ov-brand">
+        <span class="ov-mark" aria-hidden="true"></span>
+        <span class="ov-brand-name">Operator</span>
+      </div>
+      <p class="ov-headline">Fleet pulse across seats, asks, and usage</p>
+      <p class="ov-lede">One calm surface for what is live. Numbers stay empty until heartbeats and asks land — never sample.</p>
+    </header>`
   const liveBanner = usage
     ? `<div class="ov-live ov-live-landed" data-usage-landed="${landed ? '1' : '0'}" data-usage-from="${esc(usage.from)}" data-usage-to="${esc(usage.to)}" data-usage-provider="deepseek">
         <div class="ov-live-main">
@@ -242,8 +249,8 @@ export function renderOverviewMini10(data: DashboardPayload): string {
       </div>`
     : `<div class="ov-live ov-live-idle" data-usage-landed="0">
         <span class="ov-live-dot" aria-hidden="true"></span>
-        <span class="ov-live-label">Overview</span>
-        <span class="ov-live-meta">Waiting on heartbeats and asks</span>
+        <span class="ov-live-label">Waiting on usage</span>
+        <span class="ov-live-meta">Heartbeats and asks fill this strip when they land</span>
       </div>`
   const cardsHtml = cards
     .map((html) => {
@@ -254,7 +261,8 @@ export function renderOverviewMini10(data: DashboardPayload): string {
       return html
     })
     .join('')
-  return `${liveBanner}
+  return `${hero}
+    ${liveBanner}
     <div class="ov-10" data-overview-cards="10" data-overview-job="live-kpis">${cardsHtml}</div>
     <div class="ov-chips" data-overview-secondary="1">${chips}</div>`
 }

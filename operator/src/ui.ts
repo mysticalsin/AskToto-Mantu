@@ -311,7 +311,7 @@ function renderEvents(events: ConsoleEvent[], now: number): string {
         : MISSING
       const osCell = e.os ? `<span class="os-cell">${osIcon(e.os)}<span>${esc(e.os)}</span></span>` : MISSING
       return `<div class="event" data-event="${esc(e.id)}" data-q="${esc(q)}">
-        <div class="event-time">${esc(ago(e.ts, now))}</div>
+        <div class="event-time" title="${esc(when(e.ts))}">${esc(ago(e.ts, now))}</div>
         <div class="event-name">${esc(name)}</div>
         <div class="event-profile">${profileCell(profile)}</div>
         <div class="event-country">${countryCell(e.country, e.city)}</div>
@@ -520,7 +520,8 @@ export function renderConsole(data: DashboardPayload): string {
   const notifyRows = [
     ...data.crm.rows.map((r) => {
       const seat = data.profiles.find((p) => r.device && p.device === r.device)
-      return `<tr data-status="${esc(r.status)}" data-nt-row>
+      const unread = r.status === 'pending' || r.status === 'draft' || r.status === 'failed'
+      return `<tr data-status="${esc(r.status)}" data-nt-row${unread ? ' class="nt-unread"' : ''}>
         <td>${esc(r.title)}</td>
         <td class="muted">${esc(r.connector)}</td>
         <td class="muted">${esc(seat?.country || MISSING)}</td>
@@ -533,7 +534,7 @@ export function renderConsole(data: DashboardPayload): string {
     ...data.proposals
       .filter((p) => p.status === 'pending' || p.status === 'draft')
       .map(
-        (p) => `<tr data-status="${esc(p.status)}" data-nt-row>
+        (p) => `<tr data-status="${esc(p.status)}" data-nt-row class="nt-unread">
         <td>${esc(p.skill_id)} ${esc(p.status)}</td>
         <td class="muted">skill</td>
         <td class="muted">${MISSING}</td>
@@ -597,7 +598,7 @@ export function renderConsole(data: DashboardPayload): string {
     .sort((a, b) => b.events - a.events || b.sessions - a.sessions)
   const geoFlags = [...new Set(geoRows.map((r) => r.iso).filter(Boolean))].slice(0, 8)
   const geoMax = Math.max(1, ...geoRows.map((r) => r.events))
-  const geoBreakdown = `<article class="card geo-card" data-geo-breakdown>
+  const geoBreakdown = `<article class="geo-card" data-geo-breakdown>
       <div class="geo-head">
         <h3 class="geo-title">Geo</h3>
         <div class="geo-flags" aria-hidden="true">${geoFlags.map((iso) => flagMark(iso)).join('')}</div>
@@ -828,7 +829,7 @@ export function renderConsole(data: DashboardPayload): string {
             <thead><tr><th>Title</th><th>Integration</th><th>Country</th><th>OS</th><th>Browser</th><th>Profile</th><th>Created at</th></tr></thead>
             <tbody>
               ${notifyRows || ''}
-              <tr data-nt-empty ${notifyRows ? 'hidden' : ''}><td colspan="7">${emptyData()}</td></tr>
+              <tr data-nt-empty ${notifyRows ? 'hidden' : ''}><td colspan="7"><div class="nt-empty-wrap">${emptyData()}</div></td></tr>
             </tbody>
           </table>
           ${
@@ -839,7 +840,7 @@ export function renderConsole(data: DashboardPayload): string {
         </article>
       </div>
       <div data-nt-pane="rules" hidden>
-        <article class="card table-frame">${emptyData('No rules yet.')}</article>
+        <article class="card table-frame"><div class="nt-empty-wrap">${emptyData('No rules yet.')}</div></article>
       </div>
     </section>
 
