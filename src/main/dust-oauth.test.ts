@@ -104,6 +104,32 @@ describe('dust-oauth', () => {
       expect(r.ok).toBe(false)
       expect(r.error).toMatch(/offline/)
     })
+
+    it('still returns ok when openExternal rejects with spawn EINVAL (Windows .cmd browser shim)', async () => {
+      // Regression: beginDustDeviceLogin used to await shell.openExternal inside the same try/catch as
+      // the WorkOS mint, so a Windows EINVAL from opening the browser aborted a sign-in that had
+      // already minted a device code — Settings showed the raw "spawn EINVAL" string.
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () =>
+          jsonResponse({
+            device_code: 'dc-einval',
+            user_code: 'EINV-ALID',
+            verification_uri: 'https://signin.dust.tt/device',
+            verification_uri_complete: 'https://signin.dust.tt/device?user_code=EINV-ALID',
+            expires_in: 300,
+            interval: 5
+          })
+        )
+      )
+      mockOpenExternal.mockRejectedValueOnce(new Error('spawn EINVAL'))
+      const r = await beginDustDeviceLogin()
+      expect(r.ok).toBe(true)
+      expect(r.deviceCode).toBe('dc-einval')
+      expect(r.userCode).toBe('EINV-ALID')
+      expect(r.verificationUri).toBe('https://signin.dust.tt/device?user_code=EINV-ALID')
+      expect(r.error).toBeUndefined()
+    })
   })
 
   describe('pollDustDeviceLoginOnce', () => {
@@ -286,9 +312,12 @@ describe('dust-oauth', () => {
  * `verification_uri_complete` was checked for PRESENCE and then opened, so whatever returned it chose the
  * handler while the user saw only "signing in to Dust".
  *
- * Every other openExternal in the codebase is either a hardcoded literal or already gated on https
+ * Every other browser-open in the codebase is either a hardcoded literal or already gated on https
  * (index.ts's setWindowOpenHandler, intelligence.ts). This call site simply never got the same rule —
  * the same shape as the other defects this audit found: a safety rule applied everywhere except once.
+ *
+ * The open itself goes through openHttpsExternal (open-https.ts): shell.openExternal can reject with
+ * spawn EINVAL on Windows when the default browser is a .cmd shim, and that must not abort sign-in.
  */
 describe('MQA-253 — the verification URL is scheme- and host-locked before it reaches the shell', () => {
   const guard = readFileSync(join(__dirname, 'dust-oauth.ts'), 'utf8')
@@ -312,9 +341,9 @@ describe('MQA-253 — the verification URL is scheme- and host-locked before it 
 
   it('refuses rather than sanitises, and says so to the user', () => {
     expect(guard).toMatch(/returned an unexpected verification link, so it was not opened/)
-    // The guard must run BEFORE the shell call, not as a log after it.
+    // The guard must run BEFORE the browser-open call, not as a log after it.
     const guardAt = guard.indexOf('isHttpsUrl(data.verification_uri_complete)')
-    const openAt = guard.indexOf('shell.openExternal(data.verification_uri_complete)')
+    const openAt = guard.indexOf('openHttpsExternal(data.verification_uri_complete)')
     expect(guardAt).toBeGreaterThan(-1)
     expect(openAt).toBeGreaterThan(guardAt)
   })

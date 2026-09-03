@@ -177,6 +177,7 @@ import {
   resolveEntitySlug
 } from './brain/corrections'
 import { publishEntity, removeFromWiki, publishAll, publishMeetingCard, removeWiki, wikiDir } from './brain/publish'
+import { discoverSecondBrains, inspectSecondBrainFolder } from './brain/discover'
 import { computeAttention } from './brain/attention'
 import {
   openIntelligenceWindow,
@@ -1535,6 +1536,9 @@ function createWindow(): void {
 
 function resizeTo(height: number): void {
   if (!win) return
+  // MQA-271: full-bar surfaces (Settings, History, Review, …) must never inherit the mini-pill width
+  // when main/renderer minimize state drifts — useAutoResize only reports width for [data-hug-width].
+  if (!isMinimized && currentWidth < BAR_WIDTH) currentWidth = BAR_WIDTH
   // Clamp + reposition against the display the OVERLAY is actually on (not the cursor's). Otherwise, on a
   // laptop + external monitor of different heights, a streaming answer clamps to the wrong monitor and the
   // window jumps vertically while the cursor sits on the other screen.
@@ -1580,6 +1584,8 @@ function setMinimizedWidth(narrow: boolean): void {
 // settings renders as a panel under the bar now, so the window only ever lives in 'bar' mode.
 function setWindowMode(): void {
   if (!win) return
+  // Same MQA-271 guard as resizeTo — windowMode('bar') runs on every renderer mount.
+  if (!isMinimized && currentWidth < BAR_WIDTH) currentWidth = BAR_WIDTH
   const { workArea } = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
   let x = Math.round(b.x + (b.width - currentWidth) / 2)
@@ -5131,6 +5137,31 @@ function registerIpc(): void {
     const current = getSettings().teamTranscriptFolders ?? []
     setSettings({ teamTranscriptFolders: current.filter((f) => f !== target) })
     return publicSettings()
+  })
+
+  // Hunt OneDrive/Documents/Desktop (etc.) for an existing `.brain/` / `wiki/` second brain so the
+  // user can reconnect it after a reinstall or folder reset — without a blind picker.
+  ipcMain.handle(IPC.discoverSecondBrains, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return []
+    return discoverSecondBrains(getSettings())
+  })
+  ipcMain.handle(IPC.connectSecondBrain, (e, folder: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false as const, error: 'Not signed in', settings: publicSettings() }
+    const target = typeof folder === 'string' ? folder.trim() : ''
+    if (!target) return { ok: false as const, error: 'No folder selected', settings: publicSettings() }
+    // Re-validate in main: never trust the renderer that a path is a second brain.
+    const hit = inspectSecondBrainFolder(target, resolveMeetingsFolder(getSettings()))
+    if (!hit) {
+      return {
+        ok: false as const,
+        error: 'That folder does not look like a Métis second brain',
+        settings: publicSettings()
+      }
+    }
+    setSettings({ meetingsFolder: hit.path })
+    return { ok: true as const, path: hit.path, settings: publicSettings() }
   })
 
   ipcMain.handle(IPC.openPath, (e) => {

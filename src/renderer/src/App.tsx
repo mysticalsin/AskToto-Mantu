@@ -855,12 +855,37 @@ export function App(): JSX.Element {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- fire on new transcript lines only
   }, [listen.lines])
 
+  // Expand the floating control mini-pill back to the full widget. Hotkeys/Escape call this before
+  // acting so a request can never fire into an unmounted Bar (invisible work / wasted spend).
+  const unminimize = useCallback((): void => {
+    setMinimized(false)
+    void window.toto.minimize(false)
+  }, [])
+
   const openSettings = useCallback((tab?: 'personalize' | 'calendar' | 'ai', notice?: string): void => {
+    // Settings renders under the bar in the same window; if main still has the pill width (~220px),
+    // the panel is squeezed unreadably (MQA-271). Idempotent when already full-width.
+    unminimize()
     setSettingsInitialTab(tab) // generic open (no tab) → default tab; callers can target a specific one
     setSettingsNotice(notice)
     setView('settings')
     setCollapsed(false)
-  }, [])
+  }, [unminimize])
+
+  // MQA-271 safety net: panels below the bar need BAR_WIDTH. openSettings() and friends call
+  // unminimize() too, but this catches desync and any future setView() bypass while the bar is visible.
+  useEffect(() => {
+    if (minimized || DEMO != null) return
+    if (
+      view === 'settings' ||
+      view === 'history' ||
+      view === 'agenda' ||
+      view === 'review' ||
+      view === 'brain'
+    ) {
+      unminimize()
+    }
+  }, [minimized, view, unminimize])
 
   // Single readiness gate for EVERY user-initiated request entry point (not just submit). When the
   // active provider has no key / no CLI connection, route the user to Settings instead of firing an
@@ -922,13 +947,6 @@ export function App(): JSX.Element {
       openSettings
     ]
   )
-
-  // Expand the floating control mini-pill back to the full widget. Hotkeys/Escape call this before
-  // acting so a request can never fire into an unmounted Bar (invisible work / wasted spend).
-  const unminimize = useCallback((): void => {
-    setMinimized(false)
-    void window.toto.minimize(false)
-  }, [])
 
   const askScreen = useCallback(
     async (
@@ -2065,11 +2083,13 @@ export function App(): JSX.Element {
   // leaks a stale requireProvider redirect (wrong tab + stale "why am I here" banner) from a previous
   // openSettings(tab, notice) call.
   const openSettingsDefault = useCallback((): void => {
+    // Bar logo + tray/hotkey share this entry point; same pill-width squeeze as openSettings (MQA-271).
+    unminimize()
     setSettingsInitialTab(undefined)
     setSettingsNotice(undefined)
     setView((v) => (v === 'settings' ? 'answer' : 'settings'))
     setCollapsed(false)
-  }, [])
+  }, [unminimize])
   const lastSettingsToggleRef = useRef(0)
   const onBarSettings = useCallback(() => {
     const now = Date.now()
@@ -2615,12 +2635,7 @@ export function App(): JSX.Element {
           if (err) window.alert(err)
         }}
         onBack={() => setView('answer')}
-        onConnectCalendar={() => {
-          setSettingsInitialTab('calendar')
-          setSettingsNotice(undefined)
-          setView('settings')
-          setCollapsed(false)
-        }}
+        onConnectCalendar={() => openSettings('calendar')}
         onNewChat={reset}
         // savedPath is the FULL path returned by the save IPC; RecallView's rows compare against the bare
         // basename (m.file), so passing the full path here never matched and the "Just saved" badge never

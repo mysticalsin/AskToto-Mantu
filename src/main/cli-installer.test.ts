@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { gzipSync } from 'node:zlib'
@@ -10,7 +10,16 @@ import { createHash } from 'node:crypto'
 vi.mock('electron')
 
 import { app } from 'electron'
-import { installManagedCli, managedCliEntry, managedCliCommand, MANAGED_CLIS, type CliInstallProgress } from './cli-installer'
+import {
+  installManagedCli,
+  managedCliEntry,
+  managedCliCommand,
+  MANAGED_CLIS,
+  MIN_NATIVE_CLI_BYTES,
+  isJsCliEntry,
+  resolveClaudeNativePlatform,
+  type CliInstallProgress
+} from './cli-installer'
 
 // ─── tarBuilder test helper: hand-assembled ustar tar buffer ────────────────────────
 // Mirrors exactly the field layout cli-installer.ts's vendored reader expects (name @0/100,
@@ -260,5 +269,129 @@ describe('installManagedCli — download ETA', () => {
     // The very first sample (0 bytes received) can't have a rate yet; a later one must.
     expect(downloadEvents[0].etaMs).toBeNull()
     expect(downloadEvents.some((p) => typeof p.etaMs === 'number' && Number.isFinite(p.etaMs))).toBe(true)
+  })
+})
+
+describe('resolveClaudeNativePlatform / isJsCliEntry', () => {
+  it('maps Windows x64 to the win32-x64 native package', () => {
+    expect(resolveClaudeNativePlatform('win32', 'x64')).toEqual({
+      npmPackage: '@anthropic-ai/claude-code-win32-x64',
+      binaryName: 'claude.exe'
+    })
+  })
+
+  it('maps darwin arm64 and linux musl variants', () => {
+    expect(resolveClaudeNativePlatform('darwin', 'arm64')?.npmPackage).toBe('@anthropic-ai/claude-code-darwin-arm64')
+    expect(resolveClaudeNativePlatform('linux', 'x64', true)?.npmPackage).toBe(
+      '@anthropic-ai/claude-code-linux-x64-musl'
+    )
+  })
+
+  it('treats .js/.cjs/.mjs as JS entries and native binaries as not', () => {
+    expect(isJsCliEntry('/x/package/cli.js')).toBe(true)
+    expect(isJsCliEntry('/x/package/cli-wrapper.cjs')).toBe(true)
+    expect(isJsCliEntry('/x/package/bin/claude.exe')).toBe(false)
+    expect(isJsCliEntry('/x/package/bin/claude')).toBe(false)
+  })
+})
+
+describe('installManagedCli — modern Claude Code native layout', () => {
+  it('fetches the platform package, replaces the stub, and returns a native spawn command', async () => {
+    const version = '2.1.258'
+    const stub = 'S'.repeat(500)
+    const native = 'N'.repeat(MIN_NATIVE_CLI_BYTES + 64)
+    const host = resolveClaudeNativePlatform(process.platform, process.arch, false)
+    expect(host).not.toBeNull()
+    if (!host) throw new Error('unsupported test host platform')
+
+    const wrapperTgz = gzipSync(
+      buildTarball([
+        {
+          name: 'package/package.json',
+          content: JSON.stringify({
+            name: '@anthropic-ai/claude-code',
+            version,
+            bin: { claude: `bin/${host.binaryName}` }
+          })
+        },
+        { name: `package/bin/${host.binaryName}`, content: stub }
+      ])
+    )
+    const platformTgz = gzipSync(
+      buildTarball([
+        {
+          name: 'package/package.json',
+          content: JSON.stringify({ name: host.npmPackage, version })
+        },
+        { name: `package/${host.binaryName}`, content: native }
+      ])
+    )
+
+    const wrapperMeta = {
+      version,
+      dist: { tarball: 'https://example.invalid/wrapper.tgz', integrity: sha512Integrity(wrapperTgz) }
+    }
+    const platformMeta = {
+      version,
+      dist: { tarball: 'https://example.invalid/platform.tgz', integrity: sha512Integrity(platformTgz) }
+    }
+    const platformPathToken = host.npmPackage.replace('/', '%2f')
+
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: string | URL | Request) => {
+        const url = String(input)
+        if (url.includes(platformPathToken) && url.includes(`/${version}`)) {
+          return registryResponse(platformMeta)
+        }
+        if (url.endsWith('/latest')) {
+          return registryResponse(wrapperMeta)
+        }
+        if (url.includes('wrapper.tgz')) {
+          return new Response(wrapperTgz, { status: 200, headers: { 'content-length': String(wrapperTgz.length) } })
+        }
+        if (url.includes('platform.tgz')) {
+          return new Response(platformTgz, { status: 200, headers: { 'content-length': String(platformTgz.length) } })
+        }
+        return new Response(`unexpected fetch ${url}`, { status: 500 })
+      })
+    )
+
+    const progress: CliInstallProgress[] = []
+    const result = await installManagedCli('claude', (p) => progress.push(p))
+
+    expect(result.version).toBe(version)
+    expect(existsSync(result.entry)).toBe(true)
+    expect(result.entry.endsWith(join('package', 'bin', host.binaryName))).toBe(true)
+    expect(statSync(result.entry).size).toBe(native.length)
+
+    expect(managedCliCommand('claude')).toEqual({ command: result.entry, args: [], env: {} })
+    expect(progress.map((p) => p.phase)).toContain('downloading')
+    expect(progress[progress.length - 1].phase).toBe('done')
+  })
+
+  it('still errors clearly when neither cli.js nor a package.json bin exists', async () => {
+    const version = '2.1.258'
+    const tgz = gzipSync(
+      buildTarball([
+        {
+          name: 'package/package.json',
+          content: JSON.stringify({ name: '@anthropic-ai/claude-code', version })
+        }
+      ])
+    )
+    const registryJson = {
+      version,
+      dist: { tarball: 'https://example.invalid/x.tgz', integrity: sha512Integrity(tgz) }
+    }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) => {
+        if (String(url).includes('/latest')) return registryResponse(registryJson)
+        return new Response(tgz, { status: 200, headers: { 'content-length': String(tgz.length) } })
+      })
+    )
+    await expect(installManagedCli('claude', () => {})).rejects.toThrow(/expected entry 'cli\.js' is missing/)
+    expect(managedCliEntry('claude')).toBeNull()
   })
 })

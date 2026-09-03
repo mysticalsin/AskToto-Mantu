@@ -1,0 +1,103 @@
+name: Publish Metis-Releases feed
+
+# Copies a tagged AskToto-Mantu GitHub Release onto the PUBLIC mysticalsin/Metis-Releases
+# feed that installed apps poll for auto-update (electron-builder publish + src/main/updater.ts).
+#
+# Needs repo secret METIS_RELEASES_TOKEN (classic PAT or fine-grained) with Contents: write on
+# mysticalsin/Metis-Releases. GH_TOKEN is accepted as a fallback name for the same credential.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to mirror (e.g. v1.8.4)'
+        required: true
+        type: string
+        default: v1.8.4
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  mirror:
+    name: Mirror release to Metis-Releases
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # Only mirror version tags (ignore drafts already filtered by `published`)
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'v'))
+    steps:
+      - name: Require publish token
+        env:
+          METIS_RELEASES_TOKEN: ${{ secrets.METIS_RELEASES_TOKEN }}
+          GH_TOKEN_SECRET: ${{ secrets.GH_TOKEN }}
+        run: |
+          token="${METIS_RELEASES_TOKEN:-$GH_TOKEN_SECRET}"
+          if [ -z "$token" ]; then
+            echo "::error::Set secret METIS_RELEASES_TOKEN (or GH_TOKEN) with Contents:write on mysticalsin/Metis-Releases."
+            exit 1
+          fi
+          echo "TOKEN=$token" >> "$GITHUB_ENV"
+
+      - name: Resolve tag
+        id: tag
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          tag="${INPUT_TAG:-$RELEASE_TAG}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "Mirroring $tag"
+
+      - name: Download source release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p feed && cd feed
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --clobber
+          ls -lh
+
+      - name: Publish / replace Metis-Releases tag
+        env:
+          GH_TOKEN: ${{ env.TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          repo="mysticalsin/Metis-Releases"
+          cd feed
+
+          required=(
+            "Metis-Setup-${version}.exe"
+            "Metis-Setup-${version}.exe.blockmap"
+            "Metis-Portable-${version}.exe"
+            "latest.yml"
+            "Metis-${version}.dmg"
+            "Metis-${version}.dmg.blockmap"
+            "Metis-${version}.zip"
+            "Metis-${version}.zip.blockmap"
+            "latest-mac.yml"
+          )
+          for f in "${required[@]}"; do
+            [ -f "$f" ] || { echo "::error::Missing asset $f in source release $TAG"; exit 1; }
+          done
+
+          if gh release view "$TAG" --repo "$repo" >/dev/null 2>&1; then
+            echo "Release $TAG already exists on $repo — uploading/clobbering assets"
+            gh release upload "$TAG" --repo "$repo" --clobber "${required[@]}"
+            gh release edit "$TAG" --repo "$repo" --draft=false --latest \
+              --title "Métis ${version}" \
+              --notes "Métis ${version} — mirrored from ${GITHUB_REPOSITORY}@${TAG} for the public auto-update feed."
+          else
+            gh release create "$TAG" --repo "$repo" \
+              --title "Métis ${version}" \
+              --notes "Métis ${version} — mirrored from ${GITHUB_REPOSITORY}@${TAG} for the public auto-update feed." \
+              "${required[@]}"
+          fi
+
+          echo "Published: https://github.com/${repo}/releases/tag/${TAG}"
+          curl -fsSL "https://github.com/${repo}/releases/latest/download/latest.yml" | head -20
