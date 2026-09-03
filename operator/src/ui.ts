@@ -682,7 +682,7 @@ export function renderConsole(data: DashboardPayload): string {
 <div class="shell">
   <aside class="rail">
     <div class="rail-brand" title="Operator">
-      <span class="rail-logo" aria-label="Operator"></span>
+      <span class="rail-logo" aria-label="Operator">M</span>
     </div>
     ${renderNav()}
     <div class="rail-foot">
