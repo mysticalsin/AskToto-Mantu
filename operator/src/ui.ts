@@ -555,6 +555,73 @@ export function renderConsole(data: DashboardPayload): string {
   const live30Series = ops.live30Series
   const world = shoeyWorld(data.map.countries, data.map.dots)
   const liveProfiles = data.profiles.filter((p) => p.live30)
+  const liveWindow = data.now - 30 * 60 * 1000
+  const recentEvents = data.events.filter((e) => e.ts >= liveWindow)
+
+  const geoAgg = new Map<
+    string,
+    { iso: string; city: string; label: string; events: number; sessions: number; devices: Set<string> }
+  >()
+  const bumpGeo = (iso: string, city: string | null, device: string | null, asEvent: boolean): void => {
+    const cc = iso && !looksLikeSecret(iso) ? iso.trim().toUpperCase() : ''
+    const cityOk = city && !looksLikeSecret(city) ? city : ''
+    if (!cc && !cityOk) return
+    const key = `${cc}|${cityOk || '(Not set)'}`
+    const countryLabel = cc ? countryName(cc) || cc : ''
+    const label = countryLabel
+      ? `${cityOk || '(Not set)'}, ${countryLabel}`
+      : cityOk || '(Not set)'
+    let row = geoAgg.get(key)
+    if (!row) {
+      row = { iso: cc, city: cityOk || '(Not set)', label, events: 0, sessions: 0, devices: new Set() }
+      geoAgg.set(key, row)
+    }
+    if (asEvent) row.events += 1
+    if (device) row.devices.add(device)
+  }
+  for (const p of liveProfiles) {
+    bumpGeo(p.country || '', p.city, p.device, false)
+  }
+  for (const e of recentEvents) {
+    bumpGeo(e.country || '', e.city, e.device, true)
+  }
+  const geoRows = [...geoAgg.values()]
+    .map((r) => ({
+      iso: r.iso,
+      city: r.city,
+      label: r.label,
+      events: r.events || r.devices.size,
+      sessions: r.devices.size || (r.events ? 1 : 0)
+    }))
+    .sort((a, b) => b.events - a.events || b.sessions - a.sessions)
+  const geoFlags = [...new Set(geoRows.map((r) => r.iso).filter(Boolean))].slice(0, 8)
+  const geoMax = Math.max(1, ...geoRows.map((r) => r.events))
+  const geoBreakdown = `<article class="card geo-card" data-geo-breakdown>
+      <div class="geo-head">
+        <h3 class="geo-title">Geo</h3>
+        <div class="geo-flags" aria-hidden="true">${geoFlags.map((iso) => flagMark(iso)).join('')}</div>
+      </div>
+      <div class="geo-cols" aria-hidden="true"><span>Country / City</span><span>Events</span><span>Sessions</span></div>
+      <div class="geo-list" id="geo-list">
+        ${
+          geoRows.length
+            ? geoRows
+                .map((r) => {
+                  const w = Math.max(4, Math.round((r.events / geoMax) * 100))
+                  const flag = r.iso ? `<span class="flag-mark">${flagMark(r.iso)}</span>` : ''
+                  const q = `${r.iso} ${r.city} ${r.label}`.toLowerCase()
+                  return `<div class="geo-row" data-iso="${esc(r.iso)}" data-q="${esc(q)}">
+                    <span class="geo-bar" style="width:${w}%"></span>
+                    <span class="geo-place">${flag}<span>${esc(r.label)}</span></span>
+                    <span class="geo-n">${r.events}</span>
+                    <span class="geo-n">${r.sessions}</span>
+                  </div>`
+                })
+                .join('')
+            : `<div class="empty geo-empty">No live geo yet. When a Métis app heartbeats, Cloudflare request.cf fills city and country here.</div>`
+        }
+      </div>
+    </article>`
 
   const roster = liveProfiles.length
     ? liveProfiles
@@ -568,7 +635,8 @@ export function renderConsole(data: DashboardPayload): string {
           const ago = data.now - p.lastSeen < 90_000 ? 'just now' : when(p.lastSeen)
           const version = p.appVersion && !looksLikeSecret(p.appVersion) ? p.appVersion : MISSING
           const q = [identity, computer, place, p.os, p.device].join(' ').toLowerCase()
-          return `<div class="rt-seat" data-device="${esc(p.device)}" data-q="${esc(q)}">
+          const iso = p.country && !looksLikeSecret(p.country) ? p.country.trim().toUpperCase() : ''
+          return `<div class="rt-seat" data-device="${esc(p.device)}" data-iso="${esc(iso)}" data-q="${esc(q)}" tabindex="0" role="button">
             <div class="rt-seat-top">
               ${seatAvatar(identity === MISSING ? p.device : identity)}
               ${osBadge(p.os)}
@@ -589,12 +657,12 @@ export function renderConsole(data: DashboardPayload): string {
           </div>`
         })
         .join('')
-    : '<div class="rt-roster-empty empty">No live Métis seats in the last 30 minutes. Heartbeats land on Events.</div>'
+    : '<div class="rt-roster-empty empty">No live Métis seats in the last 30 minutes. Open the app so a heartbeat can land — email, hostname, and device show here.</div>'
 
   return `<!doctype html>
-<html lang="en" data-theme="light"><head>
+<html lang="en" data-theme="dark"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Métis Operator</title>
+<title>Operator</title>
 <link rel="stylesheet" href="${SPA_CSS_PATH}">
 <script src="${SPA_JS_PATH}" defer></script>
 </head>
@@ -611,10 +679,8 @@ export function renderConsole(data: DashboardPayload): string {
 </defs></svg>
 <div class="shell">
   <aside class="rail">
-    <div class="rail-brand">
-      <span class="rail-logo">M</span>
-      <h1>Métis</h1>
-      <span class="chev">▾</span>
+    <div class="rail-brand" title="Operator">
+      <span class="rail-logo" aria-label="Operator"></span>
     </div>
     ${renderNav()}
     <div class="rail-foot">
@@ -653,17 +719,17 @@ export function renderConsole(data: DashboardPayload): string {
     <section class="page wrap" data-page="realtime" hidden>
       <div class="page-hero" data-live-map>
         <h3 class="page-title">Live map</h3>
-        <p class="page-sub">Every Métis seat active in the last 30 minutes, with a signature so you know who they are. Map pins use Cloudflare request.cf only. Heartbeats stream on Events.</p>
+        <p class="page-sub">Active seats on the globe with signatures. Pins use Cloudflare request.cf only. Heartbeats stream on Events.</p>
+      </div>
+      <div class="rt-kpi-bar">
+        <div class="rt-kpi">
+          <span class="rt-hud-lbl">Unique seats last 30 min</span>
+          <div class="n rt-n">${formatCompact(live30)}</div>
+        </div>
+        <div class="rt-kpi-spark" aria-hidden="true">${blueBars(live30Series, 280, 48)}</div>
       </div>
       <div class="rt-stage">
         <article class="rt-map-full">
-          <div class="rt-hud">
-            <div class="rt-hud-kpi">
-              <span class="rt-hud-lbl">Unique seats last 30 min</span>
-              <div class="n rt-n">${formatCompact(live30)}</div>
-              ${blueBars(live30Series, 280, 56)}
-            </div>
-          </div>
           <div id="map-root" data-land="inline" style="position:relative">${world}</div>
         </article>
         <aside class="rt-roster" id="rt-roster" aria-label="Live seat signatures">
@@ -674,6 +740,7 @@ export function renderConsole(data: DashboardPayload): string {
           <div class="rt-roster-list">${roster}</div>
         </aside>
       </div>
+      ${geoBreakdown}
     </section>
 
 

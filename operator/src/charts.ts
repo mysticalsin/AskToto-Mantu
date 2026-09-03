@@ -287,7 +287,9 @@ export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world
           const meta = seatSignatureMeta(dot)
           const w = Math.min(280, Math.max(92, 20 + sig.length * 6.1))
           const h = meta ? 30 : 20
-          return `<g class="seat-mark" data-device="${escapeXml(dot.device)}" data-sig="${escapeXml(sig)}">
+          const iso = (dot.country || '').trim().toUpperCase()
+          return `<g class="seat-mark" data-device="${escapeXml(dot.device)}" data-iso="${escapeXml(iso)}" data-sig="${escapeXml(sig)}" role="button" tabindex="0">
+      <circle class="seat-hit" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="14" fill="transparent"/>
       <circle class="seat-ring" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="10" fill="none" stroke="${SHOEY_DOT}" stroke-width="1.15" opacity="0.28"/>
       <circle class="seat-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4.4" fill="${SHOEY_DOT}" stroke="#fff" stroke-width="1.2"/>
       <g class="seat-sig" transform="translate(${lx.toFixed(1)},${ly.toFixed(1)})">
