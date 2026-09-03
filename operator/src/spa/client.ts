@@ -94,9 +94,9 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
     document.querySelectorAll('[data-page]').forEach(function (p) {
       var show = p.getAttribute('data-page') === id
       p.hidden = !show
-      if (show) {
+      if (show && p.classList) {
         p.classList.remove('page-enter')
-        void p.offsetWidth
+        try { void p.offsetWidth } catch (e) {}
         p.classList.add('page-enter')
       }
     })
