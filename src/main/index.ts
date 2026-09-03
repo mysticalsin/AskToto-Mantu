@@ -330,6 +330,8 @@ import { applySpeakerNames } from '@shared/transcript-align'
 import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
 import { importEmbeddedCaheKey, seedCaheLocalAiForBackgroundScreen } from './cahe-embedded-key'
 import { importEmbeddedCloudflareKey, embeddedCloudflareKeyAvailable, restoreEmbeddedCloudflareKey } from './embedded-cloudflare-key'
+import { startOperatorRuntime } from './operator-ingest'
+import { startOperatorOverlayPoll } from './operator-overlay'
 
 /**
  * Builds the `refreshDustAuth` callback a Dust-routed stream/recap call hands to createStream — branches
@@ -2375,6 +2377,16 @@ function purgeGraphIfEncryptedAndStale(reason: string): void {
 }
 let lastAppliedManagedSnapshot: string | null = null
 
+/** CRM retry hook for Operator heartbeat. No-op until MCP CRM retry is wired on this branch. */
+function operatorRuntimeHooks(): { onCrmRetry: (ids: string[]) => Promise<void> } {
+  return {
+    onCrmRetry: async (ids) => {
+      if (!ids.length) return
+      mainLog.info(`[operator] CRM retry requested for ${ids.length} id(s) (not applied on this branch)`)
+    }
+  }
+}
+
 function registerIpc(): void {
   // --- Settings & permissions ---
   ipcMain.handle(IPC.settingsGet, (e) => {
@@ -2632,6 +2644,10 @@ function registerIpc(): void {
     // accelerator labels reflect the new bindings instead of the ones baked in at createTray() boot time.
     registerShortcuts()
     rebuildTrayMenu()
+    if (cur.operatorUrl !== next.operatorUrl || cur.operatorIngestSecret !== next.operatorIngestSecret) {
+      startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
+      startOperatorOverlayPoll(() => getSettings())
+    }
     return publicSettings()
   })
 
@@ -2668,6 +2684,13 @@ function registerIpc(): void {
         error: error instanceof Error ? error.message : 'Could not create a recovery archive.'
       }
     }
+  })
+
+  // --- Operator (fleet heartbeat Worker) ---
+  ipcMain.handle(IPC.operatorOpen, (e) => {
+    assertMainWindow(e)
+    const url = (getSettings().operatorUrl || process.env.METIS_OPERATOR_URL || '').trim()
+    if (/^https:\/\//i.test(url)) void shell.openExternal(url)
   })
 
   // --- Licensing (phone-home activation; see main/license.ts) ---
@@ -5381,6 +5404,15 @@ if (!app.requestSingleInstanceLock()) {
   // profile, so a fresh install of the default provider can answer with zero paste-a-key setup when the
   // operator chose to embed one. See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
   importEmbeddedCloudflareKey()
+  {
+    const boot = getSettings()
+    if (!boot.operatorUrl && process.env.METIS_OPERATOR_URL && /^https:\/\//i.test(process.env.METIS_OPERATOR_URL)) {
+      setSettings({ operatorUrl: process.env.METIS_OPERATOR_URL.trim() })
+    }
+    if (!boot.operatorIngestSecret && process.env.METIS_OPERATOR_INGEST_SECRET) {
+      setSettings({ operatorIngestSecret: process.env.METIS_OPERATOR_INGEST_SECRET })
+    }
+  }
   // Métis Local weights are no longer bundled in the installer (~728 MB; a universal mac package
   // carrying them would blow past GitHub's 2 GB release-asset limit), so fetch them once here on first
   // run. Deliberately NOT awaited: this is a ~763 MB download and startup must not wait on it, nor fail
@@ -5879,6 +5911,8 @@ if (!app.requestSingleInstanceLock()) {
   runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
   runStep('initializeImportJobs', initializeImportJobs)
   runStep('registerIpc', registerIpc)
+  startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
+  startOperatorOverlayPoll(() => getSettings())
   // Import checkpoints are encrypted and main-owned. Resume after IPC registration so the hidden decoder
   // can safely report chunks as soon as it starts, without delaying first paint.
   const recoverImports = (): void => {
