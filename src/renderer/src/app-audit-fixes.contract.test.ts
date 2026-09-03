@@ -337,3 +337,33 @@ describe('MQA-216 — a missing endpoint URL is never reported as an org policy 
     })
   }
 })
+
+// MQA-271 — Settings opened while the window still has the mini-pill width (~220px) renders squeezed.
+describe('MQA-271 — opening Settings always restores full bar width', () => {
+  it('openSettings widens before switching view', () => {
+    const block = code(blockBetween('const openSettings = useCallback', 'const requireProvider = useCallback'))
+    expect(block).toMatch(/unminimize\(\)/)
+    expect(block).toMatch(/setView\('settings'\)/)
+  })
+
+  it('openSettingsDefault widens before toggling settings (bar logo + tray/hotkey)', () => {
+    const block = code(blockBetween('const openSettingsDefault = useCallback', 'const lastSettingsToggleRef = useRef'))
+    expect(block).toMatch(/unminimize\(\)/)
+    expect(block).toMatch(/setView\(\(v\) => \(v === 'settings' \? 'answer' : 'settings'\)\)/)
+  })
+})
+
+// MQA-271 — Settings opened while the window still has the mini-pill width (~220px) renders squeezed.
+describe('MQA-271 — opening Settings always restores full bar width', () => {
+  it('openSettings widens before switching view', () => {
+    const block = code(blockBetween('const openSettings = useCallback', 'const requireProvider = useCallback'))
+    expect(block).toMatch(/unminimize\(\)/)
+    expect(block).toMatch(/setView\('settings'\)/)
+  })
+
+  it('openSettingsDefault widens before toggling settings (bar logo + tray/hotkey)', () => {
+    const block = code(blockBetween('const openSettingsDefault = useCallback', 'const lastSettingsToggleRef = useRef'))
+    expect(block).toMatch(/unminimize\(\)/)
+    expect(block).toMatch(/setView\(\(v\) => \(v === 'settings' \? 'answer' : 'settings'\)\)/)
+  })
+})
