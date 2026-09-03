@@ -306,3 +306,23 @@ describe('MQA-164 — a failed update download leaves the Settings row with a wa
     expect(preload).toMatch(/onUpdateError: .*sub\(IPC\.updateError, cb\)/)
   })
 })
+
+describe('Operator control plane lives on Cloudflare, not in Settings', () => {
+  it('exposes Operator URL, ingest secret, Ask-text toggle, and Open Operator', () => {
+    expect(source).toMatch(/Operator URL/)
+    expect(source).toMatch(/Ingest secret/)
+    expect(source).toMatch(/Send Ask text for skill improvement/)
+    expect(source).toMatch(/Open Operator/)
+    expect(source).toMatch(/operatorOpen/)
+    expect(source).toMatch(/Listen transcripts and screens never send/)
+    expect(source).toMatch(/metis-operator\.tony-walteur\.workers\.dev/)
+  })
+
+  it('does not keep a local-only Operator tools dashboard or fake fleet numbers', () => {
+    expect(source).not.toMatch(/operatorTools/)
+    expect(source).not.toMatch(/Operator tools/)
+    const operator = blockAfter('title="Operator"', "\n            {tab === 'meetings'")
+    expect(operator).not.toMatch(/DAU/)
+    expect(operator).not.toMatch(/cache hit rate/)
+  })
+})
