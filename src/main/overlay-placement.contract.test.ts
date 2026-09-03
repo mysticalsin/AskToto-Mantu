@@ -226,8 +226,10 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       'const { screen, clampHeight } = stubs',
       'let current = { x: 0, y: 0, width: 880, height: 400 }',
       'const win = { getBounds: () => ({ ...current }), setBounds: (b) => { current = { ...current, ...b } } }',
-      'const currentWidth = 880',
-      `const lastBarHeight = ${TALL}`,
+      `const BAR_WIDTH = ${constant('BAR_WIDTH')}`,
+      'let currentWidth = 880',
+      'let isMinimized = false',
+      `let lastBarHeight = ${TALL}`,
       ''
     ].join('\n')
     const run = new Function('stubs', preamble + region + '\nsetWindowMode()\nreturn current') as (
@@ -238,5 +240,35 @@ describe('MQA-197 — the overlay height is re-clamped whenever it changes displ
       clampHeight: (h: number, areaHeight: number) => Math.min(h, areaHeight - 48)
     }).height
     expect(height).toBeLessThanOrEqual(LAPTOP_ALONE.workArea.height - 48)
+  })
+})
+
+describe('MQA-271 — a full-bar surface never keeps the mini-pill width after expand', () => {
+  it('resizeTo widens when main is expanded but currentWidth is still pill-sized', async () => {
+    const region = await toJs(sliceBetween('function resizeTo(height: number): void {', '/** Collapse to / expand from the control mini-pill'))
+    const barWidth = constant('BAR_WIDTH')
+    const pillWidth = constant('PILL_WIDTH')
+    const preamble = [
+      'const { screen, clampHeight } = stubs',
+      `let current = { x: 0, y: 0, width: ${pillWidth}, height: 84 }`,
+      `let currentWidth = ${pillWidth}`,
+      'let isMinimized = false',
+      'const win = { getBounds: () => ({ ...current }), setBounds: (b) => { current = { ...current, ...b } } }',
+      `const BAR_WIDTH = ${barWidth}`,
+      'const userAnchorY = null',
+      'let lastBarHeight = 84',
+      ''
+    ].join('\n')
+    const run = new Function('stubs', preamble + region + '\nresizeTo(400)\nreturn { current, currentWidth }') as (
+      stubs: unknown
+    ) => { current: { width: number }; currentWidth: number }
+    const after = run({
+      screen: {
+        getDisplayMatching: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } })
+      },
+      clampHeight: (h: number, areaHeight: number) => Math.min(h, areaHeight - 48)
+    })
+    expect(after.currentWidth).toBe(barWidth)
+    expect(after.current.width).toBe(barWidth)
   })
 })

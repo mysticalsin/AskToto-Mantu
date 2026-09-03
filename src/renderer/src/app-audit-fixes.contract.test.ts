@@ -351,19 +351,16 @@ describe('MQA-271 — opening Settings always restores full bar width', () => {
     expect(block).toMatch(/unminimize\(\)/)
     expect(block).toMatch(/setView\(\(v\) => \(v === 'settings' \? 'answer' : 'settings'\)\)/)
   })
-})
 
-// MQA-271 — Settings opened while the window still has the mini-pill width (~220px) renders squeezed.
-describe('MQA-271 — opening Settings always restores full bar width', () => {
-  it('openSettings widens before switching view', () => {
-    const block = code(blockBetween('const openSettings = useCallback', 'const requireProvider = useCallback'))
+  it('a safety-net effect widens whenever a full panel is visible below the bar', () => {
+    const block = code(blockBetween('// MQA-271 safety net:', '// Single readiness gate for EVERY user-initiated'))
+    expect(block).toMatch(/if \(minimized \|\| DEMO != null\) return/)
+    expect(block).toMatch(/view === 'settings'/)
     expect(block).toMatch(/unminimize\(\)/)
-    expect(block).toMatch(/setView\('settings'\)/)
   })
 
-  it('openSettingsDefault widens before toggling settings (bar logo + tray/hotkey)', () => {
-    const block = code(blockBetween('const openSettingsDefault = useCallback', 'const lastSettingsToggleRef = useRef'))
-    expect(block).toMatch(/unminimize\(\)/)
-    expect(block).toMatch(/setView\(\(v\) => \(v === 'settings' \? 'answer' : 'settings'\)\)/)
+  it('History calendar connect routes through openSettings (not a bare setView bypass)', () => {
+    expect(source).toMatch(/onConnectCalendar=\{\(\) => openSettings\('calendar'\)\}/)
+    expect(source).not.toMatch(/onConnectCalendar=\{\(\) => \{\s*\n\s*setSettingsInitialTab\('calendar'\)/)
   })
 })

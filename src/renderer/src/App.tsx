@@ -872,6 +872,21 @@ export function App(): JSX.Element {
     setCollapsed(false)
   }, [unminimize])
 
+  // MQA-271 safety net: panels below the bar need BAR_WIDTH. openSettings() and friends call
+  // unminimize() too, but this catches desync and any future setView() bypass while the bar is visible.
+  useEffect(() => {
+    if (minimized || DEMO != null) return
+    if (
+      view === 'settings' ||
+      view === 'history' ||
+      view === 'agenda' ||
+      view === 'review' ||
+      view === 'brain'
+    ) {
+      unminimize()
+    }
+  }, [minimized, view, unminimize])
+
   // Single readiness gate for EVERY user-initiated request entry point (not just submit). When the
   // active provider has no key / no CLI connection, route the user to Settings instead of firing an
   // LLM request that fails reactively with a red stream error. Returns false → the caller must bail.
@@ -2620,12 +2635,7 @@ export function App(): JSX.Element {
           if (err) window.alert(err)
         }}
         onBack={() => setView('answer')}
-        onConnectCalendar={() => {
-          setSettingsInitialTab('calendar')
-          setSettingsNotice(undefined)
-          setView('settings')
-          setCollapsed(false)
-        }}
+        onConnectCalendar={() => openSettings('calendar')}
         onNewChat={reset}
         // savedPath is the FULL path returned by the save IPC; RecallView's rows compare against the bare
         // basename (m.file), so passing the full path here never matched and the "Just saved" badge never
