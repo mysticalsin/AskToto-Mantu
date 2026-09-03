@@ -1,7 +1,8 @@
 export const NAV_SECTIONS = [
   {
     id: 'fleet',
-    label: 'Métis',
+    /** Empty: matte Operator rail is circle-only — no product wordmark in the nav. */
+    label: '',
     items: [
       { id: 'overview', label: 'Overview' },
       { id: 'realtime', label: 'Realtime' },

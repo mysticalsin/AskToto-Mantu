@@ -255,6 +255,7 @@ describe('product sidebar (#105)', () => {
     expect(html).not.toContain('class="rt-hud"')
     expect(html).toContain('class="rail-logo"')
     expect(html).not.toContain('>Métis</h1>')
+    expect(html).not.toContain('>Métis</p>')
     expect(css).toContain('.geo-card')
     expect(css).toContain('.world.shoey-world .seat-mark')
     expect(css).toContain('pointer-events: auto')
