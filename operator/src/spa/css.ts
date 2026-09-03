@@ -5,16 +5,16 @@ export const CONSOLE_CSS = `/* Métis Operator SPA — Shoey Overview / Realtime
 @import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.min.css');
 @import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.min.css');
 :root {
-  --bg: #FFFFFF;
+  --bg: #FAFAFA;
   --panel: #FFFFFF;
-  --hair: #EDEDED;
+  --hair: #E4E4E7;
   --ink: #18181B;
   --ink2: #71717A;
   --ink3: #A1A1AA;
-  --accent: #2563EB;
+  --accent: #3B82F6;
   --ok: #16A34A;
   --danger: #DC2626;
-  --live: #10B981;
+  --live: #22C55E;
   --land: #E5E7EB;
   --ocean: #FFFFFF;
   --land-stroke: #6B7280;
@@ -30,44 +30,53 @@ export const CONSOLE_CSS = `/* Métis Operator SPA — Shoey Overview / Realtime
   --sans: 'Geist', 'Geist Sans', ui-sans-serif, system-ui, sans-serif;
 }
 [data-theme="dark"] {
-  --bg: #0a0a0b;
-  --panel: #111113;
-  --hair: rgba(255,255,255,0.10);
-  --ink: rgba(255,255,255,0.94);
-  --ink2: rgba(255,255,255,0.55);
-  --ink3: rgba(255,255,255,0.38);
+  --bg: #09090b;
+  --panel: #0f0f12;
+  --hair: rgba(255,255,255,0.08);
+  --ink: rgba(255,255,255,0.92);
+  --ink2: rgba(255,255,255,0.52);
+  --ink3: rgba(255,255,255,0.34);
   --land: #3f3f46;
   --ocean: #0a0a0b;
   --land-stroke: #111827;
-  --nav: #0d0d0f;
-  --nav-on: rgba(255,255,255,0.08);
+  --nav: #0a0a0c;
+  --nav-on: rgba(255,255,255,0.06);
+  --accent: #60A5FA;
 }
 * { box-sizing: border-box; }
 html { color-scheme: light; }
 html[data-theme="dark"] { color-scheme: dark; }
 html, body { margin: 0; height: 100%; color: var(--ink); background: var(--bg); font: 12px/1.4 var(--sans); -webkit-font-smoothing: antialiased; }
-body { background: var(--bg); color: var(--ink); }
+body {
+  background:
+    radial-gradient(120% 80% at 100% -10%, rgba(59,130,246,0.05), transparent 42%),
+    radial-gradient(90% 60% at -10% 110%, rgba(255,255,255,0.03), transparent 48%),
+    var(--bg);
+  color: var(--ink);
+}
+[data-theme="light"] body {
+  background:
+    radial-gradient(100% 70% at 100% 0%, rgba(24,24,27,0.03), transparent 50%),
+    var(--bg);
+}
 a { color: var(--accent); text-decoration: none; }
 .shell { display: grid; grid-template-columns: 185px 1fr; min-height: 100%; }
 .rail {
-  display: flex; flex-direction: column; gap: 8px;
+  display: flex; flex-direction: column; gap: 10px;
   background: var(--nav); border-right: 1px solid var(--hair);
-  padding: 12px 10px 14px; min-height: 100vh; position: sticky; top: 0;
+  padding: 16px 12px 18px; min-height: 100vh; position: sticky; top: 0;
   width: 185px;
 }
-.rail-brand { display: flex; align-items: center; gap: 8px; padding: 2px 4px 6px; }
+.rail-brand { display: flex; align-items: center; gap: 8px; padding: 4px 6px 10px; }
 .rail-logo {
-  width: 22px; height: 22px; border-radius: 999px; flex-shrink: 0;
-  background: #2563EB; color: #fff;
-  display: grid; place-items: center;
-  font: 700 10px/1 var(--sans); letter-spacing: -0.04em;
-  border: 0;
+  width: 22px; height: 22px; border-radius: 999px;
+  background: transparent;
+  border: 1.5px solid rgba(24,24,27,0.55);
+  display: block; flex-shrink: 0;
 }
 [data-theme="dark"] .rail-logo {
-  background: transparent;
-  border: 1.5px solid rgba(255,255,255,0.42);
-  color: transparent;
-  font-size: 0;
+  border-color: rgba(255,255,255,0.42);
+  background: rgba(255,255,255,0.04);
 }
 .rail-brand h1 { margin: 0; font-size: 13px; font-weight: 650; letter-spacing: -0.03em; }
 .rail-brand .chev { color: var(--ink3); font-size: 11px; }
@@ -92,11 +101,12 @@ a { color: var(--accent); text-decoration: none; }
   font: 11px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
   padding: 6px 8px; border-radius: 8px; cursor: pointer;
 }
-.main { min-width: 0; background: var(--bg); }
+.main { min-width: 0; background: transparent; }
 .top {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 10px 16px; border-bottom: 1px solid var(--hair);
-  background: var(--panel); position: sticky; top: 0; z-index: 4;
+  padding: 12px 20px; border-bottom: 1px solid var(--hair);
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(10px); position: sticky; top: 0; z-index: 4;
 }
 .top-left, .top-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .tool {
@@ -117,12 +127,12 @@ a { color: var(--accent); text-decoration: none; }
   font-size: 10px; letter-spacing: 0.12em;
   text-transform: uppercase; color: var(--ink3); margin: 0 0 8px; font-weight: 600;
 }
-.wrap { padding: 14px 16px 36px; display: grid; gap: 12px; }
+.wrap { padding: 20px 22px 48px; display: grid; gap: 16px; }
 .page { animation: pageFade 420ms var(--ease-out); }
 .page.page-enter { animation: pageFade 420ms var(--ease-out); }
 .page[hidden] { display: none !important; animation: none; }
 @keyframes pageFade {
-  from { opacity: 0; transform: translateY(4px); }
+  from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: none; }
 }
 .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
@@ -147,8 +157,8 @@ a { color: var(--accent); text-decoration: none; }
 }
 .stat-flow .lbl { font-size: 11px; color: var(--ink3); }
 @keyframes kpiSettle {
-  from { opacity: 0.35; transform: translateY(5px); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0.35; transform: translateY(5px); filter: blur(2px); }
+  to { opacity: 1; transform: none; filter: none; }
 }
 .stat-card .spark, .stat-card .stat-spark { display: block; width: calc(100% + 28px); margin: 6px -14px 0; height: 72px; }
 .stat-gauge, .stat-ring { height: 64px; margin-left: auto; margin-right: auto; width: 88px; }
@@ -162,16 +172,8 @@ a { color: var(--accent); text-decoration: none; }
 .ov-brand { display: inline-flex; align-items: center; gap: 10px; }
 .ov-mark {
   width: 28px; height: 28px; border-radius: 999px; flex-shrink: 0;
-  background: #2563EB; color: #fff;
-  display: grid; place-items: center;
-  font: 700 11px/1 var(--sans); letter-spacing: -0.04em;
-  border: 0;
-}
-[data-theme="dark"] .ov-mark {
-  background: transparent;
-  border: 1.5px solid rgba(255,255,255,0.42);
-  color: transparent;
-  font-size: 0;
+  border: 1.5px solid color-mix(in srgb, var(--ink) 42%, transparent);
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
 }
 .ov-brand-name {
   font-size: 22px; font-weight: 650; letter-spacing: -0.045em; color: var(--ink); line-height: 1;
@@ -188,7 +190,7 @@ a { color: var(--accent); text-decoration: none; }
 }
 .ov-live-landed {
   border-color: color-mix(in srgb, var(--accent) 35%, var(--hair));
-  background: var(--panel);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 8%, var(--panel)), var(--panel));
   animation: ovLand 700ms ease-out;
 }
 .ov-live-idle { background: var(--panel); }
