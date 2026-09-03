@@ -1,3 +1,4 @@
+import { resolveOperatorUrl } from '@shared/operator'
 import {
   app,
   BrowserWindow,
@@ -2689,7 +2690,7 @@ function registerIpc(): void {
   // --- Operator (fleet heartbeat Worker) ---
   ipcMain.handle(IPC.operatorOpen, (e) => {
     assertMainWindow(e)
-    const url = (getSettings().operatorUrl || process.env.METIS_OPERATOR_URL || '').trim()
+    const url = resolveOperatorUrl(getSettings())
     if (/^https:\/\//i.test(url)) void shell.openExternal(url)
   })
 
@@ -5406,8 +5407,9 @@ if (!app.requestSingleInstanceLock()) {
   importEmbeddedCloudflareKey()
   {
     const boot = getSettings()
-    if (!boot.operatorUrl && process.env.METIS_OPERATOR_URL && /^https:\/\//i.test(process.env.METIS_OPERATOR_URL)) {
-      setSettings({ operatorUrl: process.env.METIS_OPERATOR_URL.trim() })
+    {
+      const url = resolveOperatorUrl(boot)
+      if (!boot.operatorUrl && url) setSettings({ operatorUrl: url })
     }
     if (!boot.operatorIngestSecret && process.env.METIS_OPERATOR_INGEST_SECRET) {
       setSettings({ operatorIngestSecret: process.env.METIS_OPERATOR_INGEST_SECRET })

@@ -287,7 +287,7 @@ describe('SettingsSchema', () => {
   })
 
   it('defaults playListenChime, requireConsentIndicator, and lastConsentReminderAt', () => {
-    expect(DEFAULT_SETTINGS.operatorUrl).toBe('')
+    expect(DEFAULT_SETTINGS.operatorUrl).toBe('https://metis-operator.tony-walteur.workers.dev')
     expect(DEFAULT_SETTINGS.operatorIngestSecret).toBe('')
     expect(DEFAULT_SETTINGS.sendAskText).toBe(true)
     expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, operatorUrl: 'http://not-https.example' }).success).toBe(
