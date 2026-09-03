@@ -5732,6 +5732,55 @@ export function Settings({
                 >
                   <SupportBundleSection />
                 </Section>
+                <Section
+                  title="Operator"
+                  desc="Point this Mac at Tony's Operator Worker. Empty means no fleet heartbeat. This is not a local analytics page."
+                  icon={Settings2}
+                >
+                  <label className="flex flex-col gap-1 px-1 py-2">
+                    <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Operator URL</span>
+                    <input
+                      value={settings.operatorUrl || ''}
+                      spellCheck={false}
+                      autoComplete="off"
+                      placeholder="https://metis-operator.tony-walteur.workers.dev"
+                      disabled={settings.managedKeys.includes('operatorUrl')}
+                      onChange={(e) => patch({ operatorUrl: e.target.value.trim() })}
+                      className={`${ctl} w-full`}
+                    />
+                  </label>
+                  <label className="flex flex-col gap-1 px-1 py-2">
+                    <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Ingest secret</span>
+                    <input
+                      type="password"
+                      value={settings.operatorIngestSecret || ''}
+                      spellCheck={false}
+                      autoComplete="off"
+                      placeholder="Same value as the Worker OPERATOR_INGEST_SECRET"
+                      disabled={settings.managedKeys.includes('operatorIngestSecret')}
+                      onChange={(e) => patch({ operatorIngestSecret: e.target.value })}
+                      className={`${ctl} w-full`}
+                    />
+                  </label>
+                  {/^https:\/\//i.test(settings.operatorUrl || '') && (
+                    <ToggleRow
+                      label="Send Ask text for skill improvement"
+                      desc="When on, the question text goes with the metrics so skills can be drafted. Metrics always send. Listen transcripts and screens never send."
+                      on={settings.sendAskText !== false}
+                      onChange={(v) => patch({ sendAskText: v })}
+                      disabled={settings.managedKeys.includes('sendAskText')}
+                    />
+                  )}
+                  {/^https:\/\//i.test(settings.operatorUrl || '') && (
+                    <button
+                      type="button"
+                      onClick={() => void window.toto.operatorOpen()}
+                      className="no-drag cl-focus mt-1 flex items-center gap-1 rounded-lg bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.1]"
+                    >
+                      <ExternalLink size={12} /> Open Operator
+                    </button>
+                  )}
+                </Section>
               </div>
             )}
 

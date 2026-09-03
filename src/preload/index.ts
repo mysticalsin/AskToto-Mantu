@@ -344,6 +344,8 @@ const api = {
   // tokens and upserted the mcpConnections entry by the time this resolves.
   mcpClickupConnect: (): Promise<McpConnectResult> => ipcRenderer.invoke(IPC.mcpClickupConnect),
 
+  operatorOpen: (): Promise<void> => ipcRenderer.invoke(IPC.operatorOpen),
+
   licenseActivate: (payload: LicenseActivatePayload): Promise<LicenseActivateResult> =>
     ipcRenderer.invoke(IPC.licenseActivate, payload),
   licenseStatus: (): Promise<LicenseStatusResult> => ipcRenderer.invoke(IPC.licenseStatus),

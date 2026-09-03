@@ -92,7 +92,13 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
     var requested = titles[raw] ? raw : 'overview'
     var id = requested === 'map' ? 'realtime' : requested
     document.querySelectorAll('[data-page]').forEach(function (p) {
-      p.hidden = p.getAttribute('data-page') !== id
+      var show = p.getAttribute('data-page') === id
+      p.hidden = !show
+      if (show) {
+        p.classList.remove('page-enter')
+        void p.offsetWidth
+        p.classList.add('page-enter')
+      }
     })
     var navOn = requested === 'map' ? 'realtime' : requested
     document.querySelectorAll('[data-nav]').forEach(function (a) {
