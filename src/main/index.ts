@@ -268,7 +268,7 @@ import {
   deleteAllMeetings,
   sweepExpiredMeetings
 } from './recall'
-import { initAutoUpdate, checkForUpdateNow, startUpdateDownload } from './updater'
+import { initAutoUpdate, checkForUpdateNow, startUpdateDownload, installDownloadedUpdate, isInstallingUpdate } from './updater'
 import { runSelfTest } from './selftest'
 import { devEnv, devToolsEnabled } from './dev-env'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
@@ -5334,11 +5334,17 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.updateInstall, (e) => {
     assertMainWindow(e)
-    // Lazy-required (same pattern + rationale as updater.ts): a static import here put
-    // electron-updater's whole require tree (~46ms) on every boot for a once-per-update button.
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { autoUpdater } = require('electron-updater') as typeof import('electron-updater')
-    autoUpdater.quitAndInstall()
+    // MQA-272: Métis is a tray overlay — bare quitAndInstall() closes windows and the process stays
+    // alive in the menu bar, so Restart & install looked like a no-op. Skip the meeting-flush delay,
+    // tear the tray down, then hand off to installDownloadedUpdate (setImmediate + quitAndInstall).
+    quitFlushDone = true
+    try {
+      tray?.destroy()
+      tray = null
+    } catch {
+      /* tray optional */
+    }
+    installDownloadedUpdate()
   })
   // --- Mail draft ---
   // mailto: fallback for the follow-up draft (Phase 1) — opens the user's own default mail client with
@@ -5986,6 +5992,8 @@ app.on('window-all-closed', () => {
 // main. Reuses the existing 'reset' hotkey, which already runs saveMeetingNow() for a live meeting
 // (App.tsx's reset()) — no new IPC channel needed.
 app.on('before-quit', (e) => {
+  // MQA-272: Restart & install is mid-flight — never delay or divert it into a plain app.quit().
+  if (isInstallingUpdate()) return
   if (quitFlushDone || recordingPowerSaveBlockerId === null || !win || win.isDestroyed()) return
   e.preventDefault()
   quitFlushDone = true
