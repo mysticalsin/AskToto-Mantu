@@ -296,7 +296,7 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
     var theme = v === 'dark' ? 'dark' : 'light'
     document.documentElement.setAttribute('data-theme', theme)
   }
-  try { applyTheme(localStorage.getItem('metis-operator-theme') || 'light') } catch (e) { applyTheme('light') }
+  try { applyTheme(localStorage.getItem('metis-operator-theme') || 'dark') } catch (e) { applyTheme('dark') }
   paintShoeyMap()
   if (themeBtn) {
     themeBtn.addEventListener('click', function () {
@@ -307,6 +307,96 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
       try { localStorage.setItem('metis-operator-theme', next) } catch (e) {}
     })
   }
+
+  function clearLiveFocus() {
+    document.querySelectorAll('.rt-seat.on, .seat-mark.on, .geo-row.on, #map-root path[data-iso].on').forEach(function (el) {
+      el.classList.remove('on')
+    })
+  }
+
+  function focusLiveSeat(device) {
+    if (!device) return
+    clearLiveFocus()
+    document.querySelectorAll('.rt-seat[data-device]').forEach(function (el) {
+      var on = el.getAttribute('data-device') === device
+      el.classList.toggle('on', on)
+      if (on) {
+        try { el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }) } catch (e) {}
+      }
+    })
+    document.querySelectorAll('.seat-mark[data-device]').forEach(function (el) {
+      el.classList.toggle('on', el.getAttribute('data-device') === device)
+    })
+    var seat = document.querySelector('.rt-seat[data-device="' + device + '"]')
+    var iso = seat && seat.getAttribute('data-iso')
+    if (iso) {
+      document.querySelectorAll('#map-root path[data-iso="' + iso + '"]').forEach(function (p) {
+        p.classList.add('on')
+      })
+      document.querySelectorAll('.geo-row[data-iso="' + iso + '"]').forEach(function (row) {
+        row.classList.add('on')
+      })
+    }
+  }
+
+  function focusLiveIso(iso) {
+    clearLiveFocus()
+    if (!iso) return
+    document.querySelectorAll('#map-root path[data-iso="' + iso + '"]').forEach(function (p) {
+      p.classList.add('on')
+    })
+    document.querySelectorAll('.geo-row').forEach(function (row) {
+      var on = row.getAttribute('data-iso') === iso
+      row.classList.toggle('on', on)
+      row.hidden = !on
+    })
+    document.querySelectorAll('.rt-seat').forEach(function (el) {
+      var on = el.getAttribute('data-iso') === iso
+      el.classList.toggle('on', on)
+      el.hidden = !on
+    })
+    document.querySelectorAll('.seat-mark').forEach(function (el) {
+      el.classList.toggle('on', el.getAttribute('data-iso') === iso)
+    })
+  }
+
+  function clearGeoFilter() {
+    document.querySelectorAll('.geo-row, .rt-seat').forEach(function (el) { el.hidden = false })
+    clearLiveFocus()
+  }
+
+  document.querySelectorAll('.seat-mark[data-device]').forEach(function (g) {
+    g.addEventListener('click', function (ev) {
+      ev.stopPropagation()
+      focusLiveSeat(g.getAttribute('data-device'))
+    })
+    g.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault()
+        focusLiveSeat(g.getAttribute('data-device'))
+      }
+    })
+  })
+
+  document.querySelectorAll('.rt-seat[data-device]').forEach(function (el) {
+    el.addEventListener('click', function () {
+      focusLiveSeat(el.getAttribute('data-device'))
+    })
+    el.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Enter' || ev.key === ' ') {
+        ev.preventDefault()
+        focusLiveSeat(el.getAttribute('data-device'))
+      }
+    })
+  })
+
+  document.querySelectorAll('.geo-row[data-iso]').forEach(function (row) {
+    row.addEventListener('click', function () {
+      var iso = row.getAttribute('data-iso') || ''
+      if (row.classList.contains('on')) clearGeoFilter()
+      else focusLiveIso(iso)
+    })
+  })
 
   function addSeatField(body, label, value, wide) {
     var field = document.createElement('div')
@@ -393,6 +483,8 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
       document.querySelectorAll('[data-vol-pane="geo:geo"] .vol-row[data-q]').forEach(function (row) {
         row.hidden = Boolean(iso) && !(row.getAttribute('data-q') || '').toUpperCase().includes(iso)
       })
+      if (iso && p.classList.contains('on')) clearGeoFilter()
+      else if (iso) focusLiveIso(iso)
     })
   })
 
