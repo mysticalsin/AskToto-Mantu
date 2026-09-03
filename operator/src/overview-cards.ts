@@ -228,7 +228,7 @@ export function renderOverviewMini10(data: DashboardPayload): string {
   const landed = Boolean(usage && (ops.tokens || ops.apiCalls || usage.tokens || usage.count))
   const hero = `<header class="ov-hero" data-overview-hero>
       <div class="ov-brand">
-        <span class="ov-mark" aria-hidden="true"></span>
+        <span class="ov-mark" aria-hidden="true">M</span>
         <span class="ov-brand-name">Operator</span>
       </div>
       <p class="ov-headline">Fleet pulse across seats, asks, and usage</p>
