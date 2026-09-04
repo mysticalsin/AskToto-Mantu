@@ -697,6 +697,143 @@ export function renderConsole(data: DashboardPayload): string {
       </div>
     </article>`
 
+  // OpenPanel Realtime parity (WebsiteCloner): Sources / Surfaces / Cities — Métis nouns, never Referrals/Paths.
+  const sourceAgg = new Map<string, { label: string; events: number; sessions: Set<string> }>()
+  for (const p of liveProfiles) {
+    const label =
+      (p.hostname && !looksLikeSecret(p.hostname) && p.hostname.trim()) ||
+      (p.email && !looksLikeSecret(p.email) && p.email.trim()) ||
+      'unknown'
+    const row = sourceAgg.get(label) || { label, events: 0, sessions: new Set<string>() }
+    row.sessions.add(p.device)
+    sourceAgg.set(label, row)
+  }
+  for (const e of recentEvents) {
+    const label =
+      (e.hostname && !looksLikeSecret(e.hostname) && e.hostname.trim()) ||
+      (e.email && !looksLikeSecret(e.email) && e.email.trim()) ||
+      'unknown'
+    const row = sourceAgg.get(label) || { label, events: 0, sessions: new Set<string>() }
+    row.events += 1
+    if (e.device) row.sessions.add(e.device)
+    sourceAgg.set(label, row)
+  }
+  const sourceRows = [...sourceAgg.values()]
+    .map((r) => ({ label: r.label, events: r.events, sessions: r.sessions.size || (r.events ? 1 : 0) }))
+    .sort((a, b) => b.events - a.events || b.sessions - a.sessions)
+    .slice(0, 12)
+  const sourceMax = Math.max(1, ...sourceRows.map((r) => r.events || r.sessions))
+  const sourceBreakdown = `<article class="rt-board-card" data-source-breakdown>
+      <div class="rt-board-head"><h3 class="rt-board-title">Sources</h3></div>
+      <div class="rt-board-cols" aria-hidden="true"><span>Source</span><span>Events</span><span>Seats</span></div>
+      <div class="rt-board-list">
+        ${
+          sourceRows.length
+            ? sourceRows
+                .map((r) => {
+                  const w = Math.max(4, Math.round(((r.events || r.sessions) / sourceMax) * 100))
+                  return `<div class="rt-board-row">
+                    <span class="rt-board-bar" style="width:${w}%"></span>
+                    <span class="rt-board-place">${esc(r.label)}</span>
+                    <span class="rt-board-n">${r.events}</span>
+                    <span class="rt-board-n">${r.sessions}</span>
+                  </div>`
+                })
+                .join('')
+            : `<div class="empty">No sources yet. Live seat hostnames land here.</div>`
+        }
+      </div>
+    </article>`
+
+  const surfaceAgg = new Map<string, { label: string; events: number; sessions: Set<string> }>()
+  for (const e of recentEvents) {
+    const pathChip = e.chips.find((c) => c.key === 'path')?.value
+    const label =
+      (pathChip && pathChip !== '/' && !looksLikeSecret(pathChip) && pathChip.trim()) ||
+      (e.name && !looksLikeSecret(e.name) && e.name.trim()) ||
+      'event'
+    const row = surfaceAgg.get(label) || { label, events: 0, sessions: new Set<string>() }
+    row.events += 1
+    if (e.device) row.sessions.add(e.device)
+    surfaceAgg.set(label, row)
+  }
+  const surfaceRows = [...surfaceAgg.values()]
+    .map((r) => ({ label: r.label, events: r.events, sessions: r.sessions.size || (r.events ? 1 : 0) }))
+    .sort((a, b) => b.events - a.events || b.sessions - a.sessions)
+    .slice(0, 12)
+  const surfaceMax = Math.max(1, ...surfaceRows.map((r) => r.events))
+  const surfaceBreakdown = `<article class="rt-board-card" data-surface-breakdown>
+      <div class="rt-board-head"><h3 class="rt-board-title">Surfaces</h3></div>
+      <div class="rt-board-cols" aria-hidden="true"><span>Surface</span><span>Events</span><span>Seats</span></div>
+      <div class="rt-board-list">
+        ${
+          surfaceRows.length
+            ? surfaceRows
+                .map((r) => {
+                  const w = Math.max(4, Math.round((r.events / surfaceMax) * 100))
+                  return `<div class="rt-board-row">
+                    <span class="rt-board-bar" style="width:${w}%"></span>
+                    <span class="rt-board-place">${esc(r.label)}</span>
+                    <span class="rt-board-n">${r.events}</span>
+                    <span class="rt-board-n">${r.sessions}</span>
+                  </div>`
+                })
+                .join('')
+            : `<div class="empty">No surfaces yet. Asks and heartbeats fill entry points here.</div>`
+        }
+      </div>
+    </article>`
+
+  const cityAgg = new Map<string, { label: string; iso: string; events: number; sessions: Set<string> }>()
+  for (const p of liveProfiles) {
+    const city = p.city && !looksLikeSecret(p.city) ? p.city.trim() : ''
+    if (!city) continue
+    const iso = p.country && !looksLikeSecret(p.country) ? p.country.trim().toUpperCase() : ''
+    const label = iso ? `${city}, ${countryName(iso) || iso}` : city
+    const row = cityAgg.get(label) || { label, iso, events: 0, sessions: new Set<string>() }
+    row.sessions.add(p.device)
+    cityAgg.set(label, row)
+  }
+  for (const e of recentEvents) {
+    const city = e.city && !looksLikeSecret(e.city) ? e.city.trim() : ''
+    if (!city) continue
+    const iso = e.country && !looksLikeSecret(e.country) ? e.country.trim().toUpperCase() : ''
+    const label = iso ? `${city}, ${countryName(iso) || iso}` : city
+    const row = cityAgg.get(label) || { label, iso, events: 0, sessions: new Set<string>() }
+    row.events += 1
+    if (e.device) row.sessions.add(e.device)
+    cityAgg.set(label, row)
+  }
+  const cityRows = [...cityAgg.values()]
+    .map((r) => ({ label: r.label, iso: r.iso, events: r.events, sessions: r.sessions.size || (r.events ? 1 : 0) }))
+    .sort((a, b) => b.events - a.events || b.sessions - a.sessions)
+    .slice(0, 12)
+  const cityMax = Math.max(1, ...cityRows.map((r) => r.events || r.sessions))
+  const cityBreakdown = `<article class="rt-board-card" data-city-breakdown>
+      <div class="rt-board-head"><h3 class="rt-board-title">Cities</h3></div>
+      <div class="rt-board-cols" aria-hidden="true"><span>City</span><span>Events</span><span>Seats</span></div>
+      <div class="rt-board-list">
+        ${
+          cityRows.length
+            ? cityRows
+                .map((r) => {
+                  const w = Math.max(4, Math.round(((r.events || r.sessions) / cityMax) * 100))
+                  const flag = r.iso ? `<span class="flag-mark">${flagMark(r.iso)}</span>` : ''
+                  return `<div class="rt-board-row">
+                    <span class="rt-board-bar" style="width:${w}%"></span>
+                    <span class="rt-board-place">${flag}<span>${esc(r.label)}</span></span>
+                    <span class="rt-board-n">${r.events}</span>
+                    <span class="rt-board-n">${r.sessions}</span>
+                  </div>`
+                })
+                .join('')
+            : `<div class="empty">No cities yet. Cloudflare request.cf fills city when a seat heartbeats.</div>`
+        }
+      </div>
+    </article>`
+
+  const activeSeats = liveProfiles.length
+
   const activity = recentEvents.length
     ? recentEvents
         .slice()
@@ -807,10 +944,10 @@ export function renderConsole(data: DashboardPayload): string {
         <span class="live-dot"><i></i>${live30}</span>
         <button class="tool" type="button">Private</button>
       </div>
-      <h2 id="page-title" hidden>Overview</h2>
+      <h2 id="page-title" hidden>Realtime</h2>
     </header>
 
-    <section class="page wrap" data-page="overview">
+    <section class="page wrap" data-page="overview" hidden>
       ${renderOverviewMini10(data)}
       <article class="card ov-cf-secondary" style="padding-bottom:10px" data-cf-overview>
         <p class="eyebrow">Cloudflare</p>
@@ -818,7 +955,7 @@ export function renderConsole(data: DashboardPayload): string {
       </article>
     </section>
 
-    <section class="page wrap" data-page="realtime" hidden>
+    <section class="page wrap" data-page="realtime">
       <div class="page-hero" data-live-map>
         <h3 class="page-title">Live map</h3>
         <p class="page-sub">Active seats on the globe with signatures. Pins use Cloudflare request.cf only. Heartbeats stream on Events.</p>
@@ -829,6 +966,10 @@ export function renderConsole(data: DashboardPayload): string {
             <div class="rt-kpi">
               <span class="rt-hud-lbl">Unique seats last 30 min</span>
               <div class="n rt-n">${formatCompact(live30)}</div>
+            </div>
+            <div class="rt-kpi rt-kpi-active">
+              <span class="rt-hud-lbl">Active seats</span>
+              <div class="n rt-n">${formatCompact(activeSeats)}</div>
             </div>
             <div class="rt-kpi-spark" aria-hidden="true">${blueBars(live30Series, 280, 48)}</div>
           </div>
@@ -851,8 +992,11 @@ export function renderConsole(data: DashboardPayload): string {
           <div id="map-root" data-land="inline" style="position:relative">${world}</div>
         </article>
       </div>
-      <div class="rt-boards">
+      <div class="rt-boards" data-rt-boards="full">
         ${geoBreakdown}
+        ${cityBreakdown}
+        ${sourceBreakdown}
+        ${surfaceBreakdown}
         ${osBreakdown}
         ${kindBreakdown}
       </div>

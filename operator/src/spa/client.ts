@@ -82,14 +82,15 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
       var next = to
       if (next.charAt(0) === '#') next = next.slice(1)
       if (next.charAt(0) === '/') next = next.slice(1)
-      if (!next) next = 'overview'
+      if (!next) next = 'realtime'
       if (titles[next] || next === 'map') {
         var want = '#' + next
         if (location.hash !== want) location.hash = want
       }
     }
-    var raw = (location.hash || '#overview').replace('#', '')
-    var requested = titles[raw] ? raw : 'overview'
+    // WebsiteCloner / OpenPanel Realtime is the home surface — land there unless a hash is set.
+    var raw = (location.hash || '#realtime').replace('#', '')
+    var requested = titles[raw] ? raw : 'realtime'
     var id = requested === 'map' ? 'realtime' : requested
     document.querySelectorAll('[data-page]').forEach(function (p) {
       var show = p.getAttribute('data-page') === id
@@ -160,6 +161,7 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
   if (!location.hash) {
     var path = ${PATHNAME_STRIP_JS}
     if (path && titles[path]) location.hash = '#' + path
+    else location.hash = '#realtime'
   }
   route()
 

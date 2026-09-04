@@ -371,6 +371,10 @@ a { color: var(--accent); text-decoration: none; }
 .rt-boards {
   display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 4px;
 }
+.rt-boards[data-rt-boards="full"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.rt-kpi-active .n { color: var(--accent, #2563EB); }
 .rt-board-card, .geo-card {
   border: 1px solid var(--hair); border-radius: 12px; background: var(--panel);
   padding: 12px; min-width: 0; overflow: hidden;
