@@ -625,6 +625,105 @@ export function renderConsole(data: DashboardPayload): string {
       </div>
     </article>`
 
+
+  const osAgg = new Map<string, { label: string; events: number; sessions: number }>()
+  for (const p of liveProfiles) {
+    const label = (p.os || 'unknown').trim() || 'unknown'
+    const row = osAgg.get(label) || { label, events: 0, sessions: 0 }
+    row.sessions += 1
+    osAgg.set(label, row)
+  }
+  for (const e of recentEvents) {
+    const label = (e.os || 'unknown').trim() || 'unknown'
+    const row = osAgg.get(label) || { label, events: 0, sessions: 0 }
+    row.events += 1
+    osAgg.set(label, row)
+  }
+  const osRows = [...osAgg.values()].sort((a, b) => b.events - a.events || b.sessions - a.sessions)
+  const osMax = Math.max(1, ...osRows.map((r) => r.events || r.sessions))
+  const osBreakdown = `<article class="rt-board-card" data-os-breakdown>
+      <div class="rt-board-head"><h3 class="rt-board-title">OS</h3></div>
+      <div class="rt-board-cols" aria-hidden="true"><span>OS</span><span>Events</span><span>Seats</span></div>
+      <div class="rt-board-list">
+        ${
+          osRows.length
+            ? osRows
+                .map((r) => {
+                  const w = Math.max(4, Math.round(((r.events || r.sessions) / osMax) * 100))
+                  return `<div class="rt-board-row">
+                    <span class="rt-board-bar" style="width:${w}%"></span>
+                    <span class="rt-board-place">${esc(r.label)}</span>
+                    <span class="rt-board-n">${r.events}</span>
+                    <span class="rt-board-n">${r.sessions}</span>
+                  </div>`
+                })
+                .join('')
+            : `<div class="empty">No OS mix yet. Heartbeats fill macOS / Windows here.</div>`
+        }
+      </div>
+    </article>`
+
+  const kindAgg = new Map<string, { label: string; events: number; sessions: Set<string> }>()
+  for (const e of recentEvents) {
+    const label = (e.name || 'event').trim() || 'event'
+    const row = kindAgg.get(label) || { label, events: 0, sessions: new Set<string>() }
+    row.events += 1
+    if (e.device) row.sessions.add(e.device)
+    kindAgg.set(label, row)
+  }
+  const kindRows = [...kindAgg.values()]
+    .map((r) => ({ label: r.label, events: r.events, sessions: r.sessions.size || (r.events ? 1 : 0) }))
+    .sort((a, b) => b.events - a.events || b.sessions - a.sessions)
+  const kindMax = Math.max(1, ...kindRows.map((r) => r.events))
+  const kindBreakdown = `<article class="rt-board-card" data-kind-breakdown>
+      <div class="rt-board-head"><h3 class="rt-board-title">Event kinds</h3></div>
+      <div class="rt-board-cols" aria-hidden="true"><span>Kind</span><span>Events</span><span>Seats</span></div>
+      <div class="rt-board-list">
+        ${
+          kindRows.length
+            ? kindRows
+                .map((r) => {
+                  const w = Math.max(4, Math.round((r.events / kindMax) * 100))
+                  return `<div class="rt-board-row">
+                    <span class="rt-board-bar" style="width:${w}%"></span>
+                    <span class="rt-board-place">${esc(r.label)}</span>
+                    <span class="rt-board-n">${r.events}</span>
+                    <span class="rt-board-n">${r.sessions}</span>
+                  </div>`
+                })
+                .join('')
+            : `<div class="empty">No event kinds yet. Asks and heartbeats land here.</div>`
+        }
+      </div>
+    </article>`
+
+  const activity = recentEvents.length
+    ? recentEvents
+        .slice()
+        .sort((a, b) => b.ts - a.ts)
+        .slice(0, 40)
+        .map((e) => {
+          const who =
+            e.email && !looksLikeSecret(e.email)
+              ? e.email
+              : e.hostname && !looksLikeSecret(e.hostname)
+                ? e.hostname
+                : e.device || MISSING
+          const place = [e.city, e.country ? countryName(e.country) || e.country : '']
+            .filter((v) => v && !looksLikeSecret(v))
+            .join(', ')
+          return `<div class="rt-activity-row">
+            <span class="rt-activity-dot" aria-hidden="true"></span>
+            <div class="rt-activity-body">
+              <div class="rt-activity-name">${esc(e.name || 'event')}</div>
+              <div class="rt-activity-meta">${esc(who)}${place ? ` · ${esc(place)}` : ''}</div>
+            </div>
+            <span class="rt-activity-ago">${esc(ago(e.ts, data.now))}</span>
+          </div>`
+        })
+        .join('')
+    : `<div class="empty">No live activity in the last 30 minutes. Heartbeats and asks appear here.</div>`
+
   const roster = liveProfiles.length
     ? liveProfiles
         .map((p) => {
@@ -664,7 +763,7 @@ export function renderConsole(data: DashboardPayload): string {
   return `<!doctype html>
 <html lang="en" data-theme="dark"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Operator</title>
+<title>Métis Operator</title>
 <link rel="stylesheet" href="${SPA_CSS_PATH}">
 <script src="${SPA_JS_PATH}" defer></script>
 </head>
@@ -681,8 +780,9 @@ export function renderConsole(data: DashboardPayload): string {
 </defs></svg>
 <div class="shell">
   <aside class="rail">
-    <div class="rail-brand" title="Operator">
-      <span class="rail-logo" aria-label="Operator"></span>
+    <div class="rail-brand" title="Métis">
+      <span class="rail-logo" aria-label="Métis">M</span>
+      <span class="rail-name">Métis</span>
     </div>
     ${renderNav()}
     <div class="rail-foot">
@@ -723,26 +823,39 @@ export function renderConsole(data: DashboardPayload): string {
         <h3 class="page-title">Live map</h3>
         <p class="page-sub">Active seats on the globe with signatures. Pins use Cloudflare request.cf only. Heartbeats stream on Events.</p>
       </div>
-      <div class="rt-kpi-bar">
-        <div class="rt-kpi">
-          <span class="rt-hud-lbl">Unique seats last 30 min</span>
-          <div class="n rt-n">${formatCompact(live30)}</div>
+      <div class="rt-shoey" data-rt-layout="shoey">
+        <div class="rt-shoey-left">
+          <div class="rt-kpi-bar">
+            <div class="rt-kpi">
+              <span class="rt-hud-lbl">Unique seats last 30 min</span>
+              <div class="n rt-n">${formatCompact(live30)}</div>
+            </div>
+            <div class="rt-kpi-spark" aria-hidden="true">${blueBars(live30Series, 280, 48)}</div>
+          </div>
+          <aside class="rt-roster" id="rt-roster" aria-label="Live seat signatures">
+            <div class="rt-roster-head">
+              <h3 class="rt-h">Live seats</h3>
+              <span class="rt-roster-count">${formatCompact(live30)}</span>
+            </div>
+            <div class="rt-roster-list">${roster}</div>
+          </aside>
+          <article class="rt-activity" id="rt-activity" aria-label="Live activity">
+            <div class="rt-roster-head">
+              <h3 class="rt-h">Activity</h3>
+              <span class="rt-roster-count">${formatCompact(recentEvents.length)}</span>
+            </div>
+            <div class="rt-activity-list">${activity}</div>
+          </article>
         </div>
-        <div class="rt-kpi-spark" aria-hidden="true">${blueBars(live30Series, 280, 48)}</div>
-      </div>
-      <div class="rt-stage">
         <article class="rt-map-full">
           <div id="map-root" data-land="inline" style="position:relative">${world}</div>
         </article>
-        <aside class="rt-roster" id="rt-roster" aria-label="Live seat signatures">
-          <div class="rt-roster-head">
-            <h3 class="rt-h">Live seats</h3>
-            <span class="rt-roster-count">${formatCompact(live30)}</span>
-          </div>
-          <div class="rt-roster-list">${roster}</div>
-        </aside>
       </div>
-      ${geoBreakdown}
+      <div class="rt-boards">
+        ${geoBreakdown}
+        ${osBreakdown}
+        ${kindBreakdown}
+      </div>
     </section>
 
 
