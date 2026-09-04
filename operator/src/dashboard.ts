@@ -55,6 +55,7 @@ export interface MapDot {
   email: string | null
   os: string
   appVersion: string
+  product: string | null
   lastSeen: number
 }
 
@@ -206,6 +207,8 @@ export interface ProfileRow {
   email: string | null
   os: string
   appVersion: string
+  /** Allowlisted Métis client product id, or null when unknown. */
+  product: string | null
   country: string | null
   city: string | null
   lastSeen: number
@@ -703,6 +706,7 @@ export async function buildDashboard(
         email: who.email,
         os: s.os || '',
         appVersion: s.app_version || '',
+        product: s.product && !looksLikeSecret(s.product) ? s.product : null,
         lastSeen: s.last_seen
       }
     })
@@ -926,6 +930,7 @@ export async function buildDashboard(
         email: s.sso_email && !looksLikeSecret(s.sso_email) ? s.sso_email : null,
         os: s.os,
         appVersion: s.app_version,
+        product: s.product && !looksLikeSecret(s.product) ? s.product : null,
         country: s.country,
         city: s.city,
         lastSeen: s.last_seen,

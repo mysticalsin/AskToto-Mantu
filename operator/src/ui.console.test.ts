@@ -120,6 +120,8 @@ describe('product sidebar (#105)', () => {
     expect(realtime).not.toContain('Users per countries')
     expect(realtime).not.toContain('>Referrals<')
     expect(realtime).not.toContain('>Paths<')
+    expect(realtime).toContain('>Apps<')
+    expect(realtime).toContain('data-apps-breakdown')
     expect(realtime).toContain('>Sources<')
     expect(realtime).toContain('>Surfaces<')
     expect(realtime).toContain('>Cities<')
@@ -390,7 +392,8 @@ describe('events never render token-like strings', () => {
       last_index_at: null,
       hostname: 'Tonys-MacBook-Pro',
       sso_email: 'twalteur@amaris.com',
-      license: 'approved'
+      license: 'approved',
+      product: null
     })
     const ingest = await signedRequest(
       '/v1/ingest',
@@ -433,7 +436,8 @@ describe('sessions pane is live Métis seats, not Shoey demo rows', () => {
       last_index_at: null,
       hostname: 'Tonys-MacBook-Pro',
       sso_email: 'twalteur@amaris.com',
-      license: 'approved'
+      license: 'approved',
+      product: null
     })
     await store.insertEvent({
       id: 'ev-path',
@@ -535,8 +539,9 @@ describe('realtime main pane is the live signature map, not leftover OpenPanel',
         last_index_at: null,
         hostname: 'Tonys-MacBook-Pro',
         sso_email: 'twalteur@amaris.com',
-        license: 'approved'
-      })
+        license: 'approved',
+      product: null
+    })
       for (const offset of [45_000, 2 * 60_000, 8 * 60_000, 15 * 60_000] as const) {
         await store.insertPulse({
           id: `pulse-${id}-${offset}`,

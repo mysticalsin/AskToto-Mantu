@@ -1,6 +1,7 @@
 import { WORLD_PATHS } from './world-paths'
 import { stripMapBands } from './map-bands'
 import type { MapCountry, MapDot, MixBar, SeriesPoint, TokenPoint } from './dashboard'
+import { productLabel } from './product'
 
 const MONO = ['#2a2a2e', '#3f3f46', '#71717a', '#a1a1aa', '#e4e4e7']
 
@@ -191,7 +192,7 @@ export function blueBars(values: number[], w = 220, h = 36): string {
       if (v <= 0) return ''
       const bh = Math.max(2.4, (v / max) * (h - 4))
       const x = gap + i * (bw + gap)
-      return `<rect x="${x.toFixed(1)}" y="${(h - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${SHOEY_BLUE}" rx="0.6" />`
+      return `<rect class="spark-bar" style="animation-delay:${(i * 18).toFixed(0)}ms" x="${x.toFixed(1)}" y="${(h - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${SHOEY_BLUE}" rx="0.6" />`
     })
     .join('')
   return `<svg class="spark bars" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${rects}</svg>`
@@ -268,7 +269,10 @@ function seatSignaturePrimary(dot: MapDot): string {
 
 function seatSignatureMeta(dot: MapDot): string {
   const place = [dot.city, countryName(dot.country)].filter(Boolean).join(', ')
-  return [place, dot.os || '', dot.appVersion ? `v${dot.appVersion}` : ''].filter(Boolean).join(' · ')
+  const product = productLabel(dot.product)
+  return [place, product !== 'Unknown' ? product : '', dot.os || '', dot.appVersion ? `v${dot.appVersion}` : '']
+    .filter(Boolean)
+    .join(' · ')
 }
 
 /** Full world + per-seat signature markers. No regional count pills. Empty world when no live seats. */

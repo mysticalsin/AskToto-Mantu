@@ -30,6 +30,7 @@ import {
   writeVaultKey
 } from './keys'
 import { looksLikeSecret } from './redact'
+import { parseMetisProduct } from './product'
 import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './store'
 import { isPublicAssetPath, publicAssetResponse } from './assets'
 import { renderConsole } from './ui'
@@ -529,7 +530,8 @@ function seatFromBody(deviceId: string, body: Record<string, unknown>, now: numb
     last_index_at: lastIndexAt(body),
     hostname: sanitizeOperatorHostname(body.hostname),
     sso_email: sanitizeOperatorSsoEmail(body.ssoEmail),
-    license: typeof body.license === 'string' && !looksLikeSecret(body.license) ? body.license.slice(0, 32) : null
+    license: typeof body.license === 'string' && !looksLikeSecret(body.license) ? body.license.slice(0, 32) : null,
+    product: parseMetisProduct(body.product)
   }
 }
 

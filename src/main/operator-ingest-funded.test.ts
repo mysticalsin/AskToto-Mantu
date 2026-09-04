@@ -76,5 +76,6 @@ describe('heartbeat fundedProviders — IDs only, never secrets', () => {
     expect(meta.seatHash).toHaveLength(32)
     expect(meta.ssoEmail).toBe('seat@example.com')
     expect(meta.hostname === undefined || typeof meta.hostname === 'string').toBe(true)
+    expect(meta.product).toBe('metis-desktop')
   })
 })

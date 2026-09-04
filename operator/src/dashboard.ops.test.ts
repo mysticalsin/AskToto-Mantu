@@ -46,7 +46,8 @@ describe('overview ops tiles from real ingest only', () => {
       last_index_at: null,
       hostname: 'Tonys-MacBook-Pro',
       sso_email: 'twalteur@amaris.com',
-      license: 'approved'
+      license: 'approved',
+      product: null
     })
     await store.insertAsk(ask({ id: 'cli-1', provider: 'claude-cli', mode: 'answer' }))
     await store.insertAsk(ask({ id: 'op-1', provider: 'anthropic', mode: 'recap', total_ms: 40000 }))
@@ -96,8 +97,9 @@ describe('overview ops tiles from real ingest only', () => {
         last_index_at: null,
         hostname: 'Tonys-MacBook-Pro',
         sso_email: 'twalteur@amaris.com',
-        license: 'approved'
-      })
+        license: 'approved',
+      product: null
+    })
       await store.insertPulse({
         id: `pulse-${id}`,
         device_id: id,
@@ -146,8 +148,9 @@ describe('overview ops tiles from real ingest only', () => {
         last_index_at: null,
         hostname: 'Tonys-MacBook-Pro',
         sso_email: 'twalteur@amaris.com',
-        license: 'approved'
-      })
+        license: 'approved',
+      product: null
+    })
     }
     const dash = await buildDashboard(store, 'tony.walteur@gmail.com', NOW)
     expect(dash.ops.live30).toBe(0)

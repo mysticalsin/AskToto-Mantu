@@ -50,8 +50,8 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         .first<Pick<SeatRow, 'first_seen'>>()
       await db
         .prepare(
-          `INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen, country, city, lat, lon, last_index_at, hostname, sso_email, license)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen, country, city, lat, lon, last_index_at, hostname, sso_email, license, product)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(device_id) DO UPDATE SET
              seat_hash = excluded.seat_hash,
              os = CASE WHEN excluded.os IS NULL OR excluded.os = '' OR excluded.os = 'unknown' THEN seats.os ELSE excluded.os END,
@@ -64,7 +64,8 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
              last_index_at = COALESCE(excluded.last_index_at, seats.last_index_at),
              hostname = COALESCE(excluded.hostname, seats.hostname),
              sso_email = COALESCE(excluded.sso_email, seats.sso_email),
-             license = COALESCE(excluded.license, seats.license)`
+             license = COALESCE(excluded.license, seats.license),
+             product = COALESCE(excluded.product, seats.product)`
         )
         .bind(
           row.device_id,
@@ -80,7 +81,8 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
           row.last_index_at,
           row.hostname,
           row.sso_email,
-          row.license
+          row.license,
+          row.product
         )
         .run()
     },
@@ -140,7 +142,8 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         ...s,
         hostname: s.hostname ?? null,
         sso_email: s.sso_email ?? null,
-        license: s.license ?? null
+        license: s.license ?? null,
+        product: s.product ?? null
       }))
     },
     async insertPulse(row) {
