@@ -5,9 +5,9 @@ export const CONSOLE_CSS = `/* Métis Operator SPA — Shoey Overview / Realtime
 @import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.min.css');
 @import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.min.css');
 :root {
-  --bg: #FAFAFA;
+  --bg: #F4F4F5;
   --panel: #FFFFFF;
-  --hair: #E4E4E7;
+  --hair: #E5E7EB;
   --ink: #18181B;
   --ink2: #71717A;
   --ink3: #A1A1AA;
@@ -47,18 +47,7 @@ export const CONSOLE_CSS = `/* Métis Operator SPA — Shoey Overview / Realtime
 html { color-scheme: light; }
 html[data-theme="dark"] { color-scheme: dark; }
 html, body { margin: 0; height: 100%; color: var(--ink); background: var(--bg); font: 12px/1.4 var(--sans); -webkit-font-smoothing: antialiased; }
-body {
-  background:
-    radial-gradient(120% 80% at 100% -10%, rgba(59,130,246,0.05), transparent 42%),
-    radial-gradient(90% 60% at -10% 110%, rgba(255,255,255,0.03), transparent 48%),
-    var(--bg);
-  color: var(--ink);
-}
-[data-theme="light"] body {
-  background:
-    radial-gradient(100% 70% at 100% 0%, rgba(24,24,27,0.03), transparent 50%),
-    var(--bg);
-}
+body { background: var(--bg); color: var(--ink); }
 a { color: var(--accent); text-decoration: none; }
 .shell { display: grid; grid-template-columns: 185px 1fr; min-height: 100%; }
 .rail {
@@ -69,14 +58,17 @@ a { color: var(--accent); text-decoration: none; }
 }
 .rail-brand { display: flex; align-items: center; gap: 8px; padding: 4px 6px 10px; }
 .rail-logo {
-  width: 22px; height: 22px; border-radius: 999px;
-  background: transparent;
-  border: 1.5px solid rgba(24,24,27,0.55);
-  display: block; flex-shrink: 0;
+  width: 22px; height: 22px; border-radius: 999px; flex-shrink: 0;
+  background: #2563EB; color: #fff;
+  display: grid; place-items: center;
+  font: 700 10px/1 var(--sans); letter-spacing: -0.04em;
+  border: 0;
 }
 [data-theme="dark"] .rail-logo {
-  border-color: rgba(255,255,255,0.42);
-  background: rgba(255,255,255,0.04);
+  background: #2563EB; color: #fff; border: 0;
+}
+.rail-name {
+  margin: 0; font-size: 13px; font-weight: 650; letter-spacing: -0.03em; color: var(--ink);
 }
 .rail-brand h1 { margin: 0; font-size: 13px; font-weight: 650; letter-spacing: -0.03em; }
 .rail-brand .chev { color: var(--ink3); font-size: 11px; }
@@ -101,12 +93,11 @@ a { color: var(--accent); text-decoration: none; }
   font: 11px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
   padding: 6px 8px; border-radius: 8px; cursor: pointer;
 }
-.main { min-width: 0; background: transparent; }
+.main { min-width: 0; background: var(--bg); }
 .top {
   display: flex; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 12px 20px; border-bottom: 1px solid var(--hair);
-  background: color-mix(in srgb, var(--panel) 88%, transparent);
-  backdrop-filter: blur(10px); position: sticky; top: 0; z-index: 4;
+  padding: 10px 16px; border-bottom: 1px solid var(--hair);
+  background: var(--panel); position: sticky; top: 0; z-index: 4;
 }
 .top-left, .top-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .tool {
@@ -331,12 +322,64 @@ a { color: var(--accent); text-decoration: none; }
 }
 .rt-kpi-spark { flex: 1; max-width: 320px; min-width: 140px; opacity: 0.95; }
 .rt-kpi-spark .chart, .rt-kpi-spark svg { display: block; width: 100%; height: 48px; }
-.rt-stage {
+.rt-stage, .rt-shoey {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+  grid-template-columns: minmax(280px, 360px) minmax(0, 1fr);
   gap: 14px;
   align-items: stretch;
   min-height: 560px;
+}
+.rt-shoey-left {
+  display: flex; flex-direction: column; gap: 12px; min-height: 0; min-width: 0;
+}
+.rt-activity {
+  display: flex; flex-direction: column; gap: 8px; min-height: 0; flex: 1;
+  border: 1px solid var(--hair); border-radius: 12px; background: var(--panel);
+  padding: 12px; overflow: hidden;
+}
+.rt-activity-list {
+  display: flex; flex-direction: column; gap: 2px;
+  overflow: auto; min-height: 0; flex: 1;
+}
+.rt-activity-row {
+  display: grid; grid-template-columns: 10px 1fr auto; gap: 8px; align-items: start;
+  padding: 8px 4px; border-radius: 8px;
+}
+.rt-activity-row:hover { background: var(--nav-on); }
+.rt-activity-dot {
+  width: 8px; height: 8px; border-radius: 99px; margin-top: 4px;
+  background: var(--accent);
+}
+.rt-activity-name { font: 600 12px/1.3 var(--sans); color: var(--ink); letter-spacing: -0.01em; }
+.rt-activity-meta { font-size: 11px; color: var(--ink3); margin-top: 2px; }
+.rt-activity-ago { font-size: 11px; color: var(--ink3); white-space: nowrap; }
+.rt-boards {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 4px;
+}
+.rt-board-card, .geo-card {
+  border: 1px solid var(--hair); border-radius: 12px; background: var(--panel);
+  padding: 12px; min-width: 0; overflow: hidden;
+}
+.rt-board-head, .geo-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
+.rt-board-title, .geo-title { margin: 0; font-size: 13px; font-weight: 650; letter-spacing: -0.02em; }
+.rt-board-cols, .geo-cols {
+  display: grid; grid-template-columns: 1fr 56px 56px; gap: 8px;
+  font-size: 11px; color: var(--ink3); margin-bottom: 6px; padding: 0 2px;
+}
+.rt-board-list, .geo-list { display: flex; flex-direction: column; gap: 2px; max-height: 280px; overflow: auto; }
+.rt-board-row, .geo-row {
+  position: relative; display: grid; grid-template-columns: 1fr 56px 56px; gap: 8px;
+  align-items: center; padding: 7px 6px; border-radius: 8px; font-size: 12px;
+}
+.rt-board-bar, .geo-bar {
+  position: absolute; inset: 2px auto 2px 0; background: #DBEAFE; border-radius: 6px; z-index: 0;
+}
+[data-theme="dark"] .rt-board-bar, [data-theme="dark"] .geo-bar { background: rgba(37,99,235,0.22); }
+.rt-board-place, .geo-place, .rt-board-n, .geo-n { position: relative; z-index: 1; }
+.rt-board-n, .geo-n { text-align: right; font-variant-numeric: tabular-nums; color: var(--ink2); }
+@media (max-width: 1100px) {
+  .rt-stage, .rt-shoey { grid-template-columns: 1fr; min-height: 0; }
+  .rt-boards { grid-template-columns: 1fr; }
 }
 .rt-map-full {
   position: relative;
