@@ -141,8 +141,12 @@ describe('hashed SPA router (#104)', () => {
     expect(pages.find((p) => p.getAttribute('data-page') === 'overview')?.hidden).toBe(true)
   })
 
-  it('THEME is two-state light↔dark and Events/Notifications filters are wired', () => {
+  it('THEME is two-state Night↔Light and Events/Notifications filters are wired', () => {
     expect(SPA_JS).toContain("var next = cur === 'dark' ? 'light' : 'dark'")
+    expect(SPA_JS).toContain("themeBtn.textContent = night ? 'Night' : 'Light'")
+    expect(SPA_JS).toContain('syncThemeBtn')
+    expect(SPA_CSS).toContain('[data-theme="dark"]')
+    expect(SPA_CSS).toContain('[data-theme="light"]')
     expect(SPA_JS).not.toContain("cur === 'light' ? ''")
     expect(SPA_JS).toContain('events-empty')
     expect(SPA_JS).toContain('function applyEventsFilter')

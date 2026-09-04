@@ -974,7 +974,7 @@ export function renderConsole(data: DashboardPayload): string {
         <form method="post" action="/logout"><button type="submit">Back to workspace</button></form>
       </div>
       <div class="who">${esc(data.email)}</div>
-      <button class="theme-btn" id="theme-btn" type="button">Theme</button>
+      <button class="theme-btn" id="theme-btn" type="button" aria-pressed="true" aria-label="Night mode on. Switch to light mode." title="Switch to light mode">Night</button>
     </div>
   </aside>
   <div class="main">
