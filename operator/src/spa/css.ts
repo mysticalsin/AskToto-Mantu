@@ -43,6 +43,21 @@ export const CONSOLE_CSS = `/* Métis Operator SPA — Shoey Overview / Realtime
   --nav-on: rgba(255,255,255,0.06);
   --accent: #60A5FA;
 }
+[data-theme="light"] {
+  color-scheme: light;
+  --bg: #F4F4F5;
+  --panel: #FFFFFF;
+  --hair: #E5E7EB;
+  --ink: #18181B;
+  --ink2: #71717A;
+  --ink3: #A1A1AA;
+  --accent: #3B82F6;
+  --land: #E5E7EB;
+  --ocean: #FFFFFF;
+  --land-stroke: #6B7280;
+  --nav: #FFFFFF;
+  --nav-on: #F4F4F5;
+}
 * { box-sizing: border-box; }
 html { color-scheme: light; }
 html[data-theme="dark"] { color-scheme: dark; }
