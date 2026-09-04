@@ -64,7 +64,7 @@ describe('hashed SPA router (#104)', () => {
       return el
     })
     const title = { textContent: 'Overview' }
-    const location = { hash: '#overview', pathname: '/' }
+    const location = { hash: '', pathname: '/' }
     const listeners: Array<(ev?: unknown) => void> = []
     const windowObj: {
       route?: (to?: string) => void
@@ -109,9 +109,17 @@ describe('hashed SPA router (#104)', () => {
 
     const visible = () => pages.filter((p) => !p.hidden).map((p) => p.getAttribute('data-page'))
 
-    expect(visible()).toEqual(['overview'])
+    // WebsiteCloner / OpenPanel Realtime is the home surface
+    expect(location.hash).toBe('#realtime')
+    expect(visible()).toEqual(['realtime'])
+    expect(title.textContent).toBe('Realtime')
 
     windowObj.route?.('/')
+    expect(location.hash).toBe('#realtime')
+    expect(visible()).toEqual(['realtime'])
+    expect(title.textContent).toBe('Realtime')
+
+    windowObj.route?.('overview')
     expect(location.hash).toBe('#overview')
     expect(visible()).toEqual(['overview'])
     expect(title.textContent).toBe('Overview')
