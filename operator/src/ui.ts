@@ -17,6 +17,7 @@ import type { CloudflareOverview } from './cloudflare'
 import { ONLINE_MS, type ConsoleEvent, type DashboardPayload, type ProfileRow } from './dashboard'
 import { EXTRA_PAGES, FORBIDDEN_NAV, NAV_IDS, NAV_SECTIONS } from './nav'
 import { looksLikeSecret } from './redact'
+import { productLabel } from './product'
 import { countryName, flagMark } from './countries'
 
 const MISSING = '—'
@@ -832,6 +833,48 @@ export function renderConsole(data: DashboardPayload): string {
       </div>
     </article>`
 
+
+  const appAgg = new Map<string, { label: string; events: number; sessions: Set<string> }>()
+  for (const p of liveProfiles) {
+    const label = productLabel(p.product)
+    const row = appAgg.get(label) || { label, events: 0, sessions: new Set<string>() }
+    row.sessions.add(p.device)
+    appAgg.set(label, row)
+  }
+  for (const e of recentEvents) {
+    const profile = liveProfiles.find((p) => p.device === e.device)
+    const label = productLabel(profile?.product ?? null)
+    const row = appAgg.get(label) || { label, events: 0, sessions: new Set<string>() }
+    row.events += 1
+    if (e.device) row.sessions.add(e.device)
+    appAgg.set(label, row)
+  }
+  const appRows = [...appAgg.values()]
+    .map((r) => ({ label: r.label, events: r.events, sessions: r.sessions.size || (r.events ? 1 : 0) }))
+    .sort((a, b) => b.events - a.events || b.sessions - a.sessions)
+  const appMax = Math.max(1, ...appRows.map((r) => r.events || r.sessions))
+  const appsBreakdown = `<article class="rt-board-card" data-apps-breakdown>
+      <div class="rt-board-head"><h3 class="rt-board-title">Apps</h3></div>
+      <div class="rt-board-cols" aria-hidden="true"><span>App</span><span>Events</span><span>Seats</span></div>
+      <div class="rt-board-list">
+        ${
+          appRows.length
+            ? appRows
+                .map((r) => {
+                  const w = Math.max(4, Math.round(((r.events || r.sessions) / appMax) * 100))
+                  return `<div class="rt-board-row">
+                    <span class="rt-board-bar" style="width:${w}%"></span>
+                    <span class="rt-board-place">${esc(r.label)}</span>
+                    <span class="rt-board-n">${r.events}</span>
+                    <span class="rt-board-n">${r.sessions}</span>
+                  </div>`
+                })
+                .join('')
+            : `<div class="empty">No Métis apps detected yet. Desktop, Overlay, iOS, Mac, and Windows heartbeats land here.</div>`
+        }
+      </div>
+    </article>`
+
   const activeSeats = liveProfiles.length
 
   const activity = recentEvents.length
@@ -839,7 +882,7 @@ export function renderConsole(data: DashboardPayload): string {
         .slice()
         .sort((a, b) => b.ts - a.ts)
         .slice(0, 40)
-        .map((e) => {
+        .map((e, i) => {
           const who =
             e.email && !looksLikeSecret(e.email)
               ? e.email
@@ -849,7 +892,7 @@ export function renderConsole(data: DashboardPayload): string {
           const place = [e.city, e.country ? countryName(e.country) || e.country : '']
             .filter((v) => v && !looksLikeSecret(v))
             .join(', ')
-          return `<div class="rt-activity-row">
+          return `<div class="rt-activity-row" style="--i:${i}">
             <span class="rt-activity-dot" aria-hidden="true"></span>
             <div class="rt-activity-body">
               <div class="rt-activity-name">${esc(e.name || 'event')}</div>
@@ -863,7 +906,7 @@ export function renderConsole(data: DashboardPayload): string {
 
   const roster = liveProfiles.length
     ? liveProfiles
-        .map((p) => {
+        .map((p, i) => {
           const computer = p.hostname && !looksLikeSecret(p.hostname) ? p.hostname : MISSING
           const identity =
             p.email && !looksLikeSecret(p.email) ? p.email : computer !== MISSING ? computer : p.device
@@ -872,9 +915,10 @@ export function renderConsole(data: DashboardPayload): string {
             .join(' · ') || MISSING
           const ago = data.now - p.lastSeen < 90_000 ? 'just now' : when(p.lastSeen)
           const version = p.appVersion && !looksLikeSecret(p.appVersion) ? p.appVersion : MISSING
-          const q = [identity, computer, place, p.os, p.device].join(' ').toLowerCase()
+          const app = productLabel(p.product)
+          const q = [identity, computer, place, p.os, app, p.device].join(' ').toLowerCase()
           const iso = p.country && !looksLikeSecret(p.country) ? p.country.trim().toUpperCase() : ''
-          return `<div class="rt-seat" data-device="${esc(p.device)}" data-iso="${esc(iso)}" data-q="${esc(q)}" tabindex="0" role="button">
+          return `<div class="rt-seat" style="--i:${i}" data-device="${esc(p.device)}" data-iso="${esc(iso)}" data-product="${esc(p.product || '')}" data-q="${esc(q)}" tabindex="0" role="button">
             <div class="rt-seat-top">
               ${seatAvatar(identity === MISSING ? p.device : identity)}
               ${osBadge(p.os)}
@@ -890,6 +934,7 @@ export function renderConsole(data: DashboardPayload): string {
             </div>
             <div class="rt-seat-meta">
               <span>${esc(place)}</span>
+              <span class="rt-seat-app">${esc(app)}</span>
               <span>v${esc(version)}</span>
             </div>
           </div>`
@@ -995,6 +1040,7 @@ export function renderConsole(data: DashboardPayload): string {
       <div class="rt-boards" data-rt-boards="full">
         ${geoBreakdown}
         ${cityBreakdown}
+        ${appsBreakdown}
         ${sourceBreakdown}
         ${surfaceBreakdown}
         ${osBreakdown}

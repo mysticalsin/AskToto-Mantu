@@ -63,6 +63,7 @@ export function seatMeta(settings: OperatorRuntimeSettings): {
   seatHash: string
   os: string
   appVersion: string
+  product: 'metis-desktop'
   hostname?: string
   ssoEmail?: string
 } {
@@ -78,6 +79,7 @@ export function seatMeta(settings: OperatorRuntimeSettings): {
     seatHash: hashOperatorId(rawSeat),
     os: osLabel(),
     appVersion: app.getVersion(),
+    product: 'metis-desktop',
     ...(host ? { hostname: host } : {}),
     ...(email ? { ssoEmail: email } : {})
   }

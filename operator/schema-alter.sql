@@ -72,3 +72,5 @@ CREATE TABLE IF NOT EXISTS vault_keys (
   rotated_at INTEGER,
   revoked_at INTEGER
 );
+
+ALTER TABLE seats ADD COLUMN product TEXT;

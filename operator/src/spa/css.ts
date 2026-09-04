@@ -724,9 +724,65 @@ textarea { min-height: 120px; }
 .seat-row:hover {
   background: color-mix(in srgb, var(--nav-on) 80%, transparent);
 }
+
+/* Realtime motion pack — WebsiteCloner / OpenPanel parity */
+.live-dot i {
+  animation: live-pulse 1.8s ease-in-out infinite;
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--live) 55%, transparent);
+}
+@keyframes live-pulse {
+  0%, 100% { transform: scale(1); box-shadow: 0 0 0 0 color-mix(in srgb, var(--live) 45%, transparent); }
+  50% { transform: scale(1.15); box-shadow: 0 0 0 6px color-mix(in srgb, var(--live) 0%, transparent); }
+}
+.world.shoey-world .seat-dot {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: seat-pulse 2.2s ease-in-out infinite;
+}
+@keyframes seat-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.72; }
+}
+.rt-activity-row {
+  animation: rt-activity-in 0.38s var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * 28ms);
+}
+@keyframes rt-activity-in {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: none; }
+}
+.rt-seat {
+  animation-delay: calc(var(--i, 0) * 36ms);
+}
+.rt-seat-app {
+  color: var(--accent);
+  font-weight: 600;
+}
+.spark-bar, .spark .spark-bar, svg.bars rect.spark-bar {
+  transform-origin: bottom center;
+  transform-box: fill-box;
+  animation: spark-draw 520ms var(--ease-out) both;
+}
+@keyframes spark-draw {
+  from { transform: scaleY(0.12); opacity: 0.35; }
+  to { transform: scaleY(1); opacity: 1; }
+}
+html.theme-fade,
+html.theme-fade body {
+  transition: background-color 280ms var(--ease-out), color 280ms var(--ease-out);
+}
+html.theme-fade .shell,
+html.theme-fade .rail,
+html.theme-fade .panel,
+html.theme-fade .rt-board-card,
+html.theme-fade .rt-seat,
+html.theme-fade .world.shoey-world {
+  transition: background-color 280ms var(--ease-out), border-color 280ms var(--ease-out), fill 280ms var(--ease-out), stroke 280ms var(--ease-out), color 280ms var(--ease-out);
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .world.shoey-world .seat-ring, .rt-seat, .page, .stat-flow .n, .rt-kpi .n, .geo-bar, .ov-live-dot { animation: none !important; }
-  .seat-row, .event, .rt-seat, .geo-row, .nav-item { transition: none; }
+  .world.shoey-world .seat-ring, .world.shoey-world .seat-dot, .rt-seat, .page, .stat-flow .n, .rt-kpi .n, .geo-bar, .ov-live-dot, .live-dot i, .rt-activity-row, .spark-bar, svg.bars rect.spark-bar { animation: none !important; }
+  .seat-row, .event, .rt-seat, .geo-row, .nav-item, html.theme-fade, html.theme-fade body, html.theme-fade .shell, html.theme-fade .rail, html.theme-fade .panel, html.theme-fade .rt-board-card, html.theme-fade .rt-seat, html.theme-fade .world.shoey-world { transition: none !important; }
 }
 .seat-no { font-family: var(--mono); font-size: 11px; color: var(--ink3); }
 .seat-name { display: inline-flex; align-items: center; gap: 8px; font-weight: 600; }

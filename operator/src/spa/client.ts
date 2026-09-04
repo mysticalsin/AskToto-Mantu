@@ -310,9 +310,13 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
     themeBtn.addEventListener('click', function () {
       var cur = document.documentElement.getAttribute('data-theme')
       var next = cur === 'dark' ? 'light' : 'dark'
+      document.documentElement.classList.add('theme-fade')
       applyTheme(next)
       paintShoeyMap()
       try { localStorage.setItem('metis-operator-theme', next) } catch (e) {}
+      window.setTimeout(function () {
+        document.documentElement.classList.remove('theme-fade')
+      }, 320)
     })
   }
 
