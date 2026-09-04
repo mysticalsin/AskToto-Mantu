@@ -300,9 +300,21 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
   if (ntSearch) ntSearch.addEventListener('input', applyNtFilter)
 
   var themeBtn = document.getElementById('theme-btn')
+  function syncThemeBtn(theme) {
+    if (!themeBtn) return
+    var night = theme === 'dark'
+    themeBtn.textContent = night ? 'Night' : 'Light'
+    themeBtn.setAttribute('aria-pressed', night ? 'true' : 'false')
+    themeBtn.setAttribute(
+      'aria-label',
+      night ? 'Night mode on. Switch to light mode.' : 'Light mode on. Switch to night mode.'
+    )
+    themeBtn.title = night ? 'Switch to light mode' : 'Switch to night mode'
+  }
   function applyTheme(v) {
     var theme = v === 'dark' ? 'dark' : 'light'
     document.documentElement.setAttribute('data-theme', theme)
+    syncThemeBtn(theme)
   }
   try { applyTheme(localStorage.getItem('metis-operator-theme') || 'dark') } catch (e) { applyTheme('dark') }
   paintShoeyMap()

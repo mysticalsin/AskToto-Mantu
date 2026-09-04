@@ -107,6 +107,14 @@ a { color: var(--accent); text-decoration: none; }
   border: 1px solid var(--hair); background: transparent; color: var(--ink2);
   font: 11px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
   padding: 6px 8px; border-radius: 8px; cursor: pointer;
+  min-width: 4.5rem;
+}
+.theme-btn:hover { color: var(--ink); border-color: var(--ink3); }
+.theme-btn[aria-pressed="true"] {
+  background: var(--ink); color: var(--bg); border-color: var(--ink);
+}
+[data-theme="dark"] .theme-btn[aria-pressed="true"] {
+  background: #f4f4f5; color: #0a0a0b; border-color: #f4f4f5;
 }
 .main { min-width: 0; background: var(--bg); }
 .top {
