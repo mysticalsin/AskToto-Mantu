@@ -186,12 +186,15 @@ import {
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
 import {
   ASK_REVEAL_MIN_HEIGHT_PX,
+  BAR_IDLE_HEIGHT_PX,
   isIncompleteAskReveal,
+  isSettingsTallHeight,
   overlayAllowsHugWidth,
   overlayAllowsMinimize,
   overlayRevealedContentHeight,
   overlayUsesHover,
   parseOverlayLayout,
+  rememberBarContentHeight,
   type OverlayLayout
 } from '@shared/overlay-chrome'
 
@@ -1914,17 +1917,18 @@ function resizeTo(height: number): void {
     minimized: isMinimized,
     settingsOpen: settingsSurfaceOpen,
     reportedHeight: height,
-    minBarHeight: ASK_REVEAL_MIN_HEIGHT_PX
+    minBarHeight: ASK_REVEAL_MIN_HEIGHT_PX,
+    usesHover: overlayUsesHover(liveOverlayLayout())
   })
   const h = clampHeight(Math.round(lifted), workArea.height)
   const b = win.getBounds()
   if (h === b.height && currentWidth === b.width) {
     // Only remember this height for restore-on-expand when it's the real bar, not the mini-pill's
-    // much shorter content — see isMinimized comment above.
-    if (!isMinimized && !islandResting) lastBarHeight = h
+    // much shorter content — see isMinimized comment above. Never store Settings 800+ (ghost slab).
+    if (!isMinimized && !islandResting) lastBarHeight = rememberBarContentHeight(h, lastBarHeight)
     return // idempotent — skip a no-op setBounds (belt-and-braces with the renderer-side resize dedup)
   }
-  if (!isMinimized && !islandResting) lastBarHeight = h
+  if (!isMinimized && !islandResting) lastBarHeight = rememberBarContentHeight(h, lastBarHeight)
   // Resting hide/island stay at hoverRestTop (island hit). Revealed chrome sits at islandSafeTop
   // (below the notch). Do not fight macOS by writing y=0 on the full bar every tick.
   const metrics = getDisplayMetrics(display)
@@ -1948,7 +1952,8 @@ function setMinimizedWidth(narrow: boolean): void {
     isMinimized = true
     currentWidth = PILL_WIDTH
     applyHideClickThrough()
-    resizeTo(lastBarHeight)
+    // Circle rest is the 41 host. A Settings-tall lastBarHeight was the gray box under Jarvis.
+    resizeTo(rememberBarContentHeight(lastBarHeight, BAR_IDLE_HEIGHT_PX))
     return
   }
   const leavingPill = isMinimized
@@ -2201,10 +2206,18 @@ function restoreBarWidth(): void {
   } catch {
     /* headless */
   }
+  if (settingsSurfaceOpen) return
   const display = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
+  const layout = liveOverlayLayout()
   const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
-  const revealedHeight = Math.max(b.height, lastBarHeight, BAR_HEIGHT, ASK_REVEAL_MIN_HEIGHT_PX)
+  // Hide/Island reveal keeps the 120 Ask floor. Bar idle hugs the bar, never a leftover Settings 800.
+  let revealedHeight = overlayUsesHover(layout)
+    ? Math.max(b.height, lastBarHeight, BAR_HEIGHT, ASK_REVEAL_MIN_HEIGHT_PX)
+    : rememberBarContentHeight(Math.max(lastBarHeight, BAR_HEIGHT), BAR_IDLE_HEIGHT_PX)
+  if (isSettingsTallHeight(revealedHeight) && !overlayUsesHover(layout)) {
+    revealedHeight = BAR_IDLE_HEIGHT_PX
+  }
   const x = currentWidth === BAR_WIDTH ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
   currentWidth = BAR_WIDTH
   // Already the below-notch bar — do not setBounds y=0 and fight the OS clamp.
@@ -2240,6 +2253,7 @@ function applySettingsSurface(): void {
 
 function leaveSettingsSurface(): void {
   settingsSurfaceOpen = false
+  lastBarHeight = rememberBarContentHeight(lastBarHeight, BAR_IDLE_HEIGHT_PX)
   if (overlayUsesHover(liveOverlayLayout())) {
     islandResting = true
     startOverlayCursorWatch()
@@ -2281,7 +2295,14 @@ function setWindowMode(): void {
   // windowMode('bar') on every mount — including the reload after a renderer crash — which can land after
   // the overlay has moved to a shorter monitor, so re-apply that monitor's ceiling instead of restoring a
   // height it cannot show (resizable:false leaves no manual way back).
-  win.setBounds({ x, y: b.y, width: currentWidth, height: clampHeight(lastBarHeight, workArea.height) }, false)
+  // Settings 800+ must not come back as a gray slab under an idle Bar.
+  const height = rememberBarContentHeight(lastBarHeight, BAR_IDLE_HEIGHT_PX)
+  try {
+    win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
+  } catch {
+    /* headless */
+  }
+  win.setBounds({ x, y: b.y, width: currentWidth, height: clampHeight(height, workArea.height) }, false)
 }
 
 /** Self-heal a null `win` (e.g. a one-time createWindow() throw during boot) by retrying the window

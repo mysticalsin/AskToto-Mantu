@@ -1,3 +1,5 @@
+import { SETTINGS_SURFACE_BACKGROUND, SETTINGS_WINDOW_MIN } from './settings-bounds'
+
 /**
  * Overlay chrome modes (hide / island / bar). Shared so Settings, the renderer rest surface,
  * and main geometry all read one enum. Default is hide-until-hover (fresh install).
@@ -121,8 +123,43 @@ export function overlayAllowsHugWidth(input: {
   return input.islandResting && input.nextWidth <= input.restWidth + 24
 }
 
+/** Classic Bar idle hug. Settings is 800+. A leftover 800 slab under the bar is the ghost panel. */
+export const BAR_IDLE_HEIGHT_PX = 84
+
 /** Idle Ask + Settings chrome. Peek 2px / hug 44 / Ultron 880×44 must not win after reveal. */
 export const ASK_REVEAL_MIN_HEIGHT_PX = 120
+
+/** Settings / exclusive-stage heights. Never remember these as the Bar hug. */
+export function isSettingsTallHeight(height: number): boolean {
+  return Number.isFinite(height) && height >= SETTINGS_WINDOW_MIN.height
+}
+
+/**
+ * lastBarHeight must stay a bar / answer hug, not Settings 800+ or the 816 onboarding card.
+ * A long Review can grow again via useAutoResize after Settings closes.
+ */
+export function rememberBarContentHeight(height: number, fallback = BAR_IDLE_HEIGHT_PX): number {
+  if (!Number.isFinite(height) || height <= 0) return fallback
+  if (isSettingsTallHeight(height)) return fallback
+  return Math.round(height)
+}
+
+/**
+ * Tony live FAIL: Overlay=Bar, Settings closed, gray Settings-like slab under the bar
+ * (window still settings-tall and/or SETTINGS_SURFACE_BACKGROUND leftover).
+ */
+export function isBarIdleGhostPanel(input: {
+  layout: string
+  settingsSurfaceOpen: boolean
+  width: number
+  height: number
+  background?: string
+  minimized?: boolean
+}): boolean {
+  if (input.layout !== 'bar' || input.settingsSurfaceOpen) return false
+  if (input.background === SETTINGS_SURFACE_BACKGROUND) return true
+  return isSettingsTallHeight(input.height)
+}
 
 /** Ultron 2026-09-06: top-edge hover opened this stub instead of the 880 Ask bar. */
 export function isShowMetisHugStub(win: { width: number; height: number }): boolean {
@@ -138,16 +175,18 @@ export function isIncompleteAskReveal(win: { width: number; height: number }): b
   return win.width >= 800 && win.height > 0 && win.height <= 44
 }
 
-/** Revealed Hide/Island keeps at least the idle Ask bar. Park and the mini-pill stay exact. */
+/** Revealed Hide/Island keeps at least the idle Ask bar. Park, Bar idle, and the mini-pill stay exact. */
 export function overlayRevealedContentHeight(input: {
   islandResting: boolean
   minimized: boolean
   settingsOpen: boolean
   reportedHeight: number
   minBarHeight?: number
+  usesHover?: boolean
 }): number {
   const floor = input.minBarHeight ?? ASK_REVEAL_MIN_HEIGHT_PX
   if (input.islandResting || input.minimized || input.settingsOpen) return input.reportedHeight
+  if (input.usesHover === false) return input.reportedHeight
   return Math.max(input.reportedHeight, floor)
 }
 

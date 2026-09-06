@@ -21,10 +21,15 @@ import {
   isIncompleteAskReveal,
   overlayRevealedContentHeight,
   ASK_REVEAL_MIN_HEIGHT_PX,
+  BAR_IDLE_HEIGHT_PX,
+  isSettingsTallHeight,
+  rememberBarContentHeight,
+  isBarIdleGhostPanel,
   isShowMetisOnlyStub,
   isFullAskReveal,
   parseOverlayLayout
 } from './overlay-chrome'
+import { SETTINGS_SURFACE_BACKGROUND } from './settings-bounds'
 
 describe('overlay chrome modes', () => {
   it('default is hide (fresh install, no reinstall required to change later)', () => {
@@ -115,6 +120,71 @@ describe('overlay chrome modes', () => {
         reportedHeight: 2
       })
     ).toBe(2)
+    expect(
+      overlayRevealedContentHeight({
+        islandResting: false,
+        minimized: false,
+        settingsOpen: false,
+        reportedHeight: 84,
+        usesHover: false
+      })
+    ).toBe(84)
+    expect(BAR_IDLE_HEIGHT_PX).toBe(84)
+    expect(isSettingsTallHeight(800)).toBe(true)
+    expect(isSettingsTallHeight(84)).toBe(false)
+    expect(rememberBarContentHeight(800)).toBe(84)
+    expect(rememberBarContentHeight(400)).toBe(400)
+    expect(rememberBarContentHeight(84)).toBe(84)
+    expect(
+      isBarIdleGhostPanel({
+        layout: 'bar',
+        settingsSurfaceOpen: false,
+        width: 880,
+        height: 800
+      })
+    ).toBe(true)
+    expect(
+      isBarIdleGhostPanel({
+        layout: 'bar',
+        settingsSurfaceOpen: false,
+        width: 880,
+        height: 84,
+        background: SETTINGS_SURFACE_BACKGROUND
+      })
+    ).toBe(true)
+    expect(
+      isBarIdleGhostPanel({
+        layout: 'bar',
+        settingsSurfaceOpen: true,
+        width: 880,
+        height: 800
+      })
+    ).toBe(false)
+    expect(
+      isBarIdleGhostPanel({
+        layout: 'bar',
+        settingsSurfaceOpen: false,
+        width: 880,
+        height: 84
+      })
+    ).toBe(false)
+    expect(
+      isBarIdleGhostPanel({
+        layout: 'hide',
+        settingsSurfaceOpen: false,
+        width: 880,
+        height: 800
+      })
+    ).toBe(false)
+    expect(
+      isBarIdleGhostPanel({
+        layout: 'bar',
+        settingsSurfaceOpen: false,
+        width: 41,
+        height: 800,
+        minimized: true
+      })
+    ).toBe(true)
     expect(
       overlayAllowsHugWidth({ minimized: false, islandResting: false, restWidth: 8, nextWidth: 120 })
     ).toBe(false)
