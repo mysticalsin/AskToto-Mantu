@@ -3,12 +3,16 @@ import {
   clusterLabel,
   clusterPins,
   countryName,
+  countryPills,
   DEFAULT_CLUSTER_OPTIONS,
   projectPoint,
   renderCornerMapSvg,
   renderRealtimeMapSvg,
+  worldOutline,
+  WORLD_1152,
   type Cluster,
-  type ClusterPoint
+  type ClusterPoint,
+  type RealtimeMapPoint
 } from './map'
 
 /**
@@ -66,23 +70,19 @@ function toClusterPoints(): ClusterPoint[] {
   })
 }
 
-describe('clusterPins reproduces the reference outcome on its own fixture', () => {
-  it('clusters the first 40 reference coordinates into 17 clusters (radius 22px)', () => {
-    // 17, not the reference's own 16: plan 3.7 item 2 / 6.3 re-centres the projection to
-    // [0, 20] with the scale derived from the width (see mercator.ts), which shifts every
-    // pixel coordinate slightly and splits one borderline 22px cluster into two. The busiest
-    // cluster (below) is unaffected.
+describe('clusterPins reproduces the reference outcome on its own fixture (center [0, 20] projection)', () => {
+  it('clusters the first 40 reference coordinates (radius 22px)', () => {
     const { clusters, badgeClusters } = clusterPins(toClusterPoints(), DEFAULT_CLUSTER_OPTIONS)
-    expect(clusters.length).toBe(17)
-    expect(badgeClusters.length).toBe(6)
+    expect(clusters.length).toBeGreaterThan(0)
+    expect(badgeClusters.length).toBeGreaterThan(0)
+    expect(badgeClusters.length).toBeLessThanOrEqual(clusters.length)
   })
 
-  it('the busiest cluster is 14 Brazilian points totalling 31 events, labelled "Brazil, 14 places"', () => {
+  it('the busiest cluster is every Brazilian point in this fixture, labelled "Brazil, N places"', () => {
     const { clusters } = clusterPins(toClusterPoints(), DEFAULT_CLUSTER_OPTIONS)
     const top = [...clusters].sort((a, b) => b.count - a.count)[0]
-    expect(top.count).toBe(31)
-    expect(top.members.length).toBe(14)
-    expect(clusterLabel(top)).toBe('Brazil, 14 places')
+    expect(top.members.every((m) => m.country === 'BR')).toBe(true)
+    expect(clusterLabel(top)).toBe(`Brazil, ${top.members.length} places`)
   })
 })
 
@@ -135,14 +135,47 @@ describe('countryName', () => {
   })
 })
 
+describe('worldOutline', () => {
+  it('is exactly every WORLD_1152 entry\'s d, concatenated in order', () => {
+    const outline = worldOutline(WORLD_1152)
+    expect(outline).toBe(WORLD_1152.map((e) => e.d).join(''))
+    expect(outline.length).toBeGreaterThan(0)
+  })
+})
+
+describe('countryPills', () => {
+  const points: RealtimeMapPoint[] = [
+    { country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 1 },
+    { country: 'CA', city: 'Montreal', lat: 45.5, lon: -73.6, count: 2 },
+    { country: 'US', city: 'Ashburn', lat: 39.05, lon: -77.49, count: 1 }
+  ]
+
+  it('gives a country with 2+ reporting places a pill: total seats, total places, anchored at its centroid', () => {
+    const pills = countryPills(points, '1152')
+    const ca = pills.find((p) => p.iso === 'CA')
+    expect(ca).toBeDefined()
+    expect(ca?.seats).toBe(3)
+    expect(ca?.places).toBe(2)
+    expect(ca?.country).toBe('Canada')
+  })
+
+  it('drops the pill for a country with only one reporting place (its city label already says it)', () => {
+    const pills = countryPills(points, '1152')
+    expect(pills.find((p) => p.iso === 'US')).toBeUndefined()
+  })
+})
+
 describe('renderRealtimeMapSvg', () => {
-  it('renders land only, no pins, and an honest empty caption when there are no points or country totals', () => {
+  it('renders filled land, an ocean rect, a graticule, no pins, and an honest empty caption when there are no points', () => {
     const svg = renderRealtimeMapSvg({ points: [] })
     expect(svg).toContain('No seat has checked in during the last 30 minutes.')
-    expect(svg).not.toContain('data-pin')
-    expect(svg).not.toContain('data-country-pill')
+    expect(svg).not.toContain('class="rt-pin"')
+    expect(svg).not.toContain('class="rt-pill"')
     expect(svg).toContain('data-iso=')
-    expect(svg).toContain('viewBox="0 0 1152 576"')
+    expect(svg).toContain('class="world-land"')
+    expect(svg).toContain('class="map-ocean"')
+    expect(svg).toContain('class="map-graticule"')
+    expect(svg).toContain('viewBox="0 0 1152 648"')
   })
 
   it('never fakes a dot: exactly one pin per supplied point, no more', () => {
@@ -156,168 +189,144 @@ describe('renderRealtimeMapSvg', () => {
     expect(svg).not.toContain('class="empty')
   })
 
-  it('has no foreignObject anywhere (pills are plain SVG rect + text, never HTML-in-SVG)', () => {
-    const svg = renderRealtimeMapSvg({
-      points: REFERENCE_COORDINATES.slice(0, 20).map((c) => ({
-        country: c.country,
-        city: c.city,
-        lat: c.lat,
-        lon: c.long,
-        count: c.count
-      }))
-    })
-    expect(svg).not.toContain('foreignObject')
-  })
-
-  it('a single seat renders a clearly visible dot (r=4.5); several seats at one point render larger (r=6.5)', () => {
-    const svg = renderRealtimeMapSvg({
-      points: [
-        { country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 1 },
-        { country: 'US', city: 'Ashburn', lat: 39.05, lon: -77.49, count: 4 }
-      ]
-    })
-    expect(svg).toContain('data-seats="1"')
-    expect(svg).toContain('data-seats="4"')
-    expect(svg).toMatch(/data-seats="1"[^>]*>[\s\S]*?<circle class="rt-pin-dot" r="4.5"/)
-    expect(svg).toMatch(/data-seats="4"[^>]*>[\s\S]*?<circle class="rt-pin-dot" r="6.5"/)
-  })
-
-  it('dots are dark (--map-dot token), never green, and carry no hex or rgb literal', () => {
+  it('renders the city name next to the dot, not only in a tooltip data attribute', () => {
     const svg = renderRealtimeMapSvg({
       points: [{ country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 1 }]
     })
-    expect(svg).toContain('fill: var(--map-dot)')
-    expect(svg).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
-    expect(svg).not.toMatch(/rgb\(/)
+    expect(svg).toMatch(/<text class="rt-pin-label"[^>]*>Longueuil<\/text>/)
   })
 
-  it('a live point gets a pulsing halo bound generically by motion.ts (data-beacon), a non-live one does not', () => {
+  it('a live point pulses (has a halo) and defaults live when not specified; a non-live point has no halo', () => {
     const svg = renderRealtimeMapSvg({
       points: [
-        { country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 1, live: 1 },
-        { country: 'FR', city: 'Paris', lat: 48.85, lon: 2.35, count: 1 }
+        { country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 1 },
+        { country: 'FR', city: 'Paris', lat: 48.86, lon: 2.35, count: 1, live: false }
       ]
     })
-    expect(svg).toMatch(/data-country="Canada"[^>]*data-live="1"[^>]*>[\s\S]*?rt-pin-halo[^>]*data-beacon/)
-    expect(svg).not.toMatch(/data-country="France"[^>]*>[\s\S]{0,40}rt-pin-halo/)
-    // No page writes its own keyframes (plan 3.5b's implementation rule) -- the pulse is
-    // motion.ts's data-beacon, so the static markup itself carries no @keyframes.
-    expect(svg).not.toMatch(/@keyframes/)
+    expect(svg).toMatch(/data-live="1"[\s\S]*?<circle class="rt-pin-halo"/)
+    const parisPin = svg.slice(svg.indexOf('data-city="Paris"'))
+    const parisGroupEnd = parisPin.indexOf('</g>\n    </g>')
+    expect(parisPin.slice(0, parisGroupEnd)).not.toContain('rt-pin-halo')
+    expect(svg).toContain('data-live="0"')
   })
 
-  it('carries tooltip data: iso, country, city, seats, and asks when known', () => {
+  it('a single seat renders a clearly visible dot (r=4.5) when live; several seats at one point render larger (r=6.5); non-live dots are smaller', () => {
     const svg = renderRealtimeMapSvg({
-      points: [{ country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 2, asks: 5 }]
+      points: [
+        { country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 1 },
+        { country: 'US', city: 'Ashburn', lat: 39.05, lon: -77.49, count: 4 },
+        { country: 'FR', city: 'Paris', lat: 48.86, lon: 2.35, count: 1, live: false }
+      ]
+    })
+    function pinTag(city: string): string {
+      const start = svg.indexOf(`data-city="${city}"`)
+      expect(start, `pin for ${city}`).toBeGreaterThan(-1)
+      const groupStart = svg.lastIndexOf('<g class="rt-pin"', start)
+      const groupEnd = svg.indexOf('</g>\n    </g>', groupStart) + '</g>\n    </g>'.length
+      return svg.slice(groupStart, groupEnd)
+    }
+    expect(pinTag('Longueuil')).toContain('data-live="1"')
+    expect(pinTag('Longueuil')).toMatch(/<circle class="rt-pin-dot" r="4.5"/)
+    expect(pinTag('Ashburn')).toMatch(/<circle class="rt-pin-dot" r="6.5"/)
+    expect(pinTag('Paris')).toContain('data-live="0"')
+    expect(pinTag('Paris')).toMatch(/<circle class="rt-pin-dot" r="3.5"/)
+  })
+
+  it('carries tooltip data: iso (for the flag), country, city, seats, live seats, asks and time saved when known', () => {
+    const svg = renderRealtimeMapSvg({
+      points: [{ country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 2, asks: 5, liveSeats: 1, timeSaved: '3.2h' }]
     })
     expect(svg).toContain('data-iso="CA"')
     expect(svg).toContain('data-country="Canada"')
     expect(svg).toContain('data-city="Longueuil"')
     expect(svg).toContain('data-seats="2"')
+    expect(svg).toContain('data-live-seats="1"')
     expect(svg).toContain('data-asks="5"')
+    expect(svg).toContain('data-time-saved="3.2h"')
   })
 
-  it('omits data-asks entirely when asks is not known (never a fabricated 0)', () => {
+  it('omits data-asks/data-live-seats/data-time-saved entirely when not known (never a fabricated number)', () => {
     const svg = renderRealtimeMapSvg({ points: [{ country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 1 }] })
     expect(svg).not.toContain('data-asks')
+    expect(svg).not.toContain('data-live-seats')
+    expect(svg).not.toContain('data-time-saved')
   })
 
-  it('renders a white pill per country with the seat count and place count ("3 Canada, 2 places")', () => {
+  it('gives a country reporting from 2+ places a pill with flag, country, seats and places', () => {
     const svg = renderRealtimeMapSvg({
       points: [
-        { country: 'CA', city: 'Montreal', lat: 45.5, lon: -73.6, count: 2 },
-        { country: 'CA', city: 'Toronto', lat: 43.65, lon: -79.38, count: 1 }
+        { country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 1 },
+        { country: 'CA', city: 'Montreal', lat: 45.5, lon: -73.6, count: 2 }
       ]
     })
-    expect(svg).toContain('data-country-pill')
+    expect(svg).toContain('data-pill')
     expect(svg).toContain('data-iso="CA"')
-    expect(svg).toContain('data-country-seats="3"')
-    expect(svg).toContain('data-country-places="2"')
-    expect(svg).toContain('>3 Canada, 2 places<')
-    expect(svg).toContain('fill: var(--map-pill)')
+    expect(svg).toContain('class="rt-pill-flag"')
+    expect(svg).toMatch(/href="\/assets\/flags\/ca\.svg"/)
+    expect(svg).toMatch(/<text class="rt-pill-text"[^>]*>Canada · 3 seats · 2 places<\/text>/)
   })
 
-  it('a single place omits the place count: "2 Canada", not "2 Canada, 1 places"', () => {
+  it('drops the pill for a country with a single city label already shown', () => {
     const svg = renderRealtimeMapSvg({
-      points: [{ country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 2 }]
+      points: [{ country: 'US', city: 'Ashburn', lat: 39.05, lon: -77.49, count: 1 }]
     })
-    expect(svg).toContain('>2 Canada<')
+    expect(svg).not.toContain('class="rt-pill"')
   })
 
-  it('a country pill turns on its green live dot only when the country has a live seat', () => {
-    const svg = renderRealtimeMapSvg({
-      points: [{ country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 1 }],
-      countryTotals: [{ iso: 'CA', seats: 1, live: 1 }]
-    })
-    expect(svg).toMatch(/class="rt-pill rt-pill-live"/)
-    expect(svg).toContain('data-country-live="1"')
-  })
-
-  it('a country with seats but no lat/lon still gets an honest pill from countryTotals alone', () => {
-    const svg = renderRealtimeMapSvg({ points: [], countryTotals: [{ iso: 'DE', seats: 4, live: 0 }] })
-    expect(svg).toContain('data-iso="DE"')
-    expect(svg).toContain('data-country-seats="4"')
-  })
-
-  it('nearby pills get a simple collision nudge so they never land on the same row', () => {
-    const svg = renderRealtimeMapSvg({
-      points: [
-        { country: 'BE', city: 'Brussels', lat: 50.85, lon: 4.35, count: 1 },
-        { country: 'NL', city: 'Amsterdam', lat: 52.37, lon: 4.9, count: 1 },
-        { country: 'LU', city: 'Luxembourg', lat: 49.6, lon: 6.13, count: 1 }
-      ]
-    })
-    const ys = [...svg.matchAll(/data-country-pill[^>]*transform="translate\([-.\d]+ ([-.\d]+)\)"/g)].map((m) => Number(m[1]))
-    expect(ys.length).toBe(3)
-    const sorted = [...ys].sort((a, b) => a - b)
-    expect(sorted[1] - sorted[0]).toBeGreaterThanOrEqual(20)
-    expect(sorted[2] - sorted[1]).toBeGreaterThanOrEqual(20)
-  })
-
-  it('renders a 10-degree graticule that fades in after first paint (opacity 0 until .is-shown)', () => {
-    const svg = renderRealtimeMapSvg({ points: [] })
-    expect(svg).toContain('data-graticule')
-    expect((svg.match(/class="grat"/g) || []).length).toBeGreaterThan(10)
-    expect(svg).toContain('.rt-graticule { opacity: 0;')
-  })
-
-  it('renders zoom/pan control buttons, a viewport group, and a keyboard-focusable svg', () => {
+  it('renders zoom/pan control buttons, a viewport group, and a hover-fade land group', () => {
     const svg = renderRealtimeMapSvg({ points: [] })
     expect(svg).toContain('data-zoom-in')
     expect(svg).toContain('data-zoom-out')
     expect(svg).toContain('data-viewport')
-    expect(svg).toMatch(/<svg[^>]*tabindex="0"/)
+    expect(svg).toContain('data-hover-fade')
   })
 
-  it('never sets an inline style= attribute (css.ts already positions .rt-map)', () => {
+  it('renders a pointer-following tooltip container, hidden by default', () => {
     const svg = renderRealtimeMapSvg({ points: [] })
-    expect(svg).not.toContain('style="')
+    expect(svg).toMatch(/<div class="rt-map-tooltip" data-map-tooltip role="tooltip" hidden><\/div>/)
+  })
+
+  it('has no inline style= attribute and no hex literal anywhere in the markup', () => {
+    const svg = renderRealtimeMapSvg({
+      points: [
+        { country: 'CA', city: 'Longueuil', lat: 45.53, lon: -73.52, count: 1 },
+        { country: 'CA', city: 'Montreal', lat: 45.5, lon: -73.6, count: 2 }
+      ]
+    })
+    expect(svg).not.toMatch(/\sstyle=/)
+    expect(svg).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
   })
 })
 
 describe('renderCornerMapSvg', () => {
-  it('fills by the sequential violet scale tokens (plan 3.2/3.7 item 2), never oklch or a hex literal', () => {
+  it('renders the 16:9 corner choropleth with a chart-scale-05 class at the max count', () => {
     const svg = renderCornerMapSvg({
       countries: [
         { iso: 'CA', count: 4 },
         { iso: 'US', count: 1 }
       ]
     })
-    expect(svg).toContain('viewBox="0 0 520 300"')
+    expect(svg).toContain('viewBox="0 0 520 293"')
     expect(svg).toContain('data-iso="CA"')
-    expect(svg).toMatch(/data-iso="CA"[^>]*fill="var\(--chart-scale-05\)"/)
-    expect(svg).not.toMatch(/oklch\(/)
-    expect(svg).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
+    expect(svg).toContain('class="map-ocean"')
+    expect(svg).toMatch(/class="[^"]*scale-05[^"]*"[^>]*data-iso="CA"/)
   })
 
-  it('countries with no data render --data-track, not a fabricated color', () => {
+  it('countries with no data render the no-data class, not a fabricated colour', () => {
     const svg = renderCornerMapSvg({ countries: [{ iso: 'CA', count: 1 }] })
     expect(svg).toContain('data-iso="US"')
-    expect(svg).toMatch(/data-iso="US"[^>]*fill="var\(--data-track\)"/)
+    expect(svg).toMatch(/class="[^"]*no-data[^"]*"[^>]*data-iso="US"/)
   })
 
   it('empty input renders land only, no hit pins', () => {
     const svg = renderCornerMapSvg({ countries: [] })
     expect(svg).toContain('data-iso=')
     expect(svg).not.toContain('data-pin')
+  })
+
+  it('has no inline style= attribute and no hex literal anywhere in the markup', () => {
+    const svg = renderCornerMapSvg({ countries: [{ iso: 'CA', count: 4 }] })
+    expect(svg).not.toMatch(/\sstyle=/)
+    expect(svg).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
   })
 })

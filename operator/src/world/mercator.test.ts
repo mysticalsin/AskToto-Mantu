@@ -1,9 +1,9 @@
 import { geoMercator } from 'd3-geo'
 import { describe, expect, it } from 'vitest'
 import { CENTROIDS_1152, CENTROIDS_520 } from './paths.generated'
-import { MERCATOR_VARIANTS, projectPoint } from './mercator'
+import { MAP_DIMENSIONS, MERCATOR_VARIANTS, projectPoint } from './mercator'
 
-describe('projectPoint matches d3-geo geoMercator exactly', () => {
+describe('projectPoint matches d3-geo geoMercator exactly (center [0, 20])', () => {
   const cases: [number, number][] = [
     [45.5, -73.5], // Longueuil
     [0, 0],
@@ -17,8 +17,8 @@ describe('projectPoint matches d3-geo geoMercator exactly', () => {
 
   for (const variant of ['1152', '520'] as const) {
     it(`variant ${variant}`, () => {
-      const { translate, scale } = MERCATOR_VARIANTS[variant]
-      const d3proj = geoMercator().translate(translate).scale(scale)
+      const { translate, scale, center } = MERCATOR_VARIANTS[variant]
+      const d3proj = geoMercator().center(center).translate(translate).scale(scale)
       for (const [lat, lon] of cases) {
         const [x, y] = projectPoint(lat, lon, variant)
         const expected = d3proj([lon, lat]) as [number, number]
@@ -29,23 +29,17 @@ describe('projectPoint matches d3-geo geoMercator exactly', () => {
   }
 })
 
-describe('the realtime (1152) variant is centred [0, 20] with scale derived from the width (plan 3.7 item 2 / 6.3)', () => {
-  it('longitude 0 projects to the horizontal centre of the 1152-wide canvas', () => {
-    const [x] = projectPoint(0, 0, '1152')
-    expect(x).toBeCloseTo(576, 6)
-  })
-
-  it('latitude 20 (not the equator) projects to the vertical centre of the 576-tall canvas', () => {
-    const [, y] = projectPoint(20, 0, '1152')
-    expect(y).toBeCloseTo(288, 6)
-  })
-
-  it('scale is exactly width / (2*pi), the whole-world-fit formula', () => {
+describe('16:9 aspect, scale derived from width', () => {
+  it('1152 variant is 1152x648 (16:9), scale = width / (2*pi)', () => {
+    expect(MAP_DIMENSIONS['1152']).toEqual({ width: 1152, height: 648 })
     expect(MERCATOR_VARIANTS['1152'].scale).toBeCloseTo(1152 / (2 * Math.PI), 9)
+    expect(MERCATOR_VARIANTS['1152'].center).toEqual([0, 20])
   })
 
-  it('the 520 corner-map variant keeps the original CountryMap.tsx port unchanged', () => {
-    expect(MERCATOR_VARIANTS['520']).toEqual({ translate: [260, 180], scale: 70 })
+  it('520 variant is 520x293 (16:9), scale = width / (2*pi)', () => {
+    expect(MAP_DIMENSIONS['520']).toEqual({ width: 520, height: 293 })
+    expect(MERCATOR_VARIANTS['520'].scale).toBeCloseTo(520 / (2 * Math.PI), 9)
+    expect(MERCATOR_VARIANTS['520'].center).toEqual([0, 20])
   })
 })
 
@@ -59,17 +53,17 @@ describe('projectPoint reproduces the generated centroids', () => {
     expect(firstXY.length).toBe(2)
   })
 
-  it('CENTROIDS_1152.CA sits inside Canada, not off the map', () => {
+  it('CENTROIDS_1152.CA sits inside the 1152x648 frame, not off the map', () => {
     const [x, y] = CENTROIDS_1152.CA
     expect(x).toBeGreaterThan(0)
     expect(x).toBeLessThan(1152)
     expect(y).toBeGreaterThan(0)
-    expect(y).toBeLessThan(576)
+    expect(y).toBeLessThan(648)
   })
 
   it('CENTROIDS_520.US matches projectPoint at the 520 variant within 40px (country centroid vs. its capital-ish point)', () => {
     // Loose bound: a country centroid is not one lat/lon point, so this just guards against
-    // a projection mismatch (wrong scale/translate) rather than pixel-exact placement.
+    // a projection mismatch (wrong scale/translate/center) rather than pixel-exact placement.
     const [x, y] = CENTROIDS_520.US
     const [px, py] = projectPoint(39.8, -98.6, '520') // geographic center of the contiguous US
     expect(Math.abs(x - px)).toBeLessThan(40)

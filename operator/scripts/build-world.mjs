@@ -26,12 +26,40 @@
  * After that, geometry goes through d3-geo's own geoPath (real antimeridian clipping) and
  * is only ever rounded, never re-simplified or reordered.
  *
+ * A THIRD failure mode survived the arc-level rewrite and is what actually produced the
+ * "unfilled slivers, missing continents" render Tony flagged: Visvalingam-Whyatt simplifying
+ * a very thin/needle-shaped ring down to very few points can flip that ring's effective
+ * winding. d3-geo's spherical clipping trusts ring winding to decide which side of a ring is
+ * "inside"; a flipped ring gets read as "everywhere on Earth except this sliver" — a single
+ * path spanning the full canvas width that, filled in the same flat land colour as every real
+ * country, reads as a wash that makes every genuinely small/thin country look like a bare
+ * outline (and, layered under/over its neighbours, corrupts the visible shapes around it).
+ * Caught here by comparing d3-geo's own `geoArea` (a real country is always a tiny fraction
+ * of the sphere, `4*pi` steradians) before and after simplification — see `buildVariant`'s
+ * `AREA_SANITY_MAX` check, which falls back to that one feature's unsimplified geometry
+ * rather than raising every country's simplification budget to dodge one bad ring.
+ *
  * Run directly (`node operator/scripts/build-world.mjs`, or `npm run build:operator-world`)
  * or import `buildWorldData` from a test to rebuild in memory and compare against the
  * committed file (operator/src/world/paths.generated.contract.test.ts).
+ *
+ * Plan 3.7 item 2 / Tony's reference (OpenPanel + bklit): Mercator centred [0, 20], 16:9,
+ * scale derived from width (see ./world/mercator.ts's MERCATOR_VARIANTS) — both variants'
+ * translate/scale/center come from that one module so the generator and the runtime can
+ * never drift apart. Each country entry also carries its English display name (resolved
+ * once here via Intl.DisplayNames, the same table map.ts's countryName() uses at runtime)
+ * so the map can label a country without needing Intl at all. Two more precomputed shapes
+ * ships alongside the per-country paths: GRATICULE_* (d3-geo's geoGraticule10(), the standard
+ * 10-degree grid). A land outline (every country's `d` joined into one path — the countries
+ * never overlap, so one <path> with all of them fills identically to drawing them separately)
+ * is deliberately NOT also stored here: it is 100% derivable from WORLD_1152/WORLD_520 with a
+ * single `.map(e => e.d).join('')` (see world/map.ts's `worldOutline()`), so committing a
+ * second, byte-for-byte-larger copy of the same land data would roughly double this file for
+ * a shape nothing in the interactive render actually draws (hover/tint needs the per-country
+ * paths regardless) — simplicity over a literal-but-wasteful precompute.
  */
 import { build } from 'esbuild'
-import { geoMercator, geoPath } from 'd3-geo'
+import { geoArea, geoGraticule10, geoMercator, geoPath } from 'd3-geo'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
@@ -307,33 +335,90 @@ function buildValidatedPath(raw, label) {
   return { d, points, dropped }
 }
 
-async function buildVariant({ features, pathGenerator, precision, numericToAlpha2, variantLabel }) {
+/** English display name for an alpha-2 code, resolved once at build time via Intl.DisplayNames
+ * (same source map.ts's runtime countryName() uses) so every WorldEntry ships its name — the
+ * runtime never needs Intl just to label a country on the map. Falls back to the code itself
+ * for anything Intl does not recognise (never throws, never fabricates a name). */
+const regionNames = (() => {
+  try {
+    return new Intl.DisplayNames(['en'], { type: 'region' })
+  } catch {
+    return null
+  }
+})()
+
+function resolveCountryName(alpha2, id) {
+  if (!alpha2) return id
+  try {
+    return regionNames?.of(alpha2.toUpperCase()) ?? alpha2
+  } catch {
+    return alpha2
+  }
+}
+
+/** A real country's spherical area is always a tiny fraction of the whole sphere (4*pi ≈
+ * 12.566 sr; even Russia, the largest, is ≈ 0.42 sr). Two guards catch a bad ring, matched to
+ * its unsimplified twin by ARRAY INDEX, not id — world-atlas reuses one numeric id for a
+ * country and a tiny dependent territory (036 = Australia and Ashmore and Cartier Islands),
+ * two separate geometries at two separate array positions, so an id-keyed lookup would
+ * silently compare the wrong pair for either one of them:
+ *  - absolute: >= 1 sr is never a real single country/territory, only "the sphere minus a
+ *    sliver" from a fully flipped ring (Brunei's bug — see the file doc comment).
+ *  - relative: more than 20x its own unsimplified area (with a small floor so two genuinely
+ *    near-zero numbers do not look like an "infinite" ratio) is a local self-crossing fold
+ *    that inflates area without flipping the whole ring (caught on Ashmore and Cartier
+ *    Reef — real raw area ~6e-8 sr, simplified came out at 0.19 sr, 3M times larger). */
+const AREA_SANITY_MAX = 1
+const AREA_RATIO_MAX = 20
+const AREA_RATIO_FLOOR = 0.001
+
+async function buildVariant({ features, rawFeatures, pathGenerator, precision, numericToAlpha2, variantLabel }) {
   const entries = []
   const centroids = {}
   const pointCounts = []
   let droppedRings = 0
-  for (const f of features) {
+  const fellBackToRaw = []
+  for (let i = 0; i < features.length; i++) {
+    const f = features[i]
     const id = f.id == null ? 'x' : String(f.id).padStart(3, '0')
     const alpha2 = numericToAlpha2[id] ?? ''
-    const raw = pathGenerator(f) ?? ''
+    let feature = f
+    const area = geoArea(f)
+    const rawFeature = rawFeatures[i]
+    const rawArea = rawFeature ? geoArea(rawFeature) : 0
+    const suspicious = area >= AREA_SANITY_MAX || area > Math.max(rawArea * AREA_RATIO_MAX, AREA_RATIO_FLOOR)
+    if (suspicious) {
+      if (!rawFeature) throw new Error(`build-world: ${variantLabel} ${alpha2 || id} simplified to a suspicious ring (geoArea ${area.toFixed(3)} sr) and has no raw fallback`)
+      feature = rawFeature
+      fellBackToRaw.push(alpha2 || id)
+    }
+    const raw = pathGenerator(feature) ?? ''
     if (!raw) continue
     const label = `${variantLabel} ${alpha2 || id} (feature id ${id})`
     const { d, points, dropped } = buildValidatedPath(raw, label)
     droppedRings += dropped
     if (!d) continue
     pointCounts.push({ alpha2: alpha2 || id, points })
-    entries.push({ id, alpha2, d: roundPath(d, precision) })
+    entries.push({ id, alpha2, name: resolveCountryName(alpha2, id), d: roundPath(d, precision) })
     if (alpha2 && !centroids[alpha2]) {
       // world-atlas reuses one numeric id for a country and a tiny dependent territory
       // (036 = Australia and Ashmore and Cartier Islands); keep the first (larger) landmass.
-      const c = pathGenerator.centroid(f)
+      const c = pathGenerator.centroid(feature)
       if (Number.isFinite(c[0]) && Number.isFinite(c[1])) {
         centroids[alpha2] = [round(2)(c[0]), round(2)(c[1])]
       }
     }
   }
-  return { entries, centroids, pointCounts, droppedRings }
+  return { entries, centroids, pointCounts, droppedRings, fellBackToRaw }
 }
+
+/** The standard 10-degree graticule (d3-geo's own geoGraticule10()) projected and rounded the
+ * same way land is — plan 3.7 item 2's "faint 10 degree graticule". */
+function buildGraticule(pathGenerator, precision) {
+  const d = pathGenerator(geoGraticule10()) ?? ''
+  return roundPath(d, precision)
+}
+
 
 export async function buildWorldData() {
   const [mercatorMod, isoMod] = await Promise.all([importTsModule(MERCATOR_ENTRY), importTsModule(ISO_ENTRY)])
@@ -356,11 +441,21 @@ export async function buildWorldData() {
   const features1152 = feature(topology1152, topology1152.objects.countries).features
   const features520 = feature(topology520, topology520.objects.countries).features
 
-  const geoPath1152 = geoPath(geoMercator().translate(MERCATOR_VARIANTS['1152'].translate).scale(MERCATOR_VARIANTS['1152'].scale))
-  const geoPath520 = geoPath(geoMercator().translate(MERCATOR_VARIANTS['520'].translate).scale(MERCATOR_VARIANTS['520'].scale))
+  // Unsimplified features, in the same array order as features1152/features520 (simplifying
+  // a topology never touches topology.objects, only topology.arcs, so index i is always the
+  // same geometry in both) — the fallback source for the rare feature whose simplified ring
+  // comes out suspicious (see the file doc comment's "third failure mode" and AREA_SANITY_MAX
+  // below). Matched by array index, not id: see buildVariant's doc comment for why.
+  const rawFeatures = feature(topology, topology.objects.countries).features
+
+  const mercator1152 = MERCATOR_VARIANTS['1152']
+  const mercator520 = MERCATOR_VARIANTS['520']
+  const geoPath1152 = geoPath(geoMercator().center(mercator1152.center).translate(mercator1152.translate).scale(mercator1152.scale))
+  const geoPath520 = geoPath(geoMercator().center(mercator520.center).translate(mercator520.translate).scale(mercator520.scale))
 
   const world1152 = await buildVariant({
     features: features1152,
+    rawFeatures,
     pathGenerator: geoPath1152,
     precision: PRECISION_1152,
     numericToAlpha2: NUMERIC_TO_ALPHA2,
@@ -368,13 +463,17 @@ export async function buildWorldData() {
   })
   const world520 = await buildVariant({
     features: features520,
+    rawFeatures,
     pathGenerator: geoPath520,
     precision: PRECISION_520,
     numericToAlpha2: NUMERIC_TO_ALPHA2,
     variantLabel: '520'
   })
 
-  const code = renderGeneratedFile(world1152, world520)
+  const graticule1152 = buildGraticule(geoPath1152, PRECISION_1152)
+  const graticule520 = buildGraticule(geoPath520, PRECISION_520)
+
+  const code = renderGeneratedFile(world1152, world520, graticule1152, graticule520)
   const bytes = Buffer.byteLength(code, 'utf8')
   const bytes1152 = Buffer.byteLength(JSON.stringify(world1152.entries), 'utf8')
   const bytes520 = Buffer.byteLength(JSON.stringify(world520.entries), 'utf8')
@@ -386,22 +485,26 @@ export async function buildWorldData() {
     throw new Error(`build-world: WORLD_520 is ${(bytes520 / 1024).toFixed(0)} KB, over the ${MAX_BYTES_520 / 1024} KB budget. Raise AREA_THRESHOLD_520.`)
   }
 
-  return { code, world1152, world520, bytes, bytes1152, bytes520 }
+  return { code, world1152, world520, graticule1152, graticule520, bytes, bytes1152, bytes520 }
 }
 
-function renderGeneratedFile(world1152, world520) {
+function renderGeneratedFile(world1152, world520, graticule1152, graticule520) {
   return `/**
  * GENERATED FILE. Do not edit by hand.
  * Run \`npm run build:operator-world\` (node operator/scripts/build-world.mjs) to regenerate.
  * Source: operator/shoey-ref/data/countries-50m.json (world-atlas 50m, public domain),
  * simplified per-arc (Visvalingam-Whyatt) and decoded with
  * operator/scripts/topojson-feature.mjs, then projected with the reference Mercator
- * constants in operator/src/world/mercator.ts. See operator/scripts/build-world.mjs.
+ * constants (center [0, 20], 16:9, scale derived from width) in
+ * operator/src/world/mercator.ts. See operator/scripts/build-world.mjs.
  */
 
 export interface WorldEntry {
   id: string
   alpha2: string
+  /** English display name, resolved once at build time (Intl.DisplayNames) — never a
+   * fabricated name; falls back to the raw code/id when Intl does not recognise it. */
+  name: string
   d: string
 }
 
@@ -412,6 +515,11 @@ export const WORLD_520: WorldEntry[] = ${JSON.stringify(world520.entries)}
 export const CENTROIDS_1152: Record<string, [number, number]> = ${JSON.stringify(world1152.centroids)}
 
 export const CENTROIDS_520: Record<string, [number, number]> = ${JSON.stringify(world520.centroids)}
+
+/** d3-geo's geoGraticule10() (the standard 10-degree grid), projected and rounded like land. */
+export const GRATICULE_1152: string = ${JSON.stringify(graticule1152)}
+
+export const GRATICULE_520: string = ${JSON.stringify(graticule520)}
 `
 }
 
@@ -435,6 +543,12 @@ async function main() {
       `520=${(bytes520 / 1024).toFixed(1)} KB / ${world520.entries.length} pieces / ${world520.droppedRings} degenerate rings dropped, ` +
       `${Object.keys(world1152.centroids).length} centroids)`
   )
+  if (world1152.fellBackToRaw.length || world520.fellBackToRaw.length) {
+    console.log(
+      `Métis Operator: fell back to unsimplified geometry for a flipped-winding sliver — ` +
+        `1152: [${world1152.fellBackToRaw.join(', ')}], 520: [${world520.fellBackToRaw.join(', ')}]`
+    )
+  }
 }
 
 const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]

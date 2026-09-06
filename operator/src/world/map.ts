@@ -1,24 +1,31 @@
 /**
  * Pure, isomorphic world-map rendering. No DOM access anywhere in this module (that lives in
- * ./map-dom.ts, imported only by the client bundle). Every colour is a CSS custom property
- * (`var(--map-land)`, `var(--live)`, ...) defined in operator/src/spa/css.ts -- there is no hex
- * or rgb() literal anywhere below, light/dark repaint themselves with zero JS, and gates.mjs
- * gate 3 (hex literals in operator/src/world/**) passes on this file by construction.
+ * ./map-dom.ts, imported only by the client bundle). Ports the OpenPanel "Shoey" demo
+ * (WorldMap.tsx, shared/MapCanvas.tsx, shared/ZoomPan.tsx, demo-shoey-0c94a954/CountryMap.tsx)
+ * plus bklit's Choropleth Chart behaviours, per plan 3.7 item 2 and Tony's exact words this
+ * round: "fix the maps because they look terrible, it should look like this with a pulsing
+ * green dot on where people are using it and the city they are from."
  *
- * Plan 3.7 item 2 / 6.3 (the OpenPanel look plus bklit's choropleth behaviours): white ocean,
- * `--map-land` land through 0.5px `--map-stroke` borders, a 10-degree graticule at 60% opacity,
- * a Mercator projection centred [0, 20] with the scale derived from the width (see
- * ./mercator.ts), dark `--map-dot` dots per city (stacked seats enlarge the dot; a live seat at
- * that point also gets a green pulsing halo), and a white pill per country with a green live dot
- * plus the seat count and place count ("3 Canada, 2 places") at the country's centroid, with a
- * simple collision nudge so nearby pills never overlap. Hover, zoom/pan and the country click
- * filter are wired by ./map-dom.ts against the `data-*` hooks this module renders; no page
- * writes its own keyframes outside operator/client/motion.ts's helpers (`data-beacon`) or the
- * one embedded `<style>` block below, which carries only the CSS transitions the interactive
- * DOM manipulation in map-dom.ts turns on and off (no `@keyframes` -- the beacon pulse is
- * motion.ts's, bound generically by every page's `bindMotion()` call).
+ * That is the spec this file now implements: white ocean, `--map-land` filled countries with
+ * 0.5px `--map-stroke` borders, a faint 10-degree graticule, one pulsing `--live` (green) dot
+ * per city with a live seat (sized by how many seats are stacked there) and its city name
+ * rendered next to the dot — not only in a tooltip. A city seen today but with no heartbeat in
+ * the last two minutes is a smaller, static `--accent` (violet) dot, no pulse. Countries with
+ * more than one reporting place also get a pill (flag, country name, seat count, place count)
+ * anchored at the country's real centroid, dropped when the country already shows a single
+ * city label (nothing left for the pill to add). Hovering a country tints it
+ * `--map-land-hover` and fades every other country to 40%; a tooltip (wired up in
+ * ./map-dom.ts on hydration) carries flag, city, country, seats, live seats, asks in the last
+ * 30 minutes and time saved. Zoom/pan is ./map-dom.ts's `attachMapInteraction`; this module
+ * only renders the markup those hooks bind to (`data-map-svg`, `data-viewport`, `data-pin`,
+ * `data-pill`, `data-zoom-in`, `data-zoom-out`).
+ *
+ * No inline `style=` attributes: colour/typography/motion come from CSS classes
+ * (operator/src/spa/css-realtime.ts) that reference tokens (`--map-*`, `--live`, `--accent`,
+ * `--chart-scale-01..05`) — this module never writes a hex literal. Only per-instance
+ * geometry (`cx`, `cy`, `r`, `transform`, `d`) is a presentation attribute.
  */
-import { CENTROIDS_1152, CENTROIDS_520, WORLD_1152, WORLD_520 } from './paths.generated'
+import { CENTROIDS_1152, CENTROIDS_520, GRATICULE_1152, GRATICULE_520, WORLD_1152, WORLD_520, type WorldEntry } from './paths.generated'
 import { MAP_DIMENSIONS, MERCATOR_VARIANTS, projectPoint, type MapVariant } from './mercator'
 
 export type { MapVariant }
@@ -43,10 +50,31 @@ export function countryName(code: string): string {
   }
 }
 
+function escapeXml(s: string): string {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+}
+
+function flagHref(iso: string): string {
+  return `/assets/flags/${iso.toLowerCase()}.svg`
+}
+
+/** Every WORLD_* entry's `d` joined into one path — see build-world.mjs's doc comment for why
+ * this is computed on demand rather than also committed to paths.generated.ts. Not used by
+ * the default hover-interactive render (which needs per-country paths); available for a base
+ * layer or an accessibility silhouette. */
+export function worldOutline(entries: WorldEntry[]): string {
+  return entries.map((e) => e.d).join('')
+}
+
 // ---------------------------------------------------------------------------------------
-// Clustering: a pure, tested helper for tooltip aggregation by pixel proximity (kept exactly
-// as ported from WorldMap.tsx). Not used for the country pills below, which group strictly by
-// country instead — see countryPillInfos().
+// Clustering (ported from WorldMap.tsx). Kept as a pure, tested helper for tooltip
+// aggregation and any future proximity-based badge UI; the realtime map's own pills use
+// countryPills() below instead — pills are anchored at a country's real centroid, not a
+// proximity cluster's running average, so a pill always sits inside its country.
 // ---------------------------------------------------------------------------------------
 
 export interface ClusterPoint {
@@ -138,48 +166,19 @@ export function clusterLabel(cluster: Cluster): string {
 
 // ---------------------------------------------------------------------------------------
 // Rendering
+//
+// No theme branching anywhere below: every colour is a CSS custom property
+// (operator/src/spa/css-realtime.ts), so light/dark/`prefers-color-scheme` are the
+// stylesheet's problem, not this module's — the same markup is correct in both themes.
 // ---------------------------------------------------------------------------------------
 
-/** Accepted for backward compatibility (operator/src/charts.ts's shoeyWorld() still passes a
- * `theme` option) -- every colour below is a CSS custom property, so light/dark repaint
- * themselves with zero JS and this type no longer changes what gets rendered. */
-export type Theme = 'light' | 'dark'
-
-function escapeXml(s: string): string {
-  return String(s ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-}
-
-function landPaths(entries: { id: string; alpha2: string; d: string }[]): string {
+function landPaths(entries: WorldEntry[]): string {
   return entries
-    .map((c) => `<path class="world-land" data-iso="${escapeXml(c.alpha2 || c.id)}" d="${c.d}" />`)
+    .map(
+      (c) =>
+        `<path class="world-land" data-iso="${escapeXml(c.alpha2 || c.id)}" data-country="${escapeXml(c.name)}" tabindex="0" d="${c.d}" />`
+    )
     .join('')
-}
-
-const GRATICULE_STEP_DEG = 10
-
-/** A meridian/parallel every 10 degrees (bklit's ChoroplethGraticule): in a Mercator
- * projection both are straight lines, so no path baking is needed -- ./mercator.ts's
- * projectPoint places each one exactly where the land paths were projected from. Lines that
- * would fall outside the canvas (a parallel beyond the projection's vertical extent) are
- * skipped rather than drawn off-screen. */
-export function graticuleLines(variant: MapVariant): string {
-  const { width, height } = MAP_DIMENSIONS[variant]
-  const lines: string[] = []
-  for (let lon = -180; lon <= 180; lon += GRATICULE_STEP_DEG) {
-    const [x] = projectPoint(0, lon, variant)
-    if (x < -0.01 || x > width + 0.01) continue
-    lines.push(`<line class="grat" x1="${x.toFixed(2)}" y1="0" x2="${x.toFixed(2)}" y2="${height}" />`)
-  }
-  for (let lat = -80; lat <= 80; lat += GRATICULE_STEP_DEG) {
-    const [, y] = projectPoint(lat, 0, variant)
-    if (y < -0.01 || y > height + 0.01) continue
-    lines.push(`<line class="grat" x1="0" y1="${y.toFixed(2)}" x2="${width}" y2="${y.toFixed(2)}" />`)
-  }
-  return `<g class="rt-graticule" data-graticule aria-hidden="true">${lines.join('')}</g>`
 }
 
 export interface RealtimeMapPoint {
@@ -187,215 +186,219 @@ export interface RealtimeMapPoint {
   city: string
   lat: number
   lon: number
-  /** Seats reporting from this exact point. */
+  /** Seats reporting from this exact point (stacked seats enlarge the dot). */
   count: number
-  /** Of those seats, how many are live right now (heartbeat under 2 min). Omitted or 0 when
-   * none are -- the dot's halo only pulses when this point is genuinely live. */
-  live?: number
-  /** Asks in the last 30 min from this point, when known. Omitted entirely from the markup
+  /** A heartbeat in the last two minutes. Defaults to true — every point handed to this
+   * renderer represents real activity, and only a caller that can tell "seen today" apart
+   * from "live right now" (charts.ts's groupDotsToPoints, once the data layer carries that
+   * distinction) ever passes `false`. Live renders a pulsing `--live` (green) dot; not-live
+   * renders a smaller, static `--accent` (violet) dot. */
+  live?: boolean
+  /** Seats at this point that are live right now, when known and different from `count`
+   * (which is every seat seen today at this point). Omitted from the tooltip data when not
+   * supplied — numbers stay honest, never a fabricated duplicate of `count`. */
+  liveSeats?: number
+  /** Asks in the last 30 min from this point, when known. Omitted entirely from the tooltip
    * when not supplied — numbers stay honest, never a fabricated zero. */
   asks?: number
-}
-
-/** Per-country totals for the pill's seat/live counts (plan 3.7 item 2), independent of
- * `points` — a country with seats but no lat/lon on any of them still gets an honest pill. */
-export interface RealtimeCountryTotal {
-  iso: string
-  seats: number
-  live: number
+  /** Pre-formatted ("3.2h") — there is no shared duration formatter in this module. Omitted
+   * when not known. */
+  timeSaved?: string
 }
 
 export interface RealtimeMapOptions {
   points: RealtimeMapPoint[]
-  countryTotals?: RealtimeCountryTotal[]
-  /** Accepted for backward compatibility; see the Theme doc comment above. */
-  theme?: Theme
 }
 
-function renderPin(point: RealtimeMapPoint, variant: MapVariant): string {
+/** `labelDy` shifts only the city-name text (never the dot itself) — the output of the
+ * collision nudge in `layoutPoints` below, so two nearby cities' names never overlap. */
+function renderPin(point: RealtimeMapPoint, variant: MapVariant, labelDy = 0): string {
   const [x, y] = projectPoint(point.lat, point.lon, variant)
-  const dotRadius = point.count > 1 ? 6.5 : 4.5
+  const live = point.live ?? true
+  const dotRadius = live ? (point.count > 1 ? 6.5 : 4.5) : point.count > 1 ? 5 : 3.5
   const label = point.city || countryName(point.country)
   const asksAttr = point.asks == null ? '' : ` data-asks="${point.asks}"`
-  const liveAttr = point.live ? ` data-live="${point.live}"` : ''
-  const halo = point.live ? `<circle class="rt-pin-halo" r="${dotRadius}" data-beacon />` : ''
-  const iso = point.country.toUpperCase().trim()
-  const isoAttr = iso ? ` data-iso="${escapeXml(iso)}"` : ''
-  return `<g class="rt-pin" data-pin tabindex="0"${isoAttr} data-country="${escapeXml(countryName(point.country))}" data-city="${escapeXml(label)}" data-seats="${point.count}"${asksAttr}${liveAttr} transform="translate(${x.toFixed(2)} ${y.toFixed(2)})">
+  const liveSeatsAttr = point.liveSeats == null ? '' : ` data-live-seats="${point.liveSeats}"`
+  const timeSavedAttr = point.timeSaved ? ` data-time-saved="${escapeXml(point.timeSaved)}"` : ''
+  const halo = live ? '<circle class="rt-pin-halo" data-beacon r="4.5" />' : ''
+  const labelX = (dotRadius + 5).toFixed(2)
+  const labelY = (3 + labelDy).toFixed(2)
+  return `<g class="rt-pin" data-pin tabindex="0" data-live="${live ? '1' : '0'}" data-iso="${escapeXml(point.country)}" data-country="${escapeXml(countryName(point.country))}" data-city="${escapeXml(label)}" data-seats="${point.count}"${liveSeatsAttr}${asksAttr}${timeSavedAttr} transform="translate(${x.toFixed(2)} ${y.toFixed(2)})">
       <g class="rt-pin-inner" data-pin-inner>
         ${halo}
         <circle class="rt-pin-dot" r="${dotRadius}" />
+        <text class="rt-pin-label" data-pin-label x="${labelX}" y="${labelY}">${escapeXml(label)}</text>
       </g>
     </g>`
 }
 
-interface CountryPillInfo {
+export interface CountryPillEntry {
   iso: string
-  countryLabel: string
+  country: string
   seats: number
-  live: number
   places: number
+  x: number
+  y: number
 }
 
-function countryPillInfos(points: RealtimeMapPoint[], countryTotals?: RealtimeCountryTotal[]): CountryPillInfo[] {
-  const byIso = new Map<string, { seats: number; live: number; places: Set<string> }>()
+export interface CountryPillOptions {
+  /** A country needs at least this many distinct reporting places before it gets a pill —
+   * below that, its one city label already carries the information (Tony: "drop a pill when
+   * its country already shows a single city label"). */
+  minPlaces: number
+}
+
+export const DEFAULT_PILL_OPTIONS: CountryPillOptions = { minPlaces: 2 }
+
+/** One pill per country with >= minPlaces distinct reporting places, anchored at that
+ * country's real centroid (CENTROIDS_1152/520 — computed from the actual landmass at build
+ * time), never a points' average which can drift onto a neighbour or the ocean. Countries
+ * with no centroid (an id with no resolved alpha-2, vanishingly rare) are skipped rather than
+ * guessed at. */
+export function countryPills(points: RealtimeMapPoint[], variant: MapVariant, options: CountryPillOptions = DEFAULT_PILL_OPTIONS): CountryPillEntry[] {
+  const byCountry = new Map<string, { seats: number; places: Set<string> }>()
   for (const p of points) {
-    const iso = p.country.toUpperCase().trim()
-    if (!iso) continue
-    const cur = byIso.get(iso) ?? { seats: 0, live: 0, places: new Set<string>() }
-    cur.seats += p.count
-    cur.live += p.live ?? 0
-    cur.places.add(p.city || `${p.lat.toFixed(2)},${p.lon.toFixed(2)}`)
-    byIso.set(iso, cur)
+    const entry = byCountry.get(p.country) ?? { seats: 0, places: new Set<string>() }
+    entry.seats += p.count
+    entry.places.add(`${p.city}|${p.lat.toFixed(2)}|${p.lon.toFixed(2)}`)
+    byCountry.set(p.country, entry)
   }
-  for (const t of countryTotals ?? []) {
-    const iso = t.iso.toUpperCase().trim()
-    if (!iso) continue
-    const cur = byIso.get(iso) ?? { seats: 0, live: 0, places: new Set<string>() }
-    // The route-provided total is the authoritative seat/live count (it counts every seat in
-    // the country, not only the ones we could place a dot for); dot-derived places stays the
-    // honest count of distinct locations we actually know.
-    cur.seats = Math.max(cur.seats, t.seats)
-    cur.live = Math.max(cur.live, t.live)
-    byIso.set(iso, cur)
+  const centroids = variant === '1152' ? CENTROIDS_1152 : CENTROIDS_520
+  const pills: CountryPillEntry[] = []
+  for (const [iso, { seats, places }] of byCountry) {
+    if (places.size < options.minPlaces) continue
+    const centroid = centroids[iso]
+    if (!centroid) continue
+    pills.push({ iso, country: countryName(iso), seats, places: places.size, x: centroid[0], y: centroid[1] })
   }
-  return [...byIso.entries()]
-    .filter(([, v]) => v.seats > 0)
-    .map(([iso, v]) => ({ iso, countryLabel: countryName(iso), seats: v.seats, live: v.live, places: Math.max(1, v.places.size) }))
+  return pills.sort((a, b) => b.seats - a.seats)
 }
 
-/** "3 Canada, 2 places" when more than one place is known, "3 Canada" for a single place. */
-export function pillLabel(info: { countryLabel: string; seats: number; places: number }): string {
-  const base = `${info.seats} ${info.countryLabel}`
-  return info.places > 1 ? `${base}, ${info.places} places` : base
-}
-
-const PILL_HEIGHT = 20
-const PILL_PAD_X = 9
-const PILL_DOT_SPACE = 14
-const PILL_CHAR_WIDTH = 5.6
-const PILL_GAP = 4
-
-function estimatePillWidth(label: string): number {
-  return PILL_DOT_SPACE + PILL_PAD_X * 2 + label.length * PILL_CHAR_WIDTH
-}
-
-interface PillBox {
-  info: CountryPillInfo
-  label: string
+interface LayoutBox {
   x: number
   y: number
   width: number
+  height: number
 }
 
-/** Anchors every pill at its country's baked centroid, then a simple collision nudge (the
- * spec's own word: not a force-directed layout) -- sweep top to bottom, and push a pill down
- * past any already-placed pill it would otherwise overlap. */
-function placePills(infos: CountryPillInfo[], variant: MapVariant): PillBox[] {
-  const centroids = variant === '1152' ? CENTROIDS_1152 : CENTROIDS_520
-  const initial: PillBox[] = []
-  for (const info of infos) {
-    const centroid = centroids[info.iso]
-    if (!centroid) continue
-    const label = pillLabel(info)
-    initial.push({ info, label, x: centroid[0], y: centroid[1], width: estimatePillWidth(label) })
+/** Simple collision nudge (plan 3.7 item 2: pills "never overlapping, simple collision
+ * nudge"): pills are placed in seat-count order against every fixed obstacle (city labels,
+ * which never move — moving a label away from its own dot would break the visual link) and
+ * every pill already placed, dropping straight down until clear. A handful of pills and
+ * labels at a time, so the O(n*m) scan costs nothing worth optimising. */
+function nudgeDown(box: LayoutBox, obstacles: LayoutBox[]): void {
+  for (let guard = 0; guard < 8; guard++) {
+    const hit = obstacles.find(
+      (o) => box.x < o.x + o.width && box.x + box.width > o.x && box.y < o.y + o.height && box.y + box.height > o.y
+    )
+    if (!hit) return
+    box.y = hit.y + hit.height + 2
   }
-  initial.sort((a, b) => a.y - b.y)
-  const placed: PillBox[] = []
-  for (const box of initial) {
-    let y = box.y
-    for (const other of placed) {
-      const overlapsX = Math.abs(box.x - other.x) < (box.width + other.width) / 2 + PILL_GAP
-      const overlapsY = Math.abs(y - other.y) < PILL_HEIGHT + PILL_GAP
-      if (overlapsX && overlapsY) y = other.y + PILL_HEIGHT + PILL_GAP
-    }
-    placed.push({ ...box, y })
+}
+
+/** Rough label-width estimate for server-rendered layout with no real text metrics
+ * (map-dom.ts refines every box to its actual `getBBox()` width on hydration) — generous
+ * enough that the common case does not visibly overflow before that refinement runs. */
+function estimateTextWidth(text: string, pxPerChar: number): number {
+  return text.length * pxPerChar
+}
+
+function renderPillLayer(pills: CountryPillEntry[], cityLabelBoxes: LayoutBox[]): { markup: string; boxes: LayoutBox[] } {
+  const placed: LayoutBox[] = []
+  let markup = ''
+  const height = 20
+  const padX = 8
+  const dotR = 3
+  const gapDotFlag = 6
+  const flagW = 14
+  const flagH = 10
+  const gapFlagText = 5
+  const leading = padX + dotR * 2 + gapDotFlag + flagW + gapFlagText
+  for (const pill of pills) {
+    const text = `${pill.country} · ${pill.seats} seat${pill.seats === 1 ? '' : 's'} · ${pill.places} places`
+    const textWidth = estimateTextWidth(text, 5.6)
+    const width = leading + textWidth + padX
+    const box: LayoutBox = { x: pill.x - width / 2, y: pill.y - height / 2, width, height }
+    nudgeDown(box, [...cityLabelBoxes, ...placed])
+    placed.push(box)
+    const midY = box.y + height / 2
+    const dotCx = box.x + padX + dotR
+    const flagX = dotCx + dotR + gapDotFlag
+    const flagY = midY - flagH / 2
+    const textX = flagX + flagW + gapFlagText
+    const textY = midY + 3.5
+    markup += `<g class="rt-pill" data-pill data-iso="${escapeXml(pill.iso)}" data-country="${escapeXml(pill.country)}" data-seats="${pill.seats}" data-places="${pill.places}">
+      <rect class="rt-pill-bg" data-pill-bg x="${box.x.toFixed(2)}" y="${box.y.toFixed(2)}" width="${width.toFixed(2)}" height="${height}" rx="${height / 2}" />
+      <circle class="rt-pill-live" data-beacon cx="${dotCx.toFixed(2)}" cy="${midY.toFixed(2)}" r="${dotR}" />
+      <image class="rt-pill-flag" href="${flagHref(pill.iso)}" x="${flagX.toFixed(2)}" y="${flagY.toFixed(2)}" width="${flagW}" height="${flagH}" />
+      <text class="rt-pill-text" data-pill-text x="${textX.toFixed(2)}" y="${textY.toFixed(2)}">${escapeXml(text)}</text>
+    </g>`
   }
-  return placed
+  return { markup, boxes: placed }
 }
 
-function renderPill(box: PillBox): string {
-  const { info, label } = box
-  const liveClass = info.live > 0 ? ' rt-pill-live' : ''
-  const dotBeacon = info.live > 0 ? ' data-beacon' : ''
-  const left = box.x - box.width / 2
-  const top = box.y - PILL_HEIGHT / 2
-  return `<g class="rt-pill${liveClass}" data-country-pill tabindex="0" data-iso="${escapeXml(info.iso)}" data-country="${escapeXml(info.countryLabel)}" data-country-seats="${info.seats}" data-country-live="${info.live}" data-country-places="${info.places}" transform="translate(${left.toFixed(2)} ${top.toFixed(2)})">
-    <rect class="rt-pill-bg" width="${box.width.toFixed(2)}" height="${PILL_HEIGHT}" rx="${PILL_HEIGHT / 2}" />
-    <circle class="rt-pill-dot" cx="${(PILL_PAD_X + 2).toFixed(2)}" cy="${PILL_HEIGHT / 2}" r="3"${dotBeacon} />
-    <text class="rt-pill-text" x="${(PILL_DOT_SPACE + PILL_PAD_X).toFixed(2)}" y="${PILL_HEIGHT / 2}" dominant-baseline="central">${escapeXml(label)}</text>
-  </g>`
-}
-
-/** The one embedded `<style>` block for this component's own interactive states (hover fade,
- * the pill/dot palette, the zoom viewport's transition). Every value is a token or a plain
- * transition/geometry number -- no `@keyframes` (the live beacon pulse is motion.ts's
- * `data-beacon`, bound generically by every page's bindMotion() call, per plan 3.5b's
- * implementation rule), so nothing here needs its own `prefers-reduced-motion` guard beyond
- * disabling the transitions themselves. */
-const MAP_STYLE = `
-    .world-land { fill: var(--map-land); stroke: var(--map-stroke); stroke-width: 0.5; vector-effect: non-scaling-stroke; cursor: pointer; transition: opacity 150ms var(--ease-color), fill 150ms var(--ease-color); }
-    .world-land.is-faded { opacity: 0.4; }
-    .world-land.is-hovered { fill: var(--map-land-hover); }
-    .rt-pin { cursor: pointer; transition: opacity 150ms var(--ease-color); }
-    .rt-pin.is-faded { opacity: 0.4; }
-    .rt-pin-halo { fill: none; stroke: var(--live); stroke-width: 1.5; opacity: 0.6; transform-origin: center; }
-    .rt-pin-dot { fill: var(--map-dot); stroke: var(--map-ocean); stroke-width: 1.2; }
-    .rt-pill { cursor: pointer; transition: opacity 150ms var(--ease-color); }
-    .rt-pill.is-faded { opacity: 0.4; }
-    .rt-pill-bg { fill: var(--map-pill); stroke: var(--border); stroke-width: 1; }
-    .rt-pill-dot { fill: var(--ink-3); }
-    .rt-pill-live .rt-pill-dot { fill: var(--live); }
-    .rt-pill-text { font: 600 10px var(--font-body); fill: var(--ink); }
-    .rt-graticule { opacity: 0; transition: opacity 400ms var(--ease-color); }
-    .rt-graticule.is-shown { opacity: 1; }
-    .rt-viewport { transition: transform 250ms var(--ease-spring); }
-    .rt-viewport.is-dragging { transition: none; }
-    .rt-viewport.is-resetting { transition-duration: 400ms; }
-    @media (prefers-reduced-motion: reduce) {
-      .rt-viewport, .world-land, .rt-pill, .rt-pin, .rt-graticule { transition: none; }
-    }
-  `
-
-/** Full realtime map SVG: white ocean, land, the 10-degree graticule, one dot per point (dark,
- * stacked seats enlarge it, a live point also gets a green pulsing halo), a white pill per
- * country with a green live dot and its seat/place count, a zoom/pan viewport group and +/-
- * control buttons rendered as markup so ./map-dom.ts only has to bind handlers, and a bottom
- * gradient fade like the reference. */
+/** Full realtime map SVG: white ocean, faint 10-degree graticule, `--map-land` filled
+ * countries with 0.5px `--map-stroke` borders, one dot per reporting point (pulsing `--live`
+ * green when live, static `--accent` violet otherwise) with its city name next to it, a pill
+ * per country with more than one reporting place, zoom/pan viewport group and +/- control
+ * buttons rendered as markup so ./map-dom.ts only has to bind handlers, and a tooltip
+ * container it fills in on hover/pointermove. */
 export function renderRealtimeMapSvg(options: RealtimeMapOptions): string {
-  const { points, countryTotals } = options
+  const { points } = options
   const variant: MapVariant = '1152'
   const { width, height } = MAP_DIMENSIONS[variant]
-  const empty = points.length === 0 && (countryTotals ?? []).every((c) => c.seats === 0)
+  const empty = points.length === 0
+
   const land = landPaths(WORLD_1152)
-  const graticule = graticuleLines(variant)
-  const pins = empty ? '' : points.map((p) => renderPin(p, variant)).join('')
-  const pills = empty ? '' : placePills(countryPillInfos(points, countryTotals), variant).map(renderPill).join('')
+
+  // City labels must not collide with each other either (two nearby cities' names used to
+  // print on top of one another) — nudge each one, in turn, clear of every label already
+  // placed, then render every pin with the resulting vertical offset applied to its text
+  // only (the dot itself never moves).
+  const placedLabels: LayoutBox[] = []
+  const labelDy: number[] = []
+  if (!empty) {
+    for (const p of points) {
+      const [x, y] = projectPoint(p.lat, p.lon, variant)
+      const label = p.city || countryName(p.country)
+      const dotRadius = (p.live ?? true) ? (p.count > 1 ? 6.5 : 4.5) : p.count > 1 ? 5 : 3.5
+      const labelX = x + dotRadius + 5
+      const w = estimateTextWidth(label, 5.4)
+      const box: LayoutBox = { x: labelX, y: y - 7, width: w, height: 14 }
+      const originalY = box.y
+      nudgeDown(box, placedLabels)
+      placedLabels.push(box)
+      labelDy.push(box.y - originalY)
+    }
+  }
+  const pins = empty ? '' : points.map((p, i) => renderPin(p, variant, labelDy[i])).join('')
+  const pills = empty ? [] : countryPills(points, variant)
+  const { markup: pillMarkup } = renderPillLayer(pills, placedLabels)
   const caption = empty
     ? `<div class="empty map-empty">No seat has checked in during the last 30 minutes.</div>`
     : ''
-  const svg = `<svg class="rt-map-svg" data-map-svg tabindex="0" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Live seat locations, zoomable and pannable, plus and minus keys to zoom">
-    <style>${MAP_STYLE}</style>
-    <rect class="rt-map-ocean" width="${width}" height="${height}" fill="var(--map-ocean)" />
+  const svg = `<svg class="rt-map-svg" data-map-svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Live seat locations">
+    <rect class="map-ocean" width="${width}" height="${height}" />
     <g class="rt-viewport" data-viewport transform="translate(0,0) scale(1)">
-      ${land}
-      ${graticule}
-      ${pins}
-      ${pills}
+      <path class="map-graticule" data-graticule d="${GRATICULE_1152}" />
+      <g class="world-land-group" data-hover-fade>${land}</g>
+      <g class="rt-pins" data-pins>${pins}</g>
+      <g class="rt-pills" data-pills>${pillMarkup}</g>
     </g>
   </svg>`
   const controls = `<div class="rt-map-controls" data-map-controls>
     <button type="button" class="rt-map-zoom" data-zoom-in aria-label="Zoom in">+</button>
     <button type="button" class="rt-map-zoom" data-zoom-out aria-label="Zoom out">&minus;</button>
   </div>`
+  const tooltip = `<div class="rt-map-tooltip" data-map-tooltip role="tooltip" hidden></div>`
   const fade = `<div class="rt-map-fade" aria-hidden="true"></div>`
-  return `${caption}<div class="rt-map" data-map-root>${svg}${controls}${fade}</div>`
+  return `${caption}<div class="rt-map" data-map-root>${svg}${tooltip}${controls}${fade}</div>`
 }
 
 // ---------------------------------------------------------------------------------------
-// Corner choropleth (CountryMap.tsx port). Unchanged by the realtime-map spec update: the
-// Overview corner map is a separate component (plan 3.7 item 2's last sentence), still every
-// colour a token.
+// Corner choropleth (CountryMap.tsx port, plan 3.7 item 2: "the Overview corner map is the
+// same component as a choropleth: fill by seats per country through --chart-scale-01..05, no
+// data countries in --data-track").
 // ---------------------------------------------------------------------------------------
 
 export interface CornerCountry {
@@ -407,32 +410,32 @@ export interface CornerMapOptions {
   countries: CornerCountry[]
 }
 
-/** 520x300 corner choropleth: fill by a sequential violet scale (`--chart-scale-01..05`,
- * plan 3.2), white 0.5 strokes, invisible hit pins at centroids for tooltips. Countries with no
- * data render the same flat grey as the land (`--data-track`), never a fabricated color. */
+const CHART_SCALE_STEPS = 5
+
+/** 520x300-ish (16:9) corner choropleth: a 5-step `--chart-scale-01..05` sequential fill by
+ * seat count, `--map-ocean` strokes between cells (the reference's "white 0.5px strokes" —
+ * `--map-ocean` is white in light theme and the correct dark separator in dark theme), no
+ * data in `--data-track`, invisible hit pins at centroids for tooltips. */
 export function renderCornerMapSvg(options: CornerMapOptions): string {
   const variant: MapVariant = '520'
   const { width, height } = MAP_DIMENSIONS[variant]
   const byIso = new Map(options.countries.map((c) => [c.iso, c.count]))
   const max = Math.max(1, ...options.countries.map((c) => c.count))
-  const scaleSteps = ['var(--chart-scale-01)', 'var(--chart-scale-02)', 'var(--chart-scale-03)', 'var(--chart-scale-04)', 'var(--chart-scale-05)']
   const land = WORLD_520.map((c) => {
     const count = byIso.get(c.alpha2)
-    const fill =
-      count === undefined
-        ? 'var(--data-track)'
-        : scaleSteps[Math.min(scaleSteps.length - 1, Math.round((scaleSteps.length - 1) * Math.sqrt(count / max)))]
-    return `<path class="world-land" data-iso="${escapeXml(c.alpha2 || c.id)}" d="${c.d}" fill="${fill}" stroke="var(--map-ocean)" stroke-width="0.5" />`
+    const step = count == null || count <= 0 ? 0 : Math.min(CHART_SCALE_STEPS, Math.max(1, Math.ceil((count / max) * CHART_SCALE_STEPS)))
+    const cls = step === 0 ? 'no-data' : `scale-${String(step).padStart(2, '0')}`
+    return `<path class="world-land corner-cell ${cls}" data-iso="${escapeXml(c.alpha2 || c.id)}" data-country="${escapeXml(c.name)}" d="${c.d}" />`
   }).join('')
   const pins = options.countries
     .filter((c) => byIso.has(c.iso) && CENTROIDS_520[c.iso])
     .map((c) => {
       const [x, y] = CENTROIDS_520[c.iso]
       const count = byIso.get(c.iso) ?? 0
-      return `<g class="corner-pin" data-pin tabindex="0" data-country="${escapeXml(countryName(c.iso))}" data-count="${count}" transform="translate(${x} ${y})"><circle r="6" fill="transparent" /></g>`
+      return `<g class="corner-pin" data-pin tabindex="0" data-country="${escapeXml(countryName(c.iso))}" data-count="${count}" transform="translate(${x} ${y})"><circle class="corner-pin-hit" r="6" /></g>`
     })
     .join('')
-  return `<svg class="corner-map-svg" data-map-svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Countries by activity">${land}${pins}</svg>`
+  return `<svg class="corner-map-svg" data-map-svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Countries by activity"><rect class="map-ocean" width="${width}" height="${height}" />${land}${pins}</svg>`
 }
 
-export { CENTROIDS_1152, CENTROIDS_520, WORLD_1152, WORLD_520 }
+export { CENTROIDS_1152, CENTROIDS_520, GRATICULE_1152, GRATICULE_520, WORLD_1152, WORLD_520 }
