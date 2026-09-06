@@ -100,26 +100,83 @@ Signature: the **once-string**. After Generate, a mono license (`METIS-OP-1.…`
 in a hairline strip with Copy. Shown once. last4 only after reload. Never a
 secret in HTML.
 
-### Overview `#overview`
+### Overview `#overview` — Shoey bar, Métis content (Fable 6 Sep 2026)
 
-Job: Tony sees how a seat goes from install to platform keys, and can mint a
-license without hunting.
+Source of truth for chrome: WebsiteCloner Shoey OpenPanel
+(`…/WebsiteCloner`, demo `/demo/shoey` + `/demo/shoey/overview`).
+Parity is **layout and density**, not pageviews. Every number is a Métis
+seat, heartbeat, license, recap, or D1 ask. Never Unique Visitors,
+sneakers, or invented people.
+
+Job: Tony reads the fleet in one glance, sees who is on and where, and
+can mint a license without leaving the page.
 
 ```
-┌ rail: Métis · Access ──────────┐  Overview          LIVE n
-│ Overview  Realtime  Events     │  ┌ Install → works ─────────────┐
-│ Sessions  Licenses             │  │ Check in → Approve or license│
-│ Notifications  Keys  Settings  │  │ → Platform keys              │
-└────────────────────────────────┘  │ Duration [30d ▾] [Generate]  │
-                                    │ [once-string · Copy]         │
-                                    └──────────────────────────────┘
-                                    Fleet KPIs + Places (city corner)
+┌ rail: Métis · Access ──────────┐  Overview                     LIVE n
+│ Overview  Realtime  Events     │  ┌ Live seats │ Time saved │ Value ┐
+│ Sessions  Licenses             │  │     2      │   45 min   │ $1.20 │
+│ Notifications  Keys  Settings  │  └─────────────────────────────────┘
+└────────────────────────────────┘  ┌ Activity (dense) ┐ ┌ Places ──┐
+                                    │ live · city · os │ │ Cities   │
+                                    │ ask  · provider  │ │ Regions  │
+                                    │ seen · license   │ │Countries │
+                                    └──────────────────┘ │ [corner  │
+                                    ┌ People ──────────┐ │  map]    │
+                                    │ host · city · id │ └──────────┘
+                                    └──────────────────┘
+                                    ┌ Install → works + Generate ───┐
+                                    └───────────────────────────────┘
 ```
 
-Generate license is on Overview **and** `#licenses`. Same form contract:
-duration 1 / 7 / 30 / 90 / 365 → POST `/v1/admin/licenses/generate` → show
-string. Unauth **401** `{ ok:false, error:"Access required" }`. Empty seat
-table must not hide the form.
+#### 1) Glance KPI row (exactly three)
+
+| Card | Source | Empty |
+| --- | --- | --- |
+| **Live seats** | Real seats with `last_seen` &lt; 2 min | `0` + “heartbeat &lt; 2 min” |
+| **Time saved** | Recap / listen events via `timeSavedFromMeetings` | `0 min` + “no recaps ingested” |
+| **Value** | D1 ask cost today, else 7d (`formatUsdEstimate`) | `not reported` — never `$0` |
+
+No 8-card KPI wall. No Unique sessions / pageviews. Numbers are large
+(28–32px), eyebrow mono, one spark on Live only.
+
+#### 2) Places — corner map + Top lists (Shoey)
+
+Overview **Places** is a **corner** widget (`data-geo-corner`), never
+full-bleed. Left: Top lists tabs **Cities / Regions / Countries**.
+Right: mini choropleth (`data-geo-widget`). City rows are Shoey
+`{ country, city, count, unique_sessions, avg_duration }` from
+`request.cf` on heartbeat. No client GPS. No IP. Regions empty until the
+next heartbeat writes `cf.region`.
+
+Realtime keeps WorldMap + LiveFeed + GeoTable with the same city shape.
+
+#### 3) Activity — usable, Métis-dense
+
+`data-overview-activity`. Feed is seats, not pageviews:
+
+- `live` / `seen` from last heartbeat (city, device, OS, license)
+- `heartbeat` / `ask` / `recap` / `listen` / `crm` from D1
+- issued-license last4 never as a secret; chips only
+
+When the fleet has seats, Activity is **not** an empty card. If nobody
+is inside the 2-min window, show last-seen rows so the page is not
+sparse. Token-shaped values stay redacted.
+
+#### 4) People — live E2E
+
+`data-overview-people`. Compact rows: computer, city, device, SSO, OS,
+license, live/idle. Heartbeat `{ hostname, email, licenseId }` +
+`request.cf.{country,city,region}` must land here. Live pill only when
+`last_seen` &lt; 2 min. Idle last-seen still lists so People is not `0`
+while the Mac is closed.
+
+Generate license stays on Overview **and** `#licenses`. Same form:
+duration 1 / 7 / 30 / 90 / 365 → POST `/v1/admin/licenses/generate` →
+once-string. Unauth **401** `{ ok:false, error:"Access required" }`.
+Empty seat table must not hide the form.
+
+Cloudflare / Gateway / Scale / Mix stay off this glance. Keys and
+Settings own Cloudflare.
 
 ### Licenses `#licenses`
 
