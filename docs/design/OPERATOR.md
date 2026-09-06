@@ -27,9 +27,9 @@ deploy to `metis-operator` (`tony-walteur.workers.dev`). Do not merge fat PR151.
 **ULTRON LOCK.** Do **not** publish or promote any Metis-Releases Latest feed.
 EXE / DMG / Native → Latest only after Bob QA **and** Ultron approve.
 
-Visual contract lives in [DESIGN.md](DESIGN.md) § Operator Overview (Shoey
-bar, Métis content). Implement that glance — 3 KPIs, corner Places, dense
-Activity, live People, Generate — before inventing chrome.
+Visual contract lives in [DESIGN.md](DESIGN.md) § Operator — Shoey
+OpenPanel bar, Métis seats. Implement that page map (dictionary + every
+rail section) before inventing chrome.
 
 ## Generate license (P0)
 
