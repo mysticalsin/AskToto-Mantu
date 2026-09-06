@@ -692,7 +692,7 @@ export const Review = memo(function Review({
   const sendToClickup = async (): Promise<void> => {
     if (clickupState.phase === 'sending' || !clickupConn) return
     if (confidentialFlag) {
-      setClickupState({ phase: 'error', error: 'This meeting is marked confidential — ClickUp push is blocked.' })
+      setClickupState({ phase: 'error', error: 'This meeting is marked confidential. ClickUp push is blocked.' })
       return
     }
     if (!clickupDestName) {

@@ -145,7 +145,9 @@ describe('MQA-288 — no-flash contract on Settings open/close and overlay rest'
     expect(index).toMatch(/setBackgroundColor\(SETTINGS_SURFACE_BACKGROUND\)/)
     expect(index).toMatch(/setBackgroundColor\(OVERLAY_REST_BACKGROUND\)/)
     expect(index).toMatch(/rememberBarContentHeight/)
-    expect(index).toMatch(/backgroundColor: onboardingLive \? '#3A0B6B' : '#00000000'/)
+    // Exclusive first paint uses overlayWindowChrome, not an inline onboarding ternary.
+    expect(index).toMatch(/backgroundColor: chrome\.backgroundColor/)
+    expect(index).toMatch(/overlayWindowChrome\(onboardingLive\)/)
     expect(isForbiddenFlashBackground(SETTINGS_SURFACE_BACKGROUND)).toBe(false)
     expect(isForbiddenFlashBackground(OVERLAY_REST_BACKGROUND)).toBe(false)
     expect(SETTINGS_SURFACE_BACKGROUND).not.toBe('#ffffff')
