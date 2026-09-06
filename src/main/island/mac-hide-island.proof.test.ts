@@ -15,7 +15,7 @@ import {
   parkAfterExclusiveOnboarding,
   type DisplayMetrics
 } from './geometry'
-import { isFatHoverTrigger } from '@shared/settings-bounds'
+import { TONY_LIVE_SETTINGS_CRUSH, isFatHoverTrigger } from '@shared/settings-bounds'
 
 /** Tony built-in Retina (notch). workArea.y ≈ 39. */
 const TOTOS_MAC: DisplayMetrics = {
@@ -106,6 +106,7 @@ describe('MQA-289 — leftover 880×133 at Y=39 is a fat trigger; park stays Y=0
     expect(isFatHoverTrigger(leftover, TOTOS_MAC.workArea.y)).toBe(true)
     expect(isLeftoverSettingsTrigger(leftover, TOTOS_MAC)).toBe(true)
     expect(isFatHoverTrigger({ width: 880, height: 325, y: 39 }, TOTOS_MAC.workArea.y)).toBe(true)
+    expect(isFatHoverTrigger(TONY_LIVE_SETTINGS_CRUSH, TOTOS_MAC.workArea.y)).toBe(true)
     const hide = parkAfterExclusiveOnboarding('hide', TOTOS_MAC, 8)
     expect(hide.y).toBe(0)
     expect(hide.y).not.toBe(39)

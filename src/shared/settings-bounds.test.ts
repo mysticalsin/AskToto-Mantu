@@ -8,6 +8,7 @@ import {
   isFatHoverTrigger,
   isForbiddenFlashBackground,
   isHideOrIslandParkSize,
+  TONY_LIVE_SETTINGS_CRUSH,
   settingsContentHeight,
   settingsOpenRejectsPark,
   settingsSurfaceMinSize
@@ -27,6 +28,8 @@ describe('MQA-286 — Settings open path sets full min bounds', () => {
     expect(settingsOpenRejectsPark({ width: 8, height: 2 })).toBe(true)
     expect(settingsOpenRejectsPark({ width: 880, height: 560 })).toBe(false)
     expect(settingsOpenRejectsPark({ width: 880, height: 325 })).toBe(true)
+    expect(settingsOpenRejectsPark(TONY_LIVE_SETTINGS_CRUSH)).toBe(true)
+    expect(settingsContentHeight(TONY_LIVE_SETTINGS_CRUSH.height)).toBe(560)
     expect(settingsContentHeight(325)).toBe(560)
     expect(settingsContentHeight(792)).toBe(792)
     expect(settingsContentHeight(Number.NaN)).toBe(560)

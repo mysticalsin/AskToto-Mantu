@@ -8,6 +8,7 @@ import {
   SETTINGS_WINDOW_MIN,
   isForbiddenFlashBackground,
   isHideOrIslandParkSize,
+  TONY_LIVE_SETTINGS_CRUSH,
   settingsOpenRejectsPark
 } from '@shared/settings-bounds'
 
@@ -46,9 +47,13 @@ describe('MQA-286 — Settings open path sets min bounds', () => {
     expect(index).toMatch(/sendHotkey\('settings'\)/)
     expect(app).toMatch(/windowMode\('settings'\)/)
     expect(app).toMatch(/prevViewRef\.current === 'settings'/)
+    expect(app).toMatch(/onBarSettings/)
+    expect(app).toMatch(/openSettingsDefault/)
   })
 
   it('Settings open cannot keep park height or the live 880×325 Cmd+, slab', () => {
+    expect(TONY_LIVE_SETTINGS_CRUSH).toEqual({ x: 460, y: 39, width: 880, height: 325 })
+    expect(settingsOpenRejectsPark(TONY_LIVE_SETTINGS_CRUSH)).toBe(true)
     expect(settingsOpenRejectsPark({ width: 880, height: 325 })).toBe(true)
     expect(settingsOpenRejectsPark({ width: 8, height: 2 })).toBe(true)
     expect(settingsOpenRejectsPark({ width: 132, height: 15 })).toBe(true)
