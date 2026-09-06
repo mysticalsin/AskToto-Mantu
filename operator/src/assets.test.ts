@@ -44,9 +44,19 @@ describe('hashed SPA assets — fail loud if a stub ships', () => {
     expect(SPA_JS).toContain('key-add')
     expect(() => new Function(SPA_JS)).not.toThrow()
     expect(SPA_JS).not.toMatch(/self\.METIS_OPERATOR = self\.METIS_OPERATOR/)
-    expect(SPA_CSS).toContain('grid-template-columns: 185px 1fr')
+    // Rail is 288px (reference Sidebar.tsx: w-72), not the old 185px Bklit-chrome width.
+    expect(SPA_CSS).toContain('grid-template-columns: 288px 1fr')
     expect(SPA_CSS).toContain('font: 12px/1.4')
     expect(SPA_CSS).toContain('shoey-world')
+    // Reference system font stacks, verbatim, no CDN font import (SPEC.md: "no @font-face,
+    // no CDN font at all").
+    expect(SPA_CSS).toContain('ui-sans-serif, system-ui, sans-serif')
+    expect(SPA_CSS).toContain('ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas')
+    expect(SPA_CSS).not.toContain('cdn.jsdelivr.net')
+    expect(SPA_CSS).not.toContain('@import url(')
+    // Measured light tokens (SPEC.md #1) and the 6.4px card radius (SPEC rule 2).
+    expect(SPA_CSS).toContain('--def-100: #fafafa')
+    expect(SPA_CSS).toContain('--radius-card: 6.4px')
     expect(SPA_JS_PATH).toMatch(/^\/assets\/operator-[0-9a-f]{12}\.js$/)
     expect(SPA_CSS_PATH).toMatch(/^\/assets\/operator-[0-9a-f]{12}\.css$/)
   })
@@ -74,7 +84,7 @@ describe('hashed SPA assets — fail loud if a stub ships', () => {
     expect(css.headers.get('content-type') || '').toMatch(/text\/css/)
     const cssBody = await css.text()
     expect(cssBody.length).toBeGreaterThan(97)
-    expect(cssBody).toContain('185px')
+    expect(cssBody).toContain('288px')
     expect(cssBody).toContain('#E5E7EB')
     expect(cssBody).not.toMatch(/cloudflareaccess/)
 

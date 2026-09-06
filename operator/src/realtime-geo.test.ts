@@ -70,4 +70,28 @@ describe('realtimeGeoRows', () => {
       realtimeGeoRows([{ device_id: 'x', country: 'CA', city: null, first_seen: 1, last_seen: 2 }])
     ).toEqual([])
   })
+
+  it('uses sessions (gap-bounded pulses), not seat lifetime, when a sessions table is passed', () => {
+    const seats = [
+      { device_id: 'a', country: 'CA', city: 'Longueuil', first_seen: 0, last_seen: 1_000_000 }
+    ]
+    const sessions = [
+      { device_id: 'a', country: 'CA', city: 'Longueuil', started_at: 0, last_pulse_at: 60_000, ended_at: 60_000 },
+      { device_id: 'a', country: 'CA', city: 'Longueuil', started_at: 500_000, last_pulse_at: 560_000, ended_at: null }
+    ]
+    const rows = realtimeGeoRows(seats, sessions)
+    expect(rows).toEqual([
+      { country: 'CA', city: 'Longueuil', count: 1, unique_sessions: 2, avg_duration: 60_000 }
+    ])
+  })
+
+  it('region rows also prefer sessions over seat lifetime when given', () => {
+    const seats = [{ device_id: 'a', country: 'CA', city: 'Longueuil', region: 'Quebec', first_seen: 0, last_seen: 1_000_000 }]
+    const sessions = [
+      { device_id: 'a', country: 'CA', city: 'Longueuil', region: 'Quebec', started_at: 0, last_pulse_at: 30_000, ended_at: 30_000 }
+    ]
+    expect(geoRegionRows(seats, sessions)).toEqual([
+      { country: 'CA', region: 'Quebec', count: 1, unique_sessions: 1, avg_duration: 30_000 }
+    ])
+  })
 })

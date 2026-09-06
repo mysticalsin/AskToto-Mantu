@@ -11,6 +11,7 @@ export const titles: Record<string, string> = {
   realtime: 'Realtime',
   events: 'Events',
   sessions: 'Sessions',
+  licenses: 'Licenses',
   notifications: 'Notifications',
   keys: 'Keys',
   settings: 'Settings',

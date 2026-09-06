@@ -131,3 +131,8 @@ native-app/**/*.xcodeproj/xcuserdata/
 
 # Conductor session snapshots — regenerated per session, record UNCOMMITTED state, conflict on every merge.
 .conductor/
+
+# Métis Operator D1 exports (operator/scripts/backup.mjs). A full data dump — ciphertext Ask
+# columns, hashed license keys, seat rows — never belongs in git history. See
+# docs/operator/RUNBOOKS.md for the backup/restore procedure.
+operator/backups/

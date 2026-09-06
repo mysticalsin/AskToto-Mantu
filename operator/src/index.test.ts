@@ -276,8 +276,11 @@ describe('packed console map and geo', () => {
     expect(home.status).toBe(200)
     const page = await home.text()
     expect(page).toContain('No heartbeats yet. The map stays empty until a seat checks in.')
-    expect(page).not.toMatch(/Unique Visitors|visitor traffic|\$6,525|1,344/)
-    expect(page).not.toMatch(/\b1\.2\.3\.4\b/)
+    // The inlined world land carries thousands of SVG coordinate pairs ("L1,344"); strip the
+    // vector markup before checking the copy for sample numbers.
+    const prose = page.replace(/<svg[\s\S]*?<\/svg>/g, '')
+    expect(prose).not.toMatch(/Unique Visitors|visitor traffic|\$6,525|1,344/)
+    expect(prose).not.toMatch(/\b1\.2\.3\.4\b/)
     const dash = await handleRequest(
       new Request('https://operator.test/v1/admin/dashboard'),
       env(),

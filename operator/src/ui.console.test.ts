@@ -57,9 +57,22 @@ async function page(store = memoryStore()): Promise<string> {
   return home.text()
 }
 
+/** Shoey land color and every other console rule now lives in the hashed external stylesheet
+ * (plan D3: no inline <style>), not inline in the page HTML. Fetch it the same way a browser
+ * would via the <link> the page prints. */
+async function cssOf(store = memoryStore()): Promise<string> {
+  const res = await handleRequest(
+    new Request(`https://operator.test${SPA_CSS_PATH}`),
+    env(),
+    {},
+    { store, now: NOW }
+  )
+  return res.text()
+}
+
 function eventsHtml(html: string): string {
   const start = html.indexOf('data-page="events"')
-  const end = html.indexOf('data-page="profiles"')
+  const end = html.indexOf('data-page="licenses"')
   return start >= 0 && end > start ? html.slice(start, end) : html
 }
 
@@ -130,11 +143,19 @@ describe('product sidebar (#105)', () => {
     expect(html).not.toContain('ROI today')
     expect(html).not.toContain('Unique Visitors')
     expect(html).not.toContain('data-login="1"')
-    expect(html).toContain('#E5E7EB')
+    expect(html).toContain(`<link rel="stylesheet" href="${SPA_CSS_PATH}"`)
+    expect(html).toContain(`<script src="${SPA_JS_PATH}"`)
+    // No page-level inline <style> in <head> (plan D3) — an SVG-scoped <style> for the world
+    // map's pulse animation is fine, that is not the page's own chrome CSS.
+    const head = html.slice(html.indexOf('<head>'), html.indexOf('</head>'))
+    expect(head).not.toContain('<style')
+    expect(html).not.toMatch(/<script>(?!.*src=)/s)
+    const css = await cssOf()
+    expect(css).toContain('#E5E7EB')
     expect(html).toContain('data-install-works')
     expect(html).toContain('data-access-solid')
-    expect(html).toContain('#2563EB')
-    expect(html).toContain('data-theme="dark"')
+    expect(css).toContain('#2563EB')
+    expect(html).toContain('data-theme="light"')
     const overview = html.slice(html.indexOf('data-page="overview"'), html.indexOf('data-page="realtime"'))
     expect(overview).toContain('data-overview-toplists')
     expect(overview).toContain('data-device-card')
@@ -259,7 +280,7 @@ describe('map has no repeating horizontal band', () => {
     expect(findBandSubpaths(html)).toEqual([])
     expect(html).not.toMatch(/repeating-linear-gradient/)
     expect(html).toContain('data-iso="CA"')
-    expect(html).toContain('#E5E7EB')
+    expect(await cssOf(store)).toContain('#E5E7EB')
     expect(html).not.toMatch(/<rect class="world-ocean"[^>]*fill="#F5F5F5"/)
   })
 })
@@ -370,7 +391,7 @@ describe('licenses pane is real seats with Tony approval, not Shoey demo rows', 
       approval: 'pending'
     })
     const html = await page(store)
-    const licenses = html.slice(html.indexOf('data-page="licenses"'), html.indexOf('data-page="skills"'))
+    const licenses = html.slice(html.indexOf('data-page="licenses"'), html.indexOf('data-page="notifications"'))
     expect(licenses).toContain('Tonys-MacBook-Pro')
     expect(licenses).toContain('twalteur@amaris.com')
     expect(licenses).toContain('licensed')
@@ -382,7 +403,7 @@ describe('licenses pane is real seats with Tony approval, not Shoey demo rows', 
     expect(html).toContain('data-nav="notifications"')
     expect(html).toContain('data-nav="licenses"')
     expect(html).toContain('data-nav="settings"')
-    const notices = html.slice(html.indexOf('data-page="notifications"'), html.indexOf('data-page="rules"'))
+    const notices = html.slice(html.indexOf('data-page="notifications"'), html.indexOf('data-page="keys"'))
     expect(notices).toContain('data-notice-table')
     expect(notices).toContain('<th>Profile</th>')
     expect(notices).toContain('<th>City</th>')
@@ -463,7 +484,7 @@ describe('realtime and map use live heartbeats, not leftover OpenPanel', () => {
     const html = await page(store)
     expect(html).toContain('Tonys-MacBook-Pro')
     expect(html).toContain('data-iso="CA"')
-    expect(html).toContain('#E5E7EB')
+    expect(await cssOf(store)).toContain('#E5E7EB')
     expect(html).toContain('data-live-presence')
     expect(html).toContain('data-world-map')
     expect(html).toContain('data-live-feed')
@@ -478,10 +499,9 @@ describe('realtime and map use live heartbeats, not leftover OpenPanel', () => {
     expect(realtime).toContain('data-rt-live-strip')
     expect(realtime).toContain('Seats 30m')
     expect(realtime).toContain('GeoTable')
-    expect(realtime).toContain('class="city-pill"')
-    expect(realtime).toContain('class="pill-g"')
-    expect(realtime).toContain('1 Canada, 1 place')
-    expect(realtime).toContain('1 Longueuil')
+    expect(realtime).toContain('class="rt-pin"')
+    expect(realtime).toContain('data-country="Canada"')
+    expect(realtime).toContain('data-city="Longueuil"')
     expect(realtime).not.toContain('data-geo-corner')
     expect(html).toContain('data-page="sessions"')
     expect(html).toContain('<th>City</th>')

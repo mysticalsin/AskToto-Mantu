@@ -30,7 +30,7 @@ const OUT_FILE = join(OPERATOR_ROOT, 'src', 'spa', 'client.generated.ts')
 
 /** Kept verbatim: operator/src/assets.test.ts and operator/src/spa/router.test.ts grep for
  * these exact lines (Shoey, Created at columns, #E5E7EB, "not a stub"). */
-const BANNER = `/* Métis Operator SPA — Shoey Overview / Realtime / Events
+const BANNER = `/* Métis Operator SPA: Shoey Overview / Realtime / Events
  * Content-hashed chrome. Authenticated HTML script-src this file.
  * 0 LLM tokens. Live heartbeats only. Fail loud: this is not a METIS_OPERATOR stub.
  * Shoey land fill #E5E7EB. Events columns: Created at, Name, Profile, Country, OS, Browser.

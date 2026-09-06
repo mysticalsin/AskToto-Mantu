@@ -10,6 +10,17 @@ const MSG_CAP = 16_000
 const MSG_MAX = 20
 const TEXT_CAP = 64_000
 const ANTHROPIC_MESSAGES = 'https://api.anthropic.com/v1/messages'
+/** A provider call is a single request/response, never a stream, so it is bounded hard: nothing should
+ *  ever hang an isolate waiting on a provider that stopped answering. */
+const PROVIDER_FETCH_TIMEOUT_MS = 60_000
+
+/** Wraps a fetch implementation so every provider call it makes carries the same abort timeout, without
+ *  every call site having to remember to pass one. */
+function withProviderTimeout(providerFetch: typeof fetch): typeof fetch {
+  return ((input: RequestInfo | URL, init?: RequestInit) =>
+    providerFetch(input, { ...init, signal: AbortSignal.timeout(PROVIDER_FETCH_TIMEOUT_MS) })) as typeof fetch
+}
+
 
 export type UseMessage = { role: 'user' | 'assistant'; content: string }
 
@@ -249,8 +260,7 @@ export async function handleUse(
   providerFetch: typeof fetch = fetch
 ): Promise<Response> {
   if (!env.OPERATOR_VAULT_KEY) return fail('Operator cannot issue a use', 503)
-  const seats = await store.listSeats()
-  const seat = seats.find((s) => s.device_id === deviceId)
+  const seat = await store.getSeat(deviceId)
   if (!seat || !(await seatAuthorizedForKeys(store, seat, now))) return fail(SEAT_NOT_APPROVED, 403)
   const parsed = parseUseBody(bodyText)
   if (!parsed.ok) return fail(parsed.error, parsed.status)
@@ -260,14 +270,15 @@ export async function handleUse(
   if (!def || def.kind === 'cli' || def.kind === 'dust' || def.kind === 'local') {
     return fail('provider not allowed', 400)
   }
+  const timedFetch = withProviderTimeout(providerFetch)
   let out: { text: string; inputTokens?: number; outputTokens?: number } | UseFail
   try {
     out =
       parsed.req.provider === 'cloudflare'
-        ? await callCloudflareGateway(unlocked.secret, unlocked.accountId, parsed.req, providerFetch)
+        ? await callCloudflareGateway(unlocked.secret, unlocked.accountId, parsed.req, timedFetch)
         : def.kind === 'anthropic'
-          ? await callAnthropic(unlocked.secret, parsed.req, providerFetch)
-          : await callOpenAICompat(unlocked.secret, parsed.req, def.baseUrl, providerFetch)
+          ? await callAnthropic(unlocked.secret, parsed.req, timedFetch)
+          : await callOpenAICompat(unlocked.secret, parsed.req, def.baseUrl, timedFetch)
   } catch {
     return fail('Operator cannot issue a use', 503)
   }

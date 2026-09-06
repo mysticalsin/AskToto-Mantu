@@ -1,59 +1,164 @@
 import { STATUS_BADGE_CSS } from '../components/ui/status-badge'
 
-/** Shoey chrome. Hashed and served at /assets/operator-<hash>.css. Not a stub. */
-export const CONSOLE_CSS = `/* Métis Operator SPA — Shoey Overview / Realtime / Events */
-@import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.min.css');
-@import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.min.css');
+/**
+ * Shoey chrome. Hashed and served at /assets/operator-<hash>.css. Not a stub.
+ *
+ * Token values measured verbatim off the running Shoey reference (operator/shoey-ref/SPEC.md
+ * section 1: getComputedStyle round-trip against the live app, light mode). `[data-theme="dark"]`
+ * is derived from the reference's `.dark` oklch block (operator/shoey-ref/reference-styles/
+ * globals.css), converted to sRGB hex — the reference itself ships no dark screenshot (it has
+ * no theme switch anywhere), so this palette is Métis's own second theme, not a captured one.
+ *
+ * Fonts: the reference loads no `@font-face` and no CDN font at all (grepped: zero hits for
+ * next/font, Google Fonts, any font CDN). `--font-sans` / `--font-mono` are plain system stacks.
+ * Métis ships the same stacks verbatim — no network font request, ever.
+ */
+const DARK_TOKENS = `
+  --def-100: #0a0a0a;
+  --def-200: #171717;
+  --def-300: #262626;
+  --def-400: #404040;
+  --card: #171717;
+  --card-foreground: #fafafa;
+  --border: rgba(255,255,255,0.10);
+  --input: rgba(255,255,255,0.15);
+  --ring: #8a8a8a;
+  --foreground: #fafafa;
+  --muted: #262626;
+  --muted-foreground: #a3a3a3;
+  --accent-surface: #262626;
+  --accent-foreground: #fafafa;
+  --primary: #e5e5e5;
+  --primary-foreground: #171717;
+  --destructive: #ef4444;
+  --danger: #ef4444;
+  --bg: var(--def-100);
+  --panel: var(--card);
+  --hair: var(--border);
+  --ink: var(--foreground);
+  --ink2: var(--muted-foreground);
+  --ink3: #7a7a7a;
+  --land: #3f3f46;
+  --ocean: #0a0a0b;
+  --land-stroke: #111827;
+  --nav: var(--card);
+  --nav-on: var(--def-200);
+`
+
+export const CONSOLE_CSS = `/* Métis Operator SPA: Shoey Overview / Realtime / Events */
 :root {
-  --bg: #FFFFFF;
-  --panel: #FFFFFF;
-  --hair: #EDEDED;
-  --ink: #18181B;
-  --ink2: #71717A;
-  --ink3: #A1A1AA;
-  --accent: #2563EB;
+  /* Measured light tokens (operator/shoey-ref/SPEC.md #1) */
+  --def-100: #fafafa;
+  --def-200: #f4f4f4;
+  --def-300: #e3e3e3;
+  --def-400: #bebebe;
+  --card: #ffffff;
+  --card-foreground: #020819;
+  --border: #e3e8ee;
+  --input: #e3e8ee;
+  --ring: #cbd5e1;
+  --foreground: #020819;
+  --muted: #eff5fb;
+  --muted-foreground: #64748b;
+  --accent-surface: #eff5fb;
+  --accent-foreground: #0f172a;
+  --primary: #0f172a;
+  --primary-foreground: #fafafa;
+  --destructive: #f04343;
+  --chart-0: #2362ee;
+  --live: #10b981;
+  --ping: #6ee7b7;
+  --danger: #f04343;
+  --radius: 8px;
+  --radius-card: 6.4px;
+  /* Legacy aliases kept so the rest of this stylesheet (tables, tabs, cards, kpis) does not
+     have to be rewritten rule-by-rule — every one of them now resolves to a measured token. */
+  --bg: var(--def-100);
+  --panel: var(--card);
+  --hair: var(--border);
+  --ink: var(--foreground);
+  --ink2: var(--muted-foreground);
+  --ink3: #7c8ba1;
+  --accent: var(--chart-0);
   --ok: #16A34A;
-  --danger: #DC2626;
-  --live: #10B981;
   --land: #E5E7EB;
   --ocean: #FFFFFF;
   --land-stroke: #6B7280;
   --chart-1: #EFF6FF;
   --chart-2: #BFDBFE;
   --chart-3: #60A5FA;
-  --chart-4: #2563EB;
+  --chart-4: var(--chart-0);
   --chart-5: #1D4ED8;
-  --nav: #FFFFFF;
-  --nav-on: #F4F4F5;
-  --mono: ui-monospace, SFMono-Regular, 'Geist Mono', monospace;
-  --sans: Inter, Geist, system-ui, sans-serif;
+  --nav: var(--card);
+  --nav-on: var(--def-200);
+  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --sans: ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
 }
-[data-theme="dark"] {
-  --bg: #0a0a0b;
-  --panel: #111113;
-  --hair: rgba(255,255,255,0.10);
-  --ink: rgba(255,255,255,0.94);
-  --ink2: rgba(255,255,255,0.55);
-  --ink3: rgba(255,255,255,0.38);
-  --land: #3f3f46;
-  --ocean: #0a0a0b;
-  --land-stroke: #111827;
-  --nav: #0d0d0f;
-  --nav-on: rgba(255,255,255,0.08);
+/* Derived from the reference's .dark oklch block, converted to sRGB hex. Métis's own second
+   theme — the reference itself is light-only and ships no dark capture. An explicit choice
+   (data-theme="dark") always wins; with no cookie ("system"), prefers-color-scheme decides. */
+[data-theme="dark"] {${DARK_TOKENS}}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]):not([data-theme="dark"]) {${DARK_TOKENS}}
 }
-* { box-sizing: border-box; }
+*, *::before, *::after { box-sizing: border-box; }
 html { color-scheme: light; }
 html[data-theme="dark"] { color-scheme: dark; }
+@media (prefers-color-scheme: dark) {
+  html:not([data-theme="light"]):not([data-theme="dark"]) { color-scheme: dark; }
+}
 html, body { margin: 0; height: 100%; color: var(--ink); background: var(--bg); font: 12px/1.4 var(--sans); }
 body { background: var(--bg); color: var(--ink); }
 a { color: var(--accent); text-decoration: none; }
-.shell { display: grid; grid-template-columns: 185px 1fr; min-height: 100%; }
+/* Reference layout primitives (operator/shoey-ref/SPEC.md #1): .row/.col are plain flex,
+   .card is border+radius+bg, .hide-scrollbar hides the scrollbar cross-browser, .sticky-header
+   pins a def-100 bar to the top of its scroll container. */
+.row { display: flex; flex-direction: row; }
+.col { display: flex; flex-direction: column; }
+.hide-scrollbar { scrollbar-width: none; }
+.hide-scrollbar::-webkit-scrollbar { display: none; }
+.sticky-header { position: sticky; top: 0; z-index: 20; background: var(--def-100); }
+/* Visible keyboard focus ring everywhere, using the measured --ring token. */
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+.shell { display: grid; grid-template-columns: 288px 1fr; min-height: 100%; }
 .rail {
   display: flex; flex-direction: column; gap: 8px;
   background: var(--nav); border-right: 1px solid var(--hair);
   padding: 12px 10px 14px; min-height: 100vh; position: sticky; top: 0;
-  width: 185px;
+  width: 288px;
 }
+/* Below 1024px the rail goes fully off-canvas (reference Sidebar.tsx: -translate-x-72) and a
+   menu button plus a full-viewport backdrop scrim take over. */
+.rail-toggle {
+  display: none; position: fixed; top: 12px; left: 12px; z-index: 45;
+  width: 34px; height: 34px; align-items: center; justify-content: center;
+  border: 1px solid var(--hair); background: var(--panel); color: var(--ink);
+  border-radius: 8px; cursor: pointer;
+}
+.rail-backdrop {
+  display: none; position: fixed; inset: 0; z-index: 40;
+  background: rgba(2,8,25,0.32); backdrop-filter: blur(2px);
+  border: 0; padding: 0; cursor: pointer;
+}
+@media (max-width: 1023px) {
+  .shell { grid-template-columns: 1fr; }
+  .rail {
+    position: fixed; top: 0; left: 0; z-index: 46; min-height: 100vh;
+    transform: translateX(-100%); transition: transform 200ms ease;
+  }
+  .rail.open { transform: translateX(0); }
+  .rail-toggle { display: inline-flex; }
+  .rail-backdrop[data-open="1"] { display: block; }
+}
+@media (prefers-reduced-motion: reduce) { .rail { transition: none; } }
 .rail-brand { display: flex; align-items: center; gap: 8px; }
 .rail-logo {
   width: 28px; height: 28px; border-radius: 999px; background: #2563EB; color: #fff;
@@ -203,7 +308,7 @@ a { color: var(--accent); text-decoration: none; }
   position: relative;
   background: var(--panel);
   border: 1px solid var(--hair);
-  border-radius: 8px;
+  border-radius: var(--radius-card);
   padding: 10px 12px 0;
   overflow: hidden;
   color: var(--ink);
@@ -465,9 +570,118 @@ textarea { min-height: 120px; }
 svg:not(.shoey-world) path { vector-effect: non-scaling-stroke; }
 #spark-defs { position: absolute; width: 0; height: 0; }
 @media (max-width: 980px) {
-  .shell { grid-template-columns: 1fr; }
-  .rail { position: relative; min-height: auto; }
   .kpis, .kpis-extra, .ov-10, .grid-2, .grid-3, .crm-kpis, .event, .rt-grid, .ev-grid { grid-template-columns: 1fr; }
 }
+
+/* --- render/ primitive styling (shell, toolbar, metricTable, topListCard, live, badges) --- */
+.rail-logo {
+  width: 26px; height: 26px; border-radius: 7px; background: var(--chart-0); color: #fff;
+  display: grid; place-items: center; font: 700 12px/1 var(--sans); flex-shrink: 0;
+}
+.rail-brand { display: flex; align-items: center; gap: 8px; }
+.rail-switcher { flex: 1; justify-content: space-between; }
+.rail-switcher .tool-ic:last-child { margin-left: auto; }
+.rail-search-wrap { margin: 8px 0; }
+.rail-search-wrap .rail-search { padding-left: 30px; width: 100%; }
+.kbd-hint {
+  position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+  font: 10px/1 var(--mono); color: var(--ink3); border: 1px solid var(--hair);
+  border-radius: 4px; padding: 1px 5px; background: var(--panel);
+}
+.theme-group { gap: 4px; }
+.theme-btn[aria-pressed="true"] { background: var(--nav-on); color: var(--ink); font-weight: 650; }
+.nav-item svg { width: 15px; height: 15px; flex-shrink: 0; color: var(--ink3); }
+.nav-item.on svg { color: var(--ink); }
+
+/* toolbar() / toolbarButton() / toolbarSearch() / viewButton() */
+.tool { display: inline-flex; align-items: center; gap: 6px; }
+.tool[disabled] { opacity: 0.5; cursor: default; }
+
+/* pageHeader() */
+.page-tab[data-inert] { opacity: 0.6; cursor: default; }
+
+/* metricTable() */
+.mt-wrap { container-type: inline-size; }
+.mt-flags { display: flex; gap: 4px; }
+.mt-row {
+  display: grid; grid-template-columns: 1fr auto auto auto; gap: 8px; align-items: center;
+  height: 32px; position: relative; padding: 0 8px;
+}
+.mt-head { height: 28px; font: 10px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink3); }
+.mt-bar {
+  position: absolute; inset: 2px auto 2px 0; background: var(--def-200); border-radius: 4px; z-index: 0;
+}
+.mt-row:hover .mt-bar { background: #bfdbfe; }
+.mt-row > * { position: relative; z-index: 1; }
+.mt-label { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mt-col { text-align: right; font-family: var(--mono); font-size: 11px; }
+@container (max-width: 650px) { .mt-hide-650 { display: none; } }
+@container (max-width: 350px) { .mt-hide-350 { display: none; } }
+@container (max-width: 150px) { .mt-hide-150 { display: none; } }
+
+/* topListCard() */
+.tlc-tabs { display: flex; gap: 16px; border-bottom: 1px solid var(--hair); padding: 0 12px; }
+.tlc-tab { border: 0; background: transparent; color: var(--ink2); font: 500 12px var(--sans); padding: 10px 0; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tlc-tab.on { color: var(--ink); border-bottom-color: var(--ink); }
+.tlc-search { padding: 8px 12px; border-bottom: 1px solid var(--hair); }
+.tlc-row { display: grid; gap: 6px; align-items: center; height: 25px; position: relative; padding: 0 12px; }
+.tlc-head { height: 26px; font: 10px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink3); }
+.tlc-sort { display: inline-flex; align-items: center; gap: 2px; justify-self: end; cursor: pointer; }
+.tlc-bar { position: absolute; inset: 1px auto 1px 0; background: var(--def-200); border-radius: 4px; z-index: 0; }
+.tlc-row:hover .tlc-bar { background: #bfdbfe; }
+.tlc-row > * { position: relative; z-index: 1; }
+.tlc-label { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tlc-value { text-align: right; font-family: var(--mono); font-size: 11px; }
+.tlc-foot { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; border-top: 1px solid var(--hair); color: var(--ink3); }
+
+/* metricTiles() */
+.mtiles-card { overflow: visible; }
+.mtiles-grid { display: grid; grid-template-columns: repeat(2, 1fr); }
+@media (min-width: 768px) { .mtiles-grid { grid-template-columns: repeat(4, 1fr); } }
+.mtile { border: 1px solid var(--hair); border-top: 0; border-left: 0; padding: 10px 12px; min-width: 0; }
+.mtile:nth-child(2n) { border-right: 0; }
+@media (min-width: 768px) { .mtile:nth-child(2n) { border-right: 1px solid var(--hair); } .mtile:nth-child(4n) { border-right: 0; } }
+
+/* visitorsCard() / liveCard() / liveFeed() */
+.visitors-bars { display: block; width: 100%; height: 42px; margin-top: 8px; }
+.pulse-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--live); display: inline-block; margin-left: 6px; }
+
+/* primitives: flag, osGlyph/osChip, avatar, kindBadge, tierBadge, statusDot, clientChip,
+   deltaChip, tooltip, skeletonRows, timeCell */
+.flag { font-size: 14px; line-height: 1; }
+.os-chip { display: inline-flex; align-items: center; gap: 4px; }
+.os-glyph { width: 13px; height: 13px; }
+.avatar {
+  position: relative; display: inline-grid; place-items: center; width: 22px; height: 22px;
+  border-radius: 6px; font: 700 9px/1 var(--sans); flex-shrink: 0;
+}
+.avatar-live {
+  position: absolute; right: -2px; bottom: -2px; width: 7px; height: 7px; border-radius: 999px;
+  background: var(--live); border: 1.5px solid var(--card);
+}
+.kind-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; }
+.kind-icon { width: 13px; height: 13px; flex-shrink: 0; }
+.kind-heartbeat { color: #16a34a; } .kind-ask { color: var(--chart-0); } .kind-recap { color: #7c3aed; }
+.kind-listen { color: #d97706; } .kind-rating { color: #db2777; } .kind-crm { color: #0d9488; }
+.kind-vault { color: #475569; } .kind-license { color: #4f46e5; } .kind-seat { color: var(--ink3); }
+.kind-use { color: #0891b2; } .kind-platform { color: var(--danger); }
+.tier-badge { display: inline-block; padding: 1px 7px; border-radius: 999px; font: 600 10px var(--sans); border: 1px solid var(--hair); }
+.tier-metis { color: var(--chart-0); } .tier-metis-light { color: var(--ink2); }
+.status-dot { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.status-dot i { width: 7px; height: 7px; border-radius: 999px; display: inline-block; background: var(--ink3); }
+.status-dot-live i { background: var(--live); }
+.status-dot-idle i { background: var(--ink3); }
+.status-dot-pending i { background: var(--chart-0); }
+.status-dot-failed i, .status-dot-revoked i { background: var(--danger); }
+.client-chip { font: 500 11px var(--mono); color: var(--ink2); }
+.delta-chip { font: 600 11px var(--sans); padding: 2px 7px; border-radius: 999px; }
+.delta-up { background: #ecfdf5; color: #059669; }
+.delta-down { background: #fef2f2; color: #dc2626; }
+.delta-flat { background: var(--def-200); color: var(--ink3); }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; }
+.skeleton-row { height: 32px; display: flex; align-items: center; padding: 0 8px; }
+.skeleton-row i { display: block; width: 100%; height: 10px; border-radius: 4px; background: var(--def-200); animation: skeleton-pulse 1.2s ease-in-out infinite; }
+@keyframes skeleton-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
+.time-cell { font-family: var(--mono); font-size: 10px; color: var(--ink3); cursor: default; }
 ${STATUS_BADGE_CSS}
 `

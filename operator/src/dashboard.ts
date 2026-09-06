@@ -1,5 +1,6 @@
 import { aggregateCacheSlice, estimateCacheCost, formatUsdEstimate, type AskLogLine } from '../../src/shared/operator'
 import { formatSavedTime, timeSavedFromMeetings } from '../../src/shared/time-saved'
+import { aggregateQuestionTypes, type QuestionTypeMix } from '../../src/shared/question-type'
 import { CRM_STATUSES, type CrmSendRow, type CrmStatus } from './crm'
 import { missingCloudflareOverview, type CloudflareOverview } from './cloudflare'
 import {
@@ -13,7 +14,7 @@ import {
 } from './fleet'
 import { looksLikeSecret, safeChips, type SafeChip } from './redact'
 import { geoRegionRows, realtimeGeoRows, type GeoRegionRow, type RealtimeGeoRow } from './realtime-geo'
-import type { AskRow, EventRow, OperatorStore, PulseRow, SeatRow, VaultKeyMeta } from './store'
+import type { AskRow, EventRow, OperatorStore, ProposalRow, PulseRow, SeatRow, SessionRow, VaultKeyMeta } from './store'
 
 export const ONLINE_MS = 2 * 60 * 1000
 const HOUR = 60 * 60 * 1000
@@ -212,6 +213,14 @@ export interface DashboardPayload {
   }[]
   geo: RealtimeGeoRow[]
   geoRegions: GeoRegionRow[]
+  questions: QuestionsPayload
+}
+
+/** src/shared/question-type.ts owns the taxonomy and the aggregation math; this is just the shape. */
+export interface QuestionsPayload {
+  mix: QuestionTypeMix
+  byMode: { mode: string; mix: QuestionTypeMix }[]
+  coverage: number | null
 }
 
 export interface ConsoleEvent {
@@ -459,20 +468,6 @@ function recapMeetings(events: EventRow[]): { durationMin: number }[] {
   return out
 }
 
-function presenceEvents(seats: SeatRow[], now: number): ConsoleEvent[] {
-  return seats.map((s) => {
-    const who = displayProfile(s)
-    return {
-      id: `seen-${s.device_id}`,
-      ts: s.last_seen,
-      name: now - s.last_seen < ONLINE_MS ? 'live' : 'seen',
-      hostname: who.hostname,
-      email: who.email,
-      chips: seatContextChips(s)
-    }
-  })
-}
-
 /** CLI-shaped providers per the Overview cliAsks/operatorAsks split. Distinct from vault's
  *  FORBIDDEN_VAULT_PROVIDERS (which also blocks 'local'); this is only about ask attribution. */
 const CLI_ASK_PROVIDERS = new Set(['claude-cli', 'codex-cli', 'dust'])
@@ -631,16 +626,21 @@ export async function buildDashboard(
   },
   cloudflare: CloudflareOverview = missingCloudflareOverview()
 ): Promise<DashboardPayload> {
-  const seats = (await store.listSeats()).filter(isRealSeat)
-  const asks = await store.listAsks(2000)
-  const pulses = await store.listPulses(now - 7 * DAY)
-  const proposals = await store.listProposals()
-  const audit = await store.listAudit(80)
-  const crm = await store.listCrm(200)
-  const packs = await store.listPacks()
-  const storedEvents = await store.listEvents(80)
-  const vault = await store.listVaultMeta()
-  const issued = await store.listIssuedLicenses()
+  const [seatsRaw, asks, pulses, proposals, audit, crm, packs, storedEvents, vault, issued, sessionsPage] = await Promise.all([
+    store.listSeats(),
+    store.listAsks(2000),
+    store.listPulses(now - 7 * DAY),
+    store.listProposals(100),
+    store.listAudit(80),
+    store.listCrm(200),
+    store.listPacks(),
+    store.listEvents(80),
+    store.listVaultMeta(),
+    store.listIssuedLicenses(200),
+    store.listSessions({ since: now - 7 * DAY, limit: 1000 })
+  ])
+  const seats = seatsRaw.filter(isRealSeat)
+  const sessions = sessionsPage.rows
   const activeJti = new Set(issued.filter((l) => issuedLicenseActive(l, now)).map((l) => l.jti))
   const keysOn = (s: SeatRow): boolean => {
     if ((s.approval || '').trim().toLowerCase() === 'revoked') return false
@@ -875,7 +875,6 @@ export async function buildDashboard(
     events: mergeEvents(
       storedEvents.map((e) => eventFromStored(e, seatsById)),
       [
-        ...presenceEvents(seats, now),
         ...asks.slice(0, 40).map((a) => {
           const who = displayProfile(seatsById.get(a.device_id))
           return {
@@ -1018,53 +1017,7 @@ export async function buildDashboard(
           .sort((a, b) => b.asks - a.asks)
       })()
     },
-    notices: [
-      ...seats
-        .filter((s) => !isApprovedSeat(s))
-        .map((s) => {
-          const who = displayProfile(s)
-          return {
-            id: `seat-${s.device_id}`,
-            kind: 'seat-pending',
-            title: 'Seat waiting for approval',
-            detail: [who.hostname, who.email, s.os].filter(Boolean).join(' · ') || s.device_id.slice(0, 8),
-            ts: s.last_seen,
-            profile: who.hostname || who.email,
-            city: s.city && !looksLikeSecret(s.city) ? s.city : null,
-            os: s.os || null
-          }
-        }),
-      ...crm
-        .filter((r) => r.status === 'failed' || r.status === 'expired')
-        .map((r) => {
-          const who = displayProfile(seatsById.get(r.device_id))
-          const seat = seatsById.get(r.device_id)
-          return {
-            id: `crm-${r.id}`,
-            kind: 'crm-failed',
-            title: `${r.connector} push ${r.status}`,
-            detail: r.last_error && !looksLikeSecret(r.last_error) ? r.last_error : r.title,
-            ts: r.ts,
-            profile: who.hostname || who.email,
-            city: seat?.city && !looksLikeSecret(seat.city) ? seat.city : null,
-            os: seat?.os || null
-          }
-        }),
-      ...proposals
-        .filter((p) => p.status === 'pending')
-        .map((p) => ({
-          id: `skill-${p.id}`,
-          kind: 'skill-pending',
-          title: 'Skill diff pending',
-          detail: `${p.skill_id} ${p.from_version}`,
-          ts: p.created_at,
-          profile: p.created_by && !looksLikeSecret(p.created_by) ? p.created_by : null,
-          city: null,
-          os: null
-        }))
-    ]
-      .sort((a, b) => b.ts - a.ts)
-      .slice(0, 80),
+    notices: buildNotices(seats, crm, proposals),
     keys: {
       ingestBound: keys.ingestBound,
       promptBound: keys.promptBound,
@@ -1085,7 +1038,201 @@ export async function buildDashboard(
       d1Name: cloudflare.d1Name && !looksLikeSecret(cloudflare.d1Name) ? cloudflare.d1Name : null,
       d1Id: cloudflare.d1Id && !looksLikeSecret(cloudflare.d1Id) ? cloudflare.d1Id : null
     },
-    geo: realtimeGeoRows(seats),
-    geoRegions: geoRegionRows(seats)
+    geo: realtimeGeoRows(seats, sessions),
+    geoRegions: geoRegionRows(seats),
+    questions: buildQuestionsPayload(weekAsks)
   }
+}
+
+function buildQuestionsPayload(asks: AskRow[]): QuestionsPayload {
+  const mix = aggregateQuestionTypes(asks.map((a) => a.question_type))
+  const byModeInput = new Map<string, (string | null)[]>()
+  for (const a of asks) {
+    const mode = a.mode || 'unknown'
+    const arr = byModeInput.get(mode) ?? []
+    arr.push(a.question_type)
+    byModeInput.set(mode, arr)
+  }
+  const byMode = [...byModeInput.entries()]
+    .map(([mode, types]) => ({ mode, mix: aggregateQuestionTypes(types) }))
+    .sort((a, b) => b.mix.total - a.mix.total || a.mode.localeCompare(b.mode))
+  return { mix, byMode, coverage: mix.coverage }
+}
+
+/** Bounded, dependency-free notice builder shared by the full dashboard and the live poll snapshot. */
+function buildNotices(
+  seats: SeatRow[],
+  crm: CrmSendRow[],
+  proposals: ProposalRow[]
+): DashboardPayload['notices'] {
+  const seatsById = new Map(seats.map((s) => [s.device_id, s]))
+  return [
+    ...seats
+      .filter((s) => !isApprovedSeat(s))
+      .map((s) => {
+        const who = displayProfile(s)
+        return {
+          id: `seat-${s.device_id}`,
+          kind: 'seat-pending',
+          title: 'Seat waiting for approval',
+          detail: [who.hostname, who.email, s.os].filter(Boolean).join(' · ') || s.device_id.slice(0, 8),
+          ts: s.last_seen,
+          profile: who.hostname || who.email,
+          city: s.city && !looksLikeSecret(s.city) ? s.city : null,
+          os: s.os || null
+        }
+      }),
+    ...crm
+      .filter((r) => r.status === 'failed' || r.status === 'expired')
+      .map((r) => {
+        const who = displayProfile(seatsById.get(r.device_id))
+        const seat = seatsById.get(r.device_id)
+        return {
+          id: `crm-${r.id}`,
+          kind: 'crm-failed',
+          title: `${r.connector} push ${r.status}`,
+          detail: r.last_error && !looksLikeSecret(r.last_error) ? r.last_error : r.title,
+          ts: r.ts,
+          profile: who.hostname || who.email,
+          city: seat?.city && !looksLikeSecret(seat.city) ? seat.city : null,
+          os: seat?.os || null
+        }
+      }),
+    ...proposals
+      .filter((p) => p.status === 'pending')
+      .map((p) => ({
+        id: `skill-${p.id}`,
+        kind: 'skill-pending',
+        title: 'Skill diff pending',
+        detail: `${p.skill_id} ${p.from_version}`,
+        ts: p.created_at,
+        profile: p.created_by && !looksLikeSecret(p.created_by) ? p.created_by : null,
+        city: null,
+        os: null
+      }))
+  ]
+    .sort((a, b) => b.ts - a.ts)
+    .slice(0, 80)
+}
+
+export interface LiveSeatRow {
+  deviceId: string
+  hostname: string | null
+  email: string | null
+  city: string | null
+  country: string | null
+  os: string
+  appVersion: string
+  licenseTier: string | null
+  sessionStarted: number | null
+  durationMs: number | null
+  eventsThisSession: number | null
+  asksThisSession: number | null
+  live: boolean
+}
+
+export interface LiveSnapshot {
+  now: number
+  /** Cheap change-detection number for the poller: identical inputs always hash to the same value. */
+  generation: number
+  liveSeats: number
+  seats30m: number
+  events: ConsoleEvent[]
+  notices: number
+  kpis: {
+    live: number
+    dau: number
+    asksToday: number
+    costToday: string | null
+    cacheHit: string | null
+  }
+  geo: RealtimeGeoRow[]
+  liveSeatsTable: LiveSeatRow[]
+}
+
+/** FNV-1a over a compact JSON summary. Not cryptographic: only used so the poller can skip a re-render
+ *  when nothing meaningful changed between two snapshots (plan D4). */
+function hashSnapshot(value: unknown): number {
+  const s = JSON.stringify(value)
+  let h = 0x811c9dc5
+  for (let i = 0; i < s.length; i++) {
+    h ^= s.charCodeAt(i)
+    h = Math.imul(h, 0x01000193)
+  }
+  return h >>> 0
+}
+
+/**
+ * Compact snapshot for `GET /v1/admin/live.json`: every read here is bounded (fixed limits, a fixed
+ * lookback window), so polling every 5 s never scales with total fleet history. No prompt text, no
+ * secrets: only the fields the Realtime/Overview live strip needs.
+ */
+export async function buildLiveSnapshot(store: OperatorStore, now: number): Promise<LiveSnapshot> {
+  const [seatsRaw, sessionsPage, events, todayAsks, crm, proposals] = await Promise.all([
+    store.listSeats(),
+    store.listSessions({ since: now - DAY, limit: 500 }),
+    store.listEvents(40),
+    store.listAsks(500, now - DAY),
+    store.listCrm(50),
+    store.listProposals(50)
+  ])
+  const seats = seatsRaw.filter(isRealSeat)
+  const seatsById = new Map(seats.map((s) => [s.device_id, s]))
+  const liveSeats = seats.filter((s) => now - s.last_seen < ONLINE_MS)
+  const live30 = seats.filter((s) => now - s.last_seen < 30 * 60 * 1000).length
+  const dau = uniqueSeats(seats, now - DAY)
+  const sliceToday = aggregateCacheSlice(todayAsks.map(askLine))
+  const costToday = costForAsks(todayAsks)
+
+  const openSessionByDevice = new Map<string, SessionRow>()
+  for (const s of sessionsPage.rows) {
+    if (s.ended_at != null) continue
+    const cur = openSessionByDevice.get(s.device_id)
+    if (!cur || s.started_at > cur.started_at) openSessionByDevice.set(s.device_id, s)
+  }
+
+  const liveSeatsTable: LiveSeatRow[] = liveSeats
+    .slice()
+    .sort((a, b) => b.last_seen - a.last_seen)
+    .map((s) => {
+      const session = openSessionByDevice.get(s.device_id) ?? null
+      const who = displayProfile(s)
+      return {
+        deviceId: s.device_id,
+        hostname: who.hostname,
+        email: who.email,
+        city: s.city && !looksLikeSecret(s.city) ? s.city : null,
+        country: s.country,
+        os: s.os,
+        appVersion: s.app_version,
+        licenseTier: s.license && !looksLikeSecret(s.license) ? s.license : null,
+        sessionStarted: session?.started_at ?? null,
+        durationMs: session ? Math.max(0, now - session.started_at) : null,
+        eventsThisSession: session?.pulses ?? null,
+        asksThisSession: session?.asks ?? null,
+        live: true
+      }
+    })
+
+  const notices = buildNotices(seats, crm, proposals)
+  const eventsOut = events.map((e) => eventFromStored(e, seatsById))
+  const geo = realtimeGeoRows(seats, sessionsPage.rows)
+
+  const snapshot = {
+    now,
+    liveSeats: liveSeats.length,
+    seats30m: live30,
+    events: eventsOut,
+    notices: notices.length,
+    kpis: {
+      live: liveSeats.length,
+      dau,
+      asksToday: todayAsks.length,
+      costToday,
+      cacheHit: sliceToday.hitRate == null ? null : `${Math.round(sliceToday.hitRate * 100)}%`
+    },
+    geo,
+    liveSeatsTable
+  }
+  return { ...snapshot, generation: hashSnapshot(snapshot) }
 }

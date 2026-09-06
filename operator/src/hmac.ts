@@ -50,13 +50,15 @@ export async function verifyIngestHmac(
   if (!Number.isFinite(ts) || Math.abs(now - ts) > OPERATOR_HMAC_SKEW_MS) {
     return { ok: false, status: 401, error: 'timestamp skew' }
   }
-  if (seenNonce && (await seenNonce(nonce))) {
-    return { ok: false, status: 401, error: 'replay nonce' }
-  }
   const bodyHash = await sha256Hex(bodyText)
   const expected = await hmacHex(secret, ingestCanonical(tsRaw, nonce, deviceId, bodyHash))
   if (!timingSafeEqualHex(expected, sig)) {
     return { ok: false, status: 401, error: 'bad HMAC signature' }
+  }
+  // Only a request that already proved it holds the secret may consume a nonce. Checking replay first
+  // let an anonymous caller write unbounded rows into the nonce table and burn a real seat's nonce.
+  if (seenNonce && (await seenNonce(nonce))) {
+    return { ok: false, status: 401, error: 'replay nonce' }
   }
   return { ok: true, deviceId, ts, nonce }
 }

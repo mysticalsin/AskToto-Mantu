@@ -8,6 +8,7 @@ const PAGES = [
   'realtime',
   'events',
   'sessions',
+  'licenses',
   'notifications',
   'keys',
   'settings'
@@ -82,6 +83,9 @@ describe('hashed SPA router (#104)', () => {
         setAttribute(name: string, value: string) {
           if (name === 'data-theme') this.theme = value
         },
+        removeAttribute(name: string) {
+          if (name === 'data-theme') this.theme = null
+        },
         getAttribute(name: string) {
           return name === 'data-theme' ? this.theme : null
         }
@@ -104,7 +108,9 @@ describe('hashed SPA router (#104)', () => {
       self: windowObj,
       document,
       location,
-      fetch: async () => ({ json: async () => ({ ok: false }) })
+      URLSearchParams,
+      fetch: async () => ({ json: async () => ({ ok: false }) }),
+      localStorage: { getItem: () => null, setItem: () => {} }
     })
     runInContext(SPA_JS, ctx)
     expect(typeof windowObj.route).toBe('function')
@@ -135,10 +141,15 @@ describe('hashed SPA router (#104)', () => {
     expect(pages.find((p) => p.getAttribute('data-page') === 'overview')?.hidden).toBe(true)
   })
 
-  it('THEME is two-state light↔dark and Events/Notifications filters are wired', () => {
+  it('THEME is three-state System/Light/Dark (cookie + localStorage) and Events/Notifications filters are wired', () => {
     // esbuild (the real client build) always prints double-quoted string literals.
-    expect(SPA_JS).toContain('var next = cur === "dark" ? "light" : "dark"')
-    expect(SPA_JS).not.toContain('cur === "light" ? ""')
+    expect(SPA_JS).toContain('function applyTheme(choice)')
+    expect(SPA_JS).toContain('document.documentElement.removeAttribute("data-theme")')
+    expect(SPA_JS).toContain('document.documentElement.setAttribute("data-theme", choice)')
+    expect(SPA_JS).toContain('data-theme-choice')
+    expect(SPA_JS).toContain('metis-operator-theme=" + choice')
+    expect(SPA_JS).toContain('SameSite=Lax')
+    expect(SPA_JS).toContain('localStorage.setItem("metis-operator-theme", choice)')
     expect(SPA_JS).toContain('events-empty')
     expect(SPA_JS).toContain('function applyEventsFilter')
     expect(SPA_JS).toContain('evSearch.addEventListener("search", applyEventsFilter)')
@@ -197,6 +208,7 @@ describe('hashed SPA router (#104)', () => {
       documentElement: {
         theme: 'light',
         setAttribute() {},
+        removeAttribute() {},
         getAttribute() {
           return null
         }
@@ -223,7 +235,8 @@ describe('hashed SPA router (#104)', () => {
       window: windowObj,
       self: windowObj,
       document,
-      location: { hash: '#events', pathname: '/' },
+      location: { hash: '#events', pathname: '/', search: '' },
+      URLSearchParams,
       fetch: async () => ({ json: async () => ({ ok: false }), text: async () => '' }),
       localStorage: { getItem: () => null, setItem: () => {} }
     })

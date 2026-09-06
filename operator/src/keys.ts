@@ -93,6 +93,9 @@ export async function writeVaultKey(
     revoked_at: null
   }
   await store.putVaultKey(row)
+  // Only one active row per provider: an older row left `active` after a fresh write would still be
+  // eligible for `use` and dashboard funding checks even though nobody can see or rotate it anymore.
+  await store.supersedeActiveVaultKeys(provider, id, now)
   await store.audit(crypto.randomUUID(), now, email, 'vault-write', null, `${provider} ·${last4}`)
   await store.insertEvent({
     id: crypto.randomUUID(),
@@ -165,6 +168,9 @@ export async function revokeVaultKey(
     status: 'revoked',
     revoked_at: now
   })
+  // Belt and suspenders on top of the status flip: the ciphertext for a revoked key has no reason to
+  // still exist.
+  await store.clearVaultSecret(id)
   await store.audit(crypto.randomUUID(), now, email, 'vault-revoke', null, `${existing.provider} ·${existing.last4}`)
   await store.insertEvent({
     id: crypto.randomUUID(),

@@ -19,10 +19,12 @@ import {
   initCrmFilter
 } from './filters'
 import { initSeatOverlay, initSkillActions, initCrmRetry, initKeyForms } from './actions'
+import { initLicenseActions } from './licenses'
+import { initCloudflareConnectResult, initMobileRail, initNavSearch, initRailGenerate } from './nav'
 
 ;(function metisOperatorSpa() {
   'use strict'
-  var pages = ['overview', 'realtime', 'events', 'sessions', 'notifications', 'keys', 'settings']
+  var pages = ['overview', 'realtime', 'events', 'sessions', 'licenses', 'notifications', 'keys', 'settings']
   ;(self as any).METIS_OPERATOR_SPA = {
     chrome: 'shoey',
     product: 'Métis Operator',
@@ -51,4 +53,19 @@ import { initSeatOverlay, initSkillActions, initCrmRetry, initKeyForms } from '.
   initSkillActions()
   initKeyForms()
   initCrmRetry()
+  initLicenseActions()
+  initNavSearch()
+  initMobileRail()
+  initRailGenerate()
+  initCloudflareConnectResult()
+  startLivePolling()
 })()
+
+/**
+ * Stub for P2.1 (plan D4): `GET /v1/admin/live.json?since` polling every 5s visible / 30s
+ * hidden, ETag-aware, patching the touched sections in place via the same render/ functions
+ * instead of `location.reload()`. Intentionally a no-op until that task lands.
+ */
+function startLivePolling(): void {
+  // no-op — filled in by P2.1
+}
