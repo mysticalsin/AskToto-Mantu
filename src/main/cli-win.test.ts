@@ -51,6 +51,7 @@ vi.mock('node:child_process', async (importActual) => {
 // instead of telling the user to install Node (one-click onboarding, 2026-07-16).
 const managedMock = vi.hoisted(() => ({
   managedCliEntry: vi.fn((): { entry: string; version: string } | null => null),
+  managedCliCommand: vi.fn((): { command: string; args: string[]; env: Record<string, string> } | null => null),
   installManagedCli: vi.fn(
     async (_id: string, onProgress: (p: { phase: string }) => void): Promise<{ entry: string; version: string }> => {
       onProgress({ phase: 'downloading' })
@@ -407,26 +408,17 @@ describe('installCli — Windows npm-not-found detection (cmd.exe phrasing, not 
     expect(progress.mock.calls.some(([line]) => /self-contained|no Node\.js required/i.test(String(line)))).toBe(true)
   })
 
-  it('npm resolved but dies with cmd.exe\'s "not recognized" stderr: falls back to the managed install', async () => {
+  it('PATH npm exists: still uses the managed install first (no cmd.exe npm i -g)', async () => {
     managedMock.installManagedCli.mockClear()
-    // resolveBin('claude') misses; resolveBin('npm') HITS (so the npm spawn happens), then the spawned
-    // installer emits the cmd.exe not-recognized phrasing and exits 1.
     h.execFileImpl.mockImplementation(async (_cmd: string, args: string[]) => {
       if (args.includes('claude')) throw new Error('where: no matches found')
       if (args.includes('npm')) return { stdout: 'C:\\Program Files\\nodejs\\npm.cmd\r\n', stderr: '' }
       throw new Error('where: no matches found')
     })
-    const { child, stderr } = fakeChild()
-    h.spawnImpl.mockReturnValue(child)
 
-    const resultPromise = installCli('claude-cli', vi.fn())
-    stderr.write("'npm' is not recognized as an internal or external command,\r\n")
-    stderr.write('operable program or batch file.\r\n')
-    await tick()
-    child.emit('close', 1)
-
-    const r = await resultPromise
-    expect(r.ok).toBe(true) // the managed fallback rescued the install
+    const r = await installCli('claude-cli', vi.fn())
+    expect(r.ok).toBe(true)
     expect(managedMock.installManagedCli).toHaveBeenCalledWith('claude', expect.any(Function))
+    expect(h.spawnImpl).not.toHaveBeenCalled()
   })
 })

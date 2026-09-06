@@ -27,7 +27,7 @@ import type { StreamCacheUsage } from '@shared/operator'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS } from '@shared/providers'
 import type { CliActionResult, CliInstallResult, CliSessionVerdict } from '@shared/ipc'
-import { managedCliEntry, installManagedCli } from './cli-installer'
+import { managedCliEntry, managedCliCommand, installManagedCli } from './cli-installer'
 import { classifyExhaustion } from './llm/exhaustion'
 
 const execFileAsync = promisify(execFile)
@@ -1301,12 +1301,10 @@ export async function installCli(
     return { ok: true }
   }
 
-  // No system npm → skip the shell entirely and self-install on Electron's embedded Node. This is the
-  // one-click path for machines without a dev toolchain — the old behavior told the user to go install
-  // Node from nodejs.org, which is exactly the onboarding wall this removes.
-  if ((await resolveBin('npm')) === null) {
-    return managedInstall(provider, onProgress)
-  }
+  // Windows + Mac: managed tarball first. PATH npm in an Electron GUI is how Dust hit exit 127.
+  const managed = await managedInstall(provider, onProgress)
+  if (managed.ok) return managed
+  if ((await resolveBin('npm')) === null) return managed
 
   const pkg =
     provider === 'claude-cli'
@@ -1413,6 +1411,28 @@ export async function installCli(
  * install step). The user has already installed the CLI in-app via installCli; this is the
  * companion step for providers that require an interactive login flow. Mirrors setupCli's pattern.
  */
+/** Windows/Mac login script body invokes the managed entry when present, never a PATH-only `claude`. */
+export function loginCliInvokeLines(
+  provider: 'claude-cli' | 'codex-cli',
+  isWin: boolean,
+  managed: { command: string; args: string[]; env: Record<string, string> } | null
+): string[] {
+  const extra = provider === 'codex-cli' ? ['login'] : []
+  if (managed?.command) {
+    const quoted = [`"${managed.command}"`, ...managed.args.map((a) => `"${a}"`), ...extra.map((a) => `"${a}"`)].join(' ')
+    if (isWin) {
+      const sets = Object.entries(managed.env).map(([k, v]) => `set ${k}=${v}`)
+      return [...sets, quoted]
+    }
+    const env = Object.entries(managed.env)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(' ')
+    return [env ? `${env} ${quoted}` : quoted]
+  }
+  if (isWin) return [provider === 'codex-cli' ? 'call codex login' : 'call claude']
+  return [provider === 'codex-cli' ? 'codex login' : 'claude']
+}
+
 export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; error?: string }> {
   if (process.platform !== 'darwin' && process.platform !== 'win32') {
     return {
@@ -1421,70 +1441,54 @@ export async function loginCli(provider: ProviderId): Promise<{ ok: boolean; err
     }
   }
 
+  if (provider !== 'claude-cli' && provider !== 'codex-cli') {
+    return { ok: false, error: `loginCli: unknown provider '${provider}'` }
+  }
+
   const isWin = process.platform === 'win32'
+  const managedId = provider === 'claude-cli' ? 'claude' : 'codex'
+  let managed: { command: string; args: string[]; env: Record<string, string> } | null = null
+  try {
+    managed = managedCliCommand(managedId)
+  } catch {
+    managed = null
+  }
+  const invoke = loginCliInvokeLines(provider, isWin, managed)
+
   let scriptLines: string[]
 
   // Plain ASCII only in the batch body — the console codepage mangles accents (see setupCli).
   if (isWin) {
-    if (provider === 'claude-cli') {
-      scriptLines = [
-        '@echo off',
-        'cls',
-        'echo Metis - Claude Code CLI login',
-        'echo ================================',
-        'echo.',
-        'echo Type /login at the prompt below and follow the instructions.',
-        'echo ----------------------------------------',
-        'call claude',
-        'echo.',
-        'echo Done. Go back to Metis and click Connect again.',
-        'pause'
-      ]
-    } else if (provider === 'codex-cli') {
-      scriptLines = [
-        '@echo off',
-        'cls',
-        'echo Metis - OpenAI Codex CLI login',
-        'echo =================================',
-        'echo.',
-        'echo Follow the instructions below to sign in.',
-        'echo ----------------------------------------',
-        'call codex login',
-        'echo.',
-        'echo Done. Go back to Metis and click Connect again.',
-        'pause'
-      ]
-    } else {
-      return { ok: false, error: `loginCli: unknown provider '${provider}'` }
-    }
-  } else if (provider === 'claude-cli') {
     scriptLines = [
-      '#!/bin/bash',
-      'clear',
-      'echo "Métis — Claude Code CLI login"',
-      'echo "================================"',
-      'echo',
-      'echo "Type /login at the prompt below and follow the instructions."',
-      'echo "────────────────────────────────────────────────"',
-      'claude',
-      'echo; echo "✓ Done. Go back to Métis and click \\"Connect\\" again."',
-      'echo "You can close this window."'
-    ]
-  } else if (provider === 'codex-cli') {
-    scriptLines = [
-      '#!/bin/bash',
-      'clear',
-      'echo "Métis — OpenAI Codex CLI login"',
-      'echo "================================="',
-      'echo',
-      'echo "Follow the instructions below to sign in."',
-      'echo "────────────────────────────────────────────────"',
-      'codex login',
-      'echo; echo "✓ Done. Go back to Métis and click \\"Connect\\" again."',
-      'echo "You can close this window."'
+      '@echo off',
+      'cls',
+      provider === 'claude-cli' ? 'echo Metis - Claude Code CLI login' : 'echo Metis - OpenAI Codex CLI login',
+      'echo ================================',
+      'echo.',
+      provider === 'claude-cli'
+        ? 'echo Type /login at the prompt below and follow the instructions.'
+        : 'echo Follow the instructions below to sign in.',
+      'echo ----------------------------------------',
+      ...invoke,
+      'echo.',
+      'echo Done. Go back to Metis and click Connect again.',
+      'pause'
     ]
   } else {
-    return { ok: false, error: `loginCli: unknown provider '${provider}'` }
+    scriptLines = [
+      '#!/bin/bash',
+      'clear',
+      provider === 'claude-cli' ? 'echo "Metis - Claude Code CLI login"' : 'echo "Metis - OpenAI Codex CLI login"',
+      'echo "================================"',
+      'echo',
+      provider === 'claude-cli'
+        ? 'echo "Type /login at the prompt below and follow the instructions."'
+        : 'echo "Follow the instructions below to sign in."',
+      'echo "--------------------------------"',
+      ...invoke,
+      'echo; echo "Done. Go back to Metis and click Connect again."',
+      'echo "You can close this window."'
+    ]
   }
 
   try {
