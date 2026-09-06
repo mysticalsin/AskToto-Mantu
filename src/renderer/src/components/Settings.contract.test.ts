@@ -314,6 +314,11 @@ describe('CLI Connect treats a weekly cap as signed-in, not disconnected', () =>
 describe('MQA-164 — a failed update download leaves the Settings row with a way out', () => {
   const block = (): string => blockAfter('function UpdatesSection(', '\nfunction ModePromptEditor')
 
+  it('tells the user only a QA-approved Latest is offered', () => {
+    expect(block()).toMatch(/QA-approved Latest from Metis-Releases/)
+    expect(block()).toMatch(/Draft and prerelease builds are never offered/)
+  })
+
   it('subscribes to the download-failure channel alongside progress and ready', () => {
     expect(block()).toMatch(/window\.toto\.onUpdateError\(/)
   })

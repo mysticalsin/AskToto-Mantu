@@ -25,6 +25,7 @@ import {
   initAutoUpdate,
   isNewerVersion,
   latestReleaseIsOfferable,
+  latestReleaseHasApprovedInstallers,
   parseLatestRelease,
   checkForUpdateNow,
   startUpdateDownload
@@ -107,6 +108,26 @@ describe('parseLatestRelease — GitHub latest-release payload → UpdateCheckRe
     expect(latestReleaseIsOfferable({ tag_name: 'v1.8.4' })).toBe(true)
     expect(parseLatestRelease({ tag_name: 'v9.9.9', draft: true }, '1.2.0').ok).toBe(false)
     expect(parseLatestRelease({ tag_name: 'v9.9.9', prerelease: true }, '1.2.0').error).toMatch(/QA-approved/)
+  })
+
+  it('full board Latest carries EXE + DMG + Native, not a partial upload', () => {
+    expect(
+      latestReleaseHasApprovedInstallers({
+        tag_name: 'v1.8.4',
+        assets: [
+          { name: 'Metis-1.8.4.dmg' },
+          { name: 'Metis-Setup-1.8.4.exe' },
+          { name: 'Metis-Native-1.8.4.zip' }
+        ]
+      })
+    ).toBe(true)
+    expect(
+      latestReleaseHasApprovedInstallers({
+        tag_name: 'v1.8.4',
+        assets: [{ name: 'Metis-1.8.4.dmg' }]
+      })
+    ).toBe(false)
+    expect(latestReleaseHasApprovedInstallers({ tag_name: 'v1.8.4' })).toBe(false)
   })
 })
 
@@ -218,6 +239,30 @@ describe('startUpdateDownload — Settings "Update now" in-app download guard', 
     expect(r.started).toBe(false)
     expect(r.reason).toMatch(/Cahê installer/)
   })
+
+  it('refuses to start a download when GitHub Latest is draft or prerelease', async () => {
+    const electronApp = app as unknown as { isPackaged?: boolean }
+    electronApp.isPackaged = true
+    try {
+      vi.mocked(net.fetch).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ tag_name: 'v99.0.0', draft: true, html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v99.0.0' })
+      } as unknown as Response)
+      const draft = await startUpdateDownload()
+      expect(draft.started).toBe(false)
+      expect(draft.reason).toMatch(/QA-approved/)
+
+      vi.mocked(net.fetch).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ tag_name: 'v99.0.0', prerelease: true, html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v99.0.0' })
+      } as unknown as Response)
+      const pre = await startUpdateDownload()
+      expect(pre.started).toBe(false)
+      expect(pre.reason).toMatch(/QA-approved/)
+    } finally {
+      delete electronApp.isPackaged
+    }
+  })
 })
 
 // MQA-164 — a download that failed mid-flight was reported to the log file and nowhere else: there was no
@@ -245,6 +290,15 @@ describe('MQA-164 — a failed update download reaches the renderer', () => {
     electronApp.isPackaged = true
     electronApp.name = 'Métis'
     proc.resourcesPath = 'C:/fake-resources' // only join()'d, then handed to the mocked readFileSync above
+    vi.mocked(net.fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        tag_name: 'v99.0.0',
+        draft: false,
+        prerelease: false,
+        html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v99.0.0'
+      })
+    } as unknown as Response)
     // updater.ts lazy-requires electron-updater (boot cost), which vi.mock cannot intercept — seed the
     // CJS cache with a fake AppUpdater instead, so both entry points get the same event emitter we drive.
     fake = new FakeAutoUpdater()
@@ -349,5 +403,47 @@ describe('enterprise private update feed (admin managed-config `updateFeedUrl`)'
     expect(fn).not.toMatch(/userData/)
     const callSites = src.split('applyAdminUpdateFeed(autoUpdater)').length - 1
     expect(callSites, 'the manual check AND initAutoUpdate must both apply the feed').toBe(2)
+  })
+})
+
+describe('Metis-Releases feed rules — QA Latest only', () => {
+  it('the in-app check and electron-builder publish the same public owner/repo', async () => {
+    const { readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs')
+    const { join } = await vi.importActual<typeof import('node:path')>('node:path')
+    const src = readFileSync(join(__dirname, 'updater.ts'), 'utf8')
+    const yml = readFileSync(join(__dirname, '../../electron-builder.yml'), 'utf8')
+    expect(src).toContain('https://api.github.com/repos/mysticalsin/Metis-Releases/releases/latest')
+    expect(src).toContain('https://github.com/mysticalsin/Metis-Releases/releases/latest')
+    expect(yml).toMatch(/provider:\s*github/)
+    expect(yml).toMatch(/owner:\s*mysticalsin/)
+    expect(yml).toMatch(/repo:\s*Metis-Releases/)
+    expect(yml).toMatch(/releaseType:\s*release/)
+    expect(src).toMatch(/allowPrerelease = false/)
+    expect(src).toMatch(/allowDowngrade = false/)
+  })
+
+  it('release.yml does not undraft Latest until EXE + DMG + Native are in the bundle', async () => {
+    const { readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs')
+    const { join } = await vi.importActual<typeof import('node:path')>('node:path')
+    const workflow = readFileSync(join(__dirname, '../../.github/workflows/release.yml'), 'utf8')
+    expect(workflow).toContain('Metis-${version}.dmg')
+    expect(workflow).toContain('Metis-Setup-${version}.exe')
+    expect(workflow).toContain('Metis-Native-${version}.zip')
+    expect(workflow).toMatch(/gh release create .* --draft/)
+    expect(workflow).toMatch(/gh release edit .* --draft=false/)
+    const create = workflow.indexOf('gh release create')
+    const undraft = workflow.indexOf('--draft=false')
+    expect(create).toBeGreaterThan(-1)
+    expect(undraft).toBeGreaterThan(create)
+  })
+
+  it('Download & install re-checks GitHub Latest before electron-updater runs', async () => {
+    const { readFileSync } = await vi.importActual<typeof import('node:fs')>('node:fs')
+    const { join } = await vi.importActual<typeof import('node:path')>('node:path')
+    const src = readFileSync(join(__dirname, 'updater.ts'), 'utf8')
+    const fn = src.slice(src.indexOf('export async function startUpdateDownload'), src.indexOf('const isNotFound'))
+    expect(fn.indexOf('checkForUpdateNow()')).toBeGreaterThan(-1)
+    expect(fn.indexOf('checkForUpdateNow()')).toBeLessThan(fn.indexOf('autoUpdater.checkForUpdates()'))
+    expect(fn).toMatch(/No QA-approved update is available/)
   })
 })
