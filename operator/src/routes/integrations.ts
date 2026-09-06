@@ -16,7 +16,7 @@
 import { decryptVault, encryptVault } from '../crypto'
 import { json } from '../http'
 import { last4OfSecret } from '../vault'
-import { getConnectorCatalogEntry, publicConnectorCatalog, type ConnectorCatalogEntry } from '../connectors/catalog'
+import { getConnectorCatalogEntry, isConnectorReady, publicConnectorCatalog, type ConnectorCatalogEntry } from '../connectors/catalog'
 import {
   deleteIntegrationRow,
   INTEGRATION_EXTRA_DEFAULTS,
@@ -164,8 +164,9 @@ async function integrationSummary(store: OperatorStore, row: IntegrationRow): Pr
 
 /** Persists `row` through the store (so both the memory store and D1 keep the base columns in sync) and,
  *  when `env.DB` is bound, reapplies the extra columns immediately after - seev `../connectors/data.ts`
- *  for why that second call is required and not optional. */
-async function saveIntegration(ctx: AdminCtx, row: IntegrationRow, extra: IntegrationExtraColumns): Promise<IntegrationRow> {
+ *  for why that second call is required and not optional. Exported: `routes/connectors-oauth.ts`'s
+ *  callback creates a row the exact same way (rather than a third copy of the same two-step dance). */
+export async function saveIntegration(ctx: AdminCtx, row: IntegrationRow, extra: IntegrationExtraColumns): Promise<IntegrationRow> {
   const merged = withIntegrationExtra(row as unknown as Record<string, unknown>, extra) as unknown as IntegrationRow
   await ctx.store.putIntegration(merged)
   if (ctx.env.DB) await writeIntegrationExtraColumns(ctx.env.DB, row.id, extra)
@@ -184,7 +185,9 @@ export function registerIntegrationsRoutes(): void {
     method: 'GET',
     pattern: '/v1/admin/connectors/catalog',
     auth: 'admin',
-    handler: () => json({ ok: true, catalog: publicConnectorCatalog() })
+    // `ctx.env` so `oauthConfigured`/`availability` reflect which OAUTH_<KIND>_CLIENT_ID/_SECRET pairs
+    // are actually bound right now (task item 5), not the build-time default of "none".
+    handler: (_request, ctx) => json({ ok: true, catalog: publicConnectorCatalog(ctx.env) })
   })
 
   defineRoute<AdminCtx>({
@@ -207,7 +210,7 @@ export function registerIntegrationsRoutes(): void {
       const kind = typeof body.kind === 'string' ? body.kind : ''
       const entry = getConnectorCatalogEntry(kind)
       if (!entry) return json({ ok: false, error: 'unknown connector kind', code: 'unknown-kind' }, 400)
-      if (entry.availability === 'needs-oauth') {
+      if (!isConnectorReady(entry, ctx.env)) {
         return json({ ok: false, error: 'this connector needs OAuth, not available yet', code: 'needs-oauth' }, 400)
       }
       const credential = typeof body.credential === 'string' ? body.credential : ''
@@ -228,7 +231,7 @@ export function registerIntegrationsRoutes(): void {
       const kind = typeof body.kind === 'string' ? body.kind : ''
       const entry = getConnectorCatalogEntry(kind)
       if (!entry) return json({ ok: false, error: 'unknown connector kind', code: 'unknown-kind' }, 400)
-      if (entry.availability === 'needs-oauth') {
+      if (!isConnectorReady(entry, ctx.env)) {
         return json({ ok: false, error: 'this connector needs OAuth, not available yet', code: 'needs-oauth' }, 400)
       }
       const label = typeof body.label === 'string' ? body.label.trim().slice(0, 120) : ''

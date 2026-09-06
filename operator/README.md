@@ -273,6 +273,61 @@ If the team name is not `tony-walteur`, set `TEAM_DOMAIN` to `https://<team>.clo
 An unset team means the Worker returns 503, never a password form. Exact Zero Trust app and
 policy: `docs/design/OPERATOR.md` and `docs/operator/RUNBOOKS.md`.
 
+### Connectors: OAuth registration
+
+Six connector kinds authenticate over OAuth 2.0 instead of a static credential (`operator/src/
+connectors/catalog.ts`'s `oauth` config, `operator/src/connectors/oauth.ts`). Each needs its own
+one-time app registration with the vendor, then two Worker secrets named `OAUTH_<KIND>_CLIENT_ID`
+and `OAUTH_<KIND>_CLIENT_SECRET`. A kind's catalog tile flips from "Needs OAuth" to ready the moment
+both are bound - no redeploy required.
+
+The redirect URI is fixed and identical for every vendor (only the callback route, never a
+per-connector path):
+
+| Environment | Redirect URI to paste into the vendor's app registration |
+| --- | --- |
+| production | `https://metis-operator.tony-walteur.workers.dev/v1/admin/connectors/oauth/callback` |
+| staging | `https://metis-operator-staging.tony-walteur.workers.dev/v1/admin/connectors/oauth/callback` |
+
+**Google Drive** (authorization-code, PKCE) - [Google Cloud Console](https://console.cloud.google.com/apis/credentials) > Create Credentials > OAuth client ID > Web application. Paste the redirect URI above. Scope requested: `https://www.googleapis.com/auth/drive.file` (only files Métis itself creates or opens - broaden in `catalog.ts` if the fleet needs to read files it did not create).
+
+```sh
+npx wrangler@4 secret put OAUTH_GOOGLEDRIVE_CLIENT_ID
+npx wrangler@4 secret put OAUTH_GOOGLEDRIVE_CLIENT_SECRET
+```
+
+**Zoho CRM** (authorization-code) - [Zoho API Console](https://api-console.zoho.com/) (or the regional equivalent, e.g. `api-console.zoho.eu`) > Add Client > Server-based Applications, not Self Client. Paste the redirect URI above. Scopes ticked: `ZohoCRM.modules.ALL`, `ZohoCRM.settings.ALL`. The drawer additionally asks for the data centre (`accounts.zoho.com`, `.eu`, `.in`, `.com.au`, `.jp`, `.com.cn`, or `zohocloud.ca`) per connection - it must match the console the app was registered in.
+
+```sh
+npx wrangler@4 secret put OAUTH_ZOHO_CLIENT_ID
+npx wrangler@4 secret put OAUTH_ZOHO_CLIENT_SECRET
+```
+
+**Salesforce** (client-credentials, per-connection app) - Setup > App Manager > New Connected App > enable OAuth, check "Client Credentials Flow", assign a run-as user. No redirect URI is used by this grant. The drawer collects the org's My Domain URL, the Connected App's consumer key (client id), and its consumer secret (vault-encrypted as this connection's credential - never plain `config_json`). Scope requested: `api`.
+
+```sh
+npx wrangler@4 secret put OAUTH_SALESFORCE_CLIENT_ID
+npx wrangler@4 secret put OAUTH_SALESFORCE_CLIENT_SECRET
+```
+
+**Microsoft Dynamics 365 / SharePoint / Microsoft Teams** (client-credentials, one Azure AD app registration per vendor) - [Microsoft Entra admin center](https://entra.microsoft.com/) > App registrations > New registration > Certificates & secrets > New client secret. Grant the app the API permission it needs (Dataverse `user_impersonation` as an application permission for Dynamics; `Sites.Read.All`/`Files.ReadWrite.All` for SharePoint; `Chat.Read.All`/`ChannelMessage.Read.All` for Teams, all as **Application** permissions, then **Grant admin consent**). No redirect URI is used by this grant. The drawer collects the Microsoft Entra tenant id, the app's client id, and its client secret (vault-encrypted); Dynamics additionally collects the organization URL (`https://yourorg.crm.dynamics.com`), used to build the token request's scope.
+
+```sh
+npx wrangler@4 secret put OAUTH_DYNAMICS365_CLIENT_ID
+npx wrangler@4 secret put OAUTH_DYNAMICS365_CLIENT_SECRET
+npx wrangler@4 secret put OAUTH_SHAREPOINT_CLIENT_ID
+npx wrangler@4 secret put OAUTH_SHAREPOINT_CLIENT_SECRET
+npx wrangler@4 secret put OAUTH_MICROSOFTTEAMS_CLIENT_ID
+npx wrangler@4 secret put OAUTH_MICROSOFTTEAMS_CLIENT_SECRET
+```
+
+Every OAuth-obtained token is stored the same way a static API key is: AES-GCM encrypted with
+`OPERATOR_VAULT_KEY`, last4 only ever leaving the Worker. An authorization-code connection's access
+token is refreshed automatically (`oauth.ts#refreshOAuthToken`) once it is within 5 minutes of
+expiry; a refresh failure is recorded on the connection (visible as "failing" in the console) and
+never deletes the row - the admin sees exactly what broke instead of the connector silently
+vanishing.
+
 ## D1 setup (first time only)
 
 ```sh
