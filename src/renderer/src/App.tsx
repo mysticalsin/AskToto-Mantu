@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, star
 import { Bar } from './components/Bar'
 import { ControlPill } from './components/ControlPill'
 import { Panel } from './components/Panel'
-import { OnboardingV2 } from './components/OnboardingExperience'
 // Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup. Answer and
 // Copilot pull in Markdown.tsx -> streamdown + shiki/core, which have no reason to parse/execute before
 // the user has asked anything — deferring them keeps that weight out of the eager boot chunk.
+// Onboarding / SignInWall / LicenseGate are the same idea: returning users (the common launch) never
+// mount them, so their ~80 KB of first-run narrative + SSO/license chrome stays out of the boot parse.
 const Settings = lazy(() => import('./components/Settings').then((m) => ({ default: m.Settings })))
 const Review = lazy(() => import('./components/Review').then((m) => ({ default: m.Review })))
 const RecallView = lazy(() => import('./components/RecallView').then((m) => ({ default: m.RecallView })))
@@ -13,8 +14,11 @@ const AgendaView = lazy(() => import('./components/AgendaView').then((m) => ({ d
 const BrainView = lazy(() => import('./components/BrainView').then((m) => ({ default: m.BrainView })))
 const Answer = lazy(() => import('./components/Answer').then((m) => ({ default: m.Answer })))
 const Copilot = lazy(() => import('./components/Copilot').then((m) => ({ default: m.Copilot })))
-import { SignInWall } from './components/SignInWall'
-import { LicenseGate } from './components/LicenseGate'
+const OnboardingV2 = lazy(() =>
+  import('./components/OnboardingExperience').then((m) => ({ default: m.OnboardingV2 }))
+)
+const SignInWall = lazy(() => import('./components/SignInWall').then((m) => ({ default: m.SignInWall })))
+const LicenseGate = lazy(() => import('./components/LicenseGate').then((m) => ({ default: m.LicenseGate })))
 import { UpdateReadyToast } from './components/UpdateReadyToast'
 import { NewMeetingToast } from './components/NewMeetingToast'
 import { VisibilityToast, type VisibilityToastState } from './components/VisibilityToast'
@@ -2894,7 +2898,9 @@ export function App(): JSX.Element {
     return (
       <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
         <Panel>
-          <LicenseGate settings={settings} reason={licenseGate.reason} onRecheck={recheckLicenseGate} />
+          <Suspense fallback={<div className="cl-root rounded-2xl p-6 text-center text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>}>
+            <LicenseGate settings={settings} reason={licenseGate.reason} onRecheck={recheckLicenseGate} />
+          </Suspense>
         </Panel>
       </div>
     )
@@ -2924,13 +2930,15 @@ export function App(): JSX.Element {
     }
     return (
       <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
-        <SignInWall
-          status={auth.status}
-          onSignIn={auth.signIn}
-          onOpenSettings={() =>
-            openSettings('calendar', 'Enter your organization’s Microsoft sign-in IDs here, then sign in.')
-          }
-        />
+        <Suspense fallback={<div className="cl-root rounded-2xl p-6 text-center text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>}>
+          <SignInWall
+            status={auth.status}
+            onSignIn={auth.signIn}
+            onOpenSettings={() =>
+              openSettings('calendar', 'Enter your organization’s Microsoft sign-in IDs here, then sign in.')
+            }
+          />
+        </Suspense>
       </div>
     )
   }
@@ -2954,16 +2962,18 @@ export function App(): JSX.Element {
     return (
       <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
         <Panel>
-          <OnboardingV2
-            settings={settings}
-            saveKey={saveKey}
-            recoverEncryptedProfile={recoverEncryptedProfile}
-            patch={patch}
-            onOpenAiSettings={() => openSettings('ai')}
-            onDone={() => void refresh()}
-            signedIn={auth.status?.signedIn}
-            signedInEmail={auth.status?.email}
-          />
+          <Suspense fallback={<div className="cl-root rounded-2xl p-6 text-center text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>}>
+            <OnboardingV2
+              settings={settings}
+              saveKey={saveKey}
+              recoverEncryptedProfile={recoverEncryptedProfile}
+              patch={patch}
+              onOpenAiSettings={() => openSettings('ai')}
+              onDone={() => void refresh()}
+              signedIn={auth.status?.signedIn}
+              signedInEmail={auth.status?.email}
+            />
+          </Suspense>
         </Panel>
       </div>
     )
