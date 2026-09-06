@@ -1,6 +1,7 @@
 import {
   bars,
   choropleth,
+  choroplethMini,
   dualLine,
   sparklineArea,
   sparklineLine
@@ -11,6 +12,7 @@ import { CF_TOKEN_MISSING, type CloudflareOverview } from './cloudflare'
 import type { ConsoleEvent, DashboardPayload, ProfileRow } from './dashboard'
 import { FORBIDDEN_NAV, NAV_IDS, NAV_SECTIONS } from './nav'
 import { looksLikeSecret } from './redact'
+import { geoCountryRollup } from './realtime-geo'
 
 const MISSING = '—'
 
@@ -170,6 +172,11 @@ a { color: var(--accent); text-decoration: none; }
 .fail-loud { color: var(--danger); font-size: 13px; font-weight: 600; padding: 10px 0 12px; }
 .crm-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .world-wrap { overflow: hidden; max-height: 280px; }
+.geo-corner { display: grid; grid-template-columns: minmax(0, 1fr) 168px; gap: 10px; align-items: start; }
+.geo-corner-map { width: 168px; }
+.geo-corner-map svg { display: block; width: 100%; height: auto; max-height: 120px; }
+.geo-live { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 12px; align-items: start; }
+@media (max-width: 980px) { .geo-corner, .geo-live { grid-template-columns: 1fr; } }
 .key-form { display: grid; gap: 8px; margin: 0 0 14px; }
 .license-once {
   display: grid; gap: 8px; margin: 0 0 14px; padding: 10px 12px;
@@ -370,6 +377,64 @@ function renderInstallWorks(data: DashboardPayload): string {
     </ol>
     ${renderLicenseGenerateForm()}
     ${body}
+  </article>`
+}
+
+function renderGeoCorner(data: DashboardPayload): string {
+  const cities = data.geo
+  const countries = geoCountryRollup(cities)
+  const cityRows = cities
+    .map(
+      (r) =>
+        `<tr data-geo-city="${esc(r.city)}"><td>${esc(r.city)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td></tr>`
+    )
+    .join('')
+  const countryRows = countries
+    .map((r) => `<tr><td>${esc(r.country)}</td><td>${r.count}</td></tr>`)
+    .join('')
+  return `<article class="card geo-corner" data-geo-corner>
+    <div>
+      <p class="eyebrow">Places</p>
+      <div class="tabs" id="geo-tabs">
+        <button class="tab on" data-geo-tab="cities" type="button">Cities</button>
+        <button class="tab" data-geo-tab="countries" type="button">Countries</button>
+      </div>
+      <div data-geo-pane="cities">
+        ${
+          cityRows
+            ? `<table data-geo-table="cities"><thead><tr><th>City</th><th>Country</th><th>Seats</th></tr></thead><tbody>${cityRows}</tbody></table>`
+            : '<div class="empty">No city geo yet. Heartbeats write request.cf city.</div>'
+        }
+      </div>
+      <div data-geo-pane="countries" hidden>
+        ${
+          countryRows
+            ? `<table data-geo-table="countries"><thead><tr><th>Country</th><th>Seats</th></tr></thead><tbody>${countryRows}</tbody></table>`
+            : '<div class="empty">No country geo yet.</div>'
+        }
+      </div>
+    </div>
+    <div class="geo-corner-map" data-geo-widget>${choroplethMini(data.map.countries)}</div>
+  </article>`
+}
+
+function renderRealtimeGeo(data: DashboardPayload): string {
+  const rows = data.geo
+    .map(
+      (r) =>
+        `<tr><td>${esc(r.city)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${r.avg_duration}ms</td></tr>`
+    )
+    .join('')
+  return `<article class="card" data-realtime-geo>
+    <p class="eyebrow">Geo</p>
+    <div class="geo-live">
+      <div class="geo-corner-map" data-geo-widget>${choroplethMini(data.map.countries)}</div>
+      ${
+        rows
+          ? `<table data-geo-table="realtime"><thead><tr><th>City</th><th>Country</th><th>Count</th><th>Sessions</th><th>Avg</th></tr></thead><tbody>${rows}</tbody></table>`
+          : '<div class="empty">No city geo on live heartbeats yet.</div>'
+      }
+    </div>
   </article>`
 }
 
@@ -748,11 +813,7 @@ svg path { vector-effect: non-scaling-stroke; }
               : '<div class="empty">No gateway Asks ingested yet.</div>'
           }
         </article>
-        <article class="card" style="padding-bottom:10px">
-          <p class="eyebrow">Globe</p>
-          <div id="map-root-overview" class="world-wrap">${maps.land}</div>
-          <div class="sub muted" style="padding-bottom:8px">Real Métis heartbeats from request.cf. No demo VPS. Empty world until a seat checks in.</div>
-        </article>
+        ${renderGeoCorner(data)}
       </div>
 
       <article class="card" style="padding-bottom:10px" data-cf-overview>
@@ -762,16 +823,17 @@ svg path { vector-effect: non-scaling-stroke; }
     </section>
 
     <section class="page wrap" data-page="realtime" hidden>
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Live seats</p>
+      <article class="card" style="padding-bottom:10px" data-live-presence>
+        <p class="eyebrow">Live people</p>
         ${
           liveSeats.length
             ? renderProfiles(liveSeats)
-            : '<div class="empty">No live seats in the last two minutes.</div>'
+            : '<div class="empty">No live seats in the last two minutes. Heartbeat &lt; 2 min.</div>'
         }
       </article>
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Live stream</p>
+      ${renderRealtimeGeo(data)}
+      <article class="card" style="padding-bottom:10px" data-live-feed>
+        <p class="eyebrow">Activity</p>
         <div id="rt-stream">${renderEvents(data.events.slice(0, 30))}</div>
       </article>
     </section>
@@ -1026,6 +1088,11 @@ document.querySelectorAll('[data-map]').forEach((b) => b.addEventListener('click
   document.querySelectorAll('[data-map]').forEach((x) => x.classList.toggle('on', x === b))
   const v = b.getAttribute('data-map')
   document.querySelectorAll('[data-map-pane]').forEach((p) => { p.hidden = p.getAttribute('data-map-pane') !== v })
+}))
+document.querySelectorAll('[data-geo-tab]').forEach((b) => b.addEventListener('click', () => {
+  document.querySelectorAll('[data-geo-tab]').forEach((x) => x.classList.toggle('on', x === b))
+  const v = b.getAttribute('data-geo-tab')
+  document.querySelectorAll('[data-geo-pane]').forEach((p) => { p.hidden = p.getAttribute('data-geo-pane') !== v })
 }))
 document.querySelectorAll('#map-root path[data-iso]').forEach((p) => p.addEventListener('click', () => {
   const iso = p.getAttribute('data-iso')
