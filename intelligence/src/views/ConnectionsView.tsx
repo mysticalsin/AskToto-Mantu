@@ -1,3 +1,4 @@
+import type React from "react"
 import { Link } from 'react-router-dom'
 import type { DashboardData } from '../types/data'
 import { EmptyState } from '../components/EmptyState'
@@ -58,7 +59,7 @@ function MeetingDest({
   file: string
   title: string
   known: Set<string>
-}): JSX.Element {
+}): React.ReactElement {
   const s = slug(file)
   if (known.has(s)) {
     return (
