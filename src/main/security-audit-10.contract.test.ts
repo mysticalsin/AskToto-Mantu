@@ -198,6 +198,17 @@ describe('AUDIT-10 — IPC sender denials are audited, sampled', () => {
     expect(indexSrc).toMatch(/auditLog\('security\.ipc_denied'/)
     expect(indexSrc).toMatch(/auditLog\('security\.rate_limited'/)
   })
+
+  it('assertMainWindow and setWindowMode re-check isDestroyed before setBounds', () => {
+    const assertBody = sliceBetween('function assertMainWindow', 'function assertBrainReader')
+    expect(assertBody).toMatch(/!win \|\| win\.isDestroyed\(\)/)
+    const setMode = sliceBetween('function setWindowMode', 'function ensureWindow')
+    expect(setMode).toMatch(/if \(!win \|\| win\.isDestroyed\(\)\) return/)
+    // settingsSet parks after awaited consent dialogs — must re-check before setBounds
+    const settingsSet = sliceBetween('ipcMain.handle(IPC.settingsSet', 'ipcMain.handle(IPC.settingsRecoverProfile')
+    expect(settingsSet).toMatch(/if \(!win\.isDestroyed\(\)\)/)
+    expect(settingsSet).toMatch(/win\.setBounds\(park, false\)/)
+  })
 })
 
 describe('AUDIT-10 — Shiki HTML is sanitized before dangerouslySetInnerHTML', () => {
