@@ -255,7 +255,7 @@ export interface OAuthTokenPayload {
 }
 
 export interface OAuthError {
-  code: 'bad-config' | 'insecure-scheme' | 'host-blocked' | 'timeout' | 'network-error' | 'upstream-error' | 'bad-response'
+  code: 'bad-config' | 'insecure-scheme' | 'host-blocked' | 'timeout' | 'network-error' | 'upstream-error' | 'bad-response' | 'redirect'
   message: string
 }
 
@@ -304,6 +304,13 @@ async function postTokenRequest({ url, body, clientSecret, deps }: TokenRequestP
   )
   if (fetched.timedOut) return { ok: false, error: { code: 'timeout', message: `No response within ${PROBE_TIMEOUT_MS / 1000} seconds.` } }
   if (fetched.networkError || !fetched.res) return { ok: false, error: { code: 'network-error', message: 'Could not reach the token endpoint.' } }
+  // Parity with probeRest (probe.ts): a redirect is never followed and never treated as a generic
+  // upstream error - a 3xx here most often means the tokenUrl template (or a tenant value it embeds,
+  // e.g. Zoho's dataCenter) is wrong, and blindly letting fetch auto-follow it would resend the freshly
+  // minted client_secret body to whatever Location the response names.
+  if (fetched.res.status >= 300 && fetched.res.status < 400) {
+    return { ok: false, error: { code: 'redirect', message: 'The token endpoint returned a redirect. Redirects are not followed.' } }
+  }
   const bodyRead = await readCapped(fetched.res, deadlineAt)
   if (bodyRead.timedOut) return { ok: false, error: { code: 'timeout', message: `No response within ${PROBE_TIMEOUT_MS / 1000} seconds.` } }
 

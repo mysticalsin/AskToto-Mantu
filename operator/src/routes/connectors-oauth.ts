@@ -15,7 +15,7 @@
 import { encryptVault } from '../crypto'
 import { html, json, newCspNonce, noStoreHeaders } from '../http'
 import { last4OfSecret } from '../vault'
-import { getConnectorCatalogEntry, missingOAuthEnvNames, type ConnectorCatalogEntry } from '../connectors/catalog'
+import { getConnectorCatalogEntry, missingOAuthEnvNames, validateTenantValue, type ConnectorCatalogEntry } from '../connectors/catalog'
 import { INTEGRATION_EXTRA_DEFAULTS, type IntegrationExtraColumns } from '../connectors/data'
 import {
   exchangeAuthorizationCode,
@@ -84,12 +84,35 @@ function oauthUnconfigured(entry: ConnectorCatalogEntry, env: unknown): Response
   return json({ ok: false, error: 'OAuth client not configured', code: 'oauth-unconfigured', missing: missingOAuthEnvNames(entry, env) }, 503)
 }
 
+/**
+ * CRITICAL fix, defence in depth: `/oauth/start` is a GET with a real side effect (it mints an audit row
+ * and, before this fix, would 302 straight to whatever host a `dataCenter`/tenant query parameter named).
+ * The central gate's CSRF check (`index.ts#isCrossSitePost`) only ever runs on a POST, so a GET route
+ * gets none of it for free - a plain `<a href>` or `<img src>` on any page an already-authenticated admin
+ * merely *views* (an email, a chat message, a compromised ad) is enough to fire it, no session of the
+ * attacker's own required. `Sec-Fetch-Site` is sent by every modern browser Tony's console runs in; the
+ * legitimate path (the console opening this in a new tab via a click inside its own origin) sends
+ * `same-origin`, so requiring exactly that value - refusing an absent header too, not just an explicit
+ * `cross-site`/`same-site`/`none` - costs the legitimate flow nothing and closes every other one. This is
+ * `/oauth/start`-only: `/oauth/callback` is reached by the *vendor's own* redirect, which is never
+ * same-origin by construction, and is protected instead by the signed, single-use `state` parameter -
+ * the standard OAuth defence for exactly that step.
+ */
+function isCrossSiteStart(request: Request): boolean {
+  return request.headers.get('sec-fetch-site') !== 'same-origin'
+}
+
 export function registerConnectorsOAuthRoutes(): void {
   defineRoute<AdminCtx>({
     method: 'GET',
     pattern: /^\/v1\/admin\/connectors\/(?<kind>[^/]+)\/oauth\/start$/,
     auth: 'admin',
     handler: async (request, ctx, match: RouteMatch) => {
+      // CRITICAL fix (d): checked before anything else - no state minted, no audit row, no lookup of
+      // any kind for a request that does not look like the console's own "open in a new tab" click.
+      if (isCrossSiteStart(request)) {
+        return json({ ok: false, error: 'cross-site request refused', code: 'csrf' }, 403)
+      }
       const kind = param(match, 'kind')
       const entry = getConnectorCatalogEntry(kind)
       if (!entry?.oauth || entry.oauth.flow !== 'auth-code') {
@@ -99,10 +122,19 @@ export function registerConnectorsOAuthRoutes(): void {
       if (!credentials) return oauthUnconfigured(entry, ctx.env)
 
       const config: Record<string, string> = {}
+      let auditTenantSuffix = ''
       if (entry.oauth.tenantField) {
-        const value = (ctx.url.searchParams.get(entry.oauth.tenantField.key) || '').trim()
+        const value = (ctx.url.searchParams.get(entry.oauth.tenantField.key) || '').trim().slice(0, 200)
         if (!value) return json({ ok: false, error: `${entry.oauth.tenantField.label} required`, code: 'missing-field', field: entry.oauth.tenantField.key }, 400)
-        config[entry.oauth.tenantField.key] = value.slice(0, 200)
+        // CRITICAL fix (a): the value that ends up in the authorize/token URL's host or path is
+        // constrained to exactly what this kind declares - Zoho's seven documented data centres, or a
+        // GUID/single-label shape for a path-positioned Microsoft tenant id - never accepted as-is.
+        const check = validateTenantValue(entry.oauth, value)
+        if (!check.ok) {
+          return json({ ok: false, error: check.error, code: 'invalid-field', field: entry.oauth.tenantField.key }, 400)
+        }
+        config[entry.oauth.tenantField.key] = value
+        auditTenantSuffix = ` ${value}`
       }
 
       const pkce = entry.oauth.pkce ? await generatePkce() : null
@@ -112,7 +144,7 @@ export function registerConnectorsOAuthRoutes(): void {
         config: Object.keys(config).length ? config : undefined
       })
 
-      const authorizeUrl = new URL(renderOAuthTemplate(entry.oauth.authorizeUrl as string, config))
+      const authorizeUrl = new URL(renderOAuthTemplate(entry.oauth.authorizeUrl, config))
       authorizeUrl.searchParams.set('client_id', credentials.clientId)
       authorizeUrl.searchParams.set('redirect_uri', oauthRedirectUri(request))
       authorizeUrl.searchParams.set('response_type', 'code')
@@ -123,7 +155,10 @@ export function registerConnectorsOAuthRoutes(): void {
         authorizeUrl.searchParams.set('code_challenge_method', 'S256')
       }
 
-      await auditLog(ctx, 'integration-oauth-start', null, kind)
+      // (e): the tenant value is audited only once it has passed the allowlist/shape check above, and
+      // only through safeAuditText - the same control every other free-text audit detail in this Worker
+      // goes through.
+      await auditLog(ctx, 'integration-oauth-start', null, safeAuditText(`${kind}${auditTenantSuffix}`))
       return new Response(null, { status: 302, headers: { location: authorizeUrl.toString(), ...noStoreHeaders() } })
     }
   })
