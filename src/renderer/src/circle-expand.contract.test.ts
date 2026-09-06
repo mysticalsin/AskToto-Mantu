@@ -80,4 +80,38 @@ describe('circle-expand: click Expand Métis must not snap back', () => {
     expect(index).toMatch(/overlayHugNextWidth/)
     expect(index).not.toMatch(/const nextWidth = Math\.max\(120/)
   })
+
+  it('expand/collapse uses a spring, not a hard cut', () => {
+    expect(app).toMatch(/circleRestSpringAfterExpand/)
+    expect(app).toMatch(/circleRestSpringClassName/)
+    expect(app).toMatch(/commitCircleRestMinimize/)
+    const css = readFileSync(join(root, 'styles.css'), 'utf8')
+    expect(css).toMatch(/@keyframes circle-rest-expand/)
+    expect(css).toMatch(/circle-rest-spring--expand/)
+    expect(css).toMatch(/var\(--ease-spring\)/)
+    expect(css).toMatch(/scale\(1\.02\)/)
+    expect(app).toMatch(/circleRestSpringAfterCollapse/)
+    expect(app).toMatch(/onBarMinimize/)
+    expect(app).toMatch(/window\.toto\.minimize\(false\)\.then/)
+    expect(app).toMatch(/window\.toto\.minimize\(true\)\.then/)
+    expect(app).toMatch(/if \(overlayIdle\)/)
+    expect(app).toMatch(
+      /overlayIdle \? overlaySpringClassName\(overlaySpring\) : circleRestSpringClassName\(circleRestSpring\)/
+    )
+  })
+
+  it('Settings picker mounts the same Bar orbs, not a 22px CSS disc or Full Bar card', () => {
+    const picker = readFileSync(join(root, 'components', 'OverlayOrbPicker.tsx'), 'utf8')
+    const thinking = readFileSync(join(root, 'components', 'JarvisOrbButton.tsx'), 'utf8')
+    const css = readFileSync(join(root, 'styles.css'), 'utf8')
+    expect(picker).toMatch(/<JarvisOrbButton/)
+    expect(picker).toMatch(/<ObsidianOrb/)
+    expect(picker).toMatch(/preview/)
+    expect(picker).not.toMatch(/Full bar/)
+    expect(picker).not.toMatch(/overlay-orb-diagram__jakub/)
+    expect(thinking).toMatch(/from 'thinking-orbs'/)
+    expect(thinking).toMatch(/<ThinkingOrb/)
+    expect(css).not.toMatch(/\.overlay-orb-diagram__jakub \{[\s\S]*?width:\s*22px/)
+    expect(css).not.toMatch(/\.overlay-orb-diagram__jakub \{[\s\S]*?radial-gradient/)
+  })
 })

@@ -7,7 +7,12 @@ import {
   overlayShowPeek,
   overlaySpringAfterHide,
   overlaySpringAfterReveal,
-  overlaySpringClassName
+  overlaySpringClassName,
+  CIRCLE_REST_COLLAPSE_MS,
+  CIRCLE_REST_EXPAND_MS,
+  circleRestSpringAfterCollapse,
+  circleRestSpringAfterExpand,
+  circleRestSpringClassName
 } from './overlay-motion'
 
 describe('overlay hide/reveal spring timings', () => {
@@ -39,5 +44,20 @@ describe('overlay hide/reveal spring timings', () => {
     expect(overlayShowPeek(true, false, 'rest', true)).toBe(false)
     expect(overlaySpringClassName('in')).toMatch(/overlay-spring--in/)
     expect(overlaySpringClassName('out')).toMatch(/overlay-spring--out/)
+  })
+
+  it('Circle/Jarvis expand is a spring, not a hard cut; reduced-motion skips it', () => {
+    expect(CIRCLE_REST_EXPAND_MS).toBeGreaterThanOrEqual(380)
+    expect(CIRCLE_REST_EXPAND_MS).toBeLessThanOrEqual(480)
+    expect(CIRCLE_REST_COLLAPSE_MS).toBeGreaterThanOrEqual(280)
+    expect(CIRCLE_REST_COLLAPSE_MS).toBeLessThanOrEqual(380)
+    expect(circleRestSpringAfterExpand(false)).toBe('expand')
+    expect(circleRestSpringAfterExpand(true)).toBe('idle')
+    expect(circleRestSpringAfterCollapse(false)).toBe('collapse')
+    expect(circleRestSpringAfterCollapse(true)).toBe('idle')
+    expect(circleRestSpringClassName('expand')).toMatch(/circle-rest-spring--expand/)
+    expect(circleRestSpringClassName('collapse')).toMatch(/circle-rest-spring--collapse/)
+    expect(circleRestSpringClassName('expand')).not.toMatch(/overlay-spring/)
+    expect(circleRestSpringClassName('idle')).not.toMatch(/overlay-spring/)
   })
 })

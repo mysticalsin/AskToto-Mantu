@@ -26,7 +26,7 @@ Tony lock 2026-09-06 (after the 286ff55 live fail) is source of truth.
 
 Tony already picks Hide / Island / Bar. That picker is perfect. Keep it.
 
-Bar rest is a second choice: **Circle** (default, original thinking-orb), **Jarvis** (tonys-jarvis particle sphere), or **Full bar**.
+Bar rest is a second choice: **Circle** (default, original thinking-orb) or **Jarvis** (tonys-jarvis particle sphere). No Full bar card.
 
 ## Settings cards
 
@@ -34,7 +34,6 @@ Bar rest is a second choice: **Circle** (default, original thinking-orb), **Jarv
 | --- | --- | --- | --- |
 | Circle | `'jakub'` | Circle | Original thinking orb. Default rest. |
 | Jarvis | `'obsidian'` | Jarvis | Particle sphere. Small rest pill. |
-| Full bar | `'bar'` | Full bar | The Ask bar stays on screen. |
 
 Circle shows the **Default** badge. Group label: "Bar rest". Helper: "Applies when Overlay chrome is Bar."
 
@@ -48,7 +47,8 @@ Clicking Circle or Jarvis while chrome is Bar rests as the 41 pill. Click the pi
 - `overlayAllowsMinimize(layout) === (layout === 'bar')`. Hide and Island never grow a minimize control.
 - `overlayShowsBarOrb(layout, minimized) === (layout === 'bar' && minimized)`. Hide/Island never show a circle.
 - `overlayDocksBarCircle(layout) === (layout === 'bar')`.
-- `overlayUsesThinkingOrb(layout, style)` is Bar and style is not `obsidian`. Default Circle and Full-bar minimize mount `JarvisOrbButton` + `thinking-orbs`.
+- `overlayUsesThinkingOrb(layout, style)` is Bar and style is not `obsidian`. Circle rest mounts `JarvisOrbButton` + `thinking-orbs`.
+- Settings Circle card mounts the same `JarvisOrbButton` as Bar (live `ThinkingOrb`, `solving`, 64 avatar) as a non-clickable preview. Jarvis card mounts the same `ObsidianOrb`. 72px stage. Not a 22px CSS fake disc. Not a static CSS mock. No Full bar card.
 - `overlayUsesJarvisOrb(layout, style)` is Bar and style is `obsidian` only. That path mounts `ObsidianOrb` + `data-orb-engine="jarvis-particles"`.
 - `overlayShowsSettingsSheet(view, minimized)` is true only when Settings is the view and the Circle pill is not up. No `.cl-root` sheet when `view !== 'settings'` or when minimized.
 - Hide park stays 8×2. Island peek stays 132×15.
@@ -82,7 +82,7 @@ Reference: `tonys-jarvis` / `mysticalsin/jarvis2.0` `frontend/src/orb.ts`. Tree 
 
 - Default `overlayOrbStyle` is `'jakub'`. Parse garbage → `'jakub'`.
 - Hide/Island still refuse minimize and refuse `overlayShowsBarOrb`.
-- Settings cards are Circle, Jarvis, Full bar. Copy has no em dash, no Obsidian, no "Jarvis / Obsidian". Circle is Default.
+- Settings cards are Circle and Jarvis only. Copy has no em dash, no Obsidian, no "Jarvis / Obsidian". Circle is Default. Leftover persist `bar` selects Circle.
 - Bar and ControlPill mount thinking-orbs unless `overlayUsesJarvisOrb`. Jarvis card mounts the particle orb.
 - Engine color is `0x4ca8e8`. Import is `three@0.143.0`.
 - Ghost: Settings closed + Bar/Circle never keeps lastBarHeight 800+ or a Settings sheet. Circle click does not reopen Settings.
