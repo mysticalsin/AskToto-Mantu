@@ -145,7 +145,7 @@ describe('MQA-079 — blockedUpdateChannel guards the manual check, not just ini
   beforeEach(() => {
     vi.mocked(shouldDisableAutoUpdate).mockReturnValue(false)
     vi.mocked(readTrustedAdminManaged).mockReturnValue(null)
-    delete proc.windowsStore
+    Reflect.deleteProperty(proc, 'windowsStore')
     vi.mocked(net.fetch).mockClear()
   })
 
@@ -158,7 +158,7 @@ describe('MQA-079 — blockedUpdateChannel guards the manual check, not just ini
 
     proc.windowsStore = true
     expect(blockedUpdateChannel()).toBe('store')
-    delete proc.windowsStore
+    Reflect.deleteProperty(proc, 'windowsStore')
 
     vi.mocked(readTrustedAdminManaged).mockReturnValue('{"disableAutoUpdate": true}')
     expect(blockedUpdateChannel()).toBe('policy')
@@ -239,7 +239,7 @@ describe('MQA-164 — a failed update download reaches the renderer', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] })
     vi.mocked(shouldDisableAutoUpdate).mockReturnValue(false)
     vi.mocked(readTrustedAdminManaged).mockReturnValue(null)
-    delete proc.windowsStore
+    Reflect.deleteProperty(proc, 'windowsStore')
     send.mockClear()
     vi.mocked(Notification).mockClear()
     electronApp.isPackaged = true
@@ -255,7 +255,7 @@ describe('MQA-164 — a failed update download reaches the renderer', () => {
   afterEach(() => {
     delete require.cache[moduleId]
     delete electronApp.isPackaged
-    delete proc.resourcesPath
+    Reflect.deleteProperty(proc, 'resourcesPath')
     vi.useRealTimers()
   })
 
