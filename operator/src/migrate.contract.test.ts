@@ -67,10 +67,10 @@ describe('migrate.mjs statement parsing and idempotency contract', () => {
     const fromAlter = tablesOf(schemaAlterSql)
     // Every other CREATE TABLE in schema-alter.sql redefines a table schema.sql already created (the
     // richer crm_sends/issued_licenses/etc. definitions, kept for a schema-alter-only run against a
-    // very old D1). operator_settings (task B6) is the one deliberate exception: a wholly new table
-    // that has never existed anywhere else, so it is introduced directly in schema-alter.sql with
-    // nothing to "agree" with in schema.sql.
-    const ALTER_ONLY_NEW_TABLES = new Set(['operator_settings'])
+    // very old D1). operator_settings (task B6) and mcp_calls (task B3) are the deliberate exceptions:
+    // wholly new tables that have never existed anywhere else, introduced directly in schema-alter.sql
+    // with nothing to "agree" with in schema.sql.
+    const ALTER_ONLY_NEW_TABLES = new Set(['operator_settings', 'mcp_calls'])
     for (const table of fromAlter) {
       if (ALTER_ONLY_NEW_TABLES.has(table)) continue
       expect(fromSchema.has(table)).toBe(true)
@@ -151,5 +151,55 @@ describe('schema-alter.sql operator_settings table (task B6, operator/src/routes
   it('is never targeted by an ALTER TABLE statement (it has no additive columns, ever)', () => {
     const alters = parseStatements(schemaAlterSql).filter((s) => /^ALTER TABLE operator_settings\b/i.test(s))
     expect(alters).toHaveLength(0)
+  })
+})
+
+describe('schema-alter.sql mcp_calls table (task B3, operator/src/connectors/mcp-calls.ts)', () => {
+  it('creates mcp_calls with exactly the seven columns the gateway audit needs, and never an argument column', () => {
+    const stmt = parseStatements(schemaAlterSql).find((s) => /^CREATE TABLE IF NOT EXISTS mcp_calls\b/i.test(s))
+    expect(stmt).toBeTruthy()
+    for (const col of [
+      'id TEXT PRIMARY KEY',
+      'ts INTEGER NOT NULL',
+      'device_id TEXT NOT NULL',
+      'connection_id TEXT NOT NULL',
+      'tool TEXT NOT NULL',
+      'ms INTEGER NOT NULL',
+      'outcome TEXT NOT NULL'
+    ]) {
+      expect(stmt.replace(/\s+/g, ' ')).toContain(col)
+    }
+    expect(stmt.toLowerCase()).not.toContain('argument')
+  })
+
+  it('is IF NOT EXISTS, same as every other CREATE TABLE in either file (idempotency contract above)', () => {
+    const stmt = parseStatements(schemaAlterSql).find((s) => /^CREATE TABLE IF NOT EXISTS mcp_calls\b/i.test(s))
+    expect(stmt).toMatch(/^CREATE TABLE IF NOT EXISTS\b/i)
+  })
+
+  it('is never targeted by an ALTER TABLE statement (it has no additive columns, ever)', () => {
+    const alters = parseStatements(schemaAlterSql).filter((s) => /^ALTER TABLE mcp_calls\b/i.test(s))
+    expect(alters).toHaveLength(0)
+  })
+
+  it('has an index on (connection_id, ts) and on (device_id, ts) for the admin listing and retention prune', () => {
+    for (const stmt of parseStatements(schemaAlterSql)) {
+      if (/^CREATE (UNIQUE )?INDEX\b/i.test(stmt) && /mcp_calls/i.test(stmt)) {
+        expect(stmt).toMatch(/^CREATE INDEX IF NOT EXISTS\b/i)
+      }
+    }
+    const indexNames = parseStatements(schemaAlterSql)
+      .map((s) => /^CREATE INDEX IF NOT EXISTS (\w+) ON mcp_calls/i.exec(s)?.[1])
+      .filter(Boolean)
+    expect(indexNames).toEqual(expect.arrayContaining(['mcp_calls_connection_ts', 'mcp_calls_device_ts']))
+  })
+})
+
+describe('schema-alter.sql issued_licenses renewal_note column (task B11, operator/src/licenses/renew.ts)', () => {
+  it('adds a nullable renewal_note column, additive only, never NOT NULL', () => {
+    const alters = parseStatements(schemaAlterSql).filter((s) => /^ALTER TABLE issued_licenses\b/i.test(s))
+    const stmt = alters.find((s) => /ADD COLUMN renewal_note\b/i.test(s))
+    expect(stmt).toBeTruthy()
+    expect(stmt).not.toMatch(/NOT NULL/i)
   })
 })

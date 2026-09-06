@@ -841,6 +841,15 @@ svg:not(.shoey-world) path { vector-effect: non-scaling-stroke; }
 /* primitives: flag, osGlyph/osChip, avatar, kindBadge, tierBadge, statusDot, clientChip,
    deltaChip, tooltip, skeletonRows, timeCell */
 .flag { font-size: 14px; line-height: 1; }
+/* flagStrip(): header summary strip, name still reaches screen readers via flag()'s own title. */
+.flag-strip { display: inline-flex; gap: 2px; }
+/* countryCell() (plan 3.6 rewritten): flag never appears without its name. */
+.country-cell { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.country-flag { display: block; border-radius: 2px; flex-shrink: 0; object-fit: cover; }
+.country-flag-none { display: inline-block; width: 16px; height: 12px; border-radius: 2px; background: var(--surface-2); flex-shrink: 0; }
+.country-cell-body { display: flex; flex-direction: column; min-width: 0; }
+.country-cell-name { font-size: 13px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.country-cell-secondary { font-size: 11.5px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .os-chip { display: inline-flex; align-items: center; gap: 4px; }
 .os-glyph { width: 13px; height: 13px; }
 /* -- plan 3.6: avatars are initials on a deterministic tint from the identity hash (the
@@ -984,5 +993,80 @@ svg:not(.shoey-world) path { vector-effect: non-scaling-stroke; }
 
 /* exportMenu() */
 .export-menu { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; }
+
+/* alertBadge() (plan 3.5c, ported Tremor-style alert badge): white ink on --ok/--danger/--info,
+   divider in the same hue lightened. --accent-ink is reused for "white ink" -- it is already
+   the token for readable text on a saturated fill, in both themes. */
+.alert-badge {
+  display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px;
+  border-radius: var(--radius-pill); font: 600 12px var(--font-body); color: var(--accent-ink);
+}
+.alert-badge-ok { background: var(--ok); }
+.alert-badge-danger { background: var(--danger); }
+.alert-badge-info { background: var(--info); }
+.alert-badge-icon { width: 16px; height: 16px; flex-shrink: 0; }
+.alert-badge-divider { width: 1px; align-self: stretch; }
+.alert-badge-ok .alert-badge-divider { background: color-mix(in srgb, var(--ok) 55%, white); }
+.alert-badge-danger .alert-badge-divider { background: color-mix(in srgb, var(--danger) 55%, white); }
+.alert-badge-info .alert-badge-divider { background: color-mix(in srgb, var(--info) 55%, white); }
+.alert-badge-label { white-space: nowrap; }
+.alert-badge-action { color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; margin-left: 4px; white-space: nowrap; }
+
+/* dataTable variant: card (plan 3.5c): rows separated rather than ruled, a --surface band per
+   row with a 1px top highlight (--card-highlight, the same token cards use), hover/selected
+   tints mixed from the surface, 14px rounded outer corners, numeric columns right-aligned mono,
+   sortable headers with an up/down/neutral arrow. The default (ruled) table rules above are
+   untouched -- these only ever apply under the extra .dt-card class. */
+table.dt-card { border-collapse: separate; border-spacing: 0 8px; }
+table.dt-card thead th {
+  font: 600 10px var(--font-body); text-transform: none; letter-spacing: normal;
+  color: var(--ink-2); border-bottom: 0; padding: 0 12px 4px;
+}
+table.dt-card thead th.dt-card-sortable { cursor: pointer; }
+table.dt-card .dt-sort-ic { width: 12px; height: 12px; vertical-align: -2px; margin-left: 2px; color: var(--ink-3); }
+table.dt-card tbody tr { background: var(--surface); box-shadow: var(--card-highlight); }
+table.dt-card tbody tr:hover { background: color-mix(in srgb, var(--surface) 80%, var(--bg-2)); }
+table.dt-card tbody tr.is-selected { background: color-mix(in srgb, var(--surface) 70%, var(--accent-soft)); box-shadow: var(--shadow-ring); }
+table.dt-card td { border-bottom: 0; padding: 10px 12px; }
+table.dt-card .dt-card-numeric { text-align: right; font-family: var(--font-mono); }
+table.dt-card tbody tr:first-child td:first-child { border-top-left-radius: var(--radius-card); }
+table.dt-card tbody tr:first-child td:last-child { border-top-right-radius: var(--radius-card); }
+table.dt-card tbody tr:last-child td:first-child { border-bottom-left-radius: var(--radius-card); }
+table.dt-card tbody tr:last-child td:last-child { border-bottom-right-radius: var(--radius-card); }
+table.dt-card tfoot td { background: color-mix(in srgb, var(--surface) 85%, var(--bg-2)); border-radius: 0 0 var(--radius-card) var(--radius-card); }
+
+/* connectorRow() / connectorGroup() (plan 6.10b) */
+.connector-group { padding: 4px 0 8px; }
+.connector-group-head { padding: 10px 16px 6px; }
+.connector-group-head h3 { margin: 0; font: 600 13px var(--font-body); color: var(--ink); }
+.connector-group-count { color: var(--ink-3); font-weight: 500; }
+.connector-group-rows { display: flex; flex-direction: column; }
+.connector-row {
+  display: flex; align-items: center; gap: 12px; height: 56px; padding: 0 16px;
+  border-top: 1px solid var(--border); cursor: pointer; text-align: left;
+}
+.connector-group-rows .connector-row:first-child { border-top: 0; }
+.connector-row[hidden] { display: none; }
+.connector-row-icon { position: relative; flex-shrink: 0; width: 32px; height: 32px; }
+.connector-row-logo { display: block; width: 32px; height: 32px; border-radius: 8px; background: var(--surface-2); object-fit: contain; padding: 4px; box-sizing: border-box; }
+.connector-row-dot {
+  position: absolute; right: -2px; bottom: -2px; width: 9px; height: 9px; border-radius: var(--radius-pill);
+  border: 1.5px solid var(--surface);
+}
+.connector-row-dot-connected { background: var(--live); }
+.connector-row-dot-attention { background: var(--danger); }
+.connector-row-dot-pending { background: var(--warn); }
+.connector-row-dot-untested { background: var(--ink-3); }
+.connector-row-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.connector-row-name { display: flex; align-items: center; gap: 6px; font: 600 13px var(--font-body); color: var(--ink); }
+.connector-row-badge { font-size: 11px; }
+.connector-row-secondary { font-size: 11.5px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.connector-row-action { flex-shrink: 0; font: 600 12px var(--font-body); color: var(--accent-text); }
+.connector-row:hover .connector-row-action { text-decoration: underline; }
+.connector-show-more {
+  display: flex; align-items: center; justify-content: center; gap: 4px; width: 100%;
+  padding: 10px 16px; border-top: 1px solid var(--border); background: transparent;
+  color: var(--ink-2); font: 600 12px var(--font-body); cursor: pointer;
+}
 ${STATUS_BADGE_CSS}
 `
