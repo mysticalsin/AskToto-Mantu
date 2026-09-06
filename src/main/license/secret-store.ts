@@ -85,4 +85,49 @@ export function clearLicenseCache(userData?: string): void {
   } catch {
     /* missing is a cleared cache */
   }
+  clearOperatorLicenseCache(userData)
+}
+
+const OperatorCacheSchema = z.object({
+  token: z.string().min(1).max(200),
+  jti: z.string().regex(/^[a-f0-9]{16}$/),
+  iat: z.number().int(),
+  exp: z.number().int(),
+  last4: z.string().min(2).max(8),
+  cachedAt: z.number().int().nonnegative()
+})
+
+export type OperatorLicenseCache = z.infer<typeof OperatorCacheSchema>
+
+export function operatorLicenseCachePath(userData?: string): string {
+  return join(userData ?? app.getPath('userData'), 'operator-license.bin')
+}
+
+export function readOperatorLicenseCache(userData?: string): OperatorLicenseCache | null {
+  const path = operatorLicenseCachePath(userData)
+  try {
+    if (!existsSync(path)) return null
+    const raw = unwrap(readFileSync(path))
+    if (!raw) return null
+    const parsed = OperatorCacheSchema.safeParse(JSON.parse(raw))
+    return parsed.success ? parsed.data : null
+  } catch {
+    return null
+  }
+}
+
+export function writeOperatorLicenseCache(cache: OperatorLicenseCache, userData?: string): void {
+  const path = operatorLicenseCachePath(userData)
+  const dir = dirname(path)
+  if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  writeFileSync(path, wrap(JSON.stringify(cache)), { mode: 0o600 })
+}
+
+export function clearOperatorLicenseCache(userData?: string): void {
+  const path = operatorLicenseCachePath(userData)
+  try {
+    if (existsSync(path)) unlinkSync(path)
+  } catch {
+    /* missing is a cleared cache */
+  }
 }

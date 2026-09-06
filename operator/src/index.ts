@@ -29,12 +29,17 @@ import {
   writeVaultKey
 } from './keys'
 import {
-  approvalOf,
-  isApprovedSeat,
   licenseFromIngest,
   LICENSES_EMPTY,
-  parseApproval
+  parseApproval,
+  parseLicenseId,
+  seatAuthorizedForKeys
 } from './fleet'
+import {
+  generateOperatorLicense,
+  OPERATOR_LICENSE_MAX,
+  parseOperatorLicenseDays
+} from '../../src/shared/operator-license'
 import { looksLikeSecret } from './redact'
 import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './store'
 import { isPublicAssetPath, publicAssetResponse } from './assets'
@@ -323,6 +328,49 @@ async function adminRoute(
     await store.audit(crypto.randomUUID(), now, email, 'crm-retry', null, row.id)
     return json({ ok: true, autoSend: false })
   }
+  if (url.pathname === '/v1/admin/licenses/generate' && request.method === 'POST') {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
+    const days = parseOperatorLicenseDays(body.days)
+    if (!days) return json({ ok: false, error: 'days must be 1-365' }, 400)
+    const secret = env.OPERATOR_INGEST_SECRET?.trim() || ''
+    if (!secret) return json({ ok: false, error: 'Operator ingest secret missing' }, 503)
+    const minted = await generateOperatorLicense(secret, { days, now })
+    if (minted.token.length > OPERATOR_LICENSE_MAX) {
+      return json({ ok: false, error: 'generated license too long' }, 500)
+    }
+    await store.putIssuedLicense({
+      jti: minted.claims.jti,
+      last4: minted.last4,
+      key_hash: await sha256Hex(minted.token),
+      days,
+      iat: minted.claims.iat,
+      exp: minted.claims.exp,
+      revoked: 0,
+      created_at: now,
+      created_by: email
+    })
+    await store.audit(crypto.randomUUID(), now, email, 'generate-license', null, `${minted.last4} ${days}d`)
+    return json({
+      ok: true,
+      license: minted.token,
+      jti: minted.claims.jti,
+      last4: minted.last4,
+      days,
+      iat: minted.claims.iat,
+      exp: minted.claims.exp
+    })
+  }
+  if (url.pathname === '/v1/admin/licenses/issued' && request.method === 'GET') {
+    const rows = (await store.listIssuedLicenses()).map((r) => ({
+      jti: r.jti,
+      last4: r.last4,
+      days: r.days,
+      exp: r.exp,
+      revoked: r.revoked,
+      createdAt: r.created_at
+    }))
+    return json(stripSecrets({ ok: true, issued: rows }))
+  }
   if (url.pathname === '/v1/admin/licenses' && request.method === 'GET') {
     const dash = await buildDashboard(store, email, now)
     if (dash.licenses.empty) return json({ ok: false, error: LICENSES_EMPTY, empty: true }, 404)
@@ -398,8 +446,8 @@ async function heartbeat(
   return json({
     ok: true,
     retry: retries.map((r) => r.id),
-    fundedProviders: await fundedProviders(store, stored),
-    approved: isApprovedSeat(stored)
+    fundedProviders: await fundedProviders(store, stored, now),
+    approved: await seatAuthorizedForKeys(store, stored, now)
   })
 }
 
@@ -545,7 +593,8 @@ function seatFromBody(deviceId: string, body: Record<string, unknown>, now: numb
     last_index_at: lastIndexAt(body),
     hostname: sanitizeOperatorHostname(body.hostname),
     sso_email: sanitizeOperatorSsoEmail(body.ssoEmail),
-    license: licenseFromIngest(body)
+    license: licenseFromIngest(body),
+    license_jti: parseLicenseId(body.licenseId)
   }
 }
 

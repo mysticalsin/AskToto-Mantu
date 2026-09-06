@@ -148,6 +148,20 @@ describe('unauth console GET is 302 to Cloudflare Access, never a password form'
     expect(await res.json()).toEqual({ ok: false, error: 'Access required' })
   })
 
+  it('unauth POST /v1/admin/licenses/generate is 401 not 404', async () => {
+    const res = await handleRequest(
+      new Request('https://operator.test/v1/admin/licenses/generate', {
+        method: 'POST',
+        body: JSON.stringify({ days: 30 })
+      }),
+      env(),
+      {},
+      { store: memoryStore(), now: NOW }
+    )
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ ok: false, error: 'Access required' })
+  })
+
   it('unauth POST /v1/admin/licenses is 401 not 404', async () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/licenses', { method: 'POST', body: '{}' }),

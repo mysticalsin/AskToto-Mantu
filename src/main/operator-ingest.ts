@@ -16,6 +16,7 @@ import { operatorFundsProvider } from '@shared/ask-routing'
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
 import { mainLog } from './logger'
 import type { OperatorCrmEvent } from './operator-crm'
+import { identityLicenseMeta } from './license/operator-status'
 
 const HEARTBEAT_MS = 60_000
 const ASK_TEXT_CAP = 4_000
@@ -65,12 +66,23 @@ function osLabel(): 'darwin' | 'win' | string {
   return process.platform
 }
 
+export type SeatLicenseMeta = { license: string; licenseLast4?: string; licenseId?: string }
+
 /** License status + last4 only. Never the raw key. Never self-approve. */
-export function licenseMeta(settings: OperatorRuntimeSettings): { license: string; licenseLast4?: string } {
+export function licenseMeta(
+  settings: OperatorRuntimeSettings,
+  identity: SeatLicenseMeta | null = null
+): SeatLicenseMeta {
+  if (identity && (identity.license === 'licensed' || identity.license === 'grace')) {
+    return identity
+  }
   const raw = settings.licenseKey?.trim() || ''
   const alnum = raw.replace(/[^a-zA-Z0-9]/g, '')
   const licenseLast4 = alnum.length >= 4 ? alnum.slice(-4) : undefined
   const license = settings.licenseValid ? 'licensed' : settings.trialActive ? 'trial' : 'unlicensed'
+  if (identity?.license === 'expired' && !settings.licenseValid) {
+    return identity
+  }
   return licenseLast4 ? { license, licenseLast4 } : { license }
 }
 
@@ -82,6 +94,7 @@ export function seatMeta(settings: OperatorRuntimeSettings): {
   ssoEmail?: string
   license: string
   licenseLast4?: string
+  licenseId?: string
 } {
   const rawSeat = settings.licenseKey?.trim() || getMachineId()
   const host = sanitizeOperatorHostname(hostname())
@@ -97,7 +110,15 @@ export function seatMeta(settings: OperatorRuntimeSettings): {
     appVersion: app.getVersion(),
     ...(host ? { hostname: host } : {}),
     ...(email ? { ssoEmail: email } : {}),
-    ...licenseMeta(settings)
+    ...licenseMeta(settings, safeIdentityLicenseMeta())
+  }
+}
+
+function safeIdentityLicenseMeta(): SeatLicenseMeta | null {
+  try {
+    return identityLicenseMeta()
+  } catch {
+    return null
   }
 }
 

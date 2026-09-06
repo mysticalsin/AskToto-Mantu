@@ -12,8 +12,11 @@ import {
   type MemberLicenseError,
   type MemberLicenseStatus
 } from '@shared/license-types'
+import { isOperatorLicenseKey, operatorLicenseLast4 } from '@shared/operator-license'
 import { getLicenseClient } from './client'
 import { formatSerialDisplay, hashDeviceId, resolveDeviceIdentity } from './device'
+import { operatorLicenseStatus } from './operator-status'
+import { verifyOperatorLicenseSync } from './operator-token'
 import {
   assignMemberNumber,
   formatInstalledLabel,
@@ -21,7 +24,12 @@ import {
   readInstallIdentity
 } from './install'
 import { verifyLicenseJws } from './jws'
-import { clearLicenseCache, readLicenseCache, writeLicenseCache } from './secret-store'
+import {
+  clearLicenseCache,
+  readLicenseCache,
+  writeLicenseCache,
+  writeOperatorLicenseCache
+} from './secret-store'
 import { extractJwsFromLicenseFile, managedLicensePresent, parseLicenseMetis } from './airgap'
 import { getSettings } from '../store'
 
@@ -35,8 +43,14 @@ function deviceHash(): string {
   return hashDeviceId(device.stableId, device.platform)
 }
 
+function ingestSecret(): string {
+  return (getSettings().operatorIngestSecret || process.env.METIS_OPERATOR_INGEST_SECRET || '').trim()
+}
+
 function statusFromCache(): MemberLicenseStatus {
   const managed = managedLicensePresent()
+  const operator = operatorLicenseStatus()
+  if (operator) return { ...operator, managedFilePresent: managed }
   const cache = readLicenseCache()
   if (!cache) {
     return emptyLicenseStatus({ managedFilePresent: managed })
@@ -79,6 +93,23 @@ export async function activate(key: string): Promise<MemberActivateResult> {
   if (!licenseKey) {
     const s = status()
     return { ok: false, error: 'invalid', status: { ...s, error: 'invalid' } }
+  }
+  if (isOperatorLicenseKey(licenseKey)) {
+    const secret = ingestSecret()
+    const verified = verifyOperatorLicenseSync(secret, licenseKey)
+    if (!verified.ok) {
+      const s = status()
+      return { ok: false, error: verified.error, status: { ...s, error: verified.error } }
+    }
+    writeOperatorLicenseCache({
+      token: licenseKey,
+      jti: verified.claims.jti,
+      iat: verified.claims.iat,
+      exp: verified.claims.exp,
+      last4: operatorLicenseLast4(licenseKey),
+      cachedAt: Date.now()
+    })
+    return { ok: true, status: status() }
   }
   const { device } = currentDevice()
   const client = getLicenseClient(getSettings().licenseServerUrl)

@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS seats (
   hostname TEXT,
   sso_email TEXT,
   license TEXT,
-  approval TEXT
+  approval TEXT,
+  license_jti TEXT
 );
 
 CREATE TABLE IF NOT EXISTS asks (
@@ -154,3 +155,17 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 
 CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts);
+
+CREATE TABLE IF NOT EXISTS issued_licenses (
+  jti TEXT PRIMARY KEY,
+  last4 TEXT NOT NULL,
+  key_hash TEXT NOT NULL,
+  days INTEGER NOT NULL,
+  iat INTEGER NOT NULL,
+  exp INTEGER NOT NULL,
+  revoked INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  created_by TEXT
+);
+
+CREATE INDEX IF NOT EXISTS issued_licenses_exp ON issued_licenses(exp);

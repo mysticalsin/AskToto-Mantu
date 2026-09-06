@@ -17,6 +17,7 @@ vi.mock('../store', () => ({
   }
 }))
 
+import { generateOperatorLicense } from '@shared/operator-license'
 import { activate, identitySnapshot, resetRegisterAttemptForTests, status } from './activate'
 import { readInstallIdentity } from './install'
 
@@ -27,7 +28,7 @@ describe('member-pass activate foundation', () => {
     ud = mkdtempSync(join(tmpdir(), 'metis-activate-'))
     ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((n: string) => (n === 'userData' ? ud : join(ud, n)))
     ;(app.getVersion as ReturnType<typeof vi.fn>).mockReturnValue('1.6.6-test')
-    testSettings = { licenseServerUrl: '' } as Settings
+    testSettings = { licenseServerUrl: '', operatorIngestSecret: 'operator-ingest-test-secret' } as Settings
     resetRegisterAttemptForTests()
   })
 
@@ -53,6 +54,31 @@ describe('member-pass activate foundation', () => {
     const s = status()
     expect(s.state).toBe('unlicensed')
     expect(s.source).toBe('none')
+  })
+
+  it('activates an Operator-generated license and rejects expiry', async () => {
+    const minted = await generateOperatorLicense('operator-ingest-test-secret', {
+      days: 30,
+      now: Date.now(),
+      jti: 'aabbccddeeff0011'
+    })
+    const r = await activate(minted.token)
+    expect(r.ok).toBe(true)
+    expect(r.status.state).toBe('licensed')
+    expect(r.status.edition).toBe('pro')
+    expect(r.status.source).toBe('operator')
+    expect(r.status.expiresAt).toBe(minted.claims.exp * 1000)
+    expect(status().state).toBe('licensed')
+
+    const expired = await generateOperatorLicense('operator-ingest-test-secret', {
+      days: 1,
+      now: Date.now() - 48 * 60 * 60 * 1000,
+      jti: '1122334455667788'
+    })
+    const bad = await activate(expired.token)
+    expect(bad.ok).toBe(false)
+    expect(bad.error).toBe('expired')
+    expect(status().state).toBe('licensed')
   })
 
   it('identity snapshot is local, fast, and honest about a pending member number', () => {

@@ -1,7 +1,15 @@
 import { aggregateCacheSlice, estimateCacheCost, formatUsdEstimate, type AskLogLine } from '../../src/shared/operator'
 import { CRM_STATUSES, type CrmSendRow, type CrmStatus } from './crm'
 import { missingCloudflareOverview, type CloudflareOverview } from './cloudflare'
-import { approvalOf, isApprovedSeat, isRealSeat, LICENSES_EMPTY, type SeatApproval } from './fleet'
+import {
+  approvalOf,
+  isApprovedSeat,
+  issuedLicenseActive,
+  isRealSeat,
+  LICENSES_EMPTY,
+  parseLicenseId,
+  type SeatApproval
+} from './fleet'
 import { looksLikeSecret, safeChips, type SafeChip } from './redact'
 import type { EventRow, OperatorStore, PulseRow, SeatRow, VaultKeyMeta } from './store'
 
@@ -133,7 +141,18 @@ export interface DashboardPayload {
   licenses: {
     empty: boolean
     error: string | null
-    rows: { device: string; hostname: string | null; email: string | null; os: string; appVersion: string; license: string | null; approval: SeatApproval; lastSeen: number }[]
+    rows: {
+      device: string
+      hostname: string | null
+      email: string | null
+      os: string
+      appVersion: string
+      license: string | null
+      approval: SeatApproval
+      lastSeen: number
+      keysAuthorized: boolean
+    }[]
+    issued: { jti: string; last4: string; days: number; exp: number; revoked: number; createdAt: number }[]
   }
   roi: {
     costToday: string | null
@@ -401,6 +420,14 @@ export async function buildDashboard(
   const packs = await store.listPacks()
   const storedEvents = await store.listEvents(80)
   const vault = await store.listVaultMeta()
+  const issued = await store.listIssuedLicenses()
+  const activeJti = new Set(issued.filter((l) => issuedLicenseActive(l, now)).map((l) => l.jti))
+  const keysOn = (s: SeatRow): boolean => {
+    if ((s.approval || '').trim().toLowerCase() === 'revoked') return false
+    if (isApprovedSeat(s)) return true
+    const jti = parseLicenseId(s.license_jti)
+    return Boolean(jti && activeJti.has(jti))
+  }
   const seatsById = new Map(seats.map((s) => [s.device_id, s]))
 
   const live = seats.filter((s) => now - s.last_seen < ONLINE_MS).length
@@ -672,12 +699,21 @@ export async function buildDashboard(
           appVersion: s.app_version,
           license: s.license && !looksLikeSecret(s.license) ? s.license : null,
           approval: approvalOf(s),
-          lastSeen: s.last_seen
+          lastSeen: s.last_seen,
+          keysAuthorized: keysOn(s)
         }))
       return {
         empty: rows.length === 0,
         error: rows.length === 0 ? LICENSES_EMPTY : null,
-        rows
+        rows,
+        issued: issued.map((r) => ({
+          jti: r.jti,
+          last4: r.last4,
+          days: r.days,
+          exp: r.exp,
+          revoked: r.revoked,
+          createdAt: r.created_at
+        }))
       }
     })(),
     roi: {

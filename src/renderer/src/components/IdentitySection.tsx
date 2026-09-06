@@ -1,7 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { AlertCircle, Loader2 } from 'lucide-react'
 import { emptyLicenseStatus, type IdentitySnapshot, type MemberActivateResult } from '@shared/ipc'
-import { IdentityCard } from './IdentityCard'
+import { formatLicenseExpiry, IdentityCard } from './IdentityCard'
 import { prefersReducedMotion } from '../lib/identity-card-motion'
 
 const ctl =
@@ -21,6 +21,11 @@ const LOADING: IdentitySnapshot = {
 
 function activateCopy(r: MemberActivateResult | null): string | null {
   if (!r) return null
+  if (r.ok) {
+    if (r.status.expiresAt) return `License is active until ${formatLicenseExpiry(r.status.expiresAt)}.`
+    return 'License is active.'
+  }
+  if (r.error === 'expired') return 'This license has expired.'
   if (r.error === 'activation_unavailable') {
     return 'Activation is not open yet. Métis checked the key and did not apply it.'
   }
@@ -95,7 +100,7 @@ export function IdentitySection(): JSX.Element {
         <div>
           <div className="text-[13px] font-semibold leading-snug text-[color:var(--cl-foreground)]">License</div>
           <p className="mt-1 text-[12px] text-[color:var(--cl-muted-foreground)]">
-            Activation is not open yet. A key you enter is checked, then returned unused.
+            Paste a license Tony generated in Operator. Selling keys stay closed.
           </p>
         </div>
         <div className="flex items-center justify-between gap-3 text-[12px]">
@@ -107,7 +112,12 @@ export function IdentitySection(): JSX.Element {
                 : snap.license.edition === 'pro'
                   ? 'Pro'
                   : 'Personal'
-              : 'Personal'}
+              : snap.license.state === 'expired'
+                ? 'Expired'
+                : 'Personal'}
+            {snap.license.expiresAt && (snap.license.state === 'licensed' || snap.license.state === 'grace')
+              ? ` · active until ${formatLicenseExpiry(snap.license.expiresAt)}`
+              : ''}
           </span>
         </div>
         <label htmlFor={keyId} className="flex flex-col gap-1">

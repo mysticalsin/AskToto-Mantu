@@ -13,4 +13,20 @@ describe('licenseMeta', () => {
     )
     expect(OPERATOR_SEAT_NOT_APPROVED).toMatch(/not approved/)
   })
+
+  it('prefers an active Identity Operator license and sends jti, never the raw key', () => {
+    const raw = 'METIS-OP-1.aabbccddeeff0011.1725000000.1727592000.secret-sig-value'
+    expect(
+      licenseMeta({ licenseValid: false }, { license: 'licensed', licenseLast4: 'alue', licenseId: 'aabbccddeeff0011' })
+    ).toEqual({
+      license: 'licensed',
+      licenseLast4: 'alue',
+      licenseId: 'aabbccddeeff0011'
+    })
+    expect(
+      JSON.stringify(
+        licenseMeta({ licenseKey: raw, licenseValid: false }, { license: 'licensed', licenseLast4: 'alue', licenseId: 'aabbccddeeff0011' })
+      )
+    ).not.toContain('secret-sig-value')
+  })
 })

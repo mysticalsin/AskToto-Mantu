@@ -21,7 +21,7 @@ export const DEFAULT_GRACE_DAYS = 14
 
 export type LicenseEdition = 'personal' | 'pro' | 'enterprise'
 export type LicenseState = 'unlicensed' | 'licensed' | 'grace' | 'expired'
-export type LicenseSource = 'none' | 'cache' | 'mdm' | 'file'
+export type LicenseSource = 'none' | 'cache' | 'mdm' | 'file' | 'operator'
 export type SerialKind = 'hardware' | 'install'
 
 export type MemberLicenseError =
