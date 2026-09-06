@@ -14,7 +14,8 @@ describe('dataTable', () => {
     expect(html).toContain('<th>Created at</th>')
     expect(html).toContain('<th>Name</th>')
     expect(html).toContain('<td>heartbeat</td>')
-    expect(html).toContain('overflow-x:auto')
+    expect(html).toContain('class="table-wrap"')
+    expect(html).not.toContain('style="')
   })
 
   it('renders an emptyState (title + description) instead of a table when rows is empty', () => {

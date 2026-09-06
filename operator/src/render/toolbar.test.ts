@@ -37,8 +37,12 @@ describe('toolbar', () => {
     expect(html).toContain('<b>search</b>')
     expect(html).toContain('>View<')
     expect(html).toContain('sticky-header')
+    expect(html).toContain('glass')
   })
   it('never renders an em dash', () => {
     expect(toolbar({ left: 'x' })).not.toMatch(/—/)
+  })
+  it('never emits an inline style attribute (plan D6)', () => {
+    expect(toolbar({ left: 'x' })).not.toContain('style="')
   })
 })

@@ -1,6 +1,7 @@
 /**
  * Reference MetricTable.tsx / GeoTable: grid `1fr auto auto auto`, 32px rows, a full-row
- * proportional bar behind the label (`--def-200`, hover blue-200), sortable headers via
+ * proportional bar behind the label (an inline SVG `.row-bar` rect, not a style attribute --
+ * plan D6 tightens CSP to `style-src 'self'`, no `'unsafe-inline'`), sortable headers via
  * `data-sort` attributes, and extra columns that hide by the table's own *container* width
  * (650px / 350px / 150px), not the viewport (operator/shoey-ref/SPEC.md rule 8).
  */
@@ -53,8 +54,8 @@ export function metricTable(opts: {
     ? opts.rows
         .map((r) => {
           const pct = maxBar > 0 ? Math.round(((r.barValue ?? 0) / maxBar) * 100) : 0
-          return `<div class="mt-row" role="row" ${r.attrs || ''}>
-            <span class="mt-bar" style="width:${pct}%" aria-hidden="true"></span>
+          return `<div class="mt-row" role="row" data-stagger ${r.attrs || ''}>
+            <svg class="row-bar" aria-hidden="true"><rect width="${pct}%" height="100%" data-grow/></svg>
             <span class="mt-label" role="cell">${r.icon || ''}<span>${esc(r.label)}</span></span>
             ${opts.columns
               .map((c) => `<span class="mt-col${hideClass(c.hideBelowPx)}" role="cell">${r.cells[c.key] ?? ''}</span>`)

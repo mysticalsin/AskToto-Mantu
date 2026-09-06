@@ -25,9 +25,10 @@ describe('metricTable', () => {
     expect(html).toContain('mt-hide-650')
     expect(html).toContain('mt-hide-350')
     expect(html).toContain('mt-hide-150')
-    expect(html).toContain('width:100%')
+    expect(html).toContain('<rect width="100%" height="100%" data-grow/>')
     const secondBarPct = Math.round((37 / 58) * 100)
-    expect(html).toContain(`width:${secondBarPct}%`)
+    expect(html).toContain(`<rect width="${secondBarPct}%" height="100%" data-grow/>`)
+    expect(html).not.toContain('style="')
   })
 
   it('renders headerIcons (top-8 flags), truncated at 8', () => {

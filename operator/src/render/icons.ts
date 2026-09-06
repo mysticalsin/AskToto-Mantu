@@ -34,7 +34,12 @@ export const NAV_ICON_PATHS: Record<string, string> = {
     '<path d="m7 15 5 5 5-5"/><path d="m7 9 5-5 5 5"/>',
   menu:
     '<path d="M4 12h16"/><path d="M4 6h16"/><path d="M4 18h16"/>',
-  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>'
+  x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  'users-round':
+    '<path d="M18 21a8 8 0 0 0-16 0"/><circle cx="10" cy="8" r="5"/><path d="M22 20c0-3.37-2-6.5-4-8a5 5 0 0 0-.45-8.3"/>',
+  plug: '<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>',
+  'scroll-text':
+    '<path d="M15 12h-5"/><path d="M15 8h-5"/><path d="M19 17V5a2 2 0 0 0-2-2H4"/><path d="M8 21h12a2 2 0 0 0 2-2v-1a1 1 0 0 0-1-1H11a1 1 0 0 0-1 1v1a2 2 0 1 1-4 0V5a2 2 0 1 0-4 0v2a1 1 0 0 0 1 1h3"/>'
 }
 
 /** Icon-by-kind tint map (Tony 9c2). Every ingest kind gets a fixed color and glyph. */

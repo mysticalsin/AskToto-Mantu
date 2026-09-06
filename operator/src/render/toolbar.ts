@@ -26,10 +26,10 @@ export function viewButton(opts: { attrs?: string }): string {
 }
 
 /** The full sticky toolbar row: left group, optional search, right group (defaults to a
- * `viewButton()` when `right` is omitted). */
+ * `viewButton()` when `right` is omitted). Plan 3.7 item 3: glass, blur 24px. */
 export function toolbar(opts: { left?: string; right?: string; search?: string }): string {
   const right = opts.right ?? viewButton({})
-  return `<div class="page-toolbar sticky-header">
+  return `<div class="page-toolbar sticky-header glass">
     <div class="top-left">${opts.left || ''}</div>
     ${opts.search || ''}
     <div class="top-right">${right}</div>

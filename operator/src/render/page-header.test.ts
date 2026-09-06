@@ -33,4 +33,7 @@ describe('pageHeader', () => {
     expect(html).not.toContain('<y>')
     expect(html).not.toMatch(/—/)
   })
+  it('never emits an inline style attribute (plan D6)', () => {
+    expect(pageHeader({ title: 'x', subtitle: 'y', action: '<button>Go</button>' })).not.toContain('style="')
+  })
 })

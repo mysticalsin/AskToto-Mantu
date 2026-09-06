@@ -1,10 +1,14 @@
 /**
  * Small, atomic render primitives shared by every section page. Pure functions, no DOM,
  * `esc()` on every interpolated value. See operator/src/render/README.md (plan D2).
+ *
+ * No hard-coded hex anywhere in this file (plan P0.3): the one function that used to need a
+ * per-identity colour (avatar()) computes an HSL hue and lets operator/src/spa/css.ts's
+ * `--avatar-sat` / `--avatar-light` tokens (theme-aware) supply the rest.
  */
 import { esc } from './index'
 import { COUNTRY_NAMES } from './countries'
-import { iconSvg, KIND_ICON_PATHS, OS_ICON_PATHS } from './icons'
+import { iconSvg, KIND_ICON_PATHS, NAV_ICON_PATHS, OS_ICON_PATHS } from './icons'
 
 /** 1,234,567 -> "1.2M". Never invents precision the source data does not have. */
 export function formatCompact(n: number): string {
@@ -73,11 +77,6 @@ export function osChip(os: string | null | undefined): string {
   return `<span class="os-chip">${glyph}<span>${esc(label)}</span></span>`
 }
 
-const AVATAR_PALETTE = [
-  '#dbeafe', '#dcfce7', '#fef3c7', '#fce7f3', '#ede9fe', '#fee2e2', '#e0f2fe', '#f1f5f9'
-]
-const AVATAR_INK = '#0f172a'
-
 function hashString(s: string): number {
   let h = 0
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0
@@ -91,14 +90,24 @@ function initialsOf(name: string): string {
   return (parts[0][0] + parts[1][0]).toUpperCase()
 }
 
-/** Initials tile with a deterministic color keyed off the identity string, plus an optional
- * green "live" dot. Never a photo Métis does not have. */
+/** 12 hue buckets, 30deg apart -- enough spread to tell identities apart at a glance without an
+ * inline style attribute (plan D6: CSP tightens to `style-src 'self'`, no `'unsafe-inline'`, so
+ * a per-instance `style="--avatar-hue:N"` would be blocked at runtime). `data-hue` picks the
+ * bucket; operator/src/spa/css.ts carries the twelve `[data-hue="N"]` rules that set
+ * `--avatar-hue` from it. */
+const AVATAR_HUE_BUCKETS = 12
+
+/** Initials tile with a deterministic tint from the identity hash (plan 3.6: "8px radius
+ * squircle feel"), plus an optional live dot bottom-right. Never a photo Métis does not have.
+ * The tint is a bucketed `data-hue` attribute, never an inline style or a colour literal --
+ * operator/src/spa/css.ts's `[data-hue="N"]` rules set `--avatar-hue`, and the `.avatar` rule
+ * supplies the theme-aware saturation and lightness via `--avatar-sat` / `--avatar-light`. */
 export function avatar(opts: { name: string; email?: string | null; live?: boolean }): string {
   const identity = opts.name || opts.email || '?'
-  const bg = AVATAR_PALETTE[hashString(identity) % AVATAR_PALETTE.length]
+  const hueBucket = hashString(identity) % AVATAR_HUE_BUCKETS
   const initials = initialsOf(opts.name || opts.email || '?')
   const dot = opts.live ? '<i class="avatar-live" aria-hidden="true"></i>' : ''
-  return `<span class="avatar" style="background:${bg};color:${AVATAR_INK}" title="${esc(identity)}">${esc(initials)}${dot}</span>`
+  return `<span class="avatar" data-hue="${hueBucket}" title="${esc(identity)}">${esc(initials)}${dot}</span>`
 }
 
 export type IngestKind =
@@ -119,7 +128,7 @@ export function kindBadge(kind: string): string {
   return `<span class="kind-badge kind-${esc(tintKey)}">${icon}<span>${esc(label)}</span></span>`
 }
 
-/** Métis / Métis Light tier badge. Renders nothing for an unlicensed/unknown seat — never a
+/** Métis / Métis Light tier badge. Renders nothing for an unlicensed/unknown seat, never a
  * fabricated tier. */
 export function tierBadge(tier: 'metis' | 'metis-light' | null | undefined): string {
   if (!tier) return ''
@@ -129,7 +138,7 @@ export function tierBadge(tier: 'metis' | 'metis-light' | null | undefined): str
 
 export type StatusDotState = 'live' | 'idle' | 'pending' | 'failed' | 'revoked'
 
-/** Color dot plus text label — never color alone (a11y). */
+/** Color dot plus text label, never color alone (a11y). */
 export function statusDot(opts: { state: StatusDotState; label: string }): string {
   return `<span class="status-dot status-dot-${esc(opts.state)}"><i aria-hidden="true"></i><span>${esc(opts.label)}</span></span>`
 }
@@ -141,13 +150,15 @@ export function clientChip(version: string | null | undefined): string {
 }
 
 /** Up/down/flat percent delta chip (green/red/neutral), matching the reference's MetricTiles
- * delta chips. */
-export function deltaChip(pct: number | null | undefined): string {
+ * delta chips. `data-flash-key` (plan 3.5b) lets motion-bind.ts flash() this element when its
+ * live-refresh value changes and it re-renders with the same key. */
+export function deltaChip(pct: number | null | undefined, opts?: { flashKey?: string }): string {
   if (pct == null || !Number.isFinite(pct)) return ''
   const dir = pct > 0 ? 'up' : pct < 0 ? 'down' : 'flat'
   const arrow = dir === 'up' ? '↑' : dir === 'down' ? '↓' : '→'
   const value = `${pct > 0 ? '+' : ''}${Math.round(pct * 10) / 10}%`
-  return `<span class="delta-chip delta-${dir}">${arrow} ${esc(value)}</span>`
+  const flashAttr = opts?.flashKey ? ` data-flash-key="${esc(opts.flashKey)}" data-pop` : ''
+  return `<span class="delta-chip delta-${dir}"${flashAttr}>${arrow} ${esc(value)}</span>`
 }
 
 /** Wraps inline content with a `title` tooltip plus an `aria-describedby` span, so the hint
@@ -155,6 +166,14 @@ export function deltaChip(pct: number | null | undefined): string {
 export function tooltip(inner: string, text: string): string {
   const id = `tt-${hashString(text).toString(36)}`
   return `<span class="tooltip-host" title="${esc(text)}" aria-describedby="${id}">${inner}<span id="${id}" class="sr-only">${esc(text)}</span></span>`
+}
+
+/** Plan 3.7 item 10: "every number has a source, hover any KPI for its formula and table."
+ * `formula` is the human sentence, `source` is the concrete data source ("asks table, last 24h,
+ * excluding usage-* seats"). Rendered as a small "?" affordance so it never crowds the numeral
+ * itself; the full text reaches mouse and screen-reader users via tooltip(). */
+export function sourceTooltip(formula: string, source: string): string {
+  return tooltip('<span class="source-tooltip-mark" aria-hidden="true">?</span>', `${formula}. Source: ${source}`)
 }
 
 /** N skeleton loading rows for a table body, shown while a client re-fetch is in flight. */
@@ -169,4 +188,130 @@ export function emptyState(opts: { title: string; description?: string; mark?: s
   const mark = opts.mark ?? '<span class="empty-dash" aria-hidden="true"></span>'
   const desc = opts.description ? `<p>${esc(opts.description)}</p>` : ''
   return `<div class="empty-data" role="status">${mark}<strong>${esc(opts.title)}</strong>${desc}</div>`
+}
+
+/** Connector logo, served from the Workers Static Assets binding (plan D5, 3.6): an `<img>`
+ * pointing at `/assets/logos/<kind>.svg` (a real brand mark or the build script's generated
+ * monogram, operator/scripts/build-assets.mjs, never chosen here). `alt` is always the label so
+ * a slow/broken image still reads correctly. */
+export function logoGlyph(kind: string, label: string, opts?: { size?: number }): string {
+  const size = opts?.size ?? 28
+  return `<img class="logo-glyph" src="/assets/logos/${esc(kind)}.svg" alt="${esc(label)}" width="${size}" height="${size}" loading="lazy">`
+}
+
+export type CatalogTileState = 'ready' | 'needs-oauth' | 'connected'
+
+/** Plan 6.10 / 3.7 item 6: a catalog tile in the Connectors page. Ready tiles are clickable;
+ * `needs-oauth` tiles render identically but inert (lock 12: "inert beats fake") with the exact
+ * sentence the plan requires; `connected` tiles show the live status dot and count. */
+export function catalogTile(opts: {
+  kind: string
+  label: string
+  transport: 'mcp' | 'rest'
+  state: CatalogTileState
+  connections?: number
+  attrs?: string
+}): string {
+  const transportBadge = `<span class="chip catalog-tile-transport">${opts.transport === 'mcp' ? 'MCP' : 'API'}</span>`
+  const status =
+    opts.state === 'connected'
+      ? statusDot({
+          state: 'live',
+          label: opts.connections ? `Connected, ${opts.connections} connection${opts.connections === 1 ? '' : 's'}` : 'Connected'
+        })
+      : opts.state === 'needs-oauth'
+        ? '<span class="catalog-tile-note">Needs OAuth (phase 2)</span>'
+        : ''
+  const inert = opts.state === 'needs-oauth' ? ' data-inert aria-disabled="true"' : ''
+  return `<button type="button" class="catalog-tile catalog-tile-${esc(opts.state)}" data-catalog-tile="${esc(opts.kind)}"${inert} ${opts.attrs || ''}>
+    ${logoGlyph(opts.kind, opts.label)}
+    <span class="catalog-tile-name">${esc(opts.label)}</span>
+    ${transportBadge}
+    ${status}
+  </button>`
+}
+
+/** Plan 6.1 / 3.7 item 7: the "⌘K" command palette shell, list markup, and search dropdown
+ * pattern reuse this generic tab strip for anywhere a small set of named views needs one. */
+export function tabs(opts: { items: { id: string; label: string; active?: boolean }[]; attrs?: string }): string {
+  return `<div class="tabs" role="tablist" ${opts.attrs || ''}>${opts.items
+    .map(
+      (t) =>
+        `<button type="button" class="tab${t.active ? ' on' : ''}" role="tab" aria-selected="${t.active ? 'true' : 'false'}" data-tab="${esc(t.id)}">${esc(t.label)}</button>`
+    )
+    .join('')}</div>`
+}
+
+export type ChipTone = 'default' | 'ok' | 'warn' | 'danger' | 'accent'
+
+/** Generic pill chip. `tone` maps to the same status colours as statusDot()/deltaChip() so a
+ * page never invents its own colour meaning. */
+export function chip(opts: { label: string; tone?: ChipTone; icon?: string }): string {
+  const tone = opts.tone && opts.tone !== 'default' ? ` chip-${opts.tone}` : ''
+  return `<span class="chip${tone}">${opts.icon || ''}${esc(opts.label)}</span>`
+}
+
+/** Segmented control (reference: theme System/Light/Dark). A generic version of the same
+ * `.theme-group`/`.theme-btn` pattern for anywhere else a small exclusive choice is shown as
+ * a row of pill buttons (plan 6.11 Appearance: density, reduced motion). */
+export function segmented(opts: { items: { id: string; label: string; active?: boolean }[]; attrs?: string }): string {
+  return `<div class="segmented" role="radiogroup" ${opts.attrs || ''}>${opts.items
+    .map(
+      (i) =>
+        `<button type="button" class="segmented-item${i.active ? ' on' : ''}" role="radio" aria-checked="${i.active ? 'true' : 'false'}" data-segmented="${esc(i.id)}">${esc(i.label)}</button>`
+    )
+    .join('')}</div>`
+}
+
+export type ToastKind = 'info' | 'success' | 'error'
+
+/** Plan 6.1: bottom-right toast, one at a time, request id on errors, Undo where the action
+ * supports it. Markup only, operator/client owns the show/auto-dismiss timer. */
+export function toast(opts: { message: string; kind?: ToastKind; requestId?: string; undo?: boolean }): string {
+  const kind = opts.kind ?? 'info'
+  const requestId = opts.requestId ? `<span class="toast-request-id">${esc(opts.requestId)}</span>` : ''
+  const undo = opts.undo ? '<button type="button" class="btn toast-undo" data-toast-undo>Undo</button>' : ''
+  return `<div class="toast toast-${esc(kind)}" role="status" data-toast>
+    <span class="toast-message">${esc(opts.message)}</span>
+    ${requestId}
+    ${undo}
+    <button type="button" class="toast-dismiss" data-toast-dismiss aria-label="Dismiss">${iconSvg(NAV_ICON_PATHS.x, { class: 'tool-ic' })}</button>
+  </div>`
+}
+
+/** Plan 9, "no window.prompt": a small modal dialog with a labeled (optionally masked) input,
+ * Cancel and a named confirm action. operator/client owns focus trap, Escape-to-cancel and the
+ * reveal toggle; this is markup only, hidden by default. */
+export function dialog(opts: {
+  id: string
+  title: string
+  label: string
+  placeholder?: string
+  confirmLabel?: string
+  masked?: boolean
+}): string {
+  const inputType = opts.masked ? 'password' : 'text'
+  const reveal = opts.masked
+    ? `<button type="button" class="tool dialog-reveal" data-dialog-reveal aria-pressed="false">Show</button>`
+    : ''
+  return `<div id="${esc(opts.id)}" class="dialog-overlay" hidden data-dialog>
+    <div class="dialog-panel" role="dialog" aria-modal="true" aria-labelledby="${esc(opts.id)}-title">
+      <h4 id="${esc(opts.id)}-title">${esc(opts.title)}</h4>
+      <label class="dialog-label" for="${esc(opts.id)}-input">${esc(opts.label)}</label>
+      <div class="dialog-input-wrap">
+        <input id="${esc(opts.id)}-input" type="${inputType}" class="dialog-input" placeholder="${esc(opts.placeholder || '')}" autocomplete="off">
+        ${reveal}
+      </div>
+      <div class="dialog-actions">
+        <button type="button" class="btn" data-dialog-cancel>Cancel</button>
+        <button type="button" class="btn primary" data-dialog-confirm>${esc(opts.confirmLabel || 'Confirm')}</button>
+      </div>
+    </div>
+  </div>`
+}
+
+/** Plan Settings › Audit log: a CSV export affordance next to a table. Markup only; the href
+ * is the real export route (never a client-only download of what is on screen). */
+export function exportMenu(opts: { csvHref: string; label?: string }): string {
+  return `<a class="tool export-menu" href="${esc(opts.csvHref)}" data-export-link>${iconSvg(NAV_ICON_PATHS['chevrons-up-down'], { class: 'tool-ic' })}<span>${esc(opts.label || 'Export CSV')}</span></a>`
 }

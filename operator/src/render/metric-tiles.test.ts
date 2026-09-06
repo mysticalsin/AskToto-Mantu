@@ -7,10 +7,11 @@ describe('metricTiles', () => {
       { label: 'Live seats', value: '3', delta: 8.9 },
       { label: 'Live · 30 min', value: '31', live: true }
     ])
-    expect((html.match(/class="card mtiles-card"/g) || []).length).toBe(1)
+    expect((html.match(/class="card mtiles-card mtiles-card-flush"/g) || []).length).toBe(1)
     expect((html.match(/class="mtile"/g) || []).length).toBe(2)
     expect(html).toContain('delta-up')
     expect(html).toContain('class="live"')
+    expect(html).not.toContain('style="')
   })
 
   it('renders caption and spark when provided', () => {
