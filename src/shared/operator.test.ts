@@ -121,6 +121,7 @@ describe('resolveOperatorUrl', () => {
     expect(resolveOperatorUrl({}, {})).toBe(DEFAULT_OPERATOR_URL)
     expect(resolveOperatorUrl({ operatorUrl: '' }, {})).toBe(DEFAULT_OPERATOR_URL)
     expect(resolveOperatorUrl({ operatorUrl: '   ' }, {})).toBe(DEFAULT_OPERATOR_URL)
+    expect(resolveOperatorUrl({}, { METIS_OPERATOR_URL: '   ' })).toBe(DEFAULT_OPERATOR_URL)
   })
 
   it('prefers Settings, then METIS_OPERATOR_URL, and strips a trailing slash', () => {
