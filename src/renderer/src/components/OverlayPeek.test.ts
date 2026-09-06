@@ -12,6 +12,8 @@ describe('OverlayPeek hide rest is invisible', () => {
     expect(peek).toMatch(/data-hug-width=\{hidden \? undefined/)
     expect(app).toMatch(/overlayHoverIdle/)
     expect(app).toMatch(/overlayHoverForced/)
+    expect(app).toMatch(/reveal-now/)
+    expect(app).toMatch(/overlayRestsHidden\(overlayLayout\)/)
     const hide = css.slice(css.indexOf('.overlay-hide-target {'), css.indexOf('.overlay-peek {'))
     expect(hide).toMatch(/width:\s*8px/)
     expect(hide).toMatch(/height:\s*2px/)

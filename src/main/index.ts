@@ -183,6 +183,7 @@ import {
 } from './island/cursor-watch'
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
 import {
+  ASK_REVEAL_MIN_HEIGHT_PX,
   isIncompleteAskReveal,
   overlayAllowsHugWidth,
   overlayAllowsMinimize,
@@ -1910,7 +1911,7 @@ function resizeTo(height: number): void {
     minimized: isMinimized,
     settingsOpen: settingsSurfaceOpen,
     reportedHeight: height,
-    minBarHeight: BAR_HEIGHT
+    minBarHeight: ASK_REVEAL_MIN_HEIGHT_PX
   })
   const h = clampHeight(Math.round(lifted), workArea.height)
   const b = win.getBounds()
@@ -2175,12 +2176,17 @@ function restoreBarWidth(): void {
   const display = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
   const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
-  const revealedHeight = Math.max(b.height, lastBarHeight, BAR_HEIGHT)
+  const revealedHeight = Math.max(b.height, lastBarHeight, BAR_HEIGHT, ASK_REVEAL_MIN_HEIGHT_PX)
   const x = currentWidth === BAR_WIDTH ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
   currentWidth = BAR_WIDTH
   // Already the below-notch bar — do not setBounds y=0 and fight the OS clamp.
-  if (b.x === x && b.y === y && b.width === BAR_WIDTH && b.height === revealedHeight) return
+  if (b.x === x && b.y === y && b.width === BAR_WIDTH && b.height === revealedHeight) {
+    notifyOverlayCursorHover(true)
+    return
+  }
   win.setBounds({ x, y, width: BAR_WIDTH, height: revealedHeight }, false)
+  // Open Ask chrome (hasAsk). Width-only restore left OverlayPeek as Show Métis (Ultron a40a22f).
+  notifyOverlayCursorHover(true)
 }
 
 /**

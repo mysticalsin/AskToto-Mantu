@@ -546,7 +546,10 @@ describe('DESIGN.md overlay contract', () => {
 describe('island reveal/collapse wiring (index.ts)', () => {
   it('restoreBarWidth grows height at the same topClamp Y; resizeTo pins that Y', () => {
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
-    expect(index).toMatch(/revealedHeight = Math\.max\(b\.height, lastBarHeight, BAR_HEIGHT\)/)
+    expect(index).toMatch(
+      /revealedHeight = Math\.max\(b\.height, lastBarHeight, BAR_HEIGHT, ASK_REVEAL_MIN_HEIGHT_PX\)/
+    )
+    expect(index).toMatch(/notifyOverlayCursorHover\(true\)/)
     expect(index).toMatch(/const y = topClamp\(liveOverlayLayout\(\), getDisplayMetrics\(display\), ISLAND_TOP_MARGIN\)/)
     expect(index).toMatch(/function resizeTo/)
     expect(index).toMatch(/never setBounds on a stay tick/)
@@ -739,7 +742,10 @@ describe('overlay chrome modes (hide / island / bar)', () => {
     expect(css).toMatch(/\.overlay-chrome-diagram--bar/)
     expect(settings).not.toMatch(/label="Auto-hide overlay"/)
     expect(app).toMatch(/parseOverlayLayout/)
+    expect(app).toMatch(/overlayShowPeek\(/)
+    expect(app).toMatch(/overlayRestsHidden\(overlayLayout\)/)
     expect(app).toMatch(/overlayRestsHidden\(overlayLayout\) \? 'hide' : 'island'/)
+    expect(app).toMatch(/reveal-now/)
     expect(app).toMatch(/pointer-leave/)
     expect(app).toMatch(/onOverlayCursorHover/)
     expect(app).toMatch(/dwell-elapsed/)
