@@ -30,6 +30,7 @@ declare module 'three' {
     lerp(v: Vector3, alpha: number): this
     normalize(): this
     multiplyScalar(s: number): this
+    setScalar(s: number): this
     clone(): Vector3
     unproject(camera: Camera): this
   }
@@ -57,8 +58,11 @@ declare module 'three' {
 
   export class Object3D {
     layers: Layers
-    rotation: { z: number }
-    add(obj: Object3D): this
+    position: Vector3
+    rotation: { x: number; y: number; z: number }
+    scale: Vector3
+    add(...obj: Object3D[]): this
+    remove(...obj: Object3D[]): this
   }
 
   export class Scene extends Object3D {
@@ -67,6 +71,31 @@ declare module 'three' {
   }
 
   export class Group extends Object3D {}
+
+  export class Material {
+    opacity: number
+    dispose(): void
+  }
+
+  export class PointsMaterial extends Material {
+    constructor(params?: Record<string, unknown>)
+  }
+
+  export class LineBasicMaterial extends Material {
+    constructor(params?: Record<string, unknown>)
+  }
+
+  export class MeshBasicMaterial extends Material {
+    constructor(params?: Record<string, unknown>)
+  }
+
+  export class LineSegments extends Object3D {
+    constructor(geometry: BufferGeometry, material: Material)
+  }
+
+  export class Mesh extends Object3D {
+    constructor(geometry: BufferGeometry, material: Material)
+  }
 
   export class BufferAttribute {
     constructor(array: ArrayLike<number>, itemSize: number)
@@ -81,6 +110,10 @@ declare module 'three' {
     dispose(): void
   }
 
+  export class SphereGeometry extends BufferGeometry {
+    constructor(radius?: number, widthSegments?: number, heightSegments?: number)
+  }
+
   export class ShaderMaterial {
     uniforms: Record<string, { value: unknown }>
     constructor(params: Record<string, unknown>)
@@ -88,7 +121,7 @@ declare module 'three' {
   }
 
   export class Points extends Object3D {
-    constructor(geometry: BufferGeometry, material: ShaderMaterial)
+    constructor(geometry: BufferGeometry, material: ShaderMaterial | PointsMaterial)
   }
 
   export class DataTexture {
@@ -110,6 +143,7 @@ declare module 'three' {
     setSize(w: number, h: number, updateStyle?: boolean): void
     setClearColor(color: number, alpha?: number): void
     getContext(): WebGLRenderingContext | null
+    render(scene: Scene, camera: Camera): void
     dispose(): void
   }
 
