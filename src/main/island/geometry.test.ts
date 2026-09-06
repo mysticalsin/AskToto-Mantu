@@ -121,7 +121,7 @@ describe('MQA-275 — the notch clamp (topClamp)', () => {
     expect(topClamp('island', m, 8)).toBe(islandSafeTop(m))
     expect(topClamp('hide', m, 8)).toBe(islandSafeTop(m))
     expect(topClamp('hide', m, 8)).toBe(39)
-    expect(hoverRestHeight(m)).toBeLessThan(m.menuBarHeight)
+    expect(hoverRestHeight(m)).toBe(m.workArea.y - m.bounds.y + 1)
     expect(hoverRestHeight(m)).toBeLessThan(44)
     expect(parkAfterExclusiveOnboarding('hide', m, 8).y).toBe(0)
   })
@@ -231,7 +231,7 @@ describe('MQA-275 — the notch clamp (topClamp)', () => {
     expect(topClamp('hide', m, 8)).toBe(40)
     expect(topClamp('bar', m, 8)).toBe(40 + 8)
     expect(hoverRestHeight(m)).toBeLessThan(44)
-    expect(hoverRestHeight(m)).toBeLessThan(40)
+    expect(hoverRestHeight(m)).toBe(Math.min(m.workArea.y - m.bounds.y + 1, 40))
     expect(parkAfterExclusiveOnboarding('hide', m, 8).y).toBe(0)
     expect(topClamp('hide', m, 8)).not.toBe(ISLAND_NOTCH_STRUT_PX)
   })
@@ -343,7 +343,7 @@ describe('MQA-275 — clamp primitives (moved verbatim from index.ts)', () => {
     expect(watch.y).toBe(second.bounds.y)
     expect(watch.width).toBe(second.workArea.width)
     expect(watch.height).toBeLessThan(44)
-    expect(watch.height).toBeLessThan(second.workArea.y)
+    expect(watch.height).toBe(second.workArea.y - second.bounds.y + 1)
   })
 
   it('slideWithinMargin keeps a tall window inside the work area with margin on both edges', () => {
