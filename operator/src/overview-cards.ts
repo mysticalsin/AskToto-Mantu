@@ -33,6 +33,13 @@ function formatPct(n: number | null): string {
   return `${n}%`
 }
 
+function formatListen(mins: number | null): string {
+  if (mins == null) return '0'
+  if (mins < 60) return `${Math.round(mins)} min`
+  const hours = Math.round((mins / 60) * 10) / 10
+  return `${hours} hr`
+}
+
 function trend(values: number[], current?: number): { text: string; cls: string } | null {
   if (current === 0) return null
   if (values.length < 4) return null
@@ -86,6 +93,10 @@ function splitRing(a: number, b: number): string {
   </svg>`
 }
 
+function seriesEmpty(series: number[]): boolean {
+  return series.length === 0 || series.every((v) => v === 0)
+}
+
 function statCard(opts: {
   id: string
   title: string
@@ -94,10 +105,15 @@ function statCard(opts: {
   kind: 'area' | 'line' | 'gauge' | 'ring' | 'choropleth' | 'live-line'
   series: number[]
   chart: string
+  empty?: boolean
+  index?: number
 }): string {
   const current = Number(opts.value.replace(/[^\d.-]/g, ''))
   const d = trend(opts.series, Number.isFinite(current) ? current : undefined)
-  return `<article class="stat-card" data-stat-card="${esc(opts.id)}" data-bklit="${esc(opts.kind)}">
+  const empty = opts.empty ?? seriesEmpty(opts.series)
+  const emptyCls = empty ? ' stat-card-empty' : ''
+  const i = opts.index ?? 0
+  return `<article class="stat-card${emptyCls}" style="--ov-i:${i}" data-stat-card="${esc(opts.id)}" data-bklit="${esc(opts.kind)}">
     <div class="stat-card-head">
       <h3>${esc(opts.title)}</h3>
       ${d ? `<span class="trend-badge ${d.cls}">${esc(d.text)}</span>` : ''}
@@ -114,6 +130,14 @@ function chip(label: string, value: string): string {
   return `<span class="ov-chip"><b>${esc(label)}</b> ${esc(value)}</span>`
 }
 
+function pulseMetric(id: string, label: string, value: string, hint?: string): string {
+  return `<div class="ov-pulse-metric" data-ov-pulse="${esc(id)}">
+    <span class="ov-pulse-label">${esc(label)}</span>
+    <span class="ov-pulse-value">${esc(value)}</span>
+    ${hint ? `<span class="ov-pulse-hint">${esc(hint)}</span>` : ''}
+  </div>`
+}
+
 /** Issue 106: exactly 10 Bklit mini KPI cards from live heartbeats. 0 LLM tokens. */
 export function renderOverviewMini10(data: DashboardPayload): string {
   const ops = data.ops
@@ -121,6 +145,12 @@ export function renderOverviewMini10(data: DashboardPayload): string {
   const countryCount = countries.length
   const cli = ops.cliAsks
   const op = ops.operatorAsks
+  const savedMins = ops.savedMinutes || 0
+  const valueEur = ops.valueEur || 0
+  const rateHint = `at €${HOURLY_RATE_EUR}/hr`
+  const timeSavedLabel = reported(ops.timeSaved)
+  const valueLabel = formatValueEur(valueEur)
+  const savedRing = savedMins > 0 ? Math.min(1, savedMins / (8 * 60)) : 0
   const cards = [
     statCard({
       id: 'unique-sessions',
@@ -147,25 +177,31 @@ export function renderOverviewMini10(data: DashboardPayload): string {
       unit: 'seats',
       kind: 'gauge',
       series: ops.liveSeries,
-      chart: gaugeSvg(ops.liveNow, Math.max(ops.liveNow, ops.live30, ops.uniqueSessions, 1))
+      chart: gaugeSvg(ops.liveNow, Math.max(ops.liveNow, ops.live30, ops.uniqueSessions, 1)),
+      empty: ops.liveNow === 0,
+      index: 2
     }),
     statCard({
       id: 'time-saved',
       title: 'Time saved',
-      value: reported(ops.timeSaved),
+      value: timeSavedLabel,
       unit: 'seat-local',
       kind: 'ring',
       series: [],
-      chart: ringSvg(0, true)
+      chart: ringSvg(savedRing, savedMins <= 0),
+      empty: savedMins <= 0,
+      index: 3
     }),
     statCard({
       id: 'value',
       title: 'Value',
-      value: formatValueEur(ops.valueEur || 0),
-      unit: `at €${HOURLY_RATE_EUR}/hr`,
+      value: valueLabel,
+      unit: rateHint,
       kind: 'area',
       series: [],
-      chart: sparklineArea([], 280, 72)
+      chart: sparklineArea(valueEur > 0 ? [0, valueEur] : [], 280, 72),
+      empty: valueEur <= 0,
+      index: 4
     }),
     statCard({
       id: 'tokens',
@@ -221,19 +257,22 @@ export function renderOverviewMini10(data: DashboardPayload): string {
     chip('Version mix', data.scale.versions.map((v) => `${v.label} ${v.value}`).join(' · ') || '0'),
     chip('Duration', formatDuration(ops.durationMs)),
     chip('Meetings', formatCompact(ops.meetings)),
-    chip('Live · 30 min', formatCompact(ops.live30)),
+    chip('Listen minutes', formatListen(ops.listenMinutes)),
     chip('CLI asks', formatCompact(cli)),
     chip('Operator-key asks', formatCompact(op))
   ].join('')
   const usage = data.usageWindow
   const landed = Boolean(usage && (ops.tokens || ops.apiCalls || usage.tokens || usage.count))
-  const hero = `<header class="ov-hero" data-overview-hero>
+  const hero = `<header class="ov-hero ov-pulse" data-overview-hero>
       <div class="ov-brand">
         <span class="ov-mark" aria-hidden="true"></span>
         <span class="ov-brand-name">Operator</span>
       </div>
-      <p class="ov-headline">Fleet pulse · value at €${HOURLY_RATE_EUR}/hr</p>
-      <p class="ov-lede">Live seats, time saved, and EBITDA proxy at €${HOURLY_RATE_EUR}/hr. Numbers stay empty until heartbeats land — never sample.</p>
+      <div class="ov-pulse-row" data-overview-pulse>
+        ${pulseMetric('live', 'Live', formatCompact(ops.liveNow), 'seats')}
+        ${pulseMetric('saved', 'Time saved', timeSavedLabel)}
+        ${pulseMetric('value', 'Value', valueLabel, rateHint)}
+      </div>
     </header>`
   const liveBanner = usage
     ? `<div class="ov-live ov-live-landed" data-usage-landed="${landed ? '1' : '0'}" data-usage-from="${esc(usage.from)}" data-usage-to="${esc(usage.to)}" data-usage-provider="deepseek">
@@ -257,7 +296,7 @@ export function renderOverviewMini10(data: DashboardPayload): string {
     .map((html) => {
       if (!landed) return html
       if (html.includes('data-stat-card="tokens"') || html.includes('data-stat-card="api-calls"')) {
-        return html.replace('class="stat-card"', 'class="stat-card stat-card-landed"')
+        return html.replace('class="stat-card', 'class="stat-card stat-card-landed')
       }
       return html
     })
