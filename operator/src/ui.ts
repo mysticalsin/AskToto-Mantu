@@ -382,11 +382,18 @@ function renderInstallWorks(data: DashboardPayload): string {
 
 function renderGeoCorner(data: DashboardPayload): string {
   const cities = data.geo
+  const regions = data.geoRegions
   const countries = geoCountryRollup(cities)
   const cityRows = cities
     .map(
       (r) =>
         `<tr data-geo-city="${esc(r.city)}"><td>${esc(r.city)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td></tr>`
+    )
+    .join('')
+  const regionRows = regions
+    .map(
+      (r) =>
+        `<tr><td>${esc(r.region)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td></tr>`
     )
     .join('')
   const countryRows = countries
@@ -397,6 +404,7 @@ function renderGeoCorner(data: DashboardPayload): string {
       <p class="eyebrow">Places</p>
       <div class="tabs" id="geo-tabs">
         <button class="tab on" data-geo-tab="cities" type="button">Cities</button>
+        <button class="tab" data-geo-tab="regions" type="button">Regions</button>
         <button class="tab" data-geo-tab="countries" type="button">Countries</button>
       </div>
       <div data-geo-pane="cities">
@@ -404,6 +412,13 @@ function renderGeoCorner(data: DashboardPayload): string {
           cityRows
             ? `<table data-geo-table="cities"><thead><tr><th>City</th><th>Country</th><th>Seats</th></tr></thead><tbody>${cityRows}</tbody></table>`
             : '<div class="empty">No city geo yet. Heartbeats write request.cf city.</div>'
+        }
+      </div>
+      <div data-geo-pane="regions" hidden>
+        ${
+          regionRows
+            ? `<table data-geo-table="regions"><thead><tr><th>Region</th><th>Country</th><th>Seats</th></tr></thead><tbody>${regionRows}</tbody></table>`
+            : '<div class="empty">No region yet. Next heartbeat writes request.cf.region.</div>'
         }
       </div>
       <div data-geo-pane="countries" hidden>
@@ -419,21 +434,51 @@ function renderGeoCorner(data: DashboardPayload): string {
 }
 
 function renderRealtimeGeo(data: DashboardPayload): string {
-  const rows = data.geo
+  const cityRows = data.geo
     .map(
       (r) =>
         `<tr><td>${esc(r.city)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${r.avg_duration}ms</td></tr>`
     )
     .join('')
+  const regionRows = data.geoRegions
+    .map(
+      (r) =>
+        `<tr><td>${esc(r.region)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${r.avg_duration}ms</td></tr>`
+    )
+    .join('')
+  const countryRows = geoCountryRollup(data.geo)
+    .map((r) => `<tr><td>${esc(r.country)}</td><td>${r.count}</td></tr>`)
+    .join('')
   return `<article class="card" data-realtime-geo>
     <p class="eyebrow">Geo</p>
+    <div class="tabs" data-geo-tabs="realtime">
+      <button class="tab on" data-geo-tab="cities" type="button">City</button>
+      <button class="tab" data-geo-tab="regions" type="button">Regions</button>
+      <button class="tab" data-geo-tab="countries" type="button">Country</button>
+    </div>
     <div class="geo-live">
       <div class="geo-corner-map" data-geo-widget>${choroplethMini(data.map.countries)}</div>
-      ${
-        rows
-          ? `<table data-geo-table="realtime"><thead><tr><th>City</th><th>Country</th><th>Count</th><th>Sessions</th><th>Avg</th></tr></thead><tbody>${rows}</tbody></table>`
-          : '<div class="empty">No city geo on live heartbeats yet.</div>'
-      }
+      <div data-geo-pane="cities">
+        ${
+          cityRows
+            ? `<table data-geo-table="realtime"><thead><tr><th>City</th><th>Country</th><th>Count</th><th>Sessions</th><th>Avg</th></tr></thead><tbody>${cityRows}</tbody></table>`
+            : '<div class="empty">No city geo on live heartbeats yet.</div>'
+        }
+      </div>
+      <div data-geo-pane="regions" hidden>
+        ${
+          regionRows
+            ? `<table data-geo-table="regions"><thead><tr><th>Region</th><th>Country</th><th>Count</th><th>Sessions</th><th>Avg</th></tr></thead><tbody>${regionRows}</tbody></table>`
+            : '<div class="empty">No region yet. Next heartbeat writes request.cf.region.</div>'
+        }
+      </div>
+      <div data-geo-pane="countries" hidden>
+        ${
+          countryRows
+            ? `<table data-geo-table="countries"><thead><tr><th>Country</th><th>Seats</th></tr></thead><tbody>${countryRows}</tbody></table>`
+            : '<div class="empty">No country geo yet.</div>'
+        }
+      </div>
     </div>
   </article>`
 }
@@ -465,20 +510,35 @@ function renderProfiles(rows: ProfileRow[], osFilter?: string): string {
   if (!filtered.length) return '<div class="empty">No seats on the fleet yet.</div>'
   const body = filtered
     .map(
-      (r) => `<tr data-country="${esc(r.country || '')}" data-os="${esc(r.os)}">
+      (r) => {
+        const q = `${r.hostname || ''} ${r.email || ''} ${r.city || ''} ${r.country || ''} ${r.deviceId} ${r.os}`.toLowerCase()
+        return `<tr data-seat-row data-country="${esc(r.country || '')}" data-os="${esc(r.os)}" data-q="${esc(q)}" data-seat-computer="${esc(r.hostname || r.device)}" data-seat-location="${esc([r.city, r.region, r.country].filter(Boolean).join(' · '))}" data-seat-license="${esc(r.license || '')}" data-seat-identity="${esc(r.email || '')}" data-seat-last="${esc(when(r.lastSeen))}" data-seat-version="${esc(r.appVersion)}" data-seat-status="${r.live ? 'Live' : 'Idle'}" data-seat-status-id="${r.live ? 'live' : 'inactive'}">
         <td>${field(r.hostname)}</td>
+        <td>${field(r.city)}</td>
+        <td class="muted">${esc(r.country || MISSING)}</td>
+        <td class="muted">${esc(r.device)}</td>
         <td>${field(r.email)}</td>
         <td class="muted">${esc(r.os)}</td>
         <td class="muted">${esc(r.appVersion)}</td>
         <td>${field(r.license)}</td>
         <td>${approvalPill(r.approval)}</td>
-        <td class="muted">${esc(r.country || MISSING)}${r.city ? ` · ${esc(r.city)}` : ''}</td>
         <td class="muted">${esc(when(r.lastSeen))}</td>
         <td>${r.live ? '<span class="pill up">live</span>' : '<span class="muted">idle</span>'}</td>
       </tr>`
+      }
     )
     .join('')
-  return `<table><thead><tr><th>Computer</th><th>SSO email</th><th>OS</th><th>Version</th><th>License</th><th>Approval</th><th>Country</th><th>Seen</th><th></th></tr></thead><tbody>${body}</tbody></table>`
+  return `<table><thead><tr><th>Computer</th><th>City</th><th>Country</th><th>Device</th><th>SSO email</th><th>OS</th><th>Version</th><th>License</th><th>Approval</th><th>Seen</th><th></th></tr></thead><tbody>${body}</tbody></table>`
+}
+
+function renderSessions(data: DashboardPayload): string {
+  return `<article class="card" style="padding-bottom:10px" data-sessions>
+    <p class="eyebrow">Sessions</p>
+    <input class="search-bar" id="sessions-search" type="search" placeholder="Search city, device, computer…" autocomplete="off">
+    <div class="sub muted" style="padding-bottom:8px">Real seats. City from request.cf. usage-import filtered. Idle is last seen, not missing.</div>
+    ${renderProfiles(data.profiles)}
+    <div id="sessions-empty" class="empty" hidden>No matching sessions.</div>
+  </article>`
 }
 
 function renderLicenseGenerateForm(): string {
@@ -824,11 +884,13 @@ svg path { vector-effect: non-scaling-stroke; }
 
     <section class="page wrap" data-page="realtime" hidden>
       <article class="card" style="padding-bottom:10px" data-live-presence>
-        <p class="eyebrow">Live people</p>
+        <p class="eyebrow">${liveSeats.length ? 'Live people' : 'People'}</p>
         ${
           liveSeats.length
             ? renderProfiles(liveSeats)
-            : '<div class="empty">No live seats in the last two minutes. Heartbeat &lt; 2 min.</div>'
+            : data.profiles.length
+              ? `<div class="sub muted" style="padding-bottom:8px">No heartbeat in the last two minutes. Showing last-seen seats with city.</div>${renderProfiles(data.profiles)}`
+              : '<div class="empty">No seats yet. Heartbeat writes city from request.cf.</div>'
         }
       </article>
       ${renderRealtimeGeo(data)}
@@ -836,6 +898,10 @@ svg path { vector-effect: non-scaling-stroke; }
         <p class="eyebrow">Activity</p>
         <div id="rt-stream">${renderEvents(data.events.slice(0, 30))}</div>
       </article>
+    </section>
+
+    <section class="page wrap" data-page="sessions" hidden>
+      ${renderSessions(data)}
     </section>
 
     <section class="page wrap" data-page="events" hidden>
@@ -1031,6 +1097,16 @@ svg path { vector-effect: non-scaling-stroke; }
         <div id="key-msg" class="muted" style="padding:8px 0"></div>
       </article>
     </section>
+
+    <section class="page wrap" data-page="settings" hidden>
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">Settings</p>
+        <div class="rule"><h3>Access keep</h3><p>Cloudflare Access email-code only. Allowlist tony.walteur@gmail.com and twalteur@amaris.com. No homemade login.</p></div>
+        <div class="rule"><h3>Generate license</h3><p>Licenses → duration → Generate license. Paste the once-string into Métis Identity. last4 after reload.</p></div>
+        <div class="rule"><h3>Geo</h3><p>City / region / country come from request.cf on heartbeat. Never client GPS. Never IP.</p></div>
+        <p id="key-msg-settings" class="muted"></p>
+      </article>
+    </section>
   </div>
 </div>
 <script>
@@ -1039,13 +1115,14 @@ async function api(path, body) {
   return r.json()
 }
 const titles = {
-  overview: 'Overview', realtime: 'Realtime', events: 'Events', profiles: 'Users',
-  map: 'Map', macos: 'macOS', windows: 'Windows', licenses: 'Licenses', skills: 'Skills', keys: 'Keys',
-  notifications: 'Notifications', rules: 'Rules', pushes: 'Pushes', users: 'Users'
+  overview: 'Overview', realtime: 'Realtime', events: 'Events', sessions: 'Sessions',
+  profiles: 'Sessions', map: 'Map', macos: 'macOS', windows: 'Windows', licenses: 'Licenses',
+  skills: 'Skills', keys: 'Keys', notifications: 'Notifications', rules: 'Rules', pushes: 'Pushes',
+  users: 'Sessions', settings: 'Settings'
 }
 function route() {
   const raw = (location.hash || '#overview').replace('#', '')
-  const id = raw === 'users' ? 'profiles' : titles[raw] ? raw : 'overview'
+  const id = raw === 'users' || raw === 'profiles' ? 'sessions' : titles[raw] ? raw : 'overview'
   document.querySelectorAll('[data-page]').forEach((p) => { p.hidden = p.getAttribute('data-page') !== id })
   document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('on', a.getAttribute('data-nav') === id))
   const t = document.getElementById('page-title')
@@ -1090,10 +1167,18 @@ document.querySelectorAll('[data-map]').forEach((b) => b.addEventListener('click
   document.querySelectorAll('[data-map-pane]').forEach((p) => { p.hidden = p.getAttribute('data-map-pane') !== v })
 }))
 document.querySelectorAll('[data-geo-tab]').forEach((b) => b.addEventListener('click', () => {
-  document.querySelectorAll('[data-geo-tab]').forEach((x) => x.classList.toggle('on', x === b))
+  const root = b.closest('[data-geo-corner], [data-realtime-geo]') || document
+  root.querySelectorAll('[data-geo-tab]').forEach((x) => x.classList.toggle('on', x === b))
   const v = b.getAttribute('data-geo-tab')
-  document.querySelectorAll('[data-geo-pane]').forEach((p) => { p.hidden = p.getAttribute('data-geo-pane') !== v })
+  root.querySelectorAll('[data-geo-pane]').forEach((p) => { p.hidden = p.getAttribute('data-geo-pane') !== v })
 }))
+const sessSearch = document.getElementById('sessions-search')
+if (sessSearch) sessSearch.addEventListener('input', () => {
+  const q = sessSearch.value.trim().toLowerCase()
+  document.querySelectorAll('[data-seat-row]').forEach((row) => {
+    row.hidden = Boolean(q) && !(row.getAttribute('data-q') || '').includes(q)
+  })
+})
 document.querySelectorAll('#map-root path[data-iso]').forEach((p) => p.addEventListener('click', () => {
   const iso = p.getAttribute('data-iso')
   document.querySelectorAll('#map-fleet tbody tr').forEach((tr) => {

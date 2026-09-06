@@ -216,7 +216,7 @@ describe('unauth console GET is 302 to Cloudflare Access, never a password form'
       expect(html).toContain('data-nav="events"')
       expect(html).toContain('data-nav="licenses"')
       expect(html).toContain('data-nav="keys"')
-      expect(html).not.toContain('data-nav="sessions"')
+      expect(html).toContain('data-nav="sessions"')
       expect(html).not.toContain('data-nav="seo"')
       expect(html).not.toContain('data-nav="dashboards"')
       expect(html).toContain(email)

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { geoCountryRollup, realtimeGeoRows } from './realtime-geo'
+import { geoCountryRollup, geoRegionRows, realtimeGeoRows } from './realtime-geo'
 
 describe('realtimeGeoRows', () => {
   it('emits Shoey city rows: country, city, count, unique_sessions, avg_duration', () => {
@@ -31,6 +31,31 @@ describe('realtimeGeoRows', () => {
     expect(geoCountryRollup(rows)).toEqual([
       { country: 'CA', count: 2 },
       { country: 'US', count: 1 }
+    ])
+  })
+
+  it('rolls region from request.cf.region, not city-as-country', () => {
+    expect(
+      geoRegionRows([
+        {
+          device_id: 'a',
+          country: 'CA',
+          city: 'Longueuil',
+          region: 'Quebec',
+          first_seen: 1,
+          last_seen: 2
+        },
+        {
+          device_id: 'b',
+          country: 'CA',
+          city: 'Longueuil',
+          region: null,
+          first_seen: 1,
+          last_seen: 2
+        }
+      ])
+    ).toEqual([
+      { country: 'CA', region: 'Quebec', count: 1, unique_sessions: 1, avg_duration: 1 }
     ])
   })
 

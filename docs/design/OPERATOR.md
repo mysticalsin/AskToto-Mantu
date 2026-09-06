@@ -21,8 +21,8 @@ Live URL: `https://metis-operator.tony-walteur.workers.dev/` (`#overview`).
 Access: Cloudflare Access email-code only. Allowlist `tony.walteur@gmail.com` +
 `twalteur@amaris.com`. Never a homemade password form.
 
-**Hold.** Draft only. No pack. No merge. No Latest. **Do not wrangler deploy**
-until Devon / Ultron say Mac Hide UX full PASS.
+**Hold merge.** Draft only. No pack. No Latest. Ultron green-lit Operator-only
+deploy to `metis-operator` (`tony-walteur.workers.dev`). Do not merge fat PR151.
 
 **ULTRON LOCK.** Do **not** publish or promote any Metis-Releases Latest feed.
 EXE / DMG / Native → Latest only after Bob QA **and** Ultron approve.

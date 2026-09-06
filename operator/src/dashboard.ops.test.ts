@@ -97,6 +97,13 @@ describe('ROI and licenses from real D1 ingest only', () => {
     expect(dash.licenses.rows[0]?.license).toBe('licensed')
     expect(dash.profiles[0]?.hostname).toBe('Tonys-MacBook-Pro')
     expect(dash.profiles[0]?.email).toBe('twalteur@amaris.com')
+    expect(dash.profiles[0]?.city).toBe('Longueuil')
+    expect(dash.geo[0]).toMatchObject({
+      country: 'CA',
+      city: 'Longueuil',
+      count: 1,
+      unique_sessions: 1
+    })
     expect(dash.roi.cacheHit).not.toBeNull()
     expect(dash.roi.costToday).not.toBe('$0')
     expect(dash.gateway.rows.some((r) => r.provider === 'anthropic')).toBe(true)

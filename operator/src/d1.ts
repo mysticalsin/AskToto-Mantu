@@ -60,8 +60,8 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         .first<Pick<SeatRow, 'first_seen'>>()
       await db
         .prepare(
-          `INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen, country, city, lat, lon, last_index_at, hostname, sso_email, license, approval, license_jti)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen, country, city, region, lat, lon, last_index_at, hostname, sso_email, license, approval, license_jti)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(device_id) DO UPDATE SET
              seat_hash = excluded.seat_hash,
              os = CASE WHEN excluded.os IS NULL OR excluded.os = '' OR excluded.os = 'unknown' THEN seats.os ELSE excluded.os END,
@@ -69,6 +69,7 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
              last_seen = excluded.last_seen,
              country = COALESCE(excluded.country, seats.country),
              city = COALESCE(excluded.city, seats.city),
+             region = COALESCE(excluded.region, seats.region),
              lat = COALESCE(excluded.lat, seats.lat),
              lon = COALESCE(excluded.lon, seats.lon),
              last_index_at = COALESCE(excluded.last_index_at, seats.last_index_at),
@@ -86,6 +87,7 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
           row.last_seen,
           row.country,
           row.city,
+          row.region ?? null,
           row.lat,
           row.lon,
           row.last_index_at,
@@ -161,13 +163,14 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         sso_email: s.sso_email ?? null,
         license: s.license ?? null,
         approval: s.approval ?? null,
-        license_jti: s.license_jti ?? null
+        license_jti: s.license_jti ?? null,
+        region: s.region ?? null
       }))
     },
     async insertPulse(row) {
       await db
-        .prepare('INSERT OR REPLACE INTO pulses (id, device_id, ts, kind, country, city) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(row.id, row.device_id, row.ts, row.kind, row.country, row.city)
+        .prepare('INSERT OR REPLACE INTO pulses (id, device_id, ts, kind, country, city, region) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .bind(row.id, row.device_id, row.ts, row.kind, row.country, row.city, row.region ?? null)
         .run()
       await db.prepare('DELETE FROM pulses WHERE ts < ?').bind(row.ts - PULSE_TTL_MS).run()
     },
