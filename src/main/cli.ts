@@ -17,7 +17,7 @@
 import { spawn, execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { mkdtemp, rm } from 'node:fs/promises'
-import { join, isAbsolute } from 'node:path'
+import { join, isAbsolute, posix } from 'node:path'
 import { tmpdir } from 'node:os'
 import { createInterface } from 'node:readline'
 import { app, shell } from 'electron'
@@ -138,7 +138,9 @@ export function npmGlobalBinCandidates(bin: string): string[] {
 export function posixUserBinCandidates(bin: string): string[] {
   const home = process.env.HOME ?? ''
   if (!home) return []
-  return [join(home, '.local', 'bin', bin), join(home, '.hermes', 'node', 'bin', bin)]
+  // Always POSIX separators: this probe is for mac/Linux GUI PATH gaps, and Windows CI hosts
+  // still unit-test the helper. path.join() on win32 turned `/Users/tony` into `\\Users\\tony\\...`.
+  return [posix.join(home, '.local', 'bin', bin), posix.join(home, '.hermes', 'node', 'bin', bin)]
 }
 
 /**
