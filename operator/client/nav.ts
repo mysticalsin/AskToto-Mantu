@@ -1,17 +1,6 @@
-/** Rail search filter, mobile off-canvas rail (menu button + backdrop, SPEC #2), and the
- * Cloudflare-connect return-message banner. Ported from the pre-D3 inline `<script>`. */
-
-export function initNavSearch(): void {
-  var search = document.getElementById('nav-search') as HTMLInputElement | null
-  if (!search) return
-  search.addEventListener('input', function () {
-    var q = search!.value.trim().toLowerCase()
-    document.querySelectorAll<HTMLElement>('[data-nav]').forEach(function (a) {
-      var hit = !q || (a.textContent || '').toLowerCase().includes(q)
-      a.hidden = !hit
-    })
-  })
-}
+/** Mobile off-canvas rail (menu button + backdrop, SPEC #2) and the Cloudflare-connect
+ * return-message banner. Ported from the pre-D3 inline `<script>`. The rail search field itself
+ * (`#nav-search`) is owned by operator/client/search.ts, not here. */
 
 /** Below 1024px the rail (`#rail`) is fixed off-canvas; `#rail-toggle` slides it in, and either
  * the backdrop (`#rail-backdrop`) or Escape closes it. */
@@ -45,8 +34,8 @@ export function initMobileRail(): void {
 }
 
 /** The rail's primary action button on Overview/Licenses ("Generate license") jumps to the
- * Licenses page and focuses the duration field. The project switcher (`data-rail-switcher`) is
- * inert by design (reference SPEC #2: "inert in the clone" - Métis has one project). */
+ * Licenses page and focuses the duration field. The project pill (`data-rail-pill`) is inert by
+ * design (reference SPEC #2: "inert in the clone" - Métis has one project, no switcher). */
 export function initRailGenerate(): void {
   var btn = document.querySelector<HTMLElement>('[data-rail-generate]')
   if (!btn) return
@@ -54,6 +43,18 @@ export function initRailGenerate(): void {
     if (location.hash !== '#licenses') location.hash = '#licenses'
     var select = document.querySelector<HTMLElement>('[data-license-generate] select[name="days"]')
     if (select) select.focus()
+  })
+}
+
+/** The rail's primary action button on Connectors ("Add connector") jumps to the Connectors page
+ * and announces the intent; the Connectors page module (P1.9) opens its own catalog/drawer flow
+ * in response instead of this shell task reaching into a page it does not own. */
+export function initRailAddConnector(): void {
+  var btn = document.querySelector<HTMLElement>('[data-rail-add-connector]')
+  if (!btn) return
+  btn.addEventListener('click', function () {
+    if (location.hash !== '#connectors') location.hash = '#connectors'
+    window.dispatchEvent(new CustomEvent('metis:add-connector'))
   })
 }
 

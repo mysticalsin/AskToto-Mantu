@@ -1,5 +1,7 @@
 import { SHOEY_LAND_SVG } from '../charts'
 import { CONSOLE_CSS } from './css'
+import { SHELL_CSS } from './css-shell'
+import { PAGES_SHARED_CSS } from './css-pages-shared'
 import { CONSOLE_JS, PATHNAME_STRIP_JS } from './client'
 
 const MIN_SPA_BYTES = 2000
@@ -17,7 +19,7 @@ export function contentHash(body: string): string {
 }
 
 export const SPA_JS = CONSOLE_JS
-export const SPA_CSS = CONSOLE_CSS
+export const SPA_CSS = CONSOLE_CSS + SHELL_CSS + PAGES_SHARED_CSS
 
 if (SPA_JS.length < MIN_SPA_BYTES || SPA_CSS.length < MIN_SPA_BYTES) {
   throw new Error(

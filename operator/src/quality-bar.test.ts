@@ -231,7 +231,15 @@ describe('quality bar: map data contract', () => {
         { store, now: NOW }
       )
     ).text()
-    expect(css).toContain('#E5E7EB')
+    // Amaris-skinned tokens (plan 3.2) replaced the measured-Shoey light map hex with
+    // --map-land / --map-ocean, defined in both :root and [data-theme="dark"].
+    expect(css).toMatch(/--map-land:\s*#[0-9a-f]{3,8}/i)
+    expect(css).toMatch(/--map-ocean:\s*#[0-9a-f]{3,8}/i)
+    // Defined for both light and dark: :root (light), [data-theme="dark"], and the
+    // prefers-color-scheme fallback for an unset cookie -- at least 2, never a single value.
+    expect((css.match(/--map-land:/g) || []).length).toBeGreaterThanOrEqual(2)
+    expect(css).toContain('fill: var(--map-land)')
+    expect(css).not.toContain('#E5E7EB')
     expect(html).not.toContain('203.0.113.9')
     expect(html).not.toContain('SampleCity')
     const dash = (await (
