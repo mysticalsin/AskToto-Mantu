@@ -145,18 +145,19 @@ reload. Never a secret in HTML.
 ### Overview `#overview` — Mission Control glance
 
 Job: Tony reads the fleet in one glance and can mint a license.
-Placement matches `shoey-ref/overview.png`: KPIs → paired TopLists →
-Activity | Places **corner** → People → Generate.
+**PORT** `shoey-ref/overview.png` (WebsiteCloner `/demo/shoey`): two
+equal columns, then Métis People + Generate. Not a vague card stack.
 
 ```
 ┌ Live seats │ Time saved │ Value ─────────────────────────────────┐
-┌ Top devices (inline bars) ──┐ ┌ Top events (inline bars) ───────┐
-│ host · city · live/idle     │ │ live / ask / recap · count      │
+┌ Devices (tabs Devices/OS) ──┐ ┌ Events (search + count bars) ───┐
+│ search · Seats · Live bars  │ │ search · Count bars             │
 └─────────────────────────────┘ └─────────────────────────────────┘
-┌ Activity (Shoey LiveFeed) ──┐ ┌ Places TopList + CORNER map ───┐
-│ name · profile · chips · ago│ │ Cities / Regions / Countries   │
-│ city · device · os · license│ │ count · sessions · avg + bar   │
-└─────────────────────────────┘ │ [CountryMap corner — not full] │
+┌ Places table (own card) ────┐ ┌ Map (own CORNER card) ──────────┐
+│ Countries / Regions / Cities│ │ choropleth — not full-bleed     │
+│ search · Seats · Sess bars  │ │                                 │
+└─────────────────────────────┘ └─────────────────────────────────┘
+┌ Activity (Shoey LiveFeed density) ──────────────────────────────┐
 ┌ People: host · email · city · device · license · live/idle ─────┐
 ┌ Install → works + Generate license ─────────────────────────────┐
 ```
@@ -164,16 +165,18 @@ Activity | Places **corner** → People → Generate.
 1. **Glance KPIs (exactly three).** Live seats / Time saved / Value.
    Empty: `0` + “heartbeat &lt; 2 min”; `0 min` + “no recaps ingested”;
    `not reported` (never `$0`).
-2. **Paired TopLists** (`data-overview-toplists`). Devices + event kinds
-   with inline bars sized by Métis event count, not pageviews.
-3. **Places corner** (`data-geo-corner`). **Original placement:** table
-   left, mini CountryMap **right** (`data-geo-widget`). Tabs Cities /
-   Regions / Countries. Columns `{ count, unique_sessions, avg_duration }`.
-   Never full-bleed on this page.
-4. **Activity** (`data-overview-activity`). Same density as Shoey
-   LiveFeed: name, profile (hostname/email), chips for city / device /
-   os / license, **relative time**. Ask / recap / crm inherit seat city.
-   When seats exist, not an empty card (presence `live` / `seen`).
+2. **Paired TopLists** (`data-overview-toplists`). Two equal cards.
+   Devices: tabs Devices / OS, search, columns Seats · Live, **full-row
+   inline bars**. Events: search, Count, full-row bars. Métis seats, not
+   Views / pageviews.
+3. **Places + corner map** (`data-geo-corner`). **Two sibling cards**
+   (screenshot bottom row): table left, Map card right
+   (`data-geo-widget`). Tabs Countries / Regions / Cities. Search.
+   Columns Seats · Sess · Avg. Full-row bars. Never a 168px inset and
+   never full-bleed.
+4. **Activity** (`data-overview-activity`) full width under the 2×2.
+   Shoey LiveFeed density: name, profile, city/device/os/license chips,
+   relative time. Presence `live` / `seen` when seats exist.
 5. **People** (`data-overview-people`). Live pill only if heartbeat
    &lt; 2 min. Last-seen still lists. City from `request.cf`. Missing
    hostname/email = em dash.
@@ -181,15 +184,16 @@ Activity | Places **corner** → People → Generate.
 
 ### Realtime `#realtime` — full WorldMap
 
-Compare `/demo/shoey/realtime` and `shoey-ref/realtime.png`. Full map,
-not a corner.
+**PORT** `shoey-ref/realtime.png`. Full map first, then a 3-card live
+strip (30m seats · Live · Live events), then GeoTable.
 
 ```
 ┌ WorldMap (data-world-map) · city dots + country pills · LIVE n ─┐
 └─────────────────────────────────────────────────────────────────┘
-┌ LiveFeed (data-live-feed) ──┐ ┌ GeoTable City/Regions/Countries ┐
-│ name · profile · chips · ago│ │ count · sessions · avg + bar    │
-└─────────────────────────────┘ └─────────────────────────────────┘
+┌ Seats 30m ──┐ ┌ Live n ──┐ ┌ Live events (data-live-feed) ─────┐
+│ unique seats│ │ pulse    │ │ name · city · os · ago            │
+└─────────────┘ └──────────┘ └───────────────────────────────────┘
+┌ GeoTable Cities / Regions / Countries (data-realtime-geo) ──────┐
 ┌ People: host · email · city · device · license ─────────────────┐
 ```
 
