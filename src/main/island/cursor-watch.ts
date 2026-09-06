@@ -8,20 +8,13 @@
 
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import { overlayUsesHover } from '@shared/overlay-chrome'
-import { HOVER_ISLAND_HEIGHT_MAX_PX, HOVER_ISLAND_WIDTH_MAX_PX, type Rect } from './geometry'
+import { HOVER_ISLAND_HEIGHT_MAX_PX, type Rect } from './geometry'
 
-/** Ignore a leftover 560×44 menu-bar slab. Reveal is the camera island only. */
+/** Cap leftover 44px menu-bar slabs so Teams mute at Y≈40 still misses. Width stays full top edge. */
 function clampHoverRestRect(rect: Rect): Rect {
-  const width = Math.min(rect.width, HOVER_ISLAND_WIDTH_MAX_PX)
   const height = Math.min(rect.height, HOVER_ISLAND_HEIGHT_MAX_PX)
-  if (width === rect.width && height === rect.height) return rect
-  const midX = rect.x + rect.width / 2
-  return {
-    x: Math.round(midX - width / 2),
-    y: rect.y,
-    width,
-    height
-  }
+  if (height === rect.height) return rect
+  return { ...rect, height }
 }
 
 /** Poll while hide/island is resting. 16–32ms — one frame-ish, no Accessibility tap. */
@@ -50,10 +43,10 @@ export function inflateRect(rect: Rect, pad: number): Rect {
 export type CursorWatchDecision = 'reveal' | 'hide' | 'stay'
 
 /**
- * Resting: cursor in the hide/island rest rect → reveal.
- * Revealed: stay if the cursor is still in the island/notch rest strip OR the
- * inflated bar. Hide only when it is in neither. macOS clamps the bar to
- * workArea.y (~39); a cursor in the island (Y≈12) must not oscillate hide/reveal.
+ * Resting: cursor in the top-edge approach strip → reveal.
+ * Revealed: stay if the cursor is still in that strip OR the inflated bar.
+ * Hide only when it is in neither. macOS clamps the bar to workArea.y (~39);
+ * a cursor on the top edge (Y≈12) must not oscillate hide/reveal.
  */
 export function decideCursorWatch(input: {
   cursor: { x: number; y: number }

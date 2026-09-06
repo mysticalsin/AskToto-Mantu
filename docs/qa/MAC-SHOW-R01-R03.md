@@ -29,7 +29,7 @@ Display: built-in Retina, notch. `workArea.y` ≈ 39. Start from Overlay chrome 
 ### R01 — Overlay law
 
 1. Hide idle: park is 8×2 at `bounds.y` (0), not 8×44 at Y=39.
-2. Hover the camera / Dynamic Island square only. Left menu-bar items miss. Teams mute at Y≈40 misses.
+2. Hover / approach the **top edge** (left menu bar, camera, or right). Métis reveals. Do not hunt tray Show/Hide. Teams mute at Y≈40 still misses.
 3. Island peek is 132×15 at the same Y. No second circle. No minimize control.
 4. Bar is the only chrome that may minimize to a circle.
 
@@ -39,18 +39,26 @@ Display: built-in Retina, notch. `workArea.y` ≈ 39. Start from Overlay chrome 
 
 Hard repro on 1.8.3: Cmd+, or Bar Settings while Hide/Island left `x=460 y=39 width=880 height=325`.
 
-On this tip the same path must open **880×560** at `islandSafeTop` (~39), background `#120022`. Tray, dock, hotkey, and IPC all use `applySettingsSurface`.
+On this tip the same path must open **880×800** at `islandSafeTop` (~39), background `#120022`. Tray, dock, hotkey, and IPC all use `applySettingsSurface`.
 
 **FAIL if** height is 325, 8, or 15. **FAIL if** the panel is a leftover bar sliver.
 
 ### Settings from M (Tony live 2026-09-05)
 
 1. Overlay chrome **Hide**. Click the menu-bar **M** (tray logo) or Cmd+,.
-2. Window is **880×560** at `islandSafeTop` (~39). Background `#120022`. No white or `#000` flash. No spring / scale glitch.
-3. Scroll every Settings tab, including the last one, to the last row. The bottom of the last card is reachable. `main.cl-content` is `flex-1 min-h-0 overflow-y-auto` (no `max-h-[480px]` clip).
-4. Bounds stay at least 880×560. No crush to 325.
+2. Window is **880×800** at `islandSafeTop` (~39). Background `#120022`. No white or `#000` flash. No spring / scale glitch.
+3. Personalize: scroll to **Custom instructions**. The full textarea and the last row are reachable. `main.cl-content` is `flex-1 min-h-0 overflow-y-auto` (no `max-h-[480px]` clip).
+4. Bounds stay at least 880×800. No crush to 325 or 560.
 
-**FAIL if** the surface glitches on open, or the last Settings row is clipped and cannot be scrolled into view.
+**FAIL if** the surface glitches on open, Custom instructions is clipped, or the last Settings row cannot be scrolled into view.
+
+### Top-edge reveal (Tony live 2026-09-05)
+
+1. Overlay chrome **Hide**. Do not use tray Show/Hide.
+2. Move the mouse to the top of the display (left of the notch, the camera, or the right). Métis must reveal.
+3. Teams mute at Y≈40 must not reveal.
+
+**FAIL if** the overlay stays gone until the menu-bar Show/Hide click.
 
 Close Settings. Hide/Island must park again at `bounds.y`.
 

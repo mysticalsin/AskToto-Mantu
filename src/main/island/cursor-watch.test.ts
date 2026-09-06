@@ -23,7 +23,7 @@ describe('cursor-in-rect (Mac Dynamic Island hover)', () => {
     expect(rest.y).toBe(0)
     expect(rest.height).toBeLessThan(tonyMac.menuBarHeight)
     expect(rest.height).toBeLessThan(44)
-    expect(rest.width).toBe(tonyMac.notchWidth)
+    expect(rest.width).toBe(tonyMac.workArea.width)
     expect(pointInRect({ x: 900, y: 12 }, rest)).toBe(true)
     expect(pointInRect({ x: 900, y: 200 }, rest)).toBe(false)
   })

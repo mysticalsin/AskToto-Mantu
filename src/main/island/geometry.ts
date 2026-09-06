@@ -214,27 +214,21 @@ export function hoverRestHeight(m: DisplayMetrics): number {
   return hoverHitBandHeight(m)
 }
 
-/** Camera island width: real notchWidth, typically 180–250. Never 560. */
+/** Full-width top-edge approach strip. Camera island is included; left/right top edge also hits. */
 export function hoverRestWidth(m: DisplayMetrics): number {
-  const raw = m.notchWidth > 0 ? m.notchWidth : OVERLAY_ISLAND_PEEK.width
-  return Math.min(HOVER_ISLAND_WIDTH_MAX_PX, Math.max(HOVER_ISLAND_WIDTH_MIN_PX, raw))
+  return Math.max(1, m.workArea.width)
 }
 
 /**
  * Logical rest rect the cursor watch hit-tests. Hide does NOT park the window here
  * (that was the visible 560×44 slab). Island keeps a smaller visible peek at the same Y.
- * The watch rect is the hardware camera / Dynamic Island square only.
+ * Watch is the full top-edge approach band (housing-tall, work-area-wide) so Hide/Island
+ * reveal without hunting the camera pill or the menu Show item.
  */
 export function hoverWatchRestRect(_layout: OverlayLayout, m: DisplayMetrics): Rect {
   const height = hoverRestHeight(m)
   const width = hoverRestWidth(m)
-  const x = clampAxis(
-    Math.round(m.workArea.x + (m.workArea.width - width) / 2),
-    width,
-    m.workArea.x,
-    m.workArea.width
-  )
-  return { x, y: hoverRestTop(m), width, height }
+  return { x: m.workArea.x, y: hoverRestTop(m), width, height }
 }
 
 /**
@@ -295,7 +289,7 @@ export function onboardingFitsWorkArea(win: Rect, workArea: Rect): boolean {
 
 /** Tony live fail after onboardingDone on 58f6972: 880×816 layer-0 card at Y=39. */
 export function isForbiddenMidFlowCard(win: Pick<Rect, 'width' | 'height'>): boolean {
-  return win.width === OVERLAY_BAR_REST.width && win.height >= 700
+  return win.width === OVERLAY_BAR_REST.width && win.height >= 816
 }
 
 /** Rest size after exclusive exit / createWindow. Hide is a 1–8px invisible hairline. Island hugs the peek. */

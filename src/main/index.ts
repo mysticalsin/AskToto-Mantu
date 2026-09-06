@@ -2123,6 +2123,18 @@ function restoreBarWidth(): void {
   if (!win || onboardingExclusiveLive()) return
   islandResting = false
   applyHideClickThrough()
+  // LSUIElement / tray Show-Hide can leave the window hidden. Hover reveal must
+  // showInactive (never show+focus) so the top-edge path works without hunting the menu.
+  try {
+    if (!win.isVisible()) win.showInactive()
+  } catch {
+    /* headless */
+  }
+  try {
+    win.setAlwaysOnTop(true, 'screen-saver')
+  } catch {
+    /* headless */
+  }
   const display = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
   const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
@@ -2162,7 +2174,10 @@ function applySettingsSurface(): void {
 
 function leaveSettingsSurface(): void {
   settingsSurfaceOpen = false
-  if (overlayUsesHover(liveOverlayLayout())) islandResting = true
+  if (overlayUsesHover(liveOverlayLayout())) {
+    islandResting = true
+    startOverlayCursorWatch()
+  }
   if (!win || win.isDestroyed()) return
   try {
     win.setMinimumSize(1, 1)
@@ -3387,34 +3402,38 @@ function registerIpc(): void {
     else if (cur.onboardingDone && !next.onboardingDone && win && !win.isDestroyed()) {
       applyExclusiveOnboardingStage(win)
     }
-    if (cur.overlayLayout !== next.overlayLayout && next.onboardingDone && win && !win.isDestroyed() && !onboardingExclusiveLive()) {
+    if (next.onboardingDone && win && !win.isDestroyed() && !onboardingExclusiveLive()) {
       const layout = parseOverlayLayout(next.overlayLayout)
       if (overlayUsesHover(layout)) {
+        // Re-arm on every settings write, not only a layout change. CDP setSettings(Hide)
+        // while already Hide used to leave a dead watch until tray Show/Hide.
         startOverlayCursorWatch()
-        // Park now only when the pointer is out of the island/bar and this is not an open
-        // Settings panel (tall window). The renderer parks on idle if Settings is still open.
-        const display = screen.getDisplayMatching(win.getBounds())
-        const metrics = getDisplayMetrics(display)
-        const rest = overlayRestSize(layout, metrics)
-        const openPanel = win.getBounds().height > rest.height + 80
-        if (
-          !isMinimized &&
-          !openPanel &&
-          shouldParkHoverRestAfterLeavingSurface({
-            layout,
-            pointerInIslandOrBar: pointerInIslandOrBar()
-          })
-        ) {
-          overlayCursorWatchHovering = false
-          const park = parkAfterExclusiveOnboarding(layout, metrics, ISLAND_TOP_MARGIN)
-          currentWidth = park.width
-          islandResting = true
-          userAnchorY = park.y
-          win.setBounds(park, false)
-          applyHideClickThrough()
-          notifyOverlayCursorHover(false)
+        if (cur.overlayLayout !== next.overlayLayout) {
+          // Park now only when the pointer is out of the island/bar and this is not an open
+          // Settings panel (tall window). The renderer parks on idle if Settings is still open.
+          const display = screen.getDisplayMatching(win.getBounds())
+          const metrics = getDisplayMetrics(display)
+          const rest = overlayRestSize(layout, metrics)
+          const openPanel = win.getBounds().height > rest.height + 80
+          if (
+            !isMinimized &&
+            !openPanel &&
+            shouldParkHoverRestAfterLeavingSurface({
+              layout,
+              pointerInIslandOrBar: pointerInIslandOrBar()
+            })
+          ) {
+            overlayCursorWatchHovering = false
+            const park = parkAfterExclusiveOnboarding(layout, metrics, ISLAND_TOP_MARGIN)
+            currentWidth = park.width
+            islandResting = true
+            userAnchorY = park.y
+            win.setBounds(park, false)
+            applyHideClickThrough()
+            notifyOverlayCursorHover(false)
+          }
         }
-      } else {
+      } else if (cur.overlayLayout !== next.overlayLayout) {
         stopOverlayCursorWatch()
         restoreBarWidth()
       }

@@ -41,7 +41,7 @@ Three feelings, in this order:
 
 1. **It just works.** Install → first Ask. Defaults friendly. Power lives in Settings.
 2. **It never lies.** Connected means a live session. last4 is all the UI ever sees. Latest is a QA+Ultron fact, not a CI hope.
-3. **It recedes.** Hide until the camera square. Island until the camera square. Bar if they asked for a bar. Settings never crushed into the menu-bar. No white flash. No leftover 880×133 at Y=39.
+3. **It recedes.** Hide until the top edge. Island until the top edge. Bar if they asked for a bar. Settings never crushed into the menu-bar. No white flash. No leftover 880×133 at Y=39.
 
 If a change serves none of those three, subtract it.
 
@@ -95,7 +95,7 @@ Layouts stay `hide | island | bar`. Default is **Hide**. Fresh install: invisibl
 
 This is frozen law. `overlayAllowsMinimize`, `overlayShowsBarOrb`, `overlayDocksBarCircle` live in `src/shared/overlay-chrome.ts`. Hide and Island never grow a minimize control, never show a circle, never jump to Bar to display an orb.
 
-Hover hit is the camera square only (`notchWidth` ~180–250, housing height, not 44, not 560). Left menu-bar items miss. Teams mute / camera / share at Y≈40 and `TEAMS_MEETING_CHROME_Y` 48 miss. Main cursor-watch on darwin and Windows top-edge is the reveal; renderer `mouseenter` is not enough.
+Hover hit is the full top-edge approach strip (work-area-wide, housing-tall, not 44, not a leftover 560 slab). Left, camera, and right at Y≈0–12 reveal. Teams mute / camera / share at Y≈40 and `TEAMS_MEETING_CHROME_Y` 48 miss. Main cursor-watch on darwin and Windows is the reveal; renderer `mouseenter` is not enough. A hidden LSUIElement window showInactive on that path. Do not hunt tray Show/Hide.
 
 Park Hide at 8×2 and Island at peek, both at `display.bounds.y` (0 on the built-in Retina). Never park at `workArea.y` (~39). An 880×133 leftover at Y=39 is a fat hover trigger (`isFatHoverTrigger` in `src/shared/settings-bounds.ts`). MQA-289.
 
@@ -117,7 +117,7 @@ Contracts: `docs/design/BAR-PILL.md`, `docs/design/ORB-SELECTION.md`, `docs/desi
 
 ### 3.3 Settings is a surface, not a leftover
 
-Opening Settings from tray, dock, hotkey, or IPC applies `applySettingsSurface` first: **880×560** minimum at `islandSafeTop`, background `#120022`. Never Hide 8×2. Never Island peek. Never a crushed Modes & Display strip (MQA-286).
+Opening Settings from tray, dock, hotkey, or IPC applies `applySettingsSurface` first: **880×800** minimum at `islandSafeTop`, background `#120022`. Never Hide 8×2. Never Island peek. Never a crushed Modes & Display strip (MQA-286). Custom instructions must scroll to the last row.
 
 Closing Settings `leaveSettingsSurface` then parks. Hide/Island force-park on became-idle (`shouldForceParkOnBecameIdle`). Forbidden flash colors: `#fff`, `#ffffff`, `#000`, `#000000` (MQA-288). Rest stays `#00000000`.
 
@@ -362,7 +362,7 @@ Every surface fails closed and speaks in a human sentence. No "Something went wr
 
 | Failure | What the user sees | What must not happen |
 | --- | --- | --- |
-| Settings from tray while Hide | Full 880×560 glass | Crushed 8×2 / Island peek |
+| Settings from tray while Hide | Full 880×800 glass | Crushed 8×2 / Island peek |
 | Close Settings onto Hide | Park 8×2 at Y=0 | 880×133 at Y=39; Teams mute reveals Métis |
 | Pointer crosses menu-bar | Nothing | Flash open/shut |
 | White/black window color | Dark glass `#120022` or transparent | `#fff` / `#000` flash |
@@ -419,10 +419,10 @@ These are the tests a later PR must keep green or add. This file does not add th
 - `overlayLayout` default `'hide'`. Garbage → `'hide'`.
 - `overlayOrbStyle` default `'bar'`. Garbage → `'bar'`.
 - Hide/Island: `overlayAllowsMinimize` false; `overlayShowsBarOrb` false; minimize is a no-op.
-- Settings from tray / hotkey / IPC: bounds ≥ 880×560 before first paint (`settings-surface.contract.test.ts`).
+- Settings from tray / hotkey / IPC: bounds ≥ 880×800 before first paint (`settings-surface.contract.test.ts`).
 - Park after Settings: `bounds.y` = display top; `isFatHoverTrigger` catches 880×133 at workArea.y.
 - Forbidden flash colors unit-tested.
-- Hover hit is the camera square; left menu-bar and Teams Y miss (`hover-hit-band.test.ts`, `mac-hide-island.proof.test.ts`).
+- Hover hit is the top-edge strip; Teams Y miss (`hover-hit-band.test.ts`, `mac-hide-island.proof.test.ts`).
 - Obsidian markup has disc + spark + rings; reduced-motion freezes.
 - Listening toolbar at 880: no intersecting `getBoundingClientRect`; no "+ New meeting" on that row.
 - Click expands Bar circle; drag does not.
@@ -467,7 +467,7 @@ Cross-link only: the live vault board uses rows 1–7 (+ parked 8–10, pack 11,
 | ID | Slice | Agent | Status on this base | Depends |
 | --- | --- | --- | --- | --- |
 | **R01** | Overlay law frozen (Hide / Island / Bar predicates) | Desktop | Held — `overlay-chrome.ts` | — |
-| **R02** | Settings never crushed from menu-bar (880×560, `#120022`) | Desktop | Held — MQA-286 | R01 |
+| **R02** | Settings never crushed from menu-bar (880×800, `#120022`) | Desktop | Held — MQA-286 | R01 |
 | **R03** | No flash on launch / Settings open-close | Desktop | Held — MQA-288 | R02 |
 | **R04** | Top-edge reveal; park at Y=0; no 880×133 at Y=39 | Desktop | Held — MQA-289 | R01 |
 | **R05** | Bar rest picker (Full / Circle / Obsidian) | Desktop | Held on this branch — `ORB-SELECTION.md` | R01 |
