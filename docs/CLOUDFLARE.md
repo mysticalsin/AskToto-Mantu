@@ -257,3 +257,7 @@ Both are one command and are covered step by step in
 - **Revoking a leaked proxy key** takes effect the moment the new version deploys. Every install using
   the old key gets `401` until Settings is updated, which is the correct behaviour for a bearer
   credential to a paid endpoint.
+
+## Release / Latest embed (CRITICAL#1)
+
+Release workflows ship a **Worker proxy key only** (`METIS_PROXY_KEY` → encrypted blob). They must **not** set `METIS_CLOUDFLARE_ACCOUNT_ID` or `METIS_CLOUDFLARE_API_TOKEN` on the release path. An account-token shape is refused by `scripts/embed-cloudflare-key.mjs` and `scripts/check-embedded-cloudflare-key.mjs`.

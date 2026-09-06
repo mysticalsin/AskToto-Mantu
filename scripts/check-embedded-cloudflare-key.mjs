@@ -33,6 +33,15 @@ const localBundle = join(repositoryRoot, 'build', 'cloudflare-embed', 'key.json'
 const embedIntended = existsSync(localBundle)
 const ALLOW_EMBED = process.env.METIS_EMBED_CLOUDFLARE_KEY === '1'
 
+// CRITICAL#1: release packs must never carry an account-token embed path.
+if ((process.env.METIS_CLOUDFLARE_ACCOUNT_ID ?? '').trim() || (process.env.METIS_CLOUDFLARE_BASE_URL ?? '').trim()) {
+  throw new Error(
+    'METIS_CLOUDFLARE_ACCOUNT_ID / METIS_CLOUDFLARE_BASE_URL is set — refusing to package an account-token embed. ' +
+      'Worker proxy key only (METIS_PROXY_KEY). Ultron CRITICAL#1 / docs/security/EMBEDDED-KEY-ROTATION.md.'
+  )
+}
+
+
 if (embedIntended && !ALLOW_EMBED) {
   throw new Error(
     'build/cloudflare-embed/key.json is present but METIS_EMBED_CLOUDFLARE_KEY=1 was not set — refusing ' +

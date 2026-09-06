@@ -51,11 +51,14 @@ if (!token) {
 // out of tracked source too — the whole credential travels only inside the encrypted blob.
 const accountId = (process.env.METIS_CLOUDFLARE_ACCOUNT_ID ?? '').trim()
 const explicitBaseUrl = (process.env.METIS_CLOUDFLARE_BASE_URL ?? '').trim()
-const baseUrl = explicitBaseUrl
-  ? explicitBaseUrl.replace(/\/+$/, '')
-  : accountId
-    ? `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai/v1`
-    : ''
+// CRITICAL#1 (Tony + Ultron): never embed a CF account-token shape. Worker proxy key only.
+if (accountId || explicitBaseUrl) {
+  throw new Error(
+    '[embed:cf-key] METIS_CLOUDFLARE_ACCOUNT_ID / METIS_CLOUDFLARE_BASE_URL set — refusing account-token embed. ' +
+      'Ship a Worker proxy key only (METIS_PROXY_KEY, no account id). See docs/security/EMBEDDED-KEY-ROTATION.md.'
+  )
+}
+const baseUrl = ''
 if (baseUrl && !/^https:\/\//i.test(baseUrl)) {
   throw new Error(`[embed:cf-key] the Cloudflare base URL must be an https:// URL, got: ${baseUrl}`)
 }
