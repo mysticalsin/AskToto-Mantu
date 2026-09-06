@@ -81,6 +81,7 @@ Tony's browser         --Access-> resolve identity (JWT or    --read/--   integr
 | `POST /v1/heartbeat` | Métis desktop | HMAC only. Not Access. |
 | `POST /v1/use` | Métis desktop | HMAC only. Not Access. Brokers a funded Ask; never returns a raw vault secret. |
 | `GET /v1/skills/manifest` | Métis desktop | HMAC only. Not Access. Empty body, so the signed hash is `sha256Hex("")`. |
+| `GET /v1/integrations` | Métis desktop | HMAC only. Not Access. |
 | `GET /health` | Anyone | Open. Says whether secrets are bound, never what they are. |
 | `/assets/*` | Anyone | Open. Public console chrome (hashed JS/CSS, the world map SVG). Access must never wrap these. |
 
@@ -167,7 +168,7 @@ snapshot and that module is the live source of truth.
 | `POST /v1/ingest` | POST | Ask, rating, listen/recap, or crm events, shaped per `event` field. GET is rejected (405 or 401), never processed. |
 | `POST /v1/use` | POST | Brokers a funded Ask through a stored provider key. Never returns the raw key. |
 | `GET /v1/skills/manifest` | GET | No body. Returns `{ ok, skills: [{ skillId, version, sha256, signed }] }`. |
-| `GET /v1/integrations` | GET | Planned (plan section 9c): returns the CRM/MCP connections the seat's tier or group is entitled to, with credentials, to an approved or actively licensed seat only, every fetch audited. Not implemented as of this writing; see `docs/design/OPERATOR.md` and the plan for the intended contract. |
+| `GET /v1/integrations` | GET | HMAC only. Not Access. Returns CRM/MCP connections the seat's tier/group is entitled to (credentials for approved/licensed seats); every fetch audited. Cloudflare Access must Bypass this path (same as heartbeat). |
 
 `GET /health` (open, no auth): `{ ok, service: "metis-operator", configured }` today.
 `configured` is true once both `OPERATOR_INGEST_SECRET` and `OPERATOR_PROMPT_KEY` are bound. A
@@ -359,7 +360,9 @@ change that touches D1 schema, HMAC verification, or Access identity resolution;
 2. Self-hosted app **Métis Operator** on `metis-operator.tony-walteur.workers.dev` (Allow, the two
    Tony emails only).
 3. Bypass policies on `/health`, `/v1/ingest`, `/v1/heartbeat`, `/v1/use`, `/v1/skills/manifest`,
-   and `/assets/*`. Leave `/v1/admin/*` to the Worker's own 401 JSON, do not wrap it a second time.
+   `/v1/integrations`, and `/assets/*` (keep in sync with `ACCESS_BYPASS_PATHS` in
+   `operator/src/access.ts`). Leave `/v1/admin/*` to the Worker's own 401 JSON, do not wrap it a
+   second time.
 4. One-time PIN identity provider. Do not click **Protect this Worker**.
 5. Bind `POLICY_AUD` (the Métis Operator app's AUD) as a Worker secret.
 

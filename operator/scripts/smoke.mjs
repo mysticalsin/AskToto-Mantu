@@ -153,6 +153,35 @@ export async function checkHeartbeatNoHmac(fetchImpl, baseUrl) {
   }
 }
 
+
+export async function checkIntegrationsNoHmac(fetchImpl, baseUrl) {
+  const name = 'GET /v1/integrations without HMAC (401, not Access HTML)'
+  try {
+    const res = await timedFetch(fetchImpl, `${baseUrl}/v1/integrations`, { method: 'GET' })
+    const ctype = (res.headers.get('content-type') || '').toLowerCase()
+    const isAccessHtml = res.status === 302 || ctype.includes('text/html')
+    let body = null
+    try {
+      body = await res.json()
+    } catch {
+      body = null
+    }
+    const ok =
+      res.status === 401 &&
+      !isAccessHtml &&
+      body &&
+      body.ok === false &&
+      typeof body.error === 'string' &&
+      /hmac/i.test(body.error)
+    const detail = isAccessHtml
+      ? `status=${res.status} type=${ctype || 'missing'} — FAIL: Cloudflare Access wrapped HMAC route`
+      : `status=${res.status} error=${body?.error ?? 'missing'}`
+    return result(name, ok, detail)
+  } catch (err) {
+    return result(name, false, `request failed: ${err.message}`)
+  }
+}
+
 /** Pure orchestrator: no argv, no process.exit, no console — just runs every check against the
  *  injected fetch and returns the results. Safe to unit-test with a fake fetch. */
 export async function runSmoke({ baseUrl, teamDomain = DEFAULT_TEAM_DOMAIN, fetchImpl = fetch }) {
@@ -164,7 +193,8 @@ export async function runSmoke({ baseUrl, teamDomain = DEFAULT_TEAM_DOMAIN, fetc
     checkAccessRedirect(fetchImpl, base, teamDomain),
     checkAdminDashboardUnauth(fetchImpl, base),
     checkIngestGetNever200(fetchImpl, base),
-    checkHeartbeatNoHmac(fetchImpl, base)
+    checkHeartbeatNoHmac(fetchImpl, base),
+    checkIntegrationsNoHmac(fetchImpl, base)
   ])
   return { baseUrl: base, checks, allOk: checks.every((c) => c.ok) }
 }

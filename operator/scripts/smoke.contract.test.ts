@@ -7,6 +7,7 @@ import {
   checkHealth,
   checkHeartbeatNoHmac,
   checkIngestGetNever200,
+  checkIntegrationsNoHmac,
   checkWorldSvg,
   parseArgs,
   runSmoke
@@ -193,6 +194,33 @@ describe('smoke.mjs pure checkers (fake fetch)', () => {
     expect(r.ok).toBe(false)
     expect(r.detail).toContain('ECONNRESET')
   })
+
+  it('checkIntegrationsNoHmac passes on 401 missing HMAC JSON', async () => {
+    const fetchImpl = fakeFetch([
+      {
+        url: `${BASE}/v1/integrations`,
+        response: fakeResponse({ status: 401, jsonBody: { ok: false, error: 'missing HMAC headers' } })
+      }
+    ])
+    const r = await checkIntegrationsNoHmac(fetchImpl, BASE)
+    expect(r.ok).toBe(true)
+  })
+
+  it('checkIntegrationsNoHmac fails on Access 302 HTML', async () => {
+    const fetchImpl = fakeFetch([
+      {
+        url: `${BASE}/v1/integrations`,
+        response: fakeResponse({
+          status: 302,
+          headers: { location: `${DEFAULT_TEAM_DOMAIN}/cdn-cgi/access/login/x`, 'content-type': 'text/html' }
+        })
+      }
+    ])
+    const r = await checkIntegrationsNoHmac(fetchImpl, BASE)
+    expect(r.ok).toBe(false)
+    expect(r.detail).toMatch(/Access/)
+  })
+
 })
 
 describe('runSmoke orchestrator', () => {
@@ -213,13 +241,17 @@ describe('runSmoke orchestrator', () => {
         response: fakeResponse({ status: 401, jsonBody: { ok: false } })
       },
       { url: `${BASE}/v1/ingest`, response: fakeResponse({ status: 401 }) },
-      { url: `${BASE}/v1/heartbeat`, method: 'POST', response: fakeResponse({ status: 401 }) }
+      { url: `${BASE}/v1/heartbeat`, method: 'POST', response: fakeResponse({ status: 401 }) },
+      {
+        url: `${BASE}/v1/integrations`,
+        response: fakeResponse({ status: 401, jsonBody: { ok: false, error: 'missing HMAC headers' } })
+      }
     ])
   }
 
   it('allOk is true when every check passes', async () => {
     const report = await runSmoke({ baseUrl: BASE, fetchImpl: allGreenFetch() })
-    expect(report.checks).toHaveLength(7)
+    expect(report.checks).toHaveLength(8)
     expect(report.allOk).toBe(true)
   })
 
