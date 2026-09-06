@@ -116,22 +116,48 @@ describe('cloudflareConnectHref', () => {
   })
 })
 
+describe('resolveOperatorBaseUrl', () => {
+  it('falls back to DEFAULT when Settings and env are empty or whitespace', () => {
+    expect(resolveOperatorBaseUrl({}, {})).toBe(DEFAULT_OPERATOR_URL)
+    expect(resolveOperatorBaseUrl({ operatorUrl: '' }, {})).toBe(DEFAULT_OPERATOR_URL)
+    expect(resolveOperatorBaseUrl({ operatorUrl: '   ' }, {})).toBe(DEFAULT_OPERATOR_URL)
+    expect(resolveOperatorBaseUrl({}, { METIS_OPERATOR_URL: '   ' })).toBe(DEFAULT_OPERATOR_URL)
+  })
+
+  it('prefers Settings, then METIS_OPERATOR_URL, and strips a trailing slash', () => {
+    expect(resolveOperatorBaseUrl({ operatorUrl: 'https://op.example.workers.dev/' }, {})).toBe(
+      'https://op.example.workers.dev'
+    )
+    expect(resolveOperatorBaseUrl({}, { METIS_OPERATOR_URL: 'https://env.example.workers.dev/' })).toBe(
+      'https://env.example.workers.dev'
+    )
+  })
+
+  it('refuses an explicit http override instead of falling back to DEFAULT', () => {
+    expect(resolveOperatorBaseUrl({ operatorUrl: 'http://localhost:8787' }, {})).toBe('')
+    expect(resolveOperatorBaseUrl({}, { METIS_OPERATOR_URL: 'http://localhost:8787' })).toBe('')
+  })
+})
+
 describe('operatorUrlConfigured', () => {
   it('falls back to DEFAULT_OPERATOR_URL so seats can heartbeat without Settings', () => {
     expect(resolveOperatorBaseUrl({}, {})).toBe(DEFAULT_OPERATOR_URL)
     expect(operatorUrlConfigured({})).toBe(true)
     expect(operatorUrlConfigured({ operatorUrl: '' })).toBe(true)
+    expect(operatorUrlConfigured({ operatorUrl: '   ' })).toBe(true)
     expect(operatorUrlConfigured({ operatorUrl: 'http://localhost' })).toBe(false)
     expect(operatorUrlConfigured({ operatorUrl: 'https://metis-operator.example.workers.dev' })).toBe(true)
     expect(operatorUrlConfigured({}, { METIS_OPERATOR_URL: 'https://op.example.workers.dev' })).toBe(true)
+    expect(operatorUrlConfigured({}, { METIS_OPERATOR_URL: '   ' })).toBe(true)
   })
 
-  it('sends Ask text only once an explicit URL is set (not bare DEFAULT)', () => {
+  it('sends Ask text only once an explicit URL is set (not bare DEFAULT or whitespace)', () => {
     const url = { operatorUrl: 'https://metis-operator.example.workers.dev' }
     expect(shouldSendAskText(url)).toBe(true)
     expect(shouldSendAskText({ ...url, sendAskText: false })).toBe(false)
     expect(shouldSendAskText({ sendAskText: true })).toBe(false)
     expect(shouldSendAskText({})).toBe(false)
+    expect(shouldSendAskText({ operatorUrl: '   ', sendAskText: true })).toBe(false)
   })
 })
 

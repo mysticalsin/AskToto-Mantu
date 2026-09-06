@@ -364,7 +364,7 @@ svg path { vector-effect: non-scaling-stroke; }
       <p class="eyebrow">Licenses</p>
       ${
         data.licenses.empty
-          ? '<div class="empty">No heartbeats yet. Licenses stay empty until a seat checks in.</div>'
+          ? '<div class="empty">No heartbeats yet. Licenses stay empty until a seat checks in.</div><div class="sub muted" style="padding-bottom:8px">Generate License stays on the Fly license-server (asktoto-license /admin/ui, local http://127.0.0.1:8420/admin/ui). No keys on this page.</div>'
           : `<table><thead><tr><th>Device</th><th>OS</th><th>Version</th><th>Where</th><th>Last seen</th><th></th></tr></thead><tbody>${data.licenses.seats
               .map(
                 (s) => `<tr>
@@ -377,7 +377,7 @@ svg path { vector-effect: non-scaling-stroke; }
       </tr>`
               )
               .join('')}</tbody></table>
-             <div class="sub muted" style="padding-bottom:8px">Real D1 seats. Activate stays on Fly. No keys on this page.</div>`
+             <div class="sub muted" style="padding-bottom:8px">Real D1 seats from HMAC heartbeats. Generate License stays on the Fly license-server (asktoto-license /admin/ui, local http://127.0.0.1:8420/admin/ui). No keys on this page.</div>`
       }
     </article>
   </section>
