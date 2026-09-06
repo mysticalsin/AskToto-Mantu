@@ -132,6 +132,8 @@ See [THINKING-ORB.md](./THINKING-ORB.md). Caption then sphere. Word first.
 ## Bar sphere
 See [BAR-PILL.md](./BAR-PILL.md). The Bar control is a Jakub thinking-orb (`thinking-orbs`, theme `dark`): canvas 64, 2x backing, visible 41×41. Idle `solving` with no caption, listen `listening`, think `working`, fact-check `searching`, connecting `connecting`. Same circle when minimized. Left Settings M stays a circle (no-squash M). Not stuffed into overlay Hide/Island. Not a Fit Studio magenta core.
 
+Bar rest look (power choice): [ORB-SELECTION.md](./ORB-SELECTION.md). Full bar (default), Jakub circle, or Obsidian animated orb. Hide/Island ignore it.
+
 ## Auto-answer
 Ambient copilot / auto-answer stays until Tony clicks (dismiss/read, never send) or a new question replaces it. Not an ephemeral 4s/7s card.
 
@@ -142,7 +144,7 @@ Settings → CLI Integration Connect is a zero-token session probe (`missing` / 
 
 Spotlight Ref is a CLI call. The web REST picker (`listDustAgents` / view merge) must not be the only path and must not dead-end on reconnect copy.
 
-- **Install.** `MANAGED_CLIS.dust` is `@dust-tt/dust-cli` (verified 0.4.5: `bin.dust` = `dist/index.js`). Same `installManagedCli` pattern as claude/codex: fetch the npm tarball, sha512 integrity, zip-slip-safe unpack into `userData/managed-cli/dust`. No system `npm i -g`. The published tarball is not a single-file bundle: after unpack, install production deps with the **managed Node** `npm` into that package dir (still not global).
+- **Install.** `MANAGED_CLIS.dust` is `@dust-tt/dust-cli` (verified 0.4.5: `bin.dust` = `dist/index.js`). Same `installManagedCli` pattern as claude/codex: fetch the npm tarball, sha512 integrity, zip-slip-safe unpack into `userData/managed-cli/dust`. No system `npm i -g`. The published tarball is not a single-file bundle: after unpack, install production deps with the **managed Node** binary plus `npm-cli.js` (never the `bin/npm` shebang: Electron PATH has no `node`, and that was exit 127). Fail loud if Node is missing. Never leave a half tmp package as Connected.
 - **Runtime.** `@dust-tt/dust-cli` statically imports `keytar` (native). `ELECTRON_RUN_AS_NODE` does not load a Node-ABI addon. Spawn the managed `dust` entry with a **vendored portable Node** (`userData/managed-node` or `resources/managed-node`), never a user-installed Node/Git/VC++ homework step. If the pack omitted the binary (dev checkout), Set up Dust fetches official Node 22.22.3 into userData after a sha256 check.
 - **Windows.** Ship portable Node (pinned `22.22.3` win-x64) under `resources/managed-node/win-x64` so the next pack includes it. If keytar cannot load without the VC++ runtime, ship `vc_redist.x64.exe` under `resources/vcredist` and run it from the Set up Dust / installer path (`/quiet /norestart`). One-click Set up Dust. No browser-only Windows path.
 - **Set up Dust.** Settings → AI → Set up Dust installs this CLI, then signs in (native OAuth or an existing CLI session). Copy must not say "No CLI".

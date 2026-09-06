@@ -8,7 +8,7 @@ Three modes in Settings (persist, no reinstall). Default on a fresh install is *
 
 1. **hide** (default). Fully hidden until the pointer is on the hardware camera / Dynamic Island square (top-center, on top of the camera housing), then reveal down. Leave that island hides. Windows: top-center of the display, **no fake notch**.
 2. **island**. The always-visible peek capsule (may sit in the island / notch). Hover the same camera square expands down. Leave that island returns to the peek. Island must never minimize to a second disk.
-3. **bar**. Classic bar. Always visible. Idle rest is the **full bar plus the thinking-orb circle** (visible 41×41, package canvas 64 with 2x backing, never a lozenge / pill / flattened disc). The only layout that can collapse to that same circle. Hide and Island must never grow a minimize-to-circle control, and any minimize call while those layouts are active is a no-op (do not jump Hide → Bar). The circle is invisible whenever the bar is invisible. Contract: `docs/design/BAR-PILL.md`.
+3. **bar**. Classic bar. Always visible. Idle rest is the **full bar plus the thinking-orb circle** (visible 41×41, package canvas 64 with 2x backing, never a lozenge / pill / flattened disc). The only layout that can collapse to that same circle. Hide and Island must never grow a minimize-to-circle control, and any minimize call while those layouts are active is a no-op (do not jump Hide → Bar). The circle is invisible whenever the bar is invisible. Contract: `docs/design/BAR-PILL.md`. Settings Appearance also offers a Bar rest look (`docs/design/ORB-SELECTION.md`): Full bar (default), Circle (Jakub), or Obsidian (dark disc, cyan spark, purple rings). That key never changes Hide or Island.
 
 ### Bar sphere (thinking-orb, Bar only)
 
