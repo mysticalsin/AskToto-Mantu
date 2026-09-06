@@ -68,7 +68,8 @@
   },
   "comment": "Only main-process runtime deps live in 'dependencies' (electron-builder bundles these into the app). All renderer deps are bundled by Vite at build time and kept in devDependencies to keep the package small.",
   "overrides": {
-    "sharp": "^0.35.0"
+    "sharp": "^0.35.0",
+    "fast-uri": "^3.1.6"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.106.0",
