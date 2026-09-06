@@ -114,6 +114,15 @@ describe('quality bar: login', () => {
     )
     expect(postKeys.status).toBe(401)
 
+    const postLicenses = await handleRequest(
+      new Request('https://operator.test/v1/admin/licenses', { method: 'POST', body: '{}' }),
+      configured,
+      {},
+      { store, now: NOW }
+    )
+    expect(postLicenses.status).toBe(401)
+    expect(await postLicenses.json()).toEqual({ ok: false, error: 'Access required' })
+
     const other = await handleRequest(
       new Request('https://operator.test/v1/admin/summary'),
       env(),
@@ -257,5 +266,21 @@ describe('quality bar: keys last4 and Cloudflare fail-loud', () => {
     expect(html).not.toContain('Cloudflare token missing')
     expect(html).toContain('data-page="keys"')
     expect(html).not.toMatch(tokenPatternForTests())
+  })
+})
+
+describe('quality bar: Ultron lock — Operator only, no Latest feed', () => {
+  it('design law forbids Metis-Releases Latest and Operator source does not touch the feed', () => {
+    const root = join(SRC, '../..')
+    const operatorLaw = readFileSync(join(root, 'docs/design/OPERATOR.md'), 'utf8')
+    const northStar = readFileSync(join(root, 'docs/design/METIS-PLATFORM-NORTH-STAR.md'), 'utf8')
+    expect(operatorLaw).toMatch(/ULTRON LOCK/)
+    expect(operatorLaw).toMatch(/Metis-Releases Latest/)
+    expect(operatorLaw).toMatch(/Bob QA/)
+    expect(northStar).toMatch(/EXE\/DMG\/Native → Latest only after Bob QA \+ Ultron approve/)
+    for (const file of collectTs(SRC)) {
+      const src = readFileSync(file, 'utf8')
+      expect(src, file).not.toMatch(/Metis-Releases|latest-mac\.yml|latest\.yml/)
+    }
   })
 })

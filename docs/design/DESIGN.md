@@ -92,7 +92,7 @@ See [TIME-SAVED.md](./TIME-SAVED.md). Tokens, type, motion, do/don'ts live there
 dashboard (PR 61) is a separate surface; this module is a small honest feed it can read later.
 
 ## Operator
-See [OPERATOR.md](./OPERATOR.md). Cloudflare Access packed ops console (`operator/`, Worker `metis-operator`). Operator is the central API-key gateway: Tony vaults keys (last4 only), approves each seat, then HMAC `/v1/use` + heartbeat `fundedProviders` fund that seat. Unapproved seats fail loud. Chrome is pre-Shoey (Keys, Licenses, Map / macOS / Windows, Skills). Client keeps prompt cache on. Map geo comes from `request.cf`, never from the app. Not overlay chrome. Not the Fly license-server. Not `cloudflare-proxy`.
+See [OPERATOR.md](./OPERATOR.md). Cloudflare Access packed ops console (`operator/`, Worker `metis-operator`). Operator is the central API-key gateway: Tony vaults keys (last4 only), approves each seat, then HMAC `/v1/use` + heartbeat `fundedProviders` fund that seat. Unapproved seats fail loud. Chrome is pre-Shoey (Keys, Licenses, Map / macOS / Windows, Skills). Client keeps prompt cache on. Map geo comes from `request.cf`, never from the app. Not overlay chrome. Not the Fly license-server. Not `cloudflare-proxy`. Ultron lock: no pack, no merge, no Metis-Releases Latest. EXE/DMG/Native → Latest only after Bob QA + Ultron approve.
 
 ## MCP write
 Outlook drafts and CRM notes are user-confirmed. Never auto-send. A disconnected connector shows
