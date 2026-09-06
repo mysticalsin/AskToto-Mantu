@@ -1,11 +1,4 @@
-import {
-  bars,
-  choropleth,
-  choroplethMini,
-  dualLine,
-  sparklineArea,
-  sparklineLine
-} from './charts'
+import { choropleth, choroplethMini, sparklineLine } from './charts'
 import { statusBadge, STATUS_BADGE_CSS } from './components/ui/status-badge'
 import { CRM_FILTER_ORDER } from './crm'
 import { CF_TOKEN_MISSING, type CloudflareOverview } from './cloudflare'
@@ -123,7 +116,17 @@ a { color: var(--accent); text-decoration: none; }
 .wrap { padding: 12px 16px 36px; display: grid; gap: 12px; isolation: isolate; overflow-x: hidden; }
 .page { min-width: 0; position: relative; z-index: 1; }
 .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-@media (max-width: 1100px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.kpis.glance { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.kpis.glance .kpi .n { font-size: 32px; margin-top: 12px; }
+@media (max-width: 1100px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .kpis.glance { grid-template-columns: 1fr; } }
+.ov-split { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr); gap: 12px; align-items: start; }
+.people-row {
+  display: grid; grid-template-columns: 56px minmax(0, 1.2fr) 110px 88px minmax(0, 1fr) 72px;
+  gap: 8px; align-items: center; padding: 8px 4px; border-bottom: 1px solid var(--hair);
+}
+.people-row .who { font-weight: 650; color: var(--ink); font-size: 12px; word-break: break-word; }
+.activity-feed .event { padding: 8px 2px; grid-template-columns: 72px minmax(0, 1fr) minmax(0, 1.4fr) 72px; }
+@media (max-width: 980px) { .ov-split, .people-row { grid-template-columns: 1fr; } }
 .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-width: 0; }
 .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
 .card {
@@ -378,6 +381,31 @@ function renderInstallWorks(data: DashboardPayload): string {
     ${renderLicenseGenerateForm()}
     ${body}
   </article>`
+}
+
+function renderPeopleStrip(rows: ProfileRow[], liveCount: number): string {
+  if (!rows.length) {
+    return '<div class="empty">No seats yet. A heartbeat writes city from request.cf and lands here.</div>'
+  }
+  const body = rows
+    .slice(0, 12)
+    .map((r) => {
+      const who = r.hostname || r.email || r.device
+      const place = [r.city, r.region, r.country].filter(Boolean).join(' · ') || MISSING
+      return `<div class="people-row" data-people-row data-live="${r.live ? '1' : '0'}" data-city="${esc(r.city || '')}">
+        ${r.live ? '<span class="pill up">live</span>' : '<span class="muted">idle</span>'}
+        <span class="who">${field(who)}</span>
+        <span>${field(r.city)}</span>
+        <span class="muted">${esc(r.device)}</span>
+        <span class="muted">${esc(place)}</span>
+        <span>${field(r.license)}</span>
+      </div>`
+    })
+    .join('')
+  const hint = liveCount
+    ? `${liveCount} live · heartbeat &lt; 2 min`
+    : 'No heartbeat in the last two minutes. Showing last-seen seats with city.'
+  return `<div class="sub muted" style="padding-bottom:8px">${hint}</div>${body}`
 }
 
 function renderGeoCorner(data: DashboardPayload): string {
@@ -662,41 +690,6 @@ export function renderConsole(data: DashboardPayload): string {
       </div>`
     })
     .join('')
-  const askRows = data.asks
-    .map(
-      (a) => `<tr>
-        <td>${esc(a.mode)}</td>
-        <td>${esc(a.preview)}</td>
-        <td><span class="pill ${esc(a.cache_status)}">${esc(a.cache_status)}</span></td>
-        <td class="muted">${esc(a.provider)}</td>
-        <td><button data-reveal="${esc(a.id)}">Reveal</button></td>
-      </tr>`
-    )
-    .join('')
-  const costRows = data.cost.table
-    .map(
-      (r) => `<tr>
-        <td>${esc(r.provider)}</td>
-        <td>${esc(r.mode)}</td>
-        <td>${r.asks}</td>
-        <td>${r.read == null ? 'not reported' : r.read}</td>
-        <td>${r.write == null ? 'not reported' : r.write}</td>
-        <td>${r.uncached == null ? 'not reported' : r.uncached}</td>
-        <td>${r.estimate ?? 'not reported'}</td>
-      </tr>`
-    )
-    .join('')
-  const gatewayRows = data.gateway.rows
-    .map(
-      (r) => `<tr>
-        <td>${esc(r.provider)}</td>
-        <td>${r.asks}</td>
-        <td>${r.tokens == null ? 'not reported' : r.tokens}</td>
-        <td>${r.estimate ?? 'not reported'}</td>
-        <td>${r.funded ? '<span class="pill up">funded</span>' : '<span class="muted">—</span>'}</td>
-      </tr>`
-    )
-    .join('')
   const noticeRows = data.notices
     .map(
       (n) => `<tr data-q="${esc(`${n.kind} ${n.title} ${n.detail}`.toLowerCase())}">
@@ -719,16 +712,6 @@ export function renderConsole(data: DashboardPayload): string {
       </tr>`
     })
     .join('')
-  const timeline = data.change.timeline
-    .map(
-      (t) => `<tr>
-        <td class="muted">${esc(when(t.ts))}</td>
-        <td>${esc(t.action)}</td>
-        <td class="muted">${esc(t.actor)}</td>
-        <td>${esc(t.detail)}</td>
-      </tr>`
-    )
-    .join('')
   const props = data.proposals
     .map(
       (p) => `<div class="card" data-proposal="${esc(p.id)}">
@@ -747,8 +730,6 @@ export function renderConsole(data: DashboardPayload): string {
     (s) =>
       `<button class="tab" data-crm-filter="${s}" type="button">${statusBadge(s)} ${data.crm.counts[s]}</button>`
   ).join('')
-  const indexHint =
-    k.lastIndexAt != null ? `last index ${when(k.lastIndexAt)}` : 'last index not reported'
   const liveSeats = data.profiles.filter((p) => p.live)
   const vaultRows = data.keys.vault
     .map(
@@ -804,82 +785,28 @@ svg path { vector-effect: non-scaling-stroke; }
     </header>
 
     <section class="page wrap" data-page="overview">
-      ${renderInstallWorks(data)}
-      <p class="eyebrow">Fleet</p>
-      <div class="kpis">
+      <div class="kpis glance" data-overview-kpis>
         ${kpiCard({ title: 'Live seats', value: String(data.roi.liveSeats), sub: 'heartbeat &lt; 2 min · real devices', spark: sparklineLine(k.liveSeries) })}
-        ${kpiCard({ title: 'Active 24h', value: String(k.dau), sub: `WAU ${k.wau} · unique seats`, spark: sparklineArea(k.dauSeries) })}
-        ${kpiCard({ title: 'Licensed', value: String(data.roi.licensed), sub: 'license status on real seats', spark: '' })}
-        ${kpiCard({ title: 'Approved', value: String(data.roi.approved), sub: 'Tony gate for platform keys', spark: '' })}
-        ${kpiCard({
-          title: 'ROI today',
-          value: data.roi.costToday ?? 'not reported',
-          sub: data.roi.cost7d ? `7d ${data.roi.cost7d} · D1 asks` : 'D1 asks · list price',
-          spark: sparklineArea(k.costSeries)
-        })}
-        ${kpiCard({
-          title: 'Usage today',
-          value: String(data.roi.asksToday),
-          sub: 'Asks ingested today',
-          spark: ''
-        })}
-        ${kpiCard({
-          title: 'Cache hit',
-          value: data.roi.cacheHit ?? 'not reported',
-          sub: 'real provider fields only',
-          spark: sparklineLine(k.hitSeries)
-        })}
-        ${kpiCard({
-          title: 'Versions',
-          value: String(k.versions),
-          sub: indexHint,
-          spark: ''
-        })}
+        ${kpiCard({ title: 'Time saved', value: data.roi.timeSaved, sub: data.roi.timeSavedSub, spark: '' })}
+        ${kpiCard({ title: 'Value', value: data.roi.value, sub: data.roi.valueSub, spark: '' })}
       </div>
-
-      <div class="grid-2">
-        <article class="card">
-          <p class="eyebrow">Scale</p>
-          <div class="tabs">
-            <button class="tab on" data-scale="24h">24h</button>
-            <button class="tab" data-scale="7d">7d</button>
-          </div>
-          <div id="scale-24">${dualLine(data.scale.hours24)}</div>
-          <div id="scale-7" hidden>${dualLine(data.scale.days7)}</div>
-          <div class="legend"><span><i></i>heartbeats</span><span><i class="ask"></i>Asks</span></div>
-        </article>
-        <article class="card">
-          <p class="eyebrow">Mix</p>
-          <div class="grid-2" style="gap:8px">
-            <div>
-              <div class="sub muted">App version</div>
-              ${bars(data.scale.versions, 240, 140)}
-            </div>
-            <div>
-              <div class="sub muted">OS</div>
-              ${bars(data.scale.os, 240, 140)}
-            </div>
-          </div>
-        </article>
-      </div>
-
-      <div class="grid-2">
-        <article class="card" style="padding-bottom:10px">
-          <p class="eyebrow">Gateway usage</p>
+      <div class="ov-split">
+        <article class="card activity-feed" style="padding-bottom:10px" data-overview-activity>
+          <p class="eyebrow">Activity</p>
           ${
-            data.gateway.rows.length
-              ? `<table><thead><tr><th>Provider</th><th>Asks 7d</th><th>Tokens</th><th>Estimate</th><th>Vault</th></tr></thead><tbody>${gatewayRows}</tbody></table>
-                 <div class="sub muted" style="padding-bottom:8px">DeepSeek, Anthropic, NIM, and every other provider from D1 asks. Missing tokens = not reported, never $0.</div>`
-              : '<div class="empty">No gateway Asks ingested yet.</div>'
+            data.events.length
+              ? `<div class="sub muted" style="padding-bottom:6px">Seats, heartbeats, asks, recaps. City from request.cf. Not pageviews.</div>
+                 <div data-activity-stream>${renderEvents(data.events.slice(0, 24))}</div>`
+              : '<div class="empty">No activity yet. A heartbeat writes city and lands here.</div>'
           }
         </article>
         ${renderGeoCorner(data)}
       </div>
-
-      <article class="card" style="padding-bottom:10px" data-cf-overview>
-        <p class="eyebrow">Cloudflare</p>
-        ${renderCloudflare(data.cloudflare)}
+      <article class="card" style="padding-bottom:10px" data-overview-people>
+        <p class="eyebrow">${liveSeats.length ? 'Live people' : 'People'}</p>
+        ${renderPeopleStrip(liveSeats.length ? liveSeats : data.profiles, liveSeats.length)}
       </article>
+      ${renderInstallWorks(data)}
     </section>
 
     <section class="page wrap" data-page="realtime" hidden>
@@ -1086,6 +1013,7 @@ svg path { vector-effect: non-scaling-stroke; }
         </form>
         <p class="eyebrow">Cloudflare · AI Gateway</p>
         <p class="sub muted">Choose Cloudflare. Log in to the Cloudflare account. Operator adds the API key. No paste.</p>
+        <div data-cf-overview>${renderCloudflare(data.cloudflare)}</div>
         <p><a class="btn primary" id="cf-connect" data-cf-aig-connect href="/cloudflare/connect">Log in to Cloudflare</a></p>
         <p id="cf-connect-msg" class="muted" style="padding:8px 0"></p>
         <p class="eyebrow" style="margin-top:14px">Vault</p>
