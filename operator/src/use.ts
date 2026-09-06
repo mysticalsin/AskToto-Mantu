@@ -71,7 +71,7 @@ export function parseUseBody(bodyText: string): { ok: true; req: UseRequest } | 
   if (isForbiddenVaultProvider(provider) || !isVaultLlmProvider(provider) || provider === 'custom') {
     return { ok: false, error: 'provider not allowed', status: 400 }
   }
-  if (provider in PROVIDERS && requiresUserBaseUrl(provider as ProviderId)) {
+  if (provider !== 'cloudflare' && provider in PROVIDERS && requiresUserBaseUrl(provider as ProviderId)) {
     return { ok: false, error: 'provider not allowed', status: 400 }
   }
   const system = typeof body.system === 'string' ? clip(body.system, SYSTEM_CAP) : ''
@@ -103,14 +103,14 @@ export async function decryptActiveLlmSecret(
   store: OperatorStore,
   vaultKey: string,
   provider: string
-): Promise<{ secret: string; row: VaultKeyRow } | null> {
+): Promise<{ secret: string; accountId?: string; row: VaultKeyRow } | null> {
   const rows = await store.listVaultRows()
   const row = rows.find((r) => r.provider === provider && r.status === 'active')
   if (!row) return null
   try {
     const plain = decodeVaultPlaintext(await decryptVault(row.cipher, row.iv, vaultKey))
     if (!plain.secret) return null
-    return { secret: plain.secret, row }
+    return { secret: plain.secret, accountId: plain.accountId, row }
   } catch {
     return null
   }
@@ -182,6 +182,36 @@ async function callAnthropic(
   return parsed
 }
 
+async function callCloudflareGateway(
+  secret: string,
+  accountId: string | undefined,
+  req: UseRequest,
+  providerFetch: typeof fetch
+): Promise<{ text: string; inputTokens?: number; outputTokens?: number } | UseFail> {
+  const id = (accountId || '').trim()
+  if (!id) return { ok: false, error: 'Operator cannot issue a use', status: 503 }
+  const url = `https://api.cloudflare.com/client/v4/accounts/${id}/ai/v1/chat/completions`
+  const messages = [...(req.system ? [{ role: 'system' as const, content: req.system }] : []), ...req.messages]
+  const res = await providerFetch(url, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${secret}`,
+      'cf-aig-gateway-id': 'default'
+    },
+    body: JSON.stringify({
+      model: req.model,
+      messages,
+      ...(typeof req.temperature === 'number' ? { temperature: req.temperature } : {}),
+      ...(req.maxTokens ? { max_tokens: req.maxTokens } : {})
+    })
+  })
+  if (!res.ok) return { ok: false, error: 'provider refused the Operator key', status: 502 }
+  const parsed = openaiText(await res.json().catch(() => null))
+  if (!parsed) return { ok: false, error: 'provider returned an empty answer', status: 502 }
+  return parsed
+}
+
 async function callOpenAICompat(
   secret: string,
   req: UseRequest,
@@ -233,9 +263,11 @@ export async function handleUse(
   let out: { text: string; inputTokens?: number; outputTokens?: number } | UseFail
   try {
     out =
-      def.kind === 'anthropic'
-        ? await callAnthropic(unlocked.secret, parsed.req, providerFetch)
-        : await callOpenAICompat(unlocked.secret, parsed.req, def.baseUrl, providerFetch)
+      parsed.req.provider === 'cloudflare'
+        ? await callCloudflareGateway(unlocked.secret, unlocked.accountId, parsed.req, providerFetch)
+        : def.kind === 'anthropic'
+          ? await callAnthropic(unlocked.secret, parsed.req, providerFetch)
+          : await callOpenAICompat(unlocked.secret, parsed.req, def.baseUrl, providerFetch)
   } catch {
     return fail('Operator cannot issue a use', 503)
   }

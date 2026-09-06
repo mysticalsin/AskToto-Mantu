@@ -81,6 +81,15 @@ describe('parseUseBody', () => {
     expect(
       parseUseBody(
         JSON.stringify({
+          provider: 'cloudflare',
+          model: '@cf/meta/llama-4-scout-17b-16e-instruct',
+          messages: [{ role: 'user', content: 'hi' }]
+        })
+      ).ok
+    ).toBe(true)
+    expect(
+      parseUseBody(
+        JSON.stringify({
           provider: 'openai',
           model: 'gpt-4o',
           messages: [{ role: 'user', content: 'data:image/jpeg;base64,abc' }]

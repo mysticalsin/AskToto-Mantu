@@ -12,7 +12,7 @@ import {
   unauthorized,
   type AccessCtx
 } from './access'
-import { redirectToCloudflareLogin, redirectToKeysAfterCloudflareLogin } from './cloudflare-connect'
+import { handleCloudflareCallback, redirectToCloudflareLogin } from './cloudflare-connect'
 import { missingCloudflareOverview, pullCloudflareOverview, type CloudflareOverview } from './cloudflare'
 import { asCrmStatus } from './crm'
 import { decryptPrompt, encryptPrompt, sha256Hex, signSkillPack } from './crypto'
@@ -55,6 +55,12 @@ export interface Env {
   OPERATOR_VAULT_KEY?: string
   TEAM_DOMAIN?: string
   POLICY_AUD?: string
+  CF_OAUTH_CLIENT_ID?: string
+  CF_OAUTH_CLIENT_SECRET?: string
+  CF_OAUTH_AUTHORIZE_URL?: string
+  CF_OAUTH_TOKEN_URL?: string
+  CF_OAUTH_SCOPES?: string
+  CF_ACCOUNT_ID?: string
 }
 
 export interface HandleOpts {
@@ -170,8 +176,10 @@ async function adminRoute(
 ): Promise<Response> {
   if (isConsolePath(url.pathname) && request.method === 'GET') {
     if (url.pathname === '/session') return json({ ok: true })
-    if (url.pathname === '/cloudflare/connect') return redirectToCloudflareLogin(request)
-    if (url.pathname === '/cloudflare/callback') return redirectToKeysAfterCloudflareLogin()
+    if (url.pathname === '/cloudflare/connect') return redirectToCloudflareLogin(request, env)
+    if (url.pathname === '/cloudflare/callback') {
+      return handleCloudflareCallback(request, env, store, email, now, opts.cfFetch ?? fetch)
+    }
     const dash = await buildDashboard(store, email, now, keyFlags(env), await cloudflareForDashboard(store, env, opts, now))
     return html(renderConsole(dash))
   }
