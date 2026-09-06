@@ -1070,6 +1070,8 @@ export const BaseSettingsSchema = z.object({
   autoHideOverlay: z.boolean().default(true),
   /** Overlay chrome: hide (default, fully hidden until top hover), island (visible peek), bar (classic). */
   overlayLayout: z.enum(['hide', 'island', 'bar']).default('hide'),
+  /** Bar rest look. Hide/Island ignore this. Default is the current full Bar. */
+  overlayOrbStyle: z.enum(['bar', 'jakub', 'obsidian']).default('bar'),
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('best'), // Best is default; Fast is a Settings power option (docs/asr/QUALITY.md)
   // parakeet = default. NVIDIA Parakeet v3, fastest + accurate for 25 European languages.
@@ -1542,6 +1544,7 @@ export const DEFAULT_SETTINGS: Settings = {
   overlayOpacity: 1,
   autoHideOverlay: true,
   overlayLayout: 'hide',
+  overlayOrbStyle: 'bar',
   showFullTranscriptInReview: false,
   asrQuality: 'best',
   asrEngine: 'parakeet',
