@@ -110,7 +110,10 @@ function isPrivateIPv6(host: string): boolean {
 }
 
 export function isUnsafeProbeHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '')
+  // A trailing dot is a valid FQDN root-label separator that new URL() preserves verbatim
+  // ("localhost." stays "localhost."), so every check below must run against the dot-stripped form or
+  // it silently misses "https://localhost./x", "https://metadata.google.internal./x", and the like.
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
   if (host === 'localhost' || host === 'metadata.google.internal' || host === '169.254.169.254') return true
   if (host.endsWith('.local') || host.endsWith('.internal')) return true
   const v4 = parseIPv4(host)
@@ -177,13 +180,55 @@ function getByPath(obj: unknown, path: string): unknown {
 }
 
 /** Upstream error text never reaches storage or a UI verbatim: truncated first, then anything
- *  token-shaped is stripped by `redact.ts`'s own patterns. */
+ *  token-shaped is stripped by `redact.ts`'s own patterns, plus the two auth-header shapes this module
+ *  itself ever sends back to a vendor (`Bearer <token>`, `Basic <base64>`) in case a vendor's error body
+ *  echoes the request's own Authorization header. */
 function redactUpstreamText(text: string): string {
   const truncated = text.slice(0, 200)
-  return looksLikeSecret(truncated) ? '[redacted]' : truncated.replace(/bearer\s+[a-z0-9._\-+/=]{8,}/gi, '[redacted]')
+  if (looksLikeSecret(truncated)) return '[redacted]'
+  return truncated.replace(/bearer\s+[a-z0-9._\-+/=]{8,}/gi, '[redacted]').replace(/basic\s+[a-z0-9+/=]{8,}/gi, '[redacted]')
 }
 
 // ── bounded fetch ────────────────────────────────────────────────────────────────────────────────────
+
+/** Sentinel distinguishing "the awaited promise settled" from "the deadline passed first" without an
+ *  extra boolean wrapper on every call site. */
+const TIMED_OUT = Symbol('probe-deadline-exceeded')
+
+/** Races `promise` against the time left until `deadlineAt` (never a fresh `PROBE_TIMEOUT_MS` window),
+ *  so a chain of calls sharing one deadline (the MCP handshake's initialize/notify/tools-list sequence)
+ *  cannot each buy themselves a brand new 10 seconds. A `remainingMs <= 0` resolves to `TIMED_OUT`
+ *  immediately, no timer set. Never rejects: a promise rejection also resolves to `TIMED_OUT`, since
+ *  every caller here only cares "did we get a value in time," and the underlying rejection reason (an
+ *  abort, a network error) is already surfaced by the caller's own error handling. */
+function withDeadline<T>(promise: Promise<T>, remainingMs: number): Promise<T | typeof TIMED_OUT> {
+  if (remainingMs <= 0) return Promise.resolve(TIMED_OUT)
+  return new Promise((resolve) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true
+        resolve(TIMED_OUT)
+      }
+    }, remainingMs)
+    promise.then(
+      (value) => {
+        if (!settled) {
+          settled = true
+          clearTimeout(timer)
+          resolve(value)
+        }
+      },
+      () => {
+        if (!settled) {
+          settled = true
+          clearTimeout(timer)
+          resolve(TIMED_OUT)
+        }
+      }
+    )
+  })
+}
 
 interface FetchOutcome {
   res: Response | null
@@ -191,9 +236,13 @@ interface FetchOutcome {
   networkError: boolean
 }
 
-async function boundedFetch(fetchImpl: typeof fetch, url: string, init: RequestInit): Promise<FetchOutcome> {
+/** `deadlineAt` is the one shared deadline for the whole probe attempt (`startedAt + PROBE_TIMEOUT_MS`,
+ *  computed once by the caller), not a fresh `PROBE_TIMEOUT_MS` per call - see `withDeadline`. */
+async function boundedFetch(fetchImpl: typeof fetch, url: string, init: RequestInit, deadlineAt: number): Promise<FetchOutcome> {
+  const remaining = deadlineAt - Date.now()
+  if (remaining <= 0) return { res: null, timedOut: true, networkError: false }
   const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS)
+  const timer = setTimeout(() => controller.abort(), remaining)
   try {
     const res = await fetchImpl(url, { ...init, redirect: 'manual', signal: controller.signal })
     return { res, timedOut: false, networkError: false }
@@ -205,43 +254,77 @@ async function boundedFetch(fetchImpl: typeof fetch, url: string, init: RequestI
   }
 }
 
-/** Reads at most `PROBE_BODY_CAP_BYTES` of the body, stopping the stream rather than reading it fully and
- *  discarding the rest. Falls back to a plain (still length-capped) `.text()` for a fetch stand-in a test
- *  supplies without a real `ReadableStream` body. */
-async function readCapped(res: Response): Promise<string> {
+interface ReadOutcome {
+  text: string
+  timedOut: boolean
+}
+
+/**
+ * Reads at most `PROBE_BODY_CAP_BYTES` of the body, stopping the stream rather than reading it fully and
+ * discarding the rest - and, unlike a plain `await res.text()`/`reader.read()` loop, bounded by the same
+ * shared `deadlineAt` `boundedFetch` used for the headers phase. `fetch()` resolving only means the
+ * response headers arrived; a slow-drip body (one byte every N ms, never closing) can otherwise hold the
+ * connection open indefinitely once the header-phase abort timer has already been cleared. Every
+ * `reader.read()` call is individually raced against the remaining time via `withDeadline`, and the
+ * reader is cancelled the moment the deadline passes so the underlying stream is told to stop, not just
+ * abandoned. Falls back to a plain (still length- and deadline-capped) `.text()` for a fetch stand-in a
+ * test supplies without a real `ReadableStream` body.
+ */
+async function readCapped(res: Response, deadlineAt: number): Promise<ReadOutcome> {
   const body = res.body
-  if (!body || typeof body.getReader !== 'function') {
-    const text = await res.text()
-    return text.slice(0, PROBE_BODY_CAP_BYTES)
+  if (!body) return { text: '', timedOut: false }
+  if (typeof body.getReader !== 'function') {
+    const remaining = deadlineAt - Date.now()
+    if (remaining <= 0) return { text: '', timedOut: true }
+    const outcome = await withDeadline(res.text(), remaining)
+    if (outcome === TIMED_OUT) return { text: '', timedOut: true }
+    return { text: outcome.slice(0, PROBE_BODY_CAP_BYTES), timedOut: false }
   }
   const reader = body.getReader()
   const chunks: Uint8Array[] = []
   let total = 0
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (value && value.byteLength) {
-      const remaining = PROBE_BODY_CAP_BYTES - total
-      const slice = value.byteLength > remaining ? value.slice(0, remaining) : value
-      chunks.push(slice)
-      total += slice.byteLength
-      if (value.byteLength > remaining) break
-    }
-    if (total >= PROBE_BODY_CAP_BYTES) break
-  }
+  let timedOut = false
   try {
-    await reader.cancel()
-  } catch {
-    /* best effort */
+    for (;;) {
+      const remaining = deadlineAt - Date.now()
+      if (remaining <= 0) {
+        timedOut = true
+        break
+      }
+      const outcome = await withDeadline(reader.read(), remaining)
+      if (outcome === TIMED_OUT) {
+        timedOut = true
+        break
+      }
+      const { done, value } = outcome
+      if (done) break
+      if (value && value.byteLength) {
+        const remainingBytes = PROBE_BODY_CAP_BYTES - total
+        const slice = value.byteLength > remainingBytes ? value.slice(0, remainingBytes) : value
+        chunks.push(slice)
+        total += slice.byteLength
+        if (value.byteLength > remainingBytes) break
+      }
+      if (total >= PROBE_BODY_CAP_BYTES) break
+    }
+  } finally {
+    try {
+      await reader.cancel()
+    } catch {
+      /* best effort - the stream may already be closed, or cancelling a timed-out read can itself reject */
+    }
   }
+  if (timedOut) return { text: '', timedOut: true }
   const merged = new Uint8Array(total)
   let offset = 0
   for (const chunk of chunks) {
     merged.set(chunk, offset)
     offset += chunk.byteLength
   }
-  return new TextDecoder().decode(merged)
+  return { text: new TextDecoder().decode(merged), timedOut: false }
 }
+
+const TIMEOUT_RESULT_MESSAGE = 'Timed out after 10 seconds.'
 
 // ── REST probe ───────────────────────────────────────────────────────────────────────────────────────
 
@@ -262,6 +345,8 @@ function buildRestHeaders(entry: ConnectorCatalogEntry, input: ProbeInput, spec:
 }
 
 async function probeRest(entry: ConnectorCatalogEntry, spec: RestProbeSpec, input: ProbeInput, deps: ProbeDeps, startedAt: number): Promise<ProbeResult> {
+  // One deadline for the whole attempt (headers + body), computed once - see `withDeadline`'s doc comment.
+  const deadlineAt = startedAt + PROBE_TIMEOUT_MS
   const vars = buildVars(entry, input)
   const rawUrl = fillTemplate(spec.url, vars)
   const check = safeProbeUrl(rawUrl)
@@ -281,9 +366,9 @@ async function probeRest(entry: ConnectorCatalogEntry, spec: RestProbeSpec, inpu
     headers['content-type'] = 'application/json'
   }
 
-  const { res, timedOut, networkError } = await boundedFetch(deps.fetch, check.url.toString(), { method: spec.method, headers, body })
+  const { res, timedOut, networkError } = await boundedFetch(deps.fetch, check.url.toString(), { method: spec.method, headers, body }, deadlineAt)
   const latencyMs = Date.now() - startedAt
-  if (timedOut) return { ok: false, latencyMs, summary: 'The connection attempt timed out.', error: { code: 'timeout', message: 'Timed out after 10 seconds.' } }
+  if (timedOut) return { ok: false, latencyMs, summary: 'The connection attempt timed out.', error: { code: 'timeout', message: TIMEOUT_RESULT_MESSAGE } }
   if (networkError || !res) {
     return { ok: false, latencyMs, summary: 'The connection attempt failed.', error: { code: 'network', message: 'Network error reaching the provider.' } }
   }
@@ -291,7 +376,17 @@ async function probeRest(entry: ConnectorCatalogEntry, spec: RestProbeSpec, inpu
     return { ok: false, status: res.status, latencyMs, summary: 'The provider returned a redirect.', error: { code: 'redirect', message: 'Redirects are not followed.' } }
   }
 
-  const text = await readCapped(res)
+  const bodyRead = await readCapped(res, deadlineAt)
+  if (bodyRead.timedOut) {
+    return {
+      ok: false,
+      status: res.status,
+      latencyMs: Date.now() - startedAt,
+      summary: 'The connection attempt timed out.',
+      error: { code: 'timeout', message: TIMEOUT_RESULT_MESSAGE }
+    }
+  }
+  const text = bodyRead.text
   let parsed: unknown = null
   try {
     parsed = text ? JSON.parse(text) : null
@@ -391,24 +486,32 @@ async function mcpCall(
   url: string,
   headers: Record<string, string>,
   payload: Record<string, unknown>,
-  expectBody: boolean
+  expectBody: boolean,
+  deadlineAt: number
 ): Promise<McpCallResult> {
-  const { res, timedOut, networkError } = await boundedFetch(deps.fetch, url, {
-    method: 'POST',
-    headers: { ...headers, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
-    body: JSON.stringify(payload)
-  })
-  if (timedOut) return { ok: false, error: { code: 'timeout', message: 'Timed out after 10 seconds.' } }
+  const { res, timedOut, networkError } = await boundedFetch(
+    deps.fetch,
+    url,
+    {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify(payload)
+    },
+    deadlineAt
+  )
+  if (timedOut) return { ok: false, error: { code: 'timeout', message: TIMEOUT_RESULT_MESSAGE } }
   if (networkError || !res) return { ok: false, error: { code: 'network', message: 'Network error reaching the server.' } }
   if (res.status >= 300 && res.status < 400) return { ok: false, status: res.status, error: { code: 'redirect', message: 'Redirects are not followed.' } }
   const sessionId = res.headers.get('mcp-session-id') || undefined
   if (!expectBody) return { ok: res.status < 300, status: res.status, sessionId }
   if (res.status >= 400) {
-    const text = await readCapped(res)
-    return { ok: false, status: res.status, sessionId, error: { code: 'bad-status', message: redactUpstreamText(text) || `HTTP ${res.status}` } }
+    const bodyRead = await readCapped(res, deadlineAt)
+    if (bodyRead.timedOut) return { ok: false, status: res.status, sessionId, error: { code: 'timeout', message: TIMEOUT_RESULT_MESSAGE } }
+    return { ok: false, status: res.status, sessionId, error: { code: 'bad-status', message: redactUpstreamText(bodyRead.text) || `HTTP ${res.status}` } }
   }
-  const text = await readCapped(res)
-  const messages = parseMcpBody(text, res.headers.get('content-type'))
+  const bodyRead = await readCapped(res, deadlineAt)
+  if (bodyRead.timedOut) return { ok: false, status: res.status, sessionId, error: { code: 'timeout', message: TIMEOUT_RESULT_MESSAGE } }
+  const messages = parseMcpBody(bodyRead.text, res.headers.get('content-type'))
   const message = messages.find((m) => m.id === payload.id) ?? messages[0]
   if (!message) return { ok: false, status: res.status, sessionId, error: { code: 'bad-body', message: 'The server did not return a usable response.' } }
   if (message.error) return { ok: false, status: res.status, sessionId, error: { code: 'rpc-error', message: redactUpstreamText(message.error.message || 'The server rejected the request.') } }
@@ -424,6 +527,9 @@ function toolWriteHeuristic(name: string, annotations: Record<string, unknown> |
 }
 
 async function probeMcp(entry: ConnectorCatalogEntry, input: ProbeInput, deps: ProbeDeps, startedAt: number): Promise<ProbeResult> {
+  // One deadline for the entire handshake (both protocol-version attempts, the notification, and
+  // tools/list) - a fresh 10 s per call would let the sequence take up to 40 s in the worst case.
+  const deadlineAt = startedAt + PROBE_TIMEOUT_MS
   const endpointRaw = entry.endpoint ?? input.config.baseUrl ?? ''
   const check = safeProbeUrl(endpointRaw)
   if (!check.ok || !check.url) {
@@ -443,9 +549,9 @@ async function probeMcp(entry: ConnectorCatalogEntry, input: ProbeInput, deps: P
     }
   })
 
-  let init = await mcpCall(deps, url, authHeaders, initPayload(MCP_PROTOCOL_VERSION), true)
+  let init = await mcpCall(deps, url, authHeaders, initPayload(MCP_PROTOCOL_VERSION), true, deadlineAt)
   if (!init.ok) {
-    init = await mcpCall(deps, url, authHeaders, initPayload(MCP_PROTOCOL_VERSION_FALLBACK), true)
+    init = await mcpCall(deps, url, authHeaders, initPayload(MCP_PROTOCOL_VERSION_FALLBACK), true, deadlineAt)
   }
   const latencyMs = Date.now() - startedAt
   if (!init.ok) {
@@ -454,9 +560,9 @@ async function probeMcp(entry: ConnectorCatalogEntry, input: ProbeInput, deps: P
 
   const sessionHeaders = init.sessionId ? { ...authHeaders, 'mcp-session-id': init.sessionId } : authHeaders
 
-  await mcpCall(deps, url, sessionHeaders, { jsonrpc: '2.0', method: 'notifications/initialized', params: {} }, false)
+  await mcpCall(deps, url, sessionHeaders, { jsonrpc: '2.0', method: 'notifications/initialized', params: {} }, false, deadlineAt)
 
-  const listed = await mcpCall(deps, url, sessionHeaders, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, true)
+  const listed = await mcpCall(deps, url, sessionHeaders, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, true, deadlineAt)
   if (!listed.ok) {
     return { ok: false, status: listed.status ?? init.status, latencyMs, summary: 'Reached the server but could not list its tools.', error: listed.error }
   }
@@ -485,10 +591,17 @@ async function probeMcp(entry: ConnectorCatalogEntry, input: ProbeInput, deps: P
  * + `redact.ts` pattern match) only catches text that *looks* like a secret; a vendor's own token format
  * (HubSpot's `pat-...`, a Trello token, ...) does not always match those generic patterns, but an upstream
  * error that echoes the credential back verbatim (a 401 body quoting "bad token <token>") still must never
- * reach `summary`, `error.message`, or a tool's `name`/`description`. */
+ * reach `summary`, `error.message`, or a tool's `name`/`description`. Also scrubs
+ * `encodeURIComponent(credential)`: a query-param-auth vendor (Trello) or a Basic/query credential
+ * containing characters like `+`, `/`, `=`, or a space can come back percent-encoded in an echoed URL or
+ * form-encoded error body, which the raw substring scrub below would miss. */
 function scrubCredential(result: ProbeResult, credential: string): ProbeResult {
   if (!credential) return result
-  const scrub = (s: string): string => s.split(credential).join('[redacted]')
+  const encoded = encodeURIComponent(credential)
+  const scrub = (s: string): string => {
+    const raw = s.split(credential).join('[redacted]')
+    return encoded !== credential ? raw.split(encoded).join('[redacted]') : raw
+  }
   return {
     ...result,
     summary: scrub(result.summary),
