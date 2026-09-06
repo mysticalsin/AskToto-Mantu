@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { pickReadyProvider, detectHint } from './Settings'
+import { pickReadyProvider, detectHint, SETTINGS_CONTENT_SCROLL_CLASS, settingsScrollClipsOverflowX } from './Settings'
 
 // Normalize CRLF → LF: on a Windows checkout Settings.tsx has \r\n line endings, and a marker whose
 // newline sits mid-string (e.g. finding 5's '))}\n          </div>') would never match '))}\r\n...'.
@@ -539,10 +539,32 @@ describe('Settings Bar rest orb picker', () => {
 describe('Settings from M scrolls the full surface', () => {
   it('fills the 880×800 window and scrolls cl-content end to end', () => {
     expect(source).toMatch(/cl-root flex h-full min-h-0/)
-    expect(source).toMatch(/cl-content scroll-thin min-h-0 flex-1 overflow-y-auto/)
+    expect(source).toMatch(/className=\{SETTINGS_CONTENT_SCROLL_CLASS\}/)
+    expect(source).toMatch(/cl-content scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden/)
     expect(source).not.toMatch(/max-h-\[480px\]/)
     expect(source).not.toMatch(/panel-enter/)
     expect(source).toMatch(/Custom instructions/)
+  })
+})
+
+describe('Settings scroll root clips sideways overflow (Win Audio / AI)', () => {
+  it('the scroll-class helper rejects overflow-x auto/scroll/visible and requires hidden/clip', () => {
+    expect(settingsScrollClipsOverflowX(SETTINGS_CONTENT_SCROLL_CLASS)).toBe(true)
+    expect(settingsScrollClipsOverflowX('cl-content scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden')).toBe(true)
+    expect(settingsScrollClipsOverflowX('cl-content scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-clip')).toBe(true)
+    // The pre-fix class: overflow-y-auto alone computes overflow-x: auto (CSS pairing).
+    expect(settingsScrollClipsOverflowX('cl-content scroll-thin min-h-0 flex-1 overflow-y-auto')).toBe(false)
+    expect(settingsScrollClipsOverflowX('cl-content overflow-y-auto overflow-x-auto')).toBe(false)
+    expect(settingsScrollClipsOverflowX('cl-content overflow-y-auto overflow-x-scroll')).toBe(false)
+    expect(settingsScrollClipsOverflowX('cl-content overflow-y-auto overflow-x-visible')).toBe(false)
+    expect(settingsScrollClipsOverflowX('overflow-x-hidden')).toBe(false)
+  })
+
+  it('the live Settings tabpanel uses the clipping scroll class', () => {
+    expect(source).toMatch(/className=\{SETTINGS_CONTENT_SCROLL_CLASS\}/)
+    expect(SETTINGS_CONTENT_SCROLL_CLASS).toMatch(/\boverflow-y-auto\b/)
+    expect(SETTINGS_CONTENT_SCROLL_CLASS).toMatch(/\boverflow-x-hidden\b/)
+    expect(SETTINGS_CONTENT_SCROLL_CLASS).not.toMatch(/\boverflow-x-(?:auto|scroll|visible)\b/)
   })
 })
 

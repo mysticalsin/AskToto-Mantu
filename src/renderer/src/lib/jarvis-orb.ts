@@ -33,8 +33,8 @@ export type JarvisOrbState = (typeof JARVIS_ORB_STATES)[number]
 
 /** orb.ts fullscreen count. The 41 pill must thin this. Never crop 2000 into 41px. */
 export const JARVIS_PARTICLE_COUNT = 2000
-/** Clean sentient sphere at 41. 800+ is sparkly noise. */
-export const JARVIS_PILL_PARTICLE_COUNT = 220
+/** Tony lock: pill intensity = 800 (615e5fa). 220 was a regression that looked washed out. */
+export const JARVIS_PILL_PARTICLE_COUNT = 800
 export const JARVIS_ELECTRON_COUNT = 3
 export const JARVIS_MAX_LINES = 8000
 export const JARVIS_CLOUD_SEED_RADIUS = 25
@@ -95,7 +95,7 @@ export function seedJarvisCloud(
   return { pos, phase }
 }
 
-/** Thin the cloud with host size. 41 → ~220. Never keep orb.ts 2000 on the pill. */
+/** Thin the cloud with host size. 41 → 800 (intense). Never keep orb.ts 2000 on the pill. */
 export function jarvisParticleCountForHost(hostPx: number): number {
   const h = Math.max(1, hostPx)
   if (h >= JARVIS_SIZE_REF_PX) return JARVIS_PARTICLE_COUNT
