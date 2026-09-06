@@ -42,11 +42,7 @@ import {
   NAV_ICON_PATHS,
   type RenderCtx
 } from '../index'
-import {
-  renderRealtimeMapSvg,
-  type RealtimeCountryTotal,
-  type RealtimeMapPoint
-} from '../../world/map'
+import { renderRealtimeMapSvg, type RealtimeMapPoint } from '../../world/map'
 import { field, MISSING } from './_shared'
 
 // ---------------------------------------------------------------------------------------
@@ -55,13 +51,11 @@ import { field, MISSING } from './_shared'
 // the last 30 minutes on its own. See the module doc comment and the task report.
 // ---------------------------------------------------------------------------------------
 
-function buildMapModel(data: DashboardPayload): { points: RealtimeMapPoint[]; countryTotals: RealtimeCountryTotal[] } {
-  const liveByCountry = new Map<string, number>()
+function buildMapModel(data: DashboardPayload): { points: RealtimeMapPoint[] } {
   const liveByCity = new Map<string, number>()
   for (const p of data.profiles) {
     if (!p.live || !p.country) continue
     const iso = p.country.toUpperCase()
-    liveByCountry.set(iso, (liveByCountry.get(iso) ?? 0) + 1)
     const cityKey = `${iso}\0${(p.city || '').trim()}`
     liveByCity.set(cityKey, (liveByCity.get(cityKey) ?? 0) + 1)
   }
@@ -75,24 +69,23 @@ function buildMapModel(data: DashboardPayload): { points: RealtimeMapPoint[]; co
     if (existing) existing.count += 1
     else points.set(key, { country: iso, city: d.city ?? '', lat: d.lat, lon: d.lon, count: 1 })
   }
+  // A point is live when at least one seat in that exact city sent a heartbeat inside the live
+  // window; `liveSeats` carries how many, for the tooltip. The map draws a pulsing green dot for
+  // a live point and a static violet one for a place seen today but quiet now.
   for (const point of points.values()) {
-    const live = liveByCity.get(`${point.country}\0${point.city}`)
-    if (live) point.live = Math.min(point.count, live)
+    const live = liveByCity.get(`${point.country}\0${point.city}`) ?? 0
+    point.live = live > 0
+    point.liveSeats = Math.min(point.count, live)
   }
 
-  const countryTotals: RealtimeCountryTotal[] = data.map.countries.map((c) => {
-    const iso = c.iso.toUpperCase()
-    return { iso, seats: c.devices, live: liveByCountry.get(iso) ?? 0 }
-  })
-
-  return { points: [...points.values()], countryTotals }
+  return { points: [...points.values()] }
 }
 
 function renderMapPanel(data: DashboardPayload): string {
-  const { points, countryTotals } = buildMapModel(data)
+  const { points } = buildMapModel(data)
   return `<article class="card rt-map-card" data-world-map>
     <span class="live rt-map-live" data-world-live aria-live="polite">LIVE ${data.roi.liveSeats}</span>
-    ${renderRealtimeMapSvg({ points, countryTotals })}
+    ${renderRealtimeMapSvg({ points })}
     <div class="rt-tooltip" data-rt-tooltip role="tooltip" hidden>
       <div class="rt-tooltip-head"><span data-tt-flag></span><strong data-tt-country></strong></div>
       <div class="rt-tooltip-rows" data-tt-rows></div>
