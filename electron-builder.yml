@@ -129,6 +129,13 @@ extraResources:
   # into the package. The blob is OBFUSCATION, not secrecy — extractable with effort; see docs/CLOUDFLARE.md.
   - from: build/cloudflare-embed
     to: cloudflare-embed
+  # Production Ed25519 public halves for Operator skill packs and offline license leases.
+  # Directories are always present (README + .gitkeep). check:release fails closed unless
+  # pubkey.json exists and is NOT the DEV placeholder — see resources/*/README.md.
+  - from: resources/operator
+    to: operator
+  - from: resources/license-lease
+    to: license-lease
 mac:
   category: public.app-category.productivity
   # electron-builder treats a target-specific `files` override as the complete app allowlist. Keep the

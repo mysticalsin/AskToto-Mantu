@@ -32,14 +32,21 @@ function isPack(v: unknown): v is OperatorSkillPack {
 
 export function verifyOperatorSkillPack(
   token: string,
-  publicKeyRaw = getOperatorSkillPublicKeyRaw()
+  publicKeyRaw?: string
 ): OperatorSkillPack | null {
+  let keyRaw: string
+  try {
+    keyRaw = publicKeyRaw ?? getOperatorSkillPublicKeyRaw()
+  } catch {
+    // Packaged builds without a production pubkey throw — fail closed without crashing the overlay.
+    return null
+  }
   const dot = token.indexOf('.')
   if (dot <= 0 || token.indexOf('.', dot + 1) !== -1) return null
   const payloadB64 = token.slice(0, dot)
   const sigB64 = token.slice(dot + 1)
   try {
-    const key = createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: publicKeyRaw }, format: 'jwk' })
+    const key = createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: keyRaw }, format: 'jwk' })
     const ok = verify(null, Buffer.from(payloadB64, 'utf8'), key, b64urlToBuf(sigB64))
     if (!ok) return null
     const parsed = JSON.parse(b64urlToBuf(payloadB64).toString('utf8')) as unknown

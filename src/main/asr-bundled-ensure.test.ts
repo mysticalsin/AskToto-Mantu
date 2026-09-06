@@ -18,10 +18,14 @@ import { net } from 'electron'
 import { BUNDLE_GOT_LOGIN_HTML } from '@shared/bundle-response'
 import {
   ASR_ASSETS_MISSING,
+  PARAKEET_ARCHIVE_SHA256,
   PARAKEET_MODEL_NAME,
   PARAKEET_REQUIRED_FILES,
+  WHISPER_FLOOR_FILE_PINS,
   WHISPER_FLOOR_ID,
   WHISPER_FLOOR_REQUIRED_FILES,
+  WHISPER_FLOOR_REVISION,
+  assertPinnedFile,
   ensureImportAsrAssets,
   fetchBundleResponse,
   importAsrAssetsReady,
@@ -159,4 +163,49 @@ describe('asr-bundled-ensure', () => {
     expect(snap.error).toBe(BUNDLE_GOT_LOGIN_HTML)
     expect(dest.endsWith('encoder.int8.onnx')).toBe(true)
   })
+
+
+  it('pins Whisper floor to an immutable revision and carries sha256 digests', () => {
+    expect(WHISPER_FLOOR_REVISION).toMatch(/^[0-9a-f]{40}$/)
+    expect(WHISPER_FLOOR_REVISION).not.toBe('main')
+    expect(WHISPER_FLOOR_FILE_PINS).toHaveLength(WHISPER_FLOOR_REQUIRED_FILES.length)
+    for (const pin of WHISPER_FLOOR_FILE_PINS) {
+      expect(pin.sha256).toMatch(/^[0-9a-f]{64}$/)
+      expect(pin.bytes).toBeGreaterThan(0)
+    }
+    expect(PARAKEET_ARCHIVE_SHA256).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  it('assertPinnedFile fails closed on digest mismatch', async () => {
+    const file = join(paths.userData, 'tampered.bin')
+    writeFileSync(file, 'not-the-pinned-bytes')
+    await expect(
+      assertPinnedFile(file, { bytes: 19, sha256: '0'.repeat(64) })
+    ).rejects.toThrow(/sha256|does not match|expected/)
+  })
+
+  it('Parakeet download fails closed when archive sha256 does not match the pin', async () => {
+    const bogus = new Uint8Array(64).fill(7)
+    vi.mocked(net.fetch).mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({
+        'content-type': 'application/octet-stream',
+        'content-length': String(bogus.byteLength)
+      }),
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(bogus)
+          controller.close()
+        }
+      })
+    } as unknown as Response)
+
+    await expect(ensureImportAsrAssets()).rejects.toThrow(/sha256|files|connection/)
+    expect(parakeetFilesReady(parakeetUserDir())).toBe(false)
+    const snap = asrAssetsStatusSnapshot()
+    expect(snap.ready).toBe(false)
+    expect(snap.status).toBe('error')
+  })
+
 })

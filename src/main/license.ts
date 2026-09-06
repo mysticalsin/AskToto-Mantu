@@ -255,7 +255,12 @@ export interface LicenseGraceResult {
  *  malformed shape) — never throws. */
 export function verifyLease(lease: string | null | undefined): LeasePayload | null {
   if (!lease) return null
-  return verifyLeaseToken(lease, getLicenseLeasePublicKeyRaw())
+  try {
+    return verifyLeaseToken(lease, getLicenseLeasePublicKeyRaw())
+  } catch {
+    // Packaged builds without a production pubkey throw — treat as verification failure, never throw.
+    return null
+  }
 }
 
 /** Called by the license:gate IPC handler (main/index.ts), which backs the renderer's boot gate
