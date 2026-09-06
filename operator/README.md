@@ -173,7 +173,9 @@ snapshot and that module is the live source of truth.
 `configured` is true once both `OPERATOR_INGEST_SECRET` and `OPERATOR_PROMPT_KEY` are bound. A
 `version` field (the deployed `OPERATOR_VERSION`) and D1 reachability are part of the P4.0
 enterprise-readiness gate; confirm `/health`'s exact current shape in `src/index.ts` before relying
-on a field this document does not list.
+on a field this document does not list. It also reports `schema` (D1 schema status), `lastIngestAt`
+(the newest seat or ask activity) and `lastCronAt` (the timestamp of the newest `platform.heartbeat`
+audit row, i.e. when the retention cron last actually ran) - never a secret or a binding value.
 
 ## Seat contract
 

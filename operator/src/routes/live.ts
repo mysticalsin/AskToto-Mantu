@@ -184,6 +184,14 @@ export interface SearchResults {
 }
 
 const SEARCH_LIMIT_PER_GROUP = 8
+/** A pasted license string or a long paragraph should never turn one search keystroke into an
+ *  unbounded scan of every field on every row (security review, low). */
+const SEARCH_QUERY_MAX_LENGTH = 100
+/** Read-cost rate limit (security review, medium): search.json reads every seat, license, group and
+ *  integration row on every call - cheaper than an export, but still worth bounding per admin. Not
+ *  applied to live.json (polled every 5 s by design; see D3). */
+const SEARCH_RATE_WINDOW_MS = 60_000
+const SEARCH_RATE_MAX = 30
 
 function matchesQuery(q: string, fields: (string | null | undefined)[]): boolean {
   const needle = q.toLowerCase()
@@ -309,7 +317,9 @@ export function registerLiveRoutes(): void {
     pattern: '/v1/admin/search.json',
     auth: 'admin',
     handler: async (request, ctx) => {
-      const q = (new URL(request.url).searchParams.get('q') || '').trim()
+      const limited = await ctx.store.hitRate(`admin-read-search:${ctx.email}`, ctx.now, SEARCH_RATE_WINDOW_MS, SEARCH_RATE_MAX)
+      if (limited) return json({ ok: false, error: 'rate limited', code: 'rate', retryAfterMs: SEARCH_RATE_WINDOW_MS }, 429)
+      const q = (new URL(request.url).searchParams.get('q') || '').trim().slice(0, SEARCH_QUERY_MAX_LENGTH)
       if (!q) return json({ ok: true, seats: [], licenses: [], groups: [], integrations: [] })
       const results = await buildSearchResults(ctx.store, q)
       return json({ ok: true, ...results })

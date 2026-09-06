@@ -15,7 +15,7 @@ import { LICENSES_EMPTY, parseApproval } from '../fleet'
 import { mintOperatorLicense } from '../licenses/generate'
 import { renderConsole } from '../ui'
 import { defineRoute } from './registry'
-import { auditLog, cloudflareForDashboard, keyFlags, param, stripSecrets, type AdminCtx } from './admin-ctx'
+import { auditLog, cloudflareForDashboard, keyFlags, param, safeAuditText, stripSecrets, type AdminCtx } from './admin-ctx'
 import { readOperatorSettings } from './settings-store'
 
 /** The stored hourly rate and currency feed the Value tile; without a stored rate valueMinor stays null. */
@@ -375,7 +375,10 @@ export function registerAdminCoreRoutes(): void {
         return json({ ok: false, error: 'only Failed or Expired can retry' }, 400)
       }
       await ctx.store.upsertCrm({ ...row, status: 'pending', retry_requested: 1, ts: ctx.now })
-      await auditLog(ctx, 'crm-retry', null, row.id)
+      // Defence in depth (security review): device-supplied ids are already sanitised at ingest
+      // (index.ts), but an audit detail must never trust that a second time - safeAuditText strips
+      // control characters and redacts anything secret-shaped before it reaches the audit log.
+      await auditLog(ctx, 'crm-retry', null, safeAuditText(row.id))
       return json({ ok: true, autoSend: false })
     }
   })

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { ExportColumn, ExportRow } from './tables'
-import { buildXlsxStream, colLetter, crc32, excelSerialDate, guardFormulaInjection } from './xlsx'
+import { guardFormulaInjection, type ExportColumn, type ExportRow } from './tables'
+import { buildXlsxStream, colLetter, crc32, excelSerialDate } from './xlsx'
 
 /** Tiny STORED-only ZIP reader, authoritative via the central directory (real crc/size even for the
  *  streaming worksheet entry, whose local header intentionally carries zeros - see xlsx.ts's doc
@@ -150,6 +150,17 @@ describe('buildXlsxStream', () => {
     expect(dataRow).toContain("<t xml:space=\"preserve\">'+cmd|/c calc</t>")
     expect(guardFormulaInjection('@import')).toBe("'@import")
     expect(guardFormulaInjection('safe text')).toBe('safe text')
+  })
+
+  it('guards a tab-prefixed or CR-prefixed formula in the worksheet XML (security review)', async () => {
+    const rows: ExportRow[] = [{ when: null, count: 1, name: '\t=1+1', formula: '\r=1+1' }]
+    const buf = await collectXlsx({ columns: COLUMNS, batches: batchesOf(rows) })
+    const sheet = decodeSheet(readStoredZip(buf))
+    // [\s\S] rather than `.` so the match spans the embedded \t/\r themselves (JS `.` excludes line
+    // terminators, which would otherwise truncate the match right at the character under test).
+    const dataRow = /<row r="2">([\s\S]*?)<\/row>/.exec(sheet)![1]
+    expect(dataRow).toContain('<t xml:space="preserve">\'\t=1+1</t>')
+    expect(dataRow).toContain('<t xml:space="preserve">\'\r=1+1</t>')
   })
 
   it('colLetter counts A..Z then AA', () => {
