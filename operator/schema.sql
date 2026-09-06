@@ -38,11 +38,15 @@ CREATE TABLE IF NOT EXISTS asks (
   rating TEXT,
   prompt_cipher TEXT,
   prompt_iv TEXT,
-  preview TEXT
+  preview TEXT,
+  -- Closed-taxonomy label from src/shared/question-type.ts (factual, how-to, ...). Never question text.
+  -- NULL = seat predates the type; 'unknown' = seat could not classify.
+  question_type TEXT
 );
 
 CREATE INDEX IF NOT EXISTS asks_ts ON asks(ts);
 CREATE INDEX IF NOT EXISTS asks_mode ON asks(mode);
+CREATE INDEX IF NOT EXISTS asks_question_type ON asks(question_type);
 
 CREATE TABLE IF NOT EXISTS pulses (
   id TEXT PRIMARY KEY,

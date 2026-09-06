@@ -37,6 +37,11 @@ export interface AskRow {
   prompt_cipher: string | null
   prompt_iv: string | null
   preview: string | null
+  /**
+   * Closed-taxonomy label from src/shared/question-type.ts, normalized on ingest. null = the seat never
+   * sent one (pre-type build), 'unknown' = it sent one it could not classify. Never free text.
+   */
+  question_type: string | null
 }
 
 export interface PulseRow {

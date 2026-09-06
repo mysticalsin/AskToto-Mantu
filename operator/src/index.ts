@@ -7,6 +7,7 @@ import { verifyIngestHmac } from './hmac'
 import { d1Store, type D1DatabaseLike } from './d1'
 import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './store'
 import { renderConsole } from './ui'
+import { aggregateQuestionTypes, normalizeQuestionType, QUESTION_TYPE_LABELS } from '../../src/shared/question-type'
 
 export interface Env {
   DB?: D1DatabaseLike
@@ -43,8 +44,23 @@ function isAdminPath(pathname: string): boolean {
   return pathname === '/' || pathname.startsWith('/v1/admin')
 }
 
-function redactedPreview(_question: string | undefined, mode: string | undefined): string {
-  return mode ? `${mode} ask` : 'Ask'
+/**
+ * What the Asks table shows without a Reveal: mode plus the type label. Never a word of the question.
+ * The `_question` parameter exists so nobody "helpfully" wires text in later without touching this line.
+ */
+function redactedPreview(_question: string | undefined, mode: string | undefined, questionType: string | null): string {
+  const head = mode ? `${mode} ask` : 'Ask'
+  if (!questionType || questionType === 'unknown') return head
+  return `${head} · ${QUESTION_TYPE_LABELS[normalizeQuestionType(questionType)]}`
+}
+
+/**
+ * Wire guard for the type field. Absent = legacy seat (null). Present = normalized to the closed taxonomy,
+ * so a tampered client cannot store free text through this column.
+ */
+function questionTypeFromBody(body: Record<string, unknown>): string | null {
+  if (!('questionType' in body)) return null
+  return normalizeQuestionType(body.questionType)
 }
 
 export async function handleRequest(
@@ -137,10 +153,11 @@ async function adminRoute(
     const body = await request.json().catch(() => ({})) as { skillId?: string }
     const skillId = body.skillId || 'general'
     const asks = (await store.listAsks(80)).filter((a) => a.mode === skillId || a.skill_id === skillId)
-    const evidence = asks
-      .map((a) => a.preview || '')
-      .filter(Boolean)
-      .slice(0, 8)
+    // Evidence is the question-type mix of recent Asks in this skill: counts per closed label, never
+    // question text (text needs a Reveal, which is audited). A legacy seat with no type is counted in
+    // `total` so the rationale states its own coverage.
+    const mix = aggregateQuestionTypes(asks.map((a) => a.question_type))
+    const evidence = mix.bars.slice(0, 8).map((b) => `${b.label} ×${b.count}`)
     const fromVersion = asks.find((a) => a.skill_version)?.skill_version || '1.1.0'
     const id = crypto.randomUUID()
     await store.putProposal({
@@ -149,8 +166,8 @@ async function adminRoute(
       from_version: fromVersion,
       evidence_json: JSON.stringify(evidence),
       diff: `# unified diff against ${skillId} v${fromVersion}\n# Edit, then Approve. Push is a separate click.\n`,
-      rationale: evidence.length
-        ? `Clustered ${evidence.length} recent Asks in ${skillId}.`
+      rationale: asks.length
+        ? `${asks.length} recent Asks in ${skillId}, type known for ${mix.classified}: ${evidence.join(', ') || 'none typed yet'}.`
         : `No recent Asks in ${skillId} yet. Draft is a blank edit.`,
       status: 'pending',
       created_by: email,
@@ -293,6 +310,7 @@ async function ingest(
     cipher = enc.cipher
     iv = enc.iv
   }
+  const questionType = questionTypeFromBody(body)
   const row: AskRow = {
     id,
     device_id: deviceId,
@@ -315,7 +333,8 @@ async function ingest(
     rating: str(body.rating),
     prompt_cipher: cipher,
     prompt_iv: iv,
-    preview: redactedPreview(question, str(body.mode) ?? undefined)
+    preview: redactedPreview(question, str(body.mode) ?? undefined, questionType),
+    question_type: questionType
   }
   await store.insertAsk(row)
   await store.insertPulse({
