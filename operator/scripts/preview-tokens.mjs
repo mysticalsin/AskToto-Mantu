@@ -21,6 +21,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const OPERATOR_ROOT = join(__dirname, '..')
 const CSS_ENTRY = join(OPERATOR_ROOT, 'src', 'spa', 'css.ts')
 const FONTS_DIR = join(OPERATOR_ROOT, 'public', 'fonts')
+const LOGOS_DIR = join(OPERATOR_ROOT, 'public', 'logos')
+const FLAGS_DIR = join(OPERATOR_ROOT, 'public', 'flags')
 const OUT_DIR = '/private/tmp/claude-501/operator-preview'
 
 /** Bundles operator/src/spa/css.ts's own CONSOLE_CSS export directly (not manifest.ts's
@@ -55,6 +57,38 @@ async function loadConsoleCss() {
 function makeFontsStandalone(css) {
   const fontsUrl = pathToFileURL(FONTS_DIR + '/').href
   return css.replace(/url\('\/assets\/fonts\//g, `url('${fontsUrl}`)
+}
+
+/** Same idea as makeFontsStandalone(), applied to the rendered page body rather than the CSS:
+ *  the new connector-list and country-cell demos below render real `<img src="/assets/logos/...">`
+ *  / `/assets/flags/...` markup from the real primitives, so this file opens standalone with the
+ *  real logo and flag art too, not broken-image icons. */
+function makeAssetPathsStandalone(html) {
+  const logosUrl = pathToFileURL(LOGOS_DIR + '/').href
+  const flagsUrl = pathToFileURL(FLAGS_DIR + '/').href
+  return html.replace(/src="\/assets\/logos\//g, `src="${logosUrl}`).replace(/src="\/assets\/flags\//g, `src="${flagsUrl}`)
+}
+
+/** Bundles one operator/src/render/*.ts module standalone (same in-Node-bundle technique as
+ *  loadConsoleCss() above) so this preview calls the real primitive functions instead of
+ *  hand-typing markup that could drift from what they actually render. */
+async function bundleRenderModule(entryFile) {
+  const result = await build({
+    entryPoints: [entryFile],
+    bundle: true,
+    format: 'esm',
+    platform: 'neutral',
+    target: 'es2020',
+    write: false
+  })
+  const tmpDir = mkdtempSync(join(tmpdir(), 'metis-operator-preview-'))
+  const tmpFile = join(tmpDir, 'mod.mjs')
+  try {
+    writeFileSync(tmpFile, result.outputFiles[0].text)
+    return await import(pathToFileURL(tmpFile).href)
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true })
+  }
 }
 
 /** Parses every `--token: value;` declaration out of one `{...}` block's body. Strips `/* ... *\/`
@@ -181,9 +215,116 @@ const PREVIEW_CSS = `
   .pv-bar-row { display: grid; grid-template-columns: 80px 1fr; align-items: center; gap: 10px; }
   .pv-bar-track { height: 10px; border-radius: 999px; background: var(--data-track); overflow: hidden; }
   .pv-bar-fill { height: 100%; border-radius: 999px; }
+  .pv-primitive-block { margin-top: 20px; }
+  .pv-primitive-label { font: 600 12px var(--font-body); color: var(--ink-2); margin: 0 0 10px; }
+  .pv-flow { display: flex; flex-wrap: wrap; gap: 24px; align-items: flex-start; }
 `
 
-function renderPage(theme, tokenSectionsHtml, css) {
+/**
+ * Real markup from the four plan 3.5c / 3.6 / 6.10b primitives, so Tony sees exactly what
+ * countryCell()/flagStrip(), connectorRow()/connectorGroup(), dataTable({variant:'card'}) and
+ * alertBadge() render rather than a hand-typed stand-in that could drift from the real functions.
+ */
+function renderPrimitivesDemo({ primitives, connectors, dataTable, icons }) {
+  const countryDemo = `<div class="pv-flow">
+    <div>${primitives.countryCell('CA')}</div>
+    <div>${primitives.countryCell('US', { secondary: 'San Francisco, CA' })}</div>
+    <div>${primitives.countryCell('FR', {
+      secondary: 'Paris',
+      stats: { region: 'EMEA', seats: 6, live: 4, asks: 74, timeSaved: '3.2h' }
+    })}</div>
+    <div>${primitives.countryCell(null)}</div>
+  </div>
+  <div class="pv-primitive-block">${primitives.flagStrip(['CA', 'US', 'FR', 'DE', 'GB', 'JP', 'AU', 'BR', 'IN'])}</div>`
+
+  const attentionRows = [
+    {
+      id: 'conn_slack',
+      kind: 'slack',
+      label: 'Slack',
+      transport: 'rest',
+      status: 'attention',
+      action: 'Fix',
+      auth: 'oauth2-auth-code',
+      reason: 'Test failed 2 hours ago'
+    },
+    {
+      id: 'conn_hubspot',
+      kind: 'hubspot',
+      label: 'HubSpot',
+      transport: 'rest',
+      status: 'pending',
+      action: 'Authenticate',
+      auth: 'oauth2-auth-code'
+    }
+  ]
+  const connectedRows = [
+    { id: 'conn_notion', kind: 'notion', label: 'Notion', transport: 'mcp', status: 'connected', action: 'Test', auth: 'custom-mcp', toolsCount: 8 },
+    { id: 'conn_linear', kind: 'linear', label: 'Linear', transport: 'rest', status: 'connected', action: 'Test', auth: 'api-key', toolsCount: 0 },
+    { id: 'conn_github', kind: 'github', label: 'GitHub', transport: 'rest', status: 'connected', action: 'Test', auth: 'oauth2-auth-code', toolsCount: 12 },
+    { id: 'conn_jira', kind: 'jira', label: 'Jira', transport: 'rest', status: 'connected', action: 'Test', auth: 'api-key', toolsCount: 5 },
+    { id: 'conn_airtable', kind: 'airtable', label: 'Airtable', transport: 'rest', status: 'untested', action: 'Test', auth: 'api-key' },
+    { id: 'conn_zendesk', kind: 'zendesk', label: 'Zendesk', transport: 'rest', status: 'connected', action: 'Test', auth: 'oauth2-auth-code', toolsCount: 3 },
+    { id: 'conn_asana', kind: 'asana', label: 'Asana', transport: 'rest', status: 'connected', action: 'Test', auth: 'oauth2-auth-code', toolsCount: 7 }
+  ]
+  const connectorDemo = `<div class="pv-demo-card-wrap">
+    ${connectors.connectorGroup('Needs attention', attentionRows)}
+    ${connectors.connectorGroup('Connected', connectedRows)}
+  </div>`
+
+  const cardTableDemo = dataTable.dataTable({
+    variant: 'card',
+    columns: [
+      { key: 'name', label: 'Account', sortable: true, sortDirection: 'asc' },
+      { key: 'seats', label: 'Seats', numeric: true, sortable: true },
+      { key: 'asks', label: 'Asks 24h', numeric: true, sortable: true, sortDirection: 'desc' },
+      { key: 'status', label: 'Status' }
+    ],
+    rows: [
+      { cells: { name: 'Acme Corp', seats: '18', asks: '241', status: primitives.statusDot({ state: 'live', label: 'Live' }) } },
+      {
+        cells: { name: 'Globex', seats: '52', asks: '903', status: primitives.statusDot({ state: 'live', label: 'Live' }) },
+        selected: true
+      },
+      { cells: { name: 'Initech', seats: '6', asks: '74', status: primitives.statusDot({ state: 'idle', label: 'Idle' }) } }
+    ],
+    emptyTitle: 'No accounts yet',
+    footer: '3 accounts'
+  })
+
+  const alertBadgeDemo = `<div class="pv-row">
+    ${primitives.alertBadge({ variant: 'ok', icon: icons.NAV_ICON_PATHS['badge-check'], label: 'All systems operational' })}
+    ${primitives.alertBadge({
+      variant: 'danger',
+      icon: icons.NAV_ICON_PATHS.bell,
+      label: 'Major incident: ingestion delayed',
+      action: { label: 'Details', href: '#' }
+    })}
+    ${primitives.alertBadge({ variant: 'info', label: 'Scheduled maintenance Sunday 02:00 UTC' })}
+  </div>`
+
+  return `<div>
+    <h2 class="pv-section-title">New primitives (plan 3.5c, 3.6, 6.10b)</h2>
+    <div class="pv-primitive-block">
+      <h3 class="pv-primitive-label">countryCell() / flagStrip() -- plan 3.6</h3>
+      ${countryDemo}
+    </div>
+    <div class="pv-primitive-block">
+      <h3 class="pv-primitive-label">connectorRow() / connectorGroup() -- plan 6.10b</h3>
+      ${connectorDemo}
+    </div>
+    <div class="pv-primitive-block">
+      <h3 class="pv-primitive-label">dataTable({ variant: 'card' }) -- plan 3.5c</h3>
+      ${cardTableDemo}
+    </div>
+    <div class="pv-primitive-block">
+      <h3 class="pv-primitive-label">alertBadge() -- plan 3.5c</h3>
+      ${alertBadgeDemo}
+    </div>
+  </div>`
+}
+
+function renderPage(theme, tokenSectionsHtml, css, primitivesDemoHtml) {
   return `<!doctype html>
 <html data-theme="${theme}">
 <head>
@@ -271,6 +412,8 @@ function renderPage(theme, tokenSectionsHtml, css) {
       <div class="pv-bar-row"><span class="pv-type-mono">--data-4</span><div class="pv-bar-track"><div class="pv-bar-fill" style="width: 25%; background: var(--data-4);"></div></div></div>
     </div>
   </div>
+
+  ${primitivesDemoHtml}
 </div>
 </body>
 </html>
@@ -284,10 +427,18 @@ async function main() {
   const lightSectionsHtml = renderTokenSwatches(extractLightTokens(rawCss))
   const darkSectionsHtml = renderTokenSwatches(extractDarkTokens(rawCss))
 
+  const [primitives, connectors, dataTable, icons] = await Promise.all([
+    bundleRenderModule(join(OPERATOR_ROOT, 'src', 'render', 'primitives.ts')),
+    bundleRenderModule(join(OPERATOR_ROOT, 'src', 'render', 'connectors-list.ts')),
+    bundleRenderModule(join(OPERATOR_ROOT, 'src', 'render', 'data-table.ts')),
+    bundleRenderModule(join(OPERATOR_ROOT, 'src', 'render', 'icons.ts'))
+  ])
+  const primitivesDemoHtml = renderPrimitivesDemo({ primitives, connectors, dataTable, icons })
+
   const lightPath = join(OUT_DIR, 'tokens-light.html')
   const darkPath = join(OUT_DIR, 'tokens-dark.html')
-  writeFileSync(lightPath, renderPage('light', lightSectionsHtml, css))
-  writeFileSync(darkPath, renderPage('dark', darkSectionsHtml, css))
+  writeFileSync(lightPath, makeAssetPathsStandalone(renderPage('light', lightSectionsHtml, css, primitivesDemoHtml)))
+  writeFileSync(darkPath, makeAssetPathsStandalone(renderPage('dark', darkSectionsHtml, css, primitivesDemoHtml)))
   console.log(`preview-tokens: wrote ${lightPath}`)
   console.log(`preview-tokens: wrote ${darkPath}`)
 }

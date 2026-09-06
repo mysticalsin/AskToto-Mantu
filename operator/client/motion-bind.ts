@@ -8,8 +8,12 @@
  * Every attribute:
  *   data-count-to="1284"     -- countUp() to that number on first paint.
  *   data-grow                -- growBar() from the baseline (optional data-grow-delay, ms).
- *   data-stagger             -- one staggerIn() call across every match in this bind (not one
- *                                call per element: the 40ms cadence is between siblings).
+ *   data-stagger             -- one staggerIn() call per data-stagger-ms value found (not one
+ *                                call per element: the cadence is between siblings within the
+ *                                same group). data-stagger-ms is optional, default 40ms; a
+ *                                section that names a different cadence (plan 6.10b: connector
+ *                                rows, 30ms) sets it per row and every row in that group shares
+ *                                one staggerIn() call at that speed.
  *   data-flash-key="tile-0"  -- flash() when this element's text differs from the last bind
  *                                that saw the same key (never on the very first bind: a value
  *                                is not "changed" the first time it is ever shown).
@@ -43,9 +47,18 @@ export function bindMotion(root: ParentNode): void {
     growBar(el, 400, delay)
   })
 
-  const staggerEls = root.querySelectorAll('[data-stagger]')
+  const staggerEls = Array.from(root.querySelectorAll('[data-stagger]')).filter(
+    (el): el is HTMLElement => el instanceof HTMLElement
+  )
   if (staggerEls.length) {
-    staggerIn(Array.from(staggerEls).filter((el): el is HTMLElement => el instanceof HTMLElement))
+    const groups = new Map<number, HTMLElement[]>()
+    for (const el of staggerEls) {
+      const ms = toNumberAttr(el, 'data-stagger-ms', 40)
+      const group = groups.get(ms) ?? []
+      group.push(el)
+      groups.set(ms, group)
+    }
+    for (const [ms, group] of groups) staggerIn(group, ms)
   }
 
   root.querySelectorAll('[data-flash-key]').forEach((el) => {

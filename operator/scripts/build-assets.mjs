@@ -37,6 +37,10 @@ const PUBLIC_DIR = join(OPERATOR_ROOT, 'public')
 const FONTS_OUT_DIR = join(PUBLIC_DIR, 'fonts')
 const FLAGS_OUT_DIR = join(PUBLIC_DIR, 'flags')
 const LOGOS_OUT_DIR = join(PUBLIC_DIR, 'logos')
+/** Source input (not generated): drop an official brand SVG here and it wins over the
+ *  generated brand/monogram logo for that kind. See copyBrandOverrides() and the README next
+ *  to this directory. */
+const LOGOS_BRAND_DIR = join(OPERATOR_ROOT, 'assets', 'logos-brand')
 const FONTS_GENERATED_FILE = join(OPERATOR_ROOT, 'src', 'spa', 'fonts.generated.ts')
 
 const require = createRequire(import.meta.url)
@@ -169,13 +173,46 @@ function monogramLetter(label) {
   return trimmed ? trimmed[0].toUpperCase() : '?'
 }
 
-/** Plan 3.6 / brief: rounded square in --accent-soft (#f1e6fb) with --accent (#7f00da) ink,
- *  600 weight. Generated, not hand-drawn -- literal hex here is the token sheet's own light
- *  values, baked into a static asset file (not operator/src/spa/css.ts), so the "no hex outside
- *  the token blocks" gate does not apply to this generated-SVG script. */
-function monogramSvg(label) {
+/**
+ * Real, publicly documented brand colours for the connector kinds Simple Icons dropped (Tony,
+ * 2026-09-06: "make monograms good"). Best-effort at the time this was written -- Tony can
+ * override any of these (or any brand logo at all) by dropping the vendor's own SVG in
+ * operator/assets/logos-brand/<kind>.svg, which build-assets.mjs always prefers (see
+ * copyBrandOverrides() below). custom-mcp / custom-rest have no real brand, so they keep the
+ * original --accent-soft / --accent monogram instead of a fabricated "brand colour".
+ *
+ * Four of these (salesforce, pipedrive, monday, freshdesk) are darkened from the literal,
+ * commonly-cited brand hex: the literal value is too light for a legible white 600-weight
+ * initial (white-on-fill measured 2.4-3.5:1, under WCAG AA's 4.5:1). Each is darkened by the
+ * smallest amount that clears 4.5:1, same hue, same brand family -- not a different colour, a
+ * readable shade of the same one. The other six pass at the literal brand hex already.
+ */
+const MONOGRAM_BRAND_COLORS = {
+  salesforce: '#007EAF', // literal #00A1E0 is 2.93:1 with white; darkened 22% -> 4.56:1
+  pipedrive: '#1A8757', // literal #24BC79 is 2.46:1 with white; darkened 28% -> 4.52:1
+  dynamics365: '#0078D4',
+  attio: '#1A1B25',
+  close: '#1D2138',
+  monday: '#DB344B', // literal #FF3D57 is 3.47:1 with white; darkened 14% -> 4.56:1
+  freshdesk: '#1A874E', // literal #25C16F is 2.35:1 with white; darkened 30% -> 4.55:1
+  sharepoint: '#038387',
+  slack: '#4A154B',
+  microsoftteams: '#6264A7'
+}
+
+/** Plan 3.6 / P0.3 brief / Tony 2026-09-06 ("make monograms good"): a rounded square, 6px
+ *  radius. A kind with a real, documented brand colour (MONOGRAM_BRAND_COLORS) gets that colour
+ *  with a white 600-weight initial; a kind with no real brand (custom-mcp, custom-rest) keeps
+ *  the original --accent-soft background with --accent ink. Generated, not hand-drawn -- literal
+ *  hex here is either the token sheet's own light values or a documented brand colour, baked
+ *  into a static asset file (not operator/src/spa/css.ts), so the "no hex outside the token
+ *  blocks" gate does not apply to this generated-SVG script. */
+function monogramSvg(label, kind) {
   const letter = monogramLetter(label)
-  return `<svg role="img" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><title>${escapeXml(label)}</title><rect width="32" height="32" rx="8" fill="#f1e6fb"/><text x="16" y="21" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="600" fill="#7f00da" text-anchor="middle">${escapeXml(letter)}</text></svg>`
+  const brand = kind ? MONOGRAM_BRAND_COLORS[kind] : undefined
+  const bg = brand || '#f1e6fb'
+  const ink = brand ? '#ffffff' : '#7f00da'
+  return `<svg role="img" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg"><title>${escapeXml(label)}</title><rect width="32" height="32" rx="6" fill="${bg}"/><text x="16" y="21" font-family="Arial, Helvetica, sans-serif" font-size="15" font-weight="600" fill="${ink}" text-anchor="middle">${escapeXml(letter)}</text></svg>`
 }
 
 function brandSvg(icon) {
@@ -224,7 +261,7 @@ async function buildLogos() {
     const label = CONNECTOR_CATALOG_CORE[kind]?.label ?? kind
     const slug = LOGO_SLUGS[kind]
     const icon = slug ? bySlug.get(slug) : undefined
-    const svg = icon ? brandSvg(icon) : monogramSvg(label)
+    const svg = icon ? brandSvg(icon) : monogramSvg(label, kind)
     writeFileSync(join(LOGOS_OUT_DIR, `${kind}.svg`), svg)
     if (icon) {
       brandCount++
@@ -233,8 +270,28 @@ async function buildLogos() {
       report.push(`  ${kind}: monogram (no simple-icons entry for slug ${JSON.stringify(slug)})`)
     }
   }
-  report.unshift(`  ${brandCount} brand logos + ${monogramCount} monograms = ${CONNECTOR_KINDS.length} total`)
+  const overridden = copyBrandOverrides(CONNECTOR_KINDS)
+  for (const kind of overridden) report.push(`  ${kind}: overridden by operator/assets/logos-brand/${kind}.svg`)
+  report.unshift(`  ${brandCount} brand logos + ${monogramCount} monograms (${overridden.length} overridden) = ${CONNECTOR_KINDS.length} total`)
   return report
+}
+
+/**
+ * Plan brief (Tony, 2026-09-06): "add an override path... so Tony can drop official brand SVGs
+ * in and they win." Any file at operator/assets/logos-brand/<kind>.svg is copied verbatim over
+ * the generated logo for that kind, after every brand/monogram logo above has already been
+ * written -- so an override always wins regardless of whether Simple Icons had that slug.
+ */
+function copyBrandOverrides(kinds) {
+  const overridden = []
+  for (const kind of kinds) {
+    const overridePath = join(LOGOS_BRAND_DIR, `${kind}.svg`)
+    if (existsSync(overridePath)) {
+      writeFileSync(join(LOGOS_OUT_DIR, `${kind}.svg`), readFileSync(overridePath))
+      overridden.push(kind)
+    }
+  }
+  return overridden
 }
 
 /** Fallback reader for src/shared/operator-connectors.ts, used only if a future Node/loader
