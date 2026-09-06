@@ -11,6 +11,9 @@ import { registerGroupsRoutes } from './groups'
 import { registerIntegrationsRoutes } from './integrations'
 import { registerSettingsRoutes } from './settings-store'
 import { registerExportRoutes } from './export'
+import { registerSeatTimelineRoutes } from './seat-timeline'
+import { registerInsightsRoutes } from './insights'
+import { registerMcpGatewayRoutes } from './mcp-gateway'
 
 registerAdminCoreRoutes()
 registerLiveRoutes()
@@ -20,3 +23,6 @@ registerGroupsRoutes()
 registerIntegrationsRoutes()
 registerSettingsRoutes()
 registerExportRoutes()
+registerSeatTimelineRoutes()
+registerInsightsRoutes()
+registerMcpGatewayRoutes()
