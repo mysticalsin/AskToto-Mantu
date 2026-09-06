@@ -208,7 +208,11 @@ function managedBinFallback(bin: string): string | null {
   const id = bin === 'claude' ? 'claude' : bin === 'codex' ? 'codex' : bin === 'dust' ? 'dust' : null
   if (!id) return null
   try {
-    return managedCliEntry(id)?.entry ?? null
+    const found = managedCliEntry(id)
+    // Refuse leftover current.json pointers (directory, empty stub, path outside install root).
+    // Those used to make checkCliSession skip `if (!absBin) return 'missing'` and classify as unknown.
+    if (!found) return null
+    return found.entry
   } catch {
     return null
   }
