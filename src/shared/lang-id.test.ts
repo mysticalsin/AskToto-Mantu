@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { detectLanguage, LANGUAGE_NAMES } from './lang-id'
+import {
+  detectLanguage,
+  detectLanguages,
+  LANGUAGE_NAMES,
+  LANGUAGE_OPTIONS,
+  WHISPER_LANGUAGE_TOKENS,
+  APPLE_LOCALES
+} from './lang-id'
 
 describe('detectLanguage — script-based (unambiguous writing systems)', () => {
   it('detects each non-Latin script', () => {
@@ -9,10 +16,12 @@ describe('detectLanguage — script-based (unambiguous writing systems)', () => 
     expect(detectLanguage('これはとても良い会議ですね').lang).toBe('Japanese')
     expect(detectLanguage('이것은 아주 좋은 회의입니다').lang).toBe('Korean')
     expect(detectLanguage('यह बहुत अच्छी बैठक है').lang).toBe('Hindi')
+    expect(detectLanguage('นี่คือการประชุมที่ดีมากขอบคุณครับ').lang).toBe('Thai')
+    expect(detectLanguage('זה פגישה טובה מאוד תודה רבה').lang).toBe('Hebrew')
+    expect(detectLanguage('αυτή είναι μια καλή συνάντηση').lang).toBe('Greek')
   })
 
   it('reads Japanese as Japanese even when kanji (Han) dominates, as long as kana is present', () => {
-    // Kana share >=30% here; the kana check runs before Han so this never reads as Chinese.
     expect(detectLanguage('会議は明日ですね、ありがとうございます').lang).toBe('Japanese')
   })
 })
@@ -28,6 +37,8 @@ describe('detectLanguage — stopword-based (Latin scripts)', () => {
     expect(detectLanguage('we hebben dat niet met de nieuwe versie gedaan, maar het is ook goed').lang).toBe('Dutch')
     expect(detectLanguage('nie wiem czy to jest bardzo dobre, ale tak myślę').lang).toBe('Polish')
     expect(detectLanguage('evet bu çok iyi ama daha fazla zaman var mı bilmiyorum').lang).toBe('Turkish')
+    expect(detectLanguage('jag är inte säker men vi kan titta på det tillsammans').lang).toBe('Swedish')
+    expect(detectLanguage('ini tidak bisa untuk kami dan saya sudah ada waktu').lang).toBe('Indonesian')
   })
 
   it('discriminates Portuguese from Spanish on their distinctive function words', () => {
@@ -39,10 +50,10 @@ describe('detectLanguage — stopword-based (Latin scripts)', () => {
 describe('detectLanguage — conservative nulls (a wrong guess steers the ASR decoder)', () => {
   it('returns null on short, ambiguous, or gibberish text', () => {
     expect(detectLanguage('').lang).toBeNull()
-    expect(detectLanguage('ok').lang).toBeNull() // < 4 letters
-    expect(detectLanguage('de que para').lang).toBeNull() // ES/PT/FR tie — strictly ambiguous
-    expect(detectLanguage('xyzzy blorp fnord glarb').lang).toBeNull() // no stopword hits
-    expect(detectLanguage('12345 67890 !!!').lang).toBeNull() // no letters at all
+    expect(detectLanguage('ok').lang).toBeNull()
+    expect(detectLanguage('de que para').lang).toBeNull()
+    expect(detectLanguage('xyzzy blorp fnord glarb').lang).toBeNull()
+    expect(detectLanguage('12345 67890 !!!').lang).toBeNull()
   })
 
   it('requires at least two stopword hits — one shared word is not evidence', () => {
@@ -50,14 +61,37 @@ describe('detectLanguage — conservative nulls (a wrong guess steers the ASR de
   })
 })
 
-describe('LANGUAGE_NAMES contract', () => {
-  it('every name lowercased is a valid Whisper language token shape (the worker relies on this)', () => {
-    // Whisper's tokenizer accepts full lowercase English language names; this pins the list against
-    // someone adding a display name ('Brazilian Portuguese') the decoder would throw on.
-    const whisperNames = new Set([
-      'english', 'french', 'spanish', 'german', 'italian', 'portuguese', 'dutch',
-      'polish', 'arabic', 'chinese', 'japanese', 'korean', 'hindi', 'russian', 'turkish'
-    ])
-    for (const name of LANGUAGE_NAMES) expect(whisperNames.has(name.toLowerCase()), name).toBe(true)
+describe('detectLanguages — mid-utterance code-switch', () => {
+  it('flags a window that contains two confident languages', () => {
+    const mixed = detectLanguages(
+      'então a gente vai ver isso com você, não é? so we are going to look at this with you, but not for today'
+    )
+    expect(mixed.mixed).toBe(true)
+    expect(mixed.langs).toEqual(expect.arrayContaining(['Portuguese', 'English']))
+  })
+
+  it('is not mixed on a monoglot French line', () => {
+    const one = detectLanguages("alors nous allons voir ça avec vous, mais pas pour aujourd'hui")
+    expect(one.primary).toBe('French')
+    expect(one.mixed).toBe(false)
+  })
+})
+
+describe('LANGUAGE_NAMES contract — 60+ Whisper tokens, one list', () => {
+  it('covers 60+ spoken languages', () => {
+    expect(LANGUAGE_NAMES.length).toBeGreaterThanOrEqual(60)
+  })
+
+  it('every name lowercased is a valid Whisper language token', () => {
+    for (const name of LANGUAGE_NAMES) {
+      expect(WHISPER_LANGUAGE_TOKENS.has(name.toLowerCase()), name).toBe(true)
+    }
+  })
+
+  it('Settings and Apple Speech consume the same list (no parallel copies)', () => {
+    expect(LANGUAGE_OPTIONS).toBe(LANGUAGE_NAMES)
+    for (const name of LANGUAGE_NAMES) {
+      expect(APPLE_LOCALES[name], name).toMatch(/^[a-z]{2,3}-[A-Z]{2}$/)
+    }
   })
 })

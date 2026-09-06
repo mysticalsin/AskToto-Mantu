@@ -39,6 +39,11 @@ describe('vocabulary-corrections helpers', () => {
 })
 
 describe('searchSettingsTabs — settings search must find real section titles, not just tab labels', () => {
+  it('finds the Operator section (Privacy tab) by its exact title', () => {
+    expect(searchSettingsTabs('Operator').map((m) => m.id)).toContain('privacy')
+    expect(searchSettingsTabs('Operator URL').map((m) => m.id)).toContain('privacy')
+  })
+
   it('finds the "Conversation memory" section (Privacy tab) by its exact title', () => {
     const matches = searchSettingsTabs('Conversation memory')
     expect(matches.map((m) => m.id)).toContain('privacy')
@@ -69,6 +74,14 @@ describe('searchSettingsTabs — settings search must find real section titles, 
     }
   })
 
+  it('Wave 5 — Speech / Brain labels and routing / consolidation search', () => {
+    expect(searchSettingsTabs('Speech').map((m) => m.id)).toContain('audio')
+    expect(searchSettingsTabs('Brain').map((m) => m.id)).toContain('intelligence')
+    expect(searchSettingsTabs('routing mode').map((m) => m.id)).toContain('ai')
+    expect(searchSettingsTabs('Brain consolidation').map((m) => m.id)).toContain('intelligence')
+    expect(searchSettingsTabs('batch index').map((m) => m.id)).toContain('intelligence')
+  })
+
   it('MQA-131: finds "Backups & limits" (AI tab) and the hedge toggle that lives inside it', () => {
     expect(searchSettingsTabs('Backups & limits').map((m) => m.id)).toContain('ai')
     expect(searchSettingsTabs('Race a backup provider').map((m) => m.id)).toContain('ai')
@@ -76,5 +89,13 @@ describe('searchSettingsTabs — settings search must find real section titles, 
 
   it('finds the default NVIDIA NIM provider by name', () => {
     expect(searchSettingsTabs('NVIDIA').map((m) => m.id)).toContain('ai')
+  })
+
+  it('finds the Identity tab by member pass, serial, and license', () => {
+    expect(searchSettingsTabs('Identity').map((m) => m.id)).toContain('profile')
+    expect(searchSettingsTabs('member pass').map((m) => m.id)).toContain('profile')
+    expect(searchSettingsTabs('serial').map((m) => m.id)).toContain('profile')
+    expect(searchSettingsTabs('About you').map((m) => m.id)).toContain('profile')
+    expect(searchSettingsTabs('License').map((m) => m.id)).toContain('profile')
   })
 })

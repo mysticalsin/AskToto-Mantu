@@ -60,7 +60,7 @@ export const QuickActions = memo(function QuickActions({
           // tasks — so for these two the honest remedy really is a cloud provider.
           const disabledHint =
             a.kind === 'factcheck' || a.kind === 'explain'
-              ? 'Connect a cloud provider — Métis Local can’t do this one'
+              ? 'Connect a cloud provider. Métis Local can’t do this one.'
               : 'Connect an AI provider first'
           return (
           <button

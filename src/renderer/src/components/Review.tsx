@@ -6,7 +6,9 @@ import { isNonSpeechLine } from '@shared/transcript-filter'
 import { talkStats } from '@shared/talkstats'
 import { fnv1a } from '@shared/hash'
 import { Markdown } from './Markdown'
+import { ModeRecapView, modeRecapSections } from './ModeRecap'
 import { Chip, TextButton, Spinner } from './ui'
+import { AgentStatus, InlineOrb } from './AgentStatus'
 import { ReviewEntityStrip } from './ReviewEntityStrip'
 import { useFlash } from '../lib/useFlash'
 import { accelLabel } from '../lib/keys'
@@ -96,6 +98,12 @@ export type EditedRecap = { base: string; text: string }
 export function displayedRecapText(edited: EditedRecap | null, incoming: string | undefined): string {
   const text = incoming ?? ''
   return edited && edited.base === text ? edited.text : text
+}
+
+function RecapBody({ text, mode }: { text: string; mode: string }): JSX.Element {
+  const sections = modeRecapSections(text, mode)
+  if (sections.length >= 2) return <ModeRecapView mode={mode} sections={sections} />
+  return <Markdown>{text}</Markdown>
 }
 
 /** The line under a save-failure banner. It used to be an unconditional present-tense "Retrying… attempt
@@ -205,6 +213,7 @@ export function nextStepPushed(phase: NextStepPhase, connectionId: string, args:
 }
 
 export const Review = memo(function Review({
+  mode = 'general',
   recap,
   lines,
   savedPath,
@@ -233,8 +242,11 @@ export const Review = memo(function Review({
   onRecapSaved,
   onDirtyChange,
   recapUnavailable,
+  finishingTranscript,
   coldCall
 }: {
+  /** Built-in or custom mode: picks the recap section layout (sales vs recruiting vs meeting, etc.). */
+  mode?: string
   recap: AnswerState | null
   lines: TranscriptLine[]
   savedPath: string | null
@@ -272,7 +284,7 @@ export const Review = memo(function Review({
    *  rendered as a button when isPastMeeting && the recap is empty. */
   onGenerateRecap?: () => void
   /** Named MCP push connections (Settings → Mantu Intelligence) — BidStack (kind 'bidstack') gates
-   *  "Push to CRM" below; every other connected, non-BidStack kind (Plane today) gates "Book next steps". */
+   *  "Push to CRM"; ClickUp gates "Push to ClickUp"; other connected kinds (Plane) gate "Book next steps". */
   mcpConnections?: McpConnection[]
   /** Opens a "Recent meetings" row as a read-only past-meeting Review (same handler History uses). */
   onOpenPastMeeting?: (file: string) => void
@@ -288,6 +300,9 @@ export const Review = memo(function Review({
    *  fired and left to fail with a red error. Shown in place of the "writing detailed notes…" spinner,
    *  which would otherwise spin forever since no recap request was ever sent. */
   recapUnavailable?: { message: string; onOpenSettings?: () => void }
+  /** Live stop is still draining the last ASR windows — show "Finishing transcript…" instead of
+   *  pretending the LLM is already writing notes. */
+  finishingTranscript?: boolean
   /** Cold Calling Mode only (live session, see App.tsx maybeFireRecap): end-of-call coaching, fired
    *  automatically alongside the recap, plus the manual "Book meetings" action drafted from it. Session-
    *  only — not persisted, so a reopened past cold call never carries this. */
@@ -303,6 +318,7 @@ export const Review = memo(function Review({
   const [jsonCopied, flashJsonCopied] = useFlash(1500)
   const [exportError, setExportError] = useState<string | null>(null)
   const [transcriptOpen, setTranscriptOpen] = useState(!!showTranscript)
+  useEffect(() => setTranscriptOpen(!!showTranscript), [showTranscript])
   // Task MI-5 — confidential flag: excludes this meeting from every published wiki surface. Local state
   // seeded from the `confidential` prop (the meeting's actual saved value for a reopened past meeting;
   // false for a just-ended live one) and updated optimistically on toggle.
@@ -533,6 +549,12 @@ export const Review = memo(function Review({
   }, [followupDraft?.text, followupEdited])
 
   const [mailError, setMailError] = useState<string | null>(null)
+  const [outlook, setOutlook] = useState<{ signedIn: boolean; canDraft: boolean } | null>(null)
+  const [outlookDraft, setOutlookDraft] = useState<{ phase: 'idle' | 'saving' | 'saved' | 'error'; error: string | null }>({
+    phase: 'idle',
+    error: null
+  })
+  const recordedEmailIds = useRef(new Set<string>())
 
   // "Push to CRM" — manual, review-first: shows the exact payload before it ever leaves the app, then
   // fires a single MCP tool call to BidStack. Payload is deliberately thin: title, date, and the
@@ -588,12 +610,22 @@ export const Review = memo(function Review({
   const sendToCrm = async (): Promise<void> => {
     if (pushState.phase === 'sending') return
     if (!pushTool) return
+    // Wave 4 / QA: confidential meetings never leave the device via MCP — same contract as wiki publish.
+    if (confidentialFlag) {
+      setPushState({ phase: 'error', error: 'This meeting is marked confidential. CRM push is blocked.' })
+      return
+    }
     // Remember the payload that was actually sent — recapText can move on (an edit, a regeneration) while
     // the call is in flight, and the CRM holds what left here, not what the screen shows when it lands.
     const payload = crmPayload
     const file = savedPath
     setPushState({ phase: 'sending', error: null })
-    const r = await window.toto.mcpPush({ connectionId: 'bidstack', toolName: pushTool, args: payload })
+    const r = await window.toto.mcpPush({
+      connectionId: 'bidstack',
+      toolName: pushTool,
+      args: { ...payload, confidential: confidentialFlag },
+      ...(file ? { meetingFile: file.split(/[/\\]/).pop() || file } : {})
+    })
     if (r.ok) {
       markCrmPushed(payload)
       setPushState({ phase: 'sent', error: null })
@@ -608,10 +640,89 @@ export const Review = memo(function Review({
     }
   }
   // "Book next steps" — manual, review-first, same discipline as "Push to CRM": nothing sends until the
-  // user reviews the exact per-item payload and clicks Confirm. Gated on at least one connected,
-  // non-BidStack mcpConnections entry (Plane today — ClickUp has no UI/IPC wiring yet, see
-  // McpConnectionKindSchema in shared/ipc.ts).
-  const taskConnections = useMemo(() => (mcpConnections ?? []).filter((c) => c.kind !== 'bidstack' && c.connected), [mcpConnections])
+  // user reviews the exact per-item payload and clicks Confirm. Plane stays here. ClickUp recap push is
+  // the dedicated "Push to ClickUp" panel (create-task, named list) — next steps still allow per-item
+  // tasks into that same list.
+  const taskConnections = useMemo(
+    () => (mcpConnections ?? []).filter((c) => c.kind !== 'bidstack' && c.connected),
+    [mcpConnections]
+  )
+  const clickupConn = mcpConnections?.find((c) => c.kind === 'clickup' && c.connected)
+  const [clickupResolvedDest, setClickupResolvedDest] = useState('')
+  const [clickupResolving, setClickupResolving] = useState(false)
+  const clickupDiscoveringRef = useRef(false)
+  const clickupDestName = (clickupResolvedDest || clickupConn?.clickupListName || clickupConn?.clickupListId || '').trim()
+  const [clickupOpen, setClickupOpen] = useState(false)
+  const [clickupState, setClickupState] = useState<{ phase: CrmPushPhase; error: string | null; destinationName?: string; taskUrl?: string }>({
+    phase: 'idle',
+    error: null
+  })
+  useEffect(() => {
+    setClickupOpen(false)
+    setClickupState({ phase: 'idle', error: null })
+    setClickupResolvedDest('')
+    setClickupResolving(false)
+    clickupDiscoveringRef.current = false
+  }, [savedPath])
+
+  const ensureClickupDest = async (): Promise<void> => {
+    if (!clickupConn) return
+    if (clickupDestName || clickupDiscoveringRef.current) return
+    clickupDiscoveringRef.current = true
+    setClickupResolving(true)
+    try {
+      const r = await window.toto.mcpClickupDiscoverDestination()
+      const named = (r.clickupListName || r.clickupListId || '').trim()
+      if (r.ok && named) {
+        setClickupResolvedDest(named)
+        setClickupState((s) =>
+          s.phase === 'error' && /could not name the destination/i.test(s.error || '')
+            ? { phase: 'idle', error: null }
+            : s
+        )
+      } else {
+        setClickupState({ phase: 'error', error: r.error || 'ClickUp could not name the destination.' })
+      }
+    } finally {
+      clickupDiscoveringRef.current = false
+      setClickupResolving(false)
+    }
+  }
+
+  const sendToClickup = async (): Promise<void> => {
+    if (clickupState.phase === 'sending' || !clickupConn) return
+    if (confidentialFlag) {
+      setClickupState({ phase: 'error', error: 'This meeting is marked confidential. ClickUp push is blocked.' })
+      return
+    }
+    if (!clickupDestName) {
+      setClickupState({ phase: 'error', error: 'ClickUp could not name the destination.' })
+      return
+    }
+    const file = savedPath
+    setClickupState({ phase: 'sending', error: null })
+    const r = await window.toto.mcpPush({
+      connectionId: 'clickup',
+      toolName: 'clickup_create_task',
+      args: {
+        name: crmPayload.title,
+        title: crmPayload.title,
+        description: crmPayload.summary,
+        confidential: confidentialFlag
+      },
+      ...(file ? { meetingFile: file.split(/[/\\]/).pop() || file } : {})
+    })
+    if (r.ok) {
+      setClickupState({
+        phase: 'sent',
+        error: null,
+        destinationName: r.destinationName || clickupDestName,
+        taskUrl: r.taskUrl
+      })
+    } else {
+      setClickupState({ phase: 'error', error: r.error || 'ClickUp rejected the task.' })
+    }
+  }
   const [nextStepsOpen, setNextStepsOpen] = useState(false)
   const [nextStepsData, setNextStepsData] = useState<RecapExport['actionItems'] | null>(null)
   const [nextStepsLoading, setNextStepsLoading] = useState(false)
@@ -663,6 +774,7 @@ export const Review = memo(function Review({
 
   const openNextSteps = async (): Promise<void> => {
     setNextStepsOpen(true)
+    void ensureClickupDest()
     // Lazy-fetch, and re-fetch when the recap has changed since the cache was built — mirrors the CRM
     // panel's cost discipline without letting it serve items that no longer match what the user sees.
     if (nextStepsLoading || (nextStepsData && nextStepsSource === recapText)) return
@@ -694,7 +806,7 @@ export const Review = memo(function Review({
   const nextStepArgs = (item: RecapExport['actionItems'][number], i: number, connId: string): NextStepArgs => {
     const title = (itemTitle[i] ?? item.text).trim().slice(0, 300) || item.text.slice(0, 300)
     const description = nextStepDescription(item)
-    const target = (connTarget[connId] || '').trim()
+    const target = connId === 'clickup' ? '' : (connTarget[connId] || '').trim()
     return target ? { title, description, project_id: target } : { title, description }
   }
 
@@ -720,17 +832,27 @@ export const Review = memo(function Review({
 
   const runNextStepPushes = async (): Promise<void> => {
     if (!nextStepsData) return
+    if (confidentialFlag) {
+      // Same gate as sendToCrm — never enqueue Plane/ClickUp tasks for a confidential meeting.
+      setNextStepsFetchError('This meeting is marked confidential. Task push is blocked.')
+      return
+    }
     const items = nextStepsData.map((it, i) => ({ item: it, i })).filter(({ i }) => itemChecked[i])
     const conns = taskConnections.filter((c) => connChecked[c.id] ?? true)
     for (const { item, i } of items) {
       for (const conn of conns) {
-        const tool = connTool[conn.id] || conn.tools[0]
+        const tool = conn.kind === 'clickup' ? 'clickup_create_task' : connTool[conn.id] || conn.tools[0]
         if (!tool) continue
         const args = nextStepArgs(item, i, conn.id)
         const key = `${i}:${conn.id}`
         if (nextStepPushed(stepStatus[key]?.phase ?? 'idle', conn.id, args)) continue
         setStepStatus((s) => ({ ...s, [key]: { phase: 'sending', error: null } }))
-        const r = await window.toto.mcpPush({ connectionId: conn.id, toolName: tool, args })
+        const r = await window.toto.mcpPush({
+          connectionId: conn.id,
+          toolName: tool,
+          args: { ...args, confidential: confidentialFlag },
+          ...(savedPath ? { meetingFile: savedPath.split(/[/\\]/).pop() || savedPath } : {})
+        })
         if (r.ok) {
           markNextStepPushed(conn.id, args)
           setStepStatus((s) => ({ ...s, [key]: { phase: 'sent', error: null } }))
@@ -759,6 +881,45 @@ export const Review = memo(function Review({
     window.toto
       .openMailDraft({ subject, body: followupText })
       .catch((e) => setMailError(`Couldn't open your mail app: ${e instanceof Error ? e.message : String(e)}`))
+  }
+
+  useEffect(() => {
+    let alive = true
+    void window.toto
+      .outlookWriteStatus()
+      .then((s) => {
+        if (alive) setOutlook({ signedIn: s.signedIn, canDraft: s.canDraft })
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  useEffect(() => {
+    const id = followupDraft?.id
+    if (!id || followupDraft.streaming || followupDraft.error || !followupDraft.text?.trim()) return
+    if (recordedEmailIds.current.has(id)) return
+    recordedEmailIds.current.add(id)
+    void window.toto.timeSavedRecord({ kind: 'email-summary' }).catch(() => {})
+  }, [followupDraft?.id, followupDraft?.streaming, followupDraft?.error, followupDraft?.text])
+
+  const createOutlookDraft = async (): Promise<void> => {
+    if (outlookDraft.phase === 'saving' || !followupText.trim()) return
+    if (!outlook?.signedIn || !outlook.canDraft) {
+      setOutlookDraft({
+        phase: 'error',
+        error: outlook?.signedIn
+          ? 'Outlook draft permission is not granted. Métis will not send mail. Use Open in Mail.'
+          : 'Connect Outlook in Settings → Calendar. Métis will not send mail.'
+      })
+      return
+    }
+    setOutlookDraft({ phase: 'saving', error: null })
+    const subject = meetingMeta?.title ? `Follow-up: ${meetingMeta.title}` : 'Follow-up'
+    const r = await window.toto.outlookCreateDraft({ subject, body: followupText })
+    if (r.ok) setOutlookDraft({ phase: 'saved', error: null })
+    else setOutlookDraft({ phase: 'error', error: r.error || 'Could not create the Outlook draft. Nothing was sent.' })
   }
 
   return (
@@ -919,7 +1080,7 @@ export const Review = memo(function Review({
                   {debriefState === 'error' ? 'Could not save. Try again.' : 'Impressions, not transcript. 90 seconds, then move on.'}
                 </span>
                 <TextButton onClick={() => void saveDebrief()} disabled={!debrief.trim() || debriefState === 'saving'}>
-                  {debriefState === 'saving' ? <Spinner size={11} /> : <Save size={11} />}
+                  {debriefState === 'saving' ? <InlineOrb kind="writing" /> : <Save size={11} />}
                   Save debrief
                 </TextButton>
               </div>
@@ -937,7 +1098,7 @@ export const Review = memo(function Review({
             // Edit mode toolbar: Save / Cancel. Replaces Copy/Export, which don't apply mid-edit.
             <div className="flex items-center gap-1">
               <Chip onClick={() => void saveRecap()} variant="accent" disabled={recapSaving}>
-                {recapSaving ? <Spinner size={13} /> : <Check size={13} />}
+                {recapSaving ? <InlineOrb kind="writing" /> : <Check size={13} />}
                 {recapSaving ? 'Saving' : 'Save'}
               </Chip>
               <TextButton onClick={cancelEditRecap} disabled={recapSaving}>
@@ -952,8 +1113,8 @@ export const Review = memo(function Review({
                   click can't self-cancel the in-flight generation. */}
               {isPastMeeting && !recapText && !recap?.error && onGenerateRecap && (
                 <Chip onClick={onGenerateRecap} variant="accent" disabled={recap?.streaming}>
-                  {recap?.streaming ? <Spinner size={13} /> : <Sparkles size={13} />}
-                  {recap?.streaming ? 'Generating…' : 'Generate recap'}
+                  {recap?.streaming ? <AgentStatus kind="writing" size="inline" caption /> : <Sparkles size={13} />}
+                  {recap?.streaming ? null : 'Generate recap'}
                 </Chip>
               )}
               {/* Edit — past meetings only (a live session's recap is still owned by the ask state, and may
@@ -984,7 +1145,7 @@ export const Review = memo(function Review({
                       disabled={recap?.streaming}
                       title="Regenerate this summary from the transcript"
                     >
-                      {recap?.streaming ? <Spinner size={11} /> : <RotateCcw size={11} />}
+                      {recap?.streaming ? <InlineOrb kind="writing" /> : <RotateCcw size={11} />}
                       {recap?.streaming ? 'Regenerating' : 'Regenerate'}
                     </TextButton>
                   )}
@@ -993,7 +1154,7 @@ export const Review = memo(function Review({
                     {jsonCopied ? 'Copied' : 'Export JSON'}
                   </TextButton>
                   <TextButton onClick={exportPdf} disabled={pdfBusy} title="Save this summary as a PDF">
-                    {pdfBusy ? <Spinner size={11} /> : <FileText size={11} />}
+                    {pdfBusy ? <InlineOrb kind="loading" /> : <FileText size={11} />}
                     Export PDF
                   </TextButton>
                 </>
@@ -1034,6 +1195,13 @@ export const Review = memo(function Review({
           </div>
         ) : recap?.error ? (
           <div className="flex flex-col gap-2">
+            {/* Substantial streamed notes stay visible — a trailing idle-timeout used to hide them
+                behind the error alone and autosave used to wipe them. Show what we have + Retry. */}
+            {recapText.trim().length >= 40 && (
+              <div className="opacity-90">
+                <RecapBody text={recapText} mode={mode} />
+              </div>
+            )}
             <div className="text-[13px] text-[var(--color-danger)]">{recap.error}</div>
             {/* Scoped retry — replays just the recap request. Previously the only recovery was
                 "New meeting", which throws away the whole saved transcript. */}
@@ -1052,13 +1220,11 @@ export const Review = memo(function Review({
             )}
           </div>
         ) : recapText ? (
-          <Markdown>{recapText}</Markdown>
+          <RecapBody text={recapText} mode={mode} />
         ) : recap?.streaming ? (
           // A past meeting's retroactive "Generate recap" (or a just-finished import) is in flight —
           // recap here is recapGen's live streaming answer, not the static (still-empty) saved recap.
-          <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
-            <Spinner size={13} /> writing detailed notes…
-          </div>
+          <AgentStatus kind="writing" size="hero" />
         ) : isPastMeeting ? (
           // A past meeting saved without a recap (e.g. a keyless summary failure) and nothing generating
           // right now. Not a spinner — the work is long over; offer to add notes instead.
@@ -1083,10 +1249,12 @@ export const Review = memo(function Review({
               </div>
             )}
           </div>
-        ) : (
+        ) : finishingTranscript ? (
           <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
-            <Spinner size={13} /> writing detailed notes…
+            <Spinner size={13} /> finishing transcript…
           </div>
+        ) : (
+          <AgentStatus kind="writing" size="hero" />
         )}
       </section>
 
@@ -1115,9 +1283,7 @@ export const Review = memo(function Review({
                   ) : coldCall.booking ? (
                     <div className="flex flex-col gap-2">
                       {coldCall.booking.streaming && !coldCall.booking.text ? (
-                        <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
-                          <Spinner size={13} /> drafting outreach…
-                        </div>
+                        <AgentStatus kind="writing" size="inline" caption />
                       ) : (
                         <Markdown>{coldCall.booking.text}</Markdown>
                       )}
@@ -1136,9 +1302,7 @@ export const Review = memo(function Review({
               )}
             </div>
           ) : coldCall.coaching?.streaming ? (
-            <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
-              <Spinner size={13} /> coaching notes…
-            </div>
+            <AgentStatus kind="writing" size="hero" />
           ) : (
             // coaching === null means it was never STARTED (the call ended with nothing transcribed, so
             // generateColdCallCoaching returned early). Showing the spinner here — as this branch used to —
@@ -1146,7 +1310,7 @@ export const Review = memo(function Review({
             // Retry only renders on an error. Offer the action instead of pretending work is in flight.
             <div className="flex items-center justify-between gap-2 py-1">
               <span className="text-[13px] text-[color:var(--color-ink-3)]">
-                No coaching notes yet — nothing was transcribed from this call.
+                No coaching notes yet. Nothing was transcribed from this call.
               </span>
               {coldCall.onRetryCoaching && (
                 <TextButton icon={RotateCcw} onClick={coldCall.onRetryCoaching}>
@@ -1191,9 +1355,7 @@ export const Review = memo(function Review({
               </div>
             </div>
           ) : followupDraft?.streaming && !followupText ? (
-            <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
-              <Spinner size={13} /> drafting follow-up…
-            </div>
+            <AgentStatus kind="writing" size="hero" />
           ) : followupDraft ? (
             <div className="flex flex-col gap-2">
               <textarea
@@ -1213,13 +1375,32 @@ export const Review = memo(function Review({
                 <TextButton onClick={openFollowupInMail} disabled={!followupText}>
                   <Mail size={11} /> Open in Mail
                 </TextButton>
+                {outlook?.signedIn && outlook.canDraft ? (
+                  <TextButton onClick={() => void createOutlookDraft()} disabled={!followupText || outlookDraft.phase === 'saving'}>
+                    <Mail size={11} /> {outlookDraft.phase === 'saved' ? 'Draft created' : 'Create Outlook draft'}
+                  </TextButton>
+                ) : (
+                  <TextButton
+                    onClick={() =>
+                      setOutlookDraft({
+                        phase: 'error',
+                        error: 'Connect Outlook in Settings → Calendar. Métis will not send mail.'
+                      })
+                    }
+                  >
+                    <Mail size={11} /> Connect Outlook
+                  </TextButton>
+                )}
                 <TextButton icon={RotateCcw} onClick={onGenerateFollowup}>
                   Regenerate
                 </TextButton>
               </div>
               {mailError && <div className="text-[11px] text-[var(--color-danger)]">{mailError}</div>}
+              {outlookDraft.phase === 'error' && outlookDraft.error && (
+                <div className="text-[11px] text-[var(--color-danger)]">{outlookDraft.error}</div>
+              )}
               <div className="text-[11px] text-[color:var(--color-ink-3)]">
-                Review before sending, and attach anything promised manually for now.
+                Review before sending. Outlook creates a draft only. Nothing sends itself.
               </div>
             </div>
           ) : null}
@@ -1232,10 +1413,13 @@ export const Review = memo(function Review({
             <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
               <Send size={12} /> CRM
             </div>
-            {bidstackConnected && !pushOpen && !crmPushed && (
+            {bidstackConnected && !pushOpen && !crmPushed && !confidentialFlag && (
               <Chip onClick={() => setPushOpen(true)} variant="accent">
                 <Send size={13} /> Push to CRM
               </Chip>
+            )}
+            {confidentialFlag && bidstackConnected && (
+              <span className="text-[11px] text-[color:var(--color-ink-3)]">CRM push blocked (confidential)</span>
             )}
           </div>
 
@@ -1311,7 +1495,7 @@ export const Review = memo(function Review({
                     variant="accent"
                     disabled={pushState.phase === 'sending'}
                   >
-                    {pushState.phase === 'sending' ? <Spinner size={13} /> : <Send size={13} />}
+                    {pushState.phase === 'sending' ? <InlineOrb kind="connecting" /> : <Send size={13} />}
                     {pushState.phase === 'sending' ? 'Pushing…' : 'Confirm push'}
                   </Chip>
                 )}
@@ -1330,25 +1514,115 @@ export const Review = memo(function Review({
         </section>
       )}
 
+      {recapText && !recap?.error && !editingRecap && clickupConn && (
+        <section aria-live="polite">
+          <div className="mb-1.5 flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+              <Send size={12} /> ClickUp
+            </div>
+            {!clickupOpen && clickupState.phase !== 'sent' && !confidentialFlag && (
+              <Chip
+                onClick={() => {
+                  setClickupOpen(true)
+                  void ensureClickupDest()
+                }}
+                variant="accent"
+              >
+                <Send size={13} /> Push to ClickUp
+              </Chip>
+            )}
+            {confidentialFlag && (
+              <span className="text-[11px] text-[color:var(--color-ink-3)]">ClickUp push blocked (confidential)</span>
+            )}
+          </div>
+
+          {clickupState.phase === 'sent' ? (
+            <div className="flex flex-col gap-1 text-[13px] text-[var(--color-success)]">
+              <div className="flex items-center gap-1.5">
+                <Check size={13} /> Created in {clickupState.destinationName || clickupDestName || 'ClickUp'}.
+              </div>
+              {clickupState.taskUrl ? (
+                <a href={clickupState.taskUrl} className="text-[11px] text-[color:var(--color-ink-2)] underline" target="_blank" rel="noreferrer">
+                  {clickupState.taskUrl}
+                </a>
+              ) : null}
+            </div>
+          ) : clickupOpen ? (
+            <div className="flex flex-col gap-2">
+              <div className="text-[12px] text-[color:var(--color-ink-2)]">
+                {clickupResolving
+                  ? 'Finding the ClickUp list…'
+                  : clickupDestName
+                    ? `Task in ${clickupDestName}`
+                    : 'ClickUp could not name the destination.'}
+              </div>
+              <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3 text-[12px]">
+                <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
+                  Payload preview
+                </div>
+                <div className="flex flex-col gap-1 text-[color:var(--color-ink-2)]">
+                  <div>
+                    <span className="text-[color:var(--color-ink-3)]">Name: </span>
+                    {crmPayload.title}
+                  </div>
+                  <div className="text-[color:var(--color-ink-3)]">Description:</div>
+                  <div className="scroll-thin max-h-32 overflow-y-auto whitespace-pre-wrap rounded-lg bg-white/[0.03] p-2 text-[color:var(--color-ink)]">
+                    {crmPayload.summary || '(empty)'}
+                  </div>
+                </div>
+              </div>
+              {clickupState.phase === 'error' && clickupState.error && (
+                <div className="flex items-start gap-1.5 text-[11px] text-[var(--color-danger)]">
+                  <AlertCircle size={13} className="mt-px shrink-0" />
+                  <span>{clickupState.error}</span>
+                </div>
+              )}
+              <div className="flex items-center gap-1.5">
+                {clickupDestName && !clickupResolving ? (
+                  <Chip
+                    onClick={() => void sendToClickup()}
+                    variant="accent"
+                    disabled={clickupState.phase === 'sending'}
+                  >
+                    {clickupState.phase === 'sending' ? <InlineOrb kind="connecting" /> : <Send size={13} />}
+                    {clickupState.phase === 'sending' ? 'Pushing…' : 'Confirm push'}
+                  </Chip>
+                ) : null}
+                <TextButton
+                  onClick={() => {
+                    setClickupOpen(false)
+                    setClickupState({ phase: 'idle', error: null })
+                  }}
+                  disabled={clickupState.phase === 'sending'}
+                >
+                  Cancel
+                </TextButton>
+              </div>
+            </div>
+          ) : null}
+        </section>
+      )}
+
       {recapText && !recap?.error && !editingRecap && taskConnections.length > 0 && (
         <section aria-live="polite">
           <div className="mb-1.5 flex items-center justify-between">
             <div className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
               <ListTree size={12} /> Next steps
             </div>
-            {!nextStepsOpen && (
+            {!nextStepsOpen && !confidentialFlag && (
               <Chip onClick={() => void openNextSteps()} variant="accent">
                 <ListTree size={13} /> Book next steps
               </Chip>
+            )}
+            {confidentialFlag && (
+              <span className="text-[11px] text-[color:var(--color-ink-3)]">Task push blocked (confidential)</span>
             )}
           </div>
 
           {nextStepsOpen && (
             <div className="flex flex-col gap-3">
               {nextStepsLoading ? (
-                <div className="flex items-center gap-2 py-1 text-[13px] text-[color:var(--color-ink-2)]">
-                  <Spinner size={13} /> reading action items…
-                </div>
+                <AgentStatus kind="searching" size="inline" caption />
               ) : nextStepsFetchError ? (
                 <div className="flex items-start gap-1.5 text-[11px] text-[var(--color-danger)]">
                   <AlertCircle size={13} className="mt-px shrink-0" />
@@ -1406,29 +1680,41 @@ export const Review = memo(function Review({
                           </label>
                           {checked && (
                             <div className="flex flex-col gap-1.5 pl-6">
-                              {conn.tools.length > 0 ? (
-                                <select
-                                  value={tool}
-                                  onChange={(e) => setConnTool((s) => ({ ...s, [conn.id]: e.target.value }))}
-                                  className="no-drag rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.02] px-2 py-1.5 text-[12px] text-[color:var(--color-ink)]"
-                                >
-                                  {conn.tools.map((t) => (
-                                    <option key={t} value={t}>
-                                      {t}
-                                    </option>
-                                  ))}
-                                </select>
-                              ) : (
-                                <div className="text-[11px] text-[var(--color-danger)]">
-                                  {conn.label} has no tools in this key's scope, so there's nothing to push to.
+                              {conn.kind === 'clickup' ? (
+                                <div className="text-[11px] text-[color:var(--color-ink-2)]">
+                                  {clickupResolving
+                                    ? 'Finding the ClickUp list…'
+                                    : clickupDestName
+                                      ? `Task in ${clickupDestName}`
+                                      : 'ClickUp could not name the destination.'}
                                 </div>
+                              ) : (
+                                <>
+                                  {conn.tools.length > 0 ? (
+                                    <select
+                                      value={tool}
+                                      onChange={(e) => setConnTool((s) => ({ ...s, [conn.id]: e.target.value }))}
+                                      className="no-drag rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.02] px-2 py-1.5 text-[12px] text-[color:var(--color-ink)]"
+                                    >
+                                      {conn.tools.map((t) => (
+                                        <option key={t} value={t}>
+                                          {t}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  ) : (
+                                    <div className="text-[11px] text-[var(--color-danger)]">
+                                      {conn.label} has no tools in this key's scope, so there's nothing to push to.
+                                    </div>
+                                  )}
+                                  <input
+                                    value={connTarget[conn.id] || ''}
+                                    onChange={(e) => setConnTarget((s) => ({ ...s, [conn.id]: e.target.value }))}
+                                    placeholder={`${conn.label} project ID (optional)`}
+                                    className="w-full rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.02] px-2 py-1.5 text-[12px] text-[color:var(--color-ink)]"
+                                  />
+                                </>
                               )}
-                              <input
-                                value={connTarget[conn.id] || ''}
-                                onChange={(e) => setConnTarget((s) => ({ ...s, [conn.id]: e.target.value }))}
-                                placeholder={`${conn.label} project ID (optional)`}
-                                className="w-full rounded-lg border border-[var(--color-hair-soft)] bg-white/[0.02] px-2 py-1.5 text-[12px] text-[color:var(--color-ink)]"
-                              />
                             </div>
                           )}
                         </div>
@@ -1458,11 +1744,14 @@ export const Review = memo(function Review({
                                   </span>
                                 ) : status?.phase === 'sending' ? (
                                   <span className="flex items-center gap-1 text-[color:var(--color-ink-3)]">
-                                    <Spinner size={11} /> Sending
+                                    <InlineOrb kind="connecting" /> Sending
                                   </span>
                                 ) : null}
                               </div>
                               <div className="text-[color:var(--color-ink)]">{args.title}</div>
+                              {conn.kind === 'clickup' && clickupDestName ? (
+                                <div className="mt-0.5 text-[11px] text-[color:var(--color-ink-3)]">Task in {clickupDestName}</div>
+                              ) : null}
                               <div className="mt-0.5 whitespace-pre-wrap text-[color:var(--color-ink-2)]">{args.description}</div>
                               {status?.phase === 'error' && status.error && (
                                 <div className="mt-1 flex items-start gap-1.5 text-[11px] text-[var(--color-danger)]">
@@ -1478,7 +1767,7 @@ export const Review = memo(function Review({
 
                   <div className="flex items-center gap-1.5">
                     <Chip onClick={() => void confirmNextSteps()} variant="accent" disabled={pushingNextSteps}>
-                      {pushingNextSteps ? <Spinner size={13} /> : <ListTree size={13} />}
+                      {pushingNextSteps ? <InlineOrb kind="connecting" /> : <ListTree size={13} />}
                       {pushingNextSteps ? 'Pushing…' : 'Confirm push'}
                     </Chip>
                     <TextButton onClick={() => setNextStepsOpen(false)}>Cancel</TextButton>

@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "algorithm": "sha256",
+  "skills": {
+    "humanizer": {
+      "path": "humanizer/SKILL.md",
+      "version": "1.1.0",
+      "sha256": "f45e86696aab25fe6e19a424bcab93bec1fb0b35e31e5d3980bfb98803091cac"
+    },
+    "caveman": {
+      "path": "caveman/SKILL.md",
+      "version": "1.0.0",
+      "sha256": "0bb94c233fe9b00c2f4c3d5336f933c1cc4636668b249308a3b523603e1f7909"
+    },
+    "interview": {
+      "path": "modes/interview/SKILL.md",
+      "version": "1.1.0",
+      "sha256": "db40c2bf910fcfee457250c74cf9134b4f19fd5577d129b0938390d3e02ebc09"
+    },
+    "recruiting": {
+      "path": "modes/recruiting/SKILL.md",
+      "version": "1.1.0",
+      "sha256": "a3cacea32813aa928b606071e1f0ba3f6a450aebe04694d55acabad967af8964"
+    },
+    "meeting": {
+      "path": "modes/meeting/SKILL.md",
+      "version": "1.1.0",
+      "sha256": "1755d0944aab32cc854171803a5dac55cfc1b5212888a60f01cd9c5b156aecfe"
+    },
+    "sales": {
+      "path": "modes/sales/SKILL.md",
+      "version": "1.1.0",
+      "sha256": "2ad2e910c70058ecaaea6230495218f58bc6386f4709a72780bb44a2e120dffd"
+    },
+    "negotiation": {
+      "path": "modes/negotiation/SKILL.md",
+      "version": "1.1.0",
+      "sha256": "2abc9a9f6db9ea893d9774610beb71b5a3fad0e290779579ef7172013c448c2e"
+    },
+    "presentation": {
+      "path": "modes/presentation/SKILL.md",
+      "version": "1.1.0",
+      "sha256": "4981aec62bfe873d0e902bbdf9b753d81dd19a4d536016f448ac28c15816f718"
+    },
+    "support": {
+      "path": "modes/support/SKILL.md",
+      "version": "1.1.0",
+      "sha256": "d124ea7fb64f444b27eb84e9a567fee87ececca8a215d412932b016425414759"
+    },
+    "general": {
+      "path": "modes/general/SKILL.md",
+      "version": "1.1.0",
+      "sha256": "0e9a73a84c23b799993e58d428276497912b77bbd5e6bfee63dc0044b822b4d7"
+    },
+    "cold-call": {
+      "path": "modes/cold-call/SKILL.md",
+      "version": "1.1.0",
+      "sha256": "0b563c3c654693c5c1d97ce4f6b37b0dc13c8083f031876d6feb777f1c165ec0"
+    }
+  }
+}

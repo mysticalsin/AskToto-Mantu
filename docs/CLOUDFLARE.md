@@ -79,35 +79,87 @@ Model ids are typed the same way as for any other provider, in Cloudflare's form
 
 ---
 
-## Optional: an installer-embedded proxy key, so a fresh install needs zero setup
+## On by default: an installer-embedded Cloudflare credential, so a fresh install needs zero setup
 
-Cloudflare is the DEFAULT provider (`BaseSettingsSchema.provider`), and it ships the Worker URL above —
-but not a `METIS_PROXY_KEY`, so a brand-new install still has no cloud route until someone pastes one in
-Settings. An operator can optionally close that last gap the same disclosed, opt-in way the Cahê pilot
-already embeds its Kimi key (`src/main/cahe-embedded-key.ts`) — this is the general-build counterpart,
-`src/main/embedded-cloudflare-key.ts`:
+Cloudflare is the DEFAULT provider (`BaseSettingsSchema.provider`). By default the release builds now also
+embed a Cloudflare credential (encrypted at rest), so a brand-new install answers with **nothing to paste**:
+on a fresh profile `provider` is `cloudflare`, a key is seeded into the encrypted keystore, an https
+endpoint is set, and `providerReady` is true with no "Add your Cloudflare key" prompt.
+
+The embedded credential comes in **two shapes**, both encrypted into the same blob
+(`src/main/embedded-cloudflare-key.ts`), built only from build-time env — only ciphertext ships, and
+**nothing about the account (id, endpoint or token) is in tracked source**:
+
+1. **Worker proxy key** (the original, token-never-ships design above). The blob's plaintext is a bare
+   `METIS_PROXY_KEY`; the app still points `cloudflareBaseUrl` at the operator's Worker. Set
+   `METIS_CLOUDFLARE_API_TOKEN` (or the legacy `METIS_PROXY_KEY`) at build time, with no account id.
+
+2. **Direct Cloudflare account credential** (the product owner's on-by-default configuration). The blob's
+   plaintext is a JSON `{token,baseUrl}`: `token` is a Cloudflare **account API token** sent as
+   `Authorization: Bearer …`, and `baseUrl` is the account-scoped OpenAI-compatible REST endpoint
+   `https://api.cloudflare.com/client/v4/accounts/<id>/ai/v1`. Métis then talks to Cloudflare **directly**,
+   with no Worker in the path. Set `METIS_CLOUDFLARE_API_TOKEN` **and** `METIS_CLOUDFLARE_ACCOUNT_ID` at
+   build time (or `METIS_CLOUDFLARE_BASE_URL` for a full endpoint override). On first run the runtime seeds
+   both the key and — guarded so it never clobbers an operator/user endpoint (`=== METIS_WORKER_URL`) — the
+   account endpoint into settings.
+
+   The honest trade-off is the same as any embedded credential: an account token that ships is
+   **obfuscation, not secrecy** (see below), and an account token is broader than a proxy key. The product
+   owner accepts this deliberately and rotates the token out-of-band; size/scope the token accordingly and
+   be ready to rotate it. The truly-secure alternative remains shape (1)/the Worker proxy.
+
+Either shape is the same disclosed, opt-in mechanism the Cahê pilot uses for its Kimi key
+(`src/main/cahe-embedded-key.ts`) — `src/main/embedded-cloudflare-key.ts` is the general-build counterpart:
 
 1. Generate a **separate** key — never the operator's own `METIS_PROXY_KEY` — and add it to the Worker's
    `METIS_PROXY_KEYS` array under its own label, e.g. `"embedded-default:<value>"`
    (`cloudflare-proxy/src/index.ts`'s multi-key union). A labeled key is revoked independently, by
    removing just that entry, without touching any other user's key. Size it as a minimum-quota fallback
    on the Worker side, not a shared admin credential.
-2. Drop that value into `build/cloudflare-embed/key.json` (gitignored — never commit it) as
-   `{"proxyKey": "<value>"}`.
-3. Build with `METIS_EMBED_CLOUDFLARE_KEY=1 npm run dist:win` (or `release:build:win`). Without that env
-   var, `scripts/check-embedded-cloudflare-key.mjs` refuses the package outright rather than silently
-   shipping a key nobody meant to embed.
+2. Supply the credential as build environment variables (build **Secrets** in CI, or exported shell vars
+   locally). All are read **only** from the environment — never a hardcoded value, never a committed file:
+   - `METIS_CLOUDFLARE_API_TOKEN` (or legacy `METIS_PROXY_KEY`) — the token to embed.
+   - For the **direct account** shape, also `METIS_CLOUDFLARE_ACCOUNT_ID` (the endpoint is derived as
+     `https://api.cloudflare.com/client/v4/accounts/<id>/ai/v1`), or `METIS_CLOUDFLARE_BASE_URL` to set a
+     full endpoint explicitly. Omit both for the bare Worker-proxy-key shape.
+   The predist/prebuild step `scripts/embed-cloudflare-key.mjs` then AES-256-GCM-encrypts the payload into
+   `build/cloudflare-embed/key.json` (gitignored). Only the **ciphertext** blob is written to disk; the
+   plaintext token is not. If no token env var is set, the step is a clean no-op (the normal keyless build).
+3. Build with `METIS_EMBED_CLOUDFLARE_KEY=1` set as well. `.github/workflows/release.yml` already sets this
+   for the mac/win release jobs, so with the account secrets configured in the repo the DMG/EXE embed the
+   credential **by default**; locally you set it explicitly, e.g.
+   `METIS_CLOUDFLARE_API_TOKEN=… METIS_CLOUDFLARE_ACCOUNT_ID=… METIS_EMBED_CLOUDFLARE_KEY=1 npm run dist`
+   (or `release:build:mac`, `dist:win`, `release:build:win`, or the Cahê chain). This is a deliberate
+   **double opt-in**: the token env supplies the credential, and `METIS_EMBED_CLOUDFLARE_KEY=1` authorizes
+   packaging it. Without the second var, `scripts/check-embedded-cloudflare-key.mjs` refuses the package
+   outright rather than silently shipping a key nobody meant to embed. That same gate proves the packaged
+   blob is ciphertext (never a plaintext `proxyKey` field) and that the decrypted token appears **nowhere**
+   in the packaged app.
 
-The key is **extractable from the installer** — same rule as the "Métis does not ship a Cloudflare
-token" section above: `npx asar extract` (or, since this ships as a plain `extraResources` file outside
-the asar, just reading the file) recovers it in seconds. Nothing changes that. What makes this safe to
-ship is the key's SCOPE, not secrecy — a revocable, rate-limited, minimum-quota label — never the
-operator's real key.
+### The encryption, and its honest limits
 
-On first launch, `importEmbeddedCloudflareKey()` seeds the bundled key into the app's own encrypted
-keystore (the same AES file keystore a pasted key goes through) exactly once per profile, and never
-overwrites a key the user already has — their own paste (or an earlier seed) always wins, permanently,
-even across later updates.
+The blob is AES-256-GCM ciphertext. The key is derived (scrypt) from build-stable material — the appId plus
+an obfuscation secret that lives in `src/main/embedded-key-material.json` and therefore **ships inside the
+app**. That last fact is the whole caveat: because the decryption material travels with the binary, a
+determined attacker can re-derive the key and decrypt the blob. **This is obfuscation, not secrecy.** It
+raises the bar meaningfully over the old plaintext file — `npx asar extract` no longer hands you the token
+in two seconds, and a casual `strings` sweep finds nothing usable — but it does not make the token
+unextractable, and nothing compiled into a shipped client can. Do not describe it as "cannot be reverse
+engineered".
+
+The truly-secure option, where the token never ships at all, is the Worker proxy this document is about:
+users paste their own `METIS_PROXY_KEY`, and no key is embedded. The embedded key is a **convenience for a
+controlled audience** — which is exactly why what keeps it safe is its SCOPE (a revocable, rate-limited,
+minimum-quota `embedded-default` label), never this encryption and never the operator's real key.
+
+On first launch, `importEmbeddedCloudflareKey()` reads the blob, decrypts it **in memory**, and seeds the
+plaintext into the app's own encrypted keystore (the same AES file keystore a pasted key goes through)
+exactly once per profile. The decrypted value is never written to disk or logs as plaintext; only the
+keystore's own ciphertext lands on disk. It never overwrites a key the user already has — their own paste
+(or an earlier seed) always wins, permanently, even across later updates.
+
+To rotate a leaked installer key without expanding its scope: `npm run rotate:embedded-keys`
+(see `docs/security/EMBEDDED-KEY-ROTATION.md`). That command never writes an account token.
 
 ---
 

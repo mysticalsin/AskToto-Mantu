@@ -1,16 +1,37 @@
 import { useEffect, useState, type ReactNode } from 'react'
 
-// Cap the panel to the screen (minus the bar's overhead above it) so the overlay GROWS to fit long content
-// — the post-meeting Review (Overview + full transcript), History, Agenda — instead of clipping at a fixed
-// height; it only scrolls once it would run off the bottom. The ~160 reserve covers the bar + gaps + padding
-// while staying clear of main's workArea-48 hard ceiling (so the panel never clips behind the window edge).
-// Panels never sit under the quick-actions row (that's the in-bar answer surface), so the old 200 reserve was
-// over-conservative and left the review surface needlessly cramped. Computed PER RENDER (not frozen at module
-// load) so it tracks the current display after the overlay is moved between monitors.
-function panelMaxHeight(): number {
-  return typeof window !== 'undefined' && window.screen?.availHeight
-    ? Math.max(460, Math.round(window.screen.availHeight - 160))
-    : 700
+/** Idle Bar with the 64 thinking-orb in the toolbar: input row (~48) + orb toolbar (~72) + borders. */
+export const PANEL_BAR_PX = 124
+/** Stealth root `p-5` (20+20). The wider of the two live paddings; `p-1.5` is smaller and still fits. */
+export const PANEL_ROOT_PAD_PX = 40
+/** App root `gap-2` between Bar and Panel. */
+export const PANEL_GAP_PX = 8
+/** Non-panel chrome stacked above/around the Review (and History / Agenda / Brain) shell. */
+export const PANEL_CHROME_PX = PANEL_BAR_PX + PANEL_ROOT_PAD_PX + PANEL_GAP_PX
+/** Matches `BOTTOM_RESERVE_PX` in `src/main/island/geometry.ts` — main's `workArea.height - 48` clamp. */
+export const WINDOW_BOTTOM_RESERVE_PX = 48
+/** Worst-case grow from `useAutoResize`'s `ceil((h + 2) / 24) * 24` grid. */
+export const RESIZE_QUANTIZE_PX = 25
+export const PANEL_MIN_PX = 320
+
+/**
+ * Cap the panel so the overlay grows to fit long content — the post-meeting Review (Summary +
+ * transcript), History, Agenda, Brain — and only scrolls once it would run off the bottom.
+ *
+ * The reserve is the live chrome budget, not a guess: Bar (including the 64 orb), root padding, gap,
+ * resize quantization, and main's workArea-48 ceiling. A smaller reserve (the old `avail - 160`) left
+ * a dead band where recap content was taller than the clamped window but shorter than the panel cap,
+ * so `overflow-y: auto` never armed and `html/body` (`overflow: hidden`) clipped the last lines with
+ * no way to scroll. Computed PER RENDER (not frozen at module load) so it tracks the current display
+ * after the overlay is moved between monitors. Never derived from `window.innerHeight` — the window
+ * is content-sized from this panel, the same circularity MQA-198 closed for the in-bar answer.
+ */
+export function panelMaxHeight(
+  availHeight: number | undefined = typeof window !== 'undefined' ? window.screen?.availHeight : undefined
+): number {
+  if (!availHeight || !Number.isFinite(availHeight)) return PANEL_MIN_PX
+  const reserve = PANEL_CHROME_PX + WINDOW_BOTTOM_RESERVE_PX + RESIZE_QUANTIZE_PX
+  return Math.max(PANEL_MIN_PX, Math.round(availHeight - reserve))
 }
 
 /** Re-read that cap when the overlay lands on a different display. A display change produces no React
@@ -33,7 +54,8 @@ export function Panel({ children }: { children: ReactNode }): JSX.Element {
   useEffect(() => subscribeMaxHeight(setMaxHeight), [])
   return (
     <div
-      className="glass-strong scroll-thin panel-enter overflow-y-auto rounded-[var(--radius-outer)] px-4 py-3.5"
+      data-panel-scroll
+      className="glass-strong scroll-thin panel-enter min-h-0 overflow-y-auto overscroll-y-contain rounded-[var(--radius-outer)] px-4 py-3.5"
       style={{ maxHeight }}
     >
       {children}

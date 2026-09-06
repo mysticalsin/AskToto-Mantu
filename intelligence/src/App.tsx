@@ -117,7 +117,7 @@ function EmbedRoute() {
           className="border-b border-amber-500/30 bg-amber-500/10 px-3 py-1 text-[10px] text-amber-200"
           role="status"
         >
-          Last successful read — refresh failed
+          Last successful read. The latest refresh failed.
         </div>
       )}
       <EmbedView data={data} />

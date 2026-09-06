@@ -14,7 +14,6 @@ import {
   FileWarning,
   HelpCircle,
   Minus,
-  RefreshCw,
   Timer,
   TrendingUp,
   Users,
@@ -32,13 +31,17 @@ import {
 } from '@shared/time-saved'
 import { buildMarsWeek, renderMarsMarkdown } from '@shared/mars'
 import { MantuMark } from './MantuMark'
-import { Spinner, TextButton } from './ui'
+import { TextButton } from './ui'
+import { AgentStatus, InlineOrb } from './AgentStatus'
 import { WorkProgressMeter } from './WorkProgressMeter'
 import { useFlash } from '../lib/useFlash'
 import { BrainRecordPage, recordKey, sortAttentionItems, type BrainRecordRef, type RecentMerge } from './BrainRecordPage'
 import { shouldAutoBackfill } from './brain-auto'
 import { brainStatusPollInterval, shouldRefreshAfterBrainStatus } from './brain-status-refresh'
 import { describeMeetingIndexProgress } from './work-progress'
+import { IntelligenceUpdateButton } from './IntelligenceUpdateButton'
+import { NO_PROVIDER_INDEX_COPY, runIntelligenceUpdateClick } from '../lib/intelligence-update'
+import { startIntelligenceUpdateFromClick } from '@shared/intelligence-pass'
 
 /**
  * Mantu Intelligence — the second-brain dashboard over the meeting knowledge store (.brain/).
@@ -501,6 +504,7 @@ export function BrainView({
       ])
       setData(read)
       setStatus(st)
+      if (st?.error) setError(st.error)
       setMeetings(list)
       setAttention(att.items)
       setProviderReady(settings.providerReady)
@@ -519,7 +523,9 @@ export function BrainView({
 
   const refreshStatus = useCallback(async (): Promise<void> => {
     try {
-      setStatus(await window.toto.brainStatus())
+      const st = await window.toto.brainStatus()
+      setStatus(st)
+      if (st?.error) setError(st.error)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -595,7 +601,8 @@ export function BrainView({
   // a full read is only needed when work settles, so this stays responsive without re-reading the brain.
   const backfillRunning = !!status?.backfill?.running
   const liveRunning = !!status?.live?.running
-  const statusWorking = backfillRunning || liveRunning
+  const preparing = !!status?.backfill?.preparing
+  const statusWorking = backfillRunning || liveRunning || preparing
   useEffect(() => {
     void refreshStatus()
     const t = setInterval(() => void refreshStatus(), brainStatusPollInterval(statusWorking))
@@ -617,15 +624,27 @@ export function BrainView({
 
   const startBackfill = useCallback(async (): Promise<void> => {
     setBackfilling(true)
+    setError(null)
     try {
-      const result = await window.toto.brainBackfill()
-      if (result.deferred === 'no-provider') {
-        setError('Connect an AI provider in Settings → AI, or enable Métis Local there to index meetings on this device.')
+      const { error: clickError } = await runIntelligenceUpdateClick(() => window.toto.brainBackfill())
+      if (clickError) {
+        setError(clickError)
         return
       }
       await refresh()
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBackfilling(false)
+    }
+  }, [refresh])
+
+  const runIntelligencePass = useCallback(async (): Promise<void> => {
+    setBackfilling(true)
+    try {
+      await startIntelligenceUpdateFromClick({
+        runPass: () => window.toto.brainIntelligencePass(),
+        refresh,
+        setError
+      })
     } finally {
       setBackfilling(false)
     }
@@ -790,17 +809,18 @@ export function BrainView({
             Mantu Intelligence
           </div>
           <div className="text-[11px] text-[color:var(--color-ink-3)]">
-            {record ? 'Record' : 'Your meeting knowledge, compounding. Grounded in transcripts, never invented.'}
+            {record
+              ? 'Record'
+              : status?.lastIndexedAt
+                ? `Last indexed ${new Date(status.lastIndexedAt).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}`
+                : 'Your meeting knowledge, compounding. Grounded in transcripts, never invented.'}
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => void refresh()}
-          title="Refresh"
-          className="no-drag focus-ring grid h-7 w-7 place-items-center rounded-lg text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink)]"
-        >
-          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
-        </button>
+        <IntelligenceUpdateButton
+          updating={backfilling || statusWorking}
+          disabled={backfilling}
+          onClick={() => void runIntelligencePass()}
+        />
       </div>
 
       {error && (
@@ -819,7 +839,7 @@ export function BrainView({
               <AlertTriangle size={13} className="shrink-0" />
               <span>
                 {topError
-                  ? `Your AI provider is failing: ${topError} — check Settings → AI`
+                  ? `Your AI provider is failing: ${topError}. Check Settings → AI`
                   : indexProgress?.label ?? 'Some meetings need attention.'}
               </span>
             </div>
@@ -836,14 +856,14 @@ export function BrainView({
                   {failuresExpanded ? 'Hide' : 'Details'}
                 </button>
               )}
-              <button
-                type="button"
-                onClick={() => void startBackfill()}
+              <IntelligenceUpdateButton
+                variant="retry"
+                idleLabel="Retry index"
+                updating={backfilling || statusWorking}
                 disabled={backfilling}
-                className="no-drag focus-ring shrink-0 rounded-full bg-white/[0.08] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink)] hover:bg-white/[0.14] disabled:opacity-50"
-              >
-                Retry index
-              </button>
+                onClick={() => void startBackfill()}
+                title="Retry the Intelligence index"
+              />
             </span>
           </div>
           {failuresExpanded && (status?.failedDetails?.length ?? 0) > 0 && (
@@ -861,8 +881,8 @@ export function BrainView({
       )}
 
       {loading && !data ? (
-        <div className="flex items-center justify-center gap-2 py-10 text-[12px] text-[color:var(--color-ink-3)]">
-          <Spinner size={14} /> Reading the brain…
+        <div className="flex items-center justify-center py-10">
+          <AgentStatus kind="searching" size="hero" />
         </div>
       ) : record && data ? (
         <BrainRecordPage
@@ -883,7 +903,7 @@ export function BrainView({
           onUndoMerge={() => void undoMerge()}
           onDismissMerge={() => setRecentMerge(null)}
         />
-      ) : ingested === 0 && !bf?.running && !live?.running ? (
+      ) : ingested === 0 && !bf?.running && !live?.running && !backfilling && !preparing ? (
         /* Empty state — the brain has not ingested anything yet. */
         <div className="flex flex-col items-center gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-6 py-8 text-center">
           <Brain size={28} className="text-[color:var(--color-accent-2)]" />
@@ -891,23 +911,21 @@ export function BrainView({
             Build your intelligence from {meetings.length > 0 ? `${meetings.length} saved meeting${meetings.length === 1 ? '' : 's'}` : 'your meetings'}
           </div>
           <div className="max-w-[380px] text-[12px] leading-snug text-[color:var(--color-ink-3)]">
-            Métis extracts people, accounts, deals, and win/loss signals from every saved transcript into a
-            knowledge store your Dust agents can read. New meetings are ingested automatically, and existing
-            saved meetings start indexing when Mantu Intelligence opens.
+            {meetings.length > 0
+              ? 'Métis extracts people, accounts, deals, and win/loss signals from every saved transcript. Update Intelligence to run that pass now. Local AI is first, then your API if Local cannot run.'
+              : 'Save a meeting, then use Update Intelligence to build your knowledge from the transcript.'}
           </div>
-          <button
-            type="button"
-            onClick={() => void startBackfill()}
-            disabled={backfilling || meetings.length === 0 || !canIndex}
-            className="no-drag focus-ring rounded-full bg-[var(--color-accent)] px-4 py-1.5 text-[12px] font-semibold text-white hover:bg-[var(--color-accent-2)] disabled:opacity-50"
-          >
-            {backfilling ? 'Starting…' : 'Ingest my meetings'}
-          </button>
+          <IntelligenceUpdateButton
+            variant="accent"
+            updating={backfilling || statusWorking}
+            disabled={backfilling || meetings.length === 0}
+            onClick={() => void runIntelligencePass()}
+          />
           {/* canIndex ORs in localFallbackReady — a local-only setup already indexes fine, so this must
               only claim "no provider" when NEITHER a cloud provider NOR the local safety net is live. */}
           {!canIndex && meetings.length > 0 && (
             <div className="flex flex-col items-center gap-0.5 text-[11px] text-[color:var(--color-ink-3)]">
-              <span>Connect an AI provider in Settings to build your intelligence.</span>
+              <span>{NO_PROVIDER_INDEX_COPY}</span>
               {onOpenSettings && <TextButton onClick={onOpenSettings}>Open Settings</TextButton>}
             </div>
           )}
@@ -918,8 +936,8 @@ export function BrainView({
           {bf?.running ? (
             <div className="rounded-xl border border-[var(--color-hair-soft)] bg-[var(--color-accent-soft)] px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
               <div className="flex items-center gap-2">
-                <Spinner size={12} />
-                <span aria-atomic="true" aria-live="polite">{indexProgress?.label ?? 'Mapping meetings…'}</span>
+                <InlineOrb kind="searching" />
+                <span aria-atomic="true" aria-live="polite">{indexProgress?.label ?? 'Updating…'}</span>
               </div>
               <WorkProgressMeter
                 active
@@ -932,7 +950,7 @@ export function BrainView({
           ) : live?.running ? (
             <div className="rounded-xl border border-[var(--color-hair-soft)] bg-[var(--color-accent-soft)] px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
               <div className="flex items-center gap-2">
-                <Spinner size={12} />
+                <InlineOrb kind="searching" />
                 <span aria-atomic="true" aria-live="polite">
                   Updating Intelligence from {live.pending} new meeting{live.pending === 1 ? '' : 's'}…
                 </span>
@@ -946,14 +964,12 @@ export function BrainView({
               </span>
               <span className="flex shrink-0 items-center gap-1">
                 {!canIndex && onOpenSettings && <TextButton onClick={onOpenSettings}>Open Settings</TextButton>}
-                <button
-                  type="button"
+                <IntelligenceUpdateButton
+                  variant="retry"
+                  updating={backfilling || statusWorking}
+                  disabled={backfilling}
                   onClick={() => void startBackfill()}
-                  disabled={backfilling || !canIndex}
-                  className="no-drag focus-ring shrink-0 rounded-full bg-white/[0.06] px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-ink-2)] hover:bg-white/10 disabled:opacity-50"
-                >
-                  {backfilling ? 'Starting…' : 'Ingest now'}
-                </button>
+                />
               </span>
             </div>
           ) : null}

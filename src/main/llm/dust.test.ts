@@ -7,6 +7,18 @@ vi.mock('electron', () => ({ app: { getPath: () => '/tmp' } }))
 vi.mock('../auth', () => ({ authStatus: () => ({ email: null, name: null }) }))
 vi.mock('../logger', () => ({ mainLog: { info: vi.fn(), warn: vi.fn() }, auditLog: vi.fn() }))
 
+const managedDustChat = vi.hoisted(() =>
+  vi.fn(async () => ({ ok: true as const, text: 'Data and AI, AI wiki' }))
+)
+vi.mock('../dust-cli-chat', () => ({
+  runManagedDustChat: (...args: unknown[]) => managedDustChat(...args),
+  projectNameForDataAndAiAsk: () => undefined
+}))
+vi.mock('../dust-projects', () => ({
+  fetchDustProjects: async () => ({ ok: false, error: 'test' }),
+  matchDataAndAiProjects: () => []
+}))
+
 const calls = { create: 0, post: 0, get: 0 }
 const postedTo: string[] = [] // which conversation each follow-up message joined, in order
 let convCounter = 0
@@ -108,6 +120,8 @@ describe('Dust conversation continuity (one conversation per meeting)', () => {
     convCounter = 0
     throwOnNextCreate = false
     streamErrOnce = null
+    managedDustChat.mockReset()
+    managedDustChat.mockResolvedValue({ ok: true, text: 'Data and AI, AI wiki' })
   })
 
   it('reuses the same conversation for a second sequential message in the same meeting', async () => {
@@ -175,12 +189,9 @@ describe('Dust conversation continuity (one conversation per meeting)', () => {
     expect(calls.create).toBe(2)
   })
 
-  it('MQA-039 / MQA-052: a Spotlight Ref ask keeps its own thread without evicting the base agent conversation', async () => {
-    // Spotlight Ref is hard-pinned to its own agent sId, so it can never join the base agent's meeting
-    // thread — but it must not destroy it either. With a single cache slot, the Spotlight click overwrote
-    // the base agent's entry and the very next chat question cold-started a third conversation with none
-    // of the meeting's accumulated back-and-forth (Dust's server-side conversation is its ONLY continuity
-    // carrier — dust.ts never replays req.history).
+  it('MQA-039 / MQA-052: a Spotlight Ref ask is a managed CLI call and does not evict the base conversation', async () => {
+    // Spotlight Ref is hard-pinned and now goes through the managed Dust CLI, not REST conversations.
+    // A CLI ask must not destroy the base agent's meeting thread (dust.ts never replays req.history).
     const first = baseOpts({ model: 'agent-1' })
     streamDust(first)
     await waitDone(first.handlers)
@@ -189,19 +200,23 @@ describe('Dust conversation continuity (one conversation per meeting)', () => {
     streamDust(spotlight)
     await waitDone(spotlight.handlers)
 
+    expect(managedDustChat).toHaveBeenCalled()
+    expect(calls.create).toBe(1) // CLI path — no REST conversation for Spotlight Ref
+
     const backToChat = baseOpts({ model: 'agent-1' })
     streamDust(backToChat)
     await waitDone(backToChat.handlers)
 
-    expect(calls.create).toBe(2) // one conversation per agent — NOT a third cold start for the base agent
-    expect(postedTo).toEqual(['conv-1']) // the chat ask rejoined the meeting conversation
+    expect(calls.create).toBe(1) // base agent thread survived the Spotlight CLI ask
+    expect(postedTo).toEqual(['conv-1'])
 
     const spotlightAgain = baseOpts({ model: DUST_SPOTLIGHT_REF_AGENT_ID })
     streamDust(spotlightAgain)
     await waitDone(spotlightAgain.handlers)
 
-    expect(calls.create).toBe(2) // and Spotlight keeps ITS thread across clicks too
-    expect(postedTo).toEqual(['conv-1', 'conv-2'])
+    expect(managedDustChat).toHaveBeenCalledTimes(2)
+    expect(calls.create).toBe(1)
+    expect(postedTo).toEqual(['conv-1'])
   })
 
   it('MQA-052: resetDustConversation clears every agent slot, not just the last one used', async () => {
@@ -223,8 +238,9 @@ describe('Dust conversation continuity (one conversation per meeting)', () => {
     streamDust(nextSpotlight)
     await waitDone(nextSpotlight.handlers)
 
-    expect(calls.create).toBe(4) // both agents start over — no entry survives the meeting boundary
+    expect(calls.create).toBe(2) // REST base-agent slot starts over; Spotlight Ref is CLI (no REST slot)
     expect(postedTo).toEqual([]) // nothing joined a previous meeting's thread
+    expect(managedDustChat).toHaveBeenCalledTimes(2)
   })
 
   it('starts a fresh conversation once the cached one goes stale past the TTL', async () => {
@@ -320,11 +336,14 @@ describe('streamDust surfaces a stale-agent error as an actionable re-pick messa
   })
 
   it('maps a stale SPOTLIGHT agent to a Spotlight-specific remedy, not the base picker hint', async () => {
-    // Spotlight Ref asks mention the hard-locked DUST_SPOTLIGHT_REF_AGENT_ID; if that agent is gone from
-    // the workspace, "pick one in Settings" is a dead end (it isn't user-pickable). streamDust knows the
-    // mentioned agent via opts.model, so it can route to the Spotlight-specific message.
+    // Spotlight Ref is a managed CLI call. When that agent is gone from the CLI session, fail loud
+    // with "not in this workspace" — never reconnect-workspace or "pick one in Settings".
     resetDustConversation()
-    streamErrOnce = 'Failed to retrieve agent message'
+    managedDustChat.mockResolvedValue({
+      ok: false,
+      kind: 'missing-agent',
+      error: 'The Spotlight Ref agent is not in this workspace.'
+    })
     const opts = baseOpts({ model: DUST_SPOTLIGHT_REF_AGENT_ID })
     streamDust(opts)
     for (let i = 0; i < 500 && !mockOf(opts.handlers.onError).mock.calls.length; i++) {
@@ -333,6 +352,8 @@ describe('streamDust surfaces a stale-agent error as an actionable re-pick messa
     expect(opts.handlers.onError).toHaveBeenCalledTimes(1)
     const msg = String(mockOf(opts.handlers.onError).mock.calls[0][0])
     expect(msg).toContain('Spotlight Ref')
+    expect(msg.toLowerCase()).toContain('not in this workspace')
+    expect(msg.toLowerCase()).not.toContain('reconnect')
     expect(msg).not.toContain('Failed to retrieve agent message')
   })
 })

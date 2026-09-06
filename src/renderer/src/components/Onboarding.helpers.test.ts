@@ -8,7 +8,22 @@ import {
   providerTileDisabledReason,
   ssoSignInVerdict
 } from './Onboarding'
-import { micRowStatus } from './OnboardingExperience'
+import { Sparkles } from 'lucide-react'
+import {
+  aiRowStatus,
+  asrAssetsRowStatus,
+  asrEnsureFailureStatus,
+  asrRowNeedsRetry,
+  localModelRowStatus,
+  micRowStatus,
+  setupAsrBlocksContinue,
+  setupRowLoadingPercent,
+  firstRunCanFinish,
+  asrStatusIsReady,
+  summarizeSetupRows,
+  type SetupRow
+} from './OnboardingExperience'
+import { BUNDLE_GOT_LOGIN_HTML, BUNDLE_NOT_JS } from '@shared/bundle-response'
 
 describe('providerTileDisabledReason — step-5 provider tiles must not misreport why they are disabled', () => {
   it('is null (tappable) when nothing blocks the tile', () => {
@@ -168,6 +183,266 @@ describe('MQA-093 — a DENIED microphone is not the same row state as one that 
   })
 })
 
+describe('MQA-279 — Act 3 (Config) AI-readiness row must never claim ready before providerReady says so', () => {
+  it('is "checking" — never a guess — before settings have loaded', () => {
+    expect(aiRowStatus(undefined)).toEqual({ state: 'checking', detail: '' })
+    expect(aiRowStatus(null)).toEqual({ state: 'checking', detail: '' })
+  })
+
+  it('reads ready off the embedded Cloudflare default with the exact competence-framed copy', () => {
+    expect(aiRowStatus({ providerReady: true, provider: 'cloudflare' })).toEqual({
+      state: 'ready',
+      detail: "Ready: Métis's built-in Cloudflare, no key needed"
+    })
+  })
+
+  it('names whatever OTHER provider is actually ready, for a returning/reset profile', () => {
+    expect(aiRowStatus({ providerReady: true, provider: 'anthropic' })).toEqual({
+      state: 'ready',
+      detail: 'Ready: Claude · Anthropic configured'
+    })
+  })
+
+  it('is an honest, actionable "action" — not a fabricated ready — when nothing answers yet', () => {
+    expect(aiRowStatus({ providerReady: false, provider: 'cloudflare' })).toEqual({
+      state: 'action',
+      detail: 'not configured yet'
+    })
+  })
+
+  it('never reports ready purely because the provider id is cloudflare — providerReady must be true too', () => {
+    // The bug this pins: a naive `provider === 'cloudflare' ? ready : ...` would show competence for a
+    // keyless dev build that shipped no embedded credential (providerReady false, https URL unset).
+    expect(aiRowStatus({ providerReady: false, provider: 'cloudflare' }).state).not.toBe('ready')
+  })
+})
+
+describe('Act 3 on-device model row', () => {
+  it('shows downloading progress, never "not installed"', () => {
+    const row = localModelRowStatus({
+      ready: false,
+      unavailableReason: 'downloading',
+      downloadProgress: 0.42,
+      minTotalRamGB: 16
+    })
+    expect(row.state).toBe('loading')
+    expect(row.state).not.toBe('action')
+    expect(row.detail).toMatch(/Downloading 42%/)
+    expect(row.detail.toLowerCase()).not.toMatch(/not installed/)
+    expect(row.progress).toBe(0.42)
+  })
+
+  it('says so honestly when RAM-gated', () => {
+    const row = localModelRowStatus({
+      ready: false,
+      unavailableReason: 'insufficient-ram',
+      downloadProgress: 0,
+      minTotalRamGB: 16
+    })
+    expect(row.state).toBe('blocked')
+    expect(row.detail).toMatch(/16 GB/)
+    expect(row.detail.toLowerCase()).not.toMatch(/not installed/)
+  })
+
+  it('says so honestly when disk-gated, not "starting"', () => {
+    const row = localModelRowStatus({
+      ready: false,
+      unavailableReason: 'insufficient-disk',
+      downloadProgress: 0,
+      minTotalRamGB: 8
+    })
+    expect(row.state).toBe('action')
+    expect(row.detail).toMatch(/disk/i)
+    expect(row.detail.toLowerCase()).not.toMatch(/starting/)
+  })
+
+  it('treats not-downloaded as starting the fetch, not a dead install state', () => {
+    const row = localModelRowStatus({
+      ready: false,
+      unavailableReason: 'not-downloaded',
+      downloadProgress: 0,
+      minTotalRamGB: 8
+    })
+    expect(row.state).toBe('loading')
+    expect(row.state).not.toBe('action')
+    expect(row.detail).toMatch(/Starting the on-device download/)
+    expect(row.detail.toLowerCase()).not.toMatch(/not installed/)
+  })
+
+  it('does not skip the first-run fetch — setup re-arms ensure when weights are missing', () => {
+    const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+    expect(src).toMatch(/localModelsEnsure/)
+    expect(src).toMatch(/unavailableReason === 'not-downloaded'/)
+    // Progress bar is visible at 0% (waiting on the first chunk), not only after bytes land.
+    expect(src).toMatch(/\(r\.key === 'local' \|\| r\.key === 'asr'\) && r\.progress != null/)
+    expect(src).not.toMatch(/r\.progress > 0 && r\.progress < 1/)
+    expect(src).toMatch(/state === 'checking' \|\| r\.state === 'loading'/)
+    expect(src).toMatch(/InlineOrb kind="loading"/)
+  })
+})
+
+describe('MQA-279 — Act 3 config-complete state: "scan first, then present" must stay two honest claims', () => {
+  const row = (state: SetupRow['state']): SetupRow => ({ key: 'k', label: 'l', icon: Sparkles, state })
+
+  it('reports neither scanDone nor allReady before any row exists', () => {
+    expect(summarizeSetupRows([])).toEqual({ scanDone: false, allReady: false })
+  })
+
+  it('is not scanDone while even one row is still "checking"', () => {
+    expect(summarizeSetupRows([row('ready'), row('checking')])).toEqual({ scanDone: false, allReady: false })
+  })
+
+  it('is scanDone but NOT allReady once every row has resolved but one still needs action', () => {
+    // The headline this gates ("Everything's ready. Nothing to configure.") must not fire here — MQA-201's
+    // rule extended to the derivation the whole scene reads.
+    expect(summarizeSetupRows([row('ready'), row('action')])).toEqual({ scanDone: true, allReady: false })
+  })
+
+  it('is scanDone but NOT allReady for blocked/restart, same as action', () => {
+    expect(summarizeSetupRows([row('ready'), row('blocked')]).allReady).toBe(false)
+    expect(summarizeSetupRows([row('ready'), row('restart')]).allReady).toBe(false)
+  })
+
+  it('is both scanDone and allReady once every row landed on ready or skipped', () => {
+    expect(summarizeSetupRows([row('ready'), row('skipped'), row('ready')])).toEqual({ scanDone: true, allReady: true })
+  })
+
+  it('treats loading as scanned but not allReady', () => {
+    expect(summarizeSetupRows([row('ready'), row('loading')])).toEqual({ scanDone: true, allReady: false })
+  })
+})
+
+describe('Act 3 — transcription files never skip', () => {
+  const asrRow = (state: SetupRow['state']): SetupRow => ({
+    key: 'asr',
+    label: 'On-device transcription',
+    icon: Sparkles,
+    state
+  })
+
+  it('marks Parakeet + Whisper ready when assets are present', () => {
+    expect(asrAssetsRowStatus({ ready: true, status: 'ready', progress: 1, label: 'Transcription files ready' })).toEqual({
+      state: 'ready',
+      detail: 'Parakeet + Whisper ready'
+    })
+  })
+
+  it('shows download progress instead of skipping a missing bundle', () => {
+    const row = asrAssetsRowStatus({
+      ready: false,
+      status: 'downloading',
+      progress: 0.42,
+      label: 'Getting transcription files…'
+    })
+    expect(row.state).toBe('loading')
+    expect(row.state).not.toBe('action')
+    expect(row.detail).toMatch(/Getting transcription files/)
+    expect(row.progress).toBe(0.42)
+    expect(row.detail).not.toMatch(/missing in this build/i)
+    expect(row.detail).not.toMatch(/reinstall/i)
+  })
+
+  it('keeps the row on action with a retryable error, never reinstall copy', () => {
+    const row = asrAssetsRowStatus({
+      ready: false,
+      status: 'error',
+      progress: 0.1,
+      label: 'Could not get the transcription files. Check your connection and try again.',
+      error: 'Could not get the transcription files. Check your connection and try again.'
+    })
+    expect(row.state).toBe('action')
+    expect(row.detail).not.toMatch(/reinstall/i)
+    expect(asrRowNeedsRetry(row)).toBe(true)
+  })
+
+  it('Access login HTML and HTTP-not-JS fail loud with Retry, never a dead idle', () => {
+    const html = asrAssetsRowStatus(asrEnsureFailureStatus(new Error(BUNDLE_GOT_LOGIN_HTML)))
+    expect(html.state).toBe('action')
+    expect(html.detail).toMatch(/login page/)
+    expect(asrRowNeedsRetry(html)).toBe(true)
+    const notJs = asrAssetsRowStatus(asrEnsureFailureStatus(new Error(BUNDLE_NOT_JS)))
+    expect(notJs.detail).toMatch(/not JavaScript/)
+    expect(asrRowNeedsRetry(notJs)).toBe(true)
+    expect(asrEnsureFailureStatus(new Error('fetch failed')).status).toBe('error')
+    expect(asrEnsureFailureStatus(new Error('fetch failed')).ready).toBe(false)
+  })
+
+  it('onboarding never swallows an ensure failure into a silent idle', () => {
+    const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+    expect(src).toMatch(/asrEnsureFailureStatus/)
+    expect(src).not.toMatch(/asrAssetsEnsure\(\)[\s\S]{0,80}IDLE_ASR_STATUS/)
+    expect(src).not.toMatch(/catch\(\(\) => apply\(IDLE_ASR_STATUS\)\)/)
+  })
+
+  it('idle-and-missing still means getting files, never skipped or needed', () => {
+    expect(asrAssetsRowStatus({ ready: false, status: 'idle', progress: 0, label: '' }).state).toBe('loading')
+    expect(asrAssetsRowStatus({ ready: false, status: 'idle', progress: 0, label: '' }).state).not.toBe('action')
+    expect(asrAssetsRowStatus(null).detail).toMatch(/Getting transcription files/)
+  })
+
+  it('blocks Continue until the asr row is ready, including while loading', () => {
+    expect(setupAsrBlocksContinue([asrRow('action')])).toBe(true)
+    expect(setupAsrBlocksContinue([asrRow('checking')])).toBe(true)
+    expect(setupAsrBlocksContinue([asrRow('loading')])).toBe(true)
+    expect(setupAsrBlocksContinue([asrRow('ready')])).toBe(false)
+    expect(setupAsrBlocksContinue([])).toBe(true)
+  })
+
+  it('never leaves Continue stuck when the setup list already looks complete', () => {
+    const complete = [
+      asrRow('skipped'),
+      { key: 'brain', label: 'Private meeting brain', icon: Sparkles, state: 'ready' as const },
+      { key: 'mic', label: 'Microphone', icon: Sparkles, state: 'ready' as const }
+    ]
+    expect(summarizeSetupRows(complete).allReady).toBe(true)
+    expect(setupAsrBlocksContinue(complete)).toBe(false)
+
+    const staleRowReadyEngine = [asrRow('loading')]
+    expect(
+      setupAsrBlocksContinue(staleRowReadyEngine, {
+        ready: true,
+        status: 'ready',
+        progress: 1,
+        label: 'Transcription files ready'
+      })
+    ).toBe(false)
+
+    const skippedAsr = [asrRow('skipped')]
+    expect(setupAsrBlocksContinue(skippedAsr)).toBe(false)
+
+    const stillGettingFiles = [
+      asrRow('loading'),
+      { key: 'brain', label: 'Private meeting brain', icon: Sparkles, state: 'ready' as const }
+    ]
+    expect(summarizeSetupRows(stillGettingFiles).allReady).toBe(false)
+    expect(setupAsrBlocksContinue(stillGettingFiles)).toBe(true)
+  })
+
+  it('renders the loading orb for in-progress rows, never the needed span', () => {
+    const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+    expect(src).toMatch(/state === 'checking' \|\| r\.state === 'loading'/)
+    expect(src).toMatch(/InlineOrb kind="loading"/)
+    expect(src).toMatch(/setupRowLoadingPercent\(r\.progress\)/)
+    const needed = src.slice(src.indexOf("{r.state === 'action' && <span"))
+    expect(needed).toMatch(/>needed</)
+    expect(src).not.toMatch(/r\.state === 'loading'[\s\S]{0,80}needed/)
+    expect(setupRowLoadingPercent(0.42)).toBe(42)
+    expect(setupRowLoadingPercent(0)).toBeUndefined()
+    expect(setupRowLoadingPercent(1)).toBeUndefined()
+    expect(setupRowLoadingPercent(undefined)).toBeUndefined()
+  })
+
+  it('will not finish first-run (Ready or Skip) until files are ready and consent is given', () => {
+    expect(firstRunCanFinish({ asrReady: false, consent: true })).toBe(false)
+    expect(firstRunCanFinish({ asrReady: true, consent: false })).toBe(false)
+    expect(firstRunCanFinish({ asrReady: true, consent: true })).toBe(true)
+    expect(asrStatusIsReady({ ready: false, status: 'downloading', progress: 0.2, label: 'Getting transcription files…' })).toBe(
+      false
+    )
+    expect(asrStatusIsReady({ ready: true, status: 'ready', progress: 1, label: 'Transcription files ready' })).toBe(true)
+  })
+})
+
 describe('MQA-201 — scene 4 never fakes a check', () => {
   // docs/ONBOARDING-EXPERIENCE.md: "Rows animate from spinner -> state, using REAL signals ... (only show
   // rows that are actually true - never fake a check.)" The acceleration row was an unconditional
@@ -184,11 +459,40 @@ describe('MQA-201 — scene 4 never fakes a check', () => {
   })
 
   it('every remaining setup row is derived from a real signal', () => {
-    // asrBundled / getPermissions, plus the two rows whose verdict is a platform fact the renderer
+    // asrAssetsStatus / getPermissions, plus the two rows whose verdict is a platform fact the renderer
     // genuinely knows (the brain path, and Windows having no per-app screen-recording permission).
-    expect(src).toMatch(/window\.toto\.asrBundled\(\)/)
+    expect(src).toMatch(/window\.toto\.asrAssetsStatus\(\)/)
+    expect(src).toMatch(/window\.toto\.asrAssetsEnsure\(\)/)
     expect(src).toMatch(/window\.toto\.getPermissions\(\)/)
     expect(src).toMatch(/micRowStatus\(perms\?\.microphone\)/)
+    expect(src).toMatch(/window\.toto\.localModelsList\(\)/)
+    expect(src).toMatch(/localModelRowStatus/)
+    expect(src).toMatch(/asrAssetsRowStatus/)
+    expect(src).not.toMatch(/not installed/)
+    expect(src).not.toMatch(/models missing in this build/)
+    expect(src).not.toMatch(/asrBundled\(\)/)
+  })
+
+  it('Wave 5 — includes the staged problem story before the reveal', () => {
+    expect(src).toMatch(/scene === 'problem'/)
+    expect(src).toMatch(/You're in the meeting\./)
+    expect(src).toMatch(/GUIDED_SCENES: Scene\[\] = \['problem', 'reveal', 'appearance', 'setup', 'personalize'\]/)
+  })
+
+  it('MQA-279 — the new AI row is derived from providerReady, never asserted for being cloudflare alone', () => {
+    expect(src).toMatch(/aiRowStatus\(settings\)/)
+    expect(src).toMatch(/settings\.providerReady/)
+    // Guards against a future edit collapsing the two-part check back into "provider === 'cloudflare'".
+    expect(src).not.toMatch(/state: 'ready'.*provider === 'cloudflare'/)
+  })
+
+  it('MQA-279 — the opt-out toggle maps to the real screenAsk setting, never an invented one', () => {
+    expect(src).toMatch(/settings\.screenAsk/)
+    expect(src).toMatch(/patch\(\{ screenAsk: v \}\)/)
+  })
+
+  it('MQA-279 — the Listen-only caveat is placed in Act 3 (setup), ahead of the Act 6 Ready reinforcement', () => {
+    expect(src).toMatch(/Métis only starts listening when you press Listen and tell the room/)
   })
 })
 

@@ -55,6 +55,10 @@ Environment variables:
 | `LICENSE_WEBHOOK_SECRET` | *(unset)*                  | When set, each webhook delivery carries `X-AskToto-Signature: sha256=<hex>` (HMAC of the raw body) so the receiver can verify authenticity. |
 | `WEBHOOK_EXPIRY_ALERT_DAYS` | `14`                    | How far ahead the expiring-soon webhook sweep looks.                    |
 | `METRICS_TOKEN`        | *(unset)*                    | Enables `GET /metrics` (Prometheus text format), authenticated with `Authorization: Bearer <METRICS_TOKEN>`. Unset = the endpoint 404s. Use a separate, lower-privilege secret than the admin token. |
+| `LICENSE_LEASE_PRIVATE_KEY` | *(unset)*                | Ed25519 PKCS8 private key (PEM, or that PEM base64-encoded as one line) used to sign offline leases on `/activate`/`/heartbeat`. Unset = no `lease` field is ever issued and `GET /license/pubkey` 404s; every other route is unaffected. Generate one with `npm run generate-lease-keypair`. **Never** put this in the app bundle or git — only the derived public key ships client-side. |
+| `LICENSE_LEASE_TTL_DAYS` | `14`                         | How long a freshly-issued lease is valid for before the client must phone home again. Ignored when `LICENSE_LEASE_PRIVATE_KEY` is unset. |
+| `LICENSE_ENFORCEMENT`  | *(unset, effectively `false`)* | Server-declared intent for the client's compile-time `LICENSE_ENFORCEMENT` switch, exposed read-only via `GET /license/config`. See "Offline leases and license-gate flags" below — this does **not** itself gate any route on this server. |
+| `LICENSE_UI_ENABLED`   | *(unset, effectively `false`)* | Server-declared intent for the client's compile-time `LICENSE_UI_ENABLED` switch, exposed the same way. Must agree with `LICENSE_ENFORCEMENT` or the pair fails closed (see below). |
 
 ## Deploying
 
@@ -141,6 +145,15 @@ License created successfully.
     ATK-7QHM2K9X3VBN8ZC1FGJ0
 ```
 
+**Trial keys** (no purchase, no price) use the same script with `--trial`:
+
+```bash
+node scripts/generate-license.mjs \
+  --url https://your-license-server.example.com \
+  --token some-long-random-secret \
+  --trial --days 14 --seats 1   # all optional; these are the server's own defaults
+```
+
 ## Backups and restore
 
 `data/licenses.json` is the business record. It is protected in two layers:
@@ -193,8 +206,9 @@ The server ships with a small admin dashboard, no separate deploy needed.
 Open `<your-server-url>/admin/ui` in a browser (e.g.
 `https://your-license-server.example.com/admin/ui`, or `http://localhost:8420/admin/ui`
 when running locally). Visiting `/admin` redirects there too. Paste in your
-`LICENSE_ADMIN_TOKEN` when prompted. It's stored only in that browser's
-`localStorage`, so you won't need to re-enter it next time on the same device.
+`LICENSE_ADMIN_TOKEN` when prompted. The server exchanges it for an
+`httpOnly` session cookie (`metis_admin_session`, SameSite=strict, 12 hours)
+so the token never sits in `localStorage`. Sign out clears the cookie.
 
 From the dashboard you can:
 
@@ -215,10 +229,10 @@ From the dashboard you can:
 - Switch to the audit log view to see every admin mutation (create, revoke,
   unrevoke, patch, seat free) with a timestamp and details.
 
-The page itself contains no secrets. Only the browser calling it needs the
-admin token, and every admin action still goes through the same
-bearer-token-gated API described below. Sign out from the header to clear
-the token from that browser.
+The page itself contains no secrets. The browser posts the admin token once
+to `POST /admin/session`; every later admin action uses the session cookie
+or, for CLI scripts, `Authorization: Bearer <LICENSE_ADMIN_TOKEN>`. Sign
+out from the header to clear the cookie.
 
 The CLI (`npm run generate-license`) still works exactly as before, it's the
 better option for scripting or batch-issuing licenses.
@@ -235,7 +249,11 @@ Activates a machine against a license. Idempotent: re-activating an
 already-activated `machineId` (e.g. app restart) just refreshes
 `lastSeenAt` and does not consume another seat.
 
-- `{ ok: true, companyName, seatCap, seatsUsed, expiresAt }` on success
+- `{ ok: true, companyName, seatCap, seatsUsed, expiresAt, lease? }` on success
+  — `lease` is present only when `LICENSE_LEASE_PRIVATE_KEY` is configured
+  (see [Offline leases](#offline-leases-and-license-gate-flags) below); an
+  unconfigured server omits the field entirely, so old and new clients alike
+  see no difference.
 - `{ ok: false, error: "invalid" }` — unknown license key
 - `{ ok: false, error: "revoked" }` — license has been revoked
 - `{ ok: false, error: "expired" }` — license's `expiresAt` has passed
@@ -247,7 +265,7 @@ already-activated `machineId` (e.g. app restart) just refreshes
 
 Re-validates an already-activated machine. Never consumes a seat.
 
-- Same success shape as `/activate`.
+- Same success shape as `/activate` (including the optional `lease`).
 - Same `invalid` / `revoked` / `expired` errors.
 - `{ ok: false, error: "not_activated" }` — this machine was never activated for this key
 
@@ -261,18 +279,39 @@ the two apart (see below).
 - `{ ok: true }` on success
 - `{ ok: false, error: "not_found" }` — unknown license key, or machine wasn't activated
 
+**Reserved v1 (offline-first JWS, closed)** — `POST /v1/licenses/activate`
+`{ licenseKey, deviceIdHash, appVersion, os }` and `POST /v1/installs/register`
+`{ installId, appVersion, os }`. These are the real interface for the Métis
+member-pass foundation (`docs/license-v1.openapi.yaml`). They return
+`{ ok: false, error: "activation_unavailable" }` with HTTP 503 until selling
+opens (`LICENSE_ACTIVATION_OPEN=false` in the app). They do not replace
+`/activate`.
+
 **`GET /health`** — unauthenticated, for uptime/monitoring checks.
 
-→ `{ ok: true, version, uptimeSeconds, licenseCount }` — `version` is this
-server's `package.json` version, `uptimeSeconds` is how long this server
-process has been up, `licenseCount` is the total number of licenses in the
-store.
+→ `{ ok: true, version, uptimeSeconds }` — `version` is this server's
+`package.json` version, `uptimeSeconds` is how long this server process has
+been up. Fleet size is on token-gated `GET /metrics`, not on this public
+route.
+
+**`GET /license/pubkey`** — unauthenticated (there's no secret in a public
+key). → `{ ok: true, algorithm: "ed25519", publicKey }` where `publicKey` is
+the raw 32-byte Ed25519 key, base64url-encoded. `404 { error: "lease_disabled" }`
+when `LICENSE_LEASE_PRIVATE_KEY` isn't configured — same "an unconfigured
+feature doesn't even reveal it exists" convention as `/metrics`.
+
+**`GET /license/config`** — unauthenticated. → `{ ok: true, licenseEnforcement,
+licenseUiEnabled, drift }`, the server's declared intent for the two
+client-side compile-time switches. See
+[Offline leases and license-gate flags](#offline-leases-and-license-gate-flags).
 
 ### Admin endpoints
 
-All require header `Authorization: Bearer <LICENSE_ADMIN_TOKEN>`. If the
-server has no `LICENSE_ADMIN_TOKEN` configured, every admin route returns
-`503` rather than silently allowing or denying.
+All require either header `Authorization: Bearer <LICENSE_ADMIN_TOKEN>`
+(CLI / scripts) or a valid `metis_admin_session` httpOnly cookie from
+`POST /admin/session`. If the server has no `LICENSE_ADMIN_TOKEN`
+configured, every admin route returns `503` rather than silently allowing
+or denying.
 
 The bearer token is the entire security model for these routes, so failed
 auth attempts are rate-limited per IP: after 10 failed attempts from one IP
@@ -283,12 +322,33 @@ admin-disabled response never counts as a failed attempt.) This is separate,
 in-process, per-server-instance state, independent of the `/activate`
 `/heartbeat` rate limiter.
 
+**`POST /admin/session`** — Bearer `LICENSE_ADMIN_TOKEN`. Sets `metis_admin_session` (httpOnly, SameSite=strict, 12h). → `{ ok: true }`
+
+**`GET /admin/session`** — cookie or Bearer. → `{ ok: true }` or `401`
+
+**`DELETE /admin/session`** — clears the cookie.
+
 **`POST /admin/licenses`** — `{ companyName, seatCap, expiresAt?, contactName?, contactEmail?, notes? }`
 → `{ licenseKey, companyName, seatCap, expiresAt }`
 
+**`POST /admin/licenses/trial`** — `{ seats?, days?, companyName?, contactName?, contactEmail?, notes? }`
+→ `{ licenseKey, companyName, seatCap, expiresAt, trial: true }`
+
+Mints a time-boxed **trial** license — no purchase, no price, no checkout of
+any kind (this product has no price tag). Defaults: `seats: 1`, `days: 14`,
+`companyName: "Trial"`, `notes: "trial"`. A thin wrapper over the same
+create path as `POST /admin/licenses`, so it's audited (`action:
+"create_trial"`), fires the same `license.created` webhook, and appears in
+the dashboard/CSV/analytics — just tagged `trial: true` (see below) so you
+can tell it apart from a sold license. A trial key activates and heartbeats
+exactly like any other license; there is nothing locally resettable about
+it (it's a real, server-issued key with a real expiry).
+
 **`GET /admin/licenses`**
-→ list of `{ licenseKey, companyName, seatCap, seatsUsed, activeSeats30d, revoked, expiresAt, createdAt, contactName }`
-(no `activations`/`machineId`/`contactEmail`/`notes` detail in the list view)
+→ list of `{ licenseKey, companyName, seatCap, seatsUsed, activeSeats30d, revoked, expiresAt, createdAt, contactName, trial }`
+(no `activations`/`machineId`/`contactEmail`/`notes` detail in the list view; `trial` is `true` only for
+licenses minted through `POST /admin/licenses/trial`, `false` for licenses minted before this field
+existed or through the normal create route)
 
 **`GET /admin/licenses/:key`**
 → full detail: everything in the list view plus `contactEmail`, `notes`, and
@@ -423,6 +483,68 @@ scrape_configs:
 
 Unset, the endpoint returns 404 like any unknown route. For a simple
 up/down check without Prometheus, `GET /health` remains unauthenticated.
+
+## Offline leases and license-gate flags
+
+**Offline lease (Ed25519, `node:crypto`, no new dependency).** Every
+successful `/activate` and `/heartbeat` can carry a compact, signed `lease`
+field the app can verify **without contacting the server** —
+`<base64url(payload)>.<base64url(signature)>` where the payload is
+`{ licenseKey, machineId, companyName, seatCap, issuedAt, notAfter }`. Unlike
+a wall-clock-only offline grace period, `notAfter` is a signed timestamp: a
+user rolling their system clock backwards cannot extend it, only a fresh
+signature from this server's private key can.
+
+1. Generate a key pair once: `npm run generate-lease-keypair`. It prints a
+   `LICENSE_LEASE_PRIVATE_KEY` value (set it on the server, keep it secret —
+   never in git, never in the app bundle) and a raw public key (bundle that
+   into the desktop client; a public key needs no encryption).
+2. Set `LICENSE_LEASE_PRIVATE_KEY` on the server. From then on, `/activate`
+   and `/heartbeat` responses include `lease`; an unconfigured server omits
+   the field entirely (fully additive — old clients that don't know about
+   `lease` are unaffected either way).
+3. The client fetches the matching public key from `GET /license/pubkey`
+   (or bundles it at build time, the same pattern as
+   `src/main/embedded-cloudflare-key.ts`) and verifies with plain
+   `node:crypto`:
+   ```js
+   import { createPublicKey, verify } from 'node:crypto';
+   const key = createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x: publicKeyRaw }, format: 'jwk' });
+   const [payloadB64, sigB64] = lease.split('.');
+   const ok = verify(null, Buffer.from(payloadB64, 'utf8'), key, Buffer.from(sigB64, 'base64url'));
+   const payload = ok ? JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8')) : null;
+   ```
+   A tampered payload, a signature from a different key pair, or a
+   malformed token all fail verification (`lib/lease.mjs`'s `verifyLease`
+   never throws on attacker-controlled input — it returns `null`).
+4. Rotation: if the private key ever leaks, generate a new pair and
+   re-deploy. Leases are short-lived (`LICENSE_LEASE_TTL_DAYS`, default 14),
+   so the blast radius of a leaked key is bounded by that window, and every
+   subsequent heartbeat re-issues against the new key.
+
+**License-gate flags (`LICENSE_ENFORCEMENT` / `LICENSE_UI_ENABLED`).** The
+Electron app has two compile-time constants that must always agree —
+`App.tsx`'s `LICENSE_ENFORCEMENT` and `Settings.tsx`'s `LICENSE_UI_ENABLED`
+— because flipping one without the other either bricks the app (enforcement
+on, activation UI hidden) or shows a gate that does nothing (UI on,
+enforcement off). Flipping the actual client constants is a separate,
+later change (outside this server); what this server offers today is a
+read-only **declaration** of the intended pair via `GET /license/config`,
+so a managed-config fetch (or a future onboarding step) has one small JSON
+blob to read instead of guessing at two independent env vars:
+
+- Neither `LICENSE_ENFORCEMENT` nor `LICENSE_UI_ENABLED` set → both `false`
+  (today's shipped default).
+- Only one set → the other mirrors it (one knob turns both on).
+- Both set and agreeing → that value, for both.
+- Both set and **disagreeing** → the server fails **closed**: both resolve
+  to `false` and the response carries `drift: true`, so a misconfigured
+  server can never hand a client the exact inconsistent pair the plan
+  warns against.
+
+This endpoint does not itself gate any route on this server — `/activate`,
+`/heartbeat`, and every `/admin/*` route behave identically regardless of
+its response.
 
 ## Tests
 

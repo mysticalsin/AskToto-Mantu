@@ -18,7 +18,6 @@ import {
   KeyRound,
   Building2,
   ChevronDown,
-  Loader2
 } from 'lucide-react'
 import { DEFAULT_SHORTCUTS } from '@shared/ipc'
 import type {
@@ -32,6 +31,7 @@ import type {
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS, filterAllowedProviders } from '@shared/providers'
 import { MetisMark } from './MetisMark'
+import { AgentStatus, InlineOrb } from './AgentStatus'
 import { accelLabel, isWindows } from '../lib/keys'
 
 /** Microsoft 4-square glyph (no lucide equivalent). */
@@ -77,7 +77,7 @@ const managedChipCls =
 /** Why a step-5 provider tile can't be tapped right now, or `null` if it can. Kept as a discriminated
  *  reason (not a plain boolean) so ProviderOption can show copy that matches what's actually true —
  *  'org' is a genuine managed-config/data-residency lock, 'busy' is only ever a transient in-flight
- *  probe (currently just the CLI tile's ~45s cliDetect/cliTest). Conflating the two previously made
+ *  probe (currently just the CLI tile's zero-token cliDetect/cliTest). Conflating the two previously made
  *  every tile read as org-restricted for the whole time the CLI tile alone was busy. */
 export type ProviderTileDisabledReason = 'org' | 'busy' | null
 
@@ -130,7 +130,7 @@ export function providerReadyCopy(
 ): { label: string; hint: string } {
   const p = PROVIDERS[provider]
   const label = p?.label ?? 'AI provider'
-  if (opts?.alreadyConnected) return { label: `${label} connected`, hint: 'already set up — nothing to paste' }
+  if (opts?.alreadyConnected) return { label: `${label} connected`, hint: 'already set up, nothing to paste' }
   if (p?.kind === 'cli') return { label: `${label} connected`, hint: 'connect it to get live answers' }
   if (p?.kind === 'dust') return { label: `${label} connected`, hint: 'finish the one-click sign-in to get live answers' }
   return { label: `${label} API key`, hint: 'add your key to get live answers' }
@@ -203,7 +203,7 @@ function ProviderOption({
             </span>
           ) : disabledReason === 'busy' ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[10px] font-medium text-[color:var(--color-ink-2)]">
-              <Loader2 size={10} className="animate-spin" /> Checking…
+              <AgentStatus kind="loading" size="inline" caption />
             </span>
           ) : (
             badge && (
@@ -389,7 +389,7 @@ export function Onboarding({
   // Windows has no OS consent dialog for desktop apps — the mic toggle only becomes "determined" (from
   // this app's perspective) after it actually attempts a capture once. Fired at most once per mount.
   const micProbeFiredRef = useRef(false)
-  // Step 5's chooseCli (below) awaits cliDetect + cliTest for up to ~45s with no earlier exit. `stepRef`
+  // Step 5's chooseCli (below) awaits cliDetect + cliTest (zero-token session probe). `stepRef`
   // mirrors the live `step` (not the value closed over when chooseCli was called) and `mountedRef` tracks
   // whether Onboarding is still mounted, so a late resolution can never silently patch({ provider }) after
   // the user already left step 5 (Back, Decide later, Get started) or unmounted onboarding entirely.
@@ -673,7 +673,9 @@ export function Onboarding({
       await connectDust({
         select: () => choose('dust'),
         importCli: () => window.toto.dustImportCli(),
-        setupCli: () => void window.toto.dustLoginBegin(),
+        setupCli: () => {
+          void window.toto.dustInstallCli().then(() => window.toto.dustLoginBegin())
+        },
         // Re-patching the provider we just set is the renderer's only way to pull main's post-import
         // snapshot (setSettings answers with it) — settings are otherwise refetched on window 'focus'
         // alone, which this path never triggers.
@@ -886,7 +888,7 @@ export function Onboarding({
             disabled={recoveryBusy}
             className="no-drag focus-ring inline-flex items-center gap-1.5 rounded-xl border border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)] px-4 py-2 text-[12px] font-medium text-[color:var(--color-accent)] hover:brightness-110 disabled:opacity-50"
           >
-            {recoveryBusy ? <KeyRound size={13} className="animate-pulse" /> : <KeyRound size={13} />}
+            {recoveryBusy ? <InlineOrb kind="loading" /> : <KeyRound size={13} />}
             {recoveryBusy ? 'Creating new local profile…' : 'Create new local profile & retry'}
           </button>
         )}
@@ -957,7 +959,7 @@ export function Onboarding({
             busy ? 'cursor-not-allowed opacity-50' : ''
           ].join(' ')}
         >
-          {busy ? <Loader2 size={16} className="animate-spin" /> : <MsLogo size={16} />}
+          {busy ? <InlineOrb kind="connecting" /> : <MsLogo size={16} />}
           {busy ? 'Waiting for your browser…' : 'Sign in with Microsoft'}
         </button>
         {busy && (

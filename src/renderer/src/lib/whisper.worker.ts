@@ -206,6 +206,7 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
     bundled?: boolean
     language?: string
     resetFollow?: boolean
+    partial?: boolean
   }
 
   if (msg.type === 'init') {
@@ -263,7 +264,7 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
       post({
         type: 'error',
         message: bundled
-          ? 'The bundled transcription files are missing or damaged. Reinstall Métis from a complete installer.'
+          ? 'Could not load the transcription files. Check your connection and try Listen again.'
           : 'Could not load the transcription model. Check your internet connection and try Listen again.'
       })
     } finally {
@@ -277,7 +278,7 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
     // only meaningful while still in 'auto' mode: an explicit user language is never second-guessed by a
     // probe, mirroring whisper-import.ts's probeLanguage guard. Once applied, probePinned latches true for
     // the rest of the session (resetLanguageFollow is the only way back to false) — a later switch is
-    // communicated by another 'pinLanguage' message with the new language, never by un-pinning.
+    // communicated by another 'pinLanguage' message with the new language (first pin is not forever).
     if (
       userLanguage === 'auto' &&
       typeof msg.language === 'string' &&
@@ -322,7 +323,7 @@ self.onmessage = async (e: MessageEvent): Promise<void> => {
       const out: any = await asr(msg.audio, opts)
       const text = (Array.isArray(out) ? out.map((o) => o.text).join(' ') : out?.text || '').trim()
       if (text) followLanguage(text)
-      post({ type: 'text', text, speaker })
+      post({ type: 'text', text, speaker, partial: !!msg.partial })
     } catch (err) {
       // Same rule as the load-failure branch above, which this used to ignore: the engine's own text
       // ("Aborted(). Build with -sASSERTIONS for more info.", "memory access out of bounds") is a WASM

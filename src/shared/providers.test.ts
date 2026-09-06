@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { isDustReady, dustStoredAgentMissing, applyInteractiveGuardrail, parseDustUrl, detectProvider, filterAllowedProviders, migrateRetiredModelId, migrateRetiredModelMap, providerBaseUrl, reasoningEffortFor, requiresUserBaseUrl, resolveModelTier, PROVIDERS, PROVIDER_IDS, dustAgentVision } from './providers'
+import { isDustReady, isSpotlightRefReady, dustStoredAgentMissing, applyInteractiveGuardrail, parseDustUrl, detectProvider, filterAllowedProviders, migrateRetiredModelId, migrateRetiredModelMap, providerBaseUrl, reasoningEffortFor, requiresUserBaseUrl, resolveModelTier, PROVIDERS, PROVIDER_IDS, dustAgentVision } from './providers'
 
 // MQA-001 (docs/qa/BUG-LEDGER.md): the registry shipped DeepSeek's retired 'deepseek-chat' /
 // 'deepseek-reasoner' ids as its defaults after their 2026-07-24 discontinuation date. If these tests
@@ -142,6 +142,35 @@ describe('dustStoredAgentMissing', () => {
 
   it('false for an empty list (restricted/failed load is not proof the agent is gone)', () => {
     expect(dustStoredAgentMissing('gone', [])).toBe(false)
+  })
+
+  it('does not false-negative a managed Spotlight Ref agent present on an all/workspace/published list', () => {
+    expect(
+      dustStoredAgentMissing('GOr913Zr5V', [{ sId: 'personal-list-only' }, { sId: 'GOr913Zr5V' }])
+    ).toBe(false)
+  })
+})
+
+describe('isSpotlightRefReady', () => {
+  const keys = { dust: true }
+  const pin = { dust: 'GOr913Zr5V' }
+  const listOnly = [{ sId: 'user-pickable' }]
+  const allViews = [{ sId: 'user-pickable' }, { sId: 'GOr913Zr5V' }]
+
+  it('stays true when view:list omits the managed agent — REST omission is not a reconnect dead-end', () => {
+    expect(isSpotlightRefReady(keys, 'ws_123', pin, listOnly)).toBe(true)
+    expect(isSpotlightRefReady(keys, 'ws_123', pin, allViews)).toBe(true)
+  })
+
+  it('stays true while the list is inconclusive (null or empty) if Dust credentials and the pin are set', () => {
+    expect(isSpotlightRefReady(keys, 'ws_123', pin, null)).toBe(true)
+    expect(isSpotlightRefReady(keys, 'ws_123', pin, [])).toBe(true)
+  })
+
+  it('is false when Dust is not connected, even if the managed agent appears in a list', () => {
+    expect(isSpotlightRefReady({}, 'ws_123', pin, allViews)).toBe(false)
+    expect(isSpotlightRefReady(keys, '', pin, allViews)).toBe(false)
+    expect(isSpotlightRefReady(keys, 'ws_123', {}, allViews)).toBe(false)
   })
 })
 

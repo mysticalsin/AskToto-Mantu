@@ -4,17 +4,19 @@ import { streamDust } from './llm/dust'
 import { streamAnthropic } from './llm/anthropic'
 import { streamOpenAI } from './llm/openai'
 import { streamLocal } from './llm/local'
+import { streamOperatorAsk } from './llm/operator-ask'
+import { wrapEnterpriseStream } from './llm/enterprise-client'
+import { auditLog } from './logger'
 
 // Re-export the public types so existing `./llm` importers keep working after the strategy split.
 export type { StreamHandlers, StreamOptions, StreamHandle } from './llm/shared'
 
 /**
- * Provider-strategy dispatcher. Each provider kind owns its own module (src/main/llm/<kind>.ts) behind a
- * single StreamOptions → StreamHandle contract. Adding a provider kind is a new strategy module + one case
- * here — not another 150-line branch in a God-function. OpenAI-compatible is the default for any
- * non-cli/dust/anthropic kind (GPT, Kimi/Moonshot, a custom base URL).
+ * Raw strategy switch. Tests that want the unwrapped dispatcher can import this; production
+ * always goes through createStream → wrapEnterpriseStream.
  */
-export function createStream(opts: StreamOptions): StreamHandle {
+export function dispatchStream(opts: StreamOptions): StreamHandle {
+  if (opts.viaOperator) return streamOperatorAsk(opts)
   switch (opts.kind) {
     case 'cli':
       return streamCli(opts)
@@ -27,4 +29,22 @@ export function createStream(opts: StreamOptions): StreamHandle {
     default:
       return streamOpenAI(opts)
   }
+}
+
+/**
+ * The one client every provider walks through: hard timeout, cancel, TTFT/TTA, answer-first
+ * post-filter, secret-redacted errors. Strategies below this still own wire format.
+ */
+export function createStream(opts: StreamOptions): StreamHandle {
+  return wrapEnterpriseStream(dispatchStream, opts, {
+    onMetrics: (m) =>
+      auditLog('llm.call', {
+        provider: m.providerId,
+        ttftMs: m.ttftMs,
+        ttaMs: m.ttaMs,
+        cancelled: m.cancelled,
+        timedOut: m.timedOut,
+        circuitOpen: m.circuitOpen
+      })
+  })
 }

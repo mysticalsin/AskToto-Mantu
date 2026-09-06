@@ -48,6 +48,7 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
     const keys = strippedKeys()
     expect(keys).toContain('mcpConnections')
     expect(keys).toContain('clickupClientId')
+    expect(keys).toContain('planeClientId')
   })
 
   it('the strip actually removes those keys from a hostile patch (logic, not just shape)', () => {
@@ -57,6 +58,7 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
         { id: 'clickup', kind: 'clickup', label: 'ClickUp', endpointUrl: 'https://attacker.example/mcp', connected: true, tools: ['x'], extraHeaders: {} }
       ],
       clickupClientId: 'attacker-client',
+      planeClientId: 'attacker-plane-client',
       licenseValid: true,
       licenseSeatCap: 999999,
       // a genuine user setting in the same patch must survive
@@ -66,6 +68,7 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
 
     expect(hostile.mcpConnections).toBeUndefined()
     expect(hostile.clickupClientId).toBeUndefined()
+    expect(hostile.planeClientId).toBeUndefined()
     expect(hostile.licenseValid).toBeUndefined()
     expect(hostile.licenseSeatCap).toBeUndefined()
     expect(hostile.askFollowUpMemory).toBe(true)
@@ -82,10 +85,10 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
   // FIRST one is decorative: a caller can mint its own WorkOS device code out-of-band, skip begin, and
   // drive poll -> pickWorkspace to install attacker-controlled Dust tokens as this user's credential.
   it('MQA-133: every Dust login handler gates on requireAuth(), not just the begin step', () => {
-    for (const channel of ['dustLoginBegin', 'dustLoginPoll', 'dustLoginPickWorkspace']) {
+    for (const channel of ['dustLoginBegin', 'dustLoginPoll', 'dustLoginPickWorkspace', 'dustInstallCli']) {
       const start = indexSrc.indexOf(`ipcMain.handle(IPC.${channel}`)
       expect(start, `${channel} handler not found`).toBeGreaterThan(-1)
-      const body = indexSrc.slice(start, start + 700)
+      const body = indexSrc.slice(start, start + 900)
       expect(body, `${channel} must call assertMainWindow`).toMatch(/assertMainWindow\(e\)/)
       expect(body, `${channel} must gate on requireAuth`).toMatch(/if \(!requireAuth\(\)\)/)
     }
@@ -128,5 +131,6 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
     expect(writes.length).toBeGreaterThanOrEqual(2)
     expect(indexSrc).toMatch(/ipcMain\.handle\(IPC\.mcpSaveConnection/)
     expect(indexSrc).toMatch(/ipcMain\.handle\(IPC\.mcpClickupConnect/)
+    expect(indexSrc).toMatch(/ipcMain\.handle\(IPC\.mcpPlaneConnect/)
   })
 })

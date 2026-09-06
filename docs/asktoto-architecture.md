@@ -32,7 +32,7 @@ _Author: principal RT-AI engineer / product architect. Grounded in the live Mét
 - **Editable per-mode prompts + custom modes** — the user owns the assistant's behavior; not a black box.
 - **Transparent by design** — visible AI-active status, no stealth, no undetectability. We win on trust, which is the only durable moat for an always-listening tool.
 - **Connect-once enterprise context** — Dust + Claude CLI + Codex CLI bind once via the OS keychain and persist; add/remove API keys freely.
-- **Calm, Mantu-grade UI** — one pinned bar, an answer that grows below it, suggestions that auto-dismiss. It gets out of the way.
+- **Calm, Mantu-grade UI** — one pinned bar, an answer that grows below it, suggestions that stay until click or a new question. It gets out of the way.
 
 **What we will NOT build (trust/safety boundary).** No stealth / "undetectability" / hidden-from-the-room mode; no exam, interview, or meeting deception; no hidden or non-consensual recording; no evading the *other* participants' awareness; no OS/security-control bypass; no engagement dark patterns. Métis's content-protection only keeps the assistant's private answers out of *your own* outgoing screen-share — it is a privacy feature for the user, never a tool to deceive others. If a feature only makes sense for cheating, it doesn't ship.
 
@@ -78,7 +78,7 @@ Meeting mode activates via `useListen.start()` → the app switches `view` to `'
 2. **Secondary action row** — "What to say next" and "Fact-check" as ghost pills. These are always visible; pressing either fires an LLM request immediately using the current transcript.
 3. **Transcript footer** — collapsed by default ("live · N captured" + "View transcript →"). Expanding shows the speaker-bubble view (see B.6).
 
-**No automatic meeting-detection start.** Métis does not poll window titles, browser tabs, or the calendar to auto-start Listen. That subsystem (`src/main/meeting-detect/`, `detectMeeting`/`titleMatchesCalendar`, the `onMeetingDetected` IPC push) was removed; `src/main/index.ts` has zero references to it today, and a comment at `index.ts:1301-1302` states the removal explicitly — it's the reason Accessibility permission is no longer requested at all (see I.2). `<MeetingDetectedToast>` still exists as a component file but is not imported anywhere in `App.tsx` — it is dead code, not a live UX path. Listen starts only from a deliberate user action: the `⌘⇧L` hotkey or the Bar's Listen button. `settings.autoStartOnMeeting` survives only as a vestigial zod default (`false`) in `shared/ipc.ts`, with nothing left in the main process that reads it.
+**No automatic meeting-detection start.** Métis does not poll window titles, browser tabs, or the calendar to auto-start Listen. That subsystem (`src/main/meeting-detect/`, `detectMeeting`/`titleMatchesCalendar`, the `onMeetingDetected` IPC push) was removed; `src/main/index.ts` has zero references to it today — it's the reason Accessibility permission is no longer requested at all (see I.2). Listen starts only from a deliberate user action: the `⌘⇧L` hotkey or the Bar's Listen button. Wave 0 removed the dead `MeetingDetectedToast` component and the vestigial `customMeetingApps` setting.
 
 **"New meeting" toast (unrelated feature, don't confuse with the above).** Pressing "New meeting" in the Bar saves the in-flight meeting and immediately starts a fresh session at 0:00 — a single click with no other visible change, easy to miss on a misclick mid-call — so `<NewMeetingToast>` (App.tsx `newMeeting()`) confirms it happened: "Previous meeting saved / New session started," auto-dismissing after 3 s. This is a confirmation toast for an explicit user action, not a detection feature.
 
@@ -169,7 +169,7 @@ Shown inside the `<Copilot>` component's third section when `showTranscript` is 
 
 **Show/hide toggle.** The footer row shows "View transcript →" (chevron-right pill) while hidden; once expanded it shows "Hide transcript ↓". This is intentional: the transcript is secondary information during an active call. The primary surface is the suggestion card. Expanding the transcript is opt-in, not default, so the suggestion is never pushed off screen by a long transcript.
 
-**Model loading state.** While `loading` is true, the transcript section shows `<Spinner /> Loading transcription model…` (and a percentage when the worker reports one). Customer packages load installer-owned Whisper/Parakeet assets only; missing or damaged files fail locally with reinstall guidance and never trigger a model download.
+**Model loading state.** While `loading` is true, the transcript section shows `<Spinner /> Loading transcription model…` (and a percentage when the worker reports one). Customer packages load installer-owned Whisper/Parakeet assets first. If those files are missing, runtime fetches the reviewed payload into `userData` with visible progress — never a reinstall prompt.
 
 ---
 
@@ -201,11 +201,7 @@ The Assist card in Copilot is calm by design. Three controls govern when it fire
 
 **Trigger.** `onQuestionRef.current` fires on each `TranscriptLine` from `useListen`. Only `speaker === 'them'` lines trigger auto-suggest (the debounce is on the listener call site — the "other person said something" event). The prompt is `ASSIST_PROMPT` + last 4,000 chars of transcript + injection guard. If the provider is vision-capable, a screen capture is appended first.
 
-**Auto-dismiss.** Two timers run in parallel (App.tsx:236-252):
-- `SUGGESTION_TTL_MS = 4000` — starts when streaming ends; dismisses `SUGGESTION_TTL_MS` after the last token.
-- `SUGGESTION_MAX_MS = 7000` — starts when the suggestion ID first becomes non-null; fires unconditionally regardless of streaming state, capping a hung stream.
-
-Together these enforce a 4–7 s window. A suggestion never lingers past 7 s from first appearance.
+**Stay until click or a new question.** Ambient auto-answer has no TTL and no max-age. The card stays until Tony clicks it (dismiss/read via `clearAnswer`, never send-to-chat) or a new question is asked (typed ask, or a new ambient suggestion replacing it).
 
 **Non-interruption guard.** If the user is in Settings, Review, History, or Agenda, the auto-suggest fires and completes behind the scenes, but `setView('copilot')` is not called (App.tsx:298-302). The suggestion is queued on the copilot surface ready when they return. The user's active panel is never yanked away.
 
@@ -228,12 +224,12 @@ Every failure state in Métis has three elements: what it shows, the exact copy,
 | **Provider can't read screen** | Answer error block | "This provider can't read screens. Switch to Claude or GPT in Settings." | Retry (won't help — copy is honest) + settings |
 | **Screen capture permission denied** | `captureError` state in App → Answer error | "Screen capture permission denied." (raw OS error) | `errorHint()` maps "can't read screen" → settings |
 | **Mic not granted** | `listen.error` → Copilot error zone | "Microphone not available. Grant access in System Settings → Privacy → Microphone." | Copilot error zone; no button (OS settings must be opened manually) |
-| **Bundled ASR files missing or damaged** | Copilot error zone | "The bundled transcription files are missing or damaged. Reinstall Métis from a complete installer." | Reinstall from a complete Métis installer; production never downloads a replacement model |
+| **Bundled ASR files missing or damaged** | Import queue + Copilot error zone | "Could not get the transcription files. Check your connection and try again." | Runtime fetches the reviewed Parakeet + Whisper-floor files into `userData` with visible progress. Never “reinstall the installer.” |
 | **Unclear audio / VAD silence** | Copilot footer when `listening && lines.length === 0` | "Waiting for speech…" | Passive — auto-resolves when audio arrives |
 | **No audio yet (not listening)** | Copilot footer | "not listening" | AudioLines icon in the Bar toolbar is the affordance |
 | **Save to OneDrive failed** | Review surface, `saveError` | `saveError` raw string + retry up to 5×. After max retries: "Couldn't save automatically. Use the Save button to try again." | Manual Save button in Review footer |
 | **Low confidence / unverifiable** | Fact-check UNVERIFIABLE badge | "Unverifiable" (neutral badge) + bullets explaining why | No recovery needed — verdict is final |
-| **Copilot suggestion streaming stuck** | Auto-dismissed after `SUGGESTION_MAX_MS` = 7 s | Never shown — card silently clears | User can press Assist again |
+| **Copilot suggestion streaming stuck** | Stays on screen until click or a new question | Card remains until Tony acts | User can press Assist again or ask something new |
 | **Sign-in failed (SSO)** | Onboarding Step 1 error | "Sign-in failed. Use a Mantu Microsoft account." | Same screen; retry both buttons remain active |
 | **No permission at onboarding** | Onboarding Step 2 checklist | "grant access when you first press Listen" / "needed for the other side of calls + screen capture" | Row stays amber until granted; no block on "Get started" |
 
@@ -392,7 +388,7 @@ Two native binaries ship inside the packaged app, verified at **build time**, no
 
 ### C.4 Audio file import
 
-A second path into the same transcription pipeline. `main/import-audio.ts` opens a native file picker (common recording formats — wav/mp3/m4a/aac/ogg/flac/aiff/webm/opus/wma/amr/3gp/mp4 — capped at 500 MB) and hands the picked source to `main/import-jobs.ts`'s `ImportJobManager`, which owns decoding, transcription, checkpointing, saving, and recap generation as a background job queue. Decoding runs through the FFmpeg sidecar (C.3): the source file streams through FFmpeg as 16 kHz mono f32le PCM in 30-second chunks, at most one chunk held in memory at a time, then each chunk is fed through the same Whisper/Parakeet ASR path used for live audio — producing a normal saved meeting with a recap, indistinguishable from a live session's output. The renderer only ever sees the picked file's identity (path/name/size/mtime), never raw bytes; `src/renderer/src/lib/import-audio.ts` is the renderer-side hook that drives it.
+A second path into the same transcription pipeline. `main/import-audio.ts` opens a native multi-file picker (`openFile` + `multiSelections`; same formats, 500 MB per file) or accepts dropped paths from preload (`webUtils.getPathForFile` → opaque tokens). Each file becomes its own durable `ImportJob`. `ImportJobManager` runs up to two decodes at once (ASR mutexed) so one huge recording cannot hold the only decoder slot. Decoding runs through the FFmpeg sidecar (C.3): the source streams as 16 kHz mono f32le PCM, then each window is fed through the same Whisper/Parakeet ASR path used for live audio — producing a normal saved meeting with a recap. The renderer never sees a filesystem path: tokens and `ImportJobView` only. Missing Parakeet / Whisper-floor weights are provisioned by `npm run dev` and, at runtime, fetched into `userData` with visible progress — never a “reinstall the installer” error. See `docs/design/IMPORT-MEETINGS.md`.
 
 ### C.5 Brain pipeline (knowledge extraction)
 
@@ -1201,7 +1197,7 @@ Policy keys relevant to privacy/security:
 
 ### I.9 Local processing
 
-The packaged ASR path is fully on-device: Parakeet, Whisper, ONNX Runtime, and FFmpeg are installer-owned assets, and production fails locally if an integrity-checked asset is missing instead of downloading a replacement.
+The packaged ASR path is fully on-device: Parakeet, Whisper, ONNX Runtime, and FFmpeg are installer-owned assets. **Parakeet is the default live engine** (`asrEngine: 'parakeet'`). A sparse settings file that never wrote `asrEngine` inherits that default; an explicit `whisper` or `apple` choice is never clobbered. First-run Act 3 downloads the Parakeet + Whisper-floor files (progress on the setup row) and will not continue while they are missing. Pack scripts hard-fail if those files are missing after fetch. If a running app is somehow incomplete, it fetches the same reviewed files into `userData` with visible progress rather than asking the user to reinstall.
 
 The optional **Métis Local** master switch in Settings → AI is off by default. When enabled, independent toggles let the user process supported live suggestions, summaries, and screen-vision requests with an on-device Qwen3.5 model — 4B or 0.8B, chosen by host RAM — through the authenticated loopback-only `llama-server` sidecar. The native runtime is embedded in the same DMG/EXE, so no Ollama, Python or separate service is required. The weights and multimodal projector are **not**: at 3.58 GB for the 4B they would put a universal mac package past GitHub’s 2 GB per-asset release limit, so the app fetches them once per user profile on first run, size- and SHA-256-verified against a pinned immutable revision (MQA-146).
 
@@ -2309,7 +2305,7 @@ provider-outage
 2. **Parallel, never sequential.** On a hotkey, fire screen capture, retrieval, transcript-summary, and the fast draft *at the same time*. The slowest one sets the latency, not the sum. A chain of model calls is a bug, not an architecture.
 3. **Quick answer first, verified answer second.** Show the fast-model draft immediately; let the strong/verifier model correct it in place. Most of the time the draft is right and the user already moved on — that's the win.
 4. **Grounded over clever.** A short answer with `[transcript 02:14]` beats a brilliant essay with no source. "I can't see that" is a *feature*. Hallucination is the one unforgivable failure for a tool people trust in front of clients.
-5. **Calm UI.** One pinned bar. Answer grows below it — the bar never jumps. Proactive suggestions are rare, high-confidence-only, and auto-dismiss in a few seconds. Never nag, never pulse for attention, never thank the user for talking to it.
+5. **Calm UI.** One pinned bar. Answer grows below it — the bar never jumps. Proactive suggestions are rare, high-confidence-only, and stay until click or a new question. Never nag, never pulse for attention, never thank the user for talking to it.
 6. **On-device first.** Transcription, VAD, and redaction run locally. Cloud is for reasoning, and only on text that survived redaction. This is latency, privacy, and offline resilience in one decision — and it's the trust moat.
 7. **Transparent, not stealthy.** Visible AI-active status. The content-protection toggle is framed as *your* privacy (your answers stay out of your own screen-share), never as hiding from the room. We refuse the cheating market on purpose; it's a worse business and a worse product.
 8. **Connect once, disconnect clean.** Dust, Claude CLI, and Codex CLI bind a single time through the OS keychain (`safeStorage`) and persist across restarts — surfaced in Settings → AI with a one-click Disconnect. API keys add/remove freely, stored encrypted, never in plaintext, never logged. Setup friction is where copilots die; pay it once.

@@ -12,8 +12,9 @@ import { createApp } from './lib/app.mjs';
 import { createStore } from './lib/store.mjs';
 import { createAuditLog } from './lib/audit.mjs';
 import { createBackupManager } from './lib/backups.mjs';
-import { createWebhooks, isDiscordWebhookUrl, formatDiscordPayload } from './lib/webhooks.mjs';
+import { createWebhooks, isDiscordWebhookUrl, formatDiscordPayload, licenseEventView } from './lib/webhooks.mjs';
 import { computeAnalytics } from './lib/license.mjs';
+import { resolveLicenseGateConfig } from './lib/license-gate.mjs';
 
 const ADMIN_TOKEN = 'test-admin-token';
 const METRICS_TOKEN = 'test-metrics-token';
@@ -322,6 +323,27 @@ describe('ops layer', () => {
     assert.equal(calls[1].embeds, undefined);
   });
 
+  it('licenseEventView truncates the key unless LICENSE_WEBHOOK_FULL_KEYS is set', () => {
+    const license = {
+      licenseKey: 'ATK-HY2JVMZ3P3JF8CGAQWPR',
+      companyName: 'Mantu',
+      seatCap: 2,
+      activations: [],
+      expiresAt: null,
+      revoked: false,
+    };
+    const prev = process.env.LICENSE_WEBHOOK_FULL_KEYS;
+    delete process.env.LICENSE_WEBHOOK_FULL_KEYS;
+    try {
+      assert.equal(licenseEventView(license).licenseKey, 'ATK-HY2J…QWPR');
+      process.env.LICENSE_WEBHOOK_FULL_KEYS = '1';
+      assert.equal(licenseEventView(license).licenseKey, 'ATK-HY2JVMZ3P3JF8CGAQWPR');
+    } finally {
+      if (prev === undefined) delete process.env.LICENSE_WEBHOOK_FULL_KEYS;
+      else process.env.LICENSE_WEBHOOK_FULL_KEYS = prev;
+    }
+  });
+
   it('retries a 429 rate-limit response instead of dropping the event', async () => {
     const limited = await startReceiver((record, n) => (n === 1 ? 429 : 200));
     try {
@@ -351,9 +373,11 @@ describe('ops layer', () => {
       assert.equal(receiver.requests.length, 1);
       const delivery = receiver.requests[0];
       const payload = JSON.parse(delivery.body);
-      assert.equal(payload.event, 'license.created');
-      assert.equal(payload.license.companyName, 'Hook Co');
-      assert.equal(payload.license.seatCap, 3);
+    assert.equal(payload.event, 'license.created');
+    assert.equal(payload.license.companyName, 'Hook Co');
+    assert.equal(payload.license.seatCap, 3);
+    assert.ok(!delivery.body.includes(created.json.licenseKey), 'generic webhooks must not carry the full activatable key');
+    assert.match(payload.license.licenseKey, /^ATK-[0-9A-Z]{4}…[0-9A-Z]{4}$/);
 
       const expected = `sha256=${createHmac('sha256', WEBHOOK_SECRET).update(delivery.body).digest('hex')}`;
       assert.equal(delivery.headers['x-asktoto-signature'], expected);
@@ -491,6 +515,74 @@ describe('ops layer', () => {
     assert.equal(json.seatUtilization[0].companyName, 'Acme Corp');
     assert.equal(json.seatUtilization[0].seatsUsed, 2);
     assert.equal(json.seatUtilization[1].companyName, 'Big Co');
+  });
+
+  // ---------- server-side license-gate flags (LICENSE_ENFORCEMENT / LICENSE_UI_ENABLED) ----------
+  // These are the SERVER's declaration of intent for the two client-side compile-time switches
+  // (App.tsx's LICENSE_ENFORCEMENT, Settings.tsx's LICENSE_UI_ENABLED). The client wiring itself is
+  // out of scope for this phase — these tests only cover the server's resolution + exposure of the
+  // pair, including the plan's "flip both together" invariant.
+
+  it('resolveLicenseGateConfig defaults both flags to false when neither env var is set', () => {
+    const config = resolveLicenseGateConfig({});
+    assert.deepEqual(config, { licenseEnforcement: false, licenseUiEnabled: false, drift: false });
+  });
+
+  it('resolveLicenseGateConfig mirrors a single set flag onto the other (one knob turns both on)', () => {
+    const enforcementOnly = resolveLicenseGateConfig({ LICENSE_ENFORCEMENT: 'true' });
+    assert.deepEqual(enforcementOnly, { licenseEnforcement: true, licenseUiEnabled: true, drift: false });
+
+    const uiOnly = resolveLicenseGateConfig({ LICENSE_UI_ENABLED: '1' });
+    assert.deepEqual(uiOnly, { licenseEnforcement: true, licenseUiEnabled: true, drift: false });
+  });
+
+  it('resolveLicenseGateConfig accepts both flags agreeing, in either direction', () => {
+    const bothOn = resolveLicenseGateConfig({ LICENSE_ENFORCEMENT: 'true', LICENSE_UI_ENABLED: 'true' });
+    assert.deepEqual(bothOn, { licenseEnforcement: true, licenseUiEnabled: true, drift: false });
+
+    const bothOff = resolveLicenseGateConfig({ LICENSE_ENFORCEMENT: 'false', LICENSE_UI_ENABLED: '0' });
+    assert.deepEqual(bothOff, { licenseEnforcement: false, licenseUiEnabled: false, drift: false });
+  });
+
+  it('resolveLicenseGateConfig fails CLOSED and flags drift when the two switches disagree', () => {
+    const enforceButHideUi = resolveLicenseGateConfig({ LICENSE_ENFORCEMENT: 'true', LICENSE_UI_ENABLED: 'false' });
+    assert.deepEqual(enforceButHideUi, { licenseEnforcement: false, licenseUiEnabled: false, drift: true });
+
+    const showUiButDontEnforce = resolveLicenseGateConfig({ LICENSE_ENFORCEMENT: 'false', LICENSE_UI_ENABLED: 'true' });
+    assert.deepEqual(showUiButDontEnforce, { licenseEnforcement: false, licenseUiEnabled: false, drift: true });
+  });
+
+  it('resolveLicenseGateConfig treats an unrecognized value as unset rather than throwing', () => {
+    const config = resolveLicenseGateConfig({ LICENSE_ENFORCEMENT: 'maybe' });
+    assert.deepEqual(config, { licenseEnforcement: false, licenseUiEnabled: false, drift: false });
+  });
+
+  it('GET /license/config exposes the resolved flags, unauthenticated, reflecting live env vars', async () => {
+    await startServer();
+
+    const defaultResponse = await get('/license/config');
+    assert.equal(defaultResponse.status, 200);
+    assert.deepEqual(defaultResponse.json, { ok: true, licenseEnforcement: false, licenseUiEnabled: false, drift: false });
+
+    const prevEnforcement = process.env.LICENSE_ENFORCEMENT;
+    const prevUi = process.env.LICENSE_UI_ENABLED;
+    try {
+      process.env.LICENSE_ENFORCEMENT = 'true';
+      process.env.LICENSE_UI_ENABLED = 'true';
+      const enabledResponse = await get('/license/config');
+      assert.deepEqual(enabledResponse.json, { ok: true, licenseEnforcement: true, licenseUiEnabled: true, drift: false });
+
+      // A drifted pair must still resolve server-side (fail closed), never 500, and never serve
+      // an inconsistent pair to a client that reads this endpoint.
+      process.env.LICENSE_UI_ENABLED = 'false';
+      const driftedResponse = await get('/license/config');
+      assert.deepEqual(driftedResponse.json, { ok: true, licenseEnforcement: false, licenseUiEnabled: false, drift: true });
+    } finally {
+      if (prevEnforcement === undefined) delete process.env.LICENSE_ENFORCEMENT;
+      else process.env.LICENSE_ENFORCEMENT = prevEnforcement;
+      if (prevUi === undefined) delete process.env.LICENSE_UI_ENABLED;
+      else process.env.LICENSE_UI_ENABLED = prevUi;
+    }
   });
 
   it('computeAnalytics tolerates activation records missing activatedAt', () => {

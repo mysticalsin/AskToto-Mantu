@@ -85,8 +85,13 @@ export function formatDiscordPayload(event, at, payload) {
 }
 
 export function licenseEventView(license) {
+  // Generic webhooks (Slack/n8n/Zapier) are as leaky as Discord. Default is the same truncation
+  // Discord already uses. An operator-owned receiver that truly needs the raw key sets
+  // LICENSE_WEBHOOK_FULL_KEYS=1 — never the default.
+  const full =
+    process.env.LICENSE_WEBHOOK_FULL_KEYS === '1' || process.env.LICENSE_WEBHOOK_FULL_KEYS === 'true';
   return {
-    licenseKey: license.licenseKey,
+    licenseKey: full ? license.licenseKey : truncateKey(license.licenseKey),
     companyName: license.companyName,
     seatCap: license.seatCap,
     seatsUsed: license.activations.length,

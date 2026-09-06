@@ -1,0 +1,13 @@
+{
+  "name": "metis-operator",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-31",
+  "observability": { "enabled": true },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "metis-operator",
+      "database_id": "REPLACE_AFTER_D1_CREATE"
+    }
+  ]
+}

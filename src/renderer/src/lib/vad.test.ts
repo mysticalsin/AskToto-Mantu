@@ -301,8 +301,9 @@ describe('whisper worklet source', () => {
     // Latched, the VAD never end-pointed: the only cut was the 6s hard cap, and that window is ~92% bed,
     // so the envelope gate judged it non-speech and the reply never reached the ASR at all.
     feed(w, concat(tone(4, 0.0127), tone(0.5, 0.113), tone(2, 0.0127)))
-    expect(messages).toHaveLength(1)
-    expect(messages[0].audio!.length).toBeLessThan(6 * SR) // end-pointed, not force-cut at the hard cap
+    const finals = messages.filter((m) => !(m as { partial?: boolean }).partial)
+    expect(finals).toHaveLength(1)
+    expect(finals[0].audio!.length).toBeLessThan(6 * SR) // end-pointed, not force-cut at the hard cap
   })
 
   it('still emits a real utterance: syllabic bursts end-pointed and passed through the gate', () => {
@@ -313,8 +314,9 @@ describe('whisper worklet source', () => {
       w,
       concat(tone(0.4, 0.2), silence(0.2), tone(0.4, 0.2), silence(0.2), tone(0.4, 0.2), silence(0.8))
     )
-    expect(messages).toHaveLength(1)
-    expect(messages[0].audio!.length).toBeGreaterThan(0)
+    const finals = messages.filter((m) => !(m as { partial?: boolean }).partial)
+    expect(finals).toHaveLength(1)
+    expect(finals[0].audio!.length).toBeGreaterThan(0)
   })
 })
 

@@ -117,23 +117,25 @@ describe('MQA-051 / MQA-054 — the Dust keep-warm runs on every platform', () =
 })
 
 describe('MQA-056 — imported-recap falls back to the on-device model as a last resort', () => {
-  const recap = (): string =>
-    sliceBetween('async function runImportedRecap(', 'const transcript = settings.redactSensitive')
+  const recapSrc = readFileSync(join(__dirname, 'import-recap.ts'), 'utf8')
+  const pick = recapSrc.slice(
+    recapSrc.indexOf('export function pickImportRecapCandidates'),
+    recapSrc.indexOf('export function importRecapModel')
+  )
 
   it('consults the fallback gate, not only the useFor.summary gate', () => {
-    const body = recap()
-    expect(body).toMatch(/localFallbackEligibleFor\(\{ mode: 'summary' \}, settings, 'base', allowed\)/)
-    expect(body).toMatch(/const localFallbackReady =\s*\n?\s*!localSummaryReady &&/)
+    expect(pick).toMatch(/localFallbackEligibleFor\(\{ mode: 'summary' \}, settings, IMPORT_RECAP_TIER, allowed\)/)
+    expect(pick).toMatch(/const localFallbackReady =/)
   })
 
-  it('orders a fallback-only local candidate strictly LAST, after every cloud/CLI provider', () => {
-    expect(recap()).toMatch(
-      /localFallbackReady\s*\n\s*\? \[\.\.\.deduped\.filter\(\(provider\) => provider !== 'local'\), 'local' as ProviderId\]/
-    )
+  it('uses a connected API first and local only when redactSensitive or no API remains', () => {
+    expect(pick).toMatch(/if \(settings\.redactSensitive\) return localReady/)
+    expect(pick).toMatch(/if \(api\.length\) return api/)
+    expect(pick).toMatch(/return localReady \? \(\['local'\] as ProviderId\[\]\) : \[\]/)
   })
 
-  it('admits local to the candidate list under either gate', () => {
-    expect(recap()).toMatch(/if \(provider === 'local'\) return localSummaryReady \|\| localFallbackReady/)
+  it('admits local under either the summary or fallback gate', () => {
+    expect(pick).toMatch(/const localReady = localSummaryReady \|\| localFallbackReady/)
   })
 })
 
@@ -160,7 +162,8 @@ describe('MQA-062 — a dead CLI session stops reporting itself as connected', (
     const helper = sliceBetween('function retireCli(', 'function publicSettings()')
     expect(helper).toMatch(/if \(PROVIDERS\[provider\]\.kind !== 'cli' \|\| !isAuthFailure\(message\)\) return/)
     expect(helper).toMatch(/if \(!s\.cliConnected\[provider\]\) return/)
-    expect(helper).toMatch(/setSettings\(\{ cliConnected: \{ \.\.\.s\.cliConnected, \[provider\]: false \} \}\)/)
+    expect(helper).toMatch(/const nextConnected = \{ \.\.\.s\.cliConnected, \[provider\]: false \}/)
+    expect(helper).toMatch(/setSettings\(\{[\s\S]*cliConnected: nextConnected/)
   })
 
   it('names the real remedy instead of sending CLI users to re-enter an API key they never had', () => {
@@ -180,9 +183,9 @@ describe('MQA-062 — a dead CLI session stops reporting itself as connected', (
   })
 
   it('retires ONLY on an explicit signed-out verdict, never on an unreadable probe', () => {
-    // checkCliSession is deliberately three-valued; treating 'unknown' as negative would disconnect a
-    // working CLI whenever its version changed its status output.
-    expect(sweep()).toMatch(/if \(verdict !== 'signed-out'\) continue/)
+    // checkCliSession is multi-valued; treating 'unknown' or 'weekly-limit' as negative would
+    // disconnect a working (or merely capped) CLI. Only signed-out and missing retire the flag.
+    expect(sweep()).toMatch(/if \(verdict !== 'signed-out' && verdict !== 'missing'\) continue/)
   })
 
   it('re-reads the flag after the await, so a user Disconnect during the probe is not undone', () => {
@@ -360,6 +363,7 @@ describe('MQA-090 — the hidden-window decoder reaps a finished job before refu
     )
     expect(beforeGuard).toMatch(/const staleState = importJobs\?\.get\(decoderJobId\)\?\.state/)
     expect(beforeGuard).toMatch(/await closeImportDecoder\(decoderJobId\)/)
+    expect(beforeGuard).toMatch(/decoderSlotIsStale\(staleState\)/)
   })
 
   it('still refuses a genuinely live decoder', () => {

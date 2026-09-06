@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron'
+import { contextBridge, ipcRenderer, webUtils } from 'electron'
 import {
   IPC,
   type AskStart,
@@ -45,15 +45,27 @@ import {
   type McpPushPayload,
   type McpConnectResult,
   type McpPushResult,
+  type TimeSavedRecordPayload,
+  type OutlookDraftPayload,
+  type OutlookEventPayload,
   type LicenseActivatePayload,
   type LicenseActivateResult,
   type LicenseStatusResult,
   type LicenseGateVerdict,
+  type IdentitySnapshot,
+  type MemberActivatePayload,
+  type MemberActivateResult,
+  type MemberLicenseStatus,
+  type LicenseConfigPayload,
+  type LicenseConfigResult,
   type ImportAudioPickResult,
   type ImportAudioProgress,
+  type ImportAssetsProgress,
+  type AsrAssetsStatus,
   type ImportJobView,
   type LocalModelSummary,
-  type ProfileRecoveryResult
+  type ProfileRecoveryResult,
+  type ScreenCaptureCheckResult
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
 
@@ -66,12 +78,16 @@ function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
 
 const api = {
   getSettings: (): Promise<PublicSettings> => ipcRenderer.invoke(IPC.settingsGet),
+  /** Wave 2 — dismiss the one-shot last-failover chip after the user has seen it. */
+  dismissFailoverNotice: (): Promise<{ ok: true }> => ipcRenderer.invoke(IPC.dismissFailoverNotice),
   getPermissions: (): Promise<PlatformPermissions> => ipcRenderer.invoke(IPC.permissionsGet),
   getShortcutFailures: (): Promise<ShortcutFailure[]> => ipcRenderer.invoke(IPC.shortcutFailures),
   openPermissionSettings: (kind: 'microphone' | 'screenRecording'): Promise<void> =>
     ipcRenderer.invoke(IPC.permissionsOpenSettings, kind),
   requestPermissionsUpfront: (): Promise<PlatformPermissions> =>
     ipcRenderer.invoke(IPC.permissionsRequestUpfront),
+  screenCaptureCheck: (pass: 'probe' | 'vision'): Promise<ScreenCaptureCheckResult> =>
+    ipcRenderer.invoke(IPC.screenCaptureCheck, { pass }),
   setSettings: (patch: Partial<Settings> | import('@shared/ipc').SettingsPatch): Promise<PublicSettings> =>
     ipcRenderer.invoke(IPC.settingsSet, patch),
   recoverEncryptedProfile: (): Promise<ProfileRecoveryResult> => ipcRenderer.invoke(IPC.settingsRecoverProfile),
@@ -96,6 +112,15 @@ const api = {
   dustLoginPoll: (): Promise<DustDevicePollResult> => ipcRenderer.invoke(IPC.dustLoginPoll),
   dustLoginPickWorkspace: (workspaceId: string): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.dustLoginPickWorkspace, workspaceId),
+  dustInstallCli: (onProgress?: (line: string) => void): Promise<CliInstallResult> => {
+    const listener = (_e: unknown, d: { line: string }): void => {
+      onProgress?.(d.line)
+    }
+    ipcRenderer.on(IPC.dustInstallCliProgress, listener)
+    return ipcRenderer.invoke(IPC.dustInstallCli).finally(() => {
+      ipcRenderer.removeListener(IPC.dustInstallCliProgress, listener)
+    })
+  },
   cliDetect: (provider: ProviderId): Promise<CliActionResult> =>
     ipcRenderer.invoke(IPC.cliDetect, provider),
   cliSetup: (provider: ProviderId): Promise<{ ok: boolean; error?: string }> =>
@@ -121,7 +146,22 @@ const api = {
   graphifyOpenGraph: (): Promise<string> => ipcRenderer.invoke(IPC.graphifyOpenGraph),
   brainStatus: (): Promise<import('@shared/brain').BrainStatus | null> =>
     ipcRenderer.invoke(IPC.brainStatus),
-  brainBackfill: (): Promise<{ queued: number; deferred?: 'no-provider'; preparing?: boolean }> => ipcRenderer.invoke(IPC.brainBackfill),
+  brainBackfill: (): Promise<{
+    queued: number
+    deferred?: 'no-provider'
+    preparing?: boolean
+    error?: string
+    recapped?: number
+    upToDate?: boolean
+    lastIndexedAt?: number
+  }> => ipcRenderer.invoke(IPC.brainBackfill),
+  brainIntelligencePass: (): Promise<{
+    queued: number
+    deferred?: 'no-provider'
+    preparing?: boolean
+    error?: string
+    upToDate?: boolean
+  }> => ipcRenderer.invoke(IPC.brainIntelligencePass),
   brainOpenDashboard: (): Promise<{ ok: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.brainOpenDashboard),
   // MI-2.5 Fix F: `error` is set (queued: 0) when a purge failure aborts the rebuild before it starts.
@@ -142,18 +182,30 @@ const api = {
   parakeetStatus: (): Promise<{ ready: boolean; addonError: string | null }> =>
     ipcRenderer.invoke(IPC.parakeetStatus),
   parakeetEnsure: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.parakeetEnsure),
-  // Returns {text, name?} — name is the Speaker Intelligence label for THEM windows when enabled
-  // (older shape was a bare string; the renderer normalizes both while the contract settles).
-  parakeetFeed: (samples: Float32Array, speaker: string): Promise<string | { text: string; name?: string }> =>
+  // Returns {text, name?, echo?} — name is the Speaker Intelligence label for THEM windows when enabled;
+  // echo:true means operator bleed was dropped (renderer must not count that as an ASR stall).
+  // (Older shape was a bare string; the renderer normalizes both while the contract settles.)
+  parakeetFeed: (
+    samples: Float32Array,
+    speaker: string
+  ): Promise<string | { text: string; name?: string; echo?: boolean }> =>
     ipcRenderer.invoke(IPC.parakeetFeed, { samples, speaker }),
   onParakeetProgress: (cb: (pct: number) => void): (() => void) => {
     const h = (_e: unknown, d: { pct: number }): void => cb(d.pct)
     ipcRenderer.on(IPC.parakeetProgress, h)
     return () => ipcRenderer.removeListener(IPC.parakeetProgress, h)
   },
-  // Apple Speech (on-device, macOS only) — same {text, name?} shape and speaker ride-along as parakeetFeed.
-  appleSpeechFeed: (samples: Float32Array, speaker: string): Promise<string | { text: string; name?: string }> =>
+  // Apple Speech (on-device, macOS only) — same {text, name?, echo?} shape and speaker ride-along as parakeetFeed.
+  appleSpeechFeed: (
+    samples: Float32Array,
+    speaker: string
+  ): Promise<string | { text: string; name?: string; echo?: boolean }> =>
     ipcRenderer.invoke(IPC.appleSpeechFeed, { samples, speaker }),
+  // Speaker Intelligence's engine-independent embedding tap (see IPC.speakerEmbed's own comment) — the
+  // Whisper path's equivalent of the label ride-along parakeetFeed/appleSpeechFeed carry for free.
+  // echo:true → renderer drops the already-committed THEM line (operator loopback bleed).
+  speakerEmbed: (samples: Float32Array, speaker: string): Promise<{ name?: string; echo?: boolean }> =>
+    ipcRenderer.invoke(IPC.speakerEmbed, { samples, speaker }),
 
   ask: (req: AskStart): Promise<void> => ipcRenderer.invoke(IPC.askStart, req),
   cancel: (id: string): Promise<void> => ipcRenderer.invoke(IPC.askCancel, id),
@@ -173,12 +225,27 @@ const api = {
   saveNote: (n: SaveNote): Promise<{ path: string }> => ipcRenderer.invoke(IPC.saveNote, n),
   // Import audio file: pick → hand off to the main-owned background job. The overlay never receives raw audio bytes.
   importAudioPick: (): Promise<ImportAudioPickResult> => ipcRenderer.invoke(IPC.importAudioPick),
+  importAudioDrop: (files: unknown[]): Promise<ImportAudioPickResult> => {
+    const paths: string[] = []
+    for (const file of files) {
+      try {
+        const path = webUtils.getPathForFile(file as never)
+        if (path) paths.push(path)
+      } catch {
+        /* skip a file the OS will not reveal */
+      }
+    }
+    return ipcRenderer.invoke(IPC.importAudioOffer, { paths })
+  },
   importAudioStart: (token: string): Promise<ImportJobView> => ipcRenderer.invoke(IPC.importAudioStart, { token }),
+  importAudioStartBatch: (tokens: string[]): Promise<ImportJobView[]> =>
+    ipcRenderer.invoke(IPC.importAudioStartBatch, { tokens }),
   importJobsList: (): Promise<ImportJobView[]> => ipcRenderer.invoke(IPC.importJobsList),
   importJobCancel: (jobId: string): Promise<void> => ipcRenderer.invoke(IPC.importJobCancel, { jobId }),
   importJobResume: (jobId: string): Promise<ImportJobView> => ipcRenderer.invoke(IPC.importJobResume, { jobId }),
   importJobRemove: (jobId: string): Promise<void> => ipcRenderer.invoke(IPC.importJobRemove, { jobId }),
   onImportAudioProgress: (cb: (d: ImportAudioProgress) => void): Unsub => sub(IPC.importAudioProgress, cb),
+  onImportAssetsProgress: (cb: (d: ImportAssetsProgress) => void): Unsub => sub(IPC.importAssetsProgress, cb),
   answerFeedback: (f: AnswerFeedback): Promise<void> => ipcRenderer.invoke(IPC.answerFeedback, f),
   readMetrics: (): Promise<EvalMetrics> => ipcRenderer.invoke(IPC.metricsRead),
   exportRecapJson: (markdown: string): Promise<RecapExport> =>
@@ -278,9 +345,13 @@ const api = {
     ipcRenderer.invoke(IPC.brainAttention),
   setListeningState: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.listeningState, on),
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
+  asrAssetsStatus: (): Promise<AsrAssetsStatus> => ipcRenderer.invoke(IPC.asrAssetsStatus),
+  asrAssetsEnsure: (): Promise<AsrAssetsStatus> => ipcRenderer.invoke(IPC.asrAssetsEnsure),
 
-  // Métis Local (on-device LLM): read-only readiness for the model included in the installer.
+  // Métis Local (on-device LLM): readiness plus start/retry. Local AI `enabled` is routing only —
+  // this does not require toggling it on.
   localModelsList: (): Promise<LocalModelSummary[]> => ipcRenderer.invoke(IPC.localModelsList),
+  localModelsEnsure: (): Promise<{ ok: boolean }> => ipcRenderer.invoke(IPC.localModelsEnsure),
   // MQA-247: the high-accuracy transcription model, fetched on demand rather than shipped (1.61 GB would
   // put the installer over GitHub's 2 GiB per-asset limit). Paths never cross this boundary — the renderer
   // gets readiness, a status word, a fraction, and the byte count it must show before asking for consent.
@@ -300,6 +371,14 @@ const api = {
   windowMoveBy: (dx: number, dy: number): Promise<void> =>
     ipcRenderer.invoke(IPC.windowMoveBy, { dx, dy }),
   minimize: (narrow: boolean): Promise<void> => ipcRenderer.invoke(IPC.windowMinimize, narrow),
+  // Auto-hide: pin the overlay to the top-center of its current display (grows downward from the top
+  // edge). Fire-and-forget; never shows/focuses the window, so the foreground app keeps focus.
+  anchorTop: (): Promise<void> => ipcRenderer.invoke(IPC.windowAnchorTop),
+  // Auto-hide reveal: widen the window back to the full bar width after the peek narrowed it.
+  revealWidth: (): Promise<void> => ipcRenderer.invoke(IPC.windowRevealWidth),
+  onOverlayCursorHover: (cb: (d: { hovering: boolean }) => void): Unsub =>
+    sub(IPC.overlayCursorHover, cb),
+  parkAfterHide: (): Promise<void> => ipcRenderer.invoke(IPC.overlayParkAfterHide),
   // A caught render-throw (ErrorBoundary) — fire-and-forget, best-effort. Main persists it to disk (same
   // sink as a main-process crash) so a field report survives without ASKTOTO_DEBUG_RENDERER devtools.
   reportCrash: (message: string, stack?: string, componentStack?: string): Promise<void> =>
@@ -343,13 +422,54 @@ const api = {
   // returns the same shape mcpTestConnection/mcpSaveConnection do — main has already persisted the
   // tokens and upserted the mcpConnections entry by the time this resolves.
   mcpClickupConnect: (): Promise<McpConnectResult> => ipcRenderer.invoke(IPC.mcpClickupConnect),
+  // Names the ClickUp list (last successful, else last-updated). Does not create a task.
+  mcpClickupDiscoverDestination: (): Promise<McpConnectResult> =>
+    ipcRenderer.invoke(IPC.mcpClickupDiscoverDestination),
+  mcpPlaneConnect: (): Promise<McpConnectResult> => ipcRenderer.invoke(IPC.mcpPlaneConnect),
+  timeSavedRead: (): Promise<{
+    savedMinutes: number
+    byKind: Record<'note-taking' | 'second-brain' | 'email-summary' | 'mcp-push', number>
+    events: number
+    recent: Array<{
+      kind: 'note-taking' | 'second-brain' | 'email-summary' | 'mcp-push'
+      timestamp: number
+      estimatedMinutes: number
+      connector?: 'bidstack' | 'plane' | 'clickup' | 'outlook' | 'none'
+    }>
+  }> => ipcRenderer.invoke(IPC.timeSavedRead),
+  timeSavedRecord: (payload: TimeSavedRecordPayload): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.timeSavedRecord, payload),
+  outlookWriteStatus: (): Promise<{ signedIn: boolean; canDraft: boolean; canEvent: boolean }> =>
+    ipcRenderer.invoke(IPC.outlookWriteStatus),
+  outlookCreateDraft: (payload: OutlookDraftPayload): Promise<{ ok: boolean; error?: string; needsConsent?: boolean }> =>
+    ipcRenderer.invoke(IPC.outlookCreateDraft, payload),
+  outlookCreateEvent: (payload: OutlookEventPayload): Promise<{ ok: boolean; error?: string; needsConsent?: boolean }> =>
+    ipcRenderer.invoke(IPC.outlookCreateEvent, payload),
+  mcpWriteTargets: (): Promise<
+    Array<{ ready: boolean; intent: string; action: string; label: string; reason?: string }>
+  > => ipcRenderer.invoke(IPC.mcpWriteTargets),
 
+  operatorOpen: (): Promise<void> => ipcRenderer.invoke(IPC.operatorOpen),
   licenseActivate: (payload: LicenseActivatePayload): Promise<LicenseActivateResult> =>
     ipcRenderer.invoke(IPC.licenseActivate, payload),
   licenseStatus: (): Promise<LicenseStatusResult> => ipcRenderer.invoke(IPC.licenseStatus),
   // Boot-gate verdict — see the license:gate handler in main/index.ts for why this is a separate,
   // non-auth-gated channel from licenseStatus.
-  licenseGate: (): Promise<LicenseGateVerdict> => ipcRenderer.invoke(IPC.licenseGate)
+  licenseGate: (): Promise<LicenseGateVerdict> => ipcRenderer.invoke(IPC.licenseGate),
+  cloudflareConnect: (): Promise<{ ok: boolean; href?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.cloudflareConnect),
+  identitySnapshot: (): Promise<IdentitySnapshot> => ipcRenderer.invoke(IPC.identitySnapshot),
+  memberLicenseActivate: (payload: MemberActivatePayload): Promise<MemberActivateResult> =>
+    ipcRenderer.invoke(IPC.memberLicenseActivate, payload),
+  memberLicenseDeactivate: (): Promise<MemberLicenseStatus> => ipcRenderer.invoke(IPC.memberLicenseDeactivate),
+  memberLicenseStatus: (): Promise<MemberLicenseStatus> => ipcRenderer.invoke(IPC.memberLicenseStatus),
+  memberLicenseVerifyCached: (): Promise<MemberLicenseStatus> =>
+    ipcRenderer.invoke(IPC.memberLicenseVerifyCached),
+  memberLicenseImportFile: (): Promise<MemberActivateResult> =>
+    ipcRenderer.invoke(IPC.memberLicenseImportFile),
+  // Act 5 — informational GET /license/config read, for the onboarding ActLicense scene.
+  licenseConfig: (payload: LicenseConfigPayload): Promise<LicenseConfigResult> =>
+    ipcRenderer.invoke(IPC.licenseConfig, payload)
 }
 
 contextBridge.exposeInMainWorld('toto', api)

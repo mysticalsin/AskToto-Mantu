@@ -29,6 +29,17 @@
   "requireConsentIndicator": true,
   "autoSaveTranscripts": true,
   "transcriptRetentionDays": 90,
+  "_comment_egress": "egressAllowlist restricts every outbound host on both network stacks (main-process fetch and the Chromium session). Hostnames only; *.example.com covers subdomains; loopback is always allowed. Remove the key for no restriction. The full host list per feature is in docs/NETWORK-EGRESS.md. This example matches allowedProviders above plus sign-in, calendar, and updates.",
+  "egressAllowlist": [
+    "login.microsoftonline.com",
+    "graph.microsoft.com",
+    "*.dust.tt",
+    "api.workos.com",
+    "api.anthropic.com",
+    "api.openai.com",
+    "licenses.asktoto.example.com",
+    "updates.your-corp.example"
+  ],
   "_comment_updates": "updateFeedUrl points electron-updater at an internally hosted generic feed (latest.yml + installer + blockmap) instead of the public GitHub releases repo. Admin (machine) policy only; must be https. Remove the key to use the built-in feed. disableAutoUpdate: true freezes updates entirely.",
   "updateFeedUrl": "https://updates.your-corp.example/metis/"
 }

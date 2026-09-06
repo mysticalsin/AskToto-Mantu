@@ -1,6 +1,7 @@
 import { isValidElement, cloneElement, useEffect, type ReactElement } from 'react'
 import { Streamdown } from 'streamdown'
 import { CodeBlock, warmHighlighter } from './CodeBlock'
+import { safeHref } from '@shared/safe-url'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // Override streamdown's code rendering with our shiki block (reliable colors) and
@@ -17,7 +18,16 @@ import { CodeBlock, warmHighlighter } from './CodeBlock'
 const components: any = {
   code: CodeBlock,
   pre: ({ children }: any) =>
-    isValidElement(children) ? cloneElement(children as ReactElement, { 'data-block': true }) : children
+    isValidElement(children) ? cloneElement(children as ReactElement, { 'data-block': true }) : children,
+  a: ({ href, children, ...rest }: any) => {
+    const safe = safeHref(href)
+    if (!safe) return <span>{children}</span>
+    return (
+      <a href={safe} target="_blank" rel="noopener noreferrer" {...rest}>
+        {children}
+      </a>
+    )
+  }
 }
 
 export function Markdown({ children }: { children: string }): JSX.Element {

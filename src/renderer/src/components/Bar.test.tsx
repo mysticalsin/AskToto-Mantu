@@ -1,5 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server'
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { overlayAllowsMinimize } from '@shared/overlay-chrome'
+import { orbHostPaintsText } from '../lib/bar-pill-orb'
 import { Bar, type BarProps } from './Bar'
 
 function props(overrides: Partial<BarProps> = {}): BarProps {
@@ -31,6 +33,72 @@ function props(overrides: Partial<BarProps> = {}): BarProps {
     ...overrides
   }
 }
+
+describe('Bar minimize-to-circle is layout-gated', () => {
+  it('shows the minimize control on bar and hides it on hide/island', () => {
+    const bar = renderToStaticMarkup(<Bar {...props({ canMinimize: overlayAllowsMinimize('bar') })} />)
+    const hide = renderToStaticMarkup(<Bar {...props({ canMinimize: overlayAllowsMinimize('hide') })} />)
+    const island = renderToStaticMarkup(<Bar {...props({ canMinimize: overlayAllowsMinimize('island') })} />)
+    expect(bar).toContain('Minimize to the orb')
+    expect(hide).not.toContain('Minimize to the orb')
+    expect(island).not.toContain('Minimize to the orb')
+  })
+
+  it('docks a solving thinking-orb at rest with no painted caption', () => {
+    const html = renderToStaticMarkup(<Bar {...props({ canMinimize: overlayAllowsMinimize('bar') })} />)
+    expect(html).toContain('data-bar-pill-orb')
+    expect(html).toContain('data-orb-state="solving"')
+    expect(html).toContain('data-orb-visible="41"')
+    expect(html).toContain('data-orb-backing="128"')
+    expect(orbHostPaintsText(html)).toBe(false)
+    expect(html).not.toContain('Solving…')
+  })
+
+  it('uses the listening thinking-orb on the docked visible circle, not a second red disc', () => {
+    const html = renderToStaticMarkup(
+      <Bar {...props({ canMinimize: overlayAllowsMinimize('bar'), listening: true })} />
+    )
+    expect(html).toContain('data-bar-pill-orb')
+    expect(html).toContain('data-orb-listening')
+    expect(html).toContain('data-orb-state="listening"')
+    expect(html).toContain('data-orb-visible="41"')
+    expect(html).toContain('data-orb-backing="128"')
+    expect(html).not.toContain('aw-orb__rec')
+    expect(html).not.toContain('data-orb-mood="connecting"')
+  })
+
+  it('keeps the left Settings M a locked circle when Listen starts', () => {
+    const idle = renderToStaticMarkup(<Bar {...props()} />)
+    const listen = renderToStaticMarkup(<Bar {...props({ listening: true })} />)
+    for (const html of [idle, listen]) {
+      expect(html).toContain('data-bar-mark')
+      expect(html).toContain('aw-bar-mark')
+      expect(html).toContain('aw-bar-mark__disk')
+      expect(html).toContain('rounded-full')
+      expect(html).toMatch(/aria-label="Settings"/)
+    }
+    expect(listen).not.toContain('w-[100px]')
+    expect(listen).toContain('data-bar-mark')
+    expect(listen).toContain('data-bar-listen-timer')
+    expect(listen).not.toContain('New meeting')
+    expect(listen).not.toMatch(/data-bar-mark[\s\S]{0,500}rounded-\[10px\]/)
+  })
+})
+
+describe('Bar listening toolbar does not stack New meeting on the timer', () => {
+  it('hides New meeting while listening and keeps Transcript + timer + orb', () => {
+    const listen = renderToStaticMarkup(<Bar {...props({ listening: true, canMinimize: true })} />)
+    const idle = renderToStaticMarkup(<Bar {...props({ listening: false, canMinimize: true })} />)
+
+    expect(listen).toContain('data-bar-listening="true"')
+    expect(listen).toContain('data-bar-listen-timer')
+    expect(listen).toContain('Transcript')
+    expect(listen).toContain('data-bar-pill-orb')
+    expect(listen).not.toContain('New meeting')
+    expect(idle).toContain('History')
+    expect(idle).not.toContain('data-bar-listen-timer')
+  })
+})
 
 describe('Bar Spotlight Ref control', () => {
   it('keeps Spotlight Ref discoverable when Dust is not configured', () => {
@@ -136,10 +204,10 @@ describe('Bar screen-share visibility control (MQA-036)', () => {
   it('states the CURRENT state and what clicking will do, in both directions', () => {
     const hidden = renderToStaticMarkup(<Bar {...props({ stealth: true })} />)
     expect(hidden).toContain('Hidden from screen share')
-    expect(hidden).toContain('click to make Métis visible')
+    expect(hidden).toContain('Click to make Métis visible')
 
     const visible = renderToStaticMarkup(<Bar {...props({ stealth: false })} />)
     expect(visible).toContain('Visible in screen share')
-    expect(visible).toContain('click to hide Métis')
+    expect(visible).toContain('Click to hide Métis')
   })
 })

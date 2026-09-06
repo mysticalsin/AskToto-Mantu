@@ -7,7 +7,7 @@ import {
   FileText,
   Pause
 } from 'lucide-react'
-import { Spinner } from './ui'
+import { InlineOrb } from './AgentStatus'
 import { accelLabel } from '../lib/keys'
 
 function clock(s: number): string {
@@ -67,7 +67,7 @@ export function ControlBar(props: ControlBarProps): JSX.Element {
         onClick={onCapture}
         className="no-drag focus-ring grid place-items-center rounded-lg p-1 text-[color:var(--color-ink-3)] transition-colors duration-[var(--duration-hover)] hover:text-[color:var(--color-ink)]"
       >
-        {capturing ? <Spinner size={18} /> : <Image size={18} strokeWidth={1.85} />}
+        {capturing ? <InlineOrb kind="working" /> : <Image size={18} strokeWidth={1.85} />}
       </button>
 
       {/* Stealth — danger-colored when NOT in stealth (i.e. visible to screen sharing) */}

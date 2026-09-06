@@ -6,6 +6,7 @@ import path from 'node:path';
 import { createApp } from './lib/app.mjs';
 import { createStore } from './lib/store.mjs';
 import { createAuditLog } from './lib/audit.mjs';
+import { generateLeaseKeyPair, loadLeaseSigningKey, verifyLease, rawToPublicKey } from './lib/lease.mjs';
 
 const ADMIN_TOKEN = 'test-admin-token';
 const THIRTY_ONE_DAYS_MS = 31 * 24 * 60 * 60 * 1000;
@@ -17,13 +18,16 @@ let baseUrl;
 let tmpDir;
 let previousAdminToken;
 
-async function startServer() {
+async function startServer(options = {}) {
   tmpDir = await mkdtemp(path.join(tmpdir(), 'license-server-test-'));
   const dbPath = path.join(tmpDir, 'licenses.json');
   store = createStore(dbPath);
   await store.load();
   auditLog = createAuditLog(dbPath);
-  const app = createApp(store, auditLog);
+  const app = createApp(store, auditLog, {
+    leaseSigningKey: options.leaseSigningKey,
+    leaseTtlMs: options.leaseTtlMs,
+  });
   server = app.listen(0);
   await new Promise((resolve) => server.once('listening', resolve));
   const { port } = server.address();
@@ -237,6 +241,8 @@ describe('license-server', () => {
     // A license record missing its key is invalid -> 400, store untouched.
     const bad = await post('/admin/restore', { licenses: [{ companyName: 'No Key', seatCap: 1, activations: [] }] }, adminHeaders());
     assert.equal(bad.status, 400);
+    assert.deepEqual(bad.json, { ok: false, error: 'invalid_request' });
+    assert.equal(Object.prototype.hasOwnProperty.call(bad.json, 'message'), false);
     const still = await get('/admin/export', adminHeaders());
     assert.equal(still.json.licenses.length, 1);
     assert.equal(still.json.licenses[0].licenseKey, 'ATK-0000000000000000TEST');
@@ -283,6 +289,16 @@ describe('license-server', () => {
     assert.equal(retry.json.seatsUsed, 1);
   });
 
+  it('rate-limits a burst of /deactivate calls (429 after the window cap)', async () => {
+    seedLicense({ seatCap: 1000 });
+    let sawLimited = false;
+    for (let i = 0; i < 30; i++) {
+      const r = await post('/deactivate', { licenseKey: 'ATK-0000000000000000TEST', machineId: 'm-' + i });
+      if (r.status === 429) { sawLimited = true; break; }
+    }
+    assert.equal(sawLimited, true, 'a burst well over the per-minute cap must be rate-limited');
+  });
+
   it('rejects an unknown license key', async () => {
     const { json } = await post('/activate', { licenseKey: 'ATK-DOESNOTEXIST00000000', machineId: 'machine-1' });
     assert.deepEqual(json, { ok: false, error: 'invalid' });
@@ -310,6 +326,86 @@ describe('license-server', () => {
     const { status, json } = await get('/admin/licenses', adminHeaders());
     assert.equal(status, 503);
     assert.equal(json.error, 'admin_disabled');
+  });
+
+  it('exchanges a bearer token for an httpOnly session cookie that can call admin APIs', async () => {
+    const res = await fetch(`${baseUrl}/admin/session`, {
+      method: 'POST',
+      headers: { ...adminHeaders(), 'content-type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(res.status, 200);
+    const setCookie = res.headers.getSetCookie();
+    const line = setCookie.find((c) => c.startsWith('metis_admin_session='));
+    assert.ok(line, 'Set-Cookie must include metis_admin_session');
+    assert.match(line, /HttpOnly/i);
+    assert.match(line, /SameSite=Strict/i);
+    assert.doesNotMatch(line, new RegExp(ADMIN_TOKEN));
+    const id = /metis_admin_session=([a-f0-9]{64})/.exec(line)?.[1];
+    assert.ok(id);
+    const list = await get('/admin/licenses', { cookie: `metis_admin_session=${id}` });
+    assert.equal(list.status, 200);
+    assert.ok(Array.isArray(list.json));
+
+    const check = await get('/admin/session', { cookie: `metis_admin_session=${id}` });
+    assert.equal(check.status, 200);
+    assert.equal(check.json.ok, true);
+  });
+
+  it('marks the session cookie Secure on HTTPS and forgets it on DELETE', async () => {
+    const res = await fetch(`${baseUrl}/admin/session`, {
+      method: 'POST',
+      headers: { ...adminHeaders(), 'content-type': 'application/json', 'x-forwarded-proto': 'https' },
+      body: '{}',
+    });
+    assert.equal(res.status, 200);
+    const line = res.headers.getSetCookie().find((c) => c.startsWith('metis_admin_session='));
+    assert.match(line, /Secure/i);
+    const id = /metis_admin_session=([a-f0-9]{64})/.exec(line)?.[1];
+
+    const gone = await del('/admin/session', { cookie: `metis_admin_session=${id}` });
+    assert.equal(gone.status, 200);
+    const after = await get('/admin/licenses', { cookie: `metis_admin_session=${id}` });
+    assert.equal(after.status, 401);
+  });
+
+  it('admin UI HTML never stores the bearer in localStorage', async () => {
+    const res = await fetch(`${baseUrl}/admin/ui`);
+    assert.equal(res.status, 200);
+    const html = await res.text();
+    assert.doesNotMatch(html, /localStorage/);
+    assert.match(html, /\/admin\/session/);
+    assert.match(html, /credentials: 'same-origin'/);
+  });
+
+  it('attack logs hash the client IP and never print the raw address, token, or license key', async () => {
+    const lines = [];
+    const orig = console.warn;
+    console.warn = (...args) => {
+      lines.push(args.map(String).join(' '));
+    };
+    try {
+      await get('/admin/licenses', { ...adminHeaders('wrong-token'), 'x-forwarded-for': '203.0.113.88' });
+      seedLicense({ seatCap: 1000 });
+      for (let i = 0; i < 30; i++) {
+        const r = await post(
+          '/activate',
+          { licenseKey: 'ATK-0000000000000000TEST', machineId: 'log-' + i },
+          { 'x-forwarded-for': '198.51.100.44' }
+        );
+        if (r.status === 429) break;
+      }
+    } finally {
+      console.warn = orig;
+    }
+    const joined = lines.join('\n');
+    assert.match(joined, /admin_auth_failed ip_hash=[a-f0-9]{16}/);
+    assert.match(joined, /rate_limited route=\/activate ip_hash=[a-f0-9]{16}/);
+    assert.doesNotMatch(joined, /203\.0\.113\.88/);
+    assert.doesNotMatch(joined, /198\.51\.100\.44/);
+    assert.doesNotMatch(joined, /wrong-token/);
+    assert.doesNotMatch(joined, /test-admin-token/);
+    assert.doesNotMatch(joined, /ATK-0000000000000000TEST/);
   });
 
   it('admin can create a license and it round-trips through list/detail/patch', async () => {
@@ -604,7 +700,7 @@ describe('license-server', () => {
     assert.equal(afterReenable.status, 200);
   });
 
-  it('GET /health returns version, uptimeSeconds, and licenseCount alongside ok:true', async () => {
+  it('GET /health returns version and uptimeSeconds, and does not disclose licenseCount', async () => {
     seedLicense({ licenseKey: 'ATK-HEALTH-0000000000001' });
     seedLicense({ licenseKey: 'ATK-HEALTH-0000000000002' });
 
@@ -617,12 +713,325 @@ describe('license-server', () => {
     assert.match(json.version, /^\d+\.\d+\.\d+/);
     assert.equal(typeof json.uptimeSeconds, 'number');
     assert.ok(json.uptimeSeconds >= 0);
-    assert.equal(json.licenseCount, 2);
+    assert.equal(json.licenseCount, undefined);
+    assert.equal(Object.prototype.hasOwnProperty.call(json, 'licenseCount'), false);
   });
 
   it('GET /health requires no auth', async () => {
     const res = await fetch(`${baseUrl}/health`);
     assert.equal(res.status, 200);
+  });
+
+  it('HTTP responses send nosniff and frame-deny, and HSTS only when the request is HTTPS', async () => {
+    const httpRes = await fetch(`${baseUrl}/health`);
+    assert.equal(httpRes.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(httpRes.headers.get('x-frame-options'), 'DENY');
+    assert.equal(httpRes.headers.get('referrer-policy'), 'no-referrer');
+    assert.equal(httpRes.headers.get('strict-transport-security'), null);
+
+    const httpsRes = await fetch(`${baseUrl}/health`, { headers: { 'x-forwarded-proto': 'https' } });
+    assert.equal(httpsRes.headers.get('x-content-type-options'), 'nosniff');
+    assert.equal(httpsRes.headers.get('x-frame-options'), 'DENY');
+    assert.equal(httpsRes.headers.get('strict-transport-security'), 'max-age=31536000; includeSubDomains');
+
+    const ui = await fetch(`${baseUrl}/admin/ui`);
+    assert.equal(ui.status, 200);
+    assert.equal(ui.headers.get('x-frame-options'), 'DENY');
+    assert.equal(ui.headers.get('x-content-type-options'), 'nosniff');
+  });
+
+  it('forged inbound webhook paths cannot create a license', async () => {
+    seedLicense({ licenseKey: 'ATK-0000000000000000TEST', seatCap: 2 });
+    const before = store.getAll().length;
+    for (const path of ['/webhook', '/stripe', '/stripe/webhook', '/lemon', '/hooks', '/hooks/license']) {
+      const r = await post(path, { licenseKey: 'ATK-FORGED-FROM-WEBHOOK0001', seatCap: 99, type: 'checkout.session.completed' });
+      assert.equal(r.status, 404, path);
+    }
+    assert.equal(store.getAll().length, before);
+    const { readFileSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
+    const { dirname, join } = await import('node:path');
+    const appSrc = readFileSync(join(dirname(fileURLToPath(import.meta.url)), 'lib', 'app.mjs'), 'utf8');
+    assert.doesNotMatch(appSrc, /app\.(post|put|patch)\('\/(webhook|stripe|lemon|hooks)/);
+  });
+});
+
+// The Ed25519 offline lease (lib/lease.mjs) is additive: existing activate/heartbeat behaviour
+// (seat math, revoked/expired/invalid rejection, idempotent re-activation) is entirely unaffected
+// and already covered above. This suite runs a SEPARATE server instance configured with a real
+// signing key so it can assert on the `lease` field specifically, without polluting the base
+// describe block (whose server intentionally has no signing key, matching "unset by default").
+describe('license-server (offline Ed25519 lease)', () => {
+  let leaseSigningKey;
+
+  beforeEach(async () => {
+    previousAdminToken = process.env.LICENSE_ADMIN_TOKEN;
+    process.env.LICENSE_ADMIN_TOKEN = ADMIN_TOKEN;
+    const { privateKeyPem } = generateLeaseKeyPair();
+    leaseSigningKey = loadLeaseSigningKey(privateKeyPem);
+    await startServer({ leaseSigningKey });
+  });
+
+  afterEach(async () => {
+    if (previousAdminToken === undefined) delete process.env.LICENSE_ADMIN_TOKEN;
+    else process.env.LICENSE_ADMIN_TOKEN = previousAdminToken;
+    await stopServer();
+  });
+
+  it('activate returns a lease that verifies against the server public key', async () => {
+    seedLicense({ seatCap: 2, companyName: 'Lease Co' });
+    const before = Date.now();
+    const { json } = await post('/activate', { licenseKey: 'ATK-0000000000000000TEST', machineId: 'machine-1' });
+
+    assert.equal(json.ok, true);
+    assert.equal(typeof json.lease, 'string');
+    assert.match(json.lease, /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/);
+
+    const payload = verifyLease(json.lease, leaseSigningKey.publicKey);
+    assert.ok(payload, 'a freshly-issued lease must verify against the signing key that issued it');
+    assert.equal(payload.licenseKey, 'ATK-0000000000000000TEST');
+    assert.equal(payload.machineId, 'machine-1');
+    assert.equal(payload.companyName, 'Lease Co');
+    assert.equal(payload.seatCap, 2);
+    assert.ok(payload.issuedAt >= before);
+    assert.ok(payload.notAfter > payload.issuedAt, 'notAfter must be in the future relative to issuedAt');
+  });
+
+  it('heartbeat returns a fresh, independently-verifiable lease', async () => {
+    seedLicense({ seatCap: 1 });
+    await post('/activate', { licenseKey: 'ATK-0000000000000000TEST', machineId: 'machine-1' });
+
+    const beat = await post('/heartbeat', { licenseKey: 'ATK-0000000000000000TEST', machineId: 'machine-1' });
+    assert.equal(typeof beat.json.lease, 'string');
+    const payload = verifyLease(beat.json.lease, leaseSigningKey.publicKey);
+    assert.ok(payload);
+    assert.equal(payload.machineId, 'machine-1');
+  });
+
+  it('re-activating an already-activated machine also refreshes the lease (idempotent path)', async () => {
+    seedLicense({ seatCap: 1 });
+    const first = await post('/activate', { licenseKey: 'ATK-0000000000000000TEST', machineId: 'machine-1' });
+    const second = await post('/activate', { licenseKey: 'ATK-0000000000000000TEST', machineId: 'machine-1' });
+
+    assert.equal(typeof first.json.lease, 'string');
+    assert.equal(typeof second.json.lease, 'string');
+    assert.ok(verifyLease(second.json.lease, leaseSigningKey.publicKey));
+  });
+
+  it('never issues a lease for a rejected activate/heartbeat (invalid, revoked, expired, seat-capped)', async () => {
+    const invalid = await post('/activate', { licenseKey: 'ATK-DOESNOTEXIST00000000', machineId: 'm1' });
+    assert.equal(invalid.json.lease, undefined);
+
+    seedLicense({ licenseKey: 'ATK-000000000000000EXPD1', seatCap: 1, expiresAt: Date.now() - 1000 });
+    const expired = await post('/activate', { licenseKey: 'ATK-000000000000000EXPD1', machineId: 'm1' });
+    assert.equal(expired.json.lease, undefined);
+
+    seedLicense({ licenseKey: 'ATK-000000000000000CAP01', seatCap: 1 });
+    await post('/activate', { licenseKey: 'ATK-000000000000000CAP01', machineId: 'm1' });
+    const capped = await post('/activate', { licenseKey: 'ATK-000000000000000CAP01', machineId: 'm2' });
+    assert.equal(capped.json.lease, undefined);
+
+    const unheartbeat = await post('/heartbeat', { licenseKey: 'ATK-000000000000000CAP01', machineId: 'never-activated' });
+    assert.equal(unheartbeat.json.lease, undefined);
+  });
+
+  it('a tampered lease payload is rejected even though the signature segment is well-formed', async () => {
+    seedLicense({ seatCap: 1 });
+    const { json } = await post('/activate', { licenseKey: 'ATK-0000000000000000TEST', machineId: 'machine-1' });
+
+    const [payloadB64, sigB64] = json.lease.split('.');
+    const payload = JSON.parse(Buffer.from(payloadB64, 'base64url').toString('utf8'));
+    // Attempt a seat-cap bypass: swap in a different machineId, keep the ORIGINAL signature.
+    payload.machineId = 'someone-elses-machine';
+    const tamperedPayloadB64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
+    const tamperedLease = `${tamperedPayloadB64}.${sigB64}`;
+
+    assert.equal(verifyLease(tamperedLease, leaseSigningKey.publicKey), null);
+    // The original, unmodified lease must still verify — tampering isn't corrupting the fixture itself.
+    assert.ok(verifyLease(json.lease, leaseSigningKey.publicKey));
+  });
+
+  it('a lease signed by a different key pair is rejected by this server\'s public key', async () => {
+    seedLicense({ seatCap: 1 });
+    const { json } = await post('/activate', { licenseKey: 'ATK-0000000000000000TEST', machineId: 'machine-1' });
+
+    const otherKeyPair = loadLeaseSigningKey(generateLeaseKeyPair().privateKeyPem);
+    assert.equal(verifyLease(json.lease, otherKeyPair.publicKey), null);
+    // ...but it verifies fine against the key that actually signed it.
+    assert.ok(verifyLease(json.lease, leaseSigningKey.publicKey));
+  });
+
+  it('verifyLease rejects malformed tokens without throwing', () => {
+    assert.equal(verifyLease('', leaseSigningKey.publicKey), null);
+    assert.equal(verifyLease('not-a-lease-token', leaseSigningKey.publicKey), null);
+    assert.equal(verifyLease('too.many.dots', leaseSigningKey.publicKey), null);
+    assert.equal(verifyLease('..', leaseSigningKey.publicKey), null);
+    assert.equal(verifyLease(null, leaseSigningKey.publicKey), null);
+    assert.equal(verifyLease(undefined, leaseSigningKey.publicKey), null);
+    assert.equal(verifyLease(42, leaseSigningKey.publicKey), null);
+  });
+
+  it('accepts the raw base64url public key string directly (no KeyObject reconstruction needed by callers)', async () => {
+    seedLicense({ seatCap: 1 });
+    const { json } = await post('/activate', { licenseKey: 'ATK-0000000000000000TEST', machineId: 'machine-1' });
+    const payload = verifyLease(json.lease, leaseSigningKey.publicKeyRaw);
+    assert.ok(payload);
+    assert.equal(payload.machineId, 'machine-1');
+    // And the round-trip helper produces a KeyObject equivalent to constructing one by hand.
+    const reconstructed = rawToPublicKey(leaseSigningKey.publicKeyRaw);
+    assert.ok(verifyLease(json.lease, reconstructed));
+  });
+
+  it('GET /license/pubkey exposes the raw Ed25519 public key when a signing key is configured', async () => {
+    const res = await fetch(`${baseUrl}/license/pubkey`);
+    assert.equal(res.status, 200);
+    const json = await res.json();
+    assert.equal(json.ok, true);
+    assert.equal(json.algorithm, 'ed25519');
+    assert.equal(json.publicKey, leaseSigningKey.publicKeyRaw);
+  });
+
+  it('GET /license/pubkey requires no auth', async () => {
+    const res = await fetch(`${baseUrl}/license/pubkey`);
+    assert.equal(res.status, 200);
+  });
+});
+
+// Mirrors the base describe block's server (no options passed to startServer/createApp), so the
+// signing key is unset — this is what "LICENSE_LEASE_PRIVATE_KEY not configured" looks like from
+// a fresh checkout with no operator setup done yet.
+describe('license-server (offline lease disabled by default)', () => {
+  beforeEach(async () => {
+    previousAdminToken = process.env.LICENSE_ADMIN_TOKEN;
+    process.env.LICENSE_ADMIN_TOKEN = ADMIN_TOKEN;
+    await startServer();
+  });
+
+  afterEach(async () => {
+    if (previousAdminToken === undefined) delete process.env.LICENSE_ADMIN_TOKEN;
+    else process.env.LICENSE_ADMIN_TOKEN = previousAdminToken;
+    await stopServer();
+  });
+
+  it('activate/heartbeat responses carry no lease field at all when no signing key is configured', async () => {
+    seedLicense({ seatCap: 1 });
+    const activate = await post('/activate', { licenseKey: 'ATK-0000000000000000TEST', machineId: 'machine-1' });
+    assert.equal(Object.prototype.hasOwnProperty.call(activate.json, 'lease'), false);
+
+    const heartbeat = await post('/heartbeat', { licenseKey: 'ATK-0000000000000000TEST', machineId: 'machine-1' });
+    assert.equal(Object.prototype.hasOwnProperty.call(heartbeat.json, 'lease'), false);
+  });
+
+  it('GET /license/pubkey 404s, the same "feature never mentioned" convention as /metrics', async () => {
+    const { status, json } = await get('/license/pubkey');
+    assert.equal(status, 404);
+    assert.equal(json.error, 'lease_disabled');
+  });
+});
+
+// POST /admin/licenses/trial — no purchase, no price, no checkout. A thin wrapper over the same
+// create path as POST /admin/licenses, so it inherits admin-auth gating, audit logging, and the
+// webhook fan-out "for free" — these tests focus on what's DIFFERENT about the trial route:
+// its defaults, its `trial: true` tag, and that a trial key activates exactly like a sold one.
+describe('license-server (admin trial minting)', () => {
+  beforeEach(async () => {
+    previousAdminToken = process.env.LICENSE_ADMIN_TOKEN;
+    process.env.LICENSE_ADMIN_TOKEN = ADMIN_TOKEN;
+    await startServer();
+  });
+
+  afterEach(async () => {
+    if (previousAdminToken === undefined) delete process.env.LICENSE_ADMIN_TOKEN;
+    else process.env.LICENSE_ADMIN_TOKEN = previousAdminToken;
+    await stopServer();
+  });
+
+  it('requires the admin token, same as every other /admin/* route', async () => {
+    const noAuth = await post('/admin/licenses/trial', {});
+    assert.equal(noAuth.status, 401);
+    assert.equal(noAuth.json.error, 'unauthorized');
+  });
+
+  it('returns 503 when LICENSE_ADMIN_TOKEN is not configured, not a silent 200', async () => {
+    delete process.env.LICENSE_ADMIN_TOKEN;
+    const { status, json } = await post('/admin/licenses/trial', {}, adminHeaders());
+    assert.equal(status, 503);
+    assert.equal(json.error, 'admin_disabled');
+  });
+
+  it('mints a 1-seat, 14-day trial by default — no price, no checkout fields accepted', async () => {
+    const before = Date.now();
+    const created = await post('/admin/licenses/trial', {}, adminHeaders());
+    assert.equal(created.status, 201);
+    assert.equal(created.json.seatCap, 1);
+    assert.equal(created.json.trial, true);
+    assert.match(created.json.licenseKey, /^ATK-[0-9A-Z]{20}$/);
+
+    const fourteenDaysMs = 14 * 24 * 60 * 60 * 1000;
+    assert.ok(created.json.expiresAt > before + fourteenDaysMs - 5_000);
+    assert.ok(created.json.expiresAt < before + fourteenDaysMs + 5_000);
+
+    const detail = await get(`/admin/licenses/${created.json.licenseKey}`, adminHeaders());
+    assert.equal(detail.json.notes, 'trial');
+    assert.equal(detail.json.trial, true);
+    assert.equal(detail.json.companyName, 'Trial');
+  });
+
+  it('honors custom seats, days, companyName, and contact fields', async () => {
+    const created = await post(
+      '/admin/licenses/trial',
+      { seats: 3, days: 30, companyName: 'Pilot Co', contactEmail: 'pilot@example.com', notes: 'inbound demo request' },
+      adminHeaders()
+    );
+    assert.equal(created.status, 201);
+    assert.equal(created.json.seatCap, 3);
+    assert.equal(created.json.companyName, 'Pilot Co');
+
+    const thirtyDaysMs = 30 * 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    assert.ok(Math.abs(created.json.expiresAt - (now + thirtyDaysMs)) < 5_000);
+
+    const detail = await get(`/admin/licenses/${created.json.licenseKey}`, adminHeaders());
+    assert.equal(detail.json.contactEmail, 'pilot@example.com');
+    assert.equal(detail.json.notes, 'inbound demo request');
+  });
+
+  it('rejects an invalid trial request body (e.g. a non-integer days) with 400, not a mint', async () => {
+    const bad = await post('/admin/licenses/trial', { days: 'soon' }, adminHeaders());
+    assert.equal(bad.status, 400);
+    assert.equal(bad.json.error, 'invalid_request');
+
+    const list = await get('/admin/licenses', adminHeaders());
+    assert.equal(list.json.length, 0, 'a rejected trial request must not create a license');
+  });
+
+  it('a trial-minted license activates exactly like a sold one, and shows trial:true in the admin list', async () => {
+    const created = await post('/admin/licenses/trial', { seats: 1 }, adminHeaders());
+    const activate = await post('/activate', { licenseKey: created.json.licenseKey, machineId: 'trial-machine' });
+    assert.equal(activate.json.ok, true);
+    assert.equal(activate.json.seatsUsed, 1);
+
+    const list = await get('/admin/licenses', adminHeaders());
+    const entry = list.json.find((l) => l.licenseKey === created.json.licenseKey);
+    assert.equal(entry.trial, true);
+  });
+
+  it('a license minted through the normal (non-trial) route reports trial:false', async () => {
+    const created = await post('/admin/licenses', { companyName: 'Sold Co', seatCap: 2 }, adminHeaders());
+    const list = await get('/admin/licenses', adminHeaders());
+    const entry = list.json.find((l) => l.licenseKey === created.json.licenseKey);
+    assert.equal(entry.trial, false);
+  });
+
+  it('records a create_trial audit entry, distinct from a normal create', async () => {
+    const created = await post('/admin/licenses/trial', { companyName: 'Audited Trial Co' }, adminHeaders());
+    await auditLog.idle();
+
+    const audit = await get('/admin/audit', adminHeaders());
+    const entry = audit.json.find((e) => e.licenseKey === created.json.licenseKey);
+    assert.ok(entry, 'trial mint must be audited');
+    assert.equal(entry.action, 'create_trial');
+    assert.equal(entry.details.companyName, 'Audited Trial Co');
   });
 });
 

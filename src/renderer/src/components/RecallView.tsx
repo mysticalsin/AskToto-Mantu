@@ -1,4 +1,4 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type DragEvent } from 'react'
 import {
   Search,
   FolderOpen,
@@ -13,13 +13,17 @@ import {
   Pencil,
   Brain,
   Upload,
-  X,
   Lock
 } from 'lucide-react'
 import { TextButton } from './ui'
+import { AgentStatus, InlineOrb } from './AgentStatus'
 import { WorkProgressMeter } from './WorkProgressMeter'
-import { describeImportProgress, describeMeetingIndexProgress } from './work-progress'
+import { describeMeetingIndexProgress } from './work-progress'
+import { IntelligenceUpdateButton } from './IntelligenceUpdateButton'
+import { runIntelligenceUpdateClick } from '../lib/intelligence-update'
 import { accelLabel } from '../lib/keys'
+import { ImportQueue } from './ImportQueue'
+import { isImportDropFile, pickedFiles, skippedImportMessage } from './import-queue'
 import type {
   MeetingSummary,
   RecallHit,
@@ -28,6 +32,7 @@ import type {
   CalendarTodayResult,
   CalendarEvent,
   ImportAudioPickResult,
+  ImportAssetsProgress,
   ImportJobView
 } from '@shared/ipc'
 
@@ -131,6 +136,16 @@ export function meetingIndexStatus(
 // Knowledge-graph status bar — unchanged from original
 // ---------------------------------------------------------------------------
 
+function formatLastIndexedAt(at?: number): string {
+  if (!at || !Number.isFinite(at) || at <= 0) return ''
+  return new Date(at).toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit'
+  })
+}
+
 function GraphBar({
   onOpenSettings,
   onDashboardOpen
@@ -147,8 +162,15 @@ function GraphBar({
   // Distinguishes the deferred "no-provider" error (fixable via Settings → AI) from any other backfill
   // failure (network blip, etc.) — only the former gets an Open Settings action below.
   const [noProvider, setNoProvider] = useState(false)
+  const applyStatus = (st: import('@shared/brain').BrainStatus | null): void => {
+    setBrain(st)
+    if (st?.error) setError(st.error)
+  }
   useEffect(() => {
-    void window.toto.brainStatus().then(setBrain).catch(() => {})
+    void window.toto
+      .brainStatus()
+      .then(applyStatus)
+      .catch((e) => setError(e instanceof Error ? e.message : String(e)))
   }, [])
 
   // Historical batches and newly saved/imported meetings both update in main. Keep a lightweight status
@@ -156,10 +178,14 @@ function GraphBar({
   // permanent 5s idle poll is cheaper and more reliable than a filesystem watcher over OneDrive.
   const backfillRunning = !!brain?.backfill?.running
   const liveRunning = !!brain?.live?.running
-  const brainWorking = backfillRunning || liveRunning
+  const preparing = !!brain?.backfill?.preparing
+  const brainWorking = backfillRunning || liveRunning || preparing || busy
   useEffect(() => {
     const iv = setInterval(() => {
-      void window.toto.brainStatus().then(setBrain).catch(() => {})
+      void window.toto
+        .brainStatus()
+        .then(applyStatus)
+        .catch((e) => setError(e instanceof Error ? e.message : String(e)))
     }, brainWorking ? 1000 : 5000)
     return () => clearInterval(iv)
   }, [brainWorking])
@@ -169,19 +195,13 @@ function GraphBar({
     setError(null)
     setNoProvider(false)
     try {
-      const result = await window.toto.brainBackfill()
-      if (result.deferred === 'no-provider') {
-        // Main already OR's in the local safety net (ingest.ts's pickProviderCandidates appends the
-        // on-device model as a last candidate when localLlm.fallback is on) — this deferral only ever
-        // fires when NEITHER a cloud/CLI provider NOR local fallback is usable, so the message stays
-        // accurate without the renderer re-deriving readiness itself.
-        setError('Connect an AI provider in Settings → AI, or enable Métis Local there to index meetings on this device.')
-        setNoProvider(true)
+      const { error: clickError } = await runIntelligenceUpdateClick(() => window.toto.brainBackfill())
+      if (clickError) {
+        setError(clickError)
+        setNoProvider(/provider/i.test(clickError))
         return
       }
       setBrain(await window.toto.brainStatus())
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
     } finally {
       setBusy(false)
     }
@@ -193,10 +213,12 @@ function GraphBar({
     else onDashboardOpen?.()
   }
 
-  const backfilling = !!brain?.backfill?.running
+  const backfilling = !!brain?.backfill?.running || preparing
   const livePending = brain?.live?.pending ?? 0
   const backfillFailed = brain?.backfill?.failed ?? 0
   const indexProgress = brain?.backfill ? describeMeetingIndexProgress(brain.backfill) : null
+  const lastIndexed = formatLastIndexedAt(brain?.lastIndexedAt)
+  const updating = busy || backfilling || liveRunning
   return (
     <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2">
       <div className="flex items-center justify-between gap-2">
@@ -205,15 +227,17 @@ function GraphBar({
             <Network size={12} className="shrink-0 text-[var(--color-accent)]" />
             {error ? (
               <span className="text-[var(--color-danger)]">{error}</span>
-            ) : backfilling && indexProgress ? (
-              <span aria-atomic="true" aria-live="polite">{indexProgress.label}</span>
-            ) : liveRunning ? (
+            ) : updating ? (
               <span aria-atomic="true" aria-live="polite">
-                Updating Intelligence from {livePending} new meeting{livePending === 1 ? '' : 's'}…
+                {backfilling && indexProgress
+                  ? indexProgress.label
+                  : liveRunning
+                    ? `Updating Intelligence from ${livePending} new meeting${livePending === 1 ? '' : 's'}…`
+                    : 'Updating…'}
               </span>
             ) : backfillFailed > 0 && indexProgress ? (
               <span className="text-[var(--color-danger)]" role="alert">
-                {indexProgress.label}. Retry Index meetings after checking AI settings.
+                {indexProgress.label}. Retry Update Intelligence after checking AI settings.
               </span>
             ) : brain && brain.meetings > 0 ? (
               <>
@@ -225,26 +249,32 @@ function GraphBar({
               'Mantu Intelligence: build a brain from your meetings.'
             )}
           </div>
-          {backfilling && indexProgress && (
-            <WorkProgressMeter
-              active
-              ariaLabel="Mantu Intelligence meeting index progress"
-              className="mt-1.5"
-              percent={indexProgress.percent}
-              valueText={indexProgress.valueText}
-            />
+          {lastIndexed && !error && !updating && (
+            <div className="mt-0.5 text-[10px] text-[color:var(--color-ink-3)]">Last indexed {lastIndexed}</div>
+          )}
+          {updating && (
+            <div className="mt-1.5 flex items-center gap-2">
+              <InlineOrb kind="searching" />
+              {backfilling && indexProgress && (
+                <WorkProgressMeter
+                  active
+                  ariaLabel="Mantu Intelligence meeting index progress"
+                  className="min-w-0 flex-1"
+                  percent={indexProgress.percent}
+                  valueText={indexProgress.valueText}
+                />
+              )}
+            </div>
           )}
         </div>
         <div className="flex shrink-0 items-center gap-1">
           {noProvider && onOpenSettings && <TextButton onClick={onOpenSettings}>Open Settings</TextButton>}
-          <TextButton
+          <IntelligenceUpdateButton
+            variant="text"
+            updating={updating}
+            disabled={busy}
             onClick={() => void backfill()}
-            disabled={busy || backfilling}
-            title="Index every meeting (past + vault) into the brain"
-          >
-            <RefreshCw size={11} className={busy || backfilling ? 'loading-spinner animate-spin' : ''} />
-            {backfilling ? 'Mapping…' : busy ? 'Starting…' : 'Index meetings'}
-          </TextButton>
+          />
           <TextButton onClick={() => void openDashboard()} title="Open the Mantu Intelligence dashboard">
             <ExternalLink size={11} /> Mantu Intelligence
           </TextButton>
@@ -384,7 +414,7 @@ function UpcomingSection({
     <div className="mb-1.5">
       <div className="mb-1 flex items-center justify-between px-1">
         <div className="cl-eyebrow flex items-center gap-1.5 text-[color:var(--color-ink-3)]">
-          <RefreshCw size={10} className={loading ? 'animate-spin' : ''} />
+          {loading ? <InlineOrb kind="searching" /> : <RefreshCw size={10} />}
           Upcoming
         </div>
         {!loading && res?.ok && (
@@ -494,7 +524,7 @@ const MeetingRow = memo(function MeetingRow({
       ? 'Indexed in Mantu Intelligence'
       : indexStatus === 'failed'
         ? // FIX 4: name the actual reason when it's known, instead of a generic message.
-          `Intelligence extraction failed${indexError ? `: ${indexError}` : ''} — retry from Mantu Intelligence`
+          `Intelligence extraction failed${indexError ? `: ${indexError}` : ''}. Retry from Mantu Intelligence.`
         : 'Queued for Mantu Intelligence indexing'
 
   return (
@@ -769,6 +799,8 @@ export function RecallView({
   /** Main-owned jobs survive navigation and overlay closure; this component only renders their live state. */
   const [importJobs, setImportJobs] = useState<ImportJobView[]>([])
   const [importError, setImportError] = useState<string | null>(null)
+  const [importAssets, setImportAssets] = useState<ImportAssetsProgress | null>(null)
+  const [importDragOver, setImportDragOver] = useState(false)
   /** T6 6d: per-meeting Mantu Intelligence status feed — indexed/failed filename sets plus whether a
    *  backfill is currently requested, everything meetingIndexStatus needs for the row dot. A separate
    *  poll from GraphBar's own brainStatus fetch below (that bar's busy/error/backfill-run state is local
@@ -955,14 +987,37 @@ export function RecallView({
       upsertImportJob(job)
       if (job.state === 'done') refreshList()
     })
+    const unsubAssets = window.toto.onImportAssetsProgress((progress) => {
+      if (!stale) setImportAssets(progress)
+    })
     return () => {
       stale = true
       unsub()
+      unsubAssets()
     }
   }, [refreshList, upsertImportJob])
 
-  // Pick only creates a single-use capability. The main process owns decoding, transcription, checkpointing,
-  // saving, and recap generation after this call returns, so the user is free to leave this view immediately.
+  const startPickedImports = useCallback(
+    async (picked: ImportAudioPickResult): Promise<void> => {
+      const files = pickedFiles(picked)
+      const skip = skippedImportMessage(picked)
+      if (skip) setImportError(skip)
+      if (!files.length) {
+        if (!skip) setImportError(picked.error || 'Could not prepare the selected recordings.')
+        return
+      }
+      try {
+        const started = await window.toto.importAudioStartBatch(files.map((file) => file.token))
+        for (const job of started) upsertImportJob(job)
+      } catch (e) {
+        setImportError(e instanceof Error ? e.message : 'Could not start the imports.')
+      }
+    },
+    [upsertImportJob]
+  )
+
+  // Pick only creates single-use capabilities. The main process owns decoding, transcription,
+  // checkpointing, saving, and recap generation after this call returns.
   const importAudio = useCallback(async (): Promise<void> => {
     setImportError(null)
     let picked: ImportAudioPickResult
@@ -973,16 +1028,39 @@ export function RecallView({
       return
     }
     if (picked.cancelled) return
-    if (!picked.token) {
-      setImportError(picked.error || 'Could not prepare the selected recording.')
-      return
-    }
-    try {
-      upsertImportJob(await window.toto.importAudioStart(picked.token))
-    } catch (e) {
-      setImportError(e instanceof Error ? e.message : 'Could not start the import.')
-    }
-  }, [upsertImportJob])
+    await startPickedImports(picked)
+  }, [startPickedImports])
+
+  const onImportDragOver = useCallback((e: DragEvent): void => {
+    if (![...e.dataTransfer.types].includes('Files')) return
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'copy'
+    setImportDragOver(true)
+  }, [])
+
+  const onImportDragLeave = useCallback((e: DragEvent): void => {
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return
+    setImportDragOver(false)
+  }, [])
+
+  const onImportDrop = useCallback(
+    async (e: DragEvent): Promise<void> => {
+      e.preventDefault()
+      setImportDragOver(false)
+      const files = [...e.dataTransfer.files].filter(isImportDropFile)
+      if (!files.length) {
+        setImportError('Drop audio or video recordings to import them.')
+        return
+      }
+      setImportError(null)
+      try {
+        await startPickedImports(await window.toto.importAudioDrop(files))
+      } catch (err) {
+        setImportError(err instanceof Error ? err.message : 'Could not import the dropped recordings.')
+      }
+    },
+    [startPickedImports]
+  )
 
   const cancelImport = useCallback((jobId: string): void => {
     void window.toto.importJobCancel(jobId).catch((error) => {
@@ -1091,7 +1169,12 @@ export function RecallView({
   }, [allGroups, showAll, totalCount])
 
   return (
-    <div className="flex h-full flex-col">
+    <div
+      className="flex h-full flex-col"
+      onDragOver={onImportDragOver}
+      onDragLeave={onImportDragLeave}
+      onDrop={(e) => void onImportDrop(e)}
+    >
       {/* ── HEADER ─────────────────────────────────────────────────────── */}
       <div className="mb-2 flex items-center gap-2">
         {onBack && (
@@ -1126,70 +1209,21 @@ export function RecallView({
         <TextButton
           icon={Upload}
           onClick={() => void importAudio()}
-          title="Import an audio recording. It keeps processing in the background while you navigate."
+          title="Import one or more recordings. They keep processing in the background while you navigate."
         >
-          Import audio
+          Import meetings
         </TextButton>
       </div>
-      {importError && (
-        <div className="mb-2 px-1 text-[11px] text-[var(--color-danger)]">{importError}</div>
-      )}
-      {importJobs
-        .filter((job) => (job.state !== 'done' || !!job.recapError) && job.state !== 'cancelled')
-        .map((job) => {
-          const progress = describeImportProgress(job)
-          return (
-            <div
-              key={job.jobId}
-              aria-busy={progress.active || undefined}
-              className="mb-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.03] px-3 py-2"
-            >
-          <div className="flex items-center gap-2 text-[12px]">
-            <span className="min-w-0 flex-1 truncate font-medium text-[color:var(--color-ink)]">{job.title}</span>
-            <span className="shrink-0 text-[color:var(--color-ink-3)]">{progress.label}</span>
-            {job.state === 'failed' ? (
-              <>
-                <TextButton onClick={() => resumeImport(job.jobId)} title="Resume this import from its last saved transcript checkpoint">Resume</TextButton>
-                <TextButton
-                  icon={X}
-                  ariaLabel="Dismiss failed import"
-                  onClick={() => dismissImport(job.jobId)}
-                  title="Dismiss this failed import"
-                />
-              </>
-            ) : job.state === 'done' && job.recapError && job.file ? (
-              <>
-                <TextButton onClick={() => openMeeting(job.file!)} title="Open this meeting and retry its summary">Open meeting</TextButton>
-                <TextButton
-                  icon={X}
-                  ariaLabel="Dismiss this summary notice"
-                  onClick={() => dismissImport(job.jobId)}
-                  title="Dismiss, the transcript is already saved"
-                />
-              </>
-            ) : job.state !== 'done' ? (
-              <TextButton onClick={() => cancelImport(job.jobId)} title="Cancel this import">Cancel</TextButton>
-            ) : null}
-          </div>
-          {(progress.active || progress.percent !== null) && (
-            <div className="mt-1.5">
-              <div aria-atomic="true" aria-live="polite" className="text-[11px] text-[color:var(--color-ink-3)]">
-                {progress.detail}
-              </div>
-              <WorkProgressMeter
-                active={progress.active}
-                ariaLabel={`${job.title} import progress`}
-                className="mt-1"
-                percent={progress.percent}
-                pulseAtFull={progress.pulseAtFull}
-                valueText={progress.valueText}
-              />
-            </div>
-          )}
-          {job.error && <div className="mt-1 text-[11px] text-[var(--color-danger)]">{job.error}</div>}
-            </div>
-          )
-        })}
+      <ImportQueue
+        jobs={importJobs}
+        assets={importAssets}
+        dragOver={importDragOver}
+        error={importError}
+        onCancel={cancelImport}
+        onResume={resumeImport}
+        onDismiss={dismissImport}
+        onOpenMeeting={openMeeting}
+      />
 
       {/* ── UPCOMING CALENDAR SECTION ───────────────────────────────────── */}
       <UpcomingSection onConnectCalendar={onConnectCalendar} />
@@ -1202,7 +1236,9 @@ export function RecallView({
       {/* ── DATE-GROUPED MEETING LIST ───────────────────────────────────── */}
       <div ref={listRef} tabIndex={-1} className="scroll-thin min-h-0 flex-1 overflow-y-auto pr-1">
         {loading ? (
-          <div className="py-2 text-[13px] text-[color:var(--color-ink-2)]">Loading…</div>
+          <div className="py-2">
+            <AgentStatus kind="searching" size="inline" caption />
+          </div>
         ) : items.length === 0 ? (
           <div className="py-2 text-[13px] text-[color:var(--color-ink-2)]">
             {q.trim()

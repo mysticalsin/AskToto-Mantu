@@ -1,5 +1,5 @@
 import express from 'express';
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,6 +7,8 @@ import { z } from 'zod';
 import { generateLicenseKey, licenseStatus, successPayload, adminListView, adminDetailView, computeStats, computeAnalytics } from './license.mjs';
 import { licenseEventView } from './webhooks.mjs';
 import { toCsv } from './csv.mjs';
+import { signLease } from './lease.mjs';
+import { resolveLicenseGateConfig } from './license-gate.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -52,6 +54,22 @@ const adminCreateSchema = z.object({
   notes: notesField,
 });
 
+// Trial keys are minted, not sold — no price, no checkout. Defaults mirror the plan's Phase 4
+// language ("mints a 1-seat, N-day-expiry key (default 14) with notes: 'trial'").
+const DEFAULT_TRIAL_DAYS = 14;
+const DEFAULT_TRIAL_SEATS = 1;
+const MAX_TRIAL_DAYS = 3650; // ~10 years — generous ceiling, still bounded (no accidental "forever")
+const MAX_TRIAL_SEATS = 1000;
+
+const adminTrialSchema = z.object({
+  seats: z.number().int().positive().max(MAX_TRIAL_SEATS).optional(),
+  days: z.number().int().positive().max(MAX_TRIAL_DAYS).optional(),
+  companyName: z.string().trim().max(MAX_ID_LEN).optional(),
+  contactName: contactNameField,
+  contactEmail: contactEmailField,
+  notes: notesField,
+});
+
 const adminPatchSchema = z
   .object({
     seatCap: z.number().int().positive().optional(),
@@ -70,6 +88,26 @@ const adminPatchSchema = z
     { message: 'at least one field must be provided' }
   );
 
+function hashClientIp(ip) {
+  return createHash('sha256').update(String(ip || 'unknown')).digest('hex').slice(0, 16);
+}
+
+const HSTS = 'max-age=31536000; includeSubDomains';
+
+function requestIsHttps(req) {
+  const proto = String(req.get('x-forwarded-proto') || '').split(',')[0].trim().toLowerCase();
+  return Boolean(req.secure || proto === 'https');
+}
+
+/** HSTS / nosniff / frame-deny on the HTTP surfaces. Not a Helmet kitchen-sink. */
+function securityHeaders(req, res, next) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'no-referrer');
+  if (requestIsHttps(req)) res.setHeader('Strict-Transport-Security', HSTS);
+  next();
+}
+
 function badRequest(res, parseResult) {
   return res.status(400).json({
     ok: false,
@@ -78,7 +116,7 @@ function badRequest(res, parseResult) {
   });
 }
 
-// Fixed-window rate limiter for the two unauthenticated public endpoints (/activate, /heartbeat).
+// Fixed-window rate limiter for the unauthenticated public endpoints (/activate, /heartbeat, /deactivate).
 // Without it, anyone who learns a licenseKey can spam /activate with fresh random machineIds and burn
 // every seat, locking out the real machines. Keyed on client IP + licenseKey so one noisy caller can't
 // starve a different company's license. In-process (no dependency, no Redis) — correct for the single
@@ -96,6 +134,9 @@ function makeRateLimit() {
     if (!b || now - b.start >= RL_WINDOW_MS) {
       buckets.set(key, { start: now, count: 1 });
     } else if (b.count >= RL_MAX) {
+      // Attack log: route + IP only. The license key is the credential; it does not belong in stderr.
+      const route = typeof req.path === 'string' && req.path ? req.path : 'unknown';
+      console.warn(`[license-server] rate_limited route=${route} ip_hash=${hashClientIp(ip)}`);
       return res.status(429).json({ ok: false, error: 'rate_limited' });
     } else {
       b.count += 1;
@@ -167,11 +208,24 @@ const NOOP_WEBHOOKS = {
 // factory (rather than a module-level singleton) so tests can spin up
 // isolated instances against isolated temp-file stores.
 //
+// Default offline lease lifetime: how long a signed lease is valid for before the client must
+// phone home again (a heartbeat well inside this window refreshes it). Kept short relative to the
+// client's own 7-day soft-grace/30-day hard-cap fallback (src/main/license.ts) — the lease is a
+// strictly *stronger* offline proof (a tampered or clock-rolled-back lease is rejected outright),
+// not a longer one.
+const DEFAULT_LEASE_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
 // options.webhooks — a createWebhooks() instance (server.mjs wires the real one from env).
 // options.backups — a createBackupManager() instance; without one the backup routes return 503.
+// options.leaseSigningKey — { privateKey, publicKey, publicKeyRaw } from lease.mjs's
+//   loadLeaseSigningKey(); undefined/null means LICENSE_LEASE_PRIVATE_KEY isn't set, so no lease is
+//   ever issued and /license/pubkey 404s — every existing activate/heartbeat client is unaffected.
+// options.leaseTtlMs — how long a freshly-issued lease is valid for; defaults to DEFAULT_LEASE_TTL_MS.
 export function createApp(store, auditLog, options = {}) {
   const webhooks = options.webhooks || NOOP_WEBHOOKS;
   const backups = options.backups || null;
+  const leaseSigningKey = options.leaseSigningKey || null;
+  const leaseTtlMs = options.leaseTtlMs || DEFAULT_LEASE_TTL_MS;
   const app = express();
   const startedAt = Date.now();
   // Client-IP trust is deliberately OPT-IN via TRUST_PROXY, because the rate limiter and the admin
@@ -184,9 +238,29 @@ export function createApp(store, auditLog, options = {}) {
   //    which a remote client cannot spoof.
   const trustProxy = process.env.TRUST_PROXY;
   app.set('trust proxy', trustProxy === '1' || trustProxy === 'true' ? 1 : false);
+  app.use(securityHeaders);
   app.use(express.json());
   const rateLimit = makeRateLimit();
   const adminLockout = makeAdminLockout();
+
+  // Issues a signed, compact Ed25519 lease for a machine's current activation, or undefined when
+  // no signing key is configured (additive-only: an old/unaware client simply never sees the field,
+  // and a server operator who never sets LICENSE_LEASE_PRIVATE_KEY sees zero behaviour change).
+  // The payload's `notAfter` is a signed absolute timestamp — moving the local clock backwards on
+  // the machine can never extend it, unlike the wall-clock-only grace period this strictly improves.
+  function issueLease(license, machineId) {
+    if (!leaseSigningKey) return undefined;
+    const issuedAt = Date.now();
+    const payload = {
+      licenseKey: license.licenseKey,
+      machineId,
+      companyName: license.companyName,
+      seatCap: license.seatCap,
+      issuedAt,
+      notAfter: issuedAt + leaseTtlMs,
+    };
+    return signLease(payload, leaseSigningKey.privateKey);
+  }
 
   // JSON body parse errors land here (thrown by express.json()).
   app.use((err, req, res, next) => {
@@ -214,7 +288,7 @@ export function createApp(store, auditLog, options = {}) {
       existing.lastSeenAt = now;
       if (machineName) existing.machineName = machineName;
       store.persist();
-      return res.json(successPayload(license));
+      return res.json({ ...successPayload(license), lease: issueLease(license, machineId) });
     }
 
     if (license.activations.length >= license.seatCap) {
@@ -230,7 +304,7 @@ export function createApp(store, auditLog, options = {}) {
       lastSeenAt: now,
     });
     store.persist();
-    return res.json(successPayload(license));
+    return res.json({ ...successPayload(license), lease: issueLease(license, machineId) });
   });
 
   app.post('/heartbeat', rateLimit, (req, res) => {
@@ -251,10 +325,10 @@ export function createApp(store, auditLog, options = {}) {
 
     existing.lastSeenAt = Date.now();
     store.persist();
-    return res.json(successPayload(license));
+    return res.json({ ...successPayload(license), lease: issueLease(license, machineId) });
   });
 
-  app.post('/deactivate', (req, res) => {
+  app.post('/deactivate', rateLimit, (req, res) => {
     const parsed = deactivateSchema.safeParse(req.body);
     if (!parsed.success) return badRequest(res, parsed);
     const { licenseKey, machineId } = parsed.data;
@@ -298,6 +372,56 @@ export function createApp(store, auditLog, options = {}) {
     return bearerMatches(req, process.env.LICENSE_ADMIN_TOKEN);
   }
 
+  const SESSION_COOKIE = 'metis_admin_session';
+  const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+  const sessions = new Map();
+
+  function parseCookieHeader(header) {
+    const out = {};
+    if (!header) return out;
+    for (const part of String(header).split(';')) {
+      const eq = part.indexOf('=');
+      if (eq === -1) continue;
+      const k = part.slice(0, eq).trim();
+      const v = part.slice(eq + 1).trim();
+      if (k) out[k] = decodeURIComponent(v);
+    }
+    return out;
+  }
+
+  function sessionCookieLine(id, req, maxAgeSec) {
+    const parts = [`${SESSION_COOKIE}=${id}`, 'HttpOnly', 'SameSite=Strict', 'Path=/', `Max-Age=${maxAgeSec}`];
+    if (req.secure || req.get('x-forwarded-proto') === 'https') parts.push('Secure');
+    return parts.join('; ');
+  }
+
+  function sessionIdFromReq(req) {
+    const raw = parseCookieHeader(req.get('cookie') || '')[SESSION_COOKIE];
+    if (!raw || !/^[a-f0-9]{64}$/.test(raw)) return null;
+    return raw;
+  }
+
+  function validSession(req) {
+    const id = sessionIdFromReq(req);
+    if (!id) return false;
+    const sess = sessions.get(id);
+    if (!sess || Date.now() >= sess.expiresAt) {
+      if (sess) sessions.delete(id);
+      return false;
+    }
+    return true;
+  }
+
+  function createSession() {
+    const now = Date.now();
+    for (const [id, sess] of sessions) {
+      if (now >= sess.expiresAt) sessions.delete(id);
+    }
+    const id = randomBytes(32).toString('hex');
+    sessions.set(id, { expiresAt: now + SESSION_TTL_MS });
+    return id;
+  }
+
   function requireAdmin(req, res, next) {
     if (!process.env.LICENSE_ADMIN_TOKEN) {
       // No token configured means every admin call is rejected regardless of what's presented — that's
@@ -308,22 +432,63 @@ export function createApp(store, auditLog, options = {}) {
         message: 'LICENSE_ADMIN_TOKEN is not set on this server — admin routes are disabled until it is configured.',
       });
     }
+    if (validSession(req)) return next();
     const ip = req.ip || req.socket?.remoteAddress || 'unknown';
     if (adminLockout.isLocked(ip)) {
+      console.warn(`[license-server] admin_lockout ip_hash=${hashClientIp(ip)}`);
       return res.status(429).json({ ok: false, error: 'too_many_attempts' });
     }
     if (!isValidAdminToken(req)) {
       adminLockout.recordFailure(ip);
+      console.warn(`[license-server] admin_auth_failed ip_hash=${hashClientIp(ip)}`);
       return res.status(401).json({ ok: false, error: 'unauthorized' });
     }
     adminLockout.recordSuccess(ip);
     return next();
   }
 
-  // Static admin dashboard. The page itself carries no secrets — it's a
-  // token-gated client that prompts for the admin bearer token and calls the
-  // already-gated /admin/* API routes below with it — so serving it needs no
-  // auth of its own.
+  app.post('/admin/session', (req, res) => {
+    if (!process.env.LICENSE_ADMIN_TOKEN) {
+      return res.status(503).json({
+        ok: false,
+        error: 'admin_disabled',
+        message: 'LICENSE_ADMIN_TOKEN is not set on this server — admin routes are disabled until it is configured.',
+      });
+    }
+    const ip = req.ip || req.socket?.remoteAddress || 'unknown';
+    if (adminLockout.isLocked(ip)) {
+      console.warn(`[license-server] admin_lockout ip_hash=${hashClientIp(ip)}`);
+      return res.status(429).json({ ok: false, error: 'too_many_attempts' });
+    }
+    if (!isValidAdminToken(req)) {
+      adminLockout.recordFailure(ip);
+      console.warn(`[license-server] admin_auth_failed ip_hash=${hashClientIp(ip)}`);
+      return res.status(401).json({ ok: false, error: 'unauthorized' });
+    }
+    adminLockout.recordSuccess(ip);
+    const id = createSession();
+    res.setHeader('Set-Cookie', sessionCookieLine(id, req, Math.floor(SESSION_TTL_MS / 1000)));
+    return res.json({ ok: true });
+  });
+
+  app.get('/admin/session', (req, res) => {
+    if (!process.env.LICENSE_ADMIN_TOKEN) {
+      return res.status(503).json({ ok: false, error: 'admin_disabled' });
+    }
+    if (validSession(req) || isValidAdminToken(req)) return res.json({ ok: true });
+    return res.status(401).json({ ok: false, error: 'unauthorized' });
+  });
+
+  app.delete('/admin/session', (req, res) => {
+    const id = sessionIdFromReq(req);
+    if (id) sessions.delete(id);
+    res.setHeader('Set-Cookie', sessionCookieLine('', req, 0));
+    return res.json({ ok: true });
+  });
+
+  // Static admin dashboard. The page itself carries no secrets. The browser posts the admin
+  // token once to /admin/session, which sets an httpOnly session cookie. Subsequent /admin/*
+  // calls authenticate via that cookie or a Bearer token (CLI). Serving the HTML needs no auth.
   app.get('/admin/ui', (req, res) => {
     res.type('html').send(ADMIN_UI_HTML);
   });
@@ -367,6 +532,56 @@ export function createApp(store, auditLog, options = {}) {
       companyName: license.companyName,
       seatCap: license.seatCap,
       expiresAt: license.expiresAt,
+    });
+  });
+
+  // Mints a time-boxed TRIAL license/lease — no purchase, no price, no checkout of any kind. A
+  // thin wrapper over the same create path as POST /admin/licenses, so the audit log, webhooks,
+  // and dashboard all pick a trial up for free: it's a real license record (server-issued, with a
+  // real expiry), just pre-filled with trial-shaped defaults (1 seat, 14 days, notes: "trial") and
+  // tagged `trial: true` so the dashboard/CSV/analytics can tell trials apart from sold licenses.
+  // Still admin-authed — minting a key, even a free one, is an operator action, not a public route.
+  app.post('/admin/licenses/trial', requireAdmin, (req, res) => {
+    const parsed = adminTrialSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed);
+    const { seats, days, companyName, contactName, contactEmail, notes } = parsed.data;
+
+    const seatCap = seats ?? DEFAULT_TRIAL_SEATS;
+    const trialDays = days ?? DEFAULT_TRIAL_DAYS;
+    const expiresAt = Date.now() + trialDays * 24 * 60 * 60 * 1000;
+
+    let licenseKey = generateLicenseKey();
+    while (store.findByKey(licenseKey)) {
+      licenseKey = generateLicenseKey();
+    }
+
+    const license = {
+      licenseKey,
+      companyName: companyName || 'Trial',
+      seatCap,
+      createdAt: Date.now(),
+      expiresAt,
+      revoked: false,
+      activations: [],
+      contactName: contactName ?? '',
+      contactEmail: contactEmail ?? '',
+      notes: notes ?? 'trial',
+      trial: true,
+    };
+    store.addLicense(license);
+    auditLog.record({
+      action: 'create_trial',
+      licenseKey: license.licenseKey,
+      details: { companyName: license.companyName, seatCap, expiresAt, days: trialDays },
+    });
+    webhooks.emit('license.created', { license: licenseEventView(license) });
+
+    return res.status(201).json({
+      licenseKey: license.licenseKey,
+      companyName: license.companyName,
+      seatCap: license.seatCap,
+      expiresAt: license.expiresAt,
+      trial: true,
     });
   });
 
@@ -509,8 +724,8 @@ export function createApp(store, auditLog, options = {}) {
     let count;
     try {
       count = store.replaceAll(incoming);
-    } catch (err) {
-      return res.status(400).json({ ok: false, error: 'invalid_request', message: err.message });
+    } catch {
+      return res.status(400).json({ ok: false, error: 'invalid_request' });
     }
     auditLog.record({ action: 'restore', licenseKey: '(all)', details: { restoredCount: count, snapshot: snapshotPath && path.basename(snapshotPath) } });
     webhooks.emit('store.restored', { details: { restoredCount: count } });
@@ -589,12 +804,66 @@ export function createApp(store, auditLog, options = {}) {
     res.type('text/plain; version=0.0.4; charset=utf-8').send(`${lines.join('\n')}\n`);
   });
 
+  // Reserved v1 offline-first JWS contract. Selling is closed: these routes are the
+  // real interface and return activation_unavailable until LICENSE_ACTIVATION_OPEN
+  // is flipped AND a minting key is wired. Do not invent a second license product.
+  const v1ActivateSchema = z.object({
+    licenseKey: idString,
+    deviceIdHash: z.string().regex(/^[0-9a-f]{64}$/),
+    appVersion: z.string().trim().min(1).max(64),
+    os: z.string().trim().min(1).max(32),
+  });
+  const v1RegisterSchema = z.object({
+    installId: z.string().uuid(),
+    appVersion: z.string().trim().min(1).max(64),
+    os: z.string().trim().min(1).max(32),
+  });
+
+  function v1Unavailable(res) {
+    return res.status(503).json({ ok: false, error: 'activation_unavailable' });
+  }
+
+  app.post('/v1/licenses/activate', rateLimit, (req, res) => {
+    const parsed = v1ActivateSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed);
+    return v1Unavailable(res);
+  });
+
+  app.post('/v1/installs/register', rateLimit, (req, res) => {
+    const parsed = v1RegisterSchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed);
+    return v1Unavailable(res);
+  });
+
+  // Unauthenticated by design (the client needs it before it has anything to authenticate with —
+  // there's no secret here, only a public verification key). 404s when LICENSE_LEASE_PRIVATE_KEY
+  // isn't configured, same "unconfigured feature doesn't even reveal it exists" convention as
+  // /metrics — a server that has never turned leases on shouldn't advertise a key nobody signs
+  // with. `publicKey` is the raw 32-byte Ed25519 key, base64url-encoded (the JWK `x` value) — the
+  // client reconstructs it with `crypto.createPublicKey({ key: { kty: 'OKP', crv: 'Ed25519', x },
+  // format: 'jwk' })`, no PEM/DER parsing, no new dependency on either side.
+  app.get('/license/pubkey', (req, res) => {
+    if (!leaseSigningKey) return res.status(404).json({ ok: false, error: 'lease_disabled' });
+    return res.json({ ok: true, algorithm: 'ed25519', publicKey: leaseSigningKey.publicKeyRaw });
+  });
+
+  // Server-declared state of the two client-side compile-time switches (LICENSE_ENFORCEMENT /
+  // LICENSE_UI_ENABLED) — see lib/license-gate.mjs for the drift-fails-closed contract. This is a
+  // read-only DECLARATION for a future managed-config fetch to consume; it does not itself gate
+  // anything on this server (every /activate, /heartbeat, /admin/* route behaves exactly as it
+  // does today regardless of this response). Unauthenticated: it's operator-declared intent, not a
+  // secret, and a pre-activation client needs to read it before it has an admin token.
+  app.get('/license/config', (req, res) => {
+    const { licenseEnforcement, licenseUiEnabled, drift } = resolveLicenseGateConfig();
+    return res.json({ ok: true, licenseEnforcement, licenseUiEnabled, drift });
+  });
+
   app.get('/health', (req, res) => {
+    // Public liveness only. Fleet size lives on token-gated /metrics — do not advertise it here.
     res.json({
       ok: true,
       version: PACKAGE_VERSION,
       uptimeSeconds: (Date.now() - startedAt) / 1000,
-      licenseCount: store.getAll().length,
     });
   });
 

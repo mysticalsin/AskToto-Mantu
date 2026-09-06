@@ -28,7 +28,7 @@ import { fnv1a } from '@shared/hash'
 import { alignQuote, verifyNumericFact, extractNumerals, numeralDerivable } from '@shared/grounding'
 import { getSettings, getApiKey, getAllowedProviders, setApiKey, setSettings } from '../store'
 import { createStream } from '../llm'
-import { localBaseReady } from '../llm/local-routing'
+import { localBaseReady, resolveRoutingMode } from '../llm/local-routing'
 import { verifyIntegrity } from '../llm/local-models'
 import { getState as localRuntimeState, activeStreams as localActiveStreams } from '../llm/local-runtime'
 import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
@@ -36,6 +36,8 @@ import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
 // throws there (see llm/dust.ts's own note). dustcli.ts imports nothing from brain/, so no cycle.
 import { refreshDustCliSession } from '../dustcli'
 import { auditLog, mainLog } from '../logger'
+import { appendTimeSavedEvent } from '../time-saved-log'
+import { estimateSecondBrainMinutes } from '@shared/time-saved-events'
 import {
   slugify,
   commitmentKey,
@@ -66,6 +68,11 @@ import {
 } from './store'
 import { applyCorrections, readAliasMap, resolveEntitySlug, replayCorrections, readCorrectionsJournalSafe } from './corrections'
 import { publishForExtraction, publishIndexes, publishAll } from './publish'
+import { refuseIfDemoTagged } from '@shared/demo-guard'
+import { pickIntelligencePassCandidates } from './intelligence-pass-route'
+
+/** Default ingest waterfall, or the Update Intelligence button's local-first then API-once route. */
+export type IngestRoute = 'default' | 'intelligence-pass'
 
 /**
  * Brain ingest — turns one saved transcript into a structured extraction, then merges it into the
@@ -80,7 +87,7 @@ import { publishForExtraction, publishIndexes, publishAll } from './publish'
 /** Cheap "is any provider usable at all" check — reuses pickProvider's own resolution logic so the two
  *  can never drift out of sync. Used to bail out of backfill work BEFORE burning a queued job (and its
  *  one reinforcement retry) on a call that's guaranteed to reject with "No configured AI provider". */
-function hasUsableProvider(s: Settings): boolean {
+export function hasUsableProvider(s: Settings): boolean {
   return pickProvider(s) !== null
 }
 
@@ -93,8 +100,31 @@ function hasUsableProvider(s: Settings): boolean {
  *  keep on-device. Otherwise, when localLlm.fallback is on and local is ready, local is appended as
  *  the LAST candidate after the whole cloud waterfall — so a meeting still gets indexed when every cloud
  *  provider is down or none is configured, instead of never being indexed at all. */
-function pickProviderCandidates(s: Settings): { provider: ProviderId; model: string; key: string }[] {
-  if (s.localLlm.useFor.summary && localBaseReady(s, getAllowedProviders())) {
+function pickProviderCandidates(
+  s: Settings,
+  route: IngestRoute = 'default'
+): { provider: ProviderId; model: string; key: string }[] {
+  // Update Intelligence button only: Local first when ready, configured API once as failover.
+  // Must not reuse the default cloud-first waterfall, or a ready Local would be skipped.
+  if (route === 'intelligence-pass') return pickIntelligencePassCandidates(s)
+
+  // Exclusive on-device when the user opted Local summaries, set Routing mode → Local, or asked
+  // consolidation to prefer the on-device model — never waterfalls into cloud (would silently upload).
+  const preferOnDevice =
+    s.localLlm.useFor.summary ||
+    resolveRoutingMode(s) === 'local' ||
+    s.brainConsolidation.preferLocal
+  if (preferOnDevice && localBaseReady(s, getAllowedProviders())) {
+    // MQA-018 (exclusive-local parity): honor the SAME session-long 'unavailable' lockout the fallback
+    // branch below already excludes, and that localOnlyRebuildBlocked's comment assumes is "already
+    // excluded upstream in pickProviderCandidates". This branch must NEVER waterfall to cloud (an explicit
+    // privacy choice) — but returning a `local` candidate while the runtime is in its restart-budget-
+    // exhausted lockout hands hasUsableProvider() the weakest possible evidence: it authorizes
+    // startRebuild's purge, then EVERY re-extraction fails against the dead runtime with nothing (cloud is
+    // off by choice) to catch it — a wiped brain that cannot rebuild until relaunch. Returning [] instead
+    // makes hasUsableProvider() false, so the rebuild refuses with its actionable error and the meeting
+    // stays unindexed (retried once the runtime recovers) — never uploaded.
+    if (localRuntimeState() === 'unavailable') return []
     return [{ provider: 'local', model: s.localLlm.modelId, key: '' }]
   }
 
@@ -256,9 +286,10 @@ async function runCompletion(
   system: string,
   userText: string,
   id: string,
-  onlyProvider?: ProviderId
+  onlyProvider?: ProviderId,
+  route: IngestRoute = 'default'
 ): Promise<{ text: string; provider: ProviderId }> {
-  const candidates = pickProviderCandidates(s)
+  const candidates = pickProviderCandidates(s, route)
   const pool = onlyProvider ? candidates.filter((c) => c.provider === onlyProvider) : candidates
   if (pool.length === 0) throw new Error('No configured AI provider for brain ingest.')
   for (let i = 0; i < pool.length; i++) {
@@ -581,7 +612,8 @@ export const SELF_PERSON_NAME = 'You'
 async function extractMeeting(
   s: Settings,
   transcriptMd: string,
-  sourceFile: string
+  sourceFile: string,
+  route: IngestRoute = 'default'
 ): Promise<{ extraction: MeetingExtraction; preparedText: string }> {
   // Same redaction discipline as the live ask path (index.ts's askStart handler): the locally-saved
   // transcript file keeps the verbatim original on disk — only the copy sent to the cloud model for
@@ -597,7 +629,14 @@ async function extractMeeting(
     // failover walk instead — same as a first attempt.
     let servedBy: ProviderId | undefined
     const attempt = async (extra: string, pin?: ProviderId): Promise<MeetingExtraction> => {
-      const { text, provider } = await runCompletion(s, buildExtractionSystem(extra), user, `brain-${Date.now()}`, pin)
+      const { text, provider } = await runCompletion(
+        s,
+        buildExtractionSystem(extra),
+        user,
+        `brain-${Date.now()}`,
+        pin,
+        route
+      )
       servedBy = provider
       return parseExtractionPayload(text)
     }
@@ -1172,6 +1211,8 @@ type Job = {
   file: string
   source: 'meetings' | 'team'
   origin: 'live' | 'backfill'
+  /** Update Intelligence button only — Local first, configured API once. Live saves stay default. */
+  route?: IngestRoute
   /** Ingest-index identity. Undefined for the user's own meetings → basename(file), UNCHANGED. A team job
    *  (source: 'team') sets a folder-namespaced key ("team/<owner>/<file>") so a shared-folder transcript
    *  never collides in idx.ingested with an own meeting — or another member's file — of the same basename. */
@@ -1608,7 +1649,7 @@ async function runExtractionStage(job: Job): Promise<JobResult> {
       const savedExtraction = readMeetingExtraction(s, extractionSlug(jobKey(job)))
       if (savedExtraction) return { job, s, ok: true, x: savedExtraction, md, preparedText: prepareMeetingText(s, md) }
     }
-    const { extraction, preparedText } = await extractMeeting(s, md, job.file)
+    const { extraction, preparedText } = await extractMeeting(s, md, job.file, job.route ?? 'default')
     return { job, s, ok: true, x: extraction, md, preparedText }
   } catch (error) {
     return { job, s, ok: false, error }
@@ -1628,6 +1669,17 @@ async function finishJob(result: JobResult): Promise<void> {
     if (!result.ok) throw result.error
     await ingestExtraction(s, result.x, result.md, job.file, result.preparedText, job.sourceVersion, job.key, job.label)
     auditLog('brain.ingest', { ok: true, source: job.source })
+    {
+      // Time saved: 2 min per captured commitment, cap 15. Only when ingest actually extracted some.
+      const n = result.x.commitments?.length ?? 0
+      if (n > 0) {
+        appendTimeSavedEvent({
+          kind: 'second-brain',
+          estimatedMinutes: estimateSecondBrainMinutes(n),
+          ids: { meeting: job.file }
+        })
+      }
+    }
   } catch (e) {
     failed = true
     await updateIndex(s, (idx) => {
@@ -1770,6 +1822,35 @@ function hasMeetingSourceDrift(s: Settings, idx: BrainIndex): boolean {
  * still lacks a successful index record. Treat an unavailable folder conservatively too: OneDrive
  * Files On-Demand can make it disappear briefly, and clearing the flag then would strand the work.
  */
+/** Saved meeting files that do not yet have a successful ingest record. Used by Update Intelligence
+ *  so queued:0 + upToDate is illegal when the vault has meetings and the brain is empty. */
+export function countUnextractedMeetings(s: Settings = getSettings()): number {
+  const idx = readIndex(s)
+  let n = 0
+  const folder = resolveMeetingsFolder(s)
+  try {
+    if (existsSync(folder)) {
+      for (const f of readdirSync(folder)) {
+        if (isMeetingTranscriptFile(f) && !idx.ingested[f]?.ok) n++
+      }
+    }
+    for (const teamFolder of s.teamTranscriptFolders ?? []) {
+      if (!teamFolder || !existsSync(teamFolder)) continue
+      const owner = basename(teamFolder) || 'team'
+      for (const f of readdirSync(teamFolder)) {
+        if (isMeetingTranscriptFile(f) && !idx.ingested[`team/${owner}/${f}`]?.ok) n++
+      }
+    }
+  } catch {
+    /* unreadable folder: treat as unknown, not empty */
+  }
+  return n
+}
+
+export function hasUnextractedMeetings(s: Settings = getSettings()): boolean {
+  return countUnextractedMeetings(s) > 0
+}
+
 function hasIncompleteMeetingSource(s: Settings, idx: BrainIndex): boolean {
   const folder = resolveMeetingsFolder(s)
   try {
@@ -1894,8 +1975,24 @@ function pump(): void {
  * extraction is allowed to start, so a quit/restart replays the meeting instead of losing it in RAM.
  * `force` is for an edited existing note such as a debrief: its prior successful extraction is no longer
  * current and must be replaced.
+ *
+ * Wave 3 (`deferred`, settings.brainConsolidation): when true, writes the exact same durable pending
+ * record as always — a quit right after Save still resumes it — but stops short of `queue.push` +
+ * `pump()`, so this one meeting does NOT trigger an immediate network-bound extraction. The file is not
+ * lost: it is still on disk, not marked `ok` in the index, so the next backfill scan (a periodic
+ * consolidation pass, or the user clicking "Index meetings" / rebuild) picks it up exactly like any other
+ * not-yet-ingested transcript — startBackfill's readdir scan finds it by content, independent of whether
+ * enqueueIngest ever ran for it at all.
  */
-export async function enqueueIngest(file: string, { force = false }: { force?: boolean } = {}): Promise<void> {
+export async function enqueueIngest(
+  file: string,
+  { force = false, deferred = false }: { force?: boolean; deferred?: boolean } = {}
+): Promise<void> {
+  // MQA-278 — refuses Act 2 onboarding-demo-tagged data before it can reach the private meeting brain.
+  // saveMeeting already refuses the same tag before a file could legitimately exist (see
+  // transcripts.ts), so this is belt-and-suspenders for any other caller that hands enqueueIngest a
+  // path directly. See @shared/demo-guard.
+  refuseIfDemoTagged('enqueueIngest', basename(file))
   const s = getSettings()
   const key = basename(file)
   const sourceVersion = meetingSourceVersion(file)
@@ -1931,6 +2028,7 @@ export async function enqueueIngest(file: string, { force = false }: { force?: b
     // cannot be recovered until the index store becomes writable again.
     mainLog.warn(`[brain] could not persist live ingest intent for ${key}: ${error instanceof Error ? error.message : String(error)}`)
   }
+  if (deferred) return
   queue.push({ file, source: 'meetings', origin: 'live', ...(sourceVersion ? { sourceVersion } : {}) })
   pump()
 }
@@ -2167,14 +2265,29 @@ export function resumeBackfillIfPending(): void {
  *  `onDrained` (Task MI-2, brain:rebuildAll only): fires once every job this call queues — plus
  *  anything else already in flight — has fully finished (see registerDrainCallback's doc comment).
  *  Every other caller (the plain "Index meetings" button, resumeBackfillIfPending) omits it. */
-export type BackfillStartResult = { queued: number; deferred?: 'no-provider'; preparing?: boolean }
-export type BackfillStartOptions = { respectRetryBackoff?: boolean; allowSourceRefresh?: boolean }
+export type BackfillStartResult = {
+  queued: number
+  deferred?: 'no-provider'
+  preparing?: boolean
+  /** True only when there is genuinely nothing to extract. Illegal when unextracted meetings exist. */
+  upToDate?: boolean
+}
+export type BackfillStartOptions = {
+  respectRetryBackoff?: boolean
+  allowSourceRefresh?: boolean
+  force?: boolean
+  /** Update Intelligence button: stamp jobs so extraction uses local-first then API once. */
+  route?: IngestRoute
+}
+
 
 export function startBackfill(onDrained?: () => void | Promise<void>, options: BackfillStartOptions = {}): BackfillStartResult {
   const s = getSettings()
   const idx = readIndex(s)
-  const providerAvailable = hasUsableProvider(s)
-  if (!options.allowSourceRefresh && (idx.sourceRefreshRequested || hasMeetingSourceDrift(s, idx))) {
+  const route = options.route ?? 'default'
+  const providerAvailable =
+    route === 'intelligence-pass' ? pickIntelligencePassCandidates(s).length > 0 : hasUsableProvider(s)
+  if (!options.force && !options.allowSourceRefresh && (idx.sourceRefreshRequested || hasMeetingSourceDrift(s, idx))) {
     void requestSourceRefresh(s).catch((e) => mainLog.warn('[brain] source refresh request failed:', e))
     return providerAvailable ? { queued: 0 } : { queued: 0, deferred: 'no-provider' }
   }
@@ -2245,7 +2358,8 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
           source: 'meetings',
           origin: 'backfill',
           ...(sourceVersion ? { sourceVersion } : {}),
-          ...(strategy ? { strategy } : {})
+          ...(strategy ? { strategy } : {}),
+          ...(route !== 'default' ? { route } : {})
         })
       } else {
         // Leave the durable request flag in place. The source still needs a first extraction, but
@@ -2294,7 +2408,8 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
           key,
           label: owner,
           ...(sourceVersion ? { sourceVersion } : {}),
-          ...(strategy ? { strategy } : {})
+          ...(strategy ? { strategy } : {}),
+          ...(route !== 'default' ? { route } : {})
         })
       } else {
         deferredByProvider = true
@@ -2341,9 +2456,10 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
  * Rebuild/resume paths keep using startBackfill() directly because they need the actual queued count
  * synchronously for their durable journal semantics.
  */
-/** Local calendar day as 'YYYY-MM-DD' — the unit dailyBackfillRunsRemaining buckets against. */
-function todayKey(): string {
-  return new Date().toISOString().slice(0, 10)
+/** Local calendar day as 'YYYY-MM-DD' — the unit dailyBackfillRunsRemaining buckets against.
+ *  Must use the LOCAL timezone (en-CA), not UTC: a 6pm Pacific pass must not burn "tomorrow"'s budget. */
+function todayKey(now = Date.now()): string {
+  return new Date(now).toLocaleDateString('en-CA')
 }
 
 /**
@@ -2371,9 +2487,16 @@ function consumeDailyBackfillRun(s: Settings): boolean {
 
 export function requestBackfill(options: BackfillStartOptions = {}): BackfillStartResult {
   const s = getSettings()
+  const unextracted = hasUnextractedMeetings(s)
   // Preserve the existing synchronous no-provider contract so the renderer can show the actionable
   // setup guidance immediately, while retaining the durable resume flag.
-  if (!hasUsableProvider(s)) return startBackfill(undefined, options)
+  if (!hasUsableProvider(s)) {
+    const r = startBackfill(undefined, options)
+    if (unextracted && r.queued === 0 && r.deferred !== 'no-provider') {
+      return { queued: 0, deferred: 'no-provider' }
+    }
+    return r
+  }
   if (backfillPreparing || sourceRefreshRunning) return { queued: 0, preparing: true }
   // A control cannot normally be clicked during an active run, but keep this guard authoritative for
   // re-entrant IPC callers too. There is already a real batch whose progress will be reported.
@@ -2383,13 +2506,15 @@ export function requestBackfill(options: BackfillStartOptions = {}): BackfillSta
     // what makes "Retry index" work after the user pastes a fresh key, instead of silently reporting a
     // batch that can never move while the progress bar stays frozen.
     if (!hasJobsInFlight()) pump()
-    return { queued: 0 }
+    return { queued: 0, preparing: true }
   }
-  // A batch already dispatched today keeps running/resuming freely (the guard above owns that) — this
-  // only stops a NEW scan/dispatch cycle once 3 have started today. respectRetryBackoff callers (the 60s
-  // reconcile tick) are exactly the repeat callers this exists to bound; an explicit user click still
-  // reports 0 queued rather than throwing, so the dashboard reads it the same as "nothing to do right now".
-  if (!consumeDailyBackfillRun(s)) return { queued: 0 }
+  // Named 06:00 / 12:00 / 18:00 America/Toronto slots and an explicit Update Intelligence click
+  // bypass the old 3-per-day reconcile budget. queued:0 + upToDate is illegal when meetings
+  // exist but have not been extracted.
+  if (!options.force && !consumeDailyBackfillRun(s)) {
+    if (unextracted) return { queued: 0, preparing: true }
+    return { queued: 0, upToDate: true }
+  }
 
   backfillPreparing = true
   const idx = readIndex(s)
@@ -2405,6 +2530,7 @@ export function requestBackfill(options: BackfillStartOptions = {}): BackfillSta
       backfillPreparing = false
     }
   })
+  if (unextracted) return { queued: 0, preparing: true }
   return { queued: 0, preparing: true }
 }
 

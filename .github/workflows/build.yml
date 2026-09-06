@@ -46,6 +46,13 @@ jobs:
       # silently shipping again. Runs before the suite — it is fast and its failure is unambiguous.
       - run: npm run check:bugs
       - run: npm run build
+      # bar-toolbar.layout.test.ts launches Playwright Chromium. `npm ci` installs the npm package
+      # only — not the browser binary. Without this step, ubuntu and windows Quality both die at
+      # chromium.launch with `Executable doesn't exist ... chromium_headless_shell`. Chromium only
+      # (not the full browser set) is enough for that fixture. `--with-deps` is apt-oriented; Windows
+      # installs the browser without OS packages.
+      - name: Install Playwright Chromium
+        run: npx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
       - run: npm test
 
   security:

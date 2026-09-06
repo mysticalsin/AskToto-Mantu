@@ -26,11 +26,11 @@ import {
   FolderCog,
   AlertCircle,
   Trash2,
-  Loader2,
   Cpu,
   Wand2,
   ShieldCheck,
   Info,
+  IdCard,
   X,
   Search,
   RefreshCw,
@@ -61,9 +61,15 @@ import {
   Lock,
   Timer,
   ListTree,
+  Route,
   type LucideIcon
 } from 'lucide-react'
-import { formatSavedTime, timeSavedFromTotals } from '@shared/time-saved'
+import { timeSavedFromTotals } from '@shared/time-saved'
+import { TimeSavedView } from './TimeSavedView'
+import { autoHideOverlayForLayout } from '@shared/overlay-chrome'
+import { overlayShowsBarRestPicker } from '@shared/overlay-orb'
+import { OverlayChromePicker } from './OverlayChromePicker'
+import { OverlayOrbPicker } from './OverlayOrbPicker'
 import { formatResetPhrase } from '@shared/reset-time'
 import {
   DEFAULT_SHORTCUTS,
@@ -89,8 +95,11 @@ import {
   type LocalModelSummary,
   type PlatformPermissions,
   type UpdateCheckResult,
-  type McpConnectionKind
+  type McpConnectionKind,
+  type LicenseStatusResult,
+  type ScreenCaptureCheckResult
 } from '@shared/ipc'
+import { nextScreenCheckPass } from '@shared/screen-capture-check'
 import {
   PROVIDERS,
   PROVIDER_IDS,
@@ -104,14 +113,31 @@ import {
   type ProviderId
 } from '@shared/providers'
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
+import { modeSkillLock } from '@shared/mode-skills'
+import { DEFAULT_OPERATOR_URL, operatorUrlConfigured } from '@shared/operator'
+import { LANGUAGE_OPTIONS } from '@shared/lang-id'
 import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
+import { ClickUpMark } from './brand/ClickUpMark'
+import { PlaneMark } from './brand/PlaneMark'
 import { MetisMark } from './MetisMark'
+import { IdentitySection } from './IdentitySection'
 import { FieldHint, TextButton } from './ui'
+import { AgentStatus, InlineOrb } from './AgentStatus'
 import { AgendaView } from './AgendaView'
 import { usePermissions } from '../state'
 import { displayAccelerator, isWindows } from '../lib/keys'
 import { decideDustLiveCheck } from '../lib/dust-live-check'
+import { haltAllOnboardingAudio, unlockOnboardingAudio } from '../lib/onboarding-music'
+import { canShowConnected, cliSetupChip, nextCliSetupStep } from '@shared/cli-setup-status'
+import {
+  DUST_EMPTY_AGENTS_ERROR,
+  DUST_WORKSPACE_MISSING_SETUP_ERROR,
+  decideDustInstantValidate,
+  formatDustConnectedMessage,
+  proveDustConnection,
+  type DustInstantValidateResult
+} from '@shared/dust-validate'
 
 // Name the OS credential facility the way the user's own OS names it — "Keychain" is macOS-only, and
 // telling a Windows user to "restore Keychain access" names something their machine does not have. Two
@@ -128,7 +154,28 @@ const PROFILE_CREDENTIAL_STORE = isWindows ? 'Windows credential store' : 'Keych
 // (Windows renders <option> from its OWN colors, defaulting to white — the app's bg/text don't cascade in).
 // The `option` selector only matches <select> children, so plain inputs sharing this class are unaffected.
 export const ctl =
-  'no-drag font-body cl-input cl-focus px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)] [color-scheme:dark] [&>option]:bg-[#1A0033] [&>option]:text-white'
+  'no-drag font-body cl-input cl-focus min-w-0 max-w-full px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)] [color-scheme:dark] [&>option]:bg-[#1A0033] [&>option]:text-white'
+
+/**
+ * Settings tabpanel scroll classes. Vertical scroll only — overflow-x must stay hidden/clip.
+ * overflow-y-auto alone computes overflow-x: auto (CSS overflow pairing), which is the Win
+ * Settings sideways-pan bug on Audio / AI.
+ */
+export const SETTINGS_CONTENT_SCROLL_CLASS =
+  'cl-content scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden'
+
+const OVERFLOW_X_CLIP = new Set(['overflow-x-hidden', 'overflow-x-clip'])
+const OVERFLOW_X_ALLOW = new Set(['overflow-x-auto', 'overflow-x-scroll', 'overflow-x-visible'])
+const OVERFLOW_Y_SCROLL = new Set(['overflow-y-auto', 'overflow-y-scroll'])
+
+/** True when a Settings scroll-root class allows Y scroll and clips X (no sideways bar/pan). */
+export function settingsScrollClipsOverflowX(className: string): boolean {
+  const tokens = className.trim().split(/\s+/)
+  const allowsY = tokens.some((t) => OVERFLOW_Y_SCROLL.has(t))
+  const clipsX = tokens.some((t) => OVERFLOW_X_CLIP.has(t))
+  const allowsX = tokens.some((t) => OVERFLOW_X_ALLOW.has(t))
+  return allowsY && clipsX && !allowsX
+}
 
 // Providers excluded from the generic provider tiles grid + generic "key" Section because they have
 // their OWN dedicated setup card instead (dust → DustSetup, claude-cli/codex-cli → CliIntegration).
@@ -433,7 +480,7 @@ export function Section({
   const tabIcon = useContext(TabIconContext)
   const Icon = icon ?? tabIcon
   return (
-    <section className="cl-card flex flex-col gap-0 px-4 py-4">
+    <section className="cl-card flex min-w-0 max-w-full flex-col gap-0 px-4 py-4">
       <div className="mb-3 flex items-start gap-2.5">
         {Icon && (
           <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-full bg-[var(--cl-primary-soft)] text-[color:var(--cl-primary)]">
@@ -476,7 +523,7 @@ function ProviderTile({
       disabled={locked}
       onClick={onSelect}
       className={[
-        'no-drag cl-focus flex flex-col items-start gap-0.5 rounded-[10px] border px-2.5 py-2 text-left transition-colors',
+        'no-drag cl-focus flex min-w-0 w-full flex-col items-start gap-0.5 rounded-[10px] border px-2.5 py-2 text-left transition-colors',
         active
           ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]'
           : 'border-[var(--cl-border)] bg-white/[0.02] hover:bg-white/[0.05]',
@@ -496,7 +543,7 @@ function ProviderTile({
           {hasKey && <Check size={14} className="shrink-0 text-[color:var(--cl-success)]" />}
         </span>
       </span>
-      <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{PROVIDERS[id].blurb}</span>
+      <span className="w-full min-w-0 break-words text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{PROVIDERS[id].blurb}</span>
     </button>
   )
 }
@@ -515,7 +562,7 @@ function ExpandableSection({
 }): JSX.Element {
   const [open, setOpen] = useState(false)
   return (
-    <section className="flex flex-col rounded-[14px] border border-dashed border-[var(--cl-border)] px-4 py-3 transition-colors hover:border-[var(--cl-input)]">
+    <section className="flex min-w-0 max-w-full flex-col rounded-[14px] border border-dashed border-[var(--cl-border)] px-4 py-3 transition-colors hover:border-[var(--cl-input)]">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -950,9 +997,8 @@ function AiSection({
   // exclude all three from the generic tiles grid. The remainder splits by `tier`: 'featured' (GPT, Grok,
   // Kimi, Gemini) gets its own always-visible grid right under Anthropic's card, matching the CLI
   // cards' prominence; 'more' (Qwen, OpenRouter, Groq, Mistral, Grok, Gemini, Dust, custom) stays tucked
-  // in the collapsed "Experience: more models" section. Cloudflare is 'featured' and is the default
-  // provider: it is the one card most installs must touch, because the Worker URL ships preset and the
-  // METIS_PROXY_KEY is the single string a user pastes.
+  // in the collapsed "Experience: more models" section. Cloudflare is 'featured'. Happy path is
+  // Operator OAuth (tile click → default browser `/cloudflare/connect`), not Worker URL + METIS_PROXY_KEY paste.
   // When the org sets a data-residency allowlist, only approved providers are offered — mirroring what
   // the main process enforces at request time, so the UI can't offer a provider every ask would reject.
   const orgAllowed = settings.allowedProviders
@@ -982,9 +1028,15 @@ function AiSection({
   // key here would silently never be used until the env var is removed. Lock the field instead of letting
   // Save claim it's "valid and working" for a key that will never actually be read.
   const envKeyActive = settings.envKeys.includes(provider)
-  const keyEntrySection = !CLI_PROVIDERS.has(provider) && PROVIDERS[provider].kind !== 'local' ? (
+  const connectCloudflare = (): void => {
+    void patch({ provider: 'cloudflare' })
+    void window.toto.cloudflareConnect()
+  }
+
+  const keyEntrySection =
+    !CLI_PROVIDERS.has(provider) && provider !== 'cloudflare' && PROVIDERS[provider].kind !== 'local' ? (
     <Section title={`${def.label} key`} desc="Stored encrypted on this device. Never sent anywhere except the provider." icon={Lock}>
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
         <label htmlFor={keyInputId} className="sr-only">
           {def.label} API key
         </label>
@@ -1002,7 +1054,7 @@ function AiSection({
                 ? '•••••• saved (paste to replace)'
                 : `Paste your ${def.label} key`
           }
-          className={'flex-1 ' + ctl + (envKeyActive ? ' opacity-60' : '')}
+          className={'min-w-0 flex-1 ' + ctl + (envKeyActive ? ' opacity-60' : '')}
         />
         <button
           type="button"
@@ -1030,7 +1082,7 @@ function AiSection({
           }
           className="no-drag cl-focus flex items-center gap-1 rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[13px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-50"
         >
-          {test.status === 'loading' ? <Loader2 size={14} className="animate-spin" /> : null}
+          {test.status === 'loading' ? <InlineOrb kind="connecting" /> : null}
           Test
         </button>
         {envKeyActive ? (
@@ -1071,33 +1123,8 @@ function AiSection({
               <Trash2 size={14} />
             </button>
           )
-        ) : canRestoreEmbedded ? (
-          <button
-            type="button"
-            onClick={() => void onRestoreEmbedded()}
-            title="Put back the Cloudflare key that shipped with Metis"
-            className="no-drag cl-focus flex items-center rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08]"
-          >
-            Restore shipped key
-          </button>
         ) : null}
       </div>
-
-      {/* MQA-261: a fresh install gets a working Cloudflare key nobody typed, so the user has no copy of
-          it. Removing it is therefore not like removing a key they pasted — say so before, and offer the
-          way back after. */}
-      {confirmRemove && provider === 'cloudflare' && settings.embeddedCloudflareKeyAvailable && (
-        <div className="mt-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
-          This key came with Metis rather than from you, so you have no copy of it. You can put it back
-          from this card afterwards.
-        </div>
-      )}
-      {canRestoreEmbedded && (
-        <div className="mt-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
-          Metis shipped with a Cloudflare key. Without it, questions fall back to the on-device model,
-          which is private but noticeably slower.
-        </div>
-      )}
       {restoreMsg && (
         <div className="mt-2 text-[12px] text-[color:var(--cl-foreground)]">{restoreMsg}</div>
       )}
@@ -1144,7 +1171,7 @@ function AiSection({
             disabled={recoveryBusy}
             className="no-drag cl-focus inline-flex w-fit items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-50"
           >
-            {recoveryBusy ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+            {recoveryBusy ? <InlineOrb kind="loading" /> : <RotateCcw size={13} />}
             {recoveryBusy ? 'Creating new profile…' : 'Create new local profile & retry'}
           </button>
           {recoveryMessage && <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">{recoveryMessage}</div>}
@@ -1257,32 +1284,6 @@ function AiSection({
               <ManagedChip keys={settings.managedKeys} k="customBaseUrl" />
             </div>
           )}
-          {provider === 'cloudflare' && (
-            <div className="flex flex-col gap-1">
-              <label htmlFor={baseUrlInputId} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-                Worker endpoint URL
-              </label>
-              <div className="flex items-center gap-2">
-                {/* MQA-069: debounced for the same reason as the model fields above. The placeholder is
-                    the hostname cloudflare-proxy/README.md's deploy step actually produces, and keeps the
-                    /v1 suffix visible: the OpenAI client appends /chat/completions to whatever is here. */}
-                <LazyInput
-                  id={baseUrlInputId}
-                  value={settings.cloudflareBaseUrl}
-                  disabled={settings.managedKeys.includes('cloudflareBaseUrl')}
-                  onCommit={(v) => patch({ cloudflareBaseUrl: v })}
-                  placeholder="https://metis-cloudflare-proxy.your-subdomain.workers.dev/v1"
-                  className={['flex-1 min-w-0', ctl, settings.managedKeys.includes('cloudflareBaseUrl') ? 'opacity-60' : ''].join(' ')}
-                />
-                <ManagedChip keys={settings.managedKeys} k="cloudflareBaseUrl" />
-              </div>
-              <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                Your team deploys a small Cloudflare Worker that holds the Cloudflare account token as a
-                Wrangler secret; Métis never stores that token. Paste the Worker&rsquo;s URL here and your
-                METIS_PROXY_KEY in the key field above.
-              </p>
-            </div>
-          )}
           <label className="flex items-center justify-between gap-3 px-1 text-[12px] text-[color:var(--cl-muted-foreground)]">
             <span className="flex items-center gap-2">
               Creativity · {settings.temperature.toFixed(1)}
@@ -1305,7 +1306,7 @@ function AiSection({
   ) : null
 
   return (
-    <div className="flex flex-col gap-5">
+    <div className="flex min-w-0 max-w-full flex-col gap-5">
       {/* CLI Integration — Claude Code CLI and Codex CLI, first so auto-setup is the first thing offered */}
       <CliIntegration settings={settings} patch={patch} />
 
@@ -1324,7 +1325,7 @@ function AiSection({
           plus its full key card below whenever it's the one currently answering questions. */}
       <div
         className={[
-          'flex items-center justify-between gap-2 rounded-[10px] border p-3',
+          'flex min-w-0 items-center justify-between gap-2 rounded-[10px] border p-3',
           provider === 'anthropic'
             ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
             : anthropicAllowed
@@ -1332,7 +1333,7 @@ function AiSection({
               : 'border-[var(--cl-border)] bg-white/[0.02] opacity-60'
         ].join(' ')}
       >
-        <div className="flex flex-col gap-0.5">
+        <div className="min-w-0 flex flex-col gap-0.5">
           <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{PROVIDERS.anthropic.label}</span>
           <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
             {PROVIDERS.anthropic.blurb}
@@ -1372,7 +1373,7 @@ function AiSection({
       {/* Featured API providers — same prominence as the CLI cards above, so picking GPT/Grok/Kimi/
           Gemini doesn't require digging into a collapsed section. */}
       <Section title="Other providers" desc="Bring your own key from another provider." icon={Network}>
-        <div className="grid grid-cols-2 gap-2">
+        <div className="grid min-w-0 grid-cols-2 gap-2">
           {featured.map((id) => (
             <ProviderTile
               key={id}
@@ -1381,7 +1382,7 @@ function AiSection({
               recommended={id === recommended}
               hasKey={!!settings.hasKeys[id]}
               locked={locked}
-              onSelect={() => patch({ provider: id })}
+              onSelect={() => (id === 'cloudflare' ? connectCloudflare() : patch({ provider: id }))}
             />
           ))}
         </div>
@@ -1391,6 +1392,56 @@ function AiSection({
           </div>
         )}
       </Section>
+
+      {provider === 'cloudflare' && (
+        <Section
+          title="Cloudflare · AI Gateway"
+          desc="Log in to Cloudflare. Operator adds the AI Gateway key. Paste is not the happy path."
+          icon={ExternalLink}
+        >
+          <button
+            type="button"
+            data-cf-aig-connect
+            disabled={locked}
+            onClick={() => connectCloudflare()}
+            className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            <ExternalLink size={13} />
+            Log in to Cloudflare
+          </button>
+          <p className="mt-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            Finish in your default browser. Then this seat uses Operator platform keys. No Worker URL
+            or METIS_PROXY_KEY paste.
+          </p>
+          {/* MQA-261 lives on this card now. The generic key box is `provider !== 'cloudflare'`, so a
+              `provider === 'cloudflare'` compare there is TS2367 (no overlap) and the restore never
+              rendered. Provenance + restore stay here, where Cloudflare is the active provider. */}
+          {canRestoreEmbedded ? (
+            <>
+              <button
+                type="button"
+                onClick={() => void onRestoreEmbedded()}
+                title="Put back the Cloudflare key that shipped with Metis"
+                className="no-drag cl-focus mt-2 flex items-center rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08]"
+              >
+                Restore shipped key
+              </button>
+              <div className="mt-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
+                Metis shipped with a Cloudflare key. Restore it to keep Cloudflare answering, or add another
+                provider&apos;s API key below.
+              </div>
+            </>
+          ) : settings.embeddedCloudflareKeyAvailable ? (
+            <div className="mt-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
+              This key came with Metis rather than from you, so you have no copy of it. You can put it back
+              from this card afterwards.
+            </div>
+          ) : null}
+          {restoreMsg && (
+            <div className="mt-2 text-[12px] text-[color:var(--cl-foreground)]">{restoreMsg}</div>
+          )}
+        </Section>
+      )}
 
       {isFeatured && keyEntrySection}
 
@@ -1419,7 +1470,7 @@ function AiSection({
               />
             </div>
           )}
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid min-w-0 grid-cols-2 gap-2">
             {shown.map((id) => (
               <ProviderTile
                 key={id}
@@ -1456,7 +1507,7 @@ function AiSection({
 
       {/* Thinking mode — applies to whatever's active (raw model tiers, or your two Dust agents) */}
       <Section title="Thinking mode" desc="When to use a fast model vs. a deeper one for harder questions." icon={Lightbulb}>
-        <div className="flex gap-1.5">
+        <div className="flex min-w-0 flex-wrap gap-1.5">
           {(
             [
               ['auto', 'Auto'],
@@ -1472,7 +1523,7 @@ function AiSection({
                 onClick={() => patch({ thinkingMode: m })}
                 aria-pressed={on}
                 className={[
-                  'no-drag cl-focus flex-1 rounded-[8px] border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
+                  'no-drag cl-focus min-w-0 flex-1 rounded-[8px] border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
                   on
                     ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)] text-[color:var(--cl-foreground)]'
                     : 'border-[var(--cl-border)] bg-white/[0.02] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.05]'
@@ -1516,13 +1567,13 @@ function providerLimitLabel(u: { reason: string; until: number }): string {
         : 'retry shortly'
   switch (u.reason) {
     case 'rate-limit':
-      return `rate-limited — ${when}`
+      return `rate-limited, ${when}`
     case 'quota-exhausted':
-      return 'out of credit — add credit or switch providers'
+      return 'out of credit. Add credit or switch providers'
     case 'usage-cap':
-      return `usage limit reached — ${when}`
+      return `usage limit reached, ${when}`
     default:
-      return 'key rejected — re-enter it below'
+      return 'key rejected. Re-enter it below'
   }
 }
 
@@ -1543,10 +1594,53 @@ function ResilienceSection({
   return (
     <Section
       title="Backups & limits"
-      desc="When a provider runs out of tokens or credit, Métis automatically falls back — to a free provider, then to the on-device model — so you are never stuck."
+      desc="When a provider runs out of tokens or credit, Métis automatically falls back, first to a free provider, then to the on-device model, so you are never stuck."
       icon={ShieldCheck}
     >
       <div className="flex flex-col gap-3">
+        {/* Wave 2 (docs/PROVIDER-ROUTING-POLICY.md): the top-level policy, separate from Local AI's own
+            "use for suggestions/summaries/screenshots" toggles above, which stay how 'auto' picks a mode. */}
+        <div className="flex flex-col gap-1.5">
+          <div className="flex items-center gap-1.5 text-[13px] text-[color:var(--cl-foreground)]">
+            <Route size={14} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />
+            Routing mode
+          </div>
+          <div className="flex gap-1.5">
+            {(
+              [
+                ['local', 'Local'],
+                ['auto', 'Auto'],
+                ['api', 'API']
+              ] as const
+            ).map(([m, label]) => {
+              const on = settings.routingMode === m
+              return (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => patch({ routingMode: m })}
+                  aria-pressed={on}
+                  className={[
+                    'no-drag cl-focus flex-1 rounded-[8px] border px-2.5 py-1.5 text-[12px] font-medium transition-colors',
+                    on
+                      ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)] text-[color:var(--cl-foreground)]'
+                      : 'border-[var(--cl-border)] bg-white/[0.02] text-[color:var(--cl-muted-foreground)] hover:bg-white/[0.05]'
+                  ].join(' ')}
+                >
+                  {label}
+                </button>
+              )
+            })}
+          </div>
+          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            {settings.routingMode === 'local'
+              ? 'Prefer Métis Local for every eligible ask (live suggestions, summaries, screenshots) and escalate to your cloud provider only on a hard failure.'
+              : settings.routingMode === 'api'
+                ? "Use your configured provider / backup order below. The on-device model still answers as the last resort when it's enabled as a safety net and everything else is exhausted."
+                : 'Auto (default): health, headroom, free-tier exhaustion and each task\u2019s Local AI toggle below decide, per ask.'}
+          </span>
+        </div>
+
         <div className="rounded-[10px] border border-[var(--cl-border)] bg-white/[0.02] p-3">
           {limited.length === 0 ? (
             <div className="flex items-center gap-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
@@ -1585,7 +1679,7 @@ function ResilienceSection({
 
         <ToggleRow
           label="Race a backup provider on a slow answer"
-          desc="For a quick question, start a second provider if the first hasn't answered within 3 seconds — whichever answers first wins, the other is cancelled. Can occasionally use both."
+          desc="For a quick question, start a second provider if the first hasn't answered within 3 seconds. Whichever answers first wins, the other is cancelled. Can occasionally use both."
           on={settings.resilience.hedge}
           onChange={(v) => patch({ resilience: { ...settings.resilience, hedge: v } })}
         />
@@ -1593,7 +1687,7 @@ function ResilienceSection({
         <div className="flex items-start gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.02] px-3 py-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
           <Cpu size={13} className="mt-0.5 shrink-0" />
           <span>
-            Worst case, the on-device model answers with no API at all — controlled by <b>Local AI → use as a
+            Worst case, the on-device model answers with no API at all, controlled by <b>Local AI → use as a
             safety net</b> above.
           </span>
         </div>
@@ -1655,7 +1749,7 @@ function FallbackOrderEditor({
       <div className="mb-2 text-[11.5px] text-[color:var(--cl-muted-foreground)]">
         {chain.length
           ? 'Providers are tried top to bottom when one fails. Anything not listed stays available after the chain.'
-          : 'Automatic — Métis picks the next provider itself. Set an order to decide it yourself.'}
+          : 'Automatic. Métis picks the next provider itself. Set an order to decide it yourself.'}
       </div>
       {chain.length > 0 && (
         <ul className="mb-2 flex flex-col gap-1">
@@ -1737,8 +1831,8 @@ function AsrModelRow(): JSX.Element | null {
         {state.ready
           ? `High-accuracy transcription model installed (${gb} GB). Imports use it instead of the compact model.`
           : state.status === 'downloading'
-            ? `Downloading the high-accuracy transcription model — ${Math.round(state.progress * 100)}% of ${gb} GB.`
-            : `Imports use the compact transcription model. The high-accuracy one is a ${gb} GB download — noticeably better, especially on non-English audio.`}
+            ? `Downloading the high-accuracy transcription model: ${Math.round(state.progress * 100)}% of ${gb} GB.`
+            : `Imports use the compact transcription model. The high-accuracy one is a ${gb} GB download, noticeably better, especially on non-English audio.`}
         {state.status === 'error' && state.error ? ` ${state.error}` : ''}
       </span>
       {state.status !== 'downloading' && (
@@ -1769,9 +1863,11 @@ function LocalAiSection({
   patch: (p: Partial<PublicSettings>) => void
 }): JSX.Element {
   const [models, setModels] = useState<LocalModelSummary[] | null>(null)
+  const [retrying, setRetrying] = useState(false)
   // The weights are fetched on first run, not shipped, so this list is a moving target: a card opened
-  // during onboarding is looking at a download in progress. Poll while one is running so it reaches
-  // "Ready" on its own instead of freezing on the snapshot taken when the panel mounted (MQA-187).
+  // during onboarding is looking at a download in progress. Poll while one is running OR has not
+  // started yet so a late boot fetch (or a fetch that failed before the first read) cannot freeze the
+  // card on "Not downloaded yet" (MQA-187).
   useEffect(() => {
     let mounted = true
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -1780,10 +1876,16 @@ function LocalAiSection({
         (list) => {
           if (!mounted) return
           setModels(list)
-          if (list.some((m) => m.unavailableReason === 'downloading')) timer = setTimeout(read, 1500)
+          const moving = list.some(
+            (m) => m.unavailableReason === 'downloading' || m.unavailableReason === 'not-downloaded'
+          )
+          if (moving) timer = setTimeout(read, 1500)
         },
         () => {
-          if (mounted) setModels([])
+          if (mounted) {
+            setModels([])
+            timer = setTimeout(read, 1500)
+          }
         }
       )
     }
@@ -1794,29 +1896,60 @@ function LocalAiSection({
     }
   }, [])
 
-  const model = models?.[0]
+  const model =
+    models?.find((m) => m.unavailableReason === 'downloading') ??
+    models?.find((m) => m.unavailableReason === 'insufficient-disk' || m.unavailableReason === 'download-failed') ??
+    models?.find((m) => m.id === settings.localLlm.modelId) ??
+    models?.[0]
   const downloading = model?.unavailableReason === 'downloading'
+  const canRetry =
+    model?.unavailableReason === 'download-failed' ||
+    model?.unavailableReason === 'not-downloaded' ||
+    model?.unavailableReason === 'insufficient-disk' ||
+    model?.unavailableReason === 'insufficient-ram'
   const percent = Math.round((model?.downloadProgress ?? 0) * 100)
+  const retryFetch = (): void => {
+    if (retrying) return
+    setRetrying(true)
+    void window.toto
+      .localModelsEnsure()
+      .catch(() => {})
+      .finally(() => {
+        setRetrying(false)
+        void window.toto.localModelsList().then(setModels, () => {})
+      })
+  }
   // One wording for the blocked case, used by both the status strip and the card. It names the host that
   // has to be reachable and when Métis tries again. The old copy said the files were "missing or
   // incomplete" and told the user to reinstall Métis — an instruction the build gate guarantees cannot
   // work, because no installer contains the weights (MQA-188/191).
   const downloadFailedText =
-    'Could not download the on-device model. Métis retries on the next launch — check that huggingface.co is reachable from this network.'
-  const notDownloadedText = 'Not downloaded yet. Métis fetches the on-device model automatically on first run.'
+    'Could not download the on-device model. Métis retries on the next launch. Check that huggingface.co is reachable from this network.'
+  const notDownloadedText =
+    'Not downloaded yet. Métis fetches the on-device model automatically when the app opens (~730 MB).'
 
   return (
     <Section
       title="Local AI"
-      desc="Runs a small model on this device. Live suggestions, summaries, Mantu Intelligence extraction, and screenshot reads stay local."
+      desc="Optional on-device model. Off by default for answering. Cloudflare and any API keys you add stay primary. The model downloads in the background when Métis opens so enabling Local later is instant."
       icon={Cpu}
     >
       <div className="flex flex-col gap-3">
         <ToggleRow
           label="Enable Métis Local"
-          desc="Métis downloads the model (~730 MB) once, on first run — it is not part of the installer. Turning this off skips that download."
+          desc="Use the on-device model for suggestions, summaries, and screenshot reads. The weights download automatically when Métis opens (not part of the installer). Cloudflare and your other API providers stay available."
           on={settings.localLlm.enabled}
-          onChange={(v) => patch({ localLlm: { ...settings.localLlm, enabled: v } })}
+          onChange={(v) =>
+            patch({
+              localLlm: {
+                ...settings.localLlm,
+                enabled: v,
+                // Arm the safety net with the opt-in so a just-enabled Local install can still answer
+                // when every cloud provider is exhausted.
+                ...(v ? { fallback: true } : {})
+              }
+            })
+          }
         />
 
         <div className="flex items-center gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.02] px-3 py-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
@@ -1825,10 +1958,16 @@ function LocalAiSection({
             ? 'Checking the on-device model...'
             : model?.unavailableReason === 'insufficient-ram'
               ? `Unavailable: the on-device model needs at least ${model.minTotalRamGB} GB RAM.`
+              : model?.unavailableReason === 'insufficient-disk'
+                ? model.downloadError
+                  ? `Could not download the on-device model: ${model.downloadError}`
+                  : 'Unavailable: not enough free disk space for the on-device model. Free up space and tap Retry.'
               : model?.unavailableReason === 'downloading'
                 ? `Downloading the on-device model... ${percent}%`
                 : model?.unavailableReason === 'download-failed'
-                  ? downloadFailedText
+                  ? model.downloadError
+                    ? `Could not download the on-device model: ${model.downloadError}`
+                    : downloadFailedText
                   : model?.unavailableReason === 'not-downloaded'
                     ? notDownloadedText
                     : !model?.ready
@@ -1844,7 +1983,7 @@ function LocalAiSection({
 
         {models === null ? (
           <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
-            <Loader2 size={12} className="animate-spin" /> Checking the on-device model...
+            <AgentStatus kind="loading-model" size="inline" caption />
           </div>
         ) : model ? (
           <div
@@ -1876,7 +2015,7 @@ function LocalAiSection({
                       : 'bg-[var(--cl-destructive)]/10 text-[color:var(--cl-destructive)]'
                 ].join(' ')}
               >
-                {model.ready ? <CircleCheck size={12} /> : downloading ? <Loader2 size={12} className="animate-spin" /> : <AlertCircle size={12} />}
+                {model.ready ? <CircleCheck size={12} /> : downloading ? <InlineOrb kind="loading-model" /> : <AlertCircle size={12} />}
                 {model.ready ? 'Ready' : downloading ? `Downloading ${percent}%` : 'Unavailable'}
               </span>
             </div>
@@ -1892,10 +2031,21 @@ function LocalAiSection({
               <p className="text-[11px] leading-snug text-[color:var(--cl-destructive)]">
                 {model.unavailableReason === 'insufficient-ram'
                   ? `This model needs at least ${model.minTotalRamGB} GB RAM.`
+                  : model.unavailableReason === 'insufficient-disk'
+                    ? model.downloadError
+                      ? `Could not download the on-device model: ${model.downloadError}`
+                      : 'Not enough free disk space for the on-device model. Free up space and tap Retry.'
                   : model.unavailableReason === 'download-failed'
-                    ? downloadFailedText
+                    ? model.downloadError
+                      ? `Could not download the on-device model: ${model.downloadError}`
+                      : downloadFailedText
                     : notDownloadedText}
               </p>
+            )}
+            {canRetry && (
+              <TextButton icon={RotateCcw} onClick={retryFetch} disabled={retrying}>
+                {retrying ? 'Retrying…' : 'Retry'}
+              </TextButton>
             )}
           </div>
         ) : (
@@ -1937,7 +2087,7 @@ function LocalAiSection({
           <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Fallback</span>
           <ToggleRow
             label="Use as a fallback when cloud AI is unavailable"
-            desc="If every configured cloud provider is unreachable or none is set up, run meeting indexing, live suggestions, summaries and screenshot analysis on-device as a last resort — instead of failing. Cloud providers are always preferred when they work."
+            desc="If every configured cloud provider is unreachable or none is set up, run meeting indexing, live suggestions, summaries and screenshot analysis on-device as a last resort instead of failing. Cloud providers are always preferred when they work."
             on={settings.localLlm.fallback}
             onChange={(v) => patch({ localLlm: { ...settings.localLlm, fallback: v } })}
           />
@@ -1976,9 +2126,20 @@ function StepBadge({ n, done }: { n: number; done?: boolean }): JSX.Element {
 // ---------------------------------------------------------------------------
 
 type CliCardState = {
-  phase: 'idle' | 'confirming' | 'installing' | 'setup-opened' | 'connecting' | 'done' | 'error' | 'install-error'
+  phase:
+    | 'idle'
+    | 'confirming'
+    | 'installing'
+    | 'waiting-for-login'
+    | 'setup-opened'
+    | 'connecting'
+    | 'done'
+    | 'error'
+    | 'install-error'
   msg: string | null
   version: string | null
+  binaryPresent?: boolean
+  testOk?: boolean
 }
 
 function CliIntegration({
@@ -2060,71 +2221,211 @@ function CliIntegration({
     setState(id, { phase: 'confirming', msg: null, version: null })
   }
 
-  // Step 2: user clicks Continue → install silently, then connect
+  // Step 2: user clicks Continue → install if missing, open login, honest chip.
   const runInstall = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
-    // Capture which provider was active when this install run started — see the patch() call below.
     const startProvider = providerRef.current
-    setState(id, { phase: 'installing', msg: 'Installing…', version: null })
+    let binaryPresent = false
+    let installAttempted = false
+    let installOk: boolean | null = null
+    let loginAttempted = false
+    let testOk = false
 
-    const installResult = await window.toto.cliInstall(id, (line) => {
-      setState(id, { phase: 'installing', msg: line, version: null })
+    const markConnected = (version: string | null, msg: string | null): void => {
+      if (!canShowConnected({ binaryPresent, testOk })) return
+      if (mountedRef.current && providerRef.current === startProvider) {
+        patch({ provider: id, lastClickedCli: id })
+      }
+      setState(id, { phase: 'done', msg, version, binaryPresent, testOk: true })
+    }
+
+    setState(id, { phase: 'installing', msg: 'Installing', version: null, binaryPresent: false, testOk: false })
+
+    const detected = await window.toto.cliDetect(id)
+    binaryPresent = !!detected.ok
+
+    let decision = nextCliSetupStep({
+      binaryPresent,
+      testOk,
+      installAttempted,
+      installOk,
+      loginAttempted
     })
 
-    if (installResult.needsTerminal) {
-      // Needs sudo / elevated perms — fall back to Terminal
-      window.toto.cliSetup(id)
+    if (decision.action === 'install') {
+      installAttempted = true
+      const installResult = await window.toto.cliInstall(id, (line) => {
+        setState(id, { phase: 'installing', msg: line || 'Installing', version: null, binaryPresent, testOk: false })
+      })
+      if (installResult.needsTerminal) {
+        window.toto.cliSetup(id)
+        loginAttempted = true
+        setState(id, {
+          phase: 'waiting-for-login',
+          msg: 'Waiting for login',
+          version: null,
+          binaryPresent,
+          testOk: false
+        })
+        return
+      }
+      installOk = !!installResult.ok
+      if (!installResult.ok) {
+        setState(id, {
+          phase: 'install-error',
+          msg: installResult.error || 'Installation failed.',
+          version: null,
+          binaryPresent: false,
+          testOk: false
+        })
+        return
+      }
+      const again = await window.toto.cliDetect(id)
+      binaryPresent = !!again.ok
+      decision = nextCliSetupStep({
+        binaryPresent,
+        testOk,
+        installAttempted,
+        installOk,
+        loginAttempted
+      })
+      if (decision.action === 'fail') {
+        setState(id, {
+          phase: 'install-error',
+          msg: installResult.error || 'Installation finished but the CLI binary is still missing.',
+          version: null,
+          binaryPresent: false,
+          testOk: false
+        })
+        return
+      }
+    }
+
+    if (!binaryPresent) {
       setState(id, {
-        phase: 'setup-opened',
-        msg: 'Finish the login in the window that opened, then come back and press Connect.',
-        version: null
+        phase: 'install-error',
+        msg: 'CLI binary is not installed.',
+        version: null,
+        binaryPresent: false,
+        testOk: false
       })
       return
     }
 
-    if (!installResult.ok) {
-      setState(id, { phase: 'install-error', msg: installResult.error || 'Installation failed.', version: null })
-      return
-    }
-
-    // Install succeeded — test connection
-    setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
+    setState(id, { phase: 'connecting', msg: 'Connecting…', version: null, binaryPresent, testOk: false })
     const testResult = await window.toto.cliTest(id)
-
-    if (testResult.ok) {
-      // Guard against a stale in-flight install/test resolving after the user switched tabs (unmounting
-      // this card) — without this, a late resolution here can re-activate a provider the user already
-      // disconnected in the meantime (see disconnectCli). Mirrors setState's own mountedRef guard. Also
-      // skip the patch if the user switched to a different provider tile on the AiSection grid while
-      // this install was running — a finished install must never silently revert that in-panel pick.
-      if (mountedRef.current && providerRef.current === startProvider) patch({ provider: id })
-      setState(id, { phase: 'done', msg: null, version: testResult.version ?? null })
+    testOk = !!testResult.ok && !!binaryPresent
+    if (testOk) {
+      markConnected(
+        testResult.version ?? null,
+        testResult.session === 'weekly-limit'
+          ? testResult.error || 'Signed in. Weekly usage limit reached, not disconnected.'
+          : 'Connected'
+      )
       return
     }
 
-    // Not logged in — open login flow
+    loginAttempted = true
     window.toto.cliLogin(id)
     setState(id, {
-      phase: 'setup-opened',
-      msg: 'Installed. Sign in through the window that opened, then come back and press Connect.',
-      version: null
+      phase: 'waiting-for-login',
+      msg: 'Waiting for login',
+      version: null,
+      binaryPresent,
+      testOk: false
     })
+    const deadline = Date.now() + 5 * 60 * 1000
+    while (mountedRef.current && Date.now() < deadline) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 2000)
+      })
+      if (!mountedRef.current) return
+      const again = await window.toto.cliTest(id)
+      testOk = !!again.ok && binaryPresent
+      if (canShowConnected({ binaryPresent, testOk })) {
+        markConnected(
+          again.version ?? null,
+          again.session === 'weekly-limit'
+            ? again.error || 'Signed in. Weekly usage limit reached, not disconnected.'
+            : 'Connected'
+        )
+        return
+      }
+    }
+    if (mountedRef.current) {
+      setState(id, {
+        phase: 'error',
+        msg: 'Still waiting for login. Finish signing in, then press Connect.',
+        version: null,
+        binaryPresent,
+        testOk: false
+      })
+    }
   }
 
-  // Connect button (setup-opened / error): re-run test only
+  // Connect: install in-flow if the CLI is missing, then prove a live session. Never mark Connected
+  // from this handler — main writes cliConnected only after connectCliSession returns ok.
   const connect = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
     // Capture which provider was active when this connect attempt started — see the patch() call below.
     const startProvider = providerRef.current
     setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
-    const r = await window.toto.cliTest(id)
-    if (r.ok) {
+    let r = await window.toto.cliTest(id)
+    if (!r.ok && r.session === 'missing') {
+      setState(id, { phase: 'installing', msg: 'Installing…', version: null })
+      const installResult = await window.toto.cliInstall(id, (line) => {
+        setState(id, { phase: 'installing', msg: line, version: null })
+      })
+      if (installResult.needsTerminal) {
+        window.toto.cliSetup(id)
+        setState(id, {
+          phase: 'setup-opened',
+          msg: 'Finish the login in the window that opened, then come back and press Connect.',
+          version: null
+        })
+        return
+      }
+      if (!installResult.ok) {
+        setState(id, {
+          phase: 'install-error',
+          msg: installResult.error || 'Installation failed.',
+          version: null
+        })
+        return
+      }
+      setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
+      r = await window.toto.cliTest(id)
+    }
+    const binaryPresent = r.ok || r.session !== 'missing'
+    const testOk = !!r.ok && r.session !== 'missing'
+    if (canShowConnected({ binaryPresent, testOk })) {
       // Same stale-resolution + provider-switch guard as runInstall above.
-      if (mountedRef.current && providerRef.current === startProvider) patch({ provider: id })
-      setState(id, { phase: 'done', msg: null, version: r.version ?? null })
+      // Weekly-limit is signed-in: Connect succeeds and we say so, instead of looking disconnected.
+      if (mountedRef.current && providerRef.current === startProvider) {
+        patch({ provider: id, lastClickedCli: id })
+      }
+      setState(id, {
+        phase: 'done',
+        msg:
+          r.session === 'weekly-limit'
+            ? r.error || 'Signed in. Weekly usage limit reached, not disconnected.'
+            : 'Connected',
+        version: r.version ?? null,
+        binaryPresent: true,
+        testOk: true
+      })
+    } else if (r.session === 'signed-out') {
+      window.toto.cliLogin(id)
+      setState(id, {
+        phase: 'setup-opened',
+        msg: 'Installed. Sign in through the window that opened, then come back and press Connect.',
+        version: null
+      })
     } else {
       setState(id, {
         phase: 'error',
         msg: r.error || 'Could not connect. Finish signing in, then try again.',
-        version: null
+        version: null,
+        binaryPresent: r.session !== 'missing',
+        testOk: false
       })
     }
   }
@@ -2138,6 +2439,10 @@ function CliIntegration({
   const disconnectCli = (id: 'claude-cli' | 'codex-cli'): void => {
     const nextConnected = { ...cliConnected, [id]: false }
     const next: Partial<PublicSettings> = { cliConnected: nextConnected }
+    if (settings.lastClickedCli === id) {
+      const other = id === 'claude-cli' ? 'codex-cli' : 'claude-cli'
+      next.lastClickedCli = nextConnected[other] ? other : null
+    }
     if (provider === id)
       next.provider = pickReadyProvider(
         id,
@@ -2163,6 +2468,13 @@ function CliIntegration({
     const st = getState(id)
     const isActive = provider === id
     const isConnected = !!cliConnected[id]
+    const chip = cliSetupChip({
+      binaryPresent: !!st.binaryPresent || (st.phase === 'idle' && isConnected),
+      testOk: !!st.testOk || (st.phase === 'done' && isConnected) || (st.phase === 'idle' && isConnected),
+      installing: st.phase === 'installing',
+      loginOpened: st.phase === 'waiting-for-login' || st.phase === 'setup-opened',
+      error: st.phase === 'error' || st.phase === 'install-error' ? st.msg : null
+    })
     const allowed = isAllowed(id)
     const cardLocked = locked || !allowed
     const desc =
@@ -2184,10 +2496,10 @@ function CliIntegration({
             : 'border-[var(--cl-border)] bg-white/[0.02]'
         ].join(' ')}
       >
-        <div className="flex items-center justify-between gap-2">
-          <div className="flex flex-col gap-0.5">
+        <div className="flex min-w-0 items-center justify-between gap-2">
+          <div className="min-w-0 flex flex-col gap-0.5">
             <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{def.label}</span>
-            <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{desc}</span>
+            <span className="min-w-0 break-words text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{desc}</span>
           </div>
           {isActive ? (
             <span className={activePill}>
@@ -2199,6 +2511,24 @@ function CliIntegration({
             !allowed && <span className={managedChipCls}>Restricted by your organization</span>
           )}
         </div>
+
+        {chip.kind !== 'idle' && (chip.kind !== 'failed' || !st.msg) && (
+          <span
+            data-cli-setup-chip={chip.kind}
+            className={
+              chip.kind === 'connected'
+                ? 'inline-flex w-fit items-center gap-1 rounded-full bg-[var(--cl-success)]/15 px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-success)]'
+                : chip.kind === 'failed'
+                  ? 'inline-flex w-fit items-center gap-1 rounded-full bg-[var(--cl-destructive)]/15 px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-destructive)]'
+                  : 'inline-flex w-fit items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]'
+            }
+          >
+            {chip.kind === 'connected' && <CircleCheck size={12} />}
+            {chip.kind === 'installing' && <InlineOrb kind="loading" />}
+            {chip.kind === 'waiting-for-login' && <InlineOrb kind="loading" />}
+            {chip.label}
+          </span>
+        )}
 
         {/* Confirm step */}
         {st.phase === 'confirming' && (
@@ -2218,13 +2548,13 @@ function CliIntegration({
         {/* Installing — live progress */}
         {st.phase === 'installing' && (
           <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
-            <Loader2 size={12} className="shrink-0 animate-spin" />
+            <InlineOrb kind="loading" />
             <span className="min-w-0 flex-1 truncate">{st.msg ?? 'Installing…'}</span>
           </div>
         )}
 
         {/* After setup opened in Terminal */}
-        {st.phase === 'setup-opened' && st.msg && (
+        {(st.phase === 'setup-opened' || st.phase === 'waiting-for-login') && st.msg && chip.kind !== 'waiting-for-login' && (
           <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">{st.msg}</span>
         )}
 
@@ -2238,17 +2568,14 @@ function CliIntegration({
 
         {/* Connecting spinner */}
         {st.phase === 'connecting' && (
-          <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
-            <Loader2 size={12} className="shrink-0 animate-spin" />
-            <span>Connecting…</span>
-          </div>
+          <AgentStatus kind="connecting" size="inline" caption />
         )}
 
         {/* Connected version info */}
-        {st.phase === 'done' && st.version && (
+        {st.phase === 'done' && (st.version || st.msg) && (
           <span className="text-[11px] text-[color:var(--cl-success)]">
             <CircleCheck size={12} className="mr-1 inline" />
-            {st.version}
+            {st.msg || st.version}
           </span>
         )}
 
@@ -2279,8 +2606,8 @@ function CliIntegration({
           </div>
         )}
 
-        {/* Connect button — visible in setup-opened or error phases */}
-        {(st.phase === 'setup-opened' || st.phase === 'error') && (
+        {/* Connect button — visible in setup-opened, waiting-for-login, or error phases */}
+        {(st.phase === 'setup-opened' || st.phase === 'waiting-for-login' || st.phase === 'error') && (
           <div className="flex gap-2">
             <button
               type="button"
@@ -2343,7 +2670,7 @@ function CliIntegration({
   return (
     <Section
       title="CLI Integration"
-      desc="Claude Code and Codex route through your own local install of that tool. It has to be on this device. Set up automatically installs it (via npm i -g) if it's missing, or connects straight away if it's already there."
+      desc="Claude Code and Codex route through your own local install of that tool. It has to be on this device. Set up automatically installs a managed copy if the CLI is missing, or reuses a Claude or Codex login already on this machine. Connected only after a live session check."
       icon={Link2}
     >
       <div className="flex flex-col gap-3">
@@ -2659,7 +2986,7 @@ function McpConnectionCard({
               disabled={!endpointUrl.trim() || !apiKey.trim() || testState.phase === 'testing' || testState.phase === 'saving'}
               className={secondaryBtnStyle}
             >
-              {testState.phase === 'testing' ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+              {testState.phase === 'testing' ? <InlineOrb kind="connecting" /> : <RefreshCw size={12} />}
               Test connection
             </button>
             <button
@@ -2669,7 +2996,7 @@ function McpConnectionCard({
               title={testState.phase !== 'tested' ? 'Test the connection successfully first' : undefined}
               className={primaryBtnStyle}
             >
-              {testState.phase === 'saving' ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+              {testState.phase === 'saving' ? <InlineOrb kind="loading" /> : <Check size={12} />}
               Save
             </button>
             <button
@@ -2705,81 +3032,201 @@ const activePillStyle =
   'flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]'
 
 /**
- * ClickUp's connection card — same shell as McpConnectionCard (title/desc/Connected pill/tools list/
- * Reconnect+Disconnect) but a genuinely different trigger: there's no endpoint/key form to fill in and
- * Test/Save, ClickUp is OAuth-only (2.1 + PKCE). One "Connect ClickUp" button runs the whole browser
- * consent flow in main (window.toto.mcpClickupConnect) and, on success, main has already upserted the
- * mcpConnections entry — this component only reflects that state back, via the same `patch` callback
- * McpConnectionCard uses so both write through Settings' single settings-patch path.
+ * Product-connect card (ClickUp, Plane) — docs/design/BRAIN-CONNECTORS.md.
+ * Default: official logo, name, one line, Connect. No URL / key / slug / Test / Save.
+ * Advanced (closed on every mount): paste a key. Main pins the MCP URL.
+ * Connect / Test / Save / Disconnect fire only from an explicit click — never a useEffect.
  */
-function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p: Partial<PublicSettings>) => void }): JSX.Element {
-  const conn = settings.mcpConnections.find((c) => c.id === 'clickup')
+function ProductConnectCard({
+  settings,
+  patch,
+  kind,
+  title,
+  desc,
+  waitingLabel,
+  mark,
+  connect,
+  pinnedEndpoint,
+  apiKeyHint,
+  extraFields
+}: {
+  settings: PublicSettings
+  patch: (p: Partial<PublicSettings>) => void
+  kind: 'clickup' | 'plane'
+  title: string
+  desc: string
+  waitingLabel: string
+  mark: JSX.Element
+  connect: () => Promise<{ ok: boolean; error?: string; tools?: string[]; clickupListId?: string; clickupListName?: string }>
+  pinnedEndpoint: string
+  apiKeyHint: string
+  extraFields?: { key: string; label: string; placeholder: string }[]
+}): JSX.Element {
+  const conn = settings.mcpConnections.find((c) => c.id === kind)
   const connected = conn?.connected ?? false
-  const [state, setState] = useState<{ phase: 'idle' | 'connecting' | 'error'; error: string | null }>({
-    phase: 'idle',
-    error: null
-  })
+  const [state, setState] = useState<{
+    phase: 'idle' | 'connecting' | 'testing' | 'tested' | 'saving' | 'error'
+    error: string | null
+    tools: string[] | null
+  }>({ phase: 'idle', error: null, tools: null })
+  const [advanced, setAdvanced] = useState(false)
+  const [apiKey, setApiKey] = useState('')
+  const [extraValues, setExtraValues] = useState<Record<string, string>>(
+    Object.fromEntries((extraFields ?? []).map((f) => [f.key, conn?.extraHeaders?.[f.key] || '']))
+  )
+  const keyId = useId()
 
-  const connect = async (): Promise<void> => {
-    setState({ phase: 'connecting', error: null })
-    // Opens the system browser for ClickUp's consent screen — never fired except from this explicit click.
-    const r = await window.toto.mcpClickupConnect()
+  const extraHeaders = (): Record<string, string> =>
+    Object.fromEntries(Object.entries(extraValues).filter(([, v]) => v.trim()).map(([k, v]) => [k, v.trim()]))
+
+  const runConnect = async (): Promise<void> => {
+    setState({ phase: 'connecting', error: null, tools: null })
+    const r = await connect()
     if (r.ok) {
       await patch({
         mcpConnections: [
-          ...settings.mcpConnections.filter((c) => c.id !== 'clickup'),
-          { id: 'clickup', kind: 'clickup', label: 'ClickUp', endpointUrl: '', connected: true, tools: r.tools ?? [], extraHeaders: {} }
+          ...settings.mcpConnections.filter((c) => c.id !== kind),
+          {
+            id: kind,
+            kind,
+            label: title,
+            endpointUrl: pinnedEndpoint,
+            connected: true,
+            tools: r.tools ?? [],
+            extraHeaders: extraHeaders(),
+            ...(kind === 'clickup' && (r.clickupListId || r.clickupListName)
+              ? { clickupListId: r.clickupListId, clickupListName: r.clickupListName }
+              : {})
+          }
         ]
       })
-      setState({ phase: 'idle', error: null })
+      setState({ phase: 'idle', error: null, tools: null })
     } else {
-      setState({ phase: 'error', error: r.error || 'Could not connect ClickUp.' })
+      setState({ phase: 'error', error: r.error || `Could not connect ${title}.`, tools: null })
+    }
+  }
+
+  const testKey = async (): Promise<void> => {
+    setState({ phase: 'testing', error: null, tools: null })
+    const r = await window.toto.mcpTestConnection({
+      connectionId: kind,
+      endpointUrl: pinnedEndpoint,
+      apiKey: apiKey.trim(),
+      extraHeaders: extraHeaders()
+    })
+    if (r.ok) {
+      setState({ phase: 'tested', error: null, tools: r.tools ?? [] })
+    } else {
+      setState({ phase: 'error', error: r.error || 'Could not connect.', tools: null })
+    }
+  }
+
+  const saveKey = async (): Promise<void> => {
+    setState((s) => ({ ...s, phase: 'saving' }))
+    const r = await window.toto.mcpSaveConnection({
+      connectionId: kind,
+      endpointUrl: pinnedEndpoint,
+      apiKey: apiKey.trim(),
+      extraHeaders: extraHeaders(),
+      label: title
+    })
+    if (r.ok) {
+      await patch({
+        mcpConnections: [
+          ...settings.mcpConnections.filter((c) => c.id !== kind),
+          {
+            id: kind,
+            kind,
+            label: title,
+            endpointUrl: pinnedEndpoint,
+            connected: true,
+            tools: r.tools ?? [],
+            extraHeaders: extraHeaders(),
+            ...(kind === 'clickup' && (r.clickupListId || r.clickupListName)
+              ? { clickupListId: r.clickupListId, clickupListName: r.clickupListName }
+              : {})
+          }
+        ]
+      })
+      setApiKey('')
+      setAdvanced(false)
+      setState({ phase: 'idle', error: null, tools: null })
+    } else {
+      setState({ phase: 'error', error: r.error || 'Could not save the connection.', tools: null })
     }
   }
 
   const disconnect = async (): Promise<void> => {
-    const r = await window.toto.mcpDisconnect({ connectionId: 'clickup' })
+    const r = await window.toto.mcpDisconnect({ connectionId: kind })
     await patch({
-      mcpConnections: settings.mcpConnections.map((c) => (c.id === 'clickup' ? { ...c, connected: false, tools: [] } : c))
+      mcpConnections: settings.mcpConnections.map((c) => (c.id === kind ? { ...c, connected: false, tools: [] } : c))
     })
-    setState(r.ok ? { phase: 'idle', error: null } : { phase: 'error', error: r.error || 'Disconnected, but cleanup failed.' })
+    setApiKey('')
+    if (!r.ok) {
+      setState({ phase: 'error', error: r.error || 'Disconnected, but cleanup failed.', tools: null })
+      return
+    }
+    setState({ phase: 'idle', error: null, tools: null })
   }
+
+  const connecting = state.phase === 'connecting'
 
   return (
     <div
+      data-connector={kind}
       className={[
         'flex flex-col gap-2 rounded-[10px] border p-3',
         connected ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40' : 'border-[var(--cl-border)] bg-white/[0.02]'
       ].join(' ')}
     >
-      <div className="flex items-center justify-between gap-2">
-        <div className="flex flex-col gap-0.5">
-          <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">ClickUp · task management</span>
-          <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Push action items from a meeting recap to ClickUp as tasks. Manual and review-first: nothing sends automatically.
+      <div className="flex items-center gap-3">
+        {connected ? (
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] bg-white/[0.06]">
+            {mark}
           </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => void runConnect()}
+            disabled={connecting}
+            aria-label={`Connect ${title}`}
+            className="no-drag cl-focus flex h-8 w-8 shrink-0 items-center justify-center rounded-[8px] bg-white/[0.06] hover:bg-white/[0.1] disabled:opacity-50"
+          >
+            {mark}
+          </button>
+        )}
+        <div className="min-w-0 flex-1">
+          <div className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{title}</div>
+          <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">{desc}</div>
         </div>
         {connected ? (
           <span className={activePillStyle}>
             <CircleCheck size={12} /> Connected
           </span>
-        ) : null}
+        ) : (
+          <button type="button" onClick={() => void runConnect()} disabled={connecting} className={primaryBtnStyle}>
+            {connecting ? <InlineOrb kind="connecting" /> : null}
+            {connecting ? waitingLabel : 'Connect'}
+          </button>
+        )}
       </div>
 
       {connected ? (
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 pl-10">
           <span className="min-w-0 flex-1 truncate text-[11px] text-[color:var(--cl-muted-foreground)]">
             {conn && conn.tools.length > 0
-              ? `${conn.tools.length} tool${conn.tools.length === 1 ? '' : 's'} available`
-              : 'Connected — no tools reported for this account.'}
+              ? kind === 'clickup' && conn.clickupListName
+                ? `Tasks go to ${conn.clickupListName}`
+                : `${conn.tools.length} tool${conn.tools.length === 1 ? '' : 's'} available`
+              : 'Connected. No tools reported for this account.'}
           </span>
           <button
             type="button"
-            onClick={() => void connect()}
-            disabled={state.phase === 'connecting'}
+            onClick={() => void runConnect()}
+            disabled={connecting}
             className="no-drag cl-focus shrink-0 text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
           >
-            {state.phase === 'connecting' ? <Loader2 size={12} className="inline animate-spin" /> : 'Reconnect'}
+            {connecting ? <InlineOrb kind="connecting" /> : 'Reconnect'}
           </button>
           <button
             type="button"
@@ -2789,17 +3236,7 @@ function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p:
             Disconnect
           </button>
         </div>
-      ) : (
-        <button
-          type="button"
-          onClick={() => void connect()}
-          disabled={state.phase === 'connecting'}
-          className={secondaryBtnStyle}
-        >
-          {state.phase === 'connecting' ? <Loader2 size={12} className="animate-spin" /> : <Link2 size={12} />}
-          {state.phase === 'connecting' ? 'Waiting for ClickUp…' : 'Connect ClickUp'}
-        </button>
-      )}
+      ) : null}
 
       {state.phase === 'error' && state.error && (
         <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
@@ -2807,7 +3244,127 @@ function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p:
           <span>{state.error}</span>
         </div>
       )}
+      {state.phase === 'tested' && state.tools && (
+        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-success)]">
+          <CircleCheck size={13} className="mt-px shrink-0" />
+          <span>
+            Connected.{' '}
+            {state.tools.length > 0
+              ? `Found ${state.tools.length} tool${state.tools.length === 1 ? '' : 's'}: ${state.tools.join(', ')}`
+              : `${title} reported no tools for this key’s scope.`}
+          </span>
+        </div>
+      )}
+
+      <div>
+        <button
+          type="button"
+          onClick={() => setAdvanced((o) => !o)}
+          aria-expanded={advanced}
+          className="no-drag cl-focus flex items-center gap-1 text-[11px] text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]"
+        >
+          <ChevronDown size={12} className={advanced ? 'rotate-180' : ''} />
+          Advanced
+        </button>
+        {advanced ? (
+          <div className="mt-2 flex flex-col gap-2">
+            <p className="text-[11px] text-[color:var(--cl-muted-foreground)]">Paste a key if you already have one.</p>
+            <div className="flex flex-col gap-1">
+              <label htmlFor={keyId} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+                API key
+              </label>
+              <input
+                id={keyId}
+                type="password"
+                value={apiKey}
+                onChange={(e) => {
+                  setApiKey(e.target.value)
+                  setState((s) => ({ ...s, phase: s.phase === 'tested' ? 'idle' : s.phase, error: null, tools: null }))
+                }}
+                placeholder={apiKeyHint}
+                className={'w-full ' + ctl}
+              />
+            </div>
+            {(extraFields ?? []).map((f) => {
+              const fieldId = `${keyId}-${f.key}`
+              return (
+                <div key={f.key} className="flex flex-col gap-1">
+                  <label htmlFor={fieldId} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
+                    {f.label}
+                  </label>
+                  <input
+                    id={fieldId}
+                    value={extraValues[f.key] || ''}
+                    onChange={(e) => {
+                      setExtraValues((s) => ({ ...s, [f.key]: e.target.value }))
+                      setState((s) => ({ ...s, phase: s.phase === 'tested' ? 'idle' : s.phase, error: null, tools: null }))
+                    }}
+                    placeholder={f.placeholder}
+                    className={'w-full ' + ctl}
+                  />
+                </div>
+              )
+            })}
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => void testKey()}
+                disabled={!apiKey.trim() || state.phase === 'testing' || state.phase === 'saving' || connecting}
+                className={secondaryBtnStyle}
+              >
+                {state.phase === 'testing' ? <InlineOrb kind="connecting" /> : <RefreshCw size={12} />}
+                Test connection
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveKey()}
+                disabled={state.phase !== 'tested'}
+                title={state.phase !== 'tested' ? 'Test the connection successfully first' : undefined}
+                className={primaryBtnStyle}
+              >
+                {state.phase === 'saving' ? <InlineOrb kind="loading" /> : <Check size={12} />}
+                Save
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
     </div>
+  )
+}
+
+function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p: Partial<PublicSettings>) => void }): JSX.Element {
+  return (
+    <ProductConnectCard
+      settings={settings}
+      patch={patch}
+      kind="clickup"
+      title="ClickUp"
+      desc="Tasks from a recap. Nothing sends itself."
+      waitingLabel="Waiting for ClickUp…"
+      mark={<ClickUpMark size={28} />}
+      connect={() => window.toto.mcpClickupConnect()}
+      pinnedEndpoint="https://mcp.clickup.com/mcp"
+      apiKeyHint="ClickUp API token (power option, Connect is the usual path)"
+    />
+  )
+}
+
+function PlaneCard({ settings, patch }: { settings: PublicSettings; patch: (p: Partial<PublicSettings>) => void }): JSX.Element {
+  return (
+    <ProductConnectCard
+      settings={settings}
+      patch={patch}
+      kind="plane"
+      title="Plane"
+      desc="Work items from a recap. Nothing sends itself."
+      waitingLabel="Waiting for Plane…"
+      mark={<PlaneMark size={28} />}
+      connect={() => window.toto.mcpPlaneConnect()}
+      pinnedEndpoint="https://mcp.plane.so/http/api-key/mcp"
+      apiKeyHint="Personal or workspace access token"
+      extraFields={[{ key: 'X-Workspace-slug', label: 'Workspace slug', placeholder: 'acme' }]}
+    />
   )
 }
 
@@ -2892,7 +3449,7 @@ function AgentPicker({
     if (loading) {
       return (
         <div className={['flex w-full items-center gap-2 opacity-70', ctl].join(' ')}>
-          <Loader2 size={13} className="animate-spin" /> Loading agents…
+          <AgentStatus kind="searching" size="inline" caption />
         </div>
       )
     }
@@ -3062,9 +3619,8 @@ function DustSetup({
     msg: null,
     ok: false
   })
-  // Native OAuth sign-in state machine (main/dust-oauth.ts) — no CLI, no system Node.js. 'waiting' polls
-  // dustLoginPoll every intervalSec until the user finishes the browser consent; 'picking' shows the
-  // returned workspace list; 'polling' here means "finishing with the chosen workspace", not device polling.
+  // Native OAuth sign-in after the managed Dust CLI is installed. 'starting' covers CLI install +
+  // device-code mint. 'waiting' polls dustLoginPoll until the browser consent finishes.
   type DustOAuthPhase = 'idle' | 'starting' | 'waiting' | 'picking' | 'finishing' | 'error'
   const [oauth, setOauth] = useState<{
     phase: DustOAuthPhase
@@ -3110,17 +3666,43 @@ function DustSetup({
   const spotlightAgent = settings.providerModelsSpotlightRef['dust'] ?? ''
   const keySaved = !!settings.hasKeys['dust']
   const hasWs = !!settings.dustWorkspaceId.trim()
-  const connected = keySaved && hasWs && !!agent
+  // Credentials on disk are not a live proof — green Connected / Use Dust wait for a non-empty agent list.
+  const listProved = !!agents && agents.length > 0 && !err
+  const connected = keySaved && hasWs && !!agent && listProved
   const selectedAgentName = agents?.find((a) => a.sId === agent)?.name
   const selectedAgent = agents?.find((a) => a.sId === agent)
   // Loaded the workspace's agents but the saved base agent isn't among them — the root cause of the
   // "Failed to retrieve agent message" ask failure. Warn + guide a one-click re-pick right at the picker.
   const storedAgentMissing = dustStoredAgentMissing(agent, agents)
+  const spotlightAgentMissing = dustStoredAgentMissing(spotlightAgent, agents)
   const selectedAgentRunsSonnet = !!selectedAgent && selectedAgent.modelProviderId === 'anthropic' && /sonnet/i.test(selectedAgent.modelId || '')
+
+  const applyDustValidate = (verdict: DustInstantValidateResult): void => {
+    if (verdict.ok) {
+      setCli({ busy: false, ok: true, msg: verdict.message })
+      setErr(null)
+      return
+    }
+    setCli({ busy: false, ok: false, msg: verdict.message })
+    setErr(verdict.message)
+  }
+
+  // Live-ping after OAuth finish / CLI import (key already persisted in main). testApiKey + listDustAgents
+  // (view:'list'); empty/restricted/401/dead session is not Connected. Never auto-sends a chat.
+  const proveAfterConnect = async (workspaceId: string, selectedAgentId = agent): Promise<DustInstantValidateResult> => {
+    const verdict = await proveDustConnection({
+      workspaceId,
+      selectedAgentId,
+      testApiKey: () => window.toto.testApiKey('dust', ''),
+      listAgents: () => loadAgents()
+    })
+    applyDustValidate(verdict)
+    return verdict
+  }
 
   // Import an existing `dust login` CLI session (token + workspace + region) from the keychain — the
   // migration path for a user who already has the CLI installed. The primary path is startDustOAuth below,
-  // which needs neither the CLI nor system Node.js.
+  // which installs the managed Dust CLI then signs in (native OAuth). No system Node.js.
   const connectCli = async (): Promise<void> => {
     setCli({ busy: true, msg: null, ok: false })
     const r = await window.toto.dustImportCli()
@@ -3167,8 +3749,8 @@ function DustSetup({
     } else {
       await patch({ provider: 'dust' })
     }
-    setCli({ busy: false, ok: true, msg: `Connected. Workspace ${r.workspaceId}. Loading agents…` })
-    await loadAgents()
+    setCli({ busy: false, ok: false, msg: 'Checking Dust connection…' })
+    await proveAfterConnect(r.workspaceId || settings.dustWorkspaceId, wsChanged ? DUST_BASE_AGENT_ID : agent)
   }
 
   const oauthIdle = { phase: 'idle' as const, userCode: null, verificationUri: null, intervalSec: 5, expiresAt: 0, workspaces: null, error: null }
@@ -3176,6 +3758,15 @@ function DustSetup({
   // Step 1: mint a device code, open the browser consent page. Step 2 (polling) is the effect below.
   const startDustOAuth = async (): Promise<void> => {
     setOauth({ ...oauthIdle, phase: 'starting' })
+    const installed = await window.toto.dustInstallCli()
+    if (!installed.ok) {
+      setOauth({
+        ...oauthIdle,
+        phase: 'error',
+        error: installed.error || 'Could not install the Dust CLI.'
+      })
+      return
+    }
     const r = await window.toto.dustLoginBegin()
     // The device code deliberately never reaches the renderer — main keeps it and polls with its own
     // copy (see the dustLoginBegin handler). The user code is what this screen actually needs.
@@ -3203,7 +3794,7 @@ function DustSetup({
     const tick = async (intervalSec: number): Promise<void> => {
       if (cancelled) return
       if (Date.now() > oauth.expiresAt) {
-        setOauth((o) => (o.phase === 'waiting' ? { ...o, phase: 'error', error: 'Sign-in expired — try again.' } : o))
+        setOauth((o) => (o.phase === 'waiting' ? { ...o, phase: 'error', error: 'Sign-in expired. Try again.' } : o))
         return
       }
       const r = await window.toto.dustLoginPoll()
@@ -3238,7 +3829,10 @@ function DustSetup({
     }
     setOauth(oauthIdle)
     await patch({ provider: 'dust' })
-    await loadAgents()
+    const verdict = await proveAfterConnect(sId)
+    if (!verdict.ok) {
+      setOauth({ ...oauthIdle, phase: 'error', error: verdict.message })
+    }
   }
 
   // Save a Dust API key (manual alternative to the CLI). Dust keeps its own key, independent of the
@@ -3246,14 +3840,31 @@ function DustSetup({
   const saveDustKey = async (): Promise<void> => {
     const k = dustKey.trim()
     if (!k) return
+    const workspaceId = settings.dustWorkspaceId.trim()
     setKeySaving(true)
     setErr(null)
     setRecoveryMessage(null)
     try {
+      if (!workspaceId) {
+        applyDustValidate({
+          ok: false,
+          reason: 'workspace-missing',
+          message: DUST_WORKSPACE_MISSING_SETUP_ERROR
+        })
+        return
+      }
+      // Prove the pasted key before persisting it — a bad key must fail in this card, not look Saved.
+      const test = await window.toto.testApiKey('dust', k)
+      if (!test.ok) {
+        applyDustValidate(decideDustInstantValidate({ workspaceId, test, list: test }, agent))
+        return
+      }
       await saveKey('dust', k)
       await patch({ provider: 'dust' }) // activate Dust so this key is used + the add-key CTA hides
       setDustKey('')
       setRecoveryAvailable(false)
+      const list = await loadAgents()
+      applyDustValidate(decideDustInstantValidate({ workspaceId, test, list }, agent))
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Could not save the Dust API key.'
       setErr(message)
@@ -3261,9 +3872,6 @@ function DustSetup({
     } finally {
       setKeySaving(false)
     }
-    // Validate immediately: load the agent list so a bad key/workspace surfaces its error here and now
-    // instead of a silent "Saved" green check that only fails later when the user reaches Step 4.
-    if (settings.dustWorkspaceId.trim()) void loadAgents()
   }
 
   const recoverProfileAndRetryDustKey = async (): Promise<void> => {
@@ -3353,17 +3961,19 @@ function DustSetup({
     if (Object.keys(next).length) patch(next)
   }
 
-  const loadAgents = async (): Promise<void> => {
+  const loadAgents = async (): Promise<{ ok: boolean; agents?: DustAgent[]; error?: string }> => {
     setLoading(true)
     setErr(null)
     const r = await window.toto.dustListAgents()
     setLoading(false)
-    if (r.ok && r.agents) {
+    if (r.ok && r.agents && r.agents.length > 0) {
       setAgents(r.agents)
-    } else {
-      setAgents(null)
-      setErr(r.error || 'Could not load your agents. Check the key + workspace, then retry.')
+      return r
     }
+    const error = r.error || (r.ok ? DUST_EMPTY_AGENTS_ERROR : 'Could not load your agents. Check the key + workspace, then retry.')
+    setAgents(r.ok && r.agents ? r.agents : null)
+    setErr(error)
+    return { ok: false, error, agents: r.agents }
   }
 
   // When Dust was already connected in a prior session (key + workspace saved), load the agent list on
@@ -3399,24 +4009,22 @@ function DustSetup({
       const decision = decideDustLiveCheck(await window.toto.dustProbeSession())
       if (decision === 'connected') return
       if (decision === 'needs-access') {
-        setCli({ busy: false, ok: false, msg: `Allow Métis to read your Dust CLI session in ${DUST_CREDENTIAL_STORE}, then Reconnect.` })
+        const msg = `Allow Métis to read your Dust CLI session in ${DUST_CREDENTIAL_STORE}, then Reconnect.`
+        setCli({ busy: false, ok: false, msg })
+        setErr(msg)
         return
       }
       if (decision === 'finish-workspace-pick') {
-        setCli({
-          busy: false,
-          ok: false,
-          msg: 'Almost there. Finish picking your workspace in the terminal from `dust login` (arrow keys, then Enter), then Reconnect.'
-        })
+        const msg = 'Almost there. Finish picking your workspace in the terminal from `dust login` (arrow keys, then Enter), then Reconnect.'
+        setCli({ busy: false, ok: false, msg })
+        setErr(msg)
         return
       }
       // decision === 'run-setup' — the saved CLI session is dead. Nudge toward a fix rather than silently
       // relaunching anything: there is no more in-app installer/terminal step for the CLI path to reopen.
-      setCli({
-        busy: false,
-        ok: false,
-        msg: 'Your Dust CLI session ended. Run `dust login` again and Reconnect — or use the automatic sign-in above.'
-      })
+      const msg = 'Your Dust CLI session ended. Run `dust login` again and Reconnect, or use the automatic sign-in above.'
+      setCli({ busy: false, ok: false, msg })
+      setErr(msg)
     })()
     // Probe once on mount for the already-connected case only; connectCli / disconnect handle the rest.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -3456,14 +4064,48 @@ function DustSetup({
       icon={Link2}
     >
       <div className="flex flex-col gap-4">
-        {/* PRIMARY — native OAuth sign-in (main/dust-oauth.ts): no CLI install, no system Node.js. One
-            click opens the browser for consent, then Métis's own workspace picker below finishes it. */}
+        {/* PRIMARY — install the managed Dust CLI, then native OAuth (main/dust-oauth.ts). One
+            click installs @dust-tt/dust-cli into userData and opens the browser for consent. */}
         <div className="flex flex-col gap-2 rounded-[12px] border border-[var(--cl-primary)]/40 bg-[var(--cl-primary-soft)]/50 p-3.5">
           {keySaved && hasWs ? (
-            // Already connected → Reconnect (fresh sign-in) + Disconnect (full reset).
+            // Credentials exist → Reconnect / Disconnect. Green Connected only after a live agent list.
             <div className="flex items-center justify-between gap-2">
-              <span className="flex items-center gap-1.5 text-[12px] font-medium text-[color:var(--cl-success)]">
-                <CircleCheck size={14} /> Dust is connected.
+              <span
+                className={[
+                  'flex items-center gap-1.5 text-[12px] font-medium',
+                  err || (agents && agents.length === 0)
+                    ? 'text-[color:var(--cl-destructive)]'
+                    : listProved
+                      ? 'text-[color:var(--cl-success)]'
+                      : 'text-[color:var(--cl-muted-foreground)]'
+                ].join(' ')}
+              >
+                {err || (agents && agents.length === 0) ? (
+                  <>
+                    <AlertCircle size={14} />
+                    {err || DUST_EMPTY_AGENTS_ERROR}
+                  </>
+                ) : listProved && agents ? (
+                  <>
+                    <CircleCheck size={14} />
+                    {formatDustConnectedMessage({
+                      agentCount: agents.length,
+                      selectedName: selectedAgentName,
+                      selectedId: agent,
+                      workspaceId: settings.dustWorkspaceId
+                    })}
+                  </>
+                ) : loading ? (
+                  <>
+                    <InlineOrb kind="connecting" />
+                    Checking Dust connection…
+                  </>
+                ) : (
+                  <>
+                    <Info size={14} />
+                    Workspace saved. Load agents to verify the connection.
+                  </>
+                )}
               </span>
               <div className="flex items-center gap-2">
                 {locked && <span className={managedChipCls}>Managed by your organization</span>}
@@ -3474,7 +4116,7 @@ function DustSetup({
                   title="Sign in again to Dust"
                   className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
                 >
-                  {oauth.phase !== 'idle' ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+                  {oauth.phase !== 'idle' ? <InlineOrb kind="connecting" /> : <RefreshCw size={13} />}
                   Reconnect
                 </button>
                 <button
@@ -3493,7 +4135,7 @@ function DustSetup({
             // Waiting on the browser consent step — show the code in case the browser needs it re-typed,
             // and a way out in case the user closed the tab or the browser never opened.
             <div className="flex flex-col items-center gap-2 text-center">
-              <Loader2 size={16} className="animate-spin text-[color:var(--cl-primary)]" />
+              <AgentStatus kind="connecting" size="hero" />
               <span className="text-[13px] font-medium text-[color:var(--cl-foreground)]">Waiting for you to finish in your browser…</span>
               {oauth.userCode && (
                 <span className="rounded-[8px] bg-black/20 px-3 py-1 font-mono text-[15px] tracking-widest text-[color:var(--cl-foreground)]">
@@ -3537,7 +4179,7 @@ function DustSetup({
             </div>
           ) : oauth.phase === 'finishing' ? (
             <div className="flex items-center justify-center gap-2 py-2 text-[13px] text-[color:var(--cl-muted-foreground)]">
-              <Loader2 size={16} className="animate-spin" /> Finishing sign-in…
+              <AgentStatus kind="connecting" size="inline" caption />
             </div>
           ) : (
             <>
@@ -3547,11 +4189,11 @@ function DustSetup({
                 disabled={oauth.phase === 'starting' || locked}
                 className="no-drag cl-focus flex w-full items-center justify-center gap-2 rounded-[10px] bg-[var(--cl-primary)] px-4 py-3 text-[14px] font-semibold text-white hover:opacity-90 disabled:opacity-50"
               >
-                {oauth.phase === 'starting' ? <Loader2 size={16} className="animate-spin" /> : <Wand2 size={16} />}
-                {oauth.phase === 'starting' ? 'Starting sign-in…' : 'Set up Dust automatically'}
+                {oauth.phase === 'starting' ? <InlineOrb kind="connecting" /> : <Wand2 size={16} />}
+                {oauth.phase === 'starting' ? 'Installing Dust CLI…' : 'Set up Dust automatically'}
               </button>
               <span className="text-center text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                Opens your browser to sign in, then pick your workspace here. No CLI, no key to copy.
+                Installs the Dust CLI, then opens your browser to sign in and pick your workspace.
                 {locked && <span className={'ml-1 ' + managedChipCls}>Managed by your organization</span>}
               </span>
               <button
@@ -3560,7 +4202,7 @@ function DustSetup({
                 disabled={cli.busy || locked}
                 className="no-drag cl-focus mx-auto flex items-center gap-1.5 text-[11px] text-[color:var(--cl-muted-foreground)] underline disabled:opacity-50"
               >
-                {cli.busy && <Loader2 size={11} className="animate-spin" />}
+                {cli.busy && <InlineOrb kind="connecting" />}
                 Already signed in with the Dust CLI? Import that session
               </button>
             </>
@@ -3595,7 +4237,7 @@ function DustSetup({
               disabled={recoveryBusy}
               className="no-drag cl-focus inline-flex w-fit items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-50"
             >
-              {recoveryBusy ? <Loader2 size={13} className="animate-spin" /> : <RotateCcw size={13} />}
+              {recoveryBusy ? <InlineOrb kind="loading" /> : <RotateCcw size={13} />}
               {recoveryBusy ? 'Creating new profile…' : 'Create new local profile & retry'}
             </button>
             {recoveryMessage && <div className="text-[11px] text-[color:var(--cl-muted-foreground)]">{recoveryMessage}</div>}
@@ -3630,7 +4272,7 @@ function DustSetup({
               value={link}
               onChange={(e) => onLink(e.target.value)}
               placeholder="Paste your Dust workspace or agent URL (fills the fields below)"
-              className={'w-full pl-7 ' + ctl}
+              className={'w-full min-w-0 max-w-full pl-7 ' + ctl}
             />
           </div>
           <span className="pl-7 text-[11px] text-[color:var(--cl-muted-foreground)]">
@@ -3715,7 +4357,7 @@ function DustSetup({
                 disabled={keySaving || !dustKey.trim() || (locked && active)}
                 className="no-drag cl-focus flex items-center gap-1 rounded-[10px] bg-[var(--cl-primary)] px-3 py-2.5 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
               >
-                {keySaving ? <Loader2 size={14} className="animate-spin" /> : null} Save
+                {keySaving ? <InlineOrb kind="loading" /> : null} Save
               </button>
               {locked ? (
                 <span className={managedChipCls}>Managed by your organization</span>
@@ -3740,12 +4382,18 @@ function DustSetup({
             </div>
             <button
               type="button"
-              onClick={loadAgents}
+              onClick={() =>
+                void (async () => {
+                  const list = await loadAgents()
+                  const test = await window.toto.testApiKey('dust', '')
+                  applyDustValidate(decideDustInstantValidate({ workspaceId: settings.dustWorkspaceId, test, list }, agent))
+                })()
+              }
               disabled={loading || !keySaved || !hasWs}
               title={!keySaved || !hasWs ? 'Save your key + workspace first' : 'Load your Dust agents'}
               className="no-drag cl-focus flex items-center gap-1 rounded-[8px] border border-[var(--cl-input)] bg-white/[0.04] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08] disabled:opacity-40"
             >
-              {loading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
+              {loading ? <InlineOrb kind="searching" /> : <RefreshCw size={13} />}
               {agents ? 'Refresh' : 'Load my agents'}
             </button>
           </div>
@@ -3822,6 +4470,12 @@ function DustSetup({
               Spotlight Ref agent · finds sales references for the live use case
               <span className={managedChipCls}>Managed by your organization</span>
             </span>
+            {spotlightAgentMissing && (
+              <div className="flex items-start gap-1.5 rounded-[8px] border border-[var(--cl-destructive)]/30 bg-[var(--cl-destructive)]/10 px-2.5 py-1.5 text-[11px] leading-snug text-[color:var(--cl-destructive)]">
+                <Info size={13} className="mt-0.5 shrink-0" />
+                <span>The Spotlight Ref agent is not in this workspace.</span>
+              </div>
+            )}
             <div className={'w-full opacity-60 ' + ctl}>
               {spotlightAgent ? agents?.find((a) => a.sId === spotlightAgent)?.name ?? spotlightAgent : 'Not configured yet'}
             </div>
@@ -3832,7 +4486,7 @@ function DustSetup({
         <div
           className={[
             'cl-card flex items-center justify-between gap-2 px-3 py-2.5 text-[12px]',
-            storedAgentMissing
+            storedAgentMissing || (err && keySaved && hasWs)
               ? 'text-[color:var(--cl-destructive)]'
               : connected
                 ? 'text-[color:var(--cl-success)]'
@@ -3840,7 +4494,7 @@ function DustSetup({
           ].join(' ')}
         >
           <span className="flex items-center gap-2">
-            {storedAgentMissing ? (
+            {storedAgentMissing || (err && keySaved && hasWs) ? (
               <AlertCircle size={15} />
             ) : connected ? (
               <CircleCheck size={15} />
@@ -3849,11 +4503,15 @@ function DustSetup({
             )}
             {storedAgentMissing
               ? "The managed base agent isn't available in this workspace/region. Answers will fail. Check the pasted workspace and US/EU region."
-              : connected
-                ? `Workspace ${settings.dustWorkspaceId}. Base: ${selectedAgentName || agent}${
-                    thinkAgent ? `, Thinking: ${agents?.find((a) => a.sId === thinkAgent)?.name || thinkAgent}` : ' (thinking → same as base)'
-                  }.`
-                : 'Connect from the Dust CLI above, or finish steps 1–4.'}
+              : err && keySaved && hasWs
+                ? err
+                : connected
+                  ? `Workspace ${settings.dustWorkspaceId}. Base: ${selectedAgentName || agent}${
+                      thinkAgent ? `, Thinking: ${agents?.find((a) => a.sId === thinkAgent)?.name || thinkAgent}` : ' (thinking → same as base)'
+                    }.`
+                  : loading && keySaved && hasWs
+                    ? 'Checking Dust connection…'
+                    : 'Connect from the Dust CLI above, or finish steps 1–4.'}
           </span>
           {storedAgentMissing ? null : active ? (
             <span className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]">
@@ -3915,7 +4573,7 @@ function AudioChoices({
   patch: (p: Partial<PublicSettings>) => void
 }): JSX.Element {
   return (
-    <div className="grid grid-cols-3 gap-2">
+    <div className="grid min-w-0 grid-cols-3 gap-2">
       {getAudioChoices().map((c) => {
         const active = c.id === settings.audioSource
         const locked = settings.managedKeys.includes('audioSource')
@@ -3927,7 +4585,7 @@ function AudioChoices({
             disabled={locked}
             onClick={() => patch({ audioSource: c.id })}
             className={[
-              'no-drag cl-focus flex flex-col items-center gap-1 rounded-[var(--cl-radius)] border px-2 py-3 transition-colors',
+              'no-drag cl-focus flex min-w-0 w-full flex-col items-center gap-1 rounded-[var(--cl-radius)] border px-2 py-3 text-center transition-colors',
               active
                 ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]'
                 : 'border-[var(--cl-border)] bg-white/[0.02] hover:bg-white/[0.05]',
@@ -3936,8 +4594,8 @@ function AudioChoices({
           >
             <c.icon size={16} className={active ? 'text-[color:var(--cl-primary)]' : 'text-[color:var(--cl-muted-foreground)]'} />
             <span className="text-[13px] font-medium text-[color:var(--cl-foreground)]">{c.label}</span>
-            <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">{c.desc}</span>
-            <span className="text-[10px] text-[color:var(--cl-muted-foreground)]">{c.perm}</span>
+            <span className="min-w-0 break-words text-[11px] text-[color:var(--cl-muted-foreground)]">{c.desc}</span>
+            <span className="min-w-0 break-words text-[10px] text-[color:var(--cl-muted-foreground)]">{c.perm}</span>
           </button>
         )
       })}
@@ -4127,15 +4785,15 @@ function MicPicker({
 
   const locked = settings.managedKeys.includes('micDeviceId')
   return (
-    <div className="mt-3 flex flex-col gap-1.5">
-      <div className="flex items-center gap-2">
+    <div className="mt-3 flex min-w-0 flex-col gap-1.5">
+      <div className="flex min-w-0 items-center gap-2">
         <span className="shrink-0 text-[12px] text-[color:var(--cl-muted-foreground)]">Microphone</span>
         <select
           value={settings.micDeviceId}
           disabled={locked}
           onChange={(e) => patch({ micDeviceId: e.target.value })}
           aria-label="Microphone"
-          className={'no-drag flex-1 ' + ctl + (locked ? ' opacity-60' : '')}
+          className={'no-drag min-w-0 flex-1 ' + ctl + (locked ? ' opacity-60' : '')}
         >
           <option value="">System default</option>
           {devices.map((d, i) => (
@@ -4164,10 +4822,6 @@ function MicPicker({
   )
 }
 
-const LANGUAGE_OPTIONS = [
-  'English', 'French', 'Spanish', 'German', 'Italian', 'Portuguese', 'Dutch',
-  'Polish', 'Arabic', 'Chinese', 'Japanese', 'Korean', 'Hindi', 'Russian', 'Turkish'
-]
 
 /** Settings → About → Diagnostics. Nothing in this app uploads anywhere (zero telemetry, crash upload
  *  off), so when support needs the log trail the user exports it themselves: main + audit logs, crash
@@ -4272,7 +4926,7 @@ function UpdatesSection(): JSX.Element {
   }, [])
 
   return (
-    <Section title="Updates" desc="Métis installs updates automatically where the platform allows. Check, download, and install here any time." icon={RefreshCw}>
+    <Section title="Updates" desc="Métis installs a QA-approved Latest from Metis-Releases. Draft and prerelease builds are never offered." icon={RefreshCw}>
       <div className="flex flex-col items-center gap-2">
         {result?.current ? (
           <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">Installed version: {result.current}</span>
@@ -4327,7 +4981,7 @@ function UpdatesSection(): JSX.Element {
         )}
         {result && !result.ok && <span className="text-[12px] text-[var(--color-danger)]">{result.error}</span>}
         <TextButton onClick={check} disabled={checking}>
-          {checking ? 'Checking…' : 'Check for updates'}
+          {checking ? <AgentStatus kind="searching" size="inline" caption /> : 'Check for updates'}
         </TextButton>
       </div>
     </Section>
@@ -4386,6 +5040,16 @@ function ModePromptEditor({
         )}
         <ManagedChip keys={settings.managedKeys} k="modePrompts" />
       </div>
+      {isBuiltin && (
+        <p className="m-0 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+          Operator skill v{modeSkillLock().skills[mode]?.version ?? 'unknown'} is locked to this Métis
+          build. Your prompt above still applies. The skill runs in the background and cannot be
+          edited, deleted, or overridden here. Ask answers also run locked caveman v
+          {modeSkillLock().skills.caveman?.version ?? 'unknown'} (default full). Say stop caveman or
+          normal mode to drop it. /caveman lite|full|ultra switches intensity. That skill cannot be
+          edited here.
+        </p>
+      )}
     </div>
   )
 }
@@ -4960,7 +5624,7 @@ const TABS: {
     label: 'Modes & Display',
     icon: Wand2,
     desc: 'How Métis looks, and what each mode says.',
-    keywords: ['appearance', 'transparency', 'opacity', 'glass', 'modes', 'language', 'custom instructions', 'prompt']
+    keywords: ['appearance', 'transparency', 'opacity', 'glass', 'modes', 'language', 'custom instructions', 'prompt', 'operator skill']
   },
   {
     id: 'ai',
@@ -4972,15 +5636,21 @@ const TABS: {
       'thinking mode', 'model', 'other providers', 'model provider', 'cli integration',
       'fallback', 'indexing fallback', 'offline indexing',
       'backups & limits', 'nvidia', 'nim', 'race a backup provider', 'hedge',
-      'cloudflare', 'worker', 'ai gateway', 'workers ai', 'metis_proxy_key'
+      'cloudflare', 'worker', 'ai gateway', 'workers ai', 'metis_proxy_key', 'oauth', 'connect',
+      'routing mode', 'routing', 'local', 'api', 'auto'
     ]
   },
   {
+    // Wave 5 Settings IA: user-facing label "Speech" (plan: AI · Speech · Brain · Integrations · Privacy).
+    // Tab id stays 'audio' so persisted deep-links / managed-config and every `tab === 'audio'` guard keep working.
     id: 'audio',
-    label: 'Audio',
+    label: 'Speech',
     icon: Mic,
     desc: 'What Métis listens to, and how it hears you.',
-    keywords: ['microphone', 'listen to', 'in meetings', 'vocabulary corrections', 'transcription', 'asr']
+    keywords: [
+      'audio', 'speech', 'microphone', 'listen to', 'in meetings', 'vocabulary corrections',
+      'transcription', 'asr', 'parakeet', 'whisper', 'apple speech', 'speaker identification'
+    ]
   },
   {
     id: 'calendar',
@@ -4996,16 +5666,20 @@ const TABS: {
     desc: 'Where meetings are saved, and how long they stay.',
     keywords: ['meetings & transcripts', 'folder', 'retention', 'danger zone', 'delete', 'ingest']
   },
-  // Label shortened to keep all nine tabs on ONE line at the overlay's width — the MantuMark icon already
-  // signals "Mantu"; the tab id stays 'intelligence' so nothing else changes.
   {
+    // Wave 5: label "Brain" — CRM/MCP push lives here as Integrations content under the same tab
+    // (overlay width cannot afford a tenth tab). Keywords keep old "Intelligence" / CRM search hits.
     id: 'intelligence',
-    label: 'Intelligence',
+    label: 'Brain',
     icon: MantuMark,
-    desc: 'Your second brain: meetings, wiki, CRM, knowledge graph.',
+    desc: 'Your second brain: meetings, wiki, CRM push, knowledge graph.',
     keywords: [
-      'mantu intelligence', 'meetings & follow-up', 'published wiki', 'polo pre-sales', 'crm',
-      'knowledge graph', 'plane', 'clickup', 'task management', 'book next steps', 'action items'
+      'mantu intelligence', 'intelligence', 'brain', 'meetings & follow-up', 'published wiki',
+      'polo pre-sales', 'crm', 'integrations', 'knowledge graph', 'plane', 'clickup',
+      'task management', 'book next steps', 'action items', 'time saved', 'estimate',
+      'consolidation', 'token', 'batch index', 'brain consolidation',
+      'batch index (1–2× / day)', 'prefer on-device model for consolidation',
+      '06:00', '12:00', '18:00', 'America/Toronto', 'intelligence index'
     ]
   },
   {
@@ -5015,17 +5689,29 @@ const TABS: {
     desc: 'What Métis can see, record, and send.',
     keywords: [
       'screen capture', 'screen access', 'conversation memory', 'follow-up', 'memory',
-      'recording consent', 'sensitive data', 'redact', 'permissions', 'usage'
+      'recording consent', 'sensitive data', 'redact', 'permissions', 'usage',
+      'operator', 'Operator', 'operator url', 'skill improvement', 'ingest secret'
     ]
   },
-  // Profile + Keybinds merged: both are "how Métis is set up for YOU" (who you are / how you drive it).
-  // Labeled just "Profile" so all nine tabs fit one line; keybinds live inside this tab.
+  // Identity + About you + Keybinds: the member pass is the hero; who you are and how you
+  // drive Métis stay on the same tab so we do not add a tenth pill. Tab id stays `profile`.
   {
     id: 'profile',
-    label: 'Profile',
-    icon: User,
-    desc: 'Who you are, your license, and your keybinds.',
-    keywords: ['about you', 'license', 'keyboard shortcuts', 'hotkeys', 'tap control']
+    label: 'Identity',
+    icon: IdCard,
+    desc: 'Your member pass, who you are, and your keybinds.',
+    keywords: [
+      'identity',
+      'member pass',
+      'member number',
+      'serial',
+      'install date',
+      'about you',
+      'license',
+      'keyboard shortcuts',
+      'hotkeys',
+      'tap control'
+    ]
   },
   {
     id: 'about',
@@ -5151,7 +5837,7 @@ export function Settings({
   }, [tab, settings.asrEngine])
 
   return (
-    <div className="cl-root panel-enter flex w-full flex-col overflow-hidden rounded-2xl shadow-[var(--shadow-panel)] text-[color:var(--cl-foreground)]">
+    <div className="cl-root flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl shadow-[var(--shadow-panel)] text-[color:var(--cl-foreground)]">
       {/* Draggable header — sits directly under the always-visible Métis bar */}
       <header className="cl-header drag flex h-11 shrink-0 items-center gap-2 rounded-t-2xl px-3.5">
         <MetisMark size={18} />
@@ -5189,7 +5875,7 @@ export function Settings({
           openSettings(tab, notice), so only show it while the user is ON that tab — once they navigate
           away it no longer points at anything visible. Reappears if they come back to the tab. */}
       {notice && tab === (initialTab ?? 'personalize') && (
-        <div className="no-drag border-b border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] px-3.5 py-2 text-[12px] leading-snug text-[color:var(--cl-foreground)]">
+        <div className="no-drag shrink-0 border-b border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] px-3.5 py-2 text-[12px] leading-snug text-[color:var(--cl-foreground)]">
           {notice}
         </div>
       )}
@@ -5244,11 +5930,11 @@ export function Settings({
       {/* Active tab's short intro — one line, so a dense nine-tab bar still reads as a guided flow rather
           than a wall of pill buttons. Swaps for the search results list while a query is live. */}
       {query.trim() === '' ? (
-        <p className="m-0 border-b border-[var(--cl-border)] px-3.5 py-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+        <p className="m-0 shrink-0 border-b border-[var(--cl-border)] px-3.5 py-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
           {TABS.find((t) => t.id === tab)?.desc}
         </p>
       ) : (
-        <div className="flex flex-col gap-0.5 border-b border-[var(--cl-border)] px-2 py-1.5">
+        <div className="flex shrink-0 flex-col gap-0.5 border-b border-[var(--cl-border)] px-2 py-1.5">
           {searchMatches.length === 0 ? (
             <p className="m-0 px-1.5 py-1 text-[11px] text-[color:var(--cl-muted-foreground)]">No matching settings.</p>
           ) : (
@@ -5275,10 +5961,10 @@ export function Settings({
         role="tabpanel"
         id="settings-panel"
         aria-labelledby={`settings-tab-${tab}`}
-        className="cl-content scroll-thin max-h-[480px] overflow-y-auto"
+        className={SETTINGS_CONTENT_SCROLL_CLASS}
       >
         <TabIconContext.Provider value={TABS.find((t) => t.id === tab)?.icon}>
-        <div className="flex flex-col gap-6 px-5 pt-5 pb-16">
+        <div className="flex min-w-0 max-w-full flex-col gap-6 px-5 pt-5 pb-16">
             {tab === 'ai' && (
               <AiSection
                 settings={settings}
@@ -5322,6 +6008,35 @@ export function Settings({
                   <div className="glass-strong mt-1 flex items-center gap-2 rounded-[12px] px-3 py-2.5">
                     <MetisMark size={16} />
                     <span className="text-[12px] text-[color:var(--color-ink)]">This is how the overlay bar will look.</span>
+                  </div>
+                  <div className="mt-3 px-1">
+                    <p className="m-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">Overlay chrome</p>
+                    <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                      How Métis sits on the desktop. Changes apply now, no reinstall.
+                    </p>
+                    <OverlayChromePicker
+                      value={settings.overlayLayout}
+                      locked={settings.managedKeys.includes('overlayLayout')}
+                      onChange={(id) =>
+                        patch({
+                          overlayLayout: id,
+                          autoHideOverlay: autoHideOverlayForLayout(id)
+                        })
+                      }
+                    />
+                    {overlayShowsBarRestPicker(settings.overlayLayout) ? (
+                      <>
+                        <p className="mt-3 mb-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">Bar rest</p>
+                        <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                          Applies when Overlay chrome is Bar.
+                        </p>
+                        <OverlayOrbPicker
+                          value={settings.overlayOrbStyle}
+                          locked={settings.managedKeys.includes('overlayOrbStyle')}
+                          onChange={(id) => patch({ overlayOrbStyle: id })}
+                        />
+                      </>
+                    ) : null}
                   </div>
                 </Section>
                 <Section
@@ -5380,7 +6095,7 @@ export function Settings({
             )}
 
             {tab === 'audio' && (
-              <div className="flex flex-col gap-6">
+              <div className="flex min-w-0 max-w-full flex-col gap-6">
                 <Section title="Listen to" desc="Whose audio Métis transcribes during a meeting." icon={Mic}>
                   <div className="mb-2"><ManagedChip keys={settings.managedKeys} k="audioSource" /></div>
                   <AudioChoices settings={settings} patch={patch} />
@@ -5389,9 +6104,9 @@ export function Settings({
                       Speech tab: a meeting that requested system audio ran with the microphone only, so
                       the other side's speech is missing from the transcript. Persists until dismissed. */}
                   {settings.micOnlyFallbackAt != null && (
-                    <div className="mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
-                      <span>
-                        A recent meeting captured your microphone only — the other side&apos;s audio was not
+                    <div className="mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+                      <span className="min-w-0 flex-1 break-words">
+                        A recent meeting captured your microphone only. The other side&apos;s audio was not
                         recorded
                         {isWindows
                           ? ' (check that the call plays through your default output device)'
@@ -5453,8 +6168,8 @@ export function Settings({
                     label="Best transcription quality"
                     desc={
                       asrBundled
-                        ? "This build doesn't include the larger GPU-accelerated model, so On and Off currently use the same on-device model."
-                        : 'This development build does not include packaged transcription assets. Provision them before testing offline transcription.'
+                        ? 'Default is Best. Fast is a power option. This installer ships the compact model. If Best cannot load, Métis runs Fast and says so below (never a silent Fast with a Best label). Download the high-accuracy model to restore Best.'
+                        : 'Default is Best (Whisper large multilingual, 60+ languages). Fast is a Settings power option for constrained machines.'
                     }
                     on={settings.asrQuality === 'best'}
                     onChange={(v) => patch({ asrQuality: v ? 'best' : 'fast' })}
@@ -5463,7 +6178,7 @@ export function Settings({
                   <div className="flex flex-col gap-1.5 px-1 py-1">
                     <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
                       Transcription engine
-                      <FieldHint text="Parakeet: bundled NVIDIA Parakeet v3, very fast + accurate for 25 European languages. Whisper: bundled, handles ~99 languages, use it for non-European speech. Apple Speech: Apple's own on-device engine (SFSpeechRecognizer); no extra download, macOS 13+ only.">
+                      <FieldHint text="Parakeet is the default: bundled NVIDIA Parakeet v3, very fast + accurate for 25 European languages. Whisper handles ~99 languages; pick it for non-European speech. Apple Speech: Apple's own on-device engine (SFSpeechRecognizer); no extra download, macOS 13+ only.">
                         <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
                       </FieldHint>
                       <ManagedChip keys={settings.managedKeys} k="asrEngine" />
@@ -5516,8 +6231,8 @@ export function Settings({
                     </div>
                   )}
                   {settings.asrLastFallbackAt != null && (
-                    <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
-                      <span>
+                    <div className="-mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+                      <span className="min-w-0 flex-1 break-words">
                         Parakeet failed and auto-switched to Whisper for the rest of a recent meeting.{' '}
                         {new Date(settings.asrLastFallbackAt).toLocaleString()}.
                       </span>
@@ -5526,9 +6241,9 @@ export function Settings({
                   )}
                   <AsrModelRow />
                   {settings.asrImportTierFallbackAt != null && (
-                    <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
-                      <span>
-                        An imported recording was transcribed with the compact model — the
+                    <div className="-mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+                      <span className="min-w-0 flex-1 break-words">
+                        An imported recording was transcribed with the compact model. The
                         higher-accuracy one is not installed. Accuracy is lower, especially on
                         non-English audio. {new Date(settings.asrImportTierFallbackAt).toLocaleString()}.
                       </span>
@@ -5536,10 +6251,10 @@ export function Settings({
                     </div>
                   )}
                   {(settings as SettingsWithAsrWebgpuFallback).asrWebgpuFallbackAt != null && (
-                    <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
-                      <span>
-                        Best-quality transcription needs a WebGPU-capable GPU; this device fell back to
-                        the fast model.
+                    <div className="-mt-1 flex min-w-0 flex-wrap items-start justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
+                      <span className="min-w-0 flex-1 break-words">
+                        Best was requested but is not running on this device. Fast is active. Download
+                        the high-accuracy model below, or keep Fast as a power option.
                       </span>
                       <TextButton
                         onClick={() =>
@@ -5596,12 +6311,12 @@ export function Settings({
                           ? isWindows
                             ? // Local AI is ready, so the missing piece is the OS window signal — telling
                               // this user to enable Local AI would just be the opposite lie.
-                              "Not running on this machine — Métis can't tell when you switch windows, so screen asks capture live instead."
+                              "Not running on this machine. Métis can't tell when you switch windows, so screen asks capture live instead."
                             : // On macOS there is a second way to be off: the reader is gated on Screen
                               // Recording already being granted, because its own capture would otherwise be
                               // what raises the system prompt (MQA-209). The renderer can't tell the two
                               // apart, so name the actionable one first rather than guess wrong.
-                              'Not running on this machine — check Screen Recording under Permissions below (a new grant needs a restart). Screen asks capture live instead.'
+                              'Not running on this machine. Check Screen Recording under Permissions below (a new grant needs a restart). Screen asks capture live instead.'
                           : 'Enable Local AI (below) to use this. The background reader never leaves your device.'
                     }
                     on={settings.backgroundScreenContext}
@@ -5661,7 +6376,7 @@ export function Settings({
                 <Section title="Screen access" desc="Whether Métis can see your own screen to answer what's in front of you." icon={Eye}>
                   <ToggleRow
                     label="Let Métis see your screen on request"
-                    desc="Governs the explicit screen asks — the Capture button, its shortcut, quick actions, and pressing Enter with an empty box. Typed questions never capture your screen."
+                    desc="Governs the explicit screen asks: the Capture button, its shortcut, quick actions, and pressing Enter with an empty box. Typed questions never capture your screen."
                     on={settings.screenAsk}
                     onChange={(v) => patch({ screenAsk: v })}
                     disabled={settings.managedKeys.includes('screenAsk')}
@@ -5675,7 +6390,7 @@ export function Settings({
                 >
                   <ToggleRow
                     label="Carry context into follow-up questions"
-                    desc="When on, the next question can refer back to the last few answers (expires after 10 idle minutes). When off (default), every question outside a meeting starts completely fresh — nothing from the previous question leaks into the next answer. During a live meeting, Copilot always keeps the meeting's context either way."
+                    desc="When on, the next question can refer back to the last few answers (expires after 10 idle minutes). When off (default), every question outside a meeting starts completely fresh. Nothing from the previous question leaks into the next answer. During a live meeting, Copilot always keeps the meeting's context either way."
                     on={settings.askFollowUpMemory}
                     onChange={(v) => patch({ askFollowUpMemory: v })}
                     disabled={settings.managedKeys.includes('askFollowUpMemory')}
@@ -5731,6 +6446,58 @@ export function Settings({
                   icon={FileSearch}
                 >
                   <SupportBundleSection />
+                </Section>
+                <Section
+                  title="Operator"
+                  desc="Point this Mac at Tony's Operator Worker. Empty uses the shipped Operator URL at runtime. Heartbeat still needs the ingest secret. This is not a local analytics page."
+                  icon={Settings2}
+                >
+                  <label className="flex flex-col gap-1 px-1 py-2">
+                    <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Operator URL</span>
+                    <input
+                      value={settings.operatorUrl || ''}
+                      spellCheck={false}
+                      autoComplete="off"
+                      placeholder={DEFAULT_OPERATOR_URL}
+                      disabled={settings.managedKeys.includes('operatorUrl')}
+                      onChange={(e) => patch({ operatorUrl: e.target.value.trim() })}
+                      className={`${ctl} w-full`}
+                    />
+                    <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+                      Leave empty to use {DEFAULT_OPERATOR_URL}. The field is not force-written. Ingest secret stays required.
+                    </span>
+                  </label>
+                  <label className="flex flex-col gap-1 px-1 py-2">
+                    <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Ingest secret</span>
+                    <input
+                      type="password"
+                      value={settings.operatorIngestSecret || ''}
+                      spellCheck={false}
+                      autoComplete="off"
+                      placeholder="Same value as the Worker OPERATOR_INGEST_SECRET"
+                      disabled={settings.managedKeys.includes('operatorIngestSecret')}
+                      onChange={(e) => patch({ operatorIngestSecret: e.target.value })}
+                      className={`${ctl} w-full`}
+                    />
+                  </label>
+                  {/^https:\/\//i.test(settings.operatorUrl || '') && (
+                    <ToggleRow
+                      label="Send Ask text for skill improvement"
+                      desc="When on, the question text goes with the metrics so skills can be drafted. Metrics always send: mode, timing, token counts, and a question type label such as Factual or How to, never the words. Listen transcripts and screens never send."
+                      on={settings.sendAskText !== false}
+                      onChange={(v) => patch({ sendAskText: v })}
+                      disabled={settings.managedKeys.includes('sendAskText')}
+                    />
+                  )}
+                  {operatorUrlConfigured(settings) && (
+                    <button
+                      type="button"
+                      onClick={() => void window.toto.operatorOpen()}
+                      className="no-drag cl-focus mt-1 flex items-center gap-1 rounded-lg bg-white/[0.05] px-2.5 py-1.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.1]"
+                    >
+                      <ExternalLink size={12} /> Open Operator
+                    </button>
+                  )}
                 </Section>
               </div>
             )}
@@ -5901,6 +6668,7 @@ export function Settings({
 
             {tab === 'profile' && (
               <div className="flex flex-col gap-6">
+                <IdentitySection />
                 <Section title="About you" desc="Used for interview and sales modes. The more detail, the better the answers." icon={User}>
                   <ProfileEditor
                     profile={settings.profile}
@@ -6053,15 +6821,26 @@ export function Settings({
       <footer className="cl-footer flex h-14 shrink-0 items-center gap-2 rounded-b-2xl px-4">
         <button
           type="button"
+          // Act 6 (Ready, MQA-283): "Replay onboarding" — re-arms the SAME gate App.tsx checks
+          // (`!settings.onboardingDone`), so the very next render remounts the six-act experience fresh
+          // from hero, exactly like a first run. Nothing else is touched: no other setting is cleared.
+          // App.tsx's onboarding gate special-cases `view === 'settings'` to keep showing THIS panel
+          // over the gate (so the Ready scene's "Add your own AI provider" link can open Settings
+          // without the gate stealing focus back) — so without closing Settings here too, the user
+          // would click Replay and see nothing change until they also hit Done. Call onClose so the
+          // gate is what they land on immediately, matching what "Replay" promises.
           onClick={() => {
-            if (window.confirm("Show the intro tour again? Your settings won't change.")) {
+            if (window.confirm("Replay onboarding from the start? Your settings won't change.")) {
+              haltAllOnboardingAudio()
+              unlockOnboardingAudio()
               patch({ onboardingDone: false })
+              onClose?.()
             }
           }}
           className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.03] px-3 py-2 text-[12px] text-[color:var(--cl-foreground)] transition-colors hover:border-[var(--cl-input)] hover:bg-white/[0.08]"
         >
           <RotateCcw size={13} className="shrink-0 text-[color:var(--cl-muted-foreground)]" />
-          Reset onboarding
+          Replay onboarding
         </button>
         <button
           type="button"
@@ -6145,7 +6924,7 @@ function DiagnosticsSection(): JSX.Element {
     )
   }
   if (!m) {
-    return <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>
+    return <AgentStatus kind="searching" size="inline" caption />
   }
   if (m.answers === 0 && m.acceptance.up + m.acceptance.down === 0) {
     return (
@@ -6287,25 +7066,21 @@ function TimeSavedSettings({
   return (
     <Section
       title="Time saved"
-      desc="An honest estimate of the meeting write-up Métis has done for you. Adjust the assumption below — the number is yours."
+      desc="An honest estimate of work Métis finished: notes, second-brain captures, email recaps, and pushes you confirmed. Adjust the meeting-note assumption below. The number is yours."
       icon={Timer}
     >
+      <TimeSavedView meetingWriteupMinutes={saved.savedMinutes} meetingCount={saved.meetings} />
       <div className="cl-card px-3.5 py-3">
+        <div className="mb-2 text-[11px] font-medium uppercase tracking-wide text-[color:var(--cl-muted-foreground)]">
+          Meeting-note assumption
+        </div>
         {saved.meetings === 0 ? (
           <div className="text-[12px] text-[color:var(--cl-muted-foreground)]">
-            Summarize your first meeting and your time saved shows up here.
+            Summarize your first meeting and the write-up estimate shows up here.
           </div>
         ) : (
           <>
-            <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-              <span className="font-ui text-[24px] font-semibold leading-none text-[color:var(--cl-foreground)]">
-                ≈ {formatSavedTime(saved.savedMinutes)}
-              </span>
-              <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
-                across {saved.meetings} meeting{saved.meetings === 1 ? '' : 's'} ({Math.round((saved.conversationMinutes / 60) * 10) / 10}h of conversation)
-              </span>
-            </div>
-            <div className="mt-3 flex flex-col gap-0.5 border-t border-[var(--cl-border)] pt-2">
+            <div className="flex flex-col gap-0.5">
               <NumberRow
                 label="Write-up time, as % of the meeting"
                 value={Math.round(a.writeupRatio * 100)}
@@ -6412,7 +7187,9 @@ function IntelligenceTab({
       >
         <div className="flex flex-col gap-1.5">
           {meetings === null ? (
-            <div className="cl-card px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>
+            <div className="cl-card px-3 py-2.5">
+              <AgentStatus kind="searching" size="inline" caption />
+            </div>
           ) : recent.length === 0 ? (
             <div className="cl-card px-3 py-2.5 text-[12px] text-[color:var(--cl-muted-foreground)]">
               No meetings saved yet. They appear here as soon as one ends.
@@ -6462,6 +7239,58 @@ function IntelligenceTab({
       </Section>
 
       <GraphSection settings={settings} patch={patch} />
+
+      <Section
+        title="Brain consolidation"
+        desc="The Intelligence index runs at 06:00, 12:00, and 18:00 America/Toronto. If Métis was closed at a slot, the next launch catches up. This toggle only batches extra extracts between those named slots. Manual Update Intelligence still runs immediately."
+        icon={Cpu}
+      >
+        <ToggleRow
+          label="Batch index (1–2× / day)"
+          desc={
+            settings.brainConsolidation.enabled
+              ? `Named slots stay 06:00, 12:00, and 18:00 America/Toronto. Up to ${settings.brainConsolidation.maxPassesPerDay} extra consolidation pass${settings.brainConsolidation.maxPassesPerDay === 1 ? '' : 'es'} may run between slots. New meetings still save immediately; extracts can wait for the next named pass.`
+              : 'Off: each saved meeting is indexed with an LLM extract as soon as it lands (higher token use). The named 06:00 / 12:00 / 18:00 America/Toronto index still runs.'
+          }
+          on={settings.brainConsolidation.enabled}
+          onChange={(v) =>
+            patch({ brainConsolidation: { ...settings.brainConsolidation, enabled: v } })
+          }
+        />
+        {settings.brainConsolidation.enabled && (
+          <>
+            <div className="mt-2 flex items-center justify-between gap-3">
+              <span className="text-[12px] text-[color:var(--cl-foreground)]">Max passes per day</span>
+              <select
+                className="no-drag cl-focus rounded-lg border border-[var(--cl-input)] bg-white/[0.04] px-2 py-1 text-[12px]"
+                value={settings.brainConsolidation.maxPassesPerDay}
+                onChange={(e) =>
+                  patch({
+                    brainConsolidation: {
+                      ...settings.brainConsolidation,
+                      maxPassesPerDay: Number(e.target.value) as 1 | 2 | 3 | 4
+                    }
+                  })
+                }
+              >
+                {[1, 2, 3, 4].map((n) => (
+                  <option key={n} value={n}>
+                    {n}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <ToggleRow
+              label="Prefer on-device model for consolidation"
+              desc="When Métis Local is ready, use it for batch extracts before burning cloud tokens."
+              on={settings.brainConsolidation.preferLocal}
+              onChange={(v) =>
+                patch({ brainConsolidation: { ...settings.brainConsolidation, preferLocal: v } })
+              }
+            />
+          </>
+        )}
+      </Section>
 
       <Section
         title="Published wiki (Dust-readable)"
@@ -6519,26 +7348,14 @@ function IntelligenceTab({
 
       <Section
         title="Plane"
-        desc="Push meeting action items to Plane as work items — see Review → Book next steps. Manual and review-first: nothing sends automatically."
-        icon={ListTree}
+        desc="Push meeting action items to Plane as work items. See Review → Book next steps. Manual and review-first: nothing sends automatically."
       >
-        <McpConnectionCard
-          settings={settings}
-          patch={patch}
-          kind="plane"
-          defaultLabel="Plane"
-          title="Plane · task management"
-          desc="Push action items from a meeting recap to Plane as work items. Manual and review-first: nothing sends automatically."
-          endpointPlaceholder="https://mcp.plane.so/http/api-key/mcp"
-          apiKeyHint="Personal or workspace access token from Plane → Settings → API tokens"
-          extraFields={[{ key: 'X-Workspace-slug', label: 'Workspace slug', placeholder: 'acme' }]}
-        />
+        <PlaneCard settings={settings} patch={patch} />
       </Section>
 
       <Section
         title="ClickUp"
-        desc="Push meeting action items to ClickUp as tasks — see Review → Book next steps. Manual and review-first: nothing sends automatically."
-        icon={ListTree}
+        desc="Push meeting action items to ClickUp as tasks. See Review → Book next steps. Manual and review-first: nothing sends automatically."
       >
         <ClickupCard settings={settings} patch={patch} />
       </Section>
@@ -6593,7 +7410,7 @@ function GraphSection({
               className={status?.installed ? 'text-[color:var(--cl-primary)]' : 'text-[color:var(--cl-muted-foreground)]'}
             />
             {!status ? (
-              'Checking…'
+              <AgentStatus kind="loading" size="inline" caption />
             ) : !status.installed ? (
               <span className="text-[color:var(--cl-muted-foreground)]">
                 The optional knowledge-graph tool is not installed. Install graphifyy explicitly, then reopen Settings.
@@ -6640,7 +7457,7 @@ function GraphSection({
               disabled={busy || status?.building || !status?.installed || !status?.backend}
               className="no-drag cl-focus flex items-center gap-1.5 rounded-[10px] bg-[var(--cl-primary)] px-3 py-2 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
             >
-              <RefreshCw size={13} className={busy || status?.building ? 'animate-spin' : ''} /> Rebuild now
+              {busy || status?.building ? <InlineOrb kind="loading" /> : <RefreshCw size={13} />} Rebuild now
             </button>
             {status?.hasGraph && (
               <button
@@ -6794,6 +7611,9 @@ function LicenseSection({
   const [error, setError] = useState<string | null>(null)
   const serverId = useId()
   const keyId = useId()
+  // Act 5 (MQA-281/282): lease/trial status, fetched via license:status (live-verified — never a raw
+  // settings echo, see licenseDisplayStatus in main/license.ts). null while the first read is pending.
+  const [status, setStatus] = useState<LicenseStatusResult | null>(null)
   // Guards state writes after unmount — activation is a real network round trip and the user can switch
   // Settings tabs before it resolves.
   const mountedRef = useRef(true)
@@ -6802,6 +7622,19 @@ function LicenseSection({
       mountedRef.current = false
     }
   }, [])
+
+  useEffect(() => {
+    let live = true
+    void window.toto.licenseStatus().then((s) => {
+      if (live) setStatus(s)
+    })
+    return () => {
+      live = false
+    }
+    // Re-read whenever the persisted license/lease fields this section can change actually change —
+    // an activation flips licenseValid/licenseLease, so this section's status line stays live without
+    // a poll loop.
+  }, [settings.licenseValid, settings.licenseLease, settings.licenseGateEnabled])
 
   const activate = async (): Promise<void> => {
     const url = serverUrl.trim()
@@ -6819,6 +7652,8 @@ function LicenseSection({
       // which carry the freshly-persisted state, so the UI updates without a full refetch.
       await patch({ licenseServerUrl: url })
       setLicenseKey('')
+      const s = await window.toto.licenseStatus()
+      if (mountedRef.current) setStatus(s)
     } else {
       setError(licenseErrorMessage(r.error))
     }
@@ -6877,6 +7712,27 @@ function LicenseSection({
           </span>
         </div>
       )}
+      {/* Act 5 (MQA-281/282): the offline-lease / trial line. Deliberately independent of
+          settings.licenseValid above — a device can be covered by a signed lease (checked in even
+          without a live server round trip) or the local trial fallback while never having a
+          server-verified `licenseValid: true` at all, so this reads license:status's own
+          live-verified fields rather than reusing that flag. Silent (no line at all) whenever neither
+          applies, e.g. licensing is off and this device never started a trial. */}
+      {!error && status?.leaseExpiresAt != null && (
+        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-success)]">
+          <CircleCheck size={13} className="mt-px shrink-0" />
+          <span>Continue on your offline lease (expires {new Date(status.leaseExpiresAt).toLocaleDateString()}).</span>
+        </div>
+      )}
+      {!error && status?.leaseExpiresAt == null && status?.trialActive && (
+        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
+          <Timer size={13} className="mt-px shrink-0" />
+          <span>
+            Trial · {status.trialDaysRemaining} day{status.trialDaysRemaining === 1 ? '' : 's'} left. Paste a
+            license key above anytime to activate.
+          </span>
+        </div>
+      )}
 
       <button
         type="button"
@@ -6884,7 +7740,7 @@ function LicenseSection({
         disabled={!serverUrl.trim() || !licenseKey.trim() || activating}
         className={primaryBtnStyle}
       >
-        {activating ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+        {activating ? <InlineOrb kind="connecting" /> : <Check size={12} />}
         Activate
       </button>
 
@@ -7057,7 +7913,7 @@ function CalendarTab({
       <Section title="Microsoft / Outlook" desc="Connect your work Microsoft account to see Outlook calendar events." icon={Calendar}>
         <div className="flex flex-col gap-2">
           {authStatus === null && (
-            <Loader2 size={14} className="animate-spin text-[color:var(--cl-muted-foreground)]" />
+            <InlineOrb kind="connecting" />
           )}
 
           {isOutlookConnected && (
@@ -7084,7 +7940,7 @@ function CalendarTab({
                 onClick={() => void signInOutlook()}
                 className="no-drag cl-focus flex items-center justify-center gap-2 rounded-[8px] bg-[var(--cl-primary)] px-3 py-2 text-[13px] font-medium text-white hover:opacity-90 disabled:opacity-50"
               >
-                {outlookBusy ? <Loader2 size={14} className="animate-spin" /> : null}
+                {outlookBusy ? <InlineOrb kind="connecting" /> : null}
                 Connect Microsoft account
               </button>
               <div className="flex items-center justify-between">
@@ -7140,7 +7996,7 @@ function CalendarTab({
                   disabled={savingOutlook || azureLocked}
                   className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
                 >
-                  {savingOutlook ? <Loader2 size={13} className="animate-spin" /> : null}
+                  {savingOutlook ? <InlineOrb kind="loading" /> : null}
                   Save IDs
                 </button>
                 {showOutlookSetup && (
@@ -7208,6 +8064,9 @@ function PermissionsSection(): JSX.Element {
   const prevScreenStatus = useRef<PlatformPermissions['screenRecording'] | null>(null)
   const [needsRestart, setNeedsRestart] = useState(false)
   const [restarting, setRestarting] = useState(false)
+  const [lastCheckPass, setLastCheckPass] = useState<ScreenCaptureCheckResult['pass'] | null>(null)
+  const [checkBusy, setCheckBusy] = useState(false)
+  const [checkResult, setCheckResult] = useState<ScreenCaptureCheckResult | null>(null)
 
   useEffect(() => {
     if (!permissions) return
@@ -7220,6 +8079,27 @@ function PermissionsSection(): JSX.Element {
   const restart = (): void => {
     setRestarting(true)
     void window.toto.relaunch().catch(() => setRestarting(false))
+  }
+
+  const runScreenCheck = (): void => {
+    if (checkBusy) return
+    const pass = nextScreenCheckPass(lastCheckPass)
+    setCheckBusy(true)
+    void window.toto
+      .screenCaptureCheck(pass)
+      .then((result) => {
+        setLastCheckPass(result.pass)
+        setCheckResult(result)
+      })
+      .catch((err) => {
+        setLastCheckPass(pass)
+        setCheckResult({
+          ok: false,
+          pass,
+          message: err instanceof Error ? err.message : 'Screen capture check failed.'
+        })
+      })
+      .finally(() => setCheckBusy(false))
   }
 
   if (!permissions) {
@@ -7308,6 +8188,46 @@ function PermissionsSection(): JSX.Element {
           </div>
         )
       })}
+      <div className="cl-card flex flex-col gap-1.5 px-2.5 py-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[13px] font-medium text-[color:var(--cl-foreground)]">Screen capture check</span>
+          <button
+            type="button"
+            onClick={runScreenCheck}
+            disabled={checkBusy}
+            className="no-drag cl-focus rounded-full bg-[var(--cl-primary)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--cl-primary)] hover:bg-[var(--cl-primary)]/25 disabled:opacity-60"
+          >
+            {checkBusy
+              ? lastCheckPass == null
+                ? 'Checking…'
+                : 'Asking the model…'
+              : lastCheckPass == null
+                ? 'Check screen capture'
+                : 'Check again with AI'}
+          </button>
+        </div>
+        <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+          First check is the OS permission probe. Check again to send a frame to Local AI if it is ready,
+          otherwise the active API (including Dust when that is the provider). The result stays here. It
+          is never sent to a teammate.
+        </div>
+        {checkResult && (
+          <div
+            className={[
+              'flex items-start gap-1.5 text-[12px]',
+              checkResult.ok
+                ? 'text-[color:var(--cl-success)]'
+                : 'text-[color:var(--cl-destructive)]'
+            ].join(' ')}
+          >
+            {checkResult.ok ? <Check size={13} className="mt-0.5 shrink-0" /> : <AlertCircle size={13} className="mt-0.5 shrink-0" />}
+            <span>
+              {checkResult.message}
+              {checkResult.ok && checkResult.preview ? ` ${checkResult.preview}` : ''}
+            </span>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -7589,7 +8509,7 @@ function Shortcuts({
             <AlertCircle size={13} className="mt-px shrink-0" />
             <span>
               {failures.length === 1 ? "This shortcut couldn't" : "These shortcuts couldn't"} be
-              registered — either another app already owns the combo, or it is a navigation key Métis will
+              registered. Either another app already owns the combo, or it is a navigation key Métis will
               not take over globally. Rebind {failures.length === 1 ? 'it' : 'them'} below.
             </span>
           </div>

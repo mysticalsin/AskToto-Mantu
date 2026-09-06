@@ -44,7 +44,8 @@ consent tied to the bundle id) and the electron-updater continuity for existing 
 
 Grab the installer for your OS from the [Métis releases page](https://github.com/mysticalsin/AskToto-Mantu/releases):
 
-- **macOS Apple Silicon** — `Metis-<version>.dmg`.
+- **macOS Electron** — `Metis-<version>.dmg` (cross-platform overlay).
+- **macOS native** — `Metis-Native-<version>.zip` (SwiftUI / Apple Intelligence; unzip → `Metis.app`).
 - **Windows x64** — `Metis-Setup-<version>.exe` (installer) or `Metis-Portable-<version>.exe`
   (no-install; the portable build never auto-updates because electron-updater has no portable-EXE
   support).
@@ -115,7 +116,8 @@ Every script in `package.json`, one line each:
 | `dist:win` | Fetch models, build intelligence, then package an unsigned Windows build (no publish) |
 | `dist:win:appx` | ffmpeg + sherpa checks (win), then package a Windows APPX (no publish) |
 | `prepack` | Fetch models (runs automatically before electron-builder packs) |
-| `release` | Build signed/notarized macOS release artifacts (no independent publish; tag CI performs final verification) |
+| `release` | Build signed/notarized macOS Electron release artifacts (no independent publish; tag CI performs final verification) |
+| `release:native-mac` | Build pure SwiftUI Mac app → `release/Metis-Native-<version>.zip` (needs Xcode + xcodegen) |
 | `release:win` | Build Windows release artifacts after credential/package gates (no independent publish; tag CI verifies the signer) |
 | `release:mas` | Mac App Store build (provisioning profile via `MAS_PROVISIONING_PROFILE`), no publish |
 | `release:win:store` | Windows Store (APPX) build gate, no publish |
@@ -162,6 +164,15 @@ AskToto/
 ├── electron-builder.yml      packaging (dmg/zip/nsis/appx), signing via env
 └── docs/                     design spec, architecture, hardening backlog, SIGNING.md, …
 ```
+
+## Platform & dispatch map
+
+This repo ships **three products from one tree**: Métis for Windows (Electron `.exe`), Métis for macOS
+(Electron `.dmg`), and the native macOS Swift app under `native-app/`. The Electron side is **not** forked
+per-OS — Windows and macOS share `src/**` and differ only by runtime checks and packaging overlays
+(`electron-builder.win.yml` vs the mac section of `electron-builder.yml`). For exactly where each
+platform's code lives, and how a fix is dispatched to users (tag → CI → `Metis-Releases` feed →
+`electron-updater`, vs the App Store for the native app), see **[`docs/PLATFORM-MAP.md`](docs/PLATFORM-MAP.md)**.
 
 ## Architecture
 
@@ -244,6 +255,8 @@ fails the build if a row marked `FIXED` has no regression test naming its id.
 
 ## Docs
 
+- [`docs/qa/QUALITY-SCORECARD.md`](docs/qa/QUALITY-SCORECARD.md) — live quality targets (WER, failover, brain tokens/day, MCP)
+- [`docs/PROVIDER-ROUTING-POLICY.md`](docs/PROVIDER-ROUTING-POLICY.md) — Local / API / Auto routing precedence
 - [`docs/INSTALL.md`](docs/INSTALL.md) — Mac and Windows install instructions
 - [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) — dev-environment setup, gotchas, and internal patterns
   (IPC contract, state management, native-module packaging, debugging)
@@ -252,6 +265,7 @@ fails the build if a row marked `FIXED` has no regression test naming its id.
 - [`docs/CLOUDFLARE.md`](docs/CLOUDFLARE.md) — the Cloudflare provider: why it needs a Worker the
   operator deploys, what that operator stands up, and what a user types into Settings
 - [`docs/asktoto-architecture.md`](docs/asktoto-architecture.md) — architecture reference
+- [`docs/qa/BUG-LEDGER.md`](docs/qa/BUG-LEDGER.md) — defect ledger
 - [`docs/asktoto-hardening-backlog.md`](docs/asktoto-hardening-backlog.md) — deferred hardening items
 - [`docs/license-platform-plan.md`](docs/license-platform-plan.md) — license/activation platform design
 - `docs/design/` — design spec

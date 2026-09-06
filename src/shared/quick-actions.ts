@@ -91,7 +91,7 @@ export function buildSpotlightRefPrompt(transcript: string, typed: string): stri
 }
 
 export function spotlightRefUnavailableMessage(): string {
-  return 'The Spotlight Ref agent is managed. Connect or reconnect Dust in Settings → AI to the workspace that has it.'
+  return 'Set up Dust in Settings → AI to install the Dust CLI and sign in. Spotlight Ref calls that CLI — it is not a workspace-mismatch dead-end.'
 }
 
 // Shown when a Dust ask fails because the mentioned agent sId no longer resolves in the connected
@@ -102,7 +102,7 @@ export function spotlightRefUnavailableMessage(): string {
 // remedy is to reconnect Dust to the workspace that actually has the Spotlight Ref agent.
 export function dustAgentUnavailableMessage(spotlight = false): string {
   if (spotlight) {
-    return 'The Spotlight Ref agent is no longer available in this workspace. Reconnect Dust in Settings → AI to the workspace that has it.'
+    return 'The Spotlight Ref agent is not in this workspace.'
   }
   return 'Your Dust agent is no longer available in this workspace. Open Settings → AI to pick one.'
 }

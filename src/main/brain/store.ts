@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, renameSync, s
 import { join, basename } from 'node:path'
 import { createHash, randomBytes } from 'node:crypto'
 import type { Settings } from '@shared/ipc'
+import { invalidateMatchKeyDir, resetMatchKeyCacheForTests } from './match-key-cache'
 import {
   BrainIndexSchema,
   BrainGraphSchema,
@@ -208,6 +209,13 @@ function ensureDirs(settings: Settings): string {
 const jsonCache = new Map<string, { mtimeMs: number; size: number; value: unknown }>()
 const JSON_CACHE_MAX = 2000 // safety valve — see recall.ts's identical guard
 
+/** Bumps on every writeJson. Receipt Mode's match-key cache must not rely on directory mtime alone:
+ *  a same-ms rewrite (alias added to an existing entity) can leave mtime unchanged on a busy disk. */
+let _writeGen = 0
+export function brainWriteGeneration(): number {
+  return _writeGen
+}
+
 // Exported (unchanged otherwise) so the correction engine (src/main/brain/corrections.ts) can read/write
 // brain-relative JSON that doesn't fit a strict entity schema — a merged-away entity's tombstone
 // ({schema_version, id, merged_into}) and the `.brain/corrections.json` journal itself both go through
@@ -245,6 +253,7 @@ export async function writeJson(settings: Settings, rel: string, value: unknown)
   // byte-identical to what a fresh parse() of the written JSON would yield (zod defaults/transforms) —
   // and relying on mtime alone risks a same-mtime rapid write-then-read on low-resolution filesystems.
   jsonCache.delete(p)
+  _writeGen += 1
 }
 
 // MI-2.5 Fix C: the ONE serialization lane every read-modify-write mutation of `.brain/` entity files
@@ -479,23 +488,27 @@ export const writeMeetingExtraction = (s: Settings, fileSlug: string, v: Meeting
 
 export const readPerson = (s: Settings, slug: string): PersonEntity | null =>
   readJson(s, join('entities', 'person', `${slug}.json`), (v) => migratePerson(PersonEntitySchema.parse(v), slug))
-export const writePerson = (s: Settings, slug: string, v: PersonEntity): Promise<void> => {
+export const writePerson = async (s: Settings, slug: string, v: PersonEntity): Promise<void> => {
   ensureV1Backup(s)
-  return writeJson(s, join('entities', 'person', `${slug}.json`), v)
+  await writeJson(s, join('entities', 'person', `${slug}.json`), v)
+  // Receipt Mode match-key cache — alias edits must not wait on directory mtime (ask-path latency).
+  invalidateMatchKeyDir(join(brainDir(s), 'entities', 'person'))
 }
 
 export const readAccount = (s: Settings, slug: string): AccountEntity | null =>
   readJson(s, join('entities', 'account', `${slug}.json`), (v) => migrateAccount(AccountEntitySchema.parse(v), slug))
-export const writeAccount = (s: Settings, slug: string, v: AccountEntity): Promise<void> => {
+export const writeAccount = async (s: Settings, slug: string, v: AccountEntity): Promise<void> => {
   ensureV1Backup(s)
-  return writeJson(s, join('entities', 'account', `${slug}.json`), v)
+  await writeJson(s, join('entities', 'account', `${slug}.json`), v)
+  invalidateMatchKeyDir(join(brainDir(s), 'entities', 'account'))
 }
 
 export const readDeal = (s: Settings, slug: string): DealEntity | null =>
   readJson(s, join('entities', 'deal', `${slug}.json`), (v) => migrateDeal(DealEntitySchema.parse(v), slug))
-export const writeDeal = (s: Settings, slug: string, v: DealEntity): Promise<void> => {
+export const writeDeal = async (s: Settings, slug: string, v: DealEntity): Promise<void> => {
   ensureV1Backup(s)
-  return writeJson(s, join('entities', 'deal', `${slug}.json`), v)
+  await writeJson(s, join('entities', 'deal', `${slug}.json`), v)
+  invalidateMatchKeyDir(join(brainDir(s), 'entities', 'deal'))
 }
 
 /**
@@ -591,6 +604,7 @@ export function purgeBrain(settings: Settings, opts: { preserveCorrections?: boo
     preserve = !!opts.preserveCorrections && existsSync(journalPath)
     if (preserve) cpSync(journalPath, preserveTo)
     if (existsSync(root)) rmSync(root, { recursive: true, force: true })
+    resetMatchKeyCacheForTests() // Receipt Mode must not match against a wiped corpus
     if (preserve) {
       mkdirSync(root, { recursive: true })
       cpSync(preserveTo, journalPath)

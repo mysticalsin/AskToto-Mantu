@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { pickReadyProvider, detectHint } from './Settings'
+import { pickReadyProvider, detectHint, SETTINGS_CONTENT_SCROLL_CLASS, settingsScrollClipsOverflowX } from './Settings'
 
 // Normalize CRLF → LF: on a Windows checkout Settings.tsx has \r\n line endings, and a marker whose
 // newline sits mid-string (e.g. finding 5's '))}\n          </div>') would never match '))}\r\n...'.
@@ -32,10 +32,10 @@ describe('Local AI tells the truth about a model that is downloaded, not bundled
   // wording was wrong and legitimately quote it; that text never reaches a user.
   const copy = block.replace(/^\s*\/\/.*$/gm, '')
 
-  it('loads readiness metadata and exposes no runtime model management', () => {
-    // Still read-only: no download/cancel/delete controls and no extra IPC channel. The download state
-    // rides the existing localModels:list summary (see shared/ipc.ts LocalModelSummarySchema).
+  it('loads readiness metadata and exposes start/retry, not cancel/delete', () => {
+    // The download state rides localModels:list. Retry re-arms ensureLocalModel without toggling Local AI.
     expect(block).toMatch(/window\.toto\.localModelsList\(\)/)
+    expect(block).toMatch(/localModelsEnsure\(\)/)
     expect(block).not.toMatch(/localModelsDownload|localModelsCancel|localModelsDelete/)
   })
 
@@ -45,8 +45,8 @@ describe('Local AI tells the truth about a model that is downloaded, not bundled
     expect(copy).not.toMatch(/Included with Métis/)
     expect(copy).not.toMatch(/no separate model download/i)
     expect(copy).not.toMatch(/bundled model/i)
-    // ...and says what actually happens instead.
-    expect(block).toMatch(/first run/i)
+    // ...and says what actually happens instead (background download when the app opens).
+    expect(block).toMatch(/when the app opens|when Métis opens|downloads automatically when Métis opens/i)
   })
 
   it('MQA-191 — never tells the user to reinstall, which cannot restore weights no installer carries', () => {
@@ -65,9 +65,10 @@ describe('Local AI tells the truth about a model that is downloaded, not bundled
     expect(block).toMatch(/next launch/i)
   })
 
-  it('MQA-187 — the card re-polls while a download is running instead of freezing on its mount snapshot', () => {
+  it('MQA-187 — the card re-polls while a download is running or has not started', () => {
     expect(block).toMatch(/setTimeout/)
     expect(block).toMatch(/'downloading'/)
+    expect(block).toMatch(/'not-downloaded'/)
   })
 
   it('still renders ready, unavailable and the RAM floor', () => {
@@ -77,10 +78,26 @@ describe('Local AI tells the truth about a model that is downloaded, not bundled
     expect(block).toMatch(/Unavailable/)
   })
 
-  it('contains no model download or delete controls', () => {
+  it('a disk or RAM skip is a named refusal with Retry, not a silent idle', () => {
+    expect(block).toMatch(/unavailableReason === 'insufficient-disk'/)
+    expect(block).toMatch(/not enough free disk space/)
+    expect(block).toMatch(/insufficient-ram/)
+    expect(block).toMatch(/canRetry/)
+    expect(block).toMatch(/insufficient-disk/)
+    expect(block).toMatch(/Retry/)
+  })
+
+  it('contains a Retry control for a failed or not-yet-started fetch, not delete/cancel', () => {
+    expect(block).toMatch(/Retry/)
+    expect(block).toMatch(/localModelsEnsure/)
     expect(block).not.toMatch(/>\s*Download\s*</)
     expect(block).not.toMatch(/>\s*Delete\s*</)
     expect(block).not.toMatch(/>\s*Cancel\s*</)
+  })
+
+  it('exposes an in-flight fetching state with progress', () => {
+    expect(block).toMatch(/Downloading \$\{percent\}%/)
+    expect(block).toMatch(/unavailableReason === 'downloading'/)
   })
 })
 
@@ -282,12 +299,69 @@ describe('MQA-062 — CLI Integration verifies the real session when the panel o
   })
 })
 
+describe('CLI Connect treats a weekly cap as signed-in, not disconnected', () => {
+  it('the Connect handler keeps weekly-limit on the done path', () => {
+    const body = blockAfter("const connect = async (id: 'claude-cli' | 'codex-cli')", 'const cancel =')
+    expect(body).toMatch(/r\.session === 'weekly-limit'/)
+    expect(body).toMatch(/phase: 'done'/)
+  })
+
+  it('installs in-flow when the session probe says missing, then proves again', () => {
+    const body = blockAfter("const connect = async (id: 'claude-cli' | 'codex-cli')", 'const cancel =')
+    expect(body).toMatch(/r\.session === 'missing'/)
+    expect(body).toMatch(/cliInstall/)
+    expect(body).toMatch(/r\.session === 'signed-out'/)
+    expect(body).toMatch(/cliLogin/)
+  })
+})
+
+describe('CLI Integration copy — managed install, not npm i -g', () => {
+  it('does not advertise npm i -g as the happy path', () => {
+    const block = blockAfter('title="CLI Integration"', 'icon={Link2}')
+    expect(block).not.toMatch(/npm i -g/)
+    expect(block).toMatch(/managed copy/)
+    expect(block).toMatch(/live session check/)
+  })
+})
+
+describe('Set up automatically shows an honest status chip', () => {
+  const cli = (): string => blockAfter('function CliIntegration(', '\nfunction McpConnectionCard(')
+  const install = (): string =>
+    blockAfter('const runInstall = async (id: \'claude-cli\' | \'codex-cli\')', 'const connect = async')
+
+  it('keeps Set up automatically and walks install → login → Connected', () => {
+    const body = cli()
+    expect(body).toMatch(/Set up automatically/)
+    expect(body).toMatch(/data-cli-setup-chip/)
+    expect(body).toMatch(/Waiting for login/)
+    expect(body).toMatch(/canShowConnected/)
+    expect(body).toMatch(/nextCliSetupStep/)
+    expect(install()).toMatch(/window\.toto\.cliInstall\(id/)
+    expect(install()).toMatch(/window\.toto\.cliTest\(id\)/)
+    expect(install()).toMatch(/window\.toto\.cliLogin\(id\)/)
+    expect(body).toMatch(/lastClickedCli/)
+    expect(body).toMatch(/CLI Integration/)
+  })
+
+  it('a click without a working binary cannot show Connected', () => {
+    const body = install()
+    expect(body).toMatch(/if \(!binaryPresent\)/)
+    expect(body).toMatch(/canShowConnected\(\{ binaryPresent, testOk \}\)/)
+    expect(body).not.toMatch(/phase: 'done'[\s\S]{0,80}binaryPresent: false/)
+  })
+})
+
 // MQA-164 — the in-app download had no failure path: main logged the electron-updater 'error' and told
 // nobody, so UpdatesSection stayed in phase 'downloading' — a progress bar that could never move again,
 // with its own download-page fallback ("Always reachable so the user is never stranded") hidden, because
 // that link renders only in phase 'blocked' or 'idle'.
 describe('MQA-164 — a failed update download leaves the Settings row with a way out', () => {
   const block = (): string => blockAfter('function UpdatesSection(', '\nfunction ModePromptEditor')
+
+  it('tells the user only a QA-approved Latest is offered', () => {
+    expect(block()).toMatch(/QA-approved Latest from Metis-Releases/)
+    expect(block()).toMatch(/Draft and prerelease builds are never offered/)
+  })
 
   it('subscribes to the download-failure channel alongside progress and ready', () => {
     expect(block()).toMatch(/window\.toto\.onUpdateError\(/)
@@ -304,5 +378,251 @@ describe('MQA-164 — a failed update download leaves the Settings row with a wa
   it('is bridged by preload on the shared update:error channel', () => {
     const preload = readFileSync(join(__dirname, '../../../preload/index.ts'), 'utf8')
     expect(preload).toMatch(/onUpdateError: .*sub\(IPC\.updateError, cb\)/)
+  })
+})
+
+describe('Set up Dust installs the managed CLI, then signs in', () => {
+  it('startDustOAuth calls dustInstallCli before dustLoginBegin', () => {
+    const body = blockAfter('const startDustOAuth = async', 'useEffect(() => {')
+    expect(body).toMatch(/window\.toto\.dustInstallCli\(\)/)
+    expect(body).toMatch(/window\.toto\.dustLoginBegin\(\)/)
+    expect(body.indexOf('dustInstallCli()')).toBeLessThan(body.indexOf('dustLoginBegin()'))
+    expect(body).toMatch(/Could not install the Dust CLI/)
+  })
+
+  it('the Set up Dust button copy is install, not reconnect / No CLI', () => {
+    const block = blockAfter("title={active ? 'Dust CLI · Your agents (active)'", '\nfunction getAudioChoices(')
+    const copy = block.replace(/^\s*\/\/.*$/gm, '')
+    expect(copy).toMatch(/Installing Dust CLI/)
+    expect(copy).toMatch(/Installs the Dust CLI, then opens your browser/)
+    expect(copy).not.toMatch(/No CLI/)
+    expect(copy.toLowerCase()).not.toMatch(/reconnect dust in settings/)
+  })
+})
+
+describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', () => {
+  const product = blockAfter('function ProductConnectCard(', '\nfunction ClickupCard(')
+  const polo = blockAfter('function McpConnectionCard(', '\nconst primaryBtnStyle')
+  const intelligence = blockAfter('function IntelligenceTab(', '\nfunction GraphSection(')
+  const productCopy = product.replace(/^\s*\/\/.*$/gm, '')
+
+  it('ClickUp and Plane default cards have no MCP URL field', () => {
+    const clickup = blockAfter('function ClickupCard(', '\nfunction PlaneCard(')
+    const plane = blockAfter('function PlaneCard(', '\nfunction AgentPicker(')
+    expect(productCopy).not.toMatch(/MCP endpoint URL/)
+    expect(clickup).toMatch(/<ClickUpMark/)
+    expect(plane).toMatch(/<PlaneMark/)
+    expect(intelligence).toMatch(/<ClickupCard /)
+    expect(intelligence).toMatch(/<PlaneCard /)
+  })
+
+  it('ClickUp Connect is the default CTA — no endpoint or key input until Advanced opens', () => {
+    expect(product).toMatch(/\{connecting \? waitingLabel : 'Connect'\}/)
+    expect(product).toMatch(/advanced \? \(/)
+    expect(product).toMatch(/API key/)
+    const keyInput = product.indexOf('type="password"')
+    const advancedGate = product.indexOf('{advanced ? (')
+    expect(keyInput).toBeGreaterThan(advancedGate)
+  })
+
+  it('Polo Pre-Sales still has the existing URL + key + Test + Save form', () => {
+    expect(polo).toMatch(/MCP endpoint URL/)
+    expect(polo).toMatch(/API key/)
+    expect(polo).toMatch(/Test connection/)
+    expect(polo).toMatch(/Save/)
+    expect(intelligence).toMatch(/kind="bidstack"/)
+    expect(intelligence).toMatch(/defaultLabel="Polo Pre-Sales"/)
+    expect(intelligence).not.toMatch(/kind="plane"/)
+  })
+
+  it('never auto-sends: product-connect cards have no useEffect that connects or pushes', () => {
+    expect(product).not.toMatch(/useEffect/)
+    expect(product).not.toMatch(/mcpPush/)
+    expect(product).toMatch(/onClick=\{\(\) => void runConnect\(\)\}/)
+  })
+
+  it('ClickUp connected line names the destination list when known', () => {
+    expect(product).toMatch(/Tasks go to \$\{conn\.clickupListName\}/)
+    expect(product).toMatch(/clickupListName: r\.clickupListName/)
+  })
+
+  it('official marks are the vendored simple-icons paths, not Lucide stand-ins', () => {
+    const clickup = readFileSync(join(__dirname, 'brand/ClickUpMark.tsx'), 'utf8')
+    const plane = readFileSync(join(__dirname, 'brand/PlaneMark.tsx'), 'utf8')
+    expect(clickup).toMatch(/#7B68EE/)
+    expect(clickup).toMatch(/M2 18\.439l3\.69-2\.828/)
+    expect(plane).toMatch(/currentColor/)
+    expect(plane).toMatch(/M0 5\.358a\.854/)
+  })
+})
+
+// Instant validate: Dust connect must live-ping and fail loud. No green Connected from a saved key
+// alone, and never an auto-sent chat as the "proof".
+describe('Dust instant validate proves a live connection', () => {
+  const setup = (): string => blockAfter('function DustSetup(', '\nfunction getAudioChoices(')
+  const copy = (): string => setup().replace(/^\s*\/\/.*$/gm, '')
+
+  it('CLI import does not paint ok:true / Loading agents before the live prove', () => {
+    const connect = blockAfter('const connectCli = async ()', '\n  const oauthIdle')
+    expect(connect).not.toMatch(/ok:\s*true[\s\S]{0,80}Loading agents/)
+    expect(connect).toMatch(/proveAfterConnect/)
+    expect(connect).toMatch(/Checking Dust connection/)
+  })
+
+  it('OAuth workspace pick awaits the live prove and fails the oauth phase on error', () => {
+    const pick = blockAfter('const pickDustWorkspace = async', '\n  // Save a Dust API key')
+    expect(pick).toMatch(/proveAfterConnect/)
+    expect(pick).toMatch(/if \(!verdict\.ok\)/)
+    expect(pick).toMatch(/phase: 'error'/)
+  })
+
+  it('Save API key tests the pasted key before persisting and does not fire-and-forget loadAgents', () => {
+    const save = blockAfter('const saveDustKey = async', '\n  const recoverProfileAndRetryDustKey')
+    expect(save).toMatch(/window\.toto\.testApiKey\('dust', k\)/)
+    expect(save.indexOf("testApiKey('dust', k)")).toBeLessThan(save.indexOf("saveKey('dust', k)"))
+    expect(save).toMatch(/decideDustInstantValidate/)
+    expect(save).not.toMatch(/void loadAgents\(\)/)
+    expect(save).toMatch(/DUST_WORKSPACE_MISSING_SETUP_ERROR/)
+  })
+
+  it('loadAgents treats an empty list as a failure, not a loaded picker', () => {
+    const load = blockAfter('const loadAgents = async', '\n  // When Dust was already connected')
+    expect(load).toMatch(/r\.agents\.length > 0/)
+    expect(load).toMatch(/DUST_EMPTY_AGENTS_ERROR/)
+  })
+
+  it('green Connected requires a proved agent list and shows the count, not a static "Dust is connected."', () => {
+    const body = copy()
+    expect(body).not.toMatch(/Dust is connected\./)
+    expect(body).not.toMatch(/Connected\. Loading agents/)
+    expect(body).toMatch(/formatDustConnectedMessage/)
+    expect(body).toMatch(/listProved/)
+    expect(setup()).toMatch(/Checking Dust connection/)
+  })
+
+  it('Reconnect installs the CLI first and surfaces a human install error, not Connected', () => {
+    const start = blockAfter('const startDustOAuth = async', '\n  // Poll at the server-given cadence')
+    expect(start).toMatch(/dustInstallCli/)
+    expect(start.indexOf('dustInstallCli')).toBeLessThan(start.indexOf('dustLoginBegin'))
+    expect(start).toMatch(/if \(!installed\.ok\)/)
+    expect(start).toMatch(/phase: 'error'/)
+    expect(start).not.toMatch(/Connected/)
+  })
+
+  it('never auto-sends a chat as the connection test', () => {
+    const body = setup()
+    expect(body).not.toMatch(/createConversation|postUserMessage|streamAgent/)
+    expect(body).toMatch(/Never auto-sends a chat/)
+  })
+})
+
+describe('Settings Bar rest orb picker', () => {
+  it('wires OverlayOrbPicker next to Overlay chrome only when Bar is selected', () => {
+    expect(source).toMatch(/overlayShowsBarRestPicker/)
+    expect(source).toMatch(/overlayShowsBarRestPicker\(settings\.overlayLayout\)/)
+    expect(source).toMatch(/OverlayOrbPicker/)
+    expect(source).toMatch(/overlayOrbStyle: id/)
+    expect(source).toMatch(/Applies when Overlay chrome is Bar/)
+    const appearance = source.slice(source.indexOf('title="Appearance"'), source.indexOf('title="Language"'))
+    expect(appearance).toMatch(/overlayShowsBarRestPicker\(settings\.overlayLayout\)/)
+    const gated = appearance.slice(
+      appearance.indexOf('overlayShowsBarRestPicker(settings.overlayLayout)'),
+      appearance.indexOf(') : null}')
+    )
+    expect(gated).toMatch(/<OverlayOrbPicker/)
+    expect(gated).toMatch(/Bar rest/)
+    const orbBlock = source.slice(source.indexOf('<OverlayOrbPicker'), source.indexOf('<OverlayOrbPicker') + 400)
+    expect(orbBlock).not.toMatch(/\u2014/)
+  })
+})
+
+describe('Settings from M scrolls the full surface', () => {
+  it('fills the 880×800 window and scrolls cl-content end to end', () => {
+    expect(source).toMatch(/cl-root flex h-full min-h-0/)
+    expect(source).toMatch(/className=\{SETTINGS_CONTENT_SCROLL_CLASS\}/)
+    expect(source).toMatch(/cl-content scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden/)
+    expect(source).not.toMatch(/max-h-\[480px\]/)
+    expect(source).not.toMatch(/panel-enter/)
+    expect(source).toMatch(/Custom instructions/)
+  })
+})
+
+describe('Settings scroll root clips sideways overflow (Win Audio / AI)', () => {
+  it('the scroll-class helper rejects overflow-x auto/scroll/visible and requires hidden/clip', () => {
+    expect(settingsScrollClipsOverflowX(SETTINGS_CONTENT_SCROLL_CLASS)).toBe(true)
+    expect(settingsScrollClipsOverflowX('cl-content scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden')).toBe(true)
+    expect(settingsScrollClipsOverflowX('cl-content scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-clip')).toBe(true)
+    // The pre-fix class: overflow-y-auto alone computes overflow-x: auto (CSS pairing).
+    expect(settingsScrollClipsOverflowX('cl-content scroll-thin min-h-0 flex-1 overflow-y-auto')).toBe(false)
+    expect(settingsScrollClipsOverflowX('cl-content overflow-y-auto overflow-x-auto')).toBe(false)
+    expect(settingsScrollClipsOverflowX('cl-content overflow-y-auto overflow-x-scroll')).toBe(false)
+    expect(settingsScrollClipsOverflowX('cl-content overflow-y-auto overflow-x-visible')).toBe(false)
+    expect(settingsScrollClipsOverflowX('overflow-x-hidden')).toBe(false)
+  })
+
+  it('the live Settings tabpanel uses the clipping scroll class', () => {
+    expect(source).toMatch(/className=\{SETTINGS_CONTENT_SCROLL_CLASS\}/)
+    expect(SETTINGS_CONTENT_SCROLL_CLASS).toMatch(/\boverflow-y-auto\b/)
+    expect(SETTINGS_CONTENT_SCROLL_CLASS).toMatch(/\boverflow-x-hidden\b/)
+    expect(SETTINGS_CONTENT_SCROLL_CLASS).not.toMatch(/\boverflow-x-(?:auto|scroll|visible)\b/)
+  })
+})
+
+describe('Operator control plane lives on Cloudflare, not in Settings', () => {
+  it('exposes Operator URL, ingest secret, Ask-text toggle, and Open Operator', () => {
+    expect(source).toMatch(/Operator URL/)
+    expect(source).toMatch(/Ingest secret/)
+    expect(source).toMatch(/Send Ask text for skill improvement/)
+    expect(source).toMatch(/Open Operator/)
+    expect(source).toMatch(/operatorOpen/)
+    expect(source).toMatch(/Listen transcripts and screens never send/)
+    expect(source).toMatch(/DEFAULT_OPERATOR_URL/)
+    expect(source).toMatch(/operatorUrlConfigured/)
+    expect(source).toMatch(/Empty uses the shipped Operator URL at runtime/)
+    expect(source).not.toMatch(/Empty means no fleet heartbeat/)
+    expect(source).not.toMatch(/metis-operator\.example\.workers\.dev/)
+  })
+
+  it('does not keep a local-only Operator tools dashboard or fake fleet numbers', () => {
+    expect(source).not.toMatch(/operatorTools/)
+    expect(source).not.toMatch(/Operator tools/)
+    expect(source).not.toMatch(/local analytics page that pretends/)
+    expect(source).not.toMatch(/DAU/)
+    expect(source).not.toMatch(/cache hit rate/)
+    const operator = blockAfter('title="Operator"', '\n            {tab === \'meetings\'')
+    expect(operator).not.toMatch(/—/)
+    expect(operator).not.toMatch(/I am an AI|as an AI|AI assistant/i)
+  })
+})
+
+describe('locked mode skills — Settings has no editor for shipped skill files', () => {
+  const personalize = blockAfter('function ModePromptEditor(', '\nconst TEXT_FILE_RE')
+
+  it('shows a read-only locked line and never edits skill files', () => {
+    expect(personalize).toMatch(/Operator skill v/)
+    expect(personalize).toMatch(/cannot be\s+edited, deleted, or overridden here/)
+    expect(personalize).toMatch(/modeSkillLock\(\)/)
+    expect(personalize).not.toMatch(/writeFileSync/)
+    expect(personalize).not.toMatch(/skills\/modes/)
+    expect(personalize).not.toMatch(/SKILL\.md/)
+    expect(personalize).not.toMatch(/onCommit=\{\(v\) => patch\(\{[^}]*skill/)
+  })
+
+  it('the prompt textarea still edits modePrompts only', () => {
+    expect(personalize).toMatch(/patch\(\{ modePrompts:/)
+    expect(source).not.toMatch(/modeSkills/)
+    expect(source).not.toMatch(/skillsRoot/)
+
+  })
+})
+
+describe('Cloudflare tile opens Operator OAuth, not a key-paste card', () => {
+  it('calls cloudflareConnect and does not bind a Worker URL paste field', () => {
+    expect(source).toMatch(/window\.toto\.cloudflareConnect/)
+    expect(source).toMatch(/data-cf-aig-connect/)
+    expect(source).not.toMatch(/value=\{settings\.cloudflareBaseUrl\}/)
+    expect(source).not.toMatch(/Paste the Worker/)
+    const preload = readFileSync(join(__dirname, '../../../preload/index.ts'), 'utf8')
+    expect(preload).toMatch(/cloudflareConnect:/)
   })
 })

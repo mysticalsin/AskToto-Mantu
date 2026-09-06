@@ -130,6 +130,14 @@ The whole thing is about two minutes:
 Batch-minting or scripting instead? See the CLI in
 [chapter 10](#10-cli-and-api-quick-reference).
 
+**Handing out a trial instead of a sale?** There's no price tag on this
+product yet, so a trial isn't a discount — it's the same mint flow with
+different defaults: `node scripts/generate-license.mjs --url $URL --token
+"$TOKEN" --trial` (1 seat, 14 days, no company/seats required). It's a
+real, server-issued key — nothing about it is locally resettable — and it
+shows up in the dashboard/CSV tagged `trial` so you always know which keys
+you gave away versus sold.
+
 > ⚠️ **Until customers are outside your LAN**, the server URL only works on
 > your network. Before the first real external customer, deploy with the
 > [`deploy/`](deploy/README.md) bundle (domain + auto-HTTPS) and give
@@ -237,8 +245,8 @@ Discord. Update `discord-webhook.txt` and recreate the container (chapter 2).
 ## 9. Monitoring
 
 - **Quick check, no auth:** `curl http://localhost:8420/health` →
-  `{ ok, version, uptimeSeconds, licenseCount }`. Wrong `licenseCount` = look
-  immediately.
+  `{ ok, version, uptimeSeconds }`. Fleet counts live on `GET /metrics`
+  (bearer `METRICS_TOKEN`), not on public health.
 - **Prometheus / Grafana / uptime bots:** `GET /metrics` with
   `Authorization: Bearer <metrics token>` — licenses by status, seats used
   vs. cap, expiring-soon count, uptime. Scrape config is in the README's

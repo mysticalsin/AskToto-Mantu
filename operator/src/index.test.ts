@@ -1,0 +1,712 @@
+import { generateKeyPairSync } from 'node:crypto'
+import { describe, expect, it } from 'vitest'
+import { handleRequest, type Env } from './index'
+import { hmacHex } from './hmac'
+import { decryptPrompt, sha256Hex, verifySkillPack } from './crypto'
+import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
+import { memoryStore } from './store'
+import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from './test-fixtures'
+
+const NOW = 1_725_000_000_000
+
+function mintSkillKeys(): { privateKeyPem: string; publicKeyRaw: string } {
+  const pair = generateKeyPairSync('ed25519')
+  const jwk = pair.publicKey.export({ format: 'jwk' }) as { x?: string }
+  if (typeof jwk.x !== 'string' || !jwk.x) throw new Error('ed25519 jwk missing x')
+  return {
+    privateKeyPem: pair.privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(),
+    publicKeyRaw: jwk.x
+  }
+}
+
+const SKILL_KEYS = mintSkillKeys()
+
+function env(overrides: Partial<Env> = {}): Env {
+  return {
+    OPERATOR_INGEST_SECRET: TEST_INGEST_SECRET,
+    OPERATOR_PROMPT_KEY: TEST_PROMPT_KEY,
+    OPERATOR_SKILL_PRIVATE_KEY: SKILL_KEYS.privateKeyPem,
+    ...overrides
+  }
+}
+
+const tonyAccess = {
+  getIdentity: async () => ({ email: 'tony.walteur@gmail.com' })
+}
+
+async function signedRequest(
+  path: string,
+  bodyText: string,
+  opts: { ts?: number; nonce?: string; deviceId?: string; sig?: string | null; method?: string } = {}
+): Promise<Request> {
+  const ts = String(opts.ts ?? NOW)
+  const nonce = opts.nonce ?? `nonce-${Math.random().toString(16).slice(2)}`
+  const deviceId = opts.deviceId ?? 'device-a'
+  const bodyHash = await sha256Hex(bodyText)
+  const sig =
+    opts.sig === null
+      ? ''
+      : (opts.sig ?? (await hmacHex(TEST_INGEST_SECRET, ingestCanonical(ts, nonce, deviceId, bodyHash))))
+  const headers: Record<string, string> = {
+    'content-type': 'application/json',
+    [OPERATOR_HMAC_HEADERS.ts]: ts,
+    [OPERATOR_HMAC_HEADERS.nonce]: nonce,
+    [OPERATOR_HMAC_HEADERS.device]: deviceId
+  }
+  if (sig) headers[OPERATOR_HMAC_HEADERS.sig] = sig
+  return new Request(`https://operator.test${path}`, {
+    method: opts.method ?? (path.includes('manifest') ? 'GET' : 'POST'),
+    headers,
+    body: opts.method === 'GET' || path.includes('manifest') ? undefined : bodyText
+  })
+}
+
+describe('Operator /v1/ask HMAC', () => {
+  it('rejects a bad signature and never calls an upstream model', async () => {
+    const store = memoryStore()
+    const req = await signedRequest(
+      '/v1/ask',
+      JSON.stringify({ provider: 'anthropic', model: 'claude-haiku-4-5-20251001', messages: [{ role: 'user', content: 'hi' }] }),
+      { sig: 'ab'.repeat(32) }
+    )
+    const res = await handleRequest(
+      req,
+      env({ ANTHROPIC_API_KEY: 'sk-ant-worker-secret' }),
+      {},
+      {
+        store,
+        now: NOW,
+        fetchImpl: async () => {
+          throw new Error('must not call upstream')
+        }
+      }
+    )
+    expect(res.status).toBe(401)
+    expect(await res.text()).not.toContain('sk-ant-worker-secret')
+  })
+})
+
+describe('HMAC ingest', () => {
+  it('accepts a valid signature and stores ciphertext, not plaintext', async () => {
+    const store = memoryStore()
+    const question = 'How do I close a consulting offer this week?'
+    const req = await signedRequest('/v1/ingest', JSON.stringify({
+      id: 'ask-1',
+      mode: 'interview',
+      skillId: 'interview',
+      question,
+      cacheRead: 800,
+      cacheWrite: 200,
+      cacheUncached: 40,
+      cacheStatus: 'hit',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6'
+    }))
+    const res = await handleRequest(req, env(), {}, { store, now: NOW })
+    expect(res.status).toBe(200)
+    const row = await store.getAsk('ask-1')
+    expect(row).toBeTruthy()
+    expect(row?.prompt_cipher).toBeTruthy()
+    expect(row?.prompt_iv).toBeTruthy()
+    expect(row?.prompt_cipher).not.toContain(question)
+    expect(JSON.stringify(row)).not.toContain(question)
+    expect(row?.preview).not.toContain(question)
+    const plain = await decryptPrompt(row!.prompt_cipher!, row!.prompt_iv!, TEST_PROMPT_KEY)
+    expect(plain).toBe(question)
+  })
+
+  it('rejects a bad signature', async () => {
+    const store = memoryStore()
+    const req = await signedRequest('/v1/ingest', JSON.stringify({ id: 'x' }), { sig: 'ab'.repeat(32) })
+    const res = await handleRequest(req, env(), {}, { store, now: NOW })
+    expect(res.status).toBe(401)
+    expect(await store.getAsk('x')).toBeNull()
+  })
+
+  it('rejects timestamp skew over 5 minutes', async () => {
+    const store = memoryStore()
+    const req = await signedRequest('/v1/ingest', JSON.stringify({ id: 'skew' }), { ts: NOW - 6 * 60 * 1000 })
+    const res = await handleRequest(req, env(), {}, { store, now: NOW })
+    expect(res.status).toBe(401)
+    const body = (await res.json()) as { error?: string }
+    expect(body.error).toMatch(/skew/)
+  })
+
+  it('rejects a missing nonce', async () => {
+    const store = memoryStore()
+    const req = await signedRequest('/v1/ingest', JSON.stringify({ id: 'n' }), { nonce: '' })
+    const res = await handleRequest(req, env(), {}, { store, now: NOW })
+    expect(res.status).toBe(401)
+  })
+
+  it('rejects a replayed nonce', async () => {
+    const store = memoryStore()
+    const body = JSON.stringify({ id: 'replay' })
+    const first = await signedRequest('/v1/ingest', body, { nonce: 'once' })
+    expect((await handleRequest(first, env(), {}, { store, now: NOW })).status).toBe(200)
+    const second = await signedRequest('/v1/ingest', body, { nonce: 'once' })
+    expect((await handleRequest(second, env(), {}, { store, now: NOW })).status).toBe(401)
+  })
+})
+
+describe('Access on admin routes', () => {
+  it('returns 401 on / and /v1/admin/* when Access identity is missing, even with a valid HMAC', async () => {
+    const store = memoryStore()
+    const admin = await signedRequest('/v1/admin/summary', JSON.stringify({}), { method: 'GET' })
+    const res = await handleRequest(admin, env(), {}, { store, now: NOW })
+    expect(res.status).toBe(401)
+    const home = await signedRequest('/', '', { method: 'GET' })
+    expect((await handleRequest(home, env(), {}, { store, now: NOW })).status).toBe(401)
+  })
+
+  it('rejects a non-allowlisted Access email', async () => {
+    const store = memoryStore()
+    const res = await handleRequest(
+      new Request('https://operator.test/v1/admin/summary'),
+      env(),
+      { access: { getIdentity: async () => ({ email: 'other@example.com' }) } },
+      { store, now: NOW }
+    )
+    expect(res.status).toBe(401)
+  })
+
+  it('allows Tony and never returns prompt ciphertext on the asks list', async () => {
+    const store = memoryStore()
+    await handleRequest(
+      await signedRequest('/v1/ingest', JSON.stringify({ id: 'ask-2', question: 'secret close plan', mode: 'sales' })),
+      env(),
+      {},
+      { store, now: NOW }
+    )
+    const list = await handleRequest(
+      new Request('https://operator.test/v1/admin/asks'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    expect(list.status).toBe(200)
+    const body = (await list.json()) as { asks: { prompt_cipher?: string; question?: string }[] }
+    expect(body.asks[0]?.prompt_cipher).toBeUndefined()
+    expect(body.asks[0]?.question).toBeUndefined()
+    expect(JSON.stringify(body)).not.toContain('secret close plan')
+  })
+
+  it('audit-logs a reveal', async () => {
+    const store = memoryStore()
+    await handleRequest(
+      await signedRequest('/v1/ingest', JSON.stringify({ id: 'ask-3', question: 'reveal me' })),
+      env(),
+      {},
+      { store, now: NOW }
+    )
+    const reveal = await handleRequest(
+      new Request('https://operator.test/v1/admin/asks/ask-3'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    expect(reveal.status).toBe(200)
+    const body = (await reveal.json()) as { question?: string }
+    expect(body.question).toBe('reveal me')
+    const audit = await store.listAudit(5)
+    expect(audit.some((a) => a.action === 'reveal' && a.actor === 'tony.walteur@gmail.com' && a.ask_id === 'ask-3')).toBe(
+      true
+    )
+  })
+})
+
+describe('Approve vs Push', () => {
+  it('Approve does not publish a pack; Push signs a verifiable pack', async () => {
+    const store = memoryStore()
+    const draft = await handleRequest(
+      new Request('https://operator.test/v1/admin/skills/draft', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ skillId: 'interview' })
+      }),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const { id } = (await draft.json()) as { id: string }
+    const skillMd = `---\nid: interview\nversion: 1.1.1\nlocked: true\n---\n\nStay the candidate. Humanizer stays.\n`
+    const approve = await handleRequest(
+      new Request(`https://operator.test/v1/admin/skills/${id}/approve`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ diff: skillMd })
+      }),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    expect(approve.status).toBe(200)
+    expect(((await approve.json()) as { pushed?: boolean }).pushed).toBe(false)
+    expect((await store.latestPacks()).length).toBe(0)
+
+    const push = await handleRequest(
+      new Request(`https://operator.test/v1/admin/skills/${id}/push`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({})
+      }),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    expect(push.status).toBe(200)
+    const pushed = (await push.json()) as { pushed?: boolean; signed?: string }
+    expect(pushed.pushed).toBe(true)
+    expect(pushed.signed).toBeTruthy()
+    const verified = await verifySkillPack(pushed.signed!, SKILL_KEYS.publicKeyRaw)
+    expect(verified?.skillId).toBe('interview')
+    expect(verified?.body).toContain('Stay the candidate')
+    expect((await store.latestPacks()).length).toBe(1)
+  })
+})
+
+describe('question-type tracking', () => {
+  async function ingestAsk(store: ReturnType<typeof memoryStore>, body: Record<string, unknown>): Promise<void> {
+    const req = await signedRequest('/v1/ingest', JSON.stringify(body), { nonce: `qt-${String(body.id)}` })
+    expect((await handleRequest(req, env(), {}, { store, now: NOW })).status).toBe(200)
+  }
+
+  it('stores the closed label with Ask text OFF and never stores free text through it', async () => {
+    const store = memoryStore()
+    await ingestAsk(store, { id: 'q1', mode: 'interview', questionType: 'behavioral' })
+    await ingestAsk(store, { id: 'q2', mode: 'interview', questionType: 'Tell me the secret plan' })
+    await ingestAsk(store, { id: 'q3', mode: 'sales', questionType: ' FACTUAL ' })
+    await ingestAsk(store, { id: 'q4', mode: 'sales' })
+    expect((await store.getAsk('q1'))?.question_type).toBe('behavioral')
+    expect((await store.getAsk('q2'))?.question_type).toBe('unknown')
+    expect((await store.getAsk('q3'))?.question_type).toBe('factual')
+    expect((await store.getAsk('q4'))?.question_type).toBeNull()
+    expect((await store.getAsk('q1'))?.preview).toBe('interview ask · Behavioral')
+    expect((await store.getAsk('q4'))?.preview).toBe('sales ask')
+    expect(JSON.stringify(await store.listAsks(10))).not.toContain('secret plan')
+  })
+
+  it('dashboard reports mix, per-mode cross-tab, and honest coverage', async () => {
+    const store = memoryStore()
+    await ingestAsk(store, { id: 'q1', mode: 'interview', questionType: 'behavioral' })
+    await ingestAsk(store, { id: 'q2', mode: 'interview', questionType: 'behavioral' })
+    await ingestAsk(store, { id: 'q3', mode: 'interview', questionType: 'factual' })
+    await ingestAsk(store, { id: 'q4', mode: 'sales', questionType: 'unknown' })
+    await ingestAsk(store, { id: 'q5', mode: 'sales' })
+    const dash = await handleRequest(
+      new Request('https://operator.test/v1/admin/dashboard'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const body = (await dash.json()) as {
+      questions: {
+        empty: boolean
+        mix: { total: number; classified: number; coverage: number | null; bars: { type: string; count: number }[] }
+        byMode: { mode: string; asks: number; typed: number; top: { label: string; count: number }[] }[]
+      }
+      asks: { id: string; questionType: string }[]
+    }
+    expect(body.questions.empty).toBe(false)
+    expect(body.questions.mix.total).toBe(5)
+    expect(body.questions.mix.classified).toBe(3)
+    expect(body.questions.mix.coverage).toBeCloseTo(0.6)
+    expect(body.questions.mix.bars).toEqual([
+      { type: 'behavioral', label: 'Behavioral', count: 2 },
+      { type: 'factual', label: 'Factual', count: 1 }
+    ])
+    expect(body.questions.byMode).toEqual([
+      { mode: 'interview', asks: 3, typed: 3, top: [{ label: 'Behavioral', count: 2 }, { label: 'Factual', count: 1 }] },
+      { mode: 'sales', asks: 2, typed: 0, top: [] }
+    ])
+    expect(body.asks.find((a) => a.id === 'q5')?.questionType).toBe('not reported')
+    expect(body.asks.find((a) => a.id === 'q1')?.questionType).toBe('Behavioral')
+  })
+
+  it('console shows a real empty state, then the panel once types arrive', async () => {
+    const store = memoryStore()
+    const empty = await (await handleRequest(new Request('https://operator.test/'), env(), { access: tonyAccess }, { store, now: NOW })).text()
+    expect(empty).toContain('Question types')
+    expect(empty).toContain('No Asks in the last 7 days.')
+    await ingestAsk(store, { id: 'legacy', mode: 'sales' })
+    const untyped = await (await handleRequest(new Request('https://operator.test/'), env(), { access: tonyAccess }, { store, now: NOW })).text()
+    expect(untyped).toContain('1 Asks in the last 7 days, none carried a type.')
+    await ingestAsk(store, { id: 'typed', mode: 'sales', questionType: 'estimate' })
+    const page = await (await handleRequest(new Request('https://operator.test/'), env(), { access: tonyAccess }, { store, now: NOW })).text()
+    expect(page).toContain('type known for 1 of 2 Asks (50%)')
+    expect(page).toContain('Estimate 1')
+    expect(page).toContain('<th>Type</th>')
+    expect(page).toContain('<td class="muted">Estimate</td>')
+    expect(page).toContain('<td class="muted">not reported</td>')
+  })
+
+  it('skill draft evidence is the type mix, never question text', async () => {
+    const store = memoryStore()
+    await ingestAsk(store, { id: 'e1', mode: 'interview', questionType: 'behavioral', question: 'tell me about a time you failed at Acme' })
+    await ingestAsk(store, { id: 'e2', mode: 'interview', questionType: 'behavioral', question: 'why Acme' })
+    await ingestAsk(store, { id: 'e3', mode: 'interview', question: 'legacy seat text' })
+    const draft = await handleRequest(
+      new Request('https://operator.test/v1/admin/skills/draft', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ skillId: 'interview' })
+      }),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const { id } = (await draft.json()) as { id: string }
+    const row = await store.getProposal(id)
+    expect(JSON.parse(row!.evidence_json)).toEqual(['Behavioral ×2'])
+    expect(row!.rationale).toBe('3 recent Asks in interview, type known for 2: Behavioral ×2.')
+    expect(row!.rationale).not.toContain('Acme')
+    expect(row!.evidence_json).not.toContain('Acme')
+  })
+})
+
+describe('health', () => {
+  it('does not require Access or HMAC', async () => {
+    const res = await handleRequest(new Request('https://operator.test/health'), env(), {}, { store: memoryStore() })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { service?: string }
+    expect(body.service).toBe('metis-operator')
+  })
+})
+
+describe('public /assets/* — never Access HTML', () => {
+  it('serves client.js without Access and never returns login HTML', async () => {
+    const res = await handleRequest(
+      new Request('https://operator.test/assets/client.js'),
+      env(),
+      {},
+      { store: memoryStore() }
+    )
+    expect(res.status).toBe(200)
+    expect(res.status).not.toBe(302)
+    expect(res.headers.get('content-type')).toMatch(/javascript/)
+    expect(res.headers.get('content-type')).not.toMatch(/html/)
+    const body = await res.text()
+    expect(body).toMatch(/metisOperatorClient/)
+    expect(body).not.toMatch(/<!doctype html|<html|cloudflareaccess|Sign in/i)
+  })
+
+  it('does not require Access identity even when Tony is signed in', async () => {
+    const res = await handleRequest(
+      new Request('https://operator.test/assets/client.js'),
+      env(),
+      { access: tonyAccess },
+      { store: memoryStore() }
+    )
+    expect(res.status).toBe(200)
+    expect(await res.text()).toMatch(/metisOperatorClient/)
+  })
+
+  it('missing /assets/* is JSON 404, not a 302 login page', async () => {
+    const res = await handleRequest(
+      new Request('https://operator.test/assets/index-dead.js'),
+      env(),
+      {},
+      { store: memoryStore() }
+    )
+    expect(res.status).toBe(404)
+    expect(res.status).not.toBe(302)
+    expect(res.headers.get('content-type')).toMatch(/json/)
+    expect(await res.text()).not.toMatch(/<!doctype html|<html|cloudflareaccess/i)
+  })
+})
+
+describe('packed console map and geo', () => {
+  it('renders an empty map when there are no heartbeats, never sample visitors', async () => {
+    const store = memoryStore()
+    const home = await handleRequest(
+      new Request('https://operator.test/'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    expect(home.status).toBe(200)
+    const page = await home.text()
+    expect(page).toContain('No heartbeats yet. The map stays empty until a seat checks in.')
+    expect(page).toContain('No heartbeats yet. Licenses stay empty until a seat checks in.')
+    expect(page).toContain('Generate License stays on the Fly license-server')
+    expect(page).toContain('http://127.0.0.1:8420/admin/ui')
+    expect(page).toContain('Estimate from reported Asks')
+    expect(page).not.toMatch(/Unique Visitors|visitor traffic|\$6,525|1,344/)
+    expect(page).not.toMatch(/\b1\.2\.3\.4\b/)
+    const dash = await handleRequest(
+      new Request('https://operator.test/v1/admin/dashboard'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const body = (await dash.json()) as { map: { empty: boolean; countries: unknown[]; dots: unknown[] } }
+    expect(body.map.empty).toBe(true)
+    expect(body.map.countries).toEqual([])
+    expect(body.map.dots).toEqual([])
+  })
+
+  it('stores Cloudflare cf geo on heartbeat and ignores client coordinates and IP', async () => {
+    const store = memoryStore()
+    const req = await signedRequest(
+      '/v1/heartbeat',
+      JSON.stringify({
+        os: 'darwin',
+        appVersion: '1.8.0',
+        lat: 9,
+        lon: 9,
+        country: 'US',
+        city: 'Clientville',
+        ip: '203.0.113.9'
+      })
+    )
+    const res = await handleRequest(req, env(), {}, {
+      store,
+      now: NOW,
+      geo: { country: 'FR', city: 'Paris', lat: 48.857, lon: 2.351 }
+    })
+    expect(res.status).toBe(200)
+    const seats = await store.listSeats()
+    expect(seats[0]?.country).toBe('FR')
+    expect(seats[0]?.city).toBe('Paris')
+    expect(seats[0]?.lat).toBe(48.857)
+    expect(seats[0]?.lon).toBe(2.351)
+    const dash = await handleRequest(
+      new Request('https://operator.test/v1/admin/dashboard'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const text = await dash.text()
+    expect(text).not.toContain('203.0.113.9')
+    expect(text).not.toContain('Clientville')
+    const body = JSON.parse(text) as {
+      map: { empty: boolean; countries: { iso: string; devices: number }[] }
+      scale: { hours24: { heartbeats: number }[] }
+      licenses: { empty: boolean; seats: { os: string; country: string | null }[] }
+      roi: { asks7d: number; liveSeats: number }
+    }
+    expect(body.map.empty).toBe(false)
+    expect(body.map.countries).toEqual([{ iso: 'FR', devices: 1 }])
+    expect(body.scale.hours24.at(-1)?.heartbeats).toBe(1)
+    expect(body.licenses.empty).toBe(false)
+    expect(body.licenses.seats[0]?.os).toBe('darwin')
+    expect(body.licenses.seats[0]?.country).toBe('FR')
+    expect(body.roi.liveSeats).toBe(1)
+    const home = await handleRequest(
+      new Request('https://operator.test/'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const homePage = await home.text()
+    expect(homePage).toContain('Generate License stays on the Fly license-server')
+    expect(homePage).toContain('http://127.0.0.1:8420/admin/ui')
+    expect(homePage).not.toMatch(/name="licenseKey"|Generate License<\/button>/)
+  })
+
+  it('leaves the map empty when the Worker has no request.cf', async () => {
+    const store = memoryStore()
+    const req = await signedRequest('/v1/heartbeat', JSON.stringify({ os: 'win', appVersion: '1.8.0' }))
+    expect((await handleRequest(req, env(), {}, { store, now: NOW })).status).toBe(200)
+    const dash = await handleRequest(
+      new Request('https://operator.test/v1/admin/dashboard'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const body = (await dash.json()) as { map: { empty: boolean; countries: unknown[] }; kpis: { live: number } }
+    expect(body.kpis.live).toBe(1)
+    expect(body.map.empty).toBe(true)
+    expect(body.map.countries).toEqual([])
+  })
+})
+
+describe('CRM send board', () => {
+  it('funnel counts are real rows; Retry on Failed does not auto-send', async () => {
+    const store = memoryStore()
+    const ingest = await signedRequest(
+      '/v1/ingest',
+      JSON.stringify({
+        event: 'crm',
+        id: 'crm-1',
+        status: 'failed',
+        title: 'Acme recap',
+        connector: 'bidstack'
+      })
+    )
+    expect((await handleRequest(ingest, env(), {}, { store, now: NOW })).status).toBe(200)
+    const dash = await handleRequest(
+      new Request('https://operator.test/v1/admin/dashboard'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const before = (await dash.json()) as {
+      crm: { counts: Record<string, number>; rows: { status: string }[]; landing: { deadLetters: number } }
+    }
+    expect(before.crm.counts.failed).toBe(1)
+    expect(before.crm.rows[0]?.status).toBe('failed')
+    const retry = await handleRequest(
+      new Request('https://operator.test/v1/admin/crm/crm-1/retry', { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' }),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    expect(retry.status).toBe(200)
+    expect(((await retry.json()) as { autoSend?: boolean }).autoSend).toBe(false)
+    const row = await store.getCrm('crm-1')
+    expect(row?.status).toBe('pending')
+    expect(row?.retry_requested).toBe(1)
+  })
+
+  it('confidential CRM events are not ingested', async () => {
+    const store = memoryStore()
+    const ingest = await signedRequest(
+      '/v1/ingest',
+      JSON.stringify({
+        event: 'crm',
+        id: 'secret-1',
+        status: 'success',
+        title: 'Confidential recap',
+        connector: 'clickup',
+        confidential: true
+      })
+    )
+    const res = await handleRequest(ingest, env(), {}, { store, now: NOW })
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as { ingested?: boolean }).ingested).toBe(false)
+    expect(await store.getCrm('secret-1')).toBeNull()
+  })
+
+  it('success row stores the remote CRM id, never a meeting path', async () => {
+    const store = memoryStore()
+    const ingest = await signedRequest(
+      '/v1/ingest',
+      JSON.stringify({
+        event: 'crm',
+        id: 'crm-ok',
+        status: 'success',
+        title: 'Acme recap',
+        connector: 'plane',
+        meetingHash: 'aabbccddeeff0011',
+        remoteId: 'deal-99',
+        remoteUrl: 'https://crm.example/deal-99',
+        meetingFile: '/Users/tony/secret/Acme.md'
+      })
+    )
+    expect((await handleRequest(ingest, env(), {}, { store, now: NOW })).status).toBe(200)
+    const row = await store.getCrm('crm-ok')
+    expect(row?.remote_id).toBe('deal-99')
+    expect(row?.remote_url).toBe('https://crm.example/deal-99')
+    expect(row?.meeting_hash).toBe('aabbccddeeff0011')
+    expect(row?.meeting_file).toBeNull()
+    const dash = await handleRequest(
+      new Request('https://operator.test/v1/admin/dashboard'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const body = (await dash.json()) as { crm: { rows: { remoteId: string; meetingHash: string }[] } }
+    expect(body.crm.rows[0]?.remoteId).toBe('deal-99')
+    expect(JSON.stringify(body)).not.toContain('/Users/tony')
+  })
+
+  it('Retry does not fire without Access', async () => {
+    const store = memoryStore()
+    const ingest = await signedRequest(
+      '/v1/ingest',
+      JSON.stringify({ event: 'crm', id: 'crm-1', status: 'failed', title: 'Acme', connector: 'bidstack' })
+    )
+    expect((await handleRequest(ingest, env(), {}, { store, now: NOW })).status).toBe(200)
+    const retry = await handleRequest(
+      new Request('https://operator.test/v1/admin/crm/crm-1/retry', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}'
+      }),
+      env(),
+      {},
+      { store, now: NOW }
+    )
+    expect(retry.status).toBe(401)
+    expect((await store.getCrm('crm-1'))?.retry_requested).toBe(0)
+  })
+
+  it('heartbeat advertises fundedProviders IDs only and never the raw key', async () => {
+    const store = memoryStore()
+    const beat = await signedRequest('/v1/heartbeat', JSON.stringify({ os: 'darwin', appVersion: '1.8.2' }))
+    const res = await handleRequest(beat, env({ ANTHROPIC_API_KEY: 'sk-ant-worker-secret' }), {}, { store, now: NOW })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok?: boolean; fundedProviders?: string[] }
+    expect(body.ok).toBe(true)
+    expect(body.fundedProviders).toEqual(['anthropic'])
+    const raw = JSON.stringify(body)
+    expect(raw).not.toContain('sk-ant-worker-secret')
+    expect(raw).not.toContain('ANTHROPIC_API_KEY')
+  })
+
+  it('Access Retry puts the id on the next heartbeat pull', async () => {
+    const store = memoryStore()
+    const ingest = await signedRequest(
+      '/v1/ingest',
+      JSON.stringify({ event: 'crm', id: 'crm-1', status: 'failed', title: 'Acme', connector: 'bidstack' })
+    )
+    expect((await handleRequest(ingest, env(), {}, { store, now: NOW })).status).toBe(200)
+    await handleRequest(
+      new Request('https://operator.test/v1/admin/crm/crm-1/retry', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}'
+      }),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const beat = await signedRequest('/v1/heartbeat', JSON.stringify({ os: 'darwin', appVersion: '1.8.0' }))
+    const res = await handleRequest(beat, env(), {}, { store, now: NOW })
+    expect(((await res.json()) as { retry?: string[] }).retry).toEqual(['crm-1'])
+  })
+
+  it('console HTML uses StatusBadge, Retry on Failed, and no StatusDemo', async () => {
+    const store = memoryStore()
+    for (const status of ['pending', 'in_progress', 'in_review', 'submitted', 'success', 'failed', 'expired']) {
+      const ingest = await signedRequest(
+        '/v1/ingest',
+        JSON.stringify({
+          event: 'crm',
+          id: `row-${status}`,
+          status,
+          title: `${status} send`,
+          connector: 'clickup',
+          ...(status === 'success' ? { remoteId: 'cu-1' } : {})
+        }),
+        { nonce: `n-${status}` }
+      )
+      expect((await handleRequest(ingest, env(), {}, { store, now: NOW })).status).toBe(200)
+    }
+    const page = await handleRequest(new Request('https://operator.test/'), env(), { access: tonyAccess }, { store, now: NOW })
+    const html = await page.text()
+    expect(html).toContain('data-retry="row-failed"')
+    expect(html).toContain('data-retry="row-expired"')
+    expect(html).toContain('data-status="failed"')
+    expect(html).toContain('status-badge')
+    expect(html).toContain('Submitted')
+    expect([...html.matchAll(/data-crm-filter="([^"]+)"/g)].map((m) => m[1])).toEqual([
+      'all',
+      'pending',
+      'failed',
+      'success',
+      'in_progress',
+      'in_review',
+      'expired',
+      'submitted'
+    ])
+    expect(html).toContain('Landed today')
+    expect(html).toContain('Funnel by connector')
+    expect(html).not.toContain('Submited')
+    expect(html).not.toContain('StatusDemo')
+    expect(html).not.toContain('bg-orange-50')
+    expect(html).not.toContain('unsplash')
+    expect(html).not.toContain('Unsplash')
+  })
+})

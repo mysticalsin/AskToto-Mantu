@@ -18,10 +18,13 @@
       policy exists to refuse. Widening it for one main-process provider would weaken the renderer for
       every other one. If a renderer-side Cloudflare call is ever genuinely needed, pin that single
       operator URL in a custom build rather than opening the wildcard.
+
+      media-src pins one CloudFront host for Act 1's welcome atmosphere video (not a blanket https:).
+      If that clip is missing, the renderer keeps the hero-matching hold. Do not widen this to * or https:.
     -->
     <meta
       http-equiv="Content-Security-Policy"
-      content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'none'; frame-src 'none'; img-src 'self' data: blob:; media-src 'self' blob: data:; connect-src 'self' blob: asr-model: https://api.anthropic.com https://api.openai.com/v1 https://api.moonshot.ai/v1 https://integrate.api.nvidia.com/v1 https://api.deepseek.com/v1 https://dashscope-intl.aliyuncs.com/compatible-mode/v1 https://api.minimax.io/v1 https://openrouter.ai/api/v1 https://api.groq.com/openai/v1 https://api.together.xyz/v1 https://api.fireworks.ai/inference/v1 https://api.mistral.ai/v1 https://dust.tt https://*.dust.tt https://huggingface.co https://cdn.jsdelivr.net https://*.hf.co; script-src 'self' 'wasm-unsafe-eval' blob: asr-model:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:;"
+      content="default-src 'self'; base-uri 'self'; object-src 'none'; form-action 'none'; frame-src 'none'; img-src 'self' data: blob:; media-src 'self' blob: data: https://d8j0ntlcm91z4.cloudfront.net; connect-src 'self' blob: asr-model: https://api.anthropic.com https://api.openai.com/v1 https://api.moonshot.ai/v1 https://integrate.api.nvidia.com/v1 https://api.deepseek.com/v1 https://dashscope-intl.aliyuncs.com/compatible-mode/v1 https://api.minimax.io/v1 https://openrouter.ai/api/v1 https://api.groq.com/openai/v1 https://api.together.xyz/v1 https://api.fireworks.ai/inference/v1 https://api.mistral.ai/v1 https://dust.tt https://*.dust.tt https://huggingface.co https://cdn.jsdelivr.net https://*.hf.co; script-src 'self' 'wasm-unsafe-eval' blob: asr-model:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; worker-src 'self' blob:;"
     />
     <title>Métis</title>
   </head>

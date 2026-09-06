@@ -17,7 +17,8 @@ import {
   BaseSettingsSchema,
   SettingsSchema,
   type Settings,
-  type DustAgentsResponse
+  type DustAgentsResponse,
+  type DustAgent
 } from '@shared/ipc'
 import {
   PROVIDERS,
@@ -29,6 +30,7 @@ import {
   resolveModel,
   type ProviderId
 } from '@shared/providers'
+import { DUST_EMPTY_AGENTS_ERROR } from '@shared/dust-validate'
 import { mainLog } from './logger'
 import { caheEditionPolicy, isCaheEdition } from './cahe-edition'
 import {
@@ -40,6 +42,7 @@ import {
   useFileBackend
 } from './secrets'
 import { adminManagedConfigPath, readTrustedAdminManaged } from './win-security'
+import { parseEgressAllowlist } from './net/egress-policy'
 // Static (eager) imports — dynamic import() throws under the bytecode-compiled main (electron-vite
 // bytecodePlugin). These SDKs are already eager-loaded by the streaming modules (llm/anthropic|dust|openai),
 // so this adds no startup cost; it just makes the key-test + Dust-agent-list paths bytecode-safe.
@@ -47,6 +50,7 @@ import { DustAPI } from '@dust-tt/client'
 import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import { stripProxyFaultMarker } from './llm/retry'
+import { migrateOverlayLayout } from '@shared/overlay-chrome'
 
 const dir = () => app.getPath('userData')
 const settingsPath = () => join(dir(), 'settings.json')
@@ -210,16 +214,57 @@ function readAllowedFrom(p: string): string[] | null {
 // file's mtime, so an IT policy edit still lands without an app restart), plus a wall-clock ceiling so a
 // DACL-only change — which no mtime can reveal — is re-probed within the minute rather than never.
 const ADMIN_POLICY_REPROBE_MS = 60_000
-let _adminManagedCache: { mtime: number; at: number; content: string | null } | null = null
+let _adminManagedCache: {
+  path: string
+  mtime: number
+  dev: number
+  ino: number
+  at: number
+  content: string | null
+} | null = null
+
+function adminPolicyIdentity(p: string): { path: string; mtime: number; dev: number; ino: number } {
+  try {
+    const st = statSync(p)
+    return { path: p, mtime: st.mtimeMs, dev: st.dev, ino: st.ino }
+  } catch {
+    return { path: p, mtime: 0, dev: 0, ino: 0 }
+  }
+}
+
+/** Test seam: drop the machine-policy snapshot so a rebuilt %ProgramData% fixture is re-probed. */
+export function resetAdminManagedCache(): void {
+  _adminManagedCache = null
+}
+
+/** Test-only: drop the admin-policy content snapshot between cases that redirect ProgramData /
+ *  recreate the policy file. Same class of flake as resetSettingsCacheForTests — mtime collision +
+ *  wall-clock TTL would otherwise serve a previous case's bytes (or skip the probe entirely). */
+export function resetAdminManagedCacheForTests(): void {
+  _adminManagedCache = null
+}
 
 function adminManagedContent(): string | null {
-  const mtime = safeMtime(adminManagedConfigPath())
+  const id = adminPolicyIdentity(adminManagedConfigPath())
   const now = Date.now()
   const c = _adminManagedCache
   // A clock set backwards must not extend the snapshot indefinitely — any negative age counts as stale.
-  if (c && c.mtime === mtime && now - c.at >= 0 && now - c.at < ADMIN_POLICY_REPROBE_MS) return c.content
+  // Path + dev + inode belong in the key: a delete-and-replace (or a test that rebuilds %ProgramData%)
+  // can reuse the previous mtime on a fast filesystem, and that must not keep serving the old bytes.
+  if (
+    c &&
+    c.path === id.path &&
+    c.mtime === id.mtime &&
+    c.dev === id.dev &&
+    c.ino === id.ino &&
+
+    now - c.at >= 0 &&
+    now - c.at < ADMIN_POLICY_REPROBE_MS
+  ) {
+    return c.content
+  }
   const content = readTrustedAdminManaged()
-  _adminManagedCache = { mtime, at: now, content }
+  _adminManagedCache = { ...id, at: now, content }
   return content
 }
 
@@ -246,6 +291,23 @@ export function getLockedKeys(): string[] {
  * `allowedProviders`. Null = no restriction (all providers allowed). Enforced in the main process before
  * any screen/transcript egress, so a policy can confine data to approved/DPA-backed providers.
  */
+/**
+ * Optional org allowlist of network HOSTS (managed-config `egressAllowlist`, see docs/NETWORK-EGRESS.md).
+ * Null = no restriction, which is every install's behavior unless IT sets the key. Same precedence as
+ * `allowedProviders`: machine (admin) policy wins over the per-user managed file. Enforced at boot by
+ * net/egress-guard.ts on both the main-process fetch and the Chromium session.
+ */
+export function getEgressAllowlist(): string[] | null {
+  const admin = adminManagedContent()
+  const fromAdmin = admin ? parseEgressAllowlist(admin) : null
+  if (fromAdmin) return fromAdmin
+  try {
+    return parseEgressAllowlist(readFileSync(join(dir(), 'managed-config.json'), 'utf8'))
+  } catch {
+    return null
+  }
+}
+
 export function getAllowedProviders(): string[] | null {
   // Machine (admin) policy wins over the per-user managed file, mirroring validatedManaged() precedence.
   // Read from the raw JSON because `allowedProviders` is a policy key, not a settings-schema key.
@@ -493,6 +555,7 @@ function safeMtime(p: string): number {
 
 interface SettingsCache {
   value: Settings
+  userPath: string
   userMtime: number
   managedMtime: number
   adminMtime: number
@@ -500,9 +563,26 @@ interface SettingsCache {
 }
 let _settingsCache: SettingsCache | null = null
 
-function currentSettingsMtimes(): Pick<SettingsCache, 'userMtime' | 'managedMtime' | 'adminMtime' | 'caheEdition'> {
+/** Test-only: drop the settings cache between cases that swap `app.getPath('userData')`. Redundant now
+ *  that the cache key includes the settings path (see `userPath` below), but kept because existing suites
+ *  call it in beforeEach and an explicit reset is a harmless belt-and-braces. Production never swaps
+ *  userData. */
+export function resetSettingsCacheForTests(): void {
+  _settingsCache = null
+}
+
+function currentSettingsMtimes(): Pick<
+  SettingsCache,
+  'userPath' | 'userMtime' | 'managedMtime' | 'adminMtime' | 'caheEdition'
+> {
   return {
+    // settings.json path is part of the key so a change of profile directory always misses the cache.
+    // In production `settingsPath()` is constant; test suites point app.getPath('userData') at a fresh
+    // temp dir per case and would otherwise get a prior case's cached Settings when the fresh profile
+    // has no settings.json (all mtimes 0), causing order-dependent flakes.
+    userPath: settingsPath(),
     userMtime: safeMtime(settingsPath()),
+
     managedMtime: safeMtime(join(dir(), 'managed-config.json')),
     adminMtime: safeMtime(adminManagedConfigPath()),
     caheEdition: isCaheEdition()
@@ -513,6 +593,7 @@ export function getSettings(): Settings {
   const m = currentSettingsMtimes()
   if (
     _settingsCache &&
+    _settingsCache.userPath === m.userPath &&
     _settingsCache.userMtime === m.userMtime &&
     _settingsCache.managedMtime === m.managedMtime &&
     _settingsCache.adminMtime === m.adminMtime &&
@@ -566,6 +647,8 @@ export function getSettings(): Settings {
   // touches the connection card (reconnect/disconnect/save), setSettings({ mcpConnections: [...] })
   // persists the new shape for real and the legacy keys become permanently inert.
   migrateLegacyBidstackConnection(raw)
+  const overlayLayout = migrateOverlayLayout(raw)
+  if (overlayLayout) raw.overlayLayout = overlayLayout
   // Locked keys are authoritative on READ too, not just on write: a value persisted before a lock (or a
   // hand-edited settings.json) must not override the managed/default value. Strip locked keys from the
   // user layer so org policy always wins. Runs AFTER every migration above so a migration's synthesized
@@ -862,15 +945,10 @@ export async function testApiKey(provider: ProviderId, key: string): Promise<Tes
       if (!settings.dustWorkspaceId) {
         return { ok: false, error: 'Add your Dust workspace ID in the Dust setup below first.' }
       }
-      const api = new DustAPI(
-        { url: settings.dustBaseUrl || def.baseUrl },
-        { workspaceId: settings.dustWorkspaceId, apiKey: trimmed },
-        console
-      )
-      // No `view` needed here — this call only checks r.isErr() to validate the credentials, it never
-      // reads r.value, so an empty/restricted agent list (the bug fixed in listDustAgents below) is harmless.
-      const r = await api.getAgentConfigurations({})
-      if (r.isErr()) return { ok: false, error: r.error.message }
+      // Same live merged-view list as listDustAgents plus a non-empty active set. A credential
+      // ping that ignored `view` used to succeed while the picker (and later asks) saw no agents.
+      const listed = await fetchDustAgentList(trimmed, settings)
+      if (!listed.ok) return { ok: false, error: listed.error }
     } else if (def.kind === 'anthropic') {
       const client = new Anthropic({ apiKey: trimmed })
       await client.messages.create({
@@ -924,40 +1002,59 @@ export function encryptionAvailable(): boolean {
   return true
 }
 
-/** List the user's Dust agents (for the dummy-proof agent picker). Uses the saved Dust key. */
-export async function listDustAgents(): Promise<DustAgentsResponse> {
-  const settings = getSettings()
-  const key = getApiKey('dust')
-  if (!key) return { ok: false, error: 'Paste and Save your Dust API key first.' }
+/** Views merged for the agent picker and the Spotlight Ref gate. `list` is the user-pickable set;
+ *  `all` / `workspace` / `published` include managed agents that `view:list` can omit (Spotlight Ref
+ *  `GOr913Zr5V` is one). Without a `view` string @dust-tt/client 1.2.6 sends no query param and Dust
+ *  returns a restricted/empty set. */
+export const DUST_AGENT_LIST_VIEWS = ['all', 'workspace', 'published', 'list'] as const
+
+type DustAgentRaw = {
+  sId?: string
+  name?: string
+  description?: string
+  status?: string
+  model?: { providerId?: string; modelId?: string }
+}
+
+function mapActiveDustAgents(raw: DustAgentRaw[]): DustAgent[] {
+  return raw
+    .filter((a) => a && a.sId && (a.status === undefined || a.status === 'active'))
+    .map((a) => ({
+      sId: a.sId as string,
+      name: a.name || (a.sId as string),
+      description: a.description || '',
+      modelProviderId: a.model?.providerId,
+      modelId: a.model?.modelId
+    }))
+}
+
+/** Live Dust agent list for a specific key (testApiKey may pass an unsaved paste). */
+async function fetchDustAgentList(apiKey: string, settings: Settings): Promise<DustAgentsResponse> {
+  if (!apiKey) return { ok: false, error: 'Paste and Save your Dust API key first.' }
   if (!settings.dustWorkspaceId) return { ok: false, error: 'Add your Dust workspace ID first.' }
   try {
     const api = new DustAPI(
       { url: settings.dustBaseUrl || PROVIDERS.dust.baseUrl },
-      { workspaceId: settings.dustWorkspaceId, apiKey: key },
+      { workspaceId: settings.dustWorkspaceId, apiKey },
       console
     )
-    // `view: 'list'` is REQUIRED — without it @dust-tt/client 1.2.6 only appends `view` to the querystring
-    // when it's a string, and the Dust endpoint then returns a restricted/empty set for no `view` param,
-    // leaving the picker with no agents to show (falls back to a bare text box). 'list' is the "all agents
-    // this user can pick" view (see node_modules/@dust-tt/client/dist/types.d.ts AgentConfigurationViewSchema).
-    const r = await api.getAgentConfigurations({ view: 'list' })
-    if (r.isErr()) return { ok: false, error: r.error.message }
-    const agents = (r.value as {
-      sId?: string
-      name?: string
-      description?: string
-      status?: string
-      model?: { providerId?: string; modelId?: string }
-    }[])
-      .filter((a) => a && a.sId && (a.status === undefined || a.status === 'active'))
-      .map((a) => ({
-        sId: a.sId as string,
-        name: a.name || (a.sId as string),
-        description: a.description || '',
-        modelProviderId: a.model?.providerId,
-        modelId: a.model?.modelId
-      }))
-      .sort((x, y) => x.name.localeCompare(y.name))
+    const bySid = new Map<string, DustAgent>()
+    let lastError: string | null = null
+    let anyOk = false
+    for (const view of DUST_AGENT_LIST_VIEWS) {
+      const r = await api.getAgentConfigurations({ view })
+      if (r.isErr()) {
+        lastError = r.error.message
+        continue
+      }
+      anyOk = true
+      for (const agent of mapActiveDustAgents(r.value as DustAgentRaw[])) {
+        if (!bySid.has(agent.sId)) bySid.set(agent.sId, agent)
+      }
+    }
+    if (!anyOk) return { ok: false, error: lastError || 'Could not load your Dust agents.' }
+    const agents = [...bySid.values()].sort((x, y) => x.name.localeCompare(y.name))
+    if (agents.length === 0) return { ok: false, error: DUST_EMPTY_AGENTS_ERROR }
     // Cache each agent's vision capability by sId so the ask path can route a Dust screen question
     // natively (upload the screenshot) only when the SELECTED agent's model can actually read it — no
     // extra Dust round-trip at ask time (see dustSelectedAgentVision).
@@ -966,6 +1063,11 @@ export async function listDustAgents(): Promise<DustAgentsResponse> {
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) }
   }
+}
+
+/** List the user's Dust agents (for the dummy-proof agent picker). Uses the saved Dust key. */
+export async function listDustAgents(): Promise<DustAgentsResponse> {
+  return fetchDustAgentList(getApiKey('dust'), getSettings())
 }
 
 // Vision capability per Dust agent sId, populated on every agent list (listDustAgents above).

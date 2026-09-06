@@ -5,6 +5,7 @@ import { createHighlighterCore, type HighlighterCore } from 'shiki/core'
 import { createOnigurumaEngine } from 'shiki/engine/oniguruma'
 import githubDark from 'shiki/themes/github-dark.mjs'
 import { Copy, Check } from 'lucide-react'
+import { sanitizeShikiHtml } from '@shared/sanitize-html'
 
 // Alias any incoming fence language → a loaded grammar, else 'text' (built-in, no grammar needed).
 // Curated to the languages a meeting/sales/interview copilot actually shows. Rarer/heavier grammars
@@ -77,7 +78,7 @@ function Block({ code, lang }: { code: string; lang: string }): JSX.Element {
     // O(n^2). Collapse rapid updates into one highlight ~90ms after the last change.
     const t = setTimeout(() => {
       highlighter()
-        .then((h) => alive && setHtml(h.codeToHtml(code, { lang: norm(lang), theme: 'github-dark' })))
+        .then((h) => alive && setHtml(sanitizeShikiHtml(h.codeToHtml(code, { lang: norm(lang), theme: 'github-dark' }))))
         .catch(() => alive && setHtml(''))
     }, 90)
     return () => {

@@ -30,6 +30,7 @@ const app = read('App.tsx')
 const people = read('views', 'PeopleView.tsx')
 const accounts = read('views', 'AccountsView.tsx')
 const emptyState = read('components', 'EmptyState.tsx')
+const nav = read('components', 'NavBar.tsx')
 
 describe('MQA-221 — a failed refresh is never swallowed behind a good snapshot', () => {
   it('the state carries a non-fatal staleness reason alongside the fatal error', () => {
@@ -124,5 +125,15 @@ describe('MQA-225 — the Briefing tiles and the cards under them count the same
 
   it('still dedupes on the full identity, so two genuinely different promises both survive', () => {
     expect(briefing).toMatch(/\$\{c\.text\}\|\|\$\{c\.by\}\|\|\$\{c\.meeting\}\|\|\$\{c\.date\}/)
+  })
+})
+
+describe('Update Intelligence is a real click on the live dashboard', () => {
+  it('NavBar mounts the Update Intelligence button that calls the host backfill', () => {
+    expect(nav).toMatch(/IntelligenceUpdateButton/)
+    const btn = read('components', 'IntelligenceUpdateButton.tsx')
+    expect(btn).toMatch(/Updating…/)
+    expect(btn).toMatch(/runIntelligenceUpdateClick/)
+    expect(btn).toMatch(/window\.intelligence/)
   })
 })
