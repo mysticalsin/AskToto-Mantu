@@ -156,6 +156,31 @@ describe('overlay chrome modes', () => {
     expect(bar).toMatch(/aria-label="Ask Métis anything"/)
   })
 
+  it('mouse-away parks Hide without clearing the live Ask answer', () => {
+    const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
+    const index = readFileSync(join(__dirname, '../main/index.ts'), 'utf8')
+    expect(app).toMatch(/overlayHoverIdle/)
+    expect(app).toMatch(/parkAfterHide/)
+    for (const chunk of app.split('parkAfterHide()')) {
+      expect(chunk.slice(-160)).not.toMatch(/ask\.clear\(/)
+    }
+    const parkFn = index.slice(
+      index.indexOf('function parkOverlayAfterHideSpring'),
+      index.indexOf('function applyHideClickThrough')
+    )
+    expect(parkFn).toMatch(/parkAfterExclusiveOnboarding/)
+    expect(parkFn).not.toMatch(/ask\.clear/)
+    expect(index).toMatch(/scheduleOverlayLeavePark/)
+    expect(index).toMatch(/OVERLAY_LEAVE_PARK_MS/)
+    expect(overlayHoverIdle({
+      usesHover: true,
+      minimized: false,
+      onboardingDone: true,
+      view: 'answer',
+      capturing: false
+    })).toBe(true)
+  })
+
   it('Settings captions say what each chrome does (no em dash, no Vibe Island)', () => {
     expect(OVERLAY_LAYOUT_COPY.hide.title).toBe('Hide')
     expect(OVERLAY_LAYOUT_COPY.hide.desc).toMatch(/Hidden until you move to the top/)

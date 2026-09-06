@@ -5,6 +5,9 @@ import {
   OVERLAY_ORB_STYLES,
   overlayOrbRestIsCircle,
   overlayUsesObsidianOrb,
+  overlayUsesJarvisOrb,
+  overlayOrbPickerSelected,
+  OVERLAY_ORB_PICKER_CARDS,
   parseOverlayOrbStyle
 } from './overlay-orb'
 import { overlayAllowsMinimize, overlayShowsBarOrb, overlayDocksBarCircle } from './overlay-chrome'
@@ -25,8 +28,14 @@ describe('orb selection persist + Bar-only law', () => {
     expect(overlayOrbRestIsCircle('bar', 'jakub')).toBe(true)
     expect(overlayOrbRestIsCircle('bar', 'obsidian')).toBe(true)
     expect(overlayOrbRestIsCircle('bar', 'bar')).toBe(false)
+    expect(overlayUsesJarvisOrb('bar')).toBe(true)
+    expect(overlayUsesJarvisOrb('hide')).toBe(false)
     expect(overlayUsesObsidianOrb('bar', 'obsidian')).toBe(true)
+    expect(overlayUsesObsidianOrb('bar', 'jakub')).toBe(true)
     expect(overlayUsesObsidianOrb('hide', 'obsidian')).toBe(false)
+    expect(OVERLAY_ORB_PICKER_CARDS).toEqual(['bar', 'obsidian'])
+    expect(overlayOrbPickerSelected('jakub')).toBe('obsidian')
+    expect(overlayOrbPickerSelected('bar')).toBe('bar')
     expect(overlayShowsBarOrb('hide', true)).toBe(false)
     expect(overlayShowsBarOrb('island', true)).toBe(false)
     expect(overlayAllowsMinimize('hide')).toBe(false)
@@ -40,7 +49,10 @@ describe('orb selection persist + Bar-only law', () => {
     expect(all).not.toMatch(/\u2014/)
     expect(all).not.toMatch(/Vibe Island/)
     expect(OVERLAY_ORB_COPY.bar.desc).toMatch(/bar stays on screen/)
-    expect(OVERLAY_ORB_COPY.obsidian.title).toMatch(/Jarvis \/ Obsidian/)
-    expect(OVERLAY_ORB_COPY.obsidian.desc).toMatch(/particle orb/)
+    expect(OVERLAY_ORB_COPY.obsidian.title).toBe('Circle')
+    expect(OVERLAY_ORB_COPY.jakub.title).toBe('Circle')
+    expect(OVERLAY_ORB_COPY.obsidian.desc).toMatch(/Jarvis particle orb/)
+    expect(all).not.toMatch(/Obsidian/)
+    expect(all).not.toMatch(/Jarvis \/ Obsidian/)
   })
 })

@@ -175,8 +175,10 @@ import {
 } from '@shared/settings-bounds'
 import {
   CURSOR_WATCH_INTERVAL_MS,
+  OVERLAY_LEAVE_PARK_MS,
   decideCursorWatch,
   overlayWatchNeedsRestore,
+  overlayWatchShouldParkOnLeave,
   overlayWatchTreatAsRevealed,
   pointInRect,
   shouldWatchOverlayCursor
@@ -656,6 +658,7 @@ let islandResting = false
 let settingsSurfaceOpen = false
 let overlayCursorWatchTimer: ReturnType<typeof setInterval> | null = null
 let overlayCursorWatchHovering = false
+let overlayLeaveParkTimer: ReturnType<typeof setTimeout> | null = null
 const streams = new Map<string, { abort: () => void }>()
 let importJobs: ImportJobManager | null = null
 let decoderWin: BrowserWindow | null = null
@@ -2005,6 +2008,7 @@ function stopOverlayCursorWatch(): void {
     overlayCursorWatchTimer = null
   }
   overlayCursorWatchHovering = false
+  cancelOverlayLeavePark()
 }
 
 function startOverlayCursorWatch(): void {
@@ -2041,15 +2045,18 @@ function tickOverlayCursorWatch(): void {
       hugStub: isIncompleteAskReveal(bounds)
     })
   ) {
+    cancelOverlayLeavePark()
     overlayCursorWatchHovering = true
     restoreBarWidth()
     notifyOverlayCursorHover(true)
   } else if (decision === 'stay') {
     /* never setBounds on a stay tick — that was the 40fps hide/reveal stutter */
-  } else if (decision === 'hide' && overlayCursorWatchHovering) {
+  } else if (overlayWatchShouldParkOnLeave({ decision, islandResting })) {
     overlayCursorWatchHovering = false
-    // Do not park on this tick — the renderer plays the hide spring first, then overlayParkAfterHide.
+    // Renderer spring may park first. Main parks at OVERLAY_LEAVE_PARK_MS so a
+    // missed overlayParkAfterHide cannot leave 880×120 up (Ultron c74e389).
     notifyOverlayCursorHover(false)
+    scheduleOverlayLeavePark()
   }
 }
 
@@ -2060,6 +2067,23 @@ function notifyOverlayCursorHover(hovering: boolean): void {
   } catch {
     /* renderer gone */
   }
+}
+
+function cancelOverlayLeavePark(): void {
+  if (!overlayLeaveParkTimer) return
+  clearTimeout(overlayLeaveParkTimer)
+  overlayLeaveParkTimer = null
+}
+
+function scheduleOverlayLeavePark(): void {
+  if (overlayLeaveParkTimer) return
+  overlayLeaveParkTimer = setTimeout(() => {
+    overlayLeaveParkTimer = null
+    if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen) return
+    if (pointerInIslandOrBar()) return
+    parkOverlayAfterHideSpring()
+  }, OVERLAY_LEAVE_PARK_MS)
+  overlayLeaveParkTimer.unref?.()
 }
 
 /** Island strip or the revealed bar — not the ControlPill. Used when leaving pill/Settings. */
@@ -2086,7 +2110,10 @@ function pointerInIslandOrBar(opts?: { ignoreWindow?: boolean }): boolean {
 function parkOverlayAfterHideSpring(): void {
   if (!win || win.isDestroyed() || onboardingExclusiveLive()) return
   if (settingsSurfaceOpen) return
-  if (overlayCursorWatchHovering) return
+  // Do not refuse park because the hover latch is stuck. If the pointer is
+  // still on the bar or the top-edge strip, stay. Else Hide must go to 8×2.
+  if (pointerInIslandOrBar()) return
+  cancelOverlayLeavePark()
   const layout = liveOverlayLayout()
   if (!overlayUsesHover(layout)) return
   const display = screen.getDisplayMatching(win.getBounds())
@@ -2159,6 +2186,7 @@ function anchorTopCenter(): void {
  *  safe Y. Leave collapse is the inverse (resizeTo with peek height, same Y). */
 function restoreBarWidth(): void {
   if (!win || onboardingExclusiveLive()) return
+  cancelOverlayLeavePark()
   islandResting = false
   applyHideClickThrough()
   // LSUIElement / tray Show-Hide can leave the window hidden. Hover reveal must
@@ -2180,13 +2208,8 @@ function restoreBarWidth(): void {
   const x = currentWidth === BAR_WIDTH ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
   currentWidth = BAR_WIDTH
   // Already the below-notch bar — do not setBounds y=0 and fight the OS clamp.
-  if (b.x === x && b.y === y && b.width === BAR_WIDTH && b.height === revealedHeight) {
-    notifyOverlayCursorHover(true)
-    return
-  }
+  if (b.x === x && b.y === y && b.width === BAR_WIDTH && b.height === revealedHeight) return
   win.setBounds({ x, y, width: BAR_WIDTH, height: revealedHeight }, false)
-  // Open Ask chrome (hasAsk). Width-only restore left OverlayPeek as Show Métis (Ultron a40a22f).
-  notifyOverlayCursorHover(true)
 }
 
 /**

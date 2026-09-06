@@ -1,12 +1,11 @@
-import { JarvisOrbButton } from './JarvisOrbButton'
 import { ObsidianOrb } from './ObsidianOrb'
 import type { OrbMood } from '../lib/bar-pill-orb'
 import type { OverlayOrbStyle } from '@shared/overlay-orb'
 
 /**
- * Bar-only minimized control: the same thinking-orb as the docked Bar circle
- * (64 avatar, 2x backing, 41 visible host).
+ * Bar-only minimized control: Jarvis particle orb (tonys-jarvis) in the 41 host.
  * Click (not drag) expands to the full bar. Hide/Island never mount this.
+ * Never a gray box or CSS rings.
  */
 export function ControlPill({
   onExpand,
@@ -22,21 +21,8 @@ export function ControlPill({
   degradedNote?: string | null
   orbStyle?: OverlayOrbStyle
 }): JSX.Element {
-  if (orbStyle === 'obsidian') {
-    return (
-      <ObsidianOrb
-        orbMood={orbMood}
-        listening={listening}
-        title={degradedNote || 'Expand Métis'}
-        ariaLabel="Expand Métis"
-        onActivate={onExpand}
-        enableDrag
-        hugWidth
-      />
-    )
-  }
   return (
-    <JarvisOrbButton
+    <ObsidianOrb
       orbMood={orbMood}
       listening={listening}
       title={degradedNote || 'Expand Métis'}

@@ -1,11 +1,12 @@
 import {
   OVERLAY_ORB_COPY,
-  OVERLAY_ORB_STYLES,
+  OVERLAY_ORB_PICKER_CARDS,
+  overlayOrbPickerSelected,
   parseOverlayOrbStyle,
   type OverlayOrbStyle
 } from '@shared/overlay-orb'
 
-function OrbDiagram({ id }: { id: OverlayOrbStyle }): JSX.Element {
+function OrbDiagram({ id }: { id: 'bar' | 'obsidian' }): JSX.Element {
   return (
     <div
       className={`overlay-orb-diagram overlay-orb-diagram--${id}`}
@@ -14,16 +15,13 @@ function OrbDiagram({ id }: { id: OverlayOrbStyle }): JSX.Element {
     >
       <span className="overlay-orb-diagram__desktop" />
       {id === 'bar' ? <span className="overlay-orb-diagram__bar" /> : null}
-      {id === 'jakub' ? <span className="overlay-orb-diagram__jakub" /> : null}
-      {id === 'obsidian' ? (
-        <span className="overlay-orb-diagram__obsidian" data-orb-diagram-engine="jarvis-particles">
-          <span className="overlay-orb-diagram__dot overlay-orb-diagram__dot--a" />
-          <span className="overlay-orb-diagram__dot overlay-orb-diagram__dot--b" />
-          <span className="overlay-orb-diagram__dot overlay-orb-diagram__dot--c" />
-          <span className="overlay-orb-diagram__link overlay-orb-diagram__link--a" />
-          <span className="overlay-orb-diagram__link overlay-orb-diagram__link--b" />
-        </span>
-      ) : null}
+      <span className="overlay-orb-diagram__jarvis" data-orb-diagram-engine="jarvis-particles">
+        <span className="overlay-orb-diagram__dot overlay-orb-diagram__dot--a" />
+        <span className="overlay-orb-diagram__dot overlay-orb-diagram__dot--b" />
+        <span className="overlay-orb-diagram__dot overlay-orb-diagram__dot--c" />
+        <span className="overlay-orb-diagram__link overlay-orb-diagram__link--a" />
+        <span className="overlay-orb-diagram__link overlay-orb-diagram__link--b" />
+      </span>
     </div>
   )
 }
@@ -37,10 +35,10 @@ export function OverlayOrbPicker({
   locked: boolean
   onChange: (id: OverlayOrbStyle) => void
 }): JSX.Element {
-  const selected = parseOverlayOrbStyle(value)
+  const selected = overlayOrbPickerSelected(parseOverlayOrbStyle(value))
   return (
     <div role="radiogroup" aria-label="Bar rest" className="overlay-chrome-grid">
-      {OVERLAY_ORB_STYLES.map((id) => {
+      {OVERLAY_ORB_PICKER_CARDS.map((id) => {
         const on = selected === id
         return (
           <button
