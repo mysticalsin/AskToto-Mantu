@@ -1,5 +1,6 @@
 import { choroplethMini, sparklineArea, sparklineLine } from './charts'
 import type { DashboardPayload } from './dashboard'
+import { formatValueEur, HOURLY_RATE_EUR } from './value'
 
 function esc(s: unknown): string {
   return String(s ?? '')
@@ -158,6 +159,15 @@ export function renderOverviewMini10(data: DashboardPayload): string {
       chart: ringSvg(0, true)
     }),
     statCard({
+      id: 'value',
+      title: 'Value',
+      value: formatValueEur(ops.valueEur || 0),
+      unit: `at €${HOURLY_RATE_EUR}/hr`,
+      kind: 'area',
+      series: [],
+      chart: sparklineArea([], 280, 72)
+    }),
+    statCard({
       id: 'tokens',
       title: 'Tokens',
       value: reported(ops.tokens),
@@ -174,15 +184,6 @@ export function renderOverviewMini10(data: DashboardPayload): string {
       kind: 'line',
       series: ops.apiSeries,
       chart: sparklineLine(ops.apiSeries, 280, 72)
-    }),
-    statCard({
-      id: 'listen-minutes',
-      title: 'Listen minutes',
-      value: reported(ops.listenMinutes),
-      unit: 'listen',
-      kind: 'area',
-      series: [],
-      chart: sparklineArea([], 280, 72)
     }),
     statCard({
       id: 'recaps',
@@ -231,8 +232,8 @@ export function renderOverviewMini10(data: DashboardPayload): string {
         <span class="ov-mark" aria-hidden="true"></span>
         <span class="ov-brand-name">Operator</span>
       </div>
-      <p class="ov-headline">Fleet pulse across seats, asks, and usage</p>
-      <p class="ov-lede">One calm surface for what is live. Numbers stay empty until heartbeats and asks land — never sample.</p>
+      <p class="ov-headline">Fleet pulse · value at €${HOURLY_RATE_EUR}/hr</p>
+      <p class="ov-lede">Live seats, time saved, and EBITDA proxy at €${HOURLY_RATE_EUR}/hr. Numbers stay empty until heartbeats land — never sample.</p>
     </header>`
   const liveBanner = usage
     ? `<div class="ov-live ov-live-landed" data-usage-landed="${landed ? '1' : '0'}" data-usage-from="${esc(usage.from)}" data-usage-to="${esc(usage.to)}" data-usage-provider="deepseek">
