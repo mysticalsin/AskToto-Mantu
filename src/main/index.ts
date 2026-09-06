@@ -259,6 +259,7 @@ import { listModels as listLocalModels, bestModelForMachine, isDownloaded as loc
 import { ensureLocalModel, localModelDownloadState, shouldFetchWeights } from './llm/local-model-download'
 import { createScreenPreprocess, type ScreenPreprocess } from './screen-preprocess'
 import { startForegroundWatcher } from './foreground-watcher'
+import { createMeetingAutoStart } from './meeting-auto-start'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
 import {
   createKeyedSingleFlight,
@@ -2910,6 +2911,32 @@ const screenPreprocess: ScreenPreprocess = createScreenPreprocess({
   audit: (event, data) => auditLog(event as Parameters<typeof auditLog>[0], data)
 })
 
+// Meeting auto-start: same foreground-watcher producer (no Accessibility). Own instance so Listen
+// can start even when background screen context is off. Gated in shared/meeting-auto-start.ts.
+const meetingAutoStart = createMeetingAutoStart({
+  startWatcher: (onChange) =>
+    startForegroundWatcher(onChange, {
+      onError: (message) => mainLog.warn(`[meeting-auto-start] watcher: ${message}`)
+    }),
+  getSettings: () => {
+    const s = getSettings()
+    return {
+      onboardingDone: s.onboardingDone,
+      recordingConsent: s.recordingConsent,
+      autoStartMeetings: s.autoStartMeetings
+    }
+  },
+  isListening: () => listeningActive,
+  startListen: (platform) => {
+    if (listeningActive) return
+    const w = ensureWindow()
+    if (!w) return
+    w.webContents.send(IPC.meetingAutoStart, { platform })
+  },
+  log: (message) => mainLog.info(`[meeting-auto-start] ${message}`),
+  audit: (event, data) => auditLog(event, data)
+})
+
 /**
  * The ONE place that reconciles background screen preprocessing with reality. Call it from every event
  * that can change canRun(): boot, a settings write, sign-in, session clear, the local-model download
@@ -3514,10 +3541,11 @@ function registerIpc(): void {
   // Front-load the OS permission prompts during onboarding (macOS only) so the first real meeting
   // isn't interrupted by them. Serial, and only for permissions not yet granted: mic has a direct
   // prompt API; Screen Recording has none, but a 1px desktopCapturer probe registers the app with
-  // TCC and raises the system prompt. Accessibility is deliberately NOT requested — nothing in the
-  // app needs it since meeting-detect was removed, and an unexplained Accessibility prompt is
-  // exactly the kind of thing enterprise IT flags. Never re-prompts after an explicit Deny (macOS
-  // suppresses those anyway); the checklist's "Open System Settings" link stays the recovery path.
+  // TCC and raises the system prompt. Accessibility is deliberately NOT requested — meeting
+  // auto-start uses foreground-watcher (NSWorkspace / GetForegroundWindow), not AX APIs, and an
+  // unexplained Accessibility prompt is exactly the kind of thing enterprise IT flags. Never
+  // re-prompts after an explicit Deny (macOS suppresses those anyway); the checklist's "Open
+  // System Settings" link stays the recovery path.
   ipcMain.handle(IPC.permissionsRequestUpfront, async (e) => {
     assertMainWindow(e)
     if (process.platform === 'darwin') {
@@ -3734,6 +3762,7 @@ function registerIpc(): void {
     // Start/stop background screen pre-analysis to match the new settings (backgroundScreenContext toggle,
     // or Local AI being enabled/disabled/provisioned) — takes effect immediately, no relaunch.
     refreshScreenPreprocess()
+    meetingAutoStart.refresh()
     // Local AI turned ON → re-arm the weight fetch if boot somehow skipped it (offline first launch,
     // under-RAM machine later upgraded). Boot already starts the download whenever the app opens
     // (RAM permitting); this edge is the second chance, not the only path to the weights.
@@ -7862,6 +7891,7 @@ if (!app.requestSingleInstanceLock()) {
   // Silent on macOS by construction: eligibility now requires the Screen Recording grant to ALREADY exist
   // (screenCaptureGranted above), so this reconcile can never be what raises the TCC prompt (MQA-209).
   runStep('refreshScreenPreprocess', refreshScreenPreprocess)
+  runStep('refreshMeetingAutoStart', () => meetingAutoStart.refresh())
   // Synchronous OneDrive filesystem work (mkdir + two writeFileSync calls on first run) — nothing
   // before the window depends on the folder existing yet (saveMeeting/saveNote create it themselves on
   // first use), so it no longer sits ahead of createWindow on the boot path.
@@ -8023,6 +8053,11 @@ app.on('will-quit', () => {
     screenPreprocess.stop()
   } catch (e) {
     mainLog.warn('[will-quit] screenPreprocess.stop failed', e)
+  }
+  try {
+    meetingAutoStart.stop()
+  } catch (e) {
+    mainLog.warn('[will-quit] meetingAutoStart.stop failed', e)
   }
   // Kill the llama-server sidecar synchronously (SIGKILL, F3 hardening) — without this an on-device
   // suggest/summary/vision sidecar could outlive the app the user just quit.
