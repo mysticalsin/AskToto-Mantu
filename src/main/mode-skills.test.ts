@@ -4,8 +4,11 @@ import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CONVERSATION_MODES } from '@shared/ipc'
 import {
+  CAVEMAN_SKILL_ID,
   countLockedModeSkills,
+  hasLockedCaveman,
   hasLockedHumanizer,
+  lockedCavemanIntensityIn,
   lockedModeSkillIdIn,
   ModeSkillIntegrityError,
   modeSkillLock
@@ -51,7 +54,17 @@ describe('locked mode skills', () => {
       expect(hasLockedHumanizer(s)).toBe(true)
       expect(countLockedModeSkills(s)).toBe(1)
       expect(lockedModeSkillIdIn(s)).toBe(mode)
+      expect(hasLockedCaveman(s)).toBe(false)
     }
+  })
+
+  it('typed Ask default is locked caveman full; off omits it', () => {
+    const on = buildSystem(req('answer'), 'general', EMPTY_PROFILE, {}, [])
+    expect(hasLockedCaveman(on)).toBe(true)
+    expect(lockedCavemanIntensityIn(on)).toBe('full')
+    const off = buildSystem(req('answer'), 'general', EMPTY_PROFILE, {}, [], undefined, undefined, undefined, 'off')
+    expect(hasLockedCaveman(off)).toBe(false)
+    expect(loadVerifiedSkill(CAVEMAN_SKILL_ID).id).toBe('caveman')
   })
 
   it('user modePrompts cannot replace the skill body', () => {
@@ -70,6 +83,7 @@ describe('locked mode skills', () => {
     expect(countLockedModeSkills(s)).toBe(0)
     expect(lockedModeSkillIdIn(s)).toBeNull()
     expect(hasLockedHumanizer(s)).toBe(true)
+    expect(hasLockedCaveman(s)).toBe(true)
     expect(s).not.toContain('Amaris')
     expect(s).not.toContain('LOCKED MODE SKILL (interview')
   })

@@ -471,6 +471,8 @@ const api = {
   // Boot-gate verdict — see the license:gate handler in main/index.ts for why this is a separate,
   // non-auth-gated channel from licenseStatus.
   licenseGate: (): Promise<LicenseGateVerdict> => ipcRenderer.invoke(IPC.licenseGate),
+  cloudflareConnect: (): Promise<{ ok: boolean; href?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.cloudflareConnect),
   identitySnapshot: (): Promise<IdentitySnapshot> => ipcRenderer.invoke(IPC.identitySnapshot),
   memberLicenseActivate: (payload: MemberActivatePayload): Promise<MemberActivateResult> =>
     ipcRenderer.invoke(IPC.memberLicenseActivate, payload),

@@ -33,8 +33,8 @@ export type JarvisOrbState = (typeof JARVIS_ORB_STATES)[number]
 
 /** orb.ts fullscreen count. The 41 pill must thin this. Never crop 2000 into 41px. */
 export const JARVIS_PARTICLE_COUNT = 2000
-/** Clean sentient sphere at 41. 800+ is sparkly noise. */
-export const JARVIS_PILL_PARTICLE_COUNT = 220
+/** Tony lock: pill intensity = 800 (615e5fa). 220 was a regression that looked washed out. */
+export const JARVIS_PILL_PARTICLE_COUNT = 800
 export const JARVIS_ELECTRON_COUNT = 3
 export const JARVIS_MAX_LINES = 8000
 export const JARVIS_CLOUD_SEED_RADIUS = 25
@@ -95,7 +95,7 @@ export function seedJarvisCloud(
   return { pos, phase }
 }
 
-/** Thin the cloud with host size. 41 → ~220. Never keep orb.ts 2000 on the pill. */
+/** Thin the cloud with host size. 41 → 800 (intense). Never keep orb.ts 2000 on the pill. */
 export function jarvisParticleCountForHost(hostPx: number): number {
   const h = Math.max(1, hostPx)
   if (h >= JARVIS_SIZE_REF_PX) return JARVIS_PARTICLE_COUNT
@@ -107,6 +107,31 @@ export function jarvisCameraZForHost(hostPx: number): number {
   if (hostPx <= JARVIS_PILL_HOST_PX) return JARVIS_PILL_CAMERA_Z
   if (hostPx <= 96) return 68
   return JARVIS_CAMERA_Z
+}
+
+/** Vertical half-height of the 45° view at z=0. Sphere radius must meet this to fill. */
+export function jarvisVisibleHalfHeight(cameraZ: number, fovDeg = 45): number {
+  return cameraZ * Math.tan((fovDeg * Math.PI) / 360)
+}
+
+/**
+ * Idle 28 already fills at pill Z. Thinking's fullscreen 16 would sit as a marble
+ * in the 41 clip. Keep idle/thinking a dense full sphere on the pill.
+ */
+export function jarvisStateRadiusForHost(state: JarvisOrbState, hostPx: number): number {
+  const base = JARVIS_STATE_TARGET[state].radius
+  if (hostPx <= JARVIS_PILL_HOST_PX) return Math.max(26, base)
+  return base
+}
+
+/** True when the cloud diameter covers the host (not a corner marble). */
+export function jarvisCloudFillsHost(input: {
+  hostPx: number
+  cameraZ: number
+  radius: number
+}): boolean {
+  if (input.hostPx <= 0 || input.cameraZ <= 0 || input.radius <= 0) return false
+  return input.radius >= jarvisVisibleHalfHeight(input.cameraZ) * 0.92
 }
 
 export function jarvisSizeAttenuationForHost(hostPx: number): boolean {
@@ -136,16 +161,30 @@ export function jarvisLineStepForCount(count: number): number {
   return Math.max(1, Math.floor(count / 600))
 }
 
+function cssBoxSize(el: { clientWidth?: number; clientHeight?: number } | null | undefined): number {
+  const w = el?.clientWidth ?? 0
+  const h = el?.clientHeight ?? 0
+  if (w > 0 && h > 0) return Math.max(1, Math.round(Math.min(w, h)))
+  return 0
+}
+
 /**
  * CSS host, not the 2x backing attribute. width=82 on a 41 pill must stay 41.
+ * Prefer the 41 `.obsidian-orb` parent. A 0×0 pre-layout canvas or a 64
+ * `.aw-orb canvas` rule must not size the WebGL viewport — that packs the
+ * sphere into the bottom-right of the clip.
  */
 export function hostCssSize(canvas: HTMLCanvasElement): number {
-  const cssW = canvas.clientWidth
-  const cssH = canvas.clientHeight
-  if (cssW > 0 && cssH > 0) return Math.max(1, Math.round(Math.min(cssW, cssH)))
+  const fromHost = cssBoxSize(canvas.parentElement)
+  if (fromHost > 0) return fromHost <= 64 ? JARVIS_HOST_PX : fromHost
+  const fromCanvas = cssBoxSize(canvas)
+  if (fromCanvas > 0) {
+    if (fromCanvas > JARVIS_HOST_PX && fromCanvas <= 64) return JARVIS_HOST_PX
+    return fromCanvas
+  }
   const attr = Math.min(canvas.width || 0, canvas.height || 0)
   if (attr >= JARVIS_HOST_PX * 2) return JARVIS_HOST_PX
-  return Math.max(1, attr || JARVIS_HOST_PX)
+  return JARVIS_HOST_PX
 }
 
 /** Soft disc so Points are not square pixels. DataTexture, not a canvas-backed three texture. */
@@ -180,6 +219,8 @@ export interface JarvisOrbHandle {
 export interface JarvisOrbOptions {
   reducedMotion?: boolean
   state?: JarvisOrbState
+  /** Visible CSS host. The 41 pill passes this so a 0×0 first layout cannot mis-fit. */
+  hostPx?: number
 }
 
 interface Electron {
@@ -215,9 +256,16 @@ export function createJarvisOrb(
   }
 
   const fit = (): number => {
-    const css = hostCssSize(canvas)
+    const measured = hostCssSize(canvas)
+    const css =
+      opts.hostPx && opts.hostPx > 0
+        ? Math.max(1, Math.round(opts.hostPx))
+        : measured
     renderer.setPixelRatio(jarvisPixelRatio())
     renderer.setSize(css, css, false)
+    renderer.setViewport(0, 0, css, css)
+    canvas.style.setProperty('width', `${css}px`, 'important')
+    canvas.style.setProperty('height', `${css}px`, 'important')
     return css
   }
 
@@ -322,7 +370,7 @@ export function createJarvisOrb(
 
   const applyTargets = (): void => {
     const next = JARVIS_STATE_TARGET[state]
-    targetRadius = next.radius
+    targetRadius = jarvisStateRadiusForHost(state, hostPx)
     targetSpeed = next.speed
     targetBright = next.bright
     targetSize = next.size
@@ -540,10 +588,22 @@ export function createJarvisOrb(
     renderer.render(scene, camera)
   }
 
+  let running = false
+  const stop = (): void => {
+    running = false
+    cancelAnimationFrame(raf)
+    raf = 0
+  }
   const tick = (): void => {
-    if (disposed) return
+    if (disposed || !running) return
     paint()
-    if (!reduced) raf = requestAnimationFrame(tick)
+    if (!reduced && running) raf = requestAnimationFrame(tick)
+  }
+  const start = (): void => {
+    if (disposed || reduced || running) return
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+    running = true
+    raf = requestAnimationFrame(tick)
   }
 
   const onHostResize = (): void => {
@@ -558,12 +618,35 @@ export function createJarvisOrb(
 
   let ro: ResizeObserver | null = null
   if (typeof ResizeObserver !== 'undefined') {
-    ro = new ResizeObserver(onHostResize)
+    // rAF-coalesce: hug setBounds can fire ResizeObserver every frame; never nest fit() work inline.
+    let resizeRaf = 0
+    ro = new ResizeObserver(() => {
+      if (disposed) return
+      if (resizeRaf) return
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = 0
+        onHostResize()
+      })
+    })
     ro.observe(canvas)
   }
 
+  const onVis = (): void => {
+    if (typeof document === 'undefined') return
+    if (document.visibilityState === 'hidden') stop()
+    else start()
+  }
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onVis)
+  }
+
   paint()
-  if (!reduced) raf = requestAnimationFrame(tick)
+  start()
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => {
+      if (!disposed) onHostResize()
+    })
+  }
 
   return {
     setState(next) {
@@ -575,8 +658,11 @@ export function createJarvisOrb(
     },
     dispose() {
       disposed = true
-      cancelAnimationFrame(raf)
+      stop()
       ro?.disconnect()
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVis)
+      }
       scene.remove(points, lines, electrons)
       geo.dispose()
       lineGeo.dispose()

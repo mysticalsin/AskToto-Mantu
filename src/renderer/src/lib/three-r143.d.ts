@@ -154,6 +154,7 @@ declare module 'three' {
     })
     setPixelRatio(n: number): void
     setSize(w: number, h: number, updateStyle?: boolean): void
+    setViewport(x: number, y: number, w: number, h: number): void
     setClearColor(color: number, alpha?: number): void
     getContext(): WebGLRenderingContext | null
     render(scene: Scene, camera: Camera): void

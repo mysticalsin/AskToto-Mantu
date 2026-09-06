@@ -28,8 +28,6 @@ export const OVERLAY_ORB_PICKER_CARDS = ['jakub', 'obsidian'] as const
 export type OverlayOrbPickerCard = (typeof OVERLAY_ORB_PICKER_CARDS)[number]
 
 export function overlayOrbPickerSelected(style: OverlayOrbStyle): OverlayOrbPickerCard {
-  // Narrowed to the literal (equal to DEFAULT_OVERLAY_ORB_STYLE) so the return type stays
-  // OverlayOrbPickerCard without widening it to accept 'bar'.
   return style === 'obsidian' ? 'obsidian' : 'jakub'
 }
 
@@ -51,6 +49,11 @@ export const CIRCLE_REST_VIEWPORT_MAX_PX = 60
 /** Circle idle rest is Bar only. Hide/Island never collapse to an orb. */
 export function overlayOrbRestIsCircle(layout: string, style: OverlayOrbStyle): boolean {
   return layout === 'bar' && (style === 'jakub' || style === 'obsidian')
+}
+
+/** Circle / Jarvis picker cards exist only when Overlay chrome is Bar. */
+export function overlayShowsBarRestPicker(layout: unknown): boolean {
+  return layout === 'bar'
 }
 
 /** 41 host + shadow pad. Never 220 × lastBarHeight. */
@@ -94,7 +97,8 @@ export function overlayUsesObsidianOrb(layout: string, style: OverlayOrbStyle): 
 
 /**
  * Auto-collapse only when the user just picked Circle/Jarvis (`styleChanged`).
- * Every expanded frame used to hit `!minimized` and snap Expand Métis back.
+ * Settings defers this until Done (view leaves settings). Every expanded
+ * frame used to hit `!minimized` and snap Expand Métis back.
  */
 export function decideCircleRestMinimize(input: {
   layout: string

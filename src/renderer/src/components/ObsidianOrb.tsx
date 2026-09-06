@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { useWindowDrag } from '../lib/window-drag'
 import { BAR_PILL_VISIBLE_PX, runOrbPillActivate, type OrbMood } from '../lib/bar-pill-orb'
 import { createJarvisOrb, resolveJarvisOrbState, type JarvisOrbHandle } from '../lib/jarvis-orb'
@@ -15,7 +15,8 @@ export function ObsidianOrb({
   hugWidth = false,
   orbMood = 'idle',
   listening = false,
-  preview = false
+  preview = false,
+  animate = true
 }: {
   onActivate: () => void
   title: string
@@ -26,6 +27,8 @@ export function ObsidianOrb({
   listening?: boolean
   /** Settings card: same particle orb as Bar, not a button. */
   preview?: boolean
+  /** Settings picker: freeze non-selected card (no second WebGL rAF). */
+  animate?: boolean
 }): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const handleRef = useRef<JarvisOrbHandle | null>(null)
@@ -39,21 +42,23 @@ export function ObsidianOrb({
     { armOnControls: true, deadZonePx: 14 }
   )
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const reduced =
-      typeof window !== 'undefined' &&
-      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+    // Brand chrome: always animate on the live Bar. Windows "Show animations" off
+    // maps to prefers-reduced-motion and was freezing the Jarvis pill to one frame.
+    // Settings picker freezes the non-selected card (animate=false) so Circle+Jarvis
+    // never run two live rAF/WebGL loops side by side.
     handleRef.current = createJarvisOrb(canvas, {
-      reducedMotion: reduced,
-      state: startStateRef.current
+      reducedMotion: !animate,
+      state: startStateRef.current,
+      hostPx: BAR_PILL_VISIBLE_PX
     })
     return () => {
       handleRef.current?.dispose()
       handleRef.current = null
     }
-  }, [])
+  }, [animate])
 
   useEffect(() => {
     handleRef.current?.setState(orbState)

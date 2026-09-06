@@ -119,7 +119,7 @@ describe('bar pill thinking-orb circle', () => {
     ).toBe(false)
     expect(
       shouldRunOrbRaf({ minimized: true, barLayout: true, reducedMotion: true, documentHidden: false })
-    ).toBe(false)
+    ).toBe(true)
     expect(
       shouldRunOrbRaf({ minimized: true, barLayout: true, reducedMotion: false, documentHidden: true })
     ).toBe(false)
@@ -128,8 +128,8 @@ describe('bar pill thinking-orb circle', () => {
     ).toBe(true)
   })
 
-  it('reduced-motion is a still package frame and does not throw without canvas', () => {
-    expect(shouldAnimateOrb(true)).toBe(false)
+  it('brand orbs keep animating even when OS reports reduced-motion', () => {
+    expect(shouldAnimateOrb(true)).toBe(true)
     expect(shouldAnimateOrb(false)).toBe(true)
     const matchMedia = (query: string) => ({
       matches: query.includes('prefers-reduced-motion'),

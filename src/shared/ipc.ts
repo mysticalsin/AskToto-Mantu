@@ -250,6 +250,7 @@ export const IPC = {
   licenseActivate: 'license:activate',
   licenseStatus: 'license:status',
   licenseGate: 'license:gate',
+  cloudflareConnect: 'cloudflare:connect',
   identitySnapshot: 'identity:snapshot',
   memberLicenseActivate: 'license:memberActivate',
   memberLicenseDeactivate: 'license:memberDeactivate',
@@ -947,6 +948,12 @@ export const BaseSettingsSchema = z.object({
   // the ask choke point AND resets the server-side Dust conversation in the same breath — see IPC.askStart
   // in main/index.ts). Mid-meeting continuity (Copilot, fact-check during Listen) is unaffected either way.
   askFollowUpMemory: z.boolean().default(false),
+  // Ask answer register (JuliusBrussee/caveman, locked like humanizer). Default full. Persists in the
+  // existing settings store until "stop caveman" / "normal mode" / `/caveman off`. Live suggest, recap,
+  // summary, and fact-check skip it. Not an Operator skill pack.
+  askCaveman: z
+    .enum(['off', 'lite', 'full', 'ultra', 'wenyan-lite', 'wenyan-full', 'wenyan-ultra'])
+    .default('full'),
   // Dust provider config (workspace id + region base; the agent sId lives in providerModels.dust)
   dustWorkspaceId: z.string().default(''),
   dustBaseUrl: z
@@ -1547,6 +1554,7 @@ export const DEFAULT_SETTINGS: Settings = {
   resilience: { preferFreeOnExhaustion: true, budgetPreempt: true, hedge: true },
   thinkingMode: 'auto',
   askFollowUpMemory: false,
+  askCaveman: 'full',
   customBaseUrl: '',
   cloudflareBaseUrl: METIS_WORKER_URL,
   dustWorkspaceId: '',

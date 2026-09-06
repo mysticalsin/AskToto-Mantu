@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /**
- * lock-mode-skills.mjs — SHA-256 lock for shipped mode skills + the shared humanizer.
+ * lock-mode-skills.mjs — SHA-256 lock for shipped mode skills + shared humanizer + Ask caveman.
  *
- * Source of truth: skills/humanizer/SKILL.md and skills/modes/<id>/SKILL.md
+ * Source of truth: skills/humanizer/SKILL.md, skills/caveman/SKILL.md, skills/modes/<id>/SKILL.md
  * Writes:          src/shared/mode-skills.lock.json
  *
  *   node scripts/lock-mode-skills.mjs           write the lock from the files
@@ -34,6 +34,7 @@ export const BUILTIN_MODE_IDS = [
 
 export const SKILL_ENTRIES = [
   { id: 'humanizer', path: 'humanizer/SKILL.md' },
+  { id: 'caveman', path: 'caveman/SKILL.md' },
   ...BUILTIN_MODE_IDS.map((id) => ({ id, path: `modes/${id}/SKILL.md` }))
 ]
 
