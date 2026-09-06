@@ -11,6 +11,7 @@ import { AccountsView } from './views/AccountsView'
 import { PeopleView } from './views/PeopleView'
 import { StatsView } from './views/StatsView'
 import { MeetingsView } from './views/MeetingsView'
+import { ConnectionsView } from './views/ConnectionsView'
 import { EmbedView } from './views/EmbedView'
 
 // Lazy: GraphView drags in vis-network + vis-data — most of the whole bundle — which every other
@@ -91,6 +92,7 @@ function DashboardRoutes() {
                 </Suspense>
               }
             />
+            <Route path="/connections" element={<ConnectionsView data={data} />} />
             <Route path="/meetings" element={<MeetingsView data={data} />} />
           </Routes>
         </ErrorBoundary>

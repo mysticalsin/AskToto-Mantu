@@ -116,6 +116,7 @@ import { modeSkillLock } from '@shared/mode-skills'
 import { LANGUAGE_OPTIONS } from '@shared/lang-id'
 import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
+import { BrainConnectPanel } from './BrainConnectPanel'
 import { ClickUpMark } from './brand/ClickUpMark'
 import { PlaneMark } from './brand/PlaneMark'
 import { MetisMark } from './MetisMark'
@@ -5653,7 +5654,9 @@ const TABS: {
       'task management', 'book next steps', 'action items', 'time saved', 'estimate',
       'consolidation', 'token', 'batch index', 'brain consolidation',
       'batch index (1–2× / day)', 'prefer on-device model for consolidation',
-      '06:00', '12:00', '18:00', 'America/Toronto', 'intelligence index'
+      '06:00', '12:00', '18:00', 'America/Toronto', 'intelligence index',
+      'connect mantu intelligence', 'onedrive', 'ai second brain', 'scan onedrive',
+      'connections', 'paste a path'
     ]
   },
   {
@@ -7121,6 +7124,14 @@ function IntelligenceTab({
 
   return (
     <div className="flex flex-col gap-6">
+      <Section
+        title="Connect Mantu Intelligence"
+        desc="Scan OneDrive for an existing second brain or LLM wiki. Connect is the happy path. Pasting a folder path is the power path."
+        icon={FolderOpen}
+      >
+        <BrainConnectPanel settings={settings} patch={patch} />
+      </Section>
+
       <Section
         title="Mantu Intelligence"
         desc="Your meeting brain: dashboards and graphs built from every meeting Métis has captured, covering pipeline, people, deals going cold, and the week's Mars draft."

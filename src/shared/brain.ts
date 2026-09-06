@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import type { MeetingConnection } from './mantu-intelligence'
 
 /**
  * Mantu Intelligence "Brain" — the LLM-maintained knowledge store built from meeting transcripts.
@@ -538,6 +539,8 @@ export interface BrainRead {
   /** Per-meeting extractions (title/sentiment/topics + ingest-stamped source_file/date) — feeds
    *  call-grade timelines and meeting feeds without the dashboard re-deriving them from entity refs. */
   meetings: MeetingExtraction[]
+  /** Named clickable cross-meeting edges (person/account/deal/topic). Derived at read time. */
+  connections?: MeetingConnection[]
 }
 
 /** Renderer/dashboard-facing status summary. */

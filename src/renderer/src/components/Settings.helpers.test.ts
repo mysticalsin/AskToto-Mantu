@@ -80,6 +80,9 @@ describe('searchSettingsTabs — settings search must find real section titles, 
     expect(searchSettingsTabs('routing mode').map((m) => m.id)).toContain('ai')
     expect(searchSettingsTabs('Brain consolidation').map((m) => m.id)).toContain('intelligence')
     expect(searchSettingsTabs('batch index').map((m) => m.id)).toContain('intelligence')
+    expect(searchSettingsTabs('Connect Mantu Intelligence').map((m) => m.id)).toContain('intelligence')
+    expect(searchSettingsTabs('AI Second Brain').map((m) => m.id)).toContain('intelligence')
+    expect(searchSettingsTabs('Scan OneDrive').map((m) => m.id)).toContain('intelligence')
   })
 
   it('MQA-131: finds "Backups & limits" (AI tab) and the hedge toggle that lives inside it', () => {

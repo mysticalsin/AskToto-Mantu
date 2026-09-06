@@ -295,6 +295,16 @@ export interface StatusCounts {
   edges: number
 }
 
+/** Named clickable edge between two meetings. Mirror of src/shared/mantu-intelligence.ts. */
+export interface MeetingConnection {
+  id: string
+  kind: 'person' | 'account' | 'deal' | 'topic'
+  via: string
+  a: { file: string; title: string }
+  b: { file: string; title: string }
+  sentence: string
+}
+
 export interface DashboardData {
   meta: {
     is_placeholder: boolean
@@ -319,4 +329,5 @@ export interface DashboardData {
   warnings: string[]
   ingest_errors: IngestError[]
   status: StatusCounts
+  meeting_connections: MeetingConnection[]
 }

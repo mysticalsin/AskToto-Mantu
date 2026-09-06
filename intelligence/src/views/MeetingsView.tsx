@@ -4,6 +4,7 @@ import type { DashboardData, MeetingFeedRow } from '../types/data'
 import { bandColor, bandLabel } from '../lib/format'
 import { meetingsPerWeek } from '../lib/momentum'
 import { slug } from '../lib/slug'
+import { EmptyState } from '../components/EmptyState'
 
 interface Props {
   data: DashboardData
@@ -38,6 +39,17 @@ export function MeetingsView({ data }: Props) {
     () => new Set(data.account_graph.nodes.filter((n) => n.type === 'account').map((n) => n.id)),
     [data.account_graph.nodes],
   )
+
+  if (meetings.length === 0) {
+    return (
+      <EmptyState
+        title="Meetings"
+        standfirst="Every ingested meeting, newest first."
+        headline="No meetings ingested yet."
+        body="Meetings appear here after you save or import one and Update Intelligence maps it. If this brain looks empty, reconnect OneDrive in Settings → Brain."
+      />
+    )
+  }
 
   return (
     <div className="mx-auto max-w-7xl px-6 py-8">

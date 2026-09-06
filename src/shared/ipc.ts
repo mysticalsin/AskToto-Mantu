@@ -59,6 +59,8 @@ export const IPC = {
   brainBackfill: 'brain:backfill',
   brainIntelligencePass: 'brain:intelligencePass',
   brainRead: 'brain:read',
+  brainScanOneDrive: 'brain:scanOneDrive',
+  brainConnect: 'brain:connect',
   brainEntityNames: 'brain:entityNames',
   restoreEmbeddedCloudflareKey: 'settings:restoreEmbeddedCloudflareKey',
   brainOpenDashboard: 'brain:openDashboard',
@@ -2017,6 +2019,16 @@ export interface GraphRelated {
 export interface BrainEntityNamesResult {
   names: string[]
 }
+
+/** Settings → Brain / setup: connect a scanned OneDrive second-brain folder. */
+export const BrainConnectPayloadSchema = z.object({
+  path: z.string().min(1).max(1024)
+})
+export type BrainConnectPayload = z.infer<typeof BrainConnectPayloadSchema>
+export type { BrainScanHit, BrainScanResult, MeetingConnection } from './mantu-intelligence'
+export type BrainConnectResult =
+  | { ok: true; path: string }
+  | { ok: false; error: string }
 
 // ─── MCP connections (CRM push + "Book next steps") ────────────────────────
 // Generalized from the single BidStack-only mcpCrm:* IPC channels. `connectionId` identifies WHICH

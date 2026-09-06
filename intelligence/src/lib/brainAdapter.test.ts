@@ -571,3 +571,23 @@ describe('MQA-224 — a call with no extracted account is unattributed, not "int
     expect(attributed.some((g) => g.is_client_facing === true)).toBe(true)
   })
 })
+
+describe('Connections pass through from the live brain, never invented here', () => {
+  it('forwards named meeting edges and does not fabricate them', () => {
+    expect(dashboard.meeting_connections).toEqual([])
+    const withEdges: BrainRead = {
+      ...FIXTURE,
+      connections: [
+        {
+          id: 'account:Acme:m1.md->m2.md',
+          kind: 'account',
+          via: 'Acme Corp',
+          a: { file: 'm1.md', title: 'Acme Kickoff Call' },
+          b: { file: 'm2.md', title: 'Acme SOW Review' },
+          sentence: 'Acme Kickoff Call and Acme SOW Review share account Acme Corp.'
+        }
+      ]
+    }
+    expect(brainToDashboard(withEdges).meeting_connections).toEqual(withEdges.connections)
+  })
+})

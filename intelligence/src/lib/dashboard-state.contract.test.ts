@@ -128,6 +128,25 @@ describe('MQA-225 — the Briefing tiles and the cards under them count the same
   })
 })
 
+describe('Connections is a real dashboard pane, not an empty shell', () => {
+  const connections = read('views', 'ConnectionsView.tsx')
+  const app = read('App.tsx')
+
+  it('NavBar routes to Connections', () => {
+    expect(nav).toMatch(/to: '\/connections', label: 'Connections'/)
+    expect(app).toMatch(/path="\/connections"/)
+    expect(app).toMatch(/ConnectionsView/)
+  })
+
+  it('empty Connections is fail-loud with a next action', () => {
+    expect(connections).toMatch(/<EmptyState/)
+    expect(connections).toMatch(/No cross-meeting connections yet/)
+    expect(connections).toMatch(/Update Intelligence/)
+    expect(connections).toMatch(/reconnect OneDrive/)
+    expect(connections).not.toMatch(/similarity cloud|cosine/i)
+  })
+})
+
 describe('Update Intelligence is a real click on the live dashboard', () => {
   it('NavBar mounts the Update Intelligence button that calls the host backfill', () => {
     expect(nav).toMatch(/IntelligenceUpdateButton/)
