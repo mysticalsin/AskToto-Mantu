@@ -48,7 +48,9 @@ describe('MQA-009 — a fact-check ask still receives screenContext', () => {
     // screen block moved; it carries its own untrusted-data guard (llm/shared.ts screenContextBlock).
     const brainGate = blockAfter(indexSrc, BRAIN_GATE)
     expect(brainGate).toMatch(/buildBrainContext\(s,/)
-    expect(brainGate).toMatch(/req\.brainContext = hit\.block \|\| undefined/)
+    // The block is redacted under redactSensitive (security-deep-hardening.contract.test.ts) but the
+    // assignment still lands only inside this gate.
+    expect(brainGate).toMatch(/req\.brainContext = \(s\.redactSensitive && hit\.block \? redactSecrets\(hit\.block\) : hit\.block\) \|\| undefined/)
   })
 
   it("the injector's own guard admits a fact-check ask and still excludes non-answer / non-screen asks", () => {
