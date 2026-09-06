@@ -254,17 +254,25 @@ export function shoeyLandSvg(cls = 'world shoey-world'): string {
 
 export const SHOEY_LAND_SVG = shoeyLandSvg()
 
-/** Realtime map: full-bleed Mercator land, one pulsing green dot per reporting location (no
- * count-pill badges — dropped per spec), zoom/pan controls. Faithful port via
- * ./world/map.ts (renderRealtimeMapSvg) of WorldMap.tsx / shared/MapCanvas.tsx. */
+/** Realtime map: white ocean, faint graticule, filled land, one dot per reporting location —
+ * pulsing green while live, static violet once seen-but-idle (Tony: "a pulsing green dot on
+ * where people are using it and the city they are from") — plus pills for countries reporting
+ * from more than one place, zoom/pan controls and the hover tooltip. Faithful port via
+ * ./world/map.ts (renderRealtimeMapSvg) of WorldMap.tsx / shared/MapCanvas.tsx plus bklit's
+ * Choropleth Chart behaviours. Colour is entirely CSS tokens (css-realtime.ts): this function
+ * never branches on theme. */
 export function shoeyWorld(countries: MapCountry[], dots: MapDot[]): string {
   const empty = countries.length === 0 && dots.length === 0
   const points = empty ? [] : groupDotsToPoints(dots)
-  return renderRealtimeMapSvg({ points, theme: 'light' })
+  return renderRealtimeMapSvg({ points })
 }
 
 /** Seats sharing a country, city, and lat/lon (to 2 decimals, ~1km) render as one dot whose
- * count is the number of seats there — never a duplicate dot per seat at the same spot. */
+ * count is the number of seats there — never a duplicate dot per seat at the same spot.
+ * `MapDot` (operator/src/dashboard.ts) does not yet carry a live/idle flag, asks-in-30-min or
+ * time-saved per point — every dot renders live (`live` defaults to true in
+ * RealtimeMapPoint) until that data-layer distinction exists; the renderer already supports
+ * all of it (see map.test.ts) for the day a route supplies it. */
 function groupDotsToPoints(dots: MapDot[]): RealtimeMapPoint[] {
   const groups = new Map<string, RealtimeMapPoint>()
   for (const d of dots) {
