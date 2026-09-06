@@ -15,6 +15,19 @@ export interface D1DatabaseLike {
 const NONCE_TTL_MS = 10 * 60 * 1000
 const PULSE_TTL_MS = 8 * 24 * 60 * 60 * 1000
 
+/** Isolate-wide: once the live D1 proves it lacks asks.question_type, stop paying a failed insert per Ask. */
+let askInsertLegacy = false
+
+export function resetD1SchemaProbeForTests(): void {
+  askInsertLegacy = false
+}
+
+/** SQLite / D1 phrasing for a column that is not in the table: "has no column named X" or "no such column: X". */
+export function isMissingColumnError(e: unknown, column: string): boolean {
+  const msg = e instanceof Error ? e.message : String(e)
+  return new RegExp(`(no such column|has no column named)[:\\s]+${column}\\b`, 'i').test(msg)
+}
+
 export function d1Store(db: D1DatabaseLike): OperatorStore {
   return {
     async takeNonce(nonce, ts) {
@@ -78,6 +91,54 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         .run()
     },
     async insertAsk(row) {
+      const base = [
+        row.id,
+        row.device_id,
+        row.ts,
+        row.mode,
+        row.skill_id,
+        row.skill_version,
+        row.provider,
+        row.model,
+        row.ttft_ms,
+        row.total_ms,
+        row.input_tokens,
+        row.output_tokens,
+        row.cache_read,
+        row.cache_write,
+        row.cache_uncached,
+        row.cache_status,
+        row.cache_ttl,
+        row.outcome,
+        row.rating,
+        row.prompt_cipher,
+        row.prompt_iv,
+        row.preview
+      ]
+      // Fail-safe for a live D1 that has not had schema-alter.sql applied yet: the first insert that
+      // trips "no such column" flips this isolate to the legacy statement, so an Ask is never dropped
+      // because the fleet store is one migration behind. The type is lost for that row (null), which the
+      // dashboard reports as coverage, never as a silent 100%.
+      if (!askInsertLegacy) {
+        try {
+          await db
+            .prepare(
+              `INSERT OR REPLACE INTO asks (
+                id, device_id, ts, mode, skill_id, skill_version, provider, model,
+                ttft_ms, total_ms, input_tokens, output_tokens, cache_read, cache_write,
+                cache_uncached, cache_status, cache_ttl, outcome, rating, prompt_cipher, prompt_iv, preview,
+                question_type
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            )
+            .bind(...base, row.question_type)
+            .run()
+          return
+        } catch (e) {
+          if (!isMissingColumnError(e, 'question_type')) throw e
+          askInsertLegacy = true
+          console.warn('[operator] asks.question_type is missing on this D1. Apply operator/schema-alter.sql. Asks are stored without a type until then.')
+        }
+      }
       await db
         .prepare(
           `INSERT OR REPLACE INTO asks (
@@ -86,30 +147,7 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
             cache_uncached, cache_status, cache_ttl, outcome, rating, prompt_cipher, prompt_iv, preview
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
-        .bind(
-          row.id,
-          row.device_id,
-          row.ts,
-          row.mode,
-          row.skill_id,
-          row.skill_version,
-          row.provider,
-          row.model,
-          row.ttft_ms,
-          row.total_ms,
-          row.input_tokens,
-          row.output_tokens,
-          row.cache_read,
-          row.cache_write,
-          row.cache_uncached,
-          row.cache_status,
-          row.cache_ttl,
-          row.outcome,
-          row.rating,
-          row.prompt_cipher,
-          row.prompt_iv,
-          row.preview
-        )
+        .bind(...base)
         .run()
     },
     async updateAskRating(id, rating) {

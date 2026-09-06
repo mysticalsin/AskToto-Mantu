@@ -128,6 +128,9 @@ While the app is up and both URL and secret are set:
 
 - Heartbeat about every 60 seconds.
 - After each typed/screen Ask: metrics always; question text only if the toggle is on. Never Listen transcripts, screen captures, audio, or API keys.
+- Metrics include a **question type** label (`factual`, `how-to`, `explain`, `compare`, `summarize`, `draft`, `translate`, `code`, `estimate`, `decision`, `screen`, `behavioral`, `other`, `unknown`). The seat computes it locally from a closed taxonomy in `src/shared/question-type.ts`; the Worker re-validates against that taxonomy and stores anything else as `unknown`, so the `asks.question_type` column can never hold free text. Screenshot Asks are always `screen`. The console's "Question types · 7d" panel reports coverage (how many Asks carried a type) instead of pretending every Ask is typed.
+
+Migration: an existing D1 needs `ALTER TABLE asks ADD COLUMN question_type TEXT` (in `schema-alter.sql`). Until it is applied the Worker still stores every Ask, without a type, and logs one warning per isolate.
 - Skill manifest on launch and every 6 hours. Overlay applies only when the ed25519 signature and sha256 match. Drafts never apply. Approve without Push does nothing on the client.
 
 Overlays land in `userData/skills-overrides` with `lock.json`. The shipped skill stays if the overlay is missing or the lock does not match.

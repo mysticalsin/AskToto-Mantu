@@ -333,6 +333,7 @@ import {
   recordOperatorRating,
   startOperatorRuntime
 } from './operator-ingest'
+import { classifyQuestionType } from '@shared/question-type'
 import { buildCrmIngestEvent, meetingFileHash, shouldIngestCrm } from './operator-crm'
 import { startOperatorOverlayPoll } from './operator-overlay'
 import { initLogging, mainLog, auditLog } from './logger'
@@ -5914,7 +5915,11 @@ function registerIpc(): void {
                 cacheStatus: u.cacheStatus,
                 cacheTtl: u.cacheTtl,
                 outcome: 'answered',
-                question: typeof req.prompt === 'string' ? req.prompt : undefined
+                question: typeof req.prompt === 'string' ? req.prompt : undefined,
+                // Closed-taxonomy label, computed here on the seat. Ships as a metric with every Ask so the
+                // Operator "Question types" panel works even when Ask text is off. Never throws.
+                questionType: classifyQuestionType(req.prompt, { vision: req.mode === 'vision' }),
+                vision: req.mode === 'vision'
               })
             }
             // The winning leg's success is the whole race's terminal outcome — drop the combined abort
