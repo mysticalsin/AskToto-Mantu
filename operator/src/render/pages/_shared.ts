@@ -7,6 +7,12 @@
  * design-lead owns operator/src/render/primitives.ts and the other primitive files; nothing
  * here duplicates a primitive that already exists there. Where a page needs something new
  * (percentBar below), it is added here rather than by editing their files.
+ *
+ * This file stays dev-shell's (the shell owner). During the P1 section wave, a page owner adds
+ * a helper here only if it is genuinely generic (useful to more than one page, the way
+ * percentBar/geoBar already are) -- anything specific to one page belongs in that page's own
+ * operator/src/render/pages/<page>.ts instead, so no two page owners ever need to edit this
+ * file in the same wave.
  */
 import { esc } from '../index'
 import { looksLikeSecret } from '../../redact'
