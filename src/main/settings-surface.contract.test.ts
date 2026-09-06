@@ -51,6 +51,16 @@ describe('MQA-286 — Settings open path sets min bounds', () => {
     expect(app).toMatch(/openSettingsDefault/)
   })
 
+  it('CLI Connect IPC is zero-token connectCliSession, never billed testCli', () => {
+    const start = index.indexOf('ipcMain.handle(IPC.cliTest')
+    const end = index.indexOf('ipcMain.handle(IPC.cliVerifySessions')
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    const handler = index.slice(start, end)
+    expect(handler).toMatch(/connectCliSession/)
+    expect(handler).not.toMatch(/\btestCli\(/)
+  })
+
   it('Settings open cannot keep park height or the live 880×325 Cmd+, slab', () => {
     expect(TONY_LIVE_SETTINGS_CRUSH).toEqual({ x: 460, y: 39, width: 880, height: 325 })
     expect(settingsOpenRejectsPark(TONY_LIVE_SETTINGS_CRUSH)).toBe(true)
@@ -78,6 +88,27 @@ describe('MQA-286 — Settings open path sets min bounds', () => {
     expect(win.height).toBe(560)
     expect(win.y).toBe(0)
     expect(isHideOrIslandParkSize(win)).toBe(false)
+  })
+})
+
+describe('DESIGN.md Settings surface matches the north star', () => {
+  const design = readFileSync(join(__dirname, '../../docs/design/DESIGN.md'), 'utf8')
+  const north = readFileSync(join(__dirname, '../../docs/design/METIS-PLATFORM-NORTH-STAR.md'), 'utf8')
+
+  it('Settings is 880×560 dark glass, never a 320–360 leftover card', () => {
+    expect(design).toMatch(/880×560/)
+    expect(design).toMatch(/#120022/)
+    expect(design).not.toMatch(/compact 320–360px/)
+    expect(design).toMatch(/METIS-PLATFORM-NORTH-STAR/)
+    expect(design).toMatch(/READY TO MERGE stays no/)
+  })
+
+  it('north star keeps R01–R07 on the desktop agent and R17 on Operator', () => {
+    expect(north).toMatch(/READY TO MERGE: no/)
+    expect(north).toMatch(/\*\*R01\*\*.*Desktop/)
+    expect(north).toMatch(/\*\*R07\*\*.*Desktop/)
+    expect(north).toMatch(/\*\*R17\*\*.*Operator/)
+    expect(north).toMatch(/Do not ship product code in the PR that lands this file/)
   })
 })
 
