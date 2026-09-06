@@ -20,6 +20,7 @@ import {
   EntityUnmergePayloadSchema,
   EntityUpdateFieldPayloadSchema,
   FieldDecisionPayloadSchema,
+  BrainConnectPayloadSchema,
   CommitmentRejectPayloadSchema,
   MeetingExtractionQuerySchema,
   AttentionItemSchema,
@@ -1012,5 +1013,18 @@ describe('StreamMetaSchema migration guard', () => {
   it('still requires a provider and valid provider tier', () => {
     expect(StreamMetaSchema.safeParse({ id: 'ask-1', tier: 'base' }).success).toBe(false)
     expect(StreamMetaSchema.safeParse({ id: 'ask-1', provider: 'anthropic', tier: 'fast' }).success).toBe(false)
+  })
+})
+
+describe('Mantu Intelligence scan + connect IPC', () => {
+  it('names dedicated scan/connect channels (not a silent settings rewrite)', () => {
+    expect(IPC.brainScanOneDrive).toBe('brain:scanOneDrive')
+    expect(IPC.brainConnect).toBe('brain:connect')
+  })
+
+  it('connect payload requires a non-empty path and rejects a blank paste', () => {
+    expect(BrainConnectPayloadSchema.safeParse({ path: '/Users/tony/AI Second Brain' }).success).toBe(true)
+    expect(BrainConnectPayloadSchema.safeParse({ path: '' }).success).toBe(false)
+    expect(BrainConnectPayloadSchema.safeParse({}).success).toBe(false)
   })
 })

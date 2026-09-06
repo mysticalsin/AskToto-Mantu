@@ -29,6 +29,12 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
     expect(experienceSrc).not.toMatch(/initialStep=\{phase === 'legacy-full' \? 1 : 5\}/)
   })
 
+  it('setup scans OneDrive and can Connect a brain (consented setup step)', () => {
+    expect(experienceSrc).toMatch(/BrainConnectPanel/)
+    expect(experienceSrc).toMatch(/variant="setup"/)
+    expect(experienceSrc).toMatch(/r\.key === 'brain' && settings && patch/)
+  })
+
   it('reveal advances to appearance, then setup, then personalize', () => {
     expect(experienceSrc).toMatch(/setScene\(sceneAfterReveal\(\)\)/)
     expect(experienceSrc).not.toMatch(/onContinue=\{\(\) => \{\s*playHero\(\)\s*\n\s*setScene\('setup'\)/)

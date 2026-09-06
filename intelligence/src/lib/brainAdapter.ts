@@ -16,7 +16,8 @@ import type {
   FieldState,
   MeetingFeedRow,
   IngestError,
-  StatusCounts
+  StatusCounts,
+  MeetingConnection
 } from '../types/data'
 import { buildGoingCold } from './goingCold.ts'
 import { slug } from './slug.ts'
@@ -147,6 +148,7 @@ export interface BrainRead {
   accounts: BrainAccount[]
   deals: BrainDeal[]
   meetings?: BrainMeeting[]
+  connections?: MeetingConnection[]
 }
 
 declare global {
@@ -646,6 +648,7 @@ export function brainToDashboard(b: BrainRead): DashboardData {
     meetings_feed: meetingsFeed,
     warnings: b.index.warnings,
     ingest_errors: ingestErrors,
-    status
+    status,
+    meeting_connections: b.connections ?? []
   }
 }

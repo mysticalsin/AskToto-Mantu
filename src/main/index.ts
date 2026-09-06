@@ -57,6 +57,7 @@ import {
   EntityUnmergePayloadSchema,
   EntityUpdateFieldPayloadSchema,
   FieldDecisionPayloadSchema,
+  BrainConnectPayloadSchema,
   CommitmentRejectPayloadSchema,
   MeetingExtractionQuerySchema,
   appendAsrCorrection,
@@ -325,6 +326,8 @@ import {
   slugify as brainSlugify,
   brainDir as brainStoreDir
 } from './brain/store'
+import { scanOneDriveBrains } from './brain/onedrive-scan'
+import { brainConnectSettingsPatch, buildMeetingConnections, normalizeConnectPath } from '@shared/mantu-intelligence'
 import { buildBrainContext } from './brain/context'
 import { buildSystem, buildSystemParts } from './personas'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
@@ -6486,16 +6489,60 @@ function registerIpc(): void {
     if (!requireAuth()) throw new Error('Not signed in.')
     const s = getSettings()
     const index = readBrainIndex(s)
+    const people = listBrainEntities(s, 'person')
+      .map((slug) => readBrainPerson(s, slug))
+      .filter((entity): entity is NonNullable<typeof entity> => !!entity)
+    const accounts = listBrainEntities(s, 'account')
+      .map((slug) => readBrainAccount(s, slug))
+      .filter((entity): entity is NonNullable<typeof entity> => !!entity)
+    const deals = listBrainEntities(s, 'deal')
+      .map((slug) => readBrainDeal(s, slug))
+      .filter((entity): entity is NonNullable<typeof entity> => !!entity)
+    const meetings = listBrainMeetingExtractions(s)
+      .map((slug) => readBrainMeetingExtraction(s, slug))
+      .filter((meeting): meeting is NonNullable<typeof meeting> => !!meeting && !!index.ingested[meeting.source_file]?.ok)
     return {
       index,
       graph: readBrainGraph(s),
-      people: listBrainEntities(s, 'person').map((slug) => readBrainPerson(s, slug)).filter(Boolean),
-      accounts: listBrainEntities(s, 'account').map((slug) => readBrainAccount(s, slug)).filter(Boolean),
-      deals: listBrainEntities(s, 'deal').map((slug) => readBrainDeal(s, slug)).filter(Boolean),
-      meetings: listBrainMeetingExtractions(s)
-        .map((slug) => readBrainMeetingExtraction(s, slug))
-        .filter((meeting): meeting is NonNullable<typeof meeting> => !!meeting && !!index.ingested[meeting.source_file]?.ok)
+      people,
+      accounts,
+      deals,
+      meetings,
+      connections: buildMeetingConnections({ people, accounts, deals, meetings })
     }
+  })
+  ipcMain.handle(IPC.brainScanOneDrive, (e) => {
+    assertMainWindow(e)
+    const s = getSettings()
+    try {
+      return scanOneDriveBrains({
+        configuredFolder: s.meetingsFolder || resolveMeetingsFolder(s)
+      })
+    } catch (err) {
+      return {
+        hits: [],
+        connectedPath: s.meetingsFolder || resolveMeetingsFolder(s),
+        scannedRoots: [],
+        error: err instanceof Error ? err.message : String(err)
+      }
+    }
+  })
+  ipcMain.handle(IPC.brainConnect, (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = BrainConnectPayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: 'Paste or pick a folder path first.' }
+    const normalized = normalizeConnectPath(parsed.data.path)
+    if (!normalized.ok) return normalized
+    try {
+      if (!existsSync(normalized.path) || !statSync(normalized.path).isDirectory()) {
+        return { ok: false, error: 'That folder is not on this computer.' }
+      }
+    } catch {
+      return { ok: false, error: 'That folder is not on this computer.' }
+    }
+    setSettings(brainConnectSettingsPatch(normalized.path))
+    return { ok: true, path: normalized.path }
   })
   // Canonical people/account NAMES ONLY (never quotes, roles, deals, or any other entity field) — feeds
   // the renderer's ASR entity-casing bias (lib/entity-casing.ts) so a live transcript can spell a known

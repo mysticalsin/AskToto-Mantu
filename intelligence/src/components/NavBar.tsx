@@ -9,6 +9,7 @@ const links = [
   { to: '/people', label: 'People' },
   { to: '/stats', label: 'Stats' },
   { to: '/graph', label: 'Relationships' },
+  { to: '/connections', label: 'Connections' },
   { to: '/meetings', label: 'Meetings' },
 ]
 

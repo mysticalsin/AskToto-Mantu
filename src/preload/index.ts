@@ -172,6 +172,10 @@ const api = {
   brainClearJournalCorruption: (): Promise<{ ok: boolean; cleared?: boolean; error?: string }> =>
     ipcRenderer.invoke(IPC.brainClearJournalCorruption),
   brainRead: (): Promise<import('@shared/brain').BrainRead> => ipcRenderer.invoke(IPC.brainRead),
+  brainScanOneDrive: (): Promise<import('@shared/ipc').BrainScanResult> =>
+    ipcRenderer.invoke(IPC.brainScanOneDrive),
+  brainConnect: (path: string): Promise<import('@shared/ipc').BrainConnectResult> =>
+    ipcRenderer.invoke(IPC.brainConnect, { path }),
   // Canonical people/account names only — feeds the ASR entity-casing bias (lib/entity-casing.ts).
   brainEntityNames: (): Promise<import('@shared/ipc').BrainEntityNamesResult> =>
     ipcRenderer.invoke(IPC.brainEntityNames),

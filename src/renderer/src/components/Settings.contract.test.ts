@@ -589,3 +589,28 @@ describe('Cloudflare tile opens Operator OAuth, not a key-paste card', () => {
     expect(preload).toMatch(/cloudflareConnect:/)
   })
 })
+
+describe('Mantu Intelligence OneDrive scan + connect (F stays PASS)', () => {
+  const intelligence = blockAfter('function IntelligenceTab(', '\nfunction GraphSection(')
+  const panel = readFileSync(join(__dirname, 'BrainConnectPanel.tsx'), 'utf8')
+
+  it('Brain tab lists scan hits and Connect is the happy path', () => {
+    expect(intelligence).toMatch(/Connect Mantu Intelligence/)
+    expect(intelligence).toMatch(/<BrainConnectPanel /)
+    expect(panel).toMatch(/brainScanOneDrive/)
+    expect(panel).toMatch(/brainConnect/)
+    expect(panel).toMatch(/connecting === hit\.path \? 'Connecting…' : 'Connect'/)
+    expect(panel).toMatch(/Scan OneDrive/)
+  })
+
+  it('path paste is the collapsed power path, not the only happy path', () => {
+    expect(panel).toMatch(/Paste a path \(power path\)/)
+    expect(panel).toMatch(/pasteOpen/)
+    expect(panel.indexOf('Scan OneDrive')).toBeLessThan(panel.indexOf('Paste a path (power path)'))
+  })
+
+  it('does not regress CF browser-connect', () => {
+    expect(source).toMatch(/connectCloudflare/)
+    expect(source).toMatch(/data-cf-aig-connect/)
+  })
+})
