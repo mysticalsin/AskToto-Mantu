@@ -662,8 +662,8 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                 props.stealthLocked
                   ? 'Hidden from screen share: managed by your organization'
                   : props.stealth
-                    ? 'Hidden from screen share — click to make Métis visible'
-                    : 'Visible in screen share — click to hide Métis'
+                    ? 'Hidden from screen share. Click to make Métis visible.'
+                    : 'Visible in screen share. Click to hide Métis.'
               }
               onClick={props.onToggleStealth}
               active={!props.stealth}

@@ -190,6 +190,10 @@ export type AuditEvent =
   | 'provider.failover'
   | 'provider.blocked'
   | 'net.proxy'
+  // Managed egressAllowlist (net/egress-guard.ts): policy armed at boot, and each host it refused (once
+  // per host per session, hostname only).
+  | 'net.egress.policy'
+  | 'net.egress.blocked'
   | 'settings.changed'
   | 'settings.profile_recovered'
   | 'graph.purged'
@@ -198,6 +202,9 @@ export type AuditEvent =
   | 'asr.model.removed'
   | 'app.started'
   | 'app.crash'
+  // The overlay renderer stopped answering Chromium (event loop wedged, not crashed). Logged so a stuck
+  // island is diagnosable from the support bundle; the app does not reload or kill it on this signal.
+  | 'app.unresponsive'
   | 'meeting.detect.degraded'
   | 'recall.open'
   | 'recall.export' // user-initiated decrypted md copy of one meeting (recall:export-plain)
