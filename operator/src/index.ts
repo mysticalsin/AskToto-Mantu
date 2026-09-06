@@ -23,7 +23,7 @@ import { verifyIngestHmac } from './hmac'
 import { json } from './http'
 import { d1Store, type D1DatabaseLike } from './d1'
 import { fundedProviders } from './keys'
-import { licenseFromIngest, parseLicenseId, seatAuthorizedForKeys } from './fleet'
+import { issuedLicenseActive, licenseFromIngest, parseLicenseId, seatAuthorizedForKeys } from './fleet'
 import { matchRoute } from './routes/registry'
 import './routes'
 import { computeIntegrationsVersion, handleIntegrationsSeat } from './routes/integrations-seat'
@@ -338,6 +338,15 @@ async function heartbeat(store: OperatorStore, deviceId: string, bodyText: strin
   })
   await store.touchSession(deviceId, now, 'heartbeat', geo, seat)
   await ingestCrmList(store, deviceId, body, now)
+  // First seat to present an active Operator-issued jti binds activated_device (console / export).
+  // Entitlement still resolves via seat.license_jti → issued_licenses even before this bind.
+  const bindJti = parseLicenseId(stored.license_jti)
+  if (bindJti) {
+    const issued = await store.getIssuedLicense(bindJti)
+    if (issuedLicenseActive(issued, now) && !issued?.activated_device) {
+      await store.updateIssuedLicense(bindJti, { activated_device: deviceId, activated_at: now })
+    }
+  }
   const retries = await store.listCrmRetries(deviceId)
   const { tier, entitlements } = await resolveTierAndEntitlements(store, stored, now)
   const integrationsVersion = await computeIntegrationsVersion(store, stored, tier)

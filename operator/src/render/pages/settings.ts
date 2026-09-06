@@ -11,7 +11,7 @@ export function renderSettings(_data: DashboardPayload, _ctx: RenderCtx): string
     <article class="card pad-b10">
       <p class="eyebrow">Settings</p>
       <div class="rule"><h3>Access keep</h3><p>Cloudflare Access email-code only. Allowlist tony.walteur@gmail.com and twalteur@amaris.com. No homemade login.</p></div>
-      <div class="rule"><h3>Generate license</h3><p>Licenses → duration → Generate license. Paste the once-string into Métis Identity. last4 after reload.</p></div>
+      <div class="rule"><h3>Generate license</h3><p>Licenses → duration → Generate license. Paste the once-string into Métis → Settings → Operator → Operator license. last4 after reload.</p></div>
       <div class="rule"><h3>Geo</h3><p>City / region / country come from request.cf on heartbeat. Never client GPS. Never IP.</p></div>
       <p id="key-msg-settings" class="muted"></p>
     </article>`

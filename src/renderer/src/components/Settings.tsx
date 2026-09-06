@@ -6656,7 +6656,7 @@ export function Settings({
                       <ExternalLink size={12} /> Open Operator
                     </button>
                   )}
-                  {/^https:\/\//i.test(settings.operatorUrl || '') && <OperatorLicenseCard />}
+                  {operatorUrlConfigured(settings) && <OperatorLicenseCard />}
                 </Section>
               </div>
             )}

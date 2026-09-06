@@ -14,7 +14,7 @@ import { approvalPill, field, geoBar, kpiCard, MISSING, percentBar } from './_sh
 
 function renderLicenseGenerateForm(): string {
   return `<form class="key-form license-gen" data-license-generate method="post" action="/v1/admin/licenses/generate" autocomplete="off">
-      <p class="sub muted">Pick how long it stays active. Paste the string into Métis → Identity → License. Shown once. last4 after that.</p>
+      <p class="sub muted">Pick how long it stays active. Paste the once-string into Métis → Settings → Operator → Operator license. Shown once. last4 after that.</p>
       <div class="row">
         <label>Active for
           <select name="days" required>
