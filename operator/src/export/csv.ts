@@ -1,18 +1,17 @@
 /**
  * RFC 4180 CSV writer (task B10, plan D11): UTF-8 BOM, CRLF row endings, dates as ISO 8601, formula
- * injection guarded on every cell (a value starting with `=`, `+`, `-` or `@` is prefixed with a
- * single quote, the same convention Excel/Sheets/LibreOffice all treat as "force text"). Streams from
- * the same batched async row source `xlsx.ts` uses, so memory stays flat regardless of row count.
+ * injection guarded on every cell via `guardFormulaInjection` (shared with `xlsx.ts` in
+ * `./tables.ts`, so the two formats can never disagree about what counts as a dangerous leading
+ * character - a value starting with `=`, `+`, `-` or `@`, optionally after leading whitespace or a
+ * control character, is prefixed with a single quote, the same convention Excel/Sheets/LibreOffice
+ * all treat as "force text"). Streams from the same batched async row source `xlsx.ts` uses, so
+ * memory stays flat regardless of row count.
  */
-import type { ExportColumn, ExportRow } from './tables'
+import { guardFormulaInjection, type ExportColumn, type ExportRow } from './tables'
 
 export const CSV_BOM = '﻿'
 
-/** A leading `=`, `+`, `-` or `@` is how a spreadsheet decides a cell is a formula; prefixing with a
- *  single quote forces it to text in every major spreadsheet app without changing the visible value. */
-export function guardFormulaInjection(value: string): string {
-  return /^[=+\-@]/.test(value) ? `'${value}` : value
-}
+export { guardFormulaInjection }
 
 function formatCell(value: string | number | null, type: ExportColumn['type']): string {
   if (value == null) return ''

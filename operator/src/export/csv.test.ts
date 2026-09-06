@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import type { ExportColumn, ExportRow } from './tables'
-import { CSV_BOM, csvField, csvLine, csvRows, guardFormulaInjection } from './csv'
+import { guardFormulaInjection, type ExportColumn, type ExportRow } from './tables'
+import { CSV_BOM, csvField, csvLine, csvRows } from './csv'
 
 const COLUMNS: ExportColumn[] = [
   { key: 'when', header: 'When', type: 'date' },
@@ -27,6 +27,11 @@ describe('guardFormulaInjection', () => {
   })
   it('leaves an ordinary value alone', () => {
     expect(guardFormulaInjection('Alice')).toBe('Alice')
+  })
+  it('also guards a leading whitespace or control character in front of =, +, - or @ (security review)', () => {
+    expect(guardFormulaInjection('\t=1+1')).toBe("'\t=1+1")
+    expect(guardFormulaInjection('\r=1+1')).toBe("'\r=1+1")
+    expect(guardFormulaInjection('  =1+1')).toBe("'  =1+1")
   })
 })
 
@@ -65,6 +70,13 @@ describe('csvRows', () => {
   it('guards a formula-shaped name against injection', async () => {
     const out = await collect(csvRows(COLUMNS, batchesOf([{ when: null, count: 1, name: '=cmd|/c calc' }])))
     expect(out).toContain("'=cmd|/c calc")
+  })
+
+  it('guards a tab-prefixed or CR-prefixed formula in the CSV output (security review)', async () => {
+    const tabOut = await collect(csvRows(COLUMNS, batchesOf([{ when: null, count: 1, name: '\t=1+1' }])))
+    expect(tabOut).toContain("'\t=1+1")
+    const crOut = await collect(csvRows(COLUMNS, batchesOf([{ when: null, count: 1, name: '\r=1+1' }])))
+    expect(crOut).toContain("'\r=1+1")
   })
 
   it('streams across multiple batches without dropping or reordering rows', async () => {

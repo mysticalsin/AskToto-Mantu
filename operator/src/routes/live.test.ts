@@ -300,4 +300,56 @@ describe('GET /v1/admin/search.json', () => {
     const body = (await res.json()) as { seats: unknown[]; licenses: unknown[]; groups: unknown[]; integrations: unknown[] }
     expect(body).toEqual({ ok: true, seats: [], licenses: [], groups: [], integrations: [] })
   })
+
+  it('slices an overlong q to 100 characters after trim (security review, low)', async () => {
+    const store = memoryStore()
+    await store.upsertSeat(seat({ device_id: 'dev-a', hostname: 'Tonys-MacBook-Pro' }))
+    const longQuery = `  ${'a'.repeat(150)}tony${'b'.repeat(150)}  `
+    const res = await handleRequest(
+      new Request(`https://operator.test/v1/admin/search.json?q=${encodeURIComponent(longQuery)}`),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { seats: unknown[] }
+    // "tony" sits past character 100 of the trimmed, 300+ character query, so once it is sliced to
+    // 100 characters the seat search never sees it and finds nothing.
+    expect(body.seats).toEqual([])
+  })
+})
+
+describe('GET /v1/admin/search.json read-cost rate limit (security review, medium)', () => {
+  it('allows 30 requests per minute per admin, then 429s with retryAfterMs; not shared with live.json', async () => {
+    const store = memoryStore()
+    for (let i = 0; i < 30; i++) {
+      const res = await handleRequest(
+        new Request('https://operator.test/v1/admin/search.json?q=tony'),
+        env(),
+        { access: tonyAccess },
+        { store, now: NOW }
+      )
+      expect(res.status).toBe(200)
+    }
+    const res31 = await handleRequest(
+      new Request('https://operator.test/v1/admin/search.json?q=tony'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    expect(res31.status).toBe(429)
+    const body = (await res31.json()) as { ok: boolean; error: string; retryAfterMs: number }
+    expect(body.ok).toBe(false)
+    expect(body.error).toBe('rate limited')
+    expect(body.retryAfterMs).toBe(60_000)
+
+    // live.json is untouched by this bucket: it still polls freely after search.json is exhausted.
+    const liveRes = await handleRequest(
+      new Request('https://operator.test/v1/admin/live.json'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    expect(liveRes.status).toBe(200)
+  })
 })

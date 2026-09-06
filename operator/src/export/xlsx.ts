@@ -18,7 +18,9 @@
  * problem: it is declared AFTER `<sheetData>` in the OOXML schema, so it can safely use the row count
  * this writer only knows once the last batch has been seen.
  */
-import type { ExportColumn, ExportRow } from './tables'
+import { guardFormulaInjection, type ExportColumn, type ExportRow } from './tables'
+
+export { guardFormulaInjection }
 
 // ---------------------------------------------------------------------------
 // CRC-32 (public domain algorithm, table-based).
@@ -55,12 +57,6 @@ export function crc32(bytes: Uint8Array): number {
 // ---------------------------------------------------------------------------
 // Small pure helpers.
 // ---------------------------------------------------------------------------
-
-/** Same convention as `csv.ts`'s formula guard: a leading `=`, `+`, `-` or `@` is prefixed with a
- *  single quote so a spreadsheet never evaluates an untrusted string as a formula. */
-export function guardFormulaInjection(value: string): string {
-  return /^[=+\-@]/.test(value) ? `'${value}` : value
-}
 
 /** XML 1.0 forbids most C0 control characters outright (a stray one in a cell would produce a file
  *  Excel refuses to open); strip them before escaping the three characters that are always special. */

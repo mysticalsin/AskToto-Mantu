@@ -131,3 +131,51 @@ describe('GET /v1/admin/export.xlsx', () => {
     expect(res.status).toBe(400)
   })
 })
+
+describe('export read-cost rate limit (security review, medium)', () => {
+  it('shares one admin-read-export bucket across csv and xlsx: 10 per minute, then 429 with retryAfterMs', async () => {
+    const store = memoryStore()
+    for (let i = 0; i < 10; i++) {
+      const res = await handleRequest(
+        new Request('https://operator.test/v1/admin/export.csv?table=audit'),
+        env(),
+        { access: tonyAccess },
+        { store, now: NOW }
+      )
+      expect(res.status).toBe(200)
+      await res.arrayBuffer()
+    }
+    const eleventh = await handleRequest(
+      new Request('https://operator.test/v1/admin/export.xlsx?table=audit'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    expect(eleventh.status).toBe(429)
+    const body = (await eleventh.json()) as { ok: boolean; error: string; retryAfterMs: number }
+    expect(body.ok).toBe(false)
+    expect(body.error).toBe('rate limited')
+    expect(body.retryAfterMs).toBe(60_000)
+  })
+
+  it('rate-limits per admin email, not globally', async () => {
+    const store = memoryStore()
+    for (let i = 0; i < 10; i++) {
+      const res = await handleRequest(
+        new Request('https://operator.test/v1/admin/export.csv?table=audit'),
+        env(),
+        { access: tonyAccess },
+        { store, now: NOW }
+      )
+      await res.arrayBuffer()
+    }
+    const otherAdmin = { getIdentity: async () => ({ email: 'twalteur@amaris.com' }) }
+    const res = await handleRequest(
+      new Request('https://operator.test/v1/admin/export.csv?table=audit'),
+      env(),
+      { access: otherAdmin },
+      { store, now: NOW }
+    )
+    expect(res.status).toBe(200)
+  })
+})

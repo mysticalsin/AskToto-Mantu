@@ -523,6 +523,48 @@ describe('CRM send board', () => {
     expect(((await res.json()) as { retry?: string[] }).retry).toEqual(['crm-1'])
   })
 
+  it('a CRM row id containing a tab and =cmd never lands a control character in the crm-retry audit detail (security review, defence in depth)', async () => {
+    // Ingest already sanitises body.id (deviceSuppliedId strips control characters); this test goes
+    // straight through the store, the way a row written before that sanitiser existed - or by any
+    // future write path this handler cannot see - would still look. safeAuditText at the crm-retry
+    // audit call site is the second, independent layer that must catch it regardless.
+    const store = memoryStore()
+    const trickyId = 'crm-1\t=cmd(A1)'
+    await store.upsertCrm({
+      id: trickyId,
+      device_id: 'device-a',
+      ts: NOW,
+      status: 'failed',
+      title: 'Acme recap',
+      connector: 'bidstack',
+      meeting_file: null,
+      meeting_hash: null,
+      last_error: null,
+      retry_requested: 0,
+      attempt: 0,
+      latency_ms: 0,
+      remote_id: null,
+      remote_url: null,
+      action: null
+    })
+    const retry = await handleRequest(
+      new Request(`https://operator.test/v1/admin/crm/${encodeURIComponent(trickyId)}/retry`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}'
+      }),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    expect(retry.status).toBe(200)
+    const auditRows = await store.listAudit(10, { action: 'crm-retry' })
+    expect(auditRows).toHaveLength(1)
+    // eslint-disable-next-line no-control-regex
+    expect(auditRows[0].detail).not.toMatch(/[\t\r\n\x00-\x1f\x7f]/)
+    expect(auditRows[0].detail).toContain('crm-1 =cmd(A1)')
+  })
+
   it('console HTML uses StatusBadge, Retry on Failed, and no StatusDemo', async () => {
     const store = memoryStore()
     for (const status of ['pending', 'in_progress', 'in_review', 'submitted', 'success', 'failed', 'expired']) {

@@ -66,6 +66,15 @@ export function decodeVaultKey(raw, name) {
   throw new Error(`${name} must be 32 bytes, base64`)
 }
 
+/** Byte-for-byte comparison (constant-time-ish: always walks the full length rather than
+ *  short-circuiting on the first difference, since these are secret key bytes). */
+export function keyBytesEqual(a, b) {
+  if (a.length !== b.length) return false
+  let diff = 0
+  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i]
+  return diff === 0
+}
+
 async function encryptAesGcm(plaintext, keyBytes) {
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const key = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt'])
@@ -135,7 +144,11 @@ export function buildUpdateStatement(table, id, cipher, iv) {
 }
 
 export function buildAuditInsertStatement(id, now, detail) {
-  return `INSERT INTO audit (id, ts, actor, action, ask_id, detail, request_id, route) VALUES ('${sqlString(id)}', ${now}, 'system', 'vault-rewrap', NULL, '${sqlString(detail)}', NULL, NULL);`
+  // `now` is interpolated straight into the SQL text (no bind params over a batch file - see
+  // sqlString's doc comment), so it must be coerced to a finite number first: a non-numeric or NaN
+  // input would otherwise land in the statement as literal text and fail the INSERT.
+  const ts = Number(now) || 0
+  return `INSERT INTO audit (id, ts, actor, action, ask_id, detail, request_id, route) VALUES ('${sqlString(id)}', ${ts}, 'system', 'vault-rewrap', NULL, '${sqlString(detail)}', NULL, NULL);`
 }
 
 export function chunk(arr, size) {
@@ -226,6 +239,13 @@ export async function runRewrap({ args, env = process.env, exec = defaultExec, l
   }
   const oldKeyBytes = decodeVaultKey(oldKeyRaw, 'OPERATOR_VAULT_KEY_OLD')
   const newKeyBytes = decodeVaultKey(newKeyRaw, 'OPERATOR_VAULT_KEY')
+  // Security review (medium): a no-op rotation (both env vars pointing at the same key) must refuse
+  // outright, before any D1 read or write - running it anyway would silently do nothing useful while
+  // still burning a wrangler round trip per row and, on a real run, writing a misleading audit row
+  // claiming a rotation happened.
+  if (keyBytesEqual(oldKeyBytes, newKeyBytes)) {
+    throw new Error('rewrap.mjs: OPERATOR_VAULT_KEY_OLD and OPERATOR_VAULT_KEY are identical - refusing to rotate a key to itself.')
+  }
   if (!args.target) throw new Error('Usage: node operator/scripts/rewrap.mjs --remote|--local [--dry-run] [--env <name>]')
 
   const wranglerJsoncText = readWranglerJsonc()

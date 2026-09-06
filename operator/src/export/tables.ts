@@ -72,6 +72,16 @@ function matchesQuery(q: string | undefined, fields: (string | null | undefined)
   return fields.some((f) => (f || '').toLowerCase().includes(needle))
 }
 
+/** Formula injection guard (security review, task B10): shared by `csv.ts` and `xlsx.ts` so the two
+ *  formats can never disagree about what counts as a dangerous leading character. A cell is
+ *  dangerous to a spreadsheet if, once any leading whitespace or control character is skipped, it
+ *  starts with `=`, `+`, `-` or `@` - a spreadsheet's own leading-whitespace trimming means a value
+ *  like `"\t=cmd|..."` is exactly as exploitable as `"=cmd|..."`. Guarded by prefixing a single quote,
+ *  which every major spreadsheet app treats as "force text" without changing the visible value. */
+export function guardFormulaInjection(value: string): string {
+  return /^[\t\r\n\v\f ]*[=+\-@]/.test(value) ? `'${value}` : value
+}
+
 function* chunkArray<T>(arr: T[], size: number): Generator<T[]> {
   for (let i = 0; i < arr.length; i += size) yield arr.slice(i, i + size)
 }
@@ -366,7 +376,7 @@ async function* integrationsRows(store: OperatorStore, filters: ExportFilters): 
   let filtered = rows
   if (filters.status) filtered = filtered.filter((r) => r.status === filters.status)
   filtered = filtered.filter((r) => matchesQuery(filters.q, [r.kind, r.label]))
-  yield* fromBoundedArray(filtered, projectIntegration)
+  yield* fromBoundedArray(filtered.slice(0, MAX_ROWS), projectIntegration)
 }
 
 // ---------------------------------------------------------------------------

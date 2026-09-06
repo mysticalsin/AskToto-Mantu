@@ -6,6 +6,7 @@ import {
   chunk,
   decodeVaultKey,
   formatAuditDetail,
+  keyBytesEqual,
   parseArgs,
   rewrapCiphertext,
   rewrapTable,
@@ -32,6 +33,18 @@ async function encryptWithKey(plaintext: string, keyB64: string): Promise<{ ciph
   }
   return { cipher: toB64(cipherBytes), iv: toB64(iv) }
 }
+
+describe('keyBytesEqual', () => {
+  it('true for two identical byte arrays, false for any difference (including length)', () => {
+    const a = decodeVaultKey(randomKeyB64(), 'a')
+    const same = new Uint8Array(a)
+    expect(keyBytesEqual(a, same)).toBe(true)
+    const different = new Uint8Array(a)
+    different[0] ^= 0xff
+    expect(keyBytesEqual(a, different)).toBe(false)
+    expect(keyBytesEqual(a, a.slice(0, 16))).toBe(false)
+  })
+})
 
 describe('decodeVaultKey', () => {
   it('accepts a 32-byte base64 key', () => {
@@ -176,6 +189,34 @@ describe('runRewrap (fake exec, no wrangler/network)', () => {
     await expect(runRewrap({ args: { target: 'remote', dryRun: false, env: null }, env: {}, exec: vi.fn() })).rejects.toThrow(
       /OPERATOR_VAULT_KEY_OLD/
     )
+  })
+
+  it('refuses when OPERATOR_VAULT_KEY_OLD equals OPERATOR_VAULT_KEY byte for byte, before touching D1 (security review, medium)', async () => {
+    const sameKeyB64 = randomKeyB64()
+    const exec = vi.fn()
+    await expect(
+      runRewrap({
+        args: { target: 'remote', dryRun: false, env: null },
+        env: { OPERATOR_VAULT_KEY_OLD: sameKeyB64, OPERATOR_VAULT_KEY: sameKeyB64 },
+        exec,
+        log: () => {}
+      })
+    ).rejects.toThrow(/identical/)
+    expect(exec).not.toHaveBeenCalled()
+  })
+
+  it('does not refuse when the two keys merely encode to the same length but differ in bytes', async () => {
+    const oldKeyB64 = randomKeyB64()
+    const newKeyB64 = randomKeyB64()
+    const exec = vi.fn((_cmd: string, args: string[]) => (args.includes('--json') ? JSON.stringify([{ results: [] }]) : ''))
+    await expect(
+      runRewrap({
+        args: { target: 'remote', dryRun: true, env: null },
+        env: { OPERATOR_VAULT_KEY_OLD: oldKeyB64, OPERATOR_VAULT_KEY: newKeyB64 },
+        exec,
+        log: () => {}
+      })
+    ).resolves.toBeTruthy()
   })
 
   it('a real run writes one vault-rewrap audit row after both tables are processed; dry-run writes none', async () => {

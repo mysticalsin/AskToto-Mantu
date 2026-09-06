@@ -81,12 +81,26 @@ function auditDetail(table: ExportTable, format: 'csv' | 'xlsx', rowCount: numbe
   return `table ${table} format ${format} rows ${rowCount} filters ${JSON.stringify(filters)}`.slice(0, 500)
 }
 
+/** Read-cost rate limit (security review, medium): an export can read up to `MAX_ROWS` (50,000) rows
+ *  and hold a streamed response open, so it costs far more than a typical admin GET - shared by both
+ *  formats under one bucket key per signed-in admin, same 60 s window `hitRate` uses everywhere else. */
+const EXPORT_RATE_WINDOW_MS = 60_000
+const EXPORT_RATE_MAX = 10
+
+async function exportRateLimited(ctx: AdminCtx): Promise<Response | null> {
+  const limited = await ctx.store.hitRate(`admin-read-export:${ctx.email}`, ctx.now, EXPORT_RATE_WINDOW_MS, EXPORT_RATE_MAX)
+  if (!limited) return null
+  return json({ ok: false, error: 'rate limited', code: 'rate', retryAfterMs: EXPORT_RATE_WINDOW_MS }, 429)
+}
+
 export function registerExportRoutes(): void {
   defineRoute<AdminCtx>({
     method: 'GET',
     pattern: '/v1/admin/export.csv',
     auth: 'admin',
     handler: async (_request, ctx) => {
+      const limited = await exportRateLimited(ctx)
+      if (limited) return limited
       const table = parseTable(ctx)
       if (!table) return badTableResponse()
       const filters = { ...filtersFromSearchParams(ctx.url.searchParams), now: ctx.now }
@@ -113,6 +127,8 @@ export function registerExportRoutes(): void {
     pattern: '/v1/admin/export.xlsx',
     auth: 'admin',
     handler: async (_request, ctx) => {
+      const limited = await exportRateLimited(ctx)
+      if (limited) return limited
       const table = parseTable(ctx)
       if (!table) return badTableResponse()
       const filters = { ...filtersFromSearchParams(ctx.url.searchParams), now: ctx.now }
