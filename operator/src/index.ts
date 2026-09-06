@@ -200,7 +200,7 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
   ) {
     const bodyText = request.method === 'GET' ? '' : await request.text()
     const hmac = await verifyIngestHmac(request, bodyText, env.OPERATOR_INGEST_SECRET, now, (n) => store.takeNonce(n, now))
-    if (!hmac.ok) return json({ ok: false, error: hmac.error }, hmac.status)
+    if (!hmac.ok) return json({ ok: false, error: hmac.error, ...(hmac.code ? { code: hmac.code } : {}) }, hmac.status)
     const bucket = rateBucketFor(url.pathname)
     if (bucket && (await store.hitRate(`${bucket.key}:${hmac.deviceId}`, now, RATE_WINDOW_MS, bucket.max))) {
       return json({ ok: false, error: 'rate limited', retryAfterMs: RATE_WINDOW_MS }, 429)

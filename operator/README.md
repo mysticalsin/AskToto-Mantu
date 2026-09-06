@@ -88,6 +88,25 @@ If identity is missing on `/v1/admin/*`, the response is JSON 401 even when a va
 present on the same request. Unauthenticated `POST /v1/admin/keys` is 401, not 404. Browser
 `GET /` is an Access 302, never a homemade HTML password form. There is no `LICENSE_ADMIN_TOKEN`.
 
+## Security
+
+`OPERATOR_INGEST_SECRET` is one shared secret for the whole fleet, not one per device. Any seat
+that has been configured with the Operator URL and that secret can sign a request under any device
+id it chooses; the HMAC proves the caller knows the shared secret, not which physical machine it is
+running on. This is mitigated three ways, not eliminated: the device id format check
+(`DEVICE_ID_RE` in `src/hmac.ts`) rejects anything shaped like an attack rather than a real seat id
+before the signature is even checked, a device still needs Tony's Approve or an active issued
+license before vault keys or connectors work for it, and every mutation and every seat action lands
+in the audit trail so an impersonated device id is visible after the fact. Per-device secrets, so
+one compromised install could never sign as another, are future work, not shipped today.
+
+A connector set to direct delivery mode hands its decrypted credential to every seat entitled by
+tier or group, not to one seat, and any of those seats can hold that credential in memory once it
+is delivered. For that reason direct mode should be scoped to a narrow group with a real reason to
+need it, never left open to a whole tier, and it is off by default. Brokered mode is the default:
+the credential stays in the Worker, which proxies the call on the seat's behalf, so a connector
+credential is never sent to a device at all.
+
 ## Data model (D1)
 
 One row per concept, ciphertext where the plan calls for it, no plaintext Ask text anywhere. Full
