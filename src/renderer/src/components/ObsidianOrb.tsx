@@ -8,8 +8,8 @@ import {
 } from '../lib/jarvis-obsidian-orb'
 
 /**
- * Jarvis / Obsidian (option 2). Real Three.js particle cloud + lines + electrons.
- * Same 41 host as the Métis / Jakub circle. Not CSS rings.
+ * Jarvis circle. Real Three.js particle cloud + lines + electrons (tonys-jarvis).
+ * Same 41 host. Not CSS rings. Not a gray box.
  */
 export function ObsidianOrb({
   onActivate,

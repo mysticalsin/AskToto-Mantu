@@ -1,19 +1,25 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { OVERLAY_ORB_COPY, OVERLAY_ORB_STYLES } from '@shared/overlay-orb'
+import { OVERLAY_ORB_COPY, OVERLAY_ORB_PICKER_CARDS, OVERLAY_ORB_STYLES } from '@shared/overlay-orb'
 
 const picker = readFileSync(join(__dirname, './OverlayOrbPicker.tsx'), 'utf8')
 const settings = readFileSync(join(__dirname, './Settings.tsx'), 'utf8')
 const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
 const orb = readFileSync(join(__dirname, './ObsidianOrb.tsx'), 'utf8')
+const bar = readFileSync(join(__dirname, './Bar.tsx'), 'utf8')
+const pill = readFileSync(join(__dirname, './ControlPill.tsx'), 'utf8')
 const design = readFileSync(join(__dirname, '../../../../docs/design/ORB-SELECTION.md'), 'utf8')
 
 describe('Settings Bar rest orb cards', () => {
-  it('renders Full bar, Circle, and Obsidian with the reference look', () => {
+  it('renders Full bar and Circle (Jarvis), never Obsidian or a gray box', () => {
     expect(OVERLAY_ORB_STYLES).toEqual(['bar', 'jakub', 'obsidian'])
+    expect(OVERLAY_ORB_PICKER_CARDS).toEqual(['bar', 'obsidian'])
     expect(picker).toMatch(/aria-label="Bar rest"/)
     expect(picker).toMatch(/data-orb-diagram=\{id\}/)
+    expect(picker).toMatch(/overlay-orb-diagram__jarvis/)
+    expect(picker).not.toMatch(/overlay-orb-diagram__jakub/)
+    expect(picker).not.toMatch(/Obsidian/)
     expect(settings).toMatch(/<OverlayOrbPicker/)
     expect(settings).toMatch(/overlayOrbStyle: id/)
     expect(settings).toMatch(/Applies when Overlay chrome is Bar/)
@@ -25,16 +31,22 @@ describe('Settings Bar rest orb cards', () => {
     expect(orb).toMatch(/data-orb-engine="jarvis-particles"/)
     expect(orb).toMatch(/obsidian-orb__canvas/)
     expect(orb).not.toMatch(/obsidian-orb__spark/)
+    expect(bar).toMatch(/<ObsidianOrb/)
+    expect(bar).not.toMatch(/JarvisOrbButton/)
+    expect(pill).toMatch(/<ObsidianOrb/)
+    expect(pill).not.toMatch(/JarvisOrbButton/)
     expect(OVERLAY_ORB_COPY.bar.title).toBe('Full bar')
-    expect(OVERLAY_ORB_COPY.obsidian.title).toMatch(/Jarvis \/ Obsidian/)
-    expect(OVERLAY_ORB_COPY.obsidian.desc).toMatch(/particle orb/)
+    expect(OVERLAY_ORB_COPY.obsidian.title).toBe('Circle')
+    expect(OVERLAY_ORB_COPY.obsidian.desc).toMatch(/Jarvis particle orb/)
     expect(picker).toMatch(/id === 'bar' \? <span className="overlay-chrome-card__default">Default<\/span>/)
     expect(design).toMatch(/DESIGN before UI/)
     expect(design).toMatch(/0x4ca8e8/)
-    expect(design).toMatch(/Do not replace default with Jarvis/)
+    expect(design).toMatch(/Circle/)
+    expect(design).toMatch(/Never label it Obsidian|Never "Obsidian"/)
     const copy = Object.values(OVERLAY_ORB_COPY)
       .map((c) => `${c.title} ${c.desc}`)
       .join(' ')
     expect(copy).not.toMatch(/\u2014/)
+    expect(copy).not.toMatch(/Obsidian/)
   })
 })

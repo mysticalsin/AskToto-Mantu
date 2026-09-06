@@ -19,7 +19,7 @@ const engine = readFileSync(join(__dirname, './jarvis-obsidian-orb.ts'), 'utf8')
 const orb = readFileSync(join(__dirname, '../components/ObsidianOrb.tsx'), 'utf8')
 const pkg = readFileSync(join(__dirname, '../../../../package.json'), 'utf8')
 
-describe('Jarvis / Obsidian particle orb (option 2)', () => {
+describe('Jarvis particle orb (Bar circle)', () => {
   it('locks Tony color, states, and three-r143 in this tree', () => {
     expect(JARVIS_ORB_COLOR).toBe(0x4ca8e8)
     expect(JARVIS_ORB_STATES).toEqual(['idle', 'listening', 'thinking', 'speaking'])

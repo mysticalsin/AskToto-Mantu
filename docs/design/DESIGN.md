@@ -52,7 +52,7 @@ Three feelings, in this order:
 | Default | Value | Why |
 | --- | --- | --- |
 | Overlay chrome | Hide | Invisible until intent. |
-| Bar rest | Full bar (`overlayOrbStyle: 'bar'`) | Circle and Obsidian are opt-in. |
+| Bar rest | Full bar (`overlayOrbStyle: 'bar'`) | Circle (Jarvis particle) is opt-in. |
 | Provider | Cloudflare | One operator endpoint. |
 | `providerPriority` | `api` | CLI-first is a live promotion when a CLI session is actually connected. |
 | Local AI | off | Weights may warm. They do not preempt. |
@@ -165,7 +165,7 @@ See [THINKING-ORB.md](./THINKING-ORB.md). Caption then sphere. Word first.
 ## Bar sphere
 See [BAR-PILL.md](./BAR-PILL.md). The Bar control is a Jakub thinking-orb (`thinking-orbs`, theme `dark`): canvas 64, 2x backing, visible 41×41. Idle `solving` with no caption, listen `listening`, think `working`, fact-check `searching`, connecting `connecting`. Same circle when minimized. Left Settings M stays a circle (no-squash M). Not stuffed into overlay Hide/Island. Not a Fit Studio magenta core.
 
-Bar rest look (power choice): [ORB-SELECTION.md](./ORB-SELECTION.md). Full bar (default), Jakub circle, or Obsidian animated orb. Hide/Island ignore it.
+Bar rest look (power choice): [ORB-SELECTION.md](./ORB-SELECTION.md). Full bar (default, Jarvis circle docked) or Circle (Jarvis particle rest). Hide/Island ignore it. Never Obsidian.
 
 ## Auto-answer
 Ambient copilot / auto-answer stays until Tony clicks (dismiss/read, never send) or a new question replaces it. Not an ephemeral 4s/7s card.

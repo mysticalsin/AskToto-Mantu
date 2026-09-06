@@ -1845,6 +1845,7 @@ input::placeholder {
     inset 0 0 0 1.5px rgba(255, 255, 255, 0.7),
     0 0 0 1px rgba(255, 255, 255, 0.12);
 }
+.overlay-orb-diagram__jarvis,
 .overlay-orb-diagram__obsidian {
   position: absolute;
   top: 14px;

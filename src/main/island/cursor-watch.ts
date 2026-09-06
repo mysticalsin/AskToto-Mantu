@@ -46,6 +46,20 @@ export function overlayWatchNeedsRestore(input: {
 export const CURSOR_WATCH_INTERVAL_MS = 24
 /** Extra pixels around the revealed bar before we treat the pointer as gone. */
 export const CURSOR_LEAVE_GRACE_PX = 8
+/**
+ * After cursor-watch hide, main parks Hide/Island even if the renderer never
+ * calls overlayParkAfterHide. Ultron c74e389: 5s at ~(900,600) left 880×120 up.
+ * Must land inside 1–2s. Do not reset this timer on every hide tick.
+ */
+export const OVERLAY_LEAVE_PARK_MS = 800
+
+/** Revealed Hide/Island + cursor outside the bar and the top-edge strip → park. */
+export function overlayWatchShouldParkOnLeave(input: {
+  decision: CursorWatchDecision
+  islandResting: boolean
+}): boolean {
+  return input.decision === 'hide' && !input.islandResting
+}
 
 export function pointInRect(point: { x: number; y: number }, rect: Rect): boolean {
   return (

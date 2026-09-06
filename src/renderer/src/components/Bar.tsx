@@ -25,7 +25,6 @@ import type { ConversationMode, CustomMode } from '@shared/ipc'
 import { formatScreenFreshness } from '@shared/perception'
 import { accelLabel } from '../lib/keys'
 import type { CaptureDegraded } from '../lib/listen'
-import { JarvisOrbButton } from './JarvisOrbButton'
 import { ObsidianOrb } from './ObsidianOrb'
 import { BAR_MARK_SIZE_PX, type OrbMood } from '../lib/bar-pill-orb'
 import type { OverlayOrbStyle } from '@shared/overlay-orb'
@@ -193,7 +192,7 @@ export interface BarProps {
   canMinimize?: boolean
   /** Color language for the docked Bar circle. Idle purple unless a live signal is on the bar. */
   orbMood?: OrbMood
-  /** Bar rest look. Obsidian replaces the docked Jakub circle only. */
+  /** Bar rest look. Circle rest minimizes. The docked circle is always Jarvis particles. */
   orbStyle?: OverlayOrbStyle
   /** When true, the Métis window is hidden from screen capture & sharing (contentProtection). The
    *  eye button toggles this. Separate from Private View (whether Métis captures the user's screen). */
@@ -752,23 +751,13 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
               </button>
             )}
             {props.canMinimize !== false ? (
-              props.orbStyle === 'obsidian' ? (
-                <ObsidianOrb
-                  orbMood={props.orbMood ?? 'idle'}
-                  listening={props.listening}
-                  title="Minimize to the orb"
-                  ariaLabel="Minimize to the orb"
-                  onActivate={props.onMinimize}
-                />
-              ) : (
-                <JarvisOrbButton
-                  orbMood={props.orbMood ?? 'idle'}
-                  listening={props.listening}
-                  title="Minimize to the orb"
-                  ariaLabel="Minimize to the orb"
-                  onActivate={props.onMinimize}
-                />
-              )
+              <ObsidianOrb
+                orbMood={props.orbMood ?? 'idle'}
+                listening={props.listening}
+                title="Minimize to the orb"
+                ariaLabel="Minimize to the orb"
+                onActivate={props.onMinimize}
+              />
             ) : null}
             {/* Collapse-chevron: plain ghost, not aw-fill. Submit is the only accent-filled control.
                 Disabled (not hidden, so the toolbar doesn't jump) when there's nothing behind the bar

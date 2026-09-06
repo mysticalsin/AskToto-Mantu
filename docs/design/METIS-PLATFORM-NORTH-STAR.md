@@ -105,13 +105,12 @@ A second picker, Settings → Appearance → **Bar rest**, only applies when chr
 
 | Card | Persist | Feel |
 | --- | --- | --- |
-| Full bar | `overlayOrbStyle: 'bar'` | Default. 880 bar. Métis / Jakub orb docked. |
-| Circle | `'jakub'` | Same Métis orb, 41 visible, canvas 64, 2× backing. Minimize-to-circle is this circle. |
-| Jarvis / Obsidian | `'obsidian'` | Tony particle orb from tonys-jarvis `frontend/src/orb.ts`. Three.js cloud + lines + electrons, color `0x4ca8e8`. Same 41 host. Not CSS rings. |
+| Full bar | `overlayOrbStyle: 'bar'` | Default. 880 bar with a clickable Jarvis particle circle. |
+| Circle | `'obsidian'` (legacy `'jakub'` too) | Same Jarvis particle orb, 41 host. Not CSS rings. Not a gray box. Not Obsidian. |
 
 Unknown / missing / locked-absent → `'bar'`. Hide and Island ignore the key. No reinstall. Change applies immediately.
 
-Default Métis / Jakub stays the shipped thinking-orb. Option 2 is the real Jarvis particle orb (Tony lock 2026-09-05). That lock overrides QUALITY "no WebGL" for this slot only. Reduced-motion is a static representative frame. No caption.
+The Bar circle is the tonys-jarvis particle orb (Tony lock 2026-09-06). That lock overrides QUALITY "no WebGL" for this slot only. Reduced-motion is a static representative frame. No caption. Never label it Obsidian.
 
 Contracts: `docs/design/BAR-PILL.md`, `docs/design/ORB-SELECTION.md`, `docs/design/THINKING-ORB.md`, `docs/design/QUALITY.md`.
 
@@ -128,7 +127,7 @@ The Identity pass lives here (`docs/design/IDENTITY-CARD.md`). One Settings acce
 | Default | Why |
 | --- | --- |
 | Overlay Hide | Invisible until intent. |
-| Bar rest Full bar | Circle and Obsidian are opt-in. |
+| Bar rest Full bar | Circle (Jarvis particle) is opt-in. |
 | Provider Cloudflare | One operator endpoint. Embedded proxy key when the pack seeds it. |
 | `providerPriority: 'api'` | CLI-first is a live promotion when a CLI session is actually connected, not a Settings trap. |
 | `localLlm.enabled: false` | Local is power. Weights may warm; they do not preempt. |

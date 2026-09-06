@@ -1,9 +1,9 @@
 /**
- * Tony Jarvis / Obsidian orb (option 2). Port of tonys-jarvis `frontend/src/orb.ts`
+ * Jarvis particle orb. Port of tonys-jarvis `frontend/src/orb.ts`
  * (Three.js particle cloud + connection lines + electrons, color ~0x4ca8e8).
  *
  * Sized for the Bar / pill 41 host. Uses the tree's three@0.143.0.
- * Default Métis / Jakub thinking-orb is unchanged (JarvisOrbButton).
+ * This is the Bar circle. Do not fall back to a gray thinking-orb box.
  */
 
 import type { OrbMood } from './bar-pill-orb'

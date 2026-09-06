@@ -550,11 +550,12 @@ describe('island reveal/collapse wiring (index.ts)', () => {
       /revealedHeight = Math\.max\(b\.height, lastBarHeight, BAR_HEIGHT, ASK_REVEAL_MIN_HEIGHT_PX\)/
     )
     expect(index).toMatch(/notifyOverlayCursorHover\(true\)/)
+    expect(index).toMatch(/scheduleOverlayLeavePark/)
+    expect(index).toMatch(/OVERLAY_LEAVE_PARK_MS/)
     expect(index).toMatch(/const y = topClamp\(liveOverlayLayout\(\), getDisplayMetrics\(display\), ISLAND_TOP_MARGIN\)/)
     expect(index).toMatch(/function resizeTo/)
     expect(index).toMatch(/never setBounds on a stay tick/)
     expect(index).toMatch(/islandResting \? hoverRestTop/)
-    expect(index).toMatch(/Do not park on this tick/)
     expect(index).toMatch(/overlayParkAfterHide/)
     expect(index).toMatch(/parkOverlayAfterHideSpring/)
     expect(index).toMatch(/shouldParkHoverRestAfterLeavingSurface/)

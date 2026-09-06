@@ -61,9 +61,11 @@ On this tip the same path must open **880×800** at `islandSafeTop` (~39), backg
 1. Overlay chrome **Hide**. Do not use tray Show/Hide.
 2. Move the mouse to the top of the display (left of the notch, the camera, or the right), including the menu-bar edge / first desktop row (`workArea.y` ≈ 39). Métis must reveal the **full Ask/Settings bar** (880, Ask field).
 3. Teams mute at Y≈40 must not reveal.
-4. Mid-session: Ask a question, move the mouse away (auto-hide, no Escape), move back to the top. Same answer is still there. A new Ask replaces it.
+4. Mid-session: Ask a question, move the mouse away (auto-hide, no Escape, park 8×2 within 1–2s), move back to the top. Same answer is still there. A new Ask replaces it.
 
-**FAIL if** hover opens **120×44 Show Métis** or **880×44 buttons=[Show Métis] hasAsk=false** (Ultron `a40a22f`). PASS is 880×120+ with the Ask field. **FAIL if** the overlay stays gone until the menu-bar Show Métis / Show/Hide click.
+**Relaunch (required).** Kill the previous Ultron pid. Start from Hide park **8×2**, no Settings window open. Do not start from a leftover 880×120 Ask bar.
+
+**FAIL if** hover opens **120×44 Show Métis** or **880×44 buttons=[Show Métis] hasAsk=false** (Ultron `a40a22f`). PASS is 880×120+ with the Ask field. **FAIL if** after ~1–2s at ~(900, 600) the Ask bar is still 880×120 (Ultron `c74e389` AUTO-HIDE FAIL). **FAIL if** the overlay stays gone until the menu-bar Show Métis / Show/Hide click.
 
 Close Settings. Hide/Island must park again at `bounds.y`.
 

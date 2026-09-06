@@ -11,16 +11,23 @@ export const DEFAULT_OVERLAY_ORB_STYLE: OverlayOrbStyle = 'bar'
 export const OVERLAY_ORB_COPY: Record<OverlayOrbStyle, { title: string; desc: string }> = {
   bar: {
     title: 'Full bar',
-    desc: 'The bar stays on screen.'
+    desc: 'The bar stays on screen with a Jarvis circle.'
   },
   jakub: {
     title: 'Circle',
-    desc: 'Métis orb on the bar.'
+    desc: 'Jarvis particle orb.'
   },
   obsidian: {
-    title: 'Jarvis / Obsidian',
-    desc: 'Tony particle orb. Blue cloud, lines, electrons.'
+    title: 'Circle',
+    desc: 'Jarvis particle orb.'
   }
+}
+
+/** Settings cards. Persist still accepts jakub/obsidian; both are Circle. */
+export const OVERLAY_ORB_PICKER_CARDS = ['bar', 'obsidian'] as const
+
+export function overlayOrbPickerSelected(style: OverlayOrbStyle): 'bar' | 'obsidian' {
+  return style === 'bar' ? 'bar' : 'obsidian'
 }
 
 export function isOverlayOrbStyle(v: unknown): v is OverlayOrbStyle {
@@ -36,6 +43,12 @@ export function overlayOrbRestIsCircle(layout: string, style: OverlayOrbStyle): 
   return layout === 'bar' && (style === 'jakub' || style === 'obsidian')
 }
 
+/** Bar circle is always the tonys-jarvis particle orb. Hide/Island never show it. */
+export function overlayUsesJarvisOrb(layout: string, _style?: OverlayOrbStyle): boolean {
+  return layout === 'bar'
+}
+
+/** @deprecated Tony 2026-09-06: use overlayUsesJarvisOrb. Persist key may still be obsidian. */
 export function overlayUsesObsidianOrb(layout: string, style: OverlayOrbStyle): boolean {
-  return layout === 'bar' && style === 'obsidian'
+  return overlayUsesJarvisOrb(layout, style)
 }

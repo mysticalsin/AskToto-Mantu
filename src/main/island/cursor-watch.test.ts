@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest'
 import {
   CURSOR_LEAVE_GRACE_PX,
   CURSOR_WATCH_INTERVAL_MS,
+  OVERLAY_LEAVE_PARK_MS,
   decideCursorWatch,
   overlayWatchNeedsRestore,
+  overlayWatchShouldParkOnLeave,
   overlayWatchTreatAsRevealed,
   pointInRect,
   shouldWatchOverlayCursor
@@ -146,5 +148,25 @@ describe('cursor-in-rect (Mac Dynamic Island hover)', () => {
         hugStub: true
       })
     ).toBe(true)
+  })
+
+  it('leave at ~(900,600) hides a revealed 880×120 Ask bar and parks within 1–2s', () => {
+    const rest = hoverWatchRestRect('hide', tonyMac)
+    const revealed = { x: 460, y: 39, width: 880, height: 120 }
+    expect(
+      decideCursorWatch({
+        cursor: { x: 900, y: 600 },
+        restRect: rest,
+        revealedRect: revealed,
+        revealed: true
+      })
+    ).toBe('hide')
+    expect(overlayWatchShouldParkOnLeave({ decision: 'hide', islandResting: false })).toBe(true)
+    expect(overlayWatchShouldParkOnLeave({ decision: 'hide', islandResting: true })).toBe(false)
+    expect(overlayWatchShouldParkOnLeave({ decision: 'stay', islandResting: false })).toBe(false)
+    expect(OVERLAY_LEAVE_PARK_MS).toBeGreaterThanOrEqual(400)
+    expect(OVERLAY_LEAVE_PARK_MS).toBeLessThanOrEqual(2000)
+    expect(pointInRect({ x: 900, y: 600 }, rest)).toBe(false)
+    expect(pointInRect({ x: 900, y: 600 }, revealed)).toBe(false)
   })
 })
