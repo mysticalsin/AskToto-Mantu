@@ -754,6 +754,8 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
             {props.canMinimize !== false ? (
               props.orbStyle === 'obsidian' ? (
                 <ObsidianOrb
+                  orbMood={props.orbMood ?? 'idle'}
+                  listening={props.listening}
                   title="Minimize to the orb"
                   ariaLabel="Minimize to the orb"
                   onActivate={props.onMinimize}

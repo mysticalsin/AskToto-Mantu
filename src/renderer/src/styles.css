@@ -1853,21 +1853,45 @@ input::placeholder {
   height: 18px;
   margin-left: -9px;
   border-radius: 50%;
-  background: #0a0a0c;
-  box-shadow:
-    0 0 0 2px rgba(127, 0, 218, 0.35),
-    0 0 8px 1px rgba(80, 40, 180, 0.45);
+  background: #050508;
+  box-shadow: 0 0 0 1px rgba(76, 168, 232, 0.28);
 }
-.overlay-orb-diagram__spark {
+.overlay-orb-diagram__dot {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 5px;
-  height: 5px;
-  margin: -2.5px 0 0 -2.5px;
+  width: 3px;
+  height: 3px;
   border-radius: 50%;
-  background: #5ce1ff;
-  box-shadow: 0 0 6px 2px rgba(92, 225, 255, 0.7);
+  background: #4ca8e8;
+}
+.overlay-orb-diagram__dot--a {
+  top: 3px;
+  left: 7px;
+}
+.overlay-orb-diagram__dot--b {
+  top: 8px;
+  left: 3px;
+}
+.overlay-orb-diagram__dot--c {
+  top: 11px;
+  left: 11px;
+}
+.overlay-orb-diagram__link {
+  position: absolute;
+  height: 1px;
+  background: rgba(76, 168, 232, 0.7);
+  transform-origin: 0 50%;
+}
+.overlay-orb-diagram__link--a {
+  top: 5px;
+  left: 8px;
+  width: 7px;
+  transform: rotate(52deg);
+}
+.overlay-orb-diagram__link--b {
+  top: 10px;
+  left: 5px;
+  width: 8px;
+  transform: rotate(18deg);
 }
 .aw-orb--obsidian {
   width: 41px;
@@ -1881,85 +1905,14 @@ input::placeholder {
   display: block;
   width: 41px;
   height: 41px;
-}
-.obsidian-orb__ring {
-  position: absolute;
-  inset: 0;
+  overflow: hidden;
   border-radius: 50%;
-  pointer-events: none;
+  background: #050508;
 }
-.obsidian-orb__ring--outer {
-  box-shadow: 0 0 0 4px rgba(127, 0, 218, 0.22), 0 0 14px 2px rgba(90, 40, 200, 0.35);
-  animation: obsidian-ring 2.8s ease-in-out infinite;
-}
-.obsidian-orb__ring--mid {
-  inset: 4px;
-  box-shadow: 0 0 0 2px rgba(92, 140, 255, 0.28);
-  animation: obsidian-ring 2.8s ease-in-out infinite 0.4s;
-}
-.obsidian-orb__disc {
-  position: absolute;
-  inset: 6px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 50% 45%, #1a1a22 0%, #050508 72%);
-}
-.obsidian-orb__spark {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 7px;
-  height: 7px;
-  margin: -3.5px 0 0 -3.5px;
-  border-radius: 50%;
-  background: #5ce1ff;
-  box-shadow:
-    0 0 8px 3px rgba(92, 225, 255, 0.85),
-    0 0 14px 5px rgba(80, 180, 255, 0.35);
-  animation: obsidian-spark 1.6s ease-in-out infinite;
-}
-.obsidian-orb__mark {
-  position: absolute;
-  left: 50%;
-  bottom: 6px;
-  width: 10px;
-  height: 6px;
-  margin-left: -5px;
-  background:
-    repeating-linear-gradient(
-      180deg,
-      rgba(255, 255, 255, 0.7) 0 1px,
-      transparent 1px 2px
-    );
-  opacity: 0.7;
-}
-@keyframes obsidian-ring {
-  0%,
-  100% {
-    opacity: 0.55;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.06);
-  }
-}
-@keyframes obsidian-spark {
-  0%,
-  100% {
-    opacity: 0.75;
-    transform: scale(1);
-  }
-  50% {
-    opacity: 1;
-    transform: scale(1.18);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .obsidian-orb__ring--outer,
-  .obsidian-orb__ring--mid,
-  .obsidian-orb__spark {
-    animation: none;
-  }
+.obsidian-orb__canvas {
+  display: block;
+  width: 41px;
+  height: 41px;
 }
 
 @keyframes overlay-peek-in {

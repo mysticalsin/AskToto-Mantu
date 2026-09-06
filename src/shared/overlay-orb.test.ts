@@ -40,6 +40,7 @@ describe('orb selection persist + Bar-only law', () => {
     expect(all).not.toMatch(/\u2014/)
     expect(all).not.toMatch(/Vibe Island/)
     expect(OVERLAY_ORB_COPY.bar.desc).toMatch(/bar stays on screen/)
-    expect(OVERLAY_ORB_COPY.obsidian.desc).toMatch(/Dark disc/)
+    expect(OVERLAY_ORB_COPY.obsidian.title).toMatch(/Jarvis \/ Obsidian/)
+    expect(OVERLAY_ORB_COPY.obsidian.desc).toMatch(/particle orb/)
   })
 })

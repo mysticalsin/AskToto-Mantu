@@ -1,31 +1,64 @@
+import { useEffect, useRef } from 'react'
 import { useWindowDrag } from '../lib/window-drag'
-import { useRef } from 'react'
-import { BAR_PILL_VISIBLE_PX, pillClickShouldExpand } from '../lib/bar-pill-orb'
+import { BAR_PILL_VISIBLE_PX, pillClickShouldExpand, type OrbMood } from '../lib/bar-pill-orb'
+import {
+  createJarvisObsidianOrb,
+  resolveJarvisOrbState,
+  type JarvisObsidianOrbHandle
+} from '../lib/jarvis-obsidian-orb'
 
 /**
- * Obsidian Graph View orb: dark disc, cyan spark, purple rings.
- * Same 41 host as the Jakub circle. CSS only. No WebGL.
+ * Jarvis / Obsidian (option 2). Real Three.js particle cloud + lines + electrons.
+ * Same 41 host as the Métis / Jakub circle. Not CSS rings.
  */
 export function ObsidianOrb({
   onActivate,
   title,
   ariaLabel,
   enableDrag = false,
-  hugWidth = false
+  hugWidth = false,
+  orbMood = 'idle',
+  listening = false
 }: {
   onActivate: () => void
   title: string
   ariaLabel: string
   enableDrag?: boolean
   hugWidth?: boolean
+  orbMood?: OrbMood
+  listening?: boolean
 }): JSX.Element {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const handleRef = useRef<JarvisObsidianOrbHandle | null>(null)
   const dragMovedRef = useRef(false)
+  const orbState = resolveJarvisOrbState({ mood: orbMood, listening })
+  const startStateRef = useRef(orbState)
   const drag = useWindowDrag(
     () => {
       dragMovedRef.current = true
     },
     { armOnControls: true, deadZonePx: 14 }
   )
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const reduced =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+    handleRef.current = createJarvisObsidianOrb(canvas, {
+      reducedMotion: reduced,
+      state: startStateRef.current
+    })
+    return () => {
+      handleRef.current?.dispose()
+      handleRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    handleRef.current?.setState(orbState)
+  }, [orbState])
 
   return (
     <button
@@ -34,6 +67,8 @@ export function ObsidianOrb({
       data-hug-width={hugWidth || undefined}
       data-bar-pill-orb
       data-orb-style="obsidian"
+      data-orb-engine="jarvis-particles"
+      data-orb-state={orbState}
       data-orb-visible={BAR_PILL_VISIBLE_PX}
       title={title}
       aria-label={ariaLabel}
@@ -48,12 +83,12 @@ export function ObsidianOrb({
       className="aw-orb aw-orb--obsidian no-drag focus-ring"
     >
       <span className="obsidian-orb" aria-hidden="true">
-        <span className="obsidian-orb__ring obsidian-orb__ring--outer" />
-        <span className="obsidian-orb__ring obsidian-orb__ring--mid" />
-        <span className="obsidian-orb__disc">
-          <span className="obsidian-orb__spark" />
-          <span className="obsidian-orb__mark" />
-        </span>
+        <canvas
+          ref={canvasRef}
+          className="obsidian-orb__canvas"
+          width={BAR_PILL_VISIBLE_PX * 2}
+          height={BAR_PILL_VISIBLE_PX * 2}
+        />
       </span>
     </button>
   )
