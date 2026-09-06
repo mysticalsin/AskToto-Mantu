@@ -208,6 +208,7 @@ a { color: var(--accent); text-decoration: none; }
   overflow: hidden;
   color: var(--ink);
 }
+.card.rt-map, .card.rt-world { overflow: visible; }
 .card h3 { margin: 0; font-size: 13px; font-weight: 600; color: var(--ink); }
 .kpi-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
 .kpi { padding-bottom: 8px; }
@@ -221,15 +222,15 @@ a { color: var(--accent); text-decoration: none; }
 .delta.down { color: var(--danger); }
 .delta.flat { color: var(--ink3); }
 .rt-grid { display: grid; grid-template-columns: minmax(220px, 28%) minmax(0, 1fr); gap: 16px; align-items: stretch; }
-.rt-map { min-width: 0; min-height: 480px; }
-.rt-map #map-root { min-height: 480px; height: 100%; background: #FFFFFF; }
-#map-root[data-land="inline"] { min-height: 480px; background: #FFFFFF; }
+.rt-map { min-width: 0; min-height: 0; }
+.rt-map #map-root { min-height: 0; height: auto; background: #FFFFFF; }
+#map-root[data-land="inline"] { min-height: 0; background: #FFFFFF; }
 #map-root[data-land="inline"] svg.shoey-world {
-  display: block; width: 100%; height: auto; min-height: 480px;
+  display: block; width: 100%; height: auto; min-height: 0; max-height: min(52vh, 440px);
 }
 [data-theme="dark"] .rt-map #map-root,
 [data-theme="dark"] #map-root[data-land="inline"] { background: #0a0a0b; }
-.rt-map .world.shoey-world { min-height: 480px; max-height: none; }
+.rt-map .world.shoey-world { min-height: 0; max-height: min(52vh, 440px); }
 .rt-stream { display: flex; flex-direction: column; gap: 2px; max-height: 420px; overflow: auto; }
 .rt-row {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;

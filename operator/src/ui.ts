@@ -1,4 +1,4 @@
-import { choropleth, choroplethMini, shoeyWorld, sparklineLine } from './charts'
+import { blueBars, choropleth, choroplethMini, shoeyWorld, sparklineLine } from './charts'
 import { statusBadge } from './components/ui/status-badge'
 import { CRM_FILTER_ORDER } from './crm'
 import { CF_TOKEN_MISSING, type CloudflareOverview } from './cloudflare'
@@ -55,7 +55,8 @@ const EXTRA_CSS = `
 .geo-map-card { padding-bottom: 10px; }
 .geo-map-card svg { display: block; width: 100%; height: auto; min-height: 180px; max-height: 240px; }
 .rt-world { padding-bottom: 10px; }
-.rt-world.rt-map .world { min-height: 420px; max-height: none; }
+.card.rt-map, .card.rt-world { overflow: visible; }
+.rt-world.rt-map .world { min-height: 0; max-height: min(52vh, 440px); }
 .license-once {
   display: grid; gap: 8px; margin: 0 0 14px; padding: 10px 12px;
   border: 1px solid var(--hair); border-radius: 8px; background: var(--bg);
@@ -410,7 +411,7 @@ function renderRealtimeGeo(data: DashboardPayload): string {
 }
 
 function renderWorldMap(data: DashboardPayload): string {
-  return `<article class="card rt-world rt-map" data-world-map>
+  return `<article class="card rt-world rt-map" data-world-map data-rt-map-fit>
     <div class="kpi-top"><p class="eyebrow">WorldMap</p><span class="live" data-world-live>LIVE ${data.roi.liveSeats}</span></div>
     <div id="rt-map-root" data-geo-widget data-land="inline">${shoeyWorld(data.map.countries, data.map.dots)}</div>
   </article>`
@@ -822,7 +823,7 @@ svg path { vector-effect: non-scaling-stroke; }
     <section class="page wrap" data-page="realtime" hidden>
       ${renderWorldMap(data)}
       <div class="rt-live" data-rt-live-strip>
-        ${kpiCard({ title: 'Seats 30m', value: String(data.roi.seats30m), sub: 'unique seats last 30 min', spark: sparklineLine(k.liveSeries) })}
+        ${kpiCard({ title: 'Seats 30m', value: String(data.roi.seats30m), sub: 'unique seats last 30 min', spark: blueBars(k.liveSeries) })}
         ${kpiCard({ title: 'Live', value: String(data.roi.liveSeats), sub: 'seats online now · heartbeat &lt; 2 min', pill: '<span class="live">live</span>', spark: '' })}
         <article class="card activity-feed" style="padding-bottom:10px" data-live-feed>
           <p class="eyebrow">Live events</p>

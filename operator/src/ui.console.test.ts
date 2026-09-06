@@ -156,6 +156,9 @@ describe('product sidebar (#105)', () => {
     const realtime = html.slice(html.indexOf('data-page="realtime"'), html.indexOf('data-page="sessions"'))
     expect(realtime.indexOf('data-world-map')).toBeLessThan(realtime.indexOf('data-rt-live-strip'))
     expect(realtime.indexOf('data-rt-live-strip')).toBeLessThan(realtime.indexOf('data-realtime-geo'))
+    expect(realtime).toContain('data-rt-map-fit')
+    expect(html).toContain('max-height: min(52vh, 440px)')
+    expect(html).toContain('.card.rt-map, .card.rt-world { overflow: visible; }')
   })
 
   it('puts pending seats on the Install → works path with Approve', async () => {
@@ -487,6 +490,7 @@ describe('realtime and map use live heartbeats, not leftover OpenPanel', () => {
     expect(realtime).toContain('data-live-feed')
     expect(realtime).toContain('data-rt-live-strip')
     expect(realtime).toContain('Seats 30m')
+    expect(realtime).toContain('class="spark bars"')
     expect(realtime).toContain('GeoTable')
     expect(realtime).toContain('class="city-pill"')
     expect(realtime).toContain('class="pill-g"')
