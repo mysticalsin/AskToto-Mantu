@@ -2102,7 +2102,7 @@ function createWindow(): void {
       /* headless */
     }
   }
-  overlay.webContents.once('ready-to-show', revealExclusiveWhenPainted)
+  overlay.once('ready-to-show', revealExclusiveWhenPainted)
   overlay.webContents.once('did-finish-load', revealExclusiveWhenPainted)
   startOverlayCursorWatch()
   applyHideClickThrough()
