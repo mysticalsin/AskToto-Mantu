@@ -283,3 +283,41 @@ describe('per-route HMAC buckets', () => {
     expect((await handleRequest(ingest, env(), {}, { store, now: NOW })).status).toBe(200)
   })
 })
+
+describe('admin mutation rate limit', () => {
+  const mutationBody = () => JSON.stringify({ provider: 'anthropic', secret: 'sk-ant-api03-TESTKEYONLY-not-a-real-secret-cs99' })
+  const mutation = () =>
+    new Request('https://operator.test/v1/admin/keys', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'sec-fetch-site': 'same-origin' },
+      body: mutationBody()
+    })
+
+  it('limits admin mutations at 60/min per signed-in email; the 61st in the window is 429', async () => {
+    const store = memoryStore()
+    let last: Response | null = null
+    for (let i = 0; i < 61; i++) {
+      last = await handleRequest(mutation(), env(), { access: tonyAccess }, { store, now: NOW })
+    }
+    expect(last?.status).toBe(429)
+    const body = (await last!.json()) as { ok: boolean; error: string; code: string; retryAfterMs: number }
+    expect(body.ok).toBe(false)
+    expect(body.error).toBe('rate limited')
+    expect(body.code).toBe('rate')
+    expect(body.retryAfterMs).toBeGreaterThan(0)
+  })
+
+  it('never limits GET, even once the mutation bucket for that email is exhausted', async () => {
+    const store = memoryStore()
+    for (let i = 0; i < 61; i++) {
+      await handleRequest(mutation(), env(), { access: tonyAccess }, { store, now: NOW })
+    }
+    const getRes = await handleRequest(
+      new Request('https://operator.test/v1/admin/health.json', { headers: { 'sec-fetch-site': 'same-origin' } }),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    expect(getRes.status).toBe(200)
+  })
+})

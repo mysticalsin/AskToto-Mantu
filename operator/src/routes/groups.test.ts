@@ -282,6 +282,24 @@ describe('members', () => {
     expect(res.status).toBe(200)
     expect(await store.listGroupMembers(groupId)).toHaveLength(0)
   })
+
+  it('scrubs a newline and a secret-shaped substring out of a device id before it reaches the audit trail', async () => {
+    const store = memoryStore()
+    const created = await json<{ group: { id: string } }>(await call('POST', '/v1/admin/groups', store, { name: 'Amaris', tier: 'metis' }))
+    const groupId = created.group.id
+    const secretSubstring = 'sk-ant-api03-totallyfakefakefake99'
+    const weirdDeviceId = `dev-weird\n${secretSubstring}`
+    await store.upsertSeat(seat({ device_id: weirdDeviceId }))
+
+    const res = await call('POST', `/v1/admin/groups/${groupId}/members`, store, { member: weirdDeviceId, kind: 'device' })
+    expect(res.status).toBe(200)
+
+    const audit = await store.listAudit(20)
+    const addRow = audit.find((a) => a.action === 'group-member-add')
+    expect(addRow?.detail).toBeTruthy()
+    expect(addRow?.detail).not.toContain('\n')
+    expect(addRow?.detail).not.toContain(secretSubstring)
+  })
 })
 
 describe('POST /v1/admin/groups/:id/licenses/generate', () => {
@@ -320,6 +338,21 @@ describe('POST /v1/admin/groups/:id/licenses/generate', () => {
     const bad = await call('POST', `/v1/admin/groups/${groupId}/licenses/generate`, store, { days: 7, tier: 'bogus' })
     expect(bad.status).toBe(400)
   })
+
+  it('rejects a member that is neither a valid email nor an existing seat device id', async () => {
+    const store = memoryStore()
+    const created = await json<{ group: { id: string } }>(await call('POST', '/v1/admin/groups', store, { name: 'Amaris', tier: 'metis' }))
+    const groupId = created.group.id
+
+    const res = await call('POST', `/v1/admin/groups/${groupId}/licenses/generate`, store, {
+      days: 30,
+      member: 'not-an-email-or-device'
+    })
+    expect(res.status).toBe(400)
+    const body = await json<{ error: string }>(res)
+    expect(body.error).toContain('not-an-email-or-device')
+    expect(await store.listIssuedLicenses()).toHaveLength(0)
+  })
 })
 
 describe('GET /v1/admin/tiers', () => {
@@ -348,16 +381,31 @@ describe('PATCH /v1/admin/tiers/:id', () => {
     expect(body.error).toContain('ask, listen, recap, crm_push, operator_keys, intelligence, integrations')
   })
 
-  it('accepts a valid entitlement set and persists it', async () => {
+  it('accepts a valid entitlement set, persists it, and audits both the before and after lists', async () => {
     const store = memoryStore()
     await call('GET', '/v1/admin/tiers', store)
+    // metis-light seeds as ['ask', 'intelligence'] (DEFAULT_TIER_ENTITLEMENTS).
     const res = await call('PATCH', '/v1/admin/tiers/metis-light', store, { entitlements: ['ask', 'listen'], label: 'Métis Light' })
     expect(res.status).toBe(200)
     const tiers = await store.listTiers()
     const light = tiers.find((t) => t.id === 'metis-light')
     expect(JSON.parse(light?.entitlements_json ?? '[]')).toEqual(['ask', 'listen'])
     const audit = await store.listAudit(20)
-    expect(audit.some((a) => a.action === 'tier-update')).toBe(true)
+    const tierUpdateRow = audit.find((a) => a.action === 'tier-update')
+    expect(tierUpdateRow).toBeTruthy()
+    expect(tierUpdateRow?.detail).toContain('ask, intelligence')
+    expect(tierUpdateRow?.detail).toContain('ask, listen')
+  })
+
+  it('caps label at 60 characters after trim', async () => {
+    const store = memoryStore()
+    await call('GET', '/v1/admin/tiers', store)
+    const res = await call('PATCH', '/v1/admin/tiers/metis', store, { entitlements: ['ask'], label: `  ${'x'.repeat(10000)}  ` })
+    expect(res.status).toBe(200)
+    const body = await json<{ tier: { label: string } }>(res)
+    expect(body.tier.label).toHaveLength(60)
+    const tiers = await store.listTiers()
+    expect(tiers.find((t) => t.id === 'metis')?.label).toHaveLength(60)
   })
 
   it('404s for an unknown tier id', async () => {
