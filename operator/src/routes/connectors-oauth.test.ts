@@ -26,6 +26,14 @@ function get(path: string): Request {
   return new Request(`${ORIGIN}${path}`)
 }
 
+/** The admin console opens `/oauth/start` in a new tab from its own origin, which a real browser marks
+ *  `sec-fetch-site: same-origin` - every legitimate call in this suite uses this helper. A crafted link
+ *  (email, chat, another site) never gets this header value, which is exactly what the CSRF check
+ *  (item 1(d) of the security fix) tells apart; see the "cross-site" tests below. */
+function sameOriginGet(path: string): Request {
+  return new Request(`${ORIGIN}${path}`, { headers: { 'sec-fetch-site': 'same-origin' } })
+}
+
 describe('GET /v1/admin/connectors/:kind/oauth/start', () => {
   it('401s without Access identity', async () => {
     const store = memoryStore()
@@ -35,21 +43,21 @@ describe('GET /v1/admin/connectors/:kind/oauth/start', () => {
 
   it('400s a kind that has no OAuth config at all', async () => {
     const store = memoryStore()
-    const res = await handleRequest(get('/v1/admin/connectors/hubspot/oauth/start'), env(), { access: tony }, { store, now: NOW })
+    const res = await handleRequest(sameOriginGet('/v1/admin/connectors/hubspot/oauth/start'), env(), { access: tony }, { store, now: NOW })
     expect(res.status).toBe(400)
     expect((await res.json()) as { code: string }).toMatchObject({ code: 'not-oauth' })
   })
 
   it('400s a client-credentials kind (no browser flow exists for it)', async () => {
     const store = memoryStore()
-    const res = await handleRequest(get('/v1/admin/connectors/salesforce/oauth/start'), env(), { access: tony }, { store, now: NOW })
+    const res = await handleRequest(sameOriginGet('/v1/admin/connectors/salesforce/oauth/start'), env(), { access: tony }, { store, now: NOW })
     expect(res.status).toBe(400)
     expect((await res.json()) as { code: string }).toMatchObject({ code: 'not-oauth' })
   })
 
   it('503s naming the exact missing env vars when the OAuth client is unconfigured', async () => {
     const store = memoryStore()
-    const res = await handleRequest(get('/v1/admin/connectors/googledrive/oauth/start'), env(), { access: tony }, { store, now: NOW })
+    const res = await handleRequest(sameOriginGet('/v1/admin/connectors/googledrive/oauth/start'), env(), { access: tony }, { store, now: NOW })
     expect(res.status).toBe(503)
     const body = (await res.json()) as { code: string; missing: string[] }
     expect(body.code).toBe('oauth-unconfigured')
@@ -59,7 +67,7 @@ describe('GET /v1/admin/connectors/:kind/oauth/start', () => {
   it('503s naming only the one missing half when the other is already bound', async () => {
     const store = memoryStore()
     const res = await handleRequest(
-      get('/v1/admin/connectors/googledrive/oauth/start'),
+      sameOriginGet('/v1/admin/connectors/googledrive/oauth/start'),
       env({ OAUTH_GOOGLEDRIVE_CLIENT_ID: 'client-id-only' }),
       { access: tony },
       { store, now: NOW }
@@ -71,7 +79,7 @@ describe('GET /v1/admin/connectors/:kind/oauth/start', () => {
   it('400s when a required tenant field (Zoho data centre) is missing from the query string', async () => {
     const store = memoryStore()
     const res = await handleRequest(
-      get('/v1/admin/connectors/zoho/oauth/start'),
+      sameOriginGet('/v1/admin/connectors/zoho/oauth/start'),
       env({ OAUTH_ZOHO_CLIENT_ID: 'id', OAUTH_ZOHO_CLIENT_SECRET: 'secret' }),
       { access: tony },
       { store, now: NOW }
@@ -83,7 +91,7 @@ describe('GET /v1/admin/connectors/:kind/oauth/start', () => {
   it('302s to the vendor consent page with client_id, redirect_uri, scope, and state - PKCE params for a kind that supports it', async () => {
     const store = memoryStore()
     const res = await handleRequest(
-      get('/v1/admin/connectors/googledrive/oauth/start'),
+      sameOriginGet('/v1/admin/connectors/googledrive/oauth/start'),
       env({ OAUTH_GOOGLEDRIVE_CLIENT_ID: 'g-client-id', OAUTH_GOOGLEDRIVE_CLIENT_SECRET: 'g-client-secret' }),
       { access: tony },
       { store, now: NOW }
@@ -103,10 +111,10 @@ describe('GET /v1/admin/connectors/:kind/oauth/start', () => {
     expect(audit.some((a) => a.action === 'integration-oauth-start')).toBe(true)
   })
 
-  it('templates the tenant field into the authorize URL host for a kind that needs one (Zoho)', async () => {
+  it('templates the tenant field into the authorize URL host for a kind that needs one (Zoho), and audits the allowlisted tenant value', async () => {
     const store = memoryStore()
     const res = await handleRequest(
-      get('/v1/admin/connectors/zoho/oauth/start?dataCenter=accounts.zoho.eu'),
+      sameOriginGet('/v1/admin/connectors/zoho/oauth/start?dataCenter=accounts.zoho.eu'),
       env({ OAUTH_ZOHO_CLIENT_ID: 'z-id', OAUTH_ZOHO_CLIENT_SECRET: 'z-secret' }),
       { access: tony },
       { store, now: NOW }
@@ -115,6 +123,67 @@ describe('GET /v1/admin/connectors/:kind/oauth/start', () => {
     const location = new URL(res.headers.get('location') || '')
     expect(location.origin).toBe('https://accounts.zoho.eu')
     expect(location.pathname).toBe('/oauth/v2/auth')
+
+    // item 1(e): the tenant value is audited only once it has cleared the allowlist.
+    const audit = await store.listAudit(10)
+    const started = audit.find((a) => a.action === 'integration-oauth-start')
+    expect(started?.detail).toBe('zoho accounts.zoho.eu')
+  })
+
+  it('CRITICAL fix 1(a): 400s a dataCenter outside the seven documented Zoho hosts (client-secret exfiltration attempt), mints no state and writes no audit row', async () => {
+    const store = memoryStore()
+    const res = await handleRequest(
+      sameOriginGet('/v1/admin/connectors/zoho/oauth/start?dataCenter=evil.example'),
+      env({ OAUTH_ZOHO_CLIENT_ID: 'z-id', OAUTH_ZOHO_CLIENT_SECRET: 'z-secret' }),
+      { access: tony },
+      { store, now: NOW }
+    )
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { code: string; field: string }
+    expect(body.code).toBe('invalid-field')
+    expect(body.field).toBe('dataCenter')
+    expect(res.headers.get('location')).toBeNull() // no redirect - no state was ever minted
+    expect(await store.listAudit(10)).toHaveLength(0)
+  })
+
+  it('CRITICAL fix 1(a): also 400s a subdomain-suffix smuggling attempt against the allowlist (accounts.zoho.eu.evil.example)', async () => {
+    const store = memoryStore()
+    const res = await handleRequest(
+      sameOriginGet('/v1/admin/connectors/zoho/oauth/start?dataCenter=accounts.zoho.eu.evil.example'),
+      env({ OAUTH_ZOHO_CLIENT_ID: 'z-id', OAUTH_ZOHO_CLIENT_SECRET: 'z-secret' }),
+      { access: tony },
+      { store, now: NOW }
+    )
+    expect(res.status).toBe(400)
+    expect((await res.json()) as { code: string }).toMatchObject({ code: 'invalid-field' })
+  })
+
+  it('CRITICAL fix 1(d): 403s a cross-site sec-fetch-site value, mints no state and writes no audit row', async () => {
+    const store = memoryStore()
+    const req = new Request(`${ORIGIN}/v1/admin/connectors/googledrive/oauth/start`, { headers: { 'sec-fetch-site': 'cross-site' } })
+    const res = await handleRequest(
+      req,
+      env({ OAUTH_GOOGLEDRIVE_CLIENT_ID: 'g-client-id', OAUTH_GOOGLEDRIVE_CLIENT_SECRET: 'g-client-secret' }),
+      { access: tony },
+      { store, now: NOW }
+    )
+    expect(res.status).toBe(403)
+    expect((await res.json()) as { code: string }).toMatchObject({ code: 'csrf' })
+    expect(res.headers.get('location')).toBeNull()
+    expect(await store.listAudit(10)).toHaveLength(0)
+  })
+
+  it('CRITICAL fix 1(d): 403s a request with no sec-fetch-site header at all (a clicked link sends no fetch-metadata header)', async () => {
+    const store = memoryStore()
+    // `get()` sends no sec-fetch-site header, matching a clicked link from an email or chat client.
+    const res = await handleRequest(
+      get('/v1/admin/connectors/googledrive/oauth/start'),
+      env({ OAUTH_GOOGLEDRIVE_CLIENT_ID: 'g-client-id', OAUTH_GOOGLEDRIVE_CLIENT_SECRET: 'g-client-secret' }),
+      { access: tony },
+      { store, now: NOW }
+    )
+    expect(res.status).toBe(403)
+    expect((await res.json()) as { code: string }).toMatchObject({ code: 'csrf' })
   })
 })
 

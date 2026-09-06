@@ -61,7 +61,7 @@ function parseConfigJson(configJson: string): Record<string, string> {
  * the vendor, not this Worker, is the final word on whether it still works) - the row itself is never
  * touched beyond that JSON field, in particular never deleted.
  */
-async function refreshDirectOAuthCredential(
+export async function refreshDirectOAuthCredential(
   store: OperatorStore,
   env: { OPERATOR_VAULT_KEY?: string; DB?: D1DatabaseLike },
   row: IntegrationRow,
@@ -77,8 +77,24 @@ async function refreshDirectOAuthCredential(
   if (!result.ok) {
     await store.audit(crypto.randomUUID(), now, row.created_by ?? 'system', 'integration-oauth-refresh-failed', null, `${row.kind} ${result.error.code}`)
     const failingExtra = { ...currentExtra, last_test_json: JSON.stringify({ ok: false, latencyMs: 0, summary: '', error: result.error }), last_test_at: now }
-    await store.putIntegration({ ...row, ...failingExtra } as unknown as IntegrationRow)
-    if (env.DB) await writeIntegrationExtraColumns(env.DB, row.id, failingExtra)
+    // HIGH fix: a failing refresh must never touch cipher/iv. `row` is this call's own in-memory
+    // snapshot, taken before the refresh attempt - if a *concurrent* refresh for the same connection
+    // already succeeded and persisted a new cipher/iv (and, for an auth-code grant, the vendor may have
+    // already invalidated the old refresh_token once the new one was issued), calling
+    // store.putIntegration with this stale row would silently overwrite that fresh ciphertext with the
+    // old one, permanently breaking the connection. When D1 is bound, writeIntegrationExtraColumns is a
+    // targeted UPDATE of the extra columns only (`../connectors/data.ts`) - it never touches cipher/iv,
+    // so a concurrent success's ciphertext survives. The memory store has no equivalent partial-update
+    // primitive, so putIntegration is kept there as the fallback; that store is single-threaded
+    // test/dev use only; there is no concurrent request to race against in the first place. (A
+    // success-versus-success race - two overlapping refreshes that both succeed - still has no
+    // compare-and-swap guard either way; that needs a primitive in d1.ts/store.ts, which this task does
+    // not own - see the report.)
+    if (env.DB) {
+      await writeIntegrationExtraColumns(env.DB, row.id, failingExtra)
+    } else {
+      await store.putIntegration({ ...row, ...failingExtra } as unknown as IntegrationRow)
+    }
     return payload.accessToken
   }
   if (!env.OPERATOR_VAULT_KEY) return payload.accessToken

