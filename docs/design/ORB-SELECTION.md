@@ -48,7 +48,7 @@ Clicking Circle or Jarvis while chrome is Bar rests as the 41 pill. Click the pi
 - `overlayShowsBarOrb(layout, minimized) === (layout === 'bar' && minimized)`. Hide/Island never show a circle.
 - `overlayDocksBarCircle(layout) === (layout === 'bar')`.
 - `overlayUsesThinkingOrb(layout, style)` is Bar and style is not `obsidian`. Circle rest mounts `JarvisOrbButton` + `thinking-orbs`.
-- Settings Circle card mounts the same `JarvisOrbButton` as Bar (live `ThinkingOrb`, `solving`, 64 avatar) as a non-clickable preview. Jarvis card mounts the same `ObsidianOrb`. 72px stage. Not a 22px CSS fake disc. Not a static CSS mock. No Full bar card.
+- Settings Circle card mounts the same `JarvisOrbButton` as Bar (live `ThinkingOrb`, `solving`, 64 avatar) as a non-clickable preview. Host is `.overlay-orb-diagram--jakub .overlay-orb-diagram__jakub--live` 41×41 transparent + `.overlay-orb-diagram__jakub-host` `scale(41/64)` like Bar `.aw-orb__host`. 72px stage. Not a 22px CSS fake disc. Jarvis card mounts the same `ObsidianOrb`. No Full bar card.
 - `overlayUsesJarvisOrb(layout, style)` is Bar and style is `obsidian` only. That path mounts `ObsidianOrb` + `data-orb-engine="jarvis-particles"`.
 - `overlayShowsSettingsSheet(view, minimized)` is true only when Settings is the view and the Circle pill is not up. No `.cl-root` sheet when `view !== 'settings'` or when minimized.
 - Hide park stays 8×2. Island peek stays 132×15.

@@ -1878,9 +1878,33 @@ input::placeholder {
   overflow: hidden;
   background: linear-gradient(180deg, #3a0b6b 0%, #1a0630 100%);
 }
-/* Live Bar orbs (JarvisOrbButton / ObsidianOrb). Never a 22px CSS fake disc. */
-.overlay-orb-diagram .aw-orb,
-.overlay-orb-diagram .aw-orb[data-orb-preview] {
+/* Circle card: 41 host + 64 avatar scale, same as Bar .aw-orb__host. Never the 22px CSS fake disc. */
+.overlay-orb-diagram--jakub .overlay-orb-diagram__jakub--live {
+  position: relative;
+  width: 41px;
+  height: 41px;
+  overflow: visible;
+  contain: none;
+  border-radius: 50%;
+  background: transparent;
+  pointer-events: none;
+  cursor: default;
+}
+.overlay-orb-diagram__jakub-host {
+  display: block;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 64px;
+  height: 64px;
+  border-radius: 0;
+  pointer-events: none;
+  background: transparent;
+  transform: translate(-50%, -50%) scale(calc(41 / 64));
+  transform-origin: center center;
+}
+.overlay-orb-diagram--obsidian .overlay-orb-diagram__jarvis--live,
+.overlay-orb-diagram .aw-orb[data-orb-preview]:not(.overlay-orb-diagram__jakub--live) {
   pointer-events: none;
   cursor: default;
 }

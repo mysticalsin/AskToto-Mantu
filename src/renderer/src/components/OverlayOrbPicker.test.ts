@@ -22,7 +22,8 @@ describe('Settings Bar rest orb cards', () => {
     expect(picker).toMatch(/<JarvisOrbButton/)
     expect(picker).toMatch(/<ObsidianOrb/)
     expect(picker).toMatch(/preview/)
-    expect(picker).not.toMatch(/overlay-orb-diagram__jakub--live/)
+    expect(thinking).toMatch(/overlay-orb-diagram__jakub--live/)
+    expect(thinking).toMatch(/overlay-orb-diagram__jakub-host/)
     expect(picker).not.toMatch(/ThinkingOrb/)
     expect(picker).not.toMatch(/createJarvisOrb/)
     expect(picker).not.toMatch(/Full bar/)
@@ -41,7 +42,16 @@ describe('Settings Bar rest orb cards', () => {
     expect(css).toMatch(/\.overlay-chrome-grid--two/)
     expect(css).toMatch(/\.overlay-orb-diagram--jakub/)
     expect(css).toMatch(/\.overlay-orb-diagram,\n\.overlay-orb-diagram--jakub,[\s\S]*?height:\s*72px/)
-    expect(css).toMatch(/\.overlay-orb-diagram \.aw-orb/)
+    expect(css).toMatch(
+      /\.overlay-orb-diagram--jakub \.overlay-orb-diagram__jakub--live \{[\s\S]*?width:\s*41px/
+    )
+    expect(css).toMatch(
+      /\.overlay-orb-diagram--jakub \.overlay-orb-diagram__jakub--live \{[\s\S]*?overflow:\s*visible/
+    )
+    expect(css).toMatch(
+      /\.overlay-orb-diagram--jakub \.overlay-orb-diagram__jakub--live \{[\s\S]*?background:\s*transparent/
+    )
+    expect(css).toMatch(/\.overlay-orb-diagram__jakub-host \{[\s\S]*?scale\(calc\(41 \/ 64\)\)/)
     expect(css).not.toMatch(/\.overlay-orb-diagram__jakub \{[\s\S]*?width:\s*22px/)
     expect(css).not.toMatch(/\.overlay-orb-diagram__jakub \{[\s\S]*?radial-gradient/)
     expect(css).toMatch(/\.circle-rest-spring--expand/)
