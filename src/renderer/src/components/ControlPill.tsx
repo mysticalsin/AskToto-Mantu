@@ -25,6 +25,8 @@ export function ControlPill({
   if (orbStyle === 'obsidian') {
     return (
       <ObsidianOrb
+        orbMood={orbMood}
+        listening={listening}
         title={degradedNote || 'Expand Métis'}
         ariaLabel="Expand Métis"
         onActivate={onExpand}

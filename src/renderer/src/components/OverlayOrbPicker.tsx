@@ -16,8 +16,12 @@ function OrbDiagram({ id }: { id: OverlayOrbStyle }): JSX.Element {
       {id === 'bar' ? <span className="overlay-orb-diagram__bar" /> : null}
       {id === 'jakub' ? <span className="overlay-orb-diagram__jakub" /> : null}
       {id === 'obsidian' ? (
-        <span className="overlay-orb-diagram__obsidian">
-          <span className="overlay-orb-diagram__spark" />
+        <span className="overlay-orb-diagram__obsidian" data-orb-diagram-engine="jarvis-particles">
+          <span className="overlay-orb-diagram__dot overlay-orb-diagram__dot--a" />
+          <span className="overlay-orb-diagram__dot overlay-orb-diagram__dot--b" />
+          <span className="overlay-orb-diagram__dot overlay-orb-diagram__dot--c" />
+          <span className="overlay-orb-diagram__link overlay-orb-diagram__link--a" />
+          <span className="overlay-orb-diagram__link overlay-orb-diagram__link--b" />
         </span>
       ) : null}
     </div>

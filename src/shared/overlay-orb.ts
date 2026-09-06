@@ -15,11 +15,11 @@ export const OVERLAY_ORB_COPY: Record<OverlayOrbStyle, { title: string; desc: st
   },
   jakub: {
     title: 'Circle',
-    desc: 'Jakub solving orb on the bar.'
+    desc: 'Métis orb on the bar.'
   },
   obsidian: {
-    title: 'Obsidian',
-    desc: 'Dark disc, blue spark, purple rings.'
+    title: 'Jarvis / Obsidian',
+    desc: 'Tony particle orb. Blue cloud, lines, electrons.'
   }
 }
 
