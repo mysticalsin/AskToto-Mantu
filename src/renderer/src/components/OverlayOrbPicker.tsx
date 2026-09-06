@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import {
   OVERLAY_ORB_COPY,
   OVERLAY_ORB_PICKER_CARDS,
@@ -5,8 +6,22 @@ import {
   parseOverlayOrbStyle,
   type OverlayOrbStyle
 } from '@shared/overlay-orb'
+import { createJarvisOrb } from '../lib/jarvis-orb'
 
 function OrbDiagram({ id }: { id: 'bar' | 'obsidian' }): JSX.Element {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+
+  useEffect(() => {
+    if (id !== 'obsidian') return
+    const canvas = canvasRef.current
+    if (!canvas) return
+    const reduced =
+      typeof window !== 'undefined' &&
+      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+    const handle = createJarvisOrb(canvas, { reducedMotion: reduced, state: 'idle' })
+    return () => handle?.dispose()
+  }, [id])
+
   return (
     <div
       className={`overlay-orb-diagram overlay-orb-diagram--${id}`}
@@ -15,12 +30,23 @@ function OrbDiagram({ id }: { id: 'bar' | 'obsidian' }): JSX.Element {
     >
       <span className="overlay-orb-diagram__desktop" />
       {id === 'bar' ? <span className="overlay-orb-diagram__bar" /> : null}
-      <span className="overlay-orb-diagram__jarvis" data-orb-diagram-engine="jarvis-particles">
-        <span className="overlay-orb-diagram__dot overlay-orb-diagram__dot--a" />
-        <span className="overlay-orb-diagram__dot overlay-orb-diagram__dot--b" />
-        <span className="overlay-orb-diagram__dot overlay-orb-diagram__dot--c" />
-        <span className="overlay-orb-diagram__link overlay-orb-diagram__link--a" />
-        <span className="overlay-orb-diagram__link overlay-orb-diagram__link--b" />
+      <span
+        className={
+          'overlay-orb-diagram__jarvis' + (id === 'obsidian' ? ' overlay-orb-diagram__jarvis--live' : '')
+        }
+        data-orb-diagram-engine="jarvis-particles"
+      >
+        {id === 'bar' ? (
+          <>
+            <span className="overlay-orb-diagram__dot overlay-orb-diagram__dot--a" />
+            <span className="overlay-orb-diagram__dot overlay-orb-diagram__dot--b" />
+            <span className="overlay-orb-diagram__dot overlay-orb-diagram__dot--c" />
+            <span className="overlay-orb-diagram__link overlay-orb-diagram__link--a" />
+            <span className="overlay-orb-diagram__link overlay-orb-diagram__link--b" />
+          </>
+        ) : (
+          <canvas ref={canvasRef} className="overlay-orb-diagram__canvas" width={82} height={82} />
+        )}
       </span>
     </div>
   )

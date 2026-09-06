@@ -1,15 +1,11 @@
 import { useEffect, useRef } from 'react'
 import { useWindowDrag } from '../lib/window-drag'
 import { BAR_PILL_VISIBLE_PX, pillClickShouldExpand, type OrbMood } from '../lib/bar-pill-orb'
-import {
-  createJarvisObsidianOrb,
-  resolveJarvisOrbState,
-  type JarvisObsidianOrbHandle
-} from '../lib/jarvis-obsidian-orb'
+import { createJarvisOrb, resolveJarvisOrbState, type JarvisOrbHandle } from '../lib/jarvis-orb'
 
 /**
- * Jarvis circle. Real Three.js particle cloud + lines + electrons (tonys-jarvis).
- * Same 41 host. Not CSS rings. Not a gray box.
+ * Jarvis circle. Real tonys-jarvis / jarvis2.0 particle cloud, sized to the 41 pill.
+ * Not CSS rings. Not a gray box. Not a static Métis M.
  */
 export function ObsidianOrb({
   onActivate,
@@ -29,7 +25,7 @@ export function ObsidianOrb({
   listening?: boolean
 }): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
-  const handleRef = useRef<JarvisObsidianOrbHandle | null>(null)
+  const handleRef = useRef<JarvisOrbHandle | null>(null)
   const dragMovedRef = useRef(false)
   const orbState = resolveJarvisOrbState({ mood: orbMood, listening })
   const startStateRef = useRef(orbState)
@@ -46,7 +42,7 @@ export function ObsidianOrb({
     const reduced =
       typeof window !== 'undefined' &&
       window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
-    handleRef.current = createJarvisObsidianOrb(canvas, {
+    handleRef.current = createJarvisOrb(canvas, {
       reducedMotion: reduced,
       state: startStateRef.current
     })

@@ -63,13 +63,13 @@ Unknown / missing → `'bar'`. `'jakub'` and `'obsidian'` both mean Circle (Jarv
 
 ## Jarvis look (match tonys-jarvis, do not invent)
 
-Reference: `tonys-jarvis` `frontend/src/orb.ts`. Tree three is `three@0.143.0`.
+Reference: `tonys-jarvis` / `mysticalsin/jarvis2.0` `frontend/src/orb.ts`. Tree three is `three@0.143.0`.
 
-- **Cloud.** Fibonacci particle sphere. Color `0x4ca8e8`.
-- **Lines.** Connection segments between nearby particles. Same blue.
-- **Electrons.** Three small orbiting electrons.
+- **Cloud.** 2000-particle floating sphere with velocity + radius pull. Color `0x4ca8e8`. Not a fibonacci cage. Not a static Métis M.
+- **Lines.** Connection segments between nearby particles, amount by state. Same blue.
+- **Electrons.** Up to three bright dots that travel along those connections (thinking).
 - **States.** `idle` / `listening` / `thinking` / `speaking`.
-- **Host.** 41×41 visible box. Not a fullscreen canvas.
+- **Host.** 41×41 visible box (Bar circle and the second Settings pill). Never `window.innerWidth`. Not a fullscreen canvas.
 - **Engine.** Three.js `WebGLRenderer` + `Points` + `LineSegments`. CSS rings / spark / purple halo is a fail.
 - **Reduced-motion.** One static representative frame. Must still read as the particle cloud.
 - **First paint.** Dark disc behind the canvas (`#050508`). Do not flash a white hole. If WebGL is missing, keep that disc. Do not fall back to a gray thinking-orb box.
