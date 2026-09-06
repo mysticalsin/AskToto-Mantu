@@ -1,19 +1,28 @@
 import { describe, expect, it } from 'vitest'
 import {
   avatar,
+  catalogTile,
+  chip,
   clientChip,
   deltaChip,
+  dialog,
   emptyState,
+  exportMenu,
   flag,
   formatCompact,
   kindBadge,
+  logoGlyph,
   osChip,
   osGlyph,
   relativeTime,
+  segmented,
   skeletonRows,
+  sourceTooltip,
   statusDot,
+  tabs,
   tierBadge,
   timeCell,
+  toast,
   tooltip
 } from './primitives'
 
@@ -95,6 +104,20 @@ describe('avatar', () => {
   it('shows a live dot only when live is true', () => {
     expect(avatar({ name: 'X', live: true })).toContain('avatar-live')
     expect(avatar({ name: 'X', live: false })).not.toContain('avatar-live')
+  })
+  it('never hard-codes a hex colour and never emits an inline style attribute (plan D6: no style-src unsafe-inline)', () => {
+    const html = avatar({ name: 'Tonys-MacBook-Pro' })
+    expect(html).toMatch(/data-hue="\d+"/)
+    expect(html).not.toContain('style="')
+    expect(html).not.toMatch(/#[0-9a-fA-F]{3,8}/)
+  })
+  it('buckets different identities into different data-hue values', () => {
+    const a = avatar({ name: 'Tonys-MacBook-Pro' })
+    const b = avatar({ name: 'Other-PC' })
+    const hueOf = (html: string) => html.match(/data-hue="(\d+)"/)?.[1]
+    expect(hueOf(a)).toBeDefined()
+    expect(hueOf(b)).toBeDefined()
+    expect(hueOf(a)).not.toBe(hueOf(b))
   })
   it('escapes the identity and falls back to email, then "?"', () => {
     expect(avatar({ name: '', email: 'a@b.com' })).toContain('a@b.com')
@@ -181,6 +204,104 @@ describe('emptyState', () => {
   })
 })
 
+describe('logoGlyph', () => {
+  it('points at the static-assets path with the label as alt text', () => {
+    const html = logoGlyph('hubspot', 'HubSpot')
+    expect(html).toContain('src="/assets/logos/hubspot.svg"')
+    expect(html).toContain('alt="HubSpot"')
+  })
+})
+
+describe('catalogTile', () => {
+  it('ready tiles are clickable, not inert', () => {
+    const html = catalogTile({ kind: 'hubspot', label: 'HubSpot', transport: 'rest', state: 'ready' })
+    expect(html).not.toContain('data-inert')
+    expect(html).toContain('data-catalog-tile="hubspot"')
+    expect(html).toContain('API')
+  })
+  it('needs-oauth tiles render identically but inert, with the exact sentence (lock 12)', () => {
+    const html = catalogTile({ kind: 'salesforce', label: 'Salesforce', transport: 'rest', state: 'needs-oauth' })
+    expect(html).toContain('data-inert')
+    expect(html).toContain('Needs OAuth (phase 2)')
+  })
+  it('connected tiles show a live status dot with the connection count', () => {
+    const html = catalogTile({ kind: 'notion', label: 'Notion', transport: 'rest', state: 'connected', connections: 2 })
+    expect(html).toContain('status-dot-live')
+    expect(html).toContain('2 connections')
+  })
+  it('mcp transport shows the MCP badge', () => {
+    expect(catalogTile({ kind: 'github', label: 'GitHub', transport: 'mcp', state: 'ready' })).toContain('>MCP<')
+  })
+})
+
+describe('tabs', () => {
+  it('renders one button per item with role=tab and aria-selected matching active', () => {
+    const html = tabs({ items: [{ id: 'a', label: 'A', active: true }, { id: 'b', label: 'B' }] })
+    expect(html).toContain('role="tab"')
+    expect(html).toMatch(/data-tab="a"[^>]*aria-selected="true"|aria-selected="true"[^>]*data-tab="a"/)
+    expect(html).toContain('data-tab="b"')
+  })
+})
+
+describe('chip', () => {
+  it('renders the label with no tone class by default, and a tone-* class when given', () => {
+    expect(chip({ label: 'Plain' })).not.toContain('chip-')
+    expect(chip({ label: 'Connected', tone: 'ok' })).toContain('chip-ok')
+  })
+})
+
+describe('segmented', () => {
+  it('renders one radio button per item, active gets aria-checked=true', () => {
+    const html = segmented({ items: [{ id: 'light', label: 'Light', active: true }, { id: 'dark', label: 'Dark' }] })
+    expect(html).toContain('role="radiogroup"')
+    expect(html).toContain('role="radio"')
+    expect(html).toMatch(/data-segmented="light"[^>]*aria-checked="true"|aria-checked="true"[^>]*data-segmented="light"/)
+  })
+})
+
+describe('sourceTooltip', () => {
+  it('combines the formula and source into one tooltip, no em dash', () => {
+    const html = sourceTooltip('Live seats in the last 2 minutes', 'heartbeats table, last 2m')
+    expect(html).toContain('Live seats in the last 2 minutes. Source: heartbeats table, last 2m')
+    expect(html).not.toMatch(/ — /)
+  })
+})
+
+describe('toast', () => {
+  it('renders the message, an Undo button only when asked, and a request id only when given', () => {
+    const plain = toast({ message: 'Saved' })
+    expect(plain).toContain('Saved')
+    expect(plain).not.toContain('toast-undo')
+    expect(plain).not.toContain('toast-request-id')
+    const full = toast({ message: 'Failed', kind: 'error', requestId: 'req_123', undo: true })
+    expect(full).toContain('toast-error')
+    expect(full).toContain('toast-undo')
+    expect(full).toContain('req_123')
+  })
+})
+
+describe('dialog', () => {
+  it('ships hidden with a Cancel and a named confirm action', () => {
+    const html = dialog({ id: 'add-key', title: 'Add key', label: 'Secret', confirmLabel: 'Add' })
+    expect(html).toContain('hidden')
+    expect(html).toContain('data-dialog-cancel')
+    expect(html).toContain('>Add<')
+  })
+  it('masked dialogs get a password input and a reveal toggle, never window.prompt', () => {
+    const html = dialog({ id: 'rotate', title: 'Rotate key', label: 'New value', masked: true })
+    expect(html).toContain('type="password"')
+    expect(html).toContain('data-dialog-reveal')
+  })
+})
+
+describe('exportMenu', () => {
+  it('links to the real export route, not a client-only download', () => {
+    const html = exportMenu({ csvHref: '/v1/admin/audit.csv' })
+    expect(html).toContain('href="/v1/admin/audit.csv"')
+    expect(html).toContain('data-export-link')
+  })
+})
+
 describe('no user-facing em dash in generated copy', () => {
   it('none of these primitives ever emit " — " prose', () => {
     const samples = [
@@ -198,5 +319,34 @@ describe('no user-facing em dash in generated copy', () => {
       emptyState({ title: 't', description: 'd' })
     ]
     for (const s of samples) expect(s).not.toMatch(/ — /)
+  })
+})
+
+describe('no inline style attribute anywhere in primitives.ts (plan D6: style-src self, no unsafe-inline)', () => {
+  it('none of these primitives ever emit style="', () => {
+    const samples = [
+      timeCell(NOW, NOW),
+      flag('ca'),
+      osChip('darwin'),
+      avatar({ name: 'X', live: true }),
+      kindBadge('ask'),
+      tierBadge('metis'),
+      statusDot({ state: 'idle', label: 'Idle' }),
+      clientChip('1.8.5'),
+      deltaChip(1.2, { flashKey: 'k' }),
+      tooltip('x', 'y'),
+      sourceTooltip('formula', 'source'),
+      skeletonRows(3),
+      emptyState({ title: 't', description: 'd' }),
+      logoGlyph('hubspot', 'HubSpot'),
+      catalogTile({ kind: 'hubspot', label: 'HubSpot', transport: 'rest', state: 'ready' }),
+      tabs({ items: [{ id: 'a', label: 'A' }] }),
+      chip({ label: 'x', tone: 'ok' }),
+      segmented({ items: [{ id: 'a', label: 'A' }] }),
+      toast({ message: 'x', undo: true, requestId: 'r' }),
+      dialog({ id: 'x', title: 't', label: 'l', masked: true }),
+      exportMenu({ csvHref: '/x.csv' })
+    ]
+    for (const s of samples) expect(s).not.toContain('style="')
   })
 })

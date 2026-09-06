@@ -5,7 +5,7 @@ import { esc } from './index'
 import { emptyState } from './primitives'
 
 export type DataTableColumn = { key: string; label: string }
-export type DataTableRow = { cells: Record<string, string>; attrs?: string }
+export type DataTableRow = { cells: Record<string, string>; attrs?: string; selected?: boolean }
 
 export function dataTable(opts: {
   columns: DataTableColumn[]
@@ -23,10 +23,10 @@ export function dataTable(opts: {
   const body = opts.rows
     .map(
       (r) =>
-        `<tr class="${esc(opts.rowClass || '')}" ${r.attrs || ''}>${opts.columns
+        `<tr class="${esc(opts.rowClass || '')}${r.selected ? ' is-selected' : ''}" data-stagger ${r.attrs || ''}>${opts.columns
           .map((c) => `<td>${r.cells[c.key] ?? ''}</td>`)
           .join('')}</tr>`
     )
     .join('')
-  return `<div class="table-wrap" style="overflow-x:auto"><table${idAttr}>${head}<tbody>${body}</tbody></table></div>`
+  return `<div class="table-wrap"><table${idAttr}>${head}<tbody>${body}</tbody></table></div>`
 }

@@ -1,8 +1,10 @@
 /**
  * Reference TopListCard.tsx: a tab strip, a search row, a header row with 1 or 2 right-aligned
  * sortable value columns, 25px data rows with a full-row proportional bar, and a footer row.
- * Grid is `1fr 70px` for one value column, `1fr 70px 70px` for two (SPEC rule 5) — never
- * hardcode three columns.
+ * Grid is `1fr 70px` for one value column, `1fr 70px 70px` for two (SPEC rule 5) -- never
+ * hardcode three columns. The two column counts are classes (`cols-1` / `cols-2` in css.ts), not
+ * an inline `grid-template-columns` style: plan D6 tightens CSP to `style-src 'self'` with no
+ * `'unsafe-inline'`, so no `style="` attribute survives at runtime, static or dynamic.
  */
 import { esc } from './index'
 import { iconSvg, NAV_ICON_PATHS } from './icons'
@@ -20,7 +22,7 @@ export function topListCard(opts: {
   emptyTitle?: string
   footerRight?: string
 }): string {
-  const cols = opts.valueHeaders.length >= 2 ? '1fr 70px 70px' : '1fr 70px'
+  const colsClass = opts.valueHeaders.length >= 2 ? 'cols-2' : 'cols-1'
   const tabs = opts.tabs?.length
     ? `<div class="tlc-tabs" role="tablist">${opts.tabs
         .map((t) => `<button type="button" class="tlc-tab${t.active ? ' on' : ''}" role="tab" aria-selected="${t.active ? 'true' : 'false'}" data-tlc-tab="${esc(t.id)}">${esc(t.label)}</button>`)
@@ -30,7 +32,7 @@ export function topListCard(opts: {
     ? `<div class="tlc-search"><input${opts.searchId ? ` id="${esc(opts.searchId)}"` : ''} class="table-search" type="search" placeholder="${esc(opts.searchPlaceholder)}" autocomplete="off"></div>`
     : ''
   const maxBar = Math.max(1, ...opts.rows.map((r) => r.barValue ?? 0))
-  const header = `<div class="tlc-row tlc-head" style="grid-template-columns:${cols}">
+  const header = `<div class="tlc-row tlc-head ${colsClass}">
     <span>${esc(opts.labelHeader)}</span>
     ${opts.valueHeaders
       .map(
@@ -43,8 +45,8 @@ export function topListCard(opts: {
     ? opts.rows
         .map((r) => {
           const pct = maxBar > 0 ? Math.round(((r.barValue ?? 0) / maxBar) * 100) : 0
-          return `<div class="tlc-row" style="grid-template-columns:${cols}" ${r.attrs || ''}>
-            <span class="tlc-bar" style="width:${pct}%" aria-hidden="true"></span>
+          return `<div class="tlc-row ${colsClass}" data-stagger ${r.attrs || ''}>
+            <svg class="row-bar" aria-hidden="true"><rect width="${pct}%" height="100%" data-grow/></svg>
             <span class="tlc-label">${r.icon || ''}<span>${esc(r.label)}</span></span>
             ${opts.valueHeaders.map((h) => `<span class="tlc-value">${r.cells[h.key] ?? ''}</span>`).join('')}
           </div>`
@@ -52,7 +54,7 @@ export function topListCard(opts: {
         .join('')
     : `<div class="empty">${esc(opts.emptyTitle || 'No rows yet.')}</div>`
   const footer = `<div class="tlc-foot">${iconSvg(NAV_ICON_PATHS.search, { class: 'tool-ic' })}${opts.footerRight ? `<span class="tlc-foot-right">${opts.footerRight}</span>` : ''}</div>`
-  return `<div class="card tlc" style="padding-bottom:0">
+  return `<div class="card tlc tlc-flush">
     ${tabs}
     ${search}
     ${header}

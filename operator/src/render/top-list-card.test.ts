@@ -2,10 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { topListCard } from './top-list-card'
 
 describe('topListCard', () => {
-  it('uses "1fr 70px" for one value header and "1fr 70px 70px" for two (SPEC rule 5)', () => {
+  it('uses the cols-1 class for one value header and cols-2 for two (SPEC rule 5), never an inline style', () => {
     const one = topListCard({ labelHeader: 'Event', valueHeaders: [{ key: 'count', label: 'Count' }], rows: [] })
-    expect(one).toContain('grid-template-columns:1fr 70px')
-    expect(one).not.toContain('grid-template-columns:1fr 70px 70px')
+    expect(one).toContain('tlc-row tlc-head cols-1')
+    expect(one).not.toContain('cols-2')
+    expect(one).not.toContain('style="')
     const two = topListCard({
       labelHeader: 'Device',
       valueHeaders: [
@@ -14,7 +15,8 @@ describe('topListCard', () => {
       ],
       rows: []
     })
-    expect(two).toContain('grid-template-columns:1fr 70px 70px')
+    expect(two).toContain('tlc-row tlc-head cols-2')
+    expect(two).not.toContain('style="')
   })
 
   it('renders tabs, search, rows with a proportional bar, and a footer', () => {
@@ -36,9 +38,10 @@ describe('topListCard', () => {
     expect(html).toContain('data-tlc-tab="devices"')
     expect(html).toContain('id="devices-search"')
     expect(html).toContain('Tonys-MacBook-Pro')
-    expect(html).toContain('width:100%')
-    expect(html).toContain('width:50%')
+    expect(html).toContain('<rect width="100%" height="100%" data-grow/>')
+    expect(html).toContain('<rect width="50%" height="100%" data-grow/>')
     expect(html).toContain('extra')
+    expect(html).not.toContain('style="')
   })
 
   it('renders an empty state, never a fake row', () => {

@@ -11,9 +11,12 @@ import type { D1DatabaseLike } from '../d1'
 import type { OperatorStore } from '../store'
 import { missingCloudflareOverview, pullCloudflareOverview, type CloudflareOverview } from '../cloudflare'
 import { activeCloudflareAccount } from '../keys'
+import { looksLikeSecret } from '../redact'
 
 export interface Env {
   DB?: D1DatabaseLike
+  /** Workers Static Assets binding (plan D5, B8): fonts, flags and connector logos. */
+  ASSETS?: { fetch(request: Request): Promise<Response> }
   OPERATOR_INGEST_SECRET: string
   OPERATOR_PROMPT_KEY: string
   OPERATOR_SKILL_PRIVATE_KEY: string
@@ -62,6 +65,20 @@ export function auditMeta(ctx: AdminCtx): { requestId?: string; route: string } 
 
 export async function auditLog(ctx: AdminCtx, action: string, askId: string | null, detail: string): Promise<void> {
   await ctx.store.audit(crypto.randomUUID(), ctx.now, ctx.email, action, askId, detail, auditMeta(ctx))
+}
+
+/** Every audit `detail` string is free-standing text shown verbatim in the console: a group name, a
+ *  note, a member email or a device id interpolated into it must never carry a newline (log/UI
+ *  injection), a control character, or a secret-shaped substring a user or a seat could plant there.
+ *  Strips `\r`/`\n`/`\t` and other control characters to spaces, trims, caps length, and redacts the
+ *  whole value outright when `looksLikeSecret` matches any part of it (checked pre-strip, so a token
+ *  is not saved from detection by the characters around it being cleaned first). */
+export function safeAuditText(raw: string, max = 160): string {
+  if (looksLikeSecret(raw)) return '[redacted]'
+  return raw
+    .replace(/[\r\n\t\x00-\x1f\x7f]/g, ' ')
+    .trim()
+    .slice(0, max)
 }
 
 export function keyFlags(env: Env): {

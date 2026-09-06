@@ -22,6 +22,9 @@ describe('visitorsCard', () => {
     expect(html).toContain('>160<')
     expect(html).toContain('visitors-bars')
   })
+  it('never emits an inline style attribute (plan D6: no style-src unsafe-inline)', () => {
+    expect(visitorsCard({ title: 'x', value: 1, bars: [1] })).not.toContain('style="')
+  })
 })
 
 describe('liveCard', () => {
@@ -31,6 +34,9 @@ describe('liveCard', () => {
     expect(html).toContain('>22<')
     expect(html).toContain('Visitors online now')
     expect(html).toContain('class="live"')
+  })
+  it('never emits an inline style attribute', () => {
+    expect(liveCard({ title: 'x', value: 1, caption: 'y' })).not.toContain('style="')
   })
 })
 

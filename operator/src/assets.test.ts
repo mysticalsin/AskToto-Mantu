@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { handleRequest, type Env } from './index'
 import { memoryStore } from './store'
+import { binaryAssetResponse, isBinaryAssetPath, type AssetsBinding } from './assets'
 import {
   SPA_CSS,
   SPA_CSS_PATH,
@@ -46,17 +47,24 @@ describe('hashed SPA assets — fail loud if a stub ships', () => {
     expect(SPA_JS).not.toMatch(/self\.METIS_OPERATOR = self\.METIS_OPERATOR/)
     // Rail is 288px (reference Sidebar.tsx: w-72), not the old 185px Bklit-chrome width.
     expect(SPA_CSS).toContain('grid-template-columns: 288px 1fr')
-    expect(SPA_CSS).toContain('font: 12px/1.4')
+    // Plan metis-portal-wow.md 3.3: body copy is 13px/19.5px Inter, not the measured-Shoey
+    // 12px/1.4 system stack.
+    expect(SPA_CSS).toContain('font: 400 13px/19.5px')
     expect(SPA_CSS).toContain('shoey-world')
-    // Reference system font stacks, verbatim, no CDN font import (SPEC.md: "no @font-face,
-    // no CDN font at all").
+    // Self-hosted @font-face now ships (plan 3.3, D5) -- woff2 built by
+    // operator/scripts/build-assets.mjs into operator/public/fonts/, never a CDN link. The
+    // system stack stays as the fallback tail of --font-body / --font-mono either way.
     expect(SPA_CSS).toContain('ui-sans-serif, system-ui, sans-serif')
     expect(SPA_CSS).toContain('ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas')
+    expect(SPA_CSS).not.toContain('fonts.googleapis.com')
     expect(SPA_CSS).not.toContain('cdn.jsdelivr.net')
     expect(SPA_CSS).not.toContain('@import url(')
-    // Measured light tokens (SPEC.md #1) and the 6.4px card radius (SPEC rule 2).
-    expect(SPA_CSS).toContain('--def-100: #fafafa')
-    expect(SPA_CSS).toContain('--radius-card: 6.4px')
+    // Amaris-skinned tokens (plan 3.2) supersede the measured-Shoey light palette; --def-100 is
+    // now an alias of --bg, not a literal duplicate hex. Card radius is 14px (plan 3.4), not
+    // the measured-Shoey 6.4px.
+    expect(SPA_CSS).toContain('--bg: #f8f6fd')
+    expect(SPA_CSS).toContain('--def-100: var(--bg)')
+    expect(SPA_CSS).toContain('--radius-card: 14px')
     expect(SPA_JS_PATH).toMatch(/^\/assets\/operator-[0-9a-f]{12}\.js$/)
     expect(SPA_CSS_PATH).toMatch(/^\/assets\/operator-[0-9a-f]{12}\.css$/)
   })
@@ -85,7 +93,9 @@ describe('hashed SPA assets — fail loud if a stub ships', () => {
     const cssBody = await css.text()
     expect(cssBody.length).toBeGreaterThan(97)
     expect(cssBody).toContain('288px')
-    expect(cssBody).toContain('#E5E7EB')
+    // The map is a light choropleth matching the page canvas (plan 3.2, Tony 2026-09-06), not
+    // the measured-Shoey exact grey land value.
+    expect(cssBody).toContain('--map-land: #f0f0f0')
     expect(cssBody).not.toMatch(/cloudflareaccess/)
 
     const index = await handleRequest(new Request(`https://operator.test${SPA_INDEX_JS_PATH}`), env(), {}, {
@@ -134,5 +144,55 @@ describe('hashed SPA assets — fail loud if a stub ships', () => {
       expect(body, path).not.toContain('self.METIS_OPERATOR')
       expect(body, path).not.toMatch(/cdn-cgi\/access/)
     }
+  })
+})
+
+describe('binary assets (fonts, flags, logos) -- Workers Static Assets binding (plan D5, B8)', () => {
+  it('recognises the three binary asset prefixes and nothing else under /assets/', () => {
+    expect(isBinaryAssetPath('/assets/fonts/inter-variable-abc12345.woff2')).toBe(true)
+    expect(isBinaryAssetPath('/assets/flags/us.svg')).toBe(true)
+    expect(isBinaryAssetPath('/assets/logos/github.svg')).toBe(true)
+    expect(isBinaryAssetPath(SPA_JS_PATH)).toBe(false)
+    expect(isBinaryAssetPath(SPA_CSS_PATH)).toBe(false)
+    expect(isBinaryAssetPath('/assets/world.svg')).toBe(false)
+  })
+
+  function fakeAssets(files: Record<string, string>): AssetsBinding {
+    return {
+      async fetch(request: Request) {
+        const pathname = new URL(request.url).pathname
+        const body = files[pathname]
+        if (body === undefined) return new Response('not found', { status: 404 })
+        return new Response(body, { status: 200, headers: { 'content-type': 'image/svg+xml' } })
+      }
+    }
+  }
+
+  it('strips the /assets prefix before calling the binding, and stamps immutable cache-control plus the baseline security headers', async () => {
+    const assets = fakeAssets({ '/logos/github.svg': '<svg>github</svg>' })
+    const request = new Request('https://operator.test/assets/logos/github.svg')
+    const res = await binaryAssetResponse(request, { ASSETS: assets })
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('<svg>github</svg>')
+    expect(res.headers.get('content-type')).toBe('image/svg+xml')
+    expect(res.headers.get('cache-control')).toBe('public, max-age=31536000, immutable')
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(res.headers.get('referrer-policy')).toBe('no-referrer')
+    expect(res.headers.get('x-frame-options')).toBe('DENY')
+  })
+
+  it('404s an unknown name, still with the baseline security headers, never a cached response', async () => {
+    const assets = fakeAssets({ '/logos/github.svg': '<svg>github</svg>' })
+    const request = new Request('https://operator.test/assets/logos/not-a-real-kind.svg')
+    const res = await binaryAssetResponse(request, { ASSETS: assets })
+    expect(res.status).toBe(404)
+    expect(res.headers.get('cache-control')).toBe('no-store')
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff')
+  })
+
+  it('fails closed to 404 when the ASSETS binding itself is not configured (e.g. local dev without static assets)', async () => {
+    const request = new Request('https://operator.test/assets/fonts/inter-variable-abc12345.woff2')
+    const res = await binaryAssetResponse(request, {})
+    expect(res.status).toBe(404)
   })
 })

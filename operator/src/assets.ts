@@ -8,6 +8,7 @@ import {
   SPA_WORLD_SVG,
   SPA_WORLD_SVG_PATH
 } from './spa/manifest'
+import { SECURITY_HEADERS } from './http'
 
 /** Public chrome. Access must not wrap these. Worker must not 302 them. */
 
@@ -55,4 +56,47 @@ export function publicAssetResponse(pathname: string): Response | null {
     })
   }
   return null
+}
+
+/**
+ * Minimal shape of the Cloudflare Workers Static Assets binding this file needs. Kept local
+ * (same pattern as `D1DatabaseLike` in ./d1) rather than depending on `@cloudflare/workers-types`,
+ * which this project's tsconfig does not pull in (`types: []`).
+ */
+export interface AssetsBinding {
+  fetch(request: Request): Promise<Response>
+}
+
+const BINARY_ASSET_PREFIXES = ['/assets/fonts/', '/assets/flags/', '/assets/logos/']
+
+/** Fonts, flags and connector logos (plan D5, B8) -- served from the Workers Static Assets
+ *  binding, not a hand-written Response like the hashed JS/CSS above. */
+export function isBinaryAssetPath(pathname: string): boolean {
+  return BINARY_ASSET_PREFIXES.some((prefix) => pathname.startsWith(prefix))
+}
+
+/**
+ * operator/scripts/build-assets.mjs writes these files flat under
+ * operator/public/{fonts,flags,logos}/ (verified by `ls operator/public/fonts` etc. in the P0.1
+ * verification protocol), so the request's `/assets/` prefix is stripped before handing the
+ * request to the binding -- `env.ASSETS.fetch` resolves a path relative to the configured
+ * `directory` (`./public`), not the Worker's own `/assets/...` URL space. Immutable cache
+ * control plus the Worker's existing baseline security headers are applied to whatever the
+ * binding returns; an unmatched name gets the binding's own 404 straight through.
+ */
+export async function binaryAssetResponse(request: Request, env: { ASSETS?: AssetsBinding }): Promise<Response> {
+  const url = new URL(request.url)
+  if (!env.ASSETS) {
+    return new Response('not found', { status: 404, headers: { ...SECURITY_HEADERS, ...headers('text/plain; charset=utf-8', 'no-store') } })
+  }
+  const rewritten = new URL(url.pathname.replace(/^\/assets/, ''), url.origin)
+  const upstream = await env.ASSETS.fetch(new Request(rewritten, request))
+  if (upstream.status === 404) {
+    return new Response('not found', { status: 404, headers: { ...SECURITY_HEADERS, ...headers('text/plain; charset=utf-8', 'no-store') } })
+  }
+  const contentType = upstream.headers.get('content-type') || 'application/octet-stream'
+  return new Response(upstream.body, {
+    status: upstream.status,
+    headers: { ...SECURITY_HEADERS, ...headers(contentType, 'immutable') }
+  })
 }

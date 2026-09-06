@@ -31,7 +31,7 @@ import { pruneRetention } from './retention'
 import { looksLikeSecret } from './redact'
 import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './store'
 import { resolveTierAndEntitlements } from './tiers'
-import { isPublicAssetPath, publicAssetResponse } from './assets'
+import { binaryAssetResponse, isBinaryAssetPath, isPublicAssetPath, publicAssetResponse } from './assets'
 import { handleUse } from './use'
 import { OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import type { AdminCtx, Env, HandleOpts } from './routes/admin-ctx'
@@ -202,6 +202,7 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     const hmac = await verifyIngestHmac(request, bodyText, env.OPERATOR_INGEST_SECRET, now, (n) => store.takeNonce(n, now))
     if (!hmac.ok) return json({ ok: false, error: hmac.error, ...(hmac.code ? { code: hmac.code } : {}) }, hmac.status)
     const bucket = rateBucketFor(url.pathname)
+    if (isBinaryAssetPath(url.pathname)) return binaryAssetResponse(request, env)
     if (bucket && (await store.hitRate(`${bucket.key}:${hmac.deviceId}`, now, RATE_WINDOW_MS, bucket.max))) {
       return json({ ok: false, error: 'rate limited', retryAfterMs: RATE_WINDOW_MS }, 429)
     }
