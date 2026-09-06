@@ -61,11 +61,14 @@ const FIXTURE_PRIVATE_KEY_PEM = Buffer.from(
   'base64'
 ).toString('utf8')
 
+const LEASE_KEY = 'ATK-TEST1234'
+
 function signTestLease(overrides: Partial<Record<string, unknown>> = {}): string {
   const now = Date.now()
   const payload = {
-    licenseKey: 'ATK-TEST1234',
-    machineId: 'machine-1',
+    licenseKey: LEASE_KEY,
+    // Bound to this test profile's machine id (license.ts refuses a lease minted for another device).
+    machineId: getMachineId(),
     companyName: 'Acme Corp',
     seatCap: 5,
     issuedAt: now,
@@ -113,16 +116,32 @@ describe('license.ts — phone-home activation', () => {
   })
 
   describe('normalizeServerUrl', () => {
-    it('adds http:// to a scheme-less address so fetch does not reject it', () => {
+    it('adds a scheme to a scheme-less address so fetch does not reject it: http for loopback, https elsewhere', () => {
       expect(normalizeServerUrl('127.0.0.1:8420')).toBe('http://127.0.0.1:8420')
       expect(normalizeServerUrl('localhost:8420')).toBe('http://localhost:8420')
-      expect(normalizeServerUrl('192.168.1.50:8420')).toBe('http://192.168.1.50:8420')
-      expect(normalizeServerUrl('licenses.acme.com')).toBe('http://licenses.acme.com')
+      expect(normalizeServerUrl('192.168.1.50:8420')).toBe('https://192.168.1.50:8420')
+      expect(normalizeServerUrl('licenses.acme.com')).toBe('https://licenses.acme.com')
     })
     it('preserves an explicit scheme and strips trailing slashes and whitespace', () => {
       expect(normalizeServerUrl('https://license.acme.com/')).toBe('https://license.acme.com')
       expect(normalizeServerUrl('  http://127.0.0.1:8420//  ')).toBe('http://127.0.0.1:8420')
       expect(normalizeServerUrl('HTTPS://Acme.com')).toBe('HTTPS://Acme.com')
+    })
+    it('refuses plaintext http to a non-loopback host and any metadata / link-local address', () => {
+      expect(normalizeServerUrl('http://licenses.acme.com')).toBe('')
+      expect(normalizeServerUrl('http://192.168.1.50:8420')).toBe('')
+      expect(normalizeServerUrl('https://169.254.169.254/latest')).toBe('')
+      expect(normalizeServerUrl('169.254.10.7')).toBe('')
+      expect(normalizeServerUrl('https://metadata.google.internal')).toBe('')
+      expect(normalizeServerUrl('')).toBe('')
+    })
+    it('a refused server address reads as a network failure and never posts the key', async () => {
+      testSettings = baseSettings()
+      expect(await activateLicense('http://licenses.acme.com', 'KEY-123')).toEqual({ ok: false, error: 'network' })
+      testSettings = baseSettings({ licenseServerUrl: 'http://169.254.169.254', licenseKey: 'KEY-123', licenseValid: true })
+      expect(await heartbeat()).toEqual({ ok: false, error: 'network' })
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(testSettings.licenseValid).toBe(true)
     })
     it('activation normalizes a scheme-less URL before fetching AND persists the normalized form', async () => {
       testSettings = baseSettings()
@@ -335,6 +354,24 @@ describe('license.ts — phone-home activation', () => {
       expect(testSettings.licenseValid).toBe(false)
     })
 
+    it('a revoke also drops the cached lease, so the gate closes on the next check even while online', async () => {
+      testSettings = baseSettings({
+        licenseGateEnabled: true,
+        licenseValid: true,
+        licenseServerUrl: 'https://license.acme.test',
+        licenseKey: LEASE_KEY,
+        licenseLastValidatedAt: Date.now() - 1 * DAY,
+        licenseLease: signTestLease({ notAfter: Date.now() + 10 * DAY })
+      })
+      expect(checkLicenseGrace().allowed).toBe(true)
+      fetchMock.mockResolvedValue(jsonResponse({ ok: false, error: 'revoked' }))
+
+      await heartbeat()
+
+      expect(testSettings.licenseLease).toBe('')
+      expect(checkLicenseGrace()).toEqual({ allowed: false, reason: 'not_activated' })
+    })
+
     it('an explicit expired response also flips licenseValid to false', async () => {
       testSettings = baseSettings({
         licenseValid: true,
@@ -405,6 +442,7 @@ describe('license.ts — phone-home activation', () => {
       testSettings = baseSettings({
         licenseGateEnabled: true,
         licenseValid: false,
+        licenseKey: LEASE_KEY,
         licenseLease: signTestLease({ notAfter: Date.now() + 5 * DAY })
       })
 
@@ -415,6 +453,46 @@ describe('license.ts — phone-home activation', () => {
       expect(fetchMock).not.toHaveBeenCalled() // lease check is fully offline
     })
 
+    it('a lease minted for another machine, or for another key, is not this device to use', () => {
+      testSettings = baseSettings({
+        licenseGateEnabled: true,
+        licenseValid: false,
+        licenseKey: LEASE_KEY,
+        licenseLease: signTestLease({ machineId: 'someone-elses-laptop', notAfter: Date.now() + 5 * DAY })
+      })
+      expect(checkLicenseGrace()).toEqual({ allowed: false, reason: 'not_activated' })
+      expect(licenseDisplayStatus().leaseExpiresAt).toBeNull()
+
+      testSettings = baseSettings({
+        licenseGateEnabled: true,
+        licenseValid: false,
+        licenseKey: 'ATK-OTHERKEY',
+        licenseLease: signTestLease({ notAfter: Date.now() + 5 * DAY })
+      })
+      expect(checkLicenseGrace()).toEqual({ allowed: false, reason: 'not_activated' })
+    })
+
+    it('a clock rolled back behind the last server contact or the lease issue time cannot revive a lease', () => {
+      const future = Date.now() + 3 * DAY
+      testSettings = baseSettings({
+        licenseGateEnabled: true,
+        licenseValid: true,
+        licenseKey: LEASE_KEY,
+        licenseLastValidatedAt: future, // stamped in the future: the clock went backwards
+        licenseLease: signTestLease({ notAfter: Date.now() + 5 * DAY })
+      })
+      // Falls through to the wall-clock branch, whose own rollback guard blocks and re-checks.
+      expect(checkLicenseGrace()).toEqual({ allowed: false, reason: 'expired_grace' })
+
+      testSettings = baseSettings({
+        licenseGateEnabled: true,
+        licenseValid: false,
+        licenseKey: LEASE_KEY,
+        licenseLease: signTestLease({ issuedAt: future, notAfter: future + 14 * DAY })
+      })
+      expect(checkLicenseGrace()).toEqual({ allowed: false, reason: 'not_activated' })
+    })
+
     it('allows via the lease even when the wall-clock grace/hard-cap would otherwise have expired', () => {
       // The exact scenario the lease exists for: a license that phoned home once, long enough ago
       // that the 30-day wall-clock hard cap has passed, but whose signed lease is still inside its
@@ -422,6 +500,7 @@ describe('license.ts — phone-home activation', () => {
       testSettings = baseSettings({
         licenseGateEnabled: true,
         licenseValid: true,
+        licenseKey: LEASE_KEY,
         licenseLastValidatedAt: Date.now() - 45 * DAY, // past HARD_CAP_MS
         licenseLease: signTestLease({ notAfter: Date.now() + 2 * DAY })
       })
@@ -436,6 +515,7 @@ describe('license.ts — phone-home activation', () => {
       testSettings = baseSettings({
         licenseGateEnabled: true,
         licenseValid: true,
+        licenseKey: LEASE_KEY,
         licenseLastValidatedAt: Date.now() - 1 * DAY, // inside soft grace
         licenseLease: signTestLease({ notAfter: Date.now() - 1000 }) // already expired
       })
@@ -572,6 +652,7 @@ describe('license.ts — phone-home activation', () => {
     it('reports leaseExpiresAt from a valid lease, independent of licenseGateEnabled', () => {
       testSettings = baseSettings({
         licenseGateEnabled: false, // OFF — display status still works; it is not an enforcement check
+        licenseKey: LEASE_KEY,
         licenseLease: signTestLease({ notAfter: Date.now() + 3 * DAY })
       })
 
@@ -623,7 +704,7 @@ describe('license.ts — phone-home activation', () => {
 
       await fetchLicenseConfig('license.acme.test')
 
-      expect(fetchMock).toHaveBeenCalledWith('http://license.acme.test/license/config', expect.anything())
+      expect(fetchMock).toHaveBeenCalledWith('https://license.acme.test/license/config', expect.anything())
     })
 
     it('a network failure or malformed response reads as error:"network", never throws', async () => {
