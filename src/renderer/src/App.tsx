@@ -2351,8 +2351,17 @@ export function App(): JSX.Element {
     if (!collapsed && reviewDirtyRef.current && !window.confirm('You have unsaved changes to this recap. Discard them?')) {
       return
     }
+    // Chevron Collapse with Settings open must leave Settings the same way Done/X do.
+    // setView is startTransition; use setViewRaw so overlayShowsSettingsSheet clears this frame
+    // and windowMode(bar) hugs immediately — otherwise the gray settings slab stays under the Bar.
+    if (!collapsed && view === 'settings') {
+      setViewRaw('answer')
+      setCollapsed(true)
+      void window.toto.windowMode('bar')
+      return
+    }
     setCollapsed((c) => !c)
-  }, [collapsed])
+  }, [collapsed, view])
 
   // recapGen.run()'s own state update lands via React's startTransition (state.ts run()), so for one
   // render it's possible for recapGenTarget to already point at a NEW file while recapGen.answer still

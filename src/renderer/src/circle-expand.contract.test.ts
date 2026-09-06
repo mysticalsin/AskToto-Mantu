@@ -121,3 +121,13 @@ describe('circle-expand: click Expand Métis must not snap back', () => {
     expect(css).not.toMatch(/\.overlay-orb-diagram__jakub \{[\s\S]*?radial-gradient/)
   })
 })
+
+describe('Settings chevron collapse clears gray slab', () => {
+  it('onTogglePanel leaves settings with setViewRaw + windowMode(bar)', () => {
+    const app = readFileSync(join(__dirname, './App.tsx'), 'utf8')
+    expect(app).toMatch(/if \(!collapsed && view === 'settings'\)/)
+    expect(app).toMatch(/setViewRaw\('answer'\)/)
+    expect(app).toMatch(/window\.toto\.windowMode\('bar'\)/)
+    expect(readFileSync(join(__dirname, './components/Bar.tsx'), 'utf8')).toMatch(/data-bar-chevron/)
+  })
+})
