@@ -26,7 +26,8 @@ export function JarvisOrbButton({
   title,
   ariaLabel,
   enableDrag = false,
-  hugWidth = false
+  hugWidth = false,
+  preview = false
 }: {
   onActivate: () => void
   orbMood?: OrbMood
@@ -35,6 +36,8 @@ export function JarvisOrbButton({
   ariaLabel: string
   enableDrag?: boolean
   hugWidth?: boolean
+  /** Settings card: same ThinkingOrb as Bar, not a button, not the 22px CSS disc. */
+  preview?: boolean
 }): JSX.Element {
   const hostRef = useRef<HTMLSpanElement>(null)
   const dragMovedRef = useRef(false)
@@ -53,6 +56,41 @@ export function JarvisOrbButton({
     if (!canvas) return
     paintOrbFirstFrame(canvas, orbState, BAR_PILL_SIZE_PX, true, BAR_PILL_BACKING_DPR)
   }, [orbState])
+
+  const orb = (
+    <>
+      <span ref={hostRef} className="aw-orb__host" aria-hidden="true">
+        <ThinkingOrb
+          state={orbState}
+          size={BAR_PILL_SIZE_PX}
+          theme={BAR_ORB_THEME}
+          speed={BAR_ORB_SPEED}
+          className="aw-orb__canvas"
+          aria-hidden="true"
+          aria-label=""
+        />
+      </span>
+      {showRec ? <span className="aw-orb__rec rec-dot" data-orb-rec aria-hidden="true" /> : null}
+    </>
+  )
+
+  if (preview) {
+    return (
+      <span
+        className="aw-orb no-drag"
+        data-bar-pill-orb
+        data-orb-preview
+        data-orb-diagram-engine="thinking-orbs"
+        data-orb-mood={orbMood}
+        data-orb-state={orbState}
+        data-orb-visible={BAR_PILL_VISIBLE_PX}
+        data-orb-backing={BAR_PILL_BACKING_PX}
+        aria-hidden="true"
+      >
+        {orb}
+      </span>
+    )
+  }
 
   return (
     <button
@@ -76,18 +114,7 @@ export function JarvisOrbButton({
       }}
       className="aw-orb no-drag focus-ring"
     >
-      <span ref={hostRef} className="aw-orb__host" aria-hidden="true">
-        <ThinkingOrb
-          state={orbState}
-          size={BAR_PILL_SIZE_PX}
-          theme={BAR_ORB_THEME}
-          speed={BAR_ORB_SPEED}
-          className="aw-orb__canvas"
-          aria-hidden="true"
-          aria-label=""
-        />
-      </span>
-      {showRec ? <span className="aw-orb__rec rec-dot" data-orb-rec aria-hidden="true" /> : null}
+      {orb}
     </button>
   )
 }

@@ -50,12 +50,17 @@ import {
 } from '@shared/overlay-orb'
 import { resolveOrbMood } from './lib/bar-pill-orb'
 import {
+  CIRCLE_REST_COLLAPSE_MS,
   OVERLAY_PARK_FALLBACK_MS,
+  circleRestSpringAfterCollapse,
+  circleRestSpringAfterExpand,
+  circleRestSpringClassName,
   overlayShowPeek,
   overlaySpringAfterHide,
   overlaySpringAfterReveal,
   overlaySpringClassName,
   prefersOverlayReducedMotion,
+  type CircleRestSpring,
   type OverlaySpring
 } from './lib/overlay-motion'
 import { useListen, playListenChime } from './lib/listen'
@@ -604,6 +609,7 @@ export function App(): JSX.Element {
   // Hide/island idle: park the rest rect (do not anchorTop to islandSafeTop — that was the 103px stub).
   const overlayRevealed = isOverlayRevealed(autoHide)
   const [overlaySpring, setOverlaySpring] = useState<OverlaySpring>('rest')
+  const [circleRestSpring, setCircleRestSpring] = useState<CircleRestSpring>('idle')
   // Hide pad / island peek only when fully parked. Bar stays mounted during the spring (in / out).
   // Hide keeps Bar mounted (park is window size only). Island may swap to OverlayPeek.
   const overlayPeeked = overlayShowPeek(
@@ -1107,16 +1113,32 @@ export function App(): JSX.Element {
 
   // Expand the floating control mini-pill back to the full widget. Hotkeys/Escape call this before
   // acting so a request can never fire into an unmounted Bar (invisible work / wasted spend).
+  const commitCircleRestMinimize = useCallback((): void => {
+    setView((v) => (v === 'settings' ? 'answer' : v))
+    // Shrink the 41 rest window first so the orb never lands in a 220×tall slab.
+    void window.toto.minimize(true).then(() => {
+      setMinimized(true)
+      setCircleRestSpring('idle')
+    })
+  }, [])
   const unminimize = useCallback((): void => {
     // Circle click expands the bar only. Never reopen a Settings-tall sheet underneath.
+    // Grow the window first, then mount Ask — avoids a clipped Bar in the 41 rest hole.
     setView((v) => (v === 'settings' ? 'answer' : v))
-    setMinimized(false)
-    void window.toto.minimize(false)
+    setCircleRestSpring(circleRestSpringAfterExpand(prefersOverlayReducedMotion()))
+    void window.toto.minimize(false).then(() => {
+      setMinimized(false)
+    })
     if (autoHideSetting) {
       dispatchAutoHide({ type: 'collapse-now' })
       setOverlaySpring('rest')
     }
   }, [autoHideSetting])
+  useEffect(() => {
+    if (circleRestSpring !== 'collapse') return
+    const t = window.setTimeout(() => commitCircleRestMinimize(), CIRCLE_REST_COLLAPSE_MS + 80)
+    return () => window.clearTimeout(t)
+  }, [circleRestSpring, commitCircleRestMinimize])
 
   const askScreen = useCallback(
     async (
@@ -2301,10 +2323,14 @@ export function App(): JSX.Element {
     if (reviewDirtyRef.current && !window.confirm('You have unsaved changes to this recap. Discard them?')) {
       return
     }
+    const next = circleRestSpringAfterCollapse(prefersOverlayReducedMotion())
+    if (next === 'idle') {
+      commitCircleRestMinimize()
+      return
+    }
     setView((v) => (v === 'settings' ? 'answer' : v))
-    setMinimized(true)
-    void window.toto.minimize(true) // collapse to the Circle pill (Bar only)
-  }, [overlayLayout])
+    setCircleRestSpring('collapse')
+  }, [overlayLayout, commitCircleRestMinimize])
   // The bar's eye button is the visible/invisible toggle: whether the Métis window shows up on a
   // screen you share or record (contentProtection). Hidden by default — the invisible-copilot identity.
   // This is the intuitive meaning of an eye icon and what users reach for to "make it visible / hide it".
@@ -3332,16 +3358,23 @@ export function App(): JSX.Element {
         />
       ) : (
         <>
-          {/* overlay-spring: one surface, compositor-only. Peek pad mounts only at rest after park. */}
+          {/* Hide/Island: overlay-spring. Bar Circle/Jarvis: circle-rest-spring only. */}
           <div
-            className={overlayIdle ? overlaySpringClassName(overlaySpring) : 'contents'}
+            className={
+              overlayIdle ? overlaySpringClassName(overlaySpring) : circleRestSpringClassName(circleRestSpring)
+            }
             onAnimationEnd={(e) => {
               if (e.target !== e.currentTarget) return
-              if (overlaySpring === 'in') setOverlaySpring('settled')
-              if (overlaySpring === 'out' && !overlayRevealedRef.current) {
-                void window.toto.parkAfterHide()
-                setOverlaySpring('rest')
+              if (overlayIdle) {
+                if (overlaySpring === 'in') setOverlaySpring('settled')
+                if (overlaySpring === 'out' && !overlayRevealedRef.current) {
+                  void window.toto.parkAfterHide()
+                  setOverlaySpring('rest')
+                }
+                return
               }
+              if (circleRestSpring === 'expand') setCircleRestSpring('idle')
+              if (circleRestSpring === 'collapse') commitCircleRestMinimize()
             }}
           >
           <Bar

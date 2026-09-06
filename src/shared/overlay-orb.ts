@@ -23,14 +23,12 @@ export const OVERLAY_ORB_COPY: Record<OverlayOrbStyle, { title: string; desc: st
   }
 }
 
-/** Settings cards. Circle is default (thinking-orbs). Jarvis is the particle sphere. */
-export const OVERLAY_ORB_PICKER_CARDS = ['jakub', 'obsidian', 'bar'] as const
+/** Settings cards. Circle is default (thinking-orbs). Jarvis is the particle sphere. No Full bar. */
+export const OVERLAY_ORB_PICKER_CARDS = ['jakub', 'obsidian'] as const
 export type OverlayOrbPickerCard = (typeof OVERLAY_ORB_PICKER_CARDS)[number]
 
 export function overlayOrbPickerSelected(style: OverlayOrbStyle): OverlayOrbPickerCard {
-  return (OVERLAY_ORB_PICKER_CARDS as readonly string[]).includes(style)
-    ? (style as OverlayOrbPickerCard)
-    : DEFAULT_OVERLAY_ORB_STYLE
+  return style === 'obsidian' ? 'obsidian' : DEFAULT_OVERLAY_ORB_STYLE
 }
 
 export function isOverlayOrbStyle(v: unknown): v is OverlayOrbStyle {

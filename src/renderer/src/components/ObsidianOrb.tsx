@@ -14,7 +14,8 @@ export function ObsidianOrb({
   enableDrag = false,
   hugWidth = false,
   orbMood = 'idle',
-  listening = false
+  listening = false,
+  preview = false
 }: {
   onActivate: () => void
   title: string
@@ -23,6 +24,8 @@ export function ObsidianOrb({
   hugWidth?: boolean
   orbMood?: OrbMood
   listening?: boolean
+  /** Settings card: same particle orb as Bar, not a button. */
+  preview?: boolean
 }): JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const handleRef = useRef<JarvisOrbHandle | null>(null)
@@ -56,6 +59,35 @@ export function ObsidianOrb({
     handleRef.current?.setState(orbState)
   }, [orbState])
 
+  const orb = (
+    <span className="obsidian-orb" aria-hidden="true">
+      <canvas
+        ref={canvasRef}
+        className="obsidian-orb__canvas"
+        width={BAR_PILL_VISIBLE_PX * 2}
+        height={BAR_PILL_VISIBLE_PX * 2}
+      />
+    </span>
+  )
+
+  if (preview) {
+    return (
+      <span
+        className="aw-orb aw-orb--obsidian no-drag"
+        data-bar-pill-orb
+        data-orb-preview
+        data-orb-style="obsidian"
+        data-orb-engine="jarvis-particles"
+        data-orb-diagram-engine="jarvis-particles"
+        data-orb-state={orbState}
+        data-orb-visible={BAR_PILL_VISIBLE_PX}
+        aria-hidden="true"
+      >
+        {orb}
+      </span>
+    )
+  }
+
   return (
     <button
       {...(enableDrag ? drag : {})}
@@ -77,14 +109,7 @@ export function ObsidianOrb({
       }}
       className="aw-orb aw-orb--obsidian no-drag focus-ring"
     >
-      <span className="obsidian-orb" aria-hidden="true">
-        <canvas
-          ref={canvasRef}
-          className="obsidian-orb__canvas"
-          width={BAR_PILL_VISIBLE_PX * 2}
-          height={BAR_PILL_VISIBLE_PX * 2}
-        />
-      </span>
+      {orb}
     </button>
   )
 }

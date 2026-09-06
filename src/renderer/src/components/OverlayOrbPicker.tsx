@@ -1,4 +1,3 @@
-import { useEffect, useRef } from 'react'
 import {
   OVERLAY_ORB_COPY,
   OVERLAY_ORB_PICKER_CARDS,
@@ -7,51 +6,20 @@ import {
   type OverlayOrbPickerCard,
   type OverlayOrbStyle
 } from '@shared/overlay-orb'
-import { createJarvisOrb } from '../lib/jarvis-orb'
+import { JarvisOrbButton } from './JarvisOrbButton'
+import { ObsidianOrb } from './ObsidianOrb'
 
 function OrbDiagram({ id }: { id: OverlayOrbPickerCard }): JSX.Element {
-  const canvasRef = useRef<HTMLCanvasElement>(null)
-
-  useEffect(() => {
-    if (id !== 'obsidian') return
-    const canvas = canvasRef.current
-    if (!canvas) return
-    const reduced =
-      typeof window !== 'undefined' &&
-      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
-    const handle = createJarvisOrb(canvas, { reducedMotion: reduced, state: 'idle' })
-    return () => handle?.dispose()
-  }, [id])
-
   return (
     <div
       className={`overlay-orb-diagram overlay-orb-diagram--${id}`}
       data-orb-diagram={id}
       aria-hidden="true"
     >
-      <span className="overlay-orb-diagram__desktop" />
-      {id === 'bar' ? <span className="overlay-orb-diagram__bar" /> : null}
       {id === 'jakub' ? (
-        <span className="overlay-orb-diagram__jakub" data-orb-diagram-engine="thinking-orbs" />
+        <JarvisOrbButton preview onActivate={() => undefined} title="" ariaLabel="" />
       ) : (
-        <span
-          className={
-            'overlay-orb-diagram__jarvis' + (id === 'obsidian' ? ' overlay-orb-diagram__jarvis--live' : '')
-          }
-          data-orb-diagram-engine={id === 'obsidian' ? 'jarvis-particles' : undefined}
-        >
-          {id === 'obsidian' ? (
-            <canvas ref={canvasRef} className="overlay-orb-diagram__canvas" width={82} height={82} />
-          ) : (
-            <>
-              <span className="overlay-orb-diagram__dot overlay-orb-diagram__dot--a" />
-              <span className="overlay-orb-diagram__dot overlay-orb-diagram__dot--b" />
-              <span className="overlay-orb-diagram__dot overlay-orb-diagram__dot--c" />
-              <span className="overlay-orb-diagram__link overlay-orb-diagram__link--a" />
-              <span className="overlay-orb-diagram__link overlay-orb-diagram__link--b" />
-            </>
-          )}
-        </span>
+        <ObsidianOrb preview onActivate={() => undefined} title="" ariaLabel="" />
       )}
     </div>
   )
@@ -68,7 +36,7 @@ export function OverlayOrbPicker({
 }): JSX.Element {
   const selected = overlayOrbPickerSelected(parseOverlayOrbStyle(value))
   return (
-    <div role="radiogroup" aria-label="Bar rest" className="overlay-chrome-grid">
+    <div role="radiogroup" aria-label="Bar rest" className="overlay-chrome-grid overlay-chrome-grid--two">
       {OVERLAY_ORB_PICKER_CARDS.map((id) => {
         const on = selected === id
         return (
