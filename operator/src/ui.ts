@@ -33,7 +33,17 @@ const EXTRA_CSS = `
   display: grid; grid-template-columns: 56px minmax(0, 1.1fr) minmax(0, 1.1fr) 110px 88px 72px;
   gap: 8px; align-items: center; padding: 8px 4px; border-bottom: 1px solid var(--hair);
 }
+.people-row.head {
+  font: 10px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--ink3); padding-bottom: 6px;
+}
 .people-row .who { font-weight: 650; color: var(--ink); font-size: 12px; word-break: break-word; }
+.rule {
+  padding: 10px 0; border-bottom: 1px solid var(--hair);
+  background: transparent; color: var(--ink);
+}
+.rule h3 { margin: 0 0 4px; font-size: 13px; font-weight: 650; color: var(--ink); }
+.rule p { margin: 0; color: var(--ink2); font-size: 12px; }
 .activity-feed .rt-row { padding: 6px 2px; }
 .rt-live { display: grid; grid-template-columns: minmax(140px, 0.7fr) minmax(140px, 0.7fr) minmax(0, 1.6fr); gap: 12px; align-items: start; }
 .rt-live .kpi .n { font-size: 44px; margin-top: 8px; letter-spacing: -0.05em; }
@@ -226,7 +236,11 @@ function renderPeopleStrip(rows: ProfileRow[], liveCount: number): string {
   const hint = liveCount
     ? `${liveCount} live · heartbeat &lt; 2 min`
     : 'No heartbeat in the last two minutes. Showing last-seen seats with city.'
-  return `<div class="sub muted" style="padding-bottom:8px">${hint}</div>${body}`
+  return `<div class="sub muted" style="padding-bottom:8px">${hint}</div>
+    <div class="people-row head" data-people-head>
+      <span></span><span>Computer</span><span>SSO</span><span>City</span><span>Device</span><span>License</span>
+    </div>
+    ${body}`
 }
 
 function geoBar(count: number, max: number): string {
@@ -755,7 +769,7 @@ svg path { vector-effect: non-scaling-stroke; }
 #spark-defs { position: absolute; width: 0; height: 0; }
 </style>
 </head>
-<body>
+<body data-theme="light">
 <svg id="spark-defs"><defs>
   <linearGradient id="spark-fill" x1="0" x2="0" y1="0" y2="1">
     <stop offset="0" stop-color="#e4e4e7" stop-opacity="0.28"/>
@@ -1086,6 +1100,7 @@ const themeBtn = document.getElementById('theme-btn')
 function applyTheme(v) {
   const theme = v === 'light' ? 'light' : 'dark'
   document.documentElement.setAttribute('data-theme', theme)
+  document.body.setAttribute('data-theme', theme)
 }
 try { applyTheme(localStorage.getItem('metis-operator-theme') || 'light') } catch (e) { applyTheme('light') }
 if (themeBtn) themeBtn.addEventListener('click', () => {
