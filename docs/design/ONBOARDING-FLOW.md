@@ -11,7 +11,7 @@ mac-show: Totos-Mac 11:52–11:53pm ET
 
 Do not merge. Do not pack. Version stays 1.8.3. READY TO MERGE stays no.
 
-Keep: KineticGrid after the lady beat. No Skip. No starfield. Opaque exclusive `#3A0B6B`. Hide 8×2 leftover out.
+Keep: KineticGrid after the lady beat. No Skip. No starfield. Opaque exclusive `#05010A` hero hold (never `#3A0B6B` first paint). Hide 8×2 leftover out.
 
 ## 1. Your setup loading orb (HARD)
 

@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest'
 import { OVERLAY_LEAVE_PARK_MS, decideCursorWatch, overlayWatchStep, pointInRect } from './cursor-watch'
 import {
-  EXCLUSIVE_ONBOARDING_BACKGROUND,
+  MANTU_BRAND_PURPLE,
   OVERLAY_HIDE_PARK,
   OVERLAY_TRANSPARENT_BACKGROUND,
   TEAMS_MEETING_CHROME_Y,
@@ -141,7 +141,7 @@ describe('Ultron live — 8×2 at y=39 with opaque purple is FAIL', () => {
       width: 8,
       height: 2,
       y: 39,
-      background: EXCLUSIVE_ONBOARDING_BACKGROUND,
+      background: MANTU_BRAND_PURPLE,
       opacity: 1
     })
     expect(isOpaqueMantuPurple(ULTRON_PURPLE_HAIRLINE.background)).toBe(true)

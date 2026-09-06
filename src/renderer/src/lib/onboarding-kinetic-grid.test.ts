@@ -168,14 +168,15 @@ describe('haltAllOnboardingAudio still before Ready and Replay', () => {
   })
 })
 
-describe('exclusive window stays opaque Mantu while !onboardingDone', () => {
-  it('live chrome is #3A0B6B and not transparent', () => {
+describe('exclusive window stays opaque hero hold while !onboardingDone', () => {
+  it('live chrome is #05010A and not purple wash', () => {
     expect(overlayWindowChrome(true)).toEqual({
       transparent: false,
-      backgroundColor: '#3A0B6B',
+      backgroundColor: '#05010A',
       fullscreenable: true,
       roundedCorners: false
     })
+    expect(overlayWindowChrome(true).backgroundColor).not.toBe('#3A0B6B')
     expect(overlayWindowChrome(false).transparent).toBe(true)
   })
 })

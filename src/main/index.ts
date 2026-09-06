@@ -188,6 +188,7 @@ import {
   SETTINGS_WINDOW_MIN,
   settingsContentHeight
 } from '@shared/settings-bounds'
+import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
 import {
   CURSOR_WATCH_INTERVAL_MS,
   OVERLAY_LEAVE_PARK_MS,
@@ -611,7 +612,8 @@ if (!app.isPackaged && !process.env.ASKTOTO_USERDATA) {
 // Unpackaged Electron.app still ships CFBundleName "Electron". setName changes
 // app.getName() / About / some menus to Métis. The macOS menu-bar process name
 // stays Electron unless a wrapper .app overrides Info.plist — do not invent
-// "Metis Tip". Packaged Metis.app already uses CFBundleDisplayName Métis.
+// a second product name for unpackaged builds. Packaged Metis.app already
+// uses CFBundleDisplayName Métis.
 if (!app.isPackaged && !isCaheEdition()) {
   try {
     app.setName('Métis')
@@ -1680,11 +1682,24 @@ function leaveExclusiveOsFullscreen(w: BrowserWindow): void {
   }
 }
 
+/** Seal Goldberg in the live renderer before exclusive destroy / park. */
+function lockOnboardingAudioInRenderer(w: BrowserWindow | null): void {
+  if (!w || w.isDestroyed()) return
+  try {
+    void w.webContents.executeJavaScript(
+      `window.dispatchEvent(new Event(${JSON.stringify(ONBOARDING_AUDIO_LOCK_EVENT)}))`
+    )
+  } catch {
+    /* headless / already gone */
+  }
+}
+
 /** Destroy the current overlay and build one whose constructor chrome matches onboardingExclusiveLive(). */
 function recreateOverlayWindow(): void {
   const dying = win
   win = null
   if (dying && !dying.isDestroyed()) {
+    lockOnboardingAudioInRenderer(dying)
     leaveExclusiveOsFullscreen(dying)
     try {
       dying.destroy()
@@ -1695,7 +1710,7 @@ function recreateOverlayWindow(): void {
   createWindow()
 }
 
-/** Exclusive purple, Settings glass, or transparent rest. Hide park is opacity 0. */
+/** Exclusive hero hold, Settings glass, or transparent rest. Hide park is opacity 0. */
 function applyOverlaySurfaceChrome(): void {
   if (!win || win.isDestroyed()) return
   if (onboardingExclusiveLive()) {
@@ -1792,6 +1807,7 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
 /** After onboardingDone only: leave exclusive fullscreen and park hide/island peek (never 880×816). */
 function exitExclusiveOnboardingStage(): void {
   if (!win || win.isDestroyed()) return
+  lockOnboardingAudioInRenderer(win)
   leaveExclusiveOsFullscreen(win)
   if (!overlayWindowTransparent) {
     recreateOverlayWindow()
@@ -1906,6 +1922,9 @@ function createWindow(): void {
     // Hide park is at bounds.y (0 on primary). Without this, darwin clamps
     // setBounds into workArea.y≈39 — the visible purple 8×2 hairline.
     enableLargerThanScreen: true,
+    // Exclusive: hidden until ready-to-show so constructor chrome is never the first
+    // visible frame. Hero-matching hold (`#05010A`) is the window color if paint lags.
+    show: !onboardingLive,
     backgroundColor: chrome.backgroundColor,
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
@@ -2073,6 +2092,18 @@ function createWindow(): void {
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }
+  const overlay = win
+  const revealExclusiveWhenPainted = (): void => {
+    if (win !== overlay || overlay.isDestroyed() || overlay.isVisible()) return
+    if (!onboardingExclusiveLive()) return
+    try {
+      overlay.showInactive()
+    } catch {
+      /* headless */
+    }
+  }
+  overlay.webContents.once('ready-to-show', revealExclusiveWhenPainted)
+  overlay.webContents.once('did-finish-load', revealExclusiveWhenPainted)
   startOverlayCursorWatch()
   applyHideClickThrough()
   applyOverlaySurfaceChrome()
@@ -3746,7 +3777,10 @@ function registerIpc(): void {
     const next = setSettings(p)
     auditLog('settings.changed', { keys: Object.keys(p) })
     // Exclusive stage exits only here: onboardingDone false→true. Replay (true→false) re-enters it.
-    if (!cur.onboardingDone && next.onboardingDone) exitExclusiveOnboardingStage()
+    if (!cur.onboardingDone && next.onboardingDone) {
+      lockOnboardingAudioInRenderer(win)
+      exitExclusiveOnboardingStage()
+    }
     else if (cur.onboardingDone && !next.onboardingDone && win && !win.isDestroyed()) {
       applyExclusiveOnboardingStage(win)
     }

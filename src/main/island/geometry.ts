@@ -286,11 +286,14 @@ export function exclusiveOnboardingBounds(bounds: Rect, workArea: Rect): Rect {
 
 /**
  * Totos-Mac 1.8.3 tip 044c0f1: `transparent: true` + `setSimpleFullScreen(true)` composites as
- * a 3600×2338 RGBA(0,0,0,0) void. Exclusive onboarding is opaque Mantu purple. After
- * `onboardingDone` the overlay is transparent again. `transparent` is constructor-only
- * (Electron 39) — enter/exit recreate the window when chrome no longer matches.
+ * a 3600×2338 RGBA(0,0,0,0) void. Exclusive onboarding stays opaque so simple-fullscreen is
+ * not a black void. First visible frame must match the lady+universe hero (`#05010A`), never
+ * Mantu purple wash. After `onboardingDone` the overlay is transparent again. `transparent`
+ * is constructor-only (Electron 39) — enter/exit recreate the window when chrome no longer matches.
  */
-export const EXCLUSIVE_ONBOARDING_BACKGROUND = '#3A0B6B'
+export const MANTU_BRAND_PURPLE = '#3A0B6B'
+/** Hero/universe hold. Same ink as KineticGrid `bg`. Never `#3A0B6B`. */
+export const EXCLUSIVE_ONBOARDING_BACKGROUND = '#05010A'
 export const OVERLAY_TRANSPARENT_BACKGROUND = '#00000000'
 
 export interface OverlayWindowChrome {
@@ -359,7 +362,7 @@ export const ULTRON_PURPLE_HAIRLINE = {
   width: OVERLAY_HIDE_PARK.width,
   height: OVERLAY_HIDE_PARK.height,
   y: 39,
-  background: EXCLUSIVE_ONBOARDING_BACKGROUND,
+  background: MANTU_BRAND_PURPLE,
   opacity: 1
 } as const
 
@@ -373,7 +376,12 @@ export function isTransparentOverlayBackground(color?: string): boolean {
 }
 
 export function isOpaqueMantuPurple(color?: string): boolean {
-  return (color ?? '').trim().toLowerCase() === EXCLUSIVE_ONBOARDING_BACKGROUND.toLowerCase()
+  return (color ?? '').trim().toLowerCase() === MANTU_BRAND_PURPLE.toLowerCase()
+}
+
+/** Exclusive first paint must never be brand purple, even for one frame. */
+export function isExclusivePurpleFlash(color?: string): boolean {
+  return isOpaqueMantuPurple(color)
 }
 
 /**
