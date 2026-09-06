@@ -109,6 +109,31 @@ export function jarvisCameraZForHost(hostPx: number): number {
   return JARVIS_CAMERA_Z
 }
 
+/** Vertical half-height of the 45° view at z=0. Sphere radius must meet this to fill. */
+export function jarvisVisibleHalfHeight(cameraZ: number, fovDeg = 45): number {
+  return cameraZ * Math.tan((fovDeg * Math.PI) / 360)
+}
+
+/**
+ * Idle 28 already fills at pill Z. Thinking's fullscreen 16 would sit as a marble
+ * in the 41 clip. Keep idle/thinking a dense full sphere on the pill.
+ */
+export function jarvisStateRadiusForHost(state: JarvisOrbState, hostPx: number): number {
+  const base = JARVIS_STATE_TARGET[state].radius
+  if (hostPx <= JARVIS_PILL_HOST_PX) return Math.max(26, base)
+  return base
+}
+
+/** True when the cloud diameter covers the host (not a corner marble). */
+export function jarvisCloudFillsHost(input: {
+  hostPx: number
+  cameraZ: number
+  radius: number
+}): boolean {
+  if (input.hostPx <= 0 || input.cameraZ <= 0 || input.radius <= 0) return false
+  return input.radius >= jarvisVisibleHalfHeight(input.cameraZ) * 0.92
+}
+
 export function jarvisSizeAttenuationForHost(hostPx: number): boolean {
   return hostPx > 96
 }
@@ -136,16 +161,30 @@ export function jarvisLineStepForCount(count: number): number {
   return Math.max(1, Math.floor(count / 600))
 }
 
+function cssBoxSize(el: { clientWidth?: number; clientHeight?: number } | null | undefined): number {
+  const w = el?.clientWidth ?? 0
+  const h = el?.clientHeight ?? 0
+  if (w > 0 && h > 0) return Math.max(1, Math.round(Math.min(w, h)))
+  return 0
+}
+
 /**
  * CSS host, not the 2x backing attribute. width=82 on a 41 pill must stay 41.
+ * Prefer the 41 `.obsidian-orb` parent. A 0×0 pre-layout canvas or a 64
+ * `.aw-orb canvas` rule must not size the WebGL viewport — that packs the
+ * sphere into the bottom-right of the clip.
  */
 export function hostCssSize(canvas: HTMLCanvasElement): number {
-  const cssW = canvas.clientWidth
-  const cssH = canvas.clientHeight
-  if (cssW > 0 && cssH > 0) return Math.max(1, Math.round(Math.min(cssW, cssH)))
+  const fromHost = cssBoxSize(canvas.parentElement)
+  if (fromHost > 0) return fromHost <= 64 ? JARVIS_HOST_PX : fromHost
+  const fromCanvas = cssBoxSize(canvas)
+  if (fromCanvas > 0) {
+    if (fromCanvas > JARVIS_HOST_PX && fromCanvas <= 64) return JARVIS_HOST_PX
+    return fromCanvas
+  }
   const attr = Math.min(canvas.width || 0, canvas.height || 0)
   if (attr >= JARVIS_HOST_PX * 2) return JARVIS_HOST_PX
-  return Math.max(1, attr || JARVIS_HOST_PX)
+  return JARVIS_HOST_PX
 }
 
 /** Soft disc so Points are not square pixels. DataTexture, not a canvas-backed three texture. */
@@ -180,6 +219,8 @@ export interface JarvisOrbHandle {
 export interface JarvisOrbOptions {
   reducedMotion?: boolean
   state?: JarvisOrbState
+  /** Visible CSS host. The 41 pill passes this so a 0×0 first layout cannot mis-fit. */
+  hostPx?: number
 }
 
 interface Electron {
@@ -215,9 +256,16 @@ export function createJarvisOrb(
   }
 
   const fit = (): number => {
-    const css = hostCssSize(canvas)
+    const measured = hostCssSize(canvas)
+    const css =
+      opts.hostPx && opts.hostPx > 0
+        ? Math.max(1, Math.round(opts.hostPx))
+        : measured
     renderer.setPixelRatio(jarvisPixelRatio())
     renderer.setSize(css, css, false)
+    renderer.setViewport(0, 0, css, css)
+    canvas.style.setProperty('width', `${css}px`, 'important')
+    canvas.style.setProperty('height', `${css}px`, 'important')
     return css
   }
 
@@ -322,7 +370,7 @@ export function createJarvisOrb(
 
   const applyTargets = (): void => {
     const next = JARVIS_STATE_TARGET[state]
-    targetRadius = next.radius
+    targetRadius = jarvisStateRadiusForHost(state, hostPx)
     targetSpeed = next.speed
     targetBright = next.bright
     targetSize = next.size
@@ -564,6 +612,11 @@ export function createJarvisOrb(
 
   paint()
   if (!reduced) raf = requestAnimationFrame(tick)
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => {
+      if (!disposed) onHostResize()
+    })
+  }
 
   return {
     setState(next) {

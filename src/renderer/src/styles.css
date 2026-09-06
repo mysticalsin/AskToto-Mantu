@@ -1925,10 +1925,14 @@ input::placeholder {
   background: #050508;
   clip-path: circle(50% at 50% 50%);
 }
+/* Must beat the thinking-orb 64 backing rule. A 64 canvas in this 41 clip
+   shows the top-left of the sphere packed into the bottom-right. */
 .obsidian-orb__canvas {
   display: block;
-  width: 41px;
-  height: 41px;
+  position: absolute;
+  inset: 0;
+  width: 41px !important;
+  height: 41px !important;
   border-radius: 50%;
 }
 
@@ -2545,8 +2549,7 @@ html.metis-bar-land .aw-widget {
   transform: translate(-50%, -50%) scale(calc(41 / 64));
   transform-origin: center center;
 }
-.aw-orb__canvas,
-.aw-orb canvas {
+.aw-orb__canvas {
   display: block;
   width: 64px !important;
   height: 64px !important;
