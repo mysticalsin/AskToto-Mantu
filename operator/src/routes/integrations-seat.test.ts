@@ -88,10 +88,10 @@ async function integration(
 describe('GET /v1/integrations (seat delivery)', () => {
   it('delivers the decrypted credential to an approved, entitled seat and audits the delivery', async () => {
     const store = memoryStore()
-    await store.upsertSeat(seat({ device_id: 'dev-a' }))
+    await store.upsertSeat(seat({ device_id: 'device-a-0001' }))
     await store.putIntegration(await integration({ id: 'int-1' }))
 
-    const res = await handleRequest(await signedGet('/v1/integrations', 'dev-a'), env(), {}, { store, now: NOW })
+    const res = await handleRequest(await signedGet('/v1/integrations', 'device-a-0001'), env(), {}, { store, now: NOW })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean; version: number; integrations: { id: string; credential: string; kind: string }[] }
     expect(body.ok).toBe(true)
@@ -101,17 +101,17 @@ describe('GET /v1/integrations (seat delivery)', () => {
 
     const grants = await store.listIntegrationGrants('int-1', 10)
     expect(grants).toHaveLength(1)
-    expect(grants[0].device_id).toBe('dev-a')
+    expect(grants[0].device_id).toBe('device-a-0001')
     const audit = await store.listAudit(10)
-    expect(audit.some((a) => a.action === 'integration-delivered' && a.actor === 'dev-a')).toBe(true)
+    expect(audit.some((a) => a.action === 'integration-delivered' && a.actor === 'device-a-0001')).toBe(true)
   })
 
   it('never leaks the raw ciphertext, only the decrypted credential', async () => {
     const store = memoryStore()
-    await store.upsertSeat(seat({ device_id: 'dev-a' }))
+    await store.upsertSeat(seat({ device_id: 'device-a-0001' }))
     const row = await integration({ id: 'int-1' })
     await store.putIntegration(row)
-    const res = await handleRequest(await signedGet('/v1/integrations', 'dev-a'), env(), {}, { store, now: NOW })
+    const res = await handleRequest(await signedGet('/v1/integrations', 'device-a-0001'), env(), {}, { store, now: NOW })
     const text = await res.text()
     expect(text).not.toContain(row.cipher)
     expect(text).not.toContain(row.iv!)
@@ -119,9 +119,9 @@ describe('GET /v1/integrations (seat delivery)', () => {
 
   it('excludes an integration scoped to a different tier', async () => {
     const store = memoryStore()
-    await store.upsertSeat(seat({ device_id: 'dev-a' }))
+    await store.upsertSeat(seat({ device_id: 'device-a-0001' }))
     await store.putIntegration(await integration({ id: 'int-1', scope_json: JSON.stringify({ tiers: ['metis-light'] }) }))
-    const res = await handleRequest(await signedGet('/v1/integrations', 'dev-a'), env(), {}, { store, now: NOW })
+    const res = await handleRequest(await signedGet('/v1/integrations', 'device-a-0001'), env(), {}, { store, now: NOW })
     const body = (await res.json()) as { ok: boolean; integrations: unknown[] }
     expect(body.ok).toBe(true)
     expect(body.integrations).toHaveLength(0)
@@ -129,35 +129,35 @@ describe('GET /v1/integrations (seat delivery)', () => {
 
   it('403s a seat that is not approved and has no active license', async () => {
     const store = memoryStore()
-    await store.upsertSeat(seat({ device_id: 'dev-a', approval: 'pending', license: null }))
+    await store.upsertSeat(seat({ device_id: 'device-a-0001', approval: 'pending', license: null }))
     await store.putIntegration(await integration({ id: 'int-1' }))
-    const res = await handleRequest(await signedGet('/v1/integrations', 'dev-a'), env(), {}, { store, now: NOW })
+    const res = await handleRequest(await signedGet('/v1/integrations', 'device-a-0001'), env(), {}, { store, now: NOW })
     expect(res.status).toBe(403)
     expect(await res.json()).toEqual({ ok: false, error: 'seat not entitled', code: 'not-entitled' })
   })
 
   it("403s an entitled seat whose tier lacks the 'integrations' entitlement", async () => {
     const store = memoryStore()
-    await store.upsertSeat(seat({ device_id: 'dev-a' }))
+    await store.upsertSeat(seat({ device_id: 'device-a-0001' }))
     await store.putTier({ id: 'metis', label: 'Métis', entitlements_json: JSON.stringify(['ask']), updated_at: NOW })
     await store.putIntegration(await integration({ id: 'int-1' }))
-    const res = await handleRequest(await signedGet('/v1/integrations', 'dev-a'), env(), {}, { store, now: NOW })
+    const res = await handleRequest(await signedGet('/v1/integrations', 'device-a-0001'), env(), {}, { store, now: NOW })
     expect(res.status).toBe(403)
   })
 
   it('503s when the vault key is unbound', async () => {
     const store = memoryStore()
-    await store.upsertSeat(seat({ device_id: 'dev-a' }))
-    const res = await handleRequest(await signedGet('/v1/integrations', 'dev-a'), env({ OPERATOR_VAULT_KEY: undefined }), {}, { store, now: NOW })
+    await store.upsertSeat(seat({ device_id: 'device-a-0001' }))
+    const res = await handleRequest(await signedGet('/v1/integrations', 'device-a-0001'), env({ OPERATOR_VAULT_KEY: undefined }), {}, { store, now: NOW })
     expect(res.status).toBe(503)
   })
 
   it('rejects a POST (GET-only route, like manifest)', async () => {
     const store = memoryStore()
-    await store.upsertSeat(seat({ device_id: 'dev-a' }))
+    await store.upsertSeat(seat({ device_id: 'device-a-0001' }))
     // Same signature as the GET (computed over an empty body): only the method changes, so the
     // request still clears HMAC verification and reaches the GET-only check inside the route.
-    const req = await signedGet('/v1/integrations', 'dev-a')
+    const req = await signedGet('/v1/integrations', 'device-a-0001')
     const asPost = new Request(req.url, { method: 'POST', headers: req.headers })
     const res = await handleRequest(asPost, env(), {}, { store, now: NOW })
     expect(res.status).toBe(405)
@@ -165,9 +165,9 @@ describe('GET /v1/integrations (seat delivery)', () => {
 
   it('delivers a brokered connection without a credential, using the gateway endpoint shape', async () => {
     const store = memoryStore()
-    await store.upsertSeat(seat({ device_id: 'dev-a' }))
+    await store.upsertSeat(seat({ device_id: 'device-a-0001' }))
     await store.putIntegration(await integration({ id: 'int-1', mode: 'brokered', transport: 'mcp' }))
-    const res = await handleRequest(await signedGet('/v1/integrations', 'dev-a'), env(), {}, { store, now: NOW })
+    const res = await handleRequest(await signedGet('/v1/integrations', 'device-a-0001'), env(), {}, { store, now: NOW })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean; integrations: Record<string, unknown>[] }
     expect(body.ok).toBe(true)
@@ -190,11 +190,11 @@ describe('GET /v1/integrations (seat delivery)', () => {
 
   it('defaults to brokered delivery when a row predates the mode column', async () => {
     const store = memoryStore()
-    await store.upsertSeat(seat({ device_id: 'dev-a' }))
+    await store.upsertSeat(seat({ device_id: 'device-a-0001' }))
     const row = (await integration({ id: 'int-1' })) as Record<string, unknown>
     delete row.mode
     await store.putIntegration(row as unknown as IntegrationRow)
-    const res = await handleRequest(await signedGet('/v1/integrations', 'dev-a'), env(), {}, { store, now: NOW })
+    const res = await handleRequest(await signedGet('/v1/integrations', 'device-a-0001'), env(), {}, { store, now: NOW })
     const body = (await res.json()) as { ok: boolean; integrations: { mode?: string }[] }
     expect(body.ok).toBe(true)
     expect(body.integrations).toHaveLength(1)
@@ -206,19 +206,19 @@ describe('GET /v1/integrations (seat delivery)', () => {
 describe('heartbeat integrationsVersion', () => {
   it('carries the max rotated_at/created_at of the seat entitled integrations, 0 with none', async () => {
     const store = memoryStore()
-    await store.upsertSeat(seat({ device_id: 'dev-a' }))
+    await store.upsertSeat(seat({ device_id: 'device-a-0001' }))
     const ts = String(NOW)
     const nonce = 'hb-nonce-1'
     const bodyText = JSON.stringify({ os: 'darwin', appVersion: '1.8.5' })
     const bodyHash = await sha256Hex(bodyText)
-    const sig = await hmacHex(TEST_INGEST_SECRET, ingestCanonical(ts, nonce, 'dev-a', bodyHash))
+    const sig = await hmacHex(TEST_INGEST_SECRET, ingestCanonical(ts, nonce, 'device-a-0001', bodyHash))
     const req = new Request('https://operator.test/v1/heartbeat', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         [OPERATOR_HMAC_HEADERS.ts]: ts,
         [OPERATOR_HMAC_HEADERS.nonce]: nonce,
-        [OPERATOR_HMAC_HEADERS.device]: 'dev-a',
+        [OPERATOR_HMAC_HEADERS.device]: 'device-a-0001',
         [OPERATOR_HMAC_HEADERS.sig]: sig
       },
       body: bodyText
@@ -229,14 +229,14 @@ describe('heartbeat integrationsVersion', () => {
     await store.putIntegration(await integration({ id: 'int-1', rotated_at: NOW - 500, created_at: NOW - 1000 }))
     const ts2 = String(NOW + 1)
     const nonce2 = 'hb-nonce-2'
-    const sig2 = await hmacHex(TEST_INGEST_SECRET, ingestCanonical(ts2, nonce2, 'dev-a', bodyHash))
+    const sig2 = await hmacHex(TEST_INGEST_SECRET, ingestCanonical(ts2, nonce2, 'device-a-0001', bodyHash))
     const req2 = new Request('https://operator.test/v1/heartbeat', {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
         [OPERATOR_HMAC_HEADERS.ts]: ts2,
         [OPERATOR_HMAC_HEADERS.nonce]: nonce2,
-        [OPERATOR_HMAC_HEADERS.device]: 'dev-a',
+        [OPERATOR_HMAC_HEADERS.device]: 'device-a-0001',
         [OPERATOR_HMAC_HEADERS.sig]: sig2
       },
       body: bodyText

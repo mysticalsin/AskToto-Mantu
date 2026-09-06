@@ -1,7 +1,7 @@
 import { createSign, generateKeyPairSync } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { handleRequest, type Env } from './index'
-import { hmacHex } from './hmac'
+import { hmacHex, verifyIngestHmac } from './hmac'
 import { sha256Hex } from './crypto'
 import { verifyAccessJwt } from './access'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
@@ -319,5 +319,72 @@ describe('admin mutation rate limit', () => {
       { store, now: NOW }
     )
     expect(getRes.status).toBe(200)
+  })
+})
+
+describe('device id format is enforced before the signature check (B11)', () => {
+  // A real device id is hashOperatorId(getMachineId()) (src/main/operator-hmac-sign.ts): a 32-character
+  // lowercase hex string. DEVICE_ID_RE (operator/src/hmac.ts) is deliberately wider than that (letters
+  // both cases, digits, `. _ -`, 8 to 128 chars) so a future id scheme has room, while still rejecting
+  // anything that could carry a newline, HTML, or an unbounded length into a nonce key, a rate-bucket
+  // key, an audit row, or a D1 primary key.
+  const REAL_DEVICE_ID = 'f47ac10b58cc4372a5670e02b2c3d479'
+
+  it('rejects an oversized device id and one with HTML-shaped characters, with code device-id, and never burns the nonce', async () => {
+    const store = memoryStore()
+    const sharedNonce = 'nonce-not-burned-by-a-bad-device-id'
+
+    const oversized = await signed('/v1/ingest', JSON.stringify({ id: 'ask-badid-1' }), {
+      deviceId: 'a'.repeat(200),
+      nonce: sharedNonce
+    })
+    const res1 = await handleRequest(oversized, env(), {}, { store, now: NOW })
+    expect(res1.status).toBe(401)
+    expect(((await res1.json()) as { ok: boolean; code?: string }).code).toBe('device-id')
+
+    const htmlShaped = await signed('/v1/ingest', JSON.stringify({ id: 'ask-badid-2' }), {
+      deviceId: 'weird<script>device',
+      nonce: 'nonce-html-shaped'
+    })
+    const res2 = await handleRequest(htmlShaped, env(), {}, { store, now: NOW })
+    expect(res2.status).toBe(401)
+    expect(((await res2.json()) as { ok: boolean; code?: string }).code).toBe('device-id')
+
+    // Neither rejected request burned `sharedNonce`: a real, well-formed request can still present it.
+    const real = await signed('/v1/ingest', JSON.stringify({ id: 'ask-good' }), {
+      deviceId: REAL_DEVICE_ID,
+      nonce: sharedNonce
+    })
+    const res3 = await handleRequest(real, env(), {}, { store, now: NOW })
+    expect(res3.status).toBe(200)
+  })
+
+  it('rejects a device id containing a raw newline', async () => {
+    // The Fetch Headers implementation refuses to store a literal CR/LF in a header value (a real
+    // client, or workerd's own HTTP parsing, would never let one reach application code), so this
+    // exercises verifyIngestHmac's format check directly rather than through handleRequest/Headers.
+    const seenNonce = vi.fn(async () => false)
+    const headerMap = new Map<string, string>([
+      [OPERATOR_HMAC_HEADERS.ts, String(NOW)],
+      [OPERATOR_HMAC_HEADERS.nonce, 'n-newline'],
+      [OPERATOR_HMAC_HEADERS.device, 'weird\ndevice-id'],
+      [OPERATOR_HMAC_HEADERS.sig, 'irrelevant-format-fails-first']
+    ])
+    const fakeRequest = { headers: { get: (name: string) => headerMap.get(name) ?? null } } as unknown as Request
+
+    const result = await verifyIngestHmac(fakeRequest, '{}', TEST_INGEST_SECRET, NOW, seenNonce)
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.status).toBe(401)
+      expect(result.code).toBe('device-id')
+    }
+    expect(seenNonce).not.toHaveBeenCalled()
+  })
+
+  it('accepts a real-shaped device id', async () => {
+    const store = memoryStore()
+    const req = await signed('/v1/ingest', JSON.stringify({ id: 'ask-realid' }), { deviceId: REAL_DEVICE_ID, nonce: 'n-real' })
+    const res = await handleRequest(req, env(), {}, { store, now: NOW })
+    expect(res.status).toBe(200)
   })
 })

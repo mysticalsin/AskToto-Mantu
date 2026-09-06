@@ -29,7 +29,15 @@ export interface HmacFail {
   ok: false
   status: number
   error: string
+  code?: string
 }
+
+/** The desktop's real device id is `hashOperatorId(getMachineId())`
+ *  (`src/main/operator-hmac-sign.ts`): `sha256(machineId).slice(0, 32)`, always 32 lowercase hex
+ *  characters. This pattern is deliberately wider (letters upper and lower, digits, `. _ -`, 8 to 128
+ *  chars) so a future id scheme has room without a breaking change, while still rejecting anything
+ *  that could carry a newline, HTML, or an unbounded length into logs, audit text, or a D1 key. */
+export const DEVICE_ID_RE = /^[A-Za-z0-9._-]{8,128}$/
 
 export async function verifyIngestHmac(
   request: Request,
@@ -45,6 +53,11 @@ export async function verifyIngestHmac(
   const sig = (request.headers.get(OPERATOR_HMAC_HEADERS.sig) ?? '').toLowerCase()
   if (!tsRaw || !nonce || !deviceId || !sig) {
     return { ok: false, status: 401, error: 'missing HMAC headers' }
+  }
+  // Checked before any crypto or storage I/O: a malformed device id (newline, HTML, oversized) must
+  // never reach a nonce write, a rate bucket key, an audit row, or a D1 primary key.
+  if (!DEVICE_ID_RE.test(deviceId)) {
+    return { ok: false, status: 401, error: 'invalid device id', code: 'device-id' }
   }
   const ts = Number(tsRaw)
   if (!Number.isFinite(ts) || Math.abs(now - ts) > OPERATOR_HMAC_SKEW_MS) {
