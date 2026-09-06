@@ -578,3 +578,14 @@ describe('locked mode skills — Settings has no editor for shipped skill files'
 
   })
 })
+
+describe('Cloudflare tile opens Operator OAuth, not a key-paste card', () => {
+  it('calls cloudflareConnect and does not bind a Worker URL paste field', () => {
+    expect(source).toMatch(/window\.toto\.cloudflareConnect/)
+    expect(source).toMatch(/data-cf-aig-connect/)
+    expect(source).not.toMatch(/value=\{settings\.cloudflareBaseUrl\}/)
+    expect(source).not.toMatch(/Paste the Worker/)
+    const preload = readFileSync(join(__dirname, '../../../preload/index.ts'), 'utf8')
+    expect(preload).toMatch(/cloudflareConnect:/)
+  })
+})

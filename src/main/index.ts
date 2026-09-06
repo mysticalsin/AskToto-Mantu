@@ -329,6 +329,7 @@ import { buildBrainContext } from './brain/context'
 import { buildSystem, buildSystemParts } from './personas'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
 import { isOpenAICloudCacheEligible, promptCacheKey as makePromptCacheKey } from '@shared/operator'
+import { cloudflareConnectTarget } from './cloudflare-connect'
 import { loadVerifiedSkill, setModeSkillsOverlayRoot, skillLockHashForMode } from './mode-skills'
 import {
   operatorAskTransport,
@@ -3840,6 +3841,13 @@ function registerIpc(): void {
     const urlLocked = getLockedKeys().includes('licenseServerUrl')
     const serverUrl = urlLocked ? getSettings().licenseServerUrl || parsed.data.serverUrl : parsed.data.serverUrl
     return activateLicense(serverUrl, parsed.data.licenseKey)
+  })
+  ipcMain.handle(IPC.cloudflareConnect, (e) => {
+    assertMainWindow(e)
+    const target = cloudflareConnectTarget(getSettings())
+    if (!target.ok) return target
+    void shell.openExternal(target.href)
+    return target
   })
   // Read-only, local settings only — never touches the network. Mirrors metricsRead's pattern of
   // returning a safe empty/default shape (rather than throwing) when signed out.

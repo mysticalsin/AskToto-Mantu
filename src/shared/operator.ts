@@ -17,6 +17,20 @@ export interface StreamCacheUsage {
   cacheTtl?: CacheTtl
 }
 
+export const DEFAULT_OPERATOR_URL = 'https://metis-operator.tony-walteur.workers.dev'
+
+export const CF_CONNECT_PATH = '/cloudflare/connect'
+
+/** HTTPS Operator `/cloudflare/connect`. Null if the base is not https. */
+export function cloudflareConnectHref(
+  settings: { operatorUrl?: string } | null | undefined = {},
+  env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
+): string | null {
+  const raw = (settings?.operatorUrl || env.METIS_OPERATOR_URL || DEFAULT_OPERATOR_URL).trim()
+  if (!/^https:\/\//i.test(raw)) return null
+  return `${raw.replace(/\/$/, '')}${CF_CONNECT_PATH}`
+}
+
 /** True when Settings (or METIS_OPERATOR_URL) points at the Cloudflare Operator Worker. */
 export function operatorUrlConfigured(
   settings: { operatorUrl?: string } | null | undefined,
