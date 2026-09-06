@@ -173,7 +173,7 @@ See [ONBOARDING-STARFIELD.md](./ONBOARDING-STARFIELD.md). **Superseded after the
 See [ONBOARDING-KINETIC-GRID.md](./ONBOARDING-KINETIC-GRID.md). Lady+universe first. KineticGrid only after that. No Skip. Tile warp, not stage slide.
 
 ## Exclusive onboarding window (opaque)
-While `!onboardingDone`, the BrowserWindow is **opaque** Mantu purple (`transparent: false`, `#3A0B6B`). Mac `setSimpleFullScreen` on a transparent window composites as a dead black void (Totos-Mac 044c0f1). After `onboardingDone` the overlay is transparent again. Replay re-enters opaque exclusive and halts Goldberg first.
+While `!onboardingDone`, the BrowserWindow is **opaque** hero/universe hold (`transparent: false`, `#05010A`). Never `#3A0B6B` first paint. Mac `setSimpleFullScreen` on a transparent window composites as a dead black void (Totos-Mac 044c0f1). After `onboardingDone` the overlay is transparent again. Replay re-enters opaque exclusive and locks Goldberg first.
 
 ## Thinking orbs
 See [THINKING-ORB.md](./THINKING-ORB.md). Caption then sphere. Word first.

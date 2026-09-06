@@ -31,21 +31,46 @@ export function cloudflareConnectHref(
   return `${raw.replace(/\/$/, '')}${CF_CONNECT_PATH}`
 }
 
-/** True when Settings (or METIS_OPERATOR_URL) points at the Cloudflare Operator Worker. */
+/**
+ * HTTPS Operator base for heartbeat / ingest / skills / Open Operator.
+ * Settings → METIS_OPERATOR_URL → DEFAULT_OPERATOR_URL. Whitespace-only values are empty.
+ * Empty Settings still phones home to the live Worker once an ingest secret is present.
+ * Non-https overrides stay empty.
+ */
+export function resolveOperatorBaseUrl(
+  settings: { operatorUrl?: string } | null | undefined = {},
+  env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
+): string {
+  const fromSettings = settings?.operatorUrl?.trim() ?? ''
+  const fromEnv = env.METIS_OPERATOR_URL?.trim() ?? ''
+  const raw = (fromSettings || fromEnv || DEFAULT_OPERATOR_URL).replace(/\/$/, '')
+  return /^https:\/\//i.test(raw) ? raw : ''
+}
+
+/** True when a usable HTTPS Operator base resolves (Settings, env, or shipped DEFAULT). */
 export function operatorUrlConfigured(
   settings: { operatorUrl?: string } | null | undefined,
   env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
 ): boolean {
-  const url = (settings?.operatorUrl || env.METIS_OPERATOR_URL || '').trim()
-  return /^https:\/\//i.test(url)
+  return Boolean(resolveOperatorBaseUrl(settings, env))
 }
 
-/** Ask-text toggle. Default ON once a URL is set; ignored when Operator is off. */
+/** Explicit Settings/env URL only — not the shipped DEFAULT. Gates Ask-text opt-in. */
+export function operatorUrlExplicit(
+  settings: { operatorUrl?: string } | null | undefined,
+  env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
+): boolean {
+  const fromSettings = settings?.operatorUrl?.trim() ?? ''
+  const fromEnv = env.METIS_OPERATOR_URL?.trim() ?? ''
+  return /^https:\/\//i.test(fromSettings || fromEnv)
+}
+
+/** Ask-text toggle. Default ON once an explicit URL is set; ignored for bare DEFAULT. */
 export function shouldSendAskText(
   settings: { operatorUrl?: string; sendAskText?: boolean } | null | undefined,
   env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
 ): boolean {
-  if (!operatorUrlConfigured(settings, env)) return false
+  if (!operatorUrlExplicit(settings, env)) return false
   return settings?.sendAskText !== false
 }
 

@@ -9,7 +9,7 @@ describe('lock-mode-skills', () => {
     const current = buildLock()
     const expected = readLock()
     expect(diffLock(current, expected)).toEqual([])
-    expect(Object.keys(current.skills).sort()).toEqual(['humanizer', ...CONVERSATION_MODES].sort())
+    expect(Object.keys(current.skills).sort()).toEqual(['caveman', 'humanizer', ...CONVERSATION_MODES].sort())
   })
 
   it('electron-builder copies the skills tree as extraResources', () => {
@@ -35,7 +35,7 @@ describe('lock-mode-skills', () => {
     const { join } = require('node:path') as typeof import('node:path')
     const dir = mkdtempSync(join(tmpdir(), 'skill-crlf-'))
     try {
-      for (const rel of ['humanizer/SKILL.md', ...['interview','recruiting','meeting','sales','negotiation','presentation','support','general','cold-call'].map((id) => `modes/${id}/SKILL.md`)]) {
+      for (const rel of ['humanizer/SKILL.md', 'caveman/SKILL.md', ...['interview','recruiting','meeting','sales','negotiation','presentation','support','general','cold-call'].map((id) => `modes/${id}/SKILL.md`)]) {
         const src = join(process.cwd(), 'skills', rel)
         const dest = join(dir, rel)
         mkdirSync(join(dest, '..'), { recursive: true })
