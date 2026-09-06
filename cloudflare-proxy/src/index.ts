@@ -47,6 +47,13 @@ export interface Env {
 const CHAT_ROUTE = '/v1/chat/completions'
 const HEALTH_ROUTE = '/health'
 
+/**
+ * Largest chat body this proxy will buffer. Métis asks are far smaller; anything past this is not a
+ * seat talking — refuse before `request.text()` so a forged Content-Length or chunked flood cannot
+ * pin the isolate. Same fail-loud 413 shape as operator/src/index.ts.
+ */
+export const MAX_BODY_BYTES = 512_000
+
 const encoder = new TextEncoder()
 
 /**
@@ -389,12 +396,23 @@ export default {
     const gatewayId = env.CF_AI_GATEWAY_ID?.trim()
     if (gatewayId) upstreamHeaders.set('cf-aig-gateway-id', gatewayId)
 
+    // Refuse oversized bodies before reading them, and again after (chunked uploads carry no
+    // content-length), so the isolate never buffers an unbounded string on the operator's bill.
+    const declared = Number(request.headers.get('content-length') ?? 0)
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+      return errorResponse(413, 'Request body too large.')
+    }
+    const bodyText = await request.text()
+    if (bodyText.length > MAX_BODY_BYTES) {
+      return errorResponse(413, 'Request body too large.')
+    }
+
     let upstream: Response
     try {
       upstream = await fetch(upstreamUrl, {
         method: 'POST',
         headers: upstreamHeaders,
-        body: await request.text()
+        body: bodyText
       })
     } catch {
       // The thrown error is deliberately not read: a fetch failure can stringify the request it was
