@@ -73,11 +73,12 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     )
   })
 
-  it('exclusive onboarding window is opaque Mantu purple, not transparent', () => {
+  it('exclusive onboarding window is opaque hero hold, never purple wash', () => {
     const live = overlayWindowChrome(true)
     expect(live.transparent).toBe(false)
     expect(live.backgroundColor).toBe(EXCLUSIVE_ONBOARDING_BACKGROUND)
-    expect(live.backgroundColor).toBe('#3A0B6B')
+    expect(live.backgroundColor).toBe('#05010A')
+    expect(live.backgroundColor).not.toBe('#3A0B6B')
     expect(live.backgroundColor).not.toBe(OVERLAY_TRANSPARENT_BACKGROUND)
     expect(live.backgroundColor).not.toBe('#00000000')
     expect(live.fullscreenable).toBe(true)
@@ -101,6 +102,9 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(create).toMatch(/overlayWindowChrome\(onboardingLive\)/)
     expect(create).toMatch(/transparent: chrome\.transparent/)
     expect(create).toMatch(/backgroundColor: chrome\.backgroundColor/)
+    expect(create).toMatch(/show: !onboardingLive/)
+    expect(create).toMatch(/ready-to-show/)
+    expect(create).toMatch(/revealExclusiveWhenPainted/)
     expect(create).not.toMatch(/transparent:\s*true/)
     expect(create).not.toMatch(/backgroundColor: onboardingLive \? '#3A0B6B'/)
 

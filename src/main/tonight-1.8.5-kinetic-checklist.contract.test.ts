@@ -41,6 +41,12 @@ describe('1.8.6 KineticGrid tip checklist', () => {
     expect(index).toMatch(/hideParkWindowOpacity/)
     expect(index).toMatch(/app\.setName\('Métis'\)/)
     expect(index).not.toMatch(/Metis Tip|Métis Tip/)
+    expect(geometry).toMatch(/EXCLUSIVE_ONBOARDING_BACKGROUND = '#05010A'/)
+    expect(geometry).not.toMatch(/EXCLUSIVE_ONBOARDING_BACKGROUND = '#3A0B6B'/)
+    expect(experience).toMatch(/lockOnboardingAudio\(\)/)
+    expect(experience).toMatch(/setupAsrBlocksContinue\(rows, asrStatus\)/)
+    expect(experience).toMatch(/summarizeSetupRows\(rows\)\.allReady/)
+    expect(app).toMatch(/if \(settings\?\.onboardingDone\) lockOnboardingAudio\(\)/)
   })
 
   it('2 exclusive onboarding cannot be dragged off-screen', () => {

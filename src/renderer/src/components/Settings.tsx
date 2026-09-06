@@ -128,7 +128,7 @@ import { AgendaView } from './AgendaView'
 import { usePermissions } from '../state'
 import { displayAccelerator, isWindows } from '../lib/keys'
 import { decideDustLiveCheck } from '../lib/dust-live-check'
-import { haltAllOnboardingAudio } from '../lib/onboarding-music'
+import { haltAllOnboardingAudio, unlockOnboardingAudio } from '../lib/onboarding-music'
 import { canShowConnected, cliSetupChip, nextCliSetupStep } from '@shared/cli-setup-status'
 import {
   DUST_EMPTY_AGENTS_ERROR,
@@ -6832,6 +6832,7 @@ export function Settings({
           onClick={() => {
             if (window.confirm("Replay onboarding from the start? Your settings won't change.")) {
               haltAllOnboardingAudio()
+              unlockOnboardingAudio()
               patch({ onboardingDone: false })
               onClose?.()
             }

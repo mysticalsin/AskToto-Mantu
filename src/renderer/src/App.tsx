@@ -4,6 +4,8 @@ import { ControlPill } from './components/ControlPill'
 import { OverlayPeek } from './components/OverlayPeek'
 import { Panel } from './components/Panel'
 import { OnboardingV2 } from './components/OnboardingExperience'
+import { preloadOnboardingHeroVideo } from './lib/onboarding-hero-video'
+import { installOnboardingAudioLockHooks, lockOnboardingAudio } from './lib/onboarding-music'
 // Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup. Answer and
 // Copilot pull in Markdown.tsx -> streamdown + shiki/core, which have no reason to parse/execute before
 // the user has asked anything — deferring them keeps that weight out of the eager boot chunk.
@@ -459,6 +461,10 @@ export function App(): JSX.Element {
   // sits idle past the mark.
   const [nudgeExpired, setNudgeExpired] = useState(false)
   const onboardingDoneAt = settings?.onboardingDoneAt ?? 0
+  useEffect(() => {
+    installOnboardingAudioLockHooks()
+    if (settings?.onboardingDone) lockOnboardingAudio()
+  }, [settings?.onboardingDone])
   useEffect(() => {
     if (settings?.onboardingDone && !onboardingDoneAt) {
       // Legacy profile that finished onboarding before this field existed: start the clock now (one
@@ -3236,6 +3242,7 @@ export function App(): JSX.Element {
         </div>
       )
     }
+    preloadOnboardingHeroVideo()
     return (
       <div ref={setRoot} className="onboard-stage onboard-exclusive-lock">
         <div className="onboard-portal-content relative z-10 flex h-full min-h-0 w-full flex-col">

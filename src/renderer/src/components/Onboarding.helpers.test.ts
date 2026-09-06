@@ -388,6 +388,36 @@ describe('Act 3 — transcription files never skip', () => {
     expect(setupAsrBlocksContinue([])).toBe(true)
   })
 
+  it('never leaves Continue stuck when the setup list already looks complete', () => {
+    const complete = [
+      asrRow('skipped'),
+      { key: 'brain', label: 'Private meeting brain', icon: Sparkles, state: 'ready' as const },
+      { key: 'mic', label: 'Microphone', icon: Sparkles, state: 'ready' as const }
+    ]
+    expect(summarizeSetupRows(complete).allReady).toBe(true)
+    expect(setupAsrBlocksContinue(complete)).toBe(false)
+
+    const staleRowReadyEngine = [asrRow('loading')]
+    expect(
+      setupAsrBlocksContinue(staleRowReadyEngine, {
+        ready: true,
+        status: 'ready',
+        progress: 1,
+        label: 'Transcription files ready'
+      })
+    ).toBe(false)
+
+    const skippedAsr = [asrRow('skipped')]
+    expect(setupAsrBlocksContinue(skippedAsr)).toBe(false)
+
+    const stillGettingFiles = [
+      asrRow('loading'),
+      { key: 'brain', label: 'Private meeting brain', icon: Sparkles, state: 'ready' as const }
+    ]
+    expect(summarizeSetupRows(stillGettingFiles).allReady).toBe(false)
+    expect(setupAsrBlocksContinue(stillGettingFiles)).toBe(true)
+  })
+
   it('renders the loading orb for in-progress rows, never the needed span', () => {
     const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
     expect(src).toMatch(/state === 'checking' \|\| r\.state === 'loading'/)

@@ -102,7 +102,7 @@ Replay (Settings, after a completed tour) still patches `onboardingDone: false` 
 
 ## Exclusive window (already landed)
 
-While `!onboardingDone`: opaque `#3A0B6B`, `transparent: false`. Never `setSimpleFullScreen` on a transparent window. After done: transparent overlay again.
+While `!onboardingDone`: opaque hero hold `#05010A`, `transparent: false`. Never `#3A0B6B` first paint. Never `setSimpleFullScreen` on a transparent window. After done: transparent overlay again. `lockOnboardingAudio` seals Goldberg so it cannot restart.
 
 ## Files
 
@@ -125,4 +125,4 @@ Off limits: Hide 8×2, Island hover, `BAR_MIN_HEIGHT`, pack, merge, version bump
 3. No Skip control in the live onboarding tree.
 4. `onboardingDone` cannot become true without completing Ready.
 5. `haltAllOnboardingAudio` still before Ready and Replay.
-6. Exclusive window still opaque `#3A0B6B` while `!onboardingDone`.
+6. Exclusive window still opaque `#05010A` while `!onboardingDone` (never `#3A0B6B` first paint).

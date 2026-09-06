@@ -737,9 +737,8 @@ input::placeholder {
   background: color-mix(in srgb, #9a2bf0 32%, transparent);
 }
 
-/* Exclusive onboarding stage — Mantu purple brand wash, never amber, never a black void (DESIGN.md).
-   Viewport-fixed so simple-fullscreen + % height cannot collapse the paint to the
-   window chrome color. */
+/* Exclusive onboarding stage — hero/universe hold, never amber, never a purple wash, never a black void (DESIGN.md).
+ Viewport-fixed so simple-fullscreen + % height cannot collapse the paint to a brand stripe. */
 .onboard-stage {
   position: fixed;
   inset: 0;
@@ -750,10 +749,7 @@ input::placeholder {
   overflow: hidden;
   isolation: isolate;
   -webkit-app-region: no-drag;
-  background:
-    radial-gradient(1200px 700px at 18% 12%, color-mix(in srgb, #9a2bf0 42%, transparent), transparent 58%),
-    radial-gradient(900px 600px at 88% 78%, color-mix(in srgb, #7f00da 36%, transparent), transparent 55%),
-    linear-gradient(165deg, #3a0b6b 0%, #7f00da 42%, #2a0848 100%);
+  background: #05010a;
   -webkit-mask-image: radial-gradient(closest-side, rgb(0, 0, 0) 62%, rgba(0, 0, 0, 0.4) 82%, transparent 100%);
   mask-image: radial-gradient(closest-side, rgb(0, 0, 0) 62%, rgba(0, 0, 0, 0.4) 82%, transparent 100%);
   -webkit-mask-repeat: no-repeat;
@@ -838,7 +834,7 @@ input::placeholder {
   }
 }
 
-/* Act 1 welcome atmosphere — full viewport, under the UI. Purple wash remains if this is absent. */
+/* Act 1 welcome atmosphere — full viewport, under the UI. Hero hold remains if this is absent. */
 .onboard-hero-video {
   position: fixed;
   inset: 0;
@@ -868,9 +864,7 @@ input::placeholder {
 .onboard-hero-video-tint {
   position: absolute;
   inset: 0;
-  background:
-    radial-gradient(1200px 700px at 18% 12%, color-mix(in srgb, #9a2bf0 28%, transparent), transparent 58%),
-    linear-gradient(165deg, color-mix(in srgb, #3a0b6b 62%, transparent), color-mix(in srgb, #7f00da 48%, transparent));
+  background: radial-gradient(1200px 700px at 50% 40%, transparent 42%, rgba(5, 1, 10, 0.42) 100%);
 }
 
 /* Liquid glass — backdrop blur, inset highlight, gradient-border ::before. Technique only. */
