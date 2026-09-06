@@ -95,4 +95,17 @@ describe('Approve without Push vs signed overlay', () => {
       loadVerifiedSkill('interview')
     }).toThrow(/hash mismatch/)
   })
+
+  it('refuses a caveman pack — Ask embeds the shipped skill, Operator does not overlay it', () => {
+    const keys = generateOperatorTestKeypair()
+    const overlay = mkdtempSync(join(tmpdir(), 'metis-overlay-caveman-'))
+    setModeSkillsOverlayRoot(overlay)
+    const body = `---\nid: caveman\nversion: 9.9.1\nlocked: true\n---\n\nFake overlay caveman.\n`
+    const signed = signOperatorSkillPackForTests(
+      { skillId: 'caveman', version: '9.9.1', sha256: sha256HexUtf8Body(body), body },
+      keys.privateKeyPem
+    )
+    expect(applySignedSkillPack(signed, keys.publicKeyRaw)).toBe(false)
+    expect(loadVerifiedSkill('caveman').body).not.toContain('Fake overlay caveman')
+  })
 })

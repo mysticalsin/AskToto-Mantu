@@ -17,6 +17,7 @@ import {
   overlayUsesJarvisOrb,
   overlayUsesThinkingOrb,
   overlayOrbPickerSelected,
+  overlayShowsBarRestPicker,
   OVERLAY_ORB_PICKER_CARDS,
   parseOverlayOrbStyle
 } from './overlay-orb'
@@ -60,6 +61,9 @@ describe('orb selection persist + Bar-only law', () => {
     expect(overlayOrbPickerSelected('jakub')).toBe('jakub')
     expect(overlayOrbPickerSelected('obsidian')).toBe('obsidian')
     expect(overlayOrbPickerSelected('bar')).toBe('jakub')
+    expect(overlayShowsBarRestPicker('bar')).toBe(true)
+    expect(overlayShowsBarRestPicker('hide')).toBe(false)
+    expect(overlayShowsBarRestPicker('island')).toBe(false)
     expect(overlayShowsBarOrb('hide', true)).toBe(false)
     expect(overlayShowsBarOrb('island', true)).toBe(false)
     expect(overlayAllowsMinimize('hide')).toBe(false)
@@ -163,12 +167,18 @@ describe('orb selection persist + Bar-only law', () => {
     const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
     const orb = readFileSync(join(__dirname, '../renderer/src/components/ObsidianOrb.tsx'), 'utf8')
     const pill = readFileSync(join(__dirname, '../renderer/src/components/ControlPill.tsx'), 'utf8')
+    const settings = readFileSync(join(__dirname, '../renderer/src/components/Settings.tsx'), 'utf8')
     expect(app).toMatch(/decideCircleRestMinimize/)
     expect(app).toMatch(/styleChanged/)
+    expect(app).toMatch(/if \(view === 'settings'\) return/)
+    expect(app).not.toMatch(/if \(view === 'settings'\) setView\('answer'\)/)
     expect(app).toMatch(/onExpand=\{unminimize\}/)
     expect(app).toMatch(/setMinimized\(false\)/)
     expect(app).toMatch(/window\.toto\.minimize\(false\)/)
     expect(app).not.toMatch(/if \(view !== 'settings' && !minimized\)/)
+    expect(settings).toMatch(/overlayShowsBarRestPicker\(settings\.overlayLayout\)/)
+    expect(settings).toMatch(/onClick=\{onClose\}/)
+    expect(settings).toMatch(/>\s*Done\s*</)
     expect(orb).toMatch(/runOrbPillActivate/)
     expect(orb).toMatch(/onActivate/)
     expect(pill).toMatch(/onActivate=\{onExpand\}/)

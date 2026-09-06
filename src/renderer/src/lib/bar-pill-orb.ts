@@ -143,9 +143,13 @@ export function shouldRunOrbRaf(input: {
   documentHidden: boolean
 }): boolean {
   void input.minimized
-  return input.barLayout && !input.reducedMotion && !input.documentHidden
+  // reducedMotion ignored: Bar Circle/Jarvis are brand chrome and must keep moving
+  // even when Windows reports prefers-reduced-motion (animations off).
+  void input.reducedMotion
+  return input.barLayout && !input.documentHidden
 }
 
-export function shouldAnimateOrb(reducedMotion: boolean): boolean {
-  return !reducedMotion
+/** Brand Bar orbs always animate; OS reduce must not freeze the product identity. */
+export function shouldAnimateOrb(_reducedMotion: boolean): boolean {
+  return true
 }

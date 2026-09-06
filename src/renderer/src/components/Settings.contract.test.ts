@@ -10,7 +10,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
-import { pickReadyProvider, detectHint } from './Settings'
+import { pickReadyProvider, detectHint, SETTINGS_CONTENT_SCROLL_CLASS, settingsScrollClipsOverflowX } from './Settings'
 
 // Normalize CRLF → LF: on a Windows checkout Settings.tsx has \r\n line endings, and a marker whose
 // newline sits mid-string (e.g. finding 5's '))}\n          </div>') would never match '))}\r\n...'.
@@ -517,10 +517,20 @@ describe('Dust instant validate proves a live connection', () => {
 })
 
 describe('Settings Bar rest orb picker', () => {
-  it('wires OverlayOrbPicker next to Overlay chrome', () => {
+  it('wires OverlayOrbPicker next to Overlay chrome only when Bar is selected', () => {
+    expect(source).toMatch(/overlayShowsBarRestPicker/)
+    expect(source).toMatch(/overlayShowsBarRestPicker\(settings\.overlayLayout\)/)
     expect(source).toMatch(/OverlayOrbPicker/)
     expect(source).toMatch(/overlayOrbStyle: id/)
     expect(source).toMatch(/Applies when Overlay chrome is Bar/)
+    const appearance = source.slice(source.indexOf('title="Appearance"'), source.indexOf('title="Language"'))
+    expect(appearance).toMatch(/overlayShowsBarRestPicker\(settings\.overlayLayout\)/)
+    const gated = appearance.slice(
+      appearance.indexOf('overlayShowsBarRestPicker(settings.overlayLayout)'),
+      appearance.indexOf(') : null}')
+    )
+    expect(gated).toMatch(/<OverlayOrbPicker/)
+    expect(gated).toMatch(/Bar rest/)
     const orbBlock = source.slice(source.indexOf('<OverlayOrbPicker'), source.indexOf('<OverlayOrbPicker') + 400)
     expect(orbBlock).not.toMatch(/\u2014/)
   })
@@ -529,10 +539,32 @@ describe('Settings Bar rest orb picker', () => {
 describe('Settings from M scrolls the full surface', () => {
   it('fills the 880×800 window and scrolls cl-content end to end', () => {
     expect(source).toMatch(/cl-root flex h-full min-h-0/)
-    expect(source).toMatch(/cl-content scroll-thin min-h-0 flex-1 overflow-y-auto/)
+    expect(source).toMatch(/className=\{SETTINGS_CONTENT_SCROLL_CLASS\}/)
+    expect(source).toMatch(/cl-content scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden/)
     expect(source).not.toMatch(/max-h-\[480px\]/)
     expect(source).not.toMatch(/panel-enter/)
     expect(source).toMatch(/Custom instructions/)
+  })
+})
+
+describe('Settings scroll root clips sideways overflow (Win Audio / AI)', () => {
+  it('the scroll-class helper rejects overflow-x auto/scroll/visible and requires hidden/clip', () => {
+    expect(settingsScrollClipsOverflowX(SETTINGS_CONTENT_SCROLL_CLASS)).toBe(true)
+    expect(settingsScrollClipsOverflowX('cl-content scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-hidden')).toBe(true)
+    expect(settingsScrollClipsOverflowX('cl-content scroll-thin min-h-0 flex-1 overflow-y-auto overflow-x-clip')).toBe(true)
+    // The pre-fix class: overflow-y-auto alone computes overflow-x: auto (CSS pairing).
+    expect(settingsScrollClipsOverflowX('cl-content scroll-thin min-h-0 flex-1 overflow-y-auto')).toBe(false)
+    expect(settingsScrollClipsOverflowX('cl-content overflow-y-auto overflow-x-auto')).toBe(false)
+    expect(settingsScrollClipsOverflowX('cl-content overflow-y-auto overflow-x-scroll')).toBe(false)
+    expect(settingsScrollClipsOverflowX('cl-content overflow-y-auto overflow-x-visible')).toBe(false)
+    expect(settingsScrollClipsOverflowX('overflow-x-hidden')).toBe(false)
+  })
+
+  it('the live Settings tabpanel uses the clipping scroll class', () => {
+    expect(source).toMatch(/className=\{SETTINGS_CONTENT_SCROLL_CLASS\}/)
+    expect(SETTINGS_CONTENT_SCROLL_CLASS).toMatch(/\boverflow-y-auto\b/)
+    expect(SETTINGS_CONTENT_SCROLL_CLASS).toMatch(/\boverflow-x-hidden\b/)
+    expect(SETTINGS_CONTENT_SCROLL_CLASS).not.toMatch(/\boverflow-x-(?:auto|scroll|visible)\b/)
   })
 })
 
@@ -544,6 +576,11 @@ describe('Operator control plane lives on Cloudflare, not in Settings', () => {
     expect(source).toMatch(/Open Operator/)
     expect(source).toMatch(/operatorOpen/)
     expect(source).toMatch(/Listen transcripts and screens never send/)
+    expect(source).toMatch(/DEFAULT_OPERATOR_URL/)
+    expect(source).toMatch(/operatorUrlConfigured/)
+    expect(source).toMatch(/Empty uses the shipped Operator URL at runtime/)
+    expect(source).not.toMatch(/Empty means no fleet heartbeat/)
+    expect(source).not.toMatch(/metis-operator\.example\.workers\.dev/)
   })
 
   it('does not keep a local-only Operator tools dashboard or fake fleet numbers', () => {
@@ -576,5 +613,16 @@ describe('locked mode skills — Settings has no editor for shipped skill files'
     expect(source).not.toMatch(/modeSkills/)
     expect(source).not.toMatch(/skillsRoot/)
 
+  })
+})
+
+describe('Cloudflare tile opens Operator OAuth, not a key-paste card', () => {
+  it('calls cloudflareConnect and does not bind a Worker URL paste field', () => {
+    expect(source).toMatch(/window\.toto\.cloudflareConnect/)
+    expect(source).toMatch(/data-cf-aig-connect/)
+    expect(source).not.toMatch(/value=\{settings\.cloudflareBaseUrl\}/)
+    expect(source).not.toMatch(/Paste the Worker/)
+    const preload = readFileSync(join(__dirname, '../../../preload/index.ts'), 'utf8')
+    expect(preload).toMatch(/cloudflareConnect:/)
   })
 })

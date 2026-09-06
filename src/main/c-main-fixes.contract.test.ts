@@ -35,11 +35,15 @@ describe('findings 2 & 4: visionAvailable consults per-agent Dust vision, not th
 })
 
 describe('finding 5: cliPrimary is filtered by the org allowlist', () => {
-  it('the claude-cli/codex-cli .find() checks `allowed` alongside cliConnected', () => {
+  it('pickWorkingCliPrimary receives the org allowlist so a blocked CLI cannot win', () => {
     const start = source.indexOf('const cliPrimary =')
     expect(start).toBeGreaterThan(-1)
     const body = source.slice(start, start + 300)
-    expect(body).toMatch(/s\.cliConnected\[p\] && \(!allowed \|\| allowed\.includes\(p\)\)/)
+    expect(body).toMatch(/pickWorkingCliPrimary\(\{/)
+    expect(body).toMatch(/cliConnected: s\.cliConnected/)
+    expect(body).toMatch(/allowed/)
+    const routing = readFileSync(join(__dirname, '../shared/ask-routing.ts'), 'utf8')
+    expect(routing).toMatch(/if \(input\.allowed && !input\.allowed\.includes\(id\)\) return false/)
   })
 })
 

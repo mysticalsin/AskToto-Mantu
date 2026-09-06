@@ -3,13 +3,12 @@ import {
   cacheBadge,
   cloudflareConnectHref,
   DEFAULT_OPERATOR_URL,
+  resolveOperatorBaseUrl,
   estimateCacheCost,
   formatUsdEstimate,
   mapAnthropicUsage,
   mapOpenAIUsage,
   operatorUrlConfigured,
-  sanitizeOperatorHostname,
-  sanitizeOperatorSsoEmail,
   shouldSendAskText,
   unsupportedCacheUsage
 } from './operator'
@@ -101,33 +100,15 @@ describe('estimateCacheCost', () => {
   })
 })
 
-describe('operatorUrlConfigured', () => {
-  it('is off until an https Operator URL is set', () => {
-    expect(operatorUrlConfigured({})).toBe(false)
-    expect(operatorUrlConfigured({ operatorUrl: '' })).toBe(false)
-    expect(operatorUrlConfigured({ operatorUrl: 'http://localhost' })).toBe(false)
-    expect(operatorUrlConfigured({ operatorUrl: 'https://metis-operator.example.workers.dev' })).toBe(true)
-    expect(operatorUrlConfigured({}, { METIS_OPERATOR_URL: 'https://op.example.workers.dev' })).toBe(true)
-  })
-
-  it('sends Ask text by default once a URL is set', () => {
-    const url = { operatorUrl: 'https://metis-operator.example.workers.dev' }
-    expect(shouldSendAskText(url)).toBe(true)
-    expect(shouldSendAskText({ ...url, sendAskText: false })).toBe(false)
-    expect(shouldSendAskText({ sendAskText: true })).toBe(false)
-  })
-})
-
-describe('cacheBadge', () => {
-  it('does not treat missing as a hit', () => {
-    expect(cacheBadge({ cacheStatus: 'not-reported' })).toBe('not-reported')
-    expect(cacheBadge({ cacheRead: 10 })).toBe('hit')
-  })
-})
-
 describe('cloudflareConnectHref', () => {
   it('defaults to the live Operator connect path', () => {
     expect(cloudflareConnectHref({}, {})).toBe(`${DEFAULT_OPERATOR_URL}/cloudflare/connect`)
+  })
+
+  it('uses Settings operatorUrl when https', () => {
+    expect(cloudflareConnectHref({ operatorUrl: 'https://op.example.workers.dev/' }, {})).toBe(
+      'https://op.example.workers.dev/cloudflare/connect'
+    )
   })
 
   it('refuses http', () => {
@@ -135,15 +116,54 @@ describe('cloudflareConnectHref', () => {
   })
 })
 
-describe('operator seat identity', () => {
-  it('keeps a real hostname and SSO email and drops junk', () => {
-    expect(sanitizeOperatorHostname('Tonys-MacBook-Pro')).toBe('Tonys-MacBook-Pro')
-    expect(sanitizeOperatorHostname('Tony.walteur-pc')).toBe('Tony.walteur-pc')
-    expect(sanitizeOperatorHostname('not a host')).toBeNull()
-    expect(sanitizeOperatorHostname('')).toBeNull()
-    expect(sanitizeOperatorSsoEmail('Twalteur@amaris.com')).toBe('twalteur@amaris.com')
-    expect(sanitizeOperatorSsoEmail('Tony.walteur@gmail.com')).toBe('tony.walteur@gmail.com')
-    expect(sanitizeOperatorSsoEmail('not-an-email')).toBeNull()
-    expect(sanitizeOperatorSsoEmail('sk-ant-api03-abcdefghijklmnopqrstuvwxyz')).toBeNull()
+describe('resolveOperatorBaseUrl', () => {
+  it('falls back to DEFAULT when Settings and env are empty or whitespace', () => {
+    expect(resolveOperatorBaseUrl({}, {})).toBe(DEFAULT_OPERATOR_URL)
+    expect(resolveOperatorBaseUrl({ operatorUrl: '' }, {})).toBe(DEFAULT_OPERATOR_URL)
+    expect(resolveOperatorBaseUrl({ operatorUrl: '   ' }, {})).toBe(DEFAULT_OPERATOR_URL)
+    expect(resolveOperatorBaseUrl({}, { METIS_OPERATOR_URL: '   ' })).toBe(DEFAULT_OPERATOR_URL)
+  })
+
+  it('prefers Settings, then METIS_OPERATOR_URL, and strips a trailing slash', () => {
+    expect(resolveOperatorBaseUrl({ operatorUrl: 'https://op.example.workers.dev/' }, {})).toBe(
+      'https://op.example.workers.dev'
+    )
+    expect(resolveOperatorBaseUrl({}, { METIS_OPERATOR_URL: 'https://env.example.workers.dev/' })).toBe(
+      'https://env.example.workers.dev'
+    )
+  })
+
+  it('refuses an explicit http override instead of falling back to DEFAULT', () => {
+    expect(resolveOperatorBaseUrl({ operatorUrl: 'http://localhost:8787' }, {})).toBe('')
+    expect(resolveOperatorBaseUrl({}, { METIS_OPERATOR_URL: 'http://localhost:8787' })).toBe('')
+  })
+})
+
+describe('operatorUrlConfigured', () => {
+  it('falls back to DEFAULT_OPERATOR_URL so seats can heartbeat without Settings', () => {
+    expect(resolveOperatorBaseUrl({}, {})).toBe(DEFAULT_OPERATOR_URL)
+    expect(operatorUrlConfigured({})).toBe(true)
+    expect(operatorUrlConfigured({ operatorUrl: '' })).toBe(true)
+    expect(operatorUrlConfigured({ operatorUrl: '   ' })).toBe(true)
+    expect(operatorUrlConfigured({ operatorUrl: 'http://localhost' })).toBe(false)
+    expect(operatorUrlConfigured({ operatorUrl: 'https://metis-operator.example.workers.dev' })).toBe(true)
+    expect(operatorUrlConfigured({}, { METIS_OPERATOR_URL: 'https://op.example.workers.dev' })).toBe(true)
+    expect(operatorUrlConfigured({}, { METIS_OPERATOR_URL: '   ' })).toBe(true)
+  })
+
+  it('sends Ask text only once an explicit URL is set (not bare DEFAULT or whitespace)', () => {
+    const url = { operatorUrl: 'https://metis-operator.example.workers.dev' }
+    expect(shouldSendAskText(url)).toBe(true)
+    expect(shouldSendAskText({ ...url, sendAskText: false })).toBe(false)
+    expect(shouldSendAskText({ sendAskText: true })).toBe(false)
+    expect(shouldSendAskText({})).toBe(false)
+    expect(shouldSendAskText({ operatorUrl: '   ', sendAskText: true })).toBe(false)
+  })
+})
+
+describe('cacheBadge', () => {
+  it('does not treat missing as a hit', () => {
+    expect(cacheBadge({ cacheStatus: 'not-reported' })).toBe('not-reported')
+    expect(cacheBadge({ cacheRead: 10 })).toBe('hit')
   })
 })

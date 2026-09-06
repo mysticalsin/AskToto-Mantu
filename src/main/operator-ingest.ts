@@ -3,7 +3,7 @@ import { hostname as osHostname } from 'node:os'
 import { redactSecrets } from '@shared/redact'
 import { filterFundedProviders } from '@shared/ask-routing'
 import { inspectBundleResponse } from '@shared/bundle-response'
-import { operatorUrlConfigured, shouldSendAskText, type AskLogLine, type StreamCacheUsage } from '@shared/operator'
+import { operatorUrlConfigured, resolveOperatorBaseUrl, shouldSendAskText, type AskLogLine, type StreamCacheUsage } from '@shared/operator'
 import { buildSeatMeta, type SeatMeta } from '@shared/operator-seat'
 import { classifyQuestionType, normalizeQuestionType, type QuestionType } from '@shared/question-type'
 import type { Settings } from '@shared/ipc'
@@ -50,7 +50,7 @@ export function stopOperatorRuntime(): void {
 }
 
 function resolveUrl(settings: OperatorRuntimeSettings, env = process.env): string {
-  return (settings.operatorUrl || env.METIS_OPERATOR_URL || '').trim().replace(/\/$/, '')
+  return resolveOperatorBaseUrl(settings, env)
 }
 
 function resolveSecret(settings: OperatorRuntimeSettings, env = process.env): string {

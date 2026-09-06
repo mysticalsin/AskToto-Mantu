@@ -175,6 +175,7 @@ import {
   overlayRestSize,
   parkAfterExclusiveOnboarding,
   parkedHoverReanchor,
+  hideParkWindowOpacity,
   settingsOpenRect,
   shouldIgnoreResizeWhilePeekResting,
   shouldParkHoverRestAfterLeavingSurface,
@@ -187,6 +188,7 @@ import {
   SETTINGS_WINDOW_MIN,
   settingsContentHeight
 } from '@shared/settings-bounds'
+import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
 import {
   CURSOR_WATCH_INTERVAL_MS,
   OVERLAY_LEAVE_PARK_MS,
@@ -327,8 +329,10 @@ import {
 } from './brain/store'
 import { buildBrainContext } from './brain/context'
 import { buildSystem, buildSystemParts } from './personas'
+import { applyCaveman } from '@shared/caveman-ask'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
-import { isOpenAICloudCacheEligible, operatorUrlConfigured, promptCacheKey as makePromptCacheKey } from '@shared/operator'
+import { isOpenAICloudCacheEligible, promptCacheKey as makePromptCacheKey, resolveOperatorBaseUrl } from '@shared/operator'
+import { cloudflareConnectTarget } from './cloudflare-connect'
 import { loadVerifiedSkill, setModeSkillsOverlayRoot, skillLockHashForMode } from './mode-skills'
 import {
   operatorAskTransport,
@@ -343,9 +347,6 @@ import { BoundedSet } from './bounded-set'
 import { installEgressGuard } from './net/egress-guard'
 import { buildCrmIngestEvent, meetingFileHash, shouldIngestCrm } from './operator-crm'
 import { startOperatorOverlayPoll } from './operator-overlay'
-import { activateOperatorLicenseToken } from './operator-license-activate'
-import { operatorGate } from './operator-entitlements-state'
-import { operatorCrmCredentialFor, operatorIntegrationsSnapshot, registeredOperatorMcpServers, resolveCrmCredentialSource } from './operator-integrations'
 import { initLogging, mainLog, auditLog } from './logger'
 import { consumeSecurityLimit, RATE_LIMIT_USER_MESSAGE, shouldSampleIpcDeny, takeHotPath, type SecurityLimitBucket } from './security-limits'
 import { safeMeetingBasename } from './meeting-path'
@@ -606,6 +607,19 @@ if (process.env.ASKTOTO_USERDATA) app.setPath('userData', process.env.ASKTOTO_US
 // clobber it, wedging onboarding at the last slide. A '-dev' suffixed profile sidesteps all of it.
 if (!app.isPackaged && !process.env.ASKTOTO_USERDATA) {
   app.setPath('userData', `${app.getPath('userData')}-dev`)
+}
+
+// Unpackaged Electron.app still ships CFBundleName "Electron". setName changes
+// app.getName() / About / some menus to Métis. The macOS menu-bar process name
+// stays Electron unless a wrapper .app overrides Info.plist — do not invent
+// a second product name for unpackaged builds. Packaged Metis.app already
+// uses CFBundleDisplayName Métis.
+if (!app.isPackaged && !isCaheEdition()) {
+  try {
+    app.setName('Métis')
+  } catch {
+    /* headless */
+  }
 }
 
 // Profile-dir migration across product-name changes. userData follows CFBundleName, so each rename
@@ -1668,11 +1682,24 @@ function leaveExclusiveOsFullscreen(w: BrowserWindow): void {
   }
 }
 
+/** Seal Goldberg in the live renderer before exclusive destroy / park. */
+function lockOnboardingAudioInRenderer(w: BrowserWindow | null): void {
+  if (!w || w.isDestroyed()) return
+  try {
+    void w.webContents.executeJavaScript(
+      `window.dispatchEvent(new Event(${JSON.stringify(ONBOARDING_AUDIO_LOCK_EVENT)}))`
+    )
+  } catch {
+    /* headless / already gone */
+  }
+}
+
 /** Destroy the current overlay and build one whose constructor chrome matches onboardingExclusiveLive(). */
 function recreateOverlayWindow(): void {
   const dying = win
   win = null
   if (dying && !dying.isDestroyed()) {
+    lockOnboardingAudioInRenderer(dying)
     leaveExclusiveOsFullscreen(dying)
     try {
       dying.destroy()
@@ -1681,6 +1708,51 @@ function recreateOverlayWindow(): void {
     }
   }
   createWindow()
+}
+
+/** Exclusive hero hold, Settings glass, or transparent rest. Hide park is opacity 0. */
+function applyOverlaySurfaceChrome(): void {
+  if (!win || win.isDestroyed()) return
+  if (onboardingExclusiveLive()) {
+    try {
+      win.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
+      win.setOpacity(1)
+    } catch {
+      /* headless */
+    }
+    return
+  }
+  if (settingsSurfaceOpen) {
+    try {
+      win.setBackgroundColor(SETTINGS_SURFACE_BACKGROUND)
+      win.setOpacity(1)
+    } catch {
+      /* headless */
+    }
+    return
+  }
+  try {
+    win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
+  } catch {
+    /* headless */
+  }
+  try {
+    win.setOpacity(hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized))
+  } catch {
+    /* headless */
+  }
+}
+
+/** Hide/island park at bounds.y. Re-assert if darwin clamped into workArea.y≈39. */
+function commitParkedOverlayBounds(park: { x: number; y: number; width: number; height: number }): void {
+  if (!win || win.isDestroyed()) return
+  win.setBounds(park, false)
+  try {
+    const after = win.getBounds()
+    if (after.x !== park.x || after.y !== park.y) win.setPosition(park.x, park.y, false)
+  } catch {
+    /* headless */
+  }
 }
 
 function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDisplayMatching(w.getBounds())): void {
@@ -1708,6 +1780,7 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
   try {
     w.setFullScreenable?.(true)
     w.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
+    w.setOpacity(1)
     w.setBounds(stage)
   } catch {
     /* headless / already destroyed */
@@ -1734,6 +1807,7 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
 /** After onboardingDone only: leave exclusive fullscreen and park hide/island peek (never 880×816). */
 function exitExclusiveOnboardingStage(): void {
   if (!win || win.isDestroyed()) return
+  lockOnboardingAudioInRenderer(win)
   leaveExclusiveOsFullscreen(win)
   if (!overlayWindowTransparent) {
     recreateOverlayWindow()
@@ -1755,9 +1829,10 @@ function exitExclusiveOnboardingStage(): void {
   currentWidth = park.width
   islandResting = overlayUsesHover(layout)
   userAnchorY = park.y
-  win.setBounds(park, false)
+  commitParkedOverlayBounds(park)
   startOverlayCursorWatch()
   applyHideClickThrough()
+  applyOverlaySurfaceChrome()
 }
 
 function applyOverlayAlwaysOnTop(w: BrowserWindow): void {
@@ -1844,6 +1919,12 @@ function createWindow(): void {
     // move reports 8×44 (Tony listwins) even after clampHeight lets 2px through.
     minWidth: 1,
     minHeight: 1,
+    // Hide park is at bounds.y (0 on primary). Without this, darwin clamps
+    // setBounds into workArea.y≈39 — the visible purple 8×2 hairline.
+    enableLargerThanScreen: true,
+    // Exclusive: hidden until ready-to-show so constructor chrome is never the first
+    // visible frame. Hero-matching hold (`#05010A`) is the window color if paint lags.
+    show: !onboardingLive,
     backgroundColor: chrome.backgroundColor,
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
@@ -2011,8 +2092,21 @@ function createWindow(): void {
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }
+  const overlay = win
+  const revealExclusiveWhenPainted = (): void => {
+    if (win !== overlay || overlay.isDestroyed() || overlay.isVisible()) return
+    if (!onboardingExclusiveLive()) return
+    try {
+      overlay.showInactive()
+    } catch {
+      /* headless */
+    }
+  }
+  overlay.once('ready-to-show', revealExclusiveWhenPainted)
+  overlay.webContents.once('did-finish-load', revealExclusiveWhenPainted)
   startOverlayCursorWatch()
   applyHideClickThrough()
+  applyOverlaySurfaceChrome()
 }
 
 function resizeTo(height: number): void {
@@ -2312,7 +2406,8 @@ function parkOverlayAfterHideSpring(): boolean {
   } catch {
     /* headless */
   }
-  win.setBounds(park, false)
+  applyOverlaySurfaceChrome()
+  commitParkedOverlayBounds(park)
   overlayCursorWatchHovering = false
   applyHideClickThrough()
   // Hide rest is an always-on invisible hairline. Tray hide() must not leave
@@ -2384,6 +2479,7 @@ function restoreBarWidth(): void {
   cancelOverlayLeavePark()
   islandResting = false
   applyHideClickThrough()
+  applyOverlaySurfaceChrome()
   // LSUIElement / tray Show-Hide can leave the window hidden. Hover reveal must
   // showInactive (never show+focus) so the top-edge path works without hunting the menu.
   try {
@@ -2430,11 +2526,7 @@ function applySettingsSurface(): void {
   } catch {
     /* headless */
   }
-  try {
-    win.setBackgroundColor(SETTINGS_SURFACE_BACKGROUND)
-  } catch {
-    /* headless */
-  }
+  applyOverlaySurfaceChrome()
   const display = screen.getDisplayMatching(win.getBounds())
   const rect = settingsOpenRect(getDisplayMetrics(display), ISLAND_TOP_MARGIN)
   win.setBounds(rect, false)
@@ -2454,11 +2546,7 @@ function leaveSettingsSurface(): void {
   } catch {
     /* headless */
   }
-  try {
-    win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
-  } catch {
-    /* headless */
-  }
+  applyOverlaySurfaceChrome()
 }
 
 // Re-center the compact bar on its current display. The old fixed 'settings' window-mode was removed —
@@ -2474,8 +2562,9 @@ function setWindowMode(): void {
     const park = parkAfterExclusiveOnboarding(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
     currentWidth = park.width
     userAnchorY = park.y
-    win.setBounds(park, false)
+    commitParkedOverlayBounds(park)
     applyHideClickThrough()
+    applyOverlaySurfaceChrome()
     return
   }
   const { workArea } = screen.getDisplayMatching(win.getBounds())
@@ -2491,6 +2580,11 @@ function setWindowMode(): void {
     win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
   } catch {
     /* headless */
+  }
+  try {
+    win.setOpacity(hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized))
+  } catch {
+    /* headless / lifted placement stub */
   }
   win.setBounds({ x, y: b.y, width: currentWidth, height: clampHeight(height, workArea.height) }, false)
 }
@@ -3628,22 +3722,6 @@ function registerIpc(): void {
     for (const k of ['mcpConnections', 'clickupClientId', 'planeClientId']) {
       if (k in p) delete (p as Record<string, unknown>)[k]
     }
-    // Operator entitlement state (PLAN.md P2.2b #2): only a successful heartbeat
-    // (operator-entitlements-state.ts) may write these — a renderer patch must not self-grant a gated
-    // feature. The license token/jti/last4/exp are main-owned for the same reason mcpConnections is
-    // above: only IPC.operatorLicenseActivate's own parse may set them.
-    for (const k of [
-      'operatorTier',
-      'operatorEntitlements',
-      'operatorIntegrationsVersion',
-      'operatorEntitlementsAt',
-      'operatorLicenseToken',
-      'operatorLicenseJti',
-      'operatorLicenseLast4',
-      'operatorLicenseExpiresAt'
-    ]) {
-      if (k in p) delete (p as Record<string, unknown>)[k]
-    }
     const cur = getSettings()
     const wasEncrypted = cur.encryptTranscripts
     // Task MI-5 consent gate: turning publishBrainPages ON while transcripts stay encrypted writes
@@ -3699,7 +3777,10 @@ function registerIpc(): void {
     const next = setSettings(p)
     auditLog('settings.changed', { keys: Object.keys(p) })
     // Exclusive stage exits only here: onboardingDone false→true. Replay (true→false) re-enters it.
-    if (!cur.onboardingDone && next.onboardingDone) exitExclusiveOnboardingStage()
+    if (!cur.onboardingDone && next.onboardingDone) {
+      lockOnboardingAudioInRenderer(win)
+      exitExclusiveOnboardingStage()
+    }
     else if (cur.onboardingDone && !next.onboardingDone && win && !win.isDestroyed()) {
       applyExclusiveOnboardingStage(win)
     }
@@ -3839,86 +3920,8 @@ function registerIpc(): void {
   // --- Licensing (phone-home activation; see main/license.ts) ---
   ipcMain.handle(IPC.operatorOpen, (e) => {
     assertMainWindow(e)
-    const url = (getSettings().operatorUrl || process.env.METIS_OPERATOR_URL || '').trim()
-    if (/^https:\/\//i.test(url)) void shell.openExternal(url)
-  })
-  // Operator seat license (METIS-OP-1) pairing, PLAN.md P2.2b #1. Local format parse only — see
-  // operator-license-activate.ts's own header for why no secret is needed here. An empty licenseKey
-  // clears a previously activated license (e.g. the user pastes nothing and saves, or explicitly wants
-  // to unpair this seat) rather than being treated as a format error.
-  ipcMain.handle(IPC.operatorLicenseActivate, (e, payload: unknown) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const raw = payload && typeof payload === 'object' && 'licenseKey' in (payload as object) ? (payload as { licenseKey: unknown }).licenseKey : payload
-    const token = typeof raw === 'string' ? raw.trim() : ''
-    if (token === '') {
-      setSettings({
-        operatorLicenseToken: '',
-        operatorLicenseJti: '',
-        operatorLicenseLast4: '',
-        operatorLicenseExpiresAt: null,
-        operatorTier: null,
-        operatorEntitlements: null,
-        operatorEntitlementsAt: 0
-      })
-      auditLog('operator.license.cleared', {})
-      return { ok: true }
-    }
-    const result = activateOperatorLicenseToken(token)
-    if (!result.ok) return result
-    setSettings({
-      operatorLicenseToken: token,
-      operatorLicenseJti: result.jti!,
-      operatorLicenseLast4: result.last4!,
-      operatorLicenseExpiresAt: result.expiresAt!,
-      // A freshly activated license has not been confirmed by the Worker yet — clear any stale
-      // tier/entitlements a PREVIOUS license left behind so Settings shows "waiting for Operator"
-      // instead of the old license's last-known grant.
-      operatorTier: null,
-      operatorEntitlements: null,
-      operatorEntitlementsAt: 0
-    })
-    auditLog('operator.license.activated', { jti: result.jti })
-    return result
-  })
-  // Read-only Operator status snapshot for Settings (local settings + in-memory integrations state
-  // only, never touches the network) — mirrors licenseStatus's own "local settings only" contract.
-  ipcMain.handle(IPC.operatorStatus, (e) => {
-    assertMainWindow(e)
-    if (!requireAuth()) {
-      return {
-        configured: false,
-        tier: null,
-        entitlements: null,
-        licenseLast4: '',
-        licenseExpiresAt: null,
-        integrations: [],
-        mcpServers: []
-      }
-    }
-    const s = getSettings()
-    return {
-      configured: operatorUrlConfigured(s) && !!s.operatorIngestSecret.trim(),
-      tier: s.operatorTier,
-      entitlements: s.operatorEntitlements,
-      licenseLast4: s.operatorLicenseLast4,
-      licenseExpiresAt: s.operatorLicenseExpiresAt,
-      // Never the raw credential itself — only whether one exists and its last4, same discipline as
-      // every other credential surfaced to the renderer (licenseLast4, vault key last4s).
-      integrations: operatorIntegrationsSnapshot().integrations.map((i) => ({
-        id: i.id,
-        kind: i.kind,
-        label: i.label,
-        hasCredential: !!i.credential,
-        last4: i.credential ? i.credential.slice(-4) : ''
-      })),
-      mcpServers: registeredOperatorMcpServers().map((m) => ({
-        id: m.id,
-        kind: m.kind,
-        label: m.label,
-        tools: m.tools ?? []
-      }))
-    }
+    const url = resolveOperatorBaseUrl(getSettings())
+    if (url) void shell.openExternal(url)
   })
   ipcMain.handle(IPC.licenseActivate, async (e, payload: unknown) => {
     assertMainWindow(e)
@@ -3937,6 +3940,13 @@ function registerIpc(): void {
     const urlLocked = getLockedKeys().includes('licenseServerUrl')
     const serverUrl = urlLocked ? getSettings().licenseServerUrl || parsed.data.serverUrl : parsed.data.serverUrl
     return activateLicense(serverUrl, parsed.data.licenseKey)
+  })
+  ipcMain.handle(IPC.cloudflareConnect, (e) => {
+    assertMainWindow(e)
+    const target = cloudflareConnectTarget(getSettings())
+    if (!target.ok) return target
+    void shell.openExternal(target.href)
+    return target
   })
   // Read-only, local settings only — never touches the network. Mirrors metricsRead's pattern of
   // returning a safe empty/default shape (rather than throwing) when signed out.
@@ -4382,28 +4392,11 @@ function registerIpc(): void {
     }
     const s = getSettings()
     const conn = s.mcpConnections.find((c) => c.kind === action.kind)
-    const localReady = !!conn && conn.connected && !!conn.endpointUrl && hasMcpApiKey(conn.id)
-    // PLAN.md P2.2b #3: an Operator-supplied credential is a fallback for "no local key configured",
-    // never an override of one the user already set up — see operatorCrmCredentialFor's own doc comment
-    // for which kinds this applies to and why (clickup's OAuth-only local flow is excluded).
-    const operatorCred = localReady ? null : operatorCrmCredentialFor(action.kind)
-    if (!localReady && !operatorCred) {
+    if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(conn.id)) {
       return { ok: false, error: `${mcpLabelFor(action.kind)} is no longer connected.` }
     }
-    const endpointUrl = localReady ? conn!.endpointUrl : operatorCred!.endpointUrl
-    const apiKey = localReady ? getMcpApiKey(conn!.id) : operatorCred!.apiKey
-    const extraHeaders = localReady ? conn!.extraHeaders : {}
-    const label = localReady ? conn!.label : operatorCred!.label
-    return pushToMcp(endpointUrl, apiKey, extraHeaders, action.toolName, action.payload, label)
-  }
-
-  /** Which credential a CRM push for this connection kind will actually use, for the ingest event's
-   *  `credentialSource` field (PLAN.md P2.2b #3). Computed the same way retryOutboundAction and
-   *  IPC.mcpPush resolve it — local always wins when usable, Operator is a fallback. */
-  function crmCredentialSourceFor(kind: string): 'operator' | 'local' {
-    const conn = getSettings().mcpConnections.find((c) => c.kind === kind)
-    const localReady = !!conn && conn.connected && !!conn.endpointUrl && hasMcpApiKey(conn.id)
-    return resolveCrmCredentialSource(localReady, !!operatorCrmCredentialFor(kind))
+    const apiKey = getMcpApiKey(conn.id)
+    return pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, action.toolName, action.payload, conn.label)
   }
 
   applyOperatorCrmRetries = async (ids: string[]) => {
@@ -4440,8 +4433,7 @@ function registerIpc(): void {
           attempt: one.attempts || 1,
           latencyMs: Date.now() - started,
           result: one.result,
-          error: one.error,
-          credentialSource: crmCredentialSourceFor(action.kind)
+          error: one.error
         })
       )
     }
@@ -4567,9 +4559,6 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     if (denyIfLimited('mcp-outbound')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
-    // PLAN.md P2.2b #2: CRM push is Operator-gated. Ungated when Operator isn't configured.
-    const crmGate = operatorGate('crm_push')
-    if (!crmGate.allowed) return { ok: false, error: crmGate.reason }
     const parsed = McpPushPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
     const { connectionId, meetingFile } = parsed.data
@@ -4589,36 +4578,16 @@ function registerIpc(): void {
       return { ok: false, error: 'This meeting is marked confidential — push is blocked.' }
     }
     const conn = s.mcpConnections.find((c) => c.id === connectionId)
-    const localReady = !!conn && conn.connected && !!conn.endpointUrl && hasMcpApiKey(connectionId)
-    // PLAN.md P2.2b #3: an Operator-supplied credential is a fallback for "no local key configured",
-    // never an override of one the user already set up. Excluded for 'clickup' (see
-    // operatorCrmCredentialFor's doc comment) — that kind always requires a real local connection.
-    const operatorCred = localReady ? null : operatorCrmCredentialFor(connectionId)
-    if (!localReady && !operatorCred) {
+    if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(connectionId)) {
       return { ok: false, error: `${mcpLabelFor(connectionId)} is not connected. Set it up in Settings → Mantu Intelligence first.` }
     }
-    const resolvedConn: McpConnection =
-      conn && localReady
-        ? conn
-        : {
-            id: connectionId,
-            kind: connectionId,
-            label: operatorCred!.label,
-            endpointUrl: operatorCred!.endpointUrl,
-            connected: true,
-            tools: operatorCred!.tools,
-            extraHeaders: {}
-          }
-    const credentialSource: 'operator' | 'local' = localReady ? 'local' : 'operator'
     let clickupList: ClickupList | undefined
     if (connectionId === 'clickup') {
-      // clickup is never Operator-substituted (operatorCred is always null for it), so resolvedConn ===
-      // conn here and this is exactly the pre-existing local-connection flow, unchanged.
-      const dest = await discoverListForClickup(resolvedConn)
+      const dest = await discoverListForClickup(conn)
       if (!dest.ok) return dest
       clickupList = dest.list
       const prepared = prepareClickupPush({
-        tools: resolvedConn.tools,
+        tools: conn.tools,
         list: dest.list,
         rendererTool: toolName,
         rendererArgs: args
@@ -4630,27 +4599,22 @@ function registerIpc(): void {
     // Only a tool the user actually saw and picked when the connection was tested/saved may be invoked —
     // otherwise a compromised or buggy renderer call could reach an unintended (possibly destructive) MCP
     // tool on the user's live connection. ClickUp create-task is remapped above from the saved tools list.
-    // An Operator-substituted connection is held to the same rule: only a tool operator-integrations.ts
-    // has actually discovered on that connection.
-    if (!resolvedConn.tools.includes(toolName)) {
-      return { ok: false, error: `Unknown ${resolvedConn.label} tool.` }
+    if (!conn.tools.includes(toolName)) {
+      return { ok: false, error: `Unknown ${conn.label} tool.` }
     }
-    const apiKey = localReady ? getMcpApiKey(connectionId) : operatorCred!.apiKey
+    const apiKey = getMcpApiKey(connectionId)
     const started = Date.now()
-    let r = await pushToMcp(resolvedConn.endpointUrl, apiKey, resolvedConn.extraHeaders, toolName, args, resolvedConn.label)
+    let r = await pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, toolName, args, conn.label)
     // ClickUp-only: its credential is an OAuth access token, not a pasted key that only changes when the
     // user edits it — a 401 here can mean the token simply expired. Attempt exactly one refresh + retry
     // before surfacing reconnect-required, gated on the SAME single-flight lock the interactive OAuth
     // flow uses (see clickupOAuth.ts) so a background refresh here and a user-initiated Reconnect in
-    // Settings can never both persist tokens at once. An Operator-substituted 'plane' connection has no
-    // local refresh token (getMcpRefreshToken returns '' for it), so a 401 there falls straight to the
-    // "session expired, reconnect" branch below rather than a real refresh attempt — a rejected Operator
-    // credential surfaces as a clear, actionable error instead of a crash.
-    if (!r.ok && (resolvedConn.kind === 'clickup' || resolvedConn.kind === 'plane') && /401|403|unauthor|forbidden/i.test(r.error || '')) {
-      const acquire = resolvedConn.kind === 'clickup' ? tryAcquireClickupTokenLock : tryAcquirePlaneTokenLock
-      const release = resolvedConn.kind === 'clickup' ? releaseClickupTokenLock : releasePlaneTokenLock
-      const refresh = resolvedConn.kind === 'clickup' ? refreshClickupToken : refreshPlaneToken
-      const product = resolvedConn.kind === 'clickup' ? 'ClickUp' : 'Plane'
+    // Settings can never both persist tokens at once.
+    if (!r.ok && (conn.kind === 'clickup' || conn.kind === 'plane') && /401|403|unauthor|forbidden/i.test(r.error || '')) {
+      const acquire = conn.kind === 'clickup' ? tryAcquireClickupTokenLock : tryAcquirePlaneTokenLock
+      const release = conn.kind === 'clickup' ? releaseClickupTokenLock : releasePlaneTokenLock
+      const refresh = conn.kind === 'clickup' ? refreshClickupToken : refreshPlaneToken
+      const product = conn.kind === 'clickup' ? 'ClickUp' : 'Plane'
       if (acquire()) {
         try {
           const refreshToken = getMcpRefreshToken(connectionId)
@@ -4658,7 +4622,7 @@ function registerIpc(): void {
           if (refreshed.ok && refreshed.accessToken) {
             setMcpApiKey(connectionId, refreshed.accessToken)
             setMcpRefreshToken(connectionId, refreshed.refreshToken ?? refreshToken ?? '')
-            r = await pushToMcp(resolvedConn.endpointUrl, refreshed.accessToken, resolvedConn.extraHeaders, toolName, args, resolvedConn.label)
+            r = await pushToMcp(conn.endpointUrl, refreshed.accessToken, conn.extraHeaders, toolName, args, conn.label)
           } else {
             r = { ok: false, error: `Your ${product} session expired. Reconnect ${product} in Settings.` }
           }
@@ -4674,7 +4638,7 @@ function registerIpc(): void {
     const meetingBase = meetingFile ? meetingFile.split(/[/\\]/).pop() || meetingFile : undefined
     const actionKind = inferPushActionKind(toolName)
     const crmId = outboundActionId({
-      kind: resolvedConn.kind,
+      kind: conn.kind,
       toolName,
       meetingFile: meetingBase,
       payload: args
@@ -4692,8 +4656,7 @@ function registerIpc(): void {
           attempt: 1,
           latencyMs: Date.now() - started,
           result: r.result,
-          error: r.error,
-          credentialSource
+          error: r.error
         })
       )
     }
@@ -4709,7 +4672,7 @@ function registerIpc(): void {
     if (!r.ok) {
       pushQueue.enqueue({
         id: crmId,
-        kind: resolvedConn.kind,
+        kind: conn.kind,
         action: actionKind,
         toolName,
         payload: args,
@@ -5460,18 +5423,18 @@ function registerIpc(): void {
       win?.webContents.send(IPC.streamError, { id: req.id, message: PRIVATE_VIEW_BLOCKED_MESSAGE })
       return
     }
-    // PLAN.md P2.2b #2: recap generation is Operator-gated (a Métis Light seat's license may not
-    // include it). Only mode:'recap' is checked here — answer/vision/suggest/summary stay ungated by
-    // this call, and an unconfigured seat is never gated at all (operatorGate's own contract).
-    if (req.mode === 'recap') {
-      const gate = operatorGate('recap')
-      if (!gate.allowed) {
-        auditLog('operator.gate.blocked', { feature: 'recap' })
-        win?.webContents.send(IPC.streamError, { id: req.id, message: gate.reason || 'Recap is not available.' })
+    let s = getSettings()
+    // Ask caveman register: `/caveman lite|full|ultra…`, "stop caveman", "normal mode".
+    // Persist in the existing settings store, strip the command from the question the model sees.
+    if ((req.mode === 'answer' || req.mode === 'vision') && req.kind !== 'factcheck') {
+      const caveman = applyCaveman(req.prompt, s.askCaveman)
+      if (caveman.changed) s = setSettings({ askCaveman: caveman.next })
+      req.prompt = caveman.visiblePrompt
+      if (caveman.changed && !req.prompt.trim() && !req.image && !req.wantsScreenContext) {
+        win?.webContents.send(IPC.streamDone, { id: req.id })
         return
       }
     }
-    const s = getSettings()
     // Fresh-question boundary (see the state block above): a plain interactive ask outside a live meeting
     // starts clean unless the user opted into follow-up memory — and even then the memory expires after
     // ASK_MEMORY_IDLE_MS of inactivity. Pinned/cascaded requests (agentOverride / providerOverride —
@@ -6000,7 +5963,7 @@ function registerIpc(): void {
         paintedLen += text.length
         win?.webContents.send(IPC.streamDelta, { id: req.id, text })
       }
-      const systemParts = buildSystemParts(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt)
+      const systemParts = buildSystemParts(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt, s.askCaveman)
       const handle = createStream({
         providerId: provider,
         kind: def.kind,
@@ -6058,20 +6021,6 @@ function registerIpc(): void {
             if (!gotToken && provider !== 'local') {
               if (race && race.gate.markDead(race.leg) !== 'surface') return
               if (race) streams.delete(req.id)
-              // Operator traceability (PLAN.md section 3): a terminal failure reports outcome:'error' with
-              // a short CLASS, never this branch's user-facing sentence (that can name the provider/account).
-              void recordOperatorAsk(s, {
-                id: req.id,
-                mode: s.mode,
-                provider,
-                model,
-                ttftMs,
-                totalMs: Date.now() - startedAt,
-                outcome: 'error',
-                error: 'empty-response',
-                question: typeof req.prompt === 'string' ? req.prompt : undefined,
-                vision: req.mode === 'vision'
-              })
               win?.webContents.send(IPC.streamError, {
                 id: req.id,
                 message: 'That provider returned an empty answer, and there was no other provider to try. Check your providers in Settings.'
@@ -6086,18 +6035,6 @@ function registerIpc(): void {
             if (!gotToken && provider === 'local') {
               if (!race || race.gate.markDead(race.leg) === 'surface') {
                 if (race) streams.delete(req.id) // terminal for the race — same release as the error path
-                void recordOperatorAsk(s, {
-                  id: req.id,
-                  mode: s.mode,
-                  provider,
-                  model,
-                  ttftMs,
-                  totalMs: Date.now() - startedAt,
-                  outcome: 'error',
-                  error: 'empty-response',
-                  question: typeof req.prompt === 'string' ? req.prompt : undefined,
-                  vision: req.mode === 'vision'
-                })
                 win?.webContents.send(IPC.streamError, {
                   id: req.id,
                   message: 'Métis Local produced no answer — try again, or add a cloud provider in Settings for longer questions.'
@@ -6313,34 +6250,6 @@ function registerIpc(): void {
                 noteQualifyingUse(req.mode, req.prompt, req.transcript)
                 return
               }
-              // Operator traceability (PLAN.md section 3): a short error CLASS only, reusing the same
-              // classification that picked `friendly` above — never `friendly`/`message` themselves, which
-              // can name a provider account, key fragment, or URL.
-              const errorClass = exhaustion
-                ? exhaustion.kind
-                : isProxyOperatorFault(message)
-                  ? 'proxy-fault'
-                  : isTransient(message)
-                    ? 'transient'
-                    : provider === 'dust' && isDustAuthError({ message })
-                      ? 'auth'
-                      : def.kind === 'cli' && isAuthFailure(message)
-                        ? 'cli-auth'
-                        : isAuthFailure(message)
-                          ? 'auth'
-                          : 'unknown'
-              void recordOperatorAsk(s, {
-                id: req.id,
-                mode: s.mode,
-                provider,
-                model,
-                ttftMs,
-                totalMs: Date.now() - startedAt,
-                outcome: 'error',
-                error: errorClass,
-                question: typeof req.prompt === 'string' ? req.prompt : undefined,
-                vision: req.mode === 'vision'
-              })
               win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
             }
           }
@@ -6638,9 +6547,6 @@ function registerIpc(): void {
   ipcMain.handle(IPC.brainBackfill, async (e) => {
     assertBrainReader(e)
     if (!requireAuth()) return { ran: false, queued: 0, error: SIGN_IN_INDEX_COPY }
-    // PLAN.md P2.2b #2: intelligence indexing is Operator-gated. Ungated when Operator isn't configured.
-    const gate = operatorGate('intelligence')
-    if (!gate.allowed) return { ran: false, queued: 0, error: gate.reason }
     const r = await runIntelligenceIndex('click')
     auditLog('brain.backfill.start', { queued: r.queued, recapped: r.recapped, reason: 'click' })
     return r
@@ -6649,8 +6555,6 @@ function registerIpc(): void {
   ipcMain.handle(IPC.brainIntelligencePass, (e) => {
     assertBrainReader(e)
     if (!requireAuth()) throw new Error('Not signed in.')
-    const gate = operatorGate('intelligence')
-    if (!gate.allowed) return { queued: 0, error: gate.reason }
     return startIntelligencePass()
   })
   // Full rebuild: wipe the DERIVED store (entities/graph/extractions — never the source transcripts)
@@ -6927,16 +6831,11 @@ function registerIpc(): void {
   // answer text or question (those would be content). Seeds the H-section acceptance-rate eval later.
   ipcMain.handle(IPC.answerFeedback, (e, raw: unknown) => {
     assertMainWindow(e)
-    const r = raw as { rating?: unknown; kind?: unknown; askId?: unknown } | null
+    const r = raw as { rating?: unknown; kind?: unknown } | null
     const rating = r?.rating === 'up' || r?.rating === 'down' ? r.rating : null
     if (!rating) return
-    // The renderer's own answer id when it has one (App.tsx's ask.answer.id) — bounded the same way the
-    // heartbeat's retry-id list is (retryIdsFromHeartbeat). Absent falls back to recordOperatorRating's
-    // last-sent-ask default, so an older renderer build stays exactly as accurate as it was before.
-    const askId =
-      typeof r?.askId === 'string' && r.askId.length > 0 && r.askId.length <= 80 ? r.askId : undefined
     auditLog('answer.feedback', { rating, kind: typeof r?.kind === 'string' ? r.kind : undefined })
-    void (askId ? recordOperatorRating(getSettings(), rating, askId) : recordOperatorRating(getSettings(), rating))
+    void recordOperatorRating(getSettings(), rating)
   })
 
   // --- Import audio jobs (main-owned so navigation and overlay closure cannot interrupt them) ---

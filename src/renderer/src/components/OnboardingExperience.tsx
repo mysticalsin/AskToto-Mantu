@@ -86,7 +86,7 @@ import {
   type OnboardingScene
 } from '../lib/onboarding-flow'
 import { appearanceSettingsPatch, seedOnboardingAppearance } from '../lib/onboarding-appearance'
-import { createOnboardingMusicBed, haltAllOnboardingAudio } from '../lib/onboarding-music'
+import { createOnboardingMusicBed, haltAllOnboardingAudio, lockOnboardingAudio } from '../lib/onboarding-music'
 import { closeOnboardingPortal, disposePortalAudio, playBarLand, playPortalOpen, requestBarLand } from '../lib/onboarding-portal'
 import {
   TELL_THE_ROOM_CHECKBOX,
@@ -222,7 +222,7 @@ function OnboardingHeroVideo({
         loop
         playsInline
         autoPlay
-        preload="metadata"
+        preload="auto"
         src={ONBOARDING_HERO_VIDEO_SRC}
         onError={() => setFailed(true)}
       />
@@ -409,10 +409,22 @@ export function asrEnsureFailureStatus(err?: unknown): AsrAssetsStatus {
   return { ready: false, status: 'error', progress: 0, label: message, error: message }
 }
 
-/** First-run cannot leave Act 3 while Parakeet + Whisper-floor files are still missing. */
-export function setupAsrBlocksContinue(rows: SetupRow[]): boolean {
+/**
+ * First-run cannot leave Act 3 while transcription files are still missing.
+ * Unlock when the setup UI already claims complete (`allReady`, including skipped)
+ * or the ASR engine / row is ready. Never leave a dead muted Continue on a
+ * complete-looking list.
+ */
+export function setupAsrBlocksContinue(
+  rows: SetupRow[],
+  asrStatus?: AsrAssetsStatus | null
+): boolean {
+  if (summarizeSetupRows(rows).allReady) return false
+  if (asrStatusIsReady(asrStatus)) return false
   const asr = rows.find((r) => r.key === 'asr')
-  return !asr || asr.state !== 'ready'
+  if (asr && (asr.state === 'ready' || asr.state === 'skipped')) return false
+  if (!asr) return rows.length === 0
+  return true
 }
 
 /** First-run cannot mark onboardingDone until Ready, files are ready, and consent is given. */
@@ -1067,6 +1079,7 @@ export function OnboardingExperience({
   const finish = async (): Promise<void> => {
     if (doneRef.current || !canMarkOnboardingDone({ scene, asrReady, consent })) return
     doneRef.current = true
+    lockOnboardingAudio()
     haltAllOnboardingAudio()
     music.stop()
     disposePortalAudio()
@@ -1084,7 +1097,7 @@ export function OnboardingExperience({
   const needsPerms = rows.some(
     (r) => (r.key === 'mic' || r.key === 'screen') && (r.state === 'action' || r.state === 'blocked' || r.state === 'restart')
   )
-  const asrBlocksContinue = setupAsrBlocksContinue(rows)
+  const asrBlocksContinue = setupAsrBlocksContinue(rows, asrStatus)
 
   return (
     <div
@@ -1333,7 +1346,7 @@ export function OnboardingExperience({
               // Transcription files must be on disk before first-run leaves this act.
               disabled={asrBlocksContinue}
               onClick={() => {
-                if (setupAsrBlocksContinue(rows)) return
+                if (setupAsrBlocksContinue(rows, asrStatus)) return
                 playHero()
                 setScene(sceneAfterSetup())
               }}
@@ -1477,6 +1490,7 @@ export function OnboardingV2({
       patch={patch}
       onOpenAiSettings={onOpenAiSettings}
       onDone={async ({ mode, recordingConsent }) => {
+        lockOnboardingAudio()
         haltAllOnboardingAudio()
         await patch({ mode, recordingConsent, onboardingDone: true, onboardingDoneAt: Date.now() })
         onDone()

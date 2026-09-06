@@ -17,7 +17,6 @@ export interface StreamCacheUsage {
   cacheTtl?: CacheTtl
 }
 
-/** Live Operator Worker. Used when Settings has no operatorUrl yet. */
 export const DEFAULT_OPERATOR_URL = 'https://metis-operator.tony-walteur.workers.dev'
 
 export const CF_CONNECT_PATH = '/cloudflare/connect'
@@ -31,24 +30,6 @@ function nodeEnv(): Record<string, string | undefined> {
   return g.process?.env ?? {}
 }
 
-/** True when Settings (or METIS_OPERATOR_URL) points at the Cloudflare Operator Worker. */
-export function operatorUrlConfigured(
-  settings: { operatorUrl?: string } | null | undefined,
-  env: Record<string, string | undefined> = nodeEnv()
-): boolean {
-  const url = (settings?.operatorUrl || env.METIS_OPERATOR_URL || '').trim()
-  return /^https:\/\//i.test(url)
-}
-
-/** Ask-text toggle. Default ON once a URL is set; ignored when Operator is off. */
-export function shouldSendAskText(
-  settings: { operatorUrl?: string; sendAskText?: boolean } | null | undefined,
-  env: Record<string, string | undefined> = nodeEnv()
-): boolean {
-  if (!operatorUrlConfigured(settings, env)) return false
-  return settings?.sendAskText !== false
-}
-
 /** HTTPS Operator `/cloudflare/connect`. Null if the base is not https. */
 export function cloudflareConnectHref(
   settings: { operatorUrl?: string } | null | undefined = {},
@@ -57,6 +38,49 @@ export function cloudflareConnectHref(
   const raw = (settings?.operatorUrl || env.METIS_OPERATOR_URL || DEFAULT_OPERATOR_URL).trim()
   if (!/^https:\/\//i.test(raw)) return null
   return `${raw.replace(/\/$/, '')}${CF_CONNECT_PATH}`
+}
+
+/**
+ * HTTPS Operator base for heartbeat / ingest / skills / Open Operator.
+ * Settings → METIS_OPERATOR_URL → DEFAULT_OPERATOR_URL. Whitespace-only values are empty.
+ * Empty Settings still phones home to the live Worker once an ingest secret is present.
+ * Non-https overrides stay empty.
+ */
+export function resolveOperatorBaseUrl(
+  settings: { operatorUrl?: string } | null | undefined = {},
+  env: Record<string, string | undefined> = nodeEnv()
+): string {
+  const fromSettings = settings?.operatorUrl?.trim() ?? ''
+  const fromEnv = env.METIS_OPERATOR_URL?.trim() ?? ''
+  const raw = (fromSettings || fromEnv || DEFAULT_OPERATOR_URL).replace(/\/$/, '')
+  return /^https:\/\//i.test(raw) ? raw : ''
+}
+
+/** True when a usable HTTPS Operator base resolves (Settings, env, or shipped DEFAULT). */
+export function operatorUrlConfigured(
+  settings: { operatorUrl?: string } | null | undefined,
+  env: Record<string, string | undefined> = nodeEnv()
+): boolean {
+  return Boolean(resolveOperatorBaseUrl(settings, env))
+}
+
+/** Explicit Settings/env URL only — not the shipped DEFAULT. Gates Ask-text opt-in. */
+export function operatorUrlExplicit(
+  settings: { operatorUrl?: string } | null | undefined,
+  env: Record<string, string | undefined> = nodeEnv()
+): boolean {
+  const fromSettings = settings?.operatorUrl?.trim() ?? ''
+  const fromEnv = env.METIS_OPERATOR_URL?.trim() ?? ''
+  return /^https:\/\//i.test(fromSettings || fromEnv)
+}
+
+/** Ask-text toggle. Default ON once an explicit URL is set; ignored for bare DEFAULT. */
+export function shouldSendAskText(
+  settings: { operatorUrl?: string; sendAskText?: boolean } | null | undefined,
+  env: Record<string, string | undefined> = nodeEnv()
+): boolean {
+  if (!operatorUrlExplicit(settings, env)) return false
+  return settings?.sendAskText !== false
 }
 
 export function promptCacheKey(mode: string, skillLockHash: string): string {
