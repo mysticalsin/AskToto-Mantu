@@ -3221,6 +3221,7 @@ export function App(): JSX.Element {
       // the grace collapse back to peek. No-ops unless auto-hide is actually in effect (see the reducer).
       onMouseEnter={onOverlayPointerEnter}
       onMouseLeave={onOverlayPointerLeave}
+      data-settings-surface={view === 'settings' || undefined}
       className={[
         'relative flex w-full flex-col gap-2',
         // Settings fills the 880×800 surface. Without h-full the 480-era panel grew past the

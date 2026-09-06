@@ -144,6 +144,7 @@ describe('MQA-288 — no-flash contract on Settings open/close and overlay rest'
   it('Settings uses dark glass; rest and Hide park stay transparent; never white or #000', () => {
     expect(index).toMatch(/setBackgroundColor\(SETTINGS_SURFACE_BACKGROUND\)/)
     expect(index).toMatch(/setBackgroundColor\(OVERLAY_REST_BACKGROUND\)/)
+    expect(index).toMatch(/rememberBarContentHeight/)
     expect(index).toMatch(/backgroundColor: onboardingLive \? '#3A0B6B' : '#00000000'/)
     expect(isForbiddenFlashBackground(SETTINGS_SURFACE_BACKGROUND)).toBe(false)
     expect(isForbiddenFlashBackground(OVERLAY_REST_BACKGROUND)).toBe(false)
