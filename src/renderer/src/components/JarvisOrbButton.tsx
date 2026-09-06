@@ -1,5 +1,5 @@
 import { useLayoutEffect, useRef } from 'react'
-import { ThinkingOrb } from 'thinking-orbs'
+import { BrandThinkingOrb } from './BrandThinkingOrb'
 import { useWindowDrag } from '../lib/window-drag'
 import { paintOrbFirstFrame } from '../lib/orb-first-frame'
 import {
@@ -64,7 +64,7 @@ export function JarvisOrbButton({
         className={preview ? 'overlay-orb-diagram__jakub-host aw-orb__host' : 'aw-orb__host'}
         aria-hidden="true"
       >
-        <ThinkingOrb
+        <BrandThinkingOrb
           state={orbState}
           size={BAR_PILL_SIZE_PX}
           theme={BAR_ORB_THEME}
