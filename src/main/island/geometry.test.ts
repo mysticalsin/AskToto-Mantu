@@ -721,6 +721,7 @@ describe('overlay chrome modes (hide / island / bar)', () => {
     const autohide = readFileSync(join(__dirname, '../../renderer/src/lib/overlay-autohide.ts'), 'utf8')
     expect(ipc).toMatch(/overlayLayout: z\.enum\(\['hide', 'island', 'bar'\]\)\.default\('hide'\)/)
     expect(ipc).toMatch(/overlayLayout: 'hide'/)
+    expect(ipc).toMatch(/overlayOrbStyle: z\.enum\(\['bar', 'jakub', 'obsidian'\]\)\.default\('bar'\)/)
     expect(settings).toMatch(/OverlayChromePicker/)
     expect(settings).toMatch(/overlayLayout: id/)
     expect(picker).toMatch(/OVERLAY_LAYOUTS/)
