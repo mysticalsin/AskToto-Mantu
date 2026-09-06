@@ -26,9 +26,10 @@ const EXTRA_CSS = `
   width: 100%; border: 1px solid var(--hair); background: var(--panel); color: var(--ink);
   border-radius: 8px; padding: 7px 10px; font: 12px var(--sans);
 }
-.ov-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.kpis.glance { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.kpis.glance .kpi .n { font-size: 32px; margin-top: 12px; }
+.ov-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: stretch; }
+.kpis.glance { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.kpis.glance .kpi { padding: 8px 12px; }
+.kpis.glance .kpi .n { font-size: 28px; margin-top: 8px; }
 .people-row {
   display: grid; grid-template-columns: 56px minmax(0, 1.1fr) minmax(0, 1.1fr) 110px 88px 72px;
   gap: 8px; align-items: center; padding: 8px 4px; border-bottom: 1px solid var(--hair);
@@ -44,16 +45,21 @@ const EXTRA_CSS = `
 }
 .rule h3 { margin: 0 0 4px; font-size: 13px; font-weight: 650; color: var(--ink); }
 .rule p { margin: 0; color: var(--ink2); font-size: 12px; }
-.activity-feed .rt-row { padding: 6px 2px; }
+.activity-feed .rt-row { padding: 4px 2px; font-size: 12px; }
 .rt-live { display: grid; grid-template-columns: minmax(140px, 0.7fr) minmax(140px, 0.7fr) minmax(0, 1.6fr); gap: 12px; align-items: start; }
 .rt-live .kpi .n { font-size: 44px; margin-top: 8px; letter-spacing: -0.05em; }
 .vol-head {
-  display: grid; grid-template-columns: 1fr 56px 64px; gap: 8px; padding: 0 8px 4px;
+  display: grid; grid-template-columns: 1fr 56px 64px; gap: 8px; padding: 0 12px 4px;
   font: 10px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink3);
 }
 .vol-head.geo, .vol-row.geo { grid-template-columns: 1fr 48px 48px 56px; }
-.geo-map-card { padding-bottom: 10px; }
-.geo-map-card svg { display: block; width: 100%; height: auto; min-height: 180px; max-height: 240px; }
+.geo-map-card { padding: 8px 12px 10px; }
+.geo-map-card svg,
+.geo-map-card .stat-choro,
+.geo-corner-map {
+  display: block; width: 100%; height: auto !important; min-height: 200px; max-height: 260px;
+  margin: 0;
+}
 .rt-world { padding-bottom: 10px; }
 .card.rt-map, .card.rt-world { overflow: visible; }
 .rt-world.rt-map .world { min-height: 0; max-height: min(52vh, 440px); }
@@ -91,7 +97,7 @@ const EXTRA_CSS = `
 .works-path small { display: block; margin-top: 4px; color: var(--ink2); font-size: 11px; }
 .search-bar {
   width: 100%; border: 1px solid var(--hair); background: var(--bg); color: var(--ink);
-  border-radius: 8px; padding: 7px 10px; font: 12px var(--sans); margin: 0 0 10px;
+  border-radius: 8px; padding: 6px 10px; font: 12px var(--sans); margin: 0 0 8px;
 }
 @media (max-width: 980px) {
   .ov-pair, .rt-live, .people-row, .works-path { grid-template-columns: 1fr; }
@@ -338,7 +344,7 @@ function renderGeoCorner(data: DashboardPayload): string {
     </article>
     <article class="card geo-map-card" data-geo-widget>
       <p class="eyebrow">Map</p>
-      ${choroplethMini(data.map.countries)}
+      ${choroplethMini(data.map.countries, 'geo-corner-map')}
     </article>
   </div>`
 }
@@ -796,7 +802,7 @@ svg path { vector-effect: non-scaling-stroke; }
       <div class="top-right"><span class="live-dot" data-live-dot><i></i>${k.live}</span></div>
     </header>
 
-    <section class="page wrap" data-page="overview">
+    <section class="page wrap" data-page="overview" data-port-density="shoey">
       <div class="kpis glance" data-overview-kpis>
         ${kpiCard({ title: 'Live seats', value: String(data.roi.liveSeats), sub: 'heartbeat &lt; 2 min · real devices', spark: sparklineLine(k.liveSeries) })}
         ${kpiCard({ title: 'Time saved', value: data.roi.timeSaved, sub: data.roi.timeSavedSub, spark: '' })}

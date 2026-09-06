@@ -106,7 +106,7 @@ a { color: var(--accent); text-decoration: none; }
   font-size: 10px; letter-spacing: 0.12em;
   text-transform: uppercase; color: var(--ink3); margin: 0 0 8px; font-weight: 600;
 }
-.wrap { padding: 14px 16px 36px; display: grid; gap: 12px; }
+.wrap { padding: 12px 16px 32px; display: grid; gap: 10px; }
 .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .kpis-extra { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
 .ov-10 { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; }
@@ -204,7 +204,7 @@ a { color: var(--accent); text-decoration: none; }
   background: var(--panel);
   border: 1px solid var(--hair);
   border-radius: 8px;
-  padding: 10px 12px 0;
+  padding: 8px 12px 0;
   overflow: hidden;
   color: var(--ink);
 }
@@ -234,7 +234,7 @@ a { color: var(--accent); text-decoration: none; }
 .rt-stream { display: flex; flex-direction: column; gap: 2px; max-height: 420px; overflow: auto; }
 .rt-row {
   display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 6px 2px; border-bottom: 1px solid var(--hair); font-size: 11px;
+  padding: 4px 2px; border-bottom: 1px solid var(--hair); font-size: 12px;
 }
 .rt-row .ago { color: var(--ink3); font-size: 11px; white-space: nowrap; }
 .rt-ics { display: inline-flex; gap: 3px; margin-left: 6px; vertical-align: middle; }
@@ -246,10 +246,11 @@ a { color: var(--accent); text-decoration: none; }
 .vol { position: relative; }
 .vol-row {
   display: grid; grid-template-columns: 1fr 56px 64px; gap: 8px; align-items: center;
-  padding: 5px 8px; position: relative; font-size: 11px;
+  height: 25px; padding: 0 12px; position: relative; font-size: 12px; line-height: 1.2;
 }
 .vol-bar {
-  position: absolute; inset: 2px auto 2px 0; background: var(--nav-on); border-radius: 4px; z-index: 0;
+  position: absolute; top: 0; left: 0; bottom: 0; height: 100%;
+  background: var(--nav-on); border-radius: 0; z-index: 0;
 }
 .vol-bar.blue { background: #DBEAFE; }
 [data-theme="dark"] .vol-bar.blue { background: rgba(37,99,235,0.28); }
