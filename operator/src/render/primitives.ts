@@ -44,15 +44,74 @@ export function timeCell(ts: number, now: number): string {
   return `<time class="time-cell" datetime="${esc(iso)}" data-ts="${ts}" title="${esc(iso.replace('T', ' ').slice(0, 19))} UTC">${esc(relativeTime(ts, now))}</time>`
 }
 
-/** Emoji regional-indicator flag for an ISO 3166-1 alpha-2 code, with the country name in a
+/**
+ * @deprecated Plan 3.6 (rewritten 2026-09-06, Tony: "I want the country flags with their names
+ * and more"): an emoji flag with no visible name next to it is retired in favour of
+ * `countryCell(iso, opts)` below, everywhere except a header summary strip (`flagStrip()`).
+ * Kept working, unchanged, for pages that still call it directly -- do not add new call sites.
+ *
+ * Emoji regional-indicator flag for an ISO 3166-1 alpha-2 code, with the country name in a
  * title (never color alone: `aria-label` carries the same name for screen readers). Unknown
- * codes render as plain text, never a fabricated flag. */
+ * codes render as plain text, never a fabricated flag.
+ */
 export function flag(iso: string | null | undefined): string {
   const code = String(iso || '').trim().toUpperCase()
   if (!/^[A-Z]{2}$/.test(code)) return ''
   const name = COUNTRY_NAMES[code] || code
   const glyph = String.fromCodePoint(...[...code].map((c) => 0x1f1e6 + (c.charCodeAt(0) - 65)))
   return `<span class="flag" title="${esc(name)}" aria-label="${esc(name)}" role="img">${glyph}</span>`
+}
+
+/** First eight flags for a header summary strip (plan 3.6: "a flag never appears without its
+ * name anywhere except a header summary strip, where the first eight countries show flag plus
+ * name on hover") -- name-on-hover is `flag()`'s own `title`/`aria-label`, unchanged. Invalid or
+ * duplicate codes are skipped rather than padded with a fabricated flag. */
+export function flagStrip(isos: (string | null | undefined)[]): string {
+  const rendered = isos
+    .slice(0, 8)
+    .map((iso) => flag(iso))
+    .filter(Boolean)
+    .join('')
+  return rendered ? `<span class="flag-strip">${rendered}</span>` : ''
+}
+
+/** Numbers a countryCell() tooltip reports, each labeled with its source table (plan 3.7 item
+ * 10). The caller computes every number; countryCell() only formats and labels them. */
+export interface CountryCellStats {
+  region?: string
+  seats?: number
+  live?: number
+  asks?: number
+  /** Pre-formatted ("3.2h") -- there is no shared duration formatter in this file yet. */
+  timeSaved?: string
+}
+
+/**
+ * Plan 3.6 (rewritten): a flag never appears without its name. 16x12 flag, the full country name
+ * in 13px ink, and a secondary line in 11.5px --ink-3 -- the city or region the caller passes in
+ * `secondary`, or the literal "Country only" when none was reported. An optional tooltip carries
+ * the ISO code plus every number the caller supplies, each labeled with what it is. Region and
+ * city cells follow the same rule (plan 3.6): pass the region/city name as `iso`'s country and
+ * put the more specific name in a wrapping label the caller renders around this.
+ */
+export function countryCell(iso: string | null | undefined, opts?: { secondary?: string; stats?: CountryCellStats }): string {
+  const code = String(iso || '').trim().toUpperCase()
+  const valid = /^[A-Z]{2}$/.test(code)
+  const name = valid ? COUNTRY_NAMES[code] || code : code || 'Unknown'
+  const flagImg = valid
+    ? `<img class="country-flag" src="/assets/flags/${code.toLowerCase()}.svg" width="16" height="12" alt="${esc(name)}">`
+    : '<span class="country-flag country-flag-none" aria-hidden="true"></span>'
+  const secondaryText = opts?.secondary || 'Country only'
+  const inner = `<span class="country-cell">${flagImg}<span class="country-cell-body"><span class="country-cell-name">${esc(name)}</span><span class="country-cell-secondary">${esc(secondaryText)}</span></span></span>`
+  const s = opts?.stats
+  if (!s) return inner
+  const parts = [`ISO ${valid ? code : 'unknown'}`]
+  if (s.region) parts.push(s.region)
+  if (s.seats != null) parts.push(`${s.seats} seat${s.seats === 1 ? '' : 's'}`)
+  if (s.live != null) parts.push(`${s.live} live`)
+  if (s.asks != null) parts.push(`${s.asks} ask${s.asks === 1 ? '' : 's'}`)
+  if (s.timeSaved) parts.push(`${s.timeSaved} saved`)
+  return tooltip(inner, parts.join(', '))
 }
 
 /** OS glyph plus label. Never a fake device signal Métis does not collect. */
@@ -314,4 +373,27 @@ export function dialog(opts: {
  * is the real export route (never a client-only download of what is on screen). */
 export function exportMenu(opts: { csvHref: string; label?: string }): string {
   return `<a class="tool export-menu" href="${esc(opts.csvHref)}" data-export-link>${iconSvg(NAV_ICON_PATHS['chevrons-up-down'], { class: 'tool-ic' })}<span>${esc(opts.label || 'Export CSV')}</span></a>`
+}
+
+export type AlertBadgeVariant = 'ok' | 'danger' | 'info'
+
+/**
+ * Plan 3.5c (ported from a Tremor-style alert badge): a pill in --ok/--danger/--info with white
+ * ink, an optional 16px icon (an SVG path from icons.ts) separated by a 1px divider in the same
+ * hue lightened, and an optional action link. Used for the platform state strip on Settings ›
+ * Platform health, "Major incident" notices on Notifications, and the connector health chip.
+ */
+export function alertBadge(opts: {
+  variant: AlertBadgeVariant
+  icon?: string
+  label: string
+  action?: { label: string; href?: string; attrs?: string }
+}): string {
+  const iconHtml = opts.icon
+    ? `${iconSvg(opts.icon, { class: 'alert-badge-icon' })}<span class="alert-badge-divider" aria-hidden="true"></span>`
+    : ''
+  const actionHtml = opts.action
+    ? `<a class="alert-badge-action" href="${esc(opts.action.href || '#')}" ${opts.action.attrs || ''}>${esc(opts.action.label)}</a>`
+    : ''
+  return `<span class="alert-badge alert-badge-${esc(opts.variant)}">${iconHtml}<span class="alert-badge-label">${esc(opts.label)}</span>${actionHtml}</span>`
 }

@@ -1,14 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
+  alertBadge,
   avatar,
   catalogTile,
   chip,
   clientChip,
+  countryCell,
   deltaChip,
   dialog,
   emptyState,
   exportMenu,
   flag,
+  flagStrip,
   formatCompact,
   kindBadge,
   logoGlyph,
@@ -75,6 +78,49 @@ describe('flag', () => {
   })
   it('escapes and never em-dashes', () => {
     expect(flag('ca')).not.toMatch(/—/)
+  })
+})
+
+describe('flagStrip', () => {
+  it('renders up to 8 flags, each with a name on hover, and skips invalid codes', () => {
+    const html = flagStrip(['ca', 'us', 'fr', 'de', 'jp', 'br', 'in', 'gb', 'mx'])
+    expect((html.match(/class="flag"/g) || []).length).toBe(8)
+    expect(html).toContain('title="Canada"')
+    expect(html).not.toContain('title="Mexico"')
+  })
+  it('renders nothing for an empty or all-invalid list', () => {
+    expect(flagStrip([])).toBe('')
+    expect(flagStrip(['', null, 'usa'])).toBe('')
+  })
+})
+
+describe('countryCell', () => {
+  it('renders the flag, the full country name, and "Country only" when no secondary is given', () => {
+    const html = countryCell('ca')
+    expect(html).toContain('src="/assets/flags/ca.svg"')
+    expect(html).toContain('alt="Canada"')
+    expect(html).toContain('country-cell-name">Canada<')
+    expect(html).toContain('Country only')
+  })
+  it('renders the caller-supplied secondary line (city or region) instead', () => {
+    expect(countryCell('ca', { secondary: 'Toronto' })).toContain('country-cell-secondary">Toronto<')
+  })
+  it('degrades gracefully for an invalid code: no fabricated flag, still a name', () => {
+    const html = countryCell('zz-bad')
+    expect(html).not.toContain('<img')
+    expect(html).toContain('ZZ-BAD')
+  })
+  it('adds a tooltip with the ISO code and every stat the caller passes, labeled', () => {
+    const html = countryCell('ca', { stats: { region: 'Ontario', seats: 5, live: 2, asks: 41, timeSaved: '3.2h' } })
+    expect(html).toMatch(/title="ISO CA, Ontario, 5 seats, 2 live, 41 asks, 3\.2h saved"/)
+  })
+  it('renders no tooltip wrapper when no stats are given', () => {
+    expect(countryCell('ca')).not.toContain('tooltip-host')
+  })
+  it('never emits an inline style attribute or an em dash', () => {
+    const html = countryCell('ca', { secondary: 'x', stats: { seats: 1 } })
+    expect(html).not.toContain('style="')
+    expect(html).not.toMatch(/ — /)
   })
 })
 
@@ -302,6 +348,34 @@ describe('exportMenu', () => {
   })
 })
 
+describe('alertBadge', () => {
+  it('renders the variant class and the label', () => {
+    const html = alertBadge({ variant: 'danger', label: 'Connector test failing' })
+    expect(html).toContain('alert-badge-danger')
+    expect(html).toContain('Connector test failing')
+  })
+  it('renders an icon with a divider only when an icon is given', () => {
+    const withIcon = alertBadge({ variant: 'ok', label: 'x', icon: '<path d="M0 0h1v1H0z"/>' })
+    expect(withIcon).toContain('alert-badge-divider')
+    expect(withIcon).toContain('<svg')
+    const withoutIcon = alertBadge({ variant: 'ok', label: 'x' })
+    expect(withoutIcon).not.toContain('alert-badge-divider')
+    expect(withoutIcon).not.toContain('<svg')
+  })
+  it('renders an action link only when given', () => {
+    const withAction = alertBadge({ variant: 'info', label: 'x', action: { label: 'Fix', href: '/fix' } })
+    expect(withAction).toContain('alert-badge-action')
+    expect(withAction).toContain('href="/fix"')
+    expect(withAction).toContain('>Fix<')
+    expect(alertBadge({ variant: 'info', label: 'x' })).not.toContain('alert-badge-action')
+  })
+  it('never emits an inline style attribute or an em dash', () => {
+    const html = alertBadge({ variant: 'ok', label: 'x', icon: '<path d="M0 0h1v1H0z"/>', action: { label: 'Go' } })
+    expect(html).not.toContain('style="')
+    expect(html).not.toMatch(/ — /)
+  })
+})
+
 describe('no user-facing em dash in generated copy', () => {
   it('none of these primitives ever emit " — " prose', () => {
     const samples = [
@@ -345,7 +419,10 @@ describe('no inline style attribute anywhere in primitives.ts (plan D6: style-sr
       segmented({ items: [{ id: 'a', label: 'A' }] }),
       toast({ message: 'x', undo: true, requestId: 'r' }),
       dialog({ id: 'x', title: 't', label: 'l', masked: true }),
-      exportMenu({ csvHref: '/x.csv' })
+      exportMenu({ csvHref: '/x.csv' }),
+      flagStrip(['ca', 'us']),
+      countryCell('ca', { secondary: 'Toronto', stats: { seats: 1 } }),
+      alertBadge({ variant: 'ok', label: 'x', icon: '<path d="M0 0h1v1H0z"/>', action: { label: 'Go' } })
     ]
     for (const s of samples) expect(s).not.toContain('style="')
   })
