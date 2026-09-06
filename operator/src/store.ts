@@ -15,6 +15,7 @@ export interface SeatRow {
   hostname: string | null
   sso_email: string | null
   license: string | null
+  approval?: string | null
 }
 
 export interface EventRow {
@@ -115,6 +116,7 @@ export interface OperatorStore {
   takeNonce(nonce: string, ts: number): Promise<boolean>
   hitRate(deviceId: string, now: number, windowMs: number, max: number): Promise<boolean>
   upsertSeat(row: SeatRow): Promise<void>
+  updateSeatApproval(deviceId: string, approval: string): Promise<boolean>
   insertAsk(row: AskRow): Promise<void>
   updateAskRating(id: string, rating: string): Promise<void>
   listAsks(limit: number): Promise<AskRow[]>
@@ -186,8 +188,18 @@ export function memoryStore(): OperatorStore {
         last_index_at: row.last_index_at ?? prev?.last_index_at ?? null,
         hostname: row.hostname ?? prev?.hostname ?? null,
         sso_email: row.sso_email ?? prev?.sso_email ?? null,
-        license: row.license ?? prev?.license ?? null
+        license: row.license ?? prev?.license ?? null,
+        approval:
+          prev?.approval ??
+          row.approval ??
+          ((prev?.license || '').toLowerCase() === 'approved' ? 'approved' : 'pending')
       })
+    },
+    async updateSeatApproval(deviceId, approval) {
+      const prev = seats.get(deviceId)
+      if (!prev) return false
+      seats.set(deviceId, { ...prev, approval })
+      return true
     },
     async insertAsk(row) {
       asks.set(row.id, row)

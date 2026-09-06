@@ -517,9 +517,7 @@ describe('CRM send board', () => {
       'expired',
       'submitted'
     ])
-    expect(html).toContain('data-nt-tab="notifications"')
-    expect(html).toContain('data-nt-tab="rules"')
-    expect(html).toContain('No data')
+    expect(html).toContain('Data-push telemetry')
     expect(html).not.toContain('Submited')
     expect(html).not.toContain('StatusDemo')
     expect(html).not.toContain('bg-orange-50')

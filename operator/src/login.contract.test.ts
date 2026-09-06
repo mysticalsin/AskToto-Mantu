@@ -148,6 +148,17 @@ describe('unauth console GET is 302 to Cloudflare Access, never a password form'
     expect(await res.json()).toEqual({ ok: false, error: 'Access required' })
   })
 
+  it('unauth POST /v1/admin/licenses is 401 not 404', async () => {
+    const res = await handleRequest(
+      new Request('https://operator.test/v1/admin/licenses', { method: 'POST', body: '{}' }),
+      env(),
+      {},
+      { store: memoryStore(), now: NOW }
+    )
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ ok: false, error: 'Access required' })
+  })
+
   it('fails loud (503) when TEAM_DOMAIN is unset, and does not serve a password form', async () => {
     const res = await handleRequest(
       new Request('https://operator.test/keys'),
@@ -189,12 +200,11 @@ describe('unauth console GET is 302 to Cloudflare Access, never a password form'
       const html = await home.text()
       expect(html).toContain('data-nav="overview"')
       expect(html).toContain('data-nav="events"')
-      expect(html).toContain('data-nav="sessions"')
+      expect(html).toContain('data-nav="licenses"')
       expect(html).toContain('data-nav="keys"')
+      expect(html).not.toContain('data-nav="sessions"')
       expect(html).not.toContain('data-nav="seo"')
       expect(html).not.toContain('data-nav="dashboards"')
-      expect(html).toContain(`<script src="${SPA_JS_PATH}"`)
-      expect(html).toContain(`<link rel="stylesheet" href="${SPA_CSS_PATH}"`)
       expect(html).toContain(email)
       expect(html).not.toContain('data-login="1"')
       expect(html).not.toContain('action="/login"')

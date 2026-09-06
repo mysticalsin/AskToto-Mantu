@@ -140,7 +140,12 @@ import {
   resolveRoutingMode
 } from './llm/local-routing'
 import { isCliProviderId, isDustChatForbidden, pickWorkingCliPrimary, workingCliOrder } from '@shared/ask-routing'
-import { operatorCanBroker, operatorFundedProviders } from './operator-ingest'
+import {
+  operatorCanBroker,
+  operatorFundedProviders,
+  operatorSeatApproved,
+  OPERATOR_SEAT_NOT_APPROVED
+} from './operator-ingest'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText } from './mac-helper'
@@ -279,7 +284,11 @@ import {
 import { buildBrainContext } from './brain/context'
 import { buildSystem, buildSystemParts } from './personas'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
-import { isOpenAICloudCacheEligible, promptCacheKey as makePromptCacheKey } from '@shared/operator'
+import {
+  isOpenAICloudCacheEligible,
+  operatorUrlConfigured,
+  promptCacheKey as makePromptCacheKey
+} from '@shared/operator'
 import { loadVerifiedSkill, setModeSkillsOverlayRoot, skillLockHashForMode } from './mode-skills'
 import { recordOperatorAsk, recordOperatorCrmSend, recordOperatorRating, startOperatorRuntime } from './operator-ingest'
 import { buildCrmIngestEvent, meetingFileHash, shouldIngestCrm } from './operator-crm'
@@ -4977,7 +4986,9 @@ function registerIpc(): void {
           : def.kind === 'cli' && !s.cliConnected[provider]
             ? `${def.label} is not connected. Open Settings → CLI Integration to set it up.`
             : def.kind !== 'cli' && !key && !operatorCanBroker(provider, s)
-              ? `No API key for ${def.label}. Open Settings (gear) and add it.`
+              ? operatorUrlConfigured(s) && !operatorSeatApproved()
+                ? OPERATOR_SEAT_NOT_APPROVED
+                : `No API key for ${def.label}. Open Settings (gear) and add it, or ask Tony to approve this seat in Operator.`
               : def.kind !== 'cli' && !key && req.mode === 'vision'
                 ? `${def.label} is Operator-funded and cannot receive screenshots. Ask without a screen capture.`
               : def.kind !== 'cli' && !model
@@ -5136,8 +5147,8 @@ function registerIpc(): void {
       const handle = createStream({
         providerId: provider,
         kind: def.kind,
-        apiKey: key,
-        operatorBroker: !key && operatorCanBroker(provider, s),
+        apiKey: operatorCanBroker(provider, s) ? '' : key,
+        operatorBroker: operatorCanBroker(provider, s),
         operator: { operatorUrl: s.operatorUrl, operatorIngestSecret: s.operatorIngestSecret },
         baseURL,
         workspaceId: s.dustWorkspaceId,

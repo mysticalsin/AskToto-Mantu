@@ -39,6 +39,26 @@ async function signedRequest(path: string, bodyText: string, nonce = `use-${Math
   })
 }
 
+async function approveDevice(store: ReturnType<typeof memoryStore>, deviceId = 'device-use') {
+  await store.upsertSeat({
+    device_id: deviceId,
+    seat_hash: deviceId,
+    os: 'darwin',
+    app_version: '1.8.3',
+    first_seen: NOW,
+    last_seen: NOW,
+    country: 'CA',
+    city: 'Longueuil',
+    lat: 45.5,
+    lon: -73.5,
+    last_index_at: null,
+    hostname: 'Tonys-MacBook-Pro',
+    sso_email: 'tony.walteur@gmail.com',
+    license: 'licensed',
+    approval: 'approved'
+  })
+}
+
 async function addAnthropicKey(store: ReturnType<typeof memoryStore>) {
   const res = await handleRequest(
     new Request('https://operator.test/v1/admin/keys', {
@@ -74,6 +94,7 @@ describe('HMAC POST /v1/use', () => {
   it('requires HMAC and never returns a vault secret', async () => {
     const store = memoryStore()
     await addAnthropicKey(store)
+    await approveDevice(store)
     const bare = await handleRequest(
       new Request('https://operator.test/v1/use', {
         method: 'POST',
@@ -117,8 +138,25 @@ describe('HMAC POST /v1/use', () => {
     expect(JSON.stringify(json)).not.toMatch(tokenPatternForTests())
   })
 
+  it('403s loud when the seat is not approved', async () => {
+    const store = memoryStore()
+    await addAnthropicKey(store)
+    const body = JSON.stringify({
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5-20251001',
+      messages: [{ role: 'user', content: 'hi' }]
+    })
+    const res = await handleRequest(await signedRequest('/v1/use', body, 'use-pending'), env(), {}, { store, now: NOW })
+    expect(res.status).toBe(403)
+    expect(await res.json()).toEqual({
+      ok: false,
+      error: 'This seat is not approved. Tony must approve this device in Operator before platform keys work.'
+    })
+  })
+
   it('fails closed when the provider is not funded and never echoes the vault row', async () => {
     const store = memoryStore()
+    await approveDevice(store)
     const body = JSON.stringify({
       provider: 'openai',
       model: 'gpt-4o-mini',
@@ -134,6 +172,7 @@ describe('HMAC POST /v1/use', () => {
   it('writes a token-free use event', async () => {
     const store = memoryStore()
     await addAnthropicKey(store)
+    await approveDevice(store)
     const body = JSON.stringify({
       provider: 'anthropic',
       model: 'claude-haiku-4-5-20251001',

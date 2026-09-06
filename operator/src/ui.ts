@@ -2,14 +2,12 @@ import {
   bars,
   choropleth,
   dualLine,
-  heatmapGrid,
   sparklineArea,
-  sparklineLine,
-  stackedTokens
+  sparklineLine
 } from './charts'
 import { statusBadge, STATUS_BADGE_CSS } from './components/ui/status-badge'
 import { CRM_FILTER_ORDER } from './crm'
-import type { CloudflareOverview } from './cloudflare'
+import { CF_TOKEN_MISSING, type CloudflareOverview } from './cloudflare'
 import type { ConsoleEvent, DashboardPayload, ProfileRow } from './dashboard'
 import { FORBIDDEN_NAV, NAV_IDS, NAV_SECTIONS } from './nav'
 import { looksLikeSecret } from './redact'
@@ -48,7 +46,7 @@ const CSS = `
   --ink: #18181b;
   --ink2: rgba(24,24,27,0.62);
   --ink3: rgba(24,24,27,0.42);
-  --land: #d4d4d8;
+  --land: #E5E7EB;
   --chart-1: #e4e4e7;
   --chart-2: #d4d4d8;
   --chart-3: #a1a1aa;
@@ -66,7 +64,7 @@ const CSS = `
     --ink: #18181b;
     --ink2: rgba(24,24,27,0.62);
     --ink3: rgba(24,24,27,0.42);
-    --land: #d4d4d8;
+    --land: #E5E7EB;
     --chart-1: #e4e4e7;
     --chart-2: #d4d4d8;
     --chart-3: #a1a1aa;
@@ -128,9 +126,11 @@ a { color: var(--accent); text-decoration: none; }
   font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
   text-transform: uppercase; color: var(--ink3); margin: 0 0 8px;
 }
-.wrap { padding: 12px 16px 36px; display: grid; gap: 12px; }
-.kpis { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.wrap { padding: 12px 16px 36px; display: grid; gap: 12px; isolation: isolate; overflow-x: hidden; }
+.page { min-width: 0; position: relative; z-index: 1; }
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+@media (max-width: 1100px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-width: 0; }
 .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
 .card {
   position: relative;
@@ -177,14 +177,24 @@ a { color: var(--accent); text-decoration: none; }
 }
 .empty { color: var(--ink2); font-size: 12px; padding: 10px 0 12px; }
 .fail-loud { color: var(--danger); font-size: 13px; font-weight: 600; padding: 10px 0 12px; }
+.crm-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.world-wrap { overflow: hidden; max-height: 280px; }
 .key-form { display: grid; gap: 8px; margin: 0 0 14px; }
 .key-form .row input, .key-form .row select {
   border: 1px solid var(--hair); background: var(--bg); color: var(--ink);
   border-radius: 8px; padding: 6px 8px; font: 12px var(--sans); min-width: 120px;
 }
 .map-empty { position: absolute; left: 12px; top: 42px; z-index: 1; }
-table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--hair); font-size: 12px; vertical-align: top; }
+table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--hair); font-size: 12px; vertical-align: top; overflow: hidden; text-overflow: ellipsis; }
+.search-bar {
+  width: 100%; border: 1px solid var(--hair); background: var(--bg); color: var(--ink);
+  border-radius: 8px; padding: 7px 10px; font: 12px var(--sans); margin: 0 0 10px;
+}
+.event[hidden], tr[hidden] { display: none !important; }
+.rule { padding: 10px 0; border-bottom: 1px solid var(--hair); }
+.rule h3 { margin: 0 0 4px; font-size: 13px; }
+.rule p { margin: 0; color: var(--ink2); font-size: 12px; }
 th { color: var(--ink3); font-weight: 500; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
 button, .btn {
   background: transparent; color: var(--ink); border: 1px solid var(--hair);
@@ -248,9 +258,12 @@ function field(value: string | null | undefined): string {
 }
 
 function renderCloudflare(cf: CloudflareOverview): string {
+  if (cf.error === CF_TOKEN_MISSING) {
+    return `<div class="sub muted" data-cf-idle>${esc(cf.error)} Connect Cloudflare (login) on Keys.</div>`
+  }
   if (cf.error) {
     return `<div class="fail-loud" data-cf-error>${esc(cf.error)}</div>
-      <div class="sub muted" style="padding-bottom:8px">Worker ${esc(cf.worker)}. Connect Account ID and API token on Keys. No token on seats.</div>`
+      <div class="sub muted" style="padding-bottom:8px">Worker ${esc(cf.worker)}. Connect Cloudflare (login) on Keys. No token on seats.</div>`
   }
   const workers = cf.workers.length ? cf.workers.map((w) => esc(w)).join(', ') : 'none listed'
   const req = cf.requests == null ? 'not reported' : String(cf.requests)
@@ -324,29 +337,42 @@ function renderProfiles(rows: ProfileRow[], osFilter?: string): string {
         <td>${field(r.email)}</td>
         <td class="muted">${esc(r.os)}</td>
         <td class="muted">${esc(r.appVersion)}</td>
+        <td>${field(r.license)}</td>
+        <td>${esc(r.approval)}</td>
         <td class="muted">${esc(r.country || MISSING)}${r.city ? ` · ${esc(r.city)}` : ''}</td>
         <td class="muted">${esc(when(r.lastSeen))}</td>
         <td>${r.live ? '<span class="pill up">live</span>' : '<span class="muted">idle</span>'}</td>
       </tr>`
     )
     .join('')
-  return `<table><thead><tr><th>Computer</th><th>SSO email</th><th>OS</th><th>Version</th><th>Country</th><th>Seen</th><th></th></tr></thead><tbody>${body}</tbody></table>`
+  return `<table><thead><tr><th>Computer</th><th>SSO email</th><th>OS</th><th>Version</th><th>License</th><th>Approval</th><th>Country</th><th>Seen</th><th></th></tr></thead><tbody>${body}</tbody></table>`
 }
 
-function renderLicenses(rows: ProfileRow[]): string {
-  if (!rows.length) return '<div class="empty">No seats on the fleet yet.</div>'
-  const body = rows
-    .map(
-      (r) => `<tr>
+function renderLicenses(data: DashboardPayload): string {
+  if (data.licenses.empty) {
+    return `<div class="fail-loud" data-licenses-empty>${esc(data.licenses.error || 'No licenses in D1')}</div>
+      <div class="sub muted">Real Métis heartbeats only. No demo or usage-import rows. Approve a seat here before platform keys work.</div>`
+  }
+  const body = data.licenses.rows
+    .map((r) => {
+      const id = esc(r.device)
+      const act =
+        r.approval === 'approved'
+          ? `<button class="danger" data-license-revoke="${id}">Revoke</button>`
+          : `<button class="primary" data-license-approve="${id}">Approve</button>`
+      return `<tr data-device="${id}" data-approval="${esc(r.approval)}">
         <td>${field(r.hostname)}</td>
         <td>${field(r.email)}</td>
         <td>${field(r.license)}</td>
+        <td>${esc(r.approval)}</td>
         <td class="muted">${esc(r.os)}</td>
         <td class="muted">${esc(r.appVersion)}</td>
+        <td>${act}</td>
       </tr>`
-    )
+    })
     .join('')
-  return `<table><thead><tr><th>Computer</th><th>SSO email</th><th>License</th><th>OS</th><th>Version</th></tr></thead><tbody>${body}</tbody></table>`
+  return `<table><thead><tr><th>Computer</th><th>SSO email</th><th>License</th><th>Approval</th><th>OS</th><th>Version</th><th></th></tr></thead><tbody>${body}</tbody></table>
+    <div class="sub muted" style="padding-bottom:8px">Tony approves a seat before Operator platform keys work. Unapproved seats fail loud on /v1/use. last4 only. Never a raw key.</div>`
 }
 
 export function renderConsole(data: DashboardPayload): string {
@@ -424,6 +450,39 @@ export function renderConsole(data: DashboardPayload): string {
       </tr>`
     )
     .join('')
+  const gatewayRows = data.gateway.rows
+    .map(
+      (r) => `<tr>
+        <td>${esc(r.provider)}</td>
+        <td>${r.asks}</td>
+        <td>${r.tokens == null ? 'not reported' : r.tokens}</td>
+        <td>${r.estimate ?? 'not reported'}</td>
+        <td>${r.funded ? '<span class="pill up">funded</span>' : '<span class="muted">—</span>'}</td>
+      </tr>`
+    )
+    .join('')
+  const noticeRows = data.notices
+    .map(
+      (n) => `<tr data-q="${esc(`${n.kind} ${n.title} ${n.detail}`.toLowerCase())}">
+        <td>${esc(n.kind)}</td>
+        <td>${esc(n.title)}</td>
+        <td>${esc(n.detail)}</td>
+        <td class="muted">${esc(when(n.ts))}</td>
+      </tr>`
+    )
+    .join('')
+  const eventRows = data.events
+    .map((e) => {
+      const chips = e.chips.map((c) => `${c.key} ${c.value}`).join(' ')
+      const q = `${e.name} ${e.hostname || ''} ${e.email || ''} ${chips}`.toLowerCase()
+      return `<tr data-event="${esc(e.id)}" data-q="${esc(q)}">
+        <td class="muted">${esc(when(e.ts))}</td>
+        <td>${esc(looksLikeSecret(e.name) ? 'event' : e.name)}</td>
+        <td>${field(e.hostname || e.email)}</td>
+        <td>${e.chips.map((c) => `<span class="chip">${esc(c.key)} ${esc(c.value)}</span>`).join('')}</td>
+      </tr>`
+    })
+    .join('')
   const timeline = data.change.timeline
     .map(
       (t) => `<tr>
@@ -462,11 +521,8 @@ export function renderConsole(data: DashboardPayload): string {
         <td>${esc(v.label)}</td>
         <td class="muted">··${esc(v.last4)}</td>
         <td>${esc(v.status)}</td>
-        <td>${
-          v.status === 'revoked'
-            ? ''
-            : `<button data-rotate="${esc(v.id)}">Rotate</button><button class="danger" data-revoke="${esc(v.id)}">Revoke</button>`
-        }</td>
+        <td>${v.status === 'revoked' ? '' : `<button data-rotate="${esc(v.id)}">Rotate</button>`}</td>
+        <td>${v.status === 'revoked' ? '' : `<button class="danger" data-revoke="${esc(v.id)}">Revoke</button>`}</td>
       </tr>`
     )
     .join('')
@@ -512,31 +568,33 @@ svg path { vector-effect: non-scaling-stroke; }
     <section class="page wrap" data-page="overview">
       <p class="eyebrow">Fleet</p>
       <div class="kpis">
-        ${kpiCard({ title: 'Live seats', value: String(k.live), sub: 'last-seen under 2 minutes', spark: sparklineLine(k.liveSeries) })}
-        ${kpiCard({ title: 'DAU', value: String(k.dau), sub: `WAU ${k.wau}`, spark: sparklineArea(k.dauSeries) })}
+        ${kpiCard({ title: 'Live seats', value: String(data.roi.liveSeats), sub: 'heartbeat &lt; 2 min · real devices', spark: sparklineLine(k.liveSeries) })}
+        ${kpiCard({ title: 'Active 24h', value: String(k.dau), sub: `WAU ${k.wau} · unique seats`, spark: sparklineArea(k.dauSeries) })}
+        ${kpiCard({ title: 'Licensed', value: String(data.roi.licensed), sub: 'license status on real seats', spark: '' })}
+        ${kpiCard({ title: 'Approved', value: String(data.roi.approved), sub: 'Tony gate for platform keys', spark: '' })}
         ${kpiCard({
-          title: 'API cost',
-          value: k.costToday ?? 'hidden',
-          sub: k.cost7d ? `7d ${k.cost7d} · estimate, list price` : 'estimate, list price · not reported',
+          title: 'ROI today',
+          value: data.roi.costToday ?? 'not reported',
+          sub: data.roi.cost7d ? `7d ${data.roi.cost7d} · D1 asks` : 'D1 asks · list price',
           spark: sparklineArea(k.costSeries)
         })}
         ${kpiCard({
-          title: 'Prompt cache',
-          value: k.cacheHit ?? 'not reported',
+          title: 'Usage today',
+          value: String(data.roi.asksToday),
+          sub: 'Asks ingested today',
+          spark: ''
+        })}
+        ${kpiCard({
+          title: 'Cache hit',
+          value: data.roi.cacheHit ?? 'not reported',
           sub: 'real provider fields only',
           spark: sparklineLine(k.hitSeries)
         })}
         ${kpiCard({
-          title: 'Versions in field',
+          title: 'Versions',
           value: String(k.versions),
           sub: indexHint,
-          spark: bars(data.scale.versions.slice(0, 6), 220, 56)
-        })}
-        ${kpiCard({
-          title: 'Pending diffs',
-          value: String(k.pendingDiffs),
-          sub: 'Approve then Push',
-          spark: sparklineLine(data.change.heatmap.slice(-24))
+          spark: ''
         })}
       </div>
 
@@ -567,65 +625,21 @@ svg path { vector-effect: non-scaling-stroke; }
       </div>
 
       <div class="grid-2">
-        <article class="card">
-          <p class="eyebrow">Cost tokens</p>
-          ${stackedTokens(data.cost.tokens)}
-          <div class="legend"><span><i></i>cache read</span><span class="muted">write / uncached underneath</span></div>
-        </article>
-        <article class="card">
-          <p class="eyebrow">Cost by provider</p>
+        <article class="card" style="padding-bottom:10px">
+          <p class="eyebrow">Gateway usage</p>
           ${
-            data.cost.table.length
-              ? `<table><thead><tr><th>Provider</th><th>Mode</th><th>Asks</th><th>Read</th><th>Write</th><th>Uncached</th><th>Estimate</th></tr></thead><tbody>${costRows}</tbody></table>
-                 <div class="sub muted" style="padding-bottom:8px">estimate, list price. Missing usage is not reported, never $0.</div>`
-              : '<div class="empty">No Asks with usage on the fleet yet.</div>'
+            data.gateway.rows.length
+              ? `<table><thead><tr><th>Provider</th><th>Asks 7d</th><th>Tokens</th><th>Estimate</th><th>Vault</th></tr></thead><tbody>${gatewayRows}</tbody></table>
+                 <div class="sub muted" style="padding-bottom:8px">DeepSeek, Anthropic, NIM, and every other provider from D1 asks. Missing tokens = not reported, never $0.</div>`
+              : '<div class="empty">No gateway Asks ingested yet.</div>'
           }
         </article>
+        <article class="card" style="padding-bottom:10px">
+          <p class="eyebrow">Globe</p>
+          <div id="map-root-overview" class="world-wrap">${maps.land}</div>
+          <div class="sub muted" style="padding-bottom:8px">Real Métis heartbeats from request.cf. No demo VPS. Empty world until a seat checks in.</div>
+        </article>
       </div>
-
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Change</p>
-        <div class="heat-wrap">
-          ${heatmapGrid(data.change.heatmap)}
-          <div class="heat-meta">Skill draft / approve / push and rollouts over 17 weeks. Empty cells are quiet days, not sample activity.</div>
-        </div>
-        ${
-          timeline
-            ? `<table><thead><tr><th>When</th><th>Action</th><th>Who</th><th>Version</th></tr></thead><tbody>${timeline}</tbody></table>`
-            : '<div class="empty">No skill changes yet.</div>'
-        }
-      </article>
-
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Asks</p>
-        ${
-          askRows
-            ? `<table><thead><tr><th>Mode</th><th>Preview</th><th>Cache</th><th>Provider</th><th></th></tr></thead><tbody>${askRows}</tbody></table>`
-            : '<div class="empty">No Asks on the fleet yet.</div>'
-        }
-        <div id="reveal" class="muted" style="padding:8px 0"></div>
-      </article>
-
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">CRM landing</p>
-        <div class="crm-kpis">
-          ${kpiCard({ title: 'Landed today', value: String(landing.landedToday), sub: 'success with a CRM id when the connector returned one', spark: '' })}
-          ${kpiCard({ title: 'Fail rate', value: failRate, sub: 'failed + expired over attempted', spark: '' })}
-          ${kpiCard({ title: 'Retries', value: String(landing.retries), sub: 'Tony Retry or attempt over 1', spark: '' })}
-          ${kpiCard({ title: 'Dead letters', value: String(landing.deadLetters), sub: 'max attempts, Expired', spark: '' })}
-        </div>
-        ${funnelRows ? `<p class="eyebrow">Funnel by connector</p><div class="crm-funnel">${funnelRows}</div>` : ''}
-        <div class="funnel tabs" id="crm-filters">
-          <button class="tab on" data-crm-filter="all">All ${data.crm.rows.length}</button>
-          ${funnelTabs}
-        </div>
-        ${
-          crmRows
-            ? `<table id="crm-table"><thead><tr><th>Status</th><th>Title</th><th>Connector</th><th>Remote</th><th>Try</th><th>Meeting</th><th>When</th><th></th></tr></thead><tbody>${crmRows}</tbody></table>
-               <div class="sub muted" style="padding-bottom:8px">Seven status chips filter real ingest. Retry on Failed or Expired tells that seat to processDue that id. Never auto-send from Intelligence, import, or index.</div>`
-            : '<div class="empty">No CRM sends on the fleet yet.</div>'
-        }
-      </article>
 
       <article class="card" style="padding-bottom:10px" data-cf-overview>
         <p class="eyebrow">Cloudflare</p>
@@ -651,7 +665,13 @@ svg path { vector-effect: non-scaling-stroke; }
     <section class="page wrap" data-page="events" hidden>
       <article class="card" style="padding-bottom:10px">
         <p class="eyebrow">Events</p>
-        <div id="events-list">${renderEvents(data.events)}</div>
+        <input class="search-bar" id="events-search" type="search" placeholder="Search events, computers, SSO, country…" autocomplete="off">
+        ${
+          eventRows
+            ? `<table id="events-table"><thead><tr><th>When</th><th>Kind</th><th>Who</th><th>Detail</th></tr></thead><tbody>${eventRows}</tbody></table>
+               <div class="sub muted" style="padding-bottom:8px">Real HMAC ingest only. Token-shaped values are dropped. Empty search shows every row.</div>`
+            : '<div class="empty">No events yet.</div>'
+        }
       </article>
     </section>
 
@@ -715,7 +735,55 @@ svg path { vector-effect: non-scaling-stroke; }
     <section class="page wrap" data-page="licenses" hidden>
       <article class="card" style="padding-bottom:10px">
         <p class="eyebrow">Licenses</p>
-        ${renderLicenses(data.profiles)}
+        ${renderLicenses(data)}
+      </article>
+    </section>
+
+    <section class="page wrap" data-page="notifications" hidden>
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">Notifications</p>
+        <div class="sub muted" style="padding-bottom:8px">Pending seat approvals, failed CRM pushes, and skill diffs. Real D1. Not a stub.</div>
+        ${
+          noticeRows
+            ? `<table><thead><tr><th>Kind</th><th>Title</th><th>Detail</th><th>When</th></tr></thead><tbody>${noticeRows}</tbody></table>`
+            : '<div class="empty">Nothing needs Tony right now.</div>'
+        }
+      </article>
+    </section>
+
+    <section class="page wrap" data-page="rules" hidden>
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">Rules</p>
+        <div class="rule"><h3>Access only</h3><p>Console and admin APIs require Cloudflare Access email-code. Allowlist tony.walteur@gmail.com and twalteur@amaris.com. No homemade login.</p></div>
+        <div class="rule"><h3>Seat approval</h3><p>A device stays pending until Tony approves it on Licenses. Unapproved seats get fundedProviders [] and 403 on /v1/use. Live pending: ${data.profiles.filter((p) => p.approval !== 'approved').length}.</p></div>
+        <div class="rule"><h3>Platform keys first</h3><p>Approved seats use Operator vault keys (NIM, Anthropic, DeepSeek, more). Manual Métis Settings keys stay as fallback. CLI still wins when connected.</p></div>
+        <div class="rule"><h3>CRM never auto-send</h3><p>Pushes ingest status only. Tony Retry marks retry_requested. The seat processes that id. Intelligence / import / index never send.</p></div>
+        <div class="rule"><h3>No secrets in HTML</h3><p>Keys last4 only. Events drop token-shaped strings. Heartbeat never carries a raw key or grant.</p></div>
+        <div class="rule"><h3>Real ingest only</h3><p>Globe, Users, Licenses, ROI, and Events come from D1 heartbeats and Asks. usage-import rows stay off the fleet.</p></div>
+      </article>
+    </section>
+
+    <section class="page wrap" data-page="pushes" hidden>
+      <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">Data-push telemetry</p>
+        <div class="sub muted" style="padding-bottom:8px">Outbound Métis → CRM / DB. Architecture: seat HMAC ingest <code>event=crm</code> → Operator D1 <code>crm_sends</code> → named connector (ClickUp, BidStack, Plane, Outlook). Connectors may be stubbed; the log is live.</div>
+        <div class="crm-kpis">
+          ${kpiCard({ title: 'Landed today', value: String(landing.landedToday), sub: 'success with a remote id', spark: '' })}
+          ${kpiCard({ title: 'Fail rate', value: failRate, sub: 'failed + expired over attempted', spark: '' })}
+          ${kpiCard({ title: 'Retries', value: String(landing.retries), sub: 'Tony Retry or attempt over 1', spark: '' })}
+          ${kpiCard({ title: 'Dead letters', value: String(landing.deadLetters), sub: 'max attempts, Expired', spark: '' })}
+        </div>
+        ${funnelRows ? `<p class="eyebrow">Funnel by connector</p><div class="crm-funnel">${funnelRows}</div>` : ''}
+        <div class="funnel tabs" id="crm-filters">
+          <button class="tab on" data-crm-filter="all">All ${data.crm.rows.length}</button>
+          ${funnelTabs}
+        </div>
+        ${
+          crmRows
+            ? `<table id="crm-table"><thead><tr><th>Status</th><th>Title</th><th>Connector</th><th>Remote</th><th>Try</th><th>Meeting</th><th>When</th><th></th></tr></thead><tbody>${crmRows}</tbody></table>
+               <div class="sub muted" style="padding-bottom:8px">Retry on Failed or Expired tells that seat to processDue that id. Never auto-send.</div>`
+            : '<div class="empty">No outbound pushes ingested yet.</div>'
+        }
       </article>
     </section>
 
@@ -768,18 +836,14 @@ svg path { vector-effect: non-scaling-stroke; }
           </div>
         </form>
         <p class="eyebrow">Cloudflare connection</p>
-        <form class="key-form" id="cf-add" autocomplete="off">
-          <div class="row">
-            <input name="accountId" type="text" placeholder="Account ID" required maxlength="40">
-            <input name="token" type="password" placeholder="API token" required autocomplete="off">
-            <button class="primary" type="submit">Connect</button>
-          </div>
-        </form>
-        ${
-          vaultRows
-            ? `<p class="eyebrow" style="margin-top:14px">Vault</p><table><thead><tr><th>Provider</th><th>Label</th><th>Last4</th><th>Status</th><th></th></tr></thead><tbody>${vaultRows}</tbody></table>`
-            : '<div class="empty">No provider keys on Operator yet. Add an API or Cloudflare here so seats can be funded.</div>'
-        }
+        <p class="sub muted">Login redirect. Not Account ID + token paste. No CF token on seats.</p>
+        <p><a class="btn primary" id="cf-connect" href="/cloudflare/connect">Connect Cloudflare</a></p>
+        <p class="eyebrow" style="margin-top:14px">Vault</p>
+        <table>
+          <thead><tr><th>Provider</th><th>Label</th><th>Last4</th><th>Status</th><th>Rotate</th><th>Revoke</th></tr></thead>
+          <tbody>${vaultRows || ''}</tbody>
+        </table>
+        ${vaultRows ? '' : '<div class="empty">No provider keys on Operator yet. Add an API or Cloudflare here so seats can be funded.</div>'}
         <div id="key-msg" class="muted" style="padding:8px 0"></div>
       </article>
     </section>
@@ -791,12 +855,13 @@ async function api(path, body) {
   return r.json()
 }
 const titles = {
-  overview: 'Overview', realtime: 'Realtime', events: 'Events', profiles: 'Profiles',
-  map: 'Map', macos: 'macOS', windows: 'Windows', licenses: 'Licenses', skills: 'Skills', keys: 'Keys'
+  overview: 'Overview', realtime: 'Realtime', events: 'Events', profiles: 'Users',
+  map: 'Map', macos: 'macOS', windows: 'Windows', licenses: 'Licenses', skills: 'Skills', keys: 'Keys',
+  notifications: 'Notifications', rules: 'Rules', pushes: 'Pushes', users: 'Users'
 }
 function route() {
   const raw = (location.hash || '#overview').replace('#', '')
-  const id = titles[raw] ? raw : 'overview'
+  const id = raw === 'users' ? 'profiles' : titles[raw] ? raw : 'overview'
   document.querySelectorAll('[data-page]').forEach((p) => { p.hidden = p.getAttribute('data-page') !== id })
   document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('on', a.getAttribute('data-nav') === id))
   const t = document.getElementById('page-title')
@@ -804,6 +869,13 @@ function route() {
 }
 window.addEventListener('hashchange', route)
 route()
+const evSearch = document.getElementById('events-search')
+if (evSearch) evSearch.addEventListener('input', () => {
+  const q = evSearch.value.trim().toLowerCase()
+  document.querySelectorAll('#events-table [data-q]').forEach((row) => {
+    row.hidden = Boolean(q) && !(row.getAttribute('data-q') || '').includes(q)
+  })
+})
 const search = document.getElementById('nav-search')
 if (search) search.addEventListener('input', () => {
   const q = search.value.trim().toLowerCase()
@@ -910,77 +982,15 @@ document.querySelectorAll('[data-revoke]').forEach((b) => b.addEventListener('cl
   if (j && j.ok) location.reload()
   else showKey(j)
 }))
+document.querySelectorAll('[data-license-approve]').forEach((b) => b.addEventListener('click', async () => {
+  await api('/v1/admin/licenses/' + encodeURIComponent(b.getAttribute('data-license-approve')) + '/approve', {})
+  location.reload()
+}))
+document.querySelectorAll('[data-license-revoke]').forEach((b) => b.addEventListener('click', async () => {
+  await api('/v1/admin/licenses/' + encodeURIComponent(b.getAttribute('data-license-revoke')) + '/revoke', {})
+  location.reload()
+}))
 </script>
 </body></html>`
 }
 
-/** First paint for an unauthenticated browser GET of /. Never JSON. */
-export function renderLogin(error?: string): string {
-  const err = error
-    ? `<p class="login-err" role="alert">${esc(error)}</p>`
-    : ''
-  return `<!doctype html>
-<html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Métis Operator</title>
-<style>
-@import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.min.css');
-@import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.min.css');
-:root, [data-theme="dark"] {
-  --bg: #0a0a0b; --panel: #111113; --hair: rgba(255,255,255,0.10);
-  --ink: rgba(255,255,255,0.94); --ink2: rgba(255,255,255,0.55); --ink3: rgba(255,255,255,0.38);
-  --accent: #7C8CF8; --danger: #F0717A;
-  --mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
-  --sans: 'Geist', Geist, Inter, system-ui, sans-serif;
-}
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    --bg: #f4f4f5; --panel: #ffffff; --hair: rgba(15,15,17,0.10);
-    --ink: #18181b; --ink2: rgba(24,24,27,0.62); --ink3: rgba(24,24,27,0.42);
-  }
-}
-* { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; color: var(--ink); font: 13px/1.45 var(--sans); background: var(--bg); }
-.login {
-  min-height: 100%; display: grid; place-items: center; padding: 24px;
-}
-.login-card {
-  width: min(360px, 100%); background: var(--panel); border: 1px solid var(--hair);
-  border-radius: 12px; padding: 22px 20px 20px;
-}
-.login-card p.eyebrow {
-  font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
-  text-transform: uppercase; color: var(--ink3); margin: 0 0 6px;
-}
-.login-card h1 { margin: 0 0 16px; font-size: 18px; font-weight: 650; letter-spacing: -0.03em; }
-.login-card label {
-  display: block; font-size: 11px; color: var(--ink2); margin: 0 0 4px;
-}
-.login-card input {
-  width: 100%; border: 1px solid var(--hair); background: var(--bg); color: var(--ink);
-  border-radius: 8px; padding: 8px 10px; font: 13px var(--sans); margin: 0 0 12px;
-}
-.login-card button {
-  width: 100%; border: 0; background: var(--accent); color: #fff;
-  border-radius: 8px; padding: 9px 12px; font: 600 13px var(--sans); cursor: pointer;
-}
-.login-err { color: var(--danger); font-size: 12px; margin: 0 0 10px; }
-.login-note { margin: 12px 0 0; font-size: 11px; color: var(--ink3); }
-</style>
-</head>
-<body>
-  <main class="login" data-login="1">
-    <form class="login-card" method="post" action="/login" autocomplete="on">
-      <p class="eyebrow">Operator</p>
-      <h1>Sign in</h1>
-      ${err}
-      <label for="email">Email</label>
-      <input id="email" name="email" type="email" required autocomplete="username">
-      <label for="password">Password</label>
-      <input id="password" name="password" type="password" required autocomplete="current-password">
-      <button type="submit">Sign in</button>
-      <p class="login-note">Tony only. Two emails. The console stays closed until this form succeeds.</p>
-    </form>
-  </main>
-</body></html>`
-}

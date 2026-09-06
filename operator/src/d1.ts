@@ -50,8 +50,8 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         .first<Pick<SeatRow, 'first_seen'>>()
       await db
         .prepare(
-          `INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen, country, city, lat, lon, last_index_at, hostname, sso_email, license)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen, country, city, lat, lon, last_index_at, hostname, sso_email, license, approval)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(device_id) DO UPDATE SET
              seat_hash = excluded.seat_hash,
              os = CASE WHEN excluded.os IS NULL OR excluded.os = '' OR excluded.os = 'unknown' THEN seats.os ELSE excluded.os END,
@@ -80,9 +80,16 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
           row.last_index_at,
           row.hostname,
           row.sso_email,
-          row.license
+          row.license,
+          row.approval || prev?.approval || 'pending'
         )
         .run()
+    },
+    async updateSeatApproval(deviceId, approval) {
+      const existing = await db.prepare('SELECT device_id FROM seats WHERE device_id = ?').bind(deviceId).first<{ device_id: string }>()
+      if (!existing) return false
+      await db.prepare('UPDATE seats SET approval = ? WHERE device_id = ?').bind(approval, deviceId).run()
+      return true
     },
     async insertAsk(row) {
       await db
@@ -140,7 +147,8 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         ...s,
         hostname: s.hostname ?? null,
         sso_email: s.sso_email ?? null,
-        license: s.license ?? null
+        license: s.license ?? null,
+        approval: s.approval ?? null
       }))
     },
     async insertPulse(row) {

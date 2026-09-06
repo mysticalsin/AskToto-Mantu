@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { streamOperatorUse } from './operator-use'
 import {
+  setOperatorApprovedForTests,
   setOperatorFetchForTests,
   setOperatorFundedProvidersForTests,
   type OperatorRuntimeSettings
@@ -14,10 +15,12 @@ const settings: OperatorRuntimeSettings = {
 afterEach(() => {
   setOperatorFetchForTests(null)
   setOperatorFundedProvidersForTests([])
+  setOperatorApprovedForTests(false)
 })
 
 describe('streamOperatorUse', () => {
   it('completes an ask with no local API key after Operator funds the provider', async () => {
+    setOperatorApprovedForTests(true)
     setOperatorFundedProvidersForTests(['anthropic'])
     let posted = ''
     setOperatorFetchForTests(async (input, init) => {
@@ -74,6 +77,32 @@ describe('streamOperatorUse', () => {
         temperature: 0,
         system: '',
         req: { id: 'ask-2', mode: 'answer', prompt: 'hi', history: [] },
+        handlers: {
+          onDelta: () => undefined,
+          onDone: () => resolve('done'),
+          onError: (e) => resolve(e)
+        },
+        operator: settings
+      })
+    })
+    expect(err).toBe('This seat is not approved. Tony must approve this device in Operator before platform keys work.')
+  })
+
+  it('fails closed when approved but Operator has not funded the provider', async () => {
+    setOperatorApprovedForTests(true)
+    setOperatorFundedProvidersForTests([])
+    setOperatorFetchForTests(async () => {
+      throw new Error('should not fetch')
+    })
+    const err = await new Promise<string>((resolve) => {
+      streamOperatorUse({
+        providerId: 'anthropic',
+        kind: 'anthropic',
+        apiKey: '',
+        model: 'claude-haiku-4-5-20251001',
+        temperature: 0,
+        system: '',
+        req: { id: 'ask-2b', mode: 'answer', prompt: 'hi', history: [] },
         handlers: {
           onDelta: () => undefined,
           onDone: () => resolve('done'),

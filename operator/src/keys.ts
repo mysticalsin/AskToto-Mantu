@@ -1,6 +1,7 @@
 import { decryptVault, encryptVault } from './crypto'
 import { looksLikeSecret } from './redact'
-import type { OperatorStore, VaultKeyMeta, VaultKeyRow } from './store'
+import { isApprovedSeat } from './fleet'
+import type { OperatorStore, SeatRow, VaultKeyMeta, VaultKeyRow } from './store'
 import {
   CF_ACCOUNT_PROVIDER,
   decodeVaultPlaintext,
@@ -176,7 +177,8 @@ export async function revokeVaultKey(
   return { ok: true, id: existing.id, status: 'revoked' }
 }
 
-export async function fundedProviders(store: OperatorStore): Promise<string[]> {
+export async function fundedProviders(store: OperatorStore, seat?: SeatRow | null): Promise<string[]> {
+  if (seat && !isApprovedSeat(seat)) return []
   return fundedProvidersFromMeta(await store.listVaultMeta())
 }
 
