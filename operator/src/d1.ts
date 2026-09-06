@@ -50,8 +50,8 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         .first<Pick<SeatRow, 'first_seen'>>()
       await db
         .prepare(
-          `INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen, country, city, lat, lon, last_index_at, hostname, sso_email, license, product)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen, country, city, lat, lon, last_index_at, hostname, sso_email, license, product, saved_minutes, meetings_summarized, conversation_minutes)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(device_id) DO UPDATE SET
              seat_hash = excluded.seat_hash,
              os = CASE WHEN excluded.os IS NULL OR excluded.os = '' OR excluded.os = 'unknown' THEN seats.os ELSE excluded.os END,
@@ -65,7 +65,10 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
              hostname = COALESCE(excluded.hostname, seats.hostname),
              sso_email = COALESCE(excluded.sso_email, seats.sso_email),
              license = COALESCE(excluded.license, seats.license),
-             product = COALESCE(excluded.product, seats.product)`
+             product = COALESCE(excluded.product, seats.product),
+             saved_minutes = CASE WHEN excluded.saved_minutes > 0 THEN excluded.saved_minutes ELSE seats.saved_minutes END,
+             meetings_summarized = CASE WHEN excluded.meetings_summarized > 0 THEN excluded.meetings_summarized ELSE seats.meetings_summarized END,
+             conversation_minutes = CASE WHEN excluded.conversation_minutes > 0 THEN excluded.conversation_minutes ELSE seats.conversation_minutes END`
         )
         .bind(
           row.device_id,
@@ -82,7 +85,10 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
           row.hostname,
           row.sso_email,
           row.license,
-          row.product
+          row.product,
+          row.saved_minutes,
+          row.meetings_summarized,
+          row.conversation_minutes
         )
         .run()
     },
@@ -143,7 +149,10 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         hostname: s.hostname ?? null,
         sso_email: s.sso_email ?? null,
         license: s.license ?? null,
-        product: s.product ?? null
+        product: s.product ?? null,
+        saved_minutes: Number(s.saved_minutes ?? 0),
+        meetings_summarized: Number(s.meetings_summarized ?? 0),
+        conversation_minutes: Number(s.conversation_minutes ?? 0)
       }))
     },
     async insertPulse(row) {

@@ -47,7 +47,10 @@ describe('overview ops tiles from real ingest only', () => {
       hostname: 'Tonys-MacBook-Pro',
       sso_email: 'twalteur@amaris.com',
       license: 'approved',
-      product: null
+            product: null,
+      saved_minutes: 0,
+      meetings_summarized: 0,
+      conversation_minutes: 0
     })
     await store.insertAsk(ask({ id: 'cli-1', provider: 'claude-cli', mode: 'answer' }))
     await store.insertAsk(ask({ id: 'op-1', provider: 'anthropic', mode: 'recap', total_ms: 40000 }))
@@ -67,6 +70,8 @@ describe('overview ops tiles from real ingest only', () => {
     expect(dash.ops.liveNow).toBe(1)
     expect(dash.ops.live30).toBe(1)
     expect(dash.ops.timeSaved).toBeNull()
+    expect(dash.ops.savedMinutes).toBe(0)
+    expect(dash.ops.valueEur).toBe(0)
     expect(dash.ops.durationMs).toBe(18000)
     expect(dash.ops.apiCalls).toBe(3)
     expect(dash.ops.cliAsks).toBe(1)
@@ -98,7 +103,10 @@ describe('overview ops tiles from real ingest only', () => {
         hostname: 'Tonys-MacBook-Pro',
         sso_email: 'twalteur@amaris.com',
         license: 'approved',
-      product: null
+            product: null,
+      saved_minutes: 0,
+      meetings_summarized: 0,
+      conversation_minutes: 0
     })
       await store.insertPulse({
         id: `pulse-${id}`,
@@ -149,7 +157,10 @@ describe('overview ops tiles from real ingest only', () => {
         hostname: 'Tonys-MacBook-Pro',
         sso_email: 'twalteur@amaris.com',
         license: 'approved',
-      product: null
+            product: null,
+      saved_minutes: 0,
+      meetings_summarized: 0,
+      conversation_minutes: 0
     })
     }
     const dash = await buildDashboard(store, 'tony.walteur@gmail.com', NOW)
@@ -165,6 +176,8 @@ describe('overview ops tiles from real ingest only', () => {
   it('does not invent listen minutes or tokens when nothing was reported', async () => {
     const dash = await buildDashboard(memoryStore(), 'tony.walteur@gmail.com', NOW)
     expect(dash.ops.timeSaved).toBeNull()
+    expect(dash.ops.savedMinutes).toBe(0)
+    expect(dash.ops.valueEur).toBe(0)
     expect(dash.ops.listenMinutes).toBeNull()
     expect(dash.ops.tokens).toBe(0)
     expect(dash.ops.durationMs).toBeNull()

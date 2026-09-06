@@ -17,7 +17,10 @@ CREATE TABLE IF NOT EXISTS seats (
   hostname TEXT,
   sso_email TEXT,
   license TEXT,
-  product TEXT
+  product TEXT,
+  saved_minutes REAL NOT NULL DEFAULT 0,
+  meetings_summarized REAL NOT NULL DEFAULT 0,
+  conversation_minutes REAL NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS asks (

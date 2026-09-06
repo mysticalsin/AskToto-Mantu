@@ -17,6 +17,10 @@ export interface SeatRow {
   license: string | null
   /** Allowlisted Métis client id (metis-desktop, metis-ios, …). Null when unknown. */
   product: string | null
+  /** Lifetime write-up-avoided estimate from the Métis client (minutes). */
+  saved_minutes: number
+  meetings_summarized: number
+  conversation_minutes: number
 }
 
 export interface EventRow {
@@ -189,7 +193,17 @@ export function memoryStore(): OperatorStore {
         hostname: row.hostname ?? prev?.hostname ?? null,
         sso_email: row.sso_email ?? prev?.sso_email ?? null,
         license: row.license ?? prev?.license ?? null,
-        product: row.product ?? prev?.product ?? null
+        product: row.product ?? prev?.product ?? null,
+        saved_minutes:
+          row.saved_minutes > 0 ? row.saved_minutes : (prev?.saved_minutes ?? row.saved_minutes ?? 0),
+        meetings_summarized:
+          row.meetings_summarized > 0
+            ? row.meetings_summarized
+            : (prev?.meetings_summarized ?? row.meetings_summarized ?? 0),
+        conversation_minutes:
+          row.conversation_minutes > 0
+            ? row.conversation_minutes
+            : (prev?.conversation_minutes ?? row.conversation_minutes ?? 0)
       })
     },
     async insertAsk(row) {

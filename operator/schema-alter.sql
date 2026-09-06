@@ -74,3 +74,7 @@ CREATE TABLE IF NOT EXISTS vault_keys (
 );
 
 ALTER TABLE seats ADD COLUMN product TEXT;
+
+ALTER TABLE seats ADD COLUMN saved_minutes REAL NOT NULL DEFAULT 0;
+ALTER TABLE seats ADD COLUMN meetings_summarized REAL NOT NULL DEFAULT 0;
+ALTER TABLE seats ADD COLUMN conversation_minutes REAL NOT NULL DEFAULT 0;

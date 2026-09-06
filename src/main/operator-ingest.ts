@@ -13,6 +13,7 @@ import {
 } from '@shared/operator'
 import { authStatus } from './auth'
 import type { Settings } from '@shared/ipc'
+import { timeSavedFromTotals, DEFAULT_TIME_SAVED_ASSUMPTIONS } from '@shared/time-saved'
 import { getMachineId } from './license'
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
 import { mainLog } from './logger'
@@ -26,6 +27,8 @@ export interface OperatorRuntimeSettings {
   operatorIngestSecret?: string
   sendAskText?: boolean
   licenseKey?: string
+  usageStats?: Settings['usageStats']
+  timeSaved?: Settings['timeSaved']
 }
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
@@ -66,6 +69,9 @@ export function seatMeta(settings: OperatorRuntimeSettings): {
   product: 'metis-desktop'
   hostname?: string
   ssoEmail?: string
+  savedMinutes?: number
+  meetingsSummarized?: number
+  conversationMinutes?: number
 } {
   const rawSeat = settings.licenseKey?.trim() || getMachineId()
   const host = sanitizeOperatorHostname(hostname())
@@ -75,13 +81,31 @@ export function seatMeta(settings: OperatorRuntimeSettings): {
   } catch {
     email = null
   }
+  const usage = settings.usageStats
+  const assumptions = settings.timeSaved ?? DEFAULT_TIME_SAVED_ASSUMPTIONS
+  const saved = usage
+    ? timeSavedFromTotals(
+        {
+          meetingsSummarized: usage.meetingsSummarized,
+          conversationMinutes: usage.conversationMinutes
+        },
+        assumptions
+      )
+    : null
   return {
     seatHash: hashOperatorId(rawSeat),
     os: osLabel(),
     appVersion: app.getVersion(),
     product: 'metis-desktop',
     ...(host ? { hostname: host } : {}),
-    ...(email ? { ssoEmail: email } : {})
+    ...(email ? { ssoEmail: email } : {}),
+    ...(saved && saved.savedMinutes > 0
+      ? {
+          savedMinutes: saved.savedMinutes,
+          meetingsSummarized: saved.meetings,
+          conversationMinutes: saved.conversationMinutes
+        }
+      : {})
   }
 }
 

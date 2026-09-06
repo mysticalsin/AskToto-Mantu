@@ -3,6 +3,7 @@ import { CRM_STATUSES, type CrmSendRow, type CrmStatus } from './crm'
 import { missingCloudflareOverview, type CloudflareOverview } from './cloudflare'
 import { looksLikeSecret, safeChips, type SafeChip } from './redact'
 import type { EventRow, OperatorStore, PulseRow, SeatRow, VaultKeyMeta } from './store'
+import { estimateValueEur, formatSavedDuration } from './value'
 import { billedUsdFromOutcome, usageWindowFromAsks } from './usage-import'
 
 export const ONLINE_MS = 2 * 60 * 1000
@@ -67,6 +68,10 @@ export interface OpsTiles {
   /** 30 one-minute unique-device buckets. Realtime sparkline, not the 24h Overview series. */
   live30Series: number[]
   timeSaved: string | null
+  /** Fleet sum of Métis write-up-avoided estimates (minutes). */
+  savedMinutes: number
+  /** Estimated value at €85/hr. */
+  valueEur: number
   durationMs: number | null
   meetings: number
   tokens: number | null
@@ -767,13 +772,16 @@ export async function buildDashboard(
     }
     return n
   })
+  const fleetSavedMinutes = seats.reduce((sum, s) => sum + (Number(s.saved_minutes) || 0), 0)
   const ops: OpsTiles = {
     uniqueSessions: wau,
     sessionsDay: dau,
     liveNow: live,
     live30,
     live30Series,
-    timeSaved: null,
+    timeSaved: fleetSavedMinutes > 0 ? formatSavedDuration(fleetSavedMinutes) : null,
+    savedMinutes: fleetSavedMinutes,
+    valueEur: estimateValueEur(fleetSavedMinutes),
     durationMs,
     meetings,
     tokens: vault.some((v) => v.status === 'active') && tokenAny ? tokenSum : 0,

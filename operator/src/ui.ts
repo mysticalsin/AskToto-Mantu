@@ -19,6 +19,7 @@ import { EXTRA_PAGES, FORBIDDEN_NAV, NAV_IDS, NAV_SECTIONS } from './nav'
 import { looksLikeSecret } from './redact'
 import { productLabel } from './product'
 import { countryName, flagMark } from './countries'
+import { formatValueEur, formatSavedDuration, HOURLY_RATE_EUR } from './value'
 
 const MISSING = '—'
 
@@ -876,6 +877,9 @@ export function renderConsole(data: DashboardPayload): string {
     </article>`
 
   const activeSeats = liveProfiles.length
+  const savedLabel = ops.timeSaved || formatSavedDuration(ops.savedMinutes || 0)
+  const valueLabel = formatValueEur(ops.valueEur || 0)
+  const rateLabel = `€${HOURLY_RATE_EUR}/hr`
 
   const activity = recentEvents.length
     ? recentEvents
@@ -1002,49 +1006,50 @@ export function renderConsole(data: DashboardPayload): string {
 
     <section class="page wrap" data-page="realtime">
       <div class="page-hero" data-live-map>
-        <h3 class="page-title">Live map</h3>
-        <p class="page-sub">Active seats on the globe with signatures. Pins use Cloudflare request.cf only. Heartbeats stream on Events.</p>
+        <h3 class="page-title">Mission Control</h3>
+        <p class="page-sub">Live Métis seats, estimated time saved, and value at €${HOURLY_RATE_EUR}/hr. Country names appear on hover. Heartbeats stream on Events.</p>
       </div>
-      <div class="rt-shoey" data-rt-layout="shoey">
-        <div class="rt-shoey-left">
-          <div class="rt-kpi-bar">
-            <div class="rt-kpi">
-              <span class="rt-hud-lbl">Unique seats last 30 min</span>
-              <div class="n rt-n">${formatCompact(live30)}</div>
-            </div>
-            <div class="rt-kpi rt-kpi-active">
-              <span class="rt-hud-lbl">Active seats</span>
-              <div class="n rt-n">${formatCompact(activeSeats)}</div>
-            </div>
-            <div class="rt-kpi-spark" aria-hidden="true">${blueBars(live30Series, 280, 48)}</div>
-          </div>
-          <aside class="rt-roster" id="rt-roster" aria-label="Live seat signatures">
-            <div class="rt-roster-head">
-              <h3 class="rt-h">Live seats</h3>
-              <span class="rt-roster-count">${formatCompact(live30)}</span>
-            </div>
-            <div class="rt-roster-list">${roster}</div>
-          </aside>
-          <article class="rt-activity" id="rt-activity" aria-label="Live activity">
-            <div class="rt-roster-head">
-              <h3 class="rt-h">Activity</h3>
-              <span class="rt-roster-count">${formatCompact(recentEvents.length)}</span>
-            </div>
-            <div class="rt-activity-list">${activity}</div>
-          </article>
+      <div class="mc-heroes" data-mc-heroes>
+        <div class="mc-hero" data-mc="live">
+          <span class="mc-hero-lbl">Live seats</span>
+          <div class="n">${formatCompact(activeSeats)}</div>
+          <span class="mc-hero-sub">${formatCompact(live30)} unique in last 30 min</span>
         </div>
-        <article class="rt-map-full">
+        <div class="mc-hero" data-mc="saved">
+          <span class="mc-hero-lbl">Time saved</span>
+          <div class="n">${esc(savedLabel)}</div>
+          <span class="mc-hero-sub">Métis estimate · write-up avoided</span>
+        </div>
+        <div class="mc-hero" data-mc="value">
+          <span class="mc-hero-lbl">Value</span>
+          <div class="n">${esc(valueLabel)}</div>
+          <span class="mc-hero-sub">at ${rateLabel} · EBITDA proxy</span>
+        </div>
+      </div>
+      <div class="mc-stage" data-rt-layout="mission">
+        <article class="mc-map rt-map-full">
           <div id="map-root" data-land="inline" style="position:relative">${world}</div>
         </article>
+        <aside class="mc-people rt-roster" id="rt-roster" aria-label="Live people">
+          <div class="rt-roster-head">
+            <h3 class="rt-h">People</h3>
+            <span class="rt-roster-count">${formatCompact(activeSeats)}</span>
+          </div>
+          <div class="rt-roster-list">${roster}</div>
+        </aside>
       </div>
-      <div class="rt-boards" data-rt-boards="full">
-        ${geoBreakdown}
-        ${cityBreakdown}
-        ${appsBreakdown}
-        ${sourceBreakdown}
-        ${surfaceBreakdown}
-        ${osBreakdown}
-        ${kindBreakdown}
+      <div class="mc-below">
+        <article class="rt-activity" id="rt-activity" aria-label="Live activity">
+          <div class="rt-roster-head">
+            <h3 class="rt-h">Activity</h3>
+            <span class="rt-roster-count">${formatCompact(recentEvents.length)}</span>
+          </div>
+          <div class="rt-activity-list">${activity}</div>
+        </article>
+        <div class="rt-boards" data-rt-boards="slim">
+          ${appsBreakdown}
+          ${geoBreakdown}
+        </div>
       </div>
     </section>
 

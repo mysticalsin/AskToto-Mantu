@@ -515,6 +515,11 @@ function lastIndexAt(body: Record<string, unknown>): number | null {
   return typeof body.lastIndexAt === 'number' && Number.isFinite(body.lastIndexAt) ? body.lastIndexAt : null
 }
 
+function nonNegNumber(v: unknown): number {
+  const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN
+  return Number.isFinite(n) && n > 0 ? n : 0
+}
+
 function seatFromBody(deviceId: string, body: Record<string, unknown>, now: number, geo: CfGeo): SeatRow {
   return {
     device_id: deviceId,
@@ -531,7 +536,10 @@ function seatFromBody(deviceId: string, body: Record<string, unknown>, now: numb
     hostname: sanitizeOperatorHostname(body.hostname),
     sso_email: sanitizeOperatorSsoEmail(body.ssoEmail),
     license: typeof body.license === 'string' && !looksLikeSecret(body.license) ? body.license.slice(0, 32) : null,
-    product: parseMetisProduct(body.product)
+    product: parseMetisProduct(body.product),
+    saved_minutes: nonNegNumber(body.savedMinutes),
+    meetings_summarized: nonNegNumber(body.meetingsSummarized),
+    conversation_minutes: nonNegNumber(body.conversationMinutes)
   }
 }
 
