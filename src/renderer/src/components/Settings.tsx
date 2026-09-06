@@ -950,9 +950,8 @@ function AiSection({
   // exclude all three from the generic tiles grid. The remainder splits by `tier`: 'featured' (GPT, Grok,
   // Kimi, Gemini) gets its own always-visible grid right under Anthropic's card, matching the CLI
   // cards' prominence; 'more' (Qwen, OpenRouter, Groq, Mistral, Grok, Gemini, Dust, custom) stays tucked
-  // in the collapsed "Experience: more models" section. Cloudflare is 'featured' and is the default
-  // provider: it is the one card most installs must touch, because the Worker URL ships preset and the
-  // METIS_PROXY_KEY is the single string a user pastes.
+  // in the collapsed "Experience: more models" section. Cloudflare is 'featured'. Happy path is
+  // Operator OAuth (tile click → default browser `/cloudflare/connect`), not Worker URL + METIS_PROXY_KEY paste.
   // When the org sets a data-residency allowlist, only approved providers are offered — mirroring what
   // the main process enforces at request time, so the UI can't offer a provider every ask would reject.
   const orgAllowed = settings.allowedProviders
@@ -982,7 +981,13 @@ function AiSection({
   // key here would silently never be used until the env var is removed. Lock the field instead of letting
   // Save claim it's "valid and working" for a key that will never actually be read.
   const envKeyActive = settings.envKeys.includes(provider)
-  const keyEntrySection = !CLI_PROVIDERS.has(provider) && PROVIDERS[provider].kind !== 'local' ? (
+  const connectCloudflare = (): void => {
+    void patch({ provider: 'cloudflare' })
+    void window.toto.cloudflareConnect()
+  }
+
+  const keyEntrySection =
+    !CLI_PROVIDERS.has(provider) && provider !== 'cloudflare' && PROVIDERS[provider].kind !== 'local' ? (
     <Section title={`${def.label} key`} desc="Stored encrypted on this device. Never sent anywhere except the provider." icon={Lock}>
       <div className="flex items-center gap-2">
         <label htmlFor={keyInputId} className="sr-only">
@@ -1257,32 +1262,6 @@ function AiSection({
               <ManagedChip keys={settings.managedKeys} k="customBaseUrl" />
             </div>
           )}
-          {provider === 'cloudflare' && (
-            <div className="flex flex-col gap-1">
-              <label htmlFor={baseUrlInputId} className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">
-                Worker endpoint URL
-              </label>
-              <div className="flex items-center gap-2">
-                {/* MQA-069: debounced for the same reason as the model fields above. The placeholder is
-                    the hostname cloudflare-proxy/README.md's deploy step actually produces, and keeps the
-                    /v1 suffix visible: the OpenAI client appends /chat/completions to whatever is here. */}
-                <LazyInput
-                  id={baseUrlInputId}
-                  value={settings.cloudflareBaseUrl}
-                  disabled={settings.managedKeys.includes('cloudflareBaseUrl')}
-                  onCommit={(v) => patch({ cloudflareBaseUrl: v })}
-                  placeholder="https://metis-cloudflare-proxy.your-subdomain.workers.dev/v1"
-                  className={['flex-1 min-w-0', ctl, settings.managedKeys.includes('cloudflareBaseUrl') ? 'opacity-60' : ''].join(' ')}
-                />
-                <ManagedChip keys={settings.managedKeys} k="cloudflareBaseUrl" />
-              </div>
-              <p className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                Your team deploys a small Cloudflare Worker that holds the Cloudflare account token as a
-                Wrangler secret; Métis never stores that token. Paste the Worker&rsquo;s URL here and your
-                METIS_PROXY_KEY in the key field above.
-              </p>
-            </div>
-          )}
           <label className="flex items-center justify-between gap-3 px-1 text-[12px] text-[color:var(--cl-muted-foreground)]">
             <span className="flex items-center gap-2">
               Creativity · {settings.temperature.toFixed(1)}
@@ -1381,7 +1360,7 @@ function AiSection({
               recommended={id === recommended}
               hasKey={!!settings.hasKeys[id]}
               locked={locked}
-              onSelect={() => patch({ provider: id })}
+              onSelect={() => (id === 'cloudflare' ? connectCloudflare() : patch({ provider: id }))}
             />
           ))}
         </div>
@@ -1391,6 +1370,29 @@ function AiSection({
           </div>
         )}
       </Section>
+
+      {provider === 'cloudflare' && (
+        <Section
+          title="Cloudflare · AI Gateway"
+          desc="Log in to Cloudflare. Operator adds the AI Gateway key. Paste is not the happy path."
+          icon={ExternalLink}
+        >
+          <button
+            type="button"
+            data-cf-aig-connect
+            disabled={locked}
+            onClick={() => connectCloudflare()}
+            className="no-drag cl-focus flex items-center gap-1.5 rounded-[8px] bg-[var(--cl-primary)] px-3 py-1.5 text-[12px] font-medium text-white hover:opacity-90 disabled:opacity-50"
+          >
+            <ExternalLink size={13} />
+            Log in to Cloudflare
+          </button>
+          <p className="mt-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+            Finish in your default browser. Then this seat uses Operator platform keys — no Worker URL
+            or METIS_PROXY_KEY paste.
+          </p>
+        </Section>
+      )}
 
       {isFeatured && keyEntrySection}
 
@@ -4972,7 +4974,7 @@ const TABS: {
       'thinking mode', 'model', 'other providers', 'model provider', 'cli integration',
       'fallback', 'indexing fallback', 'offline indexing',
       'backups & limits', 'nvidia', 'nim', 'race a backup provider', 'hedge',
-      'cloudflare', 'worker', 'ai gateway', 'workers ai', 'metis_proxy_key'
+      'cloudflare', 'worker', 'ai gateway', 'workers ai', 'metis_proxy_key', 'oauth', 'connect'
     ]
   },
   {

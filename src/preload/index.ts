@@ -349,7 +349,9 @@ const api = {
   licenseStatus: (): Promise<LicenseStatusResult> => ipcRenderer.invoke(IPC.licenseStatus),
   // Boot-gate verdict — see the license:gate handler in main/index.ts for why this is a separate,
   // non-auth-gated channel from licenseStatus.
-  licenseGate: (): Promise<LicenseGateVerdict> => ipcRenderer.invoke(IPC.licenseGate)
+  licenseGate: (): Promise<LicenseGateVerdict> => ipcRenderer.invoke(IPC.licenseGate),
+  cloudflareConnect: (): Promise<{ ok: boolean; href?: string; error?: string }> =>
+    ipcRenderer.invoke(IPC.cloudflareConnect)
 }
 
 contextBridge.exposeInMainWorld('toto', api)
