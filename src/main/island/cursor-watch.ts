@@ -10,11 +10,34 @@ import type { OverlayLayout } from '@shared/overlay-chrome'
 import { overlayUsesHover } from '@shared/overlay-chrome'
 import { HOVER_ISLAND_HEIGHT_MAX_PX, type Rect } from './geometry'
 
-/** Cap leftover 44px menu-bar slabs so Teams mute at Y≈40 still misses. Width stays full top edge. */
-function clampHoverRestRect(rect: Rect): Rect {
+/** Cap leftover 44px slabs so Teams mute at Y=40 still misses. Width stays full top edge. */
+export function clampHoverRestRect(rect: Rect): Rect {
   const height = Math.min(rect.height, HOVER_ISLAND_HEIGHT_MAX_PX)
   if (height === rect.height) return rect
   return { ...rect, height }
+}
+
+/**
+ * A tray Show/Hide `hide()` leaves the LSUIElement window invisible while
+ * `islandResting` may still be false. Treat that as not revealed so top-edge
+ * hover calls restoreBarWidth + showInactive instead of stay.
+ */
+export function overlayWatchTreatAsRevealed(islandResting: boolean, windowVisible: boolean): boolean {
+  return !islandResting && windowVisible
+}
+
+export type CursorWatchDecision = 'reveal' | 'hide' | 'stay'
+
+/** Reveal even when the hovering latch is stuck, if the window is still parked or hidden. */
+export function overlayWatchNeedsRestore(input: {
+  decision: CursorWatchDecision
+  alreadyHovering: boolean
+  islandResting: boolean
+  windowVisible: boolean
+}): boolean {
+  if (input.decision !== 'reveal') return false
+  if (!input.alreadyHovering) return true
+  return input.islandResting || !input.windowVisible
 }
 
 /** Poll while hide/island is resting. 16–32ms — one frame-ish, no Accessibility tap. */
@@ -39,8 +62,6 @@ export function inflateRect(rect: Rect, pad: number): Rect {
     height: rect.height + pad * 2
   }
 }
-
-export type CursorWatchDecision = 'reveal' | 'hide' | 'stay'
 
 /**
  * Resting: cursor in the top-edge approach strip → reveal.

@@ -157,8 +157,6 @@ export const OVERLAY_ISLAND_PEEK = { width: 132, height: 15 } as const
 /** Camera / Dynamic Island square — typical Mac notch width, not a 560 menu-bar slab. */
 export const HOVER_ISLAND_WIDTH_MIN_PX = 180
 export const HOVER_ISLAND_WIDTH_MAX_PX = 250
-/** Camera housing only. 44px is the full menu bar and catches Teams under the island. */
-export const HOVER_ISLAND_HEIGHT_MAX_PX = 32
 /**
  * Typical Teams in-call chrome Y on a notch Mac: just under the menu bar,
  * never in the Dynamic Island. Must not hit hoverWatchRestRect.
@@ -166,6 +164,12 @@ export const HOVER_ISLAND_HEIGHT_MAX_PX = 32
 export const TEAMS_MEETING_CHROME_Y = 48
 /** Under the camera island — typical Teams mute row. Must not hit. */
 export const TEAMS_UNDER_ISLAND_Y = 40
+/**
+ * Always-on top-edge strip cap. Exclusive of Teams mute (Y=40).
+ * Ultron 2026-09-06: a 32px housing cap left Y=32–39 dead, so mouse at the
+ * menu-bar edge / first work-area row never revealed.
+ */
+export const HOVER_ISLAND_HEIGHT_MAX_PX = TEAMS_UNDER_ISLAND_Y
 /** Matches the windowResize hug-width pad so the island capsule is not clipped. */
 export const OVERLAY_PEEK_WIDTH_PAD = 10
 export const OVERLAY_PEEK_HEIGHT_PAD = 4
@@ -193,21 +197,19 @@ export function hoverRestTop(m: DisplayMetrics): number {
 }
 
 /**
- * Height of the hide/island hover hit. Camera / Dynamic Island housing only —
- * never the full 37–44 menu bar (Teams mute lives there) and never a 560-wide
- * slab. Path C flush notch still hits the housing at bounds.y; revealed chrome
- * uses the strut via islandSafeTop. Windows has no fake notch: a small
- * top-center island, not the taskbar inset.
+ * Height of the always-on top-edge hover strip.
+ *
+ * Use the reserved menu-bar / notch inset whenever Electron reports one, even
+ * if the helper said hasNotch=false. Approach from below lands on the first
+ * work-area row (`workArea.y` ≈ 39). Include that row. Never reach Teams mute
+ * at Y=40 or a leftover 44px slab. Path C flush (no inset) stays peek-tall.
+ * Windows: no fake notch when reserved is 0.
  */
 export function hoverHitBandHeight(m: DisplayMetrics): number {
-  let housing: number
-  if (m.hasNotch) {
-    const inset = Math.max(0, m.workArea.y - m.bounds.y, m.menuBarHeight || 0)
-    housing = inset > 0 ? inset : Math.max(m.menuBarHeight || 0, OVERLAY_ISLAND_PEEK.height)
-  } else {
-    housing = OVERLAY_ISLAND_PEEK.height
-  }
-  return Math.max(1, Math.min(housing, HOVER_ISLAND_HEIGHT_MAX_PX))
+  const reserved = Math.max(0, m.workArea.y - m.bounds.y, m.menuBarHeight || 0)
+  const housing = reserved > 0 ? reserved : OVERLAY_ISLAND_PEEK.height
+  const approach = reserved > 0 ? housing + 1 : housing
+  return Math.max(1, Math.min(approach, HOVER_ISLAND_HEIGHT_MAX_PX))
 }
 
 export function hoverRestHeight(m: DisplayMetrics): number {
@@ -222,8 +224,8 @@ export function hoverRestWidth(m: DisplayMetrics): number {
 /**
  * Logical rest rect the cursor watch hit-tests. Hide does NOT park the window here
  * (that was the visible 560×44 slab). Island keeps a smaller visible peek at the same Y.
- * Watch is the full top-edge approach band (housing-tall, work-area-wide) so Hide/Island
- * reveal without hunting the camera pill or the menu Show item.
+ * Watch is the always-on top-edge approach band (work-area-wide, menu-bar-tall
+ * plus the first work-area row) so Hide/Island reveal without hunting Show Métis.
  */
 export function hoverWatchRestRect(_layout: OverlayLayout, m: DisplayMetrics): Rect {
   const height = hoverRestHeight(m)

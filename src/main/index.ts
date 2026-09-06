@@ -176,6 +176,8 @@ import {
 import {
   CURSOR_WATCH_INTERVAL_MS,
   decideCursorWatch,
+  overlayWatchNeedsRestore,
+  overlayWatchTreatAsRevealed,
   pointInRect,
   shouldWatchOverlayCursor
 } from './island/cursor-watch'
@@ -2004,13 +2006,21 @@ function tickOverlayCursorWatch(): void {
   const m = getDisplayMetrics(display)
   const layout = liveOverlayLayout()
   const rest = hoverWatchRestRect(layout, m)
+  const windowVisible = win.isVisible()
   const decision = decideCursorWatch({
     cursor: screen.getCursorScreenPoint(),
     restRect: rest,
     revealedRect: win.getBounds(),
-    revealed: !islandResting
+    revealed: overlayWatchTreatAsRevealed(islandResting, windowVisible)
   })
-  if (decision === 'reveal' && !overlayCursorWatchHovering) {
+  if (
+    overlayWatchNeedsRestore({
+      decision,
+      alreadyHovering: overlayCursorWatchHovering,
+      islandResting,
+      windowVisible
+    })
+  ) {
     overlayCursorWatchHovering = true
     restoreBarWidth()
     notifyOverlayCursorHover(true)
@@ -2070,7 +2080,15 @@ function parkOverlayAfterHideSpring(): void {
     /* headless */
   }
   win.setBounds(park, false)
+  overlayCursorWatchHovering = false
   applyHideClickThrough()
+  // Hide rest is an always-on invisible hairline. Tray hide() must not leave
+  // the LSUIElement window gone — hover still needs a live window + watch.
+  try {
+    if (!win.isVisible()) win.showInactive()
+  } catch {
+    /* headless */
+  }
 }
 
 /** Hide rest is click-through so the menu bar stays usable. Island peek and the bar must receive clicks. */
@@ -2796,8 +2814,12 @@ function toggleVisible(): void {
   const hadNoWindow = !win || win.isDestroyed()
   const w = ensureWindow()
   if (!w) return
-  if (!hadNoWindow && w.isVisible()) w.hide()
-  else {
+  if (!hadNoWindow && w.isVisible()) {
+    w.hide()
+    // Tray Hide is not the rest sensor. Keep the top-edge watch armed so
+    // mouse-at-top can showInactive without hunting Show Métis.
+    if (overlayUsesHover(liveOverlayLayout())) startOverlayCursorWatch()
+  } else {
     // Revealing via the show/hide hotkey always opens the ask input right after — the same deliberate,
     // user-initiated focus grab as sendHotkey('ask'). See showForAsk's doc comment.
     showForAsk(w)
