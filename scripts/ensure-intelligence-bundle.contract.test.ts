@@ -23,6 +23,7 @@ describe('Intelligence bundle is part of a normal build', () => {
     expect(pkg.scripts['build:intelligence']).toMatch(/intelligence/)
     expect(ensure).toMatch(/build:intelligence/)
     expect(ensure).toMatch(/intelligence\/dist\/index\.html/)
+    expect(ensure).not.toMatch(/: boolean/)
     expect(intel).toMatch(/bundleIndexHtml/)
     expect(intel).toMatch(/Intelligence dashboard bundle not found/)
     expect(button).toMatch(/ReactElement/)

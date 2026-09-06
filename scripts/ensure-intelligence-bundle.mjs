@@ -12,7 +12,7 @@ import { fileURLToPath } from 'node:url'
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..')
 export const INTELLIGENCE_BUNDLE_INDEX = join(ROOT, 'intelligence', 'dist', 'index.html')
 
-export function intelligenceBundlePresent(path = INTELLIGENCE_BUNDLE_INDEX): boolean {
+export function intelligenceBundlePresent(path = INTELLIGENCE_BUNDLE_INDEX) {
   try {
     return existsSync(path) && statSync(path).size > 0
   } catch {
