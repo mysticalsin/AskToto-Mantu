@@ -112,6 +112,16 @@ describe('ROI and licenses from real D1 ingest only', () => {
     expect(dash.roi.timeSavedSub).toBe('no recaps ingested')
     expect(dash.roi.value).not.toBe('$0')
     expect(dash.events.some((e) => e.name === 'live' && e.chips.some((c) => c.value === 'Longueuil'))).toBe(true)
+    expect(
+      dash.events.some(
+        (e) =>
+          e.name === 'ask' &&
+          e.hostname === 'Tonys-MacBook-Pro' &&
+          e.chips.some((c) => c.key === 'city' && c.value === 'Longueuil') &&
+          e.chips.some((c) => c.key === 'device')
+      )
+    ).toBe(true)
+    expect(dash.notices.every((n) => 'profile' in n && 'city' in n && 'os' in n)).toBe(true)
   })
 
   it('does not invent cost when no asks were ingested', async () => {

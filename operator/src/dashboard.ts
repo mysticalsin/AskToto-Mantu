@@ -173,7 +173,16 @@ export interface DashboardPayload {
   gateway: {
     rows: { provider: string; asks: number; tokens: number | null; estimate: string | null; funded: boolean }[]
   }
-  notices: { id: string; kind: string; title: string; detail: string; ts: number }[]
+  notices: {
+    id: string
+    kind: string
+    title: string
+    detail: string
+    ts: number
+    profile: string | null
+    city: string | null
+    os: string | null
+  }[]
   geo: RealtimeGeoRow[]
   geoRegions: GeoRegionRow[]
 }
@@ -376,6 +385,18 @@ function displayProfile(seat: SeatRow | undefined): { hostname: string | null; e
   }
 }
 
+function seatContextChips(seat: SeatRow | undefined, extra: Record<string, unknown> = {}): SafeChip[] {
+  return safeChips({
+    city: seat?.city,
+    region: seat?.region,
+    country: seat?.country,
+    os: seat?.os,
+    device: seat?.device_id ? seat.device_id.slice(0, 8) : undefined,
+    license: seat?.license,
+    ...extra
+  })
+}
+
 function eventFromStored(row: EventRow, seatsById: Map<string, SeatRow>): ConsoleEvent {
   const seat = row.device_id ? seatsById.get(row.device_id) : undefined
   const who = displayProfile(seat)
@@ -385,11 +406,8 @@ function eventFromStored(row: EventRow, seatsById: Map<string, SeatRow>): Consol
     name: looksLikeSecret(row.kind) ? 'event' : row.kind,
     hostname: who.hostname,
     email: who.email || (row.actor && !looksLikeSecret(row.actor) ? row.actor : null),
-    chips: safeChips({
-      city: seat?.city,
-      region: seat?.region,
-      country: row.country,
-      os: seat?.os,
+    chips: seatContextChips(seat, {
+      country: row.country || seat?.country,
       detail: row.detail
     })
   }
@@ -422,14 +440,7 @@ function presenceEvents(seats: SeatRow[], now: number): ConsoleEvent[] {
       name: now - s.last_seen < ONLINE_MS ? 'live' : 'seen',
       hostname: who.hostname,
       email: who.email,
-      chips: safeChips({
-        city: s.city,
-        region: s.region,
-        country: s.country,
-        os: s.os,
-        device: s.device_id.slice(0, 8),
-        license: s.license
-      })
+      chips: seatContextChips(s)
     }
   })
 }
@@ -690,11 +701,10 @@ export async function buildDashboard(
             name: 'ask',
             hostname: who.hostname,
             email: who.email,
-            chips: safeChips({
+            chips: seatContextChips(seatsById.get(a.device_id), {
               mode: a.mode,
               provider: a.provider,
-              cache: a.cache_status,
-              os: seatsById.get(a.device_id)?.os
+              cache: a.cache_status
             })
           }
         }),
@@ -706,7 +716,7 @@ export async function buildDashboard(
             name: 'crm',
             hostname: who.hostname,
             email: who.email,
-            chips: safeChips({
+            chips: seatContextChips(seatsById.get(r.device_id), {
               status: r.status,
               connector: r.connector,
               action: r.action
@@ -827,22 +837,35 @@ export async function buildDashboard(
     notices: [
       ...seats
         .filter((s) => !isApprovedSeat(s))
-        .map((s) => ({
-          id: `seat-${s.device_id}`,
-          kind: 'seat-pending',
-          title: 'Seat waiting for approval',
-          detail: [s.hostname, s.sso_email, s.os].filter(Boolean).join(' · ') || s.device_id.slice(0, 8),
-          ts: s.last_seen
-        })),
+        .map((s) => {
+          const who = displayProfile(s)
+          return {
+            id: `seat-${s.device_id}`,
+            kind: 'seat-pending',
+            title: 'Seat waiting for approval',
+            detail: [who.hostname, who.email, s.os].filter(Boolean).join(' · ') || s.device_id.slice(0, 8),
+            ts: s.last_seen,
+            profile: who.hostname || who.email,
+            city: s.city && !looksLikeSecret(s.city) ? s.city : null,
+            os: s.os || null
+          }
+        }),
       ...crm
         .filter((r) => r.status === 'failed' || r.status === 'expired')
-        .map((r) => ({
-          id: `crm-${r.id}`,
-          kind: 'crm-failed',
-          title: `${r.connector} push ${r.status}`,
-          detail: r.last_error && !looksLikeSecret(r.last_error) ? r.last_error : r.title,
-          ts: r.ts
-        })),
+        .map((r) => {
+          const who = displayProfile(seatsById.get(r.device_id))
+          const seat = seatsById.get(r.device_id)
+          return {
+            id: `crm-${r.id}`,
+            kind: 'crm-failed',
+            title: `${r.connector} push ${r.status}`,
+            detail: r.last_error && !looksLikeSecret(r.last_error) ? r.last_error : r.title,
+            ts: r.ts,
+            profile: who.hostname || who.email,
+            city: seat?.city && !looksLikeSecret(seat.city) ? seat.city : null,
+            os: seat?.os || null
+          }
+        }),
       ...proposals
         .filter((p) => p.status === 'pending')
         .map((p) => ({
@@ -850,7 +873,10 @@ export async function buildDashboard(
           kind: 'skill-pending',
           title: 'Skill diff pending',
           detail: `${p.skill_id} ${p.from_version}`,
-          ts: p.created_at
+          ts: p.created_at,
+          profile: p.created_by && !looksLikeSecret(p.created_by) ? p.created_by : null,
+          city: null,
+          os: null
         }))
     ]
       .sort((a, b) => b.ts - a.ts)

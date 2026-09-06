@@ -121,7 +121,7 @@ a { color: var(--accent); text-decoration: none; }
 @media (max-width: 1100px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .kpis.glance { grid-template-columns: 1fr; } }
 .ov-split { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr); gap: 12px; align-items: start; }
 .people-row {
-  display: grid; grid-template-columns: 56px minmax(0, 1.2fr) 110px 88px minmax(0, 1fr) 72px;
+  display: grid; grid-template-columns: 56px minmax(0, 1.1fr) minmax(0, 1.1fr) 110px 88px 72px;
   gap: 8px; align-items: center; padding: 8px 4px; border-bottom: 1px solid var(--hair);
 }
 .people-row .who { font-weight: 650; color: var(--ink); font-size: 12px; word-break: break-word; }
@@ -308,6 +308,17 @@ function when(ts: number): string {
   return new Date(ts).toISOString().replace('T', ' ').slice(0, 16)
 }
 
+function ago(ts: number, now: number): string {
+  const s = Math.max(0, Math.round((now - ts) / 1000))
+  if (s < 5) return 'now'
+  if (s < 60) return `${s}s`
+  const m = Math.floor(s / 60)
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 48) return `${h}h`
+  return `${Math.floor(h / 24)}d`
+}
+
 function field(value: string | null | undefined): string {
   if (!value || looksLikeSecret(value)) return MISSING
   return esc(value)
@@ -411,14 +422,12 @@ function renderPeopleStrip(rows: ProfileRow[], liveCount: number): string {
   const body = rows
     .slice(0, 12)
     .map((r) => {
-      const who = r.hostname || r.email || r.device
-      const place = [r.city, r.region, r.country].filter(Boolean).join(' · ') || MISSING
       return `<div class="people-row" data-people-row data-live="${r.live ? '1' : '0'}" data-city="${esc(r.city || '')}">
         ${r.live ? '<span class="pill up">live</span>' : '<span class="muted">idle</span>'}
-        <span class="who">${field(who)}</span>
+        <span class="who">${field(r.hostname)}</span>
+        <span class="muted">${field(r.email)}</span>
         <span>${field(r.city)}</span>
         <span class="muted">${esc(r.device)}</span>
-        <span class="muted">${esc(place)}</span>
         <span>${field(r.license)}</span>
       </div>`
     })
@@ -494,22 +503,28 @@ function renderGeoCorner(data: DashboardPayload): string {
 }
 
 function renderRealtimeGeo(data: DashboardPayload): string {
-  const cityRows = data.geo
+  const cities = data.geo
+  const regions = data.geoRegions
+  const countries = geoCountryRollup(cities)
+  const maxCity = Math.max(1, ...cities.map((r) => r.count))
+  const maxRegion = Math.max(1, ...regions.map((r) => r.count))
+  const maxCountry = Math.max(1, ...countries.map((r) => r.count))
+  const cityRows = cities
     .map(
       (r) =>
-        `<tr data-geo-city="${esc(r.city)}"><td>${esc(r.city)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
+        `<tr data-geo-city="${esc(r.city)}"><td>${esc(r.city)}${geoBar(r.count, maxCity)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
     )
     .join('')
-  const regionRows = data.geoRegions
+  const regionRows = regions
     .map(
       (r) =>
-        `<tr><td>${esc(r.region)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
+        `<tr><td>${esc(r.region)}${geoBar(r.count, maxRegion)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
     )
     .join('')
-  const countryRows = geoCountryRollup(data.geo)
+  const countryRows = countries
     .map(
       (r) =>
-        `<tr><td>${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
+        `<tr><td>${esc(r.country)}${geoBar(r.count, maxCountry)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
     )
     .join('')
   return `<article class="card" data-realtime-geo>
@@ -547,7 +562,7 @@ function renderRealtimeGeo(data: DashboardPayload): string {
 
 function renderWorldMap(data: DashboardPayload): string {
   return `<article class="card rt-world" data-world-map>
-    <p class="eyebrow">WorldMap</p>
+    <div class="kpi-top"><p class="eyebrow">WorldMap</p><span class="live" data-world-live>LIVE ${data.roi.liveSeats}</span></div>
     <div id="rt-map-root" data-geo-widget>${shoeyWorld(data.map.countries, data.map.dots)}</div>
   </article>`
 }
@@ -557,7 +572,7 @@ function chipVal(chips: { key: string; value: string }[], key: string): string |
   return hit && !looksLikeSecret(hit.value) ? hit.value : null
 }
 
-function renderEvents(events: ConsoleEvent[]): string {
+function renderEvents(events: ConsoleEvent[], now: number): string {
   if (!events.length) return '<div class="empty">No events yet.</div>'
   return events
     .map((e) => {
@@ -571,15 +586,27 @@ function renderEvents(events: ConsoleEvent[]): string {
         <div class="event-name">${esc(name)}</div>
         <div class="event-profile">${field(profile === MISSING ? null : profile)}</div>
         <div class="event-chips">${chips}</div>
-        <div class="ago">${esc(when(e.ts))}</div>
+        <div class="ago">${esc(ago(e.ts, now))}</div>
       </div>`
     })
     .join('')
 }
 
 function renderTopLists(data: DashboardPayload): string {
-  const devices = data.profiles.slice(0, 8)
-  const maxDev = Math.max(1, devices.length)
+  const byDevice = new Map<string, number>()
+  for (const e of data.events) {
+    const id = e.hostname || e.email || chipVal(e.chips, 'device') || ''
+    if (!id) continue
+    byDevice.set(id, (byDevice.get(id) ?? 0) + 1)
+  }
+  const devices = data.profiles
+    .slice()
+    .sort((a, b) => {
+      const an = byDevice.get(a.hostname || a.email || a.device) ?? 0
+      const bn = byDevice.get(b.hostname || b.email || b.device) ?? 0
+      return bn - an || b.lastSeen - a.lastSeen
+    })
+    .slice(0, 8)
   const kinds = new Map<string, number>()
   for (const e of data.events) {
     const name = looksLikeSecret(e.name) ? 'event' : e.name
@@ -587,10 +614,12 @@ function renderTopLists(data: DashboardPayload): string {
   }
   const kindRows = [...kinds.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
   const maxKind = Math.max(1, ...kindRows.map(([, n]) => n))
+  const maxDev = Math.max(1, ...devices.map((r) => byDevice.get(r.hostname || r.email || r.device) ?? 0))
   const deviceBody = devices
-    .map((r, i) => {
+    .map((r) => {
       const who = r.hostname || r.email || r.device
-      const pct = Math.max(10, Math.round(((maxDev - i) / maxDev) * 100))
+      const n = byDevice.get(who) ?? 0
+      const pct = Math.max(10, Math.round((n / maxDev) * 100))
       return `<div class="vol-row" data-toplist-device="${esc(r.device)}">
         <span class="vol-bar" style="width:${pct}%"></span>
         <span>${field(who)}</span>
@@ -783,10 +812,12 @@ export function renderConsole(data: DashboardPayload): string {
     .join('')
   const noticeRows = data.notices
     .map(
-      (n) => `<tr data-q="${esc(`${n.kind} ${n.title} ${n.detail}`.toLowerCase())}">
+      (n) => `<tr data-q="${esc(`${n.kind} ${n.title} ${n.detail} ${n.profile || ''} ${n.city || ''}`.toLowerCase())}">
         <td>${esc(n.kind)}</td>
         <td>${esc(n.title)}</td>
-        <td>${esc(n.detail)}</td>
+        <td>${field(n.profile)}</td>
+        <td>${field(n.city)}</td>
+        <td class="muted">${esc(n.os || MISSING)}</td>
         <td class="muted">${esc(when(n.ts))}</td>
       </tr>`
     )
@@ -890,7 +921,7 @@ svg path { vector-effect: non-scaling-stroke; }
           ${
             data.events.length
               ? `<div class="sub muted" style="padding-bottom:6px">Seats, heartbeats, asks, recaps. City from request.cf. Not pageviews.</div>
-                 <div data-activity-stream>${renderEvents(data.events.slice(0, 24))}</div>`
+                 <div data-activity-stream>${renderEvents(data.events.slice(0, 24), data.now)}</div>`
               : '<div class="empty">No activity yet. A heartbeat writes city and lands here.</div>'
           }
         </article>
@@ -910,7 +941,7 @@ svg path { vector-effect: non-scaling-stroke; }
           <p class="eyebrow">LiveFeed</p>
           ${
             data.events.length
-              ? `<div id="rt-stream">${renderEvents(data.events.slice(0, 30))}</div>`
+              ? `<div id="rt-stream">${renderEvents(data.events.slice(0, 30), data.now)}</div>`
               : '<div class="empty">No live events yet. A heartbeat writes city and lands here.</div>'
           }
         </article>
@@ -1019,7 +1050,7 @@ svg path { vector-effect: non-scaling-stroke; }
         <div class="sub muted" style="padding-bottom:8px">Pending seat approvals, failed CRM pushes, and skill diffs. Real D1. Not a stub.</div>
         ${
           noticeRows
-            ? `<table><thead><tr><th>Kind</th><th>Title</th><th>Detail</th><th>When</th></tr></thead><tbody>${noticeRows}</tbody></table>`
+            ? `<table data-notice-table><thead><tr><th>Kind</th><th>Title</th><th>Profile</th><th>City</th><th>OS</th><th>When</th></tr></thead><tbody>${noticeRows}</tbody></table>`
             : '<div class="empty">Nothing needs Tony right now.</div>'
         }
       </article>
