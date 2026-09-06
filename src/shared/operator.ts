@@ -31,7 +31,9 @@ export function resolveOperatorUrl(
   settings: { operatorUrl?: string } | null | undefined = {},
   env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
 ): string {
-  return (settings?.operatorUrl || env.METIS_OPERATOR_URL || DEFAULT_OPERATOR_URL).trim().replace(/\/$/, '')
+  const fromSettings = settings?.operatorUrl?.trim() ?? ''
+  const fromEnv = env.METIS_OPERATOR_URL?.trim() ?? ''
+  return (fromSettings || fromEnv || DEFAULT_OPERATOR_URL).replace(/\/$/, '')
 }
 
 /** HTTPS Operator `/cloudflare/connect`. Null if the base is not https. */
