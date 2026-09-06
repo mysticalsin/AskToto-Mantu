@@ -105,12 +105,13 @@ A second picker, Settings → Appearance → **Bar rest**, only applies when chr
 
 | Card | Persist | Feel |
 | --- | --- | --- |
-| Full bar | `overlayOrbStyle: 'bar'` | Default. 880 bar with a clickable Jarvis particle circle. |
-| Circle | `'obsidian'` (legacy `'jakub'` too) | Same Jarvis particle orb, 41 host. Not CSS rings. Not a gray box. Not Obsidian. |
+| Circle | `overlayOrbStyle: 'jakub'` | Default. Original thinking-orb, 41 host. |
+| Jarvis | `'obsidian'` | tonys-jarvis particle sphere, 41 host. Not CSS rings. Not a gray box. Not Obsidian. |
+| Full bar | `'bar'` | 880 bar stays on screen. |
 
-Unknown / missing / locked-absent → `'bar'`. Hide and Island ignore the key. No reinstall. Change applies immediately.
+Unknown / missing / locked-absent → `'jakub'`. Hide and Island ignore the key. No reinstall. Change applies immediately.
 
-The Bar circle is the tonys-jarvis particle orb (Tony lock 2026-09-06). That lock overrides QUALITY "no WebGL" for this slot only. Reduced-motion is a static representative frame. No caption. Never label it Obsidian.
+Circle is Jakub thinking-orbs. Jarvis is the tonys-jarvis particle orb (Tony lock 2026-09-06, after the 286ff55 live fail). That Jarvis lock overrides QUALITY "no WebGL" for this slot only. Never call Circle Jarvis. Never label Jarvis Obsidian.
 
 Contracts: `docs/design/BAR-PILL.md`, `docs/design/ORB-SELECTION.md`, `docs/design/THINKING-ORB.md`, `docs/design/QUALITY.md`.
 
@@ -416,7 +417,7 @@ These are the tests a later PR must keep green or add. This file does not add th
 ### Overlay (desktop agent)
 
 - `overlayLayout` default `'hide'`. Garbage → `'hide'`.
-- `overlayOrbStyle` default `'bar'`. Garbage → `'bar'`.
+- `overlayOrbStyle` default `'jakub'`. Garbage → `'jakub'`.
 - Hide/Island: `overlayAllowsMinimize` false; `overlayShowsBarOrb` false; minimize is a no-op.
 - Settings from tray / hotkey / IPC: bounds ≥ 880×800 before first paint (`settings-surface.contract.test.ts`).
 - Park after Settings: `bounds.y` = display top; `isFatHoverTrigger` catches 880×133 at workArea.y.

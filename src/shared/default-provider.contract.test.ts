@@ -69,7 +69,7 @@ describe('MQA-219 — the default provider is one decision, in one state, and is
 describe('Apple-grade defaults (METIS-PLATFORM-NORTH-STAR §3.4)', () => {
   it('fresh install recedes and fails closed', () => {
     expect(DEFAULT_SETTINGS.overlayLayout).toBe('hide')
-    expect(DEFAULT_SETTINGS.overlayOrbStyle).toBe('bar')
+    expect(DEFAULT_SETTINGS.overlayOrbStyle).toBe('jakub')
     expect(DEFAULT_SETTINGS.providerPriority).toBe('api')
     expect(DEFAULT_SETTINGS.encryptTranscripts).toBe(true)
     expect(DEFAULT_SETTINGS.operatorUrl).toBe('')
@@ -78,7 +78,7 @@ describe('Apple-grade defaults (METIS-PLATFORM-NORTH-STAR §3.4)', () => {
 
   it('schema heals garbage overlay and orb keys to the friendly defaults', () => {
     expect(BaseSettingsSchema.shape.overlayLayout.parse(undefined)).toBe('hide')
-    expect(BaseSettingsSchema.shape.overlayOrbStyle.parse(undefined)).toBe('bar')
+    expect(BaseSettingsSchema.shape.overlayOrbStyle.parse(undefined)).toBe('jakub')
     expect(BaseSettingsSchema.shape.providerPriority.parse(undefined)).toBe('api')
     expect(BaseSettingsSchema.shape.encryptTranscripts.parse(undefined)).toBe(true)
   })

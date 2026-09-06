@@ -6,28 +6,31 @@
 export const OVERLAY_ORB_STYLES = ['bar', 'jakub', 'obsidian'] as const
 export type OverlayOrbStyle = (typeof OVERLAY_ORB_STYLES)[number]
 
-export const DEFAULT_OVERLAY_ORB_STYLE: OverlayOrbStyle = 'bar'
+export const DEFAULT_OVERLAY_ORB_STYLE: OverlayOrbStyle = 'jakub'
 
 export const OVERLAY_ORB_COPY: Record<OverlayOrbStyle, { title: string; desc: string }> = {
   bar: {
     title: 'Full bar',
-    desc: 'The bar stays on screen with a Jarvis circle.'
+    desc: 'The Ask bar stays on screen.'
   },
   jakub: {
     title: 'Circle',
-    desc: 'Jarvis particle orb.'
+    desc: 'Original thinking orb. Default rest.'
   },
   obsidian: {
-    title: 'Circle',
-    desc: 'Jarvis particle orb.'
+    title: 'Jarvis',
+    desc: 'Particle sphere. Small rest pill.'
   }
 }
 
-/** Settings cards. Persist still accepts jakub/obsidian; both are Circle. */
-export const OVERLAY_ORB_PICKER_CARDS = ['bar', 'obsidian'] as const
+/** Settings cards. Circle is default (thinking-orbs). Jarvis is the particle sphere. */
+export const OVERLAY_ORB_PICKER_CARDS = ['jakub', 'obsidian', 'bar'] as const
+export type OverlayOrbPickerCard = (typeof OVERLAY_ORB_PICKER_CARDS)[number]
 
-export function overlayOrbPickerSelected(style: OverlayOrbStyle): 'bar' | 'obsidian' {
-  return style === 'bar' ? 'bar' : 'obsidian'
+export function overlayOrbPickerSelected(style: OverlayOrbStyle): OverlayOrbPickerCard {
+  return (OVERLAY_ORB_PICKER_CARDS as readonly string[]).includes(style)
+    ? (style as OverlayOrbPickerCard)
+    : DEFAULT_OVERLAY_ORB_STYLE
 }
 
 export function isOverlayOrbStyle(v: unknown): v is OverlayOrbStyle {
@@ -43,12 +46,17 @@ export function overlayOrbRestIsCircle(layout: string, style: OverlayOrbStyle): 
   return layout === 'bar' && (style === 'jakub' || style === 'obsidian')
 }
 
-/** Bar circle is always the tonys-jarvis particle orb. Hide/Island never show it. */
-export function overlayUsesJarvisOrb(layout: string, _style?: OverlayOrbStyle): boolean {
-  return layout === 'bar'
+/** Jarvis particle sphere. Bar + persist `obsidian` only. Hide/Island never show it. */
+export function overlayUsesJarvisOrb(layout: string, style?: OverlayOrbStyle): boolean {
+  return layout === 'bar' && style === 'obsidian'
 }
 
-/** @deprecated Tony 2026-09-06: use overlayUsesJarvisOrb. Persist key may still be obsidian. */
+/** Jakub thinking-orb. Default Circle rest and the Full-bar minimize control. */
+export function overlayUsesThinkingOrb(layout: string, style?: OverlayOrbStyle): boolean {
+  return layout === 'bar' && style !== 'obsidian'
+}
+
+/** Persist key may still say obsidian. Same wire as overlayUsesJarvisOrb. */
 export function overlayUsesObsidianOrb(layout: string, style: OverlayOrbStyle): boolean {
   return overlayUsesJarvisOrb(layout, style)
 }

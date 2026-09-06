@@ -25,6 +25,7 @@ import {
   isSettingsTallHeight,
   rememberBarContentHeight,
   isBarIdleGhostPanel,
+  overlayShowsSettingsSheet,
   isShowMetisOnlyStub,
   isFullAskReveal,
   parseOverlayLayout
@@ -185,6 +186,9 @@ describe('overlay chrome modes', () => {
         minimized: true
       })
     ).toBe(true)
+    expect(overlayShowsSettingsSheet('settings', false)).toBe(true)
+    expect(overlayShowsSettingsSheet('settings', true)).toBe(false)
+    expect(overlayShowsSettingsSheet('answer', false)).toBe(false)
     expect(
       overlayAllowsHugWidth({ minimized: false, islandResting: false, restWidth: 8, nextWidth: 120 })
     ).toBe(false)

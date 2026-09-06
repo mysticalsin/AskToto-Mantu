@@ -3,9 +3,9 @@
  * (floating cloud + connection lines + electrons along those lines).
  *
  * Fullscreen orb.ts sizes the renderer to window.innerWidth/innerHeight.
- * This mount is the Bar Circle / second Settings pill: 41 host, never fullscreen.
- * Point size is scaled so 0.35–0.4 world dots still read on that small canvas.
- * Do not fall back to a gray thinking-orb box or a static Métis M.
+ * This mount is the Jarvis Settings pill / Bar rest when style is `obsidian`:
+ * 41 host, never fullscreen. Pill density and pixel point size are retuned so
+ * the sphere reads on a 41 circle. Do not fall back to a gray box or a static Métis M.
  */
 
 import type { OrbMood } from './bar-pill-orb'
@@ -28,16 +28,19 @@ export const JARVIS_ORB_COLOR = 0x4ca8e8
 export const JARVIS_ORB_STATES = ['idle', 'listening', 'thinking', 'speaking'] as const
 export type JarvisOrbState = (typeof JARVIS_ORB_STATES)[number]
 
-/** Same count as orb.ts. The 41 host crops the camera, it does not thin the cloud. */
+/** Same count as orb.ts on a large host. The 41 pill thins the cloud so it does not mud. */
 export const JARVIS_PARTICLE_COUNT = 2000
+export const JARVIS_PILL_PARTICLE_COUNT = 800
 export const JARVIS_ELECTRON_COUNT = 3
 export const JARVIS_MAX_LINES = 8000
 export const JARVIS_CLOUD_SEED_RADIUS = 25
 export const JARVIS_CAMERA_Z = 80
+export const JARVIS_PILL_CAMERA_Z = 58
 export const JARVIS_LINE_DISTANCE = 8
 export const JARVIS_HOST_PX = 41
-/** orb.ts was tuned on a ~viewport canvas. Scale point size from this. */
+/** orb.ts was tuned on a ~viewport canvas. Large-host point size scales from this. */
 export const JARVIS_SIZE_REF_PX = 900
+export const JARVIS_PILL_HOST_PX = 48
 
 export interface JarvisStateTarget {
   radius: number
@@ -87,8 +90,26 @@ export function seedJarvisCloud(
   return { pos, phase }
 }
 
-/** Keep fullscreen 0.35–0.4 dots readable on the 41 host. */
+export function jarvisParticleCountForHost(hostPx: number): number {
+  if (hostPx <= JARVIS_PILL_HOST_PX) return JARVIS_PILL_PARTICLE_COUNT
+  if (hostPx <= 96) return 1400
+  return JARVIS_PARTICLE_COUNT
+}
+
+export function jarvisCameraZForHost(hostPx: number): number {
+  if (hostPx <= JARVIS_PILL_HOST_PX) return JARVIS_PILL_CAMERA_Z
+  if (hostPx <= 96) return 68
+  return JARVIS_CAMERA_Z
+}
+
+export function jarvisSizeAttenuationForHost(hostPx: number): boolean {
+  return hostPx > 96
+}
+
+/** Pill hosts use pixel-sized points. Large hosts keep orb.ts world size. */
 export function jarvisPointSizeForHost(baseSize: number, hostPx: number): number {
+  if (hostPx <= JARVIS_PILL_HOST_PX) return Math.min(2.8, Math.max(1.55, baseSize * 5.2))
+  if (hostPx <= 96) return Math.min(3.2, Math.max(1.4, baseSize * 4.4))
   return baseSize * (JARVIS_SIZE_REF_PX / Math.max(1, hostPx))
 }
 
@@ -150,16 +171,18 @@ export function createJarvisOrb(
     return css
   }
 
-  renderer.setClearColor(0x050508, 1)
+  // Transparent clear: the CSS disc is the dark circle. An opaque canvas was a muddy gray box.
+  renderer.setClearColor(0x050508, 0)
   let hostPx = fit()
 
   const scene = new Scene()
   const camera = new PerspectiveCamera(45, 1, 1, 1000)
-  camera.position.z = JARVIS_CAMERA_Z
+  camera.position.z = jarvisCameraZForHost(hostPx)
 
-  const N = JARVIS_PARTICLE_COUNT
+  const N = jarvisParticleCountForHost(hostPx)
   const { pos, phase } = seedJarvisCloud(N, JARVIS_CLOUD_SEED_RADIUS)
   const vel = new Float32Array(N * 3)
+  const attenuate = jarvisSizeAttenuationForHost(hostPx)
 
   const geo = new BufferGeometry()
   geo.setAttribute('position', new BufferAttribute(pos, 3))
@@ -168,7 +191,7 @@ export function createJarvisOrb(
     size: jarvisPointSizeForHost(0.4, hostPx),
     transparent: true,
     opacity: 0.6,
-    sizeAttenuation: true,
+    sizeAttenuation: attenuate,
     blending: AdditiveBlending,
     depthWrite: false
   })
@@ -198,7 +221,7 @@ export function createJarvisOrb(
     size: jarvisPointSizeForHost(0.8, hostPx),
     transparent: true,
     opacity: 1,
-    sizeAttenuation: true,
+    sizeAttenuation: attenuate,
     blending: AdditiveBlending,
     depthWrite: false
   })
@@ -290,9 +313,10 @@ export function createJarvisOrb(
       mid = mSum / (16 * 255)
     }
 
-    let zTarget = Math.sin(t * 0.12) * 8
-    if (state === 'thinking') zTarget = Math.sin(t * 0.3) * 15 + Math.sin(t * 0.9) * 6
-    else if (state === 'speaking') zTarget = Math.sin(t * 0.15) * 6 - bass * 10
+    const zAmp = hostPx <= JARVIS_PILL_HOST_PX ? 0.28 : 1
+    let zTarget = Math.sin(t * 0.12) * 8 * zAmp
+    if (state === 'thinking') zTarget = (Math.sin(t * 0.3) * 15 + Math.sin(t * 0.9) * 6) * zAmp
+    else if (state === 'speaking') zTarget = (Math.sin(t * 0.15) * 6 - bass * 10) * zAmp
     cloudZVel += (zTarget - cloudZ) * 0.008
     cloudZVel *= 0.94
     cloudZ += cloudZVel
@@ -455,8 +479,10 @@ export function createJarvisOrb(
       lineMat.color.lerp(new Color(JARVIS_ORB_COLOR), 0.015)
     }
 
-    camera.position.x = Math.sin(t * 0.02) * 5
-    camera.position.y = Math.cos(t * 0.03) * 3
+    const drift = hostPx <= JARVIS_PILL_HOST_PX ? 0.35 : 1
+    camera.position.x = Math.sin(t * 0.02) * 5 * drift
+    camera.position.y = Math.cos(t * 0.03) * 3 * drift
+    camera.position.z = jarvisCameraZForHost(hostPx)
     camera.lookAt(0, 0, cloudZ * 0.2)
     renderer.render(scene, camera)
   }
@@ -471,7 +497,10 @@ export function createJarvisOrb(
     if (disposed) return
     hostPx = fit()
     camera.aspect = 1
+    camera.position.z = jarvisCameraZForHost(hostPx)
     camera.updateProjectionMatrix()
+    mat.size = jarvisPointSizeForHost(currentSize, hostPx)
+    electronMat.size = jarvisPointSizeForHost(0.8, hostPx)
   }
 
   let ro: ResizeObserver | null = null

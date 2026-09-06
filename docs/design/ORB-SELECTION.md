@@ -5,40 +5,42 @@ slice: orb-selection
 owns:
   - Settings Appearance orb rest picker
   - overlayOrbStyle persist key
-  - Jarvis particle orb on the Bar circle
+  - Circle rest (Jakub thinking-orbs)
+  - Jarvis particle orb (tonys-jarvis) when that card is picked
 does-not-own:
   - hide park 8×2
   - island peek 132×15
   - island/geometry hit rects
   - Goldberg Aria
   - Hide/Island minimize-to-circle
-notes: DESIGN before UI. Tony lock 2026-09-06 ~11:41pm ET. Bar circle is the tonys-jarvis particle orb. Never Obsidian. Never a gray box.
+notes: DESIGN before UI. Tony lock 2026-09-06 live fail on 286ff55. Default Circle is Jakub thinking-orbs. Jarvis is the particle sphere. Never call Circle Jarvis. Never label Jarvis Obsidian.
 ---
 
 # Orb selection (Bar rest look)
 
 This file is the contract for one Settings power choice. Hide / Island / Bar overlay chrome stays frozen.
 
-Tony lock 2026-09-06 ~11:41pm ET is source of truth. It overrides the 2026-09-05 "do not replace default with Jarvis" line and QUALITY.md / BAR-PILL.md "no WebGL" **for the Bar circle only**.
+Tony lock 2026-09-06 (after the 286ff55 live fail) is source of truth.
 
 ## Why this exists
 
 Tony already picks Hide / Island / Bar. That picker is perfect. Keep it.
 
-Bar is the **full bar with a clickable circle**. That circle is the animated particle orb from `https://github.com/mysticalsin/tonys-jarvis.git` `frontend/src/orb.ts`. Not a gray box. Not static CSS rings. Not the broken thinking-orb minimize.
+Bar rest is a second choice: **Circle** (default, original thinking-orb), **Jarvis** (tonys-jarvis particle sphere), or **Full bar**.
 
-## Settings cards (two)
+## Settings cards
 
 | Card | Persist | Title | Caption |
 | --- | --- | --- | --- |
-| bar | `'bar'` | Full bar | The bar stays on screen with a Jarvis circle. |
-| Circle | `'obsidian'` (legacy `'jakub'` also selects this) | Circle | Jarvis particle orb. |
+| Circle | `'jakub'` | Circle | Original thinking orb. Default rest. |
+| Jarvis | `'obsidian'` | Jarvis | Particle sphere. Small rest pill. |
+| Full bar | `'bar'` | Full bar | The Ask bar stays on screen. |
 
-Full bar shows the **Default** badge. Group label: "Bar rest". Helper: "Applies when Overlay chrome is Bar."
+Circle shows the **Default** badge. Group label: "Bar rest". Helper: "Applies when Overlay chrome is Bar."
 
-Naming: **Circle** and/or **Jarvis**. Never "Obsidian". Never "Jarvis / Obsidian".
+Naming: Circle is Circle. Jarvis is Jarvis. Never "Obsidian". Never "Jarvis / Obsidian". Never call Circle "Jarvis".
 
-Clicking Circle while chrome is Bar may rest as just the 41 particle orb (minimized). Click the orb (not drag) to open the full bar again. Full bar expands back to 880 with the same Jarvis circle docked.
+Clicking Circle or Jarvis while chrome is Bar rests as the 41 pill. Click the pill (not drag) to open the full bar again. Circle rest / Circle click must leave Settings. No 800+ gray Settings sheet under the bar.
 
 ## Hard law (do not break)
 
@@ -46,8 +48,9 @@ Clicking Circle while chrome is Bar may rest as just the 41 particle orb (minimi
 - `overlayAllowsMinimize(layout) === (layout === 'bar')`. Hide and Island never grow a minimize control.
 - `overlayShowsBarOrb(layout, minimized) === (layout === 'bar' && minimized)`. Hide/Island never show a circle.
 - `overlayDocksBarCircle(layout) === (layout === 'bar')`.
-- `overlayUsesJarvisOrb(layout)` is true only for Bar. The docked circle and the minimized circle both mount the particle orb (`ObsidianOrb` + `data-orb-engine="jarvis-particles"`).
-- Do not mount `JarvisOrbButton` / thinking-orb on Bar or ControlPill. That path was the gray box.
+- `overlayUsesThinkingOrb(layout, style)` is Bar and style is not `obsidian`. Default Circle and Full-bar minimize mount `JarvisOrbButton` + `thinking-orbs`.
+- `overlayUsesJarvisOrb(layout, style)` is Bar and style is `obsidian` only. That path mounts `ObsidianOrb` + `data-orb-engine="jarvis-particles"`.
+- `overlayShowsSettingsSheet(view, minimized)` is true only when Settings is the view and the Circle pill is not up. No `.cl-root` sheet when `view !== 'settings'` or when minimized.
 - Hide park stays 8×2. Island peek stays 132×15.
 - No em dash in user-facing copy. No Vibe Island trademark strings.
 
@@ -57,31 +60,32 @@ Key: `overlayOrbStyle`.
 
 Values: `'bar' | 'jakub' | 'obsidian'`.
 
-Default: `'bar'`.
+Default: `'jakub'`.
 
-Unknown / missing → `'bar'`. `'jakub'` and `'obsidian'` both mean Circle (Jarvis particle). The picker writes `'obsidian'` for Circle.
+Unknown / missing → `'jakub'`.
 
 ## Jarvis look (match tonys-jarvis, do not invent)
 
 Reference: `tonys-jarvis` / `mysticalsin/jarvis2.0` `frontend/src/orb.ts`. Tree three is `three@0.143.0`.
 
-- **Cloud.** 2000-particle floating sphere with velocity + radius pull. Color `0x4ca8e8`. Not a fibonacci cage. Not a static Métis M.
+- **Cloud.** Floating sphere with velocity + radius pull. Color `0x4ca8e8`. Not a fibonacci cage. Not a static Métis M.
 - **Lines.** Connection segments between nearby particles, amount by state. Same blue.
 - **Electrons.** Up to three bright dots that travel along those connections (thinking).
 - **States.** `idle` / `listening` / `thinking` / `speaking`.
-- **Host.** 41×41 visible box (Bar circle and the second Settings pill). Never `window.innerWidth`. Not a fullscreen canvas.
+- **Host.** 41×41 visible box. Never `window.innerWidth`. Not a fullscreen canvas. Pill density and point size are retuned for that host.
 - **Engine.** Three.js `WebGLRenderer` + `Points` + `LineSegments`. CSS rings / spark / purple halo is a fail.
 - **Reduced-motion.** One static representative frame. Must still read as the particle cloud.
-- **First paint.** Dark disc behind the canvas (`#050508`). Do not flash a white hole. If WebGL is missing, keep that disc. Do not fall back to a gray thinking-orb box.
+- **First paint.** Circular dark disc behind a transparent canvas. Do not flash a white hole or a square gray box. If WebGL is missing, keep that disc.
 - **Captions.** None.
 
 ## Tests (required)
 
-- Default `overlayOrbStyle` is `'bar'`. Parse garbage → `'bar'`.
+- Default `overlayOrbStyle` is `'jakub'`. Parse garbage → `'jakub'`.
 - Hide/Island still refuse minimize and refuse `overlayShowsBarOrb`.
-- Settings cards are Full bar and Circle. Copy has no em dash, no Obsidian, no "Jarvis / Obsidian".
-- Bar and ControlPill mount the particle orb (`data-orb-engine="jarvis-particles"`). No `JarvisOrbButton`.
+- Settings cards are Circle, Jarvis, Full bar. Copy has no em dash, no Obsidian, no "Jarvis / Obsidian". Circle is Default.
+- Bar and ControlPill mount thinking-orbs unless `overlayUsesJarvisOrb`. Jarvis card mounts the particle orb.
 - Engine color is `0x4ca8e8`. Import is `three@0.143.0`.
+- Ghost: Settings closed + Bar/Circle never keeps lastBarHeight 800+ or a Settings sheet. Circle click does not reopen Settings.
 - Persist key stays in the settings schema.
 
 ## Out of scope

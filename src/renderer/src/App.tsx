@@ -38,6 +38,7 @@ import {
   overlayHoverIdle,
   overlayRestsHidden,
   overlayShowsBarOrb,
+  overlayShowsSettingsSheet,
   overlayUsesHover,
   parseOverlayLayout,
   shouldForceParkOnBecameIdle
@@ -559,6 +560,8 @@ export function App(): JSX.Element {
     prevOrbStyleRef.current = overlayOrbStyle
     if (prev === overlayOrbStyle) return
     if (overlayOrbRestIsCircle(overlayLayout, overlayOrbStyle)) {
+      // Circle rest must leave Settings. Keeping view==='settings' is the 880×1017 gray slab.
+      setView((v) => (v === 'settings' ? 'answer' : v))
       setMinimized(true)
       void window.toto.minimize(true)
     } else if (overlayOrbStyle === 'bar') {
@@ -1023,6 +1026,8 @@ export function App(): JSX.Element {
   const openSettings = useCallback((tab?: 'personalize' | 'calendar' | 'ai', notice?: string): void => {
     setSettingsInitialTab(tab) // generic open (no tab) → default tab; callers can target a specific one
     setSettingsNotice(notice)
+    setMinimized(false)
+    void window.toto.minimize(false)
     setView('settings')
     setCollapsed(false)
   }, [])
@@ -1091,6 +1096,8 @@ export function App(): JSX.Element {
   // Expand the floating control mini-pill back to the full widget. Hotkeys/Escape call this before
   // acting so a request can never fire into an unmounted Bar (invisible work / wasted spend).
   const unminimize = useCallback((): void => {
+    // Circle click expands the bar only. Never reopen a Settings-tall sheet underneath.
+    setView((v) => (v === 'settings' ? 'answer' : v))
     setMinimized(false)
     void window.toto.minimize(false)
     if (autoHideSetting) {
@@ -2278,8 +2285,9 @@ export function App(): JSX.Element {
     if (reviewDirtyRef.current && !window.confirm('You have unsaved changes to this recap. Discard them?')) {
       return
     }
+    setView((v) => (v === 'settings' ? 'answer' : v))
     setMinimized(true)
-    void window.toto.minimize(true) // collapse to the Jarvis circle (Bar only)
+    void window.toto.minimize(true) // collapse to the Circle pill (Bar only)
   }, [overlayLayout])
   // The bar's eye button is the visible/invisible toggle: whether the Métis window shows up on a
   // screen you share or record (contentProtection). Hidden by default — the invisible-copilot identity.
@@ -3043,7 +3051,8 @@ export function App(): JSX.Element {
   const body: JSX.Element | null =
     DEMO === 'answer' || DEMO === 'copilot' || DEMO === 'history'
       ? demoBody
-      : (view === 'settings' || DEMO === 'settings') && settings
+      : overlayShowsSettingsSheet(view === 'settings' || DEMO === 'settings' ? 'settings' : view, minimized) &&
+          settings
         ? settingsBody
         : view === 'history'
           ? historyBody
@@ -3221,18 +3230,19 @@ export function App(): JSX.Element {
       // the grace collapse back to peek. No-ops unless auto-hide is actually in effect (see the reducer).
       onMouseEnter={onOverlayPointerEnter}
       onMouseLeave={onOverlayPointerLeave}
-      data-settings-surface={view === 'settings' || undefined}
+      data-settings-surface={overlayShowsSettingsSheet(view, minimized) || undefined}
       className={[
         'relative flex w-full flex-col gap-2',
         // Settings fills the 880×800 surface. Without h-full the 480-era panel grew past the
         // window and the last rows were clipped (Tony live: M / tray open, cannot scroll down).
-        view === 'settings' ? 'h-full min-h-0' : '',
+        // Circle rest must not keep h-full or the hug becomes a Settings-tall gray slab.
+        overlayShowsSettingsSheet(view, minimized) ? 'h-full min-h-0' : '',
         // Stealth (contentProtection) paints a multi-colour halo that spills ~34px past the widget via
         // box-shadow (see .aw-hidden-rainbow). The overlay window hugs content height to ~2px, so without
         // extra room the halo would be clipped at the window edge into a flat band. Widen the transparent
         // margin only while invisible; the resting/visible overlay keeps its tight p-1.5. Settings is
         // opaque glass, so skip the 20px stealth pad that crushed the scroll surface.
-        overlayPeeked ? 'p-0' : view === 'settings' ? 'p-1.5' : (settings?.contentProtection ?? true) && !minimized ? 'p-5 stealth-glow' : 'p-1.5',
+        overlayPeeked ? 'p-0' : overlayShowsSettingsSheet(view, minimized) ? 'p-1.5' : (settings?.contentProtection ?? true) && !minimized ? 'p-5 stealth-glow' : 'p-1.5',
         showListeningChrome ? 'listening' : ''
       ].join(' ')}
     >
@@ -3527,7 +3537,7 @@ export function App(): JSX.Element {
             )
           })()}
           {isPanelBody && panelOpen &&
-            (view === 'settings' || DEMO === 'settings' ? (
+            (overlayShowsSettingsSheet(view === 'settings' || DEMO === 'settings' ? 'settings' : view, minimized) ? (
               // Settings is its own self-contained panel — render directly under the bar (bar stays on top).
               <Suspense fallback={<div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
                 <div className="flex min-h-0 flex-1 flex-col">{body}</div>

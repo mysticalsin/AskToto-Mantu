@@ -1891,7 +1891,9 @@ function resizeTo(height: number): void {
     return
   }
   // MQA-286 — Settings hug reports ~325px. Never keep park / bar height while Settings is open.
-  if (settingsSurfaceOpen) {
+  // Circle rest must not take this branch: settingsSurfaceOpen leftover + isMinimized was the
+  // 880×1017 gray Settings sheet under the Ask bar.
+  if (settingsSurfaceOpen && !isMinimized) {
     const display = screen.getDisplayMatching(win.getBounds())
     const metrics = getDisplayMetrics(display)
     const rect = settingsOpenRect(metrics, ISLAND_TOP_MARGIN)
@@ -1948,6 +1950,7 @@ function setMinimizedWidth(narrow: boolean): void {
   // Flip BEFORE resizeTo so the pill's own resize reports (while narrow) never clobber lastBarHeight,
   // and so expanding restores the last real bar height instead of the pill's tiny one.
   if (narrow) {
+    if (settingsSurfaceOpen) leaveSettingsSurface()
     islandResting = false
     isMinimized = true
     currentWidth = PILL_WIDTH

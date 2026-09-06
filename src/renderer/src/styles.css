@@ -1834,16 +1834,20 @@ input::placeholder {
 }
 .overlay-orb-diagram__jakub {
   position: absolute;
-  top: 16px;
+  top: 50%;
   left: 50%;
-  width: 14px;
-  height: 14px;
-  margin-left: -7px;
+  width: 22px;
+  height: 22px;
+  margin-left: -11px;
+  margin-top: -11px;
   border-radius: 50%;
-  background: rgba(20, 16, 28, 0.8);
+  background:
+    radial-gradient(circle at 35% 32%, rgba(255, 236, 210, 0.95) 0 18%, transparent 42%),
+    radial-gradient(circle at 62% 58%, rgba(120, 72, 255, 0.9) 0 28%, transparent 58%),
+    rgba(20, 16, 28, 0.92);
   box-shadow:
     inset 0 0 0 1.5px rgba(255, 255, 255, 0.7),
-    0 0 0 1px rgba(255, 255, 255, 0.12);
+    0 0 10px rgba(127, 0, 218, 0.35);
 }
 .overlay-orb-diagram__jarvis,
 .overlay-orb-diagram__obsidian {
@@ -1923,11 +1927,13 @@ input::placeholder {
   overflow: hidden;
   border-radius: 50%;
   background: #050508;
+  clip-path: circle(50% at 50% 50%);
 }
 .obsidian-orb__canvas {
   display: block;
   width: 41px;
   height: 41px;
+  border-radius: 50%;
 }
 
 @keyframes overlay-peek-in {

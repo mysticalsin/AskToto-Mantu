@@ -26,8 +26,9 @@ import { formatScreenFreshness } from '@shared/perception'
 import { accelLabel } from '../lib/keys'
 import type { CaptureDegraded } from '../lib/listen'
 import { ObsidianOrb } from './ObsidianOrb'
+import { JarvisOrbButton } from './JarvisOrbButton'
 import { BAR_MARK_SIZE_PX, type OrbMood } from '../lib/bar-pill-orb'
-import type { OverlayOrbStyle } from '@shared/overlay-orb'
+import { overlayUsesJarvisOrb, type OverlayOrbStyle } from '@shared/overlay-orb'
 
 /** Single source of truth for toolbar icon stroke — prevents per-icon drift. */
 const ICON_STROKE = 1.85
@@ -751,13 +752,23 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
               </button>
             )}
             {props.canMinimize !== false ? (
-              <ObsidianOrb
-                orbMood={props.orbMood ?? 'idle'}
-                listening={props.listening}
-                title="Minimize to the orb"
-                ariaLabel="Minimize to the orb"
-                onActivate={props.onMinimize}
-              />
+              overlayUsesJarvisOrb('bar', props.orbStyle) ? (
+                <ObsidianOrb
+                  orbMood={props.orbMood ?? 'idle'}
+                  listening={props.listening}
+                  title="Minimize to the orb"
+                  ariaLabel="Minimize to the orb"
+                  onActivate={props.onMinimize}
+                />
+              ) : (
+                <JarvisOrbButton
+                  orbMood={props.orbMood ?? 'idle'}
+                  listening={props.listening}
+                  title="Minimize to the orb"
+                  ariaLabel="Minimize to the orb"
+                  onActivate={props.onMinimize}
+                />
+              )
             ) : null}
             {/* Collapse-chevron: plain ghost, not aw-fill. Submit is the only accent-filled control.
                 Disabled (not hidden, so the toolbar doesn't jump) when there's nothing behind the bar

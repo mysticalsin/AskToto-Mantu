@@ -52,7 +52,7 @@ Three feelings, in this order:
 | Default | Value | Why |
 | --- | --- | --- |
 | Overlay chrome | Hide | Invisible until intent. |
-| Bar rest | Full bar (`overlayOrbStyle: 'bar'`) | Circle (Jarvis particle) is opt-in. |
+| Bar rest | Circle (`overlayOrbStyle: 'jakub'`) | Original thinking-orb. Jarvis particles are opt-in. |
 | Provider | Cloudflare | One operator endpoint. |
 | `providerPriority` | `api` | CLI-first is a live promotion when a CLI session is actually connected. |
 | Local AI | off | Weights may warm. They do not preempt. |
