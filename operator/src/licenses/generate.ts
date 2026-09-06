@@ -14,7 +14,7 @@ import {
   OPERATOR_LICENSE_MAX,
   parseOperatorLicenseDays
 } from '../../../src/shared/operator-license'
-import { auditMeta, type AdminCtx } from '../routes/admin-ctx'
+import { auditMeta, safeAuditText, type AdminCtx } from '../routes/admin-ctx'
 
 export interface MintLicenseInput {
   /** Raw, unvalidated `days` from the request body. */
@@ -48,7 +48,7 @@ function auditDetail(last4: string, days: number, groupId: string | null, tier: 
   const parts = [`${last4} ${days}d`]
   if (groupId) parts.push(`group ${groupId}`)
   if (tier) parts.push(`tier ${tier}`)
-  if (member) parts.push(`member ${member}`)
+  if (member) parts.push(`member ${safeAuditText(member)}`)
   return parts.join(' · ')
 }
 

@@ -50,6 +50,12 @@ const RATE_LIMITS: Record<string, number> = {
   integrations: 10
 }
 
+/** Admin console mutations (every non-GET `/v1/admin/*` request), keyed by the signed-in email, same
+ *  window as the device buckets above: generous enough for normal console use (bulk group or member
+ *  edits, a run of license generates), low enough to blunt a compromised session or a buggy client
+ *  hammering D1 with writes. GET is never limited. */
+const ADMIN_MUTATION_RATE_LIMIT = 60
+
 function rateBucketFor(pathname: string): { key: string; max: number } | null {
   if (pathname === '/v1/heartbeat') return { key: 'heartbeat', max: RATE_LIMITS.heartbeat }
   if (pathname === '/v1/ingest') return { key: 'ingest', max: RATE_LIMITS.ingest }
@@ -170,6 +176,12 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     if (ident.status === 'misconfigured') return accessMisconfigured(ident.error)
     if (ident.status === 'ok') {
       if (isCrossSiteMutation(request, url)) return csrfRefused()
+      if (
+        request.method !== 'GET' &&
+        (await store.hitRate(`admin:${ident.email}`, now, RATE_WINDOW_MS, ADMIN_MUTATION_RATE_LIMIT))
+      ) {
+        return json({ ok: false, error: 'rate limited', code: 'rate', retryAfterMs: RATE_WINDOW_MS }, 429)
+      }
       const res = await adminRoute(request, url, env, store, ident.email, now, opts)
       return withSession(res, env, ident, now, url.pathname)
     }

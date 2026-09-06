@@ -30,7 +30,7 @@ import { resolveTierAndEntitlements } from '../tiers'
 import { mintOperatorLicense } from '../licenses/generate'
 import { OPERATOR_ENTITLEMENT_KEYS } from '../../../src/shared/operator-entitlements'
 import { defineRoute } from './registry'
-import { auditLog, param, type AdminCtx } from './admin-ctx'
+import { auditLog, param, safeAuditText, type AdminCtx } from './admin-ctx'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
@@ -41,6 +41,13 @@ function describeRaw(raw: unknown): string {
   } catch {
     return String(raw)
   }
+}
+
+/** Unicode-aware case-insensitive compare for the group-name uniqueness check: NFKC first so
+ *  visually/semantically equivalent forms (full-width letters, compatibility ligatures) collapse to
+ *  the same string before the case fold, not just a plain `.toLowerCase()`. */
+function normalizeForCompare(s: string): string {
+  return s.normalize('NFKC').toLowerCase()
 }
 
 // ── validation ───────────────────────────────────────────────────────────────────────────────────
@@ -59,7 +66,7 @@ function validateGroupName(
       })`
     }
   }
-  const dup = existing.find((g) => g.id !== excludeId && g.name.trim().toLowerCase() === name.toLowerCase())
+  const dup = existing.find((g) => g.id !== excludeId && normalizeForCompare(g.name.trim()) === normalizeForCompare(name))
   if (dup) {
     return {
       ok: false,
@@ -123,6 +130,24 @@ async function validateMemberInput(
     }
   }
   return { ok: true, member: memberRaw, kind }
+}
+
+/** `member` on the license-generate routes is free text with no `kind` alongside it (unlike the
+ *  members route): auto-detect email vs. device id the same way, an empty/absent value meaning "no
+ *  member", and reject anything that is neither a valid email nor a device id an actual seat holds. */
+async function validateLicenseMember(
+  store: Pick<OperatorStore, 'getSeat'>,
+  raw: unknown
+): Promise<{ ok: true; member: string | null } | { ok: false; error: string }> {
+  const trimmed = typeof raw === 'string' ? raw.trim() : ''
+  if (!trimmed) return { ok: true, member: null }
+  if (EMAIL_RE.test(trimmed)) return { ok: true, member: trimmed.toLowerCase() }
+  const seat = await store.getSeat(trimmed)
+  if (seat) return { ok: true, member: trimmed }
+  return {
+    ok: false,
+    error: `member must be a valid email address or an existing seat device id, received ${describeRaw(raw)}, no seat with that device id has checked in, for example "name@example.com" or a device id copied from the Sessions page`
+  }
 }
 
 function parseEntitlements(raw: string): string[] {
@@ -293,7 +318,7 @@ export function registerGroupsRoutes(): void {
       const id = newGroupId(nameResult.name)
       const row: GroupRow = { id, name: nameResult.name, tier: tierResult.tier, notes, created_at: ctx.now, created_by: ctx.email }
       await ctx.store.putGroup(row)
-      await auditLog(ctx, 'group-create', null, `${id} "${row.name}" tier ${row.tier}`)
+      await auditLog(ctx, 'group-create', null, `${id} "${safeAuditText(row.name)}" tier ${row.tier}`)
       return json({ ok: true, group: row })
     }
   })
@@ -395,7 +420,7 @@ export function registerGroupsRoutes(): void {
         const existing = await ctx.store.listGroups()
         const result = validateGroupName(body.name, existing, id)
         if (!result.ok) return json({ ok: false, error: result.error }, 400)
-        if (result.name !== group.name) changes.push(`name -> "${result.name}"`)
+        if (result.name !== group.name) changes.push(`name -> "${safeAuditText(result.name)}"`)
         name = result.name
       }
       if (body.tier !== undefined) {
@@ -444,7 +469,7 @@ export function registerGroupsRoutes(): void {
         )
       }
       await ctx.store.deleteGroup(id)
-      await auditLog(ctx, 'group-delete', null, `${id} "${group.name}"`)
+      await auditLog(ctx, 'group-delete', null, `${id} "${safeAuditText(group.name)}"`)
       return json({ ok: true, id })
     }
   })
@@ -461,7 +486,7 @@ export function registerGroupsRoutes(): void {
       const result = await validateMemberInput(ctx.store, body.member, body.kind)
       if (!result.ok) return json({ ok: false, error: result.error }, 400)
       await ctx.store.putGroupMember({ group_id: id, member: result.member, kind: result.kind, added_at: ctx.now, added_by: ctx.email })
-      await auditLog(ctx, 'group-member-add', null, `${id} + ${result.member} (${result.kind})`)
+      await auditLog(ctx, 'group-member-add', null, `${id} + ${safeAuditText(result.member)} (${result.kind})`)
       return json({ ok: true, member: result.member, kind: result.kind })
     }
   })
@@ -479,7 +504,7 @@ export function registerGroupsRoutes(): void {
       const found = members.find((m) => m.member.toLowerCase() === memberParam.toLowerCase())
       if (!found) return json({ ok: false, error: 'member not found in this group' }, 404)
       await ctx.store.deleteGroupMember(id, found.member)
-      await auditLog(ctx, 'group-member-remove', null, `${id} - ${found.member}`)
+      await auditLog(ctx, 'group-member-remove', null, `${id} - ${safeAuditText(found.member)}`)
       return json({ ok: true, member: found.member })
     }
   })
@@ -501,7 +526,9 @@ export function registerGroupsRoutes(): void {
         if (!result.ok) return json({ ok: false, error: result.error }, 400)
         tier = result.tier
       }
-      const member = typeof body.member === 'string' && body.member.trim() ? body.member.trim() : null
+      const memberResult = await validateLicenseMember(ctx.store, body.member)
+      if (!memberResult.ok) return json({ ok: false, error: memberResult.error }, 400)
+      const member = memberResult.member
 
       const minted = await mintOperatorLicense(ctx, {
         days: body.days,
@@ -584,10 +611,12 @@ export function registerGroupsRoutes(): void {
         )
       }
       const entitlements = [...new Set(raw as string[])]
-      const label = typeof body.label === 'string' && body.label.trim() ? body.label.trim() : existing.label
+      const label = typeof body.label === 'string' && body.label.trim() ? body.label.trim().slice(0, 60) : existing.label
+      const before = parseEntitlements(existing.entitlements_json).join(', ') || 'none'
+      const after = entitlements.join(', ') || 'none'
       const updated: TierRow = { id, label, entitlements_json: JSON.stringify(entitlements), updated_at: ctx.now }
       await ctx.store.putTier(updated)
-      await auditLog(ctx, 'tier-update', null, `${id} -> ${entitlements.join(', ') || 'none'}`)
+      await auditLog(ctx, 'tier-update', null, `${id}: ${before} -> ${after}`)
       return json({ ok: true, tier: { id, label, entitlements, updatedAt: ctx.now } })
     }
   })
