@@ -4,15 +4,12 @@ import { join } from 'node:path'
 import { getApiKey, getSettings, setApiKey, setSettings } from './store'
 import { isCaheEdition } from './cahe-edition'
 import { mainLog, auditLog } from './logger'
+import { decryptEmbeddedBlob, type EncryptedCloudflareKeyBlob } from './embedded-cloudflare-crypto'
 
 // Extract the sk-kimi- token from whatever the operator placed in the field, tolerating an accidental
 // label prefix (e.g. "Metis: sk-kimi-..."), surrounding quotes, or stray whitespace, so a paste slip
 // can't silently ship a key that the coding endpoint would 401.
 const KIMI_KEY_PATTERN = /sk-kimi-[A-Za-z0-9_-]{16,}/
-
-interface CaheKeyBundle {
-  kimiApiKey?: string
-}
 
 /** Per-profile marker recording that the one-time embedded-key seed has already run (see below). */
 function seededMarkerPath(): string {
@@ -68,10 +65,17 @@ export function seedCaheLocalAiForBackgroundScreen(): void {
 /**
  * Cahê pilot builds ship with a Kimi API key baked into the installer — this is an intentional,
  * user-authorized embed for the Cahê pilot only, disclosed (not sneaky): electron-builder.cahe.win.yml's
- * extraResources copies the locally-provided build/cahe-kimi.local.json to resources/cahe/kimi.json, and
- * scripts/check-cahe-package.mjs's packaging-time scan only lets it through when a build explicitly opts
- * in via METIS_CAHE_EMBED_KEY=1 (printing a loud warning when it does). Bundling it means the pilot works
- * with zero setup: no onboarding key-entry screen, no key to paste in.
+ * extraResources copies the ENCRYPTED blob from build/cahe-embed/kimi.json (produced by
+ * scripts/embed-cahe-kimi-key.mjs from the operator's gitignored build/cahe-kimi.local.json) to
+ * resources/cahe/kimi.json. scripts/check-cahe-package.mjs only lets it through when a build explicitly
+ * opts in via METIS_CAHE_EMBED_KEY=1, and refuses a plaintext kimiApiKey field. Bundling it means the
+ * pilot works with zero setup: no onboarding key-entry screen, no key to paste in.
+ *
+ * SECURITY HONESTY: the blob is AES-256-GCM under material that ALSO ships in the app (same
+ * encryptProxyKey / decryptEmbeddedBlob path as the Cloudflare embed). That is OBFUSCATION, not secrecy —
+ * a determined attacker with the binary can re-derive the key. It raises the bar over a plaintext
+ * resources/cahe/kimi.json that `npx asar extract` (or a raw file read of the extraResource) handed you
+ * in seconds. Fail-closed: a plaintext `kimiApiKey` bundle is refused and never seeded.
  *
  * This seeds that key into the normal per-provider keystore (store.ts's setApiKey/getApiKey — encrypted
  * at rest via the unsigned build's AES file keystore, exactly like a key the user pastes in themselves)
@@ -119,17 +123,29 @@ export function importEmbeddedCaheKey(): void {
         mainLog.warn(`[cahe-embedded-key] no embedded Kimi key bundle at ${bundlePath}; leaving normal onboarding in place`)
         return
       }
-      const bundle = JSON.parse(readFileSync(bundlePath, 'utf8')) as CaheKeyBundle
-      const extracted = bundle.kimiApiKey?.match(KIMI_KEY_PATTERN)?.[0]
+      const bundle = JSON.parse(readFileSync(bundlePath, 'utf8')) as EncryptedCloudflareKeyBlob & {
+        kimiApiKey?: unknown
+      }
+      // Fail-closed: plaintext must never ship. A regression to {"kimiApiKey":"sk-kimi-…"} is refused.
+      if (bundle && typeof bundle === 'object' && 'kimiApiKey' in bundle) {
+        mainLog.warn(
+          '[cahe-embedded-key] embedded Kimi bundle carries plaintext kimiApiKey — refusing (must be AES-256-GCM blob)'
+        )
+        return
+      }
+      const plaintext = decryptEmbeddedBlob(bundle)
+      const extracted = plaintext?.match(KIMI_KEY_PATTERN)?.[0]
       if (extracted) {
         setApiKey('kimi', extracted)
         auditLog('key.set', { provider: 'kimi', source: 'cahe-embedded' })
         mainLog.info('[cahe-embedded-key] seeded the embedded Kimi API key for the Cahê pilot')
         haveKey = true
       } else {
-        // Malformed bundle (placeholder/wrong-format key): a corrected build should still get a chance, so
+        // Malformed / undecryptable / wrong-format: a corrected build should still get a chance, so
         // return without writing the marker or forcing a keyless Kimi provider.
-        mainLog.warn('[cahe-embedded-key] embedded Kimi key bundle is missing a valid kimiApiKey; leaving normal onboarding in place')
+        mainLog.warn(
+          '[cahe-embedded-key] embedded Kimi key bundle is missing a valid encrypted sk-kimi- key; leaving normal onboarding in place'
+        )
         return
       }
     }

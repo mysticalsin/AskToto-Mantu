@@ -94,3 +94,30 @@ Managed config (machine-wide `managed-config.json`, see `docs/ENTERPRISE_RELEASE
   module, Chromium cancel, once-per-host audit, no-policy no-op.
 - `src/main/bank-grade-hardening.contract.test.ts`: the guard is armed at boot, after the proxy, in a
   try/catch so it can never block startup.
+
+## Cloudflare Worker endpoint pin (`cloudflareBaseUrl`)
+
+Packaged builds (and installs with an admin machine-wide `managed-config.json`) refuse a user-writable
+`cloudflareBaseUrl` that is not on the pin. The bearer `METIS_PROXY_KEY` and every prompt would otherwise
+follow a malicious host written into per-user `settings.json` or per-user `managed-config.json`.
+
+Allowed hosts:
+
+- `*.workers.dev` (the default Worker proxy shape, including the shipped default)
+- Hosts listed in the **admin** managed-config key `cloudflareBaseUrlAllowlist` (hostname or `*.` wildcard)
+- The host of an admin-managed `cloudflareBaseUrl` itself (self-host via admin policy)
+
+Dev / unpackaged builds without admin policy stay unrestricted beyond the existing `https://` schema check.
+Self-host is an admin decision, never a user-writable one. See `docs/CLOUDFLARE.md` and
+`src/main/cloudflare-base-url.ts`.
+
+Example admin snippet:
+
+```json
+{
+  "cloudflareBaseUrl": "https://metis-proxy.corp.example/v1",
+  "cloudflareBaseUrlAllowlist": ["metis-proxy.corp.example"],
+  "locked": ["cloudflareBaseUrl"]
+}
+```
+

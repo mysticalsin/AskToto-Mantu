@@ -27,6 +27,8 @@ build/make-cahe.ps1
 # locally before the Worker-side label exists) — only .gitkeep is ever meant to be tracked.
 build/cloudflare-embed/*
 !build/cloudflare-embed/.gitkeep
+build/cahe-embed/*
+!build/cahe-embed/.gitkeep
 .vite/
 coverage/
 *.tsbuildinfo

@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { decryptProxyKey, isEncryptedBlob } from './lib/embedded-cloudflare-crypto.mjs'
 
 const repositoryRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -32,8 +33,6 @@ if (!existsSync(executable) || statSync(executable).size === 0) {
 const appAsar = join(outputRoot, 'win-unpacked', 'resources', 'app.asar')
 const sourceMainLoader = readFileSync(join(repositoryRoot, 'out/main/index.js'))
 const sourceMainBytecode = readFileSync(join(repositoryRoot, 'out/main/index.jsc'))
-// @electron/asar keys entries with the packing host's separator (backslash on Windows). Resolve each
-// reviewed POSIX path back to the archive's native key so extraction works regardless of build OS.
 const extractPackaged = (posixPath) => {
   const wanted = `/${posixPath.replace(/^\/+/, '')}`
   const rawKey = listPackage(appAsar).find(
@@ -57,42 +56,44 @@ if (sha256(packagedMainBytecode) !== sha256(sourceMainBytecode)) {
 }
 
 const kimiKeyPattern = /sk-kimi-[A-Za-z0-9_-]{16,}/
-
-// EXPLICIT, DOCUMENTED EXCEPTION — not a loophole: the Cahê pilot intentionally embeds a Kimi API key
-// (src/main/cahe-embedded-key.ts + electron-builder.cahe.win.yml's extraResources) so the pilot works
-// with zero setup. This gate stays a hard refusal by default; METIS_CAHE_EMBED_KEY=1 is the one,
-// deliberate way to acknowledge the trade-off for a build that is meant to ship the key. Leaving the
-// flag unset keeps the original "never allow an embedded Kimi key" behavior byte-for-byte.
 const ALLOW_EMBEDDED_KIMI_KEY = process.env.METIS_CAHE_EMBED_KEY === '1'
-let embeddedKeyFound = false
+const localEmbed = join(repositoryRoot, 'build', 'cahe-embed', 'kimi.json')
+const embedIntended = existsSync(localEmbed) && statSync(localEmbed).size > 0
 
-function warnEmbeddedKimiKey(path) {
-  embeddedKeyFound = true
-  console.log(`
-⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️
-⚠️  Cahê build intentionally embeds a Kimi API key — it is EXTRACTABLE from the installer;
-⚠️  scope/rotate that key. This is expected ONLY because METIS_CAHE_EMBED_KEY=1 was set.
-⚠️  Found in: ${basename(path)}
-⚠️  Do not reuse a key that guards anything beyond this pilot's minimum plan/quota, and be
-⚠️  ready to rotate or revoke it — packaging it does not keep it secret once it ships.
-⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️
-`)
+function requireEncryptedBlob(path, label) {
+  if (!existsSync(path) || statSync(path).size === 0) throw new Error(`${label}: missing or empty (${path})`)
+  let parsed
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'))
+  } catch (e) {
+    throw new Error(`${label}: not readable JSON (${path}): ${e.message}`)
+  }
+  if (parsed && typeof parsed === 'object' && 'kimiApiKey' in parsed) {
+    throw new Error(
+      `${label}: carries a plaintext "kimiApiKey" field (${path}). The embedded Cahê key must ship ENCRYPTED — ` +
+        're-run scripts/embed-cahe-kimi-key.mjs, which writes the ciphertext blob.'
+    )
+  }
+  if (!isEncryptedBlob(parsed)) {
+    throw new Error(`${label}: is not the expected AES-256-GCM blob shape (ciphertext/iv/tag/salt) at ${path}`)
+  }
+  return parsed
 }
 
-async function assertNoEmbeddedKimiKey(path) {
+async function assertNoPlaintextKimiToken(path, token) {
   await new Promise((resolvePromise, rejectPromise) => {
     let carry = ''
     const stream = createReadStream(path)
     stream.on('data', (chunk) => {
       const text = carry + chunk.toString('latin1')
-      if (kimiKeyPattern.test(text)) {
-        if (ALLOW_EMBEDDED_KIMI_KEY) {
-          warnEmbeddedKimiKey(path)
-          resolvePromise()
-          stream.destroy()
-          return
-        }
-        stream.destroy(new Error(`Refusing Cahê package with an embedded Kimi API key: ${basename(path)}`))
+      if (token ? text.includes(token) : kimiKeyPattern.test(text)) {
+        stream.destroy(
+          new Error(
+            token
+              ? `PLAINTEXT LEAK — Cahê Kimi token found in cleartext in ${basename(path)}`
+              : `Refusing Cahê package with an embedded Kimi API key: ${basename(path)}`
+          )
+        )
         return
       }
       carry = text.slice(-64)
@@ -102,23 +103,62 @@ async function assertNoEmbeddedKimiKey(path) {
   })
 }
 
-// The key is in neither of these: electron-builder.cahe.win.yml copies it to resources/cahe/ as an
-// extraResource (outside app.asar), and NSIS ships win-unpacked inside an LZMA-compressed app-64.7z,
-// so a raw byte scan of the .exe cannot see it. Scanning the packaged extraResources directory is what
-// makes this gate's refusal real; the two below stay as a net for a key that lands somewhere it was
-// never meant to be.
-await assertNoEmbeddedKimiKey(appAsar)
-await assertNoEmbeddedKimiKey(installer)
 const packagedCaheResources = join(outputRoot, 'win-unpacked', 'resources', 'cahe')
-// Absent on a deliberately keyless build (METIS_CAHE_ALLOW_KEYLESS=1) — nothing to scan, not a failure.
-if (existsSync(packagedCaheResources)) {
-  for (const entry of readdirSync(packagedCaheResources, { recursive: true })) {
-    const file = join(packagedCaheResources, entry)
-    if (statSync(file).isFile()) await assertNoEmbeddedKimiKey(file)
+const packagedKimi = join(packagedCaheResources, 'kimi.json')
+
+if (embedIntended) {
+  if (!ALLOW_EMBEDDED_KIMI_KEY) {
+    throw new Error(
+      'build/cahe-embed/kimi.json is present but METIS_CAHE_EMBED_KEY=1 was not set — refusing to package an ' +
+        'embedded Cahê Kimi key without the explicit opt-in.'
+    )
   }
+  requireEncryptedBlob(localEmbed, 'build/cahe-embed/kimi.json')
+  if (!existsSync(packagedKimi)) {
+    throw new Error(`Expected packaged resources/cahe/kimi.json under ${outputRoot}`)
+  }
+  const packagedBlob = requireEncryptedBlob(packagedKimi, 'packaged cahe/kimi.json')
+  let token
+  try {
+    token = decryptProxyKey(packagedBlob)
+  } catch (e) {
+    throw new Error(`packaged cahe/kimi.json could not be decrypted with the shipped material: ${e.message}`)
+  }
+  if (!kimiKeyPattern.test(token)) {
+    throw new Error('packaged cahe/kimi.json decrypted to something that is not a usable sk-kimi- key')
+  }
+  // Prove plaintext does not appear in app.asar, installer, or cahe resources.
+  await assertNoPlaintextKimiToken(appAsar, token)
+  await assertNoPlaintextKimiToken(installer, token)
+  if (existsSync(packagedCaheResources)) {
+    for (const entry of readdirSync(packagedCaheResources, { recursive: true })) {
+      const file = join(packagedCaheResources, entry)
+      if (statSync(file).isFile()) await assertNoPlaintextKimiToken(file, token)
+    }
+  }
+  console.log(`
+⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️
+⚠️  Cahê build intentionally embeds a Kimi API key. It ships ENCRYPTED (AES-256-GCM), but that is
+⚠️  OBFUSCATION, not secrecy — the decryption material ships in the app, so the key is still
+⚠️  EXTRACTABLE with effort. Scope/rotate that key. Expected ONLY because METIS_CAHE_EMBED_KEY=1.
+⚠️  Found encrypted blob: ${basename(packagedKimi)}
+⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️ ⚠️
+`)
+  console.log(
+    `[check:cahe-package] OK ${installers[0]} — current bytecode, distinct identity, encrypted Cahê Kimi key explicitly allowed (METIS_CAHE_EMBED_KEY=1); no plaintext token in package`
+  )
+} else {
+  // Keyless: refuse any sk-kimi- leak and any leftover kimi.json (plaintext or encrypted stale).
+  await assertNoPlaintextKimiToken(appAsar)
+  await assertNoPlaintextKimiToken(installer)
+  if (existsSync(packagedKimi) && statSync(packagedKimi).size > 0) {
+    throw new Error(`No local cahe-embed/kimi.json to embed, but the package still carries one at ${packagedKimi}`)
+  }
+  if (existsSync(packagedCaheResources)) {
+    for (const entry of readdirSync(packagedCaheResources, { recursive: true })) {
+      const file = join(packagedCaheResources, entry)
+      if (statSync(file).isFile()) await assertNoPlaintextKimiToken(file)
+    }
+  }
+  console.log(`[check:cahe-package] OK ${installers[0]} — current bytecode, distinct identity, no embedded Kimi key`)
 }
-console.log(
-  embeddedKeyFound
-    ? `[check:cahe-package] OK ${installers[0]} — current bytecode, distinct identity, embedded Kimi key explicitly allowed (METIS_CAHE_EMBED_KEY=1)`
-    : `[check:cahe-package] OK ${installers[0]} — current bytecode, distinct identity, no embedded Kimi key`
-)
