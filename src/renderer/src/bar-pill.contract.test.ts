@@ -37,6 +37,8 @@ describe('BAR-PILL contract', () => {
     expect(contract).toMatch(/overlayShowsBarOrb\(layout, minimized\) === \(layout === 'bar' && minimized\)/)
     expect(contract).toMatch(/overlayDocksBarCircle\(layout\) === \(layout === 'bar'\)/)
     expect(bar).toMatch(/canMinimize\?: boolean/)
+    expect(bar).toMatch(/overlayUsesJarvisOrb/)
+    expect(bar).toMatch(/JarvisOrbButton/)
     expect(bar).toMatch(/ObsidianOrb/)
     expect(bar).toMatch(/Minimize to the orb/)
     expect(bar).not.toMatch(/<Minimize2/)
@@ -64,14 +66,16 @@ describe('BAR-PILL contract', () => {
     expect(app).toMatch(/showBarOrb \? \(/)
     expect(app).toMatch(/<ControlPill/)
     expect(peek).not.toMatch(/ControlPill|data-bar-pill-orb|ThinkingOrb/)
-    expect(bar).toMatch(/data-bar-pill-orb|ObsidianOrb/)
+    expect(bar).toMatch(/data-bar-pill-orb|ObsidianOrb|JarvisOrbButton/)
     const pillMounts = app.split('<ControlPill').length - 1
     expect(pillMounts).toBe(1)
   })
 
-  it('bar+minimized renders the Jarvis particle circle, not a gray box', () => {
+  it('bar+minimized default Circle is thinking-orbs; Jarvis particles only when style is obsidian', () => {
+    expect(pill).toMatch(/overlayUsesJarvisOrb/)
+    expect(pill).toMatch(/JarvisOrbButton/)
     expect(pill).toMatch(/ObsidianOrb/)
-    expect(pill).not.toMatch(/JarvisOrbButton/)
+    expect(pill).toMatch(/orbStyle = 'jakub'/)
     expect(jarvisCircle).toMatch(/data-bar-pill-orb/)
     expect(jarvisCircle).toMatch(/jarvis-particles/)
     expect(jarvisCircle).toMatch(/pillClickShouldExpand/)

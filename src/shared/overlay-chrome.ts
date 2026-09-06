@@ -145,6 +145,14 @@ export function rememberBarContentHeight(height: number, fallback = BAR_IDLE_HEI
 }
 
 /**
+ * Settings chrome mounts only while Settings is the view and the Circle pill is not up.
+ * Circle rest / Circle click must leave Settings so a 800+ sheet cannot sit under the bar.
+ */
+export function overlayShowsSettingsSheet(view: string, minimized = false): boolean {
+  return view === 'settings' && !minimized
+}
+
+/**
  * Tony live FAIL: Overlay=Bar, Settings closed, gray Settings-like slab under the bar
  * (window still settings-tall and/or SETTINGS_SURFACE_BACKGROUND leftover).
  */
