@@ -221,6 +221,7 @@ export type AuditEvent =
   // maxPassesPerDay budget.
   | 'brain.consolidation'
   | 'brain.intelligence_index'
+  | 'brain.intelligencePass.start'
   // Wave 4 (main/mcp/pushQueue.ts): an outbound CRM/task-manager action was queued, retried, sent, or
   // dead-lettered — the audit trail for the push queue's own lifecycle, separate from 'mcp.push' (one
   // live attempt).
