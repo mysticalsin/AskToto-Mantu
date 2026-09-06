@@ -103,7 +103,7 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(create).toMatch(/transparent: chrome\.transparent/)
     expect(create).toMatch(/backgroundColor: chrome\.backgroundColor/)
     expect(create).toMatch(/show: !onboardingLive/)
-    expect(create).toMatch(/ready-to-show/)
+    expect(create).toMatch(/overlay\.once\('ready-to-show'/)
     expect(create).toMatch(/revealExclusiveWhenPainted/)
     expect(create).not.toMatch(/transparent:\s*true/)
     expect(create).not.toMatch(/backgroundColor: onboardingLive \? '#3A0B6B'/)
