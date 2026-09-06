@@ -3131,8 +3131,8 @@ export function App(): JSX.Element {
     // main still refuses every settings write here except the three azure fields (ssoBootstrapAllowed).
     if (view === 'settings') {
       return (
-        <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
-          <Suspense fallback={<div className="cl-root rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
+        <div ref={setRoot} {...windowDrag} className="flex h-full min-h-0 w-full flex-col gap-2 p-1.5">
+          <Suspense fallback={<div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
             {settingsBody}
           </Suspense>
         </div>
@@ -3160,8 +3160,8 @@ export function App(): JSX.Element {
   if (settings && !settings.onboardingDone && DEMO == null) {
     if (view === 'settings') {
       return (
-        <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
-          <Suspense fallback={<div className="cl-root rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
+        <div ref={setRoot} {...windowDrag} className="flex h-full min-h-0 w-full flex-col gap-2 p-1.5">
+          <Suspense fallback={<div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
             {settingsBody}
           </Suspense>
         </div>
@@ -3225,11 +3225,15 @@ export function App(): JSX.Element {
       onMouseLeave={onOverlayPointerLeave}
       className={[
         'relative flex w-full flex-col gap-2',
+        // Settings fills the 880×560 surface. Without h-full the 480-era panel grew past the
+        // window and the last rows were clipped (Tony live: M / tray open, cannot scroll down).
+        view === 'settings' ? 'h-full min-h-0' : '',
         // Stealth (contentProtection) paints a multi-colour halo that spills ~34px past the widget via
         // box-shadow (see .aw-hidden-rainbow). The overlay window hugs content height to ~2px, so without
         // extra room the halo would be clipped at the window edge into a flat band. Widen the transparent
-        // margin only while invisible; the resting/visible overlay keeps its tight p-1.5.
-        overlayPeeked ? 'p-0' : (settings?.contentProtection ?? true) && !minimized ? 'p-5 stealth-glow' : 'p-1.5',
+        // margin only while invisible; the resting/visible overlay keeps its tight p-1.5. Settings is
+        // opaque glass, so skip the 20px stealth pad that crushed the scroll surface.
+        overlayPeeked ? 'p-0' : view === 'settings' ? 'p-1.5' : (settings?.contentProtection ?? true) && !minimized ? 'p-5 stealth-glow' : 'p-1.5',
         showListeningChrome ? 'listening' : ''
       ].join(' ')}
     >
@@ -3526,8 +3530,8 @@ export function App(): JSX.Element {
           {isPanelBody && panelOpen &&
             (view === 'settings' || DEMO === 'settings' ? (
               // Settings is its own self-contained panel — render directly under the bar (bar stays on top).
-              <Suspense fallback={<div className="cl-root rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
-                {body}
+              <Suspense fallback={<div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
+                <div className="flex min-h-0 flex-1 flex-col">{body}</div>
               </Suspense>
             ) : (
               <Panel>

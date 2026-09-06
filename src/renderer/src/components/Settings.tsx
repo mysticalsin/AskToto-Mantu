@@ -5665,7 +5665,7 @@ export function Settings({
   }, [tab, settings.asrEngine])
 
   return (
-    <div className="cl-root panel-enter flex w-full flex-col overflow-hidden rounded-2xl shadow-[var(--shadow-panel)] text-[color:var(--cl-foreground)]">
+    <div className="cl-root flex h-full min-h-0 w-full flex-col overflow-hidden rounded-2xl shadow-[var(--shadow-panel)] text-[color:var(--cl-foreground)]">
       {/* Draggable header — sits directly under the always-visible Métis bar */}
       <header className="cl-header drag flex h-11 shrink-0 items-center gap-2 rounded-t-2xl px-3.5">
         <MetisMark size={18} />
@@ -5703,7 +5703,7 @@ export function Settings({
           openSettings(tab, notice), so only show it while the user is ON that tab — once they navigate
           away it no longer points at anything visible. Reappears if they come back to the tab. */}
       {notice && tab === (initialTab ?? 'personalize') && (
-        <div className="no-drag border-b border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] px-3.5 py-2 text-[12px] leading-snug text-[color:var(--cl-foreground)]">
+        <div className="no-drag shrink-0 border-b border-[var(--cl-primary)]/30 bg-[var(--cl-primary-soft)] px-3.5 py-2 text-[12px] leading-snug text-[color:var(--cl-foreground)]">
           {notice}
         </div>
       )}
@@ -5758,11 +5758,11 @@ export function Settings({
       {/* Active tab's short intro — one line, so a dense nine-tab bar still reads as a guided flow rather
           than a wall of pill buttons. Swaps for the search results list while a query is live. */}
       {query.trim() === '' ? (
-        <p className="m-0 border-b border-[var(--cl-border)] px-3.5 py-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+        <p className="m-0 shrink-0 border-b border-[var(--cl-border)] px-3.5 py-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
           {TABS.find((t) => t.id === tab)?.desc}
         </p>
       ) : (
-        <div className="flex flex-col gap-0.5 border-b border-[var(--cl-border)] px-2 py-1.5">
+        <div className="flex shrink-0 flex-col gap-0.5 border-b border-[var(--cl-border)] px-2 py-1.5">
           {searchMatches.length === 0 ? (
             <p className="m-0 px-1.5 py-1 text-[11px] text-[color:var(--cl-muted-foreground)]">No matching settings.</p>
           ) : (
@@ -5789,7 +5789,7 @@ export function Settings({
         role="tabpanel"
         id="settings-panel"
         aria-labelledby={`settings-tab-${tab}`}
-        className="cl-content scroll-thin max-h-[480px] overflow-y-auto"
+        className="cl-content scroll-thin min-h-0 flex-1 overflow-y-auto"
       >
         <TabIconContext.Provider value={TABS.find((t) => t.id === tab)?.icon}>
         <div className="flex flex-col gap-6 px-5 pt-5 pb-16">

@@ -43,6 +43,15 @@ On this tip the same path must open **880×560** at `islandSafeTop` (~39), backg
 
 **FAIL if** height is 325, 8, or 15. **FAIL if** the panel is a leftover bar sliver.
 
+### Settings from M (Tony live 2026-09-05)
+
+1. Overlay chrome **Hide**. Click the menu-bar **M** (tray logo) or Cmd+,.
+2. Window is **880×560** at `islandSafeTop` (~39). Background `#120022`. No white or `#000` flash. No spring / scale glitch.
+3. Scroll every Settings tab, including the last one, to the last row. The bottom of the last card is reachable. `main.cl-content` is `flex-1 min-h-0 overflow-y-auto` (no `max-h-[480px]` clip).
+4. Bounds stay at least 880×560. No crush to 325.
+
+**FAIL if** the surface glitches on open, or the last Settings row is clipped and cannot be scrolled into view.
+
 Close Settings. Hide/Island must park again at `bounds.y`.
 
 ### R03 — No flash

@@ -49,6 +49,9 @@ describe('MQA-286 — Settings open path sets min bounds', () => {
     expect(app).toMatch(/prevViewRef\.current === 'settings'/)
     expect(app).toMatch(/onBarSettings/)
     expect(app).toMatch(/openSettingsDefault/)
+    expect(app).toMatch(/view === 'settings' \? 'h-full min-h-0'/)
+    expect(app).toMatch(/view === 'settings' \? 'p-1\.5'/)
+    expect(app).toMatch(/flex min-h-0 flex-1 flex-col/)
   })
 
   it('CLI Connect IPC is zero-token connectCliSession, never billed testCli', () => {
@@ -105,6 +108,9 @@ describe('Ultron Mac show runbook stays the R01–R03 gate', () => {
     expect(show).toMatch(/Do not wait on GitHub Actions/)
     expect(show).toMatch(/11:30pm ET/)
     expect(show).toMatch(/Draft only/)
+    expect(show).toMatch(/Settings from M/)
+    expect(show).toMatch(/flex-1 min-h-0 overflow-y-auto/)
+    expect(show).toMatch(/max-h-\[480px\]/)
   })
 })
 
