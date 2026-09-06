@@ -25,6 +25,14 @@ describe('redactSecrets', () => {
     expect(redactSecrets('Authorization: Bearer abcdef0123456789ABCDEF')).toContain('[redacted key]')
   })
 
+  it('redacts Cloudflare API tokens (cfut_)', () => {
+    const tok = 'cfut_test_dummy_0123456789ABCDEFghij+/='
+    expect(redactSecrets(`token ${tok} here`)).toBe('token [redacted key] here')
+    expect(redactSecrets(tok)).toBe('[redacted key]')
+    // too short to be a real token — leave alone
+    expect(redactSecrets('cfut_short')).toBe('cfut_short')
+  })
+
   // MQA-080 — the generic sk- class excluded '-', so a dashed prefix stopped the run before it could
   // reach 20 chars and every such key (including the sk-kimi- one this app ships) left the device raw.
   it('redacts sk- keys with a dashed prefix (MQA-080)', () => {

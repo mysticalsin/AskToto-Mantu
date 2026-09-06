@@ -74,6 +74,9 @@ export function redactSecrets(input: string): string {
     /\bAKIA[0-9A-Z]{16}\b/g, // AWS access key id
     /\bAIza[0-9A-Za-z_-]{35}\b/g, // Google API key
     /\bBearer\s+[A-Za-z0-9._-]{20,}\b/g, // Authorization: Bearer <token>
+    // Cloudflare API tokens (account / user). Embedded dummy in tests is cfut_…; never leave the device.
+    // Trailing lookahead (not \b): tokens may end in +/= which are non-word chars, so \b would stop early.
+    /\bcfut_[A-Za-z0-9+/=_-]{20,}(?![A-Za-z0-9+/=_-])/g,
     /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g // bare JWT (header.payload.sig — eyJ prefix is base64url of '{"')
   ]
   // Provider-declared prefixes first (nvapi-, gsk_, xai-, sk-ant-, sk-or-, sk-kimi-, AIza, eyJ …), then
