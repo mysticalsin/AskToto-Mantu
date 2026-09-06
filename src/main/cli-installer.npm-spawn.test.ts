@@ -13,6 +13,7 @@ import { resolveManagedNode } from './managed-node'
 import {
   ManagedNpmMissingError,
   npmInstallProductionSpawn,
+  planNpmInstallSpawn,
   resolveNpmCliJs,
   sanitizedSpawnEnv
 } from './cli-installer'
@@ -62,7 +63,13 @@ describe('MQA-287 — managed Dust npm spawn never uses PATH npm or the shebang 
 
   it('fails loud when Node and npm-cli.js are missing (Windows and Mac)', () => {
     resolve.mockReturnValue(null)
-    expect(() => npmInstallProductionSpawn()).toThrow(ManagedNpmMissingError)
+    expect(() =>
+      planNpmInstallSpawn({
+        portableNode: null,
+        execPath: process.platform === 'win32' ? 'C:\\Metis\\Metis.exe' : '/Applications/Metis.app/Contents/MacOS/Metis',
+        exists: () => false
+      })
+    ).toThrow(ManagedNpmMissingError)
   })
 
   it('sanitized spawn env drops secrets (Windows Path included)', () => {

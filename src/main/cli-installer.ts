@@ -494,7 +494,10 @@ export function sanitizedSpawnEnv(base: NodeJS.ProcessEnv = process.env): Record
 }
 
 /** Official Node: win32 `node.exe` sits next to `node_modules/npm`; darwin/linux `bin/node` uses `../lib`. */
-export function resolveNpmCliJs(nodePath: string): string | null {
+export function resolveNpmCliJs(
+  nodePath: string,
+  exists: (p: string) => boolean = existsSync
+): string | null {
   const dir = dirname(nodePath)
   const parent = dirname(dir)
   const candidates = [
@@ -503,7 +506,7 @@ export function resolveNpmCliJs(nodePath: string): string | null {
     join(dir, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
     join(parent, 'node_modules', 'npm', 'bin', 'npm-cli.js')
   ]
-  return candidates.find((p) => existsSync(p)) ?? null
+  return candidates.find((p) => exists(p)) ?? null
 }
 
 function withNodeOnPath(env: Record<string, string>, nodePath: string): Record<string, string> {
@@ -519,17 +522,28 @@ function withNodeOnPath(env: Record<string, string>, nodePath: string): Record<s
  * Always spawn the Node binary + npm-cli.js. Never the `bin/npm` shebang (#!/usr/bin/env node)
  * and never a PATH `npm`. Electron GUI PATH has no node: that was exit 127.
  */
+export function planNpmInstallSpawn(input: {
+  portableNode: string | null
+  execPath: string
+  exists?: (p: string) => boolean
+}): { command: string; args: string[]; env: Record<string, string> } {
+  const exists = input.exists ?? existsSync
+  if (input.portableNode && exists(input.portableNode)) {
+    const npmCli = resolveNpmCliJs(input.portableNode, exists)
+    if (!npmCli) throw new ManagedNpmMissingError()
+    return { command: input.portableNode, args: [npmCli, ...NPM_INSTALL_ARGS], env: {} }
+  }
+  const npmCli = resolveNpmCliJs(input.execPath, exists)
+  if (!npmCli) throw new ManagedNpmMissingError()
+  return { command: input.execPath, args: [npmCli, ...NPM_INSTALL_ARGS], env: { ELECTRON_RUN_AS_NODE: '1' } }
+}
+
 export function npmInstallProductionSpawn(): { command: string; args: string[]; env: Record<string, string> } {
   const portable = resolveManagedNode()
-  if (portable?.node && existsSync(portable.node)) {
-    const npmCli = resolveNpmCliJs(portable.node)
-    if (!npmCli) throw new ManagedNpmMissingError()
-    return { command: portable.node, args: [npmCli, ...NPM_INSTALL_ARGS], env: {} }
-  }
-  const electron = process.execPath
-  const npmCli = resolveNpmCliJs(electron)
-  if (!npmCli) throw new ManagedNpmMissingError()
-  return { command: electron, args: [npmCli, ...NPM_INSTALL_ARGS], env: { ELECTRON_RUN_AS_NODE: '1' } }
+  return planNpmInstallSpawn({
+    portableNode: portable?.node ?? null,
+    execPath: process.execPath
+  })
 }
 
 /** Local `npm install --omit=dev` inside the extracted package — not `npm i -g`, not a system Node. */
