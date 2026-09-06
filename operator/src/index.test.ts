@@ -262,6 +262,43 @@ describe('health', () => {
     const body = (await res.json()) as { service?: string }
     expect(body.service).toBe('metis-operator')
   })
+
+  it('reports schema unbound and lastIngestAt/lastCronAt from D1-free store data (task B6)', async () => {
+    const store = memoryStore()
+    await store.upsertSeat({
+      device_id: 'dev-a',
+      seat_hash: 'h',
+      os: 'darwin',
+      app_version: '1.8.5',
+      first_seen: NOW - 1000,
+      last_seen: NOW - 1000,
+      country: 'CA',
+      city: null,
+      region: null,
+      lat: null,
+      lon: null,
+      last_index_at: null,
+      hostname: 'box',
+      sso_email: 'tony.walteur@gmail.com',
+      license: 'approved',
+      approval: 'approved',
+      license_jti: null
+    })
+    await store.audit('a-1', NOW - 500, 'system', 'platform.heartbeat', null, 'events 0')
+    const res = await handleRequest(new Request('https://operator.test/health'), env(), {}, { store, now: NOW })
+    const body = (await res.json()) as { d1: string; schema: string; lastIngestAt: number | null; lastCronAt: number | null }
+    expect(body.d1).toBe('unbound')
+    expect(body.schema).toBe('unbound')
+    expect(body.lastIngestAt).toBe(NOW - 1000)
+    expect(body.lastCronAt).toBe(NOW - 500)
+  })
+
+  it('never exposes a secret or a binding value', async () => {
+    const res = await handleRequest(new Request('https://operator.test/health'), env(), {}, { store: memoryStore() })
+    const text = await res.text()
+    expect(text).not.toContain(TEST_INGEST_SECRET)
+    expect(text).not.toContain(TEST_PROMPT_KEY)
+  })
 })
 
 describe('packed console map and geo', () => {

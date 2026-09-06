@@ -209,3 +209,16 @@ ALTER TABLE integrations ADD COLUMN tools_json TEXT;
 ALTER TABLE integrations ADD COLUMN last_test_json TEXT;
 ALTER TABLE integrations ADD COLUMN last_test_at INTEGER;
 ALTER TABLE integrations ADD COLUMN notes TEXT;
+
+-- Operator settings key/value store (task B6, plan 3.7b law 3 and 6.11 "Value"): hourly rate,
+-- currency, per-seat daily token budget, density, reduced motion. One row per key. A wholly new
+-- table (not a redefinition of an existing one, unlike the CREATE TABLEs above it in this file), so
+-- it has no counterpart in schema.sql - see migrate.contract.test.ts's "agree on every table name"
+-- test for the documented exception. Owned by operator/src/routes/settings-store.ts, never pruned
+-- by retention.ts.
+CREATE TABLE IF NOT EXISTS operator_settings (
+  key TEXT PRIMARY KEY,
+  value_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL,
+  updated_by TEXT NOT NULL
+);

@@ -8,7 +8,7 @@ import { accessTeamDomain, CONSOLE_PATHS } from '../access'
 import { handleCloudflareCallback, redirectToCloudflareLogin } from '../cloudflare-connect'
 import { decryptPrompt, sha256Hex, signSkillPack } from '../crypto'
 import { buildDashboard } from '../dashboard'
-import { html, json, newCspNonce, noStoreHeaders } from '../http'
+import { html, json, newCspNonce } from '../http'
 import type { D1DatabaseLike } from '../d1'
 import { listKeysJson, revokeVaultKey, rotateVaultKey, writeVaultKey } from '../keys'
 import { LICENSES_EMPTY, parseApproval } from '../fleet'
@@ -16,8 +16,17 @@ import { mintOperatorLicense } from '../licenses/generate'
 import { renderConsole } from '../ui'
 import { defineRoute } from './registry'
 import { auditLog, cloudflareForDashboard, keyFlags, param, stripSecrets, type AdminCtx } from './admin-ctx'
+import { readOperatorSettings } from './settings-store'
 
-const EXPECTED_D1_TABLES = [
+/** The stored hourly rate and currency feed the Value tile; without a stored rate valueMinor stays null. */
+async function valueSettings(ctx: AdminCtx): Promise<{ hourlyRate: number | null; currency: string }> {
+  const { values } = await readOperatorSettings(ctx.env.DB)
+  return { hourlyRate: values.hourlyRate, currency: values.currency }
+}
+
+// Exported so `index.ts`'s `/health` (task B6, plan D10) can report `schema` from "the same check
+// health.json uses" rather than a second, driftable copy of this list.
+export const EXPECTED_D1_TABLES = [
   'seats',
   'asks',
   'pulses',
@@ -35,7 +44,8 @@ const EXPECTED_D1_TABLES = [
   'group_members',
   'tiers',
   'integrations',
-  'integration_grants'
+  'integration_grants',
+  'operator_settings'
 ] as const
 
 const PLACEHOLDER_DIFF_RE = /^#\s*unified diff against .+\n#\s*edit, then approve\. push is a separate click\.$/i
@@ -133,7 +143,7 @@ async function healthPayload(env: AdminCtx['env']): Promise<Record<string, unkno
   }
 }
 
-async function d1SchemaStatus(db: D1DatabaseLike | undefined): Promise<{ ok: boolean; tables: string[]; missing: string[] }> {
+export async function d1SchemaStatus(db: D1DatabaseLike | undefined): Promise<{ ok: boolean; tables: string[]; missing: string[] }> {
   if (!db) return { ok: true, tables: [], missing: [] }
   const tables: string[] = []
   const missing: string[] = []
@@ -157,44 +167,6 @@ async function auditJson(ctx: AdminCtx): Promise<Response> {
   const limit = Math.min(500, Math.max(1, Number(params.get('limit') ?? 100) || 100))
   const rows = await ctx.store.listAudit(limit, { since, actor, action })
   return json({ ok: true, audit: rows })
-}
-
-function csvEscape(v: unknown): string {
-  const s = v == null ? '' : String(v)
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
-}
-
-function toCsv(rows: Record<string, unknown>[]): string {
-  if (!rows.length) return ''
-  const cols = Object.keys(rows[0])
-  return [cols.join(','), ...rows.map((r) => cols.map((c) => csvEscape(r[c])).join(','))].join('\n')
-}
-
-async function exportCsv(ctx: AdminCtx): Promise<Response> {
-  const table = ctx.url.searchParams.get('table')
-  const since = Number(ctx.url.searchParams.get('since') ?? 0) || 0
-  let rows: Record<string, unknown>[]
-  if (table === 'asks') {
-    rows = (await ctx.store.listAsks(2000))
-      .filter((a) => a.ts >= since)
-      .map((a) => ({
-        id: a.id,
-        device_id: a.device_id,
-        ts: a.ts,
-        mode: a.mode,
-        provider: a.provider,
-        model: a.model,
-        outcome: a.outcome,
-        rating: a.rating
-      }))
-  } else if (table === 'events') {
-    rows = (await ctx.store.listEvents(2000)).filter((e) => e.ts >= since) as unknown as Record<string, unknown>[]
-  } else if (table === 'audit') {
-    rows = (await ctx.store.listAudit(2000)).filter((a) => a.ts >= since) as unknown as Record<string, unknown>[]
-  } else {
-    return json({ ok: false, error: 'table must be asks, events or audit' }, 400)
-  }
-  return new Response(toCsv(rows), { headers: { 'content-type': 'text/csv; charset=utf-8', ...noStoreHeaders() } })
 }
 
 /** `/v1/admin/licenses/:id/:action` shared by two concepts: revoking an Operator-issued license (by
@@ -244,7 +216,7 @@ export function registerAdminCoreRoutes(): void {
     auth: 'admin',
     handler: async (_request, ctx) => {
       const nonce = newCspNonce()
-      const dash = await buildDashboard(ctx.store, ctx.email, ctx.now, keyFlags(ctx.env), await cloudflareForDashboard(ctx.store, ctx.env, ctx.opts, ctx.now))
+      const dash = await buildDashboard(ctx.store, ctx.email, ctx.now, keyFlags(ctx.env), await cloudflareForDashboard(ctx.store, ctx.env, ctx.opts, ctx.now), await valueSettings(ctx))
       return html(renderConsole(dash), { nonce })
     }
   })
@@ -255,7 +227,7 @@ export function registerAdminCoreRoutes(): void {
     handler: async (_request, ctx) =>
       json(
         stripSecrets(
-          await buildDashboard(ctx.store, ctx.email, ctx.now, keyFlags(ctx.env), await cloudflareForDashboard(ctx.store, ctx.env, ctx.opts, ctx.now))
+          await buildDashboard(ctx.store, ctx.email, ctx.now, keyFlags(ctx.env), await cloudflareForDashboard(ctx.store, ctx.env, ctx.opts, ctx.now), await valueSettings(ctx))
         )
       )
   })
@@ -270,12 +242,6 @@ export function registerAdminCoreRoutes(): void {
     pattern: '/v1/admin/audit.json',
     auth: 'admin',
     handler: async (_request, ctx) => auditJson(ctx)
-  })
-  defineRoute<AdminCtx>({
-    method: 'GET',
-    pattern: '/v1/admin/export.csv',
-    auth: 'admin',
-    handler: async (_request, ctx) => exportCsv(ctx)
   })
   defineRoute<AdminCtx>({
     method: 'GET',

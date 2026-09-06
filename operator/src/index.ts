@@ -28,6 +28,7 @@ import { matchRoute } from './routes/registry'
 import './routes'
 import { computeIntegrationsVersion, handleIntegrationsSeat } from './routes/integrations-seat'
 import { pruneRetention } from './retention'
+import { d1SchemaStatus } from './routes/admin-core'
 import { looksLikeSecret } from './redact'
 import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './store'
 import { resolveTierAndEntitlements } from './tiers'
@@ -143,6 +144,36 @@ async function healthD1Status(db: D1DatabaseLike | undefined): Promise<'ok' | 'e
   return Promise.race([probe, timeout])
 }
 
+/** `schema` for `/health` (task B6, plan D10): `ok`, or the same missing-table list
+ *  `/v1/admin/health.json` computes (`d1SchemaStatus`/`EXPECTED_D1_TABLES`, `./routes/admin-core`),
+ *  so the two endpoints can never disagree about what "schema ok" means. `unbound` short-circuits
+ *  without touching D1, same as `healthD1Status`. */
+async function healthSchemaStatus(db: D1DatabaseLike | undefined): Promise<'ok' | 'unbound' | string[]> {
+  if (!db) return 'unbound'
+  const status = await d1SchemaStatus(db)
+  return status.ok ? 'ok' : status.missing
+}
+
+/** Max of `seats.last_seen` and `asks.ts` (task B6): the newest moment any seat actually reported
+ *  in. Bounded reads only - `listAsks(1)` is ordered `ts DESC` (see `d1.ts`), so its first row is the
+ *  most recent ask without scanning the table; seats has no such ordering to lean on, so this reduces
+ *  the full (small, per-fleet) seat list rather than adding a second store method for one number. */
+async function lastIngestAt(store: OperatorStore): Promise<number | null> {
+  const [seats, recentAsks] = await Promise.all([store.listSeats(), store.listAsks(1)])
+  const seatMax = seats.reduce<number | null>((acc, s) => (acc == null || s.last_seen > acc ? s.last_seen : acc), null)
+  const askMax = recentAsks[0]?.ts ?? null
+  if (seatMax == null) return askMax
+  if (askMax == null) return seatMax
+  return Math.max(seatMax, askMax)
+}
+
+/** Newest `platform.heartbeat` audit row (task B6): `retention.ts`'s cron writes exactly one per run,
+ *  so its `ts` is "when the cron last actually ran" without a dedicated table. */
+async function lastCronAt(store: OperatorStore): Promise<number | null> {
+  const rows = await store.listAudit(1, { action: 'platform.heartbeat' })
+  return rows[0]?.ts ?? null
+}
+
 async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: HandleOpts = {}): Promise<Response> {
   const url = new URL(request.url)
   const store = opts.store ?? (env.DB ? d1Store(env.DB) : memoryStore())
@@ -150,6 +181,12 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
   const accessCtx: AccessCtx = opts.access ? { access: opts.access } : ctx
 
   if (url.pathname === '/health') {
+    const [d1, schema, lastIngest, lastCron] = await Promise.all([
+      healthD1Status(env.DB),
+      healthSchemaStatus(env.DB),
+      lastIngestAt(store),
+      lastCronAt(store)
+    ])
     return json({
       ok: true,
       service: 'metis-operator',
@@ -157,11 +194,15 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
       version: env.OPERATOR_VERSION?.trim() || 'dev',
       builtAt: env.OPERATOR_BUILT_AT?.trim() || null,
       env: env.OPERATOR_ENV?.trim() || 'production',
-      d1: await healthD1Status(env.DB)
+      d1,
+      schema,
+      lastIngestAt: lastIngest,
+      lastCronAt: lastCron
     })
   }
 
   if (isPublicAssetPath(url.pathname)) {
+    if (isBinaryAssetPath(url.pathname)) return binaryAssetResponse(request, env)
     return publicAssetResponse(url.pathname) ?? json({ ok: false, error: 'not found' }, 404)
   }
 
@@ -202,7 +243,6 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     const hmac = await verifyIngestHmac(request, bodyText, env.OPERATOR_INGEST_SECRET, now, (n) => store.takeNonce(n, now))
     if (!hmac.ok) return json({ ok: false, error: hmac.error, ...(hmac.code ? { code: hmac.code } : {}) }, hmac.status)
     const bucket = rateBucketFor(url.pathname)
-    if (isBinaryAssetPath(url.pathname)) return binaryAssetResponse(request, env)
     if (bucket && (await store.hitRate(`${bucket.key}:${hmac.deviceId}`, now, RATE_WINDOW_MS, bucket.max))) {
       return json({ ok: false, error: 'rate limited', retryAfterMs: RATE_WINDOW_MS }, 429)
     }
@@ -541,8 +581,10 @@ export default {
   },
   async scheduled(_event: unknown, env: Env, _ctx: unknown): Promise<void> {
     const store: OperatorStore = env.DB ? d1Store(env.DB) : memoryStore()
-    // `pruneRetention` closes stale sessions itself as its last step, so the cron needs only the one call.
-    const result = await pruneRetention(store, Date.now())
+    // `pruneRetention` closes stale sessions itself as its last step, so the cron needs only the one
+    // call; `db` is only for the two raw-table prunes (`integration_grants`, `mcp_calls`) that live
+    // outside `OperatorStore`.
+    const result = await pruneRetention(store, Date.now(), {}, { db: env.DB })
     console.log(JSON.stringify({ t: 'retention', ...result }))
   }
 }

@@ -65,7 +65,14 @@ describe('migrate.mjs statement parsing and idempotency contract', () => {
       )
     const fromSchema = tablesOf(schemaSql)
     const fromAlter = tablesOf(schemaAlterSql)
+    // Every other CREATE TABLE in schema-alter.sql redefines a table schema.sql already created (the
+    // richer crm_sends/issued_licenses/etc. definitions, kept for a schema-alter-only run against a
+    // very old D1). operator_settings (task B6) is the one deliberate exception: a wholly new table
+    // that has never existed anywhere else, so it is introduced directly in schema-alter.sql with
+    // nothing to "agree" with in schema.sql.
+    const ALTER_ONLY_NEW_TABLES = new Set(['operator_settings'])
     for (const table of fromAlter) {
+      if (ALTER_ONLY_NEW_TABLES.has(table)) continue
       expect(fromSchema.has(table)).toBe(true)
     }
   })
@@ -124,5 +131,25 @@ describe('schema-alter.sql integrations columns (task B2, operator/src/connector
     const alters = parseStatements(schemaAlterSql).filter((s) => /^ALTER TABLE integrations\b/i.test(s))
     expect(alters.find((s) => s.includes('COLUMN mode'))).toMatch(/DEFAULT 'brokered'/)
     expect(alters.find((s) => s.includes('COLUMN allow_writes'))).toMatch(/DEFAULT 0/)
+  })
+})
+
+describe('schema-alter.sql operator_settings table (task B6, operator/src/routes/settings-store.ts)', () => {
+  it('creates operator_settings with exactly the four columns the settings store needs', () => {
+    const stmt = parseStatements(schemaAlterSql).find((s) => /^CREATE TABLE IF NOT EXISTS operator_settings\b/i.test(s))
+    expect(stmt).toBeTruthy()
+    for (const col of ['key TEXT PRIMARY KEY', 'value_json TEXT NOT NULL', 'updated_at INTEGER NOT NULL', 'updated_by TEXT NOT NULL']) {
+      expect(stmt.replace(/\s+/g, ' ')).toContain(col)
+    }
+  })
+
+  it('is IF NOT EXISTS, same as every other CREATE TABLE in either file (idempotency contract above)', () => {
+    const stmt = parseStatements(schemaAlterSql).find((s) => /operator_settings/i.test(s) && /^CREATE TABLE/i.test(s))
+    expect(stmt).toMatch(/^CREATE TABLE IF NOT EXISTS\b/i)
+  })
+
+  it('is never targeted by an ALTER TABLE statement (it has no additive columns, ever)', () => {
+    const alters = parseStatements(schemaAlterSql).filter((s) => /^ALTER TABLE operator_settings\b/i.test(s))
+    expect(alters).toHaveLength(0)
   })
 })

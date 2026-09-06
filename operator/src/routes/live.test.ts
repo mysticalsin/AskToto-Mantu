@@ -141,3 +141,163 @@ describe('GET /v1/admin/realtime.geo.json (legacy alias)', () => {
     expect(Array.isArray(body.regions)).toBe(true)
   })
 })
+
+function integrationRow(overrides: Partial<import('../store').IntegrationRow> & Pick<import('../store').IntegrationRow, 'id'>): import('../store').IntegrationRow {
+  return {
+    kind: 'hubspot',
+    label: 'HubSpot',
+    base_url: null,
+    cipher: null,
+    iv: null,
+    last4: null,
+    scope_json: '{}',
+    status: 'active',
+    created_at: NOW,
+    created_by: 'tony.walteur@gmail.com',
+    rotated_at: null,
+    revoked_at: null,
+    last_used_at: null,
+    uses: 0,
+    ...overrides
+  }
+}
+
+function issuedLicense(overrides: Partial<import('../store').IssuedLicenseRow> & Pick<import('../store').IssuedLicenseRow, 'jti'>): import('../store').IssuedLicenseRow {
+  return {
+    last4: 'ab12',
+    key_hash: 'hash',
+    days: 30,
+    iat: Math.floor(NOW / 1000),
+    exp: Math.floor(NOW / 1000) + 30 * 24 * 60 * 60,
+    revoked: 0,
+    created_at: NOW,
+    created_by: 'tony.walteur@gmail.com',
+    ...overrides
+  }
+}
+
+describe('GET /v1/admin/live.json (task B7 rail counters)', () => {
+  it('counts pending-approval seats, expiring-soon licenses and failing connectors, and hashes settingsVersion into generation', async () => {
+    const store = memoryStore()
+    await store.upsertSeat(seat({ device_id: 'dev-pending', approval: 'pending' }))
+    await store.upsertSeat(seat({ device_id: 'dev-approved', approval: 'approved' }))
+    await store.putIssuedLicense(issuedLicense({ jti: 'lic-soon', exp: Math.floor((NOW + 3 * 24 * 60 * 60 * 1000) / 1000) }))
+    await store.putIssuedLicense(issuedLicense({ jti: 'lic-far', exp: Math.floor((NOW + 60 * 24 * 60 * 60 * 1000) / 1000) }))
+    await store.putIssuedLicense(issuedLicense({ jti: 'lic-revoked', revoked: 1, exp: Math.floor((NOW + 3 * 24 * 60 * 60 * 1000) / 1000) }))
+    await store.putIntegration({
+      ...integrationRow({ id: 'int-failing', status: 'active' }),
+      last_test_at: NOW,
+      last_test_json: JSON.stringify({ ok: false })
+    } as unknown as import('../store').IntegrationRow)
+    await store.putIntegration({
+      ...integrationRow({ id: 'int-ok', status: 'active' }),
+      last_test_at: NOW,
+      last_test_json: JSON.stringify({ ok: true })
+    } as unknown as import('../store').IntegrationRow)
+
+    const res = await handleRequest(
+      new Request('https://operator.test/v1/admin/live.json'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const body = (await res.json()) as {
+      pendingApprovals: number
+      expiringLicenses7d: number
+      failingConnectors: number
+      settingsVersion: number
+      generation: number
+    }
+    expect(body.pendingApprovals).toBe(1)
+    expect(body.expiringLicenses7d).toBe(1)
+    expect(body.failingConnectors).toBe(1)
+    expect(body.settingsVersion).toBe(0)
+  })
+
+  it('unseenNotices counts every pending-seat notice when since is absent, and only newer ones when since is given', async () => {
+    const store = memoryStore()
+    await store.upsertSeat(seat({ device_id: 'dev-a', approval: 'pending', last_seen: NOW - 1000 }))
+    const all = await handleRequest(
+      new Request('https://operator.test/v1/admin/live.json'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const allBody = (await all.json()) as { unseenNotices: number }
+    expect(allBody.unseenNotices).toBe(1)
+
+    const filtered = await handleRequest(
+      new Request(`https://operator.test/v1/admin/live.json?since=${NOW}`),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const filteredBody = (await filtered.json()) as { unseenNotices: number }
+    expect(filteredBody.unseenNotices).toBe(0)
+  })
+})
+
+describe('GET /v1/admin/search.json', () => {
+  it('finds a seat by hostname, a license by last4, a group by name and a connector by label, capped at 8 per group', async () => {
+    const store = memoryStore()
+    await store.upsertSeat(seat({ device_id: 'dev-a', hostname: 'Tonys-MacBook-Pro' }))
+    await store.putIssuedLicense(issuedLicense({ jti: 'lic-1', last4: 'zz99', tier: 'metis' }))
+    await store.putGroup({ id: 'grp-1', name: 'Amaris team', tier: 'metis', notes: null, created_at: NOW, created_by: 'tony.walteur@gmail.com' })
+    await store.putIntegration(integrationRow({ id: 'int-1', kind: 'hubspot', label: 'HubSpot production' }))
+
+    const res = await handleRequest(
+      new Request('https://operator.test/v1/admin/search.json?q=tony'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const body = (await res.json()) as {
+      seats: { id: string; label: string; page: string }[]
+      licenses: unknown[]
+      groups: unknown[]
+      integrations: unknown[]
+    }
+    expect(body.seats).toEqual([
+      { id: 'dev-a', label: 'Tonys-MacBook-Pro', sublabel: 'twalteur@amaris.com', page: 'sessions', rowKey: 'dev-a' }
+    ])
+
+    const byLast4 = await handleRequest(
+      new Request('https://operator.test/v1/admin/search.json?q=zz99'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const byLast4Body = (await byLast4.json()) as { licenses: { id: string }[] }
+    expect(byLast4Body.licenses).toEqual([{ id: 'lic-1', label: 'License ···zz99', sublabel: 'metis · active', page: 'licenses', rowKey: 'lic-1' }])
+
+    const byGroup = await handleRequest(
+      new Request('https://operator.test/v1/admin/search.json?q=amaris'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const byGroupBody = (await byGroup.json()) as { groups: { id: string }[] }
+    expect(byGroupBody.groups).toEqual([{ id: 'grp-1', label: 'Amaris team', sublabel: 'metis', page: 'groups', rowKey: 'grp-1' }])
+
+    const byConnector = await handleRequest(
+      new Request('https://operator.test/v1/admin/search.json?q=hubspot'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const byConnectorBody = (await byConnector.json()) as { integrations: { id: string }[] }
+    expect(byConnectorBody.integrations).toEqual([{ id: 'int-1', label: 'HubSpot production', sublabel: 'hubspot', page: 'connectors', rowKey: 'int-1' }])
+  })
+
+  it('returns every group empty for a blank query', async () => {
+    const store = memoryStore()
+    const res = await handleRequest(
+      new Request('https://operator.test/v1/admin/search.json'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const body = (await res.json()) as { seats: unknown[]; licenses: unknown[]; groups: unknown[]; integrations: unknown[] }
+    expect(body).toEqual({ ok: true, seats: [], licenses: [], groups: [], integrations: [] })
+  })
+})

@@ -8,8 +8,9 @@ import { buildDashboard, buildLiveSnapshot, ONLINE_MS } from '../dashboard'
 import { isRealSeat } from '../fleet'
 import { json, noStoreHeaders } from '../http'
 import { sessionDurationMs } from '../sessions'
-import type { OperatorStore, SeatRow } from '../store'
+import type { GroupRow, IntegrationRow, IssuedLicenseRow, OperatorStore, SeatRow } from '../store'
 import { resolveTierAndEntitlements } from '../tiers'
+import { readOperatorSettings } from './settings-store'
 import { defineRoute } from './registry'
 import { cloudflareForDashboard, keyFlags, type AdminCtx } from './admin-ctx'
 import { profileOf, safeCity } from './seat-view'
@@ -167,13 +168,115 @@ async function buildGeoTable(store: OperatorStore, now: number): Promise<GeoTabl
     .sort((a, b) => b.liveSessions - a.liveSessions || b.events - a.events)
 }
 
+export interface SearchResultItem {
+  id: string
+  label: string
+  sublabel: string | null
+  page: string
+  rowKey: string
+}
+
+export interface SearchResults {
+  seats: SearchResultItem[]
+  licenses: SearchResultItem[]
+  groups: SearchResultItem[]
+  integrations: SearchResultItem[]
+}
+
+const SEARCH_LIMIT_PER_GROUP = 8
+
+function matchesQuery(q: string, fields: (string | null | undefined)[]): boolean {
+  const needle = q.toLowerCase()
+  return fields.some((f) => (f || '').toLowerCase().includes(needle))
+}
+
+/** Never the full device id in a label a person types to search by - just enough to recognise a
+ *  machine, matching what a hostname-less seat already shows elsewhere in the console. */
+function deviceShortId(deviceId: string): string {
+  return deviceId.length > 8 ? deviceId.slice(-8) : deviceId
+}
+
+/** Rail search (plan 3.7 item 7, task B7): up to 8 matches per group, never a credential or a full
+ *  license. `rowKey` is what the client re-selects on the target page after navigating there. */
+function searchSeats(seats: SeatRow[], q: string): SearchResultItem[] {
+  const out: SearchResultItem[] = []
+  for (const s of seats) {
+    if (!isRealSeat(s)) continue
+    const who = profileOf(s)
+    if (!matchesQuery(q, [who.hostname, who.email, deviceShortId(s.device_id)])) continue
+    out.push({
+      id: s.device_id,
+      label: who.hostname || who.email || deviceShortId(s.device_id),
+      sublabel: who.hostname && who.email ? who.email : safeCity(s),
+      page: 'sessions',
+      rowKey: s.device_id
+    })
+    if (out.length >= SEARCH_LIMIT_PER_GROUP) break
+  }
+  return out
+}
+
+function searchLicenses(issued: IssuedLicenseRow[], q: string): SearchResultItem[] {
+  const out: SearchResultItem[] = []
+  for (const l of issued) {
+    if (!matchesQuery(q, [l.last4, l.tier, l.member])) continue
+    out.push({
+      id: l.jti,
+      label: `License ···${l.last4}`,
+      sublabel: [l.tier, l.revoked ? 'revoked' : 'active'].filter(Boolean).join(' · '),
+      page: 'licenses',
+      rowKey: l.jti
+    })
+    if (out.length >= SEARCH_LIMIT_PER_GROUP) break
+  }
+  return out
+}
+
+function searchGroups(groups: GroupRow[], q: string): SearchResultItem[] {
+  const out: SearchResultItem[] = []
+  for (const g of groups) {
+    if (!matchesQuery(q, [g.name])) continue
+    out.push({ id: g.id, label: g.name, sublabel: g.tier, page: 'groups', rowKey: g.id })
+    if (out.length >= SEARCH_LIMIT_PER_GROUP) break
+  }
+  return out
+}
+
+function searchIntegrations(rows: IntegrationRow[], q: string): SearchResultItem[] {
+  const out: SearchResultItem[] = []
+  for (const r of rows) {
+    if (!matchesQuery(q, [r.label, r.kind])) continue
+    out.push({ id: r.id, label: r.label, sublabel: r.kind, page: 'connectors', rowKey: r.id })
+    if (out.length >= SEARCH_LIMIT_PER_GROUP) break
+  }
+  return out
+}
+
+async function buildSearchResults(store: OperatorStore, q: string): Promise<SearchResults> {
+  const [seats, issued, groups, integrations] = await Promise.all([
+    store.listSeats(),
+    store.listIssuedLicenses(),
+    store.listGroups(),
+    store.listIntegrationRows()
+  ])
+  return {
+    seats: searchSeats(seats, q),
+    licenses: searchLicenses(issued, q),
+    groups: searchGroups(groups, q),
+    integrations: searchIntegrations(integrations, q)
+  }
+}
+
 export function registerLiveRoutes(): void {
   defineRoute<AdminCtx>({
     method: 'GET',
     pattern: '/v1/admin/live.json',
     auth: 'admin',
     handler: async (request, ctx) => {
-      const snapshot = await buildLiveSnapshot(ctx.store, ctx.now)
+      const sinceParam = new URL(request.url).searchParams.get('since')
+      const since = sinceParam != null && sinceParam !== '' && Number.isFinite(Number(sinceParam)) ? Number(sinceParam) : undefined
+      const { settingsVersion } = await readOperatorSettings(ctx.env.DB)
+      const snapshot = await buildLiveSnapshot(ctx.store, ctx.now, { since, settingsVersion })
       const etag = `W/"${snapshot.generation}"`
       const ifNoneMatch = request.headers.get('if-none-match')
       if (ifNoneMatch && etagMatches(ifNoneMatch, etag)) return liveJsonResponse(null, etag, 304)
@@ -200,5 +303,16 @@ export function registerLiveRoutes(): void {
     pattern: '/v1/admin/realtime/live-seats.json',
     auth: 'admin',
     handler: async (_request, ctx) => json({ ok: true, rows: await buildLiveSeatsTable(ctx.store, ctx.now) })
+  })
+  defineRoute<AdminCtx>({
+    method: 'GET',
+    pattern: '/v1/admin/search.json',
+    auth: 'admin',
+    handler: async (request, ctx) => {
+      const q = (new URL(request.url).searchParams.get('q') || '').trim()
+      if (!q) return json({ ok: true, seats: [], licenses: [], groups: [], integrations: [] })
+      const results = await buildSearchResults(ctx.store, q)
+      return json({ ok: true, ...results })
+    }
   })
 }
