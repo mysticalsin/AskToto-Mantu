@@ -393,6 +393,8 @@ const api = {
   onError: (cb: (d: StreamError) => void): Unsub => sub(IPC.streamError, cb),
   onMeta: (cb: (d: StreamMeta) => void): Unsub => sub(IPC.streamMeta, cb),
   onHotkey: (cb: (a: HotkeyAction) => void): Unsub => sub(IPC.hotkey, cb),
+  onMeetingAutoStart: (cb: (d: { platform: 'zoom' | 'teams' | 'meet' }) => void): Unsub =>
+    sub(IPC.meetingAutoStart, cb),
 
   onUpdateReady: (cb: (d: { version?: string; notes?: string }) => void): Unsub => sub(IPC.updateDownloaded, cb),
   onUpdateProgress: (cb: (d: { percent?: number }) => void): Unsub => sub(IPC.updateProgress, cb),
