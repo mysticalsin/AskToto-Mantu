@@ -38,6 +38,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run typecheck
+      # Same reason as build.yml quality: bar-toolbar.layout.test.ts needs Chromium on the runner.
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
       - run: npm test
       - run: npm run build
       - run: npm audit --audit-level=critical
