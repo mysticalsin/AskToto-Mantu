@@ -5044,7 +5044,10 @@ function ModePromptEditor({
         <p className="m-0 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
           Operator skill v{modeSkillLock().skills[mode]?.version ?? 'unknown'} is locked to this Métis
           build. Your prompt above still applies. The skill runs in the background and cannot be
-          edited, deleted, or overridden here.
+          edited, deleted, or overridden here. Ask answers also run locked caveman v
+          {modeSkillLock().skills.caveman?.version ?? 'unknown'} (default full). Say stop caveman or
+          normal mode to drop it. /caveman lite|full|ultra switches intensity. That skill cannot be
+          edited here.
         </p>
       )}
     </div>

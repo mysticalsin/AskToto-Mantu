@@ -327,6 +327,7 @@ import {
 } from './brain/store'
 import { buildBrainContext } from './brain/context'
 import { buildSystem, buildSystemParts } from './personas'
+import { parseCavemanAskPrompt } from '@shared/caveman-ask'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
 import { isOpenAICloudCacheEligible, promptCacheKey as makePromptCacheKey, resolveOperatorBaseUrl } from '@shared/operator'
 import { cloudflareConnectTarget } from './cloudflare-connect'
@@ -5324,7 +5325,26 @@ function registerIpc(): void {
       win?.webContents.send(IPC.streamError, { id: req.id, message: PRIVATE_VIEW_BLOCKED_MESSAGE })
       return
     }
-    const s = getSettings()
+    let s = getSettings()
+    // Ask caveman register: `/caveman lite|full|ultra…`, "stop caveman", "normal mode".
+    // Persist in the existing settings store, strip the command from the question the model sees.
+    if ((req.mode === 'answer' || req.mode === 'vision') && req.kind !== 'factcheck') {
+      const caveman = parseCavemanAskPrompt(req.prompt)
+      if (caveman.next) {
+        s = setSettings({ askCaveman: caveman.next })
+      }
+      if (caveman.visiblePrompt !== req.prompt) req.prompt = caveman.visiblePrompt
+      if (
+        caveman.next &&
+        !req.prompt.trim() &&
+        !req.image &&
+        !req.wantsScreenContext &&
+        req.kind !== 'factcheck'
+      ) {
+        win?.webContents.send(IPC.streamDone, { id: req.id })
+        return
+      }
+    }
     // Fresh-question boundary (see the state block above): a plain interactive ask outside a live meeting
     // starts clean unless the user opted into follow-up memory — and even then the memory expires after
     // ASK_MEMORY_IDLE_MS of inactivity. Pinned/cascaded requests (agentOverride / providerOverride —
@@ -5853,7 +5873,7 @@ function registerIpc(): void {
         paintedLen += text.length
         win?.webContents.send(IPC.streamDelta, { id: req.id, text })
       }
-      const systemParts = buildSystemParts(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt)
+      const systemParts = buildSystemParts(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt, s.askCaveman)
       const handle = createStream({
         providerId: provider,
         kind: def.kind,

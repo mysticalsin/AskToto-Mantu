@@ -67,6 +67,7 @@ import { useListen, playListenChime } from './lib/listen'
 import { transcriptToText, recapPersistAction } from './lib/transcript'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
 import { DEFAULT_SHORTCUTS, ASK_MEMORY_IDLE_MS } from '@shared/ipc'
+import { parseCavemanAskPrompt } from '@shared/caveman-ask'
 import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, LicenseGateVerdict } from '@shared/ipc'
 import { HOTKEY_ACTIONS } from '@shared/ipc'
 import { useTapControl } from './lib/tap/tap-control'
@@ -1323,7 +1324,14 @@ export function App(): JSX.Element {
 
   const submit = useCallback(() => {
     if (!requireProvider()) return
-    const q = input.trim()
+    const typed = input.trim()
+    const caveman = parseCavemanAskPrompt(typed)
+    if (caveman.next) void patch({ askCaveman: caveman.next })
+    const q = caveman.visiblePrompt
+    if (!q && caveman.next) {
+      setInput('')
+      return
+    }
     setCaptureError(null)
     const canUseScreen = Boolean((settings?.screenAsk ?? true) && settings?.visionAvailable)
     // Screen-aware router (Cluely "Uses Screen"): in a call → copilot; else screen-ask when enabled +
@@ -1400,7 +1408,8 @@ export function App(): JSX.Element {
     settings?.askFollowUpMemory,
     askScreen,
     assist,
-    requireProvider
+    requireProvider,
+    patch
   ])
 
   const factCheck = useCallback(() => {
