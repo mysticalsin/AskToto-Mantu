@@ -5,7 +5,7 @@ owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, cli
 does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, installer packing, Fly license-server, Goldberg Aria, cloudflare-proxy AI token proxy, Bklit Studio, Metis-Releases Latest feed, EXE/DMG/Native pack or promote
 ready-to-merge: no
 implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing, access-login, v1-use
-this-slice: keys-gateway-seat-approval
+this-slice: keys-gateway-seat-approval + operator-license-generate
 audience: Tony Walteur only. Two emails. Nobody else.
 tokens:
   accent: "#2563EB"
@@ -131,6 +131,45 @@ Rail: Overview, Realtime, Events, Map, Users, macOS, Windows, Licenses, Keys, No
 MUST NOT return as nav: Sessions, SEO, Pages, Insights, Dashboards, References, Groups, Cohorts.
 
 `#licenses` is first-class: every real seat, license status, approval, Approve / Revoke. `#keys` is the vault. `#map` / `#macos` / `#windows` stay fleet filters.
+
+## Product law (Tony ~10:26 PM ET America/Toronto, 6 Sep 2026 — Generate license)
+
+**Hold.** Stay draft on PR 146. No pack. No merge. No Latest. **Do not Worker-deploy** until Ultron says Mac re-PASS on PR 144.
+
+**Goal.** Tony generates a license string in the Operator portal, picks how long it stays active, pastes it into **Métis → Identity → License**, and that seat is then authorized for Operator platform keys. Tony does not paste provider keys into Métis for that seat.
+
+This is **not** the Fly `license-server` / `ATK-` phone-home product. This is **not** flipping `LICENSE_ACTIVATION_OPEN`. Selling JWS (`iss: metis-license`, kid `metis-2026-1`) stays closed.
+
+### Generate (Portal)
+
+`#licenses` always shows a clear **Generate license** control, even when the seats table is empty (`data-licenses-empty` still fails loud for missing seats).
+
+Tony chooses duration: 1 day, 7 days, 30 days, 90 days, or 1 year (`days` 1–365).
+
+`POST /v1/admin/licenses/generate` `{ days }` (Access JWT + two Tony emails). Returns the raw string **once**. After that, Operator stores hash + last4 + `jti` + `exp` only. Unauth generate is **401** `{ ok:false, error:"Access required" }`.
+
+Token: `METIS-OP-1.<jti>.<iat>.<exp>.<hmac-sha256-b64url>`, HMAC over `METIS-OP-1.<jti>.<iat>.<exp>` with `OPERATOR_INGEST_SECRET`. Length stays under the Identity paste max (200). Never a raw key in HTML after reload. last4 only in the issued list.
+
+### Identity validate (Métis)
+
+Paste path is Settings → Identity → License (`IdentitySection` + `window.toto.memberLicenseActivate`). An Operator token is verified locally with the seat's `operatorIngestSecret` (same ingest secret already required for Operator URL). Valid + not expired → `MemberLicenseStatus.state` is `licensed` (UI: Pro / Active until expiry). Expired → `expired`. Wrong secret / tamper → `invalid` / `tampered`. `ATK-` and JWS keys still hit the closed client (`activation_unavailable`). Cache lives in the OS secret store (`operator-license.bin`), never `settings.json`.
+
+Heartbeat may send `license: licensed`, `licenseLast4`, and `licenseId` (`jti`). Never the raw string. Never `approval`.
+
+### Gateway after an active license
+
+A seat is authorized for platform keys when:
+
+| Gate | `fundedProviders` | `POST /v1/use` |
+| --- | --- | --- |
+| Tony **Approve** (`approval=approved`) | vault LLM ids | HMAC broker |
+| Active Operator license (`license_jti` matches issued, `exp` in the future, not revoked) | vault LLM ids | HMAC broker |
+| `approval=revoked` | `[]` | **403** loud (revoke wins) |
+| Pending, no active license | `[]` | **403** loud |
+
+Keep Access. Keep Install → works. Keep Approve / Revoke on `#licenses`. License is a second way onto the approved-keys path, not a replacement.
+
+D1: `issued_licenses` (`jti`, `last4`, `key_hash`, `days`, `iat`, `exp`, `revoked`, `created_at`, `created_by`). `seats.license_jti` from heartbeat `licenseId`. Heartbeat must not overwrite `approval`.
 
 ## Product law (Tony 8:03–8:05 PM ET, VOID 10:32 PM ET — Shoey chrome VOID 6 Sep 2026)
 
@@ -680,6 +719,6 @@ Frozen overlay chrome (do not edit from this product):
 
 ## Ready to merge
 
-**READY TO MERGE: no.** Keys gateway + seat approval. Overlay leftover stays out of this slice. No pack. No merge. Do not pack EXE/DMG. Do not bump app version (`1.8.3` stays). Goldberg Aria stays frozen. **Ultron lock:** do not publish or promote Metis-Releases Latest. EXE/DMG/Native → Latest only after Bob QA + Ultron approve.
+**READY TO MERGE: no.** Keys gateway + seat approval + Operator license generate. Overlay leftover stays out of this slice. No pack. No merge. Do not pack EXE/DMG. Do not bump app version (`1.8.3` stays). Goldberg Aria stays frozen. **Do not Worker-deploy tonight** until Ultron says Mac re-PASS on PR 144. **Ultron lock:** do not publish or promote Metis-Releases Latest. EXE/DMG/Native → Latest only after Bob QA + Ultron approve.
 
 Migrating leftover seat-stored Tony cloud keys stays a later slice. `POST /v1/use` is live: HMAC, vault decrypt in Worker memory, brokered completion, text only. Seats never persist a raw Operator key or CF token.

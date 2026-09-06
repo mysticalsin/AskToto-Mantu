@@ -109,6 +109,10 @@ Activation is not open yet.
 A key you enter is checked,
 then returned unused.
 
+Operator-issued keys (METIS-OP-1…)
+activate here and show Active until
+the expiry Tony chose.
+
 [ license key field ]
 [ Activate ]
 
@@ -176,8 +180,10 @@ No "island". No "edition card". Do not identify as AI.
 | Licensed personal | Personal |
 | Licensed pro | Pro |
 | Licensed enterprise | Enterprise |
-| Activation closed, idle | Activation is not open yet. A key you enter is checked, then returned unused. |
+| Activation closed, idle | Paste a license Tony generated in Operator. Selling keys stay closed. |
 | Activation closed, after Activate | Activation is not open yet. Métis checked the key and did not apply it. |
+| Operator license active | License is active until {date}. |
+| Operator license expired | This license has expired. |
 | Empty key | Enter the license key you were given. |
 | Tampered / invalid cache | Personal. The saved license could not be verified. |
 | MDM file present | A managed license file is on this Mac. Activation is not open yet. |
