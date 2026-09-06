@@ -555,20 +555,33 @@ export function App(): JSX.Element {
   }, [minimized, canMinimize])
   const prevOrbStyleRef = useRef<OverlayOrbStyle>(overlayOrbStyle)
   useEffect(() => {
-    if (!canMinimize) return
+    if (!canMinimize) {
+      if (!minimized) return
+      setMinimized(false)
+      void window.toto.minimize(false)
+      return
+    }
     const prev = prevOrbStyleRef.current
     prevOrbStyleRef.current = overlayOrbStyle
-    if (prev === overlayOrbStyle) return
+    const styleChanged = prev !== overlayOrbStyle
     if (overlayOrbRestIsCircle(overlayLayout, overlayOrbStyle)) {
-      // Circle rest must leave Settings. Keeping view==='settings' is the 880×1017 gray slab.
-      setView((v) => (v === 'settings' ? 'answer' : v))
-      setMinimized(true)
-      void window.toto.minimize(true)
-    } else if (overlayOrbStyle === 'bar') {
+      // Picking Circle while Settings is open must leave the 880×1017 sheet.
+      if (styleChanged && view === 'settings') {
+        setView('answer')
+        setMinimized(true)
+        void window.toto.minimize(true)
+        return
+      }
+      // Bar + Circle rest (default jakub) is the thinking-orb pill, not a Settings slab.
+      if (view !== 'settings' && !minimized) {
+        setMinimized(true)
+        void window.toto.minimize(true)
+      }
+    } else if (overlayOrbStyle === 'bar' && minimized) {
       setMinimized(false)
       void window.toto.minimize(false)
     }
-  }, [canMinimize, overlayLayout, overlayOrbStyle])
+  }, [canMinimize, overlayLayout, overlayOrbStyle, minimized, view])
   useEffect(() => {
     dispatchAutoHide({ type: 'set-forced', forced: autoHideForced })
   }, [autoHideForced])

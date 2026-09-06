@@ -80,8 +80,9 @@ export function shouldForceParkOnBecameIdle(input: { becameIdle: boolean; usesHo
 
 /**
  * Hide/Island stay hover-idle on the answer surface even with a live answer or
- * listening chrome (Tony 2026-09-06). Mouse leave auto-hides. Re-hover restores
- * the same answer. Settings / History / Review / capture stay fully shown.
+ * listening chrome (Tony 2026-09-06). A leftover Circle minimized flag must not
+ * block park — Hide never rests as Expand Métis. Settings / History / Review /
+ * capture stay fully shown.
  */
 export function overlayHoverIdle(input: {
   usesHover: boolean
@@ -92,7 +93,6 @@ export function overlayHoverIdle(input: {
 }): boolean {
   return (
     input.usesHover &&
-    !input.minimized &&
     input.onboardingDone &&
     input.view === 'answer' &&
     !input.capturing
@@ -150,6 +150,46 @@ export function rememberBarContentHeight(height: number, fallback = BAR_IDLE_HEI
  */
 export function overlayShowsSettingsSheet(view: string, minimized = false): boolean {
   return view === 'settings' && !minimized
+}
+
+/**
+ * Dock / activate opens Settings only for Bar. Hide and Island launch parked.
+ * Fresh userdata must boot 8×2, not 880×1017 Settings.
+ */
+export function overlayActivateOpensSettings(layout: string): boolean {
+  return layout === 'bar'
+}
+
+/**
+ * Top-edge Ask height. Never Math.max with a leftover Settings 800+ slab.
+ * Ultron: 880×1017 + Expand Métis while Hide should have been 880×120.
+ */
+export function askRevealHeight(input: {
+  currentHeight: number
+  lastBarHeight: number
+  minReveal?: number
+}): number {
+  const min = input.minReveal ?? ASK_REVEAL_MIN_HEIGHT_PX
+  const last = rememberBarContentHeight(input.lastBarHeight, min)
+  const current = rememberBarContentHeight(input.currentHeight, min)
+  return Math.max(min, last, current)
+}
+
+/** Ultron CDP: 880×1017, buttons=[Expand Métis], hasAsk=false. Not Hide park. Not Ask reveal. */
+export function isSettingsSlabInsteadOfAsk(input: {
+  width: number
+  height: number
+  hasAsk: boolean
+  buttons?: readonly string[]
+}): boolean {
+  const onlyExpand =
+    !!input.buttons &&
+    input.buttons.length > 0 &&
+    input.buttons.every((b) => b === 'Expand Métis')
+  if (isFullAskReveal({ width: input.width, height: input.height, hasAsk: input.hasAsk })) {
+    return false
+  }
+  return input.width >= 800 && (isSettingsTallHeight(input.height) || onlyExpand)
 }
 
 /**

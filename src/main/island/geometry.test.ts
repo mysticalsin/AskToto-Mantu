@@ -547,7 +547,7 @@ describe('island reveal/collapse wiring (index.ts)', () => {
   it('restoreBarWidth grows height at the same topClamp Y; resizeTo pins that Y', () => {
     const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
     expect(index).toMatch(
-      /Math\.max\(b\.height, lastBarHeight, BAR_HEIGHT, ASK_REVEAL_MIN_HEIGHT_PX\)/
+      /askRevealHeight\(\{ currentHeight: b\.height, lastBarHeight, minReveal: ASK_REVEAL_MIN_HEIGHT_PX \}\)/
     )
     expect(index).toMatch(/rememberBarContentHeight\(Math\.max\(lastBarHeight, BAR_HEIGHT\), BAR_IDLE_HEIGHT_PX\)/)
     expect(index).toMatch(/notifyOverlayCursorHover\(true\)/)

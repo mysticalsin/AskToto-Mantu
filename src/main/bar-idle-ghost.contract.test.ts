@@ -62,6 +62,10 @@ describe('Bar idle must not keep a Settings-tall ghost slab', () => {
     expect(index).toMatch(/if \(settingsSurfaceOpen\) leaveSettingsSurface\(\)/)
     expect(index).toMatch(/lastBarHeight = rememberBarContentHeight\(lastBarHeight, BAR_IDLE_HEIGHT_PX\)/)
     expect(index).toMatch(/setBackgroundColor\(OVERLAY_REST_BACKGROUND\)/)
+    expect(index).toMatch(/function healHideGhostSlab/)
+    expect(index).toMatch(/askRevealHeight/)
+    expect(index).toMatch(/overlayActivateOpensSettings\(liveOverlayLayout\(\)\)/)
+    expect(index).toMatch(/A Settings-tall ghost is not the Ask bar/)
   })
 
   it('renderer mounts Settings / cl-root only while view is settings; Circle click expands, not Settings', () => {
