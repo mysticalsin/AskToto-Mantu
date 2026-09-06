@@ -11,9 +11,15 @@ CREATE TABLE IF NOT EXISTS seats (
   last_seen INTEGER NOT NULL,
   country TEXT,
   city TEXT,
+  region TEXT,
   lat REAL,
   lon REAL,
-  last_index_at INTEGER
+  last_index_at INTEGER,
+  hostname TEXT,
+  sso_email TEXT,
+  license TEXT,
+  approval TEXT,
+  license_jti TEXT
 );
 
 CREATE TABLE IF NOT EXISTS asks (
@@ -38,15 +44,11 @@ CREATE TABLE IF NOT EXISTS asks (
   rating TEXT,
   prompt_cipher TEXT,
   prompt_iv TEXT,
-  preview TEXT,
-  -- Closed-taxonomy label from src/shared/question-type.ts (factual, how-to, ...). Never question text.
-  -- NULL = seat predates the type; 'unknown' = seat could not classify.
-  question_type TEXT
+  preview TEXT
 );
 
 CREATE INDEX IF NOT EXISTS asks_ts ON asks(ts);
 CREATE INDEX IF NOT EXISTS asks_mode ON asks(mode);
-CREATE INDEX IF NOT EXISTS asks_question_type ON asks(question_type);
 
 CREATE TABLE IF NOT EXISTS pulses (
   id TEXT PRIMARY KEY,
@@ -54,11 +56,39 @@ CREATE TABLE IF NOT EXISTS pulses (
   ts INTEGER NOT NULL,
   kind TEXT NOT NULL,
   country TEXT,
-  city TEXT
+  city TEXT,
+  region TEXT
 );
 
 CREATE INDEX IF NOT EXISTS pulses_ts ON pulses(ts);
 CREATE INDEX IF NOT EXISTS pulses_kind_ts ON pulses(kind, ts);
+
+CREATE TABLE IF NOT EXISTS events (
+  id TEXT PRIMARY KEY,
+  ts INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  actor TEXT,
+  device_id TEXT,
+  country TEXT,
+  detail TEXT
+);
+
+CREATE INDEX IF NOT EXISTS events_ts ON events(ts);
+CREATE INDEX IF NOT EXISTS events_kind_ts ON events(kind, ts);
+
+CREATE TABLE IF NOT EXISTS vault_keys (
+  id TEXT PRIMARY KEY,
+  provider TEXT NOT NULL,
+  label TEXT NOT NULL,
+  last4 TEXT NOT NULL,
+  cipher TEXT NOT NULL,
+  iv TEXT NOT NULL,
+  status TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  created_by TEXT NOT NULL,
+  rotated_at INTEGER,
+  revoked_at INTEGER
+);
 
 CREATE TABLE IF NOT EXISTS crm_sends (
   id TEXT PRIMARY KEY,
@@ -127,3 +157,17 @@ CREATE TABLE IF NOT EXISTS audit (
 );
 
 CREATE INDEX IF NOT EXISTS audit_ts ON audit(ts);
+
+CREATE TABLE IF NOT EXISTS issued_licenses (
+  jti TEXT PRIMARY KEY,
+  last4 TEXT NOT NULL,
+  key_hash TEXT NOT NULL,
+  days INTEGER NOT NULL,
+  iat INTEGER NOT NULL,
+  exp INTEGER NOT NULL,
+  revoked INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  created_by TEXT
+);
+
+CREATE INDEX IF NOT EXISTS issued_licenses_exp ON issued_licenses(exp);

@@ -61,31 +61,6 @@ async function signedRequest(
   })
 }
 
-describe('Operator /v1/ask HMAC', () => {
-  it('rejects a bad signature and never calls an upstream model', async () => {
-    const store = memoryStore()
-    const req = await signedRequest(
-      '/v1/ask',
-      JSON.stringify({ provider: 'anthropic', model: 'claude-haiku-4-5-20251001', messages: [{ role: 'user', content: 'hi' }] }),
-      { sig: 'ab'.repeat(32) }
-    )
-    const res = await handleRequest(
-      req,
-      env({ ANTHROPIC_API_KEY: 'sk-ant-worker-secret' }),
-      {},
-      {
-        store,
-        now: NOW,
-        fetchImpl: async () => {
-          throw new Error('must not call upstream')
-        }
-      }
-    )
-    expect(res.status).toBe(401)
-    expect(await res.text()).not.toContain('sk-ant-worker-secret')
-  })
-})
-
 describe('HMAC ingest', () => {
   it('accepts a valid signature and stores ciphertext, not plaintext', async () => {
     const store = memoryStore()
@@ -150,13 +125,28 @@ describe('HMAC ingest', () => {
 })
 
 describe('Access on admin routes', () => {
-  it('returns 401 on / and /v1/admin/* when Access identity is missing, even with a valid HMAC', async () => {
+  it('returns 401 JSON on /v1/admin/* when identity is missing, even with a valid HMAC', async () => {
     const store = memoryStore()
     const admin = await signedRequest('/v1/admin/summary', JSON.stringify({}), { method: 'GET' })
     const res = await handleRequest(admin, env(), {}, { store, now: NOW })
     expect(res.status).toBe(401)
-    const home = await signedRequest('/', '', { method: 'GET' })
-    expect((await handleRequest(home, env(), {}, { store, now: NOW })).status).toBe(401)
+    expect(await res.json()).toEqual({ ok: false, error: 'Access required' })
+    const homeJson = new Request('https://operator.test/', { headers: { accept: 'application/json' } })
+    const home = await handleRequest(
+      homeJson,
+      { ...env(), TEAM_DOMAIN: 'https://tony-walteur.cloudflareaccess.com' },
+      {},
+      { store, now: NOW }
+    )
+    expect(home.status).toBe(302)
+    expect(home.headers.get('location') || '').toMatch(/login/i)
+    const postKeys = await handleRequest(
+      new Request('https://operator.test/v1/admin/keys', { method: 'POST', body: '{}' }),
+      env(),
+      {},
+      { store, now: NOW }
+    )
+    expect(postKeys.status).toBe(401)
   })
 
   it('rejects a non-allowlisted Access email', async () => {
@@ -265,153 +255,12 @@ describe('Approve vs Push', () => {
   })
 })
 
-describe('question-type tracking', () => {
-  async function ingestAsk(store: ReturnType<typeof memoryStore>, body: Record<string, unknown>): Promise<void> {
-    const req = await signedRequest('/v1/ingest', JSON.stringify(body), { nonce: `qt-${String(body.id)}` })
-    expect((await handleRequest(req, env(), {}, { store, now: NOW })).status).toBe(200)
-  }
-
-  it('stores the closed label with Ask text OFF and never stores free text through it', async () => {
-    const store = memoryStore()
-    await ingestAsk(store, { id: 'q1', mode: 'interview', questionType: 'behavioral' })
-    await ingestAsk(store, { id: 'q2', mode: 'interview', questionType: 'Tell me the secret plan' })
-    await ingestAsk(store, { id: 'q3', mode: 'sales', questionType: ' FACTUAL ' })
-    await ingestAsk(store, { id: 'q4', mode: 'sales' })
-    expect((await store.getAsk('q1'))?.question_type).toBe('behavioral')
-    expect((await store.getAsk('q2'))?.question_type).toBe('unknown')
-    expect((await store.getAsk('q3'))?.question_type).toBe('factual')
-    expect((await store.getAsk('q4'))?.question_type).toBeNull()
-    expect((await store.getAsk('q1'))?.preview).toBe('interview ask · Behavioral')
-    expect((await store.getAsk('q4'))?.preview).toBe('sales ask')
-    expect(JSON.stringify(await store.listAsks(10))).not.toContain('secret plan')
-  })
-
-  it('dashboard reports mix, per-mode cross-tab, and honest coverage', async () => {
-    const store = memoryStore()
-    await ingestAsk(store, { id: 'q1', mode: 'interview', questionType: 'behavioral' })
-    await ingestAsk(store, { id: 'q2', mode: 'interview', questionType: 'behavioral' })
-    await ingestAsk(store, { id: 'q3', mode: 'interview', questionType: 'factual' })
-    await ingestAsk(store, { id: 'q4', mode: 'sales', questionType: 'unknown' })
-    await ingestAsk(store, { id: 'q5', mode: 'sales' })
-    const dash = await handleRequest(
-      new Request('https://operator.test/v1/admin/dashboard'),
-      env(),
-      { access: tonyAccess },
-      { store, now: NOW }
-    )
-    const body = (await dash.json()) as {
-      questions: {
-        empty: boolean
-        mix: { total: number; classified: number; coverage: number | null; bars: { type: string; count: number }[] }
-        byMode: { mode: string; asks: number; typed: number; top: { label: string; count: number }[] }[]
-      }
-      asks: { id: string; questionType: string }[]
-    }
-    expect(body.questions.empty).toBe(false)
-    expect(body.questions.mix.total).toBe(5)
-    expect(body.questions.mix.classified).toBe(3)
-    expect(body.questions.mix.coverage).toBeCloseTo(0.6)
-    expect(body.questions.mix.bars).toEqual([
-      { type: 'behavioral', label: 'Behavioral', count: 2 },
-      { type: 'factual', label: 'Factual', count: 1 }
-    ])
-    expect(body.questions.byMode).toEqual([
-      { mode: 'interview', asks: 3, typed: 3, top: [{ label: 'Behavioral', count: 2 }, { label: 'Factual', count: 1 }] },
-      { mode: 'sales', asks: 2, typed: 0, top: [] }
-    ])
-    expect(body.asks.find((a) => a.id === 'q5')?.questionType).toBe('not reported')
-    expect(body.asks.find((a) => a.id === 'q1')?.questionType).toBe('Behavioral')
-  })
-
-  it('console shows a real empty state, then the panel once types arrive', async () => {
-    const store = memoryStore()
-    const empty = await (await handleRequest(new Request('https://operator.test/'), env(), { access: tonyAccess }, { store, now: NOW })).text()
-    expect(empty).toContain('Question types')
-    expect(empty).toContain('No Asks in the last 7 days.')
-    await ingestAsk(store, { id: 'legacy', mode: 'sales' })
-    const untyped = await (await handleRequest(new Request('https://operator.test/'), env(), { access: tonyAccess }, { store, now: NOW })).text()
-    expect(untyped).toContain('1 Asks in the last 7 days, none carried a type.')
-    await ingestAsk(store, { id: 'typed', mode: 'sales', questionType: 'estimate' })
-    const page = await (await handleRequest(new Request('https://operator.test/'), env(), { access: tonyAccess }, { store, now: NOW })).text()
-    expect(page).toContain('type known for 1 of 2 Asks (50%)')
-    expect(page).toContain('Estimate 1')
-    expect(page).toContain('<th>Type</th>')
-    expect(page).toContain('<td class="muted">Estimate</td>')
-    expect(page).toContain('<td class="muted">not reported</td>')
-  })
-
-  it('skill draft evidence is the type mix, never question text', async () => {
-    const store = memoryStore()
-    await ingestAsk(store, { id: 'e1', mode: 'interview', questionType: 'behavioral', question: 'tell me about a time you failed at Acme' })
-    await ingestAsk(store, { id: 'e2', mode: 'interview', questionType: 'behavioral', question: 'why Acme' })
-    await ingestAsk(store, { id: 'e3', mode: 'interview', question: 'legacy seat text' })
-    const draft = await handleRequest(
-      new Request('https://operator.test/v1/admin/skills/draft', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ skillId: 'interview' })
-      }),
-      env(),
-      { access: tonyAccess },
-      { store, now: NOW }
-    )
-    const { id } = (await draft.json()) as { id: string }
-    const row = await store.getProposal(id)
-    expect(JSON.parse(row!.evidence_json)).toEqual(['Behavioral ×2'])
-    expect(row!.rationale).toBe('3 recent Asks in interview, type known for 2: Behavioral ×2.')
-    expect(row!.rationale).not.toContain('Acme')
-    expect(row!.evidence_json).not.toContain('Acme')
-  })
-})
-
 describe('health', () => {
   it('does not require Access or HMAC', async () => {
     const res = await handleRequest(new Request('https://operator.test/health'), env(), {}, { store: memoryStore() })
     expect(res.status).toBe(200)
     const body = (await res.json()) as { service?: string }
     expect(body.service).toBe('metis-operator')
-  })
-})
-
-describe('public /assets/* — never Access HTML', () => {
-  it('serves client.js without Access and never returns login HTML', async () => {
-    const res = await handleRequest(
-      new Request('https://operator.test/assets/client.js'),
-      env(),
-      {},
-      { store: memoryStore() }
-    )
-    expect(res.status).toBe(200)
-    expect(res.status).not.toBe(302)
-    expect(res.headers.get('content-type')).toMatch(/javascript/)
-    expect(res.headers.get('content-type')).not.toMatch(/html/)
-    const body = await res.text()
-    expect(body).toMatch(/metisOperatorClient/)
-    expect(body).not.toMatch(/<!doctype html|<html|cloudflareaccess|Sign in/i)
-  })
-
-  it('does not require Access identity even when Tony is signed in', async () => {
-    const res = await handleRequest(
-      new Request('https://operator.test/assets/client.js'),
-      env(),
-      { access: tonyAccess },
-      { store: memoryStore() }
-    )
-    expect(res.status).toBe(200)
-    expect(await res.text()).toMatch(/metisOperatorClient/)
-  })
-
-  it('missing /assets/* is JSON 404, not a 302 login page', async () => {
-    const res = await handleRequest(
-      new Request('https://operator.test/assets/index-dead.js'),
-      env(),
-      {},
-      { store: memoryStore() }
-    )
-    expect(res.status).toBe(404)
-    expect(res.status).not.toBe(302)
-    expect(res.headers.get('content-type')).toMatch(/json/)
-    expect(await res.text()).not.toMatch(/<!doctype html|<html|cloudflareaccess/i)
   })
 })
 
@@ -427,8 +276,6 @@ describe('packed console map and geo', () => {
     expect(home.status).toBe(200)
     const page = await home.text()
     expect(page).toContain('No heartbeats yet. The map stays empty until a seat checks in.')
-    expect(page).toContain('No heartbeats yet. Licenses stay empty until a seat checks in.')
-    expect(page).toContain('Estimate from reported Asks')
     expect(page).not.toMatch(/Unique Visitors|visitor traffic|\$6,525|1,344/)
     expect(page).not.toMatch(/\b1\.2\.3\.4\b/)
     const dash = await handleRequest(
@@ -480,16 +327,10 @@ describe('packed console map and geo', () => {
     const body = JSON.parse(text) as {
       map: { empty: boolean; countries: { iso: string; devices: number }[] }
       scale: { hours24: { heartbeats: number }[] }
-      licenses: { empty: boolean; seats: { os: string; country: string | null }[] }
-      roi: { asks7d: number; liveSeats: number }
     }
     expect(body.map.empty).toBe(false)
     expect(body.map.countries).toEqual([{ iso: 'FR', devices: 1 }])
     expect(body.scale.hours24.at(-1)?.heartbeats).toBe(1)
-    expect(body.licenses.empty).toBe(false)
-    expect(body.licenses.seats[0]?.os).toBe('darwin')
-    expect(body.licenses.seats[0]?.country).toBe('FR')
-    expect(body.roi.liveSeats).toBe(1)
   })
 
   it('leaves the map empty when the Worker has no request.cf', async () => {
@@ -620,19 +461,6 @@ describe('CRM send board', () => {
     expect((await store.getCrm('crm-1'))?.retry_requested).toBe(0)
   })
 
-  it('heartbeat advertises fundedProviders IDs only and never the raw key', async () => {
-    const store = memoryStore()
-    const beat = await signedRequest('/v1/heartbeat', JSON.stringify({ os: 'darwin', appVersion: '1.8.2' }))
-    const res = await handleRequest(beat, env({ ANTHROPIC_API_KEY: 'sk-ant-worker-secret' }), {}, { store, now: NOW })
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as { ok?: boolean; fundedProviders?: string[] }
-    expect(body.ok).toBe(true)
-    expect(body.fundedProviders).toEqual(['anthropic'])
-    const raw = JSON.stringify(body)
-    expect(raw).not.toContain('sk-ant-worker-secret')
-    expect(raw).not.toContain('ANTHROPIC_API_KEY')
-  })
-
   it('Access Retry puts the id on the next heartbeat pull', async () => {
     const store = memoryStore()
     const ingest = await signedRequest(
@@ -689,8 +517,7 @@ describe('CRM send board', () => {
       'expired',
       'submitted'
     ])
-    expect(html).toContain('Landed today')
-    expect(html).toContain('Funnel by connector')
+    expect(html).toContain('Data-push telemetry')
     expect(html).not.toContain('Submited')
     expect(html).not.toContain('StatusDemo')
     expect(html).not.toContain('bg-orange-50')

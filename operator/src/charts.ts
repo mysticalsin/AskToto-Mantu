@@ -1,4 +1,5 @@
 import { WORLD_PATHS } from './world-paths'
+import { stripMapBands } from './map-bands'
 import type { MapCountry, MapDot, MixBar, SeriesPoint, TokenPoint } from './dashboard'
 
 const MONO = ['#2a2a2e', '#3f3f46', '#71717a', '#a1a1aa', '#e4e4e7']
@@ -134,7 +135,7 @@ export function choropleth(
         : variant === 'hatch' && n > 0
           ? `url(#hatch-${Math.min(4, Math.max(1, Math.ceil((n / Math.max(max, 1)) * 4)))})`
           : scaleColor(n, max)
-    land += `<path data-iso="${iso}" d="${d}" fill="${fill}" />`
+    land += `<path data-iso="${iso}" d="${stripMapBands(d)}" fill="${fill}" />`
   }
   let grid = ''
   if (variant === 'graticule') {
@@ -167,6 +168,183 @@ export function choropleth(
     </defs>
     ${grid}${land}${marks}
   </svg>`
+}
+
+const SHOEY_BLUE = '#2563EB'
+/** OpenPanel Shoey realtime land. Must stay this literal so curl /assets proof can see it. */
+export const SHOEY_LAND = '#E5E7EB'
+const SHOEY_OCEAN = '#FFFFFF'
+const SHOEY_LAND_STROKE = '#6B7280'
+const SHOEY_DOT = '#111827'
+const SHOEY_PILL = '#10B981'
+
+export function blueBars(values: number[], w = 220, h = 36): string {
+  if (!values.length || values.every((v) => v === 0)) {
+    return `<svg class="spark bars" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><line x1="0" y1="${h - 2}" x2="${w}" y2="${h - 2}" stroke="#EDEDED" /></svg>`
+  }
+  const max = Math.max(...values, 1)
+  const gap = 1.5
+  const n = values.length
+  const bw = Math.max(1.5, (w - gap * (n + 1)) / n)
+  const rects = values
+    .map((v, i) => {
+      if (v <= 0) return ''
+      const bh = Math.max(2.4, (v / max) * (h - 4))
+      const x = gap + i * (bw + gap)
+      return `<rect x="${x.toFixed(1)}" y="${(h - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${SHOEY_BLUE}" rx="0.6" />`
+    })
+    .join('')
+  return `<svg class="spark bars" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${rects}</svg>`
+}
+
+export function blueArea(
+  values: number[],
+  labels: string[] = [],
+  w = 860,
+  h = 220
+): string {
+  if (!values.length || values.every((v) => v === 0)) {
+    return `<div class="empty">No seats in this window.</div>`
+  }
+  const max = Math.max(...values, 1)
+  const step = values.length > 1 ? w / (values.length - 1) : w
+  const pts = values.map((v, i) => `${(i * step).toFixed(1)},${(h - 28 - (v / max) * (h - 40)).toFixed(1)}`)
+  const fill = `M0,${h - 24} L${pts.join(' L')} L${w},${h - 24} Z`
+  const ticks = labels
+    .map((lab, i) => {
+      if (!lab) return ''
+      const x = i * step
+      return `<text x="${x.toFixed(1)}" y="${h - 8}" class="tick" text-anchor="${i === 0 ? 'start' : i === labels.length - 1 ? 'end' : 'middle'}">${escapeXml(lab)}</text>`
+    })
+    .join('')
+  const yMax = max >= 1000 ? `${Math.round(max / 1000)}k` : String(Math.round(max))
+  return `<svg class="chart area" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <text x="8" y="14" class="tick">${escapeXml(yMax)}</text>
+    <text x="8" y="${h - 30}" class="tick">0</text>
+    <path d="${fill}" fill="url(#shoey-fill)" />
+    <path d="M${pts.join(' L')}" fill="none" stroke="${SHOEY_BLUE}" stroke-width="1.6" />
+    ${ticks}
+  </svg>`
+}
+
+type Region = { id: string; x: number; y: number; isos: string[] }
+
+const REGIONS: Region[] = [
+  { id: 'na', x: 200, y: 130, isos: ['US', 'CA', 'MX', 'GT', 'BZ', 'HN', 'SV', 'NI', 'CR', 'PA', 'CU', 'HT', 'DO', 'JM', 'PR'] },
+  { id: 'sa', x: 300, y: 340, isos: ['BR', 'AR', 'CL', 'PE', 'CO', 'VE', 'EC', 'BO', 'PY', 'UY', 'GY', 'SR'] },
+  { id: 'eu', x: 520, y: 115, isos: ['GB', 'IE', 'FR', 'DE', 'ES', 'PT', 'IT', 'NL', 'BE', 'CH', 'AT', 'PL', 'SE', 'NO', 'FI', 'DK', 'CZ', 'HU', 'RO', 'GR', 'UA', 'RU'] },
+  { id: 'af', x: 530, y: 270, isos: ['MA', 'DZ', 'TN', 'EG', 'LY', 'SD', 'NG', 'GH', 'CI', 'SN', 'KE', 'ET', 'TZ', 'UG', 'ZA', 'AO', 'CD', 'CM'] },
+  { id: 'as', x: 760, y: 155, isos: ['TR', 'SA', 'AE', 'IL', 'IQ', 'IR', 'IN', 'PK', 'BD', 'CN', 'JP', 'KR', 'TW', 'HK', 'TH', 'VN', 'ID', 'MY', 'PH', 'SG', 'MN'] },
+  { id: 'oc', x: 870, y: 380, isos: ['AU', 'NZ', 'PG', 'FJ'] }
+]
+
+/** Bklit stat-card-choropleth-01 chrome. Intensity by seat count. No sample dots. */
+export function choroplethMini(countries: MapCountry[], cls = 'stat-choro'): string {
+  const by = new Map(countries.map((c) => [c.iso, c.devices]))
+  const max = Math.max(1, ...countries.map((c) => c.devices))
+  let land = ''
+  for (const [iso, d] of Object.entries(WORLD_PATHS)) {
+    const n = by.get(iso) ?? 0
+    const fill = n ? `rgba(37,99,235,${(0.2 + (n / max) * 0.7).toFixed(2)})` : '#F3F4F6'
+    land += `<path data-iso="${iso}" d="${stripMapBands(d)}" fill="${fill}" stroke="#F5F5F5" stroke-width="0.35" />`
+  }
+  return `<svg class="${cls}" viewBox="0 0 1000 500" role="img" aria-label="Countries">
+    <rect width="1000" height="500" fill="#F8F8F8"/>
+    ${land}
+  </svg>`
+}
+
+/** Ocean + every Natural Earth country. Inlined into #map-root HTML. paintShoeyMap only restyles theme. */
+export function shoeyLandSvg(cls = 'world shoey-world'): string {
+  let land = ''
+  for (const [iso, d] of Object.entries(WORLD_PATHS)) {
+    const painted = stripMapBands(d)
+    if (!painted) continue
+    land += `<path class="world-land" data-iso="${iso}" d="${painted}" fill="${SHOEY_LAND}" stroke="${SHOEY_LAND_STROKE}" stroke-width="1.15" />`
+  }
+  return `<svg class="${cls}" viewBox="0 0 1000 500" width="1000" height="500" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Unique seats by country" data-land="${SHOEY_LAND}">
+    <rect class="world-ocean" width="1000" height="500" fill="${SHOEY_OCEAN}"/>
+    ${land}
+  </svg>`
+}
+
+export const SHOEY_LAND_SVG = shoeyLandSvg()
+
+export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world shoey-world'): string {
+  const by = new Map(countries.map((c) => [c.iso, c.devices]))
+  const empty = countries.length === 0 && dots.length === 0
+  const marks = empty
+    ? ''
+    : dots
+        .map((dot) => {
+          const p = project(dot.lat, dot.lon)
+          return `<circle class="seat-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4.2" fill="${SHOEY_DOT}" stroke="#fff" stroke-width="1.2" />`
+        })
+        .join('')
+  const cityPills = empty
+    ? ''
+    : [...groupCityDots(dots).values()]
+        .map((dot) => {
+          const p = project(dot.lat, dot.lon)
+          const label = `${dot.n} ${dot.city}`
+          const w = Math.max(72, 22 + label.length * 6.2)
+          return `<g class="city-pill" data-city="${escapeXml(dot.city)}" transform="translate(${(p.x + 8).toFixed(1)},${(p.y - 6).toFixed(1)})">
+            <rect x="0" y="-10" width="${w}" height="20" rx="10" fill="#fff" stroke="#E5E5E5"/>
+            <circle cx="8" cy="0" r="3" fill="${SHOEY_PILL}"/>
+            <text x="16" y="4" font-size="10" fill="#18181B">${escapeXml(label)}</text>
+          </g>`
+        })
+        .join('')
+  const pills = empty
+    ? ''
+    : REGIONS.map((reg) => {
+        const present = reg.isos.filter((iso) => (by.get(iso) ?? 0) > 0)
+        const seats = present.reduce((n, iso) => n + (by.get(iso) ?? 0), 0)
+        if (!seats) return ''
+        const places = new Set(
+          dots.filter((d) => present.includes(d.country)).map((d) => d.city || d.country)
+        ).size
+        const where = present.length === 1 ? countryName(present[0]) : `${present.length} countries`
+        const label = `${seats} ${where}, ${places} ${places === 1 ? 'place' : 'places'}`
+        const w = Math.max(110, 36 + label.length * 6.1)
+        return `<g class="pill-g" data-region-pill="${escapeXml(reg.id)}" transform="translate(${reg.x},${reg.y})">
+          <rect x="0" y="-13" width="${w}" height="26" rx="13" fill="#fff" stroke="#E5E5E5"/>
+          <circle cx="12" cy="0" r="4" fill="${SHOEY_PILL}"/>
+          <text x="22" y="4" font-size="11" font-weight="650" fill="#18181B">${escapeXml(label)}</text>
+        </g>`
+      }).join('')
+  const caption = empty
+    ? `<div class="empty map-empty">No heartbeats yet. The map stays empty until a seat checks in. Empty is an empty world, not sample dots.</div>`
+    : ''
+  const svg = shoeyLandSvg(cls).replace('</svg>', `${marks}${pills}${cityPills}</svg>`)
+  return `${caption}${svg}`
+}
+
+function groupCityDots(dots: MapDot[]): Map<string, { city: string; country: string; lat: number; lon: number; n: number }> {
+  const groups = new Map<string, { city: string; country: string; lat: number; lon: number; n: number }>()
+  for (const d of dots) {
+    if (!d.city) continue
+    const key = `${d.country}:${d.city}`
+    const prev = groups.get(key)
+    if (prev) prev.n += 1
+    else groups.set(key, { city: d.city, country: d.country, lat: d.lat, lon: d.lon, n: 1 })
+  }
+  return groups
+}
+
+function countryName(iso: string): string {
+  const names: Record<string, string> = {
+    US: 'United States',
+    CA: 'Canada',
+    BR: 'Brazil',
+    GB: 'United Kingdom',
+    FR: 'France',
+    DE: 'Germany',
+    AU: 'Australia',
+    JP: 'Japan',
+    IN: 'India'
+  }
+  return names[iso] || iso
 }
 
 function escapeXml(s: string): string {

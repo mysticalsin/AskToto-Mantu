@@ -1,5 +1,16 @@
 import { normalizeCrmRow, type CrmSendRow } from './crm'
-import type { AskRow, OperatorStore, PackRow, ProposalRow, PulseRow, SeatRow } from './store'
+import type {
+  AskRow,
+  EventRow,
+  IssuedLicenseRow,
+  OperatorStore,
+  PackRow,
+  ProposalRow,
+  PulseRow,
+  SeatRow,
+  VaultKeyRow
+} from './store'
+import { toVaultMeta } from './store'
 
 interface D1Stmt {
   bind(...values: unknown[]): D1Stmt
@@ -14,19 +25,6 @@ export interface D1DatabaseLike {
 
 const NONCE_TTL_MS = 10 * 60 * 1000
 const PULSE_TTL_MS = 8 * 24 * 60 * 60 * 1000
-
-/** Isolate-wide: once the live D1 proves it lacks asks.question_type, stop paying a failed insert per Ask. */
-let askInsertLegacy = false
-
-export function resetD1SchemaProbeForTests(): void {
-  askInsertLegacy = false
-}
-
-/** SQLite / D1 phrasing for a column that is not in the table: "has no column named X" or "no such column: X". */
-export function isMissingColumnError(e: unknown, column: string): boolean {
-  const msg = e instanceof Error ? e.message : String(e)
-  return new RegExp(`(no such column|has no column named)[:\\s]+${column}\\b`, 'i').test(msg)
-}
 
 export function d1Store(db: D1DatabaseLike): OperatorStore {
   return {
@@ -57,23 +55,28 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
     },
     async upsertSeat(row) {
       const prev = await db
-        .prepare('SELECT first_seen, country, city, lat, lon, last_index_at FROM seats WHERE device_id = ?')
+        .prepare('SELECT first_seen, approval FROM seats WHERE device_id = ?')
         .bind(row.device_id)
-        .first<Pick<SeatRow, 'first_seen' | 'country' | 'city' | 'lat' | 'lon' | 'last_index_at'>>()
+        .first<Pick<SeatRow, 'first_seen' | 'approval'>>()
       await db
         .prepare(
-          `INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen, country, city, lat, lon, last_index_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen, country, city, region, lat, lon, last_index_at, hostname, sso_email, license, approval, license_jti)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(device_id) DO UPDATE SET
              seat_hash = excluded.seat_hash,
-             os = excluded.os,
-             app_version = excluded.app_version,
+             os = CASE WHEN excluded.os IS NULL OR excluded.os = '' OR excluded.os = 'unknown' THEN seats.os ELSE excluded.os END,
+             app_version = CASE WHEN excluded.app_version IS NULL OR excluded.app_version = '' THEN seats.app_version ELSE excluded.app_version END,
              last_seen = excluded.last_seen,
              country = COALESCE(excluded.country, seats.country),
              city = COALESCE(excluded.city, seats.city),
+             region = COALESCE(excluded.region, seats.region),
              lat = COALESCE(excluded.lat, seats.lat),
              lon = COALESCE(excluded.lon, seats.lon),
-             last_index_at = COALESCE(excluded.last_index_at, seats.last_index_at)`
+             last_index_at = COALESCE(excluded.last_index_at, seats.last_index_at),
+             hostname = COALESCE(excluded.hostname, seats.hostname),
+             sso_email = COALESCE(excluded.sso_email, seats.sso_email),
+             license = COALESCE(excluded.license, seats.license),
+             license_jti = COALESCE(excluded.license_jti, seats.license_jti)`
         )
         .bind(
           row.device_id,
@@ -84,61 +87,25 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
           row.last_seen,
           row.country,
           row.city,
+          row.region ?? null,
           row.lat,
           row.lon,
-          row.last_index_at
+          row.last_index_at,
+          row.hostname,
+          row.sso_email,
+          row.license,
+          row.approval || prev?.approval || 'pending',
+          row.license_jti ?? null
         )
         .run()
     },
+    async updateSeatApproval(deviceId, approval) {
+      const existing = await db.prepare('SELECT device_id FROM seats WHERE device_id = ?').bind(deviceId).first<{ device_id: string }>()
+      if (!existing) return false
+      await db.prepare('UPDATE seats SET approval = ? WHERE device_id = ?').bind(approval, deviceId).run()
+      return true
+    },
     async insertAsk(row) {
-      const base = [
-        row.id,
-        row.device_id,
-        row.ts,
-        row.mode,
-        row.skill_id,
-        row.skill_version,
-        row.provider,
-        row.model,
-        row.ttft_ms,
-        row.total_ms,
-        row.input_tokens,
-        row.output_tokens,
-        row.cache_read,
-        row.cache_write,
-        row.cache_uncached,
-        row.cache_status,
-        row.cache_ttl,
-        row.outcome,
-        row.rating,
-        row.prompt_cipher,
-        row.prompt_iv,
-        row.preview
-      ]
-      // Fail-safe for a live D1 that has not had schema-alter.sql applied yet: the first insert that
-      // trips "no such column" flips this isolate to the legacy statement, so an Ask is never dropped
-      // because the fleet store is one migration behind. The type is lost for that row (null), which the
-      // dashboard reports as coverage, never as a silent 100%.
-      if (!askInsertLegacy) {
-        try {
-          await db
-            .prepare(
-              `INSERT OR REPLACE INTO asks (
-                id, device_id, ts, mode, skill_id, skill_version, provider, model,
-                ttft_ms, total_ms, input_tokens, output_tokens, cache_read, cache_write,
-                cache_uncached, cache_status, cache_ttl, outcome, rating, prompt_cipher, prompt_iv, preview,
-                question_type
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-            )
-            .bind(...base, row.question_type)
-            .run()
-          return
-        } catch (e) {
-          if (!isMissingColumnError(e, 'question_type')) throw e
-          askInsertLegacy = true
-          console.warn('[operator] asks.question_type is missing on this D1. Apply operator/schema-alter.sql. Asks are stored without a type until then.')
-        }
-      }
       await db
         .prepare(
           `INSERT OR REPLACE INTO asks (
@@ -147,7 +114,30 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
             cache_uncached, cache_status, cache_ttl, outcome, rating, prompt_cipher, prompt_iv, preview
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
-        .bind(...base)
+        .bind(
+          row.id,
+          row.device_id,
+          row.ts,
+          row.mode,
+          row.skill_id,
+          row.skill_version,
+          row.provider,
+          row.model,
+          row.ttft_ms,
+          row.total_ms,
+          row.input_tokens,
+          row.output_tokens,
+          row.cache_read,
+          row.cache_write,
+          row.cache_uncached,
+          row.cache_status,
+          row.cache_ttl,
+          row.outcome,
+          row.rating,
+          row.prompt_cipher,
+          row.prompt_iv,
+          row.preview
+        )
         .run()
     },
     async updateAskRating(id, rating) {
@@ -167,12 +157,20 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
     },
     async listSeats() {
       const r = await db.prepare('SELECT * FROM seats').all<SeatRow>()
-      return r.results
+      return r.results.map((s) => ({
+        ...s,
+        hostname: s.hostname ?? null,
+        sso_email: s.sso_email ?? null,
+        license: s.license ?? null,
+        approval: s.approval ?? null,
+        license_jti: s.license_jti ?? null,
+        region: s.region ?? null
+      }))
     },
     async insertPulse(row) {
       await db
-        .prepare('INSERT OR REPLACE INTO pulses (id, device_id, ts, kind, country, city) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(row.id, row.device_id, row.ts, row.kind, row.country, row.city)
+        .prepare('INSERT OR REPLACE INTO pulses (id, device_id, ts, kind, country, city, region) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .bind(row.id, row.device_id, row.ts, row.kind, row.country, row.city, row.region ?? null)
         .run()
       await db.prepare('DELETE FROM pulses WHERE ts < ?').bind(row.ts - PULSE_TTL_MS).run()
     },
@@ -305,6 +303,112 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         .prepare('SELECT ts, actor, action, ask_id, detail FROM audit ORDER BY ts DESC LIMIT ?')
         .bind(limit)
         .all<{ ts: number; actor: string; action: string; ask_id: string | null; detail: string }>()
+      return r.results
+    },
+    async insertEvent(row) {
+      await db
+        .prepare(
+          'INSERT OR REPLACE INTO events (id, ts, kind, actor, device_id, country, detail) VALUES (?, ?, ?, ?, ?, ?, ?)'
+        )
+        .bind(row.id, row.ts, row.kind, row.actor, row.device_id, row.country, row.detail)
+        .run()
+    },
+    async listEvents(limit) {
+      const r = await db
+        .prepare('SELECT id, ts, kind, actor, device_id, country, detail FROM events ORDER BY ts DESC LIMIT ?')
+        .bind(limit)
+        .all<EventRow>()
+      return r.results
+    },
+    async listVaultMeta() {
+      const r = await db
+        .prepare(
+          `SELECT id, provider, label, last4, cipher, iv, status, created_at, created_by, rotated_at, revoked_at
+           FROM vault_keys ORDER BY created_at DESC`
+        )
+        .all<VaultKeyRow>()
+      return r.results.map(toVaultMeta)
+    },
+    async listVaultRows() {
+      const r = await db
+        .prepare(
+          `SELECT id, provider, label, last4, cipher, iv, status, created_at, created_by, rotated_at, revoked_at
+           FROM vault_keys ORDER BY created_at DESC`
+        )
+        .all<VaultKeyRow>()
+      return r.results
+    },
+    async getVaultKey(id) {
+      return (
+        (await db
+          .prepare(
+            `SELECT id, provider, label, last4, cipher, iv, status, created_at, created_by, rotated_at, revoked_at
+             FROM vault_keys WHERE id = ?`
+          )
+          .bind(id)
+          .first<VaultKeyRow>()) ?? null
+      )
+    },
+    async putVaultKey(row) {
+      await db
+        .prepare(
+          `INSERT OR REPLACE INTO vault_keys (
+            id, provider, label, last4, cipher, iv, status, created_at, created_by, rotated_at, revoked_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          row.id,
+          row.provider,
+          row.label,
+          row.last4,
+          row.cipher,
+          row.iv,
+          row.status,
+          row.created_at,
+          row.created_by,
+          row.rotated_at,
+          row.revoked_at
+        )
+        .run()
+    },
+    async putIssuedLicense(row) {
+      await db
+        .prepare(
+          `INSERT OR REPLACE INTO issued_licenses (
+            jti, last4, key_hash, days, iat, exp, revoked, created_at, created_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          row.jti,
+          row.last4,
+          row.key_hash,
+          row.days,
+          row.iat,
+          row.exp,
+          row.revoked,
+          row.created_at,
+          row.created_by
+        )
+        .run()
+    },
+    async getIssuedLicense(jti) {
+      return (
+        (await db
+          .prepare(
+            `SELECT jti, last4, key_hash, days, iat, exp, revoked, created_at, created_by
+             FROM issued_licenses WHERE jti = ?`
+          )
+          .bind(jti)
+          .first<IssuedLicenseRow>()) ?? null
+      )
+    },
+    async listIssuedLicenses() {
+      const r = await db
+        .prepare(
+          `SELECT jti, last4, key_hash, days, iat, exp, revoked, created_at, created_by
+           FROM issued_licenses ORDER BY created_at DESC`
+        )
+        .all<IssuedLicenseRow>()
       return r.results
     }
   }

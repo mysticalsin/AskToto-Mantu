@@ -1,16 +1,50 @@
-import { ADMIN_EMAILS, adminIdentity, unauthorized, type AccessCtx } from './access'
+import { sanitizeOperatorHostname, sanitizeOperatorSsoEmail } from '../../src/shared/operator'
+import {
+  ADMIN_EMAILS,
+  clearSessionCookie,
+  accessMisconfigured,
+  isAdminApiPath,
+  isConsolePath,
+  redirectToAccess,
+  resolveAdminIdentity,
+  mintSessionToken,
+  sessionCookieHeader,
+  unauthorized,
+  type AccessCtx
+} from './access'
+import { handleCloudflareCallback, redirectToCloudflareLogin } from './cloudflare-connect'
+import { missingCloudflareOverview, pullCloudflareOverview, type CloudflareOverview } from './cloudflare'
 import { asCrmStatus } from './crm'
 import { decryptPrompt, encryptPrompt, sha256Hex, signSkillPack } from './crypto'
 import { buildDashboard } from './dashboard'
 import { geoFromRequest, type CfGeo } from './geo'
 import { verifyIngestHmac } from './hmac'
 import { d1Store, type D1DatabaseLike } from './d1'
+import {
+  activeCloudflareAccount,
+  fundedProviders,
+  listKeysJson,
+  revokeVaultKey,
+  rotateVaultKey,
+  writeVaultKey
+} from './keys'
+import {
+  licenseFromIngest,
+  LICENSES_EMPTY,
+  parseApproval,
+  parseLicenseId,
+  seatAuthorizedForKeys
+} from './fleet'
+import {
+  generateOperatorLicense,
+  OPERATOR_LICENSE_MAX,
+  parseOperatorLicenseDays
+} from '../../src/shared/operator-license'
+import { looksLikeSecret } from './redact'
 import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './store'
-import { renderConsole } from './ui'
-import { fundedProvidersFromEnv } from './funded'
-import { handleOperatorAsk } from './ask'
 import { isPublicAssetPath, publicAssetResponse } from './assets'
-import { aggregateQuestionTypes, normalizeQuestionType, QUESTION_TYPE_LABELS } from '../../src/shared/question-type'
+import { renderConsole } from './ui'
+import { handleUse } from './use'
 
 export interface Env {
   DB?: D1DatabaseLike
@@ -18,20 +52,15 @@ export interface Env {
   OPERATOR_PROMPT_KEY: string
   OPERATOR_SKILL_PRIVATE_KEY: string
   OPERATOR_SKILL_PUBLIC_KEY?: string
+  OPERATOR_VAULT_KEY?: string
   TEAM_DOMAIN?: string
   POLICY_AUD?: string
-  ANTHROPIC_API_KEY?: string
-  OPENAI_API_KEY?: string
-  NVIDIA_API_KEY?: string
-  DEEPSEEK_API_KEY?: string
-  DASHSCOPE_API_KEY?: string
-  MINIMAX_API_KEY?: string
-  KIMI_API_KEY?: string
-  OPENROUTER_API_KEY?: string
-  GROQ_API_KEY?: string
-  MISTRAL_API_KEY?: string
-  XAI_API_KEY?: string
-  GEMINI_API_KEY?: string
+  CF_OAUTH_CLIENT_ID?: string
+  CF_OAUTH_CLIENT_SECRET?: string
+  CF_OAUTH_AUTHORIZE_URL?: string
+  CF_OAUTH_TOKEN_URL?: string
+  CF_OAUTH_SCOPES?: string
+  CF_ACCOUNT_ID?: string
 }
 
 export interface HandleOpts {
@@ -39,7 +68,8 @@ export interface HandleOpts {
   now?: number
   access?: AccessCtx['access']
   geo?: CfGeo
-  fetchImpl?: typeof fetch
+  cfFetch?: typeof fetch
+  providerFetch?: typeof fetch
 }
 
 const RATE_WINDOW_MS = 60_000
@@ -56,27 +86,8 @@ function html(body: string): Response {
   return new Response(body, { headers: { 'content-type': 'text/html; charset=utf-8' } })
 }
 
-function isAdminPath(pathname: string): boolean {
-  return pathname === '/' || pathname.startsWith('/v1/admin')
-}
-
-/**
- * What the Asks table shows without a Reveal: mode plus the type label. Never a word of the question.
- * The `_question` parameter exists so nobody "helpfully" wires text in later without touching this line.
- */
-function redactedPreview(_question: string | undefined, mode: string | undefined, questionType: string | null): string {
-  const head = mode ? `${mode} ask` : 'Ask'
-  if (!questionType || questionType === 'unknown') return head
-  return `${head} · ${QUESTION_TYPE_LABELS[normalizeQuestionType(questionType)]}`
-}
-
-/**
- * Wire guard for the type field. Absent = legacy seat (null). Present = normalized to the closed taxonomy,
- * so a tampered client cannot store free text through this column.
- */
-function questionTypeFromBody(body: Record<string, unknown>): string | null {
-  if (!('questionType' in body)) return null
-  return normalizeQuestionType(body.questionType)
+function redactedPreview(_question: string | undefined, mode: string | undefined): string {
+  return mode ? `${mode} ask` : 'Ask'
 }
 
 export async function handleRequest(
@@ -98,23 +109,42 @@ export async function handleRequest(
     })
   }
 
-  // /assets/* is the packed client JS. Access must never wrap it — a 302 login HTML page is not a
-  // bundle. HMAC paths stay HMAC. Admin HTML stays Access.
   if (isPublicAssetPath(url.pathname)) {
-    return publicAssetResponse(url.pathname)
+    return publicAssetResponse(url.pathname) ?? json({ ok: false, error: 'not found' }, 404)
   }
 
-  if (isAdminPath(url.pathname)) {
-    const ident = await adminIdentity(request, accessCtx, env)
-    if (!ident) return unauthorized()
-    return adminRoute(request, url, env, store, ident.email, now)
+  if (url.pathname === '/logout' && request.method === 'POST') {
+    return new Response(null, { status: 303, headers: { Location: '/', 'Set-Cookie': clearSessionCookie() } })
+  }
+
+  if (isConsolePath(url.pathname) || isAdminApiPath(url.pathname)) {
+    const ident = await resolveAdminIdentity(request, accessCtx, env, now)
+    if (ident.status === 'misconfigured') return accessMisconfigured(ident.error)
+    if (ident.status === 'ok') {
+      const res = await adminRoute(request, url, env, store, ident.email, now, opts)
+      const secret = env.OPERATOR_PROMPT_KEY?.trim()
+      if (!secret) return res
+      const token = await mintSessionToken(ident.email, now, secret)
+      const headers = new Headers(res.headers)
+      headers.append('Set-Cookie', sessionCookieHeader(token))
+      headers.set('X-Metis-Session', token)
+      if (url.pathname === '/session') {
+        headers.set('content-type', 'application/json; charset=utf-8')
+        return new Response(JSON.stringify({ ok: true, session: token }), { status: 200, headers })
+      }
+      return new Response(res.body, { status: res.status, headers })
+    }
+    if (ident.status === 'denied' || isAdminApiPath(url.pathname) || request.method !== 'GET') {
+      return unauthorized()
+    }
+    return redirectToAccess(request, env)
   }
 
   if (
     url.pathname === '/v1/ingest' ||
     url.pathname === '/v1/heartbeat' ||
     url.pathname === '/v1/skills/manifest' ||
-    url.pathname === '/v1/ask'
+    url.pathname === '/v1/use'
   ) {
     const bodyText = request.method === 'GET' ? '' : await request.text()
     const hmac = await verifyIngestHmac(request, bodyText, env.OPERATOR_INGEST_SECRET, now, (n) => store.takeNonce(n, now))
@@ -123,9 +153,12 @@ export async function handleRequest(
       return json({ ok: false, error: 'rate limited' }, 429)
     }
     const geo = opts.geo ?? geoFromRequest(request)
-    if (url.pathname === '/v1/heartbeat') return heartbeat(store, hmac.deviceId, bodyText, now, geo, env)
+    if (url.pathname === '/v1/heartbeat') return heartbeat(store, hmac.deviceId, bodyText, now, geo)
     if (url.pathname === '/v1/skills/manifest') return manifest(store)
-    if (url.pathname === '/v1/ask') return handleOperatorAsk(bodyText, env as unknown as Record<string, unknown>, opts.fetchImpl ?? fetch)
+    if (url.pathname === '/v1/use') {
+      if (request.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405)
+      return handleUse(store, env, hmac.deviceId, bodyText, now, opts.providerFetch ?? opts.cfFetch ?? fetch)
+    }
     return ingest(store, env, hmac.deviceId, bodyText, now, geo)
   }
 
@@ -138,14 +171,50 @@ async function adminRoute(
   env: Env,
   store: OperatorStore,
   email: string,
-  now: number
+  now: number,
+  opts: HandleOpts = {}
 ): Promise<Response> {
-  if (url.pathname === '/' && request.method === 'GET') {
-    const dash = await buildDashboard(store, email, now)
+  if (isConsolePath(url.pathname) && request.method === 'GET') {
+    if (url.pathname === '/session') return json({ ok: true })
+    if (url.pathname === '/cloudflare/connect') return redirectToCloudflareLogin(request, env)
+    if (url.pathname === '/cloudflare/callback') {
+      return handleCloudflareCallback(request, env, store, email, now, opts.cfFetch ?? fetch)
+    }
+    const dash = await buildDashboard(store, email, now, keyFlags(env), await cloudflareForDashboard(store, env, opts, now))
     return html(renderConsole(dash))
   }
   if (url.pathname === '/v1/admin/dashboard' && request.method === 'GET') {
-    return json(stripSecrets(await buildDashboard(store, email, now)))
+    return json(
+      stripSecrets(
+        await buildDashboard(store, email, now, keyFlags(env), await cloudflareForDashboard(store, env, opts, now))
+      )
+    )
+  }
+  if (url.pathname === '/v1/admin/realtime.geo.json' && request.method === 'GET') {
+    const dash = await buildDashboard(store, email, now, keyFlags(env), await cloudflareForDashboard(store, env, opts, now))
+    return json({ ok: true, geo: dash.geo, regions: dash.geoRegions })
+  }
+  if (url.pathname === '/v1/admin/keys' && request.method === 'GET') {
+    return json(stripSecrets({ ok: true, ...(await listKeysJson(store, keyFlags(env))) }))
+  }
+  if (url.pathname === '/v1/admin/keys' && request.method === 'POST') {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
+    const written = await writeVaultKey(store, env, email, now, body)
+    if (!written.ok) return json({ ok: false, error: written.error }, written.status)
+    return json(written)
+  }
+  const rotate = /^\/v1\/admin\/keys\/([^/]+)\/rotate$/.exec(url.pathname)
+  if (rotate && request.method === 'POST') {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
+    const out = await rotateVaultKey(store, env, email, now, rotate[1], body)
+    if (!out.ok) return json({ ok: false, error: out.error }, out.status)
+    return json(out)
+  }
+  const revoke = /^\/v1\/admin\/keys\/([^/]+)\/revoke$/.exec(url.pathname)
+  if (revoke && request.method === 'POST') {
+    const out = await revokeVaultKey(store, email, now, revoke[1])
+    if (!out.ok) return json({ ok: false, error: out.error }, out.status)
+    return json(out)
   }
   if (url.pathname === '/v1/admin/summary' && request.method === 'GET') {
     const dash = await buildDashboard(store, email, now)
@@ -181,11 +250,10 @@ async function adminRoute(
     const body = await request.json().catch(() => ({})) as { skillId?: string }
     const skillId = body.skillId || 'general'
     const asks = (await store.listAsks(80)).filter((a) => a.mode === skillId || a.skill_id === skillId)
-    // Evidence is the question-type mix of recent Asks in this skill: counts per closed label, never
-    // question text (text needs a Reveal, which is audited). A legacy seat with no type is counted in
-    // `total` so the rationale states its own coverage.
-    const mix = aggregateQuestionTypes(asks.map((a) => a.question_type))
-    const evidence = mix.bars.slice(0, 8).map((b) => `${b.label} ×${b.count}`)
+    const evidence = asks
+      .map((a) => a.preview || '')
+      .filter(Boolean)
+      .slice(0, 8)
     const fromVersion = asks.find((a) => a.skill_version)?.skill_version || '1.1.0'
     const id = crypto.randomUUID()
     await store.putProposal({
@@ -194,8 +262,8 @@ async function adminRoute(
       from_version: fromVersion,
       evidence_json: JSON.stringify(evidence),
       diff: `# unified diff against ${skillId} v${fromVersion}\n# Edit, then Approve. Push is a separate click.\n`,
-      rationale: asks.length
-        ? `${asks.length} recent Asks in ${skillId}, type known for ${mix.classified}: ${evidence.join(', ') || 'none typed yet'}.`
+      rationale: evidence.length
+        ? `Clustered ${evidence.length} recent Asks in ${skillId}.`
         : `No recent Asks in ${skillId} yet. Draft is a blank edit.`,
       status: 'pending',
       created_by: email,
@@ -272,6 +340,73 @@ async function adminRoute(
     await store.audit(crypto.randomUUID(), now, email, 'crm-retry', null, row.id)
     return json({ ok: true, autoSend: false })
   }
+  if (url.pathname === '/v1/admin/licenses/generate' && request.method === 'POST') {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
+    const days = parseOperatorLicenseDays(body.days)
+    if (!days) return json({ ok: false, error: 'days must be 1-365' }, 400)
+    const secret = env.OPERATOR_INGEST_SECRET?.trim() || ''
+    if (!secret) return json({ ok: false, error: 'Operator ingest secret missing' }, 503)
+    const minted = await generateOperatorLicense(secret, { days, now })
+    if (minted.token.length > OPERATOR_LICENSE_MAX) {
+      return json({ ok: false, error: 'generated license too long' }, 500)
+    }
+    await store.putIssuedLicense({
+      jti: minted.claims.jti,
+      last4: minted.last4,
+      key_hash: await sha256Hex(minted.token),
+      days,
+      iat: minted.claims.iat,
+      exp: minted.claims.exp,
+      revoked: 0,
+      created_at: now,
+      created_by: email
+    })
+    await store.audit(crypto.randomUUID(), now, email, 'generate-license', null, `${minted.last4} ${days}d`)
+    return json({
+      ok: true,
+      license: minted.token,
+      jti: minted.claims.jti,
+      last4: minted.last4,
+      days,
+      iat: minted.claims.iat,
+      exp: minted.claims.exp
+    })
+  }
+  if (url.pathname === '/v1/admin/licenses/issued' && request.method === 'GET') {
+    const rows = (await store.listIssuedLicenses()).map((r) => ({
+      jti: r.jti,
+      last4: r.last4,
+      days: r.days,
+      exp: r.exp,
+      revoked: r.revoked,
+      createdAt: r.created_at
+    }))
+    return json(stripSecrets({ ok: true, issued: rows }))
+  }
+  if (url.pathname === '/v1/admin/licenses' && request.method === 'GET') {
+    const dash = await buildDashboard(store, email, now)
+    if (dash.licenses.empty) return json({ ok: false, error: LICENSES_EMPTY, empty: true }, 404)
+    return json(stripSecrets({ ok: true, licenses: dash.licenses.rows }))
+  }
+  if (url.pathname === '/v1/admin/licenses' && request.method === 'POST') {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
+    const deviceId = typeof body.deviceId === 'string' ? body.deviceId.trim() : ''
+    const approval = parseApproval(body.approval)
+    if (!deviceId || !approval) return json({ ok: false, error: 'deviceId and approval required' }, 400)
+    const ok = await store.updateSeatApproval(deviceId, approval)
+    if (!ok) return json({ ok: false, error: 'seat not found' }, 404)
+    await store.audit(crypto.randomUUID(), now, email, approval === 'approved' ? 'approve-seat' : 'revoke-seat', null, deviceId)
+    return json({ ok: true, deviceId, approval })
+  }
+  const licenseAct = /^\/v1\/admin\/licenses\/([^/]+)\/(approve|revoke)$/.exec(url.pathname)
+  if (licenseAct && request.method === 'POST') {
+    const deviceId = decodeURIComponent(licenseAct[1])
+    const approval = licenseAct[2] === 'approve' ? 'approved' : 'revoked'
+    const ok = await store.updateSeatApproval(deviceId, approval)
+    if (!ok) return json({ ok: false, error: 'seat not found' }, 404)
+    await store.audit(crypto.randomUUID(), now, email, approval === 'approved' ? 'approve-seat' : 'revoke-seat', null, deviceId)
+    return json({ ok: true, deviceId, approval })
+  }
   return json({ ok: false, error: 'not found' }, 404)
 }
 
@@ -294,25 +429,40 @@ async function heartbeat(
   deviceId: string,
   bodyText: string,
   now: number,
-  geo: CfGeo,
-  env: Env
+  geo: CfGeo
 ): Promise<Response> {
   const body = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {}
-  await store.upsertSeat(seatFromBody(deviceId, body, now, geo))
+  const seat = seatFromBody(deviceId, body, now, geo)
+  await store.upsertSeat(seat)
+  const stored = (await store.listSeats()).find((s) => s.device_id === deviceId) ?? seat
+  const pulseId = crypto.randomUUID()
   await store.insertPulse({
-    id: crypto.randomUUID(),
+    id: pulseId,
     device_id: deviceId,
     ts: now,
     kind: 'heartbeat',
     country: geo.country,
-    city: geo.city
+    city: geo.city,
+    region: geo.region ?? null
+  })
+  await store.insertEvent({
+    id: pulseId,
+    ts: now,
+    kind: 'heartbeat',
+    actor: seat.sso_email,
+    device_id: deviceId,
+    country: geo.country,
+    detail: safeEventDetail(
+      [seat.os, geo.city, typeof body.path === 'string' ? body.path : '/'].filter(Boolean).join(' ')
+    )
   })
   await ingestCrmList(store, deviceId, body, now)
   const retries = await store.listCrmRetries(deviceId)
   return json({
     ok: true,
     retry: retries.map((r) => r.id),
-    fundedProviders: fundedProvidersFromEnv(env as unknown as Record<string, unknown>)
+    fundedProviders: await fundedProviders(store, stored, now),
+    approved: await seatAuthorizedForKeys(store, stored, now)
   })
 }
 
@@ -328,11 +478,46 @@ async function ingest(
   const id = String(body.id || crypto.randomUUID())
   if (body.event === 'rating') {
     await store.updateAskRating(id, String(body.rating || ''))
+    const seat = seatFromBody(deviceId, body, now, geo)
+    await store.insertEvent({
+      id: crypto.randomUUID(),
+      ts: now,
+      kind: 'rating',
+      actor: seat.sso_email,
+      device_id: deviceId,
+      country: geo.country,
+      detail: safeEventDetail(String(body.rating || 'rating'))
+    })
     return json({ ok: true })
+  }
+  if (body.event === 'listen' || body.event === 'recap') {
+    const seat = seatFromBody(deviceId, body, now, geo)
+    const minutes = num(body.minutes)
+    await store.insertEvent({
+      id,
+      ts: now,
+      kind: body.event,
+      actor: seat.sso_email,
+      device_id: deviceId,
+      country: geo.country,
+      detail: safeEventDetail(minutes != null ? `${minutes}m` : String(body.event))
+    })
+    await store.upsertSeat(seat)
+    return json({ ok: true, id })
   }
   if (body.event === 'crm') {
     if (body.confidential === true) return json({ ok: true, id, ingested: false })
     await upsertCrmEvent(store, deviceId, body, now)
+    const seat = seatFromBody(deviceId, body, now, geo)
+    await store.insertEvent({
+      id: crypto.randomUUID(),
+      ts: now,
+      kind: 'crm',
+      actor: seat.sso_email,
+      device_id: deviceId,
+      country: geo.country,
+      detail: safeEventDetail(String(body.status || body.connector || 'crm'))
+    })
     return json({ ok: true, id })
   }
   let cipher: string | null = null
@@ -343,7 +528,6 @@ async function ingest(
     cipher = enc.cipher
     iv = enc.iv
   }
-  const questionType = questionTypeFromBody(body)
   const row: AskRow = {
     id,
     device_id: deviceId,
@@ -366,19 +550,30 @@ async function ingest(
     rating: str(body.rating),
     prompt_cipher: cipher,
     prompt_iv: iv,
-    preview: redactedPreview(question, str(body.mode) ?? undefined, questionType),
-    question_type: questionType
+    preview: redactedPreview(question, str(body.mode) ?? undefined)
   }
   await store.insertAsk(row)
+  const pulseId = crypto.randomUUID()
   await store.insertPulse({
-    id: crypto.randomUUID(),
+    id: pulseId,
     device_id: deviceId,
     ts: row.ts,
     kind: 'ask',
     country: geo.country,
-    city: geo.city
+    city: geo.city,
+    region: geo.region ?? null
   })
-  await store.upsertSeat(seatFromBody(deviceId, body, now, geo))
+  const seat = seatFromBody(deviceId, body, now, geo)
+  await store.upsertSeat(seat)
+  await store.insertEvent({
+    id: pulseId,
+    ts: row.ts,
+    kind: 'ask',
+    actor: seat.sso_email,
+    device_id: deviceId,
+    country: geo.country,
+    detail: safeEventDetail(row.mode || row.cache_status || 'ask')
+  })
   return json({ ok: true, id })
 }
 
@@ -403,15 +598,57 @@ function seatFromBody(deviceId: string, body: Record<string, unknown>, now: numb
   return {
     device_id: deviceId,
     seat_hash: String(body.seatHash || deviceId),
-    os: String(body.os || 'unknown'),
-    app_version: String(body.appVersion || ''),
+    os: typeof body.os === 'string' && body.os.trim() && body.os !== 'unknown' ? body.os.trim() : '',
+    app_version: typeof body.appVersion === 'string' ? body.appVersion.trim() : '',
     first_seen: now,
     last_seen: now,
     country: geo.country,
     city: geo.city,
+    region: geo.region ?? null,
     lat: geo.lat,
     lon: geo.lon,
-    last_index_at: lastIndexAt(body)
+    last_index_at: lastIndexAt(body),
+    hostname: sanitizeOperatorHostname(body.hostname),
+    sso_email: sanitizeOperatorSsoEmail(body.ssoEmail ?? body.email),
+    license: licenseFromIngest(body),
+    license_jti: parseLicenseId(body.licenseId)
+  }
+}
+
+function safeEventDetail(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const s = raw.trim().slice(0, 48)
+  if (!s || looksLikeSecret(s)) return null
+  return s
+}
+
+function keyFlags(env: Env) {
+  return {
+    ingestBound: Boolean(env.OPERATOR_INGEST_SECRET),
+    promptBound: Boolean(env.OPERATOR_PROMPT_KEY),
+    skillBound: Boolean(env.OPERATOR_SKILL_PRIVATE_KEY),
+    vaultBound: Boolean(env.OPERATOR_VAULT_KEY),
+    oauthBound: Boolean((env.CF_OAUTH_CLIENT_ID || '').trim() && (env.CF_OAUTH_CLIENT_SECRET || '').trim())
+  }
+}
+
+async function cloudflareForDashboard(
+  store: OperatorStore,
+  env: Env,
+  opts: HandleOpts,
+  now: number
+): Promise<CloudflareOverview> {
+  const creds = await activeCloudflareAccount(store, env.OPERATOR_VAULT_KEY)
+  if (!creds) return missingCloudflareOverview()
+  try {
+    return await pullCloudflareOverview({
+      accountId: creds.accountId,
+      token: creds.token,
+      now,
+      fetchImpl: opts.cfFetch
+    })
+  } catch {
+    return { ...missingCloudflareOverview(), connected: true, error: 'Cloudflare pull failed.' }
   }
 }
 
@@ -484,7 +721,19 @@ async function ingestCrmList(
 function stripSecrets<T>(data: T): T {
   return JSON.parse(
     JSON.stringify(data, (key, value) => {
-      if (key === 'prompt_cipher' || key === 'prompt_iv' || key === 'question' || key === 'ip') return undefined
+      if (
+        key === 'prompt_cipher' ||
+        key === 'prompt_iv' ||
+        key === 'question' ||
+        key === 'ip' ||
+        key === 'cipher' ||
+        key === 'iv' ||
+        key === 'secret' ||
+        key === 'token' ||
+        key === 'grant'
+      ) {
+        return undefined
+      }
       return value
     })
   ) as T

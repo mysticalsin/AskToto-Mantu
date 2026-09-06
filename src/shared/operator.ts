@@ -17,10 +17,24 @@ export interface StreamCacheUsage {
   cacheTtl?: CacheTtl
 }
 
+/** Live Operator Worker. Used when Settings has no operatorUrl yet. */
+export const DEFAULT_OPERATOR_URL = 'https://metis-operator.tony-walteur.workers.dev'
+
+export const CF_CONNECT_PATH = '/cloudflare/connect'
+
+/** Narrow view of Node's `process.env`, read through `globalThis` so this file compiles under a
+ *  WebWorker-lib tsconfig (the Operator Worker) without pulling @types/node into that project. */
+type NodeLikeGlobal = { process?: { env?: Record<string, string | undefined> } }
+
+function nodeEnv(): Record<string, string | undefined> {
+  const g = globalThis as NodeLikeGlobal
+  return g.process?.env ?? {}
+}
+
 /** True when Settings (or METIS_OPERATOR_URL) points at the Cloudflare Operator Worker. */
 export function operatorUrlConfigured(
   settings: { operatorUrl?: string } | null | undefined,
-  env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
+  env: Record<string, string | undefined> = nodeEnv()
 ): boolean {
   const url = (settings?.operatorUrl || env.METIS_OPERATOR_URL || '').trim()
   return /^https:\/\//i.test(url)
@@ -29,10 +43,20 @@ export function operatorUrlConfigured(
 /** Ask-text toggle. Default ON once a URL is set; ignored when Operator is off. */
 export function shouldSendAskText(
   settings: { operatorUrl?: string; sendAskText?: boolean } | null | undefined,
-  env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
+  env: Record<string, string | undefined> = nodeEnv()
 ): boolean {
   if (!operatorUrlConfigured(settings, env)) return false
   return settings?.sendAskText !== false
+}
+
+/** HTTPS Operator `/cloudflare/connect`. Null if the base is not https. */
+export function cloudflareConnectHref(
+  settings: { operatorUrl?: string } | null | undefined = {},
+  env: Record<string, string | undefined> = nodeEnv()
+): string | null {
+  const raw = (settings?.operatorUrl || env.METIS_OPERATOR_URL || DEFAULT_OPERATOR_URL).trim()
+  if (!/^https:\/\//i.test(raw)) return null
+  return `${raw.replace(/\/$/, '')}${CF_CONNECT_PATH}`
 }
 
 export function promptCacheKey(mode: string, skillLockHash: string): string {
@@ -347,4 +371,20 @@ export function aggregateCacheSlice(lines: AskLogLine[]): OperatorCacheSlice {
     ttftNaP50Ms: percentile(na, 50),
     ttftNaP95Ms: percentile(na, 95)
   }
+}
+
+/** Seat hostname from `os.hostname()`. Letters, digits, dot, hyphen, underscore. Max 64. */
+export function sanitizeOperatorHostname(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const host = raw.trim().slice(0, 64)
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(host)) return null
+  return host
+}
+
+/** SSO email from the seat session. Never invent one. Max 120. */
+export function sanitizeOperatorSsoEmail(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const email = raw.trim().toLowerCase().slice(0, 120)
+  if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(email)) return null
+  return email
 }
