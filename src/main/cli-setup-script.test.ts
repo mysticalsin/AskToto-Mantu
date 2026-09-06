@@ -15,10 +15,11 @@ vi.mock('electron', () => ({
 // The self-contained installer is irrelevant here but is imported by cli.ts at module load.
 vi.mock('./cli-installer', () => ({
   managedCliEntry: vi.fn(() => null),
+  managedCliCommand: vi.fn(() => null),
   installManagedCli: vi.fn()
 }))
 
-import { setupCli, loginCli } from './cli'
+import { setupCli, loginCli, loginCliInvokeLines } from './cli'
 
 const REAL_PLATFORM = process.platform
 
@@ -109,4 +110,31 @@ describe('setupCli / loginCli — POSIX .command scripts stay LF', () => {
       expect(text.endsWith('\n')).toBe(true)
     })
   }
+})
+
+describe('loginCliInvokeLines — managed Node, never PATH-only claude', () => {
+  it('Windows uses the managed entry plus ELECTRON_RUN_AS_NODE', () => {
+    const lines = loginCliInvokeLines('claude-cli', true, {
+      command: 'C:\\Metis\\Metis.exe',
+      args: ['C:\\Users\\tony\\managed-cli\\claude\\cli.js'],
+      env: { ELECTRON_RUN_AS_NODE: '1' }
+    })
+    expect(lines).toContain('set ELECTRON_RUN_AS_NODE=1')
+    expect(lines.some((l) => l.includes('Metis.exe') && l.includes('cli.js'))).toBe(true)
+    expect(lines.join('\n')).not.toMatch(/call claude/)
+  })
+
+  it('Windows Codex login appends login to the managed entry', () => {
+    const lines = loginCliInvokeLines('codex-cli', true, {
+      command: 'C:\\Metis\\Metis.exe',
+      args: ['D:\\managed-cli\\codex\\bin\\codex.js'],
+      env: { ELECTRON_RUN_AS_NODE: '1' }
+    })
+    expect(lines.join(' ')).toMatch(/codex\.js" "login"/)
+  })
+
+  it('falls back to PATH only when nothing is managed', () => {
+    expect(loginCliInvokeLines('claude-cli', true, null)).toEqual(['call claude'])
+    expect(loginCliInvokeLines('codex-cli', false, null)).toEqual(['codex login'])
+  })
 })
