@@ -90,7 +90,7 @@ This tip before relaunch:
 1. `IntelligenceUpdateButton` returns `ReactElement`, never `JSX.Element` (MQA-290).
 2. `tsconfig.app.json` types are `vite/client`, `react`, `react-dom`.
 3. `intelligence/src/vite-env.d.ts` triple-slash loads those same React types.
-4. `npm run build` / `npm run dev` run `scripts/ensure-intelligence-bundle.mjs`.
+4. `npm run build` / `npm run dev` run `scripts/ensure-intelligence-bundle.mjs` (plain Node, no TypeScript annotations).
 
 **FAIL if** `npm run build:intelligence` still reports `TS2503`. **FAIL if** Settings / Intelligence still shows the red banner after this tip's `npm run build` (or `npm run dev`) and a restart of that tree.
 
