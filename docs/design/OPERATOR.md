@@ -5,7 +5,7 @@ owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, cli
 does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, installer packing, Fly license-server, Goldberg Aria, cloudflare-proxy AI token proxy, Bklit Studio, Metis-Releases Latest feed, EXE/DMG/Native pack or promote
 ready-to-merge: no
 implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing, access-login, v1-use
-this-slice: keys-gateway-seat-approval + operator-license-generate
+this-slice: keys-gateway-seat-approval + operator-license-generate + cf-aig-plug-and-play
 audience: Tony Walteur only. Two emails. Nobody else.
 tokens:
   accent: "#2563EB"
@@ -484,15 +484,32 @@ UI on `#keys`: add / rotate / revoke. Show last4 (`··abcd`). Never a paste-bac
 
 **At rest.** AES-GCM in D1 (`cipher` + `iv`). Wrangler secret `OPERATOR_VAULT_KEY` (32-byte key, base64), separate from `OPERATOR_PROMPT_KEY`. Decrypt only inside an Access-authenticated write/rotate or an HMAC-authenticated use. Every write / rotate / revoke is audit-logged (who, when, key id, provider, last4). Never log the secret.
 
+## Product law (Tony ~11:41 PM ET America/Toronto, 6 Sep 2026 — AI Gateway plug and play)
+
+**Hold.** Stay draft on PR 146. No pack. No merge. No Latest. **Do not Worker-deploy** until Ultron says Mac Hide UX full PASS (Devon holds deploy).
+
+**Goal.** Connecting Cloudflare / AI Gateway is login, then Operator provisions the key. Paste is not the happy path.
+
+1. On `#keys`, Tony chooses **Cloudflare · AI Gateway**.
+2. GET `/cloudflare/connect` (Access JWT + two emails) **302**s to Cloudflare OAuth login (`dash.cloudflare.com/oauth2/auth`) with `client_id`, `redirect_uri=/cloudflare/callback`, `state`, and AI Gateway / Workers AI scopes. Not Account ID + token paste. Not a homemade password form. Operator Access stay as-is for the console.
+3. GET `/cloudflare/callback?code=&state=` exchanges the code (Wrangler secrets `CF_OAUTH_CLIENT_ID` + `CF_OAUTH_CLIENT_SECRET`). Operator lists accounts, keeps `accountId`, and **writes vault rows** (AES-GCM, last4 only):
+   - `cloudflare` — AI Gateway Ask path (`/v1/use` → `api.cloudflare.com/.../ai/v1/chat/completions`, `cf-aig-gateway-id: default`)
+   - `cloudflare-account` — existing Overview connect
+4. 303 `/?cf=connected#keys`. HTML/JSON never echo the token. Unauth connect/callback still 302 Access. Unauth admin 401.
+5. Authorized seats then get `cloudflare` in `fundedProviders`. No `METIS_PROXY_KEY` paste on the seat for this path.
+
+Fail loud if the OAuth client secrets are missing (`503` on connect) or the code exchange / account list fails (`/?cf=failed#keys`). Keep Generate license. Keep Approve / Revoke.
+
 ## Cloudflare connect contract
 
-Tony connects Cloudflare **on Operator**, not on a seat.
+Tony connects Cloudflare **on Operator**, not on a seat. **Happy path is OAuth login → auto-provision.** Account ID + token paste is not offered on `#keys`.
 
 | Field | Where | UI |
 | --- | --- | --- |
-| Connect | GET `/cloudflare/connect` | **302 login redirect** to `dash.cloudflare.com/login`. Not Account ID + token paste. |
-| Callback | GET `/cloudflare/callback` | 303 `/#keys` after Cloudflare login |
-| API token | Vault row `cloudflare-account`, AES-GCM | last4 only. Never a paste field. |
+| Choose | `#keys` | **Cloudflare · AI Gateway** → Log in to Cloudflare |
+| Connect | GET `/cloudflare/connect` | **302** Cloudflare OAuth (`oauth2/auth`). Access already passed. |
+| Callback | GET `/cloudflare/callback` | Exchange code. Write `cloudflare` + `cloudflare-account`. 303 `/?cf=connected#keys`. |
+| API token | Vault rows, AES-GCM | last4 only. Never a paste field. Never in HTML/JSON. |
 | Token on a seat | Forbidden | — |
 
 **Pull into Overview** (range-aware, same calm charts as the KPI strip), scoped to this product:
@@ -719,6 +736,6 @@ Frozen overlay chrome (do not edit from this product):
 
 ## Ready to merge
 
-**READY TO MERGE: no.** Keys gateway + seat approval + Operator license generate. Overlay leftover stays out of this slice. No pack. No merge. Do not pack EXE/DMG. Do not bump app version (`1.8.3` stays). Goldberg Aria stays frozen. **Do not Worker-deploy tonight** until Ultron says Mac re-PASS on PR 144. **Ultron lock:** do not publish or promote Metis-Releases Latest. EXE/DMG/Native → Latest only after Bob QA + Ultron approve.
+**READY TO MERGE: no.** Keys gateway + seat approval + Operator license generate + Cloudflare AI Gateway plug-and-play. Overlay leftover stays out of this slice. No pack. No merge. Do not pack EXE/DMG. Do not bump app version (`1.8.3` stays). Goldberg Aria stays frozen. **Do not Worker-deploy** until Ultron says Mac Hide UX full PASS. **Ultron lock:** do not publish or promote Metis-Releases Latest. EXE/DMG/Native → Latest only after Bob QA + Ultron approve.
 
 Migrating leftover seat-stored Tony cloud keys stays a later slice. `POST /v1/use` is live: HMAC, vault decrypt in Worker memory, brokered completion, text only. Seats never persist a raw Operator key or CF token.
