@@ -275,8 +275,9 @@ describe('POST /v1/admin/integrations/test (draft) and /:id/test (stored)', () =
       { store, now: NOW, providerFetch: fakeFetch }
     )
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { ok: boolean; result: { ok: boolean; summary: string } }
+    const body = (await res.json()) as { ok: boolean; result: { ok: boolean; summary: string }; health: string }
     expect(body.result.ok).toBe(true)
+    expect(body.health).toBe('connected')
     expect(body.result.summary).toContain('42424242')
     expect(await store.listIntegrationRows()).toHaveLength(0)
     const audit = await store.listAudit(10)
@@ -290,7 +291,7 @@ describe('POST /v1/admin/integrations/test (draft) and /:id/test (stored)', () =
     expect((await res.json()) as { code: string }).toMatchObject({ code: 'needs-oauth' })
   })
 
-  it('stored test runs an MCP handshake, saves the tool list, and flips status on failure', async () => {
+  it('stored test runs an MCP handshake, saves the tool list, and reports health connected', async () => {
     const store = memoryStore()
     const enc = await encryptVault('mcp-secret-token', TEST_VAULT_KEY)
     const row: IntegrationRow = {
@@ -351,8 +352,9 @@ describe('POST /v1/admin/integrations/test (draft) and /:id/test (stored)', () =
       { store, now: NOW + 5, providerFetch: fakeFetch }
     )
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { result: { ok: boolean; tools: { name: string; write: boolean }[] } }
+    const body = (await res.json()) as { result: { ok: boolean; tools: { name: string; write: boolean }[] }; health: string }
     expect(body.result.ok).toBe(true)
+    expect(body.health).toBe('connected')
     expect(body.result.tools).toEqual([
       { name: 'list_things', description: 'List things', write: false },
       { name: 'create_thing', description: 'Create a thing', write: true }
@@ -366,16 +368,36 @@ describe('POST /v1/admin/integrations/test (draft) and /:id/test (stored)', () =
     expect(JSON.stringify(extra.last_test_json)).not.toContain('mcp-secret-token')
   })
 
-  it('a failed test sets status failing (not the seat-delivery status active)', async () => {
+  it('a failed test never changes status - only the derived health flips to failing', async () => {
     const store = memoryStore()
     const added = await addHubspot(store)
     const id = added.integration!.id
     const fakeFetch = (async () => new Response('nope', { status: 401 })) as typeof fetch
     const res = await handleRequest(post(`/v1/admin/integrations/${id}/test`, {}), env(), { access: tony }, { store, now: NOW + 9, providerFetch: fakeFetch })
     expect(res.status).toBe(200)
-    const body = (await res.json()) as { result: { ok: boolean } }
+    const body = (await res.json()) as { result: { ok: boolean }; health: string }
     expect(body.result.ok).toBe(false)
+    expect(body.health).toBe('failing')
+    // status must stay 'active' - integrations-seat.ts's entitledInScopeRows() filters strictly on
+    // status === 'active', so a transient upstream failure must never cut delivery to the whole fleet.
     const row = await store.getIntegration(id)
-    expect(row!.status).toBe('failing')
+    expect(row!.status).toBe('active')
+
+    const list = await handleRequest(get('/v1/admin/integrations'), env(), { access: tony }, { store, now: NOW + 9 })
+    const listBody = (await list.json()) as { integrations: { id: string; status: string; health: string }[] }
+    const listed = listBody.integrations.find((i) => i.id === id)
+    expect(listed?.status).toBe('active')
+    expect(listed?.health).toBe('failing')
+  })
+
+  it('a connection that has never been tested reports health untested', async () => {
+    const store = memoryStore()
+    const added = await addHubspot(store)
+    const id = added.integration!.id
+    const list = await handleRequest(get('/v1/admin/integrations'), env(), { access: tony }, { store, now: NOW })
+    const listBody = (await list.json()) as { integrations: { id: string; status: string; health: string }[] }
+    const listed = listBody.integrations.find((i) => i.id === id)
+    expect(listed?.status).toBe('active')
+    expect(listed?.health).toBe('untested')
   })
 })
