@@ -1,22 +1,12 @@
 /**
- * Act 6 (Ready) — the tail re-point (MQA-283). Pure scene-transition rules for the guided narrative's
- * LAST three hops, pulled out of OnboardingExperience.tsx so the "where does Continue/Start actually
- * land" claim is independently testable instead of only visible by reading JSX onClick handlers.
+ * Exclusive-tour hops. Independently testable so JSX onClick handlers cannot drift.
+ * Contract: docs/design/ONBOARDING-FLOW.md (Tony 11:52–11:53pm Totos-Mac).
  *
- * The six acts now run in the VibeIsland-teardown's own canonical order — welcome -> demo -> config ->
- * vibe -> license -> ready — rather than the config -> license -> vibe order Act 5 (MQA-281/282)
- * originally shipped with:
+ *   hero -> problem -> reveal -> appearance -> setup -> personalize -> [license, only if enabled] -> ready
  *
- *   hero -> problem -> reveal -> setup -> personalize -> [license, only if enabled] -> ready -> finish
- *
- * `license` stays optional and OFF by default (settings.licenseGateEnabled) exactly as Act 5 shipped it;
- * moving it after `personalize` only changes WHEN it can appear, never whether it does. `ready` is the
- * new terminal act: the narrative finishes onboarding itself there (marks `onboardingDone`) instead of
- * handing off to the legacy provider/API-key step the way it used to — the embedded-Cloudflare-default
- * install (`src/main/embedded-cloudflare-key.ts`, MQA-273) already makes a fresh install `providerReady`
- * with zero user action, so forcing that step on every install was asking for configuration nobody
- * needed. Adding a personal provider key stays reachable, just as an OPTIONAL link from Ready (see
- * `ActReady` in OnboardingExperience.tsx), never a gate.
+ * Appearance ("Where should Métis live?") sits right after the demo, then Your setup, then
+ * personalize. License stays optional and OFF by default. Ready is the only finish.
+ * There is no skip scene.
  */
 
 export type OnboardingScene =
@@ -26,24 +16,39 @@ export type OnboardingScene =
   | 'setup'
   | 'personalize'
   | 'license'
+  | 'appearance'
   | 'ready'
-  | 'skip'
 
-/** setup's Continue always lands on personalize now — license (when enabled) has moved to sit AFTER
- *  personalize instead of between setup and personalize. */
+/** Ready Get started is the only path that may persist onboardingDone. */
+export function canMarkOnboardingDone(input: {
+  scene: OnboardingScene | string
+  asrReady: boolean
+  consent: boolean
+}): boolean {
+  return input.scene === 'ready' && input.asrReady && input.consent
+}
+
+/** Demo Continue: ask where Métis lives before setup. */
+export function sceneAfterReveal(): OnboardingScene {
+  return 'appearance'
+}
+
+/** Appearance Continue lands on Your setup. */
+export function sceneAfterAppearance(): OnboardingScene {
+  return 'setup'
+}
+
+/** setup's Continue always lands on personalize. License (when enabled) sits after personalize. */
 export function sceneAfterSetup(): OnboardingScene {
   return 'personalize'
 }
 
-/** personalize's Start: the license act only when the self-hosted license gate is on, otherwise
- *  straight to Ready. Never the legacy provider/API-key step — that hop no longer exists in the
- *  narrative path (see module doc above). */
+/** personalize's Continue: license only when the self-hosted gate is on, otherwise Ready. */
 export function sceneAfterPersonalize(licenseGateEnabled: boolean | null | undefined): OnboardingScene {
   return licenseGateEnabled ? 'license' : 'ready'
 }
 
-/** license's Continue always lands on Ready now (it used to land back on personalize, which by
- *  definition already ran to get here). */
+/** license's Continue lands on Ready. */
 export function sceneAfterLicense(): OnboardingScene {
   return 'ready'
 }

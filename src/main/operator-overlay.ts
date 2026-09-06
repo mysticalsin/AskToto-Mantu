@@ -1,3 +1,4 @@
+import { inspectBundleResponse } from '@shared/bundle-response'
 import { HUMANIZER_SKILL_ID, isBuiltinConversationMode, type ModeSkillId } from '@shared/mode-skills'
 import { operatorUrlConfigured } from '@shared/operator'
 import { applyOverlaySkillFile } from './mode-skills'
@@ -45,11 +46,29 @@ export async function pullOperatorSkillManifest(settings: OverlayRuntimeSettings
   if (!operatorUrlConfigured(settings) || !secret) return 0
   const headers = operatorHmacHeaders(secret, hashOperatorId(getMachineId()), '')
   const res = await fetchImpl(`${url}/v1/skills/manifest`, { method: 'GET', headers })
+  const text = await res.text()
+  const inspected = inspectBundleResponse({
+    status: res.status,
+    contentType: res.headers.get('content-type'),
+    location: res.headers.get('location'),
+    bodyPrefix: text.slice(0, 1024),
+    expected: 'json'
+  })
+  if (!inspected.ok) {
+    mainLog.warn(`[operator] manifest ${inspected.message}`)
+    return 0
+  }
   if (!res.ok) {
     mainLog.warn(`[operator] manifest ${res.status}`)
     return 0
   }
-  const data = (await res.json()) as { ok?: boolean; skills?: { signed?: string }[] }
+  let data: { ok?: boolean; skills?: { signed?: string }[] }
+  try {
+    data = JSON.parse(text) as { ok?: boolean; skills?: { signed?: string }[] }
+  } catch {
+    mainLog.warn('[operator] manifest was not JSON')
+    return 0
+  }
   if (!data.ok || !Array.isArray(data.skills)) return 0
   let applied = 0
   for (const row of data.skills) {

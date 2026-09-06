@@ -126,6 +126,8 @@ import { AgendaView } from './AgendaView'
 import { usePermissions } from '../state'
 import { displayAccelerator, isWindows } from '../lib/keys'
 import { decideDustLiveCheck } from '../lib/dust-live-check'
+import { haltAllOnboardingAudio } from '../lib/onboarding-music'
+import { canShowConnected, cliSetupChip, nextCliSetupStep } from '@shared/cli-setup-status'
 import {
   DUST_EMPTY_AGENTS_ERROR,
   DUST_WORKSPACE_MISSING_SETUP_ERROR,
@@ -2097,9 +2099,20 @@ function StepBadge({ n, done }: { n: number; done?: boolean }): JSX.Element {
 // ---------------------------------------------------------------------------
 
 type CliCardState = {
-  phase: 'idle' | 'confirming' | 'installing' | 'setup-opened' | 'connecting' | 'done' | 'error' | 'install-error'
+  phase:
+    | 'idle'
+    | 'confirming'
+    | 'installing'
+    | 'waiting-for-login'
+    | 'setup-opened'
+    | 'connecting'
+    | 'done'
+    | 'error'
+    | 'install-error'
   msg: string | null
   version: string | null
+  binaryPresent?: boolean
+  testOk?: boolean
 }
 
 function CliIntegration({
@@ -2181,61 +2194,145 @@ function CliIntegration({
     setState(id, { phase: 'confirming', msg: null, version: null })
   }
 
-  // Step 2: user clicks Continue → install silently, then connect
+  // Step 2: user clicks Continue → install if missing, open login, honest chip.
   const runInstall = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
-    // Capture which provider was active when this install run started — see the patch() call below.
     const startProvider = providerRef.current
-    setState(id, { phase: 'installing', msg: 'Installing…', version: null })
+    let binaryPresent = false
+    let installAttempted = false
+    let installOk: boolean | null = null
+    let loginAttempted = false
+    let testOk = false
 
-    const installResult = await window.toto.cliInstall(id, (line) => {
-      setState(id, { phase: 'installing', msg: line, version: null })
+    const markConnected = (version: string | null, msg: string | null): void => {
+      if (!canShowConnected({ binaryPresent, testOk })) return
+      if (mountedRef.current && providerRef.current === startProvider) {
+        patch({ provider: id, lastClickedCli: id })
+      }
+      setState(id, { phase: 'done', msg, version, binaryPresent, testOk: true })
+    }
+
+    setState(id, { phase: 'installing', msg: 'Installing', version: null, binaryPresent: false, testOk: false })
+
+    const detected = await window.toto.cliDetect(id)
+    binaryPresent = !!detected.ok
+
+    let decision = nextCliSetupStep({
+      binaryPresent,
+      testOk,
+      installAttempted,
+      installOk,
+      loginAttempted
     })
 
-    if (installResult.needsTerminal) {
-      // Needs sudo / elevated perms — fall back to Terminal
-      window.toto.cliSetup(id)
+    if (decision.action === 'install') {
+      installAttempted = true
+      const installResult = await window.toto.cliInstall(id, (line) => {
+        setState(id, { phase: 'installing', msg: line || 'Installing', version: null, binaryPresent, testOk: false })
+      })
+      if (installResult.needsTerminal) {
+        window.toto.cliSetup(id)
+        loginAttempted = true
+        setState(id, {
+          phase: 'waiting-for-login',
+          msg: 'Waiting for login',
+          version: null,
+          binaryPresent,
+          testOk: false
+        })
+        return
+      }
+      installOk = !!installResult.ok
+      if (!installResult.ok) {
+        setState(id, {
+          phase: 'install-error',
+          msg: installResult.error || 'Installation failed.',
+          version: null,
+          binaryPresent: false,
+          testOk: false
+        })
+        return
+      }
+      const again = await window.toto.cliDetect(id)
+      binaryPresent = !!again.ok
+      decision = nextCliSetupStep({
+        binaryPresent,
+        testOk,
+        installAttempted,
+        installOk,
+        loginAttempted
+      })
+      if (decision.action === 'fail') {
+        setState(id, {
+          phase: 'install-error',
+          msg: installResult.error || 'Installation finished but the CLI binary is still missing.',
+          version: null,
+          binaryPresent: false,
+          testOk: false
+        })
+        return
+      }
+    }
+
+    if (!binaryPresent) {
       setState(id, {
-        phase: 'setup-opened',
-        msg: 'Finish the login in the window that opened, then come back and press Connect.',
-        version: null
+        phase: 'install-error',
+        msg: 'CLI binary is not installed.',
+        version: null,
+        binaryPresent: false,
+        testOk: false
       })
       return
     }
 
-    if (!installResult.ok) {
-      setState(id, { phase: 'install-error', msg: installResult.error || 'Installation failed.', version: null })
-      return
-    }
-
-    // Install succeeded — test connection
-    setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
+    setState(id, { phase: 'connecting', msg: 'Connecting…', version: null, binaryPresent, testOk: false })
     const testResult = await window.toto.cliTest(id)
-
-    if (testResult.ok) {
-      // Guard against a stale in-flight install/test resolving after the user switched tabs (unmounting
-      // this card) — without this, a late resolution here can re-activate a provider the user already
-      // disconnected in the meantime (see disconnectCli). Mirrors setState's own mountedRef guard. Also
-      // skip the patch if the user switched to a different provider tile on the AiSection grid while
-      // this install was running — a finished install must never silently revert that in-panel pick.
-      if (mountedRef.current && providerRef.current === startProvider) patch({ provider: id })
-      setState(id, {
-        phase: 'done',
-        msg:
-          testResult.session === 'weekly-limit'
-            ? testResult.error || 'Signed in. Weekly usage limit reached — not disconnected.'
-            : null,
-        version: testResult.version ?? null
-      })
+    testOk = !!testResult.ok && !!binaryPresent
+    if (testOk) {
+      markConnected(
+        testResult.version ?? null,
+        testResult.session === 'weekly-limit'
+          ? testResult.error || 'Signed in. Weekly usage limit reached — not disconnected.'
+          : 'Connected'
+      )
       return
     }
 
-    // Not logged in — open login flow
+    loginAttempted = true
     window.toto.cliLogin(id)
     setState(id, {
-      phase: 'setup-opened',
-      msg: 'Installed. Sign in through the window that opened, then come back and press Connect.',
-      version: null
+      phase: 'waiting-for-login',
+      msg: 'Waiting for login',
+      version: null,
+      binaryPresent,
+      testOk: false
     })
+    const deadline = Date.now() + 5 * 60 * 1000
+    while (mountedRef.current && Date.now() < deadline) {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 2000)
+      })
+      if (!mountedRef.current) return
+      const again = await window.toto.cliTest(id)
+      testOk = !!again.ok && binaryPresent
+      if (canShowConnected({ binaryPresent, testOk })) {
+        markConnected(
+          again.version ?? null,
+          again.session === 'weekly-limit'
+            ? again.error || 'Signed in. Weekly usage limit reached — not disconnected.'
+            : 'Connected'
+        )
+        return
+      }
+    }
+    if (mountedRef.current) {
+      setState(id, {
+        phase: 'error',
+        msg: 'Still waiting for login. Finish signing in, then press Connect.',
+        version: null,
+        binaryPresent,
+        testOk: false
+      })
+    }
   }
 
   // Connect: install in-flow if the CLI is missing, then prove a live session. Never mark Connected
@@ -2270,17 +2367,23 @@ function CliIntegration({
       setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
       r = await window.toto.cliTest(id)
     }
-    if (r.ok) {
+    const binaryPresent = r.ok || r.session !== 'missing'
+    const testOk = !!r.ok && r.session !== 'missing'
+    if (canShowConnected({ binaryPresent, testOk })) {
       // Same stale-resolution + provider-switch guard as runInstall above.
       // Weekly-limit is signed-in: Connect succeeds and we say so, instead of looking disconnected.
-      if (mountedRef.current && providerRef.current === startProvider) patch({ provider: id })
+      if (mountedRef.current && providerRef.current === startProvider) {
+        patch({ provider: id, lastClickedCli: id })
+      }
       setState(id, {
         phase: 'done',
         msg:
           r.session === 'weekly-limit'
             ? r.error || 'Signed in. Weekly usage limit reached — not disconnected.'
-            : null,
-        version: r.version ?? null
+            : 'Connected',
+        version: r.version ?? null,
+        binaryPresent: true,
+        testOk: true
       })
     } else if (r.session === 'signed-out') {
       window.toto.cliLogin(id)
@@ -2293,7 +2396,9 @@ function CliIntegration({
       setState(id, {
         phase: 'error',
         msg: r.error || 'Could not connect. Finish signing in, then try again.',
-        version: null
+        version: null,
+        binaryPresent: r.session !== 'missing',
+        testOk: false
       })
     }
   }
@@ -2307,6 +2412,10 @@ function CliIntegration({
   const disconnectCli = (id: 'claude-cli' | 'codex-cli'): void => {
     const nextConnected = { ...cliConnected, [id]: false }
     const next: Partial<PublicSettings> = { cliConnected: nextConnected }
+    if (settings.lastClickedCli === id) {
+      const other = id === 'claude-cli' ? 'codex-cli' : 'claude-cli'
+      next.lastClickedCli = nextConnected[other] ? other : null
+    }
     if (provider === id)
       next.provider = pickReadyProvider(
         id,
@@ -2332,6 +2441,13 @@ function CliIntegration({
     const st = getState(id)
     const isActive = provider === id
     const isConnected = !!cliConnected[id]
+    const chip = cliSetupChip({
+      binaryPresent: !!st.binaryPresent || (st.phase === 'idle' && isConnected),
+      testOk: !!st.testOk || (st.phase === 'done' && isConnected) || (st.phase === 'idle' && isConnected),
+      installing: st.phase === 'installing',
+      loginOpened: st.phase === 'waiting-for-login' || st.phase === 'setup-opened',
+      error: st.phase === 'error' || st.phase === 'install-error' ? st.msg : null
+    })
     const allowed = isAllowed(id)
     const cardLocked = locked || !allowed
     const desc =
@@ -2369,6 +2485,24 @@ function CliIntegration({
           )}
         </div>
 
+        {chip.kind !== 'idle' && (chip.kind !== 'failed' || !st.msg) && (
+          <span
+            data-cli-setup-chip={chip.kind}
+            className={
+              chip.kind === 'connected'
+                ? 'inline-flex w-fit items-center gap-1 rounded-full bg-[var(--cl-success)]/15 px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-success)]'
+                : chip.kind === 'failed'
+                  ? 'inline-flex w-fit items-center gap-1 rounded-full bg-[var(--cl-destructive)]/15 px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-destructive)]'
+                  : 'inline-flex w-fit items-center gap-1 rounded-full bg-[var(--cl-primary-soft)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--cl-primary)]'
+            }
+          >
+            {chip.kind === 'connected' && <CircleCheck size={12} />}
+            {chip.kind === 'installing' && <InlineOrb kind="loading" />}
+            {chip.kind === 'waiting-for-login' && <InlineOrb kind="loading" />}
+            {chip.label}
+          </span>
+        )}
+
         {/* Confirm step */}
         {st.phase === 'confirming' && (
           <div className="flex flex-col gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.04] p-2.5">
@@ -2393,7 +2527,7 @@ function CliIntegration({
         )}
 
         {/* After setup opened in Terminal */}
-        {st.phase === 'setup-opened' && st.msg && (
+        {(st.phase === 'setup-opened' || st.phase === 'waiting-for-login') && st.msg && chip.kind !== 'waiting-for-login' && (
           <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">{st.msg}</span>
         )}
 
@@ -2445,8 +2579,8 @@ function CliIntegration({
           </div>
         )}
 
-        {/* Connect button — visible in setup-opened or error phases */}
-        {(st.phase === 'setup-opened' || st.phase === 'error') && (
+        {/* Connect button — visible in setup-opened, waiting-for-login, or error phases */}
+        {(st.phase === 'setup-opened' || st.phase === 'waiting-for-login' || st.phase === 'error') && (
           <div className="flex gap-2">
             <button
               type="button"
@@ -2896,7 +3030,7 @@ function ProductConnectCard({
   desc: string
   waitingLabel: string
   mark: JSX.Element
-  connect: () => Promise<{ ok: boolean; error?: string; tools?: string[] }>
+  connect: () => Promise<{ ok: boolean; error?: string; tools?: string[]; clickupListId?: string; clickupListName?: string }>
   pinnedEndpoint: string
   apiKeyHint: string
   extraFields?: { key: string; label: string; placeholder: string }[]
@@ -2932,7 +3066,10 @@ function ProductConnectCard({
             endpointUrl: pinnedEndpoint,
             connected: true,
             tools: r.tools ?? [],
-            extraHeaders: extraHeaders()
+            extraHeaders: extraHeaders(),
+            ...(kind === 'clickup' && (r.clickupListId || r.clickupListName)
+              ? { clickupListId: r.clickupListId, clickupListName: r.clickupListName }
+              : {})
           }
         ]
       })
@@ -2977,7 +3114,10 @@ function ProductConnectCard({
             endpointUrl: pinnedEndpoint,
             connected: true,
             tools: r.tools ?? [],
-            extraHeaders: extraHeaders()
+            extraHeaders: extraHeaders(),
+            ...(kind === 'clickup' && (r.clickupListId || r.clickupListName)
+              ? { clickupListId: r.clickupListId, clickupListName: r.clickupListName }
+              : {})
           }
         ]
       })
@@ -3048,7 +3188,9 @@ function ProductConnectCard({
         <div className="flex items-center gap-3 pl-10">
           <span className="min-w-0 flex-1 truncate text-[11px] text-[color:var(--cl-muted-foreground)]">
             {conn && conn.tools.length > 0
-              ? `${conn.tools.length} tool${conn.tools.length === 1 ? '' : 's'} available`
+              ? kind === 'clickup' && conn.clickupListName
+                ? `Tasks go to ${conn.clickupListName}`
+                : `${conn.tools.length} tool${conn.tools.length === 1 ? '' : 's'} available`
               : 'Connected — no tools reported for this account.'}
           </span>
           <button
@@ -6652,6 +6794,7 @@ export function Settings({
           // gate is what they land on immediately, matching what "Replay" promises.
           onClick={() => {
             if (window.confirm("Replay onboarding from the start? Your settings won't change.")) {
+              haltAllOnboardingAudio()
               patch({ onboardingDone: false })
               onClose?.()
             }

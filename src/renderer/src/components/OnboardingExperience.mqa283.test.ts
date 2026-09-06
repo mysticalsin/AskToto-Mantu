@@ -23,13 +23,16 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
     expect(experienceSrc).toMatch(/onboardingDone: true, onboardingDoneAt: Date\.now\(\)/)
   })
 
-  it('Skip stays on the exclusive stage and does not mount legacy Onboarding.tsx', () => {
-    expect(experienceSrc).toMatch(/setScene\('skip'\)/)
+  it('there is no Skip path and the live tree does not mount legacy Onboarding.tsx', () => {
+    expect(experienceSrc).not.toMatch(/setScene\('skip'\)/)
     expect(experienceSrc).not.toMatch(/from '\.\/Onboarding'/)
     expect(experienceSrc).not.toMatch(/initialStep=\{phase === 'legacy-full' \? 1 : 5\}/)
   })
 
-  it('setup always advances to personalize — license no longer sits between setup and personalize', () => {
+  it('reveal advances to appearance, then setup, then personalize', () => {
+    expect(experienceSrc).toMatch(/setScene\(sceneAfterReveal\(\)\)/)
+    expect(experienceSrc).not.toMatch(/onContinue=\{\(\) => \{\s*playHero\(\)\s*\n\s*setScene\('setup'\)/)
+    expect(experienceSrc).toMatch(/setScene\(sceneAfterAppearance\(\)\)/)
     expect(experienceSrc).toMatch(/setScene\(sceneAfterSetup\(\)\)/)
     expect(experienceSrc).not.toMatch(/setScene\(settings\?\.licenseGateEnabled \? 'license' : 'personalize'\)/)
   })
@@ -90,7 +93,9 @@ describe('MQA-283 — Replay onboarding in Settings re-arms the same gate a firs
   it('does not reset any other setting — replay must not silently wipe unrelated config', () => {
     const idx = settingsSrc.indexOf('Replay onboarding from the start?')
     expect(idx).toBeGreaterThan(-1)
-    const block = settingsSrc.slice(idx - 200, idx + 200)
+    const block = settingsSrc.slice(idx - 200, idx + 280)
+    expect(block).toMatch(/haltAllOnboardingAudio\(\)/)
+    expect(block.indexOf('haltAllOnboardingAudio()')).toBeLessThan(block.indexOf('patch({ onboardingDone: false })'))
     expect(block).toMatch(/patch\(\{ onboardingDone: false \}\)/)
     expect(block).not.toMatch(/onboardingDoneAt/)
   })

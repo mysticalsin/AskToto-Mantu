@@ -33,7 +33,7 @@ Spotlight Ref / Dust CLI: `docs/design/DESIGN.md` § CLI session and Spotlight R
 
 Ambient copilot / auto-answer (suggest + speculative showSpec) stays on the overlay until Tony clicks the answer (dismiss/read, never send) or a new question is asked (typed ask, or a new ambient suggestion replacing it). No 4s TTL. No 7s ceiling. Never auto-send.
 
-Settings shows these as **cards with a tiny desktop diagram**, not three text radios. Hide: empty top-middle, faint hover hint, caption "Hidden until you move to the top." Island: small capsule at the top-middle, caption "A small island stays visible. Hover opens it." Bar: full bar at the top **plus a circle**, caption "The bar stays on screen." Selected card is obvious. Changes apply immediately. Closing Settings after picking Island or Hide must park the live overlay (`shouldForceParkOnBecameIdle` + `collapse-now` + `parkAfterHide`) so the user sees the notch rest, not a leftover full bar. No reinstall. Original Métis copy. No em dash. No Vibe Island trademark strings.
+Settings shows these as **cards with a tiny desktop diagram**, not three text radios. Hide: empty top-middle, faint hover hint, caption "Hidden until you move to the top." Island: small capsule at the top-middle, caption "A small island stays visible. Hover opens it." Bar: full bar at the top **plus a circle**, caption "The bar stays on screen." Selected card is obvious. Changes apply immediately. Closing Settings after picking Island or Hide must park the live overlay (`shouldForceParkOnBecameIdle` + `collapse-now` + `parkAfterHide`) so the user sees the notch rest, not a leftover full bar. No reinstall. Original Métis copy. No em dash. No Vibe Island trademark strings. Onboarding asks the same three before Ready (see **Onboarding appearance** below and `docs/design/ONBOARDING-APPEARANCE.md`).
 
 ## Island Y
 
@@ -88,6 +88,8 @@ Hide and island: hover or click expands **down** from the top edge to the full b
 
 When `onboardingDone` flips true, `exitExclusiveOnboardingStage` leaves exclusive fullscreen and parks the default **hide** rest (or island / bar if Settings already chose one). Never an **880×816** mid-flow card. Never a 120×50 pill for hide. Re-apply `setAlwaysOnTop(true, 'screen-saver')` (the level exclusive used). Hide parks a 1–8px transparent rest; `hoverWatchRestRect` still covers the top-edge strip (`y = display.bounds.y`, width = `workArea.width`, height = menu-bar inset plus first work-area row). Island is the peek capsule at the same Y. Bar keeps `workArea.y + margin`. Auto-resize must not grow hide into a 44px/103px slab or 880×816. Then destroy the exclusive stage. Do not leave layer 0. Start the cursor watch when layout is hide/island.
 
+Exclusive onboarding is an **opaque** Mantu purple window (`transparent: false`, `#3A0B6B`). Mac `setSimpleFullScreen` on a transparent `BrowserWindow` composites as a dead black void (Totos-Mac 044c0f1, 3600×2338 RGBA(0,0,0,0)). After `onboardingDone` the overlay is transparent again. Replay re-enters opaque exclusive and halts Goldberg first.
+
 ## Onboarding
 
 Every act stays on one **exclusive fullscreen** until `onboardingDone`. Then destroy that stage and leave the small island. Do not shrink to a mid-flow card.
@@ -97,23 +99,53 @@ Stage API: `exclusiveOnboardingBounds(display.bounds, display.workArea)`; exit o
 
 **Portal sound.** Original, copyright-free, precomputed at module load. Never synthesize on the click. OPEN and CLOSE are different sounds (not one whoosh played twice, not a 160ms noise burst). OPEN: slow rising sci-fi entry (clean shimmer / rising air-tone), ~1.1–1.4s, quiet. CLOSE: different falling sci-fi close (darker, descending), ~1.1–1.4s. OS mute and the onboarding mute chip zero both. This is not the Goldberg Aria gain.
 
-**Portal close.** When `onboardingDone` is about to flip (Ready or Skip Get started): reverse the same soft pill into the top-center island (1.1–1.4s), play the CLOSE tone with the collapse, then exit exclusive fullscreen and park path A (`Y >= 25`). Do not snap to a 120×50 hole while the stage is still full-bleed. Do not call `setSimpleFullScreen(false)` before the close has been seen (or reduced-motion skip). Renderer plays close, then persists `onboardingDone` so main can `exitExclusiveOnboardingStage`. Do not leave a 1800×1169 hole or a `y=0` peek.
+**Portal close.** When `onboardingDone` is about to flip (Ready Get started only): reverse the same soft pill into the top-center island (1.1–1.4s), play the CLOSE tone with the collapse, then exit exclusive fullscreen and park path A (`Y >= 25`). Do not snap to a 120×50 hole while the stage is still full-bleed. Do not call `setSimpleFullScreen(false)` before the close has been seen (or reduced-motion skip). Renderer plays close, then persists `onboardingDone` so main can `exitExclusiveOnboardingStage`. Do not leave a 1800×1169 hole or a `y=0` peek.
 
-**Skip the tour.** Skip leaves the six-act narrative but stays on the exclusive Métis stage. It is one screen: the Tell the room glass card (same copy, required checkbox) plus Get started. Same portal close. `recordingConsent` still required (CMO-QA #1). Do not mount the legacy `Onboarding.tsx` slides for Skip. Hero Skip is a quiet secondary glass chip, never louder than **Next**.
+**No Skip.** Users cannot skip onboarding. There is no Skip the tour chip, no skip scene, no Skip to the end, and no path that sets `onboardingDone` without completing Ready. Replay after a completed tour (Settings) still works and still calls `haltAllOnboardingAudio()` first.
+
+**Onboarding flow (Tony 11:52–11:53pm).** Full contract: `docs/design/ONBOARDING-FLOW.md`.
+
+```
+hero → problem → reveal → appearance → setup → personalize → [license if enabled] → ready
+```
+
+GUIDED_SCENES is problem / reveal / appearance / setup / personalize. Reveal Continue uses `sceneAfterReveal()` → appearance. Appearance Continue → setup. Personalize Continue → license or Ready (never appearance). License → Ready. No Skip.
+
+**Your setup loading orb.** Downloading / idle transcription and downloading / starting on-device model are `SetupRowState 'loading'`, not `'action'`. They show the Jakub thinking-orb (`InlineOrb` / `AgentStatus` kind=loading). Real progress in (0, 1) becomes a determinate % next to the orb. Empty progress: orb only, no fake 0%. `'action'` / **needed** is user work only (Allow Microphone, disk full, Retry). Continue stays blocked until ASR is ready.
+
+**Act 4 heading on KineticGrid.** Kicker "Last one" and title "How should Métis show up?" must read on `#05010a`: near-white, stronger weight. A soft local light sits behind the heading cluster only. Tell the room stays the bright spotlight (`rgba(255,255,255,0.22)`). No full-stage white wash.
+
+**Onboarding appearance (Tony ask).** Right after the demo (reveal), ask Hidden vs Island vs Bar. Heading stays **Where should Métis live?** (`ONBOARDING_APPEARANCE_HEADING`). Ready stays the terminal act.
+
+- **Hidden** (default, selected on a fresh install). Card title **Hidden**. Caption: "Move to the top, then click to open." Mouse to the top, click to trigger. Not a hover-only demo.
+- **Island.** Card title **Island**. Caption stays "A small island stays visible. Hover opens it."
+- **Bar.** Card title **Bar**. Caption stays "The bar stays on screen."
+
+Live preview sits at the **top** of the exclusive stage (where the real chrome will live). Picking a card switches the preview on the same tick. No lag: compositor-only (`transform` + `opacity`), same spring as overlay (`--ease-spring`, 320–380ms in / 280–340ms out). No `setBounds`. No real `Bar`. No Listen. No Jarvis orb. No WebGL. No rAF. Reduced-motion: instant swap, still no layout animation.
+
+Hidden preview starts empty (faint top-center hint only). Click the top strip to spring the mock bar. Island preview is the camera / notch **square capsule** at top-center (not a wide bar); hover expands, leave returns to the square. Bar preview is the full mock bar, always on.
+
+Persist the existing overlay setting. Seed from `settings.overlayLayout` (replay / already-chosen island or bar stays selected). Patch `overlayLayout` + `autoHideOverlay` on the click, immediately. `finish()` / `onDone` must not write `overlayLayout`. Replay onboarding must not reset it. Managed `overlayLayout` locks the cards and still previews the locked value.
+
+Do **not** change Hide park **8×2**, Island hover (camera / notch square, `hoverWatchRestRect` at `bounds.y`), cursor-watch, or overlay park leftover (PR 94). After exclusive exit, park the layout they picked using the existing rest surfaces. Windows: no fake notch in the preview either.
+
+Original Métis copy. No em dash. No Vibe Island trademark strings. Continue is `onboard-cta`, always visible, full opacity. Appearance scene mounts the KineticGrid bed (not hero, not the lady+universe video). See `docs/design/ONBOARDING-KINETIC-GRID.md`. No Skip. Starfield / space-with-moving-lights does not mount after the first beat.
+
+Out of scope: Operator, Listen, ClickUp, overlay park PR 94, pack, Goldberg Aria, merge. READY TO MERGE stays no until Tony Mac-shows.
 
 The stage is a **Mantu purple** brand wash (`#3A0B6B` / `#7F00DA` / `#9A2BF0`), exclusive, rich — never a solid black void and never amber. Depth is the purple radial wash plus two oversized GPU stripe layers (repeating linear-gradient bands in that palette, plus a thin light sheen). The layers rotate opposite directions with `transform: rotate` only (~40s and ~70s linear infinite), `mix-blend-mode` screen/overlay, opacity ~0.28–0.4, `will-change: transform`, `pointer-events: none`. They cover the full stage after Act 1 unmounts the hero video. No `filter: blur` drifting orbs. `prefers-reduced-motion` freezes rotation at 0deg and **keeps the stripe pattern** (still not a flat fill).
 
 **Motion budget (60fps-class).** Compositor-only: `transform` and `opacity`. Never animate `filter`, `backdrop-filter`, blur, box-shadow, or layout. Scene enter is opacity + translate only, ~300ms ease-out — no scale-down, no `develop-in` filter blur on onboarding. Hover on large surfaces does not scale; CTA hover is brightness or `scale(1.02)` max. Liquid glass (backdrop-filter ≤ 12px) is on small CTAs / chips only — no full-viewport glass, no 50px blur over video.
 
-Act 1 (welcome) plays a full-viewport muted looping video behind the Métis mark (`object-cover`, `object-position: center`, z-0; UI z-10). Clip: CloudFront `hf_20260319_055001_8e16d972` (March 19). Not the July 14 clip. Not the April 11 clip. No CSS `filter` on the `<video>`. A purple Mantu tint sits on the video. A very slight loop-safe Ken Burns (`transform: scale` only) may run on the video. Wordmark, Next, and the Tony Walteur chip ease in (`opacity` / `transform`) and sit on the **darker sky**, not on the bright vortex. Not a Bloom or Axon landing page. If the video fails or motion is reduced, the purple wash stays (drop the video). **Leave Act 1: pause and unmount/hide the hero video** so it is not compositing after welcome. **Métis** (mark + wordmark) lands and **stays**. The wordmark is static. **No scramble.** The tagline may fade in once. **Next**, Skip, and the Tony Walteur byline use liquid glass (capped blur, inset highlight, gradient-border). Steal the technique, not Bloom copy.
+Act 1 (welcome) plays a full-viewport muted looping video behind the Métis mark (`object-cover`, `object-position: center`, z-0; UI z-10). Clip: CloudFront `hf_20260429_115139_0fc6bd3d` (April 29, lady looking at space). That is the only space shot. Not March 19. Not the July 14 clip. Not the April 11 clip. No CSS `filter` on the `<video>`. A purple Mantu tint sits on the video. A very slight loop-safe Ken Burns (`transform: scale` only) may run on the video. Wordmark, Next, and the Tony Walteur chip ease in (`opacity` / `transform`) and sit on the **darker sky**. Not a Bloom or Axon landing page. If the video fails or motion is reduced, the purple wash stays (drop the video). **Leave Act 1: pause and unmount the hero video.** After that beat the only bed is KineticGrid (`docs/design/ONBOARDING-KINETIC-GRID.md`). **Métis** (mark + wordmark) lands and **stays**. The wordmark is static. **No scramble.** The tagline may fade in once. **Next** and the Tony Walteur byline use liquid glass (capped blur, inset highlight, gradient-border). Steal the technique, not Bloom copy.
 
-Primary CTAs (Next / Continue / Get started) are **large** hit targets (min 52×220), high contrast, bottom-safe, and visible. They must not hitch. Hero primary is **Next**. That click starts the six-act tour (problem scene). Skip finish and Ready still say Get started.
+Primary CTAs (Next / Continue / Get started) are **large** hit targets (min 52×220), high contrast, bottom-safe, and visible. They must not hitch. Hero primary is **Next**. That click starts the six-act tour (problem scene). Only Ready says Get started.
 
 Act 2 is a scripted **Métis** demo on the real product: meeting / transcript / copilot / Intelligence, fake data only. Not an mp4. Not coding terminals. Not Vibe Island strings. The recap uses the **chosen** built-in role's summary layout. Each `DEMO_STAGE` is one video: the current clip **plays by itself**. **No auto-advance** to the next video. Next is the only way to change clips; it resets the rAF clock to 0 in the same click so the next clip plays immediately (it does not sit frozen at the previous hold). No 1100ms timer that jumps stages. Continue leaves the whole demo act.
 
 **Demo clock.** Do not `setState` every rAF. Drive the synthetic cursor with a ref + DOM `transform`. Commit React state at beat boundaries, or at most ~10 Hz for transcript text. Prefetch Answer / Copilot (Markdown + shiki) during Act 1 so the first Next does not compile on the click.
 
-The Goldberg Aria starts **the same moment** as the portal-open SFX: `bed.start()` / `audio.play()` is the **first** media call in that mount effect, with **no await** before it. Electron usually allows autoplay; if `play()` is rejected, retry on the next user gesture without changing the intended start. **Do not** wait for Next to start the bed. **Next** still `play()`s the hero video **first** in that click (user gesture), not on mount, then seek 0. Do not `play()` after seek, after `setState`, or after the click stack returns. Do not auto-skip beats. `prefers-reduced-motion` may drop the video; it must not hide the mute control and must not mute the piano.
+The Goldberg Aria starts **the same moment** as the portal-open SFX: `bed.start()` / `audio.play()` is the **first** media call in that mount effect, with **no await** before it. Electron usually allows autoplay; if `play()` is rejected, retry on the next user gesture without changing the intended start. **Do not** wait for Next to start the bed. **Next** unmounts the lady+universe video and lands on KineticGrid. Do not auto-skip beats. `prefers-reduced-motion` may drop the video; it must not hide the mute control and must not mute the piano.
 
 Welcome byline: `Tony Walteur` is a real link to his LinkedIn (`https://www.linkedin.com/in/tonywalteur/`). It opens in the system browser. Do not make the whole stage a link.
 
@@ -121,15 +153,17 @@ Onboarding music: a bundled, hardware-decoded `<audio>` of J.S. Bach, Goldberg V
 
 User-facing onboarding copy never uses an em dash (U+2014). Use a comma, period, colon, or parentheses.
 
-**Act 4 light.** Personalize (and Skip, which reuses the consent card) gets a local lighter veil behind the content (soft white/lavender). The bright mass sits at the **top** of the stage (heading), not the floor. Veil core is `rgba(255, 255, 255, 0.48)` at `50% 12%`. Top-edge wash is `rgba(255, 255, 255, 0.36)` at `50% 0%`. Do not bleach the exclusive purple stage or the floor. Headings and body stay high contrast. The "Last one" eyebrow is readable, not an ink-3 whisper. Mode tiles are quiet readable glass, not near-invisible `bg-white/[0.03]`. Cards and copy are not restyled for brightness.
+**Act 4 light.** Personalize gets a local lighter veil behind the content (soft white/lavender). The bright mass sits at the **top** of the stage (heading), not the floor. Veil core is `rgba(255, 255, 255, 0.48)` at `50% 12%`. Top-edge wash is `rgba(255, 255, 255, 0.36)` at `50% 0%`. Do not bleach the exclusive purple stage or the floor. Headings and body stay high contrast. The "Last one" eyebrow is readable, not an ink-3 whisper. Mode tiles are quiet readable glass, not near-invisible `bg-white/[0.03]`. Cards and copy are not restyled for brightness.
 
-**Tell the room.** After the Act 4 mode cards, before Continue, on the personalize scene: the **primary window**. Wider (~520–560), brighter glass (background white ~0.22, backdrop-filter ≤ 12px), generous padding. Title, spoken quote, why-line, and an ~18px checkbox must be readable at a glance. Mode picks recede. Not a seventh act, not a red legal banner, not a TOS, not a GDPR logo. The required `recordingConsent` checkbox (CMO-QA #1) still gates Continue. Quiet echo on Act 6 Ready (keep the Listen line; add the sample quote under it). Skip uses this same brighter card plus Get started (not legacy slides). Do not add a second checkbox. Pin this copy:
+**Tell the room.** After the Act 4 mode cards, before Continue, on the personalize scene: the **primary window**. Wider (~520–560), brighter glass (background white ~0.22, backdrop-filter ≤ 12px), generous padding. Title, spoken quote, why-line, and an ~18px checkbox must be readable at a glance. Mode picks recede. Not a seventh act, not a red legal banner, not a TOS, not a GDPR logo. The required `recordingConsent` checkbox (CMO-QA #1) still gates Continue. Quiet echo on Act 6 Ready (keep the Listen line; add the sample quote under it). There is no Skip path. Do not add a second checkbox. Pin this copy:
 
 - Title: Tell the room
 - Lead: Métis captures the meeting so you can keep quality high and actually get things done. People on the call deserve to hear that first.
 - Sample quote: I'm using Métis to capture this for notes, follow-ups, and quality.
 - Why: Saying it out loud is how we stay transparent and aligned with GDPR.
 - Checkbox: I'll tell everyone on the call before I record.
+
+Skip does not exist. Ready is the only finish. Incomplete ASR is Retry, not a dead screen.
 
 Act 3 shows on-device model **download/install progress** (weights already fetch via `ensureLocalModel` on app open). Never copy "not installed" as a dead state. If RAM-gated, say so honestly.
 

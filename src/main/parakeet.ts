@@ -8,7 +8,7 @@
  * `npm run fetch-models` / `npm run dev`'s ensure-asr-assets). If those files are somehow absent,
  * ensureParakeetModel fetches them into userData — never asks the user to reinstall.
  */
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { setFlagsFromString } from 'node:v8'
 import { runInNewContext } from 'node:vm'
@@ -17,6 +17,7 @@ import {
   ASR_ASSETS_MISSING,
   PARAKEET_MODEL_NAME,
   ensureParakeetAssets,
+  parakeetFilesReady,
   resolveParakeetDir
 } from './asr-bundled-ensure'
 
@@ -40,10 +41,9 @@ function modelFiles(): { encoder: string; decoder: string; joiner: string; token
   }
 }
 
-/** True when all model files are present on disk (engine can be constructed without a download). */
+/** True when all model files are present and are real weights — not Access login HTML. */
 export function parakeetModelReady(): boolean {
-  const f = modelFiles()
-  return existsSync(f.encoder) && existsSync(f.decoder) && existsSync(f.joiner) && existsSync(f.tokens)
+  return parakeetFilesReady(modelDir())
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -84,12 +84,21 @@ export function parakeetAddonError(): string | null {
   return addonLoadError
 }
 
-/** Require Parakeet weights. Bundled first; otherwise fetch into userData with visible progress. */
+/** Require Parakeet weights. Bundled first; otherwise fetch into userData with visible progress.
+ *  Also constructs the recognizer (MQA-285) so first Listen is not a multi-second sherpa load. */
 export async function ensureParakeetModel(onProgress?: (pct: number) => void): Promise<void> {
-  if (parakeetModelReady()) return
-  await ensureParakeetAssets(onProgress)
-  if (parakeetModelReady()) return
-  throw new Error(ASR_ASSETS_MISSING)
+  if (!parakeetModelReady()) {
+    await ensureParakeetAssets(onProgress)
+  }
+  if (!parakeetModelReady()) throw new Error(ASR_ASSETS_MISSING)
+  // Best-effort construct so a later Listen click is not a cold sherpa load. Skip stub/tiny
+  // files (unit tests write "ok") — Ort aborts the process on a fake ONNX protobuf.
+  try {
+    const encoder = modelFiles().encoder
+    if (existsSync(encoder) && statSync(encoder).size > 1024) getRecognizer()
+  } catch {
+    /* native probe or missing addon — Listen still falls back to Whisper */
+  }
 }
 
 /** Construct (once) the offline recognizer for the Parakeet transducer model. */

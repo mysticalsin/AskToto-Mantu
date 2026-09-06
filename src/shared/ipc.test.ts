@@ -211,6 +211,12 @@ describe('AskStart screen fast-path fields (M13)', () => {
 })
 
 describe('SettingsSchema', () => {
+  it('defaults lastClickedCli to null — not a secret, not a vault row', () => {
+    expect(DEFAULT_SETTINGS.lastClickedCli).toBeNull()
+    const { lastClickedCli: _last, ...withoutLast } = DEFAULT_SETTINGS
+    expect(SettingsSchema.parse(withoutLast).lastClickedCli).toBeNull()
+  })
+
   it('defaults the time-saved usage counters and assumption, and a profile without them parses', () => {
     const s = SettingsSchema.parse(DEFAULT_SETTINGS)
     expect(s.usageStats).toEqual({ meetingsSummarized: 0, conversationMinutes: 0, firstMeetingAt: 0 })
@@ -356,6 +362,7 @@ describe('SettingsSchema', () => {
     expect(DEFAULT_SETTINGS.planeClientId).toBe('')
     expect(SettingsSchema.parse({ ...DEFAULT_SETTINGS }).planeClientId).toBe('')
     expect(IPC.mcpPlaneConnect).toBe('mcp:planeConnect')
+    expect(IPC.mcpClickupDiscoverDestination).toBe('mcp:clickupDiscoverDestination')
   })
 
   it('defaults asrQuality to best (live Whisper uses the large multilingual model)', () => {
@@ -412,6 +419,21 @@ describe('McpConnectionSchema', () => {
 
   it('accepts the schema-reserved clickup kind (no UI/IPC wiring yet, but the shape parses)', () => {
     expect(McpConnectionSchema.safeParse({ id: 'clickup', kind: 'clickup', label: 'ClickUp' }).success).toBe(true)
+  })
+
+  it('stores the last ClickUp list on the connection (destination is main-owned)', () => {
+    const r = McpConnectionSchema.safeParse({
+      id: 'clickup',
+      kind: 'clickup',
+      label: 'ClickUp',
+      clickupListId: '901419032720',
+      clickupListName: 'Project 1'
+    })
+    expect(r.success).toBe(true)
+    if (r.success) {
+      expect(r.data.clickupListId).toBe('901419032720')
+      expect(r.data.clickupListName).toBe('Project 1')
+    }
   })
 
   it('rejects an unknown kind and an empty id/label', () => {

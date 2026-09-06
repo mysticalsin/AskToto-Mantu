@@ -67,6 +67,32 @@ export interface OnboardingMusicBed {
   isMuted: () => boolean
 }
 
+/** Close-path events that must halt the tour bed. Fail-closed: leftover loop is a bug. */
+export const ONBOARDING_MUSIC_CLOSE_EVENTS = [
+  'pagehide',
+  'beforeunload',
+  'visibilitychange',
+  'keydown'
+] as const
+
+/** Known HTMLAudioElement beds created by this module. `new Audio()` is not in the DOM. */
+const knownOnboardingBeds = new Set<HTMLAudioElement>()
+const knownBedStops = new Set<() => void>()
+
+let closeHooksInstalled = false
+
+/** True when the tour is no longer on screen: tab/window hide, overlay hide, or Escape. */
+export function shouldStopOnboardingMusicOnEvent(e: {
+  type: string
+  key?: string
+  visibilityState?: string
+}): boolean {
+  if (e.type === 'pagehide' || e.type === 'beforeunload') return true
+  if (e.type === 'visibilitychange') return e.visibilityState === 'hidden'
+  if (e.type === 'keydown') return e.key === 'Escape'
+  return false
+}
+
 /** Ends playback for real. Pause alone left the Aria running after quit. */
 export function haltOnboardingAudio(el: HTMLAudioElement | null | undefined): void {
   if (!el) return
@@ -76,6 +102,11 @@ export function haltOnboardingAudio(el: HTMLAudioElement | null | undefined): vo
     el.pause()
   } catch {
     /* already dead */
+  }
+  try {
+    el.currentTime = 0
+  } catch {
+    /* detached / empty src */
   }
   el.volume = 0
   el.removeAttribute('src')
@@ -87,8 +118,56 @@ export function haltOnboardingAudio(el: HTMLAudioElement | null | undefined): vo
   }
 }
 
+function onGlobalCloseEvent(e: Event): void {
+  const vis = typeof document !== 'undefined' ? document.visibilityState : undefined
+  const key = typeof (e as KeyboardEvent).key === 'string' ? (e as KeyboardEvent).key : undefined
+  if (shouldStopOnboardingMusicOnEvent({ type: e.type, key, visibilityState: vis })) {
+    haltAllOnboardingAudio()
+  }
+}
+
+function ensureOnboardingAudioCloseHooks(): void {
+  if (closeHooksInstalled || typeof window === 'undefined') return
+  closeHooksInstalled = true
+  window.addEventListener('pagehide', onGlobalCloseEvent)
+  window.addEventListener('beforeunload', onGlobalCloseEvent)
+  window.addEventListener('keydown', onGlobalCloseEvent)
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onGlobalCloseEvent)
+  }
+}
+
+/**
+ * Module-level singleton halt. Replay remounts without killing leftover `new Audio()`
+ * beds; querySelectorAll misses those, so known refs are required too.
+ * Call BEFORE `patch({ onboardingDone: true })` and BEFORE `patch({ onboardingDone: false })`.
+ */
+export function haltAllOnboardingAudio(): void {
+  const stops = [...knownBedStops]
+  knownBedStops.clear()
+  for (const stop of stops) {
+    try {
+      stop()
+    } catch {
+      /* already dead */
+    }
+  }
+  const found = new Set<HTMLAudioElement>(knownOnboardingBeds)
+  if (typeof document !== 'undefined' && typeof document.querySelectorAll === 'function') {
+    document.querySelectorAll('audio').forEach((node) => {
+      found.add(node)
+    })
+  }
+  for (const el of found) {
+    haltOnboardingAudio(el)
+  }
+  knownOnboardingBeds.clear()
+}
+
 export function createOnboardingMusicBed(): OnboardingMusicBed {
+  ensureOnboardingAudioCloseHooks()
   const el = new Audio(ONBOARDING_MUSIC_SRC)
+  knownOnboardingBeds.add(el)
   el.loop = true
   el.preload = 'auto'
   el.autoplay = true
@@ -105,23 +184,40 @@ export function createOnboardingMusicBed(): OnboardingMusicBed {
     el.volume = ONBOARDING_MUSIC_GAIN * onboardingMusicLoopEnvelope(el.currentTime, el.duration)
   }
 
+  const onCloseEvent = (e: Event): void => {
+    const vis = typeof document !== 'undefined' ? document.visibilityState : undefined
+    const key = typeof (e as KeyboardEvent).key === 'string' ? (e as KeyboardEvent).key : undefined
+    if (shouldStopOnboardingMusicOnEvent({ type: e.type, key, visibilityState: vis })) stop()
+  }
+
   const stop = (): void => {
     if (stopped) return
     stopped = true
     muted = true
+    knownOnboardingBeds.delete(el)
+    knownBedStops.delete(stop)
     haltOnboardingAudio(el)
     el.removeEventListener('timeupdate', applyVolume)
     if (typeof window !== 'undefined') {
-      window.removeEventListener('pagehide', stop)
-      window.removeEventListener('beforeunload', stop)
+      window.removeEventListener('pagehide', onCloseEvent)
+      window.removeEventListener('beforeunload', onCloseEvent)
+      window.removeEventListener('keydown', onCloseEvent)
+    }
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', onCloseEvent)
     }
   }
 
   el.addEventListener('timeupdate', applyVolume)
   if (typeof window !== 'undefined') {
-    window.addEventListener('pagehide', stop)
-    window.addEventListener('beforeunload', stop)
+    window.addEventListener('pagehide', onCloseEvent)
+    window.addEventListener('beforeunload', onCloseEvent)
+    window.addEventListener('keydown', onCloseEvent)
   }
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onCloseEvent)
+  }
+  knownBedStops.add(stop)
 
   return {
     element: el,

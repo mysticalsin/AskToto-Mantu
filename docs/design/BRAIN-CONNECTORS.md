@@ -136,6 +136,8 @@ Render as inline SVG React components (`ClickUpMark`, `PlaneMark`). Plane's hex 
 - Pack. Merge. Ready-to-merge.
 - Rewriting Polo, Review push chrome, or `mcpClient.ts` transport (OAuth tokens are bearer keys).
 
+Post-meeting ClickUp **create-task** (destination, args, fail-loud) lives in [`CLICKUP-PUSH.md`](./CLICKUP-PUSH.md). Connect OAuth stays this file + PR 73's exact loopback DCR.
+
 ## Tests (required)
 
 Source-contract on `Settings.tsx` (no Settings render harness):

@@ -285,8 +285,8 @@ export function createStarfieldBed(
     ;(material.uniforms.uCursor.value as Vector3).copy(cursorWorld)
     finalPass.uniforms.iTime.value = t
 
-    camera.position.set(ndc.x * CONFIG.parallax, ndc.y * CONFIG.parallax, 5 - scroll * CONFIG.scrollPush)
-    camera.lookAt(ndc.x * CONFIG.parallax, ndc.y * CONFIG.parallax, -10)
+    camera.position.set(0, 0, 5 - scroll * CONFIG.scrollPush)
+    camera.lookAt(0, 0, -10)
     group.rotation.z += dt * (spinBase + scroll * CONFIG.scrollSpin)
 
     camera.layers.set(LAYERS.TORUS_SCENE)

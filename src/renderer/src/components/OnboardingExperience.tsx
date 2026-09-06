@@ -1,7 +1,7 @@
 /**
  * Métis onboarding as an EXPERIENCE — six-act narrative per docs/ONBOARDING-EXPERIENCE.md, now that
  * Act 6 (Ready, MQA-283) closes it out: hero → staged problem story → reveal → live environment-scan
- * magic moment → personalization/vibe → [license, optional] → Ready → finish (anatomy extracted from
+ * magic moment → personalization/vibe → [license, optional] → appearance → Ready → finish (anatomy extracted from
  * the Vibe Island reference Tony supplied: welcome → demo → config → vibe → license → ready).
  *
  * Deliberate constraints:
@@ -33,6 +33,7 @@
  *   needs comes back through onDone.
  */
 import { useCallback, useEffect, useId, useRef, useState, type Ref } from 'react'
+import { bundleFailureUserMessage, isRetryableBundleMessage } from '@shared/bundle-response'
 import {
   AlertCircle,
   Check,
@@ -64,17 +65,28 @@ import type {
   ProfileRecoveryResult,
   PublicSettings
 } from '@shared/ipc'
+import type { OverlayLayout } from '@shared/overlay-chrome'
 import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { PERMISSIONS_POLL_MS } from '../state'
 import { InlineOrb } from './AgentStatus'
 import { MetisMark } from './MetisMark'
 import { OnboardingDemoScene, prefetchOnboardingDemoChunks } from './OnboardingDemoScene'
-import { OnboardingStarfield } from './OnboardingStarfield'
-import { shouldMountStarfield } from '../lib/onboarding-starfield-spec'
+import { OnboardingAppearance } from './OnboardingAppearance'
+import { KineticGrid } from './onboarding/KineticGrid'
+import { shouldMountKineticGrid } from '../lib/onboarding-kinetic-grid'
 import { isWindows } from '../lib/keys'
 import { ONBOARDING_PERSONAS, type OnboardingPersonaId } from '../lib/persona-vibe'
-import { sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup, type OnboardingScene } from '../lib/onboarding-flow'
-import { createOnboardingMusicBed } from '../lib/onboarding-music'
+import {
+  canMarkOnboardingDone,
+  sceneAfterAppearance,
+  sceneAfterLicense,
+  sceneAfterPersonalize,
+  sceneAfterReveal,
+  sceneAfterSetup,
+  type OnboardingScene
+} from '../lib/onboarding-flow'
+import { appearanceSettingsPatch, seedOnboardingAppearance } from '../lib/onboarding-appearance'
+import { createOnboardingMusicBed, haltAllOnboardingAudio } from '../lib/onboarding-music'
 import { closeOnboardingPortal, disposePortalAudio, playBarLand, playPortalOpen, requestBarLand } from '../lib/onboarding-portal'
 import {
   TELL_THE_ROOM_CHECKBOX,
@@ -84,7 +96,7 @@ import {
   TELL_THE_ROOM_TITLE,
   TELL_THE_ROOM_WHY
 } from '../lib/onboarding-tell-the-room'
-import { ONBOARDING_HERO_VIDEO_SRC, playOnboardingVideo } from '../lib/onboarding-hero-video'
+import { ONBOARDING_HERO_VIDEO_SRC } from '../lib/onboarding-hero-video'
 
 // Same icon-per-mode mapping as the Settings → Personalize `ModePicker` (ModePicker.tsx) — one mode,
 // one icon, everywhere it appears, rather than inventing a second icon language just for this scene.
@@ -106,8 +118,7 @@ export interface OnboardingExperienceProps {
    *  (`onboardingDone: true`) rather than racing an in-flight patch. OnboardingV2 below is the only
    *  caller and marks onboarding done inside this callback. */
   onDone: (result: { mode: ConversationMode; recordingConsent: boolean }) => void | Promise<void>
-  /** Optional. Unused: Skip stays on this exclusive stage (tell-the-room + Get started). */
-  onSkip?: () => void
+  /** Unused. Skip is gone — the tour must be completed. */
   /** Ready's OPTIONAL "Add your own AI provider" link (never a gate) — opens Settings' AI tab. Omitted
    *  in contexts with no Settings surface to open (the link itself does not render without it). */
   onOpenAiSettings?: () => void
@@ -129,17 +140,13 @@ const PROBLEM_STORY: string[] = [
   '…and the moment passes.'
 ]
 
-// 'license' (Act 5, MQA-281/282) is deliberately NOT in GUIDED_SCENES below — see ActProgress's
-// comment. It now appears between 'personalize' and 'ready' (Act 6's re-point, MQA-283, moved it from
-// its original setup->license->personalize position to match the six-act canonical order — see
-// onboarding-flow.ts), and only when settings.licenseGateEnabled is true (the non-default,
-// self-hosted-license-server case); every other user's flow is byte-for-byte the four-scene guided
-// sequence the MQA-201 regression test pins, now closed out by the 'ready' bookend below.
+// 'license' is deliberately NOT in GUIDED_SCENES. It only appears after personalize when
+// settings.licenseGateEnabled is true. Dots track the guided acts Tony walks:
+// problem → reveal → appearance → setup → personalize. See onboarding-flow.ts.
 type Scene = OnboardingScene
 
-// Hero and Ready are the bookends, not "steps" — like Onboarding.tsx's own slide 1/6 bookends, the dots
-// only track the guided acts in between.
-const GUIDED_SCENES: Scene[] = ['problem', 'reveal', 'setup', 'personalize']
+// Hero and Ready are the bookends. Dots track the guided acts in between.
+const GUIDED_SCENES: Scene[] = ['problem', 'reveal', 'appearance', 'setup', 'personalize']
 
 // Lives in its own reserved-height row above the scene content (see the render below) rather than an
 // absolute overlay — an overlay collided with scene headings that sit close to the top on taller scenes
@@ -224,7 +231,7 @@ function OnboardingHeroVideo({
   )
 }
 
-function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => void }): JSX.Element {
+function HeroWelcome({ onBegin }: { onBegin: () => void }): JSX.Element {
   return (
     <>
       <div className="hero-welcome relative z-10 flex flex-col items-center gap-5">
@@ -251,16 +258,6 @@ function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => 
         <button type="button" onClick={onBegin} className="onboard-cta no-drag focus-ring">
           Next
         </button>
-        {onSkip && (
-          <button
-            type="button"
-            onClick={onSkip}
-            className="onboard-glass onboard-glass-chip onboard-skip-chip fade-up no-drag focus-ring"
-            style={{ animationDelay: '1150ms', animationFillMode: 'backwards' }}
-          >
-            Skip the tour
-          </button>
-        )}
         <p
           className="hero-byline onboard-glass onboard-glass-chip fade-up m-0 text-[10px] tracking-wide"
           style={{ animationDelay: '1300ms', animationFillMode: 'backwards' }}
@@ -283,7 +280,7 @@ function HeroWelcome({ onBegin, onSkip }: { onBegin: () => void; onSkip?: () => 
 // 'restart' = permission is actually granted, but this same-session ScreenCaptureKit handle never saw it
 // (macOS only applies a fresh Screen Recording grant to the NEXT launch) — needs a relaunch, not a prompt.
 // 'blocked' = the OS holds an explicit Deny, which no prompt can undo — only the privacy pane can.
-export type SetupRowState = 'checking' | 'ready' | 'action' | 'blocked' | 'restart' | 'skipped'
+export type SetupRowState = 'checking' | 'loading' | 'ready' | 'action' | 'blocked' | 'restart' | 'skipped'
 
 export interface SetupRow {
   key: string
@@ -345,14 +342,19 @@ export function localModelRowStatus(
     }
   }
   if (model.unavailableReason === 'downloading') {
-    const pct = Math.round((model.downloadProgress ?? 0) * 100)
-    return { state: 'action', detail: `Downloading ${pct}%`, progress: model.downloadProgress }
+    const p = model.downloadProgress
+    const real = p != null && p > 0 && p < 1
+    return {
+      state: 'loading',
+      detail: real ? `Downloading ${Math.round(p * 100)}%` : 'Downloading…',
+      progress: p
+    }
   }
   if (model.unavailableReason === 'download-failed') {
     return { state: 'action', detail: 'Download paused. Métis retries when the network is back.' }
   }
   if (model.unavailableReason === 'not-downloaded') {
-    return { state: 'action', detail: 'Starting the on-device download…' }
+    return { state: 'loading', detail: 'Starting the on-device download…' }
   }
   if (model.ready) return { state: 'ready', detail: 'On-device model ready' }
   return { state: 'checking', detail: 'Checking the on-device model…' }
@@ -379,19 +381,32 @@ export function asrAssetsRowStatus(
       detail: s.error || s.label || 'Could not get the transcription files. Try again.'
     }
   }
-  if (s.status === 'downloading') {
+  if (s.status === 'downloading' || s.status === 'idle') {
     return {
-      state: 'action',
+      state: 'loading',
       detail: s.label || 'Getting transcription files…',
       progress: s.progress
     }
   }
-  return { state: 'action', detail: s.label || 'Getting transcription files…' }
+  return { state: 'loading', detail: s.label || 'Getting transcription files…', progress: s.progress }
+}
+
+/** AgentStatus percent is 0–100. Only a real open interval (0, 1) becomes a determinate %. */
+export function setupRowLoadingPercent(progress: number | null | undefined): number | undefined {
+  if (progress == null || !Number.isFinite(progress)) return undefined
+  if (progress <= 0 || progress >= 1) return undefined
+  return Math.round(progress * 100)
 }
 
 export function asrRowNeedsRetry(row: Pick<SetupRow, 'state' | 'detail'>): boolean {
   if (row.state !== 'action') return false
-  return /could not get|try again|check your connection/i.test(row.detail ?? '')
+  return isRetryableBundleMessage(row.detail)
+}
+
+/** Ensure / status IPC failure. Never idle. Always Retry. */
+export function asrEnsureFailureStatus(err?: unknown): AsrAssetsStatus {
+  const message = bundleFailureUserMessage(err)
+  return { ready: false, status: 'error', progress: 0, label: message, error: message }
 }
 
 /** First-run cannot leave Act 3 while Parakeet + Whisper-floor files are still missing. */
@@ -400,7 +415,7 @@ export function setupAsrBlocksContinue(rows: SetupRow[]): boolean {
   return !asr || asr.state !== 'ready'
 }
 
-/** First-run cannot mark onboardingDone (Ready or Skip) while transcription files are missing. */
+/** First-run cannot mark onboardingDone until Ready, files are ready, and consent is given. */
 export function firstRunCanFinish(input: { asrReady: boolean; consent: boolean }): boolean {
   return input.asrReady && input.consent
 }
@@ -411,10 +426,9 @@ export function asrStatusIsReady(status: AsrAssetsStatus | null | undefined): bo
 
 /** Act 3 — "scan first, then present a completed configuration": two DIFFERENT claims the scene makes,
  *  kept as one pure derivation so both stay honest and are each independently testable.
- *  `scanDone` only means every row has left 'checking' — safe to stop showing spinners and reveal the
- *  Listen-only caveat, which is true whether or not anything still needs action.
- *  `allReady` is the stronger "nothing to configure" claim (MQA-201's rule: never true from a row that
- *  never actually resolved, and never true while something still needs 'action'/'blocked'/'restart'). */
+ *  `scanDone` only means every row has left 'checking' — loading (bytes moving) still counts as
+ *  scanned. Safe to reveal the Listen-only caveat. `allReady` stays false while any row is
+ *  loading / action / blocked / restart. */
 export interface SetupScanSummary {
   scanDone: boolean
   allReady: boolean
@@ -755,12 +769,14 @@ function useOnboardingMusic(): {
   const [muted, setMuted] = useState(false)
   const bedRef = useRef<ReturnType<typeof createOnboardingMusicBed> | null>(null)
   const pendingRetryRef = useRef(false)
-  if (!bedRef.current && typeof Audio !== 'undefined') {
-    bedRef.current = createOnboardingMusicBed()
-  }
 
   useEffect(() => {
+    // Never create the bed during render — Strict Mode double-invoke leaks a second Aria.
+    if (typeof Audio !== 'undefined') {
+      bedRef.current = createOnboardingMusicBed()
+    }
     return () => {
+      haltAllOnboardingAudio()
       bedRef.current?.stop()
       bedRef.current = null
       disposePortalAudio()
@@ -809,8 +825,7 @@ export function OnboardingExperience({
 }: OnboardingExperienceProps): JSX.Element {
   const music = useOnboardingMusic()
   const heroVideoRef = useRef<HTMLVideoElement>(null)
-  const playHero = (restart = false): void => {
-    playOnboardingVideo(heroVideoRef.current, { restart })
+  const playHero = (): void => {
     music.start()
   }
 
@@ -821,15 +836,15 @@ export function OnboardingExperience({
     music.start()
   }, [])
   const [scene, setScene] = useState<Scene>('hero')
-  const [starfieldFailed, setStarfieldFailed] = useState(false)
-  const [starfieldPulse, setStarfieldPulse] = useState(0)
-  useEffect(() => {
-    setStarfieldPulse((n) => n + 1)
-  }, [scene])
   const [rows, setRows] = useState<SetupRow[]>([])
   const [mode, setMode] = useState<ConversationMode>('general')
-  // Recording-consent gate (CMO-QA #1). Skip lands on the same tell-the-room card, never the legacy
-  // slides. Finish is blocked until this checkbox is checked, on both Ready and Skip Get started.
+  const [appearance, setAppearance] = useState<OverlayLayout>(() => seedOnboardingAppearance(settings))
+  const pickAppearance = (id: OverlayLayout): void => {
+    setAppearance(id)
+    patch?.(appearanceSettingsPatch(id))
+  }
+  const appearanceLocked = Boolean(settings?.managedKeys?.includes('overlayLayout'))
+  // Recording-consent gate (CMO-QA #1). Finish is blocked until this checkbox is checked on Ready.
   const [consent, setConsent] = useState(false)
   const [asrStatus, setAsrStatus] = useState<AsrAssetsStatus>(IDLE_ASR_STATUS)
   const asrReady = asrStatusIsReady(asrStatus)
@@ -841,7 +856,7 @@ export function OnboardingExperience({
     const apply = (s: AsrAssetsStatus): void => {
       if (live) setAsrStatus(s)
     }
-    void window.toto.asrAssetsEnsure().then(apply).catch(() => apply(IDLE_ASR_STATUS))
+    void window.toto.asrAssetsEnsure().then(apply).catch((err) => apply(asrEnsureFailureStatus(err)))
     const poll = async (): Promise<void> => {
       const s = await window.toto.asrAssetsStatus().catch(() => null)
       if (s) apply(s)
@@ -891,8 +906,16 @@ export function OnboardingExperience({
     void (async () => {
       const delay = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
       await delay(500)
-      void window.toto.asrAssetsEnsure().catch(() => {})
-      const asrStatus = await window.toto.asrAssetsStatus().catch(() => IDLE_ASR_STATUS)
+      void window.toto
+        .asrAssetsEnsure()
+        .then((s) => {
+          if (live) setAsrStatus(s)
+        })
+        .catch((err) => {
+          if (!live) return
+          setAsrStatus(asrEnsureFailureStatus(err))
+        })
+      const asrStatus = await window.toto.asrAssetsStatus().catch((err) => asrEnsureFailureStatus(err))
       const asr = asrAssetsRowStatus(asrStatus)
       set('asr', asr.state, asr.detail, asr.progress)
       await delay(450)
@@ -1012,7 +1035,7 @@ export function OnboardingExperience({
   }, [scene, settings?.localLlm.modelId])
 
   const retryAsr = async (): Promise<void> => {
-    const status = await window.toto.asrAssetsEnsure().catch(() => IDLE_ASR_STATUS)
+    const status = await window.toto.asrAssetsEnsure().catch((err) => asrEnsureFailureStatus(err))
     setAsrStatus(status)
     const asr = asrAssetsRowStatus(status)
     setRows((rs) => rs.map((r) => (r.key === 'asr' ? { ...r, state: asr.state, detail: asr.detail, progress: asr.progress } : r)))
@@ -1039,11 +1062,12 @@ export function OnboardingExperience({
   }
 
   // Act 6 (Ready, MQA-283): this is now the narrative's actual finish — invoked from the Ready scene's
-  // CTA, not personalize's Start (which now only advances to license/ready, see sceneAfterPersonalize).
+  // CTA, not personalize's Start (which now only advances to license/appearance, see sceneAfterPersonalize).
   // Returns a promise so Ready's optional provider link can await it before opening Settings.
   const finish = async (): Promise<void> => {
-    if (doneRef.current || !firstRunCanFinish({ asrReady, consent })) return
+    if (doneRef.current || !canMarkOnboardingDone({ scene, asrReady, consent })) return
     doneRef.current = true
+    haltAllOnboardingAudio()
     music.stop()
     disposePortalAudio()
     await closeOnboardingPortal(music.muted, prefersReducedMotion())
@@ -1068,9 +1092,7 @@ export function OnboardingExperience({
       onPointerDown={music.start}
     >
       {scene === 'hero' && <OnboardingHeroVideo videoRef={heroVideoRef} />}
-      {shouldMountStarfield(scene) && !starfieldFailed && (
-        <OnboardingStarfield pulse={starfieldPulse} onUnavailable={() => setStarfieldFailed(true)} />
-      )}
+      {shouldMountKineticGrid(scene) && <KineticGrid />}
       <button
         type="button"
         className="onboard-mute no-drag focus-ring"
@@ -1080,23 +1102,21 @@ export function OnboardingExperience({
       >
         {music.muted ? <VolumeX size={18} /> : <Volume2 size={18} />}
       </button>
-      <div className="flex h-9 shrink-0 items-center justify-center pt-3">
+      <div className="onboard-tour-chrome flex h-9 shrink-0 items-center justify-center pt-3">
         <ActProgress scene={scene} />
       </div>
-      <div className="flex w-full flex-1 flex-col items-center justify-center gap-6">
+      <div className="onboard-tour-slot flex w-full flex-1 flex-col items-center justify-center gap-6">
       {scene === 'hero' && (
         <HeroWelcome
           onBegin={() => {
-            playOnboardingVideo(heroVideoRef.current, { restart: true })
             music.start()
             setScene('problem')
           }}
-          onSkip={() => setScene('skip')}
         />
       )}
 
       {scene === 'problem' && (
-        <div key="problem" className="flex flex-col items-center gap-8">
+        <div key="problem" className="onboard-post-lady flex flex-col items-center gap-8">
           <div className="scene-enter flex max-w-[420px] flex-col gap-3 text-left">
             {PROBLEM_STORY.map((line, i) => (
               <p
@@ -1131,12 +1151,9 @@ export function OnboardingExperience({
           onSetMode={setMode}
           onContinue={() => {
             playHero()
-            setScene('setup')
+            setScene(sceneAfterReveal())
           }}
           onPlayVideo={() => playHero()}
-          // Demo Skip jumps to Personalize (keep Welcome + story + demo, skip the checklist).
-          // Hero Skip is different: it leaves the six-act narrative for the tell-the-room skip screen.
-          onSkipToEnd={() => setScene('personalize')}
         />
       )}
 
@@ -1275,9 +1292,9 @@ export function OnboardingExperience({
                     </p>
                   )}
                 </div>
-                {r.state === 'checking' && (
+                {(r.state === 'checking' || r.state === 'loading') && (
                   <span className="mt-0.5 shrink-0">
-                    <InlineOrb kind="loading" />
+                    <InlineOrb kind="loading" percent={setupRowLoadingPercent(r.progress)} />
                   </span>
                 )}
                 {r.state === 'ready' && <Check size={16} className="mt-0.5 shrink-0 text-[var(--color-accent-2)]" />}
@@ -1333,7 +1350,7 @@ export function OnboardingExperience({
 
       {scene === 'personalize' && (
         <div key="personalize" className="scene-enter onboard-act4 flex flex-col items-center">
-          <div className="flex flex-col items-center gap-2">
+          <div className="onboard-act4-heading flex flex-col items-center gap-2">
             <p className="onboard-act4-kicker">Last one</p>
             <h2 className="onboard-act4-title">How should Métis show up?</h2>
             <p className="onboard-act4-lead">
@@ -1375,8 +1392,7 @@ export function OnboardingExperience({
             <TellTheRoomCard consent={consent} onConsent={setConsent} />
             <button
               type="button"
-              // Act 6 re-point (MQA-283): advances to license (only if enabled) or straight to Ready —
-              // never finishes here directly any more. See onboarding-flow.ts.
+              // Advances to license (only if enabled) or Ready. See onboarding-flow.ts.
               onClick={() => {
                 playHero()
                 setScene(sceneAfterPersonalize(settings?.licenseGateEnabled))
@@ -1404,6 +1420,20 @@ export function OnboardingExperience({
         />
       )}
 
+      {scene === 'appearance' && (
+        <div key="appearance" className="flex w-full flex-col items-center">
+          <OnboardingAppearance
+            value={appearance}
+            locked={appearanceLocked}
+            onChange={pickAppearance}
+            onContinue={() => {
+              playHero()
+              setScene(sceneAfterAppearance())
+            }}
+          />
+        </div>
+      )}
+
       {scene === 'ready' && (
         <ActReady
           mode={mode}
@@ -1417,55 +1447,14 @@ export function OnboardingExperience({
         />
       )}
 
-      {scene === 'skip' && (
-        <div key="skip" className="scene-enter onboard-act4 onboard-skip-screen flex flex-col items-center">
-          <div className="hero-mark" aria-hidden="true">
-            <MetisMark size={72} />
-          </div>
-          <TellTheRoomCard consent={consent} onConsent={setConsent} />
-          {!asrReady && (
-            <div className="flex w-full max-w-[360px] flex-col items-center gap-1.5">
-              <p className="m-0 text-[11px] leading-snug text-[color:var(--color-ink-3)]">{asrRow.detail}</p>
-              {asrRow.progress != null && asrRow.progress > 0 && asrRow.progress < 1 && (
-                <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/10">
-                  <div
-                    className="h-full rounded-full bg-[#9A2BF0]"
-                    style={{ width: `${Math.round(asrRow.progress * 100)}%` }}
-                  />
-                </div>
-              )}
-              {asrRowNeedsRetry(asrRow) && (
-                <button
-                  type="button"
-                  onClick={() => void retryAsr()}
-                  className="no-drag focus-ring rounded-full bg-[var(--color-accent)]/15 px-2.5 py-1 text-[11px] font-semibold text-[color:var(--color-accent-2)] hover:bg-[var(--color-accent)]/25"
-                >
-                  Try again
-                </button>
-              )}
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={() => void finish()}
-            disabled={!firstRunCanFinish({ asrReady, consent })}
-            className={
-              'onboard-cta no-drag focus-ring' +
-              (firstRunCanFinish({ asrReady, consent }) ? '' : ' onboard-cta--muted')
-            }
-          >
-            Get started
-          </button>
-        </div>
-      )}
       </div>
     </div>
   )
 }
 
 /**
- * First-run flow. Finishes onboarding at Ready or Skip Get started.
- * Skip stays on this exclusive stage (tell-the-room card). Does not mount Onboarding.tsx.
+ * First-run flow. Finishes onboarding only at Ready Get started.
+ * There is no Skip. Does not mount Onboarding.tsx.
  */
 export function OnboardingV2({
   settings,
@@ -1488,6 +1477,7 @@ export function OnboardingV2({
       patch={patch}
       onOpenAiSettings={onOpenAiSettings}
       onDone={async ({ mode, recordingConsent }) => {
+        haltAllOnboardingAudio()
         await patch({ mode, recordingConsent, onboardingDone: true, onboardingDoneAt: Date.now() })
         onDone()
       }}

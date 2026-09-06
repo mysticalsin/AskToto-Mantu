@@ -10,7 +10,6 @@
 import { describe, it, expect } from 'vitest'
 import { DEFAULT_SETTINGS } from '@shared/ipc'
 import { buildPrewarmMessages } from './prewarm'
-// @ts-expect-error — plain .mjs script, no type declarations; import is fine at runtime under Vite/Vitest.
 import { buildSuggestSystemPrompt, suggestUserText } from '../../../scripts/prove-local-ttft.mjs'
 
 describe('prove-local-ttft.mjs system-prompt parity with buildPrewarmMessages (F4)', () => {

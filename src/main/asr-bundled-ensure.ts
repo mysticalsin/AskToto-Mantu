@@ -6,12 +6,21 @@
  * reported; the user is never told to reinstall for missing weights.
  */
 import { app, net } from 'electron'
-import { createWriteStream, existsSync, mkdirSync, renameSync, rmSync, statSync } from 'node:fs'
+import { closeSync, createWriteStream, existsSync, mkdirSync, openSync, readSync, renameSync, rmSync, statSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { execFile } from 'node:child_process'
 import { pipeline } from 'node:stream/promises'
 import { promisify } from 'node:util'
 import { Readable } from 'node:stream'
+import {
+  BUNDLE_GOT_LOGIN_HTML,
+  BUNDLE_NETWORK,
+  bundleFailureUserMessage,
+  bundleKindForUrl,
+  inspectBundleResponse,
+  looksLikeAccessRedirect,
+  looksLikeHtmlBytes
+} from '@shared/bundle-response'
 import { mainLog } from './logger'
 
 const execFileAsync = promisify(execFile)
@@ -40,6 +49,27 @@ export const WHISPER_FLOOR_REQUIRED_FILES = [
 const HF_BASE = `https://huggingface.co/${WHISPER_FLOOR_ID}/resolve/main`
 const REQUEST_TIMEOUT_MS = 60_000
 const IDLE_TIMEOUT_MS = 120_000
+const MAX_REDIRECTS = 8
+
+/** Follow https hops. Access 302 HTML is never a bundle. */
+export async function fetchBundleResponse(
+  url: string,
+  signal: AbortSignal,
+  fetchImpl: typeof net.fetch = net.fetch
+): Promise<Response> {
+  let current = url
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const res = await fetchImpl(current, { signal })
+    if (res.status < 300 || res.status >= 400) return res
+    const loc = res.headers.get('location')
+    if (!loc) return res
+    if (looksLikeAccessRedirect(loc)) throw new Error(BUNDLE_GOT_LOGIN_HTML)
+    const next = new URL(loc, current).toString()
+    if (!/^https:\/\//i.test(next)) throw new Error(BUNDLE_NETWORK)
+    current = next
+  }
+  throw new Error(BUNDLE_NETWORK)
+}
 
 export const ASR_ASSETS_MISSING =
   'Could not get the transcription files. Check your connection and try again.'
@@ -82,9 +112,31 @@ export function userDataAsrRoot(): string {
   return join(app.getPath('userData'), 'asr-models')
 }
 
+function fileLooksLikeHtml(path: string): boolean {
+  let fd = -1
+  try {
+    fd = openSync(path, 'r')
+    const buf = Buffer.alloc(512)
+    const n = readSync(fd, buf, 0, 512, 0)
+    return looksLikeHtmlBytes(buf.subarray(0, n))
+  } catch {
+    return false
+  } finally {
+    if (fd >= 0) {
+      try {
+        closeSync(fd)
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
 export function filePresent(path: string): boolean {
   try {
-    return existsSync(path) && statSync(path).size > 0
+    if (!existsSync(path) || statSync(path).size <= 0) return false
+    // Access login HTML written as .onnx / .js / .json is not a bundle.
+    return !fileLooksLikeHtml(path)
   } catch {
     return false
   }
@@ -160,16 +212,31 @@ async function downloadTo(url: string, dest: string, onChunk?: (n: number, total
   arm(REQUEST_TIMEOUT_MS, `request timeout for ${url}`)
 
   try {
-    const res = await net.fetch(url, { signal: ctrl.signal })
+    const res = await fetchBundleResponse(url, ctrl.signal)
+    const inspected = inspectBundleResponse({
+      status: res.status,
+      contentType: res.headers.get('content-type'),
+      location: res.headers.get('location'),
+      expected: bundleKindForUrl(url)
+    })
+    if (!inspected.ok) throw new Error(inspected.message)
     if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`)
     if (!res.body) throw new Error(`empty body for ${url}`)
     const declared = Number(res.headers.get('content-length') || 0)
     const reader = res.body.getReader()
+    const first = await reader.read()
+    if (first.value && looksLikeHtmlBytes(first.value)) {
+      await reader.cancel().catch(() => undefined)
+      throw new Error(BUNDLE_GOT_LOGIN_HTML)
+    }
     arm(IDLE_TIMEOUT_MS, `stalled downloading ${url}`)
-    let got = 0
+    let got = first.value?.byteLength ?? 0
+    if (first.value) onChunk?.(got, declared)
     await pipeline(
       Readable.from(
         (async function* () {
+          if (first.value) yield first.value
+          if (first.done) return
           for (;;) {
             const { done, value } = await reader.read()
             if (done) return
@@ -304,7 +371,7 @@ async function runEnsure(onProgress?: (pct: number) => void): Promise<void> {
     mainLog.info('[asr-assets] Parakeet and Whisper floor ready')
   } catch (e) {
     const error = e instanceof Error ? e.message : String(e)
-    const message = /reinstall/i.test(error) ? ASR_ASSETS_MISSING : error || ASR_ASSETS_MISSING
+    const message = /reinstall/i.test(error) ? ASR_ASSETS_MISSING : bundleFailureUserMessage(error) || ASR_ASSETS_MISSING
     publish({ status: 'error', progress: state.progress, label: message, error: message }, onProgress)
     mainLog.warn('[asr-assets] ensure failed:', message)
     throw new Error(message)

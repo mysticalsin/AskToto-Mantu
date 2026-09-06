@@ -22,11 +22,13 @@ function ChromeDiagram({ id }: { id: OverlayLayout }): JSX.Element {
 export function OverlayChromePicker({
   value,
   locked,
-  onChange
+  onChange,
+  copy = OVERLAY_LAYOUT_COPY
 }: {
   value: unknown
   locked: boolean
   onChange: (id: OverlayLayout) => void
+  copy?: Record<OverlayLayout, { title: string; desc: string }>
 }): JSX.Element {
   const selected = parseOverlayLayout(value)
   return (
@@ -49,10 +51,10 @@ export function OverlayChromePicker({
           >
             <ChromeDiagram id={id} />
             <span className="overlay-chrome-card__title">
-              {OVERLAY_LAYOUT_COPY[id].title}
+              {copy[id].title}
               {id === 'hide' ? <span className="overlay-chrome-card__default">Default</span> : null}
             </span>
-            <span className="overlay-chrome-card__desc">{OVERLAY_LAYOUT_COPY[id].desc}</span>
+            <span className="overlay-chrome-card__desc">{copy[id].desc}</span>
           </button>
         )
       })}

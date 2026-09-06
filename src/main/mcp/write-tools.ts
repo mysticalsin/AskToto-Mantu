@@ -11,6 +11,7 @@
  */
 
 import type { McpConnection, McpConnectionKind } from '@shared/ipc'
+import { pickClickupCreateTask } from './clickupPush'
 
 export const WRITE_INTENTS = ['crm-note', 'outlook-draft', 'outlook-event', 'next-steps'] as const
 export type WriteIntent = (typeof WRITE_INTENTS)[number]
@@ -37,12 +38,18 @@ export type WriteTarget =
     }
 
 const WRITE_NAME = /(?:create|add|push|insert|upsert|write|note|draft|event|task|workitem|issue|comment)/i
+const NOT_WRITE = /attach|file|upload/i
 
 export function isWriteToolName(name: string): boolean {
+  if (NOT_WRITE.test(name)) return false
   return WRITE_NAME.test(name)
 }
 
 export function pickWriteTool(tools: string[], intent: WriteIntent): string | undefined {
+  if (intent === 'next-steps') {
+    const createTask = pickClickupCreateTask(tools)
+    if (createTask) return createTask
+  }
   const ranked = tools.filter(isWriteToolName)
   if (!ranked.length) return undefined
   const prefer =

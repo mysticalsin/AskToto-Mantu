@@ -76,11 +76,15 @@ export function AgentStatus({
 export function InlineOrb({
   kind = 'loading',
   theme = 'dark',
-  className
+  className,
+  percent
 }: {
   kind?: AgentStatusKind
   theme?: OrbTheme
   className?: string
+  percent?: number | null
 }): JSX.Element {
-  return <AgentStatus kind={kind} size="inline" caption={false} theme={theme} className={className} />
+  return (
+    <AgentStatus kind={kind} size="inline" caption={false} theme={theme} percent={percent} className={className} />
+  )
 }

@@ -144,6 +144,14 @@ import {
   resolveRoutingMode,
   localRuntimeBinaryPresent
 } from './llm/local-routing'
+import {
+  isCliProviderId,
+  isDustChatForbidden,
+  nextAskRoute,
+  nextLastClickedCli,
+  pickWorkingCliPrimary,
+  workingCliOrder
+} from '@shared/ask-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText } from './mac-helper'
@@ -156,6 +164,11 @@ import {
   recenterXForWidth,
   refitToDisplay as islandRefitToDisplay,
   exclusiveOnboardingBounds,
+  exclusiveMayUseSimpleFullScreen,
+  EXCLUSIVE_ONBOARDING_BACKGROUND,
+  firstPaintOverlayBounds,
+  overlayWindowChrome,
+  OVERLAY_TRANSPARENT_BACKGROUND,
   hoverRestTop,
   hoverWatchRestRect,
   overlayRestSize,
@@ -312,7 +325,14 @@ import { buildSystem, buildSystemParts } from './personas'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
 import { isOpenAICloudCacheEligible, promptCacheKey as makePromptCacheKey } from '@shared/operator'
 import { loadVerifiedSkill, setModeSkillsOverlayRoot, skillLockHashForMode } from './mode-skills'
-import { recordOperatorAsk, recordOperatorCrmSend, recordOperatorRating, startOperatorRuntime } from './operator-ingest'
+import {
+  operatorAskTransport,
+  operatorFundedProviders,
+  recordOperatorAsk,
+  recordOperatorCrmSend,
+  recordOperatorRating,
+  startOperatorRuntime
+} from './operator-ingest'
 import { buildCrmIngestEvent, meetingFileHash, shouldIngestCrm } from './operator-crm'
 import { startOperatorOverlayPoll } from './operator-overlay'
 import { initLogging, mainLog, auditLog } from './logger'
@@ -425,6 +445,15 @@ import { isInsideResourceBase, realResourceBase } from './asr-model-path'
 import { detectCli, setupCli, installCli, loginCli, prewarmCli, checkCliSession, connectCliSession } from './cli'
 import { connectMcp, pushToMcp } from './mcp/mcpClient'
 import { resolveWriteTargets } from './mcp/write-tools'
+import {
+  discoverClickupList,
+  loudClickupError,
+  parseTaskUrl,
+  prepareClickupPush,
+  savedClickupList,
+  upsertClickupDestination,
+  type ClickupList
+} from './mcp/clickupPush'
 import { appendTimeSavedEvent, summarizeTimeSaved } from './time-saved-log'
 import {
   estimateEmailSummaryMinutes,
@@ -1417,7 +1446,11 @@ function retireCli(provider: ProviderId, message: string): void {
   if (PROVIDERS[provider].kind !== 'cli' || !isAuthFailure(message)) return
   const s = getSettings()
   if (!s.cliConnected[provider]) return
-  setSettings({ cliConnected: { ...s.cliConnected, [provider]: false } })
+  const nextConnected = { ...s.cliConnected, [provider]: false }
+  setSettings({
+    cliConnected: nextConnected,
+    lastClickedCli: nextLastClickedCli(s.lastClickedCli, provider, nextConnected)
+  })
   mainLog.warn(`[cli] ${provider} rejected our credentials — marking it disconnected`)
 }
 
@@ -1457,7 +1490,11 @@ async function verifyCliSessions(now = Date.now()): Promise<void> {
         if (verdict !== 'signed-out' && verdict !== 'missing') continue
         const s = getSettings()
         if (!s.cliConnected[provider]) continue // disconnected by the user while the probe ran
-        setSettings({ cliConnected: { ...s.cliConnected, [provider]: false } })
+        const nextConnected = { ...s.cliConnected, [provider]: false }
+        setSettings({
+          cliConnected: nextConnected,
+          lastClickedCli: nextLastClickedCli(s.lastClickedCli, provider, nextConnected)
+        })
         mainLog.warn(`[cli] ${provider} is no longer signed in — marking it disconnected`)
       }
     } catch (error) {
@@ -1487,20 +1524,26 @@ function publicSettings(): PublicSettings {
   // every ask).
   const allowed = getAllowedProviders()
   const providerReady =
-    (!allowed || allowed.includes(s.provider)) &&
-    (activeDef.kind === 'cli'
-      ? !!s.cliConnected[s.provider]
-      : hasApiKey(s.provider) &&
-        (s.provider === 'dust'
-          ? !!s.dustWorkspaceId.trim() && !!s.providerModels.dust
-          : s.provider === 'custom'
-            ? /^https:\/\//i.test(s.customBaseUrl) && !!s.providerModels.custom
-            : // Cloudflare ships a default model but NO endpoint (the operator's own Worker), so the
-              // https URL is the whole extra setup step. Unlike Custom it needs no model check —
-              // resolveModelTier always yields the registry default.
-              s.provider === 'cloudflare'
-              ? /^https:\/\//i.test(s.cloudflareBaseUrl)
-              : true))
+    ((!allowed || allowed.includes(s.provider)) &&
+      (activeDef.kind === 'cli'
+        ? !!s.cliConnected[s.provider]
+        : hasApiKey(s.provider) &&
+          (s.provider === 'dust'
+            ? !!s.dustWorkspaceId.trim() && !!s.providerModels.dust
+            : s.provider === 'custom'
+              ? /^https:\/\//i.test(s.customBaseUrl) && !!s.providerModels.custom
+              : // Cloudflare ships a default model but NO endpoint (the operator's own Worker), so the
+                // https URL is the whole extra setup step. Unlike Custom it needs no model check —
+                // resolveModelTier always yields the registry default.
+                s.provider === 'cloudflare'
+                ? /^https:\/\//i.test(s.cloudflareBaseUrl)
+                : true))) ||
+    nextAskRoute({
+      cliConnected: s.cliConnected,
+      lastClickedCli: s.lastClickedCli,
+      allowed,
+      fundedProviders: operatorFundedProviders()
+    }).tier !== 'fail'
   // Métis Local readiness (PLAN.md §4.3) — task-independent base, then one per in-scope task. Derived by
   // local-routing.ts's localBaseReady() so this snapshot and the live routing decision (attempt()/
   // pickFailover below) can never drift apart.
@@ -1547,7 +1590,9 @@ function publicSettings(): PublicSettings {
         (p) =>
           (p === 'dust' ? dustSelectedAgentVision(s.providerModels['dust']) : PROVIDERS[p].vision) &&
           (!allowed || allowed.includes(p)) &&
-          (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : hasApiKey(p)) &&
+          (PROVIDERS[p].kind === 'cli'
+            ? !!s.cliConnected[p]
+            : hasApiKey(p) || operatorFundedProviders().includes(p)) &&
           // A key alone is not reachability. Cloudflare (and custom) answer at an endpoint the operator
           // supplies, so a stored METIS_PROXY_KEY with no Worker URL yet is a provider that can never be
           // reached — and advertising vision on it makes the app CAPTURE THE USER'S SCREEN, and prewarm
@@ -1589,11 +1634,48 @@ function onboardingExclusiveLive(): boolean {
   try {
     return !getSettings().onboardingDone
   } catch {
-    return false
+    // Fail closed to exclusive — parking Hide/Island 8×2 then jumping is the flash.
+    return true
   }
 }
 
+/**
+ * Constructor `transparent` cannot be flipped later (Electron 39). Exclusive must be created
+ * opaque; overlay after onboardingDone must be created transparent. Recreate when they disagree.
+ */
+let overlayWindowTransparent = true
+let emittedAppStarted = false
+
+function leaveExclusiveOsFullscreen(w: BrowserWindow): void {
+  try {
+    if (typeof w.isSimpleFullScreen === 'function' && w.isSimpleFullScreen()) w.setSimpleFullScreen(false)
+    if (typeof w.isKiosk === 'function' && w.isKiosk()) w.setKiosk(false)
+  } catch {
+    /* headless */
+  }
+}
+
+/** Destroy the current overlay and build one whose constructor chrome matches onboardingExclusiveLive(). */
+function recreateOverlayWindow(): void {
+  const dying = win
+  win = null
+  if (dying && !dying.isDestroyed()) {
+    leaveExclusiveOsFullscreen(dying)
+    try {
+      dying.destroy()
+    } catch {
+      /* already gone */
+    }
+  }
+  createWindow()
+}
+
 function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDisplayMatching(w.getBounds())): void {
+  // Totos-Mac 044c0f1: simple-fullscreen on a transparent window is a 3600×2338 RGBA(0,0,0,0) void.
+  if (overlayWindowTransparent) {
+    recreateOverlayWindow()
+    return
+  }
   stopOverlayCursorWatch()
   const stage = exclusiveOnboardingBounds(display.bounds, display.workArea)
   currentWidth = stage.width
@@ -1607,15 +1689,23 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
   }
   try {
     w.setFullScreenable?.(true)
-    w.setBackgroundColor('#3A0B6B')
+    w.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
     w.setBounds(stage)
   } catch {
     /* headless / already destroyed */
   }
   try {
-    if (process.platform === 'darwin' && typeof w.setSimpleFullScreen === 'function') {
+    if (
+      exclusiveMayUseSimpleFullScreen(overlayWindowTransparent) &&
+      process.platform === 'darwin' &&
+      typeof w.setSimpleFullScreen === 'function'
+    ) {
       if (!w.isSimpleFullScreen()) w.setSimpleFullScreen(true)
-    } else if (process.platform === 'win32' && typeof w.setKiosk === 'function') {
+    } else if (
+      exclusiveMayUseSimpleFullScreen(overlayWindowTransparent) &&
+      process.platform === 'win32' &&
+      typeof w.setKiosk === 'function'
+    ) {
       if (!w.isKiosk()) w.setKiosk(true)
     }
   } catch {
@@ -1626,15 +1716,14 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
 /** After onboardingDone only: leave exclusive fullscreen and park hide/island peek (never 880×816). */
 function exitExclusiveOnboardingStage(): void {
   if (!win || win.isDestroyed()) return
-  try {
-    if (typeof win.isSimpleFullScreen === 'function' && win.isSimpleFullScreen()) win.setSimpleFullScreen(false)
-    if (typeof win.isKiosk === 'function' && win.isKiosk()) win.setKiosk(false)
-  } catch {
-    /* headless */
+  leaveExclusiveOsFullscreen(win)
+  if (!overlayWindowTransparent) {
+    recreateOverlayWindow()
+    return
   }
   try {
     win.setFullScreenable?.(false)
-    win.setBackgroundColor('#00000000')
+    win.setBackgroundColor(OVERLAY_TRANSPARENT_BACKGROUND)
   } catch {
     /* ignore */
   }
@@ -1679,7 +1768,10 @@ function createWindow(): void {
   //
   // Emitted here rather than at app-ready because reaching createWindow means the main process survived
   // module load, bytecode load, and boot — which is exactly the class of failure that shipped DOA twice.
-  auditLog('app.started', { version: app.getVersion(), platform: process.platform, arch: process.arch })
+  if (!emittedAppStarted) {
+    auditLog('app.started', { version: app.getVersion(), platform: process.platform, arch: process.arch })
+    emittedAppStarted = true
+  }
   // Crash/recovery guard: render-process-gone recovery and the boot-retry path both rebuild the window
   // from scratch, but isMinimized/currentWidth are module-level state that otherwise survives from before
   // the crash. If the overlay had been collapsed to the mini-pill (currentWidth === PILL_WIDTH) at the
@@ -1693,38 +1785,47 @@ function createWindow(): void {
   // parks hide/island at bounds.y (notch strip) so the hardware island can hit. getSettings() is file-keystore-safe here.
   const placementDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
   const onboardingLive = onboardingExclusiveLive()
-  const stage = exclusiveOnboardingBounds(placementDisplay.bounds, placementDisplay.workArea)
   const layout = liveOverlayLayout()
-  const restPark = parkAfterExclusiveOnboarding(layout, getDisplayMetrics(placementDisplay), ISLAND_TOP_MARGIN)
+  const placementMetrics = getDisplayMetrics(placementDisplay)
+  const firstPaint = firstPaintOverlayBounds({
+    onboardingDone: !onboardingLive,
+    bounds: placementDisplay.bounds,
+    workArea: placementDisplay.workArea,
+    layout,
+    metrics: placementMetrics,
+    topMargin: ISLAND_TOP_MARGIN
+  })
   if (onboardingLive) {
-    currentWidth = stage.width
-    lastBarHeight = stage.height
+    currentWidth = firstPaint.width
+    lastBarHeight = firstPaint.height
     islandResting = false
   } else {
-    currentWidth = restPark.width
+    currentWidth = firstPaint.width
     lastBarHeight = BAR_HEIGHT
     islandResting = overlayUsesHover(layout)
   }
+  const chrome = overlayWindowChrome(onboardingLive)
+  overlayWindowTransparent = chrome.transparent
   win = new BrowserWindow({
-    width: onboardingLive ? stage.width : restPark.width,
-    height: onboardingLive ? stage.height : restPark.height,
-    x: onboardingLive ? stage.x : restPark.x,
-    y: onboardingLive ? stage.y : restPark.y,
+    width: firstPaint.width,
+    height: firstPaint.height,
+    x: firstPaint.x,
+    y: firstPaint.y,
     frame: false,
-    transparent: true,
+    transparent: chrome.transparent,
     hasShadow: false, // panel paints its own shadow; window shadow would box the transparent area
     resizable: false,
     movable: true,
     skipTaskbar: true,
-    fullscreenable: onboardingLive,
+    fullscreenable: chrome.fullscreenable,
     maximizable: false,
     minimizable: false,
-    roundedCorners: !onboardingLive,
+    roundedCorners: chrome.roundedCorners,
     // macOS default min height can be ~44. Hide park is 8×2; without this, a display
     // move reports 8×44 (Tony listwins) even after clampHeight lets 2px through.
     minWidth: 1,
     minHeight: 1,
-    backgroundColor: onboardingLive ? '#3A0B6B' : '#00000000',
+    backgroundColor: chrome.backgroundColor,
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -4028,7 +4129,9 @@ function registerIpc(): void {
     const r = await connectCliSession(p)
     if (r.ok) {
       const s = getSettings()
-      setSettings({ cliConnected: { ...s.cliConnected, [p]: true } })
+      const next: Partial<typeof s> = { cliConnected: { ...s.cliConnected, [p]: true } }
+      if (isCliProviderId(p)) next.lastClickedCli = p
+      setSettings(next)
     }
     return r
   })
@@ -4063,7 +4166,7 @@ function registerIpc(): void {
   // Generalized from the old single-connection BidStack-only handlers (Settings → Mantu Intelligence
   // cards + Review's "Push to CRM" / "Book next steps"). `connectionId` identifies WHICH
   // settings.mcpConnections entry a call targets (id === kind in v1 — see McpConnectionSchema in
-  // shared/ipc.ts). ClickUp has no handler here — it's schema-reserved only (see McpConnectionKindSchema).
+  // shared/ipc.ts). ClickUp OAuth Connect + create-task push live here (docs/design/CLICKUP-PUSH.md).
 
   // Default display label for a connection id BEFORE it has ever been saved (so "Test connection" —
   // which runs before any persistence — still gets a real label for its error/log messages instead of
@@ -4078,6 +4181,20 @@ function registerIpc(): void {
     if (existing?.label) return existing.label
     const kind = McpConnectionKindSchema.safeParse(connectionId)
     return kind.success ? MCP_KIND_LABELS[kind.data] : connectionId
+  }
+
+  function persistClickupList(list: ClickupList): void {
+    const s = getSettings()
+    setSettings({ mcpConnections: upsertClickupDestination(s.mcpConnections, list) })
+  }
+
+  async function discoverListForClickup(conn: McpConnection): Promise<{ ok: true; list: ClickupList } | { ok: false; error: string }> {
+    const apiKey = getMcpApiKey(conn.id)
+    return discoverClickupList({
+      tools: conn.tools,
+      saved: savedClickupList(conn),
+      callTool: (toolName, args) => pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, toolName, args, conn.label)
+    })
   }
 
   // Wave 4: mcp:push's own MCP tool names are per-connection and user/operator-configured — there is no
@@ -4210,6 +4327,7 @@ function registerIpc(): void {
     try {
       setMcpApiKey(connectionId, apiKey)
       const s = getSettings()
+      const existing = s.mcpConnections.find((c) => c.id === connectionId)
       const entry: McpConnection = {
         id: connectionId,
         kind: kindParsed.data,
@@ -4217,9 +4335,20 @@ function registerIpc(): void {
         endpointUrl: endpointUrl.trim(),
         connected: true,
         tools: r.tools ?? [],
-        extraHeaders
+        extraHeaders,
+        ...(connectionId === 'clickup'
+          ? { clickupListId: existing?.clickupListId, clickupListName: existing?.clickupListName }
+          : {})
       }
       setSettings({ mcpConnections: [...s.mcpConnections.filter((c) => c.id !== connectionId), entry] })
+      if (connectionId === 'clickup') {
+        const dest = await discoverListForClickup(entry)
+        if (dest.ok) {
+          persistClickupList(dest.list)
+          auditLog('mcp.connected', { connectionId, tools: (r.tools ?? []).length })
+          return { ...r, clickupListId: dest.list.id, clickupListName: dest.list.name }
+        }
+      }
     } catch (error) {
       return { ok: false as const, error: error instanceof Error ? error.message : `Could not store the ${label} API key.` }
     }
@@ -4263,7 +4392,9 @@ function registerIpc(): void {
     if (denyIfLimited('mcp-outbound')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
     const parsed = McpPushPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
-    const { connectionId, toolName, args, meetingFile } = parsed.data
+    const { connectionId, meetingFile } = parsed.data
+    let toolName = parsed.data.toolName
+    let args = parsed.data.args
     const s = getSettings()
     // Wave 4 / QA defense-in-depth: never push confidential meetings. Prefer disk frontmatter over the
     // renderer flag — a buggy UI could omit args.confidential. Unreadable files fail closed.
@@ -4281,9 +4412,24 @@ function registerIpc(): void {
     if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(connectionId)) {
       return { ok: false, error: `${mcpLabelFor(connectionId)} is not connected. Set it up in Settings → Mantu Intelligence first.` }
     }
+    let clickupList: ClickupList | undefined
+    if (connectionId === 'clickup') {
+      const dest = await discoverListForClickup(conn)
+      if (!dest.ok) return dest
+      clickupList = dest.list
+      const prepared = prepareClickupPush({
+        tools: conn.tools,
+        list: dest.list,
+        rendererTool: toolName,
+        rendererArgs: args
+      })
+      if (!prepared.ok) return prepared
+      toolName = prepared.toolName
+      args = prepared.args
+    }
     // Only a tool the user actually saw and picked when the connection was tested/saved may be invoked —
     // otherwise a compromised or buggy renderer call could reach an unintended (possibly destructive) MCP
-    // tool on the user's live connection.
+    // tool on the user's live connection. ClickUp create-task is remapped above from the saved tools list.
     if (!conn.tools.includes(toolName)) {
       return { ok: false, error: `Unknown ${conn.label} tool.` }
     }
@@ -4364,6 +4510,13 @@ function registerIpc(): void {
         ...(meetingBase ? { meetingFile: meetingBase } : {}),
         confidential: argConfidential || diskConfidential
       })
+      if (connectionId === 'clickup' && r.error) {
+        r = { ...r, error: loudClickupError(r.error, r.error) }
+      }
+    }
+    if (r.ok && connectionId === 'clickup' && clickupList) {
+      persistClickupList(clickupList)
+      return { ...r, destinationName: clickupList.name, taskUrl: parseTaskUrl(r.result) }
     }
     return r
   })
@@ -4388,14 +4541,39 @@ function registerIpc(): void {
         endpointUrl: CLICKUP_MCP_ENDPOINT,
         connected: true,
         tools: r.tools ?? [],
-        extraHeaders: {}
+        extraHeaders: {},
+        clickupListId: savedClickupList(s.mcpConnections.find((c) => c.id === 'clickup'))?.id,
+        clickupListName: savedClickupList(s.mcpConnections.find((c) => c.id === 'clickup'))?.name
       }
       setSettings({ mcpConnections: [...s.mcpConnections.filter((c) => c.id !== 'clickup'), entry] })
+      const dest = await discoverListForClickup(entry)
+      if (dest.ok) {
+        persistClickupList(dest.list)
+        auditLog('mcp.connected', { connectionId: 'clickup', tools: (r.tools ?? []).length })
+        return { ...r, clickupListId: dest.list.id, clickupListName: dest.list.name }
+      }
     } catch (error) {
       return { ok: false as const, error: error instanceof Error ? error.message : 'Could not store the ClickUp connection.' }
     }
     auditLog('mcp.connected', { connectionId: 'clickup', tools: (r.tools ?? []).length })
     return r
+  })
+
+  // Names the destination without creating a task. Review calls this on Push to ClickUp (user click)
+  // when the seat is already connected but has no stored list — Confirm stays disabled until named.
+  ipcMain.handle(IPC.mcpClickupDiscoverDestination, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    if (denyIfLimited('mcp-outbound')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
+    const s = getSettings()
+    const conn = s.mcpConnections.find((c) => c.id === 'clickup')
+    if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey('clickup')) {
+      return { ok: false, error: 'ClickUp is not connected. Set it up in Settings → Mantu Intelligence first.' }
+    }
+    const dest = await discoverListForClickup(conn)
+    if (!dest.ok) return dest
+    persistClickupList(dest.list)
+    return { ok: true as const, clickupListId: dest.list.id, clickupListName: dest.list.name, tools: conn.tools }
   })
 
   ipcMain.handle(IPC.mcpPlaneConnect, async (e) => {
@@ -5183,7 +5361,9 @@ function registerIpc(): void {
         (p) => p !== blocked && p !== 'local' && providerVisionOk(p) && (!allowed || allowed.includes(p))
       )
       const ready = candidates.find((p) =>
-        PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0
+        PROVIDERS[p].kind === 'cli'
+          ? !!s.cliConnected[p]
+          : getApiKey(p).length > 0 || operatorFundedProviders().includes(p)
       )
       const target = ready ?? candidates[0]
       if (target)
@@ -5236,6 +5416,8 @@ function registerIpc(): void {
           })
       const eligible = (p: ProviderId): boolean => {
         if (tried.includes(p)) return false
+        // Dust is retrieval only. Never a general-chat failover unless this ask was pinned to Dust.
+        if (isDustChatForbidden(p, req.providerOverride === 'dust')) return false
         // Métis Local: routingMode-aware primary eligibility (localPrimaryEligibleFor) so Routing mode
         // → Local can fail over / serve without per-mode useFor toggles. 'api' mode keeps local out of
         // the healthy mid-walk (fallback/floor still catch last-resort below). Out-of-scope modes
@@ -5246,7 +5428,9 @@ function registerIpc(): void {
         }
         return (
           (!allowed || allowed.includes(p)) &&
-          (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0) &&
+          (PROVIDERS[p].kind === 'cli'
+            ? !!s.cliConnected[p]
+            : getApiKey(p).length > 0 || operatorFundedProviders().includes(p)) &&
           // A provider whose endpoint the USER supplies (Custom, Cloudflare's operator Worker) is only a
           // candidate once it actually has one. Cloudflare ships a default model, so without this check a
           // key alone would make it eligible and the walk would hand the request to streamOpenAI with no
@@ -5266,6 +5450,21 @@ function registerIpc(): void {
       // is about to 429 (usage-headroom.ts). Fail-open — unknown headroom never demotes — and folded into
       // the `healthy` filter ONLY, so a budget-blocked provider is still reachable as the last resort below.
       const budgetBlocked = (p: ProviderId): boolean => s.resilience.budgetPreempt && isBudgetExhausted(p)
+      // OPERATOR.md order 2: the other connected CLI is next after last-clicked quota / rate limit.
+      const cliNext = workingCliOrder({
+        cliConnected: s.cliConnected,
+        lastClickedCli: s.lastClickedCli,
+        allowed
+      }).find((p) => eligible(p) && !isCoolingDown(p) && !budgetBlocked(p))
+      if (cliNext) return cliNext
+      const fundedNext = operatorFundedProviders().find(
+        (p) =>
+          p in PROVIDERS &&
+          eligible(p as ProviderId) &&
+          !isCoolingDown(p as ProviderId) &&
+          !budgetBlocked(p as ProviderId)
+      )
+      if (fundedNext) return fundedNext as ProviderId
       // MQA-003: prefer a provider whose credentials have NOT just been rejected and that has budget left.
       const healthy = order.find((p) => eligible(p) && !isCoolingDown(p) && !budgetBlocked(p))
       if (healthy) return healthy
@@ -5373,7 +5572,14 @@ function registerIpc(): void {
       }
       // Métis Local is keyless: its per-session sidecar key lives only in local-runtime.ts memory, never
       // on disk (getApiKey('local') always resolves empty, by design — see store.ts's ENV_VAR entry).
+      // Operator-funded providers are also keyless on the seat — the Worker holds the raw LLM key.
       const key = provider === 'local' ? localRuntime.sessionKey() : getApiKey(provider)
+      const viaOperator =
+        provider !== 'local' &&
+        def.kind !== 'cli' &&
+        !key &&
+        operatorFundedProviders().includes(provider)
+      const operatorTransport = viaOperator ? operatorAskTransport(s) : null
       const tier = routeTier(req, s.thinkingMode)
       // Métis Local's "model" is the local-models.ts manifest id the sidecar loads — settings.localLlm.
       // modelId, NOT the generic per-provider tier resolution (which would otherwise fall back to
@@ -5421,7 +5627,9 @@ function registerIpc(): void {
               : 'Métis Local handles live suggestions, summaries and screenshots — this request type uses your cloud provider.'
           : def.kind === 'cli' && !s.cliConnected[provider]
             ? `${def.label} is not connected. Open Settings → CLI Integration to set it up.`
-            : def.kind !== 'cli' && !key
+            : viaOperator && !operatorTransport
+              ? 'Operator is not reachable. Check Operator URL in Settings.'
+              : def.kind !== 'cli' && !key && !viaOperator
               ? `No API key for ${def.label}. Open Settings (gear) and add it.`
               : def.kind !== 'cli' && !model
                 ? provider === 'dust'
@@ -5579,7 +5787,9 @@ function registerIpc(): void {
       const handle = createStream({
         providerId: provider,
         kind: def.kind,
-        apiKey: key,
+        apiKey: viaOperator ? '' : key,
+        viaOperator,
+        operatorTransport: operatorTransport ?? undefined,
         baseURL,
         workspaceId: s.dustWorkspaceId,
         // Dust OAuth tokens (imported from the local CLI) expire after ~1h. On a pre-token 401 the
@@ -5865,17 +6075,23 @@ function registerIpc(): void {
       else streams.set(req.id, handle)
     }
 
-    // Honor the CLI-vs-API priority for the FIRST provider tried: 'cli' prefers a connected CLI integration
-    // (Claude, then Codex) so the user's local subscription is used before any metered API. Otherwise — and
-    // whenever no CLI is connected — the user's explicitly-chosen `provider` stays primary (unchanged).
-    // req.providerOverride wins over all of that: it means "this specific request must go to provider X"
-    // (e.g. cascading a recap/follow-up/Spotlight-Ref request into Dust) regardless of what's globally active.
-    const cliPrimary =
-      s.providerPriority === 'cli'
-        ? (['claude-cli', 'codex-cli'] as ProviderId[]).find(
-            (p) => s.cliConnected[p] && (!allowed || allowed.includes(p))
-          )
-        : undefined
+    // OPERATOR.md: a connected working CLI wins every user question (last-clicked primary).
+    // req.providerOverride still wins (Dust retrieval / Spotlight Ref).
+    const cliPrimary = pickWorkingCliPrimary({
+      cliConnected: s.cliConnected,
+      lastClickedCli: s.lastClickedCli,
+      allowed
+    })
+    const operatorRoute = nextAskRoute({
+      cliConnected: s.cliConnected,
+      lastClickedCli: s.lastClickedCli,
+      allowed,
+      fundedProviders: operatorFundedProviders()
+    })
+    const routedActive =
+      !cliPrimary && operatorRoute.tier === 'operator' && operatorRoute.provider in PROVIDERS
+        ? (operatorRoute.provider as ProviderId)
+        : s.provider
     // Métis Local outranks cliPrimary (but never providerOverride): an in-scope suggest/summary/vision ask
     // routes to the on-device model first whenever it's eligible right now (PLAN.md §4.3 "Routing
     // precedence, explicit") — see local-routing.ts's pickPrimaryProvider for the exact precedence rule.
@@ -5888,7 +6104,7 @@ function registerIpc(): void {
       req.providerOverride,
       localPrimaryEligible,
       cliPrimary,
-      s.provider,
+      routedActive,
       localVisionRequired
     )
     // MQA-003: when the primary's credentials were just rejected — OR its live budget is nearly spent
@@ -7318,14 +7534,16 @@ if (!app.requestSingleInstanceLock()) {
       assertMainWindow(e)
       return asrAssetsStatusSnapshot()
     })
-    ipcMain.handle(IPC.asrAssetsEnsure, (e) => {
+    ipcMain.handle(IPC.asrAssetsEnsure, async (e) => {
       assertMainWindow(e)
-      void ensureImportAsrAssets((pct) => {
-        publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
-      }).catch((err) => {
+      try {
+        await ensureImportAsrAssets((pct) => {
+          publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
+        })
+      } catch (err) {
         mainLog.warn('[asr-assets] ensure failed:', err instanceof Error ? err.message : err)
         publishAsrAssetsProgress()
-      })
+      }
       return asrAssetsStatusSnapshot()
     })
 

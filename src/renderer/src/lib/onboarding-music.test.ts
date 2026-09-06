@@ -78,10 +78,10 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
     expect(mountBlock.lastIndexOf('music.start()')).toBeGreaterThan(mountBlock.indexOf('playPortalOpen'))
     expect(mountBlock.indexOf('music.start()')).toBeGreaterThan(-1)
     const begin = experience.slice(experience.indexOf('onBegin={() => {'))
-    const beginBlock = begin.slice(0, begin.indexOf('onSkip'))
-    expect(beginBlock).toMatch(/playOnboardingVideo\(/)
+    const beginBlock = begin.slice(0, begin.indexOf('setScene'))
     expect(beginBlock).toMatch(/music\.start\(\)/)
-    expect(beginBlock.indexOf('playOnboardingVideo')).toBeLessThan(beginBlock.indexOf('setScene'))
+    expect(beginBlock).not.toMatch(/playOnboardingVideo/)
+    expect(beginBlock.indexOf('music.start()')).toBeLessThan(begin.indexOf("setScene('problem')") - begin.indexOf('onBegin={() => {'))
     expect(experience).toMatch(/onPointerDown=\{music\.start\}/)
     expect(experience).toMatch(/music\.start\(\)/)
     expect(experience).not.toMatch(/playOnboardingMedia/)
@@ -112,12 +112,14 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
       loop: true,
       volume: 0.3,
       src: 'blob:aria',
+      currentTime: 42,
       pause: vi.fn(),
       load: vi.fn(),
       removeAttribute: vi.fn()
     } as unknown as HTMLAudioElement
     haltOnboardingAudio(el)
     expect(el.pause).toHaveBeenCalledTimes(1)
+    expect(el.currentTime).toBe(0)
     expect(el.autoplay).toBe(false)
     expect(el.loop).toBe(false)
     expect(el.volume).toBe(0)
@@ -127,6 +129,8 @@ describe('onboarding music — CC0 Goldberg Aria, HTML audio, no choir synth', (
     expect(production).toMatch(/pagehide/)
     expect(production).toMatch(/beforeunload/)
     const finish = experience.slice(experience.indexOf('const finish = async'))
+    expect(finish.indexOf('haltAllOnboardingAudio()')).toBeGreaterThan(-1)
+    expect(finish.indexOf('haltAllOnboardingAudio()')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true })'))
     expect(finish.indexOf('music.stop()')).toBeGreaterThan(-1)
     expect(finish.indexOf('music.stop()')).toBeLessThan(finish.indexOf('onDone({ mode, recordingConsent: true })'))
     expect(finish).toMatch(/disposePortalAudio\(\)/)
