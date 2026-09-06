@@ -207,6 +207,7 @@ export const IPC = {
   licenseActivate: 'license:activate',
   licenseStatus: 'license:status',
   licenseGate: 'license:gate',
+  cloudflareConnect: 'cloudflare:connect',
   localAiStatus: 'local-ai:status',
   localTranscriptBegin: 'local-ai:transcript:begin',
   localTranscriptAppend: 'local-ai:transcript:append',

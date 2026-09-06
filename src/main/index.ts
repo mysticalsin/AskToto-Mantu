@@ -320,6 +320,7 @@ import {
   type ProviderId,
   type ProviderDef
 } from '@shared/providers'
+import { cloudflareConnectTarget } from './cloudflare-connect'
 import { routeTier } from '@shared/routing'
 import { HedgeRace, HEDGE_DELAY_MS, type HedgeLeg } from './llm/hedge'
 import { ThinkStripper } from './llm/think-strip'
@@ -2687,6 +2688,13 @@ function registerIpc(): void {
     const urlLocked = getLockedKeys().includes('licenseServerUrl')
     const serverUrl = urlLocked ? getSettings().licenseServerUrl || parsed.data.serverUrl : parsed.data.serverUrl
     return activateLicense(serverUrl, parsed.data.licenseKey)
+  })
+  ipcMain.handle(IPC.cloudflareConnect, (e) => {
+    assertMainWindow(e)
+    const target = cloudflareConnectTarget()
+    if (!target.ok) return target
+    void shell.openExternal(target.href)
+    return target
   })
   // Read-only, local settings only — never touches the network. Mirrors metricsRead's pattern of
   // returning a safe empty/default shape (rather than throwing) when signed out.

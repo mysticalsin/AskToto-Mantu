@@ -306,3 +306,14 @@ describe('MQA-164 — a failed update download leaves the Settings row with a wa
     expect(preload).toMatch(/onUpdateError: .*sub\(IPC\.updateError, cb\)/)
   })
 })
+
+describe('Cloudflare tile opens Operator OAuth, not a key-paste card', () => {
+  it('calls cloudflareConnect and does not bind a Worker URL paste field', () => {
+    expect(source).toMatch(/window\.toto\.cloudflareConnect/)
+    expect(source).toMatch(/data-cf-aig-connect/)
+    expect(source).not.toMatch(/value=\{settings\.cloudflareBaseUrl\}/)
+    expect(source).not.toMatch(/Paste the Worker/)
+    const preload = readFileSync(join(__dirname, '../../../preload/index.ts'), 'utf8')
+    expect(preload).toMatch(/cloudflareConnect:/)
+  })
+})
