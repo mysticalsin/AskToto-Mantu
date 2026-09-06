@@ -561,11 +561,14 @@ export function App(): JSX.Element {
   const prevOrbStyleRef = useRef<OverlayOrbStyle>(overlayOrbStyle)
   useEffect(() => {
     if (!canMinimize) {
+      prevOrbStyleRef.current = overlayOrbStyle
       if (!minimized) return
       setMinimized(false)
       void window.toto.minimize(false)
       return
     }
+    // Preview Circle/Jarvis on the live Bar. Collapse only on Done (view leaves settings).
+    if (view === 'settings') return
     const styleChanged = prevOrbStyleRef.current !== overlayOrbStyle
     prevOrbStyleRef.current = overlayOrbStyle
     const action = decideCircleRestMinimize({
@@ -575,8 +578,6 @@ export function App(): JSX.Element {
       styleChanged
     })
     if (action === 'minimize') {
-      // Picking Circle/Jarvis while Settings is open must leave the 880×1017 sheet.
-      if (view === 'settings') setView('answer')
       setMinimized(true)
       void window.toto.minimize(true)
       return

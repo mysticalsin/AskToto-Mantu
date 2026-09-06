@@ -517,10 +517,20 @@ describe('Dust instant validate proves a live connection', () => {
 })
 
 describe('Settings Bar rest orb picker', () => {
-  it('wires OverlayOrbPicker next to Overlay chrome', () => {
+  it('wires OverlayOrbPicker next to Overlay chrome only when Bar is selected', () => {
+    expect(source).toMatch(/overlayShowsBarRestPicker/)
+    expect(source).toMatch(/overlayShowsBarRestPicker\(settings\.overlayLayout\)/)
     expect(source).toMatch(/OverlayOrbPicker/)
     expect(source).toMatch(/overlayOrbStyle: id/)
     expect(source).toMatch(/Applies when Overlay chrome is Bar/)
+    const appearance = source.slice(source.indexOf('title="Appearance"'), source.indexOf('title="Language"'))
+    expect(appearance).toMatch(/overlayShowsBarRestPicker\(settings\.overlayLayout\)/)
+    const gated = appearance.slice(
+      appearance.indexOf('overlayShowsBarRestPicker(settings.overlayLayout)'),
+      appearance.indexOf(') : null}')
+    )
+    expect(gated).toMatch(/<OverlayOrbPicker/)
+    expect(gated).toMatch(/Bar rest/)
     const orbBlock = source.slice(source.indexOf('<OverlayOrbPicker'), source.indexOf('<OverlayOrbPicker') + 400)
     expect(orbBlock).not.toMatch(/\u2014/)
   })

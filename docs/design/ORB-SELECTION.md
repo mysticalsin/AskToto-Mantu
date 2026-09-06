@@ -37,13 +37,16 @@ Bar rest is a second choice: **Circle** (default, original thinking-orb) or **Ja
 
 Circle shows the **Default** badge. Group label: "Bar rest". Helper: "Applies when Overlay chrome is Bar."
 
+Circle / Jarvis cards appear **only** when Overlay chrome is Bar. Hide and Island hide those two cards. Selecting Bar reveals Bar rest so Circle/Jarvis can be previewed on the live Bar.
+
 Naming: Circle is Circle. Jarvis is Jarvis. Never "Obsidian". Never "Jarvis / Obsidian". Never call Circle "Jarvis".
 
-Clicking Circle or Jarvis while chrome is Bar rests as the 41 pill. Click the pill (not drag) to open the full bar again. Circle rest / Circle click must leave Settings. No 800+ gray Settings sheet under the bar.
+Clicking Circle or Jarvis must **not** auto-minimize. Collapse to the 41 rest only when the user clicks **Done** (`decideCircleRestMinimize` with `styleChanged: true` only). Click the pill (not drag) to expand the full bar again. No snap-back loop. No 800+ gray Settings sheet under the minimized pill.
 
 ## Hard law (do not break)
 
 - Overlay layouts stay `hide` | `island` | `bar`. This slice does **not** add a fourth layout.
+- `overlayShowsBarRestPicker(layout) === (layout === 'bar')`. Hide/Island never show Circle/Jarvis cards.
 - `overlayAllowsMinimize(layout) === (layout === 'bar')`. Hide and Island never grow a minimize control.
 - `overlayShowsBarOrb(layout, minimized) === (layout === 'bar' && minimized)`. Hide/Island never show a circle.
 - `overlayDocksBarCircle(layout) === (layout === 'bar')`.

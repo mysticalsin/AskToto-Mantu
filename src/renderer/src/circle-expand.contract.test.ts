@@ -42,6 +42,8 @@ describe('circle-expand: click Expand Métis must not snap back', () => {
     ).toBe('expand')
     expect(app).toMatch(/styleChanged/)
     expect(app).toMatch(/decideCircleRestMinimize/)
+    expect(app).toMatch(/if \(view === 'settings'\) return/)
+    expect(app).not.toMatch(/if \(view === 'settings'\) setView\('answer'\)/)
     expect(app).not.toMatch(/if \(view !== 'settings' && !minimized\)/)
     expect(app).not.toMatch(/overlayOrbRestIsCircle\(overlayLayout, overlayOrbStyle\)[\s\S]*!minimized/)
   })

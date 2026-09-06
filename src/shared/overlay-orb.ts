@@ -51,6 +51,11 @@ export function overlayOrbRestIsCircle(layout: string, style: OverlayOrbStyle): 
   return layout === 'bar' && (style === 'jakub' || style === 'obsidian')
 }
 
+/** Circle / Jarvis picker cards exist only when Overlay chrome is Bar. */
+export function overlayShowsBarRestPicker(layout: unknown): boolean {
+  return layout === 'bar'
+}
+
 /** 41 host + shadow pad. Never 220 × lastBarHeight. */
 export function circleRestWindowPx(): number {
   return CIRCLE_REST_HOST_PX + CIRCLE_REST_SHADOW_PAD_PX
@@ -92,7 +97,8 @@ export function overlayUsesObsidianOrb(layout: string, style: OverlayOrbStyle): 
 
 /**
  * Auto-collapse only when the user just picked Circle/Jarvis (`styleChanged`).
- * Every expanded frame used to hit `!minimized` and snap Expand Métis back.
+ * Settings defers this until Done (view leaves settings). Every expanded
+ * frame used to hit `!minimized` and snap Expand Métis back.
  */
 export function decideCircleRestMinimize(input: {
   layout: string
