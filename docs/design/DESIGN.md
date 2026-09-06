@@ -64,3 +64,77 @@ motion:
 ## Brand mark
 Métis = five-star constellation-M glyph (own SVG), dots + thin connectors, `text-primary`.
 NOT Cluely's logo. Wordmark "Métis" in Geist medium, tracking-tight.
+
+## Operator (Tony 6 Sep 2026 — Overview · Licenses · Keys)
+
+Separate surface from overlay chrome. Worker `operator/`, live host
+`https://metis-operator.tony-walteur.workers.dev/`. **Cloudflare Access stays**
+(302 + email-code only; two Tony emails). No homemade password form.
+
+This slice is a **thin Operator tip**: Generate license on Overview + Licenses,
+platform keys after a seat activates that string in Métis Identity. Do not
+merge the 476-file Keys-gateway stack. **No Worker deploy** until Devon/Ultron
+Mac Hide PASS. No pack. No merge. No Latest.
+
+### Feel (original Métis Operator, not Shoey)
+
+Ops console, not e-commerce. Dark-first two-theme. Geist + Geist Mono.
+Hairline cards, uppercase mono eyebrows, one blue accent. Access chip in the
+rail. LIVE count in the top bar. No purple-gradient hero. No Bklit / Sessions
+nav.
+
+| Token | Hex / value | Role |
+| --- | --- | --- |
+| `accent` | `#2563EB` | Primary actions, nav count, live map dots |
+| `live` / `ok` | `#10B981` / `#16A34A` | Access chip, active license, funded |
+| `danger` | `#DC2626` | Revoke, fail-loud empty |
+| `bg` / `panel` | `#0a0a0b` / `#111113` | Page + card (light: `#FFFFFF`) |
+| `ink` / `ink2` | `rgba(255,255,255,0.94)` / `0.55` | Title / secondary |
+| type | Geist 12/13, Mono 10 uppercase eyebrows | Dense ops |
+
+Signature: the **once-string**. After Generate, a mono license (`METIS-OP-1.…`)
+in a hairline strip with Copy. Shown once. last4 only after reload. Never a
+secret in HTML.
+
+### Overview `#overview`
+
+Job: Tony sees how a seat goes from install to platform keys, and can mint a
+license without hunting.
+
+```
+┌ rail: Métis · Access ──────────┐  Overview          LIVE n
+│ Overview  Realtime  Events Map │  ┌ Install → works ─────────────┐
+│ Users  macOS  Windows Licenses │  │ Check in → Approve or license│
+│ Keys  Notifications Rules …    │  │ → Platform keys              │
+└────────────────────────────────┘  │ Duration [30d ▾] [Generate]  │
+                                    │ [once-string · Copy]         │
+                                    └──────────────────────────────┘
+                                    Fleet KPIs (real D1, never $0)
+```
+
+Generate license is on Overview **and** `#licenses`. Same form contract:
+duration 1 / 7 / 30 / 90 / 365 → POST `/v1/admin/licenses/generate` → show
+string. Unauth **401** `{ ok:false, error:"Access required" }`. Empty seat
+table must not hide the form.
+
+### Licenses `#licenses`
+
+Hero is Generate (eyebrow + duration + primary). Issued table under it
+(last4, duration, expiry, active/revoked). Seat approve/revoke table is
+second. Fail-loud if D1 seats are empty; generator still visible.
+
+### Keys `#keys`
+
+LLM vault add (last4 only) stays. **Cloudflare · AI Gateway** is Log in to
+Cloudflare → `/cloudflare/connect` OAuth → auto-provision. No Account ID +
+token paste as the happy path. CF Access already wraps the console.
+
+### Seat path (Identity)
+
+Tony copies the once-string. Seat: Métis → Settings → Identity / License →
+Activate. Valid `METIS-OP-1` HMAC token + not expired → licensed. Heartbeat
+sends `license: licensed` + `licenseId` (jti). Worker funds vault keys.
+Revoke still wins. ATK- / Fly JWS stay closed (`LICENSE_ACTIVATION_OPEN`
+stays false). No personal API key paste for this path.
+
+Full product law: [`OPERATOR.md`](OPERATOR.md).
