@@ -55,7 +55,8 @@ export const Answer = memo(function Answer({
   provider,
   onRetry,
   onGoDeeper,
-  captureAccel
+  captureAccel,
+  askId
 }: {
   text: string
   streaming: boolean
@@ -82,6 +83,9 @@ export const Answer = memo(function Answer({
    *  rebinds or clears it in Settings → Shortcuts. Falls back to the shipped default when omitted (demo
    *  seeding / callers that don't thread it through). */
   captureAccel?: string
+  /** This answer's real id (App.tsx's ask.answer.id) — threaded into the rating so Operator attaches it
+   *  to the exact answer, not whatever this process last happened to send. */
+  askId?: string
 }): JSX.Element {
   const [copied, flashCopied] = useFlash(1500)
   const [copyError, setCopyError] = useState<string | null>(null)
@@ -98,7 +102,7 @@ export const Answer = memo(function Answer({
   const rate = (r: 'up' | 'down'): void => {
     if (isOnboardingDemoActive()) return
     setRated(r)
-    void window.toto.answerFeedback({ rating: r, kind: kind ?? 'answer' })
+    void window.toto.answerFeedback({ rating: r, kind: kind ?? 'answer', askId })
   }
 
   const saveNote = (): void => {
