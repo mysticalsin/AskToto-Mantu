@@ -23,6 +23,18 @@ describe('decideDustInstantValidate', () => {
     expect(decideDustInstantValidate({ test: { ok: true }, list: { ok: true, agents: [metis] } }).ok).toBe(false)
   })
 
+  it('the live credentials banner is unauthorized, never Connected', () => {
+    const result = decideDustInstantValidate({
+      workspaceId: 'ws-1',
+      test: { ok: false, error: 'The request does not have valid authentication credentials.' },
+      list: { ok: false, error: 'The request does not have valid authentication credentials.' }
+    })
+    expect(result.ok).toBe(false)
+    if (result.ok) throw new Error('expected failure')
+    expect(result.reason).toBe('unauthorized')
+    expect(result.message).not.toMatch(/^Connected/)
+  })
+
   it('connect with a bad key fails (401) and is not ok', () => {
     const result = decideDustInstantValidate({
       workspaceId: 'ws-1',
