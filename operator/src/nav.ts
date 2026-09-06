@@ -14,6 +14,7 @@ export const NAV_SECTIONS = [
     label: 'Fleet',
     items: [
       { id: 'licenses', label: 'Licenses' },
+      { id: 'groups', label: 'Groups' },
       { id: 'notifications', label: 'Notifications' }
     ]
   },
@@ -22,6 +23,8 @@ export const NAV_SECTIONS = [
     label: 'Ops',
     items: [
       { id: 'keys', label: 'Keys' },
+      { id: 'connectors', label: 'Connectors' },
+      { id: 'audit', label: 'Audit' },
       { id: 'settings', label: 'Settings' }
     ]
   }
@@ -33,8 +36,11 @@ export type NavId =
   | 'events'
   | 'sessions'
   | 'licenses'
+  | 'groups'
   | 'notifications'
   | 'keys'
+  | 'connectors'
+  | 'audit'
   | 'settings'
 
 export const NAV_IDS: NavId[] = NAV_SECTIONS.flatMap((s) => s.items.map((i) => i.id))

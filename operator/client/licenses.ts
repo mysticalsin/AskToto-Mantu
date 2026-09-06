@@ -1,21 +1,35 @@
-/** License generate/approve/revoke actions. Ported from the pre-D3 inline `<script>` in
- * ui.ts (see plan D3: no inline script, this is the real client). Every mutation goes through
- * `api()`; approve/revoke reload the page (server-rendered snapshot model), generate patches
- * the once-string box in place without a reload so the string stays visible. */
+/** License generate/approve/revoke actions. Every mutation goes through `api()`; approve/revoke
+ * re-render the current page section in place through `rerender()` (operator/client/main.ts,
+ * plan P0.4: never a full document reload) with a toast reporting the outcome -- `data-license-approve`
+ * lives on both Overview (pending seats) and Licenses, so this always refreshes whichever page
+ * the click happened on, not a hardcoded one. Generate patches the once-string box in place
+ * without a reload so the string stays visible either way. */
 import { api } from './api'
+import { currentPage, rerender } from './main'
+import { toast } from './toasts'
 
 export function initLicenseActions(): void {
   document.querySelectorAll<HTMLElement>('[data-license-approve]').forEach(function (b) {
     b.addEventListener('click', async function () {
-      await api('/v1/admin/licenses/' + encodeURIComponent(b.getAttribute('data-license-approve') || '') + '/approve', {})
-      location.reload()
+      var j = await api('/v1/admin/licenses/' + encodeURIComponent(b.getAttribute('data-license-approve') || '') + '/approve', {})
+      if (j && j.ok) {
+        toast({ kind: 'ok', text: 'Seat approved.' })
+        rerender(currentPage())
+      } else {
+        toast({ kind: 'error', text: (j && j.error) || 'Could not approve the seat.' })
+      }
     })
   })
 
   document.querySelectorAll<HTMLElement>('[data-license-revoke]').forEach(function (b) {
     b.addEventListener('click', async function () {
-      await api('/v1/admin/licenses/' + encodeURIComponent(b.getAttribute('data-license-revoke') || '') + '/revoke', {})
-      location.reload()
+      var j = await api('/v1/admin/licenses/' + encodeURIComponent(b.getAttribute('data-license-revoke') || '') + '/revoke', {})
+      if (j && j.ok) {
+        toast({ kind: 'ok', text: 'License revoked.' })
+        rerender(currentPage())
+      } else {
+        toast({ kind: 'error', text: (j && j.error) || 'Could not revoke the license.' })
+      }
     })
   })
 
@@ -30,6 +44,9 @@ export function initLicenseActions(): void {
       if (j && j.ok && j.license && box && input) {
         input.value = j.license
         ;(box as HTMLElement).hidden = false
+        toast({ kind: 'ok', text: 'License generated. Copy it now, it will not be shown again.' })
+      } else if (!(j && j.ok)) {
+        toast({ kind: 'error', text: (j && j.error) || 'Could not generate a license.' })
       }
     })
   })

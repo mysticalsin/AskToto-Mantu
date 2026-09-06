@@ -9,8 +9,11 @@ const PAGES = [
   'events',
   'sessions',
   'licenses',
+  'groups',
   'notifications',
   'keys',
+  'connectors',
+  'audit',
   'settings'
 ] as const
 
@@ -98,6 +101,9 @@ describe('hashed SPA router (#104)', () => {
       querySelector() {
         return null
       },
+      // bindMotion(document.body) runs once at boot (operator/client/main.ts, plan P0.3's
+      // motion primitives); this vm document has no real body, only what bindMotion needs.
+      body: { querySelectorAll: () => [] },
       addEventListener() {},
       getElementById(id: string) {
         return id === 'page-title' ? title : null
@@ -109,6 +115,16 @@ describe('hashed SPA router (#104)', () => {
       document,
       location,
       URLSearchParams,
+      // startLivePolling (operator/client/live.ts) needs timer + event globals to exist so the
+      // bundled IIFE does not throw on load; stubbed as no-ops rather than the real Node timers
+      // so this test never leaves a background interval/timeout running after it finishes.
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+      setInterval: () => 0,
+      clearInterval: () => {},
+      CustomEvent,
+      TextEncoder,
+      TextDecoder,
       fetch: async () => ({ json: async () => ({ ok: false }) }),
       localStorage: { getItem: () => null, setItem: () => {} }
     })
@@ -220,6 +236,9 @@ describe('hashed SPA router (#104)', () => {
       querySelector(sel: string) {
         return sel === 'meta[name="metis-session"]' ? null : null
       },
+      // bindMotion(document.body) runs once at boot (operator/client/main.ts, plan P0.3's
+      // motion primitives); this vm document has no real body, only what bindMotion needs.
+      body: { querySelectorAll: () => [] },
       addEventListener() {},
       getElementById(id: string) {
         if (id === 'events-search') return evSearch
@@ -237,6 +256,16 @@ describe('hashed SPA router (#104)', () => {
       document,
       location: { hash: '#events', pathname: '/', search: '' },
       URLSearchParams,
+      // startLivePolling (operator/client/live.ts) needs timer + event globals to exist so the
+      // bundled IIFE does not throw on load; stubbed as no-ops rather than the real Node timers
+      // so this test never leaves a background interval/timeout running after it finishes.
+      setTimeout: () => 0,
+      clearTimeout: () => {},
+      setInterval: () => 0,
+      clearInterval: () => {},
+      CustomEvent,
+      TextEncoder,
+      TextDecoder,
       fetch: async () => ({ json: async () => ({ ok: false }), text: async () => '' }),
       localStorage: { getItem: () => null, setItem: () => {} }
     })

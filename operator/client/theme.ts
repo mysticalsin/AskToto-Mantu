@@ -3,7 +3,10 @@
  * contract in operator/src/spa/css.ts. "System" removes `data-theme` so the CSS
  * `prefers-color-scheme` media queries decide. Persisted to `localStorage` (immediate, this
  * tab) and mirrored to a `metis-operator-theme` cookie (SameSite=Lax) so the NEXT server
- * render picks the same theme with no flash (renderConsole reads the cookie server-side).
+ * render picks the same theme with no flash (renderConsole reads the cookie server-side). When
+ * this browser profile has no localStorage value yet, the client falls back to whatever the
+ * server already rendered (`data-theme` on `<html>`) instead of resetting to System, so the
+ * segmented control's `aria-pressed` state always agrees with what is on screen.
  */
 import { paintShoeyMap } from './map'
 
@@ -33,12 +36,22 @@ function persistTheme(choice: ThemeChoice): void {
   } catch (e) {}
 }
 
+/** What the server already rendered (the `metis-operator-theme` cookie, read server-side into
+ * `ctx.theme` and printed as `data-theme` on `<html>`, or its absence for 'system'). Used as the
+ * fallback when this browser profile has no localStorage value yet (a fresh profile, a QA/preview
+ * harness, a cleared site data run with the cookie still present) so the segmented control and
+ * the page agree with what is already on screen instead of silently resetting to System. */
+function readServerTheme(): ThemeChoice {
+  var attr = document.documentElement.getAttribute('data-theme')
+  return attr === 'light' || attr === 'dark' ? attr : 'system'
+}
+
 function readStoredTheme(): ThemeChoice {
   try {
     var v = localStorage.getItem('metis-operator-theme')
     if (isThemeChoice(v)) return v
   } catch (e) {}
-  return 'system'
+  return readServerTheme()
 }
 
 export function initTheme(): void {
