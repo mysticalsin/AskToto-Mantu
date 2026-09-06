@@ -12,7 +12,7 @@ import {
 } from './Panel'
 
 /**
- * MQA-286 — the post-meeting Summary (Review inside Panel) clipped at the window bottom with no
+ * MQA-291 — the post-meeting Summary (Review inside Panel) clipped at the window bottom with no
  * scrollbar. html/body/#root are `overflow: hidden`. The Panel is the only scroller. Its old cap
  * (`availHeight - 160`) did not leave enough room for the live Bar (64 orb toolbar + input), stealth
  * `p-5`, `gap-2`, useAutoResize's 24px grow grid, and main's `workArea.height - 48` clamp. Recap
@@ -41,8 +41,8 @@ function oldDeadBand(avail: number): { remaining: number; oldCap: number } {
   return { remaining, oldCap: avail - 160 }
 }
 
-describe('MQA-286 — summary / recap Panel fits or scrolls, never clips', () => {
-  it('MQA-286 — stays under the workArea-48 ceiling main clamps to, on every display size', () => {
+describe('MQA-291 — summary / recap Panel fits or scrolls, never clips', () => {
+  it('MQA-291 — stays under the workArea-48 ceiling main clamps to, on every display size', () => {
     for (const avail of DISPLAYS) {
       const cap = panelMaxHeight(avail)
       expect(cap + PANEL_CHROME_PX + RESIZE_QUANTIZE_PX).toBeLessThanOrEqual(
@@ -51,7 +51,7 @@ describe('MQA-286 — summary / recap Panel fits or scrolls, never clips', () =>
     }
   })
 
-  it('MQA-286 — the old avail-160 reserve leaves a dead band the new cap closes', () => {
+  it('MQA-291 — the old avail-160 reserve leaves a dead band the new cap closes', () => {
     const { remaining, oldCap } = oldDeadBand(LAPTOP)
     expect(oldCap).toBeGreaterThan(remaining)
     expect(panelMaxHeight(LAPTOP)).toBeLessThanOrEqual(remaining)
@@ -60,7 +60,7 @@ describe('MQA-286 — summary / recap Panel fits or scrolls, never clips', () =>
     expect(oldCap - remaining).toBeGreaterThan(0)
   })
 
-  it('MQA-286 — last content is reachable: the shell is a real overflow-y scroller at the screen cap', () => {
+  it('MQA-291 — last content is reachable: the shell is a real overflow-y scroller at the screen cap', () => {
     stubAvail(LAPTOP)
     const cap = panelMaxHeight(LAPTOP)
     const html = renderToStaticMarkup(
@@ -83,13 +83,13 @@ describe('MQA-286 — summary / recap Panel fits or scrolls, never clips', () =>
     expect(html).not.toContain('dvh')
   })
 
-  it('MQA-286 — scales with the display and never uses the window height as input', () => {
+  it('MQA-291 — scales with the display and never uses the window height as input', () => {
     expect(panelMaxHeight(RETINA)).toBeGreaterThan(panelMaxHeight(LAPTOP))
     expect(panelMaxHeight(LAPTOP)).toBe(panelMaxHeight(LAPTOP))
     expect(panelMaxHeight(undefined)).toBe(PANEL_MIN_PX)
   })
 
-  it('MQA-286 — Review and sibling recap bodies share this one Panel scroller (no nested trap)', () => {
+  it('MQA-291 — Review and sibling recap bodies share this one Panel scroller (no nested trap)', () => {
     const app = read('..', 'App.tsx')
     const review = read('Review.tsx')
     const panel = read('Panel.tsx')
