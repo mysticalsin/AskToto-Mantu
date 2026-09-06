@@ -305,6 +305,23 @@ describe('CLI Connect treats a weekly cap as signed-in, not disconnected', () =>
     expect(body).toMatch(/r\.session === 'weekly-limit'/)
     expect(body).toMatch(/phase: 'done'/)
   })
+
+  it('installs in-flow when the session probe says missing, then proves again', () => {
+    const body = blockAfter("const connect = async (id: 'claude-cli' | 'codex-cli')", 'const cancel =')
+    expect(body).toMatch(/r\.session === 'missing'/)
+    expect(body).toMatch(/cliInstall/)
+    expect(body).toMatch(/r\.session === 'signed-out'/)
+    expect(body).toMatch(/cliLogin/)
+  })
+})
+
+describe('CLI Integration copy — managed install, not npm i -g', () => {
+  it('does not advertise npm i -g as the happy path', () => {
+    const block = blockAfter('title="CLI Integration"', 'icon={Link2}')
+    expect(block).not.toMatch(/npm i -g/)
+    expect(block).toMatch(/managed copy/)
+    expect(block).toMatch(/live session check/)
+  })
 })
 
 // MQA-164 — the in-app download had no failure path: main logged the electron-updater 'error' and told
