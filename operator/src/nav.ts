@@ -10,6 +10,7 @@ export const NAV_SECTIONS = [
       { id: 'sessions', label: 'Sessions' },
       { id: 'notifications', label: 'Notifications' },
       { id: 'keys', label: 'Keys' },
+      { id: 'licenses', label: 'Licenses' },
       { id: 'settings', label: 'Settings' }
     ]
   }
@@ -22,6 +23,7 @@ export type NavId =
   | 'sessions'
   | 'notifications'
   | 'keys'
+  | 'licenses'
   | 'settings'
 
 export const NAV_IDS: NavId[] = NAV_SECTIONS.flatMap((s) => s.items.map((i) => i.id))

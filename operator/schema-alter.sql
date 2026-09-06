@@ -78,3 +78,27 @@ ALTER TABLE seats ADD COLUMN product TEXT;
 ALTER TABLE seats ADD COLUMN saved_minutes REAL NOT NULL DEFAULT 0;
 ALTER TABLE seats ADD COLUMN meetings_summarized REAL NOT NULL DEFAULT 0;
 ALTER TABLE seats ADD COLUMN conversation_minutes REAL NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS licenses (
+  license_key TEXT PRIMARY KEY,
+  company_name TEXT NOT NULL,
+  seat_cap INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER,
+  revoked INTEGER NOT NULL DEFAULT 0,
+  contact_name TEXT NOT NULL DEFAULT '',
+  contact_email TEXT NOT NULL DEFAULT '',
+  notes TEXT NOT NULL DEFAULT '',
+  created_by TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS license_activations (
+  license_key TEXT NOT NULL,
+  machine_id TEXT NOT NULL,
+  machine_name TEXT NOT NULL DEFAULT '',
+  activated_at INTEGER NOT NULL,
+  last_seen_at INTEGER NOT NULL,
+  PRIMARY KEY (license_key, machine_id)
+);
+
+CREATE INDEX IF NOT EXISTS license_activations_key ON license_activations(license_key);

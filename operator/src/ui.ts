@@ -507,7 +507,23 @@ export function renderConsole(data: DashboardPayload): string {
     (s) =>
       `<button class="tab" data-crm-filter="${s}" type="button">${statusBadge(s)} ${data.crm.counts[s]}</button>`
   ).join('')
-  const vaultRows = data.keys.vault
+  const licRows = (data.licenses || [])
+    .map((l) => {
+      const status = l.revoked ? 'revoked' : l.status
+      const seats = `${l.seatsUsed}/${l.seatCap}`
+      const exp = l.expiresAt ? new Date(l.expiresAt).toISOString().slice(0, 10) : '—'
+      const keyShort = l.licenseKey.length > 18 ? `${l.licenseKey.slice(0, 12)}…${l.licenseKey.slice(-4)}` : l.licenseKey
+      return `<tr data-lic-key="${esc(l.licenseKey)}">
+        <td>${esc(l.companyName)}</td>
+        <td><code title="${esc(l.licenseKey)}">${esc(keyShort)}</code></td>
+        <td>${esc(seats)}</td>
+        <td><span class="lic-status lic-${esc(String(status))}">${esc(String(status))}</span></td>
+        <td>${esc(exp)}</td>
+        <td>${l.revoked ? '' : `<button type="button" class="btn" data-lic-revoke="${esc(l.licenseKey)}">Revoke</button>`}</td>
+      </tr>`
+    })
+    .join('')
+    const vaultRows = data.keys.vault
     .map(
       (v) => `<tr data-key="${esc(v.id)}">
         <td>${esc(v.provider)}</td>
@@ -1207,7 +1223,41 @@ export function renderConsole(data: DashboardPayload): string {
       </article>
     </section>
 
-    <section class="page wrap" data-page="settings" hidden>
+    
+    <section class="page wrap" data-page="licenses" hidden>
+      <article class="card lic-card">
+        <p class="eyebrow">Licenses</p>
+        <div class="sub muted" style="padding-bottom:8px">Mint Métis ATK keys here. Point the app license server URL at this Operator. Activate and heartbeat stay on this host.</div>
+        <p class="eyebrow">Generate</p>
+        <form class="lic-form" id="lic-create" autocomplete="off">
+          <div class="row lic-row">
+            <input name="companyName" type="text" placeholder="Company" maxlength="120" required>
+            <input name="seatCap" type="number" min="1" max="10000" value="5" required title="Seat cap">
+            <input name="expiresAt" type="date" title="Expiry (optional)">
+            <input name="contactName" type="text" placeholder="Contact" maxlength="120">
+            <input name="contactEmail" type="email" placeholder="Email" maxlength="160">
+            <button class="primary" type="submit">Generate</button>
+          </div>
+          <textarea name="notes" rows="2" placeholder="Notes (optional)" maxlength="500"></textarea>
+        </form>
+        <div id="lic-reveal" class="lic-reveal" hidden>
+          <p class="eyebrow">New key — copy now</p>
+          <code id="lic-key" class="lic-key"></code>
+          <button type="button" class="btn" id="lic-copy">Copy</button>
+        </div>
+        <div id="lic-msg" class="key-msg" role="status"></div>
+        <p class="eyebrow" style="margin-top:14px">Issued</p>
+        <table id="lic-table">
+          <thead><tr><th>Company</th><th>Key</th><th>Seats</th><th>Status</th><th>Expires</th><th></th></tr></thead>
+          <tbody>
+            ${licRows || `<tr data-lic-empty><td colspan="6" class="empty">No Métis licenses yet. Generate one to hand to a customer.</td></tr>`}
+          </tbody>
+        </table>
+        <p class="sub muted" style="padding-top:10px">Server URL for Métis Settings → License: <code class="lic-url">${esc(data.origin || '')}</code></p>
+      </article>
+    </section>
+
+<section class="page wrap" data-page="settings" hidden>
       <article class="card" style="padding-bottom:10px">
         <p class="eyebrow">Settings</p>
         <div class="sub muted" style="padding-bottom:8px">Keys fund seats. Add an API once. last4 only. Heartbeats list fundedProviders. Seats never hold the raw key.</div>

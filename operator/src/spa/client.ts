@@ -74,7 +74,7 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
 
   var titles = {
     overview: 'Overview', realtime: 'Realtime', events: 'Events', sessions: 'Sessions',
-    notifications: 'Notifications', keys: 'Keys', settings: 'Settings', map: 'Realtime'
+    notifications: 'Notifications', keys: 'Keys', licenses: 'Licenses', settings: 'Settings', map: 'Realtime'
   }
 
   function route(to) {
@@ -636,5 +636,71 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
       else showKey(document.getElementById('key-msg'), j)
     })
   })
-})();
+
+  var licForm = document.getElementById('lic-create')
+  if (licForm) {
+    licForm.addEventListener('submit', async function (e) {
+      e.preventDefault()
+      var msg = document.getElementById('lic-msg')
+      var fd = new FormData(licForm)
+      var expiresRaw = String(fd.get('expiresAt') || '')
+      var expiresAt = null
+      if (expiresRaw) {
+        var t = Date.parse(expiresRaw + 'T23:59:59.000Z')
+        if (!isNaN(t)) expiresAt = t
+      }
+      var j = await api('/v1/admin/licenses', {
+        companyName: fd.get('companyName'),
+        seatCap: Number(fd.get('seatCap') || 1),
+        expiresAt: expiresAt,
+        contactName: fd.get('contactName') || '',
+        contactEmail: fd.get('contactEmail') || '',
+        notes: fd.get('notes') || ''
+      })
+      if (msg) {
+        if (j && j.ok) {
+          msg.className = 'key-msg ok'
+          msg.textContent = 'License created'
+          var reveal = document.getElementById('lic-reveal')
+          var keyEl = document.getElementById('lic-key')
+          if (reveal && keyEl) {
+            keyEl.textContent = j.licenseKey || ''
+            reveal.hidden = false
+          }
+          setTimeout(function () { location.reload() }, 1200)
+        } else {
+          msg.className = 'key-msg fail-loud'
+          msg.textContent = (j && j.error) || 'Generate failed'
+        }
+      }
+    })
+  }
+  var licCopy = document.getElementById('lic-copy')
+  if (licCopy) {
+    licCopy.addEventListener('click', function () {
+      var keyEl = document.getElementById('lic-key')
+      if (!keyEl || !keyEl.textContent) return
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(keyEl.textContent)
+      }
+    })
+  }
+  document.querySelectorAll('[data-lic-revoke]').forEach(function (b) {
+    b.addEventListener('click', async function () {
+      var key = b.getAttribute('data-lic-revoke')
+      if (!key) return
+      if (!window.confirm('Revoke ' + key + '?')) return
+      var j = await api('/v1/admin/licenses/' + encodeURIComponent(key) + '/revoke', {})
+      if (j && j.ok) location.reload()
+      else {
+        var msg = document.getElementById('lic-msg')
+        if (msg) {
+          msg.className = 'key-msg fail-loud'
+          msg.textContent = (j && j.error) || 'Revoke failed'
+        }
+      }
+    })
+  })
+
+  })();
 `

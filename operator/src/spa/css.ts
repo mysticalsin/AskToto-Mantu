@@ -585,14 +585,15 @@ a { color: var(--accent); text-decoration: none; }
 .geo-row:hover, .geo-row.on {
   background: color-mix(in srgb, var(--accent) 9%, transparent);
 }
+/* Shoey blue geo bars (pre-matte). Keep grow motion; keep row grid/hover from later polish. */
 .geo-bar {
   position: absolute; left: 0; top: 4px; bottom: 4px; z-index: 0;
-  background: color-mix(in srgb, var(--ink) 7%, transparent); border-radius: 6px;
+  background: #DBEAFE; border-radius: 6px;
   max-width: calc(100% - 150px);
   transform-origin: left center;
   animation: geoBarGrow 640ms var(--ease-out) both;
 }
-[data-theme="dark"] .geo-bar { background: rgba(255,255,255,0.07); }
+[data-theme="dark"] .geo-bar { background: rgba(37,99,235,0.22); }
 @keyframes geoBarGrow {
   from { transform: scaleX(0.08); opacity: 0.35; }
   to { transform: scaleX(1); opacity: 1; }
@@ -952,4 +953,26 @@ ${STATUS_BADGE_CSS}
 .ic-win { background: #0A84FF; }
 .ic-desk { background: #71717A; }
 
+
+.lic-card .lic-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+.lic-card .lic-row input, .lic-card textarea {
+  flex: 1 1 140px; min-width: 120px;
+  border: 1px solid var(--hair); background: var(--panel); color: var(--ink);
+  border-radius: 8px; padding: 8px 10px; font: 12px/1.4 var(--sans);
+}
+.lic-card textarea { width: 100%; resize: vertical; margin-bottom: 8px; }
+.lic-reveal {
+  margin: 10px 0; padding: 12px; border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+}
+.lic-key {
+  display: block; margin: 6px 0 10px; padding: 10px 12px; border-radius: 8px;
+  font: 600 13px/1.4 var(--mono); word-break: break-all;
+  background: var(--bg); border: 1px solid var(--hair); color: var(--ink);
+}
+.lic-status { font: 600 11px/1 var(--mono); letter-spacing: 0.04em; text-transform: uppercase; }
+.lic-ok, .lic-seat_full { color: var(--ok, #16A34A); }
+.lic-revoked, .lic-expired, .lic-invalid { color: var(--danger, #DC2626); }
+.lic-url { font: 12px/1.4 var(--mono); }
 `
