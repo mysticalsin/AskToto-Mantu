@@ -79,8 +79,35 @@ export function geoRegionRows(seats: SeatGeoInput[]): GeoRegionRow[] {
     .sort((a, b) => b.count - a.count || a.region.localeCompare(b.region))
 }
 
-export function geoCountryRollup(rows: RealtimeGeoRow[]): { country: string; count: number }[] {
-  const m = new Map<string, number>()
-  for (const r of rows) m.set(r.country, (m.get(r.country) ?? 0) + r.count)
-  return [...m.entries()].map(([country, count]) => ({ country, count })).sort((a, b) => b.count - a.count)
+export type GeoCountryRow = {
+  country: string
+  count: number
+  unique_sessions: number
+  avg_duration: number
+}
+
+export function geoCountryRollup(rows: RealtimeGeoRow[]): GeoCountryRow[] {
+  const m = new Map<string, { count: number; sessions: number; weighted: number }>()
+  for (const r of rows) {
+    const cur = m.get(r.country) ?? { count: 0, sessions: 0, weighted: 0 }
+    cur.count += r.count
+    cur.sessions += r.unique_sessions
+    cur.weighted += r.avg_duration * r.count
+    m.set(r.country, cur)
+  }
+  return [...m.entries()]
+    .map(([country, c]) => ({
+      country,
+      count: c.count,
+      unique_sessions: c.sessions,
+      avg_duration: c.count ? Math.round(c.weighted / c.count) : 0
+    }))
+    .sort((a, b) => b.count - a.count)
+}
+
+export function formatAvgDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms <= 0) return '0s'
+  if (ms < 1000) return `${Math.round(ms)}ms`
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`
+  return `${Math.round(ms / 60_000)}m`
 }

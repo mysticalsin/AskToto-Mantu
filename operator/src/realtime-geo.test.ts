@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { geoCountryRollup, geoRegionRows, realtimeGeoRows } from './realtime-geo'
+import { formatAvgDuration, geoCountryRollup, geoRegionRows, realtimeGeoRows } from './realtime-geo'
 
 describe('realtimeGeoRows', () => {
   it('emits Shoey city rows: country, city, count, unique_sessions, avg_duration', () => {
@@ -29,8 +29,8 @@ describe('realtimeGeoRows', () => {
     })
     expect(rows[1]?.city).toBe('Austin')
     expect(geoCountryRollup(rows)).toEqual([
-      { country: 'CA', count: 2 },
-      { country: 'US', count: 1 }
+      { country: 'CA', count: 2, unique_sessions: 2, avg_duration: 90_000 },
+      { country: 'US', count: 1, unique_sessions: 1, avg_duration: 0 }
     ])
   })
 
@@ -57,6 +57,12 @@ describe('realtimeGeoRows', () => {
     ).toEqual([
       { country: 'CA', region: 'Quebec', count: 1, unique_sessions: 1, avg_duration: 1 }
     ])
+  })
+
+  it('formats avg_duration for the GeoTable', () => {
+    expect(formatAvgDuration(0)).toBe('0s')
+    expect(formatAvgDuration(90_000)).toBe('2m')
+    expect(formatAvgDuration(4500)).toBe('5s')
   })
 
   it('drops country-only seats so city is required', () => {
