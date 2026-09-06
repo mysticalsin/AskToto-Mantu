@@ -123,7 +123,7 @@ Overlay chrome has three layouts. Minimize-to-circle is not a fourth layout and 
 | Layout | Rest | Minimize-to-circle |
 | --- | --- | --- |
 | **Hide** | Hover-to-reveal hairline (8×2 park). Reveal only from the hardware camera / Dynamic Island square, not a 560×44 menu-bar slab. The bar is **invisible** at rest. | **Forbidden.** The circle is invisible at rest too. Hide the minimize control. `minimize(true)` is a **no-op**. Do not park an orb while Hide is idle. Do not float a sphere in the notch. On hover the bar reveals; never a Hide circle. |
-| **Island** | The small visible island (132×15) is already the rest. Hover the camera square at the top center. Left/right menu-bar items and Teams mute / camera / share must never reveal Métis. | **Forbidden.** Do not add a second circle. Island stays the island. Same as Hide: no control, ignore minimize, no layout jump. |
+| **Island** | The small visible island (132×15) is already the rest. Hover the top edge to reveal. Teams mute / camera / share at Y≈40 must never reveal Métis. | **Forbidden.** Do not add a second circle. Island stays the island. Same as Hide: no control, ignore minimize, no layout jump. |
 | **Bar** | The classic bar stays on screen **plus** the thinking-orb circle docked on that bar (never a lozenge / pill). | **Allowed — only here.** Click the docked circle to collapse to that same circle. Click the rest circle to expand back to full bar + circle. Drag the rest circle moves. Position is the existing Bar-minimize rest (not a wanderer). Layout stays `bar`. |
 
 Visibility must match the bar. Uniform. No leftover floating orb.
@@ -229,7 +229,7 @@ No `unpkg` / CDN. Bundle the package.
 - Island: **no** extra orb (`overlayShowsBarOrb('island', *)` is false, `overlayDocksBarCircle('island')` is false).
 - Bar minimized: rest circle shown (`overlayShowsBarOrb('bar', true)` and `data-bar-pill-orb`).
 - Bar idle / expanded: circle **docked on the bar** (`overlayDocksBarCircle('bar')`), not a floating second disk and not a pill.
-- Hover hit is the camera island: width = `notchWidth` (~180–250, not 560), height = housing only (not 44). Left menu-bar misses. Y=40 and `TEAMS_MEETING_CHROME_Y` miss.
+- Hover hit is the top-edge strip: width = `workArea.width`, height = housing only (not 44). Y=40 and `TEAMS_MEETING_CHROME_Y` miss.
 - Settings close onto Island/Hide force-parks (`shouldForceParkOnBecameIdle`).
 - Aspect ratio **1** on every mood. Bounding box constant across moods. Visible size is 41. Canvas stays 64 with 2x backing. Never scale-on-appear. no-squash M on Listen.
 - Listening toolbar at production overlay width 880: no child `getBoundingClientRect` intersection. No "+ New meeting" in that row. Timer/pause do not intersect Transcript or the orb. No 100px dummy spacer.
