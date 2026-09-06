@@ -321,6 +321,7 @@ silently wrong · `medium` = degraded or confusing in a real scenario · `low` =
 | MQA-287 | Dust managed-cli `npm install --omit=dev` exited 127 because Electron PATH has no node, and the mac `bin/npm` shebang is `#!/usr/bin/env node` | Set up Dust / Reconnect on a packaged Mac or Windows app | high | FIXED | `src/main/cli-installer.npm-spawn.test.ts`, `src/shared/managed-npm.test.ts` | Spawn portable node + npm-cli.js only. Fail loud if Node is missing. Human message. Never mark Connected. |
 | MQA-288 | White or solid-black flash on launch, Settings open/close, or overlay reveal | Launch, open Settings from Hide, close Settings back to Hide | medium | FIXED | `src/main/settings-surface.contract.test.ts`, `src/shared/settings-bounds.test.ts` | Settings surface uses #120022. Rest stays #00000000. Forbidden flash colors are unit-tested. |
 | MQA-289 | Leftover clamp parked Hide/Island at Y=39 as an 880×133 fat hover trigger, so the camera square missed and Teams chrome hit | Mouse at the top / notch after Settings on a notch Mac | high | FIXED | `src/main/island/mac-hide-island.proof.test.ts`, `src/shared/settings-bounds.test.ts` | Park stays bounds.y = 0 (8×2 / island peek). 880×133 at workArea.y is isFatHoverTrigger. Hover hit remains the camera square. |
+| MQA-290 | Totos-Mac `npm run build:intelligence` dies TS2503 Cannot find namespace JSX, so Tony sees Intelligence dashboard bundle not found | Settings / Intelligence after `npm run build` on the show tree | high | FIXED | `scripts/ensure-intelligence-bundle.contract.test.ts` | Button used `JSX.Element`; `types: ["vite/client"]` hid `@types/react`. React 19 + TS 6 has no global JSX. Return `ReactElement`; load react types; prebuild/dev ensure the bundle. |
  on Windows — every reader strips `
 ` before hashing or the chain false-breaks on its own first link |
 
@@ -4417,3 +4418,19 @@ a retry or a timeout bump, both of which would hide it.
 being deterministic. It is not, so any such claim is worth exactly as much as the run it came from. That is
 the same class of problem as MQA-248 (tests excluded from typecheck) and the skipped-integration-test gap:
 a green signal that is not measuring what people believe it measures.
+
+### MQA-290 — Totos-Mac `npm run build:intelligence` Cannot find namespace JSX
+
+**Repro (Totos-Mac show tree, 2026-09-06).** `npm run build:intelligence` on the show tree:
+
+```
+src/components/IntelligenceUpdateButton.tsx(12,5): error TS2503: Cannot find namespace 'JSX'
+```
+
+Tony live `/Applications/Metis.app` 1.8.3 then shows the red Settings / Intelligence banner `Intelligence dashboard bundle not found — run \`npm run build:intelligence\`, then restart.` Same miss: no `intelligence/dist/index.html`.
+
+**Cause.** The button returned `JSX.Element`. `intelligence/tsconfig.app.json` set `"types": ["vite/client"]` only, so `tsc -b` never loaded `@types/react`. React 19 + TypeScript 6 does not provide a global `JSX` namespace unless those types load.
+
+**Fix.** Return `ReactElement`. Load `react` and `react-dom` in `tsconfig.app.json`. Keep a `src/vite-env.d.ts` triple-slash to React. `prebuild` and `dev` run `scripts/ensure-intelligence-bundle.mjs` so a normal build cannot skip the dashboard.
+
+**Regression test.** `scripts/ensure-intelligence-bundle.contract.test.ts` (MQA-290) pins `ReactElement`, forbids `JSX.Element`, requires React types, and requires the prebuild/dev ensure script.
