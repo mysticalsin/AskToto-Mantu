@@ -69,18 +69,28 @@ Managed config (machine-wide `managed-config.json`, see `docs/ENTERPRISE_RELEASE
 - Absent key: no restriction (today's behavior for every install).
 - Present: every other host is refused. `*.example.com` matches `example.com` and its subdomains. Loopback is
   always allowed. An explicit `[]` is deny-all except loopback.
-- Enforced at boot by `src/main/net/egress-guard.ts` on both stacks the app uses: the main-process `fetch`
-  (every provider, Graph, Operator, npm, WorkOS) and the Chromium session (`net.fetch`, the renderer, the
-  Intelligence window). A refused request fails like a dead network, so the existing offline handling and
-  error copy apply. Each refused host is written once per session to the audit log as `net.egress.blocked`
-  (hostname only). The policy itself is recorded at boot as `net.egress.policy`.
-- Known gaps, stated rather than hidden: raw `https.request` sockets opened by libraries (MSAL's token client
-  for Microsoft sign-in) and child processes are not seen by the guard. Put those on the proxy allowlist.
+- Enforced at boot by `src/main/net/egress-guard.ts` on every stack the app uses: the main-process `fetch`
+  (every provider, Graph, Operator, npm, WorkOS), Node `http` / `https` `request` and `get` (MSAL's token
+  client for Microsoft sign-in), and the Chromium session (`net.fetch`, the renderer, the Intelligence
+  window). A refused request fails like a dead network (fetch `TypeError`, http `ENOTFOUND`, Chromium
+  `ERR_BLOCKED_BY_CLIENT`), so the existing offline handling and error copy apply. Each refused host is
+  written once per session to the audit log as `net.egress.blocked` (hostname only). The policy itself is
+  recorded at boot as `net.egress.policy`.
+- Redirects are checked hop by hop. A host on the list cannot bounce a request to a host that is not: the
+  fetch guard follows 3xx itself (same 20-hop ceiling as the fetch spec, auth headers dropped across
+  origins) and refuses the first hop that leaves the list; Chromium re-runs the hook on each redirect. So a
+  model download from `huggingface.co` also needs its CDN targets (`*.hf.co`) on the list.
+- A refused `http` / `https` request never reaches DNS: the guard hands Node a `lookup` that fails, so
+  the hostname itself does not leave the device.
+- Known gap, stated rather than hidden: child processes (the CLI providers, ffmpeg) open their own sockets
+  and are not seen by the guard. Put those on the proxy allowlist.
 - Precedence matches `allowedProviders`: the admin (machine) file wins over the per-user file.
 
 ## Proof
 
 - `src/main/net/egress-policy.test.ts`: parsing, wildcard and loopback rules.
-- `src/main/net/egress-guard.test.ts`: fetch rejection, Chromium cancel, once-per-host audit, no-policy no-op.
+- `src/main/net/egress-guard.test.ts`: fetch rejection, redirect hop checks (allowed chain, off-list hop,
+  303/307 method and header rules, 20-hop ceiling), http/https lookup refusal against the real `node:https`
+  module, Chromium cancel, once-per-host audit, no-policy no-op.
 - `src/main/bank-grade-hardening.contract.test.ts`: the guard is armed at boot, after the proxy, in a
   try/catch so it can never block startup.
