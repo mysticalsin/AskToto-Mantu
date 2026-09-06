@@ -24,6 +24,12 @@ Access: Cloudflare Access email-code only. Allowlist `tony.walteur@gmail.com` +
 **Hold merge.** Draft only. No pack. No Latest. Ultron green-lit Operator-only
 deploy to `metis-operator` (`tony-walteur.workers.dev`). Do not merge fat PR151.
 
+**Tonight's path.** Operator asks stay on this thin Worker tip
+(`cursor/operator-license-thin-cd63`, PR153). Do not grow overlay
+Settings or Métis client CF-provider connect here. Those land on
+overlay **1.8.5 KineticGrid** tip `b8a677b` lineage, not this tip
+and not fat PR151.
+
 **ULTRON LOCK.** Do **not** publish or promote any Metis-Releases Latest feed.
 EXE / DMG / Native → Latest only after Bob QA **and** Ultron approve.
 
@@ -51,6 +57,9 @@ Selling ATK- / Fly JWS stays closed. `LICENSE_ACTIVATION_OPEN` stays false.
 `#keys` → **Log in to Cloudflare** → GET `/cloudflare/connect` (OAuth) → callback
 writes vault `cloudflare` + `cloudflare-account` (last4 only). Paste is not the
 happy path. License generate must work if CF OAuth secrets are missing.
+Tony sets `CF_OAUTH_CLIENT_ID` + `CF_OAUTH_CLIENT_SECRET` on the Worker.
+Missing secrets → 503 after Access. Métis Settings tile (if any) is
+KineticGrid `b8a677b`, not this Worker tip.
 
 ## Security (unchanged)
 

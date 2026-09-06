@@ -302,9 +302,15 @@ describe('quality bar: Ultron lock — Operator only, no Latest feed', () => {
     expect(designLaw).toMatch(/not reported/)
     expect(designLaw).toMatch(/#notifications/)
     expect(designLaw).toMatch(/Write this section first/)
+    expect(operatorLaw).toMatch(/PR153/)
+    expect(operatorLaw).toMatch(/1\.8\.5 KineticGrid/)
+    expect(operatorLaw).toMatch(/b8a677b/)
+    expect(designLaw).toMatch(/1\.8\.5 KineticGrid/)
+    expect(designLaw).toMatch(/b8a677b/)
     for (const file of collectTs(SRC)) {
       const src = readFileSync(file, 'utf8')
       expect(src, file).not.toMatch(/Metis-Releases|latest-mac\.yml|latest\.yml/)
+      expect(src, file).not.toMatch(/from ['"].*Settings['"]|renderer\/src\/components\/Settings/)
     }
   })
 })

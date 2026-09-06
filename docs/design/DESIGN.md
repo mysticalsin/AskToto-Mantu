@@ -223,8 +223,13 @@ OS · When. Real D1. Not Slack/Discord stubs.
 ### Keys `#keys` / Settings `#settings`
 
 Keys: vault last4 + **Log in to Cloudflare** (`/cloudflare/connect`).
-Settings: Access keep + geo law (`request.cf` only). No homemade
-password. CF OAuth missing must not block Generate license.
+Operator Settings: Access keep + geo law (`request.cf` only). No homemade
+password. CF OAuth missing must not block Generate license. Fail loud
+on Keys when `CF_OAUTH_CLIENT_ID` / `CF_OAUTH_CLIENT_SECRET` are unset.
+
+Métis client CF provider connect in overlay Settings, if any, lands on
+**1.8.5 KineticGrid** tip `b8a677b` — not this thin Worker tip, not
+pre-Kinetic, not fat PR151.
 
 ### Anti-slop (Operator)
 

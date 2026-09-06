@@ -17,6 +17,7 @@ export type KeysFlags = {
   promptBound: boolean
   skillBound: boolean
   vaultBound: boolean
+  oauthBound: boolean
 }
 
 export type KeysListResponse = KeysFlags & {

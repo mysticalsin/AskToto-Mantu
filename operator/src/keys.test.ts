@@ -49,6 +49,7 @@ describe('admin keys write / rotate / revoke', () => {
     const body = (await list.json()) as {
       vault: { provider: string; last4: string; status: string }[]
       vaultBound: boolean
+      oauthBound: boolean
     }
     expect(body.vaultBound).toBe(true)
     expect(body.vault).toEqual([
@@ -73,6 +74,9 @@ describe('admin keys write / rotate / revoke', () => {
     expect(html).toContain('id="key-add"')
     expect(html).toContain('id="cf-connect"')
     expect(html).toContain('href="/cloudflare/connect"')
+    expect(html).toContain('data-cf-oauth-missing')
+    expect(html).toContain('CF_OAUTH_CLIENT_ID')
+    expect(body.oauthBound).toBe(false)
     expect(html).toContain('<th>Rotate</th>')
     expect(html).toContain('<th>Revoke</th>')
     expect(html).toContain('data-rotate=')
