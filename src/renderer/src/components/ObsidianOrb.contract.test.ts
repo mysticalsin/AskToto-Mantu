@@ -3,9 +3,9 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 describe('ObsidianOrb / Circle always animate on Windows reduce', () => {
-  it('Jarvis createJarvisOrb never passes OS reducedMotion:true', () => {
+  it('Jarvis live Bar forces reducedMotion:false; picker may freeze via animate=false', () => {
     const src = readFileSync(join(__dirname, './ObsidianOrb.tsx'), 'utf8')
-    expect(src).toMatch(/reducedMotion:\s*false/)
+    expect(src).toMatch(/reducedMotion:\s*!animate/)
     expect(src).not.toMatch(/reducedMotion:\s*reduced/)
     expect(src).not.toMatch(/matchMedia\?\.\('\(prefers-reduced-motion: reduce\)'\)/)
   })

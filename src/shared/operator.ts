@@ -31,8 +31,29 @@ export function cloudflareConnectHref(
   return `${raw.replace(/\/$/, '')}${CF_CONNECT_PATH}`
 }
 
-/** True when Settings (or METIS_OPERATOR_URL) points at the Cloudflare Operator Worker. */
+/**
+ * HTTPS Operator base for heartbeat / ingest / skills.
+ * Settings → METIS_OPERATOR_URL → DEFAULT_OPERATOR_URL. Empty Settings still phones home
+ * to the live Worker once an ingest secret is present. Non-https overrides stay empty.
+ */
+export function resolveOperatorBaseUrl(
+  settings: { operatorUrl?: string } | null | undefined = {},
+  env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
+): string {
+  const raw = (settings?.operatorUrl || env.METIS_OPERATOR_URL || DEFAULT_OPERATOR_URL).trim().replace(/\/$/, '')
+  return /^https:\/\//i.test(raw) ? raw : ''
+}
+
+/** True when a usable HTTPS Operator base resolves (Settings, env, or shipped DEFAULT). */
 export function operatorUrlConfigured(
+  settings: { operatorUrl?: string } | null | undefined,
+  env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
+): boolean {
+  return Boolean(resolveOperatorBaseUrl(settings, env))
+}
+
+/** Explicit Settings/env URL only — not the shipped DEFAULT. Gates Ask-text opt-in. */
+export function operatorUrlExplicit(
   settings: { operatorUrl?: string } | null | undefined,
   env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
 ): boolean {
@@ -40,12 +61,12 @@ export function operatorUrlConfigured(
   return /^https:\/\//i.test(url)
 }
 
-/** Ask-text toggle. Default ON once a URL is set; ignored when Operator is off. */
+/** Ask-text toggle. Default ON once an explicit URL is set; ignored for bare DEFAULT. */
 export function shouldSendAskText(
   settings: { operatorUrl?: string; sendAskText?: boolean } | null | undefined,
   env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
 ): boolean {
-  if (!operatorUrlConfigured(settings, env)) return false
+  if (!operatorUrlExplicit(settings, env)) return false
   return settings?.sendAskText !== false
 }
 

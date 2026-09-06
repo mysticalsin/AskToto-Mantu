@@ -12,6 +12,7 @@ export function BrandThinkingOrb({
   size = 64,
   theme = 'dark',
   speed = 1,
+  animate = true,
   className,
   ...rest
 }: {
@@ -19,6 +20,8 @@ export function BrandThinkingOrb({
   size?: 64 | 20
   theme?: OrbTheme
   speed?: number
+  /** Settings picker: only the selected card keeps a live rAF. */
+  animate?: boolean
   className?: string
 } & Omit<CanvasHTMLAttributes<HTMLCanvasElement>, 'style'>): JSX.Element {
   const ref = useRef<HTMLCanvasElement>(null)
@@ -57,6 +60,9 @@ export function BrandThinkingOrb({
       raf = requestAnimationFrame(loop)
     }
     paint((performance.now() / 1000) * rate)
+    if (!animate) {
+      return () => undefined
+    }
     let onScreen = true
     const io =
       typeof IntersectionObserver !== 'undefined'
@@ -78,7 +84,7 @@ export function BrandThinkingOrb({
       io?.disconnect()
       document.removeEventListener('visibilitychange', onVis)
     }
-  }, [state, size, dark, speed])
+  }, [state, size, dark, speed, animate])
 
   return (
     <canvas
