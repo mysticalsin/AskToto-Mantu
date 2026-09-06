@@ -158,6 +158,23 @@ Non-goals: shipping plaintext Cahê keys (CLOSED on `8386d9d`); unpinned `cloudf
 
 ---
 
+
+## 11. QA checklist outline (docs only — no eng)
+
+Use after PCC + Lite eng is authorized. Evidence Mac show; invent nothing.
+
+| # | Step | Pass |
+| --- | --- | --- |
+| 1 | Fresh profile, Hide default | Overlay recedes; no Operator wall |
+| 2 | Connect Mantu Intelligence brain (OneDrive scan) | Path sticks across relaunch |
+| 3 | Listen ≥2 min (mic + system) | Transcript lines; no silent empty them |
+| 4 | Stop / end | Meeting saved; encryptTranscripts respected |
+| 5 | End summary | Notes body real summary or fail-loud next action (Settings → AI) |
+| 6 | Intelligence enrich | Today or Connections shows this meeting (or loud empty with Update Intelligence) |
+| 7 | Optional API | With provider connected, summary may use it; without, fail loud — never invent |
+| 8 | Names | Métis Lite / Mantu Intelligence only; no Mountain*; no em dashes; never "as an AI" |
+| 9 | Non-goals | No pack in this checklist; Operator Mission Control not required for the loop |
+
 ## 10. Related
 
 - `docs/design/MANTU-INTELLIGENCE.md`
