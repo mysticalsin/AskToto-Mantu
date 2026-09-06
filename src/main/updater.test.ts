@@ -24,6 +24,7 @@ import {
   configUpdateFeedUrl,
   initAutoUpdate,
   isNewerVersion,
+  latestReleaseIsOfferable,
   parseLatestRelease,
   checkForUpdateNow,
   startUpdateDownload
@@ -98,6 +99,14 @@ describe('parseLatestRelease — GitHub latest-release payload → UpdateCheckRe
     expect(parseLatestRelease({}, '1.2.0').ok).toBe(false)
     expect(parseLatestRelease(null, '1.2.0').ok).toBe(false)
     expect(parseLatestRelease({ tag_name: '   ' }, '1.2.0').ok).toBe(false)
+  })
+
+  it('refuses draft or prerelease Latest (QA + Ultron stamp only)', () => {
+    expect(latestReleaseIsOfferable({ tag_name: 'v1.8.4', draft: true })).toBe(false)
+    expect(latestReleaseIsOfferable({ tag_name: 'v1.8.4', prerelease: true })).toBe(false)
+    expect(latestReleaseIsOfferable({ tag_name: 'v1.8.4' })).toBe(true)
+    expect(parseLatestRelease({ tag_name: 'v9.9.9', draft: true }, '1.2.0').ok).toBe(false)
+    expect(parseLatestRelease({ tag_name: 'v9.9.9', prerelease: true }, '1.2.0').error).toMatch(/QA-approved/)
   })
 })
 

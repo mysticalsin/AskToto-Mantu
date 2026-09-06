@@ -124,8 +124,24 @@ export function isNewerVersion(latest: string, current: string): boolean {
   return false
 }
 
+/** Latest must be a published, non-prerelease tag. Draft / prerelease is not QA-approved. */
+export function latestReleaseIsOfferable(payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object') return false
+  const p = payload as { tag_name?: unknown; draft?: unknown; prerelease?: unknown }
+  if (typeof p.tag_name !== 'string' || !p.tag_name.trim()) return false
+  if (p.draft === true || p.prerelease === true) return false
+  return true
+}
+
 /** Pure: turn a GitHub "latest release" API payload into an UpdateCheckResult. Exported for tests. */
 export function parseLatestRelease(payload: unknown, current: string): UpdateCheckResult {
+  if (!latestReleaseIsOfferable(payload)) {
+    return {
+      ok: false,
+      current,
+      error: 'No QA-approved Latest release is published yet.'
+    }
+  }
   const tag = (payload as { tag_name?: unknown } | null)?.tag_name
   const htmlUrl = (payload as { html_url?: unknown } | null)?.html_url
   if (typeof tag !== 'string' || !tag.trim()) {
