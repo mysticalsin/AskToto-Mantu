@@ -9,9 +9,14 @@ function req(cf?: Record<string, unknown>): Request {
 
 describe('geoFromRequest', () => {
   it('reads ISO country, city, and numeric lat/lon from request.cf', () => {
-    expect(geoFromRequest(req({ country: 'fr', city: 'Paris', latitude: '48.857', longitude: '2.351' }))).toEqual({
+    expect(
+      geoFromRequest(
+        req({ country: 'fr', city: 'Paris', region: 'Île-de-France', latitude: '48.857', longitude: '2.351' })
+      )
+    ).toEqual({
       country: 'FR',
       city: 'Paris',
+      region: 'Île-de-France',
       lat: 48.857,
       lon: 2.351
     })
@@ -19,10 +24,11 @@ describe('geoFromRequest', () => {
 
   it('returns empty geo when cf is missing and never reads IP', () => {
     const r = req({ ip: '203.0.113.9', clientIp: '203.0.113.9' })
-    expect(geoFromRequest(r)).toEqual({ country: null, city: null, lat: null, lon: null })
+    expect(geoFromRequest(r)).toEqual({ country: null, city: null, region: null, lat: null, lon: null })
     expect(geoFromRequest(new Request('https://operator.test/v1/heartbeat'))).toEqual({
       country: null,
       city: null,
+      region: null,
       lat: null,
       lon: null
     })
@@ -31,6 +37,6 @@ describe('geoFromRequest', () => {
   it('drops garbage country codes and out-of-range coordinates', () => {
     expect(
       geoFromRequest(req({ country: 'France', city: '', latitude: '200', longitude: '-200' }))
-    ).toEqual({ country: null, city: null, lat: null, lon: null })
+    ).toEqual({ country: null, city: null, region: null, lat: null, lon: null })
   })
 })

@@ -6,17 +6,15 @@ export const NAV_SECTIONS = [
       { id: 'overview', label: 'Overview' },
       { id: 'realtime', label: 'Realtime' },
       { id: 'events', label: 'Events' },
-      { id: 'map', label: 'Map' }
+      { id: 'sessions', label: 'Sessions' }
     ]
   },
   {
     id: 'fleet',
     label: 'Fleet',
     items: [
-      { id: 'profiles', label: 'Users' },
-      { id: 'macos', label: 'macOS' },
-      { id: 'windows', label: 'Windows' },
-      { id: 'licenses', label: 'Licenses' }
+      { id: 'licenses', label: 'Licenses' },
+      { id: 'notifications', label: 'Notifications' }
     ]
   },
   {
@@ -24,10 +22,7 @@ export const NAV_SECTIONS = [
     label: 'Ops',
     items: [
       { id: 'keys', label: 'Keys' },
-      { id: 'notifications', label: 'Notifications' },
-      { id: 'rules', label: 'Rules' },
-      { id: 'pushes', label: 'Pushes' },
-      { id: 'skills', label: 'Skills' }
+      { id: 'settings', label: 'Settings' }
     ]
   }
 ] as const
@@ -36,17 +31,12 @@ export type NavId =
   | 'overview'
   | 'realtime'
   | 'events'
-  | 'profiles'
-  | 'map'
-  | 'macos'
-  | 'windows'
+  | 'sessions'
   | 'licenses'
-  | 'skills'
-  | 'keys'
   | 'notifications'
-  | 'rules'
-  | 'pushes'
+  | 'keys'
+  | 'settings'
 
 export const NAV_IDS: NavId[] = NAV_SECTIONS.flatMap((s) => s.items.map((i) => i.id))
 
-export const FORBIDDEN_NAV = ['scale', 'change', 'console', 'sessions'] as const
+export const FORBIDDEN_NAV = ['scale', 'change', 'console', 'dashboards', 'seo'] as const

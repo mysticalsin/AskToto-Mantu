@@ -47,6 +47,8 @@ ALTER TABLE seats ADD COLUMN sso_email TEXT;
 ALTER TABLE seats ADD COLUMN license TEXT;
 ALTER TABLE seats ADD COLUMN approval TEXT;
 ALTER TABLE seats ADD COLUMN license_jti TEXT;
+ALTER TABLE seats ADD COLUMN region TEXT;
+ALTER TABLE pulses ADD COLUMN region TEXT;
 
 CREATE TABLE IF NOT EXISTS issued_licenses (
   jti TEXT PRIMARY KEY,

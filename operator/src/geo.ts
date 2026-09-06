@@ -3,6 +3,7 @@
 export interface CfGeo {
   country: string | null
   city: string | null
+  region?: string | null
   lat: number | null
   lon: number | null
 }
@@ -23,6 +24,12 @@ function asCity(raw: unknown): string | null {
   return city || null
 }
 
+function asRegion(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const region = raw.trim().slice(0, 80)
+  return region || null
+}
+
 function asCoord(raw: unknown, min: number, max: number): number | null {
   const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN
   if (!Number.isFinite(n) || n < min || n > max) return null
@@ -33,11 +40,12 @@ function asCoord(raw: unknown, min: number, max: number): number | null {
 export function geoFromRequest(request: Request): CfGeo {
   const cf = (request as Request & { cf?: Record<string, unknown> }).cf
   if (!cf || typeof cf !== 'object') {
-    return { country: null, city: null, lat: null, lon: null }
+    return { country: null, city: null, region: null, lat: null, lon: null }
   }
   return {
     country: asCountry(cf.country),
     city: asCity(cf.city),
+    region: asRegion(cf.region),
     lat: asCoord(cf.latitude, -90, 90),
     lon: asCoord(cf.longitude, -180, 180)
   }
@@ -47,5 +55,5 @@ export function geoFromRequest(request: Request): CfGeo {
 export const CLIENT_GEO_KEYS = ['lat', 'lon', 'latitude', 'longitude', 'country', 'city', 'ip', 'clientIp'] as const
 
 export function emptyGeo(): CfGeo {
-  return { country: null, city: null, lat: null, lon: null }
+  return { country: null, city: null, region: null, lat: null, lon: null }
 }

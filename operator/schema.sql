@@ -11,6 +11,7 @@ CREATE TABLE IF NOT EXISTS seats (
   last_seen INTEGER NOT NULL,
   country TEXT,
   city TEXT,
+  region TEXT,
   lat REAL,
   lon REAL,
   last_index_at INTEGER,
@@ -55,7 +56,8 @@ CREATE TABLE IF NOT EXISTS pulses (
   ts INTEGER NOT NULL,
   kind TEXT NOT NULL,
   country TEXT,
-  city TEXT
+  city TEXT,
+  region TEXT
 );
 
 CREATE INDEX IF NOT EXISTS pulses_ts ON pulses(ts);

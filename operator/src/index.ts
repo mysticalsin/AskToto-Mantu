@@ -438,7 +438,8 @@ async function heartbeat(
     ts: now,
     kind: 'heartbeat',
     country: geo.country,
-    city: geo.city
+    city: geo.city,
+    region: geo.region ?? null
   })
   await store.insertEvent({
     id: pulseId,
@@ -447,7 +448,9 @@ async function heartbeat(
     actor: seat.sso_email,
     device_id: deviceId,
     country: geo.country,
-    detail: safeEventDetail([seat.os, typeof body.path === 'string' ? body.path : '/'].filter(Boolean).join(' '))
+    detail: safeEventDetail(
+      [seat.os, geo.city, typeof body.path === 'string' ? body.path : '/'].filter(Boolean).join(' ')
+    )
   })
   await ingestCrmList(store, deviceId, body, now)
   const retries = await store.listCrmRetries(deviceId)
@@ -553,7 +556,8 @@ async function ingest(
     ts: row.ts,
     kind: 'ask',
     country: geo.country,
-    city: geo.city
+    city: geo.city,
+    region: geo.region ?? null
   })
   const seat = seatFromBody(deviceId, body, now, geo)
   await store.upsertSeat(seat)
@@ -596,6 +600,7 @@ function seatFromBody(deviceId: string, body: Record<string, unknown>, now: numb
     last_seen: now,
     country: geo.country,
     city: geo.city,
+    region: geo.region ?? null,
     lat: geo.lat,
     lon: geo.lon,
     last_index_at: lastIndexAt(body),

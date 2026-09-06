@@ -21,6 +21,7 @@ export interface SeatRow {
   last_seen: number
   country: string | null
   city: string | null
+  region?: string | null
   lat: number | null
   lon: number | null
   last_index_at: number | null
@@ -98,6 +99,7 @@ export interface PulseRow {
   kind: 'heartbeat' | 'ask'
   country: string | null
   city: string | null
+  region?: string | null
 }
 
 export interface ProposalRow {
@@ -200,6 +202,7 @@ export function memoryStore(): OperatorStore {
         first_seen: prev?.first_seen ?? row.first_seen,
         country: row.country ?? prev?.country ?? null,
         city: row.city ?? prev?.city ?? null,
+        region: row.region ?? prev?.region ?? null,
         lat: row.lat ?? prev?.lat ?? null,
         lon: row.lon ?? prev?.lon ?? null,
         last_index_at: row.last_index_at ?? prev?.last_index_at ?? null,

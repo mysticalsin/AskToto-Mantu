@@ -73,16 +73,19 @@ Separate surface from overlay chrome. Worker `operator/`, live host
 
 This slice is a **thin Operator tip**: Generate license on Overview + Licenses,
 platform keys after a seat activates that string in Métis Identity. Do not
-merge the 476-file Keys-gateway stack. **No Worker deploy** until Devon/Ultron
-Mac Hide PASS. No pack. No merge. No Latest.
+merge the 476-file Keys-gateway stack. Ultron green-lit Operator-only
+`wrangler` / API deploy to `metis-operator`. No pack. No merge. No Latest.
 EXE/DMG/Native → Latest only after Bob QA + Ultron approve.
 
-### Feel (original Métis Operator, not Shoey)
+### Feel (LIVE rail + Licenses)
 
-Ops console, not e-commerce. Dark-first two-theme. Geist + Geist Mono.
-Hairline cards, uppercase mono eyebrows, one blue accent. Access chip in the
-rail. LIVE count in the top bar. No purple-gradient hero. No Bklit / Sessions
-nav.
+Ops console. Dark-first two-theme. Geist + Geist Mono. Hairline cards,
+uppercase mono eyebrows, one blue accent. Access chip in the rail. LIVE
+count in the top bar. No purple-gradient hero.
+
+Rail matches live workers.dev plus Licenses:
+
+`Overview · Realtime · Events · Sessions · Licenses · Notifications · Keys · Settings`
 
 | Token | Hex / value | Role |
 | --- | --- | --- |
@@ -104,13 +107,13 @@ license without hunting.
 
 ```
 ┌ rail: Métis · Access ──────────┐  Overview          LIVE n
-│ Overview  Realtime  Events Map │  ┌ Install → works ─────────────┐
-│ Users  macOS  Windows Licenses │  │ Check in → Approve or license│
-│ Keys  Notifications Rules …    │  │ → Platform keys              │
+│ Overview  Realtime  Events     │  ┌ Install → works ─────────────┐
+│ Sessions  Licenses             │  │ Check in → Approve or license│
+│ Notifications  Keys  Settings  │  │ → Platform keys              │
 └────────────────────────────────┘  │ Duration [30d ▾] [Generate]  │
                                     │ [once-string · Copy]         │
                                     └──────────────────────────────┘
-                                    Fleet KPIs (real D1, never $0)
+                                    Fleet KPIs + Places (city corner)
 ```
 
 Generate license is on Overview **and** `#licenses`. Same form contract:
@@ -126,10 +129,12 @@ second. Fail-loud if D1 seats are empty; generator still visible.
 
 ### Places (Overview corner + Realtime)
 
-Heartbeats write `request.cf` city + country. Overview **Places** is a corner
-widget (`data-geo-corner`, mini choropleth + Cities/Countries tabs), not a
-full-bleed globe. Realtime shows Live people, city Geo table (`count`,
-`unique_sessions`, `avg_duration`), and Activity. No Shoey SKUs.
+Heartbeats write `request.cf` city + region + country. Overview **Places** is
+a corner widget (`data-geo-corner`, mini choropleth + City / Regions /
+Countries), not a full-bleed globe. Realtime Geo tabs are City / Regions /
+Country with Shoey rows `{ country, city, count, unique_sessions, avg_duration }`.
+Sessions list city + device. People shows last-seen seats when nobody is
+inside the 2-minute live window. Activity chips include city. No Shoey SKUs.
 
 ### Keys `#keys`
 

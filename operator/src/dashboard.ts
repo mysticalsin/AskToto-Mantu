@@ -11,7 +11,7 @@ import {
   type SeatApproval
 } from './fleet'
 import { looksLikeSecret, safeChips, type SafeChip } from './redact'
-import { realtimeGeoRows, type RealtimeGeoRow } from './realtime-geo'
+import { geoRegionRows, realtimeGeoRows, type GeoRegionRow, type RealtimeGeoRow } from './realtime-geo'
 import type { EventRow, OperatorStore, PulseRow, SeatRow, VaultKeyMeta } from './store'
 
 export const ONLINE_MS = 2 * 60 * 1000
@@ -170,6 +170,7 @@ export interface DashboardPayload {
   }
   notices: { id: string; kind: string; title: string; detail: string; ts: number }[]
   geo: RealtimeGeoRow[]
+  geoRegions: GeoRegionRow[]
 }
 
 export interface ConsoleEvent {
@@ -183,12 +184,14 @@ export interface ConsoleEvent {
 
 export interface ProfileRow {
   device: string
+  deviceId: string
   hostname: string | null
   email: string | null
   os: string
   appVersion: string
   country: string | null
   city: string | null
+  region: string | null
   lastSeen: number
   live: boolean
   license: string | null
@@ -378,6 +381,8 @@ function eventFromStored(row: EventRow, seatsById: Map<string, SeatRow>): Consol
     hostname: who.hostname,
     email: who.email || (row.actor && !looksLikeSecret(row.actor) ? row.actor : null),
     chips: safeChips({
+      city: seat?.city,
+      region: seat?.region,
       country: row.country,
       os: seat?.os,
       detail: row.detail
@@ -678,12 +683,14 @@ export async function buildDashboard(
       .sort((a, b) => b.last_seen - a.last_seen)
       .map((s) => ({
         device: s.device_id.slice(0, 8),
+        deviceId: s.device_id,
         hostname: s.hostname && !looksLikeSecret(s.hostname) ? s.hostname : null,
         email: s.sso_email && !looksLikeSecret(s.sso_email) ? s.sso_email : null,
         os: s.os,
         appVersion: s.app_version,
         country: s.country,
         city: s.city,
+        region: s.region ?? null,
         lastSeen: s.last_seen,
         live: now - s.last_seen < ONLINE_MS,
         license: s.license && !looksLikeSecret(s.license) ? s.license : null,
@@ -823,6 +830,7 @@ export async function buildDashboard(
       d1Name: cloudflare.d1Name && !looksLikeSecret(cloudflare.d1Name) ? cloudflare.d1Name : null,
       d1Id: cloudflare.d1Id && !looksLikeSecret(cloudflare.d1Id) ? cloudflare.d1Id : null
     },
-    geo: realtimeGeoRows(seats)
+    geo: realtimeGeoRows(seats),
+    geoRegions: geoRegionRows(seats)
   }
 }
