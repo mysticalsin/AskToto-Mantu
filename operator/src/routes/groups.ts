@@ -34,30 +34,6 @@ import { auditLog, param, type AdminCtx } from './admin-ctx'
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
-/**
- * `operator/src/index.ts`'s central CSRF gate (`isCrossSitePost`) only ever checked `POST`, because
- * until this module every admin mutation route was a POST. `PATCH` and `DELETE` here are the first
- * of their kind, so they are not covered by it. This is a local stopgap with the same same-site
- * test until that central gate is widened to every mutating method (exact patch in the B1 report);
- * remove it once that lands. GET is never gated.
- */
-function csrfGuard(request: Request, ctx: AdminCtx): Response | null {
-  if (request.method === 'GET') return null
-  const secFetchSite = request.headers.get('sec-fetch-site')
-  const crossSite = secFetchSite
-    ? secFetchSite !== 'same-origin'
-    : (() => {
-        const origin = request.headers.get('origin')
-        if (!origin) return false
-        try {
-          return new URL(origin).host !== ctx.url.host
-        } catch {
-          return true
-        }
-      })()
-  return crossSite ? json({ ok: false, error: 'cross-site request refused', code: 'csrf' }, 403) : null
-}
-
 function describeRaw(raw: unknown): string {
   if (raw === undefined) return 'undefined'
   try {
@@ -306,8 +282,6 @@ export function registerGroupsRoutes(): void {
     pattern: '/v1/admin/groups',
     auth: 'admin',
     handler: async (request, ctx) => {
-      const csrf = csrfGuard(request, ctx)
-      if (csrf) return csrf
       const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
       const existing = await ctx.store.listGroups()
       const nameResult = validateGroupName(body.name, existing)
@@ -407,8 +381,6 @@ export function registerGroupsRoutes(): void {
     pattern: /^\/v1\/admin\/groups\/(?<id>[^/]+)$/,
     auth: 'admin',
     handler: async (request, ctx, match) => {
-      const csrf = csrfGuard(request, ctx)
-      if (csrf) return csrf
       const id = param(match, 'id')
       const group = await ctx.store.getGroup(id)
       if (!group) return json({ ok: false, error: 'not found' }, 404)
@@ -453,9 +425,7 @@ export function registerGroupsRoutes(): void {
     method: 'DELETE',
     pattern: /^\/v1\/admin\/groups\/(?<id>[^/]+)$/,
     auth: 'admin',
-    handler: async (request, ctx, match) => {
-      const csrf = csrfGuard(request, ctx)
-      if (csrf) return csrf
+    handler: async (_request, ctx, match) => {
       const id = param(match, 'id')
       const group = await ctx.store.getGroup(id)
       if (!group) return json({ ok: false, error: 'not found' }, 404)
@@ -484,8 +454,6 @@ export function registerGroupsRoutes(): void {
     pattern: /^\/v1\/admin\/groups\/(?<id>[^/]+)\/members$/,
     auth: 'admin',
     handler: async (request, ctx, match) => {
-      const csrf = csrfGuard(request, ctx)
-      if (csrf) return csrf
       const id = param(match, 'id')
       const group = await ctx.store.getGroup(id)
       if (!group) return json({ ok: false, error: 'not found' }, 404)
@@ -502,9 +470,7 @@ export function registerGroupsRoutes(): void {
     method: 'DELETE',
     pattern: /^\/v1\/admin\/groups\/(?<id>[^/]+)\/members\/(?<member>[^/]+)$/,
     auth: 'admin',
-    handler: async (request, ctx, match) => {
-      const csrf = csrfGuard(request, ctx)
-      if (csrf) return csrf
+    handler: async (_request, ctx, match) => {
       const id = param(match, 'id')
       const memberParam = param(match, 'member')
       const group = await ctx.store.getGroup(id)
@@ -523,8 +489,6 @@ export function registerGroupsRoutes(): void {
     pattern: /^\/v1\/admin\/groups\/(?<id>[^/]+)\/licenses\/generate$/,
     auth: 'admin',
     handler: async (request, ctx, match) => {
-      const csrf = csrfGuard(request, ctx)
-      if (csrf) return csrf
       const id = param(match, 'id')
       const group = await ctx.store.getGroup(id)
       if (!group) return json({ ok: false, error: 'not found' }, 404)
@@ -593,8 +557,6 @@ export function registerGroupsRoutes(): void {
     pattern: /^\/v1\/admin\/tiers\/(?<id>[^/]+)$/,
     auth: 'admin',
     handler: async (request, ctx, match) => {
-      const csrf = csrfGuard(request, ctx)
-      if (csrf) return csrf
       const id = param(match, 'id')
       const tiers = await ensureTiersSeeded(ctx)
       const existing = tiers.find((t) => t.id === id)
