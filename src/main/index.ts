@@ -170,7 +170,8 @@ import {
 import {
   OVERLAY_REST_BACKGROUND,
   SETTINGS_SURFACE_BACKGROUND,
-  SETTINGS_WINDOW_MIN
+  SETTINGS_WINDOW_MIN,
+  settingsContentHeight
 } from '@shared/settings-bounds'
 import {
   CURSOR_WATCH_INTERVAL_MS,
@@ -1870,6 +1871,17 @@ function resizeTo(height: number): void {
   // Exclusive onboarding owns the display. Auto-resize must not shrink to the 880×816 card.
   if (onboardingExclusiveLive()) {
     applyExclusiveOnboardingStage(win)
+    return
+  }
+  // MQA-286 — Settings hug reports ~325px. Never keep park / bar height while Settings is open.
+  if (settingsSurfaceOpen) {
+    const display = screen.getDisplayMatching(win.getBounds())
+    const metrics = getDisplayMetrics(display)
+    const rect = settingsOpenRect(metrics, ISLAND_TOP_MARGIN)
+    const h = clampHeight(settingsContentHeight(height), display.workArea.height)
+    currentWidth = SETTINGS_WINDOW_MIN.width
+    if (win.getBounds().width === rect.width && win.getBounds().height === h && win.getBounds().y === rect.y) return
+    win.setBounds({ x: rect.x, y: rect.y, width: rect.width, height: h }, false)
     return
   }
   const display = screen.getDisplayMatching(win.getBounds())
@@ -7417,8 +7429,13 @@ if (!app.requestSingleInstanceLock()) {
 
   app.on('activate', () => {
     if (!win) createWindow()
-    // Non-activating (island contract) — a dock-icon click surfaces the overlay without stealing focus.
     else win.showInactive()
+    // Dock is a Settings entry after first run. Full panel, never Hide 8×2 / 880×325.
+    try {
+      if (getSettings().onboardingDone) sendHotkey('settings')
+    } catch {
+      /* settings store not ready */
+    }
   })
   }).catch((e) => {
     // console.error is a no-op in a packaged GUI build with no console — route to the real sinks (same

@@ -8,6 +8,7 @@ import {
   isFatHoverTrigger,
   isForbiddenFlashBackground,
   isHideOrIslandParkSize,
+  settingsContentHeight,
   settingsOpenRejectsPark,
   settingsSurfaceMinSize
 } from './settings-bounds'
@@ -25,6 +26,10 @@ describe('MQA-286 — Settings open path sets full min bounds', () => {
     expect(isCrushedSettingsBounds({ width: 880, height: 560 })).toBe(false)
     expect(settingsOpenRejectsPark({ width: 8, height: 2 })).toBe(true)
     expect(settingsOpenRejectsPark({ width: 880, height: 560 })).toBe(false)
+    expect(settingsOpenRejectsPark({ width: 880, height: 325 })).toBe(true)
+    expect(settingsContentHeight(325)).toBe(560)
+    expect(settingsContentHeight(792)).toBe(792)
+    expect(settingsContentHeight(Number.NaN)).toBe(560)
   })
 
   it('Windows and Mac share the same Settings min (no fake notch width)', () => {
