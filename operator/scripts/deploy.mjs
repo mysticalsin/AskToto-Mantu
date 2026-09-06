@@ -32,7 +32,7 @@
  */
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { dirname, join, posix } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -68,7 +68,7 @@ export function buildDeployArgs({ env, version, builtAt }) {
 
 /** Pure: builds the migration-runner argv, run BEFORE deploy. */
 export function buildMigrateArgs({ env }) {
-  const args = [join('operator', 'scripts', 'migrate.mjs'), '--remote']
+  const args = [posix.join('operator', 'scripts', 'migrate.mjs'), '--remote']
   if (env === 'staging') args.push('--env', 'staging')
   return args
 }
@@ -76,7 +76,7 @@ export function buildMigrateArgs({ env }) {
 /** Pure: builds the post-deploy smoke argv. `url` is the environment's known workers.dev URL,
  *  or (preferred, when available) the URL wrangler's own deploy output printed. */
 export function buildSmokeArgs({ url }) {
-  return [join('operator', 'scripts', 'smoke.mjs'), '--url', url]
+  return [posix.join('operator', 'scripts', 'smoke.mjs'), '--url', url]
 }
 
 /** Pure: pulls the first `https://…workers.dev` URL out of `wrangler deploy`'s stdout, so the
