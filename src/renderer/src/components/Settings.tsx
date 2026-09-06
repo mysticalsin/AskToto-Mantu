@@ -1387,7 +1387,7 @@ function AiSection({
             Log in to Cloudflare
           </button>
           <p className="mt-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-            Finish in your default browser. Then this seat uses Operator platform keys — no Worker URL
+            Finish in your default browser. Then this seat uses Operator platform keys. No Worker URL
             or METIS_PROXY_KEY paste.
           </p>
           {/* MQA-261 lives on this card now. The generic key box is `provider !== 'cloudflare'`, so a
