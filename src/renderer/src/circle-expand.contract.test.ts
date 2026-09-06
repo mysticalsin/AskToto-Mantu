@@ -117,7 +117,7 @@ describe('circle-expand: click Expand Métis must not snap back', () => {
     expect(thinking).not.toMatch(/from 'thinking-orbs'/)
     expect(css).toMatch(/\.overlay-orb-diagram--jakub \.overlay-orb-diagram__jakub--live/)
     expect(css).toMatch(/\.overlay-orb-diagram__jakub-host \{[\s\S]*?scale\(calc\(41 \/ 64\)\)/)
-    expect(css).toMatch(/\.overlay-orb-diagram,\n\.overlay-orb-diagram--jakub,[\s\S]*?height:\s*72px/)
+    expect(css).toMatch(/\.overlay-orb-diagram,\r?\n\.overlay-orb-diagram--jakub,[\s\S]*?height:\s*72px/)
     expect(css).not.toMatch(/\.overlay-orb-diagram__jakub \{[\s\S]*?width:\s*22px/)
     expect(css).not.toMatch(/\.overlay-orb-diagram__jakub \{[\s\S]*?radial-gradient/)
   })
