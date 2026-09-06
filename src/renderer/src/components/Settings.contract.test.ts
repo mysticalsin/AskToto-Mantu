@@ -494,6 +494,15 @@ describe('Settings Bar rest orb picker', () => {
   })
 })
 
+describe('Settings from M scrolls the full surface', () => {
+  it('fills the 880×560 window and scrolls cl-content end to end', () => {
+    expect(source).toMatch(/cl-root flex h-full min-h-0/)
+    expect(source).toMatch(/cl-content scroll-thin min-h-0 flex-1 overflow-y-auto/)
+    expect(source).not.toMatch(/max-h-\[480px\]/)
+    expect(source).not.toMatch(/panel-enter/)
+  })
+})
+
 describe('Operator control plane lives on Cloudflare, not in Settings', () => {
   it('exposes Operator URL, ingest secret, Ask-text toggle, and Open Operator', () => {
     expect(source).toMatch(/Operator URL/)

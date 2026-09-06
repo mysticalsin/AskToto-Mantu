@@ -183,8 +183,8 @@ export function AgendaView(): JSX.Element {
 
   return (
     // No height cap or inner scroll here: this view renders inside Settings' Calendar tab, whose
-    // tabpanel (main.cl-content, 480px cap) is the ONE scroll container. A taller nested scroll box
-    // trapped the wheel and clipped the bottom of the section — the classic nested-scroll trap.
+    // tabpanel (main.cl-content, flex-1 min-h-0 overflow-y-auto) is the ONE scroll container. A
+    // taller nested scroll box trapped the wheel and clipped the bottom of the section.
     <div className="no-drag">
       {header}
       {body}
