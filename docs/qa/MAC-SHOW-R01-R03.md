@@ -1,10 +1,9 @@
 # Ultron Mac show — R01–R03
 
 **Gate tonight:** local Quality on this tip + this show. Do not wait on GitHub Actions.
-**Target:** ~11:30pm America/Toronto on Totos-Mac.
+**Target:** ~11:30pm ET on Totos-Mac (America/Toronto). If the show slips toward 12:15am ET, say so before 11:30.
+**Draft only.** READY TO MERGE no. No merge. No Latest.
 **This agent does not pack.** Live `/Applications/Metis.app` 1.8.3 does not contain this branch. A later pack is required before the show can PASS on the installed app. Do not publish Latest.
-
-READY TO MERGE no. No merge. No Latest.
 
 ## Local proof (run on Totos-Mac, this tip)
 

@@ -103,6 +103,8 @@ describe('Ultron Mac show runbook stays the R01–R03 gate', () => {
     expect(show).toMatch(/Do not publish Latest/)
     expect(show).toMatch(/READY TO MERGE no/)
     expect(show).toMatch(/Do not wait on GitHub Actions/)
+    expect(show).toMatch(/11:30pm ET/)
+    expect(show).toMatch(/Draft only/)
   })
 })
 
