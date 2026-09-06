@@ -148,7 +148,7 @@ export function hostCssSize(canvas: HTMLCanvasElement): number {
   return Math.max(1, attr || JARVIS_HOST_PX)
 }
 
-/** Soft disc so Points are not square pixels. DataTexture — three@0.143 types have no CanvasTexture. */
+/** Soft disc so Points are not square pixels. DataTexture, not a canvas-backed three texture. */
 export function createJarvisPointSprite(): DataTexture {
   const s = 64
   const data = new Uint8Array(s * s * 4)

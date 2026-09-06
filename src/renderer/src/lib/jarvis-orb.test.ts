@@ -48,7 +48,7 @@ describe('Jarvis particle orb (Bar Circle / second pill)', () => {
     expect(engine).toMatch(/createJarvisPointSprite/)
     expect(engine).toMatch(/jarvisPixelRatio/)
     expect(engine).toMatch(/DataTexture/)
-    expect(engine).not.toMatch(/CanvasTexture/)
+    expect(engine).not.toMatch(/\bCanvasTexture\b/)
     expect(engine).not.toMatch(/does not thin the cloud/)
     expect(engine).not.toMatch(/crops the camera/)
     expect(engine).not.toMatch(/fibonacciSphere/)

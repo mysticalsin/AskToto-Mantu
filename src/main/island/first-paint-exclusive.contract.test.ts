@@ -157,8 +157,8 @@ describe('exclusive onboarding cannot be dragged off-screen', () => {
 
     const move = index.slice(index.indexOf('function moveBy'), index.indexOf('function registerScreenListeners'))
     expect(move).toMatch(/if \(onboardingExclusiveLive\(\)\) return/)
-
-    const ipc = index.slice(index.indexOf('ipcMain.handle(IPC.windowMoveBy)'), index.indexOf('ipcMain.handle(IPC.windowHide)'))
-    expect(ipc).toMatch(/if \(onboardingExclusiveLive\(\)\) return/)
+    expect(index).toMatch(
+      /ipcMain\.handle\(IPC\.windowMoveBy[\s\S]{0,240}if \(onboardingExclusiveLive\(\)\) return/
+    )
   })
 })
