@@ -92,4 +92,17 @@ describe('1.8.5 KineticGrid tip checklist', () => {
     expect(settings).not.toMatch(/Sign in with Cloudflare/)
     expect(settings).not.toMatch(/cloudflareOAuth/)
   })
+
+  it('9 PR148 Security is on this tip, not parked on a side branch', () => {
+    expect(existsSync(join(root, 'docs/NETWORK-EGRESS.md'))).toBe(true)
+    expect(existsSync(join(root, 'src/main/net/egress-policy.ts'))).toBe(true)
+    expect(existsSync(join(root, 'src/main/net/egress-guard.ts'))).toBe(true)
+    expect(existsSync(join(root, 'src/shared/question-type.ts'))).toBe(true)
+    expect(index).toMatch(/installEgressGuard\(getEgressAllowlist\(\)\)/)
+    expect(index).toMatch(/ProviderIdSchema\.safeParse/)
+    expect(index).toMatch(/classifyQuestionType/)
+    expect(index).toMatch(/new BoundedSet/)
+    expect(settings).toMatch(/canShowConnected\(\{ binaryPresent, testOk \}\)/)
+    expect(settings).toMatch(/listProved = !!agents && agents\.length > 0 && !err/)
+  })
 })
