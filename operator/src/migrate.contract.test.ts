@@ -40,8 +40,8 @@ describe('migrate.mjs statement parsing and idempotency contract', () => {
     }
   })
 
-  it('schema-alter.sql only ever ALTERs seats, crm_sends, issued_licenses, and audit (the tables with additive columns)', () => {
-    const allowed = new Set(['seats', 'crm_sends', 'issued_licenses', 'audit', 'pulses', 'asks'])
+  it('schema-alter.sql only ever ALTERs seats, crm_sends, issued_licenses, audit, and integrations (the tables with additive columns)', () => {
+    const allowed = new Set(['seats', 'crm_sends', 'issued_licenses', 'audit', 'pulses', 'asks', 'integrations'])
     for (const stmt of parseStatements(schemaAlterSql)) {
       const m = /^ALTER TABLE (\w+)/i.exec(stmt)
       if (m) expect(allowed.has(m[1])).toBe(true)
@@ -97,5 +97,32 @@ describe('resolveDatabaseName (pure resolver, section 9d "Environments")', () =>
     const stripped = stripJsonComments('{\n  // a comment\n  "a": "http://not-a-comment", /* block */ "b": 1\n}')
     const parsed = JSON.parse(stripped)
     expect(parsed).toEqual({ a: 'http://not-a-comment', b: 1 })
+  })
+})
+
+describe('schema-alter.sql integrations columns (task B2, operator/src/connectors/data.ts)', () => {
+  it('adds every connector catalog column the Worker needs on the integrations table', () => {
+    const alters = parseStatements(schemaAlterSql).filter((s) => /^ALTER TABLE integrations\b/i.test(s))
+    const columns = [
+      'auth_kind',
+      'header_name',
+      'transport',
+      'mode',
+      'allow_writes',
+      'config_json',
+      'tools_json',
+      'last_test_json',
+      'last_test_at',
+      'notes'
+    ]
+    for (const col of columns) {
+      expect(alters.some((s) => s.includes(`ADD COLUMN ${col} `) || s.trim().endsWith(`ADD COLUMN ${col}`))).toBe(true)
+    }
+  })
+
+  it('defaults mode to brokered and allow_writes to 0, matching operator/src/connectors/data.ts', () => {
+    const alters = parseStatements(schemaAlterSql).filter((s) => /^ALTER TABLE integrations\b/i.test(s))
+    expect(alters.find((s) => s.includes('COLUMN mode'))).toMatch(/DEFAULT 'brokered'/)
+    expect(alters.find((s) => s.includes('COLUMN allow_writes'))).toMatch(/DEFAULT 0/)
   })
 })

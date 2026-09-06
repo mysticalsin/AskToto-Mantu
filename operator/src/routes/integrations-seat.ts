@@ -1,11 +1,14 @@
 /**
  * Seat-facing integration delivery (plan section 9c "Seat delivery"): `GET /v1/integrations`, HMAC
- * authenticated like heartbeat/ingest/manifest, license-gated, tier-entitled. Delivers the vault
- * credential for every active integration in scope for the seat's resolved tier or group, auditing
- * every delivery with an `integration_grants` row and an audit row. Never delivers to an
- * unapproved, unlicensed, or non-entitled seat; never logs a credential.
+ * authenticated like heartbeat/ingest/manifest, license-gated, tier-entitled. For a `direct` connection
+ * (D8), delivers the decrypted vault credential exactly as before this task, auditing the delivery with
+ * an `integration_grants` row and an audit row. For a `brokered` connection (the new default, task B2),
+ * the credential never leaves the Worker: the seat instead gets `{ transport, mode: 'brokered', endpoint
+ * }` and calls that endpoint once the gateway token exists (B3). Never delivers to an unapproved,
+ * unlicensed, or non-entitled seat; never logs a credential.
  */
 import { decryptVault } from '../crypto'
+import { readIntegrationExtra } from '../connectors/data'
 import { seatAuthorizedForKeys } from '../fleet'
 import { json } from '../http'
 import type { IntegrationRow, OperatorStore, SeatRow } from '../store'
@@ -80,7 +83,8 @@ export async function computeIntegrationsVersion(
 
 const NOT_ENTITLED = { ok: false, error: 'seat not entitled', code: 'not-entitled' } as const
 
-export interface DeliveredIntegration {
+/** Unchanged from before task B2: a `direct` connection's decrypted credential and base URL. */
+export interface DeliveredIntegrationDirect {
   id: string
   kind: string
   label: string
@@ -88,6 +92,20 @@ export interface DeliveredIntegration {
   credential: string
   scopes: IntegrationScope
 }
+
+/** New in task B2: a `brokered` connection carries no credential at all, just enough for the desktop to
+ *  know a connection exists and where its gateway endpoint will be once B3 mints a gateway token. */
+export interface DeliveredIntegrationBrokered {
+  id: string
+  kind: string
+  label: string
+  transport: string
+  mode: 'brokered'
+  endpoint: string
+  scopes: IntegrationScope
+}
+
+export type DeliveredIntegration = DeliveredIntegrationDirect | DeliveredIntegrationBrokered
 
 export async function handleIntegrationsSeat(
   store: OperatorStore,
@@ -105,21 +123,34 @@ export async function handleIntegrationsSeat(
   const rows = await entitledInScopeRows(store, seat, tier)
   const delivered: DeliveredIntegration[] = []
   for (const row of rows) {
-    if (!row.cipher || !row.iv) continue
-    let credential: string
-    try {
-      credential = await decryptVault(row.cipher, row.iv, env.OPERATOR_VAULT_KEY)
-    } catch {
-      continue
+    const extra = readIntegrationExtra(row as unknown as Record<string, unknown>)
+    if (extra.mode === 'direct') {
+      if (!row.cipher || !row.iv) continue
+      let credential: string
+      try {
+        credential = await decryptVault(row.cipher, row.iv, env.OPERATOR_VAULT_KEY)
+      } catch {
+        continue
+      }
+      delivered.push({
+        id: row.id,
+        kind: row.kind,
+        label: row.label,
+        baseUrl: row.base_url,
+        credential,
+        scopes: parseIntegrationScope(row.scope_json)
+      })
+    } else {
+      delivered.push({
+        id: row.id,
+        kind: row.kind,
+        label: row.label,
+        transport: extra.transport ?? 'rest',
+        mode: 'brokered',
+        endpoint: `/v1/mcp/${row.id}`,
+        scopes: parseIntegrationScope(row.scope_json)
+      })
     }
-    delivered.push({
-      id: row.id,
-      kind: row.kind,
-      label: row.label,
-      baseUrl: row.base_url,
-      credential,
-      scopes: parseIntegrationScope(row.scope_json)
-    })
     await store.insertIntegrationGrant({ id: crypto.randomUUID(), integration_id: row.id, device_id: deviceId, ts: now })
     await store.bumpIntegrationUse(row.id, now)
     await store.audit(crypto.randomUUID(), now, deviceId, 'integration-delivered', null, row.id)
