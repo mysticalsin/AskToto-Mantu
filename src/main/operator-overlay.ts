@@ -15,10 +15,13 @@ export interface OverlayRuntimeSettings {
 }
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
-let fetchImpl: typeof fetch = fetch
+/** Test override only. Resolved at call time so the boot-time egress guard on globalThis.fetch applies
+ *  (see operator-ingest.ts for the same rule). */
+let fetchOverride: typeof fetch | null = null
+const fetchImpl: typeof fetch = (input, init) => (fetchOverride ?? globalThis.fetch)(input, init)
 
 export function setOperatorOverlayFetchForTests(fn: typeof fetch | null): void {
-  fetchImpl = fn ?? fetch
+  fetchOverride = fn
 }
 
 export function stopOperatorOverlayPoll(): void {

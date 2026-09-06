@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { generateEmbeddedProxyKey, writeEmbeddedProxyKey } from './rotate-embedded-keys.mjs'
+import { decryptProxyKey, isEncryptedBlob } from './lib/embedded-cloudflare-crypto.mjs'
 
 describe('rotate-embedded-keys', () => {
   it('generates a key that matches the embed bundle pattern and is not an account-token shape', () => {
@@ -12,14 +13,17 @@ describe('rotate-embedded-keys', () => {
     expect(key).not.toMatch(/^ATK-/)
   })
 
-  it('writes only { proxyKey } to the dest file', async () => {
+  it('writes the encrypted blob the packaging gate accepts, never a plaintext proxyKey', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'embed-rotate-'))
     const dest = join(dir, 'key.json')
     try {
       const { key } = writeEmbeddedProxyKey(dest)
-      const parsed = JSON.parse(await readFile(dest, 'utf8')) as { proxyKey?: string }
-      expect(parsed).toEqual({ proxyKey: key })
-      expect(Object.keys(parsed)).toEqual(['proxyKey'])
+      const raw = await readFile(dest, 'utf8')
+      expect(raw).not.toContain(key)
+      const parsed = JSON.parse(raw) as Record<string, unknown>
+      expect('proxyKey' in parsed).toBe(false)
+      expect(isEncryptedBlob(parsed)).toBe(true)
+      expect(decryptProxyKey(parsed)).toBe(key)
     } finally {
       await rm(dir, { recursive: true, force: true })
     }

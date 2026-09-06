@@ -22,12 +22,16 @@ export interface OperatorRuntimeSettings {
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
 let lastAskId: string | null = null
-let fetchImpl: typeof fetch = fetch
+/** Test override only. Resolved at call time, never captured at import: this module loads before
+ *  installEgressGuard() wraps globalThis.fetch in app.whenReady, and a captured reference would put the
+ *  one path that can carry Ask text off-device outside the managed egress allowlist. */
+let fetchOverride: typeof fetch | null = null
+const fetchImpl: typeof fetch = (input, init) => (fetchOverride ?? globalThis.fetch)(input, init)
 /** In-memory funded providers from the last heartbeat. Never a secret. Never persisted. */
 let lastFundedProviders: string[] = []
 
 export function setOperatorFetchForTests(fn: typeof fetch | null): void {
-  fetchImpl = fn ?? fetch
+  fetchOverride = fn
 }
 
 export function stopOperatorRuntime(): void {
