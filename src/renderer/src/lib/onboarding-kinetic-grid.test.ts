@@ -58,7 +58,8 @@ describe('KineticGrid file + Mantu colors + pointer-events none + no stage slide
     expect(JSON.stringify(KINETIC_COLORS)).not.toMatch(/#161618/)
     expect(JSON.stringify(KINETIC_COLORS)).not.toMatch(/#4C|blue/i)
     expect(css).toMatch(/\.onboard-kinetic-grid \{[\s\S]*?background:\s*#05010a/)
-    expect(css).toMatch(/\.onboard-stage:has\(\.onboard-kinetic-grid\) \.onboard-stripes/)
+    expect(css).not.toMatch(/onboard-stripes/)
+    expect(css).not.toMatch(/onboard-stripe-spin/)
   })
 
   it('canvas and wrapper are pointer-events none; mouse warps tiles only', () => {

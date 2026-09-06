@@ -1,5 +1,5 @@
 /**
- * Tonight gate: every Métis ask must sit on KineticGrid release/1.8.3 → 1.8.5.
+ * Tonight gate: every Métis ask must sit on KineticGrid release/1.8.3 → 1.8.6.
  * Pre-Kinetic tips (615e5fa / 13092a3 without 92e9d0d) fail this file.
  */
 import { existsSync, readFileSync } from 'node:fs'
@@ -23,15 +23,24 @@ const geometry = readFileSync(join(root, 'src/main/island/geometry.ts'), 'utf8')
 const jarvis = readFileSync(join(root, 'src/renderer/src/lib/jarvis-orb.ts'), 'utf8')
 const flow = readFileSync(join(root, 'src/renderer/src/lib/onboarding-flow.ts'), 'utf8')
 const kinetic = readFileSync(join(root, 'src/renderer/src/lib/onboarding-kinetic-grid.ts'), 'utf8')
+const css = readFileSync(join(root, 'src/renderer/src/styles.css'), 'utf8')
 
-describe('1.8.5 KineticGrid tip checklist', () => {
-  it('1 KineticGrid after lady, no Skip, Ready-only done', () => {
+describe('1.8.6 KineticGrid tip checklist', () => {
+  it('1 KineticGrid after lady, no Skip, Ready-only done, no rotating stripe wash', () => {
     expect(existsSync(join(root, 'src/renderer/src/components/onboarding/KineticGrid.tsx'))).toBe(true)
     expect(kinetic).toMatch(/shouldMountKineticGrid/)
     expect(kinetic).toMatch(/'problem'/)
     expect(experience).toMatch(/shouldMountKineticGrid\(scene\) && <KineticGrid/)
+    expect(experience).toMatch(/scene === 'hero' && <OnboardingHeroVideo/)
     expect(experience).not.toMatch(/Skip the tour/)
     expect(flow).toMatch(/input\.scene === 'ready' && input\.asrReady && input\.consent/)
+    expect(app).not.toMatch(/onboard-stripes/)
+    expect(css).not.toMatch(/onboard-stripes/)
+    expect(css).not.toMatch(/onboard-stripe-spin/)
+    expect(geometry).toMatch(/isForbiddenHideParkHairline/)
+    expect(index).toMatch(/hideParkWindowOpacity/)
+    expect(index).toMatch(/app\.setName\('Métis'\)/)
+    expect(index).not.toMatch(/Metis Tip|Métis Tip/)
   })
 
   it('2 exclusive onboarding cannot be dragged off-screen', () => {
@@ -71,8 +80,8 @@ describe('1.8.5 KineticGrid tip checklist', () => {
     expect(jarvis).not.toMatch(/JARVIS_PILL_PARTICLE_COUNT = 2000/)
   })
 
-  it('6 package.json is 1.8.5', () => {
-    expect(pkg.version).toBe('1.8.5')
+  it('6 package.json is 1.8.6', () => {
+    expect(pkg.version).toBe('1.8.6')
   })
 
   it('7 Intelligence bundle is ensured; UI says Mantu Intelligence', () => {
@@ -84,8 +93,8 @@ describe('1.8.5 KineticGrid tip checklist', () => {
     expect(settings).toMatch(/title="Mantu Intelligence"/)
   })
 
-  it('8 Métis is on the 1.8.5 line; Cloudflare tile opens Operator OAuth', () => {
-    expect(pkg.version).toBe('1.8.5')
+  it('8 Métis is on the 1.8.6 line; Cloudflare tile opens Operator OAuth', () => {
+    expect(pkg.version).toBe('1.8.6')
     expect(settings).toMatch(/connectCloudflare/)
     expect(settings).toMatch(/window\.toto\.cloudflareConnect/)
     expect(settings).toMatch(/data-cf-aig-connect/)

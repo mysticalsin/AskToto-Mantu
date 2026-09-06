@@ -32,6 +32,8 @@ import {
   OVERLAY_HIDE_PARK,
   OVERLAY_ISLAND_PEEK,
   hideParkRect,
+  hideParkWindowOpacity,
+  isForbiddenHideParkHairline,
   isVisibleHideSlab,
   parkedHoverReanchor,
   ISLAND_NOTCH_STRUT_PX,
@@ -394,6 +396,32 @@ describe('after exclusive exit — park peek/hide, never 880×816', () => {
     source: 'helper'
   }
 
+  it('8×2 at y=39 with opaque purple is FAIL; opacity 0 or bounds.y pass', () => {
+    expect(
+      isForbiddenHideParkHairline({
+        width: 8,
+        height: 2,
+        y: 39,
+        workAreaY: 39,
+        boundsY: 0,
+        background: EXCLUSIVE_ONBOARDING_BACKGROUND,
+        opacity: 1
+      })
+    ).toBe(true)
+    expect(hideParkWindowOpacity('hide', true)).toBe(0)
+    expect(
+      isForbiddenHideParkHairline({
+        width: 8,
+        height: 2,
+        y: 39,
+        workAreaY: 39,
+        boundsY: 0,
+        background: EXCLUSIVE_ONBOARDING_BACKGROUND,
+        opacity: 0
+      })
+    ).toBe(false)
+  })
+
   it('hide parks an invisible 1–8px hairline; watch rect still covers the island', () => {
     const park = parkAfterExclusiveOnboarding('hide', tonyMac, 8)
     const watch = hoverWatchRestRect('hide', tonyMac)
@@ -529,7 +557,10 @@ describe('DESIGN.md overlay contract', () => {
     expect(design).toMatch(/Goldberg Variations/)
     expect(design).toMatch(/CC0 1\.0/)
     expect(design).toMatch(/Mute control/)
-    expect(design).toMatch(/rotating stripe|stripe layers/)
+    expect(design).toMatch(/No rotating purple stripe/)
+    expect(design).toMatch(/KineticGrid/)
+    expect(design).toMatch(/8×2 at y=39/)
+    expect(design).toMatch(/window opacity 0/)
     expect(design).toMatch(/0\.30/)
     expect(design).toMatch(/em dash/)
     expect(design).toMatch(/Tell the room/)
@@ -585,6 +616,13 @@ describe('island reveal/collapse wiring (index.ts)', () => {
     expect(index).toMatch(/setMinimumSize\(1, 1\)/)
     expect(index).toMatch(/minWidth: 1/)
     expect(index).toMatch(/minHeight: 1/)
+    expect(index).toMatch(/enableLargerThanScreen:\s*true/)
+    expect(index).toMatch(/function applyOverlaySurfaceChrome/)
+    expect(index).toMatch(/function commitParkedOverlayBounds/)
+    expect(index).toMatch(/hideParkWindowOpacity/)
+    expect(index).toMatch(/setOpacity\(/)
+    expect(index).toMatch(/app\.setName\('Métis'\)/)
+    expect(index).not.toMatch(/Metis Tip|Métis Tip/)
     const reanchor = index.slice(index.indexOf('function registerScreenListeners'), index.indexOf('function toggleVisible'))
     expect(reanchor).toMatch(/parkOverlayAfterHideSpring\(\)/)
     expect(reanchor).toMatch(/parkedHoverReanchor/)
@@ -678,8 +716,8 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(block).toMatch(/<OnboardingV2/)
     expect(block).not.toMatch(/<Panel>/)
     expect(block).toMatch(/onboard-stage/)
-    expect(block).toMatch(/onboard-stripes/)
-    expect(block).toMatch(/onboard-stripes--b/)
+    expect(block).not.toMatch(/onboard-stripes/)
+    expect(block).not.toMatch(/onboard-stripes--b/)
     expect(block).not.toMatch(/bg-\[#0c0c0e\]/)
     expect(block).toMatch(/h-full min-h-0 w-full/)
   })

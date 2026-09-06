@@ -815,60 +815,6 @@ input::placeholder {
   }
 }
 
-/* Living stripe wash — compositor-only rotate. No filter:blur orbs. */
-.onboard-stripes,
-.onboard-stripes--b {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 220vmax;
-  height: 220vmax;
-  margin: -110vmax 0 0 -110vmax;
-  pointer-events: none;
-  z-index: 0;
-  will-change: transform;
-  background: repeating-linear-gradient(
-    -18deg,
-    #3a0b6b 0 56px,
-    #7f00da 56px 112px,
-    #9a2bf0 112px 160px,
-    rgba(255, 255, 255, 0.28) 160px 166px,
-    #3a0b6b 166px 220px
-  );
-  opacity: 0.36;
-  mix-blend-mode: overlay;
-  animation: onboard-stripe-spin 40s linear infinite;
-}
-.onboard-stripes--b {
-  opacity: 0.3;
-  mix-blend-mode: screen;
-  animation-name: onboard-stripe-spin-rev;
-  animation-duration: 70s;
-  background: repeating-linear-gradient(
-    24deg,
-    #7f00da 0 64px,
-    #3a0b6b 64px 120px,
-    #9a2bf0 120px 168px,
-    rgba(255, 255, 255, 0.2) 168px 174px,
-    #7f00da 174px 230px
-  );
-}
-@keyframes onboard-stripe-spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
-}
-@keyframes onboard-stripe-spin-rev {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(-360deg);
-  }
-}
 @media (prefers-reduced-motion: reduce) {
   .onboard-stage,
   .onboard-stage--portal-close {
@@ -881,11 +827,6 @@ input::placeholder {
     animation: none;
     opacity: 1;
     transform: none;
-  }
-  .onboard-stripes,
-  .onboard-stripes--b {
-    animation: none;
-    transform: rotate(0deg);
   }
   .onboard-stage .scene-enter,
   .onboard-stage .fade-up {
@@ -2482,11 +2423,6 @@ html.metis-bar-land .aw-widget {
   opacity: 0;
 }
 
-.onboard-stage:has(.onboard-kinetic-grid) .onboard-stripes,
-.onboard-stage:has(.onboard-kinetic-grid) .onboard-stripes--b {
-  display: none;
-  animation: none;
-}
 .onboard-kinetic-grid {
   position: fixed;
   inset: 0;

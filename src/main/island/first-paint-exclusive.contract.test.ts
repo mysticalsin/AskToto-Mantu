@@ -56,6 +56,8 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     })
     expect(parked.width).toBe(OVERLAY_HIDE_PARK.width)
     expect(parked.height).toBe(OVERLAY_HIDE_PARK.height)
+    expect(parked.y).toBe(macbookBounds.y)
+    expect(parked.y).not.toBe(39)
   })
 
   it('createWindow uses firstPaintOverlayBounds for constructor size', () => {

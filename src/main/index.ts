@@ -175,6 +175,7 @@ import {
   overlayRestSize,
   parkAfterExclusiveOnboarding,
   parkedHoverReanchor,
+  hideParkWindowOpacity,
   settingsOpenRect,
   shouldIgnoreResizeWhilePeekResting,
   shouldParkHoverRestAfterLeavingSurface,
@@ -605,6 +606,18 @@ if (process.env.ASKTOTO_USERDATA) app.setPath('userData', process.env.ASKTOTO_US
 // clobber it, wedging onboarding at the last slide. A '-dev' suffixed profile sidesteps all of it.
 if (!app.isPackaged && !process.env.ASKTOTO_USERDATA) {
   app.setPath('userData', `${app.getPath('userData')}-dev`)
+}
+
+// Unpackaged Electron.app still ships CFBundleName "Electron". setName changes
+// app.getName() / About / some menus to Métis. The macOS menu-bar process name
+// stays Electron unless a wrapper .app overrides Info.plist — do not invent
+// "Metis Tip". Packaged Metis.app already uses CFBundleDisplayName Métis.
+if (!app.isPackaged && !isCaheEdition()) {
+  try {
+    app.setName('Métis')
+  } catch {
+    /* headless */
+  }
 }
 
 // Profile-dir migration across product-name changes. userData follows CFBundleName, so each rename
@@ -1682,6 +1695,51 @@ function recreateOverlayWindow(): void {
   createWindow()
 }
 
+/** Exclusive purple, Settings glass, or transparent rest. Hide park is opacity 0. */
+function applyOverlaySurfaceChrome(): void {
+  if (!win || win.isDestroyed()) return
+  if (onboardingExclusiveLive()) {
+    try {
+      win.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
+      win.setOpacity(1)
+    } catch {
+      /* headless */
+    }
+    return
+  }
+  if (settingsSurfaceOpen) {
+    try {
+      win.setBackgroundColor(SETTINGS_SURFACE_BACKGROUND)
+      win.setOpacity(1)
+    } catch {
+      /* headless */
+    }
+    return
+  }
+  try {
+    win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
+  } catch {
+    /* headless */
+  }
+  try {
+    win.setOpacity(hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized))
+  } catch {
+    /* headless */
+  }
+}
+
+/** Hide/island park at bounds.y. Re-assert if darwin clamped into workArea.y≈39. */
+function commitParkedOverlayBounds(park: { x: number; y: number; width: number; height: number }): void {
+  if (!win || win.isDestroyed()) return
+  win.setBounds(park, false)
+  try {
+    const after = win.getBounds()
+    if (after.x !== park.x || after.y !== park.y) win.setPosition(park.x, park.y, false)
+  } catch {
+    /* headless */
+  }
+}
+
 function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDisplayMatching(w.getBounds())): void {
   // Totos-Mac 044c0f1: simple-fullscreen on a transparent window is a 3600×2338 RGBA(0,0,0,0) void.
   if (overlayWindowTransparent) {
@@ -1707,6 +1765,7 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
   try {
     w.setFullScreenable?.(true)
     w.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
+    w.setOpacity(1)
     w.setBounds(stage)
   } catch {
     /* headless / already destroyed */
@@ -1754,9 +1813,10 @@ function exitExclusiveOnboardingStage(): void {
   currentWidth = park.width
   islandResting = overlayUsesHover(layout)
   userAnchorY = park.y
-  win.setBounds(park, false)
+  commitParkedOverlayBounds(park)
   startOverlayCursorWatch()
   applyHideClickThrough()
+  applyOverlaySurfaceChrome()
 }
 
 function applyOverlayAlwaysOnTop(w: BrowserWindow): void {
@@ -1843,6 +1903,9 @@ function createWindow(): void {
     // move reports 8×44 (Tony listwins) even after clampHeight lets 2px through.
     minWidth: 1,
     minHeight: 1,
+    // Hide park is at bounds.y (0 on primary). Without this, darwin clamps
+    // setBounds into workArea.y≈39 — the visible purple 8×2 hairline.
+    enableLargerThanScreen: true,
     backgroundColor: chrome.backgroundColor,
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
@@ -2012,6 +2075,7 @@ function createWindow(): void {
   }
   startOverlayCursorWatch()
   applyHideClickThrough()
+  applyOverlaySurfaceChrome()
 }
 
 function resizeTo(height: number): void {
@@ -2311,7 +2375,8 @@ function parkOverlayAfterHideSpring(): boolean {
   } catch {
     /* headless */
   }
-  win.setBounds(park, false)
+  applyOverlaySurfaceChrome()
+  commitParkedOverlayBounds(park)
   overlayCursorWatchHovering = false
   applyHideClickThrough()
   // Hide rest is an always-on invisible hairline. Tray hide() must not leave
@@ -2383,6 +2448,7 @@ function restoreBarWidth(): void {
   cancelOverlayLeavePark()
   islandResting = false
   applyHideClickThrough()
+  applyOverlaySurfaceChrome()
   // LSUIElement / tray Show-Hide can leave the window hidden. Hover reveal must
   // showInactive (never show+focus) so the top-edge path works without hunting the menu.
   try {
@@ -2429,11 +2495,7 @@ function applySettingsSurface(): void {
   } catch {
     /* headless */
   }
-  try {
-    win.setBackgroundColor(SETTINGS_SURFACE_BACKGROUND)
-  } catch {
-    /* headless */
-  }
+  applyOverlaySurfaceChrome()
   const display = screen.getDisplayMatching(win.getBounds())
   const rect = settingsOpenRect(getDisplayMetrics(display), ISLAND_TOP_MARGIN)
   win.setBounds(rect, false)
@@ -2453,11 +2515,7 @@ function leaveSettingsSurface(): void {
   } catch {
     /* headless */
   }
-  try {
-    win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
-  } catch {
-    /* headless */
-  }
+  applyOverlaySurfaceChrome()
 }
 
 // Re-center the compact bar on its current display. The old fixed 'settings' window-mode was removed —
@@ -2473,8 +2531,9 @@ function setWindowMode(): void {
     const park = parkAfterExclusiveOnboarding(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
     currentWidth = park.width
     userAnchorY = park.y
-    win.setBounds(park, false)
+    commitParkedOverlayBounds(park)
     applyHideClickThrough()
+    applyOverlaySurfaceChrome()
     return
   }
   const { workArea } = screen.getDisplayMatching(win.getBounds())
@@ -2490,6 +2549,11 @@ function setWindowMode(): void {
     win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
   } catch {
     /* headless */
+  }
+  try {
+    win.setOpacity(hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized))
+  } catch {
+    /* headless / lifted placement stub */
   }
   win.setBounds({ x, y: b.y, width: currentWidth, height: clampHeight(height, workArea.height) }, false)
 }
