@@ -5,6 +5,20 @@
 **Draft only.** READY TO MERGE no. No merge. No Latest.
 **This agent does not pack.** Live `/Applications/Metis.app` 1.8.3 does not contain this branch. A later pack is required before the show can PASS on the installed app. Do not publish Latest.
 
+## Show relaunch (Totos-Mac)
+
+Do not relaunch `/Applications/Metis.app`. That binary is not this tip.
+
+Show relaunch is **Electron from this tree** with an isolated `ASKTOTO_USERDATA`:
+
+```bash
+# Kill the previous Ultron / Electron pid by number. Do not pkill -f.
+ASKTOTO_USERDATA="$HOME/Library/Application Support/Metis-show-tip" \
+  npm run dev
+```
+
+`npm run dev` is `electron-vite dev` on this checkout. `src/main/index.ts` honors `ASKTOTO_USERDATA` before `app.ready`. A packed Latest or `/Applications/Metis.app` relaunch is the wrong tree.
+
 ## Local proof (run on Totos-Mac, this tip)
 
 ```bash
