@@ -12,11 +12,7 @@ import { html, json, newCspNonce, noStoreHeaders } from '../http'
 import type { D1DatabaseLike } from '../d1'
 import { listKeysJson, revokeVaultKey, rotateVaultKey, writeVaultKey } from '../keys'
 import { LICENSES_EMPTY, parseApproval } from '../fleet'
-import {
-  generateOperatorLicense,
-  OPERATOR_LICENSE_MAX,
-  parseOperatorLicenseDays
-} from '../../../src/shared/operator-license'
+import { mintOperatorLicense } from '../licenses/generate'
 import { renderConsole } from '../ui'
 import { defineRoute } from './registry'
 import { auditLog, cloudflareForDashboard, keyFlags, param, stripSecrets, type AdminCtx } from './admin-ctx'
@@ -423,34 +419,16 @@ export function registerAdminCoreRoutes(): void {
     auth: 'admin',
     handler: async (request, ctx) => {
       const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
-      const days = parseOperatorLicenseDays(body.days)
-      if (!days) return json({ ok: false, error: 'days must be 1-365' }, 400)
-      const secret = ctx.env.OPERATOR_INGEST_SECRET?.trim() || ''
-      if (!secret) return json({ ok: false, error: 'Operator ingest secret missing' }, 503)
-      const minted = await generateOperatorLicense(secret, { days, now: ctx.now })
-      if (minted.token.length > OPERATOR_LICENSE_MAX) {
-        return json({ ok: false, error: 'generated license too long' }, 500)
-      }
-      await ctx.store.putIssuedLicense({
-        jti: minted.claims.jti,
-        last4: minted.last4,
-        key_hash: await sha256Hex(minted.token),
-        days,
-        iat: minted.claims.iat,
-        exp: minted.claims.exp,
-        revoked: 0,
-        created_at: ctx.now,
-        created_by: ctx.email
-      })
-      await auditLog(ctx, 'generate-license', null, `${minted.last4} ${days}d`)
+      const minted = await mintOperatorLicense(ctx, { days: body.days, actor: ctx.email })
+      if (!minted.ok) return json({ ok: false, error: minted.error }, minted.status)
       return json({
         ok: true,
         license: minted.token,
-        jti: minted.claims.jti,
+        jti: minted.jti,
         last4: minted.last4,
-        days,
-        iat: minted.claims.iat,
-        exp: minted.claims.exp
+        days: minted.days,
+        iat: minted.iat,
+        exp: minted.exp
       })
     }
   })
