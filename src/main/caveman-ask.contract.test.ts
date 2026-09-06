@@ -7,7 +7,7 @@ import {
   lockedCavemanIntensityIn,
   lockedModeSkillIdIn
 } from '@shared/mode-skills'
-import { AUTO_CLARITY_DIRECTIVE, DEFAULT_ASK_CAVEMAN } from '@shared/caveman-ask'
+import { AUTO_CLARITY_DIRECTIVE, DEFAULT_ASK_CAVEMAN, applyCaveman } from '@shared/caveman-ask'
 import { userText } from './llm/shared'
 import { buildSystem } from './personas'
 import { loadVerifiedSkill } from './mode-skills'
@@ -19,6 +19,15 @@ const req = (mode: AskStart['mode'], prompt = 'Why React re-render?'): AskStart 
 
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const appSrc = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
+
+describe('Ask caveman — Métis header + lock path', () => {
+  it('uses Métis YAML (id / version / locked), not Claude name/description frontmatter', () => {
+    const raw = loadVerifiedSkill('caveman').raw
+    expect(raw.startsWith('---\nid: caveman\nversion: 1.0.0\nlocked: true\n---\n')).toBe(true)
+    expect(raw).not.toMatch(/^---\nname:/)
+    expect(raw).not.toMatch(/\ndescription:/)
+  })
+})
 
 describe('Ask caveman — default on full', () => {
   it('typed Ask injects locked caveman at full by default', () => {
@@ -85,12 +94,14 @@ describe('Ask caveman — Auto-Clarity', () => {
     expect(body).toMatch(/permanently delete/)
   })
 
-  it('irreversible delete warning appends the Auto-Clarity user-turn directive', () => {
-    const out = userText(
-      req('answer', 'Write SQL that will permanently delete all rows in the users table')
-    )
-    expect(out).toContain(AUTO_CLARITY_DIRECTIVE)
-    expect(out).toMatch(/Drop caveman/)
+  it('irreversible-warning composed Ask includes a clarity override cue', () => {
+    const prompt = 'Write SQL that will permanently delete all rows in the users table'
+    const system = buildSystem(req('answer', prompt), 'general', EMPTY_PROFILE, {}, [])
+    const user = userText(req('answer', prompt))
+    expect(hasLockedCaveman(system)).toBe(true)
+    expect(system).toMatch(/Auto-Clarity/)
+    expect(user).toContain(AUTO_CLARITY_DIRECTIVE)
+    expect(applyCaveman(prompt).dropClarity).toBe(true)
   })
 
   it('ordinary questions do not get the Auto-Clarity directive', () => {
@@ -100,14 +111,14 @@ describe('Ask caveman — Auto-Clarity', () => {
 
 describe('Ask caveman — command strip + persist (existing Ask/session store)', () => {
   it('askStart parses, persists askCaveman, and strips the command from the prompt', () => {
-    expect(indexSrc).toMatch(/parseCavemanAskPrompt\(req\.prompt\)/)
+    expect(indexSrc).toMatch(/applyCaveman\(req\.prompt, s\.askCaveman\)/)
     expect(indexSrc).toMatch(/setSettings\(\{ askCaveman: caveman\.next \}\)/)
     expect(indexSrc).toMatch(/req\.prompt = caveman\.visiblePrompt/)
-    expect(indexSrc).toMatch(/s\.askCaveman/)
+    expect(indexSrc).not.toMatch(/applyOverlaySkillFile/)
   })
 
   it('typed Ask submit strips the command from the user-visible question', () => {
-    expect(appSrc).toMatch(/parseCavemanAskPrompt\(typed\)/)
+    expect(appSrc).toMatch(/applyCaveman\(typed, settings\?\.askCaveman/)
     expect(appSrc).toMatch(/patch\(\{ askCaveman: caveman\.next \}\)/)
     expect(appSrc).toMatch(/const q = caveman\.visiblePrompt/)
   })

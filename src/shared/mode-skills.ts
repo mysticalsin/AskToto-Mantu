@@ -104,8 +104,9 @@ export function formatLockedCaveman(
 ): string {
   const register =
     `ACTIVE REGISTER: ${intensity}. Use the ${intensity} row of the Intensity table for this answer. ` +
-    'For this typed Ask answer, caveman register outranks humanizer spoken cadence. ' +
-    'Humanizer still bans AI-tell words and invented first-person. Code fences stay exact.'
+    'When caveman is ON, its terse register wins over humanizer fluff rules for Ask answers. ' +
+    'Humanizer anti-AI / anti-filler still applies. Conflict → caveman terseness + Auto-Clarity. ' +
+    'Code fences stay exact.'
   return `\n\n${LOCKED_CAVEMAN_BEGIN} (v${skill.version} intensity=${intensity}) ---\n${register}\n\n${skill.body.trim()}\n${LOCKED_CAVEMAN_END}`
 }
 

@@ -327,7 +327,7 @@ import {
 } from './brain/store'
 import { buildBrainContext } from './brain/context'
 import { buildSystem, buildSystemParts } from './personas'
-import { parseCavemanAskPrompt } from '@shared/caveman-ask'
+import { applyCaveman } from '@shared/caveman-ask'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
 import { isOpenAICloudCacheEligible, promptCacheKey as makePromptCacheKey, resolveOperatorBaseUrl } from '@shared/operator'
 import { cloudflareConnectTarget } from './cloudflare-connect'
@@ -5329,18 +5329,10 @@ function registerIpc(): void {
     // Ask caveman register: `/caveman lite|full|ultra…`, "stop caveman", "normal mode".
     // Persist in the existing settings store, strip the command from the question the model sees.
     if ((req.mode === 'answer' || req.mode === 'vision') && req.kind !== 'factcheck') {
-      const caveman = parseCavemanAskPrompt(req.prompt)
-      if (caveman.next) {
-        s = setSettings({ askCaveman: caveman.next })
-      }
-      if (caveman.visiblePrompt !== req.prompt) req.prompt = caveman.visiblePrompt
-      if (
-        caveman.next &&
-        !req.prompt.trim() &&
-        !req.image &&
-        !req.wantsScreenContext &&
-        req.kind !== 'factcheck'
-      ) {
+      const caveman = applyCaveman(req.prompt, s.askCaveman)
+      if (caveman.changed) s = setSettings({ askCaveman: caveman.next })
+      req.prompt = caveman.visiblePrompt
+      if (caveman.changed && !req.prompt.trim() && !req.image && !req.wantsScreenContext) {
         win?.webContents.send(IPC.streamDone, { id: req.id })
         return
       }

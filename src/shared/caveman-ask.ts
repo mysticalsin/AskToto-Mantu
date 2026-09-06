@@ -86,5 +86,37 @@ export function autoClarityDropCaveman(prompt: string): boolean {
   return CLARIFY_RE.test(text) || IRREVERSIBLE_RE.test(text) || MULTISTEP_AMBIGUITY_RE.test(text)
 }
 
+export interface AppliedCaveman {
+  visiblePrompt: string
+  /** Persisted register after this turn's command, or the current session value. */
+  next: AskCavemanLevel
+  enabled: boolean
+  intensity: Exclude<AskCavemanLevel, 'off'>
+  dropClarity: boolean
+  changed: boolean
+}
+
+/**
+ * Apply a typed Ask prompt to the session caveman register.
+ * Default session: enabled=true, intensity=full. Command tokens are stripped.
+ */
+export function applyCaveman(
+  rawPrompt: string,
+  current: AskCavemanLevel = DEFAULT_ASK_CAVEMAN
+): AppliedCaveman {
+  const parsed = parseCavemanAskPrompt(rawPrompt)
+  const next = parsed.next ?? current
+  const enabled = next !== 'off'
+  const intensity = (enabled ? next : DEFAULT_ASK_CAVEMAN) as Exclude<AskCavemanLevel, 'off'>
+  return {
+    visiblePrompt: parsed.visiblePrompt,
+    next,
+    enabled,
+    intensity,
+    dropClarity: enabled && autoClarityDropCaveman(parsed.visiblePrompt),
+    changed: parsed.next !== null
+  }
+}
+
 export const AUTO_CLARITY_DIRECTIVE =
   '\n\nAUTO-CLARITY: this turn needs clear English for the warning, confirm, multi-step, or clarify part. Drop caveman for that part. Resume caveman after the clear part is done.'
