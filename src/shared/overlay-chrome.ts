@@ -121,8 +121,8 @@ export function overlayAllowsHugWidth(input: {
   return input.islandResting && input.nextWidth <= input.restWidth + 24
 }
 
-/** Idle Ask bar height in main (`BAR_HEIGHT`). Peek 2px / hug 44 must not win after reveal. */
-export const ASK_REVEAL_MIN_HEIGHT_PX = 84
+/** Idle Ask + Settings chrome. Peek 2px / hug 44 / Ultron 880×44 must not win after reveal. */
+export const ASK_REVEAL_MIN_HEIGHT_PX = 120
 
 /** Ultron 2026-09-06: top-edge hover opened this stub instead of the 880 Ask bar. */
 export function isShowMetisHugStub(win: { width: number; height: number }): boolean {
@@ -149,6 +149,37 @@ export function overlayRevealedContentHeight(input: {
   const floor = input.minBarHeight ?? ASK_REVEAL_MIN_HEIGHT_PX
   if (input.islandResting || input.minimized || input.settingsOpen) return input.reportedHeight
   return Math.max(input.reportedHeight, floor)
+}
+
+/**
+ * Ultron CDP after top-edge dwell. FAIL: widened Show Métis stub, no Ask field.
+ * PASS: Ask chrome (hasAsk) at full bar width and taller than the 44px peek.
+ */
+export function isShowMetisOnlyStub(input: {
+  width: number
+  height: number
+  hasAsk: boolean
+  buttons: readonly string[]
+}): boolean {
+  if (input.hasAsk) return false
+  const onlyShowMetis =
+    input.buttons.length > 0 &&
+    input.buttons.every((b) => b === 'Show Métis')
+  if (onlyShowMetis && input.height <= 44) return true
+  return isIncompleteAskReveal(input)
+}
+
+export function isFullAskReveal(input: {
+  width: number
+  height: number
+  hasAsk: boolean
+}): boolean {
+  return (
+    input.hasAsk &&
+    input.width >= 800 &&
+    input.height > 44 &&
+    input.height >= ASK_REVEAL_MIN_HEIGHT_PX
+  )
 }
 
 /**

@@ -166,6 +166,15 @@ describe('overlay auto-hide state machine (MQA-274)', () => {
     expect(s.hovering).toBe(true)
   })
 
+  it('reveal-now opens Ask chrome without OverlayPeek click or a second dwell', () => {
+    let s = initialAutoHideState(true)
+    expect(isRevealed(s)).toBe(false)
+    s = reduceAutoHide(s, { type: 'reveal-now' })
+    expect(s.hovering).toBe(true)
+    expect(s.hoverPending).toBe(false)
+    expect(isRevealed(s)).toBe(true)
+  })
+
   it('collapse-now parks immediately without arming grace (leave pill / Settings → Hide)', () => {
     let s = revealViaHover(initialAutoHideState(true))
     s = reduceAutoHide(s, { type: 'collapse-now' })

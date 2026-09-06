@@ -63,7 +63,7 @@ On this tip the same path must open **880×800** at `islandSafeTop` (~39), backg
 3. Teams mute at Y≈40 must not reveal.
 4. Mid-session: Ask a question, move the mouse away (auto-hide, no Escape), move back to the top. Same answer is still there. A new Ask replaces it.
 
-**FAIL if** hover opens **120×44 Show Métis** or an **880×44 OverlayPeek** instead of the full Ask bar (Ultron `f12003d`). **FAIL if** the overlay stays gone until the menu-bar Show Métis / Show/Hide click.
+**FAIL if** hover opens **120×44 Show Métis** or **880×44 buttons=[Show Métis] hasAsk=false** (Ultron `a40a22f`). PASS is 880×120+ with the Ask field. **FAIL if** the overlay stays gone until the menu-bar Show Métis / Show/Hide click.
 
 Close Settings. Hide/Island must park again at `bounds.y`.
 

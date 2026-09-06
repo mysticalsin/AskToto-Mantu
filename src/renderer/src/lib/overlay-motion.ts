@@ -30,8 +30,18 @@ export function prefersOverlayReducedMotion(): boolean {
   return window.matchMedia('(prefers-reduced-motion: reduce)').matches
 }
 
-/** Hide pad / island peek only when fully parked. Bar stays mounted during in / settled / out. */
-export function overlayShowPeek(idle: boolean, revealed: boolean, spring: OverlaySpring): boolean {
+/**
+ * Island peek only when fully parked. Hide keeps Bar mounted (window size is the park)
+ * so top-edge restoreBarWidth shows Ask immediately — Ultron a40a22f: 880×44
+ * buttons=[Show Métis] hasAsk=false after unmounting Bar for OverlayPeek.
+ */
+export function overlayShowPeek(
+  idle: boolean,
+  revealed: boolean,
+  spring: OverlaySpring,
+  keepAskMounted = false
+): boolean {
+  if (keepAskMounted) return false
   return idle && !revealed && spring === 'rest'
 }
 

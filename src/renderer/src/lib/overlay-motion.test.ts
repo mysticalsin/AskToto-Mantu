@@ -36,6 +36,7 @@ describe('overlay hide/reveal spring timings', () => {
     expect(overlayShowPeek(true, false, 'in')).toBe(false)
     expect(overlayShowPeek(true, true, 'settled')).toBe(false)
     expect(overlayShowPeek(false, false, 'rest')).toBe(false)
+    expect(overlayShowPeek(true, false, 'rest', true)).toBe(false)
     expect(overlaySpringClassName('in')).toMatch(/overlay-spring--in/)
     expect(overlaySpringClassName('out')).toMatch(/overlay-spring--out/)
   })

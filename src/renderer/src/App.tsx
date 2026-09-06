@@ -590,7 +590,13 @@ export function App(): JSX.Element {
   const overlayRevealed = isOverlayRevealed(autoHide)
   const [overlaySpring, setOverlaySpring] = useState<OverlaySpring>('rest')
   // Hide pad / island peek only when fully parked. Bar stays mounted during the spring (in / out).
-  const overlayPeeked = overlayShowPeek(overlayIdle, overlayRevealed, overlaySpring)
+  // Hide keeps Bar mounted (park is window size only). Island may swap to OverlayPeek.
+  const overlayPeeked = overlayShowPeek(
+    overlayIdle,
+    overlayRevealed,
+    overlaySpring,
+    overlayRestsHidden(overlayLayout)
+  )
   const springIdleRef = useRef(false)
   const wasRevealedRef = useRef(overlayRevealed)
   const overlayRevealedRef = useRef(overlayRevealed)
@@ -647,8 +653,7 @@ export function App(): JSX.Element {
   useEffect(() => {
     return window.toto.onOverlayCursorHover?.((d) => {
       if (d.hovering) {
-        dispatchAutoHide({ type: 'pointer-enter' })
-        dispatchAutoHide({ type: 'dwell-elapsed' })
+        dispatchAutoHide({ type: 'reveal-now' })
       } else {
         dispatchAutoHide({ type: 'pointer-leave' })
       }

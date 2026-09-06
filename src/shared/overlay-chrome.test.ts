@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_OVERLAY_LAYOUT,
@@ -19,6 +21,8 @@ import {
   isIncompleteAskReveal,
   overlayRevealedContentHeight,
   ASK_REVEAL_MIN_HEIGHT_PX,
+  isShowMetisOnlyStub,
+  isFullAskReveal,
   parseOverlayLayout
 } from './overlay-chrome'
 
@@ -94,7 +98,7 @@ describe('overlay chrome modes', () => {
     expect(isIncompleteAskReveal({ width: 880, height: 2 })).toBe(true)
     expect(isIncompleteAskReveal({ width: 880, height: 84 })).toBe(false)
     expect(isIncompleteAskReveal({ width: 8, height: 2 })).toBe(false)
-    expect(ASK_REVEAL_MIN_HEIGHT_PX).toBe(84)
+    expect(ASK_REVEAL_MIN_HEIGHT_PX).toBe(120)
     expect(
       overlayRevealedContentHeight({
         islandResting: false,
@@ -102,7 +106,7 @@ describe('overlay chrome modes', () => {
         settingsOpen: false,
         reportedHeight: 20
       })
-    ).toBe(84)
+    ).toBe(120)
     expect(
       overlayRevealedContentHeight({
         islandResting: true,
@@ -120,6 +124,36 @@ describe('overlay chrome modes', () => {
     expect(
       overlayAllowsHugWidth({ minimized: false, islandResting: true, restWidth: 142, nextWidth: 142 })
     ).toBe(true)
+  })
+
+  it('top-edge reveal is Ask chrome, not a Show-Métis-only 44px strip', () => {
+    const ultronA40 = {
+      width: 880,
+      height: 44,
+      hasAsk: false,
+      buttons: ['Show Métis']
+    }
+    expect(isShowMetisOnlyStub(ultronA40)).toBe(true)
+    expect(isFullAskReveal(ultronA40)).toBe(false)
+    expect(
+      isShowMetisOnlyStub({ width: 120, height: 44, hasAsk: false, buttons: ['Show Métis'] })
+    ).toBe(true)
+    expect(
+      isFullAskReveal({ width: 880, height: 120, hasAsk: true })
+    ).toBe(true)
+    expect(
+      isShowMetisOnlyStub({
+        width: 880,
+        height: 120,
+        hasAsk: true,
+        buttons: ['Ask', 'Settings']
+      })
+    ).toBe(false)
+    const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
+    const bar = readFileSync(join(__dirname, '../renderer/src/components/Bar.tsx'), 'utf8')
+    expect(app).toMatch(/reveal-now/)
+    expect(app).toMatch(/overlayRestsHidden\(overlayLayout\)/)
+    expect(bar).toMatch(/aria-label="Ask Métis anything"/)
   })
 
   it('Settings captions say what each chrome does (no em dash, no Vibe Island)', () => {
