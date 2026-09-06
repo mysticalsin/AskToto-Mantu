@@ -54,7 +54,7 @@ function runCli(argv = process.argv.slice(2)) {
   console.log(`     "embedded-default:${key}"`)
   console.log('  2. Remove the previous embedded-default key from that array (revokes old installers).')
   console.log('  3. Rebuild with METIS_EMBED_CLOUDFLARE_KEY=1 so the new installer ships the new key.')
-  console.log('Cahê edition only: rotate build/cahe-kimi.local.json and revoke the old sk-kimi- key at the vendor.')
+  console.log('Cahê edition only: rotate build/cahe-kimi.local.json, run node scripts/embed-cahe-kimi-key.mjs, revoke old sk-kimi- at vendor.')
   return { dest, key }
 }
 

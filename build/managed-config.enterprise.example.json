@@ -41,5 +41,7 @@
     "updates.your-corp.example"
   ],
   "_comment_updates": "updateFeedUrl points electron-updater at an internally hosted generic feed (latest.yml + installer + blockmap) instead of the public GitHub releases repo. Admin (machine) policy only; must be https. Remove the key to use the built-in feed. disableAutoUpdate: true freezes updates entirely.",
-  "updateFeedUrl": "https://updates.your-corp.example/metis/"
+  "updateFeedUrl": "https://updates.your-corp.example/metis/",
+  "_comment_cloudflare_pin": "Packaged/managed builds pin settings.cloudflareBaseUrl to *.workers.dev plus this admin allowlist (and the host of an admin-set cloudflareBaseUrl). Self-host Workers go here — never rely on per-user managed-config for the endpoint. See docs/NETWORK-EGRESS.md.",
+  "cloudflareBaseUrlAllowlist": []
 }

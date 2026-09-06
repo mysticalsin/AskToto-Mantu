@@ -163,6 +163,15 @@ To rotate a leaked installer key without expanding its scope: `npm run rotate:em
 
 ---
 
+
+## Packaged endpoint pin
+
+In packaged / admin-managed installs, `settings.cloudflareBaseUrl` is pinned to `*.workers.dev` plus any
+hosts in the admin managed-config `cloudflareBaseUrlAllowlist` (and the host of an admin-set
+`cloudflareBaseUrl`). A per-user settings or managed-config rewrite to an arbitrary host is refused so the
+bearer cannot be stolen by redirection. Self-hosted Workers are configured through that admin allowlist —
+see `docs/NETWORK-EGRESS.md`.
+
 ## Model ids: `{provider}/{model}`
 
 Cloudflare's AI REST API is OpenAI-compatible. There are **two** id forms, and they are not

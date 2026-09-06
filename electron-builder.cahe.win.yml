@@ -12,11 +12,13 @@ win:
 nsis:
   shortcutName: Métis
 # Intentional, disclosed pilot convenience — NOT part of the standard electron-builder.win.yml, so a
-# normal Métis build never bundles this. build/cahe-kimi.local.json is a local, gitignored file the
-# operator provides (see .gitignore + src/main/cahe-embedded-key.ts, which seeds this into the app's
-# normal encrypted keystore once per profile and never fights a later user change/removal). The key IS
-# extractable from the installer by anyone who has it; scripts/check-cahe-package.mjs's packaging-time
-# scan only allows it through with METIS_CAHE_EMBED_KEY=1 set, printing a loud warning when it does.
+# normal Métis build never bundles this. The operator provides gitignored build/cahe-kimi.local.json
+# ({"kimiApiKey":"sk-kimi-…"}); scripts/embed-cahe-kimi-key.mjs AES-256-GCM-encrypts it into
+# build/cahe-embed/kimi.json (same encryptProxyKey material as Cloudflare). electron-builder copies that
+# directory to resources/cahe/ — empty on a keyless build (build/cahe-embed/.gitkeep only), so packaging
+# never fails when there is nothing to embed. The key IS still extractable with effort (obfuscation, not
+# secrecy); scripts/check-cahe-package.mjs only allows the embed with METIS_CAHE_EMBED_KEY=1 and refuses
+# a plaintext kimiApiKey field.
 extraResources:
-  - from: build/cahe-kimi.local.json
-    to: cahe/kimi.json
+  - from: build/cahe-embed
+    to: cahe
