@@ -64,6 +64,20 @@ describe('safeProbeUrl / isUnsafeProbeHost (SSRF guard)', () => {
     expect(safeProbeUrl('not a url').ok).toBe(false)
     expect(safeProbeUrl('not a url').error?.code).toBe('bad-url')
   })
+
+  it('blocks a trailing-dot FQDN the same way as the bare name (new URL() keeps the trailing dot)', () => {
+    for (const host of ['localhost.', 'metadata.google.internal.', 'service.internal.', 'printer.local.']) {
+      expect(isUnsafeProbeHost(host), host).toBe(true)
+      const check = safeProbeUrl(`https://${host}/x`)
+      expect(check.ok, host).toBe(false)
+      expect(check.error?.code, host).toBe('blocked-host')
+    }
+  })
+
+  it('a public domain with a trailing dot resolves to the same decision as without one', () => {
+    expect(isUnsafeProbeHost('api.hubapi.com.')).toBe(isUnsafeProbeHost('api.hubapi.com'))
+    expect(isUnsafeProbeHost('api.hubapi.com.')).toBe(false)
+  })
 })
 
 describe('probeConnection - REST', () => {
@@ -114,6 +128,26 @@ describe('probeConnection - REST', () => {
     expect(result.error?.code).toBe('timeout')
   }, 15000)
 
+  it('a slow-drip body (one byte every 100ms, never closing) times out rather than hanging the caller', async () => {
+    // fetch() resolves immediately (headers arrive at once); only the body trickles in forever. This is
+    // exactly what an old "clear the abort timer once fetch resolves" bug would miss: the header-phase
+    // timeout no longer covers the body-read phase, so readCapped's own deadline race must catch it.
+    const entry = entryFor('hubspot')
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const tick = (): void => {
+          controller.enqueue(new TextEncoder().encode('a'))
+          setTimeout(tick, 100)
+        }
+        tick()
+      }
+    })
+    const fetchImpl = (async () => new Response(stream, { status: 200, headers: { 'content-type': 'application/json' } })) as ProbeDeps['fetch']
+    const result = await probeConnection(entry, { credential: 'x', config: {} }, { fetch: fetchImpl })
+    expect(result.ok).toBe(false)
+    expect(result.error?.code).toBe('timeout')
+  }, 15000)
+
   it('caps the response body at 64 KB while reading it', async () => {
     const entry = entryFor('hubspot')
     const huge = '{"hubId":1,"pad":"' + 'a'.repeat(200_000) + '"}'
@@ -132,6 +166,30 @@ describe('probeConnection - REST', () => {
     const result = await probeConnection(entry, { credential: 'pat-na1-super-secret-leak', config: {} }, { fetch: fetchImpl })
     expect(result.ok).toBe(false)
     expect(JSON.stringify(result)).not.toContain('pat-na1-super-secret-leak')
+  })
+
+  it('never leaks a credential echoed back as "Basic <base64>" (the request\'s own Authorization header reflected in an error body)', async () => {
+    const entry = entryFor('close') // basic auth: credential as the Basic username, empty password
+    const credential = 'close-api-key-abcdef123456'
+    const basicValue = btoa(`${credential}:`)
+    const fetchImpl = (async () => new Response(`invalid credentials: Basic ${basicValue}`, { status: 401 })) as ProbeDeps['fetch']
+    const result = await probeConnection(entry, { credential, config: {} }, { fetch: fetchImpl })
+    expect(result.ok).toBe(false)
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toContain(credential)
+    expect(serialized).not.toContain(basicValue)
+  })
+
+  it('never leaks a percent-encoded credential (a query-param-auth vendor echoing the request URL back)', async () => {
+    const entry = entryFor('trello')
+    const credential = 'token/with+special=chars'
+    const encoded = encodeURIComponent(credential)
+    const fetchImpl = (async () => new Response(`invalid request: token=${encoded}`, { status: 401 })) as ProbeDeps['fetch']
+    const result = await probeConnection(entry, { credential, config: { key: 'k1' } }, { fetch: fetchImpl })
+    expect(result.ok).toBe(false)
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toContain(credential)
+    expect(serialized).not.toContain(encoded)
   })
 
   it('treats Slack auth.test ok:false as a failure even though the HTTP status is 200', async () => {

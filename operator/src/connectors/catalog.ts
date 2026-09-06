@@ -246,7 +246,7 @@ export const CONNECTOR_CATALOG: Record<ConnectorKind, ConnectorCatalogEntry> = {
     'trello',
     [
       { key: 'key', label: 'API key', type: 'text', help: 'trello.com/app-key', required: true },
-      CREDENTIAL_FIELD('Token')
+      CREDENTIAL_FIELD('Token', { help: "Trello's API requires the token in the request URL's query string, by vendor design; there is no header-based alternative." })
     ],
     {
       probe: {
