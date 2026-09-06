@@ -36,9 +36,21 @@ describe('parseForegroundLine', () => {
     expect(parseForegroundLine('7\t3\tNotepad\r\n')?.title).toBe('Notepad')
   })
 
-  it('keeps everything after the second tab as the title', () => {
-    // The watcher script strips tabs from titles, but joining is safe if one ever slips through.
-    expect(parseForegroundLine('1\t2\ta\tb')?.title).toBe('a\tb')
+  it('parses an optional fourth field as the Windows process name', () => {
+    expect(parseForegroundLine('12345\t678\tZoom Meeting\tZoom')).toEqual({
+      windowId: '12345',
+      pid: 678,
+      title: 'Zoom Meeting',
+      process: 'Zoom'
+    })
+  })
+
+  it('keeps a 3-field line title-only (mac helper shape)', () => {
+    expect(parseForegroundLine('1\t2\tNotepad')).toEqual({
+      windowId: '1',
+      pid: 2,
+      title: 'Notepad'
+    })
   })
 
   it('parses the mac helper shape too — bundle id as windowId, app name as title (live-verified)', () => {
