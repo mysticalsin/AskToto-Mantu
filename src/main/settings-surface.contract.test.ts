@@ -91,6 +91,21 @@ describe('MQA-286 — Settings open path sets min bounds', () => {
   })
 })
 
+describe('Ultron Mac show runbook stays the R01–R03 gate', () => {
+  const show = readFileSync(join(__dirname, '../../docs/qa/MAC-SHOW-R01-R03.md'), 'utf8')
+
+  it('names the live crush, the 880×560 open, and forbids packing Latest', () => {
+    expect(show).toMatch(/x=460 y=39 width=880 height=325/)
+    expect(show).toMatch(/880×560/)
+    expect(show).toMatch(/#120022/)
+    expect(show).toMatch(/isFatHoverTrigger/)
+    expect(show).toMatch(/This agent does not pack/)
+    expect(show).toMatch(/Do not publish Latest/)
+    expect(show).toMatch(/READY TO MERGE no/)
+    expect(show).toMatch(/Do not wait on GitHub Actions/)
+  })
+})
+
 describe('DESIGN.md Settings surface matches the north star', () => {
   const design = readFileSync(join(__dirname, '../../docs/design/DESIGN.md'), 'utf8')
   const north = readFileSync(join(__dirname, '../../docs/design/METIS-PLATFORM-NORTH-STAR.md'), 'utf8')
