@@ -55,6 +55,23 @@ describe('Windows packaging does not require a preinstalled Node', () => {
   it('mac extraResources also ship portable Node for the next DMG', () => {
     expect(builderYml).toContain('resources/managed-node/darwin-arm64')
     expect(builderYml).toContain('managed-node/darwin-arm64')
+    expect(builderYml).toContain('resources/managed-node/darwin-x64')
+    expect(builderYml).toContain('managed-node/darwin-x64')
+  })
+
+  it('x64ArchFiles covers managed-node so universal merge keeps the identical Node sidecars', () => {
+    // @electron/universal aborts when a Mach-O is byte-identical in both sub-builds and the
+    // path is not in mac.x64ArchFiles. Both darwin-arm64 and darwin-x64 Node trees are copied
+    // into every universal half; the CI #1259 abort was
+    // Contents/Resources/managed-node/darwin-arm64/bin/node. Normalize CRLF so Windows Quality
+    // does not miss the pin.
+    const yml = builderYml.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+    const match = yml.match(/^\s*x64ArchFiles:\s*'([^']+)'/m)
+    expect(match?.[1]).toBeTruthy()
+    const tokens = (match![1].match(/\{([^}]+)\}/)?.[1] ?? '').split(',')
+    expect(tokens).toContain('managed-node')
+    expect(tokens).toContain('ffmpeg')
+    expect(tokens).toContain('llama')
   })
 
   it('installManagedNodeFromArchive unpacks a real tar.gz into dest without a system node', async () => {
