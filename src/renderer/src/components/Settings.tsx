@@ -1100,33 +1100,8 @@ function AiSection({
               <Trash2 size={14} />
             </button>
           )
-        ) : canRestoreEmbedded ? (
-          <button
-            type="button"
-            onClick={() => void onRestoreEmbedded()}
-            title="Put back the Cloudflare key that shipped with Metis"
-            className="no-drag cl-focus flex items-center rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08]"
-          >
-            Restore shipped key
-          </button>
         ) : null}
       </div>
-
-      {/* MQA-261: a fresh install gets a working Cloudflare key nobody typed, so the user has no copy of
-          it. Removing it is therefore not like removing a key they pasted — say so before, and offer the
-          way back after. */}
-      {confirmRemove && provider === 'cloudflare' && settings.embeddedCloudflareKeyAvailable && (
-        <div className="mt-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
-          This key came with Metis rather than from you, so you have no copy of it. You can put it back
-          from this card afterwards.
-        </div>
-      )}
-      {canRestoreEmbedded && (
-        <div className="mt-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
-          Metis shipped with a Cloudflare key. Restore it to keep Cloudflare answering, or add another
-          provider&apos;s API key below.
-        </div>
-      )}
       {restoreMsg && (
         <div className="mt-2 text-[12px] text-[color:var(--cl-foreground)]">{restoreMsg}</div>
       )}
@@ -1415,6 +1390,33 @@ function AiSection({
             Finish in your default browser. Then this seat uses Operator platform keys — no Worker URL
             or METIS_PROXY_KEY paste.
           </p>
+          {/* MQA-261 lives on this card now. The generic key box is `provider !== 'cloudflare'`, so a
+              `provider === 'cloudflare'` compare there is TS2367 (no overlap) and the restore never
+              rendered. Provenance + restore stay here, where Cloudflare is the active provider. */}
+          {canRestoreEmbedded ? (
+            <>
+              <button
+                type="button"
+                onClick={() => void onRestoreEmbedded()}
+                title="Put back the Cloudflare key that shipped with Metis"
+                className="no-drag cl-focus mt-2 flex items-center rounded-[10px] border border-[var(--cl-input)] bg-white/[0.04] px-3 py-2.5 text-[12px] text-[color:var(--cl-foreground)] hover:bg-white/[0.08]"
+              >
+                Restore shipped key
+              </button>
+              <div className="mt-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
+                Metis shipped with a Cloudflare key. Restore it to keep Cloudflare answering, or add another
+                provider&apos;s API key below.
+              </div>
+            </>
+          ) : settings.embeddedCloudflareKeyAvailable ? (
+            <div className="mt-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
+              This key came with Metis rather than from you, so you have no copy of it. You can put it back
+              from this card afterwards.
+            </div>
+          ) : null}
+          {restoreMsg && (
+            <div className="mt-2 text-[12px] text-[color:var(--cl-foreground)]">{restoreMsg}</div>
+          )}
         </Section>
       )}
 
