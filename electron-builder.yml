@@ -191,8 +191,11 @@ mac:
   # rule is "identical across builds, so skip lipo", not "must be x64"). Every prebuilt native payload
   # here is exactly that: shipped once per arch under its own path, identical in both halves, and
   # selected at runtime rather than merged. metis-mac-helper needs no entry — it is already a fat
-  # binary, which @electron/universal detects and skips on its own.
-  x64ArchFiles: '**/{@img,onnxruntime-node,sherpa-onnx-darwin-arm64,sherpa-onnx-darwin-x64,ffmpeg,llama}/**'
+  # binary, which @electron/universal detects and skips on its own. managed-node is the official
+  # Node 22.22.3 sidecar (both darwin-arm64 and darwin-x64 trees in every sub-build) — omitting it
+  # aborts `npm run dist` at makeUniversalApp on Contents/Resources/managed-node/.../bin/node
+  # (Build&Test #1259 / run 34066411043).
+  x64ArchFiles: '**/{@img,onnxruntime-node,sherpa-onnx-darwin-arm64,sherpa-onnx-darwin-x64,ffmpeg,llama,managed-node}/**'
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
