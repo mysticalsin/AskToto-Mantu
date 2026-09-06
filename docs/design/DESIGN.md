@@ -47,7 +47,7 @@ Three feelings, in this order:
 
 1. **It just works.** Install, then Ask. Defaults friendly. Power lives in Settings.
 2. **It never lies.** Connected means a live session. Latest is a QA+Ultron fact.
-3. **It recedes.** Hide until the camera square. Settings never crushed. No white flash.
+3. **It recedes.** Hide until the top edge. Settings never crushed. No white flash.
 
 | Default | Value | Why |
 | --- | --- | --- |
@@ -77,7 +77,7 @@ CLI install, CLI session). R17 (vault last4) is Operator. Do not implement `#key
    max-height ~670px, `radius.lg`, `glass-fill-strong` + `blur.panel` + `elevation.glass`.
    Scrollable. Two modes: ANSWER (streamed markdown via streamdown) · LISTEN
    (live transcript left/right speaker + AI Suggestions cards).
-3. **Settings** — a real surface, never a leftover bar. Minimum **880×560** at `islandSafeTop`,
+3. **Settings** — a real surface, never a leftover bar. Minimum **880×800** at `islandSafeTop`,
    background `#120022`. Tray, dock, hotkey, and IPC all call `applySettingsSurface` first. Never
    Hide 8×2. Never Island peek. Never the live 880×325 Cmd+, crush. Closing Settings
    `leaveSettingsSurface` then parks. Identity pass lives here ([`IDENTITY-CARD.md`](IDENTITY-CARD.md)).

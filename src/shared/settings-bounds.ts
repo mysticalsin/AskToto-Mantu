@@ -3,7 +3,7 @@
  * bounds, never Hide 8×2 or Island peek. Closing Settings re-parks Hide/Island via overlay-chrome.
  */
 
-export const SETTINGS_WINDOW_MIN = { width: 880, height: 560 } as const
+export const SETTINGS_WINDOW_MIN = { width: 880, height: 800 } as const
 
 /** Totos-Mac live 1.8.3 Cmd+, / Bar Settings while Hide/Island (x=460 y=39 w=880 h=325). */
 export const TONY_LIVE_SETTINGS_CRUSH = { x: 460, y: 39, width: 880, height: 325 } as const

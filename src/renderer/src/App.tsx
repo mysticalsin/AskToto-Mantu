@@ -3225,7 +3225,7 @@ export function App(): JSX.Element {
       onMouseLeave={onOverlayPointerLeave}
       className={[
         'relative flex w-full flex-col gap-2',
-        // Settings fills the 880×560 surface. Without h-full the 480-era panel grew past the
+        // Settings fills the 880×800 surface. Without h-full the 480-era panel grew past the
         // window and the last rows were clipped (Tony live: M / tray open, cannot scroll down).
         view === 'settings' ? 'h-full min-h-0' : '',
         // Stealth (contentProtection) paints a multi-colour halo that spills ~34px past the widget via
