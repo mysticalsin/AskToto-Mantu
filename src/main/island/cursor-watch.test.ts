@@ -137,5 +137,14 @@ describe('cursor-in-rect (Mac Dynamic Island hover)', () => {
         windowVisible: true
       })
     ).toBe(false)
+    expect(
+      overlayWatchNeedsRestore({
+        decision: 'stay',
+        alreadyHovering: true,
+        islandResting: false,
+        windowVisible: true,
+        hugStub: true
+      })
+    ).toBe(true)
   })
 })

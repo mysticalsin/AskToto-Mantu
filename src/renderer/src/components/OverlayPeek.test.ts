@@ -9,7 +9,9 @@ const app = readFileSync(join(__dirname, '../App.tsx'), 'utf8')
 describe('OverlayPeek hide rest is invisible', () => {
   it('hide is a transparent hairline; island keeps the visible peek', () => {
     expect(peek).toMatch(/overlay-hide-target/)
-    expect(peek).toMatch(/data-hug-width/)
+    expect(peek).toMatch(/data-hug-width=\{hidden \? undefined/)
+    expect(app).toMatch(/overlayHoverIdle/)
+    expect(app).toMatch(/overlayHoverForced/)
     const hide = css.slice(css.indexOf('.overlay-hide-target {'), css.indexOf('.overlay-peek {'))
     expect(hide).toMatch(/width:\s*8px/)
     expect(hide).toMatch(/height:\s*2px/)

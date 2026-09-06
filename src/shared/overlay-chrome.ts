@@ -77,6 +77,56 @@ export function shouldForceParkOnBecameIdle(input: { becameIdle: boolean; usesHo
 }
 
 /**
+ * Hide/Island stay hover-idle on the answer surface even with a live answer or
+ * listening chrome (Tony 2026-09-06). Mouse leave auto-hides. Re-hover restores
+ * the same answer. Settings / History / Review / capture stay fully shown.
+ */
+export function overlayHoverIdle(input: {
+  usesHover: boolean
+  minimized: boolean
+  onboardingDone: boolean
+  view: string
+  capturing: boolean
+}): boolean {
+  return (
+    input.usesHover &&
+    !input.minimized &&
+    input.onboardingDone &&
+    input.view === 'answer' &&
+    !input.capturing
+  )
+}
+
+/** Toasts and typed input force the bar open. Listening and a standing answer do not. */
+export function overlayHoverForced(input: {
+  updateReady: boolean
+  toast: boolean
+  typedInput: boolean
+}): boolean {
+  return input.updateReady || input.toast || input.typedInput
+}
+
+/**
+ * Hug-width is the minimized pill or a parked island peek.
+ * Revealed Hide/Island must stay the full Ask bar (880). Ultron f12003d:
+ * OverlayPeek hug + 120 floor + BAR_MIN_HEIGHT 44 opened 120×44 Show Métis.
+ */
+export function overlayAllowsHugWidth(input: {
+  minimized: boolean
+  islandResting: boolean
+  restWidth: number
+  nextWidth: number
+}): boolean {
+  if (input.minimized) return true
+  return input.islandResting && input.nextWidth <= input.restWidth + 24
+}
+
+/** Ultron 2026-09-06: top-edge hover opened this stub instead of the 880 Ask bar. */
+export function isShowMetisHugStub(win: { width: number; height: number }): boolean {
+  return win.width === 120 && win.height === 44
+}
+
+/**
  * Map a sparse on-disk user layer onto a layout.
  * - Already has overlayLayout → keep it (Settings switch, no reinstall).
  * - Legacy autoHideOverlay false → bar.

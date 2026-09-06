@@ -59,10 +59,11 @@ On this tip the same path must open **880×800** at `islandSafeTop` (~39), backg
 ### Top-edge reveal (Tony live 2026-09-05)
 
 1. Overlay chrome **Hide**. Do not use tray Show/Hide.
-2. Move the mouse to the top of the display (left of the notch, the camera, or the right), including the menu-bar edge / first desktop row (`workArea.y` ≈ 39). Métis must reveal the full Ask/Hide bar.
+2. Move the mouse to the top of the display (left of the notch, the camera, or the right), including the menu-bar edge / first desktop row (`workArea.y` ≈ 39). Métis must reveal the **full Ask/Settings bar** (880, Ask field).
 3. Teams mute at Y≈40 must not reveal.
+4. Mid-session: Ask a question, move the mouse away (auto-hide, no Escape), move back to the top. Same answer is still there. A new Ask replaces it.
 
-**FAIL if** the overlay stays gone until the menu-bar Show Métis / Show/Hide click. Ultron 2026-09-06 on `d61ca24`: mouse at top did not open the bar; Show Métis menu did.
+**FAIL if** hover opens **120×44 Show Métis** instead of the full Ask bar (Ultron `f12003d`). **FAIL if** the overlay stays gone until the menu-bar Show Métis / Show/Hide click.
 
 Close Settings. Hide/Island must park again at `bounds.y`.
 
