@@ -78,9 +78,10 @@ function sourceFingerprint(extraFiles) {
   const files = [...listTsFiles(CLIENT_DIR), ...extraFiles].sort()
   const hash = createHash('sha256')
   for (const file of files) {
-    hash.update(relative(OPERATOR_ROOT, file))
+    // Repo-relative posix path + LF bytes so Windows checkouts fingerprint like Ubuntu/macOS.
+    hash.update(relative(OPERATOR_ROOT, file).split('\\').join('/'))
     hash.update('\0')
-    hash.update(readFileSync(file, 'utf8'))
+    hash.update(readFileSync(file, 'utf8').replace(/\r\n/g, '\n'))
     hash.update('\0')
   }
   return hash.digest('hex')
