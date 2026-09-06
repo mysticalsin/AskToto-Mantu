@@ -1,0 +1,152 @@
+#!/usr/bin/env node
+/**
+ * seed-local.mjs — writes the QA fixture (operator/src/render/fixture.ts) as idempotent SQL
+ * (`INSERT OR REPLACE`) and applies it to the LOCAL D1 that `wrangler dev --local` reads, so
+ * `npm run dev:operator` opens with the same 12 seat, 6 country, 3 group, 8 license, 5 connector,
+ * 7 day fleet used for previews and screenshots (plan P5.1).
+ *
+ * Usage:
+ *   node operator/scripts/seed-local.mjs             migrates --local, writes the SQL, applies it
+ *   node operator/scripts/seed-local.mjs --dry-run    writes the SQL, prints its path, applies nothing
+ *
+ * The SQL is idempotent: every statement is `INSERT OR REPLACE`, so running this twice against the
+ * same local D1 leaves it in the same state (re-seeding, not duplicating). A trailing `audit` row
+ * with `action = 'fixture-seeded'` labels the D1 as fixture data, visible on Settings -> Audit log.
+ */
+import { build } from 'esbuild'
+import { execFileSync } from 'node:child_process'
+import { mkdir, writeFile } from 'node:fs/promises'
+import { dirname, join } from 'node:path'
+import { fileURLToPath, pathToFileURL } from 'node:url'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const OPERATOR_ROOT = join(__dirname, '..')
+const SCRATCH_DIR =
+  process.env.METIS_QA_SCRATCH ||
+  '/private/tmp/claude-501/-Users-tony-Library-CloudStorage-OneDrive-MantuGroup-Documents-Chief-of-Staff-Apps-Source-Metis-Portal/7883530c-5678-450a-aef0-46d1bc798bfd/scratchpad'
+const DATABASE_NAME = 'metis-operator'
+
+async function loadFixtureModule() {
+  const entryFile = join(OPERATOR_ROOT, 'src/render/fixture.ts')
+  const result = await build({
+    entryPoints: [entryFile],
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    target: 'es2022',
+    write: false,
+    logLevel: 'silent'
+  })
+  const dir = join(SCRATCH_DIR, 'esbuild-tmp')
+  await mkdir(dir, { recursive: true })
+  const outFile = join(dir, 'seed-local-fixture.out.mjs')
+  await writeFile(outFile, result.outputFiles[0].text, 'utf8')
+  return import(pathToFileURL(outFile).href)
+}
+
+function sqlVal(v) {
+  if (v === null || v === undefined) return 'NULL'
+  if (typeof v === 'number') return Number.isFinite(v) ? String(v) : 'NULL'
+  if (typeof v === 'boolean') return v ? '1' : '0'
+  return `'${String(v).replace(/'/g, "''")}'`
+}
+
+function insertBatch(table, columns, rows, batchSize = 200) {
+  if (!rows || !rows.length) return ''
+  const stmts = []
+  for (let i = 0; i < rows.length; i += batchSize) {
+    const chunk = rows.slice(i, i + batchSize)
+    const values = chunk.map((row) => `(${columns.map((c) => sqlVal(row[c])).join(', ')})`).join(',\n  ')
+    stmts.push(`INSERT OR REPLACE INTO ${table} (${columns.join(', ')}) VALUES\n  ${values};`)
+  }
+  return stmts.join('\n')
+}
+
+const TABLES = [
+  ['seats', ['device_id', 'seat_hash', 'os', 'app_version', 'first_seen', 'last_seen', 'country', 'city', 'region', 'lat', 'lon', 'last_index_at', 'hostname', 'sso_email', 'license', 'approval', 'license_jti'], 'seats'],
+  ['pulses', ['id', 'device_id', 'ts', 'kind', 'country', 'city', 'region'], 'pulses'],
+  ['asks', ['id', 'device_id', 'ts', 'mode', 'skill_id', 'skill_version', 'provider', 'model', 'ttft_ms', 'total_ms', 'input_tokens', 'output_tokens', 'cache_read', 'cache_write', 'cache_uncached', 'cache_status', 'cache_ttl', 'outcome', 'rating', 'prompt_cipher', 'prompt_iv', 'preview', 'question_type'], 'asks'],
+  ['events', ['id', 'ts', 'kind', 'actor', 'device_id', 'country', 'detail'], 'events'],
+  ['sessions', ['id', 'device_id', 'started_at', 'last_pulse_at', 'ended_at', 'pulses', 'asks', 'recaps', 'country', 'city', 'os', 'app_version'], 'sessions'],
+  ['issued_licenses', ['jti', 'last4', 'key_hash', 'days', 'iat', 'exp', 'revoked', 'created_at', 'created_by', 'group_id', 'tier', 'member', 'activated_device', 'activated_at'], 'issuedLicenses'],
+  ['groups', ['id', 'name', 'tier', 'notes', 'created_at', 'created_by'], 'groups'],
+  ['group_members', ['group_id', 'member', 'kind', 'added_at', 'added_by'], 'groupMembers'],
+  ['tiers', ['id', 'label', 'entitlements_json', 'updated_at'], 'tiers'],
+  ['integrations', ['id', 'kind', 'label', 'base_url', 'cipher', 'iv', 'last4', 'scope_json', 'status', 'created_at', 'created_by', 'rotated_at', 'revoked_at', 'last_used_at', 'uses'], 'integrations'],
+  ['integration_grants', ['id', 'integration_id', 'device_id', 'ts'], 'integrationGrants'],
+  ['crm_sends', ['id', 'device_id', 'ts', 'status', 'title', 'connector', 'meeting_file', 'meeting_hash', 'last_error', 'retry_requested', 'attempt', 'latency_ms', 'remote_id', 'remote_url', 'action'], 'crmSends'],
+  ['proposals', ['id', 'skill_id', 'from_version', 'evidence_json', 'diff', 'rationale', 'status', 'created_by', 'created_at', 'decided_at', 'reject_reason'], 'proposals'],
+  ['audit', ['id', 'ts', 'actor', 'action', 'ask_id', 'detail', 'request_id', 'route'], 'audit']
+]
+
+function rowsToSql(rows) {
+  const out = [
+    '-- Metis Operator QA fixture.',
+    '-- Generated by operator/scripts/seed-local.mjs from operator/src/render/fixture.ts.',
+    '-- Idempotent: every statement is INSERT OR REPLACE, safe to re-run against the same local D1.'
+  ]
+  for (const [table, columns, key] of TABLES) {
+    const sql = insertBatch(table, columns, rows[key])
+    if (sql) out.push(sql)
+  }
+  // Label the data as fixture (deliverable: "one audit row fixture-seeded"). Separate statement,
+  // not part of the fixture's own audit rows, so it always reflects the actual seeding time.
+  out.push(
+    insertBatch('audit', ['id', 'ts', 'actor', 'action', 'ask_id', 'detail', 'request_id', 'route'], [
+      {
+        id: 'fixture-seeded',
+        ts: Date.now(),
+        actor: 'qa@example.com',
+        action: 'fixture-seeded',
+        ask_id: null,
+        detail: `QA fixture applied: ${rows.seats.length} seats, ${rows.asks.length} asks, ${rows.groups.length} groups, ${rows.integrations.length} connectors, ${rows.issuedLicenses.length} licenses`,
+        request_id: null,
+        route: null
+      }
+    ])
+  )
+  return out.join('\n\n') + '\n'
+}
+
+function parseArgs(argv) {
+  return { dryRun: argv.includes('--dry-run') }
+}
+
+async function main() {
+  const { dryRun } = parseArgs(process.argv.slice(2))
+
+  if (!dryRun) {
+    console.log('seed-local.mjs: applying schema.sql + schema-alter.sql to the local D1 first...')
+    execFileSync('node', [join(OPERATOR_ROOT, 'scripts/migrate.mjs'), '--local'], {
+      cwd: OPERATOR_ROOT,
+      stdio: 'inherit'
+    })
+  }
+
+  const { fixtureRows } = await loadFixtureModule()
+  const rows = fixtureRows()
+  const sql = rowsToSql(rows)
+
+  const outDir = join(SCRATCH_DIR, 'seed-local')
+  await mkdir(outDir, { recursive: true })
+  const sqlPath = join(outDir, 'fixture.sql')
+  await writeFile(sqlPath, sql, 'utf8')
+  console.log(`seed-local.mjs: wrote ${sqlPath} (${sql.length} bytes, ${Object.keys(rows).length} row sets).`)
+
+  if (dryRun) {
+    console.log('seed-local.mjs: --dry-run, not applying. Run again without --dry-run to seed the local D1.')
+    return
+  }
+
+  console.log(`seed-local.mjs: applying to local D1 "${DATABASE_NAME}" via wrangler...`)
+  execFileSync('npx', ['wrangler@4', 'd1', 'execute', DATABASE_NAME, '--local', '--file', sqlPath], {
+    cwd: OPERATOR_ROOT,
+    stdio: 'inherit'
+  })
+  console.log('seed-local.mjs: done. Open the local console (npm run dev:operator) to see the fixture fleet.')
+}
+
+main().catch((err) => {
+  console.error(err)
+  process.exit(1)
+})
