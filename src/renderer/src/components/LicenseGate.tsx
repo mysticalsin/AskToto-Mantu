@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
-import { AlertCircle, Check, Loader2, RefreshCw } from 'lucide-react'
+import { AlertCircle, Check, RefreshCw } from 'lucide-react'
+import { InlineOrb } from './AgentStatus'
 import { MantuLogo } from './MantuLogo'
 import type { PublicSettings } from '@shared/ipc'
 
@@ -51,7 +52,7 @@ export function LicenseGate({
   onRecheck
 }: {
   settings: PublicSettings
-  reason?: 'not_activated' | 'expired_grace'
+  reason?: 'not_activated' | 'expired_grace' | 'trial_expired'
   onRecheck: () => Promise<void>
 }): JSX.Element {
   const [serverUrl, setServerUrl] = useState(settings.licenseServerUrl || '')
@@ -108,6 +109,11 @@ export function LicenseGate({
           <p className="mx-auto max-w-[420px] text-[13px] leading-relaxed text-[color:var(--color-ink-2)]">
             This device has been offline too long for its license check. Reconnect to the internet and
             retry.
+          </p>
+        ) : reason === 'trial_expired' ? (
+          <p className="mx-auto max-w-[420px] text-[13px] leading-relaxed text-[color:var(--color-ink-2)]">
+            Your trial has ended. Enter your license server and key to keep going — no key yet? Ask
+            whoever set up Métis for one.
           </p>
         ) : (
           <p className="mx-auto max-w-[420px] text-[13px] leading-relaxed text-[color:var(--color-ink-2)]">
@@ -168,11 +174,11 @@ export function LicenseGate({
           disabled={!serverUrl.trim() || !licenseKey.trim() || activating}
           className={primaryBtnStyle}
         >
-          {activating ? <Loader2 size={12} className="animate-spin" /> : <Check size={12} />}
+          {activating ? <InlineOrb kind="connecting" /> : <Check size={12} />}
           Activate
         </button>
         <button type="button" onClick={() => void retry()} disabled={retrying} className={secondaryBtnStyle}>
-          {retrying ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+          {retrying ? <InlineOrb kind="loading" /> : <RefreshCw size={12} />}
           Retry
         </button>
       </div>

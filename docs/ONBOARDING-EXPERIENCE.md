@@ -80,3 +80,45 @@ Shipped as OnboardingExperience.tsx + OnboardingV2 wrapper (legacy entered at pr
 Consent is a REQUIRED checkbox gating Start in Scene 5 (per spec; restored after CMO-QA finding #1 —
 the Skip path routes through the full legacy flow so it hits legacy slide 1's consent instead).
 Calendar row cut from Scene 4. Demo transcript is mode-agnostic with an explicit Example label.
+
+## Implementation status — Act 6 "Ready" + the tail re-point (MQA-283)
+The narrative grew a sixth, terminal act closing out the flow the teardown's own canonical order
+uses (welcome→demo→config→vibe→license→ready):
+
+```
+hero -> problem -> reveal -> setup -> personalize -> [license, only if licenseGateEnabled] -> ready -> finish
+```
+
+- **Scene 6 — Ready.** A tasteful, Apple-grade closing beat: the Métis mark gets a one-shot conic
+  "gleam" sweep plus a handful of one-shot spark motes (`.ready-mark-wrap`/`.ready-spark`,
+  `styles.css`) — deliberately NOT Vibe Island's confetti cannon + collectible edition card, and
+  fully `prefers-reduced-motion`-safe (the sweep is suppressed outright; the spark keyframes only
+  ever touch opacity/transform, so the blanket reduced-motion rule already lands them correctly).
+  The active mode is named ("Sales mode" etc.) under the heading, then the honest empty-state line —
+  Métis's own equivalent of the teardown's "restart your sessions" last line:
+  > "Métis is ready. It starts listening only when you press Listen and tell the room — nothing is
+  > captured before that."
+  CTA: **Get started** — this is what actually finishes onboarding now (marks `onboardingDone` /
+  `onboardingDoneAt`). A second, visually secondary link — "Add your own AI provider — optional,
+  never required" — opens Settings' AI tab; it is OPTIONAL and never a gate, because the embedded-
+  Cloudflare-default install (`src/main/embedded-cloudflare-key.ts`, MQA-273) already makes a fresh
+  install `providerReady` with zero user action.
+- **The tail re-point.** The experience used to hand off, after Scene 5, to the LEGACY
+  `Onboarding.tsx` component entered at its provider/API-key step (`initialStep={5}`) — forcing a
+  config screen for something already configured on every fresh install. That hop is gone: the
+  experience now finishes itself at Ready. `OnboardingV2`'s `phase` state dropped its `'provider'`
+  member (`'experience' | 'legacy-full'` only); the legacy component is only ever entered now via the
+  "Skip the tour" escape hatch, at its own slide 1, consent gate included.
+- **License order.** Act 5's license scene (MQA-281/282, `settings.licenseGateEnabled`, default off)
+  moved from between `setup` and `personalize` to between `personalize` and `ready`, matching the
+  teardown's own act order. It is still skipped entirely — not even rendered for a frame — whenever
+  the gate is off.
+- **Pure flow logic.** The three scene-transition rules governing this tail
+  (`sceneAfterSetup`/`sceneAfterPersonalize`/`sceneAfterLicense`) live in
+  `src/renderer/src/lib/onboarding-flow.ts`, independently unit-tested in
+  `onboarding-flow.test.ts` rather than only visible by reading JSX `onClick` handlers.
+- **Replay in Settings.** The existing reset-onboarding footer action in `Settings.tsx` was
+  relabelled "Replay onboarding" with honest confirm copy ("Replay onboarding from the start? Your
+  settings won't change."). It patches `onboardingDone: false` and closes the Settings panel — the
+  same gate `App.tsx` checks on every render, so the very next render remounts the six-act experience
+  fresh from hero, with no separate replay state machine to keep in sync.

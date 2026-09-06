@@ -48,6 +48,14 @@ describe('transcriptToText', () => {
     )
   })
 
+  it('excludes provisional lines — a UI-only "…" placeholder must never reach the recap prompt (1B.2b)', () => {
+    const lines: TranscriptLine[] = [
+      line('you', 'How is the roadmap looking?'),
+      { speaker: 'them', text: '…', t: 1, provisional: true }
+    ]
+    expect(transcriptToText(lines)).toBe('YOU: How is the roadmap looking?')
+  })
+
   it('never emits markers for untagged lines (older meetings, unconfident detection) or before the first tag', () => {
     const lines: TranscriptLine[] = [
       { speaker: 'them', text: 'Hmm.', t: 0 }, // untagged
@@ -58,6 +66,14 @@ describe('transcriptToText', () => {
     expect(transcriptToText(lines)).toBe(
       'THEM: Hmm.\nYOU: Então vamos ver isso.\nTHEM: Ok.\nYOU: Vamos fechar assim.'
     )
+  })
+
+  it('drops streaming provisional lines so recap/save never see a first-caption draft', () => {
+    const lines: TranscriptLine[] = [
+      { speaker: 'them', text: 'Then we close.', t: 1 },
+      { speaker: 'you', text: '…', t: 2, provisional: true }
+    ]
+    expect(transcriptToText(lines)).toBe('THEM: Then we close.')
   })
 })
 
@@ -79,9 +95,15 @@ describe('recapPersistAction', () => {
     expect(recapPersistAction(answer, target)).toBeNull()
   })
 
-  it('returns null when the answer settled with an error even if some text is present', () => {
+  it('returns null when the answer settled with an error and only a stub of text', () => {
     const answer = { text: 'partial', streaming: false, error: 'boom' }
     expect(recapPersistAction(answer, target)).toBeNull()
+  })
+
+  it('keeps a substantial streamed summary despite a trailing stream error', () => {
+    const text = 'A'.repeat(200)
+    const answer = { text, streaming: false, error: 'idle timeout' }
+    expect(recapPersistAction(answer, target)).toEqual({ file: 'meeting.md', text })
   })
 
   it('returns null when there is no answer at all', () => {

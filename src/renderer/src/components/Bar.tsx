@@ -10,7 +10,6 @@ import {
   ChevronLeft,
   AudioLines,
   LayoutGrid,
-  Minimize2,
   FileText,
   Pause,
   Play,
@@ -21,12 +20,14 @@ import {
 } from 'lucide-react'
 import { MantuMark } from './MantuMark'
 import { ModePicker } from './ModePicker'
-import { Spinner } from './ui'
+import { InlineOrb } from './AgentStatus'
 import { modeLabel } from '@shared/ipc'
 import type { ConversationMode, CustomMode } from '@shared/ipc'
 import { formatScreenFreshness } from '@shared/perception'
 import { accelLabel } from '../lib/keys'
 import type { CaptureDegraded } from '../lib/listen'
+import { JarvisOrbButton } from './JarvisOrbButton'
+import { BAR_MARK_SIZE_PX, type OrbMood } from '../lib/bar-pill-orb'
 
 /** Single source of truth for toolbar icon stroke — prevents per-icon drift. */
 const ICON_STROKE = 1.85
@@ -185,8 +186,12 @@ export interface BarProps {
   captureAccel: string
   onSettings: () => void
   onHistory: () => void
-  /** Collapse the widget down to the floating control mini-pill. */
+  /** Collapse the widget down to the floating control mini-pill. Bar layout only. */
   onMinimize: () => void
+  /** Hide and Island must not show minimize-to-circle. Default true for isolated Bar tests. */
+  canMinimize?: boolean
+  /** Color language for the docked Bar circle. Idle purple unless a live signal is on the bar. */
+  orbMood?: OrbMood
   /** When true, the Métis window is hidden from screen capture & sharing (contentProtection). The
    *  eye button toggles this. Separate from Private View (whether Métis captures the user's screen). */
   stealth: boolean
@@ -245,6 +250,7 @@ function IconTool({
   title,
   onClick,
   onMouseEnter,
+  onMouseDown,
   active,
   danger,
   rainbow,
@@ -261,6 +267,9 @@ function IconTool({
   /** Optional hover hook — used by the Capture tool to pre-warm the OS capture pipeline at the one
    *  moment screen intent is actually signalled (MQA-236: never on text-input focus). */
   onMouseEnter?: () => void
+  /** Optional press hook — re-arms capture prewarm so a click >TTL after hover still shares the
+   *  in-flight single-flight capture instead of paying a cold desktopCapturer round trip. */
+  onMouseDown?: () => void
   active?: boolean
   danger?: boolean
   rainbow?: boolean
@@ -293,6 +302,7 @@ function IconTool({
         disabled={disabled}
         onClick={onClick}
         onMouseEnter={onMouseEnter}
+        onMouseDown={onMouseDown}
         className={[
           'no-drag focus-ring peer grid place-items-center rounded-[10px] p-1 transition-colors duration-[var(--duration-hover)] active:scale-[0.92]',
           rainbow ? 'rainbow-ring' : '',
@@ -566,17 +576,19 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
 
   const toolbarRow = useMemo(
     () => (
-        <div className="aw-toolbar grid grid-cols-[1fr_auto_1fr] items-center border-t border-[var(--color-hair-soft)] px-5 py-1">
-          {/* The Mantu mark IS the logo → opens Settings. (Quit/Hide live in the tray + hotkeys.) */}
+        <div className="aw-toolbar grid grid-cols-[minmax(30px,1fr)_auto_minmax(30px,1fr)] items-center border-t border-[var(--color-hair-soft)] px-5 py-1">
+          {/* The Mantu mark IS the logo → opens Settings. Locked circle: Listen chrome
+              may expand the Bar, but this M must not flatten, stretch, or clip into a bar. */}
           <button
             type="button"
             title="Settings"
             aria-label="Settings"
+            data-bar-mark
             onClick={props.onSettings}
-            className="no-drag focus-ring block flex-none justify-self-start rounded-[10px]"
+            className="aw-bar-mark no-drag focus-ring"
           >
-            <span className="aw-mark-glow block rounded-[10px]">
-              <MantuMark size={30} />
+            <span className="aw-bar-mark__disk aw-mark-glow">
+              <MantuMark size={BAR_MARK_SIZE_PX} round />
             </span>
           </button>
 
@@ -590,8 +602,9 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
               title={props.captureAccel ? `Capture screen (${accelLabel(props.captureAccel)})` : 'Capture screen'}
               onClick={props.onCapture}
               onMouseEnter={() => { if (props.canPrewarm) void window.toto.prewarmCapture() }}
+              onMouseDown={() => { if (props.canPrewarm) void window.toto.prewarmCapture() }}
             >
-              {props.capturing ? <Spinner size={19} /> : <Image size={19} strokeWidth={ICON_STROKE} />}
+              {props.capturing ? <InlineOrb kind="working" /> : <Image size={19} strokeWidth={ICON_STROKE} />}
             </IconTool>
             {/* Spotlight Ref stays visible so users can discover it before configuring Dust. The
                 unavailable click path names the required setup instead of silently hiding the tool. */}
@@ -745,9 +758,15 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                 <ChevronDown size={13} strokeWidth={ICON_STROKE} />
               </button>
             )}
-            <IconTool title="Minimize to a small pill" onClick={props.onMinimize} edgeRight>
-              <Minimize2 size={17} strokeWidth={ICON_STROKE} />
-            </IconTool>
+            {props.canMinimize !== false ? (
+              <JarvisOrbButton
+                orbMood={props.orbMood ?? 'idle'}
+                listening={props.listening}
+                title="Minimize to the orb"
+                ariaLabel="Minimize to the orb"
+                onActivate={props.onMinimize}
+              />
+            ) : null}
             {/* Collapse-chevron: plain ghost, not aw-fill. Submit is the only accent-filled control.
                 Disabled (not hidden, so the toolbar doesn't jump) when there's nothing behind the bar
                 for it to reveal — e.g. idle with no answer/history/settings open. */}
@@ -768,7 +787,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
           </div>
         </div>
     ),
-    [props.onSettings, props.listening, props.onCapture, props.capturing, props.captureAccel, props.spotlightReady, props.onSpotlightRef, props.mode, props.customModes, modeOpen, props.thinkingOn, props.onToggleThinking, props.stealth, props.onToggleStealth, props.stealthLocked, props.onToggleListen, props.paused, props.startedAt, props.onTogglePause, props.onNewMeeting, props.transcriptShown, props.onTranscript, props.onHistory, props.onMinimize, props.canTogglePanel, props.panelOpen, props.onTogglePanel]
+    [props.onSettings, props.listening, props.onCapture, props.capturing, props.captureAccel, props.spotlightReady, props.onSpotlightRef, props.mode, props.customModes, modeOpen, props.thinkingOn, props.onToggleThinking, props.stealth, props.onToggleStealth, props.stealthLocked, props.onToggleListen, props.paused, props.startedAt, props.onTogglePause, props.onNewMeeting, props.transcriptShown, props.onTranscript, props.onHistory, props.onMinimize, props.canMinimize, props.orbMood, props.canTogglePanel, props.panelOpen, props.onTogglePanel]
   )
 
   return (

@@ -45,8 +45,8 @@ describe('Local AI tells the truth about a model that is downloaded, not bundled
     expect(copy).not.toMatch(/Included with Métis/)
     expect(copy).not.toMatch(/no separate model download/i)
     expect(copy).not.toMatch(/bundled model/i)
-    // ...and says what actually happens instead.
-    expect(block).toMatch(/first run/i)
+    // ...and says what actually happens instead (background download when the app opens).
+    expect(block).toMatch(/when the app opens|when Métis opens|downloads automatically when Métis opens/i)
   })
 
   it('MQA-191 — never tells the user to reinstall, which cannot restore weights no installer carries', () => {
@@ -304,5 +304,98 @@ describe('MQA-164 — a failed update download leaves the Settings row with a wa
   it('is bridged by preload on the shared update:error channel', () => {
     const preload = readFileSync(join(__dirname, '../../../preload/index.ts'), 'utf8')
     expect(preload).toMatch(/onUpdateError: .*sub\(IPC\.updateError, cb\)/)
+  })
+})
+
+describe('BRAIN-CONNECTORS — one-click ClickUp and Plane, Polo form stays', () => {
+  const product = blockAfter('function ProductConnectCard(', '\nfunction ClickupCard(')
+  const polo = blockAfter('function McpConnectionCard(', '\nconst primaryBtnStyle')
+  const intelligence = blockAfter('function IntelligenceTab(', '\nfunction GraphSection(')
+  const productCopy = product.replace(/^\s*\/\/.*$/gm, '')
+
+  it('ClickUp and Plane default cards have no MCP URL field', () => {
+    const clickup = blockAfter('function ClickupCard(', '\nfunction PlaneCard(')
+    const plane = blockAfter('function PlaneCard(', '\nfunction AgentPicker(')
+    expect(productCopy).not.toMatch(/MCP endpoint URL/)
+    expect(clickup).toMatch(/<ClickUpMark/)
+    expect(plane).toMatch(/<PlaneMark/)
+    expect(intelligence).toMatch(/<ClickupCard /)
+    expect(intelligence).toMatch(/<PlaneCard /)
+  })
+
+  it('ClickUp Connect is the default CTA — no endpoint or key input until Advanced opens', () => {
+    expect(product).toMatch(/\{connecting \? waitingLabel : 'Connect'\}/)
+    expect(product).toMatch(/advanced \? \(/)
+    expect(product).toMatch(/API key/)
+    const keyInput = product.indexOf('type="password"')
+    const advancedGate = product.indexOf('{advanced ? (')
+    expect(keyInput).toBeGreaterThan(advancedGate)
+  })
+
+  it('Polo Pre-Sales still has the existing URL + key + Test + Save form', () => {
+    expect(polo).toMatch(/MCP endpoint URL/)
+    expect(polo).toMatch(/API key/)
+    expect(polo).toMatch(/Test connection/)
+    expect(polo).toMatch(/Save/)
+    expect(intelligence).toMatch(/kind="bidstack"/)
+    expect(intelligence).toMatch(/defaultLabel="Polo Pre-Sales"/)
+    expect(intelligence).not.toMatch(/kind="plane"/)
+  })
+
+  it('never auto-sends: product-connect cards have no useEffect that connects or pushes', () => {
+    expect(product).not.toMatch(/useEffect/)
+    expect(product).not.toMatch(/mcpPush/)
+    expect(product).toMatch(/onClick=\{\(\) => void runConnect\(\)\}/)
+  })
+
+  it('official marks are the vendored simple-icons paths, not Lucide stand-ins', () => {
+    const clickup = readFileSync(join(__dirname, 'brand/ClickUpMark.tsx'), 'utf8')
+    const plane = readFileSync(join(__dirname, 'brand/PlaneMark.tsx'), 'utf8')
+    expect(clickup).toMatch(/#7B68EE/)
+    expect(clickup).toMatch(/M2 18\.439l3\.69-2\.828/)
+    expect(plane).toMatch(/currentColor/)
+    expect(plane).toMatch(/M0 5\.358a\.854/)
+  })
+})
+
+describe('Operator control plane lives on Cloudflare, not in Settings', () => {
+  it('exposes Operator URL, ingest secret, Ask-text toggle, and Open Operator', () => {
+    expect(source).toMatch(/Operator URL/)
+    expect(source).toMatch(/Ingest secret/)
+    expect(source).toMatch(/Send Ask text for skill improvement/)
+    expect(source).toMatch(/Open Operator/)
+    expect(source).toMatch(/operatorOpen/)
+    expect(source).toMatch(/Listen transcripts and screens never send/)
+  })
+
+  it('does not keep a local-only Operator tools dashboard or fake fleet numbers', () => {
+    expect(source).not.toMatch(/operatorTools/)
+    expect(source).not.toMatch(/Operator tools/)
+    expect(source).not.toMatch(/local analytics page that pretends/)
+    expect(source).not.toMatch(/DAU/)
+    expect(source).not.toMatch(/cache hit rate/)
+    const operator = blockAfter('title="Operator"', '\n            {tab === \'meetings\'')
+    expect(operator).not.toMatch(/—/)
+    expect(operator).not.toMatch(/I am an AI|as an AI|AI assistant/i)
+  })
+})
+
+describe('locked mode skills — Settings has no editor for shipped skill files', () => {
+  const personalize = blockAfter('function ModePromptEditor(', '\nconst TEXT_FILE_RE')
+
+  it('shows a read-only locked line and never edits skill files', () => {
+    expect(personalize).toMatch(/Operator skill v/)
+    expect(personalize).toMatch(/cannot be\s+edited, deleted, or overridden here/)
+    expect(personalize).toMatch(/modeSkillLock\(\)/)
+    expect(personalize).not.toMatch(/writeFileSync/)
+    expect(personalize).not.toMatch(/skills\/modes/)
+    expect(personalize).not.toMatch(/SKILL\.md/)
+    expect(personalize).not.toMatch(/onCommit=\{\(v\) => patch\(\{[^}]*skill/)
+  })
+
+  it('the prompt textarea still edits modePrompts only', () => {
+    expect(personalize).toMatch(/patch\(\{ modePrompts:/)
+    expect(source).not.toMatch(/modeSkills/)
+    expect(source).not.toMatch(/skillsRoot/)
   })
 })

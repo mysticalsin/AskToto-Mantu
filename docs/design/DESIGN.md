@@ -57,6 +57,13 @@ motion:
 - Drag region: the bar background is `-webkit-app-region: drag`; inputs/buttons `no-drag`.
 - Pixel target: side-by-side with Cluely, a stranger can't tell which is which (minus brand).
 
+## Identity (Settings → Identity)
+The Métis member pass and license foundation live under Settings → Identity.
+They are **not** overlay chrome. Tokens, motion, copy, and do/don'ts are
+binding in [`IDENTITY-CARD.md`](IDENTITY-CARD.md). One accent: Mantu Bright
+Purple `#7F00DA` (the live Settings token, not the overlay indigo above).
+Implement to that contract only.
+
 ## Anti-slop (do NOT)
 - No purple-gradient hero, no generic card-in-card-in-card, no emoji UI, no rounded-3xl everything,
   no drop-shadow on text, no 6-line text wraps. Match Cluely's restraint.
@@ -64,3 +71,49 @@ motion:
 ## Brand mark
 Métis = five-star constellation-M glyph (own SVG), dots + thin connectors, `text-primary`.
 NOT Cluely's logo. Wordmark "Métis" in Geist medium, tracking-tight.
+
+## Answer first (every LLM path)
+Typed and screen answers lead with the answer. No "sure", no restating the question, no "let's".
+System rail: `ANSWER_FIRST_RAIL` in `src/shared/answer-first.ts`, appended by `buildSystem` for
+answer/vision (not live suggest, not recap/summary, not fact-check). Post-filter:
+`stripLeadingFiller` / `AnswerFirstFilter` on the enterprise client stream. Tests lock both.
+
+## Enterprise LLM client
+Every provider (local llama-server, Apple FM, OpenAI-compatible, Anthropic, Dust, CLI) enters
+through `createStream` → `wrapEnterpriseStream`. Contract: hard timeout, cancel, retry-with-jitter
+primitives, fallback chain helper, streaming, TTFT/TTA metrics, circuit snapshot, secret redaction
+in logs. Fail closed on a hung call. Honest errors, never "Something went wrong".
+
+Local runtime stays llama.cpp sidecar (plus Apple FM when live). Do not swap it. Threads / GPU /
+ctx stay machine-aware (`inferenceThreads`, `spawnProfileFor`). Streaming stays on.
+
+## Time saved
+See [TIME-SAVED.md](./TIME-SAVED.md). Tokens, type, motion, do/don'ts live there. The Intelligence
+dashboard (PR 61) is a separate surface; this module is a small honest feed it can read later.
+
+## Operator
+See [OPERATOR.md](./OPERATOR.md). Cloudflare Access packed ops console (`operator/`, Worker `metis-operator`). Operator is the central API-key gateway: Tony vaults keys (last4 only), approves each seat **or** the seat activates an Operator-generated license in Settings → Identity → License, then HMAC `/v1/use` + heartbeat `fundedProviders` fund that seat. Unapproved seats without an active Operator license fail loud. `#licenses` has **Generate license** (Tony picks duration / expiry). **Cloudflare · AI Gateway** on `#keys` is login → auto-provision (OAuth `/cloudflare/connect`), not a paste form. Chrome is pre-Shoey (Keys, Licenses, Map / macOS / Windows, Skills). Client keeps prompt cache on. Map geo comes from `request.cf`, never from the app. Not overlay chrome. Not the Fly license-server. Not `cloudflare-proxy`. Do not Worker-deploy until Ultron Mac Hide UX full PASS. Ultron lock: no pack, no merge, no Metis-Releases Latest. EXE/DMG/Native → Latest only after Bob QA + Ultron approve.
+
+## MCP write
+Outlook drafts and CRM notes are user-confirmed. Never auto-send. A disconnected connector shows
+Connect, it does not pretend a send happened.
+
+## Connector marks (Settings → Brain)
+ClickUp and Plane use official simple-icons SVG paths (CC0; trademarks remain with the brands). Do not invent marks or scrape PNGs.
+
+- ClickUp: simple-icons `clickup`, official hex `#7B68EE`, source https://clickup.com/brand — `ClickUpMark`.
+- Plane: simple-icons `plane` (commit `978656df6ce854ac04e45351059f8e3db7e34ef4`), official hex `#121212`, source https://plane.so/brand-logos/logo-with-wordmark.svg — `PlaneMark`. Near-black hex is painted as `currentColor` on dark glass so the official path still reads.
+
+See `docs/design/BRAIN-CONNECTORS.md`.
+
+## Starfield Close (onboarding bed)
+See [ONBOARDING-STARFIELD.md](./ONBOARDING-STARFIELD.md). Galaxy from frame one. Overlay hide/island stay out.
+
+## Thinking orbs
+See [THINKING-ORB.md](./THINKING-ORB.md). Caption then sphere. Word first.
+
+## Bar sphere
+See [BAR-PILL.md](./BAR-PILL.md). The Bar control is a Jakub thinking-orb (`thinking-orbs`, theme `dark`): canvas 64, 2x backing, visible 41×41. Idle `solving` with no caption, listen `listening`, think `working`, fact-check `searching`, connecting `connecting`. Same circle when minimized. Left Settings M stays a circle (no-squash M). Not stuffed into overlay Hide/Island. Not a Fit Studio magenta core.
+
+## Auto-answer
+Ambient copilot / auto-answer stays until Tony clicks (dismiss/read, never send) or a new question replaces it. Not an ephemeral 4s/7s card.

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { buildSystem } from './personas'
+import { ANSWER_FIRST_RAIL } from '@shared/answer-first'
 import type { AskStart, Profile } from '@shared/ipc'
 
 const EMPTY_PROFILE: Profile = { name: '', role: '', company: '', resume: '', jobDescription: '', notes: '' }
@@ -22,9 +23,16 @@ describe('buildSystem — multilingual language policy', () => {
     expect(s).toMatch(/respond in Spanish/i)
   })
 
-  it("'auto' falls back to the conversation language", () => {
+  it("'auto' stays in the spoken language(s) and does not translate away", () => {
     const s = buildSystem(req('answer'), 'general', EMPTY_PROFILE, {}, [], 'auto')
-    expect(s).toMatch(/main language of the conversation/i)
+    expect(s).toMatch(/spoken language/i)
+    expect(s).toMatch(/do not translate unless asked/i)
+  })
+
+  it('recap auto keeps spoken language(s) including mixed meetings', () => {
+    const s = buildSystem(req('recap'), 'meeting', EMPTY_PROFILE, {}, [], 'auto')
+    expect(s).toMatch(/spoken language\(s\) of the transcript/i)
+    expect(s).toMatch(/do not translate unless the user explicitly asked/i)
   })
 })
 
@@ -33,6 +41,15 @@ describe('buildSystem — grounding & trust', () => {
     expect(buildSystem(req('answer'), 'general', EMPTY_PROFILE, {}, [])).toContain('GROUNDING & HONESTY')
     expect(buildSystem(req('vision'), 'general', EMPTY_PROFILE, {}, [])).toContain('GROUNDING & HONESTY')
     expect(buildSystem(req('suggest'), 'meeting', EMPTY_PROFILE, {}, [])).not.toContain('GROUNDING & HONESTY')
+  })
+
+  it('appends ANSWER FIRST on typed/screen asks and never on suggest, recap, or summary', () => {
+    expect(buildSystem(req('answer'), 'general', EMPTY_PROFILE, {}, [])).toContain('ANSWER FIRST')
+    expect(buildSystem(req('vision'), 'general', EMPTY_PROFILE, {}, [])).toContain('ANSWER FIRST')
+    expect(buildSystem(req('suggest'), 'meeting', EMPTY_PROFILE, {}, [])).not.toContain('ANSWER FIRST')
+    expect(buildSystem(req('recap'), 'general', EMPTY_PROFILE, {}, [])).not.toContain('ANSWER FIRST')
+    expect(buildSystem(req('summary'), 'general', EMPTY_PROFILE, {}, [])).not.toContain('ANSWER FIRST')
+    expect(ANSWER_FIRST_RAIL).not.toMatch(/—/)
   })
 
   it('leads untrusted modes with the injection guard; a plain typed answer has none', () => {
@@ -50,18 +67,21 @@ describe('buildSystem — grounding & trust', () => {
   it('summary / recap use their dedicated prompts and skip the grounding rail', () => {
     const summary = buildSystem(req('summary'), 'general', EMPTY_PROFILE, {}, [])
     expect(summary).toContain('Summarize the conversation transcript')
-    expect(buildSystem(req('recap'), 'general', EMPTY_PROFILE, {}, [])).toContain('detailed post-meeting document')
+    const recap = buildSystem(req('recap'), 'general', EMPTY_PROFILE, {}, [])
+    expect(recap).toContain('You are Métis producing a General recap')
+    expect(recap).toContain('## Overview:')
     expect(summary).not.toContain('GROUNDING & HONESTY')
   })
 
-  it('recap is mode-aware: the active conversation mode appends its FOCUS block, general stays plain', () => {
+  it('recap uses the chosen role layout, not one skeleton plus MODE FOCUS', () => {
     const salesRecap = buildSystem(req('recap'), 'sales', EMPTY_PROFILE, {}, [])
-    expect(salesRecap).toContain('detailed post-meeting document') // section skeleton intact
-    expect(salesRecap).toContain('MODE FOCUS (Sales)')
+    expect(salesRecap).toContain('What the seller must know')
     expect(salesRecap).toMatch(/buying signals/i)
+    expect(salesRecap).not.toContain('MODE FOCUS')
 
     const generalRecap = buildSystem(req('recap'), 'general', EMPTY_PROFILE, {}, [])
     expect(generalRecap).not.toContain('MODE FOCUS')
+    expect(generalRecap).toContain('## Overview:')
 
     const customRecap = buildSystem(req('recap'), 'my-custom-mode', EMPTY_PROFILE, {}, [])
     expect(customRecap).not.toContain('MODE FOCUS')

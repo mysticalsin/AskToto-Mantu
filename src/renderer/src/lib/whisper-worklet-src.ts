@@ -19,10 +19,12 @@
  * ./vad — embedded here via `.toString()` so the unit-tested logic and the realtime logic are ONE source.
  */
 import { makeVad, isSpeechLikeWindow } from './vad'
+import { FIRST_PARTIAL_SAMPLES } from '@shared/asr-latency'
 
 export const WHISPER_WORKLET_SRC = `
 const SAMPLE_RATE = 16000
 const MAX_SAMPLES = SAMPLE_RATE * 6   // hard cap per window (long monologue → forced cut)
+const PARTIAL_SAMPLES = ${FIRST_PARTIAL_SAMPLES} // first caption before the 6s cap (docs/asr/QUALITY.md)
 const EMIT_RMS = 0.005                // whole-window energy below this → drop (silence; ASR hallucinates on it)
 const makeVad = ${makeVad.toString()}
 const isSpeechLikeWindow = ${isSpeechLikeWindow.toString()}
@@ -33,26 +35,34 @@ class WhisperWorklet extends AudioWorkletProcessor {
     // the turn has ended; we then emit one transferable copy — O(1) per quantum, zero steady-state alloc.
     this.buf = new Float32Array(MAX_SAMPLES)
     this.fill = 0
+    this.partialSent = false
     this.vad = makeVad()
     this.port.onmessage = (e) => {
       if (e.data === 'flush') this.emit() // stop(): flush whatever's buffered before teardown
     }
   }
+  keepable(n) {
+    if (n === 0) return false
+    let s = 0
+    for (let i = 0; i < n; i++) { const v = this.buf[i]; s += v * v }
+    if (Math.sqrt(s / n) < EMIT_RMS) return false
+    return isSpeechLikeWindow(this.buf, n)
+  }
+  emitPartial() {
+    if (this.partialSent || this.fill < PARTIAL_SAMPLES) return
+    if (!this.keepable(this.fill)) return
+    this.partialSent = true
+    const chunk = this.buf.slice(0, this.fill)
+    this.port.postMessage({ audio: chunk, partial: true }, [chunk.buffer])
+  }
   emit() {
     const n = this.fill
     this.fill = 0
+    this.partialSent = false
     this.vad.reset()
-    if (n === 0) return
-    // Drop near-silent windows: Whisper/Parakeet hallucinate caption filler ("you", "thank you") on silence.
-    let s = 0
-    for (let i = 0; i < n; i++) { const v = this.buf[i]; s += v * v }
-    if (Math.sqrt(s / n) < EMIT_RMS) return
-    // Drop steady non-speech windows (hold music / fan / street noise the 'them' 3.0x boost lifts over the
-    // VAD floor — during quiet stretches these force-emit every 6s and Whisper hallucinates on each one).
-    // Envelope-spread gate from ./vad; scale-invariant, fail-open. See isSpeechLikeWindow for the why.
-    if (!isSpeechLikeWindow(this.buf, n)) return
+    if (!this.keepable(n)) return
     const chunk = this.buf.slice(0, n)
-    this.port.postMessage({ audio: chunk }, [chunk.buffer])
+    this.port.postMessage({ audio: chunk, partial: false }, [chunk.buffer])
   }
   process(inputs) {
     const input = inputs[0]
@@ -72,6 +82,7 @@ class WhisperWorklet extends AudioWorkletProcessor {
       if (this.fill >= MAX_SAMPLES) this.emit() // hard cap → force-cut a long monologue
     }
 
+    if (!this.partialSent && this.fill >= PARTIAL_SAMPLES) this.emitPartial()
     if (this.vad.step(rms, data.length)) this.emit() // end of turn
     return true
   }

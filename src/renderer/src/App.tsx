@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useMemo, useRef, useState, lazy, Suspense, startTransition } from 'react'
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState, lazy, Suspense, startTransition } from 'react'
 import { Bar } from './components/Bar'
 import { ControlPill } from './components/ControlPill'
+import { OverlayPeek } from './components/OverlayPeek'
 import { Panel } from './components/Panel'
 import { OnboardingV2 } from './components/OnboardingExperience'
 // Heavy, rarely-first views are code-split so they don't weigh down the overlay's startup. Answer and
@@ -13,6 +14,7 @@ const AgendaView = lazy(() => import('./components/AgendaView').then((m) => ({ d
 const BrainView = lazy(() => import('./components/BrainView').then((m) => ({ default: m.BrainView })))
 const Answer = lazy(() => import('./components/Answer').then((m) => ({ default: m.Answer })))
 const Copilot = lazy(() => import('./components/Copilot').then((m) => ({ default: m.Copilot })))
+import { AgentStatus } from './components/AgentStatus'
 import { SignInWall } from './components/SignInWall'
 import { LicenseGate } from './components/LicenseGate'
 import { UpdateReadyToast } from './components/UpdateReadyToast'
@@ -23,6 +25,31 @@ import { MeetingOpenErrorToast } from './components/MeetingOpenErrorToast'
 import { QuickActions, type QuickKind } from './components/QuickActions'
 import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from './state'
 import { useWindowDrag } from './lib/window-drag'
+import {
+  AUTO_HIDE_GRACE_MS,
+  REVEAL_DWELL_MS,
+  initialAutoHideState,
+  isRevealed as isOverlayRevealed,
+  reduceAutoHide
+} from './lib/overlay-autohide'
+import {
+  overlayAllowsMinimize,
+  overlayRestsHidden,
+  overlayShowsBarOrb,
+  overlayUsesHover,
+  parseOverlayLayout,
+  shouldForceParkOnBecameIdle
+} from '@shared/overlay-chrome'
+import { resolveOrbMood } from './lib/bar-pill-orb'
+import {
+  OVERLAY_PARK_FALLBACK_MS,
+  overlayShowPeek,
+  overlaySpringAfterHide,
+  overlaySpringAfterReveal,
+  overlaySpringClassName,
+  prefersOverlayReducedMotion,
+  type OverlaySpring
+} from './lib/overlay-motion'
 import { useListen, playListenChime } from './lib/listen'
 import { transcriptToText, recapPersistAction } from './lib/transcript'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
@@ -136,13 +163,6 @@ export function saveFailureReason(err: unknown): string {
   if (/\bENOENT\b/.test(raw)) return 'your meetings folder is missing. Pick a folder in Settings, then press Save.'
   return raw
 }
-
-// How long a finished live copilot suggestion stays on screen before it auto-dismisses. Tony's call: a
-// suggestion should be glanceable and then get out of the way — 4 seconds, not lingering.
-const SUGGESTION_TTL_MS = 4000
-// Hard ceiling from when a suggestion first appears, so a stuck/never-finishing stream can't linger.
-// Tony: an assist must never stay on screen longer than 7 seconds.
-const SUGGESTION_MAX_MS = 7000
 
 // Dev-only visual seed for screenshots (?demo=answer|copilot|settings|onboarding|review). No-op in prod.
 const DEMO = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('demo') : null
@@ -284,7 +304,8 @@ export function App(): JSX.Element {
     settings?.micDeviceId,
     settings?.asrEntityBias ? entityNames : undefined,
     // MQA-270 (B7): lets the whisper prewarm skip itself on parakeet/apple installs — see useListen.
-    settings?.asrEngine
+    settings?.asrEngine,
+    settings?.asrQuality ?? 'best'
   )
   // Surface a best-quality ASR downgrade (listen.qualityDegraded — WebGPU/large model unavailable) to Settings, mirroring the
   // onEngineFallback → asrLastFallbackAt wiring just above. Patches exactly once per transition to true —
@@ -416,6 +437,10 @@ export function App(): JSX.Element {
   // Shown as a banner inside Settings — set when we redirect the user there for a specific reason
   // (e.g. no provider configured) so the redirect explains itself instead of looking broken.
   const [settingsNotice, setSettingsNotice] = useState<string | undefined>(undefined)
+  // Wave 2 failover chip: hide locally the instant the user dismisses, keyed by the event's `at`.
+  // refresh() after dismissFailoverNotice can race a concurrent focus poll and re-show the same hop
+  // from a stale getSettings snapshot — comparing `at` keeps the chip down until a NEW failover lands.
+  const [failoverDismissedAt, setFailoverDismissedAt] = useState(0)
 
   // The "Add your API key" nudge under the bar is a first-run courtesy, not a permanent nag. It shows
   // while no provider is ready, but only for 10 minutes after onboarding — then it steps aside (Settings
@@ -488,6 +513,139 @@ export function App(): JSX.Element {
   const [updateReady, setUpdateReady] = useState<{ open: boolean; version?: string; notes?: string; percent?: number }>({ open: false })
   const [newMeetingToast, setNewMeetingToast] = useState(false)
   const [visibilityToast, setVisibilityToast] = useState<VisibilityToastState>(null)
+
+  // ── Vibe-Island-style auto-hide overlay (MQA-274) ──────────────────────────────────────────────
+  // The overlay collapses to a slim top-center peek strip whenever it's idle and the pointer isn't over
+  // it, then reveals the full bar on hover or on an important event. Reveal/collapse are PURE content
+  // resizes of the always-on-top window (never show()/focus()), so the user's foreground app keeps focus
+  // — the non-activating notch contract. The pure state machine lives in lib/overlay-autohide.ts.
+  const overlayLayout = parseOverlayLayout(settings?.overlayLayout)
+  const canMinimize = overlayAllowsMinimize(overlayLayout)
+  const showBarOrb = overlayShowsBarOrb(overlayLayout, minimized)
+  const autoHideSetting = overlayUsesHover(overlayLayout)
+  // Hover chrome (hide / island) is in effect only in the plain idle bar surface: the overlay isn't
+  // collapsed to the control mini-pill, onboarding is finished, and the default bar view is showing with
+  // no answer/capture/meeting in flight. Every other surface (answers, the settings/history/review/agenda
+  // panels, the mini-pill, onboarding) stays fully shown.
+  const overlayIdle =
+    autoHideSetting &&
+    !minimized &&
+    !!settings?.onboardingDone &&
+    view === 'answer' &&
+    !ask.answer &&
+    !capturing &&
+    !listen.listening
+  // Force the bar open regardless of pointer position for the brief's "important events" — recording, an
+  // error/status toast — plus while the user is mid-interaction (has typed into the input). A live
+  // suggestion / recording start also flips `view` off the idle bar, which disables auto-hide anyway;
+  // listing them here keeps the force contract explicit and correct even if that coupling ever changes.
+  const autoHideForced =
+    listen.listening ||
+    updateReady.open ||
+    newMeetingToast ||
+    consentReminderOpen ||
+    !!visibilityToast ||
+    !!openMeetingError ||
+    input.trim().length > 0
+  const [autoHide, dispatchAutoHide] = useReducer(reduceAutoHide, autoHideSetting, initialAutoHideState)
+  useEffect(() => {
+    dispatchAutoHide({ type: 'set-enabled', enabled: overlayIdle })
+  }, [overlayIdle])
+  // Leaving Bar while the Jarvis circle is up must drop it. Do not switch layout to keep it.
+  useEffect(() => {
+    if (!minimized || canMinimize) return
+    setMinimized(false)
+    void window.toto.minimize(false)
+  }, [minimized, canMinimize])
+  useEffect(() => {
+    dispatchAutoHide({ type: 'set-forced', forced: autoHideForced })
+  }, [autoHideForced])
+  // Grace timer: whenever a collapse is pending (the pointer left, or a force event ended), commit it
+  // after the grace window. Re-entering or a new force event flips graceArmed back off, whose cleanup
+  // cancels this — so the collapse never fires while the pointer is hovering or an event holds it open.
+  useEffect(() => {
+    if (!autoHide.graceArmed) return
+    const t = setTimeout(() => dispatchAutoHide({ type: 'grace-elapsed' }), AUTO_HIDE_GRACE_MS)
+    return () => clearTimeout(t)
+  }, [autoHide.graceArmed])
+  // Reveal dwell (MQA-275): a pointer-enter on the still-collapsed peek strip only *arms* `hoverPending`;
+  // it doesn't reveal until this timer commits it. A pointer merely crossing the top edge (moving to
+  // another app, a menu-bar click) leaves before the dwell elapses, so the cleanup here cancels it and the
+  // bar never flashes open. Mirrors the grace-timer effect above, just for the opposite edge.
+  useEffect(() => {
+    if (!autoHide.hoverPending) return
+    const t = setTimeout(() => dispatchAutoHide({ type: 'dwell-elapsed' }), REVEAL_DWELL_MS)
+    return () => clearTimeout(t)
+  }, [autoHide.hoverPending])
+  // Hide/island idle: park the rest rect (do not anchorTop to islandSafeTop — that was the 103px stub).
+  const overlayRevealed = isOverlayRevealed(autoHide)
+  const [overlaySpring, setOverlaySpring] = useState<OverlaySpring>('rest')
+  // Hide pad / island peek only when fully parked. Bar stays mounted during the spring (in / out).
+  const overlayPeeked = overlayShowPeek(overlayIdle, overlayRevealed, overlaySpring)
+  const springIdleRef = useRef(false)
+  const wasRevealedRef = useRef(overlayRevealed)
+  const overlayRevealedRef = useRef(overlayRevealed)
+  overlayRevealedRef.current = overlayRevealed
+  useEffect(() => {
+    if (!overlayIdle) {
+      setOverlaySpring('rest')
+      springIdleRef.current = false
+      wasRevealedRef.current = overlayRevealed
+      return
+    }
+    const becameIdle = !springIdleRef.current
+    springIdleRef.current = true
+    const reduced = prefersOverlayReducedMotion()
+    const wasRevealed = wasRevealedRef.current
+    wasRevealedRef.current = overlayRevealed
+    if (shouldForceParkOnBecameIdle({ becameIdle, usesHover: overlayUsesHover(overlayLayout) })) {
+      // Settings → Island/Hide must park now. A leftover full bar or Settings-tall
+      // window is a fat hover trigger (Teams mute / camera / share sit under it).
+      dispatchAutoHide({ type: 'collapse-now' })
+      setOverlaySpring('rest')
+      wasRevealedRef.current = false
+      void window.toto.parkAfterHide()
+      return
+    }
+    if (becameIdle && !overlayRevealed) {
+      // Left Settings / pill to Hide with the pointer out — park, no ~100px stub spring.
+      setOverlaySpring('rest')
+      void window.toto.parkAfterHide()
+      return
+    }
+    if (overlayRevealed && !wasRevealed) {
+      void window.toto.revealWidth()
+      setOverlaySpring(overlaySpringAfterReveal(reduced))
+    } else if (!overlayRevealed && wasRevealed) {
+      const next = overlaySpringAfterHide(reduced)
+      setOverlaySpring(next)
+      if (next === 'rest') void window.toto.parkAfterHide()
+    }
+  }, [overlayIdle, overlayRevealed, overlayLayout])
+  useEffect(() => {
+    if (overlaySpring !== 'out') return
+    const t = window.setTimeout(() => {
+      if (overlayRevealedRef.current) return
+      void window.toto.parkAfterHide()
+      setOverlaySpring('rest')
+    }, OVERLAY_PARK_FALLBACK_MS)
+    return () => window.clearTimeout(t)
+  }, [overlaySpring])
+  const revealOverlay = useCallback(() => dispatchAutoHide({ type: 'pointer-enter' }), [])
+  const onOverlayPointerEnter = useCallback(() => dispatchAutoHide({ type: 'pointer-enter' }), [])
+  const onOverlayPointerLeave = useCallback(() => dispatchAutoHide({ type: 'pointer-leave' }), [])
+  // Main-process cursor watch: macOS menu bar / Dynamic Island often skips renderer mouseenter.
+  useEffect(() => {
+    return window.toto.onOverlayCursorHover?.((d) => {
+      if (d.hovering) {
+        dispatchAutoHide({ type: 'pointer-enter' })
+        dispatchAutoHide({ type: 'dwell-elapsed' })
+      } else {
+        dispatchAutoHide({ type: 'pointer-leave' })
+      }
+    })
+  }, [])
+
   // Idempotence latch for endReview() re-entry — see endReview's own comment for the exact hazard it
   // guards against. Cleared at the start of every fresh session (startListen) so a later stop can fire.
   const stoppingRef = useRef(false)
@@ -600,6 +758,13 @@ export function App(): JSX.Element {
   const manualSave = useCallback(async (): Promise<void> => {
     const a = ask.answer
     if (!a || a.streaming || !listen.lines.length) return
+    const id = String(meetingStartRef.current)
+    // Same redundancy + in-flight guards as the auto-save effect — without them a double-click (or a
+    // Save tapped while autosave is mid-IPC) writes the meeting twice under two paths.
+    if (meetingSaveIsRedundant(listen.lines.length, id, savedRef.current, claimedSavesRef.current)) return
+    if (savingRef.current) return
+    claimedSavesRef.current.add(id)
+    savingRef.current = true
     try {
       const title = defaultMeetingTitle(listen.lines, mode)
       const r = await window.toto.saveTranscript({
@@ -609,15 +774,19 @@ export function App(): JSX.Element {
         lines: listen.lines,
         recap: a.text
       })
-      savedRef.current = String(meetingStartRef.current)
+      savedRef.current = id
       setSavedPath(r.path)
       setSaveError(null)
       setSaveAttempts(0)
       setSaveGaveUp(false)
     } catch (e) {
+      // Released only on failure so a later retry (manual or auto) can still persist this meeting.
+      claimedSavesRef.current.delete(id)
       // A manual retry that fails does NOT restart the ladder, so saveGaveUp stays as it was: still true
       // after a give-up (the terminal line remains correct), still false while the ladder is running.
       setSaveError(saveFailureReason(e))
+    } finally {
+      savingRef.current = false
     }
   }, [ask.answer, listen.lines, mode])
 
@@ -661,9 +830,9 @@ export function App(): JSX.Element {
           mode,
           startedAt: meetingStartRef.current,
           lines: listen.lines,
-          // Save the summary when we have one; a keyless (errored) recap saves an empty summary so the
-          // transcript is still kept. The Review screen shows the transcript from lines either way.
-          recap: answerError ? '' : answerText
+          // Save whatever summary text we have. A trailing stream error used to wipe a finished summary
+          // off disk (answerError ? '' : …) even when tokens had already painted — keep the notes.
+          recap: answerText.trim() ? answerText : ''
         })
         savedRef.current = id // pin only on success → failure can retry
         setSavedPath(r.path)
@@ -749,29 +918,8 @@ export function App(): JSX.Element {
     setFocusSignal((x) => x + 1)
   }, [ask.answer, suggest.answer, view])
 
-  // Live copilot suggestions are ephemeral — auto-dismiss SUGGESTION_TTL_MS after one finishes so the
-  // card doesn't linger over the call. ONLY ambient auto-suggestions (answer.ephemeral) count down:
-  // user-initiated turns on this surface (typed questions, Assist, quick actions) stay until the user
-  // acts — auto-wiping an answer someone asked for is data loss. The timer arms only once streaming
-  // ends; a new/updated suggestion re-runs this effect and resets it (the cleanup clears the timer).
-  useEffect(() => {
-    const a = suggest.answer
-    if (!a || !a.ephemeral || a.streaming) return // still streaming → wait before counting down
-    const t = setTimeout(() => suggest.clear(), SUGGESTION_TTL_MS)
-    return () => clearTimeout(t)
-  }, [suggest.answer, suggest.clear])
-
-  // Hard ceiling: arm a max-age timer the moment an AMBIENT suggestion first appears (null→non-null)
-  // or its identity changes (new suggestion). Fires regardless of streaming state so a stream that
-  // never finishes still gets cleared. The cleanup cancels the timer on identity change or unmount so
-  // each new suggestion gets a fresh SUGGESTION_MAX_MS budget.
-  const suggestId = suggest.answer?.ephemeral ? suggest.answer.id : null
-  useEffect(() => {
-    if (suggestId === null) return
-    const t = setTimeout(() => suggest.clear(), SUGGESTION_MAX_MS)
-    return () => clearTimeout(t)
-  }, [suggestId, suggest.clear])
-
+  // Ambient auto-answer stays until Tony clicks (clearAnswer / back) or a new question replaces it
+  // (new user ask, or a new ambient suggestion). No TTL. No max-age. Never auto-send.
   // Subtle sound cue when an Ask answer finishes (ready) or fails (error). Fires once on the
   // streaming→done edge, gated by the soundCues setting. Live copilot suggestions stay silent (ambient).
   const prevStreamingRef = useRef(false)
@@ -813,7 +961,7 @@ export function App(): JSX.Element {
     if (!settings?.providerReady && !settings?.localSuggestReady && !settings?.localFallbackReady) return
     if (suggest.answer?.streaming) return
     const now = Date.now()
-    const everyMs = (settings?.suggestEverySec ?? 15) * 1000
+    const everyMs = (settings?.suggestEverySec ?? 8) * 1000
     if (now - lastSuggestRef.current < everyMs) return
     lastSuggestRef.current = now
     // Don't yank the user out of a panel they're actively using (Settings / Review / History / Agenda);
@@ -822,6 +970,9 @@ export function App(): JSX.Element {
       setView('copilot')
       setCollapsed(false)
     }
+    // Prefer a finished shadow suggestion (zero LLM wait) — same adopt rule as the manual "What to say
+    // next" button. Only hit the network when nothing speculative is ready for this transcript state.
+    if (tryAdoptSpeculative()) return
     suggest.run({ mode: 'suggest', transcript: listen.text() })
   }
 
@@ -928,7 +1079,11 @@ export function App(): JSX.Element {
   const unminimize = useCallback((): void => {
     setMinimized(false)
     void window.toto.minimize(false)
-  }, [])
+    if (autoHideSetting) {
+      dispatchAutoHide({ type: 'collapse-now' })
+      setOverlaySpring('rest')
+    }
+  }, [autoHideSetting])
 
   const askScreen = useCallback(
     async (
@@ -1313,8 +1468,8 @@ export function App(): JSX.Element {
 
   // Instant-suggestion machinery (settings.instantSuggestions, default on):
   // 1) While a meeting is live, pre-generate a shadow "what to say next" whenever the OTHER side has
-  //    spoken and the last speculative run is ≥15s old — so the button click can paint instantly.
-  //    Never fires while anything visible is streaming (the visible work always wins the bandwidth).
+  //    spoken and the last speculative run is older than suggestEverySec — so the button / auto-suggest
+  //    can paint instantly. Never fires while anything visible is streaming (visible work wins bandwidth).
   useEffect(() => {
     if (
       !listen.listening ||
@@ -1325,7 +1480,8 @@ export function App(): JSX.Element {
     const lines = listen.lines
     if (!lines.length || lines[lines.length - 1].speaker !== 'them') return
     const w = specWatermarkRef.current
-    if (lines.length === w.lineCount || Date.now() - w.at < 15_000) return
+    const everyMs = (settings?.suggestEverySec ?? 8) * 1000
+    if (lines.length === w.lineCount || Date.now() - w.at < everyMs) return
     if (ask.answer?.streaming || suggest.answer?.streaming || speculative.answer?.streaming) return
     const transcript = listen.text()
     specWatermarkRef.current = { lineCount: lines.length, at: Date.now(), key: transcriptStateKey(transcript) }
@@ -1337,6 +1493,7 @@ export function App(): JSX.Element {
     settings?.instantSuggestions,
     settings?.providerReady,
     settings?.localSuggestReady,
+    settings?.suggestEverySec,
     ask.answer?.streaming,
     suggest.answer?.streaming,
     speculative.answer?.streaming,
@@ -1421,22 +1578,8 @@ export function App(): JSX.Element {
   useEffect(() => {
     if (!listen.listening) setShowSpec(false)
   }, [listen.listening])
-  // 3) The speculative suggestion shown via showSpec never touches suggest.answer, so the TTL/MAX-ceiling
-  //    effects above (both keyed on suggest.answer) have nothing to arm a timer on — without this, an
-  //    instant "What to say next" could sit on screen for the rest of the call, contradicting the same
-  //    4s/7s contract documented above. Mirrors that same two-effect shape: TTL arms once the shown answer
-  //    stops streaming, MAX arms the instant showSpec itself flips true (a hard ceiling from when the user
-  //    actually started seeing it, independent of any background regeneration underneath).
-  useEffect(() => {
-    if (!showSpec || !speculative.answer || speculative.answer.streaming) return
-    const t = setTimeout(() => setShowSpec(false), SUGGESTION_TTL_MS)
-    return () => clearTimeout(t)
-  }, [showSpec, speculative.answer])
-  useEffect(() => {
-    if (!showSpec) return
-    const t = setTimeout(() => setShowSpec(false), SUGGESTION_MAX_MS)
-    return () => clearTimeout(t)
-  }, [showSpec])
+  // 3) Speculative showSpec has no timer either. It stays until Tony clicks (clearAnswer) or a new
+  //    question replaces it (liveSuggestId above, or a new user ask). Never auto-send.
 
   const whatNext = useCallback(() => {
     // Gate on the suggest task: the dominant live-meeting route (transcript present) fires mode
@@ -1704,7 +1847,7 @@ export function App(): JSX.Element {
     if (settings?.playListenChime ?? true) playListenChime()
     void listen.start(
       settings?.audioSource ?? 'both',
-      settings?.asrQuality ?? 'fast',
+      settings?.asrQuality ?? 'best',
       settings?.asrEngine ?? 'whisper',
       settings?.asrLanguage ?? 'auto'
     )
@@ -1760,7 +1903,11 @@ export function App(): JSX.Element {
     // anyway here would always dead-end in a red "No API key"-style error on the Review screen, even
     // though the user was explicitly told during onboarding that deciding on a provider later was fine.
     // Skip it and let Review show a neutral "connect a provider" affordance instead (recapUnavailable).
-    if (!settings?.providerReady) {
+    // Local-summary readiness (and the fallback safety net) count too — import already honored them;
+    // live stop used to skip and leave Notes empty when only Métis Local was ready.
+    const canSummarize =
+      !!settings?.providerReady || !!settings?.localSummaryReady || !!settings?.localFallbackReady
+    if (!canSummarize) {
       setRecapSkipped(true)
       ask.clear()
       // No recap means no recap-time auto-save fires — persist the transcript NOW (empty recap) so a
@@ -1773,23 +1920,42 @@ export function App(): JSX.Element {
       return
     }
     setRecapSkipped(false)
-    // Cascade the recap into Dust whenever it's configured, regardless of the active provider (e.g.
-    // Kimi handles everyday chat, Dust still writes the meeting notes) — no agentOverride needed, the
-    // normal think-tier resolution inside Dust already respects the user's own Thinking-agent pick.
+    // Prefer mode:'summary' (base tier, local-eligible) when Métis Local should win — live stop used to
+    // always fire mode:'recap' (think tier, out of local scope), so Routing mode → Local / Local summaries
+    // never actually ran on-device for the post-meeting notes. Import already picks summary when local.
+    const preferLocalSummary =
+      !!settings?.localSummaryReady ||
+      (!settings?.providerReady && !!settings?.localFallbackReady)
+    // Cascade into Dust whenever it's configured — UNLESS local summary is the intended path
+    // (mirrors Summarize quick action). Dust override used to silently beat Local on every stop.
     const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
     ask.run({
-      mode: 'recap',
+      mode: preferLocalSummary ? 'summary' : 'recap',
       transcript: tx,
-      // Inert server-side for mode:'recap' (the transcript alone builds the request) — but keeps
+      // Inert server-side for mode:'recap'/'summary' (the transcript alone builds the request) — but keeps
       // retryAnswer's replay-gate (ask.answer?.prompt) truthy so "Retry summary" works after a failure,
       // same reasoning as the Summarize quick action above.
       prompt: 'Summarize this meeting.',
-      ...(dustReady ? { providerOverride: 'dust' as const } : {})
+      ...(dustReady && !preferLocalSummary ? { providerOverride: 'dust' as const } : {})
     })
     // Cold Calling Mode's end-of-call coaching rides the same trigger as the recap (a real, non-empty,
     // provider-ready transcript) but is its own ask so a coaching failure can never blank the recap.
     if (mode === 'cold-call') generateColdCallCoaching()
-  }, [listen.listening, listen.text, listen.lines, ask.run, ask.clear, settings?.providerReady, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels, mode, generateColdCallCoaching])
+  }, [
+    listen.listening,
+    listen.text,
+    listen.lines,
+    ask.run,
+    ask.clear,
+    settings?.providerReady,
+    settings?.localSummaryReady,
+    settings?.localFallbackReady,
+    settings?.hasKeys,
+    settings?.dustWorkspaceId,
+    settings?.providerModels,
+    mode,
+    generateColdCallCoaching
+  ])
 
   // listen.listening flips true -> false exactly once (the moment the post-stop drain settles), so this
   // effect is what actually fires a recap armed by endReview below.
@@ -2078,6 +2244,8 @@ export function App(): JSX.Element {
     guardReviewNav(openSettingsDefault)
   }, [guardReviewNav, openSettingsDefault])
   const onBarMinimize = useCallback(() => {
+    // Hide/Island: ignore. Do not collapse to a pill and do not jump layout to Bar.
+    if (!overlayAllowsMinimize(overlayLayout)) return
     // Minimizing unmounts the entire Bar/Panel tree, including an open Review with an in-progress recap
     // edit — same dirty-guard the global Escape handler already runs before leaving Review (see
     // reviewDirtyRef's own comment above). Settings' own draft fields (API key / Dust / Bidstack inputs)
@@ -2086,8 +2254,8 @@ export function App(): JSX.Element {
       return
     }
     setMinimized(true)
-    void window.toto.minimize(true) // collapse to the control mini-pill
-  }, [])
+    void window.toto.minimize(true) // collapse to the Jarvis circle (Bar only)
+  }, [overlayLayout])
   // The bar's eye button is the visible/invisible toggle: whether the Métis window shows up on a
   // screen you share or record (contentProtection). Hidden by default — the invisible-copilot identity.
   // This is the intuitive meaning of an eye icon and what users reach for to "make it visible / hide it".
@@ -2140,20 +2308,32 @@ export function App(): JSX.Element {
     (file: string, lines: TranscriptLine[]) => {
       const transcript = transcriptToText(lines)
       if (!transcript) return // nothing to summarize (e.g. a silent recording)
-      // Cascade into Dust whenever it's configured, same as endReview's live recap — no agentOverride
-      // needed, Dust's own think-tier resolution already respects the user's Thinking-agent pick.
+      // Prefer local summary when ready (parity with live stop + Summarize). Always mode:'recap' used to
+      // force think-tier cloud and skip Métis Local entirely.
+      const preferLocalSummary =
+        !!settings?.localSummaryReady ||
+        (!settings?.providerReady && !!settings?.localFallbackReady)
       const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
       setRecapSaveError(null) // a retry must not carry the previous attempt's write failure on screen
       // Snapshot BEFORE run() — see recapGenPrevTextRef's comment above.
       recapGenPrevTextRef.current = recapGenAnswerRef.current?.text ?? ''
       recapGenRunIdRef.current = recapGen.run({
-        mode: 'recap',
+        mode: preferLocalSummary ? 'summary' : 'recap',
         transcript,
-        ...(dustReady ? { providerOverride: 'dust' as const } : {})
+        prompt: 'Summarize this meeting.',
+        ...(dustReady && !preferLocalSummary ? { providerOverride: 'dust' as const } : {})
       })
       setRecapGenTarget({ file })
     },
-    [recapGen.run, settings?.hasKeys, settings?.dustWorkspaceId, settings?.providerModels]
+    [
+      recapGen.run,
+      settings?.hasKeys,
+      settings?.dustWorkspaceId,
+      settings?.providerModels,
+      settings?.localSummaryReady,
+      settings?.localFallbackReady,
+      settings?.providerReady
+    ]
   )
 
   // Persist-on-settle effect for recapGen — mirrors the live auto-save effect above, but gated on
@@ -2195,11 +2375,12 @@ export function App(): JSX.Element {
           // Only release the target if a NEWER generation hasn't already taken it over — that one owns it
           // now and must not have it wiped out from under it by this older run settling late.
           if (recapGenRunIdRef.current === owningId) setRecapGenTarget(null)
-        } catch {
+        } catch (e) {
           // Persistence failure is rare. Deliberately do NOT clear recapGenTarget here: doing so would flip
           // Review's view back to the still-empty saved recap and the freshly generated text — the only
           // copy of it left — would vanish. Leaving the target set keeps recapGen's generated text on
           // screen instead; not retried automatically, same contract as the live-session save path.
+          setRecapSaveError(e instanceof Error ? e.message : 'Could not save the generated summary.')
         } finally {
           if (recapPersistingRef.current === owningId) recapPersistingRef.current = ''
         }
@@ -2513,11 +2694,11 @@ export function App(): JSX.Element {
           return
         }
         // Cascade into Dust whenever it's configured, regardless of the active provider — same reasoning
-        // as the meeting recap (endReview) above — UNLESS the user's own local-summary setup is ready:
-        // Métis Local already wins this request at the routing layer (localPrimary outranks cliPrimary),
-        // so forcing providerOverride:'dust' here would silently override that choice with a cloud round
-        // trip the user didn't ask for.
+        // as the meeting recap (endReview) above — UNLESS a connected CLI should win (OPERATOR.md) or
+        // the user's own local-summary setup is ready. Forcing providerOverride:'dust' here would
+        // silently override subscription-first routing with a Dust chat hop the law forbids.
         const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
+        const cliReady = !!settings?.cliConnected?.['claude-cli'] || !!settings?.cliConnected?.['codex-cli']
         const id = ask.run({
           mode: 'summary',
           transcript,
@@ -2527,7 +2708,7 @@ export function App(): JSX.Element {
           // deeper"/"Retry" are dead buttons on every Summarize answer. Also doubles as the clean label
           // Answer.tsx falls back to when no explicit `label` is set.
           prompt: 'Summarize the conversation so far.',
-          ...(dustReady && !settings?.localSummaryReady ? { providerOverride: 'dust' as const } : {})
+          ...(dustReady && !settings?.localSummaryReady && !cliReady ? { providerOverride: 'dust' as const } : {})
         })
         pendingUserRef.current = { id, q: 'Summarize the conversation so far.' } // record for follow-up continuity
       }
@@ -2545,6 +2726,7 @@ export function App(): JSX.Element {
       settings?.dustWorkspaceId,
       settings?.providerModels,
       settings?.localSummaryReady,
+      settings?.cliConnected,
       suggest.run,
       ask.run,
       ask.fail,
@@ -2696,6 +2878,7 @@ export function App(): JSX.Element {
         : recapGenLive
     return (
       <Review
+        mode={mode}
         recap={
           generatingThisPm
             ? recapGenDisplay
@@ -2717,9 +2900,10 @@ export function App(): JSX.Element {
         followupDraft={followup.answer}
         winsToggle={spotlightRefReady ? { on: includeWins, onToggle: setIncludeWins } : undefined}
         onGenerateFollowup={generateFollowup}
-        onGenerateRecap={pm ? () => { if (requireProvider()) generateSavedRecap(pm.file, pm.lines) } : undefined}
-        onRetryRecap={pm ? () => { if (requireProvider()) generateSavedRecap(pm.file, pm.lines) } : retryAnswer}
+        onGenerateRecap={pm ? () => { if (requireProvider('summary')) generateSavedRecap(pm.file, pm.lines) } : undefined}
+        onRetryRecap={pm ? () => { if (requireProvider('summary')) generateSavedRecap(pm.file, pm.lines) } : retryAnswer}
         mcpConnections={settings?.mcpConnections ?? []}
+        finishingTranscript={listen.listening}
         onOpenFolder={async () => {
           // openMeetingsFolder resolves to a non-empty error string on failure (folder missing/moved,
           // couldn't launch the OS file browser) instead of throwing — surface it instead of discarding
@@ -2879,9 +3063,8 @@ export function App(): JSX.Element {
     }
     return (
       <div ref={setRoot} {...windowDrag} className="w-full p-1.5">
-        <div className="glass flex h-[38px] w-full items-center gap-2.5 rounded-full px-4">
-          <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--color-accent)]" />
-          <span className="font-ui text-[12px] text-[color:var(--color-ink-3)]">Starting Métis…</span>
+        <div className="glass flex h-[38px] w-full items-center rounded-full px-4">
+          <AgentStatus kind="loading" size="inline" caption />
         </div>
       </div>
     )
@@ -2916,7 +3099,7 @@ export function App(): JSX.Element {
     if (view === 'settings') {
       return (
         <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
-          <Suspense fallback={<div className="cl-root rounded-2xl p-6 text-center text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>}>
+          <Suspense fallback={<div className="cl-root rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
             {settingsBody}
           </Suspense>
         </div>
@@ -2945,15 +3128,17 @@ export function App(): JSX.Element {
     if (view === 'settings') {
       return (
         <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
-          <Suspense fallback={<div className="cl-root rounded-2xl p-6 text-center text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>}>
+          <Suspense fallback={<div className="cl-root rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
             {settingsBody}
           </Suspense>
         </div>
       )
     }
     return (
-      <div ref={setRoot} {...windowDrag} className="flex w-full flex-col gap-2 p-1.5">
-        <Panel>
+      <div ref={setRoot} {...windowDrag} className="onboard-stage">
+        <div className="onboard-stripes" aria-hidden="true" />
+        <div className="onboard-stripes onboard-stripes--b" aria-hidden="true" />
+        <div className="onboard-portal-content relative z-10 flex h-full min-h-0 w-full flex-col">
           <OnboardingV2
             settings={settings}
             saveKey={saveKey}
@@ -2964,7 +3149,7 @@ export function App(): JSX.Element {
             signedIn={auth.status?.signedIn}
             signedInEmail={auth.status?.email}
           />
-        </Panel>
+        </div>
       </div>
     )
   }
@@ -3001,7 +3186,19 @@ export function App(): JSX.Element {
     <div
       ref={setRoot}
       {...(minimized ? {} : windowDrag)}
-      className={['relative flex w-full flex-col gap-2 p-1.5', showListeningChrome ? 'listening' : ''].join(' ')}
+      // Auto-hide (MQA-274): pointer-enter reveals the full bar from the peek strip; pointer-leave arms
+      // the grace collapse back to peek. No-ops unless auto-hide is actually in effect (see the reducer).
+      onMouseEnter={onOverlayPointerEnter}
+      onMouseLeave={onOverlayPointerLeave}
+      className={[
+        'relative flex w-full flex-col gap-2',
+        // Stealth (contentProtection) paints a multi-colour halo that spills ~34px past the widget via
+        // box-shadow (see .aw-hidden-rainbow). The overlay window hugs content height to ~2px, so without
+        // extra room the halo would be clipped at the window edge into a flat band. Widen the transparent
+        // margin only while invisible; the resting/visible overlay keeps its tight p-1.5.
+        overlayPeeked ? 'p-0' : (settings?.contentProtection ?? true) && !minimized ? 'p-5 stealth-glow' : 'p-1.5',
+        showListeningChrome ? 'listening' : ''
+      ].join(' ')}
     >
       {(() => {
         const toasts = (
@@ -3051,36 +3248,39 @@ export function App(): JSX.Element {
           </div>
         )
       })()}
-      {minimized ? (
+      {showBarOrb ? (
         <div className="flex w-full justify-center">
           <ControlPill
-            // Gated the same way as Bar's `listening` below: the raw listen.listening flag stays true for
-            // up to DRAIN_CEILING_MS after Stop while audio finishes draining in the background, which
-            // otherwise left the minimized pill showing the pulsing red dot + a still-counting timer for
-            // several seconds after Stop — reading as "Stop didn't work".
+            orbMood={resolveOrbMood({
+              factcheck: ask.answer?.kind === 'factcheck' && !!ask.answer?.streaming,
+              thinking: !!(ask.answer?.streaming || suggest.answer?.streaming)
+            })}
             listening={showListeningChrome}
-            paused={listen.paused}
-            // The minimized pill was the LAST place a capture degradation was visible — the pulsing red
-            // dot claimed "recording fine" while a whole side of the meeting was missing. Amber dot +
-            // tooltip; the note text carries the platform-specific cause.
             degradedNote={listen.captureDegraded?.note ?? null}
-            startedAt={meetingStartRef.current}
-            onTogglePause={onTogglePause}
-            onToggleListen={toggleListen}
-            onExpand={() => {
-              setMinimized(false)
-              void window.toto.minimize(false) // widen the window back to the full widget
-            }}
-            // Fully hide the window (a global hotkey restores it); reset so it reopens as the full widget.
-            onHide={() => {
-              setMinimized(false)
-              void window.toto.minimize(false)
-              void window.toto.hide()
-            }}
+            onExpand={unminimize}
           />
         </div>
+      ) : overlayPeeked ? (
+        // Hide: 8×2 hairline (cursor watch is the sensor). Island: visible peek (hug-width).
+        <OverlayPeek
+          rest={overlayRestsHidden(overlayLayout) ? 'hide' : 'island'}
+          onReveal={revealOverlay}
+          stealth={settings?.contentProtection ?? true}
+        />
       ) : (
         <>
+          {/* overlay-spring: one surface, compositor-only. Peek pad mounts only at rest after park. */}
+          <div
+            className={overlayIdle ? overlaySpringClassName(overlaySpring) : 'contents'}
+            onAnimationEnd={(e) => {
+              if (e.target !== e.currentTarget) return
+              if (overlaySpring === 'in') setOverlaySpring('settled')
+              if (overlaySpring === 'out' && !overlayRevealedRef.current) {
+                void window.toto.parkAfterHide()
+                setOverlaySpring('rest')
+              }
+            }}
+          >
           <Bar
             value={input}
             onChange={setInput}
@@ -3117,6 +3317,11 @@ export function App(): JSX.Element {
             onHistory={onBarHistory}
             onSettings={onBarSettings}
             onMinimize={onBarMinimize}
+            canMinimize={canMinimize}
+            orbMood={resolveOrbMood({
+              factcheck: ask.answer?.kind === 'factcheck' && !!ask.answer?.streaming,
+              thinking: !!(ask.answer?.streaming || suggest.answer?.streaming)
+            })}
             stealth={settings?.contentProtection ?? true}
             onToggleStealth={onToggleStealth}
             stealthLocked={stealthLocked}
@@ -3126,6 +3331,7 @@ export function App(): JSX.Element {
             canTogglePanel={canTogglePanel}
             focusSignal={focusSignal}
           />
+          </div>
           {/* Quick actions render as their own row UNDER the whole bar (including its toolbar), only
               while a meeting is actively being listened to — clean bar with nothing under it at launch
               and after a meeting ends (Review screen), per Tony's ask. */}
@@ -3222,6 +3428,31 @@ export function App(): JSX.Element {
               </button>
             )
           })()}
+          {/* Wave 2 — one-shot failover chip (docs/PROVIDER-ROUTING-POLICY.md). Distinct from the standing
+              dead-key banner above: this is an EVENT (primary hopped once), dismissible, and clears via
+              dismissFailoverNotice so it never nags every poll. */}
+          {settings?.lastFailover &&
+            settings.lastFailover.at > failoverDismissedAt &&
+            view !== 'settings' &&
+            !showListeningChrome &&
+            (() => {
+            const hop = settings.lastFailover!
+            const fromLabel = PROVIDERS[hop.from as keyof typeof PROVIDERS]?.label ?? hop.from
+            const toLabel = PROVIDERS[hop.to as keyof typeof PROVIDERS]?.label ?? hop.to
+            return (
+              <button
+                type="button"
+                onClick={() => {
+                  setFailoverDismissedAt(hop.at)
+                  void window.toto.dismissFailoverNotice().then(() => refresh()).catch(() => {})
+                }}
+                className="no-drag focus-ring fade-up flex items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-white/15 bg-white/[0.06] px-3 py-1.5 text-[11px] font-medium text-[color:var(--color-ink-2)]"
+              >
+                Switched from {fromLabel} to {toLabel}
+                {hop.reason === 'exhausted' ? ' (quota)' : ''}. Tap to dismiss.
+              </button>
+            )
+          })()}
           {/* Suppressed once the on-device safety net can answer: this CTA asks for an API key, and a user
               running Métis Local with no cloud provider does not need one — that install is finished, not
               half-configured. Telling them to "Add your Cloudflare API key" while the local model answers
@@ -3259,12 +3490,12 @@ export function App(): JSX.Element {
           {isPanelBody && panelOpen &&
             (view === 'settings' || DEMO === 'settings' ? (
               // Settings is its own self-contained panel — render directly under the bar (bar stays on top).
-              <Suspense fallback={<div className="cl-root rounded-2xl p-6 text-center text-[12px] text-[color:var(--cl-muted-foreground)]">Loading…</div>}>
+              <Suspense fallback={<div className="cl-root rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
                 {body}
               </Suspense>
             ) : (
               <Panel>
-                <Suspense fallback={<div className="p-4 text-center text-[12px] text-[color:var(--color-ink-3)]">Loading…</div>}>
+                <Suspense fallback={<div className="p-4"><AgentStatus kind="loading" size="hero" /></div>}>
                   {body}
                 </Suspense>
               </Panel>

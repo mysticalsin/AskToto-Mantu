@@ -18,7 +18,6 @@ import {
   KeyRound,
   Building2,
   ChevronDown,
-  Loader2
 } from 'lucide-react'
 import { DEFAULT_SHORTCUTS } from '@shared/ipc'
 import type {
@@ -32,6 +31,7 @@ import type {
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS, filterAllowedProviders } from '@shared/providers'
 import { MetisMark } from './MetisMark'
+import { AgentStatus, InlineOrb } from './AgentStatus'
 import { accelLabel, isWindows } from '../lib/keys'
 
 /** Microsoft 4-square glyph (no lucide equivalent). */
@@ -130,7 +130,7 @@ export function providerReadyCopy(
 ): { label: string; hint: string } {
   const p = PROVIDERS[provider]
   const label = p?.label ?? 'AI provider'
-  if (opts?.alreadyConnected) return { label: `${label} connected`, hint: 'already set up — nothing to paste' }
+  if (opts?.alreadyConnected) return { label: `${label} connected`, hint: 'already set up, nothing to paste' }
   if (p?.kind === 'cli') return { label: `${label} connected`, hint: 'connect it to get live answers' }
   if (p?.kind === 'dust') return { label: `${label} connected`, hint: 'finish the one-click sign-in to get live answers' }
   return { label: `${label} API key`, hint: 'add your key to get live answers' }
@@ -203,7 +203,7 @@ function ProviderOption({
             </span>
           ) : disabledReason === 'busy' ? (
             <span className="inline-flex items-center gap-1 rounded-full bg-white/[0.06] px-1.5 py-0.5 text-[10px] font-medium text-[color:var(--color-ink-2)]">
-              <Loader2 size={10} className="animate-spin" /> Checking…
+              <AgentStatus kind="loading" size="inline" caption />
             </span>
           ) : (
             badge && (
@@ -886,7 +886,7 @@ export function Onboarding({
             disabled={recoveryBusy}
             className="no-drag focus-ring inline-flex items-center gap-1.5 rounded-xl border border-[var(--color-accent)]/40 bg-[var(--color-accent-soft)] px-4 py-2 text-[12px] font-medium text-[color:var(--color-accent)] hover:brightness-110 disabled:opacity-50"
           >
-            {recoveryBusy ? <KeyRound size={13} className="animate-pulse" /> : <KeyRound size={13} />}
+            {recoveryBusy ? <InlineOrb kind="loading" /> : <KeyRound size={13} />}
             {recoveryBusy ? 'Creating new local profile…' : 'Create new local profile & retry'}
           </button>
         )}
@@ -957,7 +957,7 @@ export function Onboarding({
             busy ? 'cursor-not-allowed opacity-50' : ''
           ].join(' ')}
         >
-          {busy ? <Loader2 size={16} className="animate-spin" /> : <MsLogo size={16} />}
+          {busy ? <InlineOrb kind="connecting" /> : <MsLogo size={16} />}
           {busy ? 'Waiting for your browser…' : 'Sign in with Microsoft'}
         </button>
         {busy && (

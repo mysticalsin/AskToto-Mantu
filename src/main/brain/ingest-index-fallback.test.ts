@@ -23,7 +23,10 @@ const localBaseReadyMock = vi.hoisted(() =>
     return true
   })
 )
-vi.mock('../llm/local-routing', () => ({ localBaseReady: localBaseReadyMock }))
+vi.mock('../llm/local-routing', () => ({
+  localBaseReady: localBaseReadyMock,
+  resolveRoutingMode: (s: { routingMode?: string }) => s.routingMode ?? 'auto'
+}))
 
 const createStreamMock = vi.hoisted(() => vi.fn())
 vi.mock('../llm', () => ({ createStream: createStreamMock }))

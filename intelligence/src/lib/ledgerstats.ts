@@ -139,6 +139,18 @@ export function outcomeDistribution(deals: DealOutcomeLike[]): { open: number; w
   return { open, won, lost }
 }
 
+/** Closing rate from human-set outcomes only. Null when fewer than `minClosed` deals have closed —
+ *  never invent a percentage off a handful of points (Wave 6 / StatsView caveat). */
+export function closingRate(
+  deals: DealOutcomeLike[],
+  minClosed = 5
+): { rate: number; closed: number; won: number; lost: number } | null {
+  const { won, lost } = outcomeDistribution(deals)
+  const closed = won + lost
+  if (closed < minClosed) return null
+  return { rate: won / closed, closed, won, lost }
+}
+
 export interface DealBandLike {
   win_likelihood_band?: string | null
 }

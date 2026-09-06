@@ -3,6 +3,7 @@ import type { AskStart } from '@shared/ipc'
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp' }, shell: {} }))
 vi.mock('./auth', () => ({ authStatus: () => ({ email: null, name: null }) }))
+vi.mock('./logger', () => ({ auditLog: vi.fn(), mainLog: { warn: vi.fn(), error: vi.fn() } }))
 
 // Stub the CLI backend so kind='cli' routing can be asserted without spawning a process.
 const cliMock = vi.hoisted(() => ({ runCliStream: vi.fn(() => ({ abort: vi.fn() })) }))

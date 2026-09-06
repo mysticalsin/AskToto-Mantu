@@ -4,6 +4,7 @@ import {
   agingBuckets,
   reliabilityByOwner,
   outcomeDistribution,
+  closingRate,
   bandDistribution,
   stanceMix,
   type CommitmentLike
@@ -116,6 +117,21 @@ describe('outcomeDistribution', () => {
   it('counts won/lost/open, defaulting missing or unrecognized outcomes to open', () => {
     const deals = [{ outcome: 'open' }, { outcome: 'won' }, { outcome: 'won' }, { outcome: 'lost' }, {}, { outcome: 'unrecognized' }]
     expect(outcomeDistribution(deals)).toEqual({ open: 3, won: 2, lost: 1 })
+  })
+})
+
+describe('closingRate', () => {
+  it('returns null until at least 5 closed deals (Wave 6 honesty)', () => {
+    expect(closingRate([{ outcome: 'won' }, { outcome: 'lost' }])).toBeNull()
+    expect(
+      closingRate([
+        { outcome: 'won' },
+        { outcome: 'won' },
+        { outcome: 'won' },
+        { outcome: 'lost' },
+        { outcome: 'lost' }
+      ])
+    ).toEqual({ rate: 0.6, closed: 5, won: 3, lost: 2 })
   })
 })
 

@@ -15,8 +15,8 @@ export function MantuMark({ size = 20, round = false }: { size?: number; round?:
       src={markUrl}
       alt=""
       aria-hidden="true"
-      className={`block select-none ${round ? 'rounded-full' : 'rounded-[22%]'}`}
-      style={{ width: size, height: size }}
+      className={`block max-h-none max-w-none shrink-0 select-none ${round ? 'rounded-full' : 'rounded-[22%]'}`}
+      style={{ width: size, height: size, maxWidth: 'none', maxHeight: 'none' }}
       draggable={false}
     />
   )

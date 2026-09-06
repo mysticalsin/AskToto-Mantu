@@ -16,7 +16,13 @@ export function setSoundsEnabled(on: boolean): void {
 // Chromium's ~6-live-context cap on rapid clicking; a single shared context avoids that entirely.
 let clickCtx: AudioContext | null = null
 
-/** Very soft, short click for button presses — Apple-like tap feedback, gated by the master setting. */
+/** Tactile tap contract — not an 880Hz sine beep. Body stays under 500Hz. */
+export const CLICK_BODY_HZ = 210
+export const CLICK_OVERTONE_RATIO = 2.4
+export const CLICK_DURATION_S = 0.055
+export const CLICK_PEAK = 0.032
+
+/** Quiet, dark, tactile tap (trackpad / iPhone keyboard energy). Gated by the master setting. */
 export function playClick(): void {
   if (!soundsOn) return
   try {
@@ -27,16 +33,43 @@ export function playClick(): void {
     if (!clickCtx) clickCtx = new AudioCtx()
     const ctx = clickCtx
     if (ctx.state === 'suspended') void ctx.resume()
-    const osc = ctx.createOscillator()
-    const gain = ctx.createGain()
-    osc.type = 'sine'
-    osc.frequency.value = 880
-    gain.gain.setValueAtTime(0.0001, ctx.currentTime)
-    gain.gain.linearRampToValueAtTime(0.025, ctx.currentTime + 0.006)
-    gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.06)
-    osc.connect(gain).connect(ctx.destination)
-    osc.start(ctx.currentTime)
-    osc.stop(ctx.currentTime + 0.08)
+    const t0 = ctx.currentTime
+    const dur = CLICK_DURATION_S
+    const peak = CLICK_PEAK
+
+    const noiseLen = Math.max(1, Math.floor(ctx.sampleRate * 0.012))
+    const buf = ctx.createBuffer(1, noiseLen, ctx.sampleRate)
+    const data = buf.getChannelData(0)
+    for (let i = 0; i < noiseLen; i++) data[i] = (Math.random() * 2 - 1) * (1 - i / noiseLen)
+    const noise = ctx.createBufferSource()
+    noise.buffer = buf
+    const noiseGain = ctx.createGain()
+    noiseGain.gain.setValueAtTime(peak * 0.28, t0)
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.018)
+    noise.connect(noiseGain).connect(ctx.destination)
+    noise.start(t0)
+
+    const body = ctx.createOscillator()
+    body.type = 'triangle'
+    body.frequency.value = CLICK_BODY_HZ
+    const bodyGain = ctx.createGain()
+    bodyGain.gain.setValueAtTime(0.0001, t0)
+    bodyGain.gain.linearRampToValueAtTime(peak * 0.7, t0 + 0.004)
+    bodyGain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur)
+    body.connect(bodyGain).connect(ctx.destination)
+    body.start(t0)
+    body.stop(t0 + dur + 0.01)
+
+    const over = ctx.createOscillator()
+    over.type = 'sine'
+    over.frequency.value = CLICK_BODY_HZ * CLICK_OVERTONE_RATIO
+    const overGain = ctx.createGain()
+    overGain.gain.setValueAtTime(0.0001, t0)
+    overGain.gain.linearRampToValueAtTime(peak * 0.15, t0 + 0.003)
+    overGain.gain.exponentialRampToValueAtTime(0.0001, t0 + dur * 0.7)
+    over.connect(overGain).connect(ctx.destination)
+    over.start(t0)
+    over.stop(t0 + dur)
   } catch {
     /* audio unavailable — stay silent */
   }

@@ -1,10 +1,13 @@
 import type { AskStart } from '@shared/ipc'
 import type { ProviderKind, ProviderId } from '@shared/providers'
+import type { StreamCacheUsage } from '@shared/operator'
+
+export type { StreamCacheUsage }
 
 /** Stream callbacks the orchestrator wires to the renderer IPC bridge. */
 export interface StreamHandlers {
   onDelta: (text: string) => void
-  onDone: (u: { inputTokens?: number; outputTokens?: number }) => void
+  onDone: (u: StreamCacheUsage) => void
   onError: (message: string) => void
 }
 
@@ -45,6 +48,10 @@ export interface StreamOptions {
    */
   freshConversation?: boolean
   system: string
+  /** Stable / volatile split for provider prompt cache. `system` stays the concatenation. */
+  systemParts?: { cachedPrefix: string; volatile: string }
+  /** OpenAI cloud only: `metis:${mode}:${skillLockHash}`. No PII, no timestamp. */
+  promptCacheKey?: string
   req: AskStart
   handlers: StreamHandlers
   /**
@@ -62,6 +69,12 @@ export interface StreamOptions {
    * (openai.ts's rejection ladder) rather than failing the request.
    */
   responseFormat?: { type: 'json_object' }
+  /**
+   * Ask path only: no local API key, provider is Operator-funded. createStream then HMAC-POSTs /v1/use.
+   * Never set on brain ingest / import polish. Never a vault secret.
+   */
+  operatorBroker?: boolean
+  operator?: { operatorUrl?: string; operatorIngestSecret?: string }
 }
 
 export const errMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))

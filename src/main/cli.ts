@@ -23,6 +23,7 @@ import { createInterface } from 'node:readline'
 import { app, shell } from 'electron'
 import { existsSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
+import type { StreamCacheUsage } from '@shared/operator'
 import type { ProviderId } from '@shared/providers'
 import { PROVIDERS } from '@shared/providers'
 import type { CliActionResult, CliInstallResult } from '@shared/ipc'
@@ -460,7 +461,7 @@ export interface RunCliStreamOpts {
   idleMs?: number
   handlers: {
     onDelta: (text: string) => void
-    onDone: (u: Record<string, never>) => void
+    onDone: (u: StreamCacheUsage) => void
     onError: (message: string) => void
   }
 }
@@ -645,7 +646,7 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
         } else if (cfg.isResultLine?.(line)) {
           settled = true
           wd.clear()
-          opts.handlers.onDone({})
+          opts.handlers.onDone({ cacheStatus: 'n/a' })
           controller.abort()
         }
       }
@@ -663,7 +664,7 @@ export function runCliStream(opts: RunCliStreamOpts): { abort: () => void } {
       if (code === 0) {
         settled = true
         wd.clear()
-        opts.handlers.onDone({})
+        opts.handlers.onDone({ cacheStatus: 'n/a' })
       } else {
         const stderr = Buffer.concat(stderrChunks).toString('utf8').trim()
         fail(stderr.slice(-500) || `${label}: exited with code ${code}`)

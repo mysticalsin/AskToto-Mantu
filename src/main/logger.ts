@@ -163,6 +163,9 @@ export type AuditEvent =
   | 'transcript.imported'
   // Speaker Intelligence (Phases A/B): a Teams-transcript name backfill actually resolved >=1 name.
   | 'transcript.speakers_backfilled'
+  // Speaker Intelligence (P2): the auto-enrollment flywheel folded >=1 session cluster's buffered
+  // embeddings into a permanent voiceprint under a Teams-VTT-resolved real name (see backfillSpeakerNames).
+  | 'speaker.auto_enrolled'
   | 'brain.commitment.settled'
   | 'brain.deal.outcome'
   | 'brain.entity.renamed'
@@ -183,6 +186,7 @@ export type AuditEvent =
   | 'provider.request'
   | 'provider.failed'
   | 'provider.retry'
+  | 'provider.failover'
   | 'provider.blocked'
   | 'net.proxy'
   | 'settings.changed'
@@ -200,14 +204,29 @@ export type AuditEvent =
   | 'mcp.connected'
   | 'mcp.disconnected'
   | 'mcp.push'
-  // ClickUp's OAuth 2.1+PKCE handshake itself (main/mcp/clickupOAuth.ts) — distinct from the generic
-  // mcp.connected above, which fires once the resulting token is actually saved.
+  // ClickUp / Plane OAuth 2.1+PKCE handshake itself (main/mcp/clickupOAuth.ts, planeOAuth.ts) —
+  // distinct from the generic mcp.connected above, which fires once the resulting token is actually saved.
   | 'clickup.oauth.state_mismatch'
   | 'clickup.oauth.denied'
   | 'clickup.oauth.failed'
+  | 'plane.oauth.state_mismatch'
+  | 'plane.oauth.denied'
+  | 'plane.oauth.failed'
   | 'dust.conversation'
   | 'brain.ingest'
   | 'brain.backfill.start'
+  // Wave 3 (main/brain/consolidate.ts): one batched extraction pass actually ran. Distinct from
+  // 'brain.ingest' (per-meeting) — this is the per-PASS marker metrics.ts counts against the
+  // maxPassesPerDay budget.
+  | 'brain.consolidation'
+  // Wave 4 (main/mcp/pushQueue.ts): an outbound CRM/task-manager action was queued, retried, sent, or
+  // dead-lettered — the audit trail for the push queue's own lifecycle, separate from 'mcp.push' (one
+  // live attempt).
+  | 'mcp.push.queued'
+  | 'mcp.push.retried'
+  | 'mcp.push.dead_letter'
+  | 'mcp.push.skipped_confidential'
+  | 'mcp.push.operator_requeue'
   | 'local.runtime.start'
   | 'local.runtime.stop'
   | 'local.runtime.crash'
@@ -223,6 +242,12 @@ export type AuditEvent =
   | 'cahe.localai.seeded'
   // Support diagnosability: the user exported the log trail to a folder (metadata only — file count).
   | 'diagnostics.export'
+  | 'llm.call'
+  | 'time-saved.event'
+  | 'outlook.draft'
+  // Attack-shaped events. Metadata only: bucket/reason, never keys, serials, tokens, or transcripts.
+  | 'security.rate_limited'
+  | 'security.ipc_denied'
 
 // Lazy actor resolver — set once by the main process (wired to authStatus().email) so every audit
 // record can carry the signed-in identity without logger.ts importing auth.ts (which would be

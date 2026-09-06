@@ -74,6 +74,12 @@ run('node', ['scripts/check-local-model.mjs'])
 run('node', ['scripts/fetch-models.mjs'])
 run('npm', ['run', 'build:intelligence'])
 run('npm', ['run', 'build'])
+// Optional installer-embedded Cloudflare proxy key for the Cahê variant too (same as the mac + win
+// chains): a no-op unless the operator set METIS_PROXY_KEY, and it must ALSO set METIS_EMBED_CLOUDFLARE_KEY=1
+// for the packaging gate below to allow it. The blob ships ENCRYPTED (obfuscated, not secret — see
+// src/main/embedded-cloudflare-key.ts). check-cloudflare-key-valid proves the key the Worker will accept.
+run('node', ['scripts/embed-cloudflare-key.mjs'])
+run('node', ['scripts/check-cloudflare-key-valid.mjs'])
 run('npx', [
   'electron-builder',
   '--config',
@@ -93,5 +99,8 @@ run('node', [
   '--executable=Metis-Windows-Cahe.exe'
 ])
 run('node', ['scripts/check-cahe-package.mjs', outputDirectory])
+// Same encrypted-blob + no-plaintext-leak packaging gate the win/mac chains run. Keyless (the usual Cahê
+// build, which embeds Kimi not Cloudflare) → prints OK and moves on.
+run('node', ['scripts/check-embedded-cloudflare-key.mjs', outputDirectory])
 
 console.log(`\nCahê installer ready: ${outputDirectory}`)
