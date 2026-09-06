@@ -3497,7 +3497,7 @@ function OperatorLicenseCard(): JSX.Element {
           </div>
           {waitingForOperator ? (
             <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
-              <RefreshCw size={12} className="animate-spin" /> Waiting for Operator to confirm this seat…
+              <InlineOrb kind="connecting" /> Waiting for Operator to confirm this seat…
             </div>
           ) : (
             <>
