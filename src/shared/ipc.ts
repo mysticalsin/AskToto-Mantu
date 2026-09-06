@@ -2,6 +2,7 @@ import { z } from 'zod'
 import type { ProviderId } from './providers'
 import { LocalVisionEvidenceSchema } from './local-ai'
 import { EntityKindSchema } from './brain'
+import { OPERATOR_LICENSE_MAX } from './operator-license'
 
 export const ProviderIdSchema = z.enum([
   'anthropic',
@@ -239,6 +240,13 @@ export const IPC = {
   // Plane Connect — same shape as ClickUp: one button, OAuth 2.1 + PKCE + DCR, pinned hosted MCP URL.
   mcpPlaneConnect: 'mcp:planeConnect',
   operatorOpen: 'operator:open',
+  // Operator seat license (METIS-OP-1) pairing (PLAN.md P2.2b): local format parse + jti/last4/exp
+  // extraction only — the Worker verifies the signature and hands back tier/entitlements on the next
+  // heartbeat. An empty licenseKey clears a previously activated license.
+  operatorLicenseActivate: 'operator:licenseActivate',
+  // Read-only snapshot of Operator entitlement/integration state for Settings — mirrors licenseStatus's
+  // "local settings only, never touches the network" contract.
+  operatorStatus: 'operator:status',
   licenseActivate: 'license:activate',
   licenseStatus: 'license:status',
   licenseGate: 'license:gate',
@@ -1353,7 +1361,43 @@ export const BaseSettingsSchema = z.object({
     .refine((v) => v === '' || /^https:\/\//i.test(v), 'Operator URL must be an https:// URL')
     .default(''),
   operatorIngestSecret: z.string().default(''),
-  sendAskText: z.boolean().default(true)
+  sendAskText: z.boolean().default(true),
+  // Operator-issued seat license (METIS-OP-1, PLAN.md P2.2b). The pasted token is stored verbatim — it
+  // rides in the same settings.json blob as operatorIngestSecret above, so it gets the same at-rest
+  // encryption (store.ts's ATKENC2/safeStorage backend) without a bespoke secret store. Only the jti
+  // (licenseId) and last4 ever leave the device, via buildSeatMeta in every heartbeat/ingest — never
+  // this raw token. Empty token = no license activated.
+  operatorLicenseToken: z.string().max(OPERATOR_LICENSE_MAX).default(''),
+  /** Parsed from operatorLicenseToken at activation time (format-only; the Worker verifies the
+   *  signature). 16 lowercase hex chars, or '' when no license is activated. */
+  operatorLicenseJti: z.string().default(''),
+  operatorLicenseLast4: z.string().default(''),
+  /** Epoch ms, read straight out of the token's own (unsigned) exp claim — informational display only;
+   *  the Worker is the actual authority on whether the license is still good. */
+  operatorLicenseExpiresAt: z.number().nullable().default(null),
+  // ── Everything below is Worker-authoritative (PLAN.md P2.2b #2): written ONLY by operator-ingest.ts
+  // after a successful heartbeat, never by a renderer settings patch (stripped in settingsSet, same
+  // class as licenseValid/licenseLease above) — a compromised renderer must not be able to self-grant
+  // Operator entitlements. Persisted (not just in-memory) so a cold start before the first heartbeat can
+  // still honour the last known grant for the grace window (operator-entitlements.ts).
+  operatorTier: z.enum(['metis', 'metis-light']).nullable().default(null),
+  operatorEntitlements: z
+    .object({
+      ask: z.boolean(),
+      listen: z.boolean(),
+      recap: z.boolean(),
+      crm_push: z.boolean(),
+      operator_keys: z.boolean(),
+      intelligence: z.boolean(),
+      integrations: z.boolean()
+    })
+    .nullable()
+    .default(null),
+  /** Monotonic; 0 = no Operator integrations delivered yet. Drives operator-integrations.ts's refetch. */
+  operatorIntegrationsVersion: z.number().default(0),
+  /** Epoch ms of the last successful heartbeat that carried entitlements. 0 = never — grace window
+   *  (operator-entitlements.ts) treats this the same as "no snapshot at all". */
+  operatorEntitlementsAt: z.number().default(0)
 })
 
 export const SettingsSchema = BaseSettingsSchema.refine(
@@ -1604,7 +1648,15 @@ export const DEFAULT_SETTINGS: Settings = {
   trialStartedAt: null,
   operatorUrl: '',
   operatorIngestSecret: '',
-  sendAskText: true
+  sendAskText: true,
+  operatorLicenseToken: '',
+  operatorLicenseJti: '',
+  operatorLicenseLast4: '',
+  operatorLicenseExpiresAt: null,
+  operatorTier: null,
+  operatorEntitlements: null,
+  operatorIntegrationsVersion: 0,
+  operatorEntitlementsAt: 0
 }
 
 export const HOTKEY_ACTIONS: HotkeyAction[] = [

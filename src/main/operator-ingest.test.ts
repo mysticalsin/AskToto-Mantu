@@ -3,14 +3,18 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  operatorFundedProviders,
   operatorHeartbeat,
   recordOperatorAsk,
+  recordOperatorCrmSend,
   recordOperatorRating,
   resolveQuestionType,
   setOperatorFetchForTests,
+  setOperatorFundedProvidersForTests,
   setOperatorQueueDirForTests
 } from './operator-ingest'
 import { loadQueueState } from './operator-queue'
+import { resetOperatorIntegrationsStateForTests, setOperatorIntegrationsFetchForTests } from './operator-integrations'
 
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp', getVersion: () => '1.8.0-test' }
@@ -23,6 +27,16 @@ vi.mock('./logger', () => ({
   // auth.ts registers an audit actor at module load — a real seatMeta() now imports it for ssoEmail.
   setAuditActor: () => {},
   auditLog: () => {}
+}))
+// operator-entitlements-state.ts talks to the REAL settings store (getSettings/setSettings), which this
+// file deliberately does not mock (safeLastIndexAt's existing use of getStoreSettings relies on the real
+// store's safe defaults). Mocking just this module keeps operatorFundedProviders' operator_keys gate
+// testable without a real store round trip — recordOperatorHeartbeatResult itself is exercised directly
+// in operator-entitlements-state.test.ts.
+let operatorKeysEntitled = true
+vi.mock('./operator-entitlements-state', () => ({
+  recordOperatorHeartbeatResult: () => {},
+  operatorEntitled: (feature: string) => (feature === 'operator_keys' ? operatorKeysEntitled : true)
 }))
 
 const SETTINGS = {
@@ -46,10 +60,22 @@ let queueDir: string
 beforeEach(() => {
   queueDir = mkdtempSync(join(tmpdir(), 'operator-ingest-test-'))
   setOperatorQueueDirForTests(queueDir)
+  // A heartbeat's success path fires a fire-and-forget integrations refresh (maybeRefreshOperatorIntegrations)
+  // — stub its transport so tests never make a real network call, and reset its module-level cache/registry
+  // so one test's fetched integrations can't leak into the next.
+  setOperatorIntegrationsFetchForTests((async () =>
+    new Response('{"ok":true,"version":0,"integrations":[]}', {
+      status: 200,
+      headers: { 'content-type': 'application/json' }
+    })) as typeof fetch)
+  resetOperatorIntegrationsStateForTests()
+  operatorKeysEntitled = true // matches today's ungated behavior unless a test says otherwise
 })
 afterEach(() => {
   setOperatorFetchForTests(null)
   setOperatorQueueDirForTests(null)
+  setOperatorIntegrationsFetchForTests(null)
+  resetOperatorIntegrationsStateForTests()
   rmSync(queueDir, { recursive: true, force: true })
 })
 
@@ -210,6 +236,64 @@ describe('operatorHeartbeat v2 seat fields + queue reporting', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('ships licenseId/licenseLast4 once an Operator license is activated, omits them otherwise', async () => {
+    const bare = captureFetch()
+    await operatorHeartbeat(SETTINGS)
+    expect(bare.calls[0].body.licenseId).toBeUndefined()
+    expect(bare.calls[0].body.licenseLast4).toBeUndefined()
+
+    const licensed = captureFetch()
+    await operatorHeartbeat({ ...SETTINGS, operatorLicenseJti: 'abcdef0123456789', operatorLicenseLast4: 'Z9Z9' })
+    expect(licensed.calls[0].body.licenseId).toBe('abcdef0123456789')
+    expect(licensed.calls[0].body.licenseLast4).toBe('Z9Z9')
+  })
+
+  it('a heartbeat that reports fundedProviders still passes them through operatorFundedProviders when operator_keys is entitled', async () => {
+    operatorKeysEntitled = true
+    setOperatorFetchForTests((async () =>
+      new Response(JSON.stringify({ ok: true, fundedProviders: ['groq'] }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })) as typeof fetch)
+    const beat = await operatorHeartbeat(SETTINGS)
+    expect(beat.ok).toBe(true)
+    expect(operatorFundedProviders()).toEqual(['groq'])
+  })
+})
+
+describe('operatorFundedProviders gating on the operator_keys entitlement', () => {
+  it('passes through the last funded providers when operator_keys is entitled (or Operator is not configured)', () => {
+    setOperatorFundedProvidersForTests(['groq'])
+    operatorKeysEntitled = true
+    expect(operatorFundedProviders()).toEqual(['groq'])
+  })
+
+  it('empties the list when operator_keys is not entitled (PLAN.md P2.2b #2: Métis Light has no funded asks)', () => {
+    setOperatorFundedProvidersForTests(['groq'])
+    operatorKeysEntitled = false
+    expect(operatorFundedProviders()).toEqual([])
+  })
+})
+
+describe('recordOperatorCrmSend credentialSource', () => {
+  it('carries credentialSource through to the wire payload when the caller supplies one', async () => {
+    const f = captureFetch()
+    await recordOperatorCrmSend(SETTINGS, {
+      id: 'crm-op-1',
+      status: 'success',
+      connector: 'plane',
+      credentialSource: 'operator'
+    })
+    expect(f.calls).toHaveLength(1)
+    expect(f.calls[0].body.credentialSource).toBe('operator')
+  })
+
+  it('omits credentialSource entirely when the caller does not supply one', async () => {
+    const f = captureFetch()
+    await recordOperatorCrmSend(SETTINGS, { id: 'crm-local-1', status: 'success', connector: 'plane' })
+    expect(f.calls[0].body.credentialSource).toBeUndefined()
   })
 })
 

@@ -22,6 +22,10 @@ export interface OperatorCrmEvent {
   remoteUrl?: string
   error?: string
   ts?: number
+  /** PLAN.md P2.2b #3: which credential actually made this push — the user's own stored key, or an
+   *  Operator-supplied one used because no local key was configured. Omitted when the push path never
+   *  resolved a credential source at all (e.g. it failed before reaching a connector). */
+  credentialSource?: 'operator' | 'local'
 }
 
 export function shouldIngestCrm(confidential: boolean): boolean {
@@ -87,6 +91,7 @@ export function buildCrmIngestEvent(opts: {
   result?: unknown
   error?: string
   ts?: number
+  credentialSource?: 'operator' | 'local'
 }): OperatorCrmEvent {
   const remote = extractMcpRemoteRef(opts.result)
   return {
@@ -105,6 +110,7 @@ export function buildCrmIngestEvent(opts: {
     latencyMs: opts.latencyMs,
     remoteId: remote.id,
     remoteUrl: remote.url,
+    credentialSource: opts.credentialSource,
     error: opts.ok ? undefined : opts.error,
     ts: opts.ts
   }

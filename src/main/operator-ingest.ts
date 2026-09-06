@@ -15,6 +15,9 @@ import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
 import { mainLog } from './logger'
 import type { OperatorCrmEvent } from './operator-crm'
 import { drainOperatorQueue, enqueueOperatorItem, type QueueSendResult } from './operator-queue'
+import { operatorEntitled, recordOperatorHeartbeatResult } from './operator-entitlements-state'
+import { maybeRefreshOperatorIntegrations } from './operator-integrations'
+import { parseOperatorHeartbeatEntitlements } from '@shared/operator-entitlements'
 
 const HEARTBEAT_MS = 60_000
 const ASK_TEXT_CAP = 4_000
@@ -24,6 +27,9 @@ export interface OperatorRuntimeSettings {
   operatorIngestSecret?: string
   sendAskText?: boolean
   licenseKey?: string
+  /** Operator seat license (METIS-OP-1) jti/last4, once activated (operator-license-activate.ts). */
+  operatorLicenseJti?: string
+  operatorLicenseLast4?: string
 }
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
@@ -120,7 +126,12 @@ function seatMeta(settings: OperatorRuntimeSettings): SeatMeta {
     hostname: safeHostname(),
     ssoEmail: safeSsoEmail(),
     license: safeLicenseState(),
-    lastIndexAt: safeLastIndexAt()
+    lastIndexAt: safeLastIndexAt(),
+    // PLAN.md P2.2b #1: only present once this seat activated an Operator license — buildSeatMeta
+    // already sanitizes/validates both (16-hex jti, >=4-char last4), so an unactivated seat (both
+    // fields '') simply omits them, exactly like every other optional field here.
+    licenseId: settings.operatorLicenseJti,
+    licenseLast4: settings.operatorLicenseLast4
   })
 }
 
@@ -215,7 +226,13 @@ export function fundedProvidersFromHeartbeat(json: unknown): string[] {
   return filterFundedProviders(funded.filter((id): id is string => typeof id === 'string'))
 }
 
+/** Gated centrally here (PLAN.md P2.2b #2) so every ask-routing call site that already consults this
+ *  function (failover eligibility, "restore providers" checks, etc.) is gated for free, without each
+ *  of them separately importing/consulting the entitlements state. An unconfigured seat is never gated
+ *  (operatorEntitled('operator_keys') itself returns true in that case) — this only ever empties the
+ *  list once a real Operator is configured and its license doesn't include operator_keys. */
 export function operatorFundedProviders(): string[] {
+  if (!operatorEntitled('operator_keys')) return []
   return lastFundedProviders
 }
 
@@ -252,6 +269,13 @@ export async function operatorHeartbeat(
       dropped: queueReport.dropped
     })
     if (res.ok) lastFundedProviders = fundedProvidersFromHeartbeat(res.json)
+    // PLAN.md P2.2b #2/#3: a failed heartbeat leaves the entitlements snapshot and integrations cache
+    // untouched (recordOperatorHeartbeatResult no-ops on ok:false; the version refresh below is only
+    // ever consulted with a real reported version, never called with a guess).
+    recordOperatorHeartbeatResult(res.ok, res.json)
+    if (res.ok) {
+      maybeRefreshOperatorIntegrations(settings, parseOperatorHeartbeatEntitlements(res.json).integrationsVersion)
+    }
     return { ok: res.ok, retry: retryIdsFromHeartbeat(res.json) }
   } catch (e) {
     mainLog.warn('[operator] heartbeat failed:', e)
@@ -382,6 +406,7 @@ export async function recordOperatorCrmSend(
     ...(event.remoteId ? { remoteId: event.remoteId } : {}),
     ...(event.remoteUrl ? { remoteUrl: event.remoteUrl } : {}),
     ...(event.error ? { error: event.error.slice(0, 200) } : {}),
+    ...(event.credentialSource ? { credentialSource: event.credentialSource } : {}),
     ...seatMeta(settings)
   })
 }
