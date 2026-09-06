@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactElement } from 'react'
 import { runIntelligenceUpdateClick } from '../lib/intelligence-update'
 
 /**
@@ -9,7 +9,7 @@ export function IntelligenceUpdateButton({
   onUpdated
 }: {
   onUpdated?: () => void
-}): JSX.Element | null {
+}): ReactElement | null {
   const [updating, setUpdating] = useState(false)
   const [error, setError] = useState<string | null>(null)
   if (!window.intelligence?.backfill) return null
