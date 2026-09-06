@@ -42,11 +42,10 @@ export function ObsidianOrb({
   useLayoutEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
-    const reduced =
-      typeof window !== 'undefined' &&
-      window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
+    // Brand chrome: always animate. Windows "Show animations" off maps to
+    // prefers-reduced-motion and was freezing the Jarvis pill to one frame.
     handleRef.current = createJarvisOrb(canvas, {
-      reducedMotion: reduced,
+      reducedMotion: false,
       state: startStateRef.current,
       hostPx: BAR_PILL_VISIBLE_PX
     })
