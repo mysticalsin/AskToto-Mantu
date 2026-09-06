@@ -182,6 +182,9 @@ export const IPC = {
   // Main → renderer: start Listen because a meeting app became the foreground window.
   // Renderer must call startListen only (never toggle/stop). One fire per meeting session.
   meetingAutoStart: 'meeting:auto-start',
+  // QA-only (main registers handler only when ASKTOTO_USERDATA is set): stamp a synthetic
+  // foreground so Ultron/CDP can prove zoomIdle no-fire + zoom fire without a real meeting app.
+  meetingInjectAutoStart: 'meeting:inject-auto-start',
   shortcutFailures: 'shortcuts:failures',
   permissionsGet: 'permissions:get',
   permissionsOpenSettings: 'permissions:openSettings',
