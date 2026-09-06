@@ -114,9 +114,13 @@ describe('product sidebar (#105)', () => {
     expect(overviewEmpty).toContain('data-license-generate')
     expect(overviewEmpty).toContain('Generate license')
     expect(html).toContain('Live seats')
-    expect(html).toContain('ROI today')
-    expect(html).toContain('Cache hit')
-    expect(html).toContain('Gateway usage')
+    expect(html).toContain('Time saved')
+    expect(html).toContain('Value')
+    expect(html).toContain('data-overview-kpis')
+    expect(html).toContain('data-overview-activity')
+    expect(html).toContain('data-overview-people')
+    expect(html).not.toContain('ROI today')
+    expect(html).not.toContain('Unique Visitors')
     expect(html).not.toContain('data-login="1"')
     expect(html).toContain('#E5E7EB')
     expect(html).toContain('data-install-works')
@@ -150,14 +154,56 @@ describe('product sidebar (#105)', () => {
     expect(overview).toContain('Install → works')
     expect(overview).toContain('data-license-generate')
     expect(overview).toContain('Generate license')
+    expect(overview).toContain('data-overview-kpis')
+    expect(overview).toContain('data-overview-activity')
+    expect(overview).toContain('data-overview-people')
     expect(overview).toContain('data-geo-corner')
     expect(overview).toContain('data-geo-widget')
+    expect(overview).toContain('data-geo-tab="cities"')
     expect(overview).toContain('Longueuil')
     expect(overview).toContain('Tonys-MacBook-Pro')
+    expect(overview).toContain('data-people-row')
+    expect(overview).toContain('data-live="1"')
     expect(overview).toContain('data-license-approve="device-a"')
     expect(overview).toContain('pending')
     expect(html).toContain('data-nav="licenses"')
     expect(html).toContain('class="nav-count"')
+  })
+
+  it('lands a heartbeat on Overview people + activity with city', async () => {
+    const store = memoryStore()
+    const req = await signedRequest(
+      '/v1/heartbeat',
+      JSON.stringify({
+        os: 'darwin',
+        appVersion: '1.8.3',
+        hostname: 'Tonys-MacBook-Pro',
+        ssoEmail: 'twalteur@amaris.com',
+        license: 'licensed'
+      })
+    )
+    expect(
+      (
+        await handleRequest(req, env(), {}, {
+          store,
+          now: NOW,
+          geo: { country: 'CA', city: 'Longueuil', region: 'Quebec', lat: 45.531, lon: -73.518 }
+        })
+      ).status
+    ).toBe(200)
+    const html = await page(store)
+    const overview = html.slice(html.indexOf('data-page="overview"'), html.indexOf('data-page="realtime"'))
+    expect(overview).toContain('data-overview-people')
+    expect(overview).toContain('data-people-row')
+    expect(overview).toContain('data-live="1"')
+    expect(overview).toContain('data-city="Longueuil"')
+    expect(overview).toContain('Tonys-MacBook-Pro')
+    expect(overview).toContain('>live<')
+    expect(overview).toContain('data-overview-activity')
+    expect(overview).toMatch(/live|heartbeat/)
+    expect(overview).toContain('Longueuil')
+    expect(overview).toContain('data-geo-table="cities"')
+    expect(overview).toContain('Generate license')
   })
 })
 

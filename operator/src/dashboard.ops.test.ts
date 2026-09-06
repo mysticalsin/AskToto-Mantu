@@ -108,6 +108,10 @@ describe('ROI and licenses from real D1 ingest only', () => {
     expect(dash.roi.costToday).not.toBe('$0')
     expect(dash.gateway.rows.some((r) => r.provider === 'anthropic')).toBe(true)
     expect(dash.roi.approved).toBe(1)
+    expect(dash.roi.timeSaved).toBe('0 min')
+    expect(dash.roi.timeSavedSub).toBe('no recaps ingested')
+    expect(dash.roi.value).not.toBe('$0')
+    expect(dash.events.some((e) => e.name === 'live' && e.chips.some((c) => c.value === 'Longueuil'))).toBe(true)
   })
 
   it('does not invent cost when no asks were ingested', async () => {
@@ -117,5 +121,26 @@ describe('ROI and licenses from real D1 ingest only', () => {
     expect(dash.roi.cacheHit).toBeNull()
     expect(dash.roi.liveSeats).toBe(0)
     expect(dash.licenses.empty).toBe(true)
+    expect(dash.roi.timeSaved).toBe('0 min')
+    expect(dash.roi.value).toBe('not reported')
+  })
+
+  it('credits time saved from recap minutes and keeps value from asks', async () => {
+    const store = memoryStore()
+    await store.insertEvent({
+      id: 'recap-1',
+      ts: NOW,
+      kind: 'recap',
+      actor: 'twalteur@amaris.com',
+      device_id: 'dev-a',
+      country: 'CA',
+      detail: '60m'
+    })
+    await store.insertAsk(ask({ id: 'op-2', provider: 'anthropic', mode: 'answer' }))
+    const dash = await buildDashboard(store, 'tony.walteur@gmail.com', NOW)
+    expect(dash.roi.timeSaved).toBe('12 min')
+    expect(dash.roi.timeSavedSub).toBe('1 recaps · estimate')
+    expect(dash.roi.value).not.toBe('not reported')
+    expect(dash.roi.value).not.toBe('$0')
   })
 })

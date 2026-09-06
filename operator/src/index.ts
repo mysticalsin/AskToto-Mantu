@@ -605,7 +605,7 @@ function seatFromBody(deviceId: string, body: Record<string, unknown>, now: numb
     lon: geo.lon,
     last_index_at: lastIndexAt(body),
     hostname: sanitizeOperatorHostname(body.hostname),
-    sso_email: sanitizeOperatorSsoEmail(body.ssoEmail),
+    sso_email: sanitizeOperatorSsoEmail(body.ssoEmail ?? body.email),
     license: licenseFromIngest(body),
     license_jti: parseLicenseId(body.licenseId)
   }

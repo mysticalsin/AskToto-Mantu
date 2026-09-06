@@ -1,4 +1,5 @@
 import { aggregateCacheSlice, estimateCacheCost, formatUsdEstimate, type AskLogLine } from '../../src/shared/operator'
+import { formatSavedTime, timeSavedFromMeetings } from '../../src/shared/time-saved'
 import { CRM_STATUSES, type CrmSendRow, type CrmStatus } from './crm'
 import { missingCloudflareOverview, type CloudflareOverview } from './cloudflare'
 import {
@@ -163,6 +164,10 @@ export interface DashboardPayload {
     asksToday: number
     licensed: number
     approved: number
+    timeSaved: string
+    timeSavedSub: string
+    value: string
+    valueSub: string
     source: 'd1.asks+d1.seats'
   }
   gateway: {
@@ -396,6 +401,37 @@ function mergeEvents(stored: ConsoleEvent[], extra: ConsoleEvent[]): ConsoleEven
     if (!by.has(e.id)) by.set(e.id, e)
   }
   return [...by.values()].sort((a, b) => b.ts - a.ts).slice(0, 80)
+}
+
+function recapMeetings(events: EventRow[]): { durationMin: number }[] {
+  const out: { durationMin: number }[] = []
+  for (const e of events) {
+    if (e.kind !== 'listen' && e.kind !== 'recap') continue
+    const m = /^(\d+(?:\.\d+)?)m$/.exec((e.detail || '').trim())
+    if (m) out.push({ durationMin: Number(m[1]) })
+  }
+  return out
+}
+
+function presenceEvents(seats: SeatRow[], now: number): ConsoleEvent[] {
+  return seats.map((s) => {
+    const who = displayProfile(s)
+    return {
+      id: `seen-${s.device_id}`,
+      ts: s.last_seen,
+      name: now - s.last_seen < ONLINE_MS ? 'live' : 'seen',
+      hostname: who.hostname,
+      email: who.email,
+      chips: safeChips({
+        city: s.city,
+        region: s.region,
+        country: s.country,
+        os: s.os,
+        device: s.device_id.slice(0, 8),
+        license: s.license
+      })
+    }
+  })
 }
 
 function sanitizeVaultMeta(v: VaultKeyMeta): VaultKeyMeta {
@@ -645,6 +681,7 @@ export async function buildDashboard(
     events: mergeEvents(
       storedEvents.map((e) => eventFromStored(e, seatsById)),
       [
+        ...presenceEvents(seats, now),
         ...asks.slice(0, 40).map((a) => {
           const who = displayProfile(seatsById.get(a.device_id))
           return {
@@ -736,6 +773,13 @@ export async function buildDashboard(
         return lic.includes('licensed') || lic === 'approved' || lic === 'trial' || lic === 'grace'
       }).length,
       approved: seats.filter((s) => isApprovedSeat(s)).length,
+      timeSaved: formatSavedTime(timeSavedFromMeetings(recapMeetings(storedEvents)).savedMinutes),
+      timeSavedSub: (() => {
+        const n = recapMeetings(storedEvents).length
+        return n ? `${n} recaps · estimate` : 'no recaps ingested'
+      })(),
+      value: costToday ?? cost7d ?? 'not reported',
+      valueSub: costToday ? 'asks today · list price' : cost7d ? 'asks 7d · list price' : 'D1 asks · not reported',
       source: 'd1.asks+d1.seats'
     },
     gateway: {
