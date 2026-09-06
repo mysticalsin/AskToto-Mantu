@@ -25,6 +25,7 @@ const FILES = [
   'src/renderer/src/components/AgendaView.tsx',
   'src/renderer/src/components/UpdateReadyToast.tsx',
   'src/renderer/src/components/MeetingOpenErrorToast.tsx',
+  'src/renderer/src/components/OperatorGateToast.tsx',
   'src/renderer/src/components/NewMeetingToast.tsx',
   'src/renderer/src/components/VisibilityToast.tsx',
   'src/renderer/src/components/RecordingConsentReminder.tsx',

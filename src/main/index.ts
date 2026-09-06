@@ -328,7 +328,7 @@ import {
 import { buildBrainContext } from './brain/context'
 import { buildSystem, buildSystemParts } from './personas'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
-import { isOpenAICloudCacheEligible, promptCacheKey as makePromptCacheKey } from '@shared/operator'
+import { isOpenAICloudCacheEligible, operatorUrlConfigured, promptCacheKey as makePromptCacheKey } from '@shared/operator'
 import { loadVerifiedSkill, setModeSkillsOverlayRoot, skillLockHashForMode } from './mode-skills'
 import {
   operatorAskTransport,
@@ -343,6 +343,9 @@ import { BoundedSet } from './bounded-set'
 import { installEgressGuard } from './net/egress-guard'
 import { buildCrmIngestEvent, meetingFileHash, shouldIngestCrm } from './operator-crm'
 import { startOperatorOverlayPoll } from './operator-overlay'
+import { activateOperatorLicenseToken } from './operator-license-activate'
+import { operatorGate } from './operator-entitlements-state'
+import { operatorCrmCredentialFor, operatorIntegrationsSnapshot, registeredOperatorMcpServers, resolveCrmCredentialSource } from './operator-integrations'
 import { initLogging, mainLog, auditLog } from './logger'
 import { consumeSecurityLimit, RATE_LIMIT_USER_MESSAGE, shouldSampleIpcDeny, takeHotPath, type SecurityLimitBucket } from './security-limits'
 import { safeMeetingBasename } from './meeting-path'
@@ -3625,6 +3628,22 @@ function registerIpc(): void {
     for (const k of ['mcpConnections', 'clickupClientId', 'planeClientId']) {
       if (k in p) delete (p as Record<string, unknown>)[k]
     }
+    // Operator entitlement state (PLAN.md P2.2b #2): only a successful heartbeat
+    // (operator-entitlements-state.ts) may write these — a renderer patch must not self-grant a gated
+    // feature. The license token/jti/last4/exp are main-owned for the same reason mcpConnections is
+    // above: only IPC.operatorLicenseActivate's own parse may set them.
+    for (const k of [
+      'operatorTier',
+      'operatorEntitlements',
+      'operatorIntegrationsVersion',
+      'operatorEntitlementsAt',
+      'operatorLicenseToken',
+      'operatorLicenseJti',
+      'operatorLicenseLast4',
+      'operatorLicenseExpiresAt'
+    ]) {
+      if (k in p) delete (p as Record<string, unknown>)[k]
+    }
     const cur = getSettings()
     const wasEncrypted = cur.encryptTranscripts
     // Task MI-5 consent gate: turning publishBrainPages ON while transcripts stay encrypted writes
@@ -3822,6 +3841,84 @@ function registerIpc(): void {
     assertMainWindow(e)
     const url = (getSettings().operatorUrl || process.env.METIS_OPERATOR_URL || '').trim()
     if (/^https:\/\//i.test(url)) void shell.openExternal(url)
+  })
+  // Operator seat license (METIS-OP-1) pairing, PLAN.md P2.2b #1. Local format parse only — see
+  // operator-license-activate.ts's own header for why no secret is needed here. An empty licenseKey
+  // clears a previously activated license (e.g. the user pastes nothing and saves, or explicitly wants
+  // to unpair this seat) rather than being treated as a format error.
+  ipcMain.handle(IPC.operatorLicenseActivate, (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const raw = payload && typeof payload === 'object' && 'licenseKey' in (payload as object) ? (payload as { licenseKey: unknown }).licenseKey : payload
+    const token = typeof raw === 'string' ? raw.trim() : ''
+    if (token === '') {
+      setSettings({
+        operatorLicenseToken: '',
+        operatorLicenseJti: '',
+        operatorLicenseLast4: '',
+        operatorLicenseExpiresAt: null,
+        operatorTier: null,
+        operatorEntitlements: null,
+        operatorEntitlementsAt: 0
+      })
+      auditLog('operator.license.cleared', {})
+      return { ok: true }
+    }
+    const result = activateOperatorLicenseToken(token)
+    if (!result.ok) return result
+    setSettings({
+      operatorLicenseToken: token,
+      operatorLicenseJti: result.jti!,
+      operatorLicenseLast4: result.last4!,
+      operatorLicenseExpiresAt: result.expiresAt!,
+      // A freshly activated license has not been confirmed by the Worker yet — clear any stale
+      // tier/entitlements a PREVIOUS license left behind so Settings shows "waiting for Operator"
+      // instead of the old license's last-known grant.
+      operatorTier: null,
+      operatorEntitlements: null,
+      operatorEntitlementsAt: 0
+    })
+    auditLog('operator.license.activated', { jti: result.jti })
+    return result
+  })
+  // Read-only Operator status snapshot for Settings (local settings + in-memory integrations state
+  // only, never touches the network) — mirrors licenseStatus's own "local settings only" contract.
+  ipcMain.handle(IPC.operatorStatus, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) {
+      return {
+        configured: false,
+        tier: null,
+        entitlements: null,
+        licenseLast4: '',
+        licenseExpiresAt: null,
+        integrations: [],
+        mcpServers: []
+      }
+    }
+    const s = getSettings()
+    return {
+      configured: operatorUrlConfigured(s) && !!s.operatorIngestSecret.trim(),
+      tier: s.operatorTier,
+      entitlements: s.operatorEntitlements,
+      licenseLast4: s.operatorLicenseLast4,
+      licenseExpiresAt: s.operatorLicenseExpiresAt,
+      // Never the raw credential itself — only whether one exists and its last4, same discipline as
+      // every other credential surfaced to the renderer (licenseLast4, vault key last4s).
+      integrations: operatorIntegrationsSnapshot().integrations.map((i) => ({
+        id: i.id,
+        kind: i.kind,
+        label: i.label,
+        hasCredential: !!i.credential,
+        last4: i.credential ? i.credential.slice(-4) : ''
+      })),
+      mcpServers: registeredOperatorMcpServers().map((m) => ({
+        id: m.id,
+        kind: m.kind,
+        label: m.label,
+        tools: m.tools ?? []
+      }))
+    }
   })
   ipcMain.handle(IPC.licenseActivate, async (e, payload: unknown) => {
     assertMainWindow(e)
@@ -4285,11 +4382,28 @@ function registerIpc(): void {
     }
     const s = getSettings()
     const conn = s.mcpConnections.find((c) => c.kind === action.kind)
-    if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(conn.id)) {
+    const localReady = !!conn && conn.connected && !!conn.endpointUrl && hasMcpApiKey(conn.id)
+    // PLAN.md P2.2b #3: an Operator-supplied credential is a fallback for "no local key configured",
+    // never an override of one the user already set up — see operatorCrmCredentialFor's own doc comment
+    // for which kinds this applies to and why (clickup's OAuth-only local flow is excluded).
+    const operatorCred = localReady ? null : operatorCrmCredentialFor(action.kind)
+    if (!localReady && !operatorCred) {
       return { ok: false, error: `${mcpLabelFor(action.kind)} is no longer connected.` }
     }
-    const apiKey = getMcpApiKey(conn.id)
-    return pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, action.toolName, action.payload, conn.label)
+    const endpointUrl = localReady ? conn!.endpointUrl : operatorCred!.endpointUrl
+    const apiKey = localReady ? getMcpApiKey(conn!.id) : operatorCred!.apiKey
+    const extraHeaders = localReady ? conn!.extraHeaders : {}
+    const label = localReady ? conn!.label : operatorCred!.label
+    return pushToMcp(endpointUrl, apiKey, extraHeaders, action.toolName, action.payload, label)
+  }
+
+  /** Which credential a CRM push for this connection kind will actually use, for the ingest event's
+   *  `credentialSource` field (PLAN.md P2.2b #3). Computed the same way retryOutboundAction and
+   *  IPC.mcpPush resolve it — local always wins when usable, Operator is a fallback. */
+  function crmCredentialSourceFor(kind: string): 'operator' | 'local' {
+    const conn = getSettings().mcpConnections.find((c) => c.kind === kind)
+    const localReady = !!conn && conn.connected && !!conn.endpointUrl && hasMcpApiKey(conn.id)
+    return resolveCrmCredentialSource(localReady, !!operatorCrmCredentialFor(kind))
   }
 
   applyOperatorCrmRetries = async (ids: string[]) => {
@@ -4326,7 +4440,8 @@ function registerIpc(): void {
           attempt: one.attempts || 1,
           latencyMs: Date.now() - started,
           result: one.result,
-          error: one.error
+          error: one.error,
+          credentialSource: crmCredentialSourceFor(action.kind)
         })
       )
     }
@@ -4452,6 +4567,9 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     if (denyIfLimited('mcp-outbound')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
+    // PLAN.md P2.2b #2: CRM push is Operator-gated. Ungated when Operator isn't configured.
+    const crmGate = operatorGate('crm_push')
+    if (!crmGate.allowed) return { ok: false, error: crmGate.reason }
     const parsed = McpPushPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
     const { connectionId, meetingFile } = parsed.data
@@ -4471,16 +4589,36 @@ function registerIpc(): void {
       return { ok: false, error: 'This meeting is marked confidential — push is blocked.' }
     }
     const conn = s.mcpConnections.find((c) => c.id === connectionId)
-    if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(connectionId)) {
+    const localReady = !!conn && conn.connected && !!conn.endpointUrl && hasMcpApiKey(connectionId)
+    // PLAN.md P2.2b #3: an Operator-supplied credential is a fallback for "no local key configured",
+    // never an override of one the user already set up. Excluded for 'clickup' (see
+    // operatorCrmCredentialFor's doc comment) — that kind always requires a real local connection.
+    const operatorCred = localReady ? null : operatorCrmCredentialFor(connectionId)
+    if (!localReady && !operatorCred) {
       return { ok: false, error: `${mcpLabelFor(connectionId)} is not connected. Set it up in Settings → Mantu Intelligence first.` }
     }
+    const resolvedConn: McpConnection =
+      conn && localReady
+        ? conn
+        : {
+            id: connectionId,
+            kind: connectionId,
+            label: operatorCred!.label,
+            endpointUrl: operatorCred!.endpointUrl,
+            connected: true,
+            tools: operatorCred!.tools,
+            extraHeaders: {}
+          }
+    const credentialSource: 'operator' | 'local' = localReady ? 'local' : 'operator'
     let clickupList: ClickupList | undefined
     if (connectionId === 'clickup') {
-      const dest = await discoverListForClickup(conn)
+      // clickup is never Operator-substituted (operatorCred is always null for it), so resolvedConn ===
+      // conn here and this is exactly the pre-existing local-connection flow, unchanged.
+      const dest = await discoverListForClickup(resolvedConn)
       if (!dest.ok) return dest
       clickupList = dest.list
       const prepared = prepareClickupPush({
-        tools: conn.tools,
+        tools: resolvedConn.tools,
         list: dest.list,
         rendererTool: toolName,
         rendererArgs: args
@@ -4492,22 +4630,27 @@ function registerIpc(): void {
     // Only a tool the user actually saw and picked when the connection was tested/saved may be invoked —
     // otherwise a compromised or buggy renderer call could reach an unintended (possibly destructive) MCP
     // tool on the user's live connection. ClickUp create-task is remapped above from the saved tools list.
-    if (!conn.tools.includes(toolName)) {
-      return { ok: false, error: `Unknown ${conn.label} tool.` }
+    // An Operator-substituted connection is held to the same rule: only a tool operator-integrations.ts
+    // has actually discovered on that connection.
+    if (!resolvedConn.tools.includes(toolName)) {
+      return { ok: false, error: `Unknown ${resolvedConn.label} tool.` }
     }
-    const apiKey = getMcpApiKey(connectionId)
+    const apiKey = localReady ? getMcpApiKey(connectionId) : operatorCred!.apiKey
     const started = Date.now()
-    let r = await pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, toolName, args, conn.label)
+    let r = await pushToMcp(resolvedConn.endpointUrl, apiKey, resolvedConn.extraHeaders, toolName, args, resolvedConn.label)
     // ClickUp-only: its credential is an OAuth access token, not a pasted key that only changes when the
     // user edits it — a 401 here can mean the token simply expired. Attempt exactly one refresh + retry
     // before surfacing reconnect-required, gated on the SAME single-flight lock the interactive OAuth
     // flow uses (see clickupOAuth.ts) so a background refresh here and a user-initiated Reconnect in
-    // Settings can never both persist tokens at once.
-    if (!r.ok && (conn.kind === 'clickup' || conn.kind === 'plane') && /401|403|unauthor|forbidden/i.test(r.error || '')) {
-      const acquire = conn.kind === 'clickup' ? tryAcquireClickupTokenLock : tryAcquirePlaneTokenLock
-      const release = conn.kind === 'clickup' ? releaseClickupTokenLock : releasePlaneTokenLock
-      const refresh = conn.kind === 'clickup' ? refreshClickupToken : refreshPlaneToken
-      const product = conn.kind === 'clickup' ? 'ClickUp' : 'Plane'
+    // Settings can never both persist tokens at once. An Operator-substituted 'plane' connection has no
+    // local refresh token (getMcpRefreshToken returns '' for it), so a 401 there falls straight to the
+    // "session expired, reconnect" branch below rather than a real refresh attempt — a rejected Operator
+    // credential surfaces as a clear, actionable error instead of a crash.
+    if (!r.ok && (resolvedConn.kind === 'clickup' || resolvedConn.kind === 'plane') && /401|403|unauthor|forbidden/i.test(r.error || '')) {
+      const acquire = resolvedConn.kind === 'clickup' ? tryAcquireClickupTokenLock : tryAcquirePlaneTokenLock
+      const release = resolvedConn.kind === 'clickup' ? releaseClickupTokenLock : releasePlaneTokenLock
+      const refresh = resolvedConn.kind === 'clickup' ? refreshClickupToken : refreshPlaneToken
+      const product = resolvedConn.kind === 'clickup' ? 'ClickUp' : 'Plane'
       if (acquire()) {
         try {
           const refreshToken = getMcpRefreshToken(connectionId)
@@ -4515,7 +4658,7 @@ function registerIpc(): void {
           if (refreshed.ok && refreshed.accessToken) {
             setMcpApiKey(connectionId, refreshed.accessToken)
             setMcpRefreshToken(connectionId, refreshed.refreshToken ?? refreshToken ?? '')
-            r = await pushToMcp(conn.endpointUrl, refreshed.accessToken, conn.extraHeaders, toolName, args, conn.label)
+            r = await pushToMcp(resolvedConn.endpointUrl, refreshed.accessToken, resolvedConn.extraHeaders, toolName, args, resolvedConn.label)
           } else {
             r = { ok: false, error: `Your ${product} session expired. Reconnect ${product} in Settings.` }
           }
@@ -4531,7 +4674,7 @@ function registerIpc(): void {
     const meetingBase = meetingFile ? meetingFile.split(/[/\\]/).pop() || meetingFile : undefined
     const actionKind = inferPushActionKind(toolName)
     const crmId = outboundActionId({
-      kind: conn.kind,
+      kind: resolvedConn.kind,
       toolName,
       meetingFile: meetingBase,
       payload: args
@@ -4549,7 +4692,8 @@ function registerIpc(): void {
           attempt: 1,
           latencyMs: Date.now() - started,
           result: r.result,
-          error: r.error
+          error: r.error,
+          credentialSource
         })
       )
     }
@@ -4565,7 +4709,7 @@ function registerIpc(): void {
     if (!r.ok) {
       pushQueue.enqueue({
         id: crmId,
-        kind: conn.kind,
+        kind: resolvedConn.kind,
         action: actionKind,
         toolName,
         payload: args,
@@ -5315,6 +5459,17 @@ function registerIpc(): void {
       auditLog('capture.blocked', { reason: 'private_view', at: 'ask' })
       win?.webContents.send(IPC.streamError, { id: req.id, message: PRIVATE_VIEW_BLOCKED_MESSAGE })
       return
+    }
+    // PLAN.md P2.2b #2: recap generation is Operator-gated (a Métis Light seat's license may not
+    // include it). Only mode:'recap' is checked here — answer/vision/suggest/summary stay ungated by
+    // this call, and an unconfigured seat is never gated at all (operatorGate's own contract).
+    if (req.mode === 'recap') {
+      const gate = operatorGate('recap')
+      if (!gate.allowed) {
+        auditLog('operator.gate.blocked', { feature: 'recap' })
+        win?.webContents.send(IPC.streamError, { id: req.id, message: gate.reason || 'Recap is not available.' })
+        return
+      }
     }
     const s = getSettings()
     // Fresh-question boundary (see the state block above): a plain interactive ask outside a live meeting
@@ -6483,6 +6638,9 @@ function registerIpc(): void {
   ipcMain.handle(IPC.brainBackfill, async (e) => {
     assertBrainReader(e)
     if (!requireAuth()) return { ran: false, queued: 0, error: SIGN_IN_INDEX_COPY }
+    // PLAN.md P2.2b #2: intelligence indexing is Operator-gated. Ungated when Operator isn't configured.
+    const gate = operatorGate('intelligence')
+    if (!gate.allowed) return { ran: false, queued: 0, error: gate.reason }
     const r = await runIntelligenceIndex('click')
     auditLog('brain.backfill.start', { queued: r.queued, recapped: r.recapped, reason: 'click' })
     return r
@@ -6491,6 +6649,8 @@ function registerIpc(): void {
   ipcMain.handle(IPC.brainIntelligencePass, (e) => {
     assertBrainReader(e)
     if (!requireAuth()) throw new Error('Not signed in.')
+    const gate = operatorGate('intelligence')
+    if (!gate.allowed) return { queued: 0, error: gate.reason }
     return startIntelligencePass()
   })
   // Full rebuild: wipe the DERIVED store (entities/graph/extractions — never the source transcripts)

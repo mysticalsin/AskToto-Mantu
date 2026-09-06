@@ -28,7 +28,9 @@ export const OVERLAY_ORB_PICKER_CARDS = ['jakub', 'obsidian'] as const
 export type OverlayOrbPickerCard = (typeof OVERLAY_ORB_PICKER_CARDS)[number]
 
 export function overlayOrbPickerSelected(style: OverlayOrbStyle): OverlayOrbPickerCard {
-  return style === 'obsidian' ? 'obsidian' : DEFAULT_OVERLAY_ORB_STYLE
+  // Narrowed to the literal (equal to DEFAULT_OVERLAY_ORB_STYLE) so the return type stays
+  // OverlayOrbPickerCard without widening it to accept 'bar'.
+  return style === 'obsidian' ? 'obsidian' : 'jakub'
 }
 
 export function isOverlayOrbStyle(v: unknown): v is OverlayOrbStyle {

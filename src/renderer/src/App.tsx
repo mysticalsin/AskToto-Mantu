@@ -22,6 +22,7 @@ import { NewMeetingToast } from './components/NewMeetingToast'
 import { VisibilityToast, type VisibilityToastState } from './components/VisibilityToast'
 import { RecordingConsentReminder } from './components/RecordingConsentReminder'
 import { MeetingOpenErrorToast } from './components/MeetingOpenErrorToast'
+import { OperatorGateToast } from './components/OperatorGateToast'
 import { QuickActions, type QuickKind } from './components/QuickActions'
 import { useAsk, useAutoResize, useSettings, useAuth, type AnswerState } from './state'
 import { useWindowDrag } from './lib/window-drag'
@@ -76,6 +77,12 @@ import { ASSIST_PROMPT, buildNoDecisionPrompt, EMAIL_RECAP_PROMPT, COLD_CALL_COA
 import { isScreenCapturePermissionError } from '@shared/screen-capture'
 import { detectNoDecisionEnding } from '@shared/wrapup'
 import { transcriptStateKey } from '@shared/hash'
+import { operatorUrlConfigured } from '@shared/operator'
+import {
+  emptyOperatorEntitlements,
+  operatorGate,
+  type OperatorEntitlementSnapshot
+} from '@shared/operator-entitlements'
 import {
   FACT_CHECK_SCREEN_PROMPT,
   LOCAL_SCREEN_SUMMARY_PROMPT,
@@ -432,6 +439,9 @@ export function App(): JSX.Element {
   // funnels through openPastMeeting, so a single piece of state here covers all of them. Cleared at the
   // start of every open attempt so a stale banner never survives a subsequent success.
   const [openMeetingError, setOpenMeetingError] = useState<string | null>(null)
+  // PLAN.md P2.2b #2: set when startListen refused because this seat's Operator entitlements don't
+  // include Listen (or Operator hasn't confirmed the seat yet, or the grace window lapsed).
+  const [operatorGateNotice, setOperatorGateNotice] = useState<string | null>(null)
   // The saved-meeting file an in-flight recapGen run will persist its result to — set by
   // generateSavedRecap, cleared once the persist-on-settle effect below has written (or given up on) it.
   const [recapGenTarget, setRecapGenTarget] = useState<{ file: string } | null>(null)
@@ -545,7 +555,7 @@ export function App(): JSX.Element {
   })
   const autoHideForced = overlayHoverForced({
     updateReady: updateReady.open,
-    toast: newMeetingToast || consentReminderOpen || !!visibilityToast || !!openMeetingError,
+    toast: newMeetingToast || consentReminderOpen || !!visibilityToast || !!openMeetingError || !!operatorGateNotice,
     typedInput: input.trim().length > 0
   })
   const [autoHide, dispatchAutoHide] = useReducer(reduceAutoHide, autoHideSetting, initialAutoHideState)
@@ -1870,6 +1880,24 @@ export function App(): JSX.Element {
   }, [listen.listening, listen.setLanguage, settings?.asrLanguage])
 
   const startListen = useCallback(() => {
+    // PLAN.md P2.2b #2: Listen is Operator-gated. Checked synchronously against the already-synced
+    // `settings` object (never a fresh IPC round trip) so a refusal costs zero latency on the same-turn
+    // capture path below (MQA-285) — an allowed seat pays nothing extra, a refused one never touches the
+    // mic. Only gated when Operator is actually configured; an unconfigured seat behaves exactly as
+    // before this feature existed.
+    const operatorConfigured = operatorUrlConfigured(settings) && !!(settings?.operatorIngestSecret || '').trim()
+    const snapshot: OperatorEntitlementSnapshot | null = settings?.operatorEntitlementsAt
+      ? {
+          tier: settings.operatorTier ?? null,
+          entitlements: settings.operatorEntitlements ?? emptyOperatorEntitlements(),
+          at: settings.operatorEntitlementsAt
+        }
+      : null
+    const gate = operatorGate('listen', operatorConfigured, snapshot)
+    if (!gate.allowed) {
+      setOperatorGateNotice(gate.reason || 'Listen is not available.')
+      return
+    }
     stoppingRef.current = false // a fresh session can be stopped again — clear any latch left by the last one
     // A rapid Stop -> New meeting can start a fresh session while the previous endReview's recap is still
     // waiting on that old session's drain (pendingRecapRef) — drop it so it can't fire into (or read the
@@ -1931,7 +1959,12 @@ export function App(): JSX.Element {
     settings?.asrEngine,
     settings?.asrLanguage,
     settings?.playListenChime,
-    settings?.showLiveTranscript
+    settings?.showLiveTranscript,
+    settings?.operatorUrl,
+    settings?.operatorIngestSecret,
+    settings?.operatorTier,
+    settings?.operatorEntitlements,
+    settings?.operatorEntitlementsAt
   ])
 
   // Fires the deferred post-meeting recap once it's actually safe to — i.e. once listen.listening has
@@ -3303,6 +3336,7 @@ export function App(): JSX.Element {
             <NewMeetingToast open={newMeetingToast} onDismiss={() => setNewMeetingToast(false)} />
             <VisibilityToast state={visibilityToast} onDismiss={() => setVisibilityToast(null)} />
             <MeetingOpenErrorToast message={openMeetingError} onDismiss={() => setOpenMeetingError(null)} />
+            <OperatorGateToast message={operatorGateNotice} onDismiss={() => setOperatorGateNotice(null)} />
             <RecordingConsentReminder
               listening={showListeningChrome}
               lastReminderAt={settings?.lastConsentReminderAt ?? 0}
@@ -3327,7 +3361,8 @@ export function App(): JSX.Element {
         // fade-in mid-animation. `contents` keeps the non-widened case layout-equivalent to the old
         // bare-fragment render.
         const widen =
-          minimized && (updateReady.open || newMeetingToast || consentReminderOpen || !!visibilityToast || !!openMeetingError)
+          minimized &&
+          (updateReady.open || newMeetingToast || consentReminderOpen || !!visibilityToast || !!openMeetingError || !!operatorGateNotice)
         return (
           <div
             data-hug-width={widen || undefined}

@@ -61,4 +61,27 @@ describe('mapPushToCrmStatus + remote id', () => {
       review: false
     })
   })
+
+  it('carries credentialSource through when the caller supplies one, omits it otherwise', () => {
+    const withSource = buildCrmIngestEvent({
+      id: 'crm-2',
+      ok: true,
+      connector: 'plane',
+      action: 'create_issue',
+      attempt: 1,
+      latencyMs: 10,
+      credentialSource: 'operator'
+    })
+    expect(withSource.credentialSource).toBe('operator')
+
+    const withoutSource = buildCrmIngestEvent({
+      id: 'crm-3',
+      ok: true,
+      connector: 'plane',
+      action: 'create_issue',
+      attempt: 1,
+      latencyMs: 10
+    })
+    expect(withoutSource.credentialSource).toBeUndefined()
+  })
 })
