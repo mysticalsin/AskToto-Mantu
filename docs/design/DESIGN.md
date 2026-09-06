@@ -124,6 +124,13 @@ Hero is Generate (eyebrow + duration + primary). Issued table under it
 (last4, duration, expiry, active/revoked). Seat approve/revoke table is
 second. Fail-loud if D1 seats are empty; generator still visible.
 
+### Places (Overview corner + Realtime)
+
+Heartbeats write `request.cf` city + country. Overview **Places** is a corner
+widget (`data-geo-corner`, mini choropleth + Cities/Countries tabs), not a
+full-bleed globe. Realtime shows Live people, city Geo table (`count`,
+`unique_sessions`, `avg_duration`), and Activity. No Shoey SKUs.
+
 ### Keys `#keys`
 
 LLM vault add (last4 only) stays. **Cloudflare · AI Gateway** is Log in to

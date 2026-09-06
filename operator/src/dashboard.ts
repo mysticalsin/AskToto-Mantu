@@ -11,6 +11,7 @@ import {
   type SeatApproval
 } from './fleet'
 import { looksLikeSecret, safeChips, type SafeChip } from './redact'
+import { realtimeGeoRows, type RealtimeGeoRow } from './realtime-geo'
 import type { EventRow, OperatorStore, PulseRow, SeatRow, VaultKeyMeta } from './store'
 
 export const ONLINE_MS = 2 * 60 * 1000
@@ -168,6 +169,7 @@ export interface DashboardPayload {
     rows: { provider: string; asks: number; tokens: number | null; estimate: string | null; funded: boolean }[]
   }
   notices: { id: string; kind: string; title: string; detail: string; ts: number }[]
+  geo: RealtimeGeoRow[]
 }
 
 export interface ConsoleEvent {
@@ -820,6 +822,7 @@ export async function buildDashboard(
       workers: cloudflare.workers.filter((w) => !looksLikeSecret(w)),
       d1Name: cloudflare.d1Name && !looksLikeSecret(cloudflare.d1Name) ? cloudflare.d1Name : null,
       d1Id: cloudflare.d1Id && !looksLikeSecret(cloudflare.d1Id) ? cloudflare.d1Id : null
-    }
+    },
+    geo: realtimeGeoRows(seats)
   }
 }
