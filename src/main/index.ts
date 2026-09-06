@@ -191,9 +191,7 @@ import {
   CURSOR_WATCH_INTERVAL_MS,
   OVERLAY_LEAVE_PARK_MS,
   decideCursorWatch,
-  overlayWatchNeedsRestore,
-  overlayWatchShouldParkOnLeave,
-  overlayWatchTreatAsRevealed,
+  overlayWatchStep,
   pointInRect,
   shouldWatchOverlayCursor
 } from './island/cursor-watch'
@@ -2171,6 +2169,9 @@ function tickOverlayCursorWatch(): void {
     stopOverlayCursorWatch()
     return
   }
+  // A parked Settings-tall ghost heals here. If the heal was refused because the
+  // pointer is in the top-edge strip, fall through: that pointer is a hover, so
+  // reveal instead of stalling on the ghost until the mouse leaves.
   if (healHideGhostSlab()) return
   if (settingsSurfaceOpen) return
   const display = screen.getDisplayMatching(win.getBounds())
@@ -2179,34 +2180,40 @@ function tickOverlayCursorWatch(): void {
   const rest = hoverWatchRestRect(layout, m)
   const windowVisible = win.isVisible()
   const bounds = win.getBounds()
-  const decision = decideCursorWatch({
-    cursor: screen.getCursorScreenPoint(),
+  const cursor = screen.getCursorScreenPoint()
+  // overlayCursorWatchHovering is the OS-hover latch: main saw the cursor in the
+  // strip or on the bar since the last park. Only a latched reveal parks on leave.
+  const step = overlayWatchStep({
+    cursor,
     restRect: rest,
     revealedRect: bounds,
-    revealed: overlayWatchTreatAsRevealed(islandResting, windowVisible)
+    islandResting,
+    windowVisible,
+    osHoverSeen: overlayCursorWatchHovering,
+    hugStub: isIncompleteAskReveal(bounds)
   })
-  if (
-    overlayWatchNeedsRestore({
-      decision,
-      alreadyHovering: overlayCursorWatchHovering,
-      islandResting,
-      windowVisible,
-      hugStub: isIncompleteAskReveal(bounds)
-    })
-  ) {
+  overlayCursorWatchHovering = step.osHoverSeen
+  if (step.action === 'restore') {
     cancelOverlayLeavePark()
-    overlayCursorWatchHovering = true
     restoreBarWidth()
     notifyOverlayCursorHover(true)
-  } else if (decision === 'stay') {
-    /* never setBounds on a stay tick — that was the 40fps hide/reveal stutter */
-  } else if (overlayWatchShouldParkOnLeave({ decision, islandResting })) {
-    overlayCursorWatchHovering = false
+    const after = win.getBounds()
+    // Transition log only (a hug-stub restore can repeat per tick until the bar settles).
+    if (after.width !== bounds.width || after.height !== bounds.height || !windowVisible) {
+      mainLog.info(
+        `[overlay-watch] reveal cursor=(${cursor.x},${cursor.y}) from=${bounds.width}x${bounds.height}@(${bounds.x},${bounds.y}) to=${after.width}x${after.height}@(${after.x},${after.y}) visible=${windowVisible}`
+      )
+    }
+  } else if (step.action === 'park') {
     // Renderer spring may park first. Main parks at OVERLAY_LEAVE_PARK_MS so a
     // missed overlayParkAfterHide cannot leave 880×120 up (Ultron c74e389).
     notifyOverlayCursorHover(false)
     scheduleOverlayLeavePark()
+    mainLog.info(
+      `[overlay-watch] leave cursor=(${cursor.x},${cursor.y}) bar=${bounds.width}x${bounds.height}@(${bounds.x},${bounds.y}) park in ${OVERLAY_LEAVE_PARK_MS}ms`
+    )
   }
+  /* stay / leave-ignored: never setBounds on a stay tick — that was the 40fps hide/reveal stutter */
 }
 
 function notifyOverlayCursorHover(hovering: boolean): void {
@@ -2271,27 +2278,28 @@ function healHideGhostSlab(): boolean {
   if (isMinimized) {
     if (settingsSurfaceOpen) leaveSettingsSurface()
     isMinimized = false
-    parkOverlayAfterHideSpring()
-    return true
+    return parkOverlayAfterHideSpring()
   }
   // Parked Hide/Island with a leftover Settings-tall window (launch activate slab).
+  // A refused park (pointer in the strip) returns false so the tick can reveal.
   if (!settingsSurfaceOpen && islandResting && isSettingsTallHeight(win.getBounds().height)) {
-    parkOverlayAfterHideSpring()
-    return true
+    return parkOverlayAfterHideSpring()
   }
   return false
 }
 
-function parkOverlayAfterHideSpring(): void {
-  if (!win || win.isDestroyed() || onboardingExclusiveLive()) return
-  if (settingsSurfaceOpen) return
+/** Returns true only when the window was actually parked on this call. */
+function parkOverlayAfterHideSpring(): boolean {
+  if (!win || win.isDestroyed() || onboardingExclusiveLive()) return false
+  if (settingsSurfaceOpen) return false
   // Do not refuse park because the hover latch is stuck. If the pointer is
   // still on the bar or the top-edge strip, stay. Else Hide must go to 8×2.
-  if (pointerInIslandOrBar()) return
+  if (pointerInIslandOrBar()) return false
   cancelOverlayLeavePark()
   const layout = liveOverlayLayout()
-  if (!overlayUsesHover(layout)) return
+  if (!overlayUsesHover(layout)) return false
   const display = screen.getDisplayMatching(win.getBounds())
+  const before = win.getBounds()
   const park = parkAfterExclusiveOnboarding(layout, getDisplayMetrics(display), ISLAND_TOP_MARGIN)
   currentWidth = park.width
   islandResting = true
@@ -2311,6 +2319,12 @@ function parkOverlayAfterHideSpring(): void {
   } catch {
     /* headless */
   }
+  if (before.width !== park.width || before.height !== park.height || before.y !== park.y) {
+    mainLog.info(
+      `[overlay-watch] park ${layout} from=${before.width}x${before.height}@(${before.x},${before.y}) to=${park.width}x${park.height}@(${park.x},${park.y})`
+    )
+  }
+  return true
 }
 
 /** Hide rest is click-through so the menu bar stays usable. Island peek and the bar must receive clicks. */
