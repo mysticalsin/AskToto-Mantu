@@ -26,15 +26,17 @@ export interface MeetingAutoStartDeps {
 export interface MeetingAutoStart {
   refresh: () => void
   stop: () => void
+  /** QA / CDP: run the same decision path as the watcher onChange without a real foreground event. */
+  inject: (info: ForegroundInfo) => { fired: boolean; platform: MeetingPlatform | null }
 }
 
 export function createMeetingAutoStart(deps: MeetingAutoStartDeps): MeetingAutoStart {
   let watcher: ForegroundWatcher | null = null
   let session: MeetingAutoStartSession = emptyMeetingAutoStartSession()
 
-  const onChange = (info: ForegroundInfo): void => {
+  const apply = (info: ForegroundInfo): { fired: boolean; platform: MeetingPlatform | null } => {
     const settings = deps.getSettings()
-    if (!meetingAutoStartWatcherEligible(settings)) return
+    if (!meetingAutoStartWatcherEligible(settings)) return { fired: false, platform: null }
     const decision = decideMeetingAutoStart({
       info,
       settings,
@@ -42,11 +44,21 @@ export function createMeetingAutoStart(deps: MeetingAutoStartDeps): MeetingAutoS
       session
     })
     session = decision.session
-    if (!decision.fire || !decision.platform) return
+    if (!decision.fire || !decision.platform) {
+      return { fired: false, platform: decision.platform }
+    }
     deps.log?.(`auto-start Listen for ${decision.platform}`)
     deps.audit?.('meeting.auto_start', { platform: decision.platform })
     deps.startListen(decision.platform)
+    return { fired: true, platform: decision.platform }
   }
+
+  const onChange = (info: ForegroundInfo): void => {
+    apply(info)
+  }
+
+  const inject = (info: ForegroundInfo): { fired: boolean; platform: MeetingPlatform | null } =>
+    apply(info)
 
   const stop = (): void => {
     watcher?.stop()
@@ -65,5 +77,5 @@ export function createMeetingAutoStart(deps: MeetingAutoStartDeps): MeetingAutoS
     watcher = deps.startWatcher(onChange)
   }
 
-  return { refresh, stop }
+  return { refresh, stop, inject }
 }

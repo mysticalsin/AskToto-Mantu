@@ -7095,6 +7095,36 @@ function registerIpc(): void {
     return { ok: true, path: dir }
   })
 
+  // QA-only: synthetic foreground for Ultron CDP (zoomIdle no-fire + zoom fire). Registered ONLY
+  // when ASKTOTO_USERDATA isolates the profile — never expose this fire path in production.
+  if (process.env.ASKTOTO_USERDATA) {
+    ipcMain.handle(IPC.meetingInjectAutoStart, (e, payload: unknown) => {
+      assertMainWindow(e)
+      if (!process.env.ASKTOTO_USERDATA) {
+        return { ok: false as const, error: 'meeting inject requires ASKTOTO_USERDATA' }
+      }
+      const platform =
+        payload && typeof payload === 'object' && 'platform' in payload
+          ? (payload as { platform?: unknown }).platform
+          : undefined
+      const fixtures: Record<string, { windowId: string; title: string; pid: number }> = {
+        zoom: { windowId: 'us.zoom.xos', title: 'Zoom Meeting', pid: 4242 },
+        teams: { windowId: 'com.microsoft.teams2', title: 'Microsoft Teams', pid: 4243 },
+        meet: {
+          windowId: 'com.google.Chrome',
+          title: 'Meet - meet.google.com - Google Chrome',
+          pid: 4244
+        },
+        idle: { windowId: 'com.apple.finder', title: 'Finder', pid: 1 }
+      }
+      if (typeof platform !== 'string' || !(platform in fixtures)) {
+        return { ok: false as const, error: 'bad payload: platform must be zoom|teams|meet|idle' }
+      }
+      const result = meetingAutoStart.inject(fixtures[platform])
+      return { ok: true as const, fired: result.fired, platform: result.platform }
+    })
+  }
+
   // --- Listening state (tray icon + Dust conversation reset + power-save block) ---
   ipcMain.handle(IPC.listeningState, (e, on: unknown) => {
     assertMainWindow(e)

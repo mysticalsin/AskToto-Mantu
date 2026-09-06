@@ -83,6 +83,36 @@ describe('createMeetingAutoStart', () => {
     expect(started).toEqual(['teams'])
   })
 
+
+  it('inject fires zoom once, clears on idle, then fires zoom again', () => {
+    let listening = false
+    const started: string[] = []
+    const ctl = createMeetingAutoStart({
+      startWatcher: () => ({ stop: () => {}, current: () => null, healthy: () => true }),
+      getSettings: () => ready(),
+      isListening: () => listening,
+      startListen: (platform) => {
+        started.push(platform)
+        listening = true
+      }
+    })
+    ctl.refresh()
+
+    const zoom = { windowId: 'us.zoom.xos', title: 'Zoom Meeting', pid: 4242 }
+    const idle = { windowId: 'com.apple.finder', title: 'Finder', pid: 1 }
+
+    expect(ctl.inject(zoom)).toEqual({ fired: true, platform: 'zoom' })
+    expect(started).toEqual(['zoom'])
+    // Same session: no second fire even if listening flips off.
+    listening = false
+    expect(ctl.inject(zoom)).toEqual({ fired: false, platform: 'zoom' })
+    expect(started).toEqual(['zoom'])
+
+    expect(ctl.inject(idle)).toEqual({ fired: false, platform: null })
+    expect(ctl.inject(zoom)).toEqual({ fired: true, platform: 'zoom' })
+    expect(started).toEqual(['zoom', 'zoom'])
+  })
+
   it('stops the watcher when the master switch or consent turns off', () => {
     let settings = ready()
     const stop = vi.fn()

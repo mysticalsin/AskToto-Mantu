@@ -47,4 +47,18 @@ describe('meeting auto-start wiring (foreground-watcher, no Accessibility)', () 
     expect(permsSrc).not.toMatch(/[Aa]ccessibility/)
     expect(permsSrc).not.toMatch(/isTrustedAccessibilityClient/)
   })
+
+  it('QA injectMeetingAutoStart IPC is gated on ASKTOTO_USERDATA', () => {
+    const ipcSrc = readFileSync(join(root, 'src/shared/ipc.ts'), 'utf8')
+    const preloadSrc = readFileSync(join(root, 'src/preload/index.ts'), 'utf8')
+    expect(ipcSrc).toContain("meetingInjectAutoStart: 'meeting:inject-auto-start'")
+    expect(preloadSrc).toContain('injectMeetingAutoStart')
+    // Contract note: inject handler gated ASKTOTO_USERDATA — never expose fire path in production.
+    expect(indexSrc).toMatch(
+      /if \(process\.env\.ASKTOTO_USERDATA\) \{\s*ipcMain\.handle\(IPC\.meetingInjectAutoStart/
+    )
+    const at = indexSrc.indexOf('IPC.meetingInjectAutoStart')
+    expect(at).toBeGreaterThan(-1)
+    expect(indexSrc.slice(Math.max(0, at - 350), at)).toContain('ASKTOTO_USERDATA')
+  })
 })

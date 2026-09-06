@@ -399,6 +399,13 @@ const api = {
   onHotkey: (cb: (a: HotkeyAction) => void): Unsub => sub(IPC.hotkey, cb),
   onMeetingAutoStart: (cb: (d: { platform: 'zoom' | 'teams' | 'meet' }) => void): Unsub =>
     sub(IPC.meetingAutoStart, cb),
+  // QA-only fire path: main registers the handler only when ASKTOTO_USERDATA is set.
+  injectMeetingAutoStart: (payload: {
+    platform: 'zoom' | 'teams' | 'meet' | 'idle'
+  }): Promise<
+    | { ok: true; fired: boolean; platform: 'zoom' | 'teams' | 'meet' | null }
+    | { ok: false; error: string }
+  > => ipcRenderer.invoke(IPC.meetingInjectAutoStart, payload),
 
   onUpdateReady: (cb: (d: { version?: string; notes?: string }) => void): Unsub => sub(IPC.updateDownloaded, cb),
   onUpdateProgress: (cb: (d: { percent?: number }) => void): Unsub => sub(IPC.updateProgress, cb),
