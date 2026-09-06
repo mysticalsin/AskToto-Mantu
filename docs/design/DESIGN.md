@@ -65,25 +65,44 @@ motion:
 Métis = five-star constellation-M glyph (own SVG), dots + thin connectors, `text-primary`.
 NOT Cluely's logo. Wordmark "Métis" in Geist medium, tracking-tight.
 
-## Operator (Tony 6 Sep 2026 — Overview · Licenses · Keys)
+## Operator — Shoey OpenPanel bar, Métis seats (Fable lock 6 Sep 2026)
 
-Separate surface from overlay chrome. Worker `operator/`, live host
-`https://metis-operator.tony-walteur.workers.dev/`. **Cloudflare Access stays**
-(302 + email-code only; two Tony emails). No homemade password form.
+Source of truth for **chrome / density / placement**: WebsiteCloner
+Shoey OpenPanel (`…/WebsiteCloner`, compare
+`http://localhost:3112/demo/shoey/realtime` and `/overview` `/events`
+`/sessions` and the other sections). Visual refs: paired TopLists +
+corner world map on overview; full WorldMap + city/country pills +
+LiveFeed on realtime.
 
-This slice is a **thin Operator tip**: Generate license on Overview + Licenses,
-platform keys after a seat activates that string in Métis Identity. Do not
-merge the 476-file Keys-gateway stack. Ultron green-lit Operator-only
-`wrangler` / API deploy to `metis-operator`. No pack. No merge. No Latest.
-EXE/DMG/Native → Latest only after Bob QA + Ultron approve.
+Source of truth for **numbers**: Métis D1 heartbeats, seats, licenses,
+recaps, asks. **Never** OpenPanel pageviews, Unique Visitors, sneakers,
+or invented people.
 
-### Feel (LIVE rail + Licenses)
+Live host: `https://metis-operator.tony-walteur.workers.dev/`.
+**Cloudflare Access stays** (302 + email-code; two Tony emails). Thin
+Worker tip only. Do not merge fat PR151. Generate license stays P0.
+
+### Shoey → Métis dictionary (do not ship the left column)
+
+| Shoey / OpenPanel | Métis Operator |
+| --- | --- |
+| Unique visitors / pageviews | Live seats (heartbeat &lt; 2 min) |
+| Sessions / day | Real seats last seen 24h |
+| Duration | Seat first_seen → last_seen / recap minutes |
+| Top pages / referrers | Top devices + event kinds |
+| Countries / Regions / Cities | `request.cf` city geo on heartbeat |
+| Live visitors | People: hostname, SSO, device, city, license |
+| Events feed | Heartbeat / ask / recap / listen / crm / seen |
+| Revenue | Value = D1 ask cost (`not reported`, never `$0`) |
+| Time on site | Time saved = `timeSavedFromMeetings` recaps |
+
+### Feel
 
 Ops console. Dark-first two-theme. Geist + Geist Mono. Hairline cards,
-uppercase mono eyebrows, one blue accent. Access chip in the rail. LIVE
-count in the top bar. No purple-gradient hero.
+uppercase mono eyebrows, one blue accent `#2563EB`. Access chip in the
+rail. LIVE count in the top bar. No purple-gradient hero. No SKUs.
 
-Rail matches live workers.dev plus Licenses:
+Rail (LIVE + Licenses, no leftover Users/Map):
 
 `Overview · Realtime · Events · Sessions · Licenses · Notifications · Keys · Settings`
 
@@ -96,135 +115,94 @@ Rail matches live workers.dev plus Licenses:
 | `ink` / `ink2` | `rgba(255,255,255,0.94)` / `0.55` | Title / secondary |
 | type | Geist 12/13, Mono 10 uppercase eyebrows | Dense ops |
 
-Signature: the **once-string**. After Generate, a mono license (`METIS-OP-1.…`)
-in a hairline strip with Copy. Shown once. last4 only after reload. Never a
-secret in HTML.
+Signature: the **once-string**. After Generate, a mono license
+(`METIS-OP-1.…`) in a hairline strip with Copy. Shown once. last4 after
+reload. Never a secret in HTML.
 
-### Overview `#overview` — Shoey bar, Métis content (Fable 6 Sep 2026)
+### Overview `#overview`
 
-Source of truth for chrome: WebsiteCloner Shoey OpenPanel
-(`…/WebsiteCloner`, demo `/demo/shoey` + `/demo/shoey/overview`).
-Parity is **layout and density**, not pageviews. Every number is a Métis
-seat, heartbeat, license, recap, or D1 ask. Never Unique Visitors,
-sneakers, or invented people.
-
-Job: Tony reads the fleet in one glance, sees who is on and where, and
-can mint a license without leaving the page.
+Job: Tony reads the fleet in one glance and can mint a license.
 
 ```
-┌ rail: Métis · Access ──────────┐  Overview                     LIVE n
-│ Overview  Realtime  Events     │  ┌ Live seats │ Time saved │ Value ┐
-│ Sessions  Licenses             │  │     2      │   45 min   │ $1.20 │
-│ Notifications  Keys  Settings  │  └─────────────────────────────────┘
-└────────────────────────────────┘  ┌ Activity (dense) ┐ ┌ Places ──┐
-                                    │ live · city · os │ │ Cities   │
-                                    │ ask  · provider  │ │ Regions  │
-                                    │ seen · license   │ │Countries │
-                                    └──────────────────┘ │ [corner  │
-                                    ┌ People ──────────┐ │  map]    │
-                                    │ host · city · id │ └──────────┘
-                                    └──────────────────┘
-                                    ┌ Install → works + Generate ───┐
-                                    └───────────────────────────────┘
+┌ Live seats │ Time saved │ Value ─────────────────────────────────┐
+┌ Top devices (bars) ─────────┐ ┌ Top events (bars) ──────────────┐
+│ host · city · live          │ │ heartbeat / ask / recap counts  │
+└─────────────────────────────┘ └─────────────────────────────────┘
+┌ Activity (dense LiveFeed) ──┐ ┌ Places TopList + CORNER map ───┐
+│ name · profile · city chips │ │ Cities / Regions / Countries   │
+│ time                        │ │ count · sessions · avg + bar   │
+└─────────────────────────────┘ │ [CountryMap corner — not full] │
+┌ People: host · city · device · SSO · license · live/idle ───────┐
+┌ Install → works + Generate license ─────────────────────────────┐
 ```
 
-#### 1) Glance KPI row (exactly three)
+1. **Glance KPIs (exactly three).** Live seats / Time saved / Value.
+   Empty: `0` + “heartbeat &lt; 2 min”; `0 min` + “no recaps ingested”;
+   `not reported` (never `$0`).
+2. **Paired TopLists** (`data-overview-toplists`). Devices + event kinds
+   with inline bars. Métis seats, not pages.
+3. **Places corner** (`data-geo-corner`). Tabs Cities / Regions /
+   Countries. Columns `{ count, unique_sessions, avg_duration }`. Mini
+   CountryMap on the **right** (`data-geo-widget`). Never full-bleed.
+4. **Activity** (`data-overview-activity`). Shoey LiveFeed density:
+   name, profile (hostname/email), city/device/os chips, relative time.
+   When seats exist, not an empty card.
+5. **People** (`data-overview-people`). Live pill only if &lt; 2 min.
+   Last-seen still lists. City from `request.cf`.
+6. **Generate** stays on this page and `#licenses`.
 
-| Card | Source | Empty |
-| --- | --- | --- |
-| **Live seats** | Real seats with `last_seen` &lt; 2 min | `0` + “heartbeat &lt; 2 min” |
-| **Time saved** | Recap / listen events via `timeSavedFromMeetings` | `0 min` + “no recaps ingested” |
-| **Value** | D1 ask cost today, else 7d (`formatUsdEstimate`) | `not reported` — never `$0` |
+### Realtime `#realtime`
 
-No 8-card KPI wall. No Unique sessions / pageviews. Numbers are large
-(28–32px), eyebrow mono, one spark on Live only.
+Compare `/demo/shoey/realtime`. Full map, not a corner.
 
-#### 2) Places — corner map + Top lists (Shoey)
+```
+┌ WorldMap (data-world-map) · city dots + country pills · LIVE n ─┐
+└─────────────────────────────────────────────────────────────────┘
+┌ LiveFeed (data-live-feed) ──┐ ┌ GeoTable City/Regions/Countries ┐
+│ dense rows, city on chips   │ │ Shoey city JSON columns         │
+└─────────────────────────────┘ └─────────────────────────────────┘
+┌ People with city ───────────────────────────────────────────────┐
+```
 
-Overview **Places** is a **corner** widget (`data-geo-corner`), never
-full-bleed. Left: Top lists tabs **Cities / Regions / Countries**.
-Right: mini choropleth (`data-geo-widget`). City rows are Shoey
-`{ country, city, count, unique_sessions, avg_duration }` from
-`request.cf` on heartbeat. No client GPS. No IP. Regions empty until the
-next heartbeat writes `cf.region`.
-
-Realtime `#realtime` is **WorldMap + LiveFeed + GeoTable** (full map,
-city/country pills). Overview Places stays a **corner**. Same city JSON.
-
-`GET /v1/admin/realtime.geo.json` (Access) returns
+`GET /v1/admin/realtime.geo.json` (Access):
 `{ ok:true, geo:[{ country, city, count, unique_sessions, avg_duration }] }`.
-City required. Country-only seats are dropped. Unauth **401**.
+City required. Unauth **401**.
 
-#### 3) Activity — usable, Métis-dense
+### Events `#events`
 
-`data-overview-activity`. Feed is seats, not pageviews:
+Shoey table chrome: Created at · Name · Profile · City · Device · OS.
+Search. HMAC ingest only. Token-shaped values dropped. Not page paths.
 
-- `live` / `seen` from last heartbeat (city, device, OS, license)
-- `heartbeat` / `ask` / `recap` / `listen` / `crm` from D1
-- issued-license last4 never as a secret; chips only
+### Sessions `#sessions`
 
-When the fleet has seats, Activity is **not** an empty card. If nobody
-is inside the 2-min window, show last-seen rows so the page is not
-sparse. Token-shaped values stay redacted.
-
-#### 4) People — live E2E
-
-`data-overview-people`. Compact rows: computer, city, device, SSO, OS,
-license, live/idle. Heartbeat `{ hostname, email, licenseId }` +
-`request.cf.{country,city,region}` must land here. Live pill only when
-`last_seen` &lt; 2 min. Idle last-seen still lists so People is not `0`
-while the Mac is closed.
-
-Generate license stays on Overview **and** `#licenses`. Same form:
-duration 1 / 7 / 30 / 90 / 365 → POST `/v1/admin/licenses/generate` →
-once-string. Unauth **401** `{ ok:false, error:"Access required" }`.
-Empty seat table must not hide the form.
-
-Cloudflare / Gateway / Scale / Mix stay off this glance. Keys and
-Settings own Cloudflare.
+Computer · City · Country · Device · SSO · OS · Version · License ·
+Approval · Seen · live/idle. Search by city/device. `usage-import` off.
 
 ### Licenses `#licenses`
 
-Hero is Generate (eyebrow + duration + primary). Issued table under it
-(last4, duration, expiry, active/revoked). Seat approve/revoke table is
-second. Fail-loud if D1 seats are empty; generator still visible.
+Generate first (duration 1 / 7 / 30 / 90 / 365). Issued last4 table.
+Seat approve/revoke second. Empty D1 fails loud; form stays visible.
+Unauth generate **401** `{ ok:false, error:"Access required" }`.
 
-### Places (Overview corner + Realtime)
+### Notifications / Keys / Settings
 
-Heartbeats write `request.cf` city + region + country. Never client GPS.
-Never IP.
+Notifications: real D1 notices (pending seats, CRM fail). Keys: vault
+last4 + Cloudflare OAuth login. Settings: Access keep + geo law
+(`request.cf` only). No homemade password.
 
-**Overview Places** (`data-geo-corner`): Top lists **Cities / Regions /
-Countries** with Shoey columns (count, unique_sessions, avg_duration) +
-**corner** CountryMap (`data-geo-widget`). Not full-bleed.
+### Anti-slop (Operator)
 
-**Realtime** (`#realtime`):
-
-```
-┌ WorldMap (data-world-map) · city dots + country pills · LIVE n ┐
-└────────────────────────────────────────────────────────────────┘
-┌ LiveFeed (data-live-feed) ┐ ┌ GeoTable City/Regions/Countries ┐
-│ heartbeat · city · seat  │ │ country city count sessions avg │
-└──────────────────────────┘ └─────────────────────────────────┘
-┌ People with city ─────────────────────────────────────────────┐
-```
-
-Geo JSON: `GET /v1/admin/realtime.geo.json` → city rows only. Sessions
-list city + device. People shows last-seen when the 2-min window is
-empty. No Shoey SKUs. No sneakers.
-
-### Keys `#keys`
-
-LLM vault add (last4 only) stays. **Cloudflare · AI Gateway** is Log in to
-Cloudflare → `/cloudflare/connect` OAuth → auto-provision. No Account ID +
-token paste as the happy path. CF Access already wraps the console.
+- No Unique Visitors, no sneakers, no `/products/*`, no defaultServers.
+- No full-bleed broken geo on Overview.
+- No 8-card KPI wall. No invented hostname/email (em dash).
+- Overlay chrome (pill bar) is a different surface — do not restyle it
+  here.
 
 ### Seat path (Identity)
 
-Tony copies the once-string. Seat: Métis → Settings → Identity / License →
-Activate. Valid `METIS-OP-1` HMAC token + not expired → licensed. Heartbeat
-sends `license: licensed` + `licenseId` (jti). Worker funds vault keys.
-Revoke still wins. ATK- / Fly JWS stay closed (`LICENSE_ACTIVATION_OPEN`
-stays false). No personal API key paste for this path.
+Tony copies the once-string. Seat: Métis → Identity → License →
+Activate. Heartbeat `{ license, licenseId }` + city. Worker funds keys
+when Approve **or** active jti. Revoke wins. `LICENSE_ACTIVATION_OPEN`
+stays false.
 
 Full product law: [`OPERATOR.md`](OPERATOR.md).
