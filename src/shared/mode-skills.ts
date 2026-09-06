@@ -1,5 +1,5 @@
 import { CONVERSATION_MODES, type BuiltinMode, type ConversationMode } from './ipc'
-import { DEFAULT_ASK_CAVEMAN, type AskCavemanLevel } from './caveman-ask'
+import { DEFAULT_ASK_CAVEMAN, type AskCavemanIntensity, type AskCavemanLevel } from './caveman-ask'
 import lockJson from './mode-skills.lock.json'
 
 export const SKILL_HEADER_RE = /^---\n([\s\S]*?)\n---\n/
@@ -98,10 +98,7 @@ export function formatLockedHumanizer(skill: LoadedSkill): string {
   return `\n\n${LOCKED_HUMANIZER_BEGIN} (v${skill.version}) ---\n${skill.body.trim()}\n${LOCKED_HUMANIZER_END}`
 }
 
-export function formatLockedCaveman(
-  skill: LoadedSkill,
-  intensity: Exclude<AskCavemanLevel, 'off'> = DEFAULT_ASK_CAVEMAN
-): string {
+export function formatLockedCaveman(skill: LoadedSkill, intensity: AskCavemanIntensity = DEFAULT_ASK_CAVEMAN): string {
   const register =
     `ACTIVE REGISTER: ${intensity}. Use the ${intensity} row of the Intensity table for this answer. ` +
     'When caveman is ON, its terse register wins over humanizer fluff rules for Ask answers. ' +
@@ -133,14 +130,15 @@ export function composeLockedSkillsAppendix(
     throw new ModeSkillIntegrityError(mode, 'custom modes must not receive a builtin skill')
   }
   parts.push(formatLockedHumanizer(loaded.humanizer))
-  const intensity = opts?.caveman ?? 'off'
-  if (intensity !== 'off') {
+  const level = opts?.caveman ?? 'off'
+  if (level !== 'off') {
     if (!loaded.caveman) {
       throw new ModeSkillIntegrityError(CAVEMAN_SKILL_ID, 'missing caveman skill in composition')
     }
     if (loaded.caveman.id !== CAVEMAN_SKILL_ID) {
       throw new ModeSkillIntegrityError(CAVEMAN_SKILL_ID, `composed skill id ${loaded.caveman.id} does not match caveman`)
     }
+    const intensity: AskCavemanIntensity = level
     parts.push(formatLockedCaveman(loaded.caveman, intensity))
   }
   return parts.join('')
