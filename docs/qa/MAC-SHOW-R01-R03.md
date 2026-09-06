@@ -16,11 +16,15 @@ npx vitest run \
   src/main/settings-surface.contract.test.ts \
   src/main/island/mac-hide-island.proof.test.ts \
   src/main/island/hover-hit-band.test.ts \
-  src/main/island/geometry.test.ts
+  src/main/island/geometry.test.ts \
+  scripts/ensure-intelligence-bundle.contract.test.ts
+npm run build:intelligence
 npm test
 ```
 
-Pass means: typecheck clean, those six files green, `npm test` green. That is the R01–R03 local gate. GH CI is not the gate.
+Pass means: typecheck clean, those seven files green, `npm run build:intelligence` writes `intelligence/dist/index.html`, `npm test` green. That is the R01–R03 local gate. GH CI is not the gate.
+
+Do not relaunch the Mac show until this tip includes the Intelligence JSX fix (`ReactElement` + `tsconfig.app.json` types `react`). An older show tree failed `tsc -b` on Totos-Mac.
 
 ## Show (only after a later pack of this tip)
 
@@ -68,6 +72,28 @@ Open and close Settings from Hide. Launch from dock after onboarding.
 
 **FAIL if** the window paints `#fff`, `#ffffff`, `#000`, or `#000000`. Settings glass is `#120022`. Rest is `#00000000`.
 
+### Intelligence dashboard (Tony live + Totos-Mac show tree 2026-09-06)
+
+Tony live `/Applications/Metis.app` 1.8.3: Settings / Intelligence shows the red banner `Intelligence dashboard bundle not found — run \`npm run build:intelligence\`, then restart.` That installed app does not contain this branch.
+
+Totos-Mac show tree, exact fail:
+
+```
+npm run build:intelligence
+src/components/IntelligenceUpdateButton.tsx(12,5): error TS2503: Cannot find namespace 'JSX'
+```
+
+Cause: the button returned `JSX.Element`. `intelligence/tsconfig.app.json` had `"types": ["vite/client"]` only, which hid `@types/react`. React 19 + TypeScript 6 has no global `JSX` namespace unless React types load. Failed `tsc -b` left no `intelligence/dist/index.html`, so the live banner stays.
+
+This tip before relaunch:
+
+1. `IntelligenceUpdateButton` returns `ReactElement`, never `JSX.Element` (MQA-290).
+2. `tsconfig.app.json` types are `vite/client`, `react`, `react-dom`.
+3. `intelligence/src/vite-env.d.ts` triple-slash loads those same React types.
+4. `npm run build` / `npm run dev` run `scripts/ensure-intelligence-bundle.mjs`.
+
+**FAIL if** `npm run build:intelligence` still reports `TS2503`. **FAIL if** Settings / Intelligence still shows the red banner after this tip's `npm run build` (or `npm run dev`) and a restart of that tree.
+
 ## Honest 1.8.3
 
-If Ultron is still on `/Applications/Metis.app` 1.8.3, R02 will FAIL the crush. Record that as "live build, not this tip." Do not stamp Latest. Do not pack from this runbook.
+If Ultron is still on `/Applications/Metis.app` 1.8.3, R02 will FAIL the crush and Intelligence will still show the red bundle-not-found banner. Record that as "live build, not this tip." Do not stamp Latest. Do not pack from this runbook.
