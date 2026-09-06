@@ -67,7 +67,7 @@ import { useListen, playListenChime } from './lib/listen'
 import { transcriptToText, recapPersistAction } from './lib/transcript'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
 import { DEFAULT_SHORTCUTS, ASK_MEMORY_IDLE_MS } from '@shared/ipc'
-import { parseCavemanAskPrompt } from '@shared/caveman-ask'
+import { applyCaveman, DEFAULT_ASK_CAVEMAN } from '@shared/caveman-ask'
 import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, LicenseGateVerdict } from '@shared/ipc'
 import { HOTKEY_ACTIONS } from '@shared/ipc'
 import { useTapControl } from './lib/tap/tap-control'
@@ -1325,10 +1325,10 @@ export function App(): JSX.Element {
   const submit = useCallback(() => {
     if (!requireProvider()) return
     const typed = input.trim()
-    const caveman = parseCavemanAskPrompt(typed)
-    if (caveman.next) void patch({ askCaveman: caveman.next })
+    const caveman = applyCaveman(typed, settings?.askCaveman ?? DEFAULT_ASK_CAVEMAN)
+    if (caveman.changed) void patch({ askCaveman: caveman.next })
     const q = caveman.visiblePrompt
-    if (!q && caveman.next) {
+    if (!q && caveman.changed) {
       setInput('')
       return
     }
@@ -1406,6 +1406,7 @@ export function App(): JSX.Element {
     settings?.screenAsk,
     settings?.visionAvailable,
     settings?.askFollowUpMemory,
+    settings?.askCaveman,
     askScreen,
     assist,
     requireProvider,

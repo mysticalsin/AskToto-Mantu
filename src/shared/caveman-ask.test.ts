@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   AUTO_CLARITY_DIRECTIVE,
   DEFAULT_ASK_CAVEMAN,
+  applyCaveman,
   autoClarityDropCaveman,
   parseCavemanAskPrompt
 } from './caveman-ask'
@@ -59,6 +60,37 @@ describe('parseCavemanAskPrompt', () => {
     const q = 'Why does this React component re-render?'
     expect(parseCavemanAskPrompt(q)).toEqual({ visiblePrompt: q, next: null })
     expect(DEFAULT_ASK_CAVEMAN).toBe('full')
+  })
+})
+
+describe('applyCaveman', () => {
+  it('defaults enabled=true intensity=full and strips slash commands', () => {
+    const session = applyCaveman('Why React re-render?')
+    expect(session.enabled).toBe(true)
+    expect(session.intensity).toBe('full')
+    expect(session.next).toBe('full')
+    expect(session.changed).toBe(false)
+    const lite = applyCaveman('/caveman lite Why React re-render?', 'full')
+    expect(lite.enabled).toBe(true)
+    expect(lite.intensity).toBe('lite')
+    expect(lite.visiblePrompt).toBe('Why React re-render?')
+    expect(lite.changed).toBe(true)
+  })
+
+  it('stop caveman / normal mode turn the session off', () => {
+    expect(applyCaveman('stop caveman', 'full')).toMatchObject({
+      enabled: false,
+      next: 'off',
+      visiblePrompt: '',
+      changed: true
+    })
+    expect(applyCaveman('normal mode', 'lite')).toMatchObject({ enabled: false, next: 'off' })
+  })
+
+  it('Auto-Clarity helper returns drop for an irreversible warning', () => {
+    const applied = applyCaveman('Write SQL that will permanently delete the users table', 'full')
+    expect(applied.dropClarity).toBe(true)
+    expect(autoClarityDropCaveman(applied.visiblePrompt)).toBe(true)
   })
 })
 
