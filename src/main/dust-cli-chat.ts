@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, writeFileSync, mkdirSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DUST_SPOTLIGHT_REF_AGENT_ID } from '@shared/ipc'
+import { humanizeNpmInstallError } from '@shared/managed-npm'
 import { dustAgentUnavailableMessage } from '@shared/quick-actions'
 import { installManagedCli, managedCliEntry, type CliInstallProgress } from './cli-installer'
 import { ensureManagedNode, resolveManagedNode, vcredistExePath, vcredistQuietArgs } from './managed-node'
@@ -199,7 +200,7 @@ export async function ensureManagedDustCli(
   try {
     await ensureManagedNode()
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    return { ok: false, error: humanizeNpmInstallError(e) }
   }
   const existing = managedCliEntry('dust')
   if (existing) return { ok: true, entry: existing.entry, version: existing.version }
@@ -207,7 +208,7 @@ export async function ensureManagedDustCli(
     const installed = await installManagedCli('dust', onProgress ?? (() => {}))
     return { ok: true, entry: installed.entry, version: installed.version }
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : String(e) }
+    return { ok: false, error: humanizeNpmInstallError(e) }
   }
 }
 
