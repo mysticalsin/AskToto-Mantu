@@ -26,4 +26,4 @@ See [OPERATOR.md](./OPERATOR.md).
 - Seat approval before `/v1/use` and `fundedProviders`.
 - Real seats, licenses, ROI, globe from `request.cf`, Events from ingest.
 - Notifications, Rules, and data-push telemetry are real pages, not stubs.
-- No pack. No merge. No Latest feed. READY TO MERGE **no**.
+- No pack. No merge. No Latest feed. Do not publish or promote Metis-Releases. EXE/DMG/Native → Latest only after Bob QA + Ultron approve. READY TO MERGE **no**.

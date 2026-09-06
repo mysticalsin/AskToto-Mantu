@@ -2,7 +2,7 @@
 project: Métis
 type: operator-control-plane-contract
 owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, client prompt-cache honesty, CRM send board, Tony LLM keys vault, Cloudflare account connect, seat funding signal, Ask routing law, seat approval gate
-does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, installer packing, Fly license-server, Goldberg Aria, cloudflare-proxy AI token proxy, Bklit Studio
+does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, installer packing, Fly license-server, Goldberg Aria, cloudflare-proxy AI token proxy, Bklit Studio, Metis-Releases Latest feed, EXE/DMG/Native pack or promote
 ready-to-merge: no
 implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing, access-login, v1-use
 this-slice: keys-gateway-seat-approval
@@ -61,6 +61,8 @@ Live URL: `https://metis-operator.tony-walteur.workers.dev/`. This is **Métis O
 ## Product law (Tony 6 Sep 2026 — Keys gateway + seat approval)
 
 **SUPERSEDES** the Shoey rail (`#sessions` / `#notifications` / Overview-as-Bklit-10) and the un-gated line "every seat heartbeat must include fundedProviders". Chrome stays **pre-Shoey**: Keys, Licenses, Map / macOS / Windows, Skills, plus Overview / Realtime / Events / Profiles as fleet pages. Do **not** bring back Shoey Overview / Realtime / Sessions / Notifications as the product nav. READY TO MERGE **no**. No pack. Off Aria. Do not touch overlay Hide leftover.
+
+**ULTRON LOCK (6 Sep 2026).** Do **not** publish or promote any Metis-Releases Latest feed. EXE / DMG / Native → Latest only after Bob QA **and** Ultron approve. This slice is Operator portal only: real licenses, real ROI, real seats, Access security. No pack. No merge. No release-feed changes.
 
 **Goal.** Operator is the central API-key gateway for every Métis seat. Tony holds the keys. A seat must be **approved by Tony** before platform keys work and before the app "just works". Unapproved seats fail loud. Access-only admin. Real licenses, real seats, real ROI.
 
@@ -678,6 +680,6 @@ Frozen overlay chrome (do not edit from this product):
 
 ## Ready to merge
 
-**READY TO MERGE: no.** Keys gateway + seat approval. Overlay leftover stays out of this slice. No pack. No merge. Do not pack EXE/DMG. Do not bump app version (`1.8.3` stays). Goldberg Aria stays frozen.
+**READY TO MERGE: no.** Keys gateway + seat approval. Overlay leftover stays out of this slice. No pack. No merge. Do not pack EXE/DMG. Do not bump app version (`1.8.3` stays). Goldberg Aria stays frozen. **Ultron lock:** do not publish or promote Metis-Releases Latest. EXE/DMG/Native → Latest only after Bob QA + Ultron approve.
 
 Migrating leftover seat-stored Tony cloud keys stays a later slice. `POST /v1/use` is live: HMAC, vault decrypt in Worker memory, brokered completion, text only. Seats never persist a raw Operator key or CF token.
