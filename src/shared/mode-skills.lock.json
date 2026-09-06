@@ -7,6 +7,11 @@
       "version": "1.1.0",
       "sha256": "f45e86696aab25fe6e19a424bcab93bec1fb0b35e31e5d3980bfb98803091cac"
     },
+    "caveman": {
+      "path": "caveman/SKILL.md",
+      "version": "1.0.0",
+      "sha256": "a94f58fec983be6a217af8b96919906631fb246d6063e29758167caec278986b"
+    },
     "interview": {
       "path": "modes/interview/SKILL.md",
       "version": "1.1.0",
