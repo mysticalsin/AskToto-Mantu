@@ -6,10 +6,18 @@
 import { describe, expect, it } from 'vitest'
 import { OVERLAY_LEAVE_PARK_MS, decideCursorWatch, overlayWatchStep, pointInRect } from './cursor-watch'
 import {
+  EXCLUSIVE_ONBOARDING_BACKGROUND,
   OVERLAY_HIDE_PARK,
+  OVERLAY_TRANSPARENT_BACKGROUND,
   TEAMS_MEETING_CHROME_Y,
+  ULTRON_PURPLE_HAIRLINE,
+  hideParkIsVisuallyClear,
+  hideParkRect,
+  hideParkWindowOpacity,
   hoverWatchRestRect,
+  isForbiddenHideParkHairline,
   isLeftoverSettingsTrigger,
+  isOpaqueMantuPurple,
   isVisibleHideSlab,
   parkedHoverReanchor,
   parkAfterExclusiveOnboarding,
@@ -124,6 +132,78 @@ describe('Mac-test Hide hover reveal + leave park (Ultron top-edge re-check)', (
   it('a reveal main never hovered (forced toast / synthetic pointer) is left to the renderer', () => {
     const s = overlayWatchStep({ cursor: { x: 900, y: 600 }, restRect: rest, revealedRect: ask, islandResting: false, windowVisible: true, osHoverSeen: false })
     expect(s.action).toBe('leave-ignored')
+  })
+})
+
+describe('Ultron live — 8×2 at y=39 with opaque purple is FAIL', () => {
+  it('CGWindowList 8×2@(896,39) painting #3A0B6B is the hairline FAIL', () => {
+    expect(ULTRON_PURPLE_HAIRLINE).toEqual({
+      width: 8,
+      height: 2,
+      y: 39,
+      background: EXCLUSIVE_ONBOARDING_BACKGROUND,
+      opacity: 1
+    })
+    expect(isOpaqueMantuPurple(ULTRON_PURPLE_HAIRLINE.background)).toBe(true)
+    expect(
+      isForbiddenHideParkHairline({
+        ...ULTRON_PURPLE_HAIRLINE,
+        workAreaY: TOTOS_MAC.workArea.y,
+        boundsY: TOTOS_MAC.bounds.y
+      })
+    ).toBe(true)
+    expect(
+      hideParkIsVisuallyClear({
+        y: 39,
+        boundsY: 0,
+        width: 8,
+        height: 2,
+        background: '#3A0B6B',
+        opacity: 1
+      })
+    ).toBe(false)
+  })
+
+  it('transparent + bounds.y, opacity 0, or off-screen rest pass; hover watch still reveals', () => {
+    const park = hideParkRect(TOTOS_MAC)
+    expect(park).toEqual({ x: 896, y: 0, width: 8, height: 2 })
+    expect(park.y).toBe(TOTOS_MAC.bounds.y)
+    expect(park.y).not.toBe(39)
+    expect(hideParkWindowOpacity('hide', true)).toBe(0)
+    expect(hideParkWindowOpacity('hide', false)).toBe(1)
+    expect(hideParkWindowOpacity('island', true)).toBe(1)
+    expect(hideParkWindowOpacity('bar', true)).toBe(1)
+    expect(
+      isForbiddenHideParkHairline({
+        ...park,
+        workAreaY: TOTOS_MAC.workArea.y,
+        boundsY: TOTOS_MAC.bounds.y,
+        background: OVERLAY_TRANSPARENT_BACKGROUND,
+        opacity: 1
+      })
+    ).toBe(false)
+    expect(
+      isForbiddenHideParkHairline({
+        width: 8,
+        height: 2,
+        y: 39,
+        workAreaY: 39,
+        boundsY: 0,
+        background: '#3A0B6B',
+        opacity: 0
+      })
+    ).toBe(false)
+    expect(hideParkIsVisuallyClear({ y: 39, boundsY: 0, opacity: 0 })).toBe(true)
+    expect(hideParkIsVisuallyClear({ y: -2, boundsY: 0, height: 2, opacity: 1 })).toBe(true)
+    const rest = hoverWatchRestRect('hide', TOTOS_MAC)
+    expect(
+      decideCursorWatch({
+        cursor: { x: 900, y: 12 },
+        restRect: rest,
+        revealedRect: park,
+        revealed: false
+      })
+    ).toBe('reveal')
   })
 })
 

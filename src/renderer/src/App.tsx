@@ -3238,8 +3238,6 @@ export function App(): JSX.Element {
     }
     return (
       <div ref={setRoot} className="onboard-stage onboard-exclusive-lock">
-        <div className="onboard-stripes" aria-hidden="true" />
-        <div className="onboard-stripes onboard-stripes--b" aria-hidden="true" />
         <div className="onboard-portal-content relative z-10 flex h-full min-h-0 w-full flex-col">
           <OnboardingV2
             settings={settings}

@@ -354,6 +354,75 @@ export function hideParkRect(m: DisplayMetrics): Rect {
   return { x, y: hoverRestTop(m), width, height }
 }
 
+/** Ultron CGWindowList live FAIL: 8×2 at y=39 painting opaque Mantu purple. */
+export const ULTRON_PURPLE_HAIRLINE = {
+  width: OVERLAY_HIDE_PARK.width,
+  height: OVERLAY_HIDE_PARK.height,
+  y: 39,
+  background: EXCLUSIVE_ONBOARDING_BACKGROUND,
+  opacity: 1
+} as const
+
+export function isTransparentOverlayBackground(color?: string): boolean {
+  if (color == null) return false
+  const n = color.trim().toLowerCase()
+  if (n === 'transparent' || n === '#0000' || n === OVERLAY_TRANSPARENT_BACKGROUND.toLowerCase()) return true
+  // #RGBA / #RRGGBBAA with alpha 0
+  if (n.startsWith('#') && (n.length === 5 || n.length === 9) && n.endsWith('00')) return true
+  return false
+}
+
+export function isOpaqueMantuPurple(color?: string): boolean {
+  return (color ?? '').trim().toLowerCase() === EXCLUSIVE_ONBOARDING_BACKGROUND.toLowerCase()
+}
+
+/**
+ * Hide park window opacity. Hide rest is gone (0) so Electron clamping the
+ * 8×2 hairline to workArea.y≈39 cannot paint a visible sliver. Island peek,
+ * Bar, Settings, and exclusive onboarding stay 1. Cursor watch does not use
+ * this window — hoverWatchRestRect still reveals.
+ */
+export function hideParkWindowOpacity(layout: OverlayLayout, resting: boolean): number {
+  return layout === 'hide' && resting ? 0 : 1
+}
+
+/**
+ * True when the parked hide window cannot be seen: opacity 0, fully above
+ * the display top, or transparent at bounds.y (behind the menu bar).
+ */
+export function hideParkIsVisuallyClear(input: {
+  y: number
+  boundsY: number
+  width?: number
+  height?: number
+  background?: string
+  opacity?: number
+}): boolean {
+  if ((input.opacity ?? 1) <= 0) return true
+  const height = input.height ?? OVERLAY_HIDE_PARK.height
+  if (input.y + height <= input.boundsY) return true
+  return input.y === input.boundsY && isTransparentOverlayBackground(input.background ?? OVERLAY_TRANSPARENT_BACKGROUND)
+}
+
+/**
+ * Ultron / Tony live: 8×2 at workArea.y≈39 with opaque purple (or any visible
+ * paint) is FAIL. Opacity 0, off-screen rest, or transparent + bounds.y pass.
+ */
+export function isForbiddenHideParkHairline(input: {
+  width: number
+  height: number
+  y: number
+  workAreaY: number
+  boundsY: number
+  background?: string
+  opacity?: number
+}): boolean {
+  if (input.width !== OVERLAY_HIDE_PARK.width || input.height !== OVERLAY_HIDE_PARK.height) return false
+  if (hideParkIsVisuallyClear(input)) return false
+  const clampedToWorkArea = Math.abs(input.y - input.workAreaY) <= 1 && input.workAreaY > input.boundsY
+  return clampedToWorkArea
+}
+
 /**
  * Display topology change while hide/island is parked.
  * Re-apply the rest rect on the NEW display. Never clampHeight (BAR_MIN_HEIGHT 44)
