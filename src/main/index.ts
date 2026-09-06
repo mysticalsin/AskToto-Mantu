@@ -1688,6 +1688,11 @@ function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDis
     /* headless */
   }
   try {
+    w.setMovable(false)
+  } catch {
+    /* headless */
+  }
+  try {
     w.setFullScreenable?.(true)
     w.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
     w.setBounds(stage)
@@ -1723,6 +1728,7 @@ function exitExclusiveOnboardingStage(): void {
   }
   try {
     win.setFullScreenable?.(false)
+    win.setMovable(true)
     win.setBackgroundColor(OVERLAY_TRANSPARENT_BACKGROUND)
   } catch {
     /* ignore */
@@ -1815,7 +1821,7 @@ function createWindow(): void {
     transparent: chrome.transparent,
     hasShadow: false, // panel paints its own shadow; window shadow would box the transparent area
     resizable: false,
-    movable: true,
+    movable: !onboardingLive,
     skipTaskbar: true,
     fullscreenable: chrome.fullscreenable,
     maximizable: false,
@@ -2924,6 +2930,8 @@ function refitToDisplay(next: Electron.Rectangle, fromDisplayId: number): Electr
 }
 
 function moveBy(dx: number, dy: number): void {
+  // Exclusive onboarding owns the display. Click-hold / scroll-nudge must not drag it off-screen.
+  if (onboardingExclusiveLive()) return
   // Self-heal a null win (e.g. a one-time createWindow() throw during boot) — mirrors sendHotkey/
   // toggleVisible so scroll/move hotkeys recover instead of staying permanently dead for the process life.
   const w = ensureWindow()
@@ -7058,6 +7066,7 @@ function registerIpc(): void {
   // Drag the overlay from anywhere on the bar (the renderer's JS drag drives this with screen-pixel deltas).
   ipcMain.handle(IPC.windowMoveBy, (e, d: unknown) => {
     assertMainWindow(e)
+    if (onboardingExclusiveLive()) return
     const { dx, dy } = (d ?? {}) as { dx?: number; dy?: number }
     if (typeof dx === 'number' && typeof dy === 'number' && Number.isFinite(dx) && Number.isFinite(dy)) {
       moveBy(dx, dy)

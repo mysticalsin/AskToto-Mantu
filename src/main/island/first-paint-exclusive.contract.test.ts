@@ -123,3 +123,42 @@ describe('first-paint exclusive stage while !onboardingDone', () => {
     expect(replay.indexOf('haltAllOnboardingAudio()')).toBeLessThan(replay.indexOf('patch({ onboardingDone: false })'))
   })
 })
+
+describe('exclusive onboarding cannot be dragged off-screen', () => {
+  it('onboard root has no windowDrag and main ignores move while exclusive', () => {
+    const index = readFileSync(join(__dirname, '../index.ts'), 'utf8')
+    const app = readFileSync(join(__dirname, '../../renderer/src/App.tsx'), 'utf8')
+    const css = readFileSync(join(__dirname, '../../renderer/src/styles.css'), 'utf8')
+    const gate = app.slice(
+      app.indexOf("settings && !settings.onboardingDone && DEMO == null"),
+      app.indexOf('const panelOpen')
+    )
+    expect(gate).toMatch(/className="onboard-stage onboard-exclusive-lock"/)
+    expect(gate).toMatch(/onboard-exclusive-lock/)
+    expect(gate).not.toMatch(/windowDrag/)
+    expect(gate).not.toMatch(/onPointerDown/)
+    expect(gate).not.toMatch(/windowMoveBy/)
+    expect(css).toMatch(/\.onboard-stage \{[\s\S]*?-webkit-app-region:\s*no-drag/)
+    expect(css).toMatch(/\.onboard-exclusive-lock[\s\S]*?-webkit-app-region:\s*no-drag/)
+    expect(css).toMatch(/\.onboard-stage \.drag \{[\s\S]*?-webkit-app-region:\s*no-drag/)
+
+    const create = index.slice(index.indexOf('function createWindow'), index.indexOf('function resizeTo'))
+    expect(create).toMatch(/movable: !onboardingLive/)
+    expect(create).not.toMatch(/movable: true/)
+
+    const apply = index.slice(
+      index.indexOf('function applyExclusiveOnboardingStage'),
+      index.indexOf('function exitExclusiveOnboardingStage')
+    )
+    expect(apply).toMatch(/setMovable\(false\)/)
+
+    const exit = index.slice(index.indexOf('function exitExclusiveOnboardingStage'), index.indexOf('function createWindow'))
+    expect(exit).toMatch(/setMovable\(true\)/)
+
+    const move = index.slice(index.indexOf('function moveBy'), index.indexOf('function registerScreenListeners'))
+    expect(move).toMatch(/if \(onboardingExclusiveLive\(\)\) return/)
+
+    const ipc = index.slice(index.indexOf('ipcMain.handle(IPC.windowMoveBy)'), index.indexOf('ipcMain.handle(IPC.windowHide)'))
+    expect(ipc).toMatch(/if \(onboardingExclusiveLive\(\)\) return/)
+  })
+})

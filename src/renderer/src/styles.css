@@ -250,6 +250,13 @@ html.shot-bg-light #root {
 .no-drag {
   -webkit-app-region: no-drag;
 }
+/* Exclusive onboarding owns the display. Native app-region drag must not move it. */
+.onboard-exclusive-lock,
+.onboard-exclusive-lock .drag,
+.onboard-stage,
+.onboard-stage .drag {
+  -webkit-app-region: no-drag;
+}
 
 /* NOTE: a `background` shorthand may carry at most ONE solid color (the final background-color); every
    other layer MUST be an image. So each translucent color layer is wrapped in linear-gradient(c, c) to
@@ -741,6 +748,7 @@ input::placeholder {
   flex-direction: column;
   overflow: hidden;
   isolation: isolate;
+  -webkit-app-region: no-drag;
   background:
     radial-gradient(1200px 700px at 18% 12%, color-mix(in srgb, #9a2bf0 42%, transparent), transparent 58%),
     radial-gradient(900px 600px at 88% 78%, color-mix(in srgb, #7f00da 36%, transparent), transparent 55%),
