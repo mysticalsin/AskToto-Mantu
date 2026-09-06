@@ -8,6 +8,7 @@ import {
   mapAnthropicUsage,
   mapOpenAIUsage,
   operatorUrlConfigured,
+  resolveOperatorUrl,
   shouldSendAskText,
   unsupportedCacheUsage
 } from './operator'
@@ -115,20 +116,39 @@ describe('cloudflareConnectHref', () => {
   })
 })
 
-describe('operatorUrlConfigured', () => {
-  it('is off until an https Operator URL is set', () => {
-    expect(operatorUrlConfigured({})).toBe(false)
-    expect(operatorUrlConfigured({ operatorUrl: '' })).toBe(false)
-    expect(operatorUrlConfigured({ operatorUrl: 'http://localhost' })).toBe(false)
-    expect(operatorUrlConfigured({ operatorUrl: 'https://metis-operator.example.workers.dev' })).toBe(true)
-    expect(operatorUrlConfigured({}, { METIS_OPERATOR_URL: 'https://op.example.workers.dev' })).toBe(true)
+describe('resolveOperatorUrl', () => {
+  it('falls back to the shipped live Worker when Settings and env are empty', () => {
+    expect(resolveOperatorUrl({}, {})).toBe(DEFAULT_OPERATOR_URL)
+    expect(resolveOperatorUrl({ operatorUrl: '' }, {})).toBe(DEFAULT_OPERATOR_URL)
+    expect(resolveOperatorUrl({ operatorUrl: '   ' }, {})).toBe(DEFAULT_OPERATOR_URL)
   })
 
-  it('sends Ask text by default once a URL is set', () => {
+  it('prefers Settings, then METIS_OPERATOR_URL, and strips a trailing slash', () => {
+    expect(resolveOperatorUrl({ operatorUrl: 'https://op.example.workers.dev/' }, {})).toBe(
+      'https://op.example.workers.dev'
+    )
+    expect(resolveOperatorUrl({}, { METIS_OPERATOR_URL: 'https://env.example.workers.dev/' })).toBe(
+      'https://env.example.workers.dev'
+    )
+  })
+})
+
+describe('operatorUrlConfigured', () => {
+  it('treats the shipped default as configured, and still refuses an explicit http override', () => {
+    expect(operatorUrlConfigured({}, {})).toBe(true)
+    expect(operatorUrlConfigured({ operatorUrl: '' }, {})).toBe(true)
+    expect(operatorUrlConfigured({ operatorUrl: 'http://localhost' }, {})).toBe(false)
+    expect(operatorUrlConfigured({ operatorUrl: 'https://metis-operator.example.workers.dev' }, {})).toBe(true)
+    expect(operatorUrlConfigured({}, { METIS_OPERATOR_URL: 'https://op.example.workers.dev' })).toBe(true)
+    expect(operatorUrlConfigured({}, { METIS_OPERATOR_URL: 'http://localhost:8787' })).toBe(false)
+  })
+
+  it('sends Ask text by default once an https Operator URL resolves, including the shipped default', () => {
     const url = { operatorUrl: 'https://metis-operator.example.workers.dev' }
-    expect(shouldSendAskText(url)).toBe(true)
-    expect(shouldSendAskText({ ...url, sendAskText: false })).toBe(false)
-    expect(shouldSendAskText({ sendAskText: true })).toBe(false)
+    expect(shouldSendAskText(url, {})).toBe(true)
+    expect(shouldSendAskText({ ...url, sendAskText: false }, {})).toBe(false)
+    expect(shouldSendAskText({ sendAskText: true }, {})).toBe(true)
+    expect(shouldSendAskText({ sendAskText: false }, {})).toBe(false)
   })
 })
 

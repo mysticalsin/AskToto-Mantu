@@ -1,6 +1,6 @@
 import { inspectBundleResponse } from '@shared/bundle-response'
 import { HUMANIZER_SKILL_ID, isBuiltinConversationMode, type ModeSkillId } from '@shared/mode-skills'
-import { operatorUrlConfigured } from '@shared/operator'
+import { operatorUrlConfigured, resolveOperatorUrl } from '@shared/operator'
 import { applyOverlaySkillFile } from './mode-skills'
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
 import { getMachineId } from './license'
@@ -29,7 +29,7 @@ export function stopOperatorOverlayPoll(): void {
 }
 
 function resolveUrl(settings: OverlayRuntimeSettings, env = process.env): string {
-  return (settings.operatorUrl || env.METIS_OPERATOR_URL || '').trim().replace(/\/$/, '')
+  return resolveOperatorUrl(settings, env)
 }
 
 function resolveSecret(settings: OverlayRuntimeSettings, env = process.env): string {
