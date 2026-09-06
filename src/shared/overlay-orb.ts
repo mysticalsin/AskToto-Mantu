@@ -92,25 +92,18 @@ export function overlayUsesObsidianOrb(layout: string, style: OverlayOrbStyle): 
   return overlayUsesJarvisOrb(layout, style)
 }
 
-export type CircleRestSession = 'idle' | 'resting' | 'expanded'
-
 /**
- * Force the 41 Circle/Jarvis rest only on boot, style pick, or leaving Settings.
- * User click-expand (session already resting, minimized just became false) must stay expanded.
- * The old `view !== 'settings' && !minimized` law snapped the pill back and ate Expand Métis.
+ * Auto-collapse only when the user just picked Circle/Jarvis (`styleChanged`).
+ * Every expanded frame used to hit `!minimized` and snap Expand Métis back.
  */
 export function decideCircleRestMinimize(input: {
   layout: string
   style: OverlayOrbStyle
-  view: string
   minimized: boolean
   styleChanged: boolean
-  leftSettings: boolean
-  session: CircleRestSession
 }): 'minimize' | 'expand' | 'stay' {
   if (input.layout === 'bar' && input.style === 'bar' && input.minimized) return 'expand'
   if (!overlayOrbRestIsCircle(input.layout, input.style)) return 'stay'
-  if (input.styleChanged || input.leftSettings) return input.minimized ? 'stay' : 'minimize'
-  if (input.session === 'idle' && !input.minimized && input.view !== 'settings') return 'minimize'
+  if (input.styleChanged && !input.minimized) return 'minimize'
   return 'stay'
 }

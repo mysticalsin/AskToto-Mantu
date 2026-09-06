@@ -45,9 +45,7 @@ import {
 } from '@shared/overlay-chrome'
 import {
   decideCircleRestMinimize,
-  overlayOrbRestIsCircle,
   parseOverlayOrbStyle,
-  type CircleRestSession,
   type OverlayOrbStyle
 } from '@shared/overlay-orb'
 import { resolveOrbMood } from './lib/bar-pill-orb'
@@ -556,48 +554,32 @@ export function App(): JSX.Element {
     void window.toto.minimize(false)
   }, [minimized, canMinimize])
   const prevOrbStyleRef = useRef<OverlayOrbStyle>(overlayOrbStyle)
-  const circleRestViewRef = useRef(view)
-  const circleRestSessionRef = useRef<CircleRestSession>('idle')
   useEffect(() => {
     if (!canMinimize) {
-      circleRestSessionRef.current = 'idle'
       if (!minimized) return
       setMinimized(false)
       void window.toto.minimize(false)
       return
     }
-    const prevStyle = prevOrbStyleRef.current
-    const prevView = circleRestViewRef.current
+    const styleChanged = prevOrbStyleRef.current !== overlayOrbStyle
     prevOrbStyleRef.current = overlayOrbStyle
-    circleRestViewRef.current = view
     const action = decideCircleRestMinimize({
       layout: overlayLayout,
       style: overlayOrbStyle,
-      view,
       minimized,
-      styleChanged: prevStyle !== overlayOrbStyle,
-      leftSettings: prevView === 'settings' && view !== 'settings',
-      session: circleRestSessionRef.current
+      styleChanged
     })
     if (action === 'minimize') {
       // Picking Circle/Jarvis while Settings is open must leave the 880×1017 sheet.
       if (view === 'settings') setView('answer')
       setMinimized(true)
       void window.toto.minimize(true)
-      circleRestSessionRef.current = 'resting'
       return
     }
     if (action === 'expand') {
       setMinimized(false)
       void window.toto.minimize(false)
-      circleRestSessionRef.current = 'idle'
-      return
     }
-    circleRestSessionRef.current = overlayOrbRestIsCircle(overlayLayout, overlayOrbStyle)
-      ? minimized
-        ? 'resting'
-        : 'expanded'
-      : 'idle'
   }, [canMinimize, overlayLayout, overlayOrbStyle, minimized, view])
   useEffect(() => {
     dispatchAutoHide({ type: 'set-forced', forced: autoHideForced })
