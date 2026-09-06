@@ -1,11 +1,11 @@
 ---
 project: Métis
 type: operator-control-plane-contract
-owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, client prompt-cache honesty, CRM send board, Tony LLM keys vault, Cloudflare account connect, seat funding signal, Ask routing law
+owns: Cloudflare-hosted Operator console, device ingest, signed skill packs, client prompt-cache honesty, CRM send board, Tony LLM keys vault, Cloudflare account connect, seat funding signal, Ask routing law, seat approval gate
 does-not-own: overlay chrome (Bar / Island / Hide), leftover Intelligence PR 94, onboarding, installer packing, Fly license-server, Goldberg Aria, cloudflare-proxy AI token proxy, Bklit Studio
 ready-to-merge: no
-implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing, access-login, shoey-map, v1-use
-this-slice: keys-fund-seats
+implemented: keys-write, cloudflare-connect, fundedProviders, cli-first-routing, access-login, v1-use
+this-slice: keys-gateway-seat-approval
 audience: Tony Walteur only. Two emails. Nobody else.
 tokens:
   accent: "#2563EB"
@@ -56,9 +56,81 @@ Tony's ops console. How people use Métis, who is live, what Asks cost, whether 
 
 This is not a Settings card. It is not a local analytics page. The product is a Cloudflare Worker named `metis-operator` under `operator/`. The Métis client keeps prompt caching on, and talks to this Worker only when Settings has an Operator URL.
 
-Live URL: `https://metis-operator.tony-walteur.workers.dev/`. This is **Métis Operator** (AI fleet: seats, Asks, heartbeats, tokens, API calls, Listen, devices, countries). It is not a Shoey e-commerce / SEO demo. After Access identity, the in-page product pages are `#overview`, `#realtime`, `#events`, `#sessions`, `#notifications`, `#keys`, `#settings`. Data is real Operator D1 / HMAC ingest only.
+Live URL: `https://metis-operator.tony-walteur.workers.dev/`. This is **Métis Operator** (AI fleet: seats, Asks, heartbeats, tokens, API calls, Listen, devices, countries). It is not a Shoey e-commerce / SEO demo. Data is real Operator D1 / HMAC ingest only.
 
-## Product law (Tony 8:03–8:05 PM ET, VOID 10:32 PM ET)
+## Product law (Tony 6 Sep 2026 — Keys gateway + seat approval)
+
+**SUPERSEDES** the Shoey rail (`#sessions` / `#notifications` / Overview-as-Bklit-10) and the un-gated line "every seat heartbeat must include fundedProviders". Chrome stays **pre-Shoey**: Keys, Licenses, Map / macOS / Windows, Skills, plus Overview / Realtime / Events / Profiles as fleet pages. Do **not** bring back Shoey Overview / Realtime / Sessions / Notifications as the product nav. READY TO MERGE **no**. No pack. Off Aria. Do not touch overlay Hide leftover.
+
+**Goal.** Operator is the central API-key gateway for every Métis seat. Tony holds the keys. A seat must be **approved by Tony** before platform keys work and before the app "just works". Unapproved seats fail loud. Access-only admin. Real licenses, real seats, real ROI.
+
+### Keys gateway
+
+Tony adds any vault keys in Operator (`#keys`): NVIDIA NIM, Anthropic, DeepSeek, OpenAI, Gemini, MiniMax, Qwen, Kimi, OpenRouter, Groq, Mistral, Grok, custom, and Cloudflare connect. AES-GCM at rest. UI and JSON are **last4 only**. Never a secret, cipher, iv, token, or grant in HTML, dashboard JSON, heartbeat, or Events.
+
+Funded provider **ids** (not secrets) are pushed only to **approved** seats via:
+
+- HMAC heartbeat response `{ approved, fundedProviders, retry }`
+- HMAC `POST /v1/use` (Worker decrypts vault in memory, brokers the provider, returns answer text only)
+
+Seats must **not** paste Tony's cloud keys by default. In-app manual API keys stay as a **fallback** only. Default Ask path when a seat is approved and Operator funds a provider: **Operator platform keys**. Local Settings keys are used only when Operator cannot broker (unapproved, vault empty, provider not funded, or `/v1/use` fail-closed). CLI subscription still wins when connected and working (Claude CLI / Codex CLI). Dust stays retrieval only.
+
+### Approval gate (hard)
+
+A device/seat is `pending` until Tony approves it in Operator.
+
+| Seat `approval` | Heartbeat `fundedProviders` | `POST /v1/use` | App default |
+| --- | --- | --- | --- |
+| `pending` (new heartbeat) | `[]` | **403** `{ ok:false, error:"This seat is not approved. Tony must approve this device in Operator before platform keys work." }` | Fail loud. Do not silently fall through as if Operator funded the seat. Manual local key still works as fallback. |
+| `approved` | Active vault LLM ids (never CLI / Dust / local / `cloudflare-account`) | HMAC broker if vault has that provider | Default path: Operator keys |
+| `revoked` | `[]` | **403** same loud error | Fail loud |
+
+Tony approves or revokes from `#licenses` (Access JWT allowlist only). The seat **cannot** self-approve. Heartbeat may send license **status** (`licensed` / `unlicensed` / `grace` / `expired` / `trial`) and license key **last4**. It must never send the raw license key, and it must never set `approval`.
+
+D1 columns on `seats`:
+
+- `license` — device-reported license status (or last4-safe status string). Real ingest only.
+- `approval` — Tony-only. `pending` \| `approved` \| `revoked`. New insert defaults `pending`. Heartbeat upsert must not overwrite `approval`.
+
+Legacy row with `license = 'approved'` and `approval` null is treated as approved until Tony revokes it.
+
+Admin API (Access JWT + two Tony emails; **401** without Access):
+
+| Method | Path | Effect |
+| --- | --- | --- |
+| `GET` | `/v1/admin/licenses` | All real-seat licenses + approval. **Fail loud** if empty (`{ ok:false, error:"No licenses in D1", empty:true }`). |
+| `POST` | `/v1/admin/licenses` | `{ deviceId, approval }` approve or revoke. 404 if seat missing. |
+| `POST` | `/v1/admin/licenses/:device/approve` | Set `approval=approved`. Audit. |
+| `POST` | `/v1/admin/licenses/:device/revoke` | Set `approval=revoked`. Next heartbeat `fundedProviders=[]`. |
+
+Unauth `POST /v1/admin/licenses` is **401** JSON, not 404, not a password form.
+
+### Real seats, licenses, ROI (D1 only)
+
+Queries are real D1. No demo / fake VPS / `usage-import` / `usage-*` device rows on Users, Licenses, Map, macOS, Windows. Those synthetic import seats stay out of the fleet. Cost / cache KPIs may still read ingested `asks` rows (including already-ingested token usage) because ROI is "Asks/tokens already ingested", never invented `$0`.
+
+| Surface | Real source | Empty |
+| --- | --- | --- |
+| Users / seats | `seats` heartbeats: hostname, SSO email, OS, version, last seen, license, approval. Filter `isRealSeat`. | Honest empty. Never Frankfurt / `defaultServers`. |
+| Licenses | Same real seats + `license` + `approval`. Manage all of them. | **Fail loud** (`data-licenses-empty`). Not a quiet table. |
+| ROI | `asks` tokens → cost today / 7d (list-price estimate or `not reported`). Live seats from real `last_seen` < `ONLINE_MS`. Cache hit from reported cache fields. | Missing usage = `not reported` / `hidden`. Never fake `$0`. |
+
+### Security (unchanged hard rules)
+
+- Unauth console GET **302** to Cloudflare Access (`TEAM_DOMAIN/cdn-cgi/access/login/{host}?redirect_url=…&next={path}`). Email-code / One-time PIN. **Never** a homemade password form. `renderLogin` is void. `ADMIN_EMAILS` only `tony.walteur@gmail.com` + `twalteur@amaris.com`.
+- `/v1/admin/*` is **401** `{ ok:false, error:"Access required" }` without Access JWT / `getIdentity()` / post-Access session. HMAC ingest does not unlock admin.
+- Ingest / heartbeat / use / skill manifest stay HMAC. Do not click **Protect this Worker** for all traffic.
+- No secrets in HTML/JSON. Keys last4 only.
+
+### Chrome (pre-Shoey, KEEP)
+
+Rail: Overview, Realtime, Events, Profiles, Map, macOS, Windows, Licenses, Skills, Keys.
+
+MUST NOT return as nav: Sessions, Notifications, SEO, Pages, Insights, Dashboards, References, Groups, Cohorts.
+
+`#licenses` is first-class: every real seat, license status, approval, Approve / Revoke. `#keys` is the vault. `#map` / `#macos` / `#windows` stay fleet filters.
+
+## Product law (Tony 8:03–8:05 PM ET, VOID 10:32 PM ET — Shoey chrome VOID 6 Sep 2026)
 
 **Goal.** Tony holds LLM API keys in Operator. End-user Métis just works. Keep the product in Métis (seats, Asks, licenses, skills, Listen, recap, keys, devices).
 
@@ -364,7 +436,7 @@ UI on `#keys`: add / rotate / revoke. Show last4 (`··abcd`). Never a paste-bac
 **Seat funding (no raw key on the seat).**
 
 - Heartbeat and/or a dedicated HMAC admin-to-seat payload tells the seat `fundedProviders: ProviderId[]` (ids Operator can pay for right now). Never a secret.
-- **Tony 10:14 PM ET.** After `#keys` add (last4 only in UI, AES-GCM at rest), every seat heartbeat must include that provider in `fundedProviders`. Devices just work. Ask uses Operator-hosted keys only AFTER Claude/Codex CLI quota or rate limit. Dust is retrieval only. Never CLI tokens in the vault. Prove: unauth `POST /v1/admin/keys` 401; identity `GET /` is `text/html` 200 with add/rotate/revoke; heartbeat lists `fundedProviders` after a key is stored.
+- **Tony 6 Sep 2026.** After `#keys` add (last4 only in UI, AES-GCM at rest), **approved** seat heartbeats include that provider in `fundedProviders`. Unapproved seats get `[]` and a loud 403 on `/v1/use`. Devices just work only after Tony approves the seat. Ask uses Operator-hosted keys as the default funded path (CLI still first when connected). Dust is retrieval only. Never CLI tokens in the vault. Prove: unauth `POST /v1/admin/keys` and `POST /v1/admin/licenses` 401; identity `GET /` is `text/html` 200 with add/rotate/revoke + Approve; pending heartbeat lists `fundedProviders: []`; approved heartbeat lists the vault ids.
 - When the routing table reaches order 3, the seat requests a **short-lived use** from Operator over HMAC (`POST /v1/use` or equivalent). Operator decrypts the vault row in Worker memory, performs or brokers the provider call, and returns tokens/stream to the seat. The renderer never sees the grant or the raw key.
 - Seats must not persist those cloud API keys in Settings / keystore. Existing seat-stored Tony keys are a migration debt for a later implement slice, not a feature.
 - Fail closed if Operator cannot issue a use (vault empty, revoked, identity wrong, HMAC fail). Honest error. No leftover seat key.
@@ -588,7 +660,7 @@ Tony 6:17 PM ET (login, overlay, map, events) plus Tony 8:03–8:05 PM ET (routi
 | Keys last4 | `#keys` and `/v1/admin/keys` never echo a secret, cipher, iv, CF token, or grant. UI last4 only. Seats are not told they keep Tony's cloud keys. |
 | CLI not in vault | `claude-cli` / `codex-cli` stay kind `cli`. Settings CLI Integration unchanged. No CLI token in `vault_keys`. |
 | Cloudflare fail-loud | Overview Worker/D1/analytics for `metis-operator` errors visibly when the token is missing. No CF token on seats. |
-| Shoey chrome + Métis nouns | Rail is Overview / Realtime / Events / Sessions / Notifications / Keys / Settings only. Overview is exactly 10 Bklit mini cards + chips. Realtime / Events / Sessions / Notifications stay Shoey page chrome. No SEO / Pages / Insights leftovers. No shoe SKUs. No sample visitors. |
+| Pre-Shoey chrome + Métis nouns | Rail is Overview / Realtime / Events / Profiles / Map / macOS / Windows / Licenses / Skills / Keys. Do not ship Sessions / Notifications as nav. No SEO / Pages / Insights leftovers. No shoe SKUs. No sample visitors. |
 
 If a map or sidebar fix would require touching overlay chrome, **stop and report**. Do not mix slices.
 
@@ -606,6 +678,6 @@ Frozen overlay chrome (do not edit from this product):
 
 ## Ready to merge
 
-**READY TO MERGE: no.** Live router + hashed SPA still P0 after the 11:39 PM ET walk. Overlay leftover stays Wed 10am. No pack. No merge. Ultron tests before stamp. Do not pack EXE/DMG. Do not bump app version (`1.8.3` stays). Goldberg Aria stays frozen.
+**READY TO MERGE: no.** Keys gateway + seat approval. Overlay leftover stays out of this slice. No pack. No merge. Do not pack EXE/DMG. Do not bump app version (`1.8.3` stays). Goldberg Aria stays frozen.
 
 Migrating leftover seat-stored Tony cloud keys stays a later slice. `POST /v1/use` is live: HMAC, vault decrypt in Worker memory, brokered completion, text only. Seats never persist a raw Operator key or CF token.
