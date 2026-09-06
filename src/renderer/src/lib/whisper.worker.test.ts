@@ -61,7 +61,7 @@ describe('Whisper worker bundled mode', () => {
     )
     expect(fetchSpy).not.toHaveBeenCalled()
     expect(worker.postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'error', message: expect.stringMatching(/Reinstall Métis/) })
+      expect.objectContaining({ type: 'error', message: expect.stringMatching(/Check your connection/) })
     )
   })
 
@@ -111,7 +111,12 @@ describe('Whisper worker bundled mode', () => {
       audio,
       expect.objectContaining({ return_timestamps: false, language: 'portuguese', task: 'transcribe' })
     )
-    expect(worker.postMessage).toHaveBeenCalledWith({ type: 'text', text: 'olá, tudo bem', speaker: 'them' })
+    expect(worker.postMessage).toHaveBeenCalledWith({
+      type: 'text',
+      text: 'olá, tudo bem',
+      speaker: 'them',
+      partial: false
+    })
   })
 
   it("decodes with auto-detect (no language option) for 'auto' and for names Whisper does not know", async () => {

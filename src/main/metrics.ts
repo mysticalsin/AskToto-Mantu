@@ -24,6 +24,10 @@ export interface AuditRecord {
   retry?: boolean
   inputTokens?: number
   outputTokens?: number
+  cacheRead?: number
+  cacheWrite?: number
+  cacheUncached?: number
+  cacheStatus?: string
 }
 
 /** Nearest-rank percentile of an already-collected sample. Returns null for an empty sample. */
@@ -44,6 +48,7 @@ export function aggregateMetrics(records: AuditRecord[]): EvalMetrics {
   let fallbacks = 0
   let tokensIn = 0
   let tokensOut = 0
+  let brainConsolidationPasses = 0
   const byProvider: Record<string, number> = {}
   // `fallbacks` is the CROSS-PROVIDER failover count the D-section eval divides by (failover resolves the
   // ask). The request record's `retry` flag cannot carry that on its own: a same-provider transient retry
@@ -77,6 +82,8 @@ export function aggregateMetrics(records: AuditRecord[]): EvalMetrics {
     } else if (r.event === 'answer.feedback') {
       if (r.rating === 'up') up++
       else if (r.rating === 'down') down++
+    } else if (r.event === 'brain.consolidation') {
+      brainConsolidationPasses++
     }
   }
 
@@ -91,7 +98,8 @@ export function aggregateMetrics(records: AuditRecord[]): EvalMetrics {
     fallbacks,
     tokensIn,
     tokensOut,
-    byProvider
+    byProvider,
+    brainConsolidationPasses
   }
 }
 

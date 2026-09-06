@@ -50,17 +50,36 @@ describe('MQA-219 — the default provider is one decision, in one state, and is
     expect(url.replace(/\/+$/, '')).toMatch(/\/v1$/)
   })
 
-  it('an unconfigured default cannot dead-end the app', () => {
-    // The default provider needs a credential the build does not ship, so a brand-new install has no
-    // cloud route until someone pastes it. localLlm.fallback is the safety net that still answers
-    // on-device in that window; if it ever defaults false, a fresh install answers nothing.
-    expect(DEFAULT_SETTINGS.localLlm.enabled).toBe(true)
-    expect(DEFAULT_SETTINGS.localLlm.fallback).toBe(true)
+  it('Cloudflare is the always-on default; Local AI routing is opt-in (weights still download on open)', () => {
+    // Cloudflare ships with a Worker URL (+ optional embedded key). Local routing stays off until the
+    // user turns it on; the weight download is independent and starts whenever the app opens.
+    expect(DEFAULT_SETTINGS.provider).toBe('cloudflare')
+    expect(DEFAULT_SETTINGS.cloudflareBaseUrl).toMatch(/^https:\/\//)
+    expect(DEFAULT_SETTINGS.localLlm.enabled).toBe(false)
+    expect(DEFAULT_SETTINGS.localLlm.fallback).toBe(false)
   })
 
   it('the on-device model still only PREEMPTS when the user asks it to', () => {
     // Tony's routing order: a toggled-on local model wins, otherwise the default provider does. These
     // must stay false or local silently becomes primary for everyone.
     expect(DEFAULT_SETTINGS.localLlm.useFor).toEqual({ suggest: false, summary: false, vision: false })
+  })
+})
+
+describe('Apple-grade defaults (METIS-PLATFORM-NORTH-STAR §3.4)', () => {
+  it('fresh install recedes and fails closed', () => {
+    expect(DEFAULT_SETTINGS.overlayLayout).toBe('hide')
+    expect(DEFAULT_SETTINGS.overlayOrbStyle).toBe('jakub')
+    expect(DEFAULT_SETTINGS.providerPriority).toBe('api')
+    expect(DEFAULT_SETTINGS.encryptTranscripts).toBe(true)
+    expect(DEFAULT_SETTINGS.operatorUrl).toBe('')
+    expect(DEFAULT_SETTINGS.localLlm.enabled).toBe(false)
+  })
+
+  it('schema heals garbage overlay and orb keys to the friendly defaults', () => {
+    expect(BaseSettingsSchema.shape.overlayLayout.parse(undefined)).toBe('hide')
+    expect(BaseSettingsSchema.shape.overlayOrbStyle.parse(undefined)).toBe('jakub')
+    expect(BaseSettingsSchema.shape.providerPriority.parse(undefined)).toBe('api')
+    expect(BaseSettingsSchema.shape.encryptTranscripts.parse(undefined)).toBe(true)
   })
 })

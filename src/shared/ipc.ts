@@ -49,12 +49,15 @@ export const IPC = {
   dustLoginBegin: 'dust:loginBegin',
   dustLoginPoll: 'dust:loginPoll',
   dustLoginPickWorkspace: 'dust:loginPickWorkspace',
+  dustInstallCli: 'dust:installCli',
+  dustInstallCliProgress: 'dust:installCli:progress',
   graphifyStatus: 'graphify:status',
   graphifyRebuild: 'graphify:rebuild',
   graphifyRelated: 'graphify:related',
   graphifyOpenGraph: 'graphify:openGraph',
   brainStatus: 'brain:status',
   brainBackfill: 'brain:backfill',
+  brainIntelligencePass: 'brain:intelligencePass',
   brainRead: 'brain:read',
   brainEntityNames: 'brain:entityNames',
   restoreEmbeddedCloudflareKey: 'settings:restoreEmbeddedCloudflareKey',
@@ -73,6 +76,8 @@ export const IPC = {
   // No status/ensure/progress channels: unlike Parakeet there is no bundled model to download: the
   // helper binary either transcribes or the call resolves to '' (see main/apple-speech.ts).
   appleSpeechFeed: 'apple-speech:feed',
+  // Speaker Intelligence — Whisper's speaker-embedding tap. echo:true means operator loopback bleed.
+  speakerEmbed: 'speaker:embed',
   askStart: 'ask:start',
   askCancel: 'ask:cancel',
   // Explicit "new chat" boundary: clears the main-owned carriers of cross-question state (the server-side
@@ -91,12 +96,15 @@ export const IPC = {
   saveDraftTranscript: 'transcript:saveDraft',
   saveNote: 'note:save',
   importAudioPick: 'import-audio:pick',
+  importAudioOffer: 'import-audio:offer',
   importAudioStart: 'import-audio:start',
+  importAudioStartBatch: 'import-audio:start-batch',
   importJobsList: 'import-audio:jobs:list',
   importJobCancel: 'import-audio:job:cancel',
   importJobResume: 'import-audio:job:resume',
   importJobRemove: 'import-audio:job:remove',
   importAudioProgress: 'import-audio:progress',
+  importAssetsProgress: 'import-assets:progress',
   // Private channels used only by the sandboxed hidden decoder window. They are never bridged to the
   // interactive overlay preload.
   importDecoderChunk: 'import-decoder:chunk',
@@ -152,6 +160,18 @@ export const IPC = {
   windowQuit: 'window:quit',
   windowRelaunch: 'window:relaunch',
   windowMinimize: 'window:minimize',
+  // Vibe-Island auto-hide: pin the overlay to the top-center of its current display and re-arm the
+  // resizeTo anchor there, so the peek strip / revealed bar grow downward from the top edge. Never
+  // shows or focuses the window — a pure setBounds, so the user's foreground app keeps focus.
+  windowAnchorTop: 'window:anchorTop',
+  // Auto-hide reveal: widen the window back to the full bar width (the peek narrowed it via
+  // data-hug-width, and the plain-bar view never reports a width again). Pure setBounds; no show/focus.
+  windowRevealWidth: 'window:revealWidth',
+  // Main-process cursor watch (darwin / Windows top-edge): menu-bar / Dynamic Island
+  // often does not deliver mouseenter. Payload: { hovering: boolean }.
+  overlayCursorHover: 'overlay:cursorHover',
+  // Renderer finished the hide spring (or 400ms fallback) — now park the rest rect.
+  overlayParkAfterHide: 'overlay:parkAfterHide',
   // Renderer ErrorBoundary catch (React render-throw) → persisted crash-*.log, same sink as onFatal's
   // main-process crashes. Distinct from render-process-gone (whole renderer dies): this is a caught JS
   // exception the renderer survives, previously visible only via ASKTOTO_DEBUG_RENDERER console mirroring.
@@ -161,10 +181,19 @@ export const IPC = {
   permissionsGet: 'permissions:get',
   permissionsOpenSettings: 'permissions:openSettings',
   permissionsRequestUpfront: 'permissions:requestUpfront',
+  // Settings / overlay self-check: first pass is the OS probe; second pass is a real vision ask.
+  // Result stays on this device — never forwarded to a teammate, CRM, or askStart overlay chat.
+  screenCaptureCheck: 'permissions:screenCaptureCheck',
   listeningState: 'listening:state',
   asrBundled: 'asr:bundled',
-  // Métis Local (on-device LLM): read-only readiness metadata for the model bundled in the installer.
+  // Onboarding + Settings: live Parakeet/Whisper-floor readiness (bundled or userData). Distinct from
+  // asrBundled, which only answers “is the installer/repo resources/ manifest complete?”
+  asrAssetsStatus: 'asr:assets-status',
+  asrAssetsEnsure: 'asr:assets-ensure',
+  // Métis Local (on-device LLM): readiness metadata plus a start/retry that does not require toggling
+  // Local AI (routing) on. Cancel/delete stay off the renderer — main owns the transfer.
   localModelsList: 'localModels:list',
+  localModelsEnsure: 'localModels:ensure',
   // MQA-247: the high-accuracy transcription model. Its own pair rather than folded into the LLM
   // channel above — different asset, different size, different consent, and a user may want one
   // and not the other.
@@ -204,14 +233,36 @@ export const IPC = {
   // + PKCE flow (browser consent) and, on success, upserts an mcpConnections entry exactly like
   // mcpSaveConnection does for a pasted key. Reuses mcpDisconnect/mcpPush unchanged.
   mcpClickupConnect: 'mcp:clickupConnect',
+  // Names the last/connected ClickUp list without creating a task. Used when the seat was already
+  // connected before dest storage existed, so Review can show `Task in {list}` before Confirm.
+  mcpClickupDiscoverDestination: 'mcp:clickupDiscoverDestination',
+  // Plane Connect — same shape as ClickUp: one button, OAuth 2.1 + PKCE + DCR, pinned hosted MCP URL.
+  mcpPlaneConnect: 'mcp:planeConnect',
+  operatorOpen: 'operator:open',
   licenseActivate: 'license:activate',
   licenseStatus: 'license:status',
   licenseGate: 'license:gate',
+  cloudflareConnect: 'cloudflare:connect',
+  identitySnapshot: 'identity:snapshot',
+  memberLicenseActivate: 'license:memberActivate',
+  memberLicenseDeactivate: 'license:memberDeactivate',
+  memberLicenseStatus: 'license:memberStatus',
+  memberLicenseVerifyCached: 'license:memberVerifyCached',
+  memberLicenseImportFile: 'license:memberImportFile',
+  licenseConfig: 'license:config',
   localAiStatus: 'local-ai:status',
   localTranscriptBegin: 'local-ai:transcript:begin',
   localTranscriptAppend: 'local-ai:transcript:append',
   localTranscriptResync: 'local-ai:transcript:resync',
-  localTranscriptEnd: 'local-ai:transcript:end'
+  localTranscriptEnd: 'local-ai:transcript:end',
+  timeSavedRead: 'time-saved:read',
+  timeSavedRecord: 'time-saved:record',
+  outlookWriteStatus: 'outlook:writeStatus',
+  outlookCreateDraft: 'outlook:createDraft',
+  outlookCreateEvent: 'outlook:createEvent',
+  mcpWriteTargets: 'mcp:writeTargets',
+  /** Wave 2 — clear the one-shot last-failover chip after the user dismisses it. */
+  dismissFailoverNotice: 'settings:dismissFailoverNotice'
 } as const
 
 /** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals. */
@@ -230,6 +281,10 @@ export interface EvalMetrics {
   tokensIn: number
   tokensOut: number
   byProvider: Record<string, number>
+  /** Wave 3 (docs/qa/QUALITY-SCORECARD.md's "Brain LLM consolidations / active day"): count of
+   *  'brain.consolidation' audit events in this window — how many batched extraction passes actually
+   *  ran, as opposed to the per-mode provider.request counts above. */
+  brainConsolidationPasses: number
 }
 
 export type AskMode = 'answer' | 'vision' | 'suggest' | 'summary' | 'recap'
@@ -307,9 +362,23 @@ export const TranscriptLineSchema = z.object({
   // by commitLine so mixed-language meetings render "[conversation switches to …]" markers in the recap
   // prompt and the saved transcript (the LLM otherwise has no way to know a switch happened). Absent
   // when detection wasn't confident, and on every line saved before this field existed.
-  lang: z.string().optional()
+  lang: z.string().optional(),
+  // Streaming first-caption placeholder (docs/asr/QUALITY.md). Never persisted; transcriptToText drops it.
+  provisional: z.boolean().optional()
 })
 export type TranscriptLine = z.infer<typeof TranscriptLineSchema>
+
+/** ASR quality (1B.2b) — strip UI-only provisional placeholders (see TranscriptLineSchema.provisional
+ *  above) before a transcript reaches disk or the recap prompt. `transcriptToText` (renderer/lib/
+ *  transcript.ts) is the live-text guard; this is the save-path guard, applied once at the IPC boundary
+ *  (main/index.ts's saveTranscript/saveDraftTranscript handlers) so every caller is covered even one that
+ *  forgot to filter — belt-and-suspenders, since commitLine already removes the placeholder it's
+ *  replacing before pushing the real line, so in the common case there is nothing left to strip. Returns
+ *  the input array unchanged (same reference) when nothing needed removing, so a save of an ordinary
+ *  meeting with no provisional lines never pays a spurious copy. */
+export function stripProvisionalLines(lines: TranscriptLine[]): TranscriptLine[] {
+  return lines.some((l) => l.provisional) ? lines.filter((l) => !l.provisional) : lines
+}
 
 /** Single source of truth for the import pipeline's decode window. Both decoders that turn a recording
  *  into PCM windows — main's ffmpeg sidecar (main/ffmpeg-decoder.ts) and the renderer's Chromium
@@ -362,7 +431,20 @@ export const ImportAudioChunkSchema = z.object({
 })
 export type ImportAudioChunk = z.infer<typeof ImportAudioChunkSchema>
 
-/** Result of import-audio:pick. `token` is an opaque, single-use main-process capability, never a file path. */
+/** One accepted recording from import-audio:pick / offer. `token` is never a file path. */
+export interface ImportAudioPickedFile {
+  token: string
+  name: string
+  sizeBytes: number
+  mtimeMs: number
+}
+
+export interface ImportAudioSkippedFile {
+  name: string
+  error: string
+}
+
+/** Result of import-audio:pick or import-audio:offer. Tokens are opaque, single-use, never file paths. */
 export interface ImportAudioPickResult {
   cancelled?: boolean
   error?: string
@@ -370,10 +452,34 @@ export interface ImportAudioPickResult {
   name?: string
   sizeBytes?: number
   mtimeMs?: number
+  files?: ImportAudioPickedFile[]
+  skipped?: ImportAudioSkippedFile[]
 }
 
 export const ImportAudioStartSchema = z.object({ token: z.string().min(20).max(200) })
 export type ImportAudioStart = z.infer<typeof ImportAudioStartSchema>
+
+export const ImportAudioStartBatchSchema = z.object({
+  tokens: z.array(z.string().min(20).max(200)).min(1).max(50)
+})
+export type ImportAudioStartBatch = z.infer<typeof ImportAudioStartBatchSchema>
+
+export const ImportAudioOfferSchema = z.object({
+  paths: z.array(z.string().min(1).max(4096)).max(50)
+})
+export type ImportAudioOffer = z.infer<typeof ImportAudioOfferSchema>
+
+export interface ImportAssetsProgress {
+  status: 'idle' | 'downloading' | 'ready' | 'error'
+  progress: number
+  label: string
+  error?: string
+}
+
+/** Onboarding / Settings snapshot of Parakeet + Whisper-floor readiness. */
+export interface AsrAssetsStatus extends ImportAssetsProgress {
+  ready: boolean
+}
 
 export type ImportJobState =
   | 'queued'
@@ -675,7 +781,12 @@ export type StreamDelta = z.infer<typeof StreamDeltaSchema>
 export const StreamDoneSchema = z.object({
   id: z.string(),
   inputTokens: z.number().optional(),
-  outputTokens: z.number().optional()
+  outputTokens: z.number().optional(),
+  cacheRead: z.number().optional(),
+  cacheWrite: z.number().optional(),
+  cacheUncached: z.number().optional(),
+  cacheStatus: z.enum(['hit', 'write', 'n/a', 'not-reported']).optional(),
+  cacheTtl: z.enum(['1h', '5m', '30m']).optional()
 })
 export type StreamDone = z.infer<typeof StreamDoneSchema>
 
@@ -719,11 +830,9 @@ const BundledLocalModelIdSchema = z.preprocess(
 )
 
 // ─── MCP connections (generalized from the single BidStack connection) ──────────────────────────────
-// 'clickup' is schema-reserved only: ClickUp's remote MCP server is OAuth-2.1-with-PKCE only (no bearer
-// API-key path), a materially different auth shape than mcpClient.ts implements today, so it ships as
-// its own scoped follow-up. Keeping the enum member here now means the persisted-settings shape never
-// has to change again when that follow-up lands (Build Law rule 7) — there's just no UI/IPC wiring for
-// it yet.
+// 'clickup' is a first-class connection: OAuth 2.1 + PKCE (clickupOAuth.ts, PR 73 loopback DCR) and
+// post-meeting create-task (docs/design/CLICKUP-PUSH.md). The access token is a bearer key on
+// mcpClient.ts like any other connection.
 export const McpConnectionKindSchema = z.enum(['bidstack', 'clickup', 'plane'])
 export type McpConnectionKind = z.infer<typeof McpConnectionKindSchema>
 
@@ -747,7 +856,11 @@ export const McpConnectionSchema = z.object({
   // requires `X-Workspace-slug` alongside the bearer token. Generic (not `planeWorkspaceSlug`) because
   // it's a mechanical transport concern, not a Plane-specific business field, and BidStack already
   // proves the "zero extra headers" case — two real shapes justify the generalization.
-  extraHeaders: z.record(z.string(), z.string()).default({})
+  extraHeaders: z.record(z.string(), z.string()).default({}),
+  // ClickUp last-successful list (main-owned; renderer cannot patch mcpConnections). Empty until
+  // Connect discovers one or a create-task lands. See docs/design/CLICKUP-PUSH.md.
+  clickupListId: z.string().max(40).optional(),
+  clickupListName: z.string().max(120).optional()
 })
 export type McpConnection = z.infer<typeof McpConnectionSchema>
 
@@ -766,10 +879,12 @@ export const BaseSettingsSchema = z.object({
   // Default provider: Cloudflare (Tony, 2026-08-21), replacing NVIDIA NIM (2026-08-14). One endpoint the
   // operator deploys reaches Workers AI, OpenAI, Anthropic and Google on a single account credential, so
   // a fleet is configured once rather than per vendor per user. The build ships the operator's Worker URL
-  // as cloudflareBaseUrl's default (a URL is not a secret); the METIS_PROXY_KEY never ships and is the one
-  // string a user pastes. Until that key exists the provider is simply not ready, and the walk behaves as
-  // it always has: an explicitly enabled on-device model short-circuits first (localLlm.useFor), then
-  // Cloudflare, then NVIDIA NIM, then whatever keys the user added themselves.
+  // as cloudflareBaseUrl's default (a URL is not a secret); the METIS_PROXY_KEY is either
+  // installer-embedded (embedded-cloudflare-key.ts) or pasted once in Settings — Cloudflare stays the
+  // always-on cloud path. Additional LLMs are additive: paste any featured / "more models" / Custom
+  // OpenAI-compatible API key in Settings → AI. Métis Local routing is opt-in (localLlm.enabled defaults
+  // off) but the weights still download in the background when the app opens so enabling Local later is
+  // instant. Local only preempts Cloudflare when the user turns a useFor toggle on.
   provider: ProviderIdSchema.default('cloudflare'),
   // CLI-vs-API priority. 'api' (default) keeps the explicitly-chosen `provider` as primary. 'cli' makes a
   // connected CLI integration (Claude/Codex) the primary so the user's local subscription is used before
@@ -822,6 +937,12 @@ export const BaseSettingsSchema = z.object({
   // the ask choke point AND resets the server-side Dust conversation in the same breath — see IPC.askStart
   // in main/index.ts). Mid-meeting continuity (Copilot, fact-check during Listen) is unaffected either way.
   askFollowUpMemory: z.boolean().default(false),
+  // Ask answer register (JuliusBrussee/caveman, locked like humanizer). Default full. Persists in the
+  // existing settings store until "stop caveman" / "normal mode" / `/caveman off`. Live suggest, recap,
+  // summary, and fact-check skip it. Not an Operator skill pack.
+  askCaveman: z
+    .enum(['off', 'lite', 'full', 'ultra', 'wenyan-lite', 'wenyan-full', 'wenyan-ultra'])
+    .default('full'),
   // Dust provider config (workspace id + region base; the agent sId lives in providerModels.dust)
   dustWorkspaceId: z.string().default(''),
   dustBaseUrl: z
@@ -943,26 +1064,36 @@ export const BaseSettingsSchema = z.object({
   /** Background screen preprocessing: when the foreground window changes, quietly analyze the screen with
    *  the ON-DEVICE model and cache the description, so "What's on my screen" answers from pre-computed text
    *  instead of a cold capture + full-image round trip. On-device only — nothing extra is sent to the cloud;
-   *  Private View hard-blocks it. Default OFF — explicit opt-in. This used to default on while relying on
-   *  localLlm.enabled defaulting off to stay inert; now that Local AI is enabled by default (fallback
-   *  safety net), a true default here would silently start continuous foreground-window capture +
-   *  captioning on every fresh install with zero user action. Continuous screen reading is its own
-   *  consent decision, never a side effect of another default. (The Cahê pilot still seeds it true
-   *  explicitly — cahe-embedded-key.ts — which is an explicit per-edition choice, not a default.) */
+   *  Private View hard-blocks it. Default OFF — explicit opt-in. Continuous screen reading is its own
+   *  consent decision, and it also requires Local AI to be enabled (itself off by default). (The Cahê
+   *  pilot still seeds both true explicitly — cahe-embedded-key.ts — which is an explicit per-edition
+   *  choice, not a default.) */
   backgroundScreenContext: z.boolean().default(false),
   // How see-through the overlay's glass background is. A multiplier on the default glass alpha values
   // (see --glass-fill etc. in styles.css) — 1 = today's default look, lower = more transparent (see more
   // of what's behind), higher = more opaque/solid (easier to read over a busy desktop). Values above 1
   // simply saturate at fully opaque for the most solid backgrounds; nothing errors or clips oddly.
   overlayOpacity: z.number().min(0.3).max(1.5).default(1),
+  // Vibe-Island-style auto-hide: when on (default), the top-center overlay collapses to a slim peek strip
+  // hugging the top edge whenever the pointer isn't over it and nothing important is happening, then
+  // reveals the full bar on hover / on a forced event (recording, live suggestion, error toast). Reveal
+  // and collapse are pure content resizes of the always-on-top window — they never show/focus it, so the
+  // user's foreground app keeps focus (the non-activating notch contract). Off = the bar is always shown.
+  autoHideOverlay: z.boolean().default(true),
+  /** Overlay chrome: hide (default, fully hidden until top hover), island (visible peek), bar (classic). */
+  overlayLayout: z.enum(['hide', 'island', 'bar']).default('hide'),
+  /** Bar rest look. Hide/Island ignore this. Default Circle is the Jakub thinking-orb. */
+  overlayOrbStyle: z.enum(['bar', 'jakub', 'obsidian']).default('jakub'),
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
-  asrQuality: z.enum(['best', 'fast']).default('fast'), // packaged builds use the bundled compact model for both modes
-  // whisper = ~99 langs (default — safe for any locale; parakeet is European-only, which is why 1fa4d76
-  // moved the default off it); parakeet = 25 European languages, fastest; apple = on-device Apple Speech
-  // (SFSpeechRecognizer via the mac-helper sidecar), opt-in, macOS 13+ only — see main/apple-speech.ts.
+  asrQuality: z.enum(['best', 'fast']).default('best'), // Best is default; Fast is a Settings power option (docs/asr/QUALITY.md)
+  // parakeet = default. NVIDIA Parakeet v3, fastest + accurate for 25 European languages.
+  // whisper = ~99 langs, opt-in for non-European speech. apple = on-device Apple Speech
+  // (SFSpeechRecognizer via the mac-helper sidecar), macOS 13+ only — see main/apple-speech.ts.
+  // Existing users who never wrote asrEngine inherit this default (sparse settings.json).
+  // An explicit whisper/apple override is never clobbered.
   // NOTE: this zod default is effectively dead — store.ts layers DEFAULT_SETTINGS under the user file
   // before parsing, so the key is always present. Keep both declarations identical so neither lies.
-  asrEngine: z.enum(['whisper', 'parakeet', 'apple']).default('whisper'),
+  asrEngine: z.enum(['whisper', 'parakeet', 'apple']).default('parakeet'),
   // Spoken-language hint for transcription: 'auto' (per-window detect) or a language display name from
   // Settings' LANGUAGE_OPTIONS ('Portuguese', …). Pins Whisper's decoder and Apple Speech's recognizer
   // locale; Parakeet always auto-detects. Exists because per-window auto-detect on the compact bundled
@@ -995,9 +1126,6 @@ export const BaseSettingsSchema = z.object({
   // before it's sent to a cloud model. On by default; never touches the typed question or the saved file.
   redactSensitive: z.boolean().default(true),
   lastConsentReminderAt: z.number().default(0),
-  // deprecated — kept so persisted settings/managed-config still parse (was only used by the removed
-  // auto-start-on-meeting-detected popup's app-name matching).
-  customMeetingApps: z.array(z.string().min(1).max(80)).max(20).default([]),
   // Words the ASR engine consistently mishears, always corrected in the live transcript (commitLine).
   asrCorrections: z.array(AsrCorrectionPairSchema).max(100).default([]),
   // Entity-casing bias (SAFE — exact-match only, never phonetic/fuzzy): spell people/account names the
@@ -1006,13 +1134,16 @@ export const BaseSettingsSchema = z.object({
   asrEntityBias: z.boolean().default(true),
   // CLI provider connection state. Keyed by ProviderId ('claude-cli', 'codex-cli').
   cliConnected: z.record(z.string(), z.boolean()).default({}),
+  // Last CLI the user connected or selected. Ask uses this as the primary when both CLIs work.
+  // Not a secret. Never a vault row.
+  lastClickedCli: z.enum(['claude-cli', 'codex-cli']).nullable().default(null),
   // Epoch ms of the last Dust CLI token import. Gates the startup eager refresh: while the ~1h OAuth
   // token is still fresh, launch does NOT touch the Dust CLI keychain item (each `security` read can
   // cost a macOS keychain password prompt on identity-unstable dev builds). 0 = never imported.
   dustTokenMintedAt: z.number().default(0),
   // Whether the user has acknowledged the CLI integration notice banner.
   cliNoticeAck: z.boolean().default(false),
-  // Named MCP connections — CRM (BidStack) and task managers (Plane; ClickUp is schema-reserved only,
+  // Named MCP connections — CRM (BidStack) and task managers (Plane, ClickUp). One connection per kind
   // see McpConnectionKindSchema). One connection per kind (id === kind in v1). API keys themselves are
   // NOT stored here; they go through the same encrypted-file mechanism as provider keys, via
   // main/mcp/mcpSecrets.ts (kept out of the ProviderId union — these are push credentials, not LLM
@@ -1022,21 +1153,26 @@ export const BaseSettingsSchema = z.object({
   // migrateLegacyBidstackConnection in main/store.ts for how an existing user's data carries forward.
   mcpConnections: z.array(McpConnectionSchema).max(10).default([]),
   // ClickUp's Dynamic Client Registration (RFC 7591) client_id — public, not a secret, so it lives in
-  // plain settings rather than mcpSecrets.ts. Registered once (main/mcp/clickupOAuth.ts) and cached here
-  // so every later connect/reconnect reuses the same client instead of re-registering.
+  // plain settings rather than mcpSecrets.ts. ClickUp binds each client_id to the exact redirect_uri
+  // from that registration (no RFC 8252 port flexibility). Each Connect run in clickupOAuth.ts
+  // registers a fresh client with this run's loopback URI and stores the new id here for token refresh;
+  // a leftover portless/mismatched client_id is never reused for /authorize.
   clickupClientId: z.string().default(''),
+  // Plane DCR client_id — public, like clickupClientId. The matching client_secret is encrypted in
+  // mcpSecrets (`key-mcp-plane-client.bin`) because Plane's token endpoint requires client_secret_post.
+  planeClientId: z.string().default(''),
   // Métis Local uses a single on-device model. The preprocess is a persisted-settings migration for
   // releases that offered qwen3.5-2b; unknown ids fail validation and fall back safely in
   // main/store.ts instead of pointing llama-server at a file that can never exist.
   localLlm: z
     .object({
-      // Default TRUE: the llama-server RUNTIME ships inside every installer, and the flag alone costs
-      // nothing at runtime — the sidecar spawns lazily on first local request, and
-      // prewarm additionally requires useFor.suggest (local-routing.ts localPrewarmEligible). With every
-      // useFor toggle defaulting FALSE below, default-enabled can never preempt a configured cloud
-      // provider; it only makes the `fallback` safety net (and the Settings toggles) live out of the box,
-      // so a zero-API-key install still indexes meetings and answers in-scope asks on-device.
-      enabled: z.boolean().default(true),
+      // Default FALSE: Cloudflare (the shipped default provider, with Worker URL + optional embedded
+      // METIS_PROXY_KEY) is the always-on cloud path. Métis Local ROUTING is opt-in — turning it on in
+      // Settings uses the on-device model. The weights themselves still download in the background whenever
+      // the app opens (RAM permitting), so enabling Local later does not wait on a multi-GB transfer.
+      // Keeping enabled false means a fresh install never silently routes work on-device ahead of
+      // Cloudflare / API providers.
+      enabled: z.boolean().default(false),
       modelId: BundledLocalModelIdSchema,
       // All FALSE by default: useFor.X means "local FIRST for X" — it short-circuits even a configured
       // cloud provider (local-routing.ts pickPrimaryProvider) and, for summary, makes local the EXCLUSIVE
@@ -1060,17 +1196,25 @@ export const BaseSettingsSchema = z.object({
       // limits entirely so a plain typed question is answered on-device rather than met with "add an API
       // key" — the alternative there is not a better cloud answer, it is no answer. Only ever reachable
       // when localLlm.enabled is true and the runtime+model are actually provisioned AND the org
-      // allowlist permits 'local' (localBaseReady). Defaults on: it can only ever reduce the chance of
-      // work going undone, never increase cloud exposure (on-device is same-or-more private than cloud,
-      // never less).
-      fallback: z.boolean().default(true)
+      // allowlist permits 'local' (localBaseReady). Defaults OFF with enabled: a safety net that would
+      // trigger a ~730 MB download the user never asked for is not a safety net. Settings → Local AI
+      // arms fallback when the user turns Local on.
+      fallback: z.boolean().default(false)
     })
     .default({
-      enabled: true,
+      enabled: false,
       modelId: BUNDLED_LOCAL_MODEL_ID,
       useFor: { suggest: false, summary: false, vision: false },
-      fallback: true
+      fallback: false
     }),
+  // Wave 2 (docs/PROVIDER-ROUTING-POLICY.md): a top-level policy choice, separate from localLlm.useFor/
+  // fallback (which stay the per-mode mechanics 'auto' actually consults). 'local' prefers Métis Local for
+  // every eligible mode and only escalates to cloud on hard failure; 'api' keeps local out of the FIRST-
+  // attempt pick entirely (it still applies as the last-resort floor when localLlm.fallback is on — the
+  // "never fully stuck" guarantee stays true once Local is opted in); 'auto' (default) is today's
+  // health/headroom/useFor-driven behavior. With Local off by default, 'auto' still routes to Cloudflare /
+  // pasted API keys first. Legacy installs with no persisted value parse to 'auto'.
+  routingMode: z.enum(['local', 'api', 'auto']).default('auto'),
   // Resilience routing (the OmniRoute integration): what to do when a provider runs out of tokens/credit
   // rather than a key being rejected. See main/llm/exhaustion.ts + provider-health.ts. Both default ON —
   // they can only ever KEEP an ask answerable, never expose more than the user already configured.
@@ -1091,6 +1235,20 @@ export const BaseSettingsSchema = z.object({
       hedge: z.boolean().default(true)
     })
     .default({ preferFreeOnExhaustion: true, budgetPreempt: true, hedge: true }),
+  // Wave 3: batch the brain's LLM extraction into 1-2 passes/day (docs/qa/QUALITY-SCORECARD.md's "Brain
+  // LLM consolidations / active day ≤ 2") instead of a network round trip after every single meeting.
+  // main/brain/consolidate.ts owns the pass counting and the timer that drives runConsolidationIfDue;
+  // this is only the user-facing policy. enabled=true by default (batching reduces cloud calls);
+  // preferLocal=false by default so consolidation uses Cloudflare / API providers until Local is opted in.
+  // today's per-meeting behavior, never add one.
+  brainConsolidation: z
+    .object({
+      enabled: z.boolean().default(true),
+      maxPassesPerDay: z.number().int().min(1).max(4).default(2),
+      // Prefer Cloudflare / API providers for consolidation batches unless the user opts Local on.
+      preferLocal: z.boolean().default(false)
+    })
+    .default({ enabled: true, maxPassesPerDay: 2, preferLocal: false }),
   // Speaker Intelligence (docs/SPEAKER-INTELLIGENCE-PLAN.md): live "who's speaking" labels on THEM
   // transcript lines via on-device voice embeddings (sherpa-onnx, same addon as Parakeet). ON by
   // default since 2026-08-21 (MQA-235 / Plaud-parity work): the embedding model ships in every build
@@ -1175,7 +1333,31 @@ export const BaseSettingsSchema = z.object({
   licenseExpiresAt: z.number().nullable().default(null),
   licenseValid: z.boolean().default(false),
   licenseLastValidatedAt: z.number().default(0),
-  licenseGateEnabled: z.boolean().default(false)
+  licenseGateEnabled: z.boolean().default(false),
+  // ── Act 5 (License/trial), MQA-281/282 ──────────────────────────────────────────────────────────
+  /** Compact Ed25519-signed offline lease from the most recent successful /activate or /heartbeat that
+   *  carried one (license-server's lib/lease.mjs wire format). '' = no lease (an unconfigured server,
+   *  or a build that never activated at all) — checkLicenseGrace() (main/license.ts) then falls back to
+   *  the wall-clock grace exactly as it did before this existed. Server-authoritative: stripped from
+   *  any renderer-supplied settings patch, same as the other license fields above (settings:set's strip
+   *  list, main/index.ts) — a hostile renderer must not be able to self-issue a lease. */
+  licenseLease: z.string().default(''),
+  /** Epoch ms of the first QUALIFYING real use — a real suggest/summary/recap result actually delivered
+   *  (main/license.ts's noteQualifyingUse, called from main/index.ts's ask pipeline). null = no
+   *  qualifying use yet. Deliberately NOT set on install/first launch, and never reachable from Act 2's
+   *  onboarding demo (structurally IPC-free — see onboarding-demo.ts). Main-authoritative: stripped
+   *  from renderer patches for the same reason as licenseLease — a plain settings patch must not be
+   *  able to grant a fresh 14-day trial. */
+  trialStartedAt: z.number().nullable().default(null),
+  // Operator control plane (Cloudflare Worker `metis-operator`). Empty URL = off. Not the Fly
+  // license-server and not cloudflare-proxy. Ingest secret is the HMAC shared with the Worker;
+  // it is a Wrangler secret on the server and a Settings power field here. Never commit it.
+  operatorUrl: z
+    .string()
+    .refine((v) => v === '' || /^https:\/\//i.test(v), 'Operator URL must be an https:// URL')
+    .default(''),
+  operatorIngestSecret: z.string().default(''),
+  sendAskText: z.boolean().default(true)
 })
 
 export const SettingsSchema = BaseSettingsSchema.refine(
@@ -1239,6 +1421,20 @@ export const PublicSettingsSchema = BaseSettingsSchema.extend({
       })
     )
     .default([]),
+  /**
+   * Wave 2 / QA — last successful failover hop this session (primary → backup). Session-scoped, never
+   * persisted; the renderer shows a one-shot chip then clears via settings:dismissFailoverNotice.
+   * null when no failover has fired yet (or the user dismissed the chip).
+   */
+  lastFailover: z
+    .object({
+      from: z.string(),
+      to: z.string(),
+      at: z.number(),
+      reason: z.string().default('failover')
+    })
+    .nullable()
+    .default(null),
   /** Background on-device screen pre-analysis can actually run RIGHT NOW, straight from the engine's own
    *  gate (screen-preprocess.ts canRun(), never recomputed renderer-side): session valid, the
    *  `backgroundScreenContext` setting on, an on-device reader available (local model OR the macOS Vision
@@ -1288,6 +1484,7 @@ export type SettingsPatch = Partial<
     | 'managedKeys'
     | 'envKeys'
     | 'loginItemOpenAtLogin'
+    | 'lastFailover'
   >
 >
 
@@ -1306,9 +1503,11 @@ export const DEFAULT_SETTINGS: Settings = {
   providerModelsThinking: {},
   providerModelsDeep: {},
   providerModelsSpotlightRef: DUST_SPOTLIGHT_REF_AGENT_ID ? { dust: DUST_SPOTLIGHT_REF_AGENT_ID } : {},
+  routingMode: 'auto',
   resilience: { preferFreeOnExhaustion: true, budgetPreempt: true, hedge: true },
   thinkingMode: 'auto',
   askFollowUpMemory: false,
+  askCaveman: 'full',
   customBaseUrl: '',
   cloudflareBaseUrl: METIS_WORKER_URL,
   dustWorkspaceId: '',
@@ -1338,7 +1537,7 @@ export const DEFAULT_SETTINGS: Settings = {
   privateView: false,
   audioSource: 'both',
   micDeviceId: '',
-  suggestEverySec: 15,
+  suggestEverySec: 8,
   mode: 'general',
   profile: { name: '', role: '', company: '', resume: '', jobDescription: '', notes: '' },
   shortcuts: {}, // empty → built-in DEFAULT_SHORTCUTS apply (merged at hotkey registration)
@@ -1359,9 +1558,12 @@ export const DEFAULT_SETTINGS: Settings = {
   instantSuggestions: true,
   backgroundScreenContext: false,
   overlayOpacity: 1,
+  autoHideOverlay: true,
+  overlayLayout: 'hide',
+  overlayOrbStyle: 'jakub',
   showFullTranscriptInReview: false,
-  asrQuality: 'fast',
-  asrEngine: 'whisper',
+  asrQuality: 'best',
+  asrEngine: 'parakeet',
   asrLanguage: 'auto',
   asrLastFallbackAt: null,
   asrWebgpuFallbackAt: null,
@@ -1369,21 +1571,23 @@ export const DEFAULT_SETTINGS: Settings = {
   requireConsentIndicator: true,
   redactSensitive: true,
   lastConsentReminderAt: 0,
-  customMeetingApps: [], // deprecated — kept so persisted settings/managed-config still parse
   asrCorrections: [],
   asrEntityBias: true,
   cliConnected: {},
+  lastClickedCli: null,
   dustTokenMintedAt: 0,
   cliNoticeAck: false,
   mcpConnections: [],
   clickupClientId: '',
+  planeClientId: '',
   localLlm: {
-    enabled: true,
+    enabled: false,
     modelId: BUNDLED_LOCAL_MODEL_ID,
     useFor: { suggest: false, summary: false, vision: false },
-    fallback: true
+    fallback: false
   },
   speakerId: { enabled: true },
+  brainConsolidation: { enabled: true, maxPassesPerDay: 2, preferLocal: false },
   usageStats: { meetingsSummarized: 0, conversationMinutes: 0, firstMeetingAt: 0 },
   timeSaved: { writeupRatio: 0.2, floorMin: 5, capMin: 30 },
   tapControl: {
@@ -1400,7 +1604,12 @@ export const DEFAULT_SETTINGS: Settings = {
   licenseExpiresAt: null,
   licenseValid: false,
   licenseLastValidatedAt: 0,
-  licenseGateEnabled: false
+  licenseGateEnabled: false,
+  licenseLease: '',
+  trialStartedAt: null,
+  operatorUrl: '',
+  operatorIngestSecret: '',
+  sendAskText: true
 }
 
 export const HOTKEY_ACTIONS: HotkeyAction[] = [
@@ -1522,6 +1731,21 @@ export const TestApiKeyPayloadSchema = z.object({
   provider: ProviderIdSchema,
   key: z.string()
 })
+
+export const ScreenCaptureCheckPassSchema = z.enum(['probe', 'vision'])
+export const ScreenCaptureCheckPayloadSchema = z.object({
+  pass: ScreenCaptureCheckPassSchema
+})
+export const ScreenCaptureCheckResultSchema = z.object({
+  ok: z.boolean(),
+  pass: ScreenCaptureCheckPassSchema,
+  backend: z.enum(['probe', 'local', 'api']).optional(),
+  backendLabel: z.string().max(200).optional(),
+  failedOver: z.boolean().optional(),
+  message: z.string().max(2000),
+  preview: z.string().max(200).optional()
+})
+export type ScreenCaptureCheckResult = z.infer<typeof ScreenCaptureCheckResultSchema>
 
 export interface TestKeyResponse {
   ok: boolean
@@ -1754,11 +1978,16 @@ export interface DustSessionProbe {
   incomplete?: boolean
 }
 
+/** Honest CLI session probe. Weekly-limit is signed-in, not disconnected. */
+export type CliSessionVerdict = 'missing' | 'signed-out' | 'weekly-limit' | 'live' | 'unknown'
+
 /** Result of a CLI provider detect/test operation (claude-cli, codex-cli). */
 export interface CliActionResult {
   ok: boolean
   version?: string
   error?: string
+  /** Present on Settings → Connect / session probe. Weekly-limit still has ok: true. */
+  session?: CliSessionVerdict
 }
 
 /** Result of an in-app CLI install attempt. needsTerminal → EACCES; fall back to setupCli. */
@@ -1834,7 +2063,9 @@ export const McpPushPayloadSchema = z.object({
   toolName: z.string().min(1, 'Choose an MCP tool to push to.'),
   args: z
     .record(z.string(), McpArgValueSchema)
-    .refine((a) => Object.keys(a).length <= 20, { message: 'Too many fields in the push payload.' })
+    .refine((a) => Object.keys(a).length <= 20, { message: 'Too many fields in the push payload.' }),
+  /** Basename of the saved meeting markdown — main re-reads frontmatter for confidential (never trust UI alone). */
+  meetingFile: z.string().min(1).max(260).optional()
 })
 export type McpPushPayload = z.infer<typeof McpPushPayloadSchema>
 
@@ -1843,6 +2074,8 @@ export interface McpConnectResult {
   ok: boolean
   error?: string
   tools?: string[]
+  clickupListId?: string
+  clickupListName?: string
 }
 
 /** Result of pushing to an MCP tool. */
@@ -1850,7 +2083,29 @@ export interface McpPushResult {
   ok: boolean
   error?: string
   result?: unknown
+  destinationName?: string
+  taskUrl?: string
 }
+
+/** Renderer may only record an email-summary. Main owns note-taking, second-brain, and mcp-push. */
+export const TimeSavedRecordPayloadSchema = z.object({
+  kind: z.literal('email-summary')
+})
+export type TimeSavedRecordPayload = z.infer<typeof TimeSavedRecordPayloadSchema>
+
+export const OutlookDraftPayloadSchema = z.object({
+  subject: z.string().max(200).default(''),
+  body: z.string().max(20_000).default('')
+})
+export type OutlookDraftPayload = z.infer<typeof OutlookDraftPayloadSchema>
+
+export const OutlookEventPayloadSchema = z.object({
+  subject: z.string().max(200).default(''),
+  body: z.string().max(20_000).default(''),
+  startIso: z.string().max(40).optional(),
+  endIso: z.string().max(40).optional()
+})
+export type OutlookEventPayload = z.infer<typeof OutlookEventPayloadSchema>
 
 // ─── Métis Local (on-device LLM) — bundled model readiness (see main/llm/local-models.ts) ─────────────
 // ipc.ts is bundled into the renderer too, so it cannot import local-models.ts (touches node:fs/electron
@@ -1868,10 +2123,12 @@ export const LocalModelSummarySchema = z
     minTotalRamGB: z.number(),
     ready: z.boolean(),
     unavailableReason: z
-      .enum(['insufficient-ram', 'downloading', 'download-failed', 'not-downloaded'])
+      .enum(['insufficient-ram', 'insufficient-disk', 'downloading', 'download-failed', 'not-downloaded'])
       .nullable(),
     /** 0..1 while `unavailableReason === 'downloading'`, 0 otherwise. */
-    downloadProgress: z.number().min(0).max(1)
+    downloadProgress: z.number().min(0).max(1),
+    /** Concrete refuse/fail reason while `unavailableReason === 'download-failed'`. */
+    downloadError: z.string().max(2000).nullable().optional()
   })
   .strict()
 export type LocalModelSummary = z.infer<typeof LocalModelSummarySchema>
@@ -1892,6 +2149,11 @@ export const LicenseActivatePayloadSchema = z.object({
 })
 export type LicenseActivatePayload = z.infer<typeof LicenseActivatePayloadSchema>
 
+export const LicenseConfigPayloadSchema = z.object({
+  serverUrl: z.string().min(1, 'Enter the license server URL.')
+})
+export type LicenseConfigPayload = z.infer<typeof LicenseConfigPayloadSchema>
+
 /** Result of an activate/heartbeat call. `error` carries either the server's own code ('invalid' |
  *  'revoked' | 'expired' | 'seat_limit_reached') or a client-side code for cases the server never sees:
  *  'network' (unreachable or a malformed response) and 'not_activated' (heartbeat with no activation on
@@ -1902,6 +2164,9 @@ export interface LicenseActivateResult {
   companyName?: string
   seatCap?: number
   expiresAt?: number | null
+  /** Compact signed offline lease (MQA-282), when this server has lease signing configured. Absent on
+   *  an unconfigured/older server — additive-only, see license-server/README.md. */
+  lease?: string
 }
 
 /** Cached license state for display — read straight from settings, no network call (see the
@@ -1915,6 +2180,11 @@ export interface LicenseStatusResult {
   licenseValid: boolean
   licenseLastValidatedAt: number
   licenseGateEnabled: boolean
+  /** Act 5 (MQA-281/282) — live-verified lease/trial status, independent of licenseGateEnabled (see
+   *  main/license.ts's licenseDisplayStatus). null/false/0 whenever neither applies. */
+  leaseExpiresAt: number | null
+  trialActive: boolean
+  trialDaysRemaining: number
 }
 
 /** Startup-gate verdict for App.tsx's boot gate, derived by calling checkLicenseGrace() fresh on every
@@ -1925,8 +2195,32 @@ export interface LicenseStatusResult {
 export interface LicenseGateVerdict {
   gateEnabled: boolean
   allowed: boolean
-  reason?: 'not_activated' | 'expired_grace'
+  reason?: 'not_activated' | 'expired_grace' | 'trial_expired'
+  leaseExpiresAt?: number
+  trialActive?: boolean
+  trialDaysRemaining?: number
 }
+
+/** GET /license/config's declared-intent pair (license-server's lib/license-gate.mjs) — informational
+ *  only, read by the ActLicense onboarding scene. `error` mirrors LicenseActivateResult's client-side
+ *  codes ('network' for unreachable/malformed; the server route itself never returns a business error). */
+export interface LicenseConfigResult {
+  ok: boolean
+  error?: string
+  licenseEnforcement?: boolean
+  licenseUiEnabled?: boolean
+  drift?: boolean
+}
+
+export {
+  LICENSE_ACTIVATION_OPEN,
+  MemberActivatePayloadSchema,
+  emptyLicenseStatus,
+  type IdentitySnapshot,
+  type MemberActivatePayload,
+  type MemberActivateResult,
+  type MemberLicenseStatus
+} from './license-types'
 
 export const CaptureResultSchema = z.object({
   /** base64 JPEG, no data: prefix */

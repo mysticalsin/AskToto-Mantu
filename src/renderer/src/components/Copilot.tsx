@@ -4,16 +4,21 @@ import type { TranscriptLine } from '@shared/ipc'
 import { isScreenCapturePermissionError, needsAppRelaunchForScreenCapture } from '@shared/screen-capture'
 import type { AnswerState } from '../state'
 import { Markdown } from './Markdown'
-import { TextButton, Spinner } from './ui'
+import { TextButton } from './ui'
+import { AgentStatus } from './AgentStatus'
 import { useFlash } from '../lib/useFlash'
 
 // Cap on how many transcript lines render live in the copilot panel — see the comment above transcriptRows.
 const TRANSCRIPT_RENDER_LIMIT = 150
 
 /** One transcript bubble. Memoized so appending a new line only mounts/renders the new row — React.memo's
- *  default shallow-prop comparison is enough here because `line` is a stable, never-mutated object once
- *  committed (see listen.ts's commitLine), so every already-rendered row's props are referentially
- *  unchanged and its render is skipped entirely. */
+ *  default shallow-prop comparison is enough here because `line` is a stable object once committed (see
+ *  listen.ts's commitLine), so every already-rendered row's props are referentially unchanged and its
+ *  render is skipped entirely. Two exceptions, both REPLACE the line with a new object rather than
+ *  mutating it in place, so the identity change is exactly what tells this row to re-render: a provisional
+ *  "…" placeholder gets swapped for the real committed line (listen.ts's clearProvisional/commitLine), and
+ *  a Speaker Intelligence name can attach to an already-committed 'them' line slightly later (listen.ts's
+ *  attachSpeakerName, Whisper-engine only). */
 const TranscriptRow = memo(function TranscriptRow({ line }: { line: TranscriptLine }): JSX.Element {
   return (
     <div className={line.speaker === 'you' ? 'flex justify-end' : 'flex justify-start'}>
@@ -22,7 +27,12 @@ const TranscriptRow = memo(function TranscriptRow({ line }: { line: TranscriptLi
           'max-w-[82%] rounded-[var(--radius-xl)] px-3 py-1.5 text-[13px] leading-snug break-words',
           line.speaker === 'you'
             ? 'bg-[var(--color-accent-soft)] text-[color:var(--color-ink)]'
-            : 'bg-white/[0.06] text-[color:var(--color-ink)]'
+            : 'bg-white/[0.06] text-[color:var(--color-ink)]',
+          // ASR quality (1B.2b) — a provisional line is a "…" placeholder standing in for a window still
+          // decoding (see shared/ipc.ts's TranscriptLineSchema.provisional); fade it so it visibly reads
+          // as pending rather than a real, final transcribed line — it's replaced (not restyled) once
+          // the real text commits, so this class never lingers on an actual line.
+          line.provisional ? 'opacity-40' : ''
         ].join(' ')}
       >
         <span className="mr-1.5 text-[10px] font-semibold uppercase text-[color:var(--color-ink-3)]">
@@ -185,9 +195,7 @@ export const Copilot = memo(function Copilot({
             )}
             <div className="flex items-center gap-1.5">
               {suggestion?.text && suggestion?.streaming && (
-                <span className="flex items-center gap-1 text-[11px] text-[color:var(--color-ink-3)]">
-                  <Spinner size={11} /> Updating…
-                </span>
+                <AgentStatus kind="working" size="inline" caption />
               )}
               {suggestion?.text && (
                 <TextButton
@@ -205,9 +213,7 @@ export const Copilot = memo(function Copilot({
         ) : suggestion?.text ? (
           <Markdown>{suggestion.text}</Markdown>
         ) : suggestion?.streaming ? (
-          <div className="flex items-center justify-center gap-2 text-[13px] text-[color:var(--color-ink-2)]">
-            <Spinner size={13} /> Thinking…
-          </div>
+          <AgentStatus kind="thinking" size="hero" />
         ) : (
           <div className="text-center text-[13px] leading-snug text-[color:var(--color-ink-2)]">
             {listening ? (
@@ -265,10 +271,12 @@ export const Copilot = memo(function Copilot({
         </div>
       )}
       {loading && (
-        <div className="flex items-center gap-2 text-[11px] text-[color:var(--color-ink-3)]">
-          <Spinner size={11} />
-          {loadingPct != null ? `Loading speech model… ${loadingPct}%` : 'Loading transcription model…'}
-        </div>
+        <AgentStatus
+          kind="loading-model"
+          size="inline"
+          caption
+          percent={loadingPct}
+        />
       )}
       {/* Transcript — hidden during the call; shown only when the user opens it (bar → Transcript). */}
       {showTx && (

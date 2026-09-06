@@ -971,8 +971,7 @@
 (function () {
   'use strict';
 
-  var TOKEN_KEY = 'asktoto-license-admin-token';
-  var token = localStorage.getItem(TOKEN_KEY);
+  var signedIn = false;
   var currentDetail = null;
   var pendingConfirmAction = null;
 
@@ -1237,9 +1236,8 @@
   function apiFetch(path, options) {
     options = options || {};
     var headers = Object.assign({}, options.headers || {});
-    if (token) headers['Authorization'] = 'Bearer ' + token;
     if (options.body && !headers['Content-Type']) headers['Content-Type'] = 'application/json';
-    return fetch(path, Object.assign({}, options, { headers: headers })).then(function (res) {
+    return fetch(path, Object.assign({ credentials: 'same-origin' }, options, { headers: headers })).then(function (res) {
       if (res.status === 401) {
         handleUnauthorized();
         throw new ApiError('unauthorized', 401, null);
@@ -1251,8 +1249,7 @@
   }
 
   function handleUnauthorized() {
-    localStorage.removeItem(TOKEN_KEY);
-    token = null;
+    signedIn = false;
     closeDrawer();
     closeNewLicenseModal();
     closeConfirm();
@@ -1289,31 +1286,37 @@
     }
     gateConnectBtn.disabled = true;
     gateError.classList.add('hidden');
-    var previousToken = token;
-    token = candidate;
-    apiFetch('/admin/licenses')
+    fetch('/admin/session', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { 'Authorization': 'Bearer ' + candidate, 'Content-Type': 'application/json' },
+      body: '{}'
+    })
+      .then(function (res) {
+        return res.json().catch(function () { return null; }).then(function (json) {
+          return { status: res.status, json: json };
+        });
+      })
       .then(function (result) {
         if (result.status === 200) {
-          localStorage.setItem(TOKEN_KEY, candidate);
+          signedIn = true;
           showDashboard();
-          renderLicenses(result.json || []);
+          return apiFetch('/admin/licenses').then(function (licenses) {
+            if (licenses.status === 200) renderLicenses(licenses.json || []);
+          });
         } else if (result.status === 503) {
-          token = previousToken;
           gateError.textContent = 'Admin routes are disabled on this server. Set LICENSE_ADMIN_TOKEN and try again.';
           gateError.classList.remove('hidden');
+        } else if (result.status === 401) {
+          gateError.textContent = 'Wrong admin token.';
+          gateError.classList.remove('hidden');
         } else {
-          token = previousToken;
           gateError.textContent = 'Could not connect. Please try again.';
           gateError.classList.remove('hidden');
         }
       })
-      .catch(function (err) {
-        token = previousToken;
-        if (err instanceof ApiError && err.kind === 'unauthorized') {
-          gateError.textContent = 'Wrong admin token.';
-        } else {
-          gateError.textContent = 'Could not reach the server. Check your connection and try again.';
-        }
+      .catch(function () {
+        gateError.textContent = 'Could not reach the server. Check your connection and try again.';
         gateError.classList.remove('hidden');
       })
       .finally(function () {
@@ -1322,10 +1325,11 @@
   }
 
   function signOut() {
-    localStorage.removeItem(TOKEN_KEY);
-    token = null;
-    closeDrawer();
-    showGate();
+    fetch('/admin/session', { method: 'DELETE', credentials: 'same-origin' }).finally(function () {
+      signedIn = false;
+      closeDrawer();
+      showGate();
+    });
   }
 
   // ---------- table rendering ----------
@@ -1520,7 +1524,7 @@
   }
 
   function loadAnalytics() {
-    // /health is public (no bearer needed); the two admin calls carry the token.
+    // /health is public; the two admin calls ride the httpOnly session cookie.
     Promise.all([
       apiFetch('/admin/analytics'),
       apiFetch('/admin/backups').catch(function (err) {
@@ -1697,9 +1701,7 @@
   // ---------- CSV export ----------
 
   function exportCsv() {
-    var headers = {};
-    if (token) headers.Authorization = 'Bearer ' + token;
-    fetch('/admin/licenses.csv', { headers: headers }).then(function (res) {
+    fetch('/admin/licenses.csv', { credentials: 'same-origin' }).then(function (res) {
       if (res.status === 401) {
         handleUnauthorized();
         throw new Error('unauthorized');
@@ -2167,19 +2169,23 @@
 
   // ---------- init ----------
 
-  // Validate a cached token BEFORE revealing the dashboard: don't flash the full dashboard chrome for
-  // a token that turns out stale (admin rotated the secret, or another tab signed out). Keep the gate
-  // up, in a checking state, until the first load actually succeeds. loadLicenses() SWALLOWS a 401 (its
-  // own .catch resolves), and apiFetch's handleUnauthorized() nulls `token` + shows the gate on a 401 —
-  // so only reveal the dashboard when `token` is still set after the load, i.e. auth actually held.
-  if (token) {
-    showGate('Checking your saved session...');
-    loadLicenses().then(function () {
-      if (token) showDashboard();
+  // Resume an httpOnly session cookie if one is still valid. Do not flash the dashboard until
+  // /admin/session says so — a rotated admin token or an expired cookie must stay on the gate.
+  fetch('/admin/session', { credentials: 'same-origin' })
+    .then(function (res) {
+      if (!res.ok) {
+        showGate();
+        return;
+      }
+      signedIn = true;
+      showGate('Checking your saved session...');
+      return loadLicenses().then(function () {
+        if (signedIn) showDashboard();
+      });
+    })
+    .catch(function () {
+      showGate();
     });
-  } else {
-    showGate();
-  }
 })();
 </script>
 </body>

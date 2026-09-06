@@ -1,4 +1,5 @@
 import type { AskStart, ConversationMode, Profile } from '@shared/ipc'
+import { DEFAULT_ASK_CAVEMAN, type AskCavemanLevel } from '@shared/caveman-ask'
 import {
   SUMMARY_PROMPT,
   INJECTION_GUARD,
@@ -7,6 +8,8 @@ import {
   recapPromptFor,
   retargetForTypedAsk
 } from '@shared/prompts'
+import { ANSWER_FIRST_RAIL } from '@shared/answer-first'
+import { lockedSkillsAppendix } from './mode-skills'
 
 function profileBlock(p: Profile): string {
   const parts: string[] = []
@@ -62,16 +65,27 @@ function languageDirective(
     isSummary && summarySel && summarySel !== 'auto' && summarySel !== 'same' ? summaryLanguage : outputLanguage
   const lang = (chosen || 'auto').trim()
   if (!lang || lang.toLowerCase() === 'auto') {
-    return '\n\nLANGUAGE: Respond in the main language of the conversation/input.'
+    // docs/asr/QUALITY.md — do not translate away unless the user asked.
+    if (isSummary) {
+      return '\n\nLANGUAGE: Write the recap/notes in the spoken language(s) of the transcript. If the meeting used more than one language, keep each attributed passage in the language it was spoken. Do not translate unless the user explicitly asked for a different summary language.'
+    }
+    return '\n\nLANGUAGE: Respond in the spoken language(s) of the conversation/input. Do not translate unless asked.'
   }
   return `\n\nLANGUAGE: Always respond in ${lang}, regardless of the input language.`
 }
 
+export interface SystemParts {
+  /** Byte-stable per session. Identity, mode prompt, locked skills, static rails, profile, docs. */
+  cachedPrefix: string
+  /** Per-turn system tail. Empty today: clocks, transcripts, L0, screenshots stay in userText(). */
+  volatile: string
+}
+
 /**
- * Mode + profile + imported-context aware system prompt. Each conversation mode uses its editable
- * prompt (settings.modePrompts override → built-in default). Untrusted-input modes get an injection guard.
+ * Split system prompt so the provider cache breakpoint sits on stable content only.
+ * Transcripts, clocks, meeting ids, L0, and screenshots must never enter `cachedPrefix`.
  */
-export function buildSystem(
+export function buildSystemParts(
   req: AskStart,
   mode: ConversationMode,
   profile: Profile,
@@ -79,8 +93,9 @@ export function buildSystem(
   contextDocs: { name: string; text: string }[] | undefined,
   outputLanguage?: string,
   summaryLanguage?: string,
-  systemPrompt?: string
-): string {
+  systemPrompt?: string,
+  askCaveman?: AskCavemanLevel
+): SystemParts {
   const untrusted =
     req.mode === 'suggest' || req.mode === 'summary' || req.mode === 'recap' || req.mode === 'vision'
   const guard = untrusted ? INJECTION_GUARD : ''
@@ -90,11 +105,15 @@ export function buildSystem(
   const lead = guard ? guard.trimStart() + '\n\n' : ''
   const ctx = contextBlock(contextDocs)
   const lang = languageDirective(req.mode, outputLanguage, summaryLanguage)
-  // Optional global custom instruction (Settings → Personalize), prepended to every mode's system prompt.
+  // Personalize custom instruction is stable per machine: it belongs in the cached prefix.
   const prefix = systemPrompt && systemPrompt.trim() ? systemPrompt.trim() + '\n\n' : ''
 
-  if (req.mode === 'summary') return lead + prefix + SUMMARY_PROMPT + ctx + lang
-  if (req.mode === 'recap') return lead + prefix + recapPromptFor(mode) + ctx + lang
+  if (req.mode === 'summary') {
+    return { cachedPrefix: lead + prefix + SUMMARY_PROMPT + ctx + lang, volatile: '' }
+  }
+  if (req.mode === 'recap') {
+    return { cachedPrefix: lead + prefix + recapPromptFor(mode) + ctx + lang, volatile: '' }
+  }
 
   // Fact-check (mode:'answer', kind:'factcheck') has a strict "Respond in EXACTLY this format … VERDICT: …"
   // contract that parseVerdict depends on. The active mode's persona prompt (sales/interview/negotiation/…)
@@ -122,5 +141,46 @@ export function buildSystem(
   // "lead with the answer / ask a clarifying question" guidance onto it corrupts the output that
   // parseVerdict expects (a preamble before "VERDICT:" gets dropped).
   const rail = (req.mode === 'answer' || req.mode === 'vision') && req.kind !== 'factcheck' ? GROUNDING_RAIL : ''
-  return lead + prefix + prompt + profileTail + ctx + rail + lang
+  // Answer-first is the typed/screen contract. Live suggest keeps its spoken format; recap/summary
+  // and fact-check have their own skeletons and must not pick up "first sentence is the answer".
+  const answerFirst = typedAsk ? ANSWER_FIRST_RAIL : ''
+  // Locked operator skills run AFTER the visible (user or default) prompt. Builtin modes get that
+  // mode's shipped skill plus the humanizer. Custom modes get the humanizer only. Fact-check skips
+  // both so the VERDICT contract stays clean. User modePrompts cannot replace the skill body.
+  // Typed Ask also gets locked caveman (default full) unless the user said stop / normal mode.
+  const cavemanLevel = typedAsk ? (askCaveman ?? DEFAULT_ASK_CAVEMAN) : 'off'
+  const locked = req.kind === 'factcheck' ? '' : lockedSkillsAppendix(mode, { caveman: cavemanLevel })
+  return {
+    cachedPrefix: lead + prefix + prompt + locked + profileTail + ctx + rail + answerFirst + lang,
+    volatile: ''
+  }
+}
+
+/**
+ * Mode + profile + imported-context aware system prompt. Each conversation mode uses its editable
+ * prompt (settings.modePrompts override → built-in default). Untrusted-input modes get an injection guard.
+ */
+export function buildSystem(
+  req: AskStart,
+  mode: ConversationMode,
+  profile: Profile,
+  modePrompts: Partial<Record<string, string>> | undefined,
+  contextDocs: { name: string; text: string }[] | undefined,
+  outputLanguage?: string,
+  summaryLanguage?: string,
+  systemPrompt?: string,
+  askCaveman?: AskCavemanLevel
+): string {
+  const parts = buildSystemParts(
+    req,
+    mode,
+    profile,
+    modePrompts,
+    contextDocs,
+    outputLanguage,
+    summaryLanguage,
+    systemPrompt,
+    askCaveman
+  )
+  return parts.cachedPrefix + parts.volatile
 }

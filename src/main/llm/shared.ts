@@ -1,10 +1,14 @@
 import type { AskStart } from '@shared/ipc'
 import type { ProviderKind, ProviderId } from '@shared/providers'
+import type { StreamCacheUsage } from '@shared/operator'
+import { AUTO_CLARITY_DIRECTIVE, autoClarityDropCaveman } from '@shared/caveman-ask'
+
+export type { StreamCacheUsage }
 
 /** Stream callbacks the orchestrator wires to the renderer IPC bridge. */
 export interface StreamHandlers {
   onDelta: (text: string) => void
-  onDone: (u: { inputTokens?: number; outputTokens?: number }) => void
+  onDone: (u: StreamCacheUsage) => void
   onError: (message: string) => void
 }
 
@@ -18,6 +22,13 @@ export interface StreamOptions {
   providerId: ProviderId
   kind: ProviderKind
   apiKey: string
+  /**
+   * When true, Ask goes through Operator /v1/ask. The Worker holds the raw LLM key.
+   * The seat must leave apiKey empty and never persist a leased secret.
+   */
+  viaOperator?: boolean
+  /** HMAC target for viaOperator. URL + ingest secret only — never an LLM key. */
+  operatorTransport?: { url: string; secret: string }
   baseURL?: string
   /** Dust workspace id (only used when kind === 'dust'). */
   workspaceId?: string
@@ -45,6 +56,19 @@ export interface StreamOptions {
    */
   freshConversation?: boolean
   system: string
+  /** Stable / volatile split for provider prompt cache. `system` stays the concatenation. */
+  systemParts?: { cachedPrefix: string; volatile: string }
+  /**
+   * OpenAI-compatible prompt cache key. Operator uses `metis:${mode}:${skillLockHash}`.
+   * Import recap also sets this so the stable system prefix can reuse a cached prompt.
+   * No PII, no timestamp.
+   */
+  promptCacheKey?: string
+  /**
+   * Anthropic cache_control ttl for the system block. Import recap uses '1h'. Other callers
+   * leave this unset and keep the default ephemeral (5m) breakpoint.
+   */
+  systemCacheTtl?: '1h'
   req: AskStart
   handlers: StreamHandlers
   /**
@@ -95,7 +119,12 @@ const DEEPER_DIRECTIVE =
  *  message (NOT the cached system prefix), so requesting depth never invalidates the prompt cache. */
 export function userText(req: AskStart): string {
   const base = baseUserText(req)
-  return req.depth === 'deeper' ? base + DEEPER_DIRECTIVE : base
+  const withDepth = req.depth === 'deeper' ? base + DEEPER_DIRECTIVE : base
+  const typedAsk = (req.mode === 'answer' || req.mode === 'vision') && req.kind !== 'factcheck'
+  if (typedAsk && autoClarityDropCaveman(req.prompt)) {
+    return withDepth + AUTO_CLARITY_DIRECTIVE
+  }
+  return withDepth
 }
 
 /**

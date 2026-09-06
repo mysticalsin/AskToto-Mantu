@@ -140,7 +140,7 @@ export interface BrainRead {
   index: {
     warnings: string[]
     revision?: number
-    ingested: Record<string, { at: number; ok: boolean; error?: string; sourceVersion?: string; attempts?: number; retryAfter?: number }>
+    ingested: Record<string, { at: number; ok: boolean; error?: string; sourceVersion?: string; attempts?: number; retryAfter?: number; exhausted?: boolean }>
   }
   graph: { nodes: Array<{ id: string; type: string; label: string }>; edges: Array<{ from: string; to: string; rel: string; confidence: Conf }> }
   people: BrainPerson[]
@@ -154,7 +154,8 @@ declare global {
     intelligence?: {
       getData: () => Promise<BrainRead>
       getStatus: () => Promise<unknown>
-      backfill: () => Promise<{ queued: number }>
+      backfill: () => Promise<{ queued: number; deferred?: string; preparing?: boolean; error?: string }>
+      runPass?: () => Promise<{ queued: number; error?: string; upToDate?: boolean }>
       // Dashboard suggestion accept/dismiss (deferred CRM pattern 3) — see src/preload/intelligence.ts
       // in the host app for the real signature this mirrors.
       fieldDecision: (payload: {
@@ -614,7 +615,8 @@ export function brainToDashboard(b: BrainRead): DashboardData {
     }))
 
   const ingestErrors: IngestError[] = Object.entries(b.index.ingested ?? {})
-    .filter(([, v]) => !v.ok)
+    // Pending deferred ingest (ok:false, no error, attempts:0) is waiting for consolidation — not a failure.
+    .filter(([, v]) => !v.ok && !!(v.error || v.exhausted || (v.attempts ?? 0) > 0))
     .map(([file, v]) => ({ file, error: v.error ?? '' }))
 
   const status: StatusCounts = {

@@ -224,6 +224,16 @@ describe('mcpClient — against a real local Streamable HTTP mock (not a live Bi
     expect(r.error).toMatch(/http or https/i)
   })
 
+  it('refuses data: and javascript: URLs before connecting', async () => {
+    const data = await connectMcp('data:text/plain,hello', API_KEY, NO_EXTRA_HEADERS, LABEL)
+    expect(data.ok).toBe(false)
+    expect(data.error).toMatch(/http or https/i)
+
+    const js = await connectMcp('javascript:alert(1)', API_KEY, NO_EXTRA_HEADERS, LABEL)
+    expect(js.ok).toBe(false)
+    expect(js.error).toMatch(/http or https|not a valid URL/i)
+  })
+
   it('refuses IPv4-mapped IPv6 forms of the cloud-metadata address (SSRF denylist bypass)', async () => {
     // Both forms resolve/route to the same host as 169.254.169.254 — the OS network stack treats an
     // IPv4-mapped IPv6 literal as that IPv4 address, so a plain-string hostname check alone misses them.

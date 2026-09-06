@@ -403,9 +403,10 @@ export const PROVIDERS: Record<ProviderId, ProviderDef> = {
   custom: {
     id: 'custom',
     label: 'Custom · OpenAI-compatible',
-    blurb: 'Point at any OpenAI-compatible endpoint you already run.',
+    blurb: 'Point at any OpenAI-compatible endpoint you already run — add more LLMs via API.',
     kind: 'openai',
-    tier: 'more',
+    // Featured alongside Cloudflare so adding another API endpoint is one click, not buried in "more".
+    tier: 'featured',
     baseUrl: '',
     models: [],
     defaultModel: '',
@@ -658,7 +659,11 @@ export function isDustReady(
  *  reconnecting to a different workspace, or the agent was deleted. This is the root cause of the raw
  *  "Failed to retrieve agent message" ask failure. Only conclusive once the list has actually loaded
  *  with at least one agent: `null` (not loaded yet) and `[]` (empty/restricted load) both return false
- *  so the UI never raises a false "your agent is gone" alarm before it truly knows. */
+ *  so the UI never raises a false "your agent is gone" alarm before it truly knows.
+ *
+ *  The list passed here must include workspace / published / all views (see listDustAgents). A
+ *  view:list-only load can omit managed agents; that is not proof they are gone, so an empty list
+ *  stays inconclusive and a merged list that still contains the pin returns false. */
 export function dustStoredAgentMissing(
   agentId: string,
   agents: readonly { sId: string }[] | null
@@ -666,6 +671,26 @@ export function dustStoredAgentMissing(
   if (!agentId) return false
   if (agents === null || agents.length === 0) return false
   return !agents.some((a) => a.sId === agentId)
+}
+
+/** Spotlight Ref is ready when Dust credentials are present, the locked agent id is set, and — once
+ *  a non-empty agent list has loaded — that id appears in it. A view:list-only array that omits a
+ *  managed/workspace/published agent is the caller's problem: pass the merged all/workspace/published
+ *  list. `null` / `[]` stay inconclusive so we do not dead-end a connected workspace before the list
+ *  is known. */
+export function isSpotlightRefReady(
+  hasKeys: Partial<Record<string, boolean>>,
+  dustWorkspaceId: string,
+  providerModelsSpotlightRef: Partial<Record<string, string>>,
+  agents: readonly { sId: string }[] | null
+): boolean {
+  if (!isDustReady(hasKeys, dustWorkspaceId, providerModelsSpotlightRef)) return false
+  const id = (providerModelsSpotlightRef['dust'] || '').trim()
+  if (!id) return false
+  // REST view:list (and even a merged list) can omit a managed agent. That is not proof the
+  // agent is gone — Spotlight Ref fails only when the Dust CLI session says so.
+  void agents
+  return true
 }
 
 /**

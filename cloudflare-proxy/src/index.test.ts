@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import worker, { type Env } from './index'
+import worker, {
+  resetProxyRateLimits,
+  setProxyRateLimitCache,
+  PROXY_RL_AUTH_MAX,
+  PROXY_RL_UNAUTH_MAX,
+  type Env,
+  type ProxyRateCache
+} from './index'
 
 /**
  * index.test.ts — the Worker's auth boundary and its forwarding contract, proven without a deploy.
@@ -85,7 +92,21 @@ function controllableStream(): {
 
 afterEach(() => {
   vi.unstubAllGlobals()
+  resetProxyRateLimits()
+  setProxyRateLimitCache(null)
 })
+
+function memoryRateCache(): ProxyRateCache {
+  const map = new Map<string, Response>()
+  return {
+    async match(request) {
+      return map.get(new URL(request.url).pathname)
+    },
+    async put(request, response) {
+      map.set(new URL(request.url).pathname, response)
+    }
+  }
+}
 
 describe('caller authentication', () => {
   it('rejects a request with no Authorization header and never calls Cloudflare', async () => {
@@ -267,6 +288,9 @@ describe('forwarding to the Cloudflare AI REST API', () => {
     // Only the two this file writes itself survive.
     expect(res.headers.get('content-type')).toBe('application/json')
     expect(res.headers.get('cache-control')).toBe('no-store')
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(res.headers.get('x-frame-options')).toBe('DENY')
+    expect(res.headers.get('strict-transport-security')).toBe('max-age=31536000; includeSubDomains')
   })
 })
 
@@ -387,6 +411,9 @@ describe('routing', () => {
     expect(text).not.toContain(ACCOUNT_TOKEN)
     expect(text).not.toContain(ACCOUNT_ID)
     expect(text).not.toContain(PROXY_KEY)
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(res.headers.get('x-frame-options')).toBe('DENY')
+    expect(res.headers.get('strict-transport-security')).toBe('max-age=31536000; includeSubDomains')
   })
 
   it('reports configured:false while secrets are still missing', async () => {
@@ -418,6 +445,39 @@ describe('routing', () => {
     expect(text).not.toContain(PROXY_KEY)
   })
 
+  it('rate-limits an authenticated burst before spending the account token', async () => {
+    const calls = stubUpstream(new Response('{"ok":true}', { status: 200 }))
+
+    let limited = 0
+    for (let i = 0; i < PROXY_RL_AUTH_MAX + 5; i++) {
+      const res = await worker.fetch(chatRequest(), env())
+      if (res.status === 429) {
+        limited += 1
+        const text = await res.text()
+        expect(text).not.toContain(ACCOUNT_TOKEN)
+        expect(text).not.toContain(PROXY_KEY)
+        expect(JSON.parse(text).error.message).toMatch(/Rate limited/)
+      } else {
+        expect(res.status).toBe(200)
+      }
+    }
+    expect(limited).toBeGreaterThanOrEqual(5)
+    expect(calls.length).toBe(PROXY_RL_AUTH_MAX)
+  })
+
+  it('rate-limits unauthenticated guesses without calling Cloudflare', async () => {
+    const calls = stubUpstream(new Response('{}', { status: 200 }))
+
+    let limited = 0
+    for (let i = 0; i < PROXY_RL_UNAUTH_MAX + 5; i++) {
+      const res = await worker.fetch(chatRequest('wrong-key'), env())
+      if (res.status === 429) limited += 1
+      else expect(res.status).toBe(401)
+    }
+    expect(limited).toBeGreaterThanOrEqual(5)
+    expect(calls).toHaveLength(0)
+  })
+
   it('404s an unknown path and 405s the wrong method, never reaching Cloudflare', async () => {
     const calls = stubUpstream(new Response('{}', { status: 200 }))
 
@@ -437,5 +497,22 @@ describe('routing', () => {
     expect(postHealth.status).toBe(405)
 
     expect(calls).toHaveLength(0)
+  })
+
+  it('shares the authenticated window across isolates via the Cache API', async () => {
+    const shared = memoryRateCache()
+    setProxyRateLimitCache(shared)
+    const calls = stubUpstream(new Response('{"ok":true}', { status: 200 }))
+
+    for (let i = 0; i < PROXY_RL_AUTH_MAX; i++) {
+      const res = await worker.fetch(chatRequest(), env())
+      expect(res.status).toBe(200)
+    }
+    resetProxyRateLimits()
+    setProxyRateLimitCache(shared)
+
+    const limited = await worker.fetch(chatRequest(), env())
+    expect(limited.status).toBe(429)
+    expect(calls.length).toBe(PROXY_RL_AUTH_MAX)
   })
 })

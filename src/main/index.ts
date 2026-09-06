@@ -25,9 +25,8 @@ import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unl
 // Enterprise checkbox: DevTools stay reachable only where they are a development tool. No secret ever
 // reaches the renderer (publicSettings strips key material), but DevTools on a packaged build still
 // exposes in-memory renderer state (transcript text, screen-context strings) to anyone at the keyboard,
-// and every security questionnaire asks. ASKTOTO_DEVTOOLS=1 is the deliberate field-debugging override —
-// an env var a local user could set, which is fine: whoever controls the local environment already owns
-// this session; the control is about the DEFAULT posture, not about defeating a local admin.
+// and every security questionnaire asks. Packaged builds ignore ASKTOTO_DEVTOOLS: devEnv() returns
+// undefined once isPackagedBuild() is true, so there is no env backdoor in a shipped DMG/EXE.
 // Shared with intelligence.ts so every window in src/main gates on ONE decision — see
 // dev-env.ts's devToolsEnabled() for why this moved out of this file.
 const DEVTOOLS_ENABLED = devToolsEnabled()
@@ -44,9 +43,14 @@ import {
   McpDisconnectPayloadSchema,
   McpPushPayloadSchema,
   McpConnectionKindSchema,
+  TimeSavedRecordPayloadSchema,
+  OutlookDraftPayloadSchema,
+  OutlookEventPayloadSchema,
   type McpConnection,
   type McpConnectionKind,
   LicenseActivatePayloadSchema,
+  MemberActivatePayloadSchema,
+  LicenseConfigPayloadSchema,
   SetDealOutcomePayloadSchema,
   EntityRenamePayloadSchema,
   EntityMergePayloadSchema,
@@ -62,6 +66,8 @@ import {
   SetCrmPushedPayloadSchema,
   RecallBackfillSpeakersPayloadSchema,
   ImportAudioStartSchema,
+  ImportAudioStartBatchSchema,
+  ImportAudioOfferSchema,
   ImportJobIdSchema,
   ImportDecoderChunkSchema,
   ImportDecoderCompleteSchema,
@@ -76,15 +82,18 @@ import {
   type CalendarEvent,
   type AskStart,
   type ImportJobView,
+  type ImportAssetsProgress,
   type ScreenContextResult,
   type DiagnosticsExportResult,
-  type RecallExportPlainResult
+  type RecallExportPlainResult,
+  ScreenCaptureCheckPayloadSchema
 } from '@shared/ipc'
 import {
   getSettings,
   setSettings,
   getLockedKeys,
   getAllowedProviders,
+  getEgressAllowlist,
   getEnvKeyProviders,
   getApiKey,
   setApiKey,
@@ -113,6 +122,15 @@ import {
   resetProviderHealth,
   unhealthyProviders
 } from './llm/provider-health'
+
+/** Wave 2 — session-scoped last successful failover hop for the one-shot UI chip. Never persisted. */
+let lastFailoverNotice: { from: string; to: string; at: number; reason: string } | null = null
+export function peekLastFailoverNotice(): typeof lastFailoverNotice {
+  return lastFailoverNotice
+}
+export function dismissLastFailoverNotice(): void {
+  lastFailoverNotice = null
+}
 import * as localRuntime from './llm/local-runtime'
 import {
   localEligibleFor,
@@ -121,13 +139,86 @@ import {
   localBaseReady,
   localPrewarmEligible,
   localVisionPrivacyRequired,
+  localPrimaryEligibleFor,
   pickPrimaryProvider,
-  allowCrossProviderFailover
+  allowCrossProviderFailover,
+  resolveRoutingMode,
+  localRuntimeBinaryPresent
 } from './llm/local-routing'
+import {
+  isCliProviderId,
+  isDustChatForbidden,
+  nextAskRoute,
+  nextLastClickedCli,
+  pickWorkingCliPrimary,
+  workingCliOrder
+} from '@shared/ask-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText } from './mac-helper'
-import { createSpeakerId, type SpeakerId } from './speaker-id'
+import { createSpeakerId, type SpeakerId, type SpeakerLabel } from './speaker-id'
+import {
+  clampAxis,
+  clampAxisMargin,
+  clampHeight as islandClampHeight,
+  isReachable as islandIsReachable,
+  recenterXForWidth,
+  refitToDisplay as islandRefitToDisplay,
+  exclusiveOnboardingBounds,
+  exclusiveMayUseSimpleFullScreen,
+  EXCLUSIVE_ONBOARDING_BACKGROUND,
+  firstPaintOverlayBounds,
+  overlayWindowChrome,
+  OVERLAY_TRANSPARENT_BACKGROUND,
+  hoverRestTop,
+  hoverWatchRestRect,
+  overlayRestSize,
+  parkAfterExclusiveOnboarding,
+  parkedHoverReanchor,
+  hideParkWindowOpacity,
+  settingsOpenRect,
+  shouldIgnoreResizeWhilePeekResting,
+  shouldParkHoverRestAfterLeavingSurface,
+  topCenterPosition,
+  topClamp
+} from './island/geometry'
+import {
+  OVERLAY_REST_BACKGROUND,
+  SETTINGS_SURFACE_BACKGROUND,
+  SETTINGS_WINDOW_MIN,
+  settingsContentHeight
+} from '@shared/settings-bounds'
+import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
+import {
+  CURSOR_WATCH_INTERVAL_MS,
+  OVERLAY_LEAVE_PARK_MS,
+  decideCursorWatch,
+  overlayWatchStep,
+  pointInRect,
+  shouldWatchOverlayCursor
+} from './island/cursor-watch'
+import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
+import {
+  ASK_REVEAL_MIN_HEIGHT_PX,
+  BAR_IDLE_HEIGHT_PX,
+  askRevealHeight,
+  isIncompleteAskReveal,
+  isSettingsTallHeight,
+  overlayActivateOpensSettings,
+  overlayAllowsHugWidth,
+  overlayAllowsMinimize,
+  overlayHugNextWidth,
+  overlayRevealedContentHeight,
+  overlayUsesHover,
+  parseOverlayLayout,
+  rememberBarContentHeight,
+  type OverlayLayout
+} from '@shared/overlay-chrome'
+import {
+  minimizedCircleRestBounds,
+  overlayOrbRestIsCircle,
+  parseOverlayOrbStyle
+} from '@shared/overlay-orb'
 
 // Lazy Speaker Intelligence singleton — building it probes the sherpa addon + embedding model, so defer
 // until the first THEM window with the feature enabled (never on the startup path).
@@ -135,6 +226,34 @@ let speakerIdInstance: SpeakerId | null = null
 function getSpeakerId(): SpeakerId {
   if (!speakerIdInstance) speakerIdInstance = createSpeakerId()
   return speakerIdInstance
+}
+
+/** Shared Speaker Intelligence label lookup for a THEM window — parakeetFeed, appleSpeechFeed and
+ *  speakerEmbed all funnel through this one place so the settings gate + failure handling can't drift
+ *  between the three chokepoints. Degrades to null on any failure, the feature being off, or the model
+ *  being unprovisioned — a missing label must never break transcription. See speaker-id.ts's labelWindow
+ *  for the echo-defense flag (`label.echo`) callers must check before attaching `label.name` anywhere. */
+function labelThemAudio(samples: Float32Array): SpeakerLabel | null {
+  if (!getSettings().speakerId.enabled) return null
+  try {
+    return getSpeakerId().labelWindow(samples)
+  } catch (err) {
+    mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
+    return null
+  }
+}
+
+/** Echo defense + operator profile upkeep (SPEAKER-INTELLIGENCE-PLAN §3.3) — feed a 'you' (mic) window's
+ *  raw audio into the operator's rolling voiceprint so labelThemAudio can recognize the operator's own
+ *  voice bleeding through the loopback. Fire-and-forget by construction (void return, swallows errors):
+ *  called from the SAME handlers that already transcribe the window, and must never affect their result. */
+function observeOperatorAudio(samples: Float32Array): void {
+  if (!getSettings().speakerId.enabled) return
+  try {
+    getSpeakerId().observeOperatorWindow(samples)
+  } catch (err) {
+    mainLog.warn('[speaker-id] operator observation failed', err instanceof Error ? err.message : String(err))
+  }
 }
 import { buildPrewarmMessages } from './llm/prewarm'
 import { listModels as listLocalModels, bestModelForMachine, isDownloaded as localModelDownloaded } from './llm/local-models'
@@ -153,16 +272,21 @@ import {
   exciseDeletedMeeting,
   markBrainChanged,
   requestBackfill,
+  countUnextractedMeetings,
   requestSourceRefresh,
   brainBackfillProgress,
   brainLiveIngestProgress,
   ingestFailureCounts,
   ingestFailureDetails,
+  isPendingIngestRecord,
   resumeBackfillIfPending,
   reconcileMeetingsInBackground,
   settleCommitment,
-  startRebuild
+  startRebuild,
+  startBackfill
 } from './brain/ingest'
+import { startIntelligencePass } from './brain/intelligence-pass'
+import { runConsolidationIfDue } from './brain/consolidate'
 import {
   renameEntity,
   mergeEntities,
@@ -204,8 +328,28 @@ import {
   brainDir as brainStoreDir
 } from './brain/store'
 import { buildBrainContext } from './brain/context'
-import { buildSystem } from './personas'
+import { buildSystem, buildSystemParts } from './personas'
+import { applyCaveman } from '@shared/caveman-ask'
+import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
+import { isOpenAICloudCacheEligible, promptCacheKey as makePromptCacheKey, resolveOperatorBaseUrl } from '@shared/operator'
+import { cloudflareConnectTarget } from './cloudflare-connect'
+import { loadVerifiedSkill, setModeSkillsOverlayRoot, skillLockHashForMode } from './mode-skills'
+import {
+  operatorAskTransport,
+  operatorFundedProviders,
+  recordOperatorAsk,
+  recordOperatorCrmSend,
+  recordOperatorRating,
+  startOperatorRuntime
+} from './operator-ingest'
+import { classifyQuestionType } from '@shared/question-type'
+import { BoundedSet } from './bounded-set'
+import { installEgressGuard } from './net/egress-guard'
+import { buildCrmIngestEvent, meetingFileHash, shouldIngestCrm } from './operator-crm'
+import { startOperatorOverlayPoll } from './operator-overlay'
 import { initLogging, mainLog, auditLog } from './logger'
+import { consumeSecurityLimit, RATE_LIMIT_USER_MESSAGE, shouldSampleIpcDeny, takeHotPath, type SecurityLimitBucket } from './security-limits'
+import { safeMeetingBasename } from './meeting-path'
 import { asrModelDownloadState, ensureHighTierAsrModel, isHighTierAsrModelReady, removeHighTierAsrModel } from './asr-model-download'
 import { asrModelBytes } from './asr-model-manifest'
 import { beginBootWatch, endBootWatch, describeEarlyDeath } from './boot-sentinel'
@@ -232,8 +376,28 @@ import { resetLanguageFollow as resetImportLanguageFollow, whisperImportTranscri
 import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine } from './polish'
 import { detectLanguage as detectTextLanguage } from '@shared/lang-id'
 import type { TranscriptLine } from '@shared/ipc'
-import { pickAudioFile, consumePickedAudio } from './import-audio'
-import { ImportJobManager, type ImportJob } from './import-jobs'
+import { pickAudioFile, consumePickedAudio, offerAudioPaths } from './import-audio'
+import { ImportJobManager, MAX_CONCURRENT_DECODES, decoderSlotIsStale, type ImportJob } from './import-jobs'
+import {
+  runImportedRecap as runImportedRecapJob,
+  importedTranscriptText as formatImportedTranscriptText
+} from './import-recap'
+import {
+  scheduleIntelligenceIndex,
+  catchUpIntelligenceIndexIfNeeded,
+  runIntelligenceIndex,
+  setIntelligenceIndexWork,
+  lastIndexedAt,
+  classifyIntelligenceClick,
+  NO_PROVIDER_INDEX_COPY,
+  SIGN_IN_INDEX_COPY
+} from './brain/intelligence-index'
+import {
+  ensureImportAsrAssets,
+  asrAssetsProgress,
+  asrAssetsStatusSnapshot,
+  userDataAsrRoot
+} from './asr-bundled-ensure'
 import { EncryptedImportJobStore } from './import-job-store'
 import { bundledFfmpegPath, startFfmpegDecode, type FfmpegDecoder } from './ffmpeg-decoder'
 import {
@@ -254,8 +418,15 @@ import {
   readSavedFile
 } from './transcripts'
 import { getPlatformPermissions, probeScreenCapture, noteScreenCaptureOutcome } from './platform-perms'
+import { collectVisionStream, runScreenCaptureCheck } from './screen-capture-check'
+import {
+  VISION_CHECK_PROMPT,
+  VISION_CHECK_SYSTEM,
+  isApiVisionCandidate
+} from '@shared/screen-capture-check'
 import {
   listMeetings,
+  listMeetingsNeedingRecap,
   searchMeetings,
   recallRead,
   deleteMeeting,
@@ -264,6 +435,7 @@ import {
   updateMeetingTranscript,
   setMeetingConfidential,
   setMeetingCrmPushed,
+  isMeetingConfidentialOnDisk,
   deleteAllMeetings,
   sweepExpiredMeetings
 } from './recall'
@@ -272,6 +444,7 @@ import { runSelfTest } from './selftest'
 import { devEnv, devToolsEnabled } from './dev-env'
 import { readEvalMetrics, aggregateMetrics } from './metrics'
 import { importDustCliSession, refreshDustCliSession } from './dustcli'
+import { ensureManagedDustCli } from './dust-cli-chat'
 import {
   beginDustDeviceLogin,
   pollDustDeviceLoginOnce,
@@ -281,9 +454,42 @@ import {
 } from './dust-oauth'
 import { asrManifestComplete } from './asr-manifest'
 import { isInsideResourceBase, realResourceBase } from './asr-model-path'
-import { detectCli, testCli, setupCli, installCli, loginCli, prewarmCli, checkCliSession } from './cli'
+import { detectCli, setupCli, installCli, loginCli, prewarmCli, checkCliSession, connectCliSession } from './cli'
 import { connectMcp, pushToMcp } from './mcp/mcpClient'
-import { activateLicense, checkLicenseGrace, heartbeat } from './license'
+import { resolveWriteTargets } from './mcp/write-tools'
+import {
+  discoverClickupList,
+  loudClickupError,
+  parseTaskUrl,
+  prepareClickupPush,
+  savedClickupList,
+  upsertClickupDestination,
+  type ClickupList
+} from './mcp/clickupPush'
+import { appendTimeSavedEvent, summarizeTimeSaved } from './time-saved-log'
+import {
+  estimateEmailSummaryMinutes,
+  estimateMcpPushMinutes,
+  estimateNoteTakingMinutes,
+  estimateSecondBrainMinutes,
+  wordsFromTexts
+} from '@shared/time-saved-events'
+import { createOutlookDraft, createOutlookEvent, outlookWriteStatus } from './outlook-write'
+import { outboundActionId, pushQueue, type OutboundAction, type OutboundActionKind } from './mcp/pushQueue'
+import {
+  activateLicense,
+  activateMemberLicense,
+  checkLicenseGrace,
+  deactivateMemberLicense,
+  fetchLicenseConfig,
+  heartbeat,
+  identitySnapshot,
+  importLicenseMetis,
+  licenseDisplayStatus,
+  memberLicenseStatus,
+  noteQualifyingUse,
+  verifyCachedMemberLicense
+} from './license'
 import {
   setMcpApiKey,
   getMcpApiKey,
@@ -301,6 +507,14 @@ import {
   releaseClickupTokenLock
 } from './mcp/clickupOAuth'
 import {
+  runPlaneOAuth,
+  refreshPlaneToken,
+  PLANE_MCP_OAUTH_ENDPOINT,
+  PLANE_MCP_PAT_ENDPOINT,
+  tryAcquirePlaneTokenLock,
+  releasePlaneTokenLock
+} from './mcp/planeOAuth'
+import {
   graphifyStatus,
   buildGraph,
   relatedNotes,
@@ -308,7 +522,7 @@ import {
   scheduleRebuild,
   purgeGraphArtifacts
 } from './graphify'
-import { SaveMeetingSchema, SaveNoteSchema } from '@shared/ipc'
+import { SaveMeetingSchema, SaveNoteSchema, stripProvisionalLines } from '@shared/ipc'
 import {
   PROVIDERS,
   PROVIDER_IDS,
@@ -321,12 +535,12 @@ import {
   type ProviderDef
 } from '@shared/providers'
 import { routeTier } from '@shared/routing'
-import { HedgeRace, HEDGE_DELAY_MS, type HedgeLeg } from './llm/hedge'
+import { HedgeRace, HEDGE_DELAY_MS, HEDGE_DELAY_SUGGEST_MS, type HedgeLeg } from './llm/hedge'
 import { ThinkStripper } from './llm/think-strip'
 import { redactSecrets } from '@shared/redact'
 import { isSafeAccelerator } from '@shared/accelerator'
 import { formatResetPhrase } from '@shared/reset-time'
-import { applySpeakerNames } from '@shared/transcript-align'
+import { applySpeakerNames, clusterNamePairsFromAlignment } from '@shared/transcript-align'
 import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
 import { importEmbeddedCaheKey, seedCaheLocalAiForBackgroundScreen } from './cahe-embedded-key'
 import { importEmbeddedCloudflareKey, embeddedCloudflareKeyAvailable, restoreEmbeddedCloudflareKey } from './embedded-cloudflare-key'
@@ -393,6 +607,19 @@ if (process.env.ASKTOTO_USERDATA) app.setPath('userData', process.env.ASKTOTO_US
 // clobber it, wedging onboarding at the last slide. A '-dev' suffixed profile sidesteps all of it.
 if (!app.isPackaged && !process.env.ASKTOTO_USERDATA) {
   app.setPath('userData', `${app.getPath('userData')}-dev`)
+}
+
+// Unpackaged Electron.app still ships CFBundleName "Electron". setName changes
+// app.getName() / About / some menus to Métis. The macOS menu-bar process name
+// stays Electron unless a wrapper .app overrides Info.plist — do not invent
+// a second product name for unpackaged builds. Packaged Metis.app already
+// uses CFBundleDisplayName Métis.
+if (!app.isPackaged && !isCaheEdition()) {
+  try {
+    app.setName('Métis')
+  } catch {
+    /* headless */
+  }
 }
 
 // Profile-dir migration across product-name changes. userData follows CFBundleName, so each rename
@@ -484,6 +711,13 @@ let currentWidth = BAR_WIDTH // window width; narrows to PILL_WIDTH while collap
 // content height must never overwrite the remembered full-bar height, or expanding back out would apply
 // the tiny pill height first and squish/flash before the renderer's next resize report corrects it.
 let isMinimized = false
+// Hide/island rest after exclusive onboarding. Stale exclusive / 880×816 measures must not grow the park.
+let islandResting = false
+// Settings is a full surface, not Hide 8×2 / Island peek. Cursor watch and park must not crush it.
+let settingsSurfaceOpen = false
+let overlayCursorWatchTimer: ReturnType<typeof setInterval> | null = null
+let overlayCursorWatchHovering = false
+let overlayLeaveParkTimer: ReturnType<typeof setTimeout> | null = null
 const streams = new Map<string, { abort: () => void }>()
 let importJobs: ImportJobManager | null = null
 let decoderWin: BrowserWindow | null = null
@@ -493,7 +727,9 @@ let closingDecoderJobId: string | null = null
 let sourceAck: { jobId: string; resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null = null
 let decoderReady: { resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null = null
 const ffmpegDecoders = new Map<string, FfmpegDecoder>()
-const notifiedImportJobs = new Set<string>()
+// "Notified once" keys. Bounded: a session that runs for days imports many files, and an unbounded Set
+// here was one of the two module-level structures that only ever grew (RAM audit, 2026-09-05).
+const notifiedImportJobs = new BoundedSet<string>(500)
 
 type BrainStatusCounts = { people: number; accounts: number; deals: number; nodes: number; edges: number }
 let brainStatusCountsCache: { folder: string; revision: number; counts: BrainStatusCounts } | null = null
@@ -516,23 +752,41 @@ function brainStatusCounts(s: ReturnType<typeof getSettings>, revision: number):
   return counts
 }
 
+function noteIpcDenied(reason: 'no_window' | 'sender' | 'frame'): void {
+  if (!shouldSampleIpcDeny()) return
+  auditLog('security.ipc_denied', { reason })
+}
+
 /** Security: every privileged IPC handler must come from the main window's top frame.
  *  Compromised subframes, devtools, or unexpected webContents are rejected here. */
 function assertMainWindow(event: Electron.IpcMainInvokeEvent): void {
-  if (!win) throw new Error('Main window not available')
+  if (!win) {
+    noteIpcDenied('no_window')
+    throw new Error('Main window not available')
+  }
   if (event.sender !== win.webContents) {
+    noteIpcDenied('sender')
     throw new Error('IPC denied: sender is not the main window')
   }
   const frame = event.senderFrame
   if (!frame || frame.parent !== null || frame.url !== win.webContents.getURL()) {
+    noteIpcDenied('frame')
     throw new Error('IPC denied: not main frame')
   }
 }
 
-/** brain:status/brain:read (pure reads) and brain:backfill/brain:field-decision (narrow, guarded writes —
- *  a backfill request, and promoting one already-`extracted` field the human reviewed) are ALSO callable
- *  from the Mantu Intelligence window's top frame; that preload exposes nothing beyond these four (see
- *  src/preload/intelligence.ts). Every other privileged write stays main-window-only via assertMainWindow. */
+function denyIfLimited(bucket: SecurityLimitBucket): boolean {
+  const verdict = consumeSecurityLimit(bucket)
+  if (verdict.ok) return false
+  auditLog('security.rate_limited', { bucket })
+  return true
+}
+
+/** brain:status/brain:read (pure reads) and brain:backfill/brain:intelligencePass/brain:field-decision
+ *  (narrow, guarded writes — a backfill request, the Update Intelligence pass, and promoting one
+ *  already-`extracted` field the human reviewed) are ALSO callable from the Mantu Intelligence window's
+ *  top frame; that preload exposes nothing beyond these (see src/preload/intelligence.ts). Every other
+ *  privileged write stays main-window-only via assertMainWindow. */
 function assertBrainReader(event: Electron.IpcMainInvokeEvent): void {
   const frame = event.senderFrame
   if (isIntelligenceSender(event.sender)) {
@@ -547,6 +801,15 @@ function importJobView(job: ImportJob): ImportJobView {
   if (job.state === 'done') pct = 100
   else if (job.progressPct !== undefined) pct = Math.min(99, Math.max(0, Math.round(job.progressPct)))
   else if (job.totalChunks > 0) pct = Math.min(99, Math.round((job.cursor / job.totalChunks) * 100))
+  let queuePosition: number | undefined
+  if (job.state === 'queued' && importJobs) {
+    const waiting = importJobs
+      .list()
+      .filter((j) => j.state === 'queued')
+      .sort((a, b) => a.createdAt - b.createdAt)
+    const i = waiting.findIndex((j) => j.jobId === job.jobId)
+    if (i >= 0) queuePosition = i + 1
+  }
   return {
     jobId: job.jobId,
     title: job.title,
@@ -558,7 +821,20 @@ function importJobView(job: ImportJob): ImportJobView {
     recapError: job.recapError,
     file: job.file,
     createdAt: job.createdAt,
-    updatedAt: job.updatedAt
+    updatedAt: job.updatedAt,
+    queuePosition
+  }
+}
+
+function publishAsrAssetsProgress(progress = asrAssetsProgress()): void {
+  if (win && !win.isDestroyed()) {
+    const payload: ImportAssetsProgress = {
+      status: progress.status,
+      progress: progress.progress,
+      label: progress.label,
+      error: progress.error
+    }
+    win.webContents.send(IPC.importAssetsProgress, payload)
   }
 }
 
@@ -573,8 +849,10 @@ function publishImportJob(job: ImportJob): void {
     })
     notification.on('click', () => {
       if (!win || win.isDestroyed()) createWindow()
-      win?.show()
-      win?.focus()
+      // Non-activating: clicking the notification surfaces the overlay but must not steal focus from
+      // whatever app the user was in (the island's "never steals focus" contract) — see showForAsk's
+      // doc comment for the one deliberate exception.
+      win?.showInactive()
     })
     notification.show()
   }
@@ -629,15 +907,38 @@ async function closeImportDecoder(jobId: string): Promise<void> {
   const ffmpeg = ffmpegDecoders.get(jobId)
   if (ffmpeg) {
     ffmpeg.cancel()
-    await ffmpeg.completed
+    await ffmpeg.completed.catch(() => {})
     ffmpegDecoders.delete(jobId)
     return
   }
-  if (!decoderWin || decoderWin.isDestroyed() || decoderJobId !== jobId) return
+  if (!decoderWin || decoderJobId !== jobId) return
+  const win = decoderWin
   closingDecoderJobId = jobId
   rejectSourceAck(new Error('Import decoder closed.'))
   rejectDecoderReady(new Error('Import decoder closed.'))
-  decoderWin.destroy()
+  // Null the singleton before destroy() finishes so pump() can start the next file. A late
+  // 'closed' handler must not see these globals and fail the newer job.
+  decoderWin = null
+  decoderJobId = null
+  decoderExpectedUrl = ''
+  if (win.isDestroyed()) {
+    closingDecoderJobId = null
+    return
+  }
+  await new Promise<void>((resolve) => {
+    let settled = false
+    const done = (): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      closingDecoderJobId = null
+      resolve()
+    }
+    const timer = setTimeout(done, 2_000)
+    win.once('closed', done)
+    win.destroy()
+    if (win.isDestroyed()) done()
+  })
 }
 
 function bundledImportFfmpeg(): string | null {
@@ -684,12 +985,12 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
     for (const [id, stale] of ffmpegDecoders) {
       if (id === job.jobId) continue
       const staleState = importJobs?.get(id)?.state
-      if (staleState === 'failed' || staleState === 'cancelled' || staleState === 'done' || staleState === undefined) {
+      if (decoderSlotIsStale(staleState)) {
         stale.cancel()
         ffmpegDecoders.delete(id)
       }
     }
-    if (ffmpegDecoders.size) throw new Error('Another audio decoder is already active.')
+    if (ffmpegDecoders.size >= MAX_CONCURRENT_DECODES) throw new Error('Another audio decoder is already active.')
     // vad-v1 jobs: cursor counts WINDOWS (phase 2); a resume re-decodes the whole file (seconds of
     // ffmpeg) and the deterministic re-segmentation + window cursor skip the already-transcribed part.
     const skipThrough = job.pipeline === 'vad-v1' ? 0 : job.cursor
@@ -703,6 +1004,7 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
       onComplete: async (totalChunks) => {
         // Release the process slot before finishDecoding pumps the next FIFO job.
         ffmpegDecoders.delete(job.jobId)
+        await importJobs?.releaseDecodeSlot(job.jobId)
         await importJobs?.finishDecoding(job.jobId, totalChunks)
       },
       onError: async (error) => {
@@ -727,10 +1029,11 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
   // behind it, dies with a false "Another audio decoder is already active."
   if (decoderWin && !decoderWin.isDestroyed() && decoderJobId && decoderJobId !== job.jobId) {
     const staleState = importJobs?.get(decoderJobId)?.state
-    if (staleState === 'failed' || staleState === 'cancelled' || staleState === 'done' || staleState === undefined) {
+    if (decoderSlotIsStale(staleState)) {
       await closeImportDecoder(decoderJobId)
     }
   }
+  if (listeningActive) throw new Error('Another audio decoder is already active.')
   if (decoderWin && !decoderWin.isDestroyed()) throw new Error('Another audio decoder is already active.')
 
   decoderJobId = job.jobId
@@ -794,7 +1097,9 @@ async function startImportDecoder(job: ImportJob): Promise<void> {
 }
 
 function importedTranscriptText(lines: ImportJob['lines']): string {
-  return lines.map((line) => `SPEAKER: ${line.text}`).join('\n')
+  // Diarization lands on line.name (enrolled profile or "Speaker N") — the recap prompt asks the model
+  // to attribute by those labels, so erasing them here made every import look like one anonymous SPEAKER.
+  return formatImportedTranscriptText(lines)
 }
 
 /** Text-side language name for one probe window's Parakeet decode, or null when inconclusive. */
@@ -935,118 +1240,108 @@ async function runImportPolish(lines: TranscriptLine[]): Promise<TranscriptLine[
 }
 
 async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
-  const settings = getSettings()
-  const allowed = getAllowedProviders()
-  // An imported recording is a summary task. If the user opted into Métis Local summaries and its
-  // installer-owned runtime is ready, try it first so the transcript stays on-device. Cloud providers
-  // remain the explicit fallback when local is disabled or unavailable.
-  const localSummaryReady = localEligibleFor({ mode: 'summary' }, settings, 'base', allowed)
-  // MQA-056: the same zero-config safety net (localLlm.fallback) the live-ask seams and brain ingest
-  // already honour. Without it a revoked cloud key left the imported meeting with no summary at all —
-  // while the very same file was being indexed on-device under the identical flag — and the "retry the
-  // summary" the card advises runs as mode:'recap', which is out of local's scope entirely. Strictly
-  // LAST, after every cloud/CLI candidate (including `custom`, which sorts after `local` in PROVIDERS),
-  // so the existing useFor.summary precedence above is untouched: cloud is still preferred when it works.
-  const localFallbackReady =
-    !localSummaryReady && localFallbackEligibleFor({ mode: 'summary' }, settings, 'base', allowed)
-  const ordered: ProviderId[] = [
-    ...(localSummaryReady ? (['local'] as ProviderId[]) : []),
-    ...(settings.dustWorkspaceId && getApiKey('dust') && settings.providerModels.dust ? (['dust'] as ProviderId[]) : []),
-    settings.provider,
-    ...(Object.keys(PROVIDERS) as ProviderId[])
-  ]
-  const deduped = [...new Set(ordered)]
-  const walk = localFallbackReady
-    ? [...deduped.filter((provider) => provider !== 'local'), 'local' as ProviderId]
-    : deduped
-  const candidates = walk.filter((provider) => {
-    const def = PROVIDERS[provider]
-    if (!def || (allowed && !allowed.includes(provider))) return false
-    if (provider === 'local') return localSummaryReady || localFallbackReady
-    if (def.kind === 'cli') return !!settings.cliConnected[provider]
-    if (!getApiKey(provider)) return false
-    // MQA-215: same rule as pickFailover and the brain-ingest walk. A provider whose endpoint the USER
-    // supplies (Custom, and Cloudflare's operator-deployed Worker) is not a candidate until it has one.
-    // Cloudflare ships a default model, so a stored METIS_PROXY_KEY alone would otherwise leave it in
-    // this waterfall as the LAST cloud candidate, and streamOpenAI's own guard message would become the
-    // lastError an import that failed for unrelated reasons reports back to the user.
-    if (requiresUserBaseUrl(provider) && !providerBaseUrl(provider, settings)) return false
-    if (provider === 'dust' && !settings.dustWorkspaceId) return false
-    return !!resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think', settings.providerModelsDeep)
+  return runImportedRecapJob(job, {
+    getSettings,
+    getApiKey,
+    getAllowedProviders,
+    providerBaseUrl,
+    redactSecrets,
+    createStream,
+    refreshDustAuth: (s) =>
+      makeRefreshDustAuth({
+        dustSessionOrigin: s.dustSessionOrigin,
+        dustWorkspaceId: s.dustWorkspaceId,
+        dustBaseUrl: s.dustBaseUrl
+      }),
+    logWarn: (message) => mainLog.warn(message)
   })
-  if (!candidates.length) return undefined
+}
 
-  const transcript = settings.redactSensitive ? redactSecrets(importedTranscriptText(job.lines)) : importedTranscriptText(job.lines)
-  // Persona pinned at import start (ImportJob.mode) — NOT the live settings.mode, which may have been
-  // switched while this job sat in the queue. Older checkpoints have no pin; they keep the live mode.
-  const personaMode = job.mode || settings.mode
-  let lastError: Error | null = null
-  for (const provider of candidates) {
-    const def = PROVIDERS[provider]
-    const local = provider === 'local'
-    const req: AskStart = { id: `import-recap-${job.jobId}`, mode: local ? 'summary' : 'recap', prompt: '', transcript, history: [] }
-    const key = local ? '' : getApiKey(provider)
-    const rawModel = local
-      ? settings.localLlm.modelId
-      : resolveModelTier(provider, settings.providerModels, settings.providerModelsThinking, 'think', settings.providerModelsDeep)
-    const model = local ? rawModel : applyInteractiveGuardrail(provider, 'think', rawModel || def.defaultModel)
+async function recapMissingMeetingSummaries(): Promise<number> {
+  const needing = await listMeetingsNeedingRecap()
+  let n = 0
+  for (const m of needing) {
     try {
-      const recap = await new Promise<string>((resolveRecap, rejectRecap) => {
-        let text = ''
-        createStream({
-          providerId: provider,
-          kind: def.kind,
-          apiKey: key,
-          baseURL: local ? undefined : providerBaseUrl(provider, settings),
-          workspaceId: settings.dustWorkspaceId,
-          refreshDustAuth: provider === 'dust' ? makeRefreshDustAuth(settings) : undefined,
-          model,
-          temperature: settings.temperature,
-          // Same reasoning gate as the live stream (providers.ts reasoningEffortFor) — this path always
-          // resolves at the 'think' tier, so a reasoning-by-default model is asked for full effort.
-          reasoningEffort: reasoningEffortFor(provider, 'think', settings.thinkingMode === 'always'),
-          idleMs: 120_000,
-          freshConversation: true,
-          system:
-            buildSystem(req, personaMode, settings.profile, settings.modePrompts, settings.contextDocs[personaMode] || [], settings.outputLanguage, settings.summaryLanguage, settings.systemPrompt) +
-            (job.lines.some((l) => l.name)
-              ? '\n\nThis is an imported recording. Lines carry on-device voice-matched speaker labels (e.g. "Speaker 1" or an enrolled name) — attribute statements to those labels, never to YOU or THEM.'
-              : '\n\nThis is an imported recording with no speaker diarization. Do not attribute statements to YOU or THEM.'),
-          req,
-          handlers: {
-            onDelta: (delta) => {
-              text += delta
-            },
-            onDone: () => resolveRecap(text),
-            onError: (error) => {
-              // A trailing stream error AFTER the summary has streamed must not discard the summary.
-              // Seen live (2026-08-04) importing a real recording with the claude-cli provider: the CLI
-              // lingers after its final token, the idle watchdog then fires, and a complete recap was
-              // thrown away — transcript saved, Notes empty, recapError set. An idle timeout by
-              // definition means the model stopped producing long ago, so substantial accumulated text
-              // is a finished (or effectively finished) summary — keep it. Early/pre-token failures
-              // (no meaningful text yet) still reject into the provider waterfall exactly as before.
-              if (text.trim().length >= 200) {
-                mainLog.warn(`[import-recap] keeping ${text.trim().length}-char summary despite trailing stream error: ${error}`)
-                resolveRecap(text)
-                return
-              }
-              rejectRecap(new Error(error))
-            }
-          }
-        })
-      })
-      if (!recap.trim()) throw new Error('Summary provider returned an empty response.')
-      return recap.trim()
+      const recap = await runImportedRecap({
+        jobId: `index-${m.file}`,
+        lines: m.lines,
+        mode: m.mode
+      } as ImportJob)
+      if (recap?.trim()) {
+        const saved = await updateMeetingRecap(getSettings(), m.file, recap)
+        if (saved.ok) n += 1
+        else mainLog.error(`[intelligence-index] could not save recap for ${m.file}: ${saved.error}`)
+      }
     } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error))
+      mainLog.error(
+        `[intelligence-index] recap failed for ${m.file}:`,
+        error instanceof Error ? error.message : error
+      )
     }
   }
-  throw lastError ?? new Error('No configured AI provider could generate the imported summary.')
+  return n
+}
+
+function intelligenceDashboardIsEmpty(): boolean {
+  const s = getSettings()
+  const idx = readBrainIndex(s)
+  const counts = brainStatusCounts(s, idx.revision)
+  return counts.people === 0 && counts.accounts === 0 && counts.deals === 0
+}
+
+function wireIntelligenceIndexWork(): void {
+  setIntelligenceIndexWork(async (reason) => {
+    const recapP = recapMissingMeetingSummaries()
+    const r = requestBackfill({ force: true })
+    const savedMeetings = (await listMeetings()).filter((m) => !m.locked).length
+    const unextracted = countUnextractedMeetings()
+    const emptyDashboard = intelligenceDashboardIsEmpty()
+    let result = { ...r, ran: true, recapped: 0 }
+    const verdict = classifyIntelligenceClick({
+      savedMeetings,
+      unextracted,
+      emptyDashboard,
+      queued: result.queued,
+      preparing: result.preparing,
+      deferred: result.deferred,
+      upToDate: result.upToDate
+    })
+    if (verdict === 'illegal-empty') {
+      const forced = startBackfill(undefined, { force: true })
+      result = {
+        ...forced,
+        ran: true,
+        recapped: 0,
+        preparing: true,
+        upToDate: false
+      }
+    }
+    if (result.deferred === 'no-provider') {
+      void recapP.catch((e) =>
+        mainLog.error('[intelligence-index] background recap failed:', e instanceof Error ? e.message : e)
+      )
+      return { ...result, error: NO_PROVIDER_INDEX_COPY, recapped: 0 }
+    }
+    // Click and import-idle must not wait on sequential recaps — extract starts now; recap writes
+    // in the background. Named slots can afford to await the summaries.
+    if (reason === 'click' || reason === 'import-idle') {
+      void recapP
+        .then((n) => {
+          if (n) mainLog.info(`[intelligence-index] background recap wrote ${n} summary(ies)`)
+        })
+        .catch((e) =>
+          mainLog.error('[intelligence-index] background recap failed:', e instanceof Error ? e.message : e)
+        )
+      return result
+    }
+    const recapped = await recapP
+    return { ...result, recapped }
+  })
 }
 
 function initializeImportJobs(): void {
   if (importJobs) return
+  wireIntelligenceIndexWork()
   importJobs = new ImportJobManager({
     store: new EncryptedImportJobStore(getSettings),
     decode: (job) => {
@@ -1112,13 +1407,24 @@ function initializeImportJobs(): void {
     // CAM++ extractor the live path uses; a fresh session is reset per job in `decode` above.
     speakerFor: async (samples) => getSpeakerId().labelWindow(samples)?.name ?? null,
     finalizeSpeakers: () => getSpeakerId().finalizeSession(),
-    polish: (lines) => runImportPolish(lines),
+    // Polish is skipped on import: sequential batches of 8 with a 120s idle made one meeting take
+    // forever before the summary. Recap writes first. Cheap polish can be run later if needed.
     // Free the whisper helper's model memory between imports; the next job spawns a fresh child.
-    onIdle: () => stopWhisperHost(),
+    // Import idle may start one Intelligence pass (not a BrainView mount timer).
+    onIdle: () => {
+      stopWhisperHost()
+      void runIntelligenceIndex('import-idle').catch((e) =>
+        mainLog.error('[intelligence-index] import-idle pass failed:', e)
+      )
+    },
     saveMeeting: (meeting) => saveMeeting(getSettings(), meeting),
     deleteMeeting,
     enqueueIngest,
     recordMeetingSummarized,
+    recordTimeSavedNote: (words, file) => {
+      const mins = estimateNoteTakingMinutes(words)
+      if (mins > 0) appendTimeSavedEvent({ kind: 'note-taking', estimatedMinutes: mins, ids: { meeting: file } })
+    },
     generateRecap: runImportedRecap,
     updateRecap: async (file, recap) => {
       const result = await updateMeetingRecap(getSettings(), file, recap)
@@ -1127,7 +1433,14 @@ function initializeImportJobs(): void {
     onChange: publishImportJob,
     onCancel: closeImportDecoder,
     personaMode: () => getSettings().mode,
-    newId: () => randomBytes(16).toString('hex')
+    newId: () => randomBytes(16).toString('hex'),
+    concurrency: MAX_CONCURRENT_DECODES
+  })
+  void ensureImportAsrAssets((pct) => {
+    publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
+  }).catch((err) => {
+    mainLog.warn('[asr-assets] background ensure failed:', err instanceof Error ? err.message : err)
+    publishAsrAssetsProgress()
   })
 }
 
@@ -1160,7 +1473,11 @@ function retireCli(provider: ProviderId, message: string): void {
   if (PROVIDERS[provider].kind !== 'cli' || !isAuthFailure(message)) return
   const s = getSettings()
   if (!s.cliConnected[provider]) return
-  setSettings({ cliConnected: { ...s.cliConnected, [provider]: false } })
+  const nextConnected = { ...s.cliConnected, [provider]: false }
+  setSettings({
+    cliConnected: nextConnected,
+    lastClickedCli: nextLastClickedCli(s.lastClickedCli, provider, nextConnected)
+  })
   mainLog.warn(`[cli] ${provider} rejected our credentials — marking it disconnected`)
 }
 
@@ -1173,8 +1490,8 @@ function retireCli(provider: ProviderId, message: string): void {
  * at startup and whenever the AI settings tab opens.
  *
  * Throttled per provider because the probe spawns a (cheap, zero-token) child process and the settings
- * panel can be opened repeatedly. Only an explicit 'signed-out' retires the flag — see checkCliSession on
- * why 'unknown' must change nothing.
+ * panel can be opened repeatedly. Only an explicit 'signed-out' or 'missing' retires the flag — a
+ * weekly-limit stays connected. See checkCliSession on why 'unknown' must change nothing.
  */
 const CLI_SESSION_RECHECK_MS = 60_000
 const cliSessionCheckedAt = new Map<ProviderId, number>()
@@ -1197,10 +1514,14 @@ async function verifyCliSessions(now = Date.now()): Promise<void> {
         if (now - last < CLI_SESSION_RECHECK_MS) continue
         cliSessionCheckedAt.set(provider, now)
         const verdict = await checkCliSession(provider)
-        if (verdict !== 'signed-out') continue
+        if (verdict !== 'signed-out' && verdict !== 'missing') continue
         const s = getSettings()
         if (!s.cliConnected[provider]) continue // disconnected by the user while the probe ran
-        setSettings({ cliConnected: { ...s.cliConnected, [provider]: false } })
+        const nextConnected = { ...s.cliConnected, [provider]: false }
+        setSettings({
+          cliConnected: nextConnected,
+          lastClickedCli: nextLastClickedCli(s.lastClickedCli, provider, nextConnected)
+        })
         mainLog.warn(`[cli] ${provider} is no longer signed in — marking it disconnected`)
       }
     } catch (error) {
@@ -1230,27 +1551,37 @@ function publicSettings(): PublicSettings {
   // every ask).
   const allowed = getAllowedProviders()
   const providerReady =
-    (!allowed || allowed.includes(s.provider)) &&
-    (activeDef.kind === 'cli'
-      ? !!s.cliConnected[s.provider]
-      : hasApiKey(s.provider) &&
-        (s.provider === 'dust'
-          ? !!s.dustWorkspaceId.trim() && !!s.providerModels.dust
-          : s.provider === 'custom'
-            ? /^https:\/\//i.test(s.customBaseUrl) && !!s.providerModels.custom
-            : // Cloudflare ships a default model but NO endpoint (the operator's own Worker), so the
-              // https URL is the whole extra setup step. Unlike Custom it needs no model check —
-              // resolveModelTier always yields the registry default.
-              s.provider === 'cloudflare'
-              ? /^https:\/\//i.test(s.cloudflareBaseUrl)
-              : true))
+    ((!allowed || allowed.includes(s.provider)) &&
+      (activeDef.kind === 'cli'
+        ? !!s.cliConnected[s.provider]
+        : hasApiKey(s.provider) &&
+          (s.provider === 'dust'
+            ? !!s.dustWorkspaceId.trim() && !!s.providerModels.dust
+            : s.provider === 'custom'
+              ? /^https:\/\//i.test(s.customBaseUrl) && !!s.providerModels.custom
+              : // Cloudflare ships a default model but NO endpoint (the operator's own Worker), so the
+                // https URL is the whole extra setup step. Unlike Custom it needs no model check —
+                // resolveModelTier always yields the registry default.
+                s.provider === 'cloudflare'
+                ? /^https:\/\//i.test(s.cloudflareBaseUrl)
+                : true))) ||
+    nextAskRoute({
+      cliConnected: s.cliConnected,
+      lastClickedCli: s.lastClickedCli,
+      allowed,
+      fundedProviders: operatorFundedProviders()
+    }).tier !== 'fail'
   // Métis Local readiness (PLAN.md §4.3) — task-independent base, then one per in-scope task. Derived by
   // local-routing.ts's localBaseReady() so this snapshot and the live routing decision (attempt()/
   // pickFailover below) can never drift apart.
   const localReady = localBaseReady(s, allowed)
-  const localSuggestReady = localReady && s.localLlm.useFor.suggest
-  const localSummaryReady = localReady && s.localLlm.useFor.summary
-  const localVisionReady = localReady && s.localLlm.useFor.vision
+  // routingMode:'local' is a standing opt-in for every in-scope mode (see localPrimaryEligibleFor) —
+  // the per-task useFor toggles are only required under 'auto'. Without this, Settings → Routing mode
+  // → Local left the readiness chips and requireProvider() gates claiming Local was off.
+  const routingLocal = resolveRoutingMode(s) === 'local'
+  const localSuggestReady = localReady && (s.localLlm.useFor.suggest || routingLocal)
+  const localSummaryReady = localReady && (s.localLlm.useFor.summary || routingLocal)
+  const localVisionReady = localReady && (s.localLlm.useFor.vision || routingLocal)
   // "Local as safety net" is live: with zero cloud/CLI configured, meeting indexing and — through the
   // absolute floor — asks of ANY mode still run on-device (askStart's fallback seams + brain/ingest.ts's
   // last-resort candidate). Surfaced so renderer readiness gates match what routing will actually do:
@@ -1286,7 +1617,9 @@ function publicSettings(): PublicSettings {
         (p) =>
           (p === 'dust' ? dustSelectedAgentVision(s.providerModels['dust']) : PROVIDERS[p].vision) &&
           (!allowed || allowed.includes(p)) &&
-          (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : hasApiKey(p)) &&
+          (PROVIDERS[p].kind === 'cli'
+            ? !!s.cliConnected[p]
+            : hasApiKey(p) || operatorFundedProviders().includes(p)) &&
           // A key alone is not reachability. Cloudflare (and custom) answer at an endpoint the operator
           // supplies, so a stored METIS_PROXY_KEY with no Worker URL yet is a provider that can never be
           // reached — and advertising vision on it makes the app CAPTURE THE USER'S SCREEN, and prewarm
@@ -1301,6 +1634,7 @@ function publicSettings(): PublicSettings {
     // MQA-004: the honest counterpart to providerReady — which providers actually REJECTED their
     // credentials recently, so the UI can say "your key stopped working" instead of claiming ready.
     unhealthyProviders: unhealthyProviders(),
+    lastFailover: lastFailoverNotice,
     // Background on-device screen pre-analysis can actually run. Asked of the ENGINE, never recomputed
     // here: the old `s.backgroundScreenContext && localReady` copy missed the macOS OCR engine (Settings
     // said "not running" while it captured every 6s) and could not see a dead foreground watcher at all.
@@ -1322,11 +1656,191 @@ function publicSettings(): PublicSettings {
   }
 }
 
-function topCenter(width: number, height: number): { x: number; y: number } {
-  const { workArea } = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
-  return {
-    x: Math.round(workArea.x + (workArea.width - width) / 2),
-    y: workArea.y + 24
+/** Wiped-profile / mid-tour: exclusive fullscreen owns the display until onboardingDone. */
+function onboardingExclusiveLive(): boolean {
+  try {
+    return !getSettings().onboardingDone
+  } catch {
+    // Fail closed to exclusive — parking Hide/Island 8×2 then jumping is the flash.
+    return true
+  }
+}
+
+/**
+ * Constructor `transparent` cannot be flipped later (Electron 39). Exclusive must be created
+ * opaque; overlay after onboardingDone must be created transparent. Recreate when they disagree.
+ */
+let overlayWindowTransparent = true
+let emittedAppStarted = false
+
+function leaveExclusiveOsFullscreen(w: BrowserWindow): void {
+  try {
+    if (typeof w.isSimpleFullScreen === 'function' && w.isSimpleFullScreen()) w.setSimpleFullScreen(false)
+    if (typeof w.isKiosk === 'function' && w.isKiosk()) w.setKiosk(false)
+  } catch {
+    /* headless */
+  }
+}
+
+/** Seal Goldberg in the live renderer before exclusive destroy / park. */
+function lockOnboardingAudioInRenderer(w: BrowserWindow | null): void {
+  if (!w || w.isDestroyed()) return
+  try {
+    void w.webContents.executeJavaScript(
+      `window.dispatchEvent(new Event(${JSON.stringify(ONBOARDING_AUDIO_LOCK_EVENT)}))`
+    )
+  } catch {
+    /* headless / already gone */
+  }
+}
+
+/** Destroy the current overlay and build one whose constructor chrome matches onboardingExclusiveLive(). */
+function recreateOverlayWindow(): void {
+  const dying = win
+  win = null
+  if (dying && !dying.isDestroyed()) {
+    lockOnboardingAudioInRenderer(dying)
+    leaveExclusiveOsFullscreen(dying)
+    try {
+      dying.destroy()
+    } catch {
+      /* already gone */
+    }
+  }
+  createWindow()
+}
+
+/** Exclusive hero hold, Settings glass, or transparent rest. Hide park is opacity 0. */
+function applyOverlaySurfaceChrome(): void {
+  if (!win || win.isDestroyed()) return
+  if (onboardingExclusiveLive()) {
+    try {
+      win.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
+      win.setOpacity(1)
+    } catch {
+      /* headless */
+    }
+    return
+  }
+  if (settingsSurfaceOpen) {
+    try {
+      win.setBackgroundColor(SETTINGS_SURFACE_BACKGROUND)
+      win.setOpacity(1)
+    } catch {
+      /* headless */
+    }
+    return
+  }
+  try {
+    win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
+  } catch {
+    /* headless */
+  }
+  try {
+    win.setOpacity(hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized))
+  } catch {
+    /* headless */
+  }
+}
+
+/** Hide/island park at bounds.y. Re-assert if darwin clamped into workArea.y≈39. */
+function commitParkedOverlayBounds(park: { x: number; y: number; width: number; height: number }): void {
+  if (!win || win.isDestroyed()) return
+  win.setBounds(park, false)
+  try {
+    const after = win.getBounds()
+    if (after.x !== park.x || after.y !== park.y) win.setPosition(park.x, park.y, false)
+  } catch {
+    /* headless */
+  }
+}
+
+function applyExclusiveOnboardingStage(w: BrowserWindow, display = screen.getDisplayMatching(w.getBounds())): void {
+  // Totos-Mac 044c0f1: simple-fullscreen on a transparent window is a 3600×2338 RGBA(0,0,0,0) void.
+  if (overlayWindowTransparent) {
+    recreateOverlayWindow()
+    return
+  }
+  stopOverlayCursorWatch()
+  const stage = exclusiveOnboardingBounds(display.bounds, display.workArea)
+  currentWidth = stage.width
+  lastBarHeight = stage.height
+  isMinimized = false
+  islandResting = false
+  try {
+    w.setIgnoreMouseEvents(false)
+  } catch {
+    /* headless */
+  }
+  try {
+    w.setMovable(false)
+  } catch {
+    /* headless */
+  }
+  try {
+    w.setFullScreenable?.(true)
+    w.setBackgroundColor(EXCLUSIVE_ONBOARDING_BACKGROUND)
+    w.setOpacity(1)
+    w.setBounds(stage)
+  } catch {
+    /* headless / already destroyed */
+  }
+  try {
+    if (
+      exclusiveMayUseSimpleFullScreen(overlayWindowTransparent) &&
+      process.platform === 'darwin' &&
+      typeof w.setSimpleFullScreen === 'function'
+    ) {
+      if (!w.isSimpleFullScreen()) w.setSimpleFullScreen(true)
+    } else if (
+      exclusiveMayUseSimpleFullScreen(overlayWindowTransparent) &&
+      process.platform === 'win32' &&
+      typeof w.setKiosk === 'function'
+    ) {
+      if (!w.isKiosk()) w.setKiosk(true)
+    }
+  } catch {
+    /* CI / Linux kiosk unsupported — bounds still cover the display */
+  }
+}
+
+/** After onboardingDone only: leave exclusive fullscreen and park hide/island peek (never 880×816). */
+function exitExclusiveOnboardingStage(): void {
+  if (!win || win.isDestroyed()) return
+  lockOnboardingAudioInRenderer(win)
+  leaveExclusiveOsFullscreen(win)
+  if (!overlayWindowTransparent) {
+    recreateOverlayWindow()
+    return
+  }
+  try {
+    win.setFullScreenable?.(false)
+    win.setMovable(true)
+    win.setBackgroundColor(OVERLAY_TRANSPARENT_BACKGROUND)
+  } catch {
+    /* ignore */
+  }
+  applyOverlayAlwaysOnTop(win)
+  isMinimized = false
+  lastBarHeight = BAR_HEIGHT
+  const display = screen.getDisplayMatching(win.getBounds())
+  const layout = liveOverlayLayout()
+  const park = parkAfterExclusiveOnboarding(layout, getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+  currentWidth = park.width
+  islandResting = overlayUsesHover(layout)
+  userAnchorY = park.y
+  commitParkedOverlayBounds(park)
+  startOverlayCursorWatch()
+  applyHideClickThrough()
+  applyOverlaySurfaceChrome()
+}
+
+function applyOverlayAlwaysOnTop(w: BrowserWindow): void {
+  try {
+    w.setAlwaysOnTop(true, 'screen-saver')
+    if (process.platform !== 'win32') w.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true })
+  } catch {
+    /* headless / already destroyed */
   }
 }
 
@@ -1348,7 +1862,10 @@ function createWindow(): void {
   //
   // Emitted here rather than at app-ready because reaching createWindow means the main process survived
   // module load, bytecode load, and boot — which is exactly the class of failure that shipped DOA twice.
-  auditLog('app.started', { version: app.getVersion(), platform: process.platform, arch: process.arch })
+  if (!emittedAppStarted) {
+    auditLog('app.started', { version: app.getVersion(), platform: process.platform, arch: process.arch })
+    emittedAppStarted = true
+  }
   // Crash/recovery guard: render-process-gone recovery and the boot-retry path both rebuild the window
   // from scratch, but isMinimized/currentWidth are module-level state that otherwise survives from before
   // the crash. If the overlay had been collapsed to the mini-pill (currentWidth === PILL_WIDTH) at the
@@ -1357,38 +1874,58 @@ function createWindow(): void {
   // resizable:false blocking any manual fix. Reset both so a recovered window always starts full-size.
   isMinimized = false
   currentWidth = BAR_WIDTH
-  // Fresh-install onboarding is a ~640px panel, not the 84px bar. The renderer's content-driven auto-resize
-  // can be starved by the macOS compositor on a just-created transparent, always-on-top overlay (rAF/timers
-  // frozen for a beat after first paint), which would otherwise leave onboarding clipped to bar height with
-  // its "Continue" buttons off-screen. Size the window to fit onboarding up front — deterministic, not
-  // dependent on the renderer — and let auto-resize settle it back to the bar once onboarding is done.
-  // getSettings() is safe to read here (file keystore, no Keychain prompt — see the keystore note at top).
-  let initialHeight = BAR_HEIGHT
-  try {
-    if (!getSettings().onboardingDone) {
-      initialHeight = Math.min(680, screen.getPrimaryDisplay().workArea.height - 48)
-      lastBarHeight = initialHeight // so a later width-only change (mini-pill) doesn't snap it back to 84
-    }
-  } catch {
-    /* getSettings unavailable — keep bar height; auto-resize grows onboarding if the renderer isn't frozen */
+  // Wiped-profile onboarding owns the display (exclusiveOnboardingBounds) — never the 880×816 card
+  // that overlapped Tony's work. Auto-resize must not shrink this until onboardingDone; exit then
+  // parks hide/island at bounds.y (notch strip) so the hardware island can hit. getSettings() is file-keystore-safe here.
+  const placementDisplay = screen.getDisplayNearestPoint(screen.getCursorScreenPoint())
+  const onboardingLive = onboardingExclusiveLive()
+  const layout = liveOverlayLayout()
+  const placementMetrics = getDisplayMetrics(placementDisplay)
+  const firstPaint = firstPaintOverlayBounds({
+    onboardingDone: !onboardingLive,
+    bounds: placementDisplay.bounds,
+    workArea: placementDisplay.workArea,
+    layout,
+    metrics: placementMetrics,
+    topMargin: ISLAND_TOP_MARGIN
+  })
+  if (onboardingLive) {
+    currentWidth = firstPaint.width
+    lastBarHeight = firstPaint.height
+    islandResting = false
+  } else {
+    currentWidth = firstPaint.width
+    lastBarHeight = BAR_HEIGHT
+    islandResting = overlayUsesHover(layout)
   }
-  const { x, y } = topCenter(BAR_WIDTH, initialHeight)
+  const chrome = overlayWindowChrome(onboardingLive)
+  overlayWindowTransparent = chrome.transparent
   win = new BrowserWindow({
-    width: BAR_WIDTH,
-    height: initialHeight,
-    x,
-    y,
+    width: firstPaint.width,
+    height: firstPaint.height,
+    x: firstPaint.x,
+    y: firstPaint.y,
     frame: false,
-    transparent: true,
+    transparent: chrome.transparent,
     hasShadow: false, // panel paints its own shadow; window shadow would box the transparent area
     resizable: false,
-    movable: true,
+    movable: !onboardingLive,
     skipTaskbar: true,
-    fullscreenable: false,
+    fullscreenable: chrome.fullscreenable,
     maximizable: false,
     minimizable: false,
-    roundedCorners: true,
-    backgroundColor: '#00000000',
+    roundedCorners: chrome.roundedCorners,
+    // macOS default min height can be ~44. Hide park is 8×2; without this, a display
+    // move reports 8×44 (Tony listwins) even after clampHeight lets 2px through.
+    minWidth: 1,
+    minHeight: 1,
+    // Hide park is at bounds.y (0 on primary). Without this, darwin clamps
+    // setBounds into workArea.y≈39 — the visible purple 8×2 hairline.
+    enableLargerThanScreen: true,
+    // Exclusive: hidden until ready-to-show so constructor chrome is never the first
+    // visible frame. Hero-matching hold (`#05010A`) is the window color if paint lags.
+    show: !onboardingLive,
+    backgroundColor: chrome.backgroundColor,
     acceptFirstMouse: true, // macOS: first click activates + hits the target without needing a second click
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
@@ -1402,7 +1939,14 @@ function createWindow(): void {
   })
 
   try {
-  win.setAlwaysOnTop(true, 'screen-saver')
+  // Frameless transparent windows on darwin still inherit an OS min (~44). Hide park is 8×2.
+  try {
+    win.setMinimumSize(1, 1)
+  } catch {
+    /* headless */
+  }
+  if (onboardingLive) applyExclusiveOnboardingStage(win, placementDisplay)
+  applyOverlayAlwaysOnTop(win)
   // setVisibleOnAllWorkspaces is a documented no-op on Windows (Electron: "This API does nothing on
   // Windows") — gate the call so it isn't dead code there. Windows has no public API for pinning a
   // window across Task View virtual desktops (that needs the native IVirtualDesktopManager COM
@@ -1448,7 +1992,10 @@ function createWindow(): void {
     streams.clear()
     // Import jobs belong to main plus the hidden decoder window, so closing the overlay never abandons
     // a selected recording. Their checkpointed state resumes even if the entire app exits.
-    if (win === self) win = null
+    if (win === self) {
+      stopOverlayCursorWatch()
+      win = null
+    }
   })
 
   // Security: never let model-output links navigate the trusted renderer or open child windows
@@ -1469,6 +2016,16 @@ function createWindow(): void {
       if (level >= 2) mainLog.info(`[renderer] ${message}  (${sourceId}:${line})`)
     })
   }
+  // A renderer that is wedged (event loop stuck) never fires render-process-gone below, so the island can
+  // sit blank with no trace in any log. Record it, and record the recovery. No automatic reload: Chromium
+  // recovers most stalls on its own, and a forced reload mid-meeting would drop the live transcript.
+  win.on('unresponsive', () => {
+    mainLog.warn('[renderer-unresponsive] overlay renderer stopped responding')
+    auditLog('app.unresponsive', { kind: 'overlay' })
+  })
+  win.on('responsive', () => {
+    mainLog.info('[renderer-responsive] overlay renderer recovered')
+  })
   // The BrowserWindow survives a renderer crash (GPU/compositor crash, OOM in the in-renderer ASR
   // worker) — only its content dies, so `win` stays non-null while hotkeys/tray silently no-op into the
   // dead renderer and the overlay sits permanently blank. Previously this was only logged via
@@ -1497,7 +2054,11 @@ function createWindow(): void {
     // width — squeezing the recovered bar into a ~130px sliver that resizable:false makes unfixable. Same
     // two lines createWindow's crash guard uses, for the reload path that never reaches it.
     isMinimized = false
-    currentWidth = BAR_WIDTH
+    if (onboardingExclusiveLive() && win && !win.isDestroyed()) {
+      applyExclusiveOnboardingStage(win)
+    } else {
+      currentWidth = BAR_WIDTH
+    }
     if (!win || win.isDestroyed()) return
     if (process.env['ELECTRON_RENDERER_URL']) win.loadURL(process.env['ELECTRON_RENDERER_URL'])
     else win.loadFile(join(__dirname, '../renderer/index.html'))
@@ -1531,44 +2092,125 @@ function createWindow(): void {
   } else {
     win.loadFile(join(__dirname, '../renderer/index.html'))
   }
+  const overlay = win
+  const revealExclusiveWhenPainted = (): void => {
+    if (win !== overlay || overlay.isDestroyed() || overlay.isVisible()) return
+    if (!onboardingExclusiveLive()) return
+    try {
+      overlay.showInactive()
+    } catch {
+      /* headless */
+    }
+  }
+  overlay.once('ready-to-show', revealExclusiveWhenPainted)
+  overlay.webContents.once('did-finish-load', revealExclusiveWhenPainted)
+  startOverlayCursorWatch()
+  applyHideClickThrough()
+  applyOverlaySurfaceChrome()
 }
 
 function resizeTo(height: number): void {
   if (!win) return
+  // Exclusive onboarding owns the display. Auto-resize must not shrink to the 880×816 card.
+  if (onboardingExclusiveLive()) {
+    applyExclusiveOnboardingStage(win)
+    return
+  }
+  // MQA-286 — Settings hug reports ~325px. Never keep park / bar height while Settings is open.
+  // Circle rest must not take this branch: settingsSurfaceOpen leftover + isMinimized was the
+  // 880×1017 gray Settings sheet under the Ask bar.
+  if (settingsSurfaceOpen && !isMinimized) {
+    const display = screen.getDisplayMatching(win.getBounds())
+    const metrics = getDisplayMetrics(display)
+    const rect = settingsOpenRect(metrics, ISLAND_TOP_MARGIN)
+    const h = clampHeight(settingsContentHeight(height), display.workArea.height)
+    currentWidth = SETTINGS_WINDOW_MIN.width
+    if (win.getBounds().width === rect.width && win.getBounds().height === h && win.getBounds().y === rect.y) return
+    win.setBounds({ x: rect.x, y: rect.y, width: rect.width, height: h }, false)
+    return
+  }
+  const display = screen.getDisplayMatching(win.getBounds())
+  const rest = overlayRestSize(liveOverlayLayout(), getDisplayMetrics(display))
+  // Hide rest is a 1–8px hairline. BAR_MIN_HEIGHT (44) must never grow it into Tony's slab.
+  if (!settingsSurfaceOpen && islandResting && liveOverlayLayout() === 'hide') return
+  if (!settingsSurfaceOpen && shouldIgnoreResizeWhilePeekResting(islandResting, height, rest.height)) return
   // Clamp + reposition against the display the OVERLAY is actually on (not the cursor's). Otherwise, on a
   // laptop + external monitor of different heights, a streaming answer clamps to the wrong monitor and the
   // window jumps vertically while the cursor sits on the other screen.
-  const { workArea } = screen.getDisplayMatching(win.getBounds())
-  const h = clampHeight(Math.round(height), workArea.height)
+  const { workArea } = display
+  // OverlayPeek can still report 2–20px after restoreBarWidth. clampHeight would floor that
+  // to BAR_MIN_HEIGHT 44 (880×44 Show Métis). Revealed Hide/Island stays the Ask bar.
+  const lifted = overlayRevealedContentHeight({
+    islandResting,
+    minimized: isMinimized,
+    settingsOpen: settingsSurfaceOpen,
+    reportedHeight: height,
+    minBarHeight: ASK_REVEAL_MIN_HEIGHT_PX,
+    usesHover: overlayUsesHover(liveOverlayLayout())
+  })
+  const h = clampHeight(Math.round(lifted), workArea.height)
   const b = win.getBounds()
   if (h === b.height && currentWidth === b.width) {
     // Only remember this height for restore-on-expand when it's the real bar, not the mini-pill's
-    // much shorter content — see isMinimized comment above.
-    if (!isMinimized) lastBarHeight = h
+    // much shorter content — see isMinimized comment above. Never store Settings 800+ (ghost slab).
+    if (!isMinimized && !islandResting) lastBarHeight = rememberBarContentHeight(h, lastBarHeight)
     return // idempotent — skip a no-op setBounds (belt-and-braces with the renderer-side resize dedup)
   }
-  if (!isMinimized) lastBarHeight = h
-  // Keep the panel fully on-screen; if it would grow below the work area, slide it up — TEMPORARILY.
-  // Measured against the user's own anchor rather than the current (possibly already-slid) top edge, so
-  // the window returns to where they put it once the content shrinks again.
-  const maxY = workArea.y + workArea.height - h - 8
-  const anchor = userAnchorY ?? b.y
-  const y = Math.max(workArea.y + 8, Math.min(anchor, maxY))
+  if (!isMinimized && !islandResting) lastBarHeight = rememberBarContentHeight(h, lastBarHeight)
+  // Resting hide/island stay at hoverRestTop (island hit). Revealed chrome sits at islandSafeTop
+  // (below the notch). Do not fight macOS by writing y=0 on the full bar every tick.
+  const metrics = getDisplayMetrics(display)
+  const y = islandResting ? hoverRestTop(metrics) : topClamp(liveOverlayLayout(), metrics, ISLAND_TOP_MARGIN)
   // When the width changes (collapse to / expand from the mini-pill), recenter around the old midpoint
   // so the overlay stays put; otherwise keep the left edge. Clamp x into the work area either way.
-  let x = currentWidth === b.width ? b.x : Math.round(b.x + (b.width - currentWidth) / 2)
-  x = Math.max(workArea.x + 8, Math.min(x, workArea.x + workArea.width - currentWidth - 8))
+  const x = recenterXForWidth(b.x, b.width, currentWidth, workArea, RESIZE_EDGE_MARGIN)
   win.setBounds({ x, y, width: currentWidth, height: h }, false)
 }
 
 /** Collapse to / expand from the control mini-pill by switching the window width; the renderer's
  *  auto-resize then settles the height to whichever surface is shown. */
 function setMinimizedWidth(narrow: boolean): void {
+  if (onboardingExclusiveLive()) return
+  // Hide/Island: ignore collapse. Do not grow a pill and do not jump layout to Bar.
+  if (narrow && !overlayAllowsMinimize(liveOverlayLayout())) return
   // Flip BEFORE resizeTo so the pill's own resize reports (while narrow) never clobber lastBarHeight,
   // and so expanding restores the last real bar height instead of the pill's tiny one.
-  isMinimized = narrow
-  currentWidth = narrow ? PILL_WIDTH : BAR_WIDTH
-  resizeTo(lastBarHeight) // re-apply immediately so width + recenter land before the renderer re-measures
+  if (narrow) {
+    if (settingsSurfaceOpen) leaveSettingsSurface()
+    islandResting = false
+    isMinimized = true
+    applyHideClickThrough()
+    // Circle rest is the 41 host. A Settings-tall lastBarHeight was the gray box under Jarvis.
+    const circleRest = minimizedCircleRestBounds({
+      layout: liveOverlayLayout(),
+      style: parseOverlayOrbStyle(getSettings().overlayOrbStyle)
+    })
+    if (circleRest) {
+      currentWidth = circleRest.width
+      resizeTo(circleRest.height)
+      return
+    }
+    currentWidth = PILL_WIDTH
+    resizeTo(rememberBarContentHeight(lastBarHeight, BAR_IDLE_HEIGHT_PX))
+    return
+  }
+  const leavingPill = isMinimized
+  isMinimized = false
+  // Leaving the pill on Hide/island with the pointer outside the island/bar must PARK the rest
+  // (Tony live: 560×103 stub at Y=39). The pill itself is not the bar.
+  if (
+    shouldParkHoverRestAfterLeavingSurface({
+      layout: liveOverlayLayout(),
+      pointerInIslandOrBar: pointerInIslandOrBar({ ignoreWindow: leavingPill })
+    })
+  ) {
+    overlayCursorWatchHovering = false
+    parkOverlayAfterHideSpring()
+    notifyOverlayCursorHover(false)
+    return
+  }
+  currentWidth = BAR_WIDTH
+  resizeTo(lastBarHeight)
 }
 
 /**
@@ -1576,19 +2218,375 @@ function setMinimizedWidth(narrow: boolean): void {
  * Settings keeps the same top edge (so it grows downward from the bar) and centers horizontally,
  * clamped to the work area. Exiting restores the bar's width and last content height.
  */
+// Top margin (px) for BAR chrome. Hide/island ignore this and park at bounds.y (hover rest).
+const ISLAND_TOP_MARGIN = 8
+// Top margin (px) for the ONE-TIME initial window placement in createWindow — deliberately larger than
+// ISLAND_TOP_MARGIN so a freshly-launched window doesn't appear jammed against the very top edge before
+// the user has ever triggered the auto-hide anchor.
+const TOP_CENTER_MARGIN_PX = 24
+// Edge margin (px) resizeTo keeps clear on every side while sliding/recentering a growing or narrowing
+// bar — small breathing room from the raw screen edge, distinct from ISLAND_TOP_MARGIN (the auto-hide
+// anchor's OWN resting position, which intentionally sits closer to y=0).
+const RESIZE_EDGE_MARGIN = 8
+
+/** Where THIS window's top-center placement should land on a display, honoring the notch clamp
+ *  (island/geometry.ts's topClamp) — the single call every top-anchor site in this file routes through,
+ *  so hide/island rest at bounds.y (island hover hits) and bar floats on the work area. */
+function liveOverlayLayout(): OverlayLayout {
+  return parseOverlayLayout(getSettings().overlayLayout)
+}
+
+function overlayCursorWatchWanted(): boolean {
+  if (onboardingExclusiveLive()) return false
+  try {
+    return shouldWatchOverlayCursor(process.platform, getSettings().onboardingDone, liveOverlayLayout())
+  } catch {
+    return false
+  }
+}
+
+function stopOverlayCursorWatch(): void {
+  if (overlayCursorWatchTimer) {
+    clearInterval(overlayCursorWatchTimer)
+    overlayCursorWatchTimer = null
+  }
+  overlayCursorWatchHovering = false
+  cancelOverlayLeavePark()
+}
+
+function startOverlayCursorWatch(): void {
+  stopOverlayCursorWatch()
+  if (!overlayCursorWatchWanted() || !win || win.isDestroyed()) return
+  overlayCursorWatchTimer = setInterval(() => tickOverlayCursorWatch(), CURSOR_WATCH_INTERVAL_MS)
+  overlayCursorWatchTimer.unref?.()
+}
+
+function tickOverlayCursorWatch(): void {
+  if (!win || win.isDestroyed() || !overlayCursorWatchWanted()) {
+    stopOverlayCursorWatch()
+    return
+  }
+  // A parked Settings-tall ghost heals here. If the heal was refused because the
+  // pointer is in the top-edge strip, fall through: that pointer is a hover, so
+  // reveal instead of stalling on the ghost until the mouse leaves.
+  if (healHideGhostSlab()) return
+  if (settingsSurfaceOpen) return
+  const display = screen.getDisplayMatching(win.getBounds())
+  const m = getDisplayMetrics(display)
+  const layout = liveOverlayLayout()
+  const rest = hoverWatchRestRect(layout, m)
+  const windowVisible = win.isVisible()
+  const bounds = win.getBounds()
+  const cursor = screen.getCursorScreenPoint()
+  // overlayCursorWatchHovering is the OS-hover latch: main saw the cursor in the
+  // strip or on the bar since the last park. Only a latched reveal parks on leave.
+  const step = overlayWatchStep({
+    cursor,
+    restRect: rest,
+    revealedRect: bounds,
+    islandResting,
+    windowVisible,
+    osHoverSeen: overlayCursorWatchHovering,
+    hugStub: isIncompleteAskReveal(bounds)
+  })
+  overlayCursorWatchHovering = step.osHoverSeen
+  if (step.action === 'restore') {
+    cancelOverlayLeavePark()
+    restoreBarWidth()
+    notifyOverlayCursorHover(true)
+    const after = win.getBounds()
+    // Transition log only (a hug-stub restore can repeat per tick until the bar settles).
+    if (after.width !== bounds.width || after.height !== bounds.height || !windowVisible) {
+      mainLog.info(
+        `[overlay-watch] reveal cursor=(${cursor.x},${cursor.y}) from=${bounds.width}x${bounds.height}@(${bounds.x},${bounds.y}) to=${after.width}x${after.height}@(${after.x},${after.y}) visible=${windowVisible}`
+      )
+    }
+  } else if (step.action === 'park') {
+    // Renderer spring may park first. Main parks at OVERLAY_LEAVE_PARK_MS so a
+    // missed overlayParkAfterHide cannot leave 880×120 up (Ultron c74e389).
+    notifyOverlayCursorHover(false)
+    scheduleOverlayLeavePark()
+    mainLog.info(
+      `[overlay-watch] leave cursor=(${cursor.x},${cursor.y}) bar=${bounds.width}x${bounds.height}@(${bounds.x},${bounds.y}) park in ${OVERLAY_LEAVE_PARK_MS}ms`
+    )
+  }
+  /* stay / leave-ignored: never setBounds on a stay tick — that was the 40fps hide/reveal stutter */
+}
+
+function notifyOverlayCursorHover(hovering: boolean): void {
+  if (!win || win.isDestroyed()) return
+  try {
+    win.webContents.send(IPC.overlayCursorHover, { hovering })
+  } catch {
+    /* renderer gone */
+  }
+}
+
+function cancelOverlayLeavePark(): void {
+  if (!overlayLeaveParkTimer) return
+  clearTimeout(overlayLeaveParkTimer)
+  overlayLeaveParkTimer = null
+}
+
+function scheduleOverlayLeavePark(): void {
+  if (overlayLeaveParkTimer) return
+  overlayLeaveParkTimer = setTimeout(() => {
+    overlayLeaveParkTimer = null
+    if (!win || win.isDestroyed() || islandResting || settingsSurfaceOpen) return
+    if (pointerInIslandOrBar()) return
+    parkOverlayAfterHideSpring()
+  }, OVERLAY_LEAVE_PARK_MS)
+  overlayLeaveParkTimer.unref?.()
+}
+
+/** Island strip or the revealed bar — not the ControlPill. Used when leaving pill/Settings. */
+function pointerInIslandOrBar(opts?: { ignoreWindow?: boolean }): boolean {
+  if (!win || win.isDestroyed()) return false
+  const display = screen.getDisplayMatching(win.getBounds())
+  const m = getDisplayMetrics(display)
+  const layout = liveOverlayLayout()
+  const rest = hoverWatchRestRect(layout, m)
+  const cursor = screen.getCursorScreenPoint()
+  if (pointInRect(cursor, rest)) return true
+  // The pill window is not the bar. Expanding it must not count as "pointer in bar".
+  if (opts?.ignoreWindow || isMinimized || islandResting) return false
+  const bounds = win.getBounds()
+  // A Settings-tall ghost is not the Ask bar. (900, 600) over 880×1017 must still park 8×2.
+  if (isSettingsTallHeight(bounds.height) && !settingsSurfaceOpen) return false
+  return (
+    decideCursorWatch({
+      cursor,
+      restRect: rest,
+      revealedRect: bounds,
+      revealed: true
+    }) === 'stay'
+  )
+}
+
+/**
+ * Hide/Island must never keep a Settings-tall ghost or a leftover Circle pill.
+ * Fresh launch and mouse-away park 8×2. Expand Métis is Bar-only.
+ */
+function healHideGhostSlab(): boolean {
+  if (!win || win.isDestroyed() || onboardingExclusiveLive()) return false
+  const layout = liveOverlayLayout()
+  if (!overlayUsesHover(layout)) return false
+  // Circle pill is Bar-only. Hide + Expand Métis is the 880×1017 ghost.
+  if (isMinimized) {
+    if (settingsSurfaceOpen) leaveSettingsSurface()
+    isMinimized = false
+    return parkOverlayAfterHideSpring()
+  }
+  // Parked Hide/Island with a leftover Settings-tall window (launch activate slab).
+  // A refused park (pointer in the strip) returns false so the tick can reveal.
+  if (!settingsSurfaceOpen && islandResting && isSettingsTallHeight(win.getBounds().height)) {
+    return parkOverlayAfterHideSpring()
+  }
+  return false
+}
+
+/** Returns true only when the window was actually parked on this call. */
+function parkOverlayAfterHideSpring(): boolean {
+  if (!win || win.isDestroyed() || onboardingExclusiveLive()) return false
+  if (settingsSurfaceOpen) return false
+  // Do not refuse park because the hover latch is stuck. If the pointer is
+  // still on the bar or the top-edge strip, stay. Else Hide must go to 8×2.
+  if (pointerInIslandOrBar()) return false
+  cancelOverlayLeavePark()
+  const layout = liveOverlayLayout()
+  if (!overlayUsesHover(layout)) return false
+  const display = screen.getDisplayMatching(win.getBounds())
+  const before = win.getBounds()
+  const park = parkAfterExclusiveOnboarding(layout, getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+  currentWidth = park.width
+  islandResting = true
+  userAnchorY = park.y
+  try {
+    win.setMinimumSize(1, 1)
+  } catch {
+    /* headless */
+  }
+  applyOverlaySurfaceChrome()
+  commitParkedOverlayBounds(park)
+  overlayCursorWatchHovering = false
+  applyHideClickThrough()
+  // Hide rest is an always-on invisible hairline. Tray hide() must not leave
+  // the LSUIElement window gone — hover still needs a live window + watch.
+  try {
+    if (!win.isVisible()) win.showInactive()
+  } catch {
+    /* headless */
+  }
+  if (before.width !== park.width || before.height !== park.height || before.y !== park.y) {
+    mainLog.info(
+      `[overlay-watch] park ${layout} from=${before.width}x${before.height}@(${before.x},${before.y}) to=${park.width}x${park.height}@(${park.x},${park.y})`
+    )
+  }
+  return true
+}
+
+/** Hide rest is click-through so the menu bar stays usable. Island peek and the bar must receive clicks. */
+function applyHideClickThrough(): void {
+  if (!win || win.isDestroyed()) return
+  const clickThrough =
+    !settingsSurfaceOpen &&
+    islandResting &&
+    liveOverlayLayout() === 'hide' &&
+    !isMinimized &&
+    !onboardingExclusiveLive()
+  try {
+    win.setIgnoreMouseEvents(clickThrough)
+  } catch {
+    /* headless */
+  }
+}
+
+function islandTopCenter(width: number, display: Electron.Display, topMargin: number): { x: number; y: number } {
+  return topCenterPosition(width, liveOverlayLayout(), getDisplayMetrics(display), topMargin)
+}
+
+/** Pin the overlay to the top-center of the display it is currently on, and re-arm the resizeTo anchor
+ *  there, so the auto-hide peek strip and the revealed bar both grow DOWNWARD from the same safe Y
+ *  (below the notch). Uses getDisplayMatching(win bounds) so it stays correct on the overlay's actual
+ *  display. A pure setBounds — never show()/focus(). */
+function anchorTopCenter(): void {
+  if (!win) return
+  if (onboardingExclusiveLive()) {
+    applyExclusiveOnboardingStage(win)
+    return
+  }
+  // Hide/island already parked: re-apply the rest rect. Do not slide a hide rest down to
+  // islandSafeTop (~39) — that was the 560×103 stub at Y=39.
+  if (islandResting && overlayUsesHover(liveOverlayLayout())) {
+    overlayCursorWatchHovering = false
+    parkOverlayAfterHideSpring()
+    return
+  }
+  const display = screen.getDisplayMatching(win.getBounds())
+  const b = win.getBounds()
+  const { x, y } = islandTopCenter(b.width, display, ISLAND_TOP_MARGIN)
+  userAnchorY = y // resizeTo slides against this, so a growing bar returns to the top edge when it shrinks
+  win.setBounds({ x, y, width: b.width, height: b.height }, false)
+}
+
+/** Reveal from the auto-hide peek: widen to the full bar and grow height downward from the same
+ *  safe Y. Leave collapse is the inverse (resizeTo with peek height, same Y). */
+function restoreBarWidth(): void {
+  if (!win || onboardingExclusiveLive()) return
+  // Do not un-park Hide just to bounce off Settings. That left islandResting
+  // false on a 880×1017 slab so mouse-away could not park 8×2.
+  if (settingsSurfaceOpen) return
+  cancelOverlayLeavePark()
+  islandResting = false
+  applyHideClickThrough()
+  applyOverlaySurfaceChrome()
+  // LSUIElement / tray Show-Hide can leave the window hidden. Hover reveal must
+  // showInactive (never show+focus) so the top-edge path works without hunting the menu.
+  try {
+    if (!win.isVisible()) win.showInactive()
+  } catch {
+    /* headless */
+  }
+  try {
+    win.setAlwaysOnTop(true, 'screen-saver')
+  } catch {
+    /* headless */
+  }
+  const display = screen.getDisplayMatching(win.getBounds())
+  const b = win.getBounds()
+  const layout = liveOverlayLayout()
+  const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+  // Hide/Island reveal keeps the 120 Ask floor. Never Math.max a leftover Settings 800+ slab
+  // (Ultron 880×1017 Expand Métis). Bar idle hugs the bar.
+  let revealedHeight = overlayUsesHover(layout)
+    ? askRevealHeight({ currentHeight: b.height, lastBarHeight, minReveal: ASK_REVEAL_MIN_HEIGHT_PX })
+    : rememberBarContentHeight(Math.max(lastBarHeight, BAR_HEIGHT), BAR_IDLE_HEIGHT_PX)
+  if (isSettingsTallHeight(revealedHeight)) {
+    revealedHeight = overlayUsesHover(layout) ? ASK_REVEAL_MIN_HEIGHT_PX : BAR_IDLE_HEIGHT_PX
+  }
+  const x = currentWidth === BAR_WIDTH ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
+  currentWidth = BAR_WIDTH
+  // Already the below-notch bar — do not setBounds y=0 and fight the OS clamp.
+  if (b.x === x && b.y === y && b.width === BAR_WIDTH && b.height === revealedHeight) return
+  win.setBounds({ x, y, width: BAR_WIDTH, height: revealedHeight }, false)
+}
+
+/**
+ * MQA-286 — tray / dock / IPC Settings must use a full Settings window, never Hide 8×2 or Island peek.
+ * Closing Settings calls leaveSettingsSurface then setWindowMode, which re-parks Hide/Island.
+ */
+function applySettingsSurface(): void {
+  if (!win || win.isDestroyed() || onboardingExclusiveLive()) return
+  settingsSurfaceOpen = true
+  islandResting = false
+  isMinimized = false
+  currentWidth = SETTINGS_WINDOW_MIN.width
+  try {
+    win.setMinimumSize(SETTINGS_WINDOW_MIN.width, SETTINGS_WINDOW_MIN.height)
+  } catch {
+    /* headless */
+  }
+  applyOverlaySurfaceChrome()
+  const display = screen.getDisplayMatching(win.getBounds())
+  const rect = settingsOpenRect(getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+  win.setBounds(rect, false)
+  applyHideClickThrough()
+}
+
+function leaveSettingsSurface(): void {
+  settingsSurfaceOpen = false
+  lastBarHeight = rememberBarContentHeight(lastBarHeight, BAR_IDLE_HEIGHT_PX)
+  if (overlayUsesHover(liveOverlayLayout())) {
+    islandResting = true
+    startOverlayCursorWatch()
+  }
+  if (!win || win.isDestroyed()) return
+  try {
+    win.setMinimumSize(1, 1)
+  } catch {
+    /* headless */
+  }
+  applyOverlaySurfaceChrome()
+}
+
 // Re-center the compact bar on its current display. The old fixed 'settings' window-mode was removed —
 // settings renders as a panel under the bar now, so the window only ever lives in 'bar' mode.
 function setWindowMode(): void {
   if (!win) return
+  if (onboardingExclusiveLive()) {
+    applyExclusiveOnboardingStage(win)
+    return
+  }
+  if (islandResting) {
+    const display = screen.getDisplayMatching(win.getBounds())
+    const park = parkAfterExclusiveOnboarding(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+    currentWidth = park.width
+    userAnchorY = park.y
+    commitParkedOverlayBounds(park)
+    applyHideClickThrough()
+    applyOverlaySurfaceChrome()
+    return
+  }
   const { workArea } = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
-  let x = Math.round(b.x + (b.width - currentWidth) / 2)
-  x = Math.max(workArea.x + 16, Math.min(x, workArea.x + workArea.width - currentWidth - 16))
+  const x = recenterXForWidth(b.x, b.width, currentWidth, workArea, 16)
   // lastBarHeight was measured on whatever display the bar was on at the time. The renderer sends
   // windowMode('bar') on every mount — including the reload after a renderer crash — which can land after
   // the overlay has moved to a shorter monitor, so re-apply that monitor's ceiling instead of restoring a
   // height it cannot show (resizable:false leaves no manual way back).
-  win.setBounds({ x, y: b.y, width: currentWidth, height: clampHeight(lastBarHeight, workArea.height) }, false)
+  // Settings 800+ must not come back as a gray slab under an idle Bar.
+  const height = rememberBarContentHeight(lastBarHeight, BAR_IDLE_HEIGHT_PX)
+  try {
+    win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
+  } catch {
+    /* headless */
+  }
+  try {
+    win.setOpacity(hideParkWindowOpacity(liveOverlayLayout(), islandResting && !isMinimized))
+  } catch {
+    /* headless / lifted placement stub */
+  }
+  win.setBounds({ x, y: b.y, width: currentWidth, height: clampHeight(height, workArea.height) }, false)
 }
 
 /** Self-heal a null `win` (e.g. a one-time createWindow() throw during boot) by retrying the window
@@ -1607,10 +2605,28 @@ function ensureWindow(): BrowserWindow | null {
   return win
 }
 
+/**
+ * The ONE deliberate, user-initiated focus grab in this file (MQA-275 / Phase 1d of the island rebuild:
+ * "never steals focus" except a deliberate ask). `show()` (unlike `showInactive()`) activates the window
+ * on both macOS and Windows, stealing focus from whatever app the user was typing in — acceptable ONLY
+ * when the user just explicitly asked to type into the overlay (the `ask` hotkey, or the show/hide
+ * toggle's reveal, which always opens `ask` immediately after). Every other reveal in this file must call
+ * `showInactive()` instead — enforced by `no-show-steals-focus.contract.test.ts`, which greps this file
+ * for bare `.show()` calls and fails on any occurrence outside this function.
+ */
+function showForAsk(w: BrowserWindow): void {
+  w.show()
+  w.focus()
+}
+
 function sendHotkey(action: HotkeyAction): void {
   const w = ensureWindow()
   if (!w) return
-  if (!w.isVisible()) w.show()
+  if (action === 'settings') applySettingsSurface()
+  if (!w.isVisible()) {
+    if (action === 'ask') showForAsk(w)
+    else w.showInactive()
+  }
   w.webContents.send(IPC.hotkey, action)
 }
 
@@ -1672,8 +2688,9 @@ function onFatal(kind: 'uncaughtException' | 'unhandledRejection', err: unknown)
 
 // --- Screen capture (cached + pre-warmable for vision latency) -----------------------------------------
 // A vision ask issued within CAPTURE_TTL_MS of a (pre-warmed) capture reuses the JPEG instead of paying the
-// ~150-450ms capture cost again. Kept tiny so the screen the model sees is never visibly stale.
-const CAPTURE_TTL_MS = 1500
+// ~150-450ms capture cost again. 4s covers hover→click and shortcut→Enter without showing a visibly stale
+// frame; Private View / display-id checks still refuse a bad send.
+const CAPTURE_TTL_MS = 4000
 let shotCache: { image: string; width: number; height: number; dispId: number; displayMismatch: boolean; ts: number } | null = null
 type CapturedScreen = { image: string; width: number; height: number; dispId: number; displayMismatch: boolean }
 
@@ -1836,6 +2853,112 @@ function prewarmCapture(): void {
   })
 }
 
+function visionCheckContextFromSettings(): import('@shared/screen-capture-check').VisionCheckContext {
+  const s = getSettings()
+  let localWeightsReady = false
+  try {
+    localWeightsReady = localModelDownloaded(s.localLlm.modelId) && localRuntimeBinaryPresent()
+  } catch {
+    localWeightsReady = false
+  }
+  const provider = s.provider
+  const visionOk =
+    provider === 'dust' ? dustSelectedAgentVision(s.providerModels['dust']) : PROVIDERS[provider].vision
+  const configured =
+    provider === 'local'
+      ? false
+      : PROVIDERS[provider].kind === 'cli'
+        ? !!s.cliConnected[provider]
+        : getApiKey(provider).length > 0 &&
+          (provider !== 'dust' || !!s.dustWorkspaceId) &&
+          (!requiresUserBaseUrl(provider) || !!providerBaseUrl(provider, s))
+  const allowed = getAllowedProviders()
+  const orgOk = !allowed || allowed.includes(provider)
+  return {
+    localWeightsReady,
+    localEnabled: s.localLlm.enabled,
+    apiVisionReady: isApiVisionCandidate(provider, visionOk, configured && orgOk),
+    activeProvider: provider
+  }
+}
+
+/** Isolated vision ask for the Settings self-check. Never askStart, never overlay chat, never a teammate push. */
+function askVisionForScreenCheck(
+  backend: 'local' | 'api',
+  image: string
+): Promise<{ text: string; label: string }> {
+  const s = getSettings()
+  const req: AskStart = {
+    id: `screen-check-${Date.now()}`,
+    mode: 'vision',
+    prompt: VISION_CHECK_PROMPT,
+    image,
+    history: []
+  }
+  if (backend === 'local') {
+    return collectVisionStream((handlers) =>
+      createStream({
+        providerId: 'local',
+        kind: 'local',
+        apiKey: '',
+        model: s.localLlm.modelId,
+        temperature: 0,
+        idleMs: 90_000,
+        maxOutputTokens: 80,
+        system: VISION_CHECK_SYSTEM,
+        req,
+        handlers: {
+          onDelta: handlers.onDelta,
+          onDone: () => handlers.onDone(),
+          onError: handlers.onError
+        }
+      })
+    ).then((text) => ({ text, label: PROVIDERS.local.label }))
+  }
+  const provider = s.provider
+  if (provider === 'local') {
+    return Promise.reject(new Error('No API provider is selected.'))
+  }
+  const def = PROVIDERS[provider]
+  const key = def.kind === 'cli' ? '' : getApiKey(provider)
+  const model =
+    provider === 'dust'
+      ? (s.providerModels['dust'] || '').trim() || def.defaultModel
+      : applyInteractiveGuardrail(
+          provider,
+          'base',
+          resolveModelTier(
+            provider,
+            s.providerModels,
+            s.providerModelsThinking,
+            'base',
+            s.providerModelsDeep
+          ) || def.fastModel
+        )
+  return collectVisionStream((handlers) =>
+    createStream({
+      providerId: provider,
+      kind: def.kind,
+      apiKey: key,
+      baseURL: providerBaseUrl(provider, s),
+      workspaceId: s.dustWorkspaceId,
+      refreshDustAuth: provider === 'dust' ? makeRefreshDustAuth(s) : undefined,
+      model,
+      temperature: 0,
+      idleMs: 45_000,
+      maxOutputTokens: 80,
+      freshConversation: true,
+      system: VISION_CHECK_SYSTEM,
+      req,
+      handlers: {
+        onDelta: handlers.onDelta,
+        onDone: () => handlers.onDone(),
+        onError: handlers.onError
+      }
+    })
+  ).then((text) => ({ text, label: def.label }))
+}
+
 // --- Background screen preprocessing (M13) ---------------------------------------------------------------
 // On-device pre-analysis of the screen on window/content change, so a "what's on my screen" ask answers from
 // a pre-computed description instead of a cold capture + image round trip. All the privacy/cost guardrails
@@ -1909,47 +3032,31 @@ function revokePrivilegedSurface(): void {
 }
 setSessionClearedHandler(revokePrivilegedSurface)
 
-/** Clamp a single axis (pos/size) into a work-area span, without inverting when the window is bigger
- *  than the display. Math.min(Math.max(pos, areaPos), areaPos + areaSpan - size) assumes
- *  areaPos + areaSpan - size >= areaPos; when size > areaSpan that upper bound falls below areaPos and
- *  min/max invert, pushing the window partially off-screen instead of pinning it. Pin to areaPos instead. */
-function clampAxis(pos: number, size: number, areaPos: number, areaSpan: number): number {
-  if (size >= areaSpan) return areaPos
-  return Math.min(Math.max(pos, areaPos), areaPos + areaSpan - size)
-}
-
-/** Ceiling a window height to a display's work area, keeping the 48px reserve. Lives here rather than
- *  inside resizeTo because the ceiling has to be re-applied every time the overlay lands on a DIFFERENT
- *  display — while the rest of resizeTo (width, recenter, lastBarHeight) must NOT run on those paths. */
-function clampHeight(height: number, areaHeight: number): number {
-  return Math.max(BAR_MIN_HEIGHT, Math.min(height, areaHeight - 48))
-}
-
 // How much of the window must stay visibly reachable on some display while it's being dragged — enough
 // to grab it back, not the whole thing. Below this it's treated as flung off-screen and pulled back in.
 const DRAG_VISIBLE_MARGIN = 40
 
-/** Loosened clampAxis: pins `pos` so between `margin` and `size` px (whichever is smaller) of the
- *  window stays inside [areaPos, areaPos + areaSpan), instead of pinning the WHOLE window inside it.
- *  Only used as the moveBy() fallback below — letting most of the window hang off a display's edge is
- *  what lets a drag glide across a gap to a neighboring monitor instead of stopping dead at the first
- *  display's boundary. */
-function clampAxisMargin(pos: number, size: number, areaPos: number, areaSpan: number, margin: number): number {
-  const m = Math.min(margin, size, areaSpan)
-  return Math.min(Math.max(pos, areaPos - size + m), areaPos + areaSpan - m)
+/** Ceiling a window height to a display's work area, keeping the 48px reserve. Lives here rather than
+ *  inside resizeTo because the ceiling has to be re-applied every time the overlay lands on a DIFFERENT
+ *  display — while the rest of resizeTo (width, recenter, lastBarHeight) must NOT run on those paths.
+ *  Thin index.ts-local name preserved at every call site (MQA-275); the clamp math itself now lives in
+ *  island/geometry.ts so it is unit-tested there without booting Electron. */
+function clampHeight(height: number, areaHeight: number): number {
+  return islandClampHeight(height, areaHeight, BAR_MIN_HEIGHT)
 }
 
 /** True if, positioned at (x, y), at least DRAG_VISIBLE_MARGIN px of the window overlaps the work area
  *  of at least one CONNECTED display — checked against the union of every display (getAllDisplays()),
- *  not just whichever one the window started the drag on. */
+ *  not just whichever one the window started the drag on. Math lives in island/geometry.ts. */
 function isReachable(x: number, y: number, width: number, height: number): boolean {
-  const marginW = Math.min(DRAG_VISIBLE_MARGIN, width)
-  const marginH = Math.min(DRAG_VISIBLE_MARGIN, height)
-  return screen.getAllDisplays().some(({ workArea: wa }) => {
-    const overlapW = Math.min(x + width, wa.x + wa.width) - Math.max(x, wa.x)
-    const overlapH = Math.min(y + height, wa.y + wa.height) - Math.max(y, wa.y)
-    return overlapW >= marginW && overlapH >= marginH
-  })
+  return islandIsReachable(
+    x,
+    y,
+    width,
+    height,
+    screen.getAllDisplays().map((d) => d.workArea),
+    DRAG_VISIBLE_MARGIN
+  )
 }
 
 /** Re-apply the work-area height ceiling when a move lands the window on a DIFFERENT display than it
@@ -1957,17 +3064,16 @@ function isReachable(x: number, y: number, width: number, height: number): boole
  *  4K panel keeps that height when it is dragged onto a 1080p monitor — hanging a thousand pixels below
  *  the bottom edge, where resizable:false leaves the user no way to fix it. Height only: x/y stay the
  *  caller's, except that y is re-checked, because the caller validated it against the OLD (taller)
- *  height and a shorter window can lose the overlap that made that position reachable. */
+ *  height and a shorter window can lose the overlap that made that position reachable. Math lives in
+ *  island/geometry.ts; this wrapper resolves the live `screen.getDisplayMatching` display. */
 function refitToDisplay(next: Electron.Rectangle, fromDisplayId: number): Electron.Rectangle {
   const { id, workArea } = screen.getDisplayMatching(next)
-  if (id === fromDisplayId) return next
-  const height = clampHeight(next.height, workArea.height)
-  if (height === next.height) return next
-  const y = clampAxisMargin(next.y, height, workArea.y, workArea.height, DRAG_VISIBLE_MARGIN)
-  return { ...next, height, y }
+  return islandRefitToDisplay(next, id, workArea, fromDisplayId, BAR_MIN_HEIGHT, DRAG_VISIBLE_MARGIN)
 }
 
 function moveBy(dx: number, dy: number): void {
+  // Exclusive onboarding owns the display. Click-hold / scroll-nudge must not drag it off-screen.
+  if (onboardingExclusiveLive()) return
   // Self-heal a null win (e.g. a one-time createWindow() throw during boot) — mirrors sendHotkey/
   // toggleVisible so scroll/move hotkeys recover instead of staying permanently dead for the process life.
   const w = ensureWindow()
@@ -2007,12 +3113,34 @@ function moveBy(dx: number, dy: number): void {
 function registerScreenListeners(): void {
   const reanchor = (): void => {
     if (!win) return
+    if (onboardingExclusiveLive()) {
+      applyExclusiveOnboardingStage(win)
+      return
+    }
+    // Hide/island already parked: re-apply the rest rect on the new display.
+    // Do not clampHeight (BAR_MIN_HEIGHT 44) or slide y into workArea (Tony live: 8×44 at Y=39).
+    // Hide at bounds.y is outside a notched workArea; that is the park, not "off-screen".
+    {
+      const display = screen.getDisplayMatching(win.getBounds())
+      const park = parkedHoverReanchor(
+        liveOverlayLayout(),
+        islandResting,
+        getDisplayMetrics(display),
+        ISLAND_TOP_MARGIN
+      )
+      if (park) {
+        overlayCursorWatchHovering = false
+        parkOverlayAfterHideSpring()
+        return
+      }
+    }
     const b = win.getBounds()
     const { workArea: wa } = screen.getDisplayMatching(b)
     // Height first, and BEFORE the reachability guard below. A window grown to fit a tall display keeps
     // that height when the display is unplugged or its resolution shrinks — and in that state it is
     // normally still partly visible, so the guard would skip exactly the case that leaves the overlay
     // hanging off the bottom of the remaining screen with resizable:false and no in-app fix.
+    // Hide hairline (2px) must survive this clamp — BAR_MIN_HEIGHT 44 is a sliver (Tony 8×44).
     const height = clampHeight(b.height, wa.height)
     const visible =
       b.x + b.width > wa.x && b.x < wa.x + wa.width && b.y + b.height > wa.y && b.y < wa.y + wa.height
@@ -2041,10 +3169,15 @@ function toggleVisible(): void {
   const hadNoWindow = !win || win.isDestroyed()
   const w = ensureWindow()
   if (!w) return
-  if (!hadNoWindow && w.isVisible()) w.hide()
-  else {
-    w.show()
-    w.focus()
+  if (!hadNoWindow && w.isVisible()) {
+    w.hide()
+    // Tray Hide is not the rest sensor. Keep the top-edge watch armed so
+    // mouse-at-top can showInactive without hunting Show Métis.
+    if (overlayUsesHover(liveOverlayLayout())) startOverlayCursorWatch()
+  } else {
+    // Revealing via the show/hide hotkey always opens the ask input right after — the same deliberate,
+    // user-initiated focus grab as sendHotkey('ask'). See showForAsk's doc comment.
+    showForAsk(w)
     w.webContents.send(IPC.hotkey, 'ask')
   }
 }
@@ -2132,12 +3265,14 @@ let notifPrevPollMs = 0 // wall time of the previous notifier poll — used for 
 // — an OS quit, or an abrupt kill of a dev/driven instance — a resolve-in-flight can trip a SIGTRAP on
 // a blocking-pool thread (the shutdown-race crash class). Tracked here so will-quit cancels them ALL
 // before the rest of teardown, closing that race for good.
-const backgroundTimers: ReturnType<typeof setInterval>[] = []
-const trackTimer = (t: ReturnType<typeof setInterval>): ReturnType<typeof setInterval> => {
+const backgroundTimers: Array<ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>> = []
+const trackTimer = <T extends ReturnType<typeof setInterval> | ReturnType<typeof setTimeout>>(t: T): T => {
   backgroundTimers.push(t)
   return t
 }
-const notifiedKeys = new Set<string>() // keys of events already notified this session
+// Keys of events already notified this session. Bounded: the notifier polls every 30 s for the life of
+// the process, and every event that ever crossed its 60 s mark used to stay here forever.
+const notifiedKeys = new BoundedSet<string>(1_000)
 
 // Cache today's agenda (~30s) so startMeetingNotifier can cross-reference upcoming events against real
 // calendar data without hammering Graph on every 30s poll.
@@ -2229,13 +3364,13 @@ function buildTrayMenu(): Menu {
   }
   return Menu.buildFromTemplate([
     { label: label('Show / Hide', 'hide'), click: toggleVisible },
+    // sendHotkey() already reveals the window itself (non-activating — see showForAsk's doc comment)
+    // when it isn't visible, so no separate show call is needed (or wanted) here.
     { label: 'Settings…', click: () => {
-      if (win && !win.isVisible()) win.show()
       sendHotkey('settings')
     } },
     { label: label('Listen / Stop listening', 'toggle-listen'), click: () => sendHotkey('toggle-listen') },
     { label: "Today's agenda", click: () => {
-      if (win && !win.isVisible()) win.show()
       sendHotkey('agenda')
     } },
     { label: label('New', 'reset'), click: () => sendHotkey('reset') },
@@ -2255,6 +3390,8 @@ function createTray(): void {
     if (process.platform === 'darwin' && img.isEmpty()) tray.setTitle(' ◉ Métis')
     tray.setToolTip('Métis')
     tray.setContextMenu(buildTrayMenu())
+    // Menu-bar / tray logo click is the Settings entry Tony uses. applySettingsSurface runs inside sendHotkey.
+    tray.on('click', () => sendHotkey('settings'))
   } catch {
     /* tray optional */
   }
@@ -2325,7 +3462,8 @@ async function backfillSpeakerNames(file: string): Promise<{ ok: boolean; named?
   if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
   try {
     const settings = getSettings()
-    const safeName = basename(file)
+    const safeName = safeMeetingBasename(file)
+    if (!safeName) return { ok: false, error: 'Invalid meeting file name.' }
     const read = await recallRead(safeName)
     if (!read.ok || !read.lines) return { ok: false, error: read.error || 'Meeting file not found.' }
     if (!read.startedAt) return { ok: false, error: 'This meeting has no recorded start time.' }
@@ -2337,6 +3475,21 @@ async function backfillSpeakerNames(file: string): Promise<{ ok: boolean; named?
     const operatorName = authStatus().name
     const { lines, named } = applySpeakerNames(read.lines, fetched.entries, { operatorName })
     if (named === 0) return { ok: true, named: 0 }
+
+    // Auto-enrollment flywheel (SPEAKER-INTELLIGENCE-PLAN §3.4): a THEM line VTT alignment just resolved
+    // to a real name, whose PRE-alignment name was a live session cluster label ("Speaker N"), is exactly
+    // the join needed to grow a permanent voiceprint with zero user effort — this session's "Speaker N"
+    // IS that person. Best-effort and silent: a missed window (feature off, no session buffer left, below
+    // the quality gate) never affects the save this function already guarantees.
+    const clusterNamePairs = clusterNamePairsFromAlignment(read.lines, lines)
+    if (clusterNamePairs.length) {
+      try {
+        const enrolled = getSpeakerId().autoEnrollFromLabeledWindows(clusterNamePairs)
+        if (enrolled) auditLog('speaker.auto_enrolled', { enrolled })
+      } catch (err) {
+        mainLog.warn('[speaker-id] auto-enroll failed', err instanceof Error ? err.message : String(err))
+      }
+    }
 
     const result = await updateMeetingTranscript(settings, safeName, lines)
     if (!result.ok) return { ok: false, error: result.error }
@@ -2375,6 +3528,12 @@ function purgeGraphIfEncryptedAndStale(reason: string): void {
 }
 let lastAppliedManagedSnapshot: string | null = null
 
+let applyOperatorCrmRetries: (ids: string[]) => Promise<void> = async () => {}
+
+function operatorRuntimeHooks(): { onCrmRetry: (ids: string[]) => Promise<void> } {
+  return { onCrmRetry: (ids) => applyOperatorCrmRetries(ids) }
+}
+
 function registerIpc(): void {
   // --- Settings & permissions ---
   ipcMain.handle(IPC.settingsGet, (e) => {
@@ -2408,6 +3567,11 @@ function registerIpc(): void {
       }
     }
     return s
+  })
+  ipcMain.handle(IPC.dismissFailoverNotice, (e) => {
+    assertMainWindow(e)
+    dismissLastFailoverNotice()
+    return { ok: true as const }
   })
   ipcMain.handle(IPC.permissionsGet, (e) => {
     assertMainWindow(e)
@@ -2473,6 +3637,31 @@ function registerIpc(): void {
     refreshScreenPreprocess()
     return getPlatformPermissions()
   })
+  // Settings / overlay self-check. First pass: existing OS probe. Second pass: real vision on local or API.
+  // Isolated from askStart — the result is never painted as a chat turn and never pushed to a teammate.
+  ipcMain.handle(IPC.screenCaptureCheck, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) {
+      return { ok: false, pass: 'probe' as const, message: 'Sign in with your Mantu account first.' }
+    }
+    const parsed = ScreenCaptureCheckPayloadSchema.parse(payload)
+    const result = await runScreenCaptureCheck(parsed.pass, {
+      probe: probeScreenCapture,
+      capture: async () => {
+        const shot = await getScreenshot('screen-check')
+        return { image: shot.image }
+      },
+      askVision: askVisionForScreenCheck,
+      context: visionCheckContextFromSettings()
+    })
+    auditLog('capture.check', {
+      pass: result.pass,
+      ok: result.ok,
+      backend: result.backend,
+      failedOver: result.failedOver === true
+    })
+    return result
+  })
 
   ipcMain.handle(IPC.settingsSet, async (e, patch) => {
     assertMainWindow(e)
@@ -2505,7 +3694,19 @@ function registerIpc(): void {
     // write it. Without this strip, any renderer code could self-issue an unlimited license with a
     // plain settings patch ({licenseValid:true, licenseSeatCap:999999}) and defeat the gate once it's
     // wired. licenseServerUrl + licenseGateEnabled stay writable — those are genuine user inputs.
-    for (const k of ['licenseKey', 'licenseCompanyName', 'licenseSeatCap', 'licenseExpiresAt', 'licenseValid', 'licenseLastValidatedAt']) {
+    // licenseLease (MQA-282) and trialStartedAt (MQA-281) are the same class of field: only
+    // activateLicense/heartbeat may set the former, only noteQualifyingUse the latter — a renderer patch
+    // must not be able to self-issue a signed-looking lease string or grant itself a fresh trial.
+    for (const k of [
+      'licenseKey',
+      'licenseCompanyName',
+      'licenseSeatCap',
+      'licenseExpiresAt',
+      'licenseValid',
+      'licenseLastValidatedAt',
+      'licenseLease',
+      'trialStartedAt'
+    ]) {
       if (k in p) delete (p as Record<string, unknown>)[k]
     }
     // MCP connection STATE is main-owned for the same reason. IPC.mcpPush deliberately reads the endpoint
@@ -2518,7 +3719,7 @@ function registerIpc(): void {
     // patch({ mcpConnections }) calls are redundant echoes of what main just persisted, and state.ts's
     // patch() re-seeds React state from this handler's return value, so dropping the key here costs the
     // UI nothing. clickupClientId is main-owned too (written only by the DCR step).
-    for (const k of ['mcpConnections', 'clickupClientId']) {
+    for (const k of ['mcpConnections', 'clickupClientId', 'planeClientId']) {
       if (k in p) delete (p as Record<string, unknown>)[k]
     }
     const cur = getSettings()
@@ -2575,6 +3776,48 @@ function registerIpc(): void {
     }
     const next = setSettings(p)
     auditLog('settings.changed', { keys: Object.keys(p) })
+    // Exclusive stage exits only here: onboardingDone false→true. Replay (true→false) re-enters it.
+    if (!cur.onboardingDone && next.onboardingDone) {
+      lockOnboardingAudioInRenderer(win)
+      exitExclusiveOnboardingStage()
+    }
+    else if (cur.onboardingDone && !next.onboardingDone && win && !win.isDestroyed()) {
+      applyExclusiveOnboardingStage(win)
+    }
+    if (next.onboardingDone && win && !win.isDestroyed() && !onboardingExclusiveLive()) {
+      const layout = parseOverlayLayout(next.overlayLayout)
+      if (overlayUsesHover(layout)) {
+        // Re-arm on every settings write, not only a layout change. CDP setSettings(Hide)
+        // while already Hide used to leave a dead watch until tray Show/Hide.
+        startOverlayCursorWatch()
+        if (cur.overlayLayout !== next.overlayLayout) {
+          // Switching to Hide/Island must park. A leftover Circle pill or Settings-tall
+          // ghost was Ultron 880×1017 + Expand Métis. Keep a real Settings panel open.
+          isMinimized = false
+          const display = screen.getDisplayMatching(win.getBounds())
+          const metrics = getDisplayMetrics(display)
+          if (
+            !settingsSurfaceOpen &&
+            shouldParkHoverRestAfterLeavingSurface({
+              layout,
+              pointerInIslandOrBar: pointerInIslandOrBar({ ignoreWindow: true })
+            })
+          ) {
+            overlayCursorWatchHovering = false
+            const park = parkAfterExclusiveOnboarding(layout, metrics, ISLAND_TOP_MARGIN)
+            currentWidth = park.width
+            islandResting = true
+            userAnchorY = park.y
+            win.setBounds(park, false)
+            applyHideClickThrough()
+            notifyOverlayCursorHover(false)
+          }
+        }
+      } else if (cur.overlayLayout !== next.overlayLayout) {
+        stopOverlayCursorWatch()
+        restoreBarWidth()
+      }
+    }
     // Flipping follow-up memory is itself a conversation boundary. Without this, turning it ON would
     // retroactively inherit the Q&A recorded — and the Dust conversation created — while the user was
     // being told each question "starts completely fresh" (review finding, 2026-08-04). Zeroing the idle
@@ -2587,10 +3830,10 @@ function registerIpc(): void {
     // Start/stop background screen pre-analysis to match the new settings (backgroundScreenContext toggle,
     // or Local AI being enabled/disabled/provisioned) — takes effect immediately, no relaunch.
     refreshScreenPreprocess()
-    // Local AI turned back ON → arm the weight fetch here (MQA-186). Boot is the only other trigger and
-    // it now skips while the toggle is off, so without this edge a user who declined the download once
-    // could never get it: Settings would report the model unavailable for the rest of the install's life.
-    if (!cur.localLlm.enabled && next.localLlm.enabled && shouldFetchWeights(next.localLlm.modelId, true)) {
+    // Local AI turned ON → re-arm the weight fetch if boot somehow skipped it (offline first launch,
+    // under-RAM machine later upgraded). Boot already starts the download whenever the app opens
+    // (RAM permitting); this edge is the second chance, not the only path to the weights.
+    if (!cur.localLlm.enabled && next.localLlm.enabled && shouldFetchWeights(next.localLlm.modelId)) {
       void ensureLocalModel(next.localLlm.modelId)
         .then(() => refreshScreenPreprocess())
         .catch((e) => mainLog.warn('[settings] local model provisioning failed:', e))
@@ -2632,6 +3875,10 @@ function registerIpc(): void {
     // accelerator labels reflect the new bindings instead of the ones baked in at createTray() boot time.
     registerShortcuts()
     rebuildTrayMenu()
+    if (cur.operatorUrl !== next.operatorUrl || cur.operatorIngestSecret !== next.operatorIngestSecret) {
+      startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
+      startOperatorOverlayPoll(() => getSettings())
+    }
     return publicSettings()
   })
 
@@ -2671,8 +3918,14 @@ function registerIpc(): void {
   })
 
   // --- Licensing (phone-home activation; see main/license.ts) ---
+  ipcMain.handle(IPC.operatorOpen, (e) => {
+    assertMainWindow(e)
+    const url = resolveOperatorBaseUrl(getSettings())
+    if (url) void shell.openExternal(url)
+  })
   ipcMain.handle(IPC.licenseActivate, async (e, payload: unknown) => {
     assertMainWindow(e)
+    if (denyIfLimited('license-activate')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
     // No requireAuth() here on purpose: license enforcement outranks SSO (see the boot-gate ordering in
     // App.tsx). If activation required a signed-in session, a device blocked by the license gate could
     // never activate before reaching the SSO screen — a sign-in-to-activate / activate-to-sign-in
@@ -2688,6 +3941,13 @@ function registerIpc(): void {
     const serverUrl = urlLocked ? getSettings().licenseServerUrl || parsed.data.serverUrl : parsed.data.serverUrl
     return activateLicense(serverUrl, parsed.data.licenseKey)
   })
+  ipcMain.handle(IPC.cloudflareConnect, (e) => {
+    assertMainWindow(e)
+    const target = cloudflareConnectTarget(getSettings())
+    if (!target.ok) return target
+    void shell.openExternal(target.href)
+    return target
+  })
   // Read-only, local settings only — never touches the network. Mirrors metricsRead's pattern of
   // returning a safe empty/default shape (rather than throwing) when signed out.
   ipcMain.handle(IPC.licenseStatus, (e) => {
@@ -2700,10 +3960,16 @@ function registerIpc(): void {
         licenseExpiresAt: null,
         licenseValid: false,
         licenseLastValidatedAt: 0,
-        licenseGateEnabled: false
+        licenseGateEnabled: false,
+        leaseExpiresAt: null,
+        trialActive: false,
+        trialDaysRemaining: 0
       }
     }
     const s = getSettings()
+    // Act 5 (MQA-281/282): lease/trial status is live-verified (licenseDisplayStatus), not a raw
+    // settings echo — a tampered/expired licenseLease string must never read back as "active".
+    const display = licenseDisplayStatus()
     return {
       licenseServerUrl: s.licenseServerUrl,
       licenseCompanyName: s.licenseCompanyName,
@@ -2711,7 +3977,10 @@ function registerIpc(): void {
       licenseExpiresAt: s.licenseExpiresAt,
       licenseValid: s.licenseValid,
       licenseLastValidatedAt: s.licenseLastValidatedAt,
-      licenseGateEnabled: s.licenseGateEnabled
+      licenseGateEnabled: s.licenseGateEnabled,
+      leaseExpiresAt: display.leaseExpiresAt,
+      trialActive: display.trialActive,
+      trialDaysRemaining: display.trialDaysRemaining
     }
   })
   // Startup-gate verdict for App.tsx's <LicenseGate/>. Deliberately NOT behind requireAuth(): this is
@@ -2722,6 +3991,69 @@ function registerIpc(): void {
     assertMainWindow(e)
     const verdict = checkLicenseGrace()
     return { gateEnabled: getSettings().licenseGateEnabled, ...verdict }
+  })
+  // Informational read of the server's declared license-gate intent (GET /license/config) — used by the
+  // onboarding ActLicense scene. No requireAuth(): reachable before sign-in, like licenseGate above, and
+  // the server route itself is unauthenticated (see license-server/lib/license-gate.mjs's header).
+  ipcMain.handle(IPC.licenseConfig, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    const parsed = LicenseConfigPayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
+    return fetchLicenseConfig(parsed.data.serverUrl)
+  })
+
+  // Member pass (Phase 5). DTOs only — no JWS, no raw serial, no raw key returned.
+  ipcMain.handle(IPC.identitySnapshot, (e) => {
+    assertMainWindow(e)
+    return identitySnapshot()
+  })
+  ipcMain.handle(IPC.memberLicenseActivate, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    const parsed = MemberActivatePayloadSchema.safeParse(payload)
+    if (!parsed.success) {
+      const status = memberLicenseStatus()
+      return { ok: false, error: 'invalid', status: { ...status, error: 'invalid' } }
+    }
+    return activateMemberLicense(parsed.data.licenseKey)
+  })
+  ipcMain.handle(IPC.memberLicenseDeactivate, (e) => {
+    assertMainWindow(e)
+    return deactivateMemberLicense()
+  })
+  ipcMain.handle(IPC.memberLicenseStatus, (e) => {
+    assertMainWindow(e)
+    return memberLicenseStatus()
+  })
+  ipcMain.handle(IPC.memberLicenseVerifyCached, (e) => {
+    assertMainWindow(e)
+    return verifyCachedMemberLicense()
+  })
+  ipcMain.handle(IPC.memberLicenseImportFile, async (e) => {
+    assertMainWindow(e)
+    const win = BrowserWindow.fromWebContents(e.sender)
+    const picked = win
+      ? await dialog.showOpenDialog(win, {
+          title: 'Choose a license.metis file',
+          filters: [{ name: 'Métis license', extensions: ['metis'] }],
+          properties: ['openFile']
+        })
+      : await dialog.showOpenDialog({
+          title: 'Choose a license.metis file',
+          filters: [{ name: 'Métis license', extensions: ['metis'] }],
+          properties: ['openFile']
+        })
+    if (picked.canceled || !picked.filePaths[0]) {
+      const status = memberLicenseStatus()
+      return { ok: false, error: 'invalid', status }
+    }
+    let raw = ''
+    try {
+      raw = readFileSync(picked.filePaths[0], 'utf8')
+    } catch {
+      const status = memberLicenseStatus()
+      return { ok: false, error: 'invalid', status: { ...status, error: 'invalid' } }
+    }
+    return importLicenseMetis(raw, 'file')
   })
 
   // --- Provider API keys ---
@@ -2858,6 +4190,27 @@ function registerIpc(): void {
   // cascade). importDustCliSession only READS the keychain — no rotation, no persist — and returns
   // booleans only (the token never crosses to the renderer). A present-but-expired token reports ok:true
   // (it is refreshable on the ask/list path); only a genuinely absent session reports ok:false.
+  ipcMain.handle(IPC.dustInstallCli, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const r = await ensureManagedDustCli((p) => {
+      const line =
+        p.phase === 'downloading' && p.totalBytes
+          ? `Downloading Dust CLI… ${Math.floor(((p.receivedBytes ?? 0) / p.totalBytes) * 100)}%`
+          : p.phase === 'resolving'
+            ? 'Finding the Dust CLI…'
+            : p.phase === 'verifying'
+              ? 'Verifying Dust CLI…'
+              : p.phase === 'extracting'
+                ? 'Installing Dust CLI…'
+                : p.phase === 'error'
+                  ? p.error || 'Dust CLI install failed.'
+                  : 'Dust CLI ready.'
+      win?.webContents.send(IPC.dustInstallCliProgress, { line })
+    })
+    return r.ok ? { ok: true } : { ok: false, error: r.error }
+  })
+
   ipcMain.handle(IPC.dustProbeSession, async (e) => {
     assertMainWindow(e)
     const s = await importDustCliSession()
@@ -2933,10 +4286,14 @@ function registerIpc(): void {
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const parsedProvider = ProviderIdSchema.safeParse(provider)
     const p = parsedProvider.success ? parsedProvider.data : 'claude-cli'
-    const r = await testCli(p)
+    // Zero-token session probe. A billed testCli turn would treat Claude's weekly cap as "not
+    // connected" and auto-send a prompt — Connect must never do that. Weekly-limit is ok: true.
+    const r = await connectCliSession(p)
     if (r.ok) {
       const s = getSettings()
-      setSettings({ cliConnected: { ...s.cliConnected, [p]: true } })
+      const next: Partial<typeof s> = { cliConnected: { ...s.cliConnected, [p]: true } }
+      if (isCliProviderId(p)) next.lastClickedCli = p
+      setSettings(next)
     }
     return r
   })
@@ -2950,28 +4307,35 @@ function registerIpc(): void {
     await verifyCliSessions()
     return publicSettings()
   })
+  // Parse, never cast: setupCli / installCli / loginCli put the provider id into temp-file names and
+  // child-process arguments, so a renderer-supplied string outside the ProviderId enum must not reach
+  // them (cliDetect / cliTest above already do this; these three were still blind-casting).
+  const cliProviderArg = (provider: unknown): ProviderId => {
+    const parsed = ProviderIdSchema.safeParse(provider)
+    return parsed.success ? parsed.data : 'claude-cli'
+  }
   ipcMain.handle(IPC.cliSetup, (e, provider: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    return setupCli(typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli')
+    return setupCli(cliProviderArg(provider))
   })
   ipcMain.handle(IPC.cliInstall, (e, provider: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const p = typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli'
+    const p = cliProviderArg(provider)
     return installCli(p, (line) => win?.webContents.send(IPC.cliInstallProgress, { provider: p, line }))
   })
   ipcMain.handle(IPC.cliLogin, (e, provider: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    return loginCli(typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli')
+    return loginCli(cliProviderArg(provider))
   })
 
   // --- MCP connections: BidStack CRM push + Plane "Book next steps" ---
   // Generalized from the old single-connection BidStack-only handlers (Settings → Mantu Intelligence
   // cards + Review's "Push to CRM" / "Book next steps"). `connectionId` identifies WHICH
   // settings.mcpConnections entry a call targets (id === kind in v1 — see McpConnectionSchema in
-  // shared/ipc.ts). ClickUp has no handler here — it's schema-reserved only (see McpConnectionKindSchema).
+  // shared/ipc.ts). ClickUp OAuth Connect + create-task push live here (docs/design/CLICKUP-PUSH.md).
 
   // Default display label for a connection id BEFORE it has ever been saved (so "Test connection" —
   // which runs before any persistence — still gets a real label for its error/log messages instead of
@@ -2988,14 +4352,118 @@ function registerIpc(): void {
     return kind.success ? MCP_KIND_LABELS[kind.data] : connectionId
   }
 
+  function persistClickupList(list: ClickupList): void {
+    const s = getSettings()
+    setSettings({ mcpConnections: upsertClickupDestination(s.mcpConnections, list) })
+  }
+
+  async function discoverListForClickup(conn: McpConnection): Promise<{ ok: true; list: ClickupList } | { ok: false; error: string }> {
+    const apiKey = getMcpApiKey(conn.id)
+    return discoverClickupList({
+      tools: conn.tools,
+      saved: savedClickupList(conn),
+      callTool: (toolName, args) => pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, toolName, args, conn.label)
+    })
+  }
+
+  // Wave 4: mcp:push's own MCP tool names are per-connection and user/operator-configured — there is no
+  // registry mapping them to the queue's small action-kind enum. A cheap name heuristic is enough for
+  // this queue's own purposes (it only affects a retry-log label, never routing): most tools are named
+  // for what they do (push_meeting_recap, create_task, log_note, update_deal, …).
+  function inferPushActionKind(toolName: string): OutboundActionKind {
+    const t = toolName.toLowerCase()
+    if (t.includes('deal')) return 'update_deal'
+    if (t.includes('task')) return 'create_task'
+    return 'log_note'
+  }
+
+  // The background half of the retry queue: re-attempts one durable OutboundAction against whatever the
+  // named connection's CURRENT endpoint/key are (a retry may run long after the original attempt, so the
+  // key may have since been rotated or the connection reconnected). Deliberately does not repeat the
+  // interactive handler's ClickUp-401-refresh dance below — that stays exclusive to the live, synchronous
+  // path; a ClickUp token that expired between attempts here simply dead-letters like any other repeated
+  // failure, which is an acceptable (and honest — "reconnect ClickUp") outcome for a background retry.
+  async function retryOutboundAction(action: OutboundAction): Promise<{ ok: boolean; error?: string }> {
+    // Re-check disk on every retry tick — a meeting flagged confidential AFTER enqueue must never leave.
+    if (action.meetingFile && isMeetingConfidentialOnDisk(getSettings(), action.meetingFile)) {
+      // Dequeue without sending — returning ok:true removes the entry; a hard error would retry forever.
+      auditLog('mcp.push.skipped_confidential', { kind: action.kind, action: action.action, source: 'disk' })
+      return { ok: true }
+    }
+    const s = getSettings()
+    const conn = s.mcpConnections.find((c) => c.kind === action.kind)
+    if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(conn.id)) {
+      return { ok: false, error: `${mcpLabelFor(action.kind)} is no longer connected.` }
+    }
+    const apiKey = getMcpApiKey(conn.id)
+    return pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, action.toolName, action.payload, conn.label)
+  }
+
+  applyOperatorCrmRetries = async (ids: string[]) => {
+    const unique = [...new Set(ids.filter(Boolean))]
+    if (!unique.length) return
+    const settings = getSettings()
+    for (const id of unique) {
+      const action = pushQueue.requeue(id)
+      if (!action) continue
+      const title = typeof action.payload.title === 'string' ? action.payload.title : undefined
+      const started = Date.now()
+      await recordOperatorCrmSend(settings, {
+        id,
+        status: 'in_progress',
+        title,
+        connector: action.kind,
+        meetingHash: meetingFileHash(action.meetingFile),
+        action: action.action,
+        attempt: 1
+      })
+      const batch = await pushQueue.processIds([id], retryOutboundAction)
+      const one = batch.results[0]
+      if (!one || one.skippedConfidential) continue
+      await recordOperatorCrmSend(
+        settings,
+        buildCrmIngestEvent({
+          id,
+          ok: one.ok,
+          deadLetter: one.deadLetter,
+          title,
+          connector: action.kind,
+          meetingFile: action.meetingFile,
+          action: action.action,
+          attempt: one.attempts || 1,
+          latencyMs: Date.now() - started,
+          result: one.result,
+          error: one.error
+        })
+      )
+    }
+  }
+
+  // Same minute-ish cadence as the brain reconcile tick (BRAIN_RECONCILE_MS, set up below in
+  // app.whenReady) — cheap enough to poll often, and pushQueue.processDue itself no-ops instantly when
+  // the queue is empty or every due action is still cooling down on backoff. Lives here (registerIpc),
+  // not next to that tick, because retryOutboundAction and mcpLabelFor above are this function's own
+  // locals — pulling the timer out to whenReady's scope would mean hoisting both to module scope for no
+  // real benefit.
+  trackTimer(setInterval(() => {
+    void pushQueue.processDue(retryOutboundAction).catch((e) => mainLog.warn('[mcp-push-queue] processDue tick failed:', e))
+  }, 60 * 1000))
+
   // Test connection: connects + authenticates + lists tools, persists NOTHING (mirrors BidStack's own
   // "Test endpoint" button). Lets the user verify before committing an endpoint/key to disk.
   ipcMain.handle(IPC.mcpTestConnection, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    if (denyIfLimited('mcp-outbound')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
     const parsed = McpTestConnectionPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
-    return connectMcp(parsed.data.endpointUrl, parsed.data.apiKey, parsed.data.extraHeaders, mcpLabelFor(parsed.data.connectionId))
+    const testUrl =
+      parsed.data.connectionId === 'clickup'
+        ? CLICKUP_MCP_ENDPOINT
+        : parsed.data.connectionId === 'plane'
+          ? PLANE_MCP_PAT_ENDPOINT
+          : parsed.data.endpointUrl
+    return connectMcp(testUrl, parsed.data.apiKey, parsed.data.extraHeaders, mcpLabelFor(parsed.data.connectionId))
   })
 
   // Save connection: re-verifies (never trust a stale/unverified endpoint+key) then persists the
@@ -3004,11 +4472,20 @@ function registerIpc(): void {
   ipcMain.handle(IPC.mcpSaveConnection, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    if (denyIfLimited('mcp-outbound')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
     const parsed = McpSaveConnectionPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
-    const { connectionId, endpointUrl, apiKey, extraHeaders, label } = parsed.data
+    const { connectionId, apiKey, extraHeaders, label } = parsed.data
     const kindParsed = McpConnectionKindSchema.safeParse(connectionId)
     if (!kindParsed.success) return { ok: false, error: 'Unknown MCP connection id.' }
+    // ClickUp / Plane product-connect: never persist a renderer-supplied URL. Polo (bidstack) still
+    // uses the user's own endpoint. Advanced Plane is the PAT host; OAuth Connect writes the OAuth host.
+    const endpointUrl =
+      connectionId === 'clickup'
+        ? CLICKUP_MCP_ENDPOINT
+        : connectionId === 'plane'
+          ? PLANE_MCP_PAT_ENDPOINT
+          : parsed.data.endpointUrl
     const r = await connectMcp(endpointUrl, apiKey, extraHeaders, label)
     if (!r.ok) return r
     // MQA-064: mcpSecrets.ts writes user-facing diagnostics for exactly this step ("Encryption is
@@ -3019,6 +4496,7 @@ function registerIpc(): void {
     try {
       setMcpApiKey(connectionId, apiKey)
       const s = getSettings()
+      const existing = s.mcpConnections.find((c) => c.id === connectionId)
       const entry: McpConnection = {
         id: connectionId,
         kind: kindParsed.data,
@@ -3026,9 +4504,20 @@ function registerIpc(): void {
         endpointUrl: endpointUrl.trim(),
         connected: true,
         tools: r.tools ?? [],
-        extraHeaders
+        extraHeaders,
+        ...(connectionId === 'clickup'
+          ? { clickupListId: existing?.clickupListId, clickupListName: existing?.clickupListName }
+          : {})
       }
       setSettings({ mcpConnections: [...s.mcpConnections.filter((c) => c.id !== connectionId), entry] })
+      if (connectionId === 'clickup') {
+        const dest = await discoverListForClickup(entry)
+        if (dest.ok) {
+          persistClickupList(dest.list)
+          auditLog('mcp.connected', { connectionId, tools: (r.tools ?? []).length })
+          return { ...r, clickupListId: dest.list.id, clickupListName: dest.list.name }
+        }
+      }
     } catch (error) {
       return { ok: false as const, error: error instanceof Error ? error.message : `Could not store the ${label} API key.` }
     }
@@ -3069,47 +4558,135 @@ function registerIpc(): void {
   ipcMain.handle(IPC.mcpPush, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    if (denyIfLimited('mcp-outbound')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
     const parsed = McpPushPayloadSchema.safeParse(payload)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid input.' }
-    const { connectionId, toolName, args } = parsed.data
+    const { connectionId, meetingFile } = parsed.data
+    let toolName = parsed.data.toolName
+    let args = parsed.data.args
     const s = getSettings()
+    // Wave 4 / QA defense-in-depth: never push confidential meetings. Prefer disk frontmatter over the
+    // renderer flag — a buggy UI could omit args.confidential. Unreadable files fail closed.
+    const diskConfidential = meetingFile ? isMeetingConfidentialOnDisk(s, meetingFile) : false
+    const argConfidential = args && typeof args === 'object' && (args as { confidential?: unknown }).confidential === true
+    if (diskConfidential || argConfidential) {
+      auditLog('mcp.push.skipped_confidential', {
+        connectionId,
+        tool: toolName,
+        source: diskConfidential ? 'disk' : 'args'
+      })
+      return { ok: false, error: 'This meeting is marked confidential — push is blocked.' }
+    }
     const conn = s.mcpConnections.find((c) => c.id === connectionId)
     if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey(connectionId)) {
       return { ok: false, error: `${mcpLabelFor(connectionId)} is not connected. Set it up in Settings → Mantu Intelligence first.` }
     }
+    let clickupList: ClickupList | undefined
+    if (connectionId === 'clickup') {
+      const dest = await discoverListForClickup(conn)
+      if (!dest.ok) return dest
+      clickupList = dest.list
+      const prepared = prepareClickupPush({
+        tools: conn.tools,
+        list: dest.list,
+        rendererTool: toolName,
+        rendererArgs: args
+      })
+      if (!prepared.ok) return prepared
+      toolName = prepared.toolName
+      args = prepared.args
+    }
     // Only a tool the user actually saw and picked when the connection was tested/saved may be invoked —
     // otherwise a compromised or buggy renderer call could reach an unintended (possibly destructive) MCP
-    // tool on the user's live connection.
+    // tool on the user's live connection. ClickUp create-task is remapped above from the saved tools list.
     if (!conn.tools.includes(toolName)) {
       return { ok: false, error: `Unknown ${conn.label} tool.` }
     }
     const apiKey = getMcpApiKey(connectionId)
+    const started = Date.now()
     let r = await pushToMcp(conn.endpointUrl, apiKey, conn.extraHeaders, toolName, args, conn.label)
     // ClickUp-only: its credential is an OAuth access token, not a pasted key that only changes when the
     // user edits it — a 401 here can mean the token simply expired. Attempt exactly one refresh + retry
     // before surfacing reconnect-required, gated on the SAME single-flight lock the interactive OAuth
     // flow uses (see clickupOAuth.ts) so a background refresh here and a user-initiated Reconnect in
     // Settings can never both persist tokens at once.
-    if (!r.ok && conn.kind === 'clickup' && /401|403|unauthor|forbidden/i.test(r.error || '')) {
-      if (tryAcquireClickupTokenLock()) {
+    if (!r.ok && (conn.kind === 'clickup' || conn.kind === 'plane') && /401|403|unauthor|forbidden/i.test(r.error || '')) {
+      const acquire = conn.kind === 'clickup' ? tryAcquireClickupTokenLock : tryAcquirePlaneTokenLock
+      const release = conn.kind === 'clickup' ? releaseClickupTokenLock : releasePlaneTokenLock
+      const refresh = conn.kind === 'clickup' ? refreshClickupToken : refreshPlaneToken
+      const product = conn.kind === 'clickup' ? 'ClickUp' : 'Plane'
+      if (acquire()) {
         try {
           const refreshToken = getMcpRefreshToken(connectionId)
-          const refreshed = refreshToken ? await refreshClickupToken(refreshToken) : { ok: false as const }
+          const refreshed = refreshToken ? await refresh(refreshToken) : { ok: false as const }
           if (refreshed.ok && refreshed.accessToken) {
             setMcpApiKey(connectionId, refreshed.accessToken)
             setMcpRefreshToken(connectionId, refreshed.refreshToken ?? refreshToken ?? '')
             r = await pushToMcp(conn.endpointUrl, refreshed.accessToken, conn.extraHeaders, toolName, args, conn.label)
           } else {
-            r = { ok: false, error: 'Your ClickUp session expired. Reconnect ClickUp in Settings.' }
+            r = { ok: false, error: `Your ${product} session expired. Reconnect ${product} in Settings.` }
           }
         } finally {
-          releaseClickupTokenLock()
+          release()
         }
       } else {
-        r = { ok: false, error: 'A ClickUp sign-in or refresh is already in progress. Try again in a moment.' }
+        r = { ok: false, error: `A ${product} sign-in or refresh is already in progress. Try again in a moment.` }
       }
     }
     auditLog('mcp.push', { connectionId, tool: toolName, ok: r.ok })
+    const crmTitle = typeof args.title === 'string' ? args.title : undefined
+    const meetingBase = meetingFile ? meetingFile.split(/[/\\]/).pop() || meetingFile : undefined
+    const actionKind = inferPushActionKind(toolName)
+    const crmId = outboundActionId({
+      kind: conn.kind,
+      toolName,
+      meetingFile: meetingBase,
+      payload: args
+    })
+    if (shouldIngestCrm(false)) {
+      void recordOperatorCrmSend(
+        getSettings(),
+        buildCrmIngestEvent({
+          id: crmId,
+          ok: r.ok,
+          title: crmTitle,
+          connector: connectionId,
+          meetingFile: meetingBase,
+          action: actionKind,
+          attempt: 1,
+          latencyMs: Date.now() - started,
+          result: r.result,
+          error: r.error
+        })
+      )
+    }
+    if (r.ok) {
+      appendTimeSavedEvent({
+        kind: 'mcp-push',
+        estimatedMinutes: estimateMcpPushMinutes(),
+        connector: connectionId === 'bidstack' || connectionId === 'plane' || connectionId === 'clickup' ? connectionId : 'none',
+        ids: { tool: toolName }
+      })
+    }
+    // Wave 4: a FAILURE also goes into the durable retry queue. Idempotent enqueue.
+    if (!r.ok) {
+      pushQueue.enqueue({
+        id: crmId,
+        kind: conn.kind,
+        action: actionKind,
+        toolName,
+        payload: args,
+        ...(meetingBase ? { meetingFile: meetingBase } : {}),
+        confidential: argConfidential || diskConfidential
+      })
+      if (connectionId === 'clickup' && r.error) {
+        r = { ...r, error: loudClickupError(r.error, r.error) }
+      }
+    }
+    if (r.ok && connectionId === 'clickup' && clickupList) {
+      persistClickupList(clickupList)
+      return { ...r, destinationName: clickupList.name, taskUrl: parseTaskUrl(r.result) }
+    }
     return r
   })
 
@@ -3133,13 +4710,66 @@ function registerIpc(): void {
         endpointUrl: CLICKUP_MCP_ENDPOINT,
         connected: true,
         tools: r.tools ?? [],
-        extraHeaders: {}
+        extraHeaders: {},
+        clickupListId: savedClickupList(s.mcpConnections.find((c) => c.id === 'clickup'))?.id,
+        clickupListName: savedClickupList(s.mcpConnections.find((c) => c.id === 'clickup'))?.name
       }
       setSettings({ mcpConnections: [...s.mcpConnections.filter((c) => c.id !== 'clickup'), entry] })
+      const dest = await discoverListForClickup(entry)
+      if (dest.ok) {
+        persistClickupList(dest.list)
+        auditLog('mcp.connected', { connectionId: 'clickup', tools: (r.tools ?? []).length })
+        return { ...r, clickupListId: dest.list.id, clickupListName: dest.list.name }
+      }
     } catch (error) {
       return { ok: false as const, error: error instanceof Error ? error.message : 'Could not store the ClickUp connection.' }
     }
     auditLog('mcp.connected', { connectionId: 'clickup', tools: (r.tools ?? []).length })
+    return r
+  })
+
+  // Names the destination without creating a task. Review calls this on Push to ClickUp (user click)
+  // when the seat is already connected but has no stored list — Confirm stays disabled until named.
+  ipcMain.handle(IPC.mcpClickupDiscoverDestination, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    if (denyIfLimited('mcp-outbound')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
+    const s = getSettings()
+    const conn = s.mcpConnections.find((c) => c.id === 'clickup')
+    if (!conn || !conn.connected || !conn.endpointUrl || !hasMcpApiKey('clickup')) {
+      return { ok: false, error: 'ClickUp is not connected. Set it up in Settings → Mantu Intelligence first.' }
+    }
+    const dest = await discoverListForClickup(conn)
+    if (!dest.ok) return dest
+    persistClickupList(dest.list)
+    return { ok: true as const, clickupListId: dest.list.id, clickupListName: dest.list.name, tools: conn.tools }
+  })
+
+  ipcMain.handle(IPC.mcpPlaneConnect, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const tokens = await runPlaneOAuth()
+    if (!tokens.ok || !tokens.accessToken) return { ok: false, error: tokens.error || 'Could not connect Plane.' }
+    const r = await connectMcp(PLANE_MCP_OAUTH_ENDPOINT, tokens.accessToken, {}, 'Plane')
+    if (!r.ok) return r
+    try {
+      setMcpApiKey('plane', tokens.accessToken)
+      setMcpRefreshToken('plane', tokens.refreshToken ?? '')
+      const s = getSettings()
+      const entry: McpConnection = {
+        id: 'plane',
+        kind: 'plane',
+        label: 'Plane',
+        endpointUrl: PLANE_MCP_OAUTH_ENDPOINT,
+        connected: true,
+        tools: r.tools ?? [],
+        extraHeaders: {}
+      }
+      setSettings({ mcpConnections: [...s.mcpConnections.filter((c) => c.id !== 'plane'), entry] })
+    } catch (error) {
+      return { ok: false as const, error: error instanceof Error ? error.message : 'Could not store the Plane connection.' }
+    }
+    auditLog('mcp.connected', { connectionId: 'plane', tools: (r.tools ?? []).length })
     return r
   })
 
@@ -3163,9 +4793,70 @@ function registerIpc(): void {
     return authSignOut()
   })
   // --- Calendar ---
+  ipcMain.handle(IPC.timeSavedRead, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { savedMinutes: 0, byKind: { 'note-taking': 0, 'second-brain': 0, 'email-summary': 0, 'mcp-push': 0 }, events: 0, recent: [] }
+    return summarizeTimeSaved()
+  })
+  ipcMain.handle(IPC.timeSavedRecord, (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = TimeSavedRecordPayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid time-saved event.' }
+    return appendTimeSavedEvent({ kind: parsed.data.kind, estimatedMinutes: estimateEmailSummaryMinutes() })
+  })
+  ipcMain.handle(IPC.outlookWriteStatus, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { signedIn: false, canDraft: false, canEvent: false }
+    return outlookWriteStatus()
+  })
+  ipcMain.handle(IPC.outlookCreateDraft, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = OutlookDraftPayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid draft.' }
+    const r = await createOutlookDraft(parsed.data)
+    if (r.ok) {
+      appendTimeSavedEvent({
+        kind: 'mcp-push',
+        estimatedMinutes: estimateMcpPushMinutes(),
+        connector: 'outlook',
+        ids: { draft: r.id }
+      })
+    }
+    return r
+  })
+  ipcMain.handle(IPC.outlookCreateEvent, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const parsed = OutlookEventPayloadSchema.safeParse(payload)
+    if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid event.' }
+    const r = await createOutlookEvent(parsed.data)
+    if (r.ok) {
+      appendTimeSavedEvent({
+        kind: 'mcp-push',
+        estimatedMinutes: estimateMcpPushMinutes(),
+        connector: 'outlook',
+        ids: { draft: r.id }
+      })
+    }
+    return r
+  })
+  ipcMain.handle(IPC.mcpWriteTargets, async (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return []
+    const outlook = await outlookWriteStatus()
+    return resolveWriteTargets({
+      connections: getSettings().mcpConnections,
+      outlookSignedIn: outlook.signedIn,
+      outlookCanWrite: outlook.canDraft || outlook.canEvent
+    })
+  })
+
   ipcMain.handle(IPC.calendarToday, async (e, tz: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    if (denyIfLimited('graph-calendar')) return { ok: false, error: RATE_LIMIT_USER_MESSAGE }
     return calendarToday(typeof tz === 'string' ? tz : 'UTC')
   })
 
@@ -3184,9 +4875,9 @@ function registerIpc(): void {
   ipcMain.handle(IPC.recallExportPlain, async (e, file: unknown): Promise<RecallExportPlainResult> => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const safeName = basename(String(file ?? ''))
+    const safeName = safeMeetingBasename(file)
     // Same guard set as every recall.ts sibling: only meeting .md files, never the plaintext index/README.
-    if (!safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+    if (!safeName) {
       return { ok: false, error: 'Not a saved meeting file.' }
     }
     try {
@@ -3280,7 +4971,8 @@ function registerIpc(): void {
   ipcMain.handle(IPC.recallDelete, async (e, file: unknown, title: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const safeName = basename(String(file ?? ''))
+    const safeName = safeMeetingBasename(file)
+    if (!safeName) return { ok: false, error: 'Not a saved meeting file.' }
     const label = typeof title === 'string' && title.trim() ? title.trim() : 'this meeting'
     const dialogOpts = {
       type: 'warning' as const,
@@ -3421,9 +5113,9 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const p = raw as { file?: unknown; text?: unknown }
-    const safeName = basename(String(p?.file ?? ''))
+    const safeName = safeMeetingBasename(p?.file)
     const text = String(p?.text ?? '').slice(0, 8000)
-    if (!safeName.endsWith('.md') || !text.trim()) return { ok: false, error: 'Nothing to save.' }
+    if (!safeName || !text.trim()) return { ok: false, error: 'Nothing to save.' }
     const s = getSettings()
     const result = await appendDebrief(s, safeName, text)
     if (result.ok) {
@@ -3531,6 +5223,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.parakeetFeed, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return ''
+    if (!takeHotPath('asr-feed')) return ''
     const p = payload as { samples?: unknown; speaker?: unknown }
     if (!(p?.samples instanceof Float32Array)) return ''
     // Cap a single feed chunk generously above the renderer's real ~6s windows (WINDOW_SEC in listen.ts) at
@@ -3543,13 +5236,14 @@ function registerIpc(): void {
     // ("Jane Doe" from an enrolled profile, else a stable "Speaker N" session label). Same PCM buffer the
     // ASR just consumed — no extra capture. Strictly additive and best-effort: any failure or the feature
     // being off/unprovisioned attaches no name and the line renders exactly as before.
-    if (text && p.speaker === 'them' && getSettings().speakerId.enabled) {
-      try {
-        const label = getSpeakerId().labelWindow(p.samples)
-        if (label) return { text, name: label.name }
-      } catch (err) {
-        mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
-      }
+    if (p.speaker === 'them') {
+      const label = labelThemAudio(p.samples)
+      // P2 echo defense: this window is the operator's OWN voice bleeding through the loopback —
+      // drop the transcribed text rather than mislabel the operator's words as THEM.
+      if (label?.echo) return { text: '', echo: true }
+      if (text && label) return { text, name: label.name }
+    } else if (p.speaker === 'you') {
+      observeOperatorAudio(p.samples)
     }
     return { text }
   })
@@ -3561,21 +5255,44 @@ function registerIpc(): void {
   ipcMain.handle(IPC.appleSpeechFeed, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return ''
+    if (!takeHotPath('asr-feed')) return ''
     const p = payload as { samples?: unknown; speaker?: unknown }
     if (!(p?.samples instanceof Float32Array)) return ''
     // Same defensive cap as parakeetFeed — see its own comment for why.
     if (p.samples.length > 16_000 * 30) return ''
     // Spoken-language hint (Settings → Audio) pins the recognizer locale; 'auto' keeps system locale.
     const text = await appleSpeechTranscribe(p.samples, appleSpeechLocale(getSettings().asrLanguage))
-    if (text && p.speaker === 'them' && getSettings().speakerId.enabled) {
-      try {
-        const label = getSpeakerId().labelWindow(p.samples)
-        if (label) return { text, name: label.name }
-      } catch (err) {
-        mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
-      }
+    if (p.speaker === 'them') {
+      const label = labelThemAudio(p.samples)
+      if (label?.echo) return { text: '', echo: true } // see parakeetFeed's identical echo-defense comment above
+      if (text && label) return { text, name: label.name }
+    } else if (p.speaker === 'you') {
+      observeOperatorAudio(p.samples)
     }
     return { text }
+  })
+
+  // Speaker Intelligence (SPEAKER-INTELLIGENCE-PLAN §3) — the Whisper engine's speaker-embedding tap.
+  // Whisper runs entirely in a renderer Worker with no main-process round trip of its own (unlike
+  // Parakeet/Apple, which already ride the label along on parakeetFeed/appleSpeechFeed above), so
+  // listen.ts's Whisper commitLine path calls this separately, after the fact, with the SAME window's
+  // audio the worker just transcribed — fire-and-forget, best-effort, never blocking the live decode.
+  ipcMain.handle(IPC.speakerEmbed, async (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return {}
+    const p = payload as { samples?: unknown; speaker?: unknown }
+    if (!(p?.samples instanceof Float32Array)) return {}
+    // Same defensive cap as parakeetFeed — see its own comment for why.
+    if (p.samples.length > 16_000 * 30) return {}
+    if (p.speaker === 'them') {
+      const label = labelThemAudio(p.samples)
+      // Echo bleed: Whisper already committed the line — return echo:true so the renderer can drop it.
+      if (label?.echo) return { echo: true as const }
+      if (label) return { name: label.name }
+    } else if (p.speaker === 'you') {
+      observeOperatorAudio(p.samples)
+    }
+    return {}
   })
 
   // --- Métis Local (on-device LLM): model readiness metadata ---
@@ -3586,6 +5303,21 @@ function registerIpc(): void {
   ipcMain.handle(IPC.localModelsList, (e) => {
     assertMainWindow(e)
     return listLocalModels(localModelDownloadState())
+  })
+  // Start/retry the first-run fetch without flipping Local AI (routing). Boot already calls
+  // ensureLocalModel; this is the onboarding/Settings path when that was skipped or failed, and the
+  // Retry control when huggingface.co / disk / pin refused the transfer.
+  ipcMain.handle(IPC.localModelsEnsure, (e) => {
+    assertMainWindow(e)
+    const best = bestModelForMachine()
+    const current = getSettings().localLlm.modelId
+    const target = shouldFetchWeights(current) ? current : best.id
+    // Always invoke: RAM/disk gates inside ensureLocalModel record a visible refusal. Returning
+    // ok:false here without calling it left Settings idle after Retry on a skipped fetch.
+    void ensureLocalModel(target)
+      .then(() => refreshScreenPreprocess())
+      .catch((err) => mainLog.warn('[localModels:ensure] provisioning failed:', err))
+    return { ok: true }
   })
 
   // MQA-247: the high-accuracy transcription model. Same shape as the LLM weights above — paths stay in
@@ -3619,6 +5351,7 @@ function registerIpc(): void {
   // routes through local-runtime.ts's own start()/audit calls when it actually spins the sidecar up.
   ipcMain.handle(IPC.localPrewarm, (e, payload: unknown) => {
     assertMainWindow(e)
+    if (!requireAuth()) return
     const parsed = LocalPrewarmPayloadSchema.safeParse(payload)
     if (!parsed.success) return
     const s = getSettings()
@@ -3638,11 +5371,13 @@ function registerIpc(): void {
   ipcMain.handle(IPC.captureScreen, async (event) => {
     assertMainWindow(event)
     if (!requireAuth()) throw new Error('Not signed in.')
+    if (!takeHotPath('capture-screen')) throw new Error('Could not capture the screen.')
     return getScreenshot()
   })
   // Pre-warm: prime the cache + spin up the OS capture pipeline so the next real vision ask is instant.
   ipcMain.handle(IPC.prewarmCapture, (e) => {
     assertMainWindow(e)
+    if (!requireAuth()) return
     prewarmCapture()
   })
   // Screen-ask fast-path: hand the renderer the freshest on-device screen description (or null). Non-null
@@ -3688,7 +5423,18 @@ function registerIpc(): void {
       win?.webContents.send(IPC.streamError, { id: req.id, message: PRIVATE_VIEW_BLOCKED_MESSAGE })
       return
     }
-    const s = getSettings()
+    let s = getSettings()
+    // Ask caveman register: `/caveman lite|full|ultra…`, "stop caveman", "normal mode".
+    // Persist in the existing settings store, strip the command from the question the model sees.
+    if ((req.mode === 'answer' || req.mode === 'vision') && req.kind !== 'factcheck') {
+      const caveman = applyCaveman(req.prompt, s.askCaveman)
+      if (caveman.changed) s = setSettings({ askCaveman: caveman.next })
+      req.prompt = caveman.visiblePrompt
+      if (caveman.changed && !req.prompt.trim() && !req.image && !req.wantsScreenContext) {
+        win?.webContents.send(IPC.streamDone, { id: req.id })
+        return
+      }
+    }
     // Fresh-question boundary (see the state block above): a plain interactive ask outside a live meeting
     // starts clean unless the user opted into follow-up memory — and even then the memory expires after
     // ASK_MEMORY_IDLE_MS of inactivity. Pinned/cascaded requests (agentOverride / providerOverride —
@@ -3718,6 +5464,13 @@ function registerIpc(): void {
     // no typed claim) — redact it the same way so a secret-shaped pattern in that fallback text isn't sent
     // to the provider. Typed-claim fact-check asks never set this flag, so normal prompts are untouched.
     if (s.redactSensitive && req.redactPrompt) req.prompt = redactSecrets(req.prompt)
+    // Overlap local sidecar start with the sync brain stamp below — when local will serve (or hedge),
+    // kicking ensure NOW hides cold-load behind Receipt Mode work instead of serializing after it.
+    if (localPrewarmEligible(s, getAllowedProviders(), publicSettings().providerReady)) {
+      void ensureLocalRuntimeStarted(s.localLlm.modelId, req.mode === 'vision').catch((err) =>
+        mainLog.warn('[local] early ensure failed', err instanceof Error ? err.message : String(err))
+      )
+    }
     // Receipt Mode: ground a typed answer in the user's own past meetings. Match the brain against the
     // question (which already carries the live transcript tail via the renderer's withContext) and inject
     // the relevant, meeting-cited slice per-turn. Answer mode only — never the latency-critical spoken
@@ -3788,7 +5541,9 @@ function registerIpc(): void {
         (p) => p !== blocked && p !== 'local' && providerVisionOk(p) && (!allowed || allowed.includes(p))
       )
       const ready = candidates.find((p) =>
-        PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0
+        PROVIDERS[p].kind === 'cli'
+          ? !!s.cliConnected[p]
+          : getApiKey(p).length > 0 || operatorFundedProviders().includes(p)
       )
       const target = ready ?? candidates[0]
       if (target)
@@ -3841,14 +5596,21 @@ function registerIpc(): void {
           })
       const eligible = (p: ProviderId): boolean => {
         if (tried.includes(p)) return false
-        // Métis Local replaces the generic key/model/vision checks with localEligibleFor — the SAME
-        // mode-scope gate the ineligible chain below enforces, so local can never become a failover
-        // target for an out-of-scope mode (answer/recap or escalated text) even though it's a keyless,
-        // always-vision-capable entry in PROVIDERS (PLAN.md §4.3: "enforced at BOTH gates").
-        if (p === 'local') return localEligibleFor(req, s, tier, allowed)
+        // Dust is retrieval only. Never a general-chat failover unless this ask was pinned to Dust.
+        if (isDustChatForbidden(p, req.providerOverride === 'dust')) return false
+        // Métis Local: routingMode-aware primary eligibility (localPrimaryEligibleFor) so Routing mode
+        // → Local can fail over / serve without per-mode useFor toggles. 'api' mode keeps local out of
+        // the healthy mid-walk (fallback/floor still catch last-resort below). Out-of-scope modes
+        // (answer/recap) stay ineligible here — same PLAN.md §4.3 both-gates contract.
+        if (p === 'local') {
+          if (resolveRoutingMode(s) === 'api') return false
+          return localPrimaryEligibleFor(req, s, tier, allowed)
+        }
         return (
           (!allowed || allowed.includes(p)) &&
-          (PROVIDERS[p].kind === 'cli' ? !!s.cliConnected[p] : getApiKey(p).length > 0) &&
+          (PROVIDERS[p].kind === 'cli'
+            ? !!s.cliConnected[p]
+            : getApiKey(p).length > 0 || operatorFundedProviders().includes(p)) &&
           // A provider whose endpoint the USER supplies (Custom, Cloudflare's operator Worker) is only a
           // candidate once it actually has one. Cloudflare ships a default model, so without this check a
           // key alone would make it eligible and the walk would hand the request to streamOpenAI with no
@@ -3868,6 +5630,21 @@ function registerIpc(): void {
       // is about to 429 (usage-headroom.ts). Fail-open — unknown headroom never demotes — and folded into
       // the `healthy` filter ONLY, so a budget-blocked provider is still reachable as the last resort below.
       const budgetBlocked = (p: ProviderId): boolean => s.resilience.budgetPreempt && isBudgetExhausted(p)
+      // OPERATOR.md order 2: the other connected CLI is next after last-clicked quota / rate limit.
+      const cliNext = workingCliOrder({
+        cliConnected: s.cliConnected,
+        lastClickedCli: s.lastClickedCli,
+        allowed
+      }).find((p) => eligible(p) && !isCoolingDown(p) && !budgetBlocked(p))
+      if (cliNext) return cliNext
+      const fundedNext = operatorFundedProviders().find(
+        (p) =>
+          p in PROVIDERS &&
+          eligible(p as ProviderId) &&
+          !isCoolingDown(p as ProviderId) &&
+          !budgetBlocked(p as ProviderId)
+      )
+      if (fundedNext) return fundedNext as ProviderId
       // MQA-003: prefer a provider whose credentials have NOT just been rejected and that has budget left.
       const healthy = order.find((p) => eligible(p) && !isCoolingDown(p) && !budgetBlocked(p))
       if (healthy) return healthy
@@ -3908,6 +5685,18 @@ function registerIpc(): void {
     const failover = (tried: ProviderId[], preferFree = false, race?: AttemptRace): boolean => {
       const next = pickFailover(tried, preferFree)
       if (!next) return false
+      // Wave 2 — record the hop for the one-shot UI chip (docs/PROVIDER-ROUTING-POLICY.md). Only fire
+      // when we actually start a different provider; a no-op return above leaves the notice untouched.
+      const from = tried.length ? tried[tried.length - 1]! : 'unknown'
+      if (from !== next) {
+        lastFailoverNotice = {
+          from,
+          to: next,
+          at: Date.now(),
+          reason: preferFree ? 'exhausted' : 'failover'
+        }
+        auditLog('provider.failover', { from, to: next, reason: lastFailoverNotice.reason })
+      }
       attempt(next, tried, 0, race)
       return true
     }
@@ -3963,7 +5752,14 @@ function registerIpc(): void {
       }
       // Métis Local is keyless: its per-session sidecar key lives only in local-runtime.ts memory, never
       // on disk (getApiKey('local') always resolves empty, by design — see store.ts's ENV_VAR entry).
+      // Operator-funded providers are also keyless on the seat — the Worker holds the raw LLM key.
       const key = provider === 'local' ? localRuntime.sessionKey() : getApiKey(provider)
+      const viaOperator =
+        provider !== 'local' &&
+        def.kind !== 'cli' &&
+        !key &&
+        operatorFundedProviders().includes(provider)
+      const operatorTransport = viaOperator ? operatorAskTransport(s) : null
       const tier = routeTier(req, s.thinkingMode)
       // Métis Local's "model" is the local-models.ts manifest id the sidecar loads — settings.localLlm.
       // modelId, NOT the generic per-provider tier resolution (which would otherwise fall back to
@@ -3994,14 +5790,12 @@ function registerIpc(): void {
       // built-in. Resolved BEFORE the eligibility chain because a missing user endpoint is an eligibility
       // failure, not a stream failure.
       const baseURL = providerBaseUrl(provider, s)
-      // Métis Local replaces the ENTIRE generic key/model/vision chain below with localEligibleFor — the
-      // same mode-scope + readiness gate the settings snapshot and pickFailover's candidate filter use, so
-      // an out-of-scope request (answer/recap or escalated text) can never actually route to the local
-      // provider. Opted-in vision deliberately stays local at every tier so prompt complexity cannot
-      // silently turn a screenshot into a cloud upload.
+      // Métis Local: accept localPrimaryEligibleFor (routingMode-aware) plus the unchanged fallback/floor
+      // nets. Opted-in vision stays local at every tier so prompt complexity cannot silently turn a
+      // screenshot into a cloud upload.
       const ineligible =
         provider === 'local'
-          ? localEligibleFor(req, s, tier, allowed) ||
+          ? localPrimaryEligibleFor(req, s, tier, allowed) ||
             localFallbackEligibleFor(req, s, tier, allowed) ||
             // The answer-mode floor: pickFailover routes here when every cloud/CLI route is exhausted for an
             // out-of-scope mode (answer/recap). attempt() must accept it too, or the floor pickFailover
@@ -4013,7 +5807,9 @@ function registerIpc(): void {
               : 'Métis Local handles live suggestions, summaries and screenshots — this request type uses your cloud provider.'
           : def.kind === 'cli' && !s.cliConnected[provider]
             ? `${def.label} is not connected. Open Settings → CLI Integration to set it up.`
-            : def.kind !== 'cli' && !key
+            : viaOperator && !operatorTransport
+              ? 'Operator is not reachable. Check Operator URL in Settings.'
+              : def.kind !== 'cli' && !key && !viaOperator
               ? `No API key for ${def.label}. Open Settings (gear) and add it.`
               : def.kind !== 'cli' && !model
                 ? provider === 'dust'
@@ -4135,6 +5931,7 @@ function registerIpc(): void {
           : baseIdleMs
       const startedAt = Date.now()
       let gotToken = false
+      let paintedLen = 0
       let ttftMs: number | undefined
       // Strips a reasoning model's inline <think>…</think> out of the answer stream (llm/think-strip.ts).
       // One per attempt: each leg/retry is its own stream, and the stripper carries position state.
@@ -4163,12 +5960,16 @@ function registerIpc(): void {
           }
         }
         gotToken = true
+        paintedLen += text.length
         win?.webContents.send(IPC.streamDelta, { id: req.id, text })
       }
+      const systemParts = buildSystemParts(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt, s.askCaveman)
       const handle = createStream({
         providerId: provider,
         kind: def.kind,
-        apiKey: key,
+        apiKey: viaOperator ? '' : key,
+        viaOperator,
+        operatorTransport: operatorTransport ?? undefined,
         baseURL,
         workspaceId: s.dustWorkspaceId,
         // Dust OAuth tokens (imported from the local CLI) expire after ~1h. On a pre-token 401 the
@@ -4182,7 +5983,11 @@ function registerIpc(): void {
         // undefined for every other provider, so their request bodies stay byte-identical.
         reasoningEffort: reasoningEffortFor(provider, tier, s.thinkingMode === 'always'),
         idleMs,
-        system: buildSystem(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt),
+        systemParts,
+        system: systemParts.cachedPrefix + systemParts.volatile,
+        promptCacheKey: isOpenAICloudCacheEligible(provider, def.kind, false)
+          ? makePromptCacheKey(s.mode, skillLockHashForMode(s.mode))
+          : undefined,
         req,
         handlers: {
           onDelta: (text) => {
@@ -4247,12 +6052,56 @@ function registerIpc(): void {
               ttftMs,
               totalMs: Date.now() - startedAt,
               inputTokens: u.inputTokens,
-              outputTokens: u.outputTokens
+              outputTokens: u.outputTokens,
+              cacheRead: u.cacheRead,
+              cacheWrite: u.cacheWrite,
+              cacheUncached: u.cacheUncached,
+              cacheStatus: u.cacheStatus,
+              cacheTtl: u.cacheTtl
             })
+            if (req.mode === 'answer' || req.mode === 'vision') {
+              let skillId: string | undefined
+              let skillVersion: string | undefined
+              try {
+                const skill = loadVerifiedSkill(isBuiltinConversationMode(s.mode) ? s.mode : 'humanizer')
+                skillId = skill.id
+                skillVersion = skill.version
+              } catch {
+                /* integrity errors already fail closed on the ask path */
+              }
+              void recordOperatorAsk(s, {
+                id: req.id,
+                mode: s.mode,
+                skillId,
+                skillVersion,
+                provider,
+                model,
+                ttftMs,
+                totalMs: Date.now() - startedAt,
+                inputTokens: u.inputTokens,
+                outputTokens: u.outputTokens,
+                cacheRead: u.cacheRead,
+                cacheWrite: u.cacheWrite,
+                cacheUncached: u.cacheUncached,
+                cacheStatus: u.cacheStatus,
+                cacheTtl: u.cacheTtl,
+                outcome: 'answered',
+                question: typeof req.prompt === 'string' ? req.prompt : undefined,
+                // Closed-taxonomy label, computed here on the seat. Ships as a metric with every Ask so the
+                // Operator "Question types" panel works even when Ask text is off. Never throws.
+                questionType: classifyQuestionType(req.prompt, { vision: req.mode === 'vision' }),
+                vision: req.mode === 'vision'
+              })
+            }
             // The winning leg's success is the whole race's terminal outcome — drop the combined abort
             // registration set up before either leg started (see the hedge dispatch below).
             if (race) streams.delete(req.id)
             win?.webContents.send(IPC.streamDone, { id: req.id, ...u })
+            // Act 5 trial hook (MQA-281): the ONE seam that fires on a real, successfully-delivered
+            // result (gotToken is guaranteed true above) — never on install/launch. Cheap no-op unless
+            // this is the very first qualifying (suggest/summary/recap) result this install has ever
+            // produced; the demo-tagged check is belt-and-suspenders (see noteQualifyingUse's header).
+            noteQualifyingUse(req.mode, req.prompt, req.transcript)
           },
           onError: (message) => {
             if (race && race.gate.isLoser(race.leg)) return
@@ -4390,6 +6239,17 @@ function registerIpc(): void {
               // path already deleted its entry at the top of onError; without this the map kept the
               // HedgeRace and both handles alive for every hedged ask that ended in an error.
               if (race) streams.delete(req.id)
+              // Trailing stream error AFTER substantial visible output (claude-cli idle linger, etc.) —
+              // same keep-threshold as import-recap. Without this, Review blanked notes / autosave wrote
+              // an empty recap even though the summary had already streamed onto the screen.
+              if (gotToken && paintedLen >= 200) {
+                mainLog.warn(
+                  `[ask] keeping ${paintedLen}-char answer despite trailing stream error: ${friendly}`
+                )
+                win?.webContents.send(IPC.streamDone, { id: req.id })
+                noteQualifyingUse(req.mode, req.prompt, req.transcript)
+                return
+              }
               win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
             }
           }
@@ -4399,27 +6259,36 @@ function registerIpc(): void {
       else streams.set(req.id, handle)
     }
 
-    // Honor the CLI-vs-API priority for the FIRST provider tried: 'cli' prefers a connected CLI integration
-    // (Claude, then Codex) so the user's local subscription is used before any metered API. Otherwise — and
-    // whenever no CLI is connected — the user's explicitly-chosen `provider` stays primary (unchanged).
-    // req.providerOverride wins over all of that: it means "this specific request must go to provider X"
-    // (e.g. cascading a recap/follow-up/Spotlight-Ref request into Dust) regardless of what's globally active.
-    const cliPrimary =
-      s.providerPriority === 'cli'
-        ? (['claude-cli', 'codex-cli'] as ProviderId[]).find(
-            (p) => s.cliConnected[p] && (!allowed || allowed.includes(p))
-          )
-        : undefined
+    // OPERATOR.md: a connected working CLI wins every user question (last-clicked primary).
+    // req.providerOverride still wins (Dust retrieval / Spotlight Ref).
+    const cliPrimary = pickWorkingCliPrimary({
+      cliConnected: s.cliConnected,
+      lastClickedCli: s.lastClickedCli,
+      allowed
+    })
+    const operatorRoute = nextAskRoute({
+      cliConnected: s.cliConnected,
+      lastClickedCli: s.lastClickedCli,
+      allowed,
+      fundedProviders: operatorFundedProviders()
+    })
+    const routedActive =
+      !cliPrimary && operatorRoute.tier === 'operator' && operatorRoute.provider in PROVIDERS
+        ? (operatorRoute.provider as ProviderId)
+        : s.provider
     // Métis Local outranks cliPrimary (but never providerOverride): an in-scope suggest/summary/vision ask
     // routes to the on-device model first whenever it's eligible right now (PLAN.md §4.3 "Routing
     // precedence, explicit") — see local-routing.ts's pickPrimaryProvider for the exact precedence rule.
-    const localPrimaryEligible = localEligibleFor(req, s, routeTier(req, s.thinkingMode), allowed)
+    // localPrimaryEligibleFor (not the bare localEligibleFor) layers Wave 2's routingMode on top: 'api'
+    // forces this false so local can never win the first-attempt pick, 'local' relaxes the per-mode
+    // useFor toggle, 'auto' is byte-identical to the old localEligibleFor call.
+    const localPrimaryEligible = localPrimaryEligibleFor(req, s, routeTier(req, s.thinkingMode), allowed)
     const localVisionRequired = localVisionPrivacyRequired(req, s)
     const primary = pickPrimaryProvider(
       req.providerOverride,
       localPrimaryEligible,
       cliPrimary,
-      s.provider,
+      routedActive,
       localVisionRequired
     )
     // MQA-003: when the primary's credentials were just rejected — OR its live budget is nearly spent
@@ -4462,7 +6331,12 @@ function registerIpc(): void {
       // ask when it genuinely gets there first, which is the cloud-is-slow / cloud-is-down case.
       // This early pick decides the DELAY only: startHedgeLeg re-picks the provider at fire time against
       // the live primaryChain, so a primary that fails over in the meantime is still excluded correctly.
-      const hedgeDelayMs = pickFailover([primary]) === 'local' ? 0 : HEDGE_DELAY_MS
+      const hedgeDelayMs =
+        pickFailover([primary]) === 'local'
+          ? 0
+          : req.mode === 'suggest'
+            ? HEDGE_DELAY_SUGGEST_MS
+            : HEDGE_DELAY_MS
       let hedgeTimer: NodeJS.Timeout | null = setTimeout(() => {
         hedgeTimer = null
         startHedgeLeg()
@@ -4499,16 +6373,21 @@ function registerIpc(): void {
     } else {
       attempt(skipDeadPrimary ?? primary, skipDeadPrimary ? [primary] : [])
     }
-    } catch (e) {
+    } catch (err) {
       win?.webContents.send(IPC.streamError, {
         id,
-        message: e instanceof Error ? e.message : 'Could not start the answer.'
+        message: isModeSkillIntegrityError(err)
+          ? err instanceof Error
+            ? err.message
+            : String(err)
+          : 'Could not start the answer.'
       })
     }
   })
 
   ipcMain.handle(IPC.askCancel, (e, id: string) => {
     assertMainWindow(e)
+    if (!requireAuth()) return
     streams.get(id)?.abort()
     streams.delete(id)
   })
@@ -4519,6 +6398,7 @@ function registerIpc(): void {
   // idle clock.
   ipcMain.handle(IPC.askResetContext, (e) => {
     assertMainWindow(e)
+    if (!requireAuth()) return
     resetDustConversation()
     lastPlainAskAt = 0
   })
@@ -4527,6 +6407,7 @@ function registerIpc(): void {
   ipcMain.handle(IPC.armAudio, (e, on: boolean) => {
     assertMainWindow(e)
     if (!requireAuth()) return
+    if (!takeHotPath('arm-audio')) return
     audioArmed = !!on
   })
 
@@ -4534,12 +6415,22 @@ function registerIpc(): void {
   ipcMain.handle(IPC.saveTranscript, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
+    if (!takeHotPath('save-transcript')) throw new Error('Could not save the transcript.')
     const m = SaveMeetingSchema.parse(raw)
+    // ASR quality (1B.2b) — a live-only interim placeholder must never reach disk (see
+    // TranscriptLineSchema.provisional's own doc comment). Belt-and-suspenders: listen.ts already
+    // replaces a provisional line with the real one before it could ever be included here.
+    m.lines = stripProvisionalLines(m.lines)
     const r = { path: await saveMeeting(getSettings(), m) }
     // Time-saved: the meeting file just landed — credit it ONCE to the durable lifetime counters. This is
     // the live-meeting save path; the import path credits itself separately once its file is durable. A
     // rebuild never reaches here, so a meeting is counted once for its lifetime.
     recordMeetingSummarized(meetingDurationMin(m))
+    {
+      const words = wordsFromTexts(m.recap, ...m.lines.map((l) => l.text))
+      const mins = estimateNoteTakingMinutes(words)
+      if (mins > 0) appendTimeSavedEvent({ kind: 'note-taking', estimatedMinutes: mins, ids: { meeting: r.path } })
+    }
     void clearDraftTranscript(getSettings(), m.startedAt) // the real save landed — this autosave is now stale
     auditLog('transcript.saved', {
       mode: m.mode,
@@ -4550,7 +6441,11 @@ function registerIpc(): void {
     scheduleRebuild() // refresh the knowledge graph with the new note (debounced; no-op if disabled)
     // Persist the small background-work marker before confirming the transcript save. The actual LLM
     // extraction remains asynchronous, but a quit immediately after Save can now resume it.
-    await enqueueIngest(r.path)
+    // Wave 3 (settings.brainConsolidation): when batching is on, this meeting is marked pending but NOT
+    // queued for immediate extraction — it waits for the next consolidation pass (or a manual rebuild/
+    // "Index meetings" click, which scans for pending work independent of this flag) instead of paying a
+    // network round trip after every single save.
+    await enqueueIngest(r.path, { deferred: getSettings().brainConsolidation.enabled })
     // Speaker Intelligence (Phases A/B): best-effort, fire-and-forget backfill of resolved names from the
     // meeting's own Teams transcript (if one exists yet). Never awaited — must never delay or fail the
     // save response itself; see backfillSpeakerNames's own doc comment for the full quiet-no-op contract.
@@ -4595,7 +6490,20 @@ function registerIpc(): void {
   })
   ipcMain.handle(IPC.brainStatus, (e) => {
     assertBrainReader(e)
-    if (!requireAuth()) return null
+    if (!requireAuth()) {
+      return {
+        meetings: 0,
+        ingestedFiles: [],
+        people: 0,
+        accounts: 0,
+        deals: 0,
+        nodes: 0,
+        edges: 0,
+        warnings: 0,
+        revision: 0,
+        error: 'Sign in with your Mantu account first.'
+      }
+    }
     const s = getSettings()
     const idx = readBrainIndex(s)
     const counts = brainStatusCounts(s, idx.revision)
@@ -4611,7 +6519,11 @@ function registerIpc(): void {
       ingestedFiles: Object.entries(idx.ingested).filter(([, v]) => v.ok).map(([file]) => file),
       // 6d: failing-source filenames, the failed-side counterpart to ingestedFiles above — lets a
       // per-meeting indicator (indexed/pending/failed) be derived without a second, heavier IPC call.
-      failedFiles: Object.entries(idx.ingested).filter(([, v]) => !v.ok).map(([file]) => file),
+      // Pending (deferred for consolidation) is NOT a failure — same discriminator ingestFailureCounts
+      // already uses. Listing pending here painted every just-saved meeting as a red "failed" History dot.
+      failedFiles: Object.entries(idx.ingested)
+        .filter(([, v]) => !v.ok && !isPendingIngestRecord(v))
+        .map(([file]) => file),
       ...(failureDetails.length ? { failedDetails: failureDetails } : {}),
       backfillRequested: idx.backfillRequested,
       ...counts,
@@ -4628,15 +6540,22 @@ function registerIpc(): void {
       // MQA-230: entity files can still hold items attributed to an already-deleted meeting until the
       // deferred source refresh runs (it needs a usable provider). Surfaced so the UI can say the
       // cleanup is pending instead of silently claiming the delete was complete.
-      cleanupPending: idx.sourceRefreshRequested === true
+      cleanupPending: idx.sourceRefreshRequested === true,
+      lastIndexedAt: lastIndexedAt(s)
     }
   })
-  ipcMain.handle(IPC.brainBackfill, (e) => {
+  ipcMain.handle(IPC.brainBackfill, async (e) => {
+    assertBrainReader(e)
+    if (!requireAuth()) return { ran: false, queued: 0, error: SIGN_IN_INDEX_COPY }
+    const r = await runIntelligenceIndex('click')
+    auditLog('brain.backfill.start', { queued: r.queued, recapped: r.recapped, reason: 'click' })
+    return r
+  })
+  // Update Intelligence: explicit click only. Local first, configured API once. Never auto-send.
+  ipcMain.handle(IPC.brainIntelligencePass, (e) => {
     assertBrainReader(e)
     if (!requireAuth()) throw new Error('Not signed in.')
-    const r = requestBackfill()
-    auditLog('brain.backfill.start', { queued: r.queued })
-    return r
+    return startIntelligencePass()
   })
   // Full rebuild: wipe the DERIVED store (entities/graph/extractions — never the source transcripts)
   // and re-extract everything with the current schema/prompt. This is the upgrade path for legacy
@@ -4889,7 +6808,9 @@ function registerIpc(): void {
     if (!requireAuth()) return
     const parsed = SaveMeetingSchema.safeParse(raw)
     if (!parsed.success) return
-    await saveDraftTranscript(getSettings(), parsed.data)
+    // Same provisional-line guard as the real saveTranscript handler above — this periodic crash-
+    // recovery snapshot must never resurrect a UI-only "…" placeholder into a recovered draft.
+    await saveDraftTranscript(getSettings(), { ...parsed.data, lines: stripProvisionalLines(parsed.data.lines) })
   })
 
   ipcMain.handle(IPC.saveNote, async (e, raw) => {
@@ -4898,6 +6819,10 @@ function registerIpc(): void {
     const n = SaveNoteSchema.parse(raw)
     const r = { path: await saveNote(getSettings(), n) }
     auditLog('note.saved', { mode: n.mode })
+    {
+      const mins = estimateNoteTakingMinutes(wordsFromTexts(n.question, n.answer))
+      if (mins > 0) appendTimeSavedEvent({ kind: 'note-taking', estimatedMinutes: mins, ids: { note: r.path } })
+    }
     scheduleRebuild()
     return r
   })
@@ -4910,6 +6835,7 @@ function registerIpc(): void {
     const rating = r?.rating === 'up' || r?.rating === 'down' ? r.rating : null
     if (!rating) return
     auditLog('answer.feedback', { rating, kind: typeof r?.kind === 'string' ? r.kind : undefined })
+    void recordOperatorRating(getSettings(), rating)
   })
 
   // --- Import audio jobs (main-owned so navigation and overlay closure cannot interrupt them) ---
@@ -4918,12 +6844,36 @@ function registerIpc(): void {
     if (!requireAuth()) return { error: 'Not signed in.' }
     return pickAudioFile(win)
   })
+  ipcMain.handle(IPC.importAudioOffer, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { error: 'Not signed in.' }
+    const parsed = ImportAudioOfferSchema.safeParse(raw)
+    if (!parsed.success) return { error: 'Could not prepare the selected recordings.' }
+    return offerAudioPaths(parsed.data.paths)
+  })
   ipcMain.handle(IPC.importAudioStart, async (e, raw) => {
     assertMainWindow(e)
     if (!requireAuth()) throw new Error('Not signed in.')
     const parsed = ImportAudioStartSchema.parse(raw)
     if (!importJobs) throw new Error('Audio import service is unavailable.')
     return importJobView(await importJobs.start(consumePickedAudio(parsed.token)))
+  })
+  ipcMain.handle(IPC.importAudioStartBatch, async (e, raw) => {
+    assertMainWindow(e)
+    if (!requireAuth()) throw new Error('Not signed in.')
+    const parsed = ImportAudioStartBatchSchema.parse(raw)
+    if (!importJobs) throw new Error('Audio import service is unavailable.')
+    const sources = []
+    const errors: string[] = []
+    for (const token of parsed.tokens) {
+      try {
+        sources.push(consumePickedAudio(token))
+      } catch (err) {
+        errors.push(err instanceof Error ? err.message : String(err))
+      }
+    }
+    if (!sources.length) throw new Error(errors[0] || 'Could not start the imports.')
+    return (await importJobs.startMany(sources)).map(importJobView)
   })
   ipcMain.handle(IPC.importJobsList, (e) => {
     assertMainWindow(e)
@@ -4990,6 +6940,7 @@ function registerIpc(): void {
     // handler's finally) runs too late and startImportDecoder's "already active" guard cascade-fails
     // every queued job. Mirrors the ffmpeg onComplete path, which frees its slot first for the same reason.
     await closeImportDecoder(parsed.jobId)
+    await importJobs.releaseDecodeSlot(parsed.jobId)
     try {
       await importJobs.finishDecoding(parsed.jobId)
     } finally {
@@ -5002,6 +6953,7 @@ function registerIpc(): void {
     if (parsed.jobId !== decoderJobId || !importJobs) throw new Error('Import decoder job mismatch.')
     // Same ordering requirement as importDecoderComplete above: free the slot before failDecoder can pump.
     await closeImportDecoder(parsed.jobId)
+    await importJobs.releaseDecodeSlot(parsed.jobId)
     try {
       await importJobs.failDecoder(parsed.jobId, parsed.error)
     } finally {
@@ -5150,11 +7102,11 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return ''
     const folder = resolveMeetingsFolder(getSettings())
-    const safeName = basename(String(file ?? '')) // basename blocks traversal
+    const safeName = safeMeetingBasename(file)
     // Only ever open Métis's own .md meeting transcripts. The meetings folder is user-chosen
     // (could be Desktop/Downloads), and shell.openPath launches the OS handler for whatever it finds,
     // which would execute a .command/.app/.exe. Mirror deleteMeeting()/debriefSave()'s .md guard.
-    if (!safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') return ''
+    if (!safeName) return ''
     const path = join(folder, safeName)
     const encrypted = isEncryptedFile(path)
     auditLog('recall.open', { encrypted })
@@ -5180,6 +7132,7 @@ function registerIpc(): void {
   // --- Listening state (tray icon + Dust conversation reset + power-save block) ---
   ipcMain.handle(IPC.listeningState, (e, on: unknown) => {
     assertMainWindow(e)
+    if (!requireAuth()) return
     listeningActive = !!on // fresh-question boundary (askStart) is suspended while a meeting is live
     setTrayRecording(!!on)
     setRecordingPowerSaveBlock(!!on)
@@ -5215,6 +7168,9 @@ function registerIpc(): void {
   // --- Window management ---
   ipcMain.handle(IPC.windowResize, (e, payload: { height: number; width?: number }) => {
     assertMainWindow(e)
+    // Hide rest stays the 1–8px hairline. The 120px hug floor and BAR_MIN_HEIGHT (44) must not
+    // grow it into a visible slab.
+    if (!settingsSurfaceOpen && islandResting && liveOverlayLayout() === 'hide') return
     // A view can opt into reporting its own visible width (the collapsed control mini-pill, and a toast
     // that widens the pill to fit itself while minimized) instead of relying on the fixed
     // BAR_WIDTH/PILL_WIDTH guess. Without this the pill's real content (~170px) sat centered inside the
@@ -5222,10 +7178,30 @@ function registerIpc(): void {
     // was behind it. Floor/ceiling guard against a measurement glitch reporting something absurd — the
     // ceiling is BAR_WIDTH itself since nothing legitimately needs to be wider than the full bar (a lower
     // ceiling here once clipped a wider toast's own content that had genuinely asked for more room).
-    if (typeof payload?.width === 'number' && Number.isFinite(payload.width)) {
+    if (typeof payload?.width === 'number' && Number.isFinite(payload.width) && !onboardingExclusiveLive()) {
       // +10 (not the height report's +2) gives the pill's own box-shadow/glow room to render without
       // being hard-clipped at the window edge — see the .aw-pill / .aw-mark-glow comments in styles.css.
-      currentWidth = Math.max(120, Math.min(Math.ceil(payload.width) + 10, BAR_WIDTH))
+      // Circle/Jarvis rest reports ~41; the old Math.max(120, …) floor left a 120 slab, never 41.
+      const layout = liveOverlayLayout()
+      const nextWidth = overlayHugNextWidth({
+        reportedWidth: payload.width,
+        maxWidth: BAR_WIDTH,
+        circleRest:
+          isMinimized &&
+          overlayOrbRestIsCircle(layout, parseOverlayOrbStyle(getSettings().overlayOrbStyle))
+      })
+      const rest = overlayRestSize(layout)
+      // Revealed Hide/Island keeps BAR_WIDTH. Hug 120 + height 44 was the Ultron Show Métis stub.
+      if (
+        overlayAllowsHugWidth({
+          minimized: isMinimized,
+          islandResting,
+          restWidth: rest.width,
+          nextWidth
+        })
+      ) {
+        currentWidth = nextWidth
+      }
     }
     // Same finite-number guard as width: a NaN/Infinity height from a renderer layout glitch would
     // otherwise reach resizeTo's Math.round/min/max unclamped, poisoning them to NaN and making
@@ -5234,19 +7210,36 @@ function registerIpc(): void {
       typeof payload?.height === 'number' && Number.isFinite(payload.height) ? payload.height : BAR_HEIGHT
     resizeTo(height)
   })
-  ipcMain.handle(IPC.windowMode, (e) => {
+  ipcMain.handle(IPC.windowMode, (e, mode: unknown) => {
     assertMainWindow(e)
-    setWindowMode()
+    if (mode === 'settings') applySettingsSurface()
+    else {
+      if (settingsSurfaceOpen) leaveSettingsSurface()
+      setWindowMode()
+    }
   })
   ipcMain.handle(IPC.windowMinimize, (e, narrow: unknown) => {
     assertMainWindow(e)
     setMinimizedWidth(!!narrow)
+  })
+  ipcMain.handle(IPC.windowAnchorTop, (e) => {
+    assertMainWindow(e)
+    anchorTopCenter()
+  })
+  ipcMain.handle(IPC.windowRevealWidth, (e) => {
+    assertMainWindow(e)
+    restoreBarWidth()
+  })
+  ipcMain.handle(IPC.overlayParkAfterHide, (e) => {
+    assertMainWindow(e)
+    parkOverlayAfterHideSpring()
   })
   // Renderer ErrorBoundary catch: persist via the same sink as onFatal's main-process crashes, so a
   // caught render-throw survives to disk instead of only reaching console (gated behind
   // ASKTOTO_DEBUG_RENDERER, never on in a packaged build).
   ipcMain.handle(IPC.rendererCrash, (e, raw: unknown) => {
     assertMainWindow(e)
+    if (!requireAuth()) return
     const r = raw as { message?: unknown; stack?: unknown; componentStack?: unknown } | null
     const message = typeof r?.message === 'string' ? r.message : 'unknown renderer error'
     const stack = typeof r?.stack === 'string' ? r.stack : ''
@@ -5256,6 +7249,7 @@ function registerIpc(): void {
   // Drag the overlay from anywhere on the bar (the renderer's JS drag drives this with screen-pixel deltas).
   ipcMain.handle(IPC.windowMoveBy, (e, d: unknown) => {
     assertMainWindow(e)
+    if (onboardingExclusiveLive()) return
     const { dx, dy } = (d ?? {}) as { dx?: number; dy?: number }
     if (typeof dx === 'number' && typeof dy === 'number' && Number.isFinite(dx) && Number.isFinite(dy)) {
       moveBy(dx, dy)
@@ -5292,6 +7286,7 @@ function registerIpc(): void {
   // reach the download page. Never throws — failures come back as a short human-readable error.
   ipcMain.handle(IPC.updateCheck, (e) => {
     assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, current: '', error: 'Not signed in.' }
     return checkForUpdateNow()
   })
   // Settings "Update now" → kick the in-app download. Progress + ready then stream to the renderer via the
@@ -5299,10 +7294,12 @@ function registerIpc(): void {
   // this build cannot self-install so the UI shows the download-page link instead of a stuck button.
   ipcMain.handle(IPC.updateDownload, (e) => {
     assertMainWindow(e)
+    if (!requireAuth()) return { started: false, reason: 'Not signed in.' }
     return startUpdateDownload()
   })
   ipcMain.handle(IPC.updateInstall, (e) => {
     assertMainWindow(e)
+    if (!requireAuth()) return
     // Lazy-required (same pattern + rationale as updater.ts): a static import here put
     // electron-updater's whole require tree (~46ms) on every boot for a once-per-update button.
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -5350,12 +7347,21 @@ if (!app.requestSingleInstanceLock()) {
     // no-opping forever. ensureWindow() also filters a destroyed-but-non-null window.
     const w = ensureWindow()
     if (!w) return
-    if (!w.isVisible()) w.show()
-    w.focus()
+    // Non-activating, same island contract as every other reveal (see showForAsk's doc comment) — a
+    // second launch attempt surfaces the overlay without stealing focus from the foreground app.
+    if (!w.isVisible()) w.showInactive()
   })
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
   await installProxyAwareFetch() // route provider fetch through the env/OS proxy so Dust etc. work behind a corporate proxy
+  // Managed egressAllowlist (docs/NETWORK-EGRESS.md): when IT names the hosts this seat may reach, refuse
+  // every other host on both network stacks. Best-effort like the proxy install: a failure here must not
+  // block boot, and an absent key changes nothing.
+  try {
+    installEgressGuard(getEgressAllowlist())
+  } catch (e) {
+    mainLog.warn('[net] egress guard not installed:', e)
+  }
   // Warm the CLI binary cache at boot when a CLI provider is connected, so the session's FIRST CLI ask
   // doesn't stall on the login-shell PATH lookup (it only ran on sign-in before — i.e. once ever).
   try {
@@ -5381,16 +7387,28 @@ if (!app.requestSingleInstanceLock()) {
   // profile, so a fresh install of the default provider can answer with zero paste-a-key setup when the
   // operator chose to embed one. See embedded-cloudflare-key.ts — a no-op when no bundle was packaged.
   importEmbeddedCloudflareKey()
+  {
+    setModeSkillsOverlayRoot(join(app.getPath('userData'), 'skills-overrides'))
+    const boot = getSettings()
+    if (!boot.operatorUrl && process.env.METIS_OPERATOR_URL && /^https:\/\//i.test(process.env.METIS_OPERATOR_URL)) {
+      setSettings({ operatorUrl: process.env.METIS_OPERATOR_URL.trim() })
+    }
+    if (!boot.operatorIngestSecret && process.env.METIS_OPERATOR_INGEST_SECRET) {
+      setSettings({ operatorIngestSecret: process.env.METIS_OPERATOR_INGEST_SECRET })
+    }
+  }
   // Métis Local weights are no longer bundled in the installer (~728 MB; a universal mac package
-  // carrying them would blow past GitHub's 2 GB release-asset limit), so fetch them once here on first
-  // run. Deliberately NOT awaited: this is a ~763 MB download and startup must not wait on it, nor fail
-  // when the machine is offline or behind a restrictive proxy — Local simply stays unavailable and the
-  // next launch retries. ensureLocalModel() verifies the pinned sha256 and never throws.
-  // GATED (MQA-186): this used to fire unconditionally, so a machine under the model's RAM floor paid
-  // 763 MB for weights assertRamOk would refuse to load, and a user who had switched Local AI off got
-  // the transfer anyway with no way to decline it. shouldFetchWeights answers both. Because this is the
-  // only trigger, the settings handler re-arms it on the OFF→ON edge — see the localLlm.enabled branch
-  // in IPC.setSettings — otherwise switching Local AI back on would leave no path to the weights at all.
+  // carrying them would blow past GitHub's 2 GB release-asset limit), so fetch them once here whenever
+  // the app opens. Deliberately NOT awaited: this is a multi-GB download and startup must not wait on
+  // it, nor fail when the machine is offline or behind a restrictive proxy — the next launch retries.
+  // ensureLocalModel() verifies the pinned sha256 and never throws.
+  //
+  // GATED on RAM only (MQA-186): a machine under the model's floor must not pay for weights
+  // assertRamOk would refuse to load. Local AI `enabled` does NOT gate the download — routing stays
+  // off by default (Cloudflare / API keys stay primary); the bytes land in the background so turning
+  // Local on later is instant. OFF→ON in setSettings still re-arms as a second chance after a failed
+  // first-run fetch.
+  //
   // local-routing.ts re-reads isDownloaded() per request, so no ROUTING decision needs notifying. The
   // background screen reader does: its eligibility is evaluated when the engine is refreshed, and the boot
   // refresh below runs while this download is still in flight — without this re-arm, a first-run user who
@@ -5432,7 +7450,7 @@ if (!app.requestSingleInstanceLock()) {
         mainLog.warn('[boot] local prewarm skipped:', e instanceof Error ? e.message : String(e))
       }
     }
-    if (shouldFetchWeights(best.id, getSettings().localLlm.enabled)) {
+    if (shouldFetchWeights(best.id)) {
       void ensureLocalModel(best.id)
         .then(() => {
           refreshScreenPreprocess()
@@ -5441,6 +7459,11 @@ if (!app.requestSingleInstanceLock()) {
           warmLocalIfReady()
         })
         .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
+    } else {
+      // RAM gate kept — do not fetch. Still invoke so download state records the refusal; Settings
+      // must show "needs N GB RAM" + Retry, never a silent idle (Tony: disk/RAM skip looked like
+      // "doesn't even download").
+      void ensureLocalModel(best.id).catch((e) => mainLog.warn('[boot] local model refusal failed:', e))
     }
     setTimeout(warmLocalIfReady, 4000).unref?.()
   }
@@ -5700,12 +7723,28 @@ if (!app.requestSingleInstanceLock()) {
     const RES_BASE_REAL = realResourceBase(RES_BASE)
 
     // A packaged app is ALWAYS offline-only, even if its installer is corrupt/incomplete. Returning true
-    // keeps the worker's remote resolver disabled so missing assets fail locally with a reinstall message
-    // instead of silently downloading after install. Development may still use its explicit remote path.
+    // keeps the worker's remote resolver disabled so missing assets fail locally (runtime then fetches
+    // into userData) instead of silently downloading from a CDN. Development may still use its explicit remote path.
     const ASR_BUNDLED = app.isPackaged || asrManifestComplete(RES_BASE)
     ipcMain.handle(IPC.asrBundled, (e) => {
       assertMainWindow(e)
       return ASR_BUNDLED
+    })
+    ipcMain.handle(IPC.asrAssetsStatus, (e) => {
+      assertMainWindow(e)
+      return asrAssetsStatusSnapshot()
+    })
+    ipcMain.handle(IPC.asrAssetsEnsure, async (e) => {
+      assertMainWindow(e)
+      try {
+        await ensureImportAsrAssets((pct) => {
+          publishAsrAssetsProgress({ ...asrAssetsProgress(), progress: pct / 100 })
+        })
+      } catch (err) {
+        mainLog.warn('[asr-assets] ensure failed:', err instanceof Error ? err.message : err)
+        publishAsrAssetsProgress()
+      }
+      return asrAssetsStatusSnapshot()
     })
 
     protocol.handle('asr-model', async (req) => {
@@ -5737,9 +7776,22 @@ if (!app.requestSingleInstanceLock()) {
           real = realpathSync(abs)
         } catch (e: unknown) {
           if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
-            return respond(null, { status: 404 })
+            // Incomplete installer: the same relative object may live in userData after auto-fetch.
+            try {
+              const fallbackAbs = resolve(userDataAsrRoot(), rel.replace(/^models\//, ''))
+              const fallbackReal = realpathSync(fallbackAbs)
+              const fallbackBase = realResourceBase(userDataAsrRoot())
+              if (isInsideResourceBase(fallbackBase, fallbackReal)) {
+                real = fallbackReal
+              } else {
+                return respond(null, { status: 404 })
+              }
+            } catch {
+              return respond(null, { status: 404 })
+            }
+          } else {
+            throw e
           }
-          throw e
         }
         // Path-traversal guard (separator-safe on Windows): reject any path that escapes RES_BASE.
         // Run the check against the real (symlink-resolved) path on BOTH sides, not the raw abs path.
@@ -5879,6 +7931,8 @@ if (!app.requestSingleInstanceLock()) {
   runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
   runStep('initializeImportJobs', initializeImportJobs)
   runStep('registerIpc', registerIpc)
+  startOperatorRuntime(() => getSettings(), operatorRuntimeHooks())
+  startOperatorOverlayPoll(() => getSettings())
   // Import checkpoints are encrypted and main-owned. Resume after IPC registration so the hidden decoder
   // can safely report chunks as soon as it starts, without delaying first paint.
   const recoverImports = (): void => {
@@ -5890,6 +7944,10 @@ if (!app.requestSingleInstanceLock()) {
   }
   recoverImports()
   runStep('registerScreenListeners', registerScreenListeners)
+  // Notch/menu-bar metrics for the island top clamp (MQA-275) — invalidate-on-topology-change, same
+  // event set registerScreenListeners just subscribed to, plus powerMonitor resume (a notch MacBook can
+  // wake docked to a different external display than it slept on). macOS-only signal; a no-op elsewhere.
+  runStep('registerDisplayMetricsInvalidation', registerDisplayMetricsInvalidation)
   // Establish real screen-capture readiness at boot on Windows, where the probe raises NO system prompt
   // and there is no queryable permission to read instead — without it getPlatformPermissions() reports
   // 'unknown' forever and the readiness checklist cannot tell the user whether screenshots will work
@@ -5923,13 +7981,36 @@ if (!app.requestSingleInstanceLock()) {
       // Registered here rather than alongside the timer so safe start skips the recurring brain work too,
       // not just the single resume — the reconcile tick reads the same index.json.
       trackTimer(setInterval(reconcileMeetingsInBackground, BRAIN_RECONCILE_MS))
+      // Product cadence is three named slots (06:00, 12:00, 18:00 America/Toronto), not an hourly
+      // consolidation poll. Catch up if Métis was closed across a slot; then arm the next timeout.
+      wireIntelligenceIndexWork()
+      void catchUpIntelligenceIndexIfNeeded().catch((e) =>
+        mainLog.error('[intelligence-index] launch catch-up failed:', e)
+      )
+      scheduleIntelligenceIndex(trackTimer)
+      // Hourly consolidation is demoted: the named slots own the extract pass. The helper stays
+      // imported so existing settings/tests keep compiling, and a manual budget check still no-ops
+      // when the feature is off.
+      void runConsolidationIfDue().catch((e) => mainLog.warn('[brain] demoted consolidation check failed:', e))
     }
     endBootWatch(app.getPath('userData'))
   }, 15_000)
 
   app.on('activate', () => {
     if (!win) createWindow()
-    else win.show()
+    else win.showInactive()
+    // Bar dock click still opens Settings. Hide/Island launch must stay parked
+    // 8×2 — Ultron fresh userdata was 880×1017 Settings / Expand Métis.
+    try {
+      if (
+        getSettings().onboardingDone &&
+        overlayActivateOpensSettings(liveOverlayLayout())
+      ) {
+        sendHotkey('settings')
+      }
+    } catch {
+      /* settings store not ready */
+    }
   })
   }).catch((e) => {
     // console.error is a no-op in a packaged GUI build with no console — route to the real sinks (same

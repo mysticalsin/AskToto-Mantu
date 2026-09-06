@@ -1,0 +1,122 @@
+openapi: 3.1.0
+info:
+  title: Métis license API v1
+  version: 1.0.0
+  description: |
+    Reserved contract for offline-first Ed25519 JWS licenses.
+    Extends the existing phone-home license-server (`/activate`, `/heartbeat`).
+    This change does not deploy a live server. Client and server stubs return
+    `activation_unavailable` while `LICENSE_ACTIVATION_OPEN=false`.
+servers:
+  - url: https://license.example.com
+paths:
+  /v1/licenses/activate:
+    post:
+      summary: Activate a key on this device
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActivateRequest'
+      responses:
+        '200':
+          description: Signed license or a typed error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivateResponse'
+  /v1/installs/register:
+    post:
+      summary: Assign a sequential Métis member number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterRequest'
+      responses:
+        '200':
+          description: Assigned number or unavailable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RegisterResponse'
+components:
+  schemas:
+    ActivateRequest:
+      type: object
+      required: [licenseKey, deviceIdHash, appVersion, os]
+      properties:
+        licenseKey:
+          type: string
+          maxLength: 200
+        deviceIdHash:
+          type: string
+          description: SHA-256 hex of (metis-device-v1 || stableId || platform). Never a raw serial.
+          pattern: '^[0-9a-f]{64}$'
+        appVersion:
+          type: string
+        os:
+          type: string
+    ActivateResponse:
+      oneOf:
+        - type: object
+          required: [ok, jws]
+          properties:
+            ok: { type: boolean, enum: [true] }
+            jws:
+              type: string
+              description: Compact Ed25519 JWS (alg EdDSA)
+        - type: object
+          required: [ok, error]
+          properties:
+            ok: { type: boolean, enum: [false] }
+            error:
+              type: string
+              enum:
+                - activation_unavailable
+                - invalid
+                - revoked
+                - expired
+                - seat_limit_reached
+                - not_activated
+                - network
+    RegisterRequest:
+      type: object
+      required: [installId, appVersion, os]
+      properties:
+        installId: { type: string, format: uuid }
+        appVersion: { type: string }
+        os: { type: string }
+    RegisterResponse:
+      oneOf:
+        - type: object
+          required: [ok, memberNumber]
+          properties:
+            ok: { type: boolean, enum: [true] }
+            memberNumber: { type: integer, minimum: 1 }
+        - type: object
+          required: [ok, error]
+          properties:
+            ok: { type: boolean, enum: [false] }
+            error:
+              type: string
+              enum: [activation_unavailable, network]
+    LicenseClaims:
+      type: object
+      required: [iss, sub, edition, seats, exp, kid]
+      properties:
+        iss: { type: string, enum: [metis-license] }
+        sub: { type: string, description: deviceIdHash or * }
+        edition: { type: string, enum: [personal, pro, enterprise] }
+        seats: { type: integer, minimum: 1 }
+        exp: { type: integer }
+        nbf: { type: integer }
+        iat: { type: integer }
+        features:
+          type: array
+          items: { type: string }
+        orgId: { type: string }
+        kid: { type: string }
+        graceDays: { type: integer, minimum: 0, default: 14 }

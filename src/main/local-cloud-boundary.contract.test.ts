@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const source = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 describe('local processing privacy boundary', () => {
   it('forces an opted-in vision request onto local before provider overrides or cloud routing', () => {
@@ -50,12 +50,16 @@ describe('local processing privacy boundary', () => {
   // model, and the fastest answer wins. The zero delay is keyed on the BACKUP being local — never on the
   // primary's identity — so it holds for every provider rather than being special-cased to one.
   // Quality is safe because HedgeRace declares the winner on FIRST TOKEN, not on start order.
+  // Suggest uses a shorter paid-backup delay (HEDGE_DELAY_SUGGEST_MS) so live turns still fit the budget.
   it('races the on-device model from t=0 against ANY api primary, not just one provider', () => {
     const at = source.indexOf('const hedgeDelayMs')
     expect(at).toBeGreaterThan(-1)
-    const decl = source.slice(at, at + 160)
+    const decl = source.slice(at, at + 280)
     // Keyed on the BACKUP, so no provider name appears in the condition.
-    expect(decl).toMatch(/pickFailover\(\[primary\]\) === 'local' \? 0 : HEDGE_DELAY_MS/)
+    expect(decl).toMatch(/pickFailover\(\[primary\]\) === 'local'/)
+    expect(decl).toMatch(/\? 0/)
+    expect(decl).toMatch(/HEDGE_DELAY_SUGGEST_MS/)
+    expect(decl).toMatch(/HEDGE_DELAY_MS/)
     expect(decl).not.toMatch(/cloudflare|anthropic|openai/)
     const timerAt = source.indexOf('startHedgeLeg()', at)
     expect(timerAt).toBeGreaterThan(at)
@@ -78,7 +82,8 @@ describe('local processing privacy boundary', () => {
     // `req.mode === 'answer' && req.wantsScreenContext` so fact-check-on-screen stops being sent zero
     // screen data. The redaction invariant below is what this test exists to protect, and it is
     // independent of which asks reach the block.
-    const start = source.indexOf('req.wantsScreenContext) {')
+    // Must not match the caveman early-return `!req.wantsScreenContext) {` above this block.
+    const start = source.indexOf("if (req.mode === 'answer' && req.wantsScreenContext) {")
     expect(start).toBeGreaterThan(-1)
     const end = source.indexOf('} catch (err) {', start)
     expect(end).toBeGreaterThan(start)
@@ -98,7 +103,7 @@ describe('local processing privacy boundary', () => {
   // "fact-check what's on my screen" reached the model with no screen data at all. The two
   // injections are now siblings: brainContext stays fact-check-excluded, screenContext does not.
   it('injects screen context for fact-check too — only brainContext is fact-check-excluded (MQA-009)', () => {
-    const screenIdx = source.indexOf('req.wantsScreenContext) {')
+    const screenIdx = source.indexOf("if (req.mode === 'answer' && req.wantsScreenContext) {")
     const brainGateIdx = source.indexOf("req.mode === 'answer' && req.kind !== 'factcheck'")
     expect(screenIdx).toBeGreaterThan(-1)
     expect(brainGateIdx).toBeGreaterThan(-1)

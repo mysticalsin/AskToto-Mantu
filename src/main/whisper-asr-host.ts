@@ -88,7 +88,7 @@ async function ensureAsr(): Promise<any> {
   if (asr) return asr
   if (loadingAsr) return loadingAsr
   const mod = loadTransformers()
-  if (!mod || !modelsPath) throw new Error('The bundled transcription files are missing or damaged. Reinstall Métis from a complete installer.')
+  if (!mod || !modelsPath) throw new Error('Could not load the transcription files. Check your connection and try again.')
   const { pipeline, env } = mod
   env.allowLocalModels = true
   const { tier, root } = tierAndRoot(modelsPath)
@@ -109,7 +109,7 @@ async function ensureAsr(): Promise<any> {
       // `local_files_only` wording. The raw reason still reaches the packaged app's log via stderr (the
       // parent pipes this to mainLog.warn — see whisper-import.ts's ensureHost).
       console.error('[whisper-asr-host] model load failed:', e instanceof Error ? e.message : String(e))
-      throw new Error('The bundled transcription files are missing or damaged. Reinstall Métis from a complete installer.')
+      throw new Error('Could not load the transcription files. Check your connection and try again.')
     })
     .finally(() => {
       loadingAsr = null

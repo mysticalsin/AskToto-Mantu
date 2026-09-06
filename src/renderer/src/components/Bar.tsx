@@ -10,23 +10,25 @@ import {
   ChevronLeft,
   AudioLines,
   LayoutGrid,
-  Minimize2,
   FileText,
   Pause,
   Play,
   Square,
-  Plus,
   Brain,
   FileSearch
 } from 'lucide-react'
 import { MantuMark } from './MantuMark'
 import { ModePicker } from './ModePicker'
-import { Spinner } from './ui'
+import { InlineOrb } from './AgentStatus'
 import { modeLabel } from '@shared/ipc'
 import type { ConversationMode, CustomMode } from '@shared/ipc'
 import { formatScreenFreshness } from '@shared/perception'
 import { accelLabel } from '../lib/keys'
 import type { CaptureDegraded } from '../lib/listen'
+import { ObsidianOrb } from './ObsidianOrb'
+import { JarvisOrbButton } from './JarvisOrbButton'
+import { BAR_MARK_SIZE_PX, type OrbMood } from '../lib/bar-pill-orb'
+import { overlayUsesJarvisOrb, type OverlayOrbStyle } from '@shared/overlay-orb'
 
 /** Single source of truth for toolbar icon stroke — prevents per-icon drift. */
 const ICON_STROKE = 1.85
@@ -111,7 +113,7 @@ export const ElapsedClock = memo(function ElapsedClock({
   return (
     <span
       className={[
-        'tabular-nums text-[12px] font-medium',
+        'inline-block min-w-[5ch] tabular-nums text-[12px] font-medium',
         paused ? 'text-[color:var(--color-ink-3)]' : 'text-[color:var(--color-danger)]'
       ].join(' ')}
     >
@@ -185,8 +187,14 @@ export interface BarProps {
   captureAccel: string
   onSettings: () => void
   onHistory: () => void
-  /** Collapse the widget down to the floating control mini-pill. */
+  /** Collapse the widget down to the floating control mini-pill. Bar layout only. */
   onMinimize: () => void
+  /** Hide and Island must not show minimize-to-circle. Default true for isolated Bar tests. */
+  canMinimize?: boolean
+  /** Color language for the docked Bar circle. Idle purple unless a live signal is on the bar. */
+  orbMood?: OrbMood
+  /** Bar rest look. Circle rest minimizes. The docked circle is always Jarvis particles. */
+  orbStyle?: OverlayOrbStyle
   /** When true, the Métis window is hidden from screen capture & sharing (contentProtection). The
    *  eye button toggles this. Separate from Private View (whether Métis captures the user's screen). */
   stealth: boolean
@@ -222,7 +230,8 @@ export interface BarProps {
   onTranscript?: () => void
   /** Whether the live transcript panel is currently shown, so the button label reads Hide vs Show. */
   transcriptShown?: boolean
-  /** Start a fresh meeting from the bar (ends + saves the current one, then begins a new session). */
+  /** Start a fresh meeting (ends + saves the current one). Not rendered on the listening
+   *  toolbar row — that row is already a meeting. Review / History / after Stop keep the action. */
   onNewMeeting?: () => void
   /** When true, calling prewarmCapture() on input focus is permitted (pass visionReady && screenAsk). */
   canPrewarm?: boolean
@@ -245,6 +254,7 @@ function IconTool({
   title,
   onClick,
   onMouseEnter,
+  onMouseDown,
   active,
   danger,
   rainbow,
@@ -261,6 +271,9 @@ function IconTool({
   /** Optional hover hook — used by the Capture tool to pre-warm the OS capture pipeline at the one
    *  moment screen intent is actually signalled (MQA-236: never on text-input focus). */
   onMouseEnter?: () => void
+  /** Optional press hook — re-arms capture prewarm so a click >TTL after hover still shares the
+   *  in-flight single-flight capture instead of paying a cold desktopCapturer round trip. */
+  onMouseDown?: () => void
   active?: boolean
   danger?: boolean
   rainbow?: boolean
@@ -293,6 +306,7 @@ function IconTool({
         disabled={disabled}
         onClick={onClick}
         onMouseEnter={onMouseEnter}
+        onMouseDown={onMouseDown}
         className={[
           'no-drag focus-ring peer grid place-items-center rounded-[10px] p-1 transition-colors duration-[var(--duration-hover)] active:scale-[0.92]',
           rainbow ? 'rainbow-ring' : '',
@@ -566,32 +580,36 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
 
   const toolbarRow = useMemo(
     () => (
-        <div className="aw-toolbar grid grid-cols-[1fr_auto_1fr] items-center border-t border-[var(--color-hair-soft)] px-5 py-1">
-          {/* The Mantu mark IS the logo → opens Settings. (Quit/Hide live in the tray + hotkeys.) */}
+        <div
+          className="aw-toolbar border-t border-[var(--color-hair-soft)]"
+          data-bar-toolbar
+          data-bar-listening={props.listening ? 'true' : 'false'}
+        >
+          {/* The Mantu mark IS the logo → opens Settings. Locked circle: Listen chrome
+              may expand the Bar, but this M must not flatten, stretch, or clip into a bar. */}
           <button
             type="button"
             title="Settings"
             aria-label="Settings"
+            data-bar-mark
             onClick={props.onSettings}
-            className="no-drag focus-ring block flex-none justify-self-start rounded-[10px]"
+            className="aw-bar-mark no-drag focus-ring"
           >
-            <span className="aw-mark-glow block rounded-[10px]">
-              <MantuMark size={30} />
+            <span className="aw-bar-mark__disk aw-mark-glow">
+              <MantuMark size={BAR_MARK_SIZE_PX} round />
             </span>
           </button>
 
-          {/* Centered tools — the grid's auto middle track. While listening, the timer/pause/stop slot on
-              the right is mirrored by an equal-width spacer on the left, so the icons stay put when a
-              meeting starts AND the group's midpoint stays on the window's centerline (a one-sided slot
-              dragged the whole cluster ~58px left of center). Idle, neither side renders. */}
-          <div className="flex min-w-0 items-center justify-center gap-4">
-            {props.listening && <span aria-hidden className="w-[100px] flex-none" />}
+          {/* Icon cluster. No dummy 100px spacer — that stole width and collided with the
+              right reserved slots at production overlay width. Tools flex in leftover space. */}
+          <div className="aw-toolbar__tools" data-bar-tools>
             <IconTool
               title={props.captureAccel ? `Capture screen (${accelLabel(props.captureAccel)})` : 'Capture screen'}
               onClick={props.onCapture}
               onMouseEnter={() => { if (props.canPrewarm) void window.toto.prewarmCapture() }}
+              onMouseDown={() => { if (props.canPrewarm) void window.toto.prewarmCapture() }}
             >
-              {props.capturing ? <Spinner size={19} /> : <Image size={19} strokeWidth={ICON_STROKE} />}
+              {props.capturing ? <InlineOrb kind="working" /> : <Image size={19} strokeWidth={ICON_STROKE} />}
             </IconTool>
             {/* Spotlight Ref stays visible so users can discover it before configuring Dust. The
                 unavailable click path names the required setup instead of silently hiding the tool. */}
@@ -644,8 +662,8 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                 props.stealthLocked
                   ? 'Hidden from screen share: managed by your organization'
                   : props.stealth
-                    ? 'Hidden from screen share — click to make Métis visible'
-                    : 'Visible in screen share — click to hide Métis'
+                    ? 'Hidden from screen share. Click to make Métis visible.'
+                    : 'Visible in screen share. Click to hide Métis.'
               }
               onClick={props.onToggleStealth}
               active={!props.stealth}
@@ -675,13 +693,16 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                 <AudioLines size={19} strokeWidth={ICON_STROKE} />
               )}
             </IconTool>
-            {/* Timer + pause + stop — rendered only while listening, mirrored by the spacer at the
-                cluster's other end so the icons between them never move. */}
+          </div>
+
+          {/* Right reserved slots. Listening is already a meeting: no "+ New meeting" here
+              (that action stays after Stop / on Review / History). Timer + pause own one box. */}
+          <div className="aw-toolbar__actions" data-bar-actions>
             {props.listening && (
-              <div className="flex w-[100px] flex-none items-center gap-2">
+              <div className="aw-toolbar__timer" data-bar-listen-timer>
                   <ElapsedClock startedAt={props.startedAt} paused={props.paused} />
                   {/* Pause suspends capture (mic + system audio stay warm, nothing is finalized/saved) —
-                      distinct from Stop (the danger dot above), which ends the meeting and saves it. */}
+                      distinct from Stop (the danger rec-dot in the tools cluster), which ends the meeting. */}
                   <button
                     type="button"
                     title={props.paused ? 'Resume recording' : 'Pause recording'}
@@ -695,7 +716,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                       <Pause size={16} strokeWidth={ICON_STROKE} />
                     )}
                   </button>
-                  {/* Stop — ends the meeting (recap + save), identical to the rec-dot above; an explicit
+                  {/* Stop — ends the meeting (recap + save), identical to the rec-dot; an explicit
                       square makes "end" discoverable next to Pause instead of hiding behind the dot. */}
                   <button
                     type="button"
@@ -708,51 +729,53 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                   </button>
               </div>
             )}
-          </div>
-
-          {/* Right: History/Transcript pill(s) + Minimize-to-pill + collapse-chevron (ghost).
-              No separate Hide button — global ⌘\ and tray handle that. */}
-          <div className="flex flex-none items-center justify-self-end gap-1.5">
-            {/* Live pivot: New meeting + Transcript when listening, History otherwise */}
             {props.listening ? (
-              <>
                 <button
                   type="button"
-                  title="Save this meeting and start a fresh one"
-                  onClick={props.onNewMeeting}
-                  className="no-drag focus-ring flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-[var(--color-accent-soft)] px-3 py-1.5 text-[13px] font-semibold leading-none text-[color:var(--color-accent-text)] ring-1 ring-inset ring-[var(--color-accent)]/30 transition-colors duration-[var(--duration-hover)] hover:bg-[var(--color-accent)]/25 hover:ring-[var(--color-accent)]/50"
-                >
-                  <Plus size={14} strokeWidth={2.5} />
-                  New meeting
-                </button>
-                <button
-                  type="button"
+                  data-bar-transcript
                   title={props.transcriptShown ? 'Hide the live transcript' : 'Show the live transcript'}
                   onClick={props.onTranscript}
-                  className="no-drag focus-ring mr-0.5 flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-white/[0.05] px-2.5 py-1.5 text-[13px] font-semibold leading-none text-[color:var(--color-ink-2)] transition-colors duration-[var(--duration-hover)] hover:bg-white/[0.1] hover:text-[color:var(--color-ink)]"
+                  className="aw-toolbar__transcript no-drag focus-ring flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full bg-white/[0.05] px-2.5 py-1.5 text-[13px] font-semibold leading-none text-[color:var(--color-ink-2)] transition-colors duration-[var(--duration-hover)] hover:bg-white/[0.1] hover:text-[color:var(--color-ink)]"
                 >
                   <FileText size={13} strokeWidth={ICON_STROKE} />
-                  Transcript
+                  <span className="aw-toolbar__transcript-copy">Transcript</span>
                 </button>
-              </>
             ) : (
               <button
                 type="button"
+                data-bar-history
                 onClick={props.onHistory}
-                className="no-drag focus-ring mr-0.5 flex items-center gap-1.5 rounded-full bg-white/[0.05] px-3 py-1.5 text-[13px] font-semibold text-[color:var(--color-ink-2)] transition-colors duration-[var(--duration-hover)] hover:bg-white/[0.1] hover:text-[color:var(--color-ink)]"
+                className="no-drag focus-ring flex items-center gap-1.5 rounded-full bg-white/[0.05] px-3 py-1.5 text-[13px] font-semibold text-[color:var(--color-ink-2)] transition-colors duration-[var(--duration-hover)] hover:bg-white/[0.1] hover:text-[color:var(--color-ink)]"
               >
                 History
                 <ChevronDown size={13} strokeWidth={ICON_STROKE} />
               </button>
             )}
-            <IconTool title="Minimize to a small pill" onClick={props.onMinimize} edgeRight>
-              <Minimize2 size={17} strokeWidth={ICON_STROKE} />
-            </IconTool>
+            {props.canMinimize !== false ? (
+              overlayUsesJarvisOrb('bar', props.orbStyle) ? (
+                <ObsidianOrb
+                  orbMood={props.orbMood ?? 'idle'}
+                  listening={props.listening}
+                  title="Minimize to the orb"
+                  ariaLabel="Minimize to the orb"
+                  onActivate={props.onMinimize}
+                />
+              ) : (
+                <JarvisOrbButton
+                  orbMood={props.orbMood ?? 'idle'}
+                  listening={props.listening}
+                  title="Minimize to the orb"
+                  ariaLabel="Minimize to the orb"
+                  onActivate={props.onMinimize}
+                />
+              )
+            ) : null}
             {/* Collapse-chevron: plain ghost, not aw-fill. Submit is the only accent-filled control.
                 Disabled (not hidden, so the toolbar doesn't jump) when there's nothing behind the bar
                 for it to reveal — e.g. idle with no answer/history/settings open. */}
             <button
               type="button"
+              data-bar-chevron
               title={!props.canTogglePanel ? 'Nothing to expand yet' : props.panelOpen ? 'Collapse' : 'Expand'}
               aria-label={props.panelOpen ? 'Collapse' : 'Expand'}
               aria-disabled={!props.canTogglePanel}
@@ -768,7 +791,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
           </div>
         </div>
     ),
-    [props.onSettings, props.listening, props.onCapture, props.capturing, props.captureAccel, props.spotlightReady, props.onSpotlightRef, props.mode, props.customModes, modeOpen, props.thinkingOn, props.onToggleThinking, props.stealth, props.onToggleStealth, props.stealthLocked, props.onToggleListen, props.paused, props.startedAt, props.onTogglePause, props.onNewMeeting, props.transcriptShown, props.onTranscript, props.onHistory, props.onMinimize, props.canTogglePanel, props.panelOpen, props.onTogglePanel]
+    [props.onSettings, props.listening, props.onCapture, props.capturing, props.captureAccel, props.spotlightReady, props.onSpotlightRef, props.mode, props.customModes, modeOpen, props.thinkingOn, props.onToggleThinking, props.stealth, props.onToggleStealth, props.stealthLocked, props.onToggleListen, props.paused, props.startedAt, props.onTogglePause, props.transcriptShown, props.onTranscript, props.onHistory, props.onMinimize, props.canMinimize, props.orbMood, props.orbStyle, props.canTogglePanel, props.panelOpen, props.onTogglePanel]
   )
 
   return (

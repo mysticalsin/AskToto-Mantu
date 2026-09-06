@@ -1,21 +1,13 @@
-import { memo, useEffect, useState } from 'react'
+import { memo, useState } from 'react'
 import { Copy, Check, RefreshCw, FileDown, ShieldCheck, ChevronsDown, ThumbsUp, ThumbsDown, Eye, EyeOff, X } from 'lucide-react'
 import { PROVIDERS, type ProviderId } from '@shared/providers'
 import { isScreenCapturePermissionError, needsAppRelaunchForScreenCapture } from '@shared/screen-capture'
 import { Markdown } from './Markdown'
 import { TextButton } from './ui'
+import { AgentStatus } from './AgentStatus'
 import { useFlash } from '../lib/useFlash'
 import { accelLabel } from '../lib/keys'
-
-function Skeleton(): JSX.Element {
-  return (
-    <div className="flex flex-col gap-2 py-1">
-      <div className="shimmer h-3 w-[72%]" />
-      <div className="shimmer h-3 w-[90%]" />
-      <div className="shimmer h-3 w-[54%]" />
-    </div>
-  )
-}
+import { isOnboardingDemoActive } from '../lib/onboarding-demo-guard'
 
 /** A fact-check verdict: parse a leading "VERDICT: <X>" line; the rest is the bulleted reasoning. */
 const VERDICTS: Record<string, { label: string; chip: string }> = {
@@ -97,29 +89,21 @@ export const Answer = memo(function Answer({
   const [saveError, setSaveError] = useState<string | null>(null)
   const [rated, setRated] = useState<'up' | 'down' | null>(null)
 
-  // Elapsed-time-aware "Thinking…" message. Some providers (Dust) take ~40-48s to first token — the same
-  // static label for that whole window reads as stuck rather than working. Ticks only while the thinking
-  // branch (!text && streaming) is actually showing; resets the moment it isn't, so the next request starts
-  // from 0 rather than inheriting a stale count.
+  // First-token wait. The orb is the liveness signal — no elapsed-time coaching.
   const thinking = !text && streaming
-  const [thinkingSecs, setThinkingSecs] = useState(0)
-  useEffect(() => {
-    if (!thinking) {
-      setThinkingSecs(0)
-      return
-    }
-    const iv = setInterval(() => setThinkingSecs((s) => s + 1), 1000)
-    return () => clearInterval(iv)
-  }, [thinking])
 
   // Record the user's verdict on this answer. Metadata only (rating + kind) → audit log; no content sent.
+  // MQA-278: refuses while the Act 2 onboarding demo is on screen — nothing real should be written
+  // while a scripted, non-real screen is up, whether or not this particular answer's text is tagged.
   const rate = (r: 'up' | 'down'): void => {
+    if (isOnboardingDemoActive()) return
     setRated(r)
     void window.toto.answerFeedback({ rating: r, kind: kind ?? 'answer' })
   }
 
   const saveNote = (): void => {
-    if (!text) return
+    // MQA-278 — same demo-screen refusal as rate() above; see lib/onboarding-demo-guard.ts.
+    if (!text || isOnboardingDemoActive()) return
     // Save the user-facing label (the claim/question), NEVER the engineered prompt scaffold + guard line.
     const noteTitle = label || prompt || ''
     window.toto
@@ -220,15 +204,14 @@ export const Answer = memo(function Answer({
   // answer still says who is working on it.
   const attribution = who ? (
     <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--color-ink-3)]">
-      <span
-        className={`h-1.5 w-1.5 rounded-full bg-[var(--color-accent)]${streaming ? ' animate-pulse' : ''}`}
-      />
-      {/* MQA-269: neutral while streaming. This row re-renders on every failover attempt, so naming the
-          provider mid-stream made the user watch the brand change ("Asking DeepSeek…" → "Asking NVIDIA ·
-          NIM…") — the loudest artefact of a failover that succeeded. The after-the-fact `Answered by`
-          stays: a quiet, honest record of who actually answered is what makes silent failover honest
-          rather than deceptive. */}
-      {streaming ? 'Thinking…' : `Answered by ${who}`}
+      {streaming ? (
+        <AgentStatus kind="working" size="inline" caption />
+      ) : (
+        <>
+          <span className="h-1.5 w-1.5 rounded-full bg-[var(--color-accent)]" />
+          Answered by {who}
+        </>
+      )}
     </div>
   ) : null
 
@@ -332,25 +315,13 @@ export const Answer = memo(function Answer({
     )
   }
   if (thinking) {
-    // Reasoning models (e.g. Kimi Code) think before the first token, and Dust specifically can take
-    // ~40-48s to first token — past ~8s, swap the static label for an elapsed-time count so a long wait
-    // still reads as "working" instead of "stuck". The elapsed counter is what prevents the frozen-
-    // spinner read; the provider name is not.
-    //
-    // MQA-269: no provider name here any more. This label re-renders on every failover attempt, so
-    // naming the brain narrated each hop ("Asking DeepSeek…" → "NVIDIA · NIM is on it") — the wait
-    // stayed the same, only the brand flickered. The finished answer's `Answered by` byline remains the
-    // one attribution surface, after the fact, when it is stable and true.
-    const label = thinkingSecs >= 8 ? `Still working… (${thinkingSecs}s)` : 'Thinking…'
+    // MQA-269: no provider name here. The wait re-renders on every failover attempt; naming the brain
+    // narrated each hop. The finished answer's `Answered by` byline remains the one attribution surface.
     return (
       <div className="fade-up mx-auto max-w-[620px] flex flex-col gap-2">
         {header}
         {notice}
-        <div className="flex items-center gap-1.5 text-[12px] text-[color:var(--color-ink-2)]">
-          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-accent)]" />
-          {label}
-        </div>
-        <Skeleton />
+        <AgentStatus kind="thinking" size="hero" />
       </div>
     )
   }
@@ -388,9 +359,7 @@ export const Answer = memo(function Answer({
           </div>
         ) : kind === 'factcheck' && streaming ? (
           // Hide the raw "VERDICT:" scaffold from view until the verdict word streams in and parses.
-          <div className="flex items-center gap-1.5 text-[12px] text-[color:var(--color-ink-2)]">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-[var(--color-accent)]" /> Checking…
-          </div>
+          <AgentStatus kind="working" size="inline" caption />
         ) : (
           <Markdown>{text}</Markdown>
         )}

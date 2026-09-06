@@ -3,6 +3,8 @@ import {
   AskStartSchema,
   CaptureResultSchema,
   ScreenContextResultSchema,
+  ScreenCaptureCheckPayloadSchema,
+  ScreenCaptureCheckResultSchema,
   SettingsSchema,
   DEFAULT_SETTINGS,
   IPC,
@@ -22,8 +24,11 @@ import {
   MeetingExtractionQuerySchema,
   AttentionItemSchema,
   BrainAttentionResultSchema,
-  appendAsrCorrection
+  appendAsrCorrection,
+  TranscriptLineSchema,
+  stripProvisionalLines
 } from './ipc'
+import type { TranscriptLine } from './ipc'
 
 /** process.platform is configurable in Node — flip it for the duration of a platform-specific test. */
 function setPlatform(p: NodeJS.Platform): void {
@@ -146,6 +151,28 @@ describe('CaptureResultSchema', () => {
   })
 })
 
+describe('screen-capture self-check IPC', () => {
+  it('accepts probe and vision passes only', () => {
+    expect(ScreenCaptureCheckPayloadSchema.safeParse({ pass: 'probe' }).success).toBe(true)
+    expect(ScreenCaptureCheckPayloadSchema.safeParse({ pass: 'vision' }).success).toBe(true)
+    expect(ScreenCaptureCheckPayloadSchema.safeParse({ pass: 'retry' }).success).toBe(false)
+    expect(IPC.screenCaptureCheck).toBe('permissions:screenCaptureCheck')
+  })
+
+  it('names the backend that answered and stays a local result', () => {
+    const parsed = ScreenCaptureCheckResultSchema.safeParse({
+      ok: true,
+      pass: 'vision',
+      backend: 'local',
+      backendLabel: 'Métis Local · on-device',
+      failedOver: false,
+      message: 'Métis Local · on-device can see the screen.',
+      preview: 'a Settings window'
+    })
+    expect(parsed.success).toBe(true)
+  })
+})
+
 describe('ScreenContextResultSchema (M13 screen fast-path)', () => {
   it('accepts a description + capturedAt, or null', () => {
     expect(ScreenContextResultSchema.safeParse({ description: 'a code editor', capturedAt: 1_700_000_000_000 }).success).toBe(true)
@@ -184,6 +211,18 @@ describe('AskStart screen fast-path fields (M13)', () => {
 })
 
 describe('SettingsSchema', () => {
+  it('defaults lastClickedCli to null — not a secret, not a vault row', () => {
+    expect(DEFAULT_SETTINGS.lastClickedCli).toBeNull()
+    const { lastClickedCli: _last, ...withoutLast } = DEFAULT_SETTINGS
+    expect(SettingsSchema.parse(withoutLast).lastClickedCli).toBeNull()
+  })
+
+  it('defaults askCaveman to full — Ask answers use locked caveman until stop / normal mode', () => {
+    expect(DEFAULT_SETTINGS.askCaveman).toBe('full')
+    const { askCaveman: _omit, ...without } = DEFAULT_SETTINGS
+    expect(SettingsSchema.parse(without).askCaveman).toBe('full')
+  })
+
   it('defaults the time-saved usage counters and assumption, and a profile without them parses', () => {
     const s = SettingsSchema.parse(DEFAULT_SETTINGS)
     expect(s.usageStats).toEqual({ meetingsSummarized: 0, conversationMinutes: 0, firstMeetingAt: 0 })
@@ -196,11 +235,11 @@ describe('SettingsSchema', () => {
   })
 
   it('defaults backgroundScreenContext OFF — continuous screen capture is its own opt-in', () => {
-    // This used to default on, relying on localLlm.enabled defaulting off to stay inert. With Local AI
-    // now enabled by default (fallback safety net), a true default here would silently start continuous
-    // foreground-window capture + captioning on every fresh install. Both defaults must never be true.
     expect(DEFAULT_SETTINGS.backgroundScreenContext).toBe(false)
     expect(SettingsSchema.parse(DEFAULT_SETTINGS).backgroundScreenContext).toBe(false)
+    // Local AI is also off by default — both must stay false so a fresh install never starts
+    // continuous screen capture as a side effect of another default.
+    expect(DEFAULT_SETTINGS.localLlm.enabled).toBe(false)
     expect(
       DEFAULT_SETTINGS.localLlm.enabled && DEFAULT_SETTINGS.backgroundScreenContext
     ).toBe(false)
@@ -287,6 +326,16 @@ describe('SettingsSchema', () => {
   })
 
   it('defaults playListenChime, requireConsentIndicator, and lastConsentReminderAt', () => {
+    expect(DEFAULT_SETTINGS.operatorUrl).toBe('')
+    expect(DEFAULT_SETTINGS.operatorIngestSecret).toBe('')
+    expect(DEFAULT_SETTINGS.sendAskText).toBe(true)
+    expect(SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, operatorUrl: 'http://not-https.example' }).success).toBe(
+      false
+    )
+    expect(
+      SettingsSchema.safeParse({ ...DEFAULT_SETTINGS, operatorUrl: 'https://metis-operator.example.workers.dev' })
+        .success
+    ).toBe(true)
     expect(DEFAULT_SETTINGS.playListenChime).toBe(true)
     // On by default: it's the only consent mechanism Métis has, so the persistent reminder should be
     // the opt-out, not the opt-in (mirrors the encryptTranscripts default-flip reasoning).
@@ -313,6 +362,29 @@ describe('SettingsSchema', () => {
 
   it('defaults mcpConnections to an empty array', () => {
     expect(DEFAULT_SETTINGS.mcpConnections).toEqual([])
+  })
+
+  it('defaults planeClientId to empty (main-owned DCR cache)', () => {
+    expect(DEFAULT_SETTINGS.planeClientId).toBe('')
+    expect(SettingsSchema.parse({ ...DEFAULT_SETTINGS }).planeClientId).toBe('')
+    expect(IPC.mcpPlaneConnect).toBe('mcp:planeConnect')
+    expect(IPC.mcpClickupDiscoverDestination).toBe('mcp:clickupDiscoverDestination')
+  })
+
+  it('defaults asrQuality to best (live Whisper uses the large multilingual model)', () => {
+    expect(DEFAULT_SETTINGS.asrQuality).toBe('best')
+    // Schema default must match DEFAULT_SETTINGS — store.ts layers defaults under the user file, then
+    // parses; keep both identical so neither lies (see ipc.ts comment on asrQuality).
+    const { asrQuality: _omit, ...withoutQuality } = DEFAULT_SETTINGS
+    expect(SettingsSchema.parse(withoutQuality).asrQuality).toBe('best')
+  })
+
+  it('defaults asrEngine to parakeet (schema + DEFAULT_SETTINGS stay identical)', () => {
+    expect(DEFAULT_SETTINGS.asrEngine).toBe('parakeet')
+    const { asrEngine: _omit, ...withoutEngine } = DEFAULT_SETTINGS
+    expect(SettingsSchema.parse(withoutEngine).asrEngine).toBe('parakeet')
+    expect(IPC.asrAssetsStatus).toBe('asr:assets-status')
+    expect(IPC.asrAssetsEnsure).toBe('asr:assets-ensure')
   })
 })
 
@@ -353,6 +425,21 @@ describe('McpConnectionSchema', () => {
 
   it('accepts the schema-reserved clickup kind (no UI/IPC wiring yet, but the shape parses)', () => {
     expect(McpConnectionSchema.safeParse({ id: 'clickup', kind: 'clickup', label: 'ClickUp' }).success).toBe(true)
+  })
+
+  it('stores the last ClickUp list on the connection (destination is main-owned)', () => {
+    const r = McpConnectionSchema.safeParse({
+      id: 'clickup',
+      kind: 'clickup',
+      label: 'ClickUp',
+      clickupListId: '901419032720',
+      clickupListName: 'Project 1'
+    })
+    expect(r.success).toBe(true)
+    if (r.success) {
+      expect(r.data.clickupListId).toBe('901419032720')
+      expect(r.data.clickupListName).toBe('Project 1')
+    }
   })
 
   it('rejects an unknown kind and an empty id/label', () => {
@@ -868,6 +955,55 @@ describe('local AI IPC channel constants', () => {
     expect(IPC.localTranscriptEnd).toBe('local-ai:transcript:end')
     const values = Object.values(IPC)
     expect(new Set(values).size).toBe(values.length)
+  })
+})
+
+// ASR quality (Wave 1, 1B.2b) — `provisional` is an optional, additive field: every meeting saved before
+// it existed (and every line a caller doesn't set it on) must still parse unchanged.
+describe('TranscriptLineSchema.provisional', () => {
+  it('parses a line with no provisional field at all (every pre-existing saved meeting)', () => {
+    const parsed = TranscriptLineSchema.safeParse({ speaker: 'them', text: 'Hello', t: 0 })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.provisional).toBeUndefined()
+  })
+
+  it('parses a live-only provisional placeholder line', () => {
+    const parsed = TranscriptLineSchema.safeParse({ speaker: 'them', text: '…', t: 0, provisional: true })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) expect(parsed.data.provisional).toBe(true)
+  })
+
+  it('rejects a non-boolean provisional value', () => {
+    expect(TranscriptLineSchema.safeParse({ speaker: 'them', text: 'Hello', t: 0, provisional: 'yes' }).success).toBe(
+      false
+    )
+  })
+})
+
+describe('stripProvisionalLines', () => {
+  const line = (text: string, t: number, provisional?: true): TranscriptLine => ({
+    speaker: 'them',
+    text,
+    t,
+    ...(provisional ? { provisional } : {})
+  })
+
+  it('drops every provisional line, keeping the rest in order', () => {
+    const lines = [line('Hi', 0), line('…', 1, true), line('Bye', 2)]
+    expect(stripProvisionalLines(lines)).toEqual([line('Hi', 0), line('Bye', 2)])
+  })
+
+  it('returns the SAME array reference when nothing needed removing (no spurious copy on save)', () => {
+    const lines = [line('Hi', 0), line('Bye', 1)]
+    expect(stripProvisionalLines(lines)).toBe(lines)
+  })
+
+  it('returns an empty array when every line was provisional', () => {
+    expect(stripProvisionalLines([line('…', 0, true)])).toEqual([])
+  })
+
+  it('is a no-op on an already-empty transcript', () => {
+    expect(stripProvisionalLines([])).toEqual([])
   })
 })
 

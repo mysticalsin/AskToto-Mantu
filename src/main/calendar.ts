@@ -9,6 +9,7 @@
 import { getGraphToken } from './auth'
 import { auditLog } from './logger'
 import type { CalendarEvent, CalendarTodayResult } from '@shared/ipc'
+import { safeHref } from '@shared/safe-url'
 
 const GRAPH = 'https://graph.microsoft.com/v1.0'
 
@@ -48,6 +49,23 @@ function zonedMidnight(tz: string, ymd: string): Date {
  *  interprets calendarView's startDateTime/endDateTime by the offset carried in the value and is NOT
  *  impacted by Prefer: outlook.timezone — that header only picks the zone of the *response*. Naive bounds
  *  therefore query a UTC day, so a Tokyo user's morning standup falls outside "today". */
+/**
+ * The zone name is renderer-supplied and lands verbatim inside the `Prefer: outlook.timezone="..."` request
+ * header, so it must be an IANA identifier and nothing else: no quotes, no CR/LF, no header-shaped text.
+ * Anything that does not look like one, or that the runtime does not know, falls back to UTC. Fail-safe,
+ * never an error: a bad zone must not cost the user their agenda.
+ */
+const IANA_ZONE = /^[A-Za-z][A-Za-z0-9_+\-]{0,31}(\/[A-Za-z0-9_+\-]{1,32}){0,3}$/
+export function safeTimeZone(tz: unknown): string {
+  if (typeof tz !== 'string' || !tz || !IANA_ZONE.test(tz)) return 'UTC'
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: tz })
+    return tz
+  } catch {
+    return 'UTC'
+  }
+}
+
 function todayBounds(tz: string): { start: string; end: string } {
   const today = new Intl.DateTimeFormat('en-CA', {
     timeZone: tz,
@@ -72,7 +90,7 @@ function toEvent(ev: any): CalendarEvent {
     allDay: !!ev?.isAllDay,
     location: ev?.location?.displayName || undefined,
     online: !!ev?.onlineMeeting?.joinUrl,
-    joinUrl: ev?.onlineMeeting?.joinUrl || undefined,
+    joinUrl: safeHref(ev?.onlineMeeting?.joinUrl) || undefined,
     attendees: Array.isArray(ev?.attendees) ? ev.attendees.length : 0
   }
 }
@@ -81,7 +99,7 @@ export async function calendarToday(tz: string): Promise<CalendarTodayResult> {
   const token = await getGraphToken(['Calendars.Read'])
   if (!token) return { ok: false, needsConsent: true }
 
-  const zone = typeof tz === 'string' && tz ? tz : 'UTC'
+  const zone = safeTimeZone(tz)
 
   try {
     const { start, end } = todayBounds(zone)

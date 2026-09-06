@@ -3,10 +3,16 @@ import type { AskStart } from '@shared/ipc'
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp' }, shell: {} }))
 vi.mock('./auth', () => ({ authStatus: () => ({ email: null, name: null }) }))
+vi.mock('./logger', () => ({ auditLog: vi.fn(), mainLog: { warn: vi.fn(), error: vi.fn() } }))
 
 // Stub the CLI backend so kind='cli' routing can be asserted without spawning a process.
 const cliMock = vi.hoisted(() => ({ runCliStream: vi.fn(() => ({ abort: vi.fn() })) }))
 vi.mock('./cli', () => cliMock)
+
+const operatorAskMock = vi.hoisted(() => ({
+  streamOperatorAsk: vi.fn((_opts: { apiKey: string }) => ({ abort: vi.fn() }))
+}))
+vi.mock('./llm/operator-ask', () => operatorAskMock)
 
 // Anthropic stub whose stream never emits and whose finalMessage never resolves → forces the idle watchdog.
 const anthro = vi.hoisted(() => {
@@ -49,6 +55,26 @@ describe('createStream — routing', () => {
     anthro.ctor.mockClear()
     anthro.stream.on.mockClear()
     anthro.streamFn.mockClear()
+  })
+
+  it('viaOperator never constructs a local Anthropic client or stores a key', () => {
+    operatorAskMock.streamOperatorAsk.mockClear()
+    createStream({
+      providerId: 'anthropic',
+      kind: 'anthropic',
+      apiKey: '',
+      viaOperator: true,
+      operatorTransport: { url: 'https://operator.test', secret: 'ingest-secret' },
+      model: 'claude',
+      temperature: 0.7,
+      system: 'sys',
+      req: req(),
+      handlers: handlers()
+    })
+    expect(operatorAskMock.streamOperatorAsk).toHaveBeenCalledOnce()
+    expect(anthro.ctor).not.toHaveBeenCalled()
+    const passed = operatorAskMock.streamOperatorAsk.mock.calls[0][0]
+    expect(passed.apiKey).toBe('')
   })
 
   it('kind=cli delegates to runCliStream and returns its abort handle', () => {

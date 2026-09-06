@@ -160,9 +160,12 @@ function classifyError(e: unknown, endpointUrl: string, label: string): string {
   if (blob.includes('redirect')) {
     return `${label} redirected ${endpointUrl} somewhere else. Enter the endpoint's final URL instead.`
   }
-  // Unclassified failure shape — never return the raw exception text to the renderer (it may contain
-  // stack-derived detail, internal module paths, or MCP SDK/fetch internals). `raw` is still logged
-  // by the caller's mainLog.warn for diagnostics.
+  // Unclassified failure shape — never return stack traces or module paths. ClickUp tool validation
+  // (invalid parameters, missing list_id) must stay ClickUp's own sentence, not "unknown reason".
+  if (label === 'ClickUp') {
+    const trimmed = raw.replace(/\s+/g, ' ').trim().slice(0, 500)
+    if (trimmed && !/node_modules|at Object\.|at async /.test(trimmed)) return trimmed
+  }
   return `${label} connection failed for an unknown reason. Check the endpoint and API key.`
 }
 

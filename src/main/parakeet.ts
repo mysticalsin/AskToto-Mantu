@@ -5,30 +5,31 @@
  * fails, the renderer silently falls back to Whisper, so this can never break live transcription.
  *
  * The model ships BUNDLED in the app's resources (resources/asr, populated by
- * `npm run fetch-models` before packaging) and loads straight from disk with zero network use — see
- * modelDir() below. Missing assets are a build/package failure; runtime never downloads or extracts a
- * replacement after installation.
+ * `npm run fetch-models` / `npm run dev`'s ensure-asr-assets). If those files are somehow absent,
+ * ensureParakeetModel fetches them into userData — never asks the user to reinstall.
  */
-import { app } from 'electron'
-import { existsSync } from 'node:fs'
+import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { setFlagsFromString } from 'node:v8'
 import { runInNewContext } from 'node:vm'
 import { mainLog } from './logger'
+import {
+  ASR_ASSETS_MISSING,
+  PARAKEET_MODEL_NAME,
+  ensureParakeetAssets,
+  parakeetFilesReady,
+  resolveParakeetDir
+} from './asr-bundled-ensure'
 
-const MODEL_NAME = 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8'
 const SAMPLE_RATE = 16000
 
 /**
  * Return the model directory, preferring the bundled copy shipped inside the app's resources.
- * In packaged builds, resources/asr/<MODEL_NAME> is extracted by electron-builder extraResources.
- * In dev, resources/asr/<MODEL_NAME> lives at the repo root (populated by `npm run fetch-models`).
- * A missing file remains missing so status/ensure can fail closed and expose the packaging defect.
+ * Falls back to a userData copy written by ensureParakeetAssets when the installer or checkout
+ * is missing weights.
  */
 function modelDir(): string {
-  const REPO_ROOT = join(__dirname, '..', '..')
-  const bundledBase = app.isPackaged ? process.resourcesPath : join(REPO_ROOT, 'resources')
-  return join(bundledBase, 'asr', MODEL_NAME)
+  return resolveParakeetDir()
 }
 function modelFiles(): { encoder: string; decoder: string; joiner: string; tokens: string } {
   const d = modelDir()
@@ -40,10 +41,9 @@ function modelFiles(): { encoder: string; decoder: string; joiner: string; token
   }
 }
 
-/** True when all model files are present on disk (engine can be constructed without a download). */
+/** True when all model files are present and are real weights — not Access login HTML. */
 export function parakeetModelReady(): boolean {
-  const f = modelFiles()
-  return existsSync(f.encoder) && existsSync(f.decoder) && existsSync(f.joiner) && existsSync(f.tokens)
+  return parakeetFilesReady(modelDir())
 }
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -84,10 +84,21 @@ export function parakeetAddonError(): string | null {
   return addonLoadError
 }
 
-/** Require the bundled Parakeet payload. Runtime never downloads missing model files. */
-export async function ensureParakeetModel(_onProgress?: (pct: number) => void): Promise<void> {
-  if (parakeetModelReady()) return
-  throw new Error('Bundled Parakeet model assets are missing. Reinstall Métis from a complete installer.')
+/** Require Parakeet weights. Bundled first; otherwise fetch into userData with visible progress.
+ *  Also constructs the recognizer (MQA-285) so first Listen is not a multi-second sherpa load. */
+export async function ensureParakeetModel(onProgress?: (pct: number) => void): Promise<void> {
+  if (!parakeetModelReady()) {
+    await ensureParakeetAssets(onProgress)
+  }
+  if (!parakeetModelReady()) throw new Error(ASR_ASSETS_MISSING)
+  // Best-effort construct so a later Listen click is not a cold sherpa load. Skip stub/tiny
+  // files (unit tests write "ok") — Ort aborts the process on a fake ONNX protobuf.
+  try {
+    const encoder = modelFiles().encoder
+    if (existsSync(encoder) && statSync(encoder).size > 1024) getRecognizer()
+  } catch {
+    /* native probe or missing addon — Listen still falls back to Whisper */
+  }
 }
 
 /** Construct (once) the offline recognizer for the Parakeet transducer model. */
@@ -190,3 +201,5 @@ export function parakeetRelease(): void {
   }
   collectNativeGarbage()
 }
+
+export { PARAKEET_MODEL_NAME }

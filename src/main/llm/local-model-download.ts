@@ -1,10 +1,17 @@
 import { createHash } from 'node:crypto'
-import { createReadStream, createWriteStream, mkdirSync, renameSync, rmSync, statSync, statfsSync } from 'node:fs'
+import { createReadStream, createWriteStream, mkdirSync, renameSync, rmSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { net } from 'electron'
 import { auditLog } from '../logger'
-import { assertRamOk, getModel, modelPaths, type LocalModelDownloadState, type LocalModelFile } from './local-models'
+import {
+  assertRamOk,
+  assertRoomFor,
+  getModel,
+  modelPaths,
+  type LocalModelDownloadState,
+  type LocalModelFile
+} from './local-models'
 
 /**
  * First-run downloader for the Métis Local weights.
@@ -37,53 +44,10 @@ import { assertRamOk, getModel, modelPaths, type LocalModelDownloadState, type L
  * damaged install (MQA-186/187).
  */
 
-/**
- * Spare room demanded on top of the weights themselves.
- *
- * Not padding for its own sake: the transfer writes a `.partial` alongside whatever else the volume is
- * doing, and macOS needs slack for its own bookkeeping. Filling a startup volume to zero does not fail
- * politely — Chromium CHECK()s on a failed write and aborts with SIGTRAP, and the Crashpad handler that
- * would report it dies the same way, so the user sees an app that vanishes with no crash dialog and no
- * log. Observed exactly that on 2026-08-24 with a volume at 98%: three separate Electron binaries and
- * the crash handler itself all died with `brk 0` within seconds of launch. Refusing the download is the
- * only outcome that leaves the machine usable.
- */
-const DISK_HEADROOM_BYTES = 512 * 1024 * 1024
-
-/**
- * Refuse a transfer the volume cannot hold, BEFORE a single byte is written.
- *
- * The module contract above promises that a machine "short on disk simply keeps using the cloud/CLI
- * routes". Nothing enforced that: the only disk check was the post-write size comparison, which is
- * reached AFTER the volume has already been filled. With the weights now 3.58 GB (Qwen3.5 4B, up from
- * 763 MB) that gap stopped being theoretical.
- *
- * Unmeasurable is not the same as insufficient: if statfs throws — an exotic filesystem, a path that
- * vanished between mkdir and here — we proceed rather than block a download that would have worked.
- * The post-write size and SHA-256 checks still catch a truncated result, so failing open here cannot
- * let a bad file be kept.
- */
-function assertRoomFor(bytes: number, dir: string, file: string): void {
-  let freeBytes: number
-  try {
-    const fs = statfsSync(dir)
-    freeBytes = fs.bavail * fs.bsize
-  } catch {
-    return
-  }
-  const needed = bytes + DISK_HEADROOM_BYTES
-  if (freeBytes >= needed) return
-  const gb = (n: number): string => `${(n / 1e9).toFixed(1)} GB`
-  throw new Error(
-    `${file}: not enough free disk space — needs ${gb(needed)} (${gb(bytes)} of weights plus ` +
-      `${gb(DISK_HEADROOM_BYTES)} of headroom) but only ${gb(freeBytes)} is available. ` +
-      `Free up space and reopen Métis; the download retries on the next launch.`
-  )
-}
-
 const REQUEST_TIMEOUT_MS = 60_000
 const IDLE_TIMEOUT_MS = 120_000
 const MAX_ATTEMPTS = 3
+const MAX_REDIRECTS = 8
 
 const IDLE: LocalModelDownloadState = { modelId: null, status: 'idle', progress: 0 }
 
@@ -100,17 +64,15 @@ export function localModelDownloadState(): LocalModelDownloadState {
 }
 
 /**
- * Whether this machine should fetch the ~763 MB of weights at all.
+ * Whether this machine should fetch the on-device weights at all.
  *
- * Two reasons not to, both of which boot used to ignore — it fetched unconditionally (MQA-186):
- *   - Local AI is switched off. The transfer is then pure waste of the user's bandwidth, and the toggle
- *     is the only "not now" the product offers. Callers MUST re-arm on the OFF→ON edge: this module has
- *     no other trigger, so gating without re-arming would strand the user with no path to the weights.
+ * Weights are not in the installer (~730 MB+); the app starts the download whenever it opens so the
+ * model is ready the moment the user turns Local AI on. Local AI `enabled` only controls ROUTING —
+ * never whether bytes are fetched. One remaining reason not to fetch:
  *   - The machine is under the model's RAM floor. assertRamOk refuses every load below it, so the bytes
  *     could never be used; listModels() already reported such a machine `insufficient-ram`.
  */
-export function shouldFetchWeights(modelId: string, localAiEnabled: boolean): boolean {
-  if (!localAiEnabled) return false
+export function shouldFetchWeights(modelId: string): boolean {
   try {
     assertRamOk(modelId)
   } catch {
@@ -139,6 +101,28 @@ async function alreadyValid(path: string, spec: LocalModelFile): Promise<boolean
   return (await sha256Of(path)) === spec.sha256
 }
 
+/**
+ * Hugging Face `resolve/<commit>/` URLs 302 to the Xet/CDN host (us.aws.cdn.hf.co) with a ~1 KB
+ * text/plain body. If Electron `net.fetch` hands back that 302 instead of following it — observed as
+ * HTTP 302 or `server declared 1032 bytes` — the transfer never starts and Settings looks idle. Follow
+ * https Location hops ourselves; a fetch that already landed on 200 is a no-op.
+ */
+async function fetchFollowingRedirects(url: string, signal: AbortSignal): Promise<Response> {
+  let current = url
+  for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+    const res = await net.fetch(current, { signal })
+    if (res.status < 300 || res.status >= 400) return res
+    const loc = res.headers.get('location')
+    if (!loc) return res
+    const next = new URL(loc, current).toString()
+    if (!/^https:\/\//i.test(next)) {
+      throw new Error(`refusing non-https redirect from ${current}`)
+    }
+    current = next
+  }
+  throw new Error(`too many redirects for ${url}`)
+}
+
 async function downloadOne(
   file: 'gguf' | 'mmproj',
   spec: LocalModelFile,
@@ -163,7 +147,7 @@ async function downloadOne(
   arm(REQUEST_TIMEOUT_MS, `${file}: request timeout for ${spec.url}`)
 
   try {
-    const res = await net.fetch(spec.url, { signal: ctrl.signal })
+    const res = await fetchFollowingRedirects(spec.url, ctrl.signal)
     if (!res.ok) throw new Error(`${file}: HTTP ${res.status} for ${spec.url}`)
 
     // Reject on the declared length before writing anything: a redirect to a login/error page or a
@@ -217,6 +201,12 @@ async function downloadOne(
  */
 export function ensureLocalModel(modelId: string): Promise<boolean> {
   if (inFlight) return inFlight
+  // Publish BEFORE the async work so the first localModels:list (Settings / onboarding, same tick as
+  // boot) reads `downloading` instead of idle/`not-downloaded`. A missed first poll used to freeze
+  // Settings on "Not downloaded yet" because it only re-armed while already `downloading`.
+  if (state.status !== 'downloading' || state.modelId !== modelId) {
+    state = { modelId, status: 'downloading', progress: 0 }
+  }
   inFlight = run(modelId).finally(() => {
     inFlight = null
   })
@@ -227,7 +217,10 @@ async function run(modelId: string): Promise<boolean> {
   let entry
   try {
     entry = getModel(modelId)
-  } catch {
+    assertRamOk(modelId)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    state = { modelId, status: 'failed', progress: 0, error: message }
     return false
   }
   const paths = modelPaths(modelId)
@@ -238,8 +231,13 @@ async function run(modelId: string): Promise<boolean> {
 
   const totalBytes = files.reduce((sum, f) => sum + f.spec.bytes, 0)
   let received = 0
-  const publish = (status: LocalModelDownloadState['status']): void => {
-    state = { modelId, status, progress: totalBytes ? Math.min(1, received / totalBytes) : 0 }
+  const publish = (status: LocalModelDownloadState['status'], error?: string): void => {
+    state = {
+      modelId,
+      status,
+      progress: totalBytes ? Math.min(1, received / totalBytes) : 0,
+      ...(status === 'failed' && error ? { error } : {})
+    }
   }
 
   const missing = []
@@ -277,16 +275,17 @@ async function run(modelId: string): Promise<boolean> {
       }
     }
     if (!ok) {
+      const error = lastErr instanceof Error ? lastErr.message : String(lastErr)
       auditLog('local.model.download_fail', {
         modelId,
         file: f.key,
-        error: lastErr instanceof Error ? lastErr.message : String(lastErr)
+        error
       })
       // Held at 'failed' rather than reset, because this is what Settings now reads: the card says the
       // fetch could not complete and names what has to be reachable, instead of the old "the bundled
       // model files are missing or incomplete — reinstall Métis", which no installer can satisfy
       // (MQA-187/191).
-      publish('failed')
+      publish('failed', error)
       return false
     }
   }

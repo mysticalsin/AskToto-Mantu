@@ -72,8 +72,8 @@ node scripts/restore.mjs --url https://<new-host> --token <ADMIN_TOKEN> \
 ```
 
 The new server snapshots its (empty) store first, validates the payload, and
-replaces everything atomically. Verify: `GET /health` shows the right
-`licenseCount`, dashboard shows the licenses.
+replaces everything atomically. Verify: `GET /admin/stats` (or `/metrics`)
+shows the right license count, dashboard shows the licenses.
 
 **From an option C tarball (before first start):**
 
@@ -95,7 +95,8 @@ then future moves are a DNS change and nobody touches an app setting.
 
 ## Step 5 — Confirm, then retire the old box
 
-- `GET /health` on the new host: correct `licenseCount`.
+- `GET /health` on the new host returns `ok: true`. Confirm the restored
+  count via `GET /admin/stats` or token-gated `/metrics`.
 - Dashboard Analytics tab: "Last backup" populates within a minute of boot
   (the startup snapshot) — automatic backups are live on the new host.
 - If webhooks are configured: create + delete a throwaway test license and

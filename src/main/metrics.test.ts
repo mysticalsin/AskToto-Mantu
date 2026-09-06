@@ -79,5 +79,17 @@ describe('aggregateMetrics', () => {
     expect(m.tokensIn).toBe(0)
     expect(m.tokensOut).toBe(0)
     expect(m.byProvider).toEqual({})
+    expect(m.brainConsolidationPasses).toBe(0)
+  })
+
+  // Wave 3: the QUALITY-SCORECARD's "Brain LLM consolidations / active day" reads this off the audit
+  // log, distinct from the per-meeting provider.request counts above.
+  it('counts brain.consolidation events independent of provider request/failure counts', () => {
+    const records: AuditRecord[] = [
+      { event: 'brain.consolidation' },
+      { event: 'provider.request', provider: 'anthropic' },
+      { event: 'brain.consolidation' }
+    ]
+    expect(aggregateMetrics(records).brainConsolidationPasses).toBe(2)
   })
 })

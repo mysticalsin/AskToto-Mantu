@@ -1,7 +1,8 @@
 import { readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { exciseDeletedMeeting } from './brain/ingest'
 import { join, basename } from 'node:path'
-import { resolveMeetingsFolder, decodeSaved, isEncryptedFile, writeSaved, formatTranscript, DEBRIEF_HEADING } from './transcripts'
+import { safeMeetingBasename } from './meeting-path'
+import { resolveMeetingsFolder, decodeSaved, isEncryptedFile, writeSaved, formatTranscript, DEBRIEF_HEADING, readSavedFile } from './transcripts'
 import { getSettings } from './store'
 import { detectLanguage } from '@shared/lang-id'
 import type { MeetingSummary, RecallHit, RecallReadResult, Settings, TranscriptLine } from '@shared/ipc'
@@ -184,6 +185,32 @@ async function readMeetingUncached(path: string, file: string): Promise<Read | n
   }
 }
 
+/** Recap body is missing or blank. Used by the solid Intelligence pass to write summaries that never landed. */
+export function meetingTextNeedsRecap(text: string): boolean {
+  if (!text.trim()) return true
+  const startMatch = text.match(/^## Notes & follow-ups[\r\n]+/m)
+  if (!startMatch) return true
+  const afterStart = text.slice(startMatch.index! + startMatch[0].length)
+  const endIdx = afterStart.search(/^## Full transcript/m)
+  const recap = (endIdx === -1 ? afterStart : afterStart.slice(0, endIdx)).trim()
+  return recap.length === 0
+}
+
+export async function listMeetingsNeedingRecap(): Promise<Array<{ file: string; mode: string; lines: TranscriptLine[] }>> {
+  const folder = resolveMeetingsFolder(getSettings())
+  const files = await meetingFiles(folder)
+  const out: Array<{ file: string; mode: string; lines: TranscriptLine[] }> = []
+  for (const f of files) {
+    const read = await readMeeting(folder, f)
+    if (!read || read.sum.locked) continue
+    if (!meetingTextNeedsRecap(read.text)) continue
+    const parsed = await recallRead(f)
+    if (!parsed.ok || !parsed.lines?.length) continue
+    out.push({ file: f, mode: parsed.mode || read.sum.mode || 'meeting', lines: parsed.lines })
+  }
+  return out
+}
+
 /** Newest-first list of saved meetings. */
 export async function listMeetings(): Promise<MeetingSummary[]> {
   const folder = resolveMeetingsFolder(getSettings())
@@ -202,8 +229,8 @@ export async function listMeetings(): Promise<MeetingSummary[]> {
 export async function recallRead(file: string): Promise<RecallReadResult> {
   const folder = resolveMeetingsFolder(getSettings())
   // basename blocks path traversal (mirrors the recallOpen guard in index.ts).
-  const safeName = basename(file)
-  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+  const safeName = safeMeetingBasename(file)
+  if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
   const fullPath = join(folder, safeName)
@@ -313,8 +340,8 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
  */
 export async function deleteMeeting(file: string): Promise<{ ok: boolean; error?: string }> {
   const folder = resolveMeetingsFolder(getSettings())
-  const safeName = basename(file) // block traversal
-  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+  const safeName = safeMeetingBasename(file)
+  if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
   const fullPath = join(folder, safeName)
@@ -375,8 +402,8 @@ export async function renameMeeting(
   newTitle: string
 ): Promise<{ ok: boolean; error?: string }> {
   const folder = resolveMeetingsFolder(settings)
-  const safeName = basename(file) // block traversal
-  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+  const safeName = safeMeetingBasename(file)
+  if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
   const title = sanitizeRenameTitle(newTitle)
@@ -480,8 +507,8 @@ export async function updateMeetingRecap(
   newRecap: string
 ): Promise<{ ok: boolean; error?: string }> {
   const folder = resolveMeetingsFolder(settings)
-  const safeName = basename(file) // block traversal
-  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+  const safeName = safeMeetingBasename(file)
+  if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
 
@@ -556,8 +583,8 @@ export async function updateMeetingTranscript(
   lines: TranscriptLine[]
 ): Promise<{ ok: boolean; error?: string }> {
   const folder = resolveMeetingsFolder(settings)
-  const safeName = basename(file) // block traversal
-  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+  const safeName = safeMeetingBasename(file)
+  if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
 
@@ -618,8 +645,8 @@ export async function setMeetingCrmPushed(
   key: string
 ): Promise<{ ok: boolean; error?: string }> {
   const folder = resolveMeetingsFolder(settings)
-  const safeName = basename(file) // block traversal
-  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+  const safeName = safeMeetingBasename(file)
+  if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
   // The fingerprint is written into a YAML scalar, so it must not be able to carry a newline or a colon
@@ -670,8 +697,8 @@ export async function setMeetingConfidential(
   confidential: boolean
 ): Promise<{ ok: boolean; error?: string }> {
   const folder = resolveMeetingsFolder(settings)
-  const safeName = basename(file) // block traversal
-  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+  const safeName = safeMeetingBasename(file)
+  if (!safeName) {
     return { ok: false, error: 'Invalid meeting file name.' }
   }
 
@@ -711,6 +738,31 @@ export async function setMeetingConfidential(
     return { ok: false, error: 'Could not save the confidential flag.' }
   }
   return { ok: true }
+}
+
+/**
+ * Disk-backed confidential check for MCP push (Wave 4 defense-in-depth). The renderer already gates
+ * on its local flag, but a buggy/compromised UI could omit `args.confidential` — main must re-read
+ * frontmatter. Unreadable / undecryptable / missing frontmatter fails CLOSED (same as publish MQA-077):
+ * treat as confidential so nothing leaves the device.
+ */
+export function isMeetingConfidentialOnDisk(settings: Settings, file: string): boolean {
+  const safeName = basename(file)
+  if (!safeName || !safeName.endsWith('.md') || safeName === 'index.md' || safeName === 'README.md') {
+    return true
+  }
+  const fullPath = join(resolveMeetingsFolder(settings), safeName)
+  let text: string
+  try {
+    text = readSavedFile(fullPath)
+  } catch {
+    return true // missing / unreadable — fail closed
+  }
+  if (!text) return true
+  const fmMatch = text.match(/^---\n([\s\S]*?)\n---/)
+  if (!fmMatch) return true
+  const m = fmMatch[1].match(/^confidential:\s*(.*)\s*$/m)
+  return !!m && /^"?true"?$/i.test(m[1].trim())
 }
 
 // Every file Métis itself writes into the meetings folder carries one of these frontmatter types (see

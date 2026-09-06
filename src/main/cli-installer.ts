@@ -30,15 +30,18 @@
  * commonly carry — so those do not break extraction of the regular files/dirs we actually need.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { delimiter, dirname, isAbsolute, join, relative } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import { createHash, randomBytes } from 'node:crypto'
+import { spawn } from 'node:child_process'
 import { app } from 'electron'
-
-function errMsg(e: unknown): string {
-  return e instanceof Error ? e.message : String(e)
-}
+import { ensureManagedNode, resolveManagedNode } from './managed-node'
+import {
+  NPM_MISSING_NODE_ERROR,
+  humanizeNpmInstallError,
+  npmInstallLooksLikeMissingBinary
+} from '@shared/managed-npm'
 
 // ─── Public types ──────────────────────────────────────────────────────────────────
 
@@ -51,9 +54,11 @@ export interface CliInstallProgress {
 }
 
 export interface ManagedCliSpec {
-  id: 'claude' | 'codex'
+  id: 'claude' | 'codex' | 'dust'
   npmPackage: string
   binRelPath: string
+  /** Dust CLI is ESM + node_modules (keytar). Claude/Codex ship a self-contained JS entry. */
+  needsNpmInstall?: boolean
 }
 
 export type ManagedCliId = ManagedCliSpec['id']
@@ -71,6 +76,12 @@ export const MANAGED_CLIS: Record<ManagedCliId, ManagedCliSpec> = {
     // tarball once it's available — this mirrors claude's single-JS-entry layout but codex's bin
     // layout hasn't been verified directly.
     binRelPath: 'bin/codex.js'
+  },
+  dust: {
+    id: 'dust',
+    npmPackage: '@dust-tt/dust-cli',
+    binRelPath: 'dist/index.js',
+    needsNpmInstall: true
   }
 }
 
@@ -370,6 +381,14 @@ export async function installManagedCli(
       )
     }
 
+    if (spec.needsNpmInstall) {
+      throwIfAborted()
+      onProgress({ phase: 'extracting' })
+      // Dust CLI's production deps include keytar — need official Node, not Electron-as-node.
+      await ensureManagedNode()
+      await npmInstallProduction(join(tmpDir, 'package'), signal)
+    }
+
     throwIfAborted()
     rmSync(versionDir, { recursive: true, force: true }) // clear any stale prior extraction at this version
     renameSync(tmpDir, versionDir)
@@ -389,22 +408,45 @@ export async function installManagedCli(
       }
     }
     const cancelled = isCancellation(err, signal)
-    const message = cancelled ? 'cancelled' : errMsg(err)
+    const message = cancelled ? 'cancelled' : humanizeNpmInstallError(err)
     onProgress({ phase: 'error', error: message })
-    throw cancelled ? new Error('cancelled') : err instanceof Error ? err : new Error(message)
+    throw cancelled ? new Error('cancelled') : new Error(message)
   }
 }
 
 // ─── Reading back an installed CLI ──────────────────────────────────────────────────
 
+/**
+ * True only when `entry` is the real managed script for `id`: an absolute path under this id's
+ * install root, ending at the spec's binRelPath, and a non-empty regular file. existsSync alone is
+ * not enough — a leftover current.json can point at the install directory (`/tmp`, userData) or an
+ * empty stub; resolveBin then treats that as installed, checkCliSession never returns `missing`,
+ * and Settings shows "unknown" instead of "not installed".
+ */
+export function managedEntryIsRunnable(id: ManagedCliId, entry: string): boolean {
+  if (!entry || !isAbsolute(entry)) return false
+  const root = installRoot(id)
+  const rel = relative(root, entry)
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return false
+  const posixEntry = entry.replace(/\\/g, '/')
+  if (!posixEntry.endsWith(MANAGED_CLIS[id].binRelPath)) return false
+  try {
+    const st = statSync(entry)
+    if (!st.isFile() || st.size === 0) return false
+  } catch {
+    return false
+  }
+  return true
+}
+
 /** The currently-installed entry for `id`, or null if never installed / current.json is missing,
- *  malformed, or points at a file that no longer exists on disk. */
+ *  malformed, or points at a path that is not a real runnable entry script. */
 export function managedCliEntry(id: ManagedCliId): { entry: string; version: string } | null {
   try {
     const raw = readFileSync(currentJsonPath(id), 'utf8')
     const parsed = JSON.parse(raw) as Partial<CurrentPointer>
     if (typeof parsed.version !== 'string' || typeof parsed.entry !== 'string') return null
-    if (!existsSync(parsed.entry)) return null
+    if (!managedEntryIsRunnable(id, parsed.entry)) return null
     return { entry: parsed.entry, version: parsed.version }
   } catch {
     return null
@@ -414,13 +456,161 @@ export function managedCliEntry(id: ManagedCliId): { entry: string; version: str
 /** The { command, args, env } to spawn `id`'s managed CLI, or null if it isn't installed. Runs Electron's
  *  own binary (process.execPath) as the interpreter: ELECTRON_RUN_AS_NODE='1' makes Electron boot as a
  *  plain Node.js runtime (its bundled Node core, currently >=22) instead of Electron/Chromium, so the JS
- *  entry point runs exactly as it would under a system `node` — without the user ever installing one. */
+ *  entry point runs exactly as it would under a system `node` — without the user ever installing one.
+ *  Dust uses a vendored portable Node when present so keytar's native addon can load. */
 export function managedCliCommand(id: ManagedCliId): { command: string; args: string[]; env: Record<string, string> } | null {
   const found = managedCliEntry(id)
   if (!found) return null
+  if (id === 'dust') {
+    const portable = resolveManagedNode()
+    if (portable) {
+      return { command: portable.node, args: [found.entry], env: {} }
+    }
+  }
   return {
     command: process.execPath,
     args: [found.entry],
     env: { ELECTRON_RUN_AS_NODE: '1' }
   }
+}
+
+const NPM_INSTALL_ARGS = ['install', '--omit=dev', '--no-fund', '--no-audit'] as const
+
+export class ManagedNpmMissingError extends Error {
+  constructor(message: string = NPM_MISSING_NODE_ERROR) {
+    super(message)
+    this.name = 'ManagedNpmMissingError'
+  }
+}
+
+const SPAWN_ENV_ALLOW = new Set([
+  'PATH',
+  'PATHEXT',
+  'SYSTEMROOT',
+  'WINDIR',
+  'SYSTEMDRIVE',
+  'COMSPEC',
+  'TEMP',
+  'TMP',
+  'HOME',
+  'USERPROFILE',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TZ',
+  'PROCESSOR_ARCHITECTURE',
+  'NUMBER_OF_PROCESSORS'
+])
+
+/** Drop secrets from the parent env. npm only needs a short OS allow-list. */
+export function sanitizedSpawnEnv(base: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(base)) {
+    if (!v) continue
+    if (SPAWN_ENV_ALLOW.has(k) || SPAWN_ENV_ALLOW.has(k.toUpperCase())) out[k] = v
+  }
+  return out
+}
+
+/** Official Node: win32 `node.exe` sits next to `node_modules/npm`; darwin/linux `bin/node` uses `../lib`. */
+export function resolveNpmCliJs(
+  nodePath: string,
+  exists: (p: string) => boolean = existsSync
+): string | null {
+  const dir = dirname(nodePath)
+  const parent = dirname(dir)
+  const candidates = [
+    join(dir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    join(parent, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    join(dir, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    join(parent, 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  ]
+  return candidates.find((p) => exists(p)) ?? null
+}
+
+function withNodeOnPath(env: Record<string, string>, nodePath: string): Record<string, string> {
+  const dir = dirname(nodePath)
+  const existing = env.PATH || env.Path || ''
+  const next = existing ? `${dir}${delimiter}${existing}` : dir
+  env.PATH = next
+  if (process.platform === 'win32') env.Path = next
+  return env
+}
+
+/**
+ * Always spawn the Node binary + npm-cli.js. Never the `bin/npm` shebang (#!/usr/bin/env node)
+ * and never a PATH `npm`. Electron GUI PATH has no node: that was exit 127.
+ */
+export function planNpmInstallSpawn(input: {
+  portableNode: string | null
+  execPath: string
+  exists?: (p: string) => boolean
+}): { command: string; args: string[]; env: Record<string, string> } {
+  const exists = input.exists ?? existsSync
+  if (input.portableNode && exists(input.portableNode)) {
+    const npmCli = resolveNpmCliJs(input.portableNode, exists)
+    if (!npmCli) throw new ManagedNpmMissingError()
+    return { command: input.portableNode, args: [npmCli, ...NPM_INSTALL_ARGS], env: {} }
+  }
+  const npmCli = resolveNpmCliJs(input.execPath, exists)
+  if (!npmCli) throw new ManagedNpmMissingError()
+  return { command: input.execPath, args: [npmCli, ...NPM_INSTALL_ARGS], env: { ELECTRON_RUN_AS_NODE: '1' } }
+}
+
+export function npmInstallProductionSpawn(): { command: string; args: string[]; env: Record<string, string> } {
+  const portable = resolveManagedNode()
+  return planNpmInstallSpawn({
+    portableNode: portable?.node ?? null,
+    execPath: process.execPath
+  })
+}
+
+/** Local `npm install --omit=dev` inside the extracted package — not `npm i -g`, not a system Node. */
+export function npmInstallProduction(packageDir: string, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    let spec: { command: string; args: string[]; env: Record<string, string> }
+    try {
+      spec = npmInstallProductionSpawn()
+    } catch (err) {
+      reject(err instanceof Error ? err : new ManagedNpmMissingError())
+      return
+    }
+    const env = withNodeOnPath({ ...sanitizedSpawnEnv(), CI: '1', ...spec.env }, spec.command)
+    const child = spawn(spec.command, spec.args, {
+      cwd: packageDir,
+      env,
+      windowsHide: true,
+      stdio: 'ignore'
+    })
+    const onAbort = (): void => {
+      child.kill('SIGTERM')
+      reject(new CliInstallAbortError())
+    }
+    signal?.addEventListener('abort', onAbort)
+    child.once('error', (err) => {
+      signal?.removeEventListener('abort', onAbort)
+      reject(
+        npmInstallLooksLikeMissingBinary(null, err)
+          ? new Error(humanizeNpmInstallError(err))
+          : err
+      )
+    })
+    child.once('close', (code) => {
+      signal?.removeEventListener('abort', onAbort)
+      if (signal?.aborted) {
+        reject(new CliInstallAbortError())
+        return
+      }
+      if (code !== 0) {
+        const raw = `npm install --omit=dev failed in ${packageDir} (exit ${code})`
+        reject(new Error(npmInstallLooksLikeMissingBinary(code) ? humanizeNpmInstallError(new Error(raw)) : raw))
+        return
+      }
+      resolve()
+    })
+  })
 }
