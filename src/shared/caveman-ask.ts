@@ -15,8 +15,9 @@ export const ASK_CAVEMAN_LEVELS = [
 ] as const
 
 export type AskCavemanLevel = (typeof ASK_CAVEMAN_LEVELS)[number]
+export type AskCavemanIntensity = Exclude<AskCavemanLevel, 'off'>
 
-export const DEFAULT_ASK_CAVEMAN: AskCavemanLevel = 'full'
+export const DEFAULT_ASK_CAVEMAN: AskCavemanIntensity = 'full'
 
 export function isAskCavemanLevel(value: unknown): value is AskCavemanLevel {
   return typeof value === 'string' && (ASK_CAVEMAN_LEVELS as readonly string[]).includes(value)
@@ -91,7 +92,7 @@ export interface AppliedCaveman {
   /** Persisted register after this turn's command, or the current session value. */
   next: AskCavemanLevel
   enabled: boolean
-  intensity: Exclude<AskCavemanLevel, 'off'>
+  intensity: AskCavemanIntensity
   dropClarity: boolean
   changed: boolean
 }
@@ -107,7 +108,7 @@ export function applyCaveman(
   const parsed = parseCavemanAskPrompt(rawPrompt)
   const next = parsed.next ?? current
   const enabled = next !== 'off'
-  const intensity = (enabled ? next : DEFAULT_ASK_CAVEMAN) as Exclude<AskCavemanLevel, 'off'>
+  const intensity: AskCavemanIntensity = next === 'off' ? DEFAULT_ASK_CAVEMAN : next
   return {
     visiblePrompt: parsed.visiblePrompt,
     next,
