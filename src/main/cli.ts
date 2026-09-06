@@ -956,7 +956,7 @@ export async function connectCliSession(provider: ProviderId): Promise<CliAction
       version: detected.version,
       error:
         session === 'weekly-limit'
-          ? `${label} is signed in. Weekly usage limit reached — this is not disconnected. Asks wait until the cap resets.`
+          ? `${label} is signed in. Weekly usage limit reached, this is not disconnected. Asks wait until the cap resets.`
           : undefined
     }
   }
