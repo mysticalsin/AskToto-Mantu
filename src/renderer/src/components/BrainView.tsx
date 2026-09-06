@@ -41,6 +41,7 @@ import { brainStatusPollInterval, shouldRefreshAfterBrainStatus } from './brain-
 import { describeMeetingIndexProgress } from './work-progress'
 import { IntelligenceUpdateButton } from './IntelligenceUpdateButton'
 import { NO_PROVIDER_INDEX_COPY, runIntelligenceUpdateClick } from '../lib/intelligence-update'
+import { startIntelligenceUpdateFromClick } from '@shared/intelligence-pass'
 
 /**
  * Mantu Intelligence — the second-brain dashboard over the meeting knowledge store (.brain/).
@@ -636,6 +637,19 @@ export function BrainView({
     }
   }, [refresh])
 
+  const runIntelligencePass = useCallback(async (): Promise<void> => {
+    setBackfilling(true)
+    try {
+      await startIntelligenceUpdateFromClick({
+        runPass: () => window.toto.brainIntelligencePass(),
+        refresh,
+        setError
+      })
+    } finally {
+      setBackfilling(false)
+    }
+  }, [refresh])
+
   // Existing meetings used to wait indefinitely for a manual "Index meetings" click. New saves already
   // enqueue themselves in the main process; this covers the backlog when the in-app Intelligence view is
   // opened and keeps the manual button as an explicit retry/recovery path.
@@ -805,7 +819,7 @@ export function BrainView({
         <IntelligenceUpdateButton
           updating={backfilling || statusWorking}
           disabled={backfilling}
-          onClick={() => void startBackfill()}
+          onClick={() => void runIntelligencePass()}
         />
       </div>
 
@@ -905,7 +919,7 @@ export function BrainView({
             variant="accent"
             updating={backfilling || statusWorking}
             disabled={backfilling || meetings.length === 0}
-            onClick={() => void startBackfill()}
+            onClick={() => void runIntelligencePass()}
           />
           {/* canIndex ORs in localFallbackReady — a local-only setup already indexes fine, so this must
               only claim "no provider" when NEITHER a cloud provider NOR the local safety net is live. */}
