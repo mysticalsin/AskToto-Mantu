@@ -242,6 +242,7 @@ export const IPC = {
   licenseActivate: 'license:activate',
   licenseStatus: 'license:status',
   licenseGate: 'license:gate',
+  cloudflareConnect: 'cloudflare:connect',
   identitySnapshot: 'identity:snapshot',
   memberLicenseActivate: 'license:memberActivate',
   memberLicenseDeactivate: 'license:memberDeactivate',

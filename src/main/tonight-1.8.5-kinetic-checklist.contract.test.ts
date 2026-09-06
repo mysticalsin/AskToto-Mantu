@@ -84,10 +84,15 @@ describe('1.8.5 KineticGrid tip checklist', () => {
     expect(settings).toMatch(/title="Mantu Intelligence"/)
   })
 
-  it('8 Métis is on the 1.8.5 line; Cloudflare browser-connect is not in Settings', () => {
+  it('8 Métis is on the 1.8.5 line; Cloudflare tile opens Operator OAuth', () => {
     expect(pkg.version).toBe('1.8.5')
-    expect(settings).toMatch(/provider === 'cloudflare'/)
-    expect(settings).toMatch(/Worker endpoint URL/)
+    expect(settings).toMatch(/connectCloudflare/)
+    expect(settings).toMatch(/window\.toto\.cloudflareConnect/)
+    expect(settings).toMatch(/data-cf-aig-connect/)
+    expect(settings).toMatch(/Log in to Cloudflare/)
+    expect(settings).toMatch(/Paste is not the happy path/)
+    expect(settings).not.toMatch(/value=\{settings\.cloudflareBaseUrl\}/)
+    expect(settings).not.toMatch(/Paste the Worker/)
     expect(settings).not.toMatch(/Connect with browser/)
     expect(settings).not.toMatch(/Sign in with Cloudflare/)
     expect(settings).not.toMatch(/cloudflareOAuth/)
