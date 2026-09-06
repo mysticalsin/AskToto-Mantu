@@ -81,6 +81,7 @@ or invented people.
 Live host: `https://metis-operator.tony-walteur.workers.dev/`.
 **Cloudflare Access stays** (302 + email-code; two Tony emails). Thin
 Worker tip only. Do not merge fat PR151. Generate license stays P0.
+EXE/DMG/Native → Latest only after Bob QA + Ultron approve.
 
 ### Shoey → Métis dictionary (do not ship the left column)
 
