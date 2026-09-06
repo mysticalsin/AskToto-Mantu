@@ -111,14 +111,14 @@ export function installEgressGuard(allow: readonly string[] | null, deps: Egress
   }
 
   /** Follow 3xx hops ourselves so every hop's host is checked; undici would follow them unseen. */
-  async function followRedirects(input: RequestInfo | URL, init: RequestInit | undefined): Promise<Response> {
+  async function followRedirects(input: Parameters<typeof fetch>[0], init: RequestInit | undefined): Promise<Response> {
     const first = new Request(input, init)
     let url = first.url
     let method = first.method
     let headers = new Headers(first.headers)
     // A Request-object body is a stream the first hop consumes; keeping it here makes a 307/308 refuse
     // honestly instead of silently resending an empty body.
-    let body: BodyInit | null | undefined = init?.body ?? (input instanceof Request ? input.body : undefined)
+    let body: RequestInit['body'] = init?.body ?? (input instanceof Request ? input.body : undefined)
     const signal = init?.signal ?? first.signal
     let res = await baseFetch(input, { ...init, redirect: 'manual' })
     for (let hop = 0; REDIRECT_STATUS.has(res.status); hop++) {
@@ -201,7 +201,7 @@ export function installEgressGuard(allow: readonly string[] | null, deps: Egress
   }
 }
 
-function bodyReusable(body: BodyInit): boolean {
+function bodyReusable(body: NonNullable<RequestInit['body']>): boolean {
   if (typeof body === 'string') return true
   if (body instanceof URLSearchParams || body instanceof ArrayBuffer || ArrayBuffer.isView(body)) return true
   if (typeof Blob !== 'undefined' && body instanceof Blob) return true
