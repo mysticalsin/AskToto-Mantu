@@ -133,6 +133,26 @@ export function latestReleaseIsOfferable(payload: unknown): boolean {
   return true
 }
 
+/** Filenames a public Latest must carry (EXE + DMG + Native). Publish only after Bob QA + Ultron. */
+export const LATEST_REQUIRED_ASSET_PATTERNS = [
+  /^Metis-\d+\.\d+\.\d+\.dmg$/,
+  /^Metis-Setup-\d+\.\d+\.\d+\.exe$/,
+  /^Metis-Native-\d+\.\d+\.\d+\.zip$/
+] as const
+
+/** True when the GitHub Latest payload lists all three customer installers. */
+export function latestReleaseHasApprovedInstallers(payload: unknown): boolean {
+  if (!payload || typeof payload !== 'object') return false
+  const assets = (payload as { assets?: unknown }).assets
+  if (!Array.isArray(assets)) return false
+  const names = assets.map((a) =>
+    a && typeof a === 'object' && typeof (a as { name?: unknown }).name === 'string'
+      ? (a as { name: string }).name
+      : ''
+  )
+  return LATEST_REQUIRED_ASSET_PATTERNS.every((re) => names.some((n) => re.test(n)))
+}
+
 /** Pure: turn a GitHub "latest release" API payload into an UpdateCheckResult. Exported for tests. */
 export function parseLatestRelease(payload: unknown, current: string): UpdateCheckResult {
   if (!latestReleaseIsOfferable(payload)) {
@@ -224,6 +244,14 @@ export async function startUpdateDownload(): Promise<UpdateDownloadStart> {
   if ((process as NodeJS.Process & { mas?: boolean }).mas) {
     return { started: false, reason: 'Updates for this build come from the App Store.' }
   }
+  // Same GitHub Latest gate as Settings → Check. electron-updater reads latest.yml; this call
+  // refuses draft / prerelease / "not newer" so the button cannot start a download the feed
+  // must not offer. Bob QA + Ultron stamp is what publishes Latest.
+  const feed = await checkForUpdateNow()
+  if (!feed.ok) return { started: false, reason: feed.error }
+  if (!feed.available) {
+    return { started: false, reason: 'No QA-approved update is available.' }
+  }
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { autoUpdater } = require('electron-updater')
@@ -292,6 +320,10 @@ export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
     log.transports.file.level = 'info'
     autoUpdater.autoDownload = true
     autoUpdater.autoInstallOnAppQuit = true
+    // Latest is the only channel. A prerelease or draft must never be offered or installed, even if
+    // someone uploaded latest.yml beside one. QA + Ultron stamp is what makes a tag Latest.
+    autoUpdater.allowPrerelease = false
+    autoUpdater.allowDowngrade = false
     // AppUpdater's own constructor registers a default 'error' listener that unconditionally logs the
     // full stack via its logger, regardless of cause — on a 404 that's a full HttpError stack PLUS our
     // own warn below PLUS the check() rejection below (electron-updater both emits 'error' AND rethrows
