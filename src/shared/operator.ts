@@ -21,23 +21,37 @@ export const DEFAULT_OPERATOR_URL = 'https://metis-operator.tony-walteur.workers
 
 export const CF_CONNECT_PATH = '/cloudflare/connect'
 
+/**
+ * Settings `operatorUrl`, then `METIS_OPERATOR_URL`, then the shipped live Worker.
+ * Empty Settings still resolve to DEFAULT so a fresh seat can heartbeat.
+ * An explicit http(s) value wins, including a local http override.
+ * Trailing slash stripped. Never a secret.
+ */
+export function resolveOperatorUrl(
+  settings: { operatorUrl?: string } | null | undefined = {},
+  env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
+): string {
+  const fromSettings = settings?.operatorUrl?.trim() ?? ''
+  const fromEnv = env.METIS_OPERATOR_URL?.trim() ?? ''
+  return (fromSettings || fromEnv || DEFAULT_OPERATOR_URL).replace(/\/$/, '')
+}
+
 /** HTTPS Operator `/cloudflare/connect`. Null if the base is not https. */
 export function cloudflareConnectHref(
   settings: { operatorUrl?: string } | null | undefined = {},
   env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
 ): string | null {
-  const raw = (settings?.operatorUrl || env.METIS_OPERATOR_URL || DEFAULT_OPERATOR_URL).trim()
+  const raw = resolveOperatorUrl(settings, env)
   if (!/^https:\/\//i.test(raw)) return null
-  return `${raw.replace(/\/$/, '')}${CF_CONNECT_PATH}`
+  return `${raw}${CF_CONNECT_PATH}`
 }
 
-/** True when Settings (or METIS_OPERATOR_URL) points at the Cloudflare Operator Worker. */
+/** True when Settings, METIS_OPERATOR_URL, or the shipped default is an https Operator Worker. */
 export function operatorUrlConfigured(
   settings: { operatorUrl?: string } | null | undefined,
   env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
 ): boolean {
-  const url = (settings?.operatorUrl || env.METIS_OPERATOR_URL || '').trim()
-  return /^https:\/\//i.test(url)
+  return /^https:\/\//i.test(resolveOperatorUrl(settings, env))
 }
 
 /** Ask-text toggle. Default ON once a URL is set; ignored when Operator is off. */
