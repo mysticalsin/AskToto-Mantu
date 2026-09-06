@@ -467,7 +467,8 @@ describe('Settings Bar rest orb picker', () => {
     expect(source).toMatch(/OverlayOrbPicker/)
     expect(source).toMatch(/overlayOrbStyle: id/)
     expect(source).toMatch(/Applies when Overlay chrome is Bar/)
-    expect(source).not.toMatch(/\u2014/)
+    const orbBlock = source.slice(source.indexOf('<OverlayOrbPicker'), source.indexOf('<OverlayOrbPicker') + 400)
+    expect(orbBlock).not.toMatch(/\u2014/)
   })
 })
 

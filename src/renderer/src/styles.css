@@ -1807,7 +1807,10 @@ input::placeholder {
     inset 0 0 0 1.25px rgba(255, 255, 255, 0.72),
     0 0 0 1px rgba(255, 255, 255, 0.12);
 }
-.overlay-orb-diagram {
+.overlay-orb-diagram,
+.overlay-orb-diagram--bar,
+.overlay-orb-diagram--jakub,
+.overlay-orb-diagram--obsidian {
   position: relative;
   height: 52px;
   border-radius: 8px;
