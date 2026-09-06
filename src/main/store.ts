@@ -42,6 +42,7 @@ import {
   useFileBackend
 } from './secrets'
 import { adminManagedConfigPath, readTrustedAdminManaged } from './win-security'
+import { parseEgressAllowlist } from './net/egress-policy'
 // Static (eager) imports — dynamic import() throws under the bytecode-compiled main (electron-vite
 // bytecodePlugin). These SDKs are already eager-loaded by the streaming modules (llm/anthropic|dust|openai),
 // so this adds no startup cost; it just makes the key-test + Dust-agent-list paths bytecode-safe.
@@ -290,6 +291,23 @@ export function getLockedKeys(): string[] {
  * `allowedProviders`. Null = no restriction (all providers allowed). Enforced in the main process before
  * any screen/transcript egress, so a policy can confine data to approved/DPA-backed providers.
  */
+/**
+ * Optional org allowlist of network HOSTS (managed-config `egressAllowlist`, see docs/NETWORK-EGRESS.md).
+ * Null = no restriction, which is every install's behavior unless IT sets the key. Same precedence as
+ * `allowedProviders`: machine (admin) policy wins over the per-user managed file. Enforced at boot by
+ * net/egress-guard.ts on both the main-process fetch and the Chromium session.
+ */
+export function getEgressAllowlist(): string[] | null {
+  const admin = adminManagedContent()
+  const fromAdmin = admin ? parseEgressAllowlist(admin) : null
+  if (fromAdmin) return fromAdmin
+  try {
+    return parseEgressAllowlist(readFileSync(join(dir(), 'managed-config.json'), 'utf8'))
+  } catch {
+    return null
+  }
+}
+
 export function getAllowedProviders(): string[] | null {
   // Machine (admin) policy wins over the per-user managed file, mirroring validatedManaged() precedence.
   // Read from the raw JSON because `allowedProviders` is a policy key, not a settings-schema key.

@@ -524,7 +524,7 @@ const MeetingRow = memo(function MeetingRow({
       ? 'Indexed in Mantu Intelligence'
       : indexStatus === 'failed'
         ? // FIX 4: name the actual reason when it's known, instead of a generic message.
-          `Intelligence extraction failed${indexError ? `: ${indexError}` : ''} — retry from Mantu Intelligence`
+          `Intelligence extraction failed${indexError ? `: ${indexError}` : ''}. Retry from Mantu Intelligence.`
         : 'Queued for Mantu Intelligence indexing'
 
   return (

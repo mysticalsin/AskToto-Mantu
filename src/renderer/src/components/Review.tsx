@@ -612,7 +612,7 @@ export const Review = memo(function Review({
     if (!pushTool) return
     // Wave 4 / QA: confidential meetings never leave the device via MCP — same contract as wiki publish.
     if (confidentialFlag) {
-      setPushState({ phase: 'error', error: 'This meeting is marked confidential — CRM push is blocked.' })
+      setPushState({ phase: 'error', error: 'This meeting is marked confidential. CRM push is blocked.' })
       return
     }
     // Remember the payload that was actually sent — recapText can move on (an edit, a regeneration) while
@@ -834,7 +834,7 @@ export const Review = memo(function Review({
     if (!nextStepsData) return
     if (confidentialFlag) {
       // Same gate as sendToCrm — never enqueue Plane/ClickUp tasks for a confidential meeting.
-      setNextStepsFetchError('This meeting is marked confidential — task push is blocked.')
+      setNextStepsFetchError('This meeting is marked confidential. Task push is blocked.')
       return
     }
     const items = nextStepsData.map((it, i) => ({ item: it, i })).filter(({ i }) => itemChecked[i])
@@ -1310,7 +1310,7 @@ export const Review = memo(function Review({
             // Retry only renders on an error. Offer the action instead of pretending work is in flight.
             <div className="flex items-center justify-between gap-2 py-1">
               <span className="text-[13px] text-[color:var(--color-ink-3)]">
-                No coaching notes yet — nothing was transcribed from this call.
+                No coaching notes yet. Nothing was transcribed from this call.
               </span>
               {coldCall.onRetryCoaching && (
                 <TextButton icon={RotateCcw} onClick={coldCall.onRetryCoaching}>
