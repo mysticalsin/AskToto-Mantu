@@ -111,11 +111,13 @@ export function flash(el: HTMLElement): void {
 }
 
 /**
- * Stagger-in: 40ms per row (plan 3.5), for rows that arrive from a live refresh or a "load
- * older" page. Reduced motion: every row's opacity is set to 1 instantly, no delay, no
+ * Stagger-in: 40ms per row by default (plan 3.5), for rows that arrive from a live refresh or a
+ * "load older" page. Some sections name a different cadence (plan 6.10b: connector rows stagger
+ * in 30ms) -- pass `ms` for those, added after the fact so every existing call keeps its 40ms
+ * default unchanged. Reduced motion: every row's opacity is set to 1 instantly, no delay, no
  * transform -- a batch still "arrives" but without motion.
  */
-export function staggerIn(els: ArrayLike<HTMLElement>): void {
+export function staggerIn(els: ArrayLike<HTMLElement>, ms = 40): void {
   const list = Array.from(els)
   if (reduceMotion()) {
     for (const el of list) el.style.opacity = '1'
@@ -125,7 +127,7 @@ export function staggerIn(els: ArrayLike<HTMLElement>): void {
     animate(
       el,
       { opacity: [0, 1], transform: ['translateY(4px)', 'translateY(0)'] },
-      { duration: 0.3, delay: i * 0.04, ease: EASE_SPRING }
+      { duration: 0.3, delay: (i * ms) / 1000, ease: EASE_SPRING }
     )
   })
 }
@@ -244,12 +246,13 @@ export function drawPath(svgPath: SVGPathElement, ms = 800): void {
  * FLIP reorder/insert (plan 3.5b: live event feeds, "load older", table row inserts). Measures
  * every child of `container` (First), runs `mutate` (which adds/removes/reorders children,
  * Last), then plays each surviving child from its old position to its new one (Invert + Play,
- * spring easing) and fades+rises newly inserted children in, staggered 40ms apart when more
- * than one is new in the same call (plan 3.5b: "table rows stagger in ... on 'Load older'").
- * Reduced motion: `mutate` still runs (the DOM must update either way) but nothing animates --
- * children land at rest instantly.
+ * spring easing) and fades+rises newly inserted children in, staggered `ms` apart (default
+ * 40ms) when more than one is new in the same call (plan 3.5b: "table rows stagger in ... on
+ * 'Load older'"; plan 6.10b names 30ms for the connector list's "Show N more"). Reduced motion:
+ * `mutate` still runs (the DOM must update either way) but nothing animates -- children land at
+ * rest instantly.
  */
-export function flip(container: HTMLElement, mutate: () => void): void {
+export function flip(container: HTMLElement, mutate: () => void, ms = 40): void {
   const before = new Map<Element, DOMRect>()
   for (const el of Array.from(container.children)) before.set(el, el.getBoundingClientRect())
   mutate()
@@ -262,7 +265,7 @@ export function flip(container: HTMLElement, mutate: () => void): void {
       animate(
         el,
         { opacity: [0, 1], transform: ['translateY(4px)', 'translateY(0)'] },
-        { duration: 0.3, delay: newIndex * 0.04, ease: EASE_SPRING }
+        { duration: 0.3, delay: (newIndex * ms) / 1000, ease: EASE_SPRING }
       )
       newIndex++
       continue
