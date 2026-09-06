@@ -1,6 +1,6 @@
 import { PROVIDERS, requiresUserBaseUrl, type ProviderId } from '../../src/shared/providers'
 import { decryptVault } from './crypto'
-import { isApprovedSeat, SEAT_NOT_APPROVED } from './fleet'
+import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
 import { looksLikeSecret } from './redact'
 import type { OperatorStore, VaultKeyRow } from './store'
 import { decodeVaultPlaintext, isForbiddenVaultProvider, isVaultLlmProvider } from './vault'
@@ -221,7 +221,7 @@ export async function handleUse(
   if (!env.OPERATOR_VAULT_KEY) return fail('Operator cannot issue a use', 503)
   const seats = await store.listSeats()
   const seat = seats.find((s) => s.device_id === deviceId)
-  if (!seat || !isApprovedSeat(seat)) return fail(SEAT_NOT_APPROVED, 403)
+  if (!seat || !(await seatAuthorizedForKeys(store, seat, now))) return fail(SEAT_NOT_APPROVED, 403)
   const parsed = parseUseBody(bodyText)
   if (!parsed.ok) return fail(parsed.error, parsed.status)
   const unlocked = await decryptActiveLlmSecret(store, env.OPERATOR_VAULT_KEY, parsed.req.provider)

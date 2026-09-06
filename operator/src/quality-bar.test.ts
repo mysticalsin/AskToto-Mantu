@@ -123,6 +123,18 @@ describe('quality bar: login', () => {
     expect(postLicenses.status).toBe(401)
     expect(await postLicenses.json()).toEqual({ ok: false, error: 'Access required' })
 
+    const postGenerate = await handleRequest(
+      new Request('https://operator.test/v1/admin/licenses/generate', {
+        method: 'POST',
+        body: JSON.stringify({ days: 30 })
+      }),
+      configured,
+      {},
+      { store, now: NOW }
+    )
+    expect(postGenerate.status).toBe(401)
+    expect(await postGenerate.json()).toEqual({ ok: false, error: 'Access required' })
+
     const other = await handleRequest(
       new Request('https://operator.test/v1/admin/summary'),
       env(),

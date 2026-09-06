@@ -1,5 +1,17 @@
 import { type CrmSendRow } from './crm'
 
+export interface IssuedLicenseRow {
+  jti: string
+  last4: string
+  key_hash: string
+  days: number
+  iat: number
+  exp: number
+  revoked: number
+  created_at: number
+  created_by: string | null
+}
+
 export interface SeatRow {
   device_id: string
   seat_hash: string
@@ -16,6 +28,7 @@ export interface SeatRow {
   sso_email: string | null
   license: string | null
   approval?: string | null
+  license_jti?: string | null
 }
 
 export interface EventRow {
@@ -142,6 +155,9 @@ export interface OperatorStore {
   listVaultRows(): Promise<VaultKeyRow[]>
   getVaultKey(id: string): Promise<VaultKeyRow | null>
   putVaultKey(row: VaultKeyRow): Promise<void>
+  putIssuedLicense(row: IssuedLicenseRow): Promise<void>
+  getIssuedLicense(jti: string): Promise<IssuedLicenseRow | null>
+  listIssuedLicenses(): Promise<IssuedLicenseRow[]>
 }
 
 const PULSE_TTL_MS = 8 * 24 * 60 * 60 * 1000
@@ -158,6 +174,7 @@ export function memoryStore(): OperatorStore {
   const audits: { id: string; ts: number; actor: string; action: string; ask_id: string | null; detail: string }[] = []
   const events = new Map<string, EventRow>()
   const vault = new Map<string, VaultKeyRow>()
+  const issued = new Map<string, IssuedLicenseRow>()
 
   return {
     async takeNonce(nonce) {
@@ -189,6 +206,7 @@ export function memoryStore(): OperatorStore {
         hostname: row.hostname ?? prev?.hostname ?? null,
         sso_email: row.sso_email ?? prev?.sso_email ?? null,
         license: row.license ?? prev?.license ?? null,
+        license_jti: row.license_jti ?? prev?.license_jti ?? null,
         approval:
           prev?.approval ??
           row.approval ??
@@ -295,6 +313,15 @@ export function memoryStore(): OperatorStore {
     },
     async putVaultKey(row) {
       vault.set(row.id, row)
+    },
+    async putIssuedLicense(row) {
+      issued.set(row.jti, row)
+    },
+    async getIssuedLicense(jti) {
+      return issued.get(jti) ?? null
+    },
+    async listIssuedLicenses() {
+      return [...issued.values()].sort((a, b) => b.created_at - a.created_at)
     }
   }
 }

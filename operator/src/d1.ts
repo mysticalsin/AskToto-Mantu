@@ -1,5 +1,15 @@
 import { normalizeCrmRow, type CrmSendRow } from './crm'
-import type { AskRow, EventRow, OperatorStore, PackRow, ProposalRow, PulseRow, SeatRow, VaultKeyRow } from './store'
+import type {
+  AskRow,
+  EventRow,
+  IssuedLicenseRow,
+  OperatorStore,
+  PackRow,
+  ProposalRow,
+  PulseRow,
+  SeatRow,
+  VaultKeyRow
+} from './store'
 import { toVaultMeta } from './store'
 
 interface D1Stmt {
@@ -50,8 +60,8 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         .first<Pick<SeatRow, 'first_seen'>>()
       await db
         .prepare(
-          `INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen, country, city, lat, lon, last_index_at, hostname, sso_email, license, approval)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen, country, city, lat, lon, last_index_at, hostname, sso_email, license, approval, license_jti)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(device_id) DO UPDATE SET
              seat_hash = excluded.seat_hash,
              os = CASE WHEN excluded.os IS NULL OR excluded.os = '' OR excluded.os = 'unknown' THEN seats.os ELSE excluded.os END,
@@ -64,7 +74,8 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
              last_index_at = COALESCE(excluded.last_index_at, seats.last_index_at),
              hostname = COALESCE(excluded.hostname, seats.hostname),
              sso_email = COALESCE(excluded.sso_email, seats.sso_email),
-             license = COALESCE(excluded.license, seats.license)`
+             license = COALESCE(excluded.license, seats.license),
+             license_jti = COALESCE(excluded.license_jti, seats.license_jti)`
         )
         .bind(
           row.device_id,
@@ -81,7 +92,8 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
           row.hostname,
           row.sso_email,
           row.license,
-          row.approval || prev?.approval || 'pending'
+          row.approval || prev?.approval || 'pending',
+          row.license_jti ?? null
         )
         .run()
     },
@@ -148,7 +160,8 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         hostname: s.hostname ?? null,
         sso_email: s.sso_email ?? null,
         license: s.license ?? null,
-        approval: s.approval ?? null
+        approval: s.approval ?? null,
+        license_jti: s.license_jti ?? null
       }))
     },
     async insertPulse(row) {
@@ -354,6 +367,46 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
           row.revoked_at
         )
         .run()
+    },
+    async putIssuedLicense(row) {
+      await db
+        .prepare(
+          `INSERT OR REPLACE INTO issued_licenses (
+            jti, last4, key_hash, days, iat, exp, revoked, created_at, created_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          row.jti,
+          row.last4,
+          row.key_hash,
+          row.days,
+          row.iat,
+          row.exp,
+          row.revoked,
+          row.created_at,
+          row.created_by
+        )
+        .run()
+    },
+    async getIssuedLicense(jti) {
+      return (
+        (await db
+          .prepare(
+            `SELECT jti, last4, key_hash, days, iat, exp, revoked, created_at, created_by
+             FROM issued_licenses WHERE jti = ?`
+          )
+          .bind(jti)
+          .first<IssuedLicenseRow>()) ?? null
+      )
+    },
+    async listIssuedLicenses() {
+      const r = await db
+        .prepare(
+          `SELECT jti, last4, key_hash, days, iat, exp, revoked, created_at, created_by
+           FROM issued_licenses ORDER BY created_at DESC`
+        )
+        .all<IssuedLicenseRow>()
+      return r.results
     }
   }
 }

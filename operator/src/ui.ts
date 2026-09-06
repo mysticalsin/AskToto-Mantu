@@ -171,6 +171,14 @@ a { color: var(--accent); text-decoration: none; }
 .crm-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .world-wrap { overflow: hidden; max-height: 280px; }
 .key-form { display: grid; gap: 8px; margin: 0 0 14px; }
+.license-once {
+  display: grid; gap: 8px; margin: 0 0 14px; padding: 10px 12px;
+  border: 1px solid var(--hair); border-radius: 8px; background: var(--bg);
+}
+.license-once input {
+  width: 100%; border: 1px solid var(--hair); background: var(--panel); color: var(--ink);
+  border-radius: 8px; padding: 8px 10px; font: 12px var(--mono);
+}
 .key-form .row input, .key-form .row select {
   border: 1px solid var(--hair); background: var(--bg); color: var(--ink);
   border-radius: 8px; padding: 6px 8px; font: 12px var(--sans); min-width: 120px;
@@ -357,7 +365,7 @@ function renderInstallWorks(data: DashboardPayload): string {
     <p class="eyebrow">Install → works</p>
     <ol class="works-path">
       <li data-step="checkin" class="${seats ? 'done' : 'need'}"><b>Check in</b><span>Seat checks in</span><small>${seats ? `${seats} real` : 'waiting for heartbeat'}</small></li>
-      <li data-step="approve" class="${pending.length ? 'need' : approved ? 'done' : ''}"><b>Approve</b><span>Tony approves</span><small>${pending.length ? `${pending.length} pending` : approved ? `${approved} approved` : 'no seats yet'}</small></li>
+      <li data-step="approve" class="${pending.length ? 'need' : approved ? 'done' : ''}"><b>Approve</b><span>Approve or license</span><small>${pending.length ? `${pending.length} pending` : approved ? `${approved} approved` : 'no seats yet'}</small></li>
       <li data-step="keys" class="${vaulted && approved ? 'done' : 'need'}"><b>Keys</b><span>Platform keys</span><small>${vaulted ? 'vault ready' : 'add a key on Keys'}</small></li>
     </ol>
     ${body}
@@ -407,10 +415,49 @@ function renderProfiles(rows: ProfileRow[], osFilter?: string): string {
   return `<table><thead><tr><th>Computer</th><th>SSO email</th><th>OS</th><th>Version</th><th>License</th><th>Approval</th><th>Country</th><th>Seen</th><th></th></tr></thead><tbody>${body}</tbody></table>`
 }
 
+function renderLicenseGenerate(data: DashboardPayload): string {
+  const issued = (data.licenses.issued || [])
+    .map((r) => {
+      const active = !r.revoked && r.exp * 1000 > Date.now()
+      return `<tr>
+        <td class="muted">··${esc(r.last4)}</td>
+        <td class="muted">${r.days}d</td>
+        <td class="muted">${esc(when(r.exp * 1000))}</td>
+        <td>${r.revoked ? '<span class="pill">revoked</span>' : active ? '<span class="pill up">active</span>' : '<span class="muted">expired</span>'}</td>
+      </tr>`
+    })
+    .join('')
+  return `<form class="key-form" id="license-generate" data-license-generate autocomplete="off">
+      <p class="sub muted">Tony picks how long it stays active. Paste the string into Métis → Identity → License. Shown once. last4 after that.</p>
+      <div class="row">
+        <label>Active for
+          <select name="days" required>
+            <option value="1">1 day</option>
+            <option value="7">7 days</option>
+            <option value="30" selected>30 days</option>
+            <option value="90">90 days</option>
+            <option value="365">1 year</option>
+          </select>
+        </label>
+        <button class="primary" type="submit">Generate license</button>
+      </div>
+    </form>
+    <div id="license-once" class="license-once" hidden data-license-once>
+      <p class="sub">Copy this once. It will not be shown again.</p>
+      <input id="license-once-value" readonly spellcheck="false" />
+      <button type="button" id="license-once-copy" class="primary">Copy</button>
+    </div>
+    ${
+      issued
+        ? `<table data-issued-licenses><thead><tr><th>Last4</th><th>Duration</th><th>Expires</th><th></th></tr></thead><tbody>${issued}</tbody></table>`
+        : '<div class="empty">No Operator licenses generated yet.</div>'
+    }`
+}
+
 function renderLicenses(data: DashboardPayload): string {
   if (data.licenses.empty) {
     return `<div class="fail-loud" data-licenses-empty>${esc(data.licenses.error || 'No licenses in D1')}</div>
-      <div class="sub muted">Real Métis heartbeats only. No demo or usage-import rows. Approve a seat here before platform keys work.</div>`
+      <div class="sub muted">Real Métis heartbeats only. No demo or usage-import rows. Approve a seat or activate an Operator license before platform keys work.</div>`
   }
   const body = data.licenses.rows
     .map((r) => {
@@ -431,7 +478,7 @@ function renderLicenses(data: DashboardPayload): string {
     })
     .join('')
   return `<table><thead><tr><th>Computer</th><th>SSO email</th><th>License</th><th>Approval</th><th>OS</th><th>Version</th><th></th></tr></thead><tbody>${body}</tbody></table>
-    <div class="sub muted" style="padding-bottom:8px">Tony approves a seat before Operator platform keys work. Unapproved seats fail loud on /v1/use. last4 only. Never a raw key.</div>`
+    <div class="sub muted" style="padding-bottom:8px">Tony approves a seat or the seat activates an Operator license. Revoke still stops platform keys. last4 only. Never a raw key.</div>`
 }
 
 export function renderConsole(data: DashboardPayload): string {
@@ -796,6 +843,10 @@ svg path { vector-effect: non-scaling-stroke; }
 
     <section class="page wrap" data-page="licenses" hidden>
       <article class="card" style="padding-bottom:10px">
+        <p class="eyebrow">Generate license</p>
+        ${renderLicenseGenerate(data)}
+      </article>
+      <article class="card" style="padding-bottom:10px">
         <p class="eyebrow">Licenses</p>
         ${renderLicenses(data)}
       </article>
@@ -817,9 +868,10 @@ svg path { vector-effect: non-scaling-stroke; }
       <article class="card" style="padding-bottom:10px">
         <p class="eyebrow">Rules</p>
         <div class="rule"><h3>Access only</h3><p>Console and admin APIs require Cloudflare Access email-code. Allowlist tony.walteur@gmail.com and twalteur@amaris.com. No homemade login. Access-solid.</p></div>
-        <div class="rule"><h3>Install → works</h3><p>A seat checks in, Tony approves it, then Métis uses Operator platform keys. No paste by default. Unapproved seats fail loud.</p></div>
-        <div class="rule"><h3>Seat approval</h3><p>A device stays pending until Tony approves it on Licenses. Unapproved seats get fundedProviders [] and 403 on /v1/use. Live pending: ${data.profiles.filter((p) => p.approval !== 'approved').length}.</p></div>
-        <div class="rule"><h3>Platform keys first</h3><p>Approved seats use Operator vault keys (NIM, Anthropic, DeepSeek, more). Manual Métis Settings keys stay as fallback. CLI still wins when connected.</p></div>
+        <div class="rule"><h3>Install → works</h3><p>A seat checks in. Tony approves it or the seat activates an Operator license in Métis → Identity → License. Then Métis uses Operator platform keys. No provider-key paste by default. Unapproved seats fail loud.</p></div>
+        <div class="rule"><h3>Generate license</h3><p>On Licenses, Tony clicks Generate license and picks how long it stays active. Paste that string into Métis Identity. Selling ATK / JWS activation stays closed.</p></div>
+        <div class="rule"><h3>Seat approval</h3><p>A device stays pending until Tony approves it on Licenses or an Operator license is active on the seat. Revoke still wins. Unapproved seats get fundedProviders [] and 403 on /v1/use. Live pending: ${data.profiles.filter((p) => p.approval !== 'approved').length}.</p></div>
+        <div class="rule"><h3>Platform keys first</h3><p>Authorized seats use Operator vault keys (NIM, Anthropic, DeepSeek, more). Manual Métis Settings keys stay as fallback. CLI still wins when connected.</p></div>
         <div class="rule"><h3>CRM never auto-send</h3><p>Pushes ingest status only. Tony Retry marks retry_requested. The seat processes that id. Intelligence / import / index never send.</p></div>
         <div class="rule"><h3>No secrets in HTML</h3><p>Keys last4 only. Events drop token-shaped strings. Heartbeat never carries a raw key or grant.</p></div>
         <div class="rule"><h3>Real ingest only</h3><p>Globe, Users, Licenses, ROI, and Events come from D1 heartbeats and Asks. usage-import rows stay off the fleet.</p></div>
@@ -1052,6 +1104,23 @@ document.querySelectorAll('[data-license-revoke]').forEach((b) => b.addEventList
   await api('/v1/admin/licenses/' + encodeURIComponent(b.getAttribute('data-license-revoke')) + '/revoke', {})
   location.reload()
 }))
+const genForm = document.getElementById('license-generate')
+if (genForm) genForm.addEventListener('submit', async (e) => {
+  e.preventDefault()
+  const fd = new FormData(genForm)
+  const j = await api('/v1/admin/licenses/generate', { days: Number(fd.get('days')) })
+  const box = document.getElementById('license-once')
+  const input = document.getElementById('license-once-value')
+  if (j && j.ok && j.license && box && input) {
+    input.value = j.license
+    box.hidden = false
+  }
+})
+const genCopy = document.getElementById('license-once-copy')
+if (genCopy) genCopy.addEventListener('click', async () => {
+  const input = document.getElementById('license-once-value')
+  if (input && input.value && navigator.clipboard) await navigator.clipboard.writeText(input.value)
+})
 </script>
 </body></html>`
 }

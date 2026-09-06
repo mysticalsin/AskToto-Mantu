@@ -1,5 +1,10 @@
 /** Real Métis seats vs synthetic import rows. Tony-only approval for platform keys. */
 
+import { parseLicenseId } from '../../src/shared/operator-license'
+import type { IssuedLicenseRow, OperatorStore } from './store'
+
+export { parseLicenseId }
+
 export const SEAT_APPROVALS = ['pending', 'approved', 'revoked'] as const
 export type SeatApproval = (typeof SEAT_APPROVALS)[number]
 
@@ -28,6 +33,7 @@ export type FleetSeat = {
   sso_email?: string | null
   license?: string | null
   approval?: string | null
+  license_jti?: string | null
 }
 
 export function isRealSeat(row: FleetSeat): boolean {
@@ -78,6 +84,25 @@ export function isApprovedSeat(row: Pick<FleetSeat, 'approval' | 'license'>): bo
   if (approval === 'approved') return true
   if (approval === 'revoked' || approval === 'pending') return false
   return (row.license || '').trim().toLowerCase() === 'approved'
+}
+
+export function issuedLicenseActive(row: IssuedLicenseRow | null | undefined, now: number): boolean {
+  if (!row || row.revoked) return false
+  return row.exp * 1000 > now
+}
+
+/** Approve click or an active Operator-issued license. Revoke always wins. */
+export async function seatAuthorizedForKeys(
+  store: Pick<OperatorStore, 'getIssuedLicense'>,
+  seat: Pick<FleetSeat, 'approval' | 'license' | 'license_jti'> | null | undefined,
+  now = Date.now()
+): Promise<boolean> {
+  if (!seat) return false
+  if ((seat.approval || '').trim().toLowerCase() === 'revoked') return false
+  if (isApprovedSeat(seat)) return true
+  const jti = parseLicenseId(seat.license_jti)
+  if (!jti) return false
+  return issuedLicenseActive(await store.getIssuedLicense(jti), now)
 }
 
 export function approvalOf(row: Pick<FleetSeat, 'approval' | 'license'>): SeatApproval {

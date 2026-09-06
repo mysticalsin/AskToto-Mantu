@@ -23,6 +23,20 @@ function licenseWord(snap: IdentitySnapshot): string {
   return 'Personal'
 }
 
+export function formatLicenseExpiry(ms: number): string {
+  return new Date(ms).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })
+}
+
+function licenseBackCopy(snap: IdentitySnapshot): string {
+  const lic = snap.license
+  if ((lic.state === 'licensed' || lic.state === 'grace') && lic.expiresAt) {
+    return `License is active until ${formatLicenseExpiry(lic.expiresAt)}.`
+  }
+  if (lic.state === 'licensed' || lic.state === 'grace') return 'This seat is active.'
+  if (lic.state === 'expired') return 'This license has expired.'
+  return 'Activation is not open yet. A key you enter is checked, then returned unused.'
+}
+
 export function IdentityCard({
   snapshot,
   reducedMotion: reducedMotionProp
@@ -190,9 +204,7 @@ export function IdentityCard({
             <span className="metis-pass-eyebrow">License</span>
             <span className="metis-pass-edition">{edition}</span>
           </div>
-          <p className="metis-pass-copy">
-            Activation is not open yet. A key you enter is checked, then returned unused.
-          </p>
+          <p className="metis-pass-copy">{licenseBackCopy(snapshot)}</p>
           {snapshot.license.managedFilePresent && (
             <p className="metis-pass-copy metis-pass-copy--soft">A managed license file is on this device. Activation is not open yet.</p>
           )}

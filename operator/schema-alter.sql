@@ -46,6 +46,21 @@ ALTER TABLE seats ADD COLUMN hostname TEXT;
 ALTER TABLE seats ADD COLUMN sso_email TEXT;
 ALTER TABLE seats ADD COLUMN license TEXT;
 ALTER TABLE seats ADD COLUMN approval TEXT;
+ALTER TABLE seats ADD COLUMN license_jti TEXT;
+
+CREATE TABLE IF NOT EXISTS issued_licenses (
+  jti TEXT PRIMARY KEY,
+  last4 TEXT NOT NULL,
+  key_hash TEXT NOT NULL,
+  days INTEGER NOT NULL,
+  iat INTEGER NOT NULL,
+  exp INTEGER NOT NULL,
+  revoked INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  created_by TEXT
+);
+
+CREATE INDEX IF NOT EXISTS issued_licenses_exp ON issued_licenses(exp);
 
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,

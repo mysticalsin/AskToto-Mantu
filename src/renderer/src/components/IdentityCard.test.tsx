@@ -50,6 +50,27 @@ describe('IdentityCard', () => {
     expect(html).not.toMatch(/>Serial</)
   })
 
+  it('shows Active until on the license face when an Operator license is live', () => {
+    const html = renderToStaticMarkup(
+      <IdentityCard
+        snapshot={{
+          ...SNAP,
+          license: {
+            ...emptyLicenseStatus(),
+            state: 'licensed',
+            edition: 'pro',
+            expiresAt: Date.UTC(2026, 9, 6),
+            source: 'operator'
+          }
+        }}
+        reducedMotion
+      />
+    )
+    expect(html).toContain('Pro')
+    expect(html).toContain('License is active until')
+    expect(html).not.toContain('returned unused')
+  })
+
   it('does not invent a member number when pending', () => {
     const html = renderToStaticMarkup(<IdentityCard snapshot={SNAP} reducedMotion />)
     expect(html).not.toContain('Nº 1')
