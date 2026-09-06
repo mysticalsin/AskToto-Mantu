@@ -5,7 +5,7 @@ slice: bar-pill
 owns: Bar layout + minimized thinking-orb circle only
 does-not-own: hide park 8×2 paint, island peek 132×15 paint, BAR_MIN_HEIGHT, onboarding, starfield, AgentStatus captions, ASR, identity
 owns-also: Bar idle docked circle; Hide/Island must not minimize
-notes: Island/Hide hover hit is the camera / Dynamic Island square (DESIGN.md + island/geometry). A 560-wide or 44-tall slab is a bug.
+notes: Island/Hide hover hit is the always-on top-edge strip (DESIGN.md + island/geometry). A 560-wide or 44-tall slab is a bug. Park paint stays 8×2 / 132×15.
 ---
 
 # Bar sphere: Jakub thinking-orb
@@ -229,7 +229,7 @@ No `unpkg` / CDN. Bundle the package.
 - Island: **no** extra orb (`overlayShowsBarOrb('island', *)` is false, `overlayDocksBarCircle('island')` is false).
 - Bar minimized: rest circle shown (`overlayShowsBarOrb('bar', true)` and `data-bar-pill-orb`).
 - Bar idle / expanded: circle **docked on the bar** (`overlayDocksBarCircle('bar')`), not a floating second disk and not a pill.
-- Hover hit is the top-edge strip: width = `workArea.width`, height = housing only (not 44). Y=40 and `TEAMS_MEETING_CHROME_Y` miss.
+- Hover hit is the top-edge strip: width = `workArea.width`, height = menu-bar inset plus first work-area row (not 44). Y=39 hits. Y=40 and `TEAMS_MEETING_CHROME_Y` miss.
 - Settings close onto Island/Hide force-parks (`shouldForceParkOnBecameIdle`).
 - Aspect ratio **1** on every mood. Bounding box constant across moods. Visible size is 41. Canvas stays 64 with 2x backing. Never scale-on-appear. no-squash M on Listen.
 - Listening toolbar at production overlay width 880: no child `getBoundingClientRect` intersection. No "+ New meeting" in that row. Timer/pause do not intersect Transcript or the orb. No 100px dummy spacer.

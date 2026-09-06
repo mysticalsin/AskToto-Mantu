@@ -33,7 +33,7 @@ Display: built-in Retina, notch. `workArea.y` ≈ 39. Start from Overlay chrome 
 ### R01 — Overlay law
 
 1. Hide idle: park is 8×2 at `bounds.y` (0), not 8×44 at Y=39.
-2. Hover / approach the **top edge** (left menu bar, camera, or right). Métis reveals. Do not hunt tray Show/Hide. Teams mute at Y≈40 still misses.
+2. Hover / approach the **top edge** (left menu bar, camera, or right, including the first work-area row ≈39). Métis reveals. Do not hunt tray Show/Hide. Teams mute at Y≈40 still misses.
 3. Island peek is 132×15 at the same Y. No second circle. No minimize control.
 4. Bar is the only chrome that may minimize to a circle.
 
@@ -59,10 +59,10 @@ On this tip the same path must open **880×800** at `islandSafeTop` (~39), backg
 ### Top-edge reveal (Tony live 2026-09-05)
 
 1. Overlay chrome **Hide**. Do not use tray Show/Hide.
-2. Move the mouse to the top of the display (left of the notch, the camera, or the right). Métis must reveal.
+2. Move the mouse to the top of the display (left of the notch, the camera, or the right), including the menu-bar edge / first desktop row (`workArea.y` ≈ 39). Métis must reveal the full Ask/Hide bar.
 3. Teams mute at Y≈40 must not reveal.
 
-**FAIL if** the overlay stays gone until the menu-bar Show/Hide click.
+**FAIL if** the overlay stays gone until the menu-bar Show Métis / Show/Hide click. Ultron 2026-09-06 on `d61ca24`: mouse at top did not open the bar; Show Métis menu did.
 
 Close Settings. Hide/Island must park again at `bounds.y`.
 

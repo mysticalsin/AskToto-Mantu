@@ -3,6 +3,8 @@ import {
   CURSOR_LEAVE_GRACE_PX,
   CURSOR_WATCH_INTERVAL_MS,
   decideCursorWatch,
+  overlayWatchNeedsRestore,
+  overlayWatchTreatAsRevealed,
   pointInRect,
   shouldWatchOverlayCursor
 } from './cursor-watch'
@@ -21,7 +23,7 @@ describe('cursor-in-rect (Mac Dynamic Island hover)', () => {
   it('point in the notch strip is a hit; Y=200 is not', () => {
     const rest = hoverWatchRestRect('hide', tonyMac)
     expect(rest.y).toBe(0)
-    expect(rest.height).toBeLessThan(tonyMac.menuBarHeight)
+    expect(rest.height).toBe(tonyMac.workArea.y - tonyMac.bounds.y + 1)
     expect(rest.height).toBeLessThan(44)
     expect(rest.width).toBe(tonyMac.workArea.width)
     expect(pointInRect({ x: 900, y: 12 }, rest)).toBe(true)
@@ -88,5 +90,52 @@ describe('cursor-in-rect (Mac Dynamic Island hover)', () => {
     expect(shouldWatchOverlayCursor('darwin', true, 'bar')).toBe(false)
     expect(CURSOR_WATCH_INTERVAL_MS).toBeGreaterThanOrEqual(16)
     expect(CURSOR_WATCH_INTERVAL_MS).toBeLessThanOrEqual(32)
+  })
+
+  it('hidden LSUIElement is not revealed; stuck hovering latch still restores', () => {
+    expect(overlayWatchTreatAsRevealed(true, true)).toBe(false)
+    expect(overlayWatchTreatAsRevealed(false, true)).toBe(true)
+    expect(overlayWatchTreatAsRevealed(false, false)).toBe(false)
+    expect(overlayWatchTreatAsRevealed(true, false)).toBe(false)
+    expect(
+      overlayWatchNeedsRestore({
+        decision: 'reveal',
+        alreadyHovering: false,
+        islandResting: true,
+        windowVisible: true
+      })
+    ).toBe(true)
+    expect(
+      overlayWatchNeedsRestore({
+        decision: 'reveal',
+        alreadyHovering: true,
+        islandResting: false,
+        windowVisible: false
+      })
+    ).toBe(true)
+    expect(
+      overlayWatchNeedsRestore({
+        decision: 'reveal',
+        alreadyHovering: true,
+        islandResting: true,
+        windowVisible: true
+      })
+    ).toBe(true)
+    expect(
+      overlayWatchNeedsRestore({
+        decision: 'reveal',
+        alreadyHovering: true,
+        islandResting: false,
+        windowVisible: true
+      })
+    ).toBe(false)
+    expect(
+      overlayWatchNeedsRestore({
+        decision: 'stay',
+        alreadyHovering: false,
+        islandResting: true,
+        windowVisible: true
+      })
+    ).toBe(false)
   })
 })
