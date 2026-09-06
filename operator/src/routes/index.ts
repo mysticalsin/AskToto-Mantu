@@ -15,6 +15,7 @@ import { registerExportRoutes } from './export'
 import { registerSeatTimelineRoutes } from './seat-timeline'
 import { registerInsightsRoutes } from './insights'
 import { registerMcpGatewayRoutes } from './mcp-gateway'
+import { registerReviewQueueRoutes } from './review-queue'
 
 registerAdminCoreRoutes()
 registerLiveRoutes()
@@ -28,3 +29,4 @@ registerExportRoutes()
 registerSeatTimelineRoutes()
 registerInsightsRoutes()
 registerMcpGatewayRoutes()
+registerReviewQueueRoutes()

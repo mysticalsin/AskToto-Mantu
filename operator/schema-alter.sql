@@ -83,6 +83,9 @@ ALTER TABLE issued_licenses ADD COLUMN tier TEXT;
 ALTER TABLE issued_licenses ADD COLUMN member TEXT;
 ALTER TABLE issued_licenses ADD COLUMN activated_device TEXT;
 ALTER TABLE issued_licenses ADD COLUMN activated_at INTEGER;
+-- Set to 'declined' by the review queue's "let it expire" action (plan 6.7 block 0, task B11,
+-- operator/src/licenses/renew.ts). Never changes exp or revoked on its own.
+ALTER TABLE issued_licenses ADD COLUMN renewal_note TEXT;
 
 CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY,
@@ -222,3 +225,22 @@ CREATE TABLE IF NOT EXISTS operator_settings (
   updated_at INTEGER NOT NULL,
   updated_by TEXT NOT NULL
 );
+
+-- MCP gateway calls (task B3, plan D8/D10): one row per `tools/call` a seat makes through the gateway.
+-- Arguments are never written here, or anywhere - device, connection, tool, latency and outcome only.
+-- A wholly new table, same exception as operator_settings above (see migrate.contract.test.ts's "agree
+-- on every table name" test and its ALTER_ONLY_NEW_TABLES allowlist). Owned by
+-- operator/src/connectors/mcp-calls.ts. Pruned at 90 days by retention.ts (already written to expect
+-- exactly this id/ts shape, ahead of this table landing - see that file's module doc).
+CREATE TABLE IF NOT EXISTS mcp_calls (
+  id TEXT PRIMARY KEY,
+  ts INTEGER NOT NULL,
+  device_id TEXT NOT NULL,
+  connection_id TEXT NOT NULL,
+  tool TEXT NOT NULL,
+  ms INTEGER NOT NULL,
+  outcome TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS mcp_calls_connection_ts ON mcp_calls(connection_id, ts);
+CREATE INDEX IF NOT EXISTS mcp_calls_device_ts ON mcp_calls(device_id, ts);

@@ -18,6 +18,9 @@ export interface IssuedLicenseRow {
   member?: string | null
   activated_device?: string | null
   activated_at?: number | null
+  /** Set to `'declined'` by the review queue's "let it expire" action (plan 6.7 block 0, B11); never
+   *  written anywhere else, never changes `exp` or `revoked` on its own. */
+  renewal_note?: string | null
 }
 
 export interface SeatRow {

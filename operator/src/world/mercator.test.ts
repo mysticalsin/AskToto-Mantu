@@ -29,6 +29,26 @@ describe('projectPoint matches d3-geo geoMercator exactly', () => {
   }
 })
 
+describe('the realtime (1152) variant is centred [0, 20] with scale derived from the width (plan 3.7 item 2 / 6.3)', () => {
+  it('longitude 0 projects to the horizontal centre of the 1152-wide canvas', () => {
+    const [x] = projectPoint(0, 0, '1152')
+    expect(x).toBeCloseTo(576, 6)
+  })
+
+  it('latitude 20 (not the equator) projects to the vertical centre of the 576-tall canvas', () => {
+    const [, y] = projectPoint(20, 0, '1152')
+    expect(y).toBeCloseTo(288, 6)
+  })
+
+  it('scale is exactly width / (2*pi), the whole-world-fit formula', () => {
+    expect(MERCATOR_VARIANTS['1152'].scale).toBeCloseTo(1152 / (2 * Math.PI), 9)
+  })
+
+  it('the 520 corner-map variant keeps the original CountryMap.tsx port unchanged', () => {
+    expect(MERCATOR_VARIANTS['520']).toEqual({ translate: [260, 180], scale: 70 })
+  })
+})
+
 describe('projectPoint reproduces the generated centroids', () => {
   it('every 1152 centroid round-trips through projectPoint within 0.05px of itself', () => {
     // Centroids are themselves projected pixel coordinates (from d3-geo's geoPath.centroid
