@@ -1116,7 +1116,7 @@ function AiSection({
       )}
       {canRestoreEmbedded && (
         <div className="mt-2 text-[12px] text-[color:var(--cl-muted-foreground)]">
-          Metis shipped with a Cloudflare key. Restore it to keep Cloudflare answering — or add another
+          Metis shipped with a Cloudflare key. Restore it to keep Cloudflare answering, or add another
           provider&apos;s API key below.
         </div>
       )}
@@ -1538,13 +1538,13 @@ function providerLimitLabel(u: { reason: string; until: number }): string {
         : 'retry shortly'
   switch (u.reason) {
     case 'rate-limit':
-      return `rate-limited — ${when}`
+      return `rate-limited, ${when}`
     case 'quota-exhausted':
-      return 'out of credit — add credit or switch providers'
+      return 'out of credit. Add credit or switch providers'
     case 'usage-cap':
-      return `usage limit reached — ${when}`
+      return `usage limit reached, ${when}`
     default:
-      return 'key rejected — re-enter it below'
+      return 'key rejected. Re-enter it below'
   }
 }
 
@@ -1565,7 +1565,7 @@ function ResilienceSection({
   return (
     <Section
       title="Backups & limits"
-      desc="When a provider runs out of tokens or credit, Métis automatically falls back — to a free provider, then to the on-device model — so you are never stuck."
+      desc="When a provider runs out of tokens or credit, Métis automatically falls back, first to a free provider, then to the on-device model, so you are never stuck."
       icon={ShieldCheck}
     >
       <div className="flex flex-col gap-3">
@@ -1650,7 +1650,7 @@ function ResilienceSection({
 
         <ToggleRow
           label="Race a backup provider on a slow answer"
-          desc="For a quick question, start a second provider if the first hasn't answered within 3 seconds — whichever answers first wins, the other is cancelled. Can occasionally use both."
+          desc="For a quick question, start a second provider if the first hasn't answered within 3 seconds. Whichever answers first wins, the other is cancelled. Can occasionally use both."
           on={settings.resilience.hedge}
           onChange={(v) => patch({ resilience: { ...settings.resilience, hedge: v } })}
         />
@@ -1658,7 +1658,7 @@ function ResilienceSection({
         <div className="flex items-start gap-2 rounded-[8px] border border-[var(--cl-border)] bg-white/[0.02] px-3 py-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
           <Cpu size={13} className="mt-0.5 shrink-0" />
           <span>
-            Worst case, the on-device model answers with no API at all — controlled by <b>Local AI → use as a
+            Worst case, the on-device model answers with no API at all, controlled by <b>Local AI → use as a
             safety net</b> above.
           </span>
         </div>
@@ -1720,7 +1720,7 @@ function FallbackOrderEditor({
       <div className="mb-2 text-[11.5px] text-[color:var(--cl-muted-foreground)]">
         {chain.length
           ? 'Providers are tried top to bottom when one fails. Anything not listed stays available after the chain.'
-          : 'Automatic — Métis picks the next provider itself. Set an order to decide it yourself.'}
+          : 'Automatic. Métis picks the next provider itself. Set an order to decide it yourself.'}
       </div>
       {chain.length > 0 && (
         <ul className="mb-2 flex flex-col gap-1">
@@ -1802,8 +1802,8 @@ function AsrModelRow(): JSX.Element | null {
         {state.ready
           ? `High-accuracy transcription model installed (${gb} GB). Imports use it instead of the compact model.`
           : state.status === 'downloading'
-            ? `Downloading the high-accuracy transcription model — ${Math.round(state.progress * 100)}% of ${gb} GB.`
-            : `Imports use the compact transcription model. The high-accuracy one is a ${gb} GB download — noticeably better, especially on non-English audio.`}
+            ? `Downloading the high-accuracy transcription model: ${Math.round(state.progress * 100)}% of ${gb} GB.`
+            : `Imports use the compact transcription model. The high-accuracy one is a ${gb} GB download, noticeably better, especially on non-English audio.`}
         {state.status === 'error' && state.error ? ` ${state.error}` : ''}
       </span>
       {state.status !== 'downloading' && (
@@ -1895,14 +1895,14 @@ function LocalAiSection({
   // incomplete" and told the user to reinstall Métis — an instruction the build gate guarantees cannot
   // work, because no installer contains the weights (MQA-188/191).
   const downloadFailedText =
-    'Could not download the on-device model. Métis retries on the next launch — check that huggingface.co is reachable from this network.'
+    'Could not download the on-device model. Métis retries on the next launch. Check that huggingface.co is reachable from this network.'
   const notDownloadedText =
     'Not downloaded yet. Métis fetches the on-device model automatically when the app opens (~730 MB).'
 
   return (
     <Section
       title="Local AI"
-      desc="Optional on-device model. Off by default for answering — Cloudflare and any API keys you add stay primary. The model downloads in the background when Métis opens so enabling Local later is instant."
+      desc="Optional on-device model. Off by default for answering. Cloudflare and any API keys you add stay primary. The model downloads in the background when Métis opens so enabling Local later is instant."
       icon={Cpu}
     >
       <div className="flex flex-col gap-3">
@@ -2058,7 +2058,7 @@ function LocalAiSection({
           <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">Fallback</span>
           <ToggleRow
             label="Use as a fallback when cloud AI is unavailable"
-            desc="If every configured cloud provider is unreachable or none is set up, run meeting indexing, live suggestions, summaries and screenshot analysis on-device as a last resort — instead of failing. Cloud providers are always preferred when they work."
+            desc="If every configured cloud provider is unreachable or none is set up, run meeting indexing, live suggestions, summaries and screenshot analysis on-device as a last resort instead of failing. Cloud providers are always preferred when they work."
             on={settings.localLlm.fallback}
             onChange={(v) => patch({ localLlm: { ...settings.localLlm, fallback: v } })}
           />
@@ -2222,7 +2222,7 @@ function CliIntegration({
         phase: 'done',
         msg:
           testResult.session === 'weekly-limit'
-            ? testResult.error || 'Signed in. Weekly usage limit reached — not disconnected.'
+            ? testResult.error || 'Signed in. Weekly usage limit reached, not disconnected.'
             : null,
         version: testResult.version ?? null
       })
@@ -2252,7 +2252,7 @@ function CliIntegration({
         phase: 'done',
         msg:
           r.session === 'weekly-limit'
-            ? r.error || 'Signed in. Weekly usage limit reached — not disconnected.'
+            ? r.error || 'Signed in. Weekly usage limit reached, not disconnected.'
             : null,
         version: r.version ?? null
       })
@@ -3016,7 +3016,7 @@ function ProductConnectCard({
           <span className="min-w-0 flex-1 truncate text-[11px] text-[color:var(--cl-muted-foreground)]">
             {conn && conn.tools.length > 0
               ? `${conn.tools.length} tool${conn.tools.length === 1 ? '' : 's'} available`
-              : 'Connected — no tools reported for this account.'}
+              : 'Connected. No tools reported for this account.'}
           </span>
           <button
             type="button"
@@ -3143,7 +3143,7 @@ function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p:
       mark={<ClickUpMark size={28} />}
       connect={() => window.toto.mcpClickupConnect()}
       pinnedEndpoint="https://mcp.clickup.com/mcp"
-      apiKeyHint="ClickUp API token (power option — Connect is the usual path)"
+      apiKeyHint="ClickUp API token (power option, Connect is the usual path)"
     />
   )
 }
@@ -3592,7 +3592,7 @@ function DustSetup({
     const tick = async (intervalSec: number): Promise<void> => {
       if (cancelled) return
       if (Date.now() > oauth.expiresAt) {
-        setOauth((o) => (o.phase === 'waiting' ? { ...o, phase: 'error', error: 'Sign-in expired — try again.' } : o))
+        setOauth((o) => (o.phase === 'waiting' ? { ...o, phase: 'error', error: 'Sign-in expired. Try again.' } : o))
         return
       }
       const r = await window.toto.dustLoginPoll()
@@ -3820,7 +3820,7 @@ function DustSetup({
       }
       // decision === 'run-setup' — the saved CLI session is dead. Nudge toward a fix rather than silently
       // relaunching anything: there is no more in-app installer/terminal step for the CLI path to reopen.
-      const msg = 'Your Dust CLI session ended. Run `dust login` again and Reconnect — or use the automatic sign-in above.'
+      const msg = 'Your Dust CLI session ended. Run `dust login` again and Reconnect, or use the automatic sign-in above.'
       setCli({ busy: false, ok: false, msg })
       setErr(msg)
     })()
@@ -5807,7 +5807,7 @@ export function Settings({
                   <div className="mt-3 px-1">
                     <p className="m-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">Overlay chrome</p>
                     <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                      How Métis sits on the desktop. Changes apply now — no reinstall.
+                      How Métis sits on the desktop. Changes apply now, no reinstall.
                     </p>
                     <OverlayChromePicker
                       value={settings.overlayLayout}
@@ -5897,7 +5897,7 @@ export function Settings({
                   {settings.micOnlyFallbackAt != null && (
                     <div className="mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
                       <span>
-                        A recent meeting captured your microphone only — the other side&apos;s audio was not
+                        A recent meeting captured your microphone only. The other side&apos;s audio was not
                         recorded
                         {isWindows
                           ? ' (check that the call plays through your default output device)'
@@ -5959,7 +5959,7 @@ export function Settings({
                     label="Best transcription quality"
                     desc={
                       asrBundled
-                        ? 'Default is Best. Fast is a power option. This installer ships the compact model — if Best cannot load, Métis runs Fast and says so below (never a silent Fast with a Best label). Download the high-accuracy model to restore Best.'
+                        ? 'Default is Best. Fast is a power option. This installer ships the compact model. If Best cannot load, Métis runs Fast and says so below (never a silent Fast with a Best label). Download the high-accuracy model to restore Best.'
                         : 'Default is Best (Whisper large multilingual, 60+ languages). Fast is a Settings power option for constrained machines.'
                     }
                     on={settings.asrQuality === 'best'}
@@ -5969,7 +5969,7 @@ export function Settings({
                   <div className="flex flex-col gap-1.5 px-1 py-1">
                     <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
                       Transcription engine
-                      <FieldHint text="Parakeet is the default — bundled NVIDIA Parakeet v3, very fast + accurate for 25 European languages. Whisper handles ~99 languages; pick it for non-European speech. Apple Speech: Apple's own on-device engine (SFSpeechRecognizer); no extra download, macOS 13+ only.">
+                      <FieldHint text="Parakeet is the default: bundled NVIDIA Parakeet v3, very fast + accurate for 25 European languages. Whisper handles ~99 languages; pick it for non-European speech. Apple Speech: Apple's own on-device engine (SFSpeechRecognizer); no extra download, macOS 13+ only.">
                         <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
                       </FieldHint>
                       <ManagedChip keys={settings.managedKeys} k="asrEngine" />
@@ -6034,7 +6034,7 @@ export function Settings({
                   {settings.asrImportTierFallbackAt != null && (
                     <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
                       <span>
-                        An imported recording was transcribed with the compact model — the
+                        An imported recording was transcribed with the compact model. The
                         higher-accuracy one is not installed. Accuracy is lower, especially on
                         non-English audio. {new Date(settings.asrImportTierFallbackAt).toLocaleString()}.
                       </span>
@@ -6044,7 +6044,7 @@ export function Settings({
                   {(settings as SettingsWithAsrWebgpuFallback).asrWebgpuFallbackAt != null && (
                     <div className="-mt-1 flex items-center justify-between gap-2 pl-1 text-[12px] text-[color:var(--color-ink-3)]">
                       <span>
-                        Best was requested but is not running on this device — Fast is active. Download
+                        Best was requested but is not running on this device. Fast is active. Download
                         the high-accuracy model below, or keep Fast as a power option.
                       </span>
                       <TextButton
@@ -6102,12 +6102,12 @@ export function Settings({
                           ? isWindows
                             ? // Local AI is ready, so the missing piece is the OS window signal — telling
                               // this user to enable Local AI would just be the opposite lie.
-                              "Not running on this machine — Métis can't tell when you switch windows, so screen asks capture live instead."
+                              "Not running on this machine. Métis can't tell when you switch windows, so screen asks capture live instead."
                             : // On macOS there is a second way to be off: the reader is gated on Screen
                               // Recording already being granted, because its own capture would otherwise be
                               // what raises the system prompt (MQA-209). The renderer can't tell the two
                               // apart, so name the actionable one first rather than guess wrong.
-                              'Not running on this machine — check Screen Recording under Permissions below (a new grant needs a restart). Screen asks capture live instead.'
+                              'Not running on this machine. Check Screen Recording under Permissions below (a new grant needs a restart). Screen asks capture live instead.'
                           : 'Enable Local AI (below) to use this. The background reader never leaves your device.'
                     }
                     on={settings.backgroundScreenContext}
@@ -6167,7 +6167,7 @@ export function Settings({
                 <Section title="Screen access" desc="Whether Métis can see your own screen to answer what's in front of you." icon={Eye}>
                   <ToggleRow
                     label="Let Métis see your screen on request"
-                    desc="Governs the explicit screen asks — the Capture button, its shortcut, quick actions, and pressing Enter with an empty box. Typed questions never capture your screen."
+                    desc="Governs the explicit screen asks: the Capture button, its shortcut, quick actions, and pressing Enter with an empty box. Typed questions never capture your screen."
                     on={settings.screenAsk}
                     onChange={(v) => patch({ screenAsk: v })}
                     disabled={settings.managedKeys.includes('screenAsk')}
@@ -6181,7 +6181,7 @@ export function Settings({
                 >
                   <ToggleRow
                     label="Carry context into follow-up questions"
-                    desc="When on, the next question can refer back to the last few answers (expires after 10 idle minutes). When off (default), every question outside a meeting starts completely fresh — nothing from the previous question leaks into the next answer. During a live meeting, Copilot always keeps the meeting's context either way."
+                    desc="When on, the next question can refer back to the last few answers (expires after 10 idle minutes). When off (default), every question outside a meeting starts completely fresh. Nothing from the previous question leaks into the next answer. During a live meeting, Copilot always keeps the meeting's context either way."
                     on={settings.askFollowUpMemory}
                     onChange={(v) => patch({ askFollowUpMemory: v })}
                     disabled={settings.managedKeys.includes('askFollowUpMemory')}
@@ -7134,14 +7134,14 @@ function IntelligenceTab({
 
       <Section
         title="Plane"
-        desc="Push meeting action items to Plane as work items — see Review → Book next steps. Manual and review-first: nothing sends automatically."
+        desc="Push meeting action items to Plane as work items. See Review → Book next steps. Manual and review-first: nothing sends automatically."
       >
         <PlaneCard settings={settings} patch={patch} />
       </Section>
 
       <Section
         title="ClickUp"
-        desc="Push meeting action items to ClickUp as tasks — see Review → Book next steps. Manual and review-first: nothing sends automatically."
+        desc="Push meeting action items to ClickUp as tasks. See Review → Book next steps. Manual and review-first: nothing sends automatically."
       >
         <ClickupCard settings={settings} patch={patch} />
       </Section>
@@ -7994,7 +7994,7 @@ function PermissionsSection(): JSX.Element {
         </div>
         <div className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
           First check is the OS permission probe. Check again to send a frame to Local AI if it is ready,
-          otherwise the active API (including Dust when that is the provider). The result stays here — it
+          otherwise the active API (including Dust when that is the provider). The result stays here. It
           is never sent to a teammate.
         </div>
         {checkResult && (
@@ -8295,7 +8295,7 @@ function Shortcuts({
             <AlertCircle size={13} className="mt-px shrink-0" />
             <span>
               {failures.length === 1 ? "This shortcut couldn't" : "These shortcuts couldn't"} be
-              registered — either another app already owns the combo, or it is a navigation key Métis will
+              registered. Either another app already owns the combo, or it is a navigation key Métis will
               not take over globally. Rebind {failures.length === 1 ? 'it' : 'them'} below.
             </span>
           </div>
