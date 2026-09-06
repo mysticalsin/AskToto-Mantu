@@ -200,14 +200,10 @@ const DEMO_SUG = `**Say this:** "At Mantu I led the Métis build — a Cluely-cl
 export function App(): JSX.Element {
   const setRoot = useAutoResize() // callback ref — tracks the live root across view switches
 
-  // Single window-drag instance for the ENTIRE app — every surface (loading strip, sign-in wall,
-  // onboarding, and the main bar/panel) spreads this same object on its own root div below, rather than
-  // each surface (or Bar itself) owning its own hook. It arms from any empty, non-`.no-drag` surface —
-  // including panels/toasts/gates that never used to be draggable. noTouch keeps a Windows touchscreen's
-  // scroll gesture scrolling instead of moving the window; the minimized ControlPill keeps its own
-  // separate armOnControls instance and this one is withheld while minimized (see `minimized` below) so
-  // exactly one instance is ever armed at a time. Blurring the active input on drag-start replaces the
-  // input-blur Bar used to do itself before it had its own useWindowDrag instance.
+  // Single window-drag instance for post-onboarding surfaces (loading strip, sign-in, bar/panel).
+  // Exclusive onboarding must NOT spread this — click-hold cannot drag the stage off-screen.
+  // noTouch keeps a Windows touchscreen scroll a scroll. The minimized ControlPill keeps its own
+  // armOnControls instance; this one is withheld while minimized so only one instance is armed.
   const onWindowDragStart = useCallback(() => {
     const el = document.activeElement
     if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) el.blur()
@@ -3184,7 +3180,7 @@ export function App(): JSX.Element {
   if (settings && !settings.onboardingDone && DEMO == null) {
     if (view === 'settings') {
       return (
-        <div ref={setRoot} {...windowDrag} className="flex h-full min-h-0 w-full flex-col gap-2 p-1.5">
+        <div ref={setRoot} className="onboard-exclusive-lock flex h-full min-h-0 w-full flex-col gap-2 p-1.5">
           <Suspense fallback={<div className="cl-root flex min-h-0 flex-1 rounded-2xl p-6"><AgentStatus kind="loading" size="hero" /></div>}>
             {settingsBody}
           </Suspense>
@@ -3192,7 +3188,7 @@ export function App(): JSX.Element {
       )
     }
     return (
-      <div ref={setRoot} {...windowDrag} className="onboard-stage">
+      <div ref={setRoot} className="onboard-stage onboard-exclusive-lock">
         <div className="onboard-stripes" aria-hidden="true" />
         <div className="onboard-stripes onboard-stripes--b" aria-hidden="true" />
         <div className="onboard-portal-content relative z-10 flex h-full min-h-0 w-full flex-col">
