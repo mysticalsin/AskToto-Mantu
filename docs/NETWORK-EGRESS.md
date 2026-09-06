@@ -86,6 +86,19 @@ Managed config (machine-wide `managed-config.json`, see `docs/ENTERPRISE_RELEASE
   and are not seen by the guard. Put those on the proxy allowlist.
 - Precedence matches `allowedProviders`: the admin (machine) file wins over the per-user file.
 
+### User managed-config fallback (convenience, not enforcement)
+
+When the **admin** machine-wide file omits `egressAllowlist`, `getEgressAllowlist()` falls back to the
+per-user `managed-config.json` next to `settings.json` (user-writable). That fallback is a convenience
+for solo / lab installs so a developer can try the policy without IT. **It is not the enterprise
+enforcement point.**
+
+- Packaged / fleet installs: put `egressAllowlist` (and lock it) in the **admin** machine-wide
+  `managed-config.json`. Only that file is trustworthy against a local user or compromised renderer.
+- If the admin file is present but omits the key, the user file can still supply a list — treat that as
+  a misconfiguration for enterprise, not a feature. See `docs/ENTERPRISE_RELEASE.md`.
+
+
 ## Proof
 
 - `src/main/net/egress-policy.test.ts`: parsing, wildcard and loopback rules.
