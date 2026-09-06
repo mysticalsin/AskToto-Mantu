@@ -163,7 +163,7 @@ describe('closing onboarding hard-stops the Goldberg Aria', () => {
     expect(app).toMatch(/if \(settings\?\.onboardingDone\) lockOnboardingAudio\(\)/)
     expect(app).toMatch(/installOnboardingAudioLockHooks\(\)/)
 
-    const index = readFileSync(join(__dirname, '../../main/index.ts'), 'utf8')
+    const index = readFileSync(join(__dirname, '../../../main/index.ts'), 'utf8')
     expect(index).toMatch(/function lockOnboardingAudioInRenderer/)
     expect(index).toMatch(/ONBOARDING_AUDIO_LOCK_EVENT/)
     const exit = index.slice(index.indexOf('function exitExclusiveOnboardingStage'), index.indexOf('function applyOverlayAlwaysOnTop'))
