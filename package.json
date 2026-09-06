@@ -10,7 +10,7 @@
   "main": "./out/main/index.js",
   "scripts": {
     "postinstall": "node scripts/prune-dust-bundle.mjs",
-    "dev": "node scripts/ensure-asr-assets.mjs && electron-vite dev",
+    "dev": "node scripts/ensure-asr-assets.mjs && node scripts/ensure-intelligence-bundle.mjs && electron-vite dev",
     "check:main-imports": "node scripts/check-no-dynamic-import.mjs",
     "check:offline-package": "node scripts/check-offline-package.mjs",
     "check:ffmpeg": "node scripts/check-ffmpeg-sidecar.mjs",
@@ -24,7 +24,7 @@
     "check:packaged-runtime": "node scripts/check-packaged-runtime.mjs",
     "check:update-metadata": "node scripts/check-update-metadata.mjs",
     "check:built-offline": "node scripts/check-built-offline.mjs",
-    "prebuild": "node scripts/check-no-dynamic-import.mjs && node scripts/check-offline-package.mjs",
+    "prebuild": "node scripts/check-no-dynamic-import.mjs && node scripts/check-offline-package.mjs && node scripts/ensure-intelligence-bundle.mjs",
     "build": "electron-vite build",
     "postbuild": "node scripts/check-built-offline.mjs",
     "preview": "electron-vite preview",
