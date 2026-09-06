@@ -217,8 +217,11 @@ function renderInstallWorks(data: DashboardPayload): string {
 }
 
 function renderPeopleStrip(rows: ProfileRow[], liveCount: number): string {
+  const head = `<div class="people-row head" data-people-head>
+      <span></span><span>Computer</span><span>SSO</span><span>City</span><span>Device</span><span>License</span>
+    </div>`
   if (!rows.length) {
-    return '<div class="empty">No seats yet. A heartbeat writes city from request.cf and lands here.</div>'
+    return `${head}<div class="empty">No seats yet. A heartbeat writes city from request.cf and lands here.</div>`
   }
   const body = rows
     .slice(0, 12)
@@ -237,9 +240,7 @@ function renderPeopleStrip(rows: ProfileRow[], liveCount: number): string {
     ? `${liveCount} live · heartbeat &lt; 2 min`
     : 'No heartbeat in the last two minutes. Showing last-seen seats with city.'
   return `<div class="sub muted" style="padding-bottom:8px">${hint}</div>
-    <div class="people-row head" data-people-head>
-      <span></span><span>Computer</span><span>SSO</span><span>City</span><span>Device</span><span>License</span>
-    </div>
+    ${head}
     ${body}`
 }
 
