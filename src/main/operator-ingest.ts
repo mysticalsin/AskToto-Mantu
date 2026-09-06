@@ -20,11 +20,16 @@ import type { OperatorCrmEvent } from './operator-crm'
 const HEARTBEAT_MS = 60_000
 const ASK_TEXT_CAP = 4_000
 
+export const OPERATOR_SEAT_NOT_APPROVED =
+  'This seat is not approved. Tony must approve this device in Operator before platform keys work.'
+
 export interface OperatorRuntimeSettings {
   operatorUrl?: string
   operatorIngestSecret?: string
   sendAskText?: boolean
   licenseKey?: string
+  licenseValid?: boolean
+  trialActive?: boolean
 }
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
@@ -32,6 +37,8 @@ let lastAskId: string | null = null
 let fetchImpl: typeof fetch = fetch
 /** In-memory funded providers from the last heartbeat. Never a secret. Never persisted. */
 let lastFundedProviders: string[] = []
+/** Tony approved this device in Operator. Default false until a heartbeat says so. */
+let lastApproved = false
 
 export function setOperatorFetchForTests(fn: typeof fetch | null): void {
   fetchImpl = fn ?? fetch
@@ -58,12 +65,23 @@ function osLabel(): 'darwin' | 'win' | string {
   return process.platform
 }
 
+/** License status + last4 only. Never the raw key. Never self-approve. */
+export function licenseMeta(settings: OperatorRuntimeSettings): { license: string; licenseLast4?: string } {
+  const raw = settings.licenseKey?.trim() || ''
+  const alnum = raw.replace(/[^a-zA-Z0-9]/g, '')
+  const licenseLast4 = alnum.length >= 4 ? alnum.slice(-4) : undefined
+  const license = settings.licenseValid ? 'licensed' : settings.trialActive ? 'trial' : 'unlicensed'
+  return licenseLast4 ? { license, licenseLast4 } : { license }
+}
+
 export function seatMeta(settings: OperatorRuntimeSettings): {
   seatHash: string
   os: string
   appVersion: string
   hostname?: string
   ssoEmail?: string
+  license: string
+  licenseLast4?: string
 } {
   const rawSeat = settings.licenseKey?.trim() || getMachineId()
   const host = sanitizeOperatorHostname(hostname())
@@ -78,7 +96,8 @@ export function seatMeta(settings: OperatorRuntimeSettings): {
     os: osLabel(),
     appVersion: app.getVersion(),
     ...(host ? { hostname: host } : {}),
-    ...(email ? { ssoEmail: email } : {})
+    ...(email ? { ssoEmail: email } : {}),
+    ...licenseMeta(settings)
   }
 }
 
@@ -153,8 +172,20 @@ export function operatorBrokerConfigured(settings: OperatorRuntimeSettings, env 
   return operatorUrlConfigured(settings, env) && !!resolveSecret(settings, env)
 }
 
+function heartbeatApproved(json: unknown): boolean {
+  return Boolean(json && typeof json === 'object' && (json as { approved?: unknown }).approved === true)
+}
+
+export function operatorSeatApproved(): boolean {
+  return lastApproved
+}
+
 export function operatorCanBroker(provider: string, settings: OperatorRuntimeSettings): boolean {
-  return operatorBrokerConfigured(settings) && operatorFundsProvider(provider, lastFundedProviders)
+  return (
+    lastApproved &&
+    operatorBrokerConfigured(settings) &&
+    operatorFundsProvider(provider, lastFundedProviders)
+  )
 }
 
 export type OperatorUseResult =
@@ -177,6 +208,9 @@ export async function operatorUseAsk(
   const secret = resolveSecret(settings)
   if (!operatorUrlConfigured(settings) || !secret) {
     return { ok: false, error: 'Operator cannot issue a use' }
+  }
+  if (!lastApproved) {
+    return { ok: false, error: OPERATOR_SEAT_NOT_APPROVED }
   }
   if (!operatorFundsProvider(body.provider, lastFundedProviders)) {
     return { ok: false, error: 'Operator cannot issue a use' }
@@ -228,6 +262,10 @@ export function setOperatorFundedProvidersForTests(ids: string[]): void {
   lastFundedProviders = [...ids]
 }
 
+export function setOperatorApprovedForTests(approved: boolean): void {
+  lastApproved = approved
+}
+
 export async function operatorHeartbeat(
   settings: OperatorRuntimeSettings
 ): Promise<{ ok: boolean; retry: string[] }> {
@@ -236,7 +274,10 @@ export async function operatorHeartbeat(
   if (!operatorUrlConfigured(settings) || !secret) return { ok: false, retry: [] }
   try {
     const res = await signedPost(url, secret, '/v1/heartbeat', seatMeta(settings))
-    if (res.ok) lastFundedProviders = fundedProvidersFromHeartbeat(res.json)
+    if (res.ok) {
+      lastFundedProviders = fundedProvidersFromHeartbeat(res.json)
+      lastApproved = heartbeatApproved(res.json)
+    }
     return { ok: res.ok, retry: retryIdsFromHeartbeat(res.json) }
   } catch (e) {
     mainLog.warn('[operator] heartbeat failed:', e)

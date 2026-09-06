@@ -153,8 +153,43 @@ describe('admin keys write / rotate / revoke', () => {
       {},
       { store, now: NOW + 2 }
     )
-    const hb = (await beat.json()) as { fundedProviders?: string[] }
-    expect(hb.fundedProviders).toEqual(['openai'])
+    const hb = (await beat.json()) as { fundedProviders?: string[]; approved?: boolean }
+    expect(hb.approved).toBe(false)
+    expect(hb.fundedProviders).toEqual([])
+
+    const approved = await handleRequest(
+      new Request('https://operator.test/v1/admin/licenses/device-keys/approve', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}'
+      }),
+      env(),
+      { access: tony },
+      { store, now: NOW + 2 }
+    )
+    expect(approved.status).toBe(200)
+    const beat2 = await handleRequest(
+      new Request('https://operator.test/v1/heartbeat', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          [OPERATOR_HMAC_HEADERS.ts]: String(NOW + 3),
+          [OPERATOR_HMAC_HEADERS.nonce]: 'keys-hb-2',
+          [OPERATOR_HMAC_HEADERS.device]: deviceId,
+          [OPERATOR_HMAC_HEADERS.sig]: await hmacHex(
+            TEST_INGEST_SECRET,
+            ingestCanonical(String(NOW + 3), 'keys-hb-2', deviceId, await sha256Hex(bodyText))
+          )
+        },
+        body: bodyText
+      }),
+      env(),
+      {},
+      { store, now: NOW + 3 }
+    )
+    const hb2 = (await beat2.json()) as { fundedProviders?: string[]; approved?: boolean }
+    expect(hb2.approved).toBe(true)
+    expect(hb2.fundedProviders).toEqual(['openai'])
 
     const revoked = await handleRequest(
       new Request(`https://operator.test/v1/admin/keys/${id}/revoke`, {

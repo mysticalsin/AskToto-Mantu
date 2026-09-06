@@ -124,9 +124,9 @@ Queries are real D1. No demo / fake VPS / `usage-import` / `usage-*` device rows
 
 ### Chrome (pre-Shoey, KEEP)
 
-Rail: Overview, Realtime, Events, Profiles, Map, macOS, Windows, Licenses, Skills, Keys.
+Rail: Overview, Realtime, Events, Map, Users, macOS, Windows, Licenses, Keys, Notifications, Rules, Pushes, Skills.
 
-MUST NOT return as nav: Sessions, Notifications, SEO, Pages, Insights, Dashboards, References, Groups, Cohorts.
+MUST NOT return as nav: Sessions, SEO, Pages, Insights, Dashboards, References, Groups, Cohorts.
 
 `#licenses` is first-class: every real seat, license status, approval, Approve / Revoke. `#keys` is the vault. `#map` / `#macos` / `#windows` stay fleet filters.
 
@@ -619,11 +619,11 @@ Copy is **Submitted**, never Submited. No `bg-orange-50`. No Unsplash.
 
 ## Geo and identity ingest
 
-On each HMAC heartbeat (and Ask ingest), the Worker attaches geo from `request.cf`. The client body may send `seatHash`, `os`, `appVersion`, optional `lastIndexAt`, optional `hostname`, and optional `ssoEmail`. The Worker ignores client `lat`, `lon`, `country`, `city`, and `ip`.
+On each HMAC heartbeat (and Ask ingest), the Worker attaches geo from `request.cf`. The client body may send `seatHash`, `os`, `appVersion`, optional `lastIndexAt`, optional `hostname`, optional `ssoEmail`, optional license **status**, and optional license key **last4**. The Worker ignores client `lat`, `lon`, `country`, `city`, and `ip`. The Worker ignores any client `approval` field.
 
 `hostname` is `os.hostname()` from the seat, sanitized (letters, digits, dot, hyphen, underscore; max 64). `ssoEmail` is `authStatus().email` when the seat is signed in, sanitized as an email (max 120). Do not invent either field. Do not store Tony's cloud provider keys on the seat. Do not send the ingest secret, skill PEM, API keys, CF tokens, or use grants.
 
-Heartbeat **response** (HMAC, not Access) may include `retry: string[]` and `fundedProviders: ProviderId[]`. Never a secret, last4, or grant in that JSON.
+Heartbeat **response** (HMAC, not Access) may include `approved: boolean`, `retry: string[]`, and `fundedProviders: ProviderId[]` (empty unless `approved`). Never a secret, last4, or grant in that JSON.
 
 ## Client (Métis)
 
@@ -660,7 +660,7 @@ Tony 6:17 PM ET (login, overlay, map, events) plus Tony 8:03–8:05 PM ET (routi
 | Keys last4 | `#keys` and `/v1/admin/keys` never echo a secret, cipher, iv, CF token, or grant. UI last4 only. Seats are not told they keep Tony's cloud keys. |
 | CLI not in vault | `claude-cli` / `codex-cli` stay kind `cli`. Settings CLI Integration unchanged. No CLI token in `vault_keys`. |
 | Cloudflare fail-loud | Overview Worker/D1/analytics for `metis-operator` errors visibly when the token is missing. No CF token on seats. |
-| Pre-Shoey chrome + Métis nouns | Rail is Overview / Realtime / Events / Profiles / Map / macOS / Windows / Licenses / Skills / Keys. Do not ship Sessions / Notifications as nav. No SEO / Pages / Insights leftovers. No shoe SKUs. No sample visitors. |
+| Pre-Shoey chrome + Métis nouns | Rail is Overview / Realtime / Events / Map / Users / macOS / Windows / Licenses / Keys / Notifications / Rules / Pushes / Skills. Do not ship Sessions as nav. No SEO / Pages / Insights leftovers. No shoe SKUs. No sample visitors. |
 
 If a map or sidebar fix would require touching overlay chrome, **stop and report**. Do not mix slices.
 

@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS seats (
   last_index_at INTEGER,
   hostname TEXT,
   sso_email TEXT,
-  license TEXT
+  license TEXT,
+  approval TEXT
 );
 
 CREATE TABLE IF NOT EXISTS asks (

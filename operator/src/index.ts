@@ -28,6 +28,13 @@ import {
   rotateVaultKey,
   writeVaultKey
 } from './keys'
+import {
+  approvalOf,
+  isApprovedSeat,
+  licenseFromIngest,
+  LICENSES_EMPTY,
+  parseApproval
+} from './fleet'
 import { looksLikeSecret } from './redact'
 import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './store'
 import { isPublicAssetPath, publicAssetResponse } from './assets'
@@ -316,6 +323,30 @@ async function adminRoute(
     await store.audit(crypto.randomUUID(), now, email, 'crm-retry', null, row.id)
     return json({ ok: true, autoSend: false })
   }
+  if (url.pathname === '/v1/admin/licenses' && request.method === 'GET') {
+    const dash = await buildDashboard(store, email, now)
+    if (dash.licenses.empty) return json({ ok: false, error: LICENSES_EMPTY, empty: true }, 404)
+    return json(stripSecrets({ ok: true, licenses: dash.licenses.rows }))
+  }
+  if (url.pathname === '/v1/admin/licenses' && request.method === 'POST') {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
+    const deviceId = typeof body.deviceId === 'string' ? body.deviceId.trim() : ''
+    const approval = parseApproval(body.approval)
+    if (!deviceId || !approval) return json({ ok: false, error: 'deviceId and approval required' }, 400)
+    const ok = await store.updateSeatApproval(deviceId, approval)
+    if (!ok) return json({ ok: false, error: 'seat not found' }, 404)
+    await store.audit(crypto.randomUUID(), now, email, approval === 'approved' ? 'approve-seat' : 'revoke-seat', null, deviceId)
+    return json({ ok: true, deviceId, approval })
+  }
+  const licenseAct = /^\/v1\/admin\/licenses\/([^/]+)\/(approve|revoke)$/.exec(url.pathname)
+  if (licenseAct && request.method === 'POST') {
+    const deviceId = decodeURIComponent(licenseAct[1])
+    const approval = licenseAct[2] === 'approve' ? 'approved' : 'revoked'
+    const ok = await store.updateSeatApproval(deviceId, approval)
+    if (!ok) return json({ ok: false, error: 'seat not found' }, 404)
+    await store.audit(crypto.randomUUID(), now, email, approval === 'approved' ? 'approve-seat' : 'revoke-seat', null, deviceId)
+    return json({ ok: true, deviceId, approval })
+  }
   return json({ ok: false, error: 'not found' }, 404)
 }
 
@@ -343,6 +374,7 @@ async function heartbeat(
   const body = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {}
   const seat = seatFromBody(deviceId, body, now, geo)
   await store.upsertSeat(seat)
+  const stored = (await store.listSeats()).find((s) => s.device_id === deviceId) ?? seat
   const pulseId = crypto.randomUUID()
   await store.insertPulse({
     id: pulseId,
@@ -366,7 +398,8 @@ async function heartbeat(
   return json({
     ok: true,
     retry: retries.map((r) => r.id),
-    fundedProviders: await fundedProviders(store)
+    fundedProviders: await fundedProviders(store, stored),
+    approved: isApprovedSeat(stored)
   })
 }
 
@@ -512,7 +545,7 @@ function seatFromBody(deviceId: string, body: Record<string, unknown>, now: numb
     last_index_at: lastIndexAt(body),
     hostname: sanitizeOperatorHostname(body.hostname),
     sso_email: sanitizeOperatorSsoEmail(body.ssoEmail),
-    license: typeof body.license === 'string' && !looksLikeSecret(body.license) ? body.license.slice(0, 32) : null
+    license: licenseFromIngest(body)
   }
 }
 

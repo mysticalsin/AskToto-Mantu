@@ -1,6 +1,7 @@
 import { aggregateCacheSlice, estimateCacheCost, formatUsdEstimate, type AskLogLine } from '../../src/shared/operator'
 import { CRM_STATUSES, type CrmSendRow, type CrmStatus } from './crm'
 import { missingCloudflareOverview, type CloudflareOverview } from './cloudflare'
+import { approvalOf, isApprovedSeat, isRealSeat, LICENSES_EMPTY, type SeatApproval } from './fleet'
 import { looksLikeSecret, safeChips, type SafeChip } from './redact'
 import type { EventRow, OperatorStore, PulseRow, SeatRow, VaultKeyMeta } from './store'
 
@@ -129,6 +130,25 @@ export interface DashboardPayload {
     vault: VaultKeyMeta[]
   }
   cloudflare: CloudflareOverview
+  licenses: {
+    empty: boolean
+    error: string | null
+    rows: { device: string; hostname: string | null; email: string | null; os: string; appVersion: string; license: string | null; approval: SeatApproval; lastSeen: number }[]
+  }
+  roi: {
+    costToday: string | null
+    cost7d: string | null
+    liveSeats: number
+    cacheHit: string | null
+    asksToday: number
+    licensed: number
+    approved: number
+    source: 'd1.asks+d1.seats'
+  }
+  gateway: {
+    rows: { provider: string; asks: number; tokens: number | null; estimate: string | null; funded: boolean }[]
+  }
+  notices: { id: string; kind: string; title: string; detail: string; ts: number }[]
 }
 
 export interface ConsoleEvent {
@@ -151,6 +171,7 @@ export interface ProfileRow {
   lastSeen: number
   live: boolean
   license: string | null
+  approval: SeatApproval
 }
 
 export type DashboardKeyFlags = {
@@ -371,7 +392,7 @@ export async function buildDashboard(
   keys: DashboardKeyFlags = { ingestBound: false, promptBound: false, skillBound: false, vaultBound: false },
   cloudflare: CloudflareOverview = missingCloudflareOverview()
 ): Promise<DashboardPayload> {
-  const seats = await store.listSeats()
+  const seats = (await store.listSeats()).filter(isRealSeat)
   const asks = await store.listAsks(2000)
   const pulses = await store.listPulses(now - 7 * DAY)
   const proposals = await store.listProposals()
@@ -636,8 +657,115 @@ export async function buildDashboard(
         city: s.city,
         lastSeen: s.last_seen,
         live: now - s.last_seen < ONLINE_MS,
-        license: s.license && !looksLikeSecret(s.license) ? s.license : null
+        license: s.license && !looksLikeSecret(s.license) ? s.license : null,
+        approval: approvalOf(s)
       })),
+    licenses: (() => {
+      const rows = seats
+        .slice()
+        .sort((a, b) => b.last_seen - a.last_seen)
+        .map((s) => ({
+          device: s.device_id,
+          hostname: s.hostname && !looksLikeSecret(s.hostname) ? s.hostname : null,
+          email: s.sso_email && !looksLikeSecret(s.sso_email) ? s.sso_email : null,
+          os: s.os,
+          appVersion: s.app_version,
+          license: s.license && !looksLikeSecret(s.license) ? s.license : null,
+          approval: approvalOf(s),
+          lastSeen: s.last_seen
+        }))
+      return {
+        empty: rows.length === 0,
+        error: rows.length === 0 ? LICENSES_EMPTY : null,
+        rows
+      }
+    })(),
+    roi: {
+      costToday,
+      cost7d,
+      liveSeats: live,
+      cacheHit: sliceToday.hitRate == null ? null : `${Math.round(sliceToday.hitRate * 100)}%`,
+      asksToday: todayAsks.length,
+      licensed: seats.filter((s) => {
+        const lic = (s.license || '').toLowerCase()
+        return lic.includes('licensed') || lic === 'approved' || lic === 'trial' || lic === 'grace'
+      }).length,
+      approved: seats.filter((s) => isApprovedSeat(s)).length,
+      source: 'd1.asks+d1.seats'
+    },
+    gateway: {
+      rows: (() => {
+        const funded = new Set(vault.filter((v) => v.status === 'active').map((v) => v.provider))
+        const by = new Map<string, { asks: number; tokens: number; anyTok: boolean; usd: number; anyCost: boolean }>()
+        for (const a of weekAsks) {
+          const provider = a.provider || 'unknown'
+          const cur = by.get(provider) ?? { asks: 0, tokens: 0, anyTok: false, usd: 0, anyCost: false }
+          cur.asks += 1
+          const tok = (a.input_tokens ?? 0) + (a.output_tokens ?? 0) + (a.cache_read ?? 0) + (a.cache_write ?? 0)
+          if (a.input_tokens != null || a.output_tokens != null || a.cache_read != null) {
+            cur.tokens += tok
+            cur.anyTok = true
+          }
+          const est = estimateCacheCost(
+            {
+              cacheRead: a.cache_read ?? undefined,
+              cacheWrite: a.cache_write ?? undefined,
+              cacheUncached: a.cache_uncached ?? undefined,
+              cacheStatus: (a.cache_status as AskLogLine['cacheStatus']) ?? undefined,
+              cacheTtl: (a.cache_ttl as AskLogLine['cacheTtl']) ?? undefined,
+              outputTokens: a.output_tokens ?? undefined
+            },
+            a.model || '',
+            a.provider || undefined
+          )
+          if (est) {
+            cur.usd += est.usd
+            cur.anyCost = true
+          }
+          by.set(provider, cur)
+        }
+        return [...by.entries()]
+          .map(([provider, cur]) => ({
+            provider,
+            asks: cur.asks,
+            tokens: cur.anyTok ? cur.tokens : null,
+            estimate: cur.anyCost ? formatUsdEstimate(cur.usd) : null,
+            funded: funded.has(provider)
+          }))
+          .sort((a, b) => b.asks - a.asks)
+      })()
+    },
+    notices: [
+      ...seats
+        .filter((s) => !isApprovedSeat(s))
+        .map((s) => ({
+          id: `seat-${s.device_id}`,
+          kind: 'seat-pending',
+          title: 'Seat waiting for approval',
+          detail: [s.hostname, s.sso_email, s.os].filter(Boolean).join(' · ') || s.device_id.slice(0, 8),
+          ts: s.last_seen
+        })),
+      ...crm
+        .filter((r) => r.status === 'failed' || r.status === 'expired')
+        .map((r) => ({
+          id: `crm-${r.id}`,
+          kind: 'crm-failed',
+          title: `${r.connector} push ${r.status}`,
+          detail: r.last_error && !looksLikeSecret(r.last_error) ? r.last_error : r.title,
+          ts: r.ts
+        })),
+      ...proposals
+        .filter((p) => p.status === 'pending')
+        .map((p) => ({
+          id: `skill-${p.id}`,
+          kind: 'skill-pending',
+          title: 'Skill diff pending',
+          detail: `${p.skill_id} ${p.from_version}`,
+          ts: p.created_at
+        }))
+    ]
+      .sort((a, b) => b.ts - a.ts)
+      .slice(0, 80),
     keys: {
       ingestBound: keys.ingestBound,
       promptBound: keys.promptBound,

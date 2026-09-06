@@ -6,7 +6,6 @@ export const NAV_SECTIONS = [
       { id: 'overview', label: 'Overview' },
       { id: 'realtime', label: 'Realtime' },
       { id: 'events', label: 'Events' },
-      { id: 'profiles', label: 'Profiles' },
       { id: 'map', label: 'Map' }
     ]
   },
@@ -14,6 +13,7 @@ export const NAV_SECTIONS = [
     id: 'fleet',
     label: 'Fleet',
     items: [
+      { id: 'profiles', label: 'Users' },
       { id: 'macos', label: 'macOS' },
       { id: 'windows', label: 'Windows' },
       { id: 'licenses', label: 'Licenses' }
@@ -23,8 +23,11 @@ export const NAV_SECTIONS = [
     id: 'ops',
     label: 'Ops',
     items: [
-      { id: 'skills', label: 'Skills' },
-      { id: 'keys', label: 'Keys' }
+      { id: 'keys', label: 'Keys' },
+      { id: 'notifications', label: 'Notifications' },
+      { id: 'rules', label: 'Rules' },
+      { id: 'pushes', label: 'Pushes' },
+      { id: 'skills', label: 'Skills' }
     ]
   }
 ] as const
@@ -40,7 +43,10 @@ export type NavId =
   | 'licenses'
   | 'skills'
   | 'keys'
+  | 'notifications'
+  | 'rules'
+  | 'pushes'
 
 export const NAV_IDS: NavId[] = NAV_SECTIONS.flatMap((s) => s.items.map((i) => i.id))
 
-export const FORBIDDEN_NAV = ['scale', 'change', 'console'] as const
+export const FORBIDDEN_NAV = ['scale', 'change', 'console', 'sessions'] as const
