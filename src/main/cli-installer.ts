@@ -31,16 +31,17 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { delimiter, dirname, join } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import { createHash, randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
 import { app } from 'electron'
 import { ensureManagedNode, resolveManagedNode } from './managed-node'
-
-function errMsg(e: unknown): string {
-  return e instanceof Error ? e.message : String(e)
-}
+import {
+  NPM_MISSING_NODE_ERROR,
+  humanizeNpmInstallError,
+  npmInstallLooksLikeMissingBinary
+} from '@shared/managed-npm'
 
 // ─── Public types ──────────────────────────────────────────────────────────────────
 
@@ -407,9 +408,9 @@ export async function installManagedCli(
       }
     }
     const cancelled = isCancellation(err, signal)
-    const message = cancelled ? 'cancelled' : errMsg(err)
+    const message = cancelled ? 'cancelled' : humanizeNpmInstallError(err)
     onProgress({ phase: 'error', error: message })
-    throw cancelled ? new Error('cancelled') : err instanceof Error ? err : new Error(message)
+    throw cancelled ? new Error('cancelled') : new Error(message)
   }
 }
 
@@ -452,28 +453,99 @@ export function managedCliCommand(id: ManagedCliId): { command: string; args: st
 
 const NPM_INSTALL_ARGS = ['install', '--omit=dev', '--no-fund', '--no-audit'] as const
 
-/** Resolve { command, args } for a local npm install using portable Node, never a system global npm. */
+export class ManagedNpmMissingError extends Error {
+  constructor(message: string = NPM_MISSING_NODE_ERROR) {
+    super(message)
+    this.name = 'ManagedNpmMissingError'
+  }
+}
+
+const SPAWN_ENV_ALLOW = new Set([
+  'PATH',
+  'PATHEXT',
+  'SYSTEMROOT',
+  'WINDIR',
+  'SYSTEMDRIVE',
+  'COMSPEC',
+  'TEMP',
+  'TMP',
+  'HOME',
+  'USERPROFILE',
+  'APPDATA',
+  'LOCALAPPDATA',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TZ',
+  'PROCESSOR_ARCHITECTURE',
+  'NUMBER_OF_PROCESSORS'
+])
+
+/** Drop secrets from the parent env. npm only needs a short OS allow-list. */
+export function sanitizedSpawnEnv(base: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(base)) {
+    if (!v) continue
+    if (SPAWN_ENV_ALLOW.has(k) || SPAWN_ENV_ALLOW.has(k.toUpperCase())) out[k] = v
+  }
+  return out
+}
+
+/** Official Node: win32 `node.exe` sits next to `node_modules/npm`; darwin/linux `bin/node` uses `../lib`. */
+export function resolveNpmCliJs(nodePath: string): string | null {
+  const dir = dirname(nodePath)
+  const parent = dirname(dir)
+  const candidates = [
+    join(dir, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    join(parent, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    join(dir, 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    join(parent, 'node_modules', 'npm', 'bin', 'npm-cli.js')
+  ]
+  return candidates.find((p) => existsSync(p)) ?? null
+}
+
+function withNodeOnPath(env: Record<string, string>, nodePath: string): Record<string, string> {
+  const dir = dirname(nodePath)
+  const existing = env.PATH || env.Path || ''
+  const next = existing ? `${dir}${delimiter}${existing}` : dir
+  env.PATH = next
+  if (process.platform === 'win32') env.Path = next
+  return env
+}
+
+/**
+ * Always spawn the Node binary + npm-cli.js. Never the `bin/npm` shebang (#!/usr/bin/env node)
+ * and never a PATH `npm`. Electron GUI PATH has no node: that was exit 127.
+ */
 export function npmInstallProductionSpawn(): { command: string; args: string[]; env: Record<string, string> } {
   const portable = resolveManagedNode()
-  if (portable?.npm && existsSync(portable.npm)) {
-    return { command: portable.npm, args: [...NPM_INSTALL_ARGS], env: {} }
+  if (portable?.node && existsSync(portable.node)) {
+    const npmCli = resolveNpmCliJs(portable.node)
+    if (!npmCli) throw new ManagedNpmMissingError()
+    return { command: portable.node, args: [npmCli, ...NPM_INSTALL_ARGS], env: {} }
   }
-  const node = portable?.node || process.execPath
-  const npmCli = [
-    join(dirname(node), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
-    join(dirname(node), 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
-  ].find((p) => existsSync(p))
-  const env = portable ? {} : { ELECTRON_RUN_AS_NODE: '1' }
-  return { command: node, args: [...(npmCli ? [npmCli] : []), ...NPM_INSTALL_ARGS], env }
+  const electron = process.execPath
+  const npmCli = resolveNpmCliJs(electron)
+  if (!npmCli) throw new ManagedNpmMissingError()
+  return { command: electron, args: [npmCli, ...NPM_INSTALL_ARGS], env: { ELECTRON_RUN_AS_NODE: '1' } }
 }
 
 /** Local `npm install --omit=dev` inside the extracted package — not `npm i -g`, not a system Node. */
 export function npmInstallProduction(packageDir: string, signal?: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
-    const spec = npmInstallProductionSpawn()
+    let spec: { command: string; args: string[]; env: Record<string, string> }
+    try {
+      spec = npmInstallProductionSpawn()
+    } catch (err) {
+      reject(err instanceof Error ? err : new ManagedNpmMissingError())
+      return
+    }
+    const env = withNodeOnPath({ ...sanitizedSpawnEnv(), CI: '1', ...spec.env }, spec.command)
     const child = spawn(spec.command, spec.args, {
       cwd: packageDir,
-      env: { ...process.env, CI: '1', ...spec.env },
+      env,
       windowsHide: true,
       stdio: 'ignore'
     })
@@ -484,7 +556,11 @@ export function npmInstallProduction(packageDir: string, signal?: AbortSignal): 
     signal?.addEventListener('abort', onAbort)
     child.once('error', (err) => {
       signal?.removeEventListener('abort', onAbort)
-      reject(err)
+      reject(
+        npmInstallLooksLikeMissingBinary(null, err)
+          ? new Error(humanizeNpmInstallError(err))
+          : err
+      )
     })
     child.once('close', (code) => {
       signal?.removeEventListener('abort', onAbort)
@@ -493,7 +569,8 @@ export function npmInstallProduction(packageDir: string, signal?: AbortSignal): 
         return
       }
       if (code !== 0) {
-        reject(new Error(`npm install --omit=dev failed in ${packageDir} (exit ${code})`))
+        const raw = `npm install --omit=dev failed in ${packageDir} (exit ${code})`
+        reject(new Error(npmInstallLooksLikeMissingBinary(code) ? humanizeNpmInstallError(new Error(raw)) : raw))
         return
       }
       resolve()
