@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react'
 import { useWindowDrag } from '../lib/window-drag'
-import { BAR_PILL_VISIBLE_PX, pillClickShouldExpand, type OrbMood } from '../lib/bar-pill-orb'
+import { BAR_PILL_VISIBLE_PX, runOrbPillActivate, type OrbMood } from '../lib/bar-pill-orb'
 import { createJarvisOrb, resolveJarvisOrbState, type JarvisOrbHandle } from '../lib/jarvis-orb'
 
 /**
@@ -73,8 +73,7 @@ export function ObsidianOrb({
         if (enableDrag) drag.onPointerDown(e)
       }}
       onClick={() => {
-        if (enableDrag && !pillClickShouldExpand(dragMovedRef.current)) return
-        onActivate()
+        runOrbPillActivate({ enableDrag, dragMoved: dragMovedRef.current, onActivate })
       }}
       className="aw-orb aw-orb--obsidian no-drag focus-ring"
     >

@@ -78,7 +78,7 @@ describe('BAR-PILL contract', () => {
     expect(pill).toMatch(/orbStyle = 'jakub'/)
     expect(jarvisCircle).toMatch(/data-bar-pill-orb/)
     expect(jarvisCircle).toMatch(/jarvis-particles/)
-    expect(jarvisCircle).toMatch(/pillClickShouldExpand/)
+    expect(jarvisCircle).toMatch(/runOrbPillActivate/)
     expect(pill).toMatch(/orbMood/)
     expect(css).toMatch(/\.aw-orb/)
     expect(css).not.toMatch(/bar-pill-spring-in/)
@@ -122,8 +122,13 @@ describe('BAR-PILL contract', () => {
 
   it('click expands and drag does not', () => {
     expect(orbBtn).toMatch(/onClick=\{\(\) => \{/)
-    expect(orbBtn).toMatch(/pillClickShouldExpand\(dragMovedRef\.current\)/)
+    expect(orbBtn).toMatch(/runOrbPillActivate\(\{ enableDrag, dragMoved: dragMovedRef\.current, onActivate \}\)/)
     expect(orbBtn).toMatch(/useWindowDrag/)
+    expect(jarvisCircle).toMatch(/runOrbPillActivate\(\{ enableDrag, dragMoved: dragMovedRef\.current, onActivate \}\)/)
+    expect(pill).toMatch(/onActivate=\{onExpand\}/)
+    expect(app).toMatch(/onExpand=\{unminimize\}/)
+    expect(app).toMatch(/decideCircleRestMinimize/)
+    expect(app).not.toMatch(/if \(view !== 'settings' && !minimized\)/)
   })
 
   it('hide and island rest sizes and hover math stay put', () => {
