@@ -138,11 +138,13 @@ describe('an unconfigured endpoint is a routing decision, never a silent redirec
   })
 })
 
-describe('Settings offers Cloudflare the same affordances as its siblings', () => {
-  it('renders a Worker endpoint field bound to cloudflareBaseUrl, with managed-config support', () => {
-    expect(settingsSource).toMatch(/value=\{settings\.cloudflareBaseUrl\}/)
-    expect(settingsSource).toMatch(/onCommit=\{\(v\) => patch\(\{ cloudflareBaseUrl: v \}\)\}/)
-    expect(settingsSource).toMatch(/k="cloudflareBaseUrl"/)
+describe('Settings offers Cloudflare connect, not a paste happy path', () => {
+  it('opens Operator /cloudflare/connect from the provider tile and a Log in button', () => {
+    expect(settingsSource).toMatch(/connectCloudflare/)
+    expect(settingsSource).toMatch(/window\.toto\.cloudflareConnect/)
+    expect(settingsSource).toMatch(/data-cf-aig-connect/)
+    expect(settingsSource).toMatch(/Log in to Cloudflare/)
+    expect(settingsSource).toMatch(/id === 'cloudflare' \? connectCloudflare/)
   })
 
   it('auto-opens Advanced for every provider that needs a URL, not just Custom by name', () => {
@@ -150,11 +152,10 @@ describe('Settings offers Cloudflare the same affordances as its siblings', () =
     expect(settingsSource).toMatch(/if \(requiresUserBaseUrl\(provider\)\) setAdv\(true\)/)
   })
 
-  it('tells the user where the token actually lives, without ever showing one', () => {
-    const copy = settingsSource.slice(settingsSource.indexOf("provider === 'cloudflare' && ("))
-    expect(copy).toMatch(/Wrangler secret/)
-    expect(copy).toMatch(/METIS_PROXY_KEY/)
-    expect(copy).toMatch(/never stores that token/)
+  it('does not offer Worker URL + METIS_PROXY_KEY paste as the happy path', () => {
+    expect(settingsSource).not.toMatch(/value=\{settings\.cloudflareBaseUrl\}/)
+    expect(settingsSource).not.toMatch(/Paste the Worker/)
+    expect(settingsSource).toMatch(/Paste is not the happy path/)
   })
 })
 
