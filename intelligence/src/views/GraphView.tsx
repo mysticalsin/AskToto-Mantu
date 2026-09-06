@@ -6,6 +6,7 @@ import type { DashboardData, GraphEdge, GraphNode, Reason, ScopeSummary, WinLike
 import { bandColor, bandLabel, fmtScopeTotal } from '../lib/format'
 import { findBridges } from '../lib/bridges'
 import { slug } from '../lib/slug'
+import { EmptyState } from '../components/EmptyState'
 
 interface Props {
   data: DashboardData
@@ -444,6 +445,17 @@ export function GraphView({ data }: Props) {
   }, [selected, people])
 
   const isThin = accountGroups.length <= 1 && sectorGroups.length <= 1
+
+  if (graph.nodes.length === 0) {
+    return (
+      <EmptyState
+        title="Relationships"
+        standfirst="People, accounts, and deals linked from your connected brain."
+        headline="No relationship graph yet."
+        body="Relationships fill in after Update Intelligence extracts people, accounts, and deals from saved meetings. If this brain looks empty, reconnect OneDrive in Settings → Brain."
+      />
+    )
+  }
 
   return (
     <div className="flex h-[calc(100vh-57px)]">

@@ -88,6 +88,7 @@ import {
 import { appearanceSettingsPatch, seedOnboardingAppearance } from '../lib/onboarding-appearance'
 import { createOnboardingMusicBed, haltAllOnboardingAudio } from '../lib/onboarding-music'
 import { closeOnboardingPortal, disposePortalAudio, playBarLand, playPortalOpen, requestBarLand } from '../lib/onboarding-portal'
+import { BrainConnectPanel } from './BrainConnectPanel'
 import {
   TELL_THE_ROOM_CHECKBOX,
   TELL_THE_ROOM_LEAD,
@@ -1171,6 +1172,9 @@ export function OnboardingExperience({
                 <div className="min-w-0 flex-1">
                   <p className="m-0 truncate text-[13px] text-[color:var(--color-ink)]">{r.label}</p>
                   {r.detail && <p className="m-0 text-[11px] text-[color:var(--color-ink-3)]">{r.detail}</p>}
+                  {r.key === 'brain' && settings && patch && (
+                    <BrainConnectPanel settings={settings} patch={patch} variant="setup" />
+                  )}
                   {(r.key === 'local' || r.key === 'asr') && r.progress != null && (
                     <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-white/10">
                       <div

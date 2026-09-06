@@ -59,6 +59,8 @@ export const IPC = {
   brainBackfill: 'brain:backfill',
   brainIntelligencePass: 'brain:intelligencePass',
   brainRead: 'brain:read',
+  brainScanOneDrive: 'brain:scanOneDrive',
+  brainConnect: 'brain:connect',
   brainEntityNames: 'brain:entityNames',
   restoreEmbeddedCloudflareKey: 'settings:restoreEmbeddedCloudflareKey',
   brainOpenDashboard: 'brain:openDashboard',
@@ -177,6 +179,12 @@ export const IPC = {
   // exception the renderer survives, previously visible only via ASKTOTO_DEBUG_RENDERER console mirroring.
   rendererCrash: 'renderer:crash',
   hotkey: 'hotkey',
+  // Main → renderer: start Listen because a meeting app became the foreground window.
+  // Renderer must call startListen only (never toggle/stop). One fire per meeting session.
+  meetingAutoStart: 'meeting:auto-start',
+  // QA-only (main registers handler only when ASKTOTO_USERDATA is set): stamp a synthetic
+  // foreground so Ultron/CDP can prove zoomIdle no-fire + zoom fire without a real meeting app.
+  meetingInjectAutoStart: 'meeting:inject-auto-start',
   shortcutFailures: 'shortcuts:failures',
   permissionsGet: 'permissions:get',
   permissionsOpenSettings: 'permissions:openSettings',
@@ -1047,6 +1055,17 @@ export const BaseSettingsSchema = z.object({
   // = never finished (or a legacy profile that predates this field; the app backfills it once on load).
   onboardingDoneAt: z.number().default(0),
   recordingConsent: z.boolean().default(false),
+  // Auto-start Listen when Teams / Zoom / Google Meet becomes the foreground window.
+  // Defaults ON for new profiles. Runtime still requires onboardingDone && recordingConsent
+  // (see shared/meeting-auto-start.ts). Before consent this never fires.
+  autoStartMeetings: z
+    .object({
+      enabled: z.boolean().default(true),
+      zoom: z.boolean().default(true),
+      teams: z.boolean().default(true),
+      meet: z.boolean().default(true)
+    })
+    .default({ enabled: true, zoom: true, teams: true, meet: true }),
   playListenChime: z.boolean().default(true),
   soundCues: z.boolean().default(true), // subtle answer-ready / error sound cues
   uiSounds: z.boolean().default(true), // master: soft click feedback on buttons (and gates all UI sounds)
@@ -1544,6 +1563,7 @@ export const DEFAULT_SETTINGS: Settings = {
   onboardingDone: false,
   onboardingDoneAt: 0,
   recordingConsent: false,
+  autoStartMeetings: { enabled: true, zoom: true, teams: true, meet: true },
   playListenChime: true,
   soundCues: true,
   uiSounds: true,
@@ -2017,6 +2037,16 @@ export interface GraphRelated {
 export interface BrainEntityNamesResult {
   names: string[]
 }
+
+/** Settings → Brain / setup: connect a scanned OneDrive second-brain folder. */
+export const BrainConnectPayloadSchema = z.object({
+  path: z.string().min(1).max(1024)
+})
+export type BrainConnectPayload = z.infer<typeof BrainConnectPayloadSchema>
+export type { BrainScanHit, BrainScanResult, MeetingConnection } from './mantu-intelligence'
+export type BrainConnectResult =
+  | { ok: true; path: string }
+  | { ok: false; error: string }
 
 // ─── MCP connections (CRM push + "Book next steps") ────────────────────────
 // Generalized from the single BidStack-only mcpCrm:* IPC channels. `connectionId` identifies WHICH

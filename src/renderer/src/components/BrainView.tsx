@@ -13,6 +13,7 @@ import {
   ExternalLink,
   FileWarning,
   HelpCircle,
+  Link2,
   Minus,
   Timer,
   TrendingUp,
@@ -42,6 +43,7 @@ import { describeMeetingIndexProgress } from './work-progress'
 import { IntelligenceUpdateButton } from './IntelligenceUpdateButton'
 import { NO_PROVIDER_INDEX_COPY, runIntelligenceUpdateClick } from '../lib/intelligence-update'
 import { startIntelligenceUpdateFromClick } from '@shared/intelligence-pass'
+import { uniqueConnectionPairs, type MeetingConnection } from '@shared/mantu-intelligence'
 
 /**
  * Mantu Intelligence — the second-brain dashboard over the meeting knowledge store (.brain/).
@@ -157,6 +159,61 @@ function SectionTitle({ children }: { children: React.ReactNode }): JSX.Element 
   return (
     <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[color:var(--color-ink-3)]">
       {children}
+    </div>
+  )
+}
+
+function ConnectionsSection({
+  connections,
+  onOpenMeeting,
+  meetingCount
+}: {
+  connections: MeetingConnection[]
+  onOpenMeeting?: (file: string) => void
+  meetingCount: number
+}): JSX.Element {
+  const rows = uniqueConnectionPairs(connections).slice(0, 12)
+  return (
+    <div className="rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-2.5">
+      <SectionTitle>
+        <Link2 size={11} className="mr-1 inline" />
+        Connections
+      </SectionTitle>
+      {rows.length === 0 ? (
+        <div className="text-[12px] leading-snug text-[color:var(--color-ink-3)]" role="status">
+          {meetingCount < 2
+            ? 'No cross-meeting links yet. Save a second meeting that names the same person, account, deal, or topic, then use Update Intelligence.'
+            : 'No shared person, account, deal, or topic across two meetings yet. Update Intelligence after those meetings are saved, or reconnect OneDrive if this brain looks empty.'}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {rows.map((row) => (
+            <div key={row.id} className="flex flex-col gap-0.5 rounded-lg px-1 py-0.5">
+              <div className="text-[12px] text-[color:var(--color-ink-2)]">{row.sentence}</div>
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                <button
+                  type="button"
+                  onClick={() => onOpenMeeting?.(row.a.file)}
+                  className="no-drag focus-ring rounded-md px-1.5 py-0.5 text-[color:var(--color-accent-2)] hover:bg-white/[0.06]"
+                >
+                  {row.a.title}
+                </button>
+                <span className="text-[color:var(--color-ink-3)]">and</span>
+                <button
+                  type="button"
+                  onClick={() => onOpenMeeting?.(row.b.file)}
+                  className="no-drag focus-ring rounded-md px-1.5 py-0.5 text-[color:var(--color-accent-2)] hover:bg-white/[0.06]"
+                >
+                  {row.b.title}
+                </button>
+                <span className="rounded-full bg-white/[0.06] px-1.5 py-px text-[10px] text-[color:var(--color-ink-3)]">
+                  {row.kind} · {row.via}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -1003,6 +1060,12 @@ export function BrainView({
                 transcripts are short or don&rsquo;t name clients. Longer, client-facing meetings will fill this in.
               </div>
             )}
+
+          <ConnectionsSection
+            connections={data?.connections ?? []}
+            onOpenMeeting={onOpenMeeting}
+            meetingCount={ingested}
+          />
 
           {/* ATTENTION — lint contradictions, AMBIGUOUS fields, and pins a later meeting disputed. Never
               auto-resolved; each row jumps straight to the entity's record page. Empty state is a single

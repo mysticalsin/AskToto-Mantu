@@ -3,6 +3,7 @@ import { motion } from 'framer-motion'
 import { useNavigate } from 'react-router-dom'
 import type { Category, DashboardData } from '../types/data'
 import { InsightCard } from '../components/InsightCard'
+import { EmptyState } from '../components/EmptyState'
 import { categoryLabel, confidenceImpactScore } from '../lib/format'
 
 interface Props {
@@ -31,6 +32,17 @@ export function CoachingView({ data }: Props) {
         confidenceImpactScore(a.confidence, a.n_observations),
     )
   }, [data.coaching_insights, categoryFilter])
+
+  if (data.coaching_insights.length === 0) {
+    return (
+      <EmptyState
+        title="Coaching"
+        standfirst="Prescriptive moves sorted by confidence × impact."
+        headline="No coaching insights yet."
+        body="Coaching notes appear after Update Intelligence extracts them from saved meetings. Record a client meeting, then run that pass. If this brain looks empty, reconnect OneDrive in Settings → Brain."
+      />
+    )
+  }
 
   return (
     <div className="mx-auto max-w-7xl px-6 py-8">

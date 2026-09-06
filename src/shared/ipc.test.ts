@@ -20,6 +20,7 @@ import {
   EntityUnmergePayloadSchema,
   EntityUpdateFieldPayloadSchema,
   FieldDecisionPayloadSchema,
+  BrainConnectPayloadSchema,
   CommitmentRejectPayloadSchema,
   MeetingExtractionQuerySchema,
   AttentionItemSchema,
@@ -317,6 +318,37 @@ describe('SettingsSchema', () => {
   it('accepts the default settings', () => {
     const result = SettingsSchema.safeParse(DEFAULT_SETTINGS)
     expect(result.success).toBe(true)
+  })
+
+  it('defaults autoStartMeetings ON, and a profile without the key still parses', () => {
+    expect(DEFAULT_SETTINGS.autoStartMeetings).toEqual({
+      enabled: true,
+      zoom: true,
+      teams: true,
+      meet: true
+    })
+    expect(SettingsSchema.parse(DEFAULT_SETTINGS).autoStartMeetings).toEqual({
+      enabled: true,
+      zoom: true,
+      teams: true,
+      meet: true
+    })
+    const { autoStartMeetings: _omit, ...without } = DEFAULT_SETTINGS
+    expect(SettingsSchema.parse(without).autoStartMeetings).toEqual({
+      enabled: true,
+      zoom: true,
+      teams: true,
+      meet: true
+    })
+    const parsed = SettingsSchema.safeParse({
+      ...DEFAULT_SETTINGS,
+      autoStartMeetings: { enabled: false, zoom: false, teams: true, meet: true }
+    })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data.autoStartMeetings.enabled).toBe(false)
+      expect(parsed.data.autoStartMeetings.zoom).toBe(false)
+    }
   })
 
   it('defaults playListenChime, requireConsentIndicator, and lastConsentReminderAt', () => {
@@ -947,6 +979,7 @@ describe('local AI IPC channel constants', () => {
     expect(IPC.localTranscriptAppend).toBe('local-ai:transcript:append')
     expect(IPC.localTranscriptResync).toBe('local-ai:transcript:resync')
     expect(IPC.localTranscriptEnd).toBe('local-ai:transcript:end')
+    expect(IPC.meetingAutoStart).toBe('meeting:auto-start')
     const values = Object.values(IPC)
     expect(new Set(values).size).toBe(values.length)
   })
@@ -1012,5 +1045,18 @@ describe('StreamMetaSchema migration guard', () => {
   it('still requires a provider and valid provider tier', () => {
     expect(StreamMetaSchema.safeParse({ id: 'ask-1', tier: 'base' }).success).toBe(false)
     expect(StreamMetaSchema.safeParse({ id: 'ask-1', provider: 'anthropic', tier: 'fast' }).success).toBe(false)
+  })
+})
+
+describe('Mantu Intelligence scan + connect IPC', () => {
+  it('names dedicated scan/connect channels (not a silent settings rewrite)', () => {
+    expect(IPC.brainScanOneDrive).toBe('brain:scanOneDrive')
+    expect(IPC.brainConnect).toBe('brain:connect')
+  })
+
+  it('connect payload requires a non-empty path and rejects a blank paste', () => {
+    expect(BrainConnectPayloadSchema.safeParse({ path: '/Users/tony/AI Second Brain' }).success).toBe(true)
+    expect(BrainConnectPayloadSchema.safeParse({ path: '' }).success).toBe(false)
+    expect(BrainConnectPayloadSchema.safeParse({}).success).toBe(false)
   })
 })

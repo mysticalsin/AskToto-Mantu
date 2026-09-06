@@ -30,6 +30,8 @@ export interface ForegroundInfo {
   pid: number
   /** Windows: window title. macOS: localized app name. Control chars/tabs stripped; may be ''. */
   title: string
+  /** Windows: process name (Zoom, Teams, chrome). Omitted on 3-field mac helper lines. */
+  process?: string
 }
 
 export interface ForegroundWatcher {
@@ -59,6 +61,10 @@ export function parseForegroundLine(line: string): ForegroundInfo | null {
   const windowId = parts[0].trim()
   const pid = Number(parts[1])
   if (!windowId || !Number.isFinite(pid)) return null
+  // 4-field Windows lines: HWND, pid, title, process. 3-field mac helper lines stay title-only.
+  if (parts.length >= 4) {
+    return { windowId, pid, title: parts[2], process: parts[3] }
+  }
   return { windowId, pid, title: parts.slice(2).join('\t') }
 }
 
@@ -93,7 +99,10 @@ while ($true) {
     if ($key -ne $last) {
       $last = $key
       $title = ($sb.ToString() -replace '[\\t\\r\\n]', ' ')
-      [Console]::Out.WriteLine(($hwnd.ToString() + $tab + $procId.ToString() + $tab + $title))
+      $procName = ''
+      $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+      if ($p) { $procName = ($p.ProcessName -replace '[\\t\\r\\n]', '') }
+      [Console]::Out.WriteLine(($hwnd.ToString() + $tab + $procId.ToString() + $tab + $title + $tab + $procName))
       [Console]::Out.Flush()
     }
   } catch {}
