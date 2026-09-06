@@ -3,6 +3,7 @@ import {
   cacheBadge,
   cloudflareConnectHref,
   DEFAULT_OPERATOR_URL,
+  resolveOperatorBaseUrl,
   estimateCacheCost,
   formatUsdEstimate,
   mapAnthropicUsage,
@@ -116,19 +117,21 @@ describe('cloudflareConnectHref', () => {
 })
 
 describe('operatorUrlConfigured', () => {
-  it('is off until an https Operator URL is set', () => {
-    expect(operatorUrlConfigured({})).toBe(false)
-    expect(operatorUrlConfigured({ operatorUrl: '' })).toBe(false)
+  it('falls back to DEFAULT_OPERATOR_URL so seats can heartbeat without Settings', () => {
+    expect(resolveOperatorBaseUrl({}, {})).toBe(DEFAULT_OPERATOR_URL)
+    expect(operatorUrlConfigured({})).toBe(true)
+    expect(operatorUrlConfigured({ operatorUrl: '' })).toBe(true)
     expect(operatorUrlConfigured({ operatorUrl: 'http://localhost' })).toBe(false)
     expect(operatorUrlConfigured({ operatorUrl: 'https://metis-operator.example.workers.dev' })).toBe(true)
     expect(operatorUrlConfigured({}, { METIS_OPERATOR_URL: 'https://op.example.workers.dev' })).toBe(true)
   })
 
-  it('sends Ask text by default once a URL is set', () => {
+  it('sends Ask text only once an explicit URL is set (not bare DEFAULT)', () => {
     const url = { operatorUrl: 'https://metis-operator.example.workers.dev' }
     expect(shouldSendAskText(url)).toBe(true)
     expect(shouldSendAskText({ ...url, sendAskText: false })).toBe(false)
     expect(shouldSendAskText({ sendAskText: true })).toBe(false)
+    expect(shouldSendAskText({})).toBe(false)
   })
 })
 

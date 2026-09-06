@@ -588,10 +588,22 @@ export function createJarvisOrb(
     renderer.render(scene, camera)
   }
 
+  let running = false
+  const stop = (): void => {
+    running = false
+    cancelAnimationFrame(raf)
+    raf = 0
+  }
   const tick = (): void => {
-    if (disposed) return
+    if (disposed || !running) return
     paint()
-    if (!reduced) raf = requestAnimationFrame(tick)
+    if (!reduced && running) raf = requestAnimationFrame(tick)
+  }
+  const start = (): void => {
+    if (disposed || reduced || running) return
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+    running = true
+    raf = requestAnimationFrame(tick)
   }
 
   const onHostResize = (): void => {
@@ -606,12 +618,30 @@ export function createJarvisOrb(
 
   let ro: ResizeObserver | null = null
   if (typeof ResizeObserver !== 'undefined') {
-    ro = new ResizeObserver(onHostResize)
+    // rAF-coalesce: hug setBounds can fire ResizeObserver every frame; never nest fit() work inline.
+    let resizeRaf = 0
+    ro = new ResizeObserver(() => {
+      if (disposed) return
+      if (resizeRaf) return
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = 0
+        onHostResize()
+      })
+    })
     ro.observe(canvas)
   }
 
+  const onVis = (): void => {
+    if (typeof document === 'undefined') return
+    if (document.visibilityState === 'hidden') stop()
+    else start()
+  }
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onVis)
+  }
+
   paint()
-  if (!reduced) raf = requestAnimationFrame(tick)
+  start()
   if (typeof requestAnimationFrame === 'function') {
     requestAnimationFrame(() => {
       if (!disposed) onHostResize()
@@ -628,8 +658,11 @@ export function createJarvisOrb(
     },
     dispose() {
       disposed = true
-      cancelAnimationFrame(raf)
+      stop()
       ro?.disconnect()
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVis)
+      }
       scene.remove(points, lines, electrons)
       geo.dispose()
       lineGeo.dispose()

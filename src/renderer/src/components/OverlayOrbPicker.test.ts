@@ -22,6 +22,8 @@ describe('Settings Bar rest orb cards', () => {
     expect(picker).toMatch(/<JarvisOrbButton/)
     expect(picker).toMatch(/<ObsidianOrb/)
     expect(picker).toMatch(/preview/)
+    expect(picker).toMatch(/animate=\{on\}/)
+    expect(picker).toMatch(/data-orb-diagram-animate/)
     expect(thinking).toMatch(/overlay-orb-diagram__jakub--live/)
     expect(thinking).toMatch(/overlay-orb-diagram__jakub-host/)
     expect(picker).not.toMatch(/ThinkingOrb/)
