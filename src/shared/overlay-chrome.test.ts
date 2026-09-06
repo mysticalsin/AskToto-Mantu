@@ -16,6 +16,9 @@ import {
   overlayHoverForced,
   overlayAllowsHugWidth,
   isShowMetisHugStub,
+  isIncompleteAskReveal,
+  overlayRevealedContentHeight,
+  ASK_REVEAL_MIN_HEIGHT_PX,
   parseOverlayLayout
 } from './overlay-chrome'
 
@@ -86,6 +89,28 @@ describe('overlay chrome modes', () => {
     expect(overlayHoverForced({ updateReady: true, toast: false, typedInput: false })).toBe(true)
     expect(isShowMetisHugStub({ width: 120, height: 44 })).toBe(true)
     expect(isShowMetisHugStub({ width: 880, height: 84 })).toBe(false)
+    expect(isIncompleteAskReveal({ width: 120, height: 44 })).toBe(true)
+    expect(isIncompleteAskReveal({ width: 880, height: 44 })).toBe(true)
+    expect(isIncompleteAskReveal({ width: 880, height: 2 })).toBe(true)
+    expect(isIncompleteAskReveal({ width: 880, height: 84 })).toBe(false)
+    expect(isIncompleteAskReveal({ width: 8, height: 2 })).toBe(false)
+    expect(ASK_REVEAL_MIN_HEIGHT_PX).toBe(84)
+    expect(
+      overlayRevealedContentHeight({
+        islandResting: false,
+        minimized: false,
+        settingsOpen: false,
+        reportedHeight: 20
+      })
+    ).toBe(84)
+    expect(
+      overlayRevealedContentHeight({
+        islandResting: true,
+        minimized: false,
+        settingsOpen: false,
+        reportedHeight: 2
+      })
+    ).toBe(2)
     expect(
       overlayAllowsHugWidth({ minimized: false, islandResting: false, restWidth: 8, nextWidth: 120 })
     ).toBe(false)

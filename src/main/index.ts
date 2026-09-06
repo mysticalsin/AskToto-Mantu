@@ -183,9 +183,10 @@ import {
 } from './island/cursor-watch'
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
 import {
-  isShowMetisHugStub,
+  isIncompleteAskReveal,
   overlayAllowsHugWidth,
   overlayAllowsMinimize,
+  overlayRevealedContentHeight,
   overlayUsesHover,
   parseOverlayLayout,
   type OverlayLayout
@@ -1902,7 +1903,16 @@ function resizeTo(height: number): void {
   // laptop + external monitor of different heights, a streaming answer clamps to the wrong monitor and the
   // window jumps vertically while the cursor sits on the other screen.
   const { workArea } = display
-  const h = clampHeight(Math.round(height), workArea.height)
+  // OverlayPeek can still report 2–20px after restoreBarWidth. clampHeight would floor that
+  // to BAR_MIN_HEIGHT 44 (880×44 Show Métis). Revealed Hide/Island stays the Ask bar.
+  const lifted = overlayRevealedContentHeight({
+    islandResting,
+    minimized: isMinimized,
+    settingsOpen: settingsSurfaceOpen,
+    reportedHeight: height,
+    minBarHeight: BAR_HEIGHT
+  })
+  const h = clampHeight(Math.round(lifted), workArea.height)
   const b = win.getBounds()
   if (h === b.height && currentWidth === b.width) {
     // Only remember this height for restore-on-expand when it's the real bar, not the mini-pill's
@@ -2027,7 +2037,7 @@ function tickOverlayCursorWatch(): void {
       alreadyHovering: overlayCursorWatchHovering,
       islandResting,
       windowVisible,
-      hugStub: isShowMetisHugStub(bounds)
+      hugStub: isIncompleteAskReveal(bounds)
     })
   ) {
     overlayCursorWatchHovering = true

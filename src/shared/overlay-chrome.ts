@@ -121,9 +121,34 @@ export function overlayAllowsHugWidth(input: {
   return input.islandResting && input.nextWidth <= input.restWidth + 24
 }
 
+/** Idle Ask bar height in main (`BAR_HEIGHT`). Peek 2px / hug 44 must not win after reveal. */
+export const ASK_REVEAL_MIN_HEIGHT_PX = 84
+
 /** Ultron 2026-09-06: top-edge hover opened this stub instead of the 880 Ask bar. */
 export function isShowMetisHugStub(win: { width: number; height: number }): boolean {
   return win.width === 120 && win.height === 44
+}
+
+/**
+ * After hug-width is blocked, OverlayPeek can still report 2–20px. clampHeight
+ * then floors to BAR_MIN_HEIGHT 44 → 880×44 Show Métis. Force restore.
+ */
+export function isIncompleteAskReveal(win: { width: number; height: number }): boolean {
+  if (isShowMetisHugStub(win)) return true
+  return win.width >= 800 && win.height > 0 && win.height <= 44
+}
+
+/** Revealed Hide/Island keeps at least the idle Ask bar. Park and the mini-pill stay exact. */
+export function overlayRevealedContentHeight(input: {
+  islandResting: boolean
+  minimized: boolean
+  settingsOpen: boolean
+  reportedHeight: number
+  minBarHeight?: number
+}): number {
+  const floor = input.minBarHeight ?? ASK_REVEAL_MIN_HEIGHT_PX
+  if (input.islandResting || input.minimized || input.settingsOpen) return input.reportedHeight
+  return Math.max(input.reportedHeight, floor)
 }
 
 /**
