@@ -57,6 +57,11 @@ describe('Windows packaging does not require a preinstalled Node', () => {
     expect(builderYml).toContain('managed-node/darwin-arm64')
   })
 
+  it('mac universal x64ArchFiles includes managed-node so identical sidecars do not abort lipo', () => {
+    const rule = builderYml.match(/x64ArchFiles:\s*'([^']+)'/)?.[1] ?? ''
+    expect(rule).toContain('managed-node')
+  })
+
   it('installManagedNodeFromArchive unpacks a real tar.gz into dest without a system node', async () => {
     const { mkdtempSync, writeFileSync, mkdirSync, existsSync, rmSync, chmodSync } = await import('node:fs')
     const { tmpdir } = await import('node:os')
