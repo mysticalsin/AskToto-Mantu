@@ -1,5 +1,6 @@
 import { isValidElement, cloneElement, useEffect, type ReactElement } from 'react'
 import { Streamdown } from 'streamdown'
+import 'streamdown/styles.css'
 import { CodeBlock, warmHighlighter } from './CodeBlock'
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
