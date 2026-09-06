@@ -12,6 +12,7 @@ const button = readFileSync(
   join(root, 'intelligence/src/components/IntelligenceUpdateButton.tsx'),
   'utf8'
 )
+const tsconfig = readFileSync(join(root, 'intelligence/tsconfig.app.json'), 'utf8')
 
 describe('Intelligence bundle is part of a normal build', () => {
   it('npm run build and npm run dev both ensure the dashboard bundle', () => {
@@ -23,5 +24,7 @@ describe('Intelligence bundle is part of a normal build', () => {
     expect(intel).toMatch(/bundleIndexHtml/)
     expect(button).toMatch(/ReactElement/)
     expect(button).not.toMatch(/JSX\.Element/)
+    expect(tsconfig).toMatch(/"react"/)
+    expect(tsconfig).toMatch(/"jsx": "react-jsx"/)
   })
 })
