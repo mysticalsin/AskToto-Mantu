@@ -10,10 +10,8 @@
  * mic-in-use indicator either way; Settings copy owns the "mic stays on while armed" disclosure.
  */
 import { useEffect, useRef } from 'react'
-import { extractFeatures } from './features'
-import { makeTrainGate, runGates, type RejectReason } from './gates'
-import { classify, type TapProfile } from './classify'
-import { TAP_WORKLET_SRC } from './tap-worklet-src'
+import type { RejectReason } from './gates'
+import type { TapProfile } from './classify'
 
 /** A keydown this close to an acoustic onset means "the user is typing", not "the user tapped". */
 const KEYDOWN_VETO_MS = 80
@@ -30,9 +28,19 @@ export interface TapCandidatePayload {
 }
 
 let cachedUrl: string | null = null
-function tapWorkletUrl(): string {
-  if (!cachedUrl) cachedUrl = URL.createObjectURL(new Blob([TAP_WORKLET_SRC], { type: 'text/javascript' }))
-  return cachedUrl
+let srcPromise: Promise<string> | null = null
+// The worklet source + classifier/FFT graph are only needed once a session actually arms. App.tsx
+// always mounts useTapControl, so a static import of those modules used to land in the overlay boot
+// chunk for every launch — including users who never enable desk tap.
+async function tapWorkletUrl(): Promise<string> {
+  if (cachedUrl) return cachedUrl
+  if (!srcPromise) {
+    srcPromise = import('./tap-worklet-src').then(({ TAP_WORKLET_SRC }) => {
+      cachedUrl = URL.createObjectURL(new Blob([TAP_WORKLET_SRC], { type: 'text/javascript' }))
+      return cachedUrl
+    })
+  }
+  return srcPromise
 }
 
 export interface TapCaptureSession {
@@ -70,7 +78,7 @@ export async function startTapCapture(opts: {
   }
   const ctx = new AudioContext()
   try {
-    await ctx.audioWorklet.addModule(tapWorkletUrl())
+    await ctx.audioWorklet.addModule(await tapWorkletUrl())
   } catch (e) {
     stream.getTracks().forEach((t) => t.stop())
     void ctx.close()
@@ -131,6 +139,11 @@ export async function startTapControl(opts: {
   sensitivity: number
   onEvent: (e: TapEvent) => void
 }): Promise<TapControlSession> {
+  const [{ extractFeatures }, { makeTrainGate, runGates }, { classify }] = await Promise.all([
+    import('./features'),
+    import('./gates'),
+    import('./classify')
+  ])
   const train = makeTrainGate()
   let lastKeydown = -Infinity
   const onKey = (): void => {
