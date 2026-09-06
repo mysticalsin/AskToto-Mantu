@@ -68,6 +68,7 @@ import { timeSavedFromTotals } from '@shared/time-saved'
 import { TimeSavedView } from './TimeSavedView'
 import { autoHideOverlayForLayout } from '@shared/overlay-chrome'
 import { OverlayChromePicker } from './OverlayChromePicker'
+import { OverlayOrbPicker } from './OverlayOrbPicker'
 import { formatResetPhrase } from '@shared/reset-time'
 import {
   DEFAULT_SHORTCUTS,
@@ -5817,6 +5818,15 @@ export function Settings({
                           autoHideOverlay: autoHideOverlayForLayout(id)
                         })
                       }
+                    />
+                    <p className="mt-3 mb-0 text-[12px] font-medium text-[color:var(--cl-foreground)]">Bar rest</p>
+                    <p className="mt-0.5 mb-2 text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+                      Applies when Overlay chrome is Bar.
+                    </p>
+                    <OverlayOrbPicker
+                      value={settings.overlayOrbStyle}
+                      locked={settings.managedKeys.includes('overlayOrbStyle')}
+                      onChange={(id) => patch({ overlayOrbStyle: id })}
                     />
                   </div>
                 </Section>
