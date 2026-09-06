@@ -93,6 +93,7 @@ import {
   setSettings,
   getLockedKeys,
   getAllowedProviders,
+  getEgressAllowlist,
   getEnvKeyProviders,
   getApiKey,
   setApiKey,
@@ -334,6 +335,8 @@ import {
   startOperatorRuntime
 } from './operator-ingest'
 import { classifyQuestionType } from '@shared/question-type'
+import { BoundedSet } from './bounded-set'
+import { installEgressGuard } from './net/egress-guard'
 import { buildCrmIngestEvent, meetingFileHash, shouldIngestCrm } from './operator-crm'
 import { startOperatorOverlayPoll } from './operator-overlay'
 import { initLogging, mainLog, auditLog } from './logger'
@@ -703,7 +706,9 @@ let closingDecoderJobId: string | null = null
 let sourceAck: { jobId: string; resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null = null
 let decoderReady: { resolve: () => void; reject: (error: Error) => void; timer: NodeJS.Timeout } | null = null
 const ffmpegDecoders = new Map<string, FfmpegDecoder>()
-const notifiedImportJobs = new Set<string>()
+// "Notified once" keys. Bounded: a session that runs for days imports many files, and an unbounded Set
+// here was one of the two module-level structures that only ever grew (RAM audit, 2026-09-05).
+const notifiedImportJobs = new BoundedSet<string>(500)
 
 type BrainStatusCounts = { people: number; accounts: number; deals: number; nodes: number; edges: number }
 let brainStatusCountsCache: { folder: string; revision: number; counts: BrainStatusCounts } | null = null
@@ -1923,6 +1928,16 @@ function createWindow(): void {
       if (level >= 2) mainLog.info(`[renderer] ${message}  (${sourceId}:${line})`)
     })
   }
+  // A renderer that is wedged (event loop stuck) never fires render-process-gone below, so the island can
+  // sit blank with no trace in any log. Record it, and record the recovery. No automatic reload: Chromium
+  // recovers most stalls on its own, and a forced reload mid-meeting would drop the live transcript.
+  win.on('unresponsive', () => {
+    mainLog.warn('[renderer-unresponsive] overlay renderer stopped responding')
+    auditLog('app.unresponsive', { kind: 'overlay' })
+  })
+  win.on('responsive', () => {
+    mainLog.info('[renderer-responsive] overlay renderer recovered')
+  })
   // The BrowserWindow survives a renderer crash (GPU/compositor crash, OOM in the in-renderer ASR
   // worker) — only its content dies, so `win` stays non-null while hotkeys/tray silently no-op into the
   // dead renderer and the overlay sits permanently blank. Previously this was only logged via
@@ -3129,7 +3144,9 @@ const trackTimer = <T extends ReturnType<typeof setInterval> | ReturnType<typeof
   backgroundTimers.push(t)
   return t
 }
-const notifiedKeys = new Set<string>() // keys of events already notified this session
+// Keys of events already notified this session. Bounded: the notifier polls every 30 s for the life of
+// the process, and every event that ever crossed its 60 s mark used to stay here forever.
+const notifiedKeys = new BoundedSet<string>(1_000)
 
 // Cache today's agenda (~30s) so startMeetingNotifier can cross-reference upcoming events against real
 // calendar data without hammering Graph on every 30s poll.
@@ -4154,21 +4171,28 @@ function registerIpc(): void {
     await verifyCliSessions()
     return publicSettings()
   })
+  // Parse, never cast: setupCli / installCli / loginCli put the provider id into temp-file names and
+  // child-process arguments, so a renderer-supplied string outside the ProviderId enum must not reach
+  // them (cliDetect / cliTest above already do this; these three were still blind-casting).
+  const cliProviderArg = (provider: unknown): ProviderId => {
+    const parsed = ProviderIdSchema.safeParse(provider)
+    return parsed.success ? parsed.data : 'claude-cli'
+  }
   ipcMain.handle(IPC.cliSetup, (e, provider: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    return setupCli(typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli')
+    return setupCli(cliProviderArg(provider))
   })
   ipcMain.handle(IPC.cliInstall, (e, provider: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    const p = typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli'
+    const p = cliProviderArg(provider)
     return installCli(p, (line) => win?.webContents.send(IPC.cliInstallProgress, { provider: p, line }))
   })
   ipcMain.handle(IPC.cliLogin, (e, provider: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
-    return loginCli(typeof provider === 'string' ? (provider as ProviderId) : 'claude-cli')
+    return loginCli(cliProviderArg(provider))
   })
 
   // --- MCP connections: BidStack CRM push + Plane "Book next steps" ---
@@ -7176,6 +7200,14 @@ if (!app.requestSingleInstanceLock()) {
   app.whenReady().then(async () => {
   initLogging() // route main-process logs to a rotated file before anything else can fail
   await installProxyAwareFetch() // route provider fetch through the env/OS proxy so Dust etc. work behind a corporate proxy
+  // Managed egressAllowlist (docs/NETWORK-EGRESS.md): when IT names the hosts this seat may reach, refuse
+  // every other host on both network stacks. Best-effort like the proxy install: a failure here must not
+  // block boot, and an absent key changes nothing.
+  try {
+    installEgressGuard(getEgressAllowlist())
+  } catch (e) {
+    mainLog.warn('[net] egress guard not installed:', e)
+  }
   // Warm the CLI binary cache at boot when a CLI provider is connected, so the session's FIRST CLI ask
   // doesn't stall on the login-shell PATH lookup (it only ran on sign-in before — i.e. once ever).
   try {

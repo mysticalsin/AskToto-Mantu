@@ -112,7 +112,7 @@ export function LicenseGate({
           </p>
         ) : reason === 'trial_expired' ? (
           <p className="mx-auto max-w-[420px] text-[13px] leading-relaxed text-[color:var(--color-ink-2)]">
-            Your trial has ended. Enter your license server and key to keep going — no key yet? Ask
+            Your trial has ended. Enter your license server and key to keep going. No key yet? Ask
             whoever set up Métis for one.
           </p>
         ) : (
