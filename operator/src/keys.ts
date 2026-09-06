@@ -69,9 +69,9 @@ export async function writeVaultKey(
   const secret = readSecret(body)
   if (!secret) return { ok: false, error: 'secret required', status: 400 }
   if (looksLikeSecret(provider)) return { ok: false, error: 'provider not allowed', status: 400 }
-  const accountId =
-    provider === CF_ACCOUNT_PROVIDER && typeof body.accountId === 'string' ? body.accountId.trim() : undefined
-  if (provider === CF_ACCOUNT_PROVIDER && !accountId) {
+  const needsAccount = provider === CF_ACCOUNT_PROVIDER || provider === 'cloudflare'
+  const accountId = needsAccount && typeof body.accountId === 'string' ? body.accountId.trim() : undefined
+  if (needsAccount && !accountId) {
     return { ok: false, error: 'accountId required', status: 400 }
   }
   const label = labelFromBody(body, accountId || provider)
@@ -120,7 +120,7 @@ export async function rotateVaultKey(
   const secret = readSecret(body)
   if (!secret) return { ok: false, error: 'secret required', status: 400 }
   let accountId: string | undefined
-  if (existing.provider === CF_ACCOUNT_PROVIDER) {
+  if (existing.provider === CF_ACCOUNT_PROVIDER || existing.provider === 'cloudflare') {
     try {
       const prev = decodeVaultPlaintext(await decryptVault(existing.cipher, existing.iv, env.OPERATOR_VAULT_KEY))
       accountId = typeof body.accountId === 'string' && body.accountId.trim() ? body.accountId.trim() : prev.accountId

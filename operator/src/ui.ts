@@ -871,7 +871,8 @@ svg path { vector-effect: non-scaling-stroke; }
         <div class="rule"><h3>Install → works</h3><p>A seat checks in. Tony approves it or the seat activates an Operator license in Métis → Identity → License. Then Métis uses Operator platform keys. No provider-key paste by default. Unapproved seats fail loud.</p></div>
         <div class="rule"><h3>Generate license</h3><p>On Licenses, Tony clicks Generate license and picks how long it stays active. Paste that string into Métis Identity. Selling ATK / JWS activation stays closed.</p></div>
         <div class="rule"><h3>Seat approval</h3><p>A device stays pending until Tony approves it on Licenses or an Operator license is active on the seat. Revoke still wins. Unapproved seats get fundedProviders [] and 403 on /v1/use. Live pending: ${data.profiles.filter((p) => p.approval !== 'approved').length}.</p></div>
-        <div class="rule"><h3>Platform keys first</h3><p>Authorized seats use Operator vault keys (NIM, Anthropic, DeepSeek, more). Manual Métis Settings keys stay as fallback. CLI still wins when connected.</p></div>
+        <div class="rule"><h3>Cloudflare · AI Gateway</h3><p>Log in to Cloudflare on Keys. Operator provisions the AI Gateway key. Paste is not the happy path. No CF token on seats.</p></div>
+        <div class="rule"><h3>Platform keys first</h3><p>Authorized seats use Operator vault keys (NIM, Anthropic, DeepSeek, Cloudflare AI Gateway, more). Manual Métis Settings keys stay as fallback. CLI still wins when connected.</p></div>
         <div class="rule"><h3>CRM never auto-send</h3><p>Pushes ingest status only. Tony Retry marks retry_requested. The seat processes that id. Intelligence / import / index never send.</p></div>
         <div class="rule"><h3>No secrets in HTML</h3><p>Keys last4 only. Events drop token-shaped strings. Heartbeat never carries a raw key or grant.</p></div>
         <div class="rule"><h3>Real ingest only</h3><p>Globe, Users, Licenses, ROI, and Events come from D1 heartbeats and Asks. usage-import rows stay off the fleet.</p></div>
@@ -950,9 +951,10 @@ svg path { vector-effect: non-scaling-stroke; }
             <button class="primary" type="submit">Add</button>
           </div>
         </form>
-        <p class="eyebrow">Cloudflare connection</p>
-        <p class="sub muted">Login redirect. Not Account ID + token paste. No CF token on seats.</p>
-        <p><a class="btn primary" id="cf-connect" href="/cloudflare/connect">Connect Cloudflare</a></p>
+        <p class="eyebrow">Cloudflare · AI Gateway</p>
+        <p class="sub muted">Choose Cloudflare. Log in to the Cloudflare account. Operator adds the API key. No paste.</p>
+        <p><a class="btn primary" id="cf-connect" data-cf-aig-connect href="/cloudflare/connect">Log in to Cloudflare</a></p>
+        <p id="cf-connect-msg" class="muted" style="padding:8px 0"></p>
         <p class="eyebrow" style="margin-top:14px">Vault</p>
         <table>
           <thead><tr><th>Provider</th><th>Label</th><th>Last4</th><th>Status</th><th>Rotate</th><th>Revoke</th></tr></thead>
@@ -1062,6 +1064,15 @@ document.querySelectorAll('[data-retry]').forEach((b) => b.addEventListener('cli
   await api('/v1/admin/crm/' + b.getAttribute('data-retry') + '/retry', {})
   location.reload()
 }))
+;(function cfResult() {
+  const q = new URLSearchParams(location.search).get('cf')
+  const el = document.getElementById('cf-connect-msg')
+  if (!el || !q) return
+  if (q === 'connected') el.textContent = 'AI Gateway key added. last4 only.'
+  else if (q === 'failed') el.textContent = 'Cloudflare login worked, but Operator could not provision the key.'
+  else if (q === 'denied') el.textContent = 'Cloudflare login was cancelled.'
+  else if (q === 'need-oauth') el.textContent = 'Cloudflare OAuth client is missing on this Worker.'
+})()
 const keyMsg = document.getElementById('key-msg')
 function showKey(j) {
   if (!keyMsg) return

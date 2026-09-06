@@ -13,6 +13,7 @@ export const VAULT_LLM_PROVIDERS = [
   'groq',
   'mistral',
   'grok',
+  'cloudflare',
   'custom'
 ] as const
 
