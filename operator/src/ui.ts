@@ -120,7 +120,7 @@ a { color: var(--accent); text-decoration: none; }
 .kpis.glance { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .kpis.glance .kpi .n { font-size: 32px; margin-top: 12px; }
 @media (max-width: 1100px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .kpis.glance { grid-template-columns: 1fr; } }
-.ov-split { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(280px, 0.85fr); gap: 12px; align-items: start; }
+.ov-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
 .people-row {
   display: grid; grid-template-columns: 56px minmax(0, 1.1fr) minmax(0, 1.1fr) 110px 88px 72px;
   gap: 8px; align-items: center; padding: 8px 4px; border-bottom: 1px solid var(--hair);
@@ -176,32 +176,40 @@ a { color: var(--accent); text-decoration: none; }
 .fail-loud { color: var(--danger); font-size: 13px; font-weight: 600; padding: 10px 0 12px; }
 .crm-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
 .world-wrap { overflow: hidden; max-height: 280px; }
-.geo-corner { display: grid; grid-template-columns: minmax(0, 1fr) 168px; gap: 10px; align-items: start; }
-.geo-corner-map { width: 168px; }
-.geo-corner-map svg { display: block; width: 100%; height: auto; max-height: 120px; }
+.geo-map-card { padding-bottom: 10px; }
+.geo-map-card svg { display: block; width: 100%; height: auto; min-height: 180px; max-height: 240px; }
 .geo-live { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
 .rt-world { padding-bottom: 10px; }
-.rt-world .world { display: block; width: 100%; height: auto; min-height: 280px; max-height: 480px; }
+.rt-world .world { display: block; width: 100%; height: auto; min-height: 320px; max-height: 520px; }
+.rt-live { display: grid; grid-template-columns: minmax(140px, 0.7fr) minmax(140px, 0.7fr) minmax(0, 1.6fr); gap: 12px; align-items: start; }
 .rt-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
 .ov-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .vol { position: relative; }
+.vol-head {
+  display: grid; grid-template-columns: 1fr auto auto; gap: 8px; padding: 0 8px 4px;
+  font: 10px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink3);
+}
 .vol-row {
   display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center;
-  padding: 6px 8px; position: relative; font-size: 12px;
+  padding: 7px 8px; position: relative; font-size: 12px;
 }
 .vol-bar {
-  position: absolute; inset: 2px auto 2px 0; background: color-mix(in srgb, var(--accent) 22%, transparent);
+  position: absolute; inset: 2px auto 2px 0; background: color-mix(in srgb, var(--accent) 18%, transparent);
   border-radius: 4px; z-index: 0;
 }
 .vol-row > * { position: relative; z-index: 1; }
+tbody tr { position: relative; }
 .rt-row {
   display: grid; grid-template-columns: 88px minmax(0, 1fr) minmax(0, 1.4fr) 72px;
   gap: 8px; align-items: center; padding: 6px 2px; border-bottom: 1px solid var(--hair); font-size: 12px;
 }
 .rt-row .ago { font-family: var(--mono); font-size: 10px; color: var(--ink3); text-align: right; }
 @media (max-width: 980px) { .ov-pair, .rt-row { grid-template-columns: 1fr; } }
-.geo-bar { display: block; height: 3px; margin-top: 4px; background: var(--accent); max-width: 100%; }
-@media (max-width: 980px) { .geo-corner, .geo-live, .rt-split { grid-template-columns: 1fr; } }
+.geo-bar {
+  position: absolute; inset: 2px auto 2px 0; height: auto;
+  background: color-mix(in srgb, var(--accent) 18%, transparent); border-radius: 4px; z-index: 0;
+}
+@media (max-width: 980px) { .geo-live, .rt-split, .rt-live { grid-template-columns: 1fr; } }
 .key-form { display: grid; gap: 8px; margin: 0 0 14px; }
 .license-once {
   display: grid; gap: 8px; margin: 0 0 14px; padding: 10px 12px;
@@ -217,12 +225,12 @@ a { color: var(--accent); text-decoration: none; }
 }
 .map-empty { position: absolute; left: 12px; top: 42px; z-index: 1; }
 table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--hair); font-size: 12px; vertical-align: top; overflow: hidden; text-overflow: ellipsis; }
+th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--hair); font-size: 12px; vertical-align: top; overflow: hidden; text-overflow: ellipsis; position: relative; }
 .search-bar {
   width: 100%; border: 1px solid var(--hair); background: var(--bg); color: var(--ink);
   border-radius: 8px; padding: 7px 10px; font: 12px var(--sans); margin: 0 0 10px;
 }
-.event[hidden], tr[hidden] { display: none !important; }
+.event[hidden], tr[hidden], .vol-row[hidden], .people-row[hidden], .rt-row[hidden] { display: none !important; }
 .rule { padding: 10px 0; border-bottom: 1px solid var(--hair); }
 .rule h3 { margin: 0 0 4px; font-size: 13px; }
 .rule p { margin: 0; color: var(--ink2); font-size: 12px; }
@@ -454,53 +462,57 @@ function renderGeoCorner(data: DashboardPayload): string {
   const cityRows = cities
     .map(
       (r) =>
-        `<tr data-geo-city="${esc(r.city)}"><td>${esc(r.city)}${geoBar(r.count, maxCity)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
+        `<tr data-geo-city="${esc(r.city)}" data-q="${esc(`${r.city} ${r.country}`.toLowerCase())}"><td>${geoBar(r.count, maxCity)}${esc(r.city)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
     )
     .join('')
   const regionRows = regions
     .map(
       (r) =>
-        `<tr><td>${esc(r.region)}${geoBar(r.count, maxRegion)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
+        `<tr data-q="${esc(`${r.region} ${r.country}`.toLowerCase())}"><td>${geoBar(r.count, maxRegion)}${esc(r.region)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
     )
     .join('')
   const countryRows = countries
     .map(
       (r) =>
-        `<tr><td>${esc(r.country)}${geoBar(r.count, maxCountry)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
+        `<tr data-q="${esc(r.country.toLowerCase())}"><td>${geoBar(r.count, maxCountry)}${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
     )
     .join('')
-  return `<article class="card geo-corner" data-geo-corner>
-    <div>
+  return `<div class="ov-pair" data-geo-corner>
+    <article class="card" style="padding-bottom:10px">
       <p class="eyebrow">Places</p>
       <div class="tabs" id="geo-tabs">
-        <button class="tab on" data-geo-tab="cities" type="button">Cities</button>
+        <button class="tab on" data-geo-tab="countries" type="button">Countries</button>
         <button class="tab" data-geo-tab="regions" type="button">Regions</button>
-        <button class="tab" data-geo-tab="countries" type="button">Countries</button>
+        <button class="tab" data-geo-tab="cities" type="button">Cities</button>
       </div>
-      <div data-geo-pane="cities">
+      <input class="search-bar" data-geo-search type="search" placeholder="Search places…" autocomplete="off">
+      <div data-geo-pane="countries">
         ${
-          cityRows
-            ? `<table data-geo-table="cities"><thead><tr><th>City</th><th>Country</th><th>Count</th><th>Sessions</th><th>Avg</th></tr></thead><tbody>${cityRows}</tbody></table>`
-            : '<div class="empty">No city geo yet. Heartbeats write request.cf city.</div>'
+          countryRows
+            ? `<table data-geo-table="countries"><thead><tr><th>Country</th><th>Seats</th><th>Sess.</th><th>Avg</th></tr></thead><tbody>${countryRows}</tbody></table>`
+            : '<div class="empty">No country geo yet.</div>'
         }
       </div>
       <div data-geo-pane="regions" hidden>
         ${
           regionRows
-            ? `<table data-geo-table="regions"><thead><tr><th>Region</th><th>Country</th><th>Count</th><th>Sessions</th><th>Avg</th></tr></thead><tbody>${regionRows}</tbody></table>`
+            ? `<table data-geo-table="regions"><thead><tr><th>Region</th><th>Country</th><th>Seats</th><th>Sess.</th><th>Avg</th></tr></thead><tbody>${regionRows}</tbody></table>`
             : '<div class="empty">No region yet. Next heartbeat writes request.cf.region.</div>'
         }
       </div>
-      <div data-geo-pane="countries" hidden>
+      <div data-geo-pane="cities" hidden>
         ${
-          countryRows
-            ? `<table data-geo-table="countries"><thead><tr><th>Country</th><th>Count</th><th>Sessions</th><th>Avg</th></tr></thead><tbody>${countryRows}</tbody></table>`
-            : '<div class="empty">No country geo yet.</div>'
+          cityRows
+            ? `<table data-geo-table="cities"><thead><tr><th>City</th><th>Country</th><th>Seats</th><th>Sess.</th><th>Avg</th></tr></thead><tbody>${cityRows}</tbody></table>`
+            : '<div class="empty">No city geo yet. Heartbeats write request.cf city.</div>'
         }
       </div>
-    </div>
-    <div class="geo-corner-map" data-geo-widget>${choroplethMini(data.map.countries)}</div>
-  </article>`
+    </article>
+    <article class="card geo-map-card" data-geo-widget>
+      <p class="eyebrow">Map</p>
+      ${choroplethMini(data.map.countries)}
+    </article>
+  </div>`
 }
 
 function renderRealtimeGeo(data: DashboardPayload): string {
@@ -513,19 +525,19 @@ function renderRealtimeGeo(data: DashboardPayload): string {
   const cityRows = cities
     .map(
       (r) =>
-        `<tr data-geo-city="${esc(r.city)}"><td>${esc(r.city)}${geoBar(r.count, maxCity)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
+        `<tr data-geo-city="${esc(r.city)}" data-q="${esc(`${r.city} ${r.country}`.toLowerCase())}"><td>${geoBar(r.count, maxCity)}${esc(r.city)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
     )
     .join('')
   const regionRows = regions
     .map(
       (r) =>
-        `<tr><td>${esc(r.region)}${geoBar(r.count, maxRegion)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
+        `<tr data-q="${esc(`${r.region} ${r.country}`.toLowerCase())}"><td>${geoBar(r.count, maxRegion)}${esc(r.region)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
     )
     .join('')
   const countryRows = countries
     .map(
       (r) =>
-        `<tr><td>${esc(r.country)}${geoBar(r.count, maxCountry)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
+        `<tr data-q="${esc(r.country.toLowerCase())}"><td>${geoBar(r.count, maxCountry)}${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
     )
     .join('')
   return `<article class="card" data-realtime-geo>
@@ -535,6 +547,7 @@ function renderRealtimeGeo(data: DashboardPayload): string {
       <button class="tab" data-geo-tab="regions" type="button">Regions</button>
       <button class="tab" data-geo-tab="countries" type="button">Country</button>
     </div>
+    <input class="search-bar" data-geo-search type="search" placeholder="Search cities…" autocomplete="off">
     <div class="geo-live">
       <div data-geo-pane="cities">
         ${
@@ -615,24 +628,38 @@ function renderTopLists(data: DashboardPayload): string {
   }
   const kindRows = [...kinds.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
   const maxKind = Math.max(1, ...kindRows.map(([, n]) => n))
-  const maxDev = Math.max(1, ...devices.map((r) => byDevice.get(r.hostname || r.email || r.device) ?? 0))
+  const maxDev = Math.max(1, ...devices.map((r) => byDevice.get(r.hostname || r.email || r.device) ?? 1))
+  const osRows = data.scale.os.slice(0, 8)
+  const maxOs = Math.max(1, ...osRows.map((r) => r.value))
   const deviceBody = devices
     .map((r) => {
       const who = r.hostname || r.email || r.device
       const n = byDevice.get(who) ?? 0
-      const pct = Math.max(10, Math.round((n / maxDev) * 100))
-      return `<div class="vol-row" data-toplist-device="${esc(r.device)}">
+      const pct = Math.max(10, Math.round((Math.max(n, 1) / maxDev) * 100))
+      const q = `${who} ${r.city || ''} ${r.os}`.toLowerCase()
+      return `<div class="vol-row" data-toplist-device="${esc(r.device)}" data-q="${esc(q)}">
         <span class="vol-bar" style="width:${pct}%"></span>
         <span>${field(who)}</span>
-        <span class="muted">${field(r.city)}</span>
+        <span class="muted">${n || 1}</span>
         <span>${r.live ? '<span class="pill up">live</span>' : '<span class="muted">idle</span>'}</span>
+      </div>`
+    })
+    .join('')
+  const osBody = osRows
+    .map((r) => {
+      const pct = Math.max(10, Math.round((r.value / maxOs) * 100))
+      return `<div class="vol-row" data-toplist-os="${esc(r.label)}" data-q="${esc(r.label.toLowerCase())}">
+        <span class="vol-bar" style="width:${pct}%"></span>
+        <span>${esc(r.label)}</span>
+        <span class="muted">${r.value}</span>
+        <span></span>
       </div>`
     })
     .join('')
   const kindBody = kindRows
     .map(([name, n]) => {
       const pct = Math.max(10, Math.round((n / maxKind) * 100))
-      return `<div class="vol-row" data-toplist-event="${esc(name)}">
+      return `<div class="vol-row" data-toplist-event="${esc(name)}" data-q="${esc(name.toLowerCase())}">
         <span class="vol-bar" style="width:${pct}%"></span>
         <span>${esc(name)}</span>
         <span class="muted">${n}</span>
@@ -641,12 +668,21 @@ function renderTopLists(data: DashboardPayload): string {
     })
     .join('')
   return `<div class="ov-pair" data-overview-toplists>
-    <article class="card" style="padding-bottom:10px">
-      <p class="eyebrow">Top devices</p>
-      ${deviceBody || '<div class="empty">No seats yet.</div>'}
+    <article class="card" style="padding-bottom:10px" data-device-card>
+      <p class="eyebrow">Devices</p>
+      <div class="tabs" data-device-tabs>
+        <button class="tab on" data-device-tab="devices" type="button">Devices</button>
+        <button class="tab" data-device-tab="os" type="button">OS</button>
+      </div>
+      <input class="search-bar" data-list-search="devices" type="search" placeholder="Search devices…" autocomplete="off">
+      <div class="vol-head"><span></span><span>Seats</span><span>Live</span></div>
+      <div data-device-pane="devices">${deviceBody || '<div class="empty">No seats yet.</div>'}</div>
+      <div data-device-pane="os" hidden>${osBody || '<div class="empty">No OS mix yet.</div>'}</div>
     </article>
     <article class="card" style="padding-bottom:10px">
-      <p class="eyebrow">Top events</p>
+      <p class="eyebrow">Events</p>
+      <input class="search-bar" data-list-search="events" type="search" placeholder="Search events…" autocomplete="off">
+      <div class="vol-head"><span></span><span>Count</span><span></span></div>
       ${kindBody || '<div class="empty">No events yet.</div>'}
     </article>
   </div>`
@@ -916,18 +952,16 @@ svg path { vector-effect: non-scaling-stroke; }
         ${kpiCard({ title: 'Value', value: data.roi.value, sub: data.roi.valueSub, spark: '' })}
       </div>
       ${renderTopLists(data)}
-      <div class="ov-split">
-        <article class="card activity-feed" style="padding-bottom:10px" data-overview-activity>
-          <p class="eyebrow">Activity</p>
-          ${
-            data.events.length
-              ? `<div class="sub muted" style="padding-bottom:6px">Seats, heartbeats, asks, recaps. City from request.cf. Not pageviews.</div>
-                 <div data-activity-stream>${renderEvents(data.events.slice(0, 24), data.now)}</div>`
-              : '<div class="empty">No activity yet. A heartbeat writes city and lands here.</div>'
-          }
-        </article>
-        ${renderGeoCorner(data)}
-      </div>
+      ${renderGeoCorner(data)}
+      <article class="card activity-feed" style="padding-bottom:10px" data-overview-activity>
+        <p class="eyebrow">Activity</p>
+        ${
+          data.events.length
+            ? `<div class="sub muted" style="padding-bottom:6px">Seats, heartbeats, asks, recaps. City from request.cf. Not pageviews.</div>
+               <div data-activity-stream>${renderEvents(data.events.slice(0, 24), data.now)}</div>`
+            : '<div class="empty">No activity yet. A heartbeat writes city and lands here.</div>'
+        }
+      </article>
       <article class="card" style="padding-bottom:10px" data-overview-people>
         <p class="eyebrow">${liveSeats.length ? 'Live people' : 'People'}</p>
         ${renderPeopleStrip(liveSeats.length ? liveSeats : data.profiles, liveSeats.length)}
@@ -937,17 +971,19 @@ svg path { vector-effect: non-scaling-stroke; }
 
     <section class="page wrap" data-page="realtime" hidden>
       ${renderWorldMap(data)}
-      <div class="rt-split">
+      <div class="rt-live" data-rt-live-strip>
+        ${kpiCard({ title: 'Seats 30m', value: String(data.roi.seats30m), sub: 'unique seats last 30 min', spark: sparklineLine(k.liveSeries) })}
+        ${kpiCard({ title: 'Live', value: String(data.roi.liveSeats), sub: 'seats online now · heartbeat &lt; 2 min', pill: '<span class="live">live</span>', spark: '' })}
         <article class="card activity-feed" style="padding-bottom:10px" data-live-feed>
-          <p class="eyebrow">LiveFeed</p>
+          <p class="eyebrow">Live events</p>
           ${
             data.events.length
               ? `<div id="rt-stream">${renderEvents(data.events.slice(0, 30), data.now)}</div>`
               : '<div class="empty">No live events yet. A heartbeat writes city and lands here.</div>'
           }
         </article>
-        ${renderRealtimeGeo(data)}
       </div>
+      ${renderRealtimeGeo(data)}
       <article class="card" style="padding-bottom:10px" data-live-presence>
         <p class="eyebrow">${liveSeats.length ? 'Live people' : 'People'}</p>
         ${
@@ -1238,6 +1274,21 @@ document.querySelectorAll('[data-geo-tab]').forEach((b) => b.addEventListener('c
   const v = b.getAttribute('data-geo-tab')
   root.querySelectorAll('[data-geo-pane]').forEach((p) => { p.hidden = p.getAttribute('data-geo-pane') !== v })
 }))
+document.querySelectorAll('[data-device-tab]').forEach((b) => b.addEventListener('click', () => {
+  const root = b.closest('[data-device-card]') || document
+  root.querySelectorAll('[data-device-tab]').forEach((x) => x.classList.toggle('on', x === b))
+  const v = b.getAttribute('data-device-tab')
+  root.querySelectorAll('[data-device-pane]').forEach((p) => { p.hidden = p.getAttribute('data-device-pane') !== v })
+}))
+document.querySelectorAll('[data-list-search], [data-geo-search]').forEach((input) => {
+  input.addEventListener('input', () => {
+    const q = input.value.trim().toLowerCase()
+    const root = input.closest('.card') || document
+    root.querySelectorAll('[data-q]').forEach((row) => {
+      row.hidden = Boolean(q) && !(row.getAttribute('data-q') || '').includes(q)
+    })
+  })
+})
 const sessSearch = document.getElementById('sessions-search')
 if (sessSearch) sessSearch.addEventListener('input', () => {
   const q = sessSearch.value.trim().toLowerCase()

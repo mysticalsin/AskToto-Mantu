@@ -161,6 +161,7 @@ export interface DashboardPayload {
     costToday: string | null
     cost7d: string | null
     liveSeats: number
+    seats30m: number
     cacheHit: string | null
     asksToday: number
     licensed: number
@@ -784,6 +785,7 @@ export async function buildDashboard(
       costToday,
       cost7d,
       liveSeats: live,
+      seats30m: seats.filter((s) => now - s.last_seen < 30 * 60 * 1000).length,
       cacheHit: sliceToday.hitRate == null ? null : `${Math.round(sliceToday.hitRate * 100)}%`,
       asksToday: todayAsks.length,
       licensed: seats.filter((s) => {
