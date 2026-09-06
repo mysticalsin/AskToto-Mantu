@@ -38,6 +38,7 @@ import { initSearch } from './search'
 import { startLivePolling } from './live'
 import { toast } from './toasts'
 import { bindMotion } from './motion-bind'
+import { PAGE_INIT } from './pages/index'
 
 var PAGES = [
   'overview',
@@ -126,6 +127,7 @@ export async function rerender(page: string): Promise<void> {
   section.innerHTML = renderer(data as DashboardPayload, { now: Date.now(), theme: 'light' })
   reinitPage(page)
   bindMotion(section)
+  PAGE_INIT[page]?.(section, data as DashboardPayload)
 }
 
 /** The page id the mutation just acted on, so its handler can call `rerender(currentPage())`
@@ -173,4 +175,11 @@ export function currentPage(): string {
   initCloudflareConnectResult()
   startLivePolling()
   bindMotion(document.body)
+  // First paint is already server-rendered (no freshly fetched DashboardPayload yet, hence
+  // `null`); each page's own init still runs once on its already-rendered `[data-page]` section
+  // so it starts interactive rather than only working after a later rerender().
+  PAGES.forEach(function (id) {
+    var section = document.querySelector<HTMLElement>('[data-page="' + id + '"]')
+    if (section) PAGE_INIT[id]?.(section, null)
+  })
 })()
