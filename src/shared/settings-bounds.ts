@@ -5,6 +5,9 @@
 
 export const SETTINGS_WINDOW_MIN = { width: 880, height: 560 } as const
 
+/** Totos-Mac live 1.8.3 Cmd+, / Bar Settings while Hide/Island (x=460 y=39 w=880 h=325). */
+export const TONY_LIVE_SETTINGS_CRUSH = { x: 460, y: 39, width: 880, height: 325 } as const
+
 /** Dark glass, not white and not solid black. Used while the Settings surface is up. */
 export const SETTINGS_SURFACE_BACKGROUND = '#120022'
 
