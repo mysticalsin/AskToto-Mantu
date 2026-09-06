@@ -10,6 +10,12 @@ declare module 'three' {
 
   export class Color {
     constructor(color?: string | number)
+    lerp(color: Color, alpha: number): this
+  }
+
+  export class Clock {
+    constructor(autoStart?: boolean)
+    getElapsedTime(): number
   }
 
   export class Vector2 {
@@ -78,10 +84,13 @@ declare module 'three' {
   }
 
   export class PointsMaterial extends Material {
+    size: number
+    color: Color
     constructor(params?: Record<string, unknown>)
   }
 
   export class LineBasicMaterial extends Material {
+    color: Color
     constructor(params?: Record<string, unknown>)
   }
 
@@ -98,6 +107,8 @@ declare module 'three' {
   }
 
   export class BufferAttribute {
+    array: Float32Array
+    needsUpdate: boolean
     constructor(array: ArrayLike<number>, itemSize: number)
   }
 
@@ -107,6 +118,8 @@ declare module 'three' {
 
   export class BufferGeometry {
     setAttribute(name: string, attribute: BufferAttribute): this
+    getAttribute(name: string): BufferAttribute
+    setDrawRange(start: number, count: number): this
     dispose(): void
   }
 

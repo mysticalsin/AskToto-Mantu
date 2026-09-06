@@ -1857,6 +1857,20 @@ input::placeholder {
   background: #050508;
   box-shadow: 0 0 0 1px rgba(76, 168, 232, 0.28);
 }
+.overlay-orb-diagram--obsidian .overlay-orb-diagram__jarvis--live {
+  top: 50%;
+  width: 41px;
+  height: 41px;
+  margin-left: -20.5px;
+  margin-top: -20.5px;
+  overflow: hidden;
+}
+.overlay-orb-diagram__canvas {
+  display: block;
+  width: 41px;
+  height: 41px;
+  pointer-events: none;
+}
 .overlay-orb-diagram__dot {
   position: absolute;
   width: 3px;
