@@ -88,7 +88,7 @@ describe('product sidebar (#105)', () => {
     expect(html).not.toContain('>Shoey<')
     expect(html).toContain('class="rail-name">Métis</span>')
     expect(html).toContain('aria-label="Métis"')
-    expect(html).toContain('Unique seats')
+    expect(html).toContain('Live seats')
     expect(html).toContain('Unique sessions')
     expect(html).toContain('Sessions / day')
     expect(html).toContain('API calls')
@@ -114,22 +114,19 @@ describe('product sidebar (#105)', () => {
     expect(realtime).toContain('data-land="inline"')
     expect(realtime).toContain('id="rt-roster"')
     expect(realtime).toContain('data-live-map')
-    expect(realtime).toContain('Live map')
+    expect(realtime).toContain('Mission Control')
     expect(realtime).toContain('Live seats')
+    expect(realtime).toContain('Time saved')
+    expect(realtime).toContain('Value')
+    expect(realtime).toContain('€85')
     expect(realtime).not.toContain('id="rt-stream"')
     expect(realtime).not.toContain('Users per countries')
     expect(realtime).not.toContain('>Referrals<')
     expect(realtime).not.toContain('>Paths<')
     expect(realtime).toContain('>Apps<')
     expect(realtime).toContain('data-apps-breakdown')
-    expect(realtime).toContain('>Sources<')
-    expect(realtime).toContain('>Surfaces<')
-    expect(realtime).toContain('>Cities<')
-    expect(realtime).toContain('Active seats')
-    expect(realtime).toContain('data-rt-boards="full"')
-    expect(realtime).toContain('data-source-breakdown')
-    expect(realtime).toContain('data-surface-breakdown')
-    expect(realtime).toContain('data-city-breakdown')
+    expect(realtime).toContain('data-rt-boards="slim"')
+    expect(realtime).toContain('data-mc-heroes')
     expect(html).toContain('data-page="realtime"')
     // WebsiteCloner home: Realtime is the default landing surface
     expect(html).toMatch(/data-page="overview"[^>]*\bhidden\b/)
@@ -156,8 +153,8 @@ describe('product sidebar (#105)', () => {
     expect(html).toContain('data-iso="US"')
     expect(html).toContain('class="world-ocean"')
     expect(html).not.toContain('Asks per seat')
-    expect(html).toContain('Live map')
-    expect(html).toContain('Unique seats last 30 min')
+    expect(html).toContain('Mission Control')
+    expect(html).toContain('unique in last 30 min')
     expect(html).toContain('data-nav="overview"')
     expect(html).toContain('data-nav="realtime"')
     expect(html).toContain('data-nav="events"')
@@ -268,7 +265,7 @@ describe('product sidebar (#105)', () => {
     expect(js).toContain("requested === 'map' ? 'realtime'")
     expect(html).toContain('data-theme="dark"')
     expect(html).toContain('data-geo-breakdown')
-    expect(html).toContain('class="rt-kpi-bar"')
+    expect(html).toContain('class="mc-heroes"')
     expect(html).not.toContain('class="rt-hud"')
     expect(html).toContain('class="rail-logo"')
     expect(html).not.toContain('>Métis</h1>')
@@ -398,7 +395,10 @@ describe('events never render token-like strings', () => {
       hostname: 'Tonys-MacBook-Pro',
       sso_email: 'twalteur@amaris.com',
       license: 'approved',
-      product: null
+            product: null,
+      saved_minutes: 0,
+      meetings_summarized: 0,
+      conversation_minutes: 0
     })
     const ingest = await signedRequest(
       '/v1/ingest',
@@ -442,7 +442,10 @@ describe('sessions pane is live Métis seats, not Shoey demo rows', () => {
       hostname: 'Tonys-MacBook-Pro',
       sso_email: 'twalteur@amaris.com',
       license: 'approved',
-      product: null
+            product: null,
+      saved_minutes: 0,
+      meetings_summarized: 0,
+      conversation_minutes: 0
     })
     await store.insertEvent({
       id: 'ev-path',
@@ -545,7 +548,10 @@ describe('realtime main pane is the live signature map, not leftover OpenPanel',
         hostname: 'Tonys-MacBook-Pro',
         sso_email: 'twalteur@amaris.com',
         license: 'approved',
-      product: null
+            product: null,
+      saved_minutes: 0,
+      meetings_summarized: 0,
+      conversation_minutes: 0
     })
       for (const offset of [45_000, 2 * 60_000, 8 * 60_000, 15 * 60_000] as const) {
         await store.insertPulse({
@@ -569,22 +575,23 @@ describe('realtime main pane is the live signature map, not leftover OpenPanel',
     }
     const html = await page(store)
     const realtime = html.slice(html.indexOf('data-page="realtime"'), html.indexOf('data-page="events"'))
-    expect(realtime).toMatch(/class="n rt-n">2</)
+    expect(realtime).toMatch(/class="n"[^>]*>2</)
     expect(html).toMatch(/class="live-dot"><i><\/i>2</)
-    expect(realtime).toContain('<rect')
-    expect(realtime).toContain('fill="#2563EB"')
-    expect(realtime).not.toContain('stroke="#EDEDED"')
-    expect((realtime.match(/<rect [^>]*fill="#2563EB"/g) || []).length).toBeGreaterThanOrEqual(4)
     expect(realtime).toContain('fill="#E5E7EB"')
+    expect(realtime).toContain('seat-dot')
+    expect(realtime).toContain('#7C3AED')
     expect(realtime).toContain('class="world-land"')
     expect(realtime).toContain('class="world-ocean"')
     expect(realtime).toContain('Canada')
-    expect(realtime).toContain('Live map')
+    expect(realtime).toContain('country-label')
+    expect(realtime).not.toContain('class="seat-sig"')
+    expect(realtime).not.toContain('seat-sig-bg')
+    expect(realtime).toContain('Mission Control')
     expect(realtime).toContain('brand-mark')
     expect(realtime).toContain('twalteur@amaris.com')
     expect(realtime).toContain('Tonys-MacBook-Pro')
     expect(realtime).toContain('seat-mark')
-    expect(realtime).toContain('Heartbeats stream on Events')
+    expect(realtime).toMatch(/Heartbeats stream on Events|Country names appear on hover/)
     expect(realtime).not.toContain('(Not set)')
     expect(realtime).not.toContain('/checkout')
     expect(realtime).not.toContain('/products/sneakers')

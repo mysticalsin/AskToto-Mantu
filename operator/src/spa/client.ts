@@ -510,6 +510,17 @@ export const CONSOLE_JS = `/* Métis Operator SPA — Shoey Overview / Realtime 
       if (iso && p.classList.contains('on')) clearGeoFilter()
       else if (iso) focusLiveIso(iso)
     })
+    p.addEventListener('mouseenter', function () {
+      var iso = p.getAttribute('data-iso')
+      document.querySelectorAll('#map-root .country-label').forEach(function (el) {
+        el.classList.toggle('is-on', el.getAttribute('data-iso') === iso)
+      })
+    })
+    p.addEventListener('mouseleave', function () {
+      document.querySelectorAll('#map-root .country-label.is-on').forEach(function (el) {
+        el.classList.remove('is-on')
+      })
+    })
   })
 
   document.querySelectorAll('[data-crm-filter]').forEach(function (b) {

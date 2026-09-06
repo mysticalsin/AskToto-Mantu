@@ -484,8 +484,10 @@ a { color: var(--accent); text-decoration: none; }
   0%, 100% { opacity: 0.2; }
   50% { opacity: 0.55; }
 }
+.world.shoey-world .seat-sig { display: none; }
 .world.shoey-world .seat-sig-bg { fill: #fff; stroke: #E5E5E5; }
-[data-theme="dark"] .world.shoey-world .seat-sig-bg { fill: #18181B; stroke: #3F3F46; }
+[data-theme="dark"] .world.shoey-world .seat-sig { display: none; }
+.world.shoey-world .seat-sig-bg { fill: #18181B; stroke: #3F3F46; }
 [data-theme="dark"] .world.shoey-world .seat-sig-name { fill: #F8FAFC; }
 [data-theme="dark"] .world.shoey-world .seat-sig-meta { fill: #A1A1AA; }
 .ic-mac, .ic-win, .ic-desk {
@@ -536,7 +538,7 @@ a { color: var(--accent); text-decoration: none; }
   fill: #3f3f46 !important;
   stroke: #111827 !important;
 }
-.world.shoey-world .seat-dot { fill: #111827; stroke: #fff; }
+.world.shoey-world .seat-dot { fill: #7C3AED; stroke: #fff; }
 .world.shoey-world .seat-mark {
   pointer-events: auto; cursor: pointer;
 }
@@ -549,11 +551,11 @@ a { color: var(--accent); text-decoration: none; }
   fill: #3B82F6 !important;
 }
 .world.shoey-world .seat-mark.on .seat-dot {
-  fill: #2563EB; stroke: #fff; stroke-width: 1.6;
+  fill: #6D28D9; stroke: #fff; stroke-width: 1.6;
 }
-.world.shoey-world .seat-mark.on .seat-ring { opacity: 0.7; stroke: #2563EB; }
-[data-theme="dark"] .world.shoey-world .seat-dot { fill: #F8FAFC; stroke: #0a0a0b; }
-[data-theme="dark"] .world.shoey-world .seat-mark.on .seat-dot { fill: #93C5FD; stroke: #0a0a0b; }
+.world.shoey-world .seat-mark.on .seat-ring { opacity: 0.75; stroke: #7C3AED; }
+[data-theme="dark"] .world.shoey-world .seat-dot { fill: #C4B5FD; stroke: #0a0a0b; }
+[data-theme="dark"] .world.shoey-world .seat-mark.on .seat-dot { fill: #DDD6FE; stroke: #0a0a0b; }
 .geo-card {
   padding: 16px 16px 12px; background: var(--panel); border: 1px solid var(--hair);
   border-radius: 14px; min-width: 0;
@@ -786,6 +788,56 @@ html.theme-fade .rt-board-card,
 html.theme-fade .rt-seat,
 html.theme-fade .world.shoey-world {
   transition: background-color 280ms var(--ease-out), border-color 280ms var(--ease-out), fill 280ms var(--ease-out), stroke 280ms var(--ease-out), color 280ms var(--ease-out);
+}
+
+
+/* Country name overlays — visible on land hover only (€85 value lives in heroes; labels stay hover-only) */
+.world.shoey-world .country-label { opacity: 0; transition: opacity 140ms ease; pointer-events: none; }
+.world.shoey-world .country-label.is-on { opacity: 1; }
+.world.shoey-world .seat-halo {
+  transform-box: fill-box; transform-origin: center;
+  animation: seat-halo-pulse 2.6s ease-in-out infinite;
+}
+.world.shoey-world .seat-ring {
+  transform-box: fill-box; transform-origin: center;
+  animation: seat-breathe 2.6s ease-in-out infinite;
+}
+@keyframes seat-halo-pulse {
+  0%, 100% { opacity: 0.12; r: 12; }
+  50% { opacity: 0.32; }
+}
+.mc-heroes {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px;
+  margin-bottom: 14px;
+}
+.mc-hero {
+  display: grid; gap: 6px; padding: 16px 18px;
+  border: 1px solid var(--hair); border-radius: 14px; background: var(--panel);
+  min-width: 0;
+}
+.mc-hero-lbl { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink3); }
+.mc-hero .n { margin: 0; font: 650 34px/1 var(--sans); letter-spacing: -0.045em; color: var(--ink); }
+.mc-hero-sub { font-size: 11px; color: var(--ink3); }
+.mc-stage {
+  display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+  gap: 14px; align-items: stretch; min-height: 560px;
+}
+.mc-map {
+  position: relative; min-width: 0; min-height: 560px;
+  background: #FFFFFF; border: 1px solid var(--hair); border-radius: 14px; overflow: hidden;
+}
+.mc-map #map-root { min-height: 560px; height: 100%; background: #FFFFFF; }
+[data-theme="dark"] .mc-map, [data-theme="dark"] .mc-map #map-root { background: #0a0a0b; }
+.mc-people {
+  display: flex; flex-direction: column; gap: 8px; min-height: 0; min-width: 0;
+  border: 1px solid var(--hair); border-radius: 14px; background: var(--panel);
+  padding: 12px; overflow: hidden;
+}
+.mc-below { display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); gap: 12px; margin-top: 14px; }
+@media (max-width: 1100px) {
+  .mc-heroes { grid-template-columns: 1fr; }
+  .mc-stage, .mc-below { grid-template-columns: 1fr; min-height: 0; }
+  .mc-map, .mc-map #map-root { min-height: 360px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

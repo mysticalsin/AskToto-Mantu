@@ -250,7 +250,10 @@ export function planUsageImport(amountCsv: string, costCsv: string, importedAt =
     hostname: null,
     sso_email: null,
     license: null,
-    product: null
+          product: null,
+      saved_minutes: 0,
+      meetings_summarized: 0,
+      conversation_minutes: 0
   }
 
   const last4 = days.find((d) => d.apiKeyLast4 && d.apiKeyLast4 !== '----')?.apiKeyLast4 || 'cfc3'

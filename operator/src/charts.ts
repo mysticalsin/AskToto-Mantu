@@ -2,6 +2,7 @@ import { WORLD_PATHS } from './world-paths'
 import { stripMapBands } from './map-bands'
 import type { MapCountry, MapDot, MixBar, SeriesPoint, TokenPoint } from './dashboard'
 import { productLabel } from './product'
+import { countryName as isoCountryName } from './countries'
 
 const MONO = ['#2a2a2e', '#3f3f46', '#71717a', '#a1a1aa', '#e4e4e7']
 
@@ -176,7 +177,8 @@ const SHOEY_BLUE = '#2563EB'
 export const SHOEY_LAND = '#E5E7EB'
 const SHOEY_OCEAN = '#FFFFFF'
 const SHOEY_LAND_STROKE = '#6B7280'
-const SHOEY_DOT = '#111827'
+const SHOEY_DOT = '#7C3AED'
+const SHOEY_HALO = '#A78BFA'
 const SHOEY_PILL = '#10B981'
 
 export function blueBars(values: number[], w = 220, h = 36): string {
@@ -275,32 +277,48 @@ function seatSignatureMeta(dot: MapDot): string {
     .join(' · ')
 }
 
-/** Full world + per-seat signature markers. No regional count pills. Empty world when no live seats. */
+/** Full world + soft purple seat pulses. Country names appear on land hover only — no permanent seat chips. */
 export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world shoey-world'): string {
   void countries
   const empty = dots.length === 0
+  const byIso = new Map<string, { x: number; y: number; n: number }>()
+  for (const dot of dots) {
+    const iso = (dot.country || '').trim().toUpperCase()
+    if (!iso) continue
+    const p = project(dot.lat, dot.lon)
+    const cur = byIso.get(iso)
+    if (cur) {
+      cur.x += p.x
+      cur.y += p.y
+      cur.n += 1
+    } else {
+      byIso.set(iso, { x: p.x, y: p.y, n: 1 })
+    }
+  }
+  const countryLabels = [...byIso.entries()]
+    .map(([iso, agg]) => {
+      const name = isoCountryName(iso) || countryName(iso) || iso
+      const x = Math.min(920, Math.max(40, agg.x / agg.n))
+      const y = Math.min(470, Math.max(24, agg.y / agg.n - 16))
+      const w = Math.min(160, Math.max(48, 14 + name.length * 6.2))
+      return `<g class="country-label" data-iso="${escapeXml(iso)}" transform="translate(${x.toFixed(1)},${y.toFixed(1)})" pointer-events="none">
+      <rect class="country-label-bg" x="${(-w / 2).toFixed(1)}" y="-11" width="${w.toFixed(1)}" height="22" rx="11" fill="#18181B" fill-opacity="0.82"/>
+      <text class="country-label-text" text-anchor="middle" y="4" font-size="11" font-weight="600" fill="#F8FAFC">${escapeXml(name)}</text>
+    </g>`
+    })
+    .join('')
   const marks = empty
     ? ''
     : dots
-        .map((dot, i) => {
+        .map((dot) => {
           const p = project(dot.lat, dot.lon)
-          const bump = i % 4
-          const lx = Math.min(900, Math.max(12, p.x + 12))
-          const ly = Math.min(478, Math.max(18, p.y - 14 - bump * 20))
-          const sig = seatSignaturePrimary(dot)
-          const meta = seatSignatureMeta(dot)
-          const w = Math.min(280, Math.max(92, 20 + sig.length * 6.1))
-          const h = meta ? 30 : 20
           const iso = (dot.country || '').trim().toUpperCase()
+          const sig = seatSignaturePrimary(dot)
           return `<g class="seat-mark" data-device="${escapeXml(dot.device)}" data-iso="${escapeXml(iso)}" data-sig="${escapeXml(sig)}" role="button" tabindex="0">
       <circle class="seat-hit" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="14" fill="transparent"/>
-      <circle class="seat-ring" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="10" fill="none" stroke="${SHOEY_DOT}" stroke-width="1.15" opacity="0.28"/>
-      <circle class="seat-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4.4" fill="${SHOEY_DOT}" stroke="#fff" stroke-width="1.2"/>
-      <g class="seat-sig" transform="translate(${lx.toFixed(1)},${ly.toFixed(1)})">
-        <rect class="seat-sig-bg" x="0" y="${(-h / 2).toFixed(1)}" width="${w.toFixed(1)}" height="${h}" rx="6" fill="#fff" stroke="#E5E5E5"/>
-        <text class="seat-sig-name" x="8" y="${meta ? -1 : 4}" font-size="11" font-weight="650" fill="#18181B">${escapeXml(sig)}</text>
-        ${meta ? `<text class="seat-sig-meta" x="8" y="12" font-size="9" fill="#71717A">${escapeXml(meta)}</text>` : ''}
-      </g>
+      <circle class="seat-halo" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="14" fill="${SHOEY_HALO}" opacity="0.22"/>
+      <circle class="seat-ring" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="10" fill="none" stroke="${SHOEY_DOT}" stroke-width="1.15" opacity="0.35"/>
+      <circle class="seat-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4.4" fill="${SHOEY_DOT}" stroke="#fff" stroke-width="1.15"/>
     </g>`
         })
         .join('')
@@ -309,7 +327,7 @@ export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world
     : ''
   const svg = shoeyLandSvg(cls)
     .replace('aria-label="Unique seats by country"', 'aria-label="Live Métis seats across the globe"')
-    .replace('</svg>', `${marks}</svg>`)
+    .replace('</svg>', `${countryLabels}${marks}</svg>`)
   return `${caption}${svg}`
 }
 
