@@ -9,6 +9,7 @@ import {
   OVERLAY_ORB_COPY,
   OVERLAY_ORB_STYLES,
   circleRestWindowPx,
+  decideCircleRestMinimize,
   isCircleRestWrongSlab,
   minimizedCircleRestBounds,
   overlayOrbRestIsCircle,
@@ -130,5 +131,71 @@ describe('orb selection persist + Bar-only law', () => {
     )
     expect(hug).toMatch(/overlayHugNextWidth/)
     expect(hug).not.toMatch(/const nextWidth = Math\.max\(120/)
+  })
+
+  it('click Expand Métis stays expanded; Circle rest does not snap the pill back', () => {
+    const jarvisRest = {
+      layout: 'bar' as const,
+      style: 'obsidian' as const,
+      view: 'answer',
+      minimized: false,
+      styleChanged: false,
+      leftSettings: false
+    }
+    // Totos-Mac live: click Expand Métis then view !== settings && !minimized re-minimized.
+    expect(decideCircleRestMinimize({ ...jarvisRest, session: 'resting' })).toBe('stay')
+    expect(decideCircleRestMinimize({ ...jarvisRest, session: 'expanded' })).toBe('stay')
+    expect(decideCircleRestMinimize({ ...jarvisRest, style: 'jakub', session: 'resting' })).toBe('stay')
+    expect(decideCircleRestMinimize({ ...jarvisRest, session: 'idle' })).toBe('minimize')
+    expect(
+      decideCircleRestMinimize({
+        ...jarvisRest,
+        view: 'settings',
+        styleChanged: true,
+        session: 'idle'
+      })
+    ).toBe('minimize')
+    expect(
+      decideCircleRestMinimize({
+        ...jarvisRest,
+        leftSettings: true,
+        session: 'expanded'
+      })
+    ).toBe('minimize')
+    expect(
+      decideCircleRestMinimize({
+        layout: 'bar',
+        style: 'bar',
+        view: 'answer',
+        minimized: true,
+        styleChanged: true,
+        leftSettings: false,
+        session: 'idle'
+      })
+    ).toBe('expand')
+    expect(
+      decideCircleRestMinimize({
+        layout: 'hide',
+        style: 'obsidian',
+        view: 'answer',
+        minimized: false,
+        styleChanged: false,
+        leftSettings: false,
+        session: 'idle'
+      })
+    ).toBe('stay')
+
+    const app = readFileSync(join(__dirname, '../renderer/src/App.tsx'), 'utf8')
+    const orb = readFileSync(join(__dirname, '../renderer/src/components/ObsidianOrb.tsx'), 'utf8')
+    const pill = readFileSync(join(__dirname, '../renderer/src/components/ControlPill.tsx'), 'utf8')
+    expect(app).toMatch(/decideCircleRestMinimize/)
+    expect(app).toMatch(/onExpand=\{unminimize\}/)
+    expect(app).toMatch(/setMinimized\(false\)/)
+    expect(app).toMatch(/window\.toto\.minimize\(false\)/)
+    expect(app).not.toMatch(/if \(view !== 'settings' && !minimized\)/)
+    expect(orb).toMatch(/runOrbPillActivate/)
+    expect(orb).toMatch(/onActivate/)
+    expect(pill).toMatch(/onActivate=\{onExpand\}/)
+    expect(pill).toMatch(/ariaLabel="Expand Métis"/)
   })
 })

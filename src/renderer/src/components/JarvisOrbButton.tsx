@@ -9,7 +9,7 @@ import {
   BAR_PILL_BACKING_PX,
   BAR_PILL_SIZE_PX,
   BAR_PILL_VISIBLE_PX,
-  pillClickShouldExpand,
+  runOrbPillActivate,
   resolveBarOrbState,
   shouldShowOrbRecDot,
   type OrbMood
@@ -72,8 +72,7 @@ export function JarvisOrbButton({
         if (enableDrag) drag.onPointerDown(e)
       }}
       onClick={() => {
-        if (enableDrag && !pillClickShouldExpand(dragMovedRef.current)) return
-        onActivate()
+        runOrbPillActivate({ enableDrag, dragMoved: dragMovedRef.current, onActivate })
       }}
       className="aw-orb no-drag focus-ring"
     >

@@ -20,6 +20,7 @@ import {
   orbBoxForMood,
   orbHostPaintsText,
   pillClickShouldExpand,
+  runOrbPillActivate,
   resolveBarOrbState,
   resolveOrbMood,
   shouldAnimateOrb,
@@ -100,6 +101,13 @@ describe('bar pill thinking-orb circle', () => {
   it('click expands and drag does not', () => {
     expect(pillClickShouldExpand(false)).toBe(true)
     expect(pillClickShouldExpand(true)).toBe(false)
+    let n = 0
+    expect(runOrbPillActivate({ enableDrag: true, dragMoved: false, onActivate: () => { n++ } })).toBe(true)
+    expect(n).toBe(1)
+    expect(runOrbPillActivate({ enableDrag: true, dragMoved: true, onActivate: () => { n++ } })).toBe(false)
+    expect(n).toBe(1)
+    expect(runOrbPillActivate({ enableDrag: false, dragMoved: true, onActivate: () => { n++ } })).toBe(true)
+    expect(n).toBe(2)
   })
 
   it('orb rAF runs on a Bar circle and is off on Hide/Island', () => {

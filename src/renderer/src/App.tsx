@@ -43,7 +43,13 @@ import {
   parseOverlayLayout,
   shouldForceParkOnBecameIdle
 } from '@shared/overlay-chrome'
-import { overlayOrbRestIsCircle, parseOverlayOrbStyle, type OverlayOrbStyle } from '@shared/overlay-orb'
+import {
+  decideCircleRestMinimize,
+  overlayOrbRestIsCircle,
+  parseOverlayOrbStyle,
+  type CircleRestSession,
+  type OverlayOrbStyle
+} from '@shared/overlay-orb'
 import { resolveOrbMood } from './lib/bar-pill-orb'
 import {
   OVERLAY_PARK_FALLBACK_MS,
@@ -550,33 +556,48 @@ export function App(): JSX.Element {
     void window.toto.minimize(false)
   }, [minimized, canMinimize])
   const prevOrbStyleRef = useRef<OverlayOrbStyle>(overlayOrbStyle)
+  const circleRestViewRef = useRef(view)
+  const circleRestSessionRef = useRef<CircleRestSession>('idle')
   useEffect(() => {
     if (!canMinimize) {
+      circleRestSessionRef.current = 'idle'
       if (!minimized) return
       setMinimized(false)
       void window.toto.minimize(false)
       return
     }
-    const prev = prevOrbStyleRef.current
+    const prevStyle = prevOrbStyleRef.current
+    const prevView = circleRestViewRef.current
     prevOrbStyleRef.current = overlayOrbStyle
-    const styleChanged = prev !== overlayOrbStyle
-    if (overlayOrbRestIsCircle(overlayLayout, overlayOrbStyle)) {
-      // Picking Circle while Settings is open must leave the 880×1017 sheet.
-      if (styleChanged && view === 'settings') {
-        setView('answer')
-        setMinimized(true)
-        void window.toto.minimize(true)
-        return
-      }
-      // Bar + Circle rest (default jakub) is the thinking-orb pill, not a Settings slab.
-      if (view !== 'settings' && !minimized) {
-        setMinimized(true)
-        void window.toto.minimize(true)
-      }
-    } else if (overlayOrbStyle === 'bar' && minimized) {
+    circleRestViewRef.current = view
+    const action = decideCircleRestMinimize({
+      layout: overlayLayout,
+      style: overlayOrbStyle,
+      view,
+      minimized,
+      styleChanged: prevStyle !== overlayOrbStyle,
+      leftSettings: prevView === 'settings' && view !== 'settings',
+      session: circleRestSessionRef.current
+    })
+    if (action === 'minimize') {
+      // Picking Circle/Jarvis while Settings is open must leave the 880×1017 sheet.
+      if (view === 'settings') setView('answer')
+      setMinimized(true)
+      void window.toto.minimize(true)
+      circleRestSessionRef.current = 'resting'
+      return
+    }
+    if (action === 'expand') {
       setMinimized(false)
       void window.toto.minimize(false)
+      circleRestSessionRef.current = 'idle'
+      return
     }
+    circleRestSessionRef.current = overlayOrbRestIsCircle(overlayLayout, overlayOrbStyle)
+      ? minimized
+        ? 'resting'
+        : 'expanded'
+      : 'idle'
   }, [canMinimize, overlayLayout, overlayOrbStyle, minimized, view])
   useEffect(() => {
     dispatchAutoHide({ type: 'set-forced', forced: autoHideForced })

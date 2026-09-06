@@ -121,6 +121,17 @@ export function pillClickShouldExpand(didDrag: boolean): boolean {
   return !didDrag
 }
 
+/** Expand Métis on Circle/Jarvis. Fires onActivate when this press was not a drag. */
+export function runOrbPillActivate(input: {
+  enableDrag?: boolean
+  dragMoved: boolean
+  onActivate: () => void
+}): boolean {
+  if (input.enableDrag && !pillClickShouldExpand(input.dragMoved)) return false
+  input.onActivate()
+  return true
+}
+
 /**
  * Orb clock is allowed only on a mounted Bar circle (docked idle or minimized rest).
  * Hide, Island, reduced-motion, and a hidden document must not run a frame loop we own.
