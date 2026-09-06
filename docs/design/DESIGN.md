@@ -75,6 +75,7 @@ This slice is a **thin Operator tip**: Generate license on Overview + Licenses,
 platform keys after a seat activates that string in Métis Identity. Do not
 merge the 476-file Keys-gateway stack. **No Worker deploy** until Devon/Ultron
 Mac Hide PASS. No pack. No merge. No Latest.
+EXE/DMG/Native → Latest only after Bob QA + Ultron approve.
 
 ### Feel (original Métis Operator, not Shoey)
 

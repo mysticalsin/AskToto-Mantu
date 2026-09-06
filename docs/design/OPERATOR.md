@@ -24,6 +24,9 @@ Access: Cloudflare Access email-code only. Allowlist `tony.walteur@gmail.com` +
 **Hold.** Draft only. No pack. No merge. No Latest. **Do not wrangler deploy**
 until Devon / Ultron say Mac Hide UX full PASS.
 
+**ULTRON LOCK.** Do **not** publish or promote any Metis-Releases Latest feed.
+EXE / DMG / Native → Latest only after Bob QA **and** Ultron approve.
+
 Visual contract lives in [DESIGN.md](DESIGN.md) § Operator. Implement that
 before inventing chrome.
 

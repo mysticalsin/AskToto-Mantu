@@ -30,6 +30,7 @@
     "start": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json && node scripts/check-test-types.mjs",
     "test": "vitest run && npm run test:proxy",
+    "test:operator": "vitest run --config operator/vitest.config.ts",
     "//test:proxy": "The Worker under cloudflare-proxy/ needs its own vitest config (WebWorker lib, its own root), so the root config's include globs can never reach it — a positional path filter silently matches nothing. Chained into `test` so CI's single `npm test` covers it; a suite that never runs is not a suite.",
     "test:proxy": "vitest run --config cloudflare-proxy/vitest.config.ts",
     "test:smoke:import": "npm run build && node scripts/smoke-import.mjs",
