@@ -4,6 +4,7 @@ import worker, {
   setProxyRateLimitCache,
   PROXY_RL_AUTH_MAX,
   PROXY_RL_UNAUTH_MAX,
+  MAX_BODY_BYTES,
   type Env,
   type ProxyRateCache
 } from './index'
@@ -248,6 +249,30 @@ describe('forwarding to the Cloudflare AI REST API', () => {
     await worker.fetch(chatRequest(PROXY_KEY, BODY), env())
 
     expect(calls[0][1].body).toBe(BODY)
+  })
+
+  it('refuses a declared oversize body with 413 and never calls upstream', async () => {
+    const calls = stubUpstream(new Response('{"ok":true}', { status: 200 }))
+    const req = new Request('https://proxy.example.workers.dev/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${PROXY_KEY}`,
+        'content-type': 'application/json',
+        'content-length': String(MAX_BODY_BYTES + 1)
+      },
+      body: BODY
+    })
+    const res = await worker.fetch(req, env())
+    expect(res.status).toBe(413)
+    expect(calls).toHaveLength(0)
+  })
+
+  it('refuses an undeclared oversize body with 413 after reading it', async () => {
+    const calls = stubUpstream(new Response('{"ok":true}', { status: 200 }))
+    const huge = 'x'.repeat(MAX_BODY_BYTES + 1)
+    const res = await worker.fetch(chatRequest(PROXY_KEY, huge), env())
+    expect(res.status).toBe(413)
+    expect(calls).toHaveLength(0)
   })
 
   it('pins an AI Gateway only when the operator set one', async () => {
