@@ -13,6 +13,8 @@ Operator is the control plane. Seats are the product. Tony holds the keys.
 
 Beautiful, scale-ready, Access-solid. Apple-grade density. No overlapping chrome. No fake rows. Fail loud.
 
+Overview opens on **Install → works**: Check in → Approve → Platform keys. Pending seats sit on that path with Approve. Tokens from [OPERATOR.md](./OPERATOR.md): accent `#2563EB`, live `#10B981`, land `#E5E7EB`. Theme is always `dark` or `light`, never empty.
+
 ## Install → works
 
 A Métis seat checks in, Tony **approves** it in Operator, then the app just works on **Operator platform keys**. No paste by default. In-app manual keys stay as fallback. Unapproved seats fail loud.

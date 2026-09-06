@@ -110,6 +110,40 @@ describe('product sidebar (#105)', () => {
     expect(html).toContain('Gateway usage')
     expect(html).not.toContain('data-login="1"')
     expect(html).toContain('#E5E7EB')
+    expect(html).toContain('data-install-works')
+    expect(html).toContain('data-access-solid')
+    expect(html).toContain('#2563EB')
+    expect(html).toContain('data-theme="dark"')
+  })
+
+  it('puts pending seats on the Install → works path with Approve', async () => {
+    const store = memoryStore()
+    await store.upsertSeat({
+      device_id: 'device-a',
+      seat_hash: 'seat-a',
+      os: 'darwin',
+      app_version: '1.8.2',
+      first_seen: NOW,
+      last_seen: NOW,
+      country: 'CA',
+      city: 'Longueuil',
+      lat: 45.5,
+      lon: -73.5,
+      last_index_at: null,
+      hostname: 'Tonys-MacBook-Pro',
+      sso_email: 'twalteur@amaris.com',
+      license: 'licensed',
+      approval: 'pending'
+    })
+    const html = await page(store)
+    const overview = html.slice(html.indexOf('data-page="overview"'), html.indexOf('data-page="realtime"'))
+    expect(overview).toContain('data-install-works')
+    expect(overview).toContain('Install → works')
+    expect(overview).toContain('Tonys-MacBook-Pro')
+    expect(overview).toContain('data-license-approve="device-a"')
+    expect(overview).toContain('pending')
+    expect(html).toContain('data-nav="licenses"')
+    expect(html).toContain('class="nav-count"')
   })
 })
 
