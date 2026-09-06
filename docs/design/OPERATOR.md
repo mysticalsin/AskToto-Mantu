@@ -70,9 +70,10 @@ KineticGrid `b8a677b`, not this Worker tip.
 
 ## Overview glance (P0)
 
-`#overview` reads at a glance: **Live seats · Time saved · Value**. Places
-is a **corner** map + Cities / Regions / Countries (Shoey columns).
-`#realtime` is WorldMap + LiveFeed + GeoTable. `GET /v1/admin/realtime.geo.json`
+`#overview` reads at a glance: **Live seats · Time saved · Value**. Then
+the Shoey 2×2: Devices/Events tables with full-row bars, Places table +
+**corner** map as sibling cards. `#realtime` is WorldMap + 30m/Live/Live
+events strip + GeoTable. `GET /v1/admin/realtime.geo.json`
 is city-level `{ country, city, count, unique_sessions, avg_duration }`.
 Activity is Métis heartbeats / asks / recaps with city · device · os ·
 license chips and relative time, never pageviews. People lists last-seen

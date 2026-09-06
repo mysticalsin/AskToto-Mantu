@@ -105,6 +105,7 @@ EXE/DMG/Native → Latest only after Bob QA + Ultron approve.
 | Shoey / OpenPanel | Métis Operator |
 | --- | --- |
 | Unique visitors / pageviews | Live seats (heartbeat &lt; 2 min) |
+| Unique visitors last 30 min | Seats last 30 min (`last_seen`) |
 | Sessions / day | Real seats last seen 24h |
 | Duration / time on site | Seat first_seen → last_seen · recap minutes |
 | Top pages / referrers / sources | Top devices (hostname · city · live) |
