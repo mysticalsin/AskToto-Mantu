@@ -14,11 +14,14 @@ import {
   JARVIS_PILL_PARTICLE_COUNT,
   JARVIS_STATE_TARGET,
   jarvisCameraZForHost,
+  jarvisCloudFillsHost,
   jarvisLineStepForCount,
   jarvisParticleCountForHost,
   jarvisPixelRatio,
   jarvisPointSizeForHost,
   jarvisSizeAttenuationForHost,
+  jarvisStateRadiusForHost,
+  jarvisVisibleHalfHeight,
   resolveJarvisOrbState,
   seedJarvisCloud
 } from './jarvis-orb'
@@ -26,6 +29,7 @@ import {
 const engine = readFileSync(join(__dirname, './jarvis-orb.ts'), 'utf8')
 const orb = readFileSync(join(__dirname, '../components/ObsidianOrb.tsx'), 'utf8')
 const picker = readFileSync(join(__dirname, '../components/OverlayOrbPicker.tsx'), 'utf8')
+const css = readFileSync(join(__dirname, '../styles.css'), 'utf8')
 const pkg = readFileSync(join(__dirname, '../../../../package.json'), 'utf8')
 
 describe('Jarvis particle orb (Bar Circle / second pill)', () => {
@@ -99,9 +103,77 @@ describe('Jarvis particle orb (Bar Circle / second pill)', () => {
     expect(jarvisLineStepForCount(220)).toBeGreaterThan(1)
     expect(JARVIS_STATE_TARGET.thinking.lineAmount).toBeGreaterThan(JARVIS_STATE_TARGET.idle.lineAmount)
     expect(JARVIS_STATE_TARGET.thinking.electronRate).toBeGreaterThan(0)
-    const css = { clientWidth: 41, clientHeight: 41, width: 82, height: 82 } as HTMLCanvasElement
-    expect(hostCssSize(css)).toBe(41)
+    const laidOut = { clientWidth: 41, clientHeight: 41, width: 82, height: 82 } as HTMLCanvasElement
+    expect(hostCssSize(laidOut)).toBe(41)
     const backingOnly = { clientWidth: 0, clientHeight: 0, width: 82, height: 82 } as HTMLCanvasElement
     expect(hostCssSize(backingOnly)).toBe(41)
+  })
+
+  it('cameraZ + host sizing fill the 41 circle, not a 64 bottom-right pack', () => {
+    expect(JARVIS_PILL_CAMERA_Z).toBe(52)
+    expect(jarvisCameraZForHost(41)).toBe(52)
+    expect(jarvisCameraZForHost(0)).toBe(52)
+    expect(jarvisCameraZForHost(64)).toBe(68)
+    expect(jarvisVisibleHalfHeight(52)).toBeLessThan(28)
+    expect(
+      jarvisCloudFillsHost({
+        hostPx: 41,
+        cameraZ: jarvisCameraZForHost(41),
+        radius: jarvisStateRadiusForHost('idle', 41)
+      })
+    ).toBe(true)
+    expect(
+      jarvisCloudFillsHost({
+        hostPx: 41,
+        cameraZ: jarvisCameraZForHost(41),
+        radius: jarvisStateRadiusForHost('thinking', 41)
+      })
+    ).toBe(true)
+    expect(jarvisStateRadiusForHost('thinking', 41)).toBeGreaterThanOrEqual(26)
+    expect(jarvisStateRadiusForHost('idle', 41)).toBe(28)
+    expect(jarvisStateRadiusForHost('thinking', 900)).toBe(16)
+
+    const preLayout = {
+      clientWidth: 0,
+      clientHeight: 0,
+      width: 0,
+      height: 0,
+      parentElement: null
+    } as unknown as HTMLCanvasElement
+    expect(hostCssSize(preLayout)).toBe(41)
+
+    const thinkingOrbRule = {
+      clientWidth: 64,
+      clientHeight: 64,
+      width: 128,
+      height: 128,
+      parentElement: { clientWidth: 41, clientHeight: 41 }
+    } as unknown as HTMLCanvasElement
+    expect(hostCssSize(thinkingOrbRule)).toBe(41)
+
+    const canvas64NoParent = {
+      clientWidth: 64,
+      clientHeight: 64,
+      width: 128,
+      height: 128,
+      parentElement: null
+    } as unknown as HTMLCanvasElement
+    expect(hostCssSize(canvas64NoParent)).toBe(41)
+
+    expect(engine).toMatch(/setViewport\(0, 0, css, css\)/)
+    expect(engine).toMatch(/opts\.hostPx/)
+    expect(engine).toMatch(/jarvisStateRadiusForHost/)
+    expect(orb).toMatch(/hostPx: BAR_PILL_VISIBLE_PX/)
+    expect(orb).toMatch(/useLayoutEffect/)
+  })
+
+  it('visual contract: Jarvis canvas is 41, not the thinking-orb 64 rule', () => {
+    expect(css).toMatch(/\.obsidian-orb__canvas \{[\s\S]*?width:\s*41px !important/)
+    expect(css).toMatch(/\.obsidian-orb__canvas \{[\s\S]*?height:\s*41px !important/)
+    expect(css).toMatch(/\.obsidian-orb__canvas \{[\s\S]*?inset:\s*0/)
+    expect(css).toMatch(/\.obsidian-orb \{[\s\S]*?width:\s*41px/)
+    expect(css).toMatch(/\.obsidian-orb \{[\s\S]*?clip-path:\s*circle\(50% at 50% 50%\)/)
+    expect(css).toMatch(/\.aw-orb__canvas \{[\s\S]*?width:\s*64px !important/)
+    expect(css).not.toMatch(/\.aw-orb canvas \{/)
   })
 })

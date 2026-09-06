@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useLayoutEffect, useRef } from 'react'
 import { useWindowDrag } from '../lib/window-drag'
 import { BAR_PILL_VISIBLE_PX, runOrbPillActivate, type OrbMood } from '../lib/bar-pill-orb'
 import { createJarvisOrb, resolveJarvisOrbState, type JarvisOrbHandle } from '../lib/jarvis-orb'
@@ -39,7 +39,7 @@ export function ObsidianOrb({
     { armOnControls: true, deadZonePx: 14 }
   )
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
     const reduced =
@@ -47,7 +47,8 @@ export function ObsidianOrb({
       window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true
     handleRef.current = createJarvisOrb(canvas, {
       reducedMotion: reduced,
-      state: startStateRef.current
+      state: startStateRef.current,
+      hostPx: BAR_PILL_VISIBLE_PX
     })
     return () => {
       handleRef.current?.dispose()
