@@ -4724,7 +4724,7 @@ function UpdatesSection(): JSX.Element {
   }, [])
 
   return (
-    <Section title="Updates" desc="Métis installs updates automatically where the platform allows. Check, download, and install here any time." icon={RefreshCw}>
+    <Section title="Updates" desc="Métis installs a QA-approved Latest from Metis-Releases. Draft and prerelease builds are never offered." icon={RefreshCw}>
       <div className="flex flex-col items-center gap-2">
         {result?.current ? (
           <span className="text-[12px] text-[color:var(--cl-muted-foreground)]">Installed version: {result.current}</span>
