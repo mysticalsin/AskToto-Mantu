@@ -264,8 +264,11 @@ export const IPC = {
   dismissFailoverNotice: 'settings:dismissFailoverNotice'
 } as const
 
-/** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals. */
-export type AnswerFeedback = { rating: 'up' | 'down'; kind?: string }
+/** User's verdict on an answer (metadata only — never the answer text). Feeds the audit log + future evals.
+ *  `askId` is the real answer id (App.tsx's ask.answer.id, the same id recordOperatorAsk sent for this
+ *  answer) so an Operator rating attaches to the exact answer it was given on — optional only for a
+ *  renderer build that predates this field. */
+export type AnswerFeedback = { rating: 'up' | 'down'; kind?: string; askId?: string }
 
 /** On-device eval metrics aggregated from the local audit log (no content, never shipped). */
 export interface EvalMetrics {

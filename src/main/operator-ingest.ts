@@ -1,14 +1,20 @@
 import { app } from 'electron'
+import { hostname as osHostname } from 'node:os'
 import { redactSecrets } from '@shared/redact'
 import { filterFundedProviders } from '@shared/ask-routing'
 import { inspectBundleResponse } from '@shared/bundle-response'
 import { operatorUrlConfigured, shouldSendAskText, type AskLogLine, type StreamCacheUsage } from '@shared/operator'
+import { buildSeatMeta, type SeatMeta } from '@shared/operator-seat'
 import { classifyQuestionType, normalizeQuestionType, type QuestionType } from '@shared/question-type'
 import type { Settings } from '@shared/ipc'
-import { getMachineId } from './license'
+import { getMachineId, memberLicenseStatus, licenseDisplayStatus } from './license'
+import { getSettings as getStoreSettings } from './store'
+import { authStatus } from './auth'
+import { lastIndexedAt } from './brain/intelligence-index'
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
 import { mainLog } from './logger'
 import type { OperatorCrmEvent } from './operator-crm'
+import { drainOperatorQueue, enqueueOperatorItem, type QueueSendResult } from './operator-queue'
 
 const HEARTBEAT_MS = 60_000
 const ASK_TEXT_CAP = 4_000
@@ -51,13 +57,71 @@ function osLabel(): 'darwin' | 'win' | string {
   return process.platform
 }
 
-function seatMeta(settings: OperatorRuntimeSettings): { seatHash: string; os: string; appVersion: string } {
+/** Test-only override for the queue's directory, mirroring setOperatorFetchForTests. Production always
+ *  resolves the real Electron userData dir. */
+let queueDirOverride: string | null = null
+export function setOperatorQueueDirForTests(dir: string | null): void {
+  queueDirOverride = dir
+}
+function queueDir(): string {
+  return queueDirOverride ?? app.getPath('userData')
+}
+
+/** This Mac's real hostname (os.hostname()). Never a placeholder; sanitized downstream by buildSeatMeta. */
+function safeHostname(): string | undefined {
+  try {
+    return osHostname()
+  } catch {
+    return undefined
+  }
+}
+
+/** The signed-in Mantu/Azure AD identity (src/main/auth.ts), when one exists. Never a guess, never the
+ *  local license-server email — only a verified, domain-locked SSO session counts as "signed in". */
+function safeSsoEmail(): string | undefined {
+  try {
+    const status = authStatus()
+    return status.signedIn ? status.email : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Real license state from the member-pass subsystem (src/main/license/activate.ts), falling back to
+ *  the local trial clock (src/main/license.ts) only when there is no real activation. Both are the
+ *  actual on-device state machines — never invented, and 'trial' only when the trial is genuinely
+ *  active right now. */
+function safeLicenseState(): string | undefined {
+  try {
+    const member = memberLicenseStatus()
+    if (member.state !== 'unlicensed') return member.state
+    const display = licenseDisplayStatus()
+    return display.trialActive ? 'trial' : 'unlicensed'
+  } catch {
+    return undefined
+  }
+}
+
+/** Last successful Solid Intelligence index run (src/main/brain/intelligence-index.ts). */
+function safeLastIndexAt(): number | undefined {
+  try {
+    return lastIndexedAt(getStoreSettings())
+  } catch {
+    return undefined
+  }
+}
+
+function seatMeta(settings: OperatorRuntimeSettings): SeatMeta {
   const rawSeat = settings.licenseKey?.trim() || getMachineId()
-  return {
+  return buildSeatMeta({
     seatHash: hashOperatorId(rawSeat),
     os: osLabel(),
-    appVersion: app.getVersion()
-  }
+    appVersion: app.getVersion(),
+    hostname: safeHostname(),
+    ssoEmail: safeSsoEmail(),
+    license: safeLicenseState(),
+    lastIndexAt: safeLastIndexAt()
+  })
 }
 
 export type { OperatorCrmEvent, OperatorCrmStatus } from './operator-crm'
@@ -75,7 +139,7 @@ async function signedPost(
   secret: string,
   path: string,
   bodyObj: Record<string, unknown>
-): Promise<{ ok: boolean; json: unknown }> {
+): Promise<{ ok: boolean; json: unknown; status: number }> {
   const body = JSON.stringify(bodyObj)
   const headers = {
     'content-type': 'application/json',
@@ -92,7 +156,7 @@ async function signedPost(
   })
   if (!inspected.ok) {
     mainLog.warn(`[operator] ${path} ${inspected.message}`)
-    return { ok: false, json: null }
+    return { ok: false, json: null, status: res.status }
   }
   if (!res.ok) {
     mainLog.warn(`[operator] ${path} ${res.status}`)
@@ -103,7 +167,38 @@ async function signedPost(
   } catch {
     parsed = null
   }
-  return { ok: res.ok, json: parsed }
+  return { ok: res.ok, json: parsed, status: res.status }
+}
+
+function retryAfterMsFromJson(json: unknown): number | undefined {
+  if (!json || typeof json !== 'object') return undefined
+  const v = (json as { retryAfterMs?: unknown }).retryAfterMs
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : undefined
+}
+
+/** Durable-outbox eligibility (PLAN.md section 3): a network failure (status is undefined — the fetch
+ *  itself threw), a 429, or a 5xx. Anything else (400s, a bad HMAC, a malformed body) is a real
+ *  rejection that a retry would never fix, so it is logged and dropped instead of queued forever. */
+function shouldQueueOnFailure(status: number | undefined): boolean {
+  if (status === undefined) return true
+  return status === 429 || status >= 500
+}
+
+/** POST one `/v1/ingest` event (ask, crm, rating, listen/recap). On success, nothing else happens. On a
+ *  failure eligible for retry (network error, 429, 5xx), the exact same body is appended to the durable
+ *  outbox so the Worker's INSERT OR REPLACE on (id, ts) dedups it once it lands. Never throws. */
+async function postIngestWithQueue(url: string, secret: string, bodyObj: Record<string, unknown>): Promise<void> {
+  let result: QueueSendResult
+  try {
+    const res = await signedPost(url, secret, '/v1/ingest', bodyObj)
+    result = { ok: res.ok, status: res.status, retryAfterMs: retryAfterMsFromJson(res.json) }
+  } catch (e) {
+    mainLog.warn('[operator] ingest failed:', e)
+    result = { ok: false }
+  }
+  if (!result.ok && shouldQueueOnFailure(result.status)) {
+    enqueueOperatorItem(queueDir(), { path: '/v1/ingest', body: bodyObj }, { retryAfterMs: result.retryAfterMs })
+  }
 }
 
 function retryIdsFromHeartbeat(json: unknown): string[] {
@@ -141,8 +236,21 @@ export async function operatorHeartbeat(
   const url = resolveUrl(settings)
   const secret = resolveSecret(settings)
   if (!operatorUrlConfigured(settings) || !secret) return { ok: false, retry: [] }
+  // Drain the durable outbox on every tick, BEFORE the heartbeat itself, so a just-flushed queue is
+  // reflected in the {queued, dropped} counts this same heartbeat reports. Heartbeats are never queued.
+  const queueReport = await drainOperatorQueue(queueDir(), Date.now(), async (path, body) => {
+    const res = await signedPost(url, secret, path, body)
+    return { ok: res.ok, status: res.status, retryAfterMs: retryAfterMsFromJson(res.json) }
+  }).catch((e) => {
+    mainLog.warn('[operator] queue drain failed:', e)
+    return { queued: 0, dropped: 0 }
+  })
   try {
-    const res = await signedPost(url, secret, '/v1/heartbeat', seatMeta(settings))
+    const res = await signedPost(url, secret, '/v1/heartbeat', {
+      ...seatMeta(settings),
+      queued: queueReport.queued,
+      dropped: queueReport.dropped
+    })
     if (res.ok) lastFundedProviders = fundedProvidersFromHeartbeat(res.json)
     return { ok: res.ok, retry: retryIdsFromHeartbeat(res.json) }
   } catch (e) {
@@ -184,6 +292,9 @@ export interface OperatorAskEvent extends StreamCacheUsage {
   ttftMs?: number
   totalMs?: number
   outcome?: AskLogLine['outcome']
+  /** Short error CLASS only (e.g. 'transient', 'auth', 'rate-limit', 'usage-cap', 'empty-response') when
+   *  outcome is 'error' — never the provider's raw message text, which can carry account/URL detail. */
+  error?: string
   question?: string
   /**
    * Closed-taxonomy label computed on this seat (question-type.ts). A METRIC, not text: it always ships,
@@ -239,15 +350,14 @@ export async function recordOperatorAsk(
     questionType: resolveQuestionType(event),
     ...seatMeta(settings)
   }
+  if (event.outcome === 'error' && event.error) {
+    payload.error = event.error.slice(0, 64)
+  }
   if (shouldSendAskText(settings)) {
     const q = sanitizeQuestion(event.question)
     if (q) payload.question = q
   }
-  try {
-    await signedPost(url, secret, '/v1/ingest', payload)
-  } catch (e) {
-    mainLog.warn('[operator] ingest failed:', e)
-  }
+  await postIngestWithQueue(url, secret, payload)
 }
 
 export async function recordOperatorCrmSend(
@@ -258,28 +368,28 @@ export async function recordOperatorCrmSend(
   const secret = resolveSecret(settings)
   if (!operatorUrlConfigured(settings) || !secret) return
   const title = event.title?.replace(/\s+/g, ' ').trim().slice(0, 160)
-  try {
-    await signedPost(url, secret, '/v1/ingest', {
-      event: 'crm',
-      id: event.id,
-      ts: event.ts ?? Date.now(),
-      status: event.status,
-      title: title || 'CRM send',
-      connector: event.connector || 'unknown',
-      ...(event.meetingHash ? { meetingHash: event.meetingHash } : {}),
-      ...(event.action ? { action: event.action } : {}),
-      ...(typeof event.attempt === 'number' ? { attempt: event.attempt } : {}),
-      ...(typeof event.latencyMs === 'number' ? { latencyMs: event.latencyMs } : {}),
-      ...(event.remoteId ? { remoteId: event.remoteId } : {}),
-      ...(event.remoteUrl ? { remoteUrl: event.remoteUrl } : {}),
-      ...(event.error ? { error: event.error.slice(0, 200) } : {}),
-      ...seatMeta(settings)
-    })
-  } catch (e) {
-    mainLog.warn('[operator] crm ingest failed:', e)
-  }
+  await postIngestWithQueue(url, secret, {
+    event: 'crm',
+    id: event.id,
+    ts: event.ts ?? Date.now(),
+    status: event.status,
+    title: title || 'CRM send',
+    connector: event.connector || 'unknown',
+    ...(event.meetingHash ? { meetingHash: event.meetingHash } : {}),
+    ...(event.action ? { action: event.action } : {}),
+    ...(typeof event.attempt === 'number' ? { attempt: event.attempt } : {}),
+    ...(typeof event.latencyMs === 'number' ? { latencyMs: event.latencyMs } : {}),
+    ...(event.remoteId ? { remoteId: event.remoteId } : {}),
+    ...(event.remoteUrl ? { remoteUrl: event.remoteUrl } : {}),
+    ...(event.error ? { error: event.error.slice(0, 200) } : {}),
+    ...seatMeta(settings)
+  })
 }
 
+/** `askId` is the real answer id from the renderer's feedback IPC (App.tsx threads ask.answer.id through
+ *  Answer.tsx). Falls back to the last ask this process sent only when the renderer didn't have one
+ *  (older payload shape) — never silently misattributes a rating to the wrong answer when a real id
+ *  was available. */
 export async function recordOperatorRating(
   settings: OperatorRuntimeSettings,
   rating: 'up' | 'down',
@@ -288,9 +398,5 @@ export async function recordOperatorRating(
   const url = resolveUrl(settings)
   const secret = resolveSecret(settings)
   if (!operatorUrlConfigured(settings) || !secret || !askId) return
-  try {
-    await signedPost(url, secret, '/v1/ingest', { event: 'rating', id: askId, rating, ...seatMeta(settings) })
-  } catch (e) {
-    mainLog.warn('[operator] rating ingest failed:', e)
-  }
+  await postIngestWithQueue(url, secret, { event: 'rating', id: askId, rating, ...seatMeta(settings) })
 }

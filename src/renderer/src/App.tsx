@@ -3067,6 +3067,7 @@ export function App(): JSX.Element {
         onRetry={capturing || !ask.answer?.prompt ? undefined : retryAnswer}
         onGoDeeper={capturing ? undefined : goDeeper}
         captureAccel={captureAccel}
+        askId={capturing ? undefined : ask.answer?.id}
       />
     )
   }, [capturing, captureError, ask.answer, retryAnswer, goDeeper, captureAccel])

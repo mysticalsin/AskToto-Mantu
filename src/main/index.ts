@@ -5903,6 +5903,20 @@ function registerIpc(): void {
             if (!gotToken && provider !== 'local') {
               if (race && race.gate.markDead(race.leg) !== 'surface') return
               if (race) streams.delete(req.id)
+              // Operator traceability (PLAN.md section 3): a terminal failure reports outcome:'error' with
+              // a short CLASS, never this branch's user-facing sentence (that can name the provider/account).
+              void recordOperatorAsk(s, {
+                id: req.id,
+                mode: s.mode,
+                provider,
+                model,
+                ttftMs,
+                totalMs: Date.now() - startedAt,
+                outcome: 'error',
+                error: 'empty-response',
+                question: typeof req.prompt === 'string' ? req.prompt : undefined,
+                vision: req.mode === 'vision'
+              })
               win?.webContents.send(IPC.streamError, {
                 id: req.id,
                 message: 'That provider returned an empty answer, and there was no other provider to try. Check your providers in Settings.'
@@ -5917,6 +5931,18 @@ function registerIpc(): void {
             if (!gotToken && provider === 'local') {
               if (!race || race.gate.markDead(race.leg) === 'surface') {
                 if (race) streams.delete(req.id) // terminal for the race — same release as the error path
+                void recordOperatorAsk(s, {
+                  id: req.id,
+                  mode: s.mode,
+                  provider,
+                  model,
+                  ttftMs,
+                  totalMs: Date.now() - startedAt,
+                  outcome: 'error',
+                  error: 'empty-response',
+                  question: typeof req.prompt === 'string' ? req.prompt : undefined,
+                  vision: req.mode === 'vision'
+                })
                 win?.webContents.send(IPC.streamError, {
                   id: req.id,
                   message: 'Métis Local produced no answer — try again, or add a cloud provider in Settings for longer questions.'
@@ -6132,6 +6158,34 @@ function registerIpc(): void {
                 noteQualifyingUse(req.mode, req.prompt, req.transcript)
                 return
               }
+              // Operator traceability (PLAN.md section 3): a short error CLASS only, reusing the same
+              // classification that picked `friendly` above — never `friendly`/`message` themselves, which
+              // can name a provider account, key fragment, or URL.
+              const errorClass = exhaustion
+                ? exhaustion.kind
+                : isProxyOperatorFault(message)
+                  ? 'proxy-fault'
+                  : isTransient(message)
+                    ? 'transient'
+                    : provider === 'dust' && isDustAuthError({ message })
+                      ? 'auth'
+                      : def.kind === 'cli' && isAuthFailure(message)
+                        ? 'cli-auth'
+                        : isAuthFailure(message)
+                          ? 'auth'
+                          : 'unknown'
+              void recordOperatorAsk(s, {
+                id: req.id,
+                mode: s.mode,
+                provider,
+                model,
+                ttftMs,
+                totalMs: Date.now() - startedAt,
+                outcome: 'error',
+                error: errorClass,
+                question: typeof req.prompt === 'string' ? req.prompt : undefined,
+                vision: req.mode === 'vision'
+              })
               win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
             }
           }
@@ -6713,11 +6767,16 @@ function registerIpc(): void {
   // answer text or question (those would be content). Seeds the H-section acceptance-rate eval later.
   ipcMain.handle(IPC.answerFeedback, (e, raw: unknown) => {
     assertMainWindow(e)
-    const r = raw as { rating?: unknown; kind?: unknown } | null
+    const r = raw as { rating?: unknown; kind?: unknown; askId?: unknown } | null
     const rating = r?.rating === 'up' || r?.rating === 'down' ? r.rating : null
     if (!rating) return
+    // The renderer's own answer id when it has one (App.tsx's ask.answer.id) — bounded the same way the
+    // heartbeat's retry-id list is (retryIdsFromHeartbeat). Absent falls back to recordOperatorRating's
+    // last-sent-ask default, so an older renderer build stays exactly as accurate as it was before.
+    const askId =
+      typeof r?.askId === 'string' && r.askId.length > 0 && r.askId.length <= 80 ? r.askId : undefined
     auditLog('answer.feedback', { rating, kind: typeof r?.kind === 'string' ? r.kind : undefined })
-    void recordOperatorRating(getSettings(), rating)
+    void (askId ? recordOperatorRating(getSettings(), rating, askId) : recordOperatorRating(getSettings(), rating))
   })
 
   // --- Import audio jobs (main-owned so navigation and overlay closure cannot interrupt them) ---
