@@ -151,7 +151,7 @@ The product promise is one sentence: **a licensed person installs Métis and Ask
 ### 4.1 The path
 
 ```
-Download (Metis-Releases, not the private source repo)
+Download (Metis-Releases; AskToto-Mantu source is PUBLIC)
         │
         ▼
 Install (dmg / Install Metis.command / NSIS / portable)
@@ -461,6 +461,8 @@ These are the tests a later PR must keep green or add. This file does not add th
 ## 10. Board R01–R22 — desktop agent vs Operator agent
 
 This is the sequence. One owner per row. Do not start a later row that needs an earlier one's law. Subtract: if a row is already green on `fix/settings-orb-stability-20260905`, mark it **held** and do not restyle it.
+
+Cross-link only: the live vault board uses rows 1–7 (+ parked 8–10, pack 11, PCC R22). Do not renumber the R01–R22 law mid-flight without Tony. CoS crosswalk: AI Second Brain `_relay/METIS-REQUEST-BOARD.md`.
 
 | ID | Slice | Agent | Status on this base | Depends |
 | --- | --- | --- | --- | --- |
