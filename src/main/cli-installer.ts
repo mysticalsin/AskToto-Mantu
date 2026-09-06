@@ -30,8 +30,8 @@
  * commonly carry — so those do not break extraction of the regular files/dirs we actually need.
  */
 
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
-import { delimiter, dirname, join } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { delimiter, dirname, isAbsolute, join, relative } from 'node:path'
 import { gunzipSync } from 'node:zlib'
 import { createHash, randomBytes } from 'node:crypto'
 import { spawn } from 'node:child_process'
@@ -416,14 +416,37 @@ export async function installManagedCli(
 
 // ─── Reading back an installed CLI ──────────────────────────────────────────────────
 
+/**
+ * True only when `entry` is the real managed script for `id`: an absolute path under this id's
+ * install root, ending at the spec's binRelPath, and a non-empty regular file. existsSync alone is
+ * not enough — a leftover current.json can point at the install directory (`/tmp`, userData) or an
+ * empty stub; resolveBin then treats that as installed, checkCliSession never returns `missing`,
+ * and Settings shows "unknown" instead of "not installed".
+ */
+export function managedEntryIsRunnable(id: ManagedCliId, entry: string): boolean {
+  if (!entry || !isAbsolute(entry)) return false
+  const root = installRoot(id)
+  const rel = relative(root, entry)
+  if (!rel || rel.startsWith('..') || isAbsolute(rel)) return false
+  const posixEntry = entry.replace(/\\/g, '/')
+  if (!posixEntry.endsWith(MANAGED_CLIS[id].binRelPath)) return false
+  try {
+    const st = statSync(entry)
+    if (!st.isFile() || st.size === 0) return false
+  } catch {
+    return false
+  }
+  return true
+}
+
 /** The currently-installed entry for `id`, or null if never installed / current.json is missing,
- *  malformed, or points at a file that no longer exists on disk. */
+ *  malformed, or points at a path that is not a real runnable entry script. */
 export function managedCliEntry(id: ManagedCliId): { entry: string; version: string } | null {
   try {
     const raw = readFileSync(currentJsonPath(id), 'utf8')
     const parsed = JSON.parse(raw) as Partial<CurrentPointer>
     if (typeof parsed.version !== 'string' || typeof parsed.entry !== 'string') return null
-    if (!existsSync(parsed.entry)) return null
+    if (!managedEntryIsRunnable(id, parsed.entry)) return null
     return { entry: parsed.entry, version: parsed.version }
   } catch {
     return null
