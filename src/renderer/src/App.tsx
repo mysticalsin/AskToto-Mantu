@@ -40,6 +40,7 @@ import {
   parseOverlayLayout,
   shouldForceParkOnBecameIdle
 } from '@shared/overlay-chrome'
+import { overlayOrbRestIsCircle, parseOverlayOrbStyle, type OverlayOrbStyle } from '@shared/overlay-orb'
 import { resolveOrbMood } from './lib/bar-pill-orb'
 import {
   OVERLAY_PARK_FALLBACK_MS,
@@ -520,6 +521,7 @@ export function App(): JSX.Element {
   // resizes of the always-on-top window (never show()/focus()), so the user's foreground app keeps focus
   // — the non-activating notch contract. The pure state machine lives in lib/overlay-autohide.ts.
   const overlayLayout = parseOverlayLayout(settings?.overlayLayout)
+  const overlayOrbStyle = parseOverlayOrbStyle(settings?.overlayOrbStyle)
   const canMinimize = overlayAllowsMinimize(overlayLayout)
   const showBarOrb = overlayShowsBarOrb(overlayLayout, minimized)
   const autoHideSetting = overlayUsesHover(overlayLayout)
@@ -557,6 +559,20 @@ export function App(): JSX.Element {
     setMinimized(false)
     void window.toto.minimize(false)
   }, [minimized, canMinimize])
+  const prevOrbStyleRef = useRef<OverlayOrbStyle>(overlayOrbStyle)
+  useEffect(() => {
+    if (!canMinimize) return
+    const prev = prevOrbStyleRef.current
+    prevOrbStyleRef.current = overlayOrbStyle
+    if (prev === overlayOrbStyle) return
+    if (overlayOrbRestIsCircle(overlayLayout, overlayOrbStyle)) {
+      setMinimized(true)
+      void window.toto.minimize(true)
+    } else if (overlayOrbStyle === 'bar') {
+      setMinimized(false)
+      void window.toto.minimize(false)
+    }
+  }, [canMinimize, overlayLayout, overlayOrbStyle])
   useEffect(() => {
     dispatchAutoHide({ type: 'set-forced', forced: autoHideForced })
   }, [autoHideForced])
@@ -2605,10 +2621,17 @@ export function App(): JSX.Element {
   }, [])
 
   // The overlay is always the compact bar — Settings opens as a panel BELOW it (Tony: keep the
-  // Métis menu at the top, don't take over the window).
+  // Métis menu at the top, don't take over the window). Opening Settings from Hide/Island must
+  // still expand to a full Settings surface (MQA-286), never the 8×2 / island peek.
   useEffect(() => {
     void window.toto.windowMode('bar')
   }, [])
+  const prevViewRef = useRef(view)
+  useEffect(() => {
+    if (view === 'settings') void window.toto.windowMode('settings')
+    else if (prevViewRef.current === 'settings') void window.toto.windowMode('bar')
+    prevViewRef.current = view
+  }, [view])
 
   useEffect(() => {
     const offReady = window.toto.onUpdateReady((d) => setUpdateReady({ open: true, version: d?.version, notes: d?.notes }))
@@ -3268,6 +3291,7 @@ export function App(): JSX.Element {
             listening={showListeningChrome}
             degradedNote={listen.captureDegraded?.note ?? null}
             onExpand={unminimize}
+            orbStyle={overlayOrbStyle}
           />
         </div>
       ) : overlayPeeked ? (
@@ -3329,6 +3353,7 @@ export function App(): JSX.Element {
             onSettings={onBarSettings}
             onMinimize={onBarMinimize}
             canMinimize={canMinimize}
+            orbStyle={overlayOrbStyle}
             orbMood={resolveOrbMood({
               factcheck: ask.answer?.kind === 'factcheck' && !!ask.answer?.streaming,
               thinking: !!(ask.answer?.streaming || suggest.answer?.streaming)

@@ -161,11 +161,17 @@ import {
   overlayRestSize,
   parkAfterExclusiveOnboarding,
   parkedHoverReanchor,
+  settingsOpenRect,
   shouldIgnoreResizeWhilePeekResting,
   shouldParkHoverRestAfterLeavingSurface,
   topCenterPosition,
   topClamp
 } from './island/geometry'
+import {
+  OVERLAY_REST_BACKGROUND,
+  SETTINGS_SURFACE_BACKGROUND,
+  SETTINGS_WINDOW_MIN
+} from '@shared/settings-bounds'
 import {
   CURSOR_WATCH_INTERVAL_MS,
   decideCursorWatch,
@@ -634,6 +640,8 @@ let currentWidth = BAR_WIDTH // window width; narrows to PILL_WIDTH while collap
 let isMinimized = false
 // Hide/island rest after exclusive onboarding. Stale exclusive / 880×816 measures must not grow the park.
 let islandResting = false
+// Settings is a full surface, not Hide 8×2 / Island peek. Cursor watch and park must not crush it.
+let settingsSurfaceOpen = false
 let overlayCursorWatchTimer: ReturnType<typeof setInterval> | null = null
 let overlayCursorWatchHovering = false
 const streams = new Map<string, { abort: () => void }>()
@@ -1867,8 +1875,8 @@ function resizeTo(height: number): void {
   const display = screen.getDisplayMatching(win.getBounds())
   const rest = overlayRestSize(liveOverlayLayout(), getDisplayMetrics(display))
   // Hide rest is a 1–8px hairline. BAR_MIN_HEIGHT (44) must never grow it into Tony's slab.
-  if (islandResting && liveOverlayLayout() === 'hide') return
-  if (shouldIgnoreResizeWhilePeekResting(islandResting, height, rest.height)) return
+  if (!settingsSurfaceOpen && islandResting && liveOverlayLayout() === 'hide') return
+  if (!settingsSurfaceOpen && shouldIgnoreResizeWhilePeekResting(islandResting, height, rest.height)) return
   // Clamp + reposition against the display the OVERLAY is actually on (not the cursor's). Otherwise, on a
   // laptop + external monitor of different heights, a streaming answer clamps to the wrong monitor and the
   // window jumps vertically while the cursor sits on the other screen.
@@ -1979,6 +1987,7 @@ function tickOverlayCursorWatch(): void {
     stopOverlayCursorWatch()
     return
   }
+  if (settingsSurfaceOpen) return
   const display = screen.getDisplayMatching(win.getBounds())
   const m = getDisplayMetrics(display)
   const layout = liveOverlayLayout()
@@ -2034,6 +2043,7 @@ function pointerInIslandOrBar(opts?: { ignoreWindow?: boolean }): boolean {
 
 function parkOverlayAfterHideSpring(): void {
   if (!win || win.isDestroyed() || onboardingExclusiveLive()) return
+  if (settingsSurfaceOpen) return
   if (overlayCursorWatchHovering) return
   const layout = liveOverlayLayout()
   if (!overlayUsesHover(layout)) return
@@ -2055,7 +2065,11 @@ function parkOverlayAfterHideSpring(): void {
 function applyHideClickThrough(): void {
   if (!win || win.isDestroyed()) return
   const clickThrough =
-    islandResting && liveOverlayLayout() === 'hide' && !isMinimized && !onboardingExclusiveLive()
+    !settingsSurfaceOpen &&
+    islandResting &&
+    liveOverlayLayout() === 'hide' &&
+    !isMinimized &&
+    !onboardingExclusiveLive()
   try {
     win.setIgnoreMouseEvents(clickThrough)
   } catch {
@@ -2106,6 +2120,48 @@ function restoreBarWidth(): void {
   // Already the below-notch bar — do not setBounds y=0 and fight the OS clamp.
   if (b.x === x && b.y === y && b.width === BAR_WIDTH && b.height === revealedHeight) return
   win.setBounds({ x, y, width: BAR_WIDTH, height: revealedHeight }, false)
+}
+
+/**
+ * MQA-286 — tray / dock / IPC Settings must use a full Settings window, never Hide 8×2 or Island peek.
+ * Closing Settings calls leaveSettingsSurface then setWindowMode, which re-parks Hide/Island.
+ */
+function applySettingsSurface(): void {
+  if (!win || win.isDestroyed() || onboardingExclusiveLive()) return
+  settingsSurfaceOpen = true
+  islandResting = false
+  isMinimized = false
+  currentWidth = SETTINGS_WINDOW_MIN.width
+  try {
+    win.setMinimumSize(SETTINGS_WINDOW_MIN.width, SETTINGS_WINDOW_MIN.height)
+  } catch {
+    /* headless */
+  }
+  try {
+    win.setBackgroundColor(SETTINGS_SURFACE_BACKGROUND)
+  } catch {
+    /* headless */
+  }
+  const display = screen.getDisplayMatching(win.getBounds())
+  const rect = settingsOpenRect(getDisplayMetrics(display), ISLAND_TOP_MARGIN)
+  win.setBounds(rect, false)
+  applyHideClickThrough()
+}
+
+function leaveSettingsSurface(): void {
+  settingsSurfaceOpen = false
+  if (overlayUsesHover(liveOverlayLayout())) islandResting = true
+  if (!win || win.isDestroyed()) return
+  try {
+    win.setMinimumSize(1, 1)
+  } catch {
+    /* headless */
+  }
+  try {
+    win.setBackgroundColor(OVERLAY_REST_BACKGROUND)
+  } catch {
+    /* headless */
+  }
 }
 
 // Re-center the compact bar on its current display. The old fixed 'settings' window-mode was removed —
@@ -2168,6 +2224,7 @@ function showForAsk(w: BrowserWindow): void {
 function sendHotkey(action: HotkeyAction): void {
   const w = ensureWindow()
   if (!w) return
+  if (action === 'settings') applySettingsSurface()
   if (!w.isVisible()) {
     if (action === 'ask') showForAsk(w)
     else w.showInactive()
@@ -2927,6 +2984,8 @@ function createTray(): void {
     if (process.platform === 'darwin' && img.isEmpty()) tray.setTitle(' ◉ Métis')
     tray.setToolTip('Métis')
     tray.setContextMenu(buildTrayMenu())
+    // Menu-bar / tray logo click is the Settings entry Tony uses. applySettingsSurface runs inside sendHotkey.
+    tray.on('click', () => sendHotkey('settings'))
   } catch {
     /* tray optional */
   }
@@ -6556,7 +6615,7 @@ function registerIpc(): void {
     assertMainWindow(e)
     // Hide rest stays the 1–8px hairline. The 120px hug floor and BAR_MIN_HEIGHT (44) must not
     // grow it into a visible slab.
-    if (islandResting && liveOverlayLayout() === 'hide') return
+    if (!settingsSurfaceOpen && islandResting && liveOverlayLayout() === 'hide') return
     // A view can opt into reporting its own visible width (the collapsed control mini-pill, and a toast
     // that widens the pill to fit itself while minimized) instead of relying on the fixed
     // BAR_WIDTH/PILL_WIDTH guess. Without this the pill's real content (~170px) sat centered inside the
@@ -6581,9 +6640,13 @@ function registerIpc(): void {
       typeof payload?.height === 'number' && Number.isFinite(payload.height) ? payload.height : BAR_HEIGHT
     resizeTo(height)
   })
-  ipcMain.handle(IPC.windowMode, (e) => {
+  ipcMain.handle(IPC.windowMode, (e, mode: unknown) => {
     assertMainWindow(e)
-    setWindowMode()
+    if (mode === 'settings') applySettingsSurface()
+    else {
+      if (settingsSurfaceOpen) leaveSettingsSurface()
+      setWindowMode()
+    }
   })
   ipcMain.handle(IPC.windowMinimize, (e, narrow: unknown) => {
     assertMainWindow(e)

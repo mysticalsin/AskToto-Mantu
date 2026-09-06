@@ -9,10 +9,13 @@ import {
   OVERLAY_HIDE_PARK,
   TEAMS_MEETING_CHROME_Y,
   hoverWatchRestRect,
+  isLeftoverSettingsTrigger,
   isVisibleHideSlab,
   parkedHoverReanchor,
+  parkAfterExclusiveOnboarding,
   type DisplayMetrics
 } from './geometry'
+import { isFatHoverTrigger } from '@shared/settings-bounds'
 
 /** Tony built-in Retina (notch). workArea.y ≈ 39. */
 const TOTOS_MAC: DisplayMetrics = {
@@ -94,5 +97,27 @@ describe('Mac-test Island hover', () => {
         revealed: false
       })
     ).toBe('reveal')
+  })
+})
+
+describe('MQA-289 — leftover 880×133 at Y=39 is a fat trigger; park stays Y=0', () => {
+  it('Hide/Island park at bounds.y after Settings; 880×133 at Y=39 must not remain', () => {
+    const leftover = { width: 880, height: 133, y: 39 }
+    expect(isFatHoverTrigger(leftover, TOTOS_MAC.workArea.y)).toBe(true)
+    expect(isLeftoverSettingsTrigger(leftover, TOTOS_MAC)).toBe(true)
+    const hide = parkAfterExclusiveOnboarding('hide', TOTOS_MAC, 8)
+    expect(hide.y).toBe(0)
+    expect(hide.y).not.toBe(39)
+    expect(hide.width).toBe(8)
+    expect(hide.height).toBe(2)
+    expect(isFatHoverTrigger(hide, TOTOS_MAC.workArea.y)).toBe(false)
+    const island = parkAfterExclusiveOnboarding('island', TOTOS_MAC, 8)
+    expect(island.y).toBe(0)
+    expect(island.width).toBeLessThan(200)
+    const rest = hoverWatchRestRect('hide', TOTOS_MAC)
+    expect(rest.y).toBe(0)
+    expect(rest.width).toBeLessThanOrEqual(250)
+    expect(rest.height).toBeLessThanOrEqual(32)
+    expect(pointInRect({ x: 40, y: 12 }, rest)).toBe(false)
   })
 })

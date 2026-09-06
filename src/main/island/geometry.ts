@@ -16,6 +16,7 @@
 
 import type { OverlayLayout } from '@shared/overlay-chrome'
 import { overlayUsesHover } from '@shared/overlay-chrome'
+import { SETTINGS_WINDOW_MIN, isFatHoverTrigger as sharedIsFatHoverTrigger } from '@shared/settings-bounds'
 
 export type { OverlayLayout }
 
@@ -386,4 +387,25 @@ export function shouldParkHoverRestAfterLeavingSurface(input: {
   pointerInIslandOrBar: boolean
 }): boolean {
   return overlayUsesHover(input.layout) && !input.pointerInIslandOrBar
+}
+
+/**
+ * Full Settings surface. Revealed chrome Y (below the notch), never Hide 8×2 or Island peek.
+ * Width/height are Apple-grade Settings mins. Hide/Island park after close, not here.
+ */
+export function settingsOpenRect(m: DisplayMetrics, _topMargin: number): Rect {
+  const width = SETTINGS_WINDOW_MIN.width
+  const height = SETTINGS_WINDOW_MIN.height
+  const x = clampAxis(
+    Math.round(m.workArea.x + (m.workArea.width - width) / 2),
+    width,
+    m.workArea.x,
+    m.workArea.width
+  )
+  return { x, y: islandSafeTop(m), width, height }
+}
+
+/** Leftover 880×133 at workArea.y. Must park Hide/Island instead of leaving this trigger. */
+export function isLeftoverSettingsTrigger(win: Pick<Rect, 'width' | 'height' | 'y'>, m: DisplayMetrics): boolean {
+  return sharedIsFatHoverTrigger(win, m.workArea.y)
 }
