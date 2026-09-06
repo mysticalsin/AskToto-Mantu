@@ -208,6 +208,7 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
     expect(html).toContain('Log in to Cloudflare')
     expect(html).toContain('Cloudflare · AI Gateway')
     expect(html).toContain('Generate license')
+    expect(html).not.toContain('data-cf-oauth-missing')
     expect(html).not.toContain('name="accountId"')
     expect(html).not.toContain('placeholder="API token"')
     expect(html).not.toContain('id="cf-add"')

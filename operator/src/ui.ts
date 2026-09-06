@@ -2,6 +2,7 @@ import { choropleth, choroplethMini, shoeyWorld, sparklineLine } from './charts'
 import { statusBadge, STATUS_BADGE_CSS } from './components/ui/status-badge'
 import { CRM_FILTER_ORDER } from './crm'
 import { CF_TOKEN_MISSING, type CloudflareOverview } from './cloudflare'
+import { CF_OAUTH_MISSING } from './cloudflare-connect'
 import type { ConsoleEvent, DashboardPayload, ProfileRow } from './dashboard'
 import { FORBIDDEN_NAV, NAV_IDS, NAV_SECTIONS } from './nav'
 import { looksLikeSecret } from './redact'
@@ -1144,7 +1145,12 @@ svg path { vector-effect: non-scaling-stroke; }
           </div>
         </form>
         <p class="eyebrow">Cloudflare · AI Gateway</p>
-        <p class="sub muted">Choose Cloudflare. Log in to the Cloudflare account. Operator adds the API key. No paste.</p>
+        <p class="sub muted">Choose Cloudflare. Log in to the Cloudflare account. Operator adds the API key. No paste. Métis Settings tile stays on KineticGrid.</p>
+        ${
+          data.keys.oauthBound
+            ? ''
+            : `<div class="fail-loud" data-cf-oauth-missing>${esc(CF_OAUTH_MISSING)}</div>`
+        }
         <div data-cf-overview>${renderCloudflare(data.cloudflare)}</div>
         <p><a class="btn primary" id="cf-connect" data-cf-aig-connect href="/cloudflare/connect">Log in to Cloudflare</a></p>
         <p id="cf-connect-msg" class="muted" style="padding:8px 0"></p>

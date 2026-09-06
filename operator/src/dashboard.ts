@@ -137,6 +137,7 @@ export interface DashboardPayload {
     promptBound: boolean
     skillBound: boolean
     vaultBound: boolean
+    oauthBound: boolean
     vault: VaultKeyMeta[]
   }
   cloudflare: CloudflareOverview
@@ -217,6 +218,7 @@ export type DashboardKeyFlags = {
   promptBound: boolean
   skillBound: boolean
   vaultBound: boolean
+  oauthBound: boolean
 }
 
 export type CrmLanding = {
@@ -462,7 +464,13 @@ export async function buildDashboard(
   store: OperatorStore,
   email: string,
   now: number,
-  keys: DashboardKeyFlags = { ingestBound: false, promptBound: false, skillBound: false, vaultBound: false },
+  keys: DashboardKeyFlags = {
+    ingestBound: false,
+    promptBound: false,
+    skillBound: false,
+    vaultBound: false,
+    oauthBound: false
+  },
   cloudflare: CloudflareOverview = missingCloudflareOverview()
 ): Promise<DashboardPayload> {
   const seats = (await store.listSeats()).filter(isRealSeat)
@@ -886,6 +894,7 @@ export async function buildDashboard(
       promptBound: keys.promptBound,
       skillBound: keys.skillBound,
       vaultBound: keys.vaultBound,
+      oauthBound: keys.oauthBound,
       vault: vault.map(sanitizeVaultMeta)
     },
     cloudflare: {

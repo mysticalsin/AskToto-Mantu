@@ -627,7 +627,8 @@ function keyFlags(env: Env) {
     ingestBound: Boolean(env.OPERATOR_INGEST_SECRET),
     promptBound: Boolean(env.OPERATOR_PROMPT_KEY),
     skillBound: Boolean(env.OPERATOR_SKILL_PRIVATE_KEY),
-    vaultBound: Boolean(env.OPERATOR_VAULT_KEY)
+    vaultBound: Boolean(env.OPERATOR_VAULT_KEY),
+    oauthBound: Boolean((env.CF_OAUTH_CLIENT_ID || '').trim() && (env.CF_OAUTH_CLIENT_SECRET || '').trim())
   }
 }
 
