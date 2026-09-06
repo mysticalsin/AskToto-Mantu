@@ -1568,6 +1568,10 @@ function publicSettings(): PublicSettings {
   const localFallbackReady = localReady && s.localLlm.fallback
   return {
     ...s,
+    // The license key is a credential (it rides every activate / heartbeat POST) and no renderer surface
+    // reads it back: the activation forms keep their own local input state. Ship presence, never value.
+    licenseKey: '',
+    hasLicenseKey: !!s.licenseKey,
     hasApiKey: hasApiKey(s.provider),
     // Reflect the value actually applied to the window, not the raw stored setting — otherwise a dev
     // process running with ASKTOTO_DISABLE_CP would show "Content protection: On" in Settings while
@@ -5334,7 +5338,9 @@ function registerIpc(): void {
     if (req.mode === 'answer' && req.kind !== 'factcheck') {
       try {
         const hit = buildBrainContext(s, `${req.prompt}\n${req.transcript ?? ''}`)
-        req.brainContext = hit.block || undefined
+        // Same local-first contract as the transcript and the screen description above: a brain entry
+        // ingested while redaction was off can still carry a secret, and this block is cloud-bound.
+        req.brainContext = (s.redactSensitive && hit.block ? redactSecrets(hit.block) : hit.block) || undefined
       } catch (err) {
         console.warn('[brain] context assembly failed', err)
       }
@@ -6855,6 +6861,10 @@ function registerIpc(): void {
       show: false,
       webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false, devTools: DEVTOOLS_ENABLED, webSecurity: true }
     })
+    // Same posture as every other window: the recap document is escaped and carries script-src 'none',
+    // and on top of that nothing it contains may open a window or navigate this one anywhere.
+    pdfWin.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    pdfWin.webContents.on('will-navigate', (e) => e.preventDefault())
     try {
       await pdfWin.loadURL('data:text/html;charset=UTF-8,' + encodeURIComponent(html))
       const buffer = await pdfWin.webContents.printToPDF({ printBackground: true })

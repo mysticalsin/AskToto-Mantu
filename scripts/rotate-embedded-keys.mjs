@@ -8,7 +8,9 @@
  *
  *   npm run rotate:embedded-keys
  *
- * Writes a new gitignored `build/cloudflare-embed/key.json`. Then the operator must:
+ * Writes a new gitignored `build/cloudflare-embed/key.json` in the same encrypted blob shape
+ * scripts/embed-cloudflare-key.mjs produces (the packaging gate rejects a plaintext `proxyKey`
+ * file). Then the operator must:
  *   1. Add the new key to the Worker `METIS_PROXY_KEYS` under label `embedded-default`.
  *   2. Remove the previous `embedded-default` entry.
  *   3. Rebuild the installer with `METIS_EMBED_CLOUDFLARE_KEY=1`.
@@ -20,6 +22,7 @@ import { randomBytes } from 'node:crypto'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { encryptProxyKey } from './lib/embedded-cloudflare-crypto.mjs'
 
 const repositoryRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 
@@ -33,16 +36,18 @@ export function generateEmbeddedProxyKey() {
   return randomBytes(32).toString('base64')
 }
 
+/** Writes the encrypted blob the app decrypts at runtime, never the plaintext key. The plaintext is
+ *  returned to the caller (printed once by the CLI) so it can be put on the Worker. */
 export function writeEmbeddedProxyKey(dest, key = generateEmbeddedProxyKey()) {
   mkdirSync(dirname(dest), { recursive: true })
-  writeFileSync(dest, `${JSON.stringify({ proxyKey: key }, null, 2)}\n`, { mode: 0o600 })
+  writeFileSync(dest, `${JSON.stringify(encryptProxyKey(key), null, 2)}\n`, { mode: 0o600 })
   return { dest, key }
 }
 
 function runCli(argv = process.argv.slice(2)) {
   const dest = parseOutPath(argv)
   const { key } = writeEmbeddedProxyKey(dest)
-  console.log(`Wrote a new disclosed embedded proxy key to ${dest} (gitignored).`)
+  console.log(`Wrote a new disclosed embedded proxy key to ${dest} (gitignored, encrypted blob).`)
   console.log('Operator next steps (do not put this value in CLOUDFLARE_API_TOKEN or METIS_PROXY_KEY):')
   console.log('  1. wrangler secret put METIS_PROXY_KEYS')
   console.log('     Keep every other labeled key. Replace only the embedded-default entry with:')

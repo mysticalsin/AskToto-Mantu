@@ -1365,6 +1365,9 @@ export type Settings = z.infer<typeof BaseSettingsSchema>
 /** What the renderer receives (never raw keys). */
 export const PublicSettingsSchema = BaseSettingsSchema.extend({
   hasApiKey: z.boolean(),
+  /** A phone-home license key is stored. The key itself never crosses the bridge (publicSettings blanks
+   *  `licenseKey`); the settingsSet handler already strips a renderer-supplied one. */
+  hasLicenseKey: z.boolean().default(false),
   /** Active provider is actually usable (key present AND any provider-specific setup done) — drives the
    *  "add your key" CTA so it only shows when the app genuinely can't answer yet. */
   /** MQA-261: this build shipped a Cloudflare key, so a user who removed theirs can get it back.
@@ -1464,6 +1467,7 @@ export type SettingsPatch = Partial<
   Omit<
     PublicSettings,
     | 'hasApiKey'
+    | 'hasLicenseKey'
     | 'providerReady'
     | 'localReady'
     | 'localSuggestReady'
