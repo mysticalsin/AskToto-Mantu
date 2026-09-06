@@ -283,14 +283,15 @@ export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world
         .join('')
   const cityPills = empty
     ? ''
-    : [...new Map(dots.filter((d) => d.city).map((d) => [`${d.country}:${d.city}`, d])).values()]
+    : [...groupCityDots(dots).values()]
         .map((dot) => {
           const p = project(dot.lat, dot.lon)
-          const label = String(dot.city)
-          const w = Math.max(72, 28 + label.length * 6.2)
-          return `<g class="city-pill" data-city="${escapeXml(label)}" transform="translate(${(p.x + 8).toFixed(1)},${(p.y - 6).toFixed(1)})">
+          const label = `${dot.n} ${dot.city}`
+          const w = Math.max(72, 22 + label.length * 6.2)
+          return `<g class="city-pill" data-city="${escapeXml(dot.city)}" transform="translate(${(p.x + 8).toFixed(1)},${(p.y - 6).toFixed(1)})">
             <rect x="0" y="-10" width="${w}" height="20" rx="10" fill="#fff" stroke="#E5E5E5"/>
-            <text x="8" y="4" font-size="10" fill="#18181B">${escapeXml(label)}</text>
+            <circle cx="8" cy="0" r="3" fill="${SHOEY_PILL}"/>
+            <text x="16" y="4" font-size="10" fill="#18181B">${escapeXml(label)}</text>
           </g>`
         })
         .join('')
@@ -300,14 +301,16 @@ export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world
         const present = reg.isos.filter((iso) => (by.get(iso) ?? 0) > 0)
         const seats = present.reduce((n, iso) => n + (by.get(iso) ?? 0), 0)
         if (!seats) return ''
-        const label = present.length === 1 ? countryName(present[0]) : `${present.length} countries`
-        const w = Math.max(96, 36 + label.length * 6.4)
-        return `<g class="pill-g" transform="translate(${reg.x},${reg.y})">
+        const places = new Set(
+          dots.filter((d) => present.includes(d.country)).map((d) => d.city || d.country)
+        ).size
+        const where = present.length === 1 ? countryName(present[0]) : `${present.length} countries`
+        const label = `${seats} ${where}, ${places} ${places === 1 ? 'place' : 'places'}`
+        const w = Math.max(110, 36 + label.length * 6.1)
+        return `<g class="pill-g" data-region-pill="${escapeXml(reg.id)}" transform="translate(${reg.x},${reg.y})">
           <rect x="0" y="-13" width="${w}" height="26" rx="13" fill="#fff" stroke="#E5E5E5"/>
           <circle cx="12" cy="0" r="4" fill="${SHOEY_PILL}"/>
-          <text x="22" y="4" font-size="11" font-weight="650" fill="#18181B">${seats}</text>
-          <line x1="42" y1="-7" x2="42" y2="7" stroke="#E5E5E5"/>
-          <text x="48" y="4" font-size="11" fill="#71717A">${escapeXml(label)}</text>
+          <text x="22" y="4" font-size="11" font-weight="650" fill="#18181B">${escapeXml(label)}</text>
         </g>`
       }).join('')
   const caption = empty
@@ -315,6 +318,18 @@ export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world
     : ''
   const svg = shoeyLandSvg(cls).replace('</svg>', `${marks}${pills}${cityPills}</svg>`)
   return `${caption}${svg}`
+}
+
+function groupCityDots(dots: MapDot[]): Map<string, { city: string; country: string; lat: number; lon: number; n: number }> {
+  const groups = new Map<string, { city: string; country: string; lat: number; lon: number; n: number }>()
+  for (const d of dots) {
+    if (!d.city) continue
+    const key = `${d.country}:${d.city}`
+    const prev = groups.get(key)
+    if (prev) prev.n += 1
+    else groups.set(key, { city: d.city, country: d.country, lat: d.lat, lon: d.lon, n: 1 })
+  }
+  return groups
 }
 
 function countryName(iso: string): string {
