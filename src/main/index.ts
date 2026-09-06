@@ -207,12 +207,18 @@ import {
   overlayActivateOpensSettings,
   overlayAllowsHugWidth,
   overlayAllowsMinimize,
+  overlayHugNextWidth,
   overlayRevealedContentHeight,
   overlayUsesHover,
   parseOverlayLayout,
   rememberBarContentHeight,
   type OverlayLayout
 } from '@shared/overlay-chrome'
+import {
+  minimizedCircleRestBounds,
+  overlayOrbRestIsCircle,
+  parseOverlayOrbStyle
+} from '@shared/overlay-orb'
 
 // Lazy Speaker Intelligence singleton — building it probes the sherpa addon + embedding model, so defer
 // until the first THEM window with the feature enabled (never on the startup path).
@@ -2078,9 +2084,18 @@ function setMinimizedWidth(narrow: boolean): void {
     if (settingsSurfaceOpen) leaveSettingsSurface()
     islandResting = false
     isMinimized = true
-    currentWidth = PILL_WIDTH
     applyHideClickThrough()
     // Circle rest is the 41 host. A Settings-tall lastBarHeight was the gray box under Jarvis.
+    const circleRest = minimizedCircleRestBounds({
+      layout: liveOverlayLayout(),
+      style: parseOverlayOrbStyle(getSettings().overlayOrbStyle)
+    })
+    if (circleRest) {
+      currentWidth = circleRest.width
+      resizeTo(circleRest.height)
+      return
+    }
+    currentWidth = PILL_WIDTH
     resizeTo(rememberBarContentHeight(lastBarHeight, BAR_IDLE_HEIGHT_PX))
     return
   }
@@ -7034,8 +7049,15 @@ function registerIpc(): void {
     if (typeof payload?.width === 'number' && Number.isFinite(payload.width) && !onboardingExclusiveLive()) {
       // +10 (not the height report's +2) gives the pill's own box-shadow/glow room to render without
       // being hard-clipped at the window edge — see the .aw-pill / .aw-mark-glow comments in styles.css.
-      const nextWidth = Math.max(120, Math.min(Math.ceil(payload.width) + 10, BAR_WIDTH))
+      // Circle/Jarvis rest reports ~41; the old Math.max(120, …) floor left a 120 slab, never 41.
       const layout = liveOverlayLayout()
+      const nextWidth = overlayHugNextWidth({
+        reportedWidth: payload.width,
+        maxWidth: BAR_WIDTH,
+        circleRest:
+          isMinimized &&
+          overlayOrbRestIsCircle(layout, parseOverlayOrbStyle(getSettings().overlayOrbStyle))
+      })
       const rest = overlayRestSize(layout)
       // Revealed Hide/Island keeps BAR_WIDTH. Hug 120 + height 44 was the Ultron Show Métis stub.
       if (

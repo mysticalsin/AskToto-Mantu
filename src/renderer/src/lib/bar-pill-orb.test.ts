@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { CIRCLE_REST_HOST_PX } from '@shared/overlay-orb'
 import { paintOrbFirstFrame } from './orb-first-frame'
 import {
   BAR_ORB_SPEED,
@@ -31,6 +32,7 @@ describe('bar pill thinking-orb circle', () => {
     expect(BAR_PILL_SIZE_PX).toBe(64)
     expect(BAR_PILL_FROM_VISIBLE_PX).toBe(51)
     expect(BAR_PILL_VISIBLE_PX).toBe(41)
+    expect(BAR_PILL_VISIBLE_PX).toBe(CIRCLE_REST_HOST_PX)
     expect(BAR_PILL_VISIBLE_PX).toBe(Math.round(BAR_PILL_FROM_VISIBLE_PX * 0.8))
     expect(BAR_PILL_BACKING_DPR).toBe(2)
     expect(BAR_PILL_BACKING_PX).toBe(128)

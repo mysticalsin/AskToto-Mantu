@@ -41,9 +41,40 @@ export function parseOverlayOrbStyle(v: unknown): OverlayOrbStyle {
   return isOverlayOrbStyle(v) ? v : DEFAULT_OVERLAY_ORB_STYLE
 }
 
+/** Visible Circle / Jarvis host. Same as renderer BAR_PILL_VISIBLE_PX. */
+export const CIRCLE_REST_HOST_PX = 41
+/** Shadow / glow pad on the 41 host. Same as IPC.windowResize +10. */
+export const CIRCLE_REST_SHADOW_PAD_PX = 10
+/** Mac CDP: after Bar + Circle/Jarvis minimize, viewport must land in this square band. */
+export const CIRCLE_REST_VIEWPORT_MAX_PX = 60
+
 /** Circle idle rest is Bar only. Hide/Island never collapse to an orb. */
 export function overlayOrbRestIsCircle(layout: string, style: OverlayOrbStyle): boolean {
   return layout === 'bar' && (style === 'jakub' || style === 'obsidian')
+}
+
+/** 41 host + shadow pad. Never 220 × lastBarHeight. */
+export function circleRestWindowPx(): number {
+  return CIRCLE_REST_HOST_PX + CIRCLE_REST_SHADOW_PAD_PX
+}
+
+/**
+ * Collapse bounds for Circle (jakub) and Jarvis (obsidian) on Bar.
+ * Hide/Island and Full bar return null so park / PILL_WIDTH stay untouched.
+ */
+export function minimizedCircleRestBounds(input: {
+  layout: string
+  style: OverlayOrbStyle
+}): { width: number; height: number } | null {
+  if (!overlayOrbRestIsCircle(input.layout, input.style)) return null
+  const px = circleRestWindowPx()
+  return { width: px, height: px }
+}
+
+/** Totos-Mac live fail: 220×192 with jarvis-particles. Pass only a 41–60 square. */
+export function isCircleRestWrongSlab(win: { width: number; height: number }): boolean {
+  const inBand = (n: number): boolean => n >= CIRCLE_REST_HOST_PX && n <= CIRCLE_REST_VIEWPORT_MAX_PX
+  return !(inBand(win.width) && inBand(win.height))
 }
 
 /** Jarvis particle sphere. Bar + persist `obsidian` only. Hide/Island never show it. */
