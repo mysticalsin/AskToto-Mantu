@@ -267,7 +267,7 @@ describe('Act 3 on-device model row', () => {
     expect(src).toMatch(/localModelsEnsure/)
     expect(src).toMatch(/unavailableReason === 'not-downloaded'/)
     // Progress bar is visible at 0% (waiting on the first chunk), not only after bytes land.
-    expect(src).toMatch(/r\.key === 'local' && r\.progress != null/)
+    expect(src).toMatch(/\(r\.key === 'local' \|\| r\.key === 'asr'\) && r\.progress != null/)
     expect(src).not.toMatch(/r\.progress > 0 && r\.progress < 1/)
   })
 })
