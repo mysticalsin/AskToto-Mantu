@@ -563,6 +563,52 @@ describe('realtime.geo.json is city-level Shoey rows', () => {
   })
 })
 
+
+describe('Shoey PORT density contract', () => {
+  it('locks Overview densify markers vs shoey-ref/overview.png', async () => {
+    const store = memoryStore()
+    await store.upsertSeat({
+      device_id: 'device-a',
+      seat_hash: 'seat-a',
+      os: 'darwin',
+      app_version: '1.8.2',
+      first_seen: NOW,
+      last_seen: NOW,
+      country: 'CA',
+      city: 'Longueuil',
+      lat: 45.5,
+      lon: -73.5,
+      last_index_at: null,
+      hostname: 'Tonys-MacBook-Pro',
+      sso_email: 'twalteur@amaris.com',
+      license: 'licensed',
+      approval: 'pending'
+    })
+    const html = await page(store)
+    const overview = html.slice(html.indexOf('data-page="overview"'), html.indexOf('data-page="realtime"'))
+    expect(overview).toContain('data-port-density="shoey"')
+    expect(overview).toContain('data-overview-kpis')
+    expect(overview).toContain('Live seats')
+    expect(overview).toContain('Time saved')
+    expect(overview).toContain('Value')
+    expect(overview).toContain('data-overview-toplists')
+    expect(overview).toContain('data-geo-corner')
+    expect(overview).toContain('data-geo-widget')
+    expect(overview).toContain('geo-corner-map')
+    expect(overview).toContain('class="vol-bar blue"')
+    expect(overview).toContain('data-overview-activity')
+    expect(overview).toContain('data-overview-people')
+    expect(overview).toContain('data-license-generate')
+    // CSS density: 25px rows, full-row bars (WebsiteCloner TopListCard h-[25px])
+    expect(html).toContain('height: 25px')
+    expect(html).toContain('padding: 0 12px')
+    expect(html).toMatch(/\.vol-bar\s*\{[^}]*height: 100%/)
+    expect(html).not.toContain('inset: 2px auto 2px 0')
+    expect(overview.indexOf('data-overview-toplists')).toBeLessThan(overview.indexOf('data-geo-corner'))
+    expect(overview.indexOf('data-geo-corner')).toBeLessThan(overview.indexOf('data-overview-activity'))
+  })
+})
+
 describe('map land is in #map-root HTML', () => {
   it('inlines path[data-iso] land inside #map-root', async () => {
     const html = await page()
