@@ -77,7 +77,7 @@ const managedChipCls =
 /** Why a step-5 provider tile can't be tapped right now, or `null` if it can. Kept as a discriminated
  *  reason (not a plain boolean) so ProviderOption can show copy that matches what's actually true —
  *  'org' is a genuine managed-config/data-residency lock, 'busy' is only ever a transient in-flight
- *  probe (currently just the CLI tile's ~45s cliDetect/cliTest). Conflating the two previously made
+ *  probe (currently just the CLI tile's zero-token cliDetect/cliTest). Conflating the two previously made
  *  every tile read as org-restricted for the whole time the CLI tile alone was busy. */
 export type ProviderTileDisabledReason = 'org' | 'busy' | null
 
@@ -389,7 +389,7 @@ export function Onboarding({
   // Windows has no OS consent dialog for desktop apps — the mic toggle only becomes "determined" (from
   // this app's perspective) after it actually attempts a capture once. Fired at most once per mount.
   const micProbeFiredRef = useRef(false)
-  // Step 5's chooseCli (below) awaits cliDetect + cliTest for up to ~45s with no earlier exit. `stepRef`
+  // Step 5's chooseCli (below) awaits cliDetect + cliTest (zero-token session probe). `stepRef`
   // mirrors the live `step` (not the value closed over when chooseCli was called) and `mountedRef` tracks
   // whether Onboarding is still mounted, so a late resolution can never silently patch({ provider }) after
   // the user already left step 5 (Back, Decide later, Get started) or unmounted onboarding entirely.

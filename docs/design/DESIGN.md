@@ -37,6 +37,36 @@ motion:
 
 # Métis Design Contract
 
+## Platform (Fable 5.1)
+
+The one product story is [`METIS-PLATFORM-NORTH-STAR.md`](METIS-PLATFORM-NORTH-STAR.md). Slice
+files keep their pixels. The north star keeps install-to-first-Ask, fail-loud security, and
+Apple-grade defaults. READY TO MERGE stays no.
+
+Three feelings, in this order:
+
+1. **It just works.** Install, then Ask. Defaults friendly. Power lives in Settings.
+2. **It never lies.** Connected means a live session. Latest is a QA+Ultron fact.
+3. **It recedes.** Hide until the camera square. Settings never crushed. No white flash.
+
+| Default | Value | Why |
+| --- | --- | --- |
+| Overlay chrome | Hide | Invisible until intent. |
+| Bar rest | Full bar (`overlayOrbStyle: 'bar'`) | Circle and Obsidian are opt-in. |
+| Provider | Cloudflare | One operator endpoint. |
+| `providerPriority` | `api` | CLI-first is a live promotion when a CLI session is actually connected. |
+| Local AI | off | Weights may warm. They do not preempt. |
+| `encryptTranscripts` | true | Fail closed on disk. |
+| Operator URL | empty | No phone-home until Tony points the seat. |
+
+Fail loud: a WindowsApps Desktop alias is not Claude Code. A leftover managed pointer is not
+installed. `installCli` is not ok until `resolveBin` finds a runnable entry. `cliConnected` is
+written only after `connectCliSession` (`live` or `weekly-limit`). Never a billed Connect turn.
+Never `--with-tools` on Dust. Never a raw key in the renderer.
+
+Desktop holds R01–R07 on this branch (overlay law, Settings surface, flash, top hover, Bar rest,
+CLI install, CLI session). R17 (vault last4) is Operator. Do not implement `#keys` here.
+
 ## Surfaces (the ONLY visible elements — page is transparent)
 1. **Pill bar** — centered, docked near top of screen. Height ~38–44px. `radius.pill`.
    Glass fill + `glass-border` hairline + `blur.bar` + `elevation.bar`. Contents L→R:
@@ -47,7 +77,10 @@ motion:
    max-height ~670px, `radius.lg`, `glass-fill-strong` + `blur.panel` + `elevation.glass`.
    Scrollable. Two modes: ANSWER (streamed markdown via streamdown) · LISTEN
    (live transcript left/right speaker + AI Suggestions cards).
-3. **Settings** — compact 320–360px glass card (API key, model, hotkeys, audio source, toggles).
+3. **Settings** — a real surface, never a leftover bar. Minimum **880×560** at `islandSafeTop`,
+   background `#120022`. Tray, dock, hotkey, and IPC all call `applySettingsSurface` first. Never
+   Hide 8×2. Never Island peek. Never the live 880×325 Cmd+, crush. Closing Settings
+   `leaveSettingsSurface` then parks. Identity pass lives here ([`IDENTITY-CARD.md`](IDENTITY-CARD.md)).
 4. **Review / recap** — drops below the bar in the same Panel shell as History / Agenda / Brain.
    Must **fit or scroll**. Never clip. `Panel` is the one overflow-y scroller (`html`/`body`/`#root`
    stay hidden). Cap is screen-derived (`panelMaxHeight`), never `vh` / `innerHeight`: leave room for
