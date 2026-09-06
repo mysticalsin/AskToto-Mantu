@@ -428,6 +428,8 @@ describe('packed console map and geo', () => {
     const page = await home.text()
     expect(page).toContain('No heartbeats yet. The map stays empty until a seat checks in.')
     expect(page).toContain('No heartbeats yet. Licenses stay empty until a seat checks in.')
+    expect(page).toContain('Generate License stays on the Fly license-server')
+    expect(page).toContain('http://127.0.0.1:8420/admin/ui')
     expect(page).toContain('Estimate from reported Asks')
     expect(page).not.toMatch(/Unique Visitors|visitor traffic|\$6,525|1,344/)
     expect(page).not.toMatch(/\b1\.2\.3\.4\b/)
@@ -490,6 +492,16 @@ describe('packed console map and geo', () => {
     expect(body.licenses.seats[0]?.os).toBe('darwin')
     expect(body.licenses.seats[0]?.country).toBe('FR')
     expect(body.roi.liveSeats).toBe(1)
+    const home = await handleRequest(
+      new Request('https://operator.test/'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const homePage = await home.text()
+    expect(homePage).toContain('Generate License stays on the Fly license-server')
+    expect(homePage).toContain('http://127.0.0.1:8420/admin/ui')
+    expect(homePage).not.toMatch(/name="licenseKey"|Generate License<\/button>/)
   })
 
   it('leaves the map empty when the Worker has no request.cf', async () => {

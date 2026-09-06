@@ -119,12 +119,12 @@ The Worker also calls `ctx.access.getIdentity()` and, if `TEAM_DOMAIN` + `POLICY
 
 Settings → Privacy:
 
-- **Operator URL** (https). Empty by default. `METIS_OPERATOR_URL` may prefill.
-- **Ingest secret**. Same value as `OPERATOR_INGEST_SECRET`. `METIS_OPERATOR_INGEST_SECRET` may prefill.
-- **Send Ask text for skill improvement**. Default on once a URL is set. Off sends metrics only.
-- **Open Operator**. System browser. Tony signs in with Access.
+- **Operator URL** (https). Empty uses the shipped default `https://metis-operator.tony-walteur.workers.dev` at runtime. Settings are not force-written. `METIS_OPERATOR_URL` may prefill.
+- **Ingest secret**. Same value as `OPERATOR_INGEST_SECRET`. Required for heartbeat and ingest. Never baked into the client. `METIS_OPERATOR_INGEST_SECRET` may prefill.
+- **Send Ask text for skill improvement**. Default on once an https Operator URL resolves (including the shipped default). Off sends metrics only.
+- **Open Operator**. System browser. Tony signs in with Access. Empty Settings still open the shipped Worker.
 
-While the app is up and both URL and secret are set:
+While the app is up and an ingest secret is set (URL may be empty):
 
 - Heartbeat about every 60 seconds.
 - After each typed/screen Ask: metrics always; question text only if the toggle is on. Never Listen transcripts, screen captures, audio, or API keys.

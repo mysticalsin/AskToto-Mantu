@@ -328,7 +328,7 @@ import {
 import { buildBrainContext } from './brain/context'
 import { buildSystem, buildSystemParts } from './personas'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
-import { isOpenAICloudCacheEligible, promptCacheKey as makePromptCacheKey } from '@shared/operator'
+import { isOpenAICloudCacheEligible, promptCacheKey as makePromptCacheKey, resolveOperatorUrl } from '@shared/operator'
 import { cloudflareConnectTarget } from './cloudflare-connect'
 import { loadVerifiedSkill, setModeSkillsOverlayRoot, skillLockHashForMode } from './mode-skills'
 import {
@@ -3821,7 +3821,7 @@ function registerIpc(): void {
   // --- Licensing (phone-home activation; see main/license.ts) ---
   ipcMain.handle(IPC.operatorOpen, (e) => {
     assertMainWindow(e)
-    const url = (getSettings().operatorUrl || process.env.METIS_OPERATOR_URL || '').trim()
+    const url = resolveOperatorUrl(getSettings())
     if (/^https:\/\//i.test(url)) void shell.openExternal(url)
   })
   ipcMain.handle(IPC.licenseActivate, async (e, payload: unknown) => {

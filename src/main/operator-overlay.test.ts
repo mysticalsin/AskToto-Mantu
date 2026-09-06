@@ -9,6 +9,7 @@ import {
   setModeSkillsOverlayRoot,
   setModeSkillsRootForTests
 } from './mode-skills'
+import { DEFAULT_OPERATOR_URL } from '@shared/operator'
 import { applySignedSkillPack, pullOperatorSkillManifest, setOperatorOverlayFetchForTests } from './operator-overlay'
 import { verifyOperatorSkillPack } from './operator-skill-verify'
 import {
@@ -47,6 +48,30 @@ describe('Operator skill manifest download', () => {
       operatorIngestSecret: 'ingest-secret'
     })
     expect(applied).toBe(0)
+  })
+
+  it('pulls the shipped Operator URL when Settings URL is empty and a secret is set', async () => {
+    const urls: string[] = []
+    setOperatorOverlayFetchForTests(async (input) => {
+      urls.push(String(input))
+      return new Response('{"ok":true,"skills":[]}', {
+        status: 200,
+        headers: { 'content-type': 'application/json' }
+      })
+    })
+    const applied = await pullOperatorSkillManifest({ operatorIngestSecret: 'ingest-secret' })
+    expect(applied).toBe(0)
+    expect(urls).toEqual([`${DEFAULT_OPERATOR_URL}/v1/skills/manifest`])
+  })
+
+  it('does not pull a manifest without an ingest secret', async () => {
+    const urls: string[] = []
+    setOperatorOverlayFetchForTests(async (input) => {
+      urls.push(String(input))
+      return new Response('{"ok":true,"skills":[]}', { status: 200, headers: { 'content-type': 'application/json' } })
+    })
+    expect(await pullOperatorSkillManifest({})).toBe(0)
+    expect(urls).toHaveLength(0)
   })
 })
 

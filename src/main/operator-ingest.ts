@@ -2,7 +2,13 @@ import { app } from 'electron'
 import { redactSecrets } from '@shared/redact'
 import { filterFundedProviders } from '@shared/ask-routing'
 import { inspectBundleResponse } from '@shared/bundle-response'
-import { operatorUrlConfigured, shouldSendAskText, type AskLogLine, type StreamCacheUsage } from '@shared/operator'
+import {
+  operatorUrlConfigured,
+  resolveOperatorUrl,
+  shouldSendAskText,
+  type AskLogLine,
+  type StreamCacheUsage
+} from '@shared/operator'
 import { classifyQuestionType, normalizeQuestionType, type QuestionType } from '@shared/question-type'
 import type { Settings } from '@shared/ipc'
 import { getMachineId } from './license'
@@ -38,7 +44,7 @@ export function stopOperatorRuntime(): void {
 }
 
 function resolveUrl(settings: OperatorRuntimeSettings, env = process.env): string {
-  return (settings.operatorUrl || env.METIS_OPERATOR_URL || '').trim().replace(/\/$/, '')
+  return resolveOperatorUrl(settings, env)
 }
 
 function resolveSecret(settings: OperatorRuntimeSettings, env = process.env): string {
@@ -131,7 +137,7 @@ export function setOperatorFundedProvidersForTests(ids: string[]): void {
 export function operatorAskTransport(settings: OperatorRuntimeSettings): { url: string; secret: string } | null {
   const url = resolveUrl(settings)
   const secret = resolveSecret(settings)
-  if (!url || !secret) return null
+  if (!operatorUrlConfigured(settings) || !secret) return null
   return { url, secret }
 }
 

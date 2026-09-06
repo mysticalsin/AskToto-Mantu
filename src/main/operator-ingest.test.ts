@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { DEFAULT_OPERATOR_URL } from '@shared/operator'
 import { recordOperatorAsk, resolveQuestionType, setOperatorFetchForTests } from './operator-ingest'
 
 vi.mock('electron', () => ({
@@ -75,6 +76,13 @@ describe('recordOperatorAsk question type', () => {
     await recordOperatorAsk({ operatorUrl: 'http://plain.test', operatorIngestSecret: 'x' }, { id: 'a', question: 'why' })
     await recordOperatorAsk({ operatorUrl: 'https://operator.test' }, { id: 'b', question: 'why' })
     expect(f.calls).toHaveLength(0)
+  })
+
+  it('uses the shipped Operator URL when Settings URL is empty and a secret is set', async () => {
+    const f = captureFetch()
+    await recordOperatorAsk({ operatorIngestSecret: 'shared-secret-for-tests' }, { id: 'def', question: 'why' })
+    expect(f.calls).toHaveLength(1)
+    expect(f.calls[0].url).toBe(`${DEFAULT_OPERATOR_URL}/v1/ingest`)
   })
 
   it('a fetch failure is swallowed so an Ask never fails because Operator is down', async () => {
