@@ -14,6 +14,11 @@ export interface D1DatabaseLike {
 
 const NONCE_TTL_MS = 10 * 60 * 1000
 const PULSE_TTL_MS = 8 * 24 * 60 * 60 * 1000
+/** Dashboard list caps — fail-loud bounds so a grown D1 cannot dump the whole table into one Worker response. */
+export const DASHBOARD_SEATS_LIMIT = 2000
+export const DASHBOARD_PULSES_LIMIT = 5000
+export const DASHBOARD_PROPOSALS_LIMIT = 500
+export const DASHBOARD_PACKS_LIMIT = 500
 
 /** Isolate-wide: once the live D1 proves it lacks asks.question_type, stop paying a failed insert per Ask. */
 let askInsertLegacy = false
@@ -166,7 +171,10 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       return (await db.prepare('SELECT * FROM asks WHERE id = ?').bind(id).first<AskRow>()) ?? null
     },
     async listSeats() {
-      const r = await db.prepare('SELECT * FROM seats').all<SeatRow>()
+      const r = await db
+        .prepare('SELECT * FROM seats ORDER BY last_seen DESC LIMIT ?')
+        .bind(DASHBOARD_SEATS_LIMIT)
+        .all<SeatRow>()
       return r.results
     },
     async insertPulse(row) {
@@ -178,13 +186,16 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
     },
     async listPulses(since) {
       const r = await db
-        .prepare('SELECT * FROM pulses WHERE ts >= ? ORDER BY ts ASC')
-        .bind(since)
+        .prepare('SELECT * FROM pulses WHERE ts >= ? ORDER BY ts ASC LIMIT ?')
+        .bind(since, DASHBOARD_PULSES_LIMIT)
         .all<PulseRow>()
       return r.results
     },
     async listProposals() {
-      const r = await db.prepare('SELECT * FROM proposals ORDER BY created_at DESC').all<ProposalRow>()
+      const r = await db
+        .prepare('SELECT * FROM proposals ORDER BY created_at DESC LIMIT ?')
+        .bind(DASHBOARD_PROPOSALS_LIMIT)
+        .all<ProposalRow>()
       return r.results
     },
     async getProposal(id) {
@@ -214,11 +225,17 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         .run()
     },
     async listPacks() {
-      const r = await db.prepare('SELECT * FROM packs').all<PackRow>()
+      const r = await db
+        .prepare('SELECT * FROM packs ORDER BY pushed_at DESC LIMIT ?')
+        .bind(DASHBOARD_PACKS_LIMIT)
+        .all<PackRow>()
       return r.results
     },
     async latestPacks() {
-      const r = await db.prepare('SELECT * FROM packs ORDER BY pushed_at DESC').all<PackRow>()
+      const r = await db
+        .prepare('SELECT * FROM packs ORDER BY pushed_at DESC LIMIT ?')
+        .bind(DASHBOARD_PACKS_LIMIT)
+        .all<PackRow>()
       const by = new Map<string, PackRow>()
       for (const p of r.results) {
         if (!by.has(p.skill_id)) by.set(p.skill_id, p)
