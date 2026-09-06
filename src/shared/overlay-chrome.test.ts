@@ -26,6 +26,9 @@ import {
   rememberBarContentHeight,
   isBarIdleGhostPanel,
   overlayShowsSettingsSheet,
+  overlayActivateOpensSettings,
+  askRevealHeight,
+  isSettingsSlabInsteadOfAsk,
   isShowMetisOnlyStub,
   isFullAskReveal,
   parseOverlayLayout
@@ -91,6 +94,7 @@ describe('overlay chrome modes', () => {
       capturing: false
     }
     expect(overlayHoverIdle(base)).toBe(true)
+    expect(overlayHoverIdle({ ...base, minimized: true })).toBe(true)
     expect(overlayHoverIdle({ ...base, view: 'settings' })).toBe(false)
     expect(overlayHoverIdle({ ...base, capturing: true })).toBe(false)
     expect(overlayHoverIdle({ ...base, usesHover: false })).toBe(false)
@@ -189,6 +193,27 @@ describe('overlay chrome modes', () => {
     expect(overlayShowsSettingsSheet('settings', false)).toBe(true)
     expect(overlayShowsSettingsSheet('settings', true)).toBe(false)
     expect(overlayShowsSettingsSheet('answer', false)).toBe(false)
+    expect(overlayActivateOpensSettings('hide')).toBe(false)
+    expect(overlayActivateOpensSettings('island')).toBe(false)
+    expect(overlayActivateOpensSettings('bar')).toBe(true)
+    expect(askRevealHeight({ currentHeight: 1017, lastBarHeight: 84 })).toBe(ASK_REVEAL_MIN_HEIGHT_PX)
+    expect(askRevealHeight({ currentHeight: 20, lastBarHeight: 84 })).toBe(ASK_REVEAL_MIN_HEIGHT_PX)
+    expect(askRevealHeight({ currentHeight: 400, lastBarHeight: 400 })).toBe(400)
+    expect(
+      isSettingsSlabInsteadOfAsk({
+        width: 880,
+        height: 1017,
+        hasAsk: false,
+        buttons: ['Expand Métis']
+      })
+    ).toBe(true)
+    expect(
+      isSettingsSlabInsteadOfAsk({
+        width: 880,
+        height: ASK_REVEAL_MIN_HEIGHT_PX,
+        hasAsk: true
+      })
+    ).toBe(false)
     expect(
       overlayAllowsHugWidth({ minimized: false, islandResting: false, restWidth: 8, nextWidth: 120 })
     ).toBe(false)
@@ -215,6 +240,7 @@ describe('overlay chrome modes', () => {
     expect(
       isFullAskReveal({ width: 880, height: 120, hasAsk: true })
     ).toBe(true)
+    expect(isFullAskReveal({ width: 880, height: 1017, hasAsk: false })).toBe(false)
     expect(
       isShowMetisOnlyStub({
         width: 880,

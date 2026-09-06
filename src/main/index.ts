@@ -187,8 +187,10 @@ import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/
 import {
   ASK_REVEAL_MIN_HEIGHT_PX,
   BAR_IDLE_HEIGHT_PX,
+  askRevealHeight,
   isIncompleteAskReveal,
   isSettingsTallHeight,
+  overlayActivateOpensSettings,
   overlayAllowsHugWidth,
   overlayAllowsMinimize,
   overlayRevealedContentHeight,
@@ -2031,6 +2033,7 @@ function tickOverlayCursorWatch(): void {
     stopOverlayCursorWatch()
     return
   }
+  if (healHideGhostSlab()) return
   if (settingsSurfaceOpen) return
   const display = screen.getDisplayMatching(win.getBounds())
   const m = getDisplayMetrics(display)
@@ -2105,14 +2108,40 @@ function pointerInIslandOrBar(opts?: { ignoreWindow?: boolean }): boolean {
   if (pointInRect(cursor, rest)) return true
   // The pill window is not the bar. Expanding it must not count as "pointer in bar".
   if (opts?.ignoreWindow || isMinimized || islandResting) return false
+  const bounds = win.getBounds()
+  // A Settings-tall ghost is not the Ask bar. (900, 600) over 880×1017 must still park 8×2.
+  if (isSettingsTallHeight(bounds.height) && !settingsSurfaceOpen) return false
   return (
     decideCursorWatch({
       cursor,
       restRect: rest,
-      revealedRect: win.getBounds(),
+      revealedRect: bounds,
       revealed: true
     }) === 'stay'
   )
+}
+
+/**
+ * Hide/Island must never keep a Settings-tall ghost or a leftover Circle pill.
+ * Fresh launch and mouse-away park 8×2. Expand Métis is Bar-only.
+ */
+function healHideGhostSlab(): boolean {
+  if (!win || win.isDestroyed() || onboardingExclusiveLive()) return false
+  const layout = liveOverlayLayout()
+  if (!overlayUsesHover(layout)) return false
+  // Circle pill is Bar-only. Hide + Expand Métis is the 880×1017 ghost.
+  if (isMinimized) {
+    if (settingsSurfaceOpen) leaveSettingsSurface()
+    isMinimized = false
+    parkOverlayAfterHideSpring()
+    return true
+  }
+  // Parked Hide/Island with a leftover Settings-tall window (launch activate slab).
+  if (!settingsSurfaceOpen && islandResting && isSettingsTallHeight(win.getBounds().height)) {
+    parkOverlayAfterHideSpring()
+    return true
+  }
+  return false
 }
 
 function parkOverlayAfterHideSpring(): void {
@@ -2194,6 +2223,9 @@ function anchorTopCenter(): void {
  *  safe Y. Leave collapse is the inverse (resizeTo with peek height, same Y). */
 function restoreBarWidth(): void {
   if (!win || onboardingExclusiveLive()) return
+  // Do not un-park Hide just to bounce off Settings. That left islandResting
+  // false on a 880×1017 slab so mouse-away could not park 8×2.
+  if (settingsSurfaceOpen) return
   cancelOverlayLeavePark()
   islandResting = false
   applyHideClickThrough()
@@ -2209,17 +2241,17 @@ function restoreBarWidth(): void {
   } catch {
     /* headless */
   }
-  if (settingsSurfaceOpen) return
   const display = screen.getDisplayMatching(win.getBounds())
   const b = win.getBounds()
   const layout = liveOverlayLayout()
   const y = topClamp(liveOverlayLayout(), getDisplayMetrics(display), ISLAND_TOP_MARGIN)
-  // Hide/Island reveal keeps the 120 Ask floor. Bar idle hugs the bar, never a leftover Settings 800.
+  // Hide/Island reveal keeps the 120 Ask floor. Never Math.max a leftover Settings 800+ slab
+  // (Ultron 880×1017 Expand Métis). Bar idle hugs the bar.
   let revealedHeight = overlayUsesHover(layout)
-    ? Math.max(b.height, lastBarHeight, BAR_HEIGHT, ASK_REVEAL_MIN_HEIGHT_PX)
+    ? askRevealHeight({ currentHeight: b.height, lastBarHeight, minReveal: ASK_REVEAL_MIN_HEIGHT_PX })
     : rememberBarContentHeight(Math.max(lastBarHeight, BAR_HEIGHT), BAR_IDLE_HEIGHT_PX)
-  if (isSettingsTallHeight(revealedHeight) && !overlayUsesHover(layout)) {
-    revealedHeight = BAR_IDLE_HEIGHT_PX
+  if (isSettingsTallHeight(revealedHeight)) {
+    revealedHeight = overlayUsesHover(layout) ? ASK_REVEAL_MIN_HEIGHT_PX : BAR_IDLE_HEIGHT_PX
   }
   const x = currentWidth === BAR_WIDTH ? b.x : recenterXForWidth(b.x, b.width, BAR_WIDTH, display.workArea, 0)
   currentWidth = BAR_WIDTH
@@ -3503,18 +3535,16 @@ function registerIpc(): void {
         // while already Hide used to leave a dead watch until tray Show/Hide.
         startOverlayCursorWatch()
         if (cur.overlayLayout !== next.overlayLayout) {
-          // Park now only when the pointer is out of the island/bar and this is not an open
-          // Settings panel (tall window). The renderer parks on idle if Settings is still open.
+          // Switching to Hide/Island must park. A leftover Circle pill or Settings-tall
+          // ghost was Ultron 880×1017 + Expand Métis. Keep a real Settings panel open.
+          isMinimized = false
           const display = screen.getDisplayMatching(win.getBounds())
           const metrics = getDisplayMetrics(display)
-          const rest = overlayRestSize(layout, metrics)
-          const openPanel = win.getBounds().height > rest.height + 80
           if (
-            !isMinimized &&
-            !openPanel &&
+            !settingsSurfaceOpen &&
             shouldParkHoverRestAfterLeavingSurface({
               layout,
-              pointerInIslandOrBar: pointerInIslandOrBar()
+              pointerInIslandOrBar: pointerInIslandOrBar({ ignoreWindow: true })
             })
           ) {
             overlayCursorWatchHovering = false
@@ -7551,9 +7581,15 @@ if (!app.requestSingleInstanceLock()) {
   app.on('activate', () => {
     if (!win) createWindow()
     else win.showInactive()
-    // Dock is a Settings entry after first run. Full panel, never Hide 8×2 / 880×325.
+    // Bar dock click still opens Settings. Hide/Island launch must stay parked
+    // 8×2 — Ultron fresh userdata was 880×1017 Settings / Expand Métis.
     try {
-      if (getSettings().onboardingDone) sendHotkey('settings')
+      if (
+        getSettings().onboardingDone &&
+        overlayActivateOpensSettings(liveOverlayLayout())
+      ) {
+        sendHotkey('settings')
+      }
     } catch {
       /* settings store not ready */
     }
