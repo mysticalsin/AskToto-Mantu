@@ -7,6 +7,23 @@ import { PassThrough } from 'node:stream'
 // kill-on-result tests below — every other test in this file fails before reaching spawn.
 const h = vi.hoisted(() => ({ execFileImpl: vi.fn(), spawnImpl: vi.fn() }))
 
+/**
+ * MQA-251 — resolveBin's mac/Linux branch probes the real filesystem after `command -v` misses
+ * (`posixUserBinCandidates` + managed-cli). The "missing binary" / "transient lookup" session
+ * probes therefore passed on a Cloud Linux box and failed on Totos-Mac, which has Claude/Codex
+ * installed. Same class as cli-win.test.ts: default is the real existsSync; tests that need a
+ * genuine miss set `binProbe.hit = false`.
+ */
+const binProbe = vi.hoisted(() => ({ hit: null as boolean | null }))
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs')>()
+  return {
+    ...actual,
+    existsSync: (p: Parameters<typeof actual.existsSync>[0]) =>
+      binProbe.hit === null ? actual.existsSync(p) : binProbe.hit
+  }
+})
+
 vi.mock('electron', () => ({
   app: { getPath: () => '/tmp' },
   shell: { openPath: vi.fn() }
@@ -647,12 +664,17 @@ describe('checkCliSession — the zero-token liveness probe behind MQA-062', () 
 
   beforeEach(async () => {
     Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true })
+    // Hide host ~/.local/bin and managed-cli so these probes test the mock, not Tony's install.
+    binProbe.hit = false
     clearBinCache()
     h.execFileImpl.mockReset()
     vi.resetModules()
     checkCliSession = (await import('./cli')).checkCliSession
   })
-  afterEach(() => Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true }))
+  afterEach(() => {
+    binProbe.hit = null
+    Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true })
+  })
 
   it('asks the status subcommand, never a billed completion', async () => {
     wire(async () => ({ stdout: JSON.stringify({ loggedIn: true }) }))
