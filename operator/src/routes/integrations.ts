@@ -96,6 +96,25 @@ async function loadExtras(row: IntegrationRow): Promise<IntegrationExtraColumns>
   return readIntegrationExtra(row as unknown as Record<string, unknown>)
 }
 
+export type IntegrationHealth = 'connected' | 'failing' | 'untested'
+
+/** Derived, never stored: `status` stays `active`/`revoked` only (a transient upstream failure must
+ *  never flip `status` to something `integrations-seat.ts`'s `entitledInScopeRows()` does not treat as
+ *  `active`, or one bad test would cut a working connector for the whole fleet - see the coordinator's
+ *  follow-up after B2). `health` is what the console shows instead: `untested` when no test has ever
+ *  run, else `connected`/`failing` from the last stored `ProbeResult.ok`. A row with a corrupt
+ *  `last_test_json` (should not happen; `readIntegrationExtra` already guards the column) reads as
+ *  `failing` rather than throwing. */
+function deriveHealth(extra: Pick<IntegrationExtraColumns, 'last_test_json' | 'last_test_at'>): IntegrationHealth {
+  if (!extra.last_test_json || extra.last_test_at == null) return 'untested'
+  try {
+    const parsed = JSON.parse(extra.last_test_json) as { ok?: unknown }
+    return parsed?.ok === true ? 'connected' : 'failing'
+  } catch {
+    return 'failing'
+  }
+}
+
 async function integrationSummary(store: OperatorStore, row: IntegrationRow): Promise<Record<string, unknown>> {
   const extra = await loadExtras(row)
   const grants = await store.listIntegrationGrants(row.id, GRANTS_COUNT_LIMIT)
@@ -122,6 +141,7 @@ async function integrationSummary(store: OperatorStore, row: IntegrationRow): Pr
     baseUrl: row.base_url,
     last4: row.last4,
     status: row.status,
+    health: deriveHealth(extra),
     transport: extra.transport,
     authKind: extra.auth_kind,
     headerName: extra.header_name,
@@ -155,6 +175,9 @@ async function saveIntegration(ctx: AdminCtx, row: IntegrationRow, extra: Integr
 function probeDepsFrom(ctx: AdminCtx): ProbeDeps {
   return { fetch: ctx.opts.providerFetch ?? ctx.opts.cfFetch ?? fetch }
 }
+
+// No per-route rate limit here: a central per-admin-identity limit on every non-GET admin request is
+// being added in operator/src/index.ts (dev-licensing) and covers both test routes below.
 
 export function registerIntegrationsRoutes(): void {
   defineRoute<AdminCtx>({
@@ -192,7 +215,7 @@ export function registerIntegrationsRoutes(): void {
       const input: ProbeInput = { credential, config }
       const result = await probeConnection(entry, input, probeDepsFrom(ctx))
       await auditLog(ctx, 'integration-test-draft', null, kind)
-      return json({ ok: true, result })
+      return json({ ok: true, result, health: result.ok ? 'connected' : 'failing' })
     }
   })
 
@@ -353,21 +376,21 @@ export function registerIntegrationsRoutes(): void {
       }
 
       const result = await probeConnection(entry, { credential, config }, probeDepsFrom(ctx))
-      // 'active' on success, not 'connected': integrations-seat.ts's entitledInScopeRows() filters strictly
-      // on `status === 'active'` (unchanged by this task, per the brief) - a third status value here would
-      // silently stop delivering a successfully-tested connection to every seat. The console page (P1.9)
-      // renders an 'active' row's status dot as "Connected"; the stored value stays the one seat delivery
-      // already understands.
-      const nextStatus = existing.status === 'revoked' ? existing.status : result.ok ? 'active' : 'failing'
+      // `status` never changes here - only `active`/`revoked` mean anything to `integrations-seat.ts`'s
+      // entitledInScopeRows() (strictly `status === 'active'`), and a transient upstream failure must not
+      // cut a working connector from the whole fleet just because one Test connection call failed. The
+      // outcome instead lives in `last_test_json`/`last_test_at`, surfaced as the derived `health` field
+      // (`deriveHealth`) here and on every row from `GET /v1/admin/integrations`. See the coordinator's
+      // follow-up after B2 - this replaces the earlier `status: 'active' | 'failing'` behaviour.
       const nextExtra: IntegrationExtraColumns = {
         ...currentExtra,
         last_test_json: JSON.stringify(result),
         last_test_at: ctx.now,
         tools_json: result.tools ? JSON.stringify(result.tools) : currentExtra.tools_json
       }
-      await saveIntegration(ctx, { ...existing, status: nextStatus }, nextExtra)
+      await saveIntegration(ctx, existing, nextExtra)
       await auditLog(ctx, 'integration-test', null, `${existing.kind} ${existing.label} ·${existing.last4 ?? '----'}`)
-      return json({ ok: true, result })
+      return json({ ok: true, result, health: deriveHealth(nextExtra) })
     }
   })
 
