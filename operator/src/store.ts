@@ -117,6 +117,28 @@ export interface PackRow {
   pushed_by: string
 }
 
+
+export interface LicenseRow {
+  license_key: string
+  company_name: string
+  seat_cap: number
+  created_at: number
+  expires_at: number | null
+  revoked: number
+  contact_name: string
+  contact_email: string
+  notes: string
+  created_by: string
+}
+
+export interface LicenseActivationRow {
+  license_key: string
+  machine_id: string
+  machine_name: string
+  activated_at: number
+  last_seen_at: number
+}
+
 export interface OperatorStore {
   takeNonce(nonce: string, ts: number): Promise<boolean>
   hitRate(deviceId: string, now: number, windowMs: number, max: number): Promise<boolean>
@@ -146,6 +168,11 @@ export interface OperatorStore {
   listVaultRows(): Promise<VaultKeyRow[]>
   getVaultKey(id: string): Promise<VaultKeyRow | null>
   putVaultKey(row: VaultKeyRow): Promise<void>
+  listLicenses(): Promise<LicenseRow[]>
+  getLicense(licenseKey: string): Promise<LicenseRow | null>
+  putLicense(row: LicenseRow): Promise<void>
+  listLicenseActivations(licenseKey: string): Promise<LicenseActivationRow[]>
+  putLicenseActivation(row: LicenseActivationRow): Promise<void>
 }
 
 const PULSE_TTL_MS = 8 * 24 * 60 * 60 * 1000
@@ -162,6 +189,8 @@ export function memoryStore(): OperatorStore {
   const audits: { id: string; ts: number; actor: string; action: string; ask_id: string | null; detail: string }[] = []
   const events = new Map<string, EventRow>()
   const vault = new Map<string, VaultKeyRow>()
+  const licenses = new Map<string, LicenseRow>()
+  const licenseActivations = new Map<string, LicenseActivationRow>()
 
   return {
     async takeNonce(nonce) {
@@ -300,7 +329,24 @@ export function memoryStore(): OperatorStore {
     },
     async putVaultKey(row) {
       vault.set(row.id, row)
-    }
+    },
+    async listLicenses() {
+      return [...licenses.values()].sort((a, b) => b.created_at - a.created_at)
+    },
+    async getLicense(licenseKey) {
+      return licenses.get(licenseKey) ?? null
+    },
+    async putLicense(row) {
+      licenses.set(row.license_key, row)
+    },
+    async listLicenseActivations(licenseKey) {
+      return [...licenseActivations.values()]
+        .filter((a) => a.license_key === licenseKey)
+        .sort((a, b) => b.last_seen_at - a.last_seen_at)
+    },
+    async putLicenseActivation(row) {
+      licenseActivations.set(`${row.license_key}::${row.machine_id}`, row)
+    },
   }
 }
 

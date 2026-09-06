@@ -1,3 +1,4 @@
+import { listLicenseItems, type LicenseListItem } from './licenses'
 import { aggregateCacheSlice, estimateCacheCost, formatUsdEstimate, type AskLogLine } from '../../src/shared/operator'
 import { CRM_STATUSES, type CrmSendRow, type CrmStatus } from './crm'
 import { missingCloudflareOverview, type CloudflareOverview } from './cloudflare'
@@ -108,6 +109,7 @@ const OPERATOR_ASK = new Set([
 ])
 
 export interface DashboardPayload {
+  origin: string
   email: string
   now: number
   kpis: {
@@ -181,6 +183,7 @@ export interface DashboardPayload {
   }
   events: ConsoleEvent[]
   profiles: ProfileRow[]
+  licenses: LicenseListItem[]
   keys: {
     ingestBound: boolean
     promptBound: boolean
@@ -947,6 +950,8 @@ export async function buildDashboard(
         live30: liveIds.has(s.device_id),
         license: s.license && !looksLikeSecret(s.license) ? s.license : null
       })),
+    origin: "",
+    licenses: await listLicenseItems(store, now),
     keys: {
       ingestBound: keys.ingestBound,
       promptBound: keys.promptBound,

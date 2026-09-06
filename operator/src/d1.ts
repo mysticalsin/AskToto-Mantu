@@ -1,5 +1,5 @@
 import { normalizeCrmRow, type CrmSendRow } from './crm'
-import type { AskRow, EventRow, OperatorStore, PackRow, ProposalRow, PulseRow, SeatRow, VaultKeyRow } from './store'
+import type { AskRow, EventRow, LicenseActivationRow, LicenseRow, OperatorStore, PackRow, ProposalRow, PulseRow, SeatRow, VaultKeyRow } from './store'
 import { toVaultMeta } from './store'
 
 interface D1Stmt {
@@ -358,6 +358,67 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
           row.revoked_at
         )
         .run()
-    }
+    },
+    async listLicenses() {
+      const r = await db
+        .prepare(
+          `SELECT license_key, company_name, seat_cap, created_at, expires_at, revoked, contact_name, contact_email, notes, created_by
+           FROM licenses ORDER BY created_at DESC`
+        )
+        .all<LicenseRow>()
+      return r.results
+    },
+    async getLicense(licenseKey) {
+      return (
+        (await db
+          .prepare(
+            `SELECT license_key, company_name, seat_cap, created_at, expires_at, revoked, contact_name, contact_email, notes, created_by
+             FROM licenses WHERE license_key = ?`
+          )
+          .bind(licenseKey)
+          .first<LicenseRow>()) ?? null
+      )
+    },
+    async putLicense(row) {
+      await db
+        .prepare(
+          `INSERT OR REPLACE INTO licenses (
+            license_key, company_name, seat_cap, created_at, expires_at, revoked, contact_name, contact_email, notes, created_by
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          row.license_key,
+          row.company_name,
+          row.seat_cap,
+          row.created_at,
+          row.expires_at,
+          row.revoked,
+          row.contact_name,
+          row.contact_email,
+          row.notes,
+          row.created_by
+        )
+        .run()
+    },
+    async listLicenseActivations(licenseKey) {
+      const r = await db
+        .prepare(
+          `SELECT license_key, machine_id, machine_name, activated_at, last_seen_at
+           FROM license_activations WHERE license_key = ? ORDER BY last_seen_at DESC`
+        )
+        .bind(licenseKey)
+        .all<LicenseActivationRow>()
+      return r.results
+    },
+    async putLicenseActivation(row) {
+      await db
+        .prepare(
+          `INSERT OR REPLACE INTO license_activations (
+            license_key, machine_id, machine_name, activated_at, last_seen_at
+          ) VALUES (?, ?, ?, ?, ?)`
+        )
+        .bind(row.license_key, row.machine_id, row.machine_name, row.activated_at, row.last_seen_at)
+        .run()
+    },
   }
 }

@@ -34,6 +34,13 @@ import { parseMetisProduct } from './product'
 import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './store'
 import { isPublicAssetPath, publicAssetResponse } from './assets'
 import { renderConsole } from './ui'
+import {
+  activateLicense,
+  createLicense,
+  heartbeatLicense,
+  listLicenseItems,
+  revokeLicense
+} from './licenses'
 import { handleUse } from './use'
 
 export interface Env {
@@ -101,6 +108,13 @@ export async function handleRequest(
     return new Response(null, { status: 303, headers: { Location: '/', 'Set-Cookie': clearSessionCookie() } })
   }
 
+
+  if ((url.pathname === '/activate' || url.pathname === '/heartbeat') && request.method === 'POST') {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
+    if (url.pathname === '/activate') return activateLicense(store, now, body)
+    return heartbeatLicense(store, now, body)
+  }
+
   if (isConsolePath(url.pathname) || isAdminApiPath(url.pathname)) {
     const ident = await resolveAdminIdentity(request, accessCtx, env, now)
     if (ident.status === 'misconfigured') return accessMisconfigured(ident.error)
@@ -163,6 +177,7 @@ async function adminRoute(
     if (url.pathname === '/cloudflare/connect') return redirectToCloudflareLogin(request)
     if (url.pathname === '/cloudflare/callback') return redirectToKeysAfterCloudflareLogin()
     const dash = await buildDashboard(store, email, now, keyFlags(env), await cloudflareForDashboard(store, env, opts, now))
+    dash.origin = new URL(request.url).origin
     return html(renderConsole(dash))
   }
   if (url.pathname === '/v1/admin/dashboard' && request.method === 'GET') {
@@ -334,6 +349,24 @@ async function adminRoute(
     await store.audit(crypto.randomUUID(), now, email, 'crm-retry', null, row.id)
     return json({ ok: true, autoSend: false })
   }
+
+  if (url.pathname === '/v1/admin/licenses' && request.method === 'GET') {
+    return json({ ok: true, licenses: await listLicenseItems(store, now) })
+  }
+  if (url.pathname === '/v1/admin/licenses' && request.method === 'POST') {
+    const body = (await request.json().catch(() => ({}))) as Record<string, unknown>
+    const created = await createLicense(store, email, now, body)
+    if (!created.ok) return json({ ok: false, error: created.error }, created.status)
+    return json({ ok: true, ...created }, 201)
+  }
+  const licenseRevoke = /^\/v1\/admin\/licenses\/([^/]+)\/revoke$/.exec(url.pathname)
+  if (licenseRevoke && request.method === 'POST') {
+    const key = decodeURIComponent(licenseRevoke[1])
+    const out = await revokeLicense(store, email, now, key)
+    if (!out.ok) return json({ ok: false, error: out.error }, out.status)
+    return json({ ok: true })
+  }
+
   return json({ ok: false, error: 'not found' }, 404)
 }
 
