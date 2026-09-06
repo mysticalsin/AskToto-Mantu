@@ -9,14 +9,14 @@ export function bytesToB64(bytes: Uint8Array): string {
   return btoa(s)
 }
 
-export function b64ToBytes(b64: string): Uint8Array {
+export function b64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   const bin = atob(b64)
   const out = new Uint8Array(bin.length)
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
   return out
 }
 
-export function b64urlToBytes(b64url: string): Uint8Array {
+export function b64urlToBytes(b64url: string): Uint8Array<ArrayBuffer> {
   const pad = b64url.replace(/-/g, '+').replace(/_/g, '/')
   const padded = pad + '='.repeat((4 - (pad.length % 4)) % 4)
   return b64ToBytes(padded)
@@ -26,7 +26,7 @@ export function bytesToB64url(bytes: Uint8Array): string {
   return bytesToB64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '')
 }
 
-async function sha256Hex(data: Uint8Array | string): Promise<string> {
+async function sha256Hex(data: Uint8Array<ArrayBuffer> | string): Promise<string> {
   const buf = typeof data === 'string' ? enc.encode(data) : data
   const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', buf))
   return [...digest].map((b) => b.toString(16).padStart(2, '0')).join('')
@@ -34,7 +34,7 @@ async function sha256Hex(data: Uint8Array | string): Promise<string> {
 
 export { sha256Hex }
 
-function decodePromptKey(raw: string): Uint8Array {
+function decodeAesKey(raw: string, name: string): Uint8Array<ArrayBuffer> {
   const trimmed = raw.trim()
   try {
     const bytes = b64ToBytes(trimmed)
@@ -42,22 +42,17 @@ function decodePromptKey(raw: string): Uint8Array {
   } catch {
     /* fall through */
   }
-  throw new Error('OPERATOR_PROMPT_KEY must be 32 bytes, base64')
+  throw new Error(`${name} must be 32 bytes, base64`)
 }
 
-export async function encryptPrompt(
-  plaintext: string,
-  keyRaw: string
-): Promise<{ cipher: string; iv: string }> {
-  const keyBytes = decodePromptKey(keyRaw)
+async function encryptAesGcm(plaintext: string, keyBytes: Uint8Array<ArrayBuffer>): Promise<{ cipher: string; iv: string }> {
   const iv = crypto.getRandomValues(new Uint8Array(12))
   const key = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['encrypt'])
   const cipher = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, enc.encode(plaintext)))
   return { cipher: bytesToB64(cipher), iv: bytesToB64(iv) }
 }
 
-export async function decryptPrompt(cipher: string, iv: string, keyRaw: string): Promise<string> {
-  const keyBytes = decodePromptKey(keyRaw)
+async function decryptAesGcm(cipher: string, iv: string, keyBytes: Uint8Array<ArrayBuffer>): Promise<string> {
   const key = await crypto.subtle.importKey('raw', keyBytes, 'AES-GCM', false, ['decrypt'])
   const plain = await crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: b64ToBytes(iv) },
@@ -65,6 +60,28 @@ export async function decryptPrompt(cipher: string, iv: string, keyRaw: string):
     b64ToBytes(cipher)
   )
   return dec.decode(plain)
+}
+
+export async function encryptPrompt(
+  plaintext: string,
+  keyRaw: string
+): Promise<{ cipher: string; iv: string }> {
+  return encryptAesGcm(plaintext, decodeAesKey(keyRaw, 'OPERATOR_PROMPT_KEY'))
+}
+
+export async function decryptPrompt(cipher: string, iv: string, keyRaw: string): Promise<string> {
+  return decryptAesGcm(cipher, iv, decodeAesKey(keyRaw, 'OPERATOR_PROMPT_KEY'))
+}
+
+export async function encryptVault(
+  plaintext: string,
+  keyRaw: string
+): Promise<{ cipher: string; iv: string }> {
+  return encryptAesGcm(plaintext, decodeAesKey(keyRaw, 'OPERATOR_VAULT_KEY'))
+}
+
+export async function decryptVault(cipher: string, iv: string, keyRaw: string): Promise<string> {
+  return decryptAesGcm(cipher, iv, decodeAesKey(keyRaw, 'OPERATOR_VAULT_KEY'))
 }
 
 export interface SkillPackPayload {

@@ -1,0 +1,492 @@
+- generic [active] [ref=f3e1]:
+  - generic [ref=f3e2]:
+    - button "Close menu"
+    - generic [ref=f3e3]:
+      - generic [ref=f3e4]:
+        - link [ref=f3e5] [cursor=pointer]:
+          - /url: /
+          - img "Openpanel logo" [ref=f3e6]
+        - button "Shoey" [ref=f3e7]
+      - generic [ref=f3e16]:
+        - button "Create report" [ref=f3e18]
+        - generic [ref=f3e23]:
+          - textbox "Ask AI anything..." [ref=f3e27]
+          - generic [ref=f3e28]: ⌘J
+        - generic [ref=f3e29]: Analytics
+        - navigation [ref=f3e30]:
+          - link "Overview" [ref=f3e31] [cursor=pointer]:
+            - /url: /demo/shoey
+          - link "Realtime" [ref=f3e36] [cursor=pointer]:
+            - /url: /demo/shoey/realtime
+          - link "Events" [ref=f3e42] [cursor=pointer]:
+            - /url: /demo/shoey/events
+          - link "Sessions" [ref=f3e44] [cursor=pointer]:
+            - /url: /demo/shoey/sessions
+          - link "Groups" [ref=f3e50] [cursor=pointer]:
+            - /url: /demo/shoey/groups
+        - generic [ref=f3e55]: Manage
+        - navigation [ref=f3e56]:
+          - link "Settings" [ref=f3e57] [cursor=pointer]:
+            - /url: /demo/shoey/settings
+          - link "Notifications" [ref=f3e69] [cursor=pointer]:
+            - /url: /demo/shoey/notifications
+      - generic [ref=f3e74]:
+        - generic [ref=f3e75]:
+          - button "Sparkles" [ref=f3e76]
+          - button "User" [ref=f3e80]
+        - generic [ref=f3e84]:
+          - generic [ref=f3e85]: Support Us
+          - generic [ref=f3e86]: Pay What You Want
+    - generic [ref=f3e88]:
+      - generic [ref=f3e91]:
+        - generic [ref=f3e92]:
+          - button "Date range" [ref=f3e94]: Last 7 days
+          - button "Interval" [ref=f3e98]: Day
+          - button "Filters" [ref=f3e103]
+          - generic [ref=f3e106]: "Try: \"last 7 days, mobile only\""
+        - generic [ref=f3e110]:
+          - generic "Visitors online right now" [ref=f3e111]: "22"
+          - button "Change dashboard visibility" [ref=f3e117]: Private
+      - generic [ref=f3e124]:
+        - generic [ref=f3e125]:
+          - generic [ref=f3e126]:
+            - generic [ref=f3e127]:
+              - generic [ref=f3e128]:
+                - generic [ref=f3e129]: UNIQUE VISITORS
+                - generic [ref=f3e130]: 8.9%
+              - generic [ref=f3e133]: 55.7K
+              - generic [ref=f3e134]: Last 7 days
+            - generic [ref=f3e144]:
+              - generic [ref=f3e145]:
+                - generic [ref=f3e146]: SESSIONS
+                - generic [ref=f3e147]: 8.9%
+              - generic [ref=f3e150]: 55.8K
+              - generic [ref=f3e151]: Last 7 days
+            - generic [ref=f3e161]:
+              - generic [ref=f3e162]:
+                - generic [ref=f3e163]: PAGEVIEWS
+                - generic [ref=f3e164]: 8.9%
+              - generic [ref=f3e167]: 231K
+              - generic [ref=f3e168]: Last 7 days
+            - generic [ref=f3e178]:
+              - generic [ref=f3e179]:
+                - generic [ref=f3e180]: PAGES PER SESSION
+                - generic [ref=f3e181]: 0%
+              - generic [ref=f3e184]: "4.1"
+              - generic [ref=f3e185]: Last 7 days
+            - generic [ref=f3e195]:
+              - generic [ref=f3e196]:
+                - generic [ref=f3e197]: BOUNCE RATE
+                - generic [ref=f3e198]: 0.5%
+              - generic [ref=f3e201]: 28.70%
+              - generic [ref=f3e202]: Last 7 days
+            - generic [ref=f3e212]:
+              - generic [ref=f3e213]:
+                - generic [ref=f3e214]: SESSION DURATION
+                - generic [ref=f3e215]: 0.1%
+              - generic [ref=f3e218]: 18s
+              - generic [ref=f3e219]: Last 7 days
+            - generic [ref=f3e229]:
+              - generic [ref=f3e230]:
+                - generic [ref=f3e231]: REVENUE
+                - generic [ref=f3e232]: 0%
+              - generic [ref=f3e235]: 0 $
+              - generic [ref=f3e236]: Last 7 days
+            - generic [ref=f3e246]:
+              - generic [ref=f3e247]: LIVE · 30 MIN
+              - generic [ref=f3e252]: "31"
+              - generic [ref=f3e253]: Last 30 min
+          - generic [ref=f3e285]:
+            - generic [ref=f3e286]: Unique Visitors
+            - img [ref=f3e287]:
+              - generic [ref=f3e288]: "0"
+              - generic [ref=f3e290]: 2k
+              - generic [ref=f3e292]: 4k
+              - generic [ref=f3e294]: 6k
+              - generic [ref=f3e296]: 8k
+              - generic [ref=f3e298]: Aug 28
+              - generic [ref=f3e299]: Aug 29
+              - generic [ref=f3e300]: Aug 31
+              - generic [ref=f3e301]: Sep 2
+              - generic [ref=f3e302]: Sep 4
+        - generic [ref=f3e306]:
+          - generic [ref=f3e307]:
+            - button "Refs" [ref=f3e308]
+            - button "Urls" [ref=f3e309]
+            - button "Types" [ref=f3e310]
+            - button "Source" [ref=f3e311]
+            - button "Medium" [ref=f3e312]
+            - button "Campaign" [ref=f3e313]
+            - button "Term" [ref=f3e314]
+            - button "Content" [ref=f3e315]
+          - textbox "Search refs" [ref=f3e320]
+          - generic [ref=f3e321]:
+            - generic [ref=f3e322]: Referrer name
+            - button "Views" [ref=f3e323]
+            - button "Sess." [ref=f3e326]
+          - generic [ref=f3e329]:
+            - generic [ref=f3e331]: Direct / Not set
+            - generic [ref=f3e333]: 55.9K
+            - generic [ref=f3e334]: 12.3K
+          - generic [ref=f3e335]:
+            - generic [ref=f3e337]: https://www.heroku.com
+            - generic [ref=f3e339]: 9.2K
+            - generic [ref=f3e340]: 2.9K
+          - generic [ref=f3e341]:
+            - generic [ref=f3e343]: https://www.bitbucket.com
+            - generic [ref=f3e345]: 11.3K
+            - generic [ref=f3e346]: 2.6K
+          - generic [ref=f3e347]:
+            - generic [ref=f3e349]: LinkedIn
+            - generic [ref=f3e351]: 11.4K
+            - generic [ref=f3e352]: 2.5K
+          - generic [ref=f3e353]:
+            - generic [ref=f3e355]: eBay
+            - generic [ref=f3e357]: 10.5K
+            - generic [ref=f3e358]: 2.5K
+          - generic [ref=f3e359]:
+            - generic [ref=f3e361]: https://www.aol.com
+            - generic [ref=f3e363]: 7.4K
+            - generic [ref=f3e364]: 2.3K
+          - generic [ref=f3e365]:
+            - generic [ref=f3e367]: Instagram
+            - generic [ref=f3e369]: 8.7K
+            - generic [ref=f3e370]: 2.3K
+          - generic [ref=f3e371]:
+            - generic [ref=f3e373]: Youtube
+            - generic [ref=f3e375]: 8.9K
+            - generic [ref=f3e376]: 2.2K
+          - generic [ref=f3e377]:
+            - generic [ref=f3e379]: Twitter
+            - generic [ref=f3e381]: 9.6K
+            - generic [ref=f3e382]: 2.2K
+          - generic [ref=f3e383]:
+            - generic [ref=f3e385]: ChatGPT
+            - generic [ref=f3e387]: 9.7K
+            - generic [ref=f3e388]: 2.1K
+          - generic [ref=f3e389]:
+            - generic [ref=f3e391]: Bing
+            - generic [ref=f3e393]: 5.3K
+            - generic [ref=f3e394]: 2.1K
+          - generic [ref=f3e395]:
+            - generic [ref=f3e397]: Google
+            - generic [ref=f3e399]: 7.6K
+            - generic [ref=f3e400]: 1.9K
+          - generic [ref=f3e401]:
+            - generic [ref=f3e403]: Facebook
+            - generic [ref=f3e405]: 11.2K
+            - generic [ref=f3e406]: 1.9K
+          - generic [ref=f3e407]:
+            - generic [ref=f3e409]: GitLab
+            - generic [ref=f3e411]: 7.5K
+            - generic [ref=f3e412]: 1.7K
+          - generic [ref=f3e413]:
+            - generic [ref=f3e415]: Amazon
+            - generic [ref=f3e417]: 5.4K
+            - generic [ref=f3e418]: 1.7K
+        - generic [ref=f3e428]:
+          - generic [ref=f3e429]:
+            - button "Pages" [ref=f3e430]
+            - button "Entries" [ref=f3e431]
+            - button "Exits" [ref=f3e432]
+          - textbox "Search pages" [ref=f3e437]
+          - generic [ref=f3e438]:
+            - generic [ref=f3e439]: Path
+            - button "Views" [ref=f3e440]
+            - button "Sess." [ref=f3e443]
+          - generic [ref=f3e446]:
+            - generic [ref=f3e448]: /products/sneakers
+            - generic [ref=f3e450]: 24.9K
+            - generic [ref=f3e451]: 21.4K
+          - generic [ref=f3e452]:
+            - generic [ref=f3e454]: /products
+            - generic [ref=f3e456]: 13.3K
+            - generic [ref=f3e457]: 11.8K
+          - generic [ref=f3e458]:
+            - generic [ref=f3e460]: /products/sneakers/nike-air-max-2021
+            - generic [ref=f3e462]: 11.5K
+            - generic [ref=f3e463]: 9.9K
+          - generic [ref=f3e464]:
+            - generic [ref=f3e466]: /support/shipping-information
+            - generic [ref=f3e468]: 8.4K
+            - generic [ref=f3e469]: 7.5K
+          - generic [ref=f3e470]:
+            - generic [ref=f3e472]: /blog/how-to-choose-the-right-shoes
+            - generic [ref=f3e474]: 8.2K
+            - generic [ref=f3e475]: 7.3K
+          - generic [ref=f3e476]:
+            - generic [ref=f3e478]: /blog/shoe-care-tips
+            - generic [ref=f3e480]: 7.3K
+            - generic [ref=f3e481]: 6.5K
+          - generic [ref=f3e482]:
+            - generic [ref=f3e484]: /products/sneakers/air-max-2023
+            - generic [ref=f3e486]: 8.2K
+            - generic [ref=f3e487]: 6.5K
+          - generic [ref=f3e488]:
+            - generic [ref=f3e490]: /support/faq
+            - generic [ref=f3e492]: 6.6K
+            - generic [ref=f3e493]: 5.9K
+          - generic [ref=f3e494]:
+            - generic [ref=f3e496]: /products/sneakers/nike-air-max-2021/details
+            - generic [ref=f3e498]: 5.9K
+            - generic [ref=f3e499]: 5.2K
+          - generic [ref=f3e500]:
+            - generic [ref=f3e502]: /products/sneakers/air-max-2023/details
+            - generic [ref=f3e504]: 5.3K
+            - generic [ref=f3e505]: 4.5K
+          - generic [ref=f3e506]:
+            - generic [ref=f3e508]: /support/return-policy
+            - generic [ref=f3e510]: 5K
+            - generic [ref=f3e511]: 4.4K
+          - generic [ref=f3e512]:
+            - generic [ref=f3e514]: /products/sneakers/nike-air-max-270
+            - generic [ref=f3e516]: 5.6K
+            - generic [ref=f3e517]: 4.4K
+          - generic [ref=f3e518]:
+            - generic [ref=f3e520]: /blog/top-10-running-shoes-2023
+            - generic [ref=f3e522]: 4.6K
+            - generic [ref=f3e523]: 4.1K
+          - generic [ref=f3e524]:
+            - generic [ref=f3e526]: /products/shoes
+            - generic [ref=f3e528]: 4.3K
+            - generic [ref=f3e529]: 3.8K
+          - generic [ref=f3e530]:
+            - generic [ref=f3e532]: /support/shipping-policy
+            - generic [ref=f3e534]: 3.8K
+            - generic [ref=f3e535]: 3.4K
+          - generic [ref=f3e536]: Show domain
+        - generic [ref=f3e546]:
+          - generic [ref=f3e547]:
+            - button "Devices" [ref=f3e548]
+            - button "Browser" [ref=f3e549]
+            - button "Browser Version" [ref=f3e550]
+            - button "OS" [ref=f3e551]
+            - button "OS Version" [ref=f3e552]
+            - button "Brands" [ref=f3e553]
+            - button "Models" [ref=f3e554]
+          - textbox "Search devices" [ref=f3e559]
+          - generic [ref=f3e560]:
+            - generic [ref=f3e561]: Device
+            - button "Views" [ref=f3e562]
+            - button "Sess." [ref=f3e565]
+          - generic [ref=f3e568]:
+            - generic [ref=f3e570]: desktop
+            - generic [ref=f3e574]: 173K
+            - generic [ref=f3e575]: 42K
+          - generic [ref=f3e576]:
+            - generic [ref=f3e578]: mobile
+            - generic [ref=f3e582]: 51.7K
+            - generic [ref=f3e583]: 12.4K
+          - generic [ref=f3e584]:
+            - generic [ref=f3e586]: tablet
+            - generic [ref=f3e590]: 5.7K
+            - generic [ref=f3e591]: 1.4K
+        - generic [ref=f3e601]:
+          - generic [ref=f3e602]:
+            - button "Events" [ref=f3e603]
+            - button "Link out" [ref=f3e604]
+          - textbox "Search events" [ref=f3e609]
+          - generic [ref=f3e610]:
+            - generic [ref=f3e611]: Event
+            - button "Count" [ref=f3e612]
+          - generic [ref=f3e615]:
+            - generic [ref=f3e617]: add_to_cart
+            - generic [ref=f3e619]: 27.1K
+          - generic [ref=f3e620]:
+            - generic [ref=f3e622]: checkout
+            - generic [ref=f3e624]: 14.4K
+          - generic [ref=f3e625]:
+            - generic [ref=f3e627]: checkout_success
+            - generic [ref=f3e629]: 11.8K
+          - generic [ref=f3e630]:
+            - generic [ref=f3e632]: start_chat
+            - generic [ref=f3e634]: 7.2K
+          - generic [ref=f3e635]:
+            - generic [ref=f3e637]: search
+            - generic [ref=f3e639]: 6.8K
+          - generic [ref=f3e640]:
+            - generic [ref=f3e642]: filter
+            - generic [ref=f3e644]: 6.7K
+          - generic [ref=f3e645]:
+            - generic [ref=f3e647]: checkout_failed
+            - generic [ref=f3e649]: 2.6K
+          - generic [ref=f3e650]:
+            - generic [ref=f3e652]: send_message
+            - generic [ref=f3e654]: 1.7K
+          - generic [ref=f3e655]:
+            - generic [ref=f3e657]: receive_message
+            - generic [ref=f3e659]: 1.4K
+          - generic [ref=f3e660]:
+            - generic [ref=f3e662]: sort
+            - generic [ref=f3e664]: "503"
+          - generic [ref=f3e665]:
+            - generic [ref=f3e667]: share
+            - generic [ref=f3e669]: "462"
+          - generic [ref=f3e670]:
+            - generic [ref=f3e672]: sign_up_restock_notification
+            - generic [ref=f3e674]: "262"
+          - generic [ref=f3e675]:
+            - generic [ref=f3e677]: check_loyalty_status
+            - generic [ref=f3e679]: "259"
+          - generic [ref=f3e680]:
+            - generic [ref=f3e682]: subscribe_email
+            - generic [ref=f3e684]: "255"
+          - generic [ref=f3e685]:
+            - generic [ref=f3e687]: cancel_chat
+            - generic [ref=f3e689]: "252"
+        - generic [ref=f3e696]:
+          - generic [ref=f3e697]:
+            - button "Countries" [ref=f3e698]
+            - button "Regions" [ref=f3e699]
+            - button "Cities" [ref=f3e700]
+          - textbox "Search countries" [ref=f3e705]
+          - generic [ref=f3e706]:
+            - generic [ref=f3e707]: Country
+            - button "Views" [ref=f3e708]
+            - button "Sess." [ref=f3e711]
+          - generic [ref=f3e714]:
+            - generic [ref=f3e716]: Brazil
+            - generic [ref=f3e719]: 85.2K
+            - generic [ref=f3e720]: 20.7K
+          - generic [ref=f3e721]:
+            - generic [ref=f3e723]: United States
+            - generic [ref=f3e726]: 24K
+            - generic [ref=f3e727]: 5.8K
+          - generic [ref=f3e728]:
+            - generic [ref=f3e730]: Germany
+            - generic [ref=f3e733]: 20K
+            - generic [ref=f3e734]: 4.8K
+          - generic [ref=f3e735]:
+            - generic [ref=f3e737]: Indonesia
+            - generic [ref=f3e740]: 18.7K
+            - generic [ref=f3e741]: 4.6K
+          - generic [ref=f3e742]:
+            - generic [ref=f3e744]: South Korea
+            - generic [ref=f3e747]: 12K
+            - generic [ref=f3e748]: 2.8K
+          - generic [ref=f3e749]:
+            - generic [ref=f3e751]: India
+            - generic [ref=f3e754]: 11K
+            - generic [ref=f3e755]: 2.6K
+          - generic [ref=f3e756]:
+            - generic [ref=f3e758]: United Kingdom
+            - generic [ref=f3e761]: 7K
+            - generic [ref=f3e762]: 1.7K
+          - generic [ref=f3e763]:
+            - generic [ref=f3e765]: China
+            - generic [ref=f3e768]: 4K
+            - generic [ref=f3e769]: "973"
+          - generic [ref=f3e770]:
+            - generic [ref=f3e772]: Sweden
+            - generic [ref=f3e775]: 3.9K
+            - generic [ref=f3e776]: "972"
+          - generic [ref=f3e777]:
+            - generic [ref=f3e779]: France
+            - generic [ref=f3e782]: 4K
+            - generic [ref=f3e783]: "968"
+          - generic [ref=f3e784]:
+            - generic [ref=f3e786]: Australia
+            - generic [ref=f3e789]: 3.3K
+            - generic [ref=f3e790]: "799"
+          - generic [ref=f3e791]:
+            - generic [ref=f3e793]: Poland
+            - generic [ref=f3e796]: 2.7K
+            - generic [ref=f3e797]: "628"
+          - generic [ref=f3e798]:
+            - generic [ref=f3e800]: Netherlands
+            - generic [ref=f3e803]: 2.4K
+            - generic [ref=f3e804]: "610"
+          - generic [ref=f3e805]:
+            - generic [ref=f3e807]: Italy
+            - generic [ref=f3e810]: 2.2K
+            - generic [ref=f3e811]: "531"
+          - generic [ref=f3e812]:
+            - generic [ref=f3e814]: Saudi Arabia
+            - generic [ref=f3e817]: 2K
+            - generic [ref=f3e818]: "495"
+        - generic [ref=f3e825]:
+          - generic [ref=f3e826]: Map
+          - generic [ref=f3e829]:
+            - img [ref=f3e830]:
+              - generic [ref=f3e831]:
+                - generic [ref=f3e1073] [cursor=pointer]
+                - generic [ref=f3e1076] [cursor=pointer]
+                - generic [ref=f3e1079] [cursor=pointer]
+                - generic [ref=f3e1082] [cursor=pointer]
+                - generic [ref=f3e1085] [cursor=pointer]
+                - generic [ref=f3e1088] [cursor=pointer]
+                - generic [ref=f3e1091] [cursor=pointer]
+                - generic [ref=f3e1094] [cursor=pointer]
+                - generic [ref=f3e1097] [cursor=pointer]
+                - generic [ref=f3e1100] [cursor=pointer]
+                - generic [ref=f3e1103] [cursor=pointer]
+                - generic [ref=f3e1106] [cursor=pointer]
+                - generic [ref=f3e1109] [cursor=pointer]
+                - generic [ref=f3e1112] [cursor=pointer]
+                - generic [ref=f3e1115] [cursor=pointer]
+                - generic [ref=f3e1118] [cursor=pointer]
+                - generic [ref=f3e1121] [cursor=pointer]
+                - generic [ref=f3e1124] [cursor=pointer]
+                - generic [ref=f3e1127] [cursor=pointer]
+                - generic [ref=f3e1130] [cursor=pointer]
+                - generic [ref=f3e1133] [cursor=pointer]
+                - generic [ref=f3e1136] [cursor=pointer]
+                - generic [ref=f3e1139] [cursor=pointer]
+                - generic [ref=f3e1142] [cursor=pointer]
+                - generic [ref=f3e1145] [cursor=pointer]
+                - generic [ref=f3e1148] [cursor=pointer]
+                - generic [ref=f3e1151] [cursor=pointer]
+                - generic [ref=f3e1154] [cursor=pointer]
+                - generic [ref=f3e1157] [cursor=pointer]
+                - generic [ref=f3e1160] [cursor=pointer]
+                - generic [ref=f3e1163] [cursor=pointer]
+                - generic [ref=f3e1166] [cursor=pointer]
+                - generic [ref=f3e1169] [cursor=pointer]
+                - generic [ref=f3e1172] [cursor=pointer]
+                - generic [ref=f3e1175] [cursor=pointer]
+                - generic [ref=f3e1178] [cursor=pointer]
+                - generic [ref=f3e1181] [cursor=pointer]
+                - generic [ref=f3e1184] [cursor=pointer]
+                - generic [ref=f3e1187] [cursor=pointer]
+                - generic [ref=f3e1190] [cursor=pointer]
+                - generic [ref=f3e1193] [cursor=pointer]
+                - generic [ref=f3e1196] [cursor=pointer]
+                - generic [ref=f3e1199] [cursor=pointer]
+                - generic [ref=f3e1202] [cursor=pointer]
+                - generic [ref=f3e1205] [cursor=pointer]
+                - generic [ref=f3e1208] [cursor=pointer]
+                - generic [ref=f3e1211] [cursor=pointer]
+                - generic [ref=f3e1214] [cursor=pointer]
+                - generic [ref=f3e1217] [cursor=pointer]
+                - generic [ref=f3e1220] [cursor=pointer]
+                - generic [ref=f3e1223] [cursor=pointer]
+                - generic [ref=f3e1226] [cursor=pointer]
+                - generic [ref=f3e1229] [cursor=pointer]
+                - generic [ref=f3e1232] [cursor=pointer]
+                - generic [ref=f3e1235] [cursor=pointer]
+                - generic [ref=f3e1238] [cursor=pointer]
+                - generic [ref=f3e1241] [cursor=pointer]
+                - generic [ref=f3e1244] [cursor=pointer]
+                - generic [ref=f3e1247] [cursor=pointer]
+                - generic [ref=f3e1250] [cursor=pointer]
+                - generic [ref=f3e1253] [cursor=pointer]
+                - generic [ref=f3e1256] [cursor=pointer]
+                - generic [ref=f3e1259] [cursor=pointer]
+                - generic [ref=f3e1262] [cursor=pointer]
+                - generic [ref=f3e1265] [cursor=pointer]
+                - generic [ref=f3e1268] [cursor=pointer]
+                - generic [ref=f3e1271] [cursor=pointer]
+                - generic [ref=f3e1274] [cursor=pointer]
+                - generic [ref=f3e1277] [cursor=pointer]
+                - generic [ref=f3e1280] [cursor=pointer]
+                - generic [ref=f3e1283] [cursor=pointer]
+                - generic [ref=f3e1286] [cursor=pointer]
+                - generic [ref=f3e1289] [cursor=pointer]
+                - generic [ref=f3e1292] [cursor=pointer]
+                - generic [ref=f3e1295] [cursor=pointer]
+                - generic [ref=f3e1298] [cursor=pointer]
+                - generic [ref=f3e1301] [cursor=pointer]
+            - generic [ref=f3e1304]:
+              - button "Zoom in" [ref=f3e1305]
+              - button "Zoom out" [ref=f3e1307]
+  - alert [ref=f3e1309]

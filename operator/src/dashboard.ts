@@ -1,7 +1,19 @@
 import { aggregateCacheSlice, estimateCacheCost, formatUsdEstimate, type AskLogLine } from '../../src/shared/operator'
-import { aggregateQuestionTypes, normalizeQuestionType, QUESTION_TYPE_LABELS, type QuestionTypeMix } from '../../src/shared/question-type'
+import { formatSavedTime, timeSavedFromMeetings } from '../../src/shared/time-saved'
 import { CRM_STATUSES, type CrmSendRow, type CrmStatus } from './crm'
-import type { OperatorStore, PulseRow, SeatRow } from './store'
+import { missingCloudflareOverview, type CloudflareOverview } from './cloudflare'
+import {
+  approvalOf,
+  isApprovedSeat,
+  issuedLicenseActive,
+  isRealSeat,
+  LICENSES_EMPTY,
+  parseLicenseId,
+  type SeatApproval
+} from './fleet'
+import { looksLikeSecret, safeChips, type SafeChip } from './redact'
+import { geoRegionRows, realtimeGeoRows, type GeoRegionRow, type RealtimeGeoRow } from './realtime-geo'
+import type { AskRow, EventRow, OperatorStore, PulseRow, SeatRow, VaultKeyMeta } from './store'
 
 export const ONLINE_MS = 2 * 60 * 1000
 const HOUR = 60 * 60 * 1000
@@ -47,6 +59,30 @@ export interface MapDot {
   country: string
 }
 
+/** Overview mini-KPI feed (issue 106). Every field is a real D1 aggregate; null means not reported. */
+export interface DashboardOps {
+  uniqueSessions: number
+  uniqueSeries: number[]
+  sessionsDay: number
+  sessionsDaySeries: number[]
+  liveNow: number
+  liveSeries: number[]
+  live30: number
+  timeSaved: number | null
+  tokens: number | null
+  tokenSeries: number[]
+  apiCalls: number
+  apiSeries: number[]
+  listenMinutes: number | null
+  recapCount: number
+  recapSeries: number[]
+  cliAsks: number
+  operatorAsks: number
+  crmFailRate: number | null
+  durationMs: number | null
+  meetings: number
+}
+
 export interface DashboardPayload {
   email: string
   now: number
@@ -65,6 +101,7 @@ export interface DashboardPayload {
     costSeries: number[]
     hitSeries: number[]
   }
+  ops: DashboardOps
   scale: {
     hours24: SeriesPoint[]
     days7: SeriesPoint[]
@@ -85,19 +122,7 @@ export interface DashboardPayload {
     dots: MapDot[]
     empty: boolean
   }
-  asks: { id: string; ts: number; mode: string; preview: string; cache_status: string; provider: string; questionType: string }[]
-  /**
-   * Question-type tracking over the 7-day window. `mix.total` counts every Ask in the window, including
-   * ones from seats that never sent a type, so `coverage` is an honest "we know the type of N%". Empty
-   * window = `empty: true` and the console shows a real empty state, never a sample chart.
-   */
-  questions: {
-    windowDays: 7
-    empty: boolean
-    mix: QuestionTypeMix
-    byMode: QuestionsByMode[]
-    note: string
-  }
+  asks: { id: string; ts: number; mode: string; preview: string; cache_status: string; provider: string }[]
   proposals: {
     id: string
     skill_id: string
@@ -109,23 +134,6 @@ export interface DashboardPayload {
     created_by: string
     created_at: number
   }[]
-  licenses: {
-    empty: boolean
-    seats: {
-      device: string
-      os: string
-      version: string
-      lastSeen: number
-      country: string | null
-      live: boolean
-    }[]
-  }
-  roi: {
-    asks7d: number
-    liveSeats: number
-    cost7d: string | null
-    note: string
-  }
   crm: {
     counts: Record<CrmStatus, number>
     landing: CrmLanding
@@ -147,36 +155,96 @@ export interface DashboardPayload {
       action: string | null
     }[]
   }
-}
-
-export type QuestionsByMode = {
-  mode: string
-  asks: number
-  typed: number
-  /** Top three labels with counts, e.g. "Behavioral 5". Empty when nothing in this mode carried a type. */
-  top: { label: string; count: number }[]
-}
-
-/** Mode × type cross-tab for the console table. Modes sorted by volume; ties alphabetical. */
-export function questionsByMode(asks: { mode: string | null; question_type: string | null | undefined }[]): QuestionsByMode[] {
-  const byMode = new Map<string, (string | null | undefined)[]>()
-  for (const a of asks) {
-    const mode = a.mode || 'unknown'
-    const list = byMode.get(mode) ?? []
-    list.push(a.question_type)
-    byMode.set(mode, list)
+  events: ConsoleEvent[]
+  profiles: ProfileRow[]
+  keys: {
+    ingestBound: boolean
+    promptBound: boolean
+    skillBound: boolean
+    vaultBound: boolean
+    oauthBound: boolean
+    vault: VaultKeyMeta[]
   }
-  return [...byMode.entries()]
-    .map(([mode, types]) => {
-      const mix = aggregateQuestionTypes(types)
-      return {
-        mode,
-        asks: mix.total,
-        typed: mix.classified,
-        top: mix.bars.slice(0, 3).map((b) => ({ label: b.label, count: b.count }))
-      }
-    })
-    .sort((a, b) => b.asks - a.asks || a.mode.localeCompare(b.mode))
+  cloudflare: CloudflareOverview
+  licenses: {
+    empty: boolean
+    error: string | null
+    rows: {
+      device: string
+      hostname: string | null
+      email: string | null
+      os: string
+      appVersion: string
+      license: string | null
+      approval: SeatApproval
+      lastSeen: number
+      keysAuthorized: boolean
+    }[]
+    issued: { jti: string; last4: string; days: number; exp: number; revoked: number; createdAt: number }[]
+  }
+  roi: {
+    costToday: string | null
+    cost7d: string | null
+    liveSeats: number
+    seats30m: number
+    cacheHit: string | null
+    asksToday: number
+    licensed: number
+    approved: number
+    timeSaved: string
+    timeSavedSub: string
+    value: string
+    valueSub: string
+    source: 'd1.asks+d1.seats'
+  }
+  gateway: {
+    rows: { provider: string; asks: number; tokens: number | null; estimate: string | null; funded: boolean }[]
+  }
+  notices: {
+    id: string
+    kind: string
+    title: string
+    detail: string
+    ts: number
+    profile: string | null
+    city: string | null
+    os: string | null
+  }[]
+  geo: RealtimeGeoRow[]
+  geoRegions: GeoRegionRow[]
+}
+
+export interface ConsoleEvent {
+  id: string
+  ts: number
+  name: string
+  hostname: string | null
+  email: string | null
+  chips: SafeChip[]
+}
+
+export interface ProfileRow {
+  device: string
+  deviceId: string
+  hostname: string | null
+  email: string | null
+  os: string
+  appVersion: string
+  country: string | null
+  city: string | null
+  region: string | null
+  lastSeen: number
+  live: boolean
+  license: string | null
+  approval: SeatApproval
+}
+
+export type DashboardKeyFlags = {
+  ingestBound: boolean
+  promptBound: boolean
+  skillBound: boolean
+  vaultBound: boolean
+  oauthBound: boolean
 }
 
 export type CrmLanding = {
@@ -338,16 +406,252 @@ function uniqueSeats(seats: SeatRow[], since: number): number {
   return ids.size
 }
 
-export async function buildDashboard(store: OperatorStore, email: string, now: number): Promise<DashboardPayload> {
-  const seats = await store.listSeats()
+function displayProfile(seat: SeatRow | undefined): { hostname: string | null; email: string | null } {
+  return {
+    hostname: seat?.hostname && !looksLikeSecret(seat.hostname) ? seat.hostname : null,
+    email: seat?.sso_email && !looksLikeSecret(seat.sso_email) ? seat.sso_email : null
+  }
+}
+
+function seatContextChips(seat: SeatRow | undefined, extra: Record<string, unknown> = {}): SafeChip[] {
+  return safeChips({
+    city: seat?.city,
+    region: seat?.region,
+    country: seat?.country,
+    os: seat?.os,
+    device: seat?.device_id ? seat.device_id.slice(0, 8) : undefined,
+    license: seat?.license,
+    ...extra
+  })
+}
+
+function eventFromStored(row: EventRow, seatsById: Map<string, SeatRow>): ConsoleEvent {
+  const seat = row.device_id ? seatsById.get(row.device_id) : undefined
+  const who = displayProfile(seat)
+  return {
+    id: row.id,
+    ts: row.ts,
+    name: looksLikeSecret(row.kind) ? 'event' : row.kind,
+    hostname: who.hostname,
+    email: who.email || (row.actor && !looksLikeSecret(row.actor) ? row.actor : null),
+    chips: seatContextChips(seat, {
+      country: row.country || seat?.country,
+      detail: row.detail
+    })
+  }
+}
+
+function mergeEvents(stored: ConsoleEvent[], extra: ConsoleEvent[]): ConsoleEvent[] {
+  const by = new Map<string, ConsoleEvent>()
+  for (const e of [...stored, ...extra]) {
+    if (!by.has(e.id)) by.set(e.id, e)
+  }
+  return [...by.values()].sort((a, b) => b.ts - a.ts).slice(0, 80)
+}
+
+function recapMeetings(events: EventRow[]): { durationMin: number }[] {
+  const out: { durationMin: number }[] = []
+  for (const e of events) {
+    if (e.kind !== 'listen' && e.kind !== 'recap') continue
+    const m = /^(\d+(?:\.\d+)?)m$/.exec((e.detail || '').trim())
+    if (m) out.push({ durationMin: Number(m[1]) })
+  }
+  return out
+}
+
+function presenceEvents(seats: SeatRow[], now: number): ConsoleEvent[] {
+  return seats.map((s) => {
+    const who = displayProfile(s)
+    return {
+      id: `seen-${s.device_id}`,
+      ts: s.last_seen,
+      name: now - s.last_seen < ONLINE_MS ? 'live' : 'seen',
+      hostname: who.hostname,
+      email: who.email,
+      chips: seatContextChips(s)
+    }
+  })
+}
+
+/** CLI-shaped providers per the Overview cliAsks/operatorAsks split. Distinct from vault's
+ *  FORBIDDEN_VAULT_PROVIDERS (which also blocks 'local'); this is only about ask attribution. */
+const CLI_ASK_PROVIDERS = new Set(['claude-cli', 'codex-cli', 'dust'])
+
+function uniqueDevicesPerBucket(pulses: PulseRow[], starts: number[], step: number, now: number): number[] {
+  return starts.map((t, i) => {
+    const end = i === starts.length - 1 ? now + 1 : t + step
+    const ids = new Set<string>()
+    for (const p of pulses) {
+      if (p.kind === 'heartbeat' && p.ts >= t && p.ts < end) ids.add(p.device_id)
+    }
+    return ids.size
+  })
+}
+
+function countPerBucket(events: EventRow[], kind: string, starts: number[], step: number, now: number): number[] {
+  return starts.map((t, i) => {
+    const end = i === starts.length - 1 ? now + 1 : t + step
+    let n = 0
+    for (const e of events) {
+      if (e.kind === kind && e.ts >= t && e.ts < end) n++
+    }
+    return n
+  })
+}
+
+/** Reported token total for one ask (input side from the cache breakdown, plus output). Null when the
+ *  provider reported nothing, so the caller can tell "0 tokens" apart from "not reported". */
+function askTokenTotal(a: {
+  cache_read: number | null
+  cache_write: number | null
+  cache_uncached: number | null
+  output_tokens: number | null
+}): number | null {
+  if (a.cache_read == null && a.cache_write == null && a.cache_uncached == null && a.output_tokens == null) return null
+  return (a.cache_read ?? 0) + (a.cache_write ?? 0) + (a.cache_uncached ?? 0) + (a.output_tokens ?? 0)
+}
+
+function tokensReported(asks: AskRow[]): number | null {
+  let total = 0
+  let any = false
+  for (const a of asks) {
+    const t = askTokenTotal(a)
+    if (t == null) continue
+    any = true
+    total += t
+  }
+  return any ? total : null
+}
+
+function minutesFromDetail(detail: string | null): number | null {
+  const m = /^(\d+(?:\.\d+)?)m$/.exec((detail || '').trim())
+  return m ? Number(m[1]) : null
+}
+
+function listenMinutesReported(events: EventRow[]): number | null {
+  let total = 0
+  let any = false
+  for (const e of events) {
+    if (e.kind !== 'listen') continue
+    const mins = minutesFromDetail(e.detail)
+    if (mins == null) continue
+    any = true
+    total += mins
+  }
+  return any ? total : null
+}
+
+function averageDurationMs(asks: AskRow[]): number | null {
+  const durations = asks.map((a) => a.total_ms).filter((v): v is number => v != null)
+  if (!durations.length) return null
+  return Math.round(durations.reduce((n, v) => n + v, 0) / durations.length)
+}
+
+function buildOverviewOps(args: {
+  now: number
+  wau: number
+  dau: number
+  live: number
+  live30: number
+  hourStarts: number[]
+  dayStarts: number[]
+  hours24: SeriesPoint[]
+  pulses: PulseRow[]
+  weekAsks: AskRow[]
+  storedEvents: EventRow[]
+  crmFailRate: number | null
+  vault: VaultKeyMeta[]
+}): DashboardOps {
+  const { now, wau, dau, live, live30, hourStarts, dayStarts, hours24, pulses, weekAsks, storedEvents, crmFailRate, vault } = args
+  const dailyUnique = uniqueDevicesPerBucket(pulses, dayStarts, DAY, now)
+  const recapEvents = storedEvents.filter((e) => e.kind === 'recap')
+  const fundedProviders = new Set(vault.filter((v) => v.status === 'active').map((v) => v.provider))
+  let cliAsks = 0
+  let operatorAsks = 0
+  for (const a of weekAsks) {
+    const provider = a.provider || ''
+    if (!CLI_ASK_PROVIDERS.has(provider) && fundedProviders.has(provider)) operatorAsks++
+    else cliAsks++
+  }
+  return {
+    uniqueSessions: wau,
+    uniqueSeries: dailyUnique,
+    sessionsDay: dau,
+    sessionsDaySeries: dailyUnique,
+    liveNow: live,
+    liveSeries: hours24.map((p) => p.heartbeats),
+    live30,
+    timeSaved: recapEvents.length ? timeSavedFromMeetings(recapMeetings(storedEvents)).savedMinutes : null,
+    tokens: tokensReported(weekAsks),
+    tokenSeries: hourStarts.map((t, i) => {
+      const end = i === hourStarts.length - 1 ? now + 1 : t + HOUR
+      let total = 0
+      for (const a of weekAsks) {
+        if (a.ts < t || a.ts >= end) continue
+        total += askTokenTotal(a) ?? 0
+      }
+      return total
+    }),
+    apiCalls: weekAsks.length,
+    apiSeries: hours24.map((p) => p.asks),
+    listenMinutes: listenMinutesReported(storedEvents),
+    recapCount: recapEvents.length,
+    recapSeries: countPerBucket(storedEvents, 'recap', dayStarts, DAY, now),
+    cliAsks,
+    operatorAsks,
+    crmFailRate,
+    durationMs: averageDurationMs(weekAsks),
+    meetings: recapEvents.length
+  }
+}
+
+function sanitizeVaultMeta(v: VaultKeyMeta): VaultKeyMeta {
+  return {
+    id: v.id && !looksLikeSecret(v.id) ? v.id : 'key',
+    provider: looksLikeSecret(v.provider) ? 'provider' : v.provider,
+    label: looksLikeSecret(v.label) ? 'key' : v.label,
+    last4: /^\w{2,8}$/.test(v.last4) ? v.last4 : '----',
+    status: v.status,
+    createdAt: v.createdAt,
+    rotatedAt: v.rotatedAt,
+    revokedAt: v.revokedAt
+  }
+}
+
+export async function buildDashboard(
+  store: OperatorStore,
+  email: string,
+  now: number,
+  keys: DashboardKeyFlags = {
+    ingestBound: false,
+    promptBound: false,
+    skillBound: false,
+    vaultBound: false,
+    oauthBound: false
+  },
+  cloudflare: CloudflareOverview = missingCloudflareOverview()
+): Promise<DashboardPayload> {
+  const seats = (await store.listSeats()).filter(isRealSeat)
   const asks = await store.listAsks(2000)
   const pulses = await store.listPulses(now - 7 * DAY)
   const proposals = await store.listProposals()
   const audit = await store.listAudit(80)
   const crm = await store.listCrm(200)
   const packs = await store.listPacks()
+  const storedEvents = await store.listEvents(80)
+  const vault = await store.listVaultMeta()
+  const issued = await store.listIssuedLicenses()
+  const activeJti = new Set(issued.filter((l) => issuedLicenseActive(l, now)).map((l) => l.jti))
+  const keysOn = (s: SeatRow): boolean => {
+    if ((s.approval || '').trim().toLowerCase() === 'revoked') return false
+    if (isApprovedSeat(s)) return true
+    const jti = parseLicenseId(s.license_jti)
+    return Boolean(jti && activeJti.has(jti))
+  }
+  const seatsById = new Map(seats.map((s) => [s.device_id, s]))
 
   const live = seats.filter((s) => now - s.last_seen < ONLINE_MS).length
+  const live30 = seats.filter((s) => now - s.last_seen < 30 * 60 * 1000).length
   const dau = uniqueSeats(seats, now - DAY)
   const wau = uniqueSeats(seats, now - 7 * DAY)
   const versions = new Set(seats.map((s) => s.app_version).filter(Boolean)).size
@@ -473,8 +777,7 @@ export async function buildDashboard(store: OperatorStore, email: string, now: n
 
   const counts = Object.fromEntries(CRM_STATUSES.map((s) => [s, 0])) as Record<CrmStatus, number>
   for (const row of crm) counts[row.status]++
-
-  const questionMix = aggregateQuestionTypes(weekAsks.map((a) => a.question_type))
+  const crmLanding = crmLandingKpis(crm, now)
 
   return {
     email,
@@ -497,6 +800,21 @@ export async function buildDashboard(store: OperatorStore, email: string, now: n
         return slice.hitRate == null ? 0 : Math.round(slice.hitRate * 100)
       })
     },
+    ops: buildOverviewOps({
+      now,
+      wau,
+      dau,
+      live,
+      live30,
+      hourStarts,
+      dayStarts,
+      hours24,
+      pulses,
+      weekAsks,
+      storedEvents,
+      crmFailRate: crmLanding.failRatePct,
+      vault
+    }),
     scale: {
       hours24,
       days7,
@@ -509,26 +827,6 @@ export async function buildDashboard(store: OperatorStore, email: string, now: n
       heatmap,
       adoption: mix(seats.map((s) => s.app_version))
     },
-    licenses: {
-      empty: seats.length === 0,
-      seats: seats
-        .slice()
-        .sort((a, b) => b.last_seen - a.last_seen)
-        .map((s) => ({
-          device: s.device_id.slice(0, 10),
-          os: s.os || 'unknown',
-          version: s.app_version || 'unknown',
-          lastSeen: s.last_seen,
-          country: s.country,
-          live: now - s.last_seen < ONLINE_MS
-        }))
-    },
-    roi: {
-      asks7d: weekAsks.length,
-      liveSeats: live,
-      cost7d,
-      note: 'Estimate from reported Asks. Missing usage is not reported, never invented.'
-    },
     map: {
       countries,
       dots,
@@ -540,16 +838,8 @@ export async function buildDashboard(store: OperatorStore, email: string, now: n
       mode: a.mode || '',
       preview: a.preview || 'Ask',
       cache_status: a.cache_status || 'not-reported',
-      provider: a.provider || '',
-      questionType: a.question_type ? QUESTION_TYPE_LABELS[normalizeQuestionType(a.question_type)] : 'not reported'
+      provider: a.provider || ''
     })),
-    questions: {
-      windowDays: 7,
-      empty: weekAsks.length === 0,
-      mix: questionMix,
-      byMode: questionsByMode(weekAsks),
-      note: 'Type is a label the seat computes locally. Question text never rides with it; Reveal is separate and audited.'
-    },
     proposals: proposals.map((p) => ({
       id: p.id,
       skill_id: p.skill_id,
@@ -563,7 +853,7 @@ export async function buildDashboard(store: OperatorStore, email: string, now: n
     })),
     crm: {
       counts,
-      landing: crmLandingKpis(crm, now),
+      landing: crmLanding,
       funnel: crmFunnelByConnector(crm),
       rows: crm.map((r) => ({
         id: r.id,
@@ -581,6 +871,221 @@ export async function buildDashboard(store: OperatorStore, email: string, now: n
         meetingHash: r.meeting_hash,
         action: r.action
       }))
-    }
+    },
+    events: mergeEvents(
+      storedEvents.map((e) => eventFromStored(e, seatsById)),
+      [
+        ...presenceEvents(seats, now),
+        ...asks.slice(0, 40).map((a) => {
+          const who = displayProfile(seatsById.get(a.device_id))
+          return {
+            id: `ask-${a.id}`,
+            ts: a.ts,
+            name: 'ask',
+            hostname: who.hostname,
+            email: who.email,
+            chips: seatContextChips(seatsById.get(a.device_id), {
+              mode: a.mode,
+              provider: a.provider,
+              cache: a.cache_status
+            })
+          }
+        }),
+        ...crm.slice(0, 40).map((r) => {
+          const who = displayProfile(seatsById.get(r.device_id))
+          return {
+            id: `crm-${r.id}`,
+            ts: r.ts,
+            name: 'crm',
+            hostname: who.hostname,
+            email: who.email,
+            chips: seatContextChips(seatsById.get(r.device_id), {
+              status: r.status,
+              connector: r.connector,
+              action: r.action
+            })
+          }
+        })
+      ]
+    ),
+    profiles: seats
+      .slice()
+      .sort((a, b) => b.last_seen - a.last_seen)
+      .map((s) => ({
+        device: s.device_id.slice(0, 8),
+        deviceId: s.device_id,
+        hostname: s.hostname && !looksLikeSecret(s.hostname) ? s.hostname : null,
+        email: s.sso_email && !looksLikeSecret(s.sso_email) ? s.sso_email : null,
+        os: s.os,
+        appVersion: s.app_version,
+        country: s.country,
+        city: s.city,
+        region: s.region ?? null,
+        lastSeen: s.last_seen,
+        live: now - s.last_seen < ONLINE_MS,
+        license: s.license && !looksLikeSecret(s.license) ? s.license : null,
+        approval: approvalOf(s)
+      })),
+    licenses: (() => {
+      const rows = seats
+        .slice()
+        .sort((a, b) => b.last_seen - a.last_seen)
+        .map((s) => ({
+          device: s.device_id,
+          hostname: s.hostname && !looksLikeSecret(s.hostname) ? s.hostname : null,
+          email: s.sso_email && !looksLikeSecret(s.sso_email) ? s.sso_email : null,
+          os: s.os,
+          appVersion: s.app_version,
+          license: s.license && !looksLikeSecret(s.license) ? s.license : null,
+          approval: approvalOf(s),
+          lastSeen: s.last_seen,
+          keysAuthorized: keysOn(s)
+        }))
+      return {
+        empty: rows.length === 0,
+        error: rows.length === 0 ? LICENSES_EMPTY : null,
+        rows,
+        issued: issued.map((r) => ({
+          jti: r.jti,
+          last4: r.last4,
+          days: r.days,
+          exp: r.exp,
+          revoked: r.revoked,
+          createdAt: r.created_at
+        }))
+      }
+    })(),
+    roi: {
+      costToday,
+      cost7d,
+      liveSeats: live,
+      seats30m: live30,
+      cacheHit: sliceToday.hitRate == null ? null : `${Math.round(sliceToday.hitRate * 100)}%`,
+      asksToday: todayAsks.length,
+      licensed: seats.filter((s) => {
+        const lic = (s.license || '').toLowerCase()
+        return lic.includes('licensed') || lic === 'approved' || lic === 'trial' || lic === 'grace'
+      }).length,
+      approved: seats.filter((s) => isApprovedSeat(s)).length,
+      timeSaved: formatSavedTime(timeSavedFromMeetings(recapMeetings(storedEvents)).savedMinutes),
+      timeSavedSub: (() => {
+        const n = recapMeetings(storedEvents).length
+        return n ? `${n} recaps · estimate` : 'no recaps ingested'
+      })(),
+      value: costToday ?? cost7d ?? 'not reported',
+      valueSub: costToday ? 'asks today · list price' : cost7d ? 'asks 7d · list price' : 'D1 asks · not reported',
+      source: 'd1.asks+d1.seats'
+    },
+    gateway: {
+      rows: (() => {
+        const funded = new Set(vault.filter((v) => v.status === 'active').map((v) => v.provider))
+        const by = new Map<string, { asks: number; tokens: number; anyTok: boolean; usd: number; anyCost: boolean }>()
+        for (const a of weekAsks) {
+          const provider = a.provider || 'unknown'
+          const cur = by.get(provider) ?? { asks: 0, tokens: 0, anyTok: false, usd: 0, anyCost: false }
+          cur.asks += 1
+          const tok = (a.input_tokens ?? 0) + (a.output_tokens ?? 0) + (a.cache_read ?? 0) + (a.cache_write ?? 0)
+          if (a.input_tokens != null || a.output_tokens != null || a.cache_read != null) {
+            cur.tokens += tok
+            cur.anyTok = true
+          }
+          const est = estimateCacheCost(
+            {
+              cacheRead: a.cache_read ?? undefined,
+              cacheWrite: a.cache_write ?? undefined,
+              cacheUncached: a.cache_uncached ?? undefined,
+              cacheStatus: (a.cache_status as AskLogLine['cacheStatus']) ?? undefined,
+              cacheTtl: (a.cache_ttl as AskLogLine['cacheTtl']) ?? undefined,
+              outputTokens: a.output_tokens ?? undefined
+            },
+            a.model || '',
+            a.provider || undefined
+          )
+          if (est) {
+            cur.usd += est.usd
+            cur.anyCost = true
+          }
+          by.set(provider, cur)
+        }
+        return [...by.entries()]
+          .map(([provider, cur]) => ({
+            provider,
+            asks: cur.asks,
+            tokens: cur.anyTok ? cur.tokens : null,
+            estimate: cur.anyCost ? formatUsdEstimate(cur.usd) : null,
+            funded: funded.has(provider)
+          }))
+          .sort((a, b) => b.asks - a.asks)
+      })()
+    },
+    notices: [
+      ...seats
+        .filter((s) => !isApprovedSeat(s))
+        .map((s) => {
+          const who = displayProfile(s)
+          return {
+            id: `seat-${s.device_id}`,
+            kind: 'seat-pending',
+            title: 'Seat waiting for approval',
+            detail: [who.hostname, who.email, s.os].filter(Boolean).join(' · ') || s.device_id.slice(0, 8),
+            ts: s.last_seen,
+            profile: who.hostname || who.email,
+            city: s.city && !looksLikeSecret(s.city) ? s.city : null,
+            os: s.os || null
+          }
+        }),
+      ...crm
+        .filter((r) => r.status === 'failed' || r.status === 'expired')
+        .map((r) => {
+          const who = displayProfile(seatsById.get(r.device_id))
+          const seat = seatsById.get(r.device_id)
+          return {
+            id: `crm-${r.id}`,
+            kind: 'crm-failed',
+            title: `${r.connector} push ${r.status}`,
+            detail: r.last_error && !looksLikeSecret(r.last_error) ? r.last_error : r.title,
+            ts: r.ts,
+            profile: who.hostname || who.email,
+            city: seat?.city && !looksLikeSecret(seat.city) ? seat.city : null,
+            os: seat?.os || null
+          }
+        }),
+      ...proposals
+        .filter((p) => p.status === 'pending')
+        .map((p) => ({
+          id: `skill-${p.id}`,
+          kind: 'skill-pending',
+          title: 'Skill diff pending',
+          detail: `${p.skill_id} ${p.from_version}`,
+          ts: p.created_at,
+          profile: p.created_by && !looksLikeSecret(p.created_by) ? p.created_by : null,
+          city: null,
+          os: null
+        }))
+    ]
+      .sort((a, b) => b.ts - a.ts)
+      .slice(0, 80),
+    keys: {
+      ingestBound: keys.ingestBound,
+      promptBound: keys.promptBound,
+      skillBound: keys.skillBound,
+      vaultBound: keys.vaultBound,
+      oauthBound: keys.oauthBound,
+      vault: vault.map(sanitizeVaultMeta)
+    },
+    cloudflare: {
+      worker: cloudflare.worker,
+      connected: cloudflare.connected,
+      error: cloudflare.error,
+      requests: cloudflare.requests,
+      errors: cloudflare.errors,
+      cpuMs: cloudflare.cpuMs,
+      range: cloudflare.range,
+      workers: cloudflare.workers.filter((w) => !looksLikeSecret(w)),
+      d1Name: cloudflare.d1Name && !looksLikeSecret(cloudflare.d1Name) ? cloudflare.d1Name : null,
+      d1Id: cloudflare.d1Id && !looksLikeSecret(cloudflare.d1Id) ? cloudflare.d1Id : null
+    },
+    geo: realtimeGeoRows(seats),
+    geoRegions: geoRegionRows(seats)
   }
 }

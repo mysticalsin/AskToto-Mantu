@@ -12,7 +12,7 @@ This Worker is **not** the AI token proxy (`cloudflare-proxy/`, Worker `metis-cl
 
 New Worker name: `metis-operator`. Cloudflare account already in use: `tony.walteur@gmail.com`, account id `294885a27b3cc0a1cbe5d0ccbe38de4f`.
 
-The admin UI is Access-gated. Only two emails can open it. Electron devices never see Access; they HMAC-sign ingest.
+The admin UI is for Tony only. Unauthenticated GET of `/`, `/keys`, `/licenses`, `/devices`, `/map`, `/cloudflare`, and the other console paths **302**s to Cloudflare Access login. Only two emails can pass the JWT allowlist. Electron devices never see Access; they HMAC-sign ingest.
 
 Do not enable **Protect this Worker** for all traffic. That would lock the Mac and Windows clients out.
 
@@ -22,14 +22,15 @@ Do not wrangler deploy from CI with secrets.
 
 | Path | Who | Auth |
 | --- | --- | --- |
-| `/` | Tony in a browser | Cloudflare Access, then the Worker checks identity |
-| `/v1/admin/*` | Tony in a browser | Same Access + Worker identity check. Includes `/v1/admin/dashboard` and CRM retry. |
+| `/` `/keys` `/licenses` `/devices` `/map` `/cloudflare` and other console paths | Tony in a browser | Unauth GET **302** to `{TEAM_DOMAIN}/cdn-cgi/access/login/{host}?redirect_url=…&next={path}`. Console after Access JWT (`Cf-Access-Jwt-Assertion` / `getIdentity()`) and allowlist. 503 if `TEAM_DOMAIN` is unset. |
+| `/v1/admin/*` | Tony in a browser | Access JWT + allowlist. JSON 401 if missing. Includes `/v1/admin/dashboard`, `/v1/admin/keys` write/rotate/revoke, and CRM retry. |
 | `POST /v1/ingest` | Métis desktop | HMAC only. Not Access. |
 | `POST /v1/heartbeat` | Métis desktop | HMAC only. Not Access. |
+| `POST /v1/use` | Métis desktop | HMAC only. Not Access. Brokers a funded Ask. Never returns a raw vault secret. |
 | `GET /v1/skills/manifest` | Métis desktop | HMAC only. Not Access. |
 | `GET /health` | Anyone | Open. Says whether secrets are bound, never what they are. |
 
-If Access is missing on an admin route, the Worker returns 401 even when a valid ingest HMAC is present. There is no password page and no `LICENSE_ADMIN_TOKEN`.
+If identity is missing on `/v1/admin/*`, the Worker returns JSON 401 even when a valid ingest HMAC is present. Unauth `POST /v1/admin/keys` is 401, not 404. Browser GET `/` is Access 302, not an HTML password form. No `LICENSE_ADMIN_TOKEN`.
 
 ## Secrets (Wrangler only)
 
@@ -40,12 +41,14 @@ Never put these in git, logs, PR bodies, or `wrangler.jsonc`.
 | `OPERATOR_INGEST_SECRET` | HMAC-SHA256 shared with each Métis seat (Settings → Privacy → Ingest secret, or `METIS_OPERATOR_INGEST_SECRET`). |
 | `OPERATOR_PROMPT_KEY` | 32-byte AES-GCM key, base64. Encrypts Ask text before D1. |
 | `OPERATOR_SKILL_PRIVATE_KEY` | Ed25519 PKCS8 PEM (or base64 of that PEM). Signs skill packs. The public half is committed in `src/main/operator-skill-key.ts`. |
+| `OPERATOR_VAULT_KEY` | 32-byte AES-GCM key, base64. Encrypts LLM API keys and the Cloudflare account token in D1. Separate from `OPERATOR_PROMPT_KEY`. |
 
 Generate locally, then `secret put` (hidden prompt, not a shell argument):
 
 ```sh
 openssl rand -base64 32          # OPERATOR_INGEST_SECRET
 openssl rand -base64 32          # OPERATOR_PROMPT_KEY (must decode to 32 bytes)
+openssl rand -base64 32          # OPERATOR_VAULT_KEY (must decode to 32 bytes)
 openssl genpkey -algorithm Ed25519 -out skill.pem
 # public JWK x, for resources/operator/pubkey.json on a production build:
 node -e "const {createPrivateKey,createPublicKey}=require('crypto');const fs=require('fs');const pub=createPublicKey(createPrivateKey(fs.readFileSync('skill.pem')));console.log(pub.export({format:'jwk'}).x)"
@@ -57,16 +60,16 @@ npx wrangler@4 login
 npx wrangler@4 secret put OPERATOR_INGEST_SECRET
 npx wrangler@4 secret put OPERATOR_PROMPT_KEY
 npx wrangler@4 secret put OPERATOR_SKILL_PRIVATE_KEY
+npx wrangler@4 secret put OPERATOR_VAULT_KEY
 ```
 
-Optional Access JWT fallback vars (after you create the Access app):
+`TEAM_DOMAIN` is a Wrangler var (`https://tony-walteur.cloudflareaccess.com`) so unauth console GET can 302 before the Access app exists. After Tony enables Zero Trust and creates **Métis Operator**, set the AUD:
 
 ```sh
-npx wrangler@4 secret put TEAM_DOMAIN
 npx wrangler@4 secret put POLICY_AUD
 ```
 
-`TEAM_DOMAIN` looks like `https://<team>.cloudflareaccess.com`. `POLICY_AUD` is the Access application AUD.
+If the team name is not `tony-walteur`, set `TEAM_DOMAIN` to `https://<team>.cloudflareaccess.com`. Unset team = Worker 503, not a password form. Exact Zero Trust app + policy: `docs/design/OPERATOR.md`.
 
 ## D1
 
@@ -97,23 +100,17 @@ npx wrangler@4 deploy
 
 `wrangler deploy` prints the `*.workers.dev` URL. Put that URL in Métis Settings → Privacy → Operator URL on each seat, plus the same ingest secret. Do not pack installers from this change.
 
-This VM does not create a live Access hostname. After deploy, set Access by hand (next section).
+Zero Trust org `tony-walteur` and the Access apps are created. Tony completes One-time PIN in a browser. Exact table: `docs/design/OPERATOR.md`.
 
-## Cloudflare Access (admin paths only)
+## Cloudflare Access (console + admin API only)
 
-Zero Trust → Access → Applications → Add an application → Self-hosted.
+1. Team `tony-walteur` → `TEAM_DOMAIN=https://tony-walteur.cloudflareaccess.com`.
+2. Self-hosted app **Métis Operator** on `metis-operator.tony-walteur.workers.dev` (Allow, two Tony emails).
+3. Bypass apps on `/health`, `/v1/ingest`, `/v1/heartbeat`, `/v1/use`, `/v1/skills/manifest`, and `/v1/admin` (Worker returns 401 JSON on admin).
+4. One-time PIN IdP. Do not click **Protect this Worker**.
+5. Bind `POLICY_AUD` (Métis Operator AUD) as a Worker secret.
 
-1. Application name: `Métis Operator`.
-2. Session duration: short (for example 24 hours).
-3. Domain: the Worker hostname (`metis-operator.<subdomain>.workers.dev`) **or** a custom hostname you attach later.
-4. Path policy 1: path `/` (and `/v1/admin` if the UI lets you add a second path). Protect `/` and `/v1/admin*`.
-5. Do **not** protect `/v1/ingest`, `/v1/heartbeat`, `/v1/skills/manifest`, `/v1/ask`, `/health`, or `/assets/*`. A 302 Access login HTML page is not a JS bundle.
-6. Identity: One-time PIN or Google. Allowlist emails, only these two:
-   - `tony.walteur@gmail.com`
-   - `twalteur@amaris.com`
-7. Do not add other emails. Do not use "Protect this Worker" on the Worker itself (that wraps every route).
-
-The Worker also calls `ctx.access.getIdentity()` and, if `TEAM_DOMAIN` + `POLICY_AUD` are set, verifies `Cf-Access-Jwt-Assertion` against the team JWKS. A request that never passed Access is 401.
+The Worker 302s unauth console GET to `{TEAM_DOMAIN}/cdn-cgi/access/login/{host}?redirect_url=…&next={path}`, then verifies `Cf-Access-Jwt-Assertion` / `ctx.access.getIdentity()` against the two Tony emails. Missing `TEAM_DOMAIN` is 503, not a homemade form.
 
 ## Métis client
 
@@ -128,9 +125,6 @@ While the app is up and both URL and secret are set:
 
 - Heartbeat about every 60 seconds.
 - After each typed/screen Ask: metrics always; question text only if the toggle is on. Never Listen transcripts, screen captures, audio, or API keys.
-- Metrics include a **question type** label (`factual`, `how-to`, `explain`, `compare`, `summarize`, `draft`, `translate`, `code`, `estimate`, `decision`, `screen`, `behavioral`, `other`, `unknown`). The seat computes it locally from a closed taxonomy in `src/shared/question-type.ts`; the Worker re-validates against that taxonomy and stores anything else as `unknown`, so the `asks.question_type` column can never hold free text. Screenshot Asks are always `screen`. The console's "Question types · 7d" panel reports coverage (how many Asks carried a type) instead of pretending every Ask is typed.
-
-Migration: an existing D1 needs `ALTER TABLE asks ADD COLUMN question_type TEXT` (in `schema-alter.sql`). Until it is applied the Worker still stores every Ask, without a type, and logs one warning per isolate.
 - Skill manifest on launch and every 6 hours. Overlay applies only when the ed25519 signature and sha256 match. Drafts never apply. Approve without Push does nothing on the client.
 
 Overlays land in `userData/skills-overrides` with `lock.json`. The shipped skill stays if the overlay is missing or the lock does not match.

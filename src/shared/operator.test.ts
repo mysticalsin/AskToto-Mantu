@@ -1,11 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
   cacheBadge,
+  cloudflareConnectHref,
+  DEFAULT_OPERATOR_URL,
   estimateCacheCost,
   formatUsdEstimate,
   mapAnthropicUsage,
   mapOpenAIUsage,
   operatorUrlConfigured,
+  sanitizeOperatorHostname,
+  sanitizeOperatorSsoEmail,
   shouldSendAskText,
   unsupportedCacheUsage
 } from './operator'
@@ -118,5 +122,28 @@ describe('cacheBadge', () => {
   it('does not treat missing as a hit', () => {
     expect(cacheBadge({ cacheStatus: 'not-reported' })).toBe('not-reported')
     expect(cacheBadge({ cacheRead: 10 })).toBe('hit')
+  })
+})
+
+describe('cloudflareConnectHref', () => {
+  it('defaults to the live Operator connect path', () => {
+    expect(cloudflareConnectHref({}, {})).toBe(`${DEFAULT_OPERATOR_URL}/cloudflare/connect`)
+  })
+
+  it('refuses http', () => {
+    expect(cloudflareConnectHref({ operatorUrl: 'http://localhost:8787' }, {})).toBeNull()
+  })
+})
+
+describe('operator seat identity', () => {
+  it('keeps a real hostname and SSO email and drops junk', () => {
+    expect(sanitizeOperatorHostname('Tonys-MacBook-Pro')).toBe('Tonys-MacBook-Pro')
+    expect(sanitizeOperatorHostname('Tony.walteur-pc')).toBe('Tony.walteur-pc')
+    expect(sanitizeOperatorHostname('not a host')).toBeNull()
+    expect(sanitizeOperatorHostname('')).toBeNull()
+    expect(sanitizeOperatorSsoEmail('Twalteur@amaris.com')).toBe('twalteur@amaris.com')
+    expect(sanitizeOperatorSsoEmail('Tony.walteur@gmail.com')).toBe('tony.walteur@gmail.com')
+    expect(sanitizeOperatorSsoEmail('not-an-email')).toBeNull()
+    expect(sanitizeOperatorSsoEmail('sk-ant-api03-abcdefghijklmnopqrstuvwxyz')).toBeNull()
   })
 })

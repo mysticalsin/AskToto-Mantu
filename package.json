@@ -36,6 +36,7 @@
     "test:proxy": "vitest run --config cloudflare-proxy/vitest.config.ts",
     "//test:operator": "Same reason as test:proxy: operator/ is outside the root vitest include globs. Chained into npm test.",
     "test:operator": "vitest run --config operator/vitest.config.ts",
+    "build:operator-client": "node operator/scripts/build-client.mjs",
     "test:smoke:import": "npm run build && node scripts/smoke-import.mjs",
     "check:xcode": "node scripts/check-xcode-tools.mjs",
     "build:native-mac": "node scripts/build-native-mac.mjs",

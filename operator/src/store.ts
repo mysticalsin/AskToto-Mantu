@@ -1,5 +1,17 @@
 import { type CrmSendRow } from './crm'
 
+export interface IssuedLicenseRow {
+  jti: string
+  last4: string
+  key_hash: string
+  days: number
+  iat: number
+  exp: number
+  revoked: number
+  created_at: number
+  created_by: string | null
+}
+
 export interface SeatRow {
   device_id: string
   seat_hash: string
@@ -9,9 +21,50 @@ export interface SeatRow {
   last_seen: number
   country: string | null
   city: string | null
+  region?: string | null
   lat: number | null
   lon: number | null
   last_index_at: number | null
+  hostname: string | null
+  sso_email: string | null
+  license: string | null
+  approval?: string | null
+  license_jti?: string | null
+}
+
+export interface EventRow {
+  id: string
+  ts: number
+  kind: string
+  actor: string | null
+  device_id: string | null
+  country: string | null
+  detail: string | null
+}
+
+export interface VaultKeyMeta {
+  id: string
+  provider: string
+  label: string
+  last4: string
+  status: string
+  createdAt: number
+  rotatedAt: number | null
+  revokedAt: number | null
+}
+
+export interface VaultKeyRow {
+  id: string
+  provider: string
+  label: string
+  last4: string
+  cipher: string
+  iv: string
+  status: string
+  created_at: number
+  created_by: string
+  rotated_at: number | null
+  revoked_at: number | null
 }
 
 export interface AskRow {
@@ -37,11 +90,6 @@ export interface AskRow {
   prompt_cipher: string | null
   prompt_iv: string | null
   preview: string | null
-  /**
-   * Closed-taxonomy label from src/shared/question-type.ts, normalized on ingest. null = the seat never
-   * sent one (pre-type build), 'unknown' = it sent one it could not classify. Never free text.
-   */
-  question_type: string | null
 }
 
 export interface PulseRow {
@@ -51,6 +99,7 @@ export interface PulseRow {
   kind: 'heartbeat' | 'ask'
   country: string | null
   city: string | null
+  region?: string | null
 }
 
 export interface ProposalRow {
@@ -82,6 +131,7 @@ export interface OperatorStore {
   takeNonce(nonce: string, ts: number): Promise<boolean>
   hitRate(deviceId: string, now: number, windowMs: number, max: number): Promise<boolean>
   upsertSeat(row: SeatRow): Promise<void>
+  updateSeatApproval(deviceId: string, approval: string): Promise<boolean>
   insertAsk(row: AskRow): Promise<void>
   updateAskRating(id: string, rating: string): Promise<void>
   listAsks(limit: number): Promise<AskRow[]>
@@ -101,6 +151,15 @@ export interface OperatorStore {
   listCrmRetries(deviceId: string): Promise<CrmSendRow[]>
   audit(id: string, ts: number, actor: string, action: string, askId: string | null, detail: string): Promise<void>
   listAudit(limit: number): Promise<{ ts: number; actor: string; action: string; ask_id: string | null; detail: string }[]>
+  insertEvent(row: EventRow): Promise<void>
+  listEvents(limit: number): Promise<EventRow[]>
+  listVaultMeta(): Promise<VaultKeyMeta[]>
+  listVaultRows(): Promise<VaultKeyRow[]>
+  getVaultKey(id: string): Promise<VaultKeyRow | null>
+  putVaultKey(row: VaultKeyRow): Promise<void>
+  putIssuedLicense(row: IssuedLicenseRow): Promise<void>
+  getIssuedLicense(jti: string): Promise<IssuedLicenseRow | null>
+  listIssuedLicenses(): Promise<IssuedLicenseRow[]>
 }
 
 const PULSE_TTL_MS = 8 * 24 * 60 * 60 * 1000
@@ -115,6 +174,9 @@ export function memoryStore(): OperatorStore {
   const packs = new Map<string, PackRow>()
   const crm = new Map<string, CrmSendRow>()
   const audits: { id: string; ts: number; actor: string; action: string; ask_id: string | null; detail: string }[] = []
+  const events = new Map<string, EventRow>()
+  const vault = new Map<string, VaultKeyRow>()
+  const issued = new Map<string, IssuedLicenseRow>()
 
   return {
     async takeNonce(nonce) {
@@ -135,13 +197,30 @@ export function memoryStore(): OperatorStore {
       const prev = seats.get(row.device_id)
       seats.set(row.device_id, {
         ...row,
+        os: row.os && row.os !== 'unknown' ? row.os : prev?.os ?? row.os,
+        app_version: row.app_version || prev?.app_version || '',
         first_seen: prev?.first_seen ?? row.first_seen,
         country: row.country ?? prev?.country ?? null,
         city: row.city ?? prev?.city ?? null,
+        region: row.region ?? prev?.region ?? null,
         lat: row.lat ?? prev?.lat ?? null,
         lon: row.lon ?? prev?.lon ?? null,
-        last_index_at: row.last_index_at ?? prev?.last_index_at ?? null
+        last_index_at: row.last_index_at ?? prev?.last_index_at ?? null,
+        hostname: row.hostname ?? prev?.hostname ?? null,
+        sso_email: row.sso_email ?? prev?.sso_email ?? null,
+        license: row.license ?? prev?.license ?? null,
+        license_jti: row.license_jti ?? prev?.license_jti ?? null,
+        approval:
+          prev?.approval ??
+          row.approval ??
+          ((prev?.license || '').toLowerCase() === 'approved' ? 'approved' : 'pending')
       })
+    },
+    async updateSeatApproval(deviceId, approval) {
+      const prev = seats.get(deviceId)
+      if (!prev) return false
+      seats.set(deviceId, { ...prev, approval })
+      return true
     },
     async insertAsk(row) {
       asks.set(row.id, row)
@@ -217,6 +296,48 @@ export function memoryStore(): OperatorStore {
     },
     async listAudit(limit) {
       return audits.slice(-limit).reverse()
+    },
+    async insertEvent(row) {
+      events.set(row.id, row)
+    },
+    async listEvents(limit) {
+      return [...events.values()].sort((a, b) => b.ts - a.ts).slice(0, limit)
+    },
+    async listVaultMeta() {
+      return [...vault.values()]
+        .sort((a, b) => b.created_at - a.created_at)
+        .map(toVaultMeta)
+    },
+    async listVaultRows() {
+      return [...vault.values()].sort((a, b) => b.created_at - a.created_at)
+    },
+    async getVaultKey(id) {
+      return vault.get(id) ?? null
+    },
+    async putVaultKey(row) {
+      vault.set(row.id, row)
+    },
+    async putIssuedLicense(row) {
+      issued.set(row.jti, row)
+    },
+    async getIssuedLicense(jti) {
+      return issued.get(jti) ?? null
+    },
+    async listIssuedLicenses() {
+      return [...issued.values()].sort((a, b) => b.created_at - a.created_at)
     }
+  }
+}
+
+export function toVaultMeta(row: VaultKeyRow): VaultKeyMeta {
+  return {
+    id: row.id,
+    provider: row.provider,
+    label: row.label,
+    last4: row.last4,
+    status: row.status,
+    createdAt: row.created_at,
+    rotatedAt: row.rotated_at,
+    revokedAt: row.revoked_at
   }
 }
