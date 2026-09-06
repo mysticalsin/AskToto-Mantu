@@ -107,7 +107,7 @@ Zero Trust → Access → Applications → Add an application → Self-hosted.
 2. Session duration: short (for example 24 hours).
 3. Domain: the Worker hostname (`metis-operator.<subdomain>.workers.dev`) **or** a custom hostname you attach later.
 4. Path policy 1: path `/` (and `/v1/admin` if the UI lets you add a second path). Protect `/` and `/v1/admin*`.
-5. Do **not** protect `/v1/ingest`, `/v1/heartbeat`, `/v1/skills/manifest`, or `/health`.
+5. Do **not** protect `/v1/ingest`, `/v1/heartbeat`, `/v1/skills/manifest`, `/v1/ask`, `/health`, or `/assets/*`. A 302 Access login HTML page is not a JS bundle.
 6. Identity: One-time PIN or Google. Allowlist emails, only these two:
    - `tony.walteur@gmail.com`
    - `twalteur@amaris.com`

@@ -80,6 +80,13 @@ describe('AgentStatus composition', () => {
     expect(markup).not.toMatch(/>Connecting</)
   })
 
+  it('InlineOrb loading can sit beside a real percent', () => {
+    const markup = html(<InlineOrb kind="loading" percent={42} />)
+    expect(markup).toContain('data-agent-status="loading"')
+    expect(markup).toContain('42%')
+    expect(markup).not.toMatch(/>needed</)
+  })
+
   it('does not throw when prefers-reduced-motion is reduce', () => {
     const matchMedia = vi.fn().mockReturnValue({
       matches: true,

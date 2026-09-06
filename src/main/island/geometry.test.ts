@@ -17,8 +17,12 @@ import {
   hoverRestTop,
   hoverRestHeight,
   hoverWatchRestRect,
+  exclusiveMayUseSimpleFullScreen,
   exclusiveOnboardingBounds,
+  EXCLUSIVE_ONBOARDING_BACKGROUND,
   onboardingFitsWorkArea,
+  overlayWindowChrome,
+  OVERLAY_TRANSPARENT_BACKGROUND,
   parkAfterExclusiveOnboarding,
   overlayRestSize,
   isForbiddenMidFlowCard,
@@ -533,7 +537,7 @@ describe('DESIGN.md overlay contract', () => {
     expect(design).toMatch(/Act 4 light/)
     expect(design).toMatch(/GDPR/)
     expect(design).toMatch(/Portal/)
-    expect(design).toMatch(/Skip the tour/)
+    expect(design).toMatch(/No Skip/)
     expect(design).toMatch(/full-viewport muted looping video/)
     expect(design).toMatch(/liquid glass/)
     expect(design).toMatch(/Do not add or restyle overlay \/ onboarding UI unless it matches this document/)
@@ -630,6 +634,7 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(index).toMatch(/function applyExclusiveOnboardingStage/)
     expect(index).toMatch(/function exitExclusiveOnboardingStage/)
     expect(index).toMatch(/exclusiveOnboardingBounds/)
+    expect(index).toMatch(/exclusiveMayUseSimpleFullScreen\(overlayWindowTransparent\)/)
     expect(index).toMatch(/setSimpleFullScreen\(true\)/)
     expect(index).toMatch(/!cur\.onboardingDone && next\.onboardingDone/)
     expect(index).toMatch(/exitExclusiveOnboardingStage\(\)/)
@@ -647,10 +652,14 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     expect(exit).not.toMatch(/currentWidth = BAR_WIDTH/)
     expect(index).toMatch(/shouldIgnoreResizeWhilePeekResting/)
     const create = index.slice(index.indexOf('function createWindow'), index.indexOf('function resizeTo'))
-    expect(create).toMatch(/parkAfterExclusiveOnboarding/)
-    expect(create).toMatch(/onboardingLive \? stage.width : restPark.width/)
+    expect(create).toMatch(/firstPaintOverlayBounds/)
+    expect(create).toMatch(/width: firstPaint.width/)
     expect(create).toMatch(/islandResting = overlayUsesHover\(layout\)/)
     expect(create).not.toMatch(/width: onboardingLive \? stage.width : BAR_WIDTH/)
+    expect(create).not.toMatch(/onboardingLive \? stage.width : restPark.width/)
+    const live = index.slice(index.indexOf('function onboardingExclusiveLive'), index.indexOf('function applyExclusiveOnboardingStage'))
+    expect(live).toMatch(/return true/)
+    expect(live).not.toMatch(/return false/)
   })
 
   it('App fills the stage — OnboardingV2 is not wrapped in the overlapping Panel card', () => {
@@ -716,7 +725,24 @@ describe('exclusive onboarding stage (never a mid-flow card)', () => {
     const stageCss = css.slice(css.indexOf('.onboard-stage {'))
     expect(stageCss).toMatch(/@media \(prefers-reduced-motion: reduce\) \{[\s\S]*?animation:\s*none/)
     expect(stageCss).not.toMatch(/#3a2416|#5a3218|#2c1810|#f4b060/)
-    expect(index).toMatch(/backgroundColor: onboardingLive \? '#3A0B6B'/)
+    expect(overlayWindowChrome(true)).toEqual({
+      transparent: false,
+      backgroundColor: EXCLUSIVE_ONBOARDING_BACKGROUND,
+      fullscreenable: true,
+      roundedCorners: false
+    })
+    expect(overlayWindowChrome(false)).toEqual({
+      transparent: true,
+      backgroundColor: OVERLAY_TRANSPARENT_BACKGROUND,
+      fullscreenable: false,
+      roundedCorners: true
+    })
+    expect(exclusiveMayUseSimpleFullScreen(true)).toBe(false)
+    expect(exclusiveMayUseSimpleFullScreen(false)).toBe(true)
+    expect(index).toMatch(/overlayWindowChrome\(onboardingLive\)/)
+    expect(index).toMatch(/transparent: chrome\.transparent/)
+    expect(index).toMatch(/backgroundColor: chrome\.backgroundColor/)
+    expect(index).not.toMatch(/transparent:\s*true/)
   })
 })
 

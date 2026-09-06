@@ -49,7 +49,7 @@ CONFIG.colorC      = #7F00DA
 Clear / fog / scene background in the `#000` / `#05010a` range. Not `#0a0a24` navy. Not mint `#aef6cf` / jade `#5fe6a0` / bone `#eafff2`.
 
 ```
-STARFIELD_SCENES = problem | setup | personalize | license | ready | skip
+STARFIELD_SCENES = problem | setup | personalize | license | appearance | ready | skip
 shouldMountStarfield(scene) === STARFIELD_SCENES.includes(scene)
 shouldMountStarfield('hero') === false
 shouldMountStarfield('reveal') === false

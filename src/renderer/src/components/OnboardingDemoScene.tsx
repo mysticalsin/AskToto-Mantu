@@ -40,7 +40,7 @@ import { setOnboardingDemoActive } from '../lib/onboarding-demo-guard'
 import { ModeRecapView, modeRecapSections } from './ModeRecap'
 
 // Same weight rationale as App.tsx's own lazy Answer/Copilot: both pull in Markdown.tsx -> streamdown +
-// shiki/core, which has no reason to be in the eager boot chunk for a user who skips the tour.
+// shiki/core, which has no reason to be in the eager boot chunk before this act.
 const Answer = lazy(() => import('./Answer').then((m) => ({ default: m.Answer })))
 const Copilot = lazy(() => import('./Copilot').then((m) => ({ default: m.Copilot })))
 
@@ -153,13 +153,11 @@ export function OnboardingDemoScene({
   mode,
   onSetMode,
   onContinue,
-  onSkipToEnd,
   onPlayVideo
 }: {
   mode: string
   onSetMode: (mode: BuiltinMode) => void
   onContinue: () => void
-  onSkipToEnd: () => void
   onPlayVideo?: () => void
 }): JSX.Element {
   const reducedMotion = prefersReducedMotion()
@@ -300,15 +298,6 @@ export function OnboardingDemoScene({
         </button>
         <button type="button" onClick={onContinue} className="onboard-cta no-drag focus-ring">
           Set me up
-        </button>
-        {/* Skip-available-from-here (per brief): jumps straight to Personalize, keeping everything already
-            shown (unlike Hero's "Skip the tour", which restarts the legacy flow from its own slide 1). */}
-        <button
-          type="button"
-          onClick={onSkipToEnd}
-          className="fade-up no-drag text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)]"
-        >
-          Skip to the end
         </button>
       </div>
     </div>

@@ -4,6 +4,7 @@ import { streamDust } from './llm/dust'
 import { streamAnthropic } from './llm/anthropic'
 import { streamOpenAI } from './llm/openai'
 import { streamLocal } from './llm/local'
+import { streamOperatorAsk } from './llm/operator-ask'
 import { wrapEnterpriseStream } from './llm/enterprise-client'
 import { auditLog } from './logger'
 
@@ -15,6 +16,7 @@ export type { StreamHandlers, StreamOptions, StreamHandle } from './llm/shared'
  * always goes through createStream → wrapEnterpriseStream.
  */
 export function dispatchStream(opts: StreamOptions): StreamHandle {
+  if (opts.viaOperator) return streamOperatorAsk(opts)
   switch (opts.kind) {
     case 'cli':
       return streamCli(opts)

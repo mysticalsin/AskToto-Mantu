@@ -57,6 +57,14 @@ describe('tell the room — designed consent on personalize', () => {
     expect(css).toMatch(/width:\s*18px/)
     expect(css).not.toMatch(/\.onboard-act4::before/)
     expect(css).not.toMatch(/\.onboard-stage:has\(\.onboard-act4\)/)
+    expect(css).toMatch(/\.onboard-act4-heading::before/)
+    expect(experience).toMatch(/onboard-act4-heading/)
+    const kicker = css.slice(css.indexOf('.onboard-act4-kicker {'), css.indexOf('.onboard-act4-title {'))
+    expect(kicker).toMatch(/color:\s*#ffffff/)
+    expect(kicker).toMatch(/font-weight:\s*700/)
+    const title = css.slice(css.indexOf('.onboard-act4-title {'), css.indexOf('.onboard-act4-lead {'))
+    expect(title).toMatch(/color:\s*#ffffff/)
+    expect(title).toMatch(/font-weight:\s*700/)
     expect(experience).toMatch(/onboard-persona/)
     const personalizeSrc = experience.slice(experience.indexOf("scene === 'personalize'"))
     expect(personalizeSrc.slice(0, personalizeSrc.indexOf("scene === 'license'"))).not.toMatch(/bg-white\/\[0\.03\]/)
@@ -64,18 +72,17 @@ describe('tell the room — designed consent on personalize', () => {
   })
 
   it('Continue stays gated; finish still writes recordingConsent; Ready echoes the quote', () => {
-    expect(experience).toMatch(/if \(doneRef\.current \|\| !firstRunCanFinish\(\{ asrReady, consent \}\)\) return/)
+    expect(experience).toMatch(/if \(doneRef\.current \|\| !canMarkOnboardingDone\(\{ scene, asrReady, consent \}\)\) return/)
     expect(experience).toMatch(/onDone\(\{ mode, recordingConsent: true \}\)/)
     expect(experience).toMatch(/TELL_THE_ROOM_READY/)
     expect(experience).toMatch(/onboard-tell-quote--echo/)
     expect(experience).toMatch(/TELL_THE_ROOM_QUOTE/)
   })
 
-  it('Skip-the-tour still requires the tell-the-room checkbox before Get started', () => {
-    expect(experience).toMatch(/setScene\('skip'\)/)
-    const skip = experience.slice(experience.indexOf("scene === 'skip'"))
-    expect(skip).toMatch(/TellTheRoomCard/)
-    expect(skip).toMatch(/firstRunCanFinish\(\{ asrReady, consent \}\)/)
+  it('there is no Skip path; tell-the-room still gates Ready finish', () => {
+    expect(experience).not.toMatch(/setScene\('skip'\)/)
+    expect(experience).not.toMatch(/scene === 'skip'/)
+    expect(experience).toMatch(/canMarkOnboardingDone\(\{ scene, asrReady, consent \}\)/)
     expect(experience).not.toMatch(/legacy-full/)
     expect(experience).not.toMatch(/from '\.\/Onboarding'/)
   })

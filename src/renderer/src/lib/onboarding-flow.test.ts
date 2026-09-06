@@ -1,36 +1,56 @@
 import { describe, it, expect } from 'vitest'
-import { sceneAfterLicense, sceneAfterPersonalize, sceneAfterSetup } from './onboarding-flow'
+import {
+  canMarkOnboardingDone,
+  sceneAfterAppearance,
+  sceneAfterLicense,
+  sceneAfterPersonalize,
+  sceneAfterReveal,
+  sceneAfterSetup
+} from './onboarding-flow'
 
-describe('MQA-283 — Act 6 (Ready) tail re-point: setup always lands on personalize', () => {
-  it('never routes to license from setup any more (that hop moved after personalize)', () => {
+describe('MQA-283 — Ready stays the terminal act; appearance now sits after the demo', () => {
+  it('reveal continues into appearance', () => {
+    expect(sceneAfterReveal()).toBe('appearance')
+  })
+
+  it('appearance continues into setup', () => {
+    expect(sceneAfterAppearance()).toBe('setup')
+  })
+
+  it('setup continues into personalize', () => {
     expect(sceneAfterSetup()).toBe('personalize')
   })
-})
 
-describe('MQA-283 — personalize routes to license only when the gate is actually on', () => {
-  it('goes to ready when licenseGateEnabled is off (the default)', () => {
+  it('personalize goes to Ready when the license gate is off', () => {
     expect(sceneAfterPersonalize(false)).toBe('ready')
     expect(sceneAfterPersonalize(undefined)).toBe('ready')
     expect(sceneAfterPersonalize(null)).toBe('ready')
   })
 
-  it('goes to license only when the gate is explicitly on', () => {
+  it('personalize goes to license only when the gate is on, never appearance', () => {
     expect(sceneAfterPersonalize(true)).toBe('license')
+    expect(sceneAfterPersonalize(true)).not.toBe('appearance')
+    expect(sceneAfterPersonalize(false)).not.toBe('appearance')
   })
 
-  it('never routes to a legacy provider/API-key step — no such scene exists in this union', () => {
-    // Type-level guard: sceneAfterPersonalize's return type is OnboardingScene, which has no 'provider'
-    // member. This assertion exists so a future edit that widens the union gets caught by a green test
-    // reading a red diff, not just by a type error someone could work around with an `as` cast.
-    expect(['hero', 'problem', 'reveal', 'setup', 'personalize', 'license', 'ready']).toContain(
+  it('license continues into Ready', () => {
+    expect(sceneAfterLicense()).toBe('ready')
+  })
+
+  it('never routes to a legacy provider/API-key step', () => {
+    expect(['hero', 'problem', 'reveal', 'appearance', 'setup', 'personalize', 'license', 'ready']).toContain(
       sceneAfterPersonalize(true)
     )
     expect(sceneAfterPersonalize(true)).not.toBe('provider')
   })
 })
 
-describe('MQA-283 — license always finishes into ready, never back into personalize', () => {
-  it('always returns ready', () => {
-    expect(sceneAfterLicense()).toBe('ready')
+describe('canMarkOnboardingDone — Ready is the only finish', () => {
+  it('rejects every scene except completed Ready', () => {
+    expect(canMarkOnboardingDone({ scene: 'ready', asrReady: true, consent: true })).toBe(true)
+    expect(canMarkOnboardingDone({ scene: 'hero', asrReady: true, consent: true })).toBe(false)
+    expect(canMarkOnboardingDone({ scene: 'skip', asrReady: true, consent: true })).toBe(false)
+    expect(canMarkOnboardingDone({ scene: 'ready', asrReady: false, consent: true })).toBe(false)
+    expect(canMarkOnboardingDone({ scene: 'ready', asrReady: true, consent: false })).toBe(false)
   })
 })

@@ -434,8 +434,6 @@ export interface ListenApi {
   setLanguage: (language: string) => Promise<void>
 }
 
-const WORKER_IDLE_RELEASE_MS = 180_000 // 3 min: free the whisper worker + ONNX wasm after Listen goes idle
-
 /** Escapes regex metacharacters so a user-typed correction word can't corrupt the pattern. */
 function escapeRegExp(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -1616,7 +1614,7 @@ export function useListen(
         requestedQualityRef.current = quality
         asrLanguageRef.current = language
         if (workerIdleTimer.current) {
-          clearTimeout(workerIdleTimer.current) // re-arming before the idle release fires: keep the worker warm
+          clearTimeout(workerIdleTimer.current)
           workerIdleTimer.current = null
         }
         // A stop() may still be draining — cancel its initial kickoff timer and reset the stopping guard so
@@ -1656,88 +1654,97 @@ export function useListen(
         probeSwitchRunRef.current = null
         themDegradedRef.current = null // fresh session → no carried-over 'them' degradation cause
         setState((s) => ({ ...s, error: null, captureDegraded: null, listening: true, paused: false }))
-        try {
-          await window.toto.setListeningState(true)
-        } catch {
-          /* main may not have a tray; ignore */
+        // MQA-285: same-turn capture. Kick getUserMedia BEFORE any await so the click gesture still
+        // covers the permission prompt and the first second of audio is on the MediaStream — not lost
+        // behind setListeningState / parakeetEnsure / getAsrBundled. Windows queue in pump() until
+        // the (prewarmed) engine reports ready.
+        let micP: Promise<MediaStream> | null = null
+        if (source === 'mic' || source === 'both') {
+          micP = acquireMic(micDeviceIdRef.current)
         }
+        void window.toto.setListeningState(true).catch(() => {})
 
-        if (engine === 'parakeet') {
-          // Parakeet runs in the MAIN process; free any warm Whisper worker, then require its bundled model.
-          // ANY failure falls back to Whisper so Listen always works.
-          if (workerRef.current) {
-            workerRef.current.terminate()
-            workerRef.current = null
-          }
-          loadedQualityRef.current = null
-          readyRef.current = false
-          setState((s) => ({ ...s, loading: true, loadingPct: null }))
-          try {
-            const st = await window.toto.parakeetStatus()
-            if (!st.ready) {
-              const off = window.toto.onParakeetProgress((pct) => setState((s) => ({ ...s, loadingPct: pct })))
-              try {
-                const r = await window.toto.parakeetEnsure()
-                if (!r?.ok) throw new Error(r?.error || 'parakeet model unavailable')
-              } finally {
-                off()
-              }
+        void (async () => {
+          if (engine === 'parakeet') {
+            // Parakeet runs in the MAIN process; free any warm Whisper worker, then require its bundled model.
+            // ANY failure falls back to Whisper so Listen always works.
+            if (workerRef.current) {
+              workerRef.current.terminate()
+              workerRef.current = null
             }
+            loadedQualityRef.current = null
+            readyRef.current = false
+            setState((s) => ({ ...s, loading: true, loadingPct: null }))
+            try {
+              const st = await window.toto.parakeetStatus()
+              if (!liveRef.current) return
+              if (!st.ready) {
+                const off = window.toto.onParakeetProgress((pct) => setState((s) => ({ ...s, loadingPct: pct })))
+                try {
+                  const r = await window.toto.parakeetEnsure()
+                  if (!r?.ok) throw new Error(r?.error || 'parakeet model unavailable')
+                } finally {
+                  off()
+                }
+              }
+              if (!liveRef.current) return
+              readyRef.current = true
+              setState((s) => ({ ...s, ready: true, loading: false, loadingPct: null }))
+              pump()
+            } catch (e) {
+              console.warn('[listen] parakeet unavailable, using whisper:', (e as Error)?.message)
+              engineRef.current = 'whisper'
+            }
+          }
+
+          if (engine === 'apple') {
+            // Apple Speech also runs in the MAIN process via the mac-helper sidecar, but — unlike
+            // Parakeet — ships no bundled model to check/download: availability (macOS + helper present +
+            // on-device authorization) is resolved lazily inside appleSpeechTranscribe. A genuinely
+            // unavailable engine (non-mac, helper missing, authorization denied) simply returns '' for
+            // every window, which the empty-run fallback in pump() above already catches — so there is no
+            // separate status/ensure round trip to make here.
+            if (workerRef.current) {
+              workerRef.current.terminate()
+              workerRef.current = null
+            }
+            loadedQualityRef.current = null
             readyRef.current = true
             setState((s) => ({ ...s, ready: true, loading: false, loadingPct: null }))
             pump()
-          } catch (e) {
-            console.warn('[listen] parakeet unavailable, using whisper:', (e as Error)?.message)
-            engineRef.current = 'whisper'
           }
-        }
 
-        if (engine === 'apple') {
-          // Apple Speech also runs in the MAIN process via the mac-helper sidecar, but — unlike
-          // Parakeet — ships no bundled model to check/download: availability (macOS + helper present +
-          // on-device authorization) is resolved lazily inside appleSpeechTranscribe. A genuinely
-          // unavailable engine (non-mac, helper missing, authorization denied) simply returns '' for
-          // every window, which the empty-run fallback in pump() above already catches — so there is no
-          // separate status/ensure round trip to make here.
-          if (workerRef.current) {
-            workerRef.current.terminate()
-            workerRef.current = null
-          }
-          loadedQualityRef.current = null
-          readyRef.current = true
-          setState((s) => ({ ...s, ready: true, loading: false, loadingPct: null }))
-          pump()
-        }
+          if (!liveRef.current) return
 
-        if (!liveRef.current) return
-
-        if (engineRef.current === 'whisper') {
-          // If the quality changed since the warm worker loaded (or we just fell back from Parakeet),
-          // terminate so the next init reloads the correct model. Unchanged quality → instant warm restart.
-          if (workerRef.current && loadedQualityRef.current !== null && loadedQualityRef.current !== quality) {
-            workerRef.current.terminate()
-            workerRef.current = null
-            readyRef.current = false
+          if (engineRef.current === 'whisper') {
+            // If the quality changed since the warm worker loaded (or we just fell back from Parakeet),
+            // terminate so the next init reloads the correct model. Unchanged quality → instant warm restart.
+            if (workerRef.current && loadedQualityRef.current !== null && loadedQualityRef.current !== quality) {
+              workerRef.current.terminate()
+              workerRef.current = null
+              readyRef.current = false
+            }
+            loadedQualityRef.current = quality
+            setState((s) => ({ ...s, loading: !readyRef.current }))
+            // The worker selects the model: 'best' → WebGPU + whisper-large-v3-turbo (~99 languages); 'fast'
+            // (or fallback) → WASM + whisper-base. init is a no-op if a model is already loaded.
+            // bundled: true → worker uses the asr-model:// scheme (offline, packaged resources);
+            //          false → development-only remote resolver when local assets were not provisioned.
+            const bundled = await getAsrBundled()
+            if (!liveRef.current) return
+            if (!bundled && !navigator.onLine && !readyRef.current) {
+              // Non-bundled (remote-model) path needs the network to fetch the model and we're offline right
+              // now — skip the guaranteed-to-fail fetch and go straight to the "waiting for network" state
+              // instead of surfacing a raw, confusing fetch error. armNetworkRetry arms the auto-restart.
+              armNetworkRetry('offline')
+            } else {
+              // resetFollow: a fresh session must never inherit the previous meeting's converged
+              // language-follow state from a warm worker (see whisper.worker.ts's init handler).
+              ensureWorker().postMessage({ type: 'init', quality, bundled, language: asrLanguageRef.current, resetFollow: true })
+            }
+            if (readyRef.current) pump() // warm worker already ready → drain immediately
           }
-          loadedQualityRef.current = quality
-          setState((s) => ({ ...s, loading: !readyRef.current }))
-          // The worker selects the model: 'best' → WebGPU + whisper-large-v3-turbo (~99 languages); 'fast'
-          // (or fallback) → WASM + whisper-base. init is a no-op if a model is already loaded.
-          // bundled: true → worker uses the asr-model:// scheme (offline, packaged resources);
-          //          false → development-only remote resolver when local assets were not provisioned.
-          const bundled = await getAsrBundled()
-          if (!bundled && !navigator.onLine && !readyRef.current) {
-            // Non-bundled (remote-model) path needs the network to fetch the model and we're offline right
-            // now — skip the guaranteed-to-fail fetch and go straight to the "waiting for network" state
-            // instead of surfacing a raw, confusing fetch error. armNetworkRetry arms the auto-restart.
-            armNetworkRetry('offline')
-          } else {
-            // resetFollow: a fresh session must never inherit the previous meeting's converged
-            // language-follow state from a warm worker (see whisper.worker.ts's init handler).
-            ensureWorker().postMessage({ type: 'init', quality, bundled, language: asrLanguageRef.current, resetFollow: true })
-          }
-          if (readyRef.current) pump() // warm worker already ready → drain immediately
-        }
+        })()
 
         // Capture each side INDEPENDENTLY. The mic ("you") and the system loopback ("them") fail for
         // different reasons (mic = Microphone permission; loopback = Screen Recording + Electron's
@@ -1748,9 +1755,9 @@ export function useListen(
         let sysOk = false
         let sysErr: Error | null = null // captured for error-message classification below
 
-        if (source === 'mic' || source === 'both') {
+        if (micP) {
           try {
-            const mic = await acquireMic(micDeviceIdRef.current)
+            const mic = await micP
             if (!liveRef.current) {
               mic.getTracks().forEach((t) => t.stop())
               closeChannel('you')
@@ -1843,15 +1850,8 @@ export function useListen(
               : "Couldn't start the microphone. Check Microphone access in System Settings → Privacy & Security → Microphone."
           }
           setState((s) => ({ ...s, error: msg, listening: false, capturing: false, loading: false }))
-          // A failed start shouldn't pin the whisper worker + ~21MB ONNX wasm in memory for the app's life —
-          // arm the same idle release stop() uses (ensureWorker recreates it on the next start()).
-          if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
-          workerIdleTimer.current = setTimeout(() => {
-            workerRef.current?.terminate()
-            workerRef.current = null
-            readyRef.current = false
-            workerIdleTimer.current = null
-          }, WORKER_IDLE_RELEASE_MS)
+          // MQA-285: a failed start must not idle-unload a hot prewarmed engine — the next Listen
+          // (or a retry) should still be instant. Unmount is the only teardown of the worker.
           return
         }
 
@@ -2046,16 +2046,8 @@ export function useListen(
       // The final flushed window (if any) has now committed via commitLine — text() reflects the
       // complete post-drain transcript, safe for a caller (e.g. the recap) to read.
       onDrained?.()
-      // Release the whisper worker (+ ~21MB ONNX wasm + loaded model) after a few idle minutes so it
-      // does not sit resident for the entire life of an always-on overlay. ensureWorker() recreates it
-      // and start() re-inits the model on the next session; re-arming within the window keeps it warm.
-      if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
-      workerIdleTimer.current = setTimeout(() => {
-        workerRef.current?.terminate()
-        workerRef.current = null
-        readyRef.current = false
-        workerIdleTimer.current = null
-      }, WORKER_IDLE_RELEASE_MS)
+      // MQA-285: keep the hot engine. Idle-unloading here forced a cold start on the next Listen and
+      // on the post-meeting recap. Unmount still tears the worker down.
     }
     const waitForDrain = (): void => {
       // A new start() ran — the previous stop()'s drain must not proceed; the new session owns the state.
@@ -2101,24 +2093,26 @@ export function useListen(
     }
   }, [closeChannel, disarmNetworkRetry])
 
-  // Pre-warm the small default model in the BACKGROUND a few seconds after startup, so the first time the
-  // user presses Listen the bundled model is already loaded (no setup pause mid-meeting).
-  // Deferred + idle-scheduled so it never competes with the first paint / onboarding interaction.
+  // MQA-285: prewarm at app ready so Listen click finds ASR already running. No 4s delay, no
+  // requestIdleCallback, no idle-unload of a hot engine — those three were why Tony's click sat
+  // behind a cold model load. Apple has nothing to construct ahead of time. Parakeet (if that's
+  // the configured engine) is warmed via parakeetEnsure, which now also constructs the recognizer.
+  // Whisper (default / unknown) still loads the worker + weights here.
   //
-  // MQA-270 (B7): two holes closed. (1) This warmed regardless of asrEngine — but the parakeet/apple
-  // start() paths terminate the whisper worker immediately, so a parakeet install paid ~100 MB (worker +
-  // ORT wasm instance + whisper-base weights) at every boot for an engine it never uses. The engine is
-  // now consulted BEFORE the load, not after. (2) The idle release was only armed by start()'s failure
-  // branch and stop()'s teardown — the prewarm called neither, so a launch-and-never-Listen session held
-  // that memory for its whole life. The release is armed right after warming, same timer the teardown
-  // uses; a real start() within the window clears it and keeps the worker warm, which was the point.
+  // MQA-270 (B7) still holds for engine gating: a parakeet/apple install must not pay ~100 MB of
+  // whisper worker + ORT wasm at boot. The idle-release half of B7 is superseded by MQA-285.
   useEffect(() => {
-    if (asrEngine && asrEngine !== 'whisper') return
+    if (asrEngine === 'apple') return
     let warmed = false
     const warm = async (): Promise<void> => {
-      if (warmed || workerRef.current) return
+      if (warmed) return
       warmed = true
       try {
+        if (asrEngine === 'parakeet') {
+          await window.toto.parakeetEnsure()
+          return
+        }
+        if (workerRef.current) return
         const bundled = await getAsrBundled()
         // Prewarm carries no language: the setting is only known per-session at start(), whose init
         // message updates the (already warm) worker's language before the first audio window.
@@ -2126,20 +2120,11 @@ export function useListen(
         const warmQuality = asrQuality === 'fast' ? 'fast' : 'best'
         ensureWorker().postMessage({ type: 'init', quality: warmQuality, bundled })
         loadedQualityRef.current = warmQuality
-        if (workerIdleTimer.current) clearTimeout(workerIdleTimer.current)
-        workerIdleTimer.current = setTimeout(() => {
-          workerRef.current?.terminate()
-          workerRef.current = null
-          readyRef.current = false
-          workerIdleTimer.current = null
-        }, WORKER_IDLE_RELEASE_MS)
       } catch {
         /* best-effort prewarm */
       }
     }
-    const ric = (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback
-    const t = setTimeout(() => (ric ? ric(() => void warm()) : void warm()), 4000)
-    return () => clearTimeout(t)
+    void warm()
   }, [ensureWorker, getAsrBundled, asrEngine, asrQuality])
 
   // Mid-session spoken-language change (Settings → Audio while listening). The ref update covers every

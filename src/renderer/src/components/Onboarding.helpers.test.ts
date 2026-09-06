@@ -12,15 +12,18 @@ import { Sparkles } from 'lucide-react'
 import {
   aiRowStatus,
   asrAssetsRowStatus,
+  asrEnsureFailureStatus,
   asrRowNeedsRetry,
   localModelRowStatus,
   micRowStatus,
   setupAsrBlocksContinue,
+  setupRowLoadingPercent,
   firstRunCanFinish,
   asrStatusIsReady,
   summarizeSetupRows,
   type SetupRow
 } from './OnboardingExperience'
+import { BUNDLE_GOT_LOGIN_HTML, BUNDLE_NOT_JS } from '@shared/bundle-response'
 
 describe('providerTileDisabledReason — step-5 provider tiles must not misreport why they are disabled', () => {
   it('is null (tappable) when nothing blocks the tile', () => {
@@ -222,6 +225,8 @@ describe('Act 3 on-device model row', () => {
       downloadProgress: 0.42,
       minTotalRamGB: 16
     })
+    expect(row.state).toBe('loading')
+    expect(row.state).not.toBe('action')
     expect(row.detail).toMatch(/Downloading 42%/)
     expect(row.detail.toLowerCase()).not.toMatch(/not installed/)
     expect(row.progress).toBe(0.42)
@@ -258,6 +263,8 @@ describe('Act 3 on-device model row', () => {
       downloadProgress: 0,
       minTotalRamGB: 8
     })
+    expect(row.state).toBe('loading')
+    expect(row.state).not.toBe('action')
     expect(row.detail).toMatch(/Starting the on-device download/)
     expect(row.detail.toLowerCase()).not.toMatch(/not installed/)
   })
@@ -269,6 +276,8 @@ describe('Act 3 on-device model row', () => {
     // Progress bar is visible at 0% (waiting on the first chunk), not only after bytes land.
     expect(src).toMatch(/\(r\.key === 'local' \|\| r\.key === 'asr'\) && r\.progress != null/)
     expect(src).not.toMatch(/r\.progress > 0 && r\.progress < 1/)
+    expect(src).toMatch(/state === 'checking' \|\| r\.state === 'loading'/)
+    expect(src).toMatch(/InlineOrb kind="loading"/)
   })
 })
 
@@ -297,6 +306,10 @@ describe('MQA-279 — Act 3 config-complete state: "scan first, then present" mu
   it('is both scanDone and allReady once every row landed on ready or skipped', () => {
     expect(summarizeSetupRows([row('ready'), row('skipped'), row('ready')])).toEqual({ scanDone: true, allReady: true })
   })
+
+  it('treats loading as scanned but not allReady', () => {
+    expect(summarizeSetupRows([row('ready'), row('loading')])).toEqual({ scanDone: true, allReady: false })
+  })
 })
 
 describe('Act 3 — transcription files never skip', () => {
@@ -321,7 +334,8 @@ describe('Act 3 — transcription files never skip', () => {
       progress: 0.42,
       label: 'Getting transcription files…'
     })
-    expect(row.state).toBe('action')
+    expect(row.state).toBe('loading')
+    expect(row.state).not.toBe('action')
     expect(row.detail).toMatch(/Getting transcription files/)
     expect(row.progress).toBe(0.42)
     expect(row.detail).not.toMatch(/missing in this build/i)
@@ -341,16 +355,51 @@ describe('Act 3 — transcription files never skip', () => {
     expect(asrRowNeedsRetry(row)).toBe(true)
   })
 
-  it('idle-and-missing still means getting files, never skipped', () => {
-    expect(asrAssetsRowStatus({ ready: false, status: 'idle', progress: 0, label: '' }).state).toBe('action')
+  it('Access login HTML and HTTP-not-JS fail loud with Retry, never a dead idle', () => {
+    const html = asrAssetsRowStatus(asrEnsureFailureStatus(new Error(BUNDLE_GOT_LOGIN_HTML)))
+    expect(html.state).toBe('action')
+    expect(html.detail).toMatch(/login page/)
+    expect(asrRowNeedsRetry(html)).toBe(true)
+    const notJs = asrAssetsRowStatus(asrEnsureFailureStatus(new Error(BUNDLE_NOT_JS)))
+    expect(notJs.detail).toMatch(/not JavaScript/)
+    expect(asrRowNeedsRetry(notJs)).toBe(true)
+    expect(asrEnsureFailureStatus(new Error('fetch failed')).status).toBe('error')
+    expect(asrEnsureFailureStatus(new Error('fetch failed')).ready).toBe(false)
+  })
+
+  it('onboarding never swallows an ensure failure into a silent idle', () => {
+    const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+    expect(src).toMatch(/asrEnsureFailureStatus/)
+    expect(src).not.toMatch(/asrAssetsEnsure\(\)[\s\S]{0,80}IDLE_ASR_STATUS/)
+    expect(src).not.toMatch(/catch\(\(\) => apply\(IDLE_ASR_STATUS\)\)/)
+  })
+
+  it('idle-and-missing still means getting files, never skipped or needed', () => {
+    expect(asrAssetsRowStatus({ ready: false, status: 'idle', progress: 0, label: '' }).state).toBe('loading')
+    expect(asrAssetsRowStatus({ ready: false, status: 'idle', progress: 0, label: '' }).state).not.toBe('action')
     expect(asrAssetsRowStatus(null).detail).toMatch(/Getting transcription files/)
   })
 
-  it('blocks Continue until the asr row is ready', () => {
+  it('blocks Continue until the asr row is ready, including while loading', () => {
     expect(setupAsrBlocksContinue([asrRow('action')])).toBe(true)
     expect(setupAsrBlocksContinue([asrRow('checking')])).toBe(true)
+    expect(setupAsrBlocksContinue([asrRow('loading')])).toBe(true)
     expect(setupAsrBlocksContinue([asrRow('ready')])).toBe(false)
     expect(setupAsrBlocksContinue([])).toBe(true)
+  })
+
+  it('renders the loading orb for in-progress rows, never the needed span', () => {
+    const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+    expect(src).toMatch(/state === 'checking' \|\| r\.state === 'loading'/)
+    expect(src).toMatch(/InlineOrb kind="loading"/)
+    expect(src).toMatch(/setupRowLoadingPercent\(r\.progress\)/)
+    const needed = src.slice(src.indexOf("{r.state === 'action' && <span"))
+    expect(needed).toMatch(/>needed</)
+    expect(src).not.toMatch(/r\.state === 'loading'[\s\S]{0,80}needed/)
+    expect(setupRowLoadingPercent(0.42)).toBe(42)
+    expect(setupRowLoadingPercent(0)).toBeUndefined()
+    expect(setupRowLoadingPercent(1)).toBeUndefined()
+    expect(setupRowLoadingPercent(undefined)).toBeUndefined()
   })
 
   it('will not finish first-run (Ready or Skip) until files are ready and consent is given', () => {
@@ -397,7 +446,7 @@ describe('MQA-201 — scene 4 never fakes a check', () => {
   it('Wave 5 — includes the staged problem story before the reveal', () => {
     expect(src).toMatch(/scene === 'problem'/)
     expect(src).toMatch(/You're in the meeting\./)
-    expect(src).toMatch(/GUIDED_SCENES: Scene\[\] = \['problem', 'reveal', 'setup', 'personalize'\]/)
+    expect(src).toMatch(/GUIDED_SCENES: Scene\[\] = \['problem', 'reveal', 'appearance', 'setup', 'personalize'\]/)
   })
 
   it('MQA-279 — the new AI row is derived from providerReady, never asserted for being cloudflare alone', () => {

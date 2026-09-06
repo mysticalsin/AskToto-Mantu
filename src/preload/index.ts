@@ -422,6 +422,9 @@ const api = {
   // returns the same shape mcpTestConnection/mcpSaveConnection do — main has already persisted the
   // tokens and upserted the mcpConnections entry by the time this resolves.
   mcpClickupConnect: (): Promise<McpConnectResult> => ipcRenderer.invoke(IPC.mcpClickupConnect),
+  // Names the ClickUp list (last successful, else last-updated). Does not create a task.
+  mcpClickupDiscoverDestination: (): Promise<McpConnectResult> =>
+    ipcRenderer.invoke(IPC.mcpClickupDiscoverDestination),
   mcpPlaneConnect: (): Promise<McpConnectResult> => ipcRenderer.invoke(IPC.mcpPlaneConnect),
   timeSavedRead: (): Promise<{
     savedMinutes: number

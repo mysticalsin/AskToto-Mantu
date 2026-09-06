@@ -61,6 +61,31 @@ async function signedRequest(
   })
 }
 
+describe('Operator /v1/ask HMAC', () => {
+  it('rejects a bad signature and never calls an upstream model', async () => {
+    const store = memoryStore()
+    const req = await signedRequest(
+      '/v1/ask',
+      JSON.stringify({ provider: 'anthropic', model: 'claude-haiku-4-5-20251001', messages: [{ role: 'user', content: 'hi' }] }),
+      { sig: 'ab'.repeat(32) }
+    )
+    const res = await handleRequest(
+      req,
+      env({ ANTHROPIC_API_KEY: 'sk-ant-worker-secret' }),
+      {},
+      {
+        store,
+        now: NOW,
+        fetchImpl: async () => {
+          throw new Error('must not call upstream')
+        }
+      }
+    )
+    expect(res.status).toBe(401)
+    expect(await res.text()).not.toContain('sk-ant-worker-secret')
+  })
+})
+
 describe('HMAC ingest', () => {
   it('accepts a valid signature and stores ciphertext, not plaintext', async () => {
     const store = memoryStore()
@@ -246,6 +271,48 @@ describe('health', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as { service?: string }
     expect(body.service).toBe('metis-operator')
+  })
+})
+
+describe('public /assets/* — never Access HTML', () => {
+  it('serves client.js without Access and never returns login HTML', async () => {
+    const res = await handleRequest(
+      new Request('https://operator.test/assets/client.js'),
+      env(),
+      {},
+      { store: memoryStore() }
+    )
+    expect(res.status).toBe(200)
+    expect(res.status).not.toBe(302)
+    expect(res.headers.get('content-type')).toMatch(/javascript/)
+    expect(res.headers.get('content-type')).not.toMatch(/html/)
+    const body = await res.text()
+    expect(body).toMatch(/metisOperatorClient/)
+    expect(body).not.toMatch(/<!doctype html|<html|cloudflareaccess|Sign in/i)
+  })
+
+  it('does not require Access identity even when Tony is signed in', async () => {
+    const res = await handleRequest(
+      new Request('https://operator.test/assets/client.js'),
+      env(),
+      { access: tonyAccess },
+      { store: memoryStore() }
+    )
+    expect(res.status).toBe(200)
+    expect(await res.text()).toMatch(/metisOperatorClient/)
+  })
+
+  it('missing /assets/* is JSON 404, not a 302 login page', async () => {
+    const res = await handleRequest(
+      new Request('https://operator.test/assets/index-dead.js'),
+      env(),
+      {},
+      { store: memoryStore() }
+    )
+    expect(res.status).toBe(404)
+    expect(res.status).not.toBe(302)
+    expect(res.headers.get('content-type')).toMatch(/json/)
+    expect(await res.text()).not.toMatch(/<!doctype html|<html|cloudflareaccess/i)
   })
 })
 
@@ -452,6 +519,19 @@ describe('CRM send board', () => {
     )
     expect(retry.status).toBe(401)
     expect((await store.getCrm('crm-1'))?.retry_requested).toBe(0)
+  })
+
+  it('heartbeat advertises fundedProviders IDs only and never the raw key', async () => {
+    const store = memoryStore()
+    const beat = await signedRequest('/v1/heartbeat', JSON.stringify({ os: 'darwin', appVersion: '1.8.2' }))
+    const res = await handleRequest(beat, env({ ANTHROPIC_API_KEY: 'sk-ant-worker-secret' }), {}, { store, now: NOW })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok?: boolean; fundedProviders?: string[] }
+    expect(body.ok).toBe(true)
+    expect(body.fundedProviders).toEqual(['anthropic'])
+    const raw = JSON.stringify(body)
+    expect(raw).not.toContain('sk-ant-worker-secret')
+    expect(raw).not.toContain('ANTHROPIC_API_KEY')
   })
 
   it('Access Retry puts the id on the next heartbeat pull', async () => {
