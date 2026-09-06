@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { settingsOpenRect } from './island/geometry'
+import { settingsOpenRect, shouldParkHoverRestAfterLeavingSurface } from './island/geometry'
 import {
   OVERLAY_REST_BACKGROUND,
   SETTINGS_SURFACE_BACKGROUND,
@@ -154,3 +154,32 @@ describe('MQA-288 — no-flash contract on Settings open/close and overlay rest'
     expect(SETTINGS_SURFACE_BACKGROUND).not.toBe('#000000')
   })
 })
+
+describe('Settings-open → hover-rest (Ultron MED)', () => {
+  it('closing Settings leaves the surface then setWindowMode parks Hide/Island', () => {
+    const windowMode = index.slice(index.indexOf('ipcMain.handle(IPC.windowMode'), index.indexOf('ipcMain.handle(IPC.windowMinimize'))
+    expect(windowMode).toMatch(/if \(mode === 'settings'\) applySettingsSurface\(\)/)
+    expect(windowMode).toMatch(/if \(settingsSurfaceOpen\) leaveSettingsSurface\(\)/)
+    expect(windowMode).toMatch(/setWindowMode\(\)/)
+    // leave → setWindowMode order: surface flag clears, then park
+    expect(windowMode.indexOf('leaveSettingsSurface')).toBeLessThan(windowMode.indexOf('setWindowMode()'))
+  })
+
+  it('leaveSettingsSurface arms islandResting for hover layouts; setWindowMode parks when resting', () => {
+    const leave = index.slice(index.indexOf('function leaveSettingsSurface'), index.indexOf('function setWindowMode'))
+    expect(leave).toMatch(/overlayUsesHover\(liveOverlayLayout\(\)\)/)
+    expect(leave).toMatch(/islandResting = true/)
+    expect(leave).toMatch(/startOverlayCursorWatch\(\)/)
+    const setMode = index.slice(index.indexOf('function setWindowMode'), index.indexOf('function ensureWindow'))
+    expect(setMode).toMatch(/if \(islandResting\)/)
+    expect(setMode).toMatch(/parkAfterExclusiveOnboarding/)
+    expect(setMode).toMatch(/win\.setBounds\(park, false\)/)
+  })
+
+  it('settingsSet must not park Hide/Island while Settings surface is open', () => {
+    expect(index).toMatch(/!settingsSurfaceOpen &&\s*shouldParkHoverRestAfterLeavingSurface/)
+    expect(shouldParkHoverRestAfterLeavingSurface({ layout: 'hide', pointerInIslandOrBar: false })).toBe(true)
+    expect(shouldParkHoverRestAfterLeavingSurface({ layout: 'hide', pointerInIslandOrBar: true })).toBe(false)
+  })
+})
+
