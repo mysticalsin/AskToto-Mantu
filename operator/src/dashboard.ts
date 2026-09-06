@@ -14,7 +14,19 @@ import {
 } from './fleet'
 import { looksLikeSecret, safeChips, type SafeChip } from './redact'
 import { geoRegionRows, realtimeGeoRows, type GeoRegionRow, type RealtimeGeoRow } from './realtime-geo'
-import type { AskRow, EventRow, OperatorStore, ProposalRow, PulseRow, SeatRow, SessionRow, VaultKeyMeta } from './store'
+import { readIntegrationExtra } from './connectors/data'
+import type {
+  AskRow,
+  EventRow,
+  IntegrationRow,
+  IssuedLicenseRow,
+  OperatorStore,
+  ProposalRow,
+  PulseRow,
+  SeatRow,
+  SessionRow,
+  VaultKeyMeta
+} from './store'
 
 export const ONLINE_MS = 2 * 60 * 1000
 const HOUR = 60 * 60 * 1000
@@ -196,6 +208,11 @@ export interface DashboardPayload {
     timeSavedSub: string
     value: string
     valueSub: string
+    /** Law 3 (plan 3.7b): time saved x the hourly rate Tony sets in Settings -> Value, in integer
+     *  minor units (cents). Null whenever no rate is stored - never a default rate. */
+    valueMinor: number | null
+    currency: string
+    hourlyRate: number | null
     source: 'd1.asks+d1.seats'
   }
   gateway: {
@@ -613,6 +630,17 @@ function sanitizeVaultMeta(v: VaultKeyMeta): VaultKeyMeta {
   }
 }
 
+/** Just the fields `roi`'s Value law (3.7b law 3) needs. Owned by `./routes/settings-store.ts` (task
+ *  B6); passed in explicitly rather than read here so `dashboard.ts` never touches D1 directly.
+ *  `hourlyRate: null` (the default when the caller has nothing to pass) means "not set" - `roi`
+ *  must never invent a rate. */
+export interface DashboardValueSettings {
+  hourlyRate: number | null
+  currency: string
+}
+
+const NO_VALUE_SETTINGS: DashboardValueSettings = { hourlyRate: null, currency: 'USD' }
+
 export async function buildDashboard(
   store: OperatorStore,
   email: string,
@@ -624,7 +652,8 @@ export async function buildDashboard(
     vaultBound: false,
     oauthBound: false
   },
-  cloudflare: CloudflareOverview = missingCloudflareOverview()
+  cloudflare: CloudflareOverview = missingCloudflareOverview(),
+  valueSettings: DashboardValueSettings = NO_VALUE_SETTINGS
 ): Promise<DashboardPayload> {
   const [seatsRaw, asks, pulses, proposals, audit, crm, packs, storedEvents, vault, issued, sessionsPage] = await Promise.all([
     store.listSeats(),
@@ -973,6 +1002,14 @@ export async function buildDashboard(
       })(),
       value: costToday ?? cost7d ?? 'not reported',
       valueSub: costToday ? 'asks today · list price' : cost7d ? 'asks 7d · list price' : 'D1 asks · not reported',
+      valueMinor:
+        valueSettings.hourlyRate == null
+          ? null
+          : Math.round(
+              (timeSavedFromMeetings(recapMeetings(storedEvents)).savedMinutes / 60) * valueSettings.hourlyRate * 100
+            ),
+      currency: valueSettings.currency,
+      hourlyRate: valueSettings.hourlyRate,
       source: 'd1.asks+d1.seats'
     },
     gateway: {
@@ -1148,6 +1185,22 @@ export interface LiveSnapshot {
   }
   geo: RealtimeGeoRow[]
   liveSeatsTable: LiveSeatRow[]
+  /** Rail badge counts (task B7). Seats whose approval is `pending` (fleet.ts `approvalOf`). */
+  pendingApprovals: number
+  /** Notices with `ts` newer than the `since` query param the route was called with; every notice
+   *  when `since` is absent (task B7). */
+  unseenNotices: number
+  /** Integrations whose last stored probe result was `ok: false` and whose `status` is still
+   *  `active` (task B7; same derivation as `routes/integrations.ts`'s `deriveHealth`, kept local
+   *  here since that function is not exported). */
+  failingConnectors: number
+  /** Issued, non-revoked licenses expiring within the next 7 days (task B7). `exp` is UNIX seconds
+   *  (see `fleet.ts` `issuedLicenseActive`), so the comparison multiplies by 1000. */
+  expiringLicenses7d: number
+  /** `max(updated_at)` over `operator_settings` (task B6), so the rail/Settings client can tell a
+   *  setting changed without polling `settings.json` separately. 0 when nothing has ever been set
+   *  or when the caller has no D1 to read (tests, `memoryStore()`). */
+  settingsVersion: number
 }
 
 /** FNV-1a over a compact JSON summary. Not cryptographic: only used so the poller can skip a re-render
@@ -1162,19 +1215,54 @@ function hashSnapshot(value: unknown): number {
   return h >>> 0
 }
 
+export interface LiveSnapshotOpts {
+  /** Rail search's "unseen since" cursor (task B7): notices newer than this count toward
+   *  `unseenNotices`; omitted means every notice counts. */
+  since?: number
+  /** `operator_settings` `max(updated_at)` (task B6), read from D1 by `routes/live.ts` (this module
+   *  never touches D1 directly) and threaded through so it lands in `generation`'s hash too. */
+  settingsVersion?: number
+}
+
+const SEVEN_DAYS_MS = 7 * DAY
+
+/** Same derivation as `routes/integrations.ts`'s private `deriveHealth`: `failing` only once a probe
+ *  has actually run and its stored result says `ok: false`. Duplicated (not imported) because that
+ *  function is not exported and `routes/integrations.ts` is out of scope for this task; kept to the
+ *  same three lines so it cannot drift in any way that matters. */
+function isFailingConnector(row: IntegrationRow): boolean {
+  if (row.status !== 'active') return false
+  const extra = readIntegrationExtra(row as unknown as Record<string, unknown>)
+  if (!extra.last_test_json || extra.last_test_at == null) return false
+  try {
+    const parsed = JSON.parse(extra.last_test_json) as { ok?: unknown }
+    return parsed?.ok !== true
+  } catch {
+    return true
+  }
+}
+
+function isExpiringSoon(row: IssuedLicenseRow, now: number): boolean {
+  if (row.revoked) return false
+  const expMs = row.exp * 1000
+  return expMs > now && expMs <= now + SEVEN_DAYS_MS
+}
+
 /**
  * Compact snapshot for `GET /v1/admin/live.json`: every read here is bounded (fixed limits, a fixed
  * lookback window), so polling every 5 s never scales with total fleet history. No prompt text, no
  * secrets: only the fields the Realtime/Overview live strip needs.
  */
-export async function buildLiveSnapshot(store: OperatorStore, now: number): Promise<LiveSnapshot> {
-  const [seatsRaw, sessionsPage, events, todayAsks, crm, proposals] = await Promise.all([
+export async function buildLiveSnapshot(store: OperatorStore, now: number, opts: LiveSnapshotOpts = {}): Promise<LiveSnapshot> {
+  const [seatsRaw, sessionsPage, events, todayAsks, crm, proposals, integrations, issuedLicenses] = await Promise.all([
     store.listSeats(),
     store.listSessions({ since: now - DAY, limit: 500 }),
     store.listEvents(40),
     store.listAsks(500, now - DAY),
     store.listCrm(50),
-    store.listProposals(50)
+    store.listProposals(50),
+    store.listIntegrationRows(),
+    store.listIssuedLicenses()
   ])
   const seats = seatsRaw.filter(isRealSeat)
   const seatsById = new Map(seats.map((s) => [s.device_id, s]))
@@ -1218,6 +1306,12 @@ export async function buildLiveSnapshot(store: OperatorStore, now: number): Prom
   const eventsOut = events.map((e) => eventFromStored(e, seatsById))
   const geo = realtimeGeoRows(seats, sessionsPage.rows)
 
+  const pendingApprovals = seats.filter((s) => approvalOf(s) === 'pending').length
+  const unseenNotices = opts.since == null ? notices.length : notices.filter((n) => n.ts > opts.since!).length
+  const failingConnectors = integrations.filter(isFailingConnector).length
+  const expiringLicenses7d = issuedLicenses.filter((l) => isExpiringSoon(l, now)).length
+  const settingsVersion = opts.settingsVersion ?? 0
+
   const snapshot = {
     now,
     liveSeats: liveSeats.length,
@@ -1232,7 +1326,12 @@ export async function buildLiveSnapshot(store: OperatorStore, now: number): Prom
       cacheHit: sliceToday.hitRate == null ? null : `${Math.round(sliceToday.hitRate * 100)}%`
     },
     geo,
-    liveSeatsTable
+    liveSeatsTable,
+    pendingApprovals,
+    unseenNotices,
+    failingConnectors,
+    expiringLicenses7d,
+    settingsVersion
   }
   return { ...snapshot, generation: hashSnapshot(snapshot) }
 }

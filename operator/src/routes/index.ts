@@ -9,6 +9,8 @@ import { registerEventsRoutes } from './events'
 import { registerSessionsRoutes } from './sessions'
 import { registerGroupsRoutes } from './groups'
 import { registerIntegrationsRoutes } from './integrations'
+import { registerSettingsRoutes } from './settings-store'
+import { registerExportRoutes } from './export'
 
 registerAdminCoreRoutes()
 registerLiveRoutes()
@@ -16,3 +18,5 @@ registerEventsRoutes()
 registerSessionsRoutes()
 registerGroupsRoutes()
 registerIntegrationsRoutes()
+registerSettingsRoutes()
+registerExportRoutes()
