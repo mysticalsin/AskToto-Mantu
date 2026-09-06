@@ -320,6 +320,42 @@ svg path { vector-effect: non-scaling-stroke; }
 
   <section class="grid-2">
     <article class="card">
+      <p class="eyebrow">ROI</p>
+      <div class="kpis" style="grid-template-columns:repeat(3,minmax(0,1fr));gap:8px">
+        ${kpiCard({ title: 'Asks 7d', value: String(data.roi.asks7d), sub: 'real ingest only', spark: '' })}
+        ${kpiCard({ title: 'Live seats', value: String(data.roi.liveSeats), sub: 'last-seen under 2 minutes', spark: '' })}
+        ${kpiCard({
+          title: 'Cost 7d',
+          value: data.roi.cost7d ?? 'not reported',
+          sub: data.roi.note,
+          spark: ''
+        })}
+      </div>
+    </article>
+    <article class="card">
+      <p class="eyebrow">Licenses</p>
+      ${
+        data.licenses.empty
+          ? '<div class="empty">No heartbeats yet. Licenses stay empty until a seat checks in.</div>'
+          : `<table><thead><tr><th>Device</th><th>OS</th><th>Version</th><th>Where</th><th>Last seen</th><th></th></tr></thead><tbody>${data.licenses.seats
+              .map(
+                (s) => `<tr>
+        <td>${esc(s.device)}</td>
+        <td class="muted">${esc(s.os)}</td>
+        <td class="muted">${esc(s.version)}</td>
+        <td class="muted">${esc(s.country || '')}</td>
+        <td class="muted">${esc(when(s.lastSeen))}</td>
+        <td>${s.live ? '<span class="pill up">live</span>' : '<span class="pill">idle</span>'}</td>
+      </tr>`
+              )
+              .join('')}</tbody></table>
+             <div class="sub muted" style="padding-bottom:8px">Real D1 seats. Activate stays on Fly. No keys on this page.</div>`
+      }
+    </article>
+  </section>
+
+  <section class="grid-2">
+    <article class="card">
       <p class="eyebrow">Scale</p>
       <div class="tabs">
         <button class="tab on" data-scale="24h">24h</button>
