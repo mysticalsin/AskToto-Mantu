@@ -304,7 +304,7 @@ export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world
         const places = new Set(
           dots.filter((d) => present.includes(d.country)).map((d) => d.city || d.country)
         ).size
-        const where = present.length === 1 ? countryName(present[0]) : `${present.length} countries`
+        const where = present.length === 1 ? countryName(present[0]) : regionName(reg.id)
         const label = `${seats} ${where}, ${places} ${places === 1 ? 'place' : 'places'}`
         const w = Math.max(110, 36 + label.length * 6.1)
         return `<g class="pill-g" data-region-pill="${escapeXml(reg.id)}" transform="translate(${reg.x},${reg.y})">
@@ -330,6 +330,18 @@ function groupCityDots(dots: MapDot[]): Map<string, { city: string; country: str
     else groups.set(key, { city: d.city, country: d.country, lat: d.lat, lon: d.lon, n: 1 })
   }
   return groups
+}
+
+function regionName(id: string): string {
+  const names: Record<string, string> = {
+    na: 'North America',
+    sa: 'South America',
+    eu: 'Europe',
+    af: 'Africa',
+    as: 'Asia',
+    oc: 'Oceania'
+  }
+  return names[id] || id
 }
 
 function countryName(iso: string): string {

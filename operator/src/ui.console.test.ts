@@ -134,7 +134,7 @@ describe('product sidebar (#105)', () => {
     expect(html).toContain('data-install-works')
     expect(html).toContain('data-access-solid')
     expect(html).toContain('#2563EB')
-    expect(html).toContain('data-theme="dark"')
+    expect(html).toContain('data-theme="light"')
     const overview = html.slice(html.indexOf('data-page="overview"'), html.indexOf('data-page="realtime"'))
     expect(overview).toContain('data-overview-toplists')
     expect(overview).toContain('data-device-card')

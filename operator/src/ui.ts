@@ -1,5 +1,5 @@
 import { choropleth, choroplethMini, shoeyWorld, sparklineLine } from './charts'
-import { statusBadge, STATUS_BADGE_CSS } from './components/ui/status-badge'
+import { statusBadge } from './components/ui/status-badge'
 import { CRM_FILTER_ORDER } from './crm'
 import { CF_TOKEN_MISSING, type CloudflareOverview } from './cloudflare'
 import { CF_OAUTH_MISSING } from './cloudflare-connect'
@@ -7,210 +7,45 @@ import type { ConsoleEvent, DashboardPayload, ProfileRow } from './dashboard'
 import { FORBIDDEN_NAV, NAV_IDS, NAV_SECTIONS } from './nav'
 import { looksLikeSecret } from './redact'
 import { formatAvgDuration, geoCountryRollup } from './realtime-geo'
+import { CONSOLE_CSS } from './spa/css'
 
 const MISSING = '—'
 
-const CSS = `
-@import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.min.css');
-@import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.min.css');
-:root, [data-theme="dark"] {
-  --bg: #0a0a0b;
-  --panel: #111113;
-  --hair: rgba(255,255,255,0.10);
-  --ink: rgba(255,255,255,0.94);
-  --ink2: rgba(255,255,255,0.55);
-  --ink3: rgba(255,255,255,0.38);
-  --accent: #2563EB;
-  --live: #10B981;
-  --ok: #16A34A;
-  --danger: #DC2626;
-  --land: #3f3f46;
-  --chart-1: #1a1a1d;
-  --chart-2: #2a2a2e;
-  --chart-3: #52525b;
-  --chart-4: #a1a1aa;
-  --chart-5: #2563EB;
-  --nav: #0d0d0f;
-  --nav-on: rgba(255,255,255,0.08);
-  --dot: rgba(255,255,255,0.045);
-  --mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
-  --sans: 'Geist', Geist, Inter, system-ui, sans-serif;
-}
-[data-theme="light"] {
-  --bg: #FFFFFF;
-  --panel: #FFFFFF;
-  --hair: #EDEDED;
-  --ink: #18181B;
-  --ink2: #71717A;
-  --ink3: #A1A1AA;
-  --land: #E5E7EB;
-  --chart-1: #e4e4e7;
-  --chart-2: #d4d4d8;
-  --chart-3: #a1a1aa;
-  --chart-4: #52525b;
-  --chart-5: #2563EB;
-  --nav: #FFFFFF;
-  --nav-on: #F4F4F5;
-  --dot: rgba(24,24,27,0.06);
-}
-* { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; color: var(--ink); font: 12px/1.45 var(--sans); }
-body {
-  background-color: var(--bg);
-  background-image: radial-gradient(var(--dot) 1px, transparent 1px);
-  background-size: 14px 14px;
-}
-a { color: var(--accent); text-decoration: none; }
-.shell { display: grid; grid-template-columns: 228px 1fr; min-height: 100%; }
-.rail {
-  display: flex; flex-direction: column; gap: 10px;
-  background: var(--nav); border-right: 1px solid var(--hair);
-  padding: 14px 12px 16px; min-height: 100vh; position: sticky; top: 0;
-}
-.rail-brand { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.rail-brand h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -0.04em; }
-.rail-sub { margin: -4px 0 2px; font: 10px/1.2 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink3); }
+const EXTRA_CSS = `
 .access-chip {
   font: 10px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase;
   padding: 3px 7px; border-radius: 999px; border: 1px solid var(--hair); color: var(--live);
+}
+.rail-sub { margin: -2px 0 2px 36px; font: 10px/1.2 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink3); }
+.nav-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.nav-count {
+  min-width: 18px; text-align: center; font: 10px/16px var(--mono);
+  border-radius: 999px; background: var(--accent); color: #fff; padding: 0 5px;
 }
 .rail-search {
   width: 100%; border: 1px solid var(--hair); background: var(--panel); color: var(--ink);
   border-radius: 8px; padding: 7px 10px; font: 12px var(--sans);
 }
-.rail-search::placeholder { color: var(--ink3); }
-.rail nav { display: flex; flex-direction: column; gap: 14px; flex: 1; }
-.nav-sec { display: flex; flex-direction: column; gap: 2px; }
-.nav-sec p {
-  font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
-  text-transform: uppercase; color: var(--ink3); margin: 0 6px 4px;
-}
-.nav-item {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 7px 8px; border-radius: 8px; color: var(--ink);
-  font-size: 13px; font-weight: 550;
-}
-.nav-item:hover { background: var(--nav-on); }
-.nav-item.on { background: var(--nav-on); font-weight: 650; }
-.nav-count {
-  min-width: 18px; text-align: center; font: 10px/16px var(--mono);
-  border-radius: 999px; background: var(--accent); color: #fff; padding: 0 5px;
-}
-.rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding-top: 12px; }
-.who { font-family: var(--mono); font-size: 10px; color: var(--ink2); word-break: break-all; }
-.theme-btn {
-  border: 1px solid var(--hair); background: transparent; color: var(--ink2);
-  font: 11px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
-  padding: 6px 8px; border-radius: 8px; cursor: pointer;
-}
-.main { min-width: 0; }
-.top {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
-  padding: 12px 16px; border-bottom: 1px solid var(--hair);
-  background: color-mix(in srgb, var(--bg) 86%, transparent); position: sticky; top: 0; z-index: 4;
-}
-.top h2 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -0.03em; }
-.eyebrow {
-  font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
-  text-transform: uppercase; color: var(--ink3); margin: 0 0 8px;
-}
-.wrap { padding: 12px 16px 36px; display: grid; gap: 12px; isolation: isolate; overflow-x: hidden; }
-.page { min-width: 0; position: relative; z-index: 1; }
-.kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
+.ov-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .kpis.glance { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .kpis.glance .kpi .n { font-size: 32px; margin-top: 12px; }
-@media (max-width: 1100px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .kpis.glance { grid-template-columns: 1fr; } }
-.ov-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
 .people-row {
   display: grid; grid-template-columns: 56px minmax(0, 1.1fr) minmax(0, 1.1fr) 110px 88px 72px;
   gap: 8px; align-items: center; padding: 8px 4px; border-bottom: 1px solid var(--hair);
 }
 .people-row .who { font-weight: 650; color: var(--ink); font-size: 12px; word-break: break-word; }
-.activity-feed .event { padding: 8px 2px; grid-template-columns: 72px minmax(0, 1fr) minmax(0, 1.4fr) 72px; }
-@media (max-width: 980px) { .ov-split, .people-row { grid-template-columns: 1fr; } }
-.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-width: 0; }
-.grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
-.card {
-  position: relative;
-  background: var(--panel);
-  border: 1px solid var(--hair);
-  padding: 10px 12px 0;
-  overflow: hidden;
-}
-.card::before, .card::after {
-  content: ''; position: absolute; width: 8px; height: 8px; pointer-events: none;
-  border-color: color-mix(in srgb, var(--ink) 28%, transparent); border-style: solid;
-}
-.card::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
-.card::after { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
-.card h3 { margin: 0; font-size: 13px; font-weight: 600; }
-.kpi-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
-.kpi .n { font-size: 28px; font-weight: 650; letter-spacing: -0.04em; line-height: 1; margin-top: 10px; }
-.kpi .sub { font-family: var(--mono); font-size: 10px; color: var(--ink3); margin: 4px 0 8px; }
-.spark { display: block; width: calc(100% + 24px); margin: 0 -12px; height: 56px; }
-.chart { display: block; width: 100%; height: 140px; }
-.world { display: block; width: 100%; height: auto; max-height: 420px; }
-.heat { display: block; width: 100%; max-width: 280px; height: auto; }
-.grat { stroke: color-mix(in srgb, var(--ink) 18%, transparent); stroke-width: 0.6; }
-.dot { fill: var(--accent); stroke: var(--bg); stroke-width: 0.8; }
-.tick { fill: var(--ink3); font-size: 9px; font-family: var(--mono); }
-.tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
-.tab {
-  border: 1px solid transparent; background: transparent; color: var(--ink2);
-  font: 11px/1 var(--mono); letter-spacing: 0.04em; text-transform: uppercase;
-  padding: 4px 9px; border-radius: 999px; cursor: pointer;
-}
-.tab.on { background: var(--accent); color: #fff; }
-.pill {
-  display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 10px;
-  font-family: var(--mono); border: 1px solid var(--hair); color: var(--ink2);
-}
-.pill.up, .pill.hit { color: var(--ok); }
-.pill.down { color: var(--danger); }
-.chip {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--hair);
-  font-family: var(--mono); font-size: 10px; color: var(--ink2); background: var(--nav-on);
-}
-.empty { color: var(--ink2); font-size: 12px; padding: 10px 0 12px; }
-.fail-loud { color: var(--danger); font-size: 13px; font-weight: 600; padding: 10px 0 12px; }
-.crm-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.world-wrap { overflow: hidden; max-height: 280px; }
-.geo-map-card { padding-bottom: 10px; }
-.geo-map-card svg { display: block; width: 100%; height: auto; min-height: 180px; max-height: 240px; }
-.geo-live { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
-.rt-world { padding-bottom: 10px; }
-.rt-world .world { display: block; width: 100%; height: auto; min-height: 320px; max-height: 520px; }
+.activity-feed .rt-row { padding: 6px 2px; }
 .rt-live { display: grid; grid-template-columns: minmax(140px, 0.7fr) minmax(140px, 0.7fr) minmax(0, 1.6fr); gap: 12px; align-items: start; }
-.rt-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
-.ov-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.vol { position: relative; }
+.rt-live .kpi .n { font-size: 44px; margin-top: 8px; letter-spacing: -0.05em; }
 .vol-head {
-  display: grid; grid-template-columns: 1fr auto auto; gap: 8px; padding: 0 8px 4px;
+  display: grid; grid-template-columns: 1fr 56px 64px; gap: 8px; padding: 0 8px 4px;
   font: 10px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink3);
 }
-.vol-row {
-  display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center;
-  padding: 7px 8px; position: relative; font-size: 12px;
-}
-.vol-bar {
-  position: absolute; inset: 2px auto 2px 0; background: color-mix(in srgb, var(--accent) 18%, transparent);
-  border-radius: 4px; z-index: 0;
-}
-.vol-row > * { position: relative; z-index: 1; }
-tbody tr { position: relative; }
-.rt-row {
-  display: grid; grid-template-columns: 88px minmax(0, 1fr) minmax(0, 1.4fr) 72px;
-  gap: 8px; align-items: center; padding: 6px 2px; border-bottom: 1px solid var(--hair); font-size: 12px;
-}
-.rt-row .ago { font-family: var(--mono); font-size: 10px; color: var(--ink3); text-align: right; }
-@media (max-width: 980px) { .ov-pair, .rt-row { grid-template-columns: 1fr; } }
-.geo-bar {
-  position: absolute; inset: 2px auto 2px 0; height: auto;
-  background: color-mix(in srgb, var(--accent) 18%, transparent); border-radius: 4px; z-index: 0;
-}
-@media (max-width: 980px) { .geo-live, .rt-split, .rt-live { grid-template-columns: 1fr; } }
-.key-form { display: grid; gap: 8px; margin: 0 0 14px; }
+.vol-head.geo, .vol-row.geo { grid-template-columns: 1fr 48px 48px 56px; }
+.geo-map-card { padding-bottom: 10px; }
+.geo-map-card svg { display: block; width: 100%; height: auto; min-height: 180px; max-height: 240px; }
+.rt-world { padding-bottom: 10px; }
+.rt-world.rt-map .world { min-height: 420px; max-height: none; }
 .license-once {
   display: grid; gap: 8px; margin: 0 0 14px; padding: 10px 12px;
   border: 1px solid var(--hair); border-radius: 8px; background: var(--bg);
@@ -219,66 +54,13 @@ tbody tr { position: relative; }
   width: 100%; border: 1px solid var(--hair); background: var(--panel); color: var(--ink);
   border-radius: 8px; padding: 8px 10px; font: 12px var(--mono);
 }
-.key-form .row input, .key-form .row select {
-  border: 1px solid var(--hair); background: var(--bg); color: var(--ink);
-  border-radius: 8px; padding: 6px 8px; font: 12px var(--sans); min-width: 120px;
-}
-.map-empty { position: absolute; left: 12px; top: 42px; z-index: 1; }
-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--hair); font-size: 12px; vertical-align: top; overflow: hidden; text-overflow: ellipsis; position: relative; }
-.search-bar {
-  width: 100%; border: 1px solid var(--hair); background: var(--bg); color: var(--ink);
-  border-radius: 8px; padding: 7px 10px; font: 12px var(--sans); margin: 0 0 10px;
-}
-.event[hidden], tr[hidden], .vol-row[hidden], .people-row[hidden], .rt-row[hidden] { display: none !important; }
-.rule { padding: 10px 0; border-bottom: 1px solid var(--hair); }
-.rule h3 { margin: 0 0 4px; font-size: 13px; }
-.rule p { margin: 0; color: var(--ink2); font-size: 12px; }
-th { color: var(--ink3); font-weight: 500; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
-button, .btn {
-  background: transparent; color: var(--ink); border: 1px solid var(--hair);
-  padding: 4px 9px; font-size: 11px; cursor: pointer; border-radius: 999px;
-}
-button.primary, a.btn.primary { background: var(--accent); color: #fff; border-color: transparent; font-weight: 600; }
-button.danger { color: var(--danger); }
-pre, textarea {
-  width: 100%; background: color-mix(in srgb, var(--bg) 70%, #000); color: var(--ink);
-  border: 1px solid var(--hair); padding: 8px; font: 11px var(--mono);
-}
-textarea { min-height: 120px; }
-.row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-.muted { color: var(--ink2); }
-.legend { display: flex; gap: 12px; font-family: var(--mono); font-size: 10px; color: var(--ink3); padding: 6px 0 10px; }
-.legend i { display: inline-block; width: 10px; height: 2px; background: var(--chart-5); vertical-align: middle; margin-right: 4px; }
-.legend i.ask { background: var(--accent); }
-.funnel { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
-.crm-funnel { display: grid; gap: 6px; margin: 0 0 10px; }
-.crm-funnel-row { display: grid; grid-template-columns: 88px 1fr auto; gap: 8px; align-items: center; }
-.crm-funnel-track { height: 6px; background: var(--nav-on); border: 1px solid var(--hair); position: relative; overflow: hidden; }
-.crm-funnel-ok { position: absolute; inset: 0 auto 0 0; background: var(--ok); opacity: 0.7; }
-.crm-funnel-fail { position: absolute; inset: 0 0 0 auto; background: var(--danger); opacity: 0.7; }
-.crm-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0 0 10px; }
-.crm-kpis .n { font-size: 22px; margin-top: 4px; }
-.remote a { color: var(--accent); }
-.heat-wrap { display: flex; gap: 16px; align-items: flex-start; }
-.heat-meta { font-family: var(--mono); font-size: 10px; color: var(--ink3); }
-.event {
-  display: grid; grid-template-columns: 140px 160px 1fr 88px; gap: 10px; align-items: start;
-  padding: 10px 4px; border-bottom: 1px solid var(--hair);
-}
-.event-name { font-weight: 650; }
-.event-profile { color: var(--ink2); }
-.event-chips { display: flex; flex-wrap: wrap; gap: 4px; }
-.event-time { font-family: var(--mono); font-size: 10px; color: var(--ink3); text-align: right; }
-.live { display: inline-block; padding: 1px 7px; border-radius: 999px; background: var(--live); color: #052e1b; font: 10px var(--mono); letter-spacing: 0.08em; }
-[data-theme="light"] .live { background: #10B981; color: #052e1b; }
 .approval {
   display: inline-block; padding: 1px 7px; border-radius: 999px;
   font: 10px/1.4 var(--mono); letter-spacing: 0.04em; border: 1px solid var(--hair);
 }
-.approval.pending { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--hair)); }
-.approval.approved { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--hair)); }
-.approval.revoked { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--hair)); }
+.approval.pending { color: var(--accent); }
+.approval.approved { color: var(--ok); }
+.approval.revoked { color: var(--danger); }
 .works { padding-bottom: 12px; }
 .works-path {
   list-style: none; margin: 0 0 12px; padding: 0;
@@ -296,15 +78,15 @@ textarea { min-height: 120px; }
 }
 .works-path span { display: block; font-weight: 650; letter-spacing: -0.02em; }
 .works-path small { display: block; margin-top: 4px; color: var(--ink2); font-size: 11px; }
-@media (max-width: 980px) { .works-path { grid-template-columns: 1fr; } }
-@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
-.page[hidden] { display: none !important; }
+.search-bar {
+  width: 100%; border: 1px solid var(--hair); background: var(--bg); color: var(--ink);
+  border-radius: 8px; padding: 7px 10px; font: 12px var(--sans); margin: 0 0 10px;
+}
 @media (max-width: 980px) {
-  .shell { grid-template-columns: 1fr; }
-  .rail { position: relative; min-height: auto; }
-  .kpis, .grid-2, .grid-3, .crm-kpis, .event { grid-template-columns: 1fr; }
+  .ov-pair, .rt-live, .people-row, .works-path { grid-template-columns: 1fr; }
 }
 `
+const CSS = `${CONSOLE_CSS}${EXTRA_CSS}`
 
 function esc(s: unknown): string {
   return String(s ?? '')
@@ -448,8 +230,28 @@ function renderPeopleStrip(rows: ProfileRow[], liveCount: number): string {
 }
 
 function geoBar(count: number, max: number): string {
-  const pct = max <= 0 ? 0 : Math.max(6, Math.round((count / max) * 100))
-  return `<span class="geo-bar" style="width:${pct}%"></span>`
+  const pct = max <= 0 ? 0 : Math.max(8, Math.round((count / max) * 100))
+  return `<span class="vol-bar blue" style="width:${pct}%"></span>`
+}
+
+function geoVolRow(opts: {
+  q: string
+  label: string
+  extra?: string
+  count: number
+  sessions: number
+  avg: string
+  max: number
+  city?: string
+}): string {
+  const city = opts.city ? ` data-geo-city="${esc(opts.city)}"` : ''
+  return `<div class="vol-row geo" data-q="${esc(opts.q)}"${city}>
+    ${geoBar(opts.count, opts.max)}
+    <span>${esc(opts.label)}${opts.extra ? ` <span class="muted">${esc(opts.extra)}</span>` : ''}</span>
+    <span class="muted">${opts.count}</span>
+    <span class="muted">${opts.sessions}</span>
+    <span class="muted">${esc(opts.avg)}</span>
+  </div>`
 }
 
 function renderGeoCorner(data: DashboardPayload): string {
@@ -460,21 +262,42 @@ function renderGeoCorner(data: DashboardPayload): string {
   const maxRegion = Math.max(1, ...regions.map((r) => r.count))
   const maxCountry = Math.max(1, ...countries.map((r) => r.count))
   const cityRows = cities
-    .map(
-      (r) =>
-        `<tr data-geo-city="${esc(r.city)}" data-q="${esc(`${r.city} ${r.country}`.toLowerCase())}"><td>${geoBar(r.count, maxCity)}${esc(r.city)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
+    .map((r) =>
+      geoVolRow({
+        q: `${r.city} ${r.country}`.toLowerCase(),
+        label: r.city,
+        extra: r.country,
+        count: r.count,
+        sessions: r.unique_sessions,
+        avg: formatAvgDuration(r.avg_duration),
+        max: maxCity,
+        city: r.city
+      })
     )
     .join('')
   const regionRows = regions
-    .map(
-      (r) =>
-        `<tr data-q="${esc(`${r.region} ${r.country}`.toLowerCase())}"><td>${geoBar(r.count, maxRegion)}${esc(r.region)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
+    .map((r) =>
+      geoVolRow({
+        q: `${r.region} ${r.country}`.toLowerCase(),
+        label: r.region,
+        extra: r.country,
+        count: r.count,
+        sessions: r.unique_sessions,
+        avg: formatAvgDuration(r.avg_duration),
+        max: maxRegion
+      })
     )
     .join('')
   const countryRows = countries
-    .map(
-      (r) =>
-        `<tr data-q="${esc(r.country.toLowerCase())}"><td>${geoBar(r.count, maxCountry)}${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
+    .map((r) =>
+      geoVolRow({
+        q: r.country.toLowerCase(),
+        label: r.country,
+        count: r.count,
+        sessions: r.unique_sessions,
+        avg: formatAvgDuration(r.avg_duration),
+        max: maxCountry
+      })
     )
     .join('')
   return `<div class="ov-pair" data-geo-corner>
@@ -486,26 +309,15 @@ function renderGeoCorner(data: DashboardPayload): string {
         <button class="tab" data-geo-tab="cities" type="button">Cities</button>
       </div>
       <input class="search-bar" data-geo-search type="search" placeholder="Search places…" autocomplete="off">
-      <div data-geo-pane="countries">
-        ${
-          countryRows
-            ? `<table data-geo-table="countries"><thead><tr><th>Country</th><th>Seats</th><th>Sess.</th><th>Avg</th></tr></thead><tbody>${countryRows}</tbody></table>`
-            : '<div class="empty">No country geo yet.</div>'
-        }
+      <div class="vol-head geo"><span></span><span>Seats</span><span>Sess.</span><span>Avg</span></div>
+      <div data-geo-pane="countries" data-geo-table="countries">
+        ${countryRows || '<div class="empty">No country geo yet.</div>'}
       </div>
-      <div data-geo-pane="regions" hidden>
-        ${
-          regionRows
-            ? `<table data-geo-table="regions"><thead><tr><th>Region</th><th>Country</th><th>Seats</th><th>Sess.</th><th>Avg</th></tr></thead><tbody>${regionRows}</tbody></table>`
-            : '<div class="empty">No region yet. Next heartbeat writes request.cf.region.</div>'
-        }
+      <div data-geo-pane="regions" data-geo-table="regions" hidden>
+        ${regionRows || '<div class="empty">No region yet. Next heartbeat writes request.cf.region.</div>'}
       </div>
-      <div data-geo-pane="cities" hidden>
-        ${
-          cityRows
-            ? `<table data-geo-table="cities"><thead><tr><th>City</th><th>Country</th><th>Seats</th><th>Sess.</th><th>Avg</th></tr></thead><tbody>${cityRows}</tbody></table>`
-            : '<div class="empty">No city geo yet. Heartbeats write request.cf city.</div>'
-        }
+      <div data-geo-pane="cities" data-geo-table="cities" hidden>
+        ${cityRows || '<div class="empty">No city geo yet. Heartbeats write request.cf city.</div>'}
       </div>
     </article>
     <article class="card geo-map-card" data-geo-widget>
@@ -523,21 +335,42 @@ function renderRealtimeGeo(data: DashboardPayload): string {
   const maxRegion = Math.max(1, ...regions.map((r) => r.count))
   const maxCountry = Math.max(1, ...countries.map((r) => r.count))
   const cityRows = cities
-    .map(
-      (r) =>
-        `<tr data-geo-city="${esc(r.city)}" data-q="${esc(`${r.city} ${r.country}`.toLowerCase())}"><td>${geoBar(r.count, maxCity)}${esc(r.city)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
+    .map((r) =>
+      geoVolRow({
+        q: `${r.city} ${r.country}`.toLowerCase(),
+        label: r.city,
+        extra: r.country,
+        count: r.count,
+        sessions: r.unique_sessions,
+        avg: formatAvgDuration(r.avg_duration),
+        max: maxCity,
+        city: r.city
+      })
     )
     .join('')
   const regionRows = regions
-    .map(
-      (r) =>
-        `<tr data-q="${esc(`${r.region} ${r.country}`.toLowerCase())}"><td>${geoBar(r.count, maxRegion)}${esc(r.region)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
+    .map((r) =>
+      geoVolRow({
+        q: `${r.region} ${r.country}`.toLowerCase(),
+        label: r.region,
+        extra: r.country,
+        count: r.count,
+        sessions: r.unique_sessions,
+        avg: formatAvgDuration(r.avg_duration),
+        max: maxRegion
+      })
     )
     .join('')
   const countryRows = countries
-    .map(
-      (r) =>
-        `<tr data-q="${esc(r.country.toLowerCase())}"><td>${geoBar(r.count, maxCountry)}${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
+    .map((r) =>
+      geoVolRow({
+        q: r.country.toLowerCase(),
+        label: r.country,
+        count: r.count,
+        sessions: r.unique_sessions,
+        avg: formatAvgDuration(r.avg_duration),
+        max: maxCountry
+      })
     )
     .join('')
   return `<article class="card" data-realtime-geo>
@@ -548,36 +381,23 @@ function renderRealtimeGeo(data: DashboardPayload): string {
       <button class="tab" data-geo-tab="countries" type="button">Country</button>
     </div>
     <input class="search-bar" data-geo-search type="search" placeholder="Search cities…" autocomplete="off">
-    <div class="geo-live">
-      <div data-geo-pane="cities">
-        ${
-          cityRows
-            ? `<table data-geo-table="realtime"><thead><tr><th>City</th><th>Country</th><th>Count</th><th>Sessions</th><th>Avg</th></tr></thead><tbody>${cityRows}</tbody></table>`
-            : '<div class="empty">No city geo on live heartbeats yet.</div>'
-        }
-      </div>
-      <div data-geo-pane="regions" hidden>
-        ${
-          regionRows
-            ? `<table data-geo-table="regions"><thead><tr><th>Region</th><th>Country</th><th>Count</th><th>Sessions</th><th>Avg</th></tr></thead><tbody>${regionRows}</tbody></table>`
-            : '<div class="empty">No region yet. Next heartbeat writes request.cf.region.</div>'
-        }
-      </div>
-      <div data-geo-pane="countries" hidden>
-        ${
-          countryRows
-            ? `<table data-geo-table="countries"><thead><tr><th>Country</th><th>Count</th><th>Sessions</th><th>Avg</th></tr></thead><tbody>${countryRows}</tbody></table>`
-            : '<div class="empty">No country geo yet.</div>'
-        }
-      </div>
+    <div class="vol-head geo"><span></span><span>Seats</span><span>Sess.</span><span>Avg</span></div>
+    <div data-geo-pane="cities" data-geo-table="realtime">
+      ${cityRows || '<div class="empty">No city geo on live heartbeats yet.</div>'}
+    </div>
+    <div data-geo-pane="regions" hidden>
+      ${regionRows || '<div class="empty">No region yet. Next heartbeat writes request.cf.region.</div>'}
+    </div>
+    <div data-geo-pane="countries" hidden>
+      ${countryRows || '<div class="empty">No country geo yet.</div>'}
     </div>
   </article>`
 }
 
 function renderWorldMap(data: DashboardPayload): string {
-  return `<article class="card rt-world" data-world-map>
+  return `<article class="card rt-world rt-map" data-world-map>
     <div class="kpi-top"><p class="eyebrow">WorldMap</p><span class="live" data-world-live>LIVE ${data.roi.liveSeats}</span></div>
-    <div id="rt-map-root" data-geo-widget>${shoeyWorld(data.map.countries, data.map.dots)}</div>
+    <div id="rt-map-root" data-geo-widget data-land="inline">${shoeyWorld(data.map.countries, data.map.dots)}</div>
   </article>`
 }
 
@@ -631,6 +451,8 @@ function renderTopLists(data: DashboardPayload): string {
   const maxDev = Math.max(1, ...devices.map((r) => byDevice.get(r.hostname || r.email || r.device) ?? 1))
   const osRows = data.scale.os.slice(0, 8)
   const maxOs = Math.max(1, ...osRows.map((r) => r.value))
+  const verRows = data.scale.versions.slice(0, 8)
+  const maxVer = Math.max(1, ...verRows.map((r) => r.value))
   const deviceBody = devices
     .map((r) => {
       const who = r.hostname || r.email || r.device
@@ -638,7 +460,7 @@ function renderTopLists(data: DashboardPayload): string {
       const pct = Math.max(10, Math.round((Math.max(n, 1) / maxDev) * 100))
       const q = `${who} ${r.city || ''} ${r.os}`.toLowerCase()
       return `<div class="vol-row" data-toplist-device="${esc(r.device)}" data-q="${esc(q)}">
-        <span class="vol-bar" style="width:${pct}%"></span>
+        <span class="vol-bar blue" style="width:${pct}%"></span>
         <span>${field(who)}</span>
         <span class="muted">${n || 1}</span>
         <span>${r.live ? '<span class="pill up">live</span>' : '<span class="muted">idle</span>'}</span>
@@ -649,7 +471,18 @@ function renderTopLists(data: DashboardPayload): string {
     .map((r) => {
       const pct = Math.max(10, Math.round((r.value / maxOs) * 100))
       return `<div class="vol-row" data-toplist-os="${esc(r.label)}" data-q="${esc(r.label.toLowerCase())}">
-        <span class="vol-bar" style="width:${pct}%"></span>
+        <span class="vol-bar blue" style="width:${pct}%"></span>
+        <span>${esc(r.label)}</span>
+        <span class="muted">${r.value}</span>
+        <span></span>
+      </div>`
+    })
+    .join('')
+  const verBody = verRows
+    .map((r) => {
+      const pct = Math.max(10, Math.round((r.value / maxVer) * 100))
+      return `<div class="vol-row" data-toplist-version="${esc(r.label)}" data-q="${esc(r.label.toLowerCase())}">
+        <span class="vol-bar blue" style="width:${pct}%"></span>
         <span>${esc(r.label)}</span>
         <span class="muted">${r.value}</span>
         <span></span>
@@ -660,7 +493,7 @@ function renderTopLists(data: DashboardPayload): string {
     .map(([name, n]) => {
       const pct = Math.max(10, Math.round((n / maxKind) * 100))
       return `<div class="vol-row" data-toplist-event="${esc(name)}" data-q="${esc(name.toLowerCase())}">
-        <span class="vol-bar" style="width:${pct}%"></span>
+        <span class="vol-bar blue" style="width:${pct}%"></span>
         <span>${esc(name)}</span>
         <span class="muted">${n}</span>
         <span></span>
@@ -673,11 +506,13 @@ function renderTopLists(data: DashboardPayload): string {
       <div class="tabs" data-device-tabs>
         <button class="tab on" data-device-tab="devices" type="button">Devices</button>
         <button class="tab" data-device-tab="os" type="button">OS</button>
+        <button class="tab" data-device-tab="version" type="button">Version</button>
       </div>
       <input class="search-bar" data-list-search="devices" type="search" placeholder="Search devices…" autocomplete="off">
       <div class="vol-head"><span></span><span>Seats</span><span>Live</span></div>
       <div data-device-pane="devices">${deviceBody || '<div class="empty">No seats yet.</div>'}</div>
       <div data-device-pane="os" hidden>${osBody || '<div class="empty">No OS mix yet.</div>'}</div>
+      <div data-device-pane="version" hidden>${verBody || '<div class="empty">No versions yet.</div>'}</div>
     </article>
     <article class="card" style="padding-bottom:10px">
       <p class="eyebrow">Events</p>
@@ -912,10 +747,10 @@ export function renderConsole(data: DashboardPayload): string {
 
   const pendingApprovals = data.licenses.rows.filter((r) => r.approval !== 'approved').length
   return `<!doctype html>
-<html lang="en" data-theme="dark"><head>
+<html lang="en" data-theme="light"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Métis Operator</title>
-<style>${CSS}${STATUS_BADGE_CSS}
+<style>${CSS}
 svg path { vector-effect: non-scaling-stroke; }
 #spark-defs { position: absolute; width: 0; height: 0; }
 </style>
@@ -929,7 +764,7 @@ svg path { vector-effect: non-scaling-stroke; }
 </defs></svg>
 <div class="shell">
   <aside class="rail">
-    <div class="rail-brand"><h1>Métis</h1><span class="access-chip" data-access-solid>Access</span></div>
+    <div class="rail-brand"><span class="rail-logo">M</span><h1>Métis</h1><span class="access-chip" data-access-solid>Access</span></div>
     <p class="rail-sub">Operator</p>
     <input class="rail-search" id="nav-search" type="search" placeholder="Search" autocomplete="off">
     ${renderNav(pendingApprovals)}
@@ -941,8 +776,8 @@ svg path { vector-effect: non-scaling-stroke; }
   </aside>
   <div class="main">
     <header class="top">
-      <h2 id="page-title">Overview</h2>
-      <span class="live">LIVE ${k.live}</span>
+      <div class="top-left"><h2 id="page-title">Overview</h2></div>
+      <div class="top-right"><span class="live-dot" data-live-dot><i></i>${k.live}</span></div>
     </header>
 
     <section class="page wrap" data-page="overview">
@@ -1252,7 +1087,7 @@ function applyTheme(v) {
   const theme = v === 'light' ? 'light' : 'dark'
   document.documentElement.setAttribute('data-theme', theme)
 }
-try { applyTheme(localStorage.getItem('metis-operator-theme')) } catch (e) { applyTheme('dark') }
+try { applyTheme(localStorage.getItem('metis-operator-theme') || 'light') } catch (e) { applyTheme('light') }
 if (themeBtn) themeBtn.addEventListener('click', () => {
   const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light'
   applyTheme(next)

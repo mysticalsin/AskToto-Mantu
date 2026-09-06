@@ -277,7 +277,7 @@ describe('quality bar: keys last4 and Cloudflare fail-loud', () => {
     expect(html).toContain('Connect Cloudflare (login) on Keys.')
     expect(html).toContain('data-install-works')
     expect(html).toContain('Install → works')
-    expect(html).toContain('data-theme="dark"')
+    expect(html).toContain('data-theme="light"')
     expect(html).not.toContain('Cloudflare token missing')
     expect(html).toContain('data-page="keys"')
     expect(html).not.toMatch(tokenPatternForTests())
