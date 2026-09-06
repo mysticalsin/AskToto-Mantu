@@ -4,8 +4,9 @@
  *
  * Fullscreen orb.ts sizes the renderer to window.innerWidth/innerHeight.
  * This mount is the Jarvis Settings pill / Bar rest when style is `obsidian`:
- * 41 host, never fullscreen. Pill density and pixel point size are retuned so
- * the sphere reads on a 41 circle. Do not fall back to a gray box or a static Métis M.
+ * 41 host, never fullscreen. Particle count and point size scale with hostPx
+ * so the 41 pill is a clean sphere, not 2000 sparkles cropped from orb.ts.
+ * DPR is at least 2. Soft disc sprites, not square pixels. No gray box. No Métis M.
  */
 
 import type { OrbMood } from './bar-pill-orb'
@@ -15,11 +16,13 @@ import {
   BufferGeometry,
   Clock,
   Color,
+  DataTexture,
   LineBasicMaterial,
   LineSegments,
   PerspectiveCamera,
   Points,
   PointsMaterial,
+  RGBAFormat,
   Scene,
   WebGLRenderer
 } from 'three'
@@ -28,19 +31,21 @@ export const JARVIS_ORB_COLOR = 0x4ca8e8
 export const JARVIS_ORB_STATES = ['idle', 'listening', 'thinking', 'speaking'] as const
 export type JarvisOrbState = (typeof JARVIS_ORB_STATES)[number]
 
-/** Same count as orb.ts on a large host. The 41 pill thins the cloud so it does not mud. */
+/** orb.ts fullscreen count. The 41 pill must thin this. Never crop 2000 into 41px. */
 export const JARVIS_PARTICLE_COUNT = 2000
-export const JARVIS_PILL_PARTICLE_COUNT = 800
+/** Clean sentient sphere at 41. 800+ is sparkly noise. */
+export const JARVIS_PILL_PARTICLE_COUNT = 220
 export const JARVIS_ELECTRON_COUNT = 3
 export const JARVIS_MAX_LINES = 8000
 export const JARVIS_CLOUD_SEED_RADIUS = 25
 export const JARVIS_CAMERA_Z = 80
-export const JARVIS_PILL_CAMERA_Z = 58
+export const JARVIS_PILL_CAMERA_Z = 52
 export const JARVIS_LINE_DISTANCE = 8
 export const JARVIS_HOST_PX = 41
-/** orb.ts was tuned on a ~viewport canvas. Large-host point size scales from this. */
+/** orb.ts was tuned on a ~viewport canvas. Scale count and points from this. */
 export const JARVIS_SIZE_REF_PX = 900
 export const JARVIS_PILL_HOST_PX = 48
+export const JARVIS_MIN_DPR = 2
 
 export interface JarvisStateTarget {
   radius: number
@@ -90,10 +95,12 @@ export function seedJarvisCloud(
   return { pos, phase }
 }
 
+/** Thin the cloud with host size. 41 → ~220. Never keep orb.ts 2000 on the pill. */
 export function jarvisParticleCountForHost(hostPx: number): number {
-  if (hostPx <= JARVIS_PILL_HOST_PX) return JARVIS_PILL_PARTICLE_COUNT
-  if (hostPx <= 96) return 1400
-  return JARVIS_PARTICLE_COUNT
+  const h = Math.max(1, hostPx)
+  if (h >= JARVIS_SIZE_REF_PX) return JARVIS_PARTICLE_COUNT
+  const scaled = Math.round(JARVIS_PARTICLE_COUNT * (h / JARVIS_SIZE_REF_PX) * 2.4)
+  return Math.min(JARVIS_PARTICLE_COUNT, Math.max(JARVIS_PILL_PARTICLE_COUNT, scaled))
 }
 
 export function jarvisCameraZForHost(hostPx: number): number {
@@ -106,17 +113,62 @@ export function jarvisSizeAttenuationForHost(hostPx: number): boolean {
   return hostPx > 96
 }
 
-/** Pill hosts use pixel-sized points. Large hosts keep orb.ts world size. */
+/** Soft pixel size on the pill. Tiny 1px dots read as sparkle noise. */
 export function jarvisPointSizeForHost(baseSize: number, hostPx: number): number {
-  if (hostPx <= JARVIS_PILL_HOST_PX) return Math.min(2.8, Math.max(1.55, baseSize * 5.2))
-  if (hostPx <= 96) return Math.min(3.2, Math.max(1.4, baseSize * 4.4))
+  if (hostPx <= JARVIS_PILL_HOST_PX) return Math.min(3.8, Math.max(2.4, baseSize * 7.2))
+  if (hostPx <= 96) return Math.min(3.4, Math.max(2.0, baseSize * 5.6))
   return baseSize * (JARVIS_SIZE_REF_PX / Math.max(1, hostPx))
 }
 
+/** Never muddy 1x. Retina stays 2–3. */
+export function jarvisPixelRatio(dpr?: number): number {
+  const n =
+    dpr && dpr > 0
+      ? dpr
+      : typeof window !== 'undefined'
+        ? window.devicePixelRatio || JARVIS_MIN_DPR
+        : JARVIS_MIN_DPR
+  return Math.min(3, Math.max(JARVIS_MIN_DPR, n))
+}
+
+export function jarvisLineStepForCount(count: number): number {
+  if (count <= 320) return Math.max(2, Math.floor(count / 90))
+  return Math.max(1, Math.floor(count / 600))
+}
+
+/**
+ * CSS host, not the 2x backing attribute. width=82 on a 41 pill must stay 41.
+ */
 export function hostCssSize(canvas: HTMLCanvasElement): number {
-  const w = canvas.clientWidth || canvas.width || JARVIS_HOST_PX
-  const h = canvas.clientHeight || canvas.height || JARVIS_HOST_PX
-  return Math.max(1, Math.round(Math.min(w, h)))
+  const cssW = canvas.clientWidth
+  const cssH = canvas.clientHeight
+  if (cssW > 0 && cssH > 0) return Math.max(1, Math.round(Math.min(cssW, cssH)))
+  const attr = Math.min(canvas.width || 0, canvas.height || 0)
+  if (attr >= JARVIS_HOST_PX * 2) return JARVIS_HOST_PX
+  return Math.max(1, attr || JARVIS_HOST_PX)
+}
+
+/** Soft disc so Points are not square pixels. DataTexture — three@0.143 types have no CanvasTexture. */
+export function createJarvisPointSprite(): DataTexture {
+  const s = 64
+  const data = new Uint8Array(s * s * 4)
+  const cx = (s - 1) / 2
+  const r = s / 2
+  for (let y = 0; y < s; y++) {
+    for (let x = 0; x < s; x++) {
+      const d = Math.hypot(x - cx, y - cx) / r
+      const t = Math.max(0, 1 - d)
+      const i = (y * s + x) * 4
+      const a = Math.round(t * t * 255)
+      data[i] = 255
+      data[i + 1] = 255
+      data[i + 2] = 255
+      data[i + 3] = a
+    }
+  }
+  const tex = new DataTexture(data, s, s, RGBAFormat)
+  tex.needsUpdate = true
+  return tex
 }
 
 export interface JarvisOrbHandle {
@@ -164,9 +216,7 @@ export function createJarvisOrb(
 
   const fit = (): number => {
     const css = hostCssSize(canvas)
-    const dpr =
-      typeof window !== 'undefined' ? Math.min(2, window.devicePixelRatio || 1) : 2
-    renderer.setPixelRatio(Math.max(2, dpr))
+    renderer.setPixelRatio(jarvisPixelRatio())
     renderer.setSize(css, css, false)
     return css
   }
@@ -183,14 +233,16 @@ export function createJarvisOrb(
   const { pos, phase } = seedJarvisCloud(N, JARVIS_CLOUD_SEED_RADIUS)
   const vel = new Float32Array(N * 3)
   const attenuate = jarvisSizeAttenuationForHost(hostPx)
+  const pointSprite = createJarvisPointSprite()
 
   const geo = new BufferGeometry()
   geo.setAttribute('position', new BufferAttribute(pos, 3))
   const mat = new PointsMaterial({
     color: JARVIS_ORB_COLOR,
     size: jarvisPointSizeForHost(0.4, hostPx),
+    map: pointSprite,
     transparent: true,
-    opacity: 0.6,
+    opacity: hostPx <= JARVIS_PILL_HOST_PX ? 0.82 : 0.6,
     sizeAttenuation: attenuate,
     blending: AdditiveBlending,
     depthWrite: false
@@ -219,6 +271,7 @@ export function createJarvisOrb(
   const electronMat = new PointsMaterial({
     color: 0xffffff,
     size: jarvisPointSizeForHost(0.8, hostPx),
+    map: pointSprite,
     transparent: true,
     opacity: 1,
     sizeAttenuation: attenuate,
@@ -379,7 +432,7 @@ export function createJarvisOrb(
       let lineCount = 0
       const maxDist = lineDistance * (1 + bass * 0.5)
       const maxDistSq = maxDist * maxDist
-      const step = Math.max(1, Math.floor(N / 600))
+      const step = jarvisLineStepForCount(N)
 
       for (let i = 0; i < N && lineCount < JARVIS_MAX_LINES; i += step) {
         const i3 = i * 3
@@ -405,7 +458,7 @@ export function createJarvisOrb(
       }
       lineGeo.setDrawRange(0, lineCount * 2)
       lp.needsUpdate = true
-      lineMat.opacity = lineAmount * 0.12
+      lineMat.opacity = lineAmount * (hostPx <= JARVIS_PILL_HOST_PX ? 0.2 : 0.12)
 
       activeConnections = []
       for (let c = 0; c < Math.min(lineCount, 500); c++) {
@@ -531,6 +584,7 @@ export function createJarvisOrb(
       mat.dispose()
       lineMat.dispose()
       electronMat.dispose()
+      pointSprite.dispose()
       renderer.dispose()
     }
   }

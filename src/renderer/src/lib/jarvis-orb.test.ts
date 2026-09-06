@@ -6,6 +6,7 @@ import {
   JARVIS_CAMERA_Z,
   JARVIS_ELECTRON_COUNT,
   JARVIS_HOST_PX,
+  JARVIS_MIN_DPR,
   JARVIS_ORB_COLOR,
   JARVIS_ORB_STATES,
   JARVIS_PARTICLE_COUNT,
@@ -13,7 +14,9 @@ import {
   JARVIS_PILL_PARTICLE_COUNT,
   JARVIS_STATE_TARGET,
   jarvisCameraZForHost,
+  jarvisLineStepForCount,
   jarvisParticleCountForHost,
+  jarvisPixelRatio,
   jarvisPointSizeForHost,
   jarvisSizeAttenuationForHost,
   resolveJarvisOrbState,
@@ -42,6 +45,12 @@ describe('Jarvis particle orb (Bar Circle / second pill)', () => {
     expect(engine).not.toMatch(/setSize\(\s*window\.innerHeight/)
     expect(engine).toMatch(/setSize\(css, css, false\)/)
     expect(engine).toMatch(/setClearColor\(0x050508, 0\)/)
+    expect(engine).toMatch(/createJarvisPointSprite/)
+    expect(engine).toMatch(/jarvisPixelRatio/)
+    expect(engine).toMatch(/DataTexture/)
+    expect(engine).not.toMatch(/CanvasTexture/)
+    expect(engine).not.toMatch(/does not thin the cloud/)
+    expect(engine).not.toMatch(/crops the camera/)
     expect(engine).not.toMatch(/fibonacciSphere/)
     expect(pkg).toMatch(/"three": "0\.143\.0"/)
     expect(orb).toMatch(/data-orb-engine="jarvis-particles"/)
@@ -71,19 +80,27 @@ describe('Jarvis particle orb (Bar Circle / second pill)', () => {
       if (r <= 25 + 1e-6) inside++
     }
     expect(inside).toBe(JARVIS_PARTICLE_COUNT)
-    expect(jarvisPointSizeForHost(0.4, 41)).toBeGreaterThan(1.5)
-    expect(jarvisPointSizeForHost(0.4, 41)).toBeLessThan(3.5)
+    expect(jarvisPointSizeForHost(0.4, 41)).toBeGreaterThanOrEqual(2.4)
+    expect(jarvisPointSizeForHost(0.4, 41)).toBeLessThanOrEqual(3.8)
     expect(jarvisPointSizeForHost(0.4, 900)).toBeCloseTo(0.4, 5)
+    expect(JARVIS_PILL_PARTICLE_COUNT).toBe(220)
     expect(jarvisParticleCountForHost(41)).toBe(JARVIS_PILL_PARTICLE_COUNT)
+    expect(jarvisParticleCountForHost(41)).toBeLessThan(400)
     expect(jarvisParticleCountForHost(41)).toBeLessThan(JARVIS_PARTICLE_COUNT)
     expect(jarvisParticleCountForHost(900)).toBe(JARVIS_PARTICLE_COUNT)
     expect(jarvisCameraZForHost(41)).toBe(JARVIS_PILL_CAMERA_Z)
     expect(jarvisCameraZForHost(41)).toBeLessThan(JARVIS_CAMERA_Z)
     expect(jarvisSizeAttenuationForHost(41)).toBe(false)
     expect(jarvisSizeAttenuationForHost(900)).toBe(true)
+    expect(jarvisPixelRatio(1)).toBe(JARVIS_MIN_DPR)
+    expect(jarvisPixelRatio(2)).toBe(2)
+    expect(jarvisPixelRatio(3)).toBe(3)
+    expect(jarvisLineStepForCount(220)).toBeGreaterThan(1)
     expect(JARVIS_STATE_TARGET.thinking.lineAmount).toBeGreaterThan(JARVIS_STATE_TARGET.idle.lineAmount)
     expect(JARVIS_STATE_TARGET.thinking.electronRate).toBeGreaterThan(0)
-    const canvas = { clientWidth: 41, clientHeight: 41, width: 82, height: 82 } as HTMLCanvasElement
-    expect(hostCssSize(canvas)).toBe(41)
+    const css = { clientWidth: 41, clientHeight: 41, width: 82, height: 82 } as HTMLCanvasElement
+    expect(hostCssSize(css)).toBe(41)
+    const backingOnly = { clientWidth: 0, clientHeight: 0, width: 82, height: 82 } as HTMLCanvasElement
+    expect(hostCssSize(backingOnly)).toBe(41)
   })
 })
