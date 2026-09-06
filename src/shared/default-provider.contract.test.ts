@@ -72,6 +72,12 @@ describe('Apple-grade defaults (METIS-PLATFORM-NORTH-STAR §3.4)', () => {
     expect(DEFAULT_SETTINGS.overlayOrbStyle).toBe('jakub')
     expect(DEFAULT_SETTINGS.providerPriority).toBe('api')
     expect(DEFAULT_SETTINGS.encryptTranscripts).toBe(true)
+    expect(DEFAULT_SETTINGS.autoStartMeetings).toEqual({
+      enabled: true,
+      zoom: true,
+      teams: true,
+      meet: true
+    })
     expect(DEFAULT_SETTINGS.operatorUrl).toBe('')
     expect(DEFAULT_SETTINGS.localLlm.enabled).toBe(false)
   })
@@ -81,5 +87,11 @@ describe('Apple-grade defaults (METIS-PLATFORM-NORTH-STAR §3.4)', () => {
     expect(BaseSettingsSchema.shape.overlayOrbStyle.parse(undefined)).toBe('jakub')
     expect(BaseSettingsSchema.shape.providerPriority.parse(undefined)).toBe('api')
     expect(BaseSettingsSchema.shape.encryptTranscripts.parse(undefined)).toBe(true)
+    expect(BaseSettingsSchema.shape.autoStartMeetings.parse(undefined)).toEqual({
+      enabled: true,
+      zoom: true,
+      teams: true,
+      meet: true
+    })
   })
 })

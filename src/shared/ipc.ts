@@ -177,6 +177,9 @@ export const IPC = {
   // exception the renderer survives, previously visible only via ASKTOTO_DEBUG_RENDERER console mirroring.
   rendererCrash: 'renderer:crash',
   hotkey: 'hotkey',
+  // Main → renderer: start Listen because a meeting app became the foreground window.
+  // Renderer must call startListen only (never toggle/stop). One fire per meeting session.
+  meetingAutoStart: 'meeting:auto-start',
   shortcutFailures: 'shortcuts:failures',
   permissionsGet: 'permissions:get',
   permissionsOpenSettings: 'permissions:openSettings',
@@ -1046,6 +1049,17 @@ export const BaseSettingsSchema = z.object({
   // = never finished (or a legacy profile that predates this field; the app backfills it once on load).
   onboardingDoneAt: z.number().default(0),
   recordingConsent: z.boolean().default(false),
+  // Auto-start Listen when Teams / Zoom / Google Meet becomes the foreground window.
+  // Defaults ON for new profiles. Runtime still requires onboardingDone && recordingConsent
+  // (see shared/meeting-auto-start.ts). Before consent this never fires.
+  autoStartMeetings: z
+    .object({
+      enabled: z.boolean().default(true),
+      zoom: z.boolean().default(true),
+      teams: z.boolean().default(true),
+      meet: z.boolean().default(true)
+    })
+    .default({ enabled: true, zoom: true, teams: true, meet: true }),
   playListenChime: z.boolean().default(true),
   soundCues: z.boolean().default(true), // subtle answer-ready / error sound cues
   uiSounds: z.boolean().default(true), // master: soft click feedback on buttons (and gates all UI sounds)
@@ -1543,6 +1557,7 @@ export const DEFAULT_SETTINGS: Settings = {
   onboardingDone: false,
   onboardingDoneAt: 0,
   recordingConsent: false,
+  autoStartMeetings: { enabled: true, zoom: true, teams: true, meet: true },
   playListenChime: true,
   soundCues: true,
   uiSounds: true,
