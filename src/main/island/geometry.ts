@@ -286,11 +286,14 @@ export function exclusiveOnboardingBounds(bounds: Rect, workArea: Rect): Rect {
 
 /**
  * Totos-Mac 1.8.3 tip 044c0f1: `transparent: true` + `setSimpleFullScreen(true)` composites as
- * a 3600×2338 RGBA(0,0,0,0) void. Exclusive onboarding is opaque Mantu purple. After
- * `onboardingDone` the overlay is transparent again. `transparent` is constructor-only
- * (Electron 39) — enter/exit recreate the window when chrome no longer matches.
+ * a 3600×2338 RGBA(0,0,0,0) void. Exclusive onboarding stays opaque so simple-fullscreen is
+ * not a black void. First visible frame must match the lady+universe hero (`#05010A`), never
+ * Mantu purple wash. After `onboardingDone` the overlay is transparent again. `transparent`
+ * is constructor-only (Electron 39) — enter/exit recreate the window when chrome no longer matches.
  */
-export const EXCLUSIVE_ONBOARDING_BACKGROUND = '#3A0B6B'
+export const MANTU_BRAND_PURPLE = '#3A0B6B'
+/** Hero/universe hold. Same ink as KineticGrid `bg`. Never `#3A0B6B`. */
+export const EXCLUSIVE_ONBOARDING_BACKGROUND = '#05010A'
 export const OVERLAY_TRANSPARENT_BACKGROUND = '#00000000'
 
 export interface OverlayWindowChrome {
@@ -352,6 +355,80 @@ export function hideParkRect(m: DisplayMetrics): Rect {
     m.workArea.width
   )
   return { x, y: hoverRestTop(m), width, height }
+}
+
+/** Ultron CGWindowList live FAIL: 8×2 at y=39 painting opaque Mantu purple. */
+export const ULTRON_PURPLE_HAIRLINE = {
+  width: OVERLAY_HIDE_PARK.width,
+  height: OVERLAY_HIDE_PARK.height,
+  y: 39,
+  background: MANTU_BRAND_PURPLE,
+  opacity: 1
+} as const
+
+export function isTransparentOverlayBackground(color?: string): boolean {
+  if (color == null) return false
+  const n = color.trim().toLowerCase()
+  if (n === 'transparent' || n === '#0000' || n === OVERLAY_TRANSPARENT_BACKGROUND.toLowerCase()) return true
+  // #RGBA / #RRGGBBAA with alpha 0
+  if (n.startsWith('#') && (n.length === 5 || n.length === 9) && n.endsWith('00')) return true
+  return false
+}
+
+export function isOpaqueMantuPurple(color?: string): boolean {
+  return (color ?? '').trim().toLowerCase() === MANTU_BRAND_PURPLE.toLowerCase()
+}
+
+/** Exclusive first paint must never be brand purple, even for one frame. */
+export function isExclusivePurpleFlash(color?: string): boolean {
+  return isOpaqueMantuPurple(color)
+}
+
+/**
+ * Hide park window opacity. Hide rest is gone (0) so Electron clamping the
+ * 8×2 hairline to workArea.y≈39 cannot paint a visible sliver. Island peek,
+ * Bar, Settings, and exclusive onboarding stay 1. Cursor watch does not use
+ * this window — hoverWatchRestRect still reveals.
+ */
+export function hideParkWindowOpacity(layout: OverlayLayout, resting: boolean): number {
+  return layout === 'hide' && resting ? 0 : 1
+}
+
+/**
+ * True when the parked hide window cannot be seen: opacity 0, fully above
+ * the display top, or transparent at bounds.y (behind the menu bar).
+ */
+export function hideParkIsVisuallyClear(input: {
+  y: number
+  boundsY: number
+  width?: number
+  height?: number
+  background?: string
+  opacity?: number
+}): boolean {
+  if ((input.opacity ?? 1) <= 0) return true
+  const height = input.height ?? OVERLAY_HIDE_PARK.height
+  if (input.y + height <= input.boundsY) return true
+  return input.y === input.boundsY && isTransparentOverlayBackground(input.background ?? OVERLAY_TRANSPARENT_BACKGROUND)
+}
+
+/**
+ * Ultron / Tony live: 8×2 at workArea.y≈39 with opaque purple (or any visible
+ * paint) is FAIL. Opacity 0, off-screen rest, or transparent + bounds.y pass.
+ */
+export function isForbiddenHideParkHairline(input: {
+  width: number
+  height: number
+  y: number
+  workAreaY: number
+  boundsY: number
+  background?: string
+  opacity?: number
+}): boolean {
+  if (input.width !== OVERLAY_HIDE_PARK.width || input.height !== OVERLAY_HIDE_PARK.height) return false
+  if (hideParkIsVisuallyClear(input)) return false
+  const clampedToWorkArea = Math.abs(input.y - input.workAreaY) <= 1 && input.workAreaY > input.boundsY
+  return clampedToWorkArea
 }
 
 /**

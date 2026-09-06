@@ -1,4 +1,5 @@
 import type { AskStart, ConversationMode, Profile } from '@shared/ipc'
+import { DEFAULT_ASK_CAVEMAN, type AskCavemanLevel } from '@shared/caveman-ask'
 import {
   SUMMARY_PROMPT,
   INJECTION_GUARD,
@@ -92,7 +93,8 @@ export function buildSystemParts(
   contextDocs: { name: string; text: string }[] | undefined,
   outputLanguage?: string,
   summaryLanguage?: string,
-  systemPrompt?: string
+  systemPrompt?: string,
+  askCaveman?: AskCavemanLevel
 ): SystemParts {
   const untrusted =
     req.mode === 'suggest' || req.mode === 'summary' || req.mode === 'recap' || req.mode === 'vision'
@@ -145,7 +147,9 @@ export function buildSystemParts(
   // Locked operator skills run AFTER the visible (user or default) prompt. Builtin modes get that
   // mode's shipped skill plus the humanizer. Custom modes get the humanizer only. Fact-check skips
   // both so the VERDICT contract stays clean. User modePrompts cannot replace the skill body.
-  const locked = req.kind === 'factcheck' ? '' : lockedSkillsAppendix(mode)
+  // Typed Ask also gets locked caveman (default full) unless the user said stop / normal mode.
+  const cavemanLevel = typedAsk ? (askCaveman ?? DEFAULT_ASK_CAVEMAN) : 'off'
+  const locked = req.kind === 'factcheck' ? '' : lockedSkillsAppendix(mode, { caveman: cavemanLevel })
   return {
     cachedPrefix: lead + prefix + prompt + locked + profileTail + ctx + rail + answerFirst + lang,
     volatile: ''
@@ -164,7 +168,8 @@ export function buildSystem(
   contextDocs: { name: string; text: string }[] | undefined,
   outputLanguage?: string,
   summaryLanguage?: string,
-  systemPrompt?: string
+  systemPrompt?: string,
+  askCaveman?: AskCavemanLevel
 ): string {
   const parts = buildSystemParts(
     req,
@@ -174,7 +179,8 @@ export function buildSystem(
     contextDocs,
     outputLanguage,
     summaryLanguage,
-    systemPrompt
+    systemPrompt,
+    askCaveman
   )
   return parts.cachedPrefix + parts.volatile
 }

@@ -114,7 +114,7 @@ extraResources:
     to: ort
   - from: resources/runtime-assets-manifest.json
     to: runtime-assets-manifest.json
-  # Locked conversation-mode skills + shared humanizer. Hashed in src/shared/mode-skills.lock.json.
+  # Locked conversation-mode skills + shared humanizer + Ask caveman. Hashed in src/shared/mode-skills.lock.json.
   # Main verifies SHA-256 on load; a tampered file fails the ask out loud.
   - from: skills
     to: skills

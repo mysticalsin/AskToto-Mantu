@@ -3,7 +3,9 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ConversationMode } from '@shared/ipc'
+import type { AskCavemanLevel } from '@shared/caveman-ask'
 import {
+  CAVEMAN_SKILL_ID,
   composeLockedSkillsAppendix,
   emptyOverlayLock,
   HUMANIZER_SKILL_ID,
@@ -202,17 +204,28 @@ export function skillLockHashForMode(mode: ConversationMode): string {
   }
   if (isBuiltinConversationMode(mode)) parts.push(pick(mode))
   parts.push(pick(HUMANIZER_SKILL_ID))
+  parts.push(pick(CAVEMAN_SKILL_ID))
   return sha256Utf8(parts.join('|')).slice(0, 16)
 }
 
-/** Locked appendix after the visible mode prompt. Custom modes: humanizer only. */
-export function lockedSkillsAppendix(mode: ConversationMode): string {
+/** Locked appendix after the visible mode prompt. Custom modes: humanizer only. Typed Ask may add caveman. */
+export function lockedSkillsAppendix(
+  mode: ConversationMode,
+  opts?: { caveman?: AskCavemanLevel }
+): string {
   const humanizer = loadVerifiedSkill(HUMANIZER_SKILL_ID)
+  const cavemanLevel = opts?.caveman ?? 'off'
+  const caveman = cavemanLevel === 'off' ? null : loadVerifiedSkill(CAVEMAN_SKILL_ID)
   if (isBuiltinConversationMode(mode)) {
-    return composeLockedSkillsAppendix(mode, {
-      modeSkill: loadVerifiedSkill(mode),
-      humanizer
-    })
+    return composeLockedSkillsAppendix(
+      mode,
+      {
+        modeSkill: loadVerifiedSkill(mode),
+        humanizer,
+        caveman
+      },
+      { caveman: cavemanLevel }
+    )
   }
-  return composeLockedSkillsAppendix(mode, { modeSkill: null, humanizer })
+  return composeLockedSkillsAppendix(mode, { modeSkill: null, humanizer, caveman }, { caveman: cavemanLevel })
 }

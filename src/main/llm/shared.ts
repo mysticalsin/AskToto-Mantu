@@ -1,6 +1,7 @@
 import type { AskStart } from '@shared/ipc'
 import type { ProviderKind, ProviderId } from '@shared/providers'
 import type { StreamCacheUsage } from '@shared/operator'
+import { AUTO_CLARITY_DIRECTIVE, autoClarityDropCaveman } from '@shared/caveman-ask'
 
 export type { StreamCacheUsage }
 
@@ -118,7 +119,12 @@ const DEEPER_DIRECTIVE =
  *  message (NOT the cached system prefix), so requesting depth never invalidates the prompt cache. */
 export function userText(req: AskStart): string {
   const base = baseUserText(req)
-  return req.depth === 'deeper' ? base + DEEPER_DIRECTIVE : base
+  const withDepth = req.depth === 'deeper' ? base + DEEPER_DIRECTIVE : base
+  const typedAsk = (req.mode === 'answer' || req.mode === 'vision') && req.kind !== 'factcheck'
+  if (typedAsk && autoClarityDropCaveman(req.prompt)) {
+    return withDepth + AUTO_CLARITY_DIRECTIVE
+  }
+  return withDepth
 }
 
 /**

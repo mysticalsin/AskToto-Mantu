@@ -4,7 +4,10 @@
  * Composition: public domain. Recording: CC0 1.0. See assets/music/LICENSE.OPEN-GOLDBERG.txt.
  * No Web Audio choir pad. No synthesizeOnboardingPad. Never sends, never calls IPC.
  * OS mute still applies (default destination). Reduced-motion does not mute.
+ * After onboardingDone / abort, `lockOnboardingAudio` seals the module so the Aria
+ * cannot restart until Replay explicitly unlocks.
  */
+import { ONBOARDING_AUDIO_LOCK_EVENT } from '@shared/onboarding-audio'
 
 export const ONBOARDING_MUSIC_FILE = 'goldberg-variations-aria.ogg'
 export const ONBOARDING_MUSIC_SRC = new URL(
@@ -48,11 +51,29 @@ export function onboardingMusicLoopEnvelope(
  * Called on the portal-open mount (Electron usually allows autoplay). If play()
  * rejects, the caller retries on the next user gesture.
  */
+export function isOnboardingAudioLocked(): boolean {
+  return onboardingAudioLocked
+}
+
+/** Replay only. First-run and post-finish stay sealed until this runs. */
+export function unlockOnboardingAudio(): void {
+  onboardingAudioLocked = false
+}
+
+/**
+ * Stop every bed and refuse new playback. Call when onboardingDone becomes true
+ * and on any abort / exclusive→overlay recreate / relaunch-after-done.
+ */
+export function lockOnboardingAudio(): void {
+  onboardingAudioLocked = true
+  haltAllOnboardingAudio()
+}
+
 export function playOnboardingAudio(
   el: HTMLAudioElement | null | undefined,
   opts: { restart?: boolean } = {}
 ): Promise<void> | undefined {
-  if (!el) return
+  if (!el || onboardingAudioLocked) return
   const playing = el.play()
   if (opts.restart) el.currentTime = 0
   void playing.catch(() => {})
@@ -80,6 +101,8 @@ const knownOnboardingBeds = new Set<HTMLAudioElement>()
 const knownBedStops = new Set<() => void>()
 
 let closeHooksInstalled = false
+/** Sealed after finish / exclusive exit. Replay is the only unlock. */
+let onboardingAudioLocked = false
 
 /** True when the tour is no longer on screen: tab/window hide, overlay hide, or Escape. */
 export function shouldStopOnboardingMusicOnEvent(e: {
@@ -126,15 +149,24 @@ function onGlobalCloseEvent(e: Event): void {
   }
 }
 
-function ensureOnboardingAudioCloseHooks(): void {
+function onLockEvent(): void {
+  lockOnboardingAudio()
+}
+
+export function installOnboardingAudioLockHooks(): void {
   if (closeHooksInstalled || typeof window === 'undefined') return
   closeHooksInstalled = true
   window.addEventListener('pagehide', onGlobalCloseEvent)
   window.addEventListener('beforeunload', onGlobalCloseEvent)
   window.addEventListener('keydown', onGlobalCloseEvent)
+  window.addEventListener(ONBOARDING_AUDIO_LOCK_EVENT, onLockEvent)
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', onGlobalCloseEvent)
   }
+}
+
+function ensureOnboardingAudioCloseHooks(): void {
+  installOnboardingAudioLockHooks()
 }
 
 /**
@@ -164,8 +196,28 @@ export function haltAllOnboardingAudio(): void {
   knownOnboardingBeds.clear()
 }
 
+function inertOnboardingMusicBed(): OnboardingMusicBed {
+  const el = typeof Audio !== 'undefined' ? new Audio() : ({} as HTMLAudioElement)
+  try {
+    el.autoplay = false
+    el.loop = false
+    el.volume = 0
+    el.src = ''
+  } catch {
+    /* node / headless */
+  }
+  return {
+    element: el,
+    start: () => undefined,
+    stop: () => {},
+    setMuted: () => {},
+    isMuted: () => true
+  }
+}
+
 export function createOnboardingMusicBed(): OnboardingMusicBed {
   ensureOnboardingAudioCloseHooks()
+  if (onboardingAudioLocked) return inertOnboardingMusicBed()
   const el = new Audio(ONBOARDING_MUSIC_SRC)
   knownOnboardingBeds.add(el)
   el.loop = true
@@ -222,7 +274,7 @@ export function createOnboardingMusicBed(): OnboardingMusicBed {
   return {
     element: el,
     start: (opts = {}) => {
-      if (stopped) return
+      if (stopped || onboardingAudioLocked) return
       return playOnboardingAudio(el, opts)
     },
     stop,
