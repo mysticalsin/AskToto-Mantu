@@ -2238,12 +2238,38 @@ function CliIntegration({
     })
   }
 
-  // Connect button (setup-opened / error): re-run test only
+  // Connect: install in-flow if the CLI is missing, then prove a live session. Never mark Connected
+  // from this handler — main writes cliConnected only after connectCliSession returns ok.
   const connect = async (id: 'claude-cli' | 'codex-cli'): Promise<void> => {
     // Capture which provider was active when this connect attempt started — see the patch() call below.
     const startProvider = providerRef.current
     setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
-    const r = await window.toto.cliTest(id)
+    let r = await window.toto.cliTest(id)
+    if (!r.ok && r.session === 'missing') {
+      setState(id, { phase: 'installing', msg: 'Installing…', version: null })
+      const installResult = await window.toto.cliInstall(id, (line) => {
+        setState(id, { phase: 'installing', msg: line, version: null })
+      })
+      if (installResult.needsTerminal) {
+        window.toto.cliSetup(id)
+        setState(id, {
+          phase: 'setup-opened',
+          msg: 'Finish the login in the window that opened, then come back and press Connect.',
+          version: null
+        })
+        return
+      }
+      if (!installResult.ok) {
+        setState(id, {
+          phase: 'install-error',
+          msg: installResult.error || 'Installation failed.',
+          version: null
+        })
+        return
+      }
+      setState(id, { phase: 'connecting', msg: 'Connecting…', version: null })
+      r = await window.toto.cliTest(id)
+    }
     if (r.ok) {
       // Same stale-resolution + provider-switch guard as runInstall above.
       // Weekly-limit is signed-in: Connect succeeds and we say so, instead of looking disconnected.
@@ -2255,6 +2281,13 @@ function CliIntegration({
             ? r.error || 'Signed in. Weekly usage limit reached — not disconnected.'
             : null,
         version: r.version ?? null
+      })
+    } else if (r.session === 'signed-out') {
+      window.toto.cliLogin(id)
+      setState(id, {
+        phase: 'setup-opened',
+        msg: 'Installed. Sign in through the window that opened, then come back and press Connect.',
+        version: null
       })
     } else {
       setState(id, {
@@ -2476,7 +2509,7 @@ function CliIntegration({
   return (
     <Section
       title="CLI Integration"
-      desc="Claude Code and Codex route through your own local install of that tool. It has to be on this device. Set up automatically installs it (via npm i -g) if it's missing, or connects straight away if it's already there."
+      desc="Claude Code and Codex route through your own local install of that tool. It has to be on this device. Set up automatically installs a managed copy if the CLI is missing, or reuses a Claude or Codex login already on this machine. Connected only after a live session check."
       icon={Link2}
     >
       <div className="flex flex-col gap-3">

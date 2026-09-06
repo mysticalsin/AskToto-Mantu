@@ -140,6 +140,8 @@ Ambient copilot / auto-answer stays until Tony clicks (dismiss/read, never send)
 ## CLI session and Spotlight Ref
 Settings → CLI Integration Connect is a zero-token session probe (`missing` / `signed-out` / `weekly-limit` / `live`). A Claude weekly cap is signed-in, not disconnected. Codex `login status` = Logged in is connected. Never auto-send a billed turn to connect.
 
+Connect / Install must install in-flow (managed tarball, no system Node) when the CLI is missing, then prove that session. Windows must reuse a licensed Claude Code / Codex native install (`%USERPROFILE%\.local\bin`, `%LOCALAPPDATA%\Programs\...`) and must never treat Claude Desktop's `WindowsApps` alias as the CLI. Login scripts invoke that resolved binary (or the managed entry), not a PATH-only `call claude`. No fake Connected.
+
 ### Managed Dust CLI (not web-only)
 
 Spotlight Ref is a CLI call. The web REST picker (`listDustAgents` / view merge) must not be the only path and must not dead-end on reconnect copy.
