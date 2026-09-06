@@ -70,13 +70,17 @@ function questionTypeFromBody(body: Record<string, unknown>): QuestionType {
 }
 
 /**
- * A browser cross-site POST always carries `Sec-Fetch-Site` (modern browsers) or an `Origin` header that
- * differs from the Worker's own host (older ones, or a `fetch` from another origin). A same-origin console
- * request, and any non-browser caller that sends neither header (a server-to-server Bearer call, or a
- * test), is treated as same-site: this is a CSRF gate, not a bearer-token authorization check.
+ * A browser cross-site mutation always carries `Sec-Fetch-Site` (modern browsers) or an `Origin` header
+ * that differs from the Worker's own host (older ones, or a `fetch` from another origin). A same-origin
+ * console request, and any non-browser caller that sends neither header (a server-to-server Bearer call,
+ * or a test), is treated as same-site: this is a CSRF gate, not a bearer-token authorization check. It
+ * covers every mutating method the admin API uses, not only POST, so a PATCH or DELETE route added later
+ * is gated the day it is registered.
  */
-function isCrossSitePost(request: Request, url: URL): boolean {
-  if (request.method !== 'POST') return false
+const CSRF_GATED_METHODS = new Set(['POST', 'PATCH', 'DELETE', 'PUT'])
+
+function isCrossSiteMutation(request: Request, url: URL): boolean {
+  if (!CSRF_GATED_METHODS.has(request.method)) return false
   const secFetchSite = request.headers.get('sec-fetch-site')
   if (secFetchSite) return secFetchSite !== 'same-origin'
   const origin = request.headers.get('origin')
@@ -165,7 +169,7 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     const ident = await resolveAdminIdentity(request, accessCtx, env, now)
     if (ident.status === 'misconfigured') return accessMisconfigured(ident.error)
     if (ident.status === 'ok') {
-      if (isCrossSitePost(request, url)) return csrfRefused()
+      if (isCrossSiteMutation(request, url)) return csrfRefused()
       const res = await adminRoute(request, url, env, store, ident.email, now, opts)
       return withSession(res, env, ident, now, url.pathname)
     }
