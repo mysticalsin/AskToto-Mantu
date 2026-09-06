@@ -15,7 +15,7 @@ date: 2026-09-06
 **READY TO MERGE: no. No pack / EXE / DMG / Native / Latest.**  
 **No live D1 ALTER** until Ultron relays Tony OK (same hold as question_type).
 
-Ultron K: Métis Lite FRAME while pack is blocked on Tony material (prod `pubkey.json` + I signing). Implement **after** full enterprise harden + signing land. Off Aria.
+Ultron K: Métis Lite FRAME while pack is blocked on Tony material (prod `pubkey.json` + I signing). Implement **last after PCC** (Tony lock R23). Enterprise harden + signing are prerequisites; they are not the start gun for Lite eng. Off Aria.
 
 ---
 
@@ -28,7 +28,7 @@ Métis Lite is the **smallest honest product loop** a Mantu consultant can run o
 3. That meeting **enriches Mantu Intelligence** (connected OneDrive / second-brain wiki).
 4. **Optional API** — a cloud Ask/summary provider may be connected; it is never required for the Listen→save path when local / already-configured providers can finish the recap.
 
-Full Métis (overlay modes, Operator Mission Control, licenses, CRM, skills) stays the enterprise product. Lite is not a second codebase. It is a **scoped path and defaults story** inside AskToto-Mantu, sequenced after bank-grade harden + signing so Lite never ships as the unsigned / DEV-key escape hatch.
+Full Métis (overlay modes, Operator Mission Control, licenses, CRM, skills) stays the enterprise product. Lite is not a second codebase. It is a **scoped path and defaults story** inside AskToto-Mantu, sequenced **last after PCC** (R23) so Lite never ships ahead of the native/PCC cost path or as an unsigned / DEV-key escape hatch.
 
 Name in copy: **Métis Lite**. Never "Mountain Lite". Intelligence surface remains **Mantu Intelligence** only.
 
@@ -79,22 +79,23 @@ Join / open meeting
 
 ---
 
-## 4. Sequencing (HARD)
+## 4. Sequencing (HARD) — Tony lock R23
+
+**Métis Lite stays LAST after Apple Private Cloud Compute (PCC).**  
+Board R23: Native → PCC is the final step after stability, Operator keys/approval, CLI, and QA-stamped EXE/DMG/Native. Lite eng/UI/build must not start until that PCC gate is done.
 
 ```
-J bank-grade inventory PASS
-PR154 CRITICAL#1 + HIGH#2 gate + HIGH#4 + residuals (1)(2) PASS
-Tony: prod pubkey.json + I signing / notarization
+Enterprise harden stamps (J + PR154 gates) …
+Tony: pubkey.json + I signing / notarization …
+QA-stamped EXE/DMG/Native …
+Native Apple PCC seam live …
         │
         ▼
-   Enterprise pack path honest (check:release green)
-        │
-        ▼
-   K Métis Lite implementation (after this FRAME ACK)
+   K Métis Lite implementation (ONLY after PCC + this FRAME ACK)
 ```
 
-- **Now:** this FRAME only. Ultron ACK on path.
-- **Not now:** UI, new routes, pack, live D1, Aria.
+- **Now:** this FRAME (DESIGN) only. Ultron ACK on path.
+- **Not now / not until after PCC:** UI, eng build, new routes, pack, live D1, Aria.
 - **Hold as design (from J):** unsigned macOS file keystore; license `sub:*` air-gap opt-in docs already under `docs/security/`.
 
 ---
@@ -141,13 +142,13 @@ Non-goals: shipping plaintext Cahê keys (CLOSED on `8386d9d`); unpinned `cloudf
 
 1. This file exists at `docs/design/METIS-LITE.md` and Ultron ACKs FRAME.
 2. No UI / product code in the docs-only land.
-3. Explicit sequencing: implement after enterprise harden + signing.
+3. Explicit sequencing: implement **last after PCC** (R23); enterprise harden + signing are earlier gates only.
 4. Loop locked: Listen → end summary → Mantu Intelligence + optional API.
 5. No pack / merge / Latest / live D1 in K FRAME.
 
 ---
 
-## 9. Implementation order (only after Ultron ACK + enterprise gate)
+## 9. Implementation order (only after Ultron ACK + PCC / R23)
 
 1. Docs-only commit of this FRAME (and a one-line pointer from `docs/design/DESIGN.md` Related).
 2. Wire Lite happy-path checklist as QA evidence (no new chrome).
