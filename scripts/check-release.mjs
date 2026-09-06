@@ -64,6 +64,84 @@ function checkArtifactSizes() {
 const here = dirname(fileURLToPath(import.meta.url))
 const ymlPath = join(here, '..', 'electron-builder.yml')
 
+/** Fail closed when a packaged release would ship DEV Operator / license-lease trust anchors. */
+function readDevPubkeyLiteral(srcRel, constName) {
+  const src = readFileSync(join(here, '..', srcRel), 'utf8')
+  const re = new RegExp(String.raw`const ${constName} = '([^']+)'`)
+  const m = src.match(re)
+  if (!m) {
+    console.error(`[check:release] FAIL — could not locate ${constName} in ${srcRel}`)
+    process.exit(1)
+  }
+  return m[1]
+}
+
+function checkProductionPubkeys(yml) {
+  const gates = [
+    {
+      label: 'Operator skill',
+      rel: join('resources', 'operator', 'pubkey.json'),
+      srcRel: join('src', 'main', 'operator-skill-key.ts'),
+      constName: 'DEV_OPERATOR_PUBLIC_KEY',
+      builderFrom: 'resources/operator',
+      builderTo: 'operator'
+    },
+    {
+      label: 'license-lease',
+      rel: join('resources', 'license-lease', 'pubkey.json'),
+      srcRel: join('src', 'main', 'license-lease-key.ts'),
+      constName: 'DEV_LEASE_PUBLIC_KEY',
+      builderFrom: 'resources/license-lease',
+      builderTo: 'license-lease'
+    }
+  ]
+
+  let ok = true
+  for (const gate of gates) {
+    if (!yml.includes(`from: ${gate.builderFrom}`) || !yml.includes(`to: ${gate.builderTo}`)) {
+      console.error(
+        `[check:release] FAIL — electron-builder.yml must ship ${gate.builderFrom} as extraResources to/${gate.builderTo}.`
+      )
+      ok = false
+    }
+    const abs = join(here, '..', gate.rel)
+    let raw
+    try {
+      raw = readFileSync(abs, 'utf8')
+    } catch {
+      console.error(
+        `[check:release] FAIL — missing ${gate.rel}. Provision the production ${gate.label} public key before release ` +
+          `(see resources/${gate.builderTo}/README.md). Do not invent a fake key.`
+      )
+      ok = false
+      continue
+    }
+    let data
+    try {
+      data = JSON.parse(raw)
+    } catch (err) {
+      console.error(`[check:release] FAIL — ${gate.rel} is not valid JSON: ${err?.message ?? err}`)
+      ok = false
+      continue
+    }
+    if (typeof data.publicKey !== 'string' || !data.publicKey) {
+      console.error(`[check:release] FAIL — ${gate.rel} must contain a non-empty string publicKey.`)
+      ok = false
+      continue
+    }
+    const dev = readDevPubkeyLiteral(gate.srcRel, gate.constName)
+    if (data.publicKey === dev) {
+      console.error(
+        `[check:release] FAIL — ${gate.rel} still equals the DEV ${gate.label} public key. ` +
+          'Packaged builds refuse the DEV fallback; replace with the production public half.'
+      )
+      ok = false
+    }
+  }
+  return ok
+}
+
+
 let yml
 try {
   yml = readFileSync(ymlPath, 'utf8')
@@ -99,6 +177,8 @@ if (isGithub) {
     process.exit(1)
   }
   console.log(`[check:release] OK — update channel = github releases (${owner[1]}/${repo[1]}, releaseType=release).`)
+  if (!checkProductionPubkeys(yml)) process.exit(1)
+  console.log('[check:release] OK — production Operator + license-lease pubkeys provisioned (not DEV).')
   process.exit(checkArtifactSizes() ? 0 : 1)
 }
 
@@ -124,4 +204,6 @@ if (!/^https:\/\//i.test(url)) {
 }
 
 console.log(`[check:release] OK — update channel configured (publish.url = ${url}).`)
+if (!checkProductionPubkeys(yml)) process.exit(1)
+console.log('[check:release] OK — production Operator + license-lease pubkeys provisioned (not DEV).')
 process.exit(checkArtifactSizes() ? 0 : 1)
