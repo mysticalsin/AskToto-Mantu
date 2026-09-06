@@ -62,11 +62,11 @@ describe('1.8.5 KineticGrid tip checklist', () => {
     expect(app).toMatch(/overlayShowsSettingsSheet\(view, minimized\)/)
   })
 
-  it('5 Circle is Jakub default; Jarvis is option 2 with a thin 41px cloud', () => {
+  it('5 Circle is Jakub default; Jarvis is option 2 with intense 800 pill cloud', () => {
     expect(orb).toMatch(/DEFAULT_OVERLAY_ORB_STYLE: OverlayOrbStyle = 'jakub'/)
     expect(orb).toMatch(/title: 'Circle'/)
     expect(orb).toMatch(/title: 'Jarvis'/)
-    expect(jarvis).toMatch(/JARVIS_PILL_PARTICLE_COUNT = 220/)
+    expect(jarvis).toMatch(/JARVIS_PILL_PARTICLE_COUNT = 800/)
     expect(jarvis).toMatch(/createJarvisPointSprite/)
     expect(jarvis).not.toMatch(/JARVIS_PILL_PARTICLE_COUNT = 2000/)
   })
