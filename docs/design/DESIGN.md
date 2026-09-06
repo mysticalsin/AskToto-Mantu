@@ -148,7 +148,12 @@ Right: mini choropleth (`data-geo-widget`). City rows are Shoey
 `request.cf` on heartbeat. No client GPS. No IP. Regions empty until the
 next heartbeat writes `cf.region`.
 
-Realtime keeps WorldMap + LiveFeed + GeoTable with the same city shape.
+Realtime `#realtime` is **WorldMap + LiveFeed + GeoTable** (full map,
+city/country pills). Overview Places stays a **corner**. Same city JSON.
+
+`GET /v1/admin/realtime.geo.json` (Access) returns
+`{ ok:true, geo:[{ country, city, count, unique_sessions, avg_duration }] }`.
+City required. Country-only seats are dropped. Unauth **401**.
 
 #### 3) Activity — usable, Métis-dense
 
@@ -186,12 +191,27 @@ second. Fail-loud if D1 seats are empty; generator still visible.
 
 ### Places (Overview corner + Realtime)
 
-Heartbeats write `request.cf` city + region + country. Overview **Places** is
-a corner widget (`data-geo-corner`, mini choropleth + City / Regions /
-Countries), not a full-bleed globe. Realtime Geo tabs are City / Regions /
-Country with Shoey rows `{ country, city, count, unique_sessions, avg_duration }`.
-Sessions list city + device. People shows last-seen seats when nobody is
-inside the 2-minute live window. Activity chips include city. No Shoey SKUs.
+Heartbeats write `request.cf` city + region + country. Never client GPS.
+Never IP.
+
+**Overview Places** (`data-geo-corner`): Top lists **Cities / Regions /
+Countries** with Shoey columns (count, unique_sessions, avg_duration) +
+**corner** CountryMap (`data-geo-widget`). Not full-bleed.
+
+**Realtime** (`#realtime`):
+
+```
+┌ WorldMap (data-world-map) · city dots + country pills · LIVE n ┐
+└────────────────────────────────────────────────────────────────┘
+┌ LiveFeed (data-live-feed) ┐ ┌ GeoTable City/Regions/Countries ┐
+│ heartbeat · city · seat  │ │ country city count sessions avg │
+└──────────────────────────┘ └─────────────────────────────────┘
+┌ People with city ─────────────────────────────────────────────┐
+```
+
+Geo JSON: `GET /v1/admin/realtime.geo.json` → city rows only. Sessions
+list city + device. People shows last-seen when the 2-min window is
+empty. No Shoey SKUs. No sneakers.
 
 ### Keys `#keys`
 

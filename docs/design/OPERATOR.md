@@ -59,6 +59,9 @@ happy path. License generate must work if CF OAuth secrets are missing.
 ## Overview glance (P0)
 
 `#overview` reads at a glance: **Live seats · Time saved · Value**. Places
-is a corner map + Cities / Regions / Countries. Activity is Métis
-heartbeats / asks / recaps, never pageviews. People lists last-seen seats
-with city when the 2-min live window is empty. Generate stays on the page.
+is a **corner** map + Cities / Regions / Countries (Shoey columns).
+`#realtime` is WorldMap + LiveFeed + GeoTable. `GET /v1/admin/realtime.geo.json`
+is city-level `{ country, city, count, unique_sessions, avg_duration }`.
+Activity is Métis heartbeats / asks / recaps, never pageviews. People lists
+last-seen seats with city when the 2-min live window is empty. Generate
+stays on the page.
