@@ -28,13 +28,15 @@ export function overlayWatchTreatAsRevealed(islandResting: boolean, windowVisibl
 
 export type CursorWatchDecision = 'reveal' | 'hide' | 'stay'
 
-/** Reveal even when the hovering latch is stuck, if the window is still parked or hidden. */
+/** Reveal even when the hovering latch is stuck, if the window is still parked, hidden, or the 120×44 stub. */
 export function overlayWatchNeedsRestore(input: {
   decision: CursorWatchDecision
   alreadyHovering: boolean
   islandResting: boolean
   windowVisible: boolean
+  hugStub?: boolean
 }): boolean {
+  if (input.hugStub && (input.decision === 'reveal' || input.decision === 'stay')) return true
   if (input.decision !== 'reveal') return false
   if (!input.alreadyHovering) return true
   return input.islandResting || !input.windowVisible

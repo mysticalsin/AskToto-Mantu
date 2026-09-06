@@ -34,6 +34,8 @@ import {
 } from './lib/overlay-autohide'
 import {
   overlayAllowsMinimize,
+  overlayHoverForced,
+  overlayHoverIdle,
   overlayRestsHidden,
   overlayShowsBarOrb,
   overlayUsesHover,
@@ -525,30 +527,21 @@ export function App(): JSX.Element {
   const canMinimize = overlayAllowsMinimize(overlayLayout)
   const showBarOrb = overlayShowsBarOrb(overlayLayout, minimized)
   const autoHideSetting = overlayUsesHover(overlayLayout)
-  // Hover chrome (hide / island) is in effect only in the plain idle bar surface: the overlay isn't
-  // collapsed to the control mini-pill, onboarding is finished, and the default bar view is showing with
-  // no answer/capture/meeting in flight. Every other surface (answers, the settings/history/review/agenda
-  // panels, the mini-pill, onboarding) stays fully shown.
-  const overlayIdle =
-    autoHideSetting &&
-    !minimized &&
-    !!settings?.onboardingDone &&
-    view === 'answer' &&
-    !ask.answer &&
-    !capturing &&
-    !listen.listening
-  // Force the bar open regardless of pointer position for the brief's "important events" — recording, an
-  // error/status toast — plus while the user is mid-interaction (has typed into the input). A live
-  // suggestion / recording start also flips `view` off the idle bar, which disables auto-hide anyway;
-  // listing them here keeps the force contract explicit and correct even if that coupling ever changes.
-  const autoHideForced =
-    listen.listening ||
-    updateReady.open ||
-    newMeetingToast ||
-    consentReminderOpen ||
-    !!visibilityToast ||
-    !!openMeetingError ||
-    input.trim().length > 0
+  // Hide/Island stay hover-idle on the answer surface even with a standing answer or
+  // listening chrome. Mouse leave parks. Re-hover restores the same answer. Settings
+  // / History / Review and an in-flight capture stay fully shown.
+  const overlayIdle = overlayHoverIdle({
+    usesHover: autoHideSetting,
+    minimized,
+    onboardingDone: !!settings?.onboardingDone,
+    view,
+    capturing
+  })
+  const autoHideForced = overlayHoverForced({
+    updateReady: updateReady.open,
+    toast: newMeetingToast || consentReminderOpen || !!visibilityToast || !!openMeetingError,
+    typedInput: input.trim().length > 0
+  })
   const [autoHide, dispatchAutoHide] = useReducer(reduceAutoHide, autoHideSetting, initialAutoHideState)
   useEffect(() => {
     dispatchAutoHide({ type: 'set-enabled', enabled: overlayIdle })

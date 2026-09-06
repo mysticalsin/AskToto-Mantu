@@ -182,7 +182,14 @@ import {
   shouldWatchOverlayCursor
 } from './island/cursor-watch'
 import { getDisplayMetrics, registerDisplayMetricsInvalidation } from './island/metrics'
-import { overlayAllowsMinimize, overlayUsesHover, parseOverlayLayout, type OverlayLayout } from '@shared/overlay-chrome'
+import {
+  isShowMetisHugStub,
+  overlayAllowsHugWidth,
+  overlayAllowsMinimize,
+  overlayUsesHover,
+  parseOverlayLayout,
+  type OverlayLayout
+} from '@shared/overlay-chrome'
 
 // Lazy Speaker Intelligence singleton — building it probes the sherpa addon + embedding model, so defer
 // until the first THEM window with the feature enabled (never on the startup path).
@@ -2007,10 +2014,11 @@ function tickOverlayCursorWatch(): void {
   const layout = liveOverlayLayout()
   const rest = hoverWatchRestRect(layout, m)
   const windowVisible = win.isVisible()
+  const bounds = win.getBounds()
   const decision = decideCursorWatch({
     cursor: screen.getCursorScreenPoint(),
     restRect: rest,
-    revealedRect: win.getBounds(),
+    revealedRect: bounds,
     revealed: overlayWatchTreatAsRevealed(islandResting, windowVisible)
   })
   if (
@@ -2018,7 +2026,8 @@ function tickOverlayCursorWatch(): void {
       decision,
       alreadyHovering: overlayCursorWatchHovering,
       islandResting,
-      windowVisible
+      windowVisible,
+      hugStub: isShowMetisHugStub(bounds)
     })
   ) {
     overlayCursorWatchHovering = true
@@ -6682,7 +6691,15 @@ function registerIpc(): void {
       const nextWidth = Math.max(120, Math.min(Math.ceil(payload.width) + 10, BAR_WIDTH))
       const layout = liveOverlayLayout()
       const rest = overlayRestSize(layout)
-      if (!islandResting || nextWidth <= rest.width + 24) {
+      // Revealed Hide/Island keeps BAR_WIDTH. Hug 120 + height 44 was the Ultron Show Métis stub.
+      if (
+        overlayAllowsHugWidth({
+          minimized: isMinimized,
+          islandResting,
+          restWidth: rest.width,
+          nextWidth
+        })
+      ) {
         currentWidth = nextWidth
       }
     }

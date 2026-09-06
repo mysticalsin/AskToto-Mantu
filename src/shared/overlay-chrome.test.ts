@@ -12,6 +12,10 @@ import {
   overlayRestsHidden,
   overlayUsesHover,
   overlayUsesSafeTop,
+  overlayHoverIdle,
+  overlayHoverForced,
+  overlayAllowsHugWidth,
+  isShowMetisHugStub,
   parseOverlayLayout
 } from './overlay-chrome'
 
@@ -63,6 +67,34 @@ describe('overlay chrome modes', () => {
     expect(overlayUsesSafeTop('hide')).toBe(true)
     expect(overlayUsesSafeTop('island')).toBe(true)
     expect(overlayUsesSafeTop('bar')).toBe(false)
+  })
+
+  it('Hide stays hover-idle with a standing answer or listening chrome', () => {
+    const base = {
+      usesHover: true,
+      minimized: false,
+      onboardingDone: true,
+      view: 'answer',
+      capturing: false
+    }
+    expect(overlayHoverIdle(base)).toBe(true)
+    expect(overlayHoverIdle({ ...base, view: 'settings' })).toBe(false)
+    expect(overlayHoverIdle({ ...base, capturing: true })).toBe(false)
+    expect(overlayHoverIdle({ ...base, usesHover: false })).toBe(false)
+    expect(overlayHoverForced({ updateReady: false, toast: false, typedInput: false })).toBe(false)
+    expect(overlayHoverForced({ updateReady: false, toast: false, typedInput: true })).toBe(true)
+    expect(overlayHoverForced({ updateReady: true, toast: false, typedInput: false })).toBe(true)
+    expect(isShowMetisHugStub({ width: 120, height: 44 })).toBe(true)
+    expect(isShowMetisHugStub({ width: 880, height: 84 })).toBe(false)
+    expect(
+      overlayAllowsHugWidth({ minimized: false, islandResting: false, restWidth: 8, nextWidth: 120 })
+    ).toBe(false)
+    expect(
+      overlayAllowsHugWidth({ minimized: true, islandResting: false, restWidth: 8, nextWidth: 120 })
+    ).toBe(true)
+    expect(
+      overlayAllowsHugWidth({ minimized: false, islandResting: true, restWidth: 142, nextWidth: 142 })
+    ).toBe(true)
   })
 
   it('Settings captions say what each chrome does (no em dash, no Vibe Island)', () => {

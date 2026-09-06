@@ -51,7 +51,17 @@ Hide/island **rest** stays at `bounds.y` (the top edge). Revealed chrome sits at
 
 Hide and island: hover or click expands **down** from the top edge to the full bar at `islandSafeTop` (below the notch). Reveal when the cursor is on the top-edge strip (left, camera, or right, Y≈0–12 or the first work-area row ≈39). Center X at Y=40 (under the island, typical Teams) misses. Center X at `TEAMS_MEETING_CHROME_Y` 48 misses. Leaving the strip hides again. No sticky reveal from a mid-window hover — a leftover Settings-tall, 560-wide, or 44-tall window must not keep or trigger Métis. Teams meeting chrome must never reveal Métis. Leave collapses (`pointer-leave` → grace → hide or peek). Bar does not auto-collapse. Pushing the pointer **up** into the top edge must keep the bar open (smooth, no flicker).
 
-**Hide (default).** Fully gone until the pointer enters the top-edge strip. The parked window is a **1–8px fully transparent** rest (`ignoreMouseEvents` click-through). `.overlay-hide-target` must not paint a visible rectangle (`background: transparent`). Cursor watch (`getCursorScreenPoint` vs `hoverWatchRestRect`) is the sensor — the window is not a 560×44 hittable slab. Do not park a 44px/103px card. Do not hug hide to 120px. Do not require tray Show/Hide.
+**Hide (default).** Fully gone until the pointer enters the top-edge strip. The parked window is a **1–8px fully transparent** rest (`ignoreMouseEvents` click-through). `.overlay-hide-target` must not paint a visible rectangle (`background: transparent`). Cursor watch (`getCursorScreenPoint` vs `hoverWatchRestRect`) is the sensor — the window is not a 560×44 hittable slab. Do not park a 44px/103px card. Do not hug hide to 120px. Do not require tray Show/Hide. Top-edge hover must open the **full Ask bar** (880, Ask + Settings). Ultron `f12003d`: a 120×44 Show Métis hug stub is a FAIL (`isShowMetisHugStub`).
+
+**Hide mid-session Ask (Tony 2026-09-06).** Bake this into the tip:
+
+1. Ask a question. The answer shows on the overlay.
+2. Overlay chrome is Hide. Mouse leaves the overlay. Auto-hide (park). Escape is not required.
+3. Mouse back to the top-edge strip. The full Ask bar reveals. The same answer is still there.
+4. Ask another question. That answer replaces the previous one (one live answer surface).
+5. The same leave / re-hover pattern applies when a meeting starts and listening chrome is up.
+
+`overlayHoverIdle` stays true with a standing answer and while listening. Do not force-open on `listen.listening`. Hug-width must not shrink a revealed Hide/Island bar to 120×44. `ask.clear` is not called on park.
 
 **Cursor watch (required).** macOS menu bar / Dynamic Island often does **not** deliver `mouseenter` to an Electron window, even at Y=0. Renderer `onMouseEnter` is not enough. Main polls `screen.getCursorScreenPoint()` every ~16-32ms on darwin and Windows top-edge while hide/island is resting and `onboardingDone`: cursor inside the hide/island rest rect (the always-on top-edge strip, menu-bar inset plus first work-area row, never a leftover 560×44 slab or 80–120 hit pad) → reveal via `restoreBarWidth` + `showInactive` if the LSUIElement window was hidden; a tray `hide()` is not revealed (`overlayWatchTreatAsRevealed`); cursor in that strip **or** the already-revealed Métis bar (+ small grace) → stay (never `setBounds` on a stay tick); cursor in neither → hide. A mid-window hover is not a stay. No Accessibility / CGEvent tap required. Do not animate window y every frame.
 
