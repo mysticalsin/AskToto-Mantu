@@ -130,6 +130,13 @@ async function integration(
 }
 
 describe('GET /v1/integrations (seat delivery)', () => {
+  it('401s with missing HMAC headers when unsigned (Worker HMAC gate, not Access)', async () => {
+    const store = memoryStore()
+    const res = await handleRequest(new Request('https://operator.test/v1/integrations'), env(), {}, { store, now: NOW })
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ ok: false, error: 'missing HMAC headers' })
+  })
+
   it('delivers the decrypted credential to an approved, entitled seat and audits the delivery', async () => {
     const store = memoryStore()
     await store.upsertSeat(seat({ device_id: 'device-a-0001' }))

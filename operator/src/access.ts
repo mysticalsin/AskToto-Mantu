@@ -35,7 +35,21 @@ export const CONSOLE_PATHS = [
   '/settings',
   '/references',
   '/notifications',
-  '/session'
+  '/session',
+  '/connectors',
+  '/audit'
+] as const
+
+/** Paths Cloudflare Access must Bypass (Service Auth / Everyone Bypass policies).
+ *  Worker auth is HMAC (or public health/assets). Keep Zero Trust Bypass policies in sync. */
+export const ACCESS_BYPASS_PATHS = [
+  '/health',
+  '/v1/ingest',
+  '/v1/heartbeat',
+  '/v1/use',
+  '/v1/skills/manifest',
+  '/v1/integrations',
+  '/assets/*'
 ] as const
 
 export type AccessCtx = {

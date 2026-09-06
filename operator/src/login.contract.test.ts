@@ -88,7 +88,9 @@ describe('unauth console GET is 302 to Cloudflare Access, never a password form'
       '/settings',
       '/references',
       '/notifications',
-      '/session'
+      '/session',
+      '/connectors',
+      '/audit'
     ]
     for (const path of paths) {
       const res = await handleRequest(new Request(`https://operator.test${path}`), env(), {}, {
