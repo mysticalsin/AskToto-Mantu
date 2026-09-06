@@ -96,6 +96,23 @@ export interface DashboardPayload {
     created_by: string
     created_at: number
   }[]
+  licenses: {
+    empty: boolean
+    seats: {
+      device: string
+      os: string
+      version: string
+      lastSeen: number
+      country: string | null
+      live: boolean
+    }[]
+  }
+  roi: {
+    asks7d: number
+    liveSeats: number
+    cost7d: string | null
+    note: string
+  }
   crm: {
     counts: Record<CrmStatus, number>
     landing: CrmLanding
@@ -446,6 +463,26 @@ export async function buildDashboard(store: OperatorStore, email: string, now: n
       timeline: audit.map((a) => ({ ts: a.ts, actor: a.actor, action: a.action, detail: a.detail })),
       heatmap,
       adoption: mix(seats.map((s) => s.app_version))
+    },
+    licenses: {
+      empty: seats.length === 0,
+      seats: seats
+        .slice()
+        .sort((a, b) => b.last_seen - a.last_seen)
+        .map((s) => ({
+          device: s.device_id.slice(0, 10),
+          os: s.os || 'unknown',
+          version: s.app_version || 'unknown',
+          lastSeen: s.last_seen,
+          country: s.country,
+          live: now - s.last_seen < ONLINE_MS
+        }))
+    },
+    roi: {
+      asks7d: weekAsks.length,
+      liveSeats: live,
+      cost7d,
+      note: 'Estimate from reported Asks. Missing usage is not reported, never invented.'
     },
     map: {
       countries,

@@ -261,6 +261,8 @@ describe('packed console map and geo', () => {
     expect(home.status).toBe(200)
     const page = await home.text()
     expect(page).toContain('No heartbeats yet. The map stays empty until a seat checks in.')
+    expect(page).toContain('No heartbeats yet. Licenses stay empty until a seat checks in.')
+    expect(page).toContain('Estimate from reported Asks')
     expect(page).not.toMatch(/Unique Visitors|visitor traffic|\$6,525|1,344/)
     expect(page).not.toMatch(/\b1\.2\.3\.4\b/)
     const dash = await handleRequest(
@@ -312,10 +314,16 @@ describe('packed console map and geo', () => {
     const body = JSON.parse(text) as {
       map: { empty: boolean; countries: { iso: string; devices: number }[] }
       scale: { hours24: { heartbeats: number }[] }
+      licenses: { empty: boolean; seats: { os: string; country: string | null }[] }
+      roi: { asks7d: number; liveSeats: number }
     }
     expect(body.map.empty).toBe(false)
     expect(body.map.countries).toEqual([{ iso: 'FR', devices: 1 }])
     expect(body.scale.hours24.at(-1)?.heartbeats).toBe(1)
+    expect(body.licenses.empty).toBe(false)
+    expect(body.licenses.seats[0]?.os).toBe('darwin')
+    expect(body.licenses.seats[0]?.country).toBe('FR')
+    expect(body.roi.liveSeats).toBe(1)
   })
 
   it('leaves the map empty when the Worker has no request.cf', async () => {
