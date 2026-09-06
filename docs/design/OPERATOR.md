@@ -28,8 +28,11 @@ deploy to `metis-operator` (`tony-walteur.workers.dev`). Do not merge fat PR151.
 EXE / DMG / Native → Latest only after Bob QA **and** Ultron approve.
 
 Visual contract lives in [DESIGN.md](DESIGN.md) § Operator — Shoey
-OpenPanel bar, Métis seats. Implement that page map (dictionary + every
-rail section) before inventing chrome.
+OpenPanel bar, Métis seats (Fable lock). Write DESIGN first. Then UI.
+Implement the page map (WebsiteCloner chrome + Métis dictionary + every
+rail section) before inventing chrome. Corner map on Overview. Full
+WorldMap + LiveFeed + GeoTable on Realtime. Activity is seats, not
+pageviews.
 
 ## Generate license (P0)
 
@@ -62,6 +65,8 @@ happy path. License generate must work if CF OAuth secrets are missing.
 is a **corner** map + Cities / Regions / Countries (Shoey columns).
 `#realtime` is WorldMap + LiveFeed + GeoTable. `GET /v1/admin/realtime.geo.json`
 is city-level `{ country, city, count, unique_sessions, avg_duration }`.
-Activity is Métis heartbeats / asks / recaps, never pageviews. People lists
-last-seen seats with city when the 2-min live window is empty. Generate
-stays on the page.
+Activity is Métis heartbeats / asks / recaps with city · device · os ·
+license chips and relative time, never pageviews. People lists last-seen
+seats with city when the 2-min live window is empty. Generate stays on
+the page. Notifications use Shoey feed chrome (profile · city · OS) on
+real D1 rows.
