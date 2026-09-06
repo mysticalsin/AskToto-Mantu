@@ -137,4 +137,40 @@ describe('loginCliInvokeLines — managed Node, never PATH-only claude', () => {
     expect(loginCliInvokeLines('claude-cli', true, null)).toEqual(['call claude'])
     expect(loginCliInvokeLines('codex-cli', false, null)).toEqual(['codex login'])
   })
+
+  it('Windows login invokes a resolved native claude.exe, never call claude', () => {
+    const lines = loginCliInvokeLines('claude-cli', true, null, 'C:\\Users\\tony\\.local\\bin\\claude.exe')
+    expect(lines).toEqual(['"C:\\Users\\tony\\.local\\bin\\claude.exe"'])
+    expect(lines.join('\n')).not.toMatch(/call claude/)
+  })
+
+  it('prefers a licensed native exe over managed Electron-as-node', () => {
+    const lines = loginCliInvokeLines(
+      'claude-cli',
+      true,
+      {
+        command: 'C:\\Metis\\Metis.exe',
+        args: ['C:\\managed\\cli.js'],
+        env: { ELECTRON_RUN_AS_NODE: '1' }
+      },
+      'C:\\Users\\tony\\.local\\bin\\claude.exe'
+    )
+    expect(lines.join('\n')).toContain('.local\\bin\\claude.exe')
+    expect(lines.join('\n')).not.toMatch(/ELECTRON_RUN_AS_NODE/)
+  })
+
+  it('never invokes a WindowsApps Desktop alias even if resolveBin leaked one', () => {
+    const lines = loginCliInvokeLines(
+      'claude-cli',
+      true,
+      null,
+      'C:\\Users\\tony\\AppData\\Local\\Microsoft\\WindowsApps\\claude.exe'
+    )
+    expect(lines).toEqual(['call claude'])
+  })
+
+  it('Mac login quotes a resolved ~/.local/bin/claude', () => {
+    const lines = loginCliInvokeLines('claude-cli', false, null, '/Users/tony/.local/bin/claude')
+    expect(lines).toEqual(['"/Users/tony/.local/bin/claude"'])
+  })
 })
