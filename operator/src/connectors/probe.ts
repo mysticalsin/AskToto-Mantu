@@ -44,7 +44,7 @@ export interface ProbeResult {
   error?: { code: string; message: string }
 }
 
-const PROBE_TIMEOUT_MS = 10_000
+export const PROBE_TIMEOUT_MS = 10_000
 const PROBE_BODY_CAP_BYTES = 64 * 1024
 const MCP_PROTOCOL_VERSION = '2025-06-18'
 const MCP_PROTOCOL_VERSION_FALLBACK = '2025-03-26'
@@ -230,15 +230,18 @@ function withDeadline<T>(promise: Promise<T>, remainingMs: number): Promise<T | 
   })
 }
 
-interface FetchOutcome {
+export interface FetchOutcome {
   res: Response | null
   timedOut: boolean
   networkError: boolean
 }
 
 /** `deadlineAt` is the one shared deadline for the whole probe attempt (`startedAt + PROBE_TIMEOUT_MS`,
- *  computed once by the caller), not a fresh `PROBE_TIMEOUT_MS` per call - see `withDeadline`. */
-async function boundedFetch(fetchImpl: typeof fetch, url: string, init: RequestInit, deadlineAt: number): Promise<FetchOutcome> {
+ *  computed once by the caller), not a fresh `PROBE_TIMEOUT_MS` per call - see `withDeadline`. Exported
+ *  (with `readCapped`, `PROBE_TIMEOUT_MS`) so any other outbound call the Worker makes to a connector's
+ *  own infrastructure - `oauth.ts`'s token-endpoint exchange, task 6.10b/oauth - shares the exact same
+ *  SSRF guard, timeout, and body cap this probe uses, rather than a second hand-rolled fetch wrapper. */
+export async function boundedFetch(fetchImpl: typeof fetch, url: string, init: RequestInit, deadlineAt: number): Promise<FetchOutcome> {
   const remaining = deadlineAt - Date.now()
   if (remaining <= 0) return { res: null, timedOut: true, networkError: false }
   const controller = new AbortController()
@@ -254,7 +257,7 @@ async function boundedFetch(fetchImpl: typeof fetch, url: string, init: RequestI
   }
 }
 
-interface ReadOutcome {
+export interface ReadOutcome {
   text: string
   timedOut: boolean
 }
@@ -270,7 +273,7 @@ interface ReadOutcome {
  * abandoned. Falls back to a plain (still length- and deadline-capped) `.text()` for a fetch stand-in a
  * test supplies without a real `ReadableStream` body.
  */
-async function readCapped(res: Response, deadlineAt: number): Promise<ReadOutcome> {
+export async function readCapped(res: Response, deadlineAt: number): Promise<ReadOutcome> {
   const body = res.body
   if (!body) return { text: '', timedOut: false }
   if (typeof body.getReader !== 'function') {

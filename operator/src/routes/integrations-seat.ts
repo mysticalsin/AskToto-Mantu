@@ -3,16 +3,92 @@
  * authenticated like heartbeat/ingest/manifest, license-gated, tier-entitled. For a `direct` connection
  * (D8), delivers the decrypted vault credential exactly as before this task, auditing the delivery with
  * an `integration_grants` row and an audit row. For a `brokered` connection (the new default, task B2),
- * the credential never leaves the Worker: the seat instead gets `{ transport, mode: 'brokered', endpoint
- * }` and calls that endpoint once the gateway token exists (B3). Never delivers to an unapproved,
+ * the credential never leaves the Worker: the seat instead gets `{ transport, mode: 'brokered', endpoint,
+ * gatewayToken }` (task B3) - a 1 hour bearer token bound to this device and this connection, minted
+ * fresh on every pull the same way the heartbeat response mints one, so a seat's desktop client (which
+ * refreshes on every heartbeat) never has to hold a stale one for long. Never delivers to an unapproved,
  * unlicensed, or non-entitled seat; never logs a credential.
  */
-import { decryptVault } from '../crypto'
-import { readIntegrationExtra } from '../connectors/data'
+import { decryptVault, encryptVault } from '../crypto'
+import { readIntegrationExtra, writeIntegrationExtraColumns } from '../connectors/data'
+import type { D1DatabaseLike } from '../d1'
+import { mintGatewayToken } from '../connectors/gateway-token'
+import { getConnectorCatalogEntry } from '../connectors/catalog'
+import { oauthTokenNeedsRefresh, refreshOAuthToken, type OAuthTokenPayload } from '../connectors/oauth'
 import { seatAuthorizedForKeys } from '../fleet'
 import { json } from '../http'
+import { last4OfSecret } from '../vault'
 import type { IntegrationRow, OperatorStore, SeatRow } from '../store'
 import { resolveTierAndEntitlements } from '../tiers'
+
+function decodeOAuthPayload(plaintext: string): OAuthTokenPayload | null {
+  try {
+    const parsed = JSON.parse(plaintext) as unknown
+    if (!parsed || typeof parsed !== 'object') return null
+    const p = parsed as Record<string, unknown>
+    if (typeof p.accessToken !== 'string' || typeof p.expiresAt !== 'number') return null
+    return {
+      accessToken: p.accessToken,
+      refreshToken: typeof p.refreshToken === 'string' ? p.refreshToken : undefined,
+      expiresAt: p.expiresAt,
+      tokenType: typeof p.tokenType === 'string' ? p.tokenType : undefined
+    }
+  } catch {
+    return null
+  }
+}
+
+function parseConfigJson(configJson: string): Record<string, string> {
+  try {
+    const parsed = JSON.parse(configJson) as unknown
+    if (!parsed || typeof parsed !== 'object') return {}
+    const out: Record<string, string> = {}
+    for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) if (typeof v === 'string') out[k] = v
+    return out
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Refreshes an auth-code-flow `direct`-mode connection's access token when it is within 5 minutes of
+ * expiry (task item 4) before delivering it to a seat - `brokered` mode never reaches this at all, since
+ * the seat only ever gets a gateway token, never the connector's own credential. Pure with respect to the
+ * *decision*: `oauth.ts#refreshOAuthToken` makes the actual token-endpoint call; this wrapper is the one
+ * piece of storage glue (re-encrypt, persist, audit) that lives here because it is the seat-delivery path,
+ * not `oauth.ts`, that owns "when" to call it. A refresh failure marks `last_test_json` failing and
+ * returns the *old*, still-decrypted access token (better an expiring token attempt than none at all -
+ * the vendor, not this Worker, is the final word on whether it still works) - the row itself is never
+ * touched beyond that JSON field, in particular never deleted.
+ */
+async function refreshDirectOAuthCredential(
+  store: OperatorStore,
+  env: { OPERATOR_VAULT_KEY?: string; DB?: D1DatabaseLike },
+  row: IntegrationRow,
+  payload: OAuthTokenPayload,
+  configJson: string,
+  now: number,
+  fetchImpl: typeof fetch
+): Promise<string> {
+  if (!oauthTokenNeedsRefresh(payload, now)) return payload.accessToken
+  const config = parseConfigJson(configJson)
+  const result = await refreshOAuthToken(row.kind, payload, config, env, { fetch: fetchImpl }, getConnectorCatalogEntry)
+  const currentExtra = readIntegrationExtra(row as unknown as Record<string, unknown>)
+  if (!result.ok) {
+    await store.audit(crypto.randomUUID(), now, row.created_by ?? 'system', 'integration-oauth-refresh-failed', null, `${row.kind} ${result.error.code}`)
+    const failingExtra = { ...currentExtra, last_test_json: JSON.stringify({ ok: false, latencyMs: 0, summary: '', error: result.error }), last_test_at: now }
+    await store.putIntegration({ ...row, ...failingExtra } as unknown as IntegrationRow)
+    if (env.DB) await writeIntegrationExtraColumns(env.DB, row.id, failingExtra)
+    return payload.accessToken
+  }
+  if (!env.OPERATOR_VAULT_KEY) return payload.accessToken
+  const enc = await encryptVault(JSON.stringify(result.payload), env.OPERATOR_VAULT_KEY)
+  const updated: IntegrationRow = { ...row, cipher: enc.cipher, iv: enc.iv, last4: last4OfSecret(result.payload.accessToken) }
+  await store.putIntegration({ ...updated, ...currentExtra } as unknown as IntegrationRow)
+  if (env.DB) await writeIntegrationExtraColumns(env.DB, row.id, currentExtra)
+  await store.audit(crypto.randomUUID(), now, row.created_by ?? 'system', 'integration-oauth-refreshed', null, row.kind)
+  return result.payload.accessToken
+}
 
 export interface IntegrationScope {
   tiers?: string[]
@@ -93,8 +169,8 @@ export interface DeliveredIntegrationDirect {
   scopes: IntegrationScope
 }
 
-/** New in task B2: a `brokered` connection carries no credential at all, just enough for the desktop to
- *  know a connection exists and where its gateway endpoint will be once B3 mints a gateway token. */
+/** A `brokered` connection carries no credential at all: just enough for the desktop to know a
+ *  connection exists, where its gateway endpoint is, and the bearer token (task B3) to call it with. */
 export interface DeliveredIntegrationBrokered {
   id: string
   kind: string
@@ -102,6 +178,7 @@ export interface DeliveredIntegrationBrokered {
   transport: string
   mode: 'brokered'
   endpoint: string
+  gatewayToken: string
   scopes: IntegrationScope
 }
 
@@ -109,9 +186,14 @@ export type DeliveredIntegration = DeliveredIntegrationDirect | DeliveredIntegra
 
 export async function handleIntegrationsSeat(
   store: OperatorStore,
-  env: { OPERATOR_VAULT_KEY?: string },
+  env: { OPERATOR_VAULT_KEY?: string; OPERATOR_INGEST_SECRET: string; DB?: D1DatabaseLike },
   deviceId: string,
-  now: number
+  now: number,
+  /** Injected for the OAuth refresh's token-endpoint call (task item 4) - defaults to the ambient
+   *  `fetch` so `index.ts`'s existing 4-argument call site needs no change; tests pass a fake here
+   *  directly (this route predates `HandleOpts.providerFetch` reaching this deep, and adding it there
+   *  would touch `index.ts`, which this task does not own). */
+  fetchImpl: typeof fetch = fetch
 ): Promise<Response> {
   if (!env.OPERATOR_VAULT_KEY) return json({ ok: false, error: 'vault key unbound' }, 503)
   const seat = await store.getSeat(deviceId)
@@ -132,6 +214,15 @@ export async function handleIntegrationsSeat(
       } catch {
         continue
       }
+      // An auth-code OAuth connection's ciphertext decrypts to the OAuthTokenPayload JSON, not a bare
+      // token - unwrap it, refreshing first when the access token is within 5 minutes of expiry (task
+      // item 4). A static-credential kind's decrypted value is never valid JSON shaped like this, so
+      // `decodeOAuthPayload` returning null here is the overwhelmingly common, expected case.
+      const oauthEntry = getConnectorCatalogEntry(row.kind)
+      if (oauthEntry?.oauth?.flow === 'auth-code') {
+        const payload = decodeOAuthPayload(credential)
+        if (payload) credential = await refreshDirectOAuthCredential(store, env, row, payload, extra.config_json, now, fetchImpl)
+      }
       delivered.push({
         id: row.id,
         kind: row.kind,
@@ -148,6 +239,7 @@ export async function handleIntegrationsSeat(
         transport: extra.transport ?? 'rest',
         mode: 'brokered',
         endpoint: `/v1/mcp/${row.id}`,
+        gatewayToken: await mintGatewayToken(env.OPERATOR_INGEST_SECRET, deviceId, row.id, now),
         scopes: parseIntegrationScope(row.scope_json)
       })
     }

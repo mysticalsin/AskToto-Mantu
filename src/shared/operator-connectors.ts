@@ -124,9 +124,14 @@ export const CONNECTOR_CATALOG_CORE: Record<ConnectorKind, ConnectorCatalogCore>
     label: 'Zoho CRM',
     category: 'crm',
     transport: 'rest',
-    auth: 'oauth2-client-credentials',
+    // Corrected from 'oauth2-client-credentials': Zoho CRM has no client_credentials grant. Its
+    // "Server-based Applications" registration supports a standard browser authorization-code
+    // redirect (GET https://accounts.zoho.<dc>/oauth/v2/auth, verified 2026-09-06 at
+    // zoho.com/crm/developer/docs/api/v6/multi-dc.html), which is what the Operator's generic
+    // auth-code flow (operator/src/connectors/oauth.ts) drives.
+    auth: 'oauth2-auth-code',
     availability: 'needs-oauth',
-    docsUrl: 'https://www.zoho.com/crm/developer/docs/api/v6/',
+    docsUrl: 'https://www.zoho.com/crm/developer/docs/api/v6/oauth-overview.html',
     logo: 'zoho'
   },
   dynamics365: {

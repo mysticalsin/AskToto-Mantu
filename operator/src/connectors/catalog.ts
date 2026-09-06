@@ -61,6 +61,60 @@ export interface McpProbeSpec {
 
 export type ProbeSpec = RestProbeSpec | McpProbeSpec
 
+/** The one `config` field a vendor needs to identify a specific org/workspace/data-centre (Atlassian
+ *  cloud id, Zoho data centre, Salesforce My Domain, a Microsoft Entra tenant id). Its `key` can be
+ *  referenced as a `{placeholder}` inside `OAuthConfig.authorizeUrl`/`tokenUrl`/`scopes`, the same
+ *  templating `RestProbeSpec.url` already uses. Undefined when the vendor needs none (Google Drive). */
+export interface OAuthTenantField {
+  key: string
+  label: string
+  placeholder?: string
+  help?: string
+}
+
+/**
+ * Per-kind OAuth 2.0 config (task: "generic OAuth 2.0 authorization-code flow"). `flow` decides which
+ * grant `operator/src/connectors/oauth.ts` runs:
+ *  - `auth-code`: the 3-legged browser flow `routes/connectors-oauth.ts` drives end to end
+ *    (`GET .../oauth/start` -> vendor consent -> `GET .../oauth/callback`). `authorizeUrl` and `pkce`
+ *    only ever apply to this flow.
+ *  - `client-credentials`: the 2-legged, no-browser grant. There is no `authorizeUrl` and PKCE does not
+ *    apply (RFC 6749 4.4 has no user, no redirect); the drawer collects the vendor tenant/org fields and
+ *    the per-connection client secret exactly as any other static-credential kind (`fields`, not this
+ *    config), and `oauth.ts`'s `refreshOAuthToken` re-runs the same grant to mint a fresh token rather
+ *    than using a `refresh_token` (client-credentials never issues one).
+ *
+ * `clientIdEnv`/`clientSecretEnv` are always `OAUTH_<KIND>_CLIENT_ID` / `OAUTH_<KIND>_CLIENT_SECRET`
+ * Worker secrets - the Operator's own single app registration with that vendor (the same shape the
+ * existing `CF_OAUTH_CLIENT_ID`/`CF_OAUTH_CLIENT_SECRET` pair already uses for the Cloudflare connect
+ * flow). For an `auth-code` kind this is the one OAuth client every consent screen and token exchange
+ * uses. For a `client-credentials` kind, binding these two flips `oauthConfigured`/`availability` at the
+ * catalog level (task item 5); today's per-connection drawer flow (already existing before this task,
+ * now vault-encrypting the secret instead of storing it in plaintext `config_json` - see `fields` below)
+ * is the actual way a specific tenant gets connected, since each Salesforce org / Azure AD tenant
+ * typically has its own app registration rather than sharing the Operator's. Wiring a shared-app,
+ * no-drawer connect flow for these five kinds is out of this task's scope (only `GET .../oauth/start` and
+ * `GET .../oauth/callback`, both auth-code-only, were asked for) - see the report's open question.
+ */
+export interface OAuthConfig {
+  flow: 'auth-code' | 'client-credentials'
+  /** `auth-code` only. Templated the same way `RestProbeSpec.url` is against `config` (percent-encoded,
+   *  except `{baseUrl}` if ever used). */
+  authorizeUrl?: string
+  /** Templated against `config` the same way. */
+  tokenUrl: string
+  /** Templated against `config`; each entry may contain `{placeholder}`s (Dynamics 365's scope embeds
+   *  the org's own Dataverse URL). Joined with a space for the request. */
+  scopes: string[]
+  /** `auth-code` only: does the vendor support PKCE (RFC 7636)? Sent whenever true; `oauth.ts` never
+   *  sends `code_challenge` for a kind where this is false, since an unexpected parameter is occasionally
+   *  rejected outright by a stricter authorization server. */
+  pkce: boolean
+  tenantField?: OAuthTenantField
+  clientIdEnv: string
+  clientSecretEnv: string
+}
+
 export interface ConnectorCatalogEntry extends ConnectorCatalogCore {
   fields: ConnectorField[]
   /** Static header name for `api-key-header` kinds with one fixed header (e.g. GitLab's `PRIVATE-TOKEN`).
@@ -70,9 +124,15 @@ export interface ConnectorCatalogEntry extends ConnectorCatalogCore {
    *  `config.baseUrl`. */
   endpoint?: string
   probe: ProbeSpec | null
+  /** Present only for the six `oauth2-auth-code` / `oauth2-client-credentials` kinds. */
+  oauth?: OAuthConfig
 }
 
-function entry(core: ConnectorKind, fields: ConnectorField[], rest: Partial<Pick<ConnectorCatalogEntry, 'headerName' | 'endpoint' | 'probe'>>): ConnectorCatalogEntry {
+function entry(
+  core: ConnectorKind,
+  fields: ConnectorField[],
+  rest: Partial<Pick<ConnectorCatalogEntry, 'headerName' | 'endpoint' | 'probe' | 'oauth'>>
+): ConnectorCatalogEntry {
   return { ...CONNECTOR_CATALOG_CORE[core], fields, probe: null, ...rest }
 }
 
@@ -109,11 +169,30 @@ export const CONNECTOR_CATALOG: Record<ConnectorKind, ConnectorCatalogEntry> = {
       }
     }
   ),
-  salesforce: entry('salesforce', [
-    { key: 'clientId', label: 'Connected app client id', type: 'text', required: false },
-    { key: 'clientSecret', label: 'Connected app client secret', type: 'password', required: false },
-    { key: 'instanceUrl', label: 'Instance URL', type: 'url', placeholder: 'https://yourorg.my.salesforce.com', required: false }
-  ], {}),
+  salesforce: entry(
+    'salesforce',
+    [
+      { key: 'instanceUrl', label: 'My Domain URL', type: 'url', placeholder: 'https://yourorg.my.salesforce.com', help: 'Setup > My Domain. login.salesforce.com/test.salesforce.com are not accepted by this flow.', required: true },
+      { key: 'clientId', label: "Connected app consumer key", type: 'text', required: true },
+      CREDENTIAL_FIELD('Connected app consumer secret', { help: 'Setup > App Manager > your Connected App > View > Consumer Secret. Vault-encrypted, never stored in plain config.' })
+    ],
+    {
+      // Verified 2026-09-06 (Salesforce Help, "OAuth 2.0 Client Credentials Flow"): POST
+      // {instanceUrl}/services/oauth2/token, grant_type=client_credentials, client_id + client_secret.
+      // No user-facing consent screen exists for this grant (RFC 6749 4.4), so there is no authorizeUrl
+      // and PKCE does not apply. Permissions come from the Connected App's policy-assigned "run as" user,
+      // not a requested scope list; 'api' is the conventional minimum requested here.
+      oauth: {
+        flow: 'client-credentials',
+        tokenUrl: '{instanceUrl}/services/oauth2/token',
+        scopes: ['api'],
+        pkce: false,
+        tenantField: { key: 'instanceUrl', label: 'My Domain URL', placeholder: 'https://yourorg.my.salesforce.com' },
+        clientIdEnv: 'OAUTH_SALESFORCE_CLIENT_ID',
+        clientSecretEnv: 'OAUTH_SALESFORCE_CLIENT_SECRET'
+      }
+    }
+  ),
   pipedrive: entry(
     'pipedrive',
     [
@@ -130,16 +209,58 @@ export const CONNECTOR_CATALOG: Record<ConnectorKind, ConnectorCatalogEntry> = {
       probe: null
     }
   ),
-  zoho: entry('zoho', [
-    { key: 'clientId', label: 'Client id', type: 'text', required: false },
-    { key: 'clientSecret', label: 'Client secret', type: 'password', required: false },
-    { key: 'accountId', label: 'Data center domain', type: 'text', placeholder: 'zoho.com, zoho.eu, zoho.in, ...', required: false }
-  ], {}),
-  dynamics365: entry('dynamics365', [
-    { key: 'clientId', label: 'Azure AD app client id', type: 'text', required: false },
-    { key: 'clientSecret', label: 'Client secret', type: 'password', required: false },
-    { key: 'instanceUrl', label: 'Organization URL', type: 'url', placeholder: 'https://yourorg.crm.dynamics.com', required: false }
-  ], {}),
+  zoho: entry(
+    'zoho',
+    [
+      {
+        key: 'dataCenter',
+        label: 'Data centre',
+        type: 'text',
+        placeholder: 'accounts.zoho.com',
+        help: 'accounts.zoho.com (US), accounts.zoho.eu, accounts.zoho.in, accounts.zoho.com.au, accounts.zoho.jp, accounts.zoho.com.cn, or accounts.zohocloud.ca - must match the data centre of the account that created the API console client',
+        required: true
+      }
+    ],
+    {
+      // Verified 2026-09-06 at zoho.com/crm/developer/docs/api/v6/multi-dc.html (region domains) and
+      // .../oauth-overview.html (the /oauth/v2/auth, /oauth/v2/token paths). A "Server-based
+      // Applications" client (as opposed to a Self Client) supports the standard browser redirect this
+      // Operator flow drives; PKCE is not documented as supported and is never sent.
+      oauth: {
+        flow: 'auth-code',
+        authorizeUrl: 'https://{dataCenter}/oauth/v2/auth',
+        tokenUrl: 'https://{dataCenter}/oauth/v2/token',
+        scopes: ['ZohoCRM.modules.ALL', 'ZohoCRM.settings.ALL'],
+        pkce: false,
+        tenantField: { key: 'dataCenter', label: 'Data centre', placeholder: 'accounts.zoho.com' },
+        clientIdEnv: 'OAUTH_ZOHO_CLIENT_ID',
+        clientSecretEnv: 'OAUTH_ZOHO_CLIENT_SECRET'
+      }
+    }
+  ),
+  dynamics365: entry(
+    'dynamics365',
+    [
+      { key: 'tenantId', label: 'Microsoft Entra tenant id', type: 'text', placeholder: 'yourorg.onmicrosoft.com or a tenant GUID', required: true },
+      { key: 'instanceUrl', label: 'Organization URL', type: 'url', placeholder: 'https://yourorg.crm.dynamics.com', required: true },
+      { key: 'clientId', label: 'Azure AD app client id', type: 'text', required: true },
+      CREDENTIAL_FIELD('Client secret', { help: 'Azure AD app registration > Certificates & secrets. Vault-encrypted, never stored in plain config.' })
+    ],
+    {
+      // Verified 2026-09-06 at learn.microsoft.com/entra/identity-platform/v2-oauth2-client-creds-grant-flow:
+      // POST https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token, grant_type=client_credentials,
+      // scope=<resource>/.default. The Dataverse resource is the org's own instance URL.
+      oauth: {
+        flow: 'client-credentials',
+        tokenUrl: 'https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token',
+        scopes: ['{instanceUrl}/.default'],
+        pkce: false,
+        tenantField: { key: 'tenantId', label: 'Microsoft Entra tenant id' },
+        clientIdEnv: 'OAUTH_DYNAMICS365_CLIENT_ID',
+        clientSecretEnv: 'OAUTH_DYNAMICS365_CLIENT_SECRET'
+      }
+    }
+  ),
   attio: entry(
     'attio',
     [CREDENTIAL_FIELD('Access token', { help: 'Workspace settings > Developers > Access tokens' })],
@@ -375,15 +496,52 @@ export const CONNECTOR_CATALOG: Record<ConnectorKind, ConnectorCatalogEntry> = {
       }
     }
   ),
-  sharepoint: entry('sharepoint', [
-    { key: 'clientId', label: 'Azure AD app client id', type: 'text', required: false },
-    { key: 'clientSecret', label: 'Client secret', type: 'password', required: false },
-    { key: 'accountId', label: 'Tenant id', type: 'text', required: false }
-  ], {}),
-  googledrive: entry('googledrive', [
-    { key: 'clientId', label: 'OAuth client id', type: 'text', required: false },
-    { key: 'clientSecret', label: 'OAuth client secret', type: 'password', required: false }
-  ], {}),
+  sharepoint: entry(
+    'sharepoint',
+    [
+      { key: 'tenantId', label: 'Microsoft Entra tenant id', type: 'text', placeholder: 'yourorg.onmicrosoft.com or a tenant GUID', required: true },
+      { key: 'clientId', label: 'Azure AD app client id', type: 'text', required: true },
+      CREDENTIAL_FIELD('Client secret', { help: 'Azure AD app registration > Certificates & secrets. Vault-encrypted, never stored in plain config.' })
+    ],
+    {
+      // Verified 2026-09-06 (same Microsoft identity platform client-credentials flow as Dynamics 365
+      // and Teams below). SharePoint access is via Microsoft Graph (the modern, documented app-only
+      // surface for site/drive access) rather than the legacy ACS-based SharePoint app-only model, which
+      // Microsoft has been retiring - not independently re-verified against a SharePoint-specific page
+      // this session, flagged in the report.
+      oauth: {
+        flow: 'client-credentials',
+        tokenUrl: 'https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token',
+        scopes: ['https://graph.microsoft.com/.default'],
+        pkce: false,
+        tenantField: { key: 'tenantId', label: 'Microsoft Entra tenant id' },
+        clientIdEnv: 'OAUTH_SHAREPOINT_CLIENT_ID',
+        clientSecretEnv: 'OAUTH_SHAREPOINT_CLIENT_SECRET'
+      }
+    }
+  ),
+  googledrive: entry(
+    'googledrive',
+    [],
+    {
+      // Verified 2026-09-06 at developers.google.com/identity/protocols/oauth2/web-server: authorize
+      // https://accounts.google.com/o/oauth2/v2/auth, token https://oauth2.googleapis.com/token. PKCE is
+      // supported broadly across Google's OAuth endpoints (RFC 7636 is additive - an authorization server
+      // that does not require it simply ignores the parameter) though not called out specifically on this
+      // page for a confidential server-side client; sent as defence in depth. drive.file scopes only the
+      // files Métis itself creates/opens, matching least-privilege - broaden to drive.readonly or drive
+      // only if Tony needs the fleet to read files it did not create.
+      oauth: {
+        flow: 'auth-code',
+        authorizeUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+        tokenUrl: 'https://oauth2.googleapis.com/token',
+        scopes: ['https://www.googleapis.com/auth/drive.file'],
+        pkce: true,
+        clientIdEnv: 'OAUTH_GOOGLEDRIVE_CLIENT_ID',
+        clientSecretEnv: 'OAUTH_GOOGLEDRIVE_CLIENT_SECRET'
+      }
+    }
+  ),
   github: entry(
     'github',
     [CREDENTIAL_FIELD('Personal access token', { help: 'A fine-grained PAT with the scopes the tools you need require' })],
@@ -433,11 +591,28 @@ export const CONNECTOR_CATALOG: Record<ConnectorKind, ConnectorCatalogEntry> = {
       }
     }
   ),
-  microsoftteams: entry('microsoftteams', [
-    { key: 'clientId', label: 'Azure AD app client id', type: 'text', required: false },
-    { key: 'clientSecret', label: 'Client secret', type: 'password', required: false },
-    { key: 'accountId', label: 'Tenant id', type: 'text', required: false }
-  ], {}),
+  microsoftteams: entry(
+    'microsoftteams',
+    [
+      { key: 'tenantId', label: 'Microsoft Entra tenant id', type: 'text', placeholder: 'yourorg.onmicrosoft.com or a tenant GUID', required: true },
+      { key: 'clientId', label: 'Azure AD app client id', type: 'text', required: true },
+      CREDENTIAL_FIELD('Client secret', { help: 'Azure AD app registration > Certificates & secrets. Vault-encrypted, never stored in plain config.' })
+    ],
+    {
+      // Verified 2026-09-06 (same Microsoft identity platform client-credentials flow as Dynamics 365 and
+      // SharePoint above). Teams data (chats, channel messages) is exposed only through Microsoft Graph
+      // app permissions, granted by a tenant admin, consumed with the standard `.default` scope.
+      oauth: {
+        flow: 'client-credentials',
+        tokenUrl: 'https://login.microsoftonline.com/{tenantId}/oauth2/v2.0/token',
+        scopes: ['https://graph.microsoft.com/.default'],
+        pkce: false,
+        tenantField: { key: 'tenantId', label: 'Microsoft Entra tenant id' },
+        clientIdEnv: 'OAUTH_MICROSOFTTEAMS_CLIENT_ID',
+        clientSecretEnv: 'OAUTH_MICROSOFTTEAMS_CLIENT_SECRET'
+      }
+    }
+  ),
   'custom-mcp': entry(
     'custom-mcp',
     [
@@ -469,13 +644,18 @@ export function getConnectorCatalogEntry(kind: string): ConnectorCatalogEntry | 
 }
 
 /** `GET /v1/admin/connectors/catalog` shape: fields for the drawer, never the probe internals (vendor
- *  URLs, body templates) an unauthenticated-until-Access-checked route response has no business leaking. */
+ *  URLs, body templates) an unauthenticated-until-Access-checked route response has no business leaking,
+ *  and never `oauth.clientIdEnv`/`clientSecretEnv` names beyond what `oauthConfigured` already implies -
+ *  the page needs to know *whether* the Operator's app registration exists, not name the exact secret. */
 export interface PublicConnectorCatalogEntry {
   kind: ConnectorKind
   label: string
   category: ConnectorCatalogCore['category']
   transport: ConnectorCatalogCore['transport']
   auth: ConnectorCatalogCore['auth']
+  /** `needs-oauth` kinds flip to `ready` once `oauthConfigured` is true (task item 5) - never the other
+   *  way around: a bound secret never turns a genuinely `ready` (static-credential) kind into anything
+   *  else, and an unbound one is never reported as `ready`. */
   availability: ConnectorCatalogCore['availability']
   docsUrl: string
   logo: ConnectorKind
@@ -483,24 +663,75 @@ export interface PublicConnectorCatalogEntry {
   headerName?: string
   endpoint?: string
   hasProbe: boolean
+  /** True only when both `OAUTH_<KIND>_CLIENT_ID` and `OAUTH_<KIND>_CLIENT_SECRET` are bound and
+   *  non-blank; always `false` for a kind with no `oauth` config at all. Never derived from anything an
+   *  admin typed into a specific connection's drawer - this is the catalog-wide Operator app
+   *  registration, not a per-row credential. */
+  oauthConfigured: boolean
 }
 
-export function publicConnectorCatalog(): PublicConnectorCatalogEntry[] {
+/** Reads an env value by name without widening the shared `AdminCtx`/`Env` type (owned by
+ *  `routes/admin-ctx.ts`, not this module) with one named field per vendor - the set of
+ *  `OAUTH_<KIND>_CLIENT_ID`/`_SECRET` names is defined entirely by this catalog's `oauth.clientIdEnv` /
+ *  `clientSecretEnv` values, so a lookup keyed by that string is the only sane alternative to a dozen
+ *  near-duplicate optional fields on `Env`. */
+export function oauthEnvValue(env: unknown, name: string): string | undefined {
+  if (!env || typeof env !== 'object') return undefined
+  const value = (env as Record<string, unknown>)[name]
+  return typeof value === 'string' ? value : undefined
+}
+
+export function isOAuthConfigured(entry: ConnectorCatalogEntry, env: unknown): boolean {
+  if (!entry.oauth) return false
+  const clientId = (oauthEnvValue(env, entry.oauth.clientIdEnv) || '').trim()
+  const clientSecret = (oauthEnvValue(env, entry.oauth.clientSecretEnv) || '').trim()
+  return Boolean(clientId && clientSecret)
+}
+
+/** The one check every admin route that gates on "is this kind usable yet" should share:
+ *  `entry.availability` for the five kinds that were always usable, or `isOAuthConfigured` for the six
+ *  that need the Operator's own app registration bound first. `routes/integrations.ts`'s
+ *  `POST /v1/admin/integrations` (the manual credential path, including the client-credentials kinds'
+ *  tenant/client-id/secret drawer per plan 6.10b) and its draft-test route both use this instead of the
+ *  static `availability` field alone, so a bound secret genuinely unlocks the same drawer the catalog
+ *  response already advertises as `ready` - a static-only check would leave the UI and the route
+ *  permanently disagreeing once Tony binds the secrets. */
+export function isConnectorReady(entry: ConnectorCatalogEntry, env: unknown): boolean {
+  return entry.availability !== 'needs-oauth' || isOAuthConfigured(entry, env)
+}
+
+/** Every `OAUTH_<KIND>_CLIENT_ID` / `OAUTH_<KIND>_CLIENT_SECRET` name still unbound for `kind`, in that
+ *  order - the exact shape `GET .../oauth/start`'s 503 names in `missing`. Empty when the kind has no
+ *  `oauth` config, or both secrets are already bound. */
+export function missingOAuthEnvNames(entry: ConnectorCatalogEntry, env: unknown): string[] {
+  if (!entry.oauth) return []
+  const missing: string[] = []
+  if (!(oauthEnvValue(env, entry.oauth.clientIdEnv) || '').trim()) missing.push(entry.oauth.clientIdEnv)
+  if (!(oauthEnvValue(env, entry.oauth.clientSecretEnv) || '').trim()) missing.push(entry.oauth.clientSecretEnv)
+  return missing
+}
+
+/** `env` is optional (and, when omitted, every kind reports `oauthConfigured: false`) so existing callers
+ *  that pre-date task 6.10b's OAuth work keep compiling unchanged; `routes/integrations.ts`'s catalog
+ *  route is the one call site that must pass `ctx.env` to get real, request-time-accurate values. */
+export function publicConnectorCatalog(env?: unknown): PublicConnectorCatalogEntry[] {
   return CONNECTOR_KINDS.map((kind) => {
     const e = CONNECTOR_CATALOG[kind]
+    const oauthConfigured = isOAuthConfigured(e, env)
     return {
       kind: e.kind,
       label: e.label,
       category: e.category,
       transport: e.transport,
       auth: e.auth,
-      availability: e.availability,
+      availability: e.availability === 'needs-oauth' && oauthConfigured ? 'ready' : e.availability,
       docsUrl: e.docsUrl,
       logo: e.logo,
       fields: e.fields,
       headerName: e.headerName,
       endpoint: e.transport === 'mcp' ? e.endpoint : undefined,
-      hasProbe: e.probe !== null
+      hasProbe: e.probe !== null,
+      oauthConfigured
     }
   })
 }
