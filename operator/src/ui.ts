@@ -1,11 +1,11 @@
-import { choropleth, choroplethMini, sparklineLine } from './charts'
+import { choropleth, choroplethMini, shoeyWorld, sparklineLine } from './charts'
 import { statusBadge, STATUS_BADGE_CSS } from './components/ui/status-badge'
 import { CRM_FILTER_ORDER } from './crm'
 import { CF_TOKEN_MISSING, type CloudflareOverview } from './cloudflare'
 import type { ConsoleEvent, DashboardPayload, ProfileRow } from './dashboard'
 import { FORBIDDEN_NAV, NAV_IDS, NAV_SECTIONS } from './nav'
 import { looksLikeSecret } from './redact'
-import { geoCountryRollup } from './realtime-geo'
+import { formatAvgDuration, geoCountryRollup } from './realtime-geo'
 
 const MISSING = '—'
 
@@ -178,8 +178,12 @@ a { color: var(--accent); text-decoration: none; }
 .geo-corner { display: grid; grid-template-columns: minmax(0, 1fr) 168px; gap: 10px; align-items: start; }
 .geo-corner-map { width: 168px; }
 .geo-corner-map svg { display: block; width: 100%; height: auto; max-height: 120px; }
-.geo-live { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 12px; align-items: start; }
-@media (max-width: 980px) { .geo-corner, .geo-live { grid-template-columns: 1fr; } }
+.geo-live { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
+.rt-world { padding-bottom: 10px; }
+.rt-world .world { display: block; width: 100%; height: auto; max-height: 420px; }
+.rt-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.geo-bar { display: block; height: 3px; margin-top: 4px; background: var(--accent); max-width: 100%; }
+@media (max-width: 980px) { .geo-corner, .geo-live, .rt-split { grid-template-columns: 1fr; } }
 .key-form { display: grid; gap: 8px; margin: 0 0 14px; }
 .license-once {
   display: grid; gap: 8px; margin: 0 0 14px; padding: 10px 12px;
@@ -408,24 +412,35 @@ function renderPeopleStrip(rows: ProfileRow[], liveCount: number): string {
   return `<div class="sub muted" style="padding-bottom:8px">${hint}</div>${body}`
 }
 
+function geoBar(count: number, max: number): string {
+  const pct = max <= 0 ? 0 : Math.max(6, Math.round((count / max) * 100))
+  return `<span class="geo-bar" style="width:${pct}%"></span>`
+}
+
 function renderGeoCorner(data: DashboardPayload): string {
   const cities = data.geo
   const regions = data.geoRegions
   const countries = geoCountryRollup(cities)
+  const maxCity = Math.max(1, ...cities.map((r) => r.count))
+  const maxRegion = Math.max(1, ...regions.map((r) => r.count))
+  const maxCountry = Math.max(1, ...countries.map((r) => r.count))
   const cityRows = cities
     .map(
       (r) =>
-        `<tr data-geo-city="${esc(r.city)}"><td>${esc(r.city)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td></tr>`
+        `<tr data-geo-city="${esc(r.city)}"><td>${esc(r.city)}${geoBar(r.count, maxCity)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
     )
     .join('')
   const regionRows = regions
     .map(
       (r) =>
-        `<tr><td>${esc(r.region)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td></tr>`
+        `<tr><td>${esc(r.region)}${geoBar(r.count, maxRegion)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
     )
     .join('')
   const countryRows = countries
-    .map((r) => `<tr><td>${esc(r.country)}</td><td>${r.count}</td></tr>`)
+    .map(
+      (r) =>
+        `<tr><td>${esc(r.country)}${geoBar(r.count, maxCountry)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
+    )
     .join('')
   return `<article class="card geo-corner" data-geo-corner>
     <div>
@@ -438,21 +453,21 @@ function renderGeoCorner(data: DashboardPayload): string {
       <div data-geo-pane="cities">
         ${
           cityRows
-            ? `<table data-geo-table="cities"><thead><tr><th>City</th><th>Country</th><th>Seats</th></tr></thead><tbody>${cityRows}</tbody></table>`
+            ? `<table data-geo-table="cities"><thead><tr><th>City</th><th>Country</th><th>Count</th><th>Sessions</th><th>Avg</th></tr></thead><tbody>${cityRows}</tbody></table>`
             : '<div class="empty">No city geo yet. Heartbeats write request.cf city.</div>'
         }
       </div>
       <div data-geo-pane="regions" hidden>
         ${
           regionRows
-            ? `<table data-geo-table="regions"><thead><tr><th>Region</th><th>Country</th><th>Seats</th></tr></thead><tbody>${regionRows}</tbody></table>`
+            ? `<table data-geo-table="regions"><thead><tr><th>Region</th><th>Country</th><th>Count</th><th>Sessions</th><th>Avg</th></tr></thead><tbody>${regionRows}</tbody></table>`
             : '<div class="empty">No region yet. Next heartbeat writes request.cf.region.</div>'
         }
       </div>
       <div data-geo-pane="countries" hidden>
         ${
           countryRows
-            ? `<table data-geo-table="countries"><thead><tr><th>Country</th><th>Seats</th></tr></thead><tbody>${countryRows}</tbody></table>`
+            ? `<table data-geo-table="countries"><thead><tr><th>Country</th><th>Count</th><th>Sessions</th><th>Avg</th></tr></thead><tbody>${countryRows}</tbody></table>`
             : '<div class="empty">No country geo yet.</div>'
         }
       </div>
@@ -465,27 +480,29 @@ function renderRealtimeGeo(data: DashboardPayload): string {
   const cityRows = data.geo
     .map(
       (r) =>
-        `<tr><td>${esc(r.city)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${r.avg_duration}ms</td></tr>`
+        `<tr data-geo-city="${esc(r.city)}"><td>${esc(r.city)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
     )
     .join('')
   const regionRows = data.geoRegions
     .map(
       (r) =>
-        `<tr><td>${esc(r.region)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${r.avg_duration}ms</td></tr>`
+        `<tr><td>${esc(r.region)}</td><td class="muted">${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
     )
     .join('')
   const countryRows = geoCountryRollup(data.geo)
-    .map((r) => `<tr><td>${esc(r.country)}</td><td>${r.count}</td></tr>`)
+    .map(
+      (r) =>
+        `<tr><td>${esc(r.country)}</td><td>${r.count}</td><td class="muted">${r.unique_sessions}</td><td class="muted">${formatAvgDuration(r.avg_duration)}</td></tr>`
+    )
     .join('')
   return `<article class="card" data-realtime-geo>
-    <p class="eyebrow">Geo</p>
+    <p class="eyebrow">GeoTable</p>
     <div class="tabs" data-geo-tabs="realtime">
       <button class="tab on" data-geo-tab="cities" type="button">City</button>
       <button class="tab" data-geo-tab="regions" type="button">Regions</button>
       <button class="tab" data-geo-tab="countries" type="button">Country</button>
     </div>
     <div class="geo-live">
-      <div class="geo-corner-map" data-geo-widget>${choroplethMini(data.map.countries)}</div>
       <div data-geo-pane="cities">
         ${
           cityRows
@@ -503,11 +520,18 @@ function renderRealtimeGeo(data: DashboardPayload): string {
       <div data-geo-pane="countries" hidden>
         ${
           countryRows
-            ? `<table data-geo-table="countries"><thead><tr><th>Country</th><th>Seats</th></tr></thead><tbody>${countryRows}</tbody></table>`
+            ? `<table data-geo-table="countries"><thead><tr><th>Country</th><th>Count</th><th>Sessions</th><th>Avg</th></tr></thead><tbody>${countryRows}</tbody></table>`
             : '<div class="empty">No country geo yet.</div>'
         }
       </div>
     </div>
+  </article>`
+}
+
+function renderWorldMap(data: DashboardPayload): string {
+  return `<article class="card rt-world" data-world-map>
+    <p class="eyebrow">WorldMap</p>
+    <div id="rt-map-root" data-geo-widget>${shoeyWorld(data.map.countries, data.map.dots)}</div>
   </article>`
 }
 
@@ -810,20 +834,27 @@ svg path { vector-effect: non-scaling-stroke; }
     </section>
 
     <section class="page wrap" data-page="realtime" hidden>
+      ${renderWorldMap(data)}
+      <div class="rt-split">
+        <article class="card activity-feed" style="padding-bottom:10px" data-live-feed>
+          <p class="eyebrow">LiveFeed</p>
+          ${
+            data.events.length
+              ? `<div id="rt-stream">${renderEvents(data.events.slice(0, 30))}</div>`
+              : '<div class="empty">No live events yet. A heartbeat writes city and lands here.</div>'
+          }
+        </article>
+        ${renderRealtimeGeo(data)}
+      </div>
       <article class="card" style="padding-bottom:10px" data-live-presence>
         <p class="eyebrow">${liveSeats.length ? 'Live people' : 'People'}</p>
         ${
           liveSeats.length
-            ? renderProfiles(liveSeats)
+            ? renderPeopleStrip(liveSeats, liveSeats.length)
             : data.profiles.length
-              ? `<div class="sub muted" style="padding-bottom:8px">No heartbeat in the last two minutes. Showing last-seen seats with city.</div>${renderProfiles(data.profiles)}`
+              ? renderPeopleStrip(data.profiles, 0)
               : '<div class="empty">No seats yet. Heartbeat writes city from request.cf.</div>'
         }
-      </article>
-      ${renderRealtimeGeo(data)}
-      <article class="card" style="padding-bottom:10px" data-live-feed>
-        <p class="eyebrow">Activity</p>
-        <div id="rt-stream">${renderEvents(data.events.slice(0, 30))}</div>
       </article>
     </section>
 

@@ -281,6 +281,19 @@ export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world
           return `<circle class="seat-dot" cx="${p.x.toFixed(1)}" cy="${p.y.toFixed(1)}" r="4.2" fill="${SHOEY_DOT}" stroke="#fff" stroke-width="1.2" />`
         })
         .join('')
+  const cityPills = empty
+    ? ''
+    : [...new Map(dots.filter((d) => d.city).map((d) => [`${d.country}:${d.city}`, d])).values()]
+        .map((dot) => {
+          const p = project(dot.lat, dot.lon)
+          const label = String(dot.city)
+          const w = Math.max(72, 28 + label.length * 6.2)
+          return `<g class="city-pill" data-city="${escapeXml(label)}" transform="translate(${(p.x + 8).toFixed(1)},${(p.y - 6).toFixed(1)})">
+            <rect x="0" y="-10" width="${w}" height="20" rx="10" fill="#fff" stroke="#E5E5E5"/>
+            <text x="8" y="4" font-size="10" fill="#18181B">${escapeXml(label)}</text>
+          </g>`
+        })
+        .join('')
   const pills = empty
     ? ''
     : REGIONS.map((reg) => {
@@ -300,7 +313,7 @@ export function shoeyWorld(countries: MapCountry[], dots: MapDot[], cls = 'world
   const caption = empty
     ? `<div class="empty map-empty">No heartbeats yet. The map stays empty until a seat checks in. Empty is an empty world, not sample dots.</div>`
     : ''
-  const svg = shoeyLandSvg(cls).replace('</svg>', `${marks}${pills}</svg>`)
+  const svg = shoeyLandSvg(cls).replace('</svg>', `${marks}${pills}${cityPills}</svg>`)
   return `${caption}${svg}`
 }
 

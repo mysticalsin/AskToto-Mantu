@@ -190,6 +190,10 @@ async function adminRoute(
       )
     )
   }
+  if (url.pathname === '/v1/admin/realtime.geo.json' && request.method === 'GET') {
+    const dash = await buildDashboard(store, email, now, keyFlags(env), await cloudflareForDashboard(store, env, opts, now))
+    return json({ ok: true, geo: dash.geo, regions: dash.geoRegions })
+  }
   if (url.pathname === '/v1/admin/keys' && request.method === 'GET') {
     return json(stripSecrets({ ok: true, ...(await listKeysJson(store, keyFlags(env))) }))
   }

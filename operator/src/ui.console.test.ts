@@ -424,9 +424,17 @@ describe('realtime and map use live heartbeats, not leftover OpenPanel', () => {
     expect(html).toContain('data-iso="CA"')
     expect(html).toContain('#E5E7EB')
     expect(html).toContain('data-live-presence')
+    expect(html).toContain('data-world-map')
+    expect(html).toContain('data-live-feed')
     expect(html).toContain('data-realtime-geo')
     expect(html).toContain('data-geo-table="realtime"')
     expect(html).toContain('data-geo-tab="regions"')
+    expect(html).toContain('data-city="Longueuil"')
+    const realtime = html.slice(html.indexOf('data-page="realtime"'), html.indexOf('data-page="sessions"'))
+    expect(realtime).toContain('WorldMap')
+    expect(realtime).toContain('LiveFeed')
+    expect(realtime).toContain('GeoTable')
+    expect(realtime).not.toContain('data-geo-corner')
     expect(html).toContain('data-page="sessions"')
     expect(html).toContain('<th>City</th>')
     expect(html).toContain('<th>Device</th>')
@@ -442,6 +450,56 @@ function mapRootHtml(html: string): string {
   const articleEnd = html.indexOf('</article>', start)
   return articleEnd > start ? html.slice(start, articleEnd) : ''
 }
+
+describe('realtime.geo.json is city-level Shoey rows', () => {
+  it('returns 401 without Access', async () => {
+    const res = await handleRequest(
+      new Request('https://operator.test/v1/admin/realtime.geo.json'),
+      env(),
+      {},
+      { store: memoryStore(), now: NOW }
+    )
+    expect(res.status).toBe(401)
+    expect(await res.json()).toEqual({ ok: false, error: 'Access required' })
+  })
+
+  it('emits city rows after a heartbeat and never country-only', async () => {
+    const store = memoryStore()
+    const req = await signedRequest(
+      '/v1/heartbeat',
+      JSON.stringify({ os: 'darwin', appVersion: '1.8.3', hostname: 'Tonys-MacBook-Pro' })
+    )
+    expect(
+      (
+        await handleRequest(req, env(), {}, {
+          store,
+          now: NOW,
+          geo: { country: 'CA', city: 'Longueuil', region: 'Quebec', lat: 45.531, lon: -73.518 }
+        })
+      ).status
+    ).toBe(200)
+    const res = await handleRequest(
+      new Request('https://operator.test/v1/admin/realtime.geo.json'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      ok: boolean
+      geo: { country: string; city: string; count: number; unique_sessions: number; avg_duration: number }[]
+    }
+    expect(body.ok).toBe(true)
+    expect(body.geo[0]).toMatchObject({
+      country: 'CA',
+      city: 'Longueuil',
+      count: 1,
+      unique_sessions: 1
+    })
+    expect(body.geo[0]).toHaveProperty('avg_duration')
+    expect(body.geo.every((r) => r.city)).toBe(true)
+  })
+})
 
 describe('map land is in #map-root HTML', () => {
   it('inlines path[data-iso] land inside #map-root', async () => {
