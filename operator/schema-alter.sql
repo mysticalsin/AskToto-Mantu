@@ -195,3 +195,17 @@ CREATE TABLE IF NOT EXISTS integration_grants (
 );
 
 CREATE INDEX IF NOT EXISTS integration_grants_integration_ts ON integration_grants(integration_id, ts);
+
+-- Connector catalog additive columns (task B2). Kept out of the CREATE TABLE above on purpose: that
+-- statement mirrors schema.sql's original integrations table, and these columns are additive-only. Owned
+-- by operator/src/connectors/data.ts (INTEGRATION_ALTERS), not d1.ts/store.ts.
+ALTER TABLE integrations ADD COLUMN auth_kind TEXT;
+ALTER TABLE integrations ADD COLUMN header_name TEXT;
+ALTER TABLE integrations ADD COLUMN transport TEXT;
+ALTER TABLE integrations ADD COLUMN mode TEXT NOT NULL DEFAULT 'brokered';
+ALTER TABLE integrations ADD COLUMN allow_writes INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE integrations ADD COLUMN config_json TEXT NOT NULL DEFAULT '{}';
+ALTER TABLE integrations ADD COLUMN tools_json TEXT;
+ALTER TABLE integrations ADD COLUMN last_test_json TEXT;
+ALTER TABLE integrations ADD COLUMN last_test_at INTEGER;
+ALTER TABLE integrations ADD COLUMN notes TEXT;

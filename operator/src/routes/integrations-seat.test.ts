@@ -55,8 +55,15 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
   }
 }
 
-async function integration(overrides: Partial<IntegrationRow> & Pick<IntegrationRow, 'id'>): Promise<IntegrationRow> {
+/** `mode` defaults to `'direct'` here (not the column-level `'brokered'` default) so every existing test
+ *  below, written before task B2 added the `mode` column, keeps exercising the credential-delivery path
+ *  it always has - a test that wants brokered delivery, or the true column default, says so explicitly
+ *  (see the "brokered" and "predates the mode column" tests). */
+async function integration(
+  overrides: Partial<IntegrationRow> & { mode?: string; transport?: string } & Pick<IntegrationRow, 'id'>
+): Promise<IntegrationRow> {
   const enc = await encryptVault('crm-secret-token', TEST_VAULT_KEY)
+  const { mode = 'direct', transport, ...rowOverrides } = overrides
   return {
     kind: 'hubspot',
     label: 'Hubspot prod',
@@ -72,8 +79,10 @@ async function integration(overrides: Partial<IntegrationRow> & Pick<Integration
     revoked_at: null,
     last_used_at: null,
     uses: 0,
-    ...overrides
-  }
+    ...rowOverrides,
+    mode,
+    ...(transport !== undefined ? { transport } : {})
+  } as IntegrationRow
 }
 
 describe('GET /v1/integrations (seat delivery)', () => {
@@ -152,6 +161,45 @@ describe('GET /v1/integrations (seat delivery)', () => {
     const asPost = new Request(req.url, { method: 'POST', headers: req.headers })
     const res = await handleRequest(asPost, env(), {}, { store, now: NOW })
     expect(res.status).toBe(405)
+  })
+
+  it('delivers a brokered connection without a credential, using the gateway endpoint shape', async () => {
+    const store = memoryStore()
+    await store.upsertSeat(seat({ device_id: 'dev-a' }))
+    await store.putIntegration(await integration({ id: 'int-1', mode: 'brokered', transport: 'mcp' }))
+    const res = await handleRequest(await signedGet('/v1/integrations', 'dev-a'), env(), {}, { store, now: NOW })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; integrations: Record<string, unknown>[] }
+    expect(body.ok).toBe(true)
+    expect(body.integrations).toEqual([
+      {
+        id: 'int-1',
+        kind: 'hubspot',
+        label: 'Hubspot prod',
+        transport: 'mcp',
+        mode: 'brokered',
+        endpoint: '/v1/mcp/int-1',
+        scopes: {}
+      }
+    ])
+    const text = JSON.stringify(body.integrations)
+    expect(text).not.toContain('crm-secret-token')
+    expect(text).not.toContain('credential')
+    expect(text).not.toContain('baseUrl')
+  })
+
+  it('defaults to brokered delivery when a row predates the mode column', async () => {
+    const store = memoryStore()
+    await store.upsertSeat(seat({ device_id: 'dev-a' }))
+    const row = (await integration({ id: 'int-1' })) as Record<string, unknown>
+    delete row.mode
+    await store.putIntegration(row as unknown as IntegrationRow)
+    const res = await handleRequest(await signedGet('/v1/integrations', 'dev-a'), env(), {}, { store, now: NOW })
+    const body = (await res.json()) as { ok: boolean; integrations: { mode?: string }[] }
+    expect(body.ok).toBe(true)
+    expect(body.integrations).toHaveLength(1)
+    expect(body.integrations[0].mode).toBe('brokered')
+    expect(body.integrations[0]).not.toHaveProperty('credential')
   })
 })
 
