@@ -20,6 +20,6 @@ That writes a new gitignored `build/cloudflare-embed/key.json` and prints the Wo
 2. Drop the previous `embedded-default` entry. Old installers stop at the Worker. New installs get the new key.
 3. Rebuild the installer with `METIS_EMBED_CLOUDFLARE_KEY=1`.
 
-Cahê edition only: replace `build/cahe-kimi.local.json` and revoke the old `sk-kimi-` key at the vendor. Do not reuse that key as anything else.
+Cahê edition only: replace `build/cahe-kimi.local.json`, run `node scripts/embed-cahe-kimi-key.mjs` (or the Cahê build chain, which calls it), and revoke the old `sk-kimi-` key at the vendor. The packaged file is the encrypted blob under `build/cahe-embed/kimi.json` — never ship plaintext `kimiApiKey` JSON. Do not reuse that key as anything else.
 
 See `docs/CLOUDFLARE.md` and `scripts/rotate-embedded-keys.mjs`.

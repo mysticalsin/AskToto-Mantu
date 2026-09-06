@@ -34,7 +34,10 @@ let intelUrl = '' // file:// URL of the bundled index.html, set at open — the 
 export function isIntelligenceSender(wc: Electron.WebContents): boolean {
   if (!intelWin || intelWin.isDestroyed() || wc !== intelWin.webContents) return false
   try {
-    return !!intelUrl && new URL(wc.getURL()).pathname === new URL(intelUrl).pathname
+    // Whole URL, not just the path: a document at another origin with the same path must not qualify.
+    const cur = new URL(wc.getURL())
+    const own = new URL(intelUrl)
+    return !!intelUrl && cur.protocol === own.protocol && cur.host === own.host && cur.pathname === own.pathname
   } catch {
     return false
   }

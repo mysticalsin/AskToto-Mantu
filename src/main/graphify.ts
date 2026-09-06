@@ -5,6 +5,7 @@ import { readFileSync, readdirSync, existsSync, statSync, rmSync } from 'node:fs
 import { join, basename, delimiter } from 'node:path'
 import { homedir } from 'node:os'
 import { getSettings, getApiKey, hasApiKey, getAllowedProviders } from './store'
+import { sanitizedSpawnEnv } from './cli-installer'
 import { resolveMeetingsFolder } from './transcripts'
 import { readConfidentialMeetings } from './brain/publish'
 import type { GraphStatus, GraphRelated, Settings } from '@shared/ipc'
@@ -66,8 +67,12 @@ function augmentedPath(): string {
   const merged = [...cur, ...EXTRA_BINS.filter((p) => !cur.includes(p) && existsSync(p))]
   return merged.join(delimiter)
 }
+/** Env for every graphify / python / uv child. Starts from the same OS-only allow-list npm installs use
+ *  (cli-installer.ts sanitizedSpawnEnv), never the whole parent env: the parent carries every provider
+ *  key the store can read from env, and this child is a third-party package that also receives the
+ *  meetings corpus. The one key it needs arrives explicitly through `extra` (GRAPHIFY_API_KEY). */
 const spawnEnv = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => ({
-  ...process.env,
+  ...sanitizedSpawnEnv(),
   PATH: augmentedPath(),
   ...extra
 })

@@ -44,16 +44,55 @@ export interface HandleOpts {
 
 const RATE_WINDOW_MS = 60_000
 const RATE_MAX = 90
+/** Second limiter keyed on the connecting address: `x-metis-device` is client-asserted, so a secret holder
+ *  rotating device ids would otherwise have no ceiling at all. Wide enough for an office NAT. */
+const IP_RATE_MAX = 600
+/** Largest body any HMAC route accepts. The client caps an Ask at 4000 chars; a heartbeat carries at most
+ *  40 CRM rows. Anything past this is not a seat talking. */
+const MAX_BODY_BYTES = 64_000
+const MAX_QUESTION_CHARS = 4000
+/** Seat fields the console renders as labels. Bounded and character-limited so a tampered client cannot
+ *  push kilobytes of markup-looking text into every chart. */
+const SEAT_FIELD_MAX = 64
+const SEAT_FIELD_RE = /^[\w.+\-: ()/]*$/
+
+/** The console is a server-rendered page with one inline script that calls this same origin, and the
+ *  Geist fonts from jsdelivr. Everything else is refused, and no other site may frame it. */
+const CONSOLE_CSP = [
+  "default-src 'none'",
+  "style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
+  'font-src https://cdn.jsdelivr.net',
+  "script-src 'unsafe-inline'",
+  "connect-src 'self'",
+  "img-src 'self' data:",
+  "base-uri 'none'",
+  "form-action 'none'",
+  "frame-ancestors 'none'"
+].join('; ')
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'content-type': 'application/json; charset=utf-8' }
+    headers: { 'content-type': 'application/json; charset=utf-8', 'x-content-type-options': 'nosniff' }
   })
 }
 
 function html(body: string): Response {
-  return new Response(body, { headers: { 'content-type': 'text/html; charset=utf-8' } })
+  return new Response(body, {
+    headers: {
+      'content-type': 'text/html; charset=utf-8',
+      'content-security-policy': CONSOLE_CSP,
+      'x-frame-options': 'DENY',
+      'x-content-type-options': 'nosniff',
+      'referrer-policy': 'no-referrer',
+      'cache-control': 'no-store'
+    }
+  })
+}
+
+function seatField(v: unknown, fallback: string): string {
+  const s = typeof v === 'string' ? v.trim().slice(0, SEAT_FIELD_MAX) : ''
+  return s && SEAT_FIELD_RE.test(s) ? s : fallback
 }
 
 function isAdminPath(pathname: string): boolean {
@@ -105,7 +144,7 @@ export async function handleRequest(
   }
 
   if (isAdminPath(url.pathname)) {
-    const ident = await adminIdentity(request, accessCtx, env)
+    const ident = await adminIdentity(request, accessCtx, env, now)
     if (!ident) return unauthorized()
     return adminRoute(request, url, env, store, ident.email, now)
   }
@@ -116,10 +155,19 @@ export async function handleRequest(
     url.pathname === '/v1/skills/manifest' ||
     url.pathname === '/v1/ask'
   ) {
+    // Refuse oversized bodies before reading them, and again after (a chunked upload carries no
+    // content-length), so neither the isolate nor the prompt encryptor ever sees an unbounded string.
+    const declared = Number(request.headers.get('content-length') ?? 0)
+    if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return json({ ok: false, error: 'body too large' }, 413)
     const bodyText = request.method === 'GET' ? '' : await request.text()
+    if (bodyText.length > MAX_BODY_BYTES) return json({ ok: false, error: 'body too large' }, 413)
     const hmac = await verifyIngestHmac(request, bodyText, env.OPERATOR_INGEST_SECRET, now, (n) => store.takeNonce(n, now))
     if (!hmac.ok) return json({ ok: false, error: hmac.error }, hmac.status)
     if (await store.hitRate(hmac.deviceId, now, RATE_WINDOW_MS, RATE_MAX)) {
+      return json({ ok: false, error: 'rate limited' }, 429)
+    }
+    const ip = request.headers.get('cf-connecting-ip')
+    if (ip && (await store.hitRate(`ip:${ip}`, now, RATE_WINDOW_MS, IP_RATE_MAX))) {
       return json({ ok: false, error: 'rate limited' }, 429)
     }
     const geo = opts.geo ?? geoFromRequest(request)
@@ -326,18 +374,23 @@ async function ingest(
 ): Promise<Response> {
   const body = JSON.parse(bodyText || '{}') as Record<string, unknown>
   const id = String(body.id || crypto.randomUUID())
+  // Ask ids are client-chosen. A row may only be created, replaced or rated by the device that owns it;
+  // otherwise one seat could rewrite or thumbs-down another seat's history through a guessed id.
+  const existing = await store.getAsk(id)
+  if (existing && existing.device_id !== deviceId) return json({ ok: false, error: 'forbidden' }, 403)
   if (body.event === 'rating') {
-    await store.updateAskRating(id, String(body.rating || ''))
+    if (existing) await store.updateAskRating(id, String(body.rating || '').slice(0, 16))
     return json({ ok: true })
   }
   if (body.event === 'crm') {
     if (body.confidential === true) return json({ ok: true, id, ingested: false })
-    await upsertCrmEvent(store, deviceId, body, now)
+    const written = await upsertCrmEvent(store, deviceId, body, now)
+    if (written === 'foreign') return json({ ok: false, error: 'forbidden' }, 403)
     return json({ ok: true, id })
   }
   let cipher: string | null = null
   let iv: string | null = null
-  const question = typeof body.question === 'string' ? body.question : ''
+  const question = typeof body.question === 'string' ? body.question.slice(0, MAX_QUESTION_CHARS) : ''
   if (question) {
     const enc = await encryptPrompt(question, env.OPERATOR_PROMPT_KEY)
     cipher = enc.cipher
@@ -402,9 +455,9 @@ function lastIndexAt(body: Record<string, unknown>): number | null {
 function seatFromBody(deviceId: string, body: Record<string, unknown>, now: number, geo: CfGeo): SeatRow {
   return {
     device_id: deviceId,
-    seat_hash: String(body.seatHash || deviceId),
-    os: String(body.os || 'unknown'),
-    app_version: String(body.appVersion || ''),
+    seat_hash: seatField(body.seatHash, deviceId.slice(0, SEAT_FIELD_MAX)),
+    os: seatField(body.os, 'unknown'),
+    app_version: seatField(body.appVersion, ''),
     first_seen: now,
     last_seen: now,
     country: geo.country,
@@ -433,10 +486,10 @@ async function upsertCrmEvent(
   deviceId: string,
   body: Record<string, unknown>,
   now: number
-): Promise<void> {
-  if (body.confidential === true) return
+): Promise<'written' | 'skipped' | 'foreign'> {
+  if (body.confidential === true) return 'skipped'
   const status = asCrmStatus(body.status)
-  if (!status) return
+  if (!status) return 'skipped'
   const id = String(body.id || crypto.randomUUID())
   const title = typeof body.title === 'string' ? body.title.replace(/\s+/g, ' ').trim().slice(0, 160) : 'CRM send'
   const connector = typeof body.connector === 'string' ? body.connector.slice(0, 32) : 'unknown'
@@ -449,6 +502,8 @@ async function upsertCrmEvent(
   const latencyMs =
     typeof body.latencyMs === 'number' && Number.isFinite(body.latencyMs) ? Math.max(0, Math.floor(body.latencyMs)) : 0
   const prev = await store.getCrm(id)
+  // A CRM row (and the retry instruction the console attaches to it) belongs to the device that sent it.
+  if (prev && prev.device_id !== deviceId) return 'foreign'
   await store.upsertCrm({
     id,
     device_id: deviceId,
@@ -466,6 +521,7 @@ async function upsertCrmEvent(
     remote_url: remoteUrl ?? prev?.remote_url ?? null,
     action: action ?? prev?.action ?? null
   })
+  return 'written'
 }
 
 async function ingestCrmList(

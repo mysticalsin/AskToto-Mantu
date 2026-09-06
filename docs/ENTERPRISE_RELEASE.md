@@ -14,6 +14,7 @@ none of the gates below execute. See `docs/MANTU-IT-REQUEST.md` for the recorded
 - macOS and Windows tagged release scripts fail if signing inputs are missing.
 - `scripts/verify-signing.mjs` checks the produced artifacts on the current platform.
 - Machine-wide managed config can lock SSO, license server, license gate, provider policy, encryption, redaction, and retention.
+- `egressAllowlist` enforcement is the **admin** machine-wide `managed-config.json` only; the per-user file is a lab fallback (see `docs/NETWORK-EGRESS.md`).
 - The license server supports activation, heartbeat, revocation, expiry, and seat caps.
 
 ## Operator Setup

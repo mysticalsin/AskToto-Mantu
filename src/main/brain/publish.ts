@@ -15,6 +15,7 @@ import {
   type EntityKind,
   type LedgerCommitment
 } from '@shared/brain'
+import { redactSecrets } from '@shared/redact'
 import { resolveMeetingsFolder, readSavedFile, writeSaved, parseRecapMarkdown } from '../transcripts'
 import { listEntities, readPerson, readAccount, readDeal, readIndex, readMeetingExtraction, listMeetingExtractions, slugify } from './store'
 import { readAliasMap, resolveEntitySlug, type AliasMap } from './corrections'
@@ -74,9 +75,11 @@ function ensureWikiDirs(s: Settings): void {
 
 /** Every wiki file is plaintext, always — regardless of `encryptTranscripts` — via the same atomic
  *  tmp+rename path writeSaved uses for every other saved artifact (full-file regeneration, never a
- *  read-modify-write). */
+ *  read-modify-write). Because it is plaintext, and usually inside a synced folder, every page goes
+ *  through redactSecrets first: a key or token that reached a commitment or a field value while
+ *  redaction was off must not land in the clear outside the encryption boundary. */
 async function writeWikiFile(path: string, content: string): Promise<void> {
-  await writeSaved(path, content, false)
+  await writeSaved(path, redactSecrets(content), false)
 }
 
 function appVersion(): string {

@@ -35,7 +35,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import { isDemoTagged } from '@shared/demo-guard'
 import { getSettings, setSettings } from './store'
-import type { AskMode, LicenseActivateResult, LicenseConfigResult } from '@shared/ipc'
+import type { AskMode, LicenseActivateResult, LicenseConfigResult, Settings } from '@shared/ipc'
 import { getLicenseLeasePublicKeyRaw } from './license-lease-key'
 import { isLeaseValidNow, verifyLeaseToken, type LeasePayload } from './license-lease-verify'
 import { shouldStartTrial, trialStatus } from './license-trial'
@@ -123,6 +123,7 @@ async function postJson(url: string, body: unknown): Promise<LicenseActivateResu
  *  re-activation attempt (typo'd key, server hiccup) must never un-license a device that already works. */
 export async function activateLicense(serverUrl: string, licenseKey: string): Promise<LicenseActivateResult> {
   const url = normalizeServerUrl(serverUrl)
+  if (!url) return { ok: false, error: 'network' }
   const r = await postJson(`${url}/activate`, {
     licenseKey: licenseKey.trim(),
     machineId: getMachineId(),
@@ -147,15 +148,41 @@ export async function activateLicense(serverUrl: string, licenseKey: string): Pr
   return r
 }
 
+const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '::1', '[::1]'])
+/** Cloud metadata endpoints and the link-local range they live in. The license key and machine id ride
+ *  every POST, so the server address (renderer-writable in Settings) must never be one of these. */
+const METADATA_HOSTS = new Set(['169.254.169.254', 'metadata.google.internal', 'metadata', 'fd00:ec2::254', '[fd00:ec2::254]'])
+
 /** Accept whatever a human types for the server address and turn it into a URL fetch() won't reject.
  *  A bare `127.0.0.1:8420`, `localhost:8420`, or `licenses.acme.com` has no scheme, so fetch throws
  *  "Invalid URL" and the activation silently reads as a network failure — the #1 reason a good key
- *  looks broken. Default to http:// when no scheme is given (plain-LAN/dev is the common no-scheme
- *  case; a real deployment uses an https:// URL explicitly), and strip trailing slashes. */
+ *  looks broken. A scheme-less loopback address gets http:// (the local-dev case); anything else gets
+ *  https://, because the license key and machine id ride every request and a plaintext hop to another
+ *  host would hand them to the network. An explicit http:// to a non-loopback host, or any metadata /
+ *  link-local address, returns '' so the caller reports it the way it reports any unreachable server.
+ *  Trailing slashes are stripped. */
 export function normalizeServerUrl(raw: string): string {
   let u = raw.trim().replace(/\/+$/, '')
-  if (u && !/^https?:\/\//i.test(u)) u = `http://${u}`
+  if (!u) return ''
+  if (!/^https?:\/\//i.test(u)) u = `${isLoopbackAddress(u) ? 'http' : 'https'}://${u}`
+  let host: string
+  try {
+    host = new URL(u).hostname.toLowerCase()
+  } catch {
+    return ''
+  }
+  if (!host) return ''
+  if (/^http:\/\//i.test(u) && !LOOPBACK_HOSTS.has(host)) return ''
+  if (METADATA_HOSTS.has(host) || /^169\.254\./.test(host) || /^\[?fe80:/i.test(host)) return ''
   return u
+}
+
+function isLoopbackAddress(schemeless: string): boolean {
+  try {
+    return LOOPBACK_HOSTS.has(new URL(`https://${schemeless}`).hostname.toLowerCase())
+  } catch {
+    return false
+  }
 }
 
 /** Re-validate the already-saved activation. Called by checkLicenseGrace() in the background once the
@@ -163,7 +190,9 @@ export function normalizeServerUrl(raw: string): string {
 export async function heartbeat(): Promise<LicenseActivateResult> {
   const s = getSettings()
   if (!s.licenseServerUrl || !s.licenseKey) return { ok: false, error: 'not_activated' }
-  const r = await postJson(`${normalizeServerUrl(s.licenseServerUrl)}/heartbeat`, {
+  const url = normalizeServerUrl(s.licenseServerUrl)
+  if (!url) return { ok: false, error: 'network' }
+  const r = await postJson(`${url}/heartbeat`, {
     licenseKey: s.licenseKey,
     machineId: getMachineId()
   })
@@ -181,9 +210,27 @@ export async function heartbeat(): Promise<LicenseActivateResult> {
     // (license-wide), not_activated (an admin freed this seat in the dashboard), or invalid (the license
     // was deleted). Only genuine connectivity noise — 'network', timeout, malformed response — leaves
     // licenseValid untouched, so a flaky connection alone can't brick a working install.
-    setSettings({ licenseValid: false })
+    // The cached lease goes with it: checkLicenseGrace prefers a valid lease over licenseValid, so leaving
+    // it in place would keep a revoked seat running for the rest of the lease window while online.
+    setSettings({ licenseValid: false, licenseLease: '' })
   }
   return r
+}
+
+/**
+ * The lease this device may act on, or null. Beyond the signature (verifyLease), a lease counts only when
+ * it was minted for THIS machine and THIS key (a copied settings blob must not license a second machine),
+ * and only while the local clock is not behind the last server contact or the lease's own issue time
+ * (a rolled-back clock must not revive an expired lease). Everything else falls through to the wall-clock
+ * grace, whose own rollback guard then blocks.
+ */
+function trustedLease(s: Pick<Settings, 'licenseLease' | 'licenseKey' | 'licenseLastValidatedAt'>): LeasePayload | null {
+  const lease = verifyLease(s.licenseLease)
+  if (!lease) return null
+  if (lease.machineId !== getMachineId() || lease.licenseKey !== s.licenseKey) return null
+  const now = Date.now()
+  if (now < s.licenseLastValidatedAt || now < lease.issuedAt) return null
+  return isLeaseValidNow(lease) ? lease : null
 }
 
 export interface LicenseGraceResult {
@@ -208,7 +255,12 @@ export interface LicenseGraceResult {
  *  malformed shape) — never throws. */
 export function verifyLease(lease: string | null | undefined): LeasePayload | null {
   if (!lease) return null
-  return verifyLeaseToken(lease, getLicenseLeasePublicKeyRaw())
+  try {
+    return verifyLeaseToken(lease, getLicenseLeasePublicKeyRaw())
+  } catch {
+    // Packaged builds without a production pubkey throw — treat as verification failure, never throw.
+    return null
+  }
 }
 
 /** Called by the license:gate IPC handler (main/index.ts), which backs the renderer's boot gate
@@ -225,9 +277,9 @@ export function checkLicenseGrace(): LicenseGraceResult {
   const s = getSettings()
   if (!s.licenseGateEnabled) return { allowed: true }
 
-  const lease = verifyLease(s.licenseLease)
-  if (isLeaseValidNow(lease)) {
-    return { allowed: true, leaseExpiresAt: (lease as LeasePayload).notAfter }
+  const lease = trustedLease(s)
+  if (lease) {
+    return { allowed: true, leaseExpiresAt: lease.notAfter }
   }
 
   if (!s.licenseValid) {
@@ -294,8 +346,7 @@ export interface LicenseDisplayStatus {
 }
 export function licenseDisplayStatus(): LicenseDisplayStatus {
   const s = getSettings()
-  const lease = verifyLease(s.licenseLease)
-  const leaseExpiresAt = isLeaseValidNow(lease) ? (lease as LeasePayload).notAfter : null
+  const leaseExpiresAt = trustedLease(s)?.notAfter ?? null
   const trial = s.licenseValid ? { state: 'none' as const, daysRemaining: 0 } : trialStatus(s.trialStartedAt)
   return {
     leaseExpiresAt,
