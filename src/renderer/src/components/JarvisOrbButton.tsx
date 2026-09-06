@@ -59,7 +59,11 @@ export function JarvisOrbButton({
 
   const orb = (
     <>
-      <span ref={hostRef} className="aw-orb__host" aria-hidden="true">
+      <span
+        ref={hostRef}
+        className={preview ? 'overlay-orb-diagram__jakub-host aw-orb__host' : 'aw-orb__host'}
+        aria-hidden="true"
+      >
         <ThinkingOrb
           state={orbState}
           size={BAR_PILL_SIZE_PX}
@@ -77,7 +81,7 @@ export function JarvisOrbButton({
   if (preview) {
     return (
       <span
-        className="aw-orb no-drag"
+        className="overlay-orb-diagram__jakub--live aw-orb no-drag"
         data-bar-pill-orb
         data-orb-preview
         data-orb-diagram-engine="thinking-orbs"
