@@ -7,6 +7,7 @@ describe('ObsidianOrb / Circle always animate on Windows reduce', () => {
     const src = readFileSync(join(__dirname, './ObsidianOrb.tsx'), 'utf8')
     expect(src).toMatch(/reducedMotion:\s*false/)
     expect(src).not.toMatch(/reducedMotion:\s*reduced/)
+    expect(src).not.toMatch(/matchMedia\?\.\('\(prefers-reduced-motion: reduce\)'\)/)
   })
 
   it('Circle uses BrandThinkingOrb that ignores prefers-reduced-motion', () => {
@@ -16,6 +17,8 @@ describe('ObsidianOrb / Circle always animate on Windows reduce', () => {
     expect(btn).not.toMatch(/from 'thinking-orbs'/)
     expect(brand).toMatch(/Always animates/)
     expect(brand).toMatch(/MODE_DRAWS/)
+    expect(brand).toMatch(/resolvePreset/)
+    expect(brand).toMatch(/visibilitychange|visibilityState/)
     expect(brand).not.toMatch(/prefers-reduced-motion/)
   })
 })
