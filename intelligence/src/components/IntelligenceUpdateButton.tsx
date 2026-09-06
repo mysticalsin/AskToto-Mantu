@@ -1,7 +1,7 @@
 import { useState, type ReactElement } from 'react'
 import { runIntelligenceUpdateClick } from '../lib/intelligence-update'
 
-// MQA-290: never return JSX.Element. Totos-Mac tsc -b has no global JSX namespace.
+// MQA-290: return ReactElement. Totos-Mac tsc -b has no global JSX namespace.
 
 /**
  * Dashboard Update Intelligence. Shows Updating immediately, then a filled dashboard (via the
