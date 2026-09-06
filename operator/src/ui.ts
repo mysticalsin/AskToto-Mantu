@@ -1,331 +1,18 @@
-import { choropleth, choroplethMini, shoeyWorld, sparklineLine } from './charts'
-import { statusBadge, STATUS_BADGE_CSS } from './components/ui/status-badge'
+import { choroplethMini, shoeyWorld, sparklineLine } from './charts'
+import { statusBadge } from './components/ui/status-badge'
 import { CRM_FILTER_ORDER } from './crm'
 import { CF_TOKEN_MISSING, type CloudflareOverview } from './cloudflare'
 import { CF_OAUTH_MISSING } from './cloudflare-connect'
 import type { ConsoleEvent, DashboardPayload, ProfileRow } from './dashboard'
-import { FORBIDDEN_NAV, NAV_IDS, NAV_SECTIONS } from './nav'
 import { looksLikeSecret } from './redact'
 import { formatAvgDuration, geoCountryRollup } from './realtime-geo'
+import { detailDrawer, esc, relativeTime as ago, shell, type RenderCtx } from './render'
+import { SPA_CSS_PATH, SPA_JS_PATH } from './spa/manifest'
 
 const MISSING = '—'
 
-const CSS = `
-@import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-sans/style.min.css');
-@import url('https://cdn.jsdelivr.net/npm/geist@1.3.1/dist/fonts/geist-mono/style.min.css');
-:root, [data-theme="dark"] {
-  --bg: #0a0a0b;
-  --panel: #111113;
-  --hair: rgba(255,255,255,0.10);
-  --ink: rgba(255,255,255,0.94);
-  --ink2: rgba(255,255,255,0.55);
-  --ink3: rgba(255,255,255,0.38);
-  --accent: #2563EB;
-  --live: #10B981;
-  --ok: #16A34A;
-  --danger: #DC2626;
-  --land: #3f3f46;
-  --chart-1: #1a1a1d;
-  --chart-2: #2a2a2e;
-  --chart-3: #52525b;
-  --chart-4: #a1a1aa;
-  --chart-5: #2563EB;
-  --nav: #0d0d0f;
-  --nav-on: rgba(255,255,255,0.08);
-  --dot: rgba(255,255,255,0.045);
-  --mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
-  --sans: 'Geist', Geist, Inter, system-ui, sans-serif;
-}
-[data-theme="light"] {
-  --bg: #FFFFFF;
-  --panel: #FFFFFF;
-  --hair: #EDEDED;
-  --ink: #18181B;
-  --ink2: #71717A;
-  --ink3: #A1A1AA;
-  --land: #E5E7EB;
-  --chart-1: #e4e4e7;
-  --chart-2: #d4d4d8;
-  --chart-3: #a1a1aa;
-  --chart-4: #52525b;
-  --chart-5: #2563EB;
-  --nav: #FFFFFF;
-  --nav-on: #F4F4F5;
-  --dot: rgba(24,24,27,0.06);
-}
-* { box-sizing: border-box; }
-html, body { margin: 0; height: 100%; color: var(--ink); font: 12px/1.45 var(--sans); }
-body {
-  background-color: var(--bg);
-  background-image: radial-gradient(var(--dot) 1px, transparent 1px);
-  background-size: 14px 14px;
-}
-a { color: var(--accent); text-decoration: none; }
-.shell { display: grid; grid-template-columns: 228px 1fr; min-height: 100%; }
-.rail {
-  display: flex; flex-direction: column; gap: 10px;
-  background: var(--nav); border-right: 1px solid var(--hair);
-  padding: 14px 12px 16px; min-height: 100vh; position: sticky; top: 0;
-}
-.rail-brand { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.rail-brand h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -0.04em; }
-.rail-sub { margin: -4px 0 2px; font: 10px/1.2 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink3); }
-.access-chip {
-  font: 10px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase;
-  padding: 3px 7px; border-radius: 999px; border: 1px solid var(--hair); color: var(--live);
-}
-.rail-search {
-  width: 100%; border: 1px solid var(--hair); background: var(--panel); color: var(--ink);
-  border-radius: 8px; padding: 7px 10px; font: 12px var(--sans);
-}
-.rail-search::placeholder { color: var(--ink3); }
-.rail nav { display: flex; flex-direction: column; gap: 14px; flex: 1; }
-.nav-sec { display: flex; flex-direction: column; gap: 2px; }
-.nav-sec p {
-  font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
-  text-transform: uppercase; color: var(--ink3); margin: 0 6px 4px;
-}
-.nav-item {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 7px 8px; border-radius: 8px; color: var(--ink);
-  font-size: 13px; font-weight: 550;
-}
-.nav-item:hover { background: var(--nav-on); }
-.nav-item.on { background: var(--nav-on); font-weight: 650; }
-.nav-count {
-  min-width: 18px; text-align: center; font: 10px/16px var(--mono);
-  border-radius: 999px; background: var(--accent); color: #fff; padding: 0 5px;
-}
-.rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding-top: 12px; }
-.who { font-family: var(--mono); font-size: 10px; color: var(--ink2); word-break: break-all; }
-.theme-btn {
-  border: 1px solid var(--hair); background: transparent; color: var(--ink2);
-  font: 11px/1 var(--mono); letter-spacing: 0.06em; text-transform: uppercase;
-  padding: 6px 8px; border-radius: 8px; cursor: pointer;
-}
-.main { min-width: 0; }
-.top {
-  display: flex; align-items: baseline; justify-content: space-between; gap: 16px;
-  padding: 12px 16px; border-bottom: 1px solid var(--hair);
-  background: color-mix(in srgb, var(--bg) 86%, transparent); position: sticky; top: 0; z-index: 4;
-}
-.top h2 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -0.03em; }
-.eyebrow {
-  font-family: var(--mono); font-size: 10px; letter-spacing: 0.14em;
-  text-transform: uppercase; color: var(--ink3); margin: 0 0 8px;
-}
-.wrap { padding: 12px 16px 36px; display: grid; gap: 12px; isolation: isolate; overflow-x: hidden; }
-.page { min-width: 0; position: relative; z-index: 1; }
-.kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.kpis.glance { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.kpis.glance .kpi .n { font-size: 32px; margin-top: 12px; }
-@media (max-width: 1100px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } .kpis.glance { grid-template-columns: 1fr; } }
-.ov-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
-.people-row {
-  display: grid; grid-template-columns: 56px minmax(0, 1.1fr) minmax(0, 1.1fr) 110px 88px 72px;
-  gap: 8px; align-items: center; padding: 8px 4px; border-bottom: 1px solid var(--hair);
-}
-.people-row .who { font-weight: 650; color: var(--ink); font-size: 12px; word-break: break-word; }
-.activity-feed .event { padding: 8px 2px; grid-template-columns: 72px minmax(0, 1fr) minmax(0, 1.4fr) 72px; }
-@media (max-width: 980px) { .ov-split, .people-row { grid-template-columns: 1fr; } }
-.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-width: 0; }
-.grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
-.card {
-  position: relative;
-  background: var(--panel);
-  border: 1px solid var(--hair);
-  padding: 10px 12px 0;
-  overflow: hidden;
-}
-.card::before, .card::after {
-  content: ''; position: absolute; width: 8px; height: 8px; pointer-events: none;
-  border-color: color-mix(in srgb, var(--ink) 28%, transparent); border-style: solid;
-}
-.card::before { top: -1px; left: -1px; border-width: 1px 0 0 1px; }
-.card::after { bottom: -1px; right: -1px; border-width: 0 1px 1px 0; }
-.card h3 { margin: 0; font-size: 13px; font-weight: 600; }
-.kpi-top { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
-.kpi .n { font-size: 28px; font-weight: 650; letter-spacing: -0.04em; line-height: 1; margin-top: 10px; }
-.kpi .sub { font-family: var(--mono); font-size: 10px; color: var(--ink3); margin: 4px 0 8px; }
-.spark { display: block; width: calc(100% + 24px); margin: 0 -12px; height: 56px; }
-.chart { display: block; width: 100%; height: 140px; }
-.world { display: block; width: 100%; height: auto; max-height: 420px; }
-.heat { display: block; width: 100%; max-width: 280px; height: auto; }
-.grat { stroke: color-mix(in srgb, var(--ink) 18%, transparent); stroke-width: 0.6; }
-.dot { fill: var(--accent); stroke: var(--bg); stroke-width: 0.8; }
-.tick { fill: var(--ink3); font-size: 9px; font-family: var(--mono); }
-.tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 0 0 8px; }
-.tab {
-  border: 1px solid transparent; background: transparent; color: var(--ink2);
-  font: 11px/1 var(--mono); letter-spacing: 0.04em; text-transform: uppercase;
-  padding: 4px 9px; border-radius: 999px; cursor: pointer;
-}
-.tab.on { background: var(--accent); color: #fff; }
-.pill {
-  display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 10px;
-  font-family: var(--mono); border: 1px solid var(--hair); color: var(--ink2);
-}
-.pill.up, .pill.hit { color: var(--ok); }
-.pill.down { color: var(--danger); }
-.chip {
-  display: inline-flex; align-items: center; gap: 4px;
-  padding: 2px 8px; border-radius: 999px; border: 1px solid var(--hair);
-  font-family: var(--mono); font-size: 10px; color: var(--ink2); background: var(--nav-on);
-}
-.empty { color: var(--ink2); font-size: 12px; padding: 10px 0 12px; }
-.fail-loud { color: var(--danger); font-size: 13px; font-weight: 600; padding: 10px 0 12px; }
-.crm-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; }
-.world-wrap { overflow: hidden; max-height: 280px; }
-.geo-map-card { padding-bottom: 10px; }
-.geo-map-card svg { display: block; width: 100%; height: auto; min-height: 180px; max-height: 240px; }
-.geo-live { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
-.rt-world { padding-bottom: 10px; }
-.rt-world .world { display: block; width: 100%; height: auto; min-height: 320px; max-height: 520px; }
-.rt-live { display: grid; grid-template-columns: minmax(140px, 0.7fr) minmax(140px, 0.7fr) minmax(0, 1.6fr); gap: 12px; align-items: start; }
-.rt-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
-.ov-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-.vol { position: relative; }
-.vol-head {
-  display: grid; grid-template-columns: 1fr auto auto; gap: 8px; padding: 0 8px 4px;
-  font: 10px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink3);
-}
-.vol-row {
-  display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center;
-  padding: 7px 8px; position: relative; font-size: 12px;
-}
-.vol-bar {
-  position: absolute; inset: 2px auto 2px 0; background: color-mix(in srgb, var(--accent) 18%, transparent);
-  border-radius: 4px; z-index: 0;
-}
-.vol-row > * { position: relative; z-index: 1; }
-tbody tr { position: relative; }
-.rt-row {
-  display: grid; grid-template-columns: 88px minmax(0, 1fr) minmax(0, 1.4fr) 72px;
-  gap: 8px; align-items: center; padding: 6px 2px; border-bottom: 1px solid var(--hair); font-size: 12px;
-}
-.rt-row .ago { font-family: var(--mono); font-size: 10px; color: var(--ink3); text-align: right; }
-@media (max-width: 980px) { .ov-pair, .rt-row { grid-template-columns: 1fr; } }
-.geo-bar {
-  position: absolute; inset: 2px auto 2px 0; height: auto;
-  background: color-mix(in srgb, var(--accent) 18%, transparent); border-radius: 4px; z-index: 0;
-}
-@media (max-width: 980px) { .geo-live, .rt-split, .rt-live { grid-template-columns: 1fr; } }
-.key-form { display: grid; gap: 8px; margin: 0 0 14px; }
-.license-once {
-  display: grid; gap: 8px; margin: 0 0 14px; padding: 10px 12px;
-  border: 1px solid var(--hair); border-radius: 8px; background: var(--bg);
-}
-.license-once input {
-  width: 100%; border: 1px solid var(--hair); background: var(--panel); color: var(--ink);
-  border-radius: 8px; padding: 8px 10px; font: 12px var(--mono);
-}
-.key-form .row input, .key-form .row select {
-  border: 1px solid var(--hair); background: var(--bg); color: var(--ink);
-  border-radius: 8px; padding: 6px 8px; font: 12px var(--sans); min-width: 120px;
-}
-.map-empty { position: absolute; left: 12px; top: 42px; z-index: 1; }
-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-th, td { text-align: left; padding: 7px 6px; border-bottom: 1px solid var(--hair); font-size: 12px; vertical-align: top; overflow: hidden; text-overflow: ellipsis; position: relative; }
-.search-bar {
-  width: 100%; border: 1px solid var(--hair); background: var(--bg); color: var(--ink);
-  border-radius: 8px; padding: 7px 10px; font: 12px var(--sans); margin: 0 0 10px;
-}
-.event[hidden], tr[hidden], .vol-row[hidden], .people-row[hidden], .rt-row[hidden] { display: none !important; }
-.rule { padding: 10px 0; border-bottom: 1px solid var(--hair); }
-.rule h3 { margin: 0 0 4px; font-size: 13px; }
-.rule p { margin: 0; color: var(--ink2); font-size: 12px; }
-th { color: var(--ink3); font-weight: 500; font-family: var(--mono); font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; }
-button, .btn {
-  background: transparent; color: var(--ink); border: 1px solid var(--hair);
-  padding: 4px 9px; font-size: 11px; cursor: pointer; border-radius: 999px;
-}
-button.primary, a.btn.primary { background: var(--accent); color: #fff; border-color: transparent; font-weight: 600; }
-button.danger { color: var(--danger); }
-pre, textarea {
-  width: 100%; background: color-mix(in srgb, var(--bg) 70%, #000); color: var(--ink);
-  border: 1px solid var(--hair); padding: 8px; font: 11px var(--mono);
-}
-textarea { min-height: 120px; }
-.row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
-.muted { color: var(--ink2); }
-.legend { display: flex; gap: 12px; font-family: var(--mono); font-size: 10px; color: var(--ink3); padding: 6px 0 10px; }
-.legend i { display: inline-block; width: 10px; height: 2px; background: var(--chart-5); vertical-align: middle; margin-right: 4px; }
-.legend i.ask { background: var(--accent); }
-.funnel { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
-.crm-funnel { display: grid; gap: 6px; margin: 0 0 10px; }
-.crm-funnel-row { display: grid; grid-template-columns: 88px 1fr auto; gap: 8px; align-items: center; }
-.crm-funnel-track { height: 6px; background: var(--nav-on); border: 1px solid var(--hair); position: relative; overflow: hidden; }
-.crm-funnel-ok { position: absolute; inset: 0 auto 0 0; background: var(--ok); opacity: 0.7; }
-.crm-funnel-fail { position: absolute; inset: 0 0 0 auto; background: var(--danger); opacity: 0.7; }
-.crm-kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 0 0 10px; }
-.crm-kpis .n { font-size: 22px; margin-top: 4px; }
-.remote a { color: var(--accent); }
-.heat-wrap { display: flex; gap: 16px; align-items: flex-start; }
-.heat-meta { font-family: var(--mono); font-size: 10px; color: var(--ink3); }
-.event {
-  display: grid; grid-template-columns: 140px 160px 1fr 88px; gap: 10px; align-items: start;
-  padding: 10px 4px; border-bottom: 1px solid var(--hair);
-}
-.event-name { font-weight: 650; }
-.event-profile { color: var(--ink2); }
-.event-chips { display: flex; flex-wrap: wrap; gap: 4px; }
-.event-time { font-family: var(--mono); font-size: 10px; color: var(--ink3); text-align: right; }
-.live { display: inline-block; padding: 1px 7px; border-radius: 999px; background: var(--live); color: #052e1b; font: 10px var(--mono); letter-spacing: 0.08em; }
-[data-theme="light"] .live { background: #10B981; color: #052e1b; }
-.approval {
-  display: inline-block; padding: 1px 7px; border-radius: 999px;
-  font: 10px/1.4 var(--mono); letter-spacing: 0.04em; border: 1px solid var(--hair);
-}
-.approval.pending { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--hair)); }
-.approval.approved { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--hair)); }
-.approval.revoked { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--hair)); }
-.works { padding-bottom: 12px; }
-.works-path {
-  list-style: none; margin: 0 0 12px; padding: 0;
-  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
-}
-.works-path li {
-  position: relative; padding: 10px 10px 10px 12px;
-  border: 1px solid var(--hair); border-radius: 10px; background: var(--bg);
-}
-.works-path li.done { border-color: color-mix(in srgb, var(--ok) 45%, var(--hair)); }
-.works-path li.need { border-color: color-mix(in srgb, var(--accent) 45%, var(--hair)); }
-.works-path b {
-  display: block; font: 10px/1 var(--mono); letter-spacing: 0.12em;
-  text-transform: uppercase; color: var(--ink3); margin-bottom: 6px;
-}
-.works-path span { display: block; font-weight: 650; letter-spacing: -0.02em; }
-.works-path small { display: block; margin-top: 4px; color: var(--ink2); font-size: 11px; }
-@media (max-width: 980px) { .works-path { grid-template-columns: 1fr; } }
-@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
-.page[hidden] { display: none !important; }
-@media (max-width: 980px) {
-  .shell { grid-template-columns: 1fr; }
-  .rail { position: relative; min-height: auto; }
-  .kpis, .grid-2, .grid-3, .crm-kpis, .event { grid-template-columns: 1fr; }
-}
-`
-
-function esc(s: unknown): string {
-  return String(s ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/"/g, '&quot;')
-}
-
 function when(ts: number): string {
   return new Date(ts).toISOString().replace('T', ' ').slice(0, 16)
-}
-
-function ago(ts: number, now: number): string {
-  const s = Math.max(0, Math.round((now - ts) / 1000))
-  if (s < 5) return 'now'
-  if (s < 60) return `${s}s`
-  const m = Math.floor(s / 60)
-  if (m < 60) return `${m}m`
-  const h = Math.floor(m / 60)
-  if (h < 48) return `${h}h`
-  return `${Math.floor(h / 24)}d`
 }
 
 function field(value: string | null | undefined): string {
@@ -371,22 +58,6 @@ function kpiCard(opts: {
 function approvalPill(approval: string): string {
   const v = approval.trim().toLowerCase() || 'pending'
   return `<span class="approval ${esc(v)}">${esc(v)}</span>`
-}
-
-function renderNav(pendingApprovals = 0): string {
-  const sections = NAV_SECTIONS.map((sec) => {
-    const items = sec.items
-      .map((item) => {
-        const count =
-          item.id === 'licenses' && pendingApprovals > 0
-            ? `<span class="nav-count">${pendingApprovals}</span>`
-            : ''
-        return `<a class="nav-item" data-nav="${item.id}" href="#${item.id}">${esc(item.label)}${count}</a>`
-      })
-      .join('')
-    return `<div class="nav-sec"><p>${esc(sec.label)}</p>${items}</div>`
-  }).join('')
-  return `<nav id="rail-nav">${sections}</nav>`
 }
 
 function renderInstallWorks(data: DashboardPayload): string {
@@ -577,7 +248,7 @@ function renderRealtimeGeo(data: DashboardPayload): string {
 function renderWorldMap(data: DashboardPayload): string {
   return `<article class="card rt-world" data-world-map>
     <div class="kpi-top"><p class="eyebrow">WorldMap</p><span class="live" data-world-live>LIVE ${data.roi.liveSeats}</span></div>
-    <div id="rt-map-root" data-geo-widget>${shoeyWorld(data.map.countries, data.map.dots)}</div>
+    <div id="map-root" data-geo-widget>${shoeyWorld(data.map.countries, data.map.dots)}</div>
   </article>`
 }
 
@@ -727,7 +398,7 @@ function renderSessions(data: DashboardPayload): string {
 }
 
 function renderLicenseGenerateForm(): string {
-  return `<form class="key-form license-gen" data-license-generate autocomplete="off">
+  return `<form class="key-form license-gen" data-license-generate method="post" action="/v1/admin/licenses/generate" autocomplete="off">
       <p class="sub muted">Pick how long it stays active. Paste the string into Métis → Identity → License. Shown once. last4 after that.</p>
       <div class="row">
         <label>Active for
@@ -796,14 +467,19 @@ function renderLicenses(data: DashboardPayload): string {
     <div class="sub muted" style="padding-bottom:8px">Tony approves a seat or the seat activates an Operator license. Revoke still stops platform keys. last4 only. Never a raw key.</div>`
 }
 
-export function renderConsole(data: DashboardPayload): string {
+/**
+ * Composes the shell() render primitive (operator/src/render/shell.ts) with every page body.
+ * `opts.theme` is server-rendered `data-theme` from the `metis-operator-theme` cookie (the
+ * Worker route owns cookie parsing; pass the parsed value through here). `opts.nonce` is a
+ * per-request CSP nonce printed on both the stylesheet link and the script tag; omit it and
+ * neither carries a nonce attribute. No inline `<style>` or `<script>` — the hashed CSS/JS
+ * bundle from operator/src/spa/manifest.ts is the only script/style source (plan D3).
+ */
+export function renderConsole(
+  data: DashboardPayload,
+  opts: { nonce?: string; theme?: 'light' | 'dark' | 'system' } = {}
+): string {
   const k = data.kpis
-  const maps = {
-    land: choropleth(data.map.countries, data.map.dots, 'land'),
-    analytics: choropleth(data.map.countries, data.map.dots, 'analytics'),
-    graticule: choropleth(data.map.countries, data.map.dots, 'graticule'),
-    hatch: choropleth(data.map.countries, data.map.dots, 'hatch')
-  }
   const canRetry = (status: string): boolean => status === 'failed' || status === 'expired'
   const crmRows = data.crm.rows
     .map((r) => {
@@ -904,47 +580,13 @@ export function renderConsole(data: DashboardPayload): string {
       </tr>`
     )
     .join('')
-  const mapCaption =
-    'Unique devices by country from Cloudflare request.cf. No GPS from the app. No IP. Click a country to filter the fleet table. Empty is an empty world, not sample dots.'
-
-  void FORBIDDEN_NAV
-  void NAV_IDS
-
   const pendingApprovals = data.licenses.rows.filter((r) => r.approval !== 'approved').length
-  return `<!doctype html>
-<html lang="en" data-theme="dark"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Métis Operator</title>
-<style>${CSS}${STATUS_BADGE_CSS}
-svg path { vector-effect: non-scaling-stroke; }
-#spark-defs { position: absolute; width: 0; height: 0; }
-</style>
-</head>
-<body>
-<svg id="spark-defs"><defs>
-  <linearGradient id="spark-fill" x1="0" x2="0" y1="0" y2="1">
-    <stop offset="0" stop-color="#e4e4e7" stop-opacity="0.28"/>
-    <stop offset="1" stop-color="#e4e4e7" stop-opacity="0"/>
-  </linearGradient>
-</defs></svg>
-<div class="shell">
-  <aside class="rail">
-    <div class="rail-brand"><h1>Métis</h1><span class="access-chip" data-access-solid>Access</span></div>
-    <p class="rail-sub">Operator</p>
-    <input class="rail-search" id="nav-search" type="search" placeholder="Search" autocomplete="off">
-    ${renderNav(pendingApprovals)}
-    <div class="rail-foot">
-      <div class="who">${esc(data.email)}</div>
-      <button class="theme-btn" id="theme-btn" type="button">Theme</button>
-      <form method="post" action="/logout"><button class="theme-btn" type="submit">Sign out</button></form>
-    </div>
-  </aside>
-  <div class="main">
-    <header class="top">
-      <h2 id="page-title">Overview</h2>
-      <span class="live">LIVE ${k.live}</span>
-    </header>
+  const theme = opts.theme ?? 'light'
+  const ctx: RenderCtx = { now: data.now, theme }
+  const nonceAttr = opts.nonce ? ` nonce="${esc(opts.nonce)}"` : ''
+  const htmlThemeAttr = theme === 'system' ? '' : ` data-theme="${theme}"`
 
+  const bodyHtml = `
     <section class="page wrap" data-page="overview">
       <div class="kpis glance" data-overview-kpis>
         ${kpiCard({ title: 'Live seats', value: String(data.roi.liveSeats), sub: 'heartbeat &lt; 2 min · real devices', spark: sparklineLine(k.liveSeries) })}
@@ -996,8 +638,11 @@ svg path { vector-effect: non-scaling-stroke; }
       </article>
     </section>
 
+    <section class="page wrap" data-page="map" hidden aria-hidden="true"></section>
+
     <section class="page wrap" data-page="sessions" hidden>
       ${renderSessions(data)}
+      ${detailDrawer({ id: 'seat-overlay' })}
     </section>
 
     <section class="page wrap" data-page="events" hidden>
@@ -1010,63 +655,6 @@ svg path { vector-effect: non-scaling-stroke; }
             ? '<div class="sub muted" style="padding-bottom:8px">Real HMAC ingest only. Token-shaped values are dropped. Empty search shows every row.</div>'
             : '<div class="empty">No events yet.</div>'
         }
-      </article>
-    </section>
-
-    <section class="page wrap" data-page="profiles" hidden>
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">People</p>
-        <div class="sub muted" style="padding-bottom:8px">Computer and SSO email from the seat. Missing fields are ${MISSING}, never invented.</div>
-        ${renderProfiles(data.profiles)}
-      </article>
-    </section>
-
-    <section class="page wrap" data-page="map" hidden>
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Map</p>
-        <div class="tabs" id="map-tabs">
-          <button class="tab" data-map="land">Land</button>
-          <button class="tab on" data-map="analytics">Analytics</button>
-          <button class="tab" data-map="graticule">Graticule</button>
-          <button class="tab" data-map="hatch">Hatch</button>
-        </div>
-        <div id="map-root" style="position:relative">
-          <div data-map-pane="land" hidden>${maps.land}</div>
-          <div data-map-pane="analytics">${maps.analytics}</div>
-          <div data-map-pane="graticule" hidden>${maps.graticule}</div>
-          <div data-map-pane="hatch" hidden>${maps.hatch}</div>
-        </div>
-        <div class="sub muted" style="padding-bottom:8px">${esc(mapCaption)}</div>
-        <table id="map-fleet"><thead><tr><th>Computer</th><th>SSO email</th><th>OS</th><th>Version</th><th>Country</th><th>Seen</th><th></th></tr></thead>
-        <tbody>${
-          data.profiles
-            .map(
-              (r) => `<tr data-country="${esc(r.country || '')}">
-                <td>${field(r.hostname)}</td>
-                <td>${field(r.email)}</td>
-                <td class="muted">${esc(r.os)}</td>
-                <td class="muted">${esc(r.appVersion)}</td>
-                <td class="muted">${esc(r.country || MISSING)}</td>
-                <td class="muted">${esc(when(r.lastSeen))}</td>
-                <td></td>
-              </tr>`
-            )
-            .join('') || `<tr><td colspan="7" class="empty">No seats on the fleet yet.</td></tr>`
-        }</tbody></table>
-      </article>
-    </section>
-
-    <section class="page wrap" data-page="macos" hidden>
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">macOS</p>
-        ${renderProfiles(data.profiles, 'darwin')}
-      </article>
-    </section>
-
-    <section class="page wrap" data-page="windows" hidden>
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Windows</p>
-        ${renderProfiles(data.profiles, 'win')}
       </article>
     </section>
 
@@ -1091,27 +679,9 @@ svg path { vector-effect: non-scaling-stroke; }
             : '<div class="empty">Nothing needs Tony right now.</div>'
         }
       </article>
-    </section>
-
-    <section class="page wrap" data-page="rules" hidden>
-      <article class="card" style="padding-bottom:10px">
-        <p class="eyebrow">Rules</p>
-        <div class="rule"><h3>Access only</h3><p>Console and admin APIs require Cloudflare Access email-code. Allowlist tony.walteur@gmail.com and twalteur@amaris.com. No homemade login. Access-solid.</p></div>
-        <div class="rule"><h3>Install → works</h3><p>A seat checks in. Tony approves it or the seat activates an Operator license in Métis → Identity → License. Then Métis uses Operator platform keys. No provider-key paste by default. Unapproved seats fail loud.</p></div>
-        <div class="rule"><h3>Generate license</h3><p>On Licenses, Tony clicks Generate license and picks how long it stays active. Paste that string into Métis Identity. Selling ATK / JWS activation stays closed.</p></div>
-        <div class="rule"><h3>Seat approval</h3><p>A device stays pending until Tony approves it on Licenses or an Operator license is active on the seat. Revoke still wins. Unapproved seats get fundedProviders [] and 403 on /v1/use. Live pending: ${data.profiles.filter((p) => p.approval !== 'approved').length}.</p></div>
-        <div class="rule"><h3>Cloudflare · AI Gateway</h3><p>Log in to Cloudflare on Keys. Operator provisions the AI Gateway key. Paste is not the happy path. No CF token on seats.</p></div>
-        <div class="rule"><h3>Platform keys first</h3><p>Authorized seats use Operator vault keys (NIM, Anthropic, DeepSeek, Cloudflare AI Gateway, more). Manual Métis Settings keys stay as fallback. CLI still wins when connected.</p></div>
-        <div class="rule"><h3>CRM never auto-send</h3><p>Pushes ingest status only. Tony Retry marks retry_requested. The seat processes that id. Intelligence / import / index never send.</p></div>
-        <div class="rule"><h3>No secrets in HTML</h3><p>Keys last4 only. Events drop token-shaped strings. Heartbeat never carries a raw key or grant.</p></div>
-        <div class="rule"><h3>Real ingest only</h3><p>Globe, Users, Licenses, ROI, and Events come from D1 heartbeats and Asks. usage-import rows stay off the fleet.</p></div>
-      </article>
-    </section>
-
-    <section class="page wrap" data-page="pushes" hidden>
-      <article class="card" style="padding-bottom:10px">
+      <article class="card" style="padding-bottom:10px" data-crm-notices>
         <p class="eyebrow">Data-push telemetry</p>
-        <div class="sub muted" style="padding-bottom:8px">Outbound Métis → CRM / DB. Architecture: seat HMAC ingest <code>event=crm</code> → Operator D1 <code>crm_sends</code> → named connector (ClickUp, BidStack, Plane, Outlook). Connectors may be stubbed; the log is live.</div>
+        <div class="sub muted" style="padding-bottom:8px">Outbound Métis → CRM / DB. Seat HMAC ingest <code>event=crm</code> → Operator D1 <code>crm_sends</code> → named connector. Retry marks retry_requested; the seat processes it. Never auto-send.</div>
         <div class="crm-kpis">
           ${kpiCard({ title: 'Landed today', value: String(landing.landedToday), sub: 'success with a remote id', spark: '' })}
           ${kpiCard({ title: 'Fail rate', value: failRate, sub: 'failed + expired over attempted', spark: '' })}
@@ -1125,17 +695,13 @@ svg path { vector-effect: non-scaling-stroke; }
         </div>
         ${
           crmRows
-            ? `<table id="crm-table"><thead><tr><th>Status</th><th>Title</th><th>Connector</th><th>Remote</th><th>Try</th><th>Meeting</th><th>When</th><th></th></tr></thead><tbody>${crmRows}</tbody></table>
-               <div class="sub muted" style="padding-bottom:8px">Retry on Failed or Expired tells that seat to processDue that id. Never auto-send.</div>`
+            ? `<table id="crm-table"><thead><tr><th>Status</th><th>Title</th><th>Connector</th><th>Remote</th><th>Try</th><th>Meeting</th><th>When</th><th></th></tr></thead><tbody>${crmRows}</tbody></table>`
             : '<div class="empty">No outbound pushes ingested yet.</div>'
         }
       </article>
-    </section>
-
-    <section class="page wrap" data-page="skills" hidden>
-      <article class="card" style="padding-bottom:10px">
+      <article class="card" style="padding-bottom:10px" data-skill-notices>
         <div class="row" style="margin-bottom:8px">
-          <p class="eyebrow" style="margin:0">Skills</p>
+          <p class="eyebrow" style="margin:0">Skill upgrades</p>
           <button data-draft="interview">Draft interview</button>
           <button data-draft="recruiting">Draft recruiting</button>
           <button data-draft="support">Draft support</button>
@@ -1209,208 +775,32 @@ svg path { vector-effect: non-scaling-stroke; }
         <p id="key-msg-settings" class="muted"></p>
       </article>
     </section>
-  </div>
-</div>
-<script>
-async function api(path, body) {
-  const r = await fetch(path, { method: body ? 'POST' : 'GET', credentials: 'same-origin', headers: body ? { 'content-type': 'application/json' } : {}, body: body ? JSON.stringify(body) : undefined })
-  return r.json()
-}
-const titles = {
-  overview: 'Overview', realtime: 'Realtime', events: 'Events', sessions: 'Sessions',
-  profiles: 'Sessions', map: 'Map', macos: 'macOS', windows: 'Windows', licenses: 'Licenses',
-  skills: 'Skills', keys: 'Keys', notifications: 'Notifications', rules: 'Rules', pushes: 'Pushes',
-  users: 'Sessions', settings: 'Settings'
-}
-function route() {
-  const raw = (location.hash || '#overview').replace('#', '')
-  const id = raw === 'users' || raw === 'profiles' ? 'sessions' : titles[raw] ? raw : 'overview'
-  document.querySelectorAll('[data-page]').forEach((p) => { p.hidden = p.getAttribute('data-page') !== id })
-  document.querySelectorAll('[data-nav]').forEach((a) => a.classList.toggle('on', a.getAttribute('data-nav') === id))
-  const t = document.getElementById('page-title')
-  if (t) t.textContent = titles[id]
-}
-window.addEventListener('hashchange', route)
-route()
-const evSearch = document.getElementById('events-search')
-if (evSearch) evSearch.addEventListener('input', () => {
-  const q = evSearch.value.trim().toLowerCase()
-  document.querySelectorAll('#events-table [data-q]').forEach((row) => {
-    row.hidden = Boolean(q) && !(row.getAttribute('data-q') || '').includes(q)
+  `
+
+  const shellHtml = shell(ctx, {
+    page: 'overview',
+    title: 'Overview',
+    live: k.live,
+    email: data.email,
+    navCounts: { licenses: pendingApprovals, notifications: data.notices.length },
+    bodyHtml
   })
-})
-const search = document.getElementById('nav-search')
-if (search) search.addEventListener('input', () => {
-  const q = search.value.trim().toLowerCase()
-  document.querySelectorAll('[data-nav]').forEach((a) => {
-    const hit = !q || (a.textContent || '').toLowerCase().includes(q)
-    a.hidden = !hit
-  })
-})
-const themeBtn = document.getElementById('theme-btn')
-function applyTheme(v) {
-  const theme = v === 'light' ? 'light' : 'dark'
-  document.documentElement.setAttribute('data-theme', theme)
-}
-try { applyTheme(localStorage.getItem('metis-operator-theme')) } catch (e) { applyTheme('dark') }
-if (themeBtn) themeBtn.addEventListener('click', () => {
-  const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light'
-  applyTheme(next)
-  try { localStorage.setItem('metis-operator-theme', next) } catch (e) {}
-})
-document.querySelectorAll('[data-scale]').forEach((b) => b.addEventListener('click', () => {
-  document.querySelectorAll('[data-scale]').forEach((x) => x.classList.toggle('on', x === b))
-  document.getElementById('scale-24').hidden = b.getAttribute('data-scale') !== '24h'
-  document.getElementById('scale-7').hidden = b.getAttribute('data-scale') !== '7d'
-}))
-document.querySelectorAll('[data-map]').forEach((b) => b.addEventListener('click', () => {
-  document.querySelectorAll('[data-map]').forEach((x) => x.classList.toggle('on', x === b))
-  const v = b.getAttribute('data-map')
-  document.querySelectorAll('[data-map-pane]').forEach((p) => { p.hidden = p.getAttribute('data-map-pane') !== v })
-}))
-document.querySelectorAll('[data-geo-tab]').forEach((b) => b.addEventListener('click', () => {
-  const root = b.closest('[data-geo-corner], [data-realtime-geo]') || document
-  root.querySelectorAll('[data-geo-tab]').forEach((x) => x.classList.toggle('on', x === b))
-  const v = b.getAttribute('data-geo-tab')
-  root.querySelectorAll('[data-geo-pane]').forEach((p) => { p.hidden = p.getAttribute('data-geo-pane') !== v })
-}))
-document.querySelectorAll('[data-device-tab]').forEach((b) => b.addEventListener('click', () => {
-  const root = b.closest('[data-device-card]') || document
-  root.querySelectorAll('[data-device-tab]').forEach((x) => x.classList.toggle('on', x === b))
-  const v = b.getAttribute('data-device-tab')
-  root.querySelectorAll('[data-device-pane]').forEach((p) => { p.hidden = p.getAttribute('data-device-pane') !== v })
-}))
-document.querySelectorAll('[data-list-search], [data-geo-search]').forEach((input) => {
-  input.addEventListener('input', () => {
-    const q = input.value.trim().toLowerCase()
-    const root = input.closest('.card') || document
-    root.querySelectorAll('[data-q]').forEach((row) => {
-      row.hidden = Boolean(q) && !(row.getAttribute('data-q') || '').includes(q)
-    })
-  })
-})
-const sessSearch = document.getElementById('sessions-search')
-if (sessSearch) sessSearch.addEventListener('input', () => {
-  const q = sessSearch.value.trim().toLowerCase()
-  document.querySelectorAll('[data-seat-row]').forEach((row) => {
-    row.hidden = Boolean(q) && !(row.getAttribute('data-q') || '').includes(q)
-  })
-})
-document.querySelectorAll('#map-root path[data-iso]').forEach((p) => p.addEventListener('click', () => {
-  const iso = p.getAttribute('data-iso')
-  document.querySelectorAll('#map-fleet tbody tr').forEach((tr) => {
-    tr.hidden = Boolean(iso) && tr.getAttribute('data-country') !== iso
-  })
-}))
-document.querySelectorAll('[data-crm-filter]').forEach((b) => b.addEventListener('click', () => {
-  document.querySelectorAll('[data-crm-filter]').forEach((x) => x.classList.toggle('on', x === b))
-  const f = b.getAttribute('data-crm-filter')
-  document.querySelectorAll('#crm-table tbody tr').forEach((tr) => {
-    tr.hidden = f !== 'all' && tr.getAttribute('data-status') !== f
-  })
-}))
-document.querySelectorAll('[data-reveal]').forEach((b) => b.addEventListener('click', async () => {
-  const id = b.getAttribute('data-reveal')
-  const j = await api('/v1/admin/asks/' + id)
-  document.getElementById('reveal').textContent = j.ok ? (j.question || '(empty)') : (j.error || 'reveal failed')
-}))
-document.querySelectorAll('[data-approve]').forEach((b) => b.addEventListener('click', async () => {
-  const id = b.getAttribute('data-approve')
-  const diff = document.querySelector('[data-diff="' + id + '"]').value
-  await api('/v1/admin/skills/' + id + '/approve', { diff })
-  location.reload()
-}))
-document.querySelectorAll('[data-reject]').forEach((b) => b.addEventListener('click', async () => {
-  const id = b.getAttribute('data-reject')
-  await api('/v1/admin/skills/' + id + '/reject', { reason: 'rejected in console' })
-  location.reload()
-}))
-document.querySelectorAll('[data-push]').forEach((b) => b.addEventListener('click', async () => {
-  const id = b.getAttribute('data-push')
-  await api('/v1/admin/skills/' + id + '/push', {})
-  location.reload()
-}))
-document.querySelectorAll('[data-draft]').forEach((b) => b.addEventListener('click', async () => {
-  await api('/v1/admin/skills/draft', { skillId: b.getAttribute('data-draft') })
-  location.reload()
-}))
-document.querySelectorAll('[data-retry]').forEach((b) => b.addEventListener('click', async () => {
-  await api('/v1/admin/crm/' + b.getAttribute('data-retry') + '/retry', {})
-  location.reload()
-}))
-;(function cfResult() {
-  const q = new URLSearchParams(location.search).get('cf')
-  const el = document.getElementById('cf-connect-msg')
-  if (!el || !q) return
-  if (q === 'connected') el.textContent = 'AI Gateway key added. last4 only.'
-  else if (q === 'failed') el.textContent = 'Cloudflare login worked, but Operator could not provision the key.'
-  else if (q === 'denied') el.textContent = 'Cloudflare login was cancelled.'
-  else if (q === 'need-oauth') el.textContent = 'Cloudflare OAuth client is missing on this Worker.'
-})()
-const keyMsg = document.getElementById('key-msg')
-function showKey(j) {
-  if (!keyMsg) return
-  if (j && j.ok) keyMsg.textContent = j.last4 ? ('saved ··' + j.last4) : (j.status || 'ok')
-  else keyMsg.textContent = (j && j.error) || 'failed'
-}
-const addForm = document.getElementById('key-add')
-if (addForm) addForm.addEventListener('submit', async (e) => {
-  e.preventDefault()
-  const fd = new FormData(addForm)
-  const j = await api('/v1/admin/keys', { provider: fd.get('provider'), label: fd.get('label'), secret: fd.get('secret') })
-  if (j && j.ok) location.reload()
-  else showKey(j)
-})
-const cfForm = document.getElementById('cf-add')
-if (cfForm) cfForm.addEventListener('submit', async (e) => {
-  e.preventDefault()
-  const fd = new FormData(cfForm)
-  const j = await api('/v1/admin/keys', { provider: 'cloudflare-account', accountId: fd.get('accountId'), token: fd.get('token') })
-  if (j && j.ok) location.reload()
-  else showKey(j)
-})
-document.querySelectorAll('[data-rotate]').forEach((b) => b.addEventListener('click', async () => {
-  const secret = window.prompt('New secret or token')
-  if (!secret) return
-  const j = await api('/v1/admin/keys/' + b.getAttribute('data-rotate') + '/rotate', { secret })
-  if (j && j.ok) location.reload()
-  else showKey(j)
-}))
-document.querySelectorAll('[data-revoke]').forEach((b) => b.addEventListener('click', async () => {
-  const j = await api('/v1/admin/keys/' + b.getAttribute('data-revoke') + '/revoke', {})
-  if (j && j.ok) location.reload()
-  else showKey(j)
-}))
-document.querySelectorAll('[data-license-approve]').forEach((b) => b.addEventListener('click', async () => {
-  await api('/v1/admin/licenses/' + encodeURIComponent(b.getAttribute('data-license-approve')) + '/approve', {})
-  location.reload()
-}))
-document.querySelectorAll('[data-license-revoke]').forEach((b) => b.addEventListener('click', async () => {
-  await api('/v1/admin/licenses/' + encodeURIComponent(b.getAttribute('data-license-revoke')) + '/revoke', {})
-  location.reload()
-}))
-document.querySelectorAll('[data-license-generate]').forEach((form) => {
-  form.addEventListener('submit', async (e) => {
-    e.preventDefault()
-    const fd = new FormData(form)
-    const j = await api('/v1/admin/licenses/generate', { days: Number(fd.get('days')) })
-    const root = form.parentElement
-    const box = root && root.querySelector('[data-license-once]')
-    const input = root && root.querySelector('[data-license-once-value]')
-    if (j && j.ok && j.license && box && input) {
-      input.value = j.license
-      box.hidden = false
-    }
-  })
-})
-document.querySelectorAll('[data-license-once-copy]').forEach((btn) => {
-  btn.addEventListener('click', async () => {
-    const root = btn.parentElement
-    const input = root && root.querySelector('[data-license-once-value]')
-    if (input && input.value && navigator.clipboard) await navigator.clipboard.writeText(input.value)
-  })
-})
-</script>
+
+  return `<!doctype html>
+<html lang="en"${htmlThemeAttr}><head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Métis Operator</title>
+<link rel="stylesheet" href="${SPA_CSS_PATH}"${nonceAttr}>
+</head>
+<body>
+<svg id="spark-defs"><defs>
+  <linearGradient id="spark-fill" x1="0" x2="0" y1="0" y2="1">
+    <stop offset="0" stop-color="#e4e4e7" stop-opacity="0.28"/>
+    <stop offset="1" stop-color="#e4e4e7" stop-opacity="0"/>
+  </linearGradient>
+</defs></svg>
+${shellHtml}
+<script src="${SPA_JS_PATH}" defer${nonceAttr}></script>
 </body></html>`
 }
 

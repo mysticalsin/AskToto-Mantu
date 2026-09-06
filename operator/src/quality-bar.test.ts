@@ -11,6 +11,7 @@ import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operato
 import { memoryStore } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from './test-fixtures'
 import { tokenPatternForTests } from './redact'
+import { SPA_CSS_PATH } from './spa/manifest'
 
 /**
  * Tony 6:17 PM ET quality bar. After every Operator change these four
@@ -220,7 +221,17 @@ describe('quality bar: map data contract', () => {
     )
     const html = await live.text()
     expect(html).toContain('data-iso="CA"')
-    expect(html).toContain('#E5E7EB')
+    // Shoey land color now lives in the hashed external stylesheet (plan D3: no inline
+    // <style>), fetched the same way a browser would via the <link> the page prints.
+    const css = await (
+      await handleRequest(
+        new Request(`https://operator.test${SPA_CSS_PATH}`),
+        env(),
+        {},
+        { store, now: NOW }
+      )
+    ).text()
+    expect(css).toContain('#E5E7EB')
     expect(html).not.toContain('203.0.113.9')
     expect(html).not.toContain('SampleCity')
     const dash = (await (
@@ -277,7 +288,9 @@ describe('quality bar: keys last4 and Cloudflare fail-loud', () => {
     expect(html).toContain('Connect Cloudflare (login) on Keys.')
     expect(html).toContain('data-install-works')
     expect(html).toContain('Install → works')
-    expect(html).toContain('data-theme="dark"')
+    // Light is the primary theme (Shoey reference is light-only); dark is the derived second
+    // theme, chosen only by cookie or client toggle, never the server default.
+    expect(html).toContain('data-theme="light"')
     expect(html).not.toContain('Cloudflare token missing')
     expect(html).toContain('data-page="keys"')
     expect(html).not.toMatch(tokenPatternForTests())

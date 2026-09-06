@@ -113,7 +113,9 @@ describe('ROI and licenses from real D1 ingest only', () => {
     expect(dash.roi.timeSaved).toBe('0 min')
     expect(dash.roi.timeSavedSub).toBe('no recaps ingested')
     expect(dash.roi.value).not.toBe('$0')
-    expect(dash.events.some((e) => e.name === 'live' && e.chips.some((c) => c.value === 'Longueuil'))).toBe(true)
+    // Events table shows stored events only now (section 10): a bare upsertSeat with no real
+    // ingest writes no event row, so there is no synthesized 'live'/'seen' presence pseudo-event.
+    expect(dash.events.some((e) => e.name === 'live' || e.name === 'seen')).toBe(false)
     expect(
       dash.events.some(
         (e) =>

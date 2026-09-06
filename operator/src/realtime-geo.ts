@@ -25,57 +25,110 @@ export type SeatGeoInput = {
   last_seen: number
 }
 
+/** A materialized session row (operator/src/sessions.ts), used when present so unique_sessions and
+ *  avg_duration reflect real per-device pulses with gaps under 2 minutes, not a seat's whole lifetime. */
+export type SessionGeoInput = {
+  device_id: string
+  country: string | null
+  city: string | null
+  region?: string | null
+  started_at: number
+  last_pulse_at: number
+  ended_at: number | null
+}
+
 function durationMs(s: SeatGeoInput): number {
   return Math.max(0, s.last_seen - s.first_seen)
 }
 
-export function realtimeGeoRows(seats: SeatGeoInput[]): RealtimeGeoRow[] {
-  const groups = new Map<string, { country: string; city: string; devices: Set<string>; durations: number[] }>()
+function sessionDurationMs(s: SessionGeoInput): number {
+  const end = s.ended_at ?? s.last_pulse_at
+  return Math.max(0, end - s.started_at)
+}
+
+function seatGroups(seats: SeatGeoInput[], keyOf: (s: SeatGeoInput) => string | null): Map<string, { devices: Set<string>; durations: number[] }> {
+  const groups = new Map<string, { devices: Set<string>; durations: number[] }>()
   for (const s of seats) {
-    const country = (s.country || '').trim().toUpperCase()
-    const city = (s.city || '').trim()
-    if (!country || !city) continue
-    const key = `${country}\0${city}`
-    const g = groups.get(key) ?? { country, city, devices: new Set<string>(), durations: [] }
+    const key = keyOf(s)
+    if (!key) continue
+    const g = groups.get(key) ?? { devices: new Set<string>(), durations: [] }
     g.devices.add(s.device_id)
     g.durations.push(durationMs(s))
     groups.set(key, g)
   }
-  return [...groups.values()]
-    .map((g) => ({
-      country: g.country,
-      city: g.city,
-      count: g.devices.size,
-      unique_sessions: g.devices.size,
-      avg_duration: g.durations.length
-        ? Math.round(g.durations.reduce((a, b) => a + b, 0) / g.durations.length)
-        : 0
-    }))
+  return groups
+}
+
+function sessionGroups(sessions: SessionGeoInput[], keyOf: (s: SessionGeoInput) => string | null): Map<string, { count: number; durations: number[] }> {
+  const groups = new Map<string, { count: number; durations: number[] }>()
+  for (const s of sessions) {
+    const key = keyOf(s)
+    if (!key) continue
+    const g = groups.get(key) ?? { count: 0, durations: [] }
+    g.count += 1
+    g.durations.push(sessionDurationMs(s))
+    groups.set(key, g)
+  }
+  return groups
+}
+
+function avg(durations: number[]): number {
+  return durations.length ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length) : 0
+}
+
+export function realtimeGeoRows(seats: SeatGeoInput[], sessions?: SessionGeoInput[]): RealtimeGeoRow[] {
+  const groups = seatGroups(seats, (s) => {
+    const country = (s.country || '').trim().toUpperCase()
+    const city = (s.city || '').trim()
+    return country && city ? `${country}\0${city}` : null
+  })
+  const sessionsByKey = sessions
+    ? sessionGroups(sessions, (s) => {
+        const country = (s.country || '').trim().toUpperCase()
+        const city = (s.city || '').trim()
+        return country && city ? `${country}\0${city}` : null
+      })
+    : null
+  return [...groups.entries()]
+    .map(([key, g]) => {
+      const [country, city] = key.split('\0')
+      const sessionStats = sessionsByKey?.get(key)
+      return {
+        country,
+        city,
+        count: g.devices.size,
+        unique_sessions: sessionStats ? sessionStats.count : g.devices.size,
+        avg_duration: sessionStats ? avg(sessionStats.durations) : avg(g.durations)
+      }
+    })
     .sort((a, b) => b.count - a.count || a.city.localeCompare(b.city))
 }
 
-export function geoRegionRows(seats: SeatGeoInput[]): GeoRegionRow[] {
-  const groups = new Map<string, { country: string; region: string; devices: Set<string>; durations: number[] }>()
-  for (const s of seats) {
+export function geoRegionRows(seats: SeatGeoInput[], sessions?: SessionGeoInput[]): GeoRegionRow[] {
+  const groups = seatGroups(seats, (s) => {
     const country = (s.country || '').trim().toUpperCase()
     const region = (s.region || '').trim()
-    if (!country || !region) continue
-    const key = `${country}\0${region}`
-    const g = groups.get(key) ?? { country, region, devices: new Set<string>(), durations: [] }
-    g.devices.add(s.device_id)
-    g.durations.push(durationMs(s))
-    groups.set(key, g)
-  }
-  return [...groups.values()]
-    .map((g) => ({
-      country: g.country,
-      region: g.region,
-      count: g.devices.size,
-      unique_sessions: g.devices.size,
-      avg_duration: g.durations.length
-        ? Math.round(g.durations.reduce((a, b) => a + b, 0) / g.durations.length)
-        : 0
-    }))
+    return country && region ? `${country}\0${region}` : null
+  })
+  const sessionsByKey = sessions
+    ? sessionGroups(sessions, (s) => {
+        const country = (s.country || '').trim().toUpperCase()
+        const region = (s.region || '').trim()
+        return country && region ? `${country}\0${region}` : null
+      })
+    : null
+  return [...groups.entries()]
+    .map(([key, g]) => {
+      const [country, region] = key.split('\0')
+      const sessionStats = sessionsByKey?.get(key)
+      return {
+        country,
+        region,
+        count: g.devices.size,
+        unique_sessions: sessionStats ? sessionStats.count : g.devices.size,
+        avg_duration: sessionStats ? avg(sessionStats.durations) : avg(g.durations)
+      }
+    })
     .sort((a, b) => b.count - a.count || a.region.localeCompare(b.region))
 }
 

@@ -1,16 +1,31 @@
 import { normalizeCrmRow, type CrmSendRow } from './crm'
+import { applyPulse, isSessionStale, type SessionRow as SessionState } from './sessions'
 import type {
   AskRow,
+  AuditQueryOpts,
+  AuditRow,
   EventRow,
+  EventsPage,
+  EventsQueryOpts,
+  GroupMemberRow,
+  GroupRow,
+  IntegrationGrantRow,
+  IntegrationMeta,
+  IntegrationRow,
   IssuedLicenseRow,
   OperatorStore,
+  PackMeta,
   PackRow,
   ProposalRow,
   PulseRow,
   SeatRow,
+  SessionDetail,
+  SessionsPage,
+  SessionsQueryOpts,
+  TierRow,
   VaultKeyRow
 } from './store'
-import { toVaultMeta } from './store'
+import { toIntegrationMeta, toVaultMeta } from './store'
 
 interface D1Stmt {
   bind(...values: unknown[]): D1Stmt
@@ -25,8 +40,155 @@ export interface D1DatabaseLike {
 
 const NONCE_TTL_MS = 10 * 60 * 1000
 const PULSE_TTL_MS = 8 * 24 * 60 * 60 * 1000
+const SESSION_GAP_MS = 2 * 60 * 1000
+
+/** Isolate-wide: once the live D1 proves it lacks asks.question_type, stop paying a failed insert per Ask. */
+let askInsertLegacy = false
+
+export function resetD1SchemaProbeForTests(): void {
+  askInsertLegacy = false
+}
+
+/** SQLite / D1 phrasing for a column that is not in the table: "has no column named X" or "no such column: X". */
+export function isMissingColumnError(e: unknown, column: string): boolean {
+  const msg = e instanceof Error ? e.message : String(e)
+  return new RegExp(`(no such column|has no column named)[:\\s]+${column}\\b`, 'i').test(msg)
+}
+
+function toBase64Url(raw: string): string {
+  const bytes = new TextEncoder().encode(raw)
+  let bin = ''
+  for (const b of bytes) bin += String.fromCharCode(b)
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+function fromBase64Url(value: string): string {
+  const padded = value.replace(/-/g, '+').replace(/_/g, '/')
+  const pad = (4 - (padded.length % 4)) % 4
+  const bin = atob(padded + '='.repeat(pad))
+  const bytes = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+  return new TextDecoder().decode(bytes)
+}
+
+function encodeCursor(ts: number, id: string): string {
+  return toBase64Url(`${ts}:${id}`)
+}
+
+function decodeCursor(cursor: string | undefined): { ts: number; id: string } | null {
+  if (!cursor) return null
+  try {
+    const raw = fromBase64Url(cursor)
+    const i = raw.lastIndexOf(':')
+    if (i < 0) return null
+    const ts = Number(raw.slice(0, i))
+    const id = raw.slice(i + 1)
+    if (!Number.isFinite(ts) || !id) return null
+    return { ts, id }
+  } catch {
+    return null
+  }
+}
 
 export function d1Store(db: D1DatabaseLike): OperatorStore {
+  async function listEventsImpl(limit: number): Promise<EventRow[]>
+  async function listEventsImpl(limit: number, opts: EventsQueryOpts): Promise<EventsPage>
+  async function listEventsImpl(limit: number, opts?: EventsQueryOpts): Promise<EventRow[] | EventsPage> {
+    if (!opts) {
+      const r = await db
+        .prepare('SELECT id, ts, kind, actor, device_id, country, detail FROM events ORDER BY ts DESC LIMIT ?')
+        .bind(limit)
+        .all<EventRow>()
+      return r.results
+    }
+    const pageLimit = opts.limit ?? limit
+    const where: string[] = []
+    const args: unknown[] = []
+    if (opts.since != null) {
+      where.push('e.ts >= ?')
+      args.push(opts.since)
+    }
+    if (opts.until != null) {
+      where.push('e.ts <= ?')
+      args.push(opts.until)
+    }
+    if (opts.kinds && opts.kinds.length) {
+      where.push(`e.kind IN (${opts.kinds.map(() => '?').join(',')})`)
+      args.push(...opts.kinds)
+    }
+    if (opts.deviceId) {
+      where.push('e.device_id = ?')
+      args.push(opts.deviceId)
+    }
+    if (opts.country) {
+      where.push('UPPER(COALESCE(e.country, s.country)) = ?')
+      args.push(opts.country.toUpperCase())
+    }
+    if (opts.os) {
+      where.push('LOWER(s.os) = ?')
+      args.push(opts.os.toLowerCase())
+    }
+    if (opts.version) {
+      where.push('s.app_version = ?')
+      args.push(opts.version)
+    }
+    if (opts.q) {
+      where.push(
+        '(e.kind LIKE ? OR e.device_id LIKE ? OR e.country LIKE ? OR e.detail LIKE ? OR s.hostname LIKE ? OR s.sso_email LIKE ? OR s.os LIKE ? OR s.app_version LIKE ?)'
+      )
+      const like = `%${opts.q}%`
+      args.push(like, like, like, like, like, like, like, like)
+    }
+    const cursor = decodeCursor(opts.cursor)
+    if (cursor) {
+      where.push('(e.ts < ? OR (e.ts = ? AND e.id < ?))')
+      args.push(cursor.ts, cursor.ts, cursor.id)
+    }
+    const sql = `SELECT e.id, e.ts, e.kind, e.actor, e.device_id, e.country, e.detail
+                 FROM events e LEFT JOIN seats s ON s.device_id = e.device_id
+                 ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+                 ORDER BY e.ts DESC, e.id DESC LIMIT ?`
+    args.push(pageLimit)
+    const r = await db.prepare(sql).bind(...args).all<EventRow>()
+    const rows = r.results
+    const last = rows.at(-1)
+    const nextCursor = rows.length === pageLimit && last ? encodeCursor(last.ts, last.id) : null
+    return { rows, nextCursor }
+  }
+
+  async function openSessionFor(deviceId: string): Promise<SessionState | null> {
+    return (
+      (await db
+        .prepare('SELECT * FROM sessions WHERE device_id = ? ORDER BY started_at DESC LIMIT 1')
+        .bind(deviceId)
+        .first<SessionState>()) ?? null
+    )
+  }
+
+  async function writeSession(row: SessionState): Promise<void> {
+    await db
+      .prepare(
+        `INSERT OR REPLACE INTO sessions (
+          id, device_id, started_at, last_pulse_at, ended_at, pulses, asks, recaps, country, city, os, app_version
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .bind(
+        row.id,
+        row.device_id,
+        row.started_at,
+        row.last_pulse_at,
+        row.ended_at,
+        row.pulses,
+        row.asks,
+        row.recaps,
+        row.country,
+        row.city,
+        row.os,
+        row.app_version
+      )
+      .run()
+  }
+
   return {
     async takeNonce(nonce, ts) {
       const existing = await db.prepare('SELECT nonce FROM nonces WHERE nonce = ?').bind(nonce).first<{ nonce: string }>()
@@ -105,7 +267,60 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       await db.prepare('UPDATE seats SET approval = ? WHERE device_id = ?').bind(approval, deviceId).run()
       return true
     },
+    async getSeat(deviceId) {
+      return (await db.prepare('SELECT * FROM seats WHERE device_id = ?').bind(deviceId).first<SeatRow>()) ?? null
+    },
     async insertAsk(row) {
+      const base = [
+        row.id,
+        row.device_id,
+        row.ts,
+        row.mode,
+        row.skill_id,
+        row.skill_version,
+        row.provider,
+        row.model,
+        row.ttft_ms,
+        row.total_ms,
+        row.input_tokens,
+        row.output_tokens,
+        row.cache_read,
+        row.cache_write,
+        row.cache_uncached,
+        row.cache_status,
+        row.cache_ttl,
+        row.outcome,
+        row.rating,
+        row.prompt_cipher,
+        row.prompt_iv,
+        row.preview
+      ]
+      // Fail-safe for a live D1 that has not had schema-alter.sql applied yet: the first insert that
+      // trips "no such column" flips this isolate to the legacy statement, so an Ask is never dropped
+      // because the fleet store is one migration behind. The type is lost for that row (null), which the
+      // dashboard reports as coverage, never as a silent 100%.
+      if (!askInsertLegacy) {
+        try {
+          await db
+            .prepare(
+              `INSERT OR REPLACE INTO asks (
+                id, device_id, ts, mode, skill_id, skill_version, provider, model,
+                ttft_ms, total_ms, input_tokens, output_tokens, cache_read, cache_write,
+                cache_uncached, cache_status, cache_ttl, outcome, rating, prompt_cipher, prompt_iv, preview,
+                question_type
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            )
+            .bind(...base, row.question_type)
+            .run()
+          return
+        } catch (e) {
+          if (!isMissingColumnError(e, 'question_type')) throw e
+          askInsertLegacy = true
+          console.warn(
+            '[operator] asks.question_type is missing on this D1. Apply operator/schema-alter.sql. Asks are stored without a type until then.'
+          )
+        }
+      }
       await db
         .prepare(
           `INSERT OR REPLACE INTO asks (
@@ -114,30 +329,7 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
             cache_uncached, cache_status, cache_ttl, outcome, rating, prompt_cipher, prompt_iv, preview
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
-        .bind(
-          row.id,
-          row.device_id,
-          row.ts,
-          row.mode,
-          row.skill_id,
-          row.skill_version,
-          row.provider,
-          row.model,
-          row.ttft_ms,
-          row.total_ms,
-          row.input_tokens,
-          row.output_tokens,
-          row.cache_read,
-          row.cache_write,
-          row.cache_uncached,
-          row.cache_status,
-          row.cache_ttl,
-          row.outcome,
-          row.rating,
-          row.prompt_cipher,
-          row.prompt_iv,
-          row.preview
-        )
+        .bind(...base)
         .run()
     },
     async updateAskRating(id, rating) {
@@ -148,7 +340,14 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         await db.prepare('UPDATE asks SET rating = ? WHERE id = ?').bind(rating, id).run()
       }
     },
-    async listAsks(limit) {
+    async listAsks(limit, since) {
+      if (since != null) {
+        const r = await db
+          .prepare('SELECT * FROM asks WHERE ts >= ? ORDER BY ts DESC LIMIT ?')
+          .bind(since, limit)
+          .all<AskRow>()
+        return r.results
+      }
       const r = await db.prepare('SELECT * FROM asks ORDER BY ts DESC LIMIT ?').bind(limit).all<AskRow>()
       return r.results
     },
@@ -181,7 +380,11 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         .all<PulseRow>()
       return r.results
     },
-    async listProposals() {
+    async listProposals(limit) {
+      if (limit != null) {
+        const r = await db.prepare('SELECT * FROM proposals ORDER BY created_at DESC LIMIT ?').bind(limit).all<ProposalRow>()
+        return r.results
+      }
       const r = await db.prepare('SELECT * FROM proposals ORDER BY created_at DESC').all<ProposalRow>()
       return r.results
     },
@@ -212,12 +415,16 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         .run()
     },
     async listPacks() {
-      const r = await db.prepare('SELECT * FROM packs').all<PackRow>()
+      const r = await db
+        .prepare('SELECT id, skill_id, version, sha256, signed, pushed_at, pushed_by FROM packs')
+        .all<PackMeta>()
       return r.results
     },
     async latestPacks() {
-      const r = await db.prepare('SELECT * FROM packs ORDER BY pushed_at DESC').all<PackRow>()
-      const by = new Map<string, PackRow>()
+      const r = await db
+        .prepare('SELECT id, skill_id, version, sha256, signed, pushed_at, pushed_by FROM packs ORDER BY pushed_at DESC')
+        .all<PackMeta>()
+      const by = new Map<string, PackMeta>()
       for (const p of r.results) {
         if (!by.has(p.skill_id)) by.set(p.skill_id, p)
       }
@@ -292,18 +499,33 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         .all<CrmSendRow>()
       return r.results.map(normalizeCrmRow)
     },
-    async audit(id, ts, actor, action, askId, detail) {
+    async audit(id, ts, actor, action, askId, detail, meta) {
       await db
-        .prepare('INSERT INTO audit (id, ts, actor, action, ask_id, detail) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(id, ts, actor, action, askId, detail)
+        .prepare('INSERT INTO audit (id, ts, actor, action, ask_id, detail, request_id, route) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(id, ts, actor, action, askId, detail, meta?.requestId ?? null, meta?.route ?? null)
         .run()
     },
-    async listAudit(limit) {
-      const r = await db
-        .prepare('SELECT ts, actor, action, ask_id, detail FROM audit ORDER BY ts DESC LIMIT ?')
-        .bind(limit)
-        .all<{ ts: number; actor: string; action: string; ask_id: string | null; detail: string }>()
-      return r.results
+    async listAudit(limit, opts) {
+      const where: string[] = []
+      const args: unknown[] = []
+      if (opts?.since != null) {
+        where.push('ts >= ?')
+        args.push(opts.since)
+      }
+      if (opts?.actor) {
+        where.push('actor = ?')
+        args.push(opts.actor)
+      }
+      if (opts?.action) {
+        where.push('action = ?')
+        args.push(opts.action)
+      }
+      const sql = `SELECT ts, actor, action, ask_id, detail, request_id, route FROM audit
+                   ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+                   ORDER BY ts DESC LIMIT ?`
+      args.push(limit)
+      const r = await db.prepare(sql).bind(...args).all<AuditRow>()
+      return r.results.map((row) => ({ ...row, request_id: row.request_id ?? null, route: row.route ?? null }))
     },
     async insertEvent(row) {
       await db
@@ -313,12 +535,15 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         .bind(row.id, row.ts, row.kind, row.actor, row.device_id, row.country, row.detail)
         .run()
     },
-    async listEvents(limit) {
+    listEvents: listEventsImpl,
+    async countEventsByKind(since, until) {
       const r = await db
-        .prepare('SELECT id, ts, kind, actor, device_id, country, detail FROM events ORDER BY ts DESC LIMIT ?')
-        .bind(limit)
-        .all<EventRow>()
-      return r.results
+        .prepare('SELECT kind, COUNT(*) as n FROM events WHERE ts >= ? AND ts <= ? GROUP BY kind')
+        .bind(since, until)
+        .all<{ kind: string; n: number }>()
+      const out: Record<string, number> = {}
+      for (const row of r.results) out[row.kind] = row.n
+      return out
     },
     async listVaultMeta() {
       const r = await db
@@ -371,12 +596,25 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         )
         .run()
     },
+    async supersedeActiveVaultKeys(provider, exceptId, now) {
+      await db
+        .prepare(
+          `UPDATE vault_keys SET status = 'superseded', cipher = '', iv = '', rotated_at = ?
+           WHERE provider = ? AND id != ? AND status = 'active'`
+        )
+        .bind(now, provider, exceptId)
+        .run()
+    },
+    async clearVaultSecret(id) {
+      await db.prepare(`UPDATE vault_keys SET cipher = '', iv = '' WHERE id = ?`).bind(id).run()
+    },
     async putIssuedLicense(row) {
       await db
         .prepare(
           `INSERT OR REPLACE INTO issued_licenses (
-            jti, last4, key_hash, days, iat, exp, revoked, created_at, created_by
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            jti, last4, key_hash, days, iat, exp, revoked, created_at, created_by,
+            group_id, tier, member, activated_device, activated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
         )
         .bind(
           row.jti,
@@ -387,29 +625,238 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
           row.exp,
           row.revoked,
           row.created_at,
-          row.created_by
+          row.created_by,
+          row.group_id ?? null,
+          row.tier ?? null,
+          row.member ?? null,
+          row.activated_device ?? null,
+          row.activated_at ?? null
         )
         .run()
     },
     async getIssuedLicense(jti) {
-      return (
-        (await db
-          .prepare(
-            `SELECT jti, last4, key_hash, days, iat, exp, revoked, created_at, created_by
-             FROM issued_licenses WHERE jti = ?`
-          )
-          .bind(jti)
-          .first<IssuedLicenseRow>()) ?? null
-      )
+      return (await db.prepare('SELECT * FROM issued_licenses WHERE jti = ?').bind(jti).first<IssuedLicenseRow>()) ?? null
     },
-    async listIssuedLicenses() {
+    async listIssuedLicenses(limit) {
+      if (limit != null) {
+        const r = await db
+          .prepare('SELECT * FROM issued_licenses ORDER BY created_at DESC LIMIT ?')
+          .bind(limit)
+          .all<IssuedLicenseRow>()
+        return r.results
+      }
+      const r = await db.prepare('SELECT * FROM issued_licenses ORDER BY created_at DESC').all<IssuedLicenseRow>()
+      return r.results
+    },
+    async updateIssuedLicense(jti, patch) {
+      const existing = await db.prepare('SELECT jti FROM issued_licenses WHERE jti = ?').bind(jti).first<{ jti: string }>()
+      if (!existing) return false
+      const fields = Object.keys(patch) as (keyof IssuedLicenseRow)[]
+      if (!fields.length) return true
+      const set = fields.map((f) => `${f} = ?`).join(', ')
+      const args = fields.map((f) => patch[f] ?? null)
+      await db
+        .prepare(`UPDATE issued_licenses SET ${set} WHERE jti = ?`)
+        .bind(...args, jti)
+        .run()
+      return true
+    },
+    async revokeIssuedLicense(jti, now) {
+      const existing = await db
+        .prepare('SELECT jti, activated_at FROM issued_licenses WHERE jti = ?')
+        .bind(jti)
+        .first<{ jti: string; activated_at: number | null }>()
+      if (!existing) return false
+      await db
+        .prepare('UPDATE issued_licenses SET revoked = 1, activated_at = COALESCE(activated_at, ?) WHERE jti = ?')
+        .bind(now, jti)
+        .run()
+      return true
+    },
+    async touchSession(deviceId, ts, kind, geo, seatMeta) {
+      const existing = await openSessionFor(deviceId)
+      const { session, closed } = applyPulse(
+        existing,
+        { deviceId, ts, kind, country: geo.country, city: geo.city, os: seatMeta.os, appVersion: seatMeta.app_version },
+        () => crypto.randomUUID()
+      )
+      if (closed) await writeSession(closed)
+      await writeSession(session)
+      return session
+    },
+    async listSessions(opts: SessionsQueryOpts): Promise<SessionsPage> {
+      const where: string[] = []
+      const args: unknown[] = []
+      if (opts.since != null) {
+        where.push('started_at >= ?')
+        args.push(opts.since)
+      }
+      if (opts.until != null) {
+        where.push('started_at <= ?')
+        args.push(opts.until)
+      }
+      if (opts.deviceId) {
+        where.push('device_id = ?')
+        args.push(opts.deviceId)
+      }
+      const cursor = decodeCursor(opts.cursor)
+      if (cursor) {
+        where.push('(started_at < ? OR (started_at = ? AND id < ?))')
+        args.push(cursor.ts, cursor.ts, cursor.id)
+      }
+      const limit = opts.limit > 0 ? opts.limit : 50
+      const sql = `SELECT * FROM sessions ${where.length ? `WHERE ${where.join(' AND ')}` : ''} ORDER BY started_at DESC, id DESC LIMIT ?`
+      args.push(limit)
+      const r = await db.prepare(sql).bind(...args).all<SessionState>()
+      const rows = r.results
+      const last = rows.at(-1)
+      const nextCursor = rows.length === limit && last ? encodeCursor(last.started_at, last.id) : null
+      return { rows, nextCursor }
+    },
+    async getSession(id): Promise<SessionDetail | null> {
+      const session = await db.prepare('SELECT * FROM sessions WHERE id = ?').bind(id).first<SessionState>()
+      if (!session) return null
+      const end = session.ended_at ?? session.last_pulse_at
+      const r = await db
+        .prepare('SELECT * FROM pulses WHERE device_id = ? AND ts >= ? AND ts <= ? ORDER BY ts ASC')
+        .bind(session.device_id, session.started_at, end)
+        .all<PulseRow>()
+      return { session, pulses: r.results }
+    },
+    async closeStaleSessions(now) {
+      const r = await db
+        .prepare('SELECT id, last_pulse_at, ended_at FROM sessions WHERE ended_at IS NULL')
+        .all<{ id: string; last_pulse_at: number; ended_at: number | null }>()
+      let n = 0
+      for (const row of r.results) {
+        if (!isSessionStale(row, now, SESSION_GAP_MS)) continue
+        await db.prepare('UPDATE sessions SET ended_at = ? WHERE id = ?').bind(row.last_pulse_at, row.id).run()
+        n++
+      }
+      return n
+    },
+    async listGroups() {
+      const r = await db.prepare('SELECT * FROM groups ORDER BY created_at DESC').all<GroupRow>()
+      return r.results
+    },
+    async getGroup(id) {
+      return (await db.prepare('SELECT * FROM groups WHERE id = ?').bind(id).first<GroupRow>()) ?? null
+    },
+    async putGroup(row) {
+      await db
+        .prepare(
+          `INSERT OR REPLACE INTO groups (id, name, tier, notes, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?)`
+        )
+        .bind(row.id, row.name, row.tier, row.notes, row.created_at, row.created_by)
+        .run()
+    },
+    async deleteGroup(id) {
+      await db.prepare('DELETE FROM group_members WHERE group_id = ?').bind(id).run()
+      await db.prepare('DELETE FROM groups WHERE id = ?').bind(id).run()
+    },
+    async listGroupMembers(groupId) {
+      const r = await db
+        .prepare('SELECT * FROM group_members WHERE group_id = ? ORDER BY added_at ASC')
+        .bind(groupId)
+        .all<GroupMemberRow>()
+      return r.results
+    },
+    async putGroupMember(row) {
+      await db
+        .prepare(
+          `INSERT OR REPLACE INTO group_members (group_id, member, kind, added_at, added_by) VALUES (?, ?, ?, ?, ?)`
+        )
+        .bind(row.group_id, row.member, row.kind, row.added_at, row.added_by)
+        .run()
+    },
+    async deleteGroupMember(groupId, member) {
+      await db.prepare('DELETE FROM group_members WHERE group_id = ? AND member = ?').bind(groupId, member).run()
+    },
+    async listTiers() {
+      const r = await db.prepare('SELECT * FROM tiers ORDER BY id ASC').all<TierRow>()
+      return r.results
+    },
+    async putTier(row) {
+      await db
+        .prepare(
+          `INSERT OR REPLACE INTO tiers (id, label, entitlements_json, updated_at) VALUES (?, ?, ?, ?)`
+        )
+        .bind(row.id, row.label, row.entitlements_json, row.updated_at)
+        .run()
+    },
+    async listIntegrationsMeta() {
       const r = await db
         .prepare(
-          `SELECT jti, last4, key_hash, days, iat, exp, revoked, created_at, created_by
-           FROM issued_licenses ORDER BY created_at DESC`
+          `SELECT id, kind, label, base_url, last4, scope_json, status, created_at, created_by, rotated_at, revoked_at, last_used_at, uses
+           FROM integrations ORDER BY created_at DESC`
         )
-        .all<IssuedLicenseRow>()
+        .all<IntegrationMeta>()
       return r.results
+    },
+    async listIntegrationRows() {
+      const r = await db.prepare('SELECT * FROM integrations ORDER BY created_at DESC').all<IntegrationRow>()
+      return r.results
+    },
+    async getIntegration(id) {
+      return (await db.prepare('SELECT * FROM integrations WHERE id = ?').bind(id).first<IntegrationRow>()) ?? null
+    },
+    async putIntegration(row) {
+      await db
+        .prepare(
+          `INSERT OR REPLACE INTO integrations (
+            id, kind, label, base_url, cipher, iv, last4, scope_json, status,
+            created_at, created_by, rotated_at, revoked_at, last_used_at, uses
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .bind(
+          row.id,
+          row.kind,
+          row.label,
+          row.base_url,
+          row.cipher,
+          row.iv,
+          row.last4,
+          row.scope_json,
+          row.status,
+          row.created_at,
+          row.created_by,
+          row.rotated_at,
+          row.revoked_at,
+          row.last_used_at,
+          row.uses
+        )
+        .run()
+    },
+    async insertIntegrationGrant(row) {
+      await db
+        .prepare('INSERT OR REPLACE INTO integration_grants (id, integration_id, device_id, ts) VALUES (?, ?, ?, ?)')
+        .bind(row.id, row.integration_id, row.device_id, row.ts)
+        .run()
+    },
+    async listIntegrationGrants(integrationId, limit) {
+      const r = await db
+        .prepare('SELECT * FROM integration_grants WHERE integration_id = ? ORDER BY ts DESC LIMIT ?')
+        .bind(integrationId, limit)
+        .all<IntegrationGrantRow>()
+      return r.results
+    },
+    async bumpIntegrationUse(id, now) {
+      await db.prepare('UPDATE integrations SET uses = uses + 1, last_used_at = ? WHERE id = ?').bind(now, id).run()
+    },
+    async pruneTable(table, before, cap) {
+      const column = table === 'rate_limits' ? 'window_start' : 'ts'
+      const idColumn = table === 'rate_limits' ? 'device_id' : 'id'
+      const r = await db
+        .prepare(`SELECT ${idColumn} as id FROM ${table} WHERE ${column} < ? LIMIT ?`)
+        .bind(before, cap)
+        .all<{ id: string }>()
+      if (!r.results.length) return 0
+      for (const row of r.results) {
+        await db.prepare(`DELETE FROM ${table} WHERE ${idColumn} = ?`).bind(row.id).run()
+      }
+      return r.results.length
     }
   }
 }
+
+export { toIntegrationMeta }

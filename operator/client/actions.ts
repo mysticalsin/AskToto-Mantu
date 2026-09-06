@@ -25,9 +25,9 @@ function fillSeatOverlay(row: HTMLElement): void {
   var overlay = document.getElementById('seat-overlay')
   if (!overlay) return
   overlay.hidden = false
-  var title = overlay.querySelector('[data-seat-title]')
+  var title = overlay.querySelector('[data-drawer-title]')
   var no = overlay.querySelector('[data-seat-no]')
-  var body = overlay.querySelector('[data-seat-body]') as HTMLElement | null
+  var body = overlay.querySelector('[data-drawer-body]') as HTMLElement | null
   var computer = row.getAttribute('data-seat-computer') || '—'
   if (title) title.textContent = computer
   if (no) no.textContent = row.getAttribute('data-seat-no') || ''
