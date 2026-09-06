@@ -1,6 +1,7 @@
 import { app } from 'electron'
 import { redactSecrets } from '@shared/redact'
 import { operatorUrlConfigured, shouldSendAskText, type AskLogLine, type StreamCacheUsage } from '@shared/operator'
+import { classifyQuestionType, normalizeQuestionType, type QuestionType } from '@shared/question-type'
 import type { Settings } from '@shared/ipc'
 import { getMachineId } from './license'
 import { hashOperatorId, operatorHmacHeaders } from './operator-hmac-sign'
@@ -145,6 +146,22 @@ export interface OperatorAskEvent extends StreamCacheUsage {
   totalMs?: number
   outcome?: AskLogLine['outcome']
   question?: string
+  /**
+   * Closed-taxonomy label computed on this seat (question-type.ts). A METRIC, not text: it always ships,
+   * even with "Send Ask text" off, and never carries a substring of the prompt. When the caller did not
+   * classify, recordOperatorAsk derives it here from the question so the dashboard never sees a blank
+   * from a seat that had the text in hand.
+   */
+  questionType?: QuestionType
+  /** True for a screenshot Ask. Only used to derive questionType when the caller did not pass one. */
+  vision?: boolean
+}
+
+/** Resolve the wire value: caller's label wins; otherwise classify locally; never absent, never free-form. */
+export function resolveQuestionType(event: Pick<OperatorAskEvent, 'questionType' | 'question' | 'vision'>): QuestionType {
+  const given = normalizeQuestionType(event.questionType)
+  if (given !== 'unknown') return given
+  return classifyQuestionType(event.question, { vision: event.vision === true })
 }
 
 function sanitizeQuestion(raw: string | undefined): string | undefined {
@@ -180,6 +197,7 @@ export async function recordOperatorAsk(
     cacheStatus: event.cacheStatus,
     cacheTtl: event.cacheTtl,
     outcome: event.outcome ?? 'answered',
+    questionType: resolveQuestionType(event),
     ...seatMeta(settings)
   }
   if (shouldSendAskText(settings)) {
