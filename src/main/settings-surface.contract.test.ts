@@ -41,8 +41,22 @@ describe('MQA-286 — Settings open path sets min bounds', () => {
     expect(index).toMatch(/if \(mode === 'settings'\) applySettingsSurface\(\)/)
     expect(index).toMatch(/win\.setMinimumSize\(SETTINGS_WINDOW_MIN\.width, SETTINGS_WINDOW_MIN\.height\)/)
     expect(index).toMatch(/settingsOpenRect/)
+    expect(index).toMatch(/if \(settingsSurfaceOpen\)/)
+    expect(index).toMatch(/settingsContentHeight/)
+    expect(index).toMatch(/sendHotkey\('settings'\)/)
     expect(app).toMatch(/windowMode\('settings'\)/)
     expect(app).toMatch(/prevViewRef\.current === 'settings'/)
+  })
+
+  it('Settings open cannot keep park height or the live 880×325 Cmd+, slab', () => {
+    expect(settingsOpenRejectsPark({ width: 880, height: 325 })).toBe(true)
+    expect(settingsOpenRejectsPark({ width: 8, height: 2 })).toBe(true)
+    expect(settingsOpenRejectsPark({ width: 132, height: 15 })).toBe(true)
+    expect(settingsOpenRejectsPark({ width: 880, height: 560 })).toBe(false)
+    const mac = settingsOpenRect(TOTOS_MAC, 8)
+    expect(mac.height).toBeGreaterThanOrEqual(560)
+    expect(mac.height).not.toBe(325)
+    expect(mac.width).toBe(880)
   })
 
   it('settingsOpenRect is 880×560 at islandSafeTop, never Hide 8×2 or Island peek (Mac + Windows)', () => {

@@ -30,6 +30,12 @@ export function settingsOpenRejectsPark(win: { width: number; height: number }):
   return isHideOrIslandParkSize(win) || isCrushedSettingsBounds(win)
 }
 
+/** Renderer hug height while Settings is open. Never 880×325 (Tony live Cmd+,). */
+export function settingsContentHeight(reported: number): number {
+  if (!Number.isFinite(reported)) return SETTINGS_WINDOW_MIN.height
+  return Math.max(SETTINGS_WINDOW_MIN.height, Math.round(reported))
+}
+
 /**
  * 880-wide leftover at the menu-bar / workArea row (Tony: Y=39, 880×133).
  * Mid-flow 880×816 cards are a different bug (`isForbiddenMidFlowCard`).
