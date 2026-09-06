@@ -180,8 +180,25 @@ a { color: var(--accent); text-decoration: none; }
 .geo-corner-map svg { display: block; width: 100%; height: auto; max-height: 120px; }
 .geo-live { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
 .rt-world { padding-bottom: 10px; }
-.rt-world .world { display: block; width: 100%; height: auto; max-height: 420px; }
+.rt-world .world { display: block; width: 100%; height: auto; min-height: 280px; max-height: 480px; }
 .rt-split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; align-items: start; }
+.ov-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.vol { position: relative; }
+.vol-row {
+  display: grid; grid-template-columns: 1fr auto auto; gap: 8px; align-items: center;
+  padding: 6px 8px; position: relative; font-size: 12px;
+}
+.vol-bar {
+  position: absolute; inset: 2px auto 2px 0; background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-radius: 4px; z-index: 0;
+}
+.vol-row > * { position: relative; z-index: 1; }
+.rt-row {
+  display: grid; grid-template-columns: 88px minmax(0, 1fr) minmax(0, 1.4fr) 72px;
+  gap: 8px; align-items: center; padding: 6px 2px; border-bottom: 1px solid var(--hair); font-size: 12px;
+}
+.rt-row .ago { font-family: var(--mono); font-size: 10px; color: var(--ink3); text-align: right; }
+@media (max-width: 980px) { .ov-pair, .rt-row { grid-template-columns: 1fr; } }
 .geo-bar { display: block; height: 3px; margin-top: 4px; background: var(--accent); max-width: 100%; }
 @media (max-width: 980px) { .geo-corner, .geo-live, .rt-split { grid-template-columns: 1fr; } }
 .key-form { display: grid; gap: 8px; margin: 0 0 14px; }
@@ -535,6 +552,11 @@ function renderWorldMap(data: DashboardPayload): string {
   </article>`
 }
 
+function chipVal(chips: { key: string; value: string }[], key: string): string | null {
+  const hit = chips.find((c) => c.key === key)
+  return hit && !looksLikeSecret(hit.value) ? hit.value : null
+}
+
 function renderEvents(events: ConsoleEvent[]): string {
   if (!events.length) return '<div class="empty">No events yet.</div>'
   return events
@@ -545,14 +567,59 @@ function renderEvents(events: ConsoleEvent[]): string {
         .map((c) => `<span class="chip">${esc(c.key)} ${esc(c.value)}</span>`)
         .join('')
       const profile = e.hostname || e.email || MISSING
-      return `<div class="event" data-event="${esc(e.id)}">
+      return `<div class="rt-row" data-event="${esc(e.id)}">
         <div class="event-name">${esc(name)}</div>
         <div class="event-profile">${field(profile === MISSING ? null : profile)}</div>
         <div class="event-chips">${chips}</div>
-        <div class="event-time">${esc(when(e.ts))}</div>
+        <div class="ago">${esc(when(e.ts))}</div>
       </div>`
     })
     .join('')
+}
+
+function renderTopLists(data: DashboardPayload): string {
+  const devices = data.profiles.slice(0, 8)
+  const maxDev = Math.max(1, devices.length)
+  const kinds = new Map<string, number>()
+  for (const e of data.events) {
+    const name = looksLikeSecret(e.name) ? 'event' : e.name
+    kinds.set(name, (kinds.get(name) ?? 0) + 1)
+  }
+  const kindRows = [...kinds.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8)
+  const maxKind = Math.max(1, ...kindRows.map(([, n]) => n))
+  const deviceBody = devices
+    .map((r, i) => {
+      const who = r.hostname || r.email || r.device
+      const pct = Math.max(10, Math.round(((maxDev - i) / maxDev) * 100))
+      return `<div class="vol-row" data-toplist-device="${esc(r.device)}">
+        <span class="vol-bar" style="width:${pct}%"></span>
+        <span>${field(who)}</span>
+        <span class="muted">${field(r.city)}</span>
+        <span>${r.live ? '<span class="pill up">live</span>' : '<span class="muted">idle</span>'}</span>
+      </div>`
+    })
+    .join('')
+  const kindBody = kindRows
+    .map(([name, n]) => {
+      const pct = Math.max(10, Math.round((n / maxKind) * 100))
+      return `<div class="vol-row" data-toplist-event="${esc(name)}">
+        <span class="vol-bar" style="width:${pct}%"></span>
+        <span>${esc(name)}</span>
+        <span class="muted">${n}</span>
+        <span></span>
+      </div>`
+    })
+    .join('')
+  return `<div class="ov-pair" data-overview-toplists>
+    <article class="card" style="padding-bottom:10px">
+      <p class="eyebrow">Top devices</p>
+      ${deviceBody || '<div class="empty">No seats yet.</div>'}
+    </article>
+    <article class="card" style="padding-bottom:10px">
+      <p class="eyebrow">Top events</p>
+      ${kindBody || '<div class="empty">No events yet.</div>'}
+    </article>
+  </div>`
 }
 
 function renderProfiles(rows: ProfileRow[], osFilter?: string): string {
@@ -732,7 +799,9 @@ export function renderConsole(data: DashboardPayload): string {
         <td class="muted">${esc(when(e.ts))}</td>
         <td>${esc(looksLikeSecret(e.name) ? 'event' : e.name)}</td>
         <td>${field(e.hostname || e.email)}</td>
-        <td>${e.chips.map((c) => `<span class="chip">${esc(c.key)} ${esc(c.value)}</span>`).join('')}</td>
+        <td>${field(chipVal(e.chips, 'city'))}</td>
+        <td class="muted">${esc(chipVal(e.chips, 'device') || MISSING)}</td>
+        <td class="muted">${esc(chipVal(e.chips, 'os') || MISSING)}</td>
       </tr>`
     })
     .join('')
@@ -814,6 +883,7 @@ svg path { vector-effect: non-scaling-stroke; }
         ${kpiCard({ title: 'Time saved', value: data.roi.timeSaved, sub: data.roi.timeSavedSub, spark: '' })}
         ${kpiCard({ title: 'Value', value: data.roi.value, sub: data.roi.valueSub, spark: '' })}
       </div>
+      ${renderTopLists(data)}
       <div class="ov-split">
         <article class="card activity-feed" style="padding-bottom:10px" data-overview-activity>
           <p class="eyebrow">Activity</p>
@@ -866,10 +936,10 @@ svg path { vector-effect: non-scaling-stroke; }
       <article class="card" style="padding-bottom:10px">
         <p class="eyebrow">Events</p>
         <input class="search-bar" id="events-search" type="search" placeholder="Search events, computers, SSO, country…" autocomplete="off">
+        <table id="events-table"><thead><tr><th>Created at</th><th>Name</th><th>Profile</th><th>City</th><th>Device</th><th>OS</th></tr></thead><tbody>${eventRows}</tbody></table>
         ${
           eventRows
-            ? `<table id="events-table"><thead><tr><th>When</th><th>Kind</th><th>Who</th><th>Detail</th></tr></thead><tbody>${eventRows}</tbody></table>
-               <div class="sub muted" style="padding-bottom:8px">Real HMAC ingest only. Token-shaped values are dropped. Empty search shows every row.</div>`
+            ? '<div class="sub muted" style="padding-bottom:8px">Real HMAC ingest only. Token-shaped values are dropped. Empty search shows every row.</div>'
             : '<div class="empty">No events yet.</div>'
         }
       </article>
