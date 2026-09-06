@@ -320,6 +320,37 @@ describe('SettingsSchema', () => {
     expect(result.success).toBe(true)
   })
 
+  it('defaults autoStartMeetings ON, and a profile without the key still parses', () => {
+    expect(DEFAULT_SETTINGS.autoStartMeetings).toEqual({
+      enabled: true,
+      zoom: true,
+      teams: true,
+      meet: true
+    })
+    expect(SettingsSchema.parse(DEFAULT_SETTINGS).autoStartMeetings).toEqual({
+      enabled: true,
+      zoom: true,
+      teams: true,
+      meet: true
+    })
+    const { autoStartMeetings: _omit, ...without } = DEFAULT_SETTINGS
+    expect(SettingsSchema.parse(without).autoStartMeetings).toEqual({
+      enabled: true,
+      zoom: true,
+      teams: true,
+      meet: true
+    })
+    const parsed = SettingsSchema.safeParse({
+      ...DEFAULT_SETTINGS,
+      autoStartMeetings: { enabled: false, zoom: false, teams: true, meet: true }
+    })
+    expect(parsed.success).toBe(true)
+    if (parsed.success) {
+      expect(parsed.data.autoStartMeetings.enabled).toBe(false)
+      expect(parsed.data.autoStartMeetings.zoom).toBe(false)
+    }
+  })
+
   it('defaults playListenChime, requireConsentIndicator, and lastConsentReminderAt', () => {
     expect(DEFAULT_SETTINGS.operatorUrl).toBe('')
     expect(DEFAULT_SETTINGS.operatorIngestSecret).toBe('')
@@ -948,6 +979,7 @@ describe('local AI IPC channel constants', () => {
     expect(IPC.localTranscriptAppend).toBe('local-ai:transcript:append')
     expect(IPC.localTranscriptResync).toBe('local-ai:transcript:resync')
     expect(IPC.localTranscriptEnd).toBe('local-ai:transcript:end')
+    expect(IPC.meetingAutoStart).toBe('meeting:auto-start')
     const values = Object.values(IPC)
     expect(new Set(values).size).toBe(values.length)
   })
