@@ -15,24 +15,28 @@ import {
 } from './settings-bounds'
 
 describe('MQA-286 — Settings open path sets full min bounds', () => {
-  it('Apple-grade Settings min is 880×560, never Hide 8×2 or Island peek', () => {
+  it('Apple-grade Settings min is 880×800, never Hide 8×2 or Island peek', () => {
     expect(SETTINGS_WINDOW_MIN.width).toBe(880)
-    expect(SETTINGS_WINDOW_MIN.height).toBe(560)
-    expect(settingsSurfaceMinSize()).toEqual({ width: 880, height: 560 })
+    expect(SETTINGS_WINDOW_MIN.height).toBe(800)
+    expect(settingsSurfaceMinSize()).toEqual({ width: 880, height: 800 })
     expect(isHideOrIslandParkSize({ width: 8, height: 2 })).toBe(true)
     expect(isHideOrIslandParkSize({ width: 142, height: 19 })).toBe(true)
-    expect(isHideOrIslandParkSize({ width: 880, height: 560 })).toBe(false)
+    expect(isHideOrIslandParkSize({ width: 880, height: 800 })).toBe(false)
     expect(isCrushedSettingsBounds({ width: 8, height: 800 })).toBe(true)
     expect(isCrushedSettingsBounds({ width: 132, height: 15 })).toBe(true)
-    expect(isCrushedSettingsBounds({ width: 880, height: 560 })).toBe(false)
+    expect(isCrushedSettingsBounds({ width: 880, height: 560 })).toBe(true)
+    expect(isCrushedSettingsBounds({ width: 880, height: 800 })).toBe(false)
     expect(settingsOpenRejectsPark({ width: 8, height: 2 })).toBe(true)
-    expect(settingsOpenRejectsPark({ width: 880, height: 560 })).toBe(false)
+    expect(settingsOpenRejectsPark({ width: 880, height: 560 })).toBe(true)
+    expect(settingsOpenRejectsPark({ width: 880, height: 800 })).toBe(false)
     expect(settingsOpenRejectsPark({ width: 880, height: 325 })).toBe(true)
     expect(settingsOpenRejectsPark(TONY_LIVE_SETTINGS_CRUSH)).toBe(true)
-    expect(settingsContentHeight(TONY_LIVE_SETTINGS_CRUSH.height)).toBe(560)
-    expect(settingsContentHeight(325)).toBe(560)
-    expect(settingsContentHeight(792)).toBe(792)
-    expect(settingsContentHeight(Number.NaN)).toBe(560)
+    expect(settingsContentHeight(TONY_LIVE_SETTINGS_CRUSH.height)).toBe(800)
+    expect(settingsContentHeight(325)).toBe(800)
+    expect(settingsContentHeight(560)).toBe(800)
+    expect(settingsContentHeight(792)).toBe(800)
+    expect(settingsContentHeight(900)).toBe(900)
+    expect(settingsContentHeight(Number.NaN)).toBe(800)
   })
 
   it('Windows and Mac share the same Settings min (no fake notch width)', () => {

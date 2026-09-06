@@ -52,6 +52,8 @@ describe('MQA-286 — Settings open path sets min bounds', () => {
     expect(app).toMatch(/view === 'settings' \? 'h-full min-h-0'/)
     expect(app).toMatch(/view === 'settings' \? 'p-1\.5'/)
     expect(app).toMatch(/flex min-h-0 flex-1 flex-col/)
+    expect(index).toMatch(/if \(!win\.isVisible\(\)\) win\.showInactive\(\)/)
+    expect(index).toMatch(/function restoreBarWidth\(\): void/)
   })
 
   it('CLI Connect IPC is zero-token connectCliSession, never billed testCli', () => {
@@ -70,17 +72,20 @@ describe('MQA-286 — Settings open path sets min bounds', () => {
     expect(settingsOpenRejectsPark({ width: 880, height: 325 })).toBe(true)
     expect(settingsOpenRejectsPark({ width: 8, height: 2 })).toBe(true)
     expect(settingsOpenRejectsPark({ width: 132, height: 15 })).toBe(true)
-    expect(settingsOpenRejectsPark({ width: 880, height: 560 })).toBe(false)
+    expect(settingsOpenRejectsPark({ width: 880, height: 560 })).toBe(true)
+    expect(settingsOpenRejectsPark({ width: 880, height: 800 })).toBe(false)
     const mac = settingsOpenRect(TOTOS_MAC, 8)
-    expect(mac.height).toBeGreaterThanOrEqual(560)
+    expect(mac.height).toBeGreaterThanOrEqual(800)
     expect(mac.height).not.toBe(325)
+    expect(mac.height).not.toBe(560)
     expect(mac.width).toBe(880)
   })
 
-  it('settingsOpenRect is 880×560 at islandSafeTop, never Hide 8×2 or Island peek (Mac + Windows)', () => {
+  it('settingsOpenRect is 880×800 at islandSafeTop, never Hide 8×2 or Island peek (Mac + Windows)', () => {
     const mac = settingsOpenRect(TOTOS_MAC, 8)
     expect(mac.width).toBe(SETTINGS_WINDOW_MIN.width)
     expect(mac.height).toBe(SETTINGS_WINDOW_MIN.height)
+    expect(mac.height).toBe(800)
     expect(mac.y).toBe(39)
     expect(mac.y).not.toBe(0)
     expect(isHideOrIslandParkSize(mac)).toBe(false)
@@ -88,7 +93,7 @@ describe('MQA-286 — Settings open path sets min bounds', () => {
 
     const win = settingsOpenRect(WIN_DISPLAY, 8)
     expect(win.width).toBe(880)
-    expect(win.height).toBe(560)
+    expect(win.height).toBe(800)
     expect(win.y).toBe(0)
     expect(isHideOrIslandParkSize(win)).toBe(false)
   })
@@ -97,9 +102,9 @@ describe('MQA-286 — Settings open path sets min bounds', () => {
 describe('Ultron Mac show runbook stays the R01–R03 gate', () => {
   const show = readFileSync(join(__dirname, '../../docs/qa/MAC-SHOW-R01-R03.md'), 'utf8')
 
-  it('names the live crush, the 880×560 open, and forbids packing Latest', () => {
+  it('names the live crush, the 880×800 open, and forbids packing Latest', () => {
     expect(show).toMatch(/x=460 y=39 width=880 height=325/)
-    expect(show).toMatch(/880×560/)
+    expect(show).toMatch(/880×800/)
     expect(show).toMatch(/#120022/)
     expect(show).toMatch(/isFatHoverTrigger/)
     expect(show).toMatch(/This agent does not pack/)
@@ -118,8 +123,8 @@ describe('DESIGN.md Settings surface matches the north star', () => {
   const design = readFileSync(join(__dirname, '../../docs/design/DESIGN.md'), 'utf8')
   const north = readFileSync(join(__dirname, '../../docs/design/METIS-PLATFORM-NORTH-STAR.md'), 'utf8')
 
-  it('Settings is 880×560 dark glass, never a 320–360 leftover card', () => {
-    expect(design).toMatch(/880×560/)
+  it('Settings is 880×800 dark glass, never a 320–360 leftover card', () => {
+    expect(design).toMatch(/880×800/)
     expect(design).toMatch(/#120022/)
     expect(design).not.toMatch(/compact 320–360px/)
     expect(design).toMatch(/METIS-PLATFORM-NORTH-STAR/)
