@@ -182,7 +182,7 @@ describe('product sidebar (#105)', () => {
     expect(overview).toContain('data-geo-tab="cities"')
     expect(overview).toContain('data-device-card')
     expect(overview).toContain('data-device-tab="os"')
-    expect(overview).toContain('class="vol-bar"')
+    expect(overview).toContain('class="vol-bar blue"')
     expect(overview).toContain('Longueuil')
     expect(overview).toContain('Tonys-MacBook-Pro')
     expect(overview).toContain('data-people-row')
