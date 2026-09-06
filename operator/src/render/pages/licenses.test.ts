@@ -10,6 +10,8 @@ describe('renderLicenses (QA fixture)', () => {
     const html = renderLicenses(data, CTX)
     expect(html).toContain('data-license-generate')
     expect(html).toContain('Generate license')
+    expect(html).toContain('Settings → Operator → Operator license')
+    expect(html).not.toContain('Identity → License')
     expect(html).toContain('>Licenses<')
     if (data.licenses.issued.length) {
       expect(html).toContain('data-license-last4=')
