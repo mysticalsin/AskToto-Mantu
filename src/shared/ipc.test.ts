@@ -217,6 +217,12 @@ describe('SettingsSchema', () => {
     expect(SettingsSchema.parse(withoutLast).lastClickedCli).toBeNull()
   })
 
+  it('defaults askCaveman to full — Ask answers use locked caveman until stop / normal mode', () => {
+    expect(DEFAULT_SETTINGS.askCaveman).toBe('full')
+    const { askCaveman: _omit, ...without } = DEFAULT_SETTINGS
+    expect(SettingsSchema.parse(without).askCaveman).toBe('full')
+  })
+
   it('defaults the time-saved usage counters and assumption, and a profile without them parses', () => {
     const s = SettingsSchema.parse(DEFAULT_SETTINGS)
     expect(s.usageStats).toEqual({ meetingsSummarized: 0, conversationMinutes: 0, firstMeetingAt: 0 })
