@@ -446,10 +446,28 @@ describe('Dust instant validate proves a live connection', () => {
     expect(setup()).toMatch(/Checking Dust connection/)
   })
 
+  it('Reconnect installs the CLI first and surfaces a human install error, not Connected', () => {
+    const start = blockAfter('const startDustOAuth = async', '\n  // Poll at the server-given cadence')
+    expect(start).toMatch(/dustInstallCli/)
+    expect(start.indexOf('dustInstallCli')).toBeLessThan(start.indexOf('dustLoginBegin'))
+    expect(start).toMatch(/if \(!installed\.ok\)/)
+    expect(start).toMatch(/phase: 'error'/)
+    expect(start).not.toMatch(/Connected/)
+  })
+
   it('never auto-sends a chat as the connection test', () => {
     const body = setup()
     expect(body).not.toMatch(/createConversation|postUserMessage|streamAgent/)
     expect(body).toMatch(/Never auto-sends a chat/)
+  })
+})
+
+describe('Settings Bar rest orb picker', () => {
+  it('wires OverlayOrbPicker next to Overlay chrome', () => {
+    expect(source).toMatch(/OverlayOrbPicker/)
+    expect(source).toMatch(/overlayOrbStyle: id/)
+    expect(source).toMatch(/Applies when Overlay chrome is Bar/)
+    expect(source).not.toMatch(/\u2014/)
   })
 })
 
