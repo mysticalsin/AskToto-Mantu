@@ -24,56 +24,38 @@ const CSS = `
   --ink: rgba(255,255,255,0.94);
   --ink2: rgba(255,255,255,0.55);
   --ink3: rgba(255,255,255,0.38);
-  --accent: #7C8CF8;
-  --ok: #83C092;
-  --danger: #F0717A;
-  --land: #2a2a2e;
+  --accent: #2563EB;
+  --live: #10B981;
+  --ok: #16A34A;
+  --danger: #DC2626;
+  --land: #3f3f46;
   --chart-1: #1a1a1d;
   --chart-2: #2a2a2e;
   --chart-3: #52525b;
   --chart-4: #a1a1aa;
-  --chart-5: #e4e4e7;
+  --chart-5: #2563EB;
   --nav: #0d0d0f;
   --nav-on: rgba(255,255,255,0.08);
-  --dot: rgba(255,255,255,0.055);
+  --dot: rgba(255,255,255,0.045);
   --mono: 'Geist Mono', ui-monospace, SFMono-Regular, monospace;
   --sans: 'Geist', Geist, Inter, system-ui, sans-serif;
 }
 [data-theme="light"] {
-  --bg: #f4f4f5;
-  --panel: #ffffff;
-  --hair: rgba(15,15,17,0.10);
-  --ink: #18181b;
-  --ink2: rgba(24,24,27,0.62);
-  --ink3: rgba(24,24,27,0.42);
+  --bg: #FFFFFF;
+  --panel: #FFFFFF;
+  --hair: #EDEDED;
+  --ink: #18181B;
+  --ink2: #71717A;
+  --ink3: #A1A1AA;
   --land: #E5E7EB;
   --chart-1: #e4e4e7;
   --chart-2: #d4d4d8;
   --chart-3: #a1a1aa;
   --chart-4: #52525b;
-  --chart-5: #18181b;
-  --nav: #fafafa;
-  --nav-on: rgba(15,15,17,0.06);
-  --dot: rgba(15,15,17,0.08);
-}
-@media (prefers-color-scheme: light) {
-  :root:not([data-theme="dark"]) {
-    --bg: #f4f4f5;
-    --panel: #ffffff;
-    --hair: rgba(15,15,17,0.10);
-    --ink: #18181b;
-    --ink2: rgba(24,24,27,0.62);
-    --ink3: rgba(24,24,27,0.42);
-    --land: #E5E7EB;
-    --chart-1: #e4e4e7;
-    --chart-2: #d4d4d8;
-    --chart-3: #a1a1aa;
-    --chart-4: #52525b;
-    --chart-5: #18181b;
-    --nav: #fafafa;
-    --nav-on: rgba(15,15,17,0.06);
-    --dot: rgba(15,15,17,0.08);
-  }
+  --chart-5: #2563EB;
+  --nav: #FFFFFF;
+  --nav-on: #F4F4F5;
+  --dot: rgba(24,24,27,0.06);
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; height: 100%; color: var(--ink); font: 12px/1.45 var(--sans); }
@@ -89,8 +71,13 @@ a { color: var(--accent); text-decoration: none; }
   background: var(--nav); border-right: 1px solid var(--hair);
   padding: 14px 12px 16px; min-height: 100vh; position: sticky; top: 0;
 }
-.rail-brand { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.rail-brand h1 { margin: 0; font-size: 14px; font-weight: 650; letter-spacing: -0.03em; }
+.rail-brand { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.rail-brand h1 { margin: 0; font-size: 15px; font-weight: 650; letter-spacing: -0.04em; }
+.rail-sub { margin: -4px 0 2px; font: 10px/1.2 var(--mono); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink3); }
+.access-chip {
+  font: 10px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase;
+  padding: 3px 7px; border-radius: 999px; border: 1px solid var(--hair); color: var(--live);
+}
 .rail-search {
   width: 100%; border: 1px solid var(--hair); background: var(--panel); color: var(--ink);
   border-radius: 8px; padding: 7px 10px; font: 12px var(--sans);
@@ -103,11 +90,16 @@ a { color: var(--accent); text-decoration: none; }
   text-transform: uppercase; color: var(--ink3); margin: 0 6px 4px;
 }
 .nav-item {
-  display: block; padding: 7px 8px; border-radius: 8px; color: var(--ink);
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 8px; border-radius: 8px; color: var(--ink);
   font-size: 13px; font-weight: 550;
 }
 .nav-item:hover { background: var(--nav-on); }
 .nav-item.on { background: var(--nav-on); font-weight: 650; }
+.nav-count {
+  min-width: 18px; text-align: center; font: 10px/16px var(--mono);
+  border-radius: 999px; background: var(--accent); color: #fff; padding: 0 5px;
+}
 .rail-foot { margin-top: auto; display: flex; flex-direction: column; gap: 8px; padding-top: 12px; }
 .who { font-family: var(--mono); font-size: 10px; color: var(--ink2); word-break: break-all; }
 .theme-btn {
@@ -162,8 +154,7 @@ a { color: var(--accent); text-decoration: none; }
   font: 11px/1 var(--mono); letter-spacing: 0.04em; text-transform: uppercase;
   padding: 4px 9px; border-radius: 999px; cursor: pointer;
 }
-.tab.on { background: var(--chart-5); color: var(--bg); }
-[data-theme="light"] .tab.on, :root:not([data-theme="dark"]) .tab.on { color: #0a0a0b; background: #18181b; }
+.tab.on { background: var(--accent); color: #fff; }
 .pill {
   display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 10px;
   font-family: var(--mono); border: 1px solid var(--hair); color: var(--ink2);
@@ -200,7 +191,7 @@ button, .btn {
   background: transparent; color: var(--ink); border: 1px solid var(--hair);
   padding: 4px 9px; font-size: 11px; cursor: pointer; border-radius: 999px;
 }
-button.primary { background: var(--chart-5); color: var(--bg); border-color: transparent; font-weight: 600; }
+button.primary, a.btn.primary { background: var(--accent); color: #fff; border-color: transparent; font-weight: 600; }
 button.danger { color: var(--danger); }
 pre, textarea {
   width: 100%; background: color-mix(in srgb, var(--bg) 70%, #000); color: var(--ink);
@@ -231,8 +222,34 @@ textarea { min-height: 120px; }
 .event-profile { color: var(--ink2); }
 .event-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .event-time { font-family: var(--mono); font-size: 10px; color: var(--ink3); text-align: right; }
-.live { display: inline-block; padding: 1px 7px; border-radius: 999px; background: #111; color: #fff; font: 10px var(--mono); letter-spacing: 0.08em; }
-[data-theme="light"] .live { background: #18181b; }
+.live { display: inline-block; padding: 1px 7px; border-radius: 999px; background: var(--live); color: #052e1b; font: 10px var(--mono); letter-spacing: 0.08em; }
+[data-theme="light"] .live { background: #10B981; color: #052e1b; }
+.approval {
+  display: inline-block; padding: 1px 7px; border-radius: 999px;
+  font: 10px/1.4 var(--mono); letter-spacing: 0.04em; border: 1px solid var(--hair);
+}
+.approval.pending { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--hair)); }
+.approval.approved { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--hair)); }
+.approval.revoked { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--hair)); }
+.works { padding-bottom: 12px; }
+.works-path {
+  list-style: none; margin: 0 0 12px; padding: 0;
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px;
+}
+.works-path li {
+  position: relative; padding: 10px 10px 10px 12px;
+  border: 1px solid var(--hair); border-radius: 10px; background: var(--bg);
+}
+.works-path li.done { border-color: color-mix(in srgb, var(--ok) 45%, var(--hair)); }
+.works-path li.need { border-color: color-mix(in srgb, var(--accent) 45%, var(--hair)); }
+.works-path b {
+  display: block; font: 10px/1 var(--mono); letter-spacing: 0.12em;
+  text-transform: uppercase; color: var(--ink3); margin-bottom: 6px;
+}
+.works-path span { display: block; font-weight: 650; letter-spacing: -0.02em; }
+.works-path small { display: block; margin-top: 4px; color: var(--ink2); font-size: 11px; }
+@media (max-width: 980px) { .works-path { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
 .page[hidden] { display: none !important; }
 @media (max-width: 980px) {
   .shell { grid-template-columns: 1fr; }
@@ -292,17 +309,59 @@ function kpiCard(opts: {
   </article>`
 }
 
-function renderNav(): string {
+function approvalPill(approval: string): string {
+  const v = approval.trim().toLowerCase() || 'pending'
+  return `<span class="approval ${esc(v)}">${esc(v)}</span>`
+}
+
+function renderNav(pendingApprovals = 0): string {
   const sections = NAV_SECTIONS.map((sec) => {
     const items = sec.items
-      .map(
-        (item) =>
-          `<a class="nav-item" data-nav="${item.id}" href="#${item.id}">${esc(item.label)}</a>`
-      )
+      .map((item) => {
+        const count =
+          item.id === 'licenses' && pendingApprovals > 0
+            ? `<span class="nav-count">${pendingApprovals}</span>`
+            : ''
+        return `<a class="nav-item" data-nav="${item.id}" href="#${item.id}">${esc(item.label)}${count}</a>`
+      })
       .join('')
     return `<div class="nav-sec"><p>${esc(sec.label)}</p>${items}</div>`
   }).join('')
   return `<nav id="rail-nav">${sections}</nav>`
+}
+
+function renderInstallWorks(data: DashboardPayload): string {
+  const pending = data.licenses.rows.filter((r) => r.approval !== 'approved')
+  const vaulted = data.keys.vault.some((v) => v.status === 'active')
+  const approved = data.roi.approved
+  const seats = data.profiles.length
+  const body = pending.length
+    ? `<table data-pending-seats><thead><tr><th>Computer</th><th>SSO email</th><th>License</th><th>Approval</th><th></th></tr></thead><tbody>${pending
+        .map((r) => {
+          const id = esc(r.device)
+          return `<tr data-device="${id}" data-approval="${esc(r.approval)}">
+            <td>${field(r.hostname)}</td>
+            <td>${field(r.email)}</td>
+            <td>${field(r.license)}</td>
+            <td>${approvalPill(r.approval)}</td>
+            <td>${
+              r.approval === 'approved'
+                ? ''
+                : `<button class="primary" data-license-approve="${id}">Approve</button>`
+            }</td>
+          </tr>`
+        })
+        .join('')}</tbody></table>`
+    : '<div class="empty">No seats waiting. A new heartbeat lands pending until Tony approves it.</div>'
+  return `<article class="card works" data-install-works>
+    <p class="eyebrow">Install → works</p>
+    <ol class="works-path">
+      <li data-step="checkin" class="${seats ? 'done' : 'need'}"><b>Check in</b><span>Seat checks in</span><small>${seats ? `${seats} real` : 'waiting for heartbeat'}</small></li>
+      <li data-step="approve" class="${pending.length ? 'need' : approved ? 'done' : ''}"><b>Approve</b><span>Tony approves</span><small>${pending.length ? `${pending.length} pending` : approved ? `${approved} approved` : 'no seats yet'}</small></li>
+      <li data-step="keys" class="${vaulted && approved ? 'done' : 'need'}"><b>Keys</b><span>Platform keys</span><small>${vaulted ? 'vault ready' : 'add a key on Keys'}</small></li>
+    </ol>
+    ${body}
+  </article>`
 }
 
 function renderEvents(events: ConsoleEvent[]): string {
@@ -338,7 +397,7 @@ function renderProfiles(rows: ProfileRow[], osFilter?: string): string {
         <td class="muted">${esc(r.os)}</td>
         <td class="muted">${esc(r.appVersion)}</td>
         <td>${field(r.license)}</td>
-        <td>${esc(r.approval)}</td>
+        <td>${approvalPill(r.approval)}</td>
         <td class="muted">${esc(r.country || MISSING)}${r.city ? ` · ${esc(r.city)}` : ''}</td>
         <td class="muted">${esc(when(r.lastSeen))}</td>
         <td>${r.live ? '<span class="pill up">live</span>' : '<span class="muted">idle</span>'}</td>
@@ -364,7 +423,7 @@ function renderLicenses(data: DashboardPayload): string {
         <td>${field(r.hostname)}</td>
         <td>${field(r.email)}</td>
         <td>${field(r.license)}</td>
-        <td>${esc(r.approval)}</td>
+        <td>${approvalPill(r.approval)}</td>
         <td class="muted">${esc(r.os)}</td>
         <td class="muted">${esc(r.appVersion)}</td>
         <td>${act}</td>
@@ -532,8 +591,9 @@ export function renderConsole(data: DashboardPayload): string {
   void FORBIDDEN_NAV
   void NAV_IDS
 
+  const pendingApprovals = data.licenses.rows.filter((r) => r.approval !== 'approved').length
   return `<!doctype html>
-<html lang="en"><head>
+<html lang="en" data-theme="dark"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Métis Operator</title>
 <style>${CSS}${STATUS_BADGE_CSS}
@@ -550,9 +610,10 @@ svg path { vector-effect: non-scaling-stroke; }
 </defs></svg>
 <div class="shell">
   <aside class="rail">
-    <div class="rail-brand"><h1>Métis</h1></div>
+    <div class="rail-brand"><h1>Métis</h1><span class="access-chip" data-access-solid>Access</span></div>
+    <p class="rail-sub">Operator</p>
     <input class="rail-search" id="nav-search" type="search" placeholder="Search" autocomplete="off">
-    ${renderNav()}
+    ${renderNav(pendingApprovals)}
     <div class="rail-foot">
       <div class="who">${esc(data.email)}</div>
       <button class="theme-btn" id="theme-btn" type="button">Theme</button>
@@ -566,6 +627,7 @@ svg path { vector-effect: non-scaling-stroke; }
     </header>
 
     <section class="page wrap" data-page="overview">
+      ${renderInstallWorks(data)}
       <p class="eyebrow">Fleet</p>
       <div class="kpis">
         ${kpiCard({ title: 'Live seats', value: String(data.roi.liveSeats), sub: 'heartbeat &lt; 2 min · real devices', spark: sparklineLine(k.liveSeries) })}
@@ -754,7 +816,8 @@ svg path { vector-effect: non-scaling-stroke; }
     <section class="page wrap" data-page="rules" hidden>
       <article class="card" style="padding-bottom:10px">
         <p class="eyebrow">Rules</p>
-        <div class="rule"><h3>Access only</h3><p>Console and admin APIs require Cloudflare Access email-code. Allowlist tony.walteur@gmail.com and twalteur@amaris.com. No homemade login.</p></div>
+        <div class="rule"><h3>Access only</h3><p>Console and admin APIs require Cloudflare Access email-code. Allowlist tony.walteur@gmail.com and twalteur@amaris.com. No homemade login. Access-solid.</p></div>
+        <div class="rule"><h3>Install → works</h3><p>A seat checks in, Tony approves it, then Métis uses Operator platform keys. No paste by default. Unapproved seats fail loud.</p></div>
         <div class="rule"><h3>Seat approval</h3><p>A device stays pending until Tony approves it on Licenses. Unapproved seats get fundedProviders [] and 403 on /v1/use. Live pending: ${data.profiles.filter((p) => p.approval !== 'approved').length}.</p></div>
         <div class="rule"><h3>Platform keys first</h3><p>Approved seats use Operator vault keys (NIM, Anthropic, DeepSeek, more). Manual Métis Settings keys stay as fallback. CLI still wins when connected.</p></div>
         <div class="rule"><h3>CRM never auto-send</h3><p>Pushes ingest status only. Tony Retry marks retry_requested. The seat processes that id. Intelligence / import / index never send.</p></div>
@@ -802,7 +865,7 @@ svg path { vector-effect: non-scaling-stroke; }
     <section class="page wrap" data-page="keys" hidden>
       <article class="card" style="padding-bottom:10px">
         <p class="eyebrow">Keys</p>
-        <div class="sub muted" style="padding-bottom:8px">Tony adds LLM APIs and Cloudflare here. last4 only. Never a secret, cipher, token, or grant. CLI tokens stay on the seat.</div>
+        <div class="sub muted" style="padding-bottom:8px">Tony adds LLM APIs and Cloudflare here. last4 only. Never a secret, cipher, token, or grant. After a seat is approved, these keys are the default Ask path. CLI tokens stay on the seat.</div>
         <table>
           <thead><tr><th>Binding</th><th>Status</th></tr></thead>
           <tbody>
@@ -886,15 +949,14 @@ if (search) search.addEventListener('input', () => {
 })
 const themeBtn = document.getElementById('theme-btn')
 function applyTheme(v) {
-  if (v) document.documentElement.setAttribute('data-theme', v)
-  else document.documentElement.removeAttribute('data-theme')
+  const theme = v === 'light' ? 'light' : 'dark'
+  document.documentElement.setAttribute('data-theme', theme)
 }
-try { applyTheme(localStorage.getItem('metis-operator-theme')) } catch (e) {}
+try { applyTheme(localStorage.getItem('metis-operator-theme')) } catch (e) { applyTheme('dark') }
 if (themeBtn) themeBtn.addEventListener('click', () => {
-  const cur = document.documentElement.getAttribute('data-theme')
-  const next = cur === 'dark' ? 'light' : cur === 'light' ? '' : 'dark'
+  const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light'
   applyTheme(next)
-  try { if (next) localStorage.setItem('metis-operator-theme', next); else localStorage.removeItem('metis-operator-theme') } catch (e) {}
+  try { localStorage.setItem('metis-operator-theme', next) } catch (e) {}
 })
 document.querySelectorAll('[data-scale]').forEach((b) => b.addEventListener('click', () => {
   document.querySelectorAll('[data-scale]').forEach((x) => x.classList.toggle('on', x === b))
