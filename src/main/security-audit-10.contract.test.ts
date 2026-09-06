@@ -12,6 +12,15 @@ function sliceBetween(from: string, to: string): string {
   return indexSrc.slice(start, end)
 }
 
+describe('AUDIT-10 — Settings surface stays on the isolated main window', () => {
+  it('windowMode settings still goes through assertMainWindow and never a second BrowserWindow', () => {
+    const body = sliceBetween('ipcMain.handle(IPC.windowMode', 'ipcMain.handle(IPC.windowMinimize')
+    expect(body).toMatch(/assertMainWindow\(e\)/)
+    expect(body).toMatch(/applySettingsSurface/)
+    expect(indexSrc).not.toMatch(/new BrowserWindow\(\{[\s\S]{0,200}settings/)
+  })
+})
+
 describe('AUDIT-10 — askStart never forwards Error.message to the overlay', () => {
   it('the outer catch sends a constant sentence except for skill-lock integrity', () => {
     const start = indexSrc.lastIndexOf('ipcMain.handle(IPC.askStart')

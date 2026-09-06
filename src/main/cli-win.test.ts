@@ -51,10 +51,13 @@ vi.mock('node:child_process', async (importActual) => {
 // instead of telling the user to install Node (one-click onboarding, 2026-07-16).
 const managedMock = vi.hoisted(() => ({
   managedCliEntry: vi.fn((): { entry: string; version: string } | null => null),
+  managedCliCommand: vi.fn((): { command: string; args: string[]; env: Record<string, string> } | null => null),
   installManagedCli: vi.fn(
     async (_id: string, onProgress: (p: { phase: string }) => void): Promise<{ entry: string; version: string }> => {
       onProgress({ phase: 'downloading' })
-      return { entry: '/managed/cli.js', version: '9.9.9' }
+      const entry = '/tmp/managed-cli/claude/package/cli.js'
+      managedMock.managedCliEntry.mockReturnValue({ entry, version: '9.9.9' })
+      return { entry, version: '9.9.9' }
     }
   )
 }))
@@ -64,6 +67,8 @@ import {
   resolveBin,
   parseWhereOutput,
   npmGlobalBinCandidates,
+  windowsUserBinCandidates,
+  isWindowsDesktopAlias,
   isCmdShim,
   cmdShimSpawn,
   resolveSpawnTarget,
@@ -115,6 +120,49 @@ describe('parseWhereOutput — Windows `where` stdout parsing', () => {
     expect(parseWhereOutput('')).toBeNull()
     expect(parseWhereOutput('C:\\some\\shadow\\claude\n')).toBeNull()
   })
+
+  it('skips Claude Desktop WindowsApps aliases and takes the next launchable hit', () => {
+    const out =
+      'C:\\Users\\tony\\AppData\\Local\\Microsoft\\WindowsApps\\claude.exe\r\nC:\\Users\\tony\\.local\\bin\\claude.exe\r\n'
+    expect(parseWhereOutput(out)).toBe('C:\\Users\\tony\\.local\\bin\\claude.exe')
+  })
+
+  it('returns null when PATH only has a WindowsApps Desktop alias', () => {
+    expect(parseWhereOutput('C:\\Users\\tony\\AppData\\Local\\Microsoft\\WindowsApps\\Claude.exe\r\n')).toBeNull()
+  })
+})
+
+describe('isWindowsDesktopAlias / windowsUserBinCandidates', () => {
+  const savedProfile = process.env.USERPROFILE
+  const savedLocal = process.env.LOCALAPPDATA
+  afterEach(() => {
+    if (savedProfile === undefined) delete process.env.USERPROFILE
+    else process.env.USERPROFILE = savedProfile
+    if (savedLocal === undefined) delete process.env.LOCALAPPDATA
+    else process.env.LOCALAPPDATA = savedLocal
+  })
+
+  it('flags WindowsApps Claude Desktop aliases only', () => {
+    expect(isWindowsDesktopAlias('C:\\Users\\tony\\AppData\\Local\\Microsoft\\WindowsApps\\claude.exe')).toBe(true)
+    expect(isWindowsDesktopAlias('C:\\Users\\tony\\.local\\bin\\claude.exe')).toBe(false)
+  })
+
+  it('lists official Claude Code native folders before npm', () => {
+    process.env.USERPROFILE = 'C:\\Users\\tony'
+    process.env.LOCALAPPDATA = 'C:\\Users\\tony\\AppData\\Local'
+    const c = windowsUserBinCandidates('claude')
+    expect(c[0]).toBe(join('C:\\Users\\tony', '.local', 'bin', 'claude.exe'))
+    expect(c).toContain(join('C:\\Users\\tony\\AppData\\Local', 'Programs', 'Claude Code', 'claude.exe'))
+    expect(c.some((p) => /WindowsApps/i.test(p))).toBe(false)
+  })
+
+  it('lists official Codex native folders', () => {
+    process.env.USERPROFILE = 'C:\\Users\\tony'
+    process.env.LOCALAPPDATA = 'C:\\Users\\tony\\AppData\\Local'
+    const c = windowsUserBinCandidates('codex')
+    expect(c).toContain(join('C:\\Users\\tony', '.local', 'bin', 'codex.exe'))
+    expect(c).toContain(join('C:\\Users\\tony\\AppData\\Local', 'Programs', 'OpenAI', 'Codex', 'bin', 'codex.exe'))
+  })
 })
 
 describe('npmGlobalBinCandidates — Windows npm global-bin fallback paths', () => {
@@ -138,9 +186,11 @@ describe('npmGlobalBinCandidates — Windows npm global-bin fallback paths', () 
   })
 })
 
-describe('resolveBin — Windows: `where` first, then a real-fs APPDATA probe fallback', () => {
+describe('resolveBin — Windows: official native first, then `where`, then APPDATA', () => {
   let tmpDir: string
   const savedAppData = process.env.APPDATA
+  const savedProfile = process.env.USERPROFILE
+  const savedLocal = process.env.LOCALAPPDATA
 
   beforeEach(() => {
     clearBinCache()
@@ -154,6 +204,10 @@ describe('resolveBin — Windows: `where` first, then a real-fs APPDATA probe fa
     rmSync(tmpDir, { recursive: true, force: true })
     if (savedAppData === undefined) delete process.env.APPDATA
     else process.env.APPDATA = savedAppData
+    if (savedProfile === undefined) delete process.env.USERPROFILE
+    else process.env.USERPROFILE = savedProfile
+    if (savedLocal === undefined) delete process.env.LOCALAPPDATA
+    else process.env.LOCALAPPDATA = savedLocal
   })
 
   it('resolves via `where` when it finds a .cmd/.exe hit', async () => {
@@ -166,7 +220,7 @@ describe('resolveBin — Windows: `where` first, then a real-fs APPDATA probe fa
     process.env.APPDATA = tmpDir
     const npmDir = join(tmpDir, 'npm')
     mkdirSync(npmDir, { recursive: true })
-    writeFileSync(join(npmDir, 'appdata-tool.cmd'), '')
+    writeFileSync(join(npmDir, 'appdata-tool.cmd'), '@echo off\r\n')
 
     expect(await resolveBin('appdata-tool')).toBe(join(npmDir, 'appdata-tool.cmd'))
   })
@@ -176,7 +230,7 @@ describe('resolveBin — Windows: `where` first, then a real-fs APPDATA probe fa
     process.env.APPDATA = tmpDir
     const npmDir = join(tmpDir, 'npm')
     mkdirSync(npmDir, { recursive: true })
-    writeFileSync(join(npmDir, 'exe-tool.exe'), '')
+    writeFileSync(join(npmDir, 'exe-tool.exe'), 'MZ')
 
     expect(await resolveBin('exe-tool')).toBe(join(npmDir, 'exe-tool.exe'))
   })
@@ -195,6 +249,32 @@ describe('resolveBin — Windows: `where` first, then a real-fs APPDATA probe fa
     expect(a).toBe('C:\\npm\\cached-tool.cmd')
     expect(b).toBe('C:\\npm\\cached-tool.cmd')
     expect(h.execFileImpl).toHaveBeenCalledTimes(1)
+  })
+
+  it('prefers a native %USERPROFILE%\\.local\\bin install over a WindowsApps Desktop alias from where', async () => {
+    process.env.USERPROFILE = tmpDir
+    process.env.LOCALAPPDATA = join(tmpDir, 'AppData', 'Local')
+    const binDir = join(tmpDir, '.local', 'bin')
+    mkdirSync(binDir, { recursive: true })
+    const native = join(binDir, 'claude.exe')
+    writeFileSync(native, 'MZ-native')
+    h.execFileImpl.mockResolvedValue({
+      stdout: join(tmpDir, 'AppData', 'Local', 'Microsoft', 'WindowsApps', 'claude.exe') + '\r\n',
+      stderr: ''
+    })
+    expect(await resolveBin('claude')).toBe(native)
+    expect(h.execFileImpl).not.toHaveBeenCalled()
+  })
+
+  it('does not resolve a WindowsApps-only where hit as the CLI', async () => {
+    process.env.USERPROFILE = tmpDir
+    process.env.LOCALAPPDATA = join(tmpDir, 'AppData', 'Local')
+    process.env.APPDATA = join(tmpDir, 'AppData', 'Roaming')
+    h.execFileImpl.mockResolvedValue({
+      stdout: 'C:\\Users\\tony\\AppData\\Local\\Microsoft\\WindowsApps\\claude.exe\r\n',
+      stderr: ''
+    })
+    expect(await resolveBin('claude')).toBeNull()
   })
 })
 
@@ -382,6 +462,8 @@ describe('installCli — Windows npm-not-found detection (cmd.exe phrasing, not 
     h.execFileImpl.mockReset()
     h.spawnImpl.mockReset()
     setPlatform('win32')
+    managedMock.managedCliEntry.mockReturnValue(null)
+    managedMock.managedCliCommand.mockReturnValue(null)
     // "Nothing is installed" must MEAN nothing is installed, on any machine — not "nothing is installed
     // unless the person running the tests happens to have the CLI".
     binProbe.hit = false
@@ -407,26 +489,45 @@ describe('installCli — Windows npm-not-found detection (cmd.exe phrasing, not 
     expect(progress.mock.calls.some(([line]) => /self-contained|no Node\.js required/i.test(String(line)))).toBe(true)
   })
 
-  it('npm resolved but dies with cmd.exe\'s "not recognized" stderr: falls back to the managed install', async () => {
+  it('PATH npm exists: still uses the managed install first (no cmd.exe npm i -g)', async () => {
     managedMock.installManagedCli.mockClear()
-    // resolveBin('claude') misses; resolveBin('npm') HITS (so the npm spawn happens), then the spawned
-    // installer emits the cmd.exe not-recognized phrasing and exits 1.
     h.execFileImpl.mockImplementation(async (_cmd: string, args: string[]) => {
       if (args.includes('claude')) throw new Error('where: no matches found')
       if (args.includes('npm')) return { stdout: 'C:\\Program Files\\nodejs\\npm.cmd\r\n', stderr: '' }
       throw new Error('where: no matches found')
     })
-    const { child, stderr } = fakeChild()
-    h.spawnImpl.mockReturnValue(child)
 
-    const resultPromise = installCli('claude-cli', vi.fn())
-    stderr.write("'npm' is not recognized as an internal or external command,\r\n")
-    stderr.write('operable program or batch file.\r\n')
-    await tick()
-    child.emit('close', 1)
-
-    const r = await resultPromise
-    expect(r.ok).toBe(true) // the managed fallback rescued the install
+    const r = await installCli('claude-cli', vi.fn())
+    expect(r.ok).toBe(true)
     expect(managedMock.installManagedCli).toHaveBeenCalledWith('claude', expect.any(Function))
+    expect(h.spawnImpl).not.toHaveBeenCalled()
+  })
+
+  it('does not treat a WindowsApps Desktop alias as already installed', async () => {
+    managedMock.installManagedCli.mockClear()
+    managedMock.managedCliEntry.mockReturnValue(null)
+    h.execFileImpl.mockResolvedValue({
+      stdout: 'C:\\Users\\tony\\AppData\\Local\\Microsoft\\WindowsApps\\claude.exe\r\n',
+      stderr: ''
+    })
+
+    const r = await installCli('claude-cli', vi.fn())
+    expect(r.ok).toBe(true)
+    expect(managedMock.installManagedCli).toHaveBeenCalledWith('claude', expect.any(Function))
+  })
+
+  it('refuses ok after a managed install that resolveBin still cannot find', async () => {
+    managedMock.installManagedCli.mockImplementationOnce(
+      async (_id: string, onProgress: (p: { phase: string }) => void) => {
+        onProgress({ phase: 'downloading' })
+        managedMock.managedCliEntry.mockReturnValue(null)
+        return { entry: '/nope', version: '1.0.0' }
+      }
+    )
+    h.execFileImpl.mockRejectedValue(new Error('where: no matches found'))
+
+    const r = await installCli('claude-cli', vi.fn())
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/cannot find a runnable CLI/)
   })
 })

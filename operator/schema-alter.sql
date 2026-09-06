@@ -41,3 +41,8 @@ ALTER TABLE crm_sends ADD COLUMN latency_ms INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE crm_sends ADD COLUMN remote_id TEXT;
 ALTER TABLE crm_sends ADD COLUMN remote_url TEXT;
 ALTER TABLE crm_sends ADD COLUMN action TEXT;
+
+-- Question-type tracking (closed taxonomy label, never text). Until this lands on a live D1 the Worker
+-- stores Asks without a type and logs one warning per isolate; nothing is dropped.
+ALTER TABLE asks ADD COLUMN question_type TEXT;
+CREATE INDEX IF NOT EXISTS asks_question_type ON asks(question_type);

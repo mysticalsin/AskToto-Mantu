@@ -25,8 +25,10 @@ import type { ConversationMode, CustomMode } from '@shared/ipc'
 import { formatScreenFreshness } from '@shared/perception'
 import { accelLabel } from '../lib/keys'
 import type { CaptureDegraded } from '../lib/listen'
+import { ObsidianOrb } from './ObsidianOrb'
 import { JarvisOrbButton } from './JarvisOrbButton'
 import { BAR_MARK_SIZE_PX, type OrbMood } from '../lib/bar-pill-orb'
+import { overlayUsesJarvisOrb, type OverlayOrbStyle } from '@shared/overlay-orb'
 
 /** Single source of truth for toolbar icon stroke — prevents per-icon drift. */
 const ICON_STROKE = 1.85
@@ -191,6 +193,8 @@ export interface BarProps {
   canMinimize?: boolean
   /** Color language for the docked Bar circle. Idle purple unless a live signal is on the bar. */
   orbMood?: OrbMood
+  /** Bar rest look. Circle rest minimizes. The docked circle is always Jarvis particles. */
+  orbStyle?: OverlayOrbStyle
   /** When true, the Métis window is hidden from screen capture & sharing (contentProtection). The
    *  eye button toggles this. Separate from Private View (whether Métis captures the user's screen). */
   stealth: boolean
@@ -658,8 +662,8 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
                 props.stealthLocked
                   ? 'Hidden from screen share: managed by your organization'
                   : props.stealth
-                    ? 'Hidden from screen share — click to make Métis visible'
-                    : 'Visible in screen share — click to hide Métis'
+                    ? 'Hidden from screen share. Click to make Métis visible.'
+                    : 'Visible in screen share. Click to hide Métis.'
               }
               onClick={props.onToggleStealth}
               active={!props.stealth}
@@ -748,13 +752,23 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
               </button>
             )}
             {props.canMinimize !== false ? (
-              <JarvisOrbButton
-                orbMood={props.orbMood ?? 'idle'}
-                listening={props.listening}
-                title="Minimize to the orb"
-                ariaLabel="Minimize to the orb"
-                onActivate={props.onMinimize}
-              />
+              overlayUsesJarvisOrb('bar', props.orbStyle) ? (
+                <ObsidianOrb
+                  orbMood={props.orbMood ?? 'idle'}
+                  listening={props.listening}
+                  title="Minimize to the orb"
+                  ariaLabel="Minimize to the orb"
+                  onActivate={props.onMinimize}
+                />
+              ) : (
+                <JarvisOrbButton
+                  orbMood={props.orbMood ?? 'idle'}
+                  listening={props.listening}
+                  title="Minimize to the orb"
+                  ariaLabel="Minimize to the orb"
+                  onActivate={props.onMinimize}
+                />
+              )
             ) : null}
             {/* Collapse-chevron: plain ghost, not aw-fill. Submit is the only accent-filled control.
                 Disabled (not hidden, so the toolbar doesn't jump) when there's nothing behind the bar
@@ -777,7 +791,7 @@ export const Bar = memo(function Bar(props: BarProps): JSX.Element {
           </div>
         </div>
     ),
-    [props.onSettings, props.listening, props.onCapture, props.capturing, props.captureAccel, props.spotlightReady, props.onSpotlightRef, props.mode, props.customModes, modeOpen, props.thinkingOn, props.onToggleThinking, props.stealth, props.onToggleStealth, props.stealthLocked, props.onToggleListen, props.paused, props.startedAt, props.onTogglePause, props.transcriptShown, props.onTranscript, props.onHistory, props.onMinimize, props.canMinimize, props.orbMood, props.canTogglePanel, props.panelOpen, props.onTogglePanel]
+    [props.onSettings, props.listening, props.onCapture, props.capturing, props.captureAccel, props.spotlightReady, props.onSpotlightRef, props.mode, props.customModes, modeOpen, props.thinkingOn, props.onToggleThinking, props.stealth, props.onToggleStealth, props.stealthLocked, props.onToggleListen, props.paused, props.startedAt, props.onTogglePause, props.transcriptShown, props.onTranscript, props.onHistory, props.onMinimize, props.canMinimize, props.orbMood, props.orbStyle, props.canTogglePanel, props.panelOpen, props.onTogglePanel]
   )
 
   return (

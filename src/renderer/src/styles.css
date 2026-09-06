@@ -250,6 +250,13 @@ html.shot-bg-light #root {
 .no-drag {
   -webkit-app-region: no-drag;
 }
+/* Exclusive onboarding owns the display. Native app-region drag must not move it. */
+.onboard-exclusive-lock,
+.onboard-exclusive-lock .drag,
+.onboard-stage,
+.onboard-stage .drag {
+  -webkit-app-region: no-drag;
+}
 
 /* NOTE: a `background` shorthand may carry at most ONE solid color (the final background-color); every
    other layer MUST be an image. So each translucent color layer is wrapped in linear-gradient(c, c) to
@@ -741,6 +748,7 @@ input::placeholder {
   flex-direction: column;
   overflow: hidden;
   isolation: isolate;
+  -webkit-app-region: no-drag;
   background:
     radial-gradient(1200px 700px at 18% 12%, color-mix(in srgb, #9a2bf0 42%, transparent), transparent 58%),
     radial-gradient(900px 600px at 88% 78%, color-mix(in srgb, #7f00da 36%, transparent), transparent 55%),
@@ -1767,6 +1775,9 @@ input::placeholder {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
 }
+.overlay-chrome-grid--two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
 .overlay-chrome-card {
   display: flex;
   flex-direction: column;
@@ -1854,6 +1865,71 @@ input::placeholder {
   box-shadow:
     inset 0 0 0 1.25px rgba(255, 255, 255, 0.72),
     0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+.overlay-orb-diagram,
+.overlay-orb-diagram--jakub,
+.overlay-orb-diagram--obsidian {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 72px;
+  border-radius: 8px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #3a0b6b 0%, #1a0630 100%);
+}
+/* Circle card: 41 host + 64 avatar scale, same as Bar .aw-orb__host. Never the 22px CSS fake disc. */
+.overlay-orb-diagram--jakub .overlay-orb-diagram__jakub--live {
+  position: relative;
+  width: 41px;
+  height: 41px;
+  overflow: visible;
+  contain: none;
+  border-radius: 50%;
+  background: transparent;
+  pointer-events: none;
+  cursor: default;
+}
+.overlay-orb-diagram__jakub-host {
+  display: block;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 64px;
+  height: 64px;
+  border-radius: 0;
+  pointer-events: none;
+  background: transparent;
+  transform: translate(-50%, -50%) scale(calc(41 / 64));
+  transform-origin: center center;
+}
+.overlay-orb-diagram--obsidian .overlay-orb-diagram__jarvis--live,
+.overlay-orb-diagram .aw-orb[data-orb-preview]:not(.overlay-orb-diagram__jakub--live) {
+  pointer-events: none;
+  cursor: default;
+}
+.aw-orb--obsidian {
+  width: 41px;
+  height: 41px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+.obsidian-orb {
+  position: relative;
+  display: block;
+  width: 41px;
+  height: 41px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: #050508;
+  clip-path: circle(50% at 50% 50%);
+}
+.obsidian-orb__canvas {
+  display: block;
+  width: 41px;
+  height: 41px;
+  border-radius: 50%;
 }
 
 /* Exclusive-stage appearance ask. CSS mock only. No backdrop-filter. Transform + opacity. */
@@ -2013,6 +2089,41 @@ input::placeholder {
   to {
     opacity: 0.85;
     transform: scale(0.92) translateY(-8px);
+  }
+}
+/* Circle/Jarvis rest → Ask bar. Same spring family. Not a hard cut. */
+.circle-rest-spring {
+  transform-origin: top center;
+  will-change: transform, opacity;
+}
+.circle-rest-spring--expand {
+  animation: circle-rest-expand 420ms var(--ease-spring) both;
+}
+.circle-rest-spring--collapse {
+  animation: circle-rest-collapse 340ms var(--ease-spring) both;
+}
+@keyframes circle-rest-expand {
+  0% {
+    opacity: 0;
+    transform: scale(0.22) translateY(-6px);
+  }
+  70% {
+    opacity: 1;
+    transform: scale(1.02) translateY(0);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+@keyframes circle-rest-collapse {
+  0% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.22) translateY(-6px);
   }
 }
 

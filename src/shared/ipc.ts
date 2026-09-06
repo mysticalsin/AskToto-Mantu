@@ -242,6 +242,7 @@ export const IPC = {
   licenseActivate: 'license:activate',
   licenseStatus: 'license:status',
   licenseGate: 'license:gate',
+  cloudflareConnect: 'cloudflare:connect',
   identitySnapshot: 'identity:snapshot',
   memberLicenseActivate: 'license:memberActivate',
   memberLicenseDeactivate: 'license:memberDeactivate',
@@ -1075,6 +1076,8 @@ export const BaseSettingsSchema = z.object({
   autoHideOverlay: z.boolean().default(true),
   /** Overlay chrome: hide (default, fully hidden until top hover), island (visible peek), bar (classic). */
   overlayLayout: z.enum(['hide', 'island', 'bar']).default('hide'),
+  /** Bar rest look. Hide/Island ignore this. Default Circle is the Jakub thinking-orb. */
+  overlayOrbStyle: z.enum(['bar', 'jakub', 'obsidian']).default('jakub'),
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('best'), // Best is default; Fast is a Settings power option (docs/asr/QUALITY.md)
   // parakeet = default. NVIDIA Parakeet v3, fastest + accurate for 25 European languages.
@@ -1550,6 +1553,7 @@ export const DEFAULT_SETTINGS: Settings = {
   overlayOpacity: 1,
   autoHideOverlay: true,
   overlayLayout: 'hide',
+  overlayOrbStyle: 'jakub',
   showFullTranscriptInReview: false,
   asrQuality: 'best',
   asrEngine: 'parakeet',

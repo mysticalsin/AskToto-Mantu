@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import {
   cacheBadge,
+  cloudflareConnectHref,
+  DEFAULT_OPERATOR_URL,
   estimateCacheCost,
   formatUsdEstimate,
   mapAnthropicUsage,
@@ -94,6 +96,22 @@ describe('estimateCacheCost', () => {
     expect(est!.label).toBe('estimate, list price')
     expect(est!.usd).toBeGreaterThan(0)
     expect(formatUsdEstimate(est!.usd)).toMatch(/^≈\$/)
+  })
+})
+
+describe('cloudflareConnectHref', () => {
+  it('defaults to the live Operator connect path', () => {
+    expect(cloudflareConnectHref({}, {})).toBe(`${DEFAULT_OPERATOR_URL}/cloudflare/connect`)
+  })
+
+  it('uses Settings operatorUrl when https', () => {
+    expect(cloudflareConnectHref({ operatorUrl: 'https://op.example.workers.dev/' }, {})).toBe(
+      'https://op.example.workers.dev/cloudflare/connect'
+    )
+  })
+
+  it('refuses http', () => {
+    expect(cloudflareConnectHref({ operatorUrl: 'http://localhost:8787' }, {})).toBeNull()
   })
 })
 

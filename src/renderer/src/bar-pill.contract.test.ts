@@ -18,6 +18,7 @@ const root = join(__dirname)
 const app = readFileSync(join(root, 'App.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const pill = readFileSync(join(root, 'components', 'ControlPill.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const orbBtn = readFileSync(join(root, 'components', 'JarvisOrbButton.tsx'), 'utf8').replace(/\r\n/g, '\n')
+const jarvisCircle = readFileSync(join(root, 'components', 'ObsidianOrb.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const bar = readFileSync(join(root, 'components', 'Bar.tsx'), 'utf8').replace(/\r\n/g, '\n')
 const css = readFileSync(join(root, 'styles.css'), 'utf8').replace(/\r\n/g, '\n')
 const peek = readFileSync(join(root, 'components', 'OverlayPeek.tsx'), 'utf8').replace(/\r\n/g, '\n')
@@ -36,7 +37,9 @@ describe('BAR-PILL contract', () => {
     expect(contract).toMatch(/overlayShowsBarOrb\(layout, minimized\) === \(layout === 'bar' && minimized\)/)
     expect(contract).toMatch(/overlayDocksBarCircle\(layout\) === \(layout === 'bar'\)/)
     expect(bar).toMatch(/canMinimize\?: boolean/)
+    expect(bar).toMatch(/overlayUsesJarvisOrb/)
     expect(bar).toMatch(/JarvisOrbButton/)
+    expect(bar).toMatch(/ObsidianOrb/)
     expect(bar).toMatch(/Minimize to the orb/)
     expect(bar).not.toMatch(/<Minimize2/)
     expect(app).toMatch(/canMinimize=\{canMinimize\}/)
@@ -63,16 +66,19 @@ describe('BAR-PILL contract', () => {
     expect(app).toMatch(/showBarOrb \? \(/)
     expect(app).toMatch(/<ControlPill/)
     expect(peek).not.toMatch(/ControlPill|data-bar-pill-orb|ThinkingOrb/)
-    expect(bar).toMatch(/data-bar-pill-orb|JarvisOrbButton/)
+    expect(bar).toMatch(/data-bar-pill-orb|ObsidianOrb|JarvisOrbButton/)
     const pillMounts = app.split('<ControlPill').length - 1
     expect(pillMounts).toBe(1)
   })
 
-  it('bar+minimized renders the fixed thinking-orb circle', () => {
+  it('bar+minimized default Circle is thinking-orbs; Jarvis particles only when style is obsidian', () => {
+    expect(pill).toMatch(/overlayUsesJarvisOrb/)
     expect(pill).toMatch(/JarvisOrbButton/)
-    expect(orbBtn).toMatch(/data-bar-pill-orb/)
-    expect(orbBtn).toMatch(/ThinkingOrb/)
-    expect(orbBtn).toMatch(/pillClickShouldExpand/)
+    expect(pill).toMatch(/ObsidianOrb/)
+    expect(pill).toMatch(/orbStyle = 'jakub'/)
+    expect(jarvisCircle).toMatch(/data-bar-pill-orb/)
+    expect(jarvisCircle).toMatch(/jarvis-particles/)
+    expect(jarvisCircle).toMatch(/runOrbPillActivate/)
     expect(pill).toMatch(/orbMood/)
     expect(css).toMatch(/\.aw-orb/)
     expect(css).not.toMatch(/bar-pill-spring-in/)
@@ -116,8 +122,13 @@ describe('BAR-PILL contract', () => {
 
   it('click expands and drag does not', () => {
     expect(orbBtn).toMatch(/onClick=\{\(\) => \{/)
-    expect(orbBtn).toMatch(/pillClickShouldExpand\(dragMovedRef\.current\)/)
+    expect(orbBtn).toMatch(/runOrbPillActivate\(\{ enableDrag, dragMoved: dragMovedRef\.current, onActivate \}\)/)
     expect(orbBtn).toMatch(/useWindowDrag/)
+    expect(jarvisCircle).toMatch(/runOrbPillActivate\(\{ enableDrag, dragMoved: dragMovedRef\.current, onActivate \}\)/)
+    expect(pill).toMatch(/onActivate=\{onExpand\}/)
+    expect(app).toMatch(/onExpand=\{unminimize\}/)
+    expect(app).toMatch(/decideCircleRestMinimize/)
+    expect(app).not.toMatch(/if \(view !== 'settings' && !minimized\)/)
   })
 
   it('hide and island rest sizes and hover math stay put', () => {

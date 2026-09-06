@@ -305,6 +305,23 @@ describe('CLI Connect treats a weekly cap as signed-in, not disconnected', () =>
     expect(body).toMatch(/r\.session === 'weekly-limit'/)
     expect(body).toMatch(/phase: 'done'/)
   })
+
+  it('installs in-flow when the session probe says missing, then proves again', () => {
+    const body = blockAfter("const connect = async (id: 'claude-cli' | 'codex-cli')", 'const cancel =')
+    expect(body).toMatch(/r\.session === 'missing'/)
+    expect(body).toMatch(/cliInstall/)
+    expect(body).toMatch(/r\.session === 'signed-out'/)
+    expect(body).toMatch(/cliLogin/)
+  })
+})
+
+describe('CLI Integration copy — managed install, not npm i -g', () => {
+  it('does not advertise npm i -g as the happy path', () => {
+    const block = blockAfter('title="CLI Integration"', 'icon={Link2}')
+    expect(block).not.toMatch(/npm i -g/)
+    expect(block).toMatch(/managed copy/)
+    expect(block).toMatch(/live session check/)
+  })
 })
 
 describe('Set up automatically shows an honest status chip', () => {
@@ -340,6 +357,11 @@ describe('Set up automatically shows an honest status chip', () => {
 // that link renders only in phase 'blocked' or 'idle'.
 describe('MQA-164 — a failed update download leaves the Settings row with a way out', () => {
   const block = (): string => blockAfter('function UpdatesSection(', '\nfunction ModePromptEditor')
+
+  it('tells the user only a QA-approved Latest is offered', () => {
+    expect(block()).toMatch(/QA-approved Latest from Metis-Releases/)
+    expect(block()).toMatch(/Draft and prerelease builds are never offered/)
+  })
 
   it('subscribes to the download-failure channel alongside progress and ready', () => {
     expect(block()).toMatch(/window\.toto\.onUpdateError\(/)
@@ -478,10 +500,39 @@ describe('Dust instant validate proves a live connection', () => {
     expect(setup()).toMatch(/Checking Dust connection/)
   })
 
+  it('Reconnect installs the CLI first and surfaces a human install error, not Connected', () => {
+    const start = blockAfter('const startDustOAuth = async', '\n  // Poll at the server-given cadence')
+    expect(start).toMatch(/dustInstallCli/)
+    expect(start.indexOf('dustInstallCli')).toBeLessThan(start.indexOf('dustLoginBegin'))
+    expect(start).toMatch(/if \(!installed\.ok\)/)
+    expect(start).toMatch(/phase: 'error'/)
+    expect(start).not.toMatch(/Connected/)
+  })
+
   it('never auto-sends a chat as the connection test', () => {
     const body = setup()
     expect(body).not.toMatch(/createConversation|postUserMessage|streamAgent/)
     expect(body).toMatch(/Never auto-sends a chat/)
+  })
+})
+
+describe('Settings Bar rest orb picker', () => {
+  it('wires OverlayOrbPicker next to Overlay chrome', () => {
+    expect(source).toMatch(/OverlayOrbPicker/)
+    expect(source).toMatch(/overlayOrbStyle: id/)
+    expect(source).toMatch(/Applies when Overlay chrome is Bar/)
+    const orbBlock = source.slice(source.indexOf('<OverlayOrbPicker'), source.indexOf('<OverlayOrbPicker') + 400)
+    expect(orbBlock).not.toMatch(/\u2014/)
+  })
+})
+
+describe('Settings from M scrolls the full surface', () => {
+  it('fills the 880×800 window and scrolls cl-content end to end', () => {
+    expect(source).toMatch(/cl-root flex h-full min-h-0/)
+    expect(source).toMatch(/cl-content scroll-thin min-h-0 flex-1 overflow-y-auto/)
+    expect(source).not.toMatch(/max-h-\[480px\]/)
+    expect(source).not.toMatch(/panel-enter/)
+    expect(source).toMatch(/Custom instructions/)
   })
 })
 
@@ -525,5 +576,16 @@ describe('locked mode skills — Settings has no editor for shipped skill files'
     expect(source).not.toMatch(/modeSkills/)
     expect(source).not.toMatch(/skillsRoot/)
 
+  })
+})
+
+describe('Cloudflare tile opens Operator OAuth, not a key-paste card', () => {
+  it('calls cloudflareConnect and does not bind a Worker URL paste field', () => {
+    expect(source).toMatch(/window\.toto\.cloudflareConnect/)
+    expect(source).toMatch(/data-cf-aig-connect/)
+    expect(source).not.toMatch(/value=\{settings\.cloudflareBaseUrl\}/)
+    expect(source).not.toMatch(/Paste the Worker/)
+    const preload = readFileSync(join(__dirname, '../../../preload/index.ts'), 'utf8')
+    expect(preload).toMatch(/cloudflareConnect:/)
   })
 })
