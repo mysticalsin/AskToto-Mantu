@@ -114,6 +114,7 @@ import {
 } from '@shared/providers'
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
 import { modeSkillLock } from '@shared/mode-skills'
+import { DEFAULT_OPERATOR_URL, operatorUrlConfigured } from '@shared/operator'
 import { LANGUAGE_OPTIONS } from '@shared/lang-id'
 import { MantuLogo } from './MantuLogo'
 import { MantuMark } from './MantuMark'
@@ -6445,7 +6446,7 @@ export function Settings({
                 </Section>
                 <Section
                   title="Operator"
-                  desc="Point this Mac at Tony's Operator Worker. Empty means no fleet heartbeat. This is not a local analytics page."
+                  desc="Point this Mac at Tony's Operator Worker. Empty uses the shipped Operator URL at runtime. Heartbeat still needs the ingest secret. This is not a local analytics page."
                   icon={Settings2}
                 >
                   <label className="flex flex-col gap-1 px-1 py-2">
@@ -6454,11 +6455,14 @@ export function Settings({
                       value={settings.operatorUrl || ''}
                       spellCheck={false}
                       autoComplete="off"
-                      placeholder="https://metis-operator.example.workers.dev"
+                      placeholder={DEFAULT_OPERATOR_URL}
                       disabled={settings.managedKeys.includes('operatorUrl')}
                       onChange={(e) => patch({ operatorUrl: e.target.value.trim() })}
                       className={`${ctl} w-full`}
                     />
+                    <span className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+                      Leave empty to use {DEFAULT_OPERATOR_URL}. The field is not force-written. Ingest secret stays required.
+                    </span>
                   </label>
                   <label className="flex flex-col gap-1 px-1 py-2">
                     <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Ingest secret</span>
@@ -6482,7 +6486,7 @@ export function Settings({
                       disabled={settings.managedKeys.includes('sendAskText')}
                     />
                   )}
-                  {/^https:\/\//i.test(settings.operatorUrl || '') && (
+                  {operatorUrlConfigured(settings) && (
                     <button
                       type="button"
                       onClick={() => void window.toto.operatorOpen()}
