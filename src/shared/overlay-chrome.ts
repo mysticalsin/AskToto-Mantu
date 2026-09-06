@@ -1,3 +1,4 @@
+import { CIRCLE_REST_HOST_PX, CIRCLE_REST_SHADOW_PAD_PX } from './overlay-orb'
 import { SETTINGS_SURFACE_BACKGROUND, SETTINGS_WINDOW_MIN } from './settings-bounds'
 
 /**
@@ -121,6 +122,28 @@ export function overlayAllowsHugWidth(input: {
 }): boolean {
   if (input.minimized) return true
   return input.islandResting && input.nextWidth <= input.restWidth + 24
+}
+
+/** Legacy hug floor for toasts / non-circle. Circle rest must not use this. */
+export const WINDOW_RESIZE_HUG_FLOOR_PX = 120
+
+/** 41 orb + pad when Circle/Jarvis rest is showing. Else the 120 toast floor. */
+export function overlayHugWidthFloor(circleRest: boolean): number {
+  return circleRest ? CIRCLE_REST_HOST_PX + CIRCLE_REST_SHADOW_PAD_PX : WINDOW_RESIZE_HUG_FLOOR_PX
+}
+
+/**
+ * IPC.windowResize hug. A 41 Circle used to become Math.max(120, 41+10) = 120.
+ * Circle rest hugs to 41+pad. Hide/Island still use the 120 floor when they hug.
+ */
+export function overlayHugNextWidth(input: {
+  reportedWidth: number
+  maxWidth: number
+  circleRest: boolean
+}): number {
+  const pad = CIRCLE_REST_SHADOW_PAD_PX
+  const floor = overlayHugWidthFloor(input.circleRest)
+  return Math.max(floor, Math.min(Math.ceil(input.reportedWidth) + pad, input.maxWidth))
 }
 
 /** Classic Bar idle hug. Settings is 800+. A leftover 800 slab under the bar is the ghost panel. */

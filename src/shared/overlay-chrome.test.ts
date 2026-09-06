@@ -17,6 +17,9 @@ import {
   overlayHoverIdle,
   overlayHoverForced,
   overlayAllowsHugWidth,
+  overlayHugNextWidth,
+  overlayHugWidthFloor,
+  WINDOW_RESIZE_HUG_FLOOR_PX,
   isShowMetisHugStub,
   isIncompleteAskReveal,
   overlayRevealedContentHeight,
@@ -223,6 +226,11 @@ describe('overlay chrome modes', () => {
     expect(
       overlayAllowsHugWidth({ minimized: false, islandResting: true, restWidth: 142, nextWidth: 142 })
     ).toBe(true)
+    expect(WINDOW_RESIZE_HUG_FLOOR_PX).toBe(120)
+    expect(overlayHugWidthFloor(true)).toBe(51)
+    expect(overlayHugWidthFloor(false)).toBe(120)
+    expect(overlayHugNextWidth({ reportedWidth: 41, maxWidth: 880, circleRest: true })).toBe(51)
+    expect(overlayHugNextWidth({ reportedWidth: 41, maxWidth: 880, circleRest: false })).toBe(120)
   })
 
   it('top-edge reveal is Ask chrome, not a Show-Métis-only 44px strip', () => {
