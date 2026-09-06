@@ -141,6 +141,10 @@ See [INTELLIGENCE-UPDATE.md](./INTELLIGENCE-UPDATE.md). One **Update Intelligenc
 local-first agent pass (API once if Local is missing, refused, or errors) and refreshes the
 dashboard. The button is the trigger. Never auto-send. Not leftover PR 61.
 
+## Métis Lite (K FRAME)
+See [METIS-LITE.md](./METIS-LITE.md). Listen → end summary → Mantu Intelligence + optional API.
+DESIGN only until enterprise harden + signing. No UI in the FRAME land. No pack.
+
 ## Operator
 See [OPERATOR.md](./OPERATOR.md). Cloudflare Access packed ops console (`operator/`, Worker `metis-operator`). Client keeps prompt cache on. Map geo comes from `request.cf`, never from the app. Not overlay chrome. Not the Fly license-server. Not `cloudflare-proxy`.
 
