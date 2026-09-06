@@ -66,6 +66,13 @@ function rateBucketFor(pathname: string): { key: string; max: number } | null {
   return null
 }
 
+/** A device-supplied id (ask or CRM) is stored and later echoed in audit rows and exports, so it is
+ *  stripped of control characters, trimmed and capped before use; an empty result gets a fresh UUID. */
+function deviceSuppliedId(raw: unknown): string {
+  const s = String(raw ?? '').replace(/[\r\n\t\x00-\x1f\x7f]/g, ' ').trim().slice(0, 128)
+  return s || crypto.randomUUID()
+}
+
 /** `mode ask · Type label`. The question text itself is never in a preview; only its declared type is. */
 function redactedPreview(mode: string | undefined, questionType: QuestionType): string {
   const label = QUESTION_TYPE_LABELS[questionType]
@@ -349,7 +356,7 @@ async function heartbeat(store: OperatorStore, deviceId: string, bodyText: strin
 
 async function ingest(store: OperatorStore, env: Env, deviceId: string, bodyText: string, now: number, geo: CfGeo): Promise<Response> {
   const body = JSON.parse(bodyText || '{}') as Record<string, unknown>
-  const id = String(body.id || crypto.randomUUID())
+  const id = deviceSuppliedId(body.id)
   // An ask id is client-chosen. A row may only be created, replaced or rated by the device that owns it;
   // otherwise one seat could rewrite or thumbs-down another seat's history through a guessed id.
   const existing = await store.getAsk(id)
@@ -526,7 +533,7 @@ async function upsertCrmEvent(
   if (body.confidential === true) return 'skipped'
   const status = asCrmStatus(body.status)
   if (!status) return 'skipped'
-  const id = String(body.id || crypto.randomUUID())
+  const id = deviceSuppliedId(body.id)
   const title = typeof body.title === 'string' ? body.title.replace(/\s+/g, ' ').trim().slice(0, 160) : 'CRM send'
   const connector = typeof body.connector === 'string' ? body.connector.slice(0, 32) : 'unknown'
   const err = typeof body.error === 'string' ? body.error.slice(0, 200) : null
