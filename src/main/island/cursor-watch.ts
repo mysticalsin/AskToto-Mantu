@@ -53,12 +53,67 @@ export const CURSOR_LEAVE_GRACE_PX = 8
  */
 export const OVERLAY_LEAVE_PARK_MS = 800
 
-/** Revealed Hide/Island + cursor outside the bar and the top-edge strip → park. */
+/**
+ * Revealed Hide/Island + cursor outside the bar and the top-edge strip → park,
+ * but only once main has SEEN the OS cursor in the strip or on the bar during
+ * this reveal (`osHoverSeen`). A reveal the renderer opened on its own (forced
+ * toast / typed input, Island peek mouseenter, a CDP-synthetic hover) never had
+ * the OS cursor near the bar; parking it 800ms later is the "bar flashes then
+ * disappears" FAIL and would close a toast the user never hovered. The renderer
+ * parks those through its own leave / force-end path (overlayParkAfterHide).
+ */
 export function overlayWatchShouldParkOnLeave(input: {
   decision: CursorWatchDecision
   islandResting: boolean
+  osHoverSeen: boolean
 }): boolean {
-  return input.decision === 'hide' && !input.islandResting
+  return input.decision === 'hide' && !input.islandResting && input.osHoverSeen
+}
+
+export type OverlayWatchAction = 'restore' | 'stay' | 'park' | 'leave-ignored'
+
+/**
+ * One cursor-watch tick as a pure step. `osHoverSeen` is main's latch: true once
+ * the OS cursor has been inside the strip or the revealed bar since the last
+ * park; it is what makes leave → park legitimate. `restore` = restoreBarWidth +
+ * hover-true; `park` = hover-false + schedule the OVERLAY_LEAVE_PARK_MS park;
+ * `stay` / `leave-ignored` never touch bounds.
+ */
+export function overlayWatchStep(input: {
+  cursor: { x: number; y: number }
+  restRect: Rect
+  revealedRect: Rect
+  islandResting: boolean
+  windowVisible: boolean
+  osHoverSeen: boolean
+  hugStub?: boolean
+}): { action: OverlayWatchAction; osHoverSeen: boolean } {
+  const revealed = overlayWatchTreatAsRevealed(input.islandResting, input.windowVisible)
+  const decision = decideCursorWatch({
+    cursor: input.cursor,
+    restRect: input.restRect,
+    revealedRect: input.revealedRect,
+    revealed
+  })
+  if (
+    overlayWatchNeedsRestore({
+      decision,
+      alreadyHovering: input.osHoverSeen,
+      islandResting: input.islandResting,
+      windowVisible: input.windowVisible,
+      hugStub: input.hugStub
+    })
+  ) {
+    return { action: 'restore', osHoverSeen: true }
+  }
+  if (decision !== 'hide') {
+    // Revealed + 'stay' means the OS cursor is in the strip or on the bar: latch it.
+    return { action: 'stay', osHoverSeen: input.osHoverSeen || revealed }
+  }
+  if (!overlayWatchShouldParkOnLeave({ decision, islandResting: input.islandResting, osHoverSeen: input.osHoverSeen })) {
+    return { action: 'leave-ignored', osHoverSeen: input.osHoverSeen }
+  }
+  return { action: 'park', osHoverSeen: false }
 }
 
 export function pointInRect(point: { x: number; y: number }, rect: Rect): boolean {
