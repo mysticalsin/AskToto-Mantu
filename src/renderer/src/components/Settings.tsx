@@ -2318,7 +2318,7 @@ function CliIntegration({
         markConnected(
           again.version ?? null,
           again.session === 'weekly-limit'
-            ? again.error || 'Signed in. Weekly usage limit reached — not disconnected.'
+            ? again.error || 'Signed in. Weekly usage limit reached, not disconnected.'
             : 'Connected'
         )
         return
