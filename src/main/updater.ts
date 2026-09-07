@@ -244,6 +244,21 @@ export async function startUpdateDownload(): Promise<UpdateDownloadStart> {
   if ((process as NodeJS.Process & { mas?: boolean }).mas) {
     return { started: false, reason: 'Updates for this build come from the App Store.' }
   }
+  // The macOS build is ad-hoc signed, not Developer ID. Squirrel.Mac only swaps in an update whose
+  // signature satisfies the running bundle's designated requirement, and an ad-hoc signature never
+  // does — but electron-updater cannot tell us that: MacUpdater dispatches 'update-downloaded' (which
+  // pops UpdateReadyToast and flips this row to "Restart & install now") BEFORE it hands anything to
+  // Squirrel, and quitAndInstall() then just waits on an 'update-downloaded' from the native updater
+  // that never arrives. Without this guard a Mac user downloads ~1.09 GB and clicks a dead button.
+  // Send them to the DMG instead, which is the only route that actually installs today.
+  // DELETE THIS GUARD in the same commit that enrols CSC_LINK / APPLE_ID / APPLE_TEAM_ID and moves
+  // release.yml's signing mode to developer-id — see docs/ENTERPRISE_RELEASE.md, Operator Setup step 7.
+  if (process.platform === 'darwin') {
+    return {
+      started: false,
+      reason: 'This macOS build must be installed from the .dmg — open the download page.'
+    }
+  }
   // Same GitHub Latest gate as Settings → Check. electron-updater reads latest.yml; this call
   // refuses draft / prerelease / "not newer" so the button cannot start a download the feed
   // must not offer. Bob QA + Ultron stamp is what publishes Latest.
@@ -299,6 +314,14 @@ export function initAutoUpdate(getWin: () => BrowserWindow | null): void {
   }
   if (!app.isPackaged) return
   if ((process as NodeJS.Process & { mas?: boolean }).mas) return
+  // Same reason as the darwin guard in startUpdateDownload: Squirrel.Mac cannot install over an
+  // ad-hoc-signed bundle, and electron-updater announces success before it finds that out. Bail
+  // before any wiring so no background download runs and UpdateReadyToast never promises an install
+  // that cannot happen. Delete alongside that guard when Developer ID signing lands.
+  if (process.platform === 'darwin') {
+    log.info('[updater] ad-hoc signed macOS build — in-app install unavailable, skipping')
+    return
+  }
   // Skip if no real update host is configured (placeholder) — avoids failing checks every launch.
   try {
     const yml = readFileSync(join(process.resourcesPath, 'app-update.yml'), 'utf8')

@@ -1,10 +1,12 @@
 # Enterprise Release Checklist - Métis
 
-**1.8.8 cut ready; release secrets enrolled 2026-09-07 — tagging unblocked.**
+**1.8.9 cut ready; release secrets enrolled 2026-09-07 — tagging unblocked.**
 
-`GH_TOKEN`, `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD` and `WIN_CSC_EXPECTED_SUBJECT` are present on the repo, so `.github/workflows/release.yml` may run on a `v1.8.8` tag. The Apple Developer ID secrets are still absent, so the macOS DMG ships ADHOC / not Gatekeeper-notarized and the release is marked pre-release (Tony lock 2026-09-06). Windows stays Authenticode-signed. Pack is EXE + DMG + native via that workflow only. OAuth stays last. This repo does not contain signing material and a merged version bump is not a published release.
+`GH_TOKEN`, `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD` and `WIN_CSC_EXPECTED_SUBJECT` are present on the repo, so `.github/workflows/release.yml` may run on a `v1.8.9` tag. Windows stays Authenticode-signed. The Apple Developer ID secrets are still incomplete — `CSC_KEY_PASSWORD` and `APPLE_APP_SPECIFIC_PASSWORD` are enrolled, `CSC_LINK` / `APPLE_ID` / `APPLE_TEAM_ID` are not — so the macOS DMG ships ADHOC / not Gatekeeper-notarized. It is all five or none: `release.yml` selects `mode=adhoc` if any one is missing, which then forces `-c.mac.identity=null` and discards whatever signature you did have. Pack is EXE + DMG + native via that workflow only. OAuth stays last. This repo does not contain signing material and a merged version bump is not a published release.
 
-`v1.8.7` is burned: a partial public release of that tag already exists on `mysticalsin/Metis-Releases` (missing the DMG, both zips and the portable EXE), and `scripts/check-version-parity.mjs` refuses to overwrite a published release. Ship 1.8.8.
+An adhoc macOS build no longer marks the release as a GitHub pre-release (Tony, 2026-09-07 — supersedes the 2026-09-06 lock). It did, and the cost was that nothing shipped at all: `/releases/latest` skips pre-releases, so every installed client including Windows kept resolving to v1.6.6. Windows in-app update works and must not be blocked by macOS's interim signing state. `src/main/updater.ts` refuses the in-app path on darwin until Developer ID lands, so a Mac user is sent to the DMG rather than a dead "Restart & install" button.
+
+`v1.8.7` cannot be re-released: it is already a published public release on `mysticalsin/Metis-Releases`, and `scripts/check-version-parity.mjs` refuses to overwrite one. Its asset set is complete except for `Metis-Native-1.8.7.zip` — that single omission is itself proof it was hand-published, since `release.yml` makes that asset mandatory. `v1.8.8` is likewise spent: the tag exists on both remotes but its release run failed in the Windows job, and tags are never force-moved. Ship 1.8.9.
 
 Use this before any customer build or public tag.
 
@@ -32,7 +34,14 @@ none of the gates below execute. See `docs/MANTU-IT-REQUEST.md` for the recorded
 4. Mint the customer license and seat cap.
 5. Fill `build/managed-config.enterprise.example.json`.
 6. Deploy the filled file as machine-wide `managed-config.json`.
-7. Add release secrets in GitHub Actions.
+7. Add release secrets in GitHub Actions. When the Apple set (`CSC_LINK`, `CSC_KEY_PASSWORD`,
+   `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`) is complete, **delete the two
+   `process.platform === 'darwin'` guards in `src/main/updater.ts` in the same commit** — they exist
+   only because Squirrel.Mac cannot install over an ad-hoc-signed bundle, and leaving them in would
+   keep macOS in-app updates switched off after you have paid for the certificate. Note that
+   Squirrel validates a candidate against the *running* app, so every Mac already on an adhoc build
+   (1.8.3 / 1.8.4 / 1.8.7 and any adhoc 1.8.x) still needs one final manual DMG install before
+   in-app update starts working for them.
 8. Seed the `ffmpeg-sidecar-v1` release once (see "ffmpeg Sidecar Provisioning" below) — release CI cannot
    build without it.
 9. Bump `package.json`'s `version`, then tag `vX.Y.Z` from `main` — the tag must exactly match, or
