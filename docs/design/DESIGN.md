@@ -310,6 +310,8 @@ Keys: vault last4 + **Log in to Cloudflare** (`/cloudflare/connect`).
 Operator Settings: Access keep + geo law (`request.cf` only). No homemade
 password. CF OAuth missing must not block Generate license. Fail loud
 on Keys when `CF_OAUTH_CLIENT_ID` / `CF_OAUTH_CLIENT_SECRET` are unset.
+Portal-funded Ask bind (licensed seat → Operator → CF / DeepSeek, no seat key):
+[METIS-CF-LLM-GATEWAY.md](METIS-CF-LLM-GATEWAY.md).
 
 Métis client CF provider connect in overlay Settings, if any, lands on
 **1.8.5 KineticGrid** tip `b8a677b` — not this thin Worker tip, not
