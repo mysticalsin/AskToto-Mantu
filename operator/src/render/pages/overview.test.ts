@@ -109,11 +109,111 @@ describe('renderOverview (QA fixture)', () => {
   })
 })
 
+describe('on Métis right now', () => {
+  const withLive = (data: Awaited<ReturnType<typeof fixtureDashboard>>) => ({
+    ...data,
+    profiles: data.profiles.map((p, i) =>
+      i < 2 ? { ...p, live: true, lastSeen: data.now - 20_000, savedMinutes: i === 0 ? 95 : 40 } : { ...p, live: false }
+    )
+  })
+
+  it('names who is on and what each of them saved, instead of warning about silence', async () => {
+    const data = await fixtureDashboard()
+    const html = renderFleetContactBanner(withLive(data))
+    expect(html).toContain('data-ov-live-now')
+    expect(html).toContain('On Métis right now')
+    // The two live seats, by name, with their own saved time -- not just a fleet total.
+    const live = withLive(data).profiles.filter((p) => p.live)
+    for (const p of live) expect(html).toContain(p.hostname || p.email || p.device)
+    expect(html).toContain('1.6 hours')
+    expect(html).toContain('40 min')
+    // ...and the two add up, rather than being a separately computed number.
+    expect(html).toContain('2.3 hours saved between them.')
+    expect(html).not.toContain('No seat has reported')
+    expect(html).not.toContain('style="')
+    expect(html).not.toContain('—')
+  })
+
+  it('says "none yet" for a live seat that has saved nothing, never a fabricated zero', async () => {
+    const data = await fixtureDashboard()
+    const one = {
+      ...data,
+      profiles: data.profiles.map((p, i) => (i === 0 ? { ...p, live: true, savedMinutes: 0 } : { ...p, live: false }))
+    }
+    const html = renderFleetContactBanner(one)
+    expect(html).toContain('data-ov-live-now')
+    expect(html).toContain('none yet')
+  })
+
+  it('caps the list but never the count, and says how many are not shown', async () => {
+    const data = await fixtureDashboard()
+    const many = {
+      ...data,
+      profiles: Array.from({ length: 9 }, (_, i) => ({
+        ...data.profiles[0],
+        deviceId: `d${i}`,
+        device: `d${i}`,
+        hostname: `seat-${i}`,
+        live: true,
+        savedMinutes: 10 + i
+      }))
+    }
+    const html = renderFleetContactBanner(many)
+    expect((html.match(/class="ov-live-row"/g) || []).length).toBe(6)
+    // The header count is the real number of live seats, not the number of rows drawn.
+    expect(html).toContain('<span class="n">9</span>')
+    expect(html).toContain('3 more live, see Realtime.')
+  })
+
+  it('falls back to the silence notice only when nobody is live', async () => {
+    const data = await fixtureDashboard()
+    const quiet = { ...data, now: data.now + 86_400_000, profiles: data.profiles.map((p) => ({ ...p, live: false })) }
+    const html = renderFleetContactBanner(quiet)
+    expect(html).toContain('data-ov-quiet')
+    expect(html).not.toContain('data-ov-live-now')
+  })
+})
+
+describe('per-user time saved on the Seats card', () => {
+  it('gives every seat its own Time saved column', async () => {
+    const data = await fixtureDashboard()
+    const html = renderOverview(data, CTX)
+    expect(html).toContain('>Time saved<')
+    // The fixture's seats have real recap events behind them, so at least one has real saved time.
+    expect(data.profiles.some((p) => p.savedMinutes > 0)).toBe(true)
+  })
+
+  it('lists live seats before idle ones, so who is on now reads first', async () => {
+    const data = await fixtureDashboard()
+    // Make the LAST seat (the one sorting would otherwise bury) the only live one.
+    const last = data.profiles[data.profiles.length - 1]
+    const shuffled = {
+      ...data,
+      profiles: data.profiles.map((p) => ({ ...p, live: p.deviceId === last.deviceId }))
+    }
+    const pane = (html: string): string => {
+      const start = html.indexOf('data-ov-tlc-pane="seats:seats"')
+      return html.slice(start, html.indexOf('data-ov-tlc-pane="seats:os"', start))
+    }
+    const who = last.hostname || last.email || last.device
+    const seatsPane = pane(renderOverview(shuffled, CTX))
+    // It now appears at all (it was outside the row cap before) and appears first.
+    expect(seatsPane).toContain(who)
+    const others = shuffled.profiles.filter((p) => !p.live).map((p) => p.hostname || p.email || p.device)
+    const firstOtherIdx = Math.min(...others.map((o) => seatsPane.indexOf(o)).filter((i) => i > -1))
+    expect(seatsPane.indexOf(who)).toBeLessThan(firstOtherIdx)
+  })
+})
+
 describe('fleet-is-quiet banner', () => {
   /** The state Tony hit: Métis running on several Macs, console showing zero, nothing to click. */
   it('names the silence, its duration and the reason when the newest heartbeat is old', async () => {
     const data = await fixtureDashboard()
-    const stale = { ...data, now: data.now + 3 * 60 * 60 * 1000 }
+    const stale = {
+      ...data,
+      now: data.now + 3 * 60 * 60 * 1000,
+      profiles: data.profiles.map((p) => ({ ...p, live: false }))
+    }
     const html = renderFleetContactBanner(stale)
     expect(html).toContain('data-ov-quiet')
     expect(html).toContain('No seat has reported in 3h')
@@ -132,23 +232,28 @@ describe('fleet-is-quiet banner', () => {
     expect(html).not.toContain('Last contact')
   })
 
-  it('renders nothing at all while heartbeats are arriving', async () => {
+  it('renders nothing at all when the fleet is heard from recently but nobody is live', async () => {
     const data = await fixtureDashboard()
-    const live = {
+    const recent = {
       ...data,
-      profiles: data.profiles.map((p, i) => (i === 0 ? { ...p, lastSeen: data.now - 30_000 } : p))
+      profiles: data.profiles.map((p, i) => ({ ...p, live: false, lastSeen: i === 0 ? data.now - 30_000 : p.lastSeen }))
     }
-    expect(renderFleetContactBanner(live)).toBe('')
+    expect(renderFleetContactBanner(recent)).toBe('')
   })
 
   it('is absent from a healthy Overview and present on a silent one', async () => {
     const data = await fixtureDashboard()
-    const live = {
+    const recent = {
       ...data,
-      profiles: data.profiles.map((p, i) => (i === 0 ? { ...p, lastSeen: data.now - 30_000 } : p))
+      profiles: data.profiles.map((p, i) => ({ ...p, live: false, lastSeen: i === 0 ? data.now - 30_000 : p.lastSeen }))
     }
-    expect(renderOverview(live, CTX)).not.toContain('data-ov-quiet')
-    expect(renderOverview({ ...data, now: data.now + 86_400_000 }, CTX)).toContain('data-ov-quiet')
+    expect(renderOverview(recent, CTX)).not.toContain('data-ov-quiet')
+    const silent = {
+      ...data,
+      now: data.now + 86_400_000,
+      profiles: data.profiles.map((p) => ({ ...p, live: false }))
+    }
+    expect(renderOverview(silent, CTX)).toContain('data-ov-quiet')
   })
 })
 

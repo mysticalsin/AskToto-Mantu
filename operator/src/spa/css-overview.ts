@@ -51,6 +51,31 @@ export const OVERVIEW_CSS = `
 .ov-bar-slot { transition: transform 260ms var(--ease-spring); }
 .ov-bar-exit { opacity: 0; transition: opacity 260ms var(--ease-spring); }
 
+/* -- on Metis right now: who is live, and what each of them has saved. Occupies the same slot as
+   the quiet banner below, because a live fleet should read as its people rather than as the absence
+   of a warning. -- */
+.ov-live-card { margin-bottom: 12px; }
+.ov-live-card .kpi-top h3 { display: inline-flex; align-items: center; gap: 7px; }
+.ov-live-icon { width: 15px; height: 15px; color: var(--live); flex: none; }
+.ov-live-list { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; }
+.ov-live-row {
+  display: grid; grid-template-columns: auto minmax(0, 1.4fr) minmax(0, 1fr) auto auto;
+  align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--hair);
+  font: 400 13px var(--font-body);
+}
+.ov-live-row:first-child { border-top: 0; }
+.ov-live-who { color: var(--ink); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-live-where { color: var(--ink2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ov-live-saved {
+  font-family: var(--font-display); font-variant-numeric: tabular-nums; font-weight: 600;
+  color: var(--ink); text-align: right; white-space: nowrap;
+}
+.ov-live-seen { color: var(--ink3); text-align: right; white-space: nowrap; }
+@media (max-width: 768px) {
+  .ov-live-row { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .ov-live-where, .ov-live-seen { display: none; }
+}
+
 /* -- fleet-is-quiet banner: shown only when no heartbeat has arrived recently. -- */
 .ov-quiet-card {
   border-left: 3px solid var(--warn);
