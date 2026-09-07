@@ -2,17 +2,16 @@
  * Mercator projection math, plus the exact scale/translate every city dot has to project
  * with to land on the same pixels as the country outlines under it.
  *
- * Those numbers are NOT guessed here (they used to be: a hardcoded `width / (2*pi)` scale
- * that assumed the whole 360° of longitude exactly fills the canvas width, without ever
- * checking whether the projected geometry fit the canvas HEIGHT — it didn't, which is why
- * Russia/Greenland/Canada/Norway rendered clipped against the top edge). They come from
- * operator/scripts/build-world.mjs's `geoMercator().fitExtent(...)` fit against the real
- * land geometry, which provably fits every included country inside the canvas, and are
- * exported as PROJECTION_1152/PROJECTION_520 in ./paths.generated.ts (imported below) so
- * this module's single-point `projectPoint` (city dots) can never drift from the exact
- * numbers the land paths themselves were projected with. This is a one-way dependency
- * (generated data -> this module); build-world.mjs never reads anything back from this
- * file, so it can always rebuild paths.generated.ts from the raw topology alone.
+ * Those numbers are NOT guessed here — they are the reference's own fixed projection
+ * (SPEC.md: `geoMercator().translate([576,288]).scale(152.948)` on a 1152x576 viewBox for
+ * the realtime map, `.translate([260,180]).scale(70)` on 520x300 for the corner map), held
+ * as a single source of truth in operator/scripts/build-world.mjs and exported as
+ * PROJECTION_1152/PROJECTION_520 in ./paths.generated.ts (imported below) — including the
+ * width/height of the exact frame that scale/translate was clipped to — so this module's
+ * single-point `projectPoint` (city dots) can never drift from the exact numbers the land
+ * paths themselves were projected and clipped with. This is a one-way dependency (generated
+ * data -> this module); build-world.mjs never reads anything back from this file, so it can
+ * always rebuild paths.generated.ts from the raw topology alone.
  */
 import { PROJECTION_1152, PROJECTION_520 } from './paths.generated'
 
@@ -24,20 +23,18 @@ export interface MercatorVariant {
   translate: [number, number]
   scale: number
   /** [lon, lat] in degrees — matches d3-geo's `geoMercator().center([lon, lat])`. Left at
-   * d3's own default, [0, 0]: build-world.mjs's fitExtent recomputes `translate` to centre
-   * whatever bounding box the fit produces regardless of any center offset, so a non-zero
-   * value here would only be silently cancelled back out — [0, 0] is the honest value, not
-   * a simplification. */
+   * d3's own default, [0, 0]: the reference's own translate already centres the frame it
+   * wants, so a non-zero value here would only be a second, redundant offset — [0, 0] is the
+   * honest value, not a simplification. */
   center: [number, number]
 }
 
 const CENTER: [number, number] = [0, 0]
 
-function makeVariant(width: number, projection: { scale: number; translate: [number, number] }): MercatorVariant {
-  const height = Math.round((width * 9) / 16)
+function makeVariant(projection: { width: number; height: number; scale: number; translate: [number, number] }): MercatorVariant {
   return {
-    width,
-    height,
+    width: projection.width,
+    height: projection.height,
     translate: projection.translate,
     scale: projection.scale,
     center: CENTER
@@ -45,12 +42,13 @@ function makeVariant(width: number, projection: { scale: number; translate: [num
 }
 
 /** Reference projection: `geoMercator().translate(translate).scale(scale)` (center left at
- * d3's default [0, 0] — see MercatorVariant.center above) for the 1152-wide realtime map and
- * the 520-wide corner map, both 16:9. scale/translate come from PROJECTION_1152/520
- * (./paths.generated.ts), build-world.mjs's fitExtent result. */
+ * d3's default [0, 0] — see MercatorVariant.center above), clipped to its own fixed
+ * width/height, for the 1152-wide realtime map (1152x576) and the 520-wide corner map
+ * (520x300). Every field comes from PROJECTION_1152/520 (./paths.generated.ts),
+ * build-world.mjs's copy of the reference's exact numbers. */
 export const MERCATOR_VARIANTS: Record<MapVariant, MercatorVariant> = {
-  '1152': makeVariant(1152, PROJECTION_1152),
-  '520': makeVariant(520, PROJECTION_520)
+  '1152': makeVariant(PROJECTION_1152),
+  '520': makeVariant(PROJECTION_520)
 }
 
 export const MAP_DIMENSIONS: Record<MapVariant, { width: number; height: number }> = {

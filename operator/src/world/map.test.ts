@@ -175,7 +175,7 @@ describe('renderRealtimeMapSvg', () => {
     expect(svg).toContain('class="world-land"')
     expect(svg).toContain('class="map-ocean"')
     expect(svg).toContain('class="map-graticule"')
-    expect(svg).toContain('viewBox="0 0 1152 648"')
+    expect(svg).toContain('viewBox="0 0 1152 576"')
   })
 
   it('never fakes a dot: exactly one pin per supplied point, no more', () => {
@@ -299,14 +299,14 @@ describe('renderRealtimeMapSvg', () => {
 })
 
 describe('renderCornerMapSvg', () => {
-  it('renders the 16:9 corner choropleth with a chart-scale-05 class at the max count', () => {
+  it('renders the corner choropleth with a chart-scale-05 class at the max count', () => {
     const svg = renderCornerMapSvg({
       countries: [
         { iso: 'CA', count: 4 },
         { iso: 'US', count: 1 }
       ]
     })
-    expect(svg).toContain('viewBox="0 0 520 293"')
+    expect(svg).toContain('viewBox="0 0 520 300"')
     expect(svg).toContain('data-iso="CA"')
     expect(svg).toContain('class="map-ocean"')
     expect(svg).toMatch(/class="[^"]*scale-05[^"]*"[^>]*data-iso="CA"/)
