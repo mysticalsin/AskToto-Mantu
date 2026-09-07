@@ -8,6 +8,10 @@ The deploy runbook itself — commands, secrets, rotation, revocation — is
 [`cloudflare-proxy/README.md`](../cloudflare-proxy/README.md). This is the picture that runbook sits
 inside.
 
+Portal-hosted keys (licensed seat → `metis-operator` vault → Workers AI / AI Gateway, no seat-local
+key) are a different plane: [`docs/design/METIS-CF-LLM-GATEWAY.md`](design/METIS-CF-LLM-GATEWAY.md).
+Do not merge that Worker with this proxy.
+
 ---
 
 ## The rule: Métis does not ship a Cloudflare token
