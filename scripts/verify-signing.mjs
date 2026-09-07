@@ -19,7 +19,11 @@ import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, platform } from 'node:os'
 
-const REQUIRE_NOTARIZED = process.argv.includes('--require-notarized')
+const ALLOW_ADHOC_MAC = String(process.env.ASKTOTO_ALLOW_ADHOC_MAC || '').trim() === '1'
+const REQUIRE_NOTARIZED = process.argv.includes('--require-notarized') && !ALLOW_ADHOC_MAC
+if (process.argv.includes('--require-notarized') && ALLOW_ADHOC_MAC) {
+  console.log('[verify:signing] ASKTOTO_ALLOW_ADHOC_MAC=1 — skipping notarization gate (ADHOC / not Gatekeeper-notarized)')
+}
 const argDir = process.argv.slice(2).find((a) => !a.startsWith('--'))
 const CANDIDATE_DIRS = [
   argDir,

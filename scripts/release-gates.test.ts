@@ -143,4 +143,56 @@ describe('direct release signing gates', () => {
     expect(pkg.scripts['release:build:mac']).toContain('node scripts/verify-signing.mjs --require-notarized')
     expect(pkg.scripts['release:build:win']).toContain('node scripts/verify-signing.mjs')
   })
+
+  it('refuses mac Developer ID release when Apple secrets are missing outside CI', () => {
+    const result = spawnSync(process.execPath, [join(__dirname, 'check-release-secrets.mjs'), 'mac'], {
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH || '',
+        GH_TOKEN: 'test-token'
+      }
+    })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('CSC_LINK')
+    expect(result.stderr).toContain('APPLE_TEAM_ID')
+  })
+
+  it('allows mac adhoc when ASKTOTO_ALLOW_ADHOC_MAC=1', () => {
+    const result = spawnSync(process.execPath, [join(__dirname, 'check-release-secrets.mjs'), 'mac'], {
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH || '',
+        GH_TOKEN: 'test-token',
+        ASKTOTO_ALLOW_ADHOC_MAC: '1'
+      }
+    })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toMatch(/ADHOC|OK/)
+  })
+
+  it('allows mac adhoc in GitHub Actions when Apple secrets are absent', () => {
+    const result = spawnSync(process.execPath, [join(__dirname, 'check-release-secrets.mjs'), 'mac'], {
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH || '',
+        GH_TOKEN: 'test-token',
+        GITHUB_ACTIONS: 'true'
+      }
+    })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toMatch(/ADHOC|OK/)
+  })
+
+  it('release.yml ships adhoc DMG when Apple secrets are missing and keeps Windows signed-only', () => {
+    const workflow = readFileSync(join(root, '.github', 'workflows', 'release.yml'), 'utf8')
+    expect(workflow).toContain('ASKTOTO_ALLOW_ADHOC_MAC')
+    expect(workflow).toContain('ASKTOTO_ADHOC_SIGN')
+    expect(workflow).toContain('CSC_IDENTITY_AUTO_DISCOVERY')
+    expect(workflow).toMatch(/-c\.mac\.identity=null/)
+    expect(workflow).toMatch(/ADHOC|not Gatekeeper-notarized/)
+    expect(workflow).not.toMatch(/refusing to publish an unsigned macOS release/)
+    const winGate = workflow.slice(workflow.indexOf('release-windows:'))
+    expect(winGate).toContain('refusing to publish an unsigned Windows release')
+    expect(winGate).toContain('WIN_CSC_EXPECTED_SUBJECT')
+  })
 })

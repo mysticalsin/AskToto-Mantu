@@ -39,10 +39,28 @@ function requireFileEnv(name, label) {
   if (!existsSync(p)) fail(`${label} file does not exist: ${p}`)
 }
 
+const APPLE_RELEASE_SECRETS = ['CSC_LINK', 'CSC_KEY_PASSWORD', 'APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID']
+
+function appleSecretsMissing() {
+  return APPLE_RELEASE_SECRETS.every((name) => !present(name))
+}
+
+// Tony lock 2026-09-06: tagged release may ship an ADHOC / non-notarized DMG when Apple
+// Developer ID secrets are absent. Explicit flag always wins. In GitHub Actions, missing
+// Apple secrets also select adhoc. Outside CI the default stays Developer ID-strict.
+function allowAdhocMac() {
+  if (value('ASKTOTO_ALLOW_ADHOC_MAC') === '1') return true
+  return value('GITHUB_ACTIONS') === 'true' && appleSecretsMissing()
+}
+
 switch (mode) {
   case 'mac':
     requireAny(['GH_TOKEN', 'GITHUB_TOKEN'], 'GitHub release token')
-    requireAll(['CSC_LINK', 'CSC_KEY_PASSWORD', 'APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID'], 'macOS Developer ID release')
+    if (allowAdhocMac()) {
+      console.log('[check:release-secrets] mac ADHOC — Apple Developer ID / notarization secrets absent; not Gatekeeper-clean')
+      break
+    }
+    requireAll(APPLE_RELEASE_SECRETS, 'macOS Developer ID release')
     break
   case 'win':
     requireAny(['GH_TOKEN', 'GITHUB_TOKEN'], 'GitHub release token')
