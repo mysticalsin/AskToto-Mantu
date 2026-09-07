@@ -1,4 +1,4 @@
-// electron-builder afterPack hook (runs after packing, BEFORE signing).
+// electron-builder afterPack hook (runs after packing; BEFORE signing on macOS, AFTER it on Windows).
 //
 // This repo lives inside OneDrive (CloudStorage), which stamps com.apple.FinderInfo / resource-fork
 // extended attributes on files. Anything copied into the .app (extraResources: bundled ASR models,
@@ -91,9 +91,14 @@ export default async function afterPack(context) {
     execFileSync('xattr', ['-cr', context.appOutDir], { stdio: 'inherit' })
   }
 
-  // This is the only point where the final unpacked resource tree exists but platform signing has not
-  // yet changed Mach-O/PE bytes. Verify every reviewed native payload now; the later CLI invocation uses
-  // --post-sign and verifies inventory, immutable assets, architecture, and signatures instead.
+  // macOS: nothing is signed yet — codesign runs from doSignAfterPack, after this hook — so every
+  // reviewed native payload is compared byte-for-byte here.
+  // Windows: electron-builder signs extraResources .exe INSIDE the copy that fills resources/
+  // (app-builder-lib WinPackager.createTransformerForExtraFiles, consumed by PlatformPackager.doPack
+  // before emitAfterPack), so llama-server.exe, ffmpeg.exe, node.exe and vc_redist.x64.exe are already
+  // signtool-rewritten by the time this runs. There is no hook between that copy and afterPack, so the
+  // packaged-but-unsigned bytes are observable to nothing: run --post-sign. signtool signs .exe only
+  // (WinPackager.shouldSignFile), so every DLL and .node addon stays byte-verified.
   const runtimeCheckArgs = [
     join(SCRIPTS_DIR, 'check-packaged-runtime.mjs'),
     isMac ? 'mac' : 'win',
@@ -102,7 +107,10 @@ export default async function afterPack(context) {
   // electron-builder derives the Windows executable from appInfo.productFilename, which may differ from
   // the standard Metis.exe in an edition-specific config. Pass that same resolved filename into the
   // verifier so afterPack checks the binary electron-builder actually produced.
-  if (isWin) runtimeCheckArgs.push(`--executable=${context.packager.appInfo.productFilename}.exe`)
+  if (isWin) {
+    runtimeCheckArgs.push(`--executable=${context.packager.appInfo.productFilename}.exe`)
+    runtimeCheckArgs.push('--post-sign')
+  }
   // Verify exactly the architectures this package is meant to carry — the same set the pruning above
   // enforced, so the guard and the pruning can never disagree about what "correct" means.
   if (isMac) {
