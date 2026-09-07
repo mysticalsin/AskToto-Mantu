@@ -3,6 +3,15 @@
 Prove host (lock): `https://metis-operator.tony-walteur.workers.dev/`
 Worker: `metis-operator`. Pack HOLD. OAuth LAST. No seat-local keys.
 
+## Ultron paste (Keys)
+
+1. Open `#keys` → **Add an API**.
+2. Provider: `Cloudflare`.
+3. Label: e.g. `Workers AI` (optional).
+4. **API token**: paste the Cloudflare API token (Workers AI REST).
+5. **Account ID**: paste the Cloudflare account id (required).
+6. Add. Vault must show `cloudflare` · last4 only. Do not use Log in to Cloudflare.
+
 ## Deploy this tip
 
 ```sh
