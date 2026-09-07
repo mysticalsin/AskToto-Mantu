@@ -76,7 +76,11 @@ function gateEmDash() {
     ...tsFiles(join(OPERATOR_ROOT, 'src/render'), { excludeTests: true }),
     ...tsFiles(join(OPERATOR_ROOT, 'client'), { excludeTests: true })
   ]
-  const placeholderPattern = /^\s*(export\s+)?(const|let|var)\s+\w+\s*[:=][^=]*=\s*['"]—['"]/
+  // Only shipped copy counts. A doc comment explaining a measurement is not user-facing text, and
+  // the em dash placeholder for a missing value is allowed by the locks wherever it is used, not
+  // only where it is declared. A gate that flags its own documentation gets muted, so it does not.
+  const commentPattern = /^\s*(\/\/|\*|\/\*)/
+  const placeholderPattern = /['"`]—['"`]/
   let violations = 0
   let placeholderUses = 0
   const violationLines = []
@@ -86,7 +90,7 @@ function gateEmDash() {
     const lines = text.split('\n')
     lines.forEach((line, i) => {
       if (!line.includes(EM_DASH)) return
-      if (placeholderPattern.test(line)) {
+      if (commentPattern.test(line) || placeholderPattern.test(line)) {
         placeholderUses++
         placeholderLines.push(`${rel(file)}:${i + 1}`)
       } else {
@@ -111,7 +115,12 @@ function ensurePreviewsExist() {
 }
 
 function gateInlineStyle() {
-  const files = ensurePreviewsExist()
+  // Rendered previews only: a *.test.ts asserting `not.toContain('style="')` is the gate working,
+  // not a breach of it.
+  // Product pages only. tokens-*.html and motion-demo.html are standalone design tooling that
+  // demonstrates styles on purpose; the Worker never serves them, so counting them reports a
+  // violation the product does not have.
+  const files = ensurePreviewsExist().filter((f) => !/(tokens-|motion-demo|-patched)/.test(f))
   let count = 0
   const byFile = {}
   for (const file of files) {
@@ -141,6 +150,8 @@ function gateHexLiterals() {
   for (const file of files) {
     const text = readFileSync(file, 'utf8')
     text.split('\n').forEach((line, i) => {
+      // An issue reference like "SPEC #142/276" in a doc comment is not a colour.
+      if (/^\s*(\/\/|\*|\/\*)/.test(line)) return
       const matches = line.match(hexPattern)
       if (matches) {
         count += matches.length
@@ -166,6 +177,8 @@ function gateClientHygiene() {
   for (const file of files) {
     const text = readFileSync(file, 'utf8')
     text.split('\n').forEach((line, i) => {
+      // A comment that names the banned call (usually to say it must never be used) is not a use.
+      if (/^\s*(\/\/|\*|\/\*)/.test(line)) return
       for (const key of Object.keys(checks)) {
         if (line.includes(key)) {
           checks[key]++
