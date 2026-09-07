@@ -47,6 +47,7 @@ export const ACCESS_BYPASS_PATHS = [
   '/v1/ingest',
   '/v1/heartbeat',
   '/v1/use',
+  '/v1/ask',
   '/v1/skills/manifest',
   '/v1/integrations',
   '/assets/*'

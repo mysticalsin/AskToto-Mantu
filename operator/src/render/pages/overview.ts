@@ -271,6 +271,8 @@ export function renderOverview(data: DashboardPayload, _ctx: RenderCtx): string 
       ${kpiCard({ title: 'Live seats', value: String(data.roi.liveSeats), sub: 'heartbeat &lt; 2 min · real devices', spark: sparklineLine(k.liveSeries) })}
       ${kpiCard({ title: 'Time saved', value: data.roi.timeSaved, sub: data.roi.timeSavedSub, spark: '' })}
       ${kpiCard({ title: 'Value', value: data.roi.value, sub: data.roi.valueSub, spark: '' })}
+      ${kpiCard({ title: 'Portal CF', value: data.roi.portalCf, sub: 'Workers AI DeepSeek · estimate, list price', spark: '' })}
+      ${kpiCard({ title: 'Portal direct', value: data.roi.portalDirect, sub: 'DeepSeek platform · estimate, list price', spark: '' })}
     </div>
     ${renderTopLists(data)}
     ${renderGeoCorner(data)}

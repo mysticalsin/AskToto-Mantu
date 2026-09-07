@@ -25,8 +25,35 @@ export const OPERATOR_HOSTED_PROVIDER_IDS = [
   'groq',
   'mistral',
   'grok',
-  'gemini'
+  'gemini',
+  'cloudflare'
 ] as const
+
+/** Portal-funded CF path (FRAME G8). Bare `@cf/…` only — never `workers-ai/`. */
+export const PORTAL_CF_DEEPSEEK_FLASH = '@cf/deepseek-ai/deepseek-v4-flash-0731'
+export const PORTAL_CF_DEEPSEEK_PRO = '@cf/deepseek-ai/deepseek-v4-pro-0813'
+
+/**
+ * Portal-funded CF model (Ultron/Tony G8 lock):
+ * 1. Everyday Ask default = Flash (`@cf/deepseek-ai/deepseek-v4-flash-0731`).
+ * 2. Optional deep path only (never default) = Pro (`@cf/deepseek-ai/deepseek-v4-pro-0813`).
+ * portal-direct `deepseek` / api.deepseek.com is cost-compare only — not this default.
+ */
+export function portalFundedCloudflareModel(tier?: string): string {
+  if (tier === 'deep') return PORTAL_CF_DEEPSEEK_PRO
+  return PORTAL_CF_DEEPSEEK_FLASH
+}
+
+/**
+ * Pin Portal-funded CF onto the locked catalogue.
+ * Everyday / think / base → Flash. Deep tier may keep Pro. Everything else → Flash.
+ */
+export function resolvePortalCloudflareModel(requested: string, tier = 'base'): string {
+  const model = requested.trim()
+  if (tier === 'deep' && model === PORTAL_CF_DEEPSEEK_PRO) return PORTAL_CF_DEEPSEEK_PRO
+  if (model === PORTAL_CF_DEEPSEEK_FLASH) return PORTAL_CF_DEEPSEEK_FLASH
+  return portalFundedCloudflareModel(tier)
+}
 export type OperatorHostedProviderId = (typeof OPERATOR_HOSTED_PROVIDER_IDS)[number]
 
 export const DUST_RETRIEVAL_ONLY = true
@@ -113,7 +140,12 @@ export function nextAskRoute(input: {
   }
   const funded = filterFundedProviders(input.fundedProviders ?? [])
   const allowedFunded = input.allowed ? funded.filter((p) => input.allowed!.includes(p)) : funded
-  if (allowedFunded[0]) return { provider: allowedFunded[0], tier: 'operator' }
+  // Everyday Operator Ask prefers portal-cf. portal-direct DeepSeek is cost-compare only.
+  const everyday =
+    allowedFunded.includes('cloudflare')
+      ? ['cloudflare', ...allowedFunded.filter((p) => p !== 'cloudflare' && p !== 'deepseek')]
+      : allowedFunded
+  if (everyday[0]) return { provider: everyday[0], tier: 'operator' }
   return { provider: '', tier: 'fail' }
 }
 

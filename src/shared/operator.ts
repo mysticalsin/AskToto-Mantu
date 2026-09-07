@@ -196,7 +196,17 @@ export const CACHE_PRICE_MULT = {
 } as const
 
 /** Small published list-price table, USD per million tokens. Family prefixes only. */
-export const LIST_PRICE_TABLE: { test: (model: string) => boolean; inputPerMTok: number; outputPerMTok: number; family: string }[] = [
+export const LIST_PRICE_TABLE: {
+  test: (model: string) => boolean
+  inputPerMTok: number
+  outputPerMTok: number
+  cachedInPerMTok?: number
+  family: string
+}[] = [
+  { test: (m) => /@cf\/deepseek-ai\/deepseek-v4-flash/i.test(m), inputPerMTok: 0.44, outputPerMTok: 1.32, cachedInPerMTok: 0.014, family: 'Workers AI DeepSeek V4 Flash' },
+  { test: (m) => /@cf\/deepseek-ai\/deepseek-v4-pro/i.test(m), inputPerMTok: 1.32, outputPerMTok: 3.96, cachedInPerMTok: 0.044, family: 'Workers AI DeepSeek V4 Pro' },
+  { test: (m) => /deepseek-v4-flash/i.test(m), inputPerMTok: 0.14, outputPerMTok: 0.28, family: 'DeepSeek V4 Flash' },
+  { test: (m) => /deepseek-v4-pro/i.test(m), inputPerMTok: 0.55, outputPerMTok: 2.19, family: 'DeepSeek V4 Pro' },
   { test: (m) => /claude-opus/i.test(m), inputPerMTok: 15, outputPerMTok: 75, family: 'Claude Opus' },
   { test: (m) => /claude-sonnet/i.test(m), inputPerMTok: 3, outputPerMTok: 15, family: 'Claude Sonnet' },
   { test: (m) => /claude-haiku/i.test(m), inputPerMTok: 1, outputPerMTok: 5, family: 'Claude Haiku' },
@@ -205,8 +215,39 @@ export const LIST_PRICE_TABLE: { test: (model: string) => boolean; inputPerMTok:
   { test: (m) => /gpt-4/i.test(m), inputPerMTok: 10, outputPerMTok: 30, family: 'GPT-4' }
 ]
 
-export function listPriceFor(model: string): { inputPerMTok: number; outputPerMTok: number; family: string } | null {
+export function listPriceFor(model: string): {
+  inputPerMTok: number
+  outputPerMTok: number
+  cachedInPerMTok?: number
+  family: string
+} | null {
   return LIST_PRICE_TABLE.find((row) => row.test(model)) ?? null
+}
+
+/**
+ * Token list-price estimate. Null when tokens or a price row are missing.
+ * Never returns a $0 invent — missing stays not reported.
+ */
+export function estimateListPrice(
+  model: string,
+  inputTokens?: number | null,
+  outputTokens?: number | null,
+  cacheRead?: number | null
+): CostEstimate | null {
+  const price = listPriceFor(model)
+  if (!price) return null
+  const input = inputTokens ?? 0
+  const output = outputTokens ?? 0
+  const cached = cacheRead ?? 0
+  if (input <= 0 && output <= 0 && cached <= 0) return null
+  const cachedRate = price.cachedInPerMTok ?? price.inputPerMTok
+  const uncached = Math.max(0, input - cached)
+  const usd =
+    (uncached / 1_000_000) * price.inputPerMTok +
+    (cached / 1_000_000) * cachedRate +
+    (output / 1_000_000) * price.outputPerMTok
+  if (!(usd > 0)) return null
+  return { usd, savedUsd: 0, label: 'estimate, list price', family: price.family }
 }
 
 export interface CostEstimate {

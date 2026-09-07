@@ -84,6 +84,10 @@ export function renderKeys(data: DashboardPayload, _ctx: RenderCtx): string {
           : `<div class="fail-loud" data-cf-oauth-missing>${esc(CF_OAUTH_MISSING)}</div>`
       }
       <div data-cf-overview>${renderCloudflare(data.cloudflare)}</div>
+      <p class="eyebrow mg-t14">Portal LLM spend</p>
+      <div class="sub" data-portal-cf>Portal CF (Workers AI DeepSeek): ${esc(data.roi.portalCf)}</div>
+      <div class="sub" data-portal-direct>Portal direct (DeepSeek platform): ${esc(data.roi.portalDirect)}</div>
+      <div class="sub muted pad-b8">Two lines. Estimate, list price when a $ is shown. Missing stays not reported. Never $0. Worker invocations above are a different KPI.</div>
       <p><a class="btn primary" id="cf-connect" data-cf-aig-connect href="/cloudflare/connect">Log in to Cloudflare</a></p>
       <p id="cf-connect-msg" class="muted pad-8-0"></p>
       <p class="eyebrow mg-t14">Vault</p>

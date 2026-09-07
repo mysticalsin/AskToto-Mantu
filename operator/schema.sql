@@ -47,7 +47,8 @@ CREATE TABLE IF NOT EXISTS asks (
   prompt_cipher TEXT,
   prompt_iv TEXT,
   preview TEXT,
-  question_type TEXT
+  question_type TEXT,
+  path_tag TEXT
 );
 
 CREATE INDEX IF NOT EXISTS asks_ts ON asks(ts);

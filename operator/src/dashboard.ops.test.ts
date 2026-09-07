@@ -180,6 +180,52 @@ describe('ROI and licenses from real D1 ingest only', () => {
     expect(dash.licenses.empty).toBe(true)
     expect(dash.roi.timeSaved).toBe('0 min')
     expect(dash.roi.value).toBe('not reported')
+    expect(dash.roi.portalCf).toBe('not reported')
+    expect(dash.roi.portalDirect).toBe('not reported')
+    expect(dash.roi.portalCf).not.toBe('$0')
+    expect(dash.roi.portalDirect).not.toBe('$0')
+  })
+
+  it('splits portal-cf vs portal-direct list-price estimates and never invents $0', async () => {
+    const store = memoryStore()
+    await store.insertAsk(
+      ask({
+        id: 'cf-1',
+        provider: 'cloudflare',
+        mode: 'operator',
+        model: '@cf/deepseek-ai/deepseek-v4-flash-0731',
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cache_read: null,
+        cache_write: null,
+        cache_uncached: null,
+        cache_status: null,
+        path_tag: 'portal-cf'
+      })
+    )
+    await store.insertAsk(
+      ask({
+        id: 'ds-1',
+        provider: 'deepseek',
+        mode: 'operator',
+        model: 'deepseek-v4-flash',
+        input_tokens: 1_000_000,
+        output_tokens: 1_000_000,
+        cache_read: null,
+        cache_write: null,
+        cache_uncached: null,
+        cache_status: null,
+        path_tag: 'portal-direct'
+      })
+    )
+    const dash = await buildDashboard(store, 'tony.walteur@gmail.com', NOW)
+    expect(dash.roi.portalCf).toMatch(/tok/)
+    expect(dash.roi.portalCf).toMatch(/estimate, list price/)
+    expect(dash.roi.portalCf).not.toBe('$0')
+    expect(dash.roi.portalDirect).toMatch(/tok/)
+    expect(dash.roi.portalDirect).toMatch(/estimate, list price/)
+    expect(dash.roi.portalDirect).not.toBe('$0')
+    expect(dash.roi.portalCf).not.toEqual(dash.roi.portalDirect)
   })
 
   it('credits time saved from recap minutes and keeps value from asks', async () => {

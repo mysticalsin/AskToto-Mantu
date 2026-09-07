@@ -8,9 +8,13 @@ describe('renderOverview (QA fixture)', () => {
   it('renders the KPI tiles, the toplists and geo blocks, and no inline style=', async () => {
     const data = await fixtureDashboard()
     const html = renderOverview(data, CTX)
+    expect(html).toContain('Portal CF')
+    expect(html).toContain('Portal direct')
     expect(html).toContain('Live seats')
     expect(html).toContain('Time saved')
     expect(html).toContain('Value')
+    expect(html).toContain('Portal CF')
+    expect(html).toContain('Portal direct')
     expect(html).toContain('data-overview-kpis')
     expect(html).toContain('data-overview-toplists')
     expect(html).toContain('data-overview-activity')

@@ -33,6 +33,8 @@ import { looksLikeSecret } from './redact'
 import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './store'
 import { resolveTierAndEntitlements } from './tiers'
 import { binaryAssetResponse, isBinaryAssetPath, isPublicAssetPath, publicAssetResponse } from './assets'
+import { handleAsk } from './ask'
+import { parseAskPathTag } from './ask-meter'
 import { handleUse } from './use'
 import { OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import type { AdminCtx, Env, HandleOpts } from './routes/admin-ctx'
@@ -47,6 +49,7 @@ const RATE_LIMITS: Record<string, number> = {
   heartbeat: 5,
   ingest: 60,
   use: 120,
+  ask: 120,
   manifest: 5,
   integrations: 10
 }
@@ -61,6 +64,7 @@ function rateBucketFor(pathname: string): { key: string; max: number } | null {
   if (pathname === '/v1/heartbeat') return { key: 'heartbeat', max: RATE_LIMITS.heartbeat }
   if (pathname === '/v1/ingest') return { key: 'ingest', max: RATE_LIMITS.ingest }
   if (pathname === '/v1/use') return { key: 'use', max: RATE_LIMITS.use }
+  if (pathname === '/v1/ask') return { key: 'ask', max: RATE_LIMITS.ask }
   if (pathname === '/v1/skills/manifest') return { key: 'manifest', max: RATE_LIMITS.manifest }
   if (pathname === '/v1/integrations') return { key: 'integrations', max: RATE_LIMITS.integrations }
   return null
@@ -244,6 +248,7 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     url.pathname === '/v1/heartbeat' ||
     url.pathname === '/v1/skills/manifest' ||
     url.pathname === '/v1/use' ||
+    url.pathname === '/v1/ask' ||
     url.pathname === '/v1/integrations'
   ) {
     const bodyText = request.method === 'GET' ? '' : await request.text()
@@ -263,6 +268,10 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     if (url.pathname === '/v1/use') {
       if (request.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405)
       return handleUse(store, env, hmac.deviceId, bodyText, now, opts.providerFetch ?? opts.cfFetch ?? fetch)
+    }
+    if (url.pathname === '/v1/ask') {
+      if (request.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405)
+      return handleAsk(store, env, hmac.deviceId, bodyText, now, opts.providerFetch ?? opts.cfFetch ?? fetch)
     }
     return ingest(store, env, hmac.deviceId, bodyText, now, geo)
   }
@@ -447,7 +456,8 @@ async function ingest(store: OperatorStore, env: Env, deviceId: string, bodyText
     prompt_cipher: cipher,
     prompt_iv: iv,
     preview: redactedPreview(str(body.mode) ?? undefined, questionType),
-    question_type: questionType
+    question_type: questionType,
+    path_tag: parseAskPathTag(body.pathTag ?? body.path_tag)
   }
   await store.insertAsk(row)
   const pulseId = crypto.randomUUID()

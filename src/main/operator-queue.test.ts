@@ -143,6 +143,7 @@ describe('file I/O: atomic write + corrupt-file recovery (real temp dir)', () =>
   it('never enqueues a heartbeat or /v1/use item', () => {
     enqueueOperatorItem(dir, { path: '/v1/heartbeat', body: { seatHash: 'x' } })
     enqueueOperatorItem(dir, { path: '/v1/use', body: { provider: 'anthropic' } })
+    enqueueOperatorItem(dir, { path: '/v1/ask', body: { provider: 'cloudflare' } })
     expect(loadQueueState(dir).items).toHaveLength(0)
   })
 

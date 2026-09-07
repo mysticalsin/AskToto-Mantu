@@ -125,6 +125,8 @@ export interface AskRow {
    * never sent one (pre-type build or the D1 column is not migrated yet), never free text.
    */
   question_type: string | null
+  /** Portal path tag (FRAME G9). Optional so a D1 one migration behind still reads. */
+  path_tag?: string | null
 }
 
 export interface PulseRow {

@@ -115,6 +115,7 @@ CREATE TABLE IF NOT EXISTS vault_keys (
 CREATE INDEX IF NOT EXISTS vault_keys_provider_status ON vault_keys(provider, status);
 
 ALTER TABLE asks ADD COLUMN question_type TEXT;
+ALTER TABLE asks ADD COLUMN path_tag TEXT;
 
 ALTER TABLE audit ADD COLUMN request_id TEXT;
 ALTER TABLE audit ADD COLUMN route TEXT;

@@ -10,6 +10,8 @@ describe('renderKeys (QA fixture)', () => {
     const html = renderKeys(data, CTX)
     expect(html).toContain('id="key-add"')
     expect(html).toContain('data-cf-overview')
+    expect(html).toContain('data-portal-cf')
+    expect(html).toContain('data-portal-direct')
     expect(html).toContain('>Keys<')
     expect(html).not.toContain('style="')
   })
