@@ -262,13 +262,14 @@ describe('overview-charts helpers', () => {
   it('the seat area chart keeps a headroom floor so one seat is not a full-height cliff', () => {
     // Scaling to the series max alone put a single seat at the very top of the frame, reading as a
     // traffic spike. The floor is 4, and the axis label still prints the true top of the scale.
+    // Floor 4, plus the 1.2x headroom that keeps a flat series off the ceiling: top of scale 4.8.
     const oneSeat = areaChartWithPrevious({ current: [0, 0, 0, 0, 0, 0, 1], height: 150 })
-    expect(oneSeat).toContain('>4<')
+    expect(oneSeat).toContain('>5<')
     expect(oneSeat).not.toContain('>1<')
 
-    // Above the floor the data drives the scale again, exactly as before.
+    // Above the floor the data drives the scale again, still with headroom above the peak.
     const busy = areaChartWithPrevious({ current: [0, 3, 9], height: 150 })
-    expect(busy).toContain('>9<')
+    expect(busy).toContain('>11<')
   })
 
   it('tokenStackBar splits into four var(--data-N) segments that add up to the input, or renders the neutral track when empty', () => {

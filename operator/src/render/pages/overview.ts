@@ -428,7 +428,7 @@ function renderAreaChartCard(data: DashboardPayload): string {
   })
   return `<article class="card pad-b10 ov-area-card" data-ov-area-card>
     <div class="kpi-top"><h3>Unique seats${sourceTooltip('Distinct seats seen each day', 'seats table, pulses, last 7 days')}</h3></div>
-    ${areaChartWithPrevious({ current: series, previous: null, labels, height: 150 })}
+    ${areaChartWithPrevious({ current: series, previous: null, labels, height: 110 })}
   </article>`
 }
 

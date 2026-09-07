@@ -17,6 +17,18 @@ const CHART_SCALE_STEPS = 5
 const AREA_SCALE_FLOOR = 4
 
 /**
+ * Headroom above the series, so the busiest point never touches the top of the frame.
+ *
+ * A chart scaled exactly to its own maximum puts that maximum on the ceiling, and a series that
+ * does not vary puts EVERY point there: the seat chart, drawn from a steady twelve seats a day,
+ * filled its whole card with one solid block of colour and read as a broken panel rather than a
+ * flat trend. A fifth of the height in reserve is enough for the line to sit inside the frame and
+ * be legible as a line. The axis label still prints the real top of the scale, so the extra space
+ * is visible as scale, never as invented data.
+ */
+const SCALE_HEADROOM = 1.2
+
+/**
  * Area chart with an optional dashed previous-period line (plan 3.2/3.5b: "area chart with
  * previous period dashed"). `previous` is omitted whenever the payload has no prior-period
  * series -- DashboardPayload does not compute one today (see the Overview report's data-gap
@@ -51,7 +63,7 @@ export function areaChartWithPrevious(opts: {
   // frame and the line reads as a cliff, which looks like a spike in traffic rather than one seat.
   // A floor of 4 keeps small real numbers small on screen; the axis label still prints the true top
   // of the scale, so nothing is overstated. Once the fleet passes 4 the series drives the scale again.
-  const max = Math.max(AREA_SCALE_FLOOR, ...allVals)
+  const max = Math.max(AREA_SCALE_FLOOR, ...allVals) * SCALE_HEADROOM
   const baseline = padTop + innerH
   const stepFor = (arr: number[]): number => (arr.length > 1 ? innerW / (arr.length - 1) : 0)
   const pointsFor = (arr: number[]): string[] => {
@@ -107,7 +119,7 @@ export function miniBars(values: number[], opts?: { width?: number; height?: num
   if (!vals.length || vals.every((v) => v === 0)) {
     return `<svg class="ov-mini-bars ov-mini-bars-empty" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><line x1="0" y1="${h - 1}" x2="${w}" y2="${h - 1}" stroke="var(--border)" /></svg>`
   }
-  const max = Math.max(1, ...vals)
+  const max = Math.max(1, ...vals) * SCALE_HEADROOM
   const gap = 2
   const n = vals.length
   const bw = Math.max(2, (w - gap * (n + 1)) / n)
