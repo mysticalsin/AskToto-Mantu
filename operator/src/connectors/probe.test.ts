@@ -133,13 +133,39 @@ describe('probeConnection - REST', () => {
     // exactly what an old "clear the abort timer once fetch resolves" bug would miss: the header-phase
     // timeout no longer covers the body-read phase, so readCapped's own deadline race must catch it.
     const entry = entryFor('hubspot')
+    // Cancel must stop the drip: reader.cancel() (readCapped's timeout path) closes the
+    // controller, and a stray setTimeout tick after that throws
+    // `TypeError: Invalid state: Controller is already closed` — an UNHANDLED vitest
+    // failure on windows-latest even when the probe itself timed out correctly.
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let stopped = false
+    const stopDrip = (): void => {
+      stopped = true
+      if (timer !== undefined) {
+        clearTimeout(timer)
+        timer = undefined
+      }
+    }
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         const tick = (): void => {
-          controller.enqueue(new TextEncoder().encode('a'))
-          setTimeout(tick, 100)
+          if (stopped || controller.desiredSize === null) {
+            stopDrip()
+            return
+          }
+          try {
+            controller.enqueue(new TextEncoder().encode('a'))
+          } catch {
+            // Windows: cancel/close can race a timer that already fired.
+            stopDrip()
+            return
+          }
+          timer = setTimeout(tick, 100)
         }
         tick()
+      },
+      cancel() {
+        stopDrip()
       }
     })
     const fetchImpl = (async () => new Response(stream, { status: 200, headers: { 'content-type': 'application/json' } })) as ProbeDeps['fetch']
