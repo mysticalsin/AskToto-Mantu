@@ -111,6 +111,7 @@ import {
   dustStoredAgentMissing,
   type ProviderId
 } from '@shared/providers'
+import { DEFAULT_OPERATOR_URL } from '@shared/operator'
 import { DEFAULT_MODE_PROMPTS } from '@shared/prompts'
 import { modeSkillLock } from '@shared/mode-skills'
 import { LANGUAGE_OPTIONS } from '@shared/lang-id'
@@ -3420,7 +3421,13 @@ function OperatorLicenseCard(): JSX.Element {
   }
 
   const hasLicense = !!status?.licenseLast4
-  const waitingForOperator = hasLicense && !status?.tier
+  // `configured` is "this Mac has both an Operator URL and an ingest secret" (main's operatorStatus).
+  // Without it no heartbeat is ever sent, so the Worker cannot confirm the seat and a spinner reading
+  // "waiting for Operator" would spin for ever while nothing was in flight. Name the missing piece
+  // instead: an activated license on an unconnected seat is the one failure that otherwise looks
+  // identical to a licence the Worker has not got round to yet.
+  const connected = status?.configured === true
+  const waitingForOperator = hasLicense && connected && !status?.tier
 
   return (
     <div className="mt-2 flex flex-col gap-2 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.02] p-3">
@@ -3468,7 +3475,15 @@ function OperatorLicenseCard(): JSX.Element {
               Clear
             </button>
           </div>
-          {waitingForOperator ? (
+          {!connected ? (
+            <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
+              <AlertCircle size={13} className="mt-px shrink-0" />
+              <span>
+                Saved on this Mac, but this seat is not reporting yet. Fill in the Operator URL and ingest secret
+                above; the Operator confirms the license on the next heartbeat.
+              </span>
+            </div>
+          ) : waitingForOperator ? (
             <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
               <RefreshCw size={12} className="animate-spin" /> Waiting for Operator to confirm this seat…
             </div>
@@ -6582,11 +6597,20 @@ export function Settings({
                       value={settings.operatorUrl || ''}
                       spellCheck={false}
                       autoComplete="off"
-                      placeholder="https://metis-operator.example.workers.dev"
+                      placeholder={DEFAULT_OPERATOR_URL}
                       disabled={settings.managedKeys.includes('operatorUrl')}
                       onChange={(e) => patch({ operatorUrl: e.target.value.trim() })}
                       className={`${ctl} w-full`}
                     />
+                    {!settings.operatorUrl && !settings.managedKeys.includes('operatorUrl') && (
+                      <button
+                        type="button"
+                        onClick={() => patch({ operatorUrl: DEFAULT_OPERATOR_URL })}
+                        className="no-drag cl-focus w-fit text-[11px] text-[color:var(--cl-muted-foreground)] underline hover:text-[color:var(--cl-foreground)]"
+                      >
+                        Use the Métis Operator
+                      </button>
+                    )}
                   </label>
                   <label className="flex flex-col gap-1 px-1 py-2">
                     <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Ingest secret</span>
@@ -6619,7 +6643,11 @@ export function Settings({
                       <ExternalLink size={12} /> Open Operator
                     </button>
                   )}
-                  {/^https:\/\//i.test(settings.operatorUrl || '') && <OperatorLicenseCard />}
+                  {/* Always shown. Hiding it until a URL was set meant a seat with no Operator URL had
+                      nowhere to paste a licence at all: the key generated in the console had no field
+                      to go in, which reads as the licence being rejected rather than the seat being
+                      unconfigured. The card says so itself when this Mac is not reporting yet. */}
+                  <OperatorLicenseCard />
                 </Section>
               </div>
             )}
