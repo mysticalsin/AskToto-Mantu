@@ -1,7 +1,8 @@
 import { PROVIDERS, requiresUserBaseUrl, type ProviderId } from '../../src/shared/providers'
+import { ensureDefaultAiGateway } from './ai-gateway'
 import { decryptVault } from './crypto'
 import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
-import { looksLikeSecret } from './redact'
+import { looksLikeSecret, providerRefusedPayload } from './redact'
 import type { OperatorStore, VaultKeyRow } from './store'
 import { persistProxyAsk } from './ask-meter'
 import { decodeVaultPlaintext, isForbiddenVaultProvider, isVaultLlmProvider } from './vault'
@@ -35,7 +36,25 @@ export type UseRequest = {
 }
 
 export type UseOk = { ok: true; text: string; inputTokens?: number; outputTokens?: number }
-export type UseFail = { ok: false; error: string; status: number }
+export type UseFail = {
+  ok: false
+  error: string
+  status: number
+  upstreamStatus?: number
+  upstreamSnippet?: string
+}
+
+async function providerRefused(res: Response, secrets: readonly string[]): Promise<UseFail> {
+  const raw = await res.text().catch(() => '')
+  const fields = providerRefusedPayload(res.status, raw, secrets)
+  return {
+    ok: false,
+    error: fields.error,
+    status: 502,
+    upstreamStatus: fields.upstreamStatus,
+    ...(fields.upstreamSnippet ? { upstreamSnippet: fields.upstreamSnippet } : {})
+  }
+}
 
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data), {
@@ -201,7 +220,7 @@ async function callAnthropic(
       messages: req.messages
     })
   })
-  if (!res.ok) return { ok: false, error: 'provider refused the Operator key', status: 502 }
+  if (!res.ok) return providerRefused(res, [secret])
   const parsed = anthropicText(await res.json().catch(() => null))
   if (!parsed) return { ok: false, error: 'provider returned an empty answer', status: 502 }
   return parsed
@@ -216,6 +235,7 @@ async function callCloudflareGateway(
   const id = (accountId || '').trim()
   if (!id) return { ok: false, error: 'Operator cannot issue a use', status: 503 }
   const url = `https://api.cloudflare.com/client/v4/accounts/${id}/ai/v1/chat/completions`
+  await ensureDefaultAiGateway(secret, id, providerFetch)
   const messages = [...(req.system ? [{ role: 'system' as const, content: req.system }] : []), ...req.messages]
   const res = await providerFetch(url, {
     method: 'POST',
@@ -231,7 +251,7 @@ async function callCloudflareGateway(
       ...(req.maxTokens ? { max_tokens: req.maxTokens } : {})
     })
   })
-  if (!res.ok) return { ok: false, error: 'provider refused the Operator key', status: 502 }
+  if (!res.ok) return providerRefused(res, [secret])
   const parsed = openaiText(await res.json().catch(() => null))
   if (!parsed) return { ok: false, error: 'provider returned an empty answer', status: 502 }
   return parsed
@@ -259,7 +279,7 @@ async function callOpenAICompat(
       ...(req.maxTokens ? { max_tokens: req.maxTokens } : {})
     })
   })
-  if (!res.ok) return { ok: false, error: 'provider refused the Operator key', status: 502 }
+  if (!res.ok) return providerRefused(res, [secret])
   const parsed = openaiText(await res.json().catch(() => null))
   if (!parsed) return { ok: false, error: 'provider returned an empty answer', status: 502 }
   return parsed
@@ -296,7 +316,17 @@ export async function handleUse(
   } catch {
     return fail('Operator cannot issue a use', 503)
   }
-  if (!('text' in out)) return fail(out.error, out.status)
+  if (!('text' in out)) {
+    return json(
+      {
+        ok: false,
+        error: out.error,
+        ...(out.upstreamStatus != null ? { upstreamStatus: out.upstreamStatus } : {}),
+        ...(out.upstreamSnippet ? { upstreamSnippet: out.upstreamSnippet } : {})
+      },
+      out.status
+    )
+  }
   const result = publicUseResult(out.text, out.inputTokens, out.outputTokens)
   const blob = JSON.stringify(result)
   if (blob.includes(unlocked.secret) || blob.includes(unlocked.row.cipher) || blob.includes(unlocked.row.iv)) {

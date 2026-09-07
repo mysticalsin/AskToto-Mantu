@@ -17,7 +17,7 @@
  * `fetch` is injected via `deps` so tests run against a fake implementation; nothing here ever calls the
  * global `fetch` directly.
  */
-import { looksLikeSecret } from '../redact'
+import { redactUpstreamSnippet } from '../redact'
 import type { ConnectorCatalogEntry, RestProbeSpec } from './catalog'
 
 export interface ProbeDeps {
@@ -184,9 +184,7 @@ function getByPath(obj: unknown, path: string): unknown {
  *  itself ever sends back to a vendor (`Bearer <token>`, `Basic <base64>`) in case a vendor's error body
  *  echoes the request's own Authorization header. */
 function redactUpstreamText(text: string): string {
-  const truncated = text.slice(0, 200)
-  if (looksLikeSecret(truncated)) return '[redacted]'
-  return truncated.replace(/bearer\s+[a-z0-9._\-+/=]{8,}/gi, '[redacted]').replace(/basic\s+[a-z0-9+/=]{8,}/gi, '[redacted]')
+  return redactUpstreamSnippet(text)
 }
 
 // ── bounded fetch ────────────────────────────────────────────────────────────────────────────────────

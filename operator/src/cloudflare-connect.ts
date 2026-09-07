@@ -1,8 +1,11 @@
 /** Cloudflare · AI Gateway: OAuth login, then Operator provisions vault keys. No paste. */
 
+import { ensureDefaultAiGateway } from './ai-gateway'
 import { writeVaultKey } from './keys'
 import type { OperatorStore } from './store'
 import { CF_ACCOUNT_PROVIDER } from './vault'
+
+export { ensureDefaultAiGateway }
 
 export const CF_DASH_LOGIN = 'https://dash.cloudflare.com/login'
 export const CF_OAUTH_AUTHORIZE = 'https://dash.cloudflare.com/oauth2/auth'
@@ -168,28 +171,13 @@ export async function resolveCloudflareAccount(
   return { ok: true, accountId, name }
 }
 
-export async function ensureDefaultAiGateway(
-  token: string,
-  accountId: string,
-  fetchImpl: typeof fetch
-): Promise<void> {
-  try {
-    await fetchImpl(`https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-gateway/gateways`, {
-      method: 'POST',
-      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ id: 'default', name: 'default' })
-    })
-  } catch {
-    /* default gateway auto-creates on first authenticated Ask */
-  }
-}
-
 export async function provisionCloudflareKeys(
   store: OperatorStore,
   env: CloudflareOAuthEnv,
   email: string,
   now: number,
-  creds: { token: string; accountId: string; name: string }
+  creds: { token: string; accountId: string; name: string },
+  fetchImpl: typeof fetch = fetch
 ): Promise<{ ok: true; last4: string } | { ok: false; error: string; status: number }> {
   const account = await writeVaultKey(
     store,
@@ -201,7 +189,8 @@ export async function provisionCloudflareKeys(
       accountId: creds.accountId,
       token: creds.token,
       label: creds.name
-    }
+    },
+    fetchImpl
   )
   if (!account.ok) return account
   const gateway = await writeVaultKey(
@@ -214,7 +203,8 @@ export async function provisionCloudflareKeys(
       accountId: creds.accountId,
       token: creds.token,
       label: 'AI Gateway'
-    }
+    },
+    fetchImpl
   )
   if (!gateway.ok) return gateway
   return { ok: true, last4: gateway.last4 }
@@ -240,11 +230,18 @@ export async function handleCloudflareCallback(
   const account = await resolveCloudflareAccount(exchanged.token, env, fetchImpl)
   if (!account.ok) return redirectToKeysAfterCloudflareLogin('failed')
   await ensureDefaultAiGateway(exchanged.token, account.accountId, fetchImpl)
-  const written = await provisionCloudflareKeys(store, env, email, now, {
-    token: exchanged.token,
-    accountId: account.accountId,
-    name: account.name
-  })
+  const written = await provisionCloudflareKeys(
+    store,
+    env,
+    email,
+    now,
+    {
+      token: exchanged.token,
+      accountId: account.accountId,
+      name: account.name
+    },
+    fetchImpl
+  )
   if (!written.ok) return redirectToKeysAfterCloudflareLogin('failed')
   return redirectToKeysAfterCloudflareLogin('connected')
 }

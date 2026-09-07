@@ -114,7 +114,7 @@ describe('admin keys write / rotate / revoke', () => {
       }),
       env(),
       { access: tony },
-      { store, now: NOW }
+      { store, now: NOW, cfFetch: async () => new Response('{"success":true}', { status: 200 }) }
     )
     expect(res.status).toBe(200)
     const written = (await res.json()) as { ok: boolean; last4: string; secret?: string; accountId?: string }
@@ -148,6 +148,70 @@ describe('admin keys write / rotate / revoke', () => {
     expect(html).toContain('··66fd')
     expect(html).toContain('cloudflare')
     expect(html).not.toContain(secret)
+  })
+
+  it('paste provider=cloudflare + accountId calls ensureDefaultAiGateway before Ask can run', async () => {
+    const store = memoryStore()
+    const secret = 'cf-api-token-TESTKEYONLY-not-a-real-secret-66fd'
+    const accountId = '294885a27b3cc0a1cbe5d0ccbe38de4f'
+    const gatewayPosts: { url: string; auth?: string; body?: string }[] = []
+    const cfFetch: typeof fetch = async (input, init) => {
+      const url = String(input)
+      if (url.includes('/ai-gateway/gateways')) {
+        gatewayPosts.push({
+          url,
+          auth: init && typeof init === 'object' && 'headers' in init
+            ? String((init.headers as Record<string, string>).authorization || '')
+            : '',
+          body: typeof init?.body === 'string' ? init.body : ''
+        })
+        return new Response(JSON.stringify({ success: true }), { status: 200 })
+      }
+      return new Response('{"success":false}', { status: 404 })
+    }
+    const res = await handleRequest(
+      new Request('https://operator.test/v1/admin/keys', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'cloudflare', label: 'Workers AI', secret, accountId })
+      }),
+      env(),
+      { access: tony },
+      { store, now: NOW, cfFetch }
+    )
+    expect(res.status).toBe(200)
+    expect(gatewayPosts).toHaveLength(1)
+    expect(gatewayPosts[0]?.url).toBe(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/ai-gateway/gateways`
+    )
+    expect(gatewayPosts[0]?.body).toBe(JSON.stringify({ id: 'default', name: 'default' }))
+    expect(gatewayPosts[0]?.auth).toBe(`Bearer ${secret}`)
+    const written = JSON.stringify(await res.json())
+    expect(written).not.toContain(secret)
+    expect(written).not.toContain(accountId)
+    expect(written).not.toMatch(tokenPatternForTests())
+  })
+
+  it('anthropic paste does not call AI Gateway ensure', async () => {
+    const store = memoryStore()
+    const cfFetch = async () => {
+      throw new Error('ensureDefaultAiGateway must not run for non-cloudflare paste')
+    }
+    const res = await handleRequest(
+      new Request('https://operator.test/v1/admin/keys', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          provider: 'anthropic',
+          label: 'Tony cloud',
+          secret: 'sk-ant-api03-TESTKEYONLY-not-a-real-secret-xx99'
+        })
+      }),
+      env(),
+      { access: tony },
+      { store, now: NOW, cfFetch: cfFetch as typeof fetch }
+    )
+    expect(res.status).toBe(200)
   })
 
   it('rejects CLI and Dust as vault providers', async () => {

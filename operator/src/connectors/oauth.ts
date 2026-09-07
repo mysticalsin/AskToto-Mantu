@@ -29,6 +29,7 @@
  * echoed with the client secret it was sent with).
  */
 import { b64urlToBytes, bytesToB64url } from '../crypto'
+import { redactUpstreamSnippet } from '../redact'
 import { boundedFetch, isUnsafeProbeHost, PROBE_TIMEOUT_MS, readCapped, type ProbeDeps } from './probe'
 import { isOAuthConfigured, oauthEnvValue, type ConnectorCatalogEntry, type OAuthConfig } from './catalog'
 
@@ -261,8 +262,6 @@ export interface OAuthError {
 
 export type OAuthTokenResult = { ok: true; payload: OAuthTokenPayload } | { ok: false; error: OAuthError }
 
-const MAX_ERROR_SNIPPET = 200
-
 /** Truncates and strips the literal client secret from an upstream error body before it is ever returned
  *  - the caller stores `error.message` in `last_test_json` (item 4), same "never in a JSON response
  *  beyond last4" rule the rest of the connectors module follows. Pattern-based redaction is not enough
@@ -270,9 +269,7 @@ const MAX_ERROR_SNIPPET = 200
  *  secret value is stripped by exact substring first - the same belt-and-suspenders `probe.ts`'s
  *  `scrubCredential` uses. */
 function sanitizeTokenErrorText(raw: string, clientSecret: string): string {
-  let text = raw.slice(0, MAX_ERROR_SNIPPET)
-  if (clientSecret.length >= 4) text = text.split(clientSecret).join('[redacted]')
-  return text
+  return redactUpstreamSnippet(raw, clientSecret.length >= 4 ? [clientSecret] : [])
 }
 
 interface TokenRequestParams {
