@@ -1,4 +1,7 @@
-// electron-builder afterPack hook (runs after packing, BEFORE signing).
+// electron-builder afterPack hook (runs after packing).
+// On Windows, electron-builder 26 Authenticode-signs extra PE files (ffmpeg, llama-server,
+// managed-node, vcredist) DURING pack when WIN_CSC_LINK is set — so this hook is no longer
+// pre-sign for those binaries. The runtime check must then use --post-sign.
 //
 // This repo lives inside OneDrive (CloudStorage), which stamps com.apple.FinderInfo / resource-fork
 // extended attributes on files. Anything copied into the .app (extraResources: bundled ASR models,
@@ -91,9 +94,9 @@ export default async function afterPack(context) {
     execFileSync('xattr', ['-cr', context.appOutDir], { stdio: 'inherit' })
   }
 
-  // This is the only point where the final unpacked resource tree exists but platform signing has not
-  // yet changed Mach-O/PE bytes. Verify every reviewed native payload now; the later CLI invocation uses
-  // --post-sign and verifies inventory, immutable assets, architecture, and signatures instead.
+  // Verify every reviewed native payload. Unsigned Windows / Mac ad-hoc builds still have raw
+  // reviewed bytes here. Signed Windows packs have already mutated PE extras, so skip those
+  // size/hash compares (--post-sign). The later CLI invocation also uses --post-sign.
   const runtimeCheckArgs = [
     join(SCRIPTS_DIR, 'check-packaged-runtime.mjs'),
     isMac ? 'mac' : 'win',
@@ -103,6 +106,7 @@ export default async function afterPack(context) {
   // the standard Metis.exe in an edition-specific config. Pass that same resolved filename into the
   // verifier so afterPack checks the binary electron-builder actually produced.
   if (isWin) runtimeCheckArgs.push(`--executable=${context.packager.appInfo.productFilename}.exe`)
+  if (isWin && process.env.WIN_CSC_LINK) runtimeCheckArgs.push('--post-sign')
   // Verify exactly the architectures this package is meant to carry — the same set the pruning above
   // enforced, so the guard and the pruning can never disagree about what "correct" means.
   if (isMac) {
