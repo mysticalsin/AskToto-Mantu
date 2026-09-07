@@ -72,7 +72,12 @@ describe('renderOverview (QA fixture)', () => {
   it('recolours the corner map through data-iso classes instead of the raw fill', async () => {
     const data = await fixtureDashboard()
     const html = renderOverview(data, CTX)
-    expect(html).toMatch(/class="world-land ov-map-scale-\d" data-iso="[A-Z]{2}"/)
+    // The class names moved with the map rebuild (corner-cell plus a scale step, or no-data for a
+    // country with no seats); the rule has not: every land path carries its ISO code and takes its
+    // colour from a class, so the sequential scale lives in the token sheet and follows the theme.
+    expect(html).toMatch(/class="world-land corner-cell (scale-0\d|no-data)" data-iso="[A-Z]{2}"/)
+    // A raw fill on a land path would pin the colour outside the token sheet and break dark mode.
+    expect(html).not.toMatch(/<path class="world-land[^>]*\sfill="/)
   })
 
   it('never renders a JS-driven fallback and stays HTML-only for first paint', async () => {
