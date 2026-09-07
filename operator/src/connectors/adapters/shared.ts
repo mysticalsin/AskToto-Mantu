@@ -9,11 +9,14 @@
  *
  * ## SSRF guard (security carry-over, plan section 10)
  *
- * `safeGatewayUrl` below is a deliberate, standalone copy of `connectors/probe.ts`'s `safeProbeUrl`
- * hostname checks (https only; not an IP literal in loopback/link-local/private ranges; not localhost,
- * `*.internal`, `*.local`, the cloud metadata host/address; redirects never followed) - not imported,
- * because `probe.ts` belongs to task B2's owner and this task owns its own copy of the same logic, kept
- * in sync by the "same as probe.ts" requirement in this task's brief rather than a cross-task import.
+ * `safeGatewayUrl` below mirrors `connectors/probe.ts`'s `safeProbeUrl` hostname checks (https only; not
+ * an IP literal in loopback/link-local/private ranges; not localhost, `*.internal`, `*.local`, the cloud
+ * metadata host/address; redirects never followed). The actual hostname/IP classification is the
+ * literal same function as `probe.ts` calls, imported from `../ssrf-guard.ts` rather than kept as two
+ * independently hand-maintained copies - that duplication is exactly how an IPv4-mapped-IPv6 gap in this
+ * check went unnoticed here while it existed. `safeGatewayUrl` itself stays a separate, small function
+ * (different error codes/messages than `safeProbeUrl`, and this module's own `resolveThenValidate`
+ * addition below), so only the classification primitives are shared, not the two URL-check wrappers.
  *
  * `resolveThenValidate` is the addition this task's trust boundary needs that `probe.ts` does not:
  * `probe.ts` only ever runs from an admin's own "Test connection" click (an already-trusted, one-off,
@@ -39,6 +42,8 @@
  * common real case of a static record pointing at an internal address - true both times this checks it -
  * and even the timing attack now needs the attacker to win a race that did not exist at all before this.
  */
+import { expandIPv6, isUnsafeHost, parseIPv4 } from '../ssrf-guard'
+
 // ── adapter contract ─────────────────────────────────────────────────────────────────────────────────
 
 export interface AdapterToolSchema {
@@ -91,67 +96,13 @@ export function jsonResult(data: unknown): AdapterCallOutcome {
   return textResult(JSON.stringify(data, null, 2))
 }
 
-// ── SSRF guard (copy of probe.ts's, see module doc) ─────────────────────────────────────────────────
-
-function parseIPv4(host: string): number[] | null {
-  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host)
-  if (!m) return null
-  const parts = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])]
-  return parts.every((p) => p >= 0 && p <= 255) ? parts : null
-}
-
-function isPrivateIPv4(parts: number[]): boolean {
-  const [a, b] = parts
-  if (a === 127) return true
-  if (a === 10) return true
-  if (a === 172 && b >= 16 && b <= 31) return true
-  if (a === 192 && b === 168) return true
-  if (a === 169 && b === 254) return true
-  if (a === 0) return true
-  return false
-}
-
-function expandIPv6(host: string): string[] | null {
-  if (!host.includes(':')) return null
-  if ((host.match(/::/g) || []).length > 1) return null
-  const [headPart, tailPart] = host.split('::')
-  const head = headPart ? headPart.split(':') : []
-  const tail = host.includes('::') ? (tailPart ? tailPart.split(':') : []) : []
-  if (!host.includes('::')) {
-    const full = host.split(':')
-    return full.length === 8 && full.every((g) => /^[0-9a-f]{0,4}$/i.test(g)) ? full : null
-  }
-  const missing = 8 - head.length - tail.length
-  if (missing < 0) return null
-  const groups = [...head, ...Array(missing).fill('0'), ...tail]
-  return groups.length === 8 && groups.every((g) => /^[0-9a-f]{0,4}$/i.test(g)) ? groups : null
-}
-
-function isPrivateIPv6(host: string): boolean {
-  const hex = expandIPv6(host)
-  if (!hex) return false
-  const groups = hex.map((g) => Number(`0x${g || '0'}`))
-  const [g0, g1, g2, g3, g4, g5, g6, g7] = groups
-  if (groups.every((g) => g === 0)) return true
-  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0 && g6 === 0 && g7 === 1) return true
-  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && (g5 === 0xffff || g5 === 0)) {
-    if (isPrivateIPv4([(g6 >> 8) & 0xff, g6 & 0xff, (g7 >> 8) & 0xff, g7 & 0xff])) return true
-  }
-  if (g0 >= 0xfe80 && g0 <= 0xfebf) return true
-  if (g0 >= 0xfc00 && g0 <= 0xfdff) return true
-  return false
-}
+// ── SSRF guard (classification shared with probe.ts, see ../ssrf-guard.ts and module doc) ─────────────
 
 /** Checks a literal hostname or IP string against the same private/loopback/link-local/metadata rules
- *  `probe.ts#isUnsafeProbeHost` applies; also used on every address `resolveThenValidate` resolves to. */
+ *  `probe.ts#isUnsafeProbeHost` applies (the literal same function, see ../ssrf-guard.ts); also used on
+ *  every address `resolveThenValidate` resolves to. */
 export function isUnsafeGatewayHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
-  if (host === 'localhost' || host === 'metadata.google.internal' || host === '169.254.169.254') return true
-  if (host.endsWith('.local') || host.endsWith('.internal')) return true
-  const v4 = parseIPv4(host)
-  if (v4) return isPrivateIPv4(v4)
-  if (host.includes(':')) return isPrivateIPv6(host)
-  return false
+  return isUnsafeHost(hostname)
 }
 
 export interface SafeUrlCheck {
@@ -190,8 +141,14 @@ interface DohResponse {
 const DOH_ENDPOINT = 'https://cloudflare-dns.com/dns-query'
 const DOH_TIMEOUT_MS = 4000
 
-async function dohLookup(fetchImpl: typeof fetch, host: string, type: 'A' | 'AAAA', deadlineAt: number): Promise<string[]> {
-  const remaining = Math.min(DOH_TIMEOUT_MS, deadlineAt - Date.now())
+async function dohLookup(
+  fetchImpl: typeof fetch,
+  host: string,
+  type: 'A' | 'AAAA',
+  deadlineAt: number,
+  now: () => number = Date.now
+): Promise<string[]> {
+  const remaining = Math.min(DOH_TIMEOUT_MS, deadlineAt - now())
   if (remaining <= 0) return []
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), remaining)
@@ -222,7 +179,12 @@ export interface ResolveCheck {
  *  as unsafe, never as "skip the check" - the whole point of this function is that an unattended,
  *  repeated gateway call must never proceed on an unverified host. See the module doc for what this can
  *  and cannot guarantee about the `fetch()` call made after it. */
-export async function resolveThenValidate(fetchImpl: typeof fetch, url: URL, deadlineAt: number): Promise<ResolveCheck> {
+export async function resolveThenValidate(
+  fetchImpl: typeof fetch,
+  url: URL,
+  deadlineAt: number,
+  now: () => number = Date.now
+): Promise<ResolveCheck> {
   const host = url.hostname
   if (isUnsafeGatewayHost(host)) {
     return { ok: false, error: { code: 'blocked-host', message: 'This host cannot be reached from the gateway.' } }
@@ -232,8 +194,8 @@ export async function resolveThenValidate(fetchImpl: typeof fetch, url: URL, dea
     return { ok: true }
   }
   const [a, aaaa] = await Promise.all([
-    dohLookup(fetchImpl, host, 'A', deadlineAt),
-    dohLookup(fetchImpl, host, 'AAAA', deadlineAt)
+    dohLookup(fetchImpl, host, 'A', deadlineAt, now),
+    dohLookup(fetchImpl, host, 'AAAA', deadlineAt, now)
   ])
   const addresses = [...a, ...aaaa]
   if (!addresses.length) {
@@ -247,10 +209,15 @@ export async function resolveThenValidate(fetchImpl: typeof fetch, url: URL, dea
 
 /** Runs both checks in sequence, the shape every adapter and `proxy.ts` actually wants: build the URL
  *  from catalog/config fields, then get back either a validated `URL` or the first error to report. */
-export async function safeResolvedUrl(fetchImpl: typeof fetch, raw: string, deadlineAt: number): Promise<SafeUrlCheck> {
+export async function safeResolvedUrl(
+  fetchImpl: typeof fetch,
+  raw: string,
+  deadlineAt: number,
+  now: () => number = Date.now
+): Promise<SafeUrlCheck> {
   const literal = safeGatewayUrl(raw)
   if (!literal.ok || !literal.url) return literal
-  const resolved = await resolveThenValidate(fetchImpl, literal.url, deadlineAt)
+  const resolved = await resolveThenValidate(fetchImpl, literal.url, deadlineAt, now)
   if (!resolved.ok) return { ok: false, error: resolved.error }
   return literal
 }

@@ -68,7 +68,7 @@ describe('resolveThenValidate (SSRF, security carry-over plan section 10)', () =
       if (url.includes('type=A')) return dohResponse([{ type: 1, data: '10.0.0.5' }])
       return dohResponse([])
     })
-    const check = await resolveThenValidate(fetchImpl as unknown as typeof fetch, new URL('https://internal-service.example.com/'), NOW + 10_000)
+    const check = await resolveThenValidate(fetchImpl as unknown as typeof fetch, new URL('https://internal-service.example.com/'), NOW + 10_000, () => NOW)
     expect(check.ok).toBe(false)
     expect(check.error?.code).toBe('dns-private')
   })
@@ -79,7 +79,7 @@ describe('resolveThenValidate (SSRF, security carry-over plan section 10)', () =
       if (url.includes('type=A')) return dohResponse([{ type: 1, data: '104.16.0.1' }])
       return dohResponse([])
     })
-    const check = await resolveThenValidate(fetchImpl as unknown as typeof fetch, new URL('https://api.example.com/'), NOW + 10_000)
+    const check = await resolveThenValidate(fetchImpl as unknown as typeof fetch, new URL('https://api.example.com/'), NOW + 10_000, () => NOW)
     expect(check.ok).toBe(true)
   })
 
@@ -87,36 +87,54 @@ describe('resolveThenValidate (SSRF, security carry-over plan section 10)', () =
     const fetchImpl = vi.fn(async () => {
       throw new Error('network down')
     })
-    const check = await resolveThenValidate(fetchImpl as unknown as typeof fetch, new URL('https://api.example.com/'), NOW + 10_000)
+    const check = await resolveThenValidate(fetchImpl as unknown as typeof fetch, new URL('https://api.example.com/'), NOW + 10_000, () => NOW)
     expect(check.ok).toBe(false)
     expect(check.error?.code).toBe('dns-unresolved')
   })
 
   it('fails closed when the DNS lookup returns no answers', async () => {
     const fetchImpl = vi.fn(async () => dohResponse([]))
-    const check = await resolveThenValidate(fetchImpl as unknown as typeof fetch, new URL('https://nxdomain.example.com/'), NOW + 10_000)
+    const check = await resolveThenValidate(fetchImpl as unknown as typeof fetch, new URL('https://nxdomain.example.com/'), NOW + 10_000, () => NOW)
     expect(check.ok).toBe(false)
     expect(check.error?.code).toBe('dns-unresolved')
   })
 
   it('skips DNS resolution for a literal IP host (nothing to resolve) and still applies the literal check', async () => {
     const fetchImpl = vi.fn(async () => dohResponse([]))
-    const check = await resolveThenValidate(fetchImpl as unknown as typeof fetch, new URL('https://8.8.8.8/'), NOW + 10_000)
+    const check = await resolveThenValidate(fetchImpl as unknown as typeof fetch, new URL('https://8.8.8.8/'), NOW + 10_000, () => NOW)
     expect(check.ok).toBe(true)
     expect(fetchImpl).not.toHaveBeenCalled()
   })
 
   it('never proceeds past the deadline', async () => {
     const fetchImpl = vi.fn(async () => dohResponse([{ type: 1, data: '8.8.8.8' }]))
-    const check = await resolveThenValidate(fetchImpl as unknown as typeof fetch, new URL('https://api.example.com/'), NOW - 1)
+    const check = await resolveThenValidate(fetchImpl as unknown as typeof fetch, new URL('https://api.example.com/'), NOW - 1, () => NOW)
     expect(check.ok).toBe(false)
+  })
+
+  // Deadline anchored to the real clock (like the boundedFetch tests below), not the fixed `NOW` used
+  // elsewhere in this block, since dohLookup's timeout math is genuinely Date.now()-relative.
+  it('blocks a hostname whose resolver returns a mix of one public and one private address', async () => {
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.includes('type=A')) {
+        return dohResponse([
+          { type: 1, data: '8.8.8.8' },
+          { type: 1, data: '10.0.0.5' }
+        ])
+      }
+      return dohResponse([])
+    })
+    const check = await resolveThenValidate(fetchImpl as unknown as typeof fetch, new URL('https://mixed-answer.example.com/'), Date.now() + 10_000)
+    expect(check.ok).toBe(false)
+    expect(check.error?.code).toBe('dns-private')
   })
 })
 
 describe('safeResolvedUrl (literal check + resolve-then-validate together)', () => {
   it('rejects at the literal stage without ever attempting a DNS lookup', async () => {
     const fetchImpl = vi.fn(async () => dohResponse([{ type: 1, data: '8.8.8.8' }]))
-    const check = await safeResolvedUrl(fetchImpl as unknown as typeof fetch, 'https://localhost/admin', NOW + 10_000)
+    const check = await safeResolvedUrl(fetchImpl as unknown as typeof fetch, 'https://localhost/admin', NOW + 10_000, () => NOW)
     expect(check.ok).toBe(false)
     expect(check.error?.code).toBe('blocked-host')
     expect(fetchImpl).not.toHaveBeenCalled()
@@ -124,7 +142,7 @@ describe('safeResolvedUrl (literal check + resolve-then-validate together)', () 
 
   it('passes both stages for a normal public host', async () => {
     const fetchImpl = vi.fn(async () => dohResponse([{ type: 1, data: '104.16.0.1' }]))
-    const check = await safeResolvedUrl(fetchImpl as unknown as typeof fetch, 'https://api.example.com/v1', NOW + 10_000)
+    const check = await safeResolvedUrl(fetchImpl as unknown as typeof fetch, 'https://api.example.com/v1', NOW + 10_000, () => NOW)
     expect(check.ok).toBe(true)
   })
 })
