@@ -51,6 +51,16 @@ export const OVERVIEW_CSS = `
 .ov-bar-slot { transition: transform 260ms var(--ease-spring); }
 .ov-bar-exit { opacity: 0; transition: opacity 260ms var(--ease-spring); }
 
+/* -- fleet-is-quiet banner: shown only when no heartbeat has arrived recently. -- */
+.ov-quiet-card {
+  border-left: 3px solid var(--warn);
+  display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;
+}
+.ov-quiet-head { display: flex; align-items: center; gap: 8px; }
+.ov-quiet-head h3 { margin: 0; font: 600 15px/1.3 var(--font-display); color: var(--ink); }
+.ov-quiet-icon { width: 16px; height: 16px; color: var(--warn); flex: none; }
+.ov-quiet-body { margin: 0; font: 400 13px/1.5 var(--font-body); color: var(--ink2); max-width: 78ch; }
+
 /* -- tokens card: header row, stacked bar, legend, cost line. -- */
 .ov-tokens-card .kpi-top { align-items: center; }
 .ov-tokens-total { font-size: 22px; }
