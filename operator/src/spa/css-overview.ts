@@ -109,8 +109,14 @@ export const OVERVIEW_CSS = `
 
 /* The map is the seventh card in a two-column grid, so it was landing alone on the last row with
    an empty half beside it: the page ended on a hole, and the one card that most deserves the width
-   was the one drawn smallest. Spanning both columns closes the gap and roughly doubles the map. */
+   was the one drawn smallest. Spanning both columns closes the gap and roughly doubles the map.
+
+   Its height is capped because the aspect ratio alone would make a full-width map 700px tall, most
+   of a screen for one card, and the page has a two-viewport budget to keep (plan 3.7b law 10). The
+   SVG scales down inside the cap and stays centred, so it is still far wider than the half-width
+   card it replaced. */
 .ov-map-card { grid-column: 1 / -1; }
+.ov-map-card svg { max-height: 380px; }
 @media (max-width: 768px) { .ov-map-card { grid-column: auto; } }
 
 /* -- connectors card: stacks the "Needs attention" / "Connected" group cards (plan 6.10b via

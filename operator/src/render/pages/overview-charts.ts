@@ -95,10 +95,18 @@ export function areaChartWithPrevious(opts: {
   const legend = previous
     ? `<div class="ov-area-legend"><span class="ov-area-legend-item"><i class="ov-area-swatch ov-area-swatch-cur" aria-hidden="true"></i>This period</span><span class="ov-area-legend-item"><i class="ov-area-swatch ov-area-swatch-prev" aria-hidden="true"></i>Previous period</span></div>`
     : ''
+  // The fill fades out downward instead of being one flat wash. A constant-opacity fill under a
+  // steady series paints the whole card the same colour, which reads as a solid panel rather than a
+  // chart; fading it lets the line stay the subject and the area stay a hint of volume. The id is
+  // fixed because this chart is rendered once per page.
   return `<svg class="ov-area-chart" data-ov-area viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Unique seats over time">
+    <defs><linearGradient id="ov-area-grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="var(--data-1)" stop-opacity="0.30" />
+      <stop offset="100%" stop-color="var(--data-1)" stop-opacity="0.02" />
+    </linearGradient></defs>
     <text x="4" y="12" class="ov-area-tick">${esc(yMax)}</text>
     <text x="4" y="${(baseline - 4).toFixed(1)}" class="ov-area-tick">0</text>
-    <path class="ov-area-fill" data-ov-area-fill d="${areaD}" fill="var(--data-1)" fill-opacity="0.12" />
+    <path class="ov-area-fill" data-ov-area-fill d="${areaD}" fill="url(#ov-area-grad)" />
     <path class="ov-area-line" data-ov-area-line d="${lineD}" fill="none" stroke="var(--data-1)" stroke-width="1.5" />
     ${prevPath}
     ${ticks}
