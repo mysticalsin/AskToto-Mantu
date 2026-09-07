@@ -18,6 +18,7 @@ does-not-own:
 ready-to-merge: no
 audience: Tony Walteur only
 prove-host: https://metis-operator.tony-walteur.workers.dev/
+tip-baseline: feat/operator-wow 17ccbd9 (PR169 licensed · last4)
 ---
 
 # FRAME — Portal-hosted LLM bind (Workers AI / AI Gateway DeepSeek)
@@ -67,7 +68,8 @@ Do not invent Keys chrome. Do not pack. Do not contact Tony from this agent.
 
 ## 1. Current state (what already ships)
 
-Investigated on `feat/operator-wow` tip at FRAME time. Do not treat hypotheses as facts.
+Investigated on `feat/operator-wow` including tip `17ccbd9` (PR169 licensed seat label).
+Do not treat hypotheses as facts.
 
 ### 1.1 Three planes (keep them distinct)
 
@@ -95,7 +97,7 @@ This FRAME does not merge those Workers.
 
 Live copy already matches lock 1. The bind/Ask path does not yet.
 
-### 1.3 Seat authorization (done)
+### 1.3 Seat authorization + licensed label (done, including PR169)
 
 `seatAuthorizedForKeys` = Tony Approve **or** active issued license jti. Revoke wins.
 Heartbeat returns `fundedProviders` (IDs only) + `tier` + `entitlements` to an authorized seat.
@@ -103,7 +105,21 @@ Default Métis tier includes `operator_keys`. Métis Light does not (`ask` + `in
 Desktop `operatorFundedProviders()` empties the list when `operator_keys` is false.
 
 First heartbeat can bind `activated_device` to the jti. That is seat bind for **license**, not
-yet a named “CF / Portal LLM bind” object.
+yet a named “CF / Portal LLM bind” object. Keys still do not travel.
+
+**PR169 (`17ccbd9`) — licensed seat label.** Member-pass heartbeats were storing `unlicensed`
+even when an Operator jti / last4 was bound. Now:
+
+- `licenseFromIngest`: member-pass `unlicensed` + Operator `licenseId` or `licenseLast4` →
+  `licensed` / `licensed · last4`. Never a raw key. Never self-approve.
+- `mergeSeatLicenseLabel`: a later heartbeat that still says `unlicensed` does **not** wipe a
+  jti-backed licensed label.
+- `seatLicenseLabel` (Portal Licenses / People / ROI): an **active** issued row bound by
+  `license_jti` wins over a stale `unlicensed` seat field. Revoked / expired issued rows do not.
+
+So a Generate → activate seat shows `licensed · last4` and `keysAuthorized: true` on the live
+Portal when the jti is active. That is **label + key gate**, not Ask E2E. `/v1/ask` is still
+missing. Do not treat a green Licenses chip as proof Tony’s vault answered an Ask.
 
 ### 1.4 Operator LLM proxy today (partial)
 
@@ -411,6 +427,7 @@ may link; it must not invent per-seat $ from empty D1.
 | G0 | Keys copy + vault allowlist + last4 + AES-GCM | **DONE** | — |
 | G1 | CF OAuth connect + dual vault write + default gateway | **DONE** (OAuth secrets may be unset; LAST) | — |
 | G2 | `seatAuthorizedForKeys` + `operator_keys` + heartbeat IDs | **DONE** | — |
+| G2b | Licensed seat label: jti-bound → `licensed · last4` (PR169 / `17ccbd9`) | **DONE** | — |
 | G3 | `/v1/use` DeepSeek direct + CF REST (buffered) | **DONE** | — |
 | G4 | `cloudflare-proxy` streaming REST + optional gateway pin | **DONE** (other Worker; not Portal bind) | — |
 | G5 | `POST /v1/ask` SSE on `metis-operator` (desktop contract) | **MUST-BUILD** | implement |
@@ -490,7 +507,7 @@ READY TO MERGE stays no until Ultron says otherwise.
 - Vault / funded IDs: `operator/src/vault.ts`, `operator/src/keys.ts`, `src/shared/ask-routing.ts`
 - Proxy today: `operator/src/use.ts` — desktop expect: `src/main/llm/operator-ask.ts`
 - CF OAuth: `operator/src/cloudflare-connect.ts`
-- Seat gate: `operator/src/fleet.ts` `seatAuthorizedForKeys`
+- Seat gate + licensed label: `operator/src/fleet.ts` (`seatAuthorizedForKeys`, `seatLicenseLabel`, PR169)
 - Entitlements: `src/shared/operator-entitlements.ts` (`operator_keys`)
 - `docs/design/OPERATOR.md` — thin tip, OAuth LAST, generate license
 - `docs/design/DESIGN.md` — Operator Keys + `/cloudflare/connect`
