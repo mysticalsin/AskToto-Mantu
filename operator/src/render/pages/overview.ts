@@ -95,7 +95,7 @@ export function renderFleetContactBanner(data: DashboardPayload): string {
   return `<article class="card ov-quiet-card" data-ov-quiet>
     <div class="ov-quiet-head">${iconSvg(KIND_ICON_PATHS.heartbeat, { class: 'ov-quiet-icon' })}<h3>${headline}</h3></div>
     <p class="ov-quiet-body">Every figure below is counted from seat heartbeats, so they read zero because nothing is arriving, not because the fleet is idle.${since}</p>
-    <p class="ov-quiet-body">Métis heartbeats every 60 seconds, but only once a seat has both an Operator URL and an ingest secret. Set them on each Mac in Métis under Settings, then Operator.</p>
+    <p class="ov-quiet-body">Métis heartbeats every 60 seconds, but only once a seat can reach this Operator: an Operator URL, plus either an activated license or the shared ingest secret. Set them on each Mac in Métis under Settings, then Operator.</p>
   </article>`
 }
 

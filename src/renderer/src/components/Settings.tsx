@@ -3479,8 +3479,9 @@ function OperatorLicenseCard(): JSX.Element {
             <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
               <AlertCircle size={13} className="mt-px shrink-0" />
               <span>
-                Saved on this Mac, but this seat is not reporting yet. Fill in the Operator URL and ingest secret
-                above; the Operator confirms the license on the next heartbeat.
+                Saved on this Mac, but this seat is not reporting yet. Fill in the Operator URL above; this
+                license signs on its own, so no ingest secret is needed. The Operator confirms it on the next
+                heartbeat.
               </span>
             </div>
           ) : waitingForOperator ? (
@@ -6588,7 +6589,7 @@ export function Settings({
                 </Section>
                 <Section
                   title="Operator"
-                  desc="Point this Mac at Tony's Operator Worker. Empty means no fleet heartbeat. This is not a local analytics page."
+                  desc="Point this Mac at Tony's Operator Worker, then activate a license below. Empty URL means no fleet heartbeat. This is not a local analytics page."
                   icon={Settings2}
                 >
                   <label className="flex flex-col gap-1 px-1 py-2">
@@ -6619,7 +6620,7 @@ export function Settings({
                       value={settings.operatorIngestSecret || ''}
                       spellCheck={false}
                       autoComplete="off"
-                      placeholder="Same value as the Worker OPERATOR_INGEST_SECRET"
+                      placeholder="Optional once a license is activated"
                       disabled={settings.managedKeys.includes('operatorIngestSecret')}
                       onChange={(e) => patch({ operatorIngestSecret: e.target.value })}
                       className={`${ctl} w-full`}
