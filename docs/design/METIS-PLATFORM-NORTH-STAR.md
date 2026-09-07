@@ -205,6 +205,7 @@ Spotlight Ref invoke: `dust chat --sId GOr913Zr5V -m <prompt>` (or `-a "Spotligh
 The account token never ships. Seats talk to `metis-cloudflare-proxy` with a proxy key. Operator may hold the account token for Overview analytics. No CF tokens on seats. Fail loud if the token is missing on Operator: "Cloudflare token missing. Connect it on Keys."
 
 Evidence: `docs/CLOUDFLARE.md`, `docs/design/DESIGN.md` CLI / Dust section, PR 95 / 96 routing law.
+Portal-funded Ask (no seat key): `docs/design/METIS-CF-LLM-GATEWAY.md`.
 
 ---
 
@@ -534,6 +535,7 @@ Implement overlay and Operator slices to those files, not to a paraphrase here.
 | `docs/design/THINKING-ORB.md` | Caption then sphere |
 | `docs/design/QUALITY.md` | Hats; one REJECT fails the slice |
 | `docs/design/OPERATOR.md` | Access, HMAC, packed console, CRM |
+| `docs/design/METIS-CF-LLM-GATEWAY.md` | FRAME: Portal vault → Operator Ask → CF / DeepSeek |
 | `docs/design/IDENTITY-CARD.md` | Member pass |
 | `docs/design/ONBOARDING-STARFIELD.md` | Onboarding bed |
 | `docs/PROVIDER-ROUTING-POLICY.md` | Local / API / Auto |
