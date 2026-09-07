@@ -133,19 +133,34 @@ describe('probeConnection - REST', () => {
     // exactly what an old "clear the abort timer once fetch resolves" bug would miss: the header-phase
     // timeout no longer covers the body-read phase, so readCapped's own deadline race must catch it.
     const entry = entryFor('hubspot')
+    // The drip has to stop when the probe gives up. Left unbounded, the timer outlives the test and
+    // fires once more against a controller the aborted read has already closed, which surfaces as an
+    // unhandled "Invalid state: Controller is already closed" -- a whole-run failure attributed to
+    // whichever file happened to be running, with every test still reported as passing. `cancel` is
+    // what the reader calls on abort, so clearing the timer there ends the drip exactly when the real
+    // consumer walks away; the enqueue is guarded too, since the close can land between two ticks.
+    let timer: ReturnType<typeof setTimeout> | undefined
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         const tick = (): void => {
-          controller.enqueue(new TextEncoder().encode('a'))
-          setTimeout(tick, 100)
+          try {
+            controller.enqueue(new TextEncoder().encode('a'))
+          } catch {
+            return
+          }
+          timer = setTimeout(tick, 100)
         }
         tick()
+      },
+      cancel() {
+        if (timer) clearTimeout(timer)
       }
     })
     const fetchImpl = (async () => new Response(stream, { status: 200, headers: { 'content-type': 'application/json' } })) as ProbeDeps['fetch']
     const result = await probeConnection(entry, { credential: 'x', config: {} }, { fetch: fetchImpl })
     expect(result.ok).toBe(false)
     expect(result.error?.code).toBe('timeout')
+    if (timer) clearTimeout(timer)
   }, 15000)
 
   it('caps the response body at 64 KB while reading it', async () => {
