@@ -136,7 +136,10 @@ export function isApprovedSeat(row: Pick<FleetSeat, 'approval' | 'license'>): bo
   return (row.license || '').trim().toLowerCase() === 'approved'
 }
 
-export function issuedLicenseActive(row: IssuedLicenseRow | null | undefined, now: number): boolean {
+export function issuedLicenseActive(
+  row: Pick<IssuedLicenseRow, 'revoked' | 'exp'> | null | undefined,
+  now: number
+): boolean {
   if (!row || row.revoked) return false
   return row.exp * 1000 > now
 }
