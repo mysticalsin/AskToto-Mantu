@@ -2,6 +2,7 @@
  * Lucide icon paths (MIT license, https://lucide.dev), copied as inline `<path>` data only,
  * no lucide dependency ships in the bundle. Used by shell() nav, kindBadge(), and osGlyph().
  */
+import { OS_MARK_PATHS } from './os-marks.generated'
 
 /** Nav rail icons (operator/shoey-ref/SPEC.md #2): Wallpaper, Earth, ChartNoAxesGantt, Users,
  * Building2, KeyRound, Cog, Bell, BadgeCheck. */
@@ -72,4 +73,29 @@ export const OS_ICON_PATHS: Record<string, string> = {
 export function iconSvg(paths: string, opts?: { class?: string }): string {
   const cls = opts?.class ? ` class="${opts.class}"` : ''
   return `<svg${cls} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">${paths}</svg>`
+}
+
+/** Events page Platform column (plan 6.4). Unlike iconSvg()'s stroke-based Lucide outlines, a
+ *  real brand mark (simple-icons, CC0) is a single solid fill shape -- rendering it inline with
+ *  `fill="currentColor"` is the only way it can inherit the `--ink-2` token from CSS the way the
+ *  plan asks ("monochrome, inheriting --ink-2"); an `<img src>` reference cannot recolor itself
+ *  from the page theme. */
+function filledMarkSvg(pathD: string, opts?: { class?: string }): string {
+  const cls = opts?.class ? ` class="${opts.class}"` : ''
+  return `<svg${cls} viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="${pathD}"/></svg>`
+}
+
+export type PlatformOs = 'darwin' | 'win' | 'linux'
+
+/**
+ * The real Apple/Linux marks vendored from simple-icons at build time (operator/scripts/
+ * build-assets.mjs -> operator/src/render/os-marks.generated.ts), monochrome via currentColor.
+ * Windows has no honest entry to vendor -- simple-icons dropped that mark over a trademark
+ * takedown -- so it (and any os this build never resolved) falls back to the existing generic
+ * OS_ICON_PATHS glyph rather than a hand-drawn brand mark that was never really vendored.
+ */
+export function platformMarkSvg(os: PlatformOs, opts?: { class?: string }): string {
+  const mark = os !== 'win' ? OS_MARK_PATHS[os] : undefined
+  if (mark) return filledMarkSvg(mark.path, opts)
+  return iconSvg(OS_ICON_PATHS[os] ?? OS_ICON_PATHS.win, opts)
 }

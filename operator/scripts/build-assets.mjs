@@ -42,6 +42,9 @@ const LOGOS_OUT_DIR = join(PUBLIC_DIR, 'logos')
  *  to this directory. */
 const LOGOS_BRAND_DIR = join(OPERATOR_ROOT, 'assets', 'logos-brand')
 const FONTS_GENERATED_FILE = join(OPERATOR_ROOT, 'src', 'spa', 'fonts.generated.ts')
+/** Events page Platform column (plan 6.4, dev-feeds brief): generated file icons.ts imports for
+ *  the real Apple/Linux marks. See buildPlatformMarks() below. */
+const OS_MARKS_GENERATED_FILE = join(OPERATOR_ROOT, 'src', 'render', 'os-marks.generated.ts')
 
 const require = createRequire(import.meta.url)
 
@@ -336,6 +339,86 @@ function readLogoSlugsSource() {
   return { LOGO_SLUGS }
 }
 
+// -- 3b. Platform marks (Events page Platform column, plan 6.4) --------------
+
+/** os key -> simple-icons slug. Windows deliberately has no entry: simple-icons dropped the
+ *  Windows mark over a trademark takedown (verified below at build time -- `bySlug.get('windows')`
+ *  and every other spelling this package has ever used for it resolve to nothing), and this
+ *  script never draws a brand mark by hand. icons.ts falls back to the existing generic OS glyph
+ *  for "win" when this map has no entry, so the Platform column never lies about having a real
+ *  Windows brand mark it does not have. */
+const PLATFORM_MARK_SLUGS = { darwin: 'apple', linux: 'linux' }
+
+/** Optional hand-dropped override, same convention as operator/assets/logos-brand/<kind>.svg for
+ *  connectors (see that directory's README) but prefixed `os-` so it can never collide with a
+ *  connector kind id: operator/assets/logos-brand/os-darwin.svg wins over the vendored
+ *  simple-icons mark for "darwin" when present. Extracts the first `<path d="...">` found -- these
+ *  marks are always single-path brand glyphs (simple-icons' own convention), so a narrow regex is
+ *  enough without pulling in a full SVG/XML parser for a build script. */
+function extractFirstPathD(svgText) {
+  const match = svgText.match(/<path[^>]*\bd="([^"]+)"/)
+  return match ? match[1] : null
+}
+
+function renderOsMarksGeneratedFile(entries) {
+  const body = entries
+    .map(([os, mark]) => `  ${os}: { path: ${JSON.stringify(mark.path)}, source: ${JSON.stringify(mark.source)} }`)
+    .join(',\n')
+  return `/**
+ * GENERATED FILE. Do not edit by hand.
+ * Run \`node operator/scripts/build-assets.mjs\` to regenerate.
+ *
+ * Real vendored platform brand marks (simple-icons, CC0, or a hand-dropped override -- see
+ * operator/scripts/build-assets.mjs's buildPlatformMarks()), extracted at build time as plain
+ * path data so operator/src/render/icons.ts can render them inline with fill="currentColor" --
+ * the only way a brand mark can inherit the --ink-2 token from CSS (plan 6.4: "monochrome,
+ * inheriting --ink-2"), since an <img src="..."> mark cannot recolor itself from the page's
+ * theme. Windows is deliberately absent: simple-icons dropped that mark over a trademark
+ * takedown, so icons.ts falls back to the existing generic OS glyph for "win" rather than this
+ * script drawing a brand mark by hand.
+ */
+
+export interface GeneratedPlatformMark {
+  /** SVG path data on the same 0 0 24 24 viewBox every mark and monogram in this product uses. */
+  path: string
+  source: 'simple-icons' | 'override'
+}
+
+export const OS_MARK_PATHS: Partial<Record<'darwin' | 'linux', GeneratedPlatformMark>> = {
+${body}
+}
+`
+}
+
+async function buildPlatformMarks() {
+  const bySlug = await loadSimpleIconsBySlug()
+  const report = []
+  const entries = []
+  for (const [os, slug] of Object.entries(PLATFORM_MARK_SLUGS)) {
+    const overridePath = join(LOGOS_BRAND_DIR, `os-${os}.svg`)
+    if (existsSync(overridePath)) {
+      const pathD = extractFirstPathD(readFileSync(overridePath, 'utf8'))
+      if (pathD) {
+        entries.push([os, { path: pathD, source: 'override' }])
+        report.push(`  ${os}: real mark from operator/assets/logos-brand/os-${os}.svg (override)`)
+        continue
+      }
+      report.push(`  ${os}: override file present but no <path d="..."> found in it -- falling back to simple-icons`)
+    }
+    const icon = bySlug.get(slug)
+    if (icon) {
+      entries.push([os, { path: icon.path, source: 'simple-icons' }])
+      report.push(`  ${os}: real ${icon.title} mark vendored from simple-icons`)
+    } else {
+      report.push(
+        `  ${os}: no simple-icons entry for slug ${JSON.stringify(slug)} (dropped over a trademark takedown) -- icons.ts falls back to the existing generic OS glyph, never a hand-drawn brand mark`
+      )
+    }
+  }
+  writeFileSync(OS_MARKS_GENERATED_FILE, renderOsMarksGeneratedFile(entries))
+  return report
+}
+
 // -- 4. Contrast gate --------------------------------------------------------
 
 function hexToRgb(hex) {
@@ -428,6 +511,9 @@ async function main() {
   console.log('build-assets: logos')
   for (const line of await buildLogos()) console.log(line)
 
+  console.log('build-assets: platform marks (Events Platform column)')
+  for (const line of await buildPlatformMarks()) console.log(line)
+
   console.log('build-assets: contrast gate (WCAG AA, 4.5:1)')
   const { failures } = checkContrast()
   if (failures.length > 0) {
@@ -446,4 +532,4 @@ if (isMain) {
   })
 }
 
-export { buildFonts, buildFlags, buildLogos, checkContrast, contrastRatio }
+export { buildFonts, buildFlags, buildLogos, buildPlatformMarks, checkContrast, contrastRatio }

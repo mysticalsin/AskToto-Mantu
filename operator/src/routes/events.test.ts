@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { handleRequest, type Env } from '../index'
-import { memoryStore, type SeatRow } from '../store'
+import { memoryStore, type AskRow, type SeatRow } from '../store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from '../test-fixtures'
 import { parseKinds, parseLimit, resolveRange } from './events'
 
@@ -139,5 +139,115 @@ describe('GET /v1/admin/events.json', () => {
     const text = await res.text()
     expect(text).not.toMatch(/cipher/i)
     expect(text.toLowerCase()).not.toContain('prompt_iv')
+  })
+
+  it("joins an ask row's questionType from asks by (ts, device_id), never the prompt text", async () => {
+    const store = memoryStore()
+    await store.upsertSeat(seat({ device_id: 'dev-a' }))
+    await store.insertEvent({ id: 'e-ask', ts: NOW, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'answer' })
+    await store.insertEvent({ id: 'e-hb', ts: NOW, kind: 'heartbeat', actor: null, device_id: 'dev-a', country: 'CA', detail: null })
+    await store.insertAsk(ask({ id: 'a1', device_id: 'dev-a', ts: NOW, question_type: 'behavioral' }))
+    const res = await handleRequest(new Request('https://operator.test/v1/admin/events.json'), env(), { access: tonyAccess }, { store, now: NOW })
+    const body = (await res.json()) as { rows: { id: string; kind: string; questionType: string | null }[] }
+    const askRow = body.rows.find((r) => r.id === 'e-ask')
+    const hbRow = body.rows.find((r) => r.id === 'e-hb')
+    expect(askRow?.questionType).toBe('behavioral')
+    expect(hbRow?.questionType).toBeNull()
+  })
+})
+
+function ask(overrides: Partial<AskRow> & Pick<AskRow, 'id' | 'device_id'>): AskRow {
+  return {
+    ts: NOW,
+    mode: 'answer',
+    skill_id: null,
+    skill_version: null,
+    provider: 'anthropic',
+    model: 'claude-sonnet-4-6',
+    ttft_ms: null,
+    total_ms: null,
+    input_tokens: null,
+    output_tokens: null,
+    cache_read: null,
+    cache_write: null,
+    cache_uncached: null,
+    cache_status: null,
+    cache_ttl: null,
+    outcome: 'answered',
+    rating: null,
+    prompt_cipher: 'super-secret-ciphertext',
+    prompt_iv: 'iv-value',
+    preview: 'this is the confidential prompt preview text nobody should see here',
+    question_type: 'factual',
+    ...overrides
+  } as AskRow
+}
+
+describe('GET /v1/admin/events-stats.json', () => {
+  it('aggregates event kinds, ask question types, providers, models, OS and client version for the resolved range and filters', async () => {
+    const store = memoryStore()
+    await store.upsertSeat(seat({ device_id: 'dev-a', os: 'darwin', app_version: '1.8.5' }))
+    await store.upsertSeat(seat({ device_id: 'dev-b', os: 'win', app_version: '1.8.4', hostname: 'DESKTOP-B', sso_email: 'b@amaris.com' }))
+    await store.insertEvent({ id: 'e1', ts: NOW, kind: 'heartbeat', actor: null, device_id: 'dev-a', country: 'CA', detail: null })
+    await store.insertEvent({ id: 'e2', ts: NOW, kind: 'heartbeat', actor: null, device_id: 'dev-b', country: 'CA', detail: null })
+    await store.insertEvent({ id: 'e3', ts: NOW, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'answer' })
+    await store.insertAsk(ask({ id: 'a1', device_id: 'dev-a', ts: NOW, question_type: 'factual', provider: 'anthropic', model: 'claude-sonnet-4-6' }))
+    await store.insertAsk(ask({ id: 'a2', device_id: 'dev-b', ts: NOW - 1000, question_type: 'code', provider: 'openai', model: 'gpt-5' }))
+
+    const res = await handleRequest(new Request('https://operator.test/v1/admin/events-stats.json'), env(), { access: tonyAccess }, { store, now: NOW })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      byKind: { key: string; count: number }[]
+      askKindIncluded: boolean
+      askCount: number
+      questionTypes: { key: string; count: number }[]
+      providers: { key: string; count: number }[]
+      models: { key: string; count: number }[]
+      os: { key: string; count: number }[]
+      clientVersions: { key: string; count: number }[]
+      series: { start: number; count: number }[]
+      truncated: boolean
+    }
+    expect(body.byKind).toEqual(expect.arrayContaining([{ key: 'heartbeat', count: 2 }, { key: 'ask', count: 1 }]))
+    expect(body.askKindIncluded).toBe(true)
+    expect(body.askCount).toBe(2)
+    expect(body.questionTypes).toEqual(expect.arrayContaining([{ key: 'Factual', count: 1 }, { key: 'Code', count: 1 }]))
+    expect(body.providers).toEqual(expect.arrayContaining([{ key: 'anthropic', count: 1 }, { key: 'openai', count: 1 }]))
+    expect(body.models[0].key).toMatch(/\//)
+    expect(body.os).toEqual(expect.arrayContaining([{ key: 'macOS', count: 1 }, { key: 'Windows', count: 1 }]))
+    expect(body.clientVersions).toEqual(expect.arrayContaining([{ key: '1.8.5', count: 1 }, { key: '1.8.4', count: 1 }]))
+    expect(body.series.reduce((sum, p) => sum + p.count, 0)).toBeGreaterThan(0)
+    expect(body.truncated).toBe(false)
+  })
+
+  it('empties every ask-derived breakdown, honestly, when the kind filter excludes ask', async () => {
+    const store = memoryStore()
+    await store.upsertSeat(seat({ device_id: 'dev-a' }))
+    await store.insertEvent({ id: 'e1', ts: NOW, kind: 'heartbeat', actor: null, device_id: 'dev-a', country: 'CA', detail: null })
+    await store.insertAsk(ask({ id: 'a1', device_id: 'dev-a', ts: NOW }))
+    const res = await handleRequest(
+      new Request('https://operator.test/v1/admin/events-stats.json?kinds=heartbeat'),
+      env(),
+      { access: tonyAccess },
+      { store, now: NOW }
+    )
+    const body = (await res.json()) as { askKindIncluded: boolean; askCount: number; questionTypes: unknown[]; providers: unknown[]; models: unknown[] }
+    expect(body.askKindIncluded).toBe(false)
+    expect(body.askCount).toBe(0)
+    expect(body.questionTypes).toEqual([])
+    expect(body.providers).toEqual([])
+    expect(body.models).toEqual([])
+  })
+
+  it('never leaks prompt ciphertext, IVs, or the question text', async () => {
+    const store = memoryStore()
+    await store.upsertSeat(seat({ device_id: 'dev-a' }))
+    await store.insertEvent({ id: 'e1', ts: NOW, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'answer' })
+    await store.insertAsk(ask({ id: 'a1', device_id: 'dev-a', ts: NOW }))
+    const res = await handleRequest(new Request('https://operator.test/v1/admin/events-stats.json'), env(), { access: tonyAccess }, { store, now: NOW })
+    const text = await res.text()
+    expect(text).not.toMatch(/cipher/i)
+    expect(text.toLowerCase()).not.toContain('prompt_iv')
+    expect(text).not.toContain('this is the confidential prompt preview text')
   })
 })

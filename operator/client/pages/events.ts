@@ -1,5 +1,6 @@
 /**
- * Events page client (plan 6.4, P1.4 brief). Owns everything this page needs client-side:
+ * Events page client (plan 6.4, P1.3 brief, rewritten 2026-09-06 to the shoey-ref fidelity
+ * clause). Owns everything this page needs client-side:
  *
  *  - Hydrates from the real `GET /v1/admin/events.json` (richer than the SSR `DashboardPayload`:
  *    full device id, real client version, an actual cursor) as soon as the section is visible,
@@ -8,14 +9,20 @@
  *  - Listening/Paused: while listening, polls events.json every 5s for rows newer than the last
  *    one seen and prepends them (FLIP + an accent-soft wash on the new rows, plan 3.5b).
  *  - Load older via the route's own cursor, appended with a 40ms stagger.
- *  - Range, Filters (OS, country, version, profile) and Search all resolve to the same
- *    events.json query and re-hydrate; the Events/Asks page tabs are sugar over the kind filter
- *    (Asks = the same table, kind=ask -- never a second table); the CRM tab is fully server
- *    rendered already (DashboardPayload.crm) and only needs its status-chip filter and Retry wired.
+ *  - Range, and Filters (kind is not here -- the Events/Asks tabs and the Stats tab's row
+ *    click-throughs cover it; OS, country, version, profile substring search) all resolve to the
+ *    same events.json query and re-hydrate; the Events/Asks page tabs are sugar over the kind
+ *    filter (Asks = the same table, kind=ask -- never a second table); the CRM tab is fully
+ *    server rendered already (DashboardPayload.crm) and only needs its status-chip filter and
+ *    Retry wired. The toolbar itself carries only Listening, range, Filters and View (Tony
+ *    2026-09-06: match the reference's toolbar exactly) -- no visible search box, no export
+ *    links; a text search still works through the Filters panel's own Profile field.
+ *  - Stats tab: `GET /v1/admin/events-stats.json` with the exact same range/filter query this
+ *    page already builds for the table -- "no second set of controls" -- fetched fresh every time
+ *    the tab is opened and again on every range/filter change while it stays open. Its metricTable
+ *    rows for kind/OS/client-version click through back to the Events tab pre-filtered.
  *  - The drawer: every field from the clicked row's own data, plus the ask trace (GET
  *    /v1/admin/asks, joined by findAskTrace()) when the kind is ask, plus seat/license links.
- *  - The export menu's two links (CSV, Excel) are re-targeted with the current filters on every
- *    change, since GET /v1/admin/export.<csv|xlsx> reads its own query string, not page state.
  *
  * Retry (CRM tab) updates its own row in place instead of calling rerender() (operator/client/
  * main.ts): a full rerender() re-fetches /v1/admin/dashboard and re-runs renderEvents() against
@@ -30,12 +37,15 @@ import {
   normalizeEventListRow,
   renderEventRowsHtml,
   renderEventsTableBody,
+  renderEventsStatsSeries,
+  renderEventsStatsTables,
   renderKindChipButtons,
   EVENT_OPTIONAL_COLUMNS,
   type AskTraceLite,
   type EventListRowLike,
   type EventRowLike,
-  type EventOptionalColumn
+  type EventOptionalColumn,
+  type EventsStatsPayloadLike
 } from '../../src/render/pages/events'
 import { api } from '../api'
 import { beacon, flash, flip, pop, press, reduceMotion, sequence, shimmer, slideIn, staggerIn } from '../motion'
@@ -217,29 +227,6 @@ async function fetchEventsJson(params: URLSearchParams): Promise<EventsJsonRespo
 }
 
 // -------------------------------------------------------------------------------------------
-// Export links: GET /v1/admin/export.<csv|xlsx> reads its own query string (table B10's
-// filtersFromSearchParams supports since/until/q/kinds/country/os -- not version or profile, a
-// backend limitation this page cannot widen, since it does not own operator/src/export/tables.ts).
-// -------------------------------------------------------------------------------------------
-
-function updateExportLinks(): void {
-  const since = Date.now() - (RANGE_MS[state.range] ?? RANGE_MS['24h'])
-  const until = Date.now()
-  const params = new URLSearchParams()
-  params.set('since', String(since))
-  params.set('until', String(until))
-  if (state.kind !== 'all') params.set('kinds', state.kind)
-  if (state.country) params.set('country', state.country)
-  if (state.os) params.set('os', state.os)
-  if (state.q) params.set('q', state.q)
-  const query = params.toString()
-  qa<HTMLAnchorElement>('[data-export-group] [data-export-link]').forEach((link) => {
-    const format = link.href.includes('export.xlsx') ? 'xlsx' : 'csv'
-    link.href = `/v1/admin/export.${format}?table=events&${query}`
-  })
-}
-
-// -------------------------------------------------------------------------------------------
 // Kind chips.
 // -------------------------------------------------------------------------------------------
 
@@ -279,7 +266,7 @@ function syncPageTabActive(kind: string): void {
   if (!wantId) return
   qa<HTMLButtonElement>('[data-page-tab]').forEach((tab) => {
     const id = tab.getAttribute('data-page-tab')
-    if (id === 'crm') return
+    if (id === 'crm' || id === 'stats') return
     const on = id === wantId
     tab.classList.toggle('on', on)
     tab.setAttribute('aria-selected', String(on))
@@ -331,7 +318,10 @@ async function hydrate(): Promise<void> {
   state.latestTs = rows.reduce((max, r) => Math.max(max, r.ts), state.latestTs)
   updateKindChips(json.counts ?? {})
   updateLoadOlderVisibility()
-  updateExportLinks()
+  // Stats tab (plan 6.4): "the same range and filters as the table" -- every range/filter change
+  // funnels through this one hydrate(), so refreshing Stats here (a no-op unless that tab is the
+  // one currently open) is the single hook point that keeps it in sync without a second listener.
+  void refreshStatsIfVisible()
   const emptyEl = filteredEmptyEl()
   if (emptyEl) emptyEl.hidden = true
 }
@@ -543,14 +533,14 @@ function wireRangeMenu(): void {
   })
 }
 
-/** The toolbar's Search field and the Filters menu's Profile field both write the one `state.q`
- *  (the server-side substring match already covers hostname/email/device/kind/country, see
- *  operator/src/routes/events.ts's `eventMatchesSeat`) -- keeping the field the operator is not
- *  typing in mirrored to the same value means neither one silently overwrites the other. */
+/** No standalone search box in the toolbar (Tony 2026-09-06: match the reference's toolbar
+ *  exactly -- Listening, range, Filters, View, nothing else): text search lives entirely in the
+ *  Filters panel's own Profile field, which writes `state.q` (the server-side substring match
+ *  already covers hostname/email/device/kind/country, see operator/src/routes/events.ts's
+ *  `eventMatchesSeat`). Kept as its own function, rather than setting `profile.value` inline at
+ *  each call site, so a future second entry point for `state.q` has one place to stay in sync. */
 function syncSearchInputs(value: string): void {
-  const search = q<HTMLInputElement>('#ev-search')
   const profile = q<HTMLInputElement>('[data-filter="profile"]')
-  if (search && search.value !== value) search.value = value
   if (profile && profile.value !== value) profile.value = value
 }
 
@@ -653,84 +643,163 @@ function wireViewMenu(): void {
 }
 
 // -------------------------------------------------------------------------------------------
-// Search.
+// Stats tab (plan 6.4): the same range and filters as the Events table, no second set of
+// controls. Entirely client-fetched from GET /v1/admin/events-stats.json -- fresh on every open
+// and again on every range/filter change while it stays open (hooked from hydrate() above).
 // -------------------------------------------------------------------------------------------
 
-function wireSearch(): void {
-  const input = q<HTMLInputElement>('#ev-search')
-  if (!input) return
-  const run = (): void => {
-    if (searchDebounce) clearTimeout(searchDebounce)
-    searchDebounce = setTimeout(() => {
-      state.q = input.value.trim()
-      syncSearchInputs(state.q)
-      void hydrate()
-    }, 300)
+interface EventsStatsJsonResponse extends EventsStatsPayloadLike {
+  ok?: boolean
+  error?: string
+}
+
+function statsSeriesWrap(): HTMLElement | null {
+  return q<HTMLElement>('[data-ev-stats-series]')
+}
+function statsTablesWrap(): HTMLElement | null {
+  return q<HTMLElement>('[data-ev-stats-tables]')
+}
+function statsPaneEl(): HTMLElement | null {
+  return q<HTMLElement>('[data-ev-pane="stats"]')
+}
+function isStatsPaneVisible(): boolean {
+  const pane = statsPaneEl()
+  return Boolean(pane) && !pane!.hidden
+}
+
+/** Same query events.json's own buildParams() sends, minus the two params that mean nothing to
+ *  an aggregation (cursor, limit) -- events-stats.json ignores them if sent, but sending only
+ *  what the route reads keeps the request self-explanatory. */
+function buildStatsParams(): URLSearchParams {
+  const params = buildParams()
+  params.delete('cursor')
+  params.delete('limit')
+  return params
+}
+
+async function fetchEventsStats(): Promise<EventsStatsPayloadLike | null> {
+  const json = (await api(`/v1/admin/events-stats.json?${buildStatsParams().toString()}`)) as EventsStatsJsonResponse | null
+  if (!json || json.ok === false) return null
+  return json
+}
+
+async function refreshStats(): Promise<void> {
+  const tablesWrap = statsTablesWrap()
+  const seriesWrap = statsSeriesWrap()
+  if (tablesWrap) shimmer(tablesWrap, true)
+  const stats = await fetchEventsStats()
+  if (tablesWrap) shimmer(tablesWrap, false)
+  if (!stats) {
+    if (tablesWrap) tablesWrap.innerHTML = '<p class="sub muted">Could not load Stats. Try again.</p>'
+    toast({ kind: 'error', text: 'Could not load Stats.' })
+    return
   }
-  input.addEventListener('input', run)
-  input.addEventListener('search', run)
-  input.addEventListener('keydown', (event) => {
-    if (event.key === 'Enter') {
-      event.preventDefault()
-      if (searchDebounce) clearTimeout(searchDebounce)
-      state.q = input.value.trim()
-      syncSearchInputs(state.q)
-      void hydrate()
-    }
+  if (seriesWrap) {
+    seriesWrap.innerHTML = renderEventsStatsSeries(stats)
+  }
+  if (tablesWrap) {
+    tablesWrap.innerHTML = renderEventsStatsTables(stats)
+    bindMotion(tablesWrap)
+    wireStatsRowClicks()
+  }
+}
+
+/** Every range/filter change on the Events table funnels through hydrate(), which calls this --
+ *  a no-op unless the Stats tab happens to be the one currently open, which is exactly "the same
+ *  range and filters as the table, no second set of controls" (plan 6.4). */
+async function refreshStatsIfVisible(): Promise<void> {
+  if (isStatsPaneVisible()) await refreshStats()
+}
+
+function wireStatsRowClicks(): void {
+  qa<HTMLElement>('[data-ev-stats-row]').forEach((row) => {
+    press(row)
+    row.addEventListener('click', () => void jumpToEventsFromStats(row))
+    row.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter' || event.key === ' ') {
+        event.preventDefault()
+        void jumpToEventsFromStats(row)
+      }
+    })
   })
 }
 
+/** A Stats row click-through (plan 6.4: "each row clicking through to the filtered Events tab"),
+ *  for the three dimensions the Events table can actually filter by (kind, OS, client version --
+ *  question type/provider/model have no matching Events filter field, so those rows stay
+ *  informational, per this page's own metricTable() calls in the render module). One hydrate()
+ *  at the end regardless of which filter changed, never a double fetch. */
+async function jumpToEventsFromStats(row: HTMLElement): Promise<void> {
+  const filterKey = row.getAttribute('data-ev-stats-row')
+  const value = row.getAttribute('data-ev-stats-key')
+  if (!filterKey || !value) return
+  showPane('events')
+  if (filterKey === 'kind') {
+    // selectKind() already sets state.kind, syncs the Events/Asks tab active state, and
+    // hydrates -- exactly the one-fetch, correctly-labeled jump this row promises.
+    await selectKind(value)
+    return
+  }
+  activatePageTab('events')
+  if (filterKey === 'os') {
+    state.os = value
+    qa<HTMLElement>('[data-os-filter] .segmented-item').forEach((b) => b.classList.toggle('on', b.getAttribute('data-segmented') === value))
+  } else if (filterKey === 'version') {
+    state.version = value
+    const input = q<HTMLInputElement>('[data-filter="version"]')
+    if (input) input.value = value
+  }
+  await hydrate()
+}
+
 // -------------------------------------------------------------------------------------------
-// Page tabs (Events / Asks / CRM).
+// Page tabs (Events / Asks / CRM / Stats).
 // -------------------------------------------------------------------------------------------
+
+/** All three panes this page owns, so a pane switch is one loop rather than three near-identical
+ *  branches. Every hide goes through finishAnimations() first, in both directions: page boot's
+ *  bindMotion(document.body) call (operator/client/main.ts) is still mid-flight animating rows'
+ *  opacity 0->1 via WAAPI for up to ~1.1s on first mount (SSR events rows, and every
+ *  [data-stagger] row inside a pane that is still `hidden` at that point, CRM's and Stats' own
+ *  rows included) -- an animation whose target goes display:none while running, or whose ancestor
+ *  is display:none when it would settle, never reaches its resting state and is left stuck. */
+function allPanes(): HTMLElement[] {
+  return qa<HTMLElement>('[data-ev-pane]')
+}
+
+function showPane(id: 'events' | 'crm' | 'stats'): void {
+  allPanes().forEach((pane) => {
+    const match = pane.getAttribute('data-ev-pane') === id
+    finishAnimations(pane)
+    pane.hidden = !match
+  })
+}
+
+function activatePageTab(id: string): void {
+  qa<HTMLButtonElement>('[data-page-tab]').forEach((t) => {
+    const on = t.getAttribute('data-page-tab') === id
+    t.classList.toggle('on', on)
+    t.setAttribute('aria-selected', String(on))
+  })
+}
 
 function wirePageTabs(): void {
   const tabs = qa<HTMLButtonElement>('[data-page-tab]')
-  const eventsPane = q<HTMLElement>('[data-ev-pane="events"]')
-  const crmPane = q<HTMLElement>('[data-ev-pane="crm"]')
   tabs.forEach((tab) => {
     press(tab)
     tab.addEventListener('click', () => {
       const id = tab.getAttribute('data-page-tab') || 'events'
-      tabs.forEach((t) => {
-        const on = t === tab
-        t.classList.toggle('on', on)
-        t.setAttribute('aria-selected', String(on))
-      })
+      activatePageTab(id)
       if (id === 'crm') {
-        // Same hazard finishAnimations() guards against in hydrate() (see its own doc comment):
-        // on first mount, page boot's bindMotion(document.body) call (operator/client/main.ts)
-        // is still mid-flight animating the SSR events rows' opacity 0->1 via WAAPI for up to
-        // ~1.1s, and a fast click straight to the CRM tab hides this pane while that is still
-        // running. Verified with Playwright that clicking through Events -> CRM -> Events inside
-        // that window leaves every row's opacity back at 1 (not frozen) with this guard in place;
-        // finishing each animation first jumps it to its resting, visible state before the pane
-        // disappears, so nothing this page owns is left in flight to interrupt when the ancestor
-        // goes unrendered.
-        if (eventsPane) {
-          finishAnimations(eventsPane)
-          eventsPane.hidden = true
-        }
-        if (crmPane) {
-          crmPane.hidden = false
-          // Mirror-image hazard to the one this branch's own doc comment (above) explains for
-          // the events pane: page boot's bindMotion(document.body) call (operator/client/main.ts)
-          // starts staggerIn()'s WAAPI opacity animation on every [data-stagger] element site-wide
-          // before wirePageTabs() ever runs, including the CRM funnel rows and sends-table rows
-          // that live inside this pane while it is still `hidden` (display:none). An animation
-          // whose ancestor is display:none when it would run/settle never reaches its resting
-          // state, so on a fresh page load those rows are stuck at opacity 0 forever the first
-          // time this tab is revealed. Finishing any in-flight animation now jumps them straight
-          // to fully visible before the pane is shown, so nothing is left stuck mid-flight.
-          finishAnimations(crmPane)
-        }
+        showPane('crm')
         return
       }
-      if (eventsPane) eventsPane.hidden = false
-      if (crmPane) {
-        finishAnimations(crmPane)
-        crmPane.hidden = true
+      if (id === 'stats') {
+        showPane('stats')
+        void refreshStats()
+        return
       }
+      showPane('events')
       void selectKind(id === 'asks' ? 'ask' : 'all')
     })
   })
@@ -1009,7 +1078,6 @@ function wireSection(section: HTMLElement): void {
   wireFiltersMenu()
   wireViewMenu()
   initColumnVisibility()
-  wireSearch()
   wireLoadOlder()
   wirePageTabs()
   wireCrmStatusChips()
@@ -1017,7 +1085,7 @@ function wireSection(section: HTMLElement): void {
   wireDrawerChrome()
   wireKindChipButtons(section)
   wireRowClicks(qa<HTMLElement>('#ev-table tbody tr'))
-  updateExportLinks()
+  wireStatsRowClicks()
 }
 
 export function initEvents(section: HTMLElement, data: DashboardPayload | null): void {

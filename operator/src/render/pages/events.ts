@@ -1,44 +1,51 @@
 /**
- * Events page (plan 6.4, P1.4 brief). Full rebuild off the "moved out of ui.ts unchanged" P0.4
- * prototype: three tabs (Events, Asks, CRM). Events/Asks share one filterable, cursor-paginated
- * dataTable (Asks is that same table pre-filtered to kind=ask, never a second table); CRM takes
- * over the funnel + sends telemetry that used to live on Notifications (plan 6.8).
+ * Events page (plan 6.4, P1.3 brief, rewritten 2026-09-06 to the shoey-ref/events-1440.png
+ * fidelity clause). Four tabs: Events, Asks, CRM, Stats. Events/Asks share one filterable,
+ * cursor-paginated dataTable (Asks is that same table pre-filtered to kind=ask, never a second
+ * table); CRM takes over the funnel + sends telemetry that used to live on Notifications (plan
+ * 6.8); Stats is its own tab, entirely client-fetched (see the Stats section below).
+ *
+ * Row anatomy matches the reference's column order minus its Browser slot (Métis has no
+ * browser): Created at, Name, Profile, Country, Platform, Detail. Platform carries the real OS
+ * mark plus the OS name as its primary line and the Métis client version as its secondary line --
+ * the slot the reference gives the browser.
  *
  * Server/client split (plan D2): `renderEvents(data, ctx)` renders first paint from
  * `DashboardPayload.events` (a `ConsoleEvent[]`, merged from the stored events table plus
  * synthetic ask/crm rows -- see operator/src/dashboard.ts `mergeEvents()`). That shape carries no
- * `appVersion` and only an 8-char device prefix, so the "Client" column and exact seat links read
- * "Not reported" until the client hydrates from the real `GET /v1/admin/events.json` (richer:
- * full `deviceId`, `appVersion`) moments after mount -- a true reflection of what has loaded, never
- * a stub value. `EventRowLike` is the shape both sources normalize into, and `renderEventRowsHtml`
- * is the one row template both the initial `dataTable()` call and every later client-side patch
- * (hydrate, Load older, Listening prepend) build rows from, so server and client never drift.
+ * `appVersion` and only an 8-char device prefix, so the Platform cell's Métis-version line and
+ * exact seat links read "Not reported" until the client hydrates from the real `GET
+ * /v1/admin/events.json` (richer: full `deviceId`, `appVersion`) moments after mount -- a true
+ * reflection of what has loaded, never a stub value. `EventRowLike` is the shape both sources
+ * normalize into, and `renderEventRowsHtml` is the one row template both the initial
+ * `dataTable()` call and every later client-side patch (hydrate, Load older, Listening prepend)
+ * build rows from, so server and client never drift.
  *
  * Ask trace (drawer, "never text" per lock 2): `GET /v1/admin/asks` returns full `AskRow`s with
  * the prompt fields stripped. There is no shared id between an `events` row and its `asks` row
  * (the Worker mints two separate ids at ingest, see operator/src/index.ts's ask handler), but both
  * inserts share the exact same `ts` and `device_id` value from that one request -- `findAskTrace`
  * joins on that pair (a device-id prefix match covers the SSR path, whose chips only carry the
- * first 8 characters).
+ * first 8 characters). The same join, duplicated in operator/src/routes/events.ts because routes/
+ * never depends on render/, is how the Name cell's inline question type gets to an ask row.
  */
 import type { ConsoleEvent, DashboardPayload } from '../../dashboard'
 import { looksLikeSecret, type SafeChip } from '../../redact'
 import { CRM_FILTER_ORDER, type CrmStatus } from '../../crm'
 import { statusBadge } from '../../components/ui/status-badge'
 import { estimateCacheCost, formatUsdEstimate, type StreamCacheUsage } from '../../../../src/shared/operator'
+import { isQuestionType, QUESTION_TYPE_LABELS } from '../../../../src/shared/question-type'
+import { platformMarkSvg, type PlatformOs } from '../icons'
 import {
   avatar,
-  clientChip,
+  countryCell,
   dataTable,
   detailDrawer,
   esc,
-  exportMenu,
-  flag,
   KIND_ICON_PATHS,
   kindBadge,
   metricTable,
   NAV_ICON_PATHS,
-  osChip,
   pageHeader,
   segmented,
   skeletonRows,
@@ -46,7 +53,6 @@ import {
   timeCell,
   toolbar,
   toolbarButton,
-  toolbarSearch,
   viewButton,
   type DataTableColumn,
   type DataTableRow,
@@ -72,6 +78,9 @@ export interface EventRowLike {
   /** Full device id when known (events.json hydration); the seat-context chip's 8-char prefix
    *  on first paint. `findAskTrace` handles both. */
   deviceId: string | null
+  /** Name cell (plan 6.4): for an ask row, the closed-taxonomy question type (never the prompt
+   *  text) -- null for every non-ask row and for an ask whose join missed. */
+  questionType: string | null
 }
 
 /** The client's `GET /v1/admin/events.json` row shape, kept as a structural interface (not an
@@ -89,6 +98,7 @@ export interface EventListRowLike {
   appVersion: string | null
   detail: string | null
   deviceId: string | null
+  questionType: string | null
 }
 
 function chipVal(chips: SafeChip[], key: string): string | null {
@@ -113,7 +123,8 @@ export function normalizeConsoleEvent(e: ConsoleEvent): EventRowLike {
     os: get('os'),
     appVersion: null,
     detail: get('detail') ?? get('mode') ?? get('status') ?? null,
-    deviceId: get('device')
+    deviceId: get('device'),
+    questionType: get('questionType')
   }
 }
 
@@ -131,7 +142,8 @@ export function normalizeEventListRow(row: EventListRowLike): EventRowLike {
     os: row.os,
     appVersion: row.appVersion,
     detail: row.detail,
-    deviceId: row.deviceId
+    deviceId: row.deviceId,
+    questionType: row.questionType
   }
 }
 
@@ -172,29 +184,95 @@ function kindChipsBlock(counts: Record<string, number>): string {
 // renderEventRowsHtml() for every client-side patch (hydrate, Load older, Listening prepend).
 // ---------------------------------------------------------------------------------------------
 
+/** Column order matches the reference exactly minus its Browser slot, which Métis has no
+ *  equivalent for (plan 6.4, Tony 2026-09-06 correction): Created at, Name, Profile, Country,
+ *  Platform, Detail. The reference's OS + Browser pair collapses into one Platform cell (the
+ *  real OS mark plus the Métis client version as its secondary line) rather than keeping a
+ *  seventh column for a browser Métis does not have. */
 const EVENT_COLUMNS: DataTableColumn[] = [
   { key: 'created', label: 'Created at' },
   { key: 'name', label: 'Name' },
   { key: 'profile', label: 'Profile' },
   { key: 'country', label: 'Country' },
-  { key: 'os', label: 'OS' },
-  { key: 'client', label: 'Client' },
+  { key: 'platform', label: 'Platform' },
   { key: 'detail', label: 'Detail' }
 ]
 
 /** Column keys the View menu can hide (plan: "View (column visibility)"). Created at / Name /
  *  Profile stay mandatory -- without them a row is not identifiable at all. */
-export const EVENT_OPTIONAL_COLUMNS = ['country', 'os', 'client', 'detail'] as const
+export const EVENT_OPTIONAL_COLUMNS = ['country', 'platform', 'detail'] as const
 export type EventOptionalColumn = (typeof EVENT_OPTIONAL_COLUMNS)[number]
 const EVENT_OPTIONAL_COLUMN_LABEL: Record<EventOptionalColumn, string> = {
   country: 'Country',
-  os: 'OS',
-  client: 'Client',
+  platform: 'Platform',
   detail: 'Detail'
 }
 
 function safeOrNull(value: string | null): string | null {
   return value && !looksLikeSecret(value) ? value : null
+}
+
+/** Name cell (plan 6.4): "for an ask its question type follows in --ink-3, never the question
+ *  text". `question_type` is a closed taxonomy (src/shared/question-type.ts) crossing the wire
+ *  as a label already, or a raw stored value on the SSR/legacy path -- either way this only ever
+ *  emits the classification, never anything that could be prompt text. */
+function askQuestionTypeLabel(questionType: string | null): string | null {
+  if (!questionType) return null
+  return isQuestionType(questionType) ? QUESTION_TYPE_LABELS[questionType] : null
+}
+
+/** Row anatomy (plan 6.4): "an unidentified seat reads 'Seat 4f2c' from its short device id,
+ *  never 'Anonymous' and never an invented name." The reference shows "Anonymous" for a web
+ *  visitor with no login; Métis has no such thing (every row is a real installed seat), so the
+ *  one honest fallback when a hostname was never reported is the seat's own short id, never a
+ *  fabricated name and never the reference's wording. */
+function profileCellHtml(row: EventRowLike): string {
+  const hostname = safeOrNull(row.hostname)
+  const email = safeOrNull(row.email)
+  const shortSeatId = row.deviceId ? row.deviceId.slice(-4) : null
+  const primary = hostname || (shortSeatId ? `Seat ${shortSeatId}` : 'Unidentified seat')
+  const secondary = email || MISSING
+  return `<span class="ev-profile-cell">${avatar({ name: hostname || email || primary, email })}<span class="ev-profile-text"><span class="ev-profile-name">${esc(
+    primary
+  )}</span><span class="muted ev-profile-email">${esc(secondary)}</span></span></span>`
+}
+
+/** Country cell (plan 6.4 / 3.6): `countryCell` -- flag, country name, city underneath -- rather
+ *  than the old bare `flag() + field(city||country)` pair. */
+function countryCellHtml(row: EventRowLike): string {
+  return countryCell(row.country, { secondary: safeOrNull(row.city) || undefined })
+}
+
+const PLATFORM_OS_LABEL: Record<PlatformOs, string> = { darwin: 'macOS', win: 'Windows', linux: 'Linux' }
+
+function platformOsOf(os: string | null | undefined): PlatformOs | null {
+  const raw = String(os || '').trim().toLowerCase()
+  if (raw === 'darwin' || raw === 'macos' || raw === 'mac') return 'darwin'
+  if (raw === 'win' || raw === 'win32' || raw === 'windows') return 'win'
+  if (raw === 'linux') return 'linux'
+  return null
+}
+
+/** Platform cell (plan 6.4, Tony 2026-09-06 correction): the real OS mark plus the OS name as
+ *  the primary line, and the Métis client version as the secondary line in --ink-3 -- the slot
+ *  the reference gives the browser, since Métis has no browser. `appVersion` reads "Not
+ *  reported" (never a stub) until the client hydrates the richer events.json row (see the file
+ *  header doc comment on why SSR cannot know it yet). */
+function platformCellHtml(row: EventRowLike): string {
+  const key = platformOsOf(row.os)
+  if (!key) return MISSING
+  const version = row.appVersion ? `Métis ${row.appVersion}` : 'Not reported'
+  return `<span class="ev-platform-cell">${platformMarkSvg(key, { class: 'ev-platform-mark' })}<span class="ev-platform-text"><span class="ev-platform-os">${esc(
+    PLATFORM_OS_LABEL[key]
+  )}</span><span class="muted ev-platform-version">${esc(version)}</span></span></span>`
+}
+
+/** Detail cell (plan 6.4): "the redacted detail string, truncated with the full value in the
+ *  title" -- one line, ellipsis, never wrapped (plan rule). */
+function detailCellHtml(detail: string | null): string {
+  const safe = safeOrNull(detail)
+  if (!safe) return MISSING
+  return `<span class="ev-detail-cell" title="${esc(safe)}">${esc(safe)}</span>`
 }
 
 /** Every free-text field run through the same secret filter `field()` uses, before it goes
@@ -213,7 +291,8 @@ function redactRowForAttrs(row: EventRowLike): EventRowLike {
     os: safeOrNull(row.os),
     appVersion: safeOrNull(row.appVersion),
     detail: safeOrNull(row.detail),
-    deviceId: safeOrNull(row.deviceId)
+    deviceId: safeOrNull(row.deviceId),
+    questionType: safeOrNull(row.questionType)
   }
 }
 
@@ -224,21 +303,19 @@ function eventRowParts(row: EventRowLike, now: number): { attrs: string; cells: 
     .join(' ')
     .toLowerCase()
   const payload = esc(JSON.stringify(safe))
-  const profile = `<span class="ev-profile-cell">${avatar({ name: row.hostname || row.email || '?', email: row.email })}<span class="ev-profile-text"><span class="ev-profile-name">${field(
-    row.hostname
-  )}</span><span class="muted ev-profile-email">${field(row.email)}</span></span></span>`
+  const qType = row.kind === 'ask' ? askQuestionTypeLabel(row.questionType) : null
+  const name = qType ? `${kindBadge(row.kind)}<span class="muted ev-name-qtype">${esc(qType)}</span>` : kindBadge(row.kind)
   return {
     // data-event (not just data-event-id) is kept for operator/src/ui.console.test.ts's
     // pre-existing "events never render token-like strings" contract, unrelated to this rebuild.
     attrs: `data-event-row data-event="${esc(row.id)}" data-event-id="${esc(row.id)}" data-kind="${esc(row.kind)}" data-q="${esc(q)}" data-row="${payload}"`,
     cells: {
       created: timeCell(row.ts, now),
-      name: kindBadge(row.kind),
-      profile,
-      country: `${flag(row.country)}${field(row.city || row.country)}`,
-      os: osChip(row.os) || MISSING,
-      client: clientChip(row.appVersion) || MISSING,
-      detail: field(row.detail)
+      name,
+      profile: profileCellHtml(row),
+      country: countryCellHtml(row),
+      platform: platformCellHtml(row),
+      detail: detailCellHtml(row.detail)
     }
   }
 }
@@ -336,16 +413,6 @@ function viewMenuHtml(): string {
   </div>`
 }
 
-/** operator/src/render/primitives.ts's exportMenu() takes one `csvHref` + `label`: called twice
- *  here (CSV, Excel) rather than duplicating its markup, so the primitive stays the single
- *  source of that link's shape (icon, `data-export-link`) and this page only adds the wrapper the
- *  client re-targets with the current filters (operator/client/pages/events.ts). */
-function exportGroupHtml(): string {
-  return `<div class="ev-export-group" data-export-group>
-    ${exportMenu({ csvHref: '/v1/admin/export.csv?table=events', label: 'CSV' })}
-    ${exportMenu({ csvHref: '/v1/admin/export.xlsx?table=events', label: 'Excel' })}
-  </div>`
-}
 
 // ---------------------------------------------------------------------------------------------
 // Ask trace (drawer, kind === 'ask' only). Pure so both this module's test and the client's
@@ -516,6 +583,176 @@ function crmSendsTable(rows: DashboardPayload['crm']['rows'], now: number): stri
  *  behaviour the real route's resolved-range counts give once the client hydrates. */
 const FIRST_PAINT_ROW_LIMIT = 20
 
+// ---------------------------------------------------------------------------------------------
+// Stats tab (plan 6.4): the same range and filters as the Events table, no second set of
+// controls. Entirely client-fetched from GET /v1/admin/events-stats.json (operator/src/routes/
+// events.ts) -- the SSR pane below is a named skeleton, never a duplicate, out-of-sync
+// computation of the same aggregation. Render functions are exported so the client builds the
+// exact same markup after every fetch (mirrors renderEventsTableBody's own contract).
+// ---------------------------------------------------------------------------------------------
+
+export interface EventsStatsCountRowLike {
+  key: string
+  count: number
+}
+
+export interface EventsStatsSeriesPointLike {
+  start: number
+  count: number
+}
+
+export interface EventsStatsPayloadLike {
+  since: number
+  until: number
+  truncated: boolean
+  byKind: EventsStatsCountRowLike[]
+  askKindIncluded: boolean
+  questionTypes: EventsStatsCountRowLike[]
+  questionTypeCoverage: number | null
+  providers: EventsStatsCountRowLike[]
+  models: EventsStatsCountRowLike[]
+  os: EventsStatsCountRowLike[]
+  clientVersions: EventsStatsCountRowLike[]
+  series: EventsStatsSeriesPointLike[]
+  seriesBucketMs: number
+}
+
+/** Display label (routes/events.ts's own osLabelOf(), duplicated the same layering-boundary way
+ *  that file duplicates platform/question-type helpers rather than importing across it) -> the
+ *  raw `os` filter value the toolbar's Filters panel understands, for a Stats row's click-through.
+ *  "Unknown" has no real filter value, so it stays out of this map and that row renders inert. */
+const OS_LABEL_TO_FILTER: Record<string, string> = { macOS: 'darwin', Windows: 'win', Linux: 'linux' }
+
+function statsWindowNote(table: string, since: number, until: number, truncated?: boolean): string {
+  const fmt = (ts: number): string => new Date(ts).toISOString().replace('T', ' ').slice(0, 16)
+  const cap = truncated ? ', capped to the most recent matching rows -- an older match may be missing' : ''
+  return `${table} table, ${fmt(since)} to ${fmt(until)} UTC${cap}`
+}
+
+function statsRowAttrs(filterKey: 'kind' | 'os' | 'version', value: string | undefined): string {
+  if (!value) return ''
+  return `data-ev-stats-row="${esc(filterKey)}" data-ev-stats-key="${esc(value)}" role="button" tabindex="0"`
+}
+
+function statsCountTable(opts: {
+  title: string
+  labelHeader: string
+  source: string
+  rows: EventsStatsCountRowLike[]
+  emptyTitle: string
+  /** Kind rows get the same tinted badge the table's own Name cell uses instead of plain text. */
+  kindIcons?: boolean
+  filterKey?: 'kind' | 'os' | 'version'
+  keyToFilterValue?: (key: string) => string | undefined
+}): string {
+  return metricTable({
+    title: opts.title,
+    labelHeader: opts.labelHeader,
+    headerIcons: [sourceTooltip(`Count by ${opts.labelHeader.toLowerCase()}`, opts.source)],
+    columns: [{ key: 'count', label: 'Count' }],
+    rows: opts.rows.map((r) => ({
+      icon: opts.kindIcons ? kindBadge(r.key) : undefined,
+      label: opts.kindIcons ? '' : r.key,
+      barValue: r.count,
+      cells: { count: r.count.toLocaleString('en-US') },
+      attrs: opts.filterKey ? statsRowAttrs(opts.filterKey, opts.keyToFilterValue ? opts.keyToFilterValue(r.key) : r.key) : ''
+    })),
+    emptyTitle: opts.emptyTitle
+  })
+}
+
+/** The five metricTables (plan: "every dimension the row shows can also be read as a total"),
+ *  built from one GET /v1/admin/events-stats.json response. Exported so the client rebuilds this
+ *  exact markup after every fetch. */
+export function renderEventsStatsTables(stats: EventsStatsPayloadLike): string {
+  const eventsNote = statsWindowNote('events', stats.since, stats.until, stats.truncated)
+  const askNote = statsWindowNote('asks', stats.since, stats.until)
+  const askEmpty = stats.askKindIncluded ? 'No asks in this range.' : 'The kind filter excludes ask, so there is nothing to show here.'
+  return [
+    statsCountTable({
+      title: 'Event kinds',
+      labelHeader: 'Kind',
+      source: eventsNote,
+      rows: stats.byKind,
+      emptyTitle: 'No events in this range.',
+      kindIcons: true,
+      filterKey: 'kind'
+    }),
+    statsCountTable({
+      title: 'Ask question types',
+      labelHeader: 'Question type',
+      source:
+        stats.questionTypeCoverage != null
+          ? `${askNote}. ${Math.round(stats.questionTypeCoverage * 100)}% of matching asks carried a classification.`
+          : askNote,
+      rows: stats.questionTypes,
+      emptyTitle: askEmpty
+    }),
+    statsCountTable({ title: 'Providers', labelHeader: 'Provider', source: askNote, rows: stats.providers, emptyTitle: askEmpty }),
+    statsCountTable({ title: 'Models', labelHeader: 'Model', source: askNote, rows: stats.models, emptyTitle: askEmpty }),
+    statsCountTable({
+      title: 'OS',
+      labelHeader: 'OS',
+      source: eventsNote,
+      rows: stats.os,
+      emptyTitle: 'No seats reported yet.',
+      filterKey: 'os',
+      keyToFilterValue: (key) => OS_LABEL_TO_FILTER[key]
+    }),
+    statsCountTable({
+      title: 'Client version',
+      labelHeader: 'Version',
+      source: eventsNote,
+      rows: stats.clientVersions.map((r) => ({ key: `Métis ${r.key}`, count: r.count })),
+      emptyTitle: 'No seats reported yet.',
+      filterKey: 'version',
+      keyToFilterValue: (key) => stats.clientVersions.find((r) => `Métis ${r.key}` === key)?.key
+    })
+  ].join('')
+}
+
+/** A small bucketed bar series ("so a spike is visible before it is explained", plan 6.4) --
+ *  every bar's native `<title>` names the exact bucket window and count, in addition to the
+ *  block-level sourceTooltip() above it, so every number here carries a source. Bars render even
+ *  at 0 (the honest value), never a fabricated placeholder shape. */
+export function renderEventsStatsSeries(stats: EventsStatsPayloadLike): string {
+  const points = stats.series
+  const w = 720
+  const h = 56
+  const gap = 2
+  const n = Math.max(1, points.length)
+  const max = Math.max(1, ...points.map((p) => p.count))
+  const bw = Math.max(2, (w - gap * (n + 1)) / n)
+  const bucketLabel = stats.seriesBucketMs >= 24 * 60 * 60 * 1000 ? 'day' : stats.seriesBucketMs >= 60 * 60 * 1000 ? 'hour' : `${Math.round(stats.seriesBucketMs / 60000)} min`
+  const bars = points
+    .map((p, i) => {
+      const bh = Math.max(2, Math.round((p.count / max) * (h - 4)))
+      const x = gap + i * (bw + gap)
+      const y = h - bh
+      const iso = new Date(p.start).toISOString().replace('T', ' ').slice(0, 16)
+      return `<rect x="${x.toFixed(1)}" y="${y}" width="${bw.toFixed(1)}" height="${bh}" rx="1" fill="var(--data-1)" data-grow data-grow-delay="${i * 20}"><title>${esc(
+        iso
+      )} UTC, one ${esc(bucketLabel)} bucket: ${p.count} event${p.count === 1 ? '' : 's'}</title></rect>`
+    })
+    .join('')
+  return `<svg class="ev-stats-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="Events per ${esc(bucketLabel)} over the selected range">${bars}</svg>`
+}
+
+function statsPaneHtml(): string {
+  return `<div data-ev-pane="stats" hidden>
+    <article class="card pad-b10">
+      <div class="ev-kind-heading"><span class="ev-kind-label">Events over the selected range</span>${sourceTooltip(
+        'Count of matching events per bucket',
+        'events table, resolved range and filters'
+      )}</div>
+      <div class="ev-stats-series-wrap" data-ev-stats-series aria-live="polite"></div>
+    </article>
+    <article class="card pad-b10" data-ev-stats-tables aria-live="polite">
+      <div class="ev-skeleton" data-ev-stats-skeleton aria-hidden="true">${skeletonRows(6)}</div>
+    </article>
+  </div>`
+}
+
 export function renderEvents(data: DashboardPayload, ctx: RenderCtx): string {
   const allRows = data.events.map(normalizeConsoleEvent)
   const rows = allRows.slice(0, FIRST_PAINT_ROW_LIMIT)
@@ -526,8 +763,7 @@ export function renderEvents(data: DashboardPayload, ctx: RenderCtx): string {
     <article class="card ev-toolbar-card">
       ${toolbar({
         left: `${listenToggleHtml()}${rangeMenuHtml()}${filtersMenuHtml()}`,
-        search: toolbarSearch({ id: 'ev-search', placeholder: 'Search hostnames, emails, device ids' }),
-        right: `${viewMenuHtml()}${exportGroupHtml()}`
+        right: viewMenuHtml()
       })}
     </article>
     <article class="card pad-b10">
@@ -551,6 +787,8 @@ export function renderEvents(data: DashboardPayload, ctx: RenderCtx): string {
     </article>
   </div>`
 
+  const statsPane = statsPaneHtml()
+
   const drawer = detailDrawer({
     id: 'event-drawer',
     title: 'Event',
@@ -563,11 +801,13 @@ export function renderEvents(data: DashboardPayload, ctx: RenderCtx): string {
     tabs: [
       { id: 'events', label: 'Events', active: true },
       { id: 'asks', label: 'Asks' },
-      { id: 'crm', label: 'CRM' }
+      { id: 'crm', label: 'CRM' },
+      { id: 'stats', label: 'Stats' }
     ]
   })}
   ${eventsPane}
   ${crmPane}
+  ${statsPane}
   ${drawer}
   <div class="ev-drawer-backdrop" hidden data-drawer-backdrop="event-drawer"></div>`
 }

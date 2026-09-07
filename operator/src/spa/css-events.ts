@@ -1,10 +1,11 @@
 /**
- * Events page CSS (plan 6.4, P1.4 brief). Everything the shared classes in operator/src/spa/css.ts
- * and css-pages-shared.ts do not already cover: the Listening/Paused toggle, the Range/Filters/View
- * dropdown menus (one small pattern, reused by all three so there is one open/close/scale-in rule
- * rather than three near-identical ones), the kind/status chip row Events and CRM both use, column
- * hiding for the View menu, the profile cell layout, and the ask-trace stagger-reveal + drawer
- * backdrop the motion minimums (plan 3.5b, Events row) ask for.
+ * Events page CSS (plan 6.4, P1.3 brief, rewritten 2026-09-06 to the shoey-ref fidelity clause).
+ * Everything the shared classes in operator/src/spa/css.ts and css-pages-shared.ts do not already
+ * cover: the Listening/Paused toggle, the Range/Filters/View dropdown menus (one small pattern,
+ * reused by all three so there is one open/close/scale-in rule rather than three near-identical
+ * ones), the kind/status chip row Events and CRM both use, column hiding for the View menu, the
+ * Profile/Platform/Detail cell layouts, the ask-trace stagger-reveal + drawer backdrop the motion
+ * minimums (plan 3.5b, Events row) ask for, and the Stats tab's series spark + metricTable stack.
  *
  * Tokens only, no hex (plan lock). Concatenated in operator/src/spa/manifest.ts after SHELL_CSS,
  * PAGES_SHARED_CSS, OVERVIEW_CSS and REALTIME_CSS, in NAV_IDS order.
@@ -83,8 +84,6 @@ export const EVENTS_CSS = `
 .ev-menu-actions { display: flex; justify-content: flex-end; }
 .ev-view-item { display: flex; align-items: center; gap: 6px; font: 400 12px var(--font-body); color: var(--ink); padding: 4px; border-radius: 6px; cursor: pointer; }
 
-.ev-export-group { display: inline-flex; align-items: center; gap: 4px; }
-
 /* -- Kind / status chip rows (Events tab kind chips, CRM tab status chips). "Selected chip
    springs" is a one-shot pop() call from the client on the row that changes, not a CSS rule. -- */
 .ev-kind-heading { display: flex; align-items: center; gap: 4px; margin-bottom: 8px; }
@@ -99,25 +98,43 @@ button.chip.ev-kind-chip { cursor: pointer; border: 1px solid var(--border); }
 .ev-kind-chip.is-active { color: var(--accent-text); background: var(--accent-soft); border-color: transparent; }
 .ev-kind-chip.is-active .ev-kind-count { background: var(--surface); color: var(--accent-text); }
 
-/* -- Column order is fixed (Created at, Name, Profile, Country, OS, Client, Detail): position
-   selectors, the same convention css-notifications.ts uses, since dataTable() does not emit a
-   per-cell data attribute to hang a class on. -- */
+/* -- Column order is fixed (plan 6.4, Tony 2026-09-06 correction): Created at, Name, Profile,
+   Country, Platform, Detail -- no Client/Browser column. Position selectors, the same convention
+   css-notifications.ts uses, since dataTable() does not emit a per-cell data attribute to hang a
+   class on. -- */
 .ev-table-shell[data-hide-cols~='country'] table th:nth-child(4), .ev-table-shell[data-hide-cols~='country'] table td:nth-child(4) { display: none; }
-.ev-table-shell[data-hide-cols~='os'] table th:nth-child(5), .ev-table-shell[data-hide-cols~='os'] table td:nth-child(5) { display: none; }
-.ev-table-shell[data-hide-cols~='client'] table th:nth-child(6), .ev-table-shell[data-hide-cols~='client'] table td:nth-child(6) { display: none; }
-.ev-table-shell[data-hide-cols~='detail'] table th:nth-child(7), .ev-table-shell[data-hide-cols~='detail'] table td:nth-child(7) { display: none; }
+.ev-table-shell[data-hide-cols~='platform'] table th:nth-child(5), .ev-table-shell[data-hide-cols~='platform'] table td:nth-child(5) { display: none; }
+.ev-table-shell[data-hide-cols~='detail'] table th:nth-child(6), .ev-table-shell[data-hide-cols~='detail'] table td:nth-child(6) { display: none; }
 
-/* -- Profile cell: avatar + hostname/email stack. -- */
+/* -- Name cell: kind badge plus, for an ask, its question type in --ink-3 (plan 6.4, never the
+   question text). -- */
+.ev-name-qtype { margin-left: 6px; font-size: 11.5px; }
+
+/* -- Profile cell: avatar + hostname (or "Seat <shortid>") / email stack (plan 6.4). -- */
 .ev-profile-cell { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
 .ev-profile-text { display: grid; gap: 1px; min-width: 0; }
 .ev-profile-name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ev-profile-email { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* -- Platform cell: the real OS mark (plan 6.4, monochrome, inherits --ink-2 by being an inline
+   currentColor SVG -- see operator/src/render/icons.ts's platformMarkSvg()) plus the OS name as
+   the primary line and the Métis client version underneath in --ink-3, the slot the reference
+   gives the browser. -- */
+.ev-platform-cell { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.ev-platform-mark { width: 15px; height: 15px; flex-shrink: 0; color: var(--ink-2); }
+.ev-platform-text { display: grid; gap: 1px; min-width: 0; }
+.ev-platform-os { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ev-platform-version { font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* -- Detail cell: one line, ellipsis, full value in the title attribute (plan 6.4 + the page's
+   own "never wrap" rule). -- */
+.ev-detail-cell { display: inline-block; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+
 /* -- Row hover 120ms, row press scale(.995) (plan 3.5b). The press itself is a WAAPI call from
    operator/client/pages/events.ts (motion/mini, matching operator/client/motion.ts's press() at a
    more subtle scale for a full-width row); this only owns the hover transition and the cursor. -- */
 #ev-table tbody tr { cursor: pointer; }
-#ev-table tbody tr td { transition: background 120ms var(--ease-color); }
+#ev-table tbody tr td { transition: background 120ms var(--ease-color); white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { #ev-table tbody tr td { transition: none; } }
 
 .ev-skeleton { padding-top: 4px; }
@@ -148,4 +165,15 @@ button.chip.ev-kind-chip { cursor: pointer; border: 1px solid var(--border); }
 
 .ev-crm-error { font-size: 11px; }
 .ev-crm-action-cell { display: inline-flex; align-items: center; }
+
+/* -- Stats tab (plan 6.4): a small bucketed series above six metricTables, all fed by one
+   fetch that mirrors the table's own range and filters. -- */
+.ev-stats-series-wrap { min-height: 56px; }
+.ev-stats-spark { display: block; width: 100%; height: 56px; }
+.ev-stats-spark rect { transition: height 200ms var(--ease-spring); }
+@media (prefers-reduced-motion: reduce) { .ev-stats-spark rect { transition: none; } }
+[data-ev-stats-tables] .mt-wrap + .mt-wrap { margin-top: 20px; }
+[data-ev-stats-row] { cursor: pointer; }
+[data-ev-stats-row]:hover { background: var(--bg-2); }
+[data-ev-stats-row]:focus-visible { outline: none; box-shadow: var(--shadow-ring); }
 `
