@@ -130,12 +130,39 @@ function runStatement(stmt, target, databaseName, envName) {
   const args = ['wrangler', 'd1', 'execute', databaseName, '--command', stmt, target === 'remote' ? '--remote' : '--local']
   if (envName) args.push('--env', envName)
   try {
-    execFileSync('npx', args, { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' })
+    execFileSync('npx', args, { cwd: OPERATOR_ROOT, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' })
     return { status: 'applied' }
   } catch (err) {
     const message = `${err.stdout || ''}${err.stderr || ''}${err.message || ''}`
     if (isSkippableError(message)) return { status: 'skipped', message }
     return { status: 'failed', message }
+  }
+}
+
+/**
+ * Apply a whole .sql file in ONE wrangler call.
+ *
+ * The per-statement loop below exists for a real reason: schema-alter.sql is a list of
+ * `ALTER TABLE ... ADD COLUMN`, which errors once already applied, and each statement has to be
+ * allowed to fail on its own so the rest still run. But paying for that on every statement means one
+ * `npx` resolution plus one process spawn each, and these files are well over a hundred statements:
+ * a migration took long enough that deploy.mjs looked hung and was being killed before it finished,
+ * and the e2e boot could never stand a Worker up at all.
+ *
+ * So: try the whole file first. On a database that needs the migration -- a fresh local D1, a new
+ * environment -- this succeeds and costs one spawn instead of hundreds. When it fails, nothing has
+ * been half-applied that the per-statement pass cannot redo (every statement here is either
+ * `IF NOT EXISTS` or an ADD COLUMN whose duplicate is skippable), so the caller falls back and gets
+ * exactly the old behaviour, including its per-statement reporting.
+ */
+function runFile(path, target, databaseName, envName) {
+  const args = ['wrangler', 'd1', 'execute', databaseName, '--file', path, target === 'remote' ? '--remote' : '--local', '--yes']
+  if (envName) args.push('--env', envName)
+  try {
+    execFileSync('npx', args, { cwd: OPERATOR_ROOT, stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8' })
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, message: `${err.stdout || ''}${err.stderr || ''}${err.message || ''}` }
   }
 }
 
@@ -215,6 +242,12 @@ async function main() {
       continue
     }
     console.log(`--- Applying ${file} (${statements.length} statement(s)) to ${target} (database: ${databaseName}${envName ? `, env: ${envName}` : ''}) ---`)
+    const whole = runFile(join(OPERATOR_ROOT, file), target, databaseName, envName)
+    if (whole.ok) {
+      console.log(`${file}: applied as one file (${statements.length} statement(s))`)
+      continue
+    }
+    console.log(`${file}: whole-file apply did not take, falling back to one statement at a time`)
     const results = []
     for (const stmt of statements) {
       const result = runStatement(stmt, target, databaseName, envName)
