@@ -1,3 +1,4 @@
+import { ensureDefaultAiGateway, isCloudflareVaultPaste } from './ai-gateway'
 import { decryptVault, encryptVault } from './crypto'
 import { looksLikeSecret } from './redact'
 import { seatAuthorizedForKeys } from './fleet'
@@ -60,7 +61,8 @@ export async function writeVaultKey(
   env: { OPERATOR_VAULT_KEY?: string },
   email: string,
   now: number,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  fetchImpl: typeof fetch = fetch
 ): Promise<{ ok: true; id: string; last4: string; status: string } | { ok: false; error: string; status: number }> {
   if (!env.OPERATOR_VAULT_KEY) return { ok: false, error: 'vault key missing', status: 500 }
   const provider = typeof body.provider === 'string' ? body.provider.trim() : ''
@@ -106,6 +108,9 @@ export async function writeVaultKey(
     country: null,
     detail: `write ${provider}`
   })
+  if (isCloudflareVaultPaste(provider, accountId) && accountId) {
+    await ensureDefaultAiGateway(secret, accountId, fetchImpl)
+  }
   return { ok: true, id, last4, status: 'active' }
 }
 
@@ -115,7 +120,8 @@ export async function rotateVaultKey(
   email: string,
   now: number,
   id: string,
-  body: Record<string, unknown>
+  body: Record<string, unknown>,
+  fetchImpl: typeof fetch = fetch
 ): Promise<{ ok: true; id: string; last4: string; status: string } | { ok: false; error: string; status: number }> {
   if (!env.OPERATOR_VAULT_KEY) return { ok: false, error: 'vault key missing', status: 500 }
   const existing = await store.getVaultKey(id)
@@ -152,6 +158,9 @@ export async function rotateVaultKey(
     country: null,
     detail: `rotate ${existing.provider}`
   })
+  if (isCloudflareVaultPaste(existing.provider, accountId) && accountId) {
+    await ensureDefaultAiGateway(secret, accountId, fetchImpl)
+  }
   return { ok: true, id: existing.id, last4, status: 'active' }
 }
 

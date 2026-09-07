@@ -5,8 +5,10 @@
 import { PROVIDERS, type ProviderId } from '../../src/shared/providers'
 import { resolvePortalCloudflareModel } from '../../src/shared/ask-routing'
 import { persistProxyAsk } from './ask-meter'
+import { ensureDefaultAiGateway } from './ai-gateway'
 import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
 import { json } from './http'
+import { providerRefusedPayload } from './redact'
 import type { OperatorStore } from './store'
 import { decryptActiveLlmSecret, parseUseBody, type UseRequest } from './use'
 
@@ -19,8 +21,17 @@ const SSE_HEADERS = {
   'x-accel-buffering': 'no'
 } as const
 
-function fail(error: string, status: number): Response {
-  return json({ ok: false, error }, status)
+function fail(error: string, status: number, extra?: Record<string, unknown>): Response {
+  return json({ ok: false, error, ...extra }, status)
+}
+
+async function providerRefusedResponse(upstream: Response, secrets: readonly string[]): Promise<Response> {
+  const raw = await upstream.text().catch(() => '')
+  const fields = providerRefusedPayload(upstream.status, raw, secrets)
+  return fail(fields.error, 502, {
+    upstreamStatus: fields.upstreamStatus,
+    ...(fields.upstreamSnippet ? { upstreamSnippet: fields.upstreamSnippet } : {})
+  })
 }
 
 function sseLine(obj: unknown): string {
@@ -266,6 +277,9 @@ export async function handleAsk(
   }
   const dest = upstreamUrl(req.provider, unlocked.accountId, def.baseUrl)
   if (typeof dest !== 'string') return fail(dest.error, dest.status)
+  if (req.provider === 'cloudflare' && unlocked.accountId) {
+    await ensureDefaultAiGateway(unlocked.secret, unlocked.accountId, providerFetch)
+  }
   const init = upstreamInit(req.provider, unlocked.secret, req)
   let upstream: Response
   try {
@@ -277,7 +291,9 @@ export async function handleAsk(
   } catch {
     return fail('Operator cannot issue a use', 503)
   }
-  if (!upstream.ok) return fail('provider refused the Operator key', 502)
+  if (!upstream.ok) {
+    return providerRefusedResponse(upstream, [unlocked.secret, unlocked.row.cipher, unlocked.row.iv])
+  }
   await store.audit(crypto.randomUUID(), now, deviceId, 'ask', null, req.provider)
   await store.insertEvent({
     id: crypto.randomUUID(),

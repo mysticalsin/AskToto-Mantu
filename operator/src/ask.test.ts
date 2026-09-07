@@ -61,6 +61,16 @@ async function approveDevice(store: ReturnType<typeof memoryStore>, deviceId = '
   })
 }
 
+function gatewayOkFetch(): typeof fetch {
+  return async (input) => {
+    const url = String(input)
+    if (url.includes('/ai-gateway/gateways')) {
+      return new Response(JSON.stringify({ success: true }), { status: 200 })
+    }
+    return new Response('{"success":false}', { status: 404 })
+  }
+}
+
 async function addCloudflareKey(store: ReturnType<typeof memoryStore>) {
   const res = await handleRequest(
     new Request('https://operator.test/v1/admin/keys', {
@@ -70,7 +80,7 @@ async function addCloudflareKey(store: ReturnType<typeof memoryStore>) {
     }),
     env(),
     { access: tony },
-    { store, now: NOW }
+    { store, now: NOW, cfFetch: gatewayOkFetch() }
   )
   expect(res.status).toBe(200)
 }
@@ -185,5 +195,53 @@ describe('G5 POST /v1/ask SSE', () => {
     expect(text).not.toMatch(tokenPatternForTests())
     const asks = await store.listAsks(5)
     expect(asks.some((a) => a.path_tag === 'portal-cf' && a.provider === 'cloudflare')).toBe(true)
+  })
+
+  it('502 provider refused includes redacted upstream status + snippet, never the vault secret or prompt', async () => {
+    const store = memoryStore()
+    await addCloudflareKey(store)
+    await approveDevice(store)
+    const prompt = 'SECRET_PROMPT_DO_NOT_ECHO this is a long user prompt that must not ship back'
+    const body = JSON.stringify({
+      provider: 'cloudflare',
+      model: PORTAL_CF_DEEPSEEK_FLASH,
+      messages: [{ role: 'user', content: prompt }]
+    })
+    const res = await handleRequest(await signedRequest('/v1/ask', body, 'ask-502'), env(), {}, {
+      store,
+      now: NOW,
+      providerFetch: async (input) => {
+        const url = String(input)
+        if (url.includes('/ai-gateway/gateways')) {
+          return new Response(JSON.stringify({ success: true }), { status: 200 })
+        }
+        return new Response(
+          JSON.stringify({
+            success: false,
+            errors: [{ code: 2011, message: `Gateway not found Authorization: Bearer ${SECRET}` }],
+            messages: [{ role: 'user', content: prompt }]
+          }),
+          { status: 400 }
+        )
+      }
+    })
+    expect(res.status).toBe(502)
+    const json = (await res.json()) as {
+      ok: boolean
+      error: string
+      upstreamStatus?: number
+      upstreamSnippet?: string
+    }
+    expect(json.ok).toBe(false)
+    expect(json.error).toContain('provider refused the Operator key')
+    expect(json.upstreamStatus).toBe(400)
+    expect(json.upstreamSnippet).toContain('Gateway not found')
+    expect(json.upstreamSnippet).toContain('2011')
+    expect(json.upstreamSnippet?.length).toBeLessThanOrEqual(200)
+    const blob = JSON.stringify(json)
+    expect(blob).not.toContain(SECRET)
+    expect(blob).not.toContain(prompt)
+    expect(blob).not.toMatch(/Bearer /i)
+    expect(blob).not.toMatch(tokenPatternForTests())
   })
 })
