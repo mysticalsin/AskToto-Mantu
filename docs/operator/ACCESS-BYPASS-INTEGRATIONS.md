@@ -26,6 +26,7 @@ Worker code already treats `/v1/integrations` as HMAC device auth. Cloudflare Ac
 - `/v1/ingest`
 - `/v1/heartbeat`
 - `/v1/use`
+- `/v1/ask`  ← add this in Zero Trust (same Bypass as `/v1/use`)
 - `/v1/skills/manifest`
 - `/v1/integrations`  ← add this in Zero Trust
 - `/assets/*`

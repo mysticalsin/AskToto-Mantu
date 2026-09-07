@@ -45,9 +45,12 @@ const SESSION_GAP_MS = 2 * 60 * 1000
 
 /** Isolate-wide: once the live D1 proves it lacks asks.question_type, stop paying a failed insert per Ask. */
 let askInsertLegacy = false
+/** Isolate-wide: once the live D1 proves it lacks asks.path_tag, skip that column on later inserts. */
+let askInsertNoPathTag = false
 
 export function resetD1SchemaProbeForTests(): void {
   askInsertLegacy = false
+  askInsertNoPathTag = false
 }
 
 /** SQLite / D1 phrasing for a column that is not in the table: "has no column named X" or "no such column: X". */
@@ -301,6 +304,36 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       // trips "no such column" flips this isolate to the legacy statement, so an Ask is never dropped
       // because the fleet store is one migration behind. The type is lost for that row (null), which the
       // dashboard reports as coverage, never as a silent 100%.
+      if (!askInsertLegacy && !askInsertNoPathTag) {
+        try {
+          await db
+            .prepare(
+              `INSERT OR REPLACE INTO asks (
+                id, device_id, ts, mode, skill_id, skill_version, provider, model,
+                ttft_ms, total_ms, input_tokens, output_tokens, cache_read, cache_write,
+                cache_uncached, cache_status, cache_ttl, outcome, rating, prompt_cipher, prompt_iv, preview,
+                question_type, path_tag
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+            )
+            .bind(...base, row.question_type, row.path_tag ?? null)
+            .run()
+          return
+        } catch (e) {
+          if (isMissingColumnError(e, 'path_tag')) {
+            askInsertNoPathTag = true
+            console.warn(
+              '[operator] asks.path_tag is missing on this D1. Apply operator/schema-alter.sql. Asks are stored without a path tag until then.'
+            )
+          } else if (!isMissingColumnError(e, 'question_type')) {
+            throw e
+          } else {
+            askInsertLegacy = true
+            console.warn(
+              '[operator] asks.question_type is missing on this D1. Apply operator/schema-alter.sql. Asks are stored without a type until then.'
+            )
+          }
+        }
+      }
       if (!askInsertLegacy) {
         try {
           await db

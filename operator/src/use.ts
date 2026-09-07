@@ -3,6 +3,7 @@ import { decryptVault } from './crypto'
 import { seatAuthorizedForKeys, SEAT_NOT_APPROVED } from './fleet'
 import { looksLikeSecret } from './redact'
 import type { OperatorStore, VaultKeyRow } from './store'
+import { persistProxyAsk } from './ask-meter'
 import { decodeVaultPlaintext, isForbiddenVaultProvider, isVaultLlmProvider } from './vault'
 
 const SYSTEM_CAP = 32_000
@@ -70,6 +71,19 @@ export function parseUseBody(bodyText: string): { ok: true; req: UseRequest } | 
   }
   if (!parsed || typeof parsed !== 'object') return { ok: false, error: 'invalid json', status: 400 }
   const body = parsed as Record<string, unknown>
+  for (const field of [
+    'secret',
+    'token',
+    'apiKey',
+    'api_key',
+    'authorization',
+    'key',
+    'cf-aig-gateway-id',
+    'gatewayId',
+    'accountId'
+  ]) {
+    if (body[field] != null) return { ok: false, error: 'provider not allowed', status: 400 }
+  }
   if (body.image != null || body.vision === true || body.mode === 'vision') {
     return { ok: false, error: 'screenshots are not accepted on Operator use', status: 400 }
   }
@@ -298,5 +312,18 @@ export async function handleUse(
     country: null,
     detail: `use ${parsed.req.provider}`
   })
+  try {
+    await persistProxyAsk(store, {
+      deviceId,
+      now,
+      provider: parsed.req.provider,
+      model: parsed.req.model,
+      inputTokens: out.inputTokens,
+      outputTokens: out.outputTokens,
+      outcome: 'answered'
+    })
+  } catch {
+    /* metering must never fail the buffered use */
+  }
   return json(result)
 }

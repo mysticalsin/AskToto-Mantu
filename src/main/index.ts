@@ -151,6 +151,7 @@ import {
   nextAskRoute,
   nextLastClickedCli,
   pickWorkingCliPrimary,
+  portalFundedCloudflareModel,
   workingCliOrder
 } from '@shared/ask-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
@@ -5878,6 +5879,9 @@ function registerIpc(): void {
           : req.agentOverride && provider === 'dust'
             ? req.agentOverride
             : resolveModelTier(provider, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep)
+      if (viaOperator && provider === 'cloudflare') {
+        model = portalFundedCloudflareModel(tier)
+      }
       // Guardrail (per Tony): CLI is Sonnet-only, Anthropic base/think are pinned to Haiku/Sonnet — both
       // regardless of what routeTier or a user's providerModels override picked. Opus stays reachable only
       // through the Graph pipeline (brain/ingest.ts, graphify.ts), which never calls this function.
@@ -5926,7 +5930,7 @@ function registerIpc(): void {
                 : // Endpoint-is-yours providers (Custom, Cloudflare's operator-deployed Worker) cannot be
                   // reached without a URL. Say so HERE, where the message is actionable and the flow can
                   // still fail over, rather than letting streamOpenAI's own guard surface it mid-stream.
-                  def.kind !== 'cli' && requiresUserBaseUrl(provider) && !baseURL
+                  !viaOperator && def.kind !== 'cli' && requiresUserBaseUrl(provider) && !baseURL
                   ? `No endpoint URL set for ${def.label}. Open Settings → Advanced and add it.`
                   : req.mode === 'vision' && !providerVisionOk(provider)
                     ? `${def.label} can't read screenshots. ${visionSwitchAdvice(provider)}`

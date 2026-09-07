@@ -1,4 +1,10 @@
-import { aggregateCacheSlice, estimateCacheCost, formatUsdEstimate, type AskLogLine } from '../../src/shared/operator'
+import {
+  aggregateCacheSlice,
+  estimateCacheCost,
+  estimateListPrice,
+  formatUsdEstimate,
+  type AskLogLine
+} from '../../src/shared/operator'
 import { formatSavedTime, timeSavedFromMeetings } from '../../src/shared/time-saved'
 import { aggregateQuestionTypes, type QuestionTypeMix } from '../../src/shared/question-type'
 import { CRM_STATUSES, type CrmSendRow, type CrmStatus } from './crm'
@@ -92,6 +98,8 @@ export interface DashboardOps {
   recapSeries: number[]
   cliAsks: number
   operatorAsks: number
+  portalCf: string
+  portalDirect: string
   crmFailRate: number | null
   durationMs: number | null
   meetings: number
@@ -215,6 +223,8 @@ export interface DashboardPayload {
     currency: string
     hourlyRate: number | null
     source: 'd1.asks+d1.seats'
+    portalCf: string
+    portalDirect: string
   }
   gateway: {
     rows: { provider: string; asks: number; tokens: number | null; estimate: string | null; funded: boolean }[]
@@ -524,6 +534,30 @@ function askTokenTotal(a: {
   return (a.cache_read ?? 0) + (a.cache_write ?? 0) + (a.cache_uncached ?? 0) + (a.output_tokens ?? 0)
 }
 
+function portalPathSpend(asks: AskRow[], tag: 'portal-cf' | 'portal-direct'): string {
+  const rows = asks.filter((a) => a.path_tag === tag)
+  if (!rows.length) return 'not reported'
+  let usd = 0
+  let anyCost = false
+  let tokens = 0
+  let anyTok = false
+  for (const a of rows) {
+    const inTok = a.input_tokens
+    const outTok = a.output_tokens
+    if (inTok != null || outTok != null) {
+      anyTok = true
+      tokens += (inTok ?? 0) + (outTok ?? 0)
+    }
+    const est = estimateListPrice(a.model || '', a.input_tokens, a.output_tokens, a.cache_read)
+    if (!est) continue
+    anyCost = true
+    usd += est.usd
+  }
+  const tok = anyTok ? `${tokens} tok` : 'tokens not reported'
+  if (!anyCost) return `${tok} · not reported`
+  return `${tok} · ${formatUsdEstimate(usd)} · estimate, list price`
+}
+
 function tokensReported(asks: AskRow[]): number | null {
   let total = 0
   let any = false
@@ -612,6 +646,8 @@ function buildOverviewOps(args: {
     recapSeries: countPerBucket(storedEvents, 'recap', dayStarts, DAY, now),
     cliAsks,
     operatorAsks,
+    portalCf: portalPathSpend(weekAsks, 'portal-cf'),
+    portalDirect: portalPathSpend(weekAsks, 'portal-direct'),
     crmFailRate,
     durationMs: averageDurationMs(weekAsks),
     meetings: recapEvents.length
@@ -1015,7 +1051,9 @@ export async function buildDashboard(
             ),
       currency: valueSettings.currency,
       hourlyRate: valueSettings.hourlyRate,
-      source: 'd1.asks+d1.seats'
+      source: 'd1.asks+d1.seats',
+      portalCf: portalPathSpend(weekAsks, 'portal-cf'),
+      portalDirect: portalPathSpend(weekAsks, 'portal-direct')
     },
     gateway: {
       rows: (() => {

@@ -18,7 +18,7 @@ import { mainLog } from './logger'
 export const OPERATOR_QUEUE_FILE = 'operator-queue.json'
 export const OPERATOR_QUEUE_MAX_ITEMS = 500
 /** Never queue these: heartbeats are periodic on their own, and /v1/use is a live proxy call. */
-export const OPERATOR_QUEUE_BLOCKED_PATHS: ReadonlySet<string> = new Set(['/v1/heartbeat', '/v1/use'])
+export const OPERATOR_QUEUE_BLOCKED_PATHS: ReadonlySet<string> = new Set(['/v1/heartbeat', '/v1/use', '/v1/ask'])
 
 const BACKOFF_SCHEDULE_MS = [60_000, 5 * 60_000, 15 * 60_000] as const
 const BACKOFF_CAP_MS = 60 * 60_000
