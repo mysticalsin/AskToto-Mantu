@@ -461,13 +461,26 @@ async function fetchConnectorNotices(): Promise<ConnectorNoticeInput[]> {
     }))
 }
 
+/** Every label reads as a singular subject, because the title below completes it with "is not
+ *  configured". "Cloudflare OAuth credentials is not configured" was the one that did not agree. */
 const BINDING_LABEL: Record<string, string> = {
   ingest: 'Seat ingest secret',
   prompt: 'Prompt encryption key',
   skill: 'Skill signing key',
   vault: 'Vault encryption key',
   session: 'Session secret',
-  oauth: 'Cloudflare OAuth credentials'
+  oauth: 'The Cloudflare OAuth client'
+}
+
+/** The Worker secrets behind each binding, so the notice can say what to actually set rather than
+ *  leaving "set this binding" for the reader to translate into a command. */
+const BINDING_SECRETS: Record<string, string> = {
+  ingest: 'OPERATOR_INGEST_SECRET',
+  prompt: 'OPERATOR_PROMPT_KEY',
+  skill: 'OPERATOR_SKILL_PRIVATE_KEY',
+  vault: 'OPERATOR_VAULT_KEY',
+  session: 'OPERATOR_SESSION_SECRET',
+  oauth: 'CF_OAUTH_CLIENT_ID and CF_OAUTH_CLIENT_SECRET'
 }
 
 const CRON_STALE_MS = 48 * 60 * 60 * 1000
@@ -510,7 +523,9 @@ async function fetchPlatformNotices(): Promise<PlatformNoticeInput[]> {
           notices.push({
             id: `platform-binding-${key}`,
             title: `${BINDING_LABEL[key] || key} is not configured`,
-            detail: 'Set this binding in the Worker environment so this capability works.',
+            detail: BINDING_SECRETS[key]
+              ? `Set ${BINDING_SECRETS[key]} with "wrangler secret put", then redeploy.`
+              : 'Set this binding in the Worker environment so this capability works.',
             ts: now
           })
         }

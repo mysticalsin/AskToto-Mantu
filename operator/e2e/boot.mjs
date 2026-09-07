@@ -106,24 +106,34 @@ function runNode(scriptRelPath, args, cwd, env, logLines) {
 }
 
 /**
- * `wrangler dev --local` (already running) and a separate `wrangler d1 execute --local` process
- * (what `migrate.mjs`/`seed-local.mjs` shell out to, once per statement) both open the same local D1
- * sqlite file concurrently; that occasionally trips a transient "other side closed" error from the
- * dev server's own D1 session coordinator rather than a real migration failure — retrying the whole
- * script (itself idempotent: every CREATE TABLE/INDEX is IF NOT EXISTS, ALTER ADD COLUMN failures are
- * treated as "skipped") clears it.
+ * `wrangler dev --local` (already running) and the separate `wrangler d1 execute --local` processes
+ * `migrate.mjs`/`seed-local.mjs` shell out to (once per statement) both open the same local D1 sqlite
+ * file concurrently. That occasionally races: an "other side closed" error from the dev server's own
+ * D1 session coordinator, or worse, a `CREATE TABLE` that reports success but does not survive (the
+ * very next statement then fails "no such table") — a real environment race, not a product defect,
+ * and not always visible as a nonzero exit from either script alone. So this does not just retry
+ * `migrate.mjs`/`seed-local.mjs` independently; it retries the WHOLE migrate-then-seed cycle and,
+ * critically, verifies the result against `/health`'s real `schema` status each time — the one signal
+ * that can't be fooled by a script exiting 0 over a table that quietly didn't stick.
  */
-function runNodeWithRetry(scriptRelPath, args, cwd, env, logLines, attempts = 3) {
+async function migrateAndSeedWithRetry(baseUrl, env, record, attempts = 4) {
   let lastErr
   for (let i = 1; i <= attempts; i++) {
     try {
-      return runNode(scriptRelPath, args, cwd, env, logLines)
+      const migrateLog = []
+      runNode('scripts/migrate.mjs', ['--local'], OPERATOR_DIR, env, migrateLog)
+      const seedLog = []
+      runNode('scripts/seed-local.mjs', [], OPERATOR_DIR, env, seedLog)
+      const health = await waitForHealth(baseUrl, { requireSchemaOk: true, timeoutMs: 15_000 })
+      if (i > 1) record(`boot: migrate+seed succeeded on attempt ${i}/${attempts}`)
+      return health
     } catch (err) {
       lastErr = err
-      logLines.push(`$ node ${scriptRelPath} ${args.join(' ')} — attempt ${i}/${attempts} failed: ${err.message?.split('\n')[0]}`)
+      record(`boot: migrate+seed attempt ${i}/${attempts} failed (${err.message?.split('\n')[0]}), retrying`)
+      await new Promise((r) => setTimeout(r, 1500))
     }
   }
-  throw lastErr
+  throw new Error(`boot: migrate+seed never produced a healthy schema after ${attempts} attempts: ${lastErr?.message}`)
 }
 
 /**
@@ -268,15 +278,15 @@ export async function bootWorker({ log = () => {} } = {}) {
     }
     await reachablePromise
     record('boot: Worker process is up and routing requests')
+    // Miniflare's local D1 binding lazily finishes settling its on-disk storage shortly after the
+    // Worker's first real D1 touch (triggered by the reachability probe's own /health call above); a
+    // separate `wrangler d1 execute` CLI process racing that can otherwise create tables that don't
+    // survive (observed as "no such table" on the very next statement). A short settle delay here
+    // costs nothing and removes most of that race outright; the whole-cycle retry below is the real
+    // backstop for whatever it doesn't.
+    await new Promise((r) => setTimeout(r, 750))
 
-    const migrateLog = []
-    runNodeWithRetry('scripts/migrate.mjs', ['--local'], OPERATOR_DIR, childEnv, migrateLog)
-    record('boot: ran scripts/migrate.mjs --local')
-    const seedLog = []
-    runNodeWithRetry('scripts/seed-local.mjs', [], OPERATOR_DIR, childEnv, seedLog)
-    record('boot: ran scripts/seed-local.mjs (QA fixture + migrate --local again, idempotent)')
-
-    const finalHealth = await waitForHealth(baseUrl, { requireSchemaOk: true, timeoutMs: 15_000 })
+    const finalHealth = await migrateAndSeedWithRetry(baseUrl, childEnv, record)
     record(`boot: schema ok, d1 ${finalHealth.d1}`)
 
     const hmac = await loadHmac(SCRATCH_DIR)
