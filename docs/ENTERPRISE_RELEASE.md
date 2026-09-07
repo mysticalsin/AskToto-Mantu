@@ -15,7 +15,9 @@ none of the gates below execute. See `docs/MANTU-IT-REQUEST.md` for the recorded
 
 - Direct macOS updates publish through GitHub Releases in `electron-builder.yml`.
 - Direct Windows updates publish through the same feed.
-- macOS and Windows tagged release scripts fail if signing inputs are missing.
+- Windows tagged release scripts fail if `WIN_CSC_*` signing inputs are missing. macOS tagged
+  release uses Developer ID + notarization when Apple secrets are present, or an interim ADHOC /
+  non-notarized DMG when they are absent (Tony lock 2026-09-06; not Gatekeeper-clean).
 - `scripts/verify-signing.mjs` checks the produced artifacts on the current platform.
 - Machine-wide managed config can lock SSO, license server, license gate, provider policy, encryption, redaction, and retention.
 - The license server supports activation, heartbeat, revocation, expiry, and seat caps.
@@ -128,7 +130,8 @@ no manual seeding step for this one, unlike the ffmpeg sidecar above.
   electron-builder would publish onto/overwrite an existing release instead of creating a new one.
 - `release-verify` (needs both `release-macos` and `release-windows`) checks that the resulting GitHub
   release actually has both platforms' installers + `latest*.yml` metadata, and marks it draft if not —
-  a single-platform failure must never leave a half-published release live.
+  a single-platform failure must never leave a half-published release live. A notarized Mac artifact
+  is not required: a signed Windows EXE + ADHOC Electron DMG + native zip is a complete publish set.
 
 ## Direct Release Commands
 
