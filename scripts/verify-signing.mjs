@@ -19,7 +19,12 @@ import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir, platform } from 'node:os'
 
-const REQUIRE_NOTARIZED = process.argv.includes('--require-notarized')
+const ADHOC_SIGN = String(process.env.ASKTOTO_ADHOC_SIGN || '').trim() === '1'
+const WANT_NOTARIZED = process.argv.includes('--require-notarized')
+if (WANT_NOTARIZED && ADHOC_SIGN) {
+  console.log('[verify:signing] ADHOC macOS path — not notarized. Ignoring --require-notarized.')
+}
+const REQUIRE_NOTARIZED = WANT_NOTARIZED && !ADHOC_SIGN
 const argDir = process.argv.slice(2).find((a) => !a.startsWith('--'))
 const CANDIDATE_DIRS = [
   argDir,

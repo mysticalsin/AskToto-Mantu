@@ -143,4 +143,77 @@ describe('direct release signing gates', () => {
     expect(pkg.scripts['release:build:mac']).toContain('node scripts/verify-signing.mjs --require-notarized')
     expect(pkg.scripts['release:build:win']).toContain('node scripts/verify-signing.mjs')
   })
+
+  it('keeps the notarized mac path when Apple secrets are present', () => {
+    const result = spawnSync(process.execPath, [join(__dirname, 'check-release-secrets.mjs'), 'mac'], {
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH || '',
+        GH_TOKEN: 'test-token',
+        CSC_LINK: 'test-certificate',
+        CSC_KEY_PASSWORD: 'test-password',
+        APPLE_ID: 'dev@example.com',
+        APPLE_APP_SPECIFIC_PASSWORD: 'test-app-password',
+        APPLE_TEAM_ID: 'TEAMID'
+      }
+    })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('macOS Developer ID + notarization path')
+  })
+
+  it('fails the mac gate when Apple secrets are missing and adhoc is not selected', () => {
+    const result = spawnSync(process.execPath, [join(__dirname, 'check-release-secrets.mjs'), 'mac'], {
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH || '',
+        GH_TOKEN: 'test-token'
+      }
+    })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toContain('CSC_LINK')
+    expect(result.stderr).toContain('APPLE_TEAM_ID')
+  })
+
+  it('allows the mac adhoc path when Apple secrets are missing and ASKTOTO_ADHOC_SIGN=1', () => {
+    const result = spawnSync(process.execPath, [join(__dirname, 'check-release-secrets.mjs'), 'mac'], {
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH || '',
+        GH_TOKEN: 'test-token',
+        ASKTOTO_ADHOC_SIGN: '1'
+      }
+    })
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('ADHOC macOS path — not notarized')
+  })
+
+  it('still requires GH_TOKEN on the mac adhoc path', () => {
+    const result = spawnSync(process.execPath, [join(__dirname, 'check-release-secrets.mjs'), 'mac'], {
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH || '',
+        ASKTOTO_ADHOC_SIGN: '1'
+      }
+    })
+    expect(result.status).toBe(1)
+    expect(result.stderr).toMatch(/GH_TOKEN|GITHUB_TOKEN/)
+  })
+
+  it('release.yml falls back to adhoc mac instead of exiting when Apple secrets are missing', () => {
+    const source = readFileSync(join(root, '.github', 'workflows', 'release.yml'), 'utf8')
+    const macJob = source.split('release-windows:')[0]
+    expect(macJob).toContain('ADHOC macOS path — not notarized')
+    expect(macJob).toContain('ASKTOTO_ADHOC_SIGN=1')
+    expect(macJob).toContain('CSC_IDENTITY_AUTO_DISCOVERY=false')
+    expect(macJob).toContain('node scripts/verify-signing.mjs')
+    expect(macJob).toMatch(/if \[ "\$\{ASKTOTO_ADHOC_SIGN:-\}" = "1" \]/)
+    expect(macJob).not.toMatch(
+      /Missing release secret\(s\): \$\{missing\[\*\]\}\. See docs\/SIGNING\.md \/ scripts\/ship-setup\.sh - refusing to publish an unsigned macOS release\./
+    )
+    expect(source).toContain('needs: [release-macos, release-macos-native, release-windows]')
+    const winJob = source.split('release-windows:')[1].split('release-verify:')[0]
+    expect(winJob).toContain('WIN_CSC_LINK')
+    expect(winJob).toContain('refusing to publish an unsigned Windows release')
+    expect(winJob).toContain('exit 1')
+  })
 })

@@ -18,7 +18,7 @@ The repo can enforce build gates and package shapes. It cannot create Tony's cer
 
 | Channel | Command | Hard gates |
 |---|---|---|
-| macOS direct | `npm run release` | `GH_TOKEN` or `GITHUB_TOKEN`, `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID` |
+| macOS direct | `npm run release` | Notarized when `CSC_LINK` + `APPLE_*` are set. Tagged `release.yml` falls back to `ASKTOTO_ADHOC_SIGN=1` (ad-hoc, not notarized) if those Apple secrets are absent. `GH_TOKEN` still required. |
 | Windows direct | `npm run release:win` | `GH_TOKEN` or `GITHUB_TOKEN`, `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD`, `WIN_CSC_EXPECTED_SUBJECT` |
 | Mac App Store | `MAS_PROVISIONING_PROFILE=/path/profile.provisionprofile npm run release:mas` | `CSC_LINK`, `CSC_KEY_PASSWORD`, existing `MAS_PROVISIONING_PROFILE` file |
 | Microsoft Store | `npm run release:win:store` | AppX package builds locally; Microsoft signs Store-submitted packages after upload |

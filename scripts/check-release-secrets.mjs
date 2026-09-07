@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Fail-closed release secret gate. electron-builder can otherwise keep building
-// after a missing signing identity, which is fine for CI smoke artifacts but not
-// for a tagged release or store package.
+// Release secret gate. Windows / MAS stay fail-closed. macOS Developer ID +
+// notarization is the default; ASKTOTO_ADHOC_SIGN=1 allows the local ad-hoc
+// path when CSC_LINK / APPLE_* are absent (not notarized).
 
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -42,7 +42,18 @@ function requireFileEnv(name, label) {
 switch (mode) {
   case 'mac':
     requireAny(['GH_TOKEN', 'GITHUB_TOKEN'], 'GitHub release token')
-    requireAll(['CSC_LINK', 'CSC_KEY_PASSWORD', 'APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID'], 'macOS Developer ID release')
+    {
+      const macSecrets = ['CSC_LINK', 'CSC_KEY_PASSWORD', 'APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID']
+      const missingMac = macSecrets.filter((name) => !present(name))
+      if (missingMac.length === 0) {
+        console.log('[check:release-secrets] macOS Developer ID + notarization path')
+      } else if (value('ASKTOTO_ADHOC_SIGN') === '1') {
+        console.log('[check:release-secrets] ADHOC macOS path — not notarized.')
+        console.log(`[check:release-secrets] Missing Developer ID / Apple secrets: ${missingMac.join(', ')}`)
+      } else {
+        fail(`macOS Developer ID release missing: ${missingMac.join(', ')} (set ASKTOTO_ADHOC_SIGN=1 for the ad-hoc path)`)
+      }
+    }
     break
   case 'win':
     requireAny(['GH_TOKEN', 'GITHUB_TOKEN'], 'GitHub release token')

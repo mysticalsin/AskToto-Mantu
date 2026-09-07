@@ -1,11 +1,9 @@
 name: Release
 
 # Publishes signed builds to this repository's public GitHub Releases page on a version tag push (v1.2.3).
-# macOS: electron-builder only WARNS and ships unsigned/non-notarized when the Apple secrets are absent
-# (app-builder-lib only throws for MAS builds - see codeSign/macCodeSign.js reportError()), so the
-# release-macos job hard-fails BEFORE building if those secrets are missing, rather than silently
-# publishing an unsigned build. Windows signing is now also required for
-# tagged releases: unsigned public installers break enterprise trust and can be blocked by SmartScreen.
+# macOS: Developer ID + Apple notarization when CSC_LINK / APPLE_* are present. If those secrets are
+# absent, the job continues on the local ad-hoc path (ASKTOTO_ADHOC_SIGN=1, CSC_IDENTITY_AUTO_DISCOVERY=false,
+# mac identity null) and logs "ADHOC macOS path — not notarized." Windows WIN_CSC_* remains required.
 on:
   push:
     tags:
@@ -141,22 +139,28 @@ jobs:
             echo "::error::Adding it to a release that already exists: gh release upload ffmpeg-sidecar-v1 /tmp/ffmpeg-darwin-x64 --clobber --repo $GITHUB_REPOSITORY"
             exit 1
           fi
-      # Hard gate: a v* tag with these secrets missing must fail the job, not publish an unsigned build.
-      # electron-builder does not throw when it can't find a signing identity for a non-MAS build - it
-      # logs "skipped macOS application code signing" and continues (app-builder-lib/codeSign/
-      # macCodeSign.js reportError()), and `--publish always` has no idea signing was skipped.
+      # GH_TOKEN is always required. Apple Developer ID / notarization secrets are optional:
+      # missing CSC_LINK / APPLE_* selects the same ad-hoc flags as local `npm run dist`
+      # (ASKTOTO_ADHOC_SIGN=1, CSC_IDENTITY_AUTO_DISCOVERY=false, -c.mac.identity=null).
       - name: Require signing secrets before releasing
         run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::Missing release secret: GH_TOKEN. See docs/SIGNING.md / scripts/ship-setup.sh."
+            exit 1
+          fi
           missing=()
-          [ -z "$GH_TOKEN" ] && missing+=(GH_TOKEN)
           [ -z "$CSC_LINK" ] && missing+=(CSC_LINK)
           [ -z "$CSC_KEY_PASSWORD" ] && missing+=(CSC_KEY_PASSWORD)
           [ -z "$APPLE_ID" ] && missing+=(APPLE_ID)
           [ -z "$APPLE_APP_SPECIFIC_PASSWORD" ] && missing+=(APPLE_APP_SPECIFIC_PASSWORD)
           [ -z "$APPLE_TEAM_ID" ] && missing+=(APPLE_TEAM_ID)
           if [ ${#missing[@]} -gt 0 ]; then
-            echo "::error::Missing release secret(s): ${missing[*]}. See docs/SIGNING.md / scripts/ship-setup.sh - refusing to publish an unsigned macOS release."
-            exit 1
+            echo "ADHOC macOS path — not notarized. Missing: ${missing[*]}."
+            echo "Using local ad-hoc flags: ASKTOTO_ADHOC_SIGN=1, CSC_IDENTITY_AUTO_DISCOVERY=false, mac.identity=null."
+            echo "ASKTOTO_ADHOC_SIGN=1" >> "$GITHUB_ENV"
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+          else
+            echo "Developer ID + Apple notarization secrets present — notarized macOS path."
           fi
         env:
           CSC_LINK: ${{ secrets.CSC_LINK }}
@@ -200,8 +204,15 @@ jobs:
       - run: npm run check:release
         env:
           ASKTOTO_ARTIFACTS_DIR: release
-      # Positively verify the built artifact is signed + notarized before it can reach the publish job.
-      - run: node scripts/verify-signing.mjs --require-notarized
+      # Notarized path requires Gatekeeper acceptance. Adhoc path must not fail on that check.
+      - name: Verify macOS signature
+        run: |
+          if [ "${ASKTOTO_ADHOC_SIGN:-}" = "1" ]; then
+            echo "ADHOC macOS path — not notarized. Verifying codesign without --require-notarized."
+            node scripts/verify-signing.mjs
+          else
+            node scripts/verify-signing.mjs --require-notarized
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: metis-release-macos

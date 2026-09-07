@@ -15,7 +15,7 @@ none of the gates below execute. See `docs/MANTU-IT-REQUEST.md` for the recorded
 
 - Direct macOS updates publish through GitHub Releases in `electron-builder.yml`.
 - Direct Windows updates publish through the same feed.
-- macOS and Windows tagged release scripts fail if signing inputs are missing.
+- Windows tagged releases fail if `WIN_CSC_*` is missing. macOS falls back to ad-hoc (`ASKTOTO_ADHOC_SIGN=1`, not notarized) when `CSC_LINK` / `APPLE_*` are absent.
 - `scripts/verify-signing.mjs` checks the produced artifacts on the current platform.
 - Machine-wide managed config can lock SSO, license server, license gate, provider policy, encryption, redaction, and retention.
 - The license server supports activation, heartbeat, revocation, expiry, and seat caps.
