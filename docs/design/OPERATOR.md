@@ -54,9 +54,9 @@ Selling ATK- / Fly JWS stays closed. `LICENSE_ACTIVATION_OPEN` stays false.
 
 ## Cloudflare · AI Gateway (kept, not blocking)
 
-`#keys` → **Log in to Cloudflare** → GET `/cloudflare/connect` (OAuth) → callback
-writes vault `cloudflare` + `cloudflare-account` (last4 only). Paste is not the
-happy path. License generate must work if CF OAuth secrets are missing.
+`#keys` Add an API → provider `cloudflare` → paste API token + accountId
+(+ label). Vault row last4 only. OAuth **Log in to Cloudflare** is optional
+and last. License generate must work if CF OAuth secrets are missing.
 Tony sets `CF_OAUTH_CLIENT_ID` + `CF_OAUTH_CLIENT_SECRET` on the Worker.
 Missing secrets → 503 after Access. Métis Settings tile (if any) is
 KineticGrid `b8a677b`, not this Worker tip.

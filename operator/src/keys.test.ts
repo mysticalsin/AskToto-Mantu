@@ -81,11 +81,73 @@ describe('admin keys write / rotate / revoke', () => {
     expect(html).toContain('<th>Revoke</th>')
     expect(html).toContain('data-rotate=')
     expect(html).toContain('data-revoke=')
-    expect(html).not.toContain('name="accountId"')
-    expect(html).not.toContain('placeholder="API token"')
+    expect(html).toContain('value="cloudflare"')
+    expect(html).toContain('name="accountId"')
+    expect(html).toContain('placeholder="API token"')
     expect(html).not.toContain('id="cf-add"')
     expect(html).toContain('data-page="keys"')
     expect(html).toContain('data-page="map"')
+  })
+
+  it('accepts provider=cloudflare with accountId and shows last4 only', async () => {
+    const store = memoryStore()
+    const secret = 'cf-api-token-TESTKEYONLY-not-a-real-secret-66fd'
+    const accountId = '294885a27b3cc0a1cbe5d0ccbe38de4f'
+    const missing = await handleRequest(
+      new Request('https://operator.test/v1/admin/keys', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'cloudflare', label: 'Workers AI', secret })
+      }),
+      env(),
+      { access: tony },
+      { store, now: NOW }
+    )
+    expect(missing.status).toBe(400)
+    expect(await missing.json()).toEqual({ ok: false, error: 'accountId required' })
+
+    const res = await handleRequest(
+      new Request('https://operator.test/v1/admin/keys', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ provider: 'cloudflare', label: 'Workers AI', secret, accountId })
+      }),
+      env(),
+      { access: tony },
+      { store, now: NOW }
+    )
+    expect(res.status).toBe(200)
+    const written = (await res.json()) as { ok: boolean; last4: string; secret?: string; accountId?: string }
+    expect(written.ok).toBe(true)
+    expect(written.last4).toBe('66fd')
+    expect(written).not.toHaveProperty('secret')
+    expect(written).not.toHaveProperty('accountId')
+    expect(JSON.stringify(written)).not.toContain(secret)
+    expect(JSON.stringify(written)).not.toContain(accountId)
+
+    const list = await handleRequest(
+      new Request('https://operator.test/v1/admin/keys'),
+      env(),
+      { access: tony },
+      { store, now: NOW }
+    )
+    const body = (await list.json()) as { vault: { provider: string; last4: string; status: string }[] }
+    expect(body.vault).toEqual([
+      expect.objectContaining({ provider: 'cloudflare', last4: '66fd', status: 'active' })
+    ])
+    expect(JSON.stringify(body)).not.toContain(secret)
+    expect(JSON.stringify(body)).not.toMatch(/\"cipher\"|\"iv\"/)
+
+    const home = await handleRequest(
+      new Request('https://operator.test/'),
+      env(),
+      { access: tony },
+      { store, now: NOW }
+    )
+    const html = await home.text()
+    expect(html).toContain('··66fd')
+    expect(html).toContain('cloudflare')
+    expect(html).not.toContain(secret)
   })
 
   it('rejects CLI and Dust as vault providers', async () => {

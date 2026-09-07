@@ -164,15 +164,31 @@ function showKey(el: HTMLElement | null, j: any): void {
 
 function bindKeyAdd(form: HTMLFormElement | null, msgId?: string): void {
   if (!form) return
+  var provider = form.querySelector('[name="provider"]') as HTMLSelectElement | null
+  var account = form.querySelector('[name="accountId"]') as HTMLInputElement | null
+  var secret = form.querySelector('[name="secret"]') as HTMLInputElement | null
+  function syncCfFields(): void {
+    var cf = !!(provider && provider.value === 'cloudflare')
+    if (account) {
+      account.required = cf
+      account.setAttribute('aria-required', cf ? 'true' : 'false')
+    }
+    if (secret) secret.placeholder = cf ? 'API token' : 'API key'
+  }
+  if (provider) provider.addEventListener('change', syncCfFields)
+  syncCfFields()
   form.addEventListener('submit', async function (e) {
     e.preventDefault()
     var msg = document.getElementById(msgId || 'key-msg')
     var fd = new FormData(form)
-    var j = await api('/v1/admin/keys', {
+    var payload: { provider: FormDataEntryValue | null; label: FormDataEntryValue | null; secret: FormDataEntryValue | null; accountId?: FormDataEntryValue } = {
       provider: fd.get('provider'),
       label: fd.get('label'),
       secret: fd.get('secret')
-    })
+    }
+    var accountId = fd.get('accountId')
+    if (typeof accountId === 'string' && accountId.trim()) payload.accountId = accountId.trim()
+    var j = await api('/v1/admin/keys', payload)
     showKey(msg, j)
     if (j && j.ok) {
       toast({ kind: 'ok', text: 'Key added.' })

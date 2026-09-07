@@ -69,15 +69,18 @@ export function renderKeys(data: DashboardPayload, _ctx: RenderCtx): string {
             <option value="groq">Groq</option>
             <option value="mistral">Mistral</option>
             <option value="grok">Grok</option>
+            <option value="cloudflare">Cloudflare</option>
             <option value="custom">Custom</option>
           </select>
           <input name="label" type="text" placeholder="Label" maxlength="80">
-          <input name="secret" type="password" placeholder="API key" required autocomplete="off">
+          <input name="secret" type="password" placeholder="API token" required autocomplete="off">
+          <input name="accountId" type="text" placeholder="Account ID" maxlength="64" autocomplete="off" data-cf-account>
           <button class="primary" type="submit">Add</button>
         </div>
       </form>
+      <p class="sub muted">Cloudflare: paste API token + accountId (Workers AI REST). last4 only after save. Log in below is optional and last.</p>
       <p class="eyebrow">Cloudflare · AI Gateway</p>
-      <p class="sub muted">Choose Cloudflare. Log in to the Cloudflare account. Operator adds the API key. No paste. Métis Settings tile stays on KineticGrid.</p>
+      <p class="sub muted">Optional last: Log in to Cloudflare. Paste above is enough for portal-cf Flash. Métis Settings tile stays on KineticGrid.</p>
       ${
         data.keys.oauthBound
           ? ''

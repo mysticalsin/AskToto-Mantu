@@ -195,7 +195,7 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
     expect(JSON.stringify(json)).not.toContain(TOKEN)
   })
 
-  it('Keys HTML is login, not Account ID + token paste', async () => {
+  it('Keys HTML keeps optional OAuth login and paste fields for cloudflare', async () => {
     const html = await handleRequest(
       new Request('https://operator.test/'),
       env(),
@@ -209,9 +209,9 @@ describe('Cloudflare AI Gateway plug-and-play', () => {
     expect(html).toContain('Cloudflare · AI Gateway')
     expect(html).toContain('Generate license')
     expect(html).not.toContain('data-cf-oauth-missing')
-    expect(html).not.toContain('name="accountId"')
-    expect(html).not.toContain('placeholder="API token"')
+    expect(html).toContain('value="cloudflare"')
+    expect(html).toContain('name="accountId"')
+    expect(html).toContain('placeholder="API token"')
     expect(html).not.toContain('id="cf-add"')
-    expect(html).not.toContain('Connect Account ID and API token')
   })
 })
