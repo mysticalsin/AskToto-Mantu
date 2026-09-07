@@ -203,6 +203,31 @@ describe('overview-charts helpers', () => {
     expect(empty).toContain('ov-mini-bars-empty')
   })
 
+  it('miniBars draws nothing for a day with no activity, so a sparse week is not seven small events', () => {
+    // One real day among six empty ones must produce exactly one bar. The 2px floor that keeps a
+    // small real value visible used to apply to zero as well, colouring every empty day.
+    const sparse = miniBars([0, 0, 0, 0, 0, 0, 3])
+    expect((sparse.match(/<rect /g) || []).length).toBe(1)
+    // ...and the one bar that is drawn is still a real, visible bar.
+    expect(sparse).toMatch(/height="\d+"/)
+    expect(sparse).not.toMatch(/height="0"/)
+
+    const mixed = miniBars([2, 0, 5])
+    expect((mixed.match(/<rect /g) || []).length).toBe(2)
+  })
+
+  it('the seat area chart keeps a headroom floor so one seat is not a full-height cliff', () => {
+    // Scaling to the series max alone put a single seat at the very top of the frame, reading as a
+    // traffic spike. The floor is 4, and the axis label still prints the true top of the scale.
+    const oneSeat = areaChartWithPrevious({ current: [0, 0, 0, 0, 0, 0, 1], height: 150 })
+    expect(oneSeat).toContain('>4<')
+    expect(oneSeat).not.toContain('>1<')
+
+    // Above the floor the data drives the scale again, exactly as before.
+    const busy = areaChartWithPrevious({ current: [0, 3, 9], height: 150 })
+    expect(busy).toContain('>9<')
+  })
+
   it('tokenStackBar splits into four var(--data-N) segments that add up to the input, or renders the neutral track when empty', () => {
     const bar = tokenStackBar({ in: 40, out: 30, cacheRead: 20, cacheWrite: 10 })
     expect(bar).toContain('var(--data-1)')
