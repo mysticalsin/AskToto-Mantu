@@ -450,6 +450,21 @@ const api = {
   > => ipcRenderer.invoke(IPC.mcpWriteTargets),
 
   operatorOpen: (): Promise<void> => ipcRenderer.invoke(IPC.operatorOpen),
+  // Operator seat license (METIS-OP-1) pairing — PLAN.md P2.2b #1. An empty licenseKey clears a
+  // previously activated license.
+  operatorLicenseActivate: (payload: {
+    licenseKey: string
+  }): Promise<{ ok: boolean; error?: string; jti?: string; last4?: string; expiresAt?: number }> =>
+    ipcRenderer.invoke(IPC.operatorLicenseActivate, payload),
+  operatorStatus: (): Promise<{
+    configured: boolean
+    tier: 'metis' | 'metis-light' | null
+    entitlements: Record<string, boolean> | null
+    licenseLast4: string
+    licenseExpiresAt: number | null
+    integrations: Array<{ id: string; kind: string; label: string; hasCredential: boolean; last4: string }>
+    mcpServers: Array<{ id: string; kind: string; label: string; tools: string[] }>
+  }> => ipcRenderer.invoke(IPC.operatorStatus),
   licenseActivate: (payload: LicenseActivatePayload): Promise<LicenseActivateResult> =>
     ipcRenderer.invoke(IPC.licenseActivate, payload),
   licenseStatus: (): Promise<LicenseStatusResult> => ipcRenderer.invoke(IPC.licenseStatus),

@@ -578,6 +578,7 @@ describe('Operator control plane lives on Cloudflare, not in Settings', () => {
     expect(source).toMatch(/Listen transcripts and screens never send/)
     expect(source).toMatch(/DEFAULT_OPERATOR_URL/)
     expect(source).toMatch(/operatorUrlConfigured/)
+    expect(source).toMatch(/operatorUrlConfigured\(settings\) && <OperatorLicenseCard/)
     expect(source).toMatch(/Empty uses the shipped Operator URL at runtime/)
     expect(source).not.toMatch(/Empty means no fleet heartbeat/)
     expect(source).not.toMatch(/metis-operator\.example\.workers\.dev/)

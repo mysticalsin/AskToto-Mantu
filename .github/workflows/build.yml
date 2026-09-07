@@ -55,6 +55,61 @@ jobs:
         run: npx playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
       - run: npm test
 
+  operator:
+    # Métis Operator (the fleet control-plane Worker under operator/) is a separate deployable with
+    # its own tsconfig, its own vitest config, and two GENERATED files committed to the repo
+    # (operator/src/spa/client.generated.ts, and — once P0.4/P1.3 land it —
+    # operator/src/world/paths.generated.ts). None of that is reachable by the `quality` job above:
+    # its `npm run typecheck` and `npm test` are scoped to the Electron app's own tsconfigs and
+    # vitest include globs, which is why `npm run test` chains `test:operator` (see package.json's
+    # own comment on that) but nothing there rebuilds or typechecks the Worker's client bundle.
+    # This job is that gate: on every PR and push, it rebuilds both generated bundles from source
+    # and fails the build if the committed file drifts from a fresh build (plan D3's contract:
+    # "committed so the Worker ships a real build with no build step at request time" only holds if
+    # CI proves the committed bytes are what a build produces RIGHT NOW).
+    name: Operator Worker (build + typecheck + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.22.3
+          cache: npm
+      - run: npm ci
+      - name: Build operator client bundle
+        run: npm run build:operator-client
+      - name: Build operator world bundle (once build-world.mjs lands)
+        # operator/scripts/build-world.mjs is being written by a concurrent task at the time this
+        # job was authored (plan P0.4/P1.3, Natural Earth world-map paths). Guard on the FILE, not
+        # on the npm script (build:operator-world always exists in package.json so this step can
+        # name it) — that way this job runs the real build the moment the script lands, with no
+        # further edit to this workflow required, and does not fail every PR in the meantime.
+        run: |
+          if [ -f operator/scripts/build-world.mjs ]; then
+            npm run build:operator-world
+          else
+            echo "operator/scripts/build-world.mjs not present yet — skipping (tracked in plan P0.4/P1.3)."
+          fi
+      - name: Fail on a stale generated bundle
+        # A generated file that does not match a fresh build means someone hand-edited it, or
+        # edited its source and forgot to regenerate — either way the committed Worker code is not
+        # what CI just proved buildable. Only check operator/src/world/paths.generated.ts once it
+        # exists, same reasoning as the build step above.
+        run: |
+          git diff --exit-code -- operator/src/spa/client.generated.ts
+          if [ -f operator/src/world/paths.generated.ts ]; then
+            git diff --exit-code -- operator/src/world/paths.generated.ts
+          fi
+      - name: Typecheck operator (Worker)
+        run: npx tsc --noEmit -p operator/tsconfig.json
+      - name: Typecheck operator (client)
+        run: npx tsc --noEmit -p operator/client/tsconfig.json
+      - name: Operator test suite
+        run: npx vitest run --config operator/vitest.config.ts
+      - name: Operator scripts contract tests (deploy/smoke/backup/dev-session)
+        run: npx vitest run --config operator/scripts/vitest.config.ts
+
   security:
     name: Security & supply chain
     runs-on: ubuntu-latest

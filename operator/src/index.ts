@@ -1,135 +1,309 @@
-import { ADMIN_EMAILS, adminIdentity, unauthorized, type AccessCtx } from './access'
+import { sanitizeOperatorHostname, sanitizeOperatorSsoEmail } from '../../src/shared/operator'
+import { normalizeQuestionType, QUESTION_TYPE_LABELS, type QuestionType } from '../../src/shared/question-type'
+import {
+  ADMIN_EMAILS,
+  clearSessionCookie,
+  accessMisconfigured,
+  accessTeamDomain,
+  deriveSessionSecret,
+  isAdminApiPath,
+  isConsolePath,
+  redirectToAccess,
+  resolveAdminIdentity,
+  mintSessionToken,
+  sessionCookieHeader,
+  SESSION_REMINT_AFTER_MS,
+  unauthorized,
+  type AccessCtx
+} from './access'
 import { asCrmStatus } from './crm'
-import { decryptPrompt, encryptPrompt, sha256Hex, signSkillPack } from './crypto'
-import { buildDashboard } from './dashboard'
+import { encryptPrompt } from './crypto'
 import { geoFromRequest, type CfGeo } from './geo'
 import { verifyIngestHmac } from './hmac'
+import { json } from './http'
 import { d1Store, type D1DatabaseLike } from './d1'
+import { fundedProviders } from './keys'
+import { issuedLicenseActive, licenseFromIngest, parseLicenseId, seatAuthorizedForKeys } from './fleet'
+import { matchRoute } from './routes/registry'
+import './routes'
+import { computeIntegrationsVersion, handleIntegrationsSeat } from './routes/integrations-seat'
+import { pruneRetention } from './retention'
+import { d1SchemaStatus } from './routes/admin-core'
+import { looksLikeSecret } from './redact'
 import { memoryStore, type AskRow, type OperatorStore, type SeatRow } from './store'
-import { renderConsole } from './ui'
-import { fundedProvidersFromEnv } from './funded'
-import { handleOperatorAsk } from './ask'
-import { isPublicAssetPath, publicAssetResponse } from './assets'
-import { aggregateQuestionTypes, normalizeQuestionType, QUESTION_TYPE_LABELS } from '../../src/shared/question-type'
+import { resolveTierAndEntitlements } from './tiers'
+import { binaryAssetResponse, isBinaryAssetPath, isPublicAssetPath, publicAssetResponse } from './assets'
+import { handleAsk } from './ask'
+import { parseAskPathTag } from './ask-meter'
+import { handleUse } from './use'
+import { OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
+import type { AdminCtx, Env, HandleOpts } from './routes/admin-ctx'
 
-export interface Env {
-  DB?: D1DatabaseLike
-  OPERATOR_INGEST_SECRET: string
-  OPERATOR_PROMPT_KEY: string
-  OPERATOR_SKILL_PRIVATE_KEY: string
-  OPERATOR_SKILL_PUBLIC_KEY?: string
-  TEAM_DOMAIN?: string
-  POLICY_AUD?: string
-  ANTHROPIC_API_KEY?: string
-  OPENAI_API_KEY?: string
-  NVIDIA_API_KEY?: string
-  DEEPSEEK_API_KEY?: string
-  DASHSCOPE_API_KEY?: string
-  MINIMAX_API_KEY?: string
-  KIMI_API_KEY?: string
-  OPENROUTER_API_KEY?: string
-  GROQ_API_KEY?: string
-  MISTRAL_API_KEY?: string
-  XAI_API_KEY?: string
-  GEMINI_API_KEY?: string
-}
-
-export interface HandleOpts {
-  store?: OperatorStore
-  now?: number
-  access?: AccessCtx['access']
-  geo?: CfGeo
-  fetchImpl?: typeof fetch
-}
+export type { Env, HandleOpts } from './routes/admin-ctx'
 
 const RATE_WINDOW_MS = 60_000
-const RATE_MAX = 90
-
-function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: { 'content-type': 'application/json; charset=utf-8' }
-  })
+/** Per-route HMAC buckets: heartbeats and manifest pulls are cheap and frequent by nature but never need
+ *  to burst, ingest carries every ask, `use` is the one route that spends money per call, and
+ *  `integrations` is pulled once per heartbeat cycle at most. */
+const RATE_LIMITS: Record<string, number> = {
+  heartbeat: 5,
+  ingest: 60,
+  use: 120,
+  ask: 120,
+  manifest: 5,
+  integrations: 10
 }
 
-function html(body: string): Response {
-  return new Response(body, { headers: { 'content-type': 'text/html; charset=utf-8' } })
+/** Admin console mutations (every non-GET `/v1/admin/*` request), keyed by the signed-in email, same
+ *  window as the device buckets above: generous enough for normal console use (bulk group or member
+ *  edits, a run of license generates), low enough to blunt a compromised session or a buggy client
+ *  hammering D1 with writes. GET is never limited. */
+const ADMIN_MUTATION_RATE_LIMIT = 60
+
+function rateBucketFor(pathname: string): { key: string; max: number } | null {
+  if (pathname === '/v1/heartbeat') return { key: 'heartbeat', max: RATE_LIMITS.heartbeat }
+  if (pathname === '/v1/ingest') return { key: 'ingest', max: RATE_LIMITS.ingest }
+  if (pathname === '/v1/use') return { key: 'use', max: RATE_LIMITS.use }
+  if (pathname === '/v1/ask') return { key: 'ask', max: RATE_LIMITS.ask }
+  if (pathname === '/v1/skills/manifest') return { key: 'manifest', max: RATE_LIMITS.manifest }
+  if (pathname === '/v1/integrations') return { key: 'integrations', max: RATE_LIMITS.integrations }
+  return null
 }
 
-function isAdminPath(pathname: string): boolean {
-  return pathname === '/' || pathname.startsWith('/v1/admin')
+/** A device-supplied id (ask or CRM) is stored and later echoed in audit rows and exports, so it is
+ *  stripped of control characters, trimmed and capped before use; an empty result gets a fresh UUID. */
+function deviceSuppliedId(raw: unknown): string {
+  const s = String(raw ?? '').replace(/[\r\n\t\x00-\x1f\x7f]/g, ' ').trim().slice(0, 128)
+  return s || crypto.randomUUID()
 }
 
-/**
- * What the Asks table shows without a Reveal: mode plus the type label. Never a word of the question.
- * The `_question` parameter exists so nobody "helpfully" wires text in later without touching this line.
- */
-function redactedPreview(_question: string | undefined, mode: string | undefined, questionType: string | null): string {
-  const head = mode ? `${mode} ask` : 'Ask'
-  if (!questionType || questionType === 'unknown') return head
-  return `${head} · ${QUESTION_TYPE_LABELS[normalizeQuestionType(questionType)]}`
+/** `mode ask · Type label`. The question text itself is never in a preview; only its declared type is. */
+function redactedPreview(mode: string | undefined, questionType: QuestionType): string {
+  const label = QUESTION_TYPE_LABELS[questionType]
+  return mode ? `${mode} ask · ${label}` : `Ask · ${label}`
 }
 
-/**
- * Wire guard for the type field. Absent = legacy seat (null). Present = normalized to the closed taxonomy,
- * so a tampered client cannot store free text through this column.
- */
-function questionTypeFromBody(body: Record<string, unknown>): string | null {
-  if (!('questionType' in body)) return null
+function questionTypeFromBody(body: Record<string, unknown>): QuestionType {
   return normalizeQuestionType(body.questionType)
 }
 
-export async function handleRequest(
-  request: Request,
-  env: Env,
-  ctx: AccessCtx,
-  opts: HandleOpts = {}
-): Promise<Response> {
+/**
+ * A browser cross-site mutation always carries `Sec-Fetch-Site` (modern browsers) or an `Origin` header
+ * that differs from the Worker's own host (older ones, or a `fetch` from another origin). A same-origin
+ * console request, and any non-browser caller that sends neither header (a server-to-server Bearer call,
+ * or a test), is treated as same-site: this is a CSRF gate, not a bearer-token authorization check. It
+ * covers every mutating method the admin API uses, not only POST, so a PATCH or DELETE route added later
+ * is gated the day it is registered.
+ */
+const CSRF_GATED_METHODS = new Set(['POST', 'PATCH', 'DELETE', 'PUT'])
+
+function isCrossSiteMutation(request: Request, url: URL): boolean {
+  if (!CSRF_GATED_METHODS.has(request.method)) return false
+  const secFetchSite = request.headers.get('sec-fetch-site')
+  if (secFetchSite) return secFetchSite !== 'same-origin'
+  const origin = request.headers.get('origin')
+  if (!origin) return false
+  try {
+    return new URL(origin).host !== url.host
+  } catch {
+    return true
+  }
+}
+
+function csrfRefused(): Response {
+  return json({ ok: false, error: 'cross-site request refused', code: 'csrf' }, 403)
+}
+
+export async function handleRequest(request: Request, env: Env, ctx: AccessCtx, opts: HandleOpts = {}): Promise<Response> {
+  const startedAt = Date.now()
+  const res = await routeRequest(request, env, ctx, opts)
+  logRequest(request, res, startedAt)
+  return res
+}
+
+function logRequest(request: Request, res: Response, startedAt: number): void {
+  try {
+    const url = new URL(request.url)
+    console.log(
+      JSON.stringify({
+        t: 'req',
+        route: url.pathname,
+        method: request.method,
+        status: res.status,
+        ms: Date.now() - startedAt,
+        device: request.headers.get(OPERATOR_HMAC_HEADERS.device) || undefined,
+        requestId: request.headers.get('cf-ray') || undefined
+      })
+    )
+  } catch {
+    /* a log line must never fail a response */
+  }
+}
+
+/** `SELECT 1` bounded to 2 s: a health check must never hang on a D1 outage. The Worker cannot cancel
+ *  an in-flight D1 call, but racing it against a timeout keeps the response itself bounded. */
+const HEALTH_D1_TIMEOUT_MS = 2000
+
+async function healthD1Status(db: D1DatabaseLike | undefined): Promise<'ok' | 'error' | 'unbound'> {
+  if (!db) return 'unbound'
+  const timeout = new Promise<'error'>((resolve) => setTimeout(() => resolve('error'), HEALTH_D1_TIMEOUT_MS))
+  const probe = db
+    .prepare('SELECT 1')
+    .all()
+    .then(() => 'ok' as const)
+    .catch(() => 'error' as const)
+  return Promise.race([probe, timeout])
+}
+
+/** `schema` for `/health` (task B6, plan D10): `ok`, or the same missing-table list
+ *  `/v1/admin/health.json` computes (`d1SchemaStatus`/`EXPECTED_D1_TABLES`, `./routes/admin-core`),
+ *  so the two endpoints can never disagree about what "schema ok" means. `unbound` short-circuits
+ *  without touching D1, same as `healthD1Status`. */
+async function healthSchemaStatus(db: D1DatabaseLike | undefined): Promise<'ok' | 'unbound' | string[]> {
+  if (!db) return 'unbound'
+  const status = await d1SchemaStatus(db)
+  return status.ok ? 'ok' : status.missing
+}
+
+/** Max of `seats.last_seen` and `asks.ts` (task B6): the newest moment any seat actually reported
+ *  in. Bounded reads only - `listAsks(1)` is ordered `ts DESC` (see `d1.ts`), so its first row is the
+ *  most recent ask without scanning the table; seats has no such ordering to lean on, so this reduces
+ *  the full (small, per-fleet) seat list rather than adding a second store method for one number. */
+async function lastIngestAt(store: OperatorStore): Promise<number | null> {
+  const [seats, recentAsks] = await Promise.all([store.listSeats(), store.listAsks(1)])
+  const seatMax = seats.reduce<number | null>((acc, s) => (acc == null || s.last_seen > acc ? s.last_seen : acc), null)
+  const askMax = recentAsks[0]?.ts ?? null
+  if (seatMax == null) return askMax
+  if (askMax == null) return seatMax
+  return Math.max(seatMax, askMax)
+}
+
+/** Newest `platform.heartbeat` audit row (task B6): `retention.ts`'s cron writes exactly one per run,
+ *  so its `ts` is "when the cron last actually ran" without a dedicated table. */
+async function lastCronAt(store: OperatorStore): Promise<number | null> {
+  const rows = await store.listAudit(1, { action: 'platform.heartbeat' })
+  return rows[0]?.ts ?? null
+}
+
+async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: HandleOpts = {}): Promise<Response> {
   const url = new URL(request.url)
   const store = opts.store ?? (env.DB ? d1Store(env.DB) : memoryStore())
   const now = opts.now ?? Date.now()
   const accessCtx: AccessCtx = opts.access ? { access: opts.access } : ctx
 
   if (url.pathname === '/health') {
+    const [d1, schema, lastIngest, lastCron] = await Promise.all([
+      healthD1Status(env.DB),
+      healthSchemaStatus(env.DB),
+      lastIngestAt(store),
+      lastCronAt(store)
+    ])
     return json({
       ok: true,
       service: 'metis-operator',
-      configured: Boolean(env.OPERATOR_INGEST_SECRET && env.OPERATOR_PROMPT_KEY)
+      configured: Boolean(env.OPERATOR_INGEST_SECRET && env.OPERATOR_PROMPT_KEY),
+      version: env.OPERATOR_VERSION?.trim() || 'dev',
+      builtAt: env.OPERATOR_BUILT_AT?.trim() || null,
+      env: env.OPERATOR_ENV?.trim() || 'production',
+      d1,
+      schema,
+      lastIngestAt: lastIngest,
+      lastCronAt: lastCron
     })
   }
 
-  // /assets/* is the packed client JS. Access must never wrap it — a 302 login HTML page is not a
-  // bundle. HMAC paths stay HMAC. Admin HTML stays Access.
   if (isPublicAssetPath(url.pathname)) {
-    return publicAssetResponse(url.pathname)
+    if (isBinaryAssetPath(url.pathname)) return binaryAssetResponse(request, env)
+    return publicAssetResponse(url.pathname) ?? json({ ok: false, error: 'not found' }, 404)
   }
 
-  if (isAdminPath(url.pathname)) {
-    const ident = await adminIdentity(request, accessCtx, env)
-    if (!ident) return unauthorized()
-    return adminRoute(request, url, env, store, ident.email, now)
+  if (url.pathname === '/logout' && request.method === 'POST') {
+    const team = accessTeamDomain(env.TEAM_DOMAIN)
+    const location = team ? `${team}/cdn-cgi/access/logout` : '/'
+    return new Response(null, { status: 303, headers: { Location: location, 'Set-Cookie': clearSessionCookie() } })
+  }
+
+  if (isConsolePath(url.pathname) || isAdminApiPath(url.pathname)) {
+    const ident = await resolveAdminIdentity(request, accessCtx, env, now)
+    if (ident.status === 'misconfigured') return accessMisconfigured(ident.error)
+    if (ident.status === 'ok') {
+      if (isCrossSiteMutation(request, url)) return csrfRefused()
+      if (
+        request.method !== 'GET' &&
+        (await store.hitRate(`admin:${ident.email}`, now, RATE_WINDOW_MS, ADMIN_MUTATION_RATE_LIMIT))
+      ) {
+        return json({ ok: false, error: 'rate limited', code: 'rate', retryAfterMs: RATE_WINDOW_MS }, 429)
+      }
+      const res = await adminRoute(request, url, env, store, ident.email, now, opts)
+      return withSession(res, env, ident, now, url.pathname)
+    }
+    if (ident.status === 'denied' || isAdminApiPath(url.pathname) || request.method !== 'GET') {
+      return unauthorized()
+    }
+    return redirectToAccess(request, env)
   }
 
   if (
     url.pathname === '/v1/ingest' ||
     url.pathname === '/v1/heartbeat' ||
     url.pathname === '/v1/skills/manifest' ||
-    url.pathname === '/v1/ask'
+    url.pathname === '/v1/use' ||
+    url.pathname === '/v1/ask' ||
+    url.pathname === '/v1/integrations'
   ) {
     const bodyText = request.method === 'GET' ? '' : await request.text()
     const hmac = await verifyIngestHmac(request, bodyText, env.OPERATOR_INGEST_SECRET, now, (n) => store.takeNonce(n, now))
-    if (!hmac.ok) return json({ ok: false, error: hmac.error }, hmac.status)
-    if (await store.hitRate(hmac.deviceId, now, RATE_WINDOW_MS, RATE_MAX)) {
-      return json({ ok: false, error: 'rate limited' }, 429)
+    if (!hmac.ok) return json({ ok: false, error: hmac.error, ...(hmac.code ? { code: hmac.code } : {}) }, hmac.status)
+    const bucket = rateBucketFor(url.pathname)
+    if (bucket && (await store.hitRate(`${bucket.key}:${hmac.deviceId}`, now, RATE_WINDOW_MS, bucket.max))) {
+      return json({ ok: false, error: 'rate limited', retryAfterMs: RATE_WINDOW_MS }, 429)
     }
     const geo = opts.geo ?? geoFromRequest(request)
-    if (url.pathname === '/v1/heartbeat') return heartbeat(store, hmac.deviceId, bodyText, now, geo, env)
+    if (url.pathname === '/v1/heartbeat') return heartbeat(store, hmac.deviceId, bodyText, now, geo)
     if (url.pathname === '/v1/skills/manifest') return manifest(store)
-    if (url.pathname === '/v1/ask') return handleOperatorAsk(bodyText, env as unknown as Record<string, unknown>, opts.fetchImpl ?? fetch)
+    if (url.pathname === '/v1/integrations') {
+      if (request.method !== 'GET') return json({ ok: false, error: 'method not allowed' }, 405)
+      return handleIntegrationsSeat(store, env, hmac.deviceId, now)
+    }
+    if (url.pathname === '/v1/use') {
+      if (request.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405)
+      return handleUse(store, env, hmac.deviceId, bodyText, now, opts.providerFetch ?? opts.cfFetch ?? fetch)
+    }
+    if (url.pathname === '/v1/ask') {
+      if (request.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405)
+      return handleAsk(store, env, hmac.deviceId, bodyText, now, opts.providerFetch ?? opts.cfFetch ?? fetch)
+    }
     return ingest(store, env, hmac.deviceId, bodyText, now, geo)
   }
 
   return json({ ok: false, error: 'not found' }, 404)
+}
+
+/** Mints (or reconstructs) the session cookie for an authenticated admin response. A session that came
+ *  from a fresh Access identity (no `sessionIat`) always gets a new cookie; an existing session is only
+ *  re-minted, and `Set-Cookie` re-sent, once it has been alive longer than `SESSION_REMINT_AFTER_MS` -
+ *  otherwise the browser keeps the cookie it already has and this just recomputes the same token bytes
+ *  for the `/session` JSON body and the `X-Metis-Session` header. */
+async function withSession(
+  res: Response,
+  env: Env,
+  ident: { email: string; sessionIat?: number },
+  now: number,
+  pathname: string
+): Promise<Response> {
+  const secret = await deriveSessionSecret(env)
+  if (!secret) return res
+  const shouldRemint = ident.sessionIat === undefined || now - ident.sessionIat > SESSION_REMINT_AFTER_MS
+  const iat = shouldRemint ? now : ident.sessionIat!
+  const token = await mintSessionToken(ident.email, iat, secret)
+  const headers = new Headers(res.headers)
+  if (shouldRemint) headers.append('Set-Cookie', sessionCookieHeader(token, now))
+  headers.set('X-Metis-Session', token)
+  if (pathname === '/session') {
+    headers.set('content-type', 'application/json; charset=utf-8')
+    return new Response(JSON.stringify({ ok: true, session: token }), { status: 200, headers })
+  }
+  return new Response(res.body, { status: res.status, headers })
 }
 
 async function adminRoute(
@@ -138,201 +312,116 @@ async function adminRoute(
   env: Env,
   store: OperatorStore,
   email: string,
-  now: number
+  now: number,
+  opts: HandleOpts = {}
 ): Promise<Response> {
-  if (url.pathname === '/' && request.method === 'GET') {
-    const dash = await buildDashboard(store, email, now)
-    return html(renderConsole(dash))
-  }
-  if (url.pathname === '/v1/admin/dashboard' && request.method === 'GET') {
-    return json(stripSecrets(await buildDashboard(store, email, now)))
-  }
-  if (url.pathname === '/v1/admin/summary' && request.method === 'GET') {
-    const dash = await buildDashboard(store, email, now)
-    return json({
-      ok: true,
-      live: dash.kpis.live,
-      dau: dash.kpis.dau,
-      wau: dash.kpis.wau,
-      costToday: dash.kpis.costToday,
-      hitRate: dash.kpis.cacheHit,
-      pending: dash.kpis.pendingDiffs
-    })
-  }
-  if (url.pathname === '/v1/admin/asks' && request.method === 'GET') {
-    const asks = await store.listAsks(100)
-    return json({
-      ok: true,
-      asks: asks.map((a) => ({ ...a, prompt_cipher: undefined, prompt_iv: undefined, question: undefined }))
-    })
-  }
-  const reveal = /^\/v1\/admin\/asks\/([^/]+)$/.exec(url.pathname)
-  if (reveal && request.method === 'GET') {
-    const row = await store.getAsk(reveal[1])
-    if (!row) return json({ ok: false, error: 'not found' }, 404)
-    let question = ''
-    if (row.prompt_cipher && row.prompt_iv) {
-      question = await decryptPrompt(row.prompt_cipher, row.prompt_iv, env.OPERATOR_PROMPT_KEY)
-    }
-    await store.audit(crypto.randomUUID(), now, email, 'reveal', row.id, 'ask text')
-    return json({ ok: true, id: row.id, question })
-  }
-  if (url.pathname === '/v1/admin/skills/draft' && request.method === 'POST') {
-    const body = await request.json().catch(() => ({})) as { skillId?: string }
-    const skillId = body.skillId || 'general'
-    const asks = (await store.listAsks(80)).filter((a) => a.mode === skillId || a.skill_id === skillId)
-    // Evidence is the question-type mix of recent Asks in this skill: counts per closed label, never
-    // question text (text needs a Reveal, which is audited). A legacy seat with no type is counted in
-    // `total` so the rationale states its own coverage.
-    const mix = aggregateQuestionTypes(asks.map((a) => a.question_type))
-    const evidence = mix.bars.slice(0, 8).map((b) => `${b.label} ×${b.count}`)
-    const fromVersion = asks.find((a) => a.skill_version)?.skill_version || '1.1.0'
-    const id = crypto.randomUUID()
-    await store.putProposal({
-      id,
-      skill_id: skillId,
-      from_version: fromVersion,
-      evidence_json: JSON.stringify(evidence),
-      diff: `# unified diff against ${skillId} v${fromVersion}\n# Edit, then Approve. Push is a separate click.\n`,
-      rationale: asks.length
-        ? `${asks.length} recent Asks in ${skillId}, type known for ${mix.classified}: ${evidence.join(', ') || 'none typed yet'}.`
-        : `No recent Asks in ${skillId} yet. Draft is a blank edit.`,
-      status: 'pending',
-      created_by: email,
-      created_at: now,
-      decided_at: null,
-      reject_reason: null
-    })
-    await store.audit(crypto.randomUUID(), now, email, 'draft', null, skillId)
-    return json({ ok: true, id })
-  }
-  const decide = /^\/v1\/admin\/skills\/([^/]+)\/(approve|reject|push)$/.exec(url.pathname)
-  if (decide && request.method === 'POST') {
-    const id = decide[1]
-    const action = decide[2]
-    const row = await store.getProposal(id)
-    if (!row) return json({ ok: false, error: 'not found' }, 404)
-    const body = await request.json().catch(() => ({})) as { diff?: string; reason?: string; body?: string }
-    if (action === 'reject') {
-      await store.putProposal({
-        ...row,
-        status: 'rejected',
-        reject_reason: body.reason || 'rejected',
-        decided_at: now
-      })
-      await store.audit(crypto.randomUUID(), now, email, 'reject', null, row.skill_id)
-      return json({ ok: true })
-    }
-    if (action === 'approve') {
-      await store.putProposal({
-        ...row,
-        status: 'approved',
-        diff: typeof body.diff === 'string' ? body.diff : row.diff,
-        decided_at: now
-      })
-      await store.audit(crypto.randomUUID(), now, email, 'approve', null, row.skill_id)
-      return json({ ok: true, pushed: false })
-    }
-    if (row.status !== 'approved') return json({ ok: false, error: 'approve first' }, 400)
-    if (!env.OPERATOR_SKILL_PRIVATE_KEY) return json({ ok: false, error: 'skill signing key missing' }, 500)
-    const nextVersion = bump(row.from_version)
-    const skillBody = skillPackBody(row.skill_id, nextVersion, body.body || row.diff)
-    const digest = await sha256Hex(skillBody)
-    const signed = await signSkillPack(
-      { skillId: row.skill_id, version: nextVersion, sha256: digest, body: skillBody },
-      env.OPERATOR_SKILL_PRIVATE_KEY
-    )
-    await store.putPack({
-      id: crypto.randomUUID(),
-      skill_id: row.skill_id,
-      version: nextVersion,
-      sha256: digest,
-      body: skillBody,
-      signed,
-      pushed_at: now,
-      pushed_by: email
-    })
-    await store.putProposal({ ...row, status: 'pushed', decided_at: now })
-    await store.audit(crypto.randomUUID(), now, email, 'push', null, `${row.skill_id}@${nextVersion}`)
-    return json({ ok: true, pushed: true, version: nextVersion, signed })
-  }
-  const crmRetry = /^\/v1\/admin\/crm\/([^/]+)\/retry$/.exec(url.pathname)
-  if (crmRetry && request.method === 'POST') {
-    const row = await store.getCrm(crmRetry[1])
-    if (!row) return json({ ok: false, error: 'not found' }, 404)
-    if (row.status !== 'failed' && row.status !== 'expired') {
-      return json({ ok: false, error: 'only Failed or Expired can retry' }, 400)
-    }
-    await store.upsertCrm({
-      ...row,
-      status: 'pending',
-      retry_requested: 1,
-      ts: now
-    })
-    await store.audit(crypto.randomUUID(), now, email, 'crm-retry', null, row.id)
-    return json({ ok: true, autoSend: false })
-  }
+  const ctx: AdminCtx = { request, url, env, store, email, now, opts }
+  const matched = await matchRoute<AdminCtx>(request, ctx)
+  if (matched) return matched
   return json({ ok: false, error: 'not found' }, 404)
 }
 
-function bump(version: string): string {
-  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(version)
-  if (!m) return '1.0.1'
-  return `${m[1]}.${m[2]}.${Number(m[3]) + 1}`
-}
-
-function skillPackBody(skillId: string, version: string, source: string): string {
-  const trimmed = source.replace(/\r\n/g, '\n').trim()
-  if (trimmed.startsWith('---')) {
-    return trimmed.replace(/^version:\s*.*$/m, `version: ${version}`)
-  }
-  return `---\nid: ${skillId}\nversion: ${version}\nlocked: true\n---\n\n${trimmed}\n`
-}
-
-async function heartbeat(
-  store: OperatorStore,
-  deviceId: string,
-  bodyText: string,
-  now: number,
-  geo: CfGeo,
-  env: Env
-): Promise<Response> {
+async function heartbeat(store: OperatorStore, deviceId: string, bodyText: string, now: number, geo: CfGeo): Promise<Response> {
   const body = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {}
-  await store.upsertSeat(seatFromBody(deviceId, body, now, geo))
+  const seat = seatFromBody(deviceId, body, now, geo)
+  await store.upsertSeat(seat)
+  const stored = (await store.getSeat(deviceId)) ?? seat
+  const pulseId = crypto.randomUUID()
   await store.insertPulse({
-    id: crypto.randomUUID(),
+    id: pulseId,
     device_id: deviceId,
     ts: now,
     kind: 'heartbeat',
     country: geo.country,
-    city: geo.city
+    city: geo.city,
+    region: geo.region ?? null
   })
+  await store.insertEvent({
+    id: pulseId,
+    ts: now,
+    kind: 'heartbeat',
+    actor: seat.sso_email,
+    device_id: deviceId,
+    country: geo.country,
+    detail: safeEventDetail([seat.os, geo.city, typeof body.path === 'string' ? body.path : '/'].filter(Boolean).join(' '))
+  })
+  await store.touchSession(deviceId, now, 'heartbeat', geo, seat)
   await ingestCrmList(store, deviceId, body, now)
+  // First seat to present an active Operator-issued jti binds activated_device (console / export).
+  // Entitlement still resolves via seat.license_jti → issued_licenses even before this bind.
+  const bindJti = parseLicenseId(stored.license_jti)
+  if (bindJti) {
+    const issued = await store.getIssuedLicense(bindJti)
+    if (issuedLicenseActive(issued, now) && !issued?.activated_device) {
+      await store.updateIssuedLicense(bindJti, { activated_device: deviceId, activated_at: now })
+    }
+  }
   const retries = await store.listCrmRetries(deviceId)
+  const { tier, entitlements } = await resolveTierAndEntitlements(store, stored, now)
+  const integrationsVersion = await computeIntegrationsVersion(store, stored, tier)
   return json({
     ok: true,
     retry: retries.map((r) => r.id),
-    fundedProviders: fundedProvidersFromEnv(env as unknown as Record<string, unknown>)
+    fundedProviders: await fundedProviders(store, stored, now),
+    approved: await seatAuthorizedForKeys(store, stored, now),
+    tier,
+    entitlements,
+    integrationsVersion,
+    ...(typeof body.queued === 'number' ? { queued: body.queued } : {}),
+    ...(typeof body.dropped === 'number' ? { dropped: body.dropped } : {})
   })
 }
 
-async function ingest(
-  store: OperatorStore,
-  env: Env,
-  deviceId: string,
-  bodyText: string,
-  now: number,
-  geo: CfGeo
-): Promise<Response> {
+async function ingest(store: OperatorStore, env: Env, deviceId: string, bodyText: string, now: number, geo: CfGeo): Promise<Response> {
   const body = JSON.parse(bodyText || '{}') as Record<string, unknown>
-  const id = String(body.id || crypto.randomUUID())
+  const id = deviceSuppliedId(body.id)
+  // An ask id is client-chosen. A row may only be created, replaced or rated by the device that owns it;
+  // otherwise one seat could rewrite or thumbs-down another seat's history through a guessed id.
+  const existing = await store.getAsk(id)
+  if (existing && existing.device_id !== deviceId) return json({ ok: false, error: 'forbidden' }, 403)
   if (body.event === 'rating') {
-    await store.updateAskRating(id, String(body.rating || ''))
+    if (existing) await store.updateAskRating(id, String(body.rating || ''))
+    const seat = seatFromBody(deviceId, body, now, geo)
+    await store.insertEvent({
+      id: crypto.randomUUID(),
+      ts: now,
+      kind: 'rating',
+      actor: seat.sso_email,
+      device_id: deviceId,
+      country: geo.country,
+      detail: safeEventDetail(String(body.rating || 'rating'))
+    })
     return json({ ok: true })
+  }
+  if (body.event === 'listen' || body.event === 'recap') {
+    const seat = seatFromBody(deviceId, body, now, geo)
+    const minutes = num(body.minutes)
+    await store.insertEvent({
+      id,
+      ts: now,
+      kind: body.event,
+      actor: seat.sso_email,
+      device_id: deviceId,
+      country: geo.country,
+      detail: safeEventDetail(minutes != null ? `${minutes}m` : String(body.event))
+    })
+    await store.upsertSeat(seat)
+    return json({ ok: true, id })
   }
   if (body.event === 'crm') {
     if (body.confidential === true) return json({ ok: true, id, ingested: false })
-    await upsertCrmEvent(store, deviceId, body, now)
+    const written = await upsertCrmEvent(store, deviceId, body, now)
+    if (written === 'foreign') return json({ ok: false, error: 'forbidden' }, 403)
+    const seat = seatFromBody(deviceId, body, now, geo)
+    await store.insertEvent({
+      id: crypto.randomUUID(),
+      ts: now,
+      kind: 'crm',
+      actor: seat.sso_email,
+      device_id: deviceId,
+      country: geo.country,
+      detail: safeEventDetail(String(body.status || body.connector || 'crm'))
+    })
     return json({ ok: true, id })
   }
   let cipher: string | null = null
@@ -366,19 +455,33 @@ async function ingest(
     rating: str(body.rating),
     prompt_cipher: cipher,
     prompt_iv: iv,
-    preview: redactedPreview(question, str(body.mode) ?? undefined, questionType),
-    question_type: questionType
+    preview: redactedPreview(str(body.mode) ?? undefined, questionType),
+    question_type: questionType,
+    path_tag: parseAskPathTag(body.pathTag ?? body.path_tag)
   }
   await store.insertAsk(row)
+  const pulseId = crypto.randomUUID()
   await store.insertPulse({
-    id: crypto.randomUUID(),
+    id: pulseId,
     device_id: deviceId,
     ts: row.ts,
     kind: 'ask',
     country: geo.country,
-    city: geo.city
+    city: geo.city,
+    region: geo.region ?? null
   })
-  await store.upsertSeat(seatFromBody(deviceId, body, now, geo))
+  const seat = seatFromBody(deviceId, body, now, geo)
+  await store.upsertSeat(seat)
+  await store.touchSession(deviceId, row.ts, 'ask', geo, seat)
+  await store.insertEvent({
+    id: pulseId,
+    ts: row.ts,
+    kind: 'ask',
+    actor: seat.sso_email,
+    device_id: deviceId,
+    country: geo.country,
+    detail: safeEventDetail(row.mode || row.cache_status || 'ask')
+  })
   return json({ ok: true, id })
 }
 
@@ -403,16 +506,28 @@ function seatFromBody(deviceId: string, body: Record<string, unknown>, now: numb
   return {
     device_id: deviceId,
     seat_hash: String(body.seatHash || deviceId),
-    os: String(body.os || 'unknown'),
-    app_version: String(body.appVersion || ''),
+    os: typeof body.os === 'string' && body.os.trim() && body.os !== 'unknown' ? body.os.trim() : '',
+    app_version: typeof body.appVersion === 'string' ? body.appVersion.trim() : '',
     first_seen: now,
     last_seen: now,
     country: geo.country,
     city: geo.city,
+    region: geo.region ?? null,
     lat: geo.lat,
     lon: geo.lon,
-    last_index_at: lastIndexAt(body)
+    last_index_at: lastIndexAt(body),
+    hostname: sanitizeOperatorHostname(body.hostname),
+    sso_email: sanitizeOperatorSsoEmail(body.ssoEmail ?? body.email),
+    license: licenseFromIngest(body),
+    license_jti: parseLicenseId(body.licenseId)
   }
+}
+
+function safeEventDetail(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const s = raw.trim().slice(0, 48)
+  if (!s || looksLikeSecret(s)) return null
+  return s
 }
 
 function meetingHashFromBody(body: Record<string, unknown>): string | null {
@@ -433,11 +548,11 @@ async function upsertCrmEvent(
   deviceId: string,
   body: Record<string, unknown>,
   now: number
-): Promise<void> {
-  if (body.confidential === true) return
+): Promise<'written' | 'skipped' | 'foreign'> {
+  if (body.confidential === true) return 'skipped'
   const status = asCrmStatus(body.status)
-  if (!status) return
-  const id = String(body.id || crypto.randomUUID())
+  if (!status) return 'skipped'
+  const id = deviceSuppliedId(body.id)
   const title = typeof body.title === 'string' ? body.title.replace(/\s+/g, ' ').trim().slice(0, 160) : 'CRM send'
   const connector = typeof body.connector === 'string' ? body.connector.slice(0, 32) : 'unknown'
   const err = typeof body.error === 'string' ? body.error.slice(0, 200) : null
@@ -449,6 +564,8 @@ async function upsertCrmEvent(
   const latencyMs =
     typeof body.latencyMs === 'number' && Number.isFinite(body.latencyMs) ? Math.max(0, Math.floor(body.latencyMs)) : 0
   const prev = await store.getCrm(id)
+  // A CRM row (and the retry instruction the console attaches to it) belongs to the device that sent it.
+  if (prev && prev.device_id !== deviceId) return 'foreign'
   await store.upsertCrm({
     id,
     device_id: deviceId,
@@ -466,28 +583,15 @@ async function upsertCrmEvent(
     remote_url: remoteUrl ?? prev?.remote_url ?? null,
     action: action ?? prev?.action ?? null
   })
+  return 'written'
 }
 
-async function ingestCrmList(
-  store: OperatorStore,
-  deviceId: string,
-  body: Record<string, unknown>,
-  now: number
-): Promise<void> {
+async function ingestCrmList(store: OperatorStore, deviceId: string, body: Record<string, unknown>, now: number): Promise<void> {
   if (!Array.isArray(body.crm)) return
   for (const item of body.crm.slice(0, 40)) {
     if (!item || typeof item !== 'object') continue
     await upsertCrmEvent(store, deviceId, item as Record<string, unknown>, now)
   }
-}
-
-function stripSecrets<T>(data: T): T {
-  return JSON.parse(
-    JSON.stringify(data, (key, value) => {
-      if (key === 'prompt_cipher' || key === 'prompt_iv' || key === 'question' || key === 'ip') return undefined
-      return value
-    })
-  ) as T
 }
 
 function str(v: unknown): string | null {
@@ -500,6 +604,14 @@ function num(v: unknown): number | null {
 export default {
   async fetch(request: Request, env: Env, ctx: AccessCtx): Promise<Response> {
     return handleRequest(request, env, ctx)
+  },
+  async scheduled(_event: unknown, env: Env, _ctx: unknown): Promise<void> {
+    const store: OperatorStore = env.DB ? d1Store(env.DB) : memoryStore()
+    // `pruneRetention` closes stale sessions itself as its last step, so the cron needs only the one
+    // call; `db` is only for the two raw-table prunes (`integration_grants`, `mcp_calls`) that live
+    // outside `OperatorStore`.
+    const result = await pruneRetention(store, Date.now(), {}, { db: env.DB })
+    console.log(JSON.stringify({ t: 'retention', ...result }))
   }
 }
 

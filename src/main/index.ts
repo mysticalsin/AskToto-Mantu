@@ -151,6 +151,7 @@ import {
   nextAskRoute,
   nextLastClickedCli,
   pickWorkingCliPrimary,
+  portalFundedCloudflareModel,
   workingCliOrder
 } from '@shared/ask-routing'
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
@@ -331,7 +332,7 @@ import { buildBrainContext } from './brain/context'
 import { buildSystem, buildSystemParts } from './personas'
 import { applyCaveman } from '@shared/caveman-ask'
 import { isBuiltinConversationMode, isModeSkillIntegrityError } from '@shared/mode-skills'
-import { isOpenAICloudCacheEligible, promptCacheKey as makePromptCacheKey, resolveOperatorBaseUrl } from '@shared/operator'
+import { isOpenAICloudCacheEligible, operatorUrlConfigured, promptCacheKey as makePromptCacheKey, resolveOperatorBaseUrl } from '@shared/operator'
 import { cloudflareConnectTarget } from './cloudflare-connect'
 import { loadVerifiedSkill, setModeSkillsOverlayRoot, skillLockHashForMode } from './mode-skills'
 import {
@@ -347,6 +348,9 @@ import { BoundedSet } from './bounded-set'
 import { installEgressGuard } from './net/egress-guard'
 import { buildCrmIngestEvent, meetingFileHash, shouldIngestCrm } from './operator-crm'
 import { startOperatorOverlayPoll } from './operator-overlay'
+import { activateOperatorLicenseToken } from './operator-license-activate'
+import { operatorGate } from './operator-entitlements-state'
+import { operatorIntegrationsSnapshot, registeredOperatorMcpServers } from './operator-integrations'
 import { initLogging, mainLog, auditLog } from './logger'
 import { consumeSecurityLimit, RATE_LIMIT_USER_MESSAGE, shouldSampleIpcDeny, takeHotPath, type SecurityLimitBucket } from './security-limits'
 import { safeMeetingBasename } from './meeting-path'
@@ -3722,6 +3726,22 @@ function registerIpc(): void {
     for (const k of ['mcpConnections', 'clickupClientId', 'planeClientId']) {
       if (k in p) delete (p as Record<string, unknown>)[k]
     }
+    // Operator entitlement state (PLAN.md P2.2b #2): only a successful heartbeat
+    // (operator-entitlements-state.ts) may write these — a renderer patch must not self-grant a gated
+    // feature. The license token/jti/last4/exp are main-owned for the same reason mcpConnections is
+    // above: only IPC.operatorLicenseActivate's own parse may set them.
+    for (const k of [
+      'operatorTier',
+      'operatorEntitlements',
+      'operatorIntegrationsVersion',
+      'operatorEntitlementsAt',
+      'operatorLicenseToken',
+      'operatorLicenseJti',
+      'operatorLicenseLast4',
+      'operatorLicenseExpiresAt'
+    ]) {
+      if (k in p) delete (p as Record<string, unknown>)[k]
+    }
     const cur = getSettings()
     const wasEncrypted = cur.encryptTranscripts
     // Task MI-5 consent gate: turning publishBrainPages ON while transcripts stay encrypted writes
@@ -3922,6 +3942,84 @@ function registerIpc(): void {
     assertMainWindow(e)
     const url = resolveOperatorBaseUrl(getSettings())
     if (url) void shell.openExternal(url)
+  })
+  // Operator seat license (METIS-OP-1) pairing, PLAN.md P2.2b #1. Local format parse only — see
+  // operator-license-activate.ts's own header for why no secret is needed here. An empty licenseKey
+  // clears a previously activated license (e.g. the user pastes nothing and saves, or explicitly wants
+  // to unpair this seat) rather than being treated as a format error.
+  ipcMain.handle(IPC.operatorLicenseActivate, (e, payload: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+    const raw = payload && typeof payload === 'object' && 'licenseKey' in (payload as object) ? (payload as { licenseKey: unknown }).licenseKey : payload
+    const token = typeof raw === 'string' ? raw.trim() : ''
+    if (token === '') {
+      setSettings({
+        operatorLicenseToken: '',
+        operatorLicenseJti: '',
+        operatorLicenseLast4: '',
+        operatorLicenseExpiresAt: null,
+        operatorTier: null,
+        operatorEntitlements: null,
+        operatorEntitlementsAt: 0
+      })
+      auditLog('operator.license.cleared', {})
+      return { ok: true }
+    }
+    const result = activateOperatorLicenseToken(token)
+    if (!result.ok) return result
+    setSettings({
+      operatorLicenseToken: token,
+      operatorLicenseJti: result.jti!,
+      operatorLicenseLast4: result.last4!,
+      operatorLicenseExpiresAt: result.expiresAt!,
+      // A freshly activated license has not been confirmed by the Worker yet — clear any stale
+      // tier/entitlements a PREVIOUS license left behind so Settings shows "waiting for Operator"
+      // instead of the old license's last-known grant.
+      operatorTier: null,
+      operatorEntitlements: null,
+      operatorEntitlementsAt: 0
+    })
+    auditLog('operator.license.activated', { jti: result.jti })
+    return result
+  })
+  // Read-only Operator status snapshot for Settings (local settings + in-memory integrations state
+  // only, never touches the network) — mirrors licenseStatus's own "local settings only" contract.
+  ipcMain.handle(IPC.operatorStatus, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) {
+      return {
+        configured: false,
+        tier: null,
+        entitlements: null,
+        licenseLast4: '',
+        licenseExpiresAt: null,
+        integrations: [],
+        mcpServers: []
+      }
+    }
+    const s = getSettings()
+    return {
+      configured: operatorUrlConfigured(s) && !!s.operatorIngestSecret.trim(),
+      tier: s.operatorTier,
+      entitlements: s.operatorEntitlements,
+      licenseLast4: s.operatorLicenseLast4,
+      licenseExpiresAt: s.operatorLicenseExpiresAt,
+      // Never the raw credential itself — only whether one exists and its last4, same discipline as
+      // every other credential surfaced to the renderer (licenseLast4, vault key last4s).
+      integrations: operatorIntegrationsSnapshot().integrations.map((i) => ({
+        id: i.id,
+        kind: i.kind,
+        label: i.label,
+        hasCredential: !!i.credential,
+        last4: i.credential ? i.credential.slice(-4) : ''
+      })),
+      mcpServers: registeredOperatorMcpServers().map((m) => ({
+        id: m.id,
+        kind: m.kind,
+        label: m.label,
+        tools: m.tools ?? []
+      }))
+    }
   })
   ipcMain.handle(IPC.licenseActivate, async (e, payload: unknown) => {
     assertMainWindow(e)
@@ -5423,6 +5521,17 @@ function registerIpc(): void {
       win?.webContents.send(IPC.streamError, { id: req.id, message: PRIVATE_VIEW_BLOCKED_MESSAGE })
       return
     }
+    // PLAN.md P2.2b #2: recap generation is Operator-gated (a Métis Light seat's license may not
+    // include it). Only mode:'recap' is checked here — answer/vision/suggest/summary stay ungated by
+    // this call, and an unconfigured seat is never gated at all (operatorGate's own contract).
+    if (req.mode === 'recap') {
+      const gate = operatorGate('recap')
+      if (!gate.allowed) {
+        auditLog('operator.gate.blocked', { feature: 'recap' })
+        win?.webContents.send(IPC.streamError, { id: req.id, message: gate.reason || 'Recap is not available.' })
+        return
+      }
+    }
     let s = getSettings()
     // Ask caveman register: `/caveman lite|full|ultra…`, "stop caveman", "normal mode".
     // Persist in the existing settings store, strip the command from the question the model sees.
@@ -5770,6 +5879,9 @@ function registerIpc(): void {
           : req.agentOverride && provider === 'dust'
             ? req.agentOverride
             : resolveModelTier(provider, s.providerModels, s.providerModelsThinking, tier, s.providerModelsDeep)
+      if (viaOperator && provider === 'cloudflare') {
+        model = portalFundedCloudflareModel(tier)
+      }
       // Guardrail (per Tony): CLI is Sonnet-only, Anthropic base/think are pinned to Haiku/Sonnet — both
       // regardless of what routeTier or a user's providerModels override picked. Opus stays reachable only
       // through the Graph pipeline (brain/ingest.ts, graphify.ts), which never calls this function.
@@ -5818,7 +5930,7 @@ function registerIpc(): void {
                 : // Endpoint-is-yours providers (Custom, Cloudflare's operator-deployed Worker) cannot be
                   // reached without a URL. Say so HERE, where the message is actionable and the flow can
                   // still fail over, rather than letting streamOpenAI's own guard surface it mid-stream.
-                  def.kind !== 'cli' && requiresUserBaseUrl(provider) && !baseURL
+                  !viaOperator && def.kind !== 'cli' && requiresUserBaseUrl(provider) && !baseURL
                   ? `No endpoint URL set for ${def.label}. Open Settings → Advanced and add it.`
                   : req.mode === 'vision' && !providerVisionOk(provider)
                     ? `${def.label} can't read screenshots. ${visionSwitchAdvice(provider)}`

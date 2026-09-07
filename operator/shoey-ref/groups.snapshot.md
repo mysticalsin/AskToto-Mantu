@@ -1,0 +1,60 @@
+- generic [active] [ref=f7e1]:
+  - generic [ref=f7e2]:
+    - button "Close menu"
+    - generic [ref=f7e3]:
+      - generic [ref=f7e4]:
+        - link [ref=f7e5] [cursor=pointer]:
+          - /url: /
+          - img "Openpanel logo" [ref=f7e6]
+        - button "Shoey" [ref=f7e7]
+      - generic [ref=f7e16]:
+        - button "Ask AI" [ref=f7e18]
+        - generic [ref=f7e23]:
+          - textbox "Ask AI anything..." [ref=f7e27]
+          - generic [ref=f7e28]: ⌘J
+        - generic [ref=f7e29]: Analytics
+        - navigation [ref=f7e30]:
+          - link "Overview" [ref=f7e31] [cursor=pointer]:
+            - /url: /demo/shoey
+          - link "Realtime" [ref=f7e36] [cursor=pointer]:
+            - /url: /demo/shoey/realtime
+          - link "Events" [ref=f7e42] [cursor=pointer]:
+            - /url: /demo/shoey/events
+          - link "Sessions" [ref=f7e44] [cursor=pointer]:
+            - /url: /demo/shoey/sessions
+          - link "Groups" [ref=f7e50] [cursor=pointer]:
+            - /url: /demo/shoey/groups
+        - generic [ref=f7e55]: Manage
+        - navigation [ref=f7e56]:
+          - link "Settings" [ref=f7e57] [cursor=pointer]:
+            - /url: /demo/shoey/settings
+          - link "Notifications" [ref=f7e69] [cursor=pointer]:
+            - /url: /demo/shoey/notifications
+      - generic [ref=f7e74]:
+        - generic [ref=f7e75]:
+          - button "Sparkles" [ref=f7e76]
+          - button "User" [ref=f7e80]
+        - generic [ref=f7e84]:
+          - generic [ref=f7e85]: Support Us
+          - generic [ref=f7e86]: Pay What You Want
+    - generic [ref=f7e88]:
+      - generic [ref=f7e90]:
+        - generic [ref=f7e91]:
+          - heading "Groups" [level=1] [ref=f7e92]
+          - paragraph [ref=f7e93]: Groups represent companies, teams, or other entities that events belong to.
+        - button "Add group" [ref=f7e95]
+      - generic [ref=f7e97]:
+        - textbox "Search ..." [ref=f7e103]
+        - button "View" [ref=f7e105]
+      - generic [ref=f7e112]:
+        - generic [ref=f7e113]:
+          - generic [ref=f7e114]: NAME
+          - generic [ref=f7e115]: ID
+          - generic [ref=f7e116]: TYPE
+          - generic [ref=f7e117]: MEMBERS
+          - generic [ref=f7e118]: LAST ACTIVE
+          - generic [ref=f7e119]: CREATED
+        - generic [ref=f7e120]:
+          - heading "No groups found" [level=3] [ref=f7e123]
+          - paragraph [ref=f7e124]: Groups represent companies, teams, or other entities that events belong to.
+  - alert [ref=f7e125]

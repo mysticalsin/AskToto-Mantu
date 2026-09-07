@@ -1,4 +1,6 @@
 import { WORLD_PATHS } from './world-paths'
+import { stripMapBands } from './map-bands'
+import { projectPoint, renderCornerMapSvg, renderRealtimeMapSvg, type RealtimeMapPoint } from './world/map'
 import type { MapCountry, MapDot, MixBar, SeriesPoint, TokenPoint } from './dashboard'
 
 const MONO = ['#2a2a2e', '#3f3f46', '#71717a', '#a1a1aa', '#e4e4e7']
@@ -107,8 +109,11 @@ export function heatmapGrid(values: number[]): string {
   return out
 }
 
+/** Same Mercator math as the realtime map (1152x576 viewport), so the legacy 4-variant
+ * Map page's dots/graticule line up with the WORLD_PATHS land it now shares. */
 function project(lat: number, lon: number): { x: number; y: number } {
-  return { x: ((lon + 180) / 360) * 1000, y: ((90 - lat) / 180) * 500 }
+  const [x, y] = projectPoint(lat, lon, '1152')
+  return { x, y }
 }
 
 function scaleColor(devices: number, max: number): string {
@@ -134,17 +139,17 @@ export function choropleth(
         : variant === 'hatch' && n > 0
           ? `url(#hatch-${Math.min(4, Math.max(1, Math.ceil((n / Math.max(max, 1)) * 4)))})`
           : scaleColor(n, max)
-    land += `<path data-iso="${iso}" d="${d}" fill="${fill}" />`
+    land += `<path data-iso="${iso}" d="${stripMapBands(d)}" fill="${fill}" />`
   }
   let grid = ''
   if (variant === 'graticule') {
     for (let lon = -180; lon <= 180; lon += 30) {
-      const x = ((lon + 180) / 360) * 1000
-      grid += `<line x1="${x}" y1="0" x2="${x}" y2="500" class="grat" />`
+      const x = project(0, lon).x
+      grid += `<line x1="${x.toFixed(1)}" y1="0" x2="${x.toFixed(1)}" y2="576" class="grat" />`
     }
     for (let lat = -60; lat <= 80; lat += 30) {
-      const y = ((90 - lat) / 180) * 500
-      grid += `<line x1="0" y1="${y}" x2="1000" y2="${y}" class="grat" />`
+      const y = project(lat, 0).y
+      grid += `<line x1="0" y1="${y.toFixed(1)}" x2="1152" y2="${y.toFixed(1)}" class="grat" />`
     }
   }
   const marks = empty
@@ -158,7 +163,7 @@ export function choropleth(
   const caption = empty
     ? `<div class="empty map-empty">No heartbeats yet. The map stays empty until a seat checks in.</div>`
     : ''
-  return `${caption}<svg class="world" viewBox="0 0 1000 500" role="img" aria-label="Unique devices by country">
+  return `${caption}<svg class="world" viewBox="0 0 1152 576" role="img" aria-label="Unique devices by country">
     <defs>
       <pattern id="hatch-1" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="6" stroke="var(--chart-3)" stroke-width="1"/></pattern>
       <pattern id="hatch-2" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line x1="0" y1="0" x2="0" y2="5" stroke="var(--chart-4)" stroke-width="1"/></pattern>
@@ -167,6 +172,108 @@ export function choropleth(
     </defs>
     ${grid}${land}${marks}
   </svg>`
+}
+
+const SHOEY_BLUE = '#2563EB'
+/** OpenPanel Shoey realtime land. Must stay this literal so curl /assets proof can see it. */
+export const SHOEY_LAND = '#E5E7EB'
+const SHOEY_OCEAN = '#FFFFFF'
+const SHOEY_LAND_STROKE = '#6B7280'
+
+export function blueBars(values: number[], w = 220, h = 36): string {
+  if (!values.length || values.every((v) => v === 0)) {
+    return `<svg class="spark bars" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><line x1="0" y1="${h - 2}" x2="${w}" y2="${h - 2}" stroke="#EDEDED" /></svg>`
+  }
+  const max = Math.max(...values, 1)
+  const gap = 1.5
+  const n = values.length
+  const bw = Math.max(1.5, (w - gap * (n + 1)) / n)
+  const rects = values
+    .map((v, i) => {
+      if (v <= 0) return ''
+      const bh = Math.max(2.4, (v / max) * (h - 4))
+      const x = gap + i * (bw + gap)
+      return `<rect x="${x.toFixed(1)}" y="${(h - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" fill="${SHOEY_BLUE}" rx="0.6" />`
+    })
+    .join('')
+  return `<svg class="spark bars" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">${rects}</svg>`
+}
+
+export function blueArea(
+  values: number[],
+  labels: string[] = [],
+  w = 860,
+  h = 220
+): string {
+  if (!values.length || values.every((v) => v === 0)) {
+    return `<div class="empty">No seats in this window.</div>`
+  }
+  const max = Math.max(...values, 1)
+  const step = values.length > 1 ? w / (values.length - 1) : w
+  const pts = values.map((v, i) => `${(i * step).toFixed(1)},${(h - 28 - (v / max) * (h - 40)).toFixed(1)}`)
+  const fill = `M0,${h - 24} L${pts.join(' L')} L${w},${h - 24} Z`
+  const ticks = labels
+    .map((lab, i) => {
+      if (!lab) return ''
+      const x = i * step
+      return `<text x="${x.toFixed(1)}" y="${h - 8}" class="tick" text-anchor="${i === 0 ? 'start' : i === labels.length - 1 ? 'end' : 'middle'}">${escapeXml(lab)}</text>`
+    })
+    .join('')
+  const yMax = max >= 1000 ? `${Math.round(max / 1000)}k` : String(Math.round(max))
+  return `<svg class="chart area" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">
+    <text x="8" y="14" class="tick">${escapeXml(yMax)}</text>
+    <text x="8" y="${h - 30}" class="tick">0</text>
+    <path d="${fill}" fill="url(#shoey-fill)" />
+    <path d="M${pts.join(' L')}" fill="none" stroke="${SHOEY_BLUE}" stroke-width="1.6" />
+    ${ticks}
+  </svg>`
+}
+
+/** Overview corner map. Real choropleth, ported faithfully from CountryMap.tsx via
+ * ./world/map.ts (renderCornerMapSvg): oklch fill by seat count, white 0.5 strokes,
+ * invisible hit pins at real country centroids. No sample dots. */
+export function choroplethMini(countries: MapCountry[], cls = 'stat-choro'): string {
+  const svg = renderCornerMapSvg({ countries: countries.map((c) => ({ iso: c.iso, count: c.devices })) })
+  return svg.replace('class="corner-map-svg"', `class="corner-map-svg ${cls}"`)
+}
+
+/** Ocean + every world-atlas country at the 1152x576 realtime-map viewport. Inlined into
+ * #map-root HTML. paintShoeyMap only restyles theme (fill/stroke attributes, not CSS). */
+export function shoeyLandSvg(cls = 'world shoey-world'): string {
+  let land = ''
+  for (const [iso, d] of Object.entries(WORLD_PATHS)) {
+    const painted = stripMapBands(d)
+    if (!painted) continue
+    land += `<path class="world-land" data-iso="${iso}" d="${painted}" fill="${SHOEY_LAND}" stroke="${SHOEY_LAND_STROKE}" stroke-width="1.15" />`
+  }
+  return `<svg class="${cls}" viewBox="0 0 1152 576" width="1152" height="576" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Unique seats by country" data-land="${SHOEY_LAND}">
+    <rect class="world-ocean" width="1152" height="576" fill="${SHOEY_OCEAN}"/>
+    ${land}
+  </svg>`
+}
+
+export const SHOEY_LAND_SVG = shoeyLandSvg()
+
+/** Realtime map: full-bleed Mercator land, one pulsing green dot per reporting location (no
+ * count-pill badges — dropped per spec), zoom/pan controls. Faithful port via
+ * ./world/map.ts (renderRealtimeMapSvg) of WorldMap.tsx / shared/MapCanvas.tsx. */
+export function shoeyWorld(countries: MapCountry[], dots: MapDot[]): string {
+  const empty = countries.length === 0 && dots.length === 0
+  const points = empty ? [] : groupDotsToPoints(dots)
+  return renderRealtimeMapSvg({ points, theme: 'light' })
+}
+
+/** Seats sharing a country, city, and lat/lon (to 2 decimals, ~1km) render as one dot whose
+ * count is the number of seats there — never a duplicate dot per seat at the same spot. */
+function groupDotsToPoints(dots: MapDot[]): RealtimeMapPoint[] {
+  const groups = new Map<string, RealtimeMapPoint>()
+  for (const d of dots) {
+    const key = `${d.country}:${d.city ?? ''}:${d.lat.toFixed(2)}:${d.lon.toFixed(2)}`
+    const prev = groups.get(key)
+    if (prev) prev.count += 1
+    else groups.set(key, { country: d.country, city: d.city ?? '', lat: d.lat, lon: d.lon, count: 1 })
+  }
+  return [...groups.values()]
 }
 
 function escapeXml(s: string): string {
