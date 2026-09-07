@@ -220,11 +220,48 @@ describe('MQA-079 — blockedUpdateChannel guards the manual check, not just ini
   })
 })
 
+/** updater.ts refuses the in-app install on darwin — Squirrel.Mac cannot replace an ad-hoc-signed
+ *  bundle — so any suite asserting the download path must pin a non-darwin platform. Without this the
+ *  suite passes on CI's ubuntu/windows runners and fails on a maintainer's Mac. 'linux' rather than
+ *  'win32' so the PORTABLE_EXECUTABLE_FILE branch stays out of the way too. */
+function pinPlatform(value: NodeJS.Platform): () => void {
+  const original = Object.getOwnPropertyDescriptor(process, 'platform')
+  Object.defineProperty(process, 'platform', { value, configurable: true })
+  return () => {
+    if (original) Object.defineProperty(process, 'platform', original)
+  }
+}
+
 describe('startUpdateDownload — Settings "Update now" in-app download guard', () => {
+  let restorePlatform: () => void
+
   beforeEach(() => {
+    restorePlatform = pinPlatform('linux')
     vi.mocked(shouldDisableAutoUpdate).mockReturnValue(false)
     vi.mocked(readTrustedAdminManaged).mockReturnValue(null)
     delete (process as unknown as { windowsStore?: boolean }).windowsStore
+  })
+
+  afterEach(() => {
+    restorePlatform()
+  })
+
+  it('sends macOS to the DMG instead of a download that Squirrel.Mac could never install', async () => {
+    const electronApp = app as unknown as { isPackaged?: boolean }
+    electronApp.isPackaged = true
+    const restore = pinPlatform('darwin')
+    vi.mocked(net.fetch).mockClear() // earlier suites in this file exercise the feed
+    try {
+      const r = await startUpdateDownload()
+      expect(r.started).toBe(false)
+      expect(r.reason).toMatch(/\.dmg/i)
+      // The refusal must be free: no feed round-trip for an install we are going to decline anyway,
+      // so an offline Mac still gets the right message instead of a network error.
+      expect(net.fetch).not.toHaveBeenCalled()
+    } finally {
+      restore()
+      delete electronApp.isPackaged
+    }
   })
 
   it('does not start a download outside the installed app (app.isPackaged false in test)', async () => {
@@ -277,6 +314,7 @@ describe('MQA-164 — a failed update download reaches the renderer', () => {
   const win = { webContents: { send } } as unknown as BrowserWindow
   let fake: FakeAutoUpdater
   let moduleId: string
+  let restorePlatform: () => void
 
   beforeEach(() => {
     // Only the 6-hourly re-check interval is faked: setImmediate has to stay real for the
@@ -304,9 +342,13 @@ describe('MQA-164 — a failed update download reaches the renderer', () => {
     fake = new FakeAutoUpdater()
     moduleId = require.resolve('electron-updater')
     require.cache[moduleId] = { id: moduleId, filename: moduleId, loaded: true, exports: { autoUpdater: fake } } as never
+    // Both entry points bail early on darwin (see pinPlatform above), which would make every
+    // assertion below vacuous on a Mac.
+    restorePlatform = pinPlatform('linux')
   })
 
   afterEach(() => {
+    restorePlatform()
     delete require.cache[moduleId]
     delete electronApp.isPackaged
     Reflect.deleteProperty(proc, 'resourcesPath')

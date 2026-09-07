@@ -2,9 +2,11 @@
 /**
  * Verify the unpacked application contains exactly the reviewed offline payload.
  *
- * Raw mode (the default) runs from electron-builder's afterPack hook, before platform signing mutates
- * Mach-O/PE bytes. --post-sign rechecks exact inventories and immutable hashes, proves the executable
- * architecture, and verifies the macOS code signature without comparing signature-mutated native bytes.
+ * Raw mode (the default) is the macOS afterPack mode: nothing is signed yet, so every reviewed native
+ * payload is compared byte-for-byte against source. --post-sign skips ONLY the files the platform's
+ * signing tool actually rewrites — every Mach-O on macOS, .exe alone on Windows (app-builder-lib
+ * WinPackager.shouldSignFile) — and still enforces exact inventories, immutable-asset hashes, the
+ * executable architecture, and the macOS code signature.
  */
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
@@ -490,7 +492,10 @@ const llamaSource = join(REPO_ROOT, 'resources', 'llama', platformConfig.llamaNa
 const llamaPackaged = join(resourcesRoot, 'llama', platformConfig.llamaName)
 await requireTreeMatches(llamaSource, llamaPackaged, {
   label: `${target} llama runtime`,
-  nativeFile: (entry) => !entry.endsWith('.sha256')
+  // Exempt only what the platform's signing tool actually rewrites. macOS codesign re-seals every
+  // Mach-O in the tree (llama-server plus the dylib set); Windows signtool signs .exe and nothing
+  // else, so the ggml/llama DLLs stay compared against the reviewed source even post-sign.
+  nativeFile: (entry) => (target === 'win' ? entry.endsWith('.exe') : !entry.endsWith('.sha256'))
 })
 const llamaRootExpected = inventoryTree(llamaSource).map((entry) => `${platformConfig.llamaName}/${entry}`)
 llamaRootExpected.unshift(`${platformConfig.llamaName}/`)
@@ -559,7 +564,11 @@ for (const sherpaPackage of platformConfig.sherpaPackages) {
   await requireDependencyTree(sourceTargetSherpa, packagedTargetSherpa, {
     expectedFiles: ['index.js', 'package.json', ...platformConfig.sherpaNative],
     label: sherpaPackage,
-    nativeFile: (entry) => /\.(?:node|dll|dylib)$/i.test(entry)
+    // Windows signtool signs .exe only — both the extraResources copy transformer and signApp's
+    // walkSignableFiles filter on shouldSignFile() with fallbackValue false — and this payload has
+    // none, so the ONNX Runtime / Sherpa DLLs and the .node addon stay byte-compared even post-sign.
+    // macOS codesign re-seals every Mach-O.
+    nativeFile: (entry) => target === 'mac' && /\.(?:node|dylib)$/i.test(entry)
   })
   for (const native of platformConfig.sherpaNative) {
     requireRegularFile(join(packagedTargetSherpa, native))

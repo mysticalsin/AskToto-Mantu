@@ -39,7 +39,8 @@ describe('afterPack Windows runtime verification', () => {
         expect.stringMatching(/check-packaged-runtime\.mjs$/),
         'win',
         resources,
-        '--executable=Metis-Windows-Cahe.exe'
+        '--executable=Metis-Windows-Cahe.exe',
+        '--post-sign'
       ],
       expect.objectContaining({ stdio: 'inherit' })
     )

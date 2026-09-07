@@ -5,6 +5,14 @@ name: Release
 # secrets are absent, ship an ADHOC / non-notarized DMG (Tony lock 2026-09-06; same unsigned/ad-hoc
 # pattern as Metis-Releases v1.8.3/v1.8.4). Windows signing stays required — unsigned public
 # installers break enterprise trust and can be blocked by SmartScreen.
+#
+# An adhoc macOS build no longer demotes the whole release to a pre-release (Tony, 2026-09-07).
+# It did until now, and the cost was that NOTHING shipped: /releases/latest skips pre-releases, so
+# every installed client — Windows included — kept resolving to v1.6.6 and Settings → About kept
+# saying "You're on the latest version". Windows is Authenticode-signed and its in-app update works,
+# so one platform's interim signing state must not block the other's. The release notes below name
+# the adhoc macOS DMG explicitly, and updater.ts refuses the in-app path on darwin until Developer ID
+# lands, so nobody is misled about what they are getting.
 on:
   push:
     tags:
@@ -483,14 +491,11 @@ jobs:
           fi
 
           notes="Signed Métis desktop installers for macOS Apple Silicon and Windows x64."
-          extra_flags=()
           if [ "${{ needs.release-macos.outputs.signing_mode }}" = "adhoc" ]; then
             echo "::warning::Publishing ADHOC / not Gatekeeper-notarized macOS DMG plus signed Windows EXE (unsigned / ad-hoc; matches v1.8.3/v1.8.4)."
             notes="Métis $tag — Windows Authenticode-signed. macOS Electron DMG is ADHOC / not Gatekeeper-notarized (interim; same unsigned/ad-hoc pattern as v1.8.3/v1.8.4)."
-            extra_flags+=(--prerelease)
           fi
-          gh release create "$tag" --repo "$repo" --draft --title "Métis $tag" \
-            --notes "$notes" "${extra_flags[@]}"
+          gh release create "$tag" --repo "$repo" --draft --title "Métis $tag" --notes "$notes"
 
           # Recheck immediately before both remote mutations. Tag-scoped workflow concurrency prevents
           # another Actions retry from entering this critical section at the same time.
@@ -505,7 +510,13 @@ jobs:
           }
 
           assert_draft
-          gh release edit "$tag" --repo "$repo" --draft=false
+          # --latest is load-bearing, not belt-and-braces. GitHub resolves /releases/latest as the most
+          # recent non-prerelease by created_at, and EVERY release on Metis-Releases shares
+          # created_at=2026-07-18T14:54:45Z because all seven tags point at the same commit. The sort key
+          # is degenerate and the tie-break is undocumented. Both update paths read that one pointer —
+          # updater.ts's About check hits api.github.com/.../releases/latest, and electron-updater's
+          # GitHubProvider hits github.com/.../releases/latest — so pin it explicitly.
+          gh release edit "$tag" --repo "$repo" --draft=false --latest
           published=$(gh release view "$tag" --repo "$repo" --json isDraft --jq '.isDraft')
           [ "$published" = "false" ] || { echo "::error::Release $tag did not become public."; exit 1; }
           echo "Published complete Mac + Windows release $tag on $repo with an exact ${#files[@]}-asset set."

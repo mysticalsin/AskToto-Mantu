@@ -1,5 +1,5 @@
 /**
- * Tonight gate: every Métis ask must sit on KineticGrid release/1.8.3 → 1.8.8.
+ * Tonight gate: every Métis ask must sit on KineticGrid release/1.8.3 → 1.8.9.
  * Pre-Kinetic tips (615e5fa / 13092a3 without 92e9d0d) fail this file.
  */
 import { existsSync, readFileSync } from 'node:fs'
@@ -25,7 +25,7 @@ const flow = readFileSync(join(root, 'src/renderer/src/lib/onboarding-flow.ts'),
 const kinetic = readFileSync(join(root, 'src/renderer/src/lib/onboarding-kinetic-grid.ts'), 'utf8')
 const css = readFileSync(join(root, 'src/renderer/src/styles.css'), 'utf8')
 
-describe('1.8.8 KineticGrid tip checklist', () => {
+describe('1.8.9 KineticGrid tip checklist', () => {
   it('1 KineticGrid after lady, no Skip, Ready-only done, no rotating stripe wash', () => {
     expect(existsSync(join(root, 'src/renderer/src/components/onboarding/KineticGrid.tsx'))).toBe(true)
     expect(kinetic).toMatch(/shouldMountKineticGrid/)
@@ -86,8 +86,8 @@ describe('1.8.8 KineticGrid tip checklist', () => {
     expect(jarvis).not.toMatch(/JARVIS_PILL_PARTICLE_COUNT = 2000/)
   })
 
-  it('6 package.json is 1.8.8', () => {
-    expect(pkg.version).toBe('1.8.8')
+  it('6 package.json is 1.8.9', () => {
+    expect(pkg.version).toBe('1.8.9')
   })
 
   it('7 Intelligence bundle is ensured; UI says Mantu Intelligence', () => {
@@ -99,8 +99,8 @@ describe('1.8.8 KineticGrid tip checklist', () => {
     expect(settings).toMatch(/title="Mantu Intelligence"/)
   })
 
-  it('8 Métis is on the 1.8.8 line; Cloudflare tile opens Operator OAuth', () => {
-    expect(pkg.version).toBe('1.8.8')
+  it('8 Métis is on the 1.8.9 line; Cloudflare tile opens Operator OAuth', () => {
+    expect(pkg.version).toBe('1.8.9')
     expect(settings).toMatch(/connectCloudflare/)
     expect(settings).toMatch(/window\.toto\.cloudflareConnect/)
     expect(settings).toMatch(/data-cf-aig-connect/)
