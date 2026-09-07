@@ -74,7 +74,13 @@ export function wheelZoomFactor(prevK: number, deltaY: number): number {
 export interface MapInteractionOptions {
   width: number
   height: number
-  /** Plan 3.7 item 2 / Tony's reference: "wheel and drag zoom between 0.5x and 4x". */
+  /**
+   * Zoom range. The floor is 1x, not the reference's 0.5x: `clampTransform` never lets the map pan
+   * away from its own edges, so below 1x the content is smaller than the frame, every pan bound
+   * collapses to 0, and the world pins itself into the top-left with dead space down and right.
+   * 1x is the real "fully zoomed out" -- the whole world, filling the frame. The 4x ceiling is
+   * untouched, so zooming in behaves exactly as before.
+   */
   minZoom?: number
   maxZoom?: number
   /** Multiplier applied per +/- button press or keyboard +/-. Reference uses 1.6. */
@@ -125,7 +131,7 @@ function tooltipHtml(el: Element): string {
  * a constant screen size while the map zooms, exactly like MapCanvas.tsx.
  */
 export function attachMapInteraction(root: ParentNode, options: MapInteractionOptions): MapInteractionHandle {
-  const { width, height, minZoom = 0.5, maxZoom = 4, buttonZoomFactor = 1.6, resetMs = 400 } = options
+  const { width, height, minZoom = 1, maxZoom = 4, buttonZoomFactor = 1.6, resetMs = 400 } = options
   const svg = root.querySelector<SVGSVGElement>('[data-map-svg]')
   const viewport = root.querySelector<SVGGElement>('[data-viewport]')
   const zoomInBtn = root.querySelector<HTMLButtonElement>('[data-zoom-in]')

@@ -6,7 +6,7 @@
  * table when a row exists for the resolved tier, else the section-9c plan defaults.
  */
 import { isApprovedSeat, issuedLicenseActive, parseLicenseId } from './fleet'
-import { DEFAULT_TIER_ENTITLEMENTS, type OperatorStore, type SeatRow, type TierRow } from './store'
+import { DEFAULT_TIER_ENTITLEMENTS, type IssuedLicenseRow, type OperatorStore, type SeatRow, type TierRow } from './store'
 
 export interface ResolvedTier {
   tier: string | null
@@ -17,12 +17,16 @@ export async function resolveTierAndEntitlements(
   store: Pick<OperatorStore, 'getIssuedLicense' | 'listTiers'>,
   seat: Pick<SeatRow, 'approval' | 'license' | 'license_jti'>,
   now: number,
-  tiersPreloaded?: TierRow[]
+  tiersPreloaded?: TierRow[],
+  /** The seat's license row when the caller has already read it this request (the heartbeat reads it
+   *  to stamp activation, licenses/activate.ts). Passing it keeps a licensed beat at one D1 read
+   *  instead of two; `undefined` means "not preloaded" and this reads it itself, exactly as before. */
+  issuedPreloaded?: IssuedLicenseRow | null
 ): Promise<ResolvedTier> {
   let tier: string | null = null
   const jti = parseLicenseId(seat.license_jti)
   if (jti) {
-    const issued = await store.getIssuedLicense(jti)
+    const issued = issuedPreloaded !== undefined ? issuedPreloaded : await store.getIssuedLicense(jti)
     if (issuedLicenseActive(issued, now)) tier = issued?.tier ?? 'metis'
   }
   if (!tier && isApprovedSeat(seat)) tier = 'metis'

@@ -24,6 +24,7 @@ import { json } from './http'
 import { d1Store, type D1DatabaseLike } from './d1'
 import { fundedProviders } from './keys'
 import { licenseFromIngest, parseLicenseId, seatAuthorizedForKeys } from './fleet'
+import { claimIssuedLicense } from './licenses/activate'
 import { matchRoute } from './routes/registry'
 import './routes'
 import { computeIntegrationsVersion, handleIntegrationsSeat } from './routes/integrations-seat'
@@ -339,7 +340,12 @@ async function heartbeat(store: OperatorStore, deviceId: string, bodyText: strin
   await store.touchSession(deviceId, now, 'heartbeat', geo, seat)
   await ingestCrmList(store, deviceId, body, now)
   const retries = await store.listCrmRetries(deviceId)
-  const { tier, entitlements } = await resolveTierAndEntitlements(store, stored, now)
+  // The heartbeat is where a license stops being a string and becomes a seat: the desktop reports the
+  // jti it activated locally, and this is the Worker's only chance to record which machine holds it.
+  // The row read here is handed to tier resolution so a licensed beat still costs one read, not two.
+  const licenseJti = parseLicenseId(stored.license_jti)
+  const claim = licenseJti ? await claimIssuedLicense(store, licenseJti, deviceId, now) : null
+  const { tier, entitlements } = await resolveTierAndEntitlements(store, stored, now, undefined, claim?.license)
   const integrationsVersion = await computeIntegrationsVersion(store, stored, tier)
   return json({
     ok: true,
