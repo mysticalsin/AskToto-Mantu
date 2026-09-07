@@ -18,7 +18,8 @@
  * framed so the populated latitudes fill the card and the arctic is simply CROPPED at the
  * frame edge, the way a real cropped map looks, rather than either overflowing invisibly (the
  * pre-fitExtent bug) or being shrunk to make room for it (the fitExtent version). This script
- * adopts those exact numbers and calls the projection's own
+ * adopts that scale, moves the vertical offset down so the crop lands on empty ocean rather than
+ * on Russia's mainland coast (see REFERENCE_1152 below), and calls the projection's own
  * `.clipExtent([[0,0],[width,height]])` before generating paths (below): d3-geo clips ring
  * geometry to that rectangle in PROJECTED (pixel) space and closes each ring along the frame,
  * so a coastline that runs past the top edge is cut with a straight edge at y=0 instead of
@@ -62,6 +63,17 @@
  * of the sphere, `4*pi` steradians) before and after simplification — see `buildVariant`'s
  * `AREA_SANITY_MAX` check, which falls back to that one feature's unsimplified geometry
  * rather than raising every country's simplification budget to dodge one bad ring.
+ *
+ * A FOURTH failure mode is what actually produced the dome over Russia, and it is not
+ * simplification at all: both self-intersection repairs below fix a reported crossing by deleting
+ * every point between the two crossing edges, and neither bounded how many that could be. The scan
+ * walks from the start of the ring, so a crossing pairing an early point with a late one is found
+ * before any small loop is — and `repairCrossArcJunctions` then ate Russia's arctic coast from the
+ * White Sea to the Bering Strait over successive rounds, leaving a straight lon/lat line that
+ * Mercator draws as a curve. `geoArea` rose only 20%, well under `AREA_SANITY_MAX`, so the guard
+ * above never saw it. `MAX_SELF_INTERSECTION_REPAIR_SPAN` now bounds both repairs to the small
+ * fold they exist for; a wider crossing is left alone, because a hairline is worth less than a
+ * coastline.
  *
  * Run directly (`node operator/scripts/build-world.mjs`, or `npm run build:operator-world`)
  * or import `buildWorldData` from a test to rebuild in memory and compare against the
@@ -109,12 +121,47 @@ const MAX_BYTES_520 = 120 * 1024
  * zero-padded to 3 digits — see operator/src/world/iso.ts's NUMERIC_TO_ALPHA2['010']). */
 const ANTARCTICA_NUMERIC_ID = '010'
 
-/** The reference's own fixed projection numbers (SPEC.md line 278 for WorldMap, line 231 for
- * CountryMap) — not derived, not fit, just adopted exactly. `mercator.ts`'s MAP_DIMENSIONS and
- * MERCATOR_VARIANTS read these back out of PROJECTION_1152/PROJECTION_520 in the generated
- * file below (see the file doc comment above), so this is the one place these numbers live. */
-const REFERENCE_1152 = { width: 1152, height: 576, translate: [576, 288], scale: 152.948 }
-const REFERENCE_520 = { width: 520, height: 300, translate: [260, 180], scale: 70 }
+/**
+ * The reference's projection scale, with the vertical translate corrected.
+ *
+ * The reference centres the projection on the equator (translate y = height/2). Mercator is not
+ * vertically symmetric about the equator once Antarctica is dropped: at scale 152.948 the remaining
+ * land runs from Greenland's tip at y = -154 to Cape Horn at y = 469, so centring the EQUATOR
+ * pushes 154px of arctic above the frame while leaving 107px of empty ocean below it. The crop was
+ * intended (see the file doc comment), but it was landing in the wrong place -- and what it cut was
+ * not just the polar islands. Russia's mainland arctic coast sits at y = -53, so the whole northern
+ * edge of the country was sliced off in a dead straight line across the top of the frame, which
+ * reads as a rendering fault rather than a cropped map.
+ *
+ * The scale is unchanged, so the world still fills the frame's width exactly as before. Only the
+ * vertical offset moves, spending the wasted ocean at the bottom on the land that was being cut:
+ *
+ * The scale stays exactly as the reference has it. Cropping the arctic is not the fault -- it is
+ * the point. Mercator's stretch above 70N is enormous, and a projection sized to fit Greenland's
+ * tip turns the top third of the frame into one grey dome of arctic Russia, Greenland and northern
+ * Canada, which looks far more wrong than a crop does. What was actually broken is in
+ * `pathForFeature` below: `clipExtent` closes a clipped ring along the frame, and given a whole
+ * MultiPolygon it closed ACROSS separate islands, welding Russia's arctic islands together with a
+ * band of land drawn straight over the Arctic Ocean. Projecting each polygon separately fixes that
+ * without touching the framing.
+ *
+ * Only the vertical offset moves, and only to stop wasting the frame. Centring the projection on
+ * the equator (translate y = height/2) is not centring the LAND once Antarctica is dropped: at
+ * scale 152.948 the remaining land runs from y = -154 to y = 469, so the reference's y = 288 threw
+ * away 154px of northern land while leaving 107px of empty ocean below it. Moving the offset down
+ * spends that ocean on land instead.
+ *
+ *   1152x576  y = 370  Russia's mainland arctic coast lands at y = 28 instead of 53px off-frame;
+ *                      Cape Horn at y = 551. Greenland's tip and the high arctic islands stay
+ *                      cropped, now each with its own flat top rather than joined to each other.
+ *   520x300   y = 210  The span is 285px in a 300px frame, so here nothing is cut at all.
+ *
+ * `mercator.ts`'s MAP_DIMENSIONS and MERCATOR_VARIANTS read these back out of PROJECTION_1152 /
+ * PROJECTION_520 in the generated file below, so the city dots move with the coastlines and this
+ * stays the one place these numbers live.
+ */
+const REFERENCE_1152 = { width: 1152, height: 576, translate: [576, 370], scale: 152.948 }
+const REFERENCE_520 = { width: 520, height: 300, translate: [260, 210], scale: 70 }
 
 /** Bundle a small dependency-free TS module with esbuild and import it in Node, so the
  * generator and the runtime share a single source of truth for constants/data instead of
@@ -179,6 +226,33 @@ function triangleArea(a, b, c) {
   return Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])) / 2
 }
 
+/** Beyond this latitude the weighting below stops growing. `1/cos` runs away to infinity at the
+ *  pole, and no arc should become unsimplifiable just for being arctic; at 84 degrees the factor is
+ *  already ~9.5, far more than the geometry up there needs. */
+const MERCATOR_WEIGHT_MAX_LAT = 84
+
+/**
+ * A triangle's effective area measured in the space the map is actually DRAWN in, not the space the
+ * coordinates happen to be stored in.
+ *
+ * Visvalingam-Whyatt ranks points by the area of the triangle they make with their neighbours, and
+ * this pass runs on lon/lat degrees. Mercator does not preserve area: it stretches y by 1/cos(lat),
+ * so one square degree at 75N covers nearly four times the pixels one square degree at the equator
+ * does. A single lon/lat threshold therefore does not mean "remove detail finer than N pixels" -- it
+ * means "remove far more of the arctic than of the tropics". Russia paid for that: its whole arctic
+ * coastline, from the White Sea to the Bering Strait, was simplified past the point of being a
+ * coastline and filled as one solid dome over the pole, while its southern border kept full detail.
+ * (Raw, unsimplified geometry projects and clips through the same framing perfectly, which is what
+ * ruled out the projection and the clip as the cause.)
+ *
+ * Dividing by cos(lat) converts the lon/lat area into the projected area it will occupy, so the
+ * threshold means the same amount of visible detail everywhere on the map.
+ */
+function mercatorTriangleArea(a, b, c) {
+  const lat = Math.min(Math.abs((a[1] + b[1] + c[1]) / 3), MERCATOR_WEIGHT_MAX_LAT)
+  return triangleArea(a, b, c) / Math.cos((lat * Math.PI) / 180)
+}
+
 /** Minimal binary min-heap keyed by area, with lazy deletion (a popped entry is skipped if
  * it is stale — its point's area has since been recomputed to a different value). */
 class MinHeap {
@@ -233,7 +307,10 @@ class MinHeap {
  * once a fixed number of points remain -- see that function's own doc comment for why a small
  * arc needs a point-count budget instead of an area one).
  */
-function visvalingamWhyattCore(points, shouldStop) {
+/** `areaOf` is how a point's significance is measured. The lon/lat pass weights by latitude so the
+ *  threshold means projected pixels (see `mercatorTriangleArea`); the pixel-space pass is already in
+ *  pixels and ranks by plain triangle area. */
+function visvalingamWhyattCore(points, shouldStop, areaOf = triangleArea) {
   const n = points.length
   if (n <= 2) return points.slice()
   const prev = new Array(n)
@@ -251,7 +328,7 @@ function visvalingamWhyattCore(points, shouldStop) {
     const p = prev[i]
     const q = next[i]
     if (p < 0 || q < 0) return Infinity
-    return triangleArea(points[p], points[i], points[q])
+    return areaOf(points[p], points[i], points[q])
   }
 
   const heap = new MinHeap()
@@ -292,7 +369,7 @@ function visvalingamWhyattCore(points, shouldStop) {
 
 function visvalingamWhyatt(points, areaThreshold) {
   if (areaThreshold <= 0) return points.slice()
-  return visvalingamWhyattCore(points, (smallestArea) => smallestArea >= areaThreshold)
+  return visvalingamWhyattCore(points, (smallestArea) => smallestArea >= areaThreshold, mercatorTriangleArea)
 }
 
 /** Same removal order as `visvalingamWhyatt`, but stops once `maxPoints` remain rather than
@@ -341,6 +418,27 @@ function segmentsIntersect(a, b, c, d) {
  * the arc, so this always terminates, and it never touches the arc's first/last point
  * (the shared topology junctions every neighbouring ring anchors to).
  */
+/**
+ * How many points a single repair may drop.
+ *
+ * The loop this function exists to remove is a simplification artifact: two edges that ended up
+ * crossing because the points between them were thinned out, spanning a handful of points at most.
+ * Without a bound, the same "drop everything between the two crossing edges" rule will happily
+ * delete a whole coastline on one detection, and it did: run against the RAW, unsimplified topology,
+ * this pass deleted 2536 of one arc's 2539 points and 1611 of another's 2844: two of the four arcs
+ * in 1959 where the planar crossing test fires at all. What it left behind was a single straight
+ * line in lon/lat between the two surviving ends -- and a straight lon/lat line at high latitude is
+ * a CURVE once Mercator stretches y, which is precisely the smooth dome that appeared over Russia's
+ * arctic, swallowing the coast from the White Sea to the Bering Strait and inflating the country's
+ * area by 21%.
+ *
+ * A crossing that spans more than a small loop is therefore not the defect this repairs. It is
+ * either a false positive (the test is planar, and these arcs run to the antimeridian) or real
+ * geography, and in both cases the coastline is worth more than the hairline it would cost to leave
+ * it alone. Bounding the span also makes the search O(n * span) instead of O(n^2).
+ */
+const MAX_SELF_INTERSECTION_REPAIR_SPAN = 24
+
 function removeArcSelfIntersections(points) {
   let pts = points
   // Bounded by construction (each pass removes at least one point), but capped defensively.
@@ -348,7 +446,7 @@ function removeArcSelfIntersections(points) {
     const n = pts.length
     let crossing = null
     for (let i = 0; i < n - 1 && !crossing; i++) {
-      for (let j = i + 2; j < n - 1; j++) {
+      for (let j = i + 2; j < n - 1 && j - i <= MAX_SELF_INTERSECTION_REPAIR_SPAN; j++) {
         if (segmentsIntersect(pts[i], pts[i + 1], pts[j], pts[j + 1])) {
           crossing = [i, j]
           break
@@ -409,11 +507,26 @@ function ringPointsWithProvenance(topology, arcIndices, project) {
 /** Same crossing test as `removeArcSelfIntersections`, but over a CLOSED ring (edges wrap
  * from the last point back to the first) since this runs on assembled rings, not open
  * arcs. Returns the first crossing pair found, or null. */
-function findClosedRingCrossing(points) {
+/**
+ * Both callers repair a reported crossing the same way: drop every point between the two crossing
+ * edges. That is the minimal fix for the small fold this is meant to catch, and a catastrophe for
+ * anything else, because the span is whatever the scan happened to find first -- and the scan walks
+ * `i` from zero, so a crossing involving an early point and a late one is found before any small
+ * loop is. Russia's ring hit exactly that: `repairCrossArcJunctions` deleted its way from the White
+ * Sea to the Bering Strait over successive rounds, replacing the arctic coast with a straight
+ * lon/lat line, which Mercator draws as a curve -- the smooth dome that swallowed the Arctic Ocean
+ * and inflated the country's area by 20%. `repairRoundedSubpath` can go further still and return ''
+ * for a ring it has emptied.
+ *
+ * So a crossing is only reported when the repair it implies is small. Past that span the fold is
+ * either a false positive (this test is planar, and these rings run to the antimeridian and the
+ * poles) or real geography; a hairline artifact is worth far less than a coastline.
+ */
+function findClosedRingCrossing(points, maxSpan = MAX_SELF_INTERSECTION_REPAIR_SPAN) {
   const n = points.length
   if (n < 4) return null
   for (let i = 0; i < n; i++) {
-    for (let j = i + 2; j < n; j++) {
+    for (let j = i + 2; j < n && j - i <= maxSpan; j++) {
       if (i === 0 && j === n - 1) continue // the wraparound edge is adjacent to edge 0, not a crossing candidate
       if (segmentsIntersect(points[i], points[(i + 1) % n], points[j], points[(j + 1) % n])) return [i, j]
     }
@@ -705,6 +818,32 @@ const AREA_SANITY_MAX = 1
 const AREA_RATIO_MAX = 20
 const AREA_RATIO_FLOOR = 0.001
 
+/**
+ * Project one feature, a polygon at a time.
+ *
+ * `clipExtent` does not merely cut a ring off at the frame: it CLOSES the clipped ring along that
+ * boundary. Handed a whole MultiPolygon, d3 clips it as a single subject, so two separate islands
+ * that both leave the same edge come back rejoined along it. That is what made Russia look wrong:
+ * Franz Josef Land (81.8N) and Severnaya Zemlya (81.3N) sit above the frame's top, and the closure
+ * welded them to the New Siberian Islands with a 256px band of land drawn straight across the
+ * Arctic Ocean, from 54E to 150E -- a continent that does not exist, in the one part of the map a
+ * reader is least able to check.
+ *
+ * Projecting each polygon on its own keeps every closure inside the island it belongs to: a cropped
+ * island gets its own flat top, the mainland is untouched, and nothing is invented in between. The
+ * concatenated `d` is identical to what d3 would emit for the unclipped case, because a MultiPolygon
+ * path is just its polygons' subpaths in order.
+ */
+function pathForFeature(pathGenerator, feature) {
+  const geometry = feature?.geometry
+  if (!geometry || geometry.type !== 'MultiPolygon') return pathGenerator(feature) ?? ''
+  let out = ''
+  for (const coordinates of geometry.coordinates) {
+    out += pathGenerator({ type: 'Feature', properties: feature.properties ?? null, geometry: { type: 'Polygon', coordinates } }) ?? ''
+  }
+  return out
+}
+
 async function buildVariant({ features, rawFeatures, pass1Features, pathGenerator, precision, numericToAlpha2, variantLabel }) {
   const entries = []
   const centroids = {}
@@ -726,7 +865,7 @@ async function buildVariant({ features, rawFeatures, pass1Features, pathGenerato
       feature = rawFeature
       fellBackToRaw.push(alpha2 || id)
     }
-    const raw = pathGenerator(feature) ?? ''
+    const raw = pathForFeature(pathGenerator, feature)
     const label = `${variantLabel} ${alpha2 || id} (feature id ${id})`
     let { d, points, dropped } = raw ? buildValidatedPath(raw, label) : { d: '', points: 0, dropped: 0 }
     droppedRings += dropped
@@ -738,7 +877,7 @@ async function buildVariant({ features, rawFeatures, pass1Features, pathGenerato
       // silently deleting a real country/territory from the map (task report: this is exactly
       // how El Salvador briefly vanished outright while tuning smallArcMaxPoints).
       feature = pass1Features[i]
-      const fallbackRaw = pathGenerator(feature) ?? ''
+      const fallbackRaw = pathForFeature(pathGenerator, feature)
       if (fallbackRaw) {
         const fallback = buildValidatedPath(fallbackRaw, `${label} (pass-1 fallback)`)
         if (fallback.d) {

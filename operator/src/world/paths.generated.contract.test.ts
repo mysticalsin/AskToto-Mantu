@@ -197,24 +197,43 @@ describe('committed world paths have no self-intersecting rings', () => {
     return null
   }
 
-  it('WORLD_1152 rings never cross themselves', () => {
-    for (const entry of WORLD_1152) {
+  function selfIntersectingCountries(world: typeof WORLD_1152): string[] {
+    const hits = new Set<string>()
+    for (const entry of world) {
       for (const subpath of splitSubpaths(entry.d)) {
-        const pts = pointsFromSubpath(subpath)
-        const hit = findSelfIntersection(pts)
-        expect(hit, `${entry.alpha2 || entry.id} ring self-intersects at edges ${hit?.[0]}/${hit?.[1]}`).toBeNull()
+        if (findSelfIntersection(pointsFromSubpath(subpath))) hits.add(entry.alpha2 || entry.id)
       }
     }
+    return [...hits].sort()
+  }
+
+  /**
+   * Rings allowed to report a crossing, because each has been rendered fill-only and checked.
+   *
+   * This assertion used to be "no ring crosses itself, anywhere". That bar reads well and cost the
+   * map dearly: the only way to hold it was build-world.mjs repairing every reported crossing by
+   * deleting all the points between the two crossing edges, with no bound on how many that was.
+   * That is exactly how Russia lost its arctic coast -- deleted from the White Sea to the Bering
+   * Strait and replaced with a straight lon/lat line, which Mercator draws as a curve, filling the
+   * Arctic Ocean with a dome of land. A green test sat on top of it the whole time.
+   *
+   * With the repair bounded (MAX_SELF_INTERSECTION_REPAIR_SPAN), the 1152 map now has no crossings
+   * at all, and the 520 map has one: the US ring, whose Aleutians straddle the antimeridian, which
+   * this planar test cannot help but flag. Rendered on its own the shape is correct -- Alaska, the
+   * contiguous states, the Aleutian chain, Hawaii -- and build-world.mjs's own header records the
+   * same conclusion from an earlier sweep of these reports.
+   *
+   * So the guard is now an exact set, not a count or a threshold: a NEW country appearing here
+   * still fails loudly, and a listed one disappearing fails too, so the list cannot quietly rot.
+   */
+  const KNOWN_ANTIMERIDIAN_CROSSINGS = { '1152': [] as string[], '520': ['US'] }
+
+  it('WORLD_1152 rings never cross themselves', () => {
+    expect(selfIntersectingCountries(WORLD_1152)).toEqual(KNOWN_ANTIMERIDIAN_CROSSINGS['1152'])
   })
 
-  it('WORLD_520 rings never cross themselves', () => {
-    for (const entry of WORLD_520) {
-      for (const subpath of splitSubpaths(entry.d)) {
-        const pts = pointsFromSubpath(subpath)
-        const hit = findSelfIntersection(pts)
-        expect(hit, `${entry.alpha2 || entry.id} ring self-intersects at edges ${hit?.[0]}/${hit?.[1]}`).toBeNull()
-      }
-    }
+  it('WORLD_520 rings cross themselves only where the antimeridian forces it', () => {
+    expect(selfIntersectingCountries(WORLD_520)).toEqual(KNOWN_ANTIMERIDIAN_CROSSINGS['520'])
   })
 })
 
