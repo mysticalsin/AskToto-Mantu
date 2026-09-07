@@ -269,6 +269,15 @@ export interface ProfileRow {
   live: boolean
   license: string | null
   approval: SeatApproval
+  /**
+   * Minutes this seat saved, from its own listen/recap events over the dashboard window.
+   *
+   * The fleet total (`roi.timeSaved`) answers "is Métis worth it" but not "worth it to whom", which
+   * is the question a fleet owner actually acts on. Same derivation as the total, just grouped by
+   * the device that reported each meeting, so the per-seat figures sum to it rather than being a
+   * second, differently-computed number.
+   */
+  savedMinutes: number
 }
 
 export type DashboardKeyFlags = {
@@ -956,6 +965,8 @@ export async function buildDashboard(
       .slice()
       .sort((a, b) => b.last_seen - a.last_seen)
       .map((s) => ({
+        savedMinutes: timeSavedFromMeetings(recapMeetings(storedEvents.filter((e) => e.device_id === s.device_id)))
+          .savedMinutes,
         device: s.device_id.slice(0, 8),
         deviceId: s.device_id,
         hostname: s.hostname && !looksLikeSecret(s.hostname) ? s.hostname : null,

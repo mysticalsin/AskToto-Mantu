@@ -45,6 +45,7 @@ import {
   type TopListRow,
   type TopListValueHeader
 } from '../index'
+import { formatSavedTime } from '../../../../src/shared/time-saved'
 import { field } from './_shared'
 import { areaChartWithPrevious, miniBars, recolorChoroplethMini, tokenStackBar, type TokenParts } from './overview-charts'
 
@@ -86,6 +87,9 @@ const FLEET_SILENT_AFTER_MS = 5 * 60 * 1000
  */
 export function renderFleetContactBanner(data: DashboardPayload): string {
   const now = data.now
+  const live = data.profiles.filter((p) => p.live)
+  // Someone is on: show them, not a warning. This is the question the card is opened to answer.
+  if (live.length) return renderLiveNowCard(live, now)
   const lastSeen = data.profiles.reduce((newest, p) => (p.lastSeen > newest ? p.lastSeen : newest), 0)
   if (lastSeen && now - lastSeen < FLEET_SILENT_AFTER_MS) return ''
   const headline = lastSeen
@@ -96,6 +100,49 @@ export function renderFleetContactBanner(data: DashboardPayload): string {
     <div class="ov-quiet-head">${iconSvg(KIND_ICON_PATHS.heartbeat, { class: 'ov-quiet-icon' })}<h3>${headline}</h3></div>
     <p class="ov-quiet-body">Every figure below is counted from seat heartbeats, so they read zero because nothing is arriving, not because the fleet is idle.${since}</p>
     <p class="ov-quiet-body">Métis heartbeats every 60 seconds, but only once a seat can reach this Operator: an Operator URL, plus either an activated license or the shared ingest secret. Set them on each Mac in Métis under Settings, then Operator.</p>
+  </article>`
+}
+
+/**
+ * Who is on Métis right now, and what each of them has saved.
+ *
+ * The same slot that says nothing is arriving should say who IS here when someone is, rather than
+ * making a live fleet look like the absence of a warning. Each seat carries its own saved time
+ * because the fleet total answers whether Métis is worth it, not who it is worth it to -- and that
+ * second question is the one a fleet owner acts on.
+ *
+ * `live` is the payload's own flag (a heartbeat inside the online window), so this and the Live
+ * seats tile can never disagree about who counts as on.
+ */
+const LIVE_NOW_ROW_CAP = 6
+
+function renderLiveNowCard(live: DashboardPayload['profiles'], now: number): string {
+  const total = live.reduce((sum, p) => sum + p.savedMinutes, 0)
+  const ordered = live.slice().sort((a, b) => b.savedMinutes - a.savedMinutes || b.lastSeen - a.lastSeen)
+  // A fleet of fifty live seats would otherwise push the whole page down for a list nobody reads to
+  // the end. The count in the header is always the real total, so the cap hides rows, never people.
+  const hidden = Math.max(0, ordered.length - LIVE_NOW_ROW_CAP)
+  const rows = ordered
+    .slice(0, LIVE_NOW_ROW_CAP)
+    .map((p) => {
+      const who = p.hostname || p.email || p.device
+      const where = [p.city, p.country ? COUNTRY_NAMES[p.country] || p.country : null].filter(Boolean).join(', ')
+      return `<li class="ov-live-row">
+        ${avatar({ name: p.hostname || '', email: p.email, live: true })}
+        <span class="ov-live-who">${esc(who)}</span>
+        <span class="ov-live-where">${esc(where)}</span>
+        <span class="ov-live-saved">${p.savedMinutes > 0 ? esc(formatSavedTime(p.savedMinutes)) : 'none yet'}</span>
+        <span class="ov-live-seen">${timeCell(p.lastSeen, now)}</span>
+      </li>`
+    })
+    .join('')
+  return `<article class="card ov-live-card" data-ov-live-now>
+    <div class="kpi-top">
+      <h3>${iconSvg(KIND_ICON_PATHS.heartbeat, { class: 'ov-live-icon' })}On Métis right now${sourceTooltip('Seats with a heartbeat inside the online window, and what each has saved', 'seats table, listen and recap events')}</h3>
+      <span class="n">${esc(String(live.length))}</span>
+    </div>
+    <ul class="ov-live-list">${rows}</ul>
+    <div class="sub">${esc(formatSavedTime(total))} saved between them.${hidden ? ` ${esc(String(hidden))} more live, see Realtime.` : ''}</div>
   </article>`
 }
 
@@ -518,9 +565,12 @@ function buildAskCountsBySeat(data: DashboardPayload): Map<string, number> {
 
 function renderSeatsCard(data: DashboardPayload): string {
   const askCounts = buildAskCountsBySeat(data)
+  // Live seats first, then whoever asked most. "Who is on right now" is the question this card is
+  // opened to answer, and sorting purely by ask count buried a live seat under idle ones.
   const seatRows: TlcRow[] = data.profiles
     .slice()
     .sort((a, b) => {
+      if (a.live !== b.live) return a.live ? -1 : 1
       const an = askCounts.get(a.hostname || a.email || '') ?? 0
       const bn = askCounts.get(b.hostname || b.email || '') ?? 0
       return bn - an || b.lastSeen - a.lastSeen
@@ -533,7 +583,14 @@ function renderSeatsCard(data: DashboardPayload): string {
         icon: avatar({ name: r.hostname || '', email: r.email, live: r.live }),
         label: field(who),
         barValue: asks,
-        cells: { asks: String(asks), live: statusDot({ state: r.live ? 'live' : 'idle', label: r.live ? 'Live' : 'Idle' }) },
+        // Two value columns, not three: a third broke the card's grid (the header wrapped and the
+        // values fell out of line). Asks is the one that goes -- it keeps the row's bar, has its own
+        // card beside this one and its own tile above, whereas live state appears nowhere else once
+        // every seat is idle and the "On Métis right now" card is absent.
+        cells: {
+          saved: r.savedMinutes > 0 ? esc(formatSavedTime(r.savedMinutes)) : '<span class="muted">none yet</span>',
+          live: statusDot({ state: r.live ? 'live' : 'idle', label: r.live ? 'Live' : 'Idle' })
+        },
         q: `${who} ${r.os} ${r.country || ''}`.toLowerCase(),
         attrs: `data-os="${esc(r.os)}" data-country="${esc(r.country || '')}" data-version="${esc(r.appVersion)}"`
       }
@@ -559,7 +616,7 @@ function renderSeatsCard(data: DashboardPayload): string {
         label: 'Seats',
         labelHeader: 'Seat',
         valueHeaders: [
-          { key: 'asks', label: 'Asks' },
+          { key: 'saved', label: 'Time saved' },
           { key: 'live', label: 'Live' }
         ],
         rows: seatRows,
