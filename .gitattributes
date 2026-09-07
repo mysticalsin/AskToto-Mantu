@@ -13,3 +13,18 @@ resources/local-llm/*.txt -text
 
 # Mode skills are hashed LF-only. Pin checkout so Windows CI does not rewrite them.
 skills/**/*.md text eol=lf
+
+# Operator Worker sources are fingerprinted/bundled LF-only (build-client.mjs →
+# client.generated.ts). Pin checkout so Windows CI (core.autocrlf) does not rewrite them.
+# Keep binaries binary — operator/ also ships .png/.woff2 map assets.
+operator/**/*.ts text eol=lf
+operator/**/*.mjs text eol=lf
+operator/**/*.js text eol=lf
+operator/**/*.css text eol=lf
+operator/**/*.json text eol=lf
+operator/**/*.jsonc text eol=lf
+operator/**/*.sql text eol=lf
+operator/**/*.md text eol=lf
+operator/**/*.svg text eol=lf
+operator/**/*.png binary
+operator/**/*.woff2 binary

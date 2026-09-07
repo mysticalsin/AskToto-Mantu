@@ -3,11 +3,59 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-31",
   "observability": { "enabled": true },
+  "vars": {
+    "TEAM_DOMAIN": "https://tony-walteur.cloudflareaccess.com",
+    "OPERATOR_VERSION": "<set by deploy>"
+  },
+  "triggers": { "crons": ["17 3 * * *"] },
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "metis-operator",
-      "database_id": "REPLACE_AFTER_D1_CREATE"
+      "database_id": "8eb5a081-594c-407c-9470-6a5aa28b9f7c"
     }
-  ]
+  ],
+  // Plan D5, B8: fonts, flags and connector logos (operator/public/{fonts,flags,logos}/, built
+  // by operator/scripts/build-assets.mjs) served through Workers Static Assets. run_worker_first
+  // keeps the Worker in front of every request, including these, so Access and the security
+  // headers in operator/src/http.ts still apply -- the Worker itself decides whether to answer
+  // from the binding (operator/src/assets.ts: isBinaryAssetPath / binaryAssetResponse) or run
+  // its own routing. This is not "Protect this Worker" (lock 1): Access stays configured exactly
+  // as it is today.
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  // Staging (plan P4.0, section 9d "Environments"): its own Worker name, its own D1, same Access
+  // team as production. `wrangler` environment sections do not inherit `vars` or `d1_databases`
+  // from the top level, so both are restated here rather than left to fall through. OPERATOR_ENV
+  // lets the Worker (and Settings -> Platform health) tell the two apart at runtime.
+  //
+  // database_id is a placeholder: run `cd operator && npx wrangler@4 d1 create
+  // metis-operator-staging` once Cloudflare auth exists on this machine, then paste the printed id
+  // over REPLACE_AFTER_D1_CREATE below. Deploy with `node operator/scripts/deploy.mjs --env
+  // staging` (or `npx wrangler@4 deploy --env staging` from operator/ directly).
+  "env": {
+    "staging": {
+      "name": "metis-operator-staging",
+      "vars": {
+        "TEAM_DOMAIN": "https://tony-walteur.cloudflareaccess.com",
+        "OPERATOR_ENV": "staging",
+        "OPERATOR_VERSION": "<set by deploy>"
+      },
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "metis-operator-staging",
+          "database_id": "REPLACE_AFTER_D1_CREATE"
+        }
+      ],
+      "assets": {
+        "directory": "./public",
+        "binding": "ASSETS",
+        "run_worker_first": true
+      }
+    }
+  }
 }

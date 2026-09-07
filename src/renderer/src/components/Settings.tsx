@@ -3048,7 +3048,8 @@ function ProductConnectCard({
   connect,
   pinnedEndpoint,
   apiKeyHint,
-  extraFields
+  extraFields,
+  operatorManaged
 }: {
   settings: PublicSettings
   patch: (p: Partial<PublicSettings>) => void
@@ -3061,6 +3062,10 @@ function ProductConnectCard({
   pinnedEndpoint: string
   apiKeyHint: string
   extraFields?: { key: string; label: string; placeholder: string }[]
+  /** PLAN.md P2.2b #3: set when this seat has no local key for this connection but Operator supplies
+   *  one (CRM push then uses it automatically). last4 of the Operator-delivered credential, never the
+   *  credential itself. */
+  operatorManaged?: { last4: string }
 }): JSX.Element {
   const conn = settings.mcpConnections.find((c) => c.id === kind)
   const connected = conn?.connected ?? false
@@ -3202,6 +3207,10 @@ function ProductConnectCard({
         {connected ? (
           <span className={activePillStyle}>
             <CircleCheck size={12} /> Connected
+          </span>
+        ) : operatorManaged ? (
+          <span className={activePillStyle} title="Métis Operator supplies this connection's credential; no local key is set.">
+            <CircleCheck size={12} /> Managed by Operator ({operatorManaged.last4})
           </span>
         ) : (
           <button type="button" onClick={() => void runConnect()} disabled={connecting} className={primaryBtnStyle}>
@@ -3351,6 +3360,21 @@ function ClickupCard({ settings, patch }: { settings: PublicSettings; patch: (p:
 }
 
 function PlaneCard({ settings, patch }: { settings: PublicSettings; patch: (p: Partial<PublicSettings>) => void }): JSX.Element {
+  // PLAN.md P2.2b #3: Plane is the one local CRM kind an Operator-supplied credential can stand in for
+  // (see operatorCrmCredentialFor's doc comment on the desktop side for why clickup/bidstack are not).
+  const [operatorPlane, setOperatorPlane] = useState<{ last4: string } | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    void window.toto.operatorStatus().then((status) => {
+      if (cancelled) return
+      const plane = status.integrations.find((i) => i.kind === 'plane' && i.hasCredential)
+      setOperatorPlane(plane ? { last4: plane.last4 } : null)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [settings.operatorIntegrationsVersion])
+
   return (
     <ProductConnectCard
       settings={settings}
@@ -3364,7 +3388,141 @@ function PlaneCard({ settings, patch }: { settings: PublicSettings; patch: (p: P
       pinnedEndpoint="https://mcp.plane.so/http/api-key/mcp"
       apiKeyHint="Personal or workspace access token"
       extraFields={[{ key: 'X-Workspace-slug', label: 'Workspace slug', placeholder: 'acme' }]}
+      operatorManaged={operatorPlane ?? undefined}
     />
+  )
+}
+
+const OPERATOR_ENTITLEMENT_LABELS: Record<string, string> = {
+  ask: 'Ask',
+  listen: 'Listen',
+  recap: 'Recap',
+  crm_push: 'CRM push',
+  operator_keys: 'Operator-funded providers',
+  intelligence: 'Intelligence indexing',
+  integrations: 'Integrations'
+}
+
+/**
+ * Operator seat license (METIS-OP-1) activation, PLAN.md P2.2b #1. Paste-once: the field clears after a
+ * successful activate — the desktop keeps the token, but there's nothing more to type or re-paste.
+ * Polls IPC.operatorStatus (local settings + in-memory state only, no network) rather than reading off
+ * `settings` directly, since tier/entitlements/integrations live outside the normal settings push here.
+ */
+function OperatorLicenseCard(): JSX.Element {
+  const [status, setStatus] = useState<{
+    configured: boolean
+    tier: 'metis' | 'metis-light' | null
+    entitlements: Record<string, boolean> | null
+    licenseLast4: string
+    licenseExpiresAt: number | null
+  } | null>(null)
+  const [input, setInput] = useState('')
+  const [state, setState] = useState<{ phase: 'idle' | 'saving' | 'error'; error: string | null }>({
+    phase: 'idle',
+    error: null
+  })
+
+  const refresh = (): void => {
+    void window.toto.operatorStatus().then(setStatus)
+  }
+  useEffect(() => {
+    refresh()
+    // Entitlements/tier arrive on the next heartbeat after activation (main confirms with the Worker,
+    // not this device) — poll rather than a one-shot fetch so "waiting for Operator" resolves on its own.
+    const t = setInterval(refresh, 15_000)
+    return () => clearInterval(t)
+  }, [])
+
+  const activate = async (): Promise<void> => {
+    setState({ phase: 'saving', error: null })
+    const r = await window.toto.operatorLicenseActivate({ licenseKey: input.trim() })
+    if (r.ok) {
+      setInput('')
+      setState({ phase: 'idle', error: null })
+      refresh()
+    } else {
+      setState({ phase: 'error', error: r.error || 'Could not activate this license.' })
+    }
+  }
+
+  const hasLicense = !!status?.licenseLast4
+  const waitingForOperator = hasLicense && !status?.tier
+
+  return (
+    <div className="mt-2 flex flex-col gap-2 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.02] p-3">
+      <span className="text-[11px] font-medium text-[color:var(--cl-muted-foreground)]">Operator license</span>
+      <div className="flex gap-2">
+        <input
+          value={input}
+          onChange={(e) => {
+            setInput(e.target.value)
+            setState({ phase: 'idle', error: null })
+          }}
+          spellCheck={false}
+          autoComplete="off"
+          placeholder="METIS-OP-1...."
+          className={`${ctl} w-full`}
+        />
+        <button
+          type="button"
+          onClick={() => void activate()}
+          disabled={!input.trim() || state.phase === 'saving'}
+          className={primaryBtnStyle}
+        >
+          {state.phase === 'saving' ? <InlineOrb kind="loading" /> : <Check size={12} />}
+          Activate
+        </button>
+      </div>
+      {state.phase === 'error' && state.error && (
+        <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-destructive)]">
+          <AlertCircle size={13} className="mt-px shrink-0" />
+          <span>{state.error}</span>
+        </div>
+      )}
+      {hasLicense && (
+        <div className="flex flex-col gap-1.5 border-t border-[var(--cl-border)] pt-2">
+          <div className="flex items-center gap-2 text-[11px] text-[color:var(--cl-muted-foreground)]">
+            <span>
+              Ending {status?.licenseLast4}
+              {status?.licenseExpiresAt ? `, expires ${new Date(status.licenseExpiresAt).toLocaleDateString()}` : ''}
+            </span>
+            <button
+              type="button"
+              onClick={() => void window.toto.operatorLicenseActivate({ licenseKey: '' }).then(refresh)}
+              className="no-drag cl-focus text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-destructive)]"
+            >
+              Clear
+            </button>
+          </div>
+          {waitingForOperator ? (
+            <div className="flex items-center gap-1.5 text-[11px] text-[color:var(--cl-muted-foreground)]">
+              <InlineOrb kind="connecting" /> Waiting for Operator to confirm this seat…
+            </div>
+          ) : (
+            <>
+              <span className={`w-fit ${activePillStyle}`}>
+                <CircleCheck size={12} /> {status?.tier === 'metis-light' ? 'Métis Light' : 'Métis'}
+              </span>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-1">
+                {Object.entries(OPERATOR_ENTITLEMENT_LABELS).map(([key, label]) => {
+                  const on = status?.entitlements?.[key] === true
+                  return (
+                    <span
+                      key={key}
+                      className={`flex items-center gap-1 text-[11px] ${on ? 'text-[color:var(--cl-foreground)]' : 'text-[color:var(--cl-muted-foreground)]'}`}
+                    >
+                      {on ? <CircleCheck size={12} className="text-[color:var(--cl-success)]" /> : <X size={12} />}
+                      {label}
+                    </span>
+                  )
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -6483,7 +6641,7 @@ export function Settings({
                   {/^https:\/\//i.test(settings.operatorUrl || '') && (
                     <ToggleRow
                       label="Send Ask text for skill improvement"
-                      desc="When on, the question text goes with the metrics so skills can be drafted. Metrics always send: mode, timing, token counts, and a question type label such as Factual or How to, never the words. Listen transcripts and screens never send."
+                      desc="When on, the question text goes with the metrics so skills can be drafted. Metrics always send: mode, timing, token counts, a question type label such as Factual or How to, this Mac's hostname, and this device's license status, never the words. Listen transcripts and screens never send."
                       on={settings.sendAskText !== false}
                       onChange={(v) => patch({ sendAskText: v })}
                       disabled={settings.managedKeys.includes('sendAskText')}
@@ -6498,6 +6656,7 @@ export function Settings({
                       <ExternalLink size={12} /> Open Operator
                     </button>
                   )}
+                  {operatorUrlConfigured(settings) && <OperatorLicenseCard />}
                 </Section>
               </div>
             )}
@@ -7359,7 +7518,59 @@ function IntelligenceTab({
       >
         <ClickupCard settings={settings} patch={patch} />
       </Section>
+
+      <OperatorMcpServersSection />
     </div>
+  )
+}
+
+/**
+ * Read-only list of MCP connections Operator has registered on this seat (coordinator addition to
+ * PLAN.md P2.2b #3: hubspot/salesforce/pipedrive/notion/custom-mcp — anything beyond the three kinds
+ * the cards above manage locally). Renders nothing when the Operator hasn't delivered any. Rows are
+ * informational only: there is nothing to configure here, Operator owns the credential and endpoint.
+ */
+function OperatorMcpServersSection(): JSX.Element | null {
+  const [servers, setServers] = useState<Array<{ id: string; kind: string; label: string; tools: string[] }>>([])
+  useEffect(() => {
+    let cancelled = false
+    const refresh = (): void => {
+      void window.toto.operatorStatus().then((status) => {
+        if (!cancelled) setServers(status.mcpServers)
+      })
+    }
+    refresh()
+    const t = setInterval(refresh, 15_000)
+    return () => {
+      cancelled = true
+      clearInterval(t)
+    }
+  }, [])
+
+  if (servers.length === 0) return null
+
+  return (
+    <Section
+      title="Operator-managed connections"
+      desc="Delivered by Métis Operator. Credential and endpoint are managed there, not on this device."
+      icon={Link2}
+    >
+      <div className="flex flex-col gap-2">
+        {servers.map((s) => (
+          <div key={s.id} className="flex flex-col gap-1 rounded-[10px] border border-[var(--cl-border)] bg-white/[0.02] p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{s.label}</span>
+              <span className={activePillStyle}>
+                <CircleCheck size={12} /> Managed by Operator
+              </span>
+            </div>
+            <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
+              {s.tools.length > 0 ? `Tools: ${s.tools.join(', ')}` : 'Tools not listed yet.'}
+            </span>
+          </div>
+        ))}
+      </div>
+    </Section>
   )
 }
 

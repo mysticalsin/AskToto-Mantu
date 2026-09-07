@@ -1,0 +1,409 @@
+- generic [active] [ref=f4e1]:
+  - generic [ref=f4e2]:
+    - button "Close menu"
+    - generic [ref=f4e3]:
+      - generic [ref=f4e4]:
+        - link [ref=f4e5] [cursor=pointer]:
+          - /url: /
+          - img "Openpanel logo" [ref=f4e6]
+        - button "Shoey" [ref=f4e7]
+      - generic [ref=f4e16]:
+        - button "Create report" [ref=f4e18]
+        - generic [ref=f4e23]:
+          - textbox "Ask AI anything..." [ref=f4e27]
+          - generic [ref=f4e28]: ⌘J
+        - generic [ref=f4e29]: Analytics
+        - navigation [ref=f4e30]:
+          - link "Overview" [ref=f4e31] [cursor=pointer]:
+            - /url: /demo/shoey
+          - link "Realtime" [ref=f4e36] [cursor=pointer]:
+            - /url: /demo/shoey/realtime
+          - link "Events" [ref=f4e42] [cursor=pointer]:
+            - /url: /demo/shoey/events
+          - link "Sessions" [ref=f4e44] [cursor=pointer]:
+            - /url: /demo/shoey/sessions
+          - link "Groups" [ref=f4e50] [cursor=pointer]:
+            - /url: /demo/shoey/groups
+        - generic [ref=f4e55]: Manage
+        - navigation [ref=f4e56]:
+          - link "Settings" [ref=f4e57] [cursor=pointer]:
+            - /url: /demo/shoey/settings
+          - link "Notifications" [ref=f4e69] [cursor=pointer]:
+            - /url: /demo/shoey/notifications
+      - generic [ref=f4e74]:
+        - generic [ref=f4e75]:
+          - button "Sparkles" [ref=f4e76]
+          - button "User" [ref=f4e80]
+        - generic [ref=f4e84]:
+          - generic [ref=f4e85]: Support Us
+          - generic [ref=f4e86]: Pay What You Want
+    - generic [ref=f4e89]:
+      - generic [ref=f4e90]:
+        - generic [ref=f4e94]:
+          - img [ref=f4e95]:
+            - generic [ref=f4e96]:
+              - generic [ref=f4e97] [cursor=pointer]
+              - generic [ref=f4e100] [cursor=pointer]
+              - generic [ref=f4e103] [cursor=pointer]
+              - generic [ref=f4e106] [cursor=pointer]
+              - generic [ref=f4e109] [cursor=pointer]
+              - generic [ref=f4e112] [cursor=pointer]
+              - generic [ref=f4e115] [cursor=pointer]
+              - generic [ref=f4e118] [cursor=pointer]
+              - generic [ref=f4e121] [cursor=pointer]
+              - generic [ref=f4e124] [cursor=pointer]
+              - generic [ref=f4e127] [cursor=pointer]
+              - generic [ref=f4e130] [cursor=pointer]
+              - generic [ref=f4e133] [cursor=pointer]
+              - generic [ref=f4e136] [cursor=pointer]
+              - generic [ref=f4e139] [cursor=pointer]
+              - generic [ref=f4e142] [cursor=pointer]
+              - generic [ref=f4e145] [cursor=pointer]
+              - generic [ref=f4e148] [cursor=pointer]
+              - generic [ref=f4e151] [cursor=pointer]
+              - generic [ref=f4e154] [cursor=pointer]
+              - generic [ref=f4e157] [cursor=pointer]
+              - generic [ref=f4e160] [cursor=pointer]
+              - generic [ref=f4e163] [cursor=pointer]
+              - generic [ref=f4e166] [cursor=pointer]
+              - generic [ref=f4e169] [cursor=pointer]
+              - generic [ref=f4e172] [cursor=pointer]
+              - generic [ref=f4e175] [cursor=pointer]
+              - generic [ref=f4e178] [cursor=pointer]
+              - generic [ref=f4e181] [cursor=pointer]
+              - generic [ref=f4e184] [cursor=pointer]
+              - generic [ref=f4e187] [cursor=pointer]
+              - generic [ref=f4e190] [cursor=pointer]
+              - generic [ref=f4e193] [cursor=pointer]
+              - generic [ref=f4e196] [cursor=pointer]
+              - generic [ref=f4e199] [cursor=pointer]
+              - generic [ref=f4e202] [cursor=pointer]
+              - generic [ref=f4e205] [cursor=pointer]
+              - generic [ref=f4e208] [cursor=pointer]
+              - generic [ref=f4e211] [cursor=pointer]
+              - generic [ref=f4e214] [cursor=pointer]
+              - generic [ref=f4e217] [cursor=pointer]
+              - generic [ref=f4e220] [cursor=pointer]
+              - generic [ref=f4e223] [cursor=pointer]
+              - generic [ref=f4e226] [cursor=pointer]
+              - generic [ref=f4e229] [cursor=pointer]
+              - generic [ref=f4e232] [cursor=pointer]
+              - generic [ref=f4e235] [cursor=pointer]
+              - generic [ref=f4e238] [cursor=pointer]
+              - generic [ref=f4e241] [cursor=pointer]
+              - generic [ref=f4e244] [cursor=pointer]
+              - generic [ref=f4e247] [cursor=pointer]
+              - generic [ref=f4e250] [cursor=pointer]
+              - generic [ref=f4e253] [cursor=pointer]
+              - generic [ref=f4e256] [cursor=pointer]
+              - generic [ref=f4e259] [cursor=pointer]
+              - generic [ref=f4e262] [cursor=pointer]
+              - generic [ref=f4e265] [cursor=pointer]
+              - generic [ref=f4e268] [cursor=pointer]
+              - generic [ref=f4e271] [cursor=pointer]
+              - generic [ref=f4e274] [cursor=pointer]
+              - generic [ref=f4e277] [cursor=pointer]
+              - generic [ref=f4e280] [cursor=pointer]
+              - generic [ref=f4e283] [cursor=pointer]
+              - generic [ref=f4e286] [cursor=pointer]
+              - generic [ref=f4e289] [cursor=pointer]
+              - generic [ref=f4e292] [cursor=pointer]
+              - generic [ref=f4e295] [cursor=pointer]
+              - generic [ref=f4e298] [cursor=pointer]
+              - generic [ref=f4e301] [cursor=pointer]
+              - generic [ref=f4e304] [cursor=pointer]
+              - generic [ref=f4e307] [cursor=pointer]
+              - generic [ref=f4e310] [cursor=pointer]
+              - generic [ref=f4e313] [cursor=pointer]
+              - generic [ref=f4e316] [cursor=pointer]
+              - generic [ref=f4e319] [cursor=pointer]
+              - generic [ref=f4e322] [cursor=pointer]
+              - generic [ref=f4e325] [cursor=pointer]
+              - generic [ref=f4e328] [cursor=pointer]
+              - generic [ref=f4e331] [cursor=pointer]
+              - generic [ref=f4e334] [cursor=pointer]
+              - generic [ref=f4e337] [cursor=pointer]
+              - generic [ref=f4e340] [cursor=pointer]
+              - generic [ref=f4e343] [cursor=pointer]
+              - generic [ref=f4e346] [cursor=pointer]
+              - generic [ref=f4e349] [cursor=pointer]
+              - generic [ref=f4e352] [cursor=pointer]
+              - generic [ref=f4e355] [cursor=pointer]
+              - generic [ref=f4e358] [cursor=pointer]
+              - generic [ref=f4e361] [cursor=pointer]
+              - generic [ref=f4e364] [cursor=pointer]
+              - generic [ref=f4e367] [cursor=pointer]
+              - generic [ref=f4e370] [cursor=pointer]
+              - generic [ref=f4e373] [cursor=pointer]
+              - generic [ref=f4e376] [cursor=pointer]
+              - generic [ref=f4e379] [cursor=pointer]
+              - generic [ref=f4e382] [cursor=pointer]
+              - generic [ref=f4e385] [cursor=pointer]
+              - generic [ref=f4e388] [cursor=pointer]
+              - generic [ref=f4e391] [cursor=pointer]
+              - generic [ref=f4e394] [cursor=pointer]
+              - generic [ref=f4e397] [cursor=pointer]
+              - generic [ref=f4e400] [cursor=pointer]
+              - generic [ref=f4e403] [cursor=pointer]
+              - generic [ref=f4e406] [cursor=pointer]
+              - generic [ref=f4e409] [cursor=pointer]
+              - generic [ref=f4e412] [cursor=pointer]
+              - generic [ref=f4e415] [cursor=pointer]
+              - generic [ref=f4e418] [cursor=pointer]
+              - generic [ref=f4e421] [cursor=pointer]
+              - generic [ref=f4e424] [cursor=pointer]
+              - generic [ref=f4e427] [cursor=pointer]
+              - generic [ref=f4e430] [cursor=pointer]
+              - generic [ref=f4e433] [cursor=pointer]
+              - generic [ref=f4e436] [cursor=pointer]
+              - generic [ref=f4e439] [cursor=pointer]
+              - generic [ref=f4e442] [cursor=pointer]
+              - generic [ref=f4e445] [cursor=pointer]
+              - generic [ref=f4e448] [cursor=pointer]
+              - generic [ref=f4e451] [cursor=pointer]
+              - generic [ref=f4e454] [cursor=pointer]
+              - generic [ref=f4e457] [cursor=pointer]
+              - generic [ref=f4e460] [cursor=pointer]
+              - generic [ref=f4e463] [cursor=pointer]
+              - generic [ref=f4e466] [cursor=pointer]
+              - generic [ref=f4e469] [cursor=pointer]
+              - generic [ref=f4e472] [cursor=pointer]
+              - generic [ref=f4e475] [cursor=pointer]
+              - generic [ref=f4e478] [cursor=pointer]
+              - generic [ref=f4e481] [cursor=pointer]
+              - generic [ref=f4e484] [cursor=pointer]
+              - generic [ref=f4e487] [cursor=pointer]
+              - generic [ref=f4e490] [cursor=pointer]
+              - generic [ref=f4e493] [cursor=pointer]
+              - generic [ref=f4e496] [cursor=pointer]
+              - generic [ref=f4e499] [cursor=pointer]
+              - generic [ref=f4e502] [cursor=pointer]
+              - generic [ref=f4e505] [cursor=pointer]
+              - generic [ref=f4e508] [cursor=pointer]
+              - generic [ref=f4e511] [cursor=pointer]
+              - generic [ref=f4e514] [cursor=pointer]
+              - generic [ref=f4e517] [cursor=pointer]
+              - generic [ref=f4e520] [cursor=pointer]
+              - generic [ref=f4e523] [cursor=pointer]
+              - generic [ref=f4e526] [cursor=pointer]
+              - generic [ref=f4e529] [cursor=pointer]
+              - generic [ref=f4e532] [cursor=pointer]
+              - generic [ref=f4e535] [cursor=pointer]
+              - generic [ref=f4e538] [cursor=pointer]
+              - generic [ref=f4e541] [cursor=pointer]
+              - generic [ref=f4e544] [cursor=pointer]
+              - generic [ref=f4e547] [cursor=pointer]
+              - generic [ref=f4e550] [cursor=pointer]
+              - generic [ref=f4e557]:
+                - generic [ref=f4e561]: "53"
+                - generic [ref=f4e562]: Brazil, 36 places
+              - generic [ref=f4e567]:
+                - generic [ref=f4e571]: "14"
+                - generic [ref=f4e572]: South Korea, 9 places
+              - generic [ref=f4e577]:
+                - generic [ref=f4e581]: "14"
+                - generic [ref=f4e582]: 12 places
+              - generic [ref=f4e587]:
+                - generic [ref=f4e591]: "2"
+                - generic [ref=f4e592]: Cape Town
+              - generic [ref=f4e597]:
+                - generic [ref=f4e601]: "9"
+                - generic [ref=f4e602]: 9 places
+              - generic [ref=f4e607]:
+                - generic [ref=f4e611]: "15"
+                - generic [ref=f4e612]: 15 places
+              - generic [ref=f4e617]:
+                - generic [ref=f4e621]: "2"
+                - generic [ref=f4e622]: India, 2 places
+              - generic [ref=f4e627]:
+                - generic [ref=f4e631]: "1"
+                - generic [ref=f4e632]: Abidjan
+              - generic [ref=f4e637]:
+                - generic [ref=f4e641]: "1"
+                - generic [ref=f4e642]: Sydney
+              - generic [ref=f4e647]:
+                - generic [ref=f4e651]: "2"
+                - generic [ref=f4e652]: United States, 2 places
+              - generic [ref=f4e657]:
+                - generic [ref=f4e661]: "1"
+                - generic [ref=f4e662]: Jeddah
+              - generic:
+                - generic:
+                  - generic:
+                    - generic:
+                      - generic:
+                        - generic: Roswell
+                        - generic: 1 event
+          - generic [ref=f4e663]:
+            - button "Zoom in" [ref=f4e664]
+            - button "Zoom out" [ref=f4e666]
+        - generic [ref=f4e669]:
+          - generic [ref=f4e671]:
+            - generic [ref=f4e672]: Unique visitors last 30 min
+            - generic [ref=f4e674]: "160"
+          - generic [ref=f4e710]:
+            - generic [ref=f4e711]: Live
+            - generic [ref=f4e716]: "22"
+            - generic [ref=f4e718]: Visitors online now
+          - generic [ref=f4e721]:
+            - generic [ref=f4e722]:
+              - generic [ref=f4e723]: Live events
+              - generic [ref=f4e728]: "24"
+            - generic [ref=f4e730]:
+              - generic "Page view · /" [ref=f4e731]:
+                - generic [ref=f4e736]: /
+                - generic [ref=f4e741]: now
+              - generic "Session · Session start" [ref=f4e742]:
+                - generic [ref=f4e746]: Session start
+                - generic [ref=f4e751]: now
+              - generic "Page view · /blog/best-running-shoes-2023" [ref=f4e752]:
+                - generic [ref=f4e757]: /blog/best-running-shoes-2023
+                - generic [ref=f4e762]: 14s
+              - generic "Event · Start chat" [ref=f4e763]:
+                - generic [ref=f4e767]: Start chat
+                - generic [ref=f4e772]: 21s
+              - generic "Page view · /products/running/nike-air-zoom-pegasus/details" [ref=f4e773]:
+                - generic [ref=f4e778]: /products/running/nike-air-zoom-pegasus/details
+                - generic [ref=f4e783]: 28s
+              - generic "Page view · /blog/latest-trends-in-footwear" [ref=f4e784]:
+                - generic [ref=f4e789]: /blog/latest-trends-in-footwear
+                - generic [ref=f4e794]: 35s
+              - generic "Page view · /products/sneakers/ultra-runner-3000" [ref=f4e795]:
+                - generic [ref=f4e800]: /products/sneakers/ultra-runner-3000
+                - generic [ref=f4e805]: 42s
+              - generic "Page view · /blog/shoe-care-tips" [ref=f4e806]:
+                - generic [ref=f4e811]: /blog/shoe-care-tips
+                - generic [ref=f4e816]: 49s
+              - generic "Page view · /products/running/adidas-ultraboost" [ref=f4e817]:
+                - generic [ref=f4e822]: /products/running/adidas-ultraboost
+                - generic [ref=f4e827]: 56s
+              - generic "Event · Filter" [ref=f4e828]:
+                - generic [ref=f4e832]: Filter
+                - generic [ref=f4e837]: 1m
+              - generic "Page view · /products/sandals/adidas-adilette" [ref=f4e838]:
+                - generic [ref=f4e843]: /products/sandals/adidas-adilette
+                - generic [ref=f4e848]: 1m
+              - generic "Session · Session start" [ref=f4e849]:
+                - generic [ref=f4e853]: Session start
+                - generic [ref=f4e858]: 1m
+              - generic "Commerce · Checkout success" [ref=f4e859]:
+                - generic [ref=f4e865]: Checkout success
+                - generic [ref=f4e870]: 1m
+              - generic "Page view · /products/sneakers" [ref=f4e871]:
+                - generic [ref=f4e876]: /products/sneakers
+                - generic [ref=f4e881]: 1m
+              - generic "Page view · /products/running/nike-air-zoom-pegasus" [ref=f4e882]:
+                - generic [ref=f4e887]: /products/running/nike-air-zoom-pegasus
+                - generic [ref=f4e892]: 1m
+              - generic "Session · Session start" [ref=f4e893]:
+                - generic [ref=f4e897]: Session start
+                - generic [ref=f4e902]: 1m
+              - generic "Commerce · Checkout success" [ref=f4e903]:
+                - generic [ref=f4e909]: Checkout success
+                - generic [ref=f4e914]: 1m
+              - generic "Commerce · Checkout" [ref=f4e915]:
+                - generic [ref=f4e921]: Checkout
+                - generic [ref=f4e926]: 1m
+              - generic "Event · Filter" [ref=f4e927]:
+                - generic [ref=f4e931]: Filter
+                - generic [ref=f4e936]: 2m
+              - generic "Commerce · Checkout" [ref=f4e937]:
+                - generic [ref=f4e943]: Checkout
+                - generic [ref=f4e948]: 2m
+              - generic "Page view · /products/sandals/adidas-adilette" [ref=f4e949]:
+                - generic [ref=f4e954]: /products/sandals/adidas-adilette
+                - generic [ref=f4e959]: 2m
+              - generic "Page view · /cart" [ref=f4e960]:
+                - generic [ref=f4e965]: /cart
+                - generic [ref=f4e970]: 2m
+              - generic "Commerce · Add to cart" [ref=f4e971]:
+                - generic [ref=f4e977]: Add to cart
+                - generic [ref=f4e982]: 2m
+              - generic "Page view · /products/shoes/adidas-ultraboost-21" [ref=f4e983]:
+                - generic [ref=f4e988]: /products/shoes/adidas-ultraboost-21
+                - generic [ref=f4e993]: 2m
+      - generic [ref=f4e995]:
+        - generic [ref=f4e996]: Geo
+        - generic [ref=f4e1017]:
+          - generic [ref=f4e1018]:
+            - generic [ref=f4e1019]: Country / City
+            - generic [ref=f4e1020]: Duration
+            - button "Events" [ref=f4e1022]
+            - button "Sessions" [ref=f4e1024]
+          - generic [ref=f4e1025]:
+            - generic [ref=f4e1029]:
+              - generic [ref=f4e1030]: São Paulo
+              - generic [ref=f4e1035]: 0s
+              - generic [ref=f4e1036]: "58"
+              - generic [ref=f4e1039]: "10"
+            - generic [ref=f4e1045]:
+              - generic [ref=f4e1046]: Gangseo-gu
+              - generic [ref=f4e1051]: 0s
+              - generic [ref=f4e1052]: "37"
+              - generic [ref=f4e1055]: "4"
+            - generic [ref=f4e1061]:
+              - generic [ref=f4e1062]: João Pessoa
+              - generic [ref=f4e1067]: 0s
+              - generic [ref=f4e1068]: "22"
+              - generic [ref=f4e1071]: "2"
+            - generic [ref=f4e1077]:
+              - generic [ref=f4e1078]: Seocho-gu
+              - generic [ref=f4e1083]: 0s
+              - generic [ref=f4e1084]: "19"
+              - generic [ref=f4e1087]: "3"
+            - generic [ref=f4e1093]:
+              - generic [ref=f4e1094]: (Not set)
+              - generic [ref=f4e1099]: 0s
+              - generic [ref=f4e1100]: "19"
+              - generic [ref=f4e1103]: "2"
+            - generic [ref=f4e1109]:
+              - generic [ref=f4e1110]: São José dos Campos
+              - generic [ref=f4e1115]: 0s
+              - generic [ref=f4e1116]: "19"
+              - generic [ref=f4e1119]: "2"
+            - generic [ref=f4e1125]:
+              - generic [ref=f4e1126]: Brusque
+              - generic [ref=f4e1131]: 0s
+              - generic [ref=f4e1132]: "17"
+              - generic [ref=f4e1135]: "2"
+            - generic [ref=f4e1141]:
+              - generic [ref=f4e1142]: Silveiras
+              - generic [ref=f4e1147]: 0s
+              - generic [ref=f4e1148]: "15"
+              - generic [ref=f4e1151]: "2"
+            - generic [ref=f4e1157]:
+              - generic [ref=f4e1158]: Cape Town
+              - generic [ref=f4e1163]: 0s
+              - generic [ref=f4e1164]: "15"
+              - generic [ref=f4e1167]: "2"
+            - generic [ref=f4e1173]:
+              - generic [ref=f4e1174]: Blumenau
+              - generic [ref=f4e1179]: 0s
+              - generic [ref=f4e1180]: "15"
+              - generic [ref=f4e1183]: "3"
+            - generic [ref=f4e1189]:
+              - generic [ref=f4e1190]: New York
+              - generic [ref=f4e1195]: 0s
+              - generic [ref=f4e1196]: "15"
+              - generic [ref=f4e1199]: "2"
+            - generic [ref=f4e1205]:
+              - generic [ref=f4e1206]: (Not set)
+              - generic [ref=f4e1211]: 0s
+              - generic [ref=f4e1212]: "15"
+              - generic [ref=f4e1215]: "2"
+            - generic [ref=f4e1221]:
+              - generic [ref=f4e1222]: Orlando
+              - generic [ref=f4e1227]: 0s
+              - generic [ref=f4e1228]: "14"
+              - generic [ref=f4e1231]: "2"
+            - generic [ref=f4e1237]:
+              - generic [ref=f4e1238]: (Not set)
+              - generic [ref=f4e1243]: 0s
+              - generic [ref=f4e1244]: "14"
+              - generic [ref=f4e1247]: "2"
+            - generic [ref=f4e1253]:
+              - generic [ref=f4e1254]: (Not set)
+              - generic [ref=f4e1259]: 0s
+              - generic [ref=f4e1260]: "13"
+              - generic [ref=f4e1263]: "2"
+  - alert [ref=f4e1266]

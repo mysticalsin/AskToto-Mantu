@@ -1,8 +1,16 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest'
 
 vi.mock('electron', () => ({ app: { getVersion: () => '1.8.2', getPath: () => '/tmp' } }))
 vi.mock('./license', () => ({ getMachineId: () => 'machine-test' }))
-vi.mock('./logger', () => ({ mainLog: { warn: vi.fn() } }))
+vi.mock('./logger', () => ({
+  mainLog: { warn: vi.fn() },
+  // auth.ts registers an audit actor at module load — a real seatMeta() now imports it for ssoEmail.
+  setAuditActor: () => {},
+  auditLog: () => {}
+}))
 
 import {
   fundedProvidersFromHeartbeat,
@@ -10,13 +18,23 @@ import {
   operatorFundedProviders,
   operatorHeartbeat,
   setOperatorFetchForTests,
-  setOperatorFundedProvidersForTests
+  setOperatorFundedProvidersForTests,
+  setOperatorQueueDirForTests
 } from './operator-ingest'
 
 describe('heartbeat fundedProviders — IDs only, never secrets', () => {
+  // Isolated per-test queue dir: operatorHeartbeat now drains/reports the durable outbox on every
+  // call, and a shared literal '/tmp' would leak queue state across test files and runs.
+  let queueDir: string
   beforeEach(() => {
     setOperatorFundedProvidersForTests([])
     setOperatorFetchForTests(null)
+    queueDir = mkdtempSync(join(tmpdir(), 'operator-ingest-funded-test-'))
+    setOperatorQueueDirForTests(queueDir)
+  })
+  afterEach(() => {
+    setOperatorQueueDirForTests(null)
+    rmSync(queueDir, { recursive: true, force: true })
   })
 
   it('keeps Operator-hosted IDs and drops CLI, Dust, local, and vault-looking rows', () => {

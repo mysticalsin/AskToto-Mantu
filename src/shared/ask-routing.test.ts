@@ -8,6 +8,10 @@ import {
   nextAskRoute,
   nextLastClickedCli,
   pickWorkingCliPrimary,
+  portalFundedCloudflareModel,
+  PORTAL_CF_DEEPSEEK_FLASH,
+  PORTAL_CF_DEEPSEEK_PRO,
+  resolvePortalCloudflareModel,
   workingCliOrder
 } from './ask-routing'
 
@@ -69,9 +73,28 @@ describe('OPERATOR.md Ask routing law', () => {
     expect(isOperatorHostedProviderId('dust')).toBe(false)
     expect(isOperatorHostedProviderId('local')).toBe(false)
     expect(isOperatorHostedProviderId('cloudflare-account')).toBe(false)
-    expect(filterFundedProviders(['claude-cli', 'dust', 'anthropic', 'local', 'sk-ant-secret'])).toEqual([
-      'anthropic'
+    expect(isOperatorHostedProviderId('cloudflare')).toBe(true)
+    expect(filterFundedProviders(['claude-cli', 'dust', 'anthropic', 'local', 'cloudflare', 'sk-ant-secret'])).toEqual([
+      'anthropic',
+      'cloudflare'
     ])
+  })
+
+  it('Portal-funded CF default is Flash; Pro is optional deep only (G8 lock)', () => {
+    expect(portalFundedCloudflareModel('base')).toBe(PORTAL_CF_DEEPSEEK_FLASH)
+    expect(portalFundedCloudflareModel('think')).toBe(PORTAL_CF_DEEPSEEK_FLASH)
+    expect(portalFundedCloudflareModel('deep')).toBe(PORTAL_CF_DEEPSEEK_PRO)
+    expect(resolvePortalCloudflareModel('@cf/deepseek-ai/deepseek-v4-pro-0813')).toBe(PORTAL_CF_DEEPSEEK_FLASH)
+    expect(resolvePortalCloudflareModel('@cf/deepseek-ai/deepseek-v4-pro-0813', 'deep')).toBe(PORTAL_CF_DEEPSEEK_PRO)
+    expect(resolvePortalCloudflareModel('workers-ai/deepseek')).toBe(PORTAL_CF_DEEPSEEK_FLASH)
+    expect(PORTAL_CF_DEEPSEEK_FLASH).toBe('@cf/deepseek-ai/deepseek-v4-flash-0731')
+    expect(PORTAL_CF_DEEPSEEK_PRO).toBe('@cf/deepseek-ai/deepseek-v4-pro-0813')
+    expect(
+      nextAskRoute({
+        cliConnected: {},
+        fundedProviders: ['deepseek', 'cloudflare']
+      })
+    ).toEqual({ provider: 'cloudflare', tier: 'operator' })
   })
 
   it('fails honestly when no CLI and no funded Operator provider remain', () => {
