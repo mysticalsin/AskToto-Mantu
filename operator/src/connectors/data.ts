@@ -28,6 +28,13 @@ export interface IntegrationExtraColumns {
   last_test_json: string | null
   last_test_at: number | null
   notes: string | null
+  /** JSON array of tool names an admin has switched off on the Tools tab's per-tool enable switch
+   *  (plan 6.10c: "every tool ... a per-tool enable switch"). Always a JSON array of strings, never
+   *  absent -- `coerceDisabledToolsJson` guarantees `'[]'` for a row that predates this column or
+   *  carries a corrupt value, the same discipline `coerceConfigJson` already applies to
+   *  `config_json`. Checked by `gateway.ts` before a `tools/call` reaches the adapter or the proxied
+   *  upstream server, for both REST-adapter and MCP-transport connections. */
+  disabled_tools_json: string
 }
 
 /** Mirrors the SQL-level `DEFAULT`s in `INTEGRATION_ALTERS`, so a row with no extra columns yet (or a
@@ -42,7 +49,8 @@ export const INTEGRATION_EXTRA_DEFAULTS: IntegrationExtraColumns = {
   tools_json: null,
   last_test_json: null,
   last_test_at: null,
-  notes: null
+  notes: null,
+  disabled_tools_json: '[]'
 }
 
 /** Idempotent (SQLite errors "duplicate column name" on a re-run, which `migrate.mjs` already treats as
@@ -58,7 +66,8 @@ export const INTEGRATION_ALTERS: string[] = [
   'ALTER TABLE integrations ADD COLUMN tools_json TEXT;',
   'ALTER TABLE integrations ADD COLUMN last_test_json TEXT;',
   'ALTER TABLE integrations ADD COLUMN last_test_at INTEGER;',
-  'ALTER TABLE integrations ADD COLUMN notes TEXT;'
+  'ALTER TABLE integrations ADD COLUMN notes TEXT;',
+  "ALTER TABLE integrations ADD COLUMN disabled_tools_json TEXT NOT NULL DEFAULT '[]';"
 ]
 
 function coerceMode(value: unknown): IntegrationMode {
@@ -82,6 +91,31 @@ function coerceConfigJson(value: unknown): string {
   }
 }
 
+/** True only for a string that parses as a JSON array of strings (never an object, never a mixed
+ *  array). Same discipline as `coerceConfigJson` above: a corrupt or absent value reads as `'[]'`
+ *  rather than throwing downstream, in `gateway.ts` or in `integrationSummary()`. */
+function coerceDisabledToolsJson(value: unknown): string {
+  if (typeof value !== 'string' || !value) return '[]'
+  try {
+    const parsed: unknown = JSON.parse(value)
+    return Array.isArray(parsed) && parsed.every((v) => typeof v === 'string') ? value : '[]'
+  } catch {
+    return '[]'
+  }
+}
+
+/** Parses `disabled_tools_json` into the plain string array both `integrationSummary()` (the wire
+ *  shape) and `gateway.ts` (the per-call enforcement check) need, one implementation shared by both
+ *  rather than two hand-rolled `JSON.parse` call sites. */
+export function parseDisabledTools(disabledToolsJson: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(disabledToolsJson)
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : []
+  } catch {
+    return []
+  }
+}
+
 /** Reads the extra columns off any object that may carry them (a D1 `SELECT *` row, or a plain in-memory
  *  row) with the same defaults the SQL migration itself uses. Never throws on a row that predates the
  *  migration (every field just reads as its default). */
@@ -97,7 +131,8 @@ export function readIntegrationExtra(row: Record<string, unknown> | null | undef
     tools_json: typeof row.tools_json === 'string' ? row.tools_json : null,
     last_test_json: typeof row.last_test_json === 'string' ? row.last_test_json : null,
     last_test_at: typeof row.last_test_at === 'number' ? row.last_test_at : null,
-    notes: typeof row.notes === 'string' ? row.notes : null
+    notes: typeof row.notes === 'string' ? row.notes : null,
+    disabled_tools_json: coerceDisabledToolsJson(row.disabled_tools_json)
   }
 }
 
@@ -116,7 +151,8 @@ export async function writeIntegrationExtraColumns(db: D1DatabaseLike, id: strin
     .prepare(
       `UPDATE integrations SET
         auth_kind = ?, header_name = ?, transport = ?, mode = ?, allow_writes = ?,
-        config_json = ?, tools_json = ?, last_test_json = ?, last_test_at = ?, notes = ?
+        config_json = ?, tools_json = ?, last_test_json = ?, last_test_at = ?, notes = ?,
+        disabled_tools_json = ?
        WHERE id = ?`
     )
     .bind(
@@ -130,6 +166,7 @@ export async function writeIntegrationExtraColumns(db: D1DatabaseLike, id: strin
       extra.last_test_json,
       extra.last_test_at,
       extra.notes,
+      extra.disabled_tools_json,
       id
     )
     .run()
@@ -138,7 +175,7 @@ export async function writeIntegrationExtraColumns(db: D1DatabaseLike, id: strin
 export async function readIntegrationExtraColumns(db: D1DatabaseLike, id: string): Promise<IntegrationExtraColumns | null> {
   const row = await db
     .prepare(
-      `SELECT auth_kind, header_name, transport, mode, allow_writes, config_json, tools_json, last_test_json, last_test_at, notes
+      `SELECT auth_kind, header_name, transport, mode, allow_writes, config_json, tools_json, last_test_json, last_test_at, notes, disabled_tools_json
        FROM integrations WHERE id = ?`
     )
     .bind(id)

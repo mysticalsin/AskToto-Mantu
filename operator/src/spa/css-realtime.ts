@@ -102,11 +102,20 @@ export const REALTIME_CSS = `
   position: relative;
   width: 100%;
   aspect-ratio: 16 / 9;
-  min-height: 360px;
   border-radius: var(--radius-map);
   overflow: hidden;
   background: var(--map-ocean);
 }
+/* No \`min-height\` here (a previous version set 360px): \`min-height\` always wins over the
+   height \`aspect-ratio\` would otherwise compute, so on a narrow phone-width card (~356px
+   wide, where 16:9 wants ~200px) it forced a near-square box instead -- and Mercator projects
+   the globe's high-Arctic latitudes (Russia's own north coast, well past 66N) toward Y
+   coordinates far outside this map's 0..648 viewBox, ordinarily invisible because
+   \`overflow: hidden\` above clips it right at the correctly-sized 16:9 edge. The taller,
+   off-ratio box gave that always-there overflow room to actually render, in the gap the wrong
+   aspect ratio opened up -- the "hard-edged circular disc" over Scandinavia/Russia/China/Japan
+   from task report item 7 (most visible at narrow widths, where the ratio broke hardest;
+   only its topmost arc showed at 1440px, where the box is far wider than 360px regardless). */
 .rt-map-svg, .corner-map-svg { display: block; width: 100%; height: 100%; }
 .map-ocean { fill: var(--map-ocean); }
 .map-graticule {
@@ -132,8 +141,17 @@ export const REALTIME_CSS = `
 
 /* Overview corner choropleth (plan 3.7 item 2: "fill by seats per country through
    --chart-scale-01..05, no-data countries in --data-track"). More specific than .world-land
-   above so a corner-map cell's step colour always wins over the plain land fill. */
-.corner-cell { stroke: var(--map-ocean); stroke-width: 0.5px; cursor: default; }
+   above so a corner-map cell's step colour always wins over the plain land fill.
+   stroke-width is 0.2px, not the realtime map's 0.5px hairline: a country's own land bridge
+   can be genuinely narrower than half a pixel once the whole globe is Mercator-projected into
+   this map's 520-unit width (India's Siliguri Corridor, linking West Bengal to the north-east
+   states, is the real case -- task report item 6). A 0.5px stroke traces both sides of a gap
+   that thin and paints over whatever fill survives between them, rendering one connected
+   country as two disconnected lobes with a gap of ocean in between. 0.2px still reads as a
+   clear separator between adjacent, differently-coloured cells; re-rendered and visually
+   confirmed against India's corridor specifically, and against every other seeded country on
+   this map, to make sure none of them show the same gap at this width. */
+.corner-cell { stroke: var(--map-ocean); stroke-width: 0.2px; cursor: default; }
 .corner-cell.no-data { fill: var(--data-track); }
 .corner-cell.scale-01 { fill: var(--chart-scale-01); }
 .corner-cell.scale-02 { fill: var(--chart-scale-02); }
@@ -151,6 +169,10 @@ export const REALTIME_CSS = `
 .rt-pin[data-live="1"] .rt-pin-dot { fill: var(--live); }
 .rt-pin[data-live="0"] .rt-pin-dot { fill: var(--accent); }
 .rt-pin-halo { fill: none; stroke: var(--live); stroke-width: 1.5px; opacity: 0.6; }
+/* Leader line (map.ts's renderPin, LEADER_LINE_MIN_DY): only present at all once the collision
+   nudge has pushed a label far enough from its own dot that the two no longer read as one unit
+   on their own -- ties the label visually back to the marker it names. */
+.rt-pin-leader { stroke: var(--map-stroke); stroke-width: 1px; vector-effect: non-scaling-stroke; pointer-events: none; }
 .rt-pin-label {
   font: 600 9.5px var(--font-mono);
   fill: var(--ink);
@@ -231,6 +253,21 @@ export const REALTIME_CSS = `
 /* Rendered as a caption above the (still-visible, still-empty) map — plan 6.3: "the map still
    renders with no dots or pills and a centred caption says ...". */
 .map-empty { margin: 0 0 8px; color: var(--ink-2); font-size: 12px; text-align: center; }
+
+/* Mobile: renderRealtimeMapSvg() (map.ts) has no notion of viewport width -- it renders one
+   1152-unit-wide SVG, scaled purely by CSS to whatever the card's own width is. At a ~360px
+   mobile card that is roughly a quarter of the desktop rendering, every pin label and country
+   pill text shrinks right along with it -- text that reads fine at the desktop width becomes an
+   illegible, overlapping smear at mobile size well before the underlying shapes do (task report:
+   the Western-Europe and India clusters collapsing into smeared text blocks, six country pills
+   sitting edge-to-edge). Both layers are already redundant with the per-point/per-country
+   tooltip attachMapInteraction() shows on hover/tap, so the fix is to drop straight to dots +
+   tooltip at this width rather than trying to out-shrink the same label set the desktop map
+   shows -- still an honest, still a legible picture of where seats are; every dot keeps its own
+   colour, size and pulse regardless. */
+@media (max-width: 640px) {
+  .rt-pin-label, .rt-pills { display: none; }
+}
 
 @media (prefers-reduced-motion: reduce) {
   .map-graticule { transition: none; }

@@ -18,6 +18,7 @@
  * `btoa`/`TextEncoder`, matching the rest of operator/src.
  */
 import { buildDashboard, ONLINE_MS, type DashboardPayload } from '../dashboard'
+import { getConnectorCatalogEntry } from '../connectors/catalog'
 import { applyPulse, type PulseKind, type SessionRow as SessionState } from '../sessions'
 import {
   memoryStore,
@@ -495,44 +496,146 @@ function buildTiers(now: number): TierRow[] {
 // Connectors: 5 integrations (hubspot, clickup, plane, notion, custom-mcp), 2 failing.
 // ---------------------------------------------------------------------------
 
+type ConnectorProbeSeed =
+  | { ok: true; latencyMs: number; summary: string }
+  | { ok: false; latencyMs: number; summary: string; error: { code: string; message: string } }
+
 type ConnectorSeed = {
   id: string
   kind: string
   label: string
   baseUrl: string
-  status: 'connected' | 'failing'
   createdOffsetDays: number
   lastUsedOffsetHours: number
   uses: number
   scope: string
+  /** The fixture's own last-test outcome. Real health is derived (task 6.10c, `deriveHealth()` in
+   *  `connectors/summary.ts`) from `last_test_json`/`last_test_at`, never from `status` -- `status`
+   *  below is always `'active'`, exactly like a real, never-revoked connection, so `dashboard.ts`'s
+   *  `connectors` field (and `connectors.fixture.ts`'s `fixtureForConnectors()`, which now just
+   *  reads that same field) show real 'connected'/'failing' health the same way production does. */
+  probe: ConnectorProbeSeed
 }
 
 const CONNECTOR_SEEDS: ConnectorSeed[] = [
-  { id: 'int-hubspot', kind: 'hubspot', label: 'HubSpot CRM', baseUrl: 'https://api.hubapi.com', status: 'connected', createdOffsetDays: 70, lastUsedOffsetHours: 2, uses: 128, scope: '{"tiers":["metis","metis-light"],"groups":[]}' },
-  { id: 'int-clickup', kind: 'clickup', label: 'ClickUp workspace', baseUrl: 'https://api.clickup.com/api/v2', status: 'connected', createdOffsetDays: 55, lastUsedOffsetHours: 6, uses: 76, scope: `{"tiers":["metis"],"groups":["${GROUP_DELIVERY_MONTREAL}"]}` },
-  { id: 'int-plane', kind: 'plane', label: 'Plane project tracker', baseUrl: 'https://api.plane.so', status: 'failing', createdOffsetDays: 30, lastUsedOffsetHours: 96, uses: 12, scope: '{"tiers":["metis"],"groups":[]}' },
-  { id: 'int-notion', kind: 'notion', label: 'Notion knowledge base', baseUrl: 'https://api.notion.com/v1', status: 'connected', createdOffsetDays: 20, lastUsedOffsetHours: 4, uses: 54, scope: '{"tiers":["metis","metis-light"],"groups":[]}' },
-  { id: 'int-custom-mcp', kind: 'custom-mcp', label: 'Custom MCP server', baseUrl: 'https://mcp.example.com/metis', status: 'failing', createdOffsetDays: 10, lastUsedOffsetHours: 120, uses: 3, scope: `{"tiers":["metis"],"groups":["${GROUP_LEADERSHIP}"]}` }
+  {
+    id: 'int-hubspot',
+    kind: 'hubspot',
+    label: 'HubSpot CRM',
+    baseUrl: 'https://api.hubapi.com',
+    createdOffsetDays: 70,
+    lastUsedOffsetHours: 2,
+    uses: 128,
+    scope: '{"tiers":["metis","metis-light"],"groups":[]}',
+    probe: { ok: true, latencyMs: 180, summary: 'Reached HubSpot account 88213291.' }
+  },
+  {
+    id: 'int-clickup',
+    kind: 'clickup',
+    label: 'ClickUp workspace',
+    baseUrl: 'https://api.clickup.com/api/v2',
+    createdOffsetDays: 55,
+    lastUsedOffsetHours: 6,
+    uses: 76,
+    scope: `{"tiers":["metis"],"groups":["${GROUP_DELIVERY_MONTREAL}"]}`,
+    probe: { ok: true, latencyMs: 220, summary: 'Reached ClickUp as amaris-ops.' }
+  },
+  {
+    id: 'int-plane',
+    kind: 'plane',
+    label: 'Plane project tracker',
+    baseUrl: 'https://api.plane.so',
+    createdOffsetDays: 30,
+    lastUsedOffsetHours: 96,
+    uses: 12,
+    scope: '{"tiers":["metis"],"groups":[]}',
+    // Plane's catalog entry ships no probe spec at all (no cheap, documented "who am I" endpoint --
+    // see connectors/catalog.ts's own comment on the kind), so a real Test connection against it
+    // always answers exactly this: never a fabricated upstream status code for a kind that cannot
+    // produce one.
+    probe: { ok: false, latencyMs: 0, summary: 'No probe available for this kind yet.', error: { code: 'no-probe', message: 'No probe available for this kind yet.' } }
+  },
+  {
+    id: 'int-notion',
+    kind: 'notion',
+    label: 'Notion knowledge base',
+    baseUrl: 'https://api.notion.com/v1',
+    createdOffsetDays: 20,
+    lastUsedOffsetHours: 4,
+    uses: 54,
+    scope: '{"tiers":["metis","metis-light"],"groups":[]}',
+    probe: { ok: true, latencyMs: 340, summary: 'Reached Notion as integration Metis Bot.' }
+  },
+  {
+    id: 'int-custom-mcp',
+    kind: 'custom-mcp',
+    label: 'Custom MCP server',
+    baseUrl: 'https://mcp.example.com/metis',
+    createdOffsetDays: 10,
+    lastUsedOffsetHours: 120,
+    uses: 3,
+    scope: `{"tiers":["metis"],"groups":["${GROUP_LEADERSHIP}"]}`,
+    probe: {
+      ok: false,
+      latencyMs: 10000,
+      summary: 'Could not complete the MCP handshake.',
+      error: { code: 'timeout', message: 'Timed out after 10 seconds.' }
+    }
+  }
 ]
 
+/** `IntegrationRow` plus the additive `integrations` columns task B2 added
+ *  (`operator/src/connectors/data.ts`'s `IntegrationExtraColumns`) as plain extra properties on the
+ *  same object -- exactly how a real D1 `SELECT *` row carries them, and exactly what
+ *  `readIntegrationExtra()` (called by `deriveHealth()`/`integrationSummary()`) already expects to
+ *  read off any row it is given, memory-store or D1. */
+type FixtureIntegrationRow = IntegrationRow & {
+  auth_kind: string | null
+  header_name: string | null
+  transport: string | null
+  mode: 'brokered' | 'direct'
+  allow_writes: 0 | 1
+  config_json: string
+  tools_json: string | null
+  last_test_json: string | null
+  last_test_at: number | null
+  notes: string | null
+}
+
 function buildIntegrations(now: number, rng: () => number): { integrations: IntegrationRow[]; grants: IntegrationGrantRow[] } {
-  const integrations: IntegrationRow[] = CONNECTOR_SEEDS.map((c, i) => ({
-    id: c.id,
-    kind: c.kind,
-    label: c.label,
-    base_url: c.baseUrl,
-    cipher: placeholderCipher(rng, 64),
-    iv: placeholderCipher(rng, 12),
-    last4: fnvHex(c.id).slice(-4),
-    scope_json: c.scope,
-    status: c.status,
-    created_at: now - c.createdOffsetDays * DAY,
-    created_by: FIXTURE_EMAIL,
-    rotated_at: i === 0 ? now - 15 * DAY : null,
-    revoked_at: null,
-    last_used_at: now - c.lastUsedOffsetHours * HOUR,
-    uses: c.uses
-  }))
+  const integrations: FixtureIntegrationRow[] = CONNECTOR_SEEDS.map((c, i) => {
+    const entry = getConnectorCatalogEntry(c.kind)
+    return {
+      id: c.id,
+      kind: c.kind,
+      label: c.label,
+      base_url: c.baseUrl,
+      cipher: placeholderCipher(rng, 64),
+      iv: placeholderCipher(rng, 12),
+      last4: fnvHex(c.id).slice(-4),
+      scope_json: c.scope,
+      // Real rows only ever carry 'active' | 'revoked' (routes/integrations.ts's entitledInScopeRows()
+      // reads strictly 'active'); none of these five is revoked, so every seed is 'active' here,
+      // exactly like production. The probe outcome below, not this field, decides connected/failing.
+      status: 'active',
+      created_at: now - c.createdOffsetDays * DAY,
+      created_by: FIXTURE_EMAIL,
+      rotated_at: i === 0 ? now - 15 * DAY : null,
+      revoked_at: null,
+      last_used_at: now - c.lastUsedOffsetHours * HOUR,
+      uses: c.uses,
+      auth_kind: entry?.auth ?? null,
+      header_name: entry?.headerName ?? null,
+      transport: entry?.transport ?? null,
+      mode: 'brokered',
+      allow_writes: 0,
+      config_json: '{}',
+      tools_json: null,
+      last_test_json: JSON.stringify(c.probe),
+      last_test_at: now - c.lastUsedOffsetHours * HOUR,
+      notes: null
+    }
+  })
   const grantDevices: Record<string, string[]> = {
     'int-hubspot': ['seat-ca-01', 'seat-fr-01'],
     'int-clickup': ['seat-de-01', 'seat-us-01'],

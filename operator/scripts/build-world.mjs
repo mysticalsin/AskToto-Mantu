@@ -185,15 +185,18 @@ class MinHeap {
 /**
  * Visvalingam-Whyatt polyline simplification: every interior point has an "effective area"
  * (the triangle formed with its current neighbours); the smallest-area point is repeatedly
- * removed and its former neighbours' areas recomputed, until the smallest remaining area is
- * at or above `areaThreshold`. The first and last point are never removed — for a topology
- * arc these are the shared junction points other arcs/rings connect to, so keeping them
- * fixed is what keeps every ring built from these arcs closed and every shared border
- * between two rings identical.
+ * removed and its former neighbours' areas recomputed, until `shouldStop(smallestArea,
+ * remainingPointCount)` says to stop. The first and last point are never removed -- for a
+ * topology arc these are the shared junction points other arcs/rings connect to, so keeping
+ * them fixed is what keeps every ring built from these arcs closed and every shared border
+ * between two rings identical. Shared by `visvalingamWhyatt` (stop once the smallest area
+ * clears a real-world/pixel threshold -- the normal case) and `visvalingamWhyattToCount` (stop
+ * once a fixed number of points remain -- see that function's own doc comment for why a small
+ * arc needs a point-count budget instead of an area one).
  */
-function visvalingamWhyatt(points, areaThreshold) {
+function visvalingamWhyattCore(points, shouldStop) {
   const n = points.length
-  if (n <= 2 || areaThreshold <= 0) return points.slice()
+  if (n <= 2) return points.slice()
   const prev = new Array(n)
   const next = new Array(n)
   const removed = new Array(n).fill(false)
@@ -217,12 +220,14 @@ function visvalingamWhyatt(points, areaThreshold) {
     area[i] = computeArea(i)
     heap.push(i, area[i])
   }
+  let remaining = n
   while (heap.size > 0) {
     const top = heap.pop()
     const i = top.index
     if (removed[i] || top.area !== area[i]) continue // stale heap entry
-    if (top.area >= areaThreshold) break
+    if (shouldStop(top.area, remaining)) break
     removed[i] = true
+    remaining--
     const p = prev[i]
     const q = next[i]
     next[p] = q
@@ -246,13 +251,265 @@ function visvalingamWhyatt(points, areaThreshold) {
   return out
 }
 
+function visvalingamWhyatt(points, areaThreshold) {
+  if (areaThreshold <= 0) return points.slice()
+  return visvalingamWhyattCore(points, (smallestArea) => smallestArea >= areaThreshold)
+}
+
+/** Same removal order as `visvalingamWhyatt`, but stops once `maxPoints` remain rather than
+ * once the smallest area clears a threshold -- used only by `simplifyArcsPixelSpace` for an arc
+ * whose own projected footprint is already too small to show meaningful additional detail. An
+ * area threshold big enough to visibly declutter a ~10px island is also big enough to remove
+ * every one of its interior points on a smaller/thinner one, collapsing the whole island (later
+ * dropped for having under 4 points -- task report: this is exactly how West Falkland briefly
+ * vanished while tuning the threshold). A point-count budget instead always leaves a small,
+ * simple, visible shape -- never nothing. */
+function visvalingamWhyattToCount(points, maxPoints) {
+  const floor = Math.max(2, maxPoints)
+  if (points.length <= floor) return points.slice()
+  return visvalingamWhyattCore(points, (_smallestArea, remaining) => remaining <= floor)
+}
+
+function ccw(a, b, c) {
+  return (c[1] - a[1]) * (b[0] - a[0]) - (b[1] - a[1]) * (c[0] - a[0])
+}
+
+/** True when open segments a->b and c->d cross (a proper crossing, not merely touching at
+ * a shared endpoint — the only kind two non-adjacent segments of one simplified arc should
+ * ever produce, given real coastline data). */
+function segmentsIntersect(a, b, c, d) {
+  const d1 = ccw(c, d, a)
+  const d2 = ccw(c, d, b)
+  const d3 = ccw(a, b, c)
+  const d4 = ccw(a, b, d)
+  return ((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))
+}
+
+/**
+ * Visvalingam-Whyatt removes points purely by triangle-area significance: it has no
+ * built-in guarantee that the resulting polyline never crosses itself. On a coastline
+ * that already wiggles back close to itself (a fjord, a tight headland), an aggressive
+ * threshold can leave a short "loop" — two non-adjacent edges of the SAME simplified arc
+ * that cross — which renders as a small self-intersecting notch (caught here by an
+ * independent segment-intersection check across every generated ring; see
+ * scripts/_verify_world.mjs-style checks in paths.generated.contract.test.ts).
+ *
+ * Repaired at the ARC level (an open polyline, before any ring is assembled) so every
+ * ring built from this arc — forward or reversed, by either neighbouring country — gets
+ * the identical fix: when edges i->i+1 and j->j+1 cross, the points strictly between them
+ * (i+1..j) form the small loop; dropping them and connecting i directly to j+1 is the
+ * minimal-change repair. Repeats until no crossing remains — each repair strictly shrinks
+ * the arc, so this always terminates, and it never touches the arc's first/last point
+ * (the shared topology junctions every neighbouring ring anchors to).
+ */
+function removeArcSelfIntersections(points) {
+  let pts = points
+  // Bounded by construction (each pass removes at least one point), but capped defensively.
+  for (let guard = pts.length; guard >= 0; guard--) {
+    const n = pts.length
+    let crossing = null
+    for (let i = 0; i < n - 1 && !crossing; i++) {
+      for (let j = i + 2; j < n - 1; j++) {
+        if (segmentsIntersect(pts[i], pts[i + 1], pts[j], pts[j + 1])) {
+          crossing = [i, j]
+          break
+        }
+      }
+    }
+    if (!crossing) break
+    const [i, j] = crossing
+    pts = pts.slice(0, i + 1).concat(pts.slice(j + 1))
+  }
+  return pts
+}
+
+/** Visit the arc-index array of every ring in every geometry (Polygon and MultiPolygon
+ * only — Point/LineString geometries have no closed ring to check). */
+function walkRingArcIndices(topology, visit) {
+  function walkGeometry(g) {
+    if (g.type === 'GeometryCollection') return g.geometries.forEach(walkGeometry)
+    if (g.type === 'Polygon') return g.arcs.forEach(visit)
+    if (g.type === 'MultiPolygon') return g.arcs.forEach((polygon) => polygon.forEach(visit))
+  }
+  topology.objects.countries.geometries.forEach(walkGeometry)
+}
+
+/** Decode one ring's arc-index list against `topology.arcs`, returning both its points
+ * (each optionally run through `project` — identity for a lon/lat-space check, or a
+ * variant's own Mercator projection for a pixel-space check) AND, for each point, which
+ * arc (and which index within that arc's OWN array — already oriented, so this is a
+ * direct splice target) it came from. Mirrors topojson-feature.mjs's arc-stitching (pop
+ * the shared point before appending the next arc, reverse a negatively-indexed arc) but
+ * keeps the provenance a plain per-arc repair cannot: which shared arc to trim from when
+ * a crossing straddles the JOIN between two different arcs. */
+function ringPointsWithProvenance(topology, arcIndices, project) {
+  const points = []
+  const provenance = []
+  for (const ai of arcIndices) {
+    const arcIndex = ai < 0 ? ~ai : ai
+    const arcPts = topology.arcs[arcIndex]
+    if (points.length) {
+      points.pop()
+      provenance.pop()
+    }
+    if (ai < 0) {
+      for (let k = arcPts.length - 1; k >= 0; k--) {
+        points.push(project(arcPts[k]))
+        provenance.push({ arcIndex, localIndex: k })
+      }
+    } else {
+      for (let k = 0; k < arcPts.length; k++) {
+        points.push(project(arcPts[k]))
+        provenance.push({ arcIndex, localIndex: k })
+      }
+    }
+  }
+  return { points, provenance }
+}
+
+/** Same crossing test as `removeArcSelfIntersections`, but over a CLOSED ring (edges wrap
+ * from the last point back to the first) since this runs on assembled rings, not open
+ * arcs. Returns the first crossing pair found, or null. */
+function findClosedRingCrossing(points) {
+  const n = points.length
+  if (n < 4) return null
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 2; j < n; j++) {
+      if (i === 0 && j === n - 1) continue // the wraparound edge is adjacent to edge 0, not a crossing candidate
+      if (segmentsIntersect(points[i], points[(i + 1) % n], points[j], points[(j + 1) % n])) return [i, j]
+    }
+  }
+  return null
+}
+
+const identityProject = (p) => p
+
+/**
+ * Final, whole-topology safety net for the two kinds of self-intersection a per-arc repair
+ * cannot see, both of which show up as a ring folding back on itself right at the JOIN
+ * between two arcs that are each individually clean on their own:
+ *  - a lon/lat-space fold (their simplified tail and head directions cross one another
+ *    once stitched together) — caught by calling this with the identity projection;
+ *  - a PROJECTION-induced fold: Mercator's y-coordinate is a nonlinear function of
+ *    latitude (`log(tan(...))`), so two lon/lat edges that do not cross can still project
+ *    to pixel-space chords that do, once each edge is drawn as a straight line between its
+ *    two projected endpoints — caught by calling this once per viewport with that
+ *    viewport's own projection (its scale/threshold differ, so this must run separately
+ *    for topology1152 and topology520 — see buildWorldData).
+ *
+ * Repairing this on a ring's own decoded copy would reintroduce exactly the bug this whole
+ * file exists to fix (a neighbouring ring sharing one of those two arcs, paired with some
+ * OTHER arc on its far side, would keep the untouched points — the shared border drifts
+ * apart again). So every offending point found here is traced back to the shared ARC that
+ * owns it (`ringPointsWithProvenance`) and spliced out of `topology.arcs` directly, never
+ * touching an arc's first/last point (the topology junction every ring anchors to) — the
+ * fix reaches every ring that uses that arc, in whichever direction. Iterates a full pass
+ * over every ring to a fixed point; each round removes at least one point somewhere in the
+ * topology, so this always terminates.
+ */
+function repairCrossArcJunctions(topology, project = identityProject) {
+  for (let round = 0; round < 50; round++) {
+    let changedAny = false
+    walkRingArcIndices(topology, (arcIndices) => {
+      const { points, provenance } = ringPointsWithProvenance(topology, arcIndices, project)
+      const crossing = findClosedRingCrossing(points)
+      if (!crossing) return
+      const [i, j] = crossing
+      const byArc = new Map()
+      for (let k = i + 1; k <= j; k++) {
+        const { arcIndex, localIndex } = provenance[k]
+        if (!byArc.has(arcIndex)) byArc.set(arcIndex, new Set())
+        byArc.get(arcIndex).add(localIndex)
+      }
+      for (const [arcIndex, localIndices] of byArc) {
+        const arcPts = topology.arcs[arcIndex]
+        const sorted = [...localIndices].sort((a, b) => b - a)
+        for (const localIndex of sorted) {
+          if (localIndex <= 0 || localIndex >= arcPts.length - 1) continue // never touch a shared junction endpoint
+          arcPts.splice(localIndex, 1)
+          changedAny = true
+        }
+      }
+    })
+    if (!changedAny) return
+  }
+  throw new Error('build-world: repairCrossArcJunctions did not converge after 50 rounds')
+}
+
 /** Simplify every arc in the topology once (in absolute lon/lat) and return a new,
  * transform-free topology whose arcs are the simplified absolute coordinates — ready for
- * feature() to decode with no further per-ring processing. */
+ * feature() to decode with no further per-ring processing. Only the lon/lat-space cross-
+ * arc-junction pass runs here; the projection-space pass needs this variant's own Mercator
+ * projection and runs afterward in buildWorldData, once that projection is built. */
 function simplifyTopology(topology, areaThreshold) {
   const absoluteArcs = decodeAbsoluteArcs(topology)
-  const simplifiedArcs = absoluteArcs.map((arc) => visvalingamWhyatt(arc, areaThreshold))
-  return { ...topology, transform: undefined, arcs: simplifiedArcs }
+  const simplifiedArcs = absoluteArcs.map((arc) => removeArcSelfIntersections(visvalingamWhyatt(arc, areaThreshold)))
+  const simplified = { ...topology, transform: undefined, arcs: simplifiedArcs }
+  repairCrossArcJunctions(simplified)
+  return simplified
+}
+
+/**
+ * Second simplification pass, arc-by-arc again but this time in the variant's own PROJECTED
+ * pixel space, and only for an arc whose own projected footprint is already smaller than
+ * `smallArcMaxSidePx` -- fixes the exact defect task report findings 1/2/3/9 flagged (Tierra
+ * del Fuego's neighbouring skerries, the Falklands, the Alaska Peninsula/Kodiak cluster all
+ * rendering as a "self-intersecting bowtie"). Proven NOT a literal self-intersection: a
+ * from-scratch segment-crossing sweep across every ring and every pair of rings in the
+ * committed geometry at those exact locations found zero true crossings, self- or cross-ring --
+ * the rings are simple polygons (confirmed further by rendering the flagged islands fill-only,
+ * with no stroke at all: clean, simple shapes every time). What is real: `simplifyTopology`
+ * above simplifies every arc by REAL-WORLD (lon/lat) significance, which rates a wiggle by the
+ * actual square-degrees it covers -- identical treatment for a huge country and a tiny island.
+ * A wiggle that is rounding-error-sized on a whole continent is exactly as "significant" in
+ * lon/lat terms as the same real-world wiggle on an island a thousandth that size, so once both
+ * are projected to the same map, the small island has kept proportionally far more of its own
+ * detail. At the handful of screen pixels a small island actually occupies, that surviving
+ * detail is indistinguishable from noise: several points a fraction of a pixel apart, in a
+ * shape whose 0.5px hairline stroke visually reads as a crossing bowtie even though the fill is
+ * a perfectly simple polygon.
+ *
+ * The fix is deliberately scoped to only the arcs that need it: an arc whose own projected
+ * bounding box is already under `smallArcMaxSidePx` on both sides gets reduced to at most
+ * `smallArcMaxPoints` points (visvalingamWhyattToCount -- a point-count budget, not an area
+ * threshold, so a small island shrinks down to a clean small shape rather than the fixed-area
+ * threshold this replaced, which was able to remove every interior point of a small enough
+ * ring and make the whole island disappear later for having under 4 points). Every other arc --
+ * every real country coastline and shared border, however small -- is returned completely
+ * untouched, so this pass can only ever affect an already-too-small-to-read island and can
+ * never add simplification pressure (and the winding-flip risk that comes with it) to a
+ * country that did not have this problem. Same arc-level, endpoints-fixed approach as
+ * `simplifyTopology`, so a shared border still cannot drift: every ring built from an arc, on
+ * either side, gets the identical simplified pixel shape once reprojected back to lon/lat.
+ * `project`/`unproject` are this variant's own Mercator forward/inverse (mercator.ts).
+ *
+ * Belt-and-suspenders: `removeArcSelfIntersections` can itself remove a point or two more if
+ * the point-count-capped shape happens to self-cross (rare, but a real risk at 4-5 points), so
+ * the result is used only when it still has at least 4 points left -- the minimum
+ * `buildValidatedPath` needs to draw any visible shape at all. Below that, this whole arc is
+ * left exactly as the first, lon/lat-space pass produced it: a real, if slightly busier, island
+ * is always the safe fallback over a deleted one (this is precisely how the Falkland Islands
+ * briefly vanished outright while tuning `smallArcMaxPoints` down to 4 without this guard).
+ */
+function simplifyArcsPixelSpace(topology, project, unproject, smallArcMaxSidePx, smallArcMaxPoints) {
+  topology.arcs = topology.arcs.map((arc) => {
+    if (arc.length <= smallArcMaxPoints) return arc
+    const projected = arc.map((p) => project(p))
+    let minX = Infinity
+    let maxX = -Infinity
+    let minY = Infinity
+    let maxY = -Infinity
+    for (const [x, y] of projected) {
+      if (x < minX) minX = x
+      if (x > maxX) maxX = x
+      if (y < minY) minY = y
+      if (y > maxY) maxY = y
+    }
+    if (maxX - minX >= smallArcMaxSidePx || maxY - minY >= smallArcMaxSidePx) return arc
+    const simplifiedPx = removeArcSelfIntersections(visvalingamWhyattToCount(projected, smallArcMaxPoints))
+    if (simplifiedPx.length < 4) return arc
+    return simplifiedPx.map((p) => unproject(p))
+  })
 }
 
 // ---------------------------------------------------------------------------------------
@@ -316,6 +573,43 @@ function isBandBox(points) {
  *    jump bug this validation exists to catch, so it fails the build loudly instead of
  *    silently shipping a wedge artifact.
  */
+/**
+ * Rounding itself can — rarely — turn a clean ring into a self-crossing one: three points
+ * A, B, C are "clean" pre-rounding whenever C sits off the line AB by more than a hair,
+ * but if C happens to sit only a HAIR off that line (a near-collinear coastline point),
+ * truncating every coordinate to `precision` decimal places can flip the sign of that
+ * tiny offset — a change invisible at the rendered scale (it is smaller than the rounding
+ * unit itself) but technically a crossing if shipped as-is. Caught and repaired here, on
+ * the already-rounded text, by collapsing the resulting tiny loop exactly like
+ * `removeArcSelfIntersections` does for an open arc — safe to do on one ring's own output
+ * text (not the shared topology) because the loop is, by construction, smaller than the
+ * rounding step that created it, far too small to visibly separate from a neighbour's
+ * border. */
+function repairRoundedSubpath(subpath, precision) {
+  if (!/[Zz]\s*$/.test(subpath)) return subpath // only closed rings can self-cross
+  let points = pointsFromSubpath(subpath)
+  if (points.length < 4) return subpath
+  for (let guard = points.length; guard >= 0; guard--) {
+    const crossing = findClosedRingCrossing(points)
+    if (!crossing) break
+    const [i, j] = crossing
+    points = points.slice(0, i + 1).concat(points.slice(j + 1))
+  }
+  if (points.length < 4) return '' // the whole ring collapsed to nothing worth drawing
+  const fmt = (n) => n.toFixed(precision)
+  return `M${fmt(points[0][0])},${fmt(points[0][1])}${points
+    .slice(1)
+    .map((p) => `L${fmt(p[0])},${fmt(p[1])}`)
+    .join('')}Z`
+}
+
+/** Run every subpath of an already-rounded `d` string through `repairRoundedSubpath`. */
+function repairRoundedPath(d, precision) {
+  return splitSubpaths(d)
+    .map((sp) => repairRoundedSubpath(sp, precision))
+    .join('')
+}
+
 function buildValidatedPath(raw, label) {
   let d = ''
   let points = 0
@@ -372,12 +666,13 @@ const AREA_SANITY_MAX = 1
 const AREA_RATIO_MAX = 20
 const AREA_RATIO_FLOOR = 0.001
 
-async function buildVariant({ features, rawFeatures, pathGenerator, precision, numericToAlpha2, variantLabel }) {
+async function buildVariant({ features, rawFeatures, pass1Features, pathGenerator, precision, numericToAlpha2, variantLabel }) {
   const entries = []
   const centroids = {}
   const pointCounts = []
   let droppedRings = 0
   const fellBackToRaw = []
+  const fellBackToPass1 = []
   for (let i = 0; i < features.length; i++) {
     const f = features[i]
     const id = f.id == null ? 'x' : String(f.id).padStart(3, '0')
@@ -393,13 +688,32 @@ async function buildVariant({ features, rawFeatures, pathGenerator, precision, n
       fellBackToRaw.push(alpha2 || id)
     }
     const raw = pathGenerator(feature) ?? ''
-    if (!raw) continue
     const label = `${variantLabel} ${alpha2 || id} (feature id ${id})`
-    const { d, points, dropped } = buildValidatedPath(raw, label)
+    let { d, points, dropped } = raw ? buildValidatedPath(raw, label) : { d: '', points: 0, dropped: 0 }
     droppedRings += dropped
+    if (!d && pass1Features && pass1Features[i]) {
+      // simplifyArcsPixelSpace's small-arc pass emptied every ring of this feature (its point-
+      // count-capped shape, or removeArcSelfIntersections' own cleanup of it, collapsed below
+      // the 4-point floor buildValidatedPath needs) -- fall back to the pass-1-only geometry
+      // (lon/lat simplified, no small-arc pixel pass) for just this one feature rather than
+      // silently deleting a real country/territory from the map (task report: this is exactly
+      // how El Salvador briefly vanished outright while tuning smallArcMaxPoints).
+      feature = pass1Features[i]
+      const fallbackRaw = pathGenerator(feature) ?? ''
+      if (fallbackRaw) {
+        const fallback = buildValidatedPath(fallbackRaw, `${label} (pass-1 fallback)`)
+        if (fallback.d) {
+          d = fallback.d
+          points = fallback.points
+          fellBackToPass1.push(alpha2 || id)
+        }
+      }
+    }
     if (!d) continue
     pointCounts.push({ alpha2: alpha2 || id, points })
-    entries.push({ id, alpha2, name: resolveCountryName(alpha2, id), d: roundPath(d, precision) })
+    const roundedD = repairRoundedPath(roundPath(d, precision), precision)
+    if (!roundedD) continue
+    entries.push({ id, alpha2, name: resolveCountryName(alpha2, id), d: roundedD })
     if (alpha2 && !centroids[alpha2]) {
       // world-atlas reuses one numeric id for a country and a tiny dependent territory
       // (036 = Australia and Ashmore and Cartier Islands); keep the first (larger) landmass.
@@ -409,7 +723,7 @@ async function buildVariant({ features, rawFeatures, pathGenerator, precision, n
       }
     }
   }
-  return { entries, centroids, pointCounts, droppedRings, fellBackToRaw }
+  return { entries, centroids, pointCounts, droppedRings, fellBackToRaw, fellBackToPass1 }
 }
 
 /** The standard 10-degree graticule (d3-geo's own geoGraticule10()) projected and rounded the
@@ -438,6 +752,36 @@ export async function buildWorldData() {
 
   const topology1152 = simplifyTopology(topology, AREA_THRESHOLD_1152)
   const topology520 = simplifyTopology(topology, AREA_THRESHOLD_520)
+
+  const mercator1152 = MERCATOR_VARIANTS['1152']
+  const mercator520 = MERCATOR_VARIANTS['520']
+  const projection1152 = geoMercator().center(mercator1152.center).translate(mercator1152.translate).scale(mercator1152.scale)
+  const projection520 = geoMercator().center(mercator520.center).translate(mercator520.translate).scale(mercator520.scale)
+
+  // Snapshot pass-1-only features BEFORE simplifyArcsPixelSpace mutates topology*.arcs below --
+  // the fallback source buildVariant reaches for when the small-arc pixel pass empties a
+  // feature's every ring outright (see that pass's own "belt and suspenders" doc comment).
+  const pass1Features1152 = feature(topology1152, topology1152.objects.countries).features
+  const pass1Features520 = feature(topology520, topology520.objects.countries).features
+
+  // Pixel-space simplification (see simplifyArcsPixelSpace's doc comment): only an arc whose
+  // own projected footprint is already under SMALL_ARC_MAX_SIDE_PX gets capped at
+  // SMALL_ARC_MAX_POINTS — every normal country coastline and shared border is untouched.
+  const SMALL_ARC_MAX_SIDE_PX = 24
+  const SMALL_ARC_MAX_POINTS = 5
+  simplifyArcsPixelSpace(topology1152, (p) => projection1152(p), (p) => projection1152.invert(p), SMALL_ARC_MAX_SIDE_PX, SMALL_ARC_MAX_POINTS)
+  simplifyArcsPixelSpace(topology520, (p) => projection520(p), (p) => projection520.invert(p), SMALL_ARC_MAX_SIDE_PX, SMALL_ARC_MAX_POINTS)
+
+  // A second cross-arc-junction pass, this time in each viewport's own PROJECTED (pixel)
+  // space: Mercator's nonlinear latitude term can turn a lon/lat-clean junction into a
+  // self-crossing one once drawn as straight pixel chords (see repairCrossArcJunctions'
+  // doc comment) — a projection artifact, not a shared-geography one, so it is legitimately
+  // checked and repaired separately per viewport, after the shared lon/lat pass above. Also
+  // catches anything simplifyArcsPixelSpace's own VW pass might have folded, for the same
+  // reason the first, lon/lat-space pass needs its own repair pass.
+  repairCrossArcJunctions(topology1152, (p) => projection1152(p))
+  repairCrossArcJunctions(topology520, (p) => projection520(p))
+
   const features1152 = feature(topology1152, topology1152.objects.countries).features
   const features520 = feature(topology520, topology520.objects.countries).features
 
@@ -448,14 +792,13 @@ export async function buildWorldData() {
   // below). Matched by array index, not id: see buildVariant's doc comment for why.
   const rawFeatures = feature(topology, topology.objects.countries).features
 
-  const mercator1152 = MERCATOR_VARIANTS['1152']
-  const mercator520 = MERCATOR_VARIANTS['520']
-  const geoPath1152 = geoPath(geoMercator().center(mercator1152.center).translate(mercator1152.translate).scale(mercator1152.scale))
-  const geoPath520 = geoPath(geoMercator().center(mercator520.center).translate(mercator520.translate).scale(mercator520.scale))
+  const geoPath1152 = geoPath(projection1152)
+  const geoPath520 = geoPath(projection520)
 
   const world1152 = await buildVariant({
     features: features1152,
     rawFeatures,
+    pass1Features: pass1Features1152,
     pathGenerator: geoPath1152,
     precision: PRECISION_1152,
     numericToAlpha2: NUMERIC_TO_ALPHA2,
@@ -464,6 +807,7 @@ export async function buildWorldData() {
   const world520 = await buildVariant({
     features: features520,
     rawFeatures,
+    pass1Features: pass1Features520,
     pathGenerator: geoPath520,
     precision: PRECISION_520,
     numericToAlpha2: NUMERIC_TO_ALPHA2,
@@ -547,6 +891,12 @@ async function main() {
     console.log(
       `Métis Operator: fell back to unsimplified geometry for a flipped-winding sliver — ` +
         `1152: [${world1152.fellBackToRaw.join(', ')}], 520: [${world520.fellBackToRaw.join(', ')}]`
+    )
+  }
+  if (world1152.fellBackToPass1.length || world520.fellBackToPass1.length) {
+    console.log(
+      `Métis Operator: fell back to pass-1-only geometry for a feature the small-arc pixel pass emptied -- ` +
+        `1152: [${world1152.fellBackToPass1.join(', ')}], 520: [${world520.fellBackToPass1.join(', ')}]`
     )
   }
 }

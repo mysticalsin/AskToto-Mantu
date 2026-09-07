@@ -120,7 +120,8 @@ describe('schema-alter.sql integrations columns (task B2, operator/src/connector
       'tools_json',
       'last_test_json',
       'last_test_at',
-      'notes'
+      'notes',
+      'disabled_tools_json'
     ]
     for (const col of columns) {
       expect(alters.some((s) => s.includes(`ADD COLUMN ${col} `) || s.trim().endsWith(`ADD COLUMN ${col}`))).toBe(true)

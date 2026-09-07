@@ -19,12 +19,12 @@
  * whole section's innerHTML was just replaced, so this always re-attaches from scratch.
  */
 import type { DashboardPayload } from '../../src/dashboard'
-import { esc, relativeTime } from '../../src/render'
+import { emptyState, esc, relativeTime } from '../../src/render'
 import { formatAvgDuration } from '../../src/realtime-geo'
 import type { GeoTableRow, LiveSeatTableRow } from '../../src/routes/live'
 import { renderConnectedSeatsTable, renderGeoTable } from '../../src/render/pages/realtime'
 import { attachMapInteraction, type MapInteractionHandle } from '../../src/world/map-dom'
-import { api } from '../api'
+import { api, hasBackend } from '../api'
 import { bindMotion } from '../motion-bind'
 import { pop } from '../motion'
 import { toast } from '../toasts'
@@ -112,9 +112,26 @@ function attachMap(section: HTMLElement): { handle: MapInteractionHandle; untrac
 
 let lastSeats: LiveSeatTableRow[] = []
 
+/** Both tables' honest state when this page is a standalone preview (see api.ts's `hasBackend`)
+ *  -- no Worker is behind either JSON route here, so the fetch this function's caller would
+ *  otherwise make can never succeed. Skipping it outright, in favour of this named state,
+ *  replaces what a real network failure would show (a "could not load" toast on top of a
+ *  skeleton stuck loading forever, since nothing ever replaces it -- task report findings 6/7)
+ *  with an honest one: this route has no Worker to answer it here, not "something went wrong". */
+function offlinePreviewState(routeLabel: string): string {
+  return emptyState({
+    title: 'Offline preview.',
+    description: `No Worker is answering ${routeLabel} here -- this table fills in once the page runs against a deployed Worker.`
+  })
+}
+
 function hydrateGeoTable(section: HTMLElement): void {
   const host = section.querySelector<HTMLElement>('[data-geo-table-body]')
   if (!host) return
+  if (!hasBackend()) {
+    host.innerHTML = offlinePreviewState('realtime/geo.json')
+    return
+  }
   api('/v1/admin/realtime/geo.json')
     .then((res) => {
       if (!res || res.ok === false) throw new Error(res && res.error)
@@ -131,6 +148,10 @@ function hydrateGeoTable(section: HTMLElement): void {
 function hydrateSeatsTable(section: HTMLElement, now: number): void {
   const host = section.querySelector<HTMLElement>('[data-seats-table-body]')
   if (!host) return
+  if (!hasBackend()) {
+    host.innerHTML = offlinePreviewState('realtime/live-seats.json')
+    return
+  }
   api('/v1/admin/realtime/live-seats.json')
     .then((res) => {
       if (!res || res.ok === false) throw new Error(res && res.error)

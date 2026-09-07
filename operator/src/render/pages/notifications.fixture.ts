@@ -13,7 +13,8 @@
  * again with the result. This overlay exercises that same `extra` parameter for tests and
  * previews:
  *  - Connector notices are derived from `fixtureRows().integrations` (real rows, not invented):
- *    two of the five seeded connectors carry `status: 'failing'`.
+ *    two of the five seeded connectors carry a failing `last_test_json` (plan 6.10c; `deriveHealth()`
+ *    reads that, not `row.status`, which is always `'active'` like a real, never-revoked row).
  *  - The platform notice is a representative example, not derived from a fixture row: unlike
  *    every other DashboardPayload field, `/health.json`'s binding flags read live Worker `env`
  *    bindings, which operator/src/render/fixture.ts has no concept of (it only ever seeds D1
@@ -22,6 +23,8 @@
  *    derive from -- flagged here rather than silently treated as fixture-derived data.
  */
 import type { DashboardPayload } from '../../dashboard'
+import { readIntegrationExtra } from '../../connectors/data'
+import { deriveHealth } from '../../connectors/summary'
 import { fixtureDashboard, fixtureRows, FIXTURE_NOW } from '../fixture'
 import type { ConnectorNoticeInput, NotificationsExtra, PlatformNoticeInput } from './notifications'
 
@@ -31,8 +34,11 @@ export async function fixtureForNotifications(
   const data = await fixtureDashboard(now)
   const rows = fixtureRows(now)
 
+  // Health lives in each row's last_test_json/last_test_at extra columns (plan 6.10c), not
+  // row.status (always 'active' now, matching production) -- see connectors/summary.ts's
+  // deriveHealth().
   const connectors: ConnectorNoticeInput[] = rows.integrations
-    .filter((row) => row.status === 'failing')
+    .filter((row) => deriveHealth(readIntegrationExtra(row as unknown as Record<string, unknown>)) === 'failing')
     .map((row) => ({
       id: row.id,
       label: row.label,

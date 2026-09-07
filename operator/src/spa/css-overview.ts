@@ -98,7 +98,21 @@ export const OVERVIEW_CSS = `
    are shared in operator/src/spa/css.ts; this page only owns the stack layout around them. -- */
 .ov-connectors-card { display: flex; flex-direction: column; gap: 16px; }
 .ov-connectors-error[hidden] { display: none; }
-.ov-connectors-error { margin: 8px 0 0; font-size: 12px; }
+/* Shown once loadConnectorsCard() (overview.ts) clears the skeleton out of [data-ov-connectors-
+   root] on a real fetch failure -- its own card is gone at that point, so this needs its own
+   full card chrome (background/border/radius/shadow, matching .card in css.ts) rather than the
+   bare, unstyled text that used to sit directly on the page background with nothing around it
+   (task report finding 8). The left accent bar and dot echo .toast-error's own danger styling
+   elsewhere in this file, so an error reads the same way wherever it appears. */
+.ov-connectors-error {
+  display: flex; align-items: center; gap: 8px; margin: 0;
+  padding: 10px 12px; font-size: 12px; color: var(--ink);
+  background: var(--panel); border: 1px solid var(--hair); border-left: 3px solid var(--danger);
+  border-radius: var(--radius-card); box-shadow: var(--shadow), var(--card-highlight);
+}
+.ov-connectors-error::before {
+  content: ''; flex: none; width: 6px; height: 6px; border-radius: var(--radius-pill); background: var(--danger);
+}
 
 /* -- map card: corner choropleth, recoloured via data-iso classes (operator/src/render/pages/
    overview-charts.ts's recolorChoroplethMini), plus the sequential-scale legend. -- */

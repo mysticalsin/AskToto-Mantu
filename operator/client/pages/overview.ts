@@ -20,9 +20,10 @@
  * whatever is currently in the DOM.
  */
 import type { DashboardPayload } from '../../src/dashboard'
+import { emptyState } from '../../src/render'
 import type { ConnectorSummary } from '../../src/render/pages/connectors'
 import { renderConnectorsCardRows, type OverviewConnectorSummary } from '../../src/render/pages/overview'
-import { api } from '../api'
+import { api, hasBackend } from '../api'
 import { drawPath, flash, slideIn } from '../motion'
 import { bindMotion } from '../motion-bind'
 import { toast } from '../toasts'
@@ -267,6 +268,17 @@ export async function loadConnectorsCard(section: HTMLElement): Promise<void> {
   const errorEl = section.querySelector<HTMLElement>('[data-ov-connectors-error]')
   if (!root) return
   if (errorEl) errorEl.hidden = true
+  if (!hasBackend()) {
+    // No Worker is behind /v1/admin/integrations in a standalone preview (see api.ts's
+    // `hasBackend`) -- an honest "offline preview" card state instead of the raw "network
+    // failed" a doomed fetch would otherwise surface through errorEl (task report finding 8).
+    root.innerHTML = `<article class="card pad-b10 connector-group">${emptyState({
+      title: 'Offline preview.',
+      description: 'No Worker is answering /v1/admin/integrations here -- connectors load once this page runs against a deployed Worker.'
+    })}</article>`
+    root.setAttribute('data-ov-connectors-state', 'offline')
+    return
+  }
   const res = await api('/v1/admin/integrations')
   if (!res || res.ok === false || !Array.isArray(res.integrations)) {
     // The loading skeleton rendered by operator/src/render/pages/overview.ts's

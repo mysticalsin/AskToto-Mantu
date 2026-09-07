@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { readIntegrationExtra } from '../connectors/data'
+import { deriveHealth } from '../connectors/summary'
 import { FIXTURE_NOW, fixtureDashboard, fixtureRows } from './fixture'
 
 describe('QA fixture', () => {
@@ -75,7 +77,10 @@ describe('QA fixture', () => {
     expect(rows.issuedLicenses.filter((l) => l.revoked === 1)).toHaveLength(2)
     expect(rows.issuedLicenses.filter((l) => l.activated_device)).toHaveLength(5)
     expect(rows.integrations).toHaveLength(5)
-    expect(rows.integrations.filter((i) => i.status === 'failing')).toHaveLength(2)
+    // Health lives in each row's last_test_json/last_test_at extra columns (plan 6.10c), not
+    // row.status (always 'active', matching a real, never-revoked connection) -- see
+    // connectors/summary.ts's deriveHealth().
+    expect(rows.integrations.filter((i) => deriveHealth(readIntegrationExtra(i as unknown as Record<string, unknown>)) === 'failing')).toHaveLength(2)
     expect(rows.crmSends).toHaveLength(6)
     expect(new Set(rows.crmSends.map((c) => c.status)).size).toBe(6)
     expect(rows.proposals).toHaveLength(3)

@@ -1,7 +1,7 @@
 import type { DashboardPayload } from './dashboard'
 import { esc, shell, type RenderCtx } from './render'
 import { renderAudit } from './render/pages/audit'
-import { renderConnectors } from './render/pages/connectors'
+import { failingConnectorsCount, renderConnectors, type ConnectorSummary } from './render/pages/connectors'
 import { renderEvents } from './render/pages/events'
 import { renderGroups } from './render/pages/groups'
 import { renderKeys } from './render/pages/keys'
@@ -43,6 +43,7 @@ export function renderConsole(
   // its absence rather than guessing from a failed poll.
   const htmlLiveUrlAttr = opts.liveUrl ? ` data-live-url="${esc(opts.liveUrl)}"` : ''
   const pendingApprovals = data.licenses.rows.filter((r) => r.approval !== 'approved').length
+  const failingConnectors = failingConnectorsCount((data.connectors || []) as unknown as ConnectorSummary[])
 
   const bodyHtml = `
     <section class="page wrap" data-page="overview">${renderOverview(data, ctx)}</section>
@@ -64,7 +65,7 @@ export function renderConsole(
     title: 'Overview',
     live: data.kpis.live,
     email: data.email,
-    navCounts: { licenses: pendingApprovals, notifications: data.notices.length },
+    navCounts: { licenses: pendingApprovals, notifications: data.notices.length, connectors: failingConnectors },
     liveUrl: opts.liveUrl,
     bodyHtml
   })

@@ -137,6 +137,22 @@ export function currentPage(): string {
   return PAGES.indexOf(raw) >= 0 ? raw : 'overview'
 }
 
+/** Pages initialize lazily, on first becoming visible, instead of every `PAGE_INIT` running
+ * unconditionally at boot. Initializing every page up front ran hidden pages' own live-data
+ * fetches -- e.g. Realtime's `hydrateSeatsTable()` -- while the operator was looking at a
+ * different page entirely, and a resulting error toast rendered on top of whatever page *was*
+ * visible (its `data-page` section never became the toast's own). Reading the actual un-hidden
+ * `[data-page]` element (rather than re-deriving the id from `location.hash`) reuses router.ts's
+ * `route()` as the single source of truth, including its `#map` -> `realtime` aliasing. */
+var initedPages: Record<string, boolean> = {}
+function initVisiblePage(): void {
+  var visible = document.querySelector<HTMLElement>('[data-page]:not([hidden])')
+  var id = visible ? visible.getAttribute('data-page') : null
+  if (!visible || !id || initedPages[id]) return
+  initedPages[id] = true
+  PAGE_INIT[id]?.(visible, null)
+}
+
 ;(function metisOperatorSpa() {
   'use strict'
   ;(self as any).METIS_OPERATOR_SPA = {
@@ -152,6 +168,9 @@ export function currentPage(): string {
   if (esc('&') !== '&amp;') throw new Error('Métis Operator SPA: shared render path esc() mismatch')
 
   initRouter()
+  // Re-run the lazy page-init check on every route change (added after initRouter() so
+  // router.ts's own hashchange listener -- which flips `hidden` -- always runs first).
+  window.addEventListener('hashchange', initVisiblePage)
   initVolumeTabs()
   initVolumeSearch()
   initEventsFilters()
@@ -176,10 +195,9 @@ export function currentPage(): string {
   startLivePolling()
   bindMotion(document.body)
   // First paint is already server-rendered (no freshly fetched DashboardPayload yet, hence
-  // `null`); each page's own init still runs once on its already-rendered `[data-page]` section
-  // so it starts interactive rather than only working after a later rerender().
-  PAGES.forEach(function (id) {
-    var section = document.querySelector<HTMLElement>('[data-page="' + id + '"]')
-    if (section) PAGE_INIT[id]?.(section, null)
-  })
+  // `null`); the visible page's own init still runs once on its already-rendered `[data-page]`
+  // section so it starts interactive rather than only working after a later rerender(). Every
+  // other page's PAGE_INIT runs the first time the operator actually navigates there (see
+  // `initVisiblePage()` above), not preemptively while hidden.
+  initVisiblePage()
 })()

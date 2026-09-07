@@ -110,23 +110,55 @@ export function flash(el: HTMLElement): void {
   )
 }
 
+/** The opacity `el` is supposed to rest at once its entrance finishes -- almost always `1`, except
+ *  a catalog tile whose CSS class already dims it (`.catalog-tile-needs-oauth`'s 0.6,
+ *  `.catalog-tile-connected`'s 0.7, plan 6.10c). Motion One's `animate()` calls `commitStyles()` on
+ *  finish, writing whatever target value was named as an inline style permanently (motion-dom's
+ *  NativeAnimation -- by design, so a WAAPI animation's result survives the animation being torn
+ *  down); a hardcoded `1` there previously beat a dimmed tile's class rule forever after first
+ *  paint, since an inline style always wins over a class selector regardless of source order.
+ *  Animating TO the element's own resting value instead means the committed inline style and the
+ *  class agree, so the class keeps meaning what it says.
+ *
+ *  `el.getAnimations().forEach(a => a.cancel())` before reading is not optional: staggerIn() is
+ *  documented (operator/client/pages/connectors.ts's initConnectors()) and relied on to be
+ *  "harmless to repeat" -- main.ts's boot calls bindMotion(document.body) once across the whole
+ *  page, then every page's own init calls bindMotion(section) again, synchronously, as a defence-
+ *  in-depth re-bind. Without cancelling first, that second call's getComputedStyle() call landed
+ *  mid-flight inside the FIRST call's still-playing (or still-delayed) opacity:[0, ...] animation
+ *  and read back its transient 0, which the second animate() call then re-committed as the
+ *  element's permanent inline opacity: every data-stagger element on the page went permanently
+ *  invisible the moment a second bindMotion pass touched it. cancel() removes an animation's
+ *  effect without calling commitStyles() (unlike stop()), so it never leaves a stray inline value
+ *  behind; the CSS cascade is what getComputedStyle() reads afterward. */
+function restingOpacity(el: HTMLElement): number {
+  try {
+    for (const anim of el.getAnimations()) anim.cancel()
+  } catch {
+    /* getAnimations() unavailable in this runtime (very old browser, or a non-DOM test shim) --
+       read whatever computed style is already in effect rather than throw. */
+  }
+  const parsed = Number.parseFloat(getComputedStyle(el).opacity)
+  return Number.isFinite(parsed) ? parsed : 1
+}
+
 /**
  * Stagger-in: 40ms per row by default (plan 3.5), for rows that arrive from a live refresh or a
  * "load older" page. Some sections name a different cadence (plan 6.10b: connector rows stagger
  * in 30ms) -- pass `ms` for those, added after the fact so every existing call keeps its 40ms
- * default unchanged. Reduced motion: every row's opacity is set to 1 instantly, no delay, no
- * transform -- a batch still "arrives" but without motion.
+ * default unchanged. Reduced motion: every row's opacity is set instantly to its resting value, no
+ * delay, no transform -- a batch still "arrives" but without motion.
  */
 export function staggerIn(els: ArrayLike<HTMLElement>, ms = 40): void {
   const list = Array.from(els)
   if (reduceMotion()) {
-    for (const el of list) el.style.opacity = '1'
+    for (const el of list) el.style.opacity = String(restingOpacity(el))
     return
   }
   list.forEach((el, i) => {
     animate(
       el,
-      { opacity: [0, 1], transform: ['translateY(4px)', 'translateY(0)'] },
+      { opacity: [0, restingOpacity(el)], transform: ['translateY(4px)', 'translateY(0)'] },
       { duration: 0.3, delay: (i * ms) / 1000, ease: EASE_SPRING }
     )
   })
@@ -218,9 +250,26 @@ function ensureBeaconKeyframes(): void {
  * Beacon pulse: a 2.4s halo on live seats on the map and the rail's live dot (plan 3.5). The
  * only motion allowed to loop forever. Reduced motion: the beacon stays a plain, static dot --
  * still "live", just not animated.
- */
-export function beacon(el: HTMLElement): void {
+ *
+ * HTML elements (the rail's live dot, the LIVE strip badge) grow a `box-shadow` ring -- cheap,
+ * no layout, and `box-shadow`'s spread is already in the same real CSS-pixel space the element
+ * itself renders in. An SVG circle (a map pin's halo, a country pill's live dot) does NOT
+ * render in that space: it lives inside a `viewBox`-scaled `<svg>`, so its on-screen size
+ * shrinks with the map at a narrow viewport while `box-shadow`'s pixel spread does not shrink
+ * with it. A fixed 14px spread around a dot that is only ~1.5 real px wide once the 1152-unit
+ * map is squeezed into a 390px-wide screen is a ~30px halo around a barely-there dot -- visibly
+ * oversized relative to the pin it is meant to accent, at exactly the narrow widths this map
+ * has to render at on a phone. The fix is to grow the circle's own `r` (a geometry property in
+ * the same user-unit space as the map's viewBox, so it scales with the map at any width)
+ * instead of a `box-shadow`. */
+export function beacon(el: HTMLElement | SVGElement): void {
   if (reduceMotion()) return
+  if (el instanceof SVGElement) {
+    const baseR = Number(el.getAttribute('r')) || 0
+    const baseOpacity = Number(getComputedStyle(el).opacity) || 1
+    animate(el, { r: [baseR, baseR * 2], opacity: [baseOpacity, 0] }, { duration: 2.4, ease: EASE_COLOR, repeat: Infinity })
+    return
+  }
   ensureBeaconKeyframes()
   el.style.animation = 'metis-beacon-halo 2.4s cubic-bezier(0.32, 0.72, 0, 1) infinite'
 }

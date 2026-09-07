@@ -21,6 +21,7 @@ import {
   type LiveSnapshotLike,
   type PollState
 } from '../src/spa/live-client'
+import { hasBackend } from './api'
 
 const LIVE_URL = '/v1/admin/live.json'
 
@@ -29,18 +30,13 @@ let pollTimer: ReturnType<typeof setTimeout> | null = null
 let tickTimer: ReturnType<typeof setInterval> | null = null
 let inFlight = false
 
-/** Plan 3.7 item 4: `data-live-url` marks a real Worker response (operator/src/ui.ts stamps it
- *  from operator/src/routes/admin-core.ts's `liveUrl`); a standalone preview
- *  (operator/scripts/preview.mjs) never sets it, so there is truly nothing behind
- *  `/v1/admin/live.json` to reconnect to -- read once, the attribute never changes after paint,
- *  so every failed poll there reads "Offline preview" in grey rather than an amber
- *  "Reconnecting" that implies a real connection just dropped. */
+/** Plan 3.7 item 4: read once, the attribute never changes after paint, so every failed poll in
+ *  a standalone preview reads "Offline preview" in grey rather than an amber "Reconnecting"
+ *  that implies a real connection just dropped. See api.ts's `hasBackend` for the attribute
+ *  itself -- shared with every other page module that skips its own hydration fetch the same
+ *  way in a standalone preview. */
 function hasLiveEndpoint(): boolean {
-  try {
-    return document.documentElement.hasAttribute('data-live-url')
-  } catch {
-    return true
-  }
+  return hasBackend()
 }
 
 function documentVisible(): boolean {

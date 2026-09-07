@@ -17,8 +17,11 @@
  * (`github`, `custom-mcp`) is proxied to its upstream server (`adapters/proxy.ts`) with the stored
  * credential attached server-side; a REST-transport connection is served by its adapter's synthesized
  * tool set (`adapters/{hubspot,clickup,plane,notion,jira,linear,slack}.ts`), a write tool refused unless
- * the row has `allow_writes = 1`. Every `tools/call` (proxied or adapted) writes one `mcp_calls` row and
- * one audit row, `device`/`connection`/`tool`/`ms`/`outcome` only - arguments are never in either.
+ * the row has `allow_writes = 1`. A `tools/call` naming a tool an admin switched off on the Tools tab's
+ * per-tool enable switch (`disabled_tools_json`, plan 6.10c) is refused before either dispatch path runs,
+ * proxied MCP and REST-adapter alike - one check, in `handleMcpGateway` itself, not duplicated per
+ * transport. Every `tools/call` (proxied, adapted, or refused) writes one `mcp_calls` row and one audit
+ * row, `device`/`connection`/`tool`/`ms`/`outcome` only - arguments are never in either.
  */
 import { decryptVault } from '../crypto'
 import type { D1DatabaseLike } from '../d1'
@@ -27,7 +30,7 @@ import { seatAuthorizedForKeys } from '../fleet'
 import { resolveTierAndEntitlements } from '../tiers'
 import type { IntegrationRow, OperatorStore, SeatRow } from '../store'
 import { parseIntegrationScope, type IntegrationScope } from '../routes/integrations-seat'
-import { readIntegrationExtra, type IntegrationExtraColumns } from './data'
+import { parseDisabledTools, readIntegrationExtra, type IntegrationExtraColumns } from './data'
 import { getConnectorCatalogEntry } from './catalog'
 import { verifyGatewayToken } from './gateway-token'
 import { insertMcpCall } from './mcp-calls'
@@ -171,6 +174,10 @@ async function callRestAdapter(
   if (!adapter || !tool) {
     return { outcome: { content: [{ type: 'text', text: `Unknown tool ${toolName}.` }], isError: true }, label: 'error' }
   }
+  // Disabled-tool refusal (plan 6.10c per-tool switch) is checked once, before dispatch, in
+  // handleMcpGateway() below -- covering this REST-adapter path and the MCP proxy path alike, so
+  // there is exactly one place that reads `disabled_tools_json`, not a second copy of the same
+  // `.includes()` check here.
   if (tool.write && !extra.allow_writes) {
     return {
       outcome: {
@@ -317,6 +324,14 @@ export async function handleMcpGateway(
     const startedAt = Date.now()
     let outcome: { content: { type: 'text'; text: string }[]; isError: boolean }
     let label: string
+
+    if (parseDisabledTools(extra.disabled_tools_json).includes(toolName)) {
+      outcome = { content: [{ type: 'text', text: `${toolName} has been switched off for this connection by an admin.` }], isError: true }
+      label = 'refused'
+      const ms = Date.now() - startedAt
+      await recordCall(store, env, now, claims.device, connectionId, toolName, ms, label)
+      return respond(outcome)
+    }
 
     if (extra.transport === 'mcp') {
       const info = mcpConnectionInfo(row, extra)
