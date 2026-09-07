@@ -1,8 +1,10 @@
 # Enterprise Release Checklist - Métis
 
-**1.8.7 cut ready; signed publish blocked until GH secrets enrolled.**
+**1.8.8 cut ready; release secrets enrolled 2026-09-07 — tagging unblocked.**
 
-Do not tag `v1.8.7` and do not trigger `.github/workflows/release.yml` until the repo secrets below are present. Pack is signed EXE + DMG + native via that workflow only. OAuth stays last. This repo does not contain signing material and a merged version bump is not a published release.
+`GH_TOKEN`, `WIN_CSC_LINK`, `WIN_CSC_KEY_PASSWORD` and `WIN_CSC_EXPECTED_SUBJECT` are present on the repo, so `.github/workflows/release.yml` may run on a `v1.8.8` tag. The Apple Developer ID secrets are still absent, so the macOS DMG ships ADHOC / not Gatekeeper-notarized and the release is marked pre-release (Tony lock 2026-09-06). Windows stays Authenticode-signed. Pack is EXE + DMG + native via that workflow only. OAuth stays last. This repo does not contain signing material and a merged version bump is not a published release.
+
+`v1.8.7` is burned: a partial public release of that tag already exists on `mysticalsin/Metis-Releases` (missing the DMG, both zips and the portable EXE), and `scripts/check-version-parity.mjs` refuses to overwrite a published release. Ship 1.8.8.
 
 Use this before any customer build or public tag.
 
