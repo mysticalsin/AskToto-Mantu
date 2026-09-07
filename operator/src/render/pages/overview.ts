@@ -59,7 +59,7 @@ const DAY_MS = 24 * 60 * 60 * 1000
 // renders byte-identical rows either way, so nothing currently visible is hidden -- only the
 // panes that were already overflowing (Seats, Asks' Question types, Countries' Regions/Cities)
 // draw fewer rows.
-const TLC_ROW_CAP = 6
+const TLC_ROW_CAP = 5
 
 /**
  * How long the fleet may stay quiet before the Overview says so.
