@@ -89,6 +89,40 @@ export function validateSettingValue(key: SettingsKey, raw: unknown): OperatorSe
   }
 }
 
+/** Renders a value the way the inline error message quotes it: a string in quotes, anything else
+ *  (including `undefined`, which `JSON.stringify` would otherwise drop) via `String()`. */
+function describeRaw(raw: unknown): string {
+  if (typeof raw === 'string') return `"${raw}"`
+  if (raw === undefined) return 'undefined'
+  try {
+    return JSON.stringify(raw)
+  } catch {
+    return String(raw)
+  }
+}
+
+/** Inline-validation message (plan lock: "show inline validation with the invalid value and the
+ *  expected format"): names the field, the value actually received, and exactly what is expected -
+ *  the same shape `routes/groups.ts`'s tier-entitlements validation already uses. Only ever called
+ *  after `validateSettingValue` has returned `INVALID` for this key. */
+export function describeInvalidSetting(key: SettingsKey, raw: unknown): string {
+  const received = describeRaw(raw)
+  switch (key) {
+    case 'hourlyRate':
+      return `hourlyRate must be a number from 0 to 10000, or null to clear it; received ${received}`
+    case 'currency':
+      return `currency must be one of CAD, EUR, USD, GBP, CHF; received ${received}`
+    case 'dailyTokenBudgetPerSeat':
+      return `dailyTokenBudgetPerSeat must be a whole number from 0 to 50000000, or null to clear it; received ${received}`
+    case 'density':
+      return `density must be "comfortable" or "compact"; received ${received}`
+    case 'reducedMotion':
+      return `reducedMotion must be "system" or "reduce"; received ${received}`
+    default:
+      return `${key} is not a recognised settings key`
+  }
+}
+
 /** Reads every stored row and overlays it on the defaults. A row whose `value_json` fails to parse,
  *  or whose key is unknown, is skipped rather than failing the whole read - a hand-edited or
  *  partially-migrated D1 must never turn Settings into a 500. */
@@ -145,7 +179,7 @@ export async function writeOperatorSettingsPatch(
   const validated: Partial<OperatorSettingsValue> = {}
   for (const key of keysPresent) {
     const value = validateSettingValue(key, patch[key])
-    if (value === INVALID) return { ok: false, error: `invalid ${key}`, field: key }
+    if (value === INVALID) return { ok: false, error: describeInvalidSetting(key, patch[key]), field: key }
     ;(validated as Record<string, unknown>)[key] = value
   }
   for (const key of keysPresent) {

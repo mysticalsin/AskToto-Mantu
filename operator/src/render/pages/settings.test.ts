@@ -17,12 +17,12 @@ import type { QuestionsPayloadFull, SkillsPayloadFull } from '../../routes/insig
 const CTX = { now: 1_725_000_000_000, theme: 'light' as const }
 
 describe('renderSettings (QA fixture)', () => {
-  it('renders the header, all seven tabs and the sliding underline, no inline style=, no em dash', async () => {
+  it('renders the header, all nine tabs and the sliding underline, no inline style=, no em dash', async () => {
     const data = await fixtureDashboard()
     const html = renderSettings(data, CTX)
     expect(html).toContain('>Settings<')
     expect(html).toContain('Operator configuration.')
-    for (const label of ['Tiers', 'Value', 'Skills', 'Questions', 'Platform health', 'Session', 'Appearance']) {
+    for (const label of ['Tiers', 'Value', 'Skills', 'Questions', 'Platform health', 'Access', 'Data', 'Session', 'Appearance']) {
       expect(html).toContain(`>${label}<`)
     }
     expect(html).toContain('data-settings-underline')
@@ -35,10 +35,29 @@ describe('renderSettings (QA fixture)', () => {
     const html = renderSettings(data, CTX)
     expect(html).toContain('data-settings-panel="tiers"')
     expect(html).not.toMatch(/data-settings-panel="tiers"[^>]*hidden/)
-    for (const id of ['value', 'skills', 'questions', 'health', 'session', 'appearance']) {
+    for (const id of ['value', 'skills', 'questions', 'health', 'access', 'data', 'session', 'appearance']) {
       const re = new RegExp(`data-settings-panel="${id}"[^>]*hidden`)
       expect(html).toMatch(re)
     }
+  })
+
+  it('Access tab: names the real allowlisted emails, states there is no password form', async () => {
+    const data = await fixtureDashboard()
+    const html = renderSettings(data, CTX)
+    expect(html).toContain('tony.walteur@gmail.com')
+    expect(html).toContain('twalteur@amaris.com')
+    expect(html).toContain('no password form')
+  })
+
+  it('Data tab: real retention day counts, encrypted/never-stored facts, and an export link per exportable table', async () => {
+    const data = await fixtureDashboard()
+    const html = renderSettings(data, CTX)
+    expect(html).toContain('365 days') // audit
+    expect(html).toContain('90 days') // asks
+    expect(html).toContain('AES-256-GCM')
+    expect(html).toContain('IP address')
+    expect(html).toContain('/v1/admin/export.csv?table=audit')
+    expect(html).toContain('/v1/admin/export.xlsx?table=seats')
   })
 
   it('Tiers tab: two cards with the default entitlement checkboxes checked, seats loading', async () => {
@@ -126,6 +145,13 @@ describe('renderTierCard (client enrichment contract)', () => {
     const html = renderTierCard({ id: 'metis', label: 'Métis', entitlements: ['ask'], seats: 4 })
     expect(html).toContain('4 seats resolve to this tier')
     expect(html).not.toContain('Counting seats')
+  })
+
+  it('carries the baseline entitlements and seat count as data attributes for the consequence line', () => {
+    const html = renderTierCard({ id: 'metis', label: 'Métis', entitlements: ['ask', 'listen'], seats: 14 })
+    expect(html).toContain('data-baseline-entitlements="ask,listen"')
+    expect(html).toContain('data-tier-seats-count="14"')
+    expect(html).toContain('data-tier-consequence="metis"')
   })
 })
 

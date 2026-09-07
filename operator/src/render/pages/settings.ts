@@ -30,6 +30,9 @@ import {
 } from '../../../../src/shared/operator-entitlements'
 import { DEFAULT_TIME_SAVED_ASSUMPTIONS } from '../../../../src/shared/time-saved'
 import { QUESTION_TYPE_LABELS } from '../../../../src/shared/question-type'
+import { ADMIN_EMAILS, SESSION_REMINT_AFTER_MS } from '../../access'
+import { RETENTION_MS } from '../../retention'
+import { EXPORT_TABLES } from '../../export/tables'
 import {
   chip,
   dataTable,
@@ -65,7 +68,7 @@ const CHECK_ICON_PATH = '<path d="M20 6 9 17l-5-5"/>'
 // renders the strip markup plus the empty `<span>` the client positions.
 // ---------------------------------------------------------------------------------------------
 
-export const SETTINGS_TAB_IDS = ['tiers', 'value', 'skills', 'questions', 'health', 'session', 'appearance'] as const
+export const SETTINGS_TAB_IDS = ['tiers', 'value', 'skills', 'questions', 'health', 'access', 'data', 'session', 'appearance'] as const
 export type SettingsTabId = (typeof SETTINGS_TAB_IDS)[number]
 
 const SETTINGS_TAB_LABEL: Record<SettingsTabId, string> = {
@@ -74,6 +77,8 @@ const SETTINGS_TAB_LABEL: Record<SettingsTabId, string> = {
   skills: 'Skills',
   questions: 'Questions',
   health: 'Platform health',
+  access: 'Access',
+  data: 'Data',
   session: 'Session',
   appearance: 'Appearance'
 }
@@ -102,7 +107,10 @@ function panel(id: SettingsTabId, active: SettingsTabId, body: string): string {
 // /v1/admin/tiers` (already shipped, task B1) the moment the client can fetch it.
 // ---------------------------------------------------------------------------------------------
 
-const ENTITLEMENT_COPY: Record<OperatorEntitlementKey, { label: string; help: string }> = {
+/** Exported so operator/client/pages/settings.ts can restate the consequence of unchecking an
+ *  entitlement ("14 seats lose Listen on their next heartbeat") using the same label copy, never a
+ *  second, driftable label map. */
+export const ENTITLEMENT_COPY: Record<OperatorEntitlementKey, { label: string; help: string }> = {
   ask: { label: 'Ask', help: 'Ask Métis questions and get an answer.' },
   listen: { label: 'Listen', help: 'Passive meeting capture while Métis listens.' },
   recap: { label: 'Recap', help: 'Meeting recaps and the time-saved estimate.' },
@@ -147,10 +155,11 @@ export function renderTierCard(row: { id: string; label: string; entitlements: s
       <h3>${esc(row.label)}</h3>
       ${seatsLine}
     </div>
-    <form class="settings-tier-form" data-tier-form="${esc(row.id)}">
+    <form class="settings-tier-form" data-tier-form="${esc(row.id)}" data-baseline-entitlements="${esc(row.entitlements.join(','))}" data-tier-seats-count="${row.seats ?? ''}">
       <div class="settings-checkbox-list">${boxes}</div>
       ${saveButtonHtml('tier-save', row.id, 'Save')}
       <p class="settings-inline-msg muted" data-tier-msg="${esc(row.id)}"></p>
+      <p class="settings-inline-msg" data-tier-consequence="${esc(row.id)}" aria-live="polite"></p>
     </form>
   </article>`
 }
@@ -633,6 +642,92 @@ function renderHealthTab(data: DashboardPayload): string {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Access (plan lock 8b, plan 6.11 "Access": read-only truth about who can sign in, session
+// lifetime, and what a seat authenticates with; states plainly there is no password form).
+// `ADMIN_EMAILS` and `SESSION_REMINT_AFTER_MS` are the exact constants operator/src/access.ts
+// enforces the allowlist and re-mint cadence with (`../../access`, a file this page does not
+// own) - imported, not retyped, so this tab can never drift from the real allowlist. The 12-hour
+// absolute session lifetime is `access.ts`'s private `SESSION_ABSOLUTE_TTL_MS` (not exported);
+// stated here as a fact rather than duplicated as a second constant this page would then own.
+// ---------------------------------------------------------------------------------------------
+
+function msToHours(ms: number): number {
+  return Math.round(ms / (60 * 60 * 1000))
+}
+
+function renderAccessTab(): string {
+  return `<article class="card pad-b10 settings-card" data-stagger>
+    <p class="eyebrow">Who can sign in</p>
+    <p class="sub muted pad-b8">Cloudflare Access, email-code only. There is no password form anywhere in the Operator - a seat authenticates with HMAC over a shared ingest secret, never a login.</p>
+    <div class="settings-checkbox-list">
+      ${ADMIN_EMAILS.map((email) => `<div class="settings-stat"><span class="muted settings-stat-label">Allowlisted</span><span class="settings-access-email mono">${esc(email)}</span></div>`).join('')}
+    </div>
+  </article>
+  <article class="card pad-b10 settings-card" data-stagger>
+    <p class="eyebrow">Session lifetime</p>
+    <div class="settings-stats-grid">
+      ${statPairHtml('Re-minted after', `${msToHours(SESSION_REMINT_AFTER_MS)} hour of activity`, 'How often an active session gets a fresh cookie', 'operator/src/access.ts')}
+      ${statPairHtml('Absolute lifetime', '12 hours', 'Signs out even an active session after this long', 'operator/src/access.ts')}
+      ${statPairHtml('Seat authentication', 'HMAC, not a password', 'Every /v1/* request from a seat is signed with the shared ingest secret', 'operator/src/hmac.ts')}
+    </div>
+  </article>`
+}
+
+// ---------------------------------------------------------------------------------------------
+// Data (plan 6.11 "Data": retention windows per table from retention.ts, what is encrypted, what
+// is never stored, and the export links). `RETENTION_MS` (`../../retention`) and `EXPORT_TABLES`
+// (`../../export/tables`) are the real constants those two files enforce, imported rather than
+// restated so this tab can never quote a stale number.
+// ---------------------------------------------------------------------------------------------
+
+const RETENTION_TABLE_LABEL: Record<keyof typeof RETENTION_MS, string> = {
+  events: 'Events',
+  audit: 'Audit',
+  asks: 'Asks',
+  crm_sends: 'CRM sends',
+  rate_limits: 'Rate limit windows',
+  integration_grants: 'Connector credential grants',
+  mcp_calls: 'Connector tool calls'
+}
+
+function msToDays(ms: number): number {
+  return Math.round(ms / (24 * 60 * 60 * 1000))
+}
+
+function renderDataTab(): string {
+  const retentionRows = (Object.keys(RETENTION_MS) as (keyof typeof RETENTION_MS)[])
+    .map((key) => statPairHtml(RETENTION_TABLE_LABEL[key], `${msToDays(RETENTION_MS[key])} days`, 'How long this table is kept before the daily cron prunes it', 'operator/src/retention.ts'))
+    .join('')
+  return `<article class="card pad-b10 settings-card" data-stagger>
+    <p class="eyebrow">Retention</p>
+    <p class="sub muted pad-b8">operator_settings is never pruned - a hand-set preference has no age. Every other table below is pruned by the same daily cron.</p>
+    <div class="settings-stats-grid">${retentionRows}</div>
+  </article>
+  <article class="card pad-b10 settings-card" data-stagger>
+    <p class="eyebrow">Encrypted at rest</p>
+    <p class="sub muted pad-b8">Provider keys (Keys page) and connector credentials (Connectors page) are AES-256-GCM, decrypted only for the one request that spends them. Never stored decrypted, never returned in any JSON or HTML response.</p>
+  </article>
+  <article class="card pad-b10 settings-card" data-stagger>
+    <p class="eyebrow">Never stored</p>
+    <ul class="settings-never-list">
+      <li>The seat's IP address. Geo comes from Cloudflare's request.cf only.</li>
+      <li>Ask text in plaintext. Only AES-256-GCM ciphertext, decrypted for one audited Reveal at a time.</li>
+      <li>Connector tool call arguments. mcp_calls audits the tool name, latency and outcome only.</li>
+    </ul>
+  </article>
+  <article class="card pad-b10 settings-card" data-stagger>
+    <p class="eyebrow">Export</p>
+    <p class="sub muted pad-b8">Every export is itself an audited row: table, format, row count and the filter set.</p>
+    <div class="settings-export-grid">
+      ${EXPORT_TABLES.map(
+        (table) =>
+          `<div class="settings-export-row"><span class="mono">${esc(table)}</span><span class="row"><a class="tool" href="/v1/admin/export.csv?table=${esc(table)}">CSV</a><a class="tool" href="/v1/admin/export.xlsx?table=${esc(table)}">Excel</a></span></div>`
+      ).join('')}
+    </div>
+  </article>`
+}
+
+// ---------------------------------------------------------------------------------------------
 // Session (plan: email, signed in since, expires, Sign out).
 // ---------------------------------------------------------------------------------------------
 
@@ -692,6 +787,8 @@ export function renderSettings(data: DashboardPayload, ctx: RenderCtx): string {
       ${panel('skills', active, renderSkillsTab(data, ctx))}
       ${panel('questions', active, renderQuestionsTab(data))}
       ${panel('health', active, renderHealthTab(data))}
+      ${panel('access', active, renderAccessTab())}
+      ${panel('data', active, renderDataTab())}
       ${panel('session', active, renderSessionTab(data))}
       ${panel('appearance', active, renderAppearanceTab(ctx))}
     </div>`
