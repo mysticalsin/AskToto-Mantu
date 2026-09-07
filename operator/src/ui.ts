@@ -30,12 +30,18 @@ import { SPA_CSS_PATH, SPA_JS_PATH } from './spa/manifest'
  */
 export function renderConsole(
   data: DashboardPayload,
-  opts: { nonce?: string; theme?: 'light' | 'dark' | 'system' } = {}
+  opts: { nonce?: string; theme?: 'light' | 'dark' | 'system'; liveUrl?: string } = {}
 ): string {
   const theme = opts.theme ?? 'light'
   const ctx: RenderCtx = { now: data.now, theme }
   const nonceAttr = opts.nonce ? ` nonce="${esc(opts.nonce)}"` : ''
   const htmlThemeAttr = theme === 'system' ? '' : ` data-theme="${theme}"`
+  // Plan 3.7 item 4: `data-live-url` marks a real Worker response -- operator/src/routes/
+  // admin-core.ts is the only caller that supplies `liveUrl`, so a standalone preview
+  // (operator/scripts/preview.mjs never passes it) renders with no attribute at all, and
+  // operator/src/render/shell.ts + operator/client/live.ts key the rail's "Offline preview" off
+  // its absence rather than guessing from a failed poll.
+  const htmlLiveUrlAttr = opts.liveUrl ? ` data-live-url="${esc(opts.liveUrl)}"` : ''
   const pendingApprovals = data.licenses.rows.filter((r) => r.approval !== 'approved').length
 
   const bodyHtml = `
@@ -59,11 +65,12 @@ export function renderConsole(
     live: data.kpis.live,
     email: data.email,
     navCounts: { licenses: pendingApprovals, notifications: data.notices.length },
+    liveUrl: opts.liveUrl,
     bodyHtml
   })
 
   return `<!doctype html>
-<html lang="en"${htmlThemeAttr}><head>
+<html lang="en"${htmlThemeAttr}${htmlLiveUrlAttr}><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Métis Operator</title>
 <link rel="stylesheet" href="${SPA_CSS_PATH}"${nonceAttr}>

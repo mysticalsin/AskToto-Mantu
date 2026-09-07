@@ -89,8 +89,16 @@ function primaryAction(page: NavId): string {
 
 /** "Live, 7 online" seeds the rail's live indicator at first paint (no JS has run yet, so there
  * is no "updated Ns ago" to show); operator/client/live.ts overwrites `[data-live-text]` with a
- * ticking "updated Ns ago" once the first poll lands. */
-function seedLiveText(live: number): string {
+ * ticking "updated Ns ago" once the first poll lands.
+ *
+ * `liveUrl` is absent for a standalone preview (operator/scripts/preview.mjs never sets it) and
+ * present for a real Worker response (operator/src/ui.ts stamps `data-live-url` on `<html>` from
+ * it, operator/src/routes/admin-core.ts supplies the value): a preview has nothing behind
+ * `/v1/admin/live.json` to reconnect to, so it seeds straight to the honest "Offline preview"
+ * rather than a "Live, N online" that operator/client/live.ts would otherwise flip to an amber
+ * "Reconnecting" within one failed poll. */
+function seedLiveText(live: number, liveUrl?: string): string {
+  if (!liveUrl) return 'Offline preview'
   return live > 0 ? `Live, ${live} online` : 'No seats online right now'
 }
 
@@ -103,10 +111,14 @@ export function shell(
     email: string
     /** Per-nav-item badge count (e.g. licenses: pending approvals, notifications: open notices). */
     navCounts?: Partial<Record<NavId, number>>
+    /** The real live-poll endpoint, present only for a genuine Worker response (see
+     * seedLiveText's doc comment above). Absent -> the rail seeds and stays "Offline preview". */
+    liveUrl?: string
     bodyHtml: string
   }
 ): string {
   const navCounts = opts.navCounts ?? {}
+  const liveState = opts.liveUrl ? 'live' : 'offline'
   return `<div class="shell">
   <button type="button" class="rail-backdrop" id="rail-backdrop" data-open="0" aria-label="Close menu" tabindex="-1"></button>
   <aside class="rail hide-scrollbar" id="rail">
@@ -114,9 +126,9 @@ export function shell(
       <span class="rail-logo" aria-hidden="true">M</span>
       <div class="rail-pill" data-rail-pill>${iconSvg(NAV_ICON_PATHS['building-2'], { class: 'tool-ic' })}<span>Métis Operator</span></div>
     </div>
-    <div class="live-indicator" data-live-indicator data-state="live">
+    <div class="live-indicator" data-live-indicator data-state="${liveState}">
       <i class="live-dot" aria-hidden="true"></i>
-      <span data-live-text>${esc(seedLiveText(opts.live))}</span>
+      <span data-live-text>${esc(seedLiveText(opts.live, opts.liveUrl))}</span>
     </div>
     ${primaryAction(opts.page)}
     ${railNav(opts.page, navCounts)}
@@ -135,7 +147,7 @@ export function shell(
     <header class="mobile-bar">
       <button type="button" class="rail-toggle" id="rail-toggle" aria-label="Toggle menu" aria-expanded="false" aria-controls="rail">${iconSvg(NAV_ICON_PATHS.menu, { class: 'tool-ic' })}</button>
       <h2 id="page-title">${esc(opts.title)}</h2>
-      <i class="live-dot-mini" data-live-dot data-state="live" aria-hidden="true"></i>
+      <i class="live-dot-mini" data-live-dot data-state="${liveState}" aria-hidden="true"></i>
     </header>
     ${opts.bodyHtml}
   </div>

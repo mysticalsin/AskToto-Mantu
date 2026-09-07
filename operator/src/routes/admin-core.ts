@@ -217,7 +217,7 @@ export function registerAdminCoreRoutes(): void {
     handler: async (_request, ctx) => {
       const nonce = newCspNonce()
       const dash = await buildDashboard(ctx.store, ctx.email, ctx.now, keyFlags(ctx.env), await cloudflareForDashboard(ctx.store, ctx.env, ctx.opts, ctx.now), await valueSettings(ctx))
-      return html(renderConsole(dash), { nonce })
+      return html(renderConsole(dash, { liveUrl: '/v1/admin/live.json' }), { nonce })
     }
   })
   defineRoute<AdminCtx>({

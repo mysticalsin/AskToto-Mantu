@@ -29,13 +29,29 @@ let pollTimer: ReturnType<typeof setTimeout> | null = null
 let tickTimer: ReturnType<typeof setInterval> | null = null
 let inFlight = false
 
+/** Plan 3.7 item 4: `data-live-url` marks a real Worker response (operator/src/ui.ts stamps it
+ *  from operator/src/routes/admin-core.ts's `liveUrl`); a standalone preview
+ *  (operator/scripts/preview.mjs) never sets it, so there is truly nothing behind
+ *  `/v1/admin/live.json` to reconnect to -- read once, the attribute never changes after paint,
+ *  so every failed poll there reads "Offline preview" in grey rather than an amber
+ *  "Reconnecting" that implies a real connection just dropped. */
+function hasLiveEndpoint(): boolean {
+  try {
+    return document.documentElement.hasAttribute('data-live-url')
+  } catch {
+    return true
+  }
+}
+
 function documentVisible(): boolean {
   return document.visibilityState === 'visible'
 }
 
 function paintIndicator(): void {
-  var display = displayLiveState(poll.state, documentVisible())
-  var text = liveStatusText(display, poll.lastSuccessAt, Date.now(), relativeTime)
+  var display: 'live' | 'reconnecting' | 'paused' | 'offline' = hasLiveEndpoint()
+    ? displayLiveState(poll.state, documentVisible())
+    : 'offline'
+  var text = display === 'offline' ? 'Offline preview' : liveStatusText(display, poll.lastSuccessAt, Date.now(), relativeTime)
   document.querySelectorAll<HTMLElement>('[data-live-indicator]').forEach(function (el) {
     el.setAttribute('data-state', display)
     var span = el.querySelector<HTMLElement>('[data-live-text]')

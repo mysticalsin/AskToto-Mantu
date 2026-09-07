@@ -67,18 +67,29 @@ describe('admin keys write / rotate / revoke', () => {
     expect(home.status).toBe(200)
     expect(home.headers.get('content-type')).toMatch(/text\/html/)
     const html = await home.text()
-    expect(html).toContain('··xx99')
+    // Vault rows mask with •• (render/pages/keys.ts's vaultRowCells), not the old ·· dot pair.
+    expect(html).toContain('••xx99')
     expect(html).not.toContain(secret)
     expect(html).not.toContain('Seats keep their own keys')
-    expect(html).toContain('Add an API')
+    // The "Add an API..." card title is now "Add key" (render/pages/keys.ts's Add key card);
+    // the field itself still asks for the "API key" by that exact label.
+    expect(html).toContain('Add key')
+    expect(html).toContain('API key')
     expect(html).toContain('id="key-add"')
-    expect(html).toContain('id="cf-connect"')
-    expect(html).toContain('href="/cloudflare/connect"')
+    // Lock 12 ("inert beats fake"): with no CF_OAUTH_CLIENT_ID/SECRET bound, cfConnectControl
+    // (render/pages/keys.ts) now renders a real disabled <button>, not the old dead
+    // <a href="/cloudflare/connect"> that would 404 the handshake -- the href only appears once
+    // oauthBound flips true.
+    expect(html).toContain('id="cf-connect" disabled')
+    expect(html).not.toContain('href="/cloudflare/connect"')
     expect(html).toContain('data-cf-oauth-missing')
     expect(html).toContain('CF_OAUTH_CLIENT_ID')
     expect(body.oauthBound).toBe(false)
-    expect(html).toContain('<th>Rotate</th>')
-    expect(html).toContain('<th>Revoke</th>')
+    // Rotate and Revoke share one unlabelled "actions" column now (VAULT_COLUMNS's last entry
+    // is `{ key: 'actions', label: '' }`) instead of a column each -- both buttons still render,
+    // just under one header. Check the visible button text instead of a retired <th>.
+    expect(html).toContain('>Rotate<')
+    expect(html).toContain('>Revoke<')
     expect(html).toContain('data-rotate=')
     expect(html).toContain('data-revoke=')
     expect(html).not.toContain('name="accountId"')

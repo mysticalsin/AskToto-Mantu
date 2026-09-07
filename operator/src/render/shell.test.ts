@@ -99,12 +99,28 @@ describe('shell', () => {
     expect(html).not.toContain('data-rail-switcher')
   })
 
-  it('embeds bodyHtml verbatim and reflects the live count in the rail live indicator', () => {
-    const html = shell(ctx, { page: 'overview', title: 'Overview', live: 7, email: 'e', bodyHtml: '<section data-page="overview">hi</section>' })
+  it('embeds bodyHtml verbatim and reflects the live count in the rail live indicator when a real live endpoint is known', () => {
+    const html = shell(ctx, {
+      page: 'overview',
+      title: 'Overview',
+      live: 7,
+      email: 'e',
+      bodyHtml: '<section data-page="overview">hi</section>',
+      liveUrl: '/v1/admin/live.json'
+    })
     expect(html).toContain('<section data-page="overview">hi</section>')
     expect(html).toContain('data-live-indicator')
     expect(html).toContain('data-state="live"')
     expect(html).toContain('Live, 7 online')
+  })
+
+  it('seeds "Offline preview" (grey, not the amber Reconnecting) when no liveUrl is given -- a standalone preview with no Worker behind /v1/admin/live.json', () => {
+    const html = shell(ctx, { page: 'overview', title: 'Overview', live: 7, email: 'e', bodyHtml: '' })
+    expect(html).toContain('data-state="offline"')
+    expect(html).toContain('Offline preview')
+    expect(html).not.toContain('Live, 7 online')
+    expect(html).not.toContain('Reconnecting')
+    expect(html).toMatch(/data-live-dot data-state="offline"/)
   })
 
   it('renders the mobile top bar (menu button, page title, live dot)', () => {

@@ -38,17 +38,6 @@ export const REALTIME_CSS = `
   padding: 0 24px; color: var(--ink-2); font-size: 12.5px; pointer-events: none;
 }
 
-/* -- following tooltip (plan 3.7 item 2): fixed so client/motion.ts's follow() can translate it
-   straight to the pointer; never intercepts the pointer itself. -- */
-.rt-tooltip {
-  position: fixed; left: 0; top: 0; z-index: 60; pointer-events: none;
-  min-width: 160px; max-width: 240px; background: var(--surface); color: var(--ink);
-  border: 1px solid var(--border); border-radius: var(--radius-control); box-shadow: var(--shadow);
-  padding: 8px 10px; font-size: 12px;
-}
-.rt-tooltip-head { display: flex; align-items: center; gap: 6px; font-weight: 650; margin-bottom: 2px; }
-.rt-tooltip-rows { color: var(--ink-2); font-size: 11.5px; }
-
 /* -- strip: Seats 30m, Live, Live events (plan 6.3). -- */
 .rt-strip { display: grid; grid-template-columns: minmax(200px, 260px) minmax(180px, 220px) minmax(0, 1fr); gap: 16px; margin: 16px 0; }
 @media (max-width: 860px) { .rt-strip { grid-template-columns: 1fr; } }
@@ -66,6 +55,46 @@ export const REALTIME_CSS = `
 /* -- geo table search input, and the connected-seats first cell (avatar + name + email). -- */
 [data-realtime-geo] .table-search { margin-top: 8px; }
 [data-realtime-seats] table td:first-child { display: flex; align-items: center; gap: 8px; }
+
+/* -- Geo table row grid (plan 6.3, task report item 2): metric-table.ts's .mt-row is a plain
+   flow of children -- the label span plus one span per 'columns' entry -- onto css.ts's shared
+   .mt-row { grid-template-columns: 1fr auto auto auto; } (4 tracks). The Geo table's row has 4
+   metric columns (Events, Live sessions, Seats 30m, Duration) *plus* the label, 5 items on a
+   4-track grid, so the 5th (Duration) wrapped onto its own implicit row -- the "each city's name
+   sits in its own tall band, detached from Country/Count/Sessions/Avg" bug. Scoped to this page's
+   own Geo card rather than widening the shared 4-track template (events.ts's connector funnel
+   table uses that same 4-column shape and is not this task's file to touch). */
+[data-realtime-geo] .mt-row { grid-template-columns: minmax(0, 1fr) auto auto auto auto; }
+/* countryCell() (primitives.ts) replaces the old flag()+string label: flag, country name and the
+   city as a secondary line, both lines small enough to sit inside the shared 32px row without
+   spilling into the row below or after it. */
+[data-realtime-geo] .country-cell-name,
+[data-realtime-geo] .country-cell-secondary { line-height: 1.15; }
+[data-realtime-geo] .mt-label { min-width: 0; }
+/* -- Page height (plan 3.7b law 10, task report item 1): with a full fixture's worth of
+   countries and connected seats, both tables below the strip grew as tall as their row count,
+   the single biggest source of the ~5.5-viewport page. Capped the same way as the Live events
+   feed above -- an internal scroll, never a hard row limit that would hide a real country or
+   seat. -- */
+[data-realtime-geo] .mt-body { max-height: 176px; overflow-y: auto; }
+[data-realtime-seats] .table-wrap { max-height: 176px; overflow-y: auto; }
+
+/* -- Live events feed (plan 3.7 item 2/6.3, task report item 1/3): the feed has no built-in cap
+   on its own height -- operator/src/render/live.ts's #rt-stream id never matched css.ts's
+   .rt-stream class rule (a dead selector), so up to LIVE_FEED_ROW_CAP rows grew the card (and
+   the page) without a scrollbar. Recreated here, scoped by id, without touching the shared file
+   or the id/class mismatch itself. -- */
+[data-live-feed] #rt-stream { display: flex; flex-direction: column; gap: 2px; max-height: 300px; overflow-y: auto; }
+/* Each row stays one line (kind badge, name, flag + OS chip, ticking age): the chips wrapped
+   onto a second line under the name at anything less than full width, since .event-chips is
+   flex-wrap: wrap in css.ts. Truncate instead of wrapping: the name shrinks and ellipses first,
+   the chip pair and the age stay put. */
+[data-live-feed] .rt-row { flex-wrap: nowrap; }
+[data-live-feed] .event-name {
+  flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+[data-live-feed] .event-chips { flex: 0 0 auto; flex-wrap: nowrap; overflow: hidden; max-width: 45%; }
+[data-live-feed] .ago { flex: 0 0 auto; }
 
 /* -- Map SVG rules, from the map rebuild: these own everything inside the SVG and win
    over any page level rule above that targets the same element. -- */

@@ -62,10 +62,22 @@ function collectTs(dir: string): string[] {
   return out
 }
 
+// The console was a monolith when this sliced 'data-page="events"'..'data-page="profiles"';
+// P0.4 split it into per-page render modules (operator/src/render/pages/*.ts) and 'profiles'
+// was never one of the real page ids (see operator/src/nav.ts's NAV_IDS plus the standalone
+// 'map' placeholder section in operator/src/ui.ts) -- so `end` was always -1, the ternary's
+// `end > start` was always false, and this silently returned the WHOLE document instead of
+// throwing or narrowing. Slice by the real neighbouring page id ('licenses', the page that
+// now follows 'events' in ui.ts's renderConsole) and throw if either boundary goes missing
+// again, so a future rename fails loud here instead of quietly widening the scope of every
+// assertion built on top of this helper.
 function eventsHtml(html: string): string {
   const start = html.indexOf('data-page="events"')
-  const end = html.indexOf('data-page="profiles"')
-  return start >= 0 && end > start ? html.slice(start, end) : html
+  const end = html.indexOf('data-page="licenses"')
+  if (start < 0 || end < start) {
+    throw new Error('eventsHtml: could not find data-page="events"..data-page="licenses" boundaries in the console HTML')
+  }
+  return html.slice(start, end)
 }
 
 describe('quality bar: overlay chrome stays a separate slice', () => {
@@ -173,10 +185,25 @@ describe('quality bar: map data contract', () => {
       { store, now: NOW }
     )
     const emptyHtml = await emptyHome.text()
-    expect(emptyHtml).toContain('No heartbeats yet. The map stays empty until a seat checks in.')
-    expect(emptyHtml).toContain('not sample dots')
+    // That exact copy ("No heartbeats yet..." / "not sample dots") lived only in charts.ts's
+    // choropleth(), which P0.4's page-module split left behind as dead code: no render path
+    // calls it any more (confirmed -- its only remaining caller is map-bands.test.ts's own
+    // synthetic-fixture coverage of findBandSubpaths/stripMapBands). The live console states
+    // the same "the map is empty, and here is why" honestly from the two real places that
+    // replaced it: Overview's map card (render/pages/overview.ts renderMapCard, tied to the
+    // same data.map.empty field this test asserts on below) and Realtime's full map (world/
+    // map.ts renderRealtimeMapSvg, tied to zero live points). The behavioural half of the old
+    // assertion -- an empty map never paints a dot -- is unchanged and still checked next.
+    expect(emptyHtml).toContain('No seat has checked in yet. The map fills in as heartbeats arrive.')
+    expect(emptyHtml).toContain('No seat has checked in during the last 30 minutes.')
     expect(emptyHtml).not.toContain('class="dot"')
-    expect(emptyHtml).not.toMatch(/Unique Visitors|visitor traffic|\$6,525|\b1,344\b/)
+    // The world land SVG (now always inlined into the console's first paint, plan D1) carries
+    // thousands of real coordinate pairs -- "293.91,344.13" and friends -- that coincidentally
+    // contain the digits "1,344" the old Shoey fixture's fabricated visitor count used. Strip
+    // the vector markup before checking the copy for sample numbers (same technique as
+    // index.test.ts's sibling "packed console map and geo" test).
+    const emptyProse = emptyHtml.replace(/<svg[\s\S]*?<\/svg>/g, '')
+    expect(emptyProse).not.toMatch(/Unique Visitors|visitor traffic|\$6,525|\b1,344\b/)
     const emptyDash = (await (
       await handleRequest(
         new Request('https://operator.test/v1/admin/dashboard'),
@@ -292,10 +319,18 @@ describe('quality bar: keys last4 and Cloudflare fail-loud', () => {
       { store, now: NOW }
     ).then((r) => r.text())
     expect(html).not.toContain('Seats keep their own keys')
-    expect(html).toContain('No provider keys on Operator yet')
+    expect(html).toContain('No provider keys yet.')
     expect(html).toContain('Connect Cloudflare (login) on Keys.')
-    expect(html).toContain('data-install-works')
-    expect(html).toContain('Install → works')
+    // The Overview "Install -> works" ladder (check in / approve / add a key) is retired: plan
+    // section 6.7 block 0 ("Needs your review", 2026-09-06 -- "seats awaiting approval have
+    // their own section, in the license section ... it shouldn't be mixed with the
+    // notifications, it gets confusing") made Licenses the single place a seat is approved.
+    // `data-install-works` has no remaining caller anywhere in operator/src (grep confirms it
+    // now exists only in test files) -- verify its real successor instead: the review queue is
+    // always present on Licenses, empty-stated honestly (lock 3) rather than hidden away.
+    expect(html).toContain('data-review-block')
+    expect(html).toContain('Needs your review')
+    expect(html).toContain('Nothing waiting.')
     // Light is the primary theme (Shoey reference is light-only); dark is the derived second
     // theme, chosen only by cookie or client toggle, never the server default.
     expect(html).toContain('data-theme="light"')
