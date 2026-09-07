@@ -75,11 +75,13 @@ export const OVERVIEW_CSS = `
 .ov-token-swatch-4 { background: var(--data-4); }
 .ov-tokens-cost { margin-top: 6px; }
 
-/* -- unique seats area chart. QA page-height budget (plan 3.7b #10): 150px, kept equal to the
-   height: 150 option passed to areaChartWithPrevious() in operator/src/render/pages/overview.ts
+/* -- unique seats area chart. QA page-height budget (plan 3.7b #10): 110px, kept equal to the
+   height: 110 option passed to areaChartWithPrevious() in operator/src/render/pages/overview.ts
    -- the SVG's own preserveAspectRatio="none" stretches to whatever box this rule gives it, so
-   the two must move together or the chart's ticks and stroke width distort. -- */
-.ov-area-chart { display: block; width: 100%; height: 150px; margin-top: 8px; }
+   the two must move together or the chart's ticks and stroke width distort. Trimmed from 150 with
+   the map going full width: a seven point daily series needs no more, and the card was mostly the
+   area fill's flat top. -- */
+.ov-area-chart { display: block; width: 100%; height: 110px; margin-top: 8px; }
 .ov-area-tick { font: 400 10px var(--font-mono); fill: var(--ink3); }
 .ov-area-empty { margin-top: 8px; }
 .ov-area-legend { display: flex; gap: 16px; font: 400 11px var(--font-body); color: var(--ink2); margin-top: 4px; }
@@ -99,8 +101,17 @@ export const OVERVIEW_CSS = `
 /* -- the six cards: a plain two-column grid (every card is an equal half-width pair, plan 6.2's
    "col-span-3 pairs" out of a notional 6-column row -- with all six the same width a 2-column
    grid says the same thing without inventing an unused generic span-N utility system). -- */
-.ov-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+/* align-items: start so each card is its own natural height. Stretching every card to the tallest
+   in its row left the short ones (Modes over three rows, Kind over three, Connectors) with a block
+   of empty card below the last row, which read as content failing to load. */
+.ov-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
 @media (max-width: 768px) { .ov-grid { grid-template-columns: 1fr; } }
+
+/* The map is the seventh card in a two-column grid, so it was landing alone on the last row with
+   an empty half beside it: the page ended on a hole, and the one card that most deserves the width
+   was the one drawn smallest. Spanning both columns closes the gap and roughly doubles the map. */
+.ov-map-card { grid-column: 1 / -1; }
+@media (max-width: 768px) { .ov-map-card { grid-column: auto; } }
 
 /* -- connectors card: stacks the "Needs attention" / "Connected" group cards (plan 6.10b via
    operator/src/render/connectors-list.ts's connectorRow()) in the one col-span-3 slot next to

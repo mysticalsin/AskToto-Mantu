@@ -671,7 +671,17 @@ textarea { min-height: 120px; }
 .event-country, .event-os, .event-browser { color: var(--ink2); }
 .event-chips { display: flex; flex-wrap: wrap; gap: 4px; }
 .event-time { font-family: var(--font-body); font-size: 12px; color: var(--ink3); text-align: left; }
-.live { display: inline-block; padding: 1px 7px; border-radius: var(--radius-pill); background: var(--ink); color: var(--bg); font: 10px var(--mono); letter-spacing: 0.08em; }
+/* A beacon dot, not a text pill. Every .live in the codebase is an empty span used as a live
+   marker (metric-tiles.ts, live.ts, overview.ts) -- none has ever carried a label. Styled as a pill
+   with a dark background and no text to fill it, it rendered as a 14x2px black bar in the corner of
+   the Live seats tile, which read as a rendering fault. Matches .live-indicator's own dot, so the
+   two live markers on the page agree. */
+.live {
+  display: inline-block; width: 7px; height: 7px; border-radius: 999px; flex: none;
+  background: var(--live); box-shadow: 0 0 0 0 var(--live);
+  animation: metis-live-pulse 2.4s var(--ease-spring) infinite;
+}
+@media (prefers-reduced-motion: reduce) { .live { animation: none; } }
 .page[hidden] { display: none !important; }
 .event[hidden],
 .event.is-hidden,
