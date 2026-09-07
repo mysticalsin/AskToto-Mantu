@@ -10,6 +10,7 @@ import {
   isRealSeat,
   LICENSES_EMPTY,
   parseLicenseId,
+  seatLicenseLabel,
   type SeatApproval
 } from './fleet'
 import { looksLikeSecret, safeChips, type SafeChip } from './redact'
@@ -671,6 +672,10 @@ export async function buildDashboard(
   const seats = seatsRaw.filter(isRealSeat)
   const sessions = sessionsPage.rows
   const activeJti = new Set(issued.filter((l) => issuedLicenseActive(l, now)).map((l) => l.jti))
+  const licenseLabel = (s: SeatRow): string | null => {
+    const label = seatLicenseLabel(s, issued, now)
+    return label && !looksLikeSecret(label) ? label : null
+  }
   const keysOn = (s: SeatRow): boolean => {
     if ((s.approval || '').trim().toLowerCase() === 'revoked') return false
     if (isApprovedSeat(s)) return true
@@ -951,7 +956,7 @@ export async function buildDashboard(
         region: s.region ?? null,
         lastSeen: s.last_seen,
         live: now - s.last_seen < ONLINE_MS,
-        license: s.license && !looksLikeSecret(s.license) ? s.license : null,
+        license: licenseLabel(s),
         approval: approvalOf(s)
       })),
     licenses: (() => {
@@ -964,7 +969,7 @@ export async function buildDashboard(
           email: s.sso_email && !looksLikeSecret(s.sso_email) ? s.sso_email : null,
           os: s.os,
           appVersion: s.app_version,
-          license: s.license && !looksLikeSecret(s.license) ? s.license : null,
+          license: licenseLabel(s),
           approval: approvalOf(s),
           lastSeen: s.last_seen,
           keysAuthorized: keysOn(s)
@@ -991,7 +996,7 @@ export async function buildDashboard(
       cacheHit: sliceToday.hitRate == null ? null : `${Math.round(sliceToday.hitRate * 100)}%`,
       asksToday: todayAsks.length,
       licensed: seats.filter((s) => {
-        const lic = (s.license || '').toLowerCase()
+        const lic = (licenseLabel(s) || '').toLowerCase()
         return lic.includes('licensed') || lic === 'approved' || lic === 'trial' || lic === 'grace'
       }).length,
       approved: seats.filter((s) => isApprovedSeat(s)).length,

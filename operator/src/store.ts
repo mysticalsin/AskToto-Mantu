@@ -1,4 +1,5 @@
 import { type CrmSendRow } from './crm'
+import { mergeSeatLicenseLabel } from './fleet'
 import { applyPulse, isSessionStale, type PulseKind, type SessionRow as SessionState } from './sessions'
 
 export interface IssuedLicenseRow {
@@ -507,7 +508,7 @@ export function memoryStore(): OperatorStore {
         last_index_at: row.last_index_at ?? prev?.last_index_at ?? null,
         hostname: row.hostname ?? prev?.hostname ?? null,
         sso_email: row.sso_email ?? prev?.sso_email ?? null,
-        license: row.license ?? prev?.license ?? null,
+        license: mergeSeatLicenseLabel(row.license, prev?.license, row.license_jti ?? prev?.license_jti),
         license_jti: row.license_jti ?? prev?.license_jti ?? null,
         approval:
           prev?.approval ??

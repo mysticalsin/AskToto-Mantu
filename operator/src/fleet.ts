@@ -68,15 +68,65 @@ export function parseLicenseLast4(raw: unknown): string | null {
   return v.slice(-4)
 }
 
-/** Heartbeat may send status or last4. Never a raw key. Never self-approve. */
+function isUnlicensedLabel(raw: string | null | undefined): boolean {
+  const v = (raw || '').trim().toLowerCase()
+  return v === 'unlicensed' || v.startsWith('unlicensed ·') || v.startsWith('unlicensed·')
+}
+
+function last4FromLicenseLabel(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  const sep = raw.indexOf('·')
+  if (sep < 0) return null
+  return parseLicenseLast4(raw.slice(sep + 1))
+}
+
+function licensedLabel(last4: string | null): string {
+  return last4 ? `licensed · ${last4}` : 'licensed'
+}
+
+/**
+ * Heartbeat may send member-pass status, Operator last4, and Operator jti.
+ * Never a raw key. Never self-approve.
+ * Member-pass `unlicensed` is not the Operator seat state when a jti or last4 is present.
+ */
 export function licenseFromIngest(body: Record<string, unknown>): string | null {
   const status = parseLicenseStatus(body.license)
   if (status === 'approved') return null
   const last4 = parseLicenseLast4(body.licenseLast4)
-  if (status && last4) return `${status} · ${last4}`
-  if (status) return status
+  const jti = parseLicenseId(body.licenseId)
+  const operatorBound = Boolean(jti || last4)
+  const effective =
+    operatorBound && (status == null || status === 'unlicensed') ? 'licensed' : status
+  if (effective && last4) return `${effective} · ${last4}`
+  if (effective) return effective
   if (last4) return last4
   return null
+}
+
+/** Keep a jti-backed licensed label when a later heartbeat still sends member-pass unlicensed. */
+export function mergeSeatLicenseLabel(
+  incoming: string | null | undefined,
+  previous: string | null | undefined,
+  jti: string | null | undefined
+): string | null {
+  const next = incoming ?? null
+  const prev = previous ?? null
+  if (!parseLicenseId(jti) || !next || !isUnlicensedLabel(next)) return next ?? prev
+  if (prev && !isUnlicensedLabel(prev)) return prev
+  return licensedLabel(last4FromLicenseLabel(next) ?? last4FromLicenseLabel(prev))
+}
+
+/** Portal display: an active issued license bound by license_jti wins over a stored unlicensed label. */
+export function seatLicenseLabel(
+  seat: Pick<FleetSeat, 'license' | 'license_jti'>,
+  issued: ReadonlyArray<Pick<IssuedLicenseRow, 'jti' | 'last4' | 'revoked' | 'exp'>>,
+  now: number
+): string | null {
+  const jti = parseLicenseId(seat.license_jti)
+  const row = jti ? issued.find((l) => l.jti === jti) : undefined
+  if (row && issuedLicenseActive(row, now)) return licensedLabel(parseLicenseLast4(row.last4))
+  const raw = (seat.license || '').trim()
+  return raw || null
 }
 
 export function isApprovedSeat(row: Pick<FleetSeat, 'approval' | 'license'>): boolean {
