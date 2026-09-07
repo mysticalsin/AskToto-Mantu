@@ -16,8 +16,12 @@
  *
  * `fetch` is injected via `deps` so tests run against a fake implementation; nothing here ever calls the
  * global `fetch` directly.
+ *
+ * The hostname/IP classification itself (`isUnsafeProbeHost` below) lives in `./ssrf-guard.ts`, shared
+ * with `adapters/shared.ts`'s `isUnsafeGatewayHost` - see that module's doc for why.
  */
 import { looksLikeSecret } from '../redact'
+import { isUnsafeHost } from './ssrf-guard'
 import type { ConnectorCatalogEntry, RestProbeSpec } from './catalog'
 
 export interface ProbeDeps {
@@ -50,76 +54,10 @@ const MCP_PROTOCOL_VERSION = '2025-06-18'
 const MCP_PROTOCOL_VERSION_FALLBACK = '2025-03-26'
 const WRITE_NAME_RE = /^(create|update|delete|remove|send|post|write|set|add|push|archive|move|assign|close|merge)/i
 
-// ── SSRF guard ───────────────────────────────────────────────────────────────────────────────────────
-
-function parseIPv4(host: string): number[] | null {
-  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host)
-  if (!m) return null
-  const parts = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])]
-  return parts.every((p) => p >= 0 && p <= 255) ? parts : null
-}
-
-function isPrivateIPv4(parts: number[]): boolean {
-  const [a, b] = parts
-  if (a === 127) return true // loopback
-  if (a === 10) return true // private
-  if (a === 172 && b >= 16 && b <= 31) return true // private
-  if (a === 192 && b === 168) return true // private
-  if (a === 169 && b === 254) return true // link-local (covers the cloud metadata address)
-  if (a === 0) return true // "this network"
-  return false
-}
-
-/** Expands a (possibly `::`-compressed) IPv6 literal to 8 hex groups, or null if it is not a bare literal
- *  (a bracketed literal has its brackets stripped by the caller before this runs). */
-function expandIPv6(host: string): string[] | null {
-  if (!host.includes(':')) return null
-  if ((host.match(/::/g) || []).length > 1) return null
-  const [headPart, tailPart] = host.split('::')
-  const head = headPart ? headPart.split(':') : []
-  const tail = host.includes('::') ? (tailPart ? tailPart.split(':') : []) : []
-  if (!host.includes('::')) {
-    const full = host.split(':')
-    return full.length === 8 && full.every((g) => /^[0-9a-f]{0,4}$/i.test(g)) ? full : null
-  }
-  const missing = 8 - head.length - tail.length
-  if (missing < 0) return null
-  const groups = [...head, ...Array(missing).fill('0'), ...tail]
-  return groups.length === 8 && groups.every((g) => /^[0-9a-f]{0,4}$/i.test(g)) ? groups : null
-}
-
-function isPrivateIPv6(host: string): boolean {
-  const hex = expandIPv6(host)
-  if (!hex) return false
-  const groups = hex.map((g) => Number(`0x${g || '0'}`))
-  const [g0, g1, g2, g3, g4, g5, g6, g7] = groups
-  if (groups.every((g) => g === 0)) return true // :: (unspecified)
-  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && g5 === 0 && g6 === 0 && g7 === 1) return true // ::1
-  // IPv4-mapped (`::ffff:a.b.c.d`, 5 zero groups + 0xffff + 2 groups of IPv4) or the deprecated
-  // IPv4-compatible form (`::a.b.c.d`, 6 zero groups + 2 groups of IPv4): g0-g4 are zero in both, and
-  // only g5 (0xffff vs 0) tells them apart. `new URL()` normalizes a bracketed `[::ffff:127.0.0.1]`
-  // literal to `[::ffff:7f00:1]` - a bare first-hextet check never sees a recognizable private prefix
-  // unless the embedded IPv4 in g6/g7 is actually decoded, which is exactly how the cloud metadata IP
-  // slips through as `::ffff:169.254.169.254` if only `g0` is inspected.
-  if (g0 === 0 && g1 === 0 && g2 === 0 && g3 === 0 && g4 === 0 && (g5 === 0xffff || g5 === 0)) {
-    if (isPrivateIPv4([(g6 >> 8) & 0xff, g6 & 0xff, (g7 >> 8) & 0xff, g7 & 0xff])) return true
-  }
-  if (g0 >= 0xfe80 && g0 <= 0xfebf) return true // fe80::/10 link-local
-  if (g0 >= 0xfc00 && g0 <= 0xfdff) return true // fc00::/7 unique local
-  return false
-}
+// ── SSRF guard (classification shared with adapters/shared.ts, see ./ssrf-guard.ts) ────────────────────
 
 export function isUnsafeProbeHost(hostname: string): boolean {
-  // A trailing dot is a valid FQDN root-label separator that new URL() preserves verbatim
-  // ("localhost." stays "localhost."), so every check below must run against the dot-stripped form or
-  // it silently misses "https://localhost./x", "https://metadata.google.internal./x", and the like.
-  const host = hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '')
-  if (host === 'localhost' || host === 'metadata.google.internal' || host === '169.254.169.254') return true
-  if (host.endsWith('.local') || host.endsWith('.internal')) return true
-  const v4 = parseIPv4(host)
-  if (v4) return isPrivateIPv4(v4)
-  if (host.includes(':')) return isPrivateIPv6(host)
-  return false
+  return isUnsafeHost(hostname)
 }
 
 export interface SafeUrlCheck {
