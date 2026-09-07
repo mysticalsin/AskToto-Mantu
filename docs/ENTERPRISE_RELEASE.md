@@ -1,5 +1,9 @@
 # Enterprise Release Checklist - Métis
 
+**1.8.7 cut ready; signed publish blocked until GH secrets enrolled.**
+
+Do not tag `v1.8.7` and do not trigger `.github/workflows/release.yml` until the repo secrets below are present. Pack is signed EXE + DMG + native via that workflow only. OAuth stays last. This repo does not contain signing material and a merged version bump is not a published release.
+
 Use this before any customer build or public tag.
 
 **External-state check required:** a 2026-07-10 observation recorded GitHub Actions runs ending before
