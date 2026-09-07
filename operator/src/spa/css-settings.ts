@@ -147,6 +147,30 @@ export const SETTINGS_CSS = `
 @media (max-width: 480px) { .settings-bindings-grid { grid-template-columns: 1fr; } }
 .settings-ping { display: inline-flex; }
 
+/* -- Access -- */
+.settings-access-email { font-size: 14px; color: var(--ink); }
+
+/* -- Data: never-stored list, export links -- */
+.settings-never-list { margin: 0; padding-left: 18px; display: flex; flex-direction: column; gap: 6px; font-size: 13px; color: var(--ink-2); }
+.settings-export-grid { display: flex; flex-direction: column; gap: 4px; }
+.settings-export-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--border); }
+.settings-export-row:last-child { border-bottom: none; }
+
+/* -- Tiers: the consequence line restated before saving (plan: "restating the consequence before
+   saving"), tinted like an inline warning without pulling in a whole banner primitive. -- */
+.settings-inline-msg[data-tier-consequence]:not(:empty) { color: var(--warn); font-weight: 600; }
+
+/* -- Density (plan 6.11 Appearance: "applied immediately to the live document"). [data-density] on
+   <html> is portal-wide, real infrastructure (operator/client/pages/settings.ts sets it, the same
+   way theme.ts already owns [data-theme]); a portal-wide compact mode for every other page's rows
+   needs a matching rule in operator/src/spa/css.ts and operator/src/render/data-table.ts, neither
+   owned by this page (filed in the report) -- this page's own cards react to it right now, so the
+   control has a real, visible, immediate effect the moment it is toggled. -- */
+:root[data-density="compact"] .settings-content .card { padding-top: 14px; padding-bottom: 14px; }
+:root[data-density="compact"] .settings-checkbox { padding: 4px 0; }
+:root[data-density="compact"] .settings-stats-grid { gap: 10px; }
+:root[data-density="compact"] .settings-content { display: grid; gap: 10px; }
+
 @media (prefers-reduced-motion: reduce) {
   .settings-tab-underline { transition: none; }
   .settings-checkbox-box, .settings-checkbox-box svg { transition: none; }

@@ -191,6 +191,31 @@ describe('GET/PATCH /v1/admin/settings.json', () => {
     expect(await store.listAudit(10, { action: 'settings-update' })).toHaveLength(0)
   })
 
+  it('PATCH error messages state the invalid value received and the expected format', async () => {
+    const cases: { body: Record<string, unknown>; expect: string }[] = [
+      { body: { hourlyRate: 999999 }, expect: 'hourlyRate must be a number from 0 to 10000, or null to clear it; received 999999' },
+      { body: { currency: 'JPY' }, expect: 'currency must be one of CAD, EUR, USD, GBP, CHF; received "JPY"' },
+      { body: { dailyTokenBudgetPerSeat: 1.5 }, expect: 'dailyTokenBudgetPerSeat must be a whole number from 0 to 50000000, or null to clear it; received 1.5' },
+      { body: { density: 'roomy' }, expect: 'density must be "comfortable" or "compact"; received "roomy"' },
+      { body: { reducedMotion: 'off' }, expect: 'reducedMotion must be "system" or "reduce"; received "off"' }
+    ]
+    for (const c of cases) {
+      const res = await handleRequest(
+        new Request('https://operator.test/v1/admin/settings.json', {
+          method: 'PATCH',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(c.body)
+        }),
+        { ...env(), DB: sqliteD1(freshSettingsDb()) },
+        { access: tonyAccess },
+        { store: memoryStore(), now: NOW }
+      )
+      expect(res.status).toBe(400)
+      const body = (await res.json()) as { error: string }
+      expect(body.error).toBe(c.expect)
+    }
+  })
+
   it('PATCH with no recognised key returns 400', async () => {
     const res = await handleRequest(
       new Request('https://operator.test/v1/admin/settings.json', {

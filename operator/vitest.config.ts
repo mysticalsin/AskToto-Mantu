@@ -10,6 +10,6 @@ export default defineConfig({
   test: {
     root: dirname(fileURLToPath(import.meta.url)),
     environment: 'node',
-    include: ['src/**/*.test.ts', 'scripts/**/*.test.ts']
+    include: ['src/**/*.test.ts', 'scripts/**/*.test.ts', 'client/**/*.test.ts']
   }
 })

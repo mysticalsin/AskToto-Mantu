@@ -54,6 +54,7 @@
 import type { DashboardPayload } from '../../src/dashboard'
 import { esc, relativeTime, skeletonRows } from '../../src/render'
 import {
+  ENTITLEMENT_COPY,
   evidenceChipsHtml,
   renderPlatformHealthEnriched,
   renderQuestionTypeMixCard,
@@ -262,6 +263,43 @@ function applyThemeChoiceLocal(choice: ThemeChoiceLocal): void {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Density (plan 6.11 Appearance: "persisted through settings.json AND applied immediately to the
+// live document"). `data-density` on <html> is real, global infrastructure (any future stylesheet
+// can select `[data-density="compact"]`, the same shape `data-theme` already established); this
+// page's own cards additionally react to it right now via operator/src/spa/css-settings.ts (a
+// portal-wide compact mode for every other page's tables/rows needs a rule in operator/src/spa/
+// css.ts and operator/src/render/data-table.ts, neither of which this page owns - see the report).
+// ---------------------------------------------------------------------------------------------
+
+type DensityChoiceLocal = 'comfortable' | 'compact'
+
+/** Exported for `settings.appearance.test.ts` (a Node-environment unit test with a hand-built
+ *  minimal `document`/`localStorage`, the same style `operator/src/spa/router.test.ts` already
+ *  uses for client bundle behaviour - this repo has no jsdom dependency) - the only way to prove
+ *  "applied immediately to the live document" without a real browser. */
+export function applyDensityLocal(choice: DensityChoiceLocal): void {
+  document.documentElement.setAttribute('data-density', choice)
+  try {
+    localStorage.setItem('metis-operator-density', choice)
+  } catch {
+    /* private mode / storage blocked: the setting is still saved server-side */
+  }
+}
+
+/** Corrects the Density/Reduced motion segmented controls (SSR always renders the safe defaults -
+ *  comfortable/system - since first paint has no `operator_settings` fetch yet) to whatever
+ *  `GET /v1/admin/settings.json` actually answers, and applies both to the live document the same
+ *  way a direct click on the control would. Exported for the same reason as `applyDensityLocal`. */
+export function syncAppearanceFromSettings(section: HTMLElement, settings: OperatorSettingsValue): void {
+  const densityWrap = section.querySelector<HTMLElement>('[data-density-seg]')
+  if (densityWrap) setSegmentedActive(densityWrap, settings.density)
+  applyDensityLocal(settings.density)
+  const motionWrap = section.querySelector<HTMLElement>('[data-motion-seg]')
+  if (motionWrap) setSegmentedActive(motionWrap, settings.reducedMotion)
+  setReducedMotionOverride(settings.reducedMotion === 'reduce' ? true : null)
+}
+
+// ---------------------------------------------------------------------------------------------
 // Questions: audited Reveal (plan 6.11 "audited Reveal per ask"). Same `GET /v1/admin/asks/:id`
 // contract as operator/client/actions.ts's own `[data-reveal]` handler; these specific buttons
 // never exist at boot (they only appear after loadQuestions() below inserts real rows), so that
@@ -294,8 +332,9 @@ async function onSegmentedClick(section: HTMLElement, btn: HTMLElement): Promise
   const motionWrap = btn.closest<HTMLElement>('[data-motion-seg]')
   const rangeWrap = btn.closest<HTMLElement>('[data-questions-range]')
 
-  if (densityWrap) {
+  if (densityWrap && (id === 'comfortable' || id === 'compact')) {
     setSegmentedActive(densityWrap, id)
+    applyDensityLocal(id)
     const res = await request('/v1/admin/settings.json', 'PATCH', { density: id })
     if (!res || res.ok === false) toast({ kind: 'error', text: (res && res.error) || 'Could not save density.' })
     return
@@ -336,6 +375,29 @@ async function loadTiers(section: HTMLElement): Promise<void> {
     tierSeatsCache[row.id] = row.seats
     patchTierCard(section, { id: row.id, label: row.label, entitlements: row.entitlements, seats: row.seats })
   }
+}
+
+/** Plan 6.11 Tiers: "restating the consequence before saving" - every time the checked set in a
+ *  tier's form changes, compares it against the form's own `data-baseline-entitlements` (the
+ *  entitlements that tier is actually saved with right now, set by both first paint and every
+ *  `patchTierCard()` re-render) and, for anything about to be removed, states in plain words how
+ *  many seats resolve to this tier and what they lose - before the operator ever clicks Save. */
+function updateTierConsequence(section: HTMLElement, form: HTMLFormElement): void {
+  const id = form.getAttribute('data-tier-form')
+  const out = id ? section.querySelector<HTMLElement>(`[data-tier-consequence="${CSS.escape(id)}"]`) : null
+  if (!id || !out) return
+  const baseline = (form.getAttribute('data-baseline-entitlements') || '').split(',').filter(Boolean)
+  const checked = new Set(Array.from(form.querySelectorAll<HTMLInputElement>('[data-tier-entitlement]:checked')).map((i) => i.value))
+  const removed = baseline.filter((key) => !checked.has(key))
+  if (!removed.length) {
+    out.textContent = ''
+    return
+  }
+  const seatsRaw = form.getAttribute('data-tier-seats-count')
+  const seats = seatsRaw && seatsRaw !== '' ? Number(seatsRaw) : (tierSeatsCache[id] ?? null)
+  const labels = removed.map((key) => (ENTITLEMENT_COPY as Record<string, { label: string }>)[key]?.label || key)
+  const seatsText = seats == null ? 'Seats' : `${seats} seat${seats === 1 ? '' : 's'}`
+  out.textContent = `${seatsText} lose ${labels.join(', ')} on their next heartbeat.`
 }
 
 async function submitTierForm(section: HTMLElement, form: HTMLFormElement): Promise<void> {
@@ -402,6 +464,7 @@ async function loadValueSettings(section: HTMLElement): Promise<void> {
   const res = await request('/v1/admin/settings.json', 'GET')
   if (!res || res.ok === false || !res.settings) return
   cachedSettings = res.settings as OperatorSettingsValue
+  syncAppearanceFromSettings(section, cachedSettings)
   const budgetInput = section.querySelector<HTMLInputElement>('[data-value-field="dailyTokenBudgetPerSeat"]')
   if (budgetInput && document.activeElement !== budgetInput) {
     budgetInput.disabled = false
@@ -671,7 +734,14 @@ function onInput(section: HTMLElement, e: Event): void {
 
 function onChange(section: HTMLElement, e: Event): void {
   const target = e.target
-  if (target instanceof HTMLSelectElement && target.matches('[data-value-field="currency"]')) updateValuePreview(section)
+  if (target instanceof HTMLSelectElement && target.matches('[data-value-field="currency"]')) {
+    updateValuePreview(section)
+    return
+  }
+  if (target instanceof HTMLInputElement && target.matches('[data-tier-entitlement]')) {
+    const form = target.closest<HTMLFormElement>('[data-tier-form]')
+    if (form) updateTierConsequence(section, form)
+  }
 }
 
 function wireOnce(section: HTMLElement): void {
