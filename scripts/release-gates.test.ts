@@ -197,6 +197,7 @@ describe('direct release signing gates', () => {
     })
     expect(result.status).toBe(1)
     expect(result.stderr).toMatch(/GH_TOKEN|GITHUB_TOKEN/)
+    expect(result.stdout).not.toContain('ADHOC macOS path')
   })
 
   it('release.yml falls back to adhoc mac instead of exiting when Apple secrets are missing', () => {
