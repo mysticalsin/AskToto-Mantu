@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_TEAM_DOMAIN,
@@ -292,5 +294,21 @@ describe('parseArgs', () => {
 
   it('flags --help', () => {
     expect(parseArgs(['--help']).help).toBe(true)
+  })
+})
+
+describe('isMain entry (paths with spaces)', () => {
+  it('decodes import.meta.url like migrate.mjs, not file://${argv}', () => {
+    const source = readFileSync(new URL('./smoke.mjs', import.meta.url), 'utf8')
+    expect(source).toMatch(/fileURLToPath\(import\.meta\.url\) === process\.argv\[1\]/)
+    expect(source).not.toContain('import.meta.url === `file://${process.argv[1]}`')
+  })
+
+  it('fileURLToPath matches argv on spaced paths; raw file:// interpolation does not', () => {
+    const argvPath = '/tmp/Chief of Staff/Apps Source/operator/scripts/smoke.mjs'
+    const metaUrl = pathToFileURL(argvPath).href
+    expect(metaUrl).toContain('%20')
+    expect(metaUrl === `file://${argvPath}`).toBe(false)
+    expect(fileURLToPath(metaUrl) === argvPath).toBe(true)
   })
 })

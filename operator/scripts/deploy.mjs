@@ -236,7 +236,8 @@ function printReceipt(receipt) {
   console.log(`  smoke:         ${receipt.smoke}`)
 }
 
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`
+// Same as migrate.mjs: decode import.meta.url so paths with spaces still run main().
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
 if (isMain) {
   main().catch((err) => {
     console.error(err)

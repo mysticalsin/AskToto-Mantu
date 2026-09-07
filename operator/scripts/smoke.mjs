@@ -21,6 +21,8 @@
  * against the live Worker until a deploy carrying `OPERATOR_VERSION` lands — that is expected,
  * not a bug in this script.
  */
+import { fileURLToPath } from 'node:url'
+
 export const DEFAULT_TEAM_DOMAIN = 'https://tony-walteur.cloudflareaccess.com'
 const FETCH_TIMEOUT_MS = 10_000
 
@@ -243,7 +245,8 @@ async function main() {
   process.exit(report.allOk ? 0 : 1)
 }
 
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`
+// Same as migrate.mjs: decode import.meta.url so paths with spaces still run main().
+const isMain = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]
 if (isMain) {
   main().catch((err) => {
     console.error(err)
