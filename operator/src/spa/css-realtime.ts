@@ -13,9 +13,10 @@
  * another page's own css-<page>.ts.
  */
 export const REALTIME_CSS = `
-/* -- map card: full-bleed, 16:9 (plan 6.3), 18px radius, the LIVE pill anchored top-right. -- */
+/* -- map card: full-bleed, 2:1 (the reference's own WorldMap frame, SPEC.md: 1152x576
+   viewBox), 18px radius, the LIVE pill anchored top-right. -- */
 .rt-map-card { position: relative; padding: 0; overflow: hidden; border-radius: var(--radius-map); }
-.rt-map { aspect-ratio: 16 / 9; }
+.rt-map { aspect-ratio: 2 / 1; }
 .rt-map-live {
   position: absolute; top: 12px; right: 12px; z-index: 2;
   background: var(--map-pill); color: var(--ink); border: 1px solid var(--border);
@@ -102,17 +103,17 @@ export const REALTIME_CSS = `
 .rt-map {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 9;
+  aspect-ratio: 2 / 1;
   border-radius: var(--radius-map);
   overflow: hidden;
   background: var(--map-ocean);
 }
 /* No \`min-height\` here (a previous version set 360px): \`min-height\` always wins over the
    height \`aspect-ratio\` would otherwise compute, so on a narrow phone-width card (~356px
-   wide, where 16:9 wants ~200px) it forced a near-square box instead -- and Mercator projects
-   the globe's high-Arctic latitudes (Russia's own north coast, well past 66N) toward Y
-   coordinates far outside this map's 0..648 viewBox, ordinarily invisible because
-   \`overflow: hidden\` above clips it right at the correctly-sized 16:9 edge. The taller,
+   wide, where 2:1 wants ~178px) it forced a near-square box instead -- and every point past
+   this map's fixed frame (build-world.mjs's reference-clipped 0..1152 x 0..576 viewBox --
+   see that file's "Reference framing") is ordinarily invisible only because
+   \`overflow: hidden\` above clips it right at the correctly-sized 2:1 edge. The taller,
    off-ratio box gave that always-there overflow room to actually render, in the gap the wrong
    aspect ratio opened up -- the "hard-edged circular disc" over Scandinavia/Russia/China/Japan
    from task report item 7 (most visible at narrow widths, where the ratio broke hardest;

@@ -29,19 +29,25 @@ describe('projectPoint matches d3-geo geoMercator exactly (center [0, 0])', () =
   }
 })
 
-describe('16:9 aspect, scale/translate fit to the real geometry (build-world.mjs)', () => {
-  it('1152 variant is 1152x648 (16:9), scale/translate/center match PROJECTION_1152', () => {
-    expect(MAP_DIMENSIONS['1152']).toEqual({ width: 1152, height: 648 })
+describe('reference framing (build-world.mjs / SPEC.md), not a fitExtent guess', () => {
+  it('1152 variant is the reference\'s exact 1152x576 frame, scale/translate/center match PROJECTION_1152', () => {
+    expect(MAP_DIMENSIONS['1152']).toEqual({ width: 1152, height: 576 })
     expect(MERCATOR_VARIANTS['1152'].scale).toBe(PROJECTION_1152.scale)
     expect(MERCATOR_VARIANTS['1152'].translate).toEqual(PROJECTION_1152.translate)
     expect(MERCATOR_VARIANTS['1152'].center).toEqual([0, 0])
+    // SPEC.md line 278: geoMercator().translate([576,288]).scale(152.948).
+    expect(MERCATOR_VARIANTS['1152'].translate).toEqual([576, 288])
+    expect(MERCATOR_VARIANTS['1152'].scale).toBeCloseTo(152.948, 3)
   })
 
-  it('520 variant is 520x293 (16:9), scale/translate/center match PROJECTION_520', () => {
-    expect(MAP_DIMENSIONS['520']).toEqual({ width: 520, height: 293 })
+  it('520 variant is the reference\'s exact 520x300 frame, scale/translate/center match PROJECTION_520', () => {
+    expect(MAP_DIMENSIONS['520']).toEqual({ width: 520, height: 300 })
     expect(MERCATOR_VARIANTS['520'].scale).toBe(PROJECTION_520.scale)
     expect(MERCATOR_VARIANTS['520'].translate).toEqual(PROJECTION_520.translate)
     expect(MERCATOR_VARIANTS['520'].center).toEqual([0, 0])
+    // SPEC.md line 231: geoMercator().translate([260,180]).scale(70).
+    expect(MERCATOR_VARIANTS['520'].translate).toEqual([260, 180])
+    expect(MERCATOR_VARIANTS['520'].scale).toBeCloseTo(70, 3)
   })
 
   it('neither variant reverts to the old width / (2*pi) guessed scale (regression guard for the clipped-Russia bug)', () => {
@@ -60,12 +66,12 @@ describe('projectPoint reproduces the generated centroids', () => {
     expect(firstXY.length).toBe(2)
   })
 
-  it('CENTROIDS_1152.CA sits inside the 1152x648 frame, not off the map', () => {
+  it('CENTROIDS_1152.CA sits inside the 1152x576 frame, not off the map', () => {
     const [x, y] = CENTROIDS_1152.CA
     expect(x).toBeGreaterThan(0)
     expect(x).toBeLessThan(1152)
     expect(y).toBeGreaterThan(0)
-    expect(y).toBeLessThan(648)
+    expect(y).toBeLessThan(576)
   })
 
   it('CENTROIDS_520.US matches projectPoint at the 520 variant within 40px (country centroid vs. its capital-ish point)', () => {

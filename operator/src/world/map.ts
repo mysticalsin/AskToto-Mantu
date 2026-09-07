@@ -455,7 +455,8 @@ export interface CornerMapOptions {
 
 const CHART_SCALE_STEPS = 5
 
-/** 520x300-ish (16:9) corner choropleth: a 5-step `--chart-scale-01..05` sequential fill by
+/** 520x300 (the reference's own CountryMap frame, SPEC.md line 231) corner choropleth: a
+ * 5-step `--chart-scale-01..05` sequential fill by
  * seat count, `--map-ocean` strokes between cells (the reference's "white 0.5px strokes" —
  * `--map-ocean` is white in light theme and the correct dark separator in dark theme), no
  * data in `--data-track`, invisible hit pins at centroids for tooltips. */

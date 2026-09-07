@@ -28,13 +28,15 @@ describe('generated world paths are not stale', () => {
  * Regression guard for the clipped-map bug (task report: "Russia seems weird" — the old
  * width-derived scale never checked whether the projected geometry fit the canvas height,
  * so Greenland/Russia/Canada/Norway rendered clipped against the top edge and Antarctica
- * rendered entirely below the bottom, invisible). geoMercator().fitExtent() in
- * build-world.mjs now guarantees this numerically rather than by eyeballing a screenshot:
- * every included country's every point falls inside the canvas, and Antarctica (the one
- * country whose Mercator-projected latitude span would force every other country down to a
- * sliver to fit) is deliberately excluded from the data rather than drawn off-screen.
+ * rendered entirely below the bottom, invisible). build-world.mjs now uses the reference's
+ * own fixed scale/translate (SPEC.md) plus `geoMercator().clipExtent(...)`, which guarantees
+ * this numerically rather than by eyeballing a screenshot: every point of every included
+ * country's `d` is clipped to the canvas rectangle, cut with a straight edge along the frame
+ * rather than overflowing or being silently omitted, and Antarctica (whose whole landmass
+ * falls outside this framing regardless) is deliberately excluded from the data rather than
+ * drawn off-screen.
  */
-describe('committed world paths fit their own canvas (fitExtent regression guard)', () => {
+describe('committed world paths fit their own canvas (reference-framing clipExtent regression guard)', () => {
   function pointsFromD(d: string): [number, number][] {
     const subpaths = d.match(/[Mm][^Mm]*/g) ?? []
     const pts: [number, number][] = []
@@ -68,12 +70,12 @@ describe('committed world paths fit their own canvas (fitExtent regression guard
     }
   }
 
-  it('every WORLD_1152 point is within the 1152x648 canvas, and Antarctica is absent', () => {
-    checkFit(WORLD_1152, 1152, 648)
+  it('every WORLD_1152 point is within the 1152x576 canvas, and Antarctica is absent', () => {
+    checkFit(WORLD_1152, 1152, 576)
   })
 
-  it('every WORLD_520 point is within the 520x293 canvas, and Antarctica is absent', () => {
-    checkFit(WORLD_520, 520, 293)
+  it('every WORLD_520 point is within the 520x300 canvas, and Antarctica is absent', () => {
+    checkFit(WORLD_520, 520, 300)
   })
 
   /** No single subpath may exceed 60% of the canvas width — Russia's mainland (the largest
