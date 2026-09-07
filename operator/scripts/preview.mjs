@@ -26,7 +26,7 @@
  */
 import { build } from 'esbuild'
 import { mkdir, readdir, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -71,15 +71,32 @@ async function loadOperatorModule() {
   return bundleAndImport(entry, 'preview-operator')
 }
 
-/** Rewrite `/assets/fonts|flags|logos/<file>` references to an absolute `file://` path when that
- *  file already exists under operator/public/ (plan: "referenced by absolute file:// path when
- *  present" — none of these are wired into css.ts yet at the time this script was written, so this
- *  is a no-op today and starts working the moment design-lead lands the @font-face rule). */
+const ASSET_MIME_TYPES = {
+  '.svg': 'image/svg+xml',
+  '.woff2': 'font/woff2',
+  '.woff': 'font/woff',
+  '.png': 'image/png'
+}
+
+/** Inline `/assets/fonts|flags|logos/<file>` references as `data:` URIs when that file exists
+ * under operator/public/ — this standalone file has no Worker behind `/assets/...` to serve
+ * them from. An earlier version rewrote these to an absolute `file://` path instead; Chromium
+ * refuses to load a `file://` subresource that lives outside the *document's own* directory
+ * ("Not allowed to load local resource"), which is exactly what an absolute path into the repo
+ * checkout is when the preview HTML is written to /private/tmp/.../operator-preview/ — so every
+ * flag, logo and font 404'd silently as a broken image, with no error the static HTML itself
+ * revealed. A `data:` URI has no such cross-directory restriction (there is no second location
+ * to be "outside" of), so it renders identically whether opened via `file://` or served over
+ * `http://`. */
 function rewriteLocalAssetUrls(html) {
   return html.replace(/(["'(])\/assets\/(fonts|flags|logos)\/([^"')]+)(["')])/g, (whole, open, kind, file, close) => {
     const abs = join(OPERATOR_ROOT, 'public', kind, file)
     if (!existsSync(abs)) return whole
-    return `${open}${pathToFileURL(abs).href}${close}`
+    const ext = file.slice(file.lastIndexOf('.')).toLowerCase()
+    const mime = ASSET_MIME_TYPES[ext]
+    if (!mime) return whole
+    const base64 = readFileSync(abs).toString('base64')
+    return `${open}data:${mime};base64,${base64}${close}`
   })
 }
 
@@ -141,7 +158,7 @@ async function main() {
 
   const existing = await readdir(PUBLIC_FONTS_DIR).catch(() => [])
   if (existing.length) {
-    console.log(`preview.mjs: found ${existing.length} font file(s) in ${PUBLIC_FONTS_DIR}; will be inlined as file:// once css.ts references them.`)
+    console.log(`preview.mjs: found ${existing.length} font file(s) in ${PUBLIC_FONTS_DIR}; inlined as data: URIs wherever css.ts references them.`)
   }
 }
 

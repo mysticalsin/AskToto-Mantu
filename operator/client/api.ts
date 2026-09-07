@@ -6,6 +6,26 @@
 
 let sessionBearer = ''
 
+/** True once a real Worker rendered this page: operator/src/ui.ts stamps `data-live-url` on
+ *  `<html>` from operator/src/routes/admin-core.ts's `liveUrl`, and a standalone preview
+ *  (operator/scripts/preview.mjs) never sets it, since there is truly nothing behind any
+ *  `/v1/admin/*.json` route for that static file to reconnect to (same signal
+ *  operator/client/live.ts's own `hasLiveEndpoint` already reads for the live-poll indicator).
+ *  Shared here so every page module that hydrates itself from a JSON route after first paint
+ *  can skip the doomed fetch and show an honest "preview only" state instead of a fetch-failed
+ *  toast/error it can never recover from (task report findings 6-8: a permanently-stuck
+ *  skeleton and a raw "network failed" string with no source, both artefacts of running the
+ *  real client hydration path against a preview with no Worker behind it). Defaults to `true`
+ *  (assume a real backend) when `document` itself is unavailable -- a non-browser test
+ *  context, never the standalone preview this exists to detect. */
+export function hasBackend(): boolean {
+  try {
+    return document.documentElement.hasAttribute('data-live-url')
+  } catch {
+    return true
+  }
+}
+
 async function ensureSession(): Promise<void> {
   if (sessionBearer) return
   try {

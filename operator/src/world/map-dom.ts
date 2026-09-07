@@ -18,7 +18,7 @@
  * browser bundle; it is not unit-tested here since the operator vitest config runs in a plain
  * Node environment with no DOM (see operator/client's own test setup for DOM-backed coverage).
  */
-import { beacon, drawPath, follow, pop } from '../../client/motion'
+import { beacon, drawPath, follow, pop, reduceMotion } from '../../client/motion'
 
 export interface Transform {
   x: number
@@ -301,12 +301,29 @@ export function attachMapInteraction(root: ParentNode, options: MapInteractionOp
   // ---- first-paint motion: land draws in over 800ms, graticule fades in after,
   // the live beacon pulses, pins/pills pop in (plan 3.5b) ----
   root.querySelectorAll<SVGPathElement>('.world-land').forEach((p) => drawPath(p, 800))
-  if (graticule) {
+  // Sequenced reveal, land first then the grid -- but every other first-paint animation in this
+  // file (drawPath/beacon/pop, via motion.ts's reduceMotion() gate) collapses to its resting
+  // state instantly under reduced motion; this hand-rolled hide-then-`setTimeout` did not, so a
+  // reduced-motion viewer (and, in practice, any snapshot taken in the first 800ms of this page,
+  // since a static page has no "later" for the timeout to land in) saw no graticule at all
+  // rather than one shown immediately.
+  if (graticule && !reduceMotion()) {
     graticule.classList.add('is-hidden')
     setTimeout(() => graticule.classList.remove('is-hidden'), 800)
   }
-  root.querySelectorAll<SVGCircleElement>('[data-beacon]').forEach((el) => beacon(el as unknown as HTMLElement))
-  root.querySelectorAll<SVGGElement>('.rt-pin, .rt-pill').forEach((el) => pop(el as unknown as HTMLElement))
+  root.querySelectorAll<SVGCircleElement>('[data-beacon]').forEach((el) => beacon(el))
+  // pop() commits a CSS `transform` (scale) on the animated element once it finishes — which,
+  // per the CSS Transforms spec, fully REPLACES an SVG `transform` presentation attribute on
+  // that same element rather than composing with it. `.rt-pin` carries exactly such an
+  // attribute (`transform="translate(x y)"`, its only positioning: see renderPin() in map.ts)
+  // so animating it directly snapped every city pin to the SVG's local origin the moment its
+  // entrance animation finished — every dot and its label stranded at the map's top-left
+  // corner, on top of one another (this is why: `.rt-pill` has no such transform of its own —
+  // its rect/circle/image/text children are already placed with plain x/y/cx/cy attributes —
+  // so pills never showed this). `[data-pin-inner]` is the untransformed group *inside* each
+  // pin purpose-built for this (see map.ts's `<g class="rt-pin-inner" data-pin-inner>`): the
+  // pop scale/fade now lands on the pin's visual content only, never its position.
+  root.querySelectorAll<SVGGElement>('[data-pin-inner], .rt-pill').forEach((el) => pop(el as unknown as HTMLElement))
 
   return {
     destroy(): void {

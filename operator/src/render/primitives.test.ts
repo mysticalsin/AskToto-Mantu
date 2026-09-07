@@ -269,10 +269,18 @@ describe('catalogTile', () => {
     const html = catalogTile({ kind: 'salesforce', label: 'Salesforce', transport: 'rest', state: 'needs-oauth' })
     expect(html).toContain('data-inert')
     expect(html).toContain('Needs OAuth (phase 2)')
+    expect(html).toContain('catalog-tile-lock')
+  })
+  it('is a compact 64px-tall horizontal row: logo, then name and badge, no per-tile buttons', () => {
+    const html = catalogTile({ kind: 'hubspot', label: 'HubSpot', transport: 'rest', state: 'ready' })
+    expect(html).toContain('catalog-tile-body')
+    expect(html).toContain('catalog-tile-name')
+    // Exactly one <button> -- the tile itself -- never a nested per-tile button.
+    expect((html.match(/<button/g) || []).length).toBe(1)
   })
   it('connected tiles show a live status dot with the connection count', () => {
     const html = catalogTile({ kind: 'notion', label: 'Notion', transport: 'rest', state: 'connected', connections: 2 })
-    expect(html).toContain('status-dot-live')
+    expect(html).toContain('catalog-tile-dot-connected')
     expect(html).toContain('2 connections')
   })
   it('mcp transport shows the MCP badge', () => {

@@ -28,14 +28,23 @@ function transform(tf) {
   }
 }
 
+/** Reverse the last `n` elements of `array` in place (used for an arc referenced with a
+ * negative index, i.e. traversed backwards). Two independent pointers walk in from each
+ * end of that final `n`-element window and swap until they meet or cross — `i` and `j`
+ * are each adjusted exactly once per iteration, so the whole window reverses cleanly for
+ * any length. (An earlier version decremented `j` twice per iteration — once in the loop
+ * condition, once in the body — which scrambled rather than reversed any arc longer than
+ * a few points: exactly the shared-border arcs, used forward by one country and backward
+ * by its neighbour, that rendered as self-intersecting "fan" artifacts.) */
 function reverse(array, n) {
-  let t
-  let j = array.length
-  let i = j - n
-  while (i < --j) {
-    t = array[i]
-    array[i++] = array[j]
-    array[j--] = t
+  let i = array.length - n
+  let j = array.length - 1
+  while (i < j) {
+    const t = array[i]
+    array[i] = array[j]
+    array[j] = t
+    i++
+    j--
   }
 }
 

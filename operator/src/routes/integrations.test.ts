@@ -208,6 +208,49 @@ describe('PATCH /v1/admin/integrations/:id', () => {
     const res = await handleRequest(patch('/v1/admin/integrations/missing', { label: 'x' }), env(), { access: tony }, { store, now: NOW })
     expect(res.status).toBe(404)
   })
+
+  it('disabledTools accepts a real REST-adapter tool name and persists it', async () => {
+    const store = memoryStore()
+    const added = await addHubspot(store)
+    const id = added.integration!.id
+    const res = await handleRequest(
+      patch(`/v1/admin/integrations/${id}`, { disabledTools: ['create_contact'] }),
+      env(),
+      { access: tony },
+      { store, now: NOW + 1 }
+    )
+    expect(res.status).toBe(200)
+    const row = await store.getIntegration(id)
+    const extra = readIntegrationExtra(row as unknown as Record<string, unknown>)
+    expect(JSON.parse(extra.disabled_tools_json)).toEqual(['create_contact'])
+  })
+
+  it('disabledTools drops a name that is not a real tool for this connection, never storing junk', async () => {
+    const store = memoryStore()
+    const added = await addHubspot(store)
+    const id = added.integration!.id
+    const res = await handleRequest(
+      patch(`/v1/admin/integrations/${id}`, { disabledTools: ['create_contact', 'not_a_real_tool'] }),
+      env(),
+      { access: tony },
+      { store, now: NOW + 1 }
+    )
+    expect(res.status).toBe(200)
+    const row = await store.getIntegration(id)
+    const extra = readIntegrationExtra(row as unknown as Record<string, unknown>)
+    expect(JSON.parse(extra.disabled_tools_json)).toEqual(['create_contact'])
+  })
+
+  it('an empty disabledTools array re-enables every tool', async () => {
+    const store = memoryStore()
+    const added = await addHubspot(store)
+    const id = added.integration!.id
+    await handleRequest(patch(`/v1/admin/integrations/${id}`, { disabledTools: ['create_contact'] }), env(), { access: tony }, { store, now: NOW + 1 })
+    await handleRequest(patch(`/v1/admin/integrations/${id}`, { disabledTools: [] }), env(), { access: tony }, { store, now: NOW + 2 })
+    const row = await store.getIntegration(id)
+    const extra = readIntegrationExtra(row as unknown as Record<string, unknown>)
+    expect(JSON.parse(extra.disabled_tools_json)).toEqual([])
+  })
 })
 
 describe('rotate / revoke / delete', () => {

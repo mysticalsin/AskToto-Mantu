@@ -16,7 +16,8 @@
 import { decryptVault, encryptVault } from '../crypto'
 import { json } from '../http'
 import { last4OfSecret } from '../vault'
-import { getConnectorCatalogEntry, isConnectorReady, publicConnectorCatalog, type ConnectorCatalogEntry } from '../connectors/catalog'
+import { looksLikeSecret } from '../redact'
+import { getConnectorCatalogEntry, getConnectorRestTools, isConnectorReady, publicConnectorCatalog, type ConnectorCatalogEntry } from '../connectors/catalog'
 import {
   deleteIntegrationRow,
   INTEGRATION_EXTRA_DEFAULTS,
@@ -25,13 +26,17 @@ import {
   writeIntegrationExtraColumns,
   type IntegrationExtraColumns
 } from '../connectors/data'
+import { listMcpCalls } from '../connectors/mcp-calls'
 import { probeConnection, type ProbeDeps, type ProbeInput } from '../connectors/probe'
-import type { IntegrationRow, OperatorStore } from '../store'
+import { deriveHealth, integrationSummary } from '../connectors/summary'
+import type { IntegrationRow, SeatRow } from '../store'
 import { defineRoute } from './registry'
 import { auditLog, param, type AdminCtx } from './admin-ctx'
 
-const GRANTS_COUNT_LIMIT = 5000
 const CONFIG_VALUE_MAX_LENGTH = 500
+const ACTIVITY_ROWS_LIMIT = 20
+const ACTIVITY_FETCH_LIMIT = 500
+const ACTIVITY_SPARKLINE_DAYS = 7
 
 /** Non-secret identity fields only (email, subdomain, workspace, accountId, baseUrl, ...): a string
  *  value, length-capped, and - when `allowedKeys` is given - restricted to the catalog entry's own
@@ -62,13 +67,44 @@ function scopeFromBody(raw: unknown): Record<string, unknown> {
   return out
 }
 
-function parseScopeJson(scopeJson: string): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(scopeJson) as unknown
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
-  } catch {
-    return {}
+const DISABLED_TOOLS_MAX = 100
+
+/** Every tool name this connection could plausibly show a switch for right now: the REST adapter's
+ *  static set for its kind (plan D8's `getConnectorRestTools`), plus whatever the last handshake
+ *  actually discovered (`tools_json`, an MCP-transport row). Restricting `PATCH .../disabledTools`
+ *  to this set (rather than accepting any string the request body names) is the same "validate
+ *  identity, not just reachability" discipline plan section 10 already applies to scope ids -
+ *  otherwise a stale or fabricated tool name would sit in `disabled_tools_json` forever, doing
+ *  nothing but growing the column. */
+function knownToolNames(entry: ConnectorCatalogEntry | null, currentExtra: IntegrationExtraColumns): Set<string> {
+  const names = new Set<string>()
+  const restTools = entry ? getConnectorRestTools(entry.kind) : null
+  if (restTools) for (const t of restTools) names.add(t.name)
+  if (currentExtra.tools_json) {
+    try {
+      const parsed = JSON.parse(currentExtra.tools_json) as unknown
+      if (Array.isArray(parsed)) {
+        for (const t of parsed) {
+          if (t && typeof t === 'object' && typeof (t as { name?: unknown }).name === 'string') names.add((t as { name: string }).name)
+        }
+      }
+    } catch {
+      /* tools_json already passed through readIntegrationExtra unvalidated; a corrupt value here just yields no known names */
+    }
   }
+  return names
+}
+
+function disabledToolsFromBody(raw: unknown, known: Set<string>): string[] {
+  if (!Array.isArray(raw)) return []
+  const out: string[] = []
+  for (const v of raw) {
+    if (typeof v !== 'string') continue
+    const name = v.trim()
+    if (name && known.has(name) && !out.includes(name)) out.push(name)
+    if (out.length >= DISABLED_TOOLS_MAX) break
+  }
+  return out
 }
 
 /** Returns the key of the first missing required field (including `credential`, when the catalog entry
@@ -92,74 +128,12 @@ function deriveBaseUrl(entry: ConnectorCatalogEntry, config: Record<string, stri
   return (config.baseUrl || '').trim() || null
 }
 
-async function loadExtras(row: IntegrationRow): Promise<IntegrationExtraColumns> {
+/** Sync alias kept local so the PATCH/rotate/test handlers below read the same way they always
+ *  have; `deriveHealth`/`integrationSummary` themselves now live in `../connectors/summary` (see
+ *  that module's doc comment for why: `dashboard.ts`'s `connectors` field reuses them without
+ *  pulling this route's Worker-only imports into the client bundle). */
+function loadExtras(row: IntegrationRow): IntegrationExtraColumns {
   return readIntegrationExtra(row as unknown as Record<string, unknown>)
-}
-
-export type IntegrationHealth = 'connected' | 'failing' | 'untested'
-
-/** Derived, never stored: `status` stays `active`/`revoked` only (a transient upstream failure must
- *  never flip `status` to something `integrations-seat.ts`'s `entitledInScopeRows()` does not treat as
- *  `active`, or one bad test would cut a working connector for the whole fleet - see the coordinator's
- *  follow-up after B2). `health` is what the console shows instead: `untested` when no test has ever
- *  run, else `connected`/`failing` from the last stored `ProbeResult.ok`. A row with a corrupt
- *  `last_test_json` (should not happen; `readIntegrationExtra` already guards the column) reads as
- *  `failing` rather than throwing. */
-function deriveHealth(extra: Pick<IntegrationExtraColumns, 'last_test_json' | 'last_test_at'>): IntegrationHealth {
-  if (!extra.last_test_json || extra.last_test_at == null) return 'untested'
-  try {
-    const parsed = JSON.parse(extra.last_test_json) as { ok?: unknown }
-    return parsed?.ok === true ? 'connected' : 'failing'
-  } catch {
-    return 'failing'
-  }
-}
-
-async function integrationSummary(store: OperatorStore, row: IntegrationRow): Promise<Record<string, unknown>> {
-  const extra = await loadExtras(row)
-  const grants = await store.listIntegrationGrants(row.id, GRANTS_COUNT_LIMIT)
-  let lastTest: unknown = null
-  if (extra.last_test_json) {
-    try {
-      lastTest = JSON.parse(extra.last_test_json)
-    } catch {
-      lastTest = null
-    }
-  }
-  let tools: unknown = null
-  if (extra.tools_json) {
-    try {
-      tools = JSON.parse(extra.tools_json)
-    } catch {
-      tools = null
-    }
-  }
-  return {
-    id: row.id,
-    kind: row.kind,
-    label: row.label,
-    baseUrl: row.base_url,
-    last4: row.last4,
-    status: row.status,
-    health: deriveHealth(extra),
-    transport: extra.transport,
-    authKind: extra.auth_kind,
-    headerName: extra.header_name,
-    mode: extra.mode,
-    allowWrites: extra.allow_writes === 1,
-    scope: parseScopeJson(row.scope_json),
-    notes: extra.notes,
-    tools,
-    lastTest,
-    lastTestAt: extra.last_test_at,
-    uses: row.uses,
-    lastUsedAt: row.last_used_at,
-    grantsCount: grants.length,
-    createdAt: row.created_at,
-    createdBy: row.created_by,
-    rotatedAt: row.rotated_at,
-    revokedAt: row.revoked_at
-  }
 }
 
 /** Persists `row` through the store (so both the memory store and D1 keep the base columns in sync) and,
@@ -175,6 +149,18 @@ export async function saveIntegration(ctx: AdminCtx, row: IntegrationRow, extra:
 
 function probeDepsFrom(ctx: AdminCtx): ProbeDeps {
   return { fetch: ctx.opts.providerFetch ?? ctx.opts.cfFetch ?? fetch }
+}
+
+/** For the Activity route only: never a raw device id where a hostname/email is known and not
+ *  itself secret-shaped (`looksLikeSecret`, same guard `dashboard.ts`'s `displayProfile` uses), and
+ *  never an invented name for a seat that reported neither - `deviceShort` (the row's own short
+ *  device id) is what the drawer falls back to, matching Events' "Seat 4f2c" convention. */
+function seatDisplay(seat: SeatRow | undefined, deviceId: string): { hostname: string | null; email: string | null; deviceShort: string } {
+  return {
+    hostname: seat?.hostname && !looksLikeSecret(seat.hostname) ? seat.hostname : null,
+    email: seat?.sso_email && !looksLikeSecret(seat.sso_email) ? seat.sso_email : null,
+    deviceShort: deviceId.slice(0, 8)
+  }
 }
 
 // No per-route rate limit here: a central per-admin-identity limit on every non-GET admin request is
@@ -298,6 +284,9 @@ export function registerIntegrationsRoutes(): void {
       if (body.mode === 'direct' || body.mode === 'brokered') extraPatch.mode = body.mode
       if (typeof body.allowWrites === 'boolean') extraPatch.allow_writes = body.allowWrites ? 1 : 0
       if (typeof body.notes === 'string') extraPatch.notes = body.notes.trim().slice(0, 500) || null
+      if (Array.isArray(body.disabledTools)) {
+        extraPatch.disabled_tools_json = JSON.stringify(disabledToolsFromBody(body.disabledTools, knownToolNames(entry, currentExtra)))
+      }
       if (body.config !== undefined) {
         const config = stringConfig(body.config, entry ? configKeysFor(entry) : undefined)
         extraPatch.config_json = JSON.stringify(config)
@@ -394,6 +383,40 @@ export function registerIntegrationsRoutes(): void {
       await saveIntegration(ctx, existing, nextExtra)
       await auditLog(ctx, 'integration-test', null, `${existing.kind} ${existing.label} ·${existing.last4 ?? '----'}`)
       return json({ ok: true, result, health: deriveHealth(nextExtra) })
+    }
+  })
+
+  defineRoute<AdminCtx>({
+    method: 'GET',
+    pattern: /^\/v1\/admin\/integrations\/(?<id>[^/]+)\/activity\.json$/,
+    auth: 'admin',
+    handler: async (_request, ctx, match) => {
+      const id = param(match, 'id')
+      const existing = await ctx.store.getIntegration(id)
+      if (!existing) return json({ ok: false, error: 'not found' }, 404)
+      if (!ctx.env.DB) {
+        // No fake data (lock 3): mcp_calls is a D1-only table (connectors/mcp-calls.ts); an unbound
+        // D1 means "not available yet," never an empty table pretending there have been no calls.
+        return json({ ok: true, available: false, rows: [], toolCounts: [], sparkline: [] })
+      }
+      const page = await listMcpCalls(ctx.env.DB, { connectionId: id, limit: ACTIVITY_FETCH_LIMIT })
+      const seats = await ctx.store.listSeats()
+      const seatsById = new Map(seats.map((s) => [s.device_id, s]))
+      const rows = page.rows.slice(0, ACTIVITY_ROWS_LIMIT).map((r) => {
+        const seat = seatDisplay(seatsById.get(r.device_id), r.device_id)
+        return { ts: r.ts, tool: r.tool, hostname: seat.hostname, email: seat.email, deviceShort: seat.deviceShort, ms: r.ms, outcome: r.outcome }
+      })
+      const toolCountsMap = new Map<string, number>()
+      for (const r of page.rows) toolCountsMap.set(r.tool, (toolCountsMap.get(r.tool) ?? 0) + 1)
+      const toolCounts = [...toolCountsMap.entries()].map(([tool, calls]) => ({ tool, calls })).sort((a, b) => b.calls - a.calls)
+      const dayMs = 24 * 60 * 60 * 1000
+      const sparkline = Array.from({ length: ACTIVITY_SPARKLINE_DAYS }, (_, i) => {
+        const start = ctx.now - (ACTIVITY_SPARKLINE_DAYS - i) * dayMs
+        const end = start + dayMs
+        const inWindow = page.rows.filter((r) => r.ts >= start && r.ts < end)
+        return { ts: start, calls: inWindow.length, errors: inWindow.filter((r) => r.outcome !== 'ok').length }
+      })
+      return json({ ok: true, available: true, rows, toolCounts, sparkline })
     }
   })
 

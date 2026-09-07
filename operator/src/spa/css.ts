@@ -307,13 +307,11 @@ button.danger { color: var(--danger); }
   width: 288px;
 }
 /* Below 1024px the rail goes fully off-canvas (reference Sidebar.tsx: -translate-x-72) and a
-   menu button plus a full-viewport backdrop scrim take over. */
-.rail-toggle {
-  display: none; position: fixed; top: 12px; left: 12px; z-index: 45;
-  width: 34px; height: 34px; align-items: center; justify-content: center;
-  border: 1px solid var(--hair); background: var(--panel); color: var(--ink);
-  border-radius: var(--radius-control); cursor: pointer;
-}
+   menu button plus a full-viewport backdrop scrim take over. \`.rail-toggle\` itself is defined
+   once, in css-shell.ts (SHELL_CSS) alongside \`.mobile-bar\` -- it used to be redeclared here too
+   with \`position: fixed; top: 12px; left: 12px\`, which (CSS cascades per property, and
+   css-shell.ts's rule never redeclared position/top/left/z-index) pinned the button over
+   \`.mobile-bar h2#page-title\` on every page. Do not reintroduce a \`.rail-toggle\` rule here. */
 .rail-backdrop {
   display: none; position: fixed; inset: 0; z-index: 40;
   background: color-mix(in srgb, black 32%, transparent); backdrop-filter: blur(2px);
@@ -326,7 +324,6 @@ button.danger { color: var(--danger); }
     transform: translateX(-100%); transition: transform 200ms var(--ease-spring);
   }
   .rail.open { transform: translateX(0); }
-  .rail-toggle { display: inline-flex; }
   .rail-backdrop[data-open="1"] { display: block; }
 }
 @media (prefers-reduced-motion: reduce) { .rail { transition: none; } }
@@ -449,7 +446,6 @@ button.danger { color: var(--danger); }
 .ev-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin: 0 0 10px; }
 .ev-sub { margin: 4px 0 0; font-size: 12px; }
 .ev-tabs { margin: 0 0 10px; }
-.page-hero { display: grid; gap: 4px; margin: 2px 0 4px; }
 /* -- plan 3.3: page titles 24px. -- */
 .page-title {
   margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.02em; color: var(--ink);
@@ -541,8 +537,16 @@ button.danger { color: var(--danger); }
 .delta.down { color: var(--danger); }
 .delta.flat { color: var(--ink3); }
 .rt-grid { display: grid; grid-template-columns: minmax(220px, 28%) minmax(0, 1fr); gap: 16px; align-items: stretch; }
-.rt-map { min-width: 0; min-height: 480px; position: relative; }
-/* -- plan 6.3: light choropleth map panel matching the page canvas, 18px radius (Tony,
+.rt-map { min-width: 0; position: relative; }
+/* No min-height on .rt-map (removed the 480px it had): this class name is shared, by pure
+   accident, with the map rebuild's own .rt-map (css-realtime.ts) -- the legacy id="map-root"
+   markup this rule and the two below were written for has no remaining renderer (see
+   ui.console.test.ts), so a min-height meant for that dead markup was instead forcing the
+   live map's box past its intended 16:9 aspect-ratio height on any narrow card, opening a
+   gap \`overflow: hidden\` no longer closed -- Mercator's high-Arctic overflow (Russia's own
+   coastline, projected well outside the map's nominal canvas at that latitude, ordinarily
+   invisible) rendered right into it as the "hard-edged circular disc" from task report item 7.
+   -- plan 6.3: light choropleth map panel matching the page canvas, 18px radius (Tony,
    2026-09-06: not a dark focal panel). -- */
 .rt-map #map-root { min-height: 480px; height: 100%; background: var(--map-ocean); border-radius: var(--radius-map); }
 #map-root[data-land="inline"] { min-height: 480px; background: var(--map-ocean); border-radius: var(--radius-map); }
@@ -926,23 +930,56 @@ svg:not(.shoey-world) path { vector-effect: non-scaling-stroke; }
 .seat-overlay-head.glass { padding: 12px 16px; margin: -16px -16px 12px; border-bottom: 1px solid var(--border); border-radius: var(--radius-card) var(--radius-card) 0 0; }
 .seat-overlay-head.glass .logo-glyph { flex-shrink: 0; }
 
-.logo-glyph { display: inline-block; border-radius: 6px; object-fit: contain; flex-shrink: 0; }
+/* logoGlyph() (render/primitives.ts) ships each brand mark as a plain <img> over its SVG's own
+   transparent canvas. Several (github.svg #181717, notion.svg #000000, plane.svg #121212, ...)
+   are a single near-black/black path with no fill of their own behind it -- on the dark theme's
+   near-black --surface-2 tile background they read as an all-but-invisible smudge, crisp only in
+   light mode where the page background is already close to white. A background-color on an <img>
+   paints behind its transparent pixels, so one fixed, theme-INDEPENDENT light swatch behind every
+   logo -- deliberately never --surface/--surface-2, which is the whole point -- guarantees the
+   same contrast a dark-on-white brand mark was drawn for, in both themes; a full-bleed multi-
+   colour mark (slack.svg, dynamics365.svg, ...) already paints over it and is unaffected. */
+.logo-glyph { display: inline-block; border-radius: 6px; object-fit: contain; flex-shrink: 0; background: #fff; }
 
-/* catalogTile() */
+/* catalogTile() (plan 6.10c: a compact 64px-tall horizontal row, logo left -- not the taller
+   stacked card an earlier pass used). */
 .catalog-tile {
-  display: flex; flex-direction: column; align-items: flex-start; gap: 8px;
+  display: flex; flex-direction: row; align-items: center; gap: 8px;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-card);
-  padding: 12px; min-width: 168px; cursor: pointer; text-align: left;
+  height: 64px; padding: 0 10px; cursor: pointer; text-align: left; width: 100%; box-sizing: border-box;
   transition: transform 150ms var(--ease-spring), box-shadow 150ms var(--ease-spring);
 }
 .catalog-tile:hover { transform: translateY(-1px); box-shadow: var(--shadow); }
 @media (prefers-reduced-motion: reduce) { .catalog-tile:hover { transform: none; } }
-.catalog-tile-needs-oauth { opacity: 0.6; cursor: default; }
+.catalog-tile-needs-oauth { opacity: 0.6; }
 .catalog-tile-needs-oauth:hover { transform: none; box-shadow: none; }
-.catalog-tile-connected { box-shadow: var(--shadow-ring); }
-.catalog-tile-name { font: 600 13px var(--font-body); color: var(--ink); }
-.catalog-tile-transport { font-family: var(--font-mono); }
-.catalog-tile-note { font: 12px var(--font-body); color: var(--ink3); }
+/* plan 6.10b/6.10c: "Already-connected kinds are dimmed to 70% ... dims and shows its count" -- a
+   quiet, de-emphasized state, the same family as needs-oauth's 0.6, not a spotlight. This used to
+   be box-shadow: var(--shadow-ring) alone, with no opacity rule at all: on 3-4 tiles at once
+   that reads as a permanent focus/selected outline sitting on the catalog, the opposite of "make
+   sure the Catalog is clean" -- especially in dark mode, where --shadow-ring's fixed-alpha violet
+   glow sits on top of an already-dark tile and looks like stray leftover focus-state CSS rather
+   than a deliberate connected marker. The small live dot (.catalog-tile-dot-connected, already
+   rendered by catalogTile()) is what actually marks "connected"; this tile only needs to step
+   back at rest. Unlike needs-oauth it stays a real, clickable tile (scrolls the Connected block
+   into view), so it keeps the base .catalog-tile:hover lift/shadow instead of suppressing it. */
+.catalog-tile-connected { opacity: 0.7; }
+.catalog-tile .logo-glyph { flex-shrink: 0; }
+.catalog-tile-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.catalog-tile-name {
+  font: 600 12.5px var(--font-body); color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.catalog-tile-meta { display: flex; align-items: center; gap: 6px; }
+.catalog-tile-transport { font-family: var(--font-mono); flex-shrink: 0; }
+.catalog-tile-dot { display: inline-flex; flex-shrink: 0; cursor: help; }
+.catalog-tile-dot i { width: 7px; height: 7px; border-radius: var(--radius-pill); display: inline-block; }
+.catalog-tile-dot-connected i { background: var(--live); }
+/* Same rose used by status-dot-failed / the Needs attention list (plan 6.10b) -- a catalog tile
+   whose only connection(s) are all currently failing gets that colour too, not the plain
+   "any connection exists" green every other tile state already earns honestly. */
+.catalog-tile-dot-failing i { background: var(--danger); }
+.catalog-tile-lock { display: inline-flex; flex-shrink: 0; cursor: help; color: var(--ink3); }
+.catalog-tile-lock-ic { width: 13px; height: 13px; }
 
 /* chip() tones (statusDot()/deltaChip() colours, never a bespoke meaning per page) */
 .chip-ok { color: var(--ok); background: color-mix(in srgb, var(--ok) 10%, transparent); border-color: color-mix(in srgb, var(--ok) 24%, transparent); }
@@ -955,6 +992,11 @@ svg:not(.shoey-world) path { vector-effect: non-scaling-stroke; }
 .segmented-item {
   border: 0; background: transparent; color: var(--ink2); font: 600 12px var(--font-body);
   padding: 5px 12px; border-radius: var(--radius-pill); cursor: pointer;
+  /* Without these, a flex item's default min-width:auto/flex-shrink:1 let a narrow container
+     (e.g. css-connectors.ts's mobile \`.connectors-catalog-filters .segmented { overflow-x: auto }\`)
+     shrink an item below its label's natural width instead of overflowing the row -- the label
+     then wraps onto multiple lines in place of the intended horizontal scroll. */
+  white-space: nowrap; flex-shrink: 0;
 }
 .segmented-item.on { background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
 
@@ -965,9 +1007,17 @@ svg:not(.shoey-world) path { vector-effect: non-scaling-stroke; }
   font: 600 10px/1 var(--font-mono); margin-left: 4px; cursor: help;
 }
 
-/* toast() -- bottom-right, one at a time (plan 6.1) */
+/* toast() -- bottom-right, one at a time (plan 6.1). The actual bottom-right fixed positioning
+   lives on the *container* now (\`.toast-region\` in css-shell.ts / SHELL_CSS, concatenated after
+   this file), which lays its (normally one) \`.toast\` child out with \`display: flex\`. This rule
+   used to also set \`position: fixed; right: 16px; bottom: 16px; z-index: 80\` on the *toast itself*
+   -- with only ever one toast shown, that happened to land in the same visual spot, masking the
+   real bug: a \`position: fixed\` child escapes its flex parent's layout entirely, so the moment a
+   second toast is ever in the DOM at once, both stack exactly on top of each other instead of
+   \`.toast-region\`'s own \`gap: 8px\` column -- the exact cascade trap \`.rail-toggle\` hit elsewhere in
+   this file. Do not reintroduce position/right/bottom/z-index here; that belongs on the region. */
 .toast {
-  display: flex; align-items: center; gap: 10px; position: fixed; right: 16px; bottom: 16px; z-index: 80;
+  display: flex; align-items: center; gap: 10px;
   background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control);
   box-shadow: var(--shadow); padding: 10px 12px; font: 400 13px var(--font-body); color: var(--ink);
   max-width: 360px;
@@ -1004,11 +1054,13 @@ svg:not(.shoey-world) path { vector-effect: non-scaling-stroke; }
 .alert-badge-ok { background: var(--ok); }
 .alert-badge-danger { background: var(--danger); }
 .alert-badge-info { background: var(--info); }
+.alert-badge-warn { background: var(--warn); }
 .alert-badge-icon { width: 16px; height: 16px; flex-shrink: 0; }
 .alert-badge-divider { width: 1px; align-self: stretch; }
 .alert-badge-ok .alert-badge-divider { background: color-mix(in srgb, var(--ok) 55%, white); }
 .alert-badge-danger .alert-badge-divider { background: color-mix(in srgb, var(--danger) 55%, white); }
 .alert-badge-info .alert-badge-divider { background: color-mix(in srgb, var(--info) 55%, white); }
+.alert-badge-warn .alert-badge-divider { background: color-mix(in srgb, var(--warn) 55%, white); }
 .alert-badge-label { white-space: nowrap; }
 .alert-badge-action { color: var(--accent-ink); text-decoration: underline; text-underline-offset: 2px; margin-left: 4px; white-space: nowrap; }
 
@@ -1063,6 +1115,19 @@ table.dt-card tfoot td { background: color-mix(in srgb, var(--surface) 85%, var(
 .connector-row-secondary { font-size: 11.5px; color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .connector-row-action { flex-shrink: 0; font: 600 12px var(--font-body); color: var(--accent-text); }
 .connector-row:hover .connector-row-action { text-decoration: underline; }
+/* At 390px a Needs-attention reason line ("Test failed 2 hours ago, since 4h ago"-length text)
+   sharing a 56px row with a 32px icon and a right-aligned action word runs out of room for the
+   single-line ellipsis above -- the row exists specifically to state a failure and its recency
+   (plan 3.7b law 8, "state is always visible"), so eliding the recency mid-sentence hides the one
+   fact this row is for, rather than merely trimming a nice-to-have. Below the width the reference
+   two-column catalog also switches at, the row grows to fit the wrapped text instead: height
+   auto/min-height keeps the 56px floor for a short reason, the icon/action stay vertically
+   centred via the row's own align-items: center. Untouched above 640px, where the row's fixed 56px
+   height (plan 6.10b) and single-line reason both still fit comfortably. */
+@media (max-width: 640px) {
+  .connector-row { height: auto; min-height: 56px; padding-top: 8px; padding-bottom: 8px; }
+  .connector-row-secondary { white-space: normal; overflow: visible; text-overflow: clip; }
+}
 .connector-show-more {
   display: flex; align-items: center; justify-content: center; gap: 4px; width: 100%;
   padding: 10px 16px; border-top: 1px solid var(--border); background: transparent;

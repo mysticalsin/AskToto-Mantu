@@ -768,6 +768,81 @@ export const CONNECTOR_CATALOG: Record<ConnectorKind, ConnectorCatalogEntry> = {
   )
 }
 
+export interface ConnectorRestTool {
+  name: string
+  description: string
+  write: boolean
+}
+
+/** Static, code-defined tool sets for the phase-1 REST adapters (plan D8: `gateway.ts`'s
+ *  `REST_ADAPTERS`, `adapters/{hubspot,clickup,plane,notion,jira,linear,slack}.ts`). Duplicated
+ *  here -- name/description/write only, no fetch logic -- rather than importing the adapter
+ *  modules themselves: those pull in `gateway.ts`'s SSRF-guarded fetch plumbing, Worker-only
+ *  weight this catalog (already bundled into the browser via `render/pages/connectors.ts`) has no
+ *  business shipping to a client. A REST connection's real tool set at call time is always the
+ *  adapter's own list; this is display-only and must be kept in sync with it by hand. A REST kind
+ *  absent from this map (`custom-rest`, `salesforce`, `pipedrive`, ...) genuinely has no phase-1
+ *  brokered tool set yet -- `toolsCell()` / `toolsPanelHtml()` in render/pages/connectors.ts still
+ *  read "Not applicable" for it, honestly, rather than a fabricated empty list. */
+export const REST_TOOL_CATALOG: Partial<Record<ConnectorKind, ConnectorRestTool[]>> = {
+  hubspot: [
+    { name: 'list_contacts', description: 'List contacts, newest first.', write: false },
+    { name: 'get_contact', description: 'Get one contact by id.', write: false },
+    { name: 'search_contacts', description: 'Search contacts by email.', write: false },
+    { name: 'create_contact', description: 'Create a contact.', write: true },
+    { name: 'update_contact', description: 'Update a contact by id.', write: true }
+  ],
+  clickup: [
+    { name: 'list_workspaces', description: 'List the authorized workspaces (teams).', write: false },
+    { name: 'list_tasks', description: 'List tasks in a list.', write: false },
+    { name: 'get_task', description: 'Get one task by id.', write: false },
+    { name: 'create_task', description: 'Create a task in a list.', write: true },
+    { name: 'update_task', description: 'Update a task by id.', write: true }
+  ],
+  plane: [
+    { name: 'list_projects', description: 'List projects in the workspace.', write: false },
+    { name: 'list_issues', description: 'List issues in a project.', write: false },
+    { name: 'get_issue', description: 'Get one issue by id.', write: false },
+    { name: 'create_issue', description: 'Create an issue in a project.', write: true },
+    { name: 'update_issue', description: 'Update an issue by id.', write: true }
+  ],
+  notion: [
+    { name: 'search', description: 'Search pages and databases by title.', write: false },
+    { name: 'get_page', description: 'Get one page by id.', write: false },
+    { name: 'query_database', description: 'Query a database by id.', write: false },
+    { name: 'create_page', description: 'Create a page under a parent page or database.', write: true },
+    { name: 'update_page', description: "Update a page's properties by id.", write: true }
+  ],
+  jira: [
+    { name: 'search_issues', description: 'Search issues with JQL.', write: false },
+    { name: 'get_issue', description: 'Get one issue by key.', write: false },
+    { name: 'list_projects', description: 'List projects.', write: false },
+    { name: 'create_issue', description: 'Create an issue.', write: true },
+    { name: 'add_comment', description: 'Add a comment to an issue.', write: true }
+  ],
+  linear: [
+    { name: 'list_teams', description: 'List teams.', write: false },
+    { name: 'list_issues', description: 'List issues, optionally for one team.', write: false },
+    { name: 'get_issue', description: 'Get one issue by id.', write: false },
+    { name: 'create_issue', description: 'Create an issue on a team.', write: true },
+    { name: 'update_issue', description: 'Update an issue by id.', write: true }
+  ],
+  slack: [
+    { name: 'list_channels', description: 'List channels the bot can see.', write: false },
+    { name: 'list_users', description: 'List workspace members.', write: false },
+    { name: 'get_channel_history', description: 'Get recent messages in a channel.', write: false },
+    { name: 'post_message', description: 'Post a message to a channel.', write: true },
+    { name: 'add_reaction', description: 'Add an emoji reaction to a message.', write: true }
+  ]
+}
+
+/** `null` for an MCP-transport kind, a REST kind with no phase-1 adapter yet, or an unknown kind --
+ *  never an empty array standing in for "not applicable" vs. "adapter shipped zero tools" (it can't
+ *  happen today, but the distinction is free and avoids a future footgun). */
+export function getConnectorRestTools(kind: string): ConnectorRestTool[] | null {
+  return Object.prototype.hasOwnProperty.call(REST_TOOL_CATALOG, kind) ? REST_TOOL_CATALOG[kind as ConnectorKind]! : null
+}
+
 export function getConnectorCatalogEntry(kind: string): ConnectorCatalogEntry | null {
   return Object.prototype.hasOwnProperty.call(CONNECTOR_CATALOG, kind) ? CONNECTOR_CATALOG[kind as ConnectorKind] : null
 }

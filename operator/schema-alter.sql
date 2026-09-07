@@ -212,6 +212,7 @@ ALTER TABLE integrations ADD COLUMN tools_json TEXT;
 ALTER TABLE integrations ADD COLUMN last_test_json TEXT;
 ALTER TABLE integrations ADD COLUMN last_test_at INTEGER;
 ALTER TABLE integrations ADD COLUMN notes TEXT;
+ALTER TABLE integrations ADD COLUMN disabled_tools_json TEXT NOT NULL DEFAULT '[]';
 
 -- Operator settings key/value store (task B6, plan 3.7b law 3 and 6.11 "Value"): hourly rate,
 -- currency, per-seat daily token budget, density, reduced motion. One row per key. A wholly new

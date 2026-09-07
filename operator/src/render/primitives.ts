@@ -258,11 +258,20 @@ export function logoGlyph(kind: string, label: string, opts?: { size?: number })
   return `<img class="logo-glyph" src="/assets/logos/${esc(kind)}.svg" alt="${esc(label)}" width="${size}" height="${size}" loading="lazy">`
 }
 
-export type CatalogTileState = 'ready' | 'needs-oauth' | 'connected'
+export type CatalogTileState = 'ready' | 'needs-oauth' | 'connected' | 'failing'
 
-/** Plan 6.10 / 3.7 item 6: a catalog tile in the Connectors page. Ready tiles are clickable;
- * `needs-oauth` tiles render identically but inert (lock 12: "inert beats fake") with the exact
- * sentence the plan requires; `connected` tiles show the live status dot and count. */
+/** Plan 6.10c: "compact tiles ... 64px tall: 24px logo left, name 12.5px 600 on one line with
+ * ellipsis and the full name in the title, an MCP or API micro badge, and a state dot only when
+ * the kind is connected or inert. No description text, no per-tile buttons." A horizontal row
+ * (logo, then a name+badge text column), never the taller stacked layout an earlier pass of this
+ * primitive used. Ready tiles are clickable; `needs-oauth` tiles render identically but inert
+ * (lock 12: "inert beats fake") with a lock glyph, never hidden and never a dead click; `connected`
+ * tiles show a live dot carrying the connection count in its accessible name (never full label
+ * text -- there is no room for one at this height). `failing` (plan 6.10b's emerald/rose/amber
+ * status vocabulary, applied here too) is its own state, not a `connected` tile with a green dot
+ * regardless of health: a kind whose only connection(s) are all currently failing gets the same
+ * rose dot the row/Needs-attention status dots already use, not one indistinguishable from a
+ * healthy connection. */
 export function catalogTile(opts: {
   kind: string
   label: string
@@ -272,21 +281,23 @@ export function catalogTile(opts: {
   attrs?: string
 }): string {
   const transportBadge = `<span class="chip catalog-tile-transport">${opts.transport === 'mcp' ? 'MCP' : 'API'}</span>`
-  const status =
-    opts.state === 'connected'
-      ? statusDot({
-          state: 'live',
-          label: opts.connections ? `Connected, ${opts.connections} connection${opts.connections === 1 ? '' : 's'}` : 'Connected'
-        })
-      : opts.state === 'needs-oauth'
-        ? '<span class="catalog-tile-note">Needs OAuth (phase 2)</span>'
-        : ''
+  let meta = ''
+  if (opts.state === 'failing') {
+    const label = opts.connections ? `Needs attention, ${opts.connections} connection${opts.connections === 1 ? '' : 's'} failing` : 'Needs attention'
+    meta = `<span class="catalog-tile-dot catalog-tile-dot-failing" role="img" aria-label="${esc(label)}" title="${esc(label)}"><i aria-hidden="true"></i><span class="sr-only">${esc(label)}</span></span>`
+  } else if (opts.state === 'connected') {
+    const label = opts.connections ? `Connected, ${opts.connections} connection${opts.connections === 1 ? '' : 's'}` : 'Connected'
+    meta = `<span class="catalog-tile-dot catalog-tile-dot-connected" role="img" aria-label="${esc(label)}" title="${esc(label)}"><i aria-hidden="true"></i><span class="sr-only">${esc(label)}</span></span>`
+  } else if (opts.state === 'needs-oauth') {
+    meta = `<span class="catalog-tile-lock" role="img" aria-label="Needs OAuth (phase 2)" title="Needs OAuth (phase 2)">${iconSvg(KIND_ICON_PATHS.vault, { class: 'catalog-tile-lock-ic' })}<span class="sr-only">Needs OAuth (phase 2)</span></span>`
+  }
   const inert = opts.state === 'needs-oauth' ? ' data-inert aria-disabled="true"' : ''
   return `<button type="button" class="catalog-tile catalog-tile-${esc(opts.state)}" data-catalog-tile="${esc(opts.kind)}"${inert} ${opts.attrs || ''}>
-    ${logoGlyph(opts.kind, opts.label)}
-    <span class="catalog-tile-name">${esc(opts.label)}</span>
-    ${transportBadge}
-    ${status}
+    ${logoGlyph(opts.kind, opts.label, { size: 24 })}
+    <span class="catalog-tile-body">
+      <span class="catalog-tile-name" title="${esc(opts.label)}">${esc(opts.label)}</span>
+      <span class="catalog-tile-meta">${transportBadge}${meta}</span>
+    </span>
   </button>`
 }
 
@@ -304,10 +315,13 @@ export function tabs(opts: { items: { id: string; label: string; active?: boolea
 export type ChipTone = 'default' | 'ok' | 'warn' | 'danger' | 'accent'
 
 /** Generic pill chip. `tone` maps to the same status colours as statusDot()/deltaChip() so a
- * page never invents its own colour meaning. */
-export function chip(opts: { label: string; tone?: ChipTone; icon?: string }): string {
+ * page never invents its own colour meaning. `attrs` is optional extra markup (a `data-*` hook
+ * for a caller that needs to find and update this exact chip later, e.g. once a name it could not
+ * resolve at render time loads client-side) -- never a place for a colour or layout override. */
+export function chip(opts: { label: string; tone?: ChipTone; icon?: string; attrs?: string }): string {
   const tone = opts.tone && opts.tone !== 'default' ? ` chip-${opts.tone}` : ''
-  return `<span class="chip${tone}">${opts.icon || ''}${esc(opts.label)}</span>`
+  const attrs = opts.attrs ? ` ${opts.attrs}` : ''
+  return `<span class="chip${tone}"${attrs}>${opts.icon || ''}${esc(opts.label)}</span>`
 }
 
 /** Segmented control (reference: theme System/Light/Dark). A generic version of the same
@@ -375,7 +389,7 @@ export function exportMenu(opts: { csvHref: string; label?: string }): string {
   return `<a class="tool export-menu" href="${esc(opts.csvHref)}" data-export-link>${iconSvg(NAV_ICON_PATHS['chevrons-up-down'], { class: 'tool-ic' })}<span>${esc(opts.label || 'Export CSV')}</span></a>`
 }
 
-export type AlertBadgeVariant = 'ok' | 'danger' | 'info'
+export type AlertBadgeVariant = 'ok' | 'danger' | 'info' | 'warn'
 
 /**
  * Plan 3.5c (ported from a Tremor-style alert badge): a pill in --ok/--danger/--info with white

@@ -14,6 +14,8 @@
  */
 import { buildDashboard, type DashboardPayload, type DashboardValueSettings } from '../../dashboard'
 import { getConnectorCatalogEntry } from '../../connectors/catalog'
+import { readIntegrationExtra } from '../../connectors/data'
+import { deriveHealth } from '../../connectors/summary'
 import { relativeTime } from '../primitives'
 import { memoryStore } from '../../store'
 import { FIXTURE_EMAIL, FIXTURE_NOW, fixtureRows, seedStore } from '../fixture'
@@ -45,7 +47,10 @@ export function fixtureOverviewConnectors(now: number = FIXTURE_NOW): OverviewCo
   const { integrations } = fixtureRows(now)
   return integrations.map((row) => {
     const entry = getConnectorCatalogEntry(row.kind)
-    const healthy = row.status !== 'failing'
+    // `deriveHealth()` off the row's own last_test_json/last_test_at extra columns (plan 6.10c):
+    // fixture.ts's seed rows now carry those columns like a real D1 row would, and row.status
+    // itself is always 'active' (matching production) -- health no longer lives there.
+    const healthy = deriveHealth(readIntegrationExtra(row as unknown as Record<string, unknown>)) !== 'failing'
     return {
       id: row.id,
       kind: row.kind,

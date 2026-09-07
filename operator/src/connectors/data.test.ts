@@ -8,6 +8,7 @@ import {
   deleteIntegrationRow,
   INTEGRATION_ALTERS,
   INTEGRATION_EXTRA_DEFAULTS,
+  parseDisabledTools,
   readIntegrationExtra,
   readIntegrationExtraColumns,
   withIntegrationExtra,
@@ -88,7 +89,7 @@ describe('INTEGRATION_ALTERS', () => {
   it('adds a column for every field in IntegrationExtraColumns', () => {
     const db = freshDb()
     const columns = db.prepare('PRAGMA table_info(integrations)').all().map((c) => (c as { name: string }).name)
-    for (const col of ['auth_kind', 'header_name', 'transport', 'mode', 'allow_writes', 'config_json', 'tools_json', 'last_test_json', 'last_test_at', 'notes']) {
+    for (const col of ['auth_kind', 'header_name', 'transport', 'mode', 'allow_writes', 'config_json', 'tools_json', 'last_test_json', 'last_test_at', 'notes', 'disabled_tools_json']) {
       expect(columns).toContain(col)
     }
   })
@@ -116,6 +117,30 @@ describe('readIntegrationExtra', () => {
     expect(readIntegrationExtra({ config_json: 'not json' }).config_json).toBe('{}')
     expect(readIntegrationExtra({ config_json: '[1,2,3]' }).config_json).toBe('{}')
     expect(readIntegrationExtra({ config_json: '{"a":"b"}' }).config_json).toBe('{"a":"b"}')
+  })
+
+  it('defaults disabled_tools_json to "[]" for a row that predates the migration or carries a corrupt value', () => {
+    expect(readIntegrationExtra({}).disabled_tools_json).toBe('[]')
+    expect(readIntegrationExtra({ disabled_tools_json: 'not json' }).disabled_tools_json).toBe('[]')
+    expect(readIntegrationExtra({ disabled_tools_json: '{"a":"b"}' }).disabled_tools_json).toBe('[]')
+    expect(readIntegrationExtra({ disabled_tools_json: '["a", 2]' }).disabled_tools_json).toBe('[]')
+    expect(readIntegrationExtra({ disabled_tools_json: '["delete_deal"]' }).disabled_tools_json).toBe('["delete_deal"]')
+  })
+})
+
+describe('parseDisabledTools', () => {
+  it('returns the string array from valid JSON', () => {
+    expect(parseDisabledTools('["a","b"]')).toEqual(['a', 'b'])
+  })
+
+  it('returns an empty array for anything that is not a JSON array of strings', () => {
+    expect(parseDisabledTools('not json')).toEqual([])
+    expect(parseDisabledTools('{"a":"b"}')).toEqual([])
+    expect(parseDisabledTools('[]')).toEqual([])
+  })
+
+  it('drops non-string entries from a mixed array rather than failing the whole parse', () => {
+    expect(parseDisabledTools('["a", 2, null, "b"]')).toEqual(['a', 'b'])
   })
 })
 
@@ -151,7 +176,8 @@ describe('writeIntegrationExtraColumns / readIntegrationExtraColumns (real SQLit
       tools_json: JSON.stringify([{ name: 'list_contacts', write: false }]),
       last_test_json: JSON.stringify({ ok: true, latencyMs: 12, summary: 'Reached HubSpot' }),
       last_test_at: 5000,
-      notes: 'primary workspace'
+      notes: 'primary workspace',
+      disabled_tools_json: JSON.stringify(['delete_deal'])
     }
     await writeIntegrationExtraColumns(db, 'int-1', extra)
 
@@ -177,7 +203,8 @@ describe('writeIntegrationExtraColumns / readIntegrationExtraColumns (real SQLit
       tools_json: null,
       last_test_json: null,
       last_test_at: null,
-      notes: 'kept until the next putIntegration'
+      notes: 'kept until the next putIntegration',
+      disabled_tools_json: '[]'
     })
 
     // Simulate a rotate: the route re-reads the row, spreads it into a patch, and calls putIntegration
@@ -199,7 +226,8 @@ describe('writeIntegrationExtraColumns / readIntegrationExtraColumns (real SQLit
       tools_json: null,
       last_test_json: null,
       last_test_at: null,
-      notes: 'kept until the next putIntegration'
+      notes: 'kept until the next putIntegration',
+      disabled_tools_json: '[]'
     })
     const reapplied = await readIntegrationExtraColumns(db, 'int-1')
     expect(reapplied?.mode).toBe('direct')

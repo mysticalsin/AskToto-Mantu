@@ -116,8 +116,33 @@ async function main() {
         const page = await context.newPage()
         await page.goto(url, { waitUntil: 'load' })
         // Let the inlined router script (location.hash -> section swap) and any first paint
-        // animation settle before the full page screenshot.
-        await page.waitForTimeout(150)
+        // animation settle before the full page screenshot. The realtime map's own land draw-in
+        // and graticule reveal (operator/src/world/map-dom.ts) run for a full 800ms after
+        // hydration -- a shorter wait here used to snapshot the map mid-animation every time
+        // (land half-drawn, graticule still hidden), not a rendering bug in the map itself.
+        await page.waitForTimeout(900)
+        // A fixed wait alone still isn't enough once a list is long enough to need more than
+        // 900ms of stagger cadence to finish entering (bindMotion()'s staggerIn(), 40ms between
+        // rows by default): the Realtime page's 24-row Live events list finishes its last row at
+        // ~1.22s, so a 900ms-only wait screenshotted every row still sitting at its pre-entrance
+        // opacity: 0 -- a permanently blank panel under a header that already says "24" (task
+        // report finding 6). Waiting for every FINITE animation already in flight to reach a
+        // non-running state, on top of the fixed wait above, adapts to however long entrance
+        // animation content actually needs, whatever the row count -- excluding animations with
+        // `iterations: Infinity` (the pulsing live beacon, motion-bind.ts's "one allowed infinite
+        // loop"), which would otherwise never let this resolve. Falls through on its own timeout
+        // rather than failing the whole run if some animation never truly settles.
+        await page
+          .waitForFunction(
+            () =>
+              document.getAnimations().every((a) => {
+                const timing = a.effect && 'getTiming' in a.effect ? a.effect.getTiming() : null
+                if (timing && timing.iterations === Infinity) return true
+                return a.playState !== 'running' && a.playState !== 'pending'
+              }),
+            { timeout: 4000 }
+          )
+          .catch(() => {})
         const outPath = join(SHOTS_DIR, `${pageName}-${theme}-${viewport.width}.png`)
         await page.screenshot({ path: outPath, fullPage: true })
         written.push(outPath)

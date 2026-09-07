@@ -4,16 +4,15 @@
  * text forever"). operator/src/render/pages/overview.test.ts only exercises the pure
  * renderConnectorsCardRows() -- this is the async, DOM-mutating loadConnectorsCard() itself,
  * driven directly with `api()` mocked so no network call happens.
- *
- * NOTE for whoever owns operator/vitest.config.ts: this file lives under operator/client/, but
- * that config's `include` is only `['src/**\/*.test.ts', 'scripts/**\/*.test.ts']`, so this test
- * does not run yet under `npx vitest run --config operator/vitest.config.ts`. Add
- * `'client/**\/*.test.ts'` to that include array (one line) to wire it in -- flagged in this
- * task's report since operator/vitest.config.ts is not a file this task owns.
  */
 import { describe, expect, it, vi } from 'vitest'
 
-vi.mock('../api', () => ({ api: vi.fn() }))
+// `hasBackend` mocked `true` (a real Worker is behind the route) for every test below: these
+// cases are all about how loadConnectorsCard() reacts to what `api()` resolves with, not about
+// the standalone-preview short-circuit (see api.ts's own doc comment) that skips calling `api()`
+// at all -- covered instead by that short-circuit's own truth table (hasBackend() itself), not
+// by re-deriving it here against a fake `document`.
+vi.mock('../api', () => ({ api: vi.fn(), hasBackend: () => true }))
 
 import { api } from '../api'
 import { loadConnectorsCard } from './overview'

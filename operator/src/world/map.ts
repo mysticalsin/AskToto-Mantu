@@ -210,12 +210,25 @@ export interface RealtimeMapOptions {
   points: RealtimeMapPoint[]
 }
 
+/** Rendered radius of a point's own dot -- live/idle and stacked-seat count both widen it.
+ * Shared by `renderPin` and the label-layout pass below so the two can never disagree about
+ * how much room a dot actually takes up on screen. */
+function pinDotRadius(point: RealtimeMapPoint): number {
+  const live = point.live ?? true
+  return live ? (point.count > 1 ? 6.5 : 4.5) : point.count > 1 ? 5 : 3.5
+}
+
+/** Below this much vertical nudge (px), a label still reads as sitting right next to its own
+ * dot -- no leader line needed, and drawing one for every ordinary, uncrowded pin would just be
+ * visual noise. Above it, see `renderPin`'s leader-line comment. */
+const LEADER_LINE_MIN_DY = 4
+
 /** `labelDy` shifts only the city-name text (never the dot itself) — the output of the
  * collision nudge in `layoutPoints` below, so two nearby cities' names never overlap. */
 function renderPin(point: RealtimeMapPoint, variant: MapVariant, labelDy = 0): string {
   const [x, y] = projectPoint(point.lat, point.lon, variant)
   const live = point.live ?? true
-  const dotRadius = live ? (point.count > 1 ? 6.5 : 4.5) : point.count > 1 ? 5 : 3.5
+  const dotRadius = pinDotRadius(point)
   const label = point.city || countryName(point.country)
   const asksAttr = point.asks == null ? '' : ` data-asks="${point.asks}"`
   const liveSeatsAttr = point.liveSeats == null ? '' : ` data-live-seats="${point.liveSeats}"`
@@ -223,10 +236,22 @@ function renderPin(point: RealtimeMapPoint, variant: MapVariant, labelDy = 0): s
   const halo = live ? '<circle class="rt-pin-halo" data-beacon r="4.5" />' : ''
   const labelX = (dotRadius + 5).toFixed(2)
   const labelY = (3 + labelDy).toFixed(2)
+  // A label the collision nudge above pushed clear of a neighbour no longer sits beside its own
+  // dot -- at that point a short leader line is the only thing left that still reads as "this
+  // text belongs to that dot" (task report: "Paris"/"Lyon" and "Sao Paulo" stranded in open
+  // whitespace, ambiguous which marker either belongs to, once two nearby cities' labels pushed
+  // each other apart). Runs from just past the dot's own edge to just before the label's first
+  // character, inside the same `<g>` the dot itself is in, so it is always anchored to the
+  // right point even when nudged deep into another pin's or pill's territory.
+  const leader =
+    labelDy > LEADER_LINE_MIN_DY
+      ? `<line class="rt-pin-leader" x1="${dotRadius.toFixed(2)}" y1="0" x2="${(dotRadius + 3).toFixed(2)}" y2="${(labelDy - 3).toFixed(2)}" />`
+      : ''
   return `<g class="rt-pin" data-pin tabindex="0" data-live="${live ? '1' : '0'}" data-iso="${escapeXml(point.country)}" data-country="${escapeXml(countryName(point.country))}" data-city="${escapeXml(label)}" data-seats="${point.count}"${liveSeatsAttr}${asksAttr}${timeSavedAttr} transform="translate(${x.toFixed(2)} ${y.toFixed(2)})">
       <g class="rt-pin-inner" data-pin-inner>
         ${halo}
         <circle class="rt-pin-dot" r="${dotRadius}" />
+        ${leader}
         <text class="rt-pin-label" data-pin-label x="${labelX}" y="${labelY}">${escapeXml(label)}</text>
       </g>
     </g>`
@@ -296,9 +321,11 @@ function nudgeDown(box: LayoutBox, obstacles: LayoutBox[]): void {
   }
 }
 
-/** Rough label-width estimate for server-rendered layout with no real text metrics
- * (map-dom.ts refines every box to its actual `getBBox()` width on hydration) — generous
- * enough that the common case does not visibly overflow before that refinement runs. */
+/** Label-width estimate for the collision-nudge layout below: this module never touches the
+ * DOM (see the file's own header comment), so there is no real `getBBox()` text metric to
+ * measure against -- `pxPerChar` is a per-caller constant tuned generous enough, against the
+ * monospace `--font-mono` labels/pills actually render in, that this estimate does not
+ * meaningfully under-count a real string's rendered width. */
 function estimateTextWidth(text: string, pxPerChar: number): number {
   return text.length * pxPerChar
 }
@@ -351,25 +378,35 @@ export function renderRealtimeMapSvg(options: RealtimeMapOptions): string {
 
   const land = landPaths(WORLD_1152)
 
-  // City labels must not collide with each other either (two nearby cities' names used to
-  // print on top of one another) — nudge each one, in turn, clear of every label already
-  // placed, then render every pin with the resulting vertical offset applied to its text
-  // only (the dot itself never moves).
+  // City labels must not collide with each other, or with any OTHER city's own dot, either
+  // (a label nudged clear of its neighbours' labels could still land squarely on a nearby
+  // city's dot -- the exact "second dot sits on the S of Sao Paulo" / "on the i in Paris" bug:
+  // Rio's dot 11px from Sao Paulo's label, Munich's dot dead centre of Paris's, both closer
+  // to that other city's label than to their own once labels get nudged around). Every dot's
+  // footprint (its rendered radius, padded a couple of px for the live halo) is therefore a
+  // fixed obstacle up front, before any label is placed, so it never matters which point's
+  // label is laid out first.
+  const dotBoxes: LayoutBox[] = points.map((p) => {
+    const [px, py] = projectPoint(p.lat, p.lon, variant)
+    const pad = pinDotRadius(p) + 2
+    return { x: px - pad, y: py - pad, width: pad * 2, height: pad * 2 }
+  })
   const placedLabels: LayoutBox[] = []
   const labelDy: number[] = []
   if (!empty) {
-    for (const p of points) {
+    points.forEach((p, i) => {
       const [x, y] = projectPoint(p.lat, p.lon, variant)
       const label = p.city || countryName(p.country)
-      const dotRadius = (p.live ?? true) ? (p.count > 1 ? 6.5 : 4.5) : p.count > 1 ? 5 : 3.5
+      const dotRadius = pinDotRadius(p)
       const labelX = x + dotRadius + 5
       const w = estimateTextWidth(label, 5.4)
       const box: LayoutBox = { x: labelX, y: y - 7, width: w, height: 14 }
       const originalY = box.y
-      nudgeDown(box, placedLabels)
+      const otherDots = dotBoxes.filter((_, j) => j !== i)
+      nudgeDown(box, [...otherDots, ...placedLabels])
       placedLabels.push(box)
       labelDy.push(box.y - originalY)
-    }
+    })
   }
   const pins = empty ? '' : points.map((p, i) => renderPin(p, variant, labelDy[i])).join('')
   const pills = empty ? [] : countryPills(points, variant)
