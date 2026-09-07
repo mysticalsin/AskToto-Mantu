@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { fixtureDashboard } from '../fixture'
 import { areaChartWithPrevious, miniBars, recolorChoroplethMini, tokenStackBar } from './overview-charts'
 import { fixtureForOverview, fixtureOverviewConnectors } from './overview.fixture'
-import { renderConnectorsCardRows, renderOverview, type OverviewConnectorSummary } from './overview'
+import { renderConnectorsCardRows, renderFleetContactBanner, renderOverview, type OverviewConnectorSummary } from './overview'
 
 const CTX = { now: 1_725_000_000_000, theme: 'light' as const }
 
@@ -106,6 +106,49 @@ describe('renderOverview (QA fixture)', () => {
     expect(html).toContain('skeleton-row')
     expect(html).not.toContain('Needs attention')
     expect(html).not.toContain('connector-row-logo')
+  })
+})
+
+describe('fleet-is-quiet banner', () => {
+  /** The state Tony hit: Métis running on several Macs, console showing zero, nothing to click. */
+  it('names the silence, its duration and the reason when the newest heartbeat is old', async () => {
+    const data = await fixtureDashboard()
+    const stale = { ...data, now: data.now + 3 * 60 * 60 * 1000 }
+    const html = renderFleetContactBanner(stale)
+    expect(html).toContain('data-ov-quiet')
+    expect(html).toContain('No seat has reported in 3h')
+    expect(html).toContain('Operator URL and an ingest secret')
+    // The zeros below must be explained, not left to be read as a real, idle fleet.
+    expect(html).toContain('not because the fleet is idle')
+    expect(html).not.toContain('style="')
+    expect(html).not.toContain('—')
+  })
+
+  it('says so plainly when no seat has ever reported', async () => {
+    const data = await fixtureDashboard()
+    const html = renderFleetContactBanner({ ...data, profiles: [] })
+    expect(html).toContain('No seat has ever reported to this Operator.')
+    // No fabricated "last contact" when there has never been one.
+    expect(html).not.toContain('Last contact')
+  })
+
+  it('renders nothing at all while heartbeats are arriving', async () => {
+    const data = await fixtureDashboard()
+    const live = {
+      ...data,
+      profiles: data.profiles.map((p, i) => (i === 0 ? { ...p, lastSeen: data.now - 30_000 } : p))
+    }
+    expect(renderFleetContactBanner(live)).toBe('')
+  })
+
+  it('is absent from a healthy Overview and present on a silent one', async () => {
+    const data = await fixtureDashboard()
+    const live = {
+      ...data,
+      profiles: data.profiles.map((p, i) => (i === 0 ? { ...p, lastSeen: data.now - 30_000 } : p))
+    }
+    expect(renderOverview(live, CTX)).not.toContain('data-ov-quiet')
+    expect(renderOverview({ ...data, now: data.now + 86_400_000 }, CTX)).toContain('data-ov-quiet')
   })
 })
 

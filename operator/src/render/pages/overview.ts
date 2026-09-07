@@ -27,13 +27,16 @@ import {
   flag,
   formatCompact,
   iconSvg,
+  KIND_ICON_PATHS,
   kindBadge,
   NAV_ICON_PATHS,
+  relativeTime,
   pageHeader,
   segmented,
   skeletonRows,
   sourceTooltip,
   statusDot,
+  timeCell,
   toolbar,
   toolbarButton,
   toolbarSearch,
@@ -58,11 +61,50 @@ const DAY_MS = 24 * 60 * 60 * 1000
 // draw fewer rows.
 const TLC_ROW_CAP = 6
 
+/**
+ * How long the fleet may stay quiet before the Overview says so.
+ *
+ * Métis heartbeats every 60 seconds, so two missed beats is already unusual and five minutes is
+ * unambiguous. Kept well above the beat interval so a seat that is merely between beats, or a
+ * laptop that slept for a moment, never trips it.
+ */
+const FLEET_SILENT_AFTER_MS = 5 * 60 * 1000
+
+/**
+ * Says out loud when nothing is arriving.
+ *
+ * Every number on this page is derived from seat heartbeats, so a fleet that cannot reach the
+ * Worker renders exactly like a fleet that is simply idle: zeros everywhere, no errors, nothing to
+ * click. That is the state Tony hit -- Métis running on several Macs, the console reporting zero
+ * live seats, and no way to tell from this page whether the seats were quiet or unheard. They were
+ * unheard: a seat only starts its heartbeat once it has BOTH an Operator URL and an ingest secret,
+ * and until then it never contacts the Worker at all, silently.
+ *
+ * So when the newest heartbeat is old (or there has never been one), the page leads with that fact
+ * and the reason, instead of leaving a wall of zeros to be misread as real. When the fleet is
+ * healthy this renders nothing: a banner that is always present is a banner nobody reads.
+ */
+export function renderFleetContactBanner(data: DashboardPayload): string {
+  const now = data.now
+  const lastSeen = data.profiles.reduce((newest, p) => (p.lastSeen > newest ? p.lastSeen : newest), 0)
+  if (lastSeen && now - lastSeen < FLEET_SILENT_AFTER_MS) return ''
+  const headline = lastSeen
+    ? `No seat has reported in ${esc(relativeTime(lastSeen, now))}.`
+    : 'No seat has ever reported to this Operator.'
+  const since = lastSeen ? ` Last contact ${timeCell(lastSeen, now)}.` : ''
+  return `<article class="card ov-quiet-card" data-ov-quiet>
+    <div class="ov-quiet-head">${iconSvg(KIND_ICON_PATHS.heartbeat, { class: 'ov-quiet-icon' })}<h3>${headline}</h3></div>
+    <p class="ov-quiet-body">Every figure below is counted from seat heartbeats, so they read zero because nothing is arriving, not because the fleet is idle.${since}</p>
+    <p class="ov-quiet-body">Métis heartbeats every 60 seconds, but only once a seat has both an Operator URL and an ingest secret. Set them on each Mac in Métis under Settings, then Operator.</p>
+  </article>`
+}
+
 export function renderOverview(data: DashboardPayload, _ctx: RenderCtx): string {
   return `${pageHeader({
     title: 'Overview',
     subtitle: 'Who is live, what Métis is saving, and where the fleet is right now.'
   })}
+  ${renderFleetContactBanner(data)}
   ${renderToolbar(data)}
   ${renderMetricTilesBlock(data)}
   ${renderTokensCard(data)}
