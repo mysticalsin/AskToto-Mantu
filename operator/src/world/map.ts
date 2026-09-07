@@ -191,8 +191,9 @@ export interface RealtimeMapPoint {
   /** A heartbeat in the last two minutes. Defaults to true — every point handed to this
    * renderer represents real activity, and only a caller that can tell "seen today" apart
    * from "live right now" (charts.ts's groupDotsToPoints, once the data layer carries that
-   * distinction) ever passes `false`. Live renders a pulsing `--live` (green) dot; not-live
-   * renders a smaller, static `--accent` (violet) dot. */
+   * distinction) ever passes `false`. Live renders a filled, pulsing `--live` (green) dot,
+   * visibly larger than idle; not-live renders a smaller, static `--data-1` (violet) dot
+   * with no halo. */
   live?: boolean
   /** Seats at this point that are live right now, when known and different from `count`
    * (which is every seat seen today at this point). Omitted from the tooltip data when not
@@ -233,7 +234,12 @@ function renderPin(point: RealtimeMapPoint, variant: MapVariant, labelDy = 0): s
   const asksAttr = point.asks == null ? '' : ` data-asks="${point.asks}"`
   const liveSeatsAttr = point.liveSeats == null ? '' : ` data-live-seats="${point.liveSeats}"`
   const timeSavedAttr = point.timeSaved ? ` data-time-saved="${escapeXml(point.timeSaved)}"` : ''
-  const halo = live ? '<circle class="rt-pin-halo" data-beacon r="4.5" />' : ''
+  // The halo's pulse is a plain CSS animation (`.rt-pin[data-live="1"] .rt-pin-halo` in
+  // operator/src/spa/css-realtime.ts), not `data-beacon`/beacon() (motion.ts) -- so it is
+  // alive from the very first paint (a static render, or any render before the client
+  // bundle hydrates) instead of sitting still until JS runs. `beacon()` stays the right tool
+  // for elements that genuinely need JS-computed timing (see map-dom.ts); this one doesn't.
+  const halo = live ? '<circle class="rt-pin-halo" r="4.5" />' : ''
   const labelX = (dotRadius + 5).toFixed(2)
   const labelY = (3 + labelDy).toFixed(2)
   // A label the collision nudge above pushed clear of a neighbour no longer sits beside its own

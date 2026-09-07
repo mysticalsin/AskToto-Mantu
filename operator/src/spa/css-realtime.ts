@@ -5,11 +5,12 @@
  * operator/src/spa/manifest.ts, after SHELL_CSS and PAGES_SHARED_CSS, in NAV_IDS order
  * (design-lead's file, not touched here).
  *
- * operator/src/world/map.ts's own embedded `<style>` block owns everything inside the map SVG
- * itself (land/pill/pin colours and hover states, the zoom viewport transition); this file only
- * owns the page-level layout around it -- the card, the strip, the toolbar chip and the
- * following tooltip -- scoped with an `rt-` prefix so it can never collide with another page's
- * own css-<page>.ts.
+ * operator/src/world/map.ts renders the SVG markup for the map itself (land/pill/pin classes
+ * and structure), but carries no styling of its own -- this file owns everything those classes
+ * mean (colours and hover states, the pin/pill live-vs-idle treatment, the zoom viewport
+ * transition) as well as the page-level layout around it -- the card, the strip, the toolbar
+ * chip and the following tooltip -- scoped with an `rt-` prefix so it can never collide with
+ * another page's own css-<page>.ts.
  */
 export const REALTIME_CSS = `
 /* -- map card: full-bleed, 16:9 (plan 6.3), 18px radius, the LIVE pill anchored top-right. -- */
@@ -160,15 +161,23 @@ export const REALTIME_CSS = `
 .corner-cell.scale-05 { fill: var(--chart-scale-05); }
 .corner-pin-hit { fill: transparent; }
 
-/* Seat dots: pulsing --live green while live, static --accent violet once seen-but-idle
-   (Tony: "a pulsing green dot on where people are using it"). The halo only exists on a live
-   pin; beacon() (motion.ts) animates it on hydration and is a no-op under reduced motion, so
-   an unhydrated or reduced-motion pin is still a plain, static, correctly-coloured dot. */
+/* Seat dots (plan 6.3): filled, pulsing --live green while live (visibly larger than idle at
+   a glance -- pinDotRadius() in map.ts), smaller static --data-1 violet with no halo once
+   seen-but-idle (Tony: "a pulsing green dot on where people are using it"). The halo's pulse
+   is a plain CSS animation, not beacon()/data-beacon (motion.ts) -- alive from the very first
+   paint (a static render, or any render before the client bundle hydrates), not just after
+   hydration. Reduced motion: the halo holds its resting (0%) state instead of animating,
+   still a correct, if static, "this place is live" signal. */
 .rt-pin { cursor: pointer; }
 .rt-pin-dot { stroke: var(--map-pill); stroke-width: 1.5px; }
 .rt-pin[data-live="1"] .rt-pin-dot { fill: var(--live); }
-.rt-pin[data-live="0"] .rt-pin-dot { fill: var(--accent); }
-.rt-pin-halo { fill: none; stroke: var(--live); stroke-width: 1.5px; opacity: 0.6; }
+.rt-pin[data-live="0"] .rt-pin-dot { fill: var(--data-1); }
+.rt-pin-halo { fill: var(--live); opacity: 0.6; }
+@keyframes metis-beacon-halo { 0% { r: 4.5; opacity: .6 } 70% { r: 13; opacity: 0 } 100% { r: 13; opacity: 0 } }
+.rt-pin[data-live="1"] .rt-pin-halo { animation: metis-beacon-halo 2.4s var(--ease-spring) infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .rt-pin[data-live="1"] .rt-pin-halo { animation: none; opacity: .6; }
+}
 /* Leader line (map.ts's renderPin, LEADER_LINE_MIN_DY): only present at all once the collision
    nudge has pushed a label far enough from its own dot that the two no longer read as one unit
    on their own -- ties the label visually back to the marker it names. */

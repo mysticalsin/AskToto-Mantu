@@ -70,7 +70,7 @@ function toClusterPoints(): ClusterPoint[] {
   })
 }
 
-describe('clusterPins reproduces the reference outcome on its own fixture (center [0, 20] projection)', () => {
+describe('clusterPins reproduces the reference outcome on its own fixture (fitted projection)', () => {
   it('clusters the first 40 reference coordinates (radius 22px)', () => {
     const { clusters, badgeClusters } = clusterPins(toClusterPoints(), DEFAULT_CLUSTER_OPTIONS)
     expect(clusters.length).toBeGreaterThan(0)

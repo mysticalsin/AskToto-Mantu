@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { buildWorldData } from '../../scripts/build-world.mjs'
-import { CENTROIDS_1152, CENTROIDS_520, WORLD_1152, WORLD_520 } from './paths.generated'
+import { CENTROIDS_1152, CENTROIDS_520, PROJECTION_1152, PROJECTION_520, WORLD_1152, WORLD_520 } from './paths.generated'
 
 describe('generated world paths are not stale', () => {
   it('committed paths.generated.ts matches a fresh build-world.mjs run', async () => {
@@ -9,6 +9,8 @@ describe('generated world paths are not stale', () => {
     expect(WORLD_520, 'run npm run build:operator-world').toEqual(fresh.world520.entries)
     expect(CENTROIDS_1152, 'run npm run build:operator-world').toEqual(fresh.world1152.centroids)
     expect(CENTROIDS_520, 'run npm run build:operator-world').toEqual(fresh.world520.centroids)
+    expect(PROJECTION_1152, 'run npm run build:operator-world').toEqual(fresh.projectionFit1152)
+    expect(PROJECTION_520, 'run npm run build:operator-world').toEqual(fresh.projectionFit520)
   }, 30000)
 
   it('WORLD_1152 stays under the 350 KB budget', async () => {
@@ -20,6 +22,84 @@ describe('generated world paths are not stale', () => {
     const fresh = await buildWorldData()
     expect(fresh.bytes520).toBeLessThan(120 * 1024)
   }, 30000)
+})
+
+/**
+ * Regression guard for the clipped-map bug (task report: "Russia seems weird" — the old
+ * width-derived scale never checked whether the projected geometry fit the canvas height,
+ * so Greenland/Russia/Canada/Norway rendered clipped against the top edge and Antarctica
+ * rendered entirely below the bottom, invisible). geoMercator().fitExtent() in
+ * build-world.mjs now guarantees this numerically rather than by eyeballing a screenshot:
+ * every included country's every point falls inside the canvas, and Antarctica (the one
+ * country whose Mercator-projected latitude span would force every other country down to a
+ * sliver to fit) is deliberately excluded from the data rather than drawn off-screen.
+ */
+describe('committed world paths fit their own canvas (fitExtent regression guard)', () => {
+  function pointsFromD(d: string): [number, number][] {
+    const subpaths = d.match(/[Mm][^Mm]*/g) ?? []
+    const pts: [number, number][] = []
+    for (const sp of subpaths) {
+      const body = sp.replace(/^[Mm]\s*/, '').replace(/[Zz]\s*$/, '')
+      for (const chunk of body.split(/[Ll]/)) {
+        const parts = chunk.trim().split(/[\s,]+/).map(Number)
+        if (parts.length === 2 && parts.every(Number.isFinite)) pts.push(parts as [number, number])
+      }
+    }
+    return pts
+  }
+
+  function checkFit(entries: typeof WORLD_1152, width: number, height: number): void {
+    for (const entry of entries) {
+      expect(entry.alpha2, 'Antarctica must be excluded from the data, not drawn off-screen').not.toBe('AQ')
+      let minX = Infinity
+      let maxX = -Infinity
+      let minY = Infinity
+      let maxY = -Infinity
+      for (const [x, y] of pointsFromD(entry.d)) {
+        if (x < minX) minX = x
+        if (x > maxX) maxX = x
+        if (y < minY) minY = y
+        if (y > maxY) maxY = y
+      }
+      expect(minX, `${entry.alpha2 || entry.id} minX`).toBeGreaterThanOrEqual(0)
+      expect(maxX, `${entry.alpha2 || entry.id} maxX`).toBeLessThanOrEqual(width)
+      expect(minY, `${entry.alpha2 || entry.id} minY`).toBeGreaterThanOrEqual(0)
+      expect(maxY, `${entry.alpha2 || entry.id} maxY`).toBeLessThanOrEqual(height)
+    }
+  }
+
+  it('every WORLD_1152 point is within the 1152x648 canvas, and Antarctica is absent', () => {
+    checkFit(WORLD_1152, 1152, 648)
+  })
+
+  it('every WORLD_520 point is within the 520x293 canvas, and Antarctica is absent', () => {
+    checkFit(WORLD_520, 520, 293)
+  })
+
+  /** No single subpath may exceed 60% of the canvas width — Russia's mainland (the largest
+   * single landmass on the map) is comfortably under that ceiling; anything near or over it
+   * would mean a wedge/self-intersection artifact (see the "committed world paths have no
+   * ... rings" describe blocks below) or a badly mis-fit projection, not a real coastline. */
+  function checkMaxSubpathWidth(entries: typeof WORLD_1152, width: number): void {
+    const ceiling = width * 0.6
+    for (const entry of entries) {
+      const subpaths = entry.d.match(/[Mm][^Mm]*/g) ?? []
+      for (const sp of subpaths) {
+        const pts = pointsFromD(sp)
+        const xs = pts.map(([x]) => x)
+        const subpathWidth = Math.max(...xs) - Math.min(...xs)
+        expect(subpathWidth, `${entry.alpha2 || entry.id} subpath width`).toBeLessThan(ceiling)
+      }
+    }
+  }
+
+  it('no WORLD_1152 subpath exceeds 60% of the 1152 canvas width', () => {
+    checkMaxSubpathWidth(WORLD_1152, 1152)
+  })
+
+  it('no WORLD_520 subpath exceeds 60% of the 520 canvas width', () => {
+    checkMaxSubpathWidth(WORLD_520, 520)
+  })
 })
 
 /** Regression guard for the wedge-artifact bug: independently of build-world.mjs's own

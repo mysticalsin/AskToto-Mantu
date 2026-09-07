@@ -1,9 +1,9 @@
 import { geoMercator } from 'd3-geo'
 import { describe, expect, it } from 'vitest'
-import { CENTROIDS_1152, CENTROIDS_520 } from './paths.generated'
+import { CENTROIDS_1152, CENTROIDS_520, PROJECTION_1152, PROJECTION_520 } from './paths.generated'
 import { MAP_DIMENSIONS, MERCATOR_VARIANTS, projectPoint } from './mercator'
 
-describe('projectPoint matches d3-geo geoMercator exactly (center [0, 20])', () => {
+describe('projectPoint matches d3-geo geoMercator exactly (center [0, 0])', () => {
   const cases: [number, number][] = [
     [45.5, -73.5], // Longueuil
     [0, 0],
@@ -29,17 +29,24 @@ describe('projectPoint matches d3-geo geoMercator exactly (center [0, 20])', () 
   }
 })
 
-describe('16:9 aspect, scale derived from width', () => {
-  it('1152 variant is 1152x648 (16:9), scale = width / (2*pi)', () => {
+describe('16:9 aspect, scale/translate fit to the real geometry (build-world.mjs)', () => {
+  it('1152 variant is 1152x648 (16:9), scale/translate/center match PROJECTION_1152', () => {
     expect(MAP_DIMENSIONS['1152']).toEqual({ width: 1152, height: 648 })
-    expect(MERCATOR_VARIANTS['1152'].scale).toBeCloseTo(1152 / (2 * Math.PI), 9)
-    expect(MERCATOR_VARIANTS['1152'].center).toEqual([0, 20])
+    expect(MERCATOR_VARIANTS['1152'].scale).toBe(PROJECTION_1152.scale)
+    expect(MERCATOR_VARIANTS['1152'].translate).toEqual(PROJECTION_1152.translate)
+    expect(MERCATOR_VARIANTS['1152'].center).toEqual([0, 0])
   })
 
-  it('520 variant is 520x293 (16:9), scale = width / (2*pi)', () => {
+  it('520 variant is 520x293 (16:9), scale/translate/center match PROJECTION_520', () => {
     expect(MAP_DIMENSIONS['520']).toEqual({ width: 520, height: 293 })
-    expect(MERCATOR_VARIANTS['520'].scale).toBeCloseTo(520 / (2 * Math.PI), 9)
-    expect(MERCATOR_VARIANTS['520'].center).toEqual([0, 20])
+    expect(MERCATOR_VARIANTS['520'].scale).toBe(PROJECTION_520.scale)
+    expect(MERCATOR_VARIANTS['520'].translate).toEqual(PROJECTION_520.translate)
+    expect(MERCATOR_VARIANTS['520'].center).toEqual([0, 0])
+  })
+
+  it('neither variant reverts to the old width / (2*pi) guessed scale (regression guard for the clipped-Russia bug)', () => {
+    expect(MERCATOR_VARIANTS['1152'].scale).not.toBeCloseTo(1152 / (2 * Math.PI), 0)
+    expect(MERCATOR_VARIANTS['520'].scale).not.toBeCloseTo(520 / (2 * Math.PI), 0)
   })
 })
 

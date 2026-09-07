@@ -2,10 +2,26 @@
 /**
  * Precomputes the world map: reads the checked-in world-atlas 50m topology
  * (operator/shoey-ref/data/countries-50m.json), simplifies it, decodes it with the vendored
- * topojson-feature.mjs `feature()` decoder, projects every country with the exact
- * reference Mercator constants (WorldMap.tsx's 1152x576 realtime map and CountryMap.tsx's
- * 520x300 corner map — see operator/src/world/mercator.ts), and writes
- * operator/src/world/paths.generated.ts.
+ * topojson-feature.mjs `feature()` decoder, FITS a Mercator projection to the actual land
+ * geometry (see "Projection fit" below — WorldMap.tsx's 1152x648 realtime map and
+ * CountryMap.tsx's 520x293 corner map), and writes operator/src/world/paths.generated.ts.
+ *
+ * Projection fit (task report, "Russia seems weird"): earlier versions hardcoded a Mercator
+ * centre/scale (width / (2*pi), guessing the whole 360° of longitude exactly fills the
+ * canvas width) without ever checking whether the resulting geometry actually fit the
+ * canvas HEIGHT. It didn't: projected land ran from y=-139 (most of Greenland, the northern
+ * third of Russia and Canada, and Norway, all above the top edge) to y=905 (Antarctica,
+ * entirely below the bottom edge). The fix is `geoMercator().fitExtent(...)` (below):
+ * measure the real bounding box of every country's actual geometry and solve for the
+ * scale/translate that makes it fit inside a padded 0..width/0..height box, rather than
+ * assuming a scale and hoping. Antarctica is excluded from the geometry entirely (`010`
+ * dropped from the topology before anything else touches it, see below) — Mercator's polar
+ * distortion sends its latitude span to many times any other country's, so fitting it in
+ * would force every populated country down to a sliver just to make room for a landmass
+ * with no live seat activity to show. The resulting scale/translate are exported into
+ * paths.generated.ts (PROJECTION_1152/PROJECTION_520) so operator/src/world/mercator.ts's
+ * single-point `projectPoint` (city dots) can read the exact same numbers used to build the
+ * paths here, instead of a second, independently-guessed formula.
  *
  * Simplification: the raw 50m topology projects to ~1.4 MB of `d` string for the 1152 set
  * alone — far past a sane budget for a file checked into git, and full coastline detail is
@@ -43,10 +59,14 @@
  * or import `buildWorldData` from a test to rebuild in memory and compare against the
  * committed file (operator/src/world/paths.generated.contract.test.ts).
  *
- * Plan 3.7 item 2 / Tony's reference (OpenPanel + bklit): Mercator centred [0, 20], 16:9,
- * scale derived from width (see ./world/mercator.ts's MERCATOR_VARIANTS) — both variants'
- * translate/scale/center come from that one module so the generator and the runtime can
- * never drift apart. Each country entry also carries its English display name (resolved
+ * Plan 3.7 item 2 / Tony's reference (OpenPanel + bklit): Mercator, 16:9, scale/translate
+ * FIT to the real geometry (see "Projection fit" above) rather than derived from width. This
+ * script no longer reads anything from ./world/mercator.ts — it computes the fit itself and
+ * writes the result out (PROJECTION_1152/PROJECTION_520 below); mercator.ts imports those
+ * numbers back for its own point projection, a one-way dependency (generated data -> runtime
+ * module) with nothing on this side ever reading from that module, so this generator can
+ * always rebuild from the raw topology alone, even if paths.generated.ts is missing or
+ * broken. Each country entry also carries its English display name (resolved
  * once here via Intl.DisplayNames, the same table map.ts's countryName() uses at runtime)
  * so the map can label a country without needing Intl at all. Two more precomputed shapes
  * ships alongside the per-country paths: GRATICULE_* (d3-geo's geoGraticule10(), the standard
@@ -70,12 +90,32 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const OPERATOR_ROOT = join(__dirname, '..')
 const WORLD_DIR = join(OPERATOR_ROOT, 'src', 'world')
 const TOPOLOGY_PATH = join(OPERATOR_ROOT, 'shoey-ref', 'data', 'countries-50m.json')
-const MERCATOR_ENTRY = join(WORLD_DIR, 'mercator.ts')
 const ISO_ENTRY = join(WORLD_DIR, 'iso.ts')
 const OUT_FILE = join(WORLD_DIR, 'paths.generated.ts')
 
 const MAX_BYTES_1152 = 350 * 1024
 const MAX_BYTES_520 = 120 * 1024
+
+/** Numeric ISO 3166-1 id for Antarctica in the topology (world-atlas keys features by this,
+ * zero-padded to 3 digits — see operator/src/world/iso.ts's NUMERIC_TO_ALPHA2['010']). */
+const ANTARCTICA_NUMERIC_ID = '010'
+
+/** 1152x648 / 520x293, 16:9 — matches operator/src/world/mercator.ts's MAP_DIMENSIONS (that
+ * module no longer feeds anything back into this script, see the file doc comment above, so
+ * these are this script's own copy of the same width -> height formula, not a shared import). */
+function mapHeight(width) {
+  return Math.round((width * 9) / 16)
+}
+
+/** Padding (px), inset from every edge of the canvas, that geoMercator().fitExtent() below
+ * treats as the box to fit land into — never 0: a country whose real extreme point lands
+ * exactly on 0 or the canvas edge would round (PRECISION_1152/520 below) to sit flush
+ * against it, one rounding error away from drawing half a coastline pixel off-canvas. ~0.7%
+ * of width for both variants (proportional, not a shared literal, so a future variant at a
+ * different width gets the same relative breathing room without retuning by hand). */
+function fitPad(width) {
+  return Math.round(width * 0.007)
+}
 
 /** Bundle a small dependency-free TS module with esbuild and import it in Node, so the
  * generator and the runtime share a single source of truth for constants/data instead of
@@ -735,11 +775,27 @@ function buildGraticule(pathGenerator, precision) {
 
 
 export async function buildWorldData() {
-  const [mercatorMod, isoMod] = await Promise.all([importTsModule(MERCATOR_ENTRY), importTsModule(ISO_ENTRY)])
-  const { MERCATOR_VARIANTS } = mercatorMod
+  const isoMod = await importTsModule(ISO_ENTRY)
   const { NUMERIC_TO_ALPHA2 } = isoMod
 
   const topology = JSON.parse(readFileSync(TOPOLOGY_PATH, 'utf8'))
+
+  // Antarctica decision (see the file doc comment's "Projection fit"): drop it from the
+  // topology before anything else touches it, so every downstream feature array (raw,
+  // pass-1, fully simplified, and the fitExtent land collection below) is Antarctica-free
+  // with no special-casing anywhere else in this file. Its arcs are not shared with any
+  // other country's border (Antarctica borders no one), so removing its geometry cannot
+  // affect any other country's shape.
+  topology.objects.countries.geometries = topology.objects.countries.geometries.filter((g) => g.id !== ANTARCTICA_NUMERIC_ID)
+
+  // Unsimplified features, decoded once from the pristine (Antarctica-excluded) topology.
+  // Used below both as the geometry geoMercator().fitExtent() fits each viewport's
+  // projection to, and (matched against features1152/features520 further down, by array
+  // index -- see buildVariant's doc comment for why not by id) as the fallback source for
+  // the rare feature whose simplified ring comes out suspicious (the file doc comment's
+  // "third failure mode" and AREA_SANITY_MAX below).
+  const rawFeatures = feature(topology, topology.objects.countries).features
+  const landFeatureCollection = { type: 'FeatureCollection', features: rawFeatures }
 
   // Separate simplification passes per viewport: the 520 corner map is small enough on
   // screen to tolerate much coarser borders than the full-bleed 1152 realtime map, and
@@ -753,10 +809,18 @@ export async function buildWorldData() {
   const topology1152 = simplifyTopology(topology, AREA_THRESHOLD_1152)
   const topology520 = simplifyTopology(topology, AREA_THRESHOLD_520)
 
-  const mercator1152 = MERCATOR_VARIANTS['1152']
-  const mercator520 = MERCATOR_VARIANTS['520']
-  const projection1152 = geoMercator().center(mercator1152.center).translate(mercator1152.translate).scale(mercator1152.scale)
-  const projection520 = geoMercator().center(mercator520.center).translate(mercator520.translate).scale(mercator520.scale)
+  // Fit each viewport's own Mercator projection to the real (Antarctica-excluded) land
+  // geometry -- see the file doc comment's "Projection fit". geoMercator().fitExtent()
+  // measures landFeatureCollection's projected bounding box at a neutral scale, then solves
+  // for the scale/translate that fits that box inside [[pad,pad],[w-pad,h-pad]] -- provably
+  // no coastline can fall outside the canvas, unlike the old width-derived guess. `.center()`
+  // is deliberately left at d3's own default ([0, 0]): fitExtent recomputes translate to
+  // centre whatever bounding box the fit produces regardless of any center offset, so a
+  // non-zero center here would only be silently cancelled back out (see mercator.ts).
+  const pad1152 = fitPad(1152)
+  const pad520 = fitPad(520)
+  const projection1152 = geoMercator().fitExtent([[pad1152, pad1152], [1152 - pad1152, mapHeight(1152) - pad1152]], landFeatureCollection)
+  const projection520 = geoMercator().fitExtent([[pad520, pad520], [520 - pad520, mapHeight(520) - pad520]], landFeatureCollection)
 
   // Snapshot pass-1-only features BEFORE simplifyArcsPixelSpace mutates topology*.arcs below --
   // the fallback source buildVariant reaches for when the small-arc pixel pass empties a
@@ -785,12 +849,9 @@ export async function buildWorldData() {
   const features1152 = feature(topology1152, topology1152.objects.countries).features
   const features520 = feature(topology520, topology520.objects.countries).features
 
-  // Unsimplified features, in the same array order as features1152/features520 (simplifying
-  // a topology never touches topology.objects, only topology.arcs, so index i is always the
-  // same geometry in both) — the fallback source for the rare feature whose simplified ring
-  // comes out suspicious (see the file doc comment's "third failure mode" and AREA_SANITY_MAX
-  // below). Matched by array index, not id: see buildVariant's doc comment for why.
-  const rawFeatures = feature(topology, topology.objects.countries).features
+  // rawFeatures (same array order as features1152/features520: simplifying a topology never
+  // touches topology.objects, only topology.arcs, so index i is always the same geometry in
+  // both) was already decoded above, before the projection fit.
 
   const geoPath1152 = geoPath(projection1152)
   const geoPath520 = geoPath(projection520)
@@ -817,7 +878,15 @@ export async function buildWorldData() {
   const graticule1152 = buildGraticule(geoPath1152, PRECISION_1152)
   const graticule520 = buildGraticule(geoPath520, PRECISION_520)
 
-  const code = renderGeneratedFile(world1152, world520, graticule1152, graticule520)
+  // Exported at full double precision, never rounded like the `d` path coordinates or the
+  // centroids above -- this is the whole point of writing it out at all: mercator.ts's
+  // projectPoint() (city dots) has to compute the exact same pixel position this script's
+  // own geoPath(projection1152/520) used for the land paths, and any rounding here would
+  // reintroduce a fraction-of-a-pixel drift between a dot and the coastline under it.
+  const projectionFit1152 = { scale: projection1152.scale(), translate: projection1152.translate() }
+  const projectionFit520 = { scale: projection520.scale(), translate: projection520.translate() }
+
+  const code = renderGeneratedFile(world1152, world520, graticule1152, graticule520, projectionFit1152, projectionFit520)
   const bytes = Buffer.byteLength(code, 'utf8')
   const bytes1152 = Buffer.byteLength(JSON.stringify(world1152.entries), 'utf8')
   const bytes520 = Buffer.byteLength(JSON.stringify(world520.entries), 'utf8')
@@ -829,18 +898,22 @@ export async function buildWorldData() {
     throw new Error(`build-world: WORLD_520 is ${(bytes520 / 1024).toFixed(0)} KB, over the ${MAX_BYTES_520 / 1024} KB budget. Raise AREA_THRESHOLD_520.`)
   }
 
-  return { code, world1152, world520, graticule1152, graticule520, bytes, bytes1152, bytes520 }
+  return { code, world1152, world520, graticule1152, graticule520, projectionFit1152, projectionFit520, bytes, bytes1152, bytes520 }
 }
 
-function renderGeneratedFile(world1152, world520, graticule1152, graticule520) {
+function renderGeneratedFile(world1152, world520, graticule1152, graticule520, projectionFit1152, projectionFit520) {
   return `/**
  * GENERATED FILE. Do not edit by hand.
  * Run \`npm run build:operator-world\` (node operator/scripts/build-world.mjs) to regenerate.
  * Source: operator/shoey-ref/data/countries-50m.json (world-atlas 50m, public domain),
  * simplified per-arc (Visvalingam-Whyatt) and decoded with
- * operator/scripts/topojson-feature.mjs, then projected with the reference Mercator
- * constants (center [0, 20], 16:9, scale derived from width) in
- * operator/src/world/mercator.ts. See operator/scripts/build-world.mjs.
+ * operator/scripts/topojson-feature.mjs, then projected with a Mercator projection FIT to
+ * the real land geometry (16:9, Antarctica excluded — see build-world.mjs's file doc
+ * comment's "Projection fit") via geoMercator().fitExtent(). PROJECTION_1152/PROJECTION_520
+ * below are that fit's exact scale/translate, at full precision — operator/src/world/
+ * mercator.ts imports them so its own single-point projectPoint() (city dots) computes
+ * pixel positions identical to the land paths in this file, never a second guess at the
+ * same numbers. See operator/scripts/build-world.mjs.
  */
 
 export interface WorldEntry {
@@ -850,6 +923,11 @@ export interface WorldEntry {
    * fabricated name; falls back to the raw code/id when Intl does not recognise it. */
   name: string
   d: string
+}
+
+export interface ProjectionFit {
+  scale: number
+  translate: [number, number]
 }
 
 export const WORLD_1152: WorldEntry[] = ${JSON.stringify(world1152.entries)}
@@ -864,6 +942,12 @@ export const CENTROIDS_520: Record<string, [number, number]> = ${JSON.stringify(
 export const GRATICULE_1152: string = ${JSON.stringify(graticule1152)}
 
 export const GRATICULE_520: string = ${JSON.stringify(graticule520)}
+
+/** geoMercator().fitExtent() result for this viewport (see this file's own header comment) --
+ * the exact scale/translate WORLD_1152's own \`d\` paths were projected with. */
+export const PROJECTION_1152: ProjectionFit = ${JSON.stringify(projectionFit1152)}
+
+export const PROJECTION_520: ProjectionFit = ${JSON.stringify(projectionFit520)}
 `
 }
 
@@ -877,10 +961,14 @@ function printPointCounts(label, pointCounts) {
 }
 
 async function main() {
-  const { code, world1152, world520, bytes, bytes1152, bytes520 } = await buildWorldData()
+  const { code, world1152, world520, projectionFit1152, projectionFit520, bytes, bytes1152, bytes520 } = await buildWorldData()
   writeFileSync(OUT_FILE, code)
   printPointCounts('WORLD_1152', world1152.pointCounts)
   printPointCounts('WORLD_520', world520.pointCounts)
+  console.log(
+    `Métis Operator: fitted projection -- 1152: scale=${projectionFit1152.scale.toFixed(3)} translate=[${projectionFit1152.translate.map((n) => n.toFixed(2)).join(', ')}], ` +
+      `520: scale=${projectionFit520.scale.toFixed(3)} translate=[${projectionFit520.translate.map((n) => n.toFixed(2)).join(', ')}]`
+  )
   console.log(
     `Métis Operator: wrote ${relative(OPERATOR_ROOT, OUT_FILE)} (${(bytes / 1024).toFixed(1)} KB total, ` +
       `1152=${(bytes1152 / 1024).toFixed(1)} KB / ${world1152.entries.length} pieces / ${world1152.droppedRings} degenerate rings dropped, ` +
