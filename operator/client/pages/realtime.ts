@@ -1,8 +1,12 @@
 /**
  * Realtime page client init (plan 6.3, 3.7 item 2, 3.5b Realtime row). Wires:
- *  - the map's zoom/pan/hover/click interaction (operator/src/world/map-dom.ts) plus the
- *    following tooltip and the first-paint land-draw + graticule-fade entrance;
- *  - country click -> Geo table filter with a spring highlight and a toolbar chip, toggling;
+ *  - the map's zoom/pan/hover interaction, following tooltip and first-paint land-draw +
+ *    graticule-fade entrance -- all self-contained in operator/src/world/map-dom.ts's
+ *    attachMapInteraction() since the world-map rebuild (not this task's file to touch);
+ *  - country click -> Geo table filter with a spring highlight and a toolbar chip, toggling --
+ *    a second, independent click listener on the same map root, reading the same `data-iso` /
+ *    `data-country` attributes map-dom.ts's own tooltip reads, since attachMapInteraction() no
+ *    longer takes a click callback;
  *  - the Geo table and Connected seats table hydration from their own JSON routes, refreshed
  *    every time the shared 5s live poll (operator/client/live.ts) dispatches `metis:live` --
  *    never a second independent timer;
@@ -15,65 +19,32 @@
  * whole section's innerHTML was just replaced, so this always re-attaches from scratch.
  */
 import type { DashboardPayload } from '../../src/dashboard'
-import { esc, flag, relativeTime } from '../../src/render'
+import { esc, relativeTime } from '../../src/render'
 import { formatAvgDuration } from '../../src/realtime-geo'
 import type { GeoTableRow, LiveSeatTableRow } from '../../src/routes/live'
 import { renderConnectedSeatsTable, renderGeoTable } from '../../src/render/pages/realtime'
-import { attachMapInteraction, type CountryHit, type MapInteractionHandle } from '../../src/world/map-dom'
+import { attachMapInteraction, type MapInteractionHandle } from '../../src/world/map-dom'
 import { api } from '../api'
 import { bindMotion } from '../motion-bind'
-import { drawPath, follow, pop } from '../motion'
+import { pop } from '../motion'
 import { toast } from '../toasts'
 
 const MAP_WIDTH = 1152
 const MAP_HEIGHT = 576
-const TOOLTIP_OFFSET_X = 14
-const TOOLTIP_OFFSET_Y = 18
 
 /** Only this module's own teardown, so repeated calls (rerender, or navigating back to this
  * page) never accumulate a second window-level listener or a second ticker. */
 let teardown: (() => void) | null = null
 
-function tierLabel(hit: CountryHit): string {
-  const bits: string[] = []
-  if (hit.seats != null) bits.push(`${hit.seats} seat${hit.seats === 1 ? '' : 's'}`)
-  if (hit.live != null) bits.push(`${hit.live} live`)
-  if (hit.places != null && hit.places > 1) bits.push(`${hit.places} places`)
-  return bits.join(', ')
-}
-
-function showTooltip(section: HTMLElement, hit: CountryHit): void {
-  const tt = section.querySelector<HTMLElement>('[data-rt-tooltip]')
-  if (!tt) return
-  const flagEl = tt.querySelector<HTMLElement>('[data-tt-flag]')
-  const countryEl = tt.querySelector<HTMLElement>('[data-tt-country]')
-  const rowsEl = tt.querySelector<HTMLElement>('[data-tt-rows]')
-  if (flagEl) flagEl.innerHTML = flag(hit.iso)
-  if (countryEl) countryEl.textContent = hit.country
-  if (rowsEl) {
-    const summary = tierLabel(hit)
-    // Asks in the last 30 min and time saved are omitted, never a fabricated number: no route
-    // yet reports either broken out per country (see the task report for the exact patch).
-    rowsEl.textContent = summary || 'No seats reported here yet.'
-  }
-  tt.hidden = false
-}
-
-function hideTooltip(section: HTMLElement): void {
-  const tt = section.querySelector<HTMLElement>('[data-rt-tooltip]')
-  if (tt) tt.hidden = true
-}
-
-function positionTooltip(section: HTMLElement, clientX: number, clientY: number): void {
-  const tt = section.querySelector<HTMLElement>('[data-rt-tooltip]')
-  if (!tt || tt.hidden) return
-  follow(tt, { clientX: clientX + TOOLTIP_OFFSET_X, clientY: clientY + TOOLTIP_OFFSET_Y })
-}
-
 // ---------------------------------------------------------------------------------------
 // Country filter: click a country (land, dot or pill) to filter the Geo table; click the same
 // one again, or blank map, clears it. Combined with the free-text search below.
 // ---------------------------------------------------------------------------------------
+
+interface CountryHit {
+  iso: string
+  country: string
+}
 
 let activeFilterIso: string | null = null
 let searchQuery = ''
@@ -101,33 +72,38 @@ function setCountryFilter(section: HTMLElement, hit: CountryHit | null): void {
   }
 }
 
-// ---------------------------------------------------------------------------------------
-// Map interaction + first-paint entrance.
-// ---------------------------------------------------------------------------------------
-
-function playMapEntrance(section: HTMLElement): void {
-  const svg = section.querySelector<SVGSVGElement>('.rt-map-svg')
-  if (!svg) return
-  svg.querySelectorAll<SVGPathElement>('.world-land').forEach((p) => drawPath(p, 800))
+/** Reads the same `data-iso` / `data-country` pair map-dom.ts's own tooltipHtml() reads off a
+ * `.world-land`, `.rt-pin` or `.rt-pill` hit (operator/src/world/map.ts renders both on every
+ * one of them) -- never a fabricated country for an element that carries neither. */
+function countryHitFrom(el: Element): CountryHit | null {
+  const iso = el.getAttribute('data-iso')
+  const country = el.getAttribute('data-country')
+  return iso && country ? { iso, country } : null
 }
 
-function attachMap(section: HTMLElement): MapInteractionHandle | null {
+function attachCountryClickFilter(root: HTMLElement, section: HTMLElement): () => void {
+  const onClick = (e: Event): void => {
+    const target = e.target as Element | null
+    const hit = target?.closest('.world-land, .rt-pin, .rt-pill')
+    if (!hit) return
+    setCountryFilter(section, countryHitFrom(hit))
+  }
+  root.addEventListener('click', onClick)
+  return () => root.removeEventListener('click', onClick)
+}
+
+// ---------------------------------------------------------------------------------------
+// Map interaction: zoom/pan/hover/tooltip/first-paint entrance are all internal to
+// attachMapInteraction() now (operator/src/world/map-dom.ts) -- this page only adds the
+// country-click filter on top of it.
+// ---------------------------------------------------------------------------------------
+
+function attachMap(section: HTMLElement): { handle: MapInteractionHandle; untrackClick: () => void } | null {
   const root = section.querySelector<HTMLElement>('[data-map-root]')
   if (!root) return null
-  return attachMapInteraction(root, {
-    width: MAP_WIDTH,
-    height: MAP_HEIGHT,
-    onPointerMove(clientX, clientY) {
-      positionTooltip(section, clientX, clientY)
-    },
-    onHoverChange(hit) {
-      if (hit) showTooltip(section, hit)
-      else hideTooltip(section)
-    },
-    onCountryClick(hit) {
-      setCountryFilter(section, hit)
-    }
-  })
+  const handle = attachMapInteraction(root, { width: MAP_WIDTH, height: MAP_HEIGHT })
+  const untrackClick = attachCountryClickFilter(root, section)
+  return { handle, untrackClick }
 }
 
 // ---------------------------------------------------------------------------------------
@@ -265,8 +241,7 @@ function tick(section: HTMLElement): void {
 export function initRealtime(section: HTMLElement, _data: DashboardPayload | null): void {
   teardown?.()
 
-  playMapEntrance(section)
-  const mapHandle = attachMap(section)
+  const map = attachMap(section)
   const untrackSearch = attachGeoSearch(section)
   const untrackDrawer = attachSeatDrawer(section)
 
@@ -285,7 +260,8 @@ export function initRealtime(section: HTMLElement, _data: DashboardPayload | nul
   const tickTimer = setInterval(() => tick(section), 1000)
 
   teardown = () => {
-    mapHandle?.destroy()
+    map?.handle.destroy()
+    map?.untrackClick()
     untrackSearch()
     untrackDrawer()
     window.removeEventListener('metis:live', onLive)

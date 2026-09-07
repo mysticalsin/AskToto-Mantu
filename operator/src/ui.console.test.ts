@@ -70,10 +70,52 @@ async function cssOf(store = memoryStore()): Promise<string> {
   return res.text()
 }
 
+/** Slices one `data-page="<id>"` section out of the full console document, up to the next
+ *  page's `data-page="<nextId>"`. Throws rather than silently widening to the whole document
+ *  (or to `-1`, i.e. "everything but the last character") the moment either id stops existing --
+ *  the exact failure mode that let this file's stale page ids rot unnoticed for a while. Every
+ *  page-scoped assertion below goes through this one helper instead of its own ad hoc
+ *  `indexOf`/`slice` pair. */
+function pageSlice(html: string, id: string, nextId: string): string {
+  const start = html.indexOf(`data-page="${id}"`)
+  const end = html.indexOf(`data-page="${nextId}"`)
+  if (start < 0 || end < start) {
+    throw new Error(`pageSlice: could not find data-page="${id}"..data-page="${nextId}" boundaries in the console HTML`)
+  }
+  return html.slice(start, end)
+}
+
 function eventsHtml(html: string): string {
-  const start = html.indexOf('data-page="events"')
-  const end = html.indexOf('data-page="licenses"')
-  return start >= 0 && end > start ? html.slice(start, end) : html
+  return pageSlice(html, 'events', 'licenses')
+}
+
+/** Scopes findBandSubpaths to the real land geometry (world/map.ts's world-land-group), not the
+ *  whole document: the full map's intentional 10-degree graticule (plan 3.7 item 2) is itself a
+ *  set of full-width, near-zero-height lines and trips the exact "wide, short subpath" heuristic
+ *  findBandSubpaths uses for a genuine date-line sliver. This test used to scan the whole page
+ *  back when the map SVG had no graticule; scanning it now produces a false positive on every
+ *  render. A real date-line sliver would show up in the land paths, so that is what stays
+ *  checked -- throws instead of silently checking nothing if the land group ever moves. */
+function landPathsHtml(html: string): string {
+  const start = html.indexOf('class="world-land-group"')
+  const end = html.indexOf('</g>', start)
+  if (start < 0 || end < start) {
+    throw new Error('landPathsHtml: could not find the world-land-group boundaries in the console HTML')
+  }
+  return html.slice(start, end)
+}
+
+/** The full realtime map (world/map.ts renderRealtimeMapSvg) marks its root with the
+ *  `data-map-root` attribute, not the old monolith's `id="map-root"` (that id has no remaining
+ *  caller anywhere in operator/src -- grep confirms only test files still name it). Throws
+ *  instead of returning '' so a future rename fails loud here, same as pageSlice above. */
+function mapRootHtml(html: string): string {
+  const start = html.indexOf('data-map-root')
+  const articleEnd = html.indexOf('</article>', start)
+  if (start < 0 || articleEnd < start) {
+    throw new Error('mapRootHtml: could not find data-map-root..</article> boundaries in the console HTML')
+  }
+  return html.slice(start, articleEnd)
 }
 
 describe('product sidebar (#105)', () => {
@@ -123,20 +165,32 @@ describe('product sidebar (#105)', () => {
     expect(html).toContain('Generate license')
     expect(html).toContain('data-license-generate')
     expect(html).toContain('/v1/admin/licenses/generate')
-    const overviewEmpty = html.slice(html.indexOf('data-page="overview"'), html.indexOf('data-page="realtime"'))
+    const overviewEmpty = pageSlice(html, 'overview', 'realtime')
     expect(overviewEmpty).toContain('data-license-generate')
     expect(overviewEmpty).toContain('Generate license')
     expect(html).toContain('Live seats')
     expect(html).toContain('Time saved')
     expect(html).toContain('Value')
-    expect(html).toContain('data-overview-kpis')
-    expect(html).toContain('data-overview-toplists')
-    expect(html).toContain('data-overview-activity')
-    expect(html).toContain('data-overview-people')
-    expect(html).toContain('Created at')
-    expect(html).toContain('data-device-card')
-    expect(html).toContain('Search devices')
-    expect(html).toContain('Search events')
+    // Overview's KPI tiles (render/pages/overview.ts renderMetricTilesBlock) and its six-plus
+    // top-list-card grid have no data-overview-kpis/data-overview-toplists id from the old
+    // monolith; they render under stable classes/attributes instead: mtiles-grid for the tile
+    // strip, data-overview-grid for the card grid (P0.4's page-module rebuild, plan 6.2).
+    expect(html).toContain('mtiles-grid')
+    expect(html).toContain('data-overview-grid')
+    // The old raw "Activity" feed and "People" strip left Overview entirely (plan 6.2 lists six
+    // top-list-cards -- Seats, Asks, Events (Kinds), Licenses, Countries, Map -- plus a
+    // Connectors card and the Generate license card; no standalone activity log or people list
+    // is in that spec). "Who is live" (3.7b law 2's first question) now answers through the
+    // Seats top-list-card; the raw event replay moved to Events' own table and Realtime's Live
+    // events feed (both still real, checked elsewhere in this file).
+    expect(html).toContain('data-ov-tlc-card="seats"')
+    // "Created at" (the Events table's first column, EVENT_COLUMNS in render/pages/events.ts)
+    // cannot be checked from this empty-store fixture any more: dataTable() (plan lock 3, no
+    // fake tables) now renders only the named empty state, with no <thead>, when there are zero
+    // rows -- the old monolith printed a static header regardless of data. Checked instead in
+    // "events keep seat OS after a later ask ingest" below, once a real event exists.
+    expect(html).toContain('Search seats')
+    expect(html).toContain('Search hostnames, emails, device ids')
     expect(html).toContain('data-rt-live-strip')
     expect(html).toContain('Seats 30m')
     expect(html).toContain('Live events')
@@ -164,23 +218,34 @@ describe('product sidebar (#105)', () => {
     expect(css).toMatch(/--accent:\s*#[0-9a-f]{3,8}/i)
     expect(css).not.toContain('#E5E7EB')
     expect(css).not.toContain('#2563EB')
-    expect(html).toContain('data-install-works')
+    // The Overview "Install -> works" ladder is retired (plan 6.7 block 0, "Needs your review":
+    // Licenses is now the only place a seat is approved -- see the quality-bar.test.ts and
+    // keys.test.ts reports for the full citation). data-install-works has no caller left in
+    // operator/src outside test files.
+    expect(html).toContain('data-review-block')
     expect(html).toContain('data-access-solid')
     expect(html).toContain('data-theme="light"')
-    const overview = html.slice(html.indexOf('data-page="overview"'), html.indexOf('data-page="realtime"'))
-    expect(overview).toContain('data-overview-toplists')
-    expect(overview).toContain('data-device-card')
-    expect(overview).toContain('data-geo-corner')
-    expect(overview).toContain('>Places<')
+    const overview = pageSlice(html, 'overview', 'realtime')
+    expect(overview).toContain('data-overview-grid')
+    expect(overview).toContain('data-ov-tlc-card="seats"')
+    expect(overview).toContain('data-ov-map-card')
+    // "Places" was the old paired Countries+Map widget's own eyebrow; the Amaris rebuild split
+    // it into the Countries top-list-card (whose first tab is literally labelled "Countries")
+    // and its own standalone Map card, so there is no single "Places" heading left to check.
+    expect(overview).toContain('>Countries<')
     expect(overview).toContain('>Map<')
-    expect(overview.indexOf('data-overview-toplists')).toBeLessThan(overview.indexOf('data-geo-corner'))
-    expect(overview.indexOf('data-geo-corner')).toBeLessThan(overview.indexOf('data-overview-activity'))
-    const realtime = html.slice(html.indexOf('data-page="realtime"'), html.indexOf('data-page="sessions"'))
+    // Same six-question ordering the old assertion protected (top-lists, then the map, then the
+    // page's one action), just anchored on the real ids: the grid (which contains the map card
+    // as its last child) comes before the map card's own position, which comes before the
+    // trailing Generate license card.
+    expect(overview.indexOf('data-overview-grid')).toBeLessThan(overview.indexOf('data-ov-map-card'))
+    expect(overview.indexOf('data-ov-map-card')).toBeLessThan(overview.indexOf('data-ov-license-card'))
+    const realtime = pageSlice(html, 'realtime', 'sessions')
     expect(realtime.indexOf('data-world-map')).toBeLessThan(realtime.indexOf('data-rt-live-strip'))
     expect(realtime.indexOf('data-rt-live-strip')).toBeLessThan(realtime.indexOf('data-realtime-geo'))
   })
 
-  it('puts pending seats on the Install → works path with Approve', async () => {
+  it('puts pending seats on the Licenses "Needs your review" path with Approve', async () => {
     const store = memoryStore()
     await store.upsertSeat({
       device_id: 'device-a',
@@ -200,32 +265,46 @@ describe('product sidebar (#105)', () => {
       approval: 'pending'
     })
     const html = await page(store)
-    const overview = html.slice(html.indexOf('data-page="overview"'), html.indexOf('data-page="realtime"'))
-    expect(overview).toContain('data-install-works')
-    expect(overview).toContain('Install → works')
+    const overview = pageSlice(html, 'overview', 'realtime')
+    // Overview keeps the six-question summary (plan 3.7b law 2) and the Generate license
+    // action; approving a seat is not one of Overview's questions any more. Plan 6.7 block 0
+    // ("Needs your review", 2026-09-06: "seats awaiting approval have their own section, in the
+    // license section ... it shouldn't be mixed with the notifications, it gets confusing") made
+    // Licenses the one place a seat is approved -- checked below, not here.
     expect(overview).toContain('data-license-generate')
     expect(overview).toContain('Generate license')
-    expect(overview).toContain('data-overview-kpis')
-    expect(overview).toContain('data-overview-toplists')
-    expect(overview).toContain('data-overview-activity')
-    expect(overview).toContain('data-overview-people')
-    expect(overview).toContain('data-geo-corner')
-    expect(overview).toContain('data-geo-widget')
-    expect(overview).toContain('data-geo-tab="cities"')
-    expect(overview).toContain('data-device-card')
-    expect(overview).toContain('data-device-tab="os"')
-    expect(overview).toContain('class="vol-bar"')
+    expect(overview).toContain('mtiles-grid')
+    expect(overview).toContain('data-overview-grid')
+    expect(overview).toContain('data-ov-map-card')
+    expect(overview).toContain('data-ov-license-card')
+    expect(overview.indexOf('data-overview-grid')).toBeLessThan(overview.indexOf('data-ov-map-card'))
+    expect(overview.indexOf('data-ov-map-card')).toBeLessThan(overview.indexOf('data-ov-license-card'))
+    // Places is now the Countries card (Countries/Regions/Cities tabs) -- its Cities pane still
+    // carries this seat's real city, the Seats card still carries its hostname and OS, and every
+    // row still grows a real proportional bar (class="row-bar", renamed from the old vol-bar).
+    expect(overview).toContain('data-ov-tlc-pane="countries:cities"')
+    expect(overview).toContain('data-ov-tlc-card="seats"')
+    expect(overview).toContain('data-ov-tlc-pane="seats:os"')
+    expect(overview).toContain('class="row-bar"')
     expect(overview).toContain('Longueuil')
     expect(overview).toContain('Tonys-MacBook-Pro')
-    expect(overview).toContain('data-people-row')
-    expect(overview).toContain('data-live="1"')
-    expect(overview).toContain('data-license-approve="device-a"')
-    expect(overview).toContain('pending')
+    expect(overview).toContain('data-os="darwin"')
+    expect(overview).toContain('data-country="CA"')
+    expect(overview).toContain('status-dot-live')
+    // The Licenses states pane (real, not fabricated) still shows this seat's real state.
+    expect(overview).toContain('data-q="pending"')
+    // Approving a seat has exactly one home now: never duplicated back onto Overview.
+    expect(overview).not.toContain('data-license-approve')
     expect(html).toContain('data-nav="licenses"')
     expect(html).toContain('class="nav-count"')
+    const licenses = pageSlice(html, 'licenses', 'groups')
+    expect(licenses).toContain('Needs your review')
+    expect(licenses).toContain('data-review-approve="device-a"')
+    expect(licenses).toContain('Tonys-MacBook-Pro')
+    expect(licenses).toContain('data-license-approve="device-a"')
   })
 
-  it('lands a heartbeat on Overview people + activity with city', async () => {
+  it('lands a heartbeat on Overview and Realtime with city', async () => {
     const store = memoryStore()
     const req = await signedRequest(
       '/v1/heartbeat',
@@ -247,22 +326,31 @@ describe('product sidebar (#105)', () => {
       ).status
     ).toBe(200)
     const html = await page(store)
-    const overview = html.slice(html.indexOf('data-page="overview"'), html.indexOf('data-page="realtime"'))
-    expect(overview).toContain('data-overview-people')
-    expect(overview).toContain('data-people-row')
-    expect(overview).toContain('data-live="1"')
-    expect(overview).toContain('data-city="Longueuil"')
+    const overview = pageSlice(html, 'overview', 'realtime')
+    // "Who is live" (3.7b law 2) now answers through the Seats top-list-card: the real seat's
+    // hostname, its live status dot, and the fleet-wide Live seats tile counting it.
+    expect(overview).toContain('data-ov-tlc-card="seats"')
     expect(overview).toContain('Tonys-MacBook-Pro')
-    expect(overview).toContain('>live<')
-    expect(overview).toContain('data-overview-activity')
-    expect(overview).toMatch(/live|heartbeat/)
+    expect(overview).toContain('status-dot-live')
+    expect(overview).toContain('>Live<')
+    expect(overview).toContain('data-count-to="1"')
+    // City is discoverable through the Countries card's Cities pane, not a raw data-city
+    // attribute (retired along with the old <table>-based Places widget).
+    expect(overview).toContain('data-ov-tlc-pane="countries:cities"')
     expect(overview).toContain('Longueuil')
-    expect(overview).toContain('data-geo-table="cities"')
     expect(overview).toContain('Generate license')
-    expect(overview).toContain('class="ago"')
-    expect(overview).toMatch(/>now</)
-    expect(overview).toContain('city Longueuil')
-    expect(overview).toContain('twalteur@amaris.com')
+    expect(overview).toContain('data-license-generate')
+    // The raw activity/people log with a per-row age and email moved off Overview entirely
+    // (plan 6.2's cards summarise counts, they do not replay a feed) -- it lives on Realtime
+    // (Live events feed, ages included) and Licenses (this seat's real SSO email).
+    const realtime = pageSlice(html, 'realtime', 'sessions')
+    expect(realtime).toContain('data-live-feed')
+    expect(realtime).toContain('class="ago"')
+    expect(realtime).toMatch(/>now</)
+    expect(realtime).toContain('data-city="Longueuil"')
+    const licenses = pageSlice(html, 'licenses', 'notifications')
+    expect(licenses).toContain('twalteur@amaris.com')
+    expect(licenses).toContain('Tonys-MacBook-Pro')
   })
 })
 
@@ -288,7 +376,7 @@ describe('map has no repeating horizontal band', () => {
       { access: tonyAccess },
       { store, now: NOW }
     ).then((r) => r.text())
-    expect(findBandSubpaths(html)).toEqual([])
+    expect(findBandSubpaths(landPathsHtml(html))).toEqual([])
     expect(html).not.toMatch(/repeating-linear-gradient/)
     expect(html).toContain('data-iso="CA"')
     expect(await cssOf(store)).toMatch(/--map-land:\s*#[0-9a-f]{3,8}/i)
@@ -323,11 +411,19 @@ describe('events keep seat OS after a later ask ingest', () => {
     expect(events).toContain('darwin')
     expect(events).toContain('Tonys-MacBook-Pro')
     expect(events).toContain('Longueuil')
-    const realtime = html.slice(html.indexOf('data-page="realtime"'), html.indexOf('data-page="sessions"'))
+    // Moved here from the 'product sidebar' empty-store test: EVENT_COLUMNS's header only
+    // renders once at least one row exists (dataTable() shows just the named empty state at
+    // zero rows, plan lock 3), so this real event is what proves the column label.
+    expect(events).toContain('Created at')
+    const realtime = pageSlice(html, 'realtime', 'sessions')
     expect(realtime).toContain('data-world-live')
     expect(realtime).toContain('LIVE 1')
     expect(realtime).toContain('class="ago"')
-    expect(realtime).toContain('city Longueuil')
+    // The old feed rendered each chip as raw "key value" text ("city Longueuil"); the map pin
+    // (world/map.ts renderPin) now carries the same real geo honestly as a data-city attribute
+    // plus a visible label on the map itself, rather than a plain-text chip.
+    expect(realtime).toContain('data-city="Longueuil"')
+    expect(realtime).toContain('>Longueuil<')
   })
 })
 
@@ -404,7 +500,7 @@ describe('licenses pane is real seats with Tony approval, not Shoey demo rows', 
       approval: 'pending'
     })
     const html = await page(store)
-    const licenses = html.slice(html.indexOf('data-page="licenses"'), html.indexOf('data-page="notifications"'))
+    const licenses = pageSlice(html, 'licenses', 'notifications')
     expect(licenses).toContain('Tonys-MacBook-Pro')
     expect(licenses).toContain('twalteur@amaris.com')
     expect(licenses).toContain('licensed')
@@ -416,10 +512,13 @@ describe('licenses pane is real seats with Tony approval, not Shoey demo rows', 
     expect(html).toContain('data-nav="notifications"')
     expect(html).toContain('data-nav="licenses"')
     expect(html).toContain('data-nav="settings"')
-    const notices = html.slice(html.indexOf('data-page="notifications"'), html.indexOf('data-page="keys"'))
+    const notices = pageSlice(html, 'notifications', 'keys')
     expect(notices).toContain('data-notice-table')
     expect(notices).toContain('<th>Profile</th>')
-    expect(notices).toContain('<th>City</th>')
+    // countryCell() (plan 3.6) replaced the plain City column with a Country column that
+    // carries the city as its secondary line -- flag, country name, then city underneath --
+    // rather than dropping city information; it is still on the page, just not its own <th>.
+    expect(notices).toContain('<th>Country</th>')
     expect(notices).toContain('<th>OS</th>')
     expect(notices).toContain('Tonys-MacBook-Pro')
     expect(notices).toContain('Longueuil')
@@ -500,39 +599,53 @@ describe('realtime and map use live heartbeats, not leftover OpenPanel', () => {
     expect(await cssOf(store)).toMatch(/--map-land:\s*#[0-9a-f]{3,8}/i)
     expect(await cssOf(store)).toContain('fill: var(--map-land)')
     expect(await cssOf(store)).not.toContain('#E5E7EB')
-    expect(html).toContain('data-live-presence')
+    // The old "Live people" strip (data-live-presence) was a plain list of currently-live
+    // seats, separate from the map. Plan 6.3's Connected seats table absorbed and enriched that
+    // job (avatar with live dot, hostname, email, country/city, OS, client, tier, session
+    // timing) rather than dropping it -- data-realtime-seats is its real successor.
+    expect(html).toContain('data-realtime-seats')
     expect(html).toContain('data-world-map')
     expect(html).toContain('data-live-feed')
     expect(html).toContain('data-realtime-geo')
-    expect(html).toContain('data-geo-table="realtime"')
-    expect(html).toContain('data-geo-tab="regions"')
     expect(html).toContain('data-city="Longueuil"')
-    const realtime = html.slice(html.indexOf('data-page="realtime"'), html.indexOf('data-page="sessions"'))
-    expect(realtime).toContain('WorldMap')
+    const realtime = pageSlice(html, 'realtime', 'sessions')
+    // "WorldMap" / "GeoTable" were the old Shoey-clone's own internal component names leaking
+    // into page copy; the Amaris rebuild (plan 3.1/3.7b law 6, "no jargon in chrome") replaced
+    // them with the real data-* hooks already asserted above, or with no label at all where the
+    // map panel needs none.
+    expect(realtime).toContain('data-world-map')
     expect(realtime).toContain('Live events')
     expect(realtime).toContain('data-live-feed')
     expect(realtime).toContain('data-rt-live-strip')
     expect(realtime).toContain('Seats 30m')
-    expect(realtime).toContain('GeoTable')
+    expect(realtime).toContain('data-realtime-geo')
     expect(realtime).toContain('class="rt-pin"')
     expect(realtime).toContain('data-country="Canada"')
     expect(realtime).toContain('data-city="Longueuil"')
+    // Plan D2: the Geo table's real per-country/per-city rows are JSON-hydrated client-side
+    // (GET /v1/admin/realtime/geo.json, checked directly by the neighbouring
+    // 'realtime.geo.json is city-level Shoey rows' describe block below) rather than
+    // server-rendered -- first paint honestly shows a sized skeleton while seats30m > 0
+    // (data-rt-skeleton) instead of a data-geo-table="realtime" table full of guessed rows or a
+    // Country/Region/City tab switcher (that tabbed breakdown, data-geo-tab, is Overview's
+    // Countries card, plan 6.2, exercised separately by the 'product sidebar' tests).
+    expect(realtime).toContain('data-rt-skeleton')
     expect(realtime).not.toContain('data-geo-corner')
     expect(html).toContain('data-page="sessions"')
-    expect(html).toContain('<th>City</th>')
-    expect(html).toContain('<th>Device</th>')
-    expect(html).toContain('Longueuil')
+    // Sessions is fully client-hydrated now (plan D2: DashboardPayload carries no `sessions`
+    // field of its own -- render/pages/sessions.ts's renderSessions always gets `rows == null`
+    // on first server paint). It honestly shows a sized skeleton, never the old server-rendered
+    // <th>City</th>/<th>Device</th> table with real or fabricated rows; the merged Country /
+    // City and Seat columns (plan 6.5) and this seat's real values are covered directly by
+    // render/pages/sessions.test.ts (renderSessionsTableBody with real row data) and the GET
+    // /v1/admin/sessions.json contract, not by this file's job of asserting the shell.
+    const sessions = pageSlice(html, 'sessions', 'events')
+    expect(sessions).toContain('data-sessions-skeleton')
+    expect(sessions).toContain('data-loaded="false"')
     expect(html).not.toContain('/products/sneakers')
     expect(html).not.toContain('defaultServers')
   })
 })
-
-function mapRootHtml(html: string): string {
-  const start = html.indexOf('<div id="map-root"')
-  if (start < 0) return ''
-  const articleEnd = html.indexOf('</article>', start)
-  return articleEnd > start ? html.slice(start, articleEnd) : ''
-}
 
 describe('realtime.geo.json is city-level Shoey rows', () => {
   it('returns 401 without Access', async () => {
@@ -588,8 +701,14 @@ describe('map land is in #map-root HTML', () => {
   it('inlines path[data-iso] land inside #map-root', async () => {
     const html = await page()
     const root = mapRootHtml(html)
-    expect(root).toContain('id="map-root"')
+    expect(root).toContain('data-map-root')
+    // World land (world/map.ts's landPaths(), one path[data-iso] per country) is inlined
+    // unconditionally -- Canada's outline renders whether or not any seat has ever checked in,
+    // same as the old id="map-root" contract asserted, just under the new attribute.
     expect(root).toContain('data-iso="CA"')
+    // 'map' stays a real, empty, aria-hidden placeholder section (operator/src/ui.ts) -- a dead
+    // hash target for any link still pointing at #map -- even though the actual map now lives
+    // on Realtime, not its own page.
     expect(html).toContain('data-page="map"')
     expect(html).toContain('data-nav="sessions"')
   })

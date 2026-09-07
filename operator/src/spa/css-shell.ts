@@ -45,8 +45,13 @@ export const SHELL_CSS = `
 }
 .live-indicator[data-state="reconnecting"] .live-dot { background: var(--warn); animation: none; }
 .live-indicator[data-state="paused"] .live-dot { background: var(--ink-3); animation: none; }
+/* Plan 3.7 item 4: a standalone preview has no Worker behind /v1/admin/live.json, so it is never
+   "reconnecting" (that amber state is reserved for a real endpoint that stopped answering) --
+   grey, same as Paused, styled separately in case the two ever need to read differently. */
+.live-indicator[data-state="offline"] .live-dot { background: var(--ink-3); animation: none; }
 .live-indicator[data-state="reconnecting"] { color: var(--warn); }
 .live-indicator[data-state="paused"] { color: var(--ink-3); }
+.live-indicator[data-state="offline"] { color: var(--ink-3); }
 
 .rail-action.tool {
   display: flex; align-items: center; justify-content: center; gap: 6px; width: 100%;
@@ -134,6 +139,7 @@ export const SHELL_CSS = `
 }
 .live-dot-mini[data-state="reconnecting"] { background: var(--warn); animation: none; }
 .live-dot-mini[data-state="paused"] { background: var(--ink-3); animation: none; }
+.live-dot-mini[data-state="offline"] { background: var(--ink-3); animation: none; }
 
 .rail-toggle {
   display: none; align-items: center; justify-content: center; width: 32px; height: 32px;

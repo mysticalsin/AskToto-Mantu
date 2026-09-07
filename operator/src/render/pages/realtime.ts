@@ -23,6 +23,7 @@ import {
   COUNTRY_NAMES,
   avatar,
   clientChip,
+  countryCell,
   dataTable,
   emptyState,
   esc,
@@ -83,13 +84,12 @@ function buildMapModel(data: DashboardPayload): { points: RealtimeMapPoint[] } {
 
 function renderMapPanel(data: DashboardPayload): string {
   const { points } = buildMapModel(data)
+  // renderRealtimeMapSvg() (operator/src/world/map.ts) renders its own following tooltip
+  // (`.rt-map-tooltip[data-map-tooltip]`), populated by operator/src/world/map-dom.ts's
+  // attachMapInteraction() -- this card does not carry a second, separate tooltip element.
   return `<article class="card rt-map-card" data-world-map>
     <span class="live rt-map-live" data-world-live aria-live="polite">LIVE ${data.roi.liveSeats}</span>
     ${renderRealtimeMapSvg({ points })}
-    <div class="rt-tooltip" data-rt-tooltip role="tooltip" hidden>
-      <div class="rt-tooltip-head"><span data-tt-flag></span><strong data-tt-country></strong></div>
-      <div class="rt-tooltip-rows" data-tt-rows></div>
-    </div>
   </article>`
 }
 
@@ -126,13 +126,19 @@ function renderLiveEventRow(e: ConsoleEvent, byDevice: Map<string, ProfileRow>, 
   }
 }
 
+/** Plan 6.3: "the last 24", newest first -- data.events already arrives sorted newest-first
+ * (dashboard.ts's mergeEvents), so this slice is the 24 most recent, not an arbitrary 24. The
+ * badge next to "Live events" reports what is actually on screen, not the pre-slice total: a
+ * count that disagreed with the visible rows was its own small version of "feels unbounded". */
+const LIVE_FEED_ROW_CAP = 24
+
 function renderStrip(data: DashboardPayload): string {
   const byDevice = profileIndex(data.profiles)
-  const events = data.events.slice(0, 24).map((e) => renderLiveEventRow(e, byDevice, data.now))
+  const events = data.events.slice(0, LIVE_FEED_ROW_CAP).map((e) => renderLiveEventRow(e, byDevice, data.now))
   return `<div class="rt-strip" data-rt-live-strip>
     ${visitorsCard({ title: 'Seats 30m', value: data.roi.seats30m, bars: data.ops.liveSeries })}
     ${liveCard({ title: 'Live', value: data.roi.liveSeats, caption: 'seats online now, heartbeat under 2 min' })}
-    ${liveFeed({ rows: events, count: data.events.length })}
+    ${liveFeed({ rows: events, count: events.length })}
   </div>`
 }
 
@@ -161,11 +167,14 @@ export function renderGeoTable(rows: GeoTableRow[]): string {
     ],
     rows: rows.map((r) => {
       const countryLabel = COUNTRY_NAMES[r.iso] || r.iso
-      const label = r.city ? `${countryLabel}, ${r.city}` : `${countryLabel} (country only)`
       const q = `${r.iso} ${countryLabel} ${r.city || ''}`.toLowerCase()
       return {
-        icon: flag(r.iso),
-        label,
+        // countryCell() (primitives.ts, plan 3.6/6.3) is the whole label: flag, country name and
+        // the city as its secondary line, one 32px row -- not a hand-rolled "Country, City"
+        // string. metricTable() escapes `label` but renders `icon` raw, so the two-line markup
+        // has to live in `icon` with `label` left empty.
+        icon: countryCell(r.iso, { secondary: r.city || undefined }),
+        label: '',
         barValue: r.seats30m,
         attrs: `data-geo-row data-iso="${esc(r.iso)}" data-q="${esc(q)}"`,
         cells: {

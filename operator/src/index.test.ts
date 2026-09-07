@@ -312,7 +312,13 @@ describe('packed console map and geo', () => {
     )
     expect(home.status).toBe(200)
     const page = await home.text()
-    expect(page).toContain('No heartbeats yet. The map stays empty until a seat checks in.')
+    // That exact copy lived only in charts.ts's choropleth(), retired as dead code once P0.4
+    // split the console into per-page render modules (its only remaining caller is
+    // map-bands.test.ts's own synthetic-fixture coverage of findBandSubpaths/stripMapBands).
+    // Overview's real map card (render/pages/overview.ts renderMapCard) states the same "the
+    // map is empty, and here is why" honestly, tied to the same data.map.empty field this test
+    // asserts on below.
+    expect(page).toContain('No seat has checked in yet. The map fills in as heartbeats arrive.')
     // The inlined world land carries thousands of SVG coordinate pairs ("L1,344"); strip the
     // vector markup before checking the copy for sample numbers.
     const prose = page.replace(/<svg[\s\S]*?<\/svg>/g, '')
@@ -584,12 +590,18 @@ describe('CRM send board', () => {
     }
     const page = await handleRequest(new Request('https://operator.test/'), env(), { access: tonyAccess }, { store, now: NOW })
     const html = await page.text()
-    expect(html).toContain('data-retry="row-failed"')
-    expect(html).toContain('data-retry="row-expired"')
+    // CRM telemetry moved from Notifications to Events > CRM (plan 6.4/6.8: "CRM telemetry
+    // moves to Events > CRM tab"), rebuilt in render/pages/events.ts. The Retry button's hook
+    // is now the CRM-specific data-crm-retry (crmRetryCell) rather than the old bare data-retry.
+    expect(html).toContain('data-crm-retry="row-failed"')
+    expect(html).toContain('data-crm-retry="row-expired"')
     expect(html).toContain('data-status="failed"')
     expect(html).toContain('status-badge')
     expect(html).toContain('Submitted')
-    expect([...html.matchAll(/data-crm-filter="([^"]+)"/g)].map((m) => m[1])).toEqual([
+    // The status filter chips carry data-crm-status-chip now (crmStatusChipsHtml), not the old
+    // data-crm-filter; CRM_FILTER_ORDER (operator/src/crm.ts) is unchanged so the chip order,
+    // and therefore this array, stays the same.
+    expect([...html.matchAll(/data-crm-status-chip="([^"]+)"/g)].map((m) => m[1])).toEqual([
       'all',
       'pending',
       'failed',
@@ -599,7 +611,9 @@ describe('CRM send board', () => {
       'expired',
       'submitted'
     ])
-    expect(html).toContain('Data-push telemetry')
+    // The "Data-push telemetry" eyebrow was the old panel's own title; the CRM tab now
+    // identifies the section (pageHeader's tabs: Events, Asks, CRM).
+    expect(html).toContain('data-page-tab="crm"')
     expect(html).not.toContain('Submited')
     expect(html).not.toContain('StatusDemo')
     expect(html).not.toContain('bg-orange-50')

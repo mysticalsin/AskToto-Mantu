@@ -69,12 +69,21 @@ describe('renderGeoTable', () => {
     { iso: 'FR', country: 'FR', city: null, events: 2, liveSessions: 0, seats30m: 1, avgDurationMs: 15_000 }
   ]
 
-  it('renders one row per country/city with a flag, the events/live/seats/duration columns, and a search key', () => {
+  it('renders one row per country/city as a countryCell (name + city secondary line), the events/live/seats/duration columns, and a search key', () => {
     const html = renderGeoTable(rows)
-    expect(html).toContain('Canada, Montreal')
-    expect(html).toContain('Canada, Toronto')
-    expect(html).toContain('France (country only)')
+    expect(html).toContain('<span class="country-cell-name">Canada</span><span class="country-cell-secondary">Montreal</span>')
+    expect(html).toContain('<span class="country-cell-name">Canada</span><span class="country-cell-secondary">Toronto</span>')
+    expect(html).toContain('<span class="country-cell-name">France</span><span class="country-cell-secondary">Country only</span>')
     expect(html).toMatch(/data-geo-row data-iso="CA"[^>]*data-q="ca canada montreal"/)
+    // The label itself is left empty -- countryCell() is the whole cell, carried in `icon`.
+    expect(html).not.toContain('Canada, Montreal')
+  })
+
+  it('every row lands in the metricTable grid: 1 label column + 4 metric columns (plan 6.3 events/live/seats/duration)', () => {
+    const html = renderGeoTable(rows)
+    // A row that renders as its own countryCell block, once per row, confirms the label slot
+    // never doubles as a fifth ungridded column (the "each row's own tall band" bug).
+    expect((html.match(/class="country-cell"/g) || []).length).toBe(rows.length)
   })
 
   it('dedupes the header flags by country, capped at 8', () => {
@@ -88,7 +97,11 @@ describe('renderGeoTable', () => {
       avgDurationMs: 1000
     }))
     const html = renderGeoTable(many)
-    expect((html.match(/class="flag"/g) || []).length).toBeLessThanOrEqual(1 + 12) // header (1 distinct) + one per row label
+    // Header flags only now (plan 3.6: flag() with no name is retired everywhere except the
+    // header summary strip) -- row labels are countryCell()s, which render a <img class="country-flag">,
+    // not a `.flag` span.
+    expect((html.match(/class="flag"/g) || []).length).toBe(1)
+    expect((html.match(/class="country-cell"/g) || []).length).toBe(12)
   })
 
   it('renders the named empty state when there are no rows', () => {
