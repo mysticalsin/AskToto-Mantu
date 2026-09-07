@@ -21,10 +21,19 @@ export const DEFAULT_OPERATOR_URL = 'https://metis-operator.tony-walteur.workers
 
 export const CF_CONNECT_PATH = '/cloudflare/connect'
 
+/** Narrow view of Node's `process.env`, read through `globalThis` so this file compiles under a
+ *  WebWorker-lib tsconfig (the Operator Worker) without pulling @types/node into that project. */
+type NodeLikeGlobal = { process?: { env?: Record<string, string | undefined> } }
+
+function nodeEnv(): Record<string, string | undefined> {
+  const g = globalThis as NodeLikeGlobal
+  return g.process?.env ?? {}
+}
+
 /** HTTPS Operator `/cloudflare/connect`. Null if the base is not https. */
 export function cloudflareConnectHref(
   settings: { operatorUrl?: string } | null | undefined = {},
-  env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
+  env: Record<string, string | undefined> = nodeEnv()
 ): string | null {
   const raw = (settings?.operatorUrl || env.METIS_OPERATOR_URL || DEFAULT_OPERATOR_URL).trim()
   if (!/^https:\/\//i.test(raw)) return null
@@ -39,7 +48,7 @@ export function cloudflareConnectHref(
  */
 export function resolveOperatorBaseUrl(
   settings: { operatorUrl?: string } | null | undefined = {},
-  env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
+  env: Record<string, string | undefined> = nodeEnv()
 ): string {
   const fromSettings = settings?.operatorUrl?.trim() ?? ''
   const fromEnv = env.METIS_OPERATOR_URL?.trim() ?? ''
@@ -50,7 +59,7 @@ export function resolveOperatorBaseUrl(
 /** True when a usable HTTPS Operator base resolves (Settings, env, or shipped DEFAULT). */
 export function operatorUrlConfigured(
   settings: { operatorUrl?: string } | null | undefined,
-  env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
+  env: Record<string, string | undefined> = nodeEnv()
 ): boolean {
   return Boolean(resolveOperatorBaseUrl(settings, env))
 }
@@ -58,7 +67,7 @@ export function operatorUrlConfigured(
 /** Explicit Settings/env URL only — not the shipped DEFAULT. Gates Ask-text opt-in. */
 export function operatorUrlExplicit(
   settings: { operatorUrl?: string } | null | undefined,
-  env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
+  env: Record<string, string | undefined> = nodeEnv()
 ): boolean {
   const fromSettings = settings?.operatorUrl?.trim() ?? ''
   const fromEnv = env.METIS_OPERATOR_URL?.trim() ?? ''
@@ -68,7 +77,7 @@ export function operatorUrlExplicit(
 /** Ask-text toggle. Default ON once an explicit URL is set; ignored for bare DEFAULT. */
 export function shouldSendAskText(
   settings: { operatorUrl?: string; sendAskText?: boolean } | null | undefined,
-  env: Record<string, string | undefined> = typeof process !== 'undefined' && process?.env ? process.env : {}
+  env: Record<string, string | undefined> = nodeEnv()
 ): boolean {
   if (!operatorUrlExplicit(settings, env)) return false
   return settings?.sendAskText !== false
@@ -187,7 +196,17 @@ export const CACHE_PRICE_MULT = {
 } as const
 
 /** Small published list-price table, USD per million tokens. Family prefixes only. */
-export const LIST_PRICE_TABLE: { test: (model: string) => boolean; inputPerMTok: number; outputPerMTok: number; family: string }[] = [
+export const LIST_PRICE_TABLE: {
+  test: (model: string) => boolean
+  inputPerMTok: number
+  outputPerMTok: number
+  cachedInPerMTok?: number
+  family: string
+}[] = [
+  { test: (m) => /@cf\/deepseek-ai\/deepseek-v4-flash/i.test(m), inputPerMTok: 0.44, outputPerMTok: 1.32, cachedInPerMTok: 0.014, family: 'Workers AI DeepSeek V4 Flash' },
+  { test: (m) => /@cf\/deepseek-ai\/deepseek-v4-pro/i.test(m), inputPerMTok: 1.32, outputPerMTok: 3.96, cachedInPerMTok: 0.044, family: 'Workers AI DeepSeek V4 Pro' },
+  { test: (m) => /deepseek-v4-flash/i.test(m), inputPerMTok: 0.14, outputPerMTok: 0.28, family: 'DeepSeek V4 Flash' },
+  { test: (m) => /deepseek-v4-pro/i.test(m), inputPerMTok: 0.55, outputPerMTok: 2.19, family: 'DeepSeek V4 Pro' },
   { test: (m) => /claude-opus/i.test(m), inputPerMTok: 15, outputPerMTok: 75, family: 'Claude Opus' },
   { test: (m) => /claude-sonnet/i.test(m), inputPerMTok: 3, outputPerMTok: 15, family: 'Claude Sonnet' },
   { test: (m) => /claude-haiku/i.test(m), inputPerMTok: 1, outputPerMTok: 5, family: 'Claude Haiku' },
@@ -196,8 +215,39 @@ export const LIST_PRICE_TABLE: { test: (model: string) => boolean; inputPerMTok:
   { test: (m) => /gpt-4/i.test(m), inputPerMTok: 10, outputPerMTok: 30, family: 'GPT-4' }
 ]
 
-export function listPriceFor(model: string): { inputPerMTok: number; outputPerMTok: number; family: string } | null {
+export function listPriceFor(model: string): {
+  inputPerMTok: number
+  outputPerMTok: number
+  cachedInPerMTok?: number
+  family: string
+} | null {
   return LIST_PRICE_TABLE.find((row) => row.test(model)) ?? null
+}
+
+/**
+ * Token list-price estimate. Null when tokens or a price row are missing.
+ * Never returns a $0 invent — missing stays not reported.
+ */
+export function estimateListPrice(
+  model: string,
+  inputTokens?: number | null,
+  outputTokens?: number | null,
+  cacheRead?: number | null
+): CostEstimate | null {
+  const price = listPriceFor(model)
+  if (!price) return null
+  const input = inputTokens ?? 0
+  const output = outputTokens ?? 0
+  const cached = cacheRead ?? 0
+  if (input <= 0 && output <= 0 && cached <= 0) return null
+  const cachedRate = price.cachedInPerMTok ?? price.inputPerMTok
+  const uncached = Math.max(0, input - cached)
+  const usd =
+    (uncached / 1_000_000) * price.inputPerMTok +
+    (cached / 1_000_000) * cachedRate +
+    (output / 1_000_000) * price.outputPerMTok
+  if (!(usd > 0)) return null
+  return { usd, savedUsd: 0, label: 'estimate, list price', family: price.family }
 }
 
 export interface CostEstimate {
@@ -386,4 +436,20 @@ export function aggregateCacheSlice(lines: AskLogLine[]): OperatorCacheSlice {
     ttftNaP50Ms: percentile(na, 50),
     ttftNaP95Ms: percentile(na, 95)
   }
+}
+
+/** Seat hostname from `os.hostname()`. Letters, digits, dot, hyphen, underscore. Max 64. */
+export function sanitizeOperatorHostname(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const host = raw.trim().slice(0, 64)
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(host)) return null
+  return host
+}
+
+/** SSO email from the seat session. Never invent one. Max 120. */
+export function sanitizeOperatorSsoEmail(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  const email = raw.trim().toLowerCase().slice(0, 120)
+  if (!/^[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(email)) return null
+  return email
 }

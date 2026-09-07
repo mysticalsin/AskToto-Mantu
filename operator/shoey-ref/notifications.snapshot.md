@@ -1,0 +1,66 @@
+- generic [active] [ref=f8e1]:
+  - generic [ref=f8e2]:
+    - button "Close menu"
+    - generic [ref=f8e3]:
+      - generic [ref=f8e4]:
+        - link [ref=f8e5] [cursor=pointer]:
+          - /url: /
+          - img "Openpanel logo" [ref=f8e6]
+        - button "Shoey" [ref=f8e7]
+      - generic [ref=f8e16]:
+        - button "Ask AI" [ref=f8e18]
+        - generic [ref=f8e23]:
+          - textbox "Ask AI anything..." [ref=f8e27]
+          - generic [ref=f8e28]: ⌘J
+        - generic [ref=f8e29]: Analytics
+        - navigation [ref=f8e30]:
+          - link "Overview" [ref=f8e31] [cursor=pointer]:
+            - /url: /demo/shoey
+          - link "Realtime" [ref=f8e36] [cursor=pointer]:
+            - /url: /demo/shoey/realtime
+          - link "Events" [ref=f8e42] [cursor=pointer]:
+            - /url: /demo/shoey/events
+          - link "Sessions" [ref=f8e44] [cursor=pointer]:
+            - /url: /demo/shoey/sessions
+          - link "Groups" [ref=f8e50] [cursor=pointer]:
+            - /url: /demo/shoey/groups
+        - generic [ref=f8e55]: Manage
+        - navigation [ref=f8e56]:
+          - link "Settings" [ref=f8e57] [cursor=pointer]:
+            - /url: /demo/shoey/settings
+          - link "Notifications" [ref=f8e69] [cursor=pointer]:
+            - /url: /demo/shoey/notifications
+      - generic [ref=f8e74]:
+        - generic [ref=f8e75]:
+          - button "Sparkles" [ref=f8e76]
+          - button "User" [ref=f8e80]
+        - generic [ref=f8e84]:
+          - generic [ref=f8e85]: Support Us
+          - generic [ref=f8e86]: Pay What You Want
+    - generic [ref=f8e88]:
+      - generic [ref=f8e89]:
+        - generic [ref=f8e91]:
+          - heading "Notifications" [level=1] [ref=f8e92]
+          - paragraph [ref=f8e93]: See notifications and manage your rules when to get notifications
+        - navigation [ref=f8e94]:
+          - link "Notifications" [ref=f8e95] [cursor=pointer]:
+            - /url: /demo/shoey/notifications/notifications
+          - generic "Not part of this clone" [ref=f8e96]: Rules
+      - generic [ref=f8e97]:
+        - generic [ref=f8e98]:
+          - textbox "Search" [ref=f8e103]
+          - button "Created at" [ref=f8e104]
+        - button "View" [ref=f8e108]
+      - generic [ref=f8e115]:
+        - generic [ref=f8e116]:
+          - generic [ref=f8e117]: TITLE
+          - generic [ref=f8e118]: INTEGRATION
+          - generic [ref=f8e119]: COUNTRY
+          - generic [ref=f8e120]: OS
+          - generic [ref=f8e121]: BROWSER
+          - generic [ref=f8e122]: PROFILE
+          - generic [ref=f8e126]: CREATED AT
+        - generic [ref=f8e127]:
+          - heading "No data" [level=3] [ref=f8e130]
+          - paragraph [ref=f8e131]: We could not find any data here yet
+  - alert [ref=f8e132]
