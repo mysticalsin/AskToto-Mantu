@@ -2,7 +2,15 @@ import { describe, expect, it } from 'vitest'
 import type { DashboardPayload } from '../../dashboard'
 import { fixtureDashboard, FIXTURE_NOW } from '../fixture'
 import { fixtureForLicenses } from './licenses.fixture'
-import { renderIssuedLicenseRowHtml, renderLicenses, viewRowFromGenerate } from './licenses'
+import {
+  renderBatchResultPanel,
+  renderIssuedLicenseRowHtml,
+  renderIssuedLicenseTable,
+  renderLicenses,
+  viewRowFromGenerate,
+  type BatchLicenseResultView,
+  type IssuedLicenseViewRow
+} from './licenses'
 
 const CTX = { now: 1_725_000_000_000, theme: 'light' as const }
 // The fixtureForLicenses()/fixtureDashboard() default rows are built relative to FIXTURE_NOW
@@ -227,5 +235,85 @@ describe('renderIssuedLicenseRowHtml / viewRowFromGenerate (client FLIP-insert p
     expect(html).toContain('Sales Paris')
     expect(html).toContain('Métis Light')
     expect(html).toContain('a@example.com')
+  })
+})
+
+describe('renderBatchResultPanel (plan 6.7b) shows the once-strings; the issued table never can', () => {
+  const BATCH: BatchLicenseResultView[] = [
+    {
+      jti: 'batchjti00000001',
+      license: 'METIS-OP-1.batchjti00000001.1725000000.1727592000.SECRET-ONCE-STRING-AAA',
+      last4: 'aaaa',
+      member: 'a@example.com',
+      tier: 'metis',
+      days: 30,
+      exp: Math.floor(CTX.now / 1000) + 30 * 86400
+    },
+    {
+      jti: 'batchjti00000002',
+      license: 'METIS-OP-1.batchjti00000002.1725000000.1727592000.SECRET-ONCE-STRING-BBB',
+      last4: 'bbbb',
+      member: null,
+      tier: null,
+      days: 30,
+      exp: Math.floor(CTX.now / 1000) + 30 * 86400
+    }
+  ]
+
+  it('renders every full once-string, a Download control for CSV and Excel, and the once-only warning', () => {
+    const html = renderBatchResultPanel('batch-123', BATCH, CTX.now)
+    expect(html).toContain('SECRET-ONCE-STRING-AAA')
+    expect(html).toContain('SECRET-ONCE-STRING-BBB')
+    expect(html).toContain('data-batch-download="csv"')
+    expect(html).toContain('data-batch-download="xlsx"')
+    expect(html).toContain('data-batch-copy-all')
+    expect(html).toContain('data-batch-dismiss')
+    expect(html).toContain('only moment')
+    expect(html).toContain('a@example.com')
+    expect(html).toContain('··aaaa')
+    expect(html).toContain('··bbbb')
+    expect(html).not.toContain('style="')
+  })
+
+  it('omits Copy all above the small-batch threshold', () => {
+    const many: BatchLicenseResultView[] = Array.from({ length: 11 }, (_, i) => ({
+      jti: `batchjti0000000${i}`,
+      license: `METIS-OP-1.batchjti0000000${i}.1725000000.1727592000.SECRET-${i}`,
+      last4: String(i).padStart(4, '0'),
+      member: null,
+      tier: null,
+      days: 30,
+      exp: Math.floor(CTX.now / 1000) + 30 * 86400
+    }))
+    const html = renderBatchResultPanel('batch-big', many, CTX.now, 10)
+    expect(html).not.toContain('data-batch-copy-all')
+  })
+
+  it('the issued table renders the same licenses with last4 only: no once-string anywhere in it', () => {
+    const now = CTX.now
+    const viewRows: IssuedLicenseViewRow[] = BATCH.map((b) => ({
+      jti: b.jti,
+      last4: b.last4,
+      days: b.days,
+      exp: b.exp,
+      revoked: false,
+      createdAt: now,
+      tier: b.tier,
+      groupId: null,
+      groupName: null,
+      member: b.member,
+      issuedBy: 'tony.walteur@gmail.com',
+      activatedDevice: null,
+      activatedAt: null,
+      known: true
+    }))
+    const issuedHtml = renderIssuedLicenseTable(viewRows, now)
+    expect(issuedHtml).toContain('··aaaa')
+    expect(issuedHtml).toContain('··bbbb')
+    for (const b of BATCH) {
+      expect(issuedHtml).not.toContain(b.license)
+      // The distinctive once-string suffix must not leak into the issued table under any label.
+      expect(issuedHtml).not.toContain(b.license.split('.').pop() as string)
+    }
   })
 })

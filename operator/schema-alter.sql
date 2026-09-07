@@ -244,3 +244,10 @@ CREATE TABLE IF NOT EXISTS mcp_calls (
 
 CREATE INDEX IF NOT EXISTS mcp_calls_connection_ts ON mcp_calls(connection_id, ts);
 CREATE INDEX IF NOT EXISTS mcp_calls_device_ts ON mcp_calls(device_id, ts);
+
+-- Shared id stamping every license minted in one POST /v1/admin/licenses/generate-batch call (plan
+-- 6.7b, task B-batch, operator/src/licenses/batch.ts). null on every license minted outside a batch.
+-- Additive only; no new table, since a batch is otherwise just several issued_licenses rows plus one
+-- summary row in the existing audit table (see migrate.contract.test.ts's coverage of this column).
+ALTER TABLE issued_licenses ADD COLUMN batch_id TEXT;
+CREATE INDEX IF NOT EXISTS issued_licenses_batch_id ON issued_licenses(batch_id);

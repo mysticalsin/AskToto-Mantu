@@ -401,8 +401,11 @@ function renderGenerateCard(data: DashboardPayload, ctx: RenderCtx, extra: Licen
           <select name="tier" data-licenses-tier>${tierSelectOptions(extra)}</select>
         </label>
         <button class="primary" type="submit" data-licenses-generate-submit>Generate license</button>
+        ${batchToggle()}
       </div>
+      ${batchFields()}
     </form>
+    <div data-licenses-batch-panel-wrap></div>
     <div class="license-once" hidden data-licenses-once>
       <p class="muted">Copy this now. It will not be shown again.</p>
       <div class="license-once-row">
@@ -413,6 +416,106 @@ function renderGenerateCard(data: DashboardPayload, ctx: RenderCtx, extra: Licen
     </div>
     <div data-licenses-issued-wrap>${renderIssuedLicenseTable(viewRows, ctx.now)}</div>
   </article>`
+}
+
+// ── batch generate (plan 6.7b "Generate many licenses at once") ────────────────────────────────
+
+export interface BatchLicenseResultView {
+  jti: string
+  license: string
+  last4: string
+  member: string | null
+  tier: string | null
+  days: number
+  exp: number
+}
+
+function batchExpiresLabel(exp: number, now: number): string {
+  const expMs = exp * 1000
+  const iso = new Date(expMs).toISOString().replace('T', ' ').slice(0, 16)
+  const diffDays = Math.round((expMs - now) / DAY_MS)
+  const label = diffDays <= 0 ? 'Expires today' : diffDays === 1 ? 'Expires in 1 day' : `Expires in ${diffDays} days`
+  return `<span title="${esc(iso)} UTC">${esc(label)}</span>`
+}
+
+function batchTierLabel(tier: string | null): string {
+  if (!tier) return '<span class="muted">Default</span>'
+  if (tier === 'metis' || tier === 'metis-light') return tierBadge(tier)
+  return chip({ label: tier })
+}
+
+/**
+ * The batch success panel (plan 6.7b "The once-string problem, solved properly"): one row per
+ * minted license (member, last4, tier, expiry) plus the full once-strings in a plain, selectable
+ * field for Download/Copy all -- the only place a batch's raw tokens ever render anywhere.
+ * `renderIssuedLicenseTable()`/`renderIssuedLicenseRowHtml()` above take an `IssuedLicenseViewRow`,
+ * which has no token field at all, so the issued table cannot leak one even by accident; this
+ * function is the sole path a raw batch string ever reaches the DOM through. Stays open until
+ * dismissed (operator/client/pages/licenses.ts warns before a dismissal with nothing downloaded);
+ * Copy all is offered only under `copyAllMax` (plan: "for small batches").
+ */
+export function renderBatchResultPanel(batchId: string, licenses: BatchLicenseResultView[], now: number, copyAllMax = 10): string {
+  const rows = licenses
+    .map(
+      (l) => `<tr data-batch-row data-batch-jti="${esc(l.jti)}">
+        <td>${l.member ? esc(l.member) : '<span class="muted">Unassigned</span>'}</td>
+        <td><code>··${esc(l.last4)}</code></td>
+        <td>${batchTierLabel(l.tier)}</td>
+        <td>${batchExpiresLabel(l.exp, now)}</td>
+      </tr>`
+    )
+    .join('')
+  const licenseValues = licenses.map((l) => esc(l.license)).join('\n')
+  return `<div class="card batch-panel" data-licenses-batch-panel data-batch-id="${esc(batchId)}" role="alertdialog" aria-label="Batch generated">
+    <p class="eyebrow">Batch generated, ${licenses.length} license${licenses.length === 1 ? '' : 's'}</p>
+    <p class="fail-loud" data-batch-warning>This is the only moment these strings exist. Download them now. They cannot be shown again.</p>
+    <div class="batch-panel-actions">
+      <button type="button" class="primary" data-batch-download="csv">Download CSV</button>
+      <button type="button" class="tool" data-batch-download="xlsx">Download Excel</button>
+      ${licenses.length > 0 && licenses.length <= copyAllMax ? '<button type="button" class="tool" data-batch-copy-all>Copy all</button>' : ''}
+      <button type="button" class="tool" data-batch-dismiss>Dismiss</button>
+    </div>
+    <textarea class="sr-only" data-batch-values readonly aria-hidden="true" tabindex="-1">${licenseValues}</textarea>
+    <div class="batch-panel-table-wrap"><table class="batch-panel-table"><thead><tr><th>Member</th><th>Last4</th><th>Tier</th><th>Expiry</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="muted">After you dismiss this panel, only last4 is shown here, forever.</p>
+  </div>`
+}
+
+/**
+ * Quantity + member-list controls added to the Generate card (plan 6.7b). The existing duration/
+ * group/tier controls and the single-license submit path above are unchanged; the client
+ * (operator/client/pages/licenses.ts) reads these same fields and only calls `POST
+ * /v1/admin/licenses/generate-batch` instead of the single route when quantity is above 1 or the
+ * member-list mode has content -- one form, two endpoints, chosen by what was actually filled in,
+ * never a second form to keep in sync with the first.
+ *
+ * The toggle line sits inline with the existing submit button (`.licenses-generate-row`, this
+ * function's caller) rather than in its own bordered block: plan 3.7b law 10 ("short pages") caps
+ * every page at two viewport heights at 1440, and a whole new section with its own border/padding
+ * cost this page the cap on the first pass (measured: 2112px). Everything below is `hidden` until
+ * the toggle opens it, so it costs nothing in page height for the common single-license visit.
+ */
+function batchToggle(): string {
+  return `<button type="button" class="link-btn batch-toggle-btn" data-batch-toggle aria-expanded="false">Generate more than one at once</button>`
+}
+
+function batchFields(): string {
+  return `<div class="batch-controls-fields" data-batch-controls-fields hidden>
+      <div class="batch-mode-toggle" role="radiogroup" aria-label="How to generate">
+        <label class="batch-mode-option"><input type="radio" name="batchMode" value="count" checked data-batch-mode-radio="count" /> By count</label>
+        <label class="batch-mode-option"><input type="radio" name="batchMode" value="members" data-batch-mode-radio="members" /> By member list</label>
+      </div>
+      <label class="licenses-field" data-batch-count-field>
+        <span class="licenses-field-label">How many (1 to ${100})</span>
+        <input type="number" name="count" min="1" max="100" value="1" inputmode="numeric" data-batch-count />
+      </label>
+      <label class="licenses-field batch-members-field" data-batch-members-field hidden>
+        <span class="licenses-field-label">Members, one per line (email or device id)</span>
+        <textarea name="members" rows="4" placeholder="name@example.com" data-batch-members></textarea>
+      </label>
+      <div class="batch-preview" data-batch-preview hidden></div>
+      <p class="muted batch-confirm-sentence" data-batch-confirm-sentence hidden></p>
+    </div>`
 }
 
 // ── seats card ───────────────────────────────────────────────────────────────────────────────
@@ -482,11 +585,22 @@ function seatConnectorsCell(): string {
   return MISSING
 }
 
+/** Selection checkbox (plan 6.7b "Bulk elsewhere, with the same discipline"): plain data attributes
+ *  only, no handler here -- operator/client/pages/licenses.ts binds the change listener and owns
+ *  the action bar's show/hide and count. Carries the seat's hostname and email right on the input
+ *  (not just the device id) so a bulk Approve confirmation can name every selected seat without a
+ *  second lookup, matching the plan's "lists every seat by hostname and email, never just a count." */
+function seatSelectCell(r: DashboardPayload['licenses']['rows'][number]): string {
+  const name = r.hostname || `Seat ··${r.device.slice(-8)}`
+  return `<input type="checkbox" class="bulk-select-checkbox" data-bulk-select="${esc(r.device)}" data-bulk-name="${esc(name)}" data-bulk-email="${esc(r.email || '')}" aria-label="Select ${esc(name)}" />`
+}
+
 function seatRowData(r: DashboardPayload['licenses']['rows'][number], now: number, tierIndex: Map<string, string | null> | null): DataTableRow {
   const approval = seatApprovalState(r.approval)
   return {
     attrs: `data-device="${esc(r.device)}" data-approval="${esc(r.approval)}"`,
     cells: {
+      select: seatSelectCell(r),
       computer: seatComputerCell(r),
       email: field(r.email),
       os: osChip(r.os) || MISSING,
@@ -503,6 +617,7 @@ function seatRowData(r: DashboardPayload['licenses']['rows'][number], now: numbe
 }
 
 const SEATS_COLUMNS: DataTableColumn[] = [
+  { key: 'select', label: '' },
   { key: 'computer', label: 'Computer' },
   { key: 'email', label: 'Email' },
   { key: 'os', label: 'OS' },
@@ -536,6 +651,13 @@ function renderSeatsCard(data: DashboardPayload, now: number, extra: LicensesExt
     <p class="eyebrow">Seats</p>
     ${table}
     <p class="muted licenses-hint">Tony approves a seat, or the seat activates an Operator license. Revoke always stops platform keys and connectors immediately. last4 only, never a raw key.</p>
+    <div class="bulk-action-bar" data-bulk-action-bar hidden role="toolbar" aria-label="Bulk seat actions">
+      <span class="bulk-action-count" data-bulk-action-count>0 selected</span>
+      <span class="spacer"></span>
+      <button type="button" class="btn primary" data-bulk-approve>Approve selected</button>
+      <button type="button" class="btn danger" data-bulk-revoke>Revoke selected</button>
+      <button type="button" class="tool" data-bulk-clear>Clear</button>
+    </div>
   </article>`
 }
 

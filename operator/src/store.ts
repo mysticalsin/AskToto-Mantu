@@ -21,6 +21,9 @@ export interface IssuedLicenseRow {
   /** Set to `'declined'` by the review queue's "let it expire" action (plan 6.7 block 0, B11); never
    *  written anywhere else, never changes `exp` or `revoked` on its own. */
   renewal_note?: string | null
+  /** Shared by every license minted in one `POST /v1/admin/licenses/generate-batch` call (plan
+   *  6.7b, `operator/src/licenses/batch.ts`). null on every license minted outside a batch. */
+  batch_id?: string | null
 }
 
 export interface SeatRow {
