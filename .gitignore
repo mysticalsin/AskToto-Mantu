@@ -136,3 +136,9 @@ native-app/**/*.xcodeproj/xcuserdata/
 # columns, hashed license keys, seat rows — never belongs in git history. See
 # docs/operator/RUNBOOKS.md for the backup/restore procedure.
 operator/backups/
+
+# Cloudflare Worker local state and secrets (never committed)
+operator/.dev.vars
+.dev.vars
+operator/.wrangler/
+.wrangler/

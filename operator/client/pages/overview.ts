@@ -124,8 +124,15 @@ function setCopyFallbackLabel(section: HTMLElement): void {
 // Live, 30 min rolling bars.
 // ---------------------------------------------------------------------------
 
+/**
+ * Zero draws nothing. The 2px floor exists so a real but tiny minute (one seat against a busy max)
+ * stays visible; applying it to zero as well painted a purple tick for a minute in which nothing
+ * happened, so a fleet with no live seats showed a row of coloured marks under the number 0 -- the
+ * chart contradicting the tile beside it. Below zero cannot happen, and is treated as zero.
+ */
 function barHeight(value: number, max: number): number {
-  return Math.max(2, Math.round((Math.max(0, value) / Math.max(1, max)) * (LIVE30_H - 4)))
+  if (value <= 0) return 0
+  return Math.max(2, Math.round((value / Math.max(1, max)) * (LIVE30_H - 4)))
 }
 
 function setBarHeight(g: SVGGElement, value: number, max: number): void {

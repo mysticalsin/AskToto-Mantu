@@ -13,6 +13,9 @@ import type { MapCountry } from '../../dashboard'
 
 const CHART_SCALE_STEPS = 5
 
+/** Smallest top-of-scale the seat area chart will use. See `areaChartWithPrevious`. */
+const AREA_SCALE_FLOOR = 4
+
 /**
  * Area chart with an optional dashed previous-period line (plan 3.2/3.5b: "area chart with
  * previous period dashed"). `previous` is omitted whenever the payload has no prior-period
@@ -43,7 +46,12 @@ export function areaChartWithPrevious(opts: {
   const innerH = h - padTop - padBottom
   const innerW = w - padX * 2
   const allVals = previous ? [...current, ...previous] : current
-  const max = Math.max(1, ...allVals)
+  // Headroom floor. Scaling to the series max alone means a fleet with a single seat gets a chart
+  // whose entire vertical range is 0 to 1: the one day someone opened Métis pins to the top of the
+  // frame and the line reads as a cliff, which looks like a spike in traffic rather than one seat.
+  // A floor of 4 keeps small real numbers small on screen; the axis label still prints the true top
+  // of the scale, so nothing is overstated. Once the fleet passes 4 the series drives the scale again.
+  const max = Math.max(AREA_SCALE_FLOOR, ...allVals)
   const baseline = padTop + innerH
   const stepFor = (arr: number[]): number => (arr.length > 1 ? innerW / (arr.length - 1) : 0)
   const pointsFor = (arr: number[]): string[] => {
@@ -106,7 +114,11 @@ export function miniBars(values: number[], opts?: { width?: number; height?: num
   const color = `var(--data-${opts?.token ?? 1})`
   const rects = vals
     .map((v, i) => {
-      const bh = Math.max(2, Math.round((Math.max(0, v) / max) * (h - 4)))
+      // A day with nothing in it draws nothing. The 2px floor keeps a real but small value visible
+      // against a large max; applying it to zero as well drew a coloured stub for a day that had no
+      // activity, so a sparse week read as seven small events instead of one real one.
+      const bh = v <= 0 ? 0 : Math.max(2, Math.round((v / max) * (h - 4)))
+      if (!bh) return ''
       const x = gap + i * (bw + gap)
       const y = h - bh
       return `<rect x="${x.toFixed(1)}" y="${y}" width="${bw.toFixed(1)}" height="${bh}" rx="1" fill="${color}" data-grow data-grow-delay="${i * 20}" />`

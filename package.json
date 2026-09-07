@@ -43,6 +43,7 @@
     "deploy:operator": "node operator/scripts/deploy.mjs",
     "backup:operator": "node operator/scripts/backup.mjs",
     "dev:operator": "cd operator && npx wrangler@4 dev --local",
+    "e2e:operator": "node operator/e2e/run.mjs",
     "test:smoke:import": "npm run build && node scripts/smoke-import.mjs",
     "check:xcode": "node scripts/check-xcode-tools.mjs",
     "build:native-mac": "node scripts/build-native-mac.mjs",
