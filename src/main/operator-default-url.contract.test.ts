@@ -11,7 +11,9 @@ vi.mock('./license', () => ({
   getMachineId: () => 'machine-test-default-url'
 }))
 vi.mock('./logger', () => ({
-  mainLog: { warn: () => {}, info: () => {}, error: () => {} }
+  mainLog: { warn: () => {}, info: () => {}, error: () => {} },
+  setAuditActor: () => {},
+  auditLog: () => {}
 }))
 
 afterEach(() => {

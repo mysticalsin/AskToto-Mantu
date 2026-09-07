@@ -1,0 +1,90 @@
+- generic [active] [ref=f9e1]:
+  - generic [ref=f9e2]:
+    - button "Close menu"
+    - generic [ref=f9e3]:
+      - generic [ref=f9e4]:
+        - link [ref=f9e5] [cursor=pointer]:
+          - /url: /
+          - img "Openpanel logo" [ref=f9e6]
+        - button "Shoey" [ref=f9e7]
+      - generic [ref=f9e16]:
+        - button "Ask AI" [ref=f9e18]
+        - generic [ref=f9e23]:
+          - textbox "Ask AI anything..." [ref=f9e27]
+          - generic [ref=f9e28]: ⌘J
+        - generic [ref=f9e29]: Analytics
+        - navigation [ref=f9e30]:
+          - link "Overview" [ref=f9e31] [cursor=pointer]:
+            - /url: /demo/shoey
+          - link "Realtime" [ref=f9e36] [cursor=pointer]:
+            - /url: /demo/shoey/realtime
+          - link "Events" [ref=f9e42] [cursor=pointer]:
+            - /url: /demo/shoey/events
+          - link "Sessions" [ref=f9e44] [cursor=pointer]:
+            - /url: /demo/shoey/sessions
+          - link "Groups" [ref=f9e50] [cursor=pointer]:
+            - /url: /demo/shoey/groups
+        - generic [ref=f9e55]: Manage
+        - navigation [ref=f9e56]:
+          - link "Settings" [ref=f9e57] [cursor=pointer]:
+            - /url: /demo/shoey/settings
+          - link "Notifications" [ref=f9e69] [cursor=pointer]:
+            - /url: /demo/shoey/notifications
+      - generic [ref=f9e74]:
+        - generic [ref=f9e75]:
+          - button "Sparkles" [ref=f9e76]
+          - button "User" [ref=f9e80]
+        - generic [ref=f9e84]:
+          - generic [ref=f9e85]: Support Us
+          - generic [ref=f9e86]: Pay What You Want
+    - generic [ref=f9e88]:
+      - generic [ref=f9e89]:
+        - generic [ref=f9e91]:
+          - heading "Project settings" [level=1] [ref=f9e92]
+          - paragraph [ref=f9e93]: Manage your project settings here
+        - navigation [ref=f9e94]:
+          - link "Details" [ref=f9e95] [cursor=pointer]:
+            - /url: /demo/shoey/settings/details
+          - generic "Not part of this clone" [ref=f9e96]: Events
+          - generic "Not part of this clone" [ref=f9e97]: Clients / API keys
+          - generic "Not part of this clone" [ref=f9e98]: Tracking script
+          - generic "Not part of this clone" [ref=f9e99]: MCP
+          - generic "Not part of this clone" [ref=f9e100]: Widgets
+          - generic "Not part of this clone" [ref=f9e101]: Imports
+          - generic "Not part of this clone" [ref=f9e102]: Google Search
+      - generic [ref=f9e103]:
+        - generic [ref=f9e104]:
+          - heading "Details" [level=2] [ref=f9e106]
+          - generic [ref=f9e107]:
+            - generic [ref=f9e108]:
+              - generic [ref=f9e109]: Name
+              - textbox [ref=f9e110]: Shoey
+            - generic [ref=f9e111]:
+              - generic [ref=f9e112]: Domain
+              - textbox [ref=f9e116]: https://nike.com
+            - generic [ref=f9e117]:
+              - generic [ref=f9e118]: Allowed domains
+              - generic [ref=f9e119]:
+                - generic [ref=f9e120]: Allow all domains
+                - generic [ref=f9e124]: Add a domain ↵
+            - generic [ref=f9e125]:
+              - generic [ref=f9e126]: Cross domain support
+              - generic [ref=f9e127]:
+                - checkbox [ref=f9e128]
+                - generic [ref=f9e129]:
+                  - generic [ref=f9e130]: Enable cross domain support
+                  - generic [ref=f9e131]: This will let you track users across multiple domains
+            - generic [ref=f9e132]:
+              - generic [ref=f9e133]: Revenue tracking
+              - generic [ref=f9e134]:
+                - checkbox [ref=f9e135]
+                - generic [ref=f9e136]:
+                  - generic [ref=f9e137]: Allow "unsafe" revenue tracking
+                  - generic [ref=f9e138]: With this enabled, you can track revenue from client code.
+            - button "Save" [ref=f9e139]
+        - generic [ref=f9e144]:
+          - heading "Delete Project" [level=2] [ref=f9e146]
+          - generic [ref=f9e147]:
+            - paragraph [ref=f9e148]: Deleting your project will remove it from your organization and all of its data. It'll be permanently deleted after 24 hours.
+            - button "Delete Project" [ref=f9e149]
+  - alert [ref=f9e153]

@@ -258,6 +258,11 @@ export type AuditEvent =
   // Attack-shaped events. Metadata only: bucket/reason, never keys, serials, tokens, or transcripts.
   | 'security.rate_limited'
   | 'security.ipc_denied'
+  // Operator seat license (METIS-OP-1) pairing and entitlement gating (PLAN.md P2.2b). jti only, never
+  // the full token; 'operator.gate.blocked' carries the feature name only, never any request content.
+  | 'operator.license.activated'
+  | 'operator.license.cleared'
+  | 'operator.gate.blocked'
 
 // Lazy actor resolver — set once by the main process (wired to authStatus().email) so every audit
 // record can carry the signed-in identity without logger.ts importing auth.ts (which would be

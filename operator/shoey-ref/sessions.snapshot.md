@@ -1,0 +1,509 @@
+- generic [active] [ref=f6e1]:
+  - generic [ref=f6e2]:
+    - button "Close menu"
+    - generic [ref=f6e3]:
+      - generic [ref=f6e4]:
+        - link [ref=f6e5] [cursor=pointer]:
+          - /url: /
+          - img "Openpanel logo" [ref=f6e6]
+        - button "Shoey" [ref=f6e7]
+      - generic [ref=f6e16]:
+        - button "Ask AI" [ref=f6e18]
+        - generic [ref=f6e23]:
+          - textbox "Ask AI anything..." [ref=f6e27]
+          - generic [ref=f6e28]: ⌘J
+        - generic [ref=f6e29]: Analytics
+        - navigation [ref=f6e30]:
+          - link "Overview" [ref=f6e31] [cursor=pointer]:
+            - /url: /demo/shoey
+          - link "Realtime" [ref=f6e36] [cursor=pointer]:
+            - /url: /demo/shoey/realtime
+          - link "Events" [ref=f6e42] [cursor=pointer]:
+            - /url: /demo/shoey/events
+          - link "Sessions" [ref=f6e44] [cursor=pointer]:
+            - /url: /demo/shoey/sessions
+          - link "Groups" [ref=f6e50] [cursor=pointer]:
+            - /url: /demo/shoey/groups
+        - generic [ref=f6e55]: Manage
+        - navigation [ref=f6e56]:
+          - link "Settings" [ref=f6e57] [cursor=pointer]:
+            - /url: /demo/shoey/settings
+          - link "Notifications" [ref=f6e69] [cursor=pointer]:
+            - /url: /demo/shoey/notifications
+      - generic [ref=f6e74]:
+        - generic [ref=f6e75]:
+          - button "Sparkles" [ref=f6e76]
+          - button "User" [ref=f6e80]
+        - generic [ref=f6e84]:
+          - generic [ref=f6e85]: Support Us
+          - generic [ref=f6e86]: Pay What You Want
+    - generic [ref=f6e88]:
+      - generic [ref=f6e91]:
+        - heading "Sessions" [level=1] [ref=f6e92]
+        - paragraph [ref=f6e93]: Access all your sessions here
+      - generic [ref=f6e94]:
+        - generic [ref=f6e95]:
+          - textbox "Search s..." [ref=f6e100]
+          - button "Filters" [ref=f6e102]
+        - button "View" [ref=f6e107]
+      - generic [ref=f6e114]:
+        - generic [ref=f6e115]:
+          - button "Started" [ref=f6e117]
+          - generic [ref=f6e121]: Session ID
+          - generic [ref=f6e122]: Profile
+          - generic [ref=f6e123]: Entry page
+          - generic [ref=f6e124]: Exit page
+          - button "Duration" [ref=f6e126]
+          - button "Bounce" [ref=f6e131]
+          - generic [ref=f6e135]: Referrer
+        - button "just now Q1L_pVYXa6Ymhg1JrZPFhQ Anonymous /products /products/sneakers/nike-air-max-2023 6.6s No eBay" [ref=f6e136] [cursor=pointer]:
+          - generic [ref=f6e137]: just now
+          - generic [ref=f6e138]: Q1L_pVYXa6Ymhg1JrZPFhQ
+          - generic [ref=f6e139]: Anonymous
+          - generic [ref=f6e143]: /products
+          - generic [ref=f6e144]: /products/sneakers/nike-air-max-2023
+          - generic [ref=f6e145]: 6.6s
+          - generic [ref=f6e146]: "No"
+          - generic [ref=f6e147]: eBay
+        - button "just now xQOs-BXZKoRjnuPMpSTXHw Anonymous /products/sneakers/nike-air-max-2021 /wishlist 16.1s No Direct" [ref=f6e150] [cursor=pointer]:
+          - generic [ref=f6e151]: just now
+          - generic [ref=f6e152]: xQOs-BXZKoRjnuPMpSTXHw
+          - generic [ref=f6e153]: Anonymous
+          - generic [ref=f6e157]: /products/sneakers/nike-air-max-2021
+          - generic [ref=f6e158]: /wishlist
+          - generic [ref=f6e159]: 16.1s
+          - generic [ref=f6e160]: "No"
+          - generic [ref=f6e161]: Direct
+        - button "just now 2X22cNhdJBa14rKu57EHfg Anonymous /products/boots/vegan-leather-waterproof-boots /products/boots/vegan-leather-waterproof-boots 0.0s Yes Direct" [ref=f6e164] [cursor=pointer]:
+          - generic [ref=f6e165]: just now
+          - generic [ref=f6e166]: 2X22cNhdJBa14rKu57EHfg
+          - generic [ref=f6e167]: Anonymous
+          - generic [ref=f6e171]: /products/boots/vegan-leather-waterproof-boots
+          - generic [ref=f6e172]: /products/boots/vegan-leather-waterproof-boots
+          - generic [ref=f6e173]: 0.0s
+          - generic [ref=f6e174]: "Yes"
+          - generic [ref=f6e175]: Direct
+        - button "just now bhAyBPtXgRn_JrljUcz1Xw Anonymous /cart /cart 0.0s Yes https://www.bitbucket.com" [ref=f6e178] [cursor=pointer]:
+          - generic [ref=f6e179]: just now
+          - generic [ref=f6e180]: bhAyBPtXgRn_JrljUcz1Xw
+          - generic [ref=f6e181]: Anonymous
+          - generic [ref=f6e185]: /cart
+          - generic [ref=f6e186]: /cart
+          - generic [ref=f6e187]: 0.0s
+          - generic [ref=f6e188]: "Yes"
+          - generic [ref=f6e189]: https://www.bitbucket.com
+        - button "just now av4DouNfnZlyqN0sFZ9unA Anonymous /products/size/10 /products/size/10 5.9s Yes Direct" [ref=f6e192] [cursor=pointer]:
+          - generic [ref=f6e193]: just now
+          - generic [ref=f6e194]: av4DouNfnZlyqN0sFZ9unA
+          - generic [ref=f6e195]: Anonymous
+          - generic [ref=f6e199]: /products/size/10
+          - generic [ref=f6e200]: /products/size/10
+          - generic [ref=f6e201]: 5.9s
+          - generic [ref=f6e202]: "Yes"
+          - generic [ref=f6e203]: Direct
+        - button "just now Q_l9k4bK4ID0uIXVjx1cGA Anonymous /blog/how-to-choose-the-right-shoes /support/shipping-policy 27.7s No Facebook" [ref=f6e206] [cursor=pointer]:
+          - generic [ref=f6e207]: just now
+          - generic [ref=f6e208]: Q_l9k4bK4ID0uIXVjx1cGA
+          - generic [ref=f6e209]: Anonymous
+          - generic [ref=f6e213]: /blog/how-to-choose-the-right-shoes
+          - generic [ref=f6e214]: /support/shipping-policy
+          - generic [ref=f6e215]: 27.7s
+          - generic [ref=f6e216]: "No"
+          - generic [ref=f6e217]: Facebook
+        - button "just now UD8ZAveEjR0h30fk1lEiSg Anonymous /support/order-tracking /blog/how-to-care-for-your-sneakers 9.8s No https://www.aol.com" [ref=f6e220] [cursor=pointer]:
+          - generic [ref=f6e221]: just now
+          - generic [ref=f6e222]: UD8ZAveEjR0h30fk1lEiSg
+          - generic [ref=f6e223]: Anonymous
+          - generic [ref=f6e227]: /support/order-tracking
+          - generic [ref=f6e228]: /blog/how-to-care-for-your-sneakers
+          - generic [ref=f6e229]: 9.8s
+          - generic [ref=f6e230]: "No"
+          - generic [ref=f6e231]: https://www.aol.com
+        - button "just now whk_PK5QL0PVVyeC5HRIBQ Anonymous /blog/how-to-choose-the-right-sneakers /blog/how-to-choose-the-right-sneakers 0.0s Yes Reddit" [ref=f6e234] [cursor=pointer]:
+          - generic [ref=f6e235]: just now
+          - generic [ref=f6e236]: whk_PK5QL0PVVyeC5HRIBQ
+          - generic [ref=f6e237]: Anonymous
+          - generic [ref=f6e241]: /blog/how-to-choose-the-right-sneakers
+          - generic [ref=f6e242]: /blog/how-to-choose-the-right-sneakers
+          - generic [ref=f6e243]: 0.0s
+          - generic [ref=f6e244]: "Yes"
+          - generic [ref=f6e245]: Reddit
+        - button "1 minute ago A3NGGdJ4jSWoHCVTEeIunQ Anonymous /products/sneakers/nike-air-max-270 /products/sneakers/nike-air-max-270/details 1.4s No https://www.bitbucket.com" [ref=f6e248] [cursor=pointer]:
+          - generic [ref=f6e249]: 1 minute ago
+          - generic [ref=f6e250]: A3NGGdJ4jSWoHCVTEeIunQ
+          - generic [ref=f6e251]: Anonymous
+          - generic [ref=f6e255]: /products/sneakers/nike-air-max-270
+          - generic [ref=f6e256]: /products/sneakers/nike-air-max-270/details
+          - generic [ref=f6e257]: 1.4s
+          - generic [ref=f6e258]: "No"
+          - generic [ref=f6e259]: https://www.bitbucket.com
+        - button "1 minute ago l_1QWy7VuKlnKxtee82siw Anonymous /products/sneakers/nike-air-max-2021 /products/sneakers/puma-rs-x 28.0s No Direct" [ref=f6e262] [cursor=pointer]:
+          - generic [ref=f6e263]: 1 minute ago
+          - generic [ref=f6e264]: l_1QWy7VuKlnKxtee82siw
+          - generic [ref=f6e265]: Anonymous
+          - generic [ref=f6e269]: /products/sneakers/nike-air-max-2021
+          - generic [ref=f6e270]: /products/sneakers/puma-rs-x
+          - generic [ref=f6e271]: 28.0s
+          - generic [ref=f6e272]: "No"
+          - generic [ref=f6e273]: Direct
+        - button "1 minute ago jb-1fIqYleD-Fy1bKhptVg Anonymous /products/shoes /products/shoes/running-shoes/details 22.4s No Direct" [ref=f6e276] [cursor=pointer]:
+          - generic [ref=f6e277]: 1 minute ago
+          - generic [ref=f6e278]: jb-1fIqYleD-Fy1bKhptVg
+          - generic [ref=f6e279]: Anonymous
+          - generic [ref=f6e283]: /products/shoes
+          - generic [ref=f6e284]: /products/shoes/running-shoes/details
+          - generic [ref=f6e285]: 22.4s
+          - generic [ref=f6e286]: "No"
+          - generic [ref=f6e287]: Direct
+        - button "1 minute ago doGdrf9AOuh9Q0cY6rtvFQ Anonymous /products/sneakers/nike-air-max-2021 /products/sneakers/nike-air-max-2021 0.0s Yes https://www.bitbucket.com" [ref=f6e290] [cursor=pointer]:
+          - generic [ref=f6e291]: 1 minute ago
+          - generic [ref=f6e292]: doGdrf9AOuh9Q0cY6rtvFQ
+          - generic [ref=f6e293]: Anonymous
+          - generic [ref=f6e297]: /products/sneakers/nike-air-max-2021
+          - generic [ref=f6e298]: /products/sneakers/nike-air-max-2021
+          - generic [ref=f6e299]: 0.0s
+          - generic [ref=f6e300]: "Yes"
+          - generic [ref=f6e301]: https://www.bitbucket.com
+        - button "1 minute ago kmKY2CSD96HvFbuqWmHGag Anonymous /products /blog/top-10-running-shoes-2023 15.0s No Direct" [ref=f6e304] [cursor=pointer]:
+          - generic [ref=f6e305]: 1 minute ago
+          - generic [ref=f6e306]: kmKY2CSD96HvFbuqWmHGag
+          - generic [ref=f6e307]: Anonymous
+          - generic [ref=f6e311]: /products
+          - generic [ref=f6e312]: /blog/top-10-running-shoes-2023
+          - generic [ref=f6e313]: 15.0s
+          - generic [ref=f6e314]: "No"
+          - generic [ref=f6e315]: Direct
+        - button "1 minute ago FrOW_SzBHgKypaR7XYruwQ Anonymous /products/shoes/athletic-shoes /products/shoes/athletic-shoes 0.0s Yes Youtube" [ref=f6e318] [cursor=pointer]:
+          - generic [ref=f6e319]: 1 minute ago
+          - generic [ref=f6e320]: FrOW_SzBHgKypaR7XYruwQ
+          - generic [ref=f6e321]: Anonymous
+          - generic [ref=f6e325]: /products/shoes/athletic-shoes
+          - generic [ref=f6e326]: /products/shoes/athletic-shoes
+          - generic [ref=f6e327]: 0.0s
+          - generic [ref=f6e328]: "Yes"
+          - generic [ref=f6e329]: Youtube
+        - button "1 minute ago QUuNiVjRfXn5VxENZnj9cQ Anonymous /products/shoes/athletic-shoes/details /products/shoes/athletic-shoes/details 0.0s Yes Google" [ref=f6e332] [cursor=pointer]:
+          - generic [ref=f6e333]: 1 minute ago
+          - generic [ref=f6e334]: QUuNiVjRfXn5VxENZnj9cQ
+          - generic [ref=f6e335]: Anonymous
+          - generic [ref=f6e339]: /products/shoes/athletic-shoes/details
+          - generic [ref=f6e340]: /products/shoes/athletic-shoes/details
+          - generic [ref=f6e341]: 0.0s
+          - generic [ref=f6e342]: "Yes"
+          - generic [ref=f6e343]: Google
+        - button "1 minute ago NWAHOQ_aLUwyIhWRz1T0MA Anonymous /products / 31.9s No Twitter" [ref=f6e346] [cursor=pointer]:
+          - generic [ref=f6e347]: 1 minute ago
+          - generic [ref=f6e348]: NWAHOQ_aLUwyIhWRz1T0MA
+          - generic [ref=f6e349]: Anonymous
+          - generic [ref=f6e353]: /products
+          - generic [ref=f6e354]: /
+          - generic [ref=f6e355]: 31.9s
+          - generic [ref=f6e356]: "No"
+          - generic [ref=f6e357]: Twitter
+        - button "1 minute ago 1mrel5N-tQC8_PNY_C9Rrg Anonymous /products/footwear/sneakers /products/footwear/sneakers 0.0s Yes https://www.heroku.com" [ref=f6e360] [cursor=pointer]:
+          - generic [ref=f6e361]: 1 minute ago
+          - generic [ref=f6e362]: 1mrel5N-tQC8_PNY_C9Rrg
+          - generic [ref=f6e363]: Anonymous
+          - generic [ref=f6e367]: /products/footwear/sneakers
+          - generic [ref=f6e368]: /products/footwear/sneakers
+          - generic [ref=f6e369]: 0.0s
+          - generic [ref=f6e370]: "Yes"
+          - generic [ref=f6e371]: https://www.heroku.com
+        - button "3 minutes ago ngytvk_bGzyXfmnGs_iGLA Anonymous /support/privacy-policy /products/sneakers/air-max-2023 9.4s No Direct" [ref=f6e374] [cursor=pointer]:
+          - generic [ref=f6e375]: 3 minutes ago
+          - generic [ref=f6e376]: ngytvk_bGzyXfmnGs_iGLA
+          - generic [ref=f6e377]: Anonymous
+          - generic [ref=f6e381]: /support/privacy-policy
+          - generic [ref=f6e382]: /products/sneakers/air-max-2023
+          - generic [ref=f6e383]: 9.4s
+          - generic [ref=f6e384]: "No"
+          - generic [ref=f6e385]: Direct
+        - button "3 minutes ago HO778Ot1K7-8F81XCPvVUw Anonymous /blog/summer-shoe-trends-2024 /support/feedback-survey 31.3s No Instagram" [ref=f6e388] [cursor=pointer]:
+          - generic [ref=f6e389]: 3 minutes ago
+          - generic [ref=f6e390]: HO778Ot1K7-8F81XCPvVUw
+          - generic [ref=f6e391]: Anonymous
+          - generic [ref=f6e395]: /blog/summer-shoe-trends-2024
+          - generic [ref=f6e396]: /support/feedback-survey
+          - generic [ref=f6e397]: 31.3s
+          - generic [ref=f6e398]: "No"
+          - generic [ref=f6e399]: Instagram
+        - button "3 minutes ago J2yi4jdJ9GfltxJu3oeWNg Anonymous /products/accessories/shoe-cleaning-kit /products/accessories/shoe-cleaning-kit 0.0s Yes eBay" [ref=f6e402] [cursor=pointer]:
+          - generic [ref=f6e403]: 3 minutes ago
+          - generic [ref=f6e404]: J2yi4jdJ9GfltxJu3oeWNg
+          - generic [ref=f6e405]: Anonymous
+          - generic [ref=f6e409]: /products/accessories/shoe-cleaning-kit
+          - generic [ref=f6e410]: /products/accessories/shoe-cleaning-kit
+          - generic [ref=f6e411]: 0.0s
+          - generic [ref=f6e412]: "Yes"
+          - generic [ref=f6e413]: eBay
+        - button "3 minutes ago AorIv9QwQDDlwUUNmeHXyQ Anonymous /products/running-shoes /products/running-shoes/wide-fit-ultra-comfort 3.4s No Tumblr" [ref=f6e416] [cursor=pointer]:
+          - generic [ref=f6e417]: 3 minutes ago
+          - generic [ref=f6e418]: AorIv9QwQDDlwUUNmeHXyQ
+          - generic [ref=f6e419]: Anonymous
+          - generic [ref=f6e423]: /products/running-shoes
+          - generic [ref=f6e424]: /products/running-shoes/wide-fit-ultra-comfort
+          - generic [ref=f6e425]: 3.4s
+          - generic [ref=f6e426]: "No"
+          - generic [ref=f6e427]: Tumblr
+        - button "3 minutes ago WMBa6a4i_BMmYnq5pdY4RA Anonymous /products/sale /products/sale 6.1s Yes https://www.heroku.com" [ref=f6e430] [cursor=pointer]:
+          - generic [ref=f6e431]: 3 minutes ago
+          - generic [ref=f6e432]: WMBa6a4i_BMmYnq5pdY4RA
+          - generic [ref=f6e433]: Anonymous
+          - generic [ref=f6e437]: /products/sale
+          - generic [ref=f6e438]: /products/sale
+          - generic [ref=f6e439]: 6.1s
+          - generic [ref=f6e440]: "Yes"
+          - generic [ref=f6e441]: https://www.heroku.com
+        - button "4 minutes ago JOLhoGBKvTjVEANvsZg8SA Anonymous /products /products/sneakers/new-balance-990v5 14.8s No Amazon" [ref=f6e444] [cursor=pointer]:
+          - generic [ref=f6e445]: 4 minutes ago
+          - generic [ref=f6e446]: JOLhoGBKvTjVEANvsZg8SA
+          - generic [ref=f6e447]: Anonymous
+          - generic [ref=f6e451]: /products
+          - generic [ref=f6e452]: /products/sneakers/new-balance-990v5
+          - generic [ref=f6e453]: 14.8s
+          - generic [ref=f6e454]: "No"
+          - generic [ref=f6e455]: Amazon
+        - button "4 minutes ago qpQlXwmaXjK3z6Y2IY1Agw Anonymous /products/sneakers/nike-air-max-270 /products/sneakers/nike-air-max-270 0.0s Yes Direct" [ref=f6e458] [cursor=pointer]:
+          - generic [ref=f6e459]: 4 minutes ago
+          - generic [ref=f6e460]: qpQlXwmaXjK3z6Y2IY1Agw
+          - generic [ref=f6e461]: Anonymous
+          - generic [ref=f6e465]: /products/sneakers/nike-air-max-270
+          - generic [ref=f6e466]: /products/sneakers/nike-air-max-270
+          - generic [ref=f6e467]: 0.0s
+          - generic [ref=f6e468]: "Yes"
+          - generic [ref=f6e469]: Direct
+        - button "4 minutes ago j6fM6s3bvMq3lrunCf2zQw Anonymous /blog/top-10-running-shoes-2023 /products/running/nike-air-zoom-pegasus 10.6s No Quora" [ref=f6e472] [cursor=pointer]:
+          - generic [ref=f6e473]: 4 minutes ago
+          - generic [ref=f6e474]: j6fM6s3bvMq3lrunCf2zQw
+          - generic [ref=f6e475]: Anonymous
+          - generic [ref=f6e479]: /blog/top-10-running-shoes-2023
+          - generic [ref=f6e480]: /products/running/nike-air-zoom-pegasus
+          - generic [ref=f6e481]: 10.6s
+          - generic [ref=f6e482]: "No"
+          - generic [ref=f6e483]: Quora
+        - button "4 minutes ago -Z_3iaNLDDKIrl6kl-bhog Anonymous /products/accessories/shoe-cleaning-kit /products/accessories/shoe-cleaning-kit 0.0s Yes eBay" [ref=f6e486] [cursor=pointer]:
+          - generic [ref=f6e487]: 4 minutes ago
+          - generic [ref=f6e488]: "-Z_3iaNLDDKIrl6kl-bhog"
+          - generic [ref=f6e489]: Anonymous
+          - generic [ref=f6e493]: /products/accessories/shoe-cleaning-kit
+          - generic [ref=f6e494]: /products/accessories/shoe-cleaning-kit
+          - generic [ref=f6e495]: 0.0s
+          - generic [ref=f6e496]: "Yes"
+          - generic [ref=f6e497]: eBay
+        - button "4 minutes ago d4o7AwvJ9fLDa5Csgpu5vQ Anonymous /blog/top-5-sandals-for-summer /blog/top-5-sandals-for-summer 0.0s Yes Ask" [ref=f6e500] [cursor=pointer]:
+          - generic [ref=f6e501]: 4 minutes ago
+          - generic [ref=f6e502]: d4o7AwvJ9fLDa5Csgpu5vQ
+          - generic [ref=f6e503]: Anonymous
+          - generic [ref=f6e507]: /blog/top-5-sandals-for-summer
+          - generic [ref=f6e508]: /blog/top-5-sandals-for-summer
+          - generic [ref=f6e509]: 0.0s
+          - generic [ref=f6e510]: "Yes"
+          - generic [ref=f6e511]: Ask
+        - button "4 minutes ago BYHYk0PGXAmFfsPaYwkWUQ Anonymous /products/sneakers/nike-air-max-2021 /blog/latest-shoe-trends 28.0s No Direct" [ref=f6e514] [cursor=pointer]:
+          - generic [ref=f6e515]: 4 minutes ago
+          - generic [ref=f6e516]: BYHYk0PGXAmFfsPaYwkWUQ
+          - generic [ref=f6e517]: Anonymous
+          - generic [ref=f6e521]: /products/sneakers/nike-air-max-2021
+          - generic [ref=f6e522]: /blog/latest-shoe-trends
+          - generic [ref=f6e523]: 28.0s
+          - generic [ref=f6e524]: "No"
+          - generic [ref=f6e525]: Direct
+        - button "4 minutes ago 28y8YK99m66UM6jWbJ_QSA Anonymous /support /support/contact-us 16.3s No Youtube" [ref=f6e528] [cursor=pointer]:
+          - generic [ref=f6e529]: 4 minutes ago
+          - generic [ref=f6e530]: 28y8YK99m66UM6jWbJ_QSA
+          - generic [ref=f6e531]: Anonymous
+          - generic [ref=f6e535]: /support
+          - generic [ref=f6e536]: /support/contact-us
+          - generic [ref=f6e537]: 16.3s
+          - generic [ref=f6e538]: "No"
+          - generic [ref=f6e539]: Youtube
+        - button "4 minutes ago DIMhPSqbammFm9VGDiJWEg Anonymous /products/running-shoes/black-nike-air-zoom /support/shipping-information 4.8s No https://www.aol.com" [ref=f6e542] [cursor=pointer]:
+          - generic [ref=f6e543]: 4 minutes ago
+          - generic [ref=f6e544]: DIMhPSqbammFm9VGDiJWEg
+          - generic [ref=f6e545]: Anonymous
+          - generic [ref=f6e549]: /products/running-shoes/black-nike-air-zoom
+          - generic [ref=f6e550]: /support/shipping-information
+          - generic [ref=f6e551]: 4.8s
+          - generic [ref=f6e552]: "No"
+          - generic [ref=f6e553]: https://www.aol.com
+        - button "5 minutes ago 0Y31rkw3ipajOrY2Vgotkg Anonymous /blog/summer-shoe-trends-2024 /products/sandals/beach-comfort-2024 38.5s No GitHub" [ref=f6e556] [cursor=pointer]:
+          - generic [ref=f6e557]: 5 minutes ago
+          - generic [ref=f6e558]: 0Y31rkw3ipajOrY2Vgotkg
+          - generic [ref=f6e559]: Anonymous
+          - generic [ref=f6e563]: /blog/summer-shoe-trends-2024
+          - generic [ref=f6e564]: /products/sandals/beach-comfort-2024
+          - generic [ref=f6e565]: 38.5s
+          - generic [ref=f6e566]: "No"
+          - generic [ref=f6e567]: GitHub
+        - button "5 minutes ago 9SQJ9TfARm5i56RPiAfOUQ Anonymous /blog/shoe-care-tips /blog/shoe-care-tips 1.4s Yes Reddit" [ref=f6e570] [cursor=pointer]:
+          - generic [ref=f6e571]: 5 minutes ago
+          - generic [ref=f6e572]: 9SQJ9TfARm5i56RPiAfOUQ
+          - generic [ref=f6e573]: Anonymous
+          - generic [ref=f6e577]: /blog/shoe-care-tips
+          - generic [ref=f6e578]: /blog/shoe-care-tips
+          - generic [ref=f6e579]: 1.4s
+          - generic [ref=f6e580]: "Yes"
+          - generic [ref=f6e581]: Reddit
+        - button "5 minutes ago -kaqWJPNxmof-l6UVsHUIA Anonymous /blog/summer-shoe-trends-2024 /products/sandals/beach-comfort-2024 27.2s No GitHub" [ref=f6e584] [cursor=pointer]:
+          - generic [ref=f6e585]: 5 minutes ago
+          - generic [ref=f6e586]: "-kaqWJPNxmof-l6UVsHUIA"
+          - generic [ref=f6e587]: Anonymous
+          - generic [ref=f6e591]: /blog/summer-shoe-trends-2024
+          - generic [ref=f6e592]: /products/sandals/beach-comfort-2024
+          - generic [ref=f6e593]: 27.2s
+          - generic [ref=f6e594]: "No"
+          - generic [ref=f6e595]: GitHub
+        - button "5 minutes ago d0SrWWRRIRIVuD6qjJXQaw Anonymous /blog/how-to-choose-the-right-shoes /cart 13.1s No Ask" [ref=f6e598] [cursor=pointer]:
+          - generic [ref=f6e599]: 5 minutes ago
+          - generic [ref=f6e600]: d0SrWWRRIRIVuD6qjJXQaw
+          - generic [ref=f6e601]: Anonymous
+          - generic [ref=f6e605]: /blog/how-to-choose-the-right-shoes
+          - generic [ref=f6e606]: /cart
+          - generic [ref=f6e607]: 13.1s
+          - generic [ref=f6e608]: "No"
+          - generic [ref=f6e609]: Ask
+        - button "5 minutes ago YJyvCPOdSvNyA7H4Ip8oDg Anonymous /products /support/shipping-information 21.1s No https://www.bitbucket.com" [ref=f6e612] [cursor=pointer]:
+          - generic [ref=f6e613]: 5 minutes ago
+          - generic [ref=f6e614]: YJyvCPOdSvNyA7H4Ip8oDg
+          - generic [ref=f6e615]: Anonymous
+          - generic [ref=f6e619]: /products
+          - generic [ref=f6e620]: /support/shipping-information
+          - generic [ref=f6e621]: 21.1s
+          - generic [ref=f6e622]: "No"
+          - generic [ref=f6e623]: https://www.bitbucket.com
+        - button "5 minutes ago rItbDqhNKwaPwJTRczRXFg Anonymous /products / 17.6s No Direct" [ref=f6e626] [cursor=pointer]:
+          - generic [ref=f6e627]: 5 minutes ago
+          - generic [ref=f6e628]: rItbDqhNKwaPwJTRczRXFg
+          - generic [ref=f6e629]: Anonymous
+          - generic [ref=f6e633]: /products
+          - generic [ref=f6e634]: /
+          - generic [ref=f6e635]: 17.6s
+          - generic [ref=f6e636]: "No"
+          - generic [ref=f6e637]: Direct
+        - button "5 minutes ago 2ZRVgX3_Br5wj5fJLm1Hxg Anonymous /blog/winter-shoe-trends /support/faq 24.7s No Tumblr" [ref=f6e640] [cursor=pointer]:
+          - generic [ref=f6e641]: 5 minutes ago
+          - generic [ref=f6e642]: 2ZRVgX3_Br5wj5fJLm1Hxg
+          - generic [ref=f6e643]: Anonymous
+          - generic [ref=f6e647]: /blog/winter-shoe-trends
+          - generic [ref=f6e648]: /support/faq
+          - generic [ref=f6e649]: 24.7s
+          - generic [ref=f6e650]: "No"
+          - generic [ref=f6e651]: Tumblr
+        - button "5 minutes ago YLIkKMx5ua689iLpFyOYsA Anonymous /blog/shoe-care-tips /blog/shoe-care-tips 0.0s Yes Bing" [ref=f6e654] [cursor=pointer]:
+          - generic [ref=f6e655]: 5 minutes ago
+          - generic [ref=f6e656]: YLIkKMx5ua689iLpFyOYsA
+          - generic [ref=f6e657]: Anonymous
+          - generic [ref=f6e661]: /blog/shoe-care-tips
+          - generic [ref=f6e662]: /blog/shoe-care-tips
+          - generic [ref=f6e663]: 0.0s
+          - generic [ref=f6e664]: "Yes"
+          - generic [ref=f6e665]: Bing
+        - button "5 minutes ago wk1nTvUPYj-fkxJaTGUPmA Anonymous /blog/how-to-choose-the-right-shoes /products/sneakers/nike-air-max-2021/details 18.8s No LinkedIn" [ref=f6e668] [cursor=pointer]:
+          - generic [ref=f6e669]: 5 minutes ago
+          - generic [ref=f6e670]: wk1nTvUPYj-fkxJaTGUPmA
+          - generic [ref=f6e671]: Anonymous
+          - generic [ref=f6e675]: /blog/how-to-choose-the-right-shoes
+          - generic [ref=f6e676]: /products/sneakers/nike-air-max-2021/details
+          - generic [ref=f6e677]: 18.8s
+          - generic [ref=f6e678]: "No"
+          - generic [ref=f6e679]: LinkedIn
+        - button "6 minutes ago Ok9dpvwmLeCtF82h4J_7Qg Anonymous /products/sneakers/nike-air-max-2021 /products/sneakers/adidas-ultraboost-21 4.2s No Tumblr" [ref=f6e682] [cursor=pointer]:
+          - generic [ref=f6e683]: 6 minutes ago
+          - generic [ref=f6e684]: Ok9dpvwmLeCtF82h4J_7Qg
+          - generic [ref=f6e685]: Anonymous
+          - generic [ref=f6e689]: /products/sneakers/nike-air-max-2021
+          - generic [ref=f6e690]: /products/sneakers/adidas-ultraboost-21
+          - generic [ref=f6e691]: 4.2s
+          - generic [ref=f6e692]: "No"
+          - generic [ref=f6e693]: Tumblr
+        - button "6 minutes ago cM1FQl653_ZUqsufILORAQ Anonymous /blog/latest-sneaker-releases /products/sneakers 18.2s No Direct" [ref=f6e696] [cursor=pointer]:
+          - generic [ref=f6e697]: 6 minutes ago
+          - generic [ref=f6e698]: cM1FQl653_ZUqsufILORAQ
+          - generic [ref=f6e699]: Anonymous
+          - generic [ref=f6e703]: /blog/latest-sneaker-releases
+          - generic [ref=f6e704]: /products/sneakers
+          - generic [ref=f6e705]: 18.2s
+          - generic [ref=f6e706]: "No"
+          - generic [ref=f6e707]: Direct
+        - button "6 minutes ago XtodcGb1d6nBuUa91CSUlg Anonymous /products /products/sneakers 28.6s No LinkedIn" [ref=f6e710] [cursor=pointer]:
+          - generic [ref=f6e711]: 6 minutes ago
+          - generic [ref=f6e712]: XtodcGb1d6nBuUa91CSUlg
+          - generic [ref=f6e713]: Anonymous
+          - generic [ref=f6e717]: /products
+          - generic [ref=f6e718]: /products/sneakers
+          - generic [ref=f6e719]: 28.6s
+          - generic [ref=f6e720]: "No"
+          - generic [ref=f6e721]: LinkedIn
+        - button "6 minutes ago FBmmMlHzNu3I9Oyh9ZJTGA Anonymous /support/return-policy /products/sandals 30.1s No Instagram" [ref=f6e724] [cursor=pointer]:
+          - generic [ref=f6e725]: 6 minutes ago
+          - generic [ref=f6e726]: FBmmMlHzNu3I9Oyh9ZJTGA
+          - generic [ref=f6e727]: Anonymous
+          - generic [ref=f6e731]: /support/return-policy
+          - generic [ref=f6e732]: /products/sandals
+          - generic [ref=f6e733]: 30.1s
+          - generic [ref=f6e734]: "No"
+          - generic [ref=f6e735]: Instagram
+        - button "6 minutes ago Q2Jt-zVrPDBamRRKcdOmZQ Anonymous /products/sneakers/nike-air-max-2021 /support/faq 19.9s No Direct" [ref=f6e738] [cursor=pointer]:
+          - generic [ref=f6e739]: 6 minutes ago
+          - generic [ref=f6e740]: Q2Jt-zVrPDBamRRKcdOmZQ
+          - generic [ref=f6e741]: Anonymous
+          - generic [ref=f6e745]: /products/sneakers/nike-air-max-2021
+          - generic [ref=f6e746]: /support/faq
+          - generic [ref=f6e747]: 19.9s
+          - generic [ref=f6e748]: "No"
+          - generic [ref=f6e749]: Direct
+        - button "7 minutes ago y-QAV3lVz4xgXjPN4qrx_w Anonymous /support /support/contact-us 15.0s No Youtube" [ref=f6e752] [cursor=pointer]:
+          - generic [ref=f6e753]: 7 minutes ago
+          - generic [ref=f6e754]: y-QAV3lVz4xgXjPN4qrx_w
+          - generic [ref=f6e755]: Anonymous
+          - generic [ref=f6e759]: /support
+          - generic [ref=f6e760]: /support/contact-us
+          - generic [ref=f6e761]: 15.0s
+          - generic [ref=f6e762]: "No"
+          - generic [ref=f6e763]: Youtube
+        - button "7 minutes ago LlC0ATnYOt67uH1j3Ina1A Anonymous /blog/shoe-care-tips /products/accessories/shoe-deodorizer 33.8s No Quora" [ref=f6e766] [cursor=pointer]:
+          - generic [ref=f6e767]: 7 minutes ago
+          - generic [ref=f6e768]: LlC0ATnYOt67uH1j3Ina1A
+          - generic [ref=f6e769]: Anonymous
+          - generic [ref=f6e773]: /blog/shoe-care-tips
+          - generic [ref=f6e774]: /products/accessories/shoe-deodorizer
+          - generic [ref=f6e775]: 33.8s
+          - generic [ref=f6e776]: "No"
+          - generic [ref=f6e777]: Quora
+        - button "7 minutes ago MHE70_QIeEJr-c4pGJCuhA Anonymous /products/sneakers /blog/best-sneakers-for-summer 23.5s No Reddit" [ref=f6e780] [cursor=pointer]:
+          - generic [ref=f6e781]: 7 minutes ago
+          - generic [ref=f6e782]: MHE70_QIeEJr-c4pGJCuhA
+          - generic [ref=f6e783]: Anonymous
+          - generic [ref=f6e787]: /products/sneakers
+          - generic [ref=f6e788]: /blog/best-sneakers-for-summer
+          - generic [ref=f6e789]: 23.5s
+          - generic [ref=f6e790]: "No"
+          - generic [ref=f6e791]: Reddit
+        - button "7 minutes ago NImKbjO1x4I1_h4INYbAYQ Anonymous /products/wide /products/narrow/athletic-shoes 26.6s No GitLab" [ref=f6e794] [cursor=pointer]:
+          - generic [ref=f6e795]: 7 minutes ago
+          - generic [ref=f6e796]: NImKbjO1x4I1_h4INYbAYQ
+          - generic [ref=f6e797]: Anonymous
+          - generic [ref=f6e801]: /products/wide
+          - generic [ref=f6e802]: /products/narrow/athletic-shoes
+          - generic [ref=f6e803]: 26.6s
+          - generic [ref=f6e804]: "No"
+          - generic [ref=f6e805]: GitLab
+        - button "7 minutes ago 0WP5xx5DIja9mTIJsMmr9w Anonymous /blog/how-to-choose-the-right-shoes /products/sneakers/nike-air-max-2021 5.5s No Twitter" [ref=f6e808] [cursor=pointer]:
+          - generic [ref=f6e809]: 7 minutes ago
+          - generic [ref=f6e810]: 0WP5xx5DIja9mTIJsMmr9w
+          - generic [ref=f6e811]: Anonymous
+          - generic [ref=f6e815]: /blog/how-to-choose-the-right-shoes
+          - generic [ref=f6e816]: /products/sneakers/nike-air-max-2021
+          - generic [ref=f6e817]: 5.5s
+          - generic [ref=f6e818]: "No"
+          - generic [ref=f6e819]: Twitter
+        - button "7 minutes ago d5mO_oqxrEj8Y3ta0jmZhw Anonymous /products/sneakers /support/shipping-information 11.6s No Bing" [ref=f6e822] [cursor=pointer]:
+          - generic [ref=f6e823]: 7 minutes ago
+          - generic [ref=f6e824]: d5mO_oqxrEj8Y3ta0jmZhw
+          - generic [ref=f6e825]: Anonymous
+          - generic [ref=f6e829]: /products/sneakers
+          - generic [ref=f6e830]: /support/shipping-information
+          - generic [ref=f6e831]: 11.6s
+          - generic [ref=f6e832]: "No"
+          - generic [ref=f6e833]: Bing
+  - alert [ref=f6e836]

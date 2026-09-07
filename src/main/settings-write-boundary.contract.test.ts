@@ -51,6 +51,26 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
     expect(keys).toContain('planeClientId')
   })
 
+  // PLAN.md P2.2b #2: only a successful Operator heartbeat may grant tier/entitlements, and only
+  // IPC.operatorLicenseActivate's own parse may set the license token/jti/last4/exp — a generic settings
+  // patch must not be able to self-grant a gated feature (Listen, recap, CRM push, funded asks,
+  // intelligence indexing, integrations) or claim a license this device never actually activated.
+  it('strips Operator entitlement + license state, so a renderer patch cannot self-grant a gated feature', () => {
+    const keys = strippedKeys()
+    for (const k of [
+      'operatorTier',
+      'operatorEntitlements',
+      'operatorIntegrationsVersion',
+      'operatorEntitlementsAt',
+      'operatorLicenseToken',
+      'operatorLicenseJti',
+      'operatorLicenseLast4',
+      'operatorLicenseExpiresAt'
+    ]) {
+      expect(keys, `settings:set must strip ${k}`).toContain(k)
+    }
+  })
+
   it('the strip actually removes those keys from a hostile patch (logic, not just shape)', () => {
     // Execute the same delete loop the handler runs, over the key list read from the source above.
     const hostile: Record<string, unknown> = {
@@ -61,6 +81,9 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
       planeClientId: 'attacker-plane-client',
       licenseValid: true,
       licenseSeatCap: 999999,
+      operatorEntitlements: { ask: true, listen: true, recap: true, crm_push: true, operator_keys: true, intelligence: true, integrations: true },
+      operatorTier: 'metis',
+      operatorLicenseJti: 'deadbeefdeadbeef',
       // a genuine user setting in the same patch must survive
       askFollowUpMemory: true
     }
@@ -71,6 +94,9 @@ describe('settings:set — main-owned keys are not renderer-writable', () => {
     expect(hostile.planeClientId).toBeUndefined()
     expect(hostile.licenseValid).toBeUndefined()
     expect(hostile.licenseSeatCap).toBeUndefined()
+    expect(hostile.operatorEntitlements).toBeUndefined()
+    expect(hostile.operatorTier).toBeUndefined()
+    expect(hostile.operatorLicenseJti).toBeUndefined()
     expect(hostile.askFollowUpMemory).toBe(true)
   })
 
