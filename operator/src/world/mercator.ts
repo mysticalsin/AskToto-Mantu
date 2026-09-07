@@ -1,16 +1,20 @@
 /**
- * Mercator projection constants and math, isolated in their own zero-dependency module so
- * operator/scripts/build-world.mjs can esbuild-bundle just this file (mirroring how
- * build-client.mjs bundles charts.ts) and share the exact same numbers the runtime uses —
- * no risk of the generated paths and the runtime projection drifting apart. Do not import
- * anything else from here; ./map.ts imports the generated output, so importing it back
- * from this file would be circular.
+ * Mercator projection math, plus the exact scale/translate every city dot has to project
+ * with to land on the same pixels as the country outlines under it.
  *
- * Plan 3.7 item 2 / Tony's reference (OpenPanel + bklit Choropleth Chart): Mercator centred
- * `[0, 20]` (20N keeps the populated northern hemisphere framed instead of wasting height on
- * the Arctic/Antarctic), 16:9 aspect, scale derived from width the same way d3-geo's own
- * "fit the whole world's width" default does: `width / (2*pi)`.
+ * Those numbers are NOT guessed here (they used to be: a hardcoded `width / (2*pi)` scale
+ * that assumed the whole 360° of longitude exactly fills the canvas width, without ever
+ * checking whether the projected geometry fit the canvas HEIGHT — it didn't, which is why
+ * Russia/Greenland/Canada/Norway rendered clipped against the top edge). They come from
+ * operator/scripts/build-world.mjs's `geoMercator().fitExtent(...)` fit against the real
+ * land geometry, which provably fits every included country inside the canvas, and are
+ * exported as PROJECTION_1152/PROJECTION_520 in ./paths.generated.ts (imported below) so
+ * this module's single-point `projectPoint` (city dots) can never drift from the exact
+ * numbers the land paths themselves were projected with. This is a one-way dependency
+ * (generated data -> this module); build-world.mjs never reads anything back from this
+ * file, so it can always rebuild paths.generated.ts from the raw topology alone.
  */
+import { PROJECTION_1152, PROJECTION_520 } from './paths.generated'
 
 export type MapVariant = '1152' | '520'
 
@@ -19,28 +23,34 @@ export interface MercatorVariant {
   height: number
   translate: [number, number]
   scale: number
-  /** [lon, lat] in degrees — matches d3-geo's `geoMercator().center([lon, lat])`. */
+  /** [lon, lat] in degrees — matches d3-geo's `geoMercator().center([lon, lat])`. Left at
+   * d3's own default, [0, 0]: build-world.mjs's fitExtent recomputes `translate` to centre
+   * whatever bounding box the fit produces regardless of any center offset, so a non-zero
+   * value here would only be silently cancelled back out — [0, 0] is the honest value, not
+   * a simplification. */
   center: [number, number]
 }
 
-const CENTER: [number, number] = [0, 20]
+const CENTER: [number, number] = [0, 0]
 
-function makeVariant(width: number): MercatorVariant {
+function makeVariant(width: number, projection: { scale: number; translate: [number, number] }): MercatorVariant {
   const height = Math.round((width * 9) / 16)
   return {
     width,
     height,
-    translate: [width / 2, height / 2],
-    scale: width / (2 * Math.PI),
+    translate: projection.translate,
+    scale: projection.scale,
     center: CENTER
   }
 }
 
-/** Exact reference projection: `geoMercator().center([0, 20]).translate([w/2, h/2]).scale(w /
- * (2*pi))` for the 1152-wide realtime map and the 520-wide corner map, both 16:9. */
+/** Reference projection: `geoMercator().translate(translate).scale(scale)` (center left at
+ * d3's default [0, 0] — see MercatorVariant.center above) for the 1152-wide realtime map and
+ * the 520-wide corner map, both 16:9. scale/translate come from PROJECTION_1152/520
+ * (./paths.generated.ts), build-world.mjs's fitExtent result. */
 export const MERCATOR_VARIANTS: Record<MapVariant, MercatorVariant> = {
-  '1152': makeVariant(1152),
-  '520': makeVariant(520)
+  '1152': makeVariant(1152, PROJECTION_1152),
+  '520': makeVariant(520, PROJECTION_520)
 }
 
 export const MAP_DIMENSIONS: Record<MapVariant, { width: number; height: number }> = {

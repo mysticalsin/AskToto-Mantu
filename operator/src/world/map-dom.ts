@@ -3,15 +3,20 @@
  * Client-side wiring for the realtime map markup ./map.ts's renderRealtimeMapSvg renders:
  * zoom/pan (`data-map-svg` / `data-viewport` / `data-pin-inner` / `data-zoom-in` /
  * `data-zoom-out`), hover-fade + tint (`data-hover-fade` / `.world-land`), a pointer-following
- * tooltip (`data-map-tooltip`), the pulsing live beacon (`data-beacon`), and the land
- * draw-in / graticule fade-in on first mount. Ported zoom/pan from the reference's
- * shared/ZoomPan.tsx + shared/MapCanvas.tsx (wheel-zoom-to-cursor, drag pan, +/- buttons,
- * counter-scaled pins so they stay a constant screen size through zoom); hover-fade and the
- * tooltip are bklit's Choropleth Chart behaviours (plan 3.7 item 2).
+ * tooltip (`data-map-tooltip`), the country pill's live beacon (`data-beacon`, on
+ * `.rt-pill-live`), and the land draw-in / graticule fade-in on first mount. Ported zoom/pan
+ * from the reference's shared/ZoomPan.tsx + shared/MapCanvas.tsx (wheel-zoom-to-cursor, drag
+ * pan, +/- buttons, counter-scaled pins so they stay a constant screen size through zoom);
+ * hover-fade and the tooltip are bklit's Choropleth Chart behaviours (plan 3.7 item 2).
  *
- * Motion goes through operator/client/motion.ts's vocabulary only (`drawPath`, `beacon`,
- * `pop`, `follow`) — no bespoke `@keyframes` here. Every animation those helpers drive already
- * collapses to an instant/static state under `prefers-reduced-motion: reduce`.
+ * Each city pin's own live halo (`.rt-pin-halo`) is deliberately NOT one of the `data-beacon`
+ * elements this file animates — it is a plain CSS `@keyframes` in operator/src/spa/
+ * css-realtime.ts (plan 6.3), pulsing from the very first paint (a static render, or before
+ * this file's JS ever hydrates) rather than sitting still until `beacon()` below runs.
+ * Everything else still goes through operator/client/motion.ts's vocabulary (`drawPath`,
+ * `beacon`, `pop`, `follow`) — no other bespoke `@keyframes` here. Every animation those
+ * helpers drive already collapses to an instant/static state under
+ * `prefers-reduced-motion: reduce`.
  *
  * No DOM access anywhere at module scope — only inside the functions below — so this file can
  * be imported by the client bundler without a DOM. `attachMapInteraction` is exported for the
@@ -298,8 +303,9 @@ export function attachMapInteraction(root: ParentNode, options: MapInteractionOp
 
   apply()
 
-  // ---- first-paint motion: land draws in over 800ms, graticule fades in after,
-  // the live beacon pulses, pins/pills pop in (plan 3.5b) ----
+  // ---- first-paint motion: land draws in over 800ms, graticule fades in after, the
+  // country pill's live beacon pulses (city pin halos are already pulsing via CSS, see the
+  // file doc comment above), pins/pills pop in (plan 3.5b) ----
   root.querySelectorAll<SVGPathElement>('.world-land').forEach((p) => drawPath(p, 800))
   // Sequenced reveal, land first then the grid -- but every other first-paint animation in this
   // file (drawPath/beacon/pop, via motion.ts's reduceMotion() gate) collapses to its resting
