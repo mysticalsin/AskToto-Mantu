@@ -188,7 +188,7 @@ async function main() {
   console.log(cookieHeaderLine(token))
 }
 
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`
+const isMain = process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href
 if (isMain) {
   main().catch((err) => {
     console.error(err)
