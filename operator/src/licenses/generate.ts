@@ -27,6 +27,12 @@ export interface MintLicenseInput {
   actor: string
   /** Audit action name. Defaults to `generate-license` (the plain flow's existing action). */
   action?: string
+  /** Shared id stamping every license minted in one `POST /v1/admin/licenses/generate-batch` call
+   *  (plan 6.7b, `../licenses/batch.ts`). `putIssuedLicense`'s INSERT (d1.ts, not owned by this
+   *  task) has no `batch_id` column in its explicit list, so this is stamped with one follow-up
+   *  `updateIssuedLicense` rather than a d1.ts change - the same pattern `renew.ts` already uses
+   *  for `renewal_note`. `undefined`/`null` (every non-batch caller) skips that extra write. */
+  batchId?: string | null
 }
 
 export type MintLicenseResult =
@@ -78,6 +84,8 @@ export async function mintOperatorLicense(ctx: AdminCtx, input: MintLicenseInput
     tier,
     member
   })
+  const batchId = input.batchId?.trim() || null
+  if (batchId) await ctx.store.updateIssuedLicense(minted.claims.jti, { batch_id: batchId })
   await ctx.store.audit(
     crypto.randomUUID(),
     ctx.now,

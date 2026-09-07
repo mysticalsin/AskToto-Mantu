@@ -203,3 +203,19 @@ describe('schema-alter.sql issued_licenses renewal_note column (task B11, operat
     expect(stmt).not.toMatch(/NOT NULL/i)
   })
 })
+
+describe('schema-alter.sql issued_licenses batch_id column (plan 6.7b, operator/src/licenses/batch.ts)', () => {
+  it('adds a nullable batch_id column, additive only, never NOT NULL', () => {
+    const alters = parseStatements(schemaAlterSql).filter((s) => /^ALTER TABLE issued_licenses\b/i.test(s))
+    const stmt = alters.find((s) => /ADD COLUMN batch_id\b/i.test(s))
+    expect(stmt).toBeTruthy()
+    expect(stmt).not.toMatch(/NOT NULL/i)
+  })
+
+  it('has an index on batch_id for the batch route to look every row of a batch back up', () => {
+    const indexNames = parseStatements(schemaAlterSql)
+      .map((s) => /^CREATE INDEX IF NOT EXISTS (\w+) ON issued_licenses\(batch_id\)/i.exec(s)?.[1])
+      .filter(Boolean)
+    expect(indexNames).toContain('issued_licenses_batch_id')
+  })
+})

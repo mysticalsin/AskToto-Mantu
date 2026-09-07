@@ -17,7 +17,17 @@
  */
 import type { DashboardPayload } from '../../src/dashboard'
 import { esc } from '../../src/render'
-import { renderIssuedLicenseRowHtml, renderIssuedLicenseTable, viewRowFromGenerate, type IssuedLicenseViewRow } from '../../src/render/pages/licenses'
+import {
+  renderBatchResultPanel,
+  renderIssuedLicenseRowHtml,
+  renderIssuedLicenseTable,
+  viewRowFromGenerate,
+  type BatchLicenseResultView,
+  type IssuedLicenseViewRow
+} from '../../src/render/pages/licenses'
+import { csvRows } from '../../src/export/csv'
+import { buildXlsxStream } from '../../src/export/xlsx'
+import type { ExportColumn, ExportRow } from '../../src/export/tables'
 import { api } from '../api'
 import { currentPage, rerender } from '../main'
 import { bindMotion } from '../motion-bind'
@@ -660,6 +670,433 @@ function bindReviewBlock(root: HTMLElement): void {
   correctRailBadgeAtMount(block)
 }
 
+// ---------------------------------------------------------------------------------------------
+// Batch generate (plan 6.7b "Generate many licenses at once"). Shares the single-generate form
+// (`data-licenses-generate-form`) and its duration/group/tier controls; only overrides where the
+// submit goes and what happens on success when quantity is above 1 or the member-list mode has
+// content. Below quantity 1 with the member field empty, bindGenerateForm() above still owns the
+// submit untouched -- this never doubles up on that listener.
+// ---------------------------------------------------------------------------------------------
+
+const BATCH_DOWNLOAD_COLUMNS: ExportColumn[] = [
+  { key: 'member', header: 'Member', type: 'string' },
+  { key: 'last4', header: 'Last4', type: 'string' },
+  { key: 'tier', header: 'Tier', type: 'string' },
+  { key: 'expires', header: 'Expires', type: 'date' },
+  { key: 'license', header: 'License', type: 'string' }
+]
+
+function batchExportRows(licenses: BatchLicenseResultView[]): ExportRow[] {
+  return licenses.map((l) => ({
+    member: l.member,
+    last4: l.last4,
+    tier: l.tier,
+    expires: l.exp * 1000,
+    license: l.license
+  }))
+}
+
+async function* oneBatch(rows: ExportRow[]): AsyncGenerator<ExportRow[]> {
+  yield rows
+}
+
+function triggerDownload(blob: Blob, filename: string): void {
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.style.display = 'none'
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 4000)
+}
+
+async function downloadBatch(batchId: string, licenses: BatchLicenseResultView[], format: 'csv' | 'xlsx'): Promise<void> {
+  const rows = batchExportRows(licenses)
+  if (format === 'csv') {
+    let text = ''
+    for await (const chunk of csvRows(BATCH_DOWNLOAD_COLUMNS, oneBatch(rows))) text += chunk
+    triggerDownload(new Blob([text], { type: 'text/csv;charset=utf-8' }), `metis-license-batch-${batchId}.csv`)
+    return
+  }
+  const parts: Uint8Array[] = []
+  for await (const chunk of buildXlsxStream({ columns: BATCH_DOWNLOAD_COLUMNS, batches: oneBatch(rows) })) parts.push(chunk)
+  triggerDownload(
+    new Blob(parts as BlobPart[], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+    `metis-license-batch-${batchId}.xlsx`
+  )
+}
+
+/** Stays open until dismissed (plan 3.7b law 7, extended to a batch); warns before a dismissal
+ *  that never downloaded anything, since that dismissal is the one action that makes every string
+ *  in the panel unrecoverable forever. `window.confirm` is the one acceptable modal on this page:
+ *  this is the single most consequence-carrying click in the whole page, not a routine action the
+ *  inline two-click pattern elsewhere here is meant for. */
+function bindBatchPanel(panel: HTMLElement, batchId: string, licenses: BatchLicenseResultView[]): void {
+  let downloaded = false
+  panel.querySelectorAll<HTMLButtonElement>('[data-batch-download]').forEach((btn) => {
+    press(btn)
+    btn.addEventListener('click', async () => {
+      const format = btn.getAttribute('data-batch-download') === 'xlsx' ? 'xlsx' : 'csv'
+      btn.disabled = true
+      const original = btn.textContent
+      btn.textContent = 'Preparing...'
+      try {
+        await downloadBatch(batchId, licenses, format)
+        downloaded = true
+        toast({ kind: 'ok', text: `Downloaded ${licenses.length} license${licenses.length === 1 ? '' : 's'} as ${format.toUpperCase()}.` })
+      } catch {
+        toast({ kind: 'error', text: 'Could not build the download.' })
+      } finally {
+        btn.disabled = false
+        btn.textContent = original
+      }
+    })
+  })
+  const copyAllBtn = panel.querySelector<HTMLButtonElement>('[data-batch-copy-all]')
+  if (copyAllBtn) {
+    press(copyAllBtn)
+    copyAllBtn.addEventListener('click', async () => {
+      const text = licenses.map((l) => l.license).join('\n')
+      try {
+        await navigator.clipboard.writeText(text)
+        downloaded = true
+        toast({ kind: 'ok', text: 'All licenses copied to clipboard.' })
+        pop(copyAllBtn)
+      } catch {
+        const values = panel.querySelector<HTMLTextAreaElement>('[data-batch-values]')
+        if (values) {
+          // Visually reveal it too, not just remove [hidden]/aria-hidden -- .sr-only clips it to
+          // 1x1px, so a select() while that class is still applied would copy correctly but show
+          // the user nothing to look at while they press Ctrl+C.
+          values.classList.remove('sr-only')
+          values.hidden = false
+          values.removeAttribute('aria-hidden')
+          values.removeAttribute('tabindex')
+          values.select()
+        }
+        toast({ kind: 'info', text: 'Clipboard unavailable. The strings are selected below, copy with Ctrl+C or Cmd+C.' })
+      }
+    })
+  }
+  const dismissBtn = panel.querySelector<HTMLButtonElement>('[data-batch-dismiss]')
+  if (dismissBtn) {
+    dismissBtn.addEventListener('click', () => {
+      if (!downloaded) {
+        const proceed = window.confirm(
+          'You have not downloaded or copied these licenses. Once you dismiss this panel, the strings cannot be shown again. Dismiss anyway?'
+        )
+        if (!proceed) return
+      }
+      panel.remove()
+    })
+  }
+}
+
+async function renderBatchIntoIssuedTable(root: HTMLElement, batch: BatchLicenseResultView[], groupId: string, issuedBy: string | null): Promise<void> {
+  const now = Date.now()
+  let groupName: string | null = null
+  if (groupId) {
+    const extra = await loadExtra()
+    const match = extra.groups.find((g) => g.id === groupId)
+    groupName = match ? match.name : groupId
+  }
+  for (const lic of batch) {
+    const row = viewRowFromGenerate(
+      { jti: lic.jti, last4: lic.last4, days: lic.days, exp: lic.exp, groupId: groupId || null, tier: lic.tier, member: lic.member },
+      groupName,
+      issuedBy,
+      now
+    )
+    insertIssuedRow(root, row)
+  }
+}
+
+function batchModeAndLines(root: HTMLElement): { mode: 'count' | 'members'; count: number; lines: string[] } {
+  const memberMode = !!root.querySelector<HTMLInputElement>('[data-batch-mode-radio="members"]')?.checked
+  const textarea = root.querySelector<HTMLTextAreaElement>('[data-batch-members]')
+  const lines = memberMode
+    ? (textarea?.value || '')
+        .split('\n')
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0)
+    : []
+  const countInput = root.querySelector<HTMLInputElement>('[data-batch-count]')
+  const count = memberMode ? lines.length : Math.max(1, Math.floor(Number(countInput?.value) || 1))
+  return { mode: memberMode ? 'members' : 'count', count, lines }
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+/** Client-side preview only (plan 6.7b: "a preview of duplicates and malformed lines before
+ *  submit"): duplicates are certain from the text alone; a line that is not email-shaped is only
+ *  flagged as "not an email, checked as a device id on submit" -- whether it is a real device id
+ *  can only be known server-side (`ctx.store.getSeat`), so this never claims a line is wrong when
+ *  it might still be a valid device id. */
+function renderBatchPreview(root: HTMLElement): void {
+  const preview = root.querySelector<HTMLElement>('[data-batch-preview]')
+  if (!preview) return
+  const { mode, lines } = batchModeAndLines(root)
+  if (mode !== 'members' || !lines.length) {
+    preview.hidden = true
+    preview.innerHTML = ''
+    return
+  }
+  const seen = new Set<string>()
+  const rows: string[] = []
+  let dupCount = 0
+  let noteCount = 0
+  for (const line of lines) {
+    const key = line.toLowerCase()
+    if (seen.has(key)) {
+      dupCount++
+      rows.push(`<div class="batch-preview-line is-dup">${esc(line)}, duplicate, will be rejected</div>`)
+      continue
+    }
+    seen.add(key)
+    if (!EMAIL_RE.test(line)) {
+      noteCount++
+      rows.push(`<div class="batch-preview-line is-bad">${esc(line)}, not an email, checked as a device id on submit</div>`)
+    } else {
+      rows.push(`<div class="batch-preview-line">${esc(line)}</div>`)
+    }
+  }
+  preview.hidden = false
+  const summary = dupCount || noteCount ? `${lines.length} lines, ${dupCount} duplicate, ${noteCount} to verify as a device id` : `${lines.length} lines, all look like emails`
+  preview.innerHTML = `<div class="batch-preview-count">${esc(summary)}</div>${rows.join('')}`
+}
+
+function tierLabelFromExtra(tier: string, extra: CachedExtra): string {
+  const match = extra.tiers.find((t) => t.id === tier)
+  if (match) return match.label
+  return tier === 'metis' ? 'Métis' : tier === 'metis-light' ? 'Métis Light' : tier
+}
+
+async function updateBatchConfirmSentence(root: HTMLElement): Promise<void> {
+  const sentenceEl = root.querySelector<HTMLElement>('[data-batch-confirm-sentence]')
+  if (!sentenceEl || sentenceEl.hidden) return
+  const { count } = batchModeAndLines(root)
+  const days = Number(root.querySelector<HTMLSelectElement>('[data-duration-select]')?.value) || 30
+  const groupId = root.querySelector<HTMLSelectElement>('[data-licenses-group]')?.value || ''
+  const tierValue = root.querySelector<HTMLSelectElement>('[data-licenses-tier]')?.value || ''
+  const extra = await loadExtra()
+  const groupLabel = groupId ? extra.groups.find((g) => g.id === groupId)?.name || groupId : 'no group'
+  const tierLabel = tierValue ? tierLabelFromExtra(tierValue, extra) : 'the default tier'
+  sentenceEl.textContent = `About to generate ${count} license${count === 1 ? '' : 's'}, ${days} days, ${tierLabel}, ${groupLabel}.`
+}
+
+function bindBatchControls(root: HTMLElement): void {
+  const controls = root.querySelector<HTMLElement>('[data-batch-controls]')
+  const form = root.querySelector<HTMLFormElement>('[data-licenses-generate-form]')
+  const submitBtn = root.querySelector<HTMLButtonElement>('[data-licenses-generate-submit]')
+  if (!controls || !form || !submitBtn) return
+
+  const toggle = controls.querySelector<HTMLButtonElement>('[data-batch-toggle]')
+  const fields = controls.querySelector<HTMLElement>('[data-batch-controls-fields]')
+  if (toggle && fields) {
+    toggle.addEventListener('click', () => {
+      const opening = fields.hidden
+      fields.hidden = !opening
+      toggle.setAttribute('aria-expanded', String(opening))
+    })
+  }
+
+  const countField = controls.querySelector<HTMLElement>('[data-batch-count-field]')
+  const membersField = controls.querySelector<HTMLElement>('[data-batch-members-field]')
+  const membersTextarea = controls.querySelector<HTMLTextAreaElement>('[data-batch-members]')
+  const countInput = controls.querySelector<HTMLInputElement>('[data-batch-count]')
+
+  function syncModeVisibility(): void {
+    const memberMode = !!controls!.querySelector<HTMLInputElement>('[data-batch-mode-radio="members"]')?.checked
+    if (countField) countField.hidden = memberMode
+    if (membersField) membersField.hidden = !memberMode
+    renderBatchPreview(root)
+  }
+  controls.querySelectorAll<HTMLInputElement>('[data-batch-mode-radio]').forEach((radio) => {
+    radio.addEventListener('change', syncModeVisibility)
+  })
+  syncModeVisibility()
+
+  if (membersTextarea) membersTextarea.addEventListener('input', () => renderBatchPreview(root))
+  if (countInput) {
+    countInput.addEventListener('input', () => {
+      const n = Math.floor(Number(countInput.value) || 1)
+      countInput.value = String(Math.min(100, Math.max(1, n)))
+    })
+  }
+
+  let armed = false
+  let armedRevert: ReturnType<typeof setTimeout> | null = null
+  const originalLabel = submitBtn.textContent || 'Generate license'
+
+  function disarm(): void {
+    armed = false
+    if (armedRevert) clearTimeout(armedRevert)
+    submitBtn!.textContent = originalLabel
+    submitBtn!.classList.remove('is-confirming')
+    const sentence = controls!.querySelector<HTMLElement>('[data-batch-confirm-sentence]')
+    if (sentence) sentence.hidden = true
+  }
+  ;['change', 'input'].forEach((evt) => {
+    form!.addEventListener(evt, () => {
+      if (armed) disarm()
+    })
+  })
+
+  // Attached to `root` (an ancestor of `form`), not `form` itself, and in the capture phase: a
+  // capture listener only runs before a target's own listeners when it sits on an ANCESTOR of the
+  // event target -- two listeners on the exact same element (this one and bindGenerateForm()'s,
+  // both on `form`) would instead fire in registration order regardless of the capture flag, and
+  // bindGenerateForm() is bound first in initLicenses() below, so it would win the race and fire
+  // its own single-license API call on every batch submit too. Capturing on `root` guarantees this
+  // one intercepts first, every time, independent of binder call order.
+  root.addEventListener(
+    'submit',
+    async (e) => {
+      if (e.target !== form) return
+      const { mode, count, lines } = batchModeAndLines(root)
+      if (mode === 'count' && count <= 1) return // single-license path: bindGenerateForm() owns this submit.
+      e.preventDefault()
+      e.stopImmediatePropagation()
+
+      if (!armed) {
+        armed = true
+        const sentence = controls.querySelector<HTMLElement>('[data-batch-confirm-sentence]')
+        if (sentence) sentence.hidden = false
+        await updateBatchConfirmSentence(root)
+        submitBtn.textContent = `Confirm generate ${count} license${count === 1 ? '' : 's'}`
+        submitBtn.classList.add('is-confirming')
+        armedRevert = setTimeout(disarm, 8000)
+        return
+      }
+      disarm()
+
+      const fd = new FormData(form)
+      const days = Number(fd.get('days'))
+      const groupId = String(fd.get('groupId') || '').trim()
+      const tier = String(fd.get('tier') || '').trim()
+      const body: Record<string, unknown> = { days }
+      if (tier) body.tier = tier
+      if (groupId) body.groupId = groupId
+      if (mode === 'members') body.members = lines
+      else body.count = count
+
+      submitBtn.disabled = true
+      const res = await api('/v1/admin/licenses/generate-batch', body)
+      submitBtn.disabled = false
+      if (!res || !res.ok) {
+        const detail = Array.isArray(res?.invalid) && res.invalid.length ? ` ${res.invalid.map((i: { line: string }) => i.line).join(', ')}` : ''
+        toast({ kind: 'error', text: `${(res && res.error) || 'Could not generate the batch.'}${detail}` })
+        return
+      }
+      const batch: BatchLicenseResultView[] = res.licenses
+      const panelWrap = root.querySelector<HTMLElement>('[data-licenses-batch-panel-wrap]')
+      if (panelWrap) {
+        panelWrap.innerHTML = renderBatchResultPanel(res.batchId, batch, Date.now())
+        const panel = panelWrap.querySelector<HTMLElement>('[data-licenses-batch-panel]')
+        if (panel) {
+          bindMotion(panel)
+          shimmer(panel, true)
+          setTimeout(() => shimmer(panel, false), 1400)
+          bindBatchPanel(panel, res.batchId, batch)
+        }
+      }
+      const emailHost = root.querySelector<HTMLElement>('[data-email]')
+      const issuedBy = emailHost ? emailHost.getAttribute('data-email') : null
+      await renderBatchIntoIssuedTable(root, batch, groupId, issuedBy)
+      if (membersTextarea) membersTextarea.value = ''
+      toast({ kind: 'ok', text: `${batch.length} licenses generated. Download or copy them now, they will not be shown again.` })
+    },
+    true
+  )
+}
+
+// ---------------------------------------------------------------------------------------------
+// Bulk seat actions (plan 6.7b "Bulk elsewhere, with the same discipline"). The action bar shows
+// only while at least one row is selected; Approve's confirmation names every selected seat by
+// hostname and email, never a bare count, because approving a fleet blind is the one mistake this
+// product should not make cheap.
+// ---------------------------------------------------------------------------------------------
+
+interface BulkSelection {
+  device: string
+  name: string
+  email: string
+}
+
+function bulkSelected(root: HTMLElement): BulkSelection[] {
+  return Array.from(root.querySelectorAll<HTMLInputElement>('[data-bulk-select]:checked')).map((cb) => ({
+    device: cb.getAttribute('data-bulk-select') || '',
+    name: cb.getAttribute('data-bulk-name') || '',
+    email: cb.getAttribute('data-bulk-email') || ''
+  }))
+}
+
+function updateBulkBar(root: HTMLElement): void {
+  const bar = root.querySelector<HTMLElement>('[data-bulk-action-bar]')
+  const count = root.querySelector<HTMLElement>('[data-bulk-action-count]')
+  if (!bar) return
+  const selected = bulkSelected(root)
+  bar.hidden = selected.length === 0
+  if (count) count.textContent = `${selected.length} selected`
+}
+
+async function runBulkAction(root: HTMLElement, action: 'approve' | 'revoke'): Promise<void> {
+  const selected = bulkSelected(root)
+  if (!selected.length) return
+  const names = selected.map((s) => (s.email ? `${s.name} (${s.email})` : s.name))
+  const verb = action === 'approve' ? 'Approve' : 'Revoke'
+  const proceed = window.confirm(`${verb} ${selected.length} seat${selected.length === 1 ? '' : 's'}?\n\n${names.join('\n')}`)
+  if (!proceed) return
+
+  const bar = root.querySelector<HTMLElement>('[data-bulk-action-bar]')
+  const btn = bar?.querySelector<HTMLButtonElement>(action === 'approve' ? '[data-bulk-approve]' : '[data-bulk-revoke]')
+  if (btn) {
+    btn.disabled = true
+    btn.textContent = `${verb === 'Approve' ? 'Approving' : 'Revoking'} 0/${selected.length}...`
+  }
+  let ok = 0
+  let failed = 0
+  for (let i = 0; i < selected.length; i++) {
+    const res = await api(`/v1/admin/licenses/${encodeURIComponent(selected[i].device)}/${action}`, {})
+    if (res && res.ok) ok++
+    else failed++
+    if (btn) btn.textContent = `${verb === 'Approve' ? 'Approving' : 'Revoking'} ${i + 1}/${selected.length}...`
+  }
+  if (btn) {
+    btn.disabled = false
+    btn.textContent = `${verb} selected`
+  }
+  toast({
+    kind: failed ? 'error' : 'ok',
+    text: failed ? `${ok} succeeded, ${failed} failed.` : `${ok} seat${ok === 1 ? '' : 's'} ${action === 'approve' ? 'approved' : 'revoked'}.`
+  })
+  void rerender(currentPage())
+}
+
+function bindBulkSeatActions(root: HTMLElement): void {
+  const table = root.querySelector<HTMLElement>('#licenses-seats-table')
+  if (!table) return
+  table.addEventListener('change', (e) => {
+    const target = e.target as HTMLElement
+    if (target && target.matches('[data-bulk-select]')) updateBulkBar(root)
+  })
+  const bar = root.querySelector<HTMLElement>('[data-bulk-action-bar]')
+  if (!bar) return
+  const approveBtn = bar.querySelector<HTMLButtonElement>('[data-bulk-approve]')
+  const revokeBtn = bar.querySelector<HTMLButtonElement>('[data-bulk-revoke]')
+  const clearBtn = bar.querySelector<HTMLButtonElement>('[data-bulk-clear]')
+  if (approveBtn) approveBtn.addEventListener('click', () => void runBulkAction(root, 'approve'))
+  if (revokeBtn) revokeBtn.addEventListener('click', () => void runBulkAction(root, 'revoke'))
+  if (clearBtn) {
+    clearBtn.addEventListener('click', () => {
+      root.querySelectorAll<HTMLInputElement>('[data-bulk-select]:checked').forEach((cb) => (cb.checked = false))
+      updateBulkBar(root)
+    })
+  }
+}
+
 export function initLicenses(section: HTMLElement, data: DashboardPayload | null): void {
   void data
   const root = section.querySelector<HTMLElement>('.licenses-page') || section
@@ -668,4 +1105,6 @@ export function initLicenses(section: HTMLElement, data: DashboardPayload | null
   bindGenerateForm(root)
   bindOnceStrip(root)
   bindGroupAndTierSelects(root)
+  bindBatchControls(root)
+  bindBulkSeatActions(root)
 }

@@ -85,4 +85,16 @@ export const GROUPS_CSS = `
    .member-chip-removing transition above never even gets a chance to run -- and design-lead's
    global "*, *::before, *::after { transition-duration: 0.01ms !important }" block (css.ts) is a
    second, independent guard if that class is ever added while the media query is active. -- */
+
+/* -- bulk member add (plan 6.7b "paste a member list to add many at once"). .batch-preview /
+   .batch-preview-line / .batch-preview-count are defined once in css-licenses.ts and shared here
+   -- every page's CSS module concatenates into one stylesheet (spa/manifest.ts), so a pattern
+   class already proven on Licenses' batch preview is reused rather than redefined a second time
+   with the same rules under a different name. -- */
+.link-btn { border: none; background: transparent; padding: 0; color: var(--accent-text); font: 600 12px var(--font-body); cursor: pointer; text-decoration: none; }
+.link-btn:hover { text-decoration: underline; }
+.group-bulk-add { margin: 8px 0 4px; }
+.group-bulk-fields { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+.group-bulk-fields[hidden] { display: none !important; }
+.group-bulk-fields textarea { font-family: var(--font-mono); font-size: 12px; min-height: 76px; resize: vertical; }
 `

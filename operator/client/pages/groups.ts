@@ -439,6 +439,108 @@ function wireMembersPanel(drawer: HTMLElement, detail: GroupDetailPayload): void
     })
   }
   panel.querySelectorAll<HTMLElement>('[data-remove-member]').forEach((btn) => wireRemoveMemberButton(panel, detail, btn))
+  wireBulkMemberAdd(panel, detail)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Bulk member add (plan 6.7b "Groups: paste a member list to add many at once, with the same
+// preview of duplicates and malformed lines"). Reuses the single `POST .../members` endpoint one
+// line at a time (this page owns no batch route) rather than duplicating server-side validation
+// client-side; the preview below is informational only, same caveat as the Licenses batch preview
+// (operator/src/render/pages/licenses.ts): a line that is not email-shaped might still be a valid
+// device id, which only the server can confirm.
+// ---------------------------------------------------------------------------------------------
+
+const GROUP_BULK_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+function renderBulkMemberPreview(panel: HTMLElement, existing: Set<string>): void {
+  const textarea = panel.querySelector<HTMLTextAreaElement>('[data-member-bulk-textarea]')
+  const preview = panel.querySelector<HTMLElement>('[data-member-bulk-preview]')
+  if (!textarea || !preview) return
+  const lines = textarea.value
+    .split('\n')
+    .map((l) => l.trim())
+    .filter((l) => l.length > 0)
+  if (!lines.length) {
+    preview.hidden = true
+    preview.innerHTML = ''
+    return
+  }
+  const seen = new Set<string>()
+  const rows: string[] = []
+  let dup = 0
+  let already = 0
+  for (const line of lines) {
+    const key = line.toLowerCase()
+    if (existing.has(key)) {
+      already++
+      rows.push(`<div class="batch-preview-line is-dup">${esc(line)}, already a member</div>`)
+      continue
+    }
+    if (seen.has(key)) {
+      dup++
+      rows.push(`<div class="batch-preview-line is-dup">${esc(line)}, duplicate, will be added once</div>`)
+      continue
+    }
+    seen.add(key)
+    const looksEmail = GROUP_BULK_EMAIL_RE.test(line)
+    rows.push(`<div class="batch-preview-line${looksEmail ? '' : ' is-bad'}">${esc(line)}${looksEmail ? '' : ', not an email, checked as a device id'}</div>`)
+  }
+  preview.hidden = false
+  preview.innerHTML = `<div class="batch-preview-count">${lines.length} lines, ${dup} duplicate, ${already} already a member</div>${rows.join('')}`
+}
+
+function wireBulkMemberAdd(panel: HTMLElement, detail: GroupDetailPayload): void {
+  const toggle = panel.querySelector<HTMLButtonElement>('[data-member-bulk-toggle]')
+  const fields = panel.querySelector<HTMLElement>('[data-member-bulk-fields]')
+  const textarea = panel.querySelector<HTMLTextAreaElement>('[data-member-bulk-textarea]')
+  const submitBtn = panel.querySelector<HTMLButtonElement>('[data-member-bulk-submit]')
+  if (!toggle || !fields || !textarea || !submitBtn) return
+
+  function existingMembers(): Set<string> {
+    return new Set(Array.from(panel.querySelectorAll<HTMLElement>('[data-member-chip]')).map((el) => (el.getAttribute('data-member-chip') || '').toLowerCase()))
+  }
+
+  toggle.addEventListener('click', () => {
+    const opening = fields!.hidden
+    fields!.hidden = !opening
+    toggle.setAttribute('aria-expanded', String(opening))
+    if (opening) textarea!.focus()
+  })
+  textarea.addEventListener('input', () => renderBulkMemberPreview(panel, existingMembers()))
+
+  submitBtn.addEventListener('click', async () => {
+    const lines = Array.from(new Set(textarea.value.split('\n').map((l) => l.trim()).filter((l) => l.length > 0)))
+    if (!lines.length) return
+    submitBtn.disabled = true
+    const original = submitBtn.textContent
+    let ok = 0
+    let failed = 0
+    const failedLines: string[] = []
+    for (let i = 0; i < lines.length; i++) {
+      submitBtn.textContent = `Adding ${i + 1}/${lines.length}...`
+      const line = lines[i]
+      const kind = GROUP_BULK_EMAIL_RE.test(line) ? 'email' : 'device'
+      const res = await request(`/v1/admin/groups/${encodeURIComponent(detail.group.id)}/members`, 'POST', { member: line, kind })
+      if (res && res.ok !== false) {
+        ok++
+        addMemberChip(panel, detail, res.member || line, res.kind === 'device' ? 'device' : 'email')
+      } else {
+        failed++
+        failedLines.push(line)
+      }
+    }
+    submitBtn.disabled = false
+    submitBtn.textContent = original
+    textarea.value = ''
+    renderBulkMemberPreview(panel, existingMembers())
+    if (ok) listDirty = true
+    if (failed) {
+      toast({ kind: ok ? 'info' : 'error', text: `${ok} added, ${failed} failed: ${failedLines.join(', ')}` })
+    } else {
+      toast({ kind: 'ok', text: `${ok} member${ok === 1 ? '' : 's'} added.` })
+    }
+  })
 }
 
 function memberChipHtml(member: string, kind: 'email' | 'device'): string {

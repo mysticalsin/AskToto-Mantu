@@ -364,6 +364,14 @@ function renderMembersPanel(detail: GroupDetailPayload): string {
       <button class="primary" type="submit">Add member</button>
     </form>
     <div class="group-form-error" data-member-error hidden role="alert"></div>
+    <div class="group-bulk-add">
+      <button type="button" class="link-btn" data-member-bulk-toggle aria-expanded="false">Add many at once</button>
+      <div class="group-bulk-fields" data-member-bulk-fields hidden>
+        <textarea rows="4" placeholder="One email or device id per line" data-member-bulk-textarea></textarea>
+        <div class="batch-preview" data-member-bulk-preview hidden></div>
+        <button type="button" class="primary" data-member-bulk-submit>Add members</button>
+      </div>
+    </div>
     ${list}`
 }
 

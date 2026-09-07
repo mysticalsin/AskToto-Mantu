@@ -35,7 +35,7 @@ export const LICENSES_CSS = `
 
 /* .card (spa/css.ts) carries no vertical margin of its own -- every other page that stacks
    several top-level cards handles that spacing itself. Scoped to this page only. */
-.licenses-page > .card + .card { margin-top: 16px; }
+.licenses-page > .card + .card { margin-top: 12px; }
 
 /* "Needs your review" (block 0, plan 6.7). The nugget reuses the shared .chip.chip-accent look
    (spa/css.ts) so its colour never drifts from the rest of the accent-chip vocabulary. */
@@ -142,4 +142,59 @@ tr.lic-review-row.lic-review-row-collapse td {
   0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--warn) 55%, transparent); }
   100% { box-shadow: 0 0 0 10px color-mix(in srgb, var(--warn) 0%, transparent); }
 }
+
+/* Batch generate (plan 6.7b): a toggle inline with the existing submit button (not its own
+   bordered block -- plan 3.7b law 10 "short pages" cost this page the two-viewport cap the first
+   time this had a whole extra section, see batchToggle()'s doc comment), the mode toggle,
+   quantity/member-list fields and the duplicate/malformed-line preview underneath, collapsed
+   until opened. */
+.batch-toggle-btn { margin-left: 4px; }
+.batch-controls-fields { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
+.batch-controls-fields[hidden] { display: none !important; }
+.batch-mode-toggle { display: flex; gap: 16px; flex-wrap: wrap; }
+.batch-mode-option { display: inline-flex; align-items: center; gap: 6px; font: 600 12px var(--font-body); color: var(--ink-2); cursor: pointer; }
+.batch-mode-option input { accent-color: var(--accent); }
+.batch-members-field textarea { font-family: var(--font-mono); font-size: 12px; min-height: 84px; resize: vertical; }
+.batch-preview { padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-control); font-size: 12px; }
+.batch-preview[hidden] { display: none !important; }
+.batch-preview-line { display: flex; align-items: center; gap: 6px; padding: 2px 0; }
+.batch-preview-line.is-bad { color: var(--danger); }
+.batch-preview-line.is-dup { color: var(--warn); }
+.batch-preview-count { font: 600 11px var(--font-body); color: var(--ink-2); margin-bottom: 4px; }
+.batch-confirm-sentence { margin: 0; padding: 8px 10px; background: var(--accent-soft); border-radius: var(--radius-control); color: var(--ink); }
+.batch-confirm-sentence[hidden] { display: none !important; }
+
+/* Batch result panel (plan 6.7b "The once-string problem, solved properly"): the only surface a
+   batch's raw once-strings ever render on. Stays open until dismissed; a shimmer sweep on first
+   paint matches the single-license once-string strip's reveal. */
+.batch-panel { margin-top: 12px; border: 1px solid var(--warn); }
+.batch-panel[hidden] { display: none !important; }
+.batch-panel-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 10px 0; }
+/* Revealed only as the Copy-all clipboard-API fallback (client/pages/licenses.ts removes .sr-only
+   right before calling select()); font-mono so every once-string lines up for a manual select. */
+.batch-panel textarea[data-batch-values]:not(.sr-only) { width: 100%; min-height: 120px; margin-bottom: 10px; font-family: var(--font-mono); font-size: 11.5px; }
+.batch-panel-table-wrap { overflow-x: auto; max-height: 320px; overflow-y: auto; }
+.batch-panel-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.batch-panel-table th { text-align: left; font: 600 11px var(--font-body); color: var(--ink-2); padding: 6px 8px; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--surface); }
+.batch-panel-table td { padding: 6px 8px; border-bottom: 1px solid var(--border); }
+
+/* Bulk selection action bar (plan 6.7b "Bulk elsewhere, with the same discipline"): appears only
+   while at least one Seats row is selected, never a permanently visible empty bar. */
+.bulk-action-bar { position: sticky; bottom: 12px; display: flex; align-items: center; gap: 10px; margin-top: 10px; padding: 10px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-control); box-shadow: var(--shadow); z-index: 5; }
+.bulk-action-bar[hidden] { display: none !important; }
+.bulk-action-count { font: 600 12px var(--font-body); }
+.bulk-action-bar .spacer { flex: 1; }
+
+/* The shared "input, select, textarea" base rule (spa/css.ts) puts a 6px/10px padding and a 1px
+   border on every <input>, sized for a text field; unset on a checkbox it inflated the Seats
+   table's row height from ~41px to 52px per row (measured, x12 rows = the exact overage that put
+   this page over plan 3.7b law 10's two-viewport cap on the first pass). */
+.bulk-select-checkbox { width: 14px; height: 14px; padding: 0; border: none; background: transparent; margin: 0; vertical-align: middle; accent-color: var(--accent); }
+
+/* Consistent row height on the Seats table: a long hostname or email otherwise wraps to a second
+   line on just that row (measured: 52px vs the table's normal 39px, on whichever rows happened to
+   carry a longer value), which both looks uneven and cost this page part of its plan 3.7b law 10
+   budget. Ellipsis, not a guess at a shorter string -- the full value is still in the cell's
+   title/text content for a hover or a screen reader. */
+#licenses-seats-table td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
 `
