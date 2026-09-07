@@ -4,8 +4,10 @@ import {
   isApprovedSeat,
   isRealSeat,
   licenseFromIngest,
+  mergeSeatLicenseLabel,
   parseApproval,
   seatAuthorizedForKeys,
+  seatLicenseLabel,
   SEAT_NOT_APPROVED
 } from './fleet'
 import { memoryStore } from './store'
@@ -84,5 +86,54 @@ describe('approval gate', () => {
     expect(licenseFromIngest({ license: 'approved' })).toBeNull()
     expect(licenseFromIngest({ license: 'licensed', licenseLast4: 'cfc3' })).toBe('licensed · cfc3')
     expect(licenseFromIngest({ license: 'sk-ant-secret-value' })).toBeNull()
+  })
+
+  it('prefers licensed over member-pass unlicensed when Operator jti or last4 is present', () => {
+    expect(
+      licenseFromIngest({
+        license: 'unlicensed',
+        licenseLast4: 'ZRl4',
+        licenseId: '626f3683991c12c6'
+      })
+    ).toBe('licensed · ZRl4')
+    expect(licenseFromIngest({ license: 'unlicensed', licenseId: '626f3683991c12c6' })).toBe('licensed')
+    expect(licenseFromIngest({ license: 'unlicensed', licenseLast4: 'ZRl4' })).toBe('licensed · ZRl4')
+    expect(licenseFromIngest({ license: 'unlicensed' })).toBe('unlicensed')
+    expect(licenseFromIngest({ license: 'expired', licenseLast4: 'ZRl4' })).toBe('expired · ZRl4')
+  })
+
+  it('does not let a later unlicensed heartbeat wipe a jti-backed licensed label', () => {
+    expect(mergeSeatLicenseLabel('unlicensed', 'licensed · ZRl4', '626f3683991c12c6')).toBe('licensed · ZRl4')
+    expect(mergeSeatLicenseLabel('unlicensed · ZRl4', 'unlicensed · ZRl4', '626f3683991c12c6')).toBe(
+      'licensed · ZRl4'
+    )
+    expect(mergeSeatLicenseLabel('unlicensed', null, '626f3683991c12c6')).toBe('licensed')
+    expect(mergeSeatLicenseLabel('unlicensed', 'unlicensed', null)).toBe('unlicensed')
+    expect(mergeSeatLicenseLabel('trial', 'licensed · ZRl4', '626f3683991c12c6')).toBe('trial')
+  })
+
+  it('displays licensed · last4 from an active issued bind even when the seat row is stale unlicensed', () => {
+    const now = 1_725_000_000_000
+    const issued = [
+      {
+        jti: '626f3683991c12c6',
+        last4: 'ZRl4',
+        revoked: 0,
+        exp: Math.floor(now / 1000) + 7 * 24 * 60 * 60
+      }
+    ]
+    expect(
+      seatLicenseLabel({ license: 'unlicensed · ZRl4', license_jti: '626f3683991c12c6' }, issued, now)
+    ).toBe('licensed · ZRl4')
+    expect(seatLicenseLabel({ license: 'unlicensed', license_jti: '626f3683991c12c6' }, issued, now)).toBe(
+      'licensed · ZRl4'
+    )
+    expect(
+      seatLicenseLabel(
+        { license: 'unlicensed · ZRl4', license_jti: '626f3683991c12c6' },
+        [{ ...issued[0], revoked: 1 }],
+        now
+      )
+    ).toBe('unlicensed · ZRl4')
   })
 })

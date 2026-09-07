@@ -113,6 +113,30 @@ describe('getSeat', () => {
     expect((await store.getSeat('dev-a'))?.hostname).toBe('Tonys-MacBook-Pro')
     expect(await store.getSeat('missing')).toBeNull()
   })
+
+  it('does not let a later unlicensed heartbeat wipe a jti-backed licensed label', async () => {
+    await store.upsertSeat(
+      seat({
+        device_id: 'baa2dc6edd670a9894ed402b5a9b9246',
+        hostname: 'Totos-Mac.local',
+        license: 'licensed · ZRl4',
+        approval: 'pending',
+        license_jti: '626f3683991c12c6'
+      })
+    )
+    await store.upsertSeat(
+      seat({
+        device_id: 'baa2dc6edd670a9894ed402b5a9b9246',
+        hostname: 'Totos-Mac.local',
+        license: 'unlicensed',
+        approval: 'pending',
+        license_jti: null
+      })
+    )
+    const row = await store.getSeat('baa2dc6edd670a9894ed402b5a9b9246')
+    expect(row?.license).toBe('licensed · ZRl4')
+    expect(row?.license_jti).toBe('626f3683991c12c6')
+  })
 })
 
 describe('listAsks with since', () => {
