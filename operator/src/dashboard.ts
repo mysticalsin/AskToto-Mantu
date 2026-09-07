@@ -15,6 +15,7 @@ import {
 import { looksLikeSecret, safeChips, type SafeChip } from './redact'
 import { geoRegionRows, realtimeGeoRows, type GeoRegionRow, type RealtimeGeoRow } from './realtime-geo'
 import { readIntegrationExtra } from './connectors/data'
+import { integrationSummary, type IntegrationSummary } from './connectors/summary'
 import type {
   AskRow,
   EventRow,
@@ -231,6 +232,11 @@ export interface DashboardPayload {
   geo: RealtimeGeoRow[]
   geoRegions: GeoRegionRow[]
   questions: QuestionsPayload
+  /** Connectors page (plan 6.10c): every connection, server-rendered on first paint -- no client
+   *  fetch, no skeleton. `IntegrationSummary` (operator/src/connectors/summary.ts) mirrors
+   *  render/pages/connectors.ts's own `ConnectorSummary` field for field; see that page's top
+   *  comment for why the two are independently defined rather than one importing the other. */
+  connectors: IntegrationSummary[]
 }
 
 /** src/shared/question-type.ts owns the taxonomy and the aggregation math; this is just the shape. */
@@ -655,7 +661,7 @@ export async function buildDashboard(
   cloudflare: CloudflareOverview = missingCloudflareOverview(),
   valueSettings: DashboardValueSettings = NO_VALUE_SETTINGS
 ): Promise<DashboardPayload> {
-  const [seatsRaw, asks, pulses, proposals, audit, crm, packs, storedEvents, vault, issued, sessionsPage] = await Promise.all([
+  const [seatsRaw, asks, pulses, proposals, audit, crm, packs, storedEvents, vault, issued, sessionsPage, integrationRows] = await Promise.all([
     store.listSeats(),
     store.listAsks(2000),
     store.listPulses(now - 7 * DAY),
@@ -666,8 +672,14 @@ export async function buildDashboard(
     store.listEvents(80),
     store.listVaultMeta(),
     store.listIssuedLicenses(200),
-    store.listSessions({ since: now - 7 * DAY, limit: 1000 })
+    store.listSessions({ since: now - 7 * DAY, limit: 1000 }),
+    // Connectors (plan 6.10c): the same D1 query `GET /v1/admin/integrations` already runs
+    // (routes/integrations.ts), extending the pattern Licenses already uses -- reading real rows on
+    // first paint -- to Connectors. Groups does NOT do this yet (see render/pages/groups.ts's own
+    // doc comment); this is a deliberate, scoped extension, not "the existing pattern."
+    store.listIntegrationRows()
   ])
+  const connectors: IntegrationSummary[] = await Promise.all(integrationRows.map((row) => integrationSummary(store, row)))
   const seats = seatsRaw.filter(isRealSeat)
   const sessions = sessionsPage.rows
   const activeJti = new Set(issued.filter((l) => issuedLicenseActive(l, now)).map((l) => l.jti))
@@ -915,7 +927,11 @@ export async function buildDashboard(
             chips: seatContextChips(seatsById.get(a.device_id), {
               mode: a.mode,
               provider: a.provider,
-              cache: a.cache_status
+              cache: a.cache_status,
+              // Events page Name cell (plan 6.4): "for an ask its question type follows in
+              // --ink-3, never the question text" -- question_type is a closed, pre-classified
+              // taxonomy value (src/shared/question-type.ts), never the prompt itself.
+              questionType: a.question_type
             })
           }
         }),
@@ -1077,7 +1093,8 @@ export async function buildDashboard(
     },
     geo: realtimeGeoRows(seats, sessions),
     geoRegions: geoRegionRows(seats),
-    questions: buildQuestionsPayload(weekAsks)
+    questions: buildQuestionsPayload(weekAsks),
+    connectors
   }
 }
 

@@ -190,7 +190,12 @@ describe('product sidebar (#105)', () => {
     // rows -- the old monolith printed a static header regardless of data. Checked instead in
     // "events keep seat OS after a later ask ingest" below, once a real event exists.
     expect(html).toContain('Search seats')
-    expect(html).toContain('Search hostnames, emails, device ids')
+    // Events toolbar (plan 6.4, Tony 2026-09-06 fidelity clause: match the reference's toolbar
+    // exactly -- Listening, range, Filters, View, no visible search box). Text search still
+    // works through the Filters panel's own Profile field, checked here instead of the retired
+    // standalone search box's placeholder.
+    expect(html).toContain('placeholder="hostname, email or device id"')
+    expect(html).not.toContain('id="ev-search"')
     expect(html).toContain('data-rt-live-strip')
     expect(html).toContain('Seats 30m')
     expect(html).toContain('Live events')
