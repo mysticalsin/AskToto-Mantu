@@ -12,6 +12,8 @@ const POLL_MS = 6 * 60 * 60 * 1000
 export interface OverlayRuntimeSettings {
   operatorUrl?: string
   operatorIngestSecret?: string
+  /** Signs in place of the shared secret when this seat holds a license (operator-ingest.ts). */
+  operatorLicenseToken?: string
 }
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
@@ -43,8 +45,10 @@ function isOverlaySkillId(id: string): id is ModeSkillId {
 export async function pullOperatorSkillManifest(settings: OverlayRuntimeSettings): Promise<number> {
   const url = resolveUrl(settings)
   const secret = resolveSecret(settings)
-  if (!operatorUrlConfigured(settings) || !secret) return 0
-  const headers = operatorHmacHeaders(secret, hashOperatorId(getMachineId()), '')
+  const licenseToken = (settings.operatorLicenseToken || '').trim()
+  // Either credential signs (see canSign in operator-ingest.ts): a licensed seat needs no shared secret.
+  if (!operatorUrlConfigured(settings) || (!secret && !licenseToken)) return 0
+  const headers = operatorHmacHeaders(secret, hashOperatorId(getMachineId()), '', Date.now(), licenseToken)
   const res = await fetchImpl(`${url}/v1/skills/manifest`, { method: 'GET', headers })
   const text = await res.text()
   const inspected = inspectBundleResponse({

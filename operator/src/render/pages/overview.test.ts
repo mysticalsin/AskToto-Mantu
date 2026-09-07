@@ -117,7 +117,7 @@ describe('fleet-is-quiet banner', () => {
     const html = renderFleetContactBanner(stale)
     expect(html).toContain('data-ov-quiet')
     expect(html).toContain('No seat has reported in 3h')
-    expect(html).toContain('Operator URL and an ingest secret')
+    expect(html).toContain('an activated license or the shared ingest secret')
     // The zeros below must be explained, not left to be read as a real, idle fleet.
     expect(html).toContain('not because the fleet is idle')
     expect(html).not.toContain('style="')

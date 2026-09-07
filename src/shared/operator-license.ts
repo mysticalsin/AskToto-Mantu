@@ -124,6 +124,40 @@ export async function generateOperatorLicense(
   return { token, claims, last4: operatorLicenseLast4(token), days }
 }
 
+/**
+ * Rebuild the exact token that was handed out for a set of stored claims.
+ *
+ * The signature is a deterministic HMAC over `jti.iat.exp` and nothing else, and `issued_licenses`
+ * stores all three, so the Worker can reproduce a token it never kept a copy of. That is what lets
+ * a license act as its own credential: the seat holds the token, the Worker can re-derive it, and
+ * both sides reach the same per-seat key without the token or the ingest secret crossing the wire.
+ *
+ * Callers must confirm the result against the stored `key_hash` before trusting it -- see
+ * `seatKeyForLicense` in operator/src/licenses/seat-key.ts.
+ */
+export async function rebuildOperatorLicenseToken(
+  secret: string,
+  claims: OperatorLicenseClaims
+): Promise<string> {
+  const canonical = operatorLicenseCanonical(claims.jti, claims.iat, claims.exp)
+  return `${canonical}.${await hmacSha256B64url(secret, canonical)}`
+}
+
+/**
+ * The per-seat ingest key derived from a license token, as hex.
+ *
+ * WebCrypto side (Worker). The desktop computes the identical bytes with node:crypto in
+ * src/main/operator-hmac-sign.ts; operator/src/seat-key.parity.test.ts proves the two agree, which
+ * is the property the whole scheme rests on.
+ */
+export async function operatorSeatKeyFromLicense(token: string): Promise<string> {
+  const key = await crypto.subtle.importKey('raw', enc.encode(token), { name: 'HMAC', hash: 'SHA-256' }, false, [
+    'sign'
+  ])
+  const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(OPERATOR_SEAT_KEY_INFO)))
+  return [...sig].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 export async function verifyOperatorLicense(
   secret: string,
   token: string,

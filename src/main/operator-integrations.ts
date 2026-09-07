@@ -138,6 +138,8 @@ function applyIntegrations(version: number, integrations: OperatorIntegration[],
 export interface OperatorIntegrationsSettings {
   operatorUrl?: string
   operatorIngestSecret?: string
+  /** Signs in place of the shared secret when this seat holds a license (operator-ingest.ts). */
+  operatorLicenseToken?: string
 }
 
 /**
@@ -153,12 +155,14 @@ export async function fetchOperatorIntegrations(
 ): Promise<OperatorIntegration[] | null> {
   const url = (settings.operatorUrl || '').trim().replace(/\/$/, '')
   const secret = (settings.operatorIngestSecret || '').trim()
-  if (!url || !secret) return null
+  const licenseToken = (settings.operatorLicenseToken || '').trim()
+  // Either credential signs (see canSign in operator-ingest.ts): a licensed seat needs no shared secret.
+  if (!url || (!secret && !licenseToken)) return null
   if (inFlight) return inFlight
   const attempt = (async (): Promise<OperatorIntegration[] | null> => {
     try {
       const deviceId = hashOperatorId(getMachineId())
-      const headers = operatorHmacHeaders(secret, deviceId, '')
+      const headers = operatorHmacHeaders(secret, deviceId, '', Date.now(), licenseToken)
       const res = await fetchImpl(`${url}/v1/integrations`, { method: 'GET', headers })
       if (res.status === 403) {
         // Seat not entitled: an empty grant, not an error to retry hot. Clears any previously-cached

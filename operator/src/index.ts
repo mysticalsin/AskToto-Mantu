@@ -25,6 +25,7 @@ import { d1Store, type D1DatabaseLike } from './d1'
 import { fundedProviders } from './keys'
 import { licenseFromIngest, parseLicenseId, seatAuthorizedForKeys } from './fleet'
 import { claimIssuedLicense } from './licenses/activate'
+import { seatKeyForLicense } from './licenses/seat-key'
 import { matchRoute } from './routes/registry'
 import './routes'
 import { computeIntegrationsVersion, handleIntegrationsSeat } from './routes/integrations-seat'
@@ -248,7 +249,21 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     url.pathname === '/v1/integrations'
   ) {
     const bodyText = request.method === 'GET' ? '' : await request.text()
-    const hmac = await verifyIngestHmac(request, bodyText, env.OPERATOR_INGEST_SECRET, now, (n) => store.takeNonce(n, now))
+    // A seat may sign either as itself (the shared OPERATOR_INGEST_SECRET, the original scheme) or
+    // as the license it holds. The license header picks the second: the Worker rebuilds that
+    // license's token from its stored claims and derives the same per-seat key the desktop derived
+    // from the token in its hand, so a license key alone is enough to bring a seat online and a
+    // seat can only ever sign as the license it actually has. See licenses/seat-key.ts.
+    const seatLicenseJti = parseLicenseId(request.headers.get(OPERATOR_HMAC_HEADERS.license))
+    let signingKey = env.OPERATOR_INGEST_SECRET
+    if (seatLicenseJti) {
+      const resolved = await seatKeyForLicense(store, env.OPERATOR_INGEST_SECRET ?? '', seatLicenseJti, now)
+      // One message for every failure: which licenses exist is not something an unauthenticated
+      // caller gets to probe by watching the wording change.
+      if (!resolved.key) return json({ ok: false, error: 'license cannot sign', code: 'license' }, 401)
+      signingKey = resolved.key
+    }
+    const hmac = await verifyIngestHmac(request, bodyText, signingKey, now, (n) => store.takeNonce(n, now))
     if (!hmac.ok) return json({ ok: false, error: hmac.error, ...(hmac.code ? { code: hmac.code } : {}) }, hmac.status)
     const bucket = rateBucketFor(url.pathname)
     if (bucket && (await store.hitRate(`${bucket.key}:${hmac.deviceId}`, now, RATE_WINDOW_MS, bucket.max))) {

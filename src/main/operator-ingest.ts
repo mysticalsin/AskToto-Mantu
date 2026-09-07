@@ -30,6 +30,10 @@ export interface OperatorRuntimeSettings {
   /** Operator seat license (METIS-OP-1) jti/last4, once activated (operator-license-activate.ts). */
   operatorLicenseJti?: string
   operatorLicenseLast4?: string
+  /** The license token itself. Signs this seat's requests when there is no shared ingest secret:
+   *  the Worker rebuilds the same token from its stored claims and derives the same key, so the
+   *  token never leaves this machine and the license alone is enough to bring the seat online. */
+  operatorLicenseToken?: string
 }
 
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null
@@ -55,6 +59,22 @@ function resolveUrl(settings: OperatorRuntimeSettings, env = process.env): strin
 
 function resolveSecret(settings: OperatorRuntimeSettings, env = process.env): string {
   return (settings.operatorIngestSecret || env.METIS_OPERATOR_INGEST_SECRET || '').trim()
+}
+
+function resolveLicenseToken(settings: OperatorRuntimeSettings): string {
+  return (settings.operatorLicenseToken || '').trim()
+}
+
+/**
+ * Whether this seat can sign a request at all.
+ *
+ * Either credential is sufficient. A seat with an activated license needs nothing else -- that is
+ * the whole point of issuing one -- and a seat with the shared ingest secret keeps working exactly
+ * as it did. With neither, the runtime stays silent rather than sending requests that cannot be
+ * verified.
+ */
+function canSign(settings: OperatorRuntimeSettings, env = process.env): boolean {
+  return Boolean(resolveSecret(settings, env) || resolveLicenseToken(settings))
 }
 
 function osLabel(): 'darwin' | 'win' | string {
@@ -149,12 +169,13 @@ async function signedPost(
   url: string,
   secret: string,
   path: string,
-  bodyObj: Record<string, unknown>
+  bodyObj: Record<string, unknown>,
+  licenseToken = ''
 ): Promise<{ ok: boolean; json: unknown; status: number }> {
   const body = JSON.stringify(bodyObj)
   const headers = {
     'content-type': 'application/json',
-    ...operatorHmacHeaders(secret, deviceId(), body)
+    ...operatorHmacHeaders(secret, deviceId(), body, Date.now(), licenseToken)
   }
   const res = await fetchImpl(`${url}${path}`, { method: 'POST', headers, body })
   const text = await res.text()
@@ -198,10 +219,10 @@ function shouldQueueOnFailure(status: number | undefined): boolean {
 /** POST one `/v1/ingest` event (ask, crm, rating, listen/recap). On success, nothing else happens. On a
  *  failure eligible for retry (network error, 429, 5xx), the exact same body is appended to the durable
  *  outbox so the Worker's INSERT OR REPLACE on (id, ts) dedups it once it lands. Never throws. */
-async function postIngestWithQueue(url: string, secret: string, bodyObj: Record<string, unknown>): Promise<void> {
+async function postIngestWithQueue(url: string, secret: string, bodyObj: Record<string, unknown>, licenseToken = ''): Promise<void> {
   let result: QueueSendResult
   try {
-    const res = await signedPost(url, secret, '/v1/ingest', bodyObj)
+    const res = await signedPost(url, secret, '/v1/ingest', bodyObj, licenseToken)
     result = { ok: res.ok, status: res.status, retryAfterMs: retryAfterMsFromJson(res.json) }
   } catch (e) {
     mainLog.warn('[operator] ingest failed:', e)
@@ -243,7 +264,7 @@ export function setOperatorFundedProvidersForTests(ids: string[]): void {
 export function operatorAskTransport(settings: OperatorRuntimeSettings): { url: string; secret: string } | null {
   const url = resolveUrl(settings)
   const secret = resolveSecret(settings)
-  if (!url || !secret) return null
+  if (!url || !canSign(settings)) return null
   return { url, secret }
 }
 
@@ -252,11 +273,12 @@ export async function operatorHeartbeat(
 ): Promise<{ ok: boolean; retry: string[] }> {
   const url = resolveUrl(settings)
   const secret = resolveSecret(settings)
-  if (!operatorUrlConfigured(settings) || !secret) return { ok: false, retry: [] }
+  const licenseToken = resolveLicenseToken(settings)
+  if (!operatorUrlConfigured(settings) || !canSign(settings)) return { ok: false, retry: [] }
   // Drain the durable outbox on every tick, BEFORE the heartbeat itself, so a just-flushed queue is
   // reflected in the {queued, dropped} counts this same heartbeat reports. Heartbeats are never queued.
   const queueReport = await drainOperatorQueue(queueDir(), Date.now(), async (path, body) => {
-    const res = await signedPost(url, secret, path, body)
+    const res = await signedPost(url, secret, path, body, licenseToken)
     return { ok: res.ok, status: res.status, retryAfterMs: retryAfterMsFromJson(res.json) }
   }).catch((e) => {
     mainLog.warn('[operator] queue drain failed:', e)
@@ -289,7 +311,7 @@ export function startOperatorRuntime(
 ): void {
   stopOperatorRuntime()
   const settings = getSettings()
-  if (!operatorUrlConfigured(settings) || !resolveSecret(settings)) return
+  if (!operatorUrlConfigured(settings) || !canSign(settings)) return
   const tick = async (): Promise<void> => {
     const beat = await operatorHeartbeat(getSettings())
     if (beat.retry.length && hooks?.onCrmRetry) {
@@ -351,7 +373,7 @@ export async function recordOperatorAsk(
 ): Promise<void> {
   const url = resolveUrl(settings)
   const secret = resolveSecret(settings)
-  if (!operatorUrlConfigured(settings) || !secret) return
+  if (!operatorUrlConfigured(settings) || !canSign(settings)) return
   lastAskId = event.id
   const payload: Record<string, unknown> = {
     id: event.id,
@@ -381,7 +403,7 @@ export async function recordOperatorAsk(
     const q = sanitizeQuestion(event.question)
     if (q) payload.question = q
   }
-  await postIngestWithQueue(url, secret, payload)
+  await postIngestWithQueue(url, secret, payload, resolveLicenseToken(settings))
 }
 
 export async function recordOperatorCrmSend(
@@ -390,7 +412,7 @@ export async function recordOperatorCrmSend(
 ): Promise<void> {
   const url = resolveUrl(settings)
   const secret = resolveSecret(settings)
-  if (!operatorUrlConfigured(settings) || !secret) return
+  if (!operatorUrlConfigured(settings) || !canSign(settings)) return
   const title = event.title?.replace(/\s+/g, ' ').trim().slice(0, 160)
   await postIngestWithQueue(url, secret, {
     event: 'crm',
@@ -408,7 +430,7 @@ export async function recordOperatorCrmSend(
     ...(event.error ? { error: event.error.slice(0, 200) } : {}),
     ...(event.credentialSource ? { credentialSource: event.credentialSource } : {}),
     ...seatMeta(settings)
-  })
+  }, resolveLicenseToken(settings))
 }
 
 /** `askId` is the real answer id from the renderer's feedback IPC (App.tsx threads ask.answer.id through
@@ -422,6 +444,6 @@ export async function recordOperatorRating(
 ): Promise<void> {
   const url = resolveUrl(settings)
   const secret = resolveSecret(settings)
-  if (!operatorUrlConfigured(settings) || !secret || !askId) return
-  await postIngestWithQueue(url, secret, { event: 'rating', id: askId, rating, ...seatMeta(settings) })
+  if (!operatorUrlConfigured(settings) || !canSign(settings) || !askId) return
+  await postIngestWithQueue(url, secret, { event: 'rating', id: askId, rating, ...seatMeta(settings) }, resolveLicenseToken(settings))
 }

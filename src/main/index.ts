@@ -3898,7 +3898,10 @@ function registerIpc(): void {
     }
     const s = getSettings()
     return {
-      configured: operatorUrlConfigured(s) && !!s.operatorIngestSecret.trim(),
+      // Either credential is enough to reach the Worker: an activated license signs on its own
+      // (operator-ingest.ts's canSign), which is the point of issuing one. Requiring the shared
+      // ingest secret here would have Settings report a licensed, working seat as unconfigured.
+      configured: operatorUrlConfigured(s) && (!!s.operatorIngestSecret.trim() || !!s.operatorLicenseToken.trim()),
       tier: s.operatorTier,
       entitlements: s.operatorEntitlements,
       licenseLast4: s.operatorLicenseLast4,
