@@ -128,6 +128,48 @@ describe('ROI and licenses from real D1 ingest only', () => {
     expect(dash.notices.every((n) => 'profile' in n && 'city' in n && 'os' in n)).toBe(true)
   })
 
+  it('shows licensed · last4 when an active issued license is bound even if the seat row says unlicensed', async () => {
+    const store = memoryStore()
+    await store.putIssuedLicense({
+      jti: '626f3683991c12c6',
+      last4: 'ZRl4',
+      key_hash: 'hash',
+      days: 7,
+      iat: Math.floor(NOW / 1000),
+      exp: Math.floor(NOW / 1000) + 7 * 24 * 60 * 60,
+      revoked: 0,
+      created_at: NOW,
+      created_by: 'tony.walteur@gmail.com',
+      activated_device: 'baa2dc6edd670a9894ed402b5a9b9246',
+      activated_at: NOW
+    })
+    await store.upsertSeat({
+      device_id: 'baa2dc6edd670a9894ed402b5a9b9246',
+      seat_hash: 'seat',
+      os: 'darwin',
+      app_version: '1.8.6',
+      first_seen: NOW - 3_600_000,
+      last_seen: NOW,
+      country: 'CA',
+      city: 'Longueuil',
+      lat: 45.5,
+      lon: -73.5,
+      last_index_at: null,
+      hostname: 'Totos-Mac.local',
+      sso_email: null,
+      license: 'unlicensed · ZRl4',
+      approval: 'pending',
+      license_jti: '626f3683991c12c6'
+    })
+    const dash = await buildDashboard(store, 'tony.walteur@gmail.com', NOW)
+    expect(dash.licenses.empty).toBe(false)
+    expect(dash.licenses.rows[0]?.hostname).toBe('Totos-Mac.local')
+    expect(dash.licenses.rows[0]?.license).toBe('licensed · ZRl4')
+    expect(dash.licenses.rows[0]?.keysAuthorized).toBe(true)
+    expect(dash.roi.licensed).toBe(1)
+    expect(dash.profiles[0]?.license).toBe('licensed · ZRl4')
+  })
+
   it('does not invent cost when no asks were ingested', async () => {
     const dash = await buildDashboard(memoryStore(), 'tony.walteur@gmail.com', NOW)
     expect(dash.roi.costToday).toBeNull()

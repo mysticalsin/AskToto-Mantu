@@ -1,4 +1,5 @@
 import { normalizeCrmRow, type CrmSendRow } from './crm'
+import { mergeSeatLicenseLabel } from './fleet'
 import { applyPulse, isSessionStale, type SessionRow as SessionState } from './sessions'
 import type {
   AskRow,
@@ -217,9 +218,10 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
     },
     async upsertSeat(row) {
       const prev = await db
-        .prepare('SELECT first_seen, approval FROM seats WHERE device_id = ?')
+        .prepare('SELECT first_seen, approval, license, license_jti FROM seats WHERE device_id = ?')
         .bind(row.device_id)
-        .first<Pick<SeatRow, 'first_seen' | 'approval'>>()
+        .first<Pick<SeatRow, 'first_seen' | 'approval' | 'license' | 'license_jti'>>()
+      const license = mergeSeatLicenseLabel(row.license, prev?.license, row.license_jti ?? prev?.license_jti)
       await db
         .prepare(
           `INSERT INTO seats (device_id, seat_hash, os, app_version, first_seen, last_seen, country, city, region, lat, lon, last_index_at, hostname, sso_email, license, approval, license_jti)
@@ -255,7 +257,7 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
           row.last_index_at,
           row.hostname,
           row.sso_email,
-          row.license,
+          license,
           row.approval || prev?.approval || 'pending',
           row.license_jti ?? null
         )

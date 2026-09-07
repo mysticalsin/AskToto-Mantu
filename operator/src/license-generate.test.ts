@@ -4,6 +4,7 @@ import { hmacHex } from './hmac'
 import { sha256Hex } from './crypto'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { verifyOperatorLicense } from '../../src/shared/operator-license'
+import { buildDashboard } from './dashboard'
 import { memoryStore } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY, TEST_VAULT_KEY } from './test-fixtures'
 
@@ -211,5 +212,53 @@ describe('Operator generate license', () => {
     const expiredJson = (await expiredBeat.json()) as { approved?: boolean; fundedProviders?: string[] }
     expect(expiredJson.approved).toBe(false)
     expect(expiredJson.fundedProviders).toEqual([])
+  })
+
+  it('stores and displays licensed · last4 when heartbeat sends member-pass unlicensed plus Operator jti', async () => {
+    store = memoryStore()
+    const minted = await handleRequest(
+      new Request('https://operator.test/v1/admin/licenses/generate', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ days: 7 })
+      }),
+      env(),
+      { access: tony },
+      { store, now: NOW }
+    )
+    const lic = (await minted.json()) as { jti: string; last4: string }
+
+    const activate = await signed(
+      '/v1/heartbeat',
+      {
+        os: 'darwin',
+        appVersion: '1.8.6',
+        hostname: 'Totos-Mac.local',
+        license: 'unlicensed',
+        licenseLast4: lic.last4,
+        licenseId: lic.jti
+      },
+      'baa2dc6edd670a9894ed402b5a9b9246',
+      'hb-member-unlicensed'
+    )
+    expect(activate.status).toBe(200)
+    const seat = await store.getSeat('baa2dc6edd670a9894ed402b5a9b9246')
+    expect(seat?.license).toBe(`licensed · ${lic.last4}`)
+    expect(seat?.license_jti).toBe(lic.jti)
+
+    const wipe = await signed(
+      '/v1/heartbeat',
+      { os: 'darwin', appVersion: '1.8.6', hostname: 'Totos-Mac.local', license: 'unlicensed' },
+      'baa2dc6edd670a9894ed402b5a9b9246',
+      'hb-member-unlicensed-later'
+    )
+    expect(wipe.status).toBe(200)
+    expect((await store.getSeat('baa2dc6edd670a9894ed402b5a9b9246'))?.license).toBe(`licensed · ${lic.last4}`)
+
+    const dash = await buildDashboard(store, 'tony.walteur@gmail.com', NOW)
+    const row = dash.licenses.rows.find((r) => r.device === 'baa2dc6edd670a9894ed402b5a9b9246')
+    expect(row?.hostname).toBe('Totos-Mac.local')
+    expect(row?.license).toBe(`licensed · ${lic.last4}`)
+    expect(row?.keysAuthorized).toBe(true)
   })
 })
