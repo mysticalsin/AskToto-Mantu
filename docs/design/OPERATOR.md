@@ -61,6 +61,9 @@ Tony sets `CF_OAUTH_CLIENT_ID` + `CF_OAUTH_CLIENT_SECRET` on the Worker.
 Missing secrets → 503 after Access. Métis Settings tile (if any) is
 KineticGrid `b8a677b`, not this Worker tip.
 
+Portal-hosted keys for licensed seats (Ask E2E, CF DeepSeek bind, cost compare):
+[METIS-CF-LLM-GATEWAY.md](METIS-CF-LLM-GATEWAY.md). FRAME. OAuth LAST. Pack HOLD.
+
 ## Security (unchanged)
 
 - Unauth console GET **302** Access. Unauth `/v1/admin/*` **401** JSON.
