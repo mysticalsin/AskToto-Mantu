@@ -28,6 +28,24 @@ export function operatorLicenseCanonical(jti: string, iat: number, exp: number):
   return `${OPERATOR_LICENSE_PREFIX}.${jti}.${iat}.${exp}`
 }
 
+/**
+ * Domain separator for the per-seat ingest key derived from a license token.
+ *
+ * A seat used to need OPERATOR_INGEST_SECRET -- the Worker's own signing secret -- pasted into
+ * Settings before it could talk to the Operator at all, which made a license key on its own useless:
+ * there was no way to activate a seat with the thing generated for it. Every seat also shared one
+ * secret, so any seat could sign a heartbeat claiming any other seat's license id.
+ *
+ * Both problems go away if the license IS the credential. The token's signature is a deterministic
+ * HMAC over `jti.iat.exp` (see `generateOperatorLicense`), and the Worker stores those three claims,
+ * so it can rebuild the exact token from its own secret and derive the same key the seat did. The
+ * seat only ever holds its own token, and can therefore only ever sign as itself.
+ *
+ * Keyed with the token and messaged with this constant, rather than the reverse: the token is the
+ * secret here, and the constant is the label saying what the derived key is for.
+ */
+export const OPERATOR_SEAT_KEY_INFO = 'metis-seat-key-v1'
+
 export function parseOperatorLicenseDays(raw: unknown): number | null {
   const n = typeof raw === 'number' ? raw : typeof raw === 'string' ? Number(raw) : NaN
   if (!Number.isInteger(n) || n < 1 || n > 365) return null
