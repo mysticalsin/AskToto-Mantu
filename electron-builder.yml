@@ -192,7 +192,11 @@ mac:
   # here is exactly that: shipped once per arch under its own path, identical in both halves, and
   # selected at runtime rather than merged. metis-mac-helper needs no entry — it is already a fat
   # binary, which @electron/universal detects and skips on its own.
-  x64ArchFiles: '**/{@img,onnxruntime-node,sherpa-onnx-darwin-arm64,sherpa-onnx-darwin-x64,ffmpeg,llama}/**'
+  # managed-node is the same pattern as llama/ffmpeg: per-arch trees copied into BOTH
+  # universal halves, selected at runtime. Without this entry @electron/universal aborts:
+  # Detected file "Contents/Resources/managed-node/darwin-arm64/bin/node" that's the same
+  # in both x64 and arm64 builds (CI macOS package on 11dd883 / PR 164).
+  x64ArchFiles: '**/{@img,onnxruntime-node,sherpa-onnx-darwin-arm64,sherpa-onnx-darwin-x64,ffmpeg,llama,managed-node}/**'
   hardenedRuntime: true
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.plist
