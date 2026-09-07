@@ -42,7 +42,7 @@ function requireFileEnv(name, label) {
 switch (mode) {
   case 'mac':
     requireAny(['GH_TOKEN', 'GITHUB_TOKEN'], 'GitHub release token')
-    {
+    if (!process.exitCode) {
       const macSecrets = ['CSC_LINK', 'CSC_KEY_PASSWORD', 'APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID']
       const missingMac = macSecrets.filter((name) => !present(name))
       if (missingMac.length === 0) {
