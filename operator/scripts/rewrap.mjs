@@ -295,7 +295,7 @@ counts only and writes nothing. Never prints a key or a plaintext value.
 Required environment: OPERATOR_VAULT_KEY_OLD, OPERATOR_VAULT_KEY (both base64, 32 bytes).`)
 }
 
-const isMain = process.argv[1] && import.meta.url === `file://${process.argv[1]}`
+const isMain = process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href
 if (isMain) {
   const args = parseArgs(process.argv.slice(2))
   if (args.help) {
