@@ -1,6 +1,7 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import { AlertCircle, Loader2 } from 'lucide-react'
 import { emptyLicenseStatus, type IdentitySnapshot, type MemberActivateResult } from '@shared/ipc'
+import { isOperatorLicenseKey } from '@shared/operator-license'
 import { IdentityCard } from './IdentityCard'
 import { prefersReducedMotion } from '../lib/identity-card-motion'
 
@@ -40,6 +41,8 @@ export function IdentitySection(): JSX.Element {
   const [busy, setBusy] = useState(false)
   const [importBusy, setImportBusy] = useState(false)
   const [result, setResult] = useState<MemberActivateResult | null>(null)
+  /** Outcome of routing an Operator (METIS-OP-1) key entered here to Operator activation. */
+  const [operatorNote, setOperatorNote] = useState<string | null>(null)
   const mounted = useRef(true)
 
   useEffect(() => {
@@ -62,8 +65,30 @@ export function IdentitySection(): JSX.Element {
       })
       return
     }
+    // An Operator seat license (METIS-OP-1) belongs to the OTHER license system, the one in
+    // Settings, Operator. Handing it to member activation checks it against a service that is not
+    // open yet and returns it unused -- which is what this card's own copy promises, and exactly
+    // what happened: the key looked accepted, no seat license was stored, and Listen kept refusing
+    // because the Operator had granted the seat no tier. Two license systems in one app is the
+    // design; silently eating a key meant for the other one is not.
+    if (isOperatorLicenseKey(licenseKey)) {
+      setBusy(true)
+      setResult(null)
+      setOperatorNote(null)
+      const op = await window.toto.operatorLicenseActivate({ licenseKey })
+      if (!mounted.current) return
+      setBusy(false)
+      if (op.ok) {
+        setKey('')
+        setOperatorNote('Operator license activated. It applies on the next heartbeat, within a minute.')
+      } else {
+        setOperatorNote(op.error || 'Could not activate this Operator license.')
+      }
+      return
+    }
     setBusy(true)
     setResult(null)
+    setOperatorNote(null)
     const r = await window.toto.memberLicenseActivate({ licenseKey })
     if (!mounted.current) return
     setBusy(false)
@@ -130,6 +155,12 @@ export function IdentitySection(): JSX.Element {
           <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-foreground)]">
             <AlertCircle size={13} className="mt-px shrink-0 text-[color:var(--cl-primary)]" />
             <span>{message}</span>
+          </div>
+        )}
+        {operatorNote && (
+          <div className="flex items-start gap-1.5 text-[11px] text-[color:var(--cl-foreground)]">
+            <AlertCircle size={13} className="mt-px shrink-0 text-[color:var(--cl-primary)]" />
+            <span>{operatorNote}</span>
           </div>
         )}
         <button
