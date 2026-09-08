@@ -136,6 +136,12 @@ export function operatorGateReason(
   if (now - snapshot.at > OPERATOR_ENTITLEMENT_GRACE_MS) {
     return `Operator has not been reachable in over 24 hours. ${label} is off until the next heartbeat.`
   }
+  // A seat the Operator answered but granted no tier has no license at all, and saying its "Métis
+  // license" lacks the feature sends the reader to the wrong place: the Operator license box in
+  // Settings is empty, not wrong. Name the actual state instead, and where to fix it.
+  if (!snapshot.tier) {
+    return `No active Operator license on this seat. Add one under Settings, Operator to turn ${label} on.`
+  }
   const tierLabel = snapshot.tier === 'metis-light' ? 'Métis Light' : 'Métis'
   return `Your ${tierLabel} license does not include ${label}.`
 }
