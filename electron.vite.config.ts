@@ -17,15 +17,21 @@ import tailwindcss from '@tailwindcss/vite'
 //   arch -x86_64 release/mac-universal/Metis.app/Contents/MacOS/Metis
 // No single blob satisfies both slices, so a universal package cannot use bytecode at all.
 //
-// Bytecode therefore stays ON wherever the package is single-architecture (Windows, and the
-// arm64-only installers:mac / release:mas chains) and is turned OFF only for the mac UNIVERSAL
-// chains, which set ASKTOTO_MAC_UNIVERSAL=1 on their `npm run build` step (package.json: dist,
-// dist:local, release:build:mac). The flag is used rather than process.platform because the SAME
-// macOS host builds both kinds, so the platform cannot tell them apart.
+// Bytecode therefore stays ON wherever the package is single-architecture AND the build host's
+// Electron is the same OS/arch that will run the app (native Windows packs, arm64-only
+// installers:mac / release:mas). It is turned OFF for:
+//   - mac UNIVERSAL chains (ASKTOTO_MAC_UNIVERSAL=1 on `npm run build` — package.json: dist,
+//     dist:local, release:build:mac). Same macOS host builds both kinds, so platform alone
+//     cannot tell them apart.
+//   - Cross-OS packs (ASKTOTO_PLAIN_MAIN=1), e.g. Linux → Windows. electron-vite compiles .jsc
+//     by spawning the *build host* Electron; a Linux-built .jsc is rejected by Windows Electron
+//     with the same cachedDataRejected DOA that hit the 1.2.0 / 1.5.3 Windows exes and the
+//     1.6.0 Intel mac slice. Native `dist:win` on windows-latest keeps bytecode (no flag).
 //
-// The trade-off is deliberate: the mac universal artifact ships a readable main-process bundle
-// instead of bytecode. An app that starts beats an app that is obfuscated and does not.
+// The trade-off is deliberate: those artifacts ship a readable main-process bundle instead of
+// bytecode. An app that starts beats an app that is obfuscated and does not.
 const MAC_UNIVERSAL = process.env.ASKTOTO_MAC_UNIVERSAL === '1'
+const PLAIN_MAIN = process.env.ASKTOTO_PLAIN_MAIN === '1'
 
 export default defineConfig({
   main: {
@@ -34,8 +40,8 @@ export default defineConfig({
     // read out of the asar. Renderer/preload stay minified-only (a sandboxed preload and a Chromium
     // renderer can't load bytecode). This is a hardening bar, not absolute protection.
     build: {
-      // bytecode: true everywhere EXCEPT the mac universal package — see the MQA-207 note above.
-      bytecode: !MAC_UNIVERSAL,
+      // bytecode: true by default; off for mac universal and cross-OS plain-main packs — see above.
+      bytecode: !MAC_UNIVERSAL && !PLAIN_MAIN,
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/main/index.ts'),

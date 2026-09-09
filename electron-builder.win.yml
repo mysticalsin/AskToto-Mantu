@@ -26,6 +26,9 @@ files:
   - '!node_modules/@img/sharp-libvips-darwin-*{,/**/*}'
   - '!node_modules/@img/sharp-linux-*{,/**/*}'
   - '!node_modules/@img/sharp-libvips-linux-*{,/**/*}'
+  # sharp also publishes linuxmusl packages; the linux-* globs above do not match them.
+  - '!node_modules/@img/sharp-linuxmusl-*{,/**/*}'
+  - '!node_modules/@img/sharp-libvips-linuxmusl-*{,/**/*}'
   - '!out/**/*.map'
   - '!**/*.d.ts'
 win:
