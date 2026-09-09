@@ -1,9 +1,10 @@
 name: Unsigned Windows pack
 
-# Manual unsigned Windows installer for a chosen git_ref (default main).
-# Artifacts only — does not create or mutate a GitHub Release. Signing secrets are not
-# required and must not be consulted: CSC / WIN_CSC / APPLE / GH_TOKEN stay unused,
-# check-release-secrets and verify-signing are not run.
+# Native windows-latest pack for a chosen git_ref (workflow_dispatch) or any push to
+# cursor/windows-pack-* branches. Artifacts only — does not create/mutate a GitHub Release.
+# Signing secrets are not consulted: CSC / WIN_CSC stay unused; check-release-secrets and
+# verify-signing are not run. Launch + runtime gates DO run — this is the path that proves
+# Metis.exe actually opens on Windows (unlike a Linux cross-pack).
 on:
   workflow_dispatch:
     inputs:
@@ -12,6 +13,9 @@ on:
         required: true
         type: string
         default: main
+  push:
+    branches:
+      - 'cursor/windows-pack-**'
 
 jobs:
   unsigned-win-pack:
@@ -21,7 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.git_ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.git_ref || github.sha }}
           fetch-depth: 0
 
       # Same ffmpeg-sidecar-v1 provision as release.yml release-windows. windows-latest
@@ -87,6 +91,12 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: npx --no-install electron-builder --config electron-builder.win.yml --win --x64 --publish never
+
+      - name: Runtime gate (Windows)
+        run: node scripts/check-packaged-runtime.mjs win --post-sign
+
+      - name: Launch gate (proves Metis.exe opens on Windows)
+        run: node scripts/check-packaged-launch.mjs release/win-unpacked/Metis.exe
 
       - uses: actions/upload-artifact@v4
         with:

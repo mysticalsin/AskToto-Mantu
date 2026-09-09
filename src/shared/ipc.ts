@@ -1059,6 +1059,8 @@ export const BaseSettingsSchema = z.object({
   autoSaveTranscripts: z.boolean().default(false),
   launchAtLogin: z.boolean().default(false),
   onboardingDone: z.boolean().default(false),
+  // Windows: one-shot toast after launch so skipTaskbar + island park is not read as "won't open".
+  winRunningHintShown: z.boolean().default(false),
   // When onboarding finished (ms). Anchors the 10-minute "Add your API key" nudge so it expires on a
   // wall clock instead of nagging forever, and survives relaunch (a per-session timer would reset it). 0
   // = never finished (or a legacy profile that predates this field; the app backfills it once on load).
@@ -1596,6 +1598,7 @@ export const DEFAULT_SETTINGS: Settings = {
   autoSaveTranscripts: false,
   launchAtLogin: false,
   onboardingDone: false,
+  winRunningHintShown: false,
   onboardingDoneAt: 0,
   recordingConsent: false,
   playListenChime: true,

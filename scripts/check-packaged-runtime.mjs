@@ -631,6 +631,35 @@ if (target === 'mac') {
   console.log(`[check:packaged-runtime] OK mac main process is plain JavaScript (${mainBytes} bytes, 0 .jsc)`)
 }
 
+// Cross-OS Windows packs (Linux/mac host → win target) and explicit ASKTOTO_PLAIN_MAIN=1 builds must
+// not ship host-compiled .jsc — Windows Electron rejects foreign V8 cached data with cachedDataRejected
+// (1.2.0 / 1.5.3 DOA, and the 1.8.9 Linux cross-pack). Native windows-latest packs keep bytecode.
+if (target === 'win' && (process.env.ASKTOTO_PLAIN_MAIN === '1' || process.platform !== 'win32')) {
+  const mainEntries = listPackage(join(resourcesRoot, 'app.asar')).filter((entry) =>
+    /^[\/]out[\/]main[\/]/.test(entry)
+  )
+  if (!mainEntries.length) throw new Error('app.asar contains no out/main entries — the main process is missing')
+  const bytecode = mainEntries.filter((entry) => entry.toLowerCase().endsWith('.jsc'))
+  if (bytecode.length) {
+    throw new Error(
+      `Windows package built on ${process.platform} carries V8 bytecode (${bytecode.join(', ')}) — ` +
+        `Windows Electron will die on launch with cachedDataRejected. Rebuild with ASKTOTO_PLAIN_MAIN=1 ` +
+        `(electron.vite.config.ts) from a clean out/, or pack on windows-latest.`
+    )
+  }
+  const loader = mainEntries.find((entry) => /[\/]index\.js$/.test(entry))
+  if (!loader) throw new Error('app.asar has no out/main/index.js — the main-process entry is missing')
+  const mainBytes = extractFile(join(resourcesRoot, 'app.asar'), loader.replace(/^[\/]+/, '')).length
+  if (mainBytes < 50_000) {
+    throw new Error(
+      `out/main/index.js is only ${mainBytes} bytes — bytecode shim, not a plain-main Windows bundle.`
+    )
+  }
+  console.log(
+    `[check:packaged-runtime] OK win main process is plain JavaScript (${mainBytes} bytes, 0 .jsc; host=${process.platform})`
+  )
+}
+
 if (target === 'mac') {
   const contentsDir = dirname(resourcesRoot)
   const appRoot = dirname(contentsDir)
