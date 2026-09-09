@@ -79,6 +79,11 @@ export const IPC = {
   appleSpeechFeed: 'apple-speech:feed',
   // Speaker Intelligence — Whisper's speaker-embedding tap. echo:true means operator loopback bleed.
   speakerEmbed: 'speaker:embed',
+  // Voiceprint store + session rename (1.9.0 multi-speaker UX). Local-only; never leaves the device.
+  speakerProfilesList: 'speaker:profiles:list',
+  speakerProfileDelete: 'speaker:profiles:delete',
+  speakerPromote: 'speaker:promote',
+  speakerFinalize: 'speaker:finalize',
   askStart: 'ask:start',
   askCancel: 'ask:cancel',
   // Explicit "new chat" boundary: clears the main-owned carriers of cross-question state (the server-side

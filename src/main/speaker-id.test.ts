@@ -78,6 +78,21 @@ describe('labelWindow', () => {
     expect(id.listProfiles()).toEqual([{ name: 'Jane Doe', samples: 3 }])
   })
 
+  it('promoteCluster enrolls from a single buffered window (manual Review rename)', () => {
+    const id = makeId(dir)
+    expect(id.labelWindow(windowFor(2))).toMatchObject({ name: 'Speaker 1', source: 'cluster' })
+    expect(id.promoteCluster('Speaker 1', 'Ada Lovelace')).toBe(true)
+    expect(id.listProfiles()).toEqual([{ name: 'Ada Lovelace', samples: 1 }])
+    expect(id.labelWindow(windowFor(2))).toMatchObject({ name: 'Ada Lovelace', source: 'profile' })
+  })
+
+  it('promoteCluster refuses empty buffers / reserved operator name', () => {
+    const id = makeId(dir)
+    expect(id.promoteCluster('Speaker 1', 'Ghost')).toBe(false)
+    expect(id.labelWindow(windowFor(2))).toMatchObject({ name: 'Speaker 1' })
+    expect(id.promoteCluster('Speaker 1', '__operator__')).toBe(false)
+  })
+
   it('deleteProfile removes the voiceprint (privacy contract)', () => {
     const id = makeId(dir)
     id.enroll('Jane Doe', [windowFor(2)])

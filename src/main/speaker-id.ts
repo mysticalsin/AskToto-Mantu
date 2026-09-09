@@ -195,6 +195,12 @@ export interface SpeakerId {
    *  old->final label mapping so already-emitted lines can be relabeled. Profile-matched names are
    *  untouched (they never came from the clusterer). */
   finalizeSession: () => Map<string, string>
+  /**
+   * Promote a live session cluster ("Speaker N") to a named voiceprint using whatever embeddings
+   * were buffered this session (manual rename in Review). Unlike autoEnrollFromLabeledWindows, a
+   * single clear window is enough — the user explicitly confirmed the identity.
+   */
+  promoteCluster: (clusterLabel: string, name: string) => boolean
   resetSession: () => void
 }
 
@@ -357,6 +363,13 @@ export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
       return count
     },
     finalizeSession: () => clusterer.mergePass(),
+    promoteCluster: (clusterLabel, name) => {
+      const trimmed = name.trim()
+      if (!trimmed || trimmed === OPERATOR_PROFILE_NAME) return false
+      const embeddings = clusterEmbeddings.get(clusterLabel)
+      if (!embeddings || embeddings.length < 1) return false
+      return enrollEmbeddings(trimmed, embeddings)
+    },
     listProfiles: () =>
       loadProfiles()
         .filter((p) => p.name !== OPERATOR_PROFILE_NAME)

@@ -27,6 +27,10 @@ function speakerDisplay(l: TranscriptLine): string {
   return l.name || (l.speaker === 'them' ? 'Them' : l.speaker === 'you' ? 'You' : 'Speaker')
 }
 
+function isClusterSpeakerName(name: string | undefined): boolean {
+  return !!name && /^Speaker \d+$/i.test(name.trim())
+}
+
 function formatDuration(sec: number): string {
   const m = Math.floor(sec / 60)
   const s = Math.floor(sec % 60)
@@ -243,7 +247,8 @@ export const Review = memo(function Review({
   onDirtyChange,
   recapUnavailable,
   finishingTranscript,
-  coldCall
+  coldCall,
+  onRenameSpeaker
 }: {
   /** Built-in or custom mode: picks the recap section layout (sales vs recruiting vs meeting, etc.). */
   mode?: string
@@ -273,6 +278,8 @@ export const Review = memo(function Review({
   onDiscard?: () => void
   onDone?: () => void
   onResume?: () => void
+  /** 1.9.0 — rename a session cluster ("Speaker 2" → "Ada") across the transcript + enroll voiceprint. */
+  onRenameSpeaker?: (from: string, to: string) => void
   onGenerateFollowup?: () => void
   /** Spotlight Ref wins opt-in for the email recap. Present only when Spotlight Ref is connected (it holds
    *  our wins / case studies); absent otherwise so there is nothing to ground against and no dead control. */
@@ -319,6 +326,17 @@ export const Review = memo(function Review({
   const [exportError, setExportError] = useState<string | null>(null)
   const [transcriptOpen, setTranscriptOpen] = useState(!!showTranscript)
   useEffect(() => setTranscriptOpen(!!showTranscript), [showTranscript])
+  // 1.9.0 — inline rename for session clusters ("Speaker 2" → a real name).
+  const [renamingFrom, setRenamingFrom] = useState<string | null>(null)
+  const [renameDraft, setRenameDraft] = useState('')
+  const commitRename = (): void => {
+    const from = renamingFrom
+    const to = renameDraft.trim()
+    setRenamingFrom(null)
+    setRenameDraft('')
+    if (!from || !to || !onRenameSpeaker) return
+    onRenameSpeaker(from, to)
+  }
   // Task MI-5 — confidential flag: excludes this meeting from every published wiki surface. Local state
   // seeded from the `confidential` prop (the meeting's actual saved value for a reopened past meeting;
   // false for a just-ended live one) and updated optimistically on toggle.
@@ -1823,16 +1841,59 @@ export const Review = memo(function Review({
                 <span className="shrink-0 font-mono text-[10px] text-[color:var(--color-ink-3)]">
                   {clock(l.t)}
                 </span>
-                <span
-                  className={
-                    'shrink-0 text-[10px] font-semibold uppercase ' +
-                    (l.speaker === 'them'
-                      ? 'text-[color:var(--color-ink-2)]'
-                      : 'text-[color:var(--color-ink-3)]')
-                  }
-                >
-                  {speakerDisplay(l)}
-                </span>
+                {renamingFrom && isClusterSpeakerName(l.name) && renamingFrom === l.name ? (
+                  <form
+                    className="flex shrink-0 items-center gap-1"
+                    onSubmit={(e) => {
+                      e.preventDefault()
+                      commitRename()
+                    }}
+                  >
+                    <input
+                      autoFocus
+                      value={renameDraft}
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onBlur={commitRename}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Escape') {
+                          setRenamingFrom(null)
+                          setRenameDraft('')
+                        }
+                      }}
+                      aria-label="Speaker name"
+                      placeholder="Name this speaker"
+                      className="w-28 rounded border border-[var(--color-hair-soft)] bg-transparent px-1 py-0.5 text-[11px] text-[color:var(--color-ink)]"
+                    />
+                  </form>
+                ) : isClusterSpeakerName(l.name) && onRenameSpeaker ? (
+                  <button
+                    type="button"
+                    title="Name this speaker"
+                    onClick={() => {
+                      setRenamingFrom(l.name!)
+                      setRenameDraft('')
+                    }}
+                    className={
+                      'shrink-0 text-[10px] font-semibold uppercase underline-offset-2 hover:underline ' +
+                      (l.speaker === 'them'
+                        ? 'text-[color:var(--color-ink-2)]'
+                        : 'text-[color:var(--color-ink-3)]')
+                    }
+                  >
+                    {speakerDisplay(l)}
+                  </button>
+                ) : (
+                  <span
+                    className={
+                      'shrink-0 text-[10px] font-semibold uppercase ' +
+                      (l.speaker === 'them'
+                        ? 'text-[color:var(--color-ink-2)]'
+                        : 'text-[color:var(--color-ink-3)]')
+                    }
+                  >
+                    {speakerDisplay(l)}
+                  </span>
+                )}
                 <span className="min-w-0 flex-1 break-words text-[color:var(--color-ink)]">{l.text}</span>
               </div>
             ))
