@@ -432,6 +432,10 @@ export interface ListenApi {
    *  a warm re-init (the worker updates its language-follow seed before the already-loaded early
    *  return), Apple Speech reads settings per window main-side, Parakeet always auto-detects. */
   setLanguage: (language: string) => Promise<void>
+  /** 1.9.0 — rename a session cluster across the live transcript (Review "Name this speaker"). */
+  remapSpeakerNames: (from: string, to: string) => void
+  /** Apply main's finalizeSession merge map to in-memory lines. */
+  applySpeakerMapping: (mapping: Record<string, string>) => void
 }
 
 /** Escapes regex metacharacters so a user-typed correction word can't corrupt the pattern. */
@@ -705,6 +709,41 @@ export function useListen(
     if (idx < 0) return
     const next = linesRef.current.slice()
     next[idx] = { ...next[idx], name }
+    linesRef.current = next
+    setLines(next)
+  }, [])
+
+  /** 1.9.0 — remap every line whose `name` is `from` to `to` (Review "Name this speaker"). */
+  const remapSpeakerNames = useCallback((from: string, to: string): void => {
+    const src = from.trim()
+    const dest = to.trim()
+    if (!src || !dest || src === dest) return
+    let changed = false
+    const next = linesRef.current.map((l) => {
+      if (l.name !== src) return l
+      changed = true
+      return { ...l, name: dest }
+    })
+    if (!changed) return
+    linesRef.current = next
+    setLines(next)
+  }, [])
+
+  /** Apply a whole-session cluster merge map (Speaker 3 → Speaker 1) from main's finalizeSession. */
+  const applySpeakerMapping = useCallback((mapping: Record<string, string>): void => {
+    const entries = Object.entries(mapping).filter(([a, b]) => a && b && a !== b)
+    if (!entries.length) return
+    const map = new Map(entries)
+    let changed = false
+    const next = linesRef.current.map((l) => {
+      const from = l.name
+      if (!from) return l
+      const to = map.get(from)
+      if (!to || to === from) return l
+      changed = true
+      return { ...l, name: to }
+    })
+    if (!changed) return
     linesRef.current = next
     setLines(next)
   }, [])
@@ -2040,12 +2079,27 @@ export function useListen(
       closeChannel('you')
       closeChannel('them')
       void window.toto.setListeningState(false).catch(() => {})
-      setState((s) => ({ ...s, listening: false, capturing: false, paused: false, loading: false, error: null, captureDegraded: null }))
-      drainTimerRef.current = null
-      stoppingRef.current = false
-      // The final flushed window (if any) has now committed via commitLine — text() reflects the
-      // complete post-drain transcript, safe for a caller (e.g. the recap) to read.
-      onDrained?.()
+      // 1.9.0 — collapse over-split "Speaker N" clusters before the recap/save reads lines.
+      void window.toto
+        .speakerFinalize()
+        .then((mapping) => {
+          if (mapping && Object.keys(mapping).length) applySpeakerMapping(mapping)
+        })
+        .catch(() => {})
+        .finally(() => {
+          setState((s) => ({
+            ...s,
+            listening: false,
+            capturing: false,
+            paused: false,
+            loading: false,
+            error: null,
+            captureDegraded: null
+          }))
+          drainTimerRef.current = null
+          stoppingRef.current = false
+          onDrained?.()
+        })
       // MQA-285: keep the hot engine. Idle-unloading here forced a cold start on the next Listen and
       // on the post-meeting recap. Unmount still tears the worker down.
     }
@@ -2062,7 +2116,7 @@ export function useListen(
     }
     // Give the worklet's flush message a tick to post its final window into the queue, then wait for drain.
     drainTimerRef.current = setTimeout(waitForDrain, 80)
-  }, [closeChannel, disarmNetworkRetry])
+  }, [closeChannel, disarmNetworkRetry, applySpeakerMapping])
 
   const clear = useCallback((): void => {
     setLines([])
@@ -2158,7 +2212,19 @@ export function useListen(
   // identity when a real piece of it changes — start/stop/pause/resume/clear/text are already
   // useCallback-stable, so without this the returned object was a fresh literal on every render.
   return useMemo(
-    () => ({ ...state, lines, start, stop, pause, resume, clear, text, setLanguage }),
-    [state, lines, start, stop, pause, resume, clear, text, setLanguage]
+    () => ({
+      ...state,
+      lines,
+      start,
+      stop,
+      pause,
+      resume,
+      clear,
+      text,
+      setLanguage,
+      remapSpeakerNames,
+      applySpeakerMapping
+    }),
+    [state, lines, start, stop, pause, resume, clear, text, setLanguage, remapSpeakerNames, applySpeakerMapping]
   )
 }

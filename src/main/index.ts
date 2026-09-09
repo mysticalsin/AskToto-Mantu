@@ -158,6 +158,7 @@ import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText } from './mac-helper'
 import { createSpeakerId, type SpeakerId, type SpeakerLabel } from './speaker-id'
+import { remapTranscriptSpeakerNames } from '@shared/speaker-names'
 import {
   clampAxis,
   clampAxisMargin,
@@ -5393,6 +5394,52 @@ function registerIpc(): void {
     return {}
   })
 
+  // 1.9.0 — voiceprint list / delete / promote + explicit finalize for the renderer Review rename flow.
+  ipcMain.handle(IPC.speakerProfilesList, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return []
+    if (!getSettings().speakerId.enabled) return []
+    try {
+      return getSpeakerId().listProfiles()
+    } catch {
+      return []
+    }
+  })
+  ipcMain.handle(IPC.speakerProfileDelete, (e, raw: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false as const }
+    const name = typeof raw === 'string' ? raw.trim() : typeof (raw as { name?: unknown })?.name === 'string' ? (raw as { name: string }).name.trim() : ''
+    if (!name) return { ok: false as const }
+    try {
+      return { ok: getSpeakerId().deleteProfile(name) }
+    } catch {
+      return { ok: false as const }
+    }
+  })
+  ipcMain.handle(IPC.speakerPromote, (e, raw: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false as const }
+    const p = raw as { clusterLabel?: unknown; name?: unknown }
+    const clusterLabel = typeof p?.clusterLabel === 'string' ? p.clusterLabel.trim() : ''
+    const name = typeof p?.name === 'string' ? p.name.trim() : ''
+    if (!clusterLabel || !name) return { ok: false as const }
+    try {
+      return { ok: getSpeakerId().promoteCluster(clusterLabel, name) }
+    } catch {
+      return { ok: false as const }
+    }
+  })
+  ipcMain.handle(IPC.speakerFinalize, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return {}
+    if (!getSettings().speakerId.enabled) return {}
+    try {
+      return Object.fromEntries(getSpeakerId().finalizeSession())
+    } catch {
+      return {}
+    }
+  })
+
   // --- Métis Local (on-device LLM): model readiness metadata ---
   // Paths stay in main; the renderer only learns whether the weights are usable, and — since they are
   // fetched on first run rather than shipped — whether that fetch is running, failed, or never started
@@ -6533,6 +6580,16 @@ function registerIpc(): void {
     // TranscriptLineSchema.provisional's own doc comment). Belt-and-suspenders: listen.ts already
     // replaces a provisional line with the real one before it could ever be included here.
     m.lines = stripProvisionalLines(m.lines)
+    // 1.9.0: collapse over-split live "Speaker N" clusters before disk so multi-person meetings keep
+    // stable names. Same mergePass import already runs (MQA-238); live saves were missing it.
+    if (getSettings().speakerId.enabled && speakerIdInstance) {
+      try {
+        const mapping = getSpeakerId().finalizeSession()
+        if (mapping.size > 0) m.lines = remapTranscriptSpeakerNames(m.lines, mapping)
+      } catch (err) {
+        mainLog.warn('[speaker-id] finalize on save failed', err instanceof Error ? err.message : String(err))
+      }
+    }
     const r = { path: await saveMeeting(getSettings(), m) }
     // Time-saved: the meeting file just landed — credit it ONCE to the durable lifetime counters. This is
     // the live-meeting save path; the import path credits itself separately once its file is durable. A

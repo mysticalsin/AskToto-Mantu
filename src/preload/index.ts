@@ -206,6 +206,13 @@ const api = {
   // echo:true → renderer drops the already-committed THEM line (operator loopback bleed).
   speakerEmbed: (samples: Float32Array, speaker: string): Promise<{ name?: string; echo?: boolean }> =>
     ipcRenderer.invoke(IPC.speakerEmbed, { samples, speaker }),
+  speakerProfilesList: (): Promise<Array<{ name: string; samples: number }>> =>
+    ipcRenderer.invoke(IPC.speakerProfilesList),
+  speakerProfileDelete: (name: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke(IPC.speakerProfileDelete, { name }),
+  speakerPromote: (clusterLabel: string, name: string): Promise<{ ok: boolean }> =>
+    ipcRenderer.invoke(IPC.speakerPromote, { clusterLabel, name }),
+  speakerFinalize: (): Promise<Record<string, string>> => ipcRenderer.invoke(IPC.speakerFinalize),
 
   ask: (req: AskStart): Promise<void> => ipcRenderer.invoke(IPC.askStart, req),
   cancel: (id: string): Promise<void> => ipcRenderer.invoke(IPC.askCancel, id),
