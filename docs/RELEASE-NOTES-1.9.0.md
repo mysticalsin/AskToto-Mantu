@@ -26,3 +26,9 @@
 npx vitest run src/shared/speaker-names.test.ts src/main/speaker-id.test.ts src/main/speaker-cluster.test.ts
 npx tsc -p tsconfig.node.json --noEmit && npx tsc -p tsconfig.web.json --noEmit
 ```
+
+## Follow-up (efficiency + persistence)
+
+- 8 GB RAM policy: Parakeet = Best; Whisper Best download/load gated; Parakeet released before Whisper fallback; 1 ASR thread on 8 GB class.
+- Meetings folder heal on boot: lost settings pointers rebind to existing meeting folders — updates never erase prior meetings.
+- `saveMeeting` sibling non-delete covered by regression tests.

@@ -7,6 +7,7 @@ import { isWindows } from './keys'
 import { compileEntityCasingCandidates, applyEntityCasingCompiled } from './entity-casing'
 import { transcriptToText } from './transcript'
 import { shouldUseBundledAsr } from './asr-offline'
+import { effectiveWhisperQuality, shouldPrewarmParakeet } from '@shared/asr-ram'
 
 const SR = 16000
 
@@ -25,6 +26,18 @@ const WINDOW_SEC = 6
 // worst case ~12 MB total) since trimQueue below can now spend a LITTLE more room protecting the newest
 // window of each speaker rather than trimming right up against the edge.
 const MAX_QUEUE = 32
+
+/** Resolve Whisper quality for this machine. Parakeet already satisfies Best on 8 GB — this only gates Whisper. */
+async function resolveWhisperQuality(requested: 'best' | 'fast'): Promise<{ quality: 'best' | 'fast'; ramLimited: boolean }> {
+  try {
+    const ram = await window.toto.systemRam()
+    return effectiveWhisperQuality(requested, ram?.advertisedGB ?? 0)
+  } catch {
+    // Fail closed to Fast when RAM is unknown — safer on constrained laptops than loading large-v3.
+    return effectiveWhisperQuality(requested, 8)
+  }
+}
+
 const PARAKEET_FEED_TIMEOUT_MS = 5000 // a single Parakeet window shouldn't take longer than this to transcribe
 // ── Whisper 'auto' language probe (PROVEN FACT 2026-08-05, direct probe): transformers.js's whisper NEVER
 // auto-detects on an un-pinned decode — it logs "No language specified - defaulting to English" and
@@ -1732,6 +1745,8 @@ export function useListen(
               pump()
             } catch (e) {
               console.warn('[listen] parakeet unavailable, using whisper:', (e as Error)?.message)
+              // Free Parakeet native weights before loading Whisper so 8 GB laptops do not hold both.
+              void window.toto.parakeetRelease().catch(() => {})
               engineRef.current = 'whisper'
             }
           }
@@ -1756,14 +1771,22 @@ export function useListen(
           if (!liveRef.current) return
 
           if (engineRef.current === 'whisper') {
+            // 8 GB policy: Whisper Best (large) is too heavy; clamp to Fast and report qualityDegraded.
+            // Parakeet sessions never reach here — Parakeet already delivers Best-class EU accuracy lightly.
+            const resolved = await resolveWhisperQuality(quality)
+            const whisperQuality = resolved.quality
+            requestedQualityRef.current = whisperQuality
+            if (resolved.ramLimited && quality === 'best') {
+              setState((s) => ({ ...s, qualityDegraded: true }))
+            }
             // If the quality changed since the warm worker loaded (or we just fell back from Parakeet),
             // terminate so the next init reloads the correct model. Unchanged quality → instant warm restart.
-            if (workerRef.current && loadedQualityRef.current !== null && loadedQualityRef.current !== quality) {
+            if (workerRef.current && loadedQualityRef.current !== null && loadedQualityRef.current !== whisperQuality) {
               workerRef.current.terminate()
               workerRef.current = null
               readyRef.current = false
             }
-            loadedQualityRef.current = quality
+            loadedQualityRef.current = whisperQuality
             setState((s) => ({ ...s, loading: !readyRef.current }))
             // The worker selects the model: 'best' → WebGPU + whisper-large-v3-turbo (~99 languages); 'fast'
             // (or fallback) → WASM + whisper-base. init is a no-op if a model is already loaded.
@@ -1779,7 +1802,13 @@ export function useListen(
             } else {
               // resetFollow: a fresh session must never inherit the previous meeting's converged
               // language-follow state from a warm worker (see whisper.worker.ts's init handler).
-              ensureWorker().postMessage({ type: 'init', quality, bundled, language: asrLanguageRef.current, resetFollow: true })
+              ensureWorker().postMessage({
+                type: 'init',
+                quality: whisperQuality,
+                bundled,
+                language: asrLanguageRef.current,
+                resetFollow: true
+              })
             }
             if (readyRef.current) pump() // warm worker already ready → drain immediately
           }
@@ -2163,6 +2192,13 @@ export function useListen(
       warmed = true
       try {
         if (asrEngine === 'parakeet') {
+          // On tight free RAM, skip boot prewarm — Listen still loads Parakeet on demand.
+          try {
+            const ram = await window.toto.systemRam()
+            if (!shouldPrewarmParakeet(ram?.freeGB ?? 0, ram?.advertisedGB ?? 0)) return
+          } catch {
+            /* probe failed — still try prewarm */
+          }
           await window.toto.parakeetEnsure()
           return
         }
@@ -2170,8 +2206,9 @@ export function useListen(
         const bundled = await getAsrBundled()
         // Prewarm carries no language: the setting is only known per-session at start(), whose init
         // message updates the (already warm) worker's language before the first audio window.
-        // Quality matches the Settings request (default Best) so first Listen is not a cold Best load.
-        const warmQuality = asrQuality === 'fast' ? 'fast' : 'best'
+        // Quality matches Settings, then 8 GB policy clamps Whisper Best → Fast when needed.
+        const requestedWarm = asrQuality === 'fast' ? 'fast' : 'best'
+        const { quality: warmQuality } = await resolveWhisperQuality(requestedWarm)
         ensureWorker().postMessage({ type: 'init', quality: warmQuality, bundled })
         loadedQualityRef.current = warmQuality
       } catch {

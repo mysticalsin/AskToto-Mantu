@@ -182,6 +182,8 @@ const api = {
   parakeetStatus: (): Promise<{ ready: boolean; addonError: string | null }> =>
     ipcRenderer.invoke(IPC.parakeetStatus),
   parakeetEnsure: (): Promise<{ ok: boolean; error?: string }> => ipcRenderer.invoke(IPC.parakeetEnsure),
+  parakeetRelease: (): Promise<void> => ipcRenderer.invoke(IPC.parakeetRelease),
+  systemRam: (): Promise<{ advertisedGB: number; freeGB: number }> => ipcRenderer.invoke(IPC.systemRam),
   // Returns {text, name?, echo?} — name is the Speaker Intelligence label for THEM windows when enabled;
   // echo:true means operator bleed was dropped (renderer must not count that as an ASR stall).
   // (Older shape was a bare string; the renderer normalizes both while the contract settles.)

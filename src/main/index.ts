@@ -159,6 +159,8 @@ import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText } from './mac-helper'
 import { createSpeakerId, type SpeakerId, type SpeakerLabel } from './speaker-id'
 import { remapTranscriptSpeakerNames } from '@shared/speaker-names'
+import { advertisedRamGB } from '@shared/asr-ram'
+import { totalmem, freemem } from 'node:os'
 import {
   clampAxis,
   clampAxisMargin,
@@ -417,6 +419,7 @@ import {
   recapMarkdownToHtml,
   resolveMeetingsFolder,
   ensureMeetingsFolder,
+  healMeetingsFolderSetting,
   isEncryptedFile,
   decryptToTemp,
   sweepStaleTempFiles,
@@ -641,9 +644,35 @@ if (app.isPackaged && !process.env.ASKTOTO_USERDATA && !isCaheEdition()) {
         .map((n) => join(dirname(ud), n))
         .find((p) => existsSync(join(p, 'settings.json')))
       if (legacy) {
-        // Electron may have pre-created the new dir empty; clear it so rename can land.
-        if (existsSync(ud)) rmdirSync(ud)
-        renameSync(legacy, ud)
+        // Prefer an atomic rename when the new dir is missing or empty. If Electron pre-created a
+        // NON-empty new dir (stub files, crash pads), never rmdirSync+abandon — copy settings and
+        // secret material in so meetingsFolder / keys survive the rename.
+        let renamed = false
+        try {
+          if (existsSync(ud)) rmdirSync(ud) // succeeds only when empty
+          renameSync(legacy, ud)
+          renamed = true
+        } catch {
+          renamed = false
+        }
+        if (!renamed) {
+          try {
+            mkdirSync(ud, { recursive: true })
+          } catch {
+            /* already exists */
+          }
+          for (const name of ['settings.json', 'secret-key.bin', 'secrets.json', 'managed-config.json']) {
+            const src = join(legacy, name)
+            const dest = join(ud, name)
+            if (existsSync(src) && !existsSync(dest)) {
+              try {
+                copyFileSync(src, dest)
+              } catch {
+                /* best-effort — never wipe either side */
+              }
+            }
+          }
+        }
       }
     }
   } catch {
@@ -5319,6 +5348,16 @@ function registerIpc(): void {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
   })
+  ipcMain.handle(IPC.parakeetRelease, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return
+    parakeetRelease()
+  })
+  ipcMain.handle(IPC.systemRam, (e) => {
+    assertMainWindow(e)
+    // No auth gate: used before Listen to pick an 8 GB-safe Whisper path; no secrets.
+    return { advertisedGB: advertisedRamGB(totalmem()), freeGB: freemem() / 1024 ** 3 }
+  })
   ipcMain.handle(IPC.parakeetFeed, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return ''
@@ -5477,6 +5516,16 @@ function registerIpc(): void {
   ipcMain.handle(IPC.asrModelFetch, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false }
+    // 8 GB laptops: refuse the 1.61 GB Whisper Best download — Parakeet already covers Best-quality EU
+    // speech, and holding large-v3-turbo + Electron thrashing the machine. Honest refusal, not a hang.
+    const ramGB = advertisedRamGB(totalmem())
+    if (ramGB < 12) {
+      auditLog('asr.model.fetch_refused_ram', { advertisedGB: ramGB, minGB: 12 })
+      return {
+        ok: false,
+        error: `Whisper Best needs about 12 GB of RAM (this machine reports ~${ramGB} GB). Keep Parakeet for Best quality on this laptop, or use Whisper Fast.`
+      }
+    }
     auditLog('asr.model.fetch_requested', { bytes: asrModelBytes() })
     return { ok: await ensureHighTierAsrModel() }
   })
@@ -8097,6 +8146,19 @@ if (!app.requestSingleInstanceLock()) {
   // Synchronous OneDrive filesystem work (mkdir + two writeFileSync calls on first run) — nothing
   // before the window depends on the folder existing yet (saveMeeting/saveNote create it themselves on
   // first use), so it no longer sits ahead of createWindow on the boot path.
+  runStep('healMeetingsFolder', () => {
+    const heal = healMeetingsFolderSetting(getSettings())
+    if (heal.patch) {
+      try {
+        setSettings(heal.patch)
+        mainLog.info(
+          `[meetings] rebound meetingsFolder (${heal.reason}) ${heal.from} → ${heal.to} (${heal.meetingCount} files)`
+        )
+      } catch (e) {
+        mainLog.warn('[meetings] healMeetingsFolder setSettings failed:', (e as Error)?.message)
+      }
+    }
+  })
   runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
   runStep('initializeImportJobs', initializeImportJobs)
   runStep('registerIpc', registerIpc)

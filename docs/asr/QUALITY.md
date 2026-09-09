@@ -29,6 +29,22 @@ Pick Whisper when meetings are not European-language; keep Parakeet otherwise so
 - Review: click `Speaker N` to rename; remaps the transcript and promotes a voiceprint when embeddings exist.
 - Settings → Local AI lists/removes saved voiceprints. Nothing leaves the device.
 
+
+## 8 GB laptops (1.9.0)
+
+- **Parakeet remains Best** on 8 GB: one int8 model (~600 MB), 1 CPU thread, released between meetings.
+- **Whisper Best is not loaded** on ≤8 GB (and the 1.61 GB high-tier download is refused under 12 GB). Whisper Fast (base) is the fallback if Parakeet cannot run.
+- Falling back Parakeet → Whisper **releases Parakeet first** so both engines are never resident together.
+- Boot prewarm of Parakeet is skipped when free RAM is tight; Listen still loads on demand.
+- Speaker ID stays lazy (~30 MB, 1 thread) and does not change the You/Them channel model.
+
+## Previous meetings survive updates
+
+- Meeting markdown lives outside the app install tree (Documents / OneDrive `Métis Meetings`).
+- App updates **never delete** meeting files. `saveMeeting` only adds files.
+- If a settings pointer to the meetings folder is lost after a profile rename, boot **rebinds** to the richest existing folder (additive discovery) — it does not wipe history.
+- Retention auto-delete stays **off by default** (`transcriptRetentionDays: 0`).
+
 ## Languages
 
 - Auto-detect from speech. The Settings picker is a pin, not the only way a language is known.

@@ -27,6 +27,8 @@ import {
   recoverOrphanDrafts,
   writeSaved,
   resolveMeetingsFolder,
+  healMeetingsFolderSetting,
+  countMeetingMarkdownFiles,
   formatTranscript,
   meetingDurationMin,
   decryptToTemp
@@ -1218,5 +1220,70 @@ describe('meetingDurationMin — span is correct under both timestamp convention
   it('a single-line meeting is a zero span, floored to 1; an empty meeting is 0', () => {
     expect(meetingDurationMin({ startedAt: 1, lines: [{ t: 5_000 }] })).toBe(1)
     expect(meetingDurationMin({ startedAt: 1, lines: [] })).toBe(0)
+  })
+})
+
+
+
+describe('healMeetingsFolderSetting — updates must never erase previous meetings', () => {
+  let base: string
+  let userDataDir: string
+
+  beforeEach(() => {
+    base = mkdtempSync(join(tmpdir(), 'metis-heal-'))
+    userDataDir = mkdtempSync(join(tmpdir(), 'metis-heal-ud-'))
+    ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
+      if (name === 'userData') return userDataDir
+      if (name === 'documents') return base
+      return join(base, name)
+    })
+  })
+
+  afterEach(() => {
+    rmSync(base, { recursive: true, force: true })
+    rmSync(userDataDir, { recursive: true, force: true })
+    vi.restoreAllMocks()
+  })
+
+  it('rebounds an empty/missing meetingsFolder pointer to a folder that still has meetings', () => {
+    const rich = join(base, 'Métis Meetings')
+    mkdirSync(rich, { recursive: true })
+    writeFileSync(join(rich, '2026-01-01_120000-kept.md'), '# old meeting')
+    writeFileSync(join(rich, '2026-01-02_130000-also.md'), '# also kept')
+    expect(countMeetingMarkdownFiles(rich)).toBe(2)
+
+    const missing = join(base, 'gone-folder')
+    const heal = healMeetingsFolderSetting({ ...baseSettings(), meetingsFolder: missing })
+    expect(heal.patch?.meetingsFolder).toBe(rich)
+    expect(heal.reason).toBe('rebound-missing')
+    expect(heal.meetingCount).toBe(2)
+    expect(existsSync(join(rich, '2026-01-01_120000-kept.md'))).toBe(true)
+    expect(existsSync(join(rich, '2026-01-02_130000-also.md'))).toBe(true)
+  })
+
+  it('leaves a healthy meetingsFolder alone (never relocates history on update)', () => {
+    const folder = join(base, 'Métis Meetings')
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, '2026-01-01_120000-kept.md'), '# kept')
+    const heal = healMeetingsFolderSetting({ ...baseSettings(), meetingsFolder: folder })
+    expect(heal.patch).toBeNull()
+    expect(heal.reason).toBe('ok')
+  })
+
+  it('saveMeeting never deletes sibling meeting files', async () => {
+    const folder = join(base, 'Métis Meetings')
+    mkdirSync(folder, { recursive: true })
+    writeFileSync(join(folder, '2026-01-01_120000-prior.md'), '# prior meeting must survive')
+    const settings = { ...baseSettings(), meetingsFolder: folder }
+    await saveMeeting(settings, {
+      title: 'New meeting',
+      mode: 'meeting',
+      startedAt: Date.parse('2026-03-01T10:00:00Z'),
+      lines: [{ t: Date.parse('2026-03-01T10:00:00Z'), speaker: 'you', text: 'hello', name: 'You' }],
+      recap: ''
+    })
+    const names = readdirSync(folder).filter((n) => n.endsWith('.md') && n !== 'README.md' && n !== 'index.md')
+    expect(names.some((n) => n.includes('prior'))).toBe(true)
+    expect(names.length).toBeGreaterThanOrEqual(2)
   })
 })
