@@ -92,11 +92,12 @@ describe('deterministic packaging toolchain', () => {
   // cache is per-architecture, so the single out/main/index.jsc baked into a --universal package is
   // loadable by only ONE of its two slices. The Intel slice died on launch with
   // "Invalid or incompatible cached data (cachedDataRejected)", reported from a real 1.6.0 DMG.
-  it('MQA-207: main-process bytecode is on by default and off only for the mac universal package', () => {
+  it('MQA-207: main-process bytecode is on by default and off for mac universal / plain-main packs', () => {
     const viteConfig = readFileSync(join(root, 'electron.vite.config.ts'), 'utf8')
     expect(viteConfig).toContain("const MAC_UNIVERSAL = process.env.ASKTOTO_MAC_UNIVERSAL === '1'")
-    expect(viteConfig).toContain('bytecode: !MAC_UNIVERSAL')
-    // Fail-open in the right direction: with the flag unset, bytecode is ON.
+    expect(viteConfig).toContain("const PLAIN_MAIN = process.env.ASKTOTO_PLAIN_MAIN === '1'")
+    expect(viteConfig).toContain('bytecode: !MAC_UNIVERSAL && !PLAIN_MAIN')
+    // Fail-open in the right direction: with both flags unset, bytecode is ON.
     expect(viteConfig).not.toContain('bytecode: false')
   })
 
@@ -119,7 +120,12 @@ describe('deterministic packaging toolchain', () => {
   it('MQA-207: single-architecture Windows chains keep their bytecode', () => {
     const scripts = pkg.scripts as Record<string, string>
     for (const name of ['dist:win', 'dist:win:appx', 'installers:win:cahe']) {
-      if (scripts[name]) expect(scripts[name]).not.toContain('ASKTOTO_MAC_UNIVERSAL')
+      if (scripts[name]) {
+        expect(scripts[name]).not.toContain('ASKTOTO_MAC_UNIVERSAL')
+        // Native Windows packs must not force plain JS — bytecode stays on when built on Windows.
+        // Linux→Windows cross packs set ASKTOTO_PLAIN_MAIN=1 outside these script bodies.
+        expect(scripts[name]).not.toContain('ASKTOTO_PLAIN_MAIN')
+      }
     }
   })
 })
