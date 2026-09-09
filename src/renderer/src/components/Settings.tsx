@@ -2096,13 +2096,74 @@ function LocalAiSection({
         <div className="flex flex-col gap-0.5">
           <ToggleRow
             label="Speaker identification (beta)"
-            desc="Label who's speaking in meetings using on-device voice recognition. Voice data never leaves this device."
+            desc="Label who is speaking in multi-person meetings with on-device voiceprints (light CPU, ~30 MB model). You/Them from mic vs system audio still apply; other voices become Speaker 1, Speaker 2… — rename them in Review to enroll. Voice data never leaves this device."
             on={settings.speakerId.enabled}
             onChange={(v) => patch({ speakerId: { enabled: v } })}
           />
+          {settings.speakerId.enabled && <SpeakerProfilesPanel />}
         </div>
       </div>
     </Section>
+  )
+}
+
+function SpeakerProfilesPanel(): JSX.Element {
+  const [profiles, setProfiles] = useState<Array<{ name: string; samples: number }>>([])
+  const [err, setErr] = useState<string | null>(null)
+  const refresh = useCallback(() => {
+    void window.toto
+      .speakerProfilesList()
+      .then((list) => setProfiles(Array.isArray(list) ? list : []))
+      .catch(() => setProfiles([]))
+  }, [])
+  useEffect(() => {
+    refresh()
+  }, [refresh])
+  return (
+    <div className="mt-1 flex flex-col gap-1.5 rounded-lg border border-[color:var(--cl-border)]/60 px-2 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[11px] font-medium text-[color:var(--cl-foreground)]">Saved voiceprints</span>
+        <button type="button" className="text-[11px] text-[color:var(--cl-primary)]" onClick={refresh}>
+          Refresh
+        </button>
+      </div>
+      <p className="text-[11px] text-[color:var(--cl-muted-foreground)]">
+        Built automatically from Teams transcripts or when you name a Speaker N in Review. Kept on this device only.
+      </p>
+      {err && <p className="text-[11px] text-[color:var(--cl-danger)]">{err}</p>}
+      {profiles.length === 0 ? (
+        <p className="text-[11px] text-[color:var(--cl-muted-foreground)]">No named voices yet.</p>
+      ) : (
+        <ul className="flex flex-col gap-1">
+          {profiles.map((p) => (
+            <li key={p.name} className="flex items-center justify-between gap-2 text-[12px]">
+              <span className="truncate text-[color:var(--cl-foreground)]">
+                {p.name}{' '}
+                <span className="text-[color:var(--cl-muted-foreground)]">· {p.samples} samples</span>
+              </span>
+              <button
+                type="button"
+                className="shrink-0 text-[11px] text-[color:var(--cl-danger)]"
+                onClick={() => {
+                  void window.toto
+                    .speakerProfileDelete(p.name)
+                    .then((r) => {
+                      if (!r?.ok) setErr('Could not remove voiceprint.')
+                      else {
+                        setErr(null)
+                        refresh()
+                      }
+                    })
+                    .catch(() => setErr('Could not remove voiceprint.'))
+                }}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   )
 }
 
@@ -6326,8 +6387,8 @@ export function Settings({
                     label="Best transcription quality"
                     desc={
                       asrBundled
-                        ? 'Default is Best. Fast is a power option. This installer ships the compact model. If Best cannot load, Métis runs Fast and says so below (never a silent Fast with a Best label). Download the high-accuracy model to restore Best.'
-                        : 'Default is Best (Whisper large multilingual, 60+ languages). Fast is a Settings power option for constrained machines.'
+                        ? 'Default is Best. Fast is the power option for constrained machines. Parakeet (default engine) is already efficient on CPU. Whisper Best needs more RAM/GPU — if it cannot load, Métis runs Fast and says so below (never a silent Fast with a Best label). Download the high-accuracy Whisper model only when you need non-European languages.'
+                        : 'Default is Best. Prefer Parakeet for European meetings on laptops — Best quality at modest RAM, including 8 GB machines. Whisper Best (~99 languages, heavier) needs ~12 GB; on 8 GB Métis keeps Whisper on Fast automatically. Fast stays the power option.'
                     }
                     on={settings.asrQuality === 'best'}
                     onChange={(v) => patch({ asrQuality: v ? 'best' : 'fast' })}
@@ -6336,7 +6397,7 @@ export function Settings({
                   <div className="flex flex-col gap-1.5 px-1 py-1">
                     <label className="flex items-center gap-2 text-[13px] text-[color:var(--cl-foreground)]">
                       Transcription engine
-                      <FieldHint text="Parakeet is the default: bundled NVIDIA Parakeet v3, very fast + accurate for 25 European languages. Whisper handles ~99 languages; pick it for non-European speech. Apple Speech: Apple's own on-device engine (SFSpeechRecognizer); no extra download, macOS 13+ only.">
+                      <FieldHint text="Parakeet is the default and the efficient choice: bundled NVIDIA Parakeet v3, very fast + accurate for 25 European languages on CPU. Whisper handles ~99 languages but costs more memory (Best ≈ large model; Fast ≈ base). Apple Speech: Apple's on-device engine (SFSpeechRecognizer); no extra download, macOS 13+ only.">
                         <Info size={12} className="shrink-0 text-[color:var(--cl-muted-foreground)] hover:text-[color:var(--cl-foreground)]" />
                       </FieldHint>
                       <ManagedChip keys={settings.managedKeys} k="asrEngine" />
@@ -6348,8 +6409,8 @@ export function Settings({
                       aria-label="Transcription engine"
                       className={'w-full ' + ctl}
                     >
-                      <option value="parakeet">Parakeet · fastest, European languages</option>
-                      <option value="whisper">Whisper · ~99 languages</option>
+                      <option value="parakeet">Parakeet · efficient default (European languages)</option>
+                      <option value="whisper">Whisper · ~99 languages (heavier)</option>
                       <option value="apple">Apple Speech · on-device{isWindows ? ' (macOS only)' : ''}</option>
                     </select>
                   </div>

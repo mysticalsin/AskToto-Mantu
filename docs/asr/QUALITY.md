@@ -2,14 +2,48 @@
 
 Product contract for live and import ASR. Overlay chrome, island geometry, onboarding, identity card, Intelligence dashboards, and time-saved accounting are out of scope.
 
-Default is **Best**. Fast is a Settings power option, not a silent floor.
+Default engine is **Parakeet** (efficient CPU path for European languages). Default quality request is **Best**. Fast is a Settings power option, not a silent floor.
 
-## Default path
+## Engines (resource cost)
+
+| Engine | Role | Cost |
+| --- | --- | --- |
+| **Parakeet** (default) | NVIDIA NeMo TDT 0.6b int8 via sherpa-onnx — 25 European languages, auto-detect | Bundled; modest CPU (2 threads); prefer on laptops |
+| **Whisper** | ~99 languages | Best ≈ large-v3-turbo (WebGPU / heavy); Fast ≈ base WASM (floor) |
+| **Apple Speech** | macOS SFSpeechRecognizer | No extra ONNX download |
+
+Pick Whisper when meetings are not European-language; keep Parakeet otherwise so weaker devices stay responsive.
+
+## Default quality path
 
 - `asrQuality` defaults to `best` in the settings schema, `DEFAULT_SETTINGS`, and every listen/App fallback.
-- Best uses Whisper large multilingual (`whisper-large-v3-turbo` on WebGPU) unless the user opts into Fast.
+- For Whisper, Best uses large multilingual (`whisper-large-v3-turbo` on WebGPU) unless the user opts into Fast.
 - Fast is an explicit power option for constrained machines. The Settings control must say so.
 - If Best cannot load (model missing, no WebGPU, load failure), degrade honestly: report `qualityDegraded`, persist a Settings → Speech note, and keep the user's requested label as Best-requested / Fast-running. Never present Fast as Best.
+
+## Multi-speaker (1.9.0)
+
+- Channel still sets `speaker`: mic → `you`, loopback → `them`, import → `unknown`.
+- On-device CAM++ embeddings (lazy, 1 thread, ~30 MB) assign `name` (`Speaker N` or enrolled profile).
+- End-of-meeting finalize merges over-split clusters before save (live + import).
+- Review: click `Speaker N` to rename; remaps the transcript and promotes a voiceprint when embeddings exist.
+- Settings → Local AI lists/removes saved voiceprints. Nothing leaves the device.
+
+
+## 8 GB laptops (1.9.0)
+
+- **Parakeet remains Best** on 8 GB: one int8 model (~600 MB), 1 CPU thread, released between meetings.
+- **Whisper Best is not loaded** on ≤8 GB (and the 1.61 GB high-tier download is refused under 12 GB). Whisper Fast (base) is the fallback if Parakeet cannot run.
+- Falling back Parakeet → Whisper **releases Parakeet first** so both engines are never resident together.
+- Boot prewarm of Parakeet is skipped when free RAM is tight; Listen still loads on demand.
+- Speaker ID stays lazy (~30 MB, 1 thread) and does not change the You/Them channel model.
+
+## Previous meetings survive updates
+
+- Meeting markdown lives outside the app install tree (Documents / OneDrive `Métis Meetings`).
+- App updates **never delete** meeting files. `saveMeeting` only adds files.
+- If a settings pointer to the meetings folder is lost after a profile rename, boot **rebinds** to the richest existing folder (additive discovery) — it does not wipe history.
+- Retention auto-delete stays **off by default** (`transcriptRetentionDays: 0`).
 
 ## Languages
 
@@ -45,8 +79,8 @@ Default is **Best**. Fast is a Settings power option, not a silent floor.
 
 ## How to try
 
-1. Fresh settings (or delete `asrQuality`) → Listen. Default is Best.
+1. Fresh settings (or delete `asrQuality`) → Listen. Engine default Parakeet; quality Best.
 2. Settings → Audio → Speech: Fast is the power option. Best stays the request even if this device degrades.
-3. Auto language, bilingual call (e.g. French greeting then English). First pin needs two confirming probes; a later switch re-pins after the same bar.
-4. End meeting → recap stays in the spoken language(s) unless Summary language is set.
-5. Devon Mac-shows a bilingual switch + Best default before Ready-to-merge.
+3. Multi-person call with Speaker ID on → Review shows Speaker 1 / Speaker 2; click to name; Settings lists voiceprints.
+4. Auto language, bilingual call (e.g. French greeting then English). First pin needs two confirming probes; a later switch re-pins after the same bar.
+5. End meeting → recap stays in the spoken language(s) unless Summary language is set.

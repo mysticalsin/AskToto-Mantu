@@ -12,7 +12,9 @@ import { existsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { setFlagsFromString } from 'node:v8'
 import { runInNewContext } from 'node:vm'
+import { totalmem } from 'node:os'
 import { mainLog } from './logger'
+import { advertisedRamGB, parakeetNumThreads } from '@shared/asr-ram'
 import {
   ASR_ASSETS_MISSING,
   PARAKEET_MODEL_NAME,
@@ -114,7 +116,7 @@ function getRecognizer(): any | null {
       modelConfig: {
         transducer: { encoder: f.encoder, decoder: f.decoder, joiner: f.joiner },
         tokens: f.tokens,
-        numThreads: 2,
+        numThreads: parakeetNumThreads(advertisedRamGB(totalmem())),
         provider: 'cpu',
         modelType: 'nemo_transducer',
         debug: 0

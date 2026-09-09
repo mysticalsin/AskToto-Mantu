@@ -591,6 +591,113 @@ export function resolveMeetingsFolder(settings: Settings): string {
   return folder
 }
 
+const MEETINGS_FOLDER_NAMES = ['Métis Meetings', 'AskToto Meetings'] as const
+
+/** Count real meeting markdown files (not README/index bookkeeping). */
+export function countMeetingMarkdownFiles(folder: string): number {
+  try {
+    if (!existsSync(folder)) return 0
+    let n = 0
+    for (const dirent of readdirSync(folder, { withFileTypes: true })) {
+      if (!dirent.isFile() || !dirent.name.endsWith('.md')) continue
+      if (dirent.name === 'README.md' || dirent.name === 'index.md') continue
+      n++
+    }
+    return n
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * Candidate meetings folders on this machine (Documents / OneDrive / Desktop × product names).
+ * Used only to REBIND a lost settings pointer — never deletes, never merges destructively.
+ */
+export function discoverMeetingsFolderCandidates(): string[] {
+  const bases = new Set<string>()
+  try {
+    const od = detectOneDrive()
+    if (od) bases.add(od)
+  } catch {
+    /* ignore */
+  }
+  try {
+    bases.add(app.getPath('documents'))
+  } catch {
+    /* ignore */
+  }
+  try {
+    bases.add(join(homedir(), 'Desktop'))
+  } catch {
+    /* ignore */
+  }
+  const out: string[] = []
+  for (const base of bases) {
+    for (const name of MEETINGS_FOLDER_NAMES) out.push(join(base, name))
+  }
+  return out
+}
+
+export type MeetingsFolderHeal = {
+  /** Patched settings fields when a rebind is needed; null when the current pointer is fine. */
+  patch: Pick<Settings, 'meetingsFolder'> | null
+  reason: 'ok' | 'rebound-missing' | 'rebound-empty' | 'rebound-discovered'
+  from: string
+  to: string
+  meetingCount: number
+}
+
+/**
+ * If settings.meetingsFolder was lost/cleared after an update, or points at an empty/missing folder
+ * while another known location still holds meetings, rebind the pointer to the richest existing folder.
+ * NEVER deletes or overwrites meeting files — additive discovery only.
+ */
+export function healMeetingsFolderSetting(settings: Settings): MeetingsFolderHeal {
+  const current = (settings.meetingsFolder || '').trim()
+  const resolved = resolveMeetingsFolder(settings)
+  const currentCount = countMeetingMarkdownFiles(current || resolved)
+
+  // Pointer exists and already has meetings — leave it alone (updates must never "lose" history).
+  if (current && existsSync(current) && currentCount > 0) {
+    return { patch: null, reason: 'ok', from: current, to: current, meetingCount: currentCount }
+  }
+
+  let best = ''
+  let bestCount = currentCount
+  for (const cand of discoverMeetingsFolderCandidates()) {
+    if (current && cand === current) continue
+    const n = countMeetingMarkdownFiles(cand)
+    if (n > bestCount) {
+      best = cand
+      bestCount = n
+    }
+  }
+
+  if (!best || bestCount <= 0) {
+    return {
+      patch: null,
+      reason: 'ok',
+      from: current || resolved,
+      to: current || resolved,
+      meetingCount: currentCount
+    }
+  }
+
+  const reason: MeetingsFolderHeal['reason'] = !current
+    ? 'rebound-discovered'
+    : !existsSync(current)
+      ? 'rebound-missing'
+      : 'rebound-empty'
+  return {
+    patch: { meetingsFolder: best },
+    reason,
+    from: current || resolved,
+    to: best,
+    meetingCount: bestCount
+  }
+}
+
+
 const pad = (n: number): string => String(n).padStart(2, '0')
 function slug(s: string): string {
   return (

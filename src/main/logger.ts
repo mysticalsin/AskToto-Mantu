@@ -199,6 +199,7 @@ export type AuditEvent =
   | 'graph.purged'
   | 'calendar.read'
   | 'asr.model.fetch_requested'
+  | 'asr.model.fetch_refused_ram'
   | 'asr.model.removed'
   | 'app.started'
   | 'app.crash'

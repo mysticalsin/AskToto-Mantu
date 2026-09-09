@@ -158,6 +158,9 @@ import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText } from './mac-helper'
 import { createSpeakerId, type SpeakerId, type SpeakerLabel } from './speaker-id'
+import { remapTranscriptSpeakerNames } from '@shared/speaker-names'
+import { advertisedRamGB } from '@shared/asr-ram'
+import { totalmem, freemem } from 'node:os'
 import {
   clampAxis,
   clampAxisMargin,
@@ -416,6 +419,7 @@ import {
   recapMarkdownToHtml,
   resolveMeetingsFolder,
   ensureMeetingsFolder,
+  healMeetingsFolderSetting,
   isEncryptedFile,
   decryptToTemp,
   sweepStaleTempFiles,
@@ -640,9 +644,35 @@ if (app.isPackaged && !process.env.ASKTOTO_USERDATA && !isCaheEdition()) {
         .map((n) => join(dirname(ud), n))
         .find((p) => existsSync(join(p, 'settings.json')))
       if (legacy) {
-        // Electron may have pre-created the new dir empty; clear it so rename can land.
-        if (existsSync(ud)) rmdirSync(ud)
-        renameSync(legacy, ud)
+        // Prefer an atomic rename when the new dir is missing or empty. If Electron pre-created a
+        // NON-empty new dir (stub files, crash pads), never rmdirSync+abandon — copy settings and
+        // secret material in so meetingsFolder / keys survive the rename.
+        let renamed = false
+        try {
+          if (existsSync(ud)) rmdirSync(ud) // succeeds only when empty
+          renameSync(legacy, ud)
+          renamed = true
+        } catch {
+          renamed = false
+        }
+        if (!renamed) {
+          try {
+            mkdirSync(ud, { recursive: true })
+          } catch {
+            /* already exists */
+          }
+          for (const name of ['settings.json', 'secret-key.bin', 'secrets.json', 'managed-config.json']) {
+            const src = join(legacy, name)
+            const dest = join(ud, name)
+            if (existsSync(src) && !existsSync(dest)) {
+              try {
+                copyFileSync(src, dest)
+              } catch {
+                /* best-effort — never wipe either side */
+              }
+            }
+          }
+        }
       }
     }
   } catch {
@@ -5318,6 +5348,16 @@ function registerIpc(): void {
       return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
   })
+  ipcMain.handle(IPC.parakeetRelease, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return
+    parakeetRelease()
+  })
+  ipcMain.handle(IPC.systemRam, (e) => {
+    assertMainWindow(e)
+    // No auth gate: used before Listen to pick an 8 GB-safe Whisper path; no secrets.
+    return { advertisedGB: advertisedRamGB(totalmem()), freeGB: freemem() / 1024 ** 3 }
+  })
   ipcMain.handle(IPC.parakeetFeed, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return ''
@@ -5393,6 +5433,52 @@ function registerIpc(): void {
     return {}
   })
 
+  // 1.9.0 — voiceprint list / delete / promote + explicit finalize for the renderer Review rename flow.
+  ipcMain.handle(IPC.speakerProfilesList, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return []
+    if (!getSettings().speakerId.enabled) return []
+    try {
+      return getSpeakerId().listProfiles()
+    } catch {
+      return []
+    }
+  })
+  ipcMain.handle(IPC.speakerProfileDelete, (e, raw: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false as const }
+    const name = typeof raw === 'string' ? raw.trim() : typeof (raw as { name?: unknown })?.name === 'string' ? (raw as { name: string }).name.trim() : ''
+    if (!name) return { ok: false as const }
+    try {
+      return { ok: getSpeakerId().deleteProfile(name) }
+    } catch {
+      return { ok: false as const }
+    }
+  })
+  ipcMain.handle(IPC.speakerPromote, (e, raw: unknown) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return { ok: false as const }
+    const p = raw as { clusterLabel?: unknown; name?: unknown }
+    const clusterLabel = typeof p?.clusterLabel === 'string' ? p.clusterLabel.trim() : ''
+    const name = typeof p?.name === 'string' ? p.name.trim() : ''
+    if (!clusterLabel || !name) return { ok: false as const }
+    try {
+      return { ok: getSpeakerId().promoteCluster(clusterLabel, name) }
+    } catch {
+      return { ok: false as const }
+    }
+  })
+  ipcMain.handle(IPC.speakerFinalize, (e) => {
+    assertMainWindow(e)
+    if (!requireAuth()) return {}
+    if (!getSettings().speakerId.enabled) return {}
+    try {
+      return Object.fromEntries(getSpeakerId().finalizeSession())
+    } catch {
+      return {}
+    }
+  })
+
   // --- Métis Local (on-device LLM): model readiness metadata ---
   // Paths stay in main; the renderer only learns whether the weights are usable, and — since they are
   // fetched on first run rather than shipped — whether that fetch is running, failed, or never started
@@ -5430,6 +5516,16 @@ function registerIpc(): void {
   ipcMain.handle(IPC.asrModelFetch, async (e) => {
     assertMainWindow(e)
     if (!requireAuth()) return { ok: false }
+    // 8 GB laptops: refuse the 1.61 GB Whisper Best download — Parakeet already covers Best-quality EU
+    // speech, and holding large-v3-turbo + Electron thrashing the machine. Honest refusal, not a hang.
+    const ramGB = advertisedRamGB(totalmem())
+    if (ramGB < 12) {
+      auditLog('asr.model.fetch_refused_ram', { advertisedGB: ramGB, minGB: 12 })
+      return {
+        ok: false,
+        error: `Whisper Best needs about 12 GB of RAM (this machine reports ~${ramGB} GB). Keep Parakeet for Best quality on this laptop, or use Whisper Fast.`
+      }
+    }
     auditLog('asr.model.fetch_requested', { bytes: asrModelBytes() })
     return { ok: await ensureHighTierAsrModel() }
   })
@@ -6533,6 +6629,16 @@ function registerIpc(): void {
     // TranscriptLineSchema.provisional's own doc comment). Belt-and-suspenders: listen.ts already
     // replaces a provisional line with the real one before it could ever be included here.
     m.lines = stripProvisionalLines(m.lines)
+    // 1.9.0: collapse over-split live "Speaker N" clusters before disk so multi-person meetings keep
+    // stable names. Same mergePass import already runs (MQA-238); live saves were missing it.
+    if (getSettings().speakerId.enabled && speakerIdInstance) {
+      try {
+        const mapping = getSpeakerId().finalizeSession()
+        if (mapping.size > 0) m.lines = remapTranscriptSpeakerNames(m.lines, mapping)
+      } catch (err) {
+        mainLog.warn('[speaker-id] finalize on save failed', err instanceof Error ? err.message : String(err))
+      }
+    }
     const r = { path: await saveMeeting(getSettings(), m) }
     // Time-saved: the meeting file just landed — credit it ONCE to the durable lifetime counters. This is
     // the live-meeting save path; the import path credits itself separately once its file is durable. A
@@ -8040,6 +8146,19 @@ if (!app.requestSingleInstanceLock()) {
   // Synchronous OneDrive filesystem work (mkdir + two writeFileSync calls on first run) — nothing
   // before the window depends on the folder existing yet (saveMeeting/saveNote create it themselves on
   // first use), so it no longer sits ahead of createWindow on the boot path.
+  runStep('healMeetingsFolder', () => {
+    const heal = healMeetingsFolderSetting(getSettings())
+    if (heal.patch) {
+      try {
+        setSettings(heal.patch)
+        mainLog.info(
+          `[meetings] rebound meetingsFolder (${heal.reason}) ${heal.from} → ${heal.to} (${heal.meetingCount} files)`
+        )
+      } catch (e) {
+        mainLog.warn('[meetings] healMeetingsFolder setSettings failed:', (e as Error)?.message)
+      }
+    }
+  })
   runStep('ensureMeetingsFolder', () => ensureMeetingsFolder(getSettings()))
   runStep('initializeImportJobs', initializeImportJobs)
   runStep('registerIpc', registerIpc)

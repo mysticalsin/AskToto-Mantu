@@ -3054,6 +3054,10 @@ export function App(): JSX.Element {
         onSave={pm ? undefined : manualSave}
         onDiscard={pm ? undefined : discardMeeting}
         onResume={pm ? resumePastMeeting : undefined}
+        onRenameSpeaker={(from, to) => {
+          listen.remapSpeakerNames(from, to)
+          void window.toto.speakerPromote(from, to).catch(() => {})
+        }}
         onOpenPastMeeting={openPastMeeting}
         isPastMeeting={!!pm}
         onDirtyChange={onReviewDirtyChange}

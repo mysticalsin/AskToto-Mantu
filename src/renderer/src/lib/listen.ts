@@ -7,6 +7,7 @@ import { isWindows } from './keys'
 import { compileEntityCasingCandidates, applyEntityCasingCompiled } from './entity-casing'
 import { transcriptToText } from './transcript'
 import { shouldUseBundledAsr } from './asr-offline'
+import { effectiveWhisperQuality, shouldPrewarmParakeet } from '@shared/asr-ram'
 
 const SR = 16000
 
@@ -25,6 +26,18 @@ const WINDOW_SEC = 6
 // worst case ~12 MB total) since trimQueue below can now spend a LITTLE more room protecting the newest
 // window of each speaker rather than trimming right up against the edge.
 const MAX_QUEUE = 32
+
+/** Resolve Whisper quality for this machine. Parakeet already satisfies Best on 8 GB — this only gates Whisper. */
+async function resolveWhisperQuality(requested: 'best' | 'fast'): Promise<{ quality: 'best' | 'fast'; ramLimited: boolean }> {
+  try {
+    const ram = await window.toto.systemRam()
+    return effectiveWhisperQuality(requested, ram?.advertisedGB ?? 0)
+  } catch {
+    // Fail closed to Fast when RAM is unknown — safer on constrained laptops than loading large-v3.
+    return effectiveWhisperQuality(requested, 8)
+  }
+}
+
 const PARAKEET_FEED_TIMEOUT_MS = 5000 // a single Parakeet window shouldn't take longer than this to transcribe
 // ── Whisper 'auto' language probe (PROVEN FACT 2026-08-05, direct probe): transformers.js's whisper NEVER
 // auto-detects on an un-pinned decode — it logs "No language specified - defaulting to English" and
@@ -432,6 +445,10 @@ export interface ListenApi {
    *  a warm re-init (the worker updates its language-follow seed before the already-loaded early
    *  return), Apple Speech reads settings per window main-side, Parakeet always auto-detects. */
   setLanguage: (language: string) => Promise<void>
+  /** 1.9.0 — rename a session cluster across the live transcript (Review "Name this speaker"). */
+  remapSpeakerNames: (from: string, to: string) => void
+  /** Apply main's finalizeSession merge map to in-memory lines. */
+  applySpeakerMapping: (mapping: Record<string, string>) => void
 }
 
 /** Escapes regex metacharacters so a user-typed correction word can't corrupt the pattern. */
@@ -705,6 +722,41 @@ export function useListen(
     if (idx < 0) return
     const next = linesRef.current.slice()
     next[idx] = { ...next[idx], name }
+    linesRef.current = next
+    setLines(next)
+  }, [])
+
+  /** 1.9.0 — remap every line whose `name` is `from` to `to` (Review "Name this speaker"). */
+  const remapSpeakerNames = useCallback((from: string, to: string): void => {
+    const src = from.trim()
+    const dest = to.trim()
+    if (!src || !dest || src === dest) return
+    let changed = false
+    const next = linesRef.current.map((l) => {
+      if (l.name !== src) return l
+      changed = true
+      return { ...l, name: dest }
+    })
+    if (!changed) return
+    linesRef.current = next
+    setLines(next)
+  }, [])
+
+  /** Apply a whole-session cluster merge map (Speaker 3 → Speaker 1) from main's finalizeSession. */
+  const applySpeakerMapping = useCallback((mapping: Record<string, string>): void => {
+    const entries = Object.entries(mapping).filter(([a, b]) => a && b && a !== b)
+    if (!entries.length) return
+    const map = new Map(entries)
+    let changed = false
+    const next = linesRef.current.map((l) => {
+      const from = l.name
+      if (!from) return l
+      const to = map.get(from)
+      if (!to || to === from) return l
+      changed = true
+      return { ...l, name: to }
+    })
+    if (!changed) return
     linesRef.current = next
     setLines(next)
   }, [])
@@ -1693,6 +1745,8 @@ export function useListen(
               pump()
             } catch (e) {
               console.warn('[listen] parakeet unavailable, using whisper:', (e as Error)?.message)
+              // Free Parakeet native weights before loading Whisper so 8 GB laptops do not hold both.
+              void window.toto.parakeetRelease().catch(() => {})
               engineRef.current = 'whisper'
             }
           }
@@ -1717,14 +1771,22 @@ export function useListen(
           if (!liveRef.current) return
 
           if (engineRef.current === 'whisper') {
+            // 8 GB policy: Whisper Best (large) is too heavy; clamp to Fast and report qualityDegraded.
+            // Parakeet sessions never reach here — Parakeet already delivers Best-class EU accuracy lightly.
+            const resolved = await resolveWhisperQuality(quality)
+            const whisperQuality = resolved.quality
+            requestedQualityRef.current = whisperQuality
+            if (resolved.ramLimited && quality === 'best') {
+              setState((s) => ({ ...s, qualityDegraded: true }))
+            }
             // If the quality changed since the warm worker loaded (or we just fell back from Parakeet),
             // terminate so the next init reloads the correct model. Unchanged quality → instant warm restart.
-            if (workerRef.current && loadedQualityRef.current !== null && loadedQualityRef.current !== quality) {
+            if (workerRef.current && loadedQualityRef.current !== null && loadedQualityRef.current !== whisperQuality) {
               workerRef.current.terminate()
               workerRef.current = null
               readyRef.current = false
             }
-            loadedQualityRef.current = quality
+            loadedQualityRef.current = whisperQuality
             setState((s) => ({ ...s, loading: !readyRef.current }))
             // The worker selects the model: 'best' → WebGPU + whisper-large-v3-turbo (~99 languages); 'fast'
             // (or fallback) → WASM + whisper-base. init is a no-op if a model is already loaded.
@@ -1740,7 +1802,13 @@ export function useListen(
             } else {
               // resetFollow: a fresh session must never inherit the previous meeting's converged
               // language-follow state from a warm worker (see whisper.worker.ts's init handler).
-              ensureWorker().postMessage({ type: 'init', quality, bundled, language: asrLanguageRef.current, resetFollow: true })
+              ensureWorker().postMessage({
+                type: 'init',
+                quality: whisperQuality,
+                bundled,
+                language: asrLanguageRef.current,
+                resetFollow: true
+              })
             }
             if (readyRef.current) pump() // warm worker already ready → drain immediately
           }
@@ -2040,12 +2108,27 @@ export function useListen(
       closeChannel('you')
       closeChannel('them')
       void window.toto.setListeningState(false).catch(() => {})
-      setState((s) => ({ ...s, listening: false, capturing: false, paused: false, loading: false, error: null, captureDegraded: null }))
-      drainTimerRef.current = null
-      stoppingRef.current = false
-      // The final flushed window (if any) has now committed via commitLine — text() reflects the
-      // complete post-drain transcript, safe for a caller (e.g. the recap) to read.
-      onDrained?.()
+      // 1.9.0 — collapse over-split "Speaker N" clusters before the recap/save reads lines.
+      void window.toto
+        .speakerFinalize()
+        .then((mapping) => {
+          if (mapping && Object.keys(mapping).length) applySpeakerMapping(mapping)
+        })
+        .catch(() => {})
+        .finally(() => {
+          setState((s) => ({
+            ...s,
+            listening: false,
+            capturing: false,
+            paused: false,
+            loading: false,
+            error: null,
+            captureDegraded: null
+          }))
+          drainTimerRef.current = null
+          stoppingRef.current = false
+          onDrained?.()
+        })
       // MQA-285: keep the hot engine. Idle-unloading here forced a cold start on the next Listen and
       // on the post-meeting recap. Unmount still tears the worker down.
     }
@@ -2062,7 +2145,7 @@ export function useListen(
     }
     // Give the worklet's flush message a tick to post its final window into the queue, then wait for drain.
     drainTimerRef.current = setTimeout(waitForDrain, 80)
-  }, [closeChannel, disarmNetworkRetry])
+  }, [closeChannel, disarmNetworkRetry, applySpeakerMapping])
 
   const clear = useCallback((): void => {
     setLines([])
@@ -2109,6 +2192,13 @@ export function useListen(
       warmed = true
       try {
         if (asrEngine === 'parakeet') {
+          // On tight free RAM, skip boot prewarm — Listen still loads Parakeet on demand.
+          try {
+            const ram = await window.toto.systemRam()
+            if (!shouldPrewarmParakeet(ram?.freeGB ?? 0, ram?.advertisedGB ?? 0)) return
+          } catch {
+            /* probe failed — still try prewarm */
+          }
           await window.toto.parakeetEnsure()
           return
         }
@@ -2116,8 +2206,9 @@ export function useListen(
         const bundled = await getAsrBundled()
         // Prewarm carries no language: the setting is only known per-session at start(), whose init
         // message updates the (already warm) worker's language before the first audio window.
-        // Quality matches the Settings request (default Best) so first Listen is not a cold Best load.
-        const warmQuality = asrQuality === 'fast' ? 'fast' : 'best'
+        // Quality matches Settings, then 8 GB policy clamps Whisper Best → Fast when needed.
+        const requestedWarm = asrQuality === 'fast' ? 'fast' : 'best'
+        const { quality: warmQuality } = await resolveWhisperQuality(requestedWarm)
         ensureWorker().postMessage({ type: 'init', quality: warmQuality, bundled })
         loadedQualityRef.current = warmQuality
       } catch {
@@ -2158,7 +2249,19 @@ export function useListen(
   // identity when a real piece of it changes — start/stop/pause/resume/clear/text are already
   // useCallback-stable, so without this the returned object was a fresh literal on every render.
   return useMemo(
-    () => ({ ...state, lines, start, stop, pause, resume, clear, text, setLanguage }),
-    [state, lines, start, stop, pause, resume, clear, text, setLanguage]
+    () => ({
+      ...state,
+      lines,
+      start,
+      stop,
+      pause,
+      resume,
+      clear,
+      text,
+      setLanguage,
+      remapSpeakerNames,
+      applySpeakerMapping
+    }),
+    [state, lines, start, stop, pause, resume, clear, text, setLanguage, remapSpeakerNames, applySpeakerMapping]
   )
 }
