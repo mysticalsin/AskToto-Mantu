@@ -2148,16 +2148,16 @@ function SpeakerProfilesPanel(): JSX.Element {
                   void window.toto
                     .speakerProfileDelete(p.name)
                     .then((r) => {
-                      if (!r?.ok) setErr('Could not delete voiceprint.')
+                      if (!r?.ok) setErr('Could not remove voiceprint.')
                       else {
                         setErr(null)
                         refresh()
                       }
                     })
-                    .catch(() => setErr('Could not delete voiceprint.'))
+                    .catch(() => setErr('Could not remove voiceprint.'))
                 }}
               >
-                Delete
+                Remove
               </button>
             </li>
           ))}

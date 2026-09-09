@@ -23,7 +23,7 @@ describe('ASR quality ship — Best default, Fast is a power option', () => {
 
   it('Settings copy names Fast as a power option and never presents silent Fast as Best', () => {
     const settings = read('src/renderer/src/components/Settings.tsx')
-    expect(settings).toMatch(/Fast is a (Settings )?power option/)
+    expect(settings).toMatch(/Fast is (a (Settings )?|the )power option/)
     expect(settings).toMatch(/never a silent Fast with a Best label|Fast is active/)
     expect(settings).not.toMatch(/On and Off currently use the same on-device model/)
   })
@@ -33,7 +33,9 @@ describe('ASR quality ship — Best default, Fast is a power option', () => {
       /qualityDegraded: requestedQuality === 'best' && engine !== 'webgpu'/
     )
     expect(read('src/renderer/src/App.tsx')).toMatch(/asrWebgpuFallbackAt/)
-    expect(read('src/renderer/src/components/Settings.tsx')).toMatch(/Download the high-accuracy model/)
+    expect(read('src/renderer/src/components/Settings.tsx')).toMatch(
+      /Download the high-accuracy (Whisper )?model/
+    )
   })
 })
 
@@ -53,9 +55,39 @@ describe('ASR quality ship — languages, switch, echo, meaning', () => {
 
   it('QUALITY.md exists and locks Best as the default before Settings copy', () => {
     const doc = read('docs/asr/QUALITY.md')
-    expect(doc).toMatch(/Default is \*\*Best\*\*/)
+    expect(doc).toMatch(/Default quality request is \*\*Best\*\*|Default is \*\*Best\*\*/)
     expect(doc).toMatch(/Fast is a Settings power option/)
     expect(doc).toMatch(/SWITCH_AFTER/)
     expect(doc).toMatch(/60\+/)
+  })
+})
+
+describe('ASR quality ship — 1.9.0 multi-speaker + efficient engines', () => {
+  it('QUALITY.md steers Parakeet-first and documents multi-speaker naming', () => {
+    const doc = read('docs/asr/QUALITY.md')
+    expect(doc).toMatch(/\*\*Parakeet\*\*.*\(default\)/)
+    expect(doc).toMatch(/Multi-speaker \(1\.9\.0\)/)
+    expect(doc).toMatch(/Speaker N/)
+    expect(doc).toMatch(/voiceprint/i)
+  })
+
+  it('live stop + save finalize remaps Speaker N before disk', () => {
+    expect(read('src/renderer/src/lib/listen.ts')).toMatch(/speakerFinalize/)
+    expect(read('src/main/index.ts')).toMatch(/remapTranscriptSpeakerNames/)
+    expect(read('src/main/index.ts')).toMatch(/finalizeSession/)
+  })
+
+  it('Review can promote a cluster into a durable voiceprint', () => {
+    expect(read('src/renderer/src/components/Review.tsx')).toMatch(/onRenameSpeaker/)
+    expect(read('src/renderer/src/App.tsx')).toMatch(/speakerPromote/)
+    expect(read('src/main/speaker-id.ts')).toMatch(/promoteCluster/)
+  })
+
+  it('Settings keeps Speaker ID light and lists saved voiceprints', () => {
+    const settings = read('src/renderer/src/components/Settings.tsx')
+    expect(settings).toMatch(/Speaker identification \(beta\)/)
+    expect(settings).toMatch(/~30 MB model/)
+    expect(settings).toMatch(/SpeakerProfilesPanel/)
+    expect(settings).toMatch(/speakerProfilesList/)
   })
 })
