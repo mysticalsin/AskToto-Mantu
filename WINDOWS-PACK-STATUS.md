@@ -24,8 +24,8 @@ Downloaded draft release **v1.8.4** (newest Windows Setup/Portable currently on 
 
 | File | Bytes | SHA-256 |
 | --- | ---: | --- |
-| Metis-Setup-1.8.4.exe | 767305772 | 775b4b2403032b706829a6cdbf8fcb4524fa3df8ee970f4a7fcca02123df5326 |
-| Metis-Portable-1.8.4.exe | 766952628 | 2239d4b877901f1edd145ccb3338c776b8a27e4144e32f7e3687a4847554b801 |
+| `Metis-Portable-1.8.4.exe` | 766952628 | `2239d4b877901f1edd145ccb3338c776b8a27e4144e32f7e3687a4847554b801` |
+| `Metis-Setup-1.8.4.exe` | 767305772 | `775b4b2403032b706829a6cdbf8fcb4524fa3df8ee970f4a7fcca02123df5326` |
 
 Both are valid PE32 NSIS GUI executables (`file(1)` + MZ/PE parse). They were **not** launched here (no Windows / no Wine).
 
