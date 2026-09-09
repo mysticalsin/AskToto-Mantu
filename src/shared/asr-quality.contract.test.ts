@@ -16,8 +16,9 @@ describe('ASR quality ship — Best default, Fast is a power option', () => {
     expect(read('src/renderer/src/lib/listen.ts')).toMatch(/useRef<'best' \| 'fast'>\('best'\)/)
     expect(read('src/renderer/src/lib/listen.ts')).toMatch(/quality: 'best' \| 'fast' = 'best'/)
     expect(read('src/renderer/src/lib/listen.ts')).toMatch(
-      /const warmQuality = asrQuality === 'fast' \? 'fast' : 'best'/
+      /const (warmQuality|requestedWarm) = asrQuality === 'fast' \? 'fast' : 'best'/
     )
+    expect(read('src/renderer/src/lib/listen.ts')).toMatch(/resolveWhisperQuality/)
     expect(read('src/renderer/src/App.tsx')).toMatch(/settings\?\.asrQuality \?\? 'best'/)
   })
 
@@ -89,5 +90,21 @@ describe('ASR quality ship — 1.9.0 multi-speaker + efficient engines', () => {
     expect(settings).toMatch(/~30 MB model/)
     expect(settings).toMatch(/SpeakerProfilesPanel/)
     expect(settings).toMatch(/speakerProfilesList/)
+  })
+})
+
+describe('ASR quality ship — 1.9.0 8 GB efficiency + meeting persistence', () => {
+  it('ships an asr-ram policy that keeps Whisper Best off 8 GB class machines', () => {
+    expect(read('src/shared/asr-ram.ts')).toMatch(/WHISPER_BEST_MIN_ADVERTISED_RAM_GB = 12/)
+    expect(read('src/shared/asr-ram.ts')).toMatch(/ASR_EIGHT_GB_CLASS = 8/)
+    expect(read('src/main/parakeet.ts')).toMatch(/parakeetNumThreads\(advertisedRamGB/)
+    expect(read('src/renderer/src/lib/listen.ts')).toMatch(/resolveWhisperQuality/)
+    expect(read('src/renderer/src/lib/listen.ts')).toMatch(/parakeetRelease/)
+  })
+
+  it('heals a lost meetingsFolder pointer and never wipes meetings on update', () => {
+    expect(read('src/main/transcripts.ts')).toMatch(/healMeetingsFolderSetting/)
+    expect(read('src/main/index.ts')).toMatch(/healMeetingsFolder/)
+    expect(read('docs/asr/QUALITY.md')).toMatch(/Previous meetings survive updates/)
   })
 })

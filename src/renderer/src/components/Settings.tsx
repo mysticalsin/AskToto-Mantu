@@ -6388,7 +6388,7 @@ export function Settings({
                     desc={
                       asrBundled
                         ? 'Default is Best. Fast is the power option for constrained machines. Parakeet (default engine) is already efficient on CPU. Whisper Best needs more RAM/GPU — if it cannot load, Métis runs Fast and says so below (never a silent Fast with a Best label). Download the high-accuracy Whisper model only when you need non-European languages.'
-                        : 'Default is Best. Prefer Parakeet for European meetings on laptops (fast + accurate, modest RAM). Whisper Best (~99 languages, heavier) is for non-European speech; Fast keeps Whisper usable on weaker devices.'
+                        : 'Default is Best. Prefer Parakeet for European meetings on laptops — Best quality at modest RAM, including 8 GB machines. Whisper Best (~99 languages, heavier) needs ~12 GB; on 8 GB Métis keeps Whisper on Fast automatically. Fast stays the power option.'
                     }
                     on={settings.asrQuality === 'best'}
                     onChange={(v) => patch({ asrQuality: v ? 'best' : 'fast' })}

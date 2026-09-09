@@ -71,6 +71,8 @@ export const IPC = {
   calendarToday: 'calendar:today',
   parakeetStatus: 'parakeet:status',
   parakeetEnsure: 'parakeet:ensure',
+  parakeetRelease: 'parakeet:release',
+  systemRam: 'system:ram',
   parakeetFeed: 'parakeet:feed',
   parakeetProgress: 'parakeet:progress',
   // Apple Speech (SFSpeechRecognizer, on-device via the mac-helper sidecar) — opt-in third ASR engine.
