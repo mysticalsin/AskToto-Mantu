@@ -3390,6 +3390,19 @@ function createTray(): void {
       : join(__dirname, '../../build/icon.png')
     let img = nativeImage.createFromPath(iconPath)
     if (!img.isEmpty()) img = img.resize({ width: 18, height: 18 })
+    // Windows has no tray title fallback (macOS setTitle). An empty image yields an invisible
+    // tray + skipTaskbar overlay — the app looks like it "didn't open". Use a solid mark.
+    if (img.isEmpty() && process.platform === 'win32') {
+      const size = 16
+      const buf = Buffer.alloc(size * size * 4)
+      for (let i = 0; i < size * size; i++) {
+        buf[i * 4] = 0x6b
+        buf[i * 4 + 1] = 0x2d
+        buf[i * 4 + 2] = 0xd9
+        buf[i * 4 + 3] = 0xff
+      }
+      img = nativeImage.createFromBuffer(buf, { width: size, height: size })
+    }
     tray = new Tray(img.isEmpty() ? nativeImage.createEmpty() : img)
     if (process.platform === 'darwin' && img.isEmpty()) tray.setTitle(' ◉ Métis')
     tray.setToolTip('Métis')
@@ -3398,6 +3411,23 @@ function createTray(): void {
     tray.on('click', () => sendHotkey('settings'))
   } catch {
     /* tray optional */
+  }
+}
+
+/** Windows: overlay is skipTaskbar + often an 8×2 island — users report "won't open". Tell them once. */
+function maybeNotifyWindowsRunning(): void {
+  if (process.platform !== 'win32') return
+  if (!Notification.isSupported()) return
+  try {
+    const s = getSettings()
+    if (s.winRunningHintShown) return
+    setSettings({ winRunningHintShown: true })
+    new Notification({
+      title: 'Métis is running',
+      body: 'Look for the Métis icon near the clock (system tray), or press your Settings hotkey.'
+    }).show()
+  } catch {
+    /* best-effort */
   }
 }
 
@@ -8029,6 +8059,7 @@ if (!app.requestSingleInstanceLock()) {
   runStep('createTray', createTray)
   runStep('registerShortcuts', registerShortcuts)
   runStep('createWindow', createWindow)
+  runStep('maybeNotifyWindowsRunning', maybeNotifyWindowsRunning)
   // screen-preprocess documents refresh() as "Call on startup and after settings change" — only the second
   // half was ever wired, so an opted-in user got a dead fast path (and a silent cloud image upload on every
   // screen ask) for the whole session after each relaunch (MQA-178). Deliberately AFTER createWindow: the
