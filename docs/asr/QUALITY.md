@@ -27,7 +27,7 @@ Pick Whisper when meetings are not European-language; keep Parakeet otherwise so
 - On-device CAM++ embeddings (lazy, 1 thread, ~30 MB) assign `name` (`Speaker N` or enrolled profile).
 - End-of-meeting finalize merges over-split clusters before save (live + import).
 - Review: click `Speaker N` to rename; remaps the transcript and promotes a voiceprint when embeddings exist.
-- Settings → Local AI lists/deletes saved voiceprints. Nothing leaves the device.
+- Settings → Local AI lists/removes saved voiceprints. Nothing leaves the device.
 
 ## Languages
 
