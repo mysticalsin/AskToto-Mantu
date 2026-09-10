@@ -266,6 +266,10 @@ export async function operatorHeartbeat(
   // Drain the durable outbox on every tick, BEFORE the heartbeat itself, so a just-flushed queue is
   // reflected in the {queued, dropped} counts this same heartbeat reports. Heartbeats are never queued.
   const queueReport = await drainOperatorQueue(queueDir(), Date.now(), async (path, body) => {
+    // Current durable producers only enqueue /v1/ingest. Older/corrupt queue files may contain live
+    // inference paths; consuming those without a request is the only safe recovery because their body
+    // cannot be represented by the telemetry projection and retrying would preserve a poison pill.
+    if (path !== '/v1/ingest') return { ok: true }
     const res = await signedPost(url, secret, path, body)
     return { ok: res.ok, status: res.status, retryAfterMs: retryAfterMsFromJson(res.json) }
   }).catch((e) => {

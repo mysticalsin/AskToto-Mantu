@@ -6639,8 +6639,9 @@ export function Settings({
                     />
                   </label>
                   <p className="px-1 py-2 text-[11px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
-                    Only operational metadata leaves this device: event types, status, timing and usage counts, plus
-                    device and license health. Prompts, transcripts, screenshots, and CRM record details never send.
+                    Operator telemetry sends only operational metadata: event types, status, timing and usage counts,
+                    plus device and license health. Content is not included in telemetry. Provider inference and user-approved
+                    destination writes are separate.
                   </p>
                   {operatorUrlConfigured(settings) && (
                     <button

@@ -14,7 +14,7 @@ import {
   setOperatorFundedProvidersForTests,
   setOperatorQueueDirForTests
 } from './operator-ingest'
-import { enqueueOperatorItem, loadQueueState } from './operator-queue'
+import { enqueueOperatorItem, loadQueueState, saveQueueState } from './operator-queue'
 import { signOperatorIngest } from './operator-hmac-sign'
 import { resetOperatorIntegrationsStateForTests, setOperatorIntegrationsFetchForTests } from './operator-integrations'
 
@@ -325,6 +325,39 @@ describe('operatorHeartbeat v2 seat fields + queue reporting', () => {
     expect(JSON.stringify(f.calls[0].body)).not.toContain('private')
     expect(f.calls[1].url).toBe('https://operator.test/v1/heartbeat')
     expect(f.calls[1].body.queued).toBe(0)
+    expect(loadQueueState(queueDir).items).toHaveLength(0)
+  })
+
+  it('consumes legacy non-ingest paths without a network call or permanent queue poison', async () => {
+    saveQueueState(queueDir, {
+      items: [
+        {
+          id: 'legacy-ask-path',
+          path: '/v1/ask',
+          body: { messages: [{ content: 'private ask words' }] },
+          enqueuedAt: 1,
+          attempts: 0,
+          nextAttemptAt: 1
+        },
+        {
+          id: 'legacy-use-path',
+          path: '/v1/use',
+          body: { prompt: 'private use words' },
+          enqueuedAt: 2,
+          attempts: 0,
+          nextAttemptAt: 1
+        }
+      ],
+      droppedSinceReport: 0
+    })
+
+    const f = captureFetch()
+    const beat = await operatorHeartbeat(SETTINGS)
+
+    expect(beat.ok).toBe(true)
+    expect(f.calls).toHaveLength(1)
+    expect(f.calls[0].url).toBe('https://operator.test/v1/heartbeat')
+    expect(f.calls[0].body.queued).toBe(0)
     expect(loadQueueState(queueDir).items).toHaveLength(0)
   })
 
