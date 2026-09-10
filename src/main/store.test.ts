@@ -294,6 +294,21 @@ describe('store', () => {
     expect(readFileSync(settingsFile, 'utf8')).toBe(legacyProfile)
   })
 
+  it('keeps a historically completed sparse profile on Parakeet across onboarding replay', () => {
+    const settingsFile = join(userData, 'settings.json')
+    writeFileSync(
+      settingsFile,
+      JSON.stringify({ onboardingDone: true, onboardingDoneAt: 123 }),
+      'utf8'
+    )
+
+    expect(getSettings().asrEngine).toBe('parakeet')
+    expect(setSettings({ onboardingDone: false }).asrEngine).toBe('parakeet')
+    expect(readPersisted(settingsFile)).toEqual({ onboardingDone: false, onboardingDoneAt: 123 })
+    expect(setSettings({ onboardingDone: true }).asrEngine).toBe('parakeet')
+    expect(readPersisted(settingsFile)).toEqual({ onboardingDone: true, onboardingDoneAt: 123 })
+  })
+
   describe('RAM-aware fresh ASR default', () => {
     it('selects Whisper for a fresh 16 GiB profile without writing settings and memoizes the hardware read', () => {
       const settingsFile = join(userData, 'settings.json')
