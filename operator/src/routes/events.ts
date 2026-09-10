@@ -7,6 +7,7 @@
  */
 import { json } from '../http'
 import { looksLikeSecret } from '../redact'
+import { projectEventTelemetry } from '../privacy'
 import type { EventsQueryOpts } from '../store'
 import { defineRoute } from './registry'
 import type { AdminCtx } from './admin-ctx'
@@ -124,7 +125,8 @@ export function registerEventsRoutes(): void {
       ])
       const getSeat = seatCache(ctx.store)
       const rows: EventListRow[] = await Promise.all(
-        page.rows.map(async (e) => {
+        page.rows.map(async (stored) => {
+          const e = projectEventTelemetry(stored)
           const seat = e.device_id ? await getSeat(e.device_id) : null
           const who = profileOf(seat)
           return {

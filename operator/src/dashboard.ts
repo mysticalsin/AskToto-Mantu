@@ -7,7 +7,7 @@ import {
 } from '../../src/shared/operator'
 import { formatSavedTime, timeSavedFromMeetings } from '../../src/shared/time-saved'
 import { aggregateQuestionTypes, type QuestionTypeMix } from '../../src/shared/question-type'
-import { CRM_STATUSES, type CrmSendRow, type CrmStatus } from './crm'
+import { CRM_STATUSES, normalizeCrmRow, type CrmSendRow, type CrmStatus } from './crm'
 import { missingCloudflareOverview, type CloudflareOverview } from './cloudflare'
 import {
   approvalOf,
@@ -20,6 +20,7 @@ import {
   type SeatApproval
 } from './fleet'
 import { looksLikeSecret, safeChips, type SafeChip } from './redact'
+import { projectAskTelemetry, projectEventTelemetry } from './privacy'
 import { geoRegionRows, realtimeGeoRows, type GeoRegionRow, type RealtimeGeoRow } from './realtime-geo'
 import { readIntegrationExtra } from './connectors/data'
 import type {
@@ -692,7 +693,7 @@ export async function buildDashboard(
   cloudflare: CloudflareOverview = missingCloudflareOverview(),
   valueSettings: DashboardValueSettings = NO_VALUE_SETTINGS
 ): Promise<DashboardPayload> {
-  const [seatsRaw, asks, pulses, proposals, audit, crm, packs, storedEvents, vault, issued, sessionsPage] = await Promise.all([
+  const [seatsRaw, asksRaw, pulses, proposals, audit, crmRaw, packs, storedEventsRaw, vault, issued, sessionsPage] = await Promise.all([
     store.listSeats(),
     store.listAsks(2000),
     store.listPulses(now - 7 * DAY),
@@ -705,6 +706,9 @@ export async function buildDashboard(
     store.listIssuedLicenses(200),
     store.listSessions({ since: now - 7 * DAY, limit: 1000 })
   ])
+  const asks = asksRaw.map(projectAskTelemetry)
+  const crm = crmRaw.map(normalizeCrmRow)
+  const storedEvents = storedEventsRaw.map(projectEventTelemetry)
   const seats = seatsRaw.filter(isRealSeat)
   const sessions = sessionsPage.rows
   const activeJti = new Set(issued.filter((l) => issuedLicenseActive(l, now)).map((l) => l.jti))
@@ -915,9 +919,9 @@ export async function buildDashboard(
       skill_id: p.skill_id,
       from_version: p.from_version,
       status: p.status,
-      rationale: p.rationale,
+      rationale: 'Ask metadata only; no prompt evidence stored.',
       diff: p.diff,
-      evidence: JSON.parse(p.evidence_json || '[]') as string[],
+      evidence: [],
       created_by: p.created_by,
       created_at: p.created_at
     })),
@@ -1297,7 +1301,7 @@ function isExpiringSoon(row: IssuedLicenseRow, now: number): boolean {
  * secrets: only the fields the Realtime/Overview live strip needs.
  */
 export async function buildLiveSnapshot(store: OperatorStore, now: number, opts: LiveSnapshotOpts = {}): Promise<LiveSnapshot> {
-  const [seatsRaw, sessionsPage, events, todayAsks, crm, proposals, integrations, issuedLicenses] = await Promise.all([
+  const [seatsRaw, sessionsPage, eventsRaw, todayAsksRaw, crmRaw, proposals, integrations, issuedLicenses] = await Promise.all([
     store.listSeats(),
     store.listSessions({ since: now - DAY, limit: 500 }),
     store.listEvents(40),
@@ -1307,6 +1311,9 @@ export async function buildLiveSnapshot(store: OperatorStore, now: number, opts:
     store.listIntegrationRows(),
     store.listIssuedLicenses()
   ])
+  const events = eventsRaw.map(projectEventTelemetry)
+  const todayAsks = todayAsksRaw.map(projectAskTelemetry)
+  const crm = crmRaw.map(normalizeCrmRow)
   const seats = seatsRaw.filter(isRealSeat)
   const seatsById = new Map(seats.map((s) => [s.device_id, s]))
   const liveSeats = seats.filter((s) => now - s.last_seen < ONLINE_MS)

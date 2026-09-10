@@ -11,6 +11,7 @@ import { ONLINE_MS } from '../dashboard'
 import { json } from '../http'
 import type { SessionRow } from '../store'
 import { resolveTierAndEntitlements } from '../tiers'
+import { projectAskTelemetry, projectEventTelemetry } from '../privacy'
 import { resolveRange, parseLimit } from './events'
 import { defineRoute, type RouteMatch } from './registry'
 import type { AdminCtx } from './admin-ctx'
@@ -162,7 +163,7 @@ async function sessionDetail(ctx: AdminCtx, id: string): Promise<Response> {
   const who = profileOf(seat)
   const { tier } = seat ? await resolveTierAndEntitlements(ctx.store, seat, ctx.now, tiers) : { tier: null }
 
-  const events = eventsPage.rows.map((e) => ({
+  const events = eventsPage.rows.map(projectEventTelemetry).map((e) => ({
     id: e.id,
     ts: e.ts,
     kind: e.kind,
@@ -173,6 +174,7 @@ async function sessionDetail(ctx: AdminCtx, id: string): Promise<Response> {
   // asks are never shown with prompt text or ciphertext: no `preview`, `prompt_cipher` or `prompt_iv`.
   const asks = asksAll
     .filter((a) => a.device_id === session.device_id && a.ts <= end)
+    .map(projectAskTelemetry)
     .map((a) => ({
       id: a.id,
       ts: a.ts,

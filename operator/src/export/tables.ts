@@ -3,8 +3,8 @@
  * and a batched async row source per table so `csv.ts`/`xlsx.ts` can stream a response body without
  * holding a whole table in memory. `routes/export.ts` is the only caller.
  *
- * Redaction mirrors the JSON routes exactly: `asks` never carries prompt text or ciphertext (only the
- * already-redacted `preview` label ingest.ts builds); `licenses` and `integrations` carry `last4`
+ * Redaction mirrors the JSON routes exactly: `asks` never carries stored preview text or ciphertext
+ * (the export derives a label from closed metadata); `licenses` and `integrations` carry `last4`
  * only, never a credential, a config secret or the full signed license string (which is never stored
  * server-side in the first place); `seats` runs every free-text field through `looksLikeSecret`, same
  * as `dashboard.ts`.
@@ -16,7 +16,8 @@
 import { approvalOf, isRealSeat } from '../fleet'
 import { looksLikeSecret } from '../redact'
 import { issuedLicenseActive } from '../fleet'
-import type { AuditRow, EventRow, IssuedLicenseRow, OperatorStore, SeatRow, SessionRow } from '../store'
+import { projectAskTelemetry, projectEventTelemetry } from '../privacy'
+import type { AskRow, AuditRow, EventRow, IssuedLicenseRow, OperatorStore, SeatRow, SessionRow } from '../store'
 
 export type ExportColumnType = 'string' | 'number' | 'date'
 
@@ -129,13 +130,14 @@ async function* auditRows(store: OperatorStore, filters: ExportFilters): AsyncGe
 // ---------------------------------------------------------------------------
 
 function projectEvent(row: EventRow): ExportRow {
+  const safe = projectEventTelemetry(row)
   return {
-    ts: row.ts,
-    kind: row.kind,
-    actor: row.actor,
-    device_id: row.device_id,
-    country: row.country,
-    detail: row.detail
+    ts: safe.ts,
+    kind: safe.kind,
+    actor: safe.actor,
+    device_id: safe.device_id,
+    country: safe.country,
+    detail: safe.detail
   }
 }
 
@@ -224,29 +226,19 @@ async function* sessionsRows(store: OperatorStore, filters: ExportFilters): Asyn
 // asks (no prompt text, no cipher)
 // ---------------------------------------------------------------------------
 
-function projectAsk(row: {
-  id: string
-  ts: number
-  device_id: string
-  mode: string | null
-  provider: string | null
-  model: string | null
-  outcome: string | null
-  rating: string | null
-  question_type: string | null
-  preview: string | null
-}): ExportRow {
+function projectAsk(row: AskRow): ExportRow {
+  const safe = projectAskTelemetry(row)
   return {
-    id: row.id,
-    ts: row.ts,
-    device_id: row.device_id,
-    mode: row.mode,
-    provider: row.provider,
-    model: row.model,
-    outcome: row.outcome,
-    rating: row.rating,
-    question_type: row.question_type,
-    detail: row.preview
+    id: safe.id,
+    ts: safe.ts,
+    device_id: safe.device_id,
+    mode: safe.mode,
+    provider: safe.provider,
+    model: safe.model,
+    outcome: safe.outcome,
+    rating: safe.rating,
+    question_type: safe.question_type,
+    detail: safe.preview
   }
 }
 
@@ -264,7 +256,7 @@ const ASKS_COLUMNS: ExportColumn[] = [
 ]
 
 async function* asksRows(store: OperatorStore, filters: ExportFilters): AsyncGenerator<ExportRow[]> {
-  const rows = await store.listAsks(MAX_ROWS, filters.since)
+  const rows = (await store.listAsks(MAX_ROWS, filters.since)).map(projectAskTelemetry)
   const filtered = rows
     .filter((r) => filters.until == null || r.ts <= filters.until)
     .filter((r) => matchesQuery(filters.q, [r.mode, r.provider, r.model, r.outcome, r.preview]))
