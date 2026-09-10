@@ -349,6 +349,10 @@ function sseResponse(
             if (!trimmed.startsWith('data:')) return true
             const payload = trimmed.slice(5).trim()
             if (!payload) return true
+            if (terminalReached) {
+              terminalError ??= 'out_of_order_terminal'
+              return true
+            }
             if (payload === '[DONE]') {
               if (req.provider === 'anthropic' || sawOpenAiDone || !finishReason) {
                 terminalError ??= 'out_of_order_terminal'

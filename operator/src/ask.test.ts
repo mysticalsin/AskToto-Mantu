@@ -629,6 +629,42 @@ describe('truthful provider completion', () => {
     expect((await store.listAsks(1))[0]?.outcome).toBe('error')
   })
 
+  it.each([
+    [
+      'openai',
+      [
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'pre-terminal partial' } }] })}\n\n`,
+        `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`,
+        'data: [DONE]\n\n',
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'post-terminal poison' } }] })}\n\n`
+      ].join('')
+    ],
+    [
+      'anthropic',
+      [
+        `data: ${JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'pre-terminal partial' } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn' } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'message_stop' })}\n\n`,
+        `data: ${JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'post-terminal poison' } })}\n\n`
+      ].join('')
+    ]
+  ] as const)('never emits %s data received after its terminal event in the same chunk', async (provider, wire) => {
+    const { response, store } = await askProvider(provider, upstream(wire), `ask-${provider}-post-terminal-poison`)
+    const got = events(await response.text())
+    const emitted = got
+      .filter((event) => event.t === 'delta')
+      .map((event) => String(event.text ?? ''))
+      .join('')
+
+    expect(emitted).toContain('pre-terminal partial')
+    expect(emitted).not.toContain('post-terminal poison')
+    expect(got).toContainEqual(
+      expect.objectContaining({ t: 'error', status: 'incomplete', finishReason: 'out_of_order_terminal' })
+    )
+    expect(got.some((event) => event.t === 'done')).toBe(false)
+    expect((await store.listAsks(1))[0]?.outcome).toBe('error')
+  })
+
   it('rejects malformed terminal payloads instead of inferring success from HTTP 200', async () => {
     const frames = [
       `data: ${JSON.stringify({ choices: [{ delta: { content: 'partial answer' } }] })}\n\n`,
