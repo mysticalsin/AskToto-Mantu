@@ -175,6 +175,9 @@ export interface SpeakerId {
    *  old->final label mapping so already-emitted lines can be relabeled. Profile-matched names are
    *  untouched (they never came from the clusterer). */
   finalizeSession: () => Map<string, string>
+  /** Invalidate pending work and discard transient session buffers without enrolling or persisting them.
+   *  Used by the hard privacy off-switch; unlike resetSession, this never flushes the operator buffer. */
+  discardSession: () => void
   resetSession: () => void
 }
 
@@ -295,6 +298,15 @@ export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
     return persisted ? Float32Array.from(persisted.centroid) : null
   }
 
+  const discardSession = (): void => {
+    // Invalidate every native-dependent call before any await continuation can mutate session state.
+    sessionGeneration++
+    operatorBuffer = []
+    clusterEmbeddings.clear()
+    clusterer.reset()
+    lastWindowAt = 0
+  }
+
   return {
     labelWindow: async (samples, owner = 'live') => {
       const ex = getExtractor()
@@ -382,18 +394,14 @@ export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
         return false
       }
     },
+    discardSession,
     resetSession: () => {
-      // Invalidate every native-dependent call before any await continuation can touch the next session.
-      sessionGeneration++
       // Flush this session's operator samples into the persisted profile BEFORE clearing — the
       // resetSession boundary is the next meeting's START (see MQA-043's wiring in index.ts), so this
       // flushes the meeting that just ended. Same AUTO_ENROLL_MIN_WINDOWS quality gate as the flywheel:
       // a session with only 1-2 'you' windows (a near-silent mic-only stretch) adds no useful signal.
       if (operatorBuffer.length >= AUTO_ENROLL_MIN_WINDOWS) enrollEmbeddings(OPERATOR_PROFILE_NAME, operatorBuffer)
-      operatorBuffer = []
-      clusterEmbeddings.clear()
-      clusterer.reset()
-      lastWindowAt = 0
+      discardSession()
     }
   }
 }
