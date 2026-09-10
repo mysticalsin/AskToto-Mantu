@@ -342,6 +342,7 @@ function sseResponse(
           let malformedPayload = false
           let terminalError: 'conflicting_terminal' | 'out_of_order_terminal' | undefined
           let sawOpenAiDone = false
+          let terminalReached = false
 
           const processLine = (raw: string): boolean => {
             const trimmed = raw.trim()
@@ -353,6 +354,7 @@ function sseResponse(
                 terminalError ??= 'out_of_order_terminal'
               }
               sawOpenAiDone = true
+              terminalReached = true
               return true
             }
             if (sawOpenAiDone) terminalError ??= 'out_of_order_terminal'
@@ -375,6 +377,7 @@ function sseResponse(
             if (req.provider === 'anthropic' && parsed.type === 'message_stop') {
               if (sawAnthropicStop) terminalError ??= 'out_of_order_terminal'
               sawAnthropicStop = true
+              terminalReached = true
             }
             const text = deltaFromPayload(parsed)
             if (text && (finishReason || sawAnthropicStop)) terminalError ??= 'out_of_order_terminal'
@@ -394,6 +397,10 @@ function sseResponse(
                 return
               }
             }
+            if (terminalReached) {
+              await upstreamReader.cancel('provider terminal received').catch(() => undefined)
+              break
+            }
           }
           buf += decoder.decode()
           if (buf && !processLine(buf)) return
@@ -408,6 +415,10 @@ function sseResponse(
           }
           if (terminalError) {
             incomplete(terminalError)
+            return
+          }
+          if (req.provider !== 'anthropic' && !sawOpenAiDone) {
+            incomplete('unexpected_eof')
             return
           }
           if (!isNaturalCompletion(req.provider, finishReason)) {

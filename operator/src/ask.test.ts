@@ -374,6 +374,89 @@ describe('truthful provider completion', () => {
   })
 
   it.each([
+    [
+      'openai',
+      [
+        `data: ${JSON.stringify({ choices: [{ delta: { content: 'complete answer' } }] })}\n\n`,
+        `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`,
+        'data: [DONE]\n\n'
+      ].join(''),
+      'stop'
+    ],
+    [
+      'anthropic',
+      [
+        `data: ${JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'complete answer' } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn' } })}\n\n`,
+        `data: ${JSON.stringify({ type: 'message_stop' })}\n\n`
+      ].join(''),
+      'end_turn'
+    ]
+  ] as const)('completes promptly at the %s terminal event without waiting for transport EOF', async (provider, wire, finishReason) => {
+    let upstreamCancelled = false
+    const providerFetch: typeof fetch = async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(wire))
+          },
+          cancel() {
+            upstreamCancelled = true
+          }
+        }),
+        { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8' } }
+      )
+    const { response, store } = await askProvider(provider, providerFetch, `ask-${provider}-open-transport-complete`)
+
+    const got = await Promise.race([
+      response.text().then(events),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 250))
+    ])
+
+    expect(got).not.toBeNull()
+    expect(got!).toContainEqual(expect.objectContaining({ t: 'done', status: 'complete', finishReason }))
+    expect(upstreamCancelled).toBe(true)
+    expect((await store.listAsks(1))[0]?.outcome).toBe('answered')
+  })
+
+  it.each([
+    ['openai', 'data: [DONE]\n\n'],
+    ['anthropic', `data: ${JSON.stringify({ type: 'message_stop' })}\n\n`]
+  ] as const)('fails promptly when the %s terminal event has no finish reason', async (provider, terminal) => {
+    let upstreamCancelled = false
+    const wire = [
+      provider === 'openai'
+        ? `data: ${JSON.stringify({ choices: [{ delta: { content: 'partial answer' } }] })}\n\n`
+        : `data: ${JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'partial answer' } })}\n\n`,
+      terminal
+    ].join('')
+    const providerFetch: typeof fetch = async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode(wire))
+          },
+          cancel() {
+            upstreamCancelled = true
+          }
+        }),
+        { status: 200, headers: { 'content-type': 'text/event-stream; charset=utf-8' } }
+      )
+    const { response, store } = await askProvider(provider, providerFetch, `ask-${provider}-terminal-without-reason`)
+
+    const got = await Promise.race([
+      response.text().then(events),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 250))
+    ])
+
+    expect(got).not.toBeNull()
+    expect(got!).toContainEqual(expect.objectContaining({ t: 'error', status: 'incomplete', retryable: true }))
+    expect(got!.some((event) => event.t === 'done')).toBe(false)
+    expect(upstreamCancelled).toBe(true)
+    expect((await store.listAsks(1))[0]?.outcome).toBe('error')
+  })
+
+  it.each([
     ['length', 'length'],
     ['EOF without a terminal reason', undefined]
   ])('rejects OpenAI %s after partial output', async (_label, finishReason) => {
@@ -395,6 +478,21 @@ describe('truthful provider completion', () => {
         finishReason: finishReason ?? 'unexpected_eof',
         retryable: true
       })
+    )
+    expect(got.some((event) => event.t === 'done')).toBe(false)
+    expect((await store.listAsks(1))[0]?.outcome).toBe('error')
+  })
+
+  it('rejects OpenAI transport EOF after a finish reason but before the terminal sentinel', async () => {
+    const frames = [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: 'partial answer' } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`
+    ].join('')
+    const { response, store } = await askProvider('openai', upstream(frames), 'ask-openai-eof-before-done')
+    const got = events(await response.text())
+
+    expect(got).toContainEqual(
+      expect.objectContaining({ t: 'error', status: 'incomplete', finishReason: 'unexpected_eof' })
     )
     expect(got.some((event) => event.t === 'done')).toBe(false)
     expect((await store.listAsks(1))[0]?.outcome).toBe('error')
