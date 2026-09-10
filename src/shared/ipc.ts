@@ -5,6 +5,14 @@ import { EntityKindSchema } from './brain'
 import { OPERATOR_LICENSE_MAX } from './operator-license'
 import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './recap-status'
 
+/** The existing persisted meeting start is also its live audio owner. Never coerce or create a clock. */
+export const LiveMeetingStartedAtSchema = z.number().int().positive().max(8.64e15)
+export const ListeningStatePayloadSchema = z.object({
+  on: z.boolean(),
+  startedAt: LiveMeetingStartedAtSchema.optional()
+})
+export type ListeningStatePayload = z.infer<typeof ListeningStatePayloadSchema>
+
 export const ProviderIdSchema = z.enum([
   'anthropic',
   'openai',

@@ -34,6 +34,7 @@ import { pathToFileURL } from 'node:url'
 import { randomBytes } from 'node:crypto'
 import {
   IPC,
+  LiveMeetingStartedAtSchema,
   AskStartSchema,
   SetApiKeyPayloadSchema,
   ClearApiKeyPayloadSchema,
@@ -83,6 +84,7 @@ import {
   type AskStart,
   type ImportJobView,
   type ImportAssetsProgress,
+  type ListeningStatePayload,
   type ScreenContextResult,
   type DiagnosticsExportResult,
   type RecallExportPlainResult,
@@ -157,7 +159,12 @@ import {
 import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText } from './mac-helper'
-import { createSpeakerId, type SpeakerId, type SpeakerLabel } from './speaker-id'
+import {
+  createSpeakerId,
+  type SpeakerEnrollmentSnapshot,
+  type SpeakerId,
+  type SpeakerLabel
+} from './speaker-id'
 import { releaseSpeakerEmbedding } from './speaker-embedding-client'
 import {
   clampAxis,
@@ -222,18 +229,210 @@ import {
   parseOverlayOrbStyle
 } from '@shared/overlay-orb'
 
+// --- Speaker session ownership (Task 7-P2b) ---
+
 // Lazy Speaker Intelligence singleton — building it probes the sherpa addon + embedding model, so defer
-// until the first THEM window with the feature enabled (never on the startup path).
+// until an identified and admitted live/import session needs it (never on the startup path).
 let speakerIdInstance: SpeakerId | null = null
 function getSpeakerId(): SpeakerId {
   if (!speakerIdInstance) speakerIdInstance = createSpeakerId()
   return speakerIdInstance
 }
 
+type LiveSpeakerReceipt = {
+  key: string
+  closedAt?: number
+  savedFile?: string
+}
+
+type ImportSpeakerOwner = {
+  attemptId: number
+  key: string
+}
+
+const LIVE_SPEAKER_RECEIPT_TTL_MS = 30 * 60_000
+let activeLiveSpeakerStartedAt: number | null = null
+let legacyListeningActive = false
+let liveSpeakerStartedAtHighWater = 0
+const liveSpeakerReceipts = new Map<number, LiveSpeakerReceipt>()
+const importSpeakerOwners = new Map<string, ImportSpeakerOwner>()
+
+function warnSpeakerFailure(message: string, error: unknown): void {
+  mainLog.warn(`[speaker-id] ${message}`, error instanceof Error ? error.message : String(error))
+}
+
+function disposeSpeakerKey(key: string): void {
+  try {
+    speakerIdInstance?.disposeSession(key)
+  } catch (error) {
+    warnSpeakerFailure('session disposal failed', error)
+  }
+}
+
+function cleanupExpiredLiveSpeakerReceipts(): void {
+  const now = Date.now()
+  for (const [startedAt, receipt] of liveSpeakerReceipts) {
+    if (receipt.closedAt === undefined || now - receipt.closedAt <= LIVE_SPEAKER_RECEIPT_TTL_MS) continue
+    liveSpeakerReceipts.delete(startedAt)
+    disposeSpeakerKey(receipt.key)
+  }
+}
+
+function completeLiveSpeakerReceipt(startedAt: number): void {
+  const receipt = liveSpeakerReceipts.get(startedAt)
+  if (!receipt || receipt.closedAt === undefined || !receipt.savedFile) return
+
+  // Delete before any fallible work: duplicate saves/stops cannot replay the capability or snapshot a
+  // replacement. snapshotSession intentionally keeps its existing qualified-operator flush behavior;
+  // consent/encrypted operator-profile persistence remains Task 7-P3.
+  liveSpeakerReceipts.delete(startedAt)
+  let snapshot: SpeakerEnrollmentSnapshot | null = null
+  try {
+    if (speakerIdProcessingEnabled()) snapshot = speakerIdInstance?.snapshotSession(receipt.key) ?? null
+    else disposeSpeakerKey(receipt.key)
+  } catch (error) {
+    warnSpeakerFailure('session snapshot failed', error)
+    disposeSpeakerKey(receipt.key)
+  }
+
+  void backfillSpeakerNames(receipt.savedFile, snapshot ?? undefined).catch(error => {
+    warnSpeakerFailure('post-save speaker backfill failed', error)
+  })
+}
+
+function closeLiveSpeakerReceipt(startedAt: number): void {
+  cleanupExpiredLiveSpeakerReceipts()
+  const receipt = liveSpeakerReceipts.get(startedAt)
+  if (!receipt || receipt.closedAt !== undefined) return
+  receipt.closedAt = Date.now()
+  completeLiveSpeakerReceipt(startedAt)
+}
+
+/** Record only a path returned by saveMeeting. True means the save belongs to an admitted receipt, even
+ *  when it is a duplicate; every matched active save must defer name backfill until the exact close. */
+function recordLiveSpeakerSave(startedAt: number, file: string): boolean {
+  cleanupExpiredLiveSpeakerReceipts()
+  const receipt = liveSpeakerReceipts.get(startedAt)
+  if (!receipt) return false
+  if (!receipt.savedFile) receipt.savedFile = file
+  completeLiveSpeakerReceipt(startedAt)
+  return true
+}
+
+/** The one synchronous authority consumed by listening-state-ipc before it performs any side effect. */
+function acceptLiveSpeakerTransition(change: ListeningStatePayload): boolean {
+  cleanupExpiredLiveSpeakerReceipts()
+  const startedAt = change.startedAt
+
+  if (startedAt === undefined) {
+    if (activeLiveSpeakerStartedAt !== null) return false
+    if (change.on === legacyListeningActive) return false
+    legacyListeningActive = change.on
+    return true
+  }
+
+  if (change.on) {
+    if (startedAt <= liveSpeakerStartedAtHighWater) return false
+    const previous = activeLiveSpeakerStartedAt
+    if (previous !== null) closeLiveSpeakerReceipt(previous)
+    activeLiveSpeakerStartedAt = startedAt
+    legacyListeningActive = false
+    liveSpeakerStartedAtHighWater = startedAt
+
+    if (!speakerIdProcessingEnabled()) return true
+    const key = `live:${startedAt}`
+    try {
+      if (getSpeakerId().createSession(key)) liveSpeakerReceipts.set(startedAt, { key })
+    } catch (error) {
+      warnSpeakerFailure('live session admission failed', error)
+    }
+    return true
+  }
+
+  if (activeLiveSpeakerStartedAt !== startedAt) return false
+  // Capture and close the prior exact owner synchronously before clearing authority. The async native
+  // release that follows in listening-state-ipc therefore cannot resolve against a replacement.
+  closeLiveSpeakerReceipt(startedAt)
+  activeLiveSpeakerStartedAt = null
+  legacyListeningActive = false
+  return true
+}
+
+/** Validate and capture the exact currently-admitted live key before a feed handler's first ASR await. */
+function captureLiveSpeakerKey(rawStartedAt: unknown): string | null {
+  const parsed = LiveMeetingStartedAtSchema.safeParse(rawStartedAt)
+  if (!parsed.success || activeLiveSpeakerStartedAt !== parsed.data) return null
+  const receipt = liveSpeakerReceipts.get(parsed.data)
+  if (!receipt || !speakerIdProcessingEnabled()) return null
+  return receipt.key
+}
+
+/** Crash cleanup is discard-only: never snapshot, flush operator audio, or create an enrollment token. */
+function discardActiveLiveSpeakerSession(): void {
+  const startedAt = activeLiveSpeakerStartedAt
+  activeLiveSpeakerStartedAt = null
+  legacyListeningActive = false
+  if (startedAt === null) return
+  const receipt = liveSpeakerReceipts.get(startedAt)
+  if (!receipt) return
+  liveSpeakerReceipts.delete(startedAt)
+  disposeSpeakerKey(receipt.key)
+}
+
+function validImportSpeakerAttempt(attempt: ImportSpeakerAttempt): boolean {
+  return typeof attempt?.jobId === 'string' && attempt.jobId.length > 0 &&
+    Number.isSafeInteger(attempt.attemptId) && attempt.attemptId > 0
+}
+
+function beginImportSpeakers(attempt: ImportSpeakerAttempt): boolean {
+  if (!validImportSpeakerAttempt(attempt) || importSpeakerOwners.has(attempt.jobId)) return false
+  if (!speakerIdProcessingEnabled()) return false
+  const key = `import:${attempt.jobId}`
+  try {
+    if (!getSpeakerId().createSession(key)) return false
+    importSpeakerOwners.set(attempt.jobId, { attemptId: attempt.attemptId, key })
+    return true
+  } catch (error) {
+    warnSpeakerFailure('import session admission failed', error)
+    return false
+  }
+}
+
+function captureImportSpeakerKey(attempt: ImportSpeakerAttempt): string | null {
+  if (!validImportSpeakerAttempt(attempt)) return null
+  const owner = importSpeakerOwners.get(attempt.jobId)
+  if (!owner || owner.attemptId !== attempt.attemptId || !speakerIdProcessingEnabled()) return null
+  return owner.key
+}
+
+function finalizeImportSpeakers(attempt: ImportSpeakerAttempt): Map<string, string> | null {
+  const key = captureImportSpeakerKey(attempt)
+  if (!key) return null
+  try {
+    return speakerIdInstance?.finalizeSessionByKey(key) ?? null
+  } catch (error) {
+    warnSpeakerFailure('import finalization failed', error)
+    return null
+  }
+}
+
+function disposeImportSpeakers(attempt: ImportSpeakerAttempt): void {
+  if (!validImportSpeakerAttempt(attempt)) return
+  const owner = importSpeakerOwners.get(attempt.jobId)
+  if (!owner || owner.attemptId !== attempt.attemptId) return
+  importSpeakerOwners.delete(attempt.jobId)
+  disposeSpeakerKey(owner.key)
+}
+
 /** Apply the Speaker Intelligence privacy policy without constructing the lazy identifier. Turning the
- *  feature off invalidates pending continuations and drops transient buffers without persisting them. */
+ *  feature off invalidates every token/continuation and drops transient buffers without persisting them.
+ *  The active recording identity remains solely so its later keyed Stop can release capture resources. */
 function applySpeakerIdPolicy(enabled: boolean): boolean {
-  if (!enabled) speakerIdInstance?.discardSession()
+  if (!enabled) {
+    liveSpeakerReceipts.clear()
+    importSpeakerOwners.clear()
+    speakerIdInstance?.discardSession()
+  }
   return enabled
 }
 
@@ -254,37 +453,35 @@ function publicSettingsWithSpeakerPolicy(): ReturnType<typeof publicSettings> {
   return settings
 }
 
-/** Shared Speaker Intelligence label lookup for a THEM window — parakeetFeed, appleSpeechFeed and
- *  speakerEmbed all funnel through this one place so the settings gate + failure handling can't drift
- *  between the three chokepoints. Degrades to null on any failure, the feature being off, or the model
- *  being unprovisioned — a missing label must never break transcription. See speaker-id.ts's labelWindow
- *  for the echo-defense flag (`label.echo`) callers must check before attaching `label.name` anywhere. */
-async function labelThemAudio(samples: Float32Array, owner: 'live' | 'import' = 'live'): Promise<SpeakerLabel | null> {
-  if (!speakerIdProcessingEnabled()) return null
+/** Keyed Speaker Intelligence label lookup. A null/unadmitted key returns before settings/profile/native
+ *  work, and every failure degrades to no name so transcription remains authoritative. */
+async function labelThemAudio(
+  samples: Float32Array,
+  key: string | null,
+  owner: 'live' | 'import'
+): Promise<SpeakerLabel | null> {
+  if (!key || !speakerIdProcessingEnabled()) return null
   try {
-    const label = await getSpeakerId().labelWindow(samples, owner)
+    const label = await getSpeakerId().labelSessionWindow(key, samples, owner)
     return speakerIdProcessingEnabled() ? label : null
-  } catch (err) {
-    mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
+  } catch (error) {
+    warnSpeakerFailure('labeling failed', error)
     return null
   }
 }
 
-/** Echo defense + operator profile upkeep (SPEAKER-INTELLIGENCE-PLAN §3.3) — feed a 'you' (mic) window's
- *  raw audio into the operator's rolling voiceprint so labelThemAudio can recognize the operator's own
- *  voice bleeding through the loopback. Async child failures are swallowed here: called from the SAME
- *  handlers that already transcribe the window, and must never affect their result. */
-async function observeOperatorAudio(samples: Float32Array): Promise<void> {
-  if (!speakerIdProcessingEnabled()) return
+/** Keyed operator observation; capture callers pass only an admitted live key. */
+async function observeOperatorAudio(samples: Float32Array, key: string | null): Promise<void> {
+  if (!key || !speakerIdProcessingEnabled()) return
   try {
-    await getSpeakerId().observeOperatorWindow(samples, 'live')
-    // A direct managed-config flip may be first observed only after the child returns; re-checking here
-    // both suppresses that continuation and discards any transient mutation it completed.
+    await getSpeakerId().observeSessionOperatorWindow(key, samples, 'live')
     speakerIdProcessingEnabled()
-  } catch (err) {
-    mainLog.warn('[speaker-id] operator observation failed', err instanceof Error ? err.message : String(err))
+  } catch (error) {
+    warnSpeakerFailure('operator observation failed', error)
   }
 }
+
+// --- End speaker session ownership ---
 import { buildPrewarmMessages } from './llm/prewarm'
 import { listModels as listLocalModels, isDownloaded as localModelDownloaded } from './llm/local-models'
 import { ensureLocalModel, localModelDownloadState } from './llm/local-model-download'
@@ -411,7 +608,13 @@ import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine 
 import { detectLanguage as detectTextLanguage } from '@shared/lang-id'
 import type { TranscriptLine } from '@shared/ipc'
 import { pickAudioFile, consumePickedAudio, offerAudioPaths } from './import-audio'
-import { ImportJobManager, MAX_CONCURRENT_DECODES, decoderSlotIsStale, type ImportJob } from './import-jobs'
+import {
+  ImportJobManager,
+  MAX_CONCURRENT_DECODES,
+  decoderSlotIsStale,
+  type ImportJob,
+  type ImportSpeakerAttempt
+} from './import-jobs'
 import {
   runImportedRecap as runImportedRecapJob,
   importedTranscriptText as formatImportedTranscriptText
@@ -1318,9 +1521,6 @@ function initializeImportJobs(): void {
       // One reset per job, at decode start — a new import must never inherit the previous one's
       // converged language (same reasoning as the live worker's session-start resetFollow).
       resetImportLanguageFollow(getSettings().asrLanguage)
-      // MQA-235: fresh diarization session per recording — cluster labels ("Speaker 1") are meeting-
-      // scoped, never carried across imports.
-      if (speakerIdProcessingEnabled()) getSpeakerId().resetSession()
       return startImportDecoder(job)
     },
     transcribe: async (samples, opts) => {
@@ -1373,10 +1573,13 @@ function initializeImportJobs(): void {
         return null
       }
     },
-    // MQA-235: diarize one utterance window — enrolled profile name or session cluster label. Same
-    // CAM++ extractor the live path uses; a fresh session is reset per job in `decode` above.
-    speakerFor: async (samples) => (await labelThemAudio(samples, 'import'))?.name ?? null,
-    finalizeSpeakers: () => speakerIdProcessingEnabled() ? getSpeakerId().finalizeSession() : new Map(),
+    // Each manager-admitted fresh attempt owns one exact keyed session. A stale callback cannot label,
+    // finalize, or dispose a replacement attempt that happens to reuse the same durable job ID.
+    beginSpeakers: beginImportSpeakers,
+    speakerFor: async (samples, attempt) =>
+      (await labelThemAudio(samples, captureImportSpeakerKey(attempt), 'import'))?.name ?? null,
+    finalizeSpeakers: finalizeImportSpeakers,
+    disposeSpeakers: disposeImportSpeakers,
     // Polish is skipped on import: sequential batches of 8 with a 120s idle made one meeting take
     // forever before the summary. Recap writes first. Cheap polish can be run later if needed.
     // Free the ASR and speaker helpers' model memory between imports; the next job spawns fresh children.
@@ -2024,6 +2227,7 @@ function createWindow(): void {
     // and the power-save block would likewise stay stuck on "meeting in progress" (before-quit reads
     // them as exactly that). Reset the whole set here, mirroring the meeting-start boundary.
     resetDustConversation()
+    discardActiveLiveSpeakerSession()
     listeningActive = false
     lastPlainAskAt = 0
     audioArmed = false
@@ -3439,9 +3643,12 @@ function setTrayRecording(on: boolean): void {
  * no Teams transcript, no text/time overlap, or being signed out must never surface as an error to the
  * user or touch the saved file. `named: 0` is a normal outcome, not a failure.
  */
-async function backfillSpeakerNames(file: string): Promise<{ ok: boolean; named?: number; error?: string }> {
-  if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
+async function backfillSpeakerNames(
+  file: string,
+  snapshot?: SpeakerEnrollmentSnapshot
+): Promise<{ ok: boolean; named?: number; error?: string }> {
   try {
+    if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const settings = getSettings()
     const safeName = safeMeetingBasename(file)
     if (!safeName) return { ok: false, error: 'Invalid meeting file name.' }
@@ -3457,23 +3664,21 @@ async function backfillSpeakerNames(file: string): Promise<{ ok: boolean; named?
     const { lines, named } = applySpeakerNames(read.lines, fetched.entries, { operatorName })
     if (named === 0) return { ok: true, named: 0 }
 
-    // Auto-enrollment flywheel (SPEAKER-INTELLIGENCE-PLAN §3.4): a THEM line VTT alignment just resolved
-    // to a real name, whose PRE-alignment name was a live session cluster label ("Speaker N"), is exactly
-    // the join needed to grow a permanent voiceprint with zero user effort — this session's "Speaker N"
-    // IS that person. Best-effort and silent: a missed window (feature off, no session buffer left, below
-    // the quality gate) never affects the save this function already guarantees.
     const clusterNamePairs = clusterNamePairsFromAlignment(read.lines, lines)
-    if (clusterNamePairs.length && speakerIdProcessingEnabled()) {
-      try {
-        const enrolled = getSpeakerId().autoEnrollFromLabeledWindows(clusterNamePairs)
-        if (enrolled) auditLog('speaker.auto_enrolled', { enrolled })
-      } catch (err) {
-        mainLog.warn('[speaker-id] auto-enroll failed', err instanceof Error ? err.message : String(err))
-      }
-    }
-
     const result = await updateMeetingTranscript(settings, safeName, lines)
     if (!result.ok) return { ok: false, error: result.error }
+
+    // Enrollment is authorized only by the one-shot snapshot from this exact closed+saved live owner,
+    // and only after the renamed transcript is durable. Manual/no-token backfill may still improve text
+    // names but can never persist a voiceprint from legacy or another meeting's buffers.
+    if (snapshot && clusterNamePairs.length && speakerIdProcessingEnabled()) {
+      try {
+        const enrolled = getSpeakerId().enrollFromSnapshot(snapshot, clusterNamePairs)
+        if (enrolled) auditLog('speaker.auto_enrolled', { enrolled })
+      } catch (error) {
+        warnSpeakerFailure('auto-enroll failed', error)
+      }
+    }
 
     auditLog('transcript.speakers_backfilled', { named })
     // Re-run extraction now that the saved transcript names real speakers — the brain prompt already
@@ -3483,6 +3688,16 @@ async function backfillSpeakerNames(file: string): Promise<{ ok: boolean; named?
   } catch (e) {
     mainLog.warn('[speaker-backfill] failed:', e instanceof Error ? e.message : String(e))
     return { ok: false, error: 'Could not backfill speaker names.' }
+  } finally {
+    // enrollFromSnapshot is one-shot. An empty attempt consumes it on every early return/failure and is
+    // harmless after a successful enrollment already consumed the capability.
+    if (snapshot) {
+      try {
+        speakerIdInstance?.enrollFromSnapshot(snapshot, [])
+      } catch (error) {
+        warnSpeakerFailure('snapshot cleanup failed', error)
+      }
+    }
   }
 }
 
@@ -5298,26 +5513,27 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return ''
     if (!takeHotPath('asr-feed')) return ''
-    const p = payload as { samples?: unknown; speaker?: unknown }
+    const p = payload as { samples?: unknown; speaker?: unknown; startedAt?: unknown }
     if (!(p?.samples instanceof Float32Array)) return ''
     // Cap a single feed chunk generously above the renderer's real ~6s windows (WINDOW_SEC in listen.ts) at
     // 16kHz mono — every other renderer-supplied blob in this file is bounded the same way (debriefSave,
     // openMailDraft, McpArgValueSchema); without this a malicious/malfunctioning renderer could force a
     // synchronous decode of an arbitrarily large buffer and hang or OOM the whole app.
     if (p.samples.length > 16_000 * 30) return ''
+    const speakerKey = captureLiveSpeakerKey(p.startedAt)
     const text = await parakeetTranscribe(p.samples)
     // Speaker Intelligence (SPEAKER-INTELLIGENCE-PLAN §3): label THEM windows with a voice-derived name
     // ("Jane Doe" from an enrolled profile, else a stable "Speaker N" session label). Same PCM buffer the
     // ASR just consumed — no extra capture. Strictly additive and best-effort: any failure or the feature
     // being off/unprovisioned attaches no name and the line renders exactly as before.
     if (p.speaker === 'them') {
-      const label = await labelThemAudio(p.samples)
+      const label = await labelThemAudio(p.samples, speakerKey, 'live')
       // P2 echo defense: this window is the operator's OWN voice bleeding through the loopback —
       // drop the transcribed text rather than mislabel the operator's words as THEM.
       if (label?.echo) return { text: '', echo: true }
       if (text && label) return { text, name: label.name }
     } else if (p.speaker === 'you') {
-      await observeOperatorAudio(p.samples)
+      await observeOperatorAudio(p.samples, speakerKey)
     }
     return { text }
   })
@@ -5330,18 +5546,19 @@ function registerIpc(): void {
     assertMainWindow(e)
     if (!requireAuth()) return ''
     if (!takeHotPath('asr-feed')) return ''
-    const p = payload as { samples?: unknown; speaker?: unknown }
+    const p = payload as { samples?: unknown; speaker?: unknown; startedAt?: unknown }
     if (!(p?.samples instanceof Float32Array)) return ''
     // Same defensive cap as parakeetFeed — see its own comment for why.
     if (p.samples.length > 16_000 * 30) return ''
+    const speakerKey = captureLiveSpeakerKey(p.startedAt)
     // Spoken-language hint (Settings → Audio) pins the recognizer locale; 'auto' keeps system locale.
     const text = await appleSpeechTranscribe(p.samples, appleSpeechLocale(getSettings().asrLanguage))
     if (p.speaker === 'them') {
-      const label = await labelThemAudio(p.samples)
+      const label = await labelThemAudio(p.samples, speakerKey, 'live')
       if (label?.echo) return { text: '', echo: true } // see parakeetFeed's identical echo-defense comment above
       if (text && label) return { text, name: label.name }
     } else if (p.speaker === 'you') {
-      await observeOperatorAudio(p.samples)
+      await observeOperatorAudio(p.samples, speakerKey)
     }
     return { text }
   })
@@ -5354,17 +5571,18 @@ function registerIpc(): void {
   ipcMain.handle(IPC.speakerEmbed, async (e, payload: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return {}
-    const p = payload as { samples?: unknown; speaker?: unknown }
+    const p = payload as { samples?: unknown; speaker?: unknown; startedAt?: unknown }
     if (!(p?.samples instanceof Float32Array)) return {}
     // Same defensive cap as parakeetFeed — see its own comment for why.
     if (p.samples.length > 16_000 * 30) return {}
+    const speakerKey = captureLiveSpeakerKey(p.startedAt)
     if (p.speaker === 'them') {
-      const label = await labelThemAudio(p.samples)
+      const label = await labelThemAudio(p.samples, speakerKey, 'live')
       // Echo bleed: Whisper already committed the line — return echo:true so the renderer can drop it.
       if (label?.echo) return { echo: true as const }
       if (label) return { name: label.name }
     } else if (p.speaker === 'you') {
-      await observeOperatorAudio(p.samples)
+      await observeOperatorAudio(p.samples, speakerKey)
     }
     return {}
   })
@@ -6528,10 +6746,14 @@ function registerIpc(): void {
     // "Index meetings" click, which scans for pending work independent of this flag) instead of paying a
     // network round trip after every single save.
     await enqueueIngest(r.path, { deferred: getSettings().brainConsolidation.enabled })
-    // Speaker Intelligence (Phases A/B): best-effort, fire-and-forget backfill of resolved names from the
-    // meeting's own Teams transcript (if one exists yet). Never awaited — must never delay or fail the
-    // save response itself; see backfillSpeakerNames's own doc comment for the full quiet-no-op contract.
-    void backfillSpeakerNames(r.path).catch(() => {})
+    // A save matched to an admitted live owner is held until that exact owner closes. Even duplicate
+    // active saves remain claimed so text-only backfill cannot erase the original cluster-label join.
+    // Unmatched/legacy saves keep the existing fire-and-forget text-name improvement, without enrollment.
+    if (!recordLiveSpeakerSave(m.startedAt, r.path)) {
+      void backfillSpeakerNames(r.path).catch(error => {
+        warnSpeakerFailure('post-save text backfill failed', error)
+      })
+    }
     return r
   })
 
@@ -7216,23 +7438,19 @@ function registerIpc(): void {
   ipcMain.handle(IPC.listeningState, createListeningStateHandler({
     assertMainWindow,
     requireAuth,
+    acceptTransition: acceptLiveSpeakerTransition,
     setListeningActive: (on) => { listeningActive = on },
     setTrayRecording,
     setRecordingPowerSaveBlock,
     releaseParakeet: parakeetRelease,
     releaseSpeakerEmbedding: () => releaseSpeakerEmbedding('live'),
     onMeetingStart: () => {
+      if (speakerIdProcessingEnabled()) {
+        speakerIdInstance?.resetSession()
+      }
       // A new meeting starting is the one clean boundary for Dust conversation continuity — everything
       // from here until the NEXT meeting starts shares one conversation (see resetDustConversation).
       resetDustConversation()
-      // MQA-043: the same boundary must reset Speaker Intelligence's session labels. speaker-id.ts only
-      // auto-resets after a >30 min silence gap, so two meetings closer together than that inherited the
-      // previous meeting's cluster identities — a new participant would be labelled "Speaker 3" because
-      // two other people spoke in the earlier call. resetSession() existed and was unit-tested but had no
-      // production caller. Deliberately NOT wrapped in a lazy getter: if Speaker Intelligence was never
-      // started this session there is no session state to clear, and building the instance here would
-      // probe the sherpa addon on a path that does not need it.
-      if (speakerIdProcessingEnabled()) speakerIdInstance?.resetSession()
       // Pre-create the new meeting's conversation in the background (fire-and-forget) so the FIRST
       // quick action / ask of the meeting doesn't pay the createConversation round trip. Keyed to the
       // base agent — the interactive speed pin in attempt() routes all mid-meeting asks there.

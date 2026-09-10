@@ -314,7 +314,7 @@ describe('probeResultIsStale — a probe must not outlive its session (MQA-157)'
     // The stamp must be taken when the probe is FIRED (synchronously inside the session that owns it),
     // not read back out of the ref after the round trip — which is what made liveRef useless here.
     expect(listenSrc).toMatch(
-      /const probeLanguageWindow = useCallback\(\(audio: Float32Array, speaker: Speaker\): void => \{\n\s*const epoch = sessionEpochRef\.current/
+      /const probeLanguageWindow = useCallback\(\(audio: Float32Array, speaker: Speaker, startedAt\?: number\): void => \{\n\s*const epoch = sessionEpochRef\.current/
     )
     expect(listenSrc).toMatch(
       /if \(\s*probeResultIsStale\(\s*epoch,\s*sessionEpochRef\.current,\s*liveRef\.current,\s*engineRef\.current,\s*asrLanguageRef\.current\s*\)\s*\)\s*\n?\s*return/
@@ -636,7 +636,7 @@ describe('speakerEmbedResultIsStale — late Whisper labels stay in their meetin
 
   it('guards the actual speakerEmbed continuation before echo removal or name attachment', () => {
     expect(listenSrc).toMatch(
-      /\.speakerEmbed\(embedAudio, 'them'\)[\s\S]{0,300}?if \(speakerEmbedResultIsStale\(speakerEpoch, sessionEpochRef\.current\)\) return/
+      /\.speakerEmbed\(embedAudio, 'them', speakerStartedAt\)[\s\S]{0,300}?if \(speakerEmbedResultIsStale\(speakerEpoch, sessionEpochRef\.current\)\) return/
     )
   })
 })

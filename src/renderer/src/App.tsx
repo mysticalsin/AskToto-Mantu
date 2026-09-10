@@ -2070,7 +2070,8 @@ export function App(): JSX.Element {
       settings?.audioSource ?? 'both',
       settings?.asrQuality ?? 'best',
       settings?.asrEngine ?? 'parakeet',
-      settings?.asrLanguage ?? 'auto'
+      settings?.asrLanguage ?? 'auto',
+      meetingStartRef.current
     )
   }, [
     listen.listening,

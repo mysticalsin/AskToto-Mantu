@@ -280,6 +280,7 @@ export function themTracksLookDead(tracks: { readyState: string; muted: boolean 
 }
 export type AudioSource = 'mic' | 'system' | 'both'
 type Speaker = 'them' | 'you'
+type LiveAudioWindow = { audio: Float32Array; speaker: Speaker; partial?: boolean; startedAt?: number }
 
 /** Soft audible chime generated in-browser (no asset file). */
 export function playListenChime(): void {
@@ -454,7 +455,8 @@ export interface ListenApi {
     source: AudioSource,
     quality?: 'best' | 'fast',
     engine?: 'whisper' | 'parakeet' | 'apple',
-    language?: string
+    language?: string,
+    startedAt?: number
   ) => Promise<void>
   /** onDrained (optional) fires when Stop reaches a terminal state: either every sealed window settled,
    *  or a bounded no-progress watchdog ended an incomplete drain (reported through `error`). `text()` is
@@ -619,7 +621,9 @@ export function useListen(
   const stopFlushAckRef = useRef<((speaker: Speaker, requestId: string) => void) | null>(null)
   const nextStopRequestRef = useRef(1)
   const sessionEpochRef = useRef(0) // incremented each start(); drain/finishTeardown bails if epoch changed
-  const queue = useRef<{ audio: Float32Array; speaker: Speaker; partial?: boolean }[]>([])
+  // Supplied by App from the persisted meeting owner; legacy callers have no speaker identity.
+  const sessionStartedAtRef = useRef<number | undefined>(undefined)
+  const queue = useRef<LiveAudioWindow[]>([])
   const busy = useRef(false)
   const readyRef = useRef(false)
 
@@ -698,6 +702,7 @@ export function useListen(
   // after stop()/start() of the next meeting; without this check commitLine would paste into the new
   // transcript (liveRef is true again). Same class as the Parakeet/Apple jobEpoch guards in pump().
   const pendingWhisperEpochRef = useRef(0)
+  const pendingWhisperStartedAtRef = useRef<number | undefined>(undefined)
   // Trailing run of consecutive 'them' speech (joined) since the last 'you' turn or last auto-answer fire.
   // The auto-answer endpoints on this COALESCED turn rather than a single VAD window, so a question split
   // across windows by a mid-sentence hesitation pause (more likely now the endpoint is a snappy 0.6s) still
@@ -829,10 +834,10 @@ export function useListen(
   // trip, the model simply not being bundled on this platform — must never disturb whisper transcription,
   // so every exit here is silent. Mirrors whisper-import.ts's probeLanguage + reprobeForSwitch, merged into
   // one function since listen.ts (unlike the import job) drives its own single probe cadence in pump().
-  const probeLanguageWindow = useCallback((audio: Float32Array, speaker: Speaker): void => {
+  const probeLanguageWindow = useCallback((audio: Float32Array, speaker: Speaker, startedAt?: number): void => {
     const epoch = sessionEpochRef.current
     window.toto
-      .parakeetFeed(audio, speaker)
+      .parakeetFeed(audio, speaker, startedAt)
       .then((res) => {
         // The session may have moved on (stopped, switched engine, or the user set an explicit language)
         // by the time this async round trip resolves — a stale probe must not touch the current state.
@@ -883,7 +888,7 @@ export function useListen(
 
   const pump = useCallback((): void => {
     if (!readyRef.current || busy.current || queue.current.length === 0) return
-    const job = queue.current.shift() as { audio: Float32Array; speaker: Speaker; partial?: boolean }
+    const job = queue.current.shift() as LiveAudioWindow
     busy.current = true
     // Stamp the session epoch at dequeue so an in-flight decode that lands after stop()/start() of the
     // NEXT meeting cannot commitLine into the wrong transcript (liveRef is true again for the new
@@ -898,7 +903,7 @@ export function useListen(
       // Race against a timeout so a hung IPC can't stall the queue. On a real failure (reject or timeout)
       // count it; after a few consecutive failures, switch the whole session to Whisper so windows stop
       // being lost. An empty string is genuine silence (phantom-filtered in commitLine), never a failure.
-      const feed = window.toto.parakeetFeed(job.audio, job.speaker)
+      const feed = window.toto.parakeetFeed(job.audio, job.speaker, job.startedAt)
       const timeout = new Promise<string>((_, reject) =>
         setTimeout(() => reject(new Error('parakeet feed timed out')), PARAKEET_FEED_TIMEOUT_MS)
       )
@@ -953,7 +958,7 @@ export function useListen(
       // sidecar — same batch-per-window IPC contract as Parakeet above, just a different engine and IPC
       // channel. Reuses the exact same race-against-timeout / failure-count / empty-run / fallback-to-
       // Whisper logic (the two engines are mutually exclusive per session, so sharing the counters is safe).
-      const feed = window.toto.appleSpeechFeed(job.audio, job.speaker)
+      const feed = window.toto.appleSpeechFeed(job.audio, job.speaker, job.startedAt)
       const timeout = new Promise<string>((_, reject) =>
         setTimeout(() => reject(new Error('apple speech feed timed out')), PARAKEET_FEED_TIMEOUT_MS)
       )
@@ -1005,7 +1010,7 @@ export function useListen(
     if (asrLanguageRef.current === 'auto') {
       probeWindowCountRef.current += 1
       if (shouldProbeLanguageWindow(probeWindowCountRef.current, probePinnedRef.current)) {
-        probeLanguageWindow(job.audio, job.speaker)
+        probeLanguageWindow(job.audio, job.speaker, job.startedAt)
       }
     }
     if (!workerRef.current) {
@@ -1021,9 +1026,10 @@ export function useListen(
     if (job.speaker === 'them') pendingWhisperEmbedRef.current = job.audio.slice()
     else {
       pendingWhisperEmbedRef.current = null
-      void window.toto.speakerEmbed(job.audio.slice(), 'you').catch(() => {})
+      void window.toto.speakerEmbed(job.audio.slice(), 'you', job.startedAt).catch(() => {})
     }
     pendingWhisperEpochRef.current = jobEpoch
+    pendingWhisperStartedAtRef.current = job.startedAt
     workerRef.current.postMessage(
       { type: 'audio', audio: job.audio, speaker: job.speaker, partial: !!job.partial },
       [job.audio.buffer]
@@ -1083,6 +1089,7 @@ export function useListen(
         }
         clearProvisional() // this window has settled (with an error) — the placeholder's job is done
         pendingWhisperEmbedRef.current = null
+        pendingWhisperStartedAtRef.current = undefined
         busy.current = false
         pump()
       } else if (m.type === 'text') {
@@ -1091,7 +1098,9 @@ export function useListen(
         }
         clearProvisional() // this current-session window settled — replace its placeholder below
         const embedAudio = pendingWhisperEmbedRef.current
+        const speakerStartedAt = pendingWhisperStartedAtRef.current
         pendingWhisperEmbedRef.current = null
+        pendingWhisperStartedAtRef.current = undefined
         const committedAt = commitLine(
           m.text || '',
           (m.speaker as Speaker) || 'you',
@@ -1105,7 +1114,7 @@ export function useListen(
         if (committedAt !== null && !m.partial && (m.speaker as Speaker) === 'them' && embedAudio) {
           const speakerEpoch = pendingWhisperEpochRef.current
           void window.toto
-            .speakerEmbed(embedAudio, 'them')
+            .speakerEmbed(embedAudio, 'them', speakerStartedAt)
             .then((res) => {
               if (speakerEmbedResultIsStale(speakerEpoch, sessionEpochRef.current)) return
               // Echo defense (parity with Parakeet/Apple): operator bleed through loopback must not stay
@@ -1134,6 +1143,8 @@ export function useListen(
     }
     w.onerror = (err: ErrorEvent): void => {
       if (workerRef.current !== w) return // crash from a worker retired with an earlier session
+      const ownedSession = liveRef.current || stopDrainRef.current !== null
+      const startedAt = sessionStartedAtRef.current
       // A worker crash must FULLY tear down capture, not just the worker — otherwise the mic + system
       // AudioContexts stay hot and the tray stays in 'recording' while the UI reads 'not listening',
       // an unrecoverable dead end. Mirror stop()'s teardown so a crash returns to a clean idle state.
@@ -1152,10 +1163,11 @@ export function useListen(
       queue.current = []
       provisionalRef.current = null // no decode is ever coming back to replace it now
       pendingWhisperEmbedRef.current = null
+      pendingWhisperStartedAtRef.current = undefined
       themRunRef.current = '' // crash wipes the in-progress 'them' question turn (parity with stop()/start())
       closeChannel('you')
       closeChannel('them')
-      void window.toto.setListeningState(false).catch(() => {})
+      if (ownedSession) void window.toto.setListeningState(false, startedAt).catch(() => {})
       setState((s) => ({
         ...s,
         error: err.message || 'transcription worker error',
@@ -1251,9 +1263,9 @@ export function useListen(
   )
 
   const pushAudio = useCallback(
-    (sp: Speaker, audio: Float32Array, partial = false): void => {
+    (sp: Speaker, audio: Float32Array, partial = false, startedAt?: number): void => {
       if (!liveRef.current || pausedRef.current) return
-      queue.current.push({ audio, speaker: sp, partial })
+      queue.current.push({ audio, speaker: sp, partial, startedAt })
       if (queue.current.length > MAX_QUEUE) {
         const before = queue.current.length
         // bound memory; drop oldest, but never the newest window of either speaker — see trimQueue.
@@ -1359,6 +1371,7 @@ export function useListen(
         stream.getTracks().forEach((track) => track.stop())
         return false
       }
+      const channelStartedAt = sessionStartedAtRef.current
       closeChannel(sp) // close any prior channel for this speaker (avoid orphan on retry)
       const ctx = new AudioContext({ sampleRate: SR })
       const src = ctx.createMediaStreamSource(stream)
@@ -1412,6 +1425,8 @@ export function useListen(
       }
 
       worklet.port.onmessage = (ev: MessageEvent): void => {
+        // Allow the current Stop's final PCM + ACK, but never attribute a retired channel to its replacement.
+        if (admissionEpoch !== sessionEpochRef.current) return
         const data = ev.data as { type?: string; requestId?: string; audio?: Float32Array; partial?: boolean }
         if (data.type === 'flush-ack' && typeof data.requestId === 'string') {
           stopFlushAckRef.current?.(sp, data.requestId)
@@ -1434,7 +1449,7 @@ export function useListen(
               setState((s) => (s.error === THEM_SILENT_MSG ? { ...s, error: null } : s))
             }
           }
-          pushAudio(sp, data.audio, !!data.partial)
+          pushAudio(sp, data.audio, !!data.partial, channelStartedAt)
         }
       }
       const ch: Channel = { ctx, src, worklet, stream, gain: gain ?? undefined, limiter: limiter ?? undefined }
@@ -1702,7 +1717,8 @@ export function useListen(
       source: AudioSource,
       quality: 'best' | 'fast' = 'best',
       engine: 'whisper' | 'parakeet' | 'apple' = 'parakeet',
-      language: string = 'auto'
+      language: string = 'auto',
+      startedAt?: number
     ): Promise<void> => {
       // Re-entrancy guard: a rapid double-click/double-hotkey calls start() twice before React re-renders
       // listen.listening to true (that state flip is async), so this MUST be a synchronous ref check right
@@ -1754,9 +1770,11 @@ export function useListen(
           readyRef.current = false
         }
         const myEpoch = ++sessionEpochRef.current
+        sessionStartedAtRef.current = startedAt
         queue.current = []
         provisionalRef.current = null // fresh session — no carried-over placeholder from the previous one
         pendingWhisperEmbedRef.current = null
+        pendingWhisperStartedAtRef.current = undefined
         busy.current = false
         liveRef.current = true
         wantsSystemRef.current = source === 'system' || source === 'both'
@@ -1786,7 +1804,7 @@ export function useListen(
         if (source === 'mic' || source === 'both') {
           micP = acquireMic(micDeviceIdRef.current)
         }
-        void window.toto.setListeningState(true).catch(() => {})
+        void window.toto.setListeningState(true, startedAt).catch(() => {})
 
         void (async () => {
           if (engine === 'parakeet') {
@@ -1957,7 +1975,7 @@ export function useListen(
           closeChannel('you')
           closeChannel('them')
           try {
-            await window.toto.setListeningState(false)
+            await window.toto.setListeningState(false, startedAt)
           } catch {
             /* ignore */
           }
@@ -2132,6 +2150,8 @@ export function useListen(
     }
     stoppingRef.current = true
     const myEpoch = sessionEpochRef.current
+    const startedAt = sessionStartedAtRef.current
+    const ownedSession = liveRef.current
     const requestId = `stop:${myEpoch}:${nextStopRequestRef.current++}`
 
     // 0. A worklet's port message is handled on the audio-rendering thread — it won't run while that
@@ -2182,10 +2202,11 @@ export function useListen(
         queue.current = [] // drop anything still undispatched once the bounded drain ends
         clearProvisional()
         pendingWhisperEmbedRef.current = null
+        pendingWhisperStartedAtRef.current = undefined
         themRunRef.current = ''
         closeChannel('you')
         closeChannel('them')
-        void window.toto.setListeningState(false).catch(() => {})
+        if (ownedSession) void window.toto.setListeningState(false, startedAt).catch(() => {})
         setState((s) => {
           const warnings = [
             operation.flushIncomplete ? STOP_FLUSH_INCOMPLETE_MSG : null,
@@ -2307,6 +2328,8 @@ export function useListen(
       // Unmount must release hardware synchronously -- stop()'s drain is asynchronously bounded
       // and would keep running (and re-arm a new workerIdleTimer) after this instance is gone with nothing
       // left able to cancel it. So this bypasses stop() entirely and tears everything down directly.
+      const ownedSession = liveRef.current || stopDrainRef.current !== null
+      const startedAt = sessionStartedAtRef.current
       if (drainTimerRef.current) {
         clearTimeout(drainTimerRef.current)
         drainTimerRef.current = null
@@ -2315,6 +2338,9 @@ export function useListen(
       if (activeStop?.ackTimer) clearTimeout(activeStop.ackTimer)
       stopDrainRef.current = null
       liveRef.current = false
+      pendingWhisperEmbedRef.current = null
+      pendingWhisperStartedAtRef.current = undefined
+      if (ownedSession) void window.toto.setListeningState(false, startedAt).catch(() => {})
       disarmNetworkRetry()
       closeChannel('you')
       closeChannel('them')

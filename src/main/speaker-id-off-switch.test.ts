@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import vm from 'node:vm'
 import ts from 'typescript'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const source = ts.createSourceFile(
   'index.ts',
@@ -10,6 +10,10 @@ const source = ts.createSourceFile(
   ts.ScriptTarget.Latest,
   true
 )
+const liveSpeakerReceipts = new Map()
+const importSpeakerOwners = new Map()
+const warnSpeakerFailure = vi.fn()
+const speakerIdPolicyGlobals = { liveSpeakerReceipts, importSpeakerOwners }
 
 function actualFunction(name: string, globals: Record<string, unknown>): (...args: any[]) => any {
   const declaration = source.statements.find((node) => ts.isFunctionDeclaration(node) && node.name?.text === name)
@@ -49,11 +53,20 @@ function ipcHandlerCalls(channel: string, callee: string): boolean {
 function importDeps(settings: { speakerId: { enabled: boolean } }, speakerId: Record<string, any>) {
   let captured: Record<string, any> | undefined
   const noop = () => undefined
-  const applySpeakerIdPolicy = actualFunction('applySpeakerIdPolicy', { speakerIdInstance: speakerId })
+  const beginImportSpeakers = vi.fn(() => true)
+  const captureImportSpeakerKey = vi.fn(() => 'import:test')
+  const disposeImportSpeakers = vi.fn()
+  const applySpeakerIdPolicy = actualFunction('applySpeakerIdPolicy', {
+    speakerIdInstance: speakerId,
+    ...speakerIdPolicyGlobals
+  })
   const speakerIdProcessingEnabled = actualFunction('speakerIdProcessingEnabled', {
     getSettings: () => settings,
-    applySpeakerIdPolicy
+    applySpeakerIdPolicy,
+    liveSpeakerReceipts,
+    importSpeakerOwners
   })
+  const finalizeImportSpeakers = vi.fn(() => (settings.speakerId.enabled ? new Map([['Speaker 1', 'Speaker 1']]) : null))
   actualFunction('initializeImportJobs', {
     importJobs: null,
     wireIntelligenceIndexWork: noop,
@@ -62,9 +75,16 @@ function importDeps(settings: { speakerId: { enabled: boolean } }, speakerId: Re
     getSettings: () => ({ ...settings, asrLanguage: 'auto', asrEngine: 'parakeet', mode: 'meeting' }),
     getSpeakerId: () => speakerId,
     speakerIdProcessingEnabled,
+    beginImportSpeakers,
+    captureImportSpeakerKey,
+    finalizeImportSpeakers,
+    disposeImportSpeakers,
     labelThemAudio: actualFunction('labelThemAudio', {
       speakerIdProcessingEnabled,
       getSpeakerId: () => speakerId,
+      liveSpeakerReceipts,
+      importSpeakerOwners,
+      warnSpeakerFailure,
       mainLog: { warn: vi.fn() }
     }),
     resetImportLanguageFollow: noop,
@@ -87,38 +107,54 @@ function importDeps(settings: { speakerId: { enabled: boolean } }, speakerId: Re
     MAX_CONCURRENT_DECODES: 1,
     ensureImportAsrAssets: () => Promise.resolve(),
     runImportedRecap: noop,
-    mainLog: { warn: noop, error: noop }
+    mainLog: { warn: noop, error: noop },
+    liveSpeakerReceipts,
+    importSpeakerOwners,
+    warnSpeakerFailure
   })()
   if (!captured) throw new Error('ImportJobManager dependencies were not captured')
   return captured
 }
 
 describe('Speaker Intelligence hard off-switch wiring', () => {
+  beforeEach(() => {
+    liveSpeakerReceipts.clear()
+    importSpeakerOwners.clear()
+    warnSpeakerFailure.mockReset()
+  })
+
   it('disabled import decode, labeling, and finalization perform no speaker work', async () => {
     const settings = { speakerId: { enabled: false } }
     const speakerId = {
       discardSession: vi.fn(),
       resetSession: vi.fn(),
-      labelWindow: vi.fn(async () => ({ name: 'Speaker 1' })),
-      finalizeSession: vi.fn(() => new Map([['Speaker 1', 'Speaker 1']]))
+      labelSessionWindow: vi.fn(async () => ({ name: 'Speaker 1' })),
+      finalizeSessionByKey: vi.fn(() => new Map([['Speaker 1', 'Speaker 1']]))
     }
     const deps = importDeps(settings, speakerId)
 
     await deps.decode({ jobId: 'disabled-import' })
-    const label = await deps.speakerFor(Float32Array.from([0.1]))
-    const finalized = deps.finalizeSpeakers()
+    const attempt = { jobId: 'disabled-import', attemptId: 1 }
+    const label = await deps.speakerFor(Float32Array.from([0.1]), attempt)
+    const finalized = deps.finalizeSpeakers(attempt)
 
     expect(speakerId.resetSession).not.toHaveBeenCalled()
-    expect(speakerId.labelWindow).not.toHaveBeenCalled()
-    expect(speakerId.finalizeSession).not.toHaveBeenCalled()
+    expect(speakerId.labelSessionWindow).not.toHaveBeenCalled()
+    expect(speakerId.finalizeSessionByKey).not.toHaveBeenCalled()
     expect(label).toBeNull()
-    expect(finalized.size).toBe(0)
+    expect(finalized).toBeNull()
   })
 
   it('a settings disable transition invalidates pending speaker continuations without creating an instance', () => {
     const discardSession = vi.fn()
-    const applyExisting = actualFunction('applySpeakerIdPolicy', { speakerIdInstance: { discardSession } })
-    const applyAbsent = actualFunction('applySpeakerIdPolicy', { speakerIdInstance: null })
+    const applyExisting = actualFunction('applySpeakerIdPolicy', {
+      speakerIdInstance: { discardSession },
+      ...speakerIdPolicyGlobals
+    })
+    const applyAbsent = actualFunction('applySpeakerIdPolicy', {
+      speakerIdInstance: null,
+      ...speakerIdPolicyGlobals
+    })
 
     expect(applyExisting(false)).toBe(false)
     expect(discardSession).toHaveBeenCalledTimes(1)
@@ -130,9 +166,12 @@ describe('Speaker Intelligence hard off-switch wiring', () => {
     let resolve!: (value: { name: string }) => void
     const speakerId = {
       discardSession: vi.fn(),
-      labelWindow: vi.fn(() => new Promise((done) => { resolve = done }))
+      labelSessionWindow: vi.fn(() => new Promise((done) => { resolve = done }))
     }
-    const applySpeakerIdPolicy = actualFunction('applySpeakerIdPolicy', { speakerIdInstance: speakerId })
+    const applySpeakerIdPolicy = actualFunction('applySpeakerIdPolicy', {
+      speakerIdInstance: speakerId,
+      ...speakerIdPolicyGlobals
+    })
     const speakerIdProcessingEnabled = actualFunction('speakerIdProcessingEnabled', {
       getSettings: () => settings,
       applySpeakerIdPolicy
@@ -140,11 +179,15 @@ describe('Speaker Intelligence hard off-switch wiring', () => {
     const label = actualFunction('labelThemAudio', {
       speakerIdProcessingEnabled,
       getSpeakerId: () => speakerId,
+      warnSpeakerFailure,
+      liveSpeakerReceipts,
+      importSpeakerOwners,
       mainLog: { warn: vi.fn() }
     })
 
-    const pending = label(Float32Array.from([0.1]))
+    const pending = label(Float32Array.from([0.1]), 'live:1', 'live')
     settings.speakerId.enabled = false
+    applySpeakerIdPolicy(false)
     resolve({ name: 'Speaker 1' })
 
     await expect(pending).resolves.toBeNull()
@@ -153,8 +196,11 @@ describe('Speaker Intelligence hard off-switch wiring', () => {
 
   it('disabled live operator observation performs no speaker extraction', async () => {
     const settings = { speakerId: { enabled: false } }
-    const speakerId = { discardSession: vi.fn(), observeOperatorWindow: vi.fn() }
-    const applySpeakerIdPolicy = actualFunction('applySpeakerIdPolicy', { speakerIdInstance: speakerId })
+    const speakerId = { discardSession: vi.fn(), observeSessionOperatorWindow: vi.fn() }
+    const applySpeakerIdPolicy = actualFunction('applySpeakerIdPolicy', {
+      speakerIdInstance: speakerId,
+      ...speakerIdPolicyGlobals
+    })
     const speakerIdProcessingEnabled = actualFunction('speakerIdProcessingEnabled', {
       getSettings: () => settings,
       applySpeakerIdPolicy
@@ -162,12 +208,15 @@ describe('Speaker Intelligence hard off-switch wiring', () => {
     const observe = actualFunction('observeOperatorAudio', {
       speakerIdProcessingEnabled,
       getSpeakerId: () => speakerId,
+      liveSpeakerReceipts,
+      importSpeakerOwners,
+      warnSpeakerFailure,
       mainLog: { warn: vi.fn() }
     })
 
     await observe(Float32Array.from([0.1]))
 
-    expect(speakerId.observeOperatorWindow).not.toHaveBeenCalled()
+    expect(speakerId.observeSessionOperatorWindow).not.toHaveBeenCalled()
   })
 
   it('disabled backfill preserves transcript naming but performs no enrollment', async () => {
@@ -175,7 +224,10 @@ describe('Speaker Intelligence hard off-switch wiring', () => {
     const settings = { speakerId: { enabled: false } }
     const updateMeetingTranscript = vi.fn(async () => ({ ok: true }))
     const speakerId = { discardSession: vi.fn(), autoEnrollFromLabeledWindows: vi.fn(() => 1) }
-    const applySpeakerIdPolicy = actualFunction('applySpeakerIdPolicy', { speakerIdInstance: speakerId })
+    const applySpeakerIdPolicy = actualFunction('applySpeakerIdPolicy', {
+      speakerIdInstance: speakerId,
+      ...speakerIdPolicyGlobals
+    })
     const speakerIdProcessingEnabled = actualFunction('speakerIdProcessingEnabled', {
       getSettings: () => settings,
       applySpeakerIdPolicy

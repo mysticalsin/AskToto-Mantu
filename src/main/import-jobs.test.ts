@@ -3,7 +3,13 @@ import { join } from 'node:path'
 import { describe, expect, it, vi } from 'vitest'
 import { IMPORT_CHUNK_SECONDS, type TranscriptLine } from '@shared/ipc'
 import { vadWindowsFromPcm } from '@shared/vad'
-import { ImportJobManager, decoderSlotIsStale, type ImportJob, type ImportJobStore } from './import-jobs'
+import {
+  ImportJobManager,
+  decoderSlotIsStale,
+  type ImportJob,
+  type ImportJobStore,
+  type ImportSpeakerAttempt
+} from './import-jobs'
 
 class MemoryStore implements ImportJobStore {
   readonly jobs = new Map<string, ImportJob>()
@@ -80,6 +86,16 @@ function concatPcm(...parts: Float32Array[]): Float32Array {
     offset += p.length
   }
   return out
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (error: unknown) => void
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  return { promise, resolve, reject }
 }
 
 /** One VAD window: a single burst closed out by trailing silence. */
@@ -311,7 +327,7 @@ describe('ImportJobManager', () => {
   describe('per-window diarization (deps.speakerFor, MQA-235)', () => {
     it("lands a diarization result on line.name while speaker stays 'unknown'", async () => {
       const speakerFor = vi.fn().mockResolvedValue('Alex')
-      const { manager } = createManager({ speakerFor })
+      const { manager } = createManager({ beginSpeakers: () => true, speakerFor })
       await manager.start(source)
       await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
 
@@ -324,7 +340,7 @@ describe('ImportJobManager', () => {
 
     it('a throwing speakerFor is best-effort and never fails the import', async () => {
       const speakerFor = vi.fn().mockRejectedValue(new Error('extractor unavailable'))
-      const { manager } = createManager({ speakerFor })
+      const { manager } = createManager({ beginSpeakers: () => true, speakerFor })
       await manager.start(source)
       await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
 
@@ -335,6 +351,556 @@ describe('ImportJobManager', () => {
       expect(job.lines).toHaveLength(1)
       expect(job.lines[0].speaker).toBe('unknown')
       expect(job.lines[0].name).toBeUndefined()
+    })
+
+    it('does not use a legacy global speaker callback when an attempt was not explicitly admitted', async () => {
+      const speakerFor = vi.fn().mockResolvedValue('Wrong person')
+      const finalizeSpeakers = vi.fn(() => new Map([['Wrong person', 'Still wrong']]))
+      const disposeSpeakers = vi.fn()
+      const { manager } = createManager({ speakerFor, finalizeSpeakers, disposeSpeakers })
+      await manager.start(source)
+      await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+
+      await manager.finishDecoding('job-1')
+
+      expect(manager.get('job-1')?.lines).toMatchObject([{ speaker: 'unknown', text: 'recognized speech' }])
+      expect(manager.get('job-1')?.lines[0].name).toBeUndefined()
+      expect(speakerFor).not.toHaveBeenCalled()
+      expect(finalizeSpeakers).not.toHaveBeenCalled()
+      expect(disposeSpeakers).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['refuses', () => false],
+      ['throws', () => { throw new Error('speaker admission unavailable') }]
+    ])('keeps ASR anonymous when beginSpeakers %s', async (_label, beginSpeakers) => {
+      const speakerFor = vi.fn().mockResolvedValue('Wrong person')
+      const finalizeSpeakers = vi.fn(() => new Map([['Wrong person', 'Still wrong']]))
+      const disposeSpeakers = vi.fn()
+      const { manager } = createManager({ beginSpeakers, speakerFor, finalizeSpeakers, disposeSpeakers })
+      await manager.start(source)
+      await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+
+      await manager.finishDecoding('job-1')
+
+      expect(manager.get('job-1')).toMatchObject({
+        state: 'done',
+        lines: [{ speaker: 'unknown', text: 'recognized speech' }]
+      })
+      expect(manager.get('job-1')?.lines[0].name).toBeUndefined()
+      expect(speakerFor).not.toHaveBeenCalled()
+      expect(finalizeSpeakers).not.toHaveBeenCalled()
+      expect(disposeSpeakers).not.toHaveBeenCalled()
+    })
+
+    it('passes one frozen attempt identity through begin, every window, finalize, and dispose before the next decode', async () => {
+      let n = 0
+      const events: string[] = []
+      const identities: ImportSpeakerAttempt[] = []
+      const decode = vi.fn((job: ImportJob) => {
+        events.push(`decode:${job.jobId}`)
+      })
+      const beginSpeakers = vi.fn((attempt: ImportSpeakerAttempt) => {
+        identities.push(attempt)
+        events.push(`begin:${attempt.jobId}:${attempt.attemptId}`)
+        return true
+      })
+      const speakerFor = vi.fn(async (_samples: Float32Array, attempt: ImportSpeakerAttempt) => {
+        identities.push(attempt)
+        events.push(`speaker:${attempt.jobId}:${attempt.attemptId}`)
+        return 'Speaker2'
+      })
+      const finalizeSpeakers = vi.fn((attempt: ImportSpeakerAttempt) => {
+        identities.push(attempt)
+        events.push(`finalize:${attempt.jobId}:${attempt.attemptId}`)
+        return new Map([['Speaker2', 'Speaker1']])
+      })
+      const disposeSpeakers = vi.fn((attempt: ImportSpeakerAttempt) => {
+        identities.push(attempt)
+        events.push(`dispose:${attempt.jobId}:${attempt.attemptId}`)
+      })
+      const { manager } = createManager({
+        newId: () => `job-${++n}`,
+        decode,
+        beginSpeakers,
+        speakerFor,
+        finalizeSpeakers,
+        disposeSpeakers,
+        generateRecap: vi.fn(async (job: ImportJob) => {
+          events.push(`recap:${job.jobId}`)
+          return undefined
+        })
+      })
+      await manager.startMany([
+        { ...source, name: 'first.m4a' },
+        { ...source, name: 'second.wav' }
+      ])
+      await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+
+      await manager.finishDecoding('job-1')
+
+      const first = identities[0]
+      expect(first).toEqual({ jobId: 'job-1', attemptId: 1 })
+      expect(Object.isFrozen(first)).toBe(true)
+      expect(identities.slice(0, 4).every((attempt) => attempt === first)).toBe(true)
+      expect(manager.get('job-1')?.lines[0]).toMatchObject({ speaker: 'unknown', name: 'Speaker1' })
+      expect(events).toEqual([
+        'begin:job-1:1',
+        'decode:job-1',
+        'speaker:job-1:1',
+        'finalize:job-1:1',
+        'dispose:job-1:1',
+        'begin:job-2:2',
+        'decode:job-2',
+        'recap:job-1'
+      ])
+    })
+
+    it('waits for a cancelled speaker continuation before disposing once and admitting the next job', async () => {
+      let n = 0
+      const pendingSpeaker = deferred<string | null>()
+      const events: string[] = []
+      const decode = vi.fn((job: ImportJob) => {
+        events.push(`decode:${job.jobId}`)
+      })
+      const beginSpeakers = vi.fn((attempt: ImportSpeakerAttempt) => {
+        events.push(`begin:${attempt.jobId}:${attempt.attemptId}`)
+        return true
+      })
+      const speakerFor = vi.fn((_samples: Float32Array, attempt: ImportSpeakerAttempt) => {
+        events.push(`speaker:${attempt?.jobId ?? 'missing'}:${attempt?.attemptId ?? 'missing'}`)
+        return pendingSpeaker.promise
+      })
+      const disposeSpeakers = vi.fn((attempt: ImportSpeakerAttempt) => {
+        events.push(`dispose:${attempt.jobId}:${attempt.attemptId}`)
+      })
+      const { manager } = createManager({
+        newId: () => `job-${++n}`,
+        decode,
+        beginSpeakers,
+        speakerFor,
+        disposeSpeakers
+      })
+      await manager.startMany([
+        { ...source, name: 'first.m4a' },
+        { ...source, name: 'second.wav' }
+      ])
+      await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+      const finishing = manager.finishDecoding('job-1')
+      await vi.waitFor(() => expect(speakerFor).toHaveBeenCalledTimes(1))
+
+      await manager.cancel('job-1')
+      expect(disposeSpeakers).not.toHaveBeenCalled()
+      expect(decode).toHaveBeenCalledTimes(1)
+
+      pendingSpeaker.resolve('Late person')
+      await finishing
+
+      expect(manager.get('job-1')).toMatchObject({ state: 'cancelled', lines: [] })
+      expect(disposeSpeakers).toHaveBeenCalledTimes(1)
+      expect(events.indexOf('dispose:job-1:1')).toBeLessThan(events.indexOf('begin:job-2:2'))
+      expect(events.indexOf('begin:job-2:2')).toBeLessThan(events.indexOf('decode:job-2'))
+    })
+
+    it('queues a same-job resume behind its failed pending speaker attempt and ignores the stale result', async () => {
+      const pendingSpeaker = deferred<string | null>()
+      const events: string[] = []
+      const decode = vi.fn((job: ImportJob) => {
+        events.push(`decode:${job.jobId}`)
+      })
+      const beginSpeakers = vi.fn((attempt: ImportSpeakerAttempt) => {
+        events.push(`begin:${attempt.attemptId}`)
+        return true
+      })
+      const speakerFor = vi.fn((_samples: Float32Array, attempt: ImportSpeakerAttempt) => {
+        events.push(`speaker:${attempt?.attemptId ?? 'missing'}`)
+        return pendingSpeaker.promise
+      })
+      const finalizeSpeakers = vi.fn((attempt: ImportSpeakerAttempt) => {
+        events.push(`finalize:${attempt.attemptId}`)
+        return null
+      })
+      const disposeSpeakers = vi.fn((attempt: ImportSpeakerAttempt) => {
+        events.push(`dispose:${attempt.attemptId}`)
+      })
+      const { manager } = createManager({ decode, beginSpeakers, speakerFor, finalizeSpeakers, disposeSpeakers })
+      await manager.start(source)
+      await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+      const finishing = manager.finishDecoding('job-1')
+      await vi.waitFor(() => expect(speakerFor).toHaveBeenCalledTimes(1))
+
+      await manager.failDecoder('job-1', 'decoder timed out')
+      await manager.resume('job-1')
+      expect(decode).toHaveBeenCalledTimes(1)
+
+      pendingSpeaker.resolve('Stale Speaker1')
+      await finishing
+
+      expect(manager.get('job-1')).toMatchObject({ state: 'decoding', cursor: 0, lines: [] })
+      expect(decode).toHaveBeenCalledTimes(2)
+      expect(finalizeSpeakers).not.toHaveBeenCalled()
+      expect(events.indexOf('dispose:1')).toBeLessThan(events.indexOf('begin:2'))
+      expect(events.indexOf('begin:2')).toBeLessThan(events.lastIndexOf('decode:job-1'))
+      expect(disposeSpeakers).toHaveBeenCalledTimes(1)
+    })
+
+    it('rejects jobId-only decoder continuations while a failed retained attempt is waiting to unwind', async () => {
+      const pendingSpeaker = deferred<string | null>()
+      const speakerFor = vi.fn(() => pendingSpeaker.promise)
+      const { manager, decode } = createManager({ beginSpeakers: () => true, speakerFor })
+      await manager.start(source)
+      await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+      const finishing = manager.finishDecoding('job-1')
+      await vi.waitFor(() => expect(speakerFor).toHaveBeenCalledTimes(1))
+
+      await manager.failDecoder('job-1', 'decoder timed out')
+      await manager.resume('job-1')
+
+      await expect(manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())).rejects.toThrow(
+        'Import is not accepting audio for this attempt.'
+      )
+      await manager.finishDecoding('job-1')
+      expect(manager.get('job-1')).toMatchObject({ state: 'queued', cursor: 0, lines: [] })
+      expect(decode).toHaveBeenCalledTimes(1)
+
+      pendingSpeaker.resolve('stale')
+      await finishing
+      expect(manager.get('job-1')).toMatchObject({ state: 'decoding', cursor: 0, lines: [] })
+      expect(decode).toHaveBeenCalledTimes(2)
+    })
+
+    it('ignores stale progress and failure callbacks while a failed retained attempt is queued for resume', async () => {
+      const pendingSpeaker = deferred<string | null>()
+      const speakerFor = vi.fn(() => pendingSpeaker.promise)
+      const { manager, decode } = createManager({ beginSpeakers: () => true, speakerFor })
+      await manager.start(source)
+      await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+      const finishing = manager.finishDecoding('job-1')
+      await vi.waitFor(() => expect(speakerFor).toHaveBeenCalledTimes(1))
+
+      await manager.failDecoder('job-1', 'decoder timed out')
+      await manager.resume('job-1')
+      const before = manager.get('job-1')
+      await manager.reportProgress('job-1', 88)
+      await manager.failDecoder('job-1', 'stale decoder failure')
+
+      expect(manager.get('job-1')).toMatchObject({
+        state: 'queued',
+        cursor: 0,
+        lines: []
+      })
+      expect(manager.get('job-1')?.progressPct).toBe(before?.progressPct)
+      expect(manager.get('job-1')?.error).toBeUndefined()
+      expect(decode).toHaveBeenCalledTimes(1)
+
+      pendingSpeaker.resolve('stale')
+      await finishing
+      expect(manager.get('job-1')?.state).toBe('decoding')
+      expect(decode).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not start the VAD save tail when failure and resume win while the next admission is pending', async () => {
+      let n = 0
+      const secondDecode = deferred<void>()
+      const decode = vi.fn((job: ImportJob) => (job.jobId === 'job-2' ? secondDecode.promise : undefined))
+      const { manager, saveMeeting } = createManager({ newId: () => `job-${++n}`, decode })
+      await manager.startMany([
+        { ...source, name: 'first.m4a' },
+        { ...source, name: 'second.wav' }
+      ])
+      await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+      const finishing = manager.finishDecoding('job-1')
+      await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(2))
+
+      await manager.failDecoder('job-1', 'late decoder failure')
+      await manager.resume('job-1')
+      expect(manager.get('job-1')?.state).toBe('queued')
+
+      secondDecode.resolve()
+      await finishing
+
+      expect(saveMeeting).not.toHaveBeenCalled()
+      expect(manager.get('job-1')).toMatchObject({ state: 'queued', cursor: 1 })
+    })
+
+    it('does not start the legacy save tail when failure and resume win while the next admission is pending', async () => {
+      const secondDecode = deferred<void>()
+      const decode = vi.fn((job: ImportJob) => (job.jobId === 'job-2' ? secondDecode.promise : undefined))
+      const { manager, store, saveMeeting } = createManager({ decode })
+      await store.save({
+        jobId: 'job-1', sourcePath: source.path, sourceName: 'legacy.wav', sourceSizeBytes: source.sizeBytes,
+        sourceMtimeMs: source.mtimeMs, title: 'Legacy', state: 'queued', cursor: 0, totalChunks: 1,
+        chunkSec: IMPORT_CHUNK_SECONDS, lines: [], createdAt: 1, updatedAt: 1
+      })
+      await store.save({
+        jobId: 'job-2', sourcePath: source.path, sourceName: 'next.wav', sourceSizeBytes: source.sizeBytes,
+        sourceMtimeMs: source.mtimeMs, title: 'Next', state: 'queued', cursor: 0, totalChunks: 0,
+        chunkSec: IMPORT_CHUNK_SECONDS, pipeline: 'vad-v1', lines: [], createdAt: 2, updatedAt: 2
+      })
+      await manager.recover()
+      await manager.acceptDecodedChunk('job-1', 0, 1, new Float32Array([0.1]))
+      const finishing = manager.finishDecoding('job-1', 1)
+      await vi.waitFor(() => expect(decode).toHaveBeenCalledTimes(2))
+
+      await manager.failDecoder('job-1', 'late decoder failure')
+      await manager.resume('job-1')
+      secondDecode.resolve()
+      await finishing
+
+      expect(saveMeeting).not.toHaveBeenCalled()
+      expect(manager.get('job-1')).toMatchObject({ state: 'queued', cursor: 1 })
+    })
+
+    it('ignores ASR that resolves after failure and queues the same job retry behind the old consumer', async () => {
+      const pendingAsr = deferred<string>()
+      const transcribe = vi.fn(() => pendingAsr.promise)
+      const { manager, decode } = createManager({ transcribe })
+      await manager.start(source)
+      await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+      const finishing = manager.finishDecoding('job-1')
+      await vi.waitFor(() => expect(transcribe).toHaveBeenCalledTimes(1))
+
+      await manager.failDecoder('job-1', 'decoder timed out')
+      await manager.resume('job-1')
+      expect(decode).toHaveBeenCalledTimes(1)
+
+      pendingAsr.resolve('stale speech')
+      await finishing
+
+      expect(manager.get('job-1')).toMatchObject({ state: 'decoding', cursor: 0, lines: [] })
+      expect(transcribe).toHaveBeenCalledTimes(1)
+      expect(decode).toHaveBeenCalledTimes(2)
+    })
+
+    it('ignores a language probe that resolves after failure instead of transcribing into the resumed job', async () => {
+      const pendingProbe = deferred<string | null>()
+      const probeLanguageName = vi.fn(() => pendingProbe.promise)
+      const { manager, decode, transcribe } = createManager({ probeLanguageName })
+      await manager.start(source)
+      await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+      const finishing = manager.finishDecoding('job-1')
+      await vi.waitFor(() => expect(probeLanguageName).toHaveBeenCalledTimes(1))
+
+      await manager.failDecoder('job-1', 'decoder timed out')
+      await manager.resume('job-1')
+      pendingProbe.resolve('English')
+      await finishing
+
+      expect(manager.get('job-1')).toMatchObject({ state: 'decoding', cursor: 0, lines: [] })
+      expect(transcribe).not.toHaveBeenCalled()
+      expect(decode).toHaveBeenCalledTimes(2)
+    })
+
+    it('does not start another language probe after the old attempt is stopped during a rejected probe', async () => {
+      const pendingProbe = deferred<string | null>()
+      const probeLanguageName = vi
+        .fn()
+        .mockImplementationOnce(() => pendingProbe.promise)
+        .mockResolvedValue('French')
+      const { manager, decode, transcribe } = createManager({ probeLanguageName })
+      await manager.start(source)
+      await manager.acceptDecodedChunk('job-1', 0, 0, twoWindowPcm())
+      const finishing = manager.finishDecoding('job-1')
+      await vi.waitFor(() => expect(probeLanguageName).toHaveBeenCalledTimes(1))
+
+      await manager.failDecoder('job-1', 'decoder timed out')
+      await manager.resume('job-1')
+      pendingProbe.reject(new Error('old probe failed'))
+      await finishing
+
+      expect(probeLanguageName).toHaveBeenCalledTimes(1)
+      expect(transcribe).not.toHaveBeenCalled()
+      expect(manager.get('job-1')).toMatchObject({ state: 'decoding', cursor: 0, lines: [] })
+      expect(decode).toHaveBeenCalledTimes(2)
+    })
+
+    it('ignores a legacy slab completion after failure and starts the queued same-job retry only after unwind', async () => {
+      const pendingAsr = deferred<string>()
+      const transcribe = vi.fn(() => pendingAsr.promise)
+      const { manager, store, decode } = createManager({ transcribe })
+      await store.save({
+        jobId: 'job-1', sourcePath: source.path, sourceName: source.name, sourceSizeBytes: source.sizeBytes,
+        sourceMtimeMs: source.mtimeMs, title: 'Legacy', state: 'queued', cursor: 0, totalChunks: 1,
+        chunkSec: IMPORT_CHUNK_SECONDS, lines: [], createdAt: 1, updatedAt: 1
+      })
+      await manager.recover()
+      const accepting = manager.acceptDecodedChunk('job-1', 0, 1, new Float32Array([0.1]))
+      await vi.waitFor(() => expect(transcribe).toHaveBeenCalledTimes(1))
+
+      await manager.failDecoder('job-1', 'decoder timed out')
+      await manager.resume('job-1')
+      expect(decode).toHaveBeenCalledTimes(1)
+
+      pendingAsr.resolve('stale legacy speech')
+      await accepting
+
+      expect(manager.get('job-1')).toMatchObject({ state: 'decoding', cursor: 0, lines: [] })
+      expect(decode).toHaveBeenCalledTimes(2)
+    })
+
+    it('disposes a no-speech attempt before admitting the next decode', async () => {
+      let n = 0
+      const events: string[] = []
+      const { manager } = createManager({
+        newId: () => `job-${++n}`,
+        decode: vi.fn((job: ImportJob) => {
+          events.push(`decode:${job.jobId}`)
+        }),
+        beginSpeakers: vi.fn((attempt: ImportSpeakerAttempt) => {
+          events.push(`begin:${attempt.jobId}`)
+          return true
+        }),
+        disposeSpeakers: vi.fn((attempt: ImportSpeakerAttempt) => events.push(`dispose:${attempt.jobId}`))
+      })
+      await manager.startMany([
+        { ...source, name: 'first.m4a' },
+        { ...source, name: 'second.wav' }
+      ])
+
+      await manager.finishDecoding('job-1')
+
+      expect(manager.get('job-1')).toMatchObject({ state: 'failed', error: expect.stringMatching(/no speech/i) })
+      expect(events).toEqual([
+        'begin:job-1',
+        'decode:job-1',
+        'dispose:job-1',
+        'begin:job-2',
+        'decode:job-2'
+      ])
+    })
+
+    it('disposes a decoder-failed attempt before admitting the next decode', async () => {
+      let n = 0
+      const events: string[] = []
+      const { manager } = createManager({
+        newId: () => `job-${++n}`,
+        beginSpeakers: vi.fn((attempt: ImportSpeakerAttempt) => {
+          events.push(`begin:${attempt.jobId}`)
+          return true
+        }),
+        disposeSpeakers: vi.fn((attempt: ImportSpeakerAttempt) => events.push(`dispose:${attempt.jobId}`)),
+        decode: vi.fn(async (job: ImportJob) => {
+          events.push(`decode:${job.jobId}`)
+          if (job.jobId === 'job-1') throw new Error('decoder died')
+        })
+      })
+
+      await manager.startMany([
+        { ...source, name: 'first.m4a' },
+        { ...source, name: 'second.wav' }
+      ])
+
+      expect(manager.get('job-1')).toMatchObject({ state: 'failed', error: 'decoder died' })
+      expect(events).toEqual([
+        'begin:job-1',
+        'decode:job-1',
+        'dispose:job-1',
+        'begin:job-2',
+        'decode:job-2'
+      ])
+    })
+
+    it('does not admit speakers or start decode after cancellation wins during admission persistence', async () => {
+      const enteredDecodePersist = deferred<void>()
+      const releaseDecodePersist = deferred<void>()
+      class AdmissionStore extends MemoryStore {
+        private held = false
+
+        override async save(job: ImportJob): Promise<void> {
+          if (job.state === 'decoding' && !this.held) {
+            this.held = true
+            enteredDecodePersist.resolve()
+            await releaseDecodePersist.promise
+          }
+          await super.save(job)
+        }
+      }
+      const store = new AdmissionStore()
+      const beginSpeakers = vi.fn(() => true)
+      const { manager, decode } = createManager({ store, beginSpeakers })
+      const starting = manager.start(source)
+      await enteredDecodePersist.promise
+
+      await manager.cancel('job-1')
+      releaseDecodePersist.resolve()
+      await starting
+
+      expect(manager.get('job-1')?.state).toBe('cancelled')
+      expect(beginSpeakers).not.toHaveBeenCalled()
+      expect(decode).not.toHaveBeenCalled()
+    })
+
+    it('keeps resumed cursor suffixes anonymous instead of recycling fresh cluster labels', async () => {
+      const transcribe = vi.fn().mockResolvedValueOnce('prefix').mockRejectedValue(new Error('ASR unavailable'))
+      const beginSpeakers = vi.fn(() => true)
+      const speakerFor = vi.fn().mockResolvedValue('Speaker1')
+      const finalizeSpeakers = vi.fn(() => new Map<string, string>())
+      const disposeSpeakers = vi.fn()
+      const { manager } = createManager({
+        transcribe,
+        beginSpeakers,
+        speakerFor,
+        finalizeSpeakers,
+        disposeSpeakers
+      })
+      const pcm = twoWindowPcm()
+      await manager.start(source)
+      await manager.acceptDecodedChunk('job-1', 0, 0, pcm)
+      await manager.finishDecoding('job-1')
+      expect(manager.get('job-1')).toMatchObject({
+        state: 'failed',
+        cursor: 1,
+        lines: [{ name: 'Speaker1', text: 'prefix' }]
+      })
+
+      transcribe.mockReset().mockResolvedValue('suffix')
+      await manager.resume('job-1')
+      await manager.acceptDecodedChunk('job-1', 0, 0, pcm)
+      await manager.finishDecoding('job-1')
+
+      expect(manager.get('job-1')).toMatchObject({
+        state: 'done',
+        cursor: 2,
+        lines: [
+          { name: 'Speaker1', text: 'prefix' },
+          { speaker: 'unknown', text: 'suffix' }
+        ]
+      })
+      expect(manager.get('job-1')?.lines[1].name).toBeUndefined()
+      expect(beginSpeakers).toHaveBeenCalledTimes(1)
+      expect(speakerFor).toHaveBeenCalledTimes(1)
+      expect(finalizeSpeakers).not.toHaveBeenCalled()
+      expect(disposeSpeakers).toHaveBeenCalledTimes(1)
+    })
+
+    it('disposes once before a failing recap and never lets recap retain speaker ownership', async () => {
+      let n = 0
+      const events: string[] = []
+      const disposeSpeakers = vi.fn((attempt: ImportSpeakerAttempt) => events.push(`dispose:${attempt.jobId}`))
+      const { manager } = createManager({
+        newId: () => `job-${++n}`,
+        decode: vi.fn((job: ImportJob) => {
+          events.push(`decode:${job.jobId}`)
+        }),
+        beginSpeakers: () => true,
+        disposeSpeakers,
+        generateRecap: vi.fn(async (job: ImportJob) => {
+          events.push(`recap:${job.jobId}`)
+          throw new Error('provider unavailable')
+        })
+      })
+      await manager.startMany([
+        { ...source, name: 'first.m4a' },
+        { ...source, name: 'second.wav' }
+      ])
+      await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+
+      await manager.finishDecoding('job-1')
+
+      expect(manager.get('job-1')).toMatchObject({ state: 'done', recapError: 'provider unavailable' })
+      expect(disposeSpeakers).toHaveBeenCalledTimes(1)
+      expect(events.indexOf('dispose:job-1')).toBeLessThan(events.indexOf('decode:job-2'))
+      expect(events.indexOf('decode:job-2')).toBeLessThan(events.indexOf('recap:job-1'))
     })
   })
 
@@ -395,7 +961,7 @@ describe('ImportJobManager', () => {
     const src = readFileSync(join(__dirname, 'import-jobs.ts'), 'utf8')
     expect(src).toMatch(/job\.pipeline\s*=\s*undefined/)
     expect(src).toMatch(/const backlog = this\.takePcm\(job\.jobId\)/)
-    expect(src).toMatch(/legacyTranscribeSlab\(job, backlogSeq\+\+, slab\)/)
+    expect(src).toMatch(/legacyTranscribeSlab\(job, backlogSeq\+\+, slab, attempt\)/)
   })
 
   it('persists decoder progress and reserves 100% for the completed summary handoff', async () => {

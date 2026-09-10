@@ -63,7 +63,7 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
       )
     )
     const preamble = [
-      'const { mainLog, auditLog, resetDustConversation, setTrayRecording, setRecordingPowerSaveBlock, before } = stubs',
+      'const { mainLog, auditLog, resetDustConversation, setTrayRecording, setRecordingPowerSaveBlock, discardActiveLiveSpeakerSession, before } = stubs',
       `const BAR_WIDTH = ${constant('BAR_WIDTH')}`,
       'let { listeningActive, lastPlainAskAt, audioArmed, isMinimized, currentWidth } = before',
       'let handler = null',
@@ -86,6 +86,7 @@ describe('MQA-196 — a renderer crash restores the overlay geometry, not just t
       resetDustConversation: () => {},
       setTrayRecording: () => {},
       setRecordingPowerSaveBlock: () => {},
+      discardActiveLiveSpeakerSession: () => {},
       before
     })
   }
