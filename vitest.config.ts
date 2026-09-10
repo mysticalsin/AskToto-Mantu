@@ -20,6 +20,9 @@ const stripShebangPlugin = {
 
 const vitestConfig = defineConfig({
   plugins: [stripShebangPlugin],
+  // Match the renderer's react-jsx compiler setting explicitly. The root config only references
+  // tsconfig.web.json, so Vite's standalone test transform does not inherit that JSX option.
+  esbuild: { jsx: 'automatic' },
   test: {
     globals: true,
     environment: 'node',

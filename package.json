@@ -83,6 +83,9 @@
   },
   "comment": "Only main-process runtime deps live in 'dependencies' (electron-builder bundles these into the app). All renderer deps are bundled by Vite at build time and kept in devDependencies to keep the package small.",
   "overrides": {
+    "vitest": {
+      "vite": "$vite"
+    },
     "sharp": "^0.35.0",
     "fast-uri": "^3.1.6"
   },
@@ -108,7 +111,7 @@
     "@types/react": "^18.3.5",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.1",
-    "@vitest/coverage-v8": "^4.1.9",
+    "@vitest/coverage-v8": "^4.1.11",
     "electron": "39.8.10",
     "electron-builder": "26.15.3",
     "electron-vite": "5.0.0",
@@ -126,6 +129,6 @@
     "three": "0.143.0",
     "typescript": "^5.6.3",
     "vite": "7.3.6",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.11"
   }
 }
