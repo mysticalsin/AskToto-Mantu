@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import Module from 'node:module'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -300,112 +299,16 @@ describe('real sherpa integration (soft-skip when model/addon absent)', () => {
   }, 60_000)
 })
 
-/**
- * MQA-042 — the meeting-boundary release of the Parakeet recognizer. It lives in this file because
- * parakeet.ts shares the sherpa-onnx addon surface with speaker-id.ts, and the electron/logger stubs
- * above already model it.
- */
+/** MQA-042 now terminates an isolated native helper instead of forcing V8 GC in main. Detailed
+ * lifecycle behavior is covered by parakeet-client.test.ts; this pins the real meeting boundary. */
 describe('parakeetRelease at a meeting boundary (MQA-042)', () => {
-  const loader = Module as unknown as {
-    _load: (this: unknown, request: string, ...rest: unknown[]) => unknown
-  }
-  const originalLoad = loader._load
-  let resourcesPath: string
-  let originalResourcesPath: PropertyDescriptor | undefined
-  let constructed: number
+  const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 
-  /** Load a fresh parakeet.ts over a stub sherpa addon. `extra` becomes own props of the recognizer, so
-   *  a test can hand it a teardown method the shipped OfflineRecognizer does not have. The stub is
-   *  installed on Module._load, not with vi.doMock: parakeet.ts reaches the addon through a CommonJS
-   *  require(), which vitest's module mocker does not intercept — the real native .node would load and
-   *  hard-crash the worker on these stub weights. */
-  async function loadParakeet(extra: Record<string, unknown> = {}) {
-    class FakeOfflineRecognizer {
-      constructor() {
-        constructed++
-        Object.assign(this, extra)
-      }
-      createStream() {
-        return { acceptWaveform: () => {} }
-      }
-      async decodeAsync() {}
-      getResult() {
-        return { text: 'hello' }
-      }
-    }
-    loader._load = function (request: string, ...rest: unknown[]) {
-      if (request === 'sherpa-onnx-node') return { OfflineRecognizer: FakeOfflineRecognizer }
-      return originalLoad.call(this, request, ...rest)
-    }
-    vi.resetModules()
-    return import('./parakeet')
-  }
-
-  beforeEach(() => {
-    resourcesPath = mkdtempSync(join(tmpdir(), 'metis-parakeet-release-'))
-    const modelDir = join(resourcesPath, 'asr', 'sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8')
-    mkdirSync(modelDir, { recursive: true })
-    for (const f of ['encoder.int8.onnx', 'decoder.int8.onnx', 'joiner.int8.onnx', 'tokens.txt']) {
-      writeFileSync(join(modelDir, f), 'stub')
-    }
-    originalResourcesPath = Object.getOwnPropertyDescriptor(process, 'resourcesPath')
-    Object.defineProperty(process, 'resourcesPath', { configurable: true, value: resourcesPath })
-    electron.app.isPackaged = true
-    constructed = 0
-  })
-
-  afterEach(() => {
-    electron.app.isPackaged = false
-    if (originalResourcesPath) Object.defineProperty(process, 'resourcesPath', originalResourcesPath)
-    else delete (process as unknown as { resourcesPath?: string }).resourcesPath
-    rmSync(resourcesPath, { recursive: true, force: true })
-    loader._load = originalLoad
-    vi.unstubAllGlobals()
-    vi.resetModules()
-  })
-
-  it('MQA-042: forces the collection that actually reclaims the native recognizer — dropping the reference alone frees nothing', async () => {
-    const gc = vi.fn()
-    vi.stubGlobal('gc', gc)
-    const parakeet = await loadParakeet()
-
-    expect(await parakeet.parakeetTranscribe(new Float32Array(16))).toBe('hello')
-    expect(constructed).toBe(1)
-
-    parakeet.parakeetRelease()
-    expect(gc).toHaveBeenCalledTimes(1)
-
-    // Reference really dropped: meeting 2 builds a fresh recognizer rather than reviving a released one.
-    await parakeet.parakeetTranscribe(new Float32Array(16))
-    expect(constructed).toBe(2)
-
-    // A boundary where Parakeet never loaded (the Whisper-only session) must not pay for a full GC.
-    parakeet.parakeetRelease()
-    parakeet.parakeetRelease()
-    expect(gc).toHaveBeenCalledTimes(2)
-  })
-
-  it('MQA-042: calls a teardown the recognizer really has, and still collects afterwards', async () => {
-    const gc = vi.fn()
-    vi.stubGlobal('gc', gc)
-    const free = vi.fn()
-    const parakeet = await loadParakeet({ free })
-
-    await parakeet.parakeetTranscribe(new Float32Array(16))
-    parakeet.parakeetRelease()
-
-    expect(free).toHaveBeenCalledTimes(1)
-    expect(gc).toHaveBeenCalledTimes(1)
-  })
-
-  it('MQA-042: releases without an --expose-gc build present, leaving the flag as it found it', async () => {
-    const parakeet = await loadParakeet()
-    await parakeet.parakeetTranscribe(new Float32Array(16))
-
-    expect(() => parakeet.parakeetRelease()).not.toThrow()
-    expect((globalThis as { gc?: () => void }).gc).toBeUndefined()
-    await parakeet.parakeetTranscribe(new Float32Array(16))
-    expect(constructed).toBe(2)
+  it('awaits helper exit when listening stops', () => {
+    const start = indexSrc.indexOf('ipcMain.handle(IPC.listeningState')
+    expect(start).toBeGreaterThan(-1)
+    const body = indexSrc.slice(start, start + 3_000)
+    expect(body).toMatch(/else\s*\{\s*await parakeetRelease\(\)/)
   })
 })
 
