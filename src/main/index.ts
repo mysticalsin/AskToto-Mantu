@@ -230,15 +230,40 @@ function getSpeakerId(): SpeakerId {
   return speakerIdInstance
 }
 
+/** Apply the Speaker Intelligence privacy policy without constructing the lazy identifier. Turning the
+ *  feature off invalidates pending continuations and drops transient buffers without persisting them. */
+function applySpeakerIdPolicy(enabled: boolean): boolean {
+  if (!enabled) speakerIdInstance?.discardSession()
+  return enabled
+}
+
+function speakerIdProcessingEnabled(): boolean {
+  return applySpeakerIdPolicy(getSettings().speakerId.enabled)
+}
+
+/** Settings wrappers keep both renderer writes and managed-config reads on the same revocation path. */
+function setSettingsWithSpeakerPolicy(patch: Parameters<typeof setSettings>[0]): ReturnType<typeof setSettings> {
+  const settings = setSettings(patch)
+  applySpeakerIdPolicy(settings.speakerId.enabled)
+  return settings
+}
+
+function publicSettingsWithSpeakerPolicy(): ReturnType<typeof publicSettings> {
+  const settings = publicSettings()
+  applySpeakerIdPolicy(settings.speakerId.enabled)
+  return settings
+}
+
 /** Shared Speaker Intelligence label lookup for a THEM window — parakeetFeed, appleSpeechFeed and
  *  speakerEmbed all funnel through this one place so the settings gate + failure handling can't drift
  *  between the three chokepoints. Degrades to null on any failure, the feature being off, or the model
  *  being unprovisioned — a missing label must never break transcription. See speaker-id.ts's labelWindow
  *  for the echo-defense flag (`label.echo`) callers must check before attaching `label.name` anywhere. */
 async function labelThemAudio(samples: Float32Array, owner: 'live' | 'import' = 'live'): Promise<SpeakerLabel | null> {
-  if (!getSettings().speakerId.enabled) return null
+  if (!speakerIdProcessingEnabled()) return null
   try {
-    return await getSpeakerId().labelWindow(samples, owner)
+    const label = await getSpeakerId().labelWindow(samples, owner)
+    return speakerIdProcessingEnabled() ? label : null
   } catch (err) {
     mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
     return null
@@ -250,9 +275,12 @@ async function labelThemAudio(samples: Float32Array, owner: 'live' | 'import' = 
  *  voice bleeding through the loopback. Async child failures are swallowed here: called from the SAME
  *  handlers that already transcribe the window, and must never affect their result. */
 async function observeOperatorAudio(samples: Float32Array): Promise<void> {
-  if (!getSettings().speakerId.enabled) return
+  if (!speakerIdProcessingEnabled()) return
   try {
     await getSpeakerId().observeOperatorWindow(samples, 'live')
+    // A direct managed-config flip may be first observed only after the child returns; re-checking here
+    // both suppresses that continuation and discards any transient mutation it completed.
+    speakerIdProcessingEnabled()
   } catch (err) {
     mainLog.warn('[speaker-id] operator observation failed', err instanceof Error ? err.message : String(err))
   }
@@ -1292,7 +1320,7 @@ function initializeImportJobs(): void {
       resetImportLanguageFollow(getSettings().asrLanguage)
       // MQA-235: fresh diarization session per recording — cluster labels ("Speaker 1") are meeting-
       // scoped, never carried across imports.
-      getSpeakerId().resetSession()
+      if (speakerIdProcessingEnabled()) getSpeakerId().resetSession()
       return startImportDecoder(job)
     },
     transcribe: async (samples, opts) => {
@@ -1347,8 +1375,8 @@ function initializeImportJobs(): void {
     },
     // MQA-235: diarize one utterance window — enrolled profile name or session cluster label. Same
     // CAM++ extractor the live path uses; a fresh session is reset per job in `decode` above.
-    speakerFor: async (samples) => (await getSpeakerId().labelWindow(samples, 'import'))?.name ?? null,
-    finalizeSpeakers: () => getSpeakerId().finalizeSession(),
+    speakerFor: async (samples) => (await labelThemAudio(samples, 'import'))?.name ?? null,
+    finalizeSpeakers: () => speakerIdProcessingEnabled() ? getSpeakerId().finalizeSession() : new Map(),
     // Polish is skipped on import: sequential batches of 8 with a 120s idle made one meeting take
     // forever before the summary. Recap writes first. Cheap polish can be run later if needed.
     // Free the ASR and speaker helpers' model memory between imports; the next job spawns fresh children.
@@ -3435,7 +3463,7 @@ async function backfillSpeakerNames(file: string): Promise<{ ok: boolean; named?
     // IS that person. Best-effort and silent: a missed window (feature off, no session buffer left, below
     // the quality gate) never affects the save this function already guarantees.
     const clusterNamePairs = clusterNamePairsFromAlignment(read.lines, lines)
-    if (clusterNamePairs.length) {
+    if (clusterNamePairs.length && speakerIdProcessingEnabled()) {
       try {
         const enrolled = getSpeakerId().autoEnrollFromLabeledWindows(clusterNamePairs)
         if (enrolled) auditLog('speaker.auto_enrolled', { enrolled })
@@ -3491,7 +3519,7 @@ function registerIpc(): void {
   // --- Settings & permissions ---
   ipcMain.handle(IPC.settingsGet, (e) => {
     assertMainWindow(e)
-    const s = publicSettings()
+    const s = publicSettingsWithSpeakerPolicy()
     // Re-apply the live side effects of a managed-config change (content protection / shortcuts / tray)
     // if the relevant values drifted since we last applied them — but only then, so a plain settings poll
     // (this handler runs on every renderer settings fetch) stays a cheap no-op. `null` means "just booted,
@@ -3743,7 +3771,7 @@ function registerIpc(): void {
       auditLog('brain.publish.consent', { granted, at: 'encryption-enabled' })
       if (!granted) delete (p as Record<string, unknown>).encryptTranscripts
     }
-    const next = setSettings(p)
+    const next = setSettingsWithSpeakerPolicy(p)
     auditLog('settings.changed', { keys: Object.keys(p) })
     // Exclusive stage exits only here: onboardingDone false→true. Replay (true→false) re-enters it.
     if (!cur.onboardingDone && next.onboardingDone) {
@@ -7206,7 +7234,7 @@ function registerIpc(): void {
       // production caller. Deliberately NOT wrapped in a lazy getter: if Speaker Intelligence was never
       // started this session there is no session state to clear, and building the instance here would
       // probe the sherpa addon on a path that does not need it.
-      speakerIdInstance?.resetSession()
+      if (speakerIdProcessingEnabled()) speakerIdInstance?.resetSession()
       // Pre-create the new meeting's conversation in the background (fire-and-forget) so the FIRST
       // quick action / ask of the meeting doesn't pay the createConversation round trip. Keyed to the
       // base agent — the interactive speed pin in attempt() routes all mid-meeting asks there.

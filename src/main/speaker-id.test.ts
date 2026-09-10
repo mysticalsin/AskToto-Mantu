@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -231,6 +231,73 @@ describe('echo defense — operator buffer + THEM-window echo detection', () => 
     await expect(enrollment).resolves.toBe(false)
     expect(id.listProfiles()).toEqual([])
   })
+
+  it('discardSession drops transient operator audio without persisting it', async () => {
+    const id = makeId(dir)
+    await id.observeOperatorWindow(windowFor(3))
+    await id.observeOperatorWindow(windowFor(3))
+    await id.observeOperatorWindow(windowFor(3))
+
+    id.discardSession()
+    id.resetSession()
+
+    expect(existsSync(join(dir, 'voiceprints.json'))).toBe(false)
+  })
+
+  it('discardSession revokes pending label, operator-observation, and enrollment continuations', async () => {
+    const pending: Array<(embedding: Float32Array) => void> = []
+    const id = createSpeakerId({
+      createExtractor: () => ({
+        compute: () => new Promise<Float32Array>((resolve) => { pending.push(resolve) })
+      }),
+      storePath: () => join(dir, 'voiceprints.json')
+    })
+
+    const label = id.labelWindow(windowFor(1))
+    const observation = id.observeOperatorWindow(windowFor(2))
+    const enrollment = id.enroll('Revoked profile', [windowFor(3)])
+    await Promise.resolve()
+    id.discardSession()
+    for (const resolve of pending) resolve(Float32Array.from([1, 0, 0]))
+
+    await expect(label).resolves.toBeNull()
+    await expect(observation).resolves.toBeUndefined()
+    await expect(enrollment).resolves.toBe(false)
+    id.resetSession()
+    expect(id.listProfiles()).toEqual([])
+    expect(existsSync(join(dir, 'voiceprints.json'))).toBe(false)
+  })
+
+  it('re-enabling work cannot resurrect a result from before discardSession', async () => {
+    let resolveStale!: (embedding: Float32Array) => void
+    let calls = 0
+    const id = createSpeakerId({
+      createExtractor: () => ({
+        compute: () => {
+          calls++
+          if (calls === 1) return new Promise<Float32Array>((resolve) => { resolveStale = resolve })
+          return Promise.resolve(Float32Array.from([0, 1, 0]))
+        }
+      }),
+      storePath: () => join(dir, 'voiceprints.json')
+    })
+
+    const stale = id.labelWindow(windowFor(1))
+    id.discardSession()
+    resolveStale(Float32Array.from([1, 0, 0]))
+
+    await expect(stale).resolves.toBeNull()
+    await expect(id.labelWindow(windowFor(2))).resolves.toMatchObject({ name: 'Speaker 1' })
+  })
+
+  it('discardSession preserves profiles that were already stored', async () => {
+    const id = makeId(dir)
+    await id.enroll('Jane Doe', [windowFor(2)])
+
+    id.discardSession()
+
+    expect(id.listProfiles()).toEqual([{ name: 'Jane Doe', samples: 1 }])
+  })
 })
 
 describe('autoEnrollFromLabeledWindows — Teams-VTT auto-enrollment flywheel (P2 §3.4)', () => {
@@ -311,7 +378,7 @@ describe('speaker:embed — the Whisper-engine speaker-embedding tap (contract)'
       expect(body).toMatch(/await labelThemAudio\(p\.samples\)/)
       expect(body).toMatch(/await observeOperatorAudio\(p\.samples\)/)
     }
-    expect(indexSrc).toMatch(/speakerFor:\s*async \(samples\) => \(await getSpeakerId\(\)\.labelWindow\(samples, 'import'\)\)/)
+    expect(indexSrc).toMatch(/speakerFor:\s*async \(samples\) => \(await labelThemAudio\(samples, 'import'\)\)/)
   })
 
   it('builds the speaker native host as a dedicated electron-vite entry', () => {
@@ -364,13 +431,13 @@ describe('the meeting-start boundary resets speaker session labels (MQA-043)', (
     const start = indexSrc.indexOf('ipcMain.handle(IPC.listeningState')
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 2500)
-    expect(body).toMatch(/onMeetingStart:\s*\(\)\s*=>\s*\{[\s\S]{0,1000}?speakerIdInstance\?\.resetSession\(\)/)
+    expect(body).toMatch(/onMeetingStart:\s*\(\)\s*=>\s*\{[\s\S]{0,1000}?speakerIdProcessingEnabled\(\)[\s\S]{0,200}?speakerIdInstance\?\.resetSession\(\)/)
   })
 
   it('resets it alongside the Dust conversation — one boundary, not two competing ones', () => {
     const start = indexSrc.indexOf('ipcMain.handle(IPC.listeningState')
     const body = indexSrc.slice(start, start + 2500)
-    expect(body.indexOf('resetDustConversation()')).toBeLessThan(body.indexOf('speakerIdInstance?.resetSession()'))
+    expect(body.indexOf('resetDustConversation()')).toBeLessThan(body.indexOf('speakerIdProcessingEnabled()'))
   })
 })
 
