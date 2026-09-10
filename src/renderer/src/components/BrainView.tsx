@@ -37,11 +37,12 @@ import { WorkProgressMeter } from './WorkProgressMeter'
 import { useFlash } from '../lib/useFlash'
 import { BrainRecordPage, recordKey, sortAttentionItems, type BrainRecordRef, type RecentMerge } from './BrainRecordPage'
 import { shouldAutoBackfill } from './brain-auto'
-import { brainStatusIsWorking, brainStatusPollInterval, shouldRefreshAfterBrainStatus } from './brain-status-refresh'
+import { brainStatusError, brainStatusIsWorking, brainStatusPollInterval, shouldRefreshAfterBrainStatus } from './brain-status-refresh'
+import { createBrainRefresh } from './brain-refresh'
+import { INTELLIGENCE_STATUS_UNAVAILABLE, startIntelligenceUpdateFromClick } from '@shared/intelligence-pass'
 import { describeMeetingIndexProgress } from './work-progress'
 import { IntelligenceUpdateButton } from './IntelligenceUpdateButton'
 import { NO_PROVIDER_INDEX_COPY, runIntelligenceUpdateClick } from '../lib/intelligence-update'
-import { startIntelligenceUpdateFromClick } from '@shared/intelligence-pass'
 
 /**
  * Mantu Intelligence — the second-brain dashboard over the meeting knowledge store (.brain/).
@@ -444,6 +445,7 @@ export function BrainView({
   const [attention, setAttention] = useState<AttentionItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [statusError, setStatusError] = useState<string | null>(null)
   const [backfilling, setBackfilling] = useState(false)
   // FIX 4: per-file failure detail is collapsed by default — the banner's single-line summary is enough
   // for the common case, this is an opt-in drill-down for "which files, exactly, and why".
@@ -479,10 +481,6 @@ export function BrainView({
   const [timeSavedAssumptions, setTimeSavedAssumptions] = useState<TimeSavedAssumptions>(
     DEFAULT_TIME_SAVED_ASSUMPTIONS
   )
-  // Guards against overlapping polls during a long backfill: brainRead can take longer than the 4s
-  // poll interval as ingestion grows, so without this an older, slower-resolving snapshot can land
-  // after a newer one and make the KPI tiles/lists visibly jump backward.
-  const refreshingRef = useRef(false)
   // A full dashboard refresh reads every entity and meeting. During indexing, poll only the small status
   // payload for responsive progress, then hydrate the complete dashboard once the batch settles.
   const statusWasWorkingRef = useRef(false)
@@ -491,10 +489,8 @@ export function BrainView({
   // for saved transcripts that predate the brain, without re-triggering it on each progress poll.
   const autoBackfillAttemptedRef = useRef(false)
 
-  const refresh = useCallback(async (): Promise<void> => {
-    if (refreshingRef.current) return
-    refreshingRef.current = true
-    try {
+  const refresh = useMemo(() => createBrainRefresh(
+    async () => {
       const [read, st, list, att, settings] = await Promise.all([
         window.toto.brainRead(),
         window.toto.brainStatus(),
@@ -502,6 +498,9 @@ export function BrainView({
         window.toto.brainAttention(),
         window.toto.getSettings()
       ])
+      return { read, st, list, att, settings }
+    },
+    ({ read, st, list, att, settings }) => {
       setData(read)
       setStatus(st)
       setMeetings(list)
@@ -512,21 +511,19 @@ export function BrainView({
       setUsageStats(settings.usageStats)
       setTimeSavedAssumptions(settings.timeSaved)
       setError(st?.error ?? null)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setLoading(false)
-      refreshingRef.current = false
-    }
-  }, [])
+      setStatusError(null)
+    },
+    setError,
+    () => setLoading(false)
+  ), [])
 
   const refreshStatus = useCallback(async (): Promise<void> => {
     try {
       const st = await window.toto.brainStatus()
       setStatus(st)
-      if (st?.error) setError(st.error)
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
+      setStatusError(st ? null : INTELLIGENCE_STATUS_UNAVAILABLE)
+    } catch {
+      setStatusError(INTELLIGENCE_STATUS_UNAVAILABLE)
     }
   }, [])
 
@@ -598,7 +595,6 @@ export function BrainView({
 
   // Keep compact status polling alive even while idle. A new live ingest can begin after this view mounts;
   // a full read is only needed when work settles, so this stays responsive without re-reading the brain.
-  const preparing = !!status?.backfill?.preparing
   const statusWorking = brainStatusIsWorking(status)
   useEffect(() => {
     void refreshStatus()
@@ -785,7 +781,7 @@ export function BrainView({
   // tick that reset the per-run counter to 0 in between.
   const durableFailed = (status?.failed ?? 0) + (status?.exhausted ?? 0)
   const topError = status?.topError
-  const visibleError = error || status?.error || status?.intelligenceIndex?.lastError
+  const visibleError = error || statusError || brainStatusError(status)
 
   return (
     <div className="fade-up flex flex-col gap-3 px-1 py-1">
@@ -894,14 +890,14 @@ export function BrainView({
           data={data}
           onOpenRecord={openRecord}
           onOpenMeeting={onOpenMeeting}
-          onRefresh={refresh}
+          onRefresh={async () => { await refresh() }}
           onError={setError}
           onMerged={setRecentMerge}
           recentMerge={recentMerge}
           onUndoMerge={() => void undoMerge()}
           onDismissMerge={() => setRecentMerge(null)}
         />
-      ) : ingested === 0 && !bf?.running && !live?.running && !backfilling && !preparing ? (
+      ) : ingested === 0 && !statusWorking && !backfilling ? (
         /* Empty state — the brain has not ingested anything yet. */
         <div className="flex flex-col items-center gap-3 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-6 py-8 text-center">
           <Brain size={28} className="text-[color:var(--color-accent-2)]" />
@@ -953,6 +949,20 @@ export function BrainView({
                   Updating Intelligence from {live.pending} new meeting{live.pending === 1 ? '' : 's'}…
                 </span>
               </div>
+            </div>
+          ) : status?.intelligenceIndex?.running ? (
+            <div className="rounded-xl border border-[var(--color-hair-soft)] bg-[var(--color-accent-soft)] px-3 py-2 text-[11px] text-[color:var(--color-ink-2)]">
+              <div className="flex items-center gap-2">
+                <InlineOrb kind="searching" />
+                <span aria-atomic="true" aria-live="polite">Finishing Intelligence update…</span>
+              </div>
+              <WorkProgressMeter
+                active
+                ariaLabel="Mantu Intelligence completion progress"
+                className="mt-1.5"
+                percent={null}
+                valueText="Finishing summaries and saving Intelligence"
+              />
             </div>
           ) : notIngested > 0 ? (
             <div className="flex items-center justify-between gap-2 rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] px-3 py-1.5 text-[11px] text-[color:var(--color-ink-3)]">

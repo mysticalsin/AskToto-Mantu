@@ -35,6 +35,37 @@ describe('Intelligence Update contract', () => {
     expect(setError).toHaveBeenCalledWith(INTELLIGENCE_PASS_NO_PROVIDER)
   })
 
+  it('contains a rejected pass IPC without exposing its raw diagnostic or automatically retrying', async () => {
+    const runPass = vi.fn().mockRejectedValue(new Error('private/path/provider-payload'))
+    const refresh = vi.fn(async () => {})
+    const setError = vi.fn()
+    const error = 'Could not confirm the Intelligence update. Check its status before trying again.'
+    await expect(startIntelligenceUpdateFromClick({ runPass, refresh, setError })).resolves.toEqual({ queued: 0, error })
+    expect(setError).toHaveBeenLastCalledWith(error)
+    expect(runPass).toHaveBeenCalledTimes(1)
+    expect(refresh).not.toHaveBeenCalled()
+  })
+
+  it('keeps dispatch evidence when only the following refresh fails', async () => {
+    const runPass = vi.fn(async () => ({ queued: 2, preparing: true }))
+    const refresh = vi.fn().mockRejectedValue(new Error('private/path/status-error'))
+    const setError = vi.fn()
+    const error = 'The Intelligence update may still be running. Could not refresh its status; reopen Intelligence to check.'
+    await expect(startIntelligenceUpdateFromClick({ runPass, refresh, setError })).resolves.toEqual({ queued: 2, preparing: true, error })
+    expect(setError).toHaveBeenLastCalledWith(error)
+    expect(runPass).toHaveBeenCalledTimes(1)
+  })
+
+  it('observes the safe failed outcome returned by a contained dashboard refresh', async () => {
+    const runPass = vi.fn(async () => ({ queued: 2 }))
+    const refresh = vi.fn(async () => ({ ok: false }))
+    const setError = vi.fn()
+    const result = await startIntelligenceUpdateFromClick({ runPass, refresh, setError })
+    expect(result.error).toBe('The Intelligence update may still be running. Could not refresh its status; reopen Intelligence to check.')
+    expect(result.queued).toBe(2)
+    expect(setError).toHaveBeenLastCalledWith(result.error)
+  })
+
   it('never auto-sends from this click helper', async () => {
     const src = (await import('node:fs')).readFileSync(new URL('./intelligence-pass.ts', import.meta.url), 'utf8')
     expect(src).not.toMatch(/\bmcpPush\b|\bsendMail\b|\bautoSend\b/)
