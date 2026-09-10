@@ -46,7 +46,8 @@ describe('MQA-113 — the local fallback is preferred over a COOLING cloud provi
 
 describe('MQA-102 — a local completion with zero content surfaces as an error, never a blank bubble', () => {
   it('sends a streamError for a pre-token local onDone instead of falling through to streamDone', () => {
-    const onDone = indexSrc.slice(indexSrc.indexOf('onDone: (u) => {'), indexSrc.indexOf('onError: (message) => {'))
+    const start = indexSrc.indexOf('onDone: (u, completion) => {')
+    const onDone = indexSrc.slice(start, indexSrc.indexOf('onError: failAttempt', start))
     // The cloud/CLI failover guard is explicitly `provider !== 'local'`, so local needs its own branch.
     expect(onDone).toMatch(/if \(!gotToken && provider === 'local'\) \{[\s\S]*?IPC\.streamError/)
     // And it must NOT failover (which could upload the request the user chose to keep on-device).

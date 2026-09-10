@@ -20,7 +20,7 @@ describe('local processing privacy boundary', () => {
   })
 
   it('never sends a failed local request to a cloud failover provider', () => {
-    const start = source.indexOf('onError: (message) => {')
+    const start = source.indexOf('const failAttempt = (message: string): void => {')
     expect(start).toBeGreaterThan(-1)
     // Window widened again: the OmniRoute exhaustion-classification block (rate-limit / quota / usage-cap)
     // and the retry-window handling were inserted ahead of the failover line, pushing it further down. The

@@ -35,13 +35,10 @@ describe('ASR echo defense returns echo:true so the renderer can act (Parakeet /
   })
 })
 
-describe('live ask keeps a substantial answer after a trailing stream error', () => {
-  it('onError settles as streamDone when paintedLen >= 200 (parity with import-recap)', () => {
-    expect(indexSrc).toMatch(/if \(gotToken && paintedLen >= 200\)/)
-    expect(indexSrc).toMatch(/keeping \$\{paintedLen\}-char answer despite trailing stream error/)
-    expect(indexSrc).toMatch(/IPC\.streamDone, \{ id: req\.id \}/)
-  })
-})
+// Live partial-output preservation and non-success outcomes are executed in live-completion.test.ts
+// (including >200 characters, Dust EOF, network failure, CLI timeout and real hedge ownership), with
+// renderer composition in components/live-completion.test.tsx and state.useAsk.test.ts. The old source
+// assertion requiring a >=200-character error to emit streamDone encoded the false-success defect.
 
 describe('brain status failedFiles excludes pending deferred ingest', () => {
   it('filters with isPendingIngestRecord so consolidation-queued meetings are not red "failed"', () => {

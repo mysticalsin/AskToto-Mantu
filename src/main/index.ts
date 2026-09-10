@@ -6015,7 +6015,6 @@ function registerIpc(): void {
           : baseIdleMs
       const startedAt = Date.now()
       let gotToken = false
-      let paintedLen = 0
       let ttftMs: number | undefined
       // Strips a reasoning model's inline <think>…</think> out of the answer stream (llm/think-strip.ts).
       // One per attempt: each leg/retry is its own stream, and the stripper carries position state.
@@ -6044,8 +6043,149 @@ function registerIpc(): void {
           }
         }
         gotToken = true
-        paintedLen += text.length
         win?.webContents.send(IPC.streamDelta, { id: req.id, text })
+      }
+      // Both transport errors and explicit incomplete terminals share the same retry/hedge policy.
+      const failAttempt = (message: string): void => {
+        if (race && race.gate.isLoser(race.leg)) return
+        if (!race) streams.delete(req.id)
+        auditLog('provider.failed', { provider, gotToken, retry: retryCount })
+        // "You ran out" — a rate limit (429), spent credit, or a Claude Pro / Codex subscription
+        // usage-cap — is NOT a dead key, and each needs its own cooldown + message. Classify it FIRST
+        // (exhaustion.ts), so a rate-limited Claude backs off for its Retry-After window, an out-of-
+        // credit key demotes for ~1h instead of being re-tried as primary every ask, and a spent
+        // subscription window demotes until its reset. This is the OmniRoute integration: the circuit
+        // breaker now remembers token/credit exhaustion, not only credential rejections.
+        const exhaustion: ExhaustionSignal | null =
+          !gotToken && provider !== 'local' ? classifyExhaustion(message) : null
+        if (exhaustion) {
+          if (exhaustion.kind === 'rate-limit') recordRateLimited(provider, exhaustion.retryAfterMs)
+          else
+            recordExhausted(provider, exhaustion.kind, {
+              retryAfterMs: exhaustion.retryAfterMs,
+              resetAt: exhaustion.resetAt,
+              message: String(message)
+            })
+        }
+        // MQA-003/MQA-004: remember a CREDENTIAL rejection (not a transport blip) so routing can stop
+        // re-paying this provider's round trip on every subsequent ask, and so Settings can finally
+        // tell the user their key stopped working instead of reporting it ready forever.
+        // MQA-101: Dust's own auth-rejection wording drifts across API versions and the current
+        // "does not have a valid authenticated credential" phrasing carries no 401 digits, so the
+        // generic isAuthFailure misses it — the circuit breaker never trips for a genuinely dead Dust
+        // session. dust.ts already maintains the broadened matcher for exactly this; use it for Dust.
+        // Gated on !exhaustion so a "403 insufficient_quota" is not double-counted as a dead key, AND on
+        // provider !== 'local' — the on-device model has no credentials to reject, and a local runtime
+        // error whose text happens to match isAuthFailure (e.g. an EACCES "permission denied" from a
+        // file lock re-hashing the model) must NOT cool 'local' down. If it did, the skip-cooling-primary
+        // fast path would swap a privacy-pinned local vision request onto a cloud provider — uploading a
+        // screenshot the user pinned to on-device-only. Local failures are handled by local-runtime.ts's
+        // own restart budget, never by this credential breaker.
+        const isCredentialRejection =
+          !exhaustion &&
+          provider !== 'local' &&
+          (provider === 'dust' ? isDustAuthError({ message }) : isAuthFailure(message))
+        if (!gotToken && isCredentialRejection) recordAuthFailure(provider, String(message))
+        // Do NOT retire a CLI for a usage-cap: a spent Claude Pro / Codex window is a TEMPORARY lockout
+        // that refills at a known time, not a dead login — retiring it would force a needless re-login.
+        // Only a genuine auth failure retires the CLI.
+        if (!gotToken && !exhaustion) retireCli(provider, message)
+        // Pre-token transient failure (dropped socket, 5xx, 429, DNS blip): retry the SAME provider
+        // with bounded backoff before switching. `gotToken` guards it — once tokens are on the wire
+        // we never re-run. A cancel handle keeps an abort during the backoff wait from firing the retry.
+        // Waterfall: when another configured provider can take over (e.g. Dust down but a Claude/GPT key
+        // is set), cap same-provider retries at ONE so the API answers in seconds instead of after the
+        // full ~30s of retrying a dead primary. With nowhere to fall over to, keep the full retry budget.
+        // A request routed to Métis Local stays on-device. Cloud providers may waterfall into another
+        // configured provider, but a local failure must be surfaced to the user instead of silently
+        // uploading the transcript/screenshot they explicitly chose to process locally.
+        // (pickFailover may also name 'local' here — a sole cloud provider that transport-fails now
+        // retries once and then answers on-device instead of burning the full ~30s retry budget.)
+        const hasFailoverTarget = provider !== 'local' && !!pickFailover(attempted.concat(provider))
+        const retryBudget = hasFailoverTarget ? 1 : MAX_TRANSIENT_RETRIES
+        // A rate-limit is retryable IN PLACE only if the server's window is short enough to wait inside
+        // a live ask — a 5-minute Retry-After means "go to the backup now", not "freeze the UI". A hard
+        // exhaustion (credit/usage-cap) is NEVER retried in place: money and subscription windows do not
+        // return on a sub-second backoff, so we fail straight over.
+        const rateLimitWaitMs =
+          exhaustion?.kind === 'rate-limit' && exhaustion.retryAfterMs != null
+            ? exhaustion.retryAfterMs
+            : null
+        const rateLimitTooLongToWait = rateLimitWaitMs != null && rateLimitWaitMs > MAX_ASK_RETRY_WAIT_MS
+        const hardExhaustion = exhaustion != null && exhaustion.kind !== 'rate-limit'
+        if (
+          !gotToken &&
+          retryCount < retryBudget &&
+          isTransient(message) &&
+          !hardExhaustion &&
+          !rateLimitTooLongToWait
+        ) {
+          const delayMs = nextBackoff(retryCount, { retryAfterMs: rateLimitWaitMs ?? undefined })
+          auditLog('provider.retry', { provider, attempt: retryCount + 1, delayMs })
+          const timer = setTimeout(() => attempt(provider, attempted, retryCount + 1, race), delayMs)
+          // Under a race the combined abort registration set up before either leg started already
+          // covers cancellation (see the hedge dispatch below) — track this timer there instead of
+          // overwriting it, so cancelling mid-backoff still clears the pending retry.
+          if (race) race.gate.addCleanup(() => clearTimeout(timer))
+          else streams.set(req.id, { abort: () => clearTimeout(timer) })
+          return
+        }
+        // Retries exhausted or non-transient: fall over to another provider (pre-token only). When the
+        // just-failed provider ran OUT (credit/tokens/usage-cap), prefer a free-tier backup or local.
+        const preferFree = exhaustion != null && s.resilience.preferFreeOnExhaustion
+        if (!gotToken && provider !== 'local' && failover(attempted.concat(provider), preferFree, race)) return
+        // Replace raw client transport strings ("Unexpected network error from DustAPI: fetch failed")
+        // with a clean message; keep the Dust-auth one-click reconnect path; else pass the message.
+        // Reaching here means failover found NO backup — so an exhaustion message names the limit and
+        // the fix (add a provider / add credit / wait for the reset) instead of a misleading
+        // "Connection issue" (the old bug: a 429 was reported as a network fault) or a raw provider
+        // string like "Claude AI usage limit reached|1754160000".
+        const friendly = exhaustion
+          ? exhaustion.kind === 'rate-limit'
+            ? `${def.label} is rate-limited right now and no backup is configured. Add another provider in Settings → AI, or wait a moment and try again.`
+            : exhaustion.kind === 'usage-cap'
+              ? `${def.label} hit its usage limit${
+                  exhaustion.resetAt
+                    ? ` (${formatResetPhrase(exhaustion.resetAt)})`
+                    : ''
+                }. Add another provider in Settings → AI to keep going.`
+              : `${def.label} is out of credit. Add credit or switch providers in Settings → AI.`
+          : // A gateway between Métis and the model can fail for a reason only its OPERATOR can
+            // clear — a dead account token, a half-deployed Worker. Those arrive as a 502/503, which
+            // matches isTransient below, so without this branch the user is told to check their
+            // network while the real cause is a secret on the proxy. The proxy marks exactly those
+            // (and deliberately NOT its transient upstream blips, which SHOULD retry), so the marker
+            // is the signal that this sentence is already the actionable one — pass it through
+            // rather than replacing it. Ahead of isTransient because 502 matches both.
+            isProxyOperatorFault(message)
+            ? stripProxyFaultMarker(message)
+            : isTransient(message)
+              ? "Connection issue — couldn't reach the provider after retrying. Check your network and try again."
+            : // MQA-101: use dust.ts's maintained matcher, not a second copy of the phrasing regex —
+              // the inline copy missed the current "authenticated credential" wording, so a dead Dust
+              // session surfaced its raw 401 instead of this reconnect prompt.
+              provider === 'dust' && isDustAuthError({ message })
+              ? 'Your Dust session expired and could not refresh automatically. Open Settings and reconnect Dust once.'
+              : // MQA-062: a CLI provider has no API key to "re-enter" — sending the user to Settings →
+                // AI for a key that does not exist is an actively wrong remedy. Name the real fix: sign
+                // the CLI back in and reconnect it (retireCli has already retired the stale flag).
+                def.kind === 'cli' && isAuthFailure(message)
+                ? `${def.label} is no longer signed in. Sign in to the CLI again, then reconnect it in Settings → CLI Integration.`
+                : // MQA-005: a credential rejection used to fall through as the provider's raw string —
+                  // users saw literally "403 status code (no body)", which names neither the problem nor
+                  // the fix. Say which provider failed and where to go, matching the no-key path's copy.
+                  isAuthFailure(message)
+                  ? `${def.label} rejected your API key (it may have been revoked, expired, or disabled). Open Settings → AI to re-enter it.`
+                  : message
+        if (!race || race.gate.markDead(race.leg) === 'surface') {
+          // Terminal for the whole race, so release the COMBINED abort registration too. The non-race
+          // path already deleted its entry at the top of onError; without this the map kept the
+          // HedgeRace and both handles alive for every hedged ask that ended in an error.
+          if (race) streams.delete(req.id)
+          // The renderer retains partial deltas on error. Visible length is not proof of
+          // completion: never turn a truncated/error response into a successful result.
+          win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
+        }
       }
       const systemParts = buildSystemParts(req, s.mode, s.profile, s.modePrompts, s.contextDocs[s.mode] || [], s.outputLanguage, s.summaryLanguage, s.systemPrompt, s.askCaveman)
       const handle = createStream({
@@ -6080,13 +6220,20 @@ function registerIpc(): void {
             if (race && race.gate.isLoser(race.leg)) return
             paint(think.push(text))
           },
-          onDone: (u) => {
+          onDone: (u, completion) => {
             if (race && race.gate.isLoser(race.leg)) return
             // Release whatever the stripper is still holding: a tail that could have been a partial tag,
             // or — only when the answer would otherwise be blank — an unterminated think block. Must run
             // BEFORE the !gotToken check below, or a response that was entirely one unclosed think block
             // would be judged content-less and fail over despite having something to show.
             paint(think.flush())
+            // Terminal transport delivery is not necessarily a completed answer (token ceiling,
+            // unexpected EOF, etc.). Keep partial output, but never count it as delivered success.
+            // Do not expose the raw provider-controlled reason in feedback or audit logs.
+            if (completion?.status === 'incomplete') {
+              failAttempt('The provider stopped before completing the response. Try again.')
+              return
+            }
             if (!race) streams.delete(req.id)
             // MQA-020 (belt-and-braces half): a provider that completes with ZERO content deltas has not
             // answered — the user gets a blank bubble and the waterfall stops, because "done" reads as
@@ -6187,156 +6334,7 @@ function registerIpc(): void {
             // produced; the demo-tagged check is belt-and-suspenders (see noteQualifyingUse's header).
             noteQualifyingUse(req.mode, req.prompt, req.transcript)
           },
-          onError: (message) => {
-            if (race && race.gate.isLoser(race.leg)) return
-            if (!race) streams.delete(req.id)
-            auditLog('provider.failed', { provider, gotToken, retry: retryCount })
-            // "You ran out" — a rate limit (429), spent credit, or a Claude Pro / Codex subscription
-            // usage-cap — is NOT a dead key, and each needs its own cooldown + message. Classify it FIRST
-            // (exhaustion.ts), so a rate-limited Claude backs off for its Retry-After window, an out-of-
-            // credit key demotes for ~1h instead of being re-tried as primary every ask, and a spent
-            // subscription window demotes until its reset. This is the OmniRoute integration: the circuit
-            // breaker now remembers token/credit exhaustion, not only credential rejections.
-            const exhaustion: ExhaustionSignal | null =
-              !gotToken && provider !== 'local' ? classifyExhaustion(message) : null
-            if (exhaustion) {
-              if (exhaustion.kind === 'rate-limit') recordRateLimited(provider, exhaustion.retryAfterMs)
-              else
-                recordExhausted(provider, exhaustion.kind, {
-                  retryAfterMs: exhaustion.retryAfterMs,
-                  resetAt: exhaustion.resetAt,
-                  message: String(message)
-                })
-            }
-            // MQA-003/MQA-004: remember a CREDENTIAL rejection (not a transport blip) so routing can stop
-            // re-paying this provider's round trip on every subsequent ask, and so Settings can finally
-            // tell the user their key stopped working instead of reporting it ready forever.
-            // MQA-101: Dust's own auth-rejection wording drifts across API versions and the current
-            // "does not have a valid authenticated credential" phrasing carries no 401 digits, so the
-            // generic isAuthFailure misses it — the circuit breaker never trips for a genuinely dead Dust
-            // session. dust.ts already maintains the broadened matcher for exactly this; use it for Dust.
-            // Gated on !exhaustion so a "403 insufficient_quota" is not double-counted as a dead key, AND on
-            // provider !== 'local' — the on-device model has no credentials to reject, and a local runtime
-            // error whose text happens to match isAuthFailure (e.g. an EACCES "permission denied" from a
-            // file lock re-hashing the model) must NOT cool 'local' down. If it did, the skip-cooling-primary
-            // fast path would swap a privacy-pinned local vision request onto a cloud provider — uploading a
-            // screenshot the user pinned to on-device-only. Local failures are handled by local-runtime.ts's
-            // own restart budget, never by this credential breaker.
-            const isCredentialRejection =
-              !exhaustion &&
-              provider !== 'local' &&
-              (provider === 'dust' ? isDustAuthError({ message }) : isAuthFailure(message))
-            if (!gotToken && isCredentialRejection) recordAuthFailure(provider, String(message))
-            // Do NOT retire a CLI for a usage-cap: a spent Claude Pro / Codex window is a TEMPORARY lockout
-            // that refills at a known time, not a dead login — retiring it would force a needless re-login.
-            // Only a genuine auth failure retires the CLI.
-            if (!gotToken && !exhaustion) retireCli(provider, message)
-            // Pre-token transient failure (dropped socket, 5xx, 429, DNS blip): retry the SAME provider
-            // with bounded backoff before switching. `gotToken` guards it — once tokens are on the wire
-            // we never re-run. A cancel handle keeps an abort during the backoff wait from firing the retry.
-            // Waterfall: when another configured provider can take over (e.g. Dust down but a Claude/GPT key
-            // is set), cap same-provider retries at ONE so the API answers in seconds instead of after the
-            // full ~30s of retrying a dead primary. With nowhere to fall over to, keep the full retry budget.
-            // A request routed to Métis Local stays on-device. Cloud providers may waterfall into another
-            // configured provider, but a local failure must be surfaced to the user instead of silently
-            // uploading the transcript/screenshot they explicitly chose to process locally.
-            // (pickFailover may also name 'local' here — a sole cloud provider that transport-fails now
-            // retries once and then answers on-device instead of burning the full ~30s retry budget.)
-            const hasFailoverTarget = provider !== 'local' && !!pickFailover(attempted.concat(provider))
-            const retryBudget = hasFailoverTarget ? 1 : MAX_TRANSIENT_RETRIES
-            // A rate-limit is retryable IN PLACE only if the server's window is short enough to wait inside
-            // a live ask — a 5-minute Retry-After means "go to the backup now", not "freeze the UI". A hard
-            // exhaustion (credit/usage-cap) is NEVER retried in place: money and subscription windows do not
-            // return on a sub-second backoff, so we fail straight over.
-            const rateLimitWaitMs =
-              exhaustion?.kind === 'rate-limit' && exhaustion.retryAfterMs != null
-                ? exhaustion.retryAfterMs
-                : null
-            const rateLimitTooLongToWait = rateLimitWaitMs != null && rateLimitWaitMs > MAX_ASK_RETRY_WAIT_MS
-            const hardExhaustion = exhaustion != null && exhaustion.kind !== 'rate-limit'
-            if (
-              !gotToken &&
-              retryCount < retryBudget &&
-              isTransient(message) &&
-              !hardExhaustion &&
-              !rateLimitTooLongToWait
-            ) {
-              const delayMs = nextBackoff(retryCount, { retryAfterMs: rateLimitWaitMs ?? undefined })
-              auditLog('provider.retry', { provider, attempt: retryCount + 1, delayMs })
-              const timer = setTimeout(() => attempt(provider, attempted, retryCount + 1, race), delayMs)
-              // Under a race the combined abort registration set up before either leg started already
-              // covers cancellation (see the hedge dispatch below) — track this timer there instead of
-              // overwriting it, so cancelling mid-backoff still clears the pending retry.
-              if (race) race.gate.addCleanup(() => clearTimeout(timer))
-              else streams.set(req.id, { abort: () => clearTimeout(timer) })
-              return
-            }
-            // Retries exhausted or non-transient: fall over to another provider (pre-token only). When the
-            // just-failed provider ran OUT (credit/tokens/usage-cap), prefer a free-tier backup or local.
-            const preferFree = exhaustion != null && s.resilience.preferFreeOnExhaustion
-            if (!gotToken && provider !== 'local' && failover(attempted.concat(provider), preferFree, race)) return
-            // Replace raw client transport strings ("Unexpected network error from DustAPI: fetch failed")
-            // with a clean message; keep the Dust-auth one-click reconnect path; else pass the message.
-            // Reaching here means failover found NO backup — so an exhaustion message names the limit and
-            // the fix (add a provider / add credit / wait for the reset) instead of a misleading
-            // "Connection issue" (the old bug: a 429 was reported as a network fault) or a raw provider
-            // string like "Claude AI usage limit reached|1754160000".
-            const friendly = exhaustion
-              ? exhaustion.kind === 'rate-limit'
-                ? `${def.label} is rate-limited right now and no backup is configured. Add another provider in Settings → AI, or wait a moment and try again.`
-                : exhaustion.kind === 'usage-cap'
-                  ? `${def.label} hit its usage limit${
-                      exhaustion.resetAt
-                        ? ` (${formatResetPhrase(exhaustion.resetAt)})`
-                        : ''
-                    }. Add another provider in Settings → AI to keep going.`
-                  : `${def.label} is out of credit. Add credit or switch providers in Settings → AI.`
-              : // A gateway between Métis and the model can fail for a reason only its OPERATOR can
-                // clear — a dead account token, a half-deployed Worker. Those arrive as a 502/503, which
-                // matches isTransient below, so without this branch the user is told to check their
-                // network while the real cause is a secret on the proxy. The proxy marks exactly those
-                // (and deliberately NOT its transient upstream blips, which SHOULD retry), so the marker
-                // is the signal that this sentence is already the actionable one — pass it through
-                // rather than replacing it. Ahead of isTransient because 502 matches both.
-                isProxyOperatorFault(message)
-                ? stripProxyFaultMarker(message)
-                : isTransient(message)
-                  ? "Connection issue — couldn't reach the provider after retrying. Check your network and try again."
-                : // MQA-101: use dust.ts's maintained matcher, not a second copy of the phrasing regex —
-                  // the inline copy missed the current "authenticated credential" wording, so a dead Dust
-                  // session surfaced its raw 401 instead of this reconnect prompt.
-                  provider === 'dust' && isDustAuthError({ message })
-                  ? 'Your Dust session expired and could not refresh automatically. Open Settings and reconnect Dust once.'
-                  : // MQA-062: a CLI provider has no API key to "re-enter" — sending the user to Settings →
-                    // AI for a key that does not exist is an actively wrong remedy. Name the real fix: sign
-                    // the CLI back in and reconnect it (retireCli has already retired the stale flag).
-                    def.kind === 'cli' && isAuthFailure(message)
-                    ? `${def.label} is no longer signed in. Sign in to the CLI again, then reconnect it in Settings → CLI Integration.`
-                    : // MQA-005: a credential rejection used to fall through as the provider's raw string —
-                      // users saw literally "403 status code (no body)", which names neither the problem nor
-                      // the fix. Say which provider failed and where to go, matching the no-key path's copy.
-                      isAuthFailure(message)
-                      ? `${def.label} rejected your API key (it may have been revoked, expired, or disabled). Open Settings → AI to re-enter it.`
-                      : message
-            if (!race || race.gate.markDead(race.leg) === 'surface') {
-              // Terminal for the whole race, so release the COMBINED abort registration too. The non-race
-              // path already deleted its entry at the top of onError; without this the map kept the
-              // HedgeRace and both handles alive for every hedged ask that ended in an error.
-              if (race) streams.delete(req.id)
-              // Trailing stream error AFTER substantial visible output (claude-cli idle linger, etc.) —
-              // same keep-threshold as import-recap. Without this, Review blanked notes / autosave wrote
-              // an empty recap even though the summary had already streamed onto the screen.
-              if (gotToken && paintedLen >= 200) {
-                mainLog.warn(
-                  `[ask] keeping ${paintedLen}-char answer despite trailing stream error: ${friendly}`
-                )
-                win?.webContents.send(IPC.streamDone, { id: req.id })
-                noteQualifyingUse(req.mode, req.prompt, req.transcript)
-                return
-              }
-              win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })
-            }
-          }
+          onError: failAttempt
         }
       })
       if (race) race.gate.setHandle(race.leg, handle)

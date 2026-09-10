@@ -141,7 +141,7 @@ describe('MQA-056 — imported-recap falls back to the on-device model as a last
 
 describe('MQA-062 — a dead CLI session stops reporting itself as connected', () => {
   const onError = (): string =>
-    sliceBetween('onError: (message) => {', 'win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })')
+    sliceBetween('const failAttempt = (message: string): void => {', 'win?.webContents.send(IPC.streamError, { id: req.id, message: friendly })')
 
   it('retires the CLI connection on the SAME pre-token seam that records the auth verdict', () => {
     // Must run before the pre-token failover line, or the very case that matters — a dead CLI silently
@@ -273,7 +273,7 @@ describe('MQA-064 — a failed MCP key write reaches the user instead of wedging
 })
 
 describe('MQA-070 — turning encryption ON while publishing is on asks for the same consent', () => {
-  const settingsSet = (): string => sliceBetween('ipcMain.handle(IPC.settingsSet', 'const next = setSettings(p)')
+  const settingsSet = (): string => sliceBetween('ipcMain.handle(IPC.settingsSet', 'const next = setSettingsWithSpeakerPolicy(p)')
 
   it('gates the encryption OFF->ON edge, not only the publish OFF->ON edge', () => {
     const body = settingsSet()
