@@ -110,12 +110,12 @@ export interface ImportJobManagerDeps {
   personaMode?: () => string
   now?: () => number
   newId?: () => string
-  /** How many recordings may occupy the decode slot at once. ASR stays mutexed. Decode is a singleton
-   *  slot (FFmpeg and the hidden-window fallback cannot run two decoders). Recap never counts. */
+  /** How many recordings may occupy the decoded-audio admission slot at once. ASR stays mutexed. The
+   *  slot remains occupied through PCM consumption; recap never counts. */
   concurrency?: number
 }
 
-/** One decode process/window at a time. Recap and ASR do not occupy this slot. */
+/** One decoded recording at a time, from decoder admission through retained-PCM consumption. */
 export const MAX_CONCURRENT_DECODES = 1
 /** @deprecated Use MAX_CONCURRENT_DECODES. Kept so existing imports keep compiling. */
 export const MAX_CONCURRENT_IMPORTS = MAX_CONCURRENT_DECODES
@@ -154,18 +154,20 @@ function copy<T>(value: T): T {
 }
 
 /**
- * Decode slot is 1. Each success checkpoint is durable before the decoder may submit the next chunk,
- * so closing the overlay can never discard already-recognized speech. ASR calls are mutexed so
- * Parakeet / the Whisper host stay single-threaded. Recap runs after the decode slot is released.
+ * Decoded-audio admission is 1. Each success checkpoint is durable before the decoder may submit the
+ * next chunk, so closing the overlay can never discard already-recognized speech. ASR calls are mutexed
+ * so Parakeet / the Whisper host stay single-threaded. Recap runs after PCM admission is released.
  */
 export class ImportJobManager {
   private readonly jobs = new Map<string, ImportJob>()
   private readonly queue: string[] = []
   /** In-memory only: decoded PCM slabs per in-flight vad-v1 job (never persisted; resume re-decodes). */
   private readonly pcmByJob = new Map<string, { slabs: Float32Array[]; samples: number }>()
-  /** Jobs that currently occupy the singleton decode process/window. Recap never belongs here. */
+  /** Jobs that occupy the decoded-audio admission slot. Recap never belongs here. */
   private readonly decodeSlotIds = new Set<string>()
-  /** Jobs still doing decode, ASR, save, or recap. Used for cancel/onIdle, not for the decode slot. */
+  /** Jobs whose whole-recording PCM has moved from pcmByJob into the VAD/ASR consumer's local scope. */
+  private readonly retainedPcmConsumerIds = new Set<string>()
+  /** Jobs still doing decode, ASR, save, or recap. Used for cancel/onIdle, not admission ownership. */
   private readonly activeJobIds = new Set<string>()
   private transcribeLock: Promise<void> = Promise.resolve()
   private loaded = false
@@ -383,6 +385,7 @@ export class ImportJobManager {
     // whole recording is known. Past the memory cap the job degrades to the legacy slab pipeline: the
     // backlog is transcribed slab-by-slab right here, then this and every later slab take the legacy
     // branch below.
+    let drainBufferedPcm = false
     if (job.pipeline === 'vad-v1') {
       const buf = this.pcmOf(job.jobId)
       if (buf.samples + samples.length <= VAD_MAX_SAMPLES) {
@@ -394,26 +397,39 @@ export class ImportJobManager {
       job.pipeline = undefined
       job.chunkSec = IMPORT_CHUNK_SECONDS
       await this.persist(job)
-      const backlog = this.takePcm(job.jobId)
-      let backlogSeq = 0
-      for (const slab of backlog) {
-        await this.legacyTranscribeSlab(job, backlogSeq++, slab)
-        if (terminal(job.state)) return
-      }
-      // fall through: the CURRENT slab is transcribed by the legacy branch below
+      drainBufferedPcm = true
     }
 
-    job.state = 'transcribing'
-    await this.persist(job)
-
+    // The legacy overflow path temporarily owns the entire buffered recording while draining it. Keep
+    // admission closed until that helper's stack has unwound; recovered legacy jobs share the same guard
+    // so cancellation cannot overlap even their bounded current slab with the next decoder.
+    this.retainedPcmConsumerIds.add(job.jobId)
     try {
+      if (drainBufferedPcm) await this.drainLegacyBacklog(job)
+      if (terminal(job.state)) return
+      job.state = 'transcribing'
+      await this.persist(job)
       await this.legacyTranscribeSlab(job, seq, samples)
+      if (terminal(job.state)) return
       job.state = 'decoding'
       await this.persist(job)
     } catch (error) {
-      if (this.isCancelled(job)) return
+      if (terminal(job.state)) return
       await this.fail(job, message(error))
       throw error
+    } finally {
+      this.retainedPcmConsumerIds.delete(job.jobId)
+      if (terminal(job.state)) await this.releaseDecodeSlot(job.jobId)
+    }
+  }
+
+  /** Drain the whole-recording backlog in its own stack so it is unreachable before admission releases. */
+  private async drainLegacyBacklog(job: ImportJob): Promise<void> {
+    const backlog = this.takePcm(job.jobId)
+    let backlogSeq = 0
+    for (const slab of backlog) {
+      await this.legacyTranscribeSlab(job, backlogSeq++, slab)
+      if (terminal(job.state)) return
     }
   }
 
@@ -421,7 +437,7 @@ export class ImportJobManager {
   private async legacyTranscribeSlab(job: ImportJob, seq: number, samples: Float32Array): Promise<void> {
     if (seq < job.cursor) return
     const text = await this.transcribeWithRetry(samples)
-    if (this.isCancelled(job)) return
+    if (terminal(job.state)) return
     if (text.trim()) {
       job.lines.push({ speaker: 'unknown', text: text.trim(), t: job.sourceMtimeMs + seq * CHUNK_MS })
     }
@@ -442,14 +458,23 @@ export class ImportJobManager {
   private takePcm(jobId: string): Float32Array[] {
     const buf = this.pcmByJob.get(jobId)
     this.pcmByJob.delete(jobId)
-    return buf?.slabs ?? []
+    if (!buf) return []
+    const slabs = buf.slabs
+    // A caller may still hold the small buffer metadata object. Detach the large slab array from it so
+    // only the dedicated consumer stack owns the recording from this point onward.
+    buf.slabs = []
+    buf.samples = 0
+    return slabs
   }
 
-  /**
-   * The decoder process/window is gone. Free the singleton decode slot and start the next file
-   * immediately. ASR and recap keep running on this job and must not occupy the slot.
-   */
+  /** The decoder process/window is gone. Admission stays held while this job still owns decoded PCM. */
   async releaseDecodeSlot(jobId: string): Promise<void> {
+    if (this.pcmByJob.has(jobId) || this.retainedPcmConsumerIds.has(jobId)) return
+    await this.releaseAdmissionSlot(jobId)
+  }
+
+  /** Release only after no buffered or locally-consumed whole-recording PCM remains reachable. */
+  private async releaseAdmissionSlot(jobId: string): Promise<void> {
     if (!this.decodeSlotIds.has(jobId)) return
     this.decodeSlotIds.delete(jobId)
     await this.pump()
@@ -459,11 +484,22 @@ export class ImportJobManager {
   /** Called by the hidden decoder only after it has submitted every non-skipped chunk. */
   async finishDecoding(jobId: string, discoveredTotalChunks?: number): Promise<void> {
     const job = this.requireJob(jobId)
-    // Decoder already exited (FFmpeg onComplete / hidden-window close). Kick the next decode now.
+    // Decoder already exited (FFmpeg onComplete / hidden-window close). Legacy jobs can admit the next
+    // decoder now; vad-v1 remains admitted until its whole-recording PCM consumer has returned.
     await this.releaseDecodeSlot(jobId)
     if (job.state === 'cancelled' || terminal(job.state)) return
     if (job.pipeline === 'vad-v1') {
-      await this.finishVadPipeline(job)
+      this.retainedPcmConsumerIds.add(job.jobId)
+      let readyToFinalize = false
+      try {
+        readyToFinalize = await this.consumeVadPcm(job)
+      } finally {
+        // consumeVadPcm's stack (and its whole-recording PCM) has unwound before another decoder may
+        // allocate. Cancellation/failure requests that arrived mid-ASR intentionally waited here.
+        this.retainedPcmConsumerIds.delete(job.jobId)
+        await this.releaseAdmissionSlot(job.jobId)
+      }
+      if (readyToFinalize && !terminal(job.state)) await this.finalize(job)
       return
     }
     if (discoveredTotalChunks !== undefined) {
@@ -500,7 +536,7 @@ export class ImportJobManager {
    * window-by-window with a durable cursor, diarizing each window off its own samples. Lines carry the
    * window's real offset into the recording. A final polish pass (fail-open) cleans stutters before save.
    */
-  private async finishVadPipeline(job: ImportJob): Promise<void> {
+  private async consumeVadPcm(job: ImportJob): Promise<boolean> {
     const slabs = this.takePcm(job.jobId)
     const total = slabs.reduce((n, s2) => n + s2.length, 0)
     const pcm = new Float32Array(total)
@@ -512,7 +548,7 @@ export class ImportJobManager {
     const windows = vadWindowsFromPcm(pcm, SAMPLE_RATE)
     if (windows.length === 0) {
       await this.fail(job, 'No speech was recognized in this recording.')
-      return
+      return false
     }
     job.totalChunks = windows.length
     job.state = 'transcribing'
@@ -534,7 +570,7 @@ export class ImportJobManager {
       }
       const tally = new Map<string, number>()
       for (const idx of picks) {
-        if (this.isCancelled(job)) return
+        if (terminal(job.state)) return false
         try {
           const w = windows[idx]
           const lang = await this.deps.probeLanguageName(pcm.subarray(w.start, w.end))
@@ -557,18 +593,18 @@ export class ImportJobManager {
     }
 
     for (let i = job.cursor; i < windows.length; i++) {
-      if (this.isCancelled(job)) return
+      if (terminal(job.state)) return false
       const w = windows[i]
       const samples = pcm.subarray(w.start, w.end)
       let text = ''
       try {
         text = await this.transcribeWithRetry(samples, { language: votedLanguage })
       } catch (error) {
-        if (this.isCancelled(job)) return
+        if (terminal(job.state)) return false
         await this.fail(job, message(error))
-        return
+        return false
       }
-      if (this.isCancelled(job)) return
+      if (terminal(job.state)) return false
       if (text.trim()) {
         // Diarization rides the additive `name` field (same slot the Teams-name backfill uses); the
         // SIDE stays 'unknown' — an imported recording has no mic/loopback split to infer you/them from.
@@ -578,6 +614,7 @@ export class ImportJobManager {
         } catch {
           /* diarization is best-effort — an extractor fault must never fail the import */
         }
+        if (terminal(job.state)) return false
         job.lines.push({
           speaker: 'unknown',
           ...(name ? { name } : {}),
@@ -592,7 +629,7 @@ export class ImportJobManager {
 
     if (job.lines.length === 0) {
       await this.fail(job, 'No speech was recognized in this recording.')
-      return
+      return false
     }
 
     // MQA-238: the online clusterer only looks backward, so one drifting voice fragments into several
@@ -614,7 +651,7 @@ export class ImportJobManager {
     // one meeting take forever before the summary even started. Recap writes first; polish, if kept,
     // is fail-open after the recap (see finalize) and never blocks the next decode.
 
-    await this.finalize(job)
+    return true
   }
 
   /** The shared save→recap→ingest→done tail, used by both pipelines. */
@@ -645,12 +682,14 @@ export class ImportJobManager {
       if (await this.abandonIfCancelled(job, file)) return
       job.state = 'recapping'
       await this.persist(job)
+      let recapPersisted = false
       try {
         const recap = await this.deps.generateRecap(copy(job))
         if (await this.abandonIfCancelled(job, file)) return
         if (recap?.trim()) {
           await this.deps.updateRecap(file, recap)
           if (await this.abandonIfCancelled(job, file)) return
+          recapPersisted = true
         } else {
           job.recapError = 'No AI provider is configured to create the automatic summary.'
         }
@@ -685,7 +724,7 @@ export class ImportJobManager {
       // transcripts.meetingDurationMin now stamps into the frontmatter, so the counter and the meeting agree.
       const ts = job.lines.map((l) => l.t).filter((t) => Number.isFinite(t))
       const durMin = ts.length ? Math.max(1, Math.round((Math.max(...ts) - Math.min(...ts)) / 60000)) : 0
-      this.deps.recordMeetingSummarized?.(durMin)
+      if (recapPersisted) this.deps.recordMeetingSummarized?.(durMin)
       {
         const words = wordsFromTexts(...job.lines.map((l) => l.text))
         if (estimateNoteTakingMinutes(words) > 0) this.deps.recordTimeSavedNote?.(words, file)
@@ -748,7 +787,7 @@ export class ImportJobManager {
       if (!job || terminal(job.state)) continue
       this.takePcm(jobId) // leftover buffers from a prior attempt at THIS job must not mix with a resume
       // A vad-v1 job that failed mid-transcription already had `totalChunks` overwritten to the WINDOW
-      // count by finishVadPipeline (phase 2). A resume always re-decodes from scratch (phase 1), whose
+      // count by consumeVadPcm (phase 2). A resume always re-decodes from scratch (phase 1), whose
       // real decoder (index.ts's ffmpeg onChunk) always reports totalChunks 0 per slab — left un-reset,
       // that stale window count would trip acceptDecodedChunk's "decoder changed the recording chunk
       // count" guard on the very first re-fed slab, permanently breaking resume for any job that failed
@@ -764,8 +803,8 @@ export class ImportJobManager {
       } catch (error) {
         if (!this.isCancelled(job)) await this.fail(job, message(error))
       }
-      // A decoder runs asynchronously and calls finishDecoding/failDecoder later. The decode slot stays
-      // occupied until releaseDecodeSlot — recap of an earlier job must not keep the next file waiting.
+      // A decoder runs asynchronously and calls finishDecoding/failDecoder later. Admission stays
+      // occupied through retained-PCM consumption; recap does not keep the next file waiting.
     }
   }
 
@@ -782,7 +821,7 @@ export class ImportJobManager {
     }
   }
 
-  /** Whisper / Intelligence idle: no decode slot and no leftover ASR/recap work. */
+  /** Whisper / Intelligence idle: no admitted recording and no leftover ASR/recap work. */
   private maybeIdle(): void {
     if (!this.decodeSlotIds.size && !this.activeJobIds.size) this.deps.onIdle?.()
   }
