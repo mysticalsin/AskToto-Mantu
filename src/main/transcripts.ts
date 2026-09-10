@@ -1109,6 +1109,46 @@ export function recapMarkdownToHtml(markdown: string, title?: string): string {
   return `<!DOCTYPE html><html><head><meta charset="UTF-8"><meta http-equiv="Content-Security-Policy" content="${csp}"><style>${style}</style></head><body>${heading}${body.join('\n')}</body></html>`
 }
 
+const RECAP_SECTION_ALIASES: Readonly<Record<string, string>> = {
+  titre: 'title',
+  etiquettes: 'tags',
+  'mots-cles': 'tags',
+  'mots cles': 'tags',
+  resume: 'recap',
+  synthese: 'overview',
+  apercu: 'overview',
+  "vue d'ensemble": 'overview',
+  sujets: 'topics',
+  'sujets abordes': 'topics',
+  themes: 'topics',
+  'themes abordes': 'topics',
+  'questions-reponses': 'key q&a',
+  'questions-reponses cles': 'key q&a',
+  'questions et reponses': 'key q&a',
+  'questions et reponses cles': 'key q&a',
+  actions: 'action items',
+  'actions a mener': 'action items',
+  "points d'action": 'action items',
+  "elements d'action": 'action items',
+  'prochaines etapes': 'next steps',
+  'etapes suivantes': 'next steps',
+  suivis: 'follow-ups',
+  'questions ouvertes': 'open questions',
+  'questions en suspens': 'open questions',
+  'citations notables': 'notable quotes',
+  'citations marquantes': 'notable quotes'
+}
+
+const foldRecapLabel = (text: string): string =>
+  text.trim().normalize('NFD').replace(/\p{M}/gu, '').replace(/[’‘]/g, "'").toLowerCase()
+
+export function recapSectionKey(text: string): string {
+  const folded = foldRecapLabel(text)
+  return Object.prototype.hasOwnProperty.call(RECAP_SECTION_ALIASES, folded)
+    ? RECAP_SECTION_ALIASES[folded]
+    : folded
+}
+
 /**
  * Parse a RECAP_PROMPT markdown document into a structured export (for piping into Jira/Asana/Notion).
  * Sections come from RECAP_PROMPT's fixed "## Name:" headings; action-item owners are pulled from the
@@ -1143,10 +1183,10 @@ export function parseRecapMarkdown(markdown: string): RecapExport {
     const nl = part.indexOf('\n')
     const headRaw = (nl === -1 ? part : part.slice(0, nl)).trim()
     let body = nl === -1 ? '' : part.slice(nl + 1).trim()
-    let heading = headRaw.replace(/:\s*$/, '').trim().toLowerCase()
+    let heading = recapSectionKey(headRaw.replace(/:\s*$/, ''))
     const colon = headRaw.indexOf(':')
     if (colon > 0 && colon < headRaw.length - 1) {
-      const maybeKey = headRaw.slice(0, colon).trim().toLowerCase()
+      const maybeKey = recapSectionKey(headRaw.slice(0, colon))
       if (KNOWN.has(maybeKey)) {
         heading = maybeKey
         const inline = headRaw.slice(colon + 1).trim()
@@ -1160,7 +1200,7 @@ export function parseRecapMarkdown(markdown: string): RecapExport {
     (text || '')
       .split('\n')
       .map((l) => l.replace(/^\s*[-*]\s+(\[[ xX]\]\s+)?/, '').trim()) // strip bullet + optional [ ]/[x] checkbox
-      .filter((l) => l.length > 0 && !/^none\.?$/i.test(l))
+      .filter((l) => l.length > 0 && !/^(?:none|aucun(?:e|s|es)?|neant)\.?$/.test(foldRecapLabel(l)))
 
   // Best-effort trailing "by <phrase>" clause on the OWNER-STRIPPED text (e.g. "Send the deck by Friday"
   // → dueDateText "Friday"). Never parsed into a Date — RECAP_PROMPT only asks the model for "an owner
@@ -1219,7 +1259,7 @@ export function parseRecapMarkdown(markdown: string): RecapExport {
     title24,
     tags,
     // SUMMARY_PROMPT's first section used to be "**Recap**" / "## Recap"; RECAP uses "## Overview".
-    overview: sections['overview'] || sections['recap'] || '',
+    overview: sections['overview'] || sections['recap'] || sections['outcome'] || '',
     topics: bullets(sections['topics']),
     keyQA: bullets(sections['key q&a'] || sections['key qa']),
     decisions: bullets(sections['decisions']),
