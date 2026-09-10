@@ -42,9 +42,14 @@ function leaked(blob: string, secret: string, cipher: string, iv: string): boole
   return blob.includes(secret) || blob.includes(cipher) || blob.includes(iv)
 }
 
-function withAskTimeout(providerFetch: typeof fetch): typeof fetch {
-  return ((input: RequestInfo | URL, init?: RequestInit) =>
-    providerFetch(input, { ...init, signal: AbortSignal.timeout(ASK_FETCH_TIMEOUT_MS) })) as typeof fetch
+function withAskTimeout(providerFetch: typeof fetch, callerSignal?: AbortSignal): typeof fetch {
+  return ((input: RequestInfo | URL, init?: RequestInit) => {
+    const signals = [init?.signal, callerSignal, AbortSignal.timeout(ASK_FETCH_TIMEOUT_MS)].filter(
+      (signal): signal is AbortSignal => Boolean(signal)
+    )
+    const signal = signals.length === 1 ? signals[0] : AbortSignal.any(signals)
+    return providerFetch(input, { ...init, signal })
+  }) as typeof fetch
 }
 
 function openaiMessages(req: UseRequest): { role: string; content: string }[] {
@@ -146,14 +151,20 @@ function bufferedResult(
   }
   let text = ''
   if (Array.isArray(body.content)) {
+    let malformedTextBlock = false
     text = body.content
-      .map((b) =>
-        b && typeof b === 'object' && (b as { type?: unknown; text?: unknown }).type === 'text'
-          ? String((b as { text?: unknown }).text ?? '')
-          : ''
-      )
+      .map((b) => {
+        if (!b || typeof b !== 'object' || (b as { type?: unknown }).type !== 'text') return ''
+        const blockText = (b as { text?: unknown }).text
+        if (typeof blockText !== 'string') {
+          malformedTextBlock = true
+          return ''
+        }
+        return blockText
+      })
       .join('')
       .trim()
+    if (malformedTextBlock) return null
   } else if (typeof body.choices?.[0]?.message?.content === 'string') {
     text = body.choices[0].message.content.trim()
   }
@@ -202,6 +213,8 @@ function sseResponse(
   let outcome = 'answered'
   let cancelled = false
   let persisted = false
+  const protectedValues = [secret, cipher, iv].filter(Boolean)
+  const protectedTailLength = Math.max(0, ...protectedValues.map((value) => value.length - 1))
 
   const persist = async () => {
     if (persisted) return
@@ -223,6 +236,8 @@ function sseResponse(
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
+      let pendingText = ''
+      let outputBlocked = false
       const send = (obj: unknown): boolean => {
         if (cancelled) return false
         const line = sseLine(obj)
@@ -235,8 +250,31 @@ function sseResponse(
         return true
       }
 
+      const flushText = (): boolean => {
+        if (!pendingText) return true
+        const text = pendingText
+        pendingText = ''
+        return send({ t: 'delta', text })
+      }
+
+      const queueText = (text: string): boolean => {
+        pendingText += text
+        if (protectedValues.some((value) => pendingText.includes(value))) {
+          outputBlocked = true
+          outcome = 'error'
+          send({ t: 'error', message: 'Operator cannot issue a use' })
+          return false
+        }
+        const readyLength = pendingText.length - protectedTailLength
+        if (readyLength <= 0) return true
+        const ready = pendingText.slice(0, readyLength)
+        pendingText = pendingText.slice(readyLength)
+        return send({ t: 'delta', text: ready })
+      }
+
       const incomplete = (finishReason: string) => {
         outcome = 'error'
+        if (!outputBlocked && !flushText()) return
         send({
           t: 'error',
           message: 'Provider response was incomplete. Please retry.',
@@ -276,7 +314,7 @@ function sseResponse(
             }
             inputTokens = parsed.input
             outputTokens = parsed.output
-            if (parsed.text && !send({ t: 'delta', text: parsed.text })) return
+            if (parsed.text && !queueText(parsed.text)) return
             if (!parsed.text.trim()) {
               incomplete('empty_output')
               return
@@ -285,6 +323,7 @@ function sseResponse(
               incomplete(parsed.finishReason ?? 'unexpected_eof')
               return
             }
+            if (!flushText()) return
             send({
               t: 'done',
               status: 'complete',
@@ -301,12 +340,22 @@ function sseResponse(
           let sawAnthropicStop = false
           let substantiveOutput = false
           let malformedPayload = false
+          let terminalError: 'conflicting_terminal' | 'out_of_order_terminal' | undefined
+          let sawOpenAiDone = false
 
           const processLine = (raw: string): boolean => {
             const trimmed = raw.trim()
             if (!trimmed.startsWith('data:')) return true
             const payload = trimmed.slice(5).trim()
-            if (!payload || payload === '[DONE]') return true
+            if (!payload) return true
+            if (payload === '[DONE]') {
+              if (req.provider === 'anthropic' || sawOpenAiDone || !finishReason) {
+                terminalError ??= 'out_of_order_terminal'
+              }
+              sawOpenAiDone = true
+              return true
+            }
+            if (sawOpenAiDone) terminalError ??= 'out_of_order_terminal'
             let parsed: Record<string, unknown>
             try {
               parsed = JSON.parse(payload) as Record<string, unknown>
@@ -318,11 +367,19 @@ function sseResponse(
             if (usage.input != null) inputTokens = usage.input
             if (usage.output != null) outputTokens = usage.output
             const reason = streamFinishReason(req.provider, parsed)
-            if (reason) finishReason = reason
-            if (req.provider === 'anthropic' && parsed.type === 'message_stop') sawAnthropicStop = true
+            if (reason) {
+              if (sawAnthropicStop) terminalError ??= 'out_of_order_terminal'
+              if (finishReason && finishReason !== reason) terminalError ??= 'conflicting_terminal'
+              else finishReason ??= reason
+            }
+            if (req.provider === 'anthropic' && parsed.type === 'message_stop') {
+              if (sawAnthropicStop) terminalError ??= 'out_of_order_terminal'
+              sawAnthropicStop = true
+            }
             const text = deltaFromPayload(parsed)
+            if (text && (finishReason || sawAnthropicStop)) terminalError ??= 'out_of_order_terminal'
             if (text.trim()) substantiveOutput = true
-            return !text || send({ t: 'delta', text })
+            return !text || queueText(text)
           }
 
           for (;;) {
@@ -349,6 +406,10 @@ function sseResponse(
             incomplete('malformed_payload')
             return
           }
+          if (terminalError) {
+            incomplete(terminalError)
+            return
+          }
           if (!isNaturalCompletion(req.provider, finishReason)) {
             incomplete(finishReason ?? 'unexpected_eof')
             return
@@ -357,6 +418,7 @@ function sseResponse(
             incomplete(finishReason)
             return
           }
+          if (!flushText()) return
           send({ t: 'done', status: 'complete', finishReason, inputTokens, outputTokens })
         } catch {
           if (!cancelled) {
@@ -408,7 +470,8 @@ export async function handleAsk(
   deviceId: string,
   bodyText: string,
   now: number,
-  providerFetch: typeof fetch = fetch
+  providerFetch: typeof fetch = fetch,
+  callerSignal?: AbortSignal
 ): Promise<Response> {
   if (!env.OPERATOR_VAULT_KEY) return fail('Operator cannot issue a use', 503)
   const seat = await store.getSeat(deviceId)
@@ -428,13 +491,14 @@ export async function handleAsk(
   }
   const dest = upstreamUrl(req.provider, unlocked.accountId, def.baseUrl)
   if (typeof dest !== 'string') return fail(dest.error, dest.status)
-  if (req.provider === 'cloudflare' && unlocked.accountId) {
-    await ensureDefaultAiGateway(unlocked.secret, unlocked.accountId, providerFetch)
-  }
   const init = upstreamInit(req.provider, unlocked.secret, req)
+  const askFetch = withAskTimeout(providerFetch, callerSignal)
   let upstream: Response
   try {
-    upstream = await withAskTimeout(providerFetch)(dest, {
+    if (req.provider === 'cloudflare' && unlocked.accountId) {
+      await ensureDefaultAiGateway(unlocked.secret, unlocked.accountId, askFetch)
+    }
+    upstream = await askFetch(dest, {
       method: 'POST',
       headers: init.headers,
       body: init.body

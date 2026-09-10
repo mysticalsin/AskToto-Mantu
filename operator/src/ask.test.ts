@@ -26,7 +26,12 @@ function env(): Env {
 
 const tony = { getIdentity: async () => ({ email: 'tony.walteur@gmail.com' }) }
 
-async function signedRequest(path: string, bodyText: string, nonce = `ask-${Math.random().toString(16).slice(2)}`) {
+async function signedRequest(
+  path: string,
+  bodyText: string,
+  nonce = `ask-${Math.random().toString(16).slice(2)}`,
+  signal?: AbortSignal
+) {
   const ts = String(NOW)
   const deviceId = 'device-ask'
   const sig = await hmacHex(TEST_INGEST_SECRET, ingestCanonical(ts, nonce, deviceId, await sha256Hex(bodyText)))
@@ -39,7 +44,8 @@ async function signedRequest(path: string, bodyText: string, nonce = `ask-${Math
       [OPERATOR_HMAC_HEADERS.device]: deviceId,
       [OPERATOR_HMAC_HEADERS.sig]: sig
     },
-    body: bodyText
+    body: bodyText,
+    signal
   })
 }
 
@@ -124,17 +130,27 @@ async function askProvider(
   const store = memoryStore()
   await addProviderKey(store, provider, provider === 'openai' ? OPENAI_SECRET : ANTHROPIC_SECRET)
   await approveDevice(store)
+  const response = await askProviderWithStore(store, provider, providerFetch, nonce)
+  return { store, response }
+}
+
+async function askProviderWithStore(
+  store: ReturnType<typeof memoryStore>,
+  provider: 'openai' | 'anthropic',
+  providerFetch: typeof fetch,
+  nonce: string,
+  signal?: AbortSignal
+): Promise<Response> {
   const body = JSON.stringify({
     provider,
     model: provider === 'openai' ? 'gpt-4o-mini' : 'claude-haiku-4-5-20251001',
     messages: [{ role: 'user', content: 'Say ok.' }]
   })
-  const response = await handleRequest(await signedRequest('/v1/ask', body, nonce), env(), {}, {
+  return handleRequest(await signedRequest('/v1/ask', body, nonce, signal), env(), {}, {
     store,
     now: NOW,
     providerFetch
   })
-  return { store, response }
 }
 
 function sseUpstream(text = 'hello from CF'): typeof fetch {
@@ -300,6 +316,41 @@ describe('G5 POST /v1/ask SSE', () => {
 })
 
 describe('truthful provider completion', () => {
+  it.each(['secret', 'cipher', 'iv'] as const)(
+    'blocks a vault %s split across provider delta events before it can be reconstructed downstream',
+    async (protectedField) => {
+      const store = memoryStore()
+      await addProviderKey(store, 'openai', OPENAI_SECRET)
+      await approveDevice(store)
+      const row = (await store.listVaultRows())[0]
+      const protectedValue = protectedField === 'secret' ? OPENAI_SECRET : row[protectedField]
+      const splitAt = Math.floor(protectedValue.length / 2)
+      const frames = [
+        `data: ${JSON.stringify({ choices: [{ delta: { content: protectedValue.slice(0, splitAt) } }] })}\n\n`,
+        `data: ${JSON.stringify({ choices: [{ delta: { content: protectedValue.slice(splitAt) } }] })}\n\n`,
+        `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`,
+        'data: [DONE]\n\n'
+      ].join('')
+
+      const response = await askProviderWithStore(
+        store,
+        'openai',
+        upstream(frames),
+        `ask-openai-split-${protectedField}`
+      )
+      const got = events(await response.text())
+      const reconstructed = got
+        .filter((event) => event.t === 'delta')
+        .map((event) => String(event.text ?? ''))
+        .join('')
+
+      expect(reconstructed).not.toContain(protectedValue)
+      expect(got).toContainEqual(expect.objectContaining({ t: 'error' }))
+      expect(got.some((event) => event.t === 'done')).toBe(false)
+      expect((await store.listAsks(1))[0]?.outcome).toBe('error')
+    }
+  )
+
   it('marks an OpenAI stop as complete and preserves usage', async () => {
     const frames = [
       `data: ${JSON.stringify({ choices: [{ delta: { content: 'complete answer' } }] })}\n\n`,
@@ -410,6 +461,76 @@ describe('truthful provider completion', () => {
     expect((await store.listAsks(1))[0]?.outcome).toBe('error')
   })
 
+  it.each([
+    [
+      'message_stop before its stop reason',
+      [
+        { type: 'message_stop' },
+        { type: 'message_delta', delta: { stop_reason: 'end_turn' } }
+      ],
+      'out_of_order_terminal'
+    ],
+    [
+      'an abnormal reason followed by a natural reason',
+      [
+        { type: 'message_delta', delta: { stop_reason: 'max_tokens' } },
+        { type: 'message_delta', delta: { stop_reason: 'end_turn' } },
+        { type: 'message_stop' }
+      ],
+      'conflicting_terminal'
+    ]
+  ] as const)('rejects Anthropic %s', async (_label, terminalPayloads, finishReason) => {
+    const frames = [
+      `data: ${JSON.stringify({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'partial answer' } })}\n\n`,
+      ...terminalPayloads.map((payload) => `data: ${JSON.stringify(payload)}\n\n`)
+    ].join('')
+    const { response, store } = await askProvider(
+      'anthropic',
+      upstream(frames),
+      `ask-anthropic-strict-${finishReason}`
+    )
+    const got = events(await response.text())
+
+    expect(got).toContainEqual(
+      expect.objectContaining({ t: 'error', status: 'incomplete', finishReason, retryable: true })
+    )
+    expect(got.some((event) => event.t === 'done')).toBe(false)
+    expect((await store.listAsks(1))[0]?.outcome).toBe('error')
+  })
+
+  it('rejects conflicting OpenAI finish reasons instead of accepting the last natural reason', async () => {
+    const frames = [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: 'partial answer' } }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'length' }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`,
+      'data: [DONE]\n\n'
+    ].join('')
+    const { response, store } = await askProvider('openai', upstream(frames), 'ask-openai-conflicting-terminal')
+    const got = events(await response.text())
+
+    expect(got).toContainEqual(
+      expect.objectContaining({ t: 'error', status: 'incomplete', finishReason: 'conflicting_terminal' })
+    )
+    expect(got.some((event) => event.t === 'done')).toBe(false)
+    expect((await store.listAsks(1))[0]?.outcome).toBe('error')
+  })
+
+  it('rejects an OpenAI finish reason received after the stream terminal sentinel', async () => {
+    const frames = [
+      `data: ${JSON.stringify({ choices: [{ delta: { content: 'partial answer' } }] })}\n\n`,
+      'data: [DONE]\n\n',
+      `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n`
+    ].join('')
+    const { response, store } = await askProvider('openai', upstream(frames), 'ask-openai-out-of-order-terminal')
+    const got = events(await response.text())
+
+    expect(got).toContainEqual(
+      expect.objectContaining({ t: 'error', status: 'incomplete', finishReason: 'out_of_order_terminal' })
+    )
+    expect(got.some((event) => event.t === 'done')).toBe(false)
+    expect((await store.listAsks(1))[0]?.outcome).toBe('error')
+  })
+
   it('rejects malformed terminal payloads instead of inferring success from HTTP 200', async () => {
     const frames = [
       `data: ${JSON.stringify({ choices: [{ delta: { content: 'partial answer' } }] })}\n\n`,
@@ -478,6 +599,26 @@ describe('truthful provider completion', () => {
     expect((await store.listAsks(1))[0]?.outcome).toBe('error')
   })
 
+  it('rejects a buffered Anthropic text block whose text field is not a string', async () => {
+    const payload = {
+      content: [{ type: 'text', text: { coerced: 'not provider text' } }],
+      stop_reason: 'end_turn'
+    }
+    const { response, store } = await askProvider(
+      'anthropic',
+      upstream(JSON.stringify(payload), 'application/json'),
+      'ask-anthropic-buffered-malformed-text'
+    )
+    const got = events(await response.text())
+
+    expect(got).toContainEqual(
+      expect.objectContaining({ t: 'error', status: 'incomplete', finishReason: 'malformed_payload' })
+    )
+    expect(got.some((event) => event.t === 'delta')).toBe(false)
+    expect(got.some((event) => event.t === 'done')).toBe(false)
+    expect((await store.listAsks(1))[0]?.outcome).toBe('error')
+  })
+
   it('cancels the upstream reader when the downstream client disconnects', async () => {
     let upstreamCancelled = false
     const firstFrame = new TextEncoder().encode(
@@ -494,7 +635,6 @@ describe('truthful provider completion', () => {
     const { response, store } = await askProvider('openai', upstream(body), 'ask-openai-cancel')
     const reader = response.body!.getReader()
 
-    await reader.read()
     const cancelled = reader.cancel('client disconnected')
     await Promise.race([cancelled, new Promise((resolve) => setTimeout(resolve, 50))])
 
@@ -524,5 +664,48 @@ describe('truthful provider completion', () => {
 
     expect(upstreamCancelled).toBe(true)
     expect((await store.listAsks(1))[0]?.outcome).toBe('error')
+  })
+
+  it('aborts a pending provider fetch when the signed route request is cancelled before response headers', async () => {
+    const store = memoryStore()
+    await addProviderKey(store, 'openai', OPENAI_SECRET)
+    await approveDevice(store)
+    const caller = new AbortController()
+    let fetchStarted!: () => void
+    const started = new Promise<void>((resolve) => {
+      fetchStarted = resolve
+    })
+    let providerSawAbort = false
+    const providerFetch: typeof fetch = async (_input, init) => {
+      fetchStarted()
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener(
+          'abort',
+          () => {
+            providerSawAbort = true
+            reject(new DOMException('cancelled', 'AbortError'))
+          },
+          { once: true }
+        )
+      })
+    }
+    const pending = askProviderWithStore(
+      store,
+      'openai',
+      providerFetch,
+      'ask-openai-before-headers-cancel',
+      caller.signal
+    )
+    await started
+
+    caller.abort('client disconnected')
+    const response = await Promise.race([
+      pending,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 50))
+    ])
+
+    expect(providerSawAbort).toBe(true)
+    expect(response?.status).toBe(503)
+    expect(await response?.json()).toEqual({ ok: false, error: 'Operator cannot issue a use' })
   })
 })
