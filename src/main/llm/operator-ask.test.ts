@@ -116,6 +116,43 @@ describe('streamOperatorAsk', () => {
     expect(h.onError).not.toHaveBeenCalled()
   })
 
+  it.each(['cancelled', 'unexpected_eof', 'refusal', 'tool_calls', 'vendor_new_reason'])(
+    'fails closed when Operator supplies the non-natural terminal reason %s',
+    async (finishReason) => {
+      const h = handlers()
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () =>
+          new Response(
+            `data: {"t":"delta","text":"partial recap"}\n\ndata: ${JSON.stringify({ t: 'done', finishReason })}\n\n`,
+            {
+              status: 200,
+              headers: { 'content-type': 'text/event-stream; charset=utf-8' }
+            }
+          )
+        )
+      )
+
+      streamOperatorAsk({
+        providerId: 'openai',
+        kind: 'openai',
+        apiKey: '',
+        viaOperator: true,
+        operatorTransport: { url: 'https://operator.test', secret: 'ingest-secret' },
+        model: 'gpt-4.1',
+        temperature: 0.2,
+        system: 'sys',
+        req,
+        handlers: h
+      })
+
+      await vi.waitFor(() =>
+        expect(h.onDone).toHaveBeenCalledWith({}, { status: 'incomplete', reason: finishReason })
+      )
+      expect(h.onError).not.toHaveBeenCalled()
+    }
+  )
+
   it('fails loud when Operator returns Access login HTML instead of a stream', async () => {
     const onError = vi.fn()
     vi.stubGlobal(
