@@ -1,4 +1,4 @@
-import { sanitizeOperatorHostname, sanitizeOperatorSsoEmail } from '../../src/shared/operator'
+import { projectOperatorIngestMetadata, sanitizeOperatorHostname, sanitizeOperatorSsoEmail } from '../../src/shared/operator'
 import { normalizeQuestionType, QUESTION_TYPE_LABELS, type QuestionType } from '../../src/shared/question-type'
 import {
   ADMIN_EMAILS,
@@ -16,8 +16,7 @@ import {
   unauthorized,
   type AccessCtx
 } from './access'
-import { asCrmStatus } from './crm'
-import { encryptPrompt } from './crypto'
+import { asCrmStatus, CRM_CANONICAL_TITLE, normalizeCrmRow } from './crm'
 import { geoFromRequest, type CfGeo } from './geo'
 import { verifyIngestHmac } from './hmac'
 import { json } from './http'
@@ -35,6 +34,7 @@ import { resolveTierAndEntitlements } from './tiers'
 import { binaryAssetResponse, isBinaryAssetPath, isPublicAssetPath, publicAssetResponse } from './assets'
 import { handleAsk } from './ask'
 import { parseAskPathTag } from './ask-meter'
+import { projectAskMode, projectAskModel, projectAskTelemetry } from './privacy'
 import { handleUse } from './use'
 import { OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import type { AdminCtx, Env, HandleOpts } from './routes/admin-ctx'
@@ -85,6 +85,21 @@ function redactedPreview(mode: string | undefined, questionType: QuestionType): 
 
 function questionTypeFromBody(body: Record<string, unknown>): QuestionType {
   return normalizeQuestionType(body.questionType)
+}
+
+/** Server-side defence for old heartbeat clients. Reuse the desktop's positive seat projection and
+ * copy only heartbeat counters; CRM entries are independently projected by `ingestCrmList`. */
+function projectHeartbeatBody(raw: Record<string, unknown>): Record<string, unknown> {
+  const seat = projectOperatorIngestMetadata({ ...raw, event: 'ask', id: 'heartbeat', questionType: 'unknown' }) ?? {}
+  const projected: Record<string, unknown> = {}
+  for (const key of ['seatHash', 'os', 'appVersion', 'hostname', 'ssoEmail', 'license', 'licenseLast4', 'licenseId', 'lastIndexAt']) {
+    if (seat[key] !== undefined) projected[key] = seat[key]
+  }
+  for (const key of ['queued', 'dropped']) {
+    const value = raw[key]
+    if (typeof value === 'number' && Number.isFinite(value) && value >= 0) projected[key] = Math.floor(value)
+  }
+  return projected
 }
 
 /**
@@ -273,7 +288,7 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
       if (request.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405)
       return handleAsk(store, env, hmac.deviceId, bodyText, now, opts.providerFetch ?? opts.cfFetch ?? fetch, request.signal)
     }
-    return ingest(store, env, hmac.deviceId, bodyText, now, geo)
+    return ingest(store, hmac.deviceId, bodyText, now, geo)
   }
 
   return json({ ok: false, error: 'not found' }, 404)
@@ -322,7 +337,8 @@ async function adminRoute(
 }
 
 async function heartbeat(store: OperatorStore, deviceId: string, bodyText: string, now: number, geo: CfGeo): Promise<Response> {
-  const body = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {}
+  const rawBody = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {}
+  const body = projectHeartbeatBody(rawBody)
   const seat = seatFromBody(deviceId, body, now, geo)
   await store.upsertSeat(seat)
   const stored = (await store.getSeat(deviceId)) ?? seat
@@ -343,10 +359,10 @@ async function heartbeat(store: OperatorStore, deviceId: string, bodyText: strin
     actor: seat.sso_email,
     device_id: deviceId,
     country: geo.country,
-    detail: safeEventDetail([seat.os, geo.city, typeof body.path === 'string' ? body.path : '/'].filter(Boolean).join(' '))
+    detail: null
   })
   await store.touchSession(deviceId, now, 'heartbeat', geo, seat)
-  await ingestCrmList(store, deviceId, body, now)
+  await ingestCrmList(store, deviceId, rawBody, now)
   // First seat to present an active Operator-issued jti binds activated_device (console / export).
   // Entitlement still resolves via seat.license_jti → issued_licenses even before this bind.
   const bindJti = parseLicenseId(stored.license_jti)
@@ -372,8 +388,19 @@ async function heartbeat(store: OperatorStore, deviceId: string, bodyText: strin
   })
 }
 
-async function ingest(store: OperatorStore, env: Env, deviceId: string, bodyText: string, now: number, geo: CfGeo): Promise<Response> {
-  const body = JSON.parse(bodyText || '{}') as Record<string, unknown>
+async function ingest(store: OperatorStore, deviceId: string, bodyText: string, now: number, geo: CfGeo): Promise<Response> {
+  const rawBody = JSON.parse(bodyText || '{}') as Record<string, unknown>
+  if (rawBody.event === 'crm' && rawBody.confidential === true) {
+    return json({ ok: true, id: deviceSuppliedId(rawBody.id), ingested: false })
+  }
+  const body = projectOperatorIngestMetadata(rawBody)
+  if (!body) return json({ ok: true, id: deviceSuppliedId(rawBody.id), ingested: false })
+  const safeMode = projectAskMode(rawBody.mode)
+  const safeModel = projectAskModel(rawBody.model)
+  if (safeMode) body.mode = safeMode
+  if (safeModel) body.model = safeModel
+  const pathTag = parseAskPathTag(rawBody.pathTag ?? rawBody.path_tag)
+  if (pathTag) body.pathTag = pathTag
   const id = deviceSuppliedId(body.id)
   // An ask id is client-chosen. A row may only be created, replaced or rated by the device that owns it;
   // otherwise one seat could rewrite or thumbs-down another seat's history through a guessed id.
@@ -409,7 +436,6 @@ async function ingest(store: OperatorStore, env: Env, deviceId: string, bodyText
     return json({ ok: true, id })
   }
   if (body.event === 'crm') {
-    if (body.confidential === true) return json({ ok: true, id, ingested: false })
     const written = await upsertCrmEvent(store, deviceId, body, now)
     if (written === 'foreign') return json({ ok: false, error: 'forbidden' }, 403)
     const seat = seatFromBody(deviceId, body, now, geo)
@@ -420,17 +446,9 @@ async function ingest(store: OperatorStore, env: Env, deviceId: string, bodyText
       actor: seat.sso_email,
       device_id: deviceId,
       country: geo.country,
-      detail: safeEventDetail(String(body.status || body.connector || 'crm'))
+      detail: asCrmStatus(body.status)
     })
     return json({ ok: true, id })
-  }
-  let cipher: string | null = null
-  let iv: string | null = null
-  const question = typeof body.question === 'string' ? body.question : ''
-  if (question) {
-    const enc = await encryptPrompt(question, env.OPERATOR_PROMPT_KEY)
-    cipher = enc.cipher
-    iv = enc.iv
   }
   const questionType = questionTypeFromBody(body)
   const row: AskRow = {
@@ -453,13 +471,13 @@ async function ingest(store: OperatorStore, env: Env, deviceId: string, bodyText
     cache_ttl: str(body.cacheTtl),
     outcome: str(body.outcome),
     rating: str(body.rating),
-    prompt_cipher: cipher,
-    prompt_iv: iv,
+    prompt_cipher: null,
+    prompt_iv: null,
     preview: redactedPreview(str(body.mode) ?? undefined, questionType),
     question_type: questionType,
     path_tag: parseAskPathTag(body.pathTag ?? body.path_tag)
   }
-  await store.insertAsk(row)
+  await store.insertAsk(projectAskTelemetry(row))
   const pulseId = crypto.randomUUID()
   await store.insertPulse({
     id: pulseId,
@@ -530,19 +548,6 @@ function safeEventDetail(raw: string | null | undefined): string | null {
   return s
 }
 
-function meetingHashFromBody(body: Record<string, unknown>): string | null {
-  if (typeof body.meetingHash === 'string' && /^[a-f0-9]{16,64}$/i.test(body.meetingHash.trim())) {
-    return body.meetingHash.trim().toLowerCase().slice(0, 16)
-  }
-  if (typeof body.meetingFile === 'string') {
-    const base = body.meetingFile.replace(/^.*[/\\]/, '').trim()
-    if (!base) return null
-    // Never persist a path or basename. Fold a legacy field into a short hash later on the client.
-    if (/^[a-f0-9]{16,64}$/i.test(base)) return base.toLowerCase().slice(0, 16)
-  }
-  return null
-}
-
 async function upsertCrmEvent(
   store: OperatorStore,
   deviceId: string,
@@ -550,39 +555,36 @@ async function upsertCrmEvent(
   now: number
 ): Promise<'written' | 'skipped' | 'foreign'> {
   if (body.confidential === true) return 'skipped'
-  const status = asCrmStatus(body.status)
+  const projected = projectOperatorIngestMetadata({ ...body, event: 'crm' })
+  if (!projected) return 'skipped'
+  const status = asCrmStatus(projected.status)
   if (!status) return 'skipped'
-  const id = deviceSuppliedId(body.id)
-  const title = typeof body.title === 'string' ? body.title.replace(/\s+/g, ' ').trim().slice(0, 160) : 'CRM send'
-  const connector = typeof body.connector === 'string' ? body.connector.slice(0, 32) : 'unknown'
-  const err = typeof body.error === 'string' ? body.error.slice(0, 200) : null
-  const remoteId = typeof body.remoteId === 'string' ? body.remoteId.slice(0, 80) : null
-  const remoteUrl =
-    typeof body.remoteUrl === 'string' && /^https:\/\//i.test(body.remoteUrl) ? body.remoteUrl.slice(0, 300) : null
-  const action = typeof body.action === 'string' ? body.action.slice(0, 32) : null
-  const attempt = typeof body.attempt === 'number' && Number.isFinite(body.attempt) ? Math.max(0, Math.floor(body.attempt)) : 0
+  const id = deviceSuppliedId(projected.id)
+  const connector = typeof projected.connector === 'string' ? projected.connector : 'unknown'
+  const err = typeof projected.error === 'string' ? projected.error : null
+  const attempt = typeof projected.attempt === 'number' ? Math.floor(projected.attempt) : 0
   const latencyMs =
-    typeof body.latencyMs === 'number' && Number.isFinite(body.latencyMs) ? Math.max(0, Math.floor(body.latencyMs)) : 0
+    typeof projected.latencyMs === 'number' ? Math.floor(projected.latencyMs) : 0
   const prev = await store.getCrm(id)
   // A CRM row (and the retry instruction the console attaches to it) belongs to the device that sent it.
   if (prev && prev.device_id !== deviceId) return 'foreign'
-  await store.upsertCrm({
+  await store.upsertCrm(normalizeCrmRow({
     id,
     device_id: deviceId,
-    ts: typeof body.ts === 'number' ? body.ts : now,
+    ts: typeof projected.ts === 'number' ? projected.ts : now,
     status,
-    title: title || 'CRM send',
+    title: CRM_CANONICAL_TITLE,
     connector,
     meeting_file: null,
-    meeting_hash: meetingHashFromBody(body) ?? prev?.meeting_hash ?? null,
+    meeting_hash: null,
     last_error: err,
     retry_requested: 0,
     attempt: attempt || prev?.attempt || 0,
     latency_ms: latencyMs || prev?.latency_ms || 0,
-    remote_id: remoteId ?? prev?.remote_id ?? null,
-    remote_url: remoteUrl ?? prev?.remote_url ?? null,
-    action: action ?? prev?.action ?? null
-  })
+    remote_id: null,
+    remote_url: null,
+    action: null
+  }))
   return 'written'
 }
 
@@ -590,7 +592,9 @@ async function ingestCrmList(store: OperatorStore, deviceId: string, body: Recor
   if (!Array.isArray(body.crm)) return
   for (const item of body.crm.slice(0, 40)) {
     if (!item || typeof item !== 'object') continue
-    await upsertCrmEvent(store, deviceId, item as Record<string, unknown>, now)
+    const record = item as Record<string, unknown>
+    if (record.confidential === true) continue
+    await upsertCrmEvent(store, deviceId, record, now)
   }
 }
 

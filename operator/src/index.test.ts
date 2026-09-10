@@ -2,7 +2,7 @@ import { generateKeyPairSync } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { handleRequest, type Env } from './index'
 import { hmacHex } from './hmac'
-import { decryptPrompt, sha256Hex, verifySkillPack } from './crypto'
+import { sha256Hex, verifySkillPack } from './crypto'
 import { ingestCanonical, OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import { memoryStore } from './store'
 import { TEST_INGEST_SECRET, TEST_PROMPT_KEY } from './test-fixtures'
@@ -62,14 +62,15 @@ async function signedRequest(
 }
 
 describe('HMAC ingest', () => {
-  it('accepts a valid signature and stores ciphertext, not plaintext', async () => {
+  it('accepts a valid legacy Ask but stores only approved metadata, never question content or ciphertext', async () => {
     const store = memoryStore()
     const question = 'How do I close a consulting offer this week?'
     const req = await signedRequest('/v1/ingest', JSON.stringify({
       id: 'ask-1',
-      mode: 'interview',
+      mode: 'private customer strategy',
       skillId: 'interview',
       question,
+      questionType: 'how-to',
       cacheRead: 800,
       cacheWrite: 200,
       cacheUncached: 40,
@@ -81,13 +82,22 @@ describe('HMAC ingest', () => {
     expect(res.status).toBe(200)
     const row = await store.getAsk('ask-1')
     expect(row).toBeTruthy()
-    expect(row?.prompt_cipher).toBeTruthy()
-    expect(row?.prompt_iv).toBeTruthy()
-    expect(row?.prompt_cipher).not.toContain(question)
+    expect(row?.prompt_cipher).toBeNull()
+    expect(row?.prompt_iv).toBeNull()
     expect(JSON.stringify(row)).not.toContain(question)
-    expect(row?.preview).not.toContain(question)
-    const plain = await decryptPrompt(row!.prompt_cipher!, row!.prompt_iv!, TEST_PROMPT_KEY)
-    expect(plain).toBe(question)
+    expect(row?.mode).toBeNull()
+    expect(row?.preview).toBe('Ask · How to')
+    expect(row).toMatchObject({
+      id: 'ask-1',
+      skill_id: 'interview',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      cache_read: 800,
+      cache_write: 200,
+      cache_uncached: 40,
+      cache_status: 'hit',
+      question_type: 'how-to'
+    })
   })
 
   it('rejects a bad signature', async () => {
@@ -181,27 +191,25 @@ describe('Access on admin routes', () => {
     expect(JSON.stringify(body)).not.toContain('secret close plan')
   })
 
-  it('audit-logs a reveal', async () => {
+  it('refuses legacy Ask reveal without decrypting stored ciphertext', async () => {
     const store = memoryStore()
-    await handleRequest(
-      await signedRequest('/v1/ingest', JSON.stringify({ id: 'ask-3', question: 'reveal me' })),
-      env(),
-      {},
-      { store, now: NOW }
-    )
+    await store.insertAsk({
+      id: 'ask-3', device_id: 'device-a', ts: NOW, mode: 'answer', skill_id: null, skill_version: null,
+      provider: 'anthropic', model: 'claude', ttft_ms: null, total_ms: null, input_tokens: null,
+      output_tokens: null, cache_read: null, cache_write: null, cache_uncached: null, cache_status: null,
+      cache_ttl: null, outcome: null, rating: null, prompt_cipher: 'legacy-ciphertext', prompt_iv: 'legacy-iv',
+      preview: 'legacy private question', question_type: 'factual', path_tag: null
+    })
     const reveal = await handleRequest(
       new Request('https://operator.test/v1/admin/asks/ask-3'),
-      env(),
+      env({ OPERATOR_PROMPT_KEY: '' }),
       { access: tonyAccess },
       { store, now: NOW }
     )
-    expect(reveal.status).toBe(200)
-    const body = (await reveal.json()) as { question?: string }
-    expect(body.question).toBe('reveal me')
+    expect(reveal.status).toBe(410)
+    expect(await reveal.json()).toEqual({ ok: false, error: 'Ask content is unavailable' })
     const audit = await store.listAudit(5)
-    expect(audit.some((a) => a.action === 'reveal' && a.actor === 'tony.walteur@gmail.com' && a.ask_id === 'ask-3')).toBe(
-      true
-    )
+    expect(audit.some((a) => a.action === 'reveal')).toBe(false)
   })
 })
 
@@ -447,8 +455,14 @@ describe('CRM send board', () => {
     expect(await store.getCrm('secret-1')).toBeNull()
   })
 
-  it('success row stores the remote CRM id, never a meeting path', async () => {
+  it('stores only canonical CRM delivery metadata and clears legacy content-bearing columns', async () => {
     const store = memoryStore()
+    await store.upsertCrm({
+      id: 'crm-ok', device_id: 'device-a', ts: NOW - 1, status: 'pending', title: 'Legacy Customer Alpha',
+      connector: 'plane', meeting_file: '/legacy/private.md', meeting_hash: 'aabbccddeeff0011',
+      last_error: 'Legacy customer error text', retry_requested: 0, attempt: 1, latency_ms: 10,
+      remote_id: 'legacy-deal', remote_url: 'https://crm.example/legacy-deal', action: 'legacy-action'
+    })
     const ingest = await signedRequest(
       '/v1/ingest',
       JSON.stringify({
@@ -460,24 +474,56 @@ describe('CRM send board', () => {
         meetingHash: 'aabbccddeeff0011',
         remoteId: 'deal-99',
         remoteUrl: 'https://crm.example/deal-99',
-        meetingFile: '/Users/tony/secret/Acme.md'
+        meetingFile: '/Users/tony/secret/Acme.md',
+        error: 'timeout posting Customer Alpha to https://crm.example/deal-99',
+        attempt: 2,
+        latencyMs: 345
       })
     )
     expect((await handleRequest(ingest, env(), {}, { store, now: NOW })).status).toBe(200)
     const row = await store.getCrm('crm-ok')
-    expect(row?.remote_id).toBe('deal-99')
-    expect(row?.remote_url).toBe('https://crm.example/deal-99')
-    expect(row?.meeting_hash).toBe('aabbccddeeff0011')
-    expect(row?.meeting_file).toBeNull()
+    expect(row).toMatchObject({
+      id: 'crm-ok', status: 'success', title: 'CRM delivery', connector: 'plane', last_error: 'transient',
+      retry_requested: 0, attempt: 2, latency_ms: 345, meeting_file: null, meeting_hash: null,
+      remote_id: null, remote_url: null, action: null
+    })
+    expect(JSON.stringify(row)).not.toContain('Customer Alpha')
+    expect(JSON.stringify(row)).not.toContain('deal-99')
     const dash = await handleRequest(
       new Request('https://operator.test/v1/admin/dashboard'),
       env(),
       { access: tonyAccess },
       { store, now: NOW }
     )
-    const body = (await dash.json()) as { crm: { rows: { remoteId: string; meetingHash: string }[] } }
-    expect(body.crm.rows[0]?.remoteId).toBe('deal-99')
+    const body = (await dash.json()) as { crm: { rows: { title: string; error: string; remoteId: string | null; meetingHash: string | null }[] } }
+    expect(body.crm.rows[0]).toMatchObject({ title: 'CRM delivery', error: 'transient', remoteId: null, meetingHash: null })
     expect(JSON.stringify(body)).not.toContain('/Users/tony')
+  })
+
+  it('projects heartbeat CRM and event detail without path, text, or CRM content', async () => {
+    const store = memoryStore()
+    const privatePath = '/Users/tony/Customer Alpha/private-meeting.md'
+    const privateText = 'Customer Alpha acquisition plan'
+    const req = await signedRequest('/v1/heartbeat', JSON.stringify({
+      os: 'darwin', appVersion: '2.0.0', path: privatePath, text: privateText,
+      crm: [{
+        event: 'crm', id: 'crm-heartbeat', status: 'failed', connector: 'hubspot',
+        title: privateText, error: `timeout ${privateText}`, remoteId: 'customer-alpha-42',
+        remoteUrl: 'https://crm.example/customer-alpha-42', meetingHash: 'aabbccddeeff0011', action: 'send-private'
+      }]
+    }))
+    expect((await handleRequest(req, env(), {}, { store, now: NOW })).status).toBe(200)
+
+    const crm = await store.getCrm('crm-heartbeat')
+    expect(crm).toMatchObject({
+      status: 'failed', title: 'CRM delivery', connector: 'hubspot', last_error: 'transient',
+      meeting_hash: null, remote_id: null, remote_url: null, action: null
+    })
+    const events = await store.listEvents(10)
+    const persisted = JSON.stringify({ crm, events })
+    expect(persisted).not.toContain(privatePath)
+    expect(persisted).not.toContain(privateText)
+    expect(events.find((event) => event.kind === 'heartbeat')?.detail).toBeNull()
   })
 
   it('Retry does not fire without Access', async () => {

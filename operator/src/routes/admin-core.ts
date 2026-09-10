@@ -6,8 +6,9 @@
  */
 import { accessTeamDomain, CONSOLE_PATHS } from '../access'
 import { handleCloudflareCallback, redirectToCloudflareLogin } from '../cloudflare-connect'
-import { decryptPrompt, sha256Hex, signSkillPack } from '../crypto'
+import { sha256Hex, signSkillPack } from '../crypto'
 import { buildDashboard } from '../dashboard'
+import { normalizeCrmRow } from '../crm'
 import { html, json, newCspNonce } from '../http'
 import type { D1DatabaseLike } from '../d1'
 import { listKeysJson, revokeVaultKey, rotateVaultKey, writeVaultKey } from '../keys'
@@ -17,6 +18,7 @@ import { renderConsole } from '../ui'
 import { defineRoute } from './registry'
 import { auditLog, cloudflareForDashboard, keyFlags, param, safeAuditText, stripSecrets, type AdminCtx } from './admin-ctx'
 import { readOperatorSettings } from './settings-store'
+import { projectAskTelemetry } from '../privacy'
 
 /** The stored hourly rate and currency feed the Value tile; without a stored rate valueMinor stays null. */
 async function valueSettings(ctx: AdminCtx): Promise<{ hourlyRate: number | null; currency: string }> {
@@ -308,7 +310,10 @@ export function registerAdminCoreRoutes(): void {
       const asks = await ctx.store.listAsks(100)
       return json({
         ok: true,
-        asks: asks.map((a) => ({ ...a, prompt_cipher: undefined, prompt_iv: undefined, question: undefined }))
+        asks: asks.map((row) => {
+          const { prompt_cipher: _cipher, prompt_iv: _iv, ...metadata } = projectAskTelemetry(row)
+          return metadata
+        })
       })
     }
   })
@@ -316,16 +321,7 @@ export function registerAdminCoreRoutes(): void {
     method: 'GET',
     pattern: /^\/v1\/admin\/asks\/(?<id>[^/]+)$/,
     auth: 'admin',
-    handler: async (_request, ctx, match) => {
-      const row = await ctx.store.getAsk(param(match, 'id'))
-      if (!row) return json({ ok: false, error: 'not found' }, 404)
-      let question = ''
-      if (row.prompt_cipher && row.prompt_iv) {
-        question = await decryptPrompt(row.prompt_cipher, row.prompt_iv, ctx.env.OPERATOR_PROMPT_KEY)
-      }
-      await auditLog(ctx, 'reveal', row.id, 'ask text')
-      return json({ ok: true, id: row.id, question })
-    }
+    handler: async () => json({ ok: false, error: 'Ask content is unavailable' }, 410)
   })
   defineRoute<AdminCtx>({
     method: 'POST',
@@ -334,11 +330,8 @@ export function registerAdminCoreRoutes(): void {
     handler: async (request, ctx) => {
       const body = (await request.json().catch(() => ({}))) as { skillId?: string }
       const skillId = body.skillId || 'general'
-      const asks = (await ctx.store.listAsks(80)).filter((a) => a.mode === skillId || a.skill_id === skillId)
-      const evidence = asks
-        .map((a) => a.preview || '')
-        .filter(Boolean)
-        .slice(0, 8)
+      const asks = (await ctx.store.listAsks(80)).map(projectAskTelemetry).filter((a) => a.mode === skillId || a.skill_id === skillId)
+      const evidence: string[] = []
       const fromVersion = asks.find((a) => a.skill_version)?.skill_version || '1.1.0'
       const id = crypto.randomUUID()
       await ctx.store.putProposal({
@@ -347,8 +340,8 @@ export function registerAdminCoreRoutes(): void {
         from_version: fromVersion,
         evidence_json: JSON.stringify(evidence),
         diff: `# unified diff against ${skillId} v${fromVersion}\n# Edit, then Approve. Push is a separate click.\n`,
-        rationale: evidence.length
-          ? `Clustered ${evidence.length} recent Asks in ${skillId}.`
+        rationale: asks.length
+          ? `Clustered metadata from ${asks.length} recent Asks in ${skillId}; prompt evidence is not stored.`
           : `No recent Asks in ${skillId} yet. Draft is a blank edit.`,
         status: 'pending',
         created_by: ctx.email,
@@ -376,7 +369,7 @@ export function registerAdminCoreRoutes(): void {
       if (row.status !== 'failed' && row.status !== 'expired') {
         return json({ ok: false, error: 'only Failed or Expired can retry' }, 400)
       }
-      await ctx.store.upsertCrm({ ...row, status: 'pending', retry_requested: 1, ts: ctx.now })
+      await ctx.store.upsertCrm(normalizeCrmRow({ ...row, status: 'pending', retry_requested: 1, ts: ctx.now }))
       // Defence in depth (security review): device-supplied ids are already sanitised at ingest
       // (index.ts), but an audit detail must never trust that a second time - safeAuditText strips
       // control characters and redacts anything secret-shaped before it reaches the audit log.

@@ -107,8 +107,8 @@ describe('GET /v1/admin/sessions/:id.json', () => {
       { country: 'CA', city: 'Longueuil' },
       { os: 'darwin', app_version: '1.8.5' }
     )
-    await store.insertEvent({ id: 'ev-1', ts: NOW - 30_000, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'answer' })
-    await store.insertAsk(ask({ id: 'a1', device_id: 'dev-a' }))
+    await store.insertEvent({ id: 'ev-1', ts: NOW - 30_000, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'Customer Alpha private ask' })
+    await store.insertAsk(ask({ id: 'a1', device_id: 'dev-a', preview: 'Patient diagnosis private prompt' }))
 
     const res = await handleRequest(
       new Request(`https://operator.test/v1/admin/sessions/${session.id}.json`),
@@ -121,16 +121,19 @@ describe('GET /v1/admin/sessions/:id.json', () => {
     expect(text).not.toContain('super-secret-ciphertext')
     expect(text).not.toContain('iv-value')
     expect(text.toLowerCase()).not.toContain('prompt_cipher')
+    expect(text).not.toContain('Customer Alpha')
+    expect(text).not.toContain('Patient diagnosis')
 
     const body = JSON.parse(text) as {
       session: { id: string; deviceId: string; tier: string | null }
-      events: { id: string }[]
-      asks: { id: string }[]
+      events: { id: string; detail: string | null }[]
+      asks: { id: string; questionType: string | null }[]
     }
     expect(body.session.id).toBe(session.id)
     expect(body.session.deviceId).toBe('dev-a')
     expect(body.session.tier).toBe('metis')
     expect(body.events.some((e) => e.id === 'ev-1')).toBe(true)
+    expect(body.events.find((e) => e.id === 'ev-1')?.detail).toBeNull()
     expect(body.asks).toHaveLength(1)
     expect(body.asks[0].id).toBe('a1')
   })

@@ -68,22 +68,45 @@ export interface CrmSendRow {
   action: string | null
 }
 
+export const CRM_CANONICAL_TITLE = 'CRM delivery'
+
+export type CrmErrorClass = 'transient' | 'auth' | 'rate-limit' | 'usage-cap' | 'empty-response' | 'unknown'
+
+export function classifyCrmError(raw: unknown): CrmErrorClass | null {
+  if (typeof raw !== 'string' || !raw.trim()) return null
+  const value = raw.trim().toLowerCase()
+  if (/rate.?limit|\b429\b|too many requests/.test(value)) return 'rate-limit'
+  if (/usage.?cap|quota|credit|billing limit/.test(value)) return 'usage-cap'
+  if (/empty.?response|no response|empty output/.test(value)) return 'empty-response'
+  if (/\b401\b|\b403\b|auth|unauthori[sz]ed|forbidden|credential/.test(value)) return 'auth'
+  if (/transient|timeout|timed out|network|econn|fetch failed|unavailable|\b5\d\d\b/.test(value)) return 'transient'
+  return 'unknown'
+}
+
+function safeConnector(raw: unknown): string {
+  if (typeof raw !== 'string') return 'unknown'
+  const value = raw.trim()
+  return value.length <= 32 && /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/.test(value) && !value.includes('://')
+    ? value
+    : 'unknown'
+}
+
 export function normalizeCrmRow(row: CrmSendRow): CrmSendRow {
   return {
     id: row.id,
     device_id: row.device_id,
     ts: row.ts,
     status: asCrmStatus(row.status) ?? 'pending',
-    title: row.title,
-    connector: row.connector,
-    meeting_file: row.meeting_file ?? null,
-    meeting_hash: row.meeting_hash ?? null,
-    last_error: row.last_error ?? null,
+    title: CRM_CANONICAL_TITLE,
+    connector: safeConnector(row.connector),
+    meeting_file: null,
+    meeting_hash: null,
+    last_error: classifyCrmError(row.last_error),
     retry_requested: row.retry_requested === 1 ? 1 : 0,
     attempt: Number.isFinite(row.attempt) ? Math.max(0, Math.floor(row.attempt)) : 0,
     latency_ms: Number.isFinite(row.latency_ms) ? Math.max(0, Math.floor(row.latency_ms)) : 0,
-    remote_id: row.remote_id ?? null,
-    remote_url: row.remote_url ?? null,
-    action: row.action ?? null
+    remote_id: null,
+    remote_url: null,
+    action: null
   }
 }
