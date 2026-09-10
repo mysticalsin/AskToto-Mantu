@@ -1,9 +1,14 @@
 import { app } from 'electron'
 import { hostname as osHostname } from 'node:os'
-import { redactSecrets } from '@shared/redact'
 import { filterFundedProviders } from '@shared/ask-routing'
 import { inspectBundleResponse } from '@shared/bundle-response'
-import { operatorUrlConfigured, resolveOperatorBaseUrl, shouldSendAskText, type AskLogLine, type StreamCacheUsage } from '@shared/operator'
+import {
+  operatorUrlConfigured,
+  projectOperatorIngestMetadata,
+  resolveOperatorBaseUrl,
+  type AskLogLine,
+  type StreamCacheUsage
+} from '@shared/operator'
 import { buildSeatMeta, type SeatMeta } from '@shared/operator-seat'
 import { classifyQuestionType, normalizeQuestionType, type QuestionType } from '@shared/question-type'
 import type { Settings } from '@shared/ipc'
@@ -20,7 +25,6 @@ import { maybeRefreshOperatorIntegrations } from './operator-integrations'
 import { parseOperatorHeartbeatEntitlements } from '@shared/operator-entitlements'
 
 const HEARTBEAT_MS = 60_000
-const ASK_TEXT_CAP = 4_000
 
 export interface OperatorRuntimeSettings {
   operatorUrl?: string
@@ -151,7 +155,11 @@ async function signedPost(
   path: string,
   bodyObj: Record<string, unknown>
 ): Promise<{ ok: boolean; json: unknown; status: number }> {
-  const body = JSON.stringify(bodyObj)
+  const projected = path === '/v1/ingest' ? projectOperatorIngestMetadata(bodyObj) : bodyObj
+  // An unsupported legacy record can never become valid by retrying. Treat it as consumed without a
+  // network call so it cannot disclose content or remain a permanent durable-queue poison pill.
+  if (!projected) return { ok: true, json: null, status: 204 }
+  const body = JSON.stringify(projected)
   const headers = {
     'content-type': 'application/json',
     ...operatorHmacHeaders(secret, deviceId(), body)
@@ -199,16 +207,18 @@ function shouldQueueOnFailure(status: number | undefined): boolean {
  *  failure eligible for retry (network error, 429, 5xx), the exact same body is appended to the durable
  *  outbox so the Worker's INSERT OR REPLACE on (id, ts) dedups it once it lands. Never throws. */
 async function postIngestWithQueue(url: string, secret: string, bodyObj: Record<string, unknown>): Promise<void> {
+  const projected = projectOperatorIngestMetadata(bodyObj)
+  if (!projected) return
   let result: QueueSendResult
   try {
-    const res = await signedPost(url, secret, '/v1/ingest', bodyObj)
+    const res = await signedPost(url, secret, '/v1/ingest', projected)
     result = { ok: res.ok, status: res.status, retryAfterMs: retryAfterMsFromJson(res.json) }
   } catch (e) {
     mainLog.warn('[operator] ingest failed:', e)
     result = { ok: false }
   }
   if (!result.ok && shouldQueueOnFailure(result.status)) {
-    enqueueOperatorItem(queueDir(), { path: '/v1/ingest', body: bodyObj }, { retryAfterMs: result.retryAfterMs })
+    enqueueOperatorItem(queueDir(), { path: '/v1/ingest', body: projected }, { retryAfterMs: result.retryAfterMs })
   }
 }
 
@@ -338,13 +348,6 @@ export function resolveQuestionType(event: Pick<OperatorAskEvent, 'questionType'
   return classifyQuestionType(event.question, { vision: event.vision === true })
 }
 
-function sanitizeQuestion(raw: string | undefined): string | undefined {
-  if (!raw) return undefined
-  const trimmed = raw.replace(/\s+/g, ' ').trim()
-  if (!trimmed) return undefined
-  return redactSecrets(trimmed).slice(0, ASK_TEXT_CAP)
-}
-
 export async function recordOperatorAsk(
   settings: Settings | OperatorRuntimeSettings,
   event: OperatorAskEvent
@@ -377,10 +380,6 @@ export async function recordOperatorAsk(
   if (event.outcome === 'error' && event.error) {
     payload.error = event.error.slice(0, 64)
   }
-  if (shouldSendAskText(settings)) {
-    const q = sanitizeQuestion(event.question)
-    if (q) payload.question = q
-  }
   await postIngestWithQueue(url, secret, payload)
 }
 
@@ -391,21 +390,15 @@ export async function recordOperatorCrmSend(
   const url = resolveUrl(settings)
   const secret = resolveSecret(settings)
   if (!operatorUrlConfigured(settings) || !secret) return
-  const title = event.title?.replace(/\s+/g, ' ').trim().slice(0, 160)
   await postIngestWithQueue(url, secret, {
     event: 'crm',
     id: event.id,
     ts: event.ts ?? Date.now(),
     status: event.status,
-    title: title || 'CRM send',
     connector: event.connector || 'unknown',
-    ...(event.meetingHash ? { meetingHash: event.meetingHash } : {}),
-    ...(event.action ? { action: event.action } : {}),
     ...(typeof event.attempt === 'number' ? { attempt: event.attempt } : {}),
     ...(typeof event.latencyMs === 'number' ? { latencyMs: event.latencyMs } : {}),
-    ...(event.remoteId ? { remoteId: event.remoteId } : {}),
-    ...(event.remoteUrl ? { remoteUrl: event.remoteUrl } : {}),
-    ...(event.error ? { error: event.error.slice(0, 200) } : {}),
+    ...(event.error ? { error: event.error } : {}),
     ...(event.credentialSource ? { credentialSource: event.credentialSource } : {}),
     ...seatMeta(settings)
   })

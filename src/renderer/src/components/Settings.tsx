@@ -6638,15 +6638,10 @@ export function Settings({
                       className={`${ctl} w-full`}
                     />
                   </label>
-                  {/^https:\/\//i.test(settings.operatorUrl || '') && (
-                    <ToggleRow
-                      label="Send Ask text for skill improvement"
-                      desc="When on, the question text goes with the metrics so skills can be drafted. Metrics always send: mode, timing, token counts, a question type label such as Factual or How to, this Mac's hostname, and this device's license status, never the words. Listen transcripts and screens never send."
-                      on={settings.sendAskText !== false}
-                      onChange={(v) => patch({ sendAskText: v })}
-                      disabled={settings.managedKeys.includes('sendAskText')}
-                    />
-                  )}
+                  <p className="px-1 py-2 text-[11px] leading-relaxed text-[color:var(--cl-muted-foreground)]">
+                    Only operational metadata leaves this device: event types, status, timing and usage counts, plus
+                    device and license health. Prompts, transcripts, screenshots, and CRM record details never send.
+                  </p>
                   {operatorUrlConfigured(settings) && (
                     <button
                       type="button"

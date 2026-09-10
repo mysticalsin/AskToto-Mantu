@@ -64,7 +64,7 @@ export function operatorUrlConfigured(
   return Boolean(resolveOperatorBaseUrl(settings, env))
 }
 
-/** Explicit Settings/env URL only — not the shipped DEFAULT. Gates Ask-text opt-in. */
+/** Explicit Settings/env URL only — not the shipped DEFAULT. Retained for settings compatibility. */
 export function operatorUrlExplicit(
   settings: { operatorUrl?: string } | null | undefined,
   env: Record<string, string | undefined> = nodeEnv()
@@ -74,13 +74,152 @@ export function operatorUrlExplicit(
   return /^https:\/\//i.test(fromSettings || fromEnv)
 }
 
-/** Ask-text toggle. Default ON once an explicit URL is set; ignored for bare DEFAULT. */
+/** Legacy Ask-text compatibility hook. Metadata-only telemetry cannot be overridden by old settings. */
 export function shouldSendAskText(
-  settings: { operatorUrl?: string; sendAskText?: boolean } | null | undefined,
-  env: Record<string, string | undefined> = nodeEnv()
+  _settings: { operatorUrl?: string; sendAskText?: boolean } | null | undefined,
+  _env: Record<string, string | undefined> = nodeEnv()
 ): boolean {
-  if (!operatorUrlExplicit(settings, env)) return false
-  return settings?.sendAskText !== false
+  return false
+}
+
+const OPERATOR_EVENT_TYPES = new Set(['ask', 'rating', 'listen', 'recap', 'crm'])
+const ASK_MODES = new Set(['answer', 'vision', 'suggest', 'summary', 'recap'])
+const ASK_OUTCOMES = new Set(['answered', 'error', 'thumbs-down'])
+const QUESTION_TYPES = new Set([
+  'factual',
+  'how-to',
+  'explain',
+  'compare',
+  'summarize',
+  'draft',
+  'translate',
+  'code',
+  'estimate',
+  'decision',
+  'screen',
+  'behavioral',
+  'other',
+  'unknown'
+])
+const CRM_STATUSES = new Set(['pending', 'in_progress', 'in_review', 'submitted', 'success', 'failed', 'expired'])
+const CACHE_STATUSES = new Set<CacheBadge>(['hit', 'write', 'n/a', 'not-reported'])
+const CACHE_TTLS = new Set<CacheTtl>(['1h', '5m', '30m'])
+const LICENSE_STATES = new Set(['licensed', 'trial', 'grace', 'expired', 'unlicensed'])
+const IDENTIFIER_RE = /^[A-Za-z0-9][A-Za-z0-9._:/@+-]*$/
+
+function metadataIdentifier(raw: unknown, max: number): string | undefined {
+  if (typeof raw !== 'string') return undefined
+  const value = raw.trim()
+  if (!value || value.length > max || value.includes('://') || !IDENTIFIER_RE.test(value)) return undefined
+  return value
+}
+
+function finiteNonNegative(raw: unknown): number | undefined {
+  return typeof raw === 'number' && Number.isFinite(raw) && raw >= 0 ? raw : undefined
+}
+
+function putDefined(target: Record<string, unknown>, key: string, value: unknown): void {
+  if (value !== undefined) target[key] = value
+}
+
+function operatorErrorClass(raw: unknown): 'transient' | 'auth' | 'rate-limit' | 'usage-cap' | 'empty-response' | 'unknown' {
+  if (typeof raw !== 'string') return 'unknown'
+  const value = raw.trim().toLowerCase()
+  if (/rate.?limit|\b429\b|too many requests/.test(value)) return 'rate-limit'
+  if (/usage.?cap|quota|credit|billing limit/.test(value)) return 'usage-cap'
+  if (/empty.?response|no response|empty output/.test(value)) return 'empty-response'
+  if (/\b401\b|\b403\b|auth|unauthori[sz]ed|forbidden|credential/.test(value)) return 'auth'
+  if (/transient|timeout|timed out|network|econn|fetch failed|unavailable|\b5\d\d\b/.test(value)) return 'transient'
+  return 'unknown'
+}
+
+function projectSeatMetadata(source: Record<string, unknown>, target: Record<string, unknown>): void {
+  putDefined(target, 'seatHash', metadataIdentifier(source.seatHash, 128))
+  putDefined(target, 'os', metadataIdentifier(source.os, 32))
+  putDefined(target, 'appVersion', metadataIdentifier(source.appVersion, 64))
+  putDefined(target, 'hostname', sanitizeOperatorHostname(source.hostname) ?? undefined)
+  putDefined(target, 'ssoEmail', sanitizeOperatorSsoEmail(source.ssoEmail) ?? undefined)
+  putDefined(target, 'license', typeof source.license === 'string' && LICENSE_STATES.has(source.license) ? source.license : undefined)
+  putDefined(
+    target,
+    'licenseLast4',
+    typeof source.licenseLast4 === 'string' && /^[A-Za-z0-9]{4}$/.test(source.licenseLast4)
+      ? source.licenseLast4
+      : undefined
+  )
+  putDefined(
+    target,
+    'licenseId',
+    typeof source.licenseId === 'string' && /^[a-f0-9]{16}$/.test(source.licenseId) ? source.licenseId : undefined
+  )
+  const lastIndexAt = finiteNonNegative(source.lastIndexAt)
+  putDefined(target, 'lastIndexAt', lastIndexAt && lastIndexAt > 0 ? lastIndexAt : undefined)
+}
+
+/**
+ * Desktop-to-Operator `/v1/ingest` privacy boundary. It constructs a new object from approved
+ * metadata fields only; unknown, nested and content-bearing fields therefore have no serialization
+ * path. `null` means the event cannot be represented safely and should be treated as consumed.
+ */
+export function projectOperatorIngestMetadata(raw: unknown): Record<string, unknown> | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const source = raw as Record<string, unknown>
+  const event = source.event === undefined ? 'ask' : source.event
+  if (typeof event !== 'string' || !OPERATOR_EVENT_TYPES.has(event)) return null
+  const id = metadataIdentifier(source.id, 128)
+  if (!id) return null
+
+  const projected: Record<string, unknown> = event === 'ask' ? { id } : { event, id }
+  putDefined(projected, 'ts', finiteNonNegative(source.ts))
+
+  if (event === 'rating') {
+    if (source.rating !== 'up' && source.rating !== 'down') return null
+    projected.rating = source.rating
+  } else if (event === 'listen' || event === 'recap') {
+    putDefined(projected, 'minutes', finiteNonNegative(source.minutes))
+  } else if (event === 'crm') {
+    if (typeof source.status !== 'string' || !CRM_STATUSES.has(source.status)) return null
+    projected.status = source.status
+    putDefined(projected, 'connector', metadataIdentifier(source.connector, 32))
+    putDefined(projected, 'attempt', finiteNonNegative(source.attempt))
+    putDefined(projected, 'latencyMs', finiteNonNegative(source.latencyMs))
+    if (source.credentialSource === 'operator' || source.credentialSource === 'local') {
+      projected.credentialSource = source.credentialSource
+    }
+    if (source.error !== undefined) projected.error = operatorErrorClass(source.error)
+  } else {
+    putDefined(projected, 'mode', typeof source.mode === 'string' && ASK_MODES.has(source.mode) ? source.mode : undefined)
+    putDefined(projected, 'skillId', metadataIdentifier(source.skillId, 80))
+    putDefined(projected, 'skillVersion', metadataIdentifier(source.skillVersion, 40))
+    putDefined(projected, 'provider', metadataIdentifier(source.provider, 48))
+    putDefined(projected, 'model', metadataIdentifier(source.model, 120))
+    for (const key of ['ttftMs', 'totalMs', 'inputTokens', 'outputTokens', 'cacheRead', 'cacheWrite', 'cacheUncached']) {
+      putDefined(projected, key, finiteNonNegative(source[key]))
+    }
+    putDefined(
+      projected,
+      'cacheStatus',
+      typeof source.cacheStatus === 'string' && CACHE_STATUSES.has(source.cacheStatus as CacheBadge)
+        ? source.cacheStatus
+        : undefined
+    )
+    putDefined(
+      projected,
+      'cacheTtl',
+      typeof source.cacheTtl === 'string' && CACHE_TTLS.has(source.cacheTtl as CacheTtl) ? source.cacheTtl : undefined
+    )
+    putDefined(
+      projected,
+      'outcome',
+      typeof source.outcome === 'string' && ASK_OUTCOMES.has(source.outcome) ? source.outcome : undefined
+    )
+    projected.questionType =
+      typeof source.questionType === 'string' && QUESTION_TYPES.has(source.questionType) ? source.questionType : 'unknown'
+    if (source.error !== undefined) projected.error = operatorErrorClass(source.error)
+  }
+
+  projectSeatMetadata(source, projected)
+  return projected
 }
 
 export function promptCacheKey(mode: string, skillLockHash: string): string {
