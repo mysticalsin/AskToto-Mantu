@@ -129,6 +129,10 @@ class FakeWorker {
     this.onmessage?.({ data: message } as MessageEvent<WorkerMessage>)
   }
 
+  crash(message: string): void {
+    this.onerror?.({ message } as ErrorEvent)
+  }
+
   terminate(): void {}
 }
 
@@ -141,7 +145,18 @@ const fullText = 'What is the roadmap for Europe?'
 const laterText = 'Please send the revised plan tomorrow.'
 const fixedNow = 1_700_000_000_000
 
-let engineResponses: Array<{ text: string; name: string }> = []
+type EngineResponse = { text: string; name: string }
+type Deferred<T> = { promise: Promise<T>; resolve: (value: T) => void }
+
+let engineResponsePromises: Array<Promise<EngineResponse>> = []
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>((done) => {
+    resolve = done
+  })
+  return { promise, resolve }
+}
 
 function render(onQuestion: (line: TranscriptLine) => void, engine: Engine): ListenApi {
   host.beginRender()
@@ -180,16 +195,16 @@ beforeEach(() => {
   host.reset()
   worklets = []
   workers = []
-  engineResponses = [
-    { text: partialText, name: 'Alice' },
-    { text: fullText, name: 'Alice' },
-    { text: laterText, name: 'Alice' }
+  engineResponsePromises = [
+    Promise.resolve({ text: partialText, name: 'Alice' }),
+    Promise.resolve({ text: fullText, name: 'Alice' }),
+    Promise.resolve({ text: laterText, name: 'Alice' })
   ]
   vi.useFakeTimers()
   vi.setSystemTime(fixedNow)
 
-  const nextEngineResponse = async (): Promise<{ text: string; name: string }> => {
-    const next = engineResponses.shift()
+  const nextEngineResponse = (): Promise<EngineResponse> => {
+    const next = engineResponsePromises.shift()
     if (!next) throw new Error('unexpected engine feed')
     return next
   }
@@ -273,3 +288,125 @@ describe.each(['parakeet', 'apple', 'whisper'] as const)(
     })
   }
 )
+
+describe.each(['parakeet', 'apple', 'whisper'] as const)('%s restart ownership', (engine) => {
+  it('ignores an old-session settle while the new session owns the placeholder, busy slot, and queue', async () => {
+    const onQuestion = vi.fn()
+    const oldNative = deferred<EngineResponse>()
+    const currentNative = deferred<EngineResponse>()
+    const queuedNative = deferred<EngineResponse>()
+    engineResponsePromises = [oldNative.promise, currentNative.promise, queuedNative.promise]
+
+    await startSession(engine, onQuestion)
+    const oldWorklet = worklets.at(-1)
+    const oldWorker = workers.at(-1)
+    if (!oldWorklet) throw new Error('old-session worklet was not opened')
+
+    vi.setSystemTime(fixedNow + 1)
+    oldWorklet.emit({ audio: new Float32Array([0.1]), partial: false })
+    await settlePromises()
+
+    // The app clears the previous meeting's UI before starting the replacement session.
+    let api = render(onQuestion, engine)
+    api.clear()
+    await startSession(engine, onQuestion)
+    const currentWorklet = worklets.at(-1)
+    const currentWorker = workers.at(-1)
+    if (!currentWorklet) throw new Error('new-session worklet was not opened')
+
+    vi.setSystemTime(fixedNow + 10)
+    currentWorklet.emit({ audio: new Float32Array([0.2]), partial: false })
+    await settlePromises()
+    // This second new-session window must remain queued behind the active decode.
+    currentWorklet.emit({ audio: new Float32Array([0.3]), partial: false })
+    await settlePromises()
+
+    api = render(onQuestion, engine)
+    expect(api.lines).toEqual([
+      expect.objectContaining({ speaker: 'them', text: '…', t: fixedNow + 10, provisional: true })
+    ])
+
+    vi.setSystemTime(fixedNow + 20)
+    if (engine === 'whisper') {
+      if (!oldWorker) throw new Error('old-session worker was not opened')
+      oldWorker.emit({ type: 'text', text: 'Old meeting should be ignored.', speaker: 'them' })
+    } else {
+      oldNative.resolve({ text: 'Old meeting should be ignored.', name: 'Old speaker' })
+    }
+    await settlePromises()
+
+    api = render(onQuestion, engine)
+    // The timestamp proves the queued window did not start, and the old text never entered this meeting.
+    expect(api.lines).toEqual([
+      expect.objectContaining({ speaker: 'them', text: '…', t: fixedNow + 10, provisional: true })
+    ])
+    expect(api.text()).toBe('')
+    expect(onQuestion).not.toHaveBeenCalled()
+
+    vi.setSystemTime(fixedNow + 30)
+    if (engine === 'whisper') {
+      if (!currentWorker) throw new Error('new-session worker was not opened')
+      currentWorker.emit({ type: 'text', text: fullText, speaker: 'them' })
+    } else {
+      currentNative.resolve({ text: fullText, name: 'Alice' })
+    }
+    await settlePromises()
+
+    api = render(onQuestion, engine)
+    expect(api.lines.map((line) => line.text)).toEqual([fullText, '…'])
+    expect(api.lines[1]).toMatchObject({ t: fixedNow + 30, provisional: true })
+
+    if (engine === 'whisper') {
+      if (!currentWorker) throw new Error('new-session worker was not opened')
+      currentWorker.emit({ type: 'text', text: laterText, speaker: 'them' })
+    } else {
+      queuedNative.resolve({ text: laterText, name: 'Alice' })
+    }
+    await settlePromises()
+
+    api = render(onQuestion, engine)
+    expect(api.lines.map((line) => line.text)).toEqual([fullText, laterText])
+    expect(api.text()).toBe(`THEM: ${fullText}\nTHEM: ${laterText}`)
+    expect(onQuestion).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('whisper restart error ownership', () => {
+  it('ignores error and crash callbacks from the retired worker while the replacement session is decoding', async () => {
+    const onQuestion = vi.fn()
+    await startSession('whisper', onQuestion)
+    const oldWorklet = worklets.at(-1)
+    const oldWorker = workers.at(-1)
+    if (!oldWorklet || !oldWorker) throw new Error('old Whisper session did not start')
+
+    oldWorklet.emit({ audio: new Float32Array([0.1]), partial: false })
+    await settlePromises()
+
+    let api = render(onQuestion, 'whisper')
+    api.clear()
+    await startSession('whisper', onQuestion)
+    const currentWorklet = worklets.at(-1)
+    const currentWorker = workers.at(-1)
+    if (!currentWorklet || !currentWorker) throw new Error('replacement Whisper session did not start')
+
+    vi.setSystemTime(fixedNow + 40)
+    currentWorklet.emit({ audio: new Float32Array([0.2]), partial: false })
+    await settlePromises()
+    oldWorker.emit({ type: 'error', speaker: 'them' })
+    oldWorker.crash('retired worker crash')
+    await settlePromises()
+
+    api = render(onQuestion, 'whisper')
+    expect(api.listening).toBe(true)
+    expect(api.error).toBeNull()
+    expect(api.lines).toEqual([
+      expect.objectContaining({ text: '…', t: fixedNow + 40, provisional: true })
+    ])
+
+    currentWorker.emit({ type: 'text', text: laterText, speaker: 'them' })
+    await settlePromises()
+    api = render(onQuestion, 'whisper')
+    expect(api.lines.map((line) => line.text)).toEqual([laterText])
+    expect(api.text()).toBe(`THEM: ${laterText}`)
+  })
+})

@@ -894,6 +894,7 @@ export function useListen(
           if (parakeetFailures.current >= PARAKEET_MAX_FAILURES) fallBackToWhisper()
         })
         .finally(() => {
+          if (sessionEpochRef.current !== jobEpoch) return // a replacement session owns busy/placeholder/queue
           clearProvisional() // this window has settled one way or another — the placeholder's job is done
           busy.current = false
           pump()
@@ -941,6 +942,7 @@ export function useListen(
           if (parakeetFailures.current >= PARAKEET_MAX_FAILURES) fallBackToWhisper()
         })
         .finally(() => {
+          if (sessionEpochRef.current !== jobEpoch) return // a replacement session owns busy/placeholder/queue
           clearProvisional()
           busy.current = false
           pump()
@@ -988,6 +990,7 @@ export function useListen(
     if (workerRef.current) return workerRef.current
     const w = new Worker(new URL('./whisper.worker.ts', import.meta.url), { type: 'module' })
     w.onmessage = (e: MessageEvent): void => {
+      if (workerRef.current !== w) return // terminated/replaced worker from an earlier session
       const m = e.data as {
         type: string
         text?: string
@@ -1020,12 +1023,7 @@ export function useListen(
         // — same pattern as pump → fallBackToWhisper above. It only runs later, once this handler actually
         // fires, by which point it's fully initialized; deliberately omitted from this useCallback's deps.
         if (pendingWhisperEpochRef.current !== sessionEpochRef.current) {
-          // Stale decode from a previous meeting — drop without touching live UI/error state.
-          clearProvisional()
-          pendingWhisperEmbedRef.current = null
-          busy.current = false
-          pump()
-          return
+          return // replacement session owns the placeholder, embed slot, busy flag and queue
         }
         if (!armNetworkRetry(m.message ?? '')) {
           const note = m.message ?? 'transcription error'
@@ -1041,15 +1039,12 @@ export function useListen(
         busy.current = false
         pump()
       } else if (m.type === 'text') {
-        clearProvisional() // this window has settled — replace the placeholder with the real line below
+        if (pendingWhisperEpochRef.current !== sessionEpochRef.current) {
+          return // replacement session owns the placeholder, embed slot, busy flag and queue
+        }
+        clearProvisional() // this current-session window settled — replace its placeholder below
         const embedAudio = pendingWhisperEmbedRef.current
         pendingWhisperEmbedRef.current = null
-        if (pendingWhisperEpochRef.current !== sessionEpochRef.current) {
-          // Meeting moved on while this window decoded — never commit into the new transcript.
-          busy.current = false
-          pump()
-          return
-        }
         const committedAt = commitLine(
           m.text || '',
           (m.speaker as Speaker) || 'you',
@@ -1089,6 +1084,7 @@ export function useListen(
       }
     }
     w.onerror = (err: ErrorEvent): void => {
+      if (workerRef.current !== w) return // crash from a worker retired with an earlier session
       // A worker crash must FULLY tear down capture, not just the worker — otherwise the mic + system
       // AudioContexts stay hot and the tray stays in 'recording' while the UI reads 'not listening',
       // an unrecoverable dead end. Mirror stop()'s teardown so a crash returns to a clean idle state.
@@ -1631,6 +1627,16 @@ export function useListen(
           closeChannel('them')
         }
         stoppingRef.current = false
+        // A warm Whisper worker can be reused only when it has no decode in flight. If a replacement
+        // session starts mid-decode, retire that worker so its eventual text/error callback cannot be
+        // confused with the new session's job (worker replies carry no request/session identifier).
+        if (busy.current && engineRef.current === 'whisper' && workerRef.current) {
+          const staleWorker = workerRef.current
+          workerRef.current = null
+          staleWorker.terminate()
+          loadedQualityRef.current = null
+          readyRef.current = false
+        }
         sessionEpochRef.current += 1
         queue.current = []
         provisionalRef.current = null // fresh session — no carried-over placeholder from the previous one
