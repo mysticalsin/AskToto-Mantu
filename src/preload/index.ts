@@ -188,9 +188,10 @@ const api = {
   // (Older shape was a bare string; the renderer normalizes both while the contract settles.)
   parakeetFeed: (
     samples: Float32Array,
-    speaker: string
+    speaker: string,
+    startedAt?: number
   ): Promise<string | { text: string; name?: string; echo?: boolean }> =>
-    ipcRenderer.invoke(IPC.parakeetFeed, { samples, speaker }),
+    ipcRenderer.invoke(IPC.parakeetFeed, { samples, speaker, startedAt }),
   onParakeetProgress: (cb: (pct: number) => void): (() => void) => {
     const h = (_e: unknown, d: { pct: number }): void => cb(d.pct)
     ipcRenderer.on(IPC.parakeetProgress, h)
@@ -199,14 +200,15 @@ const api = {
   // Apple Speech (on-device, macOS only) — same {text, name?, echo?} shape and speaker ride-along as parakeetFeed.
   appleSpeechFeed: (
     samples: Float32Array,
-    speaker: string
+    speaker: string,
+    startedAt?: number
   ): Promise<string | { text: string; name?: string; echo?: boolean }> =>
-    ipcRenderer.invoke(IPC.appleSpeechFeed, { samples, speaker }),
+    ipcRenderer.invoke(IPC.appleSpeechFeed, { samples, speaker, startedAt }),
   // Speaker Intelligence's engine-independent embedding tap (see IPC.speakerEmbed's own comment) — the
   // Whisper path's equivalent of the label ride-along parakeetFeed/appleSpeechFeed carry for free.
   // echo:true → renderer drops the already-committed THEM line (operator loopback bleed).
-  speakerEmbed: (samples: Float32Array, speaker: string): Promise<{ name?: string; echo?: boolean }> =>
-    ipcRenderer.invoke(IPC.speakerEmbed, { samples, speaker }),
+  speakerEmbed: (samples: Float32Array, speaker: string, startedAt?: number): Promise<{ name?: string; echo?: boolean }> =>
+    ipcRenderer.invoke(IPC.speakerEmbed, { samples, speaker, startedAt }),
 
   ask: (req: AskStart): Promise<void> => ipcRenderer.invoke(IPC.askStart, req),
   cancel: (id: string): Promise<void> => ipcRenderer.invoke(IPC.askCancel, id),
@@ -344,7 +346,8 @@ const api = {
   // Task MI-3: aggregated needs-attention queue (lint contradictions, AMBIGUOUS fields, contradicted pins).
   brainAttention: (): Promise<import('@shared/ipc').BrainAttentionResult> =>
     ipcRenderer.invoke(IPC.brainAttention),
-  setListeningState: (on: boolean): Promise<void> => ipcRenderer.invoke(IPC.listeningState, on),
+  setListeningState: (on: boolean, startedAt?: number): Promise<void> =>
+    ipcRenderer.invoke(IPC.listeningState, { on, startedAt }),
   asrBundled: (): Promise<boolean> => ipcRenderer.invoke(IPC.asrBundled),
   asrAssetsStatus: (): Promise<AsrAssetsStatus> => ipcRenderer.invoke(IPC.asrAssetsStatus),
   asrAssetsEnsure: (): Promise<AsrAssetsStatus> => ipcRenderer.invoke(IPC.asrAssetsEnsure),

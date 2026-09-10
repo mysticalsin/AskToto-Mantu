@@ -234,9 +234,9 @@ async function settle(): Promise<void> {
   for (let i = 0; i < 8; i++) await Promise.resolve()
 }
 
-async function start(engine: Engine = 'parakeet'): Promise<ListenApi> {
+async function start(engine: Engine = 'parakeet', startedAt?: number): Promise<ListenApi> {
   const api = render(engine)
-  await api.start('system', 'fast', engine, 'English')
+  await api.start('system', 'fast', engine, 'English', startedAt)
   await settle()
   if (engine === 'whisper') {
     workers.at(-1)?.emit({ type: 'ready', qualityDegraded: false })
@@ -262,7 +262,7 @@ beforeEach(() => {
 
   vi.stubGlobal('window', {
     toto: {
-      setListeningState: async () => {},
+      setListeningState: vi.fn(async () => {}),
       armAudio: async () => {},
       parakeetStatus: vi.fn(async () => ({ ready: true, addonError: null })),
       parakeetEnsure: vi.fn(async () => ({ ok: true })),
@@ -270,7 +270,7 @@ beforeEach(() => {
       parakeetFeed: vi.fn(async () => ({ text: '', name: undefined })),
       appleSpeechFeed: vi.fn(async () => ({ text: '', name: undefined })),
       asrBundled: vi.fn(async () => true),
-      speakerEmbed: async () => ({}),
+      speakerEmbed: vi.fn(async () => ({})),
       getPermissions: vi.fn(() => getPermissionsImpl())
     },
     addEventListener: () => {},
@@ -295,6 +295,125 @@ afterEach(() => {
   host.unmount()
   vi.useRealTimers()
   vi.unstubAllGlobals()
+})
+
+describe('live audio transport identity', () => {
+  it('uses the supplied meeting start for start and sealed Stop despite later clock changes', async () => {
+    const api = await start('parakeet', 123)
+    vi.setSystemTime(1_800_000_000_000)
+    api.stop()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(window.toto.setListeningState).toHaveBeenNthCalledWith(1, true, 123)
+    expect(window.toto.setListeningState).toHaveBeenNthCalledWith(2, false, 123)
+    expect(window.toto.setListeningState).toHaveBeenCalledTimes(2)
+  })
+
+  it('uses the admitted identity for a failed capture start', async () => {
+    getUserMediaImpl = async () => { throw new Error('Synthetic microphone refusal') }
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      await render().start('mic', 'fast', 'parakeet', 'English', 123)
+      expect(window.toto.setListeningState).toHaveBeenNthCalledWith(1, true, 123)
+      expect(window.toto.setListeningState).toHaveBeenNthCalledWith(2, false, 123)
+      expect(render().listening).toBe(false)
+    } finally { warning.mockRestore() }
+  })
+
+  it('notifies the exact current session once after a live Whisper worker crash', async () => {
+    const api = await start('whisper', 123)
+    workers.at(-1)!.crash('Synthetic live worker failure')
+    api.stop()
+    expect(window.toto.setListeningState).toHaveBeenNthCalledWith(1, true, 123)
+    expect(window.toto.setListeningState).toHaveBeenNthCalledWith(2, false, 123)
+    expect(window.toto.setListeningState).toHaveBeenCalledTimes(2)
+  })
+
+  it('a prewarm-only worker crash or unmount cannot send an unowned stop', async () => {
+    render('whisper')
+    await settle()
+    workers.at(-1)!.crash('Synthetic idle worker failure')
+    host.unmount()
+    expect(window.toto.setListeningState).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])('unmount closes only its owned session (Stop pending=%s)', async stopping => {
+    const api = await start('parakeet', 123)
+    if (stopping) {
+      sealMode.acknowledge = false
+      api.stop()
+    }
+    host.unmount()
+    await settle()
+    expect(vi.mocked(window.toto.setListeningState).mock.calls).toEqual([
+      [true, 123], [false, 123]
+    ])
+  })
+
+  it('a superseded Stop cannot send A-off after B starts, but B Stop still carries B', async () => {
+    const api = await start('parakeet', 123)
+    sealMode.acknowledge = false
+    api.stop()
+    await start('parakeet', 456)
+    await vi.advanceTimersByTimeAsync(4_001)
+    expect(vi.mocked(window.toto.setListeningState).mock.calls).toEqual([[true, 123], [true, 456]])
+    sealMode.acknowledge = true
+    render().stop()
+    await vi.advanceTimersByTimeAsync(1)
+    expect(window.toto.setListeningState).toHaveBeenLastCalledWith(false, 456)
+  })
+
+  it.each(['parakeet', 'apple'] as const)('%s queues the window owner and keeps legacy ASR usable', async engine => {
+    const feed = engine === 'parakeet' ? window.toto.parakeetFeed : window.toto.appleSpeechFeed
+    vi.mocked(feed).mockResolvedValue({ text: 'Identity-bound speech.' })
+    await start(engine, 123)
+    worklets.at(-1)!.emit({ audio: Float32Array.from([0.2]), partial: false })
+    await settle()
+    expect(feed).toHaveBeenLastCalledWith(expect.any(Float32Array), 'them', 123)
+    expect(render(engine).text()).toBe('THEM: Identity-bound speech.')
+    await start(engine)
+    worklets.at(-1)!.emit({ audio: Float32Array.from([0.3]), partial: false })
+    await settle()
+    expect(feed).toHaveBeenLastCalledWith(expect.any(Float32Array), 'them', undefined)
+  })
+
+  it('an old worklet callback cannot enqueue its audio under a newer owner', async () => {
+    vi.mocked(window.toto.parakeetFeed).mockResolvedValue({ text: 'Only B speech.' })
+    await start('parakeet', 123)
+    const oldCallback = worklets.at(-1)!.port.onmessage!
+    await start('parakeet', 456)
+    oldCallback({ data: { audio: Float32Array.from([0.1]), partial: false } } as MessageEvent<WorkletMessage>)
+    await settle()
+    expect(window.toto.parakeetFeed).not.toHaveBeenCalled()
+    worklets.at(-1)!.emit({ audio: Float32Array.from([0.2]), partial: false })
+    await settle()
+    expect(window.toto.parakeetFeed).toHaveBeenCalledExactlyOnceWith(expect.any(Float32Array), 'them', 456)
+    expect(render().text()).toBe('THEM: Only B speech.')
+  })
+
+  it('Whisper carries the queued identity on its operator tap and Parakeet language probe', async () => {
+    const api = render('whisper')
+    await api.start('mic', 'fast', 'whisper', 'auto', 123)
+    await settle()
+    workers.at(-1)!.emit({ type: 'ready', qualityDegraded: false })
+    worklets.at(-1)!.emit({ audio: Float32Array.from([0.2]), partial: false })
+    await settle()
+    expect(window.toto.parakeetFeed).toHaveBeenCalledExactlyOnceWith(expect.any(Float32Array), 'you', 123)
+    expect(window.toto.speakerEmbed).toHaveBeenCalledExactlyOnceWith(expect.any(Float32Array), 'you', 123)
+    workers.at(-1)!.emit({ type: 'text', text: 'Operator speech.', speaker: 'you' })
+    await settle()
+    expect(render('whisper').text()).toBe('YOU: Operator speech.')
+  })
+
+  it('Whisper retains the window identity across text delivery before requesting a THEM label', async () => {
+    await start('whisper', 123)
+    worklets.at(-1)!.emit({ audio: Float32Array.from([0.2]), partial: false })
+    await settle()
+    vi.setSystemTime(1_800_000_000_000)
+    workers.at(-1)!.emit({ type: 'text', text: 'Other participant speech.', speaker: 'them' })
+    await settle()
+    expect(window.toto.speakerEmbed).toHaveBeenCalledExactlyOnceWith(expect.any(Float32Array), 'them', 123)
+    expect(render('whisper').text()).toBe('THEM: Other participant speech.')
+  })
 })
 
 describe('ASR idle prewarm ownership', () => {
@@ -412,7 +531,7 @@ describe('ASR idle prewarm ownership', () => {
     await started
     await settle()
     expect(window.toto.parakeetFeed).toHaveBeenCalledTimes(1)
-    expect(window.toto.parakeetFeed).toHaveBeenCalledWith(expect.any(Float32Array), 'them')
+    expect(window.toto.parakeetFeed).toHaveBeenCalledWith(expect.any(Float32Array), 'them', undefined)
   })
 })
 
@@ -425,7 +544,7 @@ describe('worklet seal-and-flush protocol', () => {
   }
 
   function instantiate(messages: WorkletMessage[]): RuntimeWorklet {
-    let Registered: (new () => RuntimeWorklet) | null = null
+    const registration: { ctor?: new () => RuntimeWorklet } = {}
     class FakeProcessor {
       port = {
         onmessage: null as ((event: MessageEvent<unknown>) => void) | null,
@@ -434,11 +553,11 @@ describe('worklet seal-and-flush protocol', () => {
     }
     new Function('AudioWorkletProcessor', 'registerProcessor', 'sampleRate', WHISPER_WORKLET_SRC)(
       FakeProcessor,
-      (_name: string, cls: new () => RuntimeWorklet): void => void (Registered = cls),
+      (_name: string, cls: new () => RuntimeWorklet): void => void (registration.ctor = cls),
       16_000
     )
-    if (!Registered) throw new Error('worklet source registered no processor')
-    return new Registered()
+    if (!registration.ctor) throw new Error('worklet source registered no processor')
+    return new registration.ctor()
   }
 
   function tone(samples: number, amplitude: number): Float32Array {

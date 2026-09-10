@@ -359,14 +359,13 @@ describe('speaker:embed — the Whisper-engine speaker-embedding tap (contract)'
     const body = indexSrc.slice(start, start + 2500)
     expect(body).toMatch(/if \(!\(p\?\.samples instanceof Float32Array\)\) return \{\}/)
     expect(body).toMatch(/if \(p\.samples\.length > 16_000 \* 30\) return \{\}/)
-    // 70 wires getSpeakerId().labelWindow; 58 wraps the same call as labelThemAudio. Accept either
-    // until index.ts is unioned — both reach speaker-id.labelWindow.
-    expect(body).toMatch(/getSpeakerId\(\)\.labelWindow\(p\.samples\)|labelThemAudio\(p\.samples\)/)
+    expect(body).toMatch(/const speakerKey = captureLiveSpeakerKey\(p\.startedAt\)/)
+    expect(body).toMatch(/const label = await labelThemAudio\(p\.samples, speakerKey, 'live'\)/)
     // Echo must surface as echo:true so the renderer can drop the already-committed Whisper THEM line
     // (silent skip used to leave operator loopback bleed labeled as THEM).
     expect(body).toMatch(/if \(label\?\.echo\) return \{ echo: true/)
     expect(body).toMatch(/if \(label\) return \{ name: label\.name \}/)
-    expect(body).toMatch(/observeOperatorWindow\(p\.samples\)|observeOperatorAudio\(p\.samples\)/)
+    expect(body).toMatch(/await observeOperatorAudio\(p\.samples, speakerKey\)/)
     expect(body).toMatch(/return \{\}\s*\n\s*\}\)/)
   })
 
@@ -375,10 +374,13 @@ describe('speaker:embed — the Whisper-engine speaker-embedding tap (contract)'
       const start = indexSrc.indexOf(marker)
       expect(start, marker).toBeGreaterThan(-1)
       const body = indexSrc.slice(start, start + 2500)
-      expect(body).toMatch(/await labelThemAudio\(p\.samples\)/)
-      expect(body).toMatch(/await observeOperatorAudio\(p\.samples\)/)
+      expect(body).toMatch(/const speakerKey = captureLiveSpeakerKey\(p\.startedAt\)/)
+      expect(body).toMatch(/await labelThemAudio\(p\.samples, speakerKey, 'live'\)/)
+      expect(body).toMatch(/await observeOperatorAudio\(p\.samples, speakerKey\)/)
     }
-    expect(indexSrc).toMatch(/speakerFor:\s*async \(samples\) => \(await labelThemAudio\(samples, 'import'\)\)/)
+    expect(indexSrc).toMatch(
+      /speakerFor:\s*async\s*\(samples,\s*attempt\)\s*=>\s*\(await labelThemAudio\(samples, captureImportSpeakerKey\(attempt\), 'import'\)\)\?\.name \?\? null/
+    )
   })
 
   it('builds the speaker native host as a dedicated electron-vite entry', () => {
@@ -388,7 +390,7 @@ describe('speaker:embed — the Whisper-engine speaker-embedding tap (contract)'
 
   it('the preload bridges it with the same {samples, speaker} payload shape as parakeetFeed', () => {
     expect(preloadSrc).toMatch(
-      /speakerEmbed: \(samples: Float32Array, speaker: string\): Promise<\{ name\?: string; echo\?: boolean \}> =>\s*\n\s*ipcRenderer\.invoke\(IPC\.speakerEmbed, \{ samples, speaker \}\)/
+      /speakerEmbed: \(samples: Float32Array, speaker: string, startedAt\?: number\): Promise<\{ name\?: string; echo\?: boolean \}> =>[\s\S]*ipcRenderer\.invoke\(IPC\.speakerEmbed, \{ samples, speaker, startedAt \}\)/
     )
   })
 })
@@ -431,13 +433,15 @@ describe('the meeting-start boundary resets speaker session labels (MQA-043)', (
     const start = indexSrc.indexOf('ipcMain.handle(IPC.listeningState')
     expect(start).toBeGreaterThan(-1)
     const body = indexSrc.slice(start, start + 2500)
-    expect(body).toMatch(/onMeetingStart:\s*\(\)\s*=>\s*\{[\s\S]{0,1000}?speakerIdProcessingEnabled\(\)[\s\S]{0,200}?speakerIdInstance\?\.resetSession\(\)/)
+    expect(body).toMatch(/onMeetingStart:\s*\(\)\s*=>\s*\{[\s\S]{0,1600}?speakerIdInstance\?\.resetSession\(\)/)
   })
 
   it('resets it alongside the Dust conversation — one boundary, not two competing ones', () => {
     const start = indexSrc.indexOf('ipcMain.handle(IPC.listeningState')
     const body = indexSrc.slice(start, start + 2500)
-    expect(body.indexOf('resetDustConversation()')).toBeLessThan(body.indexOf('speakerIdProcessingEnabled()'))
+    expect(body).toMatch(
+      /onMeetingStart:\s*\(\)\s*=>[\s\S]{0,2000}(?:resetDustConversation\(\)[\s\S]{0,2000}speakerIdInstance\?\.resetSession\(\)|speakerIdInstance\?\.resetSession\(\)[\s\S]{0,2000}resetDustConversation\(\))/
+    )
   })
 })
 

@@ -1,8 +1,11 @@
 /** The small registration boundary that keeps the listening-stop IPC honest about native release. */
+import { ListeningStatePayloadSchema, type ListeningStatePayload } from '@shared/ipc'
 
 interface ListeningStateDependencies<Event> {
   assertMainWindow(event: Event): void
   requireAuth(): boolean
+  /** Main owns the one authoritative identity. Rejected transitions must have no lifecycle effects. */
+  acceptTransition(change: ListeningStatePayload): boolean
   setListeningActive(on: boolean): void
   setTrayRecording(on: boolean): void
   setRecordingPowerSaveBlock(on: boolean): void
@@ -18,7 +21,9 @@ export function createListeningStateHandler<Event>(
   return async (event, rawOn) => {
     dependencies.assertMainWindow(event)
     if (!dependencies.requireAuth()) return
-    const on = !!rawOn
+    const parsed = ListeningStatePayloadSchema.safeParse(typeof rawOn === 'boolean' ? { on: rawOn } : rawOn)
+    if (!parsed.success || !dependencies.acceptTransition(parsed.data)) return
+    const { on } = parsed.data
     dependencies.setListeningActive(on)
     dependencies.setTrayRecording(on)
     dependencies.setRecordingPowerSaveBlock(on)
