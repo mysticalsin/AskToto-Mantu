@@ -19,8 +19,8 @@ import {
   powerSaveBlocker,
   systemPreferences
 } from 'electron'
-import { join, basename, dirname, resolve, extname } from 'node:path'
-import { readFileSync, existsSync, writeFileSync, realpathSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync, mkdirSync, copyFileSync } from 'node:fs'
+import { join, basename, dirname, resolve } from 'node:path'
+import { readFileSync, existsSync, writeFileSync, readdirSync, unlinkSync, createReadStream, statSync, renameSync, rmdirSync, mkdirSync, copyFileSync } from 'node:fs'
 
 // Enterprise checkbox: DevTools stay reachable only where they are a development tool. No secret ever
 // reaches the renderer (publicSettings strips key material), but DevTools on a packaged build still
@@ -459,7 +459,7 @@ import {
   refreshDustOAuthSession
 } from './dust-oauth'
 import { asrManifestComplete } from './asr-manifest'
-import { isInsideResourceBase, realResourceBase } from './asr-model-path'
+import { createAsrModelProtocolHandler } from './asr-model-protocol'
 import { detectCli, setupCli, installCli, loginCli, prewarmCli, checkCliSession, connectCliSession } from './cli'
 import { connectMcp, pushToMcp } from './mcp/mcpClient'
 import { resolveWriteTargets } from './mcp/write-tools'
@@ -7784,16 +7784,12 @@ if (!app.requestSingleInstanceLock()) {
   // Maps asr-model://<host>/<pathname> → RES_BASE/<host>/<pathname> on disk.
   // This lets the Whisper worker (served over file://) use fetch() to load
   // bundled ONNX model weights and WASM blobs with zero network access.
-  // Path-traversal guard: the resolved target must stay within RES_BASE (separator-safe on Windows).
+  // Each host has its own canonical subtree; downloaded model assets use their own guarded root.
   runStep('asrModelProtocol', () => {
     const REPO_ROOT = join(__dirname, '..', '..')
     const RES_BASE = app.isPackaged
       ? process.resourcesPath
       : join(REPO_ROOT, 'resources')
-    // The traversal check below compares against the REAL base: request targets are realpath-resolved
-    // (symlink-escape guard), so an unresolved base would describe the same directory in different words
-    // and 403 every asset — see realResourceBase for the Windows-junction case this broke.
-    const RES_BASE_REAL = realResourceBase(RES_BASE)
 
     // A packaged app is ALWAYS offline-only, even if its installer is corrupt/incomplete. Returning true
     // keeps the worker's remote resolver disabled so missing assets fail locally (runtime then fetches
@@ -7820,85 +7816,11 @@ if (!app.requestSingleInstanceLock()) {
       return asrAssetsStatusSnapshot()
     })
 
-    protocol.handle('asr-model', async (req) => {
-      // The renderer/worker that calls fetch() here is loaded over file:// (a distinct origin from
-      // asr-model://), so this is a cross-origin request. registerSchemesAsPrivileged's corsEnabled just
-      // ADMITS the scheme to Chromium's CORS protocol — it does not exempt its responses from the CORS
-      // response check the way, say, a plain `file:` fetch is exempt. Every response below (success or
-      // error) carries an explicit Access-Control-Allow-Origin so a future CORS-sensitive caller of this
-      // scheme can't hit the same generic "TypeError: Failed to fetch" this app's real root cause (a
-      // corrupted default User-Agent — see cahe-edition.ts's initializeCaheEditionIdentity) was originally
-      // mistaken for.
-      const respond = (body: ConstructorParameters<typeof Response>[0], init: ResponseInit = {}): Response => {
-        const headers = new Headers(init.headers)
-        headers.set('Access-Control-Allow-Origin', '*')
-        return new Response(body, { ...init, headers })
-      }
-      try {
-        const url = new URL(req.url)
-        // Restrict to the two roots this protocol is meant to serve. Without this, app.asar and other
-        // resourcesPath siblings resolve inside RES_BASE too and would be served as raw source bytes.
-        if (url.host !== 'models' && url.host !== 'ort') return respond(null, { status: 403 })
-        // url.host = e.g. "models" or "ort"; url.pathname = e.g. "/Xenova/whisper-base/config.json"
-        const rel = decodeURIComponent(url.host + url.pathname)
-        const abs = resolve(RES_BASE, rel)
-        // Symlink escape guard: resolve symlinks to their real path before the traversal check.
-        // realpathSync throws ENOENT for non-existent paths → return 404.
-        let real: string
-        try {
-          real = realpathSync(abs)
-        } catch (e: unknown) {
-          if ((e as NodeJS.ErrnoException).code === 'ENOENT') {
-            // Incomplete installer: the same relative object may live in userData after auto-fetch.
-            try {
-              const fallbackAbs = resolve(userDataAsrRoot(), rel.replace(/^models\//, ''))
-              const fallbackReal = realpathSync(fallbackAbs)
-              const fallbackBase = realResourceBase(userDataAsrRoot())
-              if (isInsideResourceBase(fallbackBase, fallbackReal)) {
-                real = fallbackReal
-              } else {
-                return respond(null, { status: 404 })
-              }
-            } catch {
-              return respond(null, { status: 404 })
-            }
-          } else {
-            throw e
-          }
-        }
-        // Path-traversal guard (separator-safe on Windows): reject any path that escapes RES_BASE.
-        // Run the check against the real (symlink-resolved) path on BOTH sides, not the raw abs path.
-        if (!isInsideResourceBase(RES_BASE_REAL, real)) {
-          return respond(null, { status: 403 })
-        }
-        const resp = await net.fetch(pathToFileURL(real).toString())
-        const TYPES: Record<string, string> = {
-          '.mjs': 'text/javascript',
-          '.js': 'text/javascript',
-          '.wasm': 'application/wasm',
-          '.json': 'application/json',
-          '.onnx': 'application/octet-stream',
-          '.txt': 'text/plain'
-        }
-        const ct = TYPES[extname(real).toLowerCase()]
-        const headers = new Headers(resp.headers)
-        if (ct) headers.set('Content-Type', ct)
-        // net.fetch() against a file:// URL doesn't itself supply Content-Length, which makes
-        // transformers.js fall back to a growable buffer with a "Will expand buffer when needed" console
-        // warning on every load. RES_BASE files are trusted, already-realpath-resolved local disk reads —
-        // statSync here is cheap and lets the caller size its buffer up front.
-        if (!headers.has('Content-Length')) {
-          try {
-            headers.set('Content-Length', String(statSync(real).size))
-          } catch {
-            /* best-effort — a missing Content-Length just re-enables the growable-buffer path */
-          }
-        }
-        return respond(resp.body, { status: resp.status, statusText: resp.statusText, headers })
-      } catch {
-        return respond(null, { status: 500 })
-      }
-    })
+    protocol.handle('asr-model', createAsrModelProtocolHandler({
+      resourcesRoot: RES_BASE,
+      userModelsRoot: userDataAsrRoot(),
+      readLocal: (url) => net.fetch(url)
+    }))
   })
 
   // runStep is defined above (ahead of the display-media/permission/asr-model registrations so they can
