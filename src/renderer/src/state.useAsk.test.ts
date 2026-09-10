@@ -368,6 +368,41 @@ describe('useAsk completion and cancellation ownership', () => {
     toto = installTotoStub()
   })
 
+  it('settles a rejected start IPC as incomplete without exposing raw transport errors', async () => {
+    const rejected = Promise.reject(new Error('Synthetic private transport detail'))
+    void rejected.catch(() => undefined) // keep the RED focused on lifecycle rather than unhandled rejection
+    toto.ask.mockReturnValueOnce(rejected)
+    const view = renderAsk()
+    const id = view.result.run({ mode: 'recap' })
+    toto.__fireDelta({ id, text: 'Current partial ' })
+    toto.__fireDelta({ id, text: 'notes' }) // drain the pending frame too, not only the first token
+    await host.__settle()
+    expect(view.result.answer).toMatchObject({
+      id, text: 'Current partial notes', completion: 'incomplete', streaming: false,
+      error: 'Could not start the response. Please try again.'
+    })
+    expect(JSON.stringify(view.result.answer)).not.toContain('private transport detail')
+  })
+
+  it.each(['replace', 'clear', 'cancel', 'done'] as const)('ignores a late start rejection after %s', async (action) => {
+    let reject!: (reason: Error) => void
+    const pending = new Promise<void>((_resolve, fail) => { reject = fail })
+    void pending.catch(() => undefined)
+    toto.ask.mockReturnValueOnce(pending)
+    const view = renderAsk()
+    const id = view.result.run({ mode: 'recap' })
+    toto.__fireDelta({ id, text: 'Original notes' })
+    if (action === 'replace') view.result.run({ mode: 'answer' })
+    else if (action === 'clear') view.result.clear()
+    else if (action === 'cancel') view.result.cancel()
+    else toto.__fireDone({ id })
+    await host.__settle()
+    const expected = view.result.answer
+    reject(new Error('Late start rejection'))
+    await host.__settle()
+    expect(view.result.answer).toEqual(expected)
+  })
+
   it('marks a new run pending and only its matching done event complete', async () => {
     const view = renderAsk()
     const id = view.result.run({ mode: 'recap', prompt: 'current notes' })
