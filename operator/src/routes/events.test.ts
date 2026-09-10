@@ -82,6 +82,21 @@ function seat(overrides: Partial<SeatRow> & Pick<SeatRow, 'device_id'>): SeatRow
 }
 
 describe('GET /v1/admin/events.json', () => {
+  it('never uses hidden legacy text to select rows or produce a next-page cursor', async () => {
+    const store = memoryStore()
+    for (const kind of ['ask', 'crm', 'heartbeat']) {
+      await store.insertEvent({ id: `private-${kind}`, ts: NOW, kind, actor: null, device_id: 'dev-a', country: 'CA', detail: 'private albatross acquisition' })
+    }
+    const res = await handleRequest(
+      new Request('https://operator.test/v1/admin/events.json?q=albatross&limit=1'),
+      env(), { access: tonyAccess }, { store, now: NOW }
+    )
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { rows: unknown[]; nextCursor: string | null }
+    expect(body.rows).toEqual([])
+    expect(body.nextCursor).toBeNull()
+  })
+
   it('paginates via nextCursor and joins seat fields (hostname, email, os, appVersion)', async () => {
     const store = memoryStore()
     await store.upsertSeat(seat({ device_id: 'dev-a' }))

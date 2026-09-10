@@ -82,7 +82,10 @@ export function projectAskTelemetry(row: AskRow): AskRow {
   }
 }
 
+/** Shared by response projection and storage search: hidden text must not influence row selection. */
+export const PRIVATE_EVENT_DETAIL_KINDS: readonly string[] = ['ask', 'crm', 'heartbeat']
+
 /** Legacy client event detail was free text. Sensitive event kinds therefore retain only row metadata. */
 export function projectEventTelemetry(row: EventRow): EventRow {
-  return row.kind === 'ask' || row.kind === 'crm' || row.kind === 'heartbeat' ? { ...row, detail: null } : row
+  return PRIVATE_EVENT_DETAIL_KINDS.includes(row.kind) ? { ...row, detail: null } : row
 }
