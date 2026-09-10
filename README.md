@@ -42,7 +42,7 @@ consent tied to the bundle id) and the electron-updater continuity for existing 
 
 ## Install
 
-Grab the installer for your OS from the [Métis releases page](https://github.com/mysticalsin/AskToto-Mantu/releases):
+Grab the installer for your OS from the [Métis releases page](https://github.com/mysticalsin/Metis-Releases/releases):
 
 - **macOS Electron** — `Metis-<version>.dmg` (cross-platform overlay).
 - **macOS native** — `Metis-Native-<version>.zip` (SwiftUI / Apple Intelligence; unzip → `Metis.app`).

@@ -71,9 +71,23 @@ describe('isNewerVersion — manual release-feed compare (Settings → About →
 })
 
 describe('parseLatestRelease — GitHub latest-release payload → UpdateCheckResult', () => {
+  let restorePlatform: () => void
+
+  beforeEach(() => {
+    restorePlatform = pinPlatform('linux')
+  })
+
+  afterEach(() => {
+    restorePlatform()
+  })
+
   it('reports an available update with the feed-provided https release page', () => {
     const r = parseLatestRelease(
-      { tag_name: 'v1.3.0', html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v1.3.0' },
+      {
+        tag_name: 'v1.3.0',
+        html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v1.3.0',
+        assets: [{ name: 'Metis-1.3.0.dmg' }, { name: 'Metis-Setup-1.3.0.exe' }, { name: 'Metis-Native-1.3.0.zip' }]
+      },
       '1.2.0'
     )
     expect(r).toEqual({
@@ -86,14 +100,49 @@ describe('parseLatestRelease — GitHub latest-release payload → UpdateCheckRe
   })
 
   it('reports up-to-date when the feed tag equals (or is older than) the running version', () => {
-    expect(parseLatestRelease({ tag_name: 'v1.2.0', html_url: 'https://x.example/r' }, '1.2.0').available).toBe(false)
-    expect(parseLatestRelease({ tag_name: 'v1.1.9', html_url: 'https://x.example/r' }, '1.2.0').available).toBe(false)
+    expect(
+      parseLatestRelease(
+        {
+          tag_name: 'v1.2.0',
+          html_url: 'https://x.example/r',
+          assets: [{ name: 'Metis-1.2.0.dmg' }, { name: 'Metis-Setup-1.2.0.exe' }, { name: 'Metis-Native-1.2.0.zip' }]
+        },
+        '1.2.0'
+      ).available
+    ).toBe(false)
+    expect(
+      parseLatestRelease(
+        {
+          tag_name: 'v1.1.9',
+          html_url: 'https://x.example/r',
+          assets: [{ name: 'Metis-1.1.9.dmg' }, { name: 'Metis-Setup-1.1.9.exe' }, { name: 'Metis-Native-1.1.9.zip' }]
+        },
+        '1.2.0'
+      ).available
+    ).toBe(false)
   })
 
   it('falls back to the fixed releases page when html_url is missing or not https', () => {
     const fixed = 'https://github.com/mysticalsin/Metis-Releases/releases/latest'
-    expect(parseLatestRelease({ tag_name: 'v9.9.9' }, '1.2.0').url).toBe(fixed)
-    expect(parseLatestRelease({ tag_name: 'v9.9.9', html_url: 'javascript:alert(1)' }, '1.2.0').url).toBe(fixed)
+    expect(
+      parseLatestRelease(
+        {
+          tag_name: 'v9.9.9',
+          assets: [{ name: 'Metis-9.9.9.dmg' }, { name: 'Metis-Setup-9.9.9.exe' }, { name: 'Metis-Native-9.9.9.zip' }]
+        },
+        '1.2.0'
+      ).url
+    ).toBe(fixed)
+    expect(
+      parseLatestRelease(
+        {
+          tag_name: 'v9.9.9',
+          html_url: 'javascript:alert(1)',
+          assets: [{ name: 'Metis-9.9.9.dmg' }, { name: 'Metis-Setup-9.9.9.exe' }, { name: 'Metis-Native-9.9.9.zip' }]
+        },
+        '1.2.0'
+      ).url
+    ).toBe(fixed)
   })
 
   it('returns a clean error (never throws) on a payload without a version tag', () => {
@@ -112,30 +161,52 @@ describe('parseLatestRelease — GitHub latest-release payload → UpdateCheckRe
 
   it('full board Latest carries EXE + DMG + Native, not a partial upload', () => {
     expect(
-      latestReleaseHasApprovedInstallers({
-        tag_name: 'v1.8.4',
-        assets: [
-          { name: 'Metis-1.8.4.dmg' },
-          { name: 'Metis-Setup-1.8.4.exe' },
-          { name: 'Metis-Native-1.8.4.zip' }
-        ]
-      })
+      latestReleaseHasApprovedInstallers(
+        {
+          tag_name: 'v1.8.4',
+          assets: [
+            { name: 'Metis-1.8.4.dmg' },
+            { name: 'Metis-Setup-1.8.4.exe' },
+            { name: 'Metis-Native-1.8.4.zip' }
+          ]
+        },
+        '1.8.4',
+        'linux'
+      )
     ).toBe(true)
     expect(
-      latestReleaseHasApprovedInstallers({
-        tag_name: 'v1.8.4',
-        assets: [{ name: 'Metis-1.8.4.dmg' }]
-      })
+      latestReleaseHasApprovedInstallers(
+        {
+          tag_name: 'v1.8.4',
+          assets: [{ name: 'Metis-1.8.4.dmg' }]
+        },
+        '1.8.4',
+        'linux'
+      )
     ).toBe(false)
-    expect(latestReleaseHasApprovedInstallers({ tag_name: 'v1.8.4' })).toBe(false)
+    expect(latestReleaseHasApprovedInstallers({ tag_name: 'v1.8.4' }, '1.8.4', 'linux')).toBe(false)
   })
 })
 
 describe('checkForUpdateNow — never throws, always a human-readable result', () => {
+  let restorePlatform: () => void
+
+  beforeEach(() => {
+    restorePlatform = pinPlatform('linux')
+  })
+
+  afterEach(() => {
+    restorePlatform()
+  })
+
   it('resolves available:true from a healthy feed response', async () => {
     vi.mocked(net.fetch).mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ tag_name: 'v99.0.0', html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v99.0.0' })
+      json: async () => ({
+        tag_name: 'v99.0.0',
+        html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v99.0.0',
+        assets: [{ name: 'Metis-99.0.0.dmg' }, { name: 'Metis-Setup-99.0.0.exe' }, { name: 'Metis-Native-99.0.0.zip' }]
+      })
     } as unknown as Response)
     const r = await checkForUpdateNow()
     expect(r.ok).toBe(true)
@@ -212,7 +283,15 @@ describe('MQA-079 — blockedUpdateChannel guards the manual check, not just ini
   it('still checks the feed on an ordinary build (guard must not disable updates for everyone)', async () => {
     vi.mocked(net.fetch).mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ tag_name: 'v99.0.0', html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v99.0.0' })
+      json: async () => ({
+        tag_name: 'v99.0.0',
+        html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v99.0.0',
+        assets: [
+          { name: 'Metis-99.0.0.dmg' },
+          { name: 'Metis-99.0.0.zip' },
+          { name: 'latest-mac.yml' }
+        ]
+      })
     } as unknown as Response)
     const r = await checkForUpdateNow()
     expect(net.fetch).toHaveBeenCalledTimes(1)
@@ -334,7 +413,8 @@ describe('MQA-164 — a failed update download reaches the renderer', () => {
         tag_name: 'v99.0.0',
         draft: false,
         prerelease: false,
-        html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v99.0.0'
+        html_url: 'https://github.com/mysticalsin/Metis-Releases/releases/tag/v99.0.0',
+        assets: [{ name: 'Metis-99.0.0.dmg' }, { name: 'Metis-Setup-99.0.0.exe' }, { name: 'Metis-Native-99.0.0.zip' }]
       })
     } as unknown as Response)
     // updater.ts lazy-requires electron-updater (boot cost), which vi.mock cannot intercept — seed the

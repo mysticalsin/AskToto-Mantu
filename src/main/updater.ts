@@ -133,6 +133,16 @@ export function latestReleaseIsOfferable(payload: unknown): boolean {
   return true
 }
 
+function releaseAssetNames(payload: unknown): string[] {
+  const assets = (payload as { assets?: unknown } | null)?.assets
+  if (!Array.isArray(assets)) return []
+  return assets
+    .map((asset) => (asset as { name?: unknown } | null)?.name)
+    .filter((name): name is string => typeof name === 'string')
+    .map((name) => name.trim())
+    .filter((name) => name.length > 0)
+}
+
 /** Filenames a public Latest must carry (EXE + DMG + Native). Publish only after Bob QA + Ultron. */
 export const LATEST_REQUIRED_ASSET_PATTERNS = [
   /^Metis-\d+\.\d+\.\d+\.dmg$/,
@@ -141,16 +151,22 @@ export const LATEST_REQUIRED_ASSET_PATTERNS = [
 ] as const
 
 /** True when the GitHub Latest payload lists all three customer installers. */
-export function latestReleaseHasApprovedInstallers(payload: unknown): boolean {
-  if (!payload || typeof payload !== 'object') return false
-  const assets = (payload as { assets?: unknown }).assets
-  if (!Array.isArray(assets)) return false
-  const names = assets.map((a) =>
-    a && typeof a === 'object' && typeof (a as { name?: unknown }).name === 'string'
-      ? (a as { name: string }).name
-      : ''
-  )
-  return LATEST_REQUIRED_ASSET_PATTERNS.every((re) => names.some((n) => re.test(n)))
+export function latestReleaseHasApprovedInstallers(
+  payload: unknown,
+  version: string,
+  platform: NodeJS.Platform = process.platform
+): boolean {
+  const names = releaseAssetNames(payload)
+  const requirements =
+    platform === 'darwin'
+      ? [`Metis-${version}.dmg`, `Metis-${version}.zip`, 'latest-mac.yml']
+      : platform === 'win32'
+        ? [`Metis-Setup-${version}.exe`, 'latest.yml']
+        : LATEST_REQUIRED_ASSET_PATTERNS
+  if (requirements === LATEST_REQUIRED_ASSET_PATTERNS) {
+    return requirements.every((re) => names.some((n) => re.test(n)))
+  }
+  return requirements.every((required) => names.includes(required))
 }
 
 /** Pure: turn a GitHub "latest release" API payload into an UpdateCheckResult. Exported for tests. */
@@ -168,6 +184,13 @@ export function parseLatestRelease(payload: unknown, current: string): UpdateChe
     return { ok: false, current, error: 'The release feed returned no version tag.' }
   }
   const latest = tag.trim().replace(/^v/i, '')
+  if (!latestReleaseHasApprovedInstallers(payload, latest, process.platform)) {
+    return {
+      ok: false,
+      current,
+      error: 'The latest release is not yet fully published for this platform. Please try again after the next release upload.'
+    }
+  }
   return {
     ok: true,
     current,
