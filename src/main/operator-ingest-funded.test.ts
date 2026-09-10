@@ -12,6 +12,24 @@ vi.mock('./logger', () => ({
   auditLog: () => {}
 }))
 
+const metadata = vi.hoisted(() => {
+  const settings = {
+    operatorUrl: '', operatorIngestSecret: '', operatorTier: 'none', operatorEntitlements: null,
+    operatorEntitlementsAt: 0, operatorIntegrationsVersion: 0,
+    meetingsFolder: '/private/tmp/metis-operator-funded-metadata-never-read'
+  }
+  return {
+    settings,
+    getSettings: vi.fn(() => settings),
+    setSettings: vi.fn(),
+    authStatus: vi.fn(() => ({ signedIn: false })),
+    lastIndexedAt: vi.fn(() => 1_700_000_000_222)
+  }
+})
+vi.mock('./store', () => ({ getSettings: metadata.getSettings, setSettings: metadata.setSettings }))
+vi.mock('./auth', () => ({ authStatus: metadata.authStatus }))
+vi.mock('./brain/intelligence-index', () => ({ lastIndexedAt: metadata.lastIndexedAt }))
+
 import {
   fundedProvidersFromHeartbeat,
   operatorAskTransport,
@@ -27,6 +45,9 @@ describe('heartbeat fundedProviders — IDs only, never secrets', () => {
   // call, and a shared literal '/tmp' would leak queue state across test files and runs.
   let queueDir: string
   beforeEach(() => {
+    metadata.getSettings.mockClear()
+    metadata.authStatus.mockClear()
+    metadata.lastIndexedAt.mockClear()
     setOperatorFundedProvidersForTests([])
     setOperatorFetchForTests(null)
     queueDir = mkdtempSync(join(tmpdir(), 'operator-ingest-funded-test-'))
@@ -60,6 +81,7 @@ describe('heartbeat fundedProviders — IDs only, never secrets', () => {
     expect(beat.ok).toBe(true)
     expect(operatorFundedProviders()).toEqual(['anthropic'])
     expect(JSON.stringify(operatorFundedProviders())).not.toContain('ingest-secret')
+    expect(metadata.lastIndexedAt).toHaveBeenCalledWith(metadata.settings)
   })
 
   it('does not treat Access login HTML as a successful heartbeat', async () => {
