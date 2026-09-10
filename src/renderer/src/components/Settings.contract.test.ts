@@ -569,13 +569,15 @@ describe('Settings scroll root clips sideways overflow (Win Audio / AI)', () => 
 })
 
 describe('Operator control plane lives on Cloudflare, not in Settings', () => {
-  it('exposes Operator URL, ingest secret, Ask-text toggle, and Open Operator', () => {
+  it('exposes Operator URL, ingest secret, metadata-only privacy copy, and Open Operator', () => {
     expect(source).toMatch(/Operator URL/)
     expect(source).toMatch(/Ingest secret/)
-    expect(source).toMatch(/Send Ask text for skill improvement/)
+    expect(source).not.toMatch(/Send Ask text for skill improvement/)
+    expect(source).not.toMatch(/settings\.sendAskText/)
+    expect(source).toMatch(/Only operational metadata leaves this device/)
+    expect(source).toMatch(/Prompts, transcripts, screenshots, and CRM record details never send/)
     expect(source).toMatch(/Open Operator/)
     expect(source).toMatch(/operatorOpen/)
-    expect(source).toMatch(/Listen transcripts and screens never send/)
     expect(source).toMatch(/DEFAULT_OPERATOR_URL/)
     expect(source).toMatch(/operatorUrlConfigured/)
     expect(source).toMatch(/operatorUrlConfigured\(settings\) && <OperatorLicenseCard/)

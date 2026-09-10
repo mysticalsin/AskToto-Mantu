@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { OPERATOR_HMAC_HEADERS } from '@shared/operator-hmac'
 import {
   operatorFundedProviders,
   operatorHeartbeat,
@@ -13,7 +14,8 @@ import {
   setOperatorFundedProvidersForTests,
   setOperatorQueueDirForTests
 } from './operator-ingest'
-import { loadQueueState } from './operator-queue'
+import { enqueueOperatorItem, loadQueueState } from './operator-queue'
+import { signOperatorIngest } from './operator-hmac-sign'
 import { resetOperatorIntegrationsStateForTests, setOperatorIntegrationsFetchForTests } from './operator-integrations'
 
 vi.mock('electron', () => ({
@@ -60,10 +62,18 @@ const SETTINGS = {
   operatorIngestSecret: 'shared-secret-for-tests'
 }
 
-function captureFetch(): { calls: { url: string; body: Record<string, unknown> }[] } {
-  const calls: { url: string; body: Record<string, unknown> }[] = []
+type CapturedCall = { url: string; body: Record<string, unknown>; rawBody: string; headers: Headers }
+
+function captureFetch(): { calls: CapturedCall[] } {
+  const calls: CapturedCall[] = []
   setOperatorFetchForTests((async (input: string | URL | Request, init?: RequestInit) => {
-    calls.push({ url: String(input), body: JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown> })
+    const rawBody = String(init?.body ?? '{}')
+    calls.push({
+      url: String(input),
+      body: JSON.parse(rawBody) as Record<string, unknown>,
+      rawBody,
+      headers: new Headers(init?.headers)
+    })
     return new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } })
   }) as typeof fetch)
   return { calls }
@@ -109,7 +119,7 @@ describe('resolveQuestionType', () => {
 })
 
 describe('recordOperatorAsk question type', () => {
-  it('ships the type as a metric with Ask text ON and OFF; text only when ON', async () => {
+  it('ships only the type metric with Ask text ON and OFF, including a persisted legacy opt-in', async () => {
     const on = captureFetch()
     await recordOperatorAsk(
       { ...SETTINGS, sendAskText: true },
@@ -118,7 +128,8 @@ describe('recordOperatorAsk question type', () => {
     expect(on.calls).toHaveLength(1)
     expect(on.calls[0].url).toBe('https://operator.test/v1/ingest')
     expect(on.calls[0].body.questionType).toBe('how-to')
-    expect(on.calls[0].body.question).toBe('How do I rotate the ingest secret?')
+    expect(on.calls[0].body.question).toBeUndefined()
+    expect(JSON.stringify(on.calls[0].body)).not.toContain('rotate the ingest secret')
 
     const off = captureFetch()
     await recordOperatorAsk(
@@ -162,6 +173,7 @@ describe('recordOperatorAsk question type', () => {
     expect(q.items).toHaveLength(1)
     expect(q.items[0].path).toBe('/v1/ingest')
     expect(q.items[0].body).toMatchObject({ id: 'down-2', ts: 99 })
+    expect(q.items[0].body.question).toBeUndefined()
   })
 
   it('an error outcome carries a short error class, never assumed answered', async () => {
@@ -169,6 +181,22 @@ describe('recordOperatorAsk question type', () => {
     await recordOperatorAsk(SETTINGS, { id: 'err-1', outcome: 'error', error: 'transient', question: 'q' })
     expect(f.calls[0].body.outcome).toBe('error')
     expect(f.calls[0].body.error).toBe('transient')
+  })
+
+  it('signs the exact projected metadata body sent on the wire', async () => {
+    const f = captureFetch()
+    await recordOperatorAsk(
+      { ...SETTINGS, sendAskText: true },
+      { id: 'signed-ask', question: 'private words', outcome: 'answered', questionType: 'factual' }
+    )
+    const call = f.calls[0]
+    const ts = call.headers.get(OPERATOR_HMAC_HEADERS.ts) ?? ''
+    const nonce = call.headers.get(OPERATOR_HMAC_HEADERS.nonce) ?? ''
+    const device = call.headers.get(OPERATOR_HMAC_HEADERS.device) ?? ''
+    expect(call.headers.get(OPERATOR_HMAC_HEADERS.sig)).toBe(
+      signOperatorIngest(SETTINGS.operatorIngestSecret, ts, nonce, device, call.rawBody)
+    )
+    expect(call.rawBody).not.toContain('private words')
   })
 })
 
@@ -259,6 +287,47 @@ describe('operatorHeartbeat v2 seat fields + queue reporting', () => {
     }
   })
 
+  it('projects legacy queued poison again at signed send and drains unsupported shapes without transmitting them', async () => {
+    enqueueOperatorItem(
+      queueDir,
+      {
+        path: '/v1/ingest',
+        body: {
+          id: 'legacy-ask',
+          ts: 7,
+          outcome: 'error',
+          questionType: 'factual',
+          error: '401 for private customer URL https://private.example/acme',
+          question: 'private acquisition plan',
+          transcript: 'private meeting words',
+          body: { messages: [{ content: 'nested private poison' }] }
+        }
+      },
+      { retryAfterMs: 0 },
+      1
+    )
+    enqueueOperatorItem(
+      queueDir,
+      { path: '/v1/ingest', body: { event: 'future-event', id: 'unsupported-1', payload: 'private poison' } },
+      { retryAfterMs: 0 },
+      2
+    )
+
+    const f = captureFetch()
+    const beat = await operatorHeartbeat(SETTINGS)
+
+    expect(beat.ok).toBe(true)
+    expect(f.calls).toHaveLength(2)
+    expect(f.calls[0]).toMatchObject({
+      url: 'https://operator.test/v1/ingest',
+      body: { id: 'legacy-ask', ts: 7, outcome: 'error', questionType: 'factual', error: 'auth' }
+    })
+    expect(JSON.stringify(f.calls[0].body)).not.toContain('private')
+    expect(f.calls[1].url).toBe('https://operator.test/v1/heartbeat')
+    expect(f.calls[1].body.queued).toBe(0)
+    expect(loadQueueState(queueDir).items).toHaveLength(0)
+  })
+
   it('ships licenseId/licenseLast4 once an Operator license is activated, omits them otherwise', async () => {
     const bare = captureFetch()
     await operatorHeartbeat(SETTINGS)
@@ -315,6 +384,61 @@ describe('recordOperatorCrmSend credentialSource', () => {
     const f = captureFetch()
     await recordOperatorCrmSend(SETTINGS, { id: 'crm-local-1', status: 'success', connector: 'plane' })
     expect(f.calls[0].body.credentialSource).toBeUndefined()
+  })
+
+  it('never transmits the CRM title, action, meeting/remote references, or raw error text', async () => {
+    const f = captureFetch()
+    await recordOperatorCrmSend(SETTINGS, {
+      id: 'crm-private-1',
+      status: 'failed',
+      connector: 'plane',
+      title: 'Customer Alpha renewal',
+      meetingHash: 'abcdef0123456789',
+      action: 'create Customer Alpha opportunity',
+      remoteId: 'record-42',
+      remoteUrl: 'https://crm.example/record/42',
+      error: 'timeout posting Customer Alpha to https://crm.example/record/42',
+      attempt: 3,
+      latencyMs: 90
+    })
+    expect(f.calls[0].body).toMatchObject({
+      event: 'crm',
+      id: 'crm-private-1',
+      status: 'failed',
+      connector: 'plane',
+      attempt: 3,
+      latencyMs: 90,
+      error: 'transient'
+    })
+    expect(f.calls[0].body).not.toHaveProperty('title')
+    expect(f.calls[0].body).not.toHaveProperty('meetingHash')
+    expect(f.calls[0].body).not.toHaveProperty('action')
+    expect(f.calls[0].body).not.toHaveProperty('remoteId')
+    expect(f.calls[0].body).not.toHaveProperty('remoteUrl')
+    expect(JSON.stringify(f.calls[0].body)).not.toContain('Customer Alpha')
+  })
+
+  it('persists only projected CRM metadata when a retryable send fails', async () => {
+    setOperatorFetchForTests((async () => {
+      throw new Error('ECONNREFUSED')
+    }) as typeof fetch)
+    await recordOperatorCrmSend(SETTINGS, {
+      id: 'crm-queued-private',
+      status: 'failed',
+      connector: 'plane',
+      title: 'Customer Alpha renewal',
+      remoteId: 'record-42',
+      remoteUrl: 'https://crm.example/record/42',
+      error: 'Customer Alpha could not be written',
+      attempt: 2
+    })
+
+    const queued = loadQueueState(queueDir).items[0].body
+    expect(queued).toMatchObject({ event: 'crm', id: 'crm-queued-private', status: 'failed', attempt: 2, error: 'unknown' })
+    expect(queued).not.toHaveProperty('title')
+    expect(queued).not.toHaveProperty('remoteId')
+    expect(queued).not.toHaveProperty('remoteUrl')
+    expect(JSON.stringify(queued)).not.toContain('Customer Alpha')
   })
 })
 

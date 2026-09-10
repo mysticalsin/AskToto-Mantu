@@ -1368,7 +1368,7 @@ export const BaseSettingsSchema = z.object({
     .refine((v) => v === '' || /^https:\/\//i.test(v), 'Operator URL must be an https:// URL')
     .default(''),
   operatorIngestSecret: z.string().default(''),
-  sendAskText: z.boolean().default(true),
+  sendAskText: z.boolean().default(false),
   // Operator-issued seat license (METIS-OP-1, PLAN.md P2.2b). The pasted token is stored verbatim — it
   // rides in the same settings.json blob as operatorIngestSecret above, so it gets the same at-rest
   // encryption (store.ts's ATKENC2/safeStorage backend) without a bespoke secret store. Only the jti
@@ -1656,7 +1656,7 @@ export const DEFAULT_SETTINGS: Settings = {
   trialStartedAt: null,
   operatorUrl: '',
   operatorIngestSecret: '',
-  sendAskText: true,
+  sendAskText: false,
   operatorLicenseToken: '',
   operatorLicenseJti: '',
   operatorLicenseLast4: '',

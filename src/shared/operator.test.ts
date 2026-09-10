@@ -9,6 +9,7 @@ import {
   mapAnthropicUsage,
   mapOpenAIUsage,
   operatorUrlConfigured,
+  projectOperatorIngestMetadata,
   shouldSendAskText,
   unsupportedCacheUsage
 } from './operator'
@@ -151,13 +152,128 @@ describe('operatorUrlConfigured', () => {
     expect(operatorUrlConfigured({}, { METIS_OPERATOR_URL: '   ' })).toBe(true)
   })
 
-  it('sends Ask text only once an explicit URL is set (not bare DEFAULT or whitespace)', () => {
+  it('never sends Ask text, including persisted legacy opt-ins and managed explicit URLs', () => {
     const url = { operatorUrl: 'https://metis-operator.example.workers.dev' }
-    expect(shouldSendAskText(url)).toBe(true)
+    expect(shouldSendAskText(url)).toBe(false)
+    expect(shouldSendAskText({ ...url, sendAskText: true })).toBe(false)
     expect(shouldSendAskText({ ...url, sendAskText: false })).toBe(false)
     expect(shouldSendAskText({ sendAskText: true })).toBe(false)
     expect(shouldSendAskText({})).toBe(false)
     expect(shouldSendAskText({ operatorUrl: '   ', sendAskText: true })).toBe(false)
+  })
+})
+
+describe('projectOperatorIngestMetadata', () => {
+  it('projects an Ask through a positive metadata schema and classifies raw errors', () => {
+    const projected = projectOperatorIngestMetadata({
+      id: 'ask-123',
+      ts: 123,
+      mode: 'answer',
+      skillId: 'how-to',
+      skillVersion: '2.1.0',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      ttftMs: 42,
+      totalMs: 91,
+      inputTokens: 10,
+      outputTokens: 4,
+      cacheRead: 7,
+      cacheWrite: 2,
+      cacheUncached: 1,
+      cacheStatus: 'hit',
+      cacheTtl: '1h',
+      outcome: 'error',
+      questionType: 'how-to',
+      error: '401 from https://private.example/customer/acme',
+      seatHash: 'seat-abc',
+      os: 'darwin',
+      appVersion: '1.8.9',
+      hostname: 'tonys-mac',
+      ssoEmail: 'tony@example.com',
+      license: 'licensed',
+      licenseId: 'abcdef0123456789',
+      licenseLast4: 'Z9Z9',
+      lastIndexAt: 100,
+      question: 'private acquisition plan',
+      transcript: 'private meeting transcript',
+      screenshot: { text: 'private screen' },
+      body: { messages: [{ content: 'nested private words' }] },
+      arbitrary: { secret: 'nested poison' }
+    })
+
+    expect(projected).toEqual({
+      id: 'ask-123',
+      ts: 123,
+      mode: 'answer',
+      skillId: 'how-to',
+      skillVersion: '2.1.0',
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      ttftMs: 42,
+      totalMs: 91,
+      inputTokens: 10,
+      outputTokens: 4,
+      cacheRead: 7,
+      cacheWrite: 2,
+      cacheUncached: 1,
+      cacheStatus: 'hit',
+      cacheTtl: '1h',
+      outcome: 'error',
+      questionType: 'how-to',
+      error: 'auth',
+      seatHash: 'seat-abc',
+      os: 'darwin',
+      appVersion: '1.8.9',
+      hostname: 'tonys-mac',
+      ssoEmail: 'tony@example.com',
+      license: 'licensed',
+      licenseId: 'abcdef0123456789',
+      licenseLast4: 'Z9Z9',
+      lastIndexAt: 100
+    })
+    expect(JSON.stringify(projected)).not.toContain('private')
+  })
+
+  it('keeps CRM operational status/counts but drops all customer record references', () => {
+    expect(
+      projectOperatorIngestMetadata({
+        event: 'crm',
+        id: 'crm-123',
+        ts: 456,
+        status: 'failed',
+        connector: 'plane',
+        attempt: 2,
+        latencyMs: 78,
+        credentialSource: 'operator',
+        error: 'timeout posting Customer Alpha to https://crm.example/record/42',
+        title: 'Customer Alpha renewal',
+        meetingHash: 'abcdef0123456789',
+        action: 'create Customer Alpha opportunity',
+        remoteId: 'record-42',
+        remoteUrl: 'https://crm.example/record/42',
+        payload: { description: 'customer notes' }
+      })
+    ).toEqual({
+      event: 'crm',
+      id: 'crm-123',
+      ts: 456,
+      status: 'failed',
+      connector: 'plane',
+      attempt: 2,
+      latencyMs: 78,
+      credentialSource: 'operator',
+      error: 'transient'
+    })
+  })
+
+  it('fails closed for unsupported events and malformed required identifiers', () => {
+    expect(projectOperatorIngestMetadata({ event: 'future-event', id: 'future-1', body: 'private' })).toBeNull()
+    expect(projectOperatorIngestMetadata({ event: 'rating', id: 'contains private words', rating: 'up' })).toBeNull()
+    expect(projectOperatorIngestMetadata({ event: 'crm', id: 'crm-1', status: 'made-up' })).toBeNull()
+    expect(projectOperatorIngestMetadata({ id: 'ask-unknown-error', outcome: 'error', error: 'Customer Alpha failed' })).toMatchObject({
+      id: 'ask-unknown-error',
+      error: 'unknown'
+    })
   })
 })
 
