@@ -1,4 +1,5 @@
 import type { TranscriptLine } from '@shared/ipc'
+import type { RecapStatus } from '@shared/recap-status'
 
 // Shared by the live recap path (listen.ts's text()) and the saved-meeting recap path (App.tsx's
 // generateSavedRecap, fed either an import's returned lines or a reopened past meeting's lines) — one
@@ -25,20 +26,52 @@ export function transcriptToText(lines: TranscriptLine[]): string {
   return out.join('\n')
 }
 
-// Persist-on-settle decision for the App-level recap generator (recapGen): returns the {file, text} to
-// write via recallUpdateRecap only once a run has fully SETTLED with a real, non-empty summary — i.e. not
-// streaming, no error, and non-empty text. A null target (no generation in flight), a still-streaming
-// answer, an errored settle, or a null answer all resolve to null so the caller knows there is nothing to
-// persist yet (the caller still clears recapGenTarget on an errored settle; it just doesn't write here).
+export interface RecapPersistTarget {
+  /** Meeting start id for a live recap, or the saved filename for a past-meeting generation. */
+  ownerId: string
+  runId: string
+  file: string | null
+  /** Text already known to belong to this exact target. Used only when a retry returns no new text. */
+  priorText: string
+}
+
+export interface RecapPersistAction {
+  ownerId: string
+  runId: string
+  file: string | null
+  text: string
+  recapStatus: RecapStatus
+}
+
+/**
+ * Convert one terminal recap answer into an owned persistence action. Completion is never inferred from
+ * length or the absence of an error: only the hook's explicit terminal outcome can produce a write, and
+ * only a non-empty explicit completion is `complete`. A failed/hollow retry keeps the baseline captured
+ * from this exact target, so useful partial notes survive without borrowing carried text from another run.
+ */
 export function recapPersistAction(
-  answer: { text: string; streaming: boolean; error: string | null } | null,
-  target: { file: string } | null
-): { file: string; text: string } | null {
+  answer: {
+    id: string
+    text: string
+    streaming: boolean
+    error: string | null
+    completion?: 'pending' | 'complete' | 'incomplete'
+  } | null,
+  target: RecapPersistTarget | null,
+  currentOwnerId: string
+): RecapPersistAction | null {
   if (!target || !answer) return null
-  if (answer.streaming) return null
-  // Trailing stream errors after a finished summary used to block persist (and blank Notes on disk).
-  // Keep substantial streamed text — same 200-char bar as import-recap / live ask keep-threshold.
-  if (answer.error && answer.text.trim().length < 200) return null
-  if (!answer.text.trim()) return null
-  return { file: target.file, text: answer.text }
+  if (target.ownerId !== currentOwnerId || target.runId !== answer.id) return null
+  if (answer.streaming || answer.completion === 'pending' || !answer.completion) return null
+
+  const hasCurrentText = !!answer.text.trim()
+  const recapStatus: RecapStatus =
+    answer.completion === 'complete' && hasCurrentText && !answer.error ? 'complete' : 'incomplete'
+  return {
+    ownerId: target.ownerId,
+    runId: target.runId,
+    file: target.file,
+    text: hasCurrentText ? answer.text : target.priorText,
+    recapStatus
+  }
 }

@@ -52,7 +52,7 @@ describe('MQA-030 — a keyless profile\'s auto-saved transcript is reachable by
   })
 
   it('saveMeetingNow resolves to the path it wrote so a live caller can pin it', () => {
-    const saveMeetingNowBlock = blockBetween('const saveMeetingNow = useCallback(', '// Forward reference for startListen')
+    const saveMeetingNowBlock = blockBetween('const saveMeetingNow = useCallback(', '// Same durable save, but for a meeting')
     expect(saveMeetingNowBlock).toMatch(/\): Promise<string \| null> =>/)
     expect(saveMeetingNowBlock).toMatch(/const r = await window\.toto\.saveTranscript\(payload\)\s*\n\s*return r\.path/)
   })

@@ -116,7 +116,7 @@ describe('MQA-071 — a meeting can only be persisted once, even inside the save
   })
 
   it('saveMeetingNow takes the claim before its first await and releases it only on give-up', () => {
-    const block = blockBetween('const saveMeetingNow = useCallback(', 'const saveMeetingNowRef')
+    const block = blockBetween('const saveMeetingNow = useCallback(', '// Same durable save, but for a meeting')
     const body = code(block)
     // Claimed synchronously — after the guard, before window.toto.saveTranscript is ever awaited.
     const claimAt = body.indexOf('claimedSavesRef.current.add(id)')
@@ -133,7 +133,8 @@ describe('MQA-072 — a refused recap write is never treated as a successful one
   const block = blockBetween('const owningId = recapGenId', '// Settled with an error, or with nothing at all')
 
   it('captures recallUpdateRecap’s result instead of discarding it', () => {
-    expect(block).toMatch(/const r = await window\.toto\.recallUpdateRecap\(action\.file, action\.text\)/)
+    expect(block).toMatch(/const outcome = await recapWriteCoordinatorRef\.current\.write/)
+    expect(block).toMatch(/const r = outcome\.value/)
     // The bug verbatim: a bare await, so every {ok:false} fell through to the success path.
     expect(code(block)).not.toMatch(/^\s*await window\.toto\.recallUpdateRecap/m)
   })

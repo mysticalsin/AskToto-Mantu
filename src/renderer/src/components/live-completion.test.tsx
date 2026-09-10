@@ -40,4 +40,52 @@ describe('partial completion error presentation', () => {
     expect(html).toContain(error)
     expect(html).toContain('Retry summary')
   })
+
+  it('keeps a short partial meeting summary visible with its retry action', () => {
+    const short = 'Decision: retry.'
+    const html = renderToStaticMarkup(
+      <Review lines={[]} mode="meeting" startedAt={1} savedPath={null} saveError={null}
+        recap={{ id: 'short', prompt: '', text: short, streaming: false, error }}
+        onOpenFolder={() => {}} onRetryRecap={() => {}} />
+    )
+    expect(html).toContain(short)
+    expect(html).toContain(error)
+    expect(html).toContain('Retry summary')
+  })
+
+  it('shows reopened incomplete notes with fixed local copy, Retry, and edit/export actions', () => {
+    const html = renderToStaticMarkup(
+      <Review lines={[]} mode="meeting" startedAt={1} savedPath="meeting.md" saveError={null}
+        recap={{ id: 'past', prompt: '', text: 'Short partial', streaming: false, error: null }}
+        recapStatus="incomplete" isPastMeeting onOpenFolder={() => {}} onRetryRecap={() => {}} />
+    )
+    expect(html).toContain('Short partial')
+    expect(html).toContain('This summary may be incomplete. Review it before using it, or retry.')
+    expect(html).toContain('Retry summary')
+    expect(html).toContain('Copy Summary')
+    expect(html).toContain('Edit')
+    expect(html).toContain('Export JSON')
+  })
+
+  it('shows an empty explicit incomplete recap as terminal and retryable, never still writing', () => {
+    const html = renderToStaticMarkup(
+      <Review lines={[{ speaker: 'you', text: 'Captured speech', t: 1 }]}
+        mode="meeting" startedAt={1} savedPath={null} saveError={null}
+        recap={{ id: 'empty', prompt: '', text: '', streaming: false, error: null, completion: 'incomplete' }}
+        recapStatus="incomplete" onOpenFolder={() => {}} onRetryRecap={() => {}} />
+    )
+    expect(html).toContain('This summary may be incomplete. Review it before using it, or retry.')
+    expect(html).toContain('Retry summary')
+    expect(html).not.toContain('data-agent-status="writing"')
+  })
+
+  it('keeps manual transcript Save available when no recap run owns the meeting', () => {
+    const html = renderToStaticMarkup(
+      <Review lines={[{ speaker: 'you', text: 'Captured speech', t: 1 }]}
+        mode="meeting" startedAt={1} savedPath={null} saveError={null} recap={null}
+        onOpenFolder={() => {}} onSave={() => {}} />
+    )
+    expect(html).toContain('>Save</span>')
+    expect(html).not.toContain('disabled=""')
+  })
 })
