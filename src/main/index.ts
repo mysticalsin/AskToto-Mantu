@@ -1413,10 +1413,18 @@ function initializeImportJobs(): void {
     finalizeSpeakers: () => getSpeakerId().finalizeSession(),
     // Polish is skipped on import: sequential batches of 8 with a 120s idle made one meeting take
     // forever before the summary. Recap writes first. Cheap polish can be run later if needed.
-    // Free the whisper helper's model memory between imports; the next job spawns a fresh child.
+    // Free both ASR helpers' model memory between imports; the next job spawns fresh children.
     // Import idle may start one Intelligence pass (not a BrainView mount timer).
     onIdle: () => {
       stopWhisperHost()
+      // A live meeting may share the Parakeet helper after the import queue empties. Do not tear it
+      // down out from under that owner; if listening begins during release, the generation gate makes
+      // the first live request wait for the exact old child exit before starting a replacement.
+      if (!listeningActive) {
+        void parakeetRelease().catch((e) =>
+          mainLog.error('[parakeet] import-idle release failed:', e)
+        )
+      }
       void runIntelligenceIndex('import-idle').catch((e) =>
         mainLog.error('[intelligence-index] import-idle pass failed:', e)
       )
@@ -5300,13 +5308,13 @@ function registerIpc(): void {
   })
 
   // --- Parakeet ASR engine ---
-  // Parakeet (on-device, main-process). Whisper stays the renderer default; these only run when the user
+  // Parakeet (on-device, isolated utility process). Whisper stays the renderer default; these only run when the user
   // selects the Parakeet engine. All wrapped so a failure degrades to Whisper rather than breaking Listen.
-  ipcMain.handle(IPC.parakeetStatus, (e) => {
+  ipcMain.handle(IPC.parakeetStatus, async (e) => {
     assertMainWindow(e)
     // addonError surfaces WHY the engine isn't ready (native addon missing for this platform/build) as
     // distinct from "bundled model assets missing" — Settings reads this to show an actionable message.
-    return { ready: parakeetModelReady(), addonError: parakeetAddonError() }
+    return { ready: parakeetModelReady(), addonError: await parakeetAddonError() }
   })
   ipcMain.handle(IPC.parakeetEnsure, async (e) => {
     assertMainWindow(e)
@@ -7242,7 +7250,7 @@ function registerIpc(): void {
   })
 
   // --- Listening state (tray icon + Dust conversation reset + power-save block) ---
-  ipcMain.handle(IPC.listeningState, (e, on: unknown) => {
+  ipcMain.handle(IPC.listeningState, async (e, on: unknown) => {
     assertMainWindow(e)
     if (!requireAuth()) return
     listeningActive = !!on // fresh-question boundary (askStart) is suspended while a meeting is live
@@ -7250,8 +7258,8 @@ function registerIpc(): void {
     setRecordingPowerSaveBlock(!!on)
     // A new meeting starting is the one clean boundary for Dust conversation continuity — everything
     // from here until the NEXT meeting starts shares one conversation (see resetDustConversation).
-    // It's also the clean boundary to free Parakeet's ~487MB native recognizer between meetings/on idle,
-    // instead of leaving it resident in the main process for the rest of the app's life.
+    // It's also the clean boundary to terminate Parakeet's native helper between meetings/on idle,
+    // releasing its model memory before another helper generation can start.
     if (on) {
       resetDustConversation()
       // MQA-043: the same boundary must reset Speaker Intelligence's session labels. speaker-id.ts only
@@ -7274,7 +7282,9 @@ function registerIpc(): void {
           baseAgent
         )
       }
-    } else parakeetRelease()
+    } else {
+      await parakeetRelease()
+    }
   })
 
   // --- Window management ---

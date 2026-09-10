@@ -95,12 +95,10 @@ describe('bundled Parakeet runtime', () => {
     expect(source).toMatch(/ensureParakeetAssets/)
   })
 
-  it('MQA-285 — ensureParakeetModel constructs the recognizer so first Listen is not a cold sherpa load', () => {
+  it('keeps sherpa construction out of the parent module', () => {
     const source = readFileSync(join(__dirname, 'parakeet.ts'), 'utf8')
-    const fn = source.slice(
-      source.indexOf('export async function ensureParakeetModel'),
-      source.indexOf('function getRecognizer')
-    )
-    expect(fn).toMatch(/getRecognizer\(\)/)
+    expect(source).not.toMatch(/require\(['"]sherpa-onnx-node['"]\)/)
+    expect(source).not.toMatch(/new\s+\w*\.OfflineRecognizer/)
+    expect(source).toMatch(/utilityProcess\.fork/)
   })
 })
