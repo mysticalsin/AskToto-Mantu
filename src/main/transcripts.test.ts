@@ -19,6 +19,7 @@ import {
   readSavedFile,
   isEncryptedFile,
   parseRecapMarkdown,
+  recapSectionKey,
   recapMarkdownToHtml,
   saveDraftTranscript,
   clearDraftTranscript,
@@ -758,6 +759,60 @@ describe('recoverOrphanDrafts (crash-recovery promotion)', () => {
 })
 
 describe('parseRecapMarkdown', () => {
+  it.each(['constructor', '__proto__', '__definegetter__', 'hasownproperty'])('keeps the unknown heading %s as text, never an inherited alias', (heading) => {
+    expect(recapSectionKey(heading)).toBe(heading)
+  })
+
+  it('keeps French sections in the same structured fields without translating their content', () => {
+    const md = [
+      '## Titre : Préparation du lancement',
+      '## Étiquettes : budget, lancement',
+      '## Vue d’ensemble : Le budget reste à confirmer.',
+      '## Sujets abordés',
+      '- Calendrier du lancement',
+      '## Questions-réponses clés',
+      '- Quelle date ? Vendredi.',
+      '## Décisions',
+      '- Attendre la validation',
+      '## Actions à mener',
+      '- Envoyer le document (Alice)',
+      '- Confirmer le budget d’ici vendredi — Bruno',
+      '## Questions ouvertes',
+      '- Qui valide le budget ?',
+      '## Citations notables',
+      '- « Nous attendons la validation. »'
+    ].join('\r\n')
+    const recap = parseRecapMarkdown(md)
+    expect(recap).toMatchObject({
+      title24: 'Préparation du lancement',
+      tags: ['budget', 'lancement'],
+      overview: 'Le budget reste à confirmer.',
+      topics: ['Calendrier du lancement'],
+      keyQA: ['Quelle date ? Vendredi.'],
+      decisions: ['Attendre la validation'],
+      actionItems: [
+        { text: 'Envoyer le document', owner: 'Alice', dueDateText: null },
+        { text: 'Confirmer le budget d’ici vendredi', owner: 'Bruno', dueDateText: null }
+      ],
+      openQuestions: ['Qui valide le budget ?'],
+      notableQuotes: ['« Nous attendons la validation. »'],
+      markdown: md
+    })
+  })
+
+  it('recognizes decomposed accents and French next steps without inventing an action from none', () => {
+    const md = '## Re\u0301sume\u0301 : Rien à décider.\n## Prochaines étapes\n- Aucune.\n## Décisions\n- Néant.\n## Questions ouvertes\nAucun.\n'
+    expect(parseRecapMarkdown(md)).toMatchObject({ overview: 'Rien à décider.', actionItems: [], decisions: [], openQuestions: [], markdown: md })
+    expect(parseRecapMarkdown('## Prochaines étapes\n- Relire le contrat')).toMatchObject({
+      actionItems: [{ text: 'Relire le contrat', owner: null, dueDateText: null }]
+    })
+  })
+
+  it('uses a mode Outcome when no standard overview is present without overriding an overview', () => {
+    expect(parseRecapMarkdown('## Outcome: Agreed to review the proposal.').overview).toBe('Agreed to review the proposal.')
+    expect(parseRecapMarkdown('## Overview: Primary overview.\n## Outcome: Additional detail.').overview).toBe('Primary overview.')
+  })
+
   const SAMPLE = [
     '## Title:',
     'Q3 launch budget',
