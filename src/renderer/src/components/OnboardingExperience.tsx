@@ -87,6 +87,11 @@ import {
 } from '../lib/onboarding-flow'
 import { appearanceSettingsPatch, seedOnboardingAppearance } from '../lib/onboarding-appearance'
 import { onboardingReadinessCopy } from '../lib/onboarding-readiness-copy'
+import {
+  createOnboardingCompletionFlow,
+  persistOnboardingCompletion,
+  type OnboardingCompletionState
+} from '../lib/onboarding-completion'
 import { createOnboardingMusicBed, haltAllOnboardingAudio, lockOnboardingAudio } from '../lib/onboarding-music'
 import { closeOnboardingPortal, disposePortalAudio, playBarLand, playPortalOpen, requestBarLand } from '../lib/onboarding-portal'
 import {
@@ -681,7 +686,7 @@ function ActReady({
   onRetryAsr
 }: {
   mode: ConversationMode
-  onFinish: () => Promise<void>
+  onFinish: () => Promise<boolean>
   onOpenAiSettings?: () => void
   asrReady: boolean
   aiReady: boolean
@@ -690,16 +695,16 @@ function ActReady({
   showAsrRetry: boolean
   onRetryAsr: () => void
 }): JSX.Element {
-  const [busy, setBusy] = useState(false)
+  const [completion, setCompletion] = useState<OnboardingCompletionState>({ busy: false, error: null })
+  const completionFlowRef = useRef<ReturnType<typeof createOnboardingCompletionFlow> | null>(null)
+  if (!completionFlowRef.current) completionFlowRef.current = createOnboardingCompletionFlow(setCompletion)
   const persona = ONBOARDING_PERSONAS.find((p) => p.id === (mode as OnboardingPersonaId))
-  const blocked = busy || !asrReady
+  const blocked = completion.busy || !asrReady
   const readinessCopy = onboardingReadinessCopy(asrReady, aiReady)
 
-  const finishAndOpenAiSettings = async (): Promise<void> => {
-    if (blocked) return
-    setBusy(true)
-    await onFinish()
-    onOpenAiSettings?.()
+  const attemptFinish = (afterSuccess?: () => void): void => {
+    if (!asrReady) return
+    void completionFlowRef.current?.attempt(onFinish, afterSuccess)
   }
 
   return (
@@ -754,21 +759,26 @@ function ActReady({
       )}
       <button
         type="button"
-        onClick={() => void onFinish()}
+        onClick={() => attemptFinish()}
         disabled={blocked}
         className={'onboard-cta no-drag focus-ring' + (blocked ? ' onboard-cta--muted' : '')}
       >
-        Get started
+        {completion.busy ? 'Saving…' : 'Get started'}
       </button>
       {onOpenAiSettings && (
         <button
           type="button"
-          onClick={() => void finishAndOpenAiSettings()}
+          onClick={() => attemptFinish(onOpenAiSettings)}
           disabled={blocked}
           className="no-drag focus-ring text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)] disabled:opacity-50"
         >
           {readinessCopy.aiAction}
         </button>
+      )}
+      {completion.error && (
+        <p role="alert" className="m-0 max-w-[360px] text-[11px] leading-snug text-[color:var(--color-danger)]">
+          {completion.error}
+        </p>
       )}
     </div>
   )
@@ -1082,17 +1092,24 @@ export function OnboardingExperience({
   // Act 6 (Ready, MQA-283): this is now the narrative's actual finish — invoked from the Ready scene's
   // CTA, not personalize's Start (which now only advances to license/appearance, see sceneAfterPersonalize).
   // Returns a promise so Ready's optional provider link can await it before opening Settings.
-  const finish = async (): Promise<void> => {
-    if (doneRef.current || !canMarkOnboardingDone({ scene, asrReady, consent })) return
+  const finish = async (): Promise<boolean> => {
+    if (doneRef.current || !canMarkOnboardingDone({ scene, asrReady, consent })) return false
     doneRef.current = true
-    lockOnboardingAudio()
-    haltAllOnboardingAudio()
-    music.stop()
-    disposePortalAudio()
-    await closeOnboardingPortal(music.muted, prefersReducedMotion())
-    playBarLand(music.muted)
-    requestBarLand()
-    await onDone({ mode, recordingConsent: true })
+    try {
+      lockOnboardingAudio()
+      haltAllOnboardingAudio()
+      music.stop()
+      disposePortalAudio()
+      await closeOnboardingPortal(music.muted, prefersReducedMotion())
+      playBarLand(music.muted)
+      requestBarLand()
+      await onDone({ mode, recordingConsent: true })
+      return true
+    } catch (error) {
+      doneRef.current = false
+      document.querySelector('.onboard-stage')?.classList.remove('onboard-stage--portal-close')
+      throw error
+    }
   }
 
   const { scanDone, allReady } = summarizeSetupRows(rows)
@@ -1485,7 +1502,7 @@ export function OnboardingV2({
   settings: PublicSettings
   saveKey?: (provider: ProviderId, k: string) => Promise<void>
   recoverEncryptedProfile?: () => Promise<ProfileRecoveryResult>
-  patch: (p: Partial<PublicSettings>) => void
+  patch: (p: Partial<PublicSettings>) => void | Promise<void>
   onOpenAiSettings?: () => void
   onDone: () => void
   signedIn?: boolean
@@ -1499,8 +1516,11 @@ export function OnboardingV2({
       onDone={async ({ mode, recordingConsent }) => {
         lockOnboardingAudio()
         haltAllOnboardingAudio()
-        await patch({ mode, recordingConsent, onboardingDone: true, onboardingDoneAt: Date.now() })
-        onDone()
+        await persistOnboardingCompletion({
+          settingsPatch: { mode, recordingConsent, onboardingDone: true, onboardingDoneAt: Date.now() },
+          patch,
+          onCompleted: onDone
+        })
       }}
     />
   )

@@ -20,7 +20,9 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
   })
 
   it('OnboardingV2 marks onboardingDone itself inside the experience\'s onDone, not via a provider phase', () => {
-    expect(experienceSrc).toMatch(/onboardingDone: true, onboardingDoneAt: Date\.now\(\)/)
+    expect(experienceSrc).toMatch(/await persistOnboardingCompletion\(\{/)
+    expect(experienceSrc).toMatch(/mode, recordingConsent, onboardingDone: true, onboardingDoneAt: Date\.now\(\)/)
+    expect(experienceSrc).toMatch(/onCompleted: onDone/)
   })
 
   it('there is no Skip path and the live tree does not mount legacy Onboarding.tsx', () => {
@@ -54,6 +56,20 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
     expect(experienceSrc).toMatch(/asrReady=\{asrReady\}/)
     expect(experienceSrc).toMatch(/aiReady=\{settings\?\.providerReady === true\}/)
   })
+
+  it('routes both Ready actions through one retry-safe completion path', () => {
+    expect(experienceSrc).toMatch(/createOnboardingCompletionFlow/)
+    expect(experienceSrc).toMatch(/onClick=\{\(\) => attemptFinish\(\)\}/)
+    expect(experienceSrc).toMatch(/onClick=\{\(\) => attemptFinish\(onOpenAiSettings\)\}/)
+    expect(experienceSrc).not.toMatch(/onClick=\{\(\) => void onFinish\(\)\}/)
+    expect(experienceSrc).toMatch(/role="alert"/)
+  })
+
+  it('reopens the Ready stage when the awaited save rejects', () => {
+    expect(experienceSrc).toMatch(
+      /catch \(error\) \{\s*doneRef\.current = false\s*document\.querySelector\('\.onboard-stage'\)\?\.classList\.remove\('onboard-stage--portal-close'\)/
+    )
+  })
 })
 
 describe('MQA-283 — Ready\'s honest empty-state line (Métis\'s equivalent of "restart your sessions")', () => {
@@ -81,9 +97,9 @@ describe('MQA-283 — adding a personal AI provider from Ready is optional, neve
   })
 
   it('the Get started CTA never depends on onOpenAiSettings, or on any provider state at all', () => {
-    const ctaMatch = experienceSrc.match(/onClick=\{\(\) => void onFinish\(\)\}\s*\n\s*disabled=\{blocked\}/)
+    const ctaMatch = experienceSrc.match(/onClick=\{\(\) => attemptFinish\(\)\}\s*\n\s*disabled=\{blocked\}/)
     expect(ctaMatch).not.toBeNull()
-    expect(experienceSrc).toMatch(/const blocked = busy \|\| !asrReady/)
+    expect(experienceSrc).toMatch(/const blocked = completion\.busy \|\| !asrReady/)
   })
 })
 
