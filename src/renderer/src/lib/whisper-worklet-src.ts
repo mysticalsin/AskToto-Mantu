@@ -36,9 +36,20 @@ class WhisperWorklet extends AudioWorkletProcessor {
     this.buf = new Float32Array(MAX_SAMPLES)
     this.fill = 0
     this.partialSent = false
+    this.sealed = false
     this.vad = makeVad()
     this.port.onmessage = (e) => {
-      if (e.data === 'flush') this.emit() // stop(): flush whatever's buffered before teardown
+      if (e.data === 'flush') {
+        this.emit() // pause(): reset the partial buffer without ending the channel
+        return
+      }
+      if (e.data?.type === 'seal-and-flush' && typeof e.data.requestId === 'string') {
+        // Seal first so process() can never append audio after this exact stop boundary. MessagePort
+        // preserves sender order: any final audio emit is observed before its matching acknowledgement.
+        this.sealed = true
+        this.emit()
+        this.port.postMessage({ type: 'flush-ack', requestId: e.data.requestId })
+      }
     }
   }
   keepable(n) {
@@ -65,6 +76,7 @@ class WhisperWorklet extends AudioWorkletProcessor {
     this.port.postMessage({ audio: chunk, partial: false }, [chunk.buffer])
   }
   process(inputs) {
+    if (this.sealed) return true
     const input = inputs[0]
     if (!input || !input[0] || input[0].length === 0) return true
     const data = input[0]

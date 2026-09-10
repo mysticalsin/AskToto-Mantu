@@ -22,7 +22,9 @@ describe('mic-only capture degradation stays visible', () => {
     expect(listen).toMatch(/side: micOk \? 'them' : 'you', note, permission: micOk && isSysPermDenied/)
     // Reset on every fresh start and on final teardown — a stale flag must not leak across sessions.
     expect(listen).toMatch(/error: null, captureDegraded: null, listening: true, paused: false/)
-    expect(listen).toMatch(/listening: false, capturing: false, paused: false, loading: false, error: null, captureDegraded: null/)
+    expect(listen).toMatch(
+      /listening: false,\n {12}capturing: false,\n {12}paused: false,\n {12}loading: false,\n {12}error,\n {12}captureDegraded: null/
+    )
   })
 
   it('mid-session recovery of the them channel clears the start-time mic-only note (was left stuck)', () => {
