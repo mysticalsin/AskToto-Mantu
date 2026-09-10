@@ -360,6 +360,194 @@ describe('live incomplete responses preserve buffered partial text', () => {
   })
 })
 
+describe('useAsk completion and cancellation ownership', () => {
+  let toto: TotoStub
+
+  beforeEach(() => {
+    host.__reset()
+    toto = installTotoStub()
+  })
+
+  it('marks a new run pending and only its matching done event complete', async () => {
+    const view = renderAsk()
+    const id = view.result.run({ mode: 'recap', prompt: 'current notes' })
+    await host.__settle()
+    expect(view.result.answer).toMatchObject({ id, completion: 'pending', streaming: true, error: null })
+    toto.__fireDone({ id: 'another-request' })
+    await host.__settle()
+    expect(view.result.answer?.completion).toBe('pending')
+    toto.__fireDelta({ id, text: 'Completed notes' })
+    toto.__fireDone({ id })
+    await host.__settle()
+    expect(view.result.answer).toMatchObject({ id, text: 'Completed notes', completion: 'complete', streaming: false })
+  })
+
+  it('drains the current pending frame before marking an error incomplete', async () => {
+    const view = renderAsk()
+    const id = view.result.run({ mode: 'summary' })
+    await host.__settle()
+    toto.__fireDelta({ id, text: 'Partial ' })
+    toto.__fireDelta({ id, text: 'buffered notes' })
+    toto.__fireError({ id, message: 'The remote host aborted the response.' })
+    await host.__settle()
+    expect(view.result.answer).toMatchObject({
+      id, text: 'Partial buffered notes', completion: 'incomplete', streaming: false,
+      error: 'The remote host aborted the response.'
+    })
+  })
+
+  it('marks a local failure incomplete and resets its error and completion on the next run', async () => {
+    const view = renderAsk()
+    const failed = view.result.fail('No provider available', 'Setup')
+    await host.__settle()
+    expect(view.result.answer).toMatchObject({ id: failed, completion: 'incomplete', error: 'No provider available' })
+    const id = view.result.run({ mode: 'answer' })
+    await host.__settle()
+    expect(view.result.answer).toMatchObject({ id, completion: 'pending', error: null })
+    toto.__fireDone({ id })
+    await host.__settle()
+    expect(view.result.answer).toMatchObject({ id, completion: 'complete', error: null, text: '' })
+  })
+
+  it('returns the current buffered cancellation snapshot synchronously and rejects IPC reentrancy', async () => {
+    const view = renderAsk()
+    const id = view.result.run({ mode: 'recap' })
+    await host.__settle()
+    toto.__fireDelta({ id, text: 'Current ' })
+    toto.__fireDelta({ id, text: 'unpainted tail' })
+    toto.cancel.mockImplementation(() => {
+      toto.__fireDelta({ id, text: ' LATE' })
+      toto.__fireMeta({ id, provider: 'anthropic', tier: 'deep' })
+      toto.__fireDone({ id })
+      toto.__fireError({ id, message: 'Late error' })
+      return Promise.resolve()
+    })
+    const snapshot = view.result.cancel()
+    expect(snapshot).toMatchObject({ id, text: 'Current unpainted tail', completion: 'incomplete', streaming: false, error: null })
+    await host.__settle()
+    expect(view.result.answer).toEqual(snapshot)
+    expect(view.result.answer?.provider).toBeUndefined()
+    toto.__fireDelta({ id, text: ' STILL LATE' })
+    toto.__fireMeta({ id, provider: 'anthropic', tier: 'deep' })
+    toto.__fireDone({ id })
+    toto.__fireError({ id, message: 'Still late error' })
+    await host.__settle()
+    expect(view.result.answer).toEqual(snapshot)
+  })
+
+  it.each(['recap', 'summary'] as const)('does not return carried previous-answer text when %s is cancelled before output', async (mode) => {
+    const view = renderAsk()
+    const previous = view.result.run({ mode: 'answer' })
+    await host.__settle()
+    toto.__fireDelta({ id: previous, text: 'Unrelated previous answer' })
+    toto.__fireDone({ id: previous })
+    await host.__settle()
+    const id = view.result.run({ mode })
+    const snapshot = view.result.cancel()
+    expect(snapshot).toMatchObject({ id, text: '', completion: 'incomplete', streaming: false })
+    await host.__settle()
+    expect(view.result.answer).toEqual(snapshot)
+  })
+
+  it('preserves ordinary answer carry-over when cancelled before new output', async () => {
+    const view = renderAsk()
+    const previous = view.result.run({ mode: 'answer' })
+    await host.__settle()
+    toto.__fireDelta({ id: previous, text: 'Previous answer stays visible' })
+    toto.__fireDone({ id: previous })
+    await host.__settle()
+    const id = view.result.run({ mode: 'answer' })
+    const snapshot = view.result.cancel()
+    expect(snapshot).toMatchObject({ id, text: 'Previous answer stays visible', completion: 'incomplete' })
+    await host.__settle()
+    expect(view.result.answer).toEqual(snapshot)
+  })
+
+  it.each(['done', 'error', 'cancel'] as const)('preserves fast first-mount tokens when %s arrives before the first paint', async (terminal) => {
+    const view = renderAsk()
+    const id = view.result.run({ mode: 'recap' })
+    toto.__fireDelta({ id, text: 'Fast ' })
+    toto.__fireDelta({ id, text: 'current notes' })
+    if (terminal === 'done') toto.__fireDone({ id })
+    else if (terminal === 'error') toto.__fireError({ id, message: 'Interrupted' })
+    else expect(view.result.cancel()).toMatchObject({ id, text: 'Fast current notes', completion: 'incomplete' })
+    await host.__settle()
+    expect(view.result.answer).toMatchObject({
+      id, text: 'Fast current notes', streaming: false,
+      completion: terminal === 'done' ? 'complete' : 'incomplete'
+    })
+  })
+
+  it('clear invalidates before IPC and stays empty after same-stack run and cancellation', async () => {
+    const view = renderAsk()
+    const id = view.result.run({ mode: 'recap' })
+    toto.__fireDelta({ id, text: 'Pending notes' })
+    toto.cancel.mockImplementation(() => {
+      toto.__fireDelta({ id, text: 'Late notes' })
+      toto.__fireMeta({ id, provider: 'anthropic', tier: 'deep' })
+      toto.__fireError({ id, message: 'Late error' })
+      toto.__fireDone({ id })
+      return Promise.resolve()
+    })
+    view.result.clear()
+    expect(view.result.cancel()).toBeNull()
+    await host.__settle()
+    expect(view.result.answer).toBeNull()
+  })
+
+  it('returns an empty new-request cancellation snapshot before paint and cannot resurrect it after clear', async () => {
+    const view = renderAsk()
+    const id = view.result.run({ mode: 'recap', prompt: 'current meeting' })
+    const snapshot = view.result.cancel()
+    expect(snapshot).toMatchObject({ id, text: '', completion: 'incomplete', streaming: false, prompt: 'current meeting' })
+    view.result.clear()
+    expect(view.result.cancel()).toBeNull()
+    toto.__fireDelta({ id, text: 'Late text' })
+    toto.__fireDone({ id })
+    await host.__settle()
+    expect(view.result.answer).toBeNull()
+    expect(snapshot).toMatchObject({ id, text: '', completion: 'incomplete' })
+  })
+
+  it('late events from a replaced request cannot affect its replacement, even during cancellation IPC', async () => {
+    const view = renderAsk()
+    const old = view.result.run({ mode: 'recap' })
+    await host.__settle()
+    toto.__fireDelta({ id: old, text: 'Old notes' })
+    toto.cancel.mockImplementation(() => {
+      toto.__fireDelta({ id: old, text: ' contaminating tail' })
+      toto.__fireDone({ id: old })
+      return Promise.resolve()
+    })
+    const id = view.result.run({ mode: 'recap' })
+    toto.__fireDelta({ id, text: 'Replacement notes' })
+    toto.__fireError({ id: old, message: 'Old failure' })
+    toto.__fireMeta({ id: old, provider: 'anthropic', tier: 'deep' })
+    await host.__settle()
+    expect(view.result.answer).toMatchObject({ id, text: 'Replacement notes', completion: 'pending', error: null })
+    expect(view.result.answer?.provider).toBeUndefined()
+  })
+
+  it.each(['done', 'error'] as const)('does not change a settled %s outcome on later cancel or duplicate callbacks', async (terminal) => {
+    const view = renderAsk()
+    const id = view.result.run({ mode: 'recap' })
+    await host.__settle()
+    toto.__fireDelta({ id, text: 'Current notes' })
+    if (terminal === 'done') toto.__fireDone({ id })
+    else toto.__fireError({ id, message: 'Interrupted' })
+    await host.__settle()
+    const settled = view.result.answer
+    expect(view.result.cancel()).toEqual(settled)
+    toto.__fireDelta({ id, text: ' LATE' })
+    toto.__fireMeta({ id, provider: 'anthropic', tier: 'deep' })
+    toto.__fireDone({ id })
+    toto.__fireError({ id, message: 'Late failure' })
+    await host.__settle()
+    expect(view.result.answer).toEqual(settled)
+    expect(toto.cancel).not.toHaveBeenCalled()
+  })
+})
+
 describe('MQA-182 — a request that produced nothing stops claiming it viewed the screen', () => {
   let toto: TotoStub
 

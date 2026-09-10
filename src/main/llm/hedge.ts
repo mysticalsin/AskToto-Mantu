@@ -22,9 +22,9 @@ export type HedgeLeg = 'primary' | 'hedge'
  *
  * Every provider strategy already suppresses its own onDone/onError once `.abort()` is called (e.g.
  * openai.ts's `if (controller.signal.aborted) return` before calling onError) — the same contract the
- * renderer's own cancel path already relies on (state.ts's cancelledIdsRef doc comment: "a genuinely
- * cancelled stream never emits either"). So declaring a winner and aborting the loser is enough to keep
- * the loser silent for good.
+ * renderer's cancel path now supplements by detaching its active request before cancellation IPC.
+ * Declaring a winner and aborting the loser therefore stops provider output; the race gate also rejects
+ * any late losing callbacks as described below.
  *
  * The two things that alone can't guarantee:
  *  - A leg that fails for a REAL reason (not an abort) before either leg has a token must still be free
