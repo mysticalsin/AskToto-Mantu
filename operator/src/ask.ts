@@ -133,11 +133,15 @@ function deltaFromPayload(parsed: Record<string, unknown>): string {
   return ''
 }
 
-function bufferedText(data: unknown): { text: string; input?: number; output?: number } | null {
+function bufferedResult(
+  provider: string,
+  data: unknown
+): { text: string; finishReason?: string; input?: number; output?: number } | null {
   if (!data || typeof data !== 'object') return null
   const body = data as {
     content?: unknown
-    choices?: { message?: { content?: unknown } }[]
+    choices?: { message?: { content?: unknown }; finish_reason?: unknown }[]
+    stop_reason?: unknown
     usage?: Record<string, unknown>
   }
   let text = ''
@@ -153,9 +157,31 @@ function bufferedText(data: unknown): { text: string; input?: number; output?: n
   } else if (typeof body.choices?.[0]?.message?.content === 'string') {
     text = body.choices[0].message.content.trim()
   }
-  if (!text) return null
   const usage = usageFromPayload(body as Record<string, unknown>)
-  return { text, input: usage.input, output: usage.output }
+  const rawReason = provider === 'anthropic' ? body.stop_reason : body.choices?.[0]?.finish_reason
+  return {
+    text,
+    ...(typeof rawReason === 'string' ? { finishReason: rawReason } : {}),
+    input: usage.input,
+    output: usage.output
+  }
+}
+
+function streamFinishReason(provider: string, parsed: Record<string, unknown>): string | undefined {
+  if (provider === 'anthropic') {
+    if (parsed.type !== 'message_delta' || !parsed.delta || typeof parsed.delta !== 'object') return undefined
+    const reason = (parsed.delta as { stop_reason?: unknown }).stop_reason
+    return typeof reason === 'string' ? reason : undefined
+  }
+  const choices = parsed.choices
+  if (!Array.isArray(choices)) return undefined
+  const reason = (choices[0] as { finish_reason?: unknown } | undefined)?.finish_reason
+  return typeof reason === 'string' ? reason : undefined
+}
+
+function isNaturalCompletion(provider: string, finishReason: string | undefined): finishReason is string {
+  if (provider === 'anthropic') return finishReason === 'end_turn' || finishReason === 'stop_sequence'
+  return finishReason === 'stop'
 }
 
 function sseResponse(
@@ -170,12 +196,35 @@ function sseResponse(
 ): Response {
   const encoder = new TextEncoder()
   const decoder = new TextDecoder()
+  let upstreamReader: ReadableStreamDefaultReader<Uint8Array> | null = null
+  let inputTokens: number | undefined
+  let outputTokens: number | undefined
+  let outcome = 'answered'
+  let cancelled = false
+  let persisted = false
+
+  const persist = async () => {
+    if (persisted) return
+    persisted = true
+    try {
+      await persistProxyAsk(store, {
+        deviceId,
+        now,
+        provider: req.provider,
+        model: req.model,
+        inputTokens,
+        outputTokens,
+        outcome
+      })
+    } catch {
+      /* metering must never fail the seat stream */
+    }
+  }
+
   const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      let inputTokens: number | undefined
-      let outputTokens: number | undefined
-      let outcome = 'answered'
+    start(controller) {
       const send = (obj: unknown): boolean => {
+        if (cancelled) return false
         const line = sseLine(obj)
         if (leaked(line, secret, cipher, iv)) {
           outcome = 'error'
@@ -185,67 +234,169 @@ function sseResponse(
         controller.enqueue(encoder.encode(line))
         return true
       }
-      try {
-        const ctype = upstream.headers.get('content-type') || ''
-        if (!upstream.body || !ctype.includes('text/event-stream')) {
-          const parsed = bufferedText(await upstream.json().catch(() => null))
-          if (!parsed) {
-            outcome = 'error'
-            send({ t: 'error', message: 'provider returned an empty answer' })
+
+      const incomplete = (finishReason: string) => {
+        outcome = 'error'
+        send({
+          t: 'error',
+          message: 'Provider response was incomplete. Please retry.',
+          status: 'incomplete',
+          finishReason,
+          retryable: true
+        })
+      }
+
+      const pump = async () => {
+        try {
+          const ctype = upstream.headers.get('content-type') || ''
+          if (!upstream.body || !ctype.includes('text/event-stream')) {
+            if (!upstream.body) {
+              incomplete('malformed_payload')
+              return
+            }
+            upstreamReader = upstream.body.getReader()
+            let raw = ''
+            for (;;) {
+              const { done, value } = await upstreamReader.read()
+              if (done) break
+              raw += decoder.decode(value, { stream: true })
+            }
+            raw += decoder.decode()
+            const data = (() => {
+              try {
+                return JSON.parse(raw) as unknown
+              } catch {
+                return null
+              }
+            })()
+            const parsed = bufferedResult(req.provider, data)
+            if (!parsed) {
+              incomplete('malformed_payload')
+              return
+            }
+            inputTokens = parsed.input
+            outputTokens = parsed.output
+            if (parsed.text && !send({ t: 'delta', text: parsed.text })) return
+            if (!parsed.text.trim()) {
+              incomplete('empty_output')
+              return
+            }
+            if (!isNaturalCompletion(req.provider, parsed.finishReason)) {
+              incomplete(parsed.finishReason ?? 'unexpected_eof')
+              return
+            }
+            send({
+              t: 'done',
+              status: 'complete',
+              finishReason: parsed.finishReason,
+              inputTokens,
+              outputTokens
+            })
             return
           }
-          inputTokens = parsed.input
-          outputTokens = parsed.output
-          if (parsed.text && !send({ t: 'delta', text: parsed.text })) return
-          send({ t: 'done', inputTokens, outputTokens })
-          return
-        }
-        const reader = upstream.body.getReader()
-        let buf = ''
-        for (;;) {
-          const { done, value } = await reader.read()
-          if (done) break
-          buf += decoder.decode(value, { stream: true })
-          const parts = buf.split('\n')
-          buf = parts.pop() ?? ''
-          for (const raw of parts) {
+
+          upstreamReader = upstream.body.getReader()
+          let buf = ''
+          let finishReason: string | undefined
+          let sawAnthropicStop = false
+          let substantiveOutput = false
+          let malformedPayload = false
+
+          const processLine = (raw: string): boolean => {
             const trimmed = raw.trim()
-            if (!trimmed.startsWith('data:')) continue
+            if (!trimmed.startsWith('data:')) return true
             const payload = trimmed.slice(5).trim()
-            if (!payload || payload === '[DONE]') continue
+            if (!payload || payload === '[DONE]') return true
             let parsed: Record<string, unknown>
             try {
               parsed = JSON.parse(payload) as Record<string, unknown>
             } catch {
-              continue
+              malformedPayload = true
+              return true
             }
             const usage = usageFromPayload(parsed)
             if (usage.input != null) inputTokens = usage.input
             if (usage.output != null) outputTokens = usage.output
+            const reason = streamFinishReason(req.provider, parsed)
+            if (reason) finishReason = reason
+            if (req.provider === 'anthropic' && parsed.type === 'message_stop') sawAnthropicStop = true
             const text = deltaFromPayload(parsed)
-            if (text && !send({ t: 'delta', text })) return
+            if (text.trim()) substantiveOutput = true
+            return !text || send({ t: 'delta', text })
+          }
+
+          for (;;) {
+            const { done, value } = await upstreamReader.read()
+            if (done) break
+            buf += decoder.decode(value, { stream: true })
+            const parts = buf.split('\n')
+            buf = parts.pop() ?? ''
+            for (const raw of parts) {
+              if (!processLine(raw)) {
+                await upstreamReader.cancel('blocked output')
+                return
+              }
+            }
+          }
+          buf += decoder.decode()
+          if (buf && !processLine(buf)) return
+
+          if (!substantiveOutput) {
+            incomplete('empty_output')
+            return
+          }
+          if (malformedPayload) {
+            incomplete('malformed_payload')
+            return
+          }
+          if (!isNaturalCompletion(req.provider, finishReason)) {
+            incomplete(finishReason ?? 'unexpected_eof')
+            return
+          }
+          if (req.provider === 'anthropic' && !sawAnthropicStop) {
+            incomplete(finishReason)
+            return
+          }
+          send({ t: 'done', status: 'complete', finishReason, inputTokens, outputTokens })
+        } catch {
+          if (!cancelled) {
+            outcome = 'error'
+            send({
+              t: 'error',
+              message: 'Operator cannot issue a use',
+              status: 'incomplete',
+              finishReason: 'stream_error',
+              retryable: true
+            })
+          }
+        } finally {
+          try {
+            upstreamReader?.releaseLock()
+          } catch {
+            /* upstream reader is already released */
+          }
+          await persist()
+          if (!cancelled) {
+            try {
+              controller.close()
+            } catch {
+              /* downstream already closed */
+            }
           }
         }
-        send({ t: 'done', inputTokens, outputTokens })
-      } catch {
-        outcome = 'error'
-        send({ t: 'error', message: 'Operator cannot issue a use' })
-      } finally {
-        try {
-          await persistProxyAsk(store, {
-            deviceId,
-            now,
-            provider: req.provider,
-            model: req.model,
-            inputTokens,
-            outputTokens,
-            outcome
-          })
-        } catch {
-          /* metering must never fail the seat stream */
-        }
-        controller.close()
       }
+
+      void pump()
+    },
+    async cancel(reason) {
+      cancelled = true
+      outcome = 'error'
+      try {
+        await upstreamReader?.cancel(reason)
+      } catch {
+        /* cancellation is best effort */
+      }
+      await persist()
     }
   })
   return new Response(stream, { status: 200, headers: SSE_HEADERS })
