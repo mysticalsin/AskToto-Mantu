@@ -446,6 +446,9 @@ describe('runCliStream — Windows .cmd-shim teardown ordering', () => {
     h.spawnImpl.mockReset()
     fsp.mkdtemp.mockReset()
     fsp.rm.mockReset()
+    // This suite stubs win32 on every host. Hide real HOME/.local/bin candidates so Tony's native
+    // Codex install cannot bypass the mocked `where.exe` result and silently skip the .cmd-shim guard.
+    binProbe.hit = false
     h.execFileImpl.mockResolvedValue({ stdout: 'C:\\npm\\codex.cmd\r\n', stderr: '' })
     fsp.mkdtemp.mockResolvedValue(TMP_CWD)
     fsp.rm.mockResolvedValue(undefined)
@@ -453,7 +456,10 @@ describe('runCliStream — Windows .cmd-shim teardown ordering', () => {
     // failed assertion below rather than as an unhandled TypeError on undefined.
     h.spawnImpl.mockReturnValue(fakeChild().child)
   })
-  afterEach(() => Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true }))
+  afterEach(() => {
+    binProbe.hit = null
+    Object.defineProperty(process, 'platform', { value: REAL_PLATFORM, configurable: true })
+  })
 
   // MQA-050: an abort delivered before spawn() returns left the whole cmd.exe → codex tree running —
   // spawn got no signal on this path, and the listener that would have taskkill'd it was attached to
@@ -492,6 +498,8 @@ describe('runCliStream — Windows .cmd-shim teardown ordering', () => {
       handlers: { onDelta: vi.fn(), onDone: vi.fn(), onError }
     })
 
+    await vi.waitFor(() => expect(h.execFileImpl).toHaveBeenCalled())
+    expect(await resolveBin('codex')).toBe('C:\\npm\\codex.cmd')
     await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(1))
 
     expect(h.spawnImpl).not.toHaveBeenCalled()
