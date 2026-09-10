@@ -321,18 +321,22 @@ export function aiRowStatus(
   return { state: 'action', detail: 'not configured yet' }
 }
 
-/** Act 3 on-device model row. Never a dead missing-weights state. RAM-gated says so. */
+/** Optional local AI is distinct from the required on-device transcription assets. */
 export function localModelRowStatus(
   model:
     | Pick<LocalModelSummary, 'ready' | 'unavailableReason' | 'downloadProgress' | 'minTotalRamGB'>
     | null
-    | undefined
+    | undefined,
+  enabled = true,
+  allowed = true
 ): { state: SetupRowState; detail: string; progress?: number } {
+  if (!allowed) return { state: 'skipped', detail: 'Optional local AI is restricted by your organization.' }
+  if (!enabled) return { state: 'skipped', detail: 'Optional local AI is off. Enable it in Settings when you need it.' }
   if (!model) return { state: 'checking', detail: '' }
   if (model.unavailableReason === 'insufficient-ram') {
     return {
       state: 'blocked',
-      detail: `This Mac needs at least ${model.minTotalRamGB} GB of memory for the on-device model.`
+      detail: `This device needs at least ${model.minTotalRamGB} GB of memory for the on-device model.`
     }
   }
   if (model.unavailableReason === 'insufficient-disk') {
@@ -835,6 +839,8 @@ export function OnboardingExperience({
   settings,
   patch
 }: OnboardingExperienceProps): JSX.Element {
+  const settingsRef = useRef(settings)
+  settingsRef.current = settings
   const music = useOnboardingMusic()
   const heroVideoRef = useRef<HTMLVideoElement>(null)
   const playHero = (): void => {
@@ -966,16 +972,13 @@ export function OnboardingExperience({
       const ai = aiRowStatus(settings)
       set('ai', ai.state, ai.detail)
       const models = await window.toto.localModelsList().catch(() => [])
+      const current = settingsRef.current
       const local =
-        models.find((m) => m.unavailableReason === 'downloading') ??
-        models.find((m) => m.id === settings?.localLlm.modelId) ??
-        models[0]
-      // Boot starts the fetch in whenReady; if that was skipped or not yet visible, kick it here so
-      // the mandatory tour does not sit on "Starting…" forever. Does not require Local AI enabled.
-      if (local?.unavailableReason === 'not-downloaded' || local?.unavailableReason === 'download-failed') {
-        void window.toto.localModelsEnsure().catch(() => {})
-      }
-      const lm = localModelRowStatus(local)
+        models.find((m) => m.id === current?.localLlm.modelId)
+      // Observe only. Boot and an explicit Local AI opt-in own provisioning; setup must never start
+      // optional multi-GB downloads while local AI is off or retry errors on every poll.
+      const lm = current ? localModelRowStatus(local, current.localLlm.enabled,
+        !current.allowedProviders || current.allowedProviders.includes('local')) : { state: 'checking' as const, detail: '' }
       set('local', lm.state, lm.detail, lm.progress)
     })()
     return () => {
@@ -994,14 +997,10 @@ export function OnboardingExperience({
       const asrStatusNow = await window.toto.asrAssetsStatus().catch(() => null)
       if (!live) return
       if (asrStatusNow) setAsrStatus(asrStatusNow)
-      const local =
-        models.find((m) => m.unavailableReason === 'downloading') ??
-        models.find((m) => m.id === settings?.localLlm.modelId) ??
-        models[0]
-      if (local?.unavailableReason === 'not-downloaded') {
-        void window.toto.localModelsEnsure().catch(() => {})
-      }
-      const lm = localModelRowStatus(local)
+      const current = settingsRef.current
+      const local = models.find((m) => m.id === current?.localLlm.modelId)
+      const lm = current ? localModelRowStatus(local, current.localLlm.enabled,
+        !current.allowedProviders || current.allowedProviders.includes('local')) : { state: 'checking' as const, detail: '' }
       const asr = asrStatusNow ? asrAssetsRowStatus(asrStatusNow) : null
       setRows((rs) =>
         rs.map((r) => {

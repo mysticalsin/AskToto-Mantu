@@ -218,6 +218,24 @@ describe('MQA-279 — Act 3 (Config) AI-readiness row must never claim ready bef
 })
 
 describe('Act 3 on-device model row', () => {
+  it('does not show loading or block setup when optional local AI is off', () => {
+    const row = localModelRowStatus({ ready: false, unavailableReason: 'not-downloaded', minTotalRamGB: 8 }, false)
+    expect(row.state).toBe('skipped')
+    expect(row.detail).toMatch(/optional.*off/i)
+    expect(row.progress).toBeUndefined()
+  })
+
+  it('does not claim an organization-restricted model is downloading', () => {
+    const row = localModelRowStatus({ ready: false, unavailableReason: 'not-downloaded', minTotalRamGB: 8 }, true, false)
+    expect(row.state).toBe('skipped')
+    expect(row.detail).toMatch(/organization/i)
+  })
+
+  it('uses device-neutral low-memory wording', () => {
+    const row = localModelRowStatus({ ready: false, unavailableReason: 'insufficient-ram', minTotalRamGB: 16 })
+    expect(row.detail).not.toMatch(/Mac/)
+  })
+
   it('shows downloading progress, never "not installed"', () => {
     const row = localModelRowStatus({
       ready: false,
@@ -269,9 +287,10 @@ describe('Act 3 on-device model row', () => {
     expect(row.detail.toLowerCase()).not.toMatch(/not installed/)
   })
 
-  it('does not skip the first-run fetch — setup re-arms ensure when weights are missing', () => {
+  it('never starts an optional download from setup mount or polling; only the explicit retry does', () => {
     const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
-    expect(src).toMatch(/localModelsEnsure/)
+    expect(src.match(/window\.toto\.localModelsEnsure\(\)/g)).toHaveLength(1)
+    expect(src).toMatch(/onClick=\{\(\) => void window\.toto\.localModelsEnsure\(\)/)
     expect(src).toMatch(/unavailableReason === 'not-downloaded'/)
     // Progress bar is visible at 0% (waiting on the first chunk), not only after bytes land.
     expect(src).toMatch(/\(r\.key === 'local' \|\| r\.key === 'asr'\) && r\.progress != null/)
