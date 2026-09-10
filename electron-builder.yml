@@ -35,8 +35,9 @@ directories:
 electronDownload:
   force: false
   checksums:
-    electron-v39.8.10-darwin-arm64.zip: f7e3ed2cc34dd2eba3f2a95234b576fe8082d35fb133e482102c08105f298572
-    electron-v39.8.10-win32-x64.zip: 4478410a35a8399b7745085096695a37877f176755182a71e27eddc245cd98d5
+    electron-v43.6.0-darwin-arm64.zip: 5183a2b15d013517386edd9f1ea8e3402755f6c3ea17893f92acb20052f3a2e7
+    electron-v43.6.0-darwin-x64.zip: 27f0ba89978e6a8a2fea212f8be8b114a60f5747df41f42f424b8b0131477ec4
+    electron-v43.6.0-win32-x64.zip: 4140545d6ed47b59c35900f266dea6c02f4a5496069ece7f6e7bc825e0d959c2
 files:
   - out/**/*
   - package.json

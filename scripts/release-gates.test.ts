@@ -36,10 +36,20 @@ describe('installer branding', () => {
 describe('deterministic packaging toolchain', () => {
   it('pins the audited Electron build stack exactly', () => {
     expect(pkg.devDependencies['@electron/asar']).toBe('3.4.1')
-    expect(pkg.devDependencies.electron).toBe('39.8.10')
+    expect(pkg.devDependencies.electron).toBe('43.6.0')
     expect(pkg.devDependencies['electron-builder']).toBe('26.15.3')
     expect(pkg.devDependencies['electron-vite']).toBe('5.0.0')
     expect(pkg.devDependencies.vite).toBe('7.3.6')
+  })
+
+  it('uses the maintained Electron extractor rather than the vulnerable legacy package', () => {
+    const lock = JSON.parse(readFileSync(join(root, 'package-lock.json'), 'utf8')) as {
+      packages: Record<string, { dependencies?: Record<string, string> }>
+    }
+    const electron = lock.packages['node_modules/electron']
+    expect(electron.dependencies?.['@electron-internal/extract-zip']).toBeDefined()
+    expect(electron.dependencies?.['extract-zip']).toBeUndefined()
+    expect(lock.packages['node_modules/extract-zip']).toBeUndefined()
   })
 
   it('uses the same supported Node LTS patch across local development and CI', () => {
@@ -64,7 +74,7 @@ describe('deterministic packaging toolchain', () => {
       readFileSync(join(root, 'node_modules/electron/checksums.json'), 'utf8')
     ) as Record<string, string>
 
-    for (const target of ['darwin-arm64', 'win32-x64']) {
+    for (const target of ['darwin-arm64', 'darwin-x64', 'win32-x64']) {
       const file = `electron-v${electron.version}-${target}.zip`
       expect(builderConfig).toContain(`${file}: ${officialChecksums[file]}`)
     }
@@ -72,11 +82,20 @@ describe('deterministic packaging toolchain', () => {
 
   it('does not package Dust client server dependencies that Métis never imports', () => {
     const builderConfig = readFileSync(join(root, 'electron-builder.yml'), 'utf8')
-    expect(pkg.scripts.postinstall).toBe('node scripts/prune-dust-bundle.mjs')
+    expect(pkg.scripts.postinstall).toBe(
+      'node scripts/prune-dust-bundle.mjs && node scripts/ensure-electron-runtime.mjs'
+    )
     for (const dependency of ['@modelcontextprotocol/sdk', 'express-rate-limit', 'ip-address']) {
       expect(builderConfig).toContain(
         `!node_modules/@dust-tt/client/node_modules/${dependency}{,/**/*}`
       )
+    }
+  })
+
+  it('checks the exact host runtime before compiling bytecode or launching the app', () => {
+    const gate = 'node scripts/ensure-electron-runtime.mjs --check-only && '
+    for (const script of ['prebuild', 'dev', 'preview', 'start']) {
+      expect(pkg.scripts[script].startsWith(gate), script).toBe(true)
     }
   })
 

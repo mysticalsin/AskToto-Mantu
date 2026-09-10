@@ -72,6 +72,13 @@ npm run dist         # package a signed-runtime app → release/ (electron-build
 npm run installers   # build the installer for this OS and print the installable files
 ```
 
+The install step provisions and verifies the exact Electron runtime for the build host; this is a
+developer/build dependency, not a download required by installed Métis apps. Build, dev, and preview
+commands check it without downloading. If dependencies were installed with `--ignore-scripts`, run
+`node scripts/ensure-electron-runtime.mjs` explicitly before building. To verify an already-provisioned
+runtime offline, use `node scripts/ensure-electron-runtime.mjs --check-only`. Do not reuse `out/`
+bytecode after changing the Electron version or build architecture: rebuild it with the new runtime.
+
 Set a provider key in-app: gear → **AI** → paste your key → Save (stored encrypted on-device via
 Electron `safeStorage`). Or connect **Dust** (your own agents) with one click from the Dust CLI session.
 

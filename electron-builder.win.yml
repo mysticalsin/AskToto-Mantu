@@ -20,7 +20,7 @@ files:
   - '!node_modules/sherpa-onnx-linux-*{,/**/*}'
   # sharp installs its native binaries per-host: building on macOS leaves darwin packages in
   # node_modules that a Windows install can never load; predist:win force-installs the win32-x64
-  # pair (same pattern as check-sherpa-platform's addon provisioning) and these keep the darwin
+  # combined addon/DLL package; these exclusions keep the darwin
   # copies out of the Windows installer. Same for linux hosts.
   - '!node_modules/@img/sharp-darwin-*{,/**/*}'
   - '!node_modules/@img/sharp-libvips-darwin-*{,/**/*}'
