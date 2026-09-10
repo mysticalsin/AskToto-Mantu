@@ -730,8 +730,9 @@ export function App(): JSX.Element {
     }
     proceed()
   }, [])
-  // Set by endReview() while waiting for listen.stop()'s async drain (up to DRAIN_CEILING_MS) to commit
-  // the final flushed transcript window before the recap is generated — see maybeFireRecap below.
+  // Set by endReview() while waiting for listen.stop()'s asynchronous terminal drain before the recap is
+  // generated. Healthy queued windows commit first; a no-progress expiry instead leaves an incomplete
+  // warning on listen.error — terminal does not itself guarantee a complete transcript. See maybeFireRecap.
   const pendingRecapRef = useRef(false)
   // True for the current live-session Review when the recap was intentionally skipped because no AI
   // provider is configured (rather than fired and left to fail with a red error) — see maybeFireRecap.
@@ -1984,10 +1985,10 @@ export function App(): JSX.Element {
     settings?.operatorEntitlementsAt
   ])
 
-  // Fires the deferred post-meeting recap once it's actually safe to — i.e. once listen.listening has
-  // flipped back to false, meaning listen.stop()'s async drain (up to DRAIN_CEILING_MS, see listen.ts)
-  // has committed the final flushed transcript window. Reading listen.text() any earlier (the old
-  // behavior) silently dropped the last sentence the drain machinery exists to preserve. Gated on
+  // Fires the deferred post-meeting recap once listen.stop() reaches its terminal drain state and
+  // listen.listening flips false. Healthy queued windows have committed at that point; a no-progress
+  // expiry may instead leave listen.error reporting an incomplete transcript. Reading listen.text() any
+  // earlier (the old behavior) silently dropped work the drain machinery exists to preserve. Gated on
   // pendingRecapRef so it's a no-op on every OTHER listen.listening flip (meeting start, a later
   // unrelated re-render) — only endReview() arms it.
   // Cold Calling Mode — end-of-call coaching (what to improve, what worked, next steps, who to follow up
@@ -2080,8 +2081,8 @@ export function App(): JSX.Element {
   }, [maybeFireRecap])
 
   const endReview = useCallback(() => {
-    // Idempotence latch: listen.listening stays true for up to DRAIN_CEILING_MS (4s) after stop() while
-    // the audio drain finishes in the background (listen.ts), so toggleListen() can still read "listening"
+    // Idempotence latch: listen.listening stays true while stop()'s progress-aware terminal drain runs in
+    // the background (listen.ts), so toggleListen() can still read "listening"
     // and re-enter endReview() from a second Stop click landing inside that window. Without this guard the
     // re-entrant call re-arms pendingRecapRef and could cancel/restart an already-fired recap stream
     // indefinitely instead of ever letting it land.
@@ -3315,8 +3316,8 @@ export function App(): JSX.Element {
   const ctxCapturedAt = showingScreenChip ? screenCapturedAt : null
   // Recording chrome (Heard live chip, timer, Pause/Stop, Transcript pill, Quick Actions,
   // the consent reminder, the listening glass tint) must vanish the INSTANT Stop is initiated — it must not
-  // lag behind listen.listening, which stays true for up to DRAIN_CEILING_MS (4s) while listen.ts finishes
-  // draining audio in the background (see listen.ts stop()). endReview() flips `view` to 'review'
+  // lag behind listen.listening, which stays true while listen.ts drains sealed audio toward a terminal
+  // success or explicit incomplete warning (see listen.ts stop()). endReview() flips `view` to 'review'
   // synchronously, so gating the visible chrome on the view — not the raw listening flag — makes Review
   // render clean immediately while the real drain safely finishes behind it.
   const showListeningChrome = listen.listening && view !== 'review' && !stoppingRef.current

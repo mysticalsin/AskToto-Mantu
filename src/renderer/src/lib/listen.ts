@@ -29,6 +29,13 @@ const PARAKEET_FEED_TIMEOUT_MS = 5000 // a single Parakeet window shouldn't take
 const STOP_FLUSH_ACK_TIMEOUT_MS = 4000
 const STOP_FLUSH_INCOMPLETE_MSG =
   'Could not confirm the final audio flush. The transcript may be missing the last words.'
+const NATIVE_STOP_DRAIN_NO_PROGRESS_MS = PARAKEET_FEED_TIMEOUT_MS + 1000
+// Stop-only operational bound, aligned with main/whisper-import.ts's host request timeout. This is not a
+// decode-performance promise or proof that a worker is hung; it only keeps shutdown finite when sealed
+// outstanding work has made no progress for a prolonged period.
+const WHISPER_STOP_DRAIN_NO_PROGRESS_MS = 180_000
+const STOP_DRAIN_INCOMPLETE_MSG =
+  'Transcription did not finish before Stop completed. The transcript may be incomplete.'
 // ── Whisper 'auto' language probe (PROVEN FACT 2026-08-05, direct probe): transformers.js's whisper NEVER
 // auto-detects on an un-pinned decode — it logs "No language specified - defaulting to English" and
 // decodes ENGLISH regardless of what was actually spoken. So asrLanguage:'auto' needs a language-agnostic
@@ -345,6 +352,7 @@ interface StopDrainOperation {
   callbacks: Array<() => void>
   ackTimer: ReturnType<typeof setTimeout> | null
   flushIncomplete: boolean
+  drainIncomplete: boolean
   beginDrain: () => void
 }
 
@@ -448,9 +456,9 @@ export interface ListenApi {
     engine?: 'whisper' | 'parakeet' | 'apple',
     language?: string
   ) => Promise<void>
-  /** onDrained (optional) fires once the up-to-DRAIN_CEILING_MS post-stop drain has fully settled — i.e.
-   *  after the final flushed window has committed via commitLine, so `text()` read inside it reflects the
-   *  complete transcript. Skipped if a fresh start() supersedes this session before the drain finishes. */
+  /** onDrained (optional) fires when Stop reaches a terminal state: either every sealed window settled,
+   *  or a bounded no-progress watchdog ended an incomplete drain (reported through `error`). `text()` is
+   *  current at callback time but is not guaranteed complete. Skipped if a fresh start() supersedes Stop. */
   stop: (onDrained?: () => void) => void
   /** Suspend capture without ending the meeting — the transcript, worker, and (on macOS) the fragile
    *  system-audio loopback session all stay warm so resume() picks back up mid-session. */
@@ -2152,11 +2160,15 @@ export function useListen(
       operation.ackTimer = null
       setState((state) => (state.capturing ? { ...state, capturing: false } : state))
 
-      // 2. Once the producer frontier is sealed, drain the finite queue/busy state. The total ceiling keeps
-      //    shutdown bounded; if it expires, any still-undispatched work is discarded during teardown.
-      const DRAIN_CEILING_MS =
-        engineRef.current === 'parakeet' || engineRef.current === 'apple' ? PARAKEET_FEED_TIMEOUT_MS + 1000 : 4000
-      const startedAt = Date.now()
+      // 2. Once the producer frontier is sealed, drain the finite queue/busy state. Healthy serial work can
+      //    take longer than one decode window in aggregate, so bound *lack of progress*, not total elapsed
+      //    time. Only a strict decrease in queue + in-flight work earns a fresh engine-specific interval.
+      let leastOutstanding = queue.current.length + Number(busy.current)
+      let lastProgressAt = Date.now()
+      let noProgressMs =
+        engineRef.current === 'parakeet' || engineRef.current === 'apple'
+          ? NATIVE_STOP_DRAIN_NO_PROGRESS_MS
+          : WHISPER_STOP_DRAIN_NO_PROGRESS_MS
       const finishTeardown = (): void => {
         // A new start() ran while we were draining — it already owns the session; do not clobber it.
         if (
@@ -2176,12 +2188,15 @@ export function useListen(
         closeChannel('them')
         void window.toto.setListeningState(false).catch(() => {})
         setState((s) => {
-          const flushWarning = operation.flushIncomplete ? STOP_FLUSH_INCOMPLETE_MSG : null
-          const error = flushWarning
-            ? s.error && !s.error.includes(flushWarning)
-              ? `${s.error} ${flushWarning}`
-              : s.error ?? flushWarning
-            : s.error
+          const warnings = [
+            operation.flushIncomplete ? STOP_FLUSH_INCOMPLETE_MSG : null,
+            operation.drainIncomplete ? STOP_DRAIN_INCOMPLETE_MSG : null
+          ].filter((warning): warning is string => warning !== null)
+          let error = s.error
+          for (const warning of warnings) {
+            if (!error) error = warning
+            else if (!error.includes(warning)) error = `${error} ${warning}`
+          }
           return {
             ...s,
             listening: false,
@@ -2200,7 +2215,28 @@ export function useListen(
       }
       const waitForDrain = (): void => {
         if (sessionEpochRef.current !== myEpoch || stopDrainRef.current !== operation) return
-        if ((queue.current.length === 0 && !busy.current) || Date.now() - startedAt > DRAIN_CEILING_MS) {
+        const outstanding = queue.current.length + Number(busy.current)
+        if (outstanding === 0) {
+          finishTeardown()
+          return
+        }
+        if (outstanding < leastOutstanding) {
+          leastOutstanding = outstanding
+          lastProgressAt = Date.now()
+          noProgressMs =
+            engineRef.current === 'parakeet' || engineRef.current === 'apple'
+              ? NATIVE_STOP_DRAIN_NO_PROGRESS_MS
+              : WHISPER_STOP_DRAIN_NO_PROGRESS_MS
+        } else if (Date.now() - lastProgressAt >= noProgressMs) {
+          operation.drainIncomplete = true
+          queue.current = []
+          busy.current = false
+          if (engineRef.current === 'whisper') {
+            const stalledWorker = workerRef.current
+            workerRef.current = null // invalidate late messages before terminating this exact generation
+            readyRef.current = false
+            stalledWorker?.terminate()
+          }
           finishTeardown()
           return
         }
@@ -2222,6 +2258,7 @@ export function useListen(
       callbacks: onDrained ? [onDrained] : [],
       ackTimer: null,
       flushIncomplete: false,
+      drainIncomplete: false,
       beginDrain
     }
     stopDrainRef.current = operation
@@ -2268,7 +2305,7 @@ export function useListen(
 
   useEffect(() => {
     return () => {
-      // Unmount must release hardware synchronously -- stop()'s drain is async (up to DRAIN_CEILING_MS)
+      // Unmount must release hardware synchronously -- stop()'s drain is asynchronously bounded
       // and would keep running (and re-arm a new workerIdleTimer) after this instance is gone with nothing
       // left able to cancel it. So this bypasses stop() entirely and tears everything down directly.
       if (drainTimerRef.current) {
