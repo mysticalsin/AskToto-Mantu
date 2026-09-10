@@ -218,6 +218,11 @@ export function probeResultIsStale(
   return dispatchEpoch !== currentEpoch || !live || engine !== 'whisper' || language !== 'auto'
 }
 
+/** A speaker label belongs only to the meeting epoch that dispatched its async embedding request. */
+export function speakerEmbedResultIsStale(requestEpoch: number, currentEpoch: number): boolean {
+  return requestEpoch !== currentEpoch
+}
+
 /** What the 'them' (system-loopback) side must do when the OS reports an audio-device change. */
 export type ThemDeviceAction = 'ignore' | 'watch' | 'recover' | 'recycle'
 
@@ -1056,9 +1061,11 @@ export function useListen(
         // outcome). Only for 'them' windows that actually produced a line — nothing to attach a name to
         // otherwise (silence, a suppressed dupe, or a 'you' window, which is never labeled).
         if (committedAt !== null && !m.partial && (m.speaker as Speaker) === 'them' && embedAudio) {
+          const speakerEpoch = pendingWhisperEpochRef.current
           void window.toto
             .speakerEmbed(embedAudio, 'them')
             .then((res) => {
+              if (speakerEmbedResultIsStale(speakerEpoch, sessionEpochRef.current)) return
               // Echo defense (parity with Parakeet/Apple): operator bleed through loopback must not stay
               // labeled as THEM. Whisper already committed the text before embed returns — drop the line.
               if (res?.echo) {

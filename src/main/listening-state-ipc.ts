@@ -8,6 +8,7 @@ interface ListeningStateDependencies<Event> {
   setRecordingPowerSaveBlock(on: boolean): void
   onMeetingStart(): void
   releaseParakeet(): Promise<void>
+  releaseSpeakerEmbedding(): Promise<unknown>
 }
 
 /** Create the exact listening-state callback registered by index.ts over injectable side-effect seams. */
@@ -21,7 +22,17 @@ export function createListeningStateHandler<Event>(
     dependencies.setListeningActive(on)
     dependencies.setTrayRecording(on)
     dependencies.setRecordingPowerSaveBlock(on)
-    if (on) dependencies.onMeetingStart()
-    else await dependencies.releaseParakeet()
+    if (on) {
+      dependencies.onMeetingStart()
+      return
+    }
+    // Both native helpers must get their teardown attempt even if one rejects. The handler stays pending
+    // until both settle, then propagates the first failure so an unconfirmed exit is never reported clean.
+    const releases = await Promise.allSettled([
+      dependencies.releaseParakeet(),
+      dependencies.releaseSpeakerEmbedding()
+    ])
+    const failed = releases.find((result): result is PromiseRejectedResult => result.status === 'rejected')
+    if (failed) throw failed.reason
   }
 }

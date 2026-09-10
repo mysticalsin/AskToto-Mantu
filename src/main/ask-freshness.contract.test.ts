@@ -64,7 +64,8 @@ describe('fresh-question boundary at the askStart choke point', () => {
       setTrayRecording: () => {},
       setRecordingPowerSaveBlock: () => {},
       onMeetingStart: () => {},
-      releaseParakeet: async () => {}
+      releaseParakeet: async () => {},
+      releaseSpeakerEmbedding: async () => {}
     })
     const freshQuestionBoundaryOpen = (): boolean => !listeningActive
 

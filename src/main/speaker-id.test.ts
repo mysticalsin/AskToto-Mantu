@@ -18,7 +18,7 @@ import { createSpeakerId, isEchoBleed } from './speaker-id'
  *  one-hot-ish vector along axis v, so tests choose voices by constructing windows. */
 function fakeExtractor() {
   return {
-    compute: (samples: Float32Array): Float32Array | null => {
+    compute: async (samples: Float32Array): Promise<Float32Array | null> => {
       if (samples.length === 0) return null
       const v = new Float32Array(8)
       v[Math.round(samples[0])] = 1
@@ -46,67 +46,67 @@ beforeEach(() => {
 })
 
 describe('labelWindow', () => {
-  it('labels un-enrolled voices with stable session cluster names', () => {
+  it('labels un-enrolled voices with stable session cluster names', async () => {
     const id = makeId(dir)
-    expect(id.labelWindow(windowFor(0))).toMatchObject({ name: 'Speaker 1', source: 'cluster' })
-    expect(id.labelWindow(windowFor(3))).toMatchObject({ name: 'Speaker 2', source: 'cluster' })
-    expect(id.labelWindow(windowFor(0))).toMatchObject({ name: 'Speaker 1' })
+    expect(await id.labelWindow(windowFor(0))).toMatchObject({ name: 'Speaker 1', source: 'cluster' })
+    expect(await id.labelWindow(windowFor(3))).toMatchObject({ name: 'Speaker 2', source: 'cluster' })
+    expect(await id.labelWindow(windowFor(0))).toMatchObject({ name: 'Speaker 1' })
   })
 
-  it('prefers an enrolled profile over a cluster label once the voice is known', () => {
+  it('prefers an enrolled profile over a cluster label once the voice is known', async () => {
     const id = makeId(dir)
-    expect(id.enroll('Jane Doe', [windowFor(2), windowFor(2)])).toBe(true)
-    const label = id.labelWindow(windowFor(2))
+    expect(await id.enroll('Jane Doe', [windowFor(2), windowFor(2)])).toBe(true)
+    const label = await id.labelWindow(windowFor(2))
     expect(label).toMatchObject({ name: 'Jane Doe', source: 'profile' })
     expect(label!.similarity).toBeGreaterThanOrEqual(0.55)
     // A different voice still clusters.
-    expect(id.labelWindow(windowFor(5))).toMatchObject({ source: 'cluster' })
+    expect(await id.labelWindow(windowFor(5))).toMatchObject({ source: 'cluster' })
   })
 
-  it('profiles persist across instances (the voice memory survives restarts)', () => {
-    makeId(dir).enroll('Jane Doe', [windowFor(2)])
+  it('profiles persist across instances (the voice memory survives restarts)', async () => {
+    await makeId(dir).enroll('Jane Doe', [windowFor(2)])
     const fresh = makeId(dir)
     expect(fresh.listProfiles()).toEqual([{ name: 'Jane Doe', samples: 1 }])
-    expect(fresh.labelWindow(windowFor(2))).toMatchObject({ name: 'Jane Doe', source: 'profile' })
+    expect(await fresh.labelWindow(windowFor(2))).toMatchObject({ name: 'Jane Doe', source: 'profile' })
   })
 
-  it('re-enrolling reinforces the profile (sample counts accumulate)', () => {
+  it('re-enrolling reinforces the profile (sample counts accumulate)', async () => {
     const id = makeId(dir)
-    id.enroll('Jane Doe', [windowFor(2)])
-    id.enroll('Jane Doe', [windowFor(2), windowFor(2)])
+    await id.enroll('Jane Doe', [windowFor(2)])
+    await id.enroll('Jane Doe', [windowFor(2), windowFor(2)])
     expect(id.listProfiles()).toEqual([{ name: 'Jane Doe', samples: 3 }])
   })
 
-  it('deleteProfile removes the voiceprint (privacy contract)', () => {
+  it('deleteProfile removes the voiceprint (privacy contract)', async () => {
     const id = makeId(dir)
-    id.enroll('Jane Doe', [windowFor(2)])
+    await id.enroll('Jane Doe', [windowFor(2)])
     expect(id.deleteProfile('Jane Doe')).toBe(true)
     expect(id.listProfiles()).toEqual([])
-    expect(id.labelWindow(windowFor(2))).toMatchObject({ source: 'cluster' })
+    expect(await id.labelWindow(windowFor(2))).toMatchObject({ source: 'cluster' })
     expect(id.deleteProfile('nobody')).toBe(false)
   })
 
-  it('a >30min silence gap resets session labels (new meeting), enrolled names survive', () => {
+  it('a >30min silence gap resets session labels (new meeting), enrolled names survive', async () => {
     let t = 1_000_000
     const id = makeId(dir, { now: () => t })
-    id.enroll('Jane Doe', [windowFor(2)])
-    expect(id.labelWindow(windowFor(0))!.name).toBe('Speaker 1')
+    await id.enroll('Jane Doe', [windowFor(2)])
+    expect((await id.labelWindow(windowFor(0)))!.name).toBe('Speaker 1')
     t += 31 * 60_000
-    expect(id.labelWindow(windowFor(5))!.name).toBe('Speaker 1') // numbering restarted
-    expect(id.labelWindow(windowFor(2))!.name).toBe('Jane Doe') // profiles unaffected
+    expect((await id.labelWindow(windowFor(5)))!.name).toBe('Speaker 1') // numbering restarted
+    expect((await id.labelWindow(windowFor(2)))!.name).toBe('Jane Doe') // profiles unaffected
   })
 
-  it('degrades to null when no extractor is available — transcription must never notice', () => {
+  it('degrades to null when no extractor is available — transcription must never notice', async () => {
     const id = makeId(dir, { extractor: null })
-    expect(id.available()).toBe(false)
-    expect(id.labelWindow(windowFor(0))).toBeNull()
-    expect(id.enroll('X', [windowFor(0)])).toBe(false)
+    expect(await id.available()).toBe(false)
+    expect(await id.labelWindow(windowFor(0))).toBeNull()
+    expect(await id.enroll('X', [windowFor(0)])).toBe(false)
   })
 
-  it('degenerate windows (empty audio) yield null, never a poisoned cluster', () => {
+  it('degenerate windows (empty audio) yield null, never a poisoned cluster', async () => {
     const id = makeId(dir)
-    expect(id.labelWindow(new Float32Array(0))).toBeNull()
-    expect(id.labelWindow(windowFor(0))!.name).toBe('Speaker 1')
+    expect(await id.labelWindow(new Float32Array(0))).toBeNull()
+    expect((await id.labelWindow(windowFor(0)))!.name).toBe('Speaker 1')
   })
 })
 
@@ -132,86 +132,122 @@ describe('isEchoBleed — pure cosine-threshold check', () => {
 })
 
 describe('echo defense — operator buffer + THEM-window echo detection', () => {
-  it('flags a THEM window that matches the live (this-session) operator buffer', () => {
+  it('flags a THEM window that matches the live (this-session) operator buffer', async () => {
     const id = makeId(dir)
-    id.observeOperatorWindow(windowFor(3)) // a 'you' (mic) window seeds the operator's own voiceprint
-    expect(id.labelWindow(windowFor(3))).toMatchObject({ echo: true })
+    await id.observeOperatorWindow(windowFor(3)) // a 'you' (mic) window seeds the operator's own voiceprint
+    expect(await id.labelWindow(windowFor(3))).toMatchObject({ echo: true })
   })
 
-  it('does not over-trigger on a genuinely different voice', () => {
+  it('does not over-trigger on a genuinely different voice', async () => {
     const id = makeId(dir)
-    id.observeOperatorWindow(windowFor(3))
-    const label = id.labelWindow(windowFor(5))
+    await id.observeOperatorWindow(windowFor(3))
+    const label = await id.labelWindow(windowFor(5))
     expect(label?.echo).toBeFalsy()
     expect(label).toMatchObject({ source: 'cluster', name: 'Speaker 1' })
   })
 
-  it('an echo-flagged window is never clustered (would poison Speaker N with the operator)', () => {
+  it('an echo-flagged window is never clustered (would poison Speaker N with the operator)', async () => {
     const id = makeId(dir)
-    id.observeOperatorWindow(windowFor(3))
-    id.labelWindow(windowFor(3)) // echo — must be a no-op for clustering
+    await id.observeOperatorWindow(windowFor(3))
+    await id.labelWindow(windowFor(3)) // echo — must be a no-op for clustering
     // The next genuinely-new voice still opens "Speaker 1", proving no cluster was created above.
-    expect(id.labelWindow(windowFor(5))).toMatchObject({ name: 'Speaker 1', source: 'cluster' })
+    expect(await id.labelWindow(windowFor(5))).toMatchObject({ name: 'Speaker 1', source: 'cluster' })
   })
 
-  it('degrades to no echo defense when the operator has no samples yet', () => {
+  it('degrades to no echo defense when the operator has no samples yet', async () => {
     const id = makeId(dir)
-    expect(id.labelWindow(windowFor(3))).toMatchObject({ source: 'cluster' })
+    expect(await id.labelWindow(windowFor(3))).toMatchObject({ source: 'cluster' })
   })
 
-  it('resetSession clears the in-memory operator buffer (meeting boundary)', () => {
+  it('resetSession clears the in-memory operator buffer (meeting boundary)', async () => {
     const id = makeId(dir)
-    id.observeOperatorWindow(windowFor(3))
-    expect(id.labelWindow(windowFor(3))).toMatchObject({ echo: true })
+    await id.observeOperatorWindow(windowFor(3))
+    expect(await id.labelWindow(windowFor(3))).toMatchObject({ echo: true })
     id.resetSession()
-    expect(id.labelWindow(windowFor(3))?.echo).toBeFalsy()
+    expect((await id.labelWindow(windowFor(3)))?.echo).toBeFalsy()
   })
 
-  it('resetSession flushes a well-populated operator buffer into a persisted profile (meeting boundary)', () => {
+  it('resetSession flushes a well-populated operator buffer into a persisted profile (meeting boundary)', async () => {
     const id = makeId(dir)
-    id.observeOperatorWindow(windowFor(3))
-    id.observeOperatorWindow(windowFor(3))
-    id.observeOperatorWindow(windowFor(3))
+    await id.observeOperatorWindow(windowFor(3))
+    await id.observeOperatorWindow(windowFor(3))
+    await id.observeOperatorWindow(windowFor(3))
     id.resetSession()
     // Internal-only: the operator's own voiceprint never shows up as a "person" a user could see/delete.
     const fresh = makeId(dir)
     expect(fresh.listProfiles()).toEqual([])
-    expect(fresh.labelWindow(windowFor(3))).toMatchObject({ echo: true })
+    expect(await fresh.labelWindow(windowFor(3))).toMatchObject({ echo: true })
   })
 
-  it('does not persist an operator profile from a too-short session (quality gate)', () => {
+  it('does not persist an operator profile from a too-short session (quality gate)', async () => {
     const id = makeId(dir)
-    id.observeOperatorWindow(windowFor(3))
+    await id.observeOperatorWindow(windowFor(3))
     id.resetSession()
     const fresh = makeId(dir)
-    expect(fresh.labelWindow(windowFor(3))?.echo).toBeFalsy()
+    expect((await fresh.labelWindow(windowFor(3)))?.echo).toBeFalsy()
   })
 
-  it('the reserved operator profile name can never be deleted through the public API', () => {
+  it('the reserved operator profile name can never be deleted through the public API', async () => {
     const id = makeId(dir)
-    id.observeOperatorWindow(windowFor(3))
-    id.observeOperatorWindow(windowFor(3))
-    id.observeOperatorWindow(windowFor(3))
+    await id.observeOperatorWindow(windowFor(3))
+    await id.observeOperatorWindow(windowFor(3))
+    await id.observeOperatorWindow(windowFor(3))
     id.resetSession()
     expect(id.deleteProfile('__operator__')).toBe(false)
+  })
+
+  it('drops a label result that resolves after resetSession instead of mutating the next session', async () => {
+    let resolve!: (embedding: Float32Array) => void
+    const compute = vi.fn(() => new Promise<Float32Array>((done) => { resolve = done }))
+    const id = createSpeakerId({
+      createExtractor: () => ({ compute }),
+      storePath: () => join(dir, 'voiceprints.json')
+    })
+
+    const stale = id.labelWindow(windowFor(2))
+    id.resetSession()
+    resolve(Float32Array.from([1, 0, 0]))
+
+    await expect(stale).resolves.toBeNull()
+    expect(id.finalizeSession()).toEqual(new Map())
+  })
+
+  it('drops late operator/profile mutations after resetSession', async () => {
+    const pending: Array<(embedding: Float32Array) => void> = []
+    const id = createSpeakerId({
+      createExtractor: () => ({
+        compute: () => new Promise<Float32Array>((resolve) => { pending.push(resolve) })
+      }),
+      storePath: () => join(dir, 'voiceprints.json')
+    })
+
+    const observation = id.observeOperatorWindow(windowFor(2))
+    const enrollment = id.enroll('Late profile', [windowFor(2)])
+    await Promise.resolve()
+    id.resetSession()
+    for (const resolve of pending) resolve(Float32Array.from([1, 0, 0]))
+
+    await observation
+    await expect(enrollment).resolves.toBe(false)
+    expect(id.listProfiles()).toEqual([])
   })
 })
 
 describe('autoEnrollFromLabeledWindows — Teams-VTT auto-enrollment flywheel (P2 §3.4)', () => {
-  it('folds a well-populated live cluster into a permanent voiceprint under the resolved name', () => {
+  it('folds a well-populated live cluster into a permanent voiceprint under the resolved name', async () => {
     const id = makeId(dir)
-    for (let i = 0; i < 4; i++) id.labelWindow(windowFor(2)) // populates the "Speaker 1" embedding buffer
+    for (let i = 0; i < 4; i++) await id.labelWindow(windowFor(2)) // populates the "Speaker 1" embedding buffer
     const enrolled = id.autoEnrollFromLabeledWindows([{ clusterLabel: 'Speaker 1', name: 'Jane Doe' }])
     expect(enrolled).toBe(1)
     expect(id.listProfiles()).toEqual([{ name: 'Jane Doe', samples: 4 }])
     // The very next window from the same voice is now recognized by profile, not by cluster.
-    expect(id.labelWindow(windowFor(2))).toMatchObject({ name: 'Jane Doe', source: 'profile' })
+    expect(await id.labelWindow(windowFor(2))).toMatchObject({ name: 'Jane Doe', source: 'profile' })
   })
 
-  it('skips a cluster below the quality gate (fewer than 3 buffered windows)', () => {
+  it('skips a cluster below the quality gate (fewer than 3 buffered windows)', async () => {
     const id = makeId(dir)
-    id.labelWindow(windowFor(2))
-    id.labelWindow(windowFor(2))
+    await id.labelWindow(windowFor(2))
+    await id.labelWindow(windowFor(2))
     expect(id.autoEnrollFromLabeledWindows([{ clusterLabel: 'Speaker 1', name: 'Jane Doe' }])).toBe(0)
     expect(id.listProfiles()).toEqual([])
   })
@@ -221,16 +257,16 @@ describe('autoEnrollFromLabeledWindows — Teams-VTT auto-enrollment flywheel (P
     expect(id.autoEnrollFromLabeledWindows([{ clusterLabel: 'Speaker 9', name: 'Nobody' }])).toBe(0)
   })
 
-  it('ignores a blank resolved name', () => {
+  it('ignores a blank resolved name', async () => {
     const id = makeId(dir)
-    for (let i = 0; i < 4; i++) id.labelWindow(windowFor(2))
+    for (let i = 0; i < 4; i++) await id.labelWindow(windowFor(2))
     expect(id.autoEnrollFromLabeledWindows([{ clusterLabel: 'Speaker 1', name: '   ' }])).toBe(0)
   })
 
-  it('returns the count of names actually enrolled across several pairs', () => {
+  it('returns the count of names actually enrolled across several pairs', async () => {
     const id = makeId(dir)
-    for (let i = 0; i < 4; i++) id.labelWindow(windowFor(2)) // "Speaker 1"
-    for (let i = 0; i < 4; i++) id.labelWindow(windowFor(5)) // "Speaker 2"
+    for (let i = 0; i < 4; i++) await id.labelWindow(windowFor(2)) // "Speaker 1"
+    for (let i = 0; i < 4; i++) await id.labelWindow(windowFor(5)) // "Speaker 2"
     const enrolled = id.autoEnrollFromLabeledWindows([
       { clusterLabel: 'Speaker 1', name: 'Jane Doe' },
       { clusterLabel: 'Speaker 2', name: 'Bob Smith' }
@@ -267,6 +303,22 @@ describe('speaker:embed — the Whisper-engine speaker-embedding tap (contract)'
     expect(body).toMatch(/return \{\}\s*\n\s*\}\)/)
   })
 
+  it('awaits every live native-dependent speaker call and marks the import owner', () => {
+    for (const marker of ['ipcMain.handle(IPC.parakeetFeed', 'ipcMain.handle(IPC.appleSpeechFeed', 'ipcMain.handle(IPC.speakerEmbed']) {
+      const start = indexSrc.indexOf(marker)
+      expect(start, marker).toBeGreaterThan(-1)
+      const body = indexSrc.slice(start, start + 2500)
+      expect(body).toMatch(/await labelThemAudio\(p\.samples\)/)
+      expect(body).toMatch(/await observeOperatorAudio\(p\.samples\)/)
+    }
+    expect(indexSrc).toMatch(/speakerFor:\s*async \(samples\) => \(await getSpeakerId\(\)\.labelWindow\(samples, 'import'\)\)/)
+  })
+
+  it('builds the speaker native host as a dedicated electron-vite entry', () => {
+    const vite = readFileSync(join(__dirname, '..', '..', 'electron.vite.config.ts'), 'utf8')
+    expect(vite).toMatch(/'speaker-embedding-host': resolve\(__dirname, 'src\/main\/speaker-embedding-host\.ts'\)/)
+  })
+
   it('the preload bridges it with the same {samples, speaker} payload shape as parakeetFeed', () => {
     expect(preloadSrc).toMatch(
       /speakerEmbed: \(samples: Float32Array, speaker: string\): Promise<\{ name\?: string; echo\?: boolean \}> =>\s*\n\s*ipcRenderer\.invoke\(IPC\.speakerEmbed, \{ samples, speaker \}\)/
@@ -284,18 +336,18 @@ describe('real sherpa integration (soft-skip when model/addon absent)', () => {
     }
     // No injected extractor: createSpeakerId builds the real sherpa one (repo-root model resolution).
     const id = createSpeakerId({ storePath: () => join(dir, 'voiceprints.json') })
-    if (!id.available()) {
+    if (!await id.available()) {
       console.warn('[speaker-id it] skipped — sherpa addon unavailable on this machine')
       return
     }
     const n = 16000 * 2
     const samples = new Float32Array(n)
     for (let i = 0; i < n; i++) samples[i] = 0.3 * Math.sin((2 * Math.PI * 140 * i) / 16000)
-    const label = id.labelWindow(samples)
+    const label = await id.labelWindow(samples)
     expect(label).not.toBeNull()
     expect(label!.name).toBe('Speaker 1')
     // Same audio again lands in the same cluster — the stability contract.
-    expect(id.labelWindow(samples)!.name).toBe('Speaker 1')
+    expect((await id.labelWindow(samples))!.name).toBe('Speaker 1')
   }, 60_000)
 })
 
@@ -329,8 +381,8 @@ describe('MQA-237 — embeddings must never use N-API external buffers (dead-in-
     // plain-node tests passed the whole time, which is exactly why the pin is structural.
     const { readFileSync } = require('node:fs') as typeof import('node:fs')
     const { join } = require('node:path') as typeof import('node:path')
-    const src = readFileSync(join(__dirname, 'speaker-id.ts'), 'utf8')
-    expect(src).toMatch(/extractor\.compute\(stream, false\)/)
-    expect(src).not.toMatch(/extractor\.compute\(stream\)/)
+    const src = readFileSync(join(__dirname, 'speaker-embedding-host.ts'), 'utf8')
+    expect(src).toMatch(/nativeExtractor\.compute\(stream, false\)/)
+    expect(src).not.toMatch(/nativeExtractor\.compute\(stream\)/)
   })
 })
