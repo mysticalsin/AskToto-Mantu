@@ -299,19 +299,6 @@ describe('real sherpa integration (soft-skip when model/addon absent)', () => {
   }, 60_000)
 })
 
-/** MQA-042 now terminates an isolated native helper instead of forcing V8 GC in main. Detailed
- * lifecycle behavior is covered by parakeet-client.test.ts; this pins the real meeting boundary. */
-describe('parakeetRelease at a meeting boundary (MQA-042)', () => {
-  const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
-
-  it('awaits helper exit when listening stops', () => {
-    const start = indexSrc.indexOf('ipcMain.handle(IPC.listeningState')
-    expect(start).toBeGreaterThan(-1)
-    const body = indexSrc.slice(start, start + 3_000)
-    expect(body).toMatch(/else\s*\{\s*await parakeetRelease\(\)/)
-  })
-})
-
 // MQA-043 (docs/qa/BUG-LEDGER.md): resetSession() was unit-tested but had NO production caller, so the
 // >30min silence gap was the only thing that ever reset session labels. Two meetings closer together
 // than that shared cluster identities — a new participant in meeting two could be labelled "Speaker 3"
@@ -324,13 +311,13 @@ describe('the meeting-start boundary resets speaker session labels (MQA-043)', (
   it('calls resetSession() at the listeningState meeting-start boundary', () => {
     const start = indexSrc.indexOf('ipcMain.handle(IPC.listeningState')
     expect(start).toBeGreaterThan(-1)
-    const body = indexSrc.slice(start, start + 2000)
-    expect(body).toMatch(/if \(on\) \{[\s\S]{0,800}?speakerIdInstance\?\.resetSession\(\)/)
+    const body = indexSrc.slice(start, start + 2500)
+    expect(body).toMatch(/onMeetingStart:\s*\(\)\s*=>\s*\{[\s\S]{0,1000}?speakerIdInstance\?\.resetSession\(\)/)
   })
 
   it('resets it alongside the Dust conversation — one boundary, not two competing ones', () => {
     const start = indexSrc.indexOf('ipcMain.handle(IPC.listeningState')
-    const body = indexSrc.slice(start, start + 2000)
+    const body = indexSrc.slice(start, start + 2500)
     expect(body.indexOf('resetDustConversation()')).toBeLessThan(body.indexOf('speakerIdInstance?.resetSession()'))
   })
 })

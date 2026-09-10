@@ -376,6 +376,7 @@ import {
   parakeetRelease,
   parakeetAddonError
 } from './parakeet'
+import { createListeningStateHandler } from './listening-state-ipc'
 import { appleSpeechLocale, appleSpeechTranscribe } from './apple-speech'
 import { resetLanguageFollow as resetImportLanguageFollow, whisperImportTranscribe, stopWhisperHost } from './whisper-import'
 import { buildPolishPrompt, parsePolishResponse, polishBatches, type PolishLine } from './polish'
@@ -7246,17 +7247,16 @@ function registerIpc(): void {
   })
 
   // --- Listening state (tray icon + Dust conversation reset + power-save block) ---
-  ipcMain.handle(IPC.listeningState, async (e, on: unknown) => {
-    assertMainWindow(e)
-    if (!requireAuth()) return
-    listeningActive = !!on // fresh-question boundary (askStart) is suspended while a meeting is live
-    setTrayRecording(!!on)
-    setRecordingPowerSaveBlock(!!on)
-    // A new meeting starting is the one clean boundary for Dust conversation continuity — everything
-    // from here until the NEXT meeting starts shares one conversation (see resetDustConversation).
-    // It's also the clean boundary to terminate Parakeet's native helper between meetings/on idle,
-    // releasing its model memory before another helper generation can start.
-    if (on) {
+  ipcMain.handle(IPC.listeningState, createListeningStateHandler({
+    assertMainWindow,
+    requireAuth,
+    setListeningActive: (on) => { listeningActive = on },
+    setTrayRecording,
+    setRecordingPowerSaveBlock,
+    releaseParakeet: parakeetRelease,
+    onMeetingStart: () => {
+      // A new meeting starting is the one clean boundary for Dust conversation continuity — everything
+      // from here until the NEXT meeting starts shares one conversation (see resetDustConversation).
       resetDustConversation()
       // MQA-043: the same boundary must reset Speaker Intelligence's session labels. speaker-id.ts only
       // auto-resets after a >30 min silence gap, so two meetings closer together than that inherited the
@@ -7278,10 +7278,8 @@ function registerIpc(): void {
           baseAgent
         )
       }
-    } else {
-      await parakeetRelease()
     }
-  })
+  }))
 
   // --- Window management ---
   ipcMain.handle(IPC.windowResize, (e, payload: { height: number; width?: number }) => {

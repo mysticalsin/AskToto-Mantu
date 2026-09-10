@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { createListeningStateHandler } from './listening-state-ipc'
 
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 
@@ -37,11 +38,24 @@ describe('AUDIT-10 — askStart never forwards Error.message to the overlay', ()
 })
 
 describe('AUDIT-10 — SSO-gated listening and ask side effects', () => {
-  it('listeningState requires a signed-in session before Dust prewarm or speaker reset', () => {
-    const body = sliceBetween('ipcMain.handle(IPC.listeningState', 'ipcMain.handle(IPC.windowResize')
-    expect(body).toMatch(/assertMainWindow\(e\)/)
-    expect(body).toMatch(/if \(!requireAuth\(\)\) return/)
-    expect(body.indexOf('if (!requireAuth()) return')).toBeLessThan(body.indexOf('listeningActive = !!on'))
+  it('listeningState requires a signed-in session before Dust prewarm or speaker reset', async () => {
+    const sideEffects = {
+      setListeningActive: vi.fn(),
+      setTrayRecording: vi.fn(),
+      setRecordingPowerSaveBlock: vi.fn(),
+      onMeetingStart: vi.fn(),
+      releaseParakeet: vi.fn(async () => undefined)
+    }
+    const assertMainWindow = vi.fn()
+    const requireAuth = vi.fn(() => false)
+    const handler = createListeningStateHandler({ assertMainWindow, requireAuth, ...sideEffects })
+
+    await handler({}, true)
+    await handler({}, false)
+
+    expect(assertMainWindow).toHaveBeenCalledTimes(2)
+    expect(requireAuth).toHaveBeenCalledTimes(2)
+    for (const effect of Object.values(sideEffects)) expect(effect).not.toHaveBeenCalled()
   })
 
   it('askResetContext and askCancel require a signed-in session', () => {

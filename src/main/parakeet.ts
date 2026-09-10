@@ -258,10 +258,13 @@ export async function parakeetTranscribe(samples: Float32Array): Promise<string>
   for (const sample of samples) {
     if (!Number.isFinite(sample)) throw new Error('Parakeet PCM samples must be finite.')
   }
-  if (admittedPcmBytes + samples.byteLength > MAX_QUEUED_PCM_BYTES) {
+  // The caller still owns this view and may detach or resize its buffer while decode is pending.
+  // Capture the admitted amount once; accounting must never reread mutable caller-owned metadata.
+  const admittedBytes = samples.byteLength
+  if (admittedPcmBytes + admittedBytes > MAX_QUEUED_PCM_BYTES) {
     throw new ParakeetBusyError()
   }
-  admittedPcmBytes += samples.byteLength
+  admittedPcmBytes += admittedBytes
   try {
     // Reserve first, then clone. Rejected callers never allocate a second PCM buffer and are never
     // parked in an await queue that would retain their original audio indefinitely.
@@ -269,7 +272,7 @@ export async function parakeetTranscribe(samples: Float32Array): Promise<string>
     const response = await requestHost({ type: 'transcribe', files: modelFiles(), pcm })
     return String(response.text ?? '').trim()
   } finally {
-    admittedPcmBytes -= samples.byteLength
+    admittedPcmBytes -= admittedBytes
   }
 }
 

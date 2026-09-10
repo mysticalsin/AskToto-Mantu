@@ -25,6 +25,11 @@ vi.mock('./asr-bundled-ensure', () => ({
 }))
 
 type Api = typeof import('./parakeet')
+type ResizableArrayBuffer = ArrayBuffer & { resize(byteLength: number): void }
+const ResizableBuffer = ArrayBuffer as unknown as {
+  new(byteLength: number, options: { maxByteLength: number }): ResizableArrayBuffer
+  prototype: ResizableArrayBuffer
+}
 let api: Api
 let child: FakeChild
 
@@ -123,6 +128,58 @@ describe('Parakeet utilityProcess client', () => {
     await expect(second).resolves.toBe('second')
     await expect(third).resolves.toBe('third')
   })
+
+  it('releases the immutable admission amount after callers detach their original buffers', async () => {
+    const windows = [new Float32Array(16_000 * 30), new Float32Array(16_000 * 30)]
+    const pending = windows.map((window) => api.parakeetTranscribe(window))
+    for (const window of windows) structuredClone(window.buffer, { transfer: [window.buffer] })
+    expect(windows.map((window) => window.byteLength)).toEqual([0, 0])
+
+    for (let i = 0; i < 50 && child.postMessage.mock.calls.length < 2; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    const requests = child.postMessage.mock.calls.map(([message]) => message as { id: string })
+    child.emit('message', { type: 'result', id: requests[0].id, text: 'first' })
+    child.emit('message', { type: 'result', id: requests[1].id, text: 'second' })
+    await Promise.all(pending)
+
+    const later = api.parakeetTranscribe(new Float32Array(1))
+    for (let i = 0; i < 50 && child.postMessage.mock.calls.length < 3; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
+    const laterRequest = child.postMessage.mock.calls[2][0] as { id: string }
+    child.emit('message', { type: 'result', id: laterRequest.id, text: 'capacity restored' })
+    await expect(later).resolves.toBe('capacity restored')
+  })
+
+  it.runIf(typeof ResizableBuffer.prototype.resize === 'function')(
+    'releases the immutable admission amount after callers resize their original buffers',
+    async () => {
+      const byteLength = 16_000 * 30 * Float32Array.BYTES_PER_ELEMENT
+      const buffers = [
+        new ResizableBuffer(byteLength, { maxByteLength: byteLength }),
+        new ResizableBuffer(byteLength, { maxByteLength: byteLength })
+      ]
+      const pending = buffers.map((buffer) => api.parakeetTranscribe(new Float32Array(buffer)))
+      for (const buffer of buffers) buffer.resize(0)
+
+      for (let i = 0; i < 50 && child.postMessage.mock.calls.length < 2; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      const requests = child.postMessage.mock.calls.map(([message]) => message as { id: string })
+      child.emit('message', { type: 'result', id: requests[0].id, text: 'first' })
+      child.emit('message', { type: 'result', id: requests[1].id, text: 'second' })
+      await Promise.all(pending)
+
+      const later = api.parakeetTranscribe(new Float32Array(1))
+      for (let i = 0; i < 50 && child.postMessage.mock.calls.length < 3; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      const laterRequest = child.postMessage.mock.calls[2][0] as { id: string }
+      child.emit('message', { type: 'result', id: laterRequest.id, text: 'capacity restored' })
+      await expect(later).resolves.toBe('capacity restored')
+    }
+  )
 
   it('bounds non-audio requests in the generation pending map', async () => {
     const warming = Array.from({ length: 16 }, () => api.ensureParakeetModel())
