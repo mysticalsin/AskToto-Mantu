@@ -1,5 +1,11 @@
-import { useState, type ReactElement } from 'react'
-import { runIntelligenceUpdateClick } from '../lib/intelligence-update'
+import { useEffect, useRef, useState, type ReactElement } from 'react'
+import {
+  clearRecoveredIntelligenceUpdateError,
+  createIntelligenceUpdateAttempt,
+  intelligenceUpdateViewState,
+  type IntelligenceUpdateViewState
+} from '../lib/intelligence-update'
+import type { BrainStatusSnapshot } from '../lib/status-refresh'
 
 // MQA-290: return ReactElement. Totos-Mac tsc -b has no global JSX namespace.
 
@@ -8,23 +14,40 @@ import { runIntelligenceUpdateClick } from '../lib/intelligence-update'
  * existing status poll) or a loud error. Never a silent no-op.
  */
 export function IntelligenceUpdateButton({
-  onUpdated
+  status,
+  refreshStatus
 }: {
-  onUpdated?: () => void
+  status: BrainStatusSnapshot | null
+  refreshStatus: () => Promise<BrainStatusSnapshot | null>
 }): ReactElement | null {
-  const [updating, setUpdating] = useState(false)
-  const [error, setError] = useState<string | null>(null)
+  const [local, setLocal] = useState<IntelligenceUpdateViewState>({
+    busy: false,
+    error: null,
+    errorKind: null
+  })
+  const attemptRef = useRef<ReturnType<typeof createIntelligenceUpdateAttempt> | null>(null)
+  if (!attemptRef.current) attemptRef.current = createIntelligenceUpdateAttempt(setLocal)
+
+  useEffect(() => {
+    if (status && !status.error) setLocal(clearRecoveredIntelligenceUpdateError)
+  }, [status])
+
   if (!window.intelligence?.backfill) return null
 
+  const view = intelligenceUpdateViewState(
+    local,
+    status?.error ? { running: false, lastError: status.error } : status?.intelligenceIndex
+  )
   const onClick = (): void => {
-    setUpdating(true)
-    setError(null)
-    void (async () => {
-      const { error: clickError } = await runIntelligenceUpdateClick(() => window.intelligence!.backfill())
-      if (clickError) setError(clickError)
-      else onUpdated?.()
-      setUpdating(false)
-    })()
+    void attemptRef.current!.run(
+      () => window.intelligence!.backfill(),
+      async () => {
+        const refreshed = await refreshStatus()
+        return refreshed?.error
+          ? { running: false, lastError: refreshed.error }
+          : refreshed?.intelligenceIndex ?? null
+      }
+    )
   }
 
   return (
@@ -33,16 +56,16 @@ export function IntelligenceUpdateButton({
         type="button"
         data-intelligence-update=""
         onClick={onClick}
-        disabled={updating}
-        aria-busy={updating || undefined}
+        disabled={view.busy}
+        aria-busy={view.busy || undefined}
         title="Recap missing summaries and extract people, accounts, deals, coaching, and Today"
         className="rounded-md bg-mantu px-3 py-1.5 text-xs font-semibold text-white shadow hover:bg-mantu/90 disabled:opacity-50"
       >
-        {updating ? 'Updating…' : 'Update Intelligence'}
+        {view.busy ? 'Updating…' : 'Update Intelligence'}
       </button>
-      {error && (
+      {view.error && (
         <div className="text-right text-[11px] text-rose-300" role="alert">
-          {error}
+          {view.error}
         </div>
       )}
     </div>

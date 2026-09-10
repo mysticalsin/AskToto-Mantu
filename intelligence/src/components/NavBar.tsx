@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { IntelligenceUpdateButton } from './IntelligenceUpdateButton'
+import type { BrainStatusSnapshot } from '../lib/status-refresh'
 
 const links = [
   { to: '/', label: 'Today', end: true },
@@ -12,7 +13,13 @@ const links = [
   { to: '/meetings', label: 'Meetings' },
 ]
 
-export function NavBar() {
+export function NavBar({
+  status,
+  refreshStatus
+}: {
+  status: BrainStatusSnapshot | null
+  refreshStatus: () => Promise<BrainStatusSnapshot | null>
+}) {
   return (
     // win-drag: lets you grab the header anywhere to move this normal-framed window, not just the thin
     // OS title bar above it (CSS-only — no JS drag here, since the vis-network graph view and selectable
@@ -54,7 +61,7 @@ export function NavBar() {
         {/* HashRouter + file:// packaging: a root-relative href navigates the top frame to the
             filesystem root instead of the app's own route. Hash nav stays in-window and in-app. */}
         <div className="flex items-center gap-3">
-          <IntelligenceUpdateButton />
+          <IntelligenceUpdateButton status={status} refreshStatus={refreshStatus} />
           <a
             href="#/embed"
             className="win-no-drag text-xs font-medium text-mantu-light hover:underline"

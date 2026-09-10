@@ -40,14 +40,14 @@ function LoadingOrError({ loading, error }: { loading: boolean; error: string | 
 }
 
 function DashboardRoutes() {
-  const { data, loading, error, stale } = useDashboardData()
+  const { data, loading, error, stale, status, refreshStatus } = useDashboardData()
   // Key the boundary on the route so switching tabs remounts it fresh and clears a prior view's error;
   // NavBar sits outside it, so navigation always recovers a crashed view.
   const { pathname } = useLocation()
 
   return (
     <div className="min-h-screen">
-      <NavBar />
+      <NavBar status={status} refreshStatus={refreshStatus} />
       {data?.meta.is_placeholder && <PlaceholderBanner note={data.meta.note} />}
       {/* File-mode data (no live brain bridge) always shows its age — a data.json baked months ago
           must never read as current. Live-brain mode regenerates on read, so no banner needed. */}
