@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { BaseSettingsSchema, DEFAULT_SETTINGS, ASK_MEMORY_IDLE_MS } from '@shared/ipc'
 import { isTransient } from './llm/retry'
+import { createListeningStateHandler } from './listening-state-ipc'
 
 // Source-contract lock for Tony's 2026-08-04 requirement: a plain typed/screen question asked OUTSIDE a
 // live meeting must not inherit the previous question's Q&A ("it uses the old conversation info in the
@@ -48,10 +49,29 @@ describe('fresh-question boundary at the askStart choke point', () => {
     expect(indexSrc).toMatch(/lastPlainAskAt = Date\.now\(\)/)
   })
 
-  it('listeningState keeps the boundary suspended during a live meeting', () => {
+  it('listeningState keeps the boundary suspended during a live meeting', async () => {
     const start = indexSrc.indexOf('ipcMain.handle(IPC.listeningState')
     expect(start).toBeGreaterThan(-1)
-    expect(indexSrc.slice(start, start + 300)).toMatch(/listeningActive = !!on/)
+    expect(indexSrc.slice(start, start + 500)).toMatch(
+      /setListeningActive:\s*\(on\)\s*=>\s*\{\s*listeningActive = on\s*\}/
+    )
+
+    let listeningActive = false
+    const handler = createListeningStateHandler({
+      assertMainWindow: () => {},
+      requireAuth: () => true,
+      setListeningActive: (on) => { listeningActive = on },
+      setTrayRecording: () => {},
+      setRecordingPowerSaveBlock: () => {},
+      onMeetingStart: () => {},
+      releaseParakeet: async () => {}
+    })
+    const freshQuestionBoundaryOpen = (): boolean => !listeningActive
+
+    await handler({}, true)
+    expect(freshQuestionBoundaryOpen()).toBe(false)
+    await handler({}, false)
+    expect(freshQuestionBoundaryOpen()).toBe(true)
   })
 
   it('IPC.askResetContext resets the Dust conversation — "New chat" is no longer a no-op for Dust users', () => {
