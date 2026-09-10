@@ -5,6 +5,7 @@ import { safeMeetingBasename } from './meeting-path'
 import { resolveMeetingsFolder, decodeSaved, isEncryptedFile, writeSaved, formatTranscript, DEBRIEF_HEADING, readSavedFile } from './transcripts'
 import { getSettings } from './store'
 import { detectLanguage } from '@shared/lang-id'
+import { readRecapStatus, recapStatusValidationError, type RecapStatus } from '@shared/recap-status'
 import type { MeetingSummary, RecallHit, RecallReadResult, Settings, TranscriptLine } from '@shared/ipc'
 
 // Independent meeting-history backend (own implementation, no third-party source). Reads the saved
@@ -326,6 +327,7 @@ export async function recallRead(file: string): Promise<RecallReadResult> {
     mode: fm.mode || 'general',
     startedAt,
     recap,
+    recapStatus: readRecapStatus(fm.recap_status),
     lines,
     confidential: fm.confidential === 'true',
     // MQA-092 — the CRM payload fingerprint of the last push that this meeting's CRM connection
@@ -491,7 +493,9 @@ function sanitizeRecap(s: string): string {
  * Rewrite ONLY the recap section of a saved meeting after the fact (fix a mis-heard name, tick an action
  * item, annotate). Replaces the body of the "## Notes & follow-ups" section — the exact span recallRead
  * parses, bounded before the sibling "## Full transcript" heading — with the edited markdown, leaving the
- * frontmatter, the H1, the meta line, and the entire "## Full transcript" section untouched. The FILE is
+ * frontmatter, the H1, the meta line, and the entire "## Full transcript" section untouched, except for
+ * an explicitly supplied recapStatus. An omitted status preserves the existing outcome (manual edits
+ * are not evidence that an interrupted generation completed). The FILE is
  * never renamed. If the meeting was saved with an empty recap (saveMeeting omits the heading entirely in
  * that case), the section is INSERTED immediately before "## Full transcript" so it parses identically to a
  * normally-saved recap. Same basename guard as renameMeeting/deleteMeeting (no traversal, no index/README).
@@ -504,8 +508,14 @@ function sanitizeRecap(s: string): string {
 export async function updateMeetingRecap(
   settings: Settings,
   file: string,
-  newRecap: string
+  newRecap: string,
+  recapStatus?: RecapStatus
 ): Promise<{ ok: boolean; error?: string }> {
+  const statusError = recapStatusValidationError(newRecap, recapStatus)
+  if (statusError) return { ok: false, error: statusError }
+  if (recapStatus !== undefined && newRecap.length > RECAP_MAX) {
+    return { ok: false, error: 'The generated summary is too long to save without losing text.' }
+  }
   const folder = resolveMeetingsFolder(settings)
   const safeName = safeMeetingBasename(file)
   if (!safeName) {
@@ -513,14 +523,13 @@ export async function updateMeetingRecap(
   }
 
   const recap = sanitizeRecap(newRecap)
+  const body = recap.trim()
   // Guard the one string that would corrupt the round-trip: recallRead ends the recap at the FIRST line
   // beginning "## Full transcript". If the edited notes contained that heading, re-reading would swallow
   // everything after it into the transcript. Reject rather than silently mangle the user's own text.
-  if (/^## Full transcript/m.test(recap)) {
+  if (/^## Full transcript/m.test(body)) {
     return { ok: false, error: 'The "## Full transcript" heading is reserved. Please rename it in your notes.' }
   }
-  const body = recap.trim()
-
   const fullPath = join(folder, safeName)
   let raw: Buffer
   try {
@@ -555,9 +564,21 @@ export async function updateMeetingRecap(
     // "## Full transcript" heading so recallRead parses it exactly as it would a normally-saved recap.
     const txMatch = text.match(/^## Full transcript/m)
     if (!txMatch) return { ok: false, error: 'This does not look like a meeting file.' }
-    if (!body) return { ok: true } // nothing to add and no section to change — a no-op success
-    const at = txMatch.index!
-    updated = `${text.slice(0, at)}## Notes & follow-ups\n\n${body}\n\n${text.slice(at)}`
+    if (!body) {
+      if (recapStatus === undefined) return { ok: true }
+      updated = text // An empty failed attempt still has a durable outcome, without an empty section.
+    } else {
+      const at = txMatch.index!
+      updated = `${text.slice(0, at)}## Notes & follow-ups\n\n${body}\n\n${text.slice(at)}`
+    }
+  }
+
+  if (recapStatus !== undefined) {
+    const fm = updated.match(/^---\n([\s\S]*?)\n---/)
+    if (!fm) return { ok: false, error: 'Could not save the summary status: missing meeting frontmatter.' }
+    const fields = fm[1].split('\n').filter((line) => !/^recap_status:/i.test(line))
+    fields.push(`recap_status: ${recapStatus}`)
+    updated = `---\n${fields.join('\n')}\n---${updated.slice(fm[0].length)}`
   }
 
   try {

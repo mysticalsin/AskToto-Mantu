@@ -3,6 +3,7 @@ import type { ProviderId } from './providers'
 import { LocalVisionEvidenceSchema } from './local-ai'
 import { EntityKindSchema } from './brain'
 import { OPERATOR_LICENSE_MAX } from './operator-license'
+import { RECAP_STATUSES, recapStatusValidationError, type RecapStatus } from './recap-status'
 
 export const ProviderIdSchema = z.enum([
   'anthropic',
@@ -400,13 +401,19 @@ export function stripProvisionalLines(lines: TranscriptLine[]): TranscriptLine[]
  *  one slab spanning the whole switch. */
 export const IMPORT_CHUNK_SECONDS = 12
 
+function validateRecapStatus(value: { recap: string; recapStatus?: RecapStatus }, context: z.RefinementCtx): void {
+  const message = recapStatusValidationError(value.recap, value.recapStatus)
+  if (message) context.addIssue({ code: z.ZodIssueCode.custom, path: ['recap'], message })
+}
+
 export const SaveMeetingSchema = z.object({
   title: z.string().default(''),
   mode: z.string().default('general'),
   startedAt: z.number(),
   lines: z.array(TranscriptLineSchema),
-  recap: z.string().default('')
-})
+  recap: z.string().default(''),
+  recapStatus: z.enum(RECAP_STATUSES).optional()
+}).superRefine(validateRecapStatus)
 export type SaveMeeting = z.infer<typeof SaveMeetingSchema>
 
 export const SaveNoteSchema = z.object({
@@ -1878,8 +1885,9 @@ export type RenameMeetingPayload = z.infer<typeof RenameMeetingPayloadSchema>
  *  RECAP_MAX cap. Empty is allowed (clearing the notes / annotating a meeting that had no recap yet). */
 export const UpdateRecapPayloadSchema = z.object({
   file: z.string().min(1, 'Missing meeting file.'),
-  recap: z.string().max(20000)
-})
+  recap: z.string().max(20000),
+  recapStatus: z.enum(RECAP_STATUSES).optional()
+}).superRefine(validateRecapStatus)
 export type UpdateRecapPayload = z.infer<typeof UpdateRecapPayloadSchema>
 
 /** Payload for recall:set-confidential (Task MI-5) — flags/unflags a saved meeting so the wiki
@@ -1917,6 +1925,8 @@ export interface RecallReadResult {
   mode?: string
   startedAt?: number
   recap?: string
+  /** Absent on legacy/unspecified notes; text length is not proof of generation completion. */
+  recapStatus?: RecapStatus
   lines?: TranscriptLine[]
   /** Task MI-5 — frontmatter `confidential: true`, so a reopened past meeting's toggle reflects its
    *  actual saved state instead of always starting unflagged. */

@@ -21,6 +21,7 @@ import { mainLog, auditLog } from './logger'
 import { devEnv, isPackagedBuild } from './dev-env'
 import { safeMeetingBasename } from './meeting-path'
 import { refuseIfDemoTagged } from '@shared/demo-guard'
+import { recapStatusValidationError } from '@shared/recap-status'
 
 // Optional at-rest encryption for transcripts/notes. Two on-disk formats share one fixed-length
 // `ATKENC<n>\n` magic prefix so detection stays a simple prefix check:
@@ -741,6 +742,8 @@ export function meetingDurationMin(m: { startedAt: number; lines: { t: number }[
 
 /** Write a meeting as Dust-readable markdown + frontmatter. Returns the file path. */
 export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<string> {
+  const statusError = recapStatusValidationError(m.recap, m.recapStatus)
+  if (statusError) throw new Error(statusError)
   // MQA-278 — refuses Act 2 onboarding-demo-tagged data before touching disk. See @shared/demo-guard.
   refuseIfDemoTagged('saveMeeting', m.title, m.mode)
   const folder = ensureMeetingsFolder(settings)
@@ -782,6 +785,7 @@ export async function saveMeeting(settings: Settings, m: SaveMeeting): Promise<s
       `participants: [${participants.join(', ')}]`,
       `duration_min: ${durMin}`,
       `lines: ${m.lines.length}`,
+      ...(m.recapStatus ? [`recap_status: ${m.recapStatus}`] : []),
       ...(tags.length ? [`topics: [${tags.map((t) => yamlSafeTitle(t)).join(', ')}]`] : []),
       'status: ready-for-followup',
       '---',
