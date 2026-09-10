@@ -38,7 +38,7 @@ describe('MQA-186 — the first-run weight fetch is gated, and the gate is not a
 
   it('turning Local AI on still re-arms the fetch as a second chance after a failed boot download', () => {
     // Opted-in boot provisions on open; OFF→ON also provisions without requiring an app restart.
-    const handler = sliceBetween(src, 'const next = setSettings(p)', 'ipcMain.handle(IPC.settingsRecoverProfile')
+    const handler = sliceBetween(src, 'const next = setSettingsWithSpeakerPolicy(p)', 'ipcMain.handle(IPC.settingsRecoverProfile')
     expect(handler).toMatch(/next\.localLlm\.enabled && \(!cur\.localLlm\.enabled \|\| cur\.localLlm\.modelId !== next\.localLlm\.modelId\)/)
     expect(handler).toMatch(/provisionLocalModel\(next\.localLlm, getAllowedProviders\(\), ensureLocalModel\)/)
     // Same MQA-178 reason as boot: the background screen reader's eligibility is only re-evaluated on a
