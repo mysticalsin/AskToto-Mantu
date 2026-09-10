@@ -548,6 +548,7 @@ import { isSafeAccelerator } from '@shared/accelerator'
 import { formatResetPhrase } from '@shared/reset-time'
 import { applySpeakerNames, clusterNamePairsFromAlignment } from '@shared/transcript-align'
 import { initializeCaheEditionIdentity, isCaheEdition } from './cahe-edition'
+import { freezeAsciiUserAgent } from './app-user-agent'
 import { importEmbeddedCaheKey, seedCaheLocalAiForBackgroundScreen } from './cahe-embedded-key'
 import { importEmbeddedCloudflareKey, embeddedCloudflareKeyAvailable, restoreEmbeddedCloudflareKey } from './embedded-cloudflare-key'
 
@@ -600,6 +601,9 @@ function makeRefreshDustAuth(current: {
 //
 // `??=` on BOTH platforms leaves an explicit QA/operator override (ASKTOTO_LOCAL_KEYSTORE already set
 // in the environment) untouched — including forcing the file keystore on Windows for isolated QA.
+// ENT-029: preserve Métis display branding without putting non-ASCII bytes into Chromium headers.
+// Run before edition/display-name changes and before the first session is initialized.
+freezeAsciiUserAgent(app)
 initializeCaheEditionIdentity()
 if (process.platform === 'darwin') process.env.ASKTOTO_LOCAL_KEYSTORE ??= '1'
 
