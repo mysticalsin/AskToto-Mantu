@@ -44,7 +44,8 @@ describe('AUDIT-10 — SSO-gated listening and ask side effects', () => {
       setTrayRecording: vi.fn(),
       setRecordingPowerSaveBlock: vi.fn(),
       onMeetingStart: vi.fn(),
-      releaseParakeet: vi.fn(async () => undefined)
+      releaseParakeet: vi.fn(async () => undefined),
+      releaseSpeakerEmbedding: vi.fn(async () => undefined)
     }
     const assertMainWindow = vi.fn()
     const requireAuth = vi.fn(() => false)

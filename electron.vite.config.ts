@@ -43,6 +43,9 @@ export default defineConfig({
           // transformers/ONNX runtime. Keeping it as a distinct entry is required on Windows too,
           // where the two native runtimes ship colliding DLL names.
           'parakeet-asr-host': resolve(__dirname, 'src/main/parakeet-asr-host.ts'),
+          // Speaker embeddings have their own sherpa/ONNX utility process so neither native constructor
+          // nor compute can block Electron's main loop or share Whisper's native runtime on Windows.
+          'speaker-embedding-host': resolve(__dirname, 'src/main/speaker-embedding-host.ts'),
           // MQA-234: the whisper utilityProcess child. Its own entry so it never shares a chunk with
           // main — the whole point is that transformers/onnxruntime-node load ONLY in the child.
           'whisper-asr-host': resolve(__dirname, 'src/main/whisper-asr-host.ts')

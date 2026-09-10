@@ -38,6 +38,11 @@ import { dirname, join } from 'node:path'
 import { app } from 'electron'
 import { mainLog } from './logger'
 import {
+  computeSpeakerEmbedding,
+  speakerEmbeddingAvailable
+} from './speaker-embedding-client'
+import type { SpeakerEmbeddingOwner } from './speaker-embedding-protocol'
+import {
   createSpeakerClusterer,
   cosineSimilarity,
   meanEmbedding,
@@ -49,7 +54,6 @@ import {
 const ID_THRESHOLD = 0.55
 /** A silence gap this long between THEM windows means a new meeting — session labels reset. */
 const SESSION_GAP_MS = 30 * 60_000
-const SAMPLE_RATE = 16_000
 /** Cosine similarity above which a THEM window is treated as the operator's OWN voice leaking through
  *  the loopback rather than the other person speaking. Deliberately higher than ID_THRESHOLD — this is
  *  claiming "you just heard yourself", the strongest claim speaker-id.ts makes, so it needs the strongest
@@ -100,11 +104,15 @@ interface VoiceProfile {
 }
 
 interface EmbeddingExtractor {
-  compute: (samples: Float32Array) => Float32Array | null
+  compute: (
+    samples: Float32Array,
+    owner?: SpeakerEmbeddingOwner
+  ) => Float32Array | null | Promise<Float32Array | null>
+  available?: (owner?: SpeakerEmbeddingOwner) => boolean | Promise<boolean>
 }
 
 export interface SpeakerIdDeps {
-  /** Injected extractor factory (tests). Default builds the sherpa-onnx extractor lazily. */
+  /** Injected extractor factory (tests). Default builds a lazy facade over the isolated native child. */
   createExtractor?: () => EmbeddingExtractor | null
   /** Injected store path (tests). */
   storePath?: () => string
@@ -130,42 +138,14 @@ function findRepoRoot(startDir: string): string {
   return startDir
 }
 
-/** Build the real sherpa extractor, or null when the model/addon is unavailable. Mirrors parakeet.ts's
- *  memoized-probe posture: one warn per session, never a throw into the audio path. */
+/** Build a lightweight facade over the child-owned native extractor. The parent checks only whether the
+ *  model file exists; addon load, constructor, warmup and compute happen exclusively in the utility process. */
 function buildSherpaExtractor(): EmbeddingExtractor | null {
   const modelPath = speakerModelPath()
   if (!existsSync(modelPath)) return null
-  try {
-    /* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any */
-    const sherpa: any = require('sherpa-onnx-node')
-    /* eslint-enable @typescript-eslint/no-require-imports, @typescript-eslint/no-explicit-any */
-    const extractor = new sherpa.SpeakerEmbeddingExtractor({
-      model: modelPath,
-      numThreads: 1,
-      provider: 'cpu'
-    })
-    return {
-      compute: (samples: Float32Array) => {
-        try {
-          const stream = extractor.createStream()
-          stream.acceptWaveform({ samples, sampleRate: SAMPLE_RATE })
-          // MQA-237: Electron's main process forbids N-API external ArrayBuffers ("External buffers
-          // are not allowed"), and sherpa's compute() wraps its output in one by default — so this
-          // threw on EVERY window and Speaker Intelligence has been silently dead in the app since it
-          // shipped (plain-node unit tests pass; only in-Electron use hits the guard). The binding's own
-          // escape hatch: enableExternalBuffer=false copies the embedding instead.
-          const embedding = extractor.compute(stream, false) as Float32Array | number[]
-          const arr = embedding instanceof Float32Array ? embedding : Float32Array.from(embedding)
-          return arr.length > 0 ? arr : null
-        } catch (e) {
-          mainLog.warn('[speaker-id] embedding failed', e instanceof Error ? e.message : String(e))
-          return null
-        }
-      }
-    }
-  } catch (e) {
-    mainLog.warn('[speaker-id] sherpa extractor unavailable', e instanceof Error ? e.message : String(e))
-    return null
+  return {
+    compute: (samples, owner = 'live') => computeSpeakerEmbedding(modelPath, samples, owner),
+    available: (owner = 'live') => speakerEmbeddingAvailable(modelPath, owner)
   }
 }
 
@@ -173,13 +153,13 @@ export interface SpeakerId {
   /** Label one THEM window. Returns null when unavailable/degenerate (caller attaches no name); returns
    *  a label with `echo: true` (see isEchoBleed) when this is the operator's own voice leaking through
    *  the loopback rather than a real THEM utterance — `name`/`source` carry no information in that case. */
-  labelWindow: (samples: Float32Array) => SpeakerLabel | null
+  labelWindow: (samples: Float32Array, owner?: SpeakerEmbeddingOwner) => Promise<SpeakerLabel | null>
   /** Enroll (or reinforce) a named voice profile from one or more turn embeddings' raw audio. */
-  enroll: (name: string, sampleWindows: readonly Float32Array[]) => boolean
+  enroll: (name: string, sampleWindows: readonly Float32Array[]) => Promise<boolean>
   /** Echo defense + operator profile upkeep (SPEAKER-INTELLIGENCE-PLAN §3.3): feed a 'you' (mic) window's
    *  raw audio so the operator's own voiceprint keeps improving across the session. Same degrade-to-noop
    *  contract as everything else here — never throws, never blocks the ASR path that calls it. */
-  observeOperatorWindow: (samples: Float32Array) => void
+  observeOperatorWindow: (samples: Float32Array, owner?: SpeakerEmbeddingOwner) => Promise<void>
   /** Auto-enrollment flywheel (SPEAKER-INTELLIGENCE-PLAN §3.4): fold each `clusterLabel`'s buffered
    *  session embeddings into a permanent voiceprint under `name`, once that cluster has accumulated at
    *  least AUTO_ENROLL_MIN_WINDOWS windows (quality gate — see its own comment). Called by
@@ -190,7 +170,7 @@ export interface SpeakerId {
   listProfiles: () => Array<{ name: string; samples: number }>
   deleteProfile: (name: string) => boolean
   /** True when the extractor is loadable (model present + addon healthy). */
-  available: () => boolean
+  available: (owner?: SpeakerEmbeddingOwner) => Promise<boolean>
   /** MQA-238: whole-session cluster merge at import end — see SpeakerClusterer.mergePass. Returns the
    *  old->final label mapping so already-emitted lines can be relabeled. Profile-matched names are
    *  untouched (they never came from the clusterer). */
@@ -242,6 +222,20 @@ export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
   }
 
   let lastWindowAt = 0
+  let sessionGeneration = 0
+
+  const compute = async (
+    ex: EmbeddingExtractor,
+    samples: Float32Array,
+    owner: SpeakerEmbeddingOwner
+  ): Promise<Float32Array | null> => {
+    try {
+      return await ex.compute(samples, owner)
+    } catch (e) {
+      mainLog.warn('[speaker-id] embedding failed', e instanceof Error ? e.message : String(e))
+      return null
+    }
+  }
 
   const matchProfile = (embedding: Float32Array): SpeakerLabel | null => {
     let best: SpeakerLabel | null = null
@@ -302,14 +296,17 @@ export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
   }
 
   return {
-    labelWindow: (samples) => {
+    labelWindow: async (samples, owner = 'live') => {
       const ex = getExtractor()
       if (!ex) return null
+      const generation = sessionGeneration
       const t = now()
-      if (lastWindowAt && t - lastWindowAt > SESSION_GAP_MS) clusterer.reset()
+      const embedding = await compute(ex, samples, owner)
+      if (!embedding || generation !== sessionGeneration) return null
+      if (lastWindowAt && t - lastWindowAt > SESSION_GAP_MS) {
+        clusterer.reset()
+      }
       lastWindowAt = t
-      const embedding = ex.compute(samples)
-      if (!embedding) return null
       // Echo defense FIRST (SPEAKER-INTELLIGENCE-PLAN §3.3): a THEM window that is really the operator's
       // own voice bleeding through the loopback must never reach profile/cluster matching — attributing
       // it to a person (real or "Speaker N") is the exact mislabel this guards against, and letting it
@@ -331,19 +328,24 @@ export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
       pushCapped(buf, embedding)
       return { name: assigned.label, source: 'cluster', similarity: assigned.similarity }
     },
-    enroll: (name, sampleWindows) => {
+    enroll: async (name, sampleWindows) => {
       const ex = getExtractor()
       if (!ex) return false
-      const embeddings = sampleWindows
-        .map((w) => ex.compute(w))
-        .filter((e): e is Float32Array => e !== null)
+      const generation = sessionGeneration
+      const embeddings: Float32Array[] = []
+      for (const window of sampleWindows) {
+        const embedding = await compute(ex, window, 'live')
+        if (generation !== sessionGeneration) return false
+        if (embedding) embeddings.push(embedding)
+      }
       return enrollEmbeddings(name, embeddings)
     },
-    observeOperatorWindow: (samples) => {
+    observeOperatorWindow: async (samples, owner = 'live') => {
       const ex = getExtractor()
       if (!ex) return
-      const embedding = ex.compute(samples)
-      if (!embedding) return
+      const generation = sessionGeneration
+      const embedding = await compute(ex, samples, owner)
+      if (!embedding || generation !== sessionGeneration) return
       pushCapped(operatorBuffer, embedding)
     },
     autoEnrollFromLabeledWindows: (pairs) => {
@@ -370,8 +372,19 @@ export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
       saveProfiles()
       return true
     },
-    available: () => getExtractor() !== null,
+    available: async (owner = 'live') => {
+      const ex = getExtractor()
+      if (!ex) return false
+      try {
+        return ex.available ? await ex.available(owner) : true
+      } catch (e) {
+        mainLog.warn('[speaker-id] extractor unavailable', e instanceof Error ? e.message : String(e))
+        return false
+      }
+    },
     resetSession: () => {
+      // Invalidate every native-dependent call before any await continuation can touch the next session.
+      sessionGeneration++
       // Flush this session's operator samples into the persisted profile BEFORE clearing — the
       // resetSession boundary is the next meeting's START (see MQA-043's wiring in index.ts), so this
       // flushes the meeting that just ended. Same AUTO_ENROLL_MIN_WINDOWS quality gate as the flywheel:

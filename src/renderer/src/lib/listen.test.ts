@@ -9,6 +9,7 @@ import {
   looksLikeNetworkError,
   probeMinWords,
   probeResultIsStale,
+  speakerEmbedResultIsStale,
   shouldProbeLanguageWindow,
   sysRetryDelayMs,
   themDeviceChangeAction,
@@ -624,5 +625,18 @@ describe('feedEmptyIsEcho — echo silence is not an ASR stall', () => {
   it('is what the Parakeet/Apple empty-run counters gate on (source contract)', () => {
     expect(listenSrc).toMatch(/if \(feedEmptyIsEcho\(res\)\) \{\s*\n\s*parakeetEmptyRunRef\.current = 0/g)
     expect(listenSrc).toMatch(/if \(res\?\.echo\) \{\s*\n\s*const next = linesRef\.current\.filter/)
+  })
+})
+
+describe('speakerEmbedResultIsStale — late Whisper labels stay in their meeting', () => {
+  it('drops a result after the session epoch changes', () => {
+    expect(speakerEmbedResultIsStale(7, 8)).toBe(true)
+    expect(speakerEmbedResultIsStale(7, 7)).toBe(false)
+  })
+
+  it('guards the actual speakerEmbed continuation before echo removal or name attachment', () => {
+    expect(listenSrc).toMatch(
+      /\.speakerEmbed\(embedAudio, 'them'\)[\s\S]{0,300}?if \(speakerEmbedResultIsStale\(speakerEpoch, sessionEpochRef\.current\)\) return/
+    )
   })
 })

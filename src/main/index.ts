@@ -158,6 +158,7 @@ import { ensureLocalRuntimeStarted, prewarmLocal } from './llm/local'
 import * as fmRuntime from './llm/fm-runtime'
 import { extractScreenText } from './mac-helper'
 import { createSpeakerId, type SpeakerId, type SpeakerLabel } from './speaker-id'
+import { releaseSpeakerEmbedding } from './speaker-embedding-client'
 import {
   clampAxis,
   clampAxisMargin,
@@ -234,10 +235,10 @@ function getSpeakerId(): SpeakerId {
  *  between the three chokepoints. Degrades to null on any failure, the feature being off, or the model
  *  being unprovisioned — a missing label must never break transcription. See speaker-id.ts's labelWindow
  *  for the echo-defense flag (`label.echo`) callers must check before attaching `label.name` anywhere. */
-function labelThemAudio(samples: Float32Array): SpeakerLabel | null {
+async function labelThemAudio(samples: Float32Array, owner: 'live' | 'import' = 'live'): Promise<SpeakerLabel | null> {
   if (!getSettings().speakerId.enabled) return null
   try {
-    return getSpeakerId().labelWindow(samples)
+    return await getSpeakerId().labelWindow(samples, owner)
   } catch (err) {
     mainLog.warn('[speaker-id] labeling failed', err instanceof Error ? err.message : String(err))
     return null
@@ -246,12 +247,12 @@ function labelThemAudio(samples: Float32Array): SpeakerLabel | null {
 
 /** Echo defense + operator profile upkeep (SPEAKER-INTELLIGENCE-PLAN §3.3) — feed a 'you' (mic) window's
  *  raw audio into the operator's rolling voiceprint so labelThemAudio can recognize the operator's own
- *  voice bleeding through the loopback. Fire-and-forget by construction (void return, swallows errors):
- *  called from the SAME handlers that already transcribe the window, and must never affect their result. */
-function observeOperatorAudio(samples: Float32Array): void {
+ *  voice bleeding through the loopback. Async child failures are swallowed here: called from the SAME
+ *  handlers that already transcribe the window, and must never affect their result. */
+async function observeOperatorAudio(samples: Float32Array): Promise<void> {
   if (!getSettings().speakerId.enabled) return
   try {
-    getSpeakerId().observeOperatorWindow(samples)
+    await getSpeakerId().observeOperatorWindow(samples, 'live')
   } catch (err) {
     mainLog.warn('[speaker-id] operator observation failed', err instanceof Error ? err.message : String(err))
   }
@@ -1415,11 +1416,11 @@ function initializeImportJobs(): void {
     },
     // MQA-235: diarize one utterance window — enrolled profile name or session cluster label. Same
     // CAM++ extractor the live path uses; a fresh session is reset per job in `decode` above.
-    speakerFor: async (samples) => getSpeakerId().labelWindow(samples)?.name ?? null,
+    speakerFor: async (samples) => (await getSpeakerId().labelWindow(samples, 'import'))?.name ?? null,
     finalizeSpeakers: () => getSpeakerId().finalizeSession(),
     // Polish is skipped on import: sequential batches of 8 with a 120s idle made one meeting take
     // forever before the summary. Recap writes first. Cheap polish can be run later if needed.
-    // Free both ASR helpers' model memory between imports; the next job spawns fresh children.
+    // Free the ASR and speaker helpers' model memory between imports; the next job spawns fresh children.
     // Import idle may start one Intelligence pass (not a BrainView mount timer).
     onIdle: () => {
       stopWhisperHost()
@@ -1429,6 +1430,9 @@ function initializeImportJobs(): void {
       if (!listeningActive) {
         void parakeetRelease().catch((e) =>
           mainLog.error('[parakeet] import-idle release failed:', e)
+        )
+        void releaseSpeakerEmbedding('import').catch((e) =>
+          mainLog.error('[speaker-embedding] import-idle release failed:', e)
         )
       }
       void runIntelligenceIndex('import-idle').catch((e) =>
@@ -5348,13 +5352,13 @@ function registerIpc(): void {
     // ASR just consumed — no extra capture. Strictly additive and best-effort: any failure or the feature
     // being off/unprovisioned attaches no name and the line renders exactly as before.
     if (p.speaker === 'them') {
-      const label = labelThemAudio(p.samples)
+      const label = await labelThemAudio(p.samples)
       // P2 echo defense: this window is the operator's OWN voice bleeding through the loopback —
       // drop the transcribed text rather than mislabel the operator's words as THEM.
       if (label?.echo) return { text: '', echo: true }
       if (text && label) return { text, name: label.name }
     } else if (p.speaker === 'you') {
-      observeOperatorAudio(p.samples)
+      await observeOperatorAudio(p.samples)
     }
     return { text }
   })
@@ -5374,11 +5378,11 @@ function registerIpc(): void {
     // Spoken-language hint (Settings → Audio) pins the recognizer locale; 'auto' keeps system locale.
     const text = await appleSpeechTranscribe(p.samples, appleSpeechLocale(getSettings().asrLanguage))
     if (p.speaker === 'them') {
-      const label = labelThemAudio(p.samples)
+      const label = await labelThemAudio(p.samples)
       if (label?.echo) return { text: '', echo: true } // see parakeetFeed's identical echo-defense comment above
       if (text && label) return { text, name: label.name }
     } else if (p.speaker === 'you') {
-      observeOperatorAudio(p.samples)
+      await observeOperatorAudio(p.samples)
     }
     return { text }
   })
@@ -5396,12 +5400,12 @@ function registerIpc(): void {
     // Same defensive cap as parakeetFeed — see its own comment for why.
     if (p.samples.length > 16_000 * 30) return {}
     if (p.speaker === 'them') {
-      const label = labelThemAudio(p.samples)
+      const label = await labelThemAudio(p.samples)
       // Echo bleed: Whisper already committed the line — return echo:true so the renderer can drop it.
       if (label?.echo) return { echo: true as const }
       if (label) return { name: label.name }
     } else if (p.speaker === 'you') {
-      observeOperatorAudio(p.samples)
+      await observeOperatorAudio(p.samples)
     }
     return {}
   })
@@ -7258,6 +7262,7 @@ function registerIpc(): void {
     setTrayRecording,
     setRecordingPowerSaveBlock,
     releaseParakeet: parakeetRelease,
+    releaseSpeakerEmbedding: () => releaseSpeakerEmbedding('live'),
     onMeetingStart: () => {
       // A new meeting starting is the one clean boundary for Dust conversation continuity — everything
       // from here until the NEXT meeting starts shares one conversation (see resetDustConversation).
