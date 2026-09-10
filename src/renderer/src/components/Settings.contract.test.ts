@@ -81,6 +81,10 @@ describe('Local AI tells the truth about a model that is downloaded, not bundled
     expect(block).toMatch(/Unavailable/)
   })
 
+  it('a downloaded model remains visibly inactive while Local AI is off', () => {
+    expect(copy).toMatch(/!settings\.localLlm\.enabled\s*\? 'Downloaded\. Local AI is off\. Enable it to use this model\.'/)
+  })
+
   it('a disk or RAM skip is a named refusal with Retry, not a silent idle', () => {
     expect(block).toMatch(/unavailableReason === 'insufficient-disk'/)
     expect(block).toMatch(/not enough free disk space/)

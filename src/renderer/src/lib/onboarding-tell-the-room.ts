@@ -17,4 +17,4 @@ export const TELL_THE_ROOM_WHY =
 export const TELL_THE_ROOM_CHECKBOX = "I'll tell everyone on the call before I record."
 
 export const TELL_THE_ROOM_READY =
-  'Métis is ready. It starts listening only when you press Listen and tell the room. Nothing is captured before that.'
+  'Métis starts listening only when you press Listen and tell the room. Nothing is captured before that.'

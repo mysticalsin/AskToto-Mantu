@@ -1972,7 +1972,9 @@ function LocalAiSection({
                     ? notDownloadedText
                     : !model?.ready
                       ? 'Unavailable: Métis could not read the on-device model status.'
-                      : settings.localRuntimeState === 'running'
+                      : !settings.localLlm.enabled
+                        ? 'Downloaded. Local AI is off. Enable it to use this model.'
+                        : settings.localRuntimeState === 'running'
                         ? `Running: ${model?.label ?? settings.localLlm.modelId}`
                         : settings.localRuntimeState === 'starting'
                           ? 'Starting the on-device model...'

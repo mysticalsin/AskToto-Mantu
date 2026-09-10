@@ -86,6 +86,7 @@ import {
   type OnboardingScene
 } from '../lib/onboarding-flow'
 import { appearanceSettingsPatch, seedOnboardingAppearance } from '../lib/onboarding-appearance'
+import { onboardingReadinessCopy } from '../lib/onboarding-readiness-copy'
 import { createOnboardingMusicBed, haltAllOnboardingAudio, lockOnboardingAudio } from '../lib/onboarding-music'
 import { closeOnboardingPortal, disposePortalAudio, playBarLand, playPortalOpen, requestBarLand } from '../lib/onboarding-portal'
 import {
@@ -673,6 +674,7 @@ function ActReady({
   onFinish,
   onOpenAiSettings,
   asrReady,
+  aiReady,
   asrHint,
   asrProgress,
   showAsrRetry,
@@ -682,6 +684,7 @@ function ActReady({
   onFinish: () => Promise<void>
   onOpenAiSettings?: () => void
   asrReady: boolean
+  aiReady: boolean
   asrHint: string
   asrProgress?: number
   showAsrRetry: boolean
@@ -690,6 +693,7 @@ function ActReady({
   const [busy, setBusy] = useState(false)
   const persona = ONBOARDING_PERSONAS.find((p) => p.id === (mode as OnboardingPersonaId))
   const blocked = busy || !asrReady
+  const readinessCopy = onboardingReadinessCopy(asrReady, aiReady)
 
   const finishAndOpenAiSettings = async (): Promise<void> => {
     if (blocked) return
@@ -711,7 +715,7 @@ function ActReady({
         <MetisMark size={96} />
       </div>
       <div className="flex flex-col items-center gap-2">
-        <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">You’re all set.</h2>
+        <h2 className="m-0 text-[24px] font-semibold text-[color:var(--color-ink)]">{readinessCopy.title}</h2>
         {persona && (
           <p className="fade-up m-0 text-[11px] font-medium uppercase tracking-[0.08em] text-[color:var(--color-accent-2)]">
             {persona.label} mode
@@ -723,6 +727,9 @@ function ActReady({
             personalize already committed the user to. */}
         <p className="m-0 max-w-[380px] text-[13px] leading-snug text-[color:var(--color-ink-2)]">
           {TELL_THE_ROOM_READY}
+        </p>
+        <p className="m-0 max-w-[380px] text-[12px] leading-snug text-[color:var(--color-ink-3)]">
+          {readinessCopy.aiHint}
         </p>
         <p className="onboard-tell-quote onboard-tell-quote--echo fade-up">{TELL_THE_ROOM_QUOTE}</p>
       </div>
@@ -760,7 +767,7 @@ function ActReady({
           disabled={blocked}
           className="no-drag focus-ring text-[11px] text-[color:var(--color-ink-3)] hover:text-[color:var(--color-ink-2)] disabled:opacity-50"
         >
-          Add your own AI provider (optional, never required)
+          {readinessCopy.aiAction}
         </button>
       )}
     </div>
@@ -1295,7 +1302,7 @@ export function OnboardingExperience({
                   )}
                   {r.key === 'ai' && r.state === 'action' && (
                     <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                      You'll add a provider key on the next step. Nothing else here needs one.
+                      Transcription works without an AI connection. Connect AI in Settings for automatic summaries and answers.
                     </p>
                   )}
                   {r.key === 'ai' && r.state === 'ready' && (
@@ -1452,6 +1459,7 @@ export function OnboardingExperience({
           onFinish={finish}
           onOpenAiSettings={onOpenAiSettings}
           asrReady={asrReady}
+          aiReady={settings?.providerReady === true}
           asrHint={asrRow.detail}
           asrProgress={asrRow.progress}
           showAsrRetry={asrRowNeedsRetry(asrRow)}
