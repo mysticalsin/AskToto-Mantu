@@ -858,6 +858,7 @@ export function useListen(
       void Promise.race([feed, timeout])
         .then((res) => {
           if (sessionEpochRef.current !== jobEpoch) return // meeting moved on — drop stale text
+          clearProvisional() // settle the decode placeholder before a same-timestamp partial is committed
           // Normalize both feed shapes: bare string (legacy/error paths) and {text, name?} (Speaker
           // Intelligence labels THEM windows main-side — see SPEAKER-INTELLIGENCE-PLAN §3).
           const text = typeof res === 'string' ? res : res.text
@@ -880,7 +881,7 @@ export function useListen(
             }
           } else {
             parakeetEmptyRunRef.current = 0
-            commitLine(text, job.speaker, speakerName)
+            commitLine(text, job.speaker, speakerName, !!job.partial)
           }
         })
         .catch((err) => {
@@ -911,6 +912,7 @@ export function useListen(
       void Promise.race([feed, timeout])
         .then((res) => {
           if (sessionEpochRef.current !== jobEpoch) return
+          clearProvisional() // settle the decode placeholder before a same-timestamp partial is committed
           const text = typeof res === 'string' ? res : res.text
           const speakerName = typeof res === 'string' ? undefined : res.name
           parakeetFailures.current = 0 // success (even empty) resets the IPC-failure streak
@@ -926,7 +928,7 @@ export function useListen(
             }
           } else {
             parakeetEmptyRunRef.current = 0
-            commitLine(text, job.speaker, speakerName)
+            commitLine(text, job.speaker, speakerName, !!job.partial)
           }
         })
         .catch((err) => {

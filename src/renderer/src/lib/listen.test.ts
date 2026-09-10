@@ -498,11 +498,12 @@ describe('provisional lines are excluded from text()/transcriptToText (1B.2b)', 
     expect(transcriptToText(lines)).toBe('YOU: How is the roadmap looking?\nTHEM: On track for Q3.')
   })
 
-  it('is the exact field commitLine never sets and beginProvisional always does', () => {
-    // beginProvisional is the only writer of `provisional: true`; commitLine's own line literal has no
-    // such field, so a committed line can never be mistaken for a still-pending placeholder.
-    expect(listenSrc).toMatch(/const line: TranscriptLine = \{ speaker: sp, text: '…', t, provisional: true \}/)
-    expect(listenSrc).toMatch(/const next = linesRef\.current\.filter\(\(l\) => !\(l\.provisional && l\.t === p\.t\)\)/)
+  it('drops decoded provisional caption text as well as the "…" placeholder', () => {
+    const lines: TranscriptLine[] = [
+      line('them', 'What is the roadmap?', 1, true),
+      line('them', 'What is the roadmap for Europe?', 2)
+    ]
+    expect(transcriptToText(lines)).toBe('THEM: What is the roadmap for Europe?')
   })
 })
 
