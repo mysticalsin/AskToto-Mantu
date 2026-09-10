@@ -52,7 +52,8 @@ import {
 /** Minimum cosine similarity for an enrolled-profile match. Deliberately above the session-cluster
  *  threshold (0.5): claiming "this is Jane" needs more evidence than "same unnamed voice as before". */
 const ID_THRESHOLD = 0.55
-/** A silence gap this long between THEM windows means a new meeting — session labels reset. */
+/** Backward-compatible unkeyed API only: this silence gap infers a new meeting. Explicit keyed sessions
+ *  use their create/dispose boundary instead, so transcript labels can never be recycled mid-session. */
 const SESSION_GAP_MS = 30 * 60_000
 /** Cosine similarity above which a THEM window is treated as the operator's OWN voice leaking through
  *  the loopback rather than the other person speaking. Deliberately higher than ID_THRESHOLD — this is
@@ -73,6 +74,12 @@ const EMBED_BUFFER_K = 8
  *  accumulated this many windows — a cluster with 1-2 stray windows is exactly the drift/fragment noise
  *  speaker-cluster.ts's own mergePass exists to mop up, not real evidence about a person's voice. */
 const AUTO_ENROLL_MIN_WINDOWS = 3
+/** Hard caps for transient, identity-bound state. Refusing a fifth active session is safer than
+ *  silently evicting a live meeting; closed snapshots may evict their oldest predecessor because a
+ *  missed enrichment is safer than attributing a voiceprint to the wrong meeting. */
+const MAX_TRANSIENT_SESSIONS = 4
+const MAX_ENROLLMENT_SNAPSHOTS = 4
+const ENROLLMENT_SNAPSHOT_TTL_MS = SESSION_GAP_MS
 
 export interface SpeakerLabel {
   name: string
@@ -118,6 +125,27 @@ export interface SpeakerIdDeps {
   storePath?: () => string
   now?: () => number
   clusterer?: SpeakerClusterer
+}
+
+declare const speakerEnrollmentSnapshotBrand: unique symbol
+/** Opaque, in-process capability for one delayed enrollment attempt. Runtime acceptance is by exact
+ *  object identity; this type brand only prevents accidental construction by TypeScript callers. */
+export interface SpeakerEnrollmentSnapshot {
+  readonly [speakerEnrollmentSnapshotBrand]: true
+}
+
+interface SpeakerSessionState {
+  clusterer: SpeakerClusterer
+  clusterEmbeddings: Map<string, Float32Array[]>
+  operatorBuffer: Float32Array[]
+  lastWindowAt: number
+}
+
+interface EnrollmentSnapshotState {
+  sessionKey: string
+  createdAt: number
+  policyEpoch: number
+  clusterEmbeddings: Map<string, Float32Array[]>
 }
 
 export function speakerModelPath(): string {
@@ -179,12 +207,35 @@ export interface SpeakerId {
    *  Used by the hard privacy off-switch; unlike resetSession, this never flushes the operator buffer. */
   discardSession: () => void
   resetSession: () => void
+  /** Create or replace one explicitly keyed transient session. A fifth distinct active key is rejected;
+   *  keyed operations never create sessions implicitly. */
+  createSession: (sessionKey: string) => boolean
+  labelSessionWindow: (
+    sessionKey: string,
+    samples: Float32Array,
+    owner: SpeakerEmbeddingOwner
+  ) => Promise<SpeakerLabel | null>
+  observeSessionOperatorWindow: (
+    sessionKey: string,
+    samples: Float32Array,
+    owner: SpeakerEmbeddingOwner
+  ) => Promise<void>
+  finalizeSessionByKey: (sessionKey: string) => Map<string, string>
+  /** Dispose transient state without persistence. Returns false for an invalid or unknown key. */
+  disposeSession: (sessionKey: string) => boolean
+  /** Close an enabled session, flush its qualified operator buffer, and move its cluster vectors into
+   *  a bounded one-shot capability for delayed name enrollment. */
+  snapshotSession: (sessionKey: string) => SpeakerEnrollmentSnapshot | null
+  enrollFromSnapshot: (
+    snapshot: SpeakerEnrollmentSnapshot,
+    pairs: readonly { clusterLabel: string; name: string }[]
+  ) => number
 }
 
 export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
   const now = deps.now ?? (() => Date.now())
   const storePath = deps.storePath ?? (() => join(app.getPath('userData'), 'voiceprints.json'))
-  const clusterer = deps.clusterer ?? createSpeakerClusterer()
+  const legacyClusterer = deps.clusterer ?? createSpeakerClusterer()
   const createExtractor = deps.createExtractor ?? buildSherpaExtractor
 
   // Lazy, memoized extractor — the model file may be provisioned after startup, so a null probe is
@@ -198,6 +249,17 @@ export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
     probed = true
     return extractor
   }
+
+  const newSessionState = (clusterer: SpeakerClusterer = createSpeakerClusterer()): SpeakerSessionState => ({
+    clusterer,
+    clusterEmbeddings: new Map(),
+    operatorBuffer: [],
+    lastWindowAt: 0
+  })
+  let legacySession = newSessionState(legacyClusterer)
+  const sessions = new Map<string, SpeakerSessionState>()
+  const snapshots = new Map<SpeakerEnrollmentSnapshot, EnrollmentSnapshotState>()
+  let policyEpoch = 0
 
   let profiles: VoiceProfile[] | null = null
   const loadProfiles = (): VoiceProfile[] => {
@@ -223,9 +285,6 @@ export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
       mainLog.warn('[speaker-id] voiceprint save failed', e instanceof Error ? e.message : String(e))
     }
   }
-
-  let lastWindowAt = 0
-  let sessionGeneration = 0
 
   const compute = async (
     ex: EmbeddingExtractor,
@@ -278,99 +337,153 @@ export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
     return true
   }
 
-  // Rolling per-session buffers, capped at EMBED_BUFFER_K each (FIFO — oldest embedding drops first):
-  // one per live cluster label ("Speaker N"), feeding the auto-enrollment flywheel; one for the operator's
-  // own voice, feeding echo defense. Both are in-memory only and cleared by resetSession() — see the
-  // module doc comment above for why that boundary is the right one.
-  const clusterEmbeddings = new Map<string, Float32Array[]>()
+  // Rolling per-session buffers, capped at EMBED_BUFFER_K each (FIFO — oldest embedding drops first).
+  // Every keyed session owns its own clusterer and buffers; the native extractor and stored profiles are
+  // deliberately shared once per SpeakerId instance.
   const pushCapped = (buf: Float32Array[], embedding: Float32Array): void => {
     buf.push(embedding)
     if (buf.length > EMBED_BUFFER_K) buf.shift()
   }
-  let operatorBuffer: Float32Array[] = []
-  const operatorCentroid = (): Float32Array | null => {
+  const operatorCentroid = (session: SpeakerSessionState): Float32Array | null => {
     // Prefer this SESSION's own operator samples (freshest — codec/mic conditions can drift) blended
     // with the persisted long-term profile when both exist; fall back to whichever one is available.
     const persisted = loadProfiles().find((p) => p.name === OPERATOR_PROFILE_NAME)
-    const live = operatorBuffer.length ? meanEmbedding(operatorBuffer) : null
+    const live = session.operatorBuffer.length ? meanEmbedding(session.operatorBuffer) : null
     if (persisted && live) return meanEmbedding([Float32Array.from(persisted.centroid), live])
     if (live) return live
     return persisted ? Float32Array.from(persisted.centroid) : null
   }
 
+  const clearSessionState = (session: SpeakerSessionState): void => {
+    session.operatorBuffer = []
+    session.clusterEmbeddings.clear()
+    session.clusterer.reset()
+    session.lastWindowAt = 0
+  }
+
+  const flushOperatorProfile = (session: SpeakerSessionState): void => {
+    if (session.operatorBuffer.length >= AUTO_ENROLL_MIN_WINDOWS) {
+      enrollEmbeddings(OPERATOR_PROFILE_NAME, session.operatorBuffer)
+    }
+  }
+
+  const labelInSession = async (
+    session: SpeakerSessionState,
+    isCurrent: () => boolean,
+    samples: Float32Array,
+    owner: SpeakerEmbeddingOwner,
+    resetAfterGap: boolean
+  ): Promise<SpeakerLabel | null> => {
+    const ex = getExtractor()
+    if (!ex) return null
+    const epoch = policyEpoch
+    const t = now()
+    const embedding = await compute(ex, samples, owner)
+    if (!embedding || epoch !== policyEpoch || !isCurrent()) return null
+    if (resetAfterGap && session.lastWindowAt && t - session.lastWindowAt > SESSION_GAP_MS) {
+      session.clusterer.reset()
+    }
+    session.lastWindowAt = t
+    if (isEchoBleed(embedding, operatorCentroid(session))) {
+      return { name: '', source: 'cluster', similarity: 1, echo: true }
+    }
+    const enrolled = matchProfile(embedding)
+    if (enrolled) return enrolled
+    const assigned = session.clusterer.assign(embedding)
+    let buf = session.clusterEmbeddings.get(assigned.label)
+    if (!buf) {
+      buf = []
+      session.clusterEmbeddings.set(assigned.label, buf)
+    }
+    pushCapped(buf, embedding)
+    return { name: assigned.label, source: 'cluster', similarity: assigned.similarity }
+  }
+
+  const observeInSession = async (
+    session: SpeakerSessionState,
+    isCurrent: () => boolean,
+    samples: Float32Array,
+    owner: SpeakerEmbeddingOwner
+  ): Promise<void> => {
+    const ex = getExtractor()
+    if (!ex) return
+    const epoch = policyEpoch
+    const embedding = await compute(ex, samples, owner)
+    if (!embedding || epoch !== policyEpoch || !isCurrent()) return
+    pushCapped(session.operatorBuffer, embedding)
+  }
+
+  const enrollBuffered = (
+    clusterEmbeddings: ReadonlyMap<string, readonly Float32Array[]>,
+    pairs: readonly { clusterLabel: string; name: string }[]
+  ): number => {
+    let count = 0
+    for (const { clusterLabel, name } of pairs) {
+      if (!name.trim()) continue
+      const embeddings = clusterEmbeddings.get(clusterLabel)
+      if (!embeddings || embeddings.length < AUTO_ENROLL_MIN_WINDOWS) continue
+      if (enrollEmbeddings(name, embeddings)) count++
+    }
+    return count
+  }
+
+  const validSessionKey = (sessionKey: string): boolean =>
+    sessionKey.length > 0 &&
+    sessionKey.length <= 160 &&
+    sessionKey.trim().length > 0 &&
+    !/[\u0000-\u001f\u007f-\u009f]/u.test(sessionKey)
+
+  const cleanupExpiredSnapshots = (at: number): void => {
+    for (const [token, snapshot] of snapshots) {
+      if (at - snapshot.createdAt > ENROLLMENT_SNAPSHOT_TTL_MS) snapshots.delete(token)
+    }
+  }
+
+  const revokeSnapshotsForKey = (sessionKey: string): void => {
+    for (const [token, snapshot] of snapshots) {
+      if (snapshot.sessionKey === sessionKey) snapshots.delete(token)
+    }
+  }
+
+  const resetLegacyState = (): void => {
+    clearSessionState(legacySession)
+    legacySession = newSessionState(legacyClusterer)
+  }
+
   const discardSession = (): void => {
-    // Invalidate every native-dependent call before any await continuation can mutate session state.
-    sessionGeneration++
-    operatorBuffer = []
-    clusterEmbeddings.clear()
-    clusterer.reset()
-    lastWindowAt = 0
+    // The privacy off-switch invalidates every native-dependent continuation and every retained
+    // transient enrollment capability before clearing their backing state.
+    policyEpoch++
+    resetLegacyState()
+    for (const session of sessions.values()) clearSessionState(session)
+    sessions.clear()
+    snapshots.clear()
   }
 
   return {
-    labelWindow: async (samples, owner = 'live') => {
-      const ex = getExtractor()
-      if (!ex) return null
-      const generation = sessionGeneration
-      const t = now()
-      const embedding = await compute(ex, samples, owner)
-      if (!embedding || generation !== sessionGeneration) return null
-      if (lastWindowAt && t - lastWindowAt > SESSION_GAP_MS) {
-        clusterer.reset()
-      }
-      lastWindowAt = t
-      // Echo defense FIRST (SPEAKER-INTELLIGENCE-PLAN §3.3): a THEM window that is really the operator's
-      // own voice bleeding through the loopback must never reach profile/cluster matching — attributing
-      // it to a person (real or "Speaker N") is the exact mislabel this guards against, and letting it
-      // through would also pollute a session cluster's centroid with the wrong voice.
-      if (isEchoBleed(embedding, operatorCentroid())) {
-        return { name: '', source: 'cluster', similarity: 1, echo: true }
-      }
-      const enrolled = matchProfile(embedding)
-      if (enrolled) return enrolled
-      const assigned = clusterer.assign(embedding)
-      // Buffer this cluster's embedding for the auto-enrollment flywheel (see autoEnrollFromLabeledWindows
-      // below) — cheap (a few KB of Float32Array per label, capped) since only the vector is kept, never
-      // the raw audio.
-      let buf = clusterEmbeddings.get(assigned.label)
-      if (!buf) {
-        buf = []
-        clusterEmbeddings.set(assigned.label, buf)
-      }
-      pushCapped(buf, embedding)
-      return { name: assigned.label, source: 'cluster', similarity: assigned.similarity }
+    labelWindow: (samples, owner = 'live') => {
+      const session = legacySession
+      return labelInSession(session, () => legacySession === session, samples, owner, true)
     },
     enroll: async (name, sampleWindows) => {
       const ex = getExtractor()
       if (!ex) return false
-      const generation = sessionGeneration
+      const epoch = policyEpoch
+      const session = legacySession
       const embeddings: Float32Array[] = []
       for (const window of sampleWindows) {
         const embedding = await compute(ex, window, 'live')
-        if (generation !== sessionGeneration) return false
+        if (epoch !== policyEpoch || legacySession !== session) return false
         if (embedding) embeddings.push(embedding)
       }
       return enrollEmbeddings(name, embeddings)
     },
-    observeOperatorWindow: async (samples, owner = 'live') => {
-      const ex = getExtractor()
-      if (!ex) return
-      const generation = sessionGeneration
-      const embedding = await compute(ex, samples, owner)
-      if (!embedding || generation !== sessionGeneration) return
-      pushCapped(operatorBuffer, embedding)
+    observeOperatorWindow: (samples, owner = 'live') => {
+      const session = legacySession
+      return observeInSession(session, () => legacySession === session, samples, owner)
     },
-    autoEnrollFromLabeledWindows: (pairs) => {
-      let count = 0
-      for (const { clusterLabel, name } of pairs) {
-        if (!name.trim()) continue
-        const embeddings = clusterEmbeddings.get(clusterLabel)
-        if (!embeddings || embeddings.length < AUTO_ENROLL_MIN_WINDOWS) continue
-        if (enrollEmbeddings(name, embeddings)) count++
-      }
-      return count
-    },
-    finalizeSession: () => clusterer.mergePass(),
+    autoEnrollFromLabeledWindows: (pairs) => enrollBuffered(legacySession.clusterEmbeddings, pairs),
+    finalizeSession: () => legacySession.clusterer.mergePass(),
     listProfiles: () =>
       loadProfiles()
         .filter((p) => p.name !== OPERATOR_PROFILE_NAME)
@@ -400,8 +513,75 @@ export function createSpeakerId(deps: SpeakerIdDeps = {}): SpeakerId {
       // resetSession boundary is the next meeting's START (see MQA-043's wiring in index.ts), so this
       // flushes the meeting that just ended. Same AUTO_ENROLL_MIN_WINDOWS quality gate as the flywheel:
       // a session with only 1-2 'you' windows (a near-silent mic-only stretch) adds no useful signal.
-      if (operatorBuffer.length >= AUTO_ENROLL_MIN_WINDOWS) enrollEmbeddings(OPERATOR_PROFILE_NAME, operatorBuffer)
-      discardSession()
+      flushOperatorProfile(legacySession)
+      resetLegacyState()
+    },
+    createSession: (sessionKey) => {
+      if (!validSessionKey(sessionKey)) return false
+      const existing = sessions.get(sessionKey)
+      if (!existing && sessions.size >= MAX_TRANSIENT_SESSIONS) return false
+      if (existing) clearSessionState(existing)
+      revokeSnapshotsForKey(sessionKey)
+      sessions.set(sessionKey, newSessionState())
+      return true
+    },
+    labelSessionWindow: (sessionKey, samples, owner) => {
+      if (!validSessionKey(sessionKey)) return Promise.resolve(null)
+      const session = sessions.get(sessionKey)
+      if (!session) return Promise.resolve(null)
+      // An explicit key is the authoritative meeting boundary. Recycling labels after an arbitrary
+      // silence gap would make retained vectors refer to two different people under one transcript label.
+      return labelInSession(session, () => sessions.get(sessionKey) === session, samples, owner, false)
+    },
+    observeSessionOperatorWindow: (sessionKey, samples, owner) => {
+      if (!validSessionKey(sessionKey)) return Promise.resolve()
+      const session = sessions.get(sessionKey)
+      if (!session) return Promise.resolve()
+      return observeInSession(session, () => sessions.get(sessionKey) === session, samples, owner)
+    },
+    finalizeSessionByKey: (sessionKey) => {
+      if (!validSessionKey(sessionKey)) return new Map()
+      return sessions.get(sessionKey)?.clusterer.mergePass() ?? new Map()
+    },
+    disposeSession: (sessionKey) => {
+      if (!validSessionKey(sessionKey)) return false
+      const session = sessions.get(sessionKey)
+      if (!session) return false
+      sessions.delete(sessionKey)
+      clearSessionState(session)
+      return true
+    },
+    snapshotSession: (sessionKey) => {
+      if (!validSessionKey(sessionKey)) return null
+      const session = sessions.get(sessionKey)
+      if (!session) return null
+
+      sessions.delete(sessionKey)
+      flushOperatorProfile(session)
+      const clusterEmbeddings = new Map<string, Float32Array[]>()
+      for (const [label, embeddings] of session.clusterEmbeddings) {
+        clusterEmbeddings.set(label, embeddings.map((embedding) => Float32Array.from(embedding)))
+      }
+      clearSessionState(session)
+
+      const at = now()
+      cleanupExpiredSnapshots(at)
+      revokeSnapshotsForKey(sessionKey)
+      if (snapshots.size >= MAX_ENROLLMENT_SNAPSHOTS) {
+        const oldest = snapshots.keys().next().value as SpeakerEnrollmentSnapshot | undefined
+        if (oldest) snapshots.delete(oldest)
+      }
+      const token = Object.freeze({}) as SpeakerEnrollmentSnapshot
+      snapshots.set(token, { sessionKey, createdAt: at, policyEpoch, clusterEmbeddings })
+      return token
+    },
+    enrollFromSnapshot: (snapshot, pairs) => {
+      cleanupExpiredSnapshots(now())
+      const state = snapshots.get(snapshot)
+      if (!state || state.policyEpoch !== policyEpoch) return 0
+      // One attempt only: consume before any profile mutation so duplicate callbacks cannot replay it.
+      snapshots.delete(snapshot)
+      return enrollBuffered(state.clusterEmbeddings, pairs)
     }
   }
 }
