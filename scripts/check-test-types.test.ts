@@ -1,18 +1,63 @@
 import { execFileSync } from 'node:child_process'
-import { appendFileSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { isAbsolute, join, relative, sep } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 const REPO = join(__dirname, '..')
 const GATE = join(REPO, 'scripts', 'check-test-types.mjs')
+const TRACKED_TEST = fileURLToPath(import.meta.url)
 
-function runGate(): { code: number; out: string } {
+function runGate(gate = GATE, cwd = REPO): { code: number; out: string } {
   try {
-    return { code: 0, out: execFileSync(process.execPath, [GATE], { encoding: 'utf8', stdio: 'pipe', cwd: REPO }) }
+    return { code: 0, out: execFileSync(process.execPath, [gate], { encoding: 'utf8', stdio: 'pipe', cwd }) }
   } catch (e) {
     const err = e as { status?: number; stdout?: string; stderr?: string }
     return { code: err.status ?? 1, out: `${err.stdout ?? ''}${err.stderr ?? ''}` }
   }
+}
+
+function configPath(from: string, to: string): string {
+  const path = relative(from, to)
+  const normalized = path.split(sep).join('/')
+  // path.relative returns an absolute drive path when the fixture and checkout are on different
+  // Windows drives. Prefixing that with './' would corrupt an otherwise valid TypeScript path.
+  if (isAbsolute(path)) return normalized
+  return normalized.startsWith('.') ? normalized : `./${normalized}`
+}
+
+function createFixture(): { root: string; gate: string; invalidProbe: string } {
+  // macOS exposes /var as a symlink to /private/var. Resolve it before calculating relative config
+  // paths so TypeScript never turns a valid /Users path into the nonexistent /private/Users path.
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'metis-test-types-ratchet-')))
+  const scripts = join(root, 'scripts')
+  const fixtureNodeModules = join(root, 'node_modules')
+  mkdirSync(scripts, { recursive: true })
+
+  const gate = join(scripts, 'check-test-types.mjs')
+  copyFileSync(GATE, gate)
+  symlinkSync(
+    join(REPO, 'node_modules'),
+    fixtureNodeModules,
+    process.platform === 'win32' ? 'junction' : 'dir',
+  )
+
+  const realConfig = JSON.parse(readFileSync(join(REPO, 'tsconfig.tests.json'), 'utf8')) as {
+    include: string[]
+  }
+  const include = realConfig.include.map((pattern) =>
+    configPath(root, join(REPO, ...pattern.split('/'))),
+  )
+  include.push('./probe-*.ts')
+  writeFileSync(join(root, 'tsconfig.tests.json'), JSON.stringify({
+    extends: configPath(root, join(REPO, 'tsconfig.tests.json')),
+    include,
+    exclude: [],
+  }, null, 2))
+  writeFileSync(join(root, 'probe-valid.ts'), 'export {}\nconst ratchetProbe: number = 1\nvoid ratchetProbe\n')
+
+  return { root, gate, invalidProbe: join(root, 'probe-invalid.ts') }
 }
 
 /**
@@ -36,18 +81,30 @@ describe('MQA-248 — the test-file typecheck ratchet', () => {
   })
 
   it('FAILS when a new type error appears — the whole point', () => {
-    // Proven by introducing one, not by trusting the arithmetic. A gate nobody has watched fail is a
-    // gate nobody knows works.
-    const victim = join(REPO, 'scripts', 'check-test-types.test.ts')
-    const original = readFileSync(victim, 'utf8')
+    // Exercise an exact copy of the real gate against the real project errors plus an isolated probe.
+    // The tracked test file stays immutable, so parallel typechecks can never observe the extra error.
+    const trackedBefore = readFileSync(TRACKED_TEST, 'utf8')
+    const fixture = createFixture()
     try {
-      appendFileSync(victim, '\nconst __ratchetProbe: number = "not a number"\nvoid __ratchetProbe\n')
-      const r = runGate()
-      expect(r.code).toBe(1)
-      expect(r.out).toMatch(/up from the \d+ baseline/)
+      expect(readFileSync(fixture.gate, 'utf8')).toBe(readFileSync(GATE, 'utf8'))
+      const baseline = runGate(fixture.gate, fixture.root)
+      expect(baseline.code, baseline.out).toBe(0)
+      const baselineMatch = baseline.out.match(/OK — (\d+) known type errors.+at the baseline/)
+      expect(baselineMatch).not.toBeNull()
+      const baselineCount = Number(baselineMatch?.[1])
+      expect(readFileSync(TRACKED_TEST, 'utf8')).toBe(trackedBefore)
+
+      writeFileSync(fixture.invalidProbe, 'export {}\nconst ratchetProbe: number = "not a number"\nvoid ratchetProbe\n')
+      const increased = runGate(fixture.gate, fixture.root)
+      expect(increased.code, increased.out).toBe(1)
+      expect(increased.out).toContain(
+        `${baselineCount + 1} type errors in test files, up from the ${baselineCount} baseline`,
+      )
+      expect(readFileSync(TRACKED_TEST, 'utf8')).toBe(trackedBefore)
     } finally {
-      writeFileSync(victim, original)
+      rmSync(fixture.root, { recursive: true, force: true })
     }
+    expect(readFileSync(TRACKED_TEST, 'utf8')).toBe(trackedBefore)
   })
 
   it('also fails when the baseline is STALE — a fixed error must lower it', () => {
