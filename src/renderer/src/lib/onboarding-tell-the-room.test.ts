@@ -31,7 +31,7 @@ describe('tell the room — designed consent on personalize', () => {
     )
     expect(TELL_THE_ROOM_CHECKBOX).toBe("I'll tell everyone on the call before I record.")
     expect(TELL_THE_ROOM_READY).toMatch(
-      /Métis is ready\. It starts listening only when you press Listen and tell the room\. Nothing is captured before that\./
+      /Métis starts listening only when you press Listen and tell the room\. Nothing is captured before that\./
     )
     expect(copy).not.toMatch(/\u2014/)
     expect(stripComments(experience)).not.toMatch(/\u2014/)

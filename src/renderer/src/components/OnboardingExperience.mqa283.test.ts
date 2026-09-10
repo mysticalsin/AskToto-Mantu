@@ -52,6 +52,7 @@ describe('MQA-283 — the narrative experience now ends at Ready, not a legacy p
     expect(experienceSrc).toMatch(/onFinish=\{finish\}/)
     expect(experienceSrc).toMatch(/onOpenAiSettings=\{onOpenAiSettings\}/)
     expect(experienceSrc).toMatch(/asrReady=\{asrReady\}/)
+    expect(experienceSrc).toMatch(/aiReady=\{settings\?\.providerReady === true\}/)
   })
 })
 
@@ -74,7 +75,9 @@ describe('MQA-283 — Ready\'s honest empty-state line (Métis\'s equivalent of 
 describe('MQA-283 — adding a personal AI provider from Ready is optional, never a gate', () => {
   it('the provider link only renders when onOpenAiSettings was actually passed in', () => {
     expect(experienceSrc).toMatch(/\{onOpenAiSettings && \(/)
-    expect(experienceSrc).toMatch(/Add your own AI provider \(optional, never required\)/)
+    expect(experienceSrc).toMatch(/onboardingReadinessCopy\(asrReady, aiReady\)/)
+    expect(experienceSrc).toMatch(/\{readinessCopy\.aiAction\}/)
+    expect(experienceSrc).not.toMatch(/You'll add a provider key on the next step/)
   })
 
   it('the Get started CTA never depends on onOpenAiSettings, or on any provider state at all', () => {
