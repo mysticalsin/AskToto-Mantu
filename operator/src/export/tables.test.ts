@@ -196,6 +196,20 @@ describe('events and sessions tables (cursor-paginated store methods)', () => {
     expect(JSON.stringify(rows)).not.toContain('/Users/tony')
   })
 
+  it('event export search cannot reveal hidden legacy details through row selection', async () => {
+    const store = memoryStore()
+    for (const kind of ['ask', 'crm', 'heartbeat']) {
+      await store.insertEvent({ id: `private-${kind}`, ts: NOW, kind, actor: null, device_id: 'dev-a', country: 'CA', detail: 'private albatross acquisition' })
+    }
+    const rows = await collectAll(exportTableDef('events').rows(store, { q: 'albatross' }))
+    expect(rows).toEqual([])
+    // Preserve authorized searches over ordinary operational detail.
+    await store.insertEvent({ id: 'visible', ts: NOW, kind: 'use', actor: null, device_id: 'dev-b', country: 'US', detail: 'use cloudflare' })
+    const visible = await collectAll(exportTableDef('events').rows(store, { q: 'cloudflare' }))
+    expect(visible).toHaveLength(1)
+    expect(visible[0].detail).toBe('use cloudflare')
+  })
+
   it('sessions table computes duration_ms', async () => {
     const store = memoryStore()
     await store.touchSession('dev-a', NOW, 'heartbeat', { country: 'CA', city: 'Longueuil' }, { os: 'darwin', app_version: '1.8.5' })

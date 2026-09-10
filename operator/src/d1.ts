@@ -1,5 +1,6 @@
 import { normalizeCrmRow, type CrmSendRow } from './crm'
 import { mergeSeatLicenseLabel } from './fleet'
+import { PRIVATE_EVENT_DETAIL_KINDS } from './privacy'
 import { applyPulse, isSessionStale, type SessionRow as SessionState } from './sessions'
 import type {
   AskRow,
@@ -137,11 +138,14 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
       args.push(opts.version)
     }
     if (opts.q) {
+      // Redacting the response after a raw-detail WHERE still exposes a search oracle. Apply the
+      // same visibility policy in SQL before LIMIT/cursor selection, retaining operational detail.
+      const visibleDetail = `CASE WHEN e.kind IN (${PRIVATE_EVENT_DETAIL_KINDS.map(() => '?').join(',')}) THEN NULL ELSE e.detail END`
       where.push(
-        '(e.kind LIKE ? OR e.device_id LIKE ? OR e.country LIKE ? OR e.detail LIKE ? OR s.hostname LIKE ? OR s.sso_email LIKE ? OR s.os LIKE ? OR s.app_version LIKE ?)'
+        `(e.kind LIKE ? OR e.device_id LIKE ? OR e.country LIKE ? OR (${visibleDetail}) LIKE ? OR s.hostname LIKE ? OR s.sso_email LIKE ? OR s.os LIKE ? OR s.app_version LIKE ?)`
       )
       const like = `%${opts.q}%`
-      args.push(like, like, like, like, like, like, like, like)
+      args.push(like, like, like, ...PRIVATE_EVENT_DETAIL_KINDS, like, like, like, like, like)
     }
     const cursor = decodeCursor(opts.cursor)
     if (cursor) {

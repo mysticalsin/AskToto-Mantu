@@ -1,5 +1,6 @@
 import { type CrmSendRow } from './crm'
 import { mergeSeatLicenseLabel } from './fleet'
+import { projectEventTelemetry } from './privacy'
 import { applyPulse, isSessionStale, type PulseKind, type SessionRow as SessionState } from './sessions'
 
 export interface IssuedLicenseRow {
@@ -412,7 +413,7 @@ function eventMatchesSeat(
   if (opts.country && (e.country || seat?.country || '').toUpperCase() !== opts.country.toUpperCase()) return false
   if (opts.q) {
     const q = opts.q.toLowerCase()
-    const haystack = [e.kind, e.device_id, e.country, e.detail, seat?.hostname, seat?.sso_email, seat?.os, seat?.app_version]
+    const haystack = [e.kind, e.device_id, e.country, projectEventTelemetry(e).detail, seat?.hostname, seat?.sso_email, seat?.os, seat?.app_version]
       .filter(Boolean)
       .join(' ')
       .toLowerCase()

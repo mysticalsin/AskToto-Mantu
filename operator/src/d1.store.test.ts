@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { d1Store, type D1DatabaseLike } from './d1'
+import { memoryStore } from './store'
 import type {
   AskRow,
   GroupMemberRow,
@@ -184,6 +185,31 @@ describe('listEvents overload', () => {
     const page2 = await store.listEvents(10, { limit: 2, cursor: page1.nextCursor! })
     expect(page2.rows.map((r) => r.id)).toEqual(['e1'])
     expect(page2.nextCursor).toBeNull()
+  })
+})
+
+describe.each(['memory', 'D1'] as const)('%s event-search privacy before pagination', (backend) => {
+  it.each(['ask', 'crm', 'heartbeat'])('does not match hidden %s detail', async (kind) => {
+    const subject = backend === 'memory' ? memoryStore() : store
+    await subject.insertEvent({ id: 'private', ts: 3000, kind, actor: null, device_id: 'dev-a', country: 'CA', detail: 'private albatross acquisition' })
+    const result = await subject.listEvents(1, { q: 'albatross', limit: 1 })
+    expect(result.rows).toEqual([])
+    expect(result.nextCursor).toBeNull()
+    // An ordinary metadata search still locates the row, without consulting the hidden detail.
+    expect((await subject.listEvents(10, { q: 'dev-a' })).rows.map((row) => row.id)).toEqual(['private'])
+  })
+
+  it('filters hidden detail before consuming page slots while retaining operational search', async () => {
+    const subject = backend === 'memory' ? memoryStore() : store
+    await subject.insertEvent({ id: 'private', ts: 3000, kind: 'ask', actor: null, device_id: 'dev-a', country: 'CA', detail: 'operations private acquisition' })
+    await subject.insertEvent({ id: 'visible-new', ts: 2000, kind: 'use', actor: null, device_id: 'dev-b', country: 'US', detail: 'operations ready' })
+    await subject.insertEvent({ id: 'visible-old', ts: 1000, kind: 'platform', actor: null, device_id: 'dev-b', country: 'US', detail: 'operations update' })
+    const first = await subject.listEvents(1, { q: 'operations', limit: 1 })
+    expect(first.rows.map((row) => row.id)).toEqual(['visible-new'])
+    expect(first.nextCursor).toBeTruthy()
+    const second = await subject.listEvents(1, { q: 'operations', limit: 1, cursor: first.nextCursor! })
+    expect(second.rows.map((row) => row.id)).toEqual(['visible-old'])
+    expect((await subject.listEvents(1, { q: 'operations', limit: 1, cursor: second.nextCursor! })).rows).toEqual([])
   })
 })
 
