@@ -8,7 +8,7 @@
  * that same drain/cold-start path.
  *
  * There is no jsdom harness for useListen, so this pins the source-observable contract:
- * same-turn mic capture, app-ready prewarm, no idle-unload of a hot engine.
+ * same-turn mic capture, concrete-Whisper app-ready prewarm, no idle-unload of that hot engine.
  */
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -34,7 +34,7 @@ function codeOnly(s: string): string {
 }
 
 const startBody = codeOnly(blockBetween(SRC, 'const start = useCallback(', 'const closeChannel = useCallback'))
-const prewarm = codeOnly(blockBetween(SRC, '// MQA-285: prewarm at app ready', '// Mid-session spoken-language change'))
+const prewarm = codeOnly(blockBetween(SRC, '// MQA-285: once Settings has resolved', '// Mid-session spoken-language change'))
 const finishTeardown = codeOnly(blockBetween(SRC, 'const finishTeardown = (): void => {', 'const waitForDrain = (): void => {'))
 const endReview = codeOnly(blockBetween(APP, 'const endReview = useCallback(', 'const toggleListen = useCallback('))
 
@@ -63,7 +63,7 @@ describe('MQA-285 — same-turn capture: acquireMic before any await in start()'
   })
 })
 
-describe('MQA-285 — prewarm at app ready, keep a hot engine', () => {
+describe('MQA-285 — prewarm concrete Whisper at app ready, keep that engine hot', () => {
   it('prewarms immediately, not after a 4s delay or requestIdleCallback', () => {
     expect(prewarm).not.toMatch(/setTimeout\([^,]+,\s*4000\)/)
     expect(prewarm).not.toMatch(/requestIdleCallback/)
@@ -75,9 +75,9 @@ describe('MQA-285 — prewarm at app ready, keep a hot engine', () => {
     expect(prewarm).not.toMatch(/workerRef\.current\?\.terminate\(\)/)
   })
 
-  it('prewarms Parakeet when that engine is configured, Whisper otherwise', () => {
-    expect(prewarm).toMatch(/asrEngine === 'parakeet'/)
-    expect(prewarm).toMatch(/parakeetEnsure/)
+  it('waits for a concrete Whisper choice instead of warming unknown or Parakeet', () => {
+    expect(prewarm).toMatch(/asrEngine !== 'whisper'/)
+    expect(prewarm).not.toMatch(/parakeetEnsure/)
     expect(prewarm).toMatch(/ensureWorker\(\)\.postMessage\(\{ type: 'init'/)
   })
 
