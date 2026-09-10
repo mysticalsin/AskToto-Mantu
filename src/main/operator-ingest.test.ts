@@ -28,11 +28,27 @@ vi.mock('./logger', () => ({
   setAuditActor: () => {},
   auditLog: () => {}
 }))
-// operator-entitlements-state.ts talks to the REAL settings store (getSettings/setSettings), which this
-// file deliberately does not mock (safeLastIndexAt's existing use of getStoreSettings relies on the real
-// store's safe defaults). Mocking just this module keeps operatorFundedProviders' operator_keys gate
-// testable without a real store round trip — recordOperatorHeartbeatResult itself is exercised directly
-// in operator-entitlements-state.test.ts.
+
+const metadata = vi.hoisted(() => {
+  const settings = {
+    operatorUrl: '', operatorIngestSecret: '', operatorTier: 'none', operatorEntitlements: null,
+    operatorEntitlementsAt: 0, operatorIntegrationsVersion: 0,
+    meetingsFolder: '/private/tmp/metis-operator-ingest-metadata-never-read'
+  }
+  return {
+    settings,
+    getSettings: vi.fn(() => settings),
+    setSettings: vi.fn(),
+    authStatus: vi.fn(() => ({ signedIn: false })),
+    lastIndexedAt: vi.fn(() => 1_700_000_000_333)
+  }
+})
+vi.mock('./store', () => ({ getSettings: metadata.getSettings, setSettings: metadata.setSettings }))
+vi.mock('./auth', () => ({ authStatus: metadata.authStatus }))
+vi.mock('./brain/intelligence-index', () => ({ lastIndexedAt: metadata.lastIndexedAt }))
+// Keep operatorFundedProviders' operator_keys gate focused here; recordOperatorHeartbeatResult's real
+// settings persistence is exercised directly in operator-entitlements-state.test.ts. The store mock
+// above exists only to isolate seat metadata from host profile files.
 let operatorKeysEntitled = true
 vi.mock('./operator-entitlements-state', () => ({
   recordOperatorHeartbeatResult: () => {},
@@ -58,6 +74,9 @@ function captureFetch(): { calls: { url: string; body: Record<string, unknown> }
 // '/tmp/operator-queue.json' would leak state across test files and runs.
 let queueDir: string
 beforeEach(() => {
+  metadata.getSettings.mockClear()
+  metadata.authStatus.mockClear()
+  metadata.lastIndexedAt.mockClear()
   queueDir = mkdtempSync(join(tmpdir(), 'operator-ingest-test-'))
   setOperatorQueueDirForTests(queueDir)
   // A heartbeat's success path fires a fire-and-forget integrations refresh (maybeRefreshOperatorIntegrations)
@@ -204,11 +223,13 @@ describe('operatorHeartbeat v2 seat fields + queue reporting', () => {
     expect(body.seatHash).toBeTruthy()
     expect(body.os).toBeTruthy()
     expect(body.appVersion).toBe('1.8.0-test')
+    expect(body.lastIndexAt).toBe(1_700_000_000_333)
     expect(typeof body.hostname).toBe('string')
     expect((body.hostname as string).length).toBeGreaterThan(0)
     expect(body.queued).toBe(0)
     expect(body.dropped).toBe(0)
     expect(JSON.stringify(body)).not.toMatch(/sk-ant|secret|password/i)
+    expect(metadata.lastIndexedAt).toHaveBeenCalledWith(metadata.settings)
   })
 
   it('drains queued asks in enqueue order on the tick, before the heartbeat itself, then reports empty', async () => {
