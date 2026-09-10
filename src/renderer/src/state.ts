@@ -208,6 +208,8 @@ export interface AnswerState {
   id: string
   text: string
   streaming: boolean
+  /** Missing is legacy/unspecified; only the current request's successful terminal event is complete. */
+  completion?: 'pending' | 'complete' | 'incomplete'
   error: string | null
   prompt: string
   // User-facing header (the claim/question being asked). The `prompt` is the engineered scaffold that
@@ -261,10 +263,13 @@ export function useAsk(): {
   fail: (error: string, label?: string) => string
   retry: () => string
   deeper: () => string
-  cancel: () => void
+  cancel: () => AnswerState | null
   clear: () => void
 } {
   const [answer, setAnswer] = useState<AnswerState | null>(null)
+  // Lifecycle events can arrive before React paints (or during cancellation IPC). Keep the current
+  // snapshot synchronously so callers can rescue exact pending notes before clear/reset/navigation.
+  const answerRef = useRef<AnswerState | null>(null)
   const idRef = useRef<string>('')
   const lastReqRef = useRef<AskRequest | null>(null) // last request, so Retry can replay vision verbatim
   // True once an Answer/Copilot state has been painted at least once this session — follow-up asks can
@@ -284,47 +289,47 @@ export function useAsk(): {
   // onto it. If the request ends with no real output at all (onDone/onError with zero deltas), the stale
   // text is cleared then instead — so a copy/feedback action can never act on the wrong answer.
   const pendingReplaceRef = useRef(false)
-  // Ids explicitly cancelled by cancel() below — the ONLY reliable signal that an error is a genuine
-  // user-initiated abort. Previously onError guessed from the error text (/\babort|\bcancel/i), which
-  // silently swallowed any real error whose message happened to contain those words (e.g. a provider
-  // error mentioning "the request was aborted by the remote host"). Removed on its terminal event
-  // (onDone/onError) when one arrives — but a genuinely cancelled stream never emits either (every
-  // provider strategy + the main askCancel handler suppress them on abort), so cancel() below ALSO
-  // self-evicts the id after a short delay; otherwise the Set would grow by one entry per cancelled
-  // stream for the rest of a long-running session.
-  const cancelledIdsRef = useRef<Set<string>>(new Set())
+  const updateAnswer = useCallback((update: (current: AnswerState | null) => AnswerState | null): AnswerState | null => {
+    const next = update(answerRef.current)
+    answerRef.current = next
+    // All first-mount publications, including a fast terminal event, stay in the transition lane so
+    // lazy Answer/Copilot mounting cannot suspend synchronous input (React #426).
+    if (answerMountedRef.current) setAnswer(next)
+    else startTransition(() => setAnswer(next))
+    return next
+  }, [])
+
+  const flush = useCallback((): void => {
+    if (rafRef.current) cancelAnimationFrame(rafRef.current)
+    rafRef.current = 0
+    const chunk = pendingRef.current
+    if (!chunk) return
+    const id = idRef.current
+    const replace = pendingReplaceRef.current
+    pendingRef.current = ''
+    pendingReplaceRef.current = false
+    updateAnswer((a) => a && a.id === id ? { ...a, text: replace ? chunk : a.text + chunk } : a)
+  }, [updateAnswer])
+
+  const finishCurrent = useCallback((
+    completion: 'complete' | 'incomplete', error: string | null, retainPrevious = false
+  ): AnswerState | null => {
+    const id = idRef.current
+    if (!id) return answerRef.current
+    flush() // includes current tokens that have not reached their animation frame or first paint
+    idRef.current = '' // terminal ownership ends now; duplicate or late IPC events are inert
+    const noOutput = pendingReplaceRef.current
+    pendingReplaceRef.current = false
+    return updateAnswer((a) => a && a.id === id ? {
+      ...a, streaming: false, completion, error,
+      text: noOutput && !retainPrevious ? '' : a.text,
+      usedScreen: noOutput && !retainPrevious ? false : a.usedScreen
+    } : a)
+  }, [flush, updateAnswer])
 
   useEffect(() => {
-    const flush = (): void => {
-      rafRef.current = 0
-      const chunk = pendingRef.current
-      if (!chunk) return
-      // Capture BEFORE enqueuing the state update, not after: React 18 batches this setAnswer call, so
-      // the updater below runs later (during the batched re-render), not synchronously on this line. The
-      // old code reset pendingReplaceRef.current = false right after calling setAnswer and read the LIVE
-      // ref from inside the updater — by the time the updater actually ran, the ref had already flipped to
-      // false, so the "replace" branch was unreachable and every post-reset flush silently appended onto
-      // the stale previous answer instead of replacing it (turn 2 rendered as turn1Text + turn2Text). Match
-      // onDone/onError's existing capture-then-reset idiom, which reads a plain captured boolean inside the
-      // updater instead of the ref itself.
-      //
-      // If Answer state has not mounted yet (first ask still inside startTransition), keep the buffer and
-      // retry next frame — never drop the first tokens a fast local/Worker provider already sent.
-      if (!answerMountedRef.current) {
-        rafRef.current = requestAnimationFrame(flush)
-        return
-      }
-      const replace = pendingReplaceRef.current
-      pendingRef.current = ''
-      pendingReplaceRef.current = false
-      setAnswer((a) => {
-        if (!a) return a
-        const text = replace ? chunk : a.text + chunk
-        return { ...a, text }
-      })
-    }
     const offDelta = window.toto.onDelta((d: StreamDelta) => {
-      if (d.id !== idRef.current) return
+      if (!idRef.current || d.id !== idRef.current) return
       pendingRef.current += d.text
       // Flush the FIRST token synchronously — that's the moment perceived latency is set; a RAF here would
       // add ~16ms to time-to-first-token. Everything after is batched per frame to avoid O(n^2) re-lexing.
@@ -336,18 +341,12 @@ export function useAsk(): {
       }
     })
     const offDone = window.toto.onDone((d: StreamDone) => {
-      if (d.id !== idRef.current) return
-      flush() // drain any buffered tokens before marking done
-      cancelledIdsRef.current.delete(d.id) // terminal event reached — stop tracking this id either way
-      // Zero real output ever arrived (e.g. an empty completion) — drop the stale previous-answer text
-      // instead of leaving it looking like the result of THIS request.
-      const noOutput = pendingReplaceRef.current
-      pendingReplaceRef.current = false
-      setAnswer((a) => (a ? { ...a, streaming: false, text: noOutput ? '' : a.text } : a))
+      if (!idRef.current || d.id !== idRef.current) return
+      finishCurrent('complete', null)
     })
     const offMeta = window.toto.onMeta((m: StreamMeta) => {
-      if (m.id !== idRef.current) return
-      setAnswer((a) =>
+      if (!idRef.current || m.id !== idRef.current) return
+      updateAnswer((a) =>
         a && a.id === m.id
           ? {
               ...a,
@@ -365,34 +364,10 @@ export function useAsk(): {
       )
     })
     const offErr = window.toto.onError((e: StreamError) => {
-      if (e.id !== idRef.current) return
-      flush() // keep any partial answer captured before the error
-      // User-initiated aborts/cancels are not failures — never paint them as a red error on screen. A
-      // cancel before any output simply reverts to whichever answer was already showing (the persistence
-      // contract above); a genuine error clears stale leftover text so Copy/feedback can't act on it.
-      // Determined ONLY from cancelledIdsRef (set by cancel() below), never guessed from the error's own
-      // text — a genuine error whose message happens to contain "abort"/"cancel" must still surface.
-      const aborted = cancelledIdsRef.current.delete(e.id)
-      const noOutput = pendingReplaceRef.current
-      pendingReplaceRef.current = false
-      setAnswer((a) =>
-        a
-          ? {
-              ...a,
-              streaming: false,
-              error: aborted ? null : e.message,
-              text: !aborted && noOutput ? '' : a.text,
-              // No output means no answer — so the "Viewed screen" badge (and the Bar's freshness chip it
-              // gates) has nothing left to describe. Main can reject an ask BEFORE any provider attempt,
-              // e.g. Private View refusing a replayed screenshot (MQA-182); leaving the badge up would
-              // claim a screen this request never sent. A partial answer keeps its badge: it really did
-              // see the screen.
-              usedScreen: !aborted && noOutput ? false : a.usedScreen
-            }
-          : aborted
-            ? null
-            : { id: e.id, text: '', streaming: false, error: e.message, prompt: '' }
-      )
+      if (!idRef.current || e.id !== idRef.current) return
+      // Cancellation detaches before IPC. Any still-owned error is real, even if its wording says
+      // "abort" or "cancel"; preserve current partial text without swallowing that failure.
+      finishCurrent('incomplete', e.message)
     })
     return () => {
       offDelta()
@@ -401,7 +376,7 @@ export function useAsk(): {
       offErr()
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
     }
-  }, [])
+  }, [finishCurrent, flush, updateAnswer])
 
   const resetBuffer = useCallback((): void => {
     pendingRef.current = ''
@@ -416,7 +391,9 @@ export function useAsk(): {
   const run = useCallback(
     (req: AskRequest): string => {
       lastReqRef.current = req // remember the full request (mode + image) so Retry replays it exactly
-      if (idRef.current) void window.toto.cancel(idRef.current) // abort any prior in-flight stream
+      const previousId = idRef.current
+      idRef.current = '' // reject the old request even if cancel IPC synchronously emits callbacks
+      if (previousId) void window.toto.cancel(previousId)
       resetBuffer()
       const id = uid()
       idRef.current = id
@@ -437,21 +414,18 @@ export function useAsk(): {
       //
       // Follow-up asks (Answer already mounted): paint synchronously so the first stream delta never races
       // a deferred transition and drops / delays TTFT.
-      const paint = (): void => {
-        setAnswer((prev) => ({
-          id,
-          text: prev?.text ?? '',
-          streaming: true,
-          error: null,
-          prompt: req.prompt ?? '',
-          label: req.label,
-          kind: req.kind,
-          usedScreen: req.mode === 'vision' || !!req.wantsScreenContext,
-          ephemeral: req.mode === 'suggest'
-        }))
-      }
-      if (answerMountedRef.current) paint()
-      else startTransition(paint)
+      updateAnswer((prev) => ({
+        id,
+        text: prev?.text ?? '',
+        streaming: true,
+        completion: 'pending',
+        error: null,
+        prompt: req.prompt ?? '',
+        label: req.label,
+        kind: req.kind,
+        usedScreen: req.mode === 'vision' || !!req.wantsScreenContext,
+        ephemeral: req.mode === 'suggest'
+      }))
       void window.toto.ask({
         id,
         mode: req.mode,
@@ -468,55 +442,44 @@ export function useAsk(): {
       })
       return id
     },
-    [resetBuffer]
+    [resetBuffer, updateAnswer]
   )
 
   const fail = useCallback(
     (error: string, label = ''): string => {
-      if (idRef.current) void window.toto.cancel(idRef.current)
+      const previousId = idRef.current
+      idRef.current = ''
+      if (previousId) void window.toto.cancel(previousId)
       resetBuffer()
       const id = uid()
-      idRef.current = id
       lastReqRef.current = null
       // Same #426 hazard/fix as run() above — fail() is the path a gate-free entry point (e.g. Spotlight
       // Ref with no ref agent configured) uses to mount <Answer> for the very first time in a session.
-      startTransition(() => {
-        setAnswer({ id, text: '', streaming: false, error, prompt: '', label })
-      })
+      updateAnswer(() => ({ id, text: '', streaming: false, completion: 'incomplete', error, prompt: '', label }))
       return id
     },
-    [resetBuffer]
+    [resetBuffer, updateAnswer]
   )
 
-  const cancel = useCallback((): void => {
-    if (idRef.current) {
-      const id = idRef.current
-      cancelledIdsRef.current.add(id) // marks the id so onError knows this one's abort is expected
-      void window.toto.cancel(id)
-      // Drop any buffered tokens + pending RAF so a late flush cannot append onto the cancelled answer
-      // after streaming:false (cancel used to leave the buffer armed → one more chunk could land).
-      resetBuffer()
-      setAnswer((a) => (a ? { ...a, streaming: false } : a))
-      // A genuine cancel never gets a terminal onDone/onError to remove this id (see the ref's comment
-      // above), so self-evict after a delay comfortably longer than any straggling late error could take
-      // to arrive — bounds the Set's size instead of leaking one entry per cancelled stream forever.
-      setTimeout(() => cancelledIdsRef.current.delete(id), 30_000)
-    }
-  }, [resetBuffer])
+  const cancel = useCallback((): AnswerState | null => {
+    const id = idRef.current
+    if (!id) return answerRef.current
+    const mode = lastReqRef.current?.mode
+    const snapshot = finishCurrent('incomplete', null, mode !== 'recap' && mode !== 'summary')
+    // finishCurrent drains and detaches BEFORE IPC; there is no cancelled-ID set/timer to retain.
+    void window.toto.cancel(id)
+    return snapshot
+  }, [finishCurrent])
 
   const clear = useCallback((): void => {
     // Abort any in-flight stream first — clearing UI without cancel left main producing tokens for an
     // orphaned id (onDelta drops them once idRef is wiped, but the provider call still burned quota).
-    if (idRef.current) {
-      const id = idRef.current
-      cancelledIdsRef.current.add(id)
-      void window.toto.cancel(id)
-      setTimeout(() => cancelledIdsRef.current.delete(id), 30_000)
-    }
+    const id = idRef.current
     idRef.current = ''
     resetBuffer()
-    setAnswer(null)
-  }, [resetBuffer])
+    updateAnswer(() => null)
+    if (id) void window.toto.cancel(id)
+  }, [resetBuffer, updateAnswer])
 
   // Replay the last request EXACTLY (same mode + screenshot + prompt) so retrying a vision answer re-sends
   // the image instead of silently re-asking text-only and getting a blind "I can't see your screen" answer.
