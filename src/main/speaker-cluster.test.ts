@@ -89,6 +89,29 @@ describe('createSpeakerClusterer', () => {
 })
 
 describe('MQA-238 - mergePass repairs online over-splitting at session end', () => {
+  it('preserves a distinct one-window speaker beside a frequent speaker by default', () => {
+    const c = createSpeakerClusterer()
+    const frequent = new Float32Array([1, 0, 0])
+    const brief = new Float32Array([0, 1, 0])
+    const main = c.assign(frequent).label
+    for (let i = 0; i < 10; i++) c.assign(frequent)
+    const guest = c.assign(brief).label
+    const mapping = c.mergePass()
+    expect(mapping.get(main)).not.toBe(mapping.get(guest))
+    expect(new Set(mapping.values())).toEqual(new Set(['Speaker 1', 'Speaker 2']))
+    expect(c.size()).toBe(2)
+  })
+
+  it('does not collapse distinct speakers just because both speak briefly', () => {
+    const c = createSpeakerClusterer()
+    const first = c.assign(new Float32Array([1, 0, 0])).label
+    const second = c.assign(new Float32Array([0, 0, 1])).label
+    const mapping = c.mergePass()
+    expect([...mapping.keys()]).toEqual([first, second])
+    expect(mapping.get(first)).not.toBe(mapping.get(second))
+    expect(c.size()).toBe(2)
+  })
+
   const dim = 16
   // Orthogonal supports: voice A lives in the first half of the dims, voice B in the second — their
   // cosine is ~0 by construction, the way two real voices' embeddings are far apart. (Two sine trains
@@ -114,7 +137,7 @@ describe('MQA-238 - mergePass repairs online over-splitting at session end', () 
     for (let k = 0; k < 6; k++) labels.push(c.assign(noisy(A, 0.15, k)).label)
     for (let k = 0; k < 6; k++) labels.push(c.assign(noisy(B, 0.15, k)).label)
     expect(c.size()).toBeGreaterThan(2) // the defect: one voice split into several
-    const mapping = c.mergePass({ mergeThreshold: 0.9, minorityFloor: 1 })
+    const mapping = c.mergePass({ mergeThreshold: 0.9 })
     // Every original label maps somewhere, and the survivors are exactly two, densely numbered.
     const finals = new Set(labels.map((l) => mapping.get(l)))
     expect(finals.size).toBe(2)
@@ -127,16 +150,16 @@ describe('MQA-238 - mergePass repairs online over-splitting at session end', () 
     expect(finalsA).not.toEqual(finalsB)
   })
 
-  it('absorbs minority tail fragments into their nearest survivor even below the merge threshold', () => {
+  it('retains a dissimilar brief fragment rather than assuming it belongs to the dominant voice', () => {
     const c = createSpeakerClusterer({ threshold: 0.9999 })
     const A = base('A')
-    c.assign(noisy(A, 0.02, 0))
+    const dominant = c.assign(noisy(A, 0.02, 0)).label
     c.assign(noisy(A, 0.02, 1))
     c.assign(noisy(A, 0.02, 2))
-    c.assign(noisy(A, 0.6, 9)) // a far-drifted one-window fragment of the same voice
+    const brief = c.assign(noisy(A, 0.6, 9)).label // too dissimilar to establish the same voice
     expect(c.size()).toBeGreaterThan(1)
-    const mapping = c.mergePass({ mergeThreshold: 0.999, minorityFloor: 2 })
-    expect(new Set(mapping.values()).size).toBe(1)
+    const mapping = c.mergePass({ mergeThreshold: 0.999 })
+    expect(mapping.get(brief)).not.toBe(mapping.get(dominant))
   })
 
   it('never merges two genuinely distinct, well-populated voices', () => {
@@ -145,7 +168,7 @@ describe('MQA-238 - mergePass repairs online over-splitting at session end', () 
     const B = base('B')
     for (let k = 0; k < 5; k++) c.assign(noisy(A, 0.05, k))
     for (let k = 0; k < 5; k++) c.assign(noisy(B, 0.05, k))
-    const mapping = c.mergePass({ mergeThreshold: 0.9, minorityFloor: 1 })
+    const mapping = c.mergePass({ mergeThreshold: 0.9 })
     expect(new Set(mapping.values()).size).toBe(2)
   })
 })
