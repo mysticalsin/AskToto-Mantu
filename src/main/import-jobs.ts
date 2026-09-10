@@ -97,7 +97,7 @@ export interface ImportJobManagerDeps {
   enqueueIngest: (file: string) => void | Promise<void>
   /** Returns a persisted-meeting recap or undefined when no provider is configured. */
   generateRecap: (job: ImportJob) => Promise<string | undefined>
-  updateRecap: (file: string, recap: string) => Promise<void>
+  updateRecap: (file: string, recap: string, recapStatus: 'complete') => Promise<void>
   /** Credit the durable time-saved counters for one summarized meeting (main/store.ts). Optional so the
    *  import-jobs unit tests need not wire it; the live app always provides it. */
   recordMeetingSummarized?: (durationMin: number) => void
@@ -687,7 +687,7 @@ export class ImportJobManager {
         const recap = await this.deps.generateRecap(copy(job))
         if (await this.abandonIfCancelled(job, file)) return
         if (recap?.trim()) {
-          await this.deps.updateRecap(file, recap)
+          await this.deps.updateRecap(file, recap, 'complete')
           if (await this.abandonIfCancelled(job, file)) return
           recapPersisted = true
         } else {

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { safeStorage } from 'electron'
 import { SaveMeetingSchema, UpdateRecapPayloadSchema, type SaveMeeting, type Settings } from '@shared/ipc'
 import { saveMeeting, isEncryptedFile } from './transcripts'
-import { recallRead, updateMeetingRecap } from './recall'
+import { listMeetingsNeedingRecap, recallRead, updateMeetingRecap } from './recall'
 
 vi.mock('electron')
 let settings: Settings
@@ -55,6 +55,17 @@ describe('durable summary completion state', () => {
     expect(await updateMeetingRecap(settings, file, 'User-edited notes.')).toEqual({ ok: true })
     expect((await recallRead(file)).recapStatus).toBeUndefined()
     expect(readFileSync(file, 'utf8')).not.toContain('recap_status:')
+  })
+
+  it('background repair preserves nonempty incomplete notes and manual edits for an explicit retry', async () => {
+    const partial = await saveMeeting(settings, { ...meeting, recapStatus: 'incomplete' })
+    expect(await updateMeetingRecap(settings, partial, 'My additional meeting annotations.')).toEqual({ ok: true })
+    await saveMeeting(settings, { ...meeting, recapStatus: 'complete' })
+    await saveMeeting(settings, meeting)
+    const empty = await saveMeeting(settings, { ...meeting, recap: '', recapStatus: 'incomplete' })
+    const pending = await listMeetingsNeedingRecap()
+    expect(pending.map((entry) => entry.file)).toEqual([basename(empty)])
+    expect(await recallRead(partial)).toMatchObject({ recapStatus: 'incomplete', recap: 'My additional meeting annotations.' })
   })
 
   it('keeps an incomplete warning through a manual edit, then replaces it only on an explicit complete retry', async () => {

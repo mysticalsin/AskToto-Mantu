@@ -11,7 +11,7 @@ interface MissingSummary {
 interface IntelligenceWorkDependencies {
   list(): Promise<MissingSummary[]>
   generate(meeting: MissingSummary): Promise<string | undefined>
-  save(file: string, recap: string): Promise<{ ok: boolean }>
+  save(file: string, recap: string, recapStatus: 'complete'): Promise<{ ok: boolean }>
   backfill(options: BackfillStartOptions, beforeComplete: Promise<unknown>): BackfillRun
   logFailure(error: unknown): void
 }
@@ -24,7 +24,7 @@ async function recapMissingMeetings(deps: IntelligenceWorkDependencies): Promise
     for (const meeting of meetings) {
       try {
         const recap = await deps.generate(meeting)
-        if (!recap?.trim() || !(await deps.save(meeting.file, recap)).ok) {
+        if (!recap?.trim() || !(await deps.save(meeting.file, recap, 'complete')).ok) {
           failed++
           continue
         }
