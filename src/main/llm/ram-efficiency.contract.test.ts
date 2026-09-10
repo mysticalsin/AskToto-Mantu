@@ -69,15 +69,18 @@ describe('MQA-270 (B9) — full GPU offload requires FREE ram, not just total', 
 })
 
 describe('MQA-270 (B7) — the whisper prewarm is engine-gated (MQA-285 keeps a hot engine)', () => {
-  it('skips the ~100 MB whisper warm when the configured engine is apple', () => {
-    expect(LISTEN).toMatch(/if \(asrEngine === 'apple'\) return/)
+  it('warms only a resolved Whisper choice, never unknown, Parakeet, or Apple', () => {
+    expect(LISTEN).toMatch(/if \(asrEngine !== 'whisper'\) return/)
+    const at = LISTEN.indexOf("if (asrEngine !== 'whisper') return")
+    const block = LISTEN.slice(at, at + 1600)
+    expect(block).not.toMatch(/parakeetEnsure/)
   })
 
   it('does not idle-unload a prewarmed engine (MQA-285)', () => {
     // B7 originally armed WORKER_IDLE_RELEASE_MS after prewarm. That made first Listen (and recap)
     // a cold start if the user waited ~3 min — the opposite of click-to-transcript. Unmount still
     // tears the worker down; prewarm/stop must not.
-    const at = LISTEN.indexOf("if (asrEngine === 'apple') return")
+    const at = LISTEN.indexOf("if (asrEngine !== 'whisper') return")
     const block = LISTEN.slice(at, at + 1600)
     expect(block).not.toMatch(/WORKER_IDLE_RELEASE_MS/)
     expect(block).not.toMatch(/workerRef\.current\?\.terminate\(\)/)

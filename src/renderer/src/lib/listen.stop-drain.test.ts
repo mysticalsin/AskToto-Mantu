@@ -218,11 +218,16 @@ class FakeWorker {
 
 const { useListen } = await import('./listen')
 type ListenApi = ReturnType<typeof useListen>
-type Engine = 'parakeet' | 'whisper'
+type Engine = 'parakeet' | 'whisper' | 'apple'
 
 function render(engine: Engine = 'parakeet'): ListenApi {
   host.beginRender()
   return useListen(undefined, undefined, undefined, '', undefined, engine, 'fast')
+}
+
+function renderBeforeSettingsResolve(): ListenApi {
+  host.beginRender()
+  return useListen(undefined, undefined, undefined, '', undefined, undefined, 'fast')
 }
 
 async function settle(): Promise<void> {
@@ -259,12 +264,12 @@ beforeEach(() => {
     toto: {
       setListeningState: async () => {},
       armAudio: async () => {},
-      parakeetStatus: async () => ({ ready: true, addonError: null }),
-      parakeetEnsure: async () => ({ ok: true }),
+      parakeetStatus: vi.fn(async () => ({ ready: true, addonError: null })),
+      parakeetEnsure: vi.fn(async () => ({ ok: true })),
       onParakeetProgress: () => () => {},
       parakeetFeed: vi.fn(async () => ({ text: '', name: undefined })),
       appleSpeechFeed: vi.fn(async () => ({ text: '', name: undefined })),
-      asrBundled: async () => true,
+      asrBundled: vi.fn(async () => true),
       speakerEmbed: async () => ({}),
       getPermissions: vi.fn(() => getPermissionsImpl())
     },
@@ -290,6 +295,125 @@ afterEach(() => {
   host.unmount()
   vi.useRealTimers()
   vi.unstubAllGlobals()
+})
+
+describe('ASR idle prewarm ownership', () => {
+  it('does not guess an ASR warm before settings resolve or prewarm concrete Parakeet', async () => {
+    renderBeforeSettingsResolve()
+    await settle()
+    expect(workers).toHaveLength(0)
+    expect(window.toto.parakeetEnsure).not.toHaveBeenCalled()
+
+    render('parakeet')
+    host.rerunEffect(3)
+    await settle()
+    expect(workers).toHaveLength(0)
+    expect(window.toto.parakeetEnsure).not.toHaveBeenCalled()
+  })
+
+  it('prewarms only a concrete Whisper choice at its requested quality and leaves Apple cold', async () => {
+    render('whisper')
+    await settle()
+    expect(workers).toHaveLength(1)
+    expect(workers[0].postMessage).toHaveBeenCalledWith({
+      type: 'init',
+      quality: 'fast',
+      bundled: true
+    })
+    expect(window.toto.parakeetEnsure).not.toHaveBeenCalled()
+
+    host.unmount()
+    host.reset()
+    workers = []
+    render('apple')
+    await settle()
+    expect(workers).toHaveLength(0)
+    expect(window.toto.parakeetEnsure).not.toHaveBeenCalled()
+  })
+
+  it('cancels an unresolved Whisper prewarm when the resolved choice changes to Parakeet', async () => {
+    let resolveBundled!: (bundled: boolean) => void
+    vi.mocked(window.toto.asrBundled).mockImplementation(
+      () => new Promise((resolve) => void (resolveBundled = resolve))
+    )
+    render('whisper')
+    await settle()
+    expect(workers).toHaveLength(0)
+
+    render('parakeet')
+    host.rerunEffect(3)
+    resolveBundled(true)
+    await settle()
+
+    expect(workers).toHaveLength(0)
+    expect(window.toto.parakeetEnsure).not.toHaveBeenCalled()
+  })
+
+  it('cancels an unresolved Whisper prewarm when the hook unmounts', async () => {
+    let resolveBundled!: (bundled: boolean) => void
+    vi.mocked(window.toto.asrBundled).mockImplementation(
+      () => new Promise((resolve) => void (resolveBundled = resolve))
+    )
+    render('whisper')
+    await settle()
+    host.unmount()
+    resolveBundled(true)
+    await settle()
+
+    expect(workers).toHaveLength(0)
+  })
+
+  it('does not let a late prewarm re-init the worker already owned by live startup', async () => {
+    const bundledResolvers: Array<(bundled: boolean) => void> = []
+    vi.mocked(window.toto.asrBundled).mockImplementation(
+      () => new Promise((resolve) => void bundledResolvers.push(resolve))
+    )
+    const api = render('whisper')
+    await settle()
+    expect(bundledResolvers).toHaveLength(1)
+
+    await api.start('system', 'fast', 'whisper', 'English')
+    await settle()
+    expect(bundledResolvers).toHaveLength(2)
+    bundledResolvers[1](true)
+    await settle()
+    expect(workers).toHaveLength(1)
+    expect(workers[0].postMessage).toHaveBeenCalledTimes(1)
+    expect(workers[0].postMessage).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'init',
+      resetFollow: true,
+      language: 'English'
+    }))
+
+    bundledResolvers[0](true)
+    await settle()
+    expect(workers).toHaveLength(1)
+    expect(workers[0].postMessage).toHaveBeenCalledTimes(1)
+  })
+
+  it('captures and queues a cold Parakeet window while readiness is pending', async () => {
+    let resolveStatus!: (status: { ready: boolean; addonError: null }) => void
+    vi.mocked(window.toto.parakeetStatus).mockImplementation(
+      () => new Promise((resolve) => void (resolveStatus = resolve))
+    )
+    vi.mocked(window.toto.parakeetFeed).mockResolvedValue({ text: 'Queued sentence.' })
+    const api = render('parakeet')
+    await settle()
+
+    const started = api.start('system', 'fast', 'parakeet', 'English')
+    await settle()
+    const worklet = worklets.at(-1)
+    expect(worklet).toBeDefined()
+    worklet?.emit({ audio: new Float32Array([0.2]), partial: false })
+    await settle()
+    expect(window.toto.parakeetFeed).not.toHaveBeenCalled()
+
+    resolveStatus({ ready: true, addonError: null })
+    await started
+    await settle()
+    expect(window.toto.parakeetFeed).toHaveBeenCalledTimes(1)
+    expect(window.toto.parakeetFeed).toHaveBeenCalledWith(expect.any(Float32Array), 'them')
+  })
 })
 
 describe('worklet seal-and-flush protocol', () => {

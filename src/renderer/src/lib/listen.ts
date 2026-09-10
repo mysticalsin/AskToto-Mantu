@@ -561,9 +561,8 @@ export function useListen(
   // an explicit user correction always wins.
   entityNames?: string[],
   // MQA-270 (B7): the configured ASR engine, so the whisper prewarm below can skip itself on parakeet/
-  // apple sessions instead of loading ~100 MB of worker + ORT wasm + whisper-base weights that start()
-  // will immediately terminate. Optional and undefined-tolerant: undefined means "unknown yet", which
-  // warms (the pre-existing behaviour) rather than guessing cold.
+  // apple sessions instead of loading an unused worker + ORT wasm + whisper-base weights that start()
+  // will immediately terminate. Undefined means Settings has not resolved yet, so no engine is guessed.
   asrEngine?: string,
   // docs/asr/QUALITY.md — prewarm the quality the user will actually start with (default Best). A Fast
   // prewarm + Best start() used to terminate the warm worker and reload, so first Listen on the default
@@ -2325,27 +2324,28 @@ export function useListen(
     }
   }, [closeChannel, disarmNetworkRetry])
 
-  // MQA-285: prewarm at app ready so Listen click finds ASR already running. No 4s delay, no
-  // requestIdleCallback, no idle-unload of a hot engine — those three were why Tony's click sat
-  // behind a cold model load. Apple has nothing to construct ahead of time. Parakeet (if that's
-  // the configured engine) is warmed via parakeetEnsure, which now also constructs the recognizer.
-  // Whisper (default / unknown) still loads the worker + weights here.
+  // MQA-285: once Settings has resolved a concrete Whisper choice, prewarm it immediately so Listen
+  // finds ASR already running. No 4s delay, requestIdleCallback, or idle-unload of that hot worker.
+  // Unknown must not guess: App's first render has settings=null, and guessing Whisper there used to
+  // load it before a <=8 GiB fresh profile resolved to Parakeet. Parakeet is intentionally cold until
+  // capture starts: its isolated recognizer is a large native allocation, while start() already begins
+  // capture before engine readiness and queues bounded worklet windows until pump() can consume them.
   //
-  // MQA-270 (B7) still holds for engine gating: a parakeet/apple install must not pay ~100 MB of
-  // whisper worker + ORT wasm at boot. The idle-release half of B7 is superseded by MQA-285.
+  // MQA-270 (B7) still holds for engine gating: unknown/Parakeet/Apple must not pay for a Whisper worker
+  // at boot. The idle-release half applies only to the deliberately prewarmed concrete Whisper choice.
   useEffect(() => {
-    if (asrEngine === 'apple') return
+    if (asrEngine !== 'whisper') return
+    let cancelled = false
     let warmed = false
     const warm = async (): Promise<void> => {
       if (warmed) return
       warmed = true
       try {
-        if (asrEngine === 'parakeet') {
-          await window.toto.parakeetEnsure()
-          return
-        }
         if (workerRef.current) return
         const bundled = await getAsrBundled()
+        // Settings may have changed, the hook may have unmounted, or live startup may have claimed the
+        // worker while the bundled-path lookup was pending. Prewarm never supersedes that newer owner.
+        if (cancelled || liveRef.current || workerRef.current) return
         // Prewarm carries no language: the setting is only known per-session at start(), whose init
         // message updates the (already warm) worker's language before the first audio window.
         // Quality matches the Settings request (default Best) so first Listen is not a cold Best load.
@@ -2357,6 +2357,9 @@ export function useListen(
       }
     }
     void warm()
+    return () => {
+      cancelled = true
+    }
   }, [ensureWorker, getAsrBundled, asrEngine, asrQuality])
 
   // Mid-session spoken-language change (Settings → Audio while listening). The ref update covers every
