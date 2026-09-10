@@ -9,6 +9,8 @@ import { hashOperatorId, operatorHmacHeaders } from '../operator-hmac-sign'
 import { mainLog } from '../logger'
 import { userText, type StreamHandle, type StreamOptions } from './shared'
 
+const OPERATOR_NATURAL_STOP_REASONS = new Set(['stop', 'end_turn', 'stop_sequence'])
+
 /**
  * Seat-side Ask through Operator-hosted keys.
  * The Worker holds the raw LLM key. This process never persists it, never vaults it, never logs it.
@@ -121,10 +123,18 @@ export function streamOperatorAsk(opts: StreamOptions): StreamHandle {
           if (parsed.t === 'done') {
             if (settled || aborted) return
             settled = true
-            const reason = parsed.finishReason || 'done'
-            const incomplete =
-              parsed.status === 'incomplete' || reason === 'length' || reason === 'max_tokens'
-            opts.handlers.onDone({}, { status: incomplete ? 'incomplete' : 'complete', reason })
+            const suppliedReason = parsed.finishReason?.trim().toLowerCase()
+            const suppliedStatus = parsed.status?.trim().toLowerCase()
+            // The deployed legacy gateway sends a bare explicit `done`; keep that one shape working.
+            // Once a gateway supplies metadata, fail closed: only a known natural text stop is complete.
+            const legacyDone = !suppliedReason && !suppliedStatus
+            const naturalStop = !!suppliedReason && OPERATOR_NATURAL_STOP_REASONS.has(suppliedReason)
+            const completeStatus = !suppliedStatus || suppliedStatus === 'complete'
+            const complete = completeStatus && (legacyDone || naturalStop)
+            opts.handlers.onDone({}, {
+              status: complete ? 'complete' : 'incomplete',
+              reason: suppliedReason || 'done'
+            })
             return
           }
         }
