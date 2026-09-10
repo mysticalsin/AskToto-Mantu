@@ -35,7 +35,7 @@ describe('complete Intelligence work', () => {
     expect(completed).not.toHaveBeenCalled()
     h.recap.resolve('Decisions and next steps.')
     await h.prerequisite()
-    expect(h.deps.save).toHaveBeenCalledWith('synthetic.md', 'Decisions and next steps.')
+    expect(h.deps.save).toHaveBeenCalledWith('synthetic.md', 'Decisions and next steps.', 'complete')
     await expect(run.completion).resolves.toEqual({ ok: true, recapped: 1 })
   })
 

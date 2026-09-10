@@ -68,6 +68,7 @@ import {
   type ScreenCaptureCheckResult
 } from '@shared/ipc'
 import type { ProviderId } from '@shared/providers'
+import type { RecapStatus } from '@shared/recap-status'
 
 type Unsub = () => void
 function sub<T>(channel: string, cb: (payload: T) => void): Unsub {
@@ -278,8 +279,8 @@ const api = {
   // Edit a saved meeting's recap ("## Notes & follow-ups") after the fact. Rewrites only that section in
   // place (frontmatter + full transcript untouched); never renames the file. Preserves the file's own
   // encrypted/plaintext state.
-  recallUpdateRecap: (file: string, recap: string): Promise<{ ok: boolean; error?: string }> =>
-    ipcRenderer.invoke(IPC.recallUpdateRecap, { file, recap }),
+  recallUpdateRecap: (file: string, recap: string, recapStatus?: RecapStatus): Promise<{ ok: boolean; error?: string }> =>
+    ipcRenderer.invoke(IPC.recallUpdateRecap, { file, recap, recapStatus }),
   // Task MI-5: flag/unflag a saved meeting as confidential — excludes it from every published wiki
   // surface (main/brain/publish.ts). Rewrites only the frontmatter block; never renames the file.
   recallSetConfidential: (file: string, confidential: boolean): Promise<{ ok: boolean; error?: string }> =>

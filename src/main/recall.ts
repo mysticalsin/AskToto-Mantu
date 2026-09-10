@@ -186,7 +186,8 @@ async function readMeetingUncached(path: string, file: string): Promise<Read | n
   }
 }
 
-/** Recap body is missing or blank. Used by the solid Intelligence pass to write summaries that never landed. */
+/** Background repair only fills missing notes. Nonempty incomplete notes may contain manual edits;
+ *  replacing them requires the user's explicit Retry action, not a background pass. */
 export function meetingTextNeedsRecap(text: string): boolean {
   if (!text.trim()) return true
   const startMatch = text.match(/^## Notes & follow-ups[\r\n]+/m)

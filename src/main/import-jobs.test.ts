@@ -426,7 +426,7 @@ describe('ImportJobManager', () => {
     expect(enqueueIngest).toHaveBeenCalledTimes(1)
     expect(enqueueIngest).toHaveBeenCalledWith('saved-import.md')
     expect(generateRecap).toHaveBeenCalledWith(expect.objectContaining({ file: 'saved-import.md' }))
-    expect(updateRecap).toHaveBeenCalledWith('saved-import.md', '## Overview\n\nImported summary')
+    expect(updateRecap).toHaveBeenCalledWith('saved-import.md', '## Overview\n\nImported summary', 'complete')
     expect(manager.get('job-1')?.state).toBe('done')
   })
 

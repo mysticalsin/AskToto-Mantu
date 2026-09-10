@@ -1303,7 +1303,7 @@ function wireIntelligenceIndexWork(): void {
       lines: meeting.lines,
       mode: meeting.mode
     } as ImportJob),
-    save: (file, recap) => updateMeetingRecap(getSettings(), file, recap),
+    save: (file, recap, status) => updateMeetingRecap(getSettings(), file, recap, status),
     backfill: requestBackfillRun,
     logFailure: (error) => mainLog.error('[intelligence-index] recap failed:', error)
   }))
@@ -1407,8 +1407,8 @@ function initializeImportJobs(): void {
       if (mins > 0) appendTimeSavedEvent({ kind: 'note-taking', estimatedMinutes: mins, ids: { meeting: file } })
     },
     generateRecap: runImportedRecap,
-    updateRecap: async (file, recap) => {
-      const result = await updateMeetingRecap(getSettings(), file, recap)
+    updateRecap: async (file, recap, status) => {
+      const result = await updateMeetingRecap(getSettings(), file, recap, status)
       if (!result.ok) throw new Error(result.error || 'Could not save the imported summary.')
     },
     onChange: publishImportJob,
@@ -5115,7 +5115,7 @@ function registerIpc(): void {
     if (!requireAuth()) return { ok: false, error: 'Sign in with your Mantu account first.' }
     const parsed = UpdateRecapPayloadSchema.safeParse(raw)
     if (!parsed.success) return { ok: false, error: parsed.error.issues[0]?.message || 'Invalid edit request.' }
-    const result = await updateMeetingRecap(getSettings(), parsed.data.file, parsed.data.recap)
+    const result = await updateMeetingRecap(getSettings(), parsed.data.file, parsed.data.recap, parsed.data.recapStatus)
     if (result.ok) {
       auditLog('transcript.recap_edited', { file: basename(parsed.data.file) })
       await enqueueIngest(join(resolveMeetingsFolder(getSettings()), basename(parsed.data.file)), { force: true })
