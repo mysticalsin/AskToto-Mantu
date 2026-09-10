@@ -46,7 +46,7 @@ Needed owner inputs:
 - Developer ID Application certificate exported as `.p12`.
 - App-specific password for notarization.
 - Apple Team ID.
-- GitHub token that can publish to `mysticalsin/AskToto-Mantu`.
+- GitHub token that can publish to `mysticalsin/Metis-Releases`.
 
 Environment:
 
@@ -102,7 +102,7 @@ Verified: Microsoft says public Win32 MSI/EXE Store submissions are not re-signe
 Needed owner inputs:
 
 - Authenticode `.pfx` certificate from a trusted CA, or a future wired Azure Artifact Signing flow.
-- GitHub token that can publish to `mysticalsin/AskToto-Mantu`.
+- GitHub token that can publish to `mysticalsin/Metis-Releases`.
 
 Environment:
 
