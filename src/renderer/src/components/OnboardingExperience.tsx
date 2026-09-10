@@ -355,10 +355,10 @@ export function localModelRowStatus(
     }
   }
   if (model.unavailableReason === 'download-failed') {
-    return { state: 'action', detail: 'Download paused. Métis retries when the network is back.' }
+    return { state: 'action', detail: 'Download failed. Check your connection and select Retry.' }
   }
   if (model.unavailableReason === 'not-downloaded') {
-    return { state: 'loading', detail: 'Starting the on-device download…' }
+    return { state: 'action', detail: 'Not downloaded yet. Select Retry to download the on-device model.' }
   }
   if (model.ready) return { state: 'ready', detail: 'On-device model ready' }
   return { state: 'checking', detail: 'Checking the on-device model…' }

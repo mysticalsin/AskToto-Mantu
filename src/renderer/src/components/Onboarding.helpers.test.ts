@@ -274,17 +274,19 @@ describe('Act 3 on-device model row', () => {
     expect(row.detail.toLowerCase()).not.toMatch(/starting/)
   })
 
-  it('treats not-downloaded as starting the fetch, not a dead install state', () => {
+  it('offers Retry for an enabled model that is not downloaded instead of claiming work has started', () => {
     const row = localModelRowStatus({
       ready: false,
       unavailableReason: 'not-downloaded',
       downloadProgress: 0,
       minTotalRamGB: 8
     })
-    expect(row.state).toBe('loading')
-    expect(row.state).not.toBe('action')
-    expect(row.detail).toMatch(/Starting the on-device download/)
-    expect(row.detail.toLowerCase()).not.toMatch(/not installed/)
+    expect(row.state).toBe('action')
+    expect(row.progress).toBeUndefined()
+    expect(row.detail).toMatch(/Retry/)
+    expect(row.detail).not.toMatch(/starting|downloading/i)
+    const src = readFileSync(join(__dirname, 'OnboardingExperience.tsx'), 'utf8')
+    expect(src).toMatch(/r\.key === 'local' && r\.state === 'action' && r\.progress == null/)
   })
 
   it('never starts an optional download from setup mount or polling; only the explicit retry does', () => {
