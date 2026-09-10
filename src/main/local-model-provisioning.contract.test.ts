@@ -1,10 +1,8 @@
 /**
  * local-model-provisioning.contract.test.ts — MQA-186.
  *
- * The Métis Local weights are not in the installer; `ensureLocalModel` fetches them when the app opens.
- * Boot gates that fetch on RAM (never fetch onto a machine that cannot load the model). Local AI
- * `enabled` controls routing only — not whether bytes are fetched — so turning Local on later is
- * instant once the background download has finished.
+ * Optional weights are fetched automatically only after Local AI opt-in. Explicit Download/Retry
+ * remains available, with managed policy and the downloader's RAM/disk/integrity gates enforced.
  *
  * Source-contract, following App.local-gates.test.ts / screen-preprocess-wiring.contract.test.ts: there
  * is no harness that boots main/index.ts, but the wiring is structural and can be asserted directly. The
@@ -26,36 +24,23 @@ function sliceBetween(text: string, start: string, end: string): string {
 }
 
 describe('MQA-186 — the first-run weight fetch is gated, and the gate is not a dead end', () => {
-  it('boot asks whether this machine should fetch the weights before starting a multi-GB transfer', () => {
+  it('boot uses the opt-in provisioning gate without upgrading the selected model', () => {
     const boot = sliceBetween(src, 'app.whenReady().then(async () => {', 'app.setAppUserModelId')
-    // RAM floor only — Local AI enabled does not gate the download (routing stays off by default).
-    // The model is chosen by HARDWARE (bestModelForMachine), not by registry position — indexing
-    // LOCAL_MODELS[0] would silently fetch whichever entry happened to be listed first.
-    expect(boot).toMatch(/const best = bestModelForMachine\(\)/)
-    expect(boot).toMatch(/shouldFetchWeights\(best\.id\)/)
-    expect(boot).not.toMatch(/shouldFetchWeights\(best\.id, getSettings\(\)\.localLlm\.enabled\)/)
-    // ...and the call it guards is the one that costs the bytes.
-    expect(boot).toMatch(/ensureLocalModel\(best\.id\)/)
-    // First-run exclusive tour must not defer the fetch until onboardingDone.
-    expect(boot).not.toMatch(/onboardingDone[\s\S]{0,80}ensureLocalModel/)
-    expect(boot).not.toMatch(/ensureLocalModel[\s\S]{0,80}onboardingDone/)
-    // RAM skip still invokes ensureLocalModel so the refusal is recorded, not silent idle.
-    expect(boot).toMatch(/else \{/)
-    expect(boot).toMatch(/void ensureLocalModel\(best\.id\)\.catch/)
+    expect(boot).toMatch(/provisionLocalModel\(getSettings\(\)\.localLlm, getAllowedProviders\(\), ensureLocalModel\)/)
+    expect(boot).not.toMatch(/bestModelForMachine|setSettings\(\{ localLlm/)
+    expect(boot).not.toMatch(/ensureLocalModel\([^)]*\.id\)/)
   })
 
   it('Settings/onboarding can re-arm the fetch without toggling Local AI', () => {
     expect(src).toMatch(/ipcMain\.handle\(IPC\.localModelsEnsure/)
-    expect(src).toMatch(/shouldFetchWeights\(current\)/)
-    expect(src).toMatch(/ensureLocalModel\(target\)/)
-    expect(src).not.toMatch(/if \(!shouldFetchWeights\(target\)\) return \{ ok: false \}/)
+    expect(src).toMatch(/provisionLocalModel\(getSettings\(\)\.localLlm, allowed, ensureLocalModel, 'explicit'\)/)
   })
 
   it('turning Local AI on still re-arms the fetch as a second chance after a failed boot download', () => {
     // Boot starts the download on open; OFF→ON re-arms if the first attempt failed (offline, disk, etc.).
     const handler = sliceBetween(src, 'const next = setSettings(p)', 'ipcMain.handle(IPC.settingsRecoverProfile')
-    expect(handler).toMatch(/!cur\.localLlm\.enabled && next\.localLlm\.enabled/)
-    expect(handler).toMatch(/ensureLocalModel\(next\.localLlm\.modelId\)/)
+    expect(handler).toMatch(/next\.localLlm\.enabled && \(!cur\.localLlm\.enabled \|\| cur\.localLlm\.modelId !== next\.localLlm\.modelId\)/)
+    expect(handler).toMatch(/provisionLocalModel\(next\.localLlm, getAllowedProviders\(\), ensureLocalModel\)/)
     // Same MQA-178 reason as boot: the background screen reader's eligibility is only re-evaluated on a
     // refresh, and this download lands long after the settings save returns.
     expect(handler).toMatch(/refreshScreenPreprocess\(\)/)

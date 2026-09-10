@@ -257,8 +257,9 @@ function observeOperatorAudio(samples: Float32Array): void {
   }
 }
 import { buildPrewarmMessages } from './llm/prewarm'
-import { listModels as listLocalModels, bestModelForMachine, isDownloaded as localModelDownloaded } from './llm/local-models'
-import { ensureLocalModel, localModelDownloadState, shouldFetchWeights } from './llm/local-model-download'
+import { listModels as listLocalModels, isDownloaded as localModelDownloaded } from './llm/local-models'
+import { ensureLocalModel, localModelDownloadState } from './llm/local-model-download'
+import { provisionLocalModel } from './local-model-provisioning'
 import { createScreenPreprocess, type ScreenPreprocess } from './screen-preprocess'
 import { startForegroundWatcher } from './foreground-watcher'
 import { resetDustConversation, prewarmDustConversation, isDustAuthError } from './llm/dust'
@@ -3858,12 +3859,11 @@ function registerIpc(): void {
     // Start/stop background screen pre-analysis to match the new settings (backgroundScreenContext toggle,
     // or Local AI being enabled/disabled/provisioned) — takes effect immediately, no relaunch.
     refreshScreenPreprocess()
-    // Local AI turned ON → re-arm the weight fetch if boot somehow skipped it (offline first launch,
-    // under-RAM machine later upgraded). Boot already starts the download whenever the app opens
-    // (RAM permitting); this edge is the second chance, not the only path to the weights.
-    if (!cur.localLlm.enabled && next.localLlm.enabled && shouldFetchWeights(next.localLlm.modelId)) {
-      void ensureLocalModel(next.localLlm.modelId)
-        .then(() => refreshScreenPreprocess())
+    // Local AI opt-in or an explicit model change provisions the selected model. Disabled profiles
+    // never fetch optional LLM weights automatically; mandatory transcription is a separate path.
+    if (next.localLlm.enabled && (!cur.localLlm.enabled || cur.localLlm.modelId !== next.localLlm.modelId)) {
+      void provisionLocalModel(next.localLlm, getAllowedProviders(), ensureLocalModel)
+        .then((ready) => { if (ready) refreshScreenPreprocess() })
         .catch((e) => mainLog.warn('[settings] local model provisioning failed:', e))
     }
     // At-rest encryption just turned on → purge any previously-built CLEARTEXT knowledge graph so it
@@ -5410,18 +5410,14 @@ function registerIpc(): void {
     assertMainWindow(e)
     return listLocalModels(localModelDownloadState())
   })
-  // Start/retry the first-run fetch without flipping Local AI (routing). Boot already calls
-  // ensureLocalModel; this is the onboarding/Settings path when that was skipped or failed, and the
-  // Retry control when huggingface.co / disk / pin refused the transfer.
+  // Explicit Download/Retry does not enable inference. Policy still applies; the selected model and
+  // its RAM/disk/integrity refusal stay visible rather than silently switching to a different model.
   ipcMain.handle(IPC.localModelsEnsure, (e) => {
     assertMainWindow(e)
-    const best = bestModelForMachine()
-    const current = getSettings().localLlm.modelId
-    const target = shouldFetchWeights(current) ? current : best.id
-    // Always invoke: RAM/disk gates inside ensureLocalModel record a visible refusal. Returning
-    // ok:false here without calling it left Settings idle after Retry on a skipped fetch.
-    void ensureLocalModel(target)
-      .then(() => refreshScreenPreprocess())
+    const allowed = getAllowedProviders()
+    if (allowed && !allowed.includes('local')) return { ok: false }
+    void provisionLocalModel(getSettings().localLlm, allowed, ensureLocalModel, 'explicit')
+      .then((ready) => { if (ready) refreshScreenPreprocess() })
       .catch((err) => mainLog.warn('[localModels:ensure] provisioning failed:', err))
     return { ok: true }
   })
@@ -7519,52 +7515,17 @@ if (!app.requestSingleInstanceLock()) {
       setSettings({ operatorIngestSecret: process.env.METIS_OPERATOR_INGEST_SECRET })
     }
   }
-  // Métis Local weights are no longer bundled in the installer (~728 MB; a universal mac package
-  // carrying them would blow past GitHub's 2 GB release-asset limit), so fetch them once here whenever
-  // the app opens. Deliberately NOT awaited: this is a multi-GB download and startup must not wait on
-  // it, nor fail when the machine is offline or behind a restrictive proxy — the next launch retries.
-  // ensureLocalModel() verifies the pinned sha256 and never throws.
-  //
-  // GATED on RAM only (MQA-186): a machine under the model's floor must not pay for weights
-  // assertRamOk would refuse to load. Local AI `enabled` does NOT gate the download — routing stays
-  // off by default (Cloudflare / API keys stay primary); the bytes land in the background so turning
-  // Local on later is instant. OFF→ON in setSettings still re-arms as a second chance after a failed
-  // first-run fetch.
-  //
-  // local-routing.ts re-reads isDownloaded() per request, so no ROUTING decision needs notifying. The
-  // background screen reader does: its eligibility is evaluated when the engine is refreshed, and the boot
-  // refresh below runs while this download is still in flight — without this re-arm, a first-run user who
-  // opted in gets an inert fast path until some unrelated setting changes (MQA-178).
-  // Pick by hardware, not by list position: bestModelForMachine() returns the strongest entry whose RAM
-  // floor this machine clears. A profile still holding the SMALL floor model is upgraded here rather than
-  // left behind — when that id was persisted it was the only model that existed, so it was never a user
-  // choice to respect. An explicit pick of any other id is left alone. The upgrade only rewrites the
-  // setting; ensureLocalModel then fetches whatever is missing, and a machine below the bigger model's
-  // floor simply resolves back to the small one.
+  // Optional Local AI provisions only after opt-in and only when org policy permits it. Keep the
+  // selected model (including an explicitly smaller one), and never delay startup for its download.
+  // The downloader retains RAM/disk/hash gates. Transcription assets are provisioned independently.
   {
-    const best = bestModelForMachine()
-    const current = getSettings().localLlm.modelId
-    if (current !== best.id && current === 'qwen3.5-0.8b') {
-      try {
-        setSettings({ localLlm: { ...getSettings().localLlm, modelId: best.id } })
-        mainLog.info(`[boot] upgraded the on-device model to ${best.id}`)
-      } catch (e) {
-        mainLog.warn('[boot] on-device model upgrade failed:', e)
-      }
-    }
-    // Warm the sidecar so the first ask is never the cold one — measured 42s cold against ~2.3s warm.
-    // Gated on the weights actually being PRESENT: on a fresh install they are still downloading (~3.4 GB,
-    // in the background, right through onboarding), and warming then would fight that transfer for I/O to
-    // load a model that is not there yet. So there are two triggers and one guard: warm shortly after boot
-    // when the model is already on disk, and warm off the back of the fetch when it has just landed.
-    // Fire-and-forget either way — startup never waits on it, and localPrewarmEligible re-checks
-    // enabled/allowlist/hedge. spawnProfileFor already sizes the sidecar for this machine's RAM, so on a
-    // small machine this warms the CPU-only ~2.1 GB configuration rather than the offloaded one.
+    // Warm only an eligible, downloaded model. Re-read opt-in and policy because either can change
+    // while provisioning is in flight. Startup never waits for this optional work.
     const warmLocalIfReady = (): void => {
       try {
         const cur = getSettings()
-        if (!localModelDownloaded(cur.localLlm.modelId)) return
         if (!localPrewarmEligible(cur, getAllowedProviders(), publicSettings().providerReady)) return
+        if (!localModelDownloaded(cur.localLlm.modelId)) return
         void prewarmLocal(cur.localLlm.modelId, buildPrewarmMessages('warm', cur)).catch((e) =>
           mainLog.warn('[boot] local prewarm failed:', e instanceof Error ? e.message : String(e))
         )
@@ -7572,21 +7533,13 @@ if (!app.requestSingleInstanceLock()) {
         mainLog.warn('[boot] local prewarm skipped:', e instanceof Error ? e.message : String(e))
       }
     }
-    if (shouldFetchWeights(best.id)) {
-      void ensureLocalModel(best.id)
-        .then(() => {
-          refreshScreenPreprocess()
-          // The weights just landed (first run, mid-onboarding). Warm now rather than leaving the very
-          // first ask to pay the full cold load.
-          warmLocalIfReady()
-        })
-        .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
-    } else {
-      // RAM gate kept — do not fetch. Still invoke so download state records the refusal; Settings
-      // must show "needs N GB RAM" + Retry, never a silent idle (Tony: disk/RAM skip looked like
-      // "doesn't even download").
-      void ensureLocalModel(best.id).catch((e) => mainLog.warn('[boot] local model refusal failed:', e))
-    }
+    void provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)
+      .then((ready) => {
+        if (!ready) return
+        refreshScreenPreprocess()
+        warmLocalIfReady()
+      })
+      .catch((e) => mainLog.warn('[boot] local model provisioning failed:', e))
     setTimeout(warmLocalIfReady, 4000).unref?.()
   }
   // Windows toast attribution: a process's AppUserModelID must match the installed shortcut's AUMID
