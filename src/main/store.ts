@@ -338,8 +338,8 @@ export function getEnvKeyProviders(): string[] {
 //
 // settings.json.recovered — NOT a format, a last-resort backup. Whenever settings.json exists but can't
 // be decoded in any of the three formats above, its original bytes are copied here (preserveUnreadableSettings)
-// before the caller falls back to {}, so a subsequent settings write doesn't permanently destroy the only
-// copy. readUserRaw() consults it only when the live file is missing or unreadable (see tryRecoveredSettings).
+// before the caller returns fail-closed null and serves conservative defaults, so subsequent settings writes
+// are refused rather than destroying the only copy. See readUserRaw() and tryRecoveredSettings().
 const ENC_MARKER_V1 = Buffer.from('ATKENC1\n') // legacy: safeStorage (prod)
 const ENC_MARKER_V2 = Buffer.from('ATKENC2\n') // new: AES-GCM file backend
 
@@ -589,8 +589,7 @@ function setupIsComplete(user: Record<string, unknown>, managed: Record<string, 
     'onboardingDone' in managed ? shape().onboardingDone.safeParse(managed.onboardingDone) : null
   return (
     (userDone?.success ? userDone.data : managedDone?.success ? managedDone.data : false) === true ||
-    (user.onboardingDone === undefined &&
-      typeof user.onboardingDoneAt === 'number' &&
+    (typeof user.onboardingDoneAt === 'number' &&
       Number.isFinite(user.onboardingDoneAt) &&
       user.onboardingDoneAt > 0)
   )
