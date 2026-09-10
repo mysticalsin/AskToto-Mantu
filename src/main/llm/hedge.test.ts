@@ -250,7 +250,9 @@ describe('MQA-134: a zero-token leg with nowhere left to fail over must not end 
   const indexSrc = readFileSync(join(__dirname, '..', 'index.ts'), 'utf8')
 
   it('gates that terminal path through markDead instead of falling into streamDone', () => {
-    const at = indexSrc.indexOf("if (!gotToken && provider !== 'local' && failover(")
+    // The shared failure closure can precede onDone; locate this completion-specific path after
+    // its actual flush, not the first (error-path) failover expression elsewhere in the attempt.
+    const at = indexSrc.indexOf("if (!gotToken && provider !== 'local' && failover(", indexSrc.indexOf('paint(think.flush())'))
     expect(at, 'the zero-token failover attempt was not found').toBeGreaterThan(-1)
     // Immediately after the failover attempt, before the local branch and before any success handling.
     const body = indexSrc.slice(at, at + 1400)

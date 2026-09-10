@@ -336,6 +336,30 @@ describe("MQA-180 — the screen badge follows main's verdict, not the renderer'
   })
 })
 
+describe('live incomplete responses preserve buffered partial text', () => {
+  it('drains the pending frame on error without retaining text from a previous request', async () => {
+    host.__reset()
+    const toto = installTotoStub()
+    const view = renderAsk()
+    const previous = view.result.run({ mode: 'recap', prompt: 'previous' })
+    await host.__settle()
+    toto.__fireDelta({ id: previous, text: 'Old completed notes' })
+    toto.__fireDone({ id: previous })
+    await host.__settle()
+
+    const id = view.result.run({ mode: 'recap', prompt: 'current' })
+    await host.__settle()
+    toto.__fireDelta({ id, text: 'Current partial ' })
+    toto.__fireDelta({ id, text: 'notes still buffered' })
+    toto.__fireError({ id, message: 'Response incomplete. Try again.' })
+    await host.__settle()
+    expect(view.result.answer).toMatchObject({
+      id, text: 'Current partial notes still buffered', streaming: false,
+      error: 'Response incomplete. Try again.'
+    })
+  })
+})
+
 describe('MQA-182 — a request that produced nothing stops claiming it viewed the screen', () => {
   let toto: TotoStub
 
