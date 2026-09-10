@@ -439,10 +439,14 @@ export function useAsk(): {
         providerOverride: req.providerOverride,
         wantsScreenContext: req.wantsScreenContext,
         history: req.history ?? []
+      }).catch(() => {
+        // A rejected IPC start may have no stream event. Settle only its still-owned run, using local
+        // copy rather than exposing arbitrary transport details. Late rejections cannot undo success.
+        if (idRef.current === id) finishCurrent('incomplete', 'Could not start the response. Please try again.')
       })
       return id
     },
-    [resetBuffer, updateAnswer]
+    [resetBuffer, updateAnswer, finishCurrent]
   )
 
   const fail = useCallback(
