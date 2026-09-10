@@ -271,7 +271,7 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     }
     if (url.pathname === '/v1/ask') {
       if (request.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405)
-      return handleAsk(store, env, hmac.deviceId, bodyText, now, opts.providerFetch ?? opts.cfFetch ?? fetch)
+      return handleAsk(store, env, hmac.deviceId, bodyText, now, opts.providerFetch ?? opts.cfFetch ?? fetch, request.signal)
     }
     return ingest(store, env, hmac.deviceId, bodyText, now, geo)
   }
