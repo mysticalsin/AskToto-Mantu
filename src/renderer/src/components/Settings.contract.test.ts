@@ -45,8 +45,10 @@ describe('Local AI tells the truth about a model that is downloaded, not bundled
     expect(copy).not.toMatch(/Included with Métis/)
     expect(copy).not.toMatch(/no separate model download/i)
     expect(copy).not.toMatch(/bundled model/i)
-    // ...and says what actually happens instead (background download when the app opens).
-    expect(block).toMatch(/when the app opens|when Métis opens|downloads automatically when Métis opens/i)
+    // Optional weights are fetched automatically only after opt-in, or by an explicit Retry.
+    expect(copy).toMatch(/downloads automatically only after you enable Local AI/i)
+    expect(copy).toMatch(/Retry to download without enabling/i)
+    expect(copy).not.toMatch(/when the app opens|when Métis opens|once on first run|~730 MB/i)
   })
 
   it('MQA-191 — never tells the user to reinstall, which cannot restore weights no installer carries', () => {
@@ -63,6 +65,7 @@ describe('Local AI tells the truth about a model that is downloaded, not bundled
     expect(block).toMatch(/unavailableReason === 'download-failed'/)
     expect(block).toMatch(/huggingface\.co/)
     expect(block).toMatch(/next launch/i)
+    expect(copy).toMatch(/next launch while Local AI is enabled/i)
   })
 
   it('MQA-187 — the card re-polls while a download is running or has not started', () => {

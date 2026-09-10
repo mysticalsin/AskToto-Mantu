@@ -1924,20 +1924,20 @@ function LocalAiSection({
   // incomplete" and told the user to reinstall Métis — an instruction the build gate guarantees cannot
   // work, because no installer contains the weights (MQA-188/191).
   const downloadFailedText =
-    'Could not download the on-device model. Métis retries on the next launch. Check that huggingface.co is reachable from this network.'
+    'Could not download the on-device model. Select Retry, or Métis retries on the next launch while Local AI is enabled. Check that huggingface.co is reachable from this network.'
   const notDownloadedText =
-    'Not downloaded yet. Métis fetches the on-device model automatically when the app opens (~730 MB).'
+    'Not downloaded yet. Enable Local AI to start, or select Retry to download without enabling it.'
 
   return (
     <Section
       title="Local AI"
-      desc="Optional on-device model. Off by default for answering. Cloudflare and any API keys you add stay primary. The model downloads in the background when Métis opens so enabling Local later is instant."
+      desc="Optional on-device model. Off by default. The selected model downloads automatically only after you enable Local AI, or when you select Retry. Cloudflare and any API keys you add stay primary."
       icon={Cpu}
     >
       <div className="flex flex-col gap-3">
         <ToggleRow
           label="Enable Métis Local"
-          desc="Use the on-device model for suggestions, summaries, and screenshot reads. The weights download automatically when Métis opens (not part of the installer). Cloudflare and your other API providers stay available."
+          desc="Use the on-device model for suggestions, summaries, and screenshot reads. Enabling Local AI downloads the selected model if needed (not part of the installer). Cloudflare and your other API providers stay available."
           on={settings.localLlm.enabled}
           onChange={(v) =>
             patch({
@@ -1991,7 +1991,7 @@ function LocalAiSection({
               'flex flex-col gap-2 rounded-[10px] border p-3',
               model.ready
                 ? 'border-[var(--cl-primary)] bg-[var(--cl-primary-soft)]/40'
-                : // A running first-run download is a normal state, not a fault: it must not be dressed
+                : // A running download is a normal state, not a fault: it must not be dressed
                   // as one while it is working (MQA-187).
                   downloading
                   ? 'border-[var(--cl-border)] bg-white/[0.02]'
@@ -2002,7 +2002,7 @@ function LocalAiSection({
               <div className="flex flex-col gap-0.5">
                 <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{model.label}</span>
                 <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                  Downloaded once on first run. Needs {model.minTotalRamGB} GB RAM.
+                  Downloaded once after enabling Local AI or selecting Retry. Needs {model.minTotalRamGB} GB RAM.
                 </span>
               </div>
               <span
