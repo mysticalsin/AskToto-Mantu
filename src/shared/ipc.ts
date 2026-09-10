@@ -1097,11 +1097,11 @@ export const BaseSettingsSchema = z.object({
   overlayOrbStyle: z.enum(['bar', 'jakub', 'obsidian']).default('jakub'),
   showFullTranscriptInReview: z.boolean().default(false), // review = summary-first; transcript opt-in
   asrQuality: z.enum(['best', 'fast']).default('best'), // Best is default; Fast is a Settings power option (docs/asr/QUALITY.md)
-  // parakeet = default. NVIDIA Parakeet v3, fastest + accurate for 25 European languages.
-  // whisper = ~99 langs, opt-in for non-European speech. apple = on-device Apple Speech
+  // parakeet = conservative schema/legacy fallback. Fresh incomplete profiles with >8 GiB physical RAM
+  // prefer Whisper in main/store.ts; <=8 GiB or unknown RAM stays Parakeet. This is only a preference,
+  // not a runtime/language availability guarantee. apple = on-device Apple Speech
   // (SFSpeechRecognizer via the mac-helper sidecar), macOS 13+ only — see main/apple-speech.ts.
-  // Existing users who never wrote asrEngine inherit this default (sparse settings.json).
-  // An explicit whisper/apple override is never clobbered.
+  // Completed sparse legacy profiles keep Parakeet; every explicit or managed engine remains authoritative.
   // NOTE: this zod default is effectively dead — store.ts layers DEFAULT_SETTINGS under the user file
   // before parsing, so the key is always present. Keep both declarations identical so neither lies.
   asrEngine: z.enum(['whisper', 'parakeet', 'apple']).default('parakeet'),
