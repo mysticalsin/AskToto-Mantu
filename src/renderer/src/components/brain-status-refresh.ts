@@ -4,6 +4,11 @@ export function brainStatusIsWorking(status: Pick<BrainStatus, 'backfill' | 'liv
   return !!(status?.backfill?.running || status?.backfill?.preparing || status?.live?.running || status?.intelligenceIndex?.running)
 }
 
+/** Main projects these fields to safe UI copy; an old terminal error is irrelevant during a retry. */
+export function brainStatusError(status: Pick<BrainStatus, 'error' | 'intelligenceIndex'> | null): string | null {
+  return status?.error || (!status?.intelligenceIndex?.running && status?.intelligenceIndex?.lastError) || null
+}
+
 /** Compact status remains cheap enough to poll while idle; full reads stay reserved for a transition. */
 export function brainStatusPollInterval(working: boolean): number {
   return working ? 1_000 : 2_000
