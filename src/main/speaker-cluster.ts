@@ -31,13 +31,13 @@ export interface SpeakerClusterer {
   /**
    * MQA-238: whole-session agglomerative merge, run once at import end when every window has been seen.
    * The online assign() only looks BACKWARD (a drifting voice opens a new cluster it can never rejoin),
-   * so a real 2-speaker meeting came out as 8 labels. This pass (a) repeatedly merges the two most
-   * similar clusters while their centroid cosine >= mergeThreshold (count-weighted mean), then
-   * (b) absorbs minority clusters (count < minorityFloor) into their nearest survivor — the long tail of
-   * 2-5-window fragments is drift, not people. Survivors are relabeled densely by first appearance.
+   * so a real 2-speaker meeting came out as 8 labels. This pass repeatedly merges the two most
+   * similar clusters while their centroid cosine >= mergeThreshold (count-weighted mean).
+   * Speaking briefly is not evidence of being another speaker: low-count clusters must meet the
+   * same similarity floor. Survivors are relabeled densely by first appearance.
    * Returns old->final label mapping for every ORIGINAL label (identity entries included).
    */
-  mergePass: (opts?: { mergeThreshold?: number; minorityFloor?: number }) => Map<string, string>
+  mergePass: (opts?: { mergeThreshold?: number }) => Map<string, string>
   reset: () => void
 }
 
@@ -127,7 +127,6 @@ export function createSpeakerClusterer(options: ClustererOptions = {}): SpeakerC
     size: () => clusters.length,
     mergePass: (opts) => {
       const mergeThreshold = opts?.mergeThreshold ?? threshold
-      const minorityFloor = opts?.minorityFloor ?? 3
       // Every original label -> the cluster object currently owning it.
       const owner = new Map<string, { label: string; centroid: Float32Array; count: number }>()
       for (const c of clusters) owner.set(c.label, c)
@@ -143,7 +142,7 @@ export function createSpeakerClusterer(options: ClustererOptions = {}): SpeakerC
         for (const [orig, c] of owner) if (c === from) owner.set(orig, into)
         clusters = clusters.filter((c) => c !== from)
       }
-      // (a) agglomerative: closest pair first, while above the floor.
+      // Agglomerative: closest pair first, while above the floor.
       for (;;) {
         let bi = -1
         let bj = -1
@@ -161,23 +160,6 @@ export function createSpeakerClusterer(options: ClustererOptions = {}): SpeakerC
         if (bi < 0 || best < mergeThreshold) break
         // Keep the earlier-appearing (lower-numbered) cluster as the survivor.
         absorb(clusters[bi], clusters[bj])
-      }
-      // (b) minority absorption: tail fragments join their nearest survivor unconditionally.
-      for (;;) {
-        const minor = clusters.find((c) => c.count < minorityFloor && clusters.length > 1)
-        if (!minor) break
-        let nearestC: (typeof clusters)[number] | null = null
-        let bestSim = -Infinity
-        for (const c of clusters) {
-          if (c === minor) continue
-          const sim = cosineSimilarity(minor.centroid, c.centroid)
-          if (sim > bestSim) {
-            bestSim = sim
-            nearestC = c
-          }
-        }
-        if (!nearestC) break
-        absorb(nearestC, minor)
       }
       // Dense relabel by first appearance (original numbering order of the survivors).
       const finalLabel = new Map<{ label: string }, string>()
