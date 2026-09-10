@@ -11,6 +11,7 @@ import {
   mkdtempSync
 } from 'node:fs'
 import { join } from 'node:path'
+import { totalmem as physicalTotalMemory } from 'node:os'
 import {
   DEFAULT_SETTINGS,
   DUST_BASE_AGENT_ID,
@@ -51,6 +52,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import OpenAI from 'openai'
 import { stripProxyFaultMarker } from './llm/retry'
 import { migrateOverlayLayout } from '@shared/overlay-chrome'
+import { preferredFreshAsrEngine, type FreshAsrEngine } from '@shared/asr-hardware-preference'
 
 const dir = () => app.getPath('userData')
 const settingsPath = () => join(dir(), 'settings.json')
@@ -377,10 +379,9 @@ function tryParseSettingsBuffer(buf: Buffer): Record<string, unknown> | null {
 /**
  * Last-resort backup: preserve the original UNREADABLE settings buffer verbatim to a single, stable
  * `.recovered` sibling (always overwritten, never timestamped, so repeated failures can't accumulate
- * unbounded files) before the caller discards it and falls back to {}. Without this, the very next
- * settings write would permanently overwrite the only copy of the user's settings — this is the one
- * chance to save them. Best-effort: wrapped in try/catch so a write failure here (e.g. disk full) can
- * never block the fallback-to-defaults path.
+ * unbounded files) before the caller serves defaults in fail-closed mode. This is the one chance to save
+ * the original bytes for repair. Best-effort: wrapped in try/catch so a write failure here (e.g. disk
+ * full) can never block the fail-closed fallback path.
  */
 function preserveUnreadableSettings(buf: Buffer, reason: string): void {
   const recoveredPath = `${settingsPath()}.recovered`
@@ -417,13 +418,12 @@ function tryRecoveredSettings(): Record<string, unknown> | null {
 /**
  * Sparse user overrides (only keys the user actually changed). Decrypts at-rest encryption.
  *
- * Returns `null` — NOT `{}` — when settings.json exists but the read itself threw (EPERM/EACCES/EBUSY/
- * EIO/EISDIR: an AV/EDR or backup lock, a broken ACL, a redirected or roaming %APPDATA% share). A read
- * that FAILED is not "the user has no settings": collapsing the two let setSettings merge a one-key
- * patch onto {} and rename it over the only copy of the profile, wiping meetingsFolder, contextDocs,
- * mcpConnections and everything else with no `.recovered` backup to undo it. Only ENOENT — the file
- * genuinely is not there — means "no overrides". Callers must handle `null` explicitly: getSettings
- * degrades to DEFAULT+managed so the app still runs, setSettings refuses to write.
+ * Returns `null` — NOT `{}` — when settings.json exists but cannot be read or decoded. An inaccessible,
+ * corrupt, or undecryptable profile is not "the user has no settings": collapsing the two lets
+ * setSettings merge a one-key patch onto {} and rename it over the only copy of the profile, wiping
+ * meetingsFolder, contextDocs, mcpConnections and everything else. Only ENOENT — the file genuinely is
+ * not there — means "no overrides". Callers must handle `null` explicitly: getSettings degrades to
+ * DEFAULT+managed without memoising a fresh-profile snapshot, and setSettings refuses to write.
  */
 function readUserRaw(): Record<string, unknown> | null {
   let buf: Buffer
@@ -448,25 +448,25 @@ function readUserRaw(): Record<string, unknown> | null {
     const recovered = tryRecoveredSettings()
     if (recovered) return recovered
     preserveUnreadableSettings(buf, 'settings.json (V2 AES-GCM) is undecryptable')
-    return {}
+    return null
   }
 
   // ── Legacy safeStorage format (ATKENC1) — migrate to file backend on next write ──
   if (buf.length >= ENC_MARKER_V1.length && buf.subarray(0, ENC_MARKER_V1.length).equals(ENC_MARKER_V1)) {
     // Only touch safeStorage (the Keychain) when the file backend is NOT in force. On a keystore-forced
     // build, reading a legacy V1 blob would re-open the very Keychain prompt we route around at boot — so
-    // treat it as unreadable and fall back to defaults (a one-time re-onboard), never a blocking prompt.
+    // treat it as unreadable and serve conservative defaults without caching it as fresh, never prompting.
     if (useFileBackend()) {
       const recovered = tryRecoveredSettings()
       if (recovered) return recovered
       preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — file backend is forced, so the Keychain is not probed')
-      return {}
+      return null
     }
     if (!safeStorage.isEncryptionAvailable()) {
       const recovered = tryRecoveredSettings()
       if (recovered) return recovered
       preserveUnreadableSettings(buf, 'settings.json (legacy V1) is unreadable — safeStorage is unavailable on this machine')
-      return {}
+      return null
     }
     const parsed = tryParseSettingsBuffer(buf)
     if (parsed) {
@@ -485,7 +485,7 @@ function readUserRaw(): Record<string, unknown> | null {
     const recoveredV1 = tryRecoveredSettings()
     if (recoveredV1) return recoveredV1
     preserveUnreadableSettings(buf, 'settings.json (legacy V1) is undecryptable — Keychain access lost or the OS user changed')
-    return {}
+    return null
   }
 
   // ── Legacy plaintext ─────────────────────────────────────────────────────────
@@ -494,7 +494,7 @@ function readUserRaw(): Record<string, unknown> | null {
   const recoveredPlain = tryRecoveredSettings()
   if (recoveredPlain) return recoveredPlain
   preserveUnreadableSettings(buf, 'settings.json is present but not valid JSON')
-  return {}
+  return null
 }
 
 /** Serialize user overrides, encrypted at rest. */
@@ -562,6 +562,39 @@ interface SettingsCache {
   caheEdition: boolean
 }
 let _settingsCache: SettingsCache | null = null
+let _freshAsrEngine: FreshAsrEngine | null = null
+
+/** `os.totalmem()` is stable for this process lifetime. Read it once so settings hot paths never probe
+ * hardware repeatedly; an unavailable/invalid value is conservatively mapped by the pure selector. */
+function freshAsrEngineForThisDevice(): FreshAsrEngine {
+  if (_freshAsrEngine) return _freshAsrEngine
+  let totalMemoryBytes: unknown
+  try {
+    totalMemoryBytes = physicalTotalMemory()
+  } catch {
+    totalMemoryBytes = undefined
+  }
+  _freshAsrEngine = preferredFreshAsrEngine(totalMemoryBytes)
+  return _freshAsrEngine
+}
+
+/** Test-only: each disposable profile can model a different physical-memory class. */
+export function resetAsrHardwarePreferenceForTests(): void {
+  _freshAsrEngine = null
+}
+
+function setupIsComplete(user: Record<string, unknown>, managed: Record<string, unknown>): boolean {
+  const userDone = 'onboardingDone' in user ? shape().onboardingDone.safeParse(user.onboardingDone) : null
+  const managedDone =
+    'onboardingDone' in managed ? shape().onboardingDone.safeParse(managed.onboardingDone) : null
+  return (
+    (userDone?.success ? userDone.data : managedDone?.success ? managedDone.data : false) === true ||
+    (user.onboardingDone === undefined &&
+      typeof user.onboardingDoneAt === 'number' &&
+      Number.isFinite(user.onboardingDoneAt) &&
+      user.onboardingDoneAt > 0)
+  )
+}
 
 /** Test-only: drop the settings cache between cases that swap `app.getPath('userData')`. Redundant now
  *  that the cache key includes the settings path (see `userPath` below), but kept because existing suites
@@ -655,6 +688,19 @@ export function getSettings(): Settings {
   // value is stripped too — a legacy field must not be able to resurrect a key IT has locked.
   const lockedKeys = getLockedKeys()
   if (lockedKeys.length) for (const k of lockedKeys) delete (raw as Record<string, unknown>)[k]
+  const storedAsr = 'asrEngine' in raw && shape().asrEngine.safeParse(raw.asrEngine).success
+  const completedSetup = setupIsComplete(raw, managed)
+  // A readable fresh/incomplete sparse profile gets the one-time hardware preference. Completed sparse
+  // profiles retain the former Parakeet default, and explicit/managed/locked choices remain authoritative.
+  if (
+    stored !== null &&
+    !completedSetup &&
+    !storedAsr &&
+    !('asrEngine' in managed) &&
+    !lockedKeys.includes('asrEngine')
+  ) {
+    base.asrEngine = freshAsrEngineForThisDevice()
+  }
   // Task MI-5 (hardened — QA #9): publishBrainPages is EXPLICIT opt-in only (schema default false). It is
   // deliberately NEVER derived from `!encryptTranscripts`. Deriving it meant turning at-rest encryption
   // OFF (an unrelated action) silently flipped publishing ON and materialized a full Dust-readable wiki
@@ -760,6 +806,23 @@ export function setSettings(patch: Partial<Settings>): Settings {
     )
   }
   const next = { ...prev, ...allowed }
+  const managed = validatedManaged()
+  const previousAsr = 'asrEngine' in prev && shape().asrEngine.safeParse(prev.asrEngine).success
+  const previousCompleted = setupIsComplete(prev, managed)
+  // Completing a genuinely fresh unmanaged setup is the sole persistence point for the derived choice.
+  // Without it, a high-RAM profile would show Whisper during setup and fall back to legacy Parakeet as
+  // soon as onboardingDone landed. Never persist a managed/locked default: policy must remain live.
+  if (
+    allowed.onboardingDone === true &&
+    !previousCompleted &&
+    !previousAsr &&
+    !('asrEngine' in allowed) &&
+    !('asrEngine' in managed) &&
+    !locked.includes('asrEngine')
+  ) {
+    const derived = freshAsrEngineForThisDevice()
+    if (derived === 'whisper') next.asrEngine = derived
+  }
   // Atomic write: a crash mid-write must not corrupt settings.json and wipe every setting + context doc.
   // Encrypted at rest (context docs + profile PII never hit disk as plaintext).
   const p = settingsPath()

@@ -1,5 +1,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, readFileSync, existsSync } from 'node:fs'
+import {
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+  mkdirSync,
+  readFileSync,
+  existsSync,
+  statSync,
+  utimesSync
+} from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { app, safeStorage } from 'electron'
@@ -14,9 +23,16 @@ import {
   testApiKey,
   getAllowedProviders,
   getLockedKeys,
+  resetAsrHardwarePreferenceForTests,
   resetSettingsCacheForTests
 } from './store'
 import { decryptSecret } from './secrets'
+
+const hardware = vi.hoisted(() => ({ totalmem: vi.fn(() => 16 * 1024 ** 3) }))
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>()
+  return { ...actual, totalmem: hardware.totalmem }
+})
 
 vi.mock('electron')
 
@@ -65,6 +81,8 @@ describe('store', () => {
   let userData: string
 
   beforeEach(() => {
+    hardware.totalmem.mockReset().mockReturnValue(16 * 1024 ** 3)
+    resetAsrHardwarePreferenceForTests()
     resetSettingsCacheForTests()
     userData = mkdtempSync(join(tmpdir(), 'asktoto-store-test-'))
     // store.ts's getApiKey() short-circuits on the provider's env var BEFORE it ever touches the
@@ -267,19 +285,135 @@ describe('store', () => {
     expect(getSettings().encryptTranscripts).toBe(true)
   })
 
-  it('migrates an existing install that never chose an ASR engine to Parakeet', () => {
-    // Sparse overlay: no asrEngine key means the user never touched the picker. Changing
-    // DEFAULT_SETTINGS.asrEngine to parakeet is the migration — do not write a one-shot flag.
-    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ provider: 'openai' }), 'utf8')
+  it('keeps a completed legacy install that never chose an ASR engine on Parakeet', () => {
+    const settingsFile = join(userData, 'settings.json')
+    const legacyProfile = JSON.stringify({ provider: 'openai', onboardingDone: true })
+    writeFileSync(settingsFile, legacyProfile, 'utf8')
+
     expect(getSettings().asrEngine).toBe('parakeet')
+    expect(readFileSync(settingsFile, 'utf8')).toBe(legacyProfile)
   })
 
-  it('keeps a deliberate Whisper or Apple Speech choice', () => {
-    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ asrEngine: 'whisper' }), 'utf8')
-    expect(getSettings().asrEngine).toBe('whisper')
-    writeFileSync(join(userData, 'settings.json'), JSON.stringify({ asrEngine: 'apple' }), 'utf8')
-    resetSettingsCacheForTests()
-    expect(getSettings().asrEngine).toBe('apple')
+  describe('RAM-aware fresh ASR default', () => {
+    it('selects Whisper for a fresh 16 GiB profile without writing settings and memoizes the hardware read', () => {
+      const settingsFile = join(userData, 'settings.json')
+
+      expect(getSettings().asrEngine).toBe('whisper')
+      expect(existsSync(settingsFile)).toBe(false)
+      hardware.totalmem.mockReturnValue(4 * 1024 ** 3)
+      resetSettingsCacheForTests()
+      expect(getSettings().asrEngine).toBe('whisper')
+      expect(hardware.totalmem).toHaveBeenCalledTimes(1)
+      expect(existsSync(settingsFile)).toBe(false)
+    })
+
+    it('selects Parakeet for a fresh 8 GiB profile', () => {
+      hardware.totalmem.mockReturnValue(8 * 1024 ** 3)
+      resetSettingsCacheForTests()
+
+      expect(getSettings().asrEngine).toBe('parakeet')
+      expect(existsSync(join(userData, 'settings.json'))).toBe(false)
+    })
+
+    it.each(['parakeet', 'whisper', 'apple'] as const)('keeps an explicit %s choice', (asrEngine) => {
+      writeFileSync(join(userData, 'settings.json'), JSON.stringify({ asrEngine }), 'utf8')
+      resetSettingsCacheForTests()
+
+      expect(getSettings().asrEngine).toBe(asrEngine)
+    })
+
+    it('lets an unlocked user choice override a managed default', () => {
+      writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ asrEngine: 'apple' }), 'utf8')
+      writeFileSync(join(userData, 'settings.json'), JSON.stringify({ asrEngine: 'whisper' }), 'utf8')
+
+      expect(getSettings().asrEngine).toBe('whisper')
+    })
+
+    it('uses a managed default when the user has no choice and a locked managed value over a stored choice', () => {
+      writeFileSync(
+        join(userData, 'managed-config.json'),
+        JSON.stringify({ asrEngine: 'apple', locked: ['asrEngine'] }),
+        'utf8'
+      )
+      writeFileSync(join(userData, 'settings.json'), JSON.stringify({ asrEngine: 'whisper' }), 'utf8')
+
+      expect(getSettings().asrEngine).toBe('apple')
+    })
+
+    it('persists the derived Whisper choice when a fresh setup completes', () => {
+      expect(getSettings().asrEngine).toBe('whisper')
+      expect(existsSync(join(userData, 'settings.json'))).toBe(false)
+
+      const completed = setSettings({ onboardingDone: true, onboardingDoneAt: 123 })
+
+      expect(completed.asrEngine).toBe('whisper')
+      expect(readPersisted(join(userData, 'settings.json'))).toMatchObject({
+        onboardingDone: true,
+        onboardingDoneAt: 123,
+        asrEngine: 'whisper'
+      })
+    })
+
+    it('keeps a low-RAM completion sparse because Parakeet is already the completed-profile fallback', () => {
+      hardware.totalmem.mockReturnValue(8 * 1024 ** 3)
+      resetAsrHardwarePreferenceForTests()
+
+      expect(setSettings({ onboardingDone: true }).asrEngine).toBe('parakeet')
+      expect(readPersisted(join(userData, 'settings.json'))).toEqual({ onboardingDone: true })
+    })
+
+    it('does not persist a derived engine on unrelated writes while setup is incomplete', () => {
+      const saved = setSettings({ temperature: 0.42 })
+
+      expect(saved.asrEngine).toBe('whisper')
+      expect(readPersisted(join(userData, 'settings.json'))).toEqual({ temperature: 0.42 })
+    })
+
+    it('does not freeze a live managed default into the user layer when setup completes', () => {
+      writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ asrEngine: 'apple' }), 'utf8')
+
+      expect(setSettings({ onboardingDone: true }).asrEngine).toBe('apple')
+      expect(readPersisted(join(userData, 'settings.json'))).toEqual({ onboardingDone: true })
+    })
+
+    it('does not reclassify an already-completed managed profile as a fresh setup', () => {
+      writeFileSync(join(userData, 'managed-config.json'), JSON.stringify({ onboardingDone: true }), 'utf8')
+
+      expect(getSettings().asrEngine).toBe('parakeet')
+      expect(setSettings({ onboardingDone: true }).asrEngine).toBe('parakeet')
+      expect(readPersisted(join(userData, 'settings.json'))).toEqual({ onboardingDone: true })
+    })
+
+    it('treats an unreadable existing settings path conservatively and refuses to rewrite it', () => {
+      const settingsFile = join(userData, 'settings.json')
+      mkdirSync(settingsFile)
+
+      expect(getSettings().asrEngine).toBe('parakeet')
+      expect(hardware.totalmem).not.toHaveBeenCalled()
+      expect(() => setSettings({ onboardingDone: true })).toThrow(/can't read its existing settings file/)
+      expect(existsSync(settingsFile)).toBe(true)
+      expect(existsSync(`${settingsFile}.tmp`)).toBe(false)
+    })
+
+    it('does not treat an irrecoverably corrupt settings file as a fresh profile or overwrite it', () => {
+      const settingsFile = join(userData, 'settings.json')
+      const corrupt = Buffer.from('{ definitely not valid settings JSON')
+      writeFileSync(settingsFile, corrupt)
+      const originalMtime = statSync(settingsFile).mtime
+
+      expect(getSettings().asrEngine).toBe('parakeet')
+      expect(hardware.totalmem).not.toHaveBeenCalled()
+      expect(() => setSettings({ onboardingDone: true })).toThrow(/can't read its existing settings file/)
+      expect(readFileSync(settingsFile)).toEqual(corrupt)
+      expect(readFileSync(`${settingsFile}.recovered`)).toEqual(corrupt)
+      expect(existsSync(`${settingsFile}.tmp`)).toBe(false)
+
+      // Preserve the cache key's mtime while repairing the live file. A fresh-shaped snapshot cached
+      // from the corrupt read would hide this repair; an uncached fail-closed read observes it.
+      writeFileSync(settingsFile, JSON.stringify({ provider: 'openai', onboardingDone: true }), 'utf8')
+      utimesSync(settingsFile, originalMtime, originalMtime)
+      expect(getSettings().provider).toBe('openai')
+    })
   })
 
   it('respects an explicit prior opt-out of transcript encryption', () => {
