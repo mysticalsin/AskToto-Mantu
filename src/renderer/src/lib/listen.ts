@@ -26,6 +26,9 @@ const WINDOW_SEC = 6
 // window of each speaker rather than trimming right up against the edge.
 const MAX_QUEUE = 32
 const PARAKEET_FEED_TIMEOUT_MS = 5000 // a single Parakeet window shouldn't take longer than this to transcribe
+const STOP_FLUSH_ACK_TIMEOUT_MS = 4000
+const STOP_FLUSH_INCOMPLETE_MSG =
+  'Could not confirm the final audio flush. The transcript may be missing the last words.'
 // ── Whisper 'auto' language probe (PROVEN FACT 2026-08-05, direct probe): transformers.js's whisper NEVER
 // auto-detects on an un-pinned decode — it logs "No language specified - defaulting to English" and
 // decodes ENGLISH regardless of what was actually spoken. So asrLanguage:'auto' needs a language-agnostic
@@ -334,6 +337,28 @@ interface Channel {
   limiter?: DynamicsCompressorNode // 'them' only: flattens the overs the boost creates (MQA-267)
 }
 
+interface StopDrainOperation {
+  epoch: number
+  requestId: string
+  phase: 'sealing' | 'draining' | 'finished'
+  pendingAcks: Map<Speaker, Channel>
+  callbacks: Array<() => void>
+  ackTimer: ReturnType<typeof setTimeout> | null
+  flushIncomplete: boolean
+  beginDrain: () => void
+}
+
+function settleStopCallbacks(operation: StopDrainOperation): void {
+  const callbacks = operation.callbacks.splice(0)
+  for (const callback of callbacks) {
+    try {
+      callback()
+    } catch (error) {
+      console.warn('[listen] stop drain callback failed:', error)
+    }
+  }
+}
+
 /** A capture side the session REQUESTED but is NOT currently hearing, while Listen stays active
  *  ('them' = system-audio loopback / the remote side, 'you' = the microphone). Exposed as its own
  *  structured field — separate from the sticky `error` note, which only renders inside the Copilot
@@ -581,13 +606,23 @@ export function useListen(
   }, [])
   const workerIdleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const channels = useRef<Partial<Record<Speaker, Channel>>>({})
+  const stoppingRef = useRef(false) // double-stop guard; repeated callers subscribe to stopDrainRef
+  const drainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const stopDrainRef = useRef<StopDrainOperation | null>(null)
+  const stopFlushAckRef = useRef<((speaker: Speaker, requestId: string) => void) | null>(null)
+  const nextStopRequestRef = useRef(1)
+  const sessionEpochRef = useRef(0) // incremented each start(); drain/finishTeardown bails if epoch changed
   const queue = useRef<{ audio: Float32Array; speaker: Speaker; partial?: boolean }[]>([])
   const busy = useRef(false)
   const readyRef = useRef(false)
+
   // Exact text of the note a failed audio window put in the banner, so the next window that decodes can
   // retract THAT note and nothing else (see noteAfterDecodedWindow). Null whenever nothing is outstanding.
   const decodeNoteRef = useRef<string | null>(null)
   const liveRef = useRef(false) // true only between start() and stop() — guards stale results
+  function captureAdmissionIsOpen(epoch: number): boolean {
+    return liveRef.current && !stoppingRef.current && sessionEpochRef.current === epoch
+  }
   // Synchronous in-flight guard for start(): a rapid double-click/double-hotkey on Listen calls start()
   // twice before React re-renders listen.listening to true (that state update is async), so a boolean
   // ref — set synchronously at the very top of start(), before any `await` — is required; guarding on
@@ -1095,6 +1130,16 @@ export function useListen(
       // A worker crash must FULLY tear down capture, not just the worker — otherwise the mic + system
       // AudioContexts stay hot and the tray stays in 'recording' while the UI reads 'not listening',
       // an unrecoverable dead end. Mirror stop()'s teardown so a crash returns to a clean idle state.
+      const activeStop = stopDrainRef.current
+      if (activeStop) {
+        if (activeStop.ackTimer) clearTimeout(activeStop.ackTimer)
+        if (drainTimerRef.current) clearTimeout(drainTimerRef.current)
+        activeStop.phase = 'finished'
+        activeStop.ackTimer = null
+        drainTimerRef.current = null
+        stopDrainRef.current = null
+        stoppingRef.current = false
+      }
       liveRef.current = false
       pausedRef.current = false
       queue.current = []
@@ -1117,6 +1162,7 @@ export function useListen(
       workerRef.current = null
       readyRef.current = false
       crashedRef.current = true // the crash handler already tore everything down — stop() must not redo it
+      if (activeStop) settleStopCallbacks(activeStop)
     }
     workerRef.current = w
     return w
@@ -1226,9 +1272,10 @@ export function useListen(
   function armThemWatchdog(): void {
     if (themWatchdogRef.current) clearTimeout(themWatchdogRef.current)
     if (themHeardRef.current) return
+    const originEpoch = sessionEpochRef.current
     themWatchdogRef.current = setTimeout(() => {
       themWatchdogRef.current = null
-      if (liveRef.current && !pausedRef.current && channels.current.them) {
+      if (captureAdmissionIsOpen(originEpoch) && !pausedRef.current && channels.current.them) {
         setState((s) => ({ ...s, error: THEM_SILENT_MSG }))
       }
     }, THEM_WATCHDOG_MS)
@@ -1245,9 +1292,10 @@ export function useListen(
   function armThemProbation(): void {
     if (themWatchdogRef.current) clearTimeout(themWatchdogRef.current)
     themWindowSeenRef.current = false
+    const originEpoch = sessionEpochRef.current
     themWatchdogRef.current = setTimeout(() => {
       themWatchdogRef.current = null
-      if (!liveRef.current || pausedRef.current) return
+      if (!captureAdmissionIsOpen(originEpoch) || pausedRef.current) return
       // MQA-109: a channel that was already confirmed healthy (themHeardRef) must not be recycled just for
       // going quiet during probation — only with positive evidence its audio tracks actually died (all
       // ended, or the source went muted). A channel that never proved itself keeps the original prove-or-die
@@ -1281,28 +1329,46 @@ export function useListen(
   const openSeqRef = useRef<Partial<Record<Speaker, Promise<void>>>>({})
   // Ref-indirected like recoverSystemAudioRef below: openChannelNow's identity changes with pushAudio,
   // and the serializing wrapper must always invoke the CURRENT one, not the render it was created in.
-  const openChannelNowRef = useRef<((sp: Speaker, stream: MediaStream) => Promise<void>) | null>(null)
+  const openChannelNowRef = useRef<
+    ((sp: Speaker, stream: MediaStream, admissionEpoch: number) => Promise<boolean>) | null
+  >(null)
 
-  const openChannel = useCallback((sp: Speaker, stream: MediaStream): Promise<void> => {
+  const openChannel = useCallback((sp: Speaker, stream: MediaStream, admissionEpoch: number): Promise<boolean> => {
     const prev = openSeqRef.current[sp] ?? Promise.resolve()
     // Chain regardless of the predecessor's outcome — a failed open must not wedge every later one.
-    const run = prev.catch(() => {}).then(() => openChannelNowRef.current?.(sp, stream))
+    const run = prev.catch(() => {}).then(() => {
+      const open = openChannelNowRef.current
+      if (open) return open(sp, stream, admissionEpoch)
+      stream.getTracks().forEach((track) => track.stop())
+      return false
+    })
     openSeqRef.current[sp] = run.catch(() => {}) as Promise<void> // keep the chain alive past a failure
-    return run as Promise<void>
+    return run
   }, [])
 
   const openChannelNow = useCallback(
-    async (sp: Speaker, stream: MediaStream): Promise<void> => {
+    async (sp: Speaker, stream: MediaStream, admissionEpoch: number): Promise<boolean> => {
+      if (!captureAdmissionIsOpen(admissionEpoch)) {
+        stream.getTracks().forEach((track) => track.stop())
+        return false
+      }
       closeChannel(sp) // close any prior channel for this speaker (avoid orphan on retry)
       const ctx = new AudioContext({ sampleRate: SR })
       const src = ctx.createMediaStreamSource(stream)
-      await ctx.audioWorklet.addModule(whisperWorkletUrl())
-      // Race guard: if stop() ran while we were awaiting addModule, tear down instead of wiring a stale channel.
-      if (!liveRef.current) {
+      try {
+        await ctx.audioWorklet.addModule(whisperWorkletUrl())
+      } catch (error) {
         src.disconnect()
         stream.getTracks().forEach((t) => t.stop())
         void ctx.close().catch(() => {})
-        return
+        throw error
+      }
+      // Stop, a replacement session, or a serialized stale open may have won while addModule was loading.
+      if (!captureAdmissionIsOpen(admissionEpoch)) {
+        src.disconnect()
+        stream.getTracks().forEach((t) => t.stop())
+        void ctx.close().catch(() => {})
+        return false
       }
       const worklet = new AudioWorkletNode(ctx, 'whisper-worklet', {
         numberOfInputs: 1,
@@ -1339,7 +1405,11 @@ export function useListen(
       }
 
       worklet.port.onmessage = (ev: MessageEvent): void => {
-        const data = ev.data as { audio?: Float32Array }
+        const data = ev.data as { type?: string; requestId?: string; audio?: Float32Array; partial?: boolean }
+        if (data.type === 'flush-ack' && typeof data.requestId === 'string') {
+          stopFlushAckRef.current?.(sp, data.requestId)
+          return
+        }
         if (data.audio) {
           if (sp === 'them') {
             // Rolling proof-of-life read by armThemProbation — one boolean store, nothing else, so the
@@ -1357,7 +1427,7 @@ export function useListen(
               setState((s) => (s.error === THEM_SILENT_MSG ? { ...s, error: null } : s))
             }
           }
-          pushAudio(sp, data.audio, !!(data as { partial?: boolean }).partial)
+          pushAudio(sp, data.audio, !!data.partial)
         }
       }
       const ch: Channel = { ctx, src, worklet, stream, gain: gain ?? undefined, limiter: limiter ?? undefined }
@@ -1386,7 +1456,7 @@ export function useListen(
       // getDisplayMedia; no user gesture is needed, so a blip no longer forces a "Toggle Listen" restart).
       stream.getAudioTracks().forEach((t) => {
         t.onended = (): void => {
-          if (!liveRef.current || channels.current[sp] !== ch) return
+          if (!liveRef.current || stoppingRef.current || channels.current[sp] !== ch) return
           console.warn(`[listen] ${sp} audio track ended unexpectedly (device change / sleep)`)
           closeChannel(sp)
           if (sp === 'you') {
@@ -1405,7 +1475,13 @@ export function useListen(
       // resume it right back, so an intentional pause could never actually stay suspended. Only an
       // UNEXPECTED suspension (OS/interruption) should be auto-resumed; a user-initiated pause must not.
       ctx.onstatechange = (): void => {
-        if (liveRef.current && !pausedRef.current && channels.current[sp] === ch && ctx.state === 'suspended') {
+        if (
+          liveRef.current &&
+          !stoppingRef.current &&
+          !pausedRef.current &&
+          channels.current[sp] === ch &&
+          ctx.state === 'suspended'
+        ) {
           void ctx.resume().catch(() => {})
         }
       }
@@ -1417,6 +1493,7 @@ export function useListen(
         themHeardRef.current = false // fresh channel — re-arm first-emission detection
         armThemWatchdog()
       }
+      return true
     },
     [pushAudio]
   )
@@ -1428,15 +1505,16 @@ export function useListen(
   const micRecoveringRef = useRef(false)
   const recoverMicRef = useRef<(() => Promise<void>) | null>(null)
   recoverMicRef.current = async (): Promise<void> => {
-    if (!liveRef.current || micRecoveringRef.current) return
+    const admissionEpoch = sessionEpochRef.current
+    if (!captureAdmissionIsOpen(admissionEpoch) || micRecoveringRef.current) return
     micRecoveringRef.current = true
     try {
       const mic = await acquireMic(micDeviceIdRef.current)
-      if (!liveRef.current) {
+      if (!captureAdmissionIsOpen(admissionEpoch)) {
         mic.getTracks().forEach((t) => t.stop())
         return
       }
-      await openChannel('you', mic)
+      if (!(await openChannel('you', mic, admissionEpoch)) || !captureAdmissionIsOpen(admissionEpoch)) return
       setState((s) => ({
         ...s,
         error: s.error === MIC_LOST_MSG ? null : s.error,
@@ -1448,6 +1526,7 @@ export function useListen(
         )
       }))
     } catch {
+      if (!captureAdmissionIsOpen(admissionEpoch)) return
       // Nothing to acquire (no mic connected) — the sticky MIC_LOST_MSG stays until a device change
       // retriggers recovery or the user restarts Listen.
       setState((s) => ({ ...s, error: MIC_LOST_MSG, captureDegraded: { side: 'you', note: MIC_LOST_MSG, permission: false } }))
@@ -1474,13 +1553,17 @@ export function useListen(
   const sysRetryNextAtRef = useRef(0)
   const recoverSystemAudioRef = useRef<(() => Promise<void>) | null>(null)
   recoverSystemAudioRef.current = async (): Promise<void> => {
-    if (!liveRef.current || sysRecoveringRef.current) return
+    const admissionEpoch = sessionEpochRef.current
+    const systemAdmissionIsOpen = (): boolean =>
+      captureAdmissionIsOpen(admissionEpoch) && wantsSystemRef.current
+    if (!systemAdmissionIsOpen() || sysRecoveringRef.current) return
     if (channels.current.them) return // already have a live 'them' channel — nothing to recover
     sysRecoveringRef.current = true
     try {
       await window.toto.armAudio(true)
       let sys: MediaStream
       try {
+        if (!systemAdmissionIsOpen()) return
         // MQA-267: acquired through the one shared path, which disables voice processing on the
         // loopback — see acquireLoopback/LOOPBACK_AUDIO for why AEC on this track eats the far end.
         sys = await acquireLoopback()
@@ -1488,11 +1571,11 @@ export function useListen(
         await window.toto.armAudio(false)
       }
       const liveAudio = sys.getAudioTracks().filter((t) => t.readyState !== 'ended')
-      if (!liveRef.current || !liveAudio.length) {
+      if (!systemAdmissionIsOpen() || !liveAudio.length) {
         sys.getTracks().forEach((t) => t.stop())
         return
       }
-      await openChannel('them', sys)
+      if (!(await openChannel('them', sys, admissionEpoch)) || !systemAdmissionIsOpen()) return
       themDegradedRef.current = null // 'them' is capturing again — nothing left to restore on a later mic blip
       sysRetryAttemptsRef.current = 0 // recovered — a later loss starts its backoff from scratch
       sysRetryNextAtRef.current = 0
@@ -1509,6 +1592,7 @@ export function useListen(
         captureDegraded: s.captureDegraded?.side === 'them' ? null : s.captureDegraded
       }))
     } catch {
+      if (!systemAdmissionIsOpen()) return
       // Couldn't re-acquire (permission genuinely revoked, or no loopback available) — leave the sticky
       // note so the live permission watcher / a devicechange can retrigger recovery later.
       setState((s) =>
@@ -1536,10 +1620,12 @@ export function useListen(
   const devChangeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
     const onDeviceChange = (): void => {
-      if (!liveRef.current) return
+      if (!liveRef.current || stoppingRef.current) return
+      const originEpoch = sessionEpochRef.current
       if (devChangeTimerRef.current) clearTimeout(devChangeTimerRef.current)
       devChangeTimerRef.current = setTimeout(() => {
         devChangeTimerRef.current = null
+        if (!captureAdmissionIsOpen(originEpoch)) return
         if (channels.current.you) void recoverMicRef.current?.()
         const action = themDeviceChangeAction(wantsSystemRef.current, !!channels.current.them, null)
         if (action === 'watch') armThemProbation()
@@ -1569,6 +1655,8 @@ export function useListen(
   useEffect(() => {
     if (!state.listening || !wantsSystemRef.current) return
     const iv = setInterval(() => {
+      const originEpoch = sessionEpochRef.current
+      if (!captureAdmissionIsOpen(originEpoch) || !wantsSystemRef.current) return
       if (channels.current.them || sysRecoveringRef.current) return // already have it / mid-recovery
       // Windows never reports 'granted' here (windowsScreenStatus() hard-codes 'unknown' — there is no OS
       // permission gate to poll), so the poll below can structurally never fire the retry there. Skipping
@@ -1588,7 +1676,12 @@ export function useListen(
       void window.toto
         .getPermissions()
         .then((p) => {
-          if (p?.screenRecording === 'granted' && !channels.current.them) {
+          if (
+            captureAdmissionIsOpen(originEpoch) &&
+            wantsSystemRef.current &&
+            p?.screenRecording === 'granted' &&
+            !channels.current.them
+          ) {
             void recoverSystemAudioRef.current?.()
           }
         })
@@ -1622,14 +1715,23 @@ export function useListen(
           clearTimeout(workerIdleTimer.current)
           workerIdleTimer.current = null
         }
-        // A stop() may still be draining — cancel its initial kickoff timer and reset the stopping guard so
-        // this fresh session is not torn down when finishTeardown fires for the previous stop().
+        // A stop() may still be sealing or draining. A fresh session supersedes it, so cancel both stages,
+        // abandon its callbacks (the public contract documents that behavior), and close its old channels.
+        let supersededStop = false
+        const activeStop = stopDrainRef.current
+        if (activeStop) {
+          if (activeStop.ackTimer) clearTimeout(activeStop.ackTimer)
+          stopDrainRef.current = null
+          supersededStop = true
+        }
         if (drainTimerRef.current) {
           clearTimeout(drainTimerRef.current)
           drainTimerRef.current = null
-          // The cancelled drain never got to run finishTeardown's closeChannel calls -- close both channels
-          // here so a speaker the new source excludes (e.g. restarting mic-only after a mic+system session)
-          // doesn't leak its AudioContext/MediaStream indefinitely.
+          supersededStop = true
+        }
+        if (supersededStop) {
+          // The cancelled stop never got to run finishTeardown's closeChannel calls -- close both channels
+          // so a speaker the new source excludes cannot leak its AudioContext/MediaStream indefinitely.
           closeChannel('you')
           closeChannel('them')
         }
@@ -1644,7 +1746,7 @@ export function useListen(
           loadedQualityRef.current = null
           readyRef.current = false
         }
-        sessionEpochRef.current += 1
+        const myEpoch = ++sessionEpochRef.current
         queue.current = []
         provisionalRef.current = null // fresh session — no carried-over placeholder from the previous one
         pendingWhisperEmbedRef.current = null
@@ -1692,7 +1794,7 @@ export function useListen(
             setState((s) => ({ ...s, loading: true, loadingPct: null }))
             try {
               const st = await window.toto.parakeetStatus()
-              if (!liveRef.current) return
+              if (!captureAdmissionIsOpen(myEpoch)) return
               if (!st.ready) {
                 const off = window.toto.onParakeetProgress((pct) => setState((s) => ({ ...s, loadingPct: pct })))
                 try {
@@ -1702,11 +1804,12 @@ export function useListen(
                   off()
                 }
               }
-              if (!liveRef.current) return
+              if (!captureAdmissionIsOpen(myEpoch)) return
               readyRef.current = true
               setState((s) => ({ ...s, ready: true, loading: false, loadingPct: null }))
               pump()
             } catch (e) {
+              if (!captureAdmissionIsOpen(myEpoch)) return
               console.warn('[listen] parakeet unavailable, using whisper:', (e as Error)?.message)
               engineRef.current = 'whisper'
             }
@@ -1729,7 +1832,7 @@ export function useListen(
             pump()
           }
 
-          if (!liveRef.current) return
+          if (!captureAdmissionIsOpen(myEpoch)) return
 
           if (engineRef.current === 'whisper') {
             // If the quality changed since the warm worker loaded (or we just fell back from Parakeet),
@@ -1746,7 +1849,7 @@ export function useListen(
             // bundled: true → worker uses the asr-model:// scheme (offline, packaged resources);
             //          false → development-only remote resolver when local assets were not provisioned.
             const bundled = await getAsrBundled()
-            if (!liveRef.current) return
+            if (!captureAdmissionIsOpen(myEpoch)) return
             if (!bundled && !navigator.onLine && !readyRef.current) {
               // Non-bundled (remote-model) path needs the network to fetch the model and we're offline right
               // now — skip the guaranteed-to-fail fetch and go straight to the "waiting for network" state
@@ -1773,25 +1876,25 @@ export function useListen(
         if (micP) {
           try {
             const mic = await micP
-            if (!liveRef.current) {
+            if (!captureAdmissionIsOpen(myEpoch)) {
               mic.getTracks().forEach((t) => t.stop())
-              closeChannel('you')
-              closeChannel('them')
-              setState((s) => ({ ...s, listening: false }))
               return
             }
-            await openChannel('you', mic)
-            micOk = true
+            micOk = await openChannel('you', mic, myEpoch)
+            if (!micOk && !captureAdmissionIsOpen(myEpoch)) return
           } catch (e) {
+            if (!captureAdmissionIsOpen(myEpoch)) return
             console.warn('[listen] microphone capture failed:', (e as Error)?.name, (e as Error)?.message)
           }
         }
 
         if (source === 'system' || source === 'both') {
           try {
+            if (!captureAdmissionIsOpen(myEpoch)) return
             await window.toto.armAudio(true) // arm the loopback handler only for this request
             let sys: MediaStream
             try {
+              if (!captureAdmissionIsOpen(myEpoch)) return
               // MQA-267: acquired through the one shared path (voice processing disabled on the
               // loopback — AEC on this track subtracts the very audio it exists to capture).
               //
@@ -1806,6 +1909,10 @@ export function useListen(
             } finally {
               await window.toto.armAudio(false)
             }
+            if (!captureAdmissionIsOpen(myEpoch)) {
+              sys.getTracks().forEach((t) => t.stop())
+              return
+            }
             // Verify a live (non-ended) audio track is present.  If Screen Recording permission is
             // missing, main's handler returns callback({}) which makes getDisplayMedia throw AbortError
             // (caught below as isSysPermDenied).  If permission is granted but the track is already
@@ -1816,16 +1923,10 @@ export function useListen(
               sys.getTracks().forEach((t) => t.stop())
               throw new Error('no system audio track') // non-abort → isSysPermDenied = false below
             }
-            if (!liveRef.current) {
-              sys.getTracks().forEach((t) => t.stop())
-              closeChannel('you')
-              closeChannel('them')
-              setState((s) => ({ ...s, listening: false }))
-              return
-            }
-            await openChannel('them', sys)
-            sysOk = true
+            sysOk = await openChannel('them', sys, myEpoch)
+            if (!sysOk && !captureAdmissionIsOpen(myEpoch)) return
           } catch (e) {
+            if (!captureAdmissionIsOpen(myEpoch)) return
             sysErr = e as Error
             console.warn('[listen] system-audio capture failed:', sysErr?.name, sysErr?.message)
           }
@@ -1842,6 +1943,7 @@ export function useListen(
             sysErr.name === 'NotAllowedError' ||
             /abort/i.test(sysErr.message ?? ''))
 
+        if (!captureAdmissionIsOpen(myEpoch)) return
         if (!micOk && !sysOk) {
           // Nothing came up — tear down so no half-open channel stays hot while the UI says "not listening".
           liveRef.current = false
@@ -1893,6 +1995,7 @@ export function useListen(
         // At least one channel (mic and/or system loopback) is confirmed open here — this is the point
         // a consent/recording indicator should key off, not the optimistic `listening: true` set at the
         // top of start() before any capture was actually acquired.
+        if (!captureAdmissionIsOpen(myEpoch)) return
         setState((s) => ({ ...s, error: note, captureDegraded, listening: true, capturing: true, loading: !readyRef.current }))
       } finally {
         // Every exit path (the several early `return`s above, a thrown error, or the normal fall-through)
@@ -1904,9 +2007,9 @@ export function useListen(
     [armNetworkRetry, disarmNetworkRetry, ensureWorker, getAsrBundled, openChannel, pump]
   )
 
-  const closeChannel = useCallback((sp: Speaker): void => {
+  const closeChannel = useCallback((sp: Speaker, expected?: Channel): void => {
     const ch = channels.current[sp]
-    if (!ch) return
+    if (!ch || (expected && ch !== expected)) return
     // Clear the 'them' watchdog so it cannot fire after the channel is gone.
     if (sp === 'them' && themWatchdogRef.current) {
       clearTimeout(themWatchdogRef.current)
@@ -1989,20 +2092,40 @@ export function useListen(
     setState((s) => ({ ...s, paused: false }))
   }, [])
 
-  const stoppingRef = useRef(false) // double-stop guard
-  const drainTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null) // pending initial drain kickoff timer
-  const sessionEpochRef = useRef(0) // incremented each start(); drain/finishTeardown bails if epoch changed
+  stopFlushAckRef.current = (speaker, requestId): void => {
+    const operation = stopDrainRef.current
+    const channel = operation?.pendingAcks.get(speaker)
+    if (
+      !operation ||
+      operation.epoch !== sessionEpochRef.current ||
+      operation.requestId !== requestId ||
+      !channel
+    )
+      return
+    operation.pendingAcks.delete(speaker)
+    // MessagePort ordering guarantees final audio was delivered before this ACK. Stop the exact sealed
+    // capture channel now; native ASR remains alive until the renderer queue/in-flight decode settles.
+    closeChannel(speaker, channel)
+    if (operation.pendingAcks.size === 0) operation.beginDrain()
+  }
+
   const stop = useCallback((onDrained?: () => void): void => {
     // crashedRef → the worker onerror handler already ran the full teardown; running it again here would
     // thrash state (re-fire setListeningState(false), wipe the crash error) → the "dead-end" tray mismatch.
-    if (stoppingRef.current || crashedRef.current) {
-      // Nothing left to drain (already stopping, or torn down by a crash) — fire the callback right away
-      // so a caller relying on it (e.g. endReview's recap) still runs instead of silently never firing.
+    if (crashedRef.current) {
+      // The crash handler already tore capture down and surfaced the failure; there is no live drain to join.
       onDrained?.()
+      return
+    }
+    if (stoppingRef.current) {
+      // Join the exact active stop. "Already stopping" never means "already drained": the prior operation
+      // may still own a worklet flush, queued PCM, or an in-flight decode.
+      if (onDrained) stopDrainRef.current?.callbacks.push(onDrained)
       return
     }
     stoppingRef.current = true
     const myEpoch = sessionEpochRef.current
+    const requestId = `stop:${myEpoch}:${nextStopRequestRef.current++}`
 
     // 0. A worklet's port message is handled on the audio-rendering thread — it won't run while that
     //    thread is suspended. Resume before flushing so a Stop hit while Paused still processes the flush
@@ -2012,71 +2135,125 @@ export function useListen(
       for (const ch of Object.values(channels.current)) void ch?.ctx.resume().catch(() => {})
     }
 
-    // 1. Flush each open worklet's partial accumulation buffer WHILE liveRef is still true so that
-    //    any flushed audio message routes through pushAudio → pump → commitLine before teardown.
+    // 1. Atomically seal and flush each open worklet WHILE liveRef is still true. Each worklet posts its
+    //    final audio first, then the matching request-id ACK. Only after all ACKs do we know the producer
+    //    frontier is closed and the in-memory queue is finite enough for the existing drain stage.
     const speakers: Speaker[] = ['you', 'them']
-    for (const sp of speakers) {
-      const ch = channels.current[sp]
-      if (ch) {
-        try {
-          ch.worklet.port.postMessage('flush')
-        } catch {
-          /* ignore if port is already closed */
-        }
+    let operation!: StopDrainOperation
+    const beginDrain = (): void => {
+      if (
+        stopDrainRef.current !== operation ||
+        operation.epoch !== sessionEpochRef.current ||
+        operation.phase !== 'sealing'
+      )
+        return
+      operation.phase = 'draining'
+      if (operation.ackTimer) clearTimeout(operation.ackTimer)
+      operation.ackTimer = null
+      setState((state) => (state.capturing ? { ...state, capturing: false } : state))
+
+      // 2. Once the producer frontier is sealed, drain the finite queue/busy state. The total ceiling keeps
+      //    shutdown bounded; if it expires, any still-undispatched work is discarded during teardown.
+      const DRAIN_CEILING_MS =
+        engineRef.current === 'parakeet' || engineRef.current === 'apple' ? PARAKEET_FEED_TIMEOUT_MS + 1000 : 4000
+      const startedAt = Date.now()
+      const finishTeardown = (): void => {
+        // A new start() ran while we were draining — it already owns the session; do not clobber it.
+        if (
+          sessionEpochRef.current !== myEpoch ||
+          stopDrainRef.current !== operation ||
+          operation.phase !== 'draining'
+        )
+          return
+        operation.phase = 'finished'
+        liveRef.current = false
+        disarmNetworkRetry()
+        queue.current = [] // drop anything still undispatched once the bounded drain ends
+        clearProvisional()
+        pendingWhisperEmbedRef.current = null
+        themRunRef.current = ''
+        closeChannel('you')
+        closeChannel('them')
+        void window.toto.setListeningState(false).catch(() => {})
+        setState((s) => {
+          const flushWarning = operation.flushIncomplete ? STOP_FLUSH_INCOMPLETE_MSG : null
+          const error = flushWarning
+            ? s.error && !s.error.includes(flushWarning)
+              ? `${s.error} ${flushWarning}`
+              : s.error ?? flushWarning
+            : s.error
+          return {
+            ...s,
+            listening: false,
+            capturing: false,
+            paused: false,
+            loading: false,
+            error,
+            captureDegraded: null
+          }
+        })
+        drainTimerRef.current = null
+        stopDrainRef.current = null
+        stoppingRef.current = false
+        settleStopCallbacks(operation)
+        // MQA-285: keep the hot engine. Unmount still tears the worker down.
       }
+      const waitForDrain = (): void => {
+        if (sessionEpochRef.current !== myEpoch || stopDrainRef.current !== operation) return
+        if ((queue.current.length === 0 && !busy.current) || Date.now() - startedAt > DRAIN_CEILING_MS) {
+          finishTeardown()
+          return
+        }
+        drainTimerRef.current = setTimeout(waitForDrain, 60)
+      }
+      waitForDrain()
     }
 
-    // 2. Tear down only once the flushed final window has actually been transcribed — i.e. the queue
-    //    has drained AND no decode is in flight (busy=false). The old fixed 250ms timer could fire
-    //    mid-decode, and commitLine (gated on liveRef) would drop the last sentence once liveRef flipped
-    //    false. liveRef stays TRUE through the drain so that final window still commits. A hard ceiling
-    //    guards against a hung/never-returning decode wedging teardown.
-    // Parakeet decodes run in the main process over IPC and race their own PARAKEET_FEED_TIMEOUT_MS
-    // timeout per window (see pump() above). A drain ceiling shorter than that timeout would tear down
-    // (liveRef=false) while the last decode is still in flight — and commitLine drops any line that lands
-    // after liveRef flips false — silently losing the final sentence of a Parakeet session. Give Parakeet
-    // sessions a ceiling that comfortably outlasts their own feed timeout — Apple Speech feeds over the
-    // same IPC path with the same timeout (see its pump above), so it gets the same headroom; Whisper
-    // (in-process, no IPC round trip) keeps the original 4s ceiling.
-    const DRAIN_CEILING_MS =
-      engineRef.current === 'parakeet' || engineRef.current === 'apple' ? PARAKEET_FEED_TIMEOUT_MS + 1000 : 4000
-    const startedAt = Date.now()
-    const finishTeardown = (): void => {
-      // A new start() ran while we were draining — it already owns the session; do not clobber it.
-      // Leave stoppingRef alone: start() already reset it for the new session, so an old-epoch tick
-      // clearing it here would weaken that session's double-stop guard.
-      if (sessionEpochRef.current !== myEpoch) return
-      liveRef.current = false
-      disarmNetworkRetry() // session over — a pending 'online' retry must not fire into the next one
-      queue.current = [] // drop anything still undispatched past the ceiling so it can't leak into the next session
-      clearProvisional() // a decode still in flight at the ceiling never gets to replace its placeholder
-      pendingWhisperEmbedRef.current = null
-      themRunRef.current = '' // run after the drain: any final flushed question already fired while liveRef was true
-      closeChannel('you')
-      closeChannel('them')
-      void window.toto.setListeningState(false).catch(() => {})
-      setState((s) => ({ ...s, listening: false, capturing: false, paused: false, loading: false, error: null, captureDegraded: null }))
-      drainTimerRef.current = null
-      stoppingRef.current = false
-      // The final flushed window (if any) has now committed via commitLine — text() reflects the
-      // complete post-drain transcript, safe for a caller (e.g. the recap) to read.
-      onDrained?.()
-      // MQA-285: keep the hot engine. Idle-unloading here forced a cold start on the next Listen and
-      // on the post-meeting recap. Unmount still tears the worker down.
+    operation = {
+      epoch: myEpoch,
+      requestId,
+      phase: 'sealing',
+      pendingAcks: new Map(
+        speakers.flatMap((speaker) => {
+          const channel = channels.current[speaker]
+          return channel ? [[speaker, channel] as const] : []
+        })
+      ),
+      callbacks: onDrained ? [onDrained] : [],
+      ackTimer: null,
+      flushIncomplete: false,
+      beginDrain
     }
-    const waitForDrain = (): void => {
-      // A new start() ran — the previous stop()'s drain must not proceed; the new session owns the state.
-      // (Leave stoppingRef alone, same reason as finishTeardown.)
-      if (sessionEpochRef.current !== myEpoch) return
-      if ((queue.current.length === 0 && !busy.current) || Date.now() - startedAt > DRAIN_CEILING_MS) {
-        finishTeardown()
-        return
+    stopDrainRef.current = operation
+
+    if (operation.pendingAcks.size === 0) {
+      beginDrain()
+      return
+    }
+    operation.ackTimer = setTimeout(() => {
+      if (stopDrainRef.current !== operation || operation.pendingAcks.size === 0) return
+      operation.flushIncomplete = true
+      // A missing ACK means the worklet never confirmed its producer frontier. Close those exact channels
+      // now so capture is nevertheless bounded, then drain whatever audio did reach the renderer.
+      for (const [speaker, channel] of operation.pendingAcks) closeChannel(speaker, channel)
+      operation.pendingAcks.clear()
+      beginDrain()
+    }, STOP_FLUSH_ACK_TIMEOUT_MS)
+
+    for (const [speaker, channel] of [...operation.pendingAcks]) {
+      if (channels.current[speaker] !== channel) {
+        operation.pendingAcks.delete(speaker)
+        continue
       }
-      // Track the re-arm in drainTimerRef so a fresh start() can cancel a still-pending drain tick.
-      drainTimerRef.current = setTimeout(waitForDrain, 60)
+      try {
+        channel.worklet.port.postMessage({ type: 'seal-and-flush', requestId })
+      } catch {
+        operation.flushIncomplete = true
+        operation.pendingAcks.delete(speaker)
+        closeChannel(speaker, channel)
+      }
     }
-    // Give the worklet's flush message a tick to post its final window into the queue, then wait for drain.
-    drainTimerRef.current = setTimeout(waitForDrain, 80)
+    if (operation.pendingAcks.size === 0) beginDrain()
   }, [closeChannel, disarmNetworkRetry])
 
   const clear = useCallback((): void => {
@@ -2098,6 +2275,9 @@ export function useListen(
         clearTimeout(drainTimerRef.current)
         drainTimerRef.current = null
       }
+      const activeStop = stopDrainRef.current
+      if (activeStop?.ackTimer) clearTimeout(activeStop.ackTimer)
+      stopDrainRef.current = null
       liveRef.current = false
       disarmNetworkRetry()
       closeChannel('you')

@@ -345,6 +345,11 @@ describe('windows system-audio retry watcher (MQA-041)', () => {
     expect(branch![1]).toContain('void recoverSystemAudioRef.current?.()')
     expect(branch![1]).not.toContain('getPermissions')
     // The macOS path keeps its permission gate — a granted flip is still what resumes 'them' there.
-    expect(listenSrc).toMatch(/if \(p\?\.screenRecording === 'granted' && !channels\.current\.them\)/)
+    expect(listenSrc).toMatch(
+      /captureAdmissionIsOpen\(originEpoch\) &&\n {12}wantsSystemRef\.current &&\n {12}p\?\.screenRecording === 'granted' &&\n {12}!channels\.current\.them/
+    )
+    expect(listenSrc).toMatch(
+      /const iv = setInterval\(\(\) => \{\n {6}const originEpoch = sessionEpochRef\.current\n {6}if \(!captureAdmissionIsOpen\(originEpoch\) \|\| !wantsSystemRef\.current\) return/
+    )
   })
 })
