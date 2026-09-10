@@ -275,7 +275,7 @@ import {
   exciseDeletedMeeting,
   markBrainChanged,
   requestBackfill,
-  countUnextractedMeetings,
+  requestBackfillRun,
   requestSourceRefresh,
   brainBackfillProgress,
   brainLiveIngestProgress,
@@ -286,7 +286,6 @@ import {
   reconcileMeetingsInBackground,
   settleCommitment,
   startRebuild,
-  startBackfill
 } from './brain/ingest'
 import { startIntelligencePass } from './brain/intelligence-pass'
 import { runConsolidationIfDue } from './brain/consolidate'
@@ -395,10 +394,10 @@ import {
   runIntelligenceIndex,
   setIntelligenceIndexWork,
   lastIndexedAt,
-  classifyIntelligenceClick,
-  NO_PROVIDER_INDEX_COPY,
+  intelligenceIndexStatus,
   SIGN_IN_INDEX_COPY
 } from './brain/intelligence-index'
+import { startIntelligenceWork } from './brain/intelligence-work'
 import {
   ensureImportAsrAssets,
   asrAssetsProgress,
@@ -1268,86 +1267,18 @@ async function runImportedRecap(job: ImportJob): Promise<string | undefined> {
   })
 }
 
-async function recapMissingMeetingSummaries(): Promise<number> {
-  const needing = await listMeetingsNeedingRecap()
-  let n = 0
-  for (const m of needing) {
-    try {
-      const recap = await runImportedRecap({
-        jobId: `index-${m.file}`,
-        lines: m.lines,
-        mode: m.mode
-      } as ImportJob)
-      if (recap?.trim()) {
-        const saved = await updateMeetingRecap(getSettings(), m.file, recap)
-        if (saved.ok) n += 1
-        else mainLog.error(`[intelligence-index] could not save recap for ${m.file}: ${saved.error}`)
-      }
-    } catch (error) {
-      mainLog.error(
-        `[intelligence-index] recap failed for ${m.file}:`,
-        error instanceof Error ? error.message : error
-      )
-    }
-  }
-  return n
-}
-
-function intelligenceDashboardIsEmpty(): boolean {
-  const s = getSettings()
-  const idx = readBrainIndex(s)
-  const counts = brainStatusCounts(s, idx.revision)
-  return counts.people === 0 && counts.accounts === 0 && counts.deals === 0
-}
-
 function wireIntelligenceIndexWork(): void {
-  setIntelligenceIndexWork(async (reason) => {
-    const recapP = recapMissingMeetingSummaries()
-    const r = requestBackfill({ force: true })
-    const savedMeetings = (await listMeetings()).filter((m) => !m.locked).length
-    const unextracted = countUnextractedMeetings()
-    const emptyDashboard = intelligenceDashboardIsEmpty()
-    let result = { ...r, ran: true, recapped: 0 }
-    const verdict = classifyIntelligenceClick({
-      savedMeetings,
-      unextracted,
-      emptyDashboard,
-      queued: result.queued,
-      preparing: result.preparing,
-      deferred: result.deferred,
-      upToDate: result.upToDate
-    })
-    if (verdict === 'illegal-empty') {
-      const forced = startBackfill(undefined, { force: true })
-      result = {
-        ...forced,
-        ran: true,
-        recapped: 0,
-        preparing: true,
-        upToDate: false
-      }
-    }
-    if (result.deferred === 'no-provider') {
-      void recapP.catch((e) =>
-        mainLog.error('[intelligence-index] background recap failed:', e instanceof Error ? e.message : e)
-      )
-      return { ...result, error: NO_PROVIDER_INDEX_COPY, recapped: 0 }
-    }
-    // Click and import-idle must not wait on sequential recaps — extract starts now; recap writes
-    // in the background. Named slots can afford to await the summaries.
-    if (reason === 'click' || reason === 'import-idle') {
-      void recapP
-        .then((n) => {
-          if (n) mainLog.info(`[intelligence-index] background recap wrote ${n} summary(ies)`)
-        })
-        .catch((e) =>
-          mainLog.error('[intelligence-index] background recap failed:', e instanceof Error ? e.message : e)
-        )
-      return result
-    }
-    const recapped = await recapP
-    return { ...result, recapped }
-  })
+  setIntelligenceIndexWork(() => startIntelligenceWork({
+    list: listMeetingsNeedingRecap,
+    generate: (meeting) => runImportedRecap({
+      jobId: `index-${meeting.file}`,
+      lines: meeting.lines,
+      mode: meeting.mode
+    } as ImportJob),
+    save: (file, recap) => updateMeetingRecap(getSettings(), file, recap),
+    backfill: requestBackfillRun,
+    logFailure: (error) => mainLog.error('[intelligence-index] recap failed:', error)
+  }))
 }
 
 function initializeImportJobs(): void {
@@ -6666,7 +6597,8 @@ function registerIpc(): void {
       // deferred source refresh runs (it needs a usable provider). Surfaced so the UI can say the
       // cleanup is pending instead of silently claiming the delete was complete.
       cleanupPending: idx.sourceRefreshRequested === true,
-      lastIndexedAt: lastIndexedAt(s)
+      lastIndexedAt: lastIndexedAt(s),
+      intelligenceIndex: intelligenceIndexStatus(s)
     }
   })
   ipcMain.handle(IPC.brainBackfill, async (e) => {

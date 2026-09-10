@@ -1,3 +1,9 @@
+import type { BrainStatus } from '@shared/brain'
+
+export function brainStatusIsWorking(status: Pick<BrainStatus, 'backfill' | 'live' | 'intelligenceIndex'> | null): boolean {
+  return !!(status?.backfill?.running || status?.backfill?.preparing || status?.live?.running || status?.intelligenceIndex?.running)
+}
+
 /** Compact status remains cheap enough to poll while idle; full reads stay reserved for a transition. */
 export function brainStatusPollInterval(working: boolean): number {
   return working ? 1_000 : 2_000

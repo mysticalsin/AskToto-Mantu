@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest'
-import { brainStatusPollInterval, shouldRefreshAfterBrainStatus, shouldRefreshAfterBrainStatusTransition } from './brain-status-refresh'
+import { brainStatusIsWorking, brainStatusPollInterval, shouldRefreshAfterBrainStatus, shouldRefreshAfterBrainStatusTransition } from './brain-status-refresh'
 
 describe('in-app Intelligence status refresh', () => {
+  it('keeps the control busy through recap/publication completion after the extraction queue drains', () => {
+    expect(brainStatusIsWorking({ intelligenceIndex: { running: true } })).toBe(true)
+    expect(brainStatusIsWorking({ intelligenceIndex: { running: false, lastError: 'Retry' } })).toBe(false)
+    expect(brainStatusIsWorking({ backfill: { total: 0, done: 0, running: false, preparing: true } })).toBe(true)
+    expect(brainStatusIsWorking({ live: { pending: 1, running: true } })).toBe(true)
+    expect(brainStatusIsWorking(null)).toBe(false)
+  })
   it('keeps a compact idle poll alive so a later automatic ingest is noticed', () => {
     expect(brainStatusPollInterval(false)).toBe(2_000)
     expect(brainStatusPollInterval(true)).toBe(1_000)
