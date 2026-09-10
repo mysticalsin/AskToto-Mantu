@@ -262,10 +262,14 @@ export function createApp(store, auditLog, options = {}) {
     return signLease(payload, leaseSigningKey.privateKey);
   }
 
-  // JSON body parse errors land here (thrown by express.json()).
+  // Expected JSON body rejections land here (thrown by express.json()). Keep them out of the
+  // generic 500/logger below: malformed or oversized client input is not a server fault.
   app.use((err, req, res, next) => {
     if (err && err.type === 'entity.parse.failed') {
       return res.status(400).json({ ok: false, error: 'invalid_json' });
+    }
+    if (err && err.type === 'entity.too.large') {
+      return res.status(413).json({ ok: false, error: 'payload_too_large' });
     }
     return next(err);
   });
