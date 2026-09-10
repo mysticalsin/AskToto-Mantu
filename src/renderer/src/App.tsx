@@ -67,11 +67,21 @@ import {
   type OverlaySpring
 } from './lib/overlay-motion'
 import { useListen, playListenChime } from './lib/listen'
-import { transcriptToText, recapPersistAction } from './lib/transcript'
+import { transcriptToText, recapPersistAction, type RecapPersistTarget } from './lib/transcript'
+import {
+  OwnedOperationGate,
+  RecapWriteCoordinator,
+  beginOwnedMeetingExit,
+  nextMeetingStart,
+  persistRecapOnExit,
+  recapFileIdentity,
+  retireRecapWriteKeys
+} from './lib/recap-write-coordinator'
 import { playCue, playClick, setSoundsEnabled } from './lib/sound'
 import { DEFAULT_SHORTCUTS, ASK_MEMORY_IDLE_MS } from '@shared/ipc'
 import { applyCaveman, DEFAULT_ASK_CAVEMAN } from '@shared/caveman-ask'
 import type { HotkeyAction, TranscriptLine, ConversationMode, ChatTurn, LicenseGateVerdict } from '@shared/ipc'
+import type { RecapStatus } from '@shared/recap-status'
 import { HOTKEY_ACTIONS } from '@shared/ipc'
 import { useTapControl } from './lib/tap/tap-control'
 import type { TapProfile } from './lib/tap/classify'
@@ -98,6 +108,10 @@ import {
   spotlightRefUnavailableMessage,
   transcriptHasContent
 } from '@shared/quick-actions'
+
+function recapWriteKey(ownerId: string, runId: string): string {
+  return `${ownerId}\u0000${runId}`
+}
 
 type View = 'answer' | 'copilot' | 'settings' | 'review' | 'history' | 'agenda' | 'brain'
 
@@ -430,6 +444,7 @@ export function App(): JSX.Element {
     title: string
     date: string
     recap: string
+    recapStatus?: RecapStatus
     lines: TranscriptLine[]
     startedAt: number
     confidential: boolean
@@ -447,7 +462,7 @@ export function App(): JSX.Element {
   const [operatorGateNotice, setOperatorGateNotice] = useState<string | null>(null)
   // The saved-meeting file an in-flight recapGen run will persist its result to — set by
   // generateSavedRecap, cleared once the persist-on-settle effect below has written (or given up on) it.
-  const [recapGenTarget, setRecapGenTarget] = useState<{ file: string } | null>(null)
+  const [recapGenTarget, setRecapGenTarget] = useState<RecapPersistTarget | null>(null)
   // Set when writing a generated recap back to its .md is REFUSED (recallUpdateRecap ok:false). Review
   // keeps showing the generated text (recapGenTarget stays set), but without this the refusal was
   // invisible and the user only discovered it on reopening the meeting, by which point it was gone.
@@ -503,8 +518,21 @@ export function App(): JSX.Element {
   const lastTurnAtRef = useRef(0)
   const pendingUserRef = useRef<{ id: string; q: string } | null>(null)
   const meetingStartRef = useRef(0)
+  // Exact live-recap ownership. The answer hook deliberately carries old visible text until a new run's
+  // first token; only a run id paired with this meeting start may turn that state into saved notes.
+  const liveRecapTargetRef = useRef<RecapPersistTarget | null>(null)
+  // One renderer-session coordinator for live retries and saved-meeting generations. It serializes only
+  // writes to the SAME meeting file, allowing unrelated files to remain independent.
+  const recapWriteCoordinatorRef = useRef(new RecapWriteCoordinator())
+  // Completed/in-flight live run keys prevent duplicate exit/effect writes. Each owner is retired only
+  // after its final rescue settles, so the set is bounded by the current meeting plus in-flight exits.
+  const liveRecapWritesRef = useRef<Set<string>>(new Set())
+  const persistLiveMeetingOnExitRef = useRef<
+    ((snapshot: AnswerState | null, maxAttempts?: number) => Promise<void>) | null
+  >(null)
   const savedRef = useRef('')
-  const savingRef = useRef(false)
+  const meetingSaveGateRef = useRef(new OwnedOperationGate())
+  const savingPromiseRef = useRef<Promise<string | null> | null>(null)
   // Meeting start ids that saveMeetingNow has already claimed. savedRef is pinned only AFTER a save's IPC
   // round trip resolves (and never at all by the leave-path saver, which must not touch live-session
   // state), so two rescues firing inside that window — Stop → Escape out of Review → start the next
@@ -811,37 +839,59 @@ export function App(): JSX.Element {
 
   const manualSave = useCallback(async (): Promise<void> => {
     const a = ask.answer
-    if (!a || a.streaming || !listen.lines.length) return
-    const id = String(meetingStartRef.current)
+    if (a?.streaming || !listen.lines.length) return
+    const startedAt = meetingStartRef.current
+    const id = String(startedAt)
+    const lines = [...listen.lines]
+    const action = recapPersistAction(a, liveRecapTargetRef.current, id)
     // Same redundancy + in-flight guards as the auto-save effect — without them a double-click (or a
     // Save tapped while autosave is mid-IPC) writes the meeting twice under two paths.
     if (meetingSaveIsRedundant(listen.lines.length, id, savedRef.current, claimedSavesRef.current)) return
-    if (savingRef.current) return
-    claimedSavesRef.current.add(id)
-    savingRef.current = true
-    try {
-      const title = defaultMeetingTitle(listen.lines, mode)
-      const r = await window.toto.saveTranscript({
-        title,
-        mode,
-        startedAt: meetingStartRef.current,
-        lines: listen.lines,
-        recap: a.text
-      })
-      savedRef.current = id
-      setSavedPath(r.path)
-      setSaveError(null)
-      setSaveAttempts(0)
-      setSaveGaveUp(false)
-    } catch (e) {
-      // Released only on failure so a later retry (manual or auto) can still persist this meeting.
+    if (meetingSaveGateRef.current.isActive(id)) return
+    const title = defaultMeetingTitle(lines, mode)
+    const outcomePromise = meetingSaveGateRef.current.run(
+      id,
+      () => String(meetingStartRef.current),
+      async () => {
+        claimedSavesRef.current.add(id)
+        return window.toto.saveTranscript({
+          title,
+          mode,
+          startedAt,
+          lines,
+          recap: action?.text ?? '',
+          ...(action ? { recapStatus: action.recapStatus } : {})
+        })
+      }
+    )
+    // Exit/New Meeting joins this exact file instead of racing a second blank transcript save against the
+    // manual write. Durable bookkeeping runs in the path projection before an awaiting rescue resumes.
+    savingPromiseRef.current = outcomePromise.then((outcome) => {
+      if ('error' in outcome) {
+        claimedSavesRef.current.delete(id)
+        return null
+      }
+      if ('value' in outcome) {
+        if (action) liveRecapWritesRef.current.add(recapWriteKey(action.ownerId, action.runId))
+        return outcome.value.path
+      }
+      return null
+    })
+    const outcome = await outcomePromise
+    if (outcome.status === 'busy') return
+    if ('error' in outcome) {
       claimedSavesRef.current.delete(id)
-      // A manual retry that fails does NOT restart the ladder, so saveGaveUp stays as it was: still true
-      // after a give-up (the terminal line remains correct), still false while the ladder is running.
-      setSaveError(saveFailureReason(e))
-    } finally {
-      savingRef.current = false
+      if (outcome.status === 'current') setSaveError(saveFailureReason(outcome.error))
+      return
     }
+    if (action) liveRecapWritesRef.current.add(recapWriteKey(action.ownerId, action.runId))
+    if (outcome.status === 'stale') return
+    const r = outcome.value
+    savedRef.current = id
+    setSavedPath(r.path)
+    setSaveError(null)
+    setSaveAttempts(0)
+    setSaveGaveUp(false)
   }, [ask.answer, listen.lines, mode])
 
   // auto-save the meeting to the OneDrive folder once the review notes finish.
@@ -849,64 +899,105 @@ export function App(): JSX.Element {
   const answerStreaming = ask.answer?.streaming ?? false
   const answerText = ask.answer?.text ?? ''
   const answerError = ask.answer?.error ?? null
+  const answerId = ask.answer?.id ?? ''
+  const answerCompletion = ask.answer?.completion
   // The most recent doSave() call below, so discardMeeting can AWAIT an in-flight autosave before deciding
   // whether there's a file to delete. Without this, "Disregard" clicked while doSave is still mid IPC round
   // trip reads savedPath as still-null, skips the delete, and the save that lands moments later persists a
   // meeting the user explicitly asked NOT to keep, with no further indication it happened. Reset to null in
   // startListen() for every new meeting, so a stale prior meeting's already-settled promise can never be
   // read as if it belonged to the current one.
-  const savingPromiseRef = useRef<Promise<string | null> | null>(null)
   useEffect(() => {
     if (view !== 'review') return
-    // Persist the meeting once the recap attempt has SETTLED — whether it produced a summary or failed.
-    // The transcript comes from on-device speech recognition and needs no API key, so a keyless session
-    // (recap errors for want of a provider) must still keep its transcript; we just save it with an empty
-    // recap instead of dropping the whole meeting. A settled attempt = not streaming AND has either text
-    // (success) or an error; a null answer (no recap run, e.g. a silent session) falls through to the
-    // exit-path saveMeetingNow. The autoSaveTranscripts toggle no longer gates this.
-    const settled = !answerStreaming && (!!answerText || !!answerError)
-    if (!settled) return
     if (!listen.lines.length) return
     const id = String(meetingStartRef.current)
-    if (savedRef.current === id || savingRef.current) return
+    const action = recapPersistAction(
+      answerId
+        ? { id: answerId, text: answerText, streaming: answerStreaming, error: answerError, completion: answerCompletion }
+        : null,
+      liveRecapTargetRef.current ? { ...liveRecapTargetRef.current, file: savedPath } : null,
+      id
+    )
+    if (!action) return
+    const actionKey = recapWriteKey(action.ownerId, action.runId)
+    if (liveRecapWritesRef.current.has(actionKey)) return
 
-    const title = defaultMeetingTitle(listen.lines, mode)
+    // A retry after the initial transcript save updates that exact file. Per-file ordering ensures an older
+    // write cannot land after the retry, while the run/owner checks keep stale completions out of the UI.
+    if (action.file) {
+      liveRecapWritesRef.current.add(actionKey)
+      void recapWriteCoordinatorRef.current
+        .write(action.file, action.runId, () =>
+          window.toto.recallUpdateRecap(action.file!, action.text, action.recapStatus)
+        )
+        .then((outcome) => {
+          if (outcome.status === 'superseded') return
+          if ('error' in outcome || !outcome.value.ok) liveRecapWritesRef.current.delete(actionKey)
+          const current = liveRecapTargetRef.current
+          if (!current || current.ownerId !== id || current.runId !== action.runId) return
+          if ('error' in outcome) {
+            setRecapSaveError(
+              outcome.error instanceof Error ? outcome.error.message : 'Could not save the generated summary.'
+            )
+          } else if (!outcome.value.ok) {
+            setRecapSaveError(outcome.value.error || 'Could not save the generated summary.')
+          } else {
+            setRecapSaveError(null)
+          }
+        })
+      return
+    }
+    if (savedRef.current === id || meetingSaveGateRef.current.isActive(id)) return
+
+    const startedAt = meetingStartRef.current
+    const lines = [...listen.lines]
+    const title = defaultMeetingTitle(lines, mode)
 
     const doSave = async (): Promise<string | null> => {
       // Acquire the in-flight lock only when the save actually starts — never at effect time. On the
       // retry branch the real save is deferred behind a backoff timer; if that timer is cancelled
       // (view change / reset) before it fires, a lock taken early would never release and would wedge
-      // auto-save dead for the rest of the session (savingRef stuck true → the guard above bails forever).
-      savingRef.current = true
-      try {
-        const r = await window.toto.saveTranscript({
-          title,
-          mode,
-          startedAt: meetingStartRef.current,
-          lines: listen.lines,
-          // Save whatever summary text we have. A trailing stream error used to wipe a finished summary
-          // off disk (answerError ? '' : …) even when tokens had already painted — keep the notes.
-          recap: answerText.trim() ? answerText : ''
-        })
-        savedRef.current = id // pin only on success → failure can retry
-        setSavedPath(r.path)
-        setSaveError(null)
-        setSaveAttempts(0)
-        setSaveGaveUp(false)
-        return r.path
-      } catch (e) {
-        setSaveError(saveFailureReason(e))
-        if (saveAttempts < MAX_SAVE_RETRIES) {
-          setSaveAttempts((c) => c + 1)
-        } else {
-          // Last rung: saveAttempts is this effect's only re-trigger, so leaving it alone here is what
-          // ends the ladder. Say so — the screen used to keep claiming "Retrying…" from here on.
-          setSaveGaveUp(true)
+      // auto-save dead for the rest of the session.
+      if (String(meetingStartRef.current) !== id) return null
+      const outcome = await meetingSaveGateRef.current.run(
+        id,
+        () => String(meetingStartRef.current),
+        async () => {
+          claimedSavesRef.current.add(id)
+          return window.toto.saveTranscript({
+            title,
+            mode,
+            startedAt,
+            lines,
+            recap: action.text,
+            recapStatus: action.recapStatus
+          })
+        }
+      )
+      if (outcome.status === 'busy') return null
+      if ('error' in outcome) {
+        claimedSavesRef.current.delete(id)
+        if (outcome.status === 'current') {
+          setSaveError(saveFailureReason(outcome.error))
+          if (saveAttempts < MAX_SAVE_RETRIES) {
+            setSaveAttempts((c) => c + 1)
+          } else {
+            // Last rung: saveAttempts is this effect's only re-trigger, so leaving it alone here is what
+            // ends the ladder. Say so — the screen used to keep claiming "Retrying…" from here on.
+            setSaveGaveUp(true)
+          }
         }
         return null
-      } finally {
-        savingRef.current = false
       }
+      liveRecapWritesRef.current.add(actionKey)
+      if (outcome.status === 'stale') return outcome.value.path
+      const r = outcome.value
+      savedRef.current = id // pin only on success → failure can retry
+      setSavedPath(r.path)
+      setSaveError(null)
+      setSaveAttempts(0)
+      setSaveGaveUp(false)
+      return r.path
     }
 
     if (saveAttempts === 0) {
@@ -918,7 +1009,18 @@ export function App(): JSX.Element {
       }, delay)
       return () => clearTimeout(t)
     }
-  }, [view, answerStreaming, answerText, answerError, listen.lines, mode, saveAttempts])
+  }, [
+    view,
+    answerId,
+    answerStreaming,
+    answerText,
+    answerError,
+    answerCompletion,
+    savedPath,
+    listen.lines,
+    mode,
+    saveAttempts
+  ])
 
   // record a completed Ask turn into conversation memory (for follow-ups)
   useEffect(() => {
@@ -1897,7 +1999,7 @@ export function App(): JSX.Element {
     void listen.setLanguage(settings?.asrLanguage ?? 'auto')
   }, [listen.listening, listen.setLanguage, settings?.asrLanguage])
 
-  const startListen = useCallback(() => {
+  const startListen = useCallback((rescueExisting = true) => {
     // PLAN.md P2.2b #2: Listen is Operator-gated. Checked synchronously against the already-synced
     // `settings` object (never a fresh IPC round trip) so a refusal costs zero latency on the same-turn
     // capture path below (MQA-285) — an allowed seat pays nothing extra, a refused one never touches the
@@ -1926,12 +2028,19 @@ export function App(): JSX.Element {
     // session down; a failed recap was abandoned). listen.clear() below would wipe it — rescue first.
     // Idempotent via savedRef, so normally-saved meetings never double-save. Ref-indirected because
     // saveMeetingNow is defined later in this component.
-    if (!listen.listening && listen.lines.length) {
-      void saveMeetingNowRef.current?.(listen.lines, meetingStartRef.current, '')
+    if (rescueExisting && !listen.listening && listen.lines.length) {
+      cancelledRef.current = true
+      beginOwnedMeetingExit(
+        ask.cancel,
+        (snapshot) => { void persistLiveMeetingOnExitRef.current?.(snapshot) }
+      )
     }
+    // The rescue above captured the old owner synchronously. Nothing from it may attach to the meeting
+    // whose start id is about to replace it.
+    liveRecapTargetRef.current = null
     setView('copilot')
     setCollapsed(false)
-    meetingStartRef.current = Date.now()
+    meetingStartRef.current = nextMeetingStart(meetingStartRef.current)
     savedRef.current = ''
     setSavedPath(null)
     savingPromiseRef.current = null // this meeting hasn't autosaved yet — don't let a PRIOR meeting's
@@ -1968,6 +2077,7 @@ export function App(): JSX.Element {
     listen.lines,
     listen.clear,
     listen.start,
+    ask.cancel,
     suggest.clear,
     followup.clear,
     coaching.clear,
@@ -2046,7 +2156,8 @@ export function App(): JSX.Element {
     // Cascade into Dust whenever it's configured — UNLESS local summary is the intended path
     // (mirrors Summarize quick action). Dust override used to silently beat Local on every stop.
     const dustReady = isDustReady(settings?.hasKeys ?? {}, settings?.dustWorkspaceId ?? '', settings?.providerModels ?? {})
-    ask.run({
+    setRecapSaveError(null)
+    const runId = ask.run({
       mode: preferLocalSummary ? 'summary' : 'recap',
       transcript: tx,
       // Inert server-side for mode:'recap'/'summary' (the transcript alone builds the request) — but keeps
@@ -2055,6 +2166,13 @@ export function App(): JSX.Element {
       prompt: 'Summarize this meeting.',
       ...(dustReady && !preferLocalSummary ? { providerOverride: 'dust' as const } : {})
     })
+    liveRecapTargetRef.current = {
+      ownerId: String(meetingStartRef.current),
+      runId,
+      file: null,
+      // A fresh meeting never inherits whatever ordinary answer happened to be visible before Stop.
+      priorText: ''
+    }
     // Cold Calling Mode's end-of-call coaching rides the same trigger as the recap (a real, non-empty,
     // provider-ready transcript) but is its own ask so a coaching failure can never blank the recap.
     if (mode === 'cold-call') generateColdCallCoaching()
@@ -2111,7 +2229,8 @@ export function App(): JSX.Element {
       lines: TranscriptLine[],
       started: number,
       recapText: string,
-      maxAttempts = MAX_SAVE_RETRIES
+      maxAttempts = MAX_SAVE_RETRIES,
+      recapStatus?: RecapStatus
     ): Promise<string | null> => {
       // Persist a meeting that's being LEFT (New meeting / reset / quit / logout) so a started meeting
       // is never lost. Self-contained: retries with backoff until it lands, and deliberately does NOT
@@ -2127,7 +2246,14 @@ export function App(): JSX.Element {
       if (meetingSaveIsRedundant(lines.length, id, savedRef.current, claimedSavesRef.current)) return null
       claimedSavesRef.current.add(id) // synchronous — see claimedSavesRef's declaration
       const title = defaultMeetingTitle(lines, mode)
-      const payload = { title, mode, startedAt: started, lines, recap: recapText }
+      const payload = {
+        title,
+        mode,
+        startedAt: started,
+        lines,
+        recap: recapText,
+        ...(recapStatus ? { recapStatus } : {})
+      }
       for (let attempt = 0; ; attempt++) {
         try {
           const r = await window.toto.saveTranscript(payload)
@@ -2137,7 +2263,9 @@ export function App(): JSX.Element {
             // Released only on a definitive give-up, mirroring the auto-save effect's "pin only on
             // success → failure can retry" rule: a later rescue must still get a chance to persist this.
             claimedSavesRef.current.delete(id)
-            setSaveError(saveFailureReason(e)) // same banner as the auto-save ladder — same plain words
+            if (meetingStartRef.current === started) {
+              setSaveError(saveFailureReason(e)) // same banner as the auto-save ladder — same plain words
+            }
             return null
           }
           await new Promise((r) => setTimeout(r, Math.min(1000 * 2 ** attempt, 8000)))
@@ -2146,10 +2274,6 @@ export function App(): JSX.Element {
     },
     [mode]
   )
-
-  // Forward reference for startListen (defined above saveMeetingNow) — see its rescue comment.
-  const saveMeetingNowRef = useRef<typeof saveMeetingNow | null>(null)
-  saveMeetingNowRef.current = saveMeetingNow
 
   // Same durable save, but for a meeting that is still ON SCREEN in Review rather than being left behind,
   // so it publishes the outcome through the two handles discardMeeting reads (savingPromiseRef, then
@@ -2178,23 +2302,87 @@ export function App(): JSX.Element {
   const saveLiveMeetingNowRef = useRef<typeof saveLiveMeetingNow | null>(null)
   saveLiveMeetingNowRef.current = saveLiveMeetingNow
 
+  // Leave/reset/quit rescue. The hook's synchronous cancel snapshot is the only terminal state accepted;
+  // if it does not own this exact meeting+run, preserve the ASR transcript with no attributed recap.
+  const persistLiveMeetingOnExit = useCallback(
+    async (snapshot: AnswerState | null, maxAttempts = MAX_SAVE_RETRIES): Promise<void> => {
+      const started = meetingStartRef.current
+      const ownerId = String(started)
+      const lines = [...listen.lines]
+      if (!lines.length) return
+      const target = liveRecapTargetRef.current
+      const action = recapPersistAction(snapshot, target, ownerId)
+      const actionKey = action ? recapWriteKey(action.ownerId, action.runId) : ''
+      const pendingSave = savingPromiseRef.current
+      const knownPath = savedRef.current === ownerId ? savedPath : null
+      const result = await persistRecapOnExit({
+        action,
+        path: pendingSave ? pendingSave.then((path) => path ?? knownPath) : Promise.resolve(knownPath),
+        isPersisted: () => !!actionKey && liveRecapWritesRef.current.has(actionKey),
+        markPersisted: () => { if (actionKey) liveRecapWritesRef.current.add(actionKey) },
+        create: (text, recapStatus) => saveMeetingNow(lines, started, text, maxAttempts, recapStatus),
+        update: (path, text, recapStatus) => window.toto.recallUpdateRecap(path, text, recapStatus),
+        coordinator: recapWriteCoordinatorRef.current
+      })
+      if (result.kind !== 'updated' || !action) return
+      if (
+        result.outcome.status === 'current' &&
+        ('error' in result.outcome || !result.outcome.value.ok)
+      ) liveRecapWritesRef.current.delete(actionKey)
+      const currentTarget = liveRecapTargetRef.current
+      if (
+        String(meetingStartRef.current) !== ownerId ||
+        !currentTarget ||
+        currentTarget.ownerId !== ownerId ||
+        currentTarget.runId !== action.runId ||
+        result.outcome.status !== 'current'
+      ) return
+      if ('error' in result.outcome) {
+        setRecapSaveError(
+          result.outcome.error instanceof Error
+            ? result.outcome.error.message
+            : 'Could not save the generated summary.'
+        )
+      } else if (!result.outcome.value.ok) {
+        setRecapSaveError(result.outcome.value.error || 'Could not save the generated summary.')
+      }
+    },
+    [listen.lines, savedPath, saveMeetingNow]
+  )
+  const persistAndRetireLiveMeeting = useCallback(
+    async (snapshot: AnswerState | null, maxAttempts?: number): Promise<void> => {
+      const ownerId = String(meetingStartRef.current)
+      try {
+        await persistLiveMeetingOnExit(snapshot, maxAttempts)
+      } finally {
+        retireRecapWriteKeys(liveRecapWritesRef.current, ownerId)
+      }
+    },
+    [persistLiveMeetingOnExit]
+  )
+  persistLiveMeetingOnExitRef.current = persistAndRetireLiveMeeting
+
   // "New meeting" from the bar — save the meeting we're leaving, then start a fresh session right away.
   // A single click ends the live meeting and snaps the timer to 0:00 with no other visible change — easy
   // to miss on a misclick mid-call — so surface a brief toast confirming what just happened.
   const newMeeting = useCallback(() => {
-    void saveMeetingNow(listen.lines, meetingStartRef.current, '')
-    startListen()
+    cancelledRef.current = true
+    beginOwnedMeetingExit(
+      ask.cancel,
+      (snapshot) => { void persistAndRetireLiveMeeting(snapshot) }
+    )
+    startListen(false)
     setNewMeetingToast(true)
-  }, [saveMeetingNow, listen.lines, startListen])
+  }, [ask.cancel, persistAndRetireLiveMeeting, startListen])
 
   // Quit / Log out (from Settings) must first persist any in-flight meeting — a single best-effort save
   // (maxAttempts=0) so app teardown is never blocked on the retry loop. Covers the "every started meeting
   // is saved" rule for the exit paths the user actually clicks. (Reset / New meeting use the durable path.)
   const flushLiveMeeting = useCallback(async (): Promise<void> => {
-    if (listen.listening && listen.lines.length) {
-      await saveMeetingNow(listen.lines, meetingStartRef.current, '', 0)
-    }
-  }, [listen.listening, listen.lines, saveMeetingNow])
+    if (!listen.lines.length) return
+    const snapshot = ask.cancel()
+    await persistAndRetireLiveMeeting(snapshot, 0)
+  }, [listen.lines, ask.cancel, persistAndRetireLiveMeeting])
 
   const quitApp = useCallback(async (): Promise<void> => {
     await flushLiveMeeting()
@@ -2238,6 +2426,21 @@ export function App(): JSX.Element {
     if (id) pendingUserRef.current = { id, q: ask.answer?.label ?? p }
   }, [ask.answer, ask.retry])
 
+  const retryLiveRecap = useCallback(() => {
+    const p = ask.answer?.prompt
+    if (!p) return
+    const priorText = ask.answer?.text ?? ''
+    const runId = ask.retry()
+    if (!runId) return
+    liveRecapTargetRef.current = {
+      ownerId: String(meetingStartRef.current),
+      runId,
+      file: savedPath,
+      priorText
+    }
+    setRecapSaveError(null)
+  }, [ask.answer, ask.retry, savedPath])
+
   const goDeeper = useCallback(() => {
     const p = ask.answer?.prompt
     if (!p) return
@@ -2248,14 +2451,19 @@ export function App(): JSX.Element {
   const reset = useCallback(() => {
     const wasListening = listen.listening
     cancelledRef.current = true // resetting mid-stream is a cancel, not a completion → no chime
-    ask.cancel()
+    const recapSnapshot = ask.cancel()
     suggest.cancel()
+    if ((wasListening || view === 'review') && listen.lines.length) {
+      void persistAndRetireLiveMeeting(recapSnapshot)
+    }
+    liveRecapTargetRef.current = null
     if (wasListening) {
-      void saveMeetingNow(listen.lines, meetingStartRef.current, '') // don't lose a started meeting on reset
       void listen.stop() // fire-and-forget here — reset doesn't need the final flushed line
       stoppingRef.current = true // mask the up-to-4s drain window, same as endReview's own guard
-      meetingStartRef.current = Date.now()
     }
+    // Invalidate this meeting even when it was already stopped in Review. Monotonic ownership prevents a
+    // same-millisecond reset/restart from letting its late save publish a path or release the next lock.
+    meetingStartRef.current = nextMeetingStart(meetingStartRef.current)
     pendingRecapRef.current = false // cancel any recap still waiting on endReview's drain — reset abandons it
     setRecapSkipped(false)
     ask.clear()
@@ -2285,7 +2493,8 @@ export function App(): JSX.Element {
     listen.lines,
     listen.stop,
     listen.clear,
-    saveMeetingNow
+    view,
+    persistAndRetireLiveMeeting
   ])
 
   // Summary "Disregard": throw this meeting away instead of keeping it. By the time the post-meeting
@@ -2440,7 +2649,7 @@ export function App(): JSX.Element {
   // Reuses the exact useAsk() machinery live meetings use (recapGen), just targeting a file on disk
   // instead of the live session's own autosave path.
   const generateSavedRecap = useCallback(
-    (file: string, lines: TranscriptLine[]) => {
+    (file: string, lines: TranscriptLine[], priorText = '') => {
       const transcript = transcriptToText(lines)
       if (!transcript) return // nothing to summarize (e.g. a silent recording)
       // Prefer local summary when ready (parity with live stop + Summarize). Always mode:'recap' used to
@@ -2452,13 +2661,14 @@ export function App(): JSX.Element {
       setRecapSaveError(null) // a retry must not carry the previous attempt's write failure on screen
       // Snapshot BEFORE run() — see recapGenPrevTextRef's comment above.
       recapGenPrevTextRef.current = recapGenAnswerRef.current?.text ?? ''
-      recapGenRunIdRef.current = recapGen.run({
+      const runId = recapGen.run({
         mode: preferLocalSummary ? 'summary' : 'recap',
         transcript,
         prompt: 'Summarize this meeting.',
         ...(dustReady && !preferLocalSummary ? { providerOverride: 'dust' as const } : {})
       })
-      setRecapGenTarget({ file })
+      recapGenRunIdRef.current = runId
+      setRecapGenTarget({ ownerId: file, runId, file, priorText })
     },
     [
       recapGen.run,
@@ -2479,20 +2689,41 @@ export function App(): JSX.Element {
   const recapGenStreaming = recapGen.answer?.streaming ?? false
   const recapGenText = recapGen.answer?.text ?? ''
   const recapGenError = recapGen.answer?.error ?? null
+  const recapGenCompletion = recapGen.answer?.completion
   useEffect(() => {
     if (!recapGenTarget) return
     if (recapGenId !== recapGenRunIdRef.current) return // see recapGenRunIdRef's comment above
     const action = recapPersistAction(
-      { text: recapGenText, streaming: recapGenStreaming, error: recapGenError },
-      recapGenTarget
+      recapGenId
+        ? {
+            id: recapGenId,
+            text: recapGenText,
+            streaming: recapGenStreaming,
+            error: recapGenError,
+            completion: recapGenCompletion
+          }
+        : null,
+      recapGenTarget,
+      recapGenTarget.ownerId
     )
     if (action) {
+      if (!action.file) return
       if (recapPersistingRef.current === recapGenId) return
       recapPersistingRef.current = recapGenId
       const owningId = recapGenId // this run's token — only IT may release recapGenTarget below
       void (async () => {
+        const outcome = await recapWriteCoordinatorRef.current.write(action.file!, owningId, () =>
+          window.toto.recallUpdateRecap(action.file!, action.text, action.recapStatus)
+        )
         try {
-          const r = await window.toto.recallUpdateRecap(action.file, action.text)
+          if (outcome.status === 'superseded') return
+          if (
+            recapGenRunIdRef.current !== owningId ||
+            recapGenTarget?.ownerId !== action.ownerId ||
+            recapGenTarget.runId !== owningId
+          ) return
+          if ('error' in outcome) throw outcome.error
+          const r = outcome.value
           // recallUpdateRecap RESOLVES with {ok:false} for every real failure (file locked by OneDrive/AV,
           // undecryptable on this device, a recap the payload schema rejects as over-long) and only
           // REJECTS when the IPC plumbing itself is gone — so falling through to the success path below
@@ -2506,7 +2737,11 @@ export function App(): JSX.Element {
           // Functional update: read whichever past meeting is open NOW, not whatever was captured when
           // this effect started — the user may have opened a DIFFERENT one while the write was in flight,
           // and a stale closure here would paint THIS text onto THAT meeting instead.
-          setPastMeeting((prev) => (prev && prev.file === action.file ? { ...prev, recap: action.text } : prev))
+          setPastMeeting((prev) =>
+            prev && prev.file === action.file
+              ? { ...prev, recap: action.text, recapStatus: action.recapStatus }
+              : prev
+          )
           // Only release the target if a NEWER generation hasn't already taken it over — that one owns it
           // now and must not have it wiped out from under it by this older run settling late.
           if (recapGenRunIdRef.current === owningId) setRecapGenTarget(null)
@@ -2527,7 +2762,28 @@ export function App(): JSX.Element {
     // recap and drop the failure on the floor one frame after it appeared; leaving it set keeps Review
     // reading recapGen's answer (error + the existing Retry affordance) until the user retries or navigates
     // away. reviewBody synthesizes a readable message for the empty-no-error case (recapGenDisplay below).
-  }, [recapGenTarget, recapGenId, recapGenStreaming, recapGenText, recapGenError])
+  }, [recapGenTarget, recapGenId, recapGenStreaming, recapGenText, recapGenError, recapGenCompletion])
+
+  const manualRecapWriteSeqRef = useRef(0)
+  const updateRecapManually = useCallback(async (file: string, recap: string) => {
+    const runId = `manual-${++manualRecapWriteSeqRef.current}`
+    const outcome = await recapWriteCoordinatorRef.current.write(file, runId, () =>
+      // Deliberately omit recapStatus: the storage contract preserves the existing durable status for a
+      // human edit. Sharing the coordinator ensures this later edit lands after an in-flight generation.
+      window.toto.recallUpdateRecap(file, recap)
+    )
+    if (outcome.status === 'superseded') {
+      return { ok: false, error: 'A newer summary update finished first. Review the notes and try again.' }
+    }
+    if ('error' in outcome) throw outcome.error
+    if (outcome.value.ok) {
+      setRecapGenTarget((current) =>
+        current?.file && recapFileIdentity(current.file) === recapFileIdentity(file) ? null : current
+      )
+      setRecapSaveError(null)
+    }
+    return outcome.value
+  }, [])
 
   // Open a saved meeting from History as a read-only recap (Cluely recap detail) via the recall:read IPC.
   const openPastMeeting = useCallback(async (file: string) => {
@@ -2548,6 +2804,7 @@ export function App(): JSX.Element {
       title: r.title || 'Meeting',
       date: r.startedAt ? new Date(r.startedAt).toLocaleString() : '',
       recap: r.recap || '',
+      recapStatus: r.recapStatus,
       lines: r.lines || [],
       startedAt: r.startedAt || 0,
       confidential: !!r.confidential,
@@ -2699,7 +2956,9 @@ export function App(): JSX.Element {
         // out; idempotent via savedRef when the recap auto-save already landed. Past-meeting Reviews
         // (pastMeeting set) are already on disk — only a LIVE session's review needs the rescue.
         if (!pastMeeting && listen.lines.length) {
-          void saveMeetingNow(listen.lines, meetingStartRef.current, ask.answer?.error ? '' : (ask.answer?.text ?? ''))
+          const recapSnapshot = ask.cancel()
+          void persistAndRetireLiveMeeting(recapSnapshot)
+          liveRecapTargetRef.current = null
         }
         ask.clear()
         suggest.clear()
@@ -3017,6 +3276,9 @@ export function App(): JSX.Element {
       recapGenLive && !recapGenLive.streaming && !recapGenLive.error && !recapGenLive.text
         ? { ...recapGenLive, error: 'Recap came back empty. Try again.' }
         : recapGenLive
+    const displayedRecapStatus: RecapStatus | undefined = generatingThisPm
+      ? recapGenDisplay?.completion === 'incomplete' ? 'incomplete' : undefined
+      : pm?.recapStatus ?? (!pm && ask.answer?.completion === 'incomplete' ? 'incomplete' : undefined)
     return (
       <Review
         mode={mode}
@@ -3027,6 +3289,7 @@ export function App(): JSX.Element {
               ? { id: 'past', text: pm.recap, streaming: false, error: null, prompt: '' }
               : ask.answer
         }
+        recapStatus={displayedRecapStatus}
         lines={pm ? pm.lines : listen.lines}
         savedPath={pm ? pm.file : savedPath}
         saveError={pm ? null : saveError}
@@ -3041,8 +3304,8 @@ export function App(): JSX.Element {
         followupDraft={followup.answer}
         winsToggle={spotlightRefReady ? { on: includeWins, onToggle: setIncludeWins } : undefined}
         onGenerateFollowup={generateFollowup}
-        onGenerateRecap={pm ? () => { if (requireProvider('summary')) generateSavedRecap(pm.file, pm.lines) } : undefined}
-        onRetryRecap={pm ? () => { if (requireProvider('summary')) generateSavedRecap(pm.file, pm.lines) } : retryAnswer}
+        onGenerateRecap={pm ? () => { if (requireProvider('summary')) generateSavedRecap(pm.file, pm.lines, pm.recap) } : undefined}
+        onRetryRecap={pm ? () => { if (requireProvider('summary')) generateSavedRecap(pm.file, pm.lines, pm.recap) } : retryLiveRecap}
         mcpConnections={settings?.mcpConnections ?? []}
         finishingTranscript={listen.listening}
         onOpenFolder={async () => {
@@ -3074,6 +3337,7 @@ export function App(): JSX.Element {
             ? (recap) => setPastMeeting((prev) => (prev ? { ...prev, recap } : prev))
             : undefined
         }
+        onUpdateRecap={updateRecapManually}
         onDone={
           pm
             ? () => {
@@ -3096,7 +3360,7 @@ export function App(): JSX.Element {
         }
       />
     )
-  }, [pastMeeting, recapGenTarget, recapGen.answer, ask.answer, listen.lines, savedPath, saveError, saveAttempts, saveGaveUp, settings?.showFullTranscriptInReview, settings?.mcpConnections, followup.answer, generateFollowup, requireProvider, generateSavedRecap, retryAnswer, manualSave, discardMeeting, resumePastMeeting, openPastMeeting, reset, recapSkipped, openSettings, mode, coaching.answer, generateColdCallCoaching, booking.answer, generateBookMeetings])
+  }, [pastMeeting, recapGenTarget, recapGen.answer, ask.answer, listen.lines, savedPath, saveError, saveAttempts, saveGaveUp, settings?.showFullTranscriptInReview, settings?.mcpConnections, followup.answer, generateFollowup, requireProvider, generateSavedRecap, retryLiveRecap, manualSave, discardMeeting, resumePastMeeting, openPastMeeting, reset, recapSkipped, openSettings, mode, coaching.answer, generateColdCallCoaching, booking.answer, generateBookMeetings, updateRecapManually])
   const answerBody = useMemo(() => {
     if (!(capturing || captureError || ask.answer)) return null
     // While a new screen capture is in flight (capturing), force the streaming/empty display even when

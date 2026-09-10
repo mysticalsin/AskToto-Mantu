@@ -113,7 +113,7 @@ describe('MQA-192 — the status line stops claiming a retry once the ladder is 
 describe('MQA-192 — wiring', () => {
   it('the auto-save catch humanizes the rejection instead of storing e.message', () => {
     const body = code(blockBetween(appSource, 'const doSave = async ()', 'if (saveAttempts === 0)'))
-    expect(body).toMatch(/setSaveError\(saveFailureReason\(e\)\)/)
+    expect(body).toMatch(/setSaveError\(saveFailureReason\(outcome\.error\)\)/)
     // The bug verbatim: the raw message went straight into the banner.
     expect(body).not.toMatch(/const msg = e instanceof Error \? e\.message : String\(e\)/)
   })
@@ -129,7 +129,7 @@ describe('MQA-192 — wiring', () => {
     const body = code(
       blockBetween(appSource, 'const manualSave = useCallback(', '// auto-save the meeting to the OneDrive folder')
     )
-    expect(body).toMatch(/setSaveError\(saveFailureReason\(e\)\)/)
+    expect(body).toMatch(/setSaveError\(saveFailureReason\(outcome\.error\)\)/)
     expect(body).not.toMatch(/const msg = e instanceof Error \? e\.message : String\(e\)/)
   })
 

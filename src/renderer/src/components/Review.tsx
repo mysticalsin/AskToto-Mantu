@@ -1,6 +1,7 @@
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff, ArrowLeft, Pencil, X, Sparkles, Trash2, Lock, PhoneCall } from 'lucide-react'
 import type { TranscriptLine, MeetingSummary, McpConnection, RecapExport } from '@shared/ipc'
+import type { RecapStatus } from '@shared/recap-status'
 import type { AnswerState } from '../state'
 import { isNonSpeechLine } from '@shared/transcript-filter'
 import { talkStats } from '@shared/talkstats'
@@ -13,6 +14,8 @@ import { ReviewEntityStrip } from './ReviewEntityStrip'
 import { useFlash } from '../lib/useFlash'
 import { accelLabel } from '../lib/keys'
 import { OutlookDraftLifecycle, outlookDraftIntent } from './outlook-draft-lifecycle'
+
+export const INCOMPLETE_RECAP_COPY = 'This summary may be incomplete. Review it before using it, or retry.'
 
 function clock(t: number): string {
   try {
@@ -216,6 +219,7 @@ export function nextStepPushed(phase: NextStepPhase, connectionId: string, args:
 export const Review = memo(function Review({
   mode = 'general',
   recap,
+  recapStatus,
   lines,
   savedPath,
   saveError,
@@ -241,6 +245,7 @@ export const Review = memo(function Review({
   onOpenPastMeeting,
   isPastMeeting,
   onRecapSaved,
+  onUpdateRecap,
   onDirtyChange,
   recapUnavailable,
   finishingTranscript,
@@ -249,6 +254,8 @@ export const Review = memo(function Review({
   /** Built-in or custom mode: picks the recap section layout (sales vs recruiting vs meeting, etc.). */
   mode?: string
   recap: AnswerState | null
+  /** Durable generation outcome read from the meeting file. Absent means legacy/unspecified. */
+  recapStatus?: RecapStatus
   lines: TranscriptLine[]
   savedPath: string | null
   saveError: string | null
@@ -294,6 +301,8 @@ export const Review = memo(function Review({
   /** Called with the new recap markdown after a successful in-place edit save, so the owner (App) can keep
    *  its own copy (used by Resume + follow-up generation) consistent without a disk re-read. */
   onRecapSaved?: (recap: string) => void
+  /** App-owned same-file ordering boundary. Status is intentionally omitted for manual edits. */
+  onUpdateRecap?: (file: string, recap: string) => Promise<{ ok: boolean; error?: string }>
   /** Mirrors recapDirty (below) up to the owner (App) so its global Escape handler can gate on the same
    *  unsaved-edit check this component's own in-panel exits already run. Called with `false` on unmount. */
   onDirtyChange?: (dirty: boolean) => void
@@ -431,7 +440,9 @@ export const Review = memo(function Review({
     setRecapEditError(null)
     try {
       const file = savedPath.split('/').pop() ?? savedPath
-      const r = await window.toto.recallUpdateRecap(file, recapDraft)
+      const r = await (onUpdateRecap
+        ? onUpdateRecap(file, recapDraft)
+        : window.toto.recallUpdateRecap(file, recapDraft))
       // The disk write already targeted the right file, but if the user navigated to a different meeting
       // while it was in flight, drop the result rather than paint meeting A's edit onto meeting B.
       if (savedPathRef.current !== forPath) return
@@ -990,12 +1001,12 @@ export const Review = memo(function Review({
             </Chip>
           )}
           {onSave && (
-            // Mirrors manualSave's own guard (App.tsx) — `!recap || recap.streaming` — so the button can't
-            // be clicked while the recap is still streaming/absent, which used to silently no-op.
+            // A missing recap must not block saving captured speech: keyless, cancelled-before-token and
+            // hollow-summary sessions still have an ASR transcript worth keeping.
             <TextButton
               icon={Save}
               onClick={onSave}
-              disabled={lines.length === 0 || !!savedPath || !recap || recap.streaming}
+              disabled={lines.length === 0 || !!savedPath || !!recap?.streaming}
             >
               Save
             </TextButton>
@@ -1168,7 +1179,7 @@ export const Review = memo(function Review({
                       title="Regenerate this summary from the transcript"
                     >
                       {recap?.streaming ? <InlineOrb kind="writing" /> : <RotateCcw size={11} />}
-                      {recap?.streaming ? 'Regenerating' : 'Regenerate'}
+                      {recap?.streaming ? 'Regenerating' : recapStatus === 'incomplete' ? 'Retry summary' : 'Regenerate'}
                     </TextButton>
                   )}
                   <TextButton onClick={exportJson} title="Copy structured JSON (decisions + action items) for Jira/Asana/Notion">
@@ -1185,6 +1196,11 @@ export const Review = memo(function Review({
           )}
         </div>
         {exportError && <div className="mb-1.5 text-[11px] text-[var(--color-danger)]">{exportError}</div>}
+        {recapStatus === 'incomplete' && (
+          <div className="mb-2 rounded-lg border border-[var(--color-warn)]/30 bg-[var(--color-warn)]/10 px-2.5 py-2 text-[12px] text-[color:var(--color-ink-2)]">
+            {INCOMPLETE_RECAP_COPY}
+          </div>
+        )}
         {editingRecap ? (
           <div className="flex flex-col gap-2">
             <textarea
@@ -1219,7 +1235,7 @@ export const Review = memo(function Review({
           <div className="flex flex-col gap-2">
             {/* Substantial streamed notes stay visible — a trailing idle-timeout used to hide them
                 behind the error alone and autosave used to wipe them. Show what we have + Retry. */}
-            {recapText.trim().length >= 40 && (
+            {!!recapText.trim() && (
               <div className="opacity-90">
                 <RecapBody text={recapText} mode={mode} />
               </div>
@@ -1247,6 +1263,15 @@ export const Review = memo(function Review({
           // A past meeting's retroactive "Generate recap" (or a just-finished import) is in flight —
           // recap here is recapGen's live streaming answer, not the static (still-empty) saved recap.
           <AgentStatus kind="writing" size="hero" />
+        ) : recapStatus === 'incomplete' ? (
+          <div className="flex flex-col gap-2">
+            <div className="text-[13px] text-[color:var(--color-ink-2)]">No summary text was generated.</div>
+            {onRetryRecap && (
+              <div className="flex items-center gap-1.5">
+                <TextButton icon={RotateCcw} onClick={onRetryRecap}>Retry summary</TextButton>
+              </div>
+            )}
+          </div>
         ) : isPastMeeting ? (
           // A past meeting saved without a recap (e.g. a keyless summary failure) and nothing generating
           // right now. Not a spinner — the work is long over; offer to add notes instead.

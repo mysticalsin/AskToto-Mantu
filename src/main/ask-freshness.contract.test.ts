@@ -128,7 +128,7 @@ describe('renderer clears its own carriers at every conversation boundary', () =
   })
 
   it('startListen() clears ad-hoc history so pre-meeting Q&A never rides into mid-meeting asks', () => {
-    const start = appSrc.indexOf('const startListen = useCallback(() => {')
+    const start = appSrc.indexOf('const startListen = useCallback(')
     expect(start).toBeGreaterThan(-1)
     const body = appSrc.slice(start, appSrc.indexOf('}, [', start))
     expect(body).toMatch(/historyRef\.current = \[\]/)

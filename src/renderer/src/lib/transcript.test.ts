@@ -78,45 +78,94 @@ describe('transcriptToText', () => {
 })
 
 describe('recapPersistAction', () => {
-  const target = { file: 'meeting.md' }
+  const target = {
+    file: 'meeting.md',
+    ownerId: 'meeting-1',
+    runId: 'run-1',
+    priorText: 'Earlier partial notes.'
+  }
 
-  it('returns {file, text} once the answer settles with real text and no error', () => {
-    const answer = { text: 'Notes here.', streaming: false, error: null }
-    expect(recapPersistAction(answer, target)).toEqual({ file: 'meeting.md', text: 'Notes here.' })
+  const answer = (
+    partial: Partial<{ id: string; text: string; streaming: boolean; error: string | null; completion: 'pending' | 'complete' | 'incomplete' }>
+  ) => ({
+    id: 'run-1',
+    text: 'Notes here.',
+    streaming: false,
+    error: null,
+    completion: 'complete' as const,
+    ...partial
   })
 
-  it('returns null while the answer is still streaming, even with text already buffered', () => {
-    const answer = { text: 'partial notes', streaming: true, error: null }
-    expect(recapPersistAction(answer, target)).toBeNull()
+  it('marks only an explicitly completed non-empty answer complete', () => {
+    expect(recapPersistAction(answer({}), target, 'meeting-1')).toEqual({
+      file: 'meeting.md',
+      ownerId: 'meeting-1',
+      runId: 'run-1',
+      text: 'Notes here.',
+      recapStatus: 'complete'
+    })
   })
 
-  it('returns null when the answer settled with an error (recap stays empty)', () => {
-    const answer = { text: '', streaming: false, error: 'No provider configured.' }
-    expect(recapPersistAction(answer, target)).toBeNull()
+  it('retains even a short incomplete partial with an explicit incomplete status', () => {
+    expect(
+      recapPersistAction(
+        answer({ text: 'Short partial', error: 'safe terminal error', completion: 'incomplete' }),
+        target,
+        'meeting-1'
+      )
+    ).toMatchObject({ text: 'Short partial', recapStatus: 'incomplete' })
   })
 
-  it('returns null when the answer settled with an error and only a stub of text', () => {
-    const answer = { text: 'partial', streaming: false, error: 'boom' }
-    expect(recapPersistAction(answer, target)).toBeNull()
+  it('fails closed to incomplete when a structurally conflicting terminal answer also has an error', () => {
+    expect(
+      recapPersistAction(
+        answer({ text: 'Useful partial', error: 'terminal transport error', completion: 'complete' }),
+        target,
+        'meeting-1'
+      )
+    ).toMatchObject({ text: 'Useful partial', recapStatus: 'incomplete' })
   })
 
-  it('keeps a substantial streamed summary despite a trailing stream error', () => {
-    const text = 'A'.repeat(200)
-    const answer = { text, streaming: false, error: 'idle timeout' }
-    expect(recapPersistAction(answer, target)).toEqual({ file: 'meeting.md', text })
+  it('uses only the exact target prior text when an incomplete retry returns empty', () => {
+    expect(
+      recapPersistAction(
+        answer({ text: '', error: 'safe terminal error', completion: 'incomplete' }),
+        target,
+        'meeting-1'
+      )
+    ).toMatchObject({ text: 'Earlier partial notes.', recapStatus: 'incomplete' })
   })
 
-  it('returns null when there is no answer at all', () => {
-    expect(recapPersistAction(null, target)).toBeNull()
+  it('stores an empty first failed attempt as incomplete without borrowing other text', () => {
+    expect(
+      recapPersistAction(
+        answer({ text: '', error: 'safe terminal error', completion: 'incomplete' }),
+        { ...target, priorText: '' },
+        'meeting-1'
+      )
+    ).toMatchObject({ text: '', recapStatus: 'incomplete' })
   })
 
-  it('returns null when there is no target, even with a settled successful answer', () => {
-    const answer = { text: 'Notes here.', streaming: false, error: null }
-    expect(recapPersistAction(answer, null)).toBeNull()
+  it('treats a hollow terminal completion as incomplete and preserves the exact target baseline', () => {
+    expect(recapPersistAction(answer({ text: '' }), target, 'meeting-1')).toMatchObject({
+      text: 'Earlier partial notes.',
+      recapStatus: 'incomplete'
+    })
   })
 
-  it('returns null when the answer settled successfully but with empty text', () => {
-    const answer = { text: '', streaming: false, error: null }
-    expect(recapPersistAction(answer, target)).toBeNull()
+  it('does not persist pending output even when carried text is visible', () => {
+    expect(
+      recapPersistAction(answer({ text: 'Old answer still visible', streaming: true, completion: 'pending' }), target, 'meeting-1')
+    ).toBeNull()
+  })
+
+  it('rejects stale answer runs and stale meeting owners', () => {
+    expect(recapPersistAction(answer({ id: 'old-run' }), target, 'meeting-1')).toBeNull()
+    expect(recapPersistAction(answer({}), target, 'meeting-2')).toBeNull()
+  })
+
+  it('returns null without an answer or target', () => {
+    expect(recapPersistAction(null, target, 'meeting-1')).toBeNull()
+    expect(recapPersistAction(answer({}), null, 'meeting-1')).toBeNull()
   })
 })
