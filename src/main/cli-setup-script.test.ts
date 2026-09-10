@@ -47,7 +47,15 @@ beforeAll(() => {
 })
 afterAll(() => {
   setPlatform(REAL_PLATFORM)
-  rmSync(h.dir, { recursive: true, force: true })
+  if (!h.dir) return
+  // Windows CI (and Defender) can keep a just-written .cmd locked through suite teardown.
+  // All assertions already ran; a leftover temp dir must not fail Quality.
+  try {
+    rmSync(h.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code !== 'EBUSY' && code !== 'EPERM') throw err
+  }
 })
 afterEach(() => {
   setPlatform(REAL_PLATFORM)
