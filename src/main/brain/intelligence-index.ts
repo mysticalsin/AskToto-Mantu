@@ -7,7 +7,7 @@ import { z } from 'zod'
 import type { Settings } from '@shared/ipc'
 import { getSettings } from '../store'
 import { readJson, writeJson } from './store'
-import { startBackfill, type BackfillStartResult } from './ingest'
+import { requestBackfillRun, type BackfillStartResult, type BackfillCompletion } from './ingest'
 import { auditLog, mainLog } from '../logger'
 
 export const INTELLIGENCE_INDEX_TZ = 'America/Toronto'
@@ -56,6 +56,27 @@ export interface IntelligenceIndexResult extends BackfillStartResult {
   lastIndexedAt?: number
   upToDate?: boolean
   error?: string
+}
+
+/** Internal only: completion is deliberately separate from the serializable IPC result. */
+export interface IntelligenceIndexCompletion {
+  ok: boolean
+  recapped?: number
+  /** Safe, user-facing retry guidance, not provider payloads or filesystem errors. */
+  error?: string
+}
+
+export interface IntelligenceIndexRun {
+  result: IntelligenceIndexResult
+  completion: Promise<IntelligenceIndexCompletion>
+}
+
+export const INCOMPLETE_INDEX_COPY = 'Intelligence could not finish updating. Retry Update Intelligence; your saved meetings are unchanged.'
+export const SUMMARY_INDEX_RETRY_COPY = 'Some meeting summaries could not finish. Retry Update Intelligence or retry the summary from its meeting.'
+
+export function backfillCompletionError(outcome: BackfillCompletion): string | undefined {
+  if (outcome.ok) return undefined
+  return outcome.error === 'no-provider' ? NO_PROVIDER_INDEX_COPY : INCOMPLETE_INDEX_COPY
 }
 
 interface ZonedParts {
@@ -180,12 +201,25 @@ export function lastIndexedAt(s: Settings = getSettings()): number | undefined {
   return at > 0 ? at : undefined
 }
 
-let indexing = false
-let indexWork: ((reason: IntelligenceIndexReason) => Promise<IntelligenceIndexResult>) | null = null
+let activeRun: object | null = null
+let volatileError: { folder: string; message: string } | null = null
+let indexWork: ((reason: IntelligenceIndexReason) => IntelligenceIndexRun | Promise<IntelligenceIndexRun>) | null = null
 
 /** Test-only: clear the in-flight lock between suites. */
 export function resetIntelligenceIndexLockForTests(): void {
-  indexing = false
+  activeRun = null
+  volatileError = null
+}
+
+export function intelligenceIndexStatus(s: Settings = getSettings()): { running: boolean; lastError?: string } {
+  const savedError = readIntelligenceIndexState(s).lastError
+  const safeSavedError = !savedError || [NO_PROVIDER_INDEX_COPY, INCOMPLETE_INDEX_COPY, SUMMARY_INDEX_RETRY_COPY].includes(savedError)
+    ? savedError
+    : INCOMPLETE_INDEX_COPY
+  const error = volatileError?.folder === s.meetingsFolder
+    ? volatileError.message
+    : safeSavedError
+  return { running: activeRun !== null, ...(!activeRun && error ? { lastError: error } : {}) }
 }
 
 /**
@@ -193,7 +227,7 @@ export function resetIntelligenceIndexLockForTests(): void {
  * module stays unit-testable without booting Electron or the LLM stack.
  */
 export function setIntelligenceIndexWork(
-  fn: ((reason: IntelligenceIndexReason) => Promise<IntelligenceIndexResult>) | null
+  fn: ((reason: IntelligenceIndexReason) => IntelligenceIndexRun | Promise<IntelligenceIndexRun>) | null
 ): void {
   indexWork = fn
 }
@@ -202,57 +236,64 @@ export async function runIntelligenceIndex(
   reason: IntelligenceIndexReason,
   s: Settings = getSettings()
 ): Promise<IntelligenceIndexResult> {
-  if (indexing) {
+  if (activeRun) {
     mainLog.info(`[intelligence-index] coalesced (${reason}); a pass is already running`)
     return { ran: false, queued: 0, coalesced: true, lastIndexedAt: lastIndexedAt(s) }
   }
-  indexing = true
-  try {
-    const work = indexWork
-    if (!work) {
-      const result = startBackfill(undefined, { force: true })
-      if (result.deferred === 'no-provider') {
-        mainLog.error('[intelligence-index] no AI provider is configured; index pass cannot extract meetings')
-        await writeIntelligenceIndexState({
-          lastSuccessAt: readIntelligenceIndexState(s).lastSuccessAt,
-          lastError: 'No AI provider is configured to index meetings.'
-        }, s)
-        return { ...result, ran: false, error: NO_PROVIDER_INDEX_COPY, lastIndexedAt: lastIndexedAt(s) }
-      }
-      const now = Date.now()
-      await writeIntelligenceIndexState({ lastSuccessAt: now }, s)
-      auditLog('brain.intelligence_index', { reason, queued: result.queued })
-      mainLog.info(`[intelligence-index] ${reason} queued ${result.queued} meeting(s)`)
-      return { ...result, ran: true, lastIndexedAt: now }
-    }
-    const result = await work(reason)
-    if (result.deferred === 'no-provider' || result.error) {
-      mainLog.error(`[intelligence-index] ${reason} failed: ${result.error || result.deferred}`)
-      await writeIntelligenceIndexState({
-        lastSuccessAt: readIntelligenceIndexState(s).lastSuccessAt,
-        lastError: result.error || result.deferred
-      }, s)
-      return { ...result, lastIndexedAt: lastIndexedAt(s) }
-    }
-    const now = Date.now()
-    await writeIntelligenceIndexState({ lastSuccessAt: now }, s)
-    auditLog('brain.intelligence_index', { reason, queued: result.queued, recapped: result.recapped ?? 0 })
-    mainLog.info(`[intelligence-index] ${reason} queued ${result.queued} meeting(s) recapped ${result.recapped ?? 0}`)
-    return { ...result, ran: result.ran ?? true, lastIndexedAt: now }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error)
-    mainLog.error(`[intelligence-index] ${reason} crashed:`, message)
+  const token = {}
+  activeRun = token
+  volatileError = null
+  const recordFailure = async (message: string): Promise<void> => {
+    volatileError = { folder: s.meetingsFolder, message }
     try {
       await writeIntelligenceIndexState({
         lastSuccessAt: readIntelligenceIndexState(s).lastSuccessAt,
         lastError: message
       }, s)
-    } catch (writeErr) {
-      mainLog.error('[intelligence-index] could not persist failure state:', writeErr)
+    } catch (error) {
+      mainLog.error('[intelligence-index] could not persist failure state:', error)
     }
-    return { ran: false, queued: 0, error: message, lastIndexedAt: lastIndexedAt(s) }
-  } finally {
-    indexing = false
+  }
+  try {
+    const run: IntelligenceIndexRun = indexWork ? await indexWork(reason) : (() => {
+      const backfill = requestBackfillRun({ force: true })
+      return {
+        result: { ...backfill.result, ran: !backfill.result.deferred },
+        completion: backfill.completion.then((outcome) => ({ ok: outcome.ok, error: backfillCompletionError(outcome) }))
+      }
+    })()
+    const result = {
+      ...run.result,
+      ...(run.result.deferred === 'no-provider' ? { error: NO_PROVIDER_INDEX_COPY } : {}),
+      lastIndexedAt: lastIndexedAt(s)
+    }
+    // Attach the terminal handler before returning to IPC. The lock stays owned until every stage
+    // has finished AND its success/failure state has been saved, even if the caller closes its window.
+    void (async () => {
+      try {
+        const outcome = await run.completion
+        if (activeRun !== token) return
+        const error = result.error || (!outcome.ok ? outcome.error || INCOMPLETE_INDEX_COPY : undefined)
+        if (error) {
+          await recordFailure(error)
+          return
+        }
+        await writeIntelligenceIndexState({ lastSuccessAt: Date.now() }, s)
+        auditLog('brain.intelligence_index', { reason, queued: result.queued, recapped: outcome.recapped ?? 0 })
+        mainLog.info(`[intelligence-index] ${reason} completed; recapped ${outcome.recapped ?? 0}`)
+      } catch (error) {
+        mainLog.error(`[intelligence-index] ${reason} completion failed:`, error)
+        if (activeRun === token) await recordFailure(INCOMPLETE_INDEX_COPY)
+      } finally {
+        if (activeRun === token) activeRun = null
+      }
+    })()
+    return result
+  } catch (error) {
+    mainLog.error(`[intelligence-index] ${reason} dispatch failed:`, error)
+    await recordFailure(INCOMPLETE_INDEX_COPY)
+    if (activeRun === token) activeRun = null
+    return { ran: false, queued: 0, error: INCOMPLETE_INDEX_COPY, lastIndexedAt: lastIndexedAt(s) }
   }
 }
 

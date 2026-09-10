@@ -6,7 +6,7 @@ import { app } from 'electron'
 import type { StreamHandlers, StreamOptions, StreamHandle } from '../llm/shared'
 import { getSettings, setSettings, setApiKey } from '../store'
 import { canConsolidateToday, recordConsolidationPass, runConsolidationIfDue, resetConsolidationLockForTests } from './consolidate'
-import { whenIndexWritesSettle } from './ingest'
+import { brainBackfillProgress, whenIndexWritesSettle } from './ingest'
 
 vi.mock('electron')
 
@@ -26,9 +26,13 @@ let userData: string
 let meetingsFolder: string
 
 beforeEach(() => {
+  // No consolidation job from a previous case may survive into a fresh profile.
+  expect(brainBackfillProgress().running).toBe(false)
   resetConsolidationLockForTests()
   userData = mkdtempSync(join(tmpdir(), 'asktoto-consolidate-test-'))
   meetingsFolder = mkdtempSync(join(tmpdir(), 'asktoto-consolidate-meetings-'))
+  // Defense in depth: a missing settings file must resolve inside this fixture, never real OneDrive.
+  vi.stubEnv('ASKTOTO_USERDATA', userData)
   ;(app.getPath as ReturnType<typeof vi.fn>).mockImplementation((name: string) => {
     if (name === 'userData') return userData
     return join(userData, name)
@@ -42,6 +46,9 @@ beforeEach(() => {
 })
 
 afterEach(async () => {
+  // Dispatch/budget persistence returns before extraction, merge, lint, and publication. The current
+  // index-lock tail alone cannot observe writes those still-active jobs have not enqueued yet.
+  await vi.waitFor(() => expect(brainBackfillProgress().running).toBe(false), { timeout: 10_000 })
   await whenIndexWritesSettle()
   rmSync(userData, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })
   rmSync(meetingsFolder, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 })

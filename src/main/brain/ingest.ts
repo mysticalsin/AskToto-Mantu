@@ -1261,6 +1261,49 @@ let sourceRefreshRunning = false
 // `done` is a terminal queue count, not a successful-ingest count. Keep failures separately so the
 // renderer can show honest progress instead of saying every settled job was mapped successfully.
 let backfillFailed = 0
+type CompletionError = NonNullable<BackfillCompletion['error']>
+type BackfillObserver = {
+  run: BackfillRun
+  s: Settings
+  resolve: (value: BackfillCompletion) => void
+  sources: Map<string, boolean>
+  preparing: boolean
+  gates: number
+  settling: boolean
+  published: boolean
+  error?: CompletionError
+}
+let backfillObserver: BackfillObserver | null = null
+let backfillFinalization: Promise<void> | null = null
+let drainTask: Promise<void> | null = null
+let rebuildReplayTask: Promise<void> | null = null
+let rebuildReplayQueued = false
+let rebuildStarting = false
+
+function completionError(error: CompletionError): void {
+  const observer = backfillObserver
+  if (!observer) return
+  const priority: Record<CompletionError, number> = { incomplete: 0, 'no-provider': 1, 'scan-failed': 2, 'publication-failed': 3, 'write-failed': 4 }
+  if (!observer.error || priority[error] > priority[observer.error]) observer.error = error
+}
+
+function observeSource(key: string): void {
+  if (backfillObserver && !backfillObserver.sources.has(key)) backfillObserver.sources.set(key, false)
+}
+
+class PublicationFailure extends Error {
+  constructor(error: unknown) { super(error instanceof Error ? error.message : String(error)) }
+}
+class BackfillScanFailure extends Error {
+  constructor(error: unknown) { super(error instanceof Error ? error.message : String(error)) }
+}
+
+async function trackedPublication(work: () => Promise<unknown>): Promise<void> {
+  try { await work() } catch (error) {
+    completionError('publication-failed')
+    throw new PublicationFailure(error)
+  }
+}
 // Jobs currently running extractMeeting — bounded to EXTRACT_CONCURRENCY. A job leaves this set the
 // moment its extraction settles (success or failure), immediately freeing a slot for the next one,
 // independent of how long that job's own serial ingest takes to reach the front of the withEntityLock lane.
@@ -1290,11 +1333,13 @@ const inFlightJobs = new Set<Job>()
 let indexLock: Promise<void> = Promise.resolve()
 export function updateIndex(s: Settings, mutate: (idx: BrainIndex) => void): Promise<void> {
   const run = indexLock.then(async () => {
-    const idx = readIndex(s)
+    // readIndex returns a shared cached snapshot. Only publish mutations after the durable write;
+    // a failed mutator or disk write must not leak unsaved records into later reads/writes.
+    const idx = cloneEntity(readIndex(s))
     mutate(idx)
     await writeIndex(s, idx)
   })
-  indexLock = run.catch(() => {})
+  indexLock = run.catch(() => { completionError('write-failed') })
   return run
 }
 
@@ -1395,7 +1440,7 @@ export function brainBackfillProgress(): { total: number; done: number; failed?:
     done: backfillDone,
     ...(backfillFailed > 0 ? { failed: backfillFailed } : {}),
     ...(backfillPreparing ? { preparing: true } : {}),
-    running: backfillPreparing || sourceRefreshRunning || hasActiveBackfill() || backfillLintPending
+    running: backfillPreparing || sourceRefreshRunning || rebuildStarting || rebuildReplayQueued || !!rebuildReplayTask || hasActiveBackfill() || backfillLintPending
   }
 }
 
@@ -1619,7 +1664,7 @@ export async function ingestExtraction(
   // live AND backfill alike (index regeneration is throttled separately; see finishJob/maybeFinishDrain
   // below, which mirrors exactly how lintBrain itself batches). No-ops entirely when publishBrainPages
   // is off, so this costs nothing when the mirror isn't in use.
-  await publishForExtraction(s, x, ref, aliasMap)
+  await trackedPublication(() => publishForExtraction(s, x, ref, aliasMap))
   await updateIndex(s, (idx) => {
     const version = sourceVersion ?? meetingSourceVersion(file)
     idx.ingested[key] = { at: Date.now(), ok: true, ...(version ? { sourceVersion: version } : {}), attempts: 0 }
@@ -1666,55 +1711,58 @@ async function finishJob(result: JobResult): Promise<void> {
   const { job, s } = result
   let failed = false
   try {
-    if (!result.ok) throw result.error
-    await ingestExtraction(s, result.x, result.md, job.file, result.preparedText, job.sourceVersion, job.key, job.label)
-    auditLog('brain.ingest', { ok: true, source: job.source })
-    {
-      // Time saved: 2 min per captured commitment, cap 15. Only when ingest actually extracted some.
-      const n = result.x.commitments?.length ?? 0
-      if (n > 0) {
-        appendTimeSavedEvent({
-          kind: 'second-brain',
-          estimatedMinutes: estimateSecondBrainMinutes(n),
-          ids: { meeting: job.file }
-        })
+    try {
+      if (!result.ok) throw result.error
+      await ingestExtraction(s, result.x, result.md, job.file, result.preparedText, job.sourceVersion, job.key, job.label)
+      auditLog('brain.ingest', { ok: true, source: job.source })
+      {
+        // Time saved: 2 min per captured commitment, cap 15. Only when ingest actually extracted some.
+        const n = result.x.commitments?.length ?? 0
+        if (n > 0) {
+          appendTimeSavedEvent({
+            kind: 'second-brain',
+            estimatedMinutes: estimateSecondBrainMinutes(n),
+            ids: { meeting: job.file }
+          })
+        }
       }
+    } catch (e) {
+      failed = true
+      completionError(e instanceof PublicationFailure ? 'publication-failed' : result.ok ? 'write-failed' : 'incomplete')
+      await updateIndex(s, (idx) => {
+        const key = jobKey(job)
+        const attempts = (idx.ingested[key]?.attempts ?? 0) + 1
+        const version = job.sourceVersion ?? meetingSourceVersion(job.file)
+        idx.ingested[key] = {
+          at: Date.now(),
+          ok: false,
+          error: e instanceof Error ? e.message : String(e),
+          ...(version ? { sourceVersion: version } : {}),
+          attempts,
+          retryAfter: Date.now() + retryDelayMs(attempts),
+          ...(attempts >= MAX_INGEST_ATTEMPTS ? { exhausted: true } : {})
+        }
+        idx.revision += 1
+      })
+      auditLog('brain.ingest', { ok: false, source: job.source })
     }
-  } catch (e) {
+    if (job.origin === 'live') {
+      await updateIndex(s, (idx) => { idx.warnings = lintBrain(s) })
+      // Task MI-5: one index regen per live ingest, one per whole backfill drain, not per meeting.
+      await trackedPublication(() => publishIndexes(s))
+    }
+  } catch (error) {
     failed = true
-    await updateIndex(s, (idx) => {
-      const key = jobKey(job)
-      const attempts = (idx.ingested[key]?.attempts ?? 0) + 1
-      const version = job.sourceVersion ?? meetingSourceVersion(job.file)
-      idx.ingested[key] = {
-        at: Date.now(),
-        ok: false,
-        error: e instanceof Error ? e.message : String(e),
-        ...(version ? { sourceVersion: version } : {}),
-        attempts,
-        retryAfter: Date.now() + retryDelayMs(attempts),
-        ...(attempts >= MAX_INGEST_ATTEMPTS ? { exhausted: true } : {})
-      }
-      idx.revision += 1
-    })
-    auditLog('brain.ingest', { ok: false, source: job.source })
-  }
-  if (job.origin === 'live') {
-    await updateIndex(s, (idx) => {
-      idx.warnings = lintBrain(s)
-    })
-    // Task MI-5: index regen throttled exactly like lintBrain above — one regen per live ingest, one per
-    // whole backfill drain (see maybeFinishDrain below), never once per meeting during a backfill.
-    await publishIndexes(s)
-  }
-  // Only a backfill-origin job advances the backfill progress counter — a live (just-saved meeting) job
-  // finishing while a backfill happens to be running must never nudge someone else's progress bar (this
-  // is also what makes backfillDone/backfillTotal meaningful to reset per-run in startBackfill: they only
-  // ever move in lockstep with backfill-origin work). Bumped here, inside the withEntityLock lane, so it
-  // advances in the same strictly-serial order as the ingest/error-record it belongs to.
-  if (job.origin === 'backfill') {
-    backfillDone = Math.min(backfillTotal, backfillDone + 1)
-    if (failed) backfillFailed = Math.min(backfillDone, backfillFailed + 1)
+    completionError(error instanceof PublicationFailure ? 'publication-failed' : 'write-failed')
+    throw error
+  } finally {
+    if (backfillObserver?.sources.has(jobKey(job))) backfillObserver.sources.set(jobKey(job), failed)
+    // A failed ledger write is still terminal work. Always advance here, in the serial entity lane,
+    // without allowing a live job to change the separate historical-batch progress counters.
+    if (job.origin === 'backfill') {
+      backfillDone = Math.min(backfillTotal, backfillDone + 1)
+      if (failed) backfillFailed = Math.min(backfillDone, backfillFailed + 1)
+    }
   }
 }
 
@@ -1746,18 +1794,24 @@ function registerDrainCallback(cb?: () => void | Promise<void>): void {
 
 /** Finishes historical indexing once its own work has drained, independent of live meeting ingestion. */
 function maybeFinishBackfill(): void {
-  if (!hasActiveBackfill() && backfillLintPending && backfillTotal > 0 && backfillDone >= backfillTotal) {
-    backfillLintPending = false
+  if (!hasActiveBackfill() && backfillLintPending && !backfillFinalization && backfillTotal > 0 && backfillDone >= backfillTotal) {
     const sx = getSettings()
-    updateIndexDetached(sx, (i) => {
-      // A batch can contain local checkpoint repairs while other sources still await their first
-      // provider-backed extraction. Do not let completion of the repair subset erase that durable
-      // pending state, or those meetings would never be retried after the provider returns.
-      if (!hasIncompleteMeetingSource(sx, i)) i.backfillRequested = false
-      i.warnings = lintBrain(sx)
+    backfillFinalization = withEntityLock(async () => {
+      await updateIndex(sx, (i) => { i.warnings = lintBrain(sx) })
+      await trackedPublication(() => publishIndexes(sx))
+      if (backfillObserver) backfillObserver.published = true
+      await updateIndex(sx, (i) => {
+        // Checkpoint repairs may drain while other sources still await a configured provider.
+        if (!backfillObserver && !hasIncompleteMeetingSource(sx, i)) i.backfillRequested = false
+      })
+    }).catch((error) => {
+      completionError(error instanceof PublicationFailure ? 'publication-failed' : 'write-failed')
+      mainLog.error('[brain] backfill finalization failed:', error)
+    }).finally(() => {
+      backfillLintPending = false
+      backfillFinalization = null
+      maybeFinishDrain()
     })
-    // Task MI-5: one index regen for the whole drained batch, matching the lintBrain call right above.
-    void publishIndexes(sx)
   }
 }
 
@@ -1891,28 +1945,47 @@ function hasSavedReconciliationCandidate(s: Settings): boolean {
  *  trip this — inFlightJobs and queue both being empty is what makes it "true". */
 function maybeFinishDrain(): void {
   maybeFinishBackfill()
-  if (queue.length === 0 && inFlightJobs.size === 0) {
+  if (queue.length === 0 && inFlightJobs.size === 0 && !backfillPreparing && !rebuildStarting && !backfillLintPending && !backfillFinalization && !drainTask) {
     // A just-saved meeting persists `backfillRequested` before its background job starts so a quit or
     // crash cannot strand it. Once every job truly drains, clear that durable marker only when none of
     // the persisted records remain failed/pending. A failed job therefore survives restart and the next
     // automatic reconciliation retries it instead of silently disappearing.
     const s = getSettings()
-    updateIndexDetached(s, (idx) => {
-      if (!idx.backfillRequested || Object.values(idx.ingested).some((entry) => !entry.ok) || hasIncompleteMeetingSource(s, idx)) return
-      idx.backfillRequested = false
-    })
-    if (pendingDrainCallbacks.length > 0) {
-      const cbs = pendingDrainCallbacks.splice(0, pendingDrainCallbacks.length)
-      for (const cb of cbs) {
-        try {
-          void Promise.resolve(cb()).catch((e) => mainLog.error('[brain] onDrained callback failed:', e))
-        } catch (e) {
-          mainLog.error('[brain] onDrained callback threw:', e)
+    drainTask = (async () => {
+      try {
+        await updateIndex(s, (idx) => {
+          if (backfillObserver) return // observer owns the final source/gate-aware durability decision
+          if (!idx.backfillRequested || Object.values(idx.ingested).some((entry) => !entry.ok) || hasIncompleteMeetingSource(s, idx)) return
+          idx.backfillRequested = false
+        })
+      } catch (error) {
+        // A disk failure cannot starve rebuild/source-refresh callbacks: their finally blocks release
+        // the shared lifecycle guards. The completion observer still records the real failed write.
+        completionError('write-failed')
+        mainLog.error('[brain] queue drain index update failed:', error)
+      }
+      while (pendingDrainCallbacks.length > 0 && queue.length === 0 && inFlightJobs.size === 0) {
+        const cbs = pendingDrainCallbacks.splice(0, pendingDrainCallbacks.length)
+        for (const cb of cbs) {
+          try {
+            await cb()
+          } catch (e) {
+            completionError(e instanceof PublicationFailure ? 'publication-failed' : 'incomplete')
+            mainLog.error('[brain] onDrained callback threw:', e)
+          }
         }
       }
-    }
-    maybeStartSourceRefresh()
+    })().catch((error) => {
+      completionError('write-failed')
+      mainLog.error('[brain] queue drain failed:', error)
+    }).finally(() => {
+      drainTask = null
+      maybeStartSourceRefresh()
+      maybeCompleteBackfillRun()
+      if (pendingDrainCallbacks.length > 0 && queue.length === 0 && inFlightJobs.size === 0) maybeFinishDrain()
+    })
   }
+  maybeCompleteBackfillRun()
 }
 
 function pump(): void {
@@ -2016,6 +2089,8 @@ export async function enqueueIngest(
     await requestSourceRefresh(s)
     return
   }
+  observeSource(key)
+  if (backfillObserver) backfillObserver.published = false
   try {
     await updateIndex(s, (idx) => {
       idx.backfillRequested = true
@@ -2052,7 +2127,39 @@ const REPLAY_FAILED_WARNING_PREFIX = 'Rebuild could not re-apply your saved corr
  * intentionally NOT added: the renderer's exhaustive `Record<AttentionItem['kind'], number>` (a file this
  * task must not touch) would fail typecheck — the warnings list is the existing, renderer-safe surface.
  */
-export async function finishRebuildReplay(s: Settings): Promise<void> {
+export function finishRebuildReplay(s: Settings): Promise<void> {
+  if (rebuildReplayTask) return rebuildReplayTask
+  rebuildReplayTask = performRebuildReplay(s).finally(() => {
+    rebuildReplayTask = null
+    maybeCompleteBackfillRun()
+  })
+  return rebuildReplayTask
+}
+
+/** One replay callback per drain, including a boot resume coalescing an already-running replay. */
+function replayAfterDrain(s: Settings, onFinished?: () => void | Promise<void>): (() => Promise<void>) | undefined {
+  if (rebuildReplayQueued || rebuildReplayTask) return undefined
+  rebuildReplayQueued = true
+  return async () => {
+    try { await finishRebuildReplay(s) } finally {
+      rebuildReplayQueued = false
+      await onFinished?.()
+    }
+  }
+}
+
+function startReplayBackfill(s: Settings, options: BackfillStartOptions, onFinished?: () => void | Promise<void>): BackfillStartResult {
+  const callback = replayAfterDrain(s, onFinished)
+  try { return startBackfill(callback, options) } catch (error) {
+    // startBackfill registers its callback only AFTER scanning. A failed scan must not leave a phantom
+    // queued replay that prevents a later repaired-folder retry from registering the real callback.
+    if (callback) rebuildReplayQueued = false
+    completionError('scan-failed')
+    throw new BackfillScanFailure(error)
+  }
+}
+
+async function performRebuildReplay(s: Settings): Promise<void> {
   const r = await replayCorrections(s)
   if (r.error) {
     mainLog.error(`[brain] rebuild replay could not run: ${r.error}`)
@@ -2065,6 +2172,9 @@ export async function finishRebuildReplay(s: Settings): Promise<void> {
     })
     return
   }
+  // Page regeneration is part of replay completion. Keep the durable replay marker until it succeeds,
+  // so a retry regenerates ALL entity pages rather than mistakenly publishing only index pages.
+  await trackedPublication(() => publishAll(s))
   await updateIndex(s, (i) => {
     i.replayPending = false
     i.replayError = undefined
@@ -2074,10 +2184,6 @@ export async function finishRebuildReplay(s: Settings): Promise<void> {
     // still discover real drift, but must not turn that replay into an unrelated purge.
     if (i.sourceRefreshRequested) i.sourceRefreshRequested = hasMeetingSourceDrift(s, i)
   })
-  // Task MI-5: rebuildAll's completion is publishAll's entry point — a full, deterministic regeneration
-  // of every wiki page from the now-fully-corrected brain state, catching anything the per-merge/
-  // per-correction hooks above didn't (e.g. a merge tombstone's stale page). No-ops when publishing is off.
-  await publishAll(s)
   queueMicrotask(maybeStartSourceRefresh)
 }
 
@@ -2127,7 +2233,25 @@ async function localOnlyRebuildBlocked(s: Settings): Promise<string | null> {
   }
 }
 
+const REBUILD_BUSY_ERROR = 'Intelligence indexing is already running. Wait for it to finish before rebuilding; nothing was reset.'
+
+function rebuildWorkBusy(): boolean {
+  return queue.length > 0 || inFlightJobs.size > 0 || backfillPreparing || backfillLintPending ||
+    !!backfillFinalization || !!drainTask || rebuildReplayQueued || !!rebuildReplayTask || !!backfillObserver?.settling
+}
+
 export async function startRebuild(s: Settings, options: StartRebuildOptions = {}): Promise<{ queued: number; error?: string }> {
+  // Own asynchronous preflight as well as the queue. A second rebuild must not purge active work or
+  // have its onFinished lifecycle owner dropped by the already-queued replay callback.
+  if (rebuildStarting || rebuildWorkBusy()) return { queued: 0, error: REBUILD_BUSY_ERROR }
+  rebuildStarting = true
+  try { return await performStartRebuild(s, options) } finally {
+    rebuildStarting = false
+    maybeFinishDrain()
+  }
+}
+
+async function performStartRebuild(s: Settings, options: StartRebuildOptions): Promise<{ queued: number; error?: string }> {
   // Do not wipe usable derived data just to discover that no configured provider can recreate it.
   if (!hasUsableProvider(s)) {
     return { queued: 0, error: 'Connect an AI provider in Settings → AI, or enable Métis Local summaries before rebuilding Mantu Intelligence.' }
@@ -2148,6 +2272,8 @@ export async function startRebuild(s: Settings, options: StartRebuildOptions = {
   // and a wiped brain reports itself fully indexed. Settling the lane first is what makes the purge the
   // last writer; everything queued after this point is startRebuild's own work on the fresh store.
   await whenIndexWritesSettle()
+  // Live work can arrive while integrity/journal checks await IO. Refuse before the destructive step.
+  if (rebuildWorkBusy()) return { queued: 0, error: REBUILD_BUSY_ERROR }
   // Fix F: preserveCorrections copies the journal to escrow and restores it even if the wipe fails —
   // check the result and abort (nothing re-extracted, corrections safe) rather than rebuild atop a
   // half-deleted store.
@@ -2166,10 +2292,7 @@ export async function startRebuild(s: Settings, options: StartRebuildOptions = {
     i.revision = before.revision + 1
     i.sourceRefreshRequested = preserveSourceRefresh
   })
-  const r = startBackfill(async () => {
-    await finishRebuildReplay(s)
-    await options.onFinished?.()
-  }, { allowSourceRefresh: true })
+  const r = startReplayBackfill(s, { allowSourceRefresh: true }, options.onFinished)
   return { queued: r.queued }
 }
 
@@ -2201,7 +2324,7 @@ export async function requestSourceRefresh(s: Settings = getSettings()): Promise
 }
 
 function maybeStartSourceRefresh(): void {
-  if (sourceRefreshRunning || queue.length > 0 || inFlightJobs.size > 0 || backfillPreparing) return
+  if (sourceRefreshRunning || rebuildStarting || rebuildWorkBusy()) return
   const s = getSettings()
   const idx = readIndex(s)
   if (!idx.sourceRefreshRequested || idx.replayPending || !hasUsableProvider(s)) return
@@ -2211,16 +2334,21 @@ function maybeStartSourceRefresh(): void {
     onFinished: () => {
       sourceRefreshRunning = false
       maybeStartSourceRefresh()
+      maybeCompleteBackfillRun()
     }
   })
     .then((result) => {
       if (!result.error) return
       sourceRefreshRunning = false
+      completionError('incomplete')
       mainLog.warn(`[brain] source refresh is waiting: ${result.error}`)
+      maybeCompleteBackfillRun()
     })
     .catch((error) => {
       sourceRefreshRunning = false
+      completionError(error instanceof BackfillScanFailure ? 'scan-failed' : 'write-failed')
       mainLog.error('[brain] source refresh could not start:', error)
+      maybeCompleteBackfillRun()
     })
 }
 
@@ -2238,19 +2366,18 @@ export function resumeBackfillIfPending(): void {
   try {
     const s = getSettings()
     const idx = readIndex(s)
-    if (idx.sourceRefreshRequested) {
+    if (idx.sourceRefreshRequested && !idx.replayPending) {
       maybeStartSourceRefresh()
       return
     }
     if (idx.backfillRequested) {
-      const onDrained = idx.replayPending ? () => finishRebuildReplay(s) : undefined
-      const r = startBackfill(onDrained)
+      const r = idx.replayPending ? startReplayBackfill(s, { allowSourceRefresh: true }) : startBackfill()
       if (r.queued > 0) mainLog.info(`[brain] resuming interrupted backfill: ${r.queued} transcripts remaining`)
     } else if (idx.replayPending) {
       // The backfill portion of an interrupted rebuild already finished (or never had any work) before
       // the crash, but the journal replay step itself never completed — nothing left to queue, just run
       // the replay now.
-      void finishRebuildReplay(s)
+      void finishRebuildReplay(s).catch((error) => mainLog.error('[brain] pending rebuild replay failed:', error))
     }
   } catch {
     /* brain store unreadable — a manual backfill will surface the real error */
@@ -2278,6 +2405,118 @@ export type BackfillStartOptions = {
   force?: boolean
   /** Update Intelligence button: stamp jobs so extraction uses local-first then API once. */
   route?: IngestRoute
+}
+
+export interface BackfillCompletion {
+  ok: boolean
+  error?: 'no-provider' | 'incomplete' | 'scan-failed' | 'write-failed' | 'publication-failed'
+  total: number
+  failed: number
+}
+export interface BackfillRun {
+  result: BackfillStartResult
+  completion: Promise<BackfillCompletion>
+}
+
+/** A run observes the shared worker lane, not merely the synchronous scan/queue dispatch. A recap
+ * prerequisite may run in parallel: only the final source-version check waits for it. */
+export function requestBackfillRun(options: BackfillStartOptions = {}, beforeComplete?: Promise<unknown>): BackfillRun {
+  if (backfillObserver) {
+    addCompletionGate(backfillObserver, beforeComplete)
+    return { result: { queued: 0, preparing: true }, completion: backfillObserver.run.completion }
+  }
+  let resolve!: (value: BackfillCompletion) => void
+  const run: BackfillRun = { result: { queued: 0, preparing: true }, completion: new Promise((done) => { resolve = done }) }
+  const observer: BackfillObserver = { run, resolve, s: getSettings(), sources: new Map(), preparing: true, gates: 0, settling: false, published: false }
+  backfillObserver = observer
+  for (const job of [...queue, ...inFlightJobs]) observeSource(jobKey(job))
+  addCompletionGate(observer, beforeComplete)
+  try {
+    run.result = requestBackfill(options)
+    if (readIndex(observer.s).replayPending && !sourceRefreshRunning) registerDrainCallback(replayAfterDrain(observer.s))
+    if (run.result.deferred) completionError('no-provider')
+    // A capped request can return "preparing" without dispatching anything. That is not completed work.
+    if (run.result.preparing && !backfillPreparing && !sourceRefreshRunning && !rebuildStarting && !rebuildReplayTask && !hasActiveBackfill() && !backfillLintPending) completionError('incomplete')
+  } catch (error) {
+    completionError('scan-failed')
+    mainLog.error('[brain] backfill request scan failed:', error)
+  } finally {
+    observer.preparing = backfillPreparing
+    maybeFinishDrain()
+  }
+  return run
+}
+
+function addCompletionGate(observer: BackfillObserver, prerequisite?: Promise<unknown>): void {
+  if (!prerequisite) return
+  observer.gates += 1
+  void prerequisite.then(() => {}, () => {
+    if (backfillObserver === observer) completionError('incomplete')
+  }).then(() => {
+    observer.gates -= 1
+    maybeCompleteBackfillRun()
+  })
+}
+
+/** This check never holds the drain callback lane: source-refresh replay itself needs that lane to
+ * finish. Parked no-provider work is an explicit failure, not a drain, and stays queued for retry. */
+function maybeCompleteBackfillRun(): void {
+  const observer = backfillObserver
+  if (!observer || observer.settling) return
+  const busy = (): boolean => observer.preparing || backfillPreparing || observer.gates > 0 || sourceRefreshRunning || rebuildStarting || !!drainTask || !!backfillFinalization || !!rebuildReplayTask || inFlightJobs.size > 0
+  const providerBlocked = (): boolean => queue.length > 0 && !hasUsableProvider(getSettings()) && queue.every((job) => job.origin === 'backfill' && job.strategy !== 'reconcile')
+  if (busy() || (queue.length > 0 && !providerBlocked())) return
+  observer.settling = true
+  void (async () => {
+    // Error recording is attached to each real write, because the shared lock tail deliberately
+    // recovers from rejection to keep subsequent writes usable.
+    await indexLock
+    if (busy() || (queue.length > 0 && !providerBlocked())) return
+    if (providerBlocked()) completionError('no-provider')
+    if (!observer.error && !observer.published) {
+      await withEntityLock(async () => {
+        await updateIndex(observer.s, (idx) => { idx.warnings = lintBrain(observer.s) })
+        await trackedPublication(() => publishIndexes(observer.s))
+      })
+      observer.published = true
+    }
+    // A new live job or coalesced prerequisite can arrive while publication is pending. Its completion
+    // will re-enter this check; never clear retry intent or resolve under that new work.
+    if (busy() || (queue.length > 0 && !providerBlocked())) return
+    const current = currentMeetingSourceVersions(observer.s)
+    if (!current) {
+      completionError('scan-failed')
+    } else {
+      const idx = readIndex(observer.s)
+      for (const [key, version] of current) {
+        const record = idx.ingested[key]
+        if (record?.ok && record.sourceVersion === version) continue
+        observeSource(key)
+        // Check AFTER publication as well as recap prerequisites: either can overlap source writes.
+        completionError(!record?.ok && !hasUsableProvider(getSettings()) ? 'no-provider' : 'incomplete')
+      }
+      if (Object.keys(idx.ingested).some((key) => !current.has(key)) || idx.replayPending || idx.sourceRefreshRequested) completionError('incomplete')
+    }
+    await updateIndex(observer.s, (idx) => { idx.backfillRequested = !!observer.error })
+    if (busy() || (queue.length > 0 && !providerBlocked())) return
+    finishCompletionObserver(observer)
+  })().catch(async (error) => {
+    completionError(error instanceof PublicationFailure ? 'publication-failed' : 'write-failed')
+    // Best effort after a failed write: preserve retry intent if the filesystem has recovered. A
+    // persistent disk failure still returns an explicit failed result, never an unhandled rejection.
+    try { await updateIndex(observer.s, (idx) => { idx.backfillRequested = true }) } catch { /* already recorded */ }
+    if (!busy() && (queue.length === 0 || providerBlocked())) finishCompletionObserver(observer)
+  }).finally(() => {
+    observer.settling = false
+    // A gate may have settled during an awaited write, after its own recheck saw settling=true.
+    if (backfillObserver === observer && !busy() && (queue.length === 0 || providerBlocked())) maybeCompleteBackfillRun()
+  })
+}
+
+function finishCompletionObserver(observer: BackfillObserver): void {
+  if (backfillObserver !== observer) return
+  backfillObserver = null
+  observer.resolve({ ok: !observer.error, ...(observer.error ? { error: observer.error } : {}), total: observer.sources.size, failed: [...observer.sources.values()].filter(Boolean).length })
 }
 
 
@@ -2326,6 +2565,7 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
   const toUnexhaust: string[] = []
   for (const f of existsSync(folder) ? readdirSync(folder) : []) {
     if (isMeetingTranscriptFile(f) && !already.has(f) && !inFlight.has(f)) {
+      observeSource(f)
       const file = join(folder, f)
       const record = idx.ingested[f]
       const sourceVersion = meetingSourceVersion(file)
@@ -2381,6 +2621,7 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
       if (!isMeetingTranscriptFile(f)) continue
       const key = `team/${owner}/${f}`
       if (already.has(key) || inFlight.has(key)) continue
+      observeSource(key)
       const file = join(teamFolder, f)
       const record = idx.ingested[key]
       const sourceVersion = meetingSourceVersion(file)
@@ -2434,7 +2675,10 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
   }
   // Accumulate rather than overwrite: a re-entrant call must extend an in-flight backfill's progress
   // tracking, not reset it out from under the jobs already queued.
-  if (candidates.length > 0) backfillLintPending = true
+  if (candidates.length > 0) {
+    backfillLintPending = true
+    if (backfillObserver) backfillObserver.published = false
+  }
   backfillTotal += candidates.length
   queue.push(...candidates)
   pump()
@@ -2443,7 +2687,7 @@ export function startBackfill(onDrained?: () => void | Promise<void>, options: B
   // above before scanning, so clear it again through the same serialized index lane.
   if (providerAvailable && candidates.length === 0 && !backfillInFlight && !hasActiveLiveIngest()) {
     updateIndexDetached(s, (i) => {
-      if (!hasIncompleteMeetingSource(s, i)) i.backfillRequested = false
+      if (!backfillObserver && !hasIncompleteMeetingSource(s, i)) i.backfillRequested = false
     })
   }
   registerDrainCallback(onDrained)
@@ -2497,7 +2741,7 @@ export function requestBackfill(options: BackfillStartOptions = {}): BackfillSta
     }
     return r
   }
-  if (backfillPreparing || sourceRefreshRunning) return { queued: 0, preparing: true }
+  if (backfillPreparing || sourceRefreshRunning || rebuildStarting || rebuildReplayTask) return { queued: 0, preparing: true }
   // A control cannot normally be clicked during an active run, but keep this guard authoritative for
   // re-entrant IPC callers too. There is already a real batch whose progress will be reported.
   if (hasActiveBackfill() || backfillLintPending) {
@@ -2526,8 +2770,11 @@ export function requestBackfill(options: BackfillStartOptions = {}): BackfillSta
       // Keep the durable request flag intact so a temporary OneDrive/filesystem failure can resume on
       // the next app launch. The source error is still logged rather than silently discarded.
       mainLog.error('[brain] deferred backfill scan failed:', error)
+      completionError('scan-failed')
     } finally {
       backfillPreparing = false
+      if (backfillObserver) backfillObserver.preparing = false
+      maybeFinishDrain()
     }
   })
   if (unextracted) return { queued: 0, preparing: true }

@@ -37,7 +37,7 @@ import { WorkProgressMeter } from './WorkProgressMeter'
 import { useFlash } from '../lib/useFlash'
 import { BrainRecordPage, recordKey, sortAttentionItems, type BrainRecordRef, type RecentMerge } from './BrainRecordPage'
 import { shouldAutoBackfill } from './brain-auto'
-import { brainStatusPollInterval, shouldRefreshAfterBrainStatus } from './brain-status-refresh'
+import { brainStatusIsWorking, brainStatusPollInterval, shouldRefreshAfterBrainStatus } from './brain-status-refresh'
 import { describeMeetingIndexProgress } from './work-progress'
 import { IntelligenceUpdateButton } from './IntelligenceUpdateButton'
 import { NO_PROVIDER_INDEX_COPY, runIntelligenceUpdateClick } from '../lib/intelligence-update'
@@ -504,7 +504,6 @@ export function BrainView({
       ])
       setData(read)
       setStatus(st)
-      if (st?.error) setError(st.error)
       setMeetings(list)
       setAttention(att.items)
       setProviderReady(settings.providerReady)
@@ -512,7 +511,7 @@ export function BrainView({
       setLocalSummaryReady(settings.localSummaryReady)
       setUsageStats(settings.usageStats)
       setTimeSavedAssumptions(settings.timeSaved)
-      setError(null)
+      setError(st?.error ?? null)
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -599,10 +598,8 @@ export function BrainView({
 
   // Keep compact status polling alive even while idle. A new live ingest can begin after this view mounts;
   // a full read is only needed when work settles, so this stays responsive without re-reading the brain.
-  const backfillRunning = !!status?.backfill?.running
-  const liveRunning = !!status?.live?.running
   const preparing = !!status?.backfill?.preparing
-  const statusWorking = backfillRunning || liveRunning || preparing
+  const statusWorking = brainStatusIsWorking(status)
   useEffect(() => {
     void refreshStatus()
     const t = setInterval(() => void refreshStatus(), brainStatusPollInterval(statusWorking))
@@ -788,6 +785,7 @@ export function BrainView({
   // tick that reset the per-run counter to 0 in between.
   const durableFailed = (status?.failed ?? 0) + (status?.exhausted ?? 0)
   const topError = status?.topError
+  const visibleError = error || status?.error || status?.intelligenceIndex?.lastError
 
   return (
     <div className="fade-up flex flex-col gap-3 px-1 py-1">
@@ -823,9 +821,9 @@ export function BrainView({
         />
       </div>
 
-      {error && (
+      {visibleError && (
         <div className="rounded-xl border border-[var(--color-danger)]/30 bg-[var(--color-danger)]/10 px-3 py-1.5 text-[11px] text-[var(--color-danger)]">
-          {error}
+          {visibleError}
         </div>
       )}
 

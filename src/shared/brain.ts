@@ -594,6 +594,8 @@ export interface BrainStatus {
   backfillRequested?: boolean
   /** Last successful solid Intelligence index (06:00 / 12:00 / 18:00 America/Toronto or a catch-up). */
   lastIndexedAt?: number
+  /** Full scheduled/import/manual index pass, including recap writes and final publication. */
+  intelligenceIndex?: { running: boolean; lastError?: string }
   /** requireAuth / provider failures must surface here instead of a silent null. */
   error?: string
 }
