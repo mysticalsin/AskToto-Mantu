@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * check-audit.mjs — the SCA gate: fail on any HIGH/CRITICAL advisory, except findings that live
- * entirely inside @dust-tt/client's bundled server tree.
+ * entirely inside the three verified-pruned @dust-tt/client dependency subtrees.
  *
  * Why the carve-out is safe, and why a bare `npm audit --audit-level=high` cannot be the gate:
  * npm audit reads package-lock.json's DECLARED tree. @dust-tt/client bundles an MCP server whose
@@ -12,8 +12,8 @@
  * on it would leave CI permanently red on a false positive — which trains everyone to ignore the gate.
  *
  * The carve-out is NARROW on purpose: only findings whose every node path sits under
- * node_modules/@dust-tt/client/ are excused. A real high anywhere else — including a new one inside
- * dust's tree that ALSO affects a path outside it — fails the build. Drop the carve-out when
+ * the three paths removed by prune-dust-bundle.mjs and forbidden by check-packaged-runtime.mjs are
+ * excused. A real high anywhere else, including Dust's shipped client runtime, fails. Drop the carve-out when
  * @dust-tt/client publishes a release without the stale bundled metadata.
  *
  * INDEPENDENTLY CONFIRMED (2026-08-24). An authenticated `snyk test --all-projects
@@ -54,13 +54,26 @@
  */
 import { execSync } from 'node:child_process'
 
-const EXCUSED_PREFIX = 'node_modules/@dust-tt/client/'
+const PRUNED_PREFIXES = [
+  'node_modules/@dust-tt/client/node_modules/@modelcontextprotocol/sdk',
+  'node_modules/@dust-tt/client/node_modules/express-rate-limit',
+  'node_modules/@dust-tt/client/node_modules/ip-address'
+]
+
+function isPrunedNode(node) {
+  if (node.includes('\\') || node.split('/').some((part) => part === '.' || part === '..')) return false
+  return PRUNED_PREFIXES.some((prefix) => node === prefix || node.startsWith(`${prefix}/`))
+}
 
 let raw
 try {
   raw = execSync('npm audit --omit=dev --json', { encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 })
 } catch (e) {
   // npm audit exits non-zero when vulnerabilities exist — the JSON is still on stdout.
+  if (e.status !== 1) {
+    console.error('[check:audit] scanner execution failed — failing closed')
+    process.exit(1)
+  }
   raw = e.stdout?.toString() ?? ''
 }
 
@@ -72,12 +85,33 @@ try {
   process.exit(1)
 }
 
+const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value)
+const severityNames = ['info', 'low', 'moderate', 'high', 'critical']
+const validReport = isRecord(report) &&
+  report.auditReportVersion === 2 &&
+  !Object.prototype.hasOwnProperty.call(report, 'error') &&
+  isRecord(report.vulnerabilities) &&
+  isRecord(report.metadata?.vulnerabilities) &&
+  Object.values(report.vulnerabilities).every((v) =>
+    isRecord(v) && severityNames.includes(v.severity) &&
+    Array.isArray(v.nodes) && v.nodes.every((node) => typeof node === 'string')) &&
+  [...severityNames, 'total'].every((name) =>
+    Number.isSafeInteger(report.metadata.vulnerabilities[name]) && report.metadata.vulnerabilities[name] >= 0) &&
+  severityNames.every((name) => report.metadata.vulnerabilities[name] ===
+    Object.values(report.vulnerabilities).filter((v) => v.severity === name).length) &&
+  report.metadata.vulnerabilities.total === Object.keys(report.vulnerabilities).length
+
+if (!validReport) {
+  console.error('[check:audit] incomplete or invalid npm audit report — failing closed')
+  process.exit(1)
+}
+
 const bad = []
 const excused = []
 for (const [name, v] of Object.entries(report.vulnerabilities ?? {})) {
   if (v.severity !== 'high' && v.severity !== 'critical') continue
   const nodes = Array.isArray(v.nodes) ? v.nodes : []
-  const fullyInsideDustBundle = nodes.length > 0 && nodes.every((n) => String(n).startsWith(EXCUSED_PREFIX))
+  const fullyInsideDustBundle = nodes.length > 0 && nodes.every(isPrunedNode)
   if (fullyInsideDustBundle) excused.push(`${name} (${v.severity})`)
   else bad.push(`${name} (${v.severity}) at ${nodes.join(', ') || '(no path reported)'}`)
 }
