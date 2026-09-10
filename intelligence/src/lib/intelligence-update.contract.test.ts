@@ -11,7 +11,9 @@ describe('Intelligence window Update control', () => {
     expect(btn).toContain('data-intelligence-update')
     expect(btn).toContain('Update Intelligence')
     expect(btn).toContain('backfill')
-    expect(btn).toContain('runIntelligenceUpdateClick')
+    expect(btn).toContain('createIntelligenceUpdateAttempt')
+    expect(btn).toContain('refreshStatus')
+    expect(btn).toContain('intelligenceIndex')
     expect(nav).not.toMatch(/Run agent|Trigger pass/)
   })
 

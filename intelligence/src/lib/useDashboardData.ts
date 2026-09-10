@@ -1,6 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { DashboardData } from '../types/data'
-import { brainStatusIsWorking, shouldReloadForBrainStatus } from './status-refresh'
+import {
+  brainStatusIsWorking,
+  startSingleFlightStatusPolling,
+  shouldReloadForBrainStatus,
+  type BrainStatusSnapshot
+} from './status-refresh'
+import { INTELLIGENCE_STATUS_UNAVAILABLE_COPY } from './intelligence-update'
 
 interface State {
   data: DashboardData | null
@@ -24,8 +30,14 @@ interface State {
  *     live brain over IPC (decrypted in the main process) and the adapter reshapes it.
  *  2. Standalone/dev: the generated data.json from /public (placeholder or a manual vault build).
  */
-export function useDashboardData(): State {
+export function useDashboardData(): State & {
+  status: BrainStatusSnapshot | null
+  refreshStatus: () => Promise<BrainStatusSnapshot | null>
+} {
   const [state, setState] = useState<State>({ data: null, loading: true, error: null, stale: null })
+  const [status, setStatus] = useState<BrainStatusSnapshot | null>(null)
+  const refreshStatusRef = useRef<() => Promise<BrainStatusSnapshot | null>>(async () => null)
+  const refreshStatus = useCallback(() => refreshStatusRef.current(), [])
 
   useEffect(() => {
     let cancelled = false
@@ -83,59 +95,72 @@ export function useDashboardData(): State {
     // Cheap status poll gates the full re-read for the life of the mount (see STALE_REFRESH_MS below).
     let lastRevision: number | undefined
     let wasWorking = false
-    // A persistently-null status (e.g. auth expired) must stop the poll, since nothing else here
-    // ever clears it, and without this it would poll the dead IPC forever. A transient null (one
-    // hiccup) must NOT stop it, so only consecutive nulls count; any real response resets the streak.
-    let consecutiveNulls = 0
-    const MAX_CONSECUTIVE_NULLS = 3
+    let wasUnavailable = false
     // Wall-clock floor so now()-derived fields (Going-Cold freshness, days-quiet) don't freeze at
     // whatever they were on first load: even when the meeting count never changes, force a reload
     // once this much time has passed. Comfortably below FRESH_DAYS (14 days) so a tier change is
     // never missed. The poll itself is never self-cleared anymore (see below) so this keeps firing
     // for the life of the mount, not just until the first quiet tick.
-    const iv = window.intelligence
-      ? setInterval(async () => {
-        try {
-            const st = (await window.intelligence!.getStatus()) as {
-              revision?: number
-              backfill?: { running?: boolean }
-              live?: { running?: boolean }
-              error?: string
-            } | null
-            if (st?.error) {
-              consecutiveNulls = 0
-              if (!cancelled)
-                setState((prev) => ({
-                  data: prev.data,
-                  loading: false,
-                  error: prev.data ? null : st.error!,
-                  stale: prev.data ? st.error! : null
-                }))
-              return
-            }
-            if (!st) {
-              consecutiveNulls += 1
-              if (consecutiveNulls >= MAX_CONSECUTIVE_NULLS) clearInterval(iv!)
-              return
-            }
-            consecutiveNulls = 0
-            const now = Date.now()
-            if (shouldReloadForBrainStatus({ status: st, previousRevision: lastRevision, wasWorking, lastLoadAt, now })) load()
-            if (typeof st.revision === 'number') lastRevision = st.revision
-            wasWorking = brainStatusIsWorking(st)
-            // No self-clear here: the poll is a cheap IPC status call gated by `changed`/`stale`
-            // before doing the expensive load(), so there's no cost to leaving it alive for the
-            // life of the mount. The only termination path is the consecutive-null check above.
-          } catch {
-            /* transient IPC hiccup, next tick retries */
+    let statusPolling: ReturnType<typeof startSingleFlightStatusPolling<BrainStatusSnapshot | null>> | null = null
+    if (window.intelligence) {
+      const consumeStatus = (st: BrainStatusSnapshot | null): BrainStatusSnapshot | null => {
+        if (cancelled) return st
+        if (st?.error) {
+          wasUnavailable = true
+          setStatus(st)
+          setState((prev) => ({
+            data: prev.data,
+            loading: false,
+            error: prev.data ? null : st.error!,
+            stale: prev.data ? st.error! : null
+          }))
+          return st
+        }
+        if (!st) {
+          wasUnavailable = true
+          setStatus({ error: INTELLIGENCE_STATUS_UNAVAILABLE_COPY })
+          return null
+        }
+        setStatus(st)
+        const now = Date.now()
+        if (
+          shouldReloadForBrainStatus({
+            status: st,
+            previousRevision: lastRevision,
+            wasWorking,
+            wasUnavailable,
+            lastLoadAt,
+            now
+          })
+        ) {
+          load()
+        }
+        if (typeof st.revision === 'number') lastRevision = st.revision
+        wasWorking = brainStatusIsWorking(st)
+        wasUnavailable = false
+        return st
+      }
+      statusPolling = startSingleFlightStatusPolling({
+        read: () => window.intelligence!.getStatus() as Promise<BrainStatusSnapshot | null>,
+        onStatus: consumeStatus,
+        onError: () => {
+          // An unavailable bridge is unknown, not "still running" forever. The same interval keeps
+          // retrying, and explicit callers also surface fixed safe uncertain copy.
+          if (!cancelled) {
+            wasUnavailable = true
+            setStatus({ error: INTELLIGENCE_STATUS_UNAVAILABLE_COPY })
           }
-        }, 2_000)
-      : null
+        },
+        intervalMs: 2_000
+      })
+      refreshStatusRef.current = statusPolling.refresh
+    }
     return () => {
       cancelled = true
-      if (iv) clearInterval(iv)
+      refreshStatusRef.current = async () => null
+      statusPolling?.stop()
     }
   }, [])
 
-  return state
+  return { ...state, status, refreshStatus }
 }

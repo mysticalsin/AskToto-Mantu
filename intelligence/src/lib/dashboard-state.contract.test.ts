@@ -129,11 +129,18 @@ describe('MQA-225 — the Briefing tiles and the cards under them count the same
 })
 
 describe('Update Intelligence is a real click on the live dashboard', () => {
-  it('NavBar mounts the Update Intelligence button that calls the host backfill', () => {
-    expect(nav).toMatch(/IntelligenceUpdateButton/)
+  it('passes shared status and a fresh refresh through NavBar while retaining host backfill', () => {
+    expect(app).toMatch(/<NavBar status=\{status\} refreshStatus=\{refreshStatus\} \/>/)
+    expect(nav).toMatch(/<IntelligenceUpdateButton status=\{status\} refreshStatus=\{refreshStatus\} \/>/)
     const btn = read('components', 'IntelligenceUpdateButton.tsx')
     expect(btn).toMatch(/Updating…/)
-    expect(btn).toMatch(/runIntelligenceUpdateClick/)
-    expect(btn).toMatch(/window\.intelligence/)
+    expect(btn).toMatch(/window\.intelligence!\.backfill/)
+    expect(btn).toMatch(/createIntelligenceUpdateAttempt/)
+    expect(hook).toMatch(/startSingleFlightStatusPolling/)
+    expect(hook).toMatch(/refreshStatusRef\.current = statusPolling\.refresh/)
+    expect(hook).toMatch(/statusPolling\?\.stop\(\)/)
+    expect(hook).toMatch(/setStatus\(\{ error: INTELLIGENCE_STATUS_UNAVAILABLE_COPY \}\)/)
+    expect(hook).toMatch(/shouldReloadForBrainStatus\(\{[\s\S]{0,200}wasUnavailable,/)
+    expect(hook).toContain('wasUnavailable = false')
   })
 })
