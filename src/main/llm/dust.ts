@@ -505,15 +505,16 @@ export function streamDust(opts: StreamOptions): StreamHandle {
         if (!settled) {
           settled = true
           wd.clear()
-          opts.handlers.onDone({ cacheStatus: 'n/a' })
+          opts.handlers.onDone(
+            { cacheStatus: 'n/a' },
+            { status: 'complete', reason: 'agent_message_success' }
+          )
         }
         return
       }
     }
     if (!settled) {
-      settled = true
-      wd.clear()
-      opts.handlers.onDone({ cacheStatus: 'n/a' })
+      fail('Dust stream ended before an agent success event.')
     }
   }
   void (async () => {

@@ -159,10 +159,13 @@ export function streamLocal(opts: StreamOptions): StreamHandle {
   // fire mid-stream on an unrelated schedule.
   const wrapHandlers = (markActivity: () => void): StreamOptions['handlers'] => ({
     ...opts.handlers,
-    onDone: (u) => {
+    onDone: (u, completion) => {
       releaseStream()
       markActivity()
-      opts.handlers.onDone({ ...u, cacheStatus: 'n/a', cacheRead: undefined, cacheWrite: undefined, cacheUncached: undefined })
+      opts.handlers.onDone(
+        { ...u, cacheStatus: 'n/a', cacheRead: undefined, cacheWrite: undefined, cacheUncached: undefined },
+        completion
+      )
     },
     onError: (message) => {
       releaseStream()

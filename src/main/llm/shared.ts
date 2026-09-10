@@ -5,10 +5,17 @@ import { AUTO_CLARITY_DIRECTIVE, autoClarityDropCaveman } from '@shared/caveman-
 
 export type { StreamCacheUsage }
 
+/** Provider-reported terminal state. Optional on onDone so existing strategies remain compatible. */
+export interface StreamCompletion {
+  status: 'complete' | 'incomplete'
+  /** Raw provider reason, or `unexpected_eof` when the transport ended without one. */
+  reason?: string
+}
+
 /** Stream callbacks the orchestrator wires to the renderer IPC bridge. */
 export interface StreamHandlers {
   onDelta: (text: string) => void
-  onDone: (u: StreamCacheUsage) => void
+  onDone: (u: StreamCacheUsage, completion?: StreamCompletion) => void
   onError: (message: string) => void
 }
 

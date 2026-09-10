@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import type { AskStart } from '@shared/ipc'
 import { mapAnthropicUsage, type CacheTtl } from '@shared/operator'
-import { type StreamOptions, type StreamHandle, errMsg, idleWatchdog, userText, imageMime, VISION_GUARD } from './shared'
+import { type StreamCompletion, type StreamOptions, type StreamHandle, errMsg, idleWatchdog, userText, imageMime, VISION_GUARD } from './shared'
 
 function anthropicMessages(req: AskStart): Anthropic.MessageParam[] {
   const msgs: Anthropic.MessageParam[] = req.history.map((t) => ({ role: t.role, content: t.content }))
@@ -97,11 +97,16 @@ export function streamAnthropic(opts: StreamOptions): StreamHandle {
     })
     stream
       .finalMessage()
-      .then((m: { usage?: unknown }) => {
+      .then((m: { usage?: unknown; stop_reason?: unknown }) => {
         if (settled) return
         settled = true
         wd.clear()
-        opts.handlers.onDone(mapAnthropicUsage(m.usage, usedTtl))
+        const stopReason = typeof m.stop_reason === 'string' && m.stop_reason ? m.stop_reason : 'unexpected_eof'
+        const completion: StreamCompletion = {
+          status: stopReason === 'end_turn' || stopReason === 'stop_sequence' ? 'complete' : 'incomplete',
+          reason: stopReason
+        }
+        opts.handlers.onDone(mapAnthropicUsage(m.usage, usedTtl), completion)
       })
       .catch((e: unknown) => {
         if (settled || aborted) return

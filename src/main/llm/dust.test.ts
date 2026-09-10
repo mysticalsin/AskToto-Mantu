@@ -24,6 +24,7 @@ const postedTo: string[] = [] // which conversation each follow-up message joine
 let convCounter = 0
 let throwOnNextCreate = false // one-shot: simulates createConversation rejecting instead of returning Result.Err
 let streamErrOnce: string | null = null // one-shot: streamAgentAnswerEvents returns Result.Err with this message
+let streamEvents: Array<Record<string, unknown>> = [{ type: 'agent_message_success' }]
 
 function ok<T>(value: T): { isErr: () => false; value: T } {
   return { isErr: () => false, value }
@@ -61,8 +62,8 @@ vi.mock('@dust-tt/client', () => {
         return err(m)
       }
       return ok({
-        eventStream: (async function* (): AsyncGenerator<{ type: string }> {
-          yield { type: 'agent_message_success' }
+        eventStream: (async function* (): AsyncGenerator<Record<string, unknown>> {
+          for (const event of streamEvents) yield event
         })()
       })
     }
@@ -120,6 +121,7 @@ describe('Dust conversation continuity (one conversation per meeting)', () => {
     convCounter = 0
     throwOnNextCreate = false
     streamErrOnce = null
+    streamEvents = [{ type: 'agent_message_success' }]
     managedDustChat.mockReset()
     managedDustChat.mockResolvedValue({ ok: true, text: 'Data and AI, AI wiki' })
   })
@@ -135,6 +137,34 @@ describe('Dust conversation continuity (one conversation per meeting)', () => {
     await waitDone(opts2.handlers)
     expect(calls.create).toBe(1)
     expect(calls.post).toBe(1)
+  })
+
+  it('reports an explicit agent success as complete', async () => {
+    const opts = baseOpts()
+    streamDust(opts)
+
+    await waitDone(opts.handlers)
+
+    expect(opts.handlers.onDone).toHaveBeenCalledWith(
+      { cacheStatus: 'n/a' },
+      { status: 'complete', reason: 'agent_message_success' }
+    )
+  })
+
+  it('reports iterator EOF without agent success as an error after partial tokens', async () => {
+    streamEvents = [
+      { type: 'generation_tokens', classification: 'tokens', text: 'partial recap' }
+    ]
+    const opts = baseOpts()
+    streamDust(opts)
+
+    for (let i = 0; i < 500 && !mockOf(opts.handlers.onError).mock.calls.length; i++) {
+      await new Promise((r) => setImmediate(r))
+    }
+
+    expect(opts.handlers.onDelta).toHaveBeenCalledWith('partial recap')
+    expect(opts.handlers.onError).toHaveBeenCalledWith(expect.stringMatching(/ended.*success/i))
+    expect(opts.handlers.onDone).not.toHaveBeenCalled()
   })
 
   it('serializes two concurrent first messages into ONE created conversation, not two', async () => {

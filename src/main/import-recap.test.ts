@@ -70,17 +70,73 @@ describe('pickImportRecapCandidates', () => {
 })
 
 describe('runImportedRecap critical path', () => {
-  it('does not polish; streams at base tier with a cached prefix and keeps >=200 trailing chars', async () => {
-    const createStream = vi.fn((opts: { system: string; reasoningEffort?: string; handlers: { onDelta: (d: string) => void; onError: (e: string) => void } }) => {
-      expect(opts.system.startsWith(IMPORT_RECAP_SYSTEM_PREFIX)).toBe(true)
+  it('rejects substantial partial text when the stream reports an error', async () => {
+    const createStream = vi.fn((opts: { handlers: { onDelta: (d: string) => void; onError: (e: string) => void } }) => {
       opts.handlers.onDelta('x'.repeat(200))
       opts.handlers.onError('idle timeout')
       return { abort: () => {} }
     })
+
+    await expect(
+      runImportedRecap(
+        { jobId: 'j1', lines: [{ name: 'Alex', speaker: 'unknown', text: 'we decided to ship', t: 1 }], mode: 'meeting' },
+        {
+          getSettings: () => settings(),
+          getApiKey: () => 'sk-test',
+          getAllowedProviders: () => null,
+          providerBaseUrl: () => '',
+          redactSecrets: (t) => t,
+          createStream: createStream as never
+        }
+      )
+    ).rejects.toThrow(/idle timeout.*retry/i)
+  })
+
+  it('rejects text when the provider says the output token limit stopped completion', async () => {
+    const createStream = vi.fn((opts: {
+      handlers: {
+        onDelta: (d: string) => void
+        onDone: (usage: object, completion?: { status: 'complete' | 'incomplete'; reason?: string }) => void
+      }
+    }) => {
+      opts.handlers.onDelta('## Overview\nA useful but truncated recap')
+      opts.handlers.onDone({}, { status: 'incomplete', reason: 'length' })
+      return { abort: () => {} }
+    })
+
+    await expect(
+      runImportedRecap(
+        { jobId: 'j2', lines: [{ name: 'Alex', speaker: 'unknown', text: 'we decided to ship', t: 1 }], mode: 'meeting' },
+        {
+          getSettings: () => settings(),
+          getApiKey: () => 'sk-test',
+          getAllowedProviders: () => null,
+          providerBaseUrl: () => '',
+          redactSecrets: (t) => t,
+          createStream: createStream as never
+        }
+      )
+    ).rejects.toThrow(/incomplete.*length/i)
+  })
+
+  it('sends the selected summary language without changing the cached prefix', async () => {
+    const createStream = vi.fn((opts: {
+      system: string
+      systemParts?: { cachedPrefix: string; volatile: string }
+      handlers: { onDelta: (d: string) => void; onDone: (usage: object) => void }
+    }) => {
+      expect(opts.system.startsWith(IMPORT_RECAP_SYSTEM_PREFIX)).toBe(true)
+      expect(opts.system).toContain('Always respond in French')
+      expect(opts.systemParts?.cachedPrefix).toBe(IMPORT_RECAP_SYSTEM_PREFIX)
+      expect(opts.systemParts?.volatile).toContain('Always respond in French')
+      opts.handlers.onDelta('## Overview\nLivraison approuvée.')
+      opts.handlers.onDone({})
+      return { abort: () => {} }
+    })
     const recap = await runImportedRecap(
-      { jobId: 'j1', lines: [{ name: 'Alex', speaker: 'unknown', text: 'we decided to ship', t: 1 }], mode: 'meeting' },
+      { jobId: 'j3', lines: [{ name: 'Alex', speaker: 'unknown', text: 'we decided to ship', t: 1 }], mode: 'meeting' },
       {
-        getSettings: () => settings(),
+        getSettings: () => settings({ outputLanguage: 'English', summaryLanguage: 'French' }),
         getApiKey: () => 'sk-test',
         getAllowedProviders: () => null,
         providerBaseUrl: () => '',
@@ -88,7 +144,7 @@ describe('runImportedRecap critical path', () => {
         createStream: createStream as never
       }
     )
-    expect(recap?.length).toBeGreaterThanOrEqual(200)
+    expect(recap).toBe('## Overview\nLivraison approuvée.')
     expect(createStream).toHaveBeenCalled()
     const arg = createStream.mock.calls[0][0] as { promptCacheKey?: string; systemCacheTtl?: string; reasoningEffort?: unknown }
     expect(arg.promptCacheKey).toBe(IMPORT_RECAP_CACHE_KEY)

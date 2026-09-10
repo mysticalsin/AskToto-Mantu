@@ -84,6 +84,22 @@ describe('answer-first post-filter on the stream', () => {
   })
 })
 
+describe('provider completion metadata', () => {
+  it('preserves an incomplete terminal reason through the enterprise wrapper', () => {
+    let innerHandlers: StreamOptions['handlers'] | null = null
+    const o = opts()
+    wrapEnterpriseStream((next) => {
+      innerHandlers = next.handlers
+      return { abort: () => {} }
+    }, o)
+
+    innerHandlers!.onDelta('partial')
+    innerHandlers!.onDone({}, { status: 'incomplete', reason: 'length' })
+
+    expect(o.handlers.onDone).toHaveBeenCalledWith({}, { status: 'incomplete', reason: 'length' })
+  })
+})
+
 describe('TTFT / TTA metrics', () => {
   it('records time-to-first-token and time-to-answer', () => {
     let t = 1_000

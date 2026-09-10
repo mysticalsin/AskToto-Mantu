@@ -101,9 +101,15 @@ export function streamOperatorAsk(opts: StreamOptions): StreamHandle {
           if (!trimmed.startsWith('data:')) continue
           const payload = trimmed.slice(5).trim()
           if (!payload) continue
-          let parsed: { t?: string; text?: string; message?: string }
+          let parsed: { t?: string; text?: string; message?: string; finishReason?: string; status?: string }
           try {
-            parsed = JSON.parse(payload) as { t?: string; text?: string; message?: string }
+            parsed = JSON.parse(payload) as {
+              t?: string
+              text?: string
+              message?: string
+              finishReason?: string
+              status?: string
+            }
           } catch {
             continue
           }
@@ -115,14 +121,16 @@ export function streamOperatorAsk(opts: StreamOptions): StreamHandle {
           if (parsed.t === 'done') {
             if (settled || aborted) return
             settled = true
-            opts.handlers.onDone({})
+            const reason = parsed.finishReason || 'done'
+            const incomplete =
+              parsed.status === 'incomplete' || reason === 'length' || reason === 'max_tokens'
+            opts.handlers.onDone({}, { status: incomplete ? 'incomplete' : 'complete', reason })
             return
           }
         }
       }
       if (!settled && !aborted) {
-        settled = true
-        opts.handlers.onDone({})
+        fail('Operator ask stream ended before a done event.')
       }
     } catch (e) {
       if (aborted) return
