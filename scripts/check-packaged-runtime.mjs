@@ -22,6 +22,7 @@ import {
 } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
 import { LOCAL_MODEL_ASSETS, LOCAL_MODEL_LICENSE, REPO_ROOT } from './local-model-assets.mjs'
+import { verifyPackagedSharp } from './verify-packaged-sharp.mjs'
 
 const argv = process.argv.slice(2)
 const target = argv.shift()
@@ -401,6 +402,12 @@ function verifyPeX64(path) {
 }
 
 requireDirectory(resourcesRoot)
+
+await verifyPackagedSharp(
+  { repoRoot: REPO_ROOT, resourcesRoot, target, arches: packagedArches, postSign },
+  { requireDirectory, requireRegularFile, inventoryTree, inventoryFromFiles, requireExactInventory,
+    requireSameFile, assertEqual, electronBuilderPackageJson, verifyMachOArches, verifyPeX64 }
+)
 
 // The manifest itself is tracked and copied, so both the runtime evidence and every listed asset must
 // survive packaging byte-for-byte. Inventories are derived from the manifest, not from mutable folders.

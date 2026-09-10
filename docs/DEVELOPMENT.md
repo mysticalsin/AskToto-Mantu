@@ -18,8 +18,10 @@ Run `nvm use` (or your version manager's equivalent) before installing dependenc
 version risks a native-module ABI mismatch with `sherpa-onnx-node` (see §4).
 
 `@dust-tt/client@1.2.6` still declares its publisher's exact Node 20.19.2 build environment, so npm
-prints one upstream `EBADENGINE` warning on install. Métis uses only its compiled `DustAPI` client, which
-runs inside Electron 39's Node 22 runtime. The unused bundled MCP server tree is removed from installers
+prints one upstream `EBADENGINE` warning on install. Métis uses only its compiled `DustAPI` client.
+The application now pins Electron 43.6.0, whose runtime is Node 24.20.0; this is distinct from the
+Node 22.22.3 build host. The warning does not establish account-integration compatibility: test Dust
+authentication and API workflows on each target platform. The unused bundled MCP server tree is removed from installers
 and verified from the finished `app.asar` by `scripts/check-packaged-runtime.mjs`.
 
 **Clone and install:**
@@ -28,6 +30,12 @@ and verified from the finished `app.asar` by `scripts/check-packaged-runtime.mjs
 npm install
 npm run dev
 ```
+
+Root postinstall explicitly provisions the exact host Electron runtime using the installed package's
+checksum-verified installer, then probes its version/platform/architecture without opening a window.
+Build and launch scripts verify this runtime without downloading. After `npm install --ignore-scripts`,
+run `node scripts/ensure-electron-runtime.mjs` explicitly; `--check-only` and `--offline` never install.
+Rebuild `out/` after changing Electron or architecture so old V8 bytecode cannot reach the new runtime.
 
 That's enough to run the overlay in dev. Three things are deliberately *not* required for `npm run dev`
 to work, each with a graceful fallback — know about them so you're not surprised later:
