@@ -1,4 +1,4 @@
-import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { Copy, Check, FileText, ListTree, FolderOpen, Save, RotateCcw, Play, ChevronDown, Download, Clock, Mail, Send, AlertCircle, EarOff, ArrowLeft, Pencil, X, Sparkles, Trash2, Lock, PhoneCall } from 'lucide-react'
 import type { TranscriptLine, MeetingSummary, McpConnection, RecapExport } from '@shared/ipc'
 import type { AnswerState } from '../state'
@@ -12,6 +12,7 @@ import { AgentStatus, InlineOrb } from './AgentStatus'
 import { ReviewEntityStrip } from './ReviewEntityStrip'
 import { useFlash } from '../lib/useFlash'
 import { accelLabel } from '../lib/keys'
+import { OutlookDraftLifecycle, outlookDraftIntent } from './outlook-draft-lifecycle'
 
 function clock(t: number): string {
   try {
@@ -538,22 +539,44 @@ export const Review = memo(function Review({
 
   // Editable follow-up draft: seeded from the streaming followupDraft.text until the user edits it, so
   // their edits never get clobbered by a late token — a fresh draft (new id) re-arms seeding.
+  const outlookDraftSubject = meetingMeta?.title ? `Follow-up: ${meetingMeta.title}` : 'Follow-up'
+  // startedAt is stable when a live meeting's savedPath arrives later; a regeneration id is not identity.
+  const outlookDraftMeeting = startedAt ? `started:${startedAt}` : savedPath || followupDraft?.id || meetingMeta?.date || ''
+  const outlookDraftLifecycleRef = useRef<OutlookDraftLifecycle | null>(null)
+  if (!outlookDraftLifecycleRef.current) outlookDraftLifecycleRef.current = new OutlookDraftLifecycle()
+  const outlookDraftLifecycle = outlookDraftLifecycleRef.current
   const [followupText, setFollowupText] = useState('')
   const [followupEdited, setFollowupEdited] = useState(false)
   const [followupCopied, flashFollowupCopied] = useFlash(1500)
+  const [outlookDraftLocalError, setOutlookDraftLocalError] = useState<string | null>(null)
+  const outlookDraftIntentSnapshot = useMemo(
+    () => outlookDraftIntent(outlookDraftMeeting, { subject: outlookDraftSubject, body: followupText }),
+    [outlookDraftMeeting, outlookDraftSubject, followupText]
+  )
+  const outlookDraftSession = useSyncExternalStore(
+    (listener) => outlookDraftLifecycle.subscribe(outlookDraftIntentSnapshot, listener),
+    () => outlookDraftLifecycle.status(outlookDraftIntentSnapshot)
+  )
+  // Prop-driven meeting/generation replacement must invalidate an older completion before passive effects.
+  useLayoutEffect(() => {
+    if (outlookDraftLifecycle.select(outlookDraftIntentSnapshot)) {
+      setOutlookDraftLocalError(null)
+    }
+  }, [outlookDraftIntentSnapshot.key, outlookDraftLifecycle])
   useEffect(() => {
     setFollowupEdited(false)
   }, [followupDraft?.id])
   useEffect(() => {
-    if (followupDraft?.text != null && !followupEdited) setFollowupText(followupDraft.text)
-  }, [followupDraft?.text, followupEdited])
+    if (followupDraft?.text != null && !followupEdited) {
+      const next = followupDraft.text
+      const nextIntent = outlookDraftIntent(outlookDraftMeeting, { subject: outlookDraftSubject, body: next })
+      if (outlookDraftLifecycle.select(nextIntent)) setOutlookDraftLocalError(null)
+      setFollowupText(next)
+    }
+  }, [followupDraft?.text, followupEdited, outlookDraftMeeting, outlookDraftSubject, outlookDraftLifecycle])
 
   const [mailError, setMailError] = useState<string | null>(null)
   const [outlook, setOutlook] = useState<{ signedIn: boolean; canDraft: boolean } | null>(null)
-  const [outlookDraft, setOutlookDraft] = useState<{ phase: 'idle' | 'saving' | 'saved' | 'error'; error: string | null }>({
-    phase: 'idle',
-    error: null
-  })
   const recordedEmailIds = useRef(new Set<string>())
 
   // "Push to CRM" — manual, review-first: shows the exact payload before it ever leaves the app, then
@@ -905,21 +928,20 @@ export const Review = memo(function Review({
   }, [followupDraft?.id, followupDraft?.streaming, followupDraft?.error, followupDraft?.text])
 
   const createOutlookDraft = async (): Promise<void> => {
-    if (outlookDraft.phase === 'saving' || !followupText.trim()) return
+    if (!followupText.trim()) return
     if (!outlook?.signedIn || !outlook.canDraft) {
-      setOutlookDraft({
-        phase: 'error',
-        error: outlook?.signedIn
-          ? 'Outlook draft permission is not granted. Métis will not send mail. Use Open in Mail.'
-          : 'Connect Outlook in Settings → Calendar. Métis will not send mail.'
-      })
+      setOutlookDraftLocalError(outlook?.signedIn
+        ? 'Outlook draft permission is not granted. Métis will not send mail. Use Open in Mail.'
+        : 'Connect Outlook in Settings → Calendar. Métis will not send mail.')
       return
     }
-    setOutlookDraft({ phase: 'saving', error: null })
-    const subject = meetingMeta?.title ? `Follow-up: ${meetingMeta.title}` : 'Follow-up'
-    const r = await window.toto.outlookCreateDraft({ subject, body: followupText })
-    if (r.ok) setOutlookDraft({ phase: 'saved', error: null })
-    else setOutlookDraft({ phase: 'error', error: r.error || 'Could not create the Outlook draft. Nothing was sent.' })
+    const attempt = outlookDraftLifecycle.start(outlookDraftIntentSnapshot, (payload) =>
+      window.toto.outlookCreateDraft(payload)
+    )
+    // The lifecycle flips its in-flight guard synchronously, before React commits `saving`.
+    if (!attempt) return
+    setOutlookDraftLocalError(null)
+    await attempt
   }
 
   return (
@@ -1361,8 +1383,11 @@ export const Review = memo(function Review({
               <textarea
                 value={followupText}
                 onChange={(e) => {
+                  const next = e.target.value
+                  const nextIntent = outlookDraftIntent(outlookDraftMeeting, { subject: outlookDraftSubject, body: next })
+                  if (outlookDraftLifecycle.select(nextIntent)) setOutlookDraftLocalError(null)
                   setFollowupEdited(true)
-                  setFollowupText(e.target.value)
+                  setFollowupText(next)
                 }}
                 rows={10}
                 className="scroll-thin w-full resize-y rounded-xl border border-[var(--color-hair-soft)] bg-white/[0.02] p-3 text-[13px] leading-relaxed text-[color:var(--color-ink)] focus:outline-none"
@@ -1376,16 +1401,16 @@ export const Review = memo(function Review({
                   <Mail size={11} /> Open in Mail
                 </TextButton>
                 {outlook?.signedIn && outlook.canDraft ? (
-                  <TextButton onClick={() => void createOutlookDraft()} disabled={!followupText || outlookDraft.phase === 'saving'}>
-                    <Mail size={11} /> {outlookDraft.phase === 'saved' ? 'Draft created' : 'Create Outlook draft'}
+                  <TextButton
+                    onClick={() => void createOutlookDraft()}
+                    disabled={!followupText || outlookDraftSession.phase === 'saving' || outlookDraftSession.phase === 'saved'}
+                  >
+                    <Mail size={11} /> {outlookDraftSession.phase === 'saved' ? 'Draft created' : outlookDraftSession.phase === 'saving' ? 'Creating draft…' : 'Create Outlook draft'}
                   </TextButton>
                 ) : (
                   <TextButton
                     onClick={() =>
-                      setOutlookDraft({
-                        phase: 'error',
-                        error: 'Connect Outlook in Settings → Calendar. Métis will not send mail.'
-                      })
+                      setOutlookDraftLocalError('Connect Outlook in Settings → Calendar. Métis will not send mail.')
                     }
                   >
                     <Mail size={11} /> Connect Outlook
@@ -1396,8 +1421,8 @@ export const Review = memo(function Review({
                 </TextButton>
               </div>
               {mailError && <div className="text-[11px] text-[var(--color-danger)]">{mailError}</div>}
-              {outlookDraft.phase === 'error' && outlookDraft.error && (
-                <div className="text-[11px] text-[var(--color-danger)]">{outlookDraft.error}</div>
+              {(outlookDraftLocalError || outlookDraftSession.error) && (
+                <div className="text-[11px] text-[var(--color-danger)]">{outlookDraftLocalError || outlookDraftSession.error}</div>
               )}
               <div className="text-[11px] text-[color:var(--color-ink-3)]">
                 Review before sending. Outlook creates a draft only. Nothing sends itself.

@@ -1,13 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
-const { getGraphToken } = vi.hoisted(() => ({ getGraphToken: vi.fn() }))
+const { getGraphToken, auditLog } = vi.hoisted(() => ({ getGraphToken: vi.fn(), auditLog: vi.fn() }))
 vi.mock('./auth', () => ({ getGraphToken }))
-vi.mock('./logger', () => ({ auditLog: vi.fn() }))
+vi.mock('./logger', () => ({ auditLog }))
 
 import { createOutlookDraft, createOutlookEvent, outlookWriteStatus } from './outlook-write'
 
 afterEach(() => {
   getGraphToken.mockReset()
+  auditLog.mockReset()
   vi.unstubAllGlobals()
 })
 
@@ -54,6 +55,61 @@ describe('createOutlookDraft — never send', () => {
     const r = await createOutlookDraft({ subject: 'Follow-up', body: 'Do the thing' })
     expect(r).toEqual({ ok: true, id: 'draft-1' })
     expect(fetchMock).toHaveBeenCalledOnce()
+    expect(auditLog).toHaveBeenCalledWith('outlook.draft', { ok: true, kind: 'mail' })
+  })
+
+  it.each([
+    ['malformed JSON', async () => { throw new SyntaxError('provider response body') }],
+    ['null JSON', async () => null],
+    ['a missing id', async () => ({ subject: 'accepted?' })],
+    ['an empty id', async () => ({ id: '   ' })],
+    ['a non-string id', async () => ({ id: 42 })]
+  ])('does not report or audit success for a 2xx response with %s', async (_label, json) => {
+    getGraphToken.mockResolvedValue('tok')
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 201, json })))
+
+    const r = await createOutlookDraft({ subject: 'Follow-up', body: 'Next steps' })
+
+    expect(r.ok).toBe(false)
+    expect(r.id).toBeUndefined()
+    expect(r.error).toMatch(/check drafts before trying again/i)
+    expect(auditLog).not.toHaveBeenCalled()
+  })
+
+  it('turns token acquisition rejection into fixed safe guidance', async () => {
+    getGraphToken.mockRejectedValue(new Error('secret-token-from-provider'))
+
+    await expect(createOutlookDraft({ subject: 'Follow-up', body: 'Next steps' })).resolves.toEqual({
+      ok: false,
+      error: 'Métis could not access Outlook right now. Try again. Nothing was sent.'
+    })
+  })
+
+  it('treats a fetch rejection as ambiguous without leaking dependency details', async () => {
+    getGraphToken.mockResolvedValue('tok')
+    const fetchMock = vi.fn(async () => { throw new Error('secret-token and provider body') })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const r = await createOutlookDraft({ subject: 'Follow-up', body: 'Next steps' })
+
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/could not confirm whether the draft was created/i)
+    expect(r.error).toMatch(/check drafts before trying again/i)
+    expect(r.error).not.toMatch(/secret-token|provider body/i)
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(auditLog).not.toHaveBeenCalled()
+  })
+
+  it('treats a 5xx response as ambiguous because the POST may already have committed', async () => {
+    getGraphToken.mockResolvedValue('tok')
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: false, status: 502, json: async () => ({}) })))
+
+    const r = await createOutlookDraft({ subject: 'Follow-up', body: 'Next steps' })
+
+    expect(r.ok).toBe(false)
+    expect(r.error).toMatch(/could not confirm whether the draft was created/i)
+    expect(r.error).toMatch(/check drafts before trying again/i)
+    expect(auditLog).not.toHaveBeenCalled()
   })
 })
 

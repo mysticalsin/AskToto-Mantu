@@ -47,8 +47,16 @@ async function graphPost(
   body: Record<string, unknown>,
   missing: string
 ): Promise<OutlookWriteResult> {
-  const token = await getGraphToken(scopes)
+  let token: string | null
+  try {
+    token = await getGraphToken(scopes)
+  } catch {
+    return { ok: false, error: 'Métis could not access Outlook right now. Try again. Nothing was sent.' }
+  }
   if (!token) return { ok: false, needsConsent: true, error: missing }
+  const uncertain = path === '/me/messages'
+    ? 'Outlook could not confirm whether the draft was created. Check Drafts before trying again. Nothing was sent.'
+    : 'Outlook could not confirm whether the calendar event was created. Check your calendar before trying again. No invitations were sent.'
   try {
     const res = await fetch(`${GRAPH}${path}`, {
       method: 'POST',
@@ -59,13 +67,18 @@ async function graphPost(
     if (res.status === 401 || res.status === 403) {
       return { ok: false, needsConsent: true, error: missing }
     }
+    if (res.status >= 500) return { ok: false, error: uncertain }
     if (!res.ok) {
       return { ok: false, error: `Outlook refused the draft (${res.status}). Nothing was sent.` }
     }
-    const data = (await res.json().catch(() => ({}))) as { id?: string }
-    return { ok: true, id: typeof data.id === 'string' ? data.id : undefined }
+    const data = await res.json() as unknown
+    const id = data && typeof data === 'object' && typeof (data as { id?: unknown }).id === 'string'
+      ? (data as { id: string }).id.trim()
+      : ''
+    if (!id) return { ok: false, error: uncertain }
+    return { ok: true, id }
   } catch {
-    return { ok: false, error: 'Outlook did not respond in time. Nothing was sent.' }
+    return { ok: false, error: uncertain }
   }
 }
 
