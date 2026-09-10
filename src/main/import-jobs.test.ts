@@ -151,7 +151,7 @@ describe('ImportJobManager', () => {
     expect(done.cursor).toBe(2)
     expect(done.lines).toHaveLength(2)
     expect(done.lines.every((line) => line.speaker === 'unknown' && line.text === 'recognized speech')).toBe(true)
-    expect(done.state).toBe('done') // finishVadPipeline runs the shared finalize() to completion
+    expect(done.state).toBe('done') // consumeVadPcm hands off to the shared finalize() to complete
   })
 
   it("stamps each line's t from its window's real offset into the recording — monotonic, first offset > 0 given leading silence (MQA-235)", async () => {
@@ -471,18 +471,21 @@ describe('ImportJobManager', () => {
   it('does not resurrect a cancelled job when transcription finishes late (vad-v1)', async () => {
     let resolveTranscribe!: (text: string) => void
     const transcribe = vi.fn(() => new Promise<string>((resolve) => { resolveTranscribe = resolve }))
-    const { manager } = createManager({ transcribe })
+    const onIdle = vi.fn()
+    const { manager } = createManager({ transcribe, onIdle })
     await manager.start(source)
     await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
 
     const finishing = manager.finishDecoding('job-1')
-    // Let finishVadPipeline segment the recording and reach the in-flight transcribe call for window 0.
+    // Let consumeVadPcm segment the recording and reach the in-flight transcribe call for window 0.
     for (let i = 0; i < 10 && !resolveTranscribe; i++) await new Promise((resolve) => setTimeout(resolve, 0))
     await manager.cancel('job-1')
+    expect(onIdle).not.toHaveBeenCalled()
     resolveTranscribe('late speech')
     await finishing
 
     expect(manager.get('job-1')).toMatchObject({ state: 'cancelled', cursor: 0, lines: [] })
+    expect(onIdle).toHaveBeenCalledTimes(1)
   })
 
   it('does not mark a cancelled job done when recap finishes late', async () => {
@@ -678,6 +681,36 @@ describe('ImportJobManager', () => {
     expect(manager.get('job-1')?.state).toBe('done')
   })
 
+  it('does not credit a meeting as summarized when recap generation fails', async () => {
+    const recordMeetingSummarized = vi.fn()
+    const { manager } = createManager({
+      recordMeetingSummarized,
+      generateRecap: vi.fn(async () => {
+        throw new Error('provider unavailable')
+      })
+    })
+    await manager.start(source)
+    await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+    await manager.finishDecoding('job-1')
+
+    expect(manager.get('job-1')).toMatchObject({ state: 'done', recapError: 'provider unavailable' })
+    expect(recordMeetingSummarized).not.toHaveBeenCalled()
+  })
+
+  it('does not credit a meeting as summarized when no recap provider is configured', async () => {
+    const recordMeetingSummarized = vi.fn()
+    const { manager } = createManager({
+      recordMeetingSummarized,
+      generateRecap: vi.fn(async () => undefined)
+    })
+    await manager.start(source)
+    await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+    await manager.finishDecoding('job-1')
+
+    expect(manager.get('job-1')).toMatchObject({ state: 'done', recapError: expect.stringMatching(/no ai provider/i) })
+    expect(recordMeetingSummarized).not.toHaveBeenCalled()
+  })
+
   it('still replays the decoder when a failed import never got as far as saving its meeting (MQA-025, vad-v1)', async () => {
     const transcribe = vi.fn().mockRejectedValue(new Error('ASR unavailable'))
     const { manager, decode } = createManager({ transcribe })
@@ -828,7 +861,7 @@ describe('ImportJobManager', () => {
     expect(manager.list()).toEqual([])
   })
 
-  it('N sources produce N durable jobs and only one occupies the decode slot', async () => {
+  it('N sources produce N durable jobs and only one occupies decoded-audio admission', async () => {
     let n = 0
     const { manager, decode } = createManager({
       newId: () => `job-${++n}`,
@@ -846,9 +879,16 @@ describe('ImportJobManager', () => {
     expect(manager.get('job-3')?.state).toBe('queued')
   })
 
-  it('second decode starts only after the first decoder is released; recap of A does not block decode of B', async () => {
+  it('keeps the next decode queued while ASR retains A PCM, then admits it before A recap finishes', async () => {
     let n = 0
+    let releaseTranscribe!: (value: string) => void
     let releaseRecap!: (value: string) => void
+    const transcribe = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          releaseTranscribe = resolve
+        })
+    )
     const generateRecap = vi.fn(
       () =>
         new Promise<string>((resolve) => {
@@ -857,6 +897,7 @@ describe('ImportJobManager', () => {
     )
     const { manager, decode } = createManager({
       newId: () => `job-${++n}`,
+      transcribe,
       generateRecap
     })
     await manager.startMany([
@@ -868,7 +909,16 @@ describe('ImportJobManager', () => {
     expect(manager.get('job-2')?.state).toBe('queued')
 
     await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+    // Mirrors index.ts: the decoder process closes first and reports its slot released. Admission must
+    // still stay closed because the manager owns the decoded recording until ASR finishes consuming it.
+    await manager.releaseDecodeSlot('job-1')
+    expect(manager.get('job-2')?.state).toBe('queued')
     const finishing = manager.finishDecoding('job-1')
+    await vi.waitFor(() => expect(transcribe).toHaveBeenCalled())
+    expect(manager.get('job-2')?.state).toBe('queued')
+    expect(decode).toHaveBeenCalledTimes(1)
+
+    releaseTranscribe('recognized speech')
     await vi.waitFor(() => expect(generateRecap).toHaveBeenCalled())
     expect(decode).toHaveBeenCalledTimes(2)
     expect(manager.get('job-2')?.state).toBe('decoding')
@@ -877,6 +927,139 @@ describe('ImportJobManager', () => {
     releaseRecap('## Title: Standup\n## Decisions: None.')
     await finishing
     expect(manager.get('job-1')?.state).toBe('done')
+    expect(manager.get('job-2')?.state).toBe('decoding')
+  })
+
+  it('keeps the next decode queued through an ASR retry and admits it after the retained PCM consumer fails', async () => {
+    let n = 0
+    const rejectAttempts: Array<(error: Error) => void> = []
+    const transcribe = vi.fn(
+      () =>
+        new Promise<string>((_resolve, reject) => {
+          rejectAttempts.push(reject)
+        })
+    )
+    const { manager, decode } = createManager({
+      newId: () => `job-${++n}`,
+      transcribe
+    })
+    await manager.startMany([
+      { ...source, name: 'first.m4a' },
+      { ...source, name: 'second.wav' }
+    ])
+    await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+
+    const finishing = manager.finishDecoding('job-1')
+    await vi.waitFor(() => expect(rejectAttempts).toHaveLength(1))
+    expect(manager.get('job-2')?.state).toBe('queued')
+
+    rejectAttempts[0](new Error('ASR first attempt failed'))
+    await vi.waitFor(() => expect(rejectAttempts).toHaveLength(2))
+    expect(manager.get('job-2')?.state).toBe('queued')
+
+    rejectAttempts[1](new Error('ASR unavailable'))
+    await finishing
+    expect(manager.get('job-1')).toMatchObject({ state: 'failed', error: 'ASR unavailable' })
+    expect(manager.get('job-2')?.state).toBe('decoding')
+    expect(decode).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not admit the next decode until a cancelled job stops consuming its retained PCM', async () => {
+    let n = 0
+    let releaseTranscribe!: (value: string) => void
+    const onIdle = vi.fn()
+    const transcribe = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          releaseTranscribe = resolve
+        })
+    )
+    const { manager, decode } = createManager({
+      newId: () => `job-${++n}`,
+      transcribe,
+      onIdle
+    })
+    await manager.startMany([
+      { ...source, name: 'first.m4a' },
+      { ...source, name: 'second.wav' }
+    ])
+    await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+
+    const finishing = manager.finishDecoding('job-1')
+    await vi.waitFor(() => expect(transcribe).toHaveBeenCalled())
+    await manager.cancel('job-1')
+    expect(manager.get('job-1')?.state).toBe('cancelled')
+    expect(manager.get('job-2')?.state).toBe('queued')
+    expect(decode).toHaveBeenCalledTimes(1)
+    expect(onIdle).not.toHaveBeenCalled()
+
+    releaseTranscribe('late speech')
+    await finishing
+    expect(manager.get('job-2')?.state).toBe('decoding')
+    expect(decode).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps admission closed when a decoder timeout fails a job whose PCM consumer is still returning', async () => {
+    let n = 0
+    let releaseTranscribe!: (value: string) => void
+    const transcribe = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          releaseTranscribe = resolve
+        })
+    )
+    const { manager } = createManager({
+      newId: () => `job-${++n}`,
+      transcribe
+    })
+    await manager.startMany([
+      { ...source, name: 'first.m4a' },
+      { ...source, name: 'second.wav' }
+    ])
+    await manager.acceptDecodedChunk('job-1', 0, 0, oneWindowPcm())
+
+    const finishing = manager.finishDecoding('job-1')
+    await vi.waitFor(() => expect(transcribe).toHaveBeenCalled())
+    await manager.failDecoder('job-1', 'Decoder completion timed out')
+    expect(manager.get('job-1')).toMatchObject({ state: 'failed', cursor: 0, lines: [] })
+    expect(manager.get('job-2')?.state).toBe('queued')
+
+    releaseTranscribe('late speech')
+    await finishing
+    expect(manager.get('job-1')).toMatchObject({ state: 'failed', cursor: 0, lines: [] })
+    expect(manager.get('job-2')?.state).toBe('decoding')
+  })
+
+  it('keeps the next decode queued while the legacy consumer used by overflow recovery retains PCM', async () => {
+    let releaseTranscribe!: (value: string) => void
+    const transcribe = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          releaseTranscribe = resolve
+        })
+    )
+    const { manager, store } = createManager({ transcribe })
+    await store.save({
+      jobId: 'job-1', sourcePath: source.path, sourceName: 'legacy.wav', sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs, title: 'Legacy', state: 'queued', cursor: 0, totalChunks: 1,
+      chunkSec: IMPORT_CHUNK_SECONDS, lines: [], createdAt: 1, updatedAt: 1
+    })
+    await store.save({
+      jobId: 'job-2', sourcePath: source.path, sourceName: 'next.wav', sourceSizeBytes: source.sizeBytes,
+      sourceMtimeMs: source.mtimeMs, title: 'Next', state: 'queued', cursor: 0, totalChunks: 0,
+      chunkSec: IMPORT_CHUNK_SECONDS, pipeline: 'vad-v1', lines: [], createdAt: 2, updatedAt: 2
+    })
+    await manager.recover()
+
+    const accepting = manager.acceptDecodedChunk('job-1', 0, 1, new Float32Array([1]))
+    await vi.waitFor(() => expect(transcribe).toHaveBeenCalled())
+    await manager.cancel('job-1')
+    expect(manager.get('job-1')?.state).toBe('cancelled')
+    expect(manager.get('job-2')?.state).toBe('queued')
+
+    releaseTranscribe('late speech')
+    await accepting
+    expect(manager.get('job-1')?.state).toBe('cancelled')
     expect(manager.get('job-2')?.state).toBe('decoding')
   })
 
