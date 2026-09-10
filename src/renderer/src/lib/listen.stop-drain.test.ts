@@ -198,16 +198,22 @@ class FakeWorker {
   onmessage: ((event: MessageEvent) => void) | null = null
   onerror: ((event: ErrorEvent) => void) | null = null
   postMessage = vi.fn()
+  terminate = vi.fn()
   constructor() {
     workers.push(this)
   }
-  emit(message: { type: string; qualityDegraded?: boolean }): void {
+  emit(message: {
+    type: string
+    qualityDegraded?: boolean
+    text?: string
+    speaker?: 'you' | 'them'
+    message?: string
+  }): void {
     this.onmessage?.({ data: message } as MessageEvent)
   }
   crash(message: string): void {
     this.onerror?.({ message } as ErrorEvent)
   }
-  terminate(): void {}
 }
 
 const { useListen } = await import('./listen')
@@ -397,6 +403,148 @@ describe('useListen Stop flush ownership', () => {
     await vi.advanceTimersByTimeAsync(60)
     expect(first).toHaveBeenCalledTimes(1)
     expect(second).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps draining a healthy serial native backlog while sealed outstanding work makes progress', async () => {
+    let call = 0
+    vi.mocked(window.toto.parakeetFeed).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          const text = call++ === 0 ? 'First healthy window.' : 'Second healthy window.'
+          setTimeout(() => resolve({ text, name: 'Alice' }), 4_000)
+        })
+    )
+    let api = await start()
+    const worklet = worklets.at(-1)
+    if (!worklet) throw new Error('test worklet did not open')
+    worklet.emit({ audio: new Float32Array([0.2]), partial: false })
+    worklet.emit({ audio: new Float32Array([0.3]), partial: false })
+    await settle()
+
+    const drained = vi.fn()
+    api.stop(drained)
+    await vi.advanceTimersByTimeAsync(7_000)
+    await settle()
+    expect(drained).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(1_200)
+    await settle()
+    api = render()
+    expect(drained).toHaveBeenCalledTimes(1)
+    expect(api.text()).toBe('THEM: First healthy window.\nTHEM: Second healthy window.')
+  })
+
+  it('continues a sealed native backlog through three rejections and its Whisper fallback', async () => {
+    vi.mocked(window.toto.parakeetFeed).mockImplementation(
+      () => new Promise((_, reject) => setTimeout(() => reject(new Error('native decode rejected')), 4_000))
+    )
+    let api = await start()
+    const worklet = worklets.at(-1)
+    if (!worklet) throw new Error('test worklet did not open')
+    for (let i = 0; i < 4; i++) worklet.emit({ audio: new Float32Array([0.2 + i / 10]), partial: false })
+    await settle()
+
+    const drained = vi.fn()
+    api.stop(drained)
+    await vi.advanceTimersByTimeAsync(12_100)
+    await settle()
+    expect(drained).not.toHaveBeenCalled()
+
+    const fallbackWorker = workers.at(-1)
+    if (!fallbackWorker) throw new Error('Whisper fallback worker did not open')
+    fallbackWorker.emit({ type: 'ready', qualityDegraded: false })
+    await settle()
+    expect(fallbackWorker.postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'audio' }),
+      expect.any(Array)
+    )
+    fallbackWorker.emit({ type: 'text', text: 'Recovered final window.', speaker: 'them' })
+    await vi.advanceTimersByTimeAsync(60)
+    await settle()
+
+    api = render()
+    expect(drained).toHaveBeenCalledTimes(1)
+    expect(api.text()).toContain('Recovered final window.')
+  })
+
+  it('uses the explicit Stop-only Whisper no-progress bound while a worker is not ready', async () => {
+    let api = render('whisper')
+    await api.start('system', 'fast', 'whisper', 'English')
+    await settle()
+    const worklet = worklets.at(-1)
+    const worker = workers.at(-1)
+    if (!worklet || !worker) throw new Error('test Whisper capture did not open')
+    worklet.emit({ audio: new Float32Array([0.2]), partial: false })
+
+    const drained = vi.fn()
+    api.stop(drained)
+    await vi.advanceTimersByTimeAsync(179_999)
+    expect(drained).not.toHaveBeenCalled()
+    expect(worker.terminate).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(100)
+    await settle()
+    api = render('whisper')
+    expect(drained).toHaveBeenCalledTimes(1)
+    expect(worker.terminate).toHaveBeenCalledTimes(1)
+    expect(api.error).toContain('transcript may be incomplete')
+  })
+
+  it('terminates a hung Whisper worker at the no-progress bound and ignores its late messages', async () => {
+    let api = await start('whisper')
+    const worklet = worklets.at(-1)
+    const staleWorker = workers.at(-1)
+    if (!worklet || !staleWorker) throw new Error('test Whisper capture did not open')
+    worklet.emit({ audio: new Float32Array([0.2]), partial: false })
+    await settle()
+
+    const drained = vi.fn()
+    api.stop(drained)
+    await vi.advanceTimersByTimeAsync(180_100)
+    await settle()
+    expect(drained).toHaveBeenCalledTimes(1)
+    expect(staleWorker.terminate).toHaveBeenCalledTimes(1)
+
+    api = render('whisper')
+    await api.start('system', 'fast', 'whisper', 'English')
+    await settle()
+    const replacementWorker = workers.at(-1)
+    if (!replacementWorker || replacementWorker === staleWorker) throw new Error('replacement worker did not open')
+    replacementWorker.emit({ type: 'ready', qualityDegraded: false })
+    await settle()
+    staleWorker.emit({ type: 'error', message: 'late stale failure' })
+    staleWorker.emit({ type: 'text', text: 'late stale text', speaker: 'them' })
+    await vi.advanceTimersByTimeAsync(1_000)
+    await settle()
+    api = render('whisper')
+
+    expect(drained).toHaveBeenCalledTimes(1)
+    expect(replacementWorker.terminate).not.toHaveBeenCalled()
+    expect(api.error).toBeNull()
+    expect(api.text()).not.toContain('late stale text')
+  })
+
+  it('abandons an old Stop watchdog without terminating a replacement session worker', async () => {
+    const firstApi = await start('whisper')
+    const firstWorklet = worklets.at(-1)
+    const firstWorker = workers.at(-1)
+    if (!firstWorklet || !firstWorker) throw new Error('first Whisper capture did not open')
+    firstWorklet.emit({ audio: new Float32Array([0.2]), partial: false })
+    await settle()
+    const oldDrained = vi.fn()
+    firstApi.stop(oldDrained)
+
+    const replacementApi = render('whisper')
+    await replacementApi.start('system', 'fast', 'whisper', 'English')
+    await settle()
+    const replacementWorker = workers.at(-1)
+    if (!replacementWorker || replacementWorker === firstWorker) throw new Error('replacement worker did not open')
+    replacementWorker.emit({ type: 'ready', qualityDegraded: false })
+    await vi.advanceTimersByTimeAsync(180_100)
+    await settle()
+
+    expect(oldDrained).not.toHaveBeenCalled()
+    expect(replacementWorker.terminate).not.toHaveBeenCalled()
   })
 
   it('releases the exact sealed channel hardware as soon as its ACK arrives', async () => {
@@ -606,7 +754,10 @@ describe('useListen Stop flush ownership', () => {
   })
 
   it('preserves an existing capture warning through otherwise-clean teardown', async () => {
-    vi.mocked(window.toto.parakeetFeed).mockImplementation(() => new Promise(() => {}))
+    let resolveFirst!: (value: { text: string }) => void
+    vi.mocked(window.toto.parakeetFeed)
+      .mockImplementationOnce(() => new Promise((resolve) => void (resolveFirst = resolve)))
+      .mockResolvedValue({ text: 'Queue drained.' })
     let api = await start()
     const worklet = worklets.at(-1)
     if (!worklet) throw new Error('test worklet did not open')
@@ -617,8 +768,9 @@ describe('useListen Stop flush ownership', () => {
 
     const drained = vi.fn()
     api.stop(drained)
-    await vi.advanceTimersByTimeAsync(6_100)
-    await settle()
+    resolveFirst({ text: 'Queue drain started.' })
+    for (let i = 0; i < 200; i++) await Promise.resolve()
+    await vi.advanceTimersByTimeAsync(60)
     api = render()
 
     expect(drained).toHaveBeenCalledTimes(1)
