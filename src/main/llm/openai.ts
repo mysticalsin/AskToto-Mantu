@@ -2,7 +2,7 @@ import OpenAI from 'openai'
 import type { AskStart } from '@shared/ipc'
 import { isOpenAICloudCacheEligible, mapOpenAIUsage, unsupportedCacheUsage } from '@shared/operator'
 import { PROVIDERS, requiresUserBaseUrl, type ProviderId } from '@shared/providers'
-import { type StreamOptions, type StreamHandle, errMsg, idleWatchdog, userText, imageMime, VISION_GUARD } from './shared'
+import { type StreamCompletion, type StreamOptions, type StreamHandle, errMsg, idleWatchdog, userText, imageMime, VISION_GUARD } from './shared'
 import { noteHeadroomFromHeaders, type HeaderBag } from './usage-headroom'
 
 /** Endpoints that 400'd on prompt-cache fields. Retry without them and stay stripped. */
@@ -145,7 +145,12 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
       includeEffort: boolean,
       includeResponseFormat = true,
       includePromptCache = wantCache
-    ): Promise<{ usage: ReturnType<typeof mapOpenAIUsage>; sawReasoning: boolean; sawContent: boolean }> => {
+    ): Promise<{
+      usage: ReturnType<typeof mapOpenAIUsage>
+      sawReasoning: boolean
+      sawContent: boolean
+      completion: StreamCompletion
+    }> => {
       const cachedPrefix = opts.systemParts?.cachedPrefix ?? opts.system
       const volatile = opts.systemParts?.volatile ?? ''
       const params: any = {
@@ -188,7 +193,7 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
       }
 
       type ChatStream = AsyncIterable<{
-        choices?: { delta?: { content?: string; reasoning_content?: string } }[]
+        choices?: { delta?: { content?: string; reasoning_content?: string }; finish_reason?: unknown }[]
         usage?: unknown
       }>
       const apiCall = client.chat.completions.create(params, { signal: controller.signal })
@@ -210,8 +215,10 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
       let usage: unknown
       let sawReasoning = false
       let sawContent = false
+      let finishReason: string | undefined
       for await (const chunk of stream) {
-        const delta = chunk.choices?.[0]?.delta
+        const choice = chunk.choices?.[0]
+        const delta = choice?.delta
         // Reasoning-only models (e.g. Kimi Code's kimi-for-coding) stream their thinking as
         // `reasoning_content` BEFORE any answer `content`. Keep the stall-watchdog alive during that phase
         // so it doesn't abort the stream while the model is reasoning; the answer arrives in `content`.
@@ -227,16 +234,32 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
         }
         const u = (chunk as { usage?: unknown }).usage
         if (u) usage = u
+        if (typeof choice?.finish_reason === 'string' && choice.finish_reason) {
+          finishReason = choice.finish_reason
+        }
       }
       const mapped = includePromptCache ? mapOpenAIUsage(usage) : unsupportedCacheUsage(
         (usage as { prompt_tokens?: number } | undefined)?.prompt_tokens,
         (usage as { completion_tokens?: number } | undefined)?.completion_tokens
       )
-      return { usage: mapped, sawReasoning, sawContent }
+      return {
+        usage: mapped,
+        sawReasoning,
+        sawContent,
+        completion: {
+          status: finishReason === 'stop' ? 'complete' : 'incomplete',
+          reason: finishReason || 'unexpected_eof'
+        }
+      }
     }
 
     try {
-      let usageResult: { usage: ReturnType<typeof mapOpenAIUsage>; sawReasoning: boolean; sawContent: boolean }
+      let usageResult: {
+        usage: ReturnType<typeof mapOpenAIUsage>
+        sawReasoning: boolean
+        sawContent: boolean
+        completion: StreamCompletion
+      }
       // Optional params are sent first; on a param rejection, drop ONLY the one the provider named.
       // Prompt-cache fields join the same ladder: a 400 strips them once and marks the endpoint
       // unsupported so later asks do not keep paying the extra round trip.
@@ -275,7 +298,7 @@ export function streamOpenAI(opts: StreamOptions): StreamHandle {
         opts.handlers.onError('The model produced only reasoning and no answer — try again or raise the token budget.')
         return
       }
-      opts.handlers.onDone(usageResult.usage)
+      opts.handlers.onDone(usageResult.usage, usageResult.completion)
     } catch (e) {
       wd.clear()
       if (controller.signal.aborted) return

@@ -5,38 +5,10 @@ import { describe, expect, it } from 'vitest'
 // Source-contract lock for the imported-recording auto-summary path (runImportedRecap lives in
 // import-recap.ts; index.ts is a thin wiring wrapper).
 //
-// Regression pinned (found live 2026-08-04, importing a real Downloads recording): the recap streamed
-// completely, then the provider stream ended with a trailing idle-timeout error (claude-cli lingers
-// after its final token) and onError REJECTED — discarding the finished summary. Transcript saved,
-// Notes empty, recapError set: exactly the user-reported "import doesn't auto-summarize".
+// Older source-contract coverage remains for import wiring and diarization. Stream completion behavior
+// is exercised through runImportedRecap/provider callbacks in import-recap.test.ts.
 const indexSrc = readFileSync(join(__dirname, 'index.ts'), 'utf8')
 const recapSrc = readFileSync(join(__dirname, 'import-recap.ts'), 'utf8')
-
-describe('imported-recording recap survives a trailing stream error', () => {
-  const start = recapSrc.indexOf('export async function runImportedRecap')
-  const body = recapSrc.slice(start)
-
-  it('onError keeps substantial already-streamed summary text instead of discarding it', () => {
-    expect(start).toBeGreaterThan(-1)
-    expect(body).toMatch(/IMPORT_RECAP_TRAILING_KEEP_CHARS/)
-    expect(body).toMatch(/resolveRecap\(text\)/)
-  })
-
-  it('early failures (no meaningful text) still reject into the provider waterfall', () => {
-    expect(body).toMatch(/rejectRecap\(new Error\(error\)\)/)
-  })
-
-  it('recap failure still never fails the import job (invariant from import-jobs.ts)', () => {
-    const jobsSrc = readFileSync(join(__dirname, 'import-jobs.ts'), 'utf8')
-    expect(jobsSrc).toMatch(/recapError/)
-  })
-
-  it('uses the summary/base tier, not think', () => {
-    expect(recapSrc).toMatch(/export const IMPORT_RECAP_TIER = 'base'/)
-    expect(body).toMatch(/reasoningEffortFor\(provider, IMPORT_RECAP_TIER, false\)/)
-    expect(body).not.toMatch(/['"]think['"]/)
-  })
-})
 
 // Diarized import lines carry line.name ("Jane Doe" / "Speaker N"). The recap prompt asks the model to
 // attribute by those labels — flattening every line to bare "SPEAKER:" erased attribution and made every

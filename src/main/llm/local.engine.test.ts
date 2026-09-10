@@ -143,6 +143,19 @@ describe('streamLocal — apple engine (text)', () => {
     expect(llama.endStream).not.toHaveBeenCalled()
   })
 
+  it('preserves incomplete completion metadata through the local usage wrapper', async () => {
+    const opts = makeOpts('summary')
+    streamLocal(opts)
+    const sent = await waitForStream()
+
+    sent.handlers.onDone({}, { status: 'incomplete', reason: 'length' })
+
+    expect(opts.handlers.onDone).toHaveBeenCalledWith(
+      expect.objectContaining({ cacheStatus: 'n/a' }),
+      { status: 'incomplete', reason: 'length' }
+    )
+  })
+
   it('falls back to llama-server when fm start() rejects — losslessly, no user-facing error', async () => {
     fm.start.mockRejectedValue(new Error('spawn failed'))
     const opts = makeOpts('suggest')

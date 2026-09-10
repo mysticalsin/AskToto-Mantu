@@ -195,7 +195,7 @@ export function wrapEnterpriseStream(
         if (ttftMs == null) ttftMs = now() - started
         handlers.onDelta(out)
       },
-      onDone: (u) => {
+      onDone: (u, completion) => {
         if (finished || cancelled) return
         finished = true
         stopTimer()
@@ -205,7 +205,7 @@ export function wrapEnterpriseStream(
           handlers.onDelta(tail)
         }
         finishMetrics()
-        handlers.onDone(u)
+        handlers.onDone(u, completion)
       },
       onError: (message) => {
         if (finished || cancelled) return

@@ -22,11 +22,10 @@ import type { ImportJob } from './import-jobs'
 export const IMPORT_RECAP_TIER = 'base' as const
 export const IMPORT_RECAP_MAX_ATTEMPTS = 3
 export const IMPORT_RECAP_CACHE_KEY = 'metis-import-recap-v1'
-export const IMPORT_RECAP_TRAILING_KEEP_CHARS = 200
 
 /**
- * Cached system prefix. Must stay byte-identical across meetings and days. Language policy is
- * "spoken language of the transcript" so a settings change cannot bust the cache. Decisions,
+ * Cached system prefix. Must stay byte-identical across meetings and days. The selected language
+ * lives in the volatile system tail so changing it does not invalidate this prefix. Decisions,
  * owners, and next steps stay first-class (Apple-grade recap, not a one-line blurb).
  */
 export const IMPORT_RECAP_SYSTEM_PREFIX =
@@ -42,8 +41,7 @@ export const IMPORT_RECAP_SYSTEM_PREFIX =
   '## Next steps: the same follow-ups as a short actionable list. If none, write "None."\n' +
   '## Open questions: what was left unresolved. If none, write "None."\n' +
   '## Notable quotes: 2 to 5 verbatim lines worth remembering.\n' +
-  'Be thorough and specific. Do not invent anything the transcript does not support.\n' +
-  'LANGUAGE: Write the recap/notes in the spoken language(s) of the transcript. If the meeting used more than one language, keep each attributed passage in the language it was spoken. Do not translate unless the user explicitly asked for a different summary language.'
+  'Be thorough and specific. Do not invent anything the transcript does not support.'
 
 export function importedTranscriptText(lines: ReadonlyArray<Pick<TranscriptLine, 'name' | 'text'>>): string {
   return lines.map((line) => `${line.name?.trim() || 'SPEAKER'}: ${line.text}`).join('\n')
@@ -60,8 +58,27 @@ export function importRecapSpeakerNote(hasSpeakerNames: boolean): string {
     : '\n\nThis is an imported recording with no speaker diarization. Do not attribute statements to YOU or THEM.'
 }
 
-export function importRecapSystem(hasSpeakerNames: boolean): string {
-  return IMPORT_RECAP_SYSTEM_PREFIX + importRecapSpeakerNote(hasSpeakerNames)
+export function importRecapLanguageDirective(summaryLanguage?: string, outputLanguage?: string): string {
+  const summary = (summaryLanguage || 'auto').trim()
+  const summaryKey = summary.toLowerCase()
+  const selected = summaryKey && summaryKey !== 'auto' && summaryKey !== 'same' ? summary : outputLanguage
+  const language = (selected || 'auto').trim()
+  if (!language || language.toLowerCase() === 'auto' || language.toLowerCase() === 'same') {
+    return '\n\nLANGUAGE: Write the recap/notes in the spoken language(s) of the transcript. If the meeting used more than one language, keep each attributed passage in the language it was spoken. Do not translate unless the user explicitly asked for a different summary language.'
+  }
+  return `\n\nLANGUAGE: Always respond in ${language}, regardless of the input language.`
+}
+
+export function importRecapSystem(
+  hasSpeakerNames: boolean,
+  summaryLanguage?: string,
+  outputLanguage?: string
+): string {
+  return (
+    IMPORT_RECAP_SYSTEM_PREFIX +
+    importRecapSpeakerNote(hasSpeakerNames) +
+    importRecapLanguageDirective(summaryLanguage, outputLanguage)
+  )
 }
 
 export interface ImportRecapProviderGate {
@@ -153,7 +170,10 @@ export async function runImportedRecap(
 
   const rawText = importedTranscriptText(job.lines)
   const transcript = settings.redactSensitive ? deps.redactSecrets(rawText) : rawText
-  const system = importRecapSystem(importRecapHasSpeakerNames(job.lines))
+  const systemTail =
+    importRecapSpeakerNote(importRecapHasSpeakerNames(job.lines)) +
+    importRecapLanguageDirective(settings.summaryLanguage, settings.outputLanguage)
+  const system = IMPORT_RECAP_SYSTEM_PREFIX + systemTail
   let lastError: Error | null = null
   const attempts = candidates.slice(0, IMPORT_RECAP_MAX_ATTEMPTS)
 
@@ -185,22 +205,26 @@ export async function runImportedRecap(
           freshConversation: true,
           promptCacheKey: IMPORT_RECAP_CACHE_KEY,
           systemCacheTtl: '1h',
+          systemParts: { cachedPrefix: IMPORT_RECAP_SYSTEM_PREFIX, volatile: systemTail },
           system,
           req,
           handlers: {
             onDelta: (delta) => {
               text += delta
             },
-            onDone: () => resolveRecap(text),
-            onError: (error) => {
-              if (text.trim().length >= IMPORT_RECAP_TRAILING_KEEP_CHARS) {
-                deps.logWarn?.(
-                  `[import-recap] keeping ${text.trim().length}-char summary despite trailing stream error: ${error}`
+            onDone: (_usage, completion) => {
+              if (completion?.status === 'incomplete') {
+                rejectRecap(
+                  new Error(
+                    `Summary provider returned an incomplete response (${completion.reason || 'unknown reason'}). Please retry.`
+                  )
                 )
-                resolveRecap(text)
                 return
               }
-              rejectRecap(new Error(error))
+              resolveRecap(text)
+            },
+            onError: (error) => {
+              rejectRecap(new Error(`Summary provider failed before completion (${error}). Please retry.`))
             }
           }
         })

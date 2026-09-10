@@ -36,7 +36,7 @@ describe('streamOperatorAsk', () => {
     })
     vi.stubGlobal('fetch', fetchMock)
     await new Promise<void>((resolve) => {
-      h.onDone = () => resolve()
+      vi.mocked(h.onDone).mockImplementation(() => resolve())
       streamOperatorAsk({
         providerId: 'anthropic',
         kind: 'anthropic',
@@ -52,6 +52,68 @@ describe('streamOperatorAsk', () => {
     })
     expect(fetchMock).toHaveBeenCalledOnce()
     expect(h.onDelta).toHaveBeenCalledWith('hi')
+    expect(h.onDone).toHaveBeenCalledWith({}, { status: 'complete', reason: 'done' })
+  })
+
+  it('reports an unexpected EOF instead of treating a partial SSE answer as complete', async () => {
+    const h = handlers()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response('data: {"t":"delta","text":"partial recap"}\n\n', {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream; charset=utf-8' }
+        })
+      )
+    )
+
+    streamOperatorAsk({
+      providerId: 'anthropic',
+      kind: 'anthropic',
+      apiKey: '',
+      viaOperator: true,
+      operatorTransport: { url: 'https://operator.test', secret: 'ingest-secret' },
+      model: 'claude-haiku-4-5-20251001',
+      temperature: 0.2,
+      system: 'sys',
+      req,
+      handlers: h
+    })
+
+    await vi.waitFor(() => expect(h.onError).toHaveBeenCalledWith(expect.stringMatching(/ended.*done/i)))
+    expect(h.onDelta).toHaveBeenCalledWith('partial recap')
+    expect(h.onDone).not.toHaveBeenCalled()
+  })
+
+  it('forwards an explicit incomplete terminal reason from Operator', async () => {
+    const h = handlers()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        new Response('data: {"t":"delta","text":"partial recap"}\n\ndata: {"t":"done","finishReason":"length"}\n\n', {
+          status: 200,
+          headers: { 'content-type': 'text/event-stream; charset=utf-8' }
+        })
+      )
+    )
+
+    streamOperatorAsk({
+      providerId: 'openai',
+      kind: 'openai',
+      apiKey: '',
+      viaOperator: true,
+      operatorTransport: { url: 'https://operator.test', secret: 'ingest-secret' },
+      model: 'gpt-4.1',
+      temperature: 0.2,
+      system: 'sys',
+      req,
+      handlers: h
+    })
+
+    await vi.waitFor(() =>
+      expect(h.onDone).toHaveBeenCalledWith({}, { status: 'incomplete', reason: 'length' })
+    )
+    expect(h.onError).not.toHaveBeenCalled()
   })
 
   it('fails loud when Operator returns Access login HTML instead of a stream', async () => {
