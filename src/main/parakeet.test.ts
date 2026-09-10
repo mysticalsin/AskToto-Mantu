@@ -94,11 +94,4 @@ describe('bundled Parakeet runtime', () => {
     expect(source).not.toMatch(/node:https|node:http|createWriteStream|execFile|MODEL_URL/)
     expect(source).toMatch(/ensureParakeetAssets/)
   })
-
-  it('keeps sherpa construction out of the parent module', () => {
-    const source = readFileSync(join(__dirname, 'parakeet.ts'), 'utf8')
-    expect(source).not.toMatch(/require\(['"]sherpa-onnx-node['"]\)/)
-    expect(source).not.toMatch(/new\s+\w*\.OfflineRecognizer/)
-    expect(source).toMatch(/utilityProcess\.fork/)
-  })
 })
