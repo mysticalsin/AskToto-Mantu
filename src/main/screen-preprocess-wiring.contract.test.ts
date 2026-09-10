@@ -35,14 +35,14 @@ describe('MQA-178 — the engine is armed at boot, not only when some other sett
   })
 
   it('MQA-178 — the local-model download re-arms it when the weights land mid-session', () => {
-    // First run fetches ~760 MB unawaited, so the boot reconcile above runs while localReady is still
-    // false. Nothing else notices when it finishes, so without this the feature stays dead all session.
+    // An opted-in model fetch is unawaited, so boot can reconcile before localReady becomes true.
+    // Only a successful eligible provisioning result should re-arm the feature and warm the model.
     const download = sliceBetween(
       indexSrc,
-      'ensureLocalModel(best.id)',
+      'void provisionLocalModel(getSettings().localLlm, getAllowedProviders(), ensureLocalModel)',
       'app.setAppUserModelId'
     )
-    expect(download).toContain('refreshScreenPreprocess')
+    expect(download).toMatch(/\.then\(\(ready\) => \{\s*if \(!ready\) return\s*refreshScreenPreprocess\(\)\s*warmLocalIfReady\(\)/)
   })
 })
 

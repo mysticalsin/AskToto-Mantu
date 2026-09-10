@@ -116,9 +116,11 @@ describe('MQA-188/191 — the in-app copy may not out-run what the installer act
     expect(localAi()).not.toMatch(/[Rr]einstall/)
   })
 
-  it('says instead that the model is fetched on first run', () => {
+  it('says instead that the optional model is fetched after opt-in or explicit Retry', () => {
     if (weightsArePackaged) return
-    expect(localAi()).toMatch(/first run/i)
+    expect(localAi()).toMatch(/downloads automatically only after you enable Local AI/i)
+    expect(localAi()).toMatch(/Retry to download without enabling/i)
+    expect(localAi()).not.toMatch(/first run|when the app opens|when Métis opens/i)
   })
 })
 

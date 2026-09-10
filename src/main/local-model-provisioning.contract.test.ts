@@ -37,7 +37,7 @@ describe('MQA-186 — the first-run weight fetch is gated, and the gate is not a
   })
 
   it('turning Local AI on still re-arms the fetch as a second chance after a failed boot download', () => {
-    // Boot starts the download on open; OFF→ON re-arms if the first attempt failed (offline, disk, etc.).
+    // Opted-in boot provisions on open; OFF→ON also provisions without requiring an app restart.
     const handler = sliceBetween(src, 'const next = setSettings(p)', 'ipcMain.handle(IPC.settingsRecoverProfile')
     expect(handler).toMatch(/next\.localLlm\.enabled && \(!cur\.localLlm\.enabled \|\| cur\.localLlm\.modelId !== next\.localLlm\.modelId\)/)
     expect(handler).toMatch(/provisionLocalModel\(next\.localLlm, getAllowedProviders\(\), ensureLocalModel\)/)
