@@ -60,6 +60,7 @@ describe('fresh-question boundary at the askStart choke point', () => {
     const handler = createListeningStateHandler({
       assertMainWindow: () => {},
       requireAuth: () => true,
+      acceptTransition: () => true,
       setListeningActive: (on) => { listeningActive = on },
       setTrayRecording: () => {},
       setRecordingPowerSaveBlock: () => {},

@@ -383,7 +383,7 @@ describe('live feed identity routing', () => {
 
 describe('bounded close and successful-save receipt join', () => {
   it('defers active and duplicate saves, then snapshots and backfills the exact file once on Stop', async () => {
-    const backfill = vi.fn(async () => ({ ok: true, named: 1 }))
+    const backfill = vi.fn(async (_file: string, _snapshot?: SpeakerEnrollmentSnapshot) => ({ ok: true, named: 1 }))
     const id = realSpeakerId()
     const api = sessionApi({ id, backfill })
     api.acceptLiveSpeakerTransition({ on: true, startedAt: 600 })
