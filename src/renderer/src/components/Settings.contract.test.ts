@@ -39,7 +39,7 @@ describe('Local AI distinguishes bundled compact weights from optional downloads
     expect(block).not.toMatch(/localModelsDownload|localModelsCancel|localModelsDelete/)
   })
 
-  it('describes the included compact model separately from optional downloads', () => {
+  it('MQA-188 — describes the included compact model separately from optional downloads', () => {
     expect(copy).toMatch(/The installer includes Qwen3\.5 0\.8B and its screenshot projector/)
     expect(copy).toMatch(/model\.source === 'bundled' \? 'Included with Métis\.'/)
     expect(copy).toMatch(/optional 4B model downloads only after selecting it and enabling Local AI or choosing Retry/i)
@@ -47,7 +47,7 @@ describe('Local AI distinguishes bundled compact weights from optional downloads
     expect(copy).not.toMatch(/when the app opens|when Métis opens|once on first run|~730 MB/i)
   })
 
-  it('shows repair guidance only through the invalid-bundle branch, never as optional download recovery', () => {
+  it('MQA-191 — shows repair guidance only through the invalid-bundle branch, never as optional download recovery', () => {
     expect(copy).toMatch(/unavailableReason === 'invalid-bundle'\s*\? invalidBundleText/)
     const retryBranch = block.slice(block.indexOf('const canRetry'), block.indexOf('const percent'))
     expect(retryBranch).not.toContain('invalid-bundle')
