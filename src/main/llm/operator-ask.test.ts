@@ -13,10 +13,54 @@ function handlers(): StreamHandlers {
 }
 
 const req = { id: 'ask-1', mode: 'answer', prompt: 'hello', history: [] } as AskStart
+const SCREENSHOT_PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
 describe('streamOperatorAsk', () => {
   beforeEach(() => {
     vi.unstubAllGlobals()
+  })
+
+  it('MQA-301 includes the explicitly requested screenshot in the signed managed vision request', async () => {
+    const h = handlers()
+    const fetcher = vi.fn(async (_url: Parameters<typeof fetch>[0], _init?: RequestInit) => new Response('data: {"t":"done"}\n\n', {
+      headers: { 'content-type': 'text/event-stream' }
+    }))
+    vi.stubGlobal('fetch', fetcher)
+    streamOperatorAsk({
+      providerId: 'cloudflare', kind: 'openai', apiKey: '', viaOperator: true,
+      operatorTransport: { url: 'https://operator.test', secret: 'METIS-OP-1.fixture' },
+      model: '@cf/deepseek-ai/deepseek-v4-flash-0731', temperature: 0.2, system: 'sys',
+      req: { ...req, mode: 'vision', image: SCREENSHOT_PNG }, handlers: h
+    })
+    await vi.waitFor(() => expect(h.onDone).toHaveBeenCalled())
+    expect(fetcher).toHaveBeenCalledOnce()
+    const init = fetcher.mock.calls[0]?.[1] as RequestInit
+    expect(JSON.parse(String(init.body))).toMatchObject({
+      mode: 'vision', model: '@cf/meta/llama-4-scout-17b-16e-instruct',
+      image: { mimeType: 'image/png', data: SCREENSHOT_PNG }
+    })
+  })
+
+  it.each([
+    ['not an image', 'vision'],
+    ['A'.repeat(5_500_004), 'vision'],
+    [SCREENSHOT_PNG, 'answer'],
+    ['', 'vision']
+  ] as const)('refuses an invalid or unrequested screenshot before any network request (%#)', async (image, mode) => {
+    const h = handlers()
+    const fetcher = vi.fn(async () => new Response('data: {"t":"done"}\n\n', {
+      headers: { 'content-type': 'text/event-stream' }
+    }))
+    vi.stubGlobal('fetch', fetcher)
+    streamOperatorAsk({
+      providerId: 'openai', kind: 'openai', apiKey: '', viaOperator: true,
+      operatorTransport: { url: 'https://operator.test', secret: 'METIS-OP-1.fixture' },
+      model: 'gpt-4o-mini', temperature: 0.2, system: 'sys',
+      req: { ...req, mode, image }, handlers: h
+    })
+    await vi.waitFor(() => expect(h.onError).toHaveBeenCalled())
+    expect(fetcher).not.toHaveBeenCalled()
+    expect(h.onDone).not.toHaveBeenCalled()
   })
 
   it('POSTs /v1/ask with HMAC headers and never sends an LLM key', async () => {
@@ -53,6 +97,23 @@ describe('streamOperatorAsk', () => {
     expect(fetchMock).toHaveBeenCalledOnce()
     expect(h.onDelta).toHaveBeenCalledWith('hi')
     expect(h.onDone).toHaveBeenCalledWith({}, { status: 'complete', reason: 'done' })
+  })
+
+  it('refuses redirects instead of forwarding the licence and conversation to another origin', async () => {
+    const h = handlers()
+    const fetcher = vi.fn(async () => new Response(null, { status: 307, headers: { location: 'https://elsewhere.test/ask' } }))
+    vi.stubGlobal('fetch', fetcher)
+    streamOperatorAsk({
+      providerId: 'anthropic', kind: 'anthropic', apiKey: '', viaOperator: true,
+      operatorTransport: { url: 'https://operator.test', secret: 'METIS-OP-1.fixture' },
+      model: 'fixture-model', temperature: 0.2, system: 'fixture-system', req, handlers: h
+    })
+    await vi.waitFor(() => expect(h.onError).toHaveBeenCalled())
+    expect(fetcher).toHaveBeenCalledOnce()
+    expect(fetcher).toHaveBeenCalledWith('https://operator.test/v1/ask', expect.objectContaining({
+      redirect: 'manual', headers: expect.objectContaining({ 'x-metis-license': 'METIS-OP-1.fixture' })
+    }))
+    expect(h.onDone).not.toHaveBeenCalled()
   })
 
   it('reports an unexpected EOF instead of treating a partial SSE answer as complete', async () => {
