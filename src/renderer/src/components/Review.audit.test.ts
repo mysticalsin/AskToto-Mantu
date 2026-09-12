@@ -130,6 +130,12 @@ describe('nextStepPushed — an already-pushed (item, connection) pair stays pus
 describe('Review.tsx — next steps and cold-call coaching cannot strand or duplicate work', () => {
   const src = readFileSync(join(__dirname, 'Review.tsx'), 'utf8')
 
+  it('MQA-312 shows a truthful speaker-evidence label, not the number of audio channels', () => {
+    expect(src.includes('new Set(lines.map((l) => l.speaker)).size')).toBe(false)
+    expect(src.includes('reviewSpeakerLabel(speechLines)')).toBe(true)
+    expect(src.includes('{speakerCountLabel}')).toBe(true)
+  })
+
   // MQA-140: the dedupe reads React state and a set that is only written AFTER the await, so a second
   // click in the same tick sails past both and creates duplicate tasks in the user's tracker. A ref flips
   // synchronously; the CRM push already had an equivalent in-flight guard, next steps did not.
