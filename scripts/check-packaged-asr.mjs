@@ -1,8 +1,7 @@
 #!/usr/bin/env node
 /**
  * Release-gate proof that the PACKAGED app can decode real audio through its real on-device ASR
- * engine — specifically Parakeet (sherpa-onnx-node's native N-API addon + the bundled 622MB NeMo
- * transducer model), the largest untested surface in the tree. Every other ASR-adjacent check
+ * engines — Whisper/transformers and Parakeet/sherpa, each with its bundled model. Other ASR checks
  * (check-sherpa-platform, check-local-model) inspects FILES — the right binary is present for the
  * right arch, the right model files exist on disk — but none of them actually decode audio through
  * the native addon inside a packaged Electron process. That gap is exactly the shape of the 1.2.0 DOA
@@ -12,11 +11,13 @@
  * already a devDependency — scripts/smoke-import.mjs uses the same driver for the same "drive an
  * import through the real picker" shape) and drive the real IPC surface the renderer uses
  * (window.toto.importAudioPick / importAudioStart / importJobsList / recallRead), exactly what a user
- * does via File > Import audio, with settings.asrEngine forced to 'parakeet' so the decode is proven
- * against the actual target of this gate rather than the default Whisper engine (which import()'s own
- * fallback would silently mask a dead Parakeet path behind).
+ * does via File > Import audio. MQA-306: settings alone do not prove the actual engine. Observe the
+ * production utility-process requests/results without replacing their data, then require successful
+ * PCM results from the requested packaged child and model. A Whisper-to-Parakeet fallback fails.
+ * Whisper runs first; import-idle releases its Parakeet language-probe helper before the separate
+ * Parakeet job. This also proves both native stacks can decode in one application session (MQA-234).
  *
- * Deviation from a pure playwright-core-over-CDP design, recorded honestly: CDP alone cannot reach
+ * MQA-233 — deviation from a pure playwright-core-over-CDP design, recorded honestly: CDP alone cannot reach
  * Electron's OS-level dialog.showOpenDialog (it runs in the main process, not any Chromium page CDP
  * exposes), so driving the REAL Windows Open-File dialog needs something outside CDP. A raw-Win32
  * approach (GetDlgItem + WM_SETTEXT/BM_CLICK against the dialog's standard control ids, spawning the
@@ -30,7 +31,7 @@
  * process (electronApp.evaluate) to substitute the picker's return value directly — the same technique
  * smoke-import.mjs already relies on. This keeps the gate fast and deterministic while still exercising
  * every layer that actually matters for THIS gate's purpose: the real IPC handlers
- * (importAudioPick/importAudioStart), the real bundled ffmpeg decode, and the real Parakeet native
+ * (importAudioPick/importAudioStart), the real bundled ffmpeg decode, and both real ASR native
  * addon + model. What it does NOT cover: whether Explorer's Open-File dialog itself still wires up to
  * pickAudioFile() correctly (control ids, filters) — that native-dialog latency/reliability question is
  * reported to the orchestrator separately as its own finding, not silently dropped.
@@ -44,10 +45,11 @@
  * Default target: release/win-unpacked/Metis.exe
  */
 import { _electron as electron } from 'playwright'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { assertPackagedAsrEvidence, installAsrObserver } from './lib/packaged-asr-evidence.mjs'
 
 const root = resolve(process.cwd())
 const argv = process.argv.slice(2)
@@ -56,6 +58,7 @@ const target = resolve(positional[0] || join(root, 'release/win-unpacked/Metis.e
 const timeoutIndex = argv.indexOf('--timeout-seconds')
 const timeoutSeconds = timeoutIndex === -1 ? 180 : Number(argv[timeoutIndex + 1])
 const PHRASE = 'The quarterly revenue target is seven million dollars'
+const ENGINES = ['whisper', 'parakeet']
 
 if (process.platform !== 'win32') {
   console.error(`[check:packaged-asr] FAIL — this gate synthesizes its fixture via Windows SAPI; host is ${process.platform}.`)
@@ -139,6 +142,7 @@ async function fail(reason) {
 async function main() {
 try {
   app = await electron.launch({ executablePath: target, env })
+  await app.evaluate(installAsrObserver)
 } catch (error) {
   return fail(`the packaged app failed to launch under Playwright: ${error instanceof Error ? error.message : String(error)}`)
 }
@@ -151,17 +155,10 @@ try {
   await fail(`no renderer window exposing window.toto appeared within 60s: ${error instanceof Error ? error.message : String(error)}`)
 }
 console.log('[check:packaged-asr] attached to the main window.')
+const resourcesPath = await app.evaluate(() => process.resourcesPath)
+const mainLogPath = join(await app.evaluate(({ app: electronApp }) => electronApp.getPath('logs')), 'main.log')
 
-// ── 3. Force the Parakeet engine and isolate output to the disposable profile. ─────────────────────
-await page.evaluate(
-  (args) => window.toto.setSettings({ asrEngine: 'parakeet', meetingsFolder: args.folder, encryptTranscripts: false }),
-  { folder: meetingsFolder }
-)
-const confirmedEngine = await page.evaluate(async () => (await window.toto.getSettings()).asrEngine)
-if (confirmedEngine !== 'parakeet') return fail(`asrEngine did not stick — getSettings() reported "${confirmedEngine}", expected "parakeet".`)
-console.log('[check:packaged-asr] asrEngine=parakeet confirmed via getSettings(); meetingsFolder isolated.')
-
-// ── 4. Substitute the native picker's RETURN VALUE inside the real main process. ────────────────────
+// ── 3. Substitute only the native picker's RETURN VALUE inside the real main process. ───────────────
 // Runs in Electron's main process (not a Chromium page — this is Playwright's Electron bridge), so this
 // is the actual `dialog` module the real ipcMain.handle(IPC.importAudioPick) handler calls into. Nothing
 // about pickAudioFile()/consumePickedAudio()'s own logic is bypassed — only the OS's native file-picker
@@ -174,53 +171,55 @@ await app.evaluate(async ({ dialog }, pickedFile) => {
   })
 }, wavPath)
 
-console.log('[check:packaged-asr] invoking window.toto.importAudioPick()…')
-const picked = await page.evaluate(() => window.toto.importAudioPick())
-if (picked?.error) return fail(`importAudioPick() returned an error: ${picked.error}`)
-if (!picked?.token) return fail(`importAudioPick() did not return a usable capability token: ${JSON.stringify(picked)}`)
-console.log(`[check:packaged-asr] picked "${picked.name}" (${picked.sizeBytes} bytes).`)
-
-// ── 5. Start the import job and drive it to completion through the real Parakeet path. ─────────────
-const started = await page.evaluate((token) => window.toto.importAudioStart(token), picked.token)
-if (!started?.jobId) return fail(`importAudioStart() did not return a job: ${JSON.stringify(started)}`)
-console.log(`[check:packaged-asr] import job started: ${started.jobId}`)
-
-const jobDeadline = Date.now() + timeoutSeconds * 1000
-let job = started
-while (Date.now() < jobDeadline) {
-  await sleep(1000)
-  job = await page.evaluate(
-    async (jobId) => (await window.toto.importJobsList()).find((j) => j.jobId === jobId),
-    started.jobId
+// ── 4. Separate real IPC jobs, each scoped to fresh request evidence and the existing deadline. ──────
+const jobIds = new Set()
+for (const engine of ENGINES) {
+  await page.evaluate(
+    (args) => window.toto.setSettings({ asrEngine: args.engine, meetingsFolder: args.folder, encryptTranscripts: false }),
+    { engine, folder: meetingsFolder }
   )
-  if (job?.state === 'done' || job?.state === 'failed') break
+  const confirmedEngine = await page.evaluate(async () => (await window.toto.getSettings()).asrEngine)
+  if (confirmedEngine !== engine) return fail(`asrEngine did not stick — getSettings() reported "${confirmedEngine}", expected "${engine}".`)
+  const afterSequence = await app.evaluate(() => globalThis.__metisPackagedAsrGate.sequence)
+  const logOffset = existsSync(mainLogPath) ? readFileSync(mainLogPath, 'utf8').length : 0
+  const picked = await page.evaluate(() => window.toto.importAudioPick())
+  if (picked?.error) return fail(`importAudioPick() returned an error: ${picked.error}`)
+  if (!picked?.token) return fail(`importAudioPick() did not return a usable capability token: ${JSON.stringify(picked)}`)
+  const started = await page.evaluate((token) => window.toto.importAudioStart(token), picked.token)
+  if (!started?.jobId || jobIds.has(started.jobId)) return fail(`${engine}: importAudioStart() did not create a separate job.`)
+  jobIds.add(started.jobId)
+  console.log(`[check:packaged-asr] ${engine} import started: ${started.jobId}`)
+
+  const jobDeadline = Date.now() + timeoutSeconds * 1000
+  let job = started
+  while (Date.now() < jobDeadline) {
+    await sleep(1000)
+    job = await page.evaluate(
+      async (jobId) => (await window.toto.importJobsList()).find((j) => j.jobId === jobId),
+      started.jobId
+    )
+    if (job?.state === 'done' || job?.state === 'failed') break
+  }
+  if (!job) return fail(`${engine}: the import job disappeared from importJobsList().`)
+  if (job.state === 'failed') return fail(`${engine}: the import job failed: ${job.error || '(no error message)'}`)
+  if (job.state !== 'done') return fail(`${engine}: the import job did not finish within ${timeoutSeconds}s (last state: ${job.state}).`)
+  if (!job.file) return fail(`${engine}: the import job reported done but has no saved meeting file.`)
+
+  // A ready message is emitted before lazy model loading, so it cannot satisfy this gate on its own.
+  // Match a real PCM request/result from the exact bundled host/model AND the saved transcript.
+  const meeting = await page.evaluate((file) => window.toto.recallRead(file), job.file)
+  if (!meeting?.ok || !meeting.lines?.length) return fail(`${engine}: the saved meeting has no transcript lines.`)
+  const transcript = meeting.lines.map((line) => line.text).join(' ')
+  const observed = await app.evaluate(() => globalThis.__metisPackagedAsrGate)
+  const verified = assertPackagedAsrEvidence(engine, {
+    ...observed, resourcesPath, afterSequence, transcript,
+    mainLog: readFileSync(mainLogPath, 'utf8').slice(logOffset)
+  })
+  console.log(`[check:packaged-asr] ${engine} decoded transcript: "${transcript}"`)
+  console.log(`[check:packaged-asr] VERIFIED ${JSON.stringify(verified)}`)
 }
-if (!job) return fail('the import job disappeared from importJobsList().')
-if (job.state === 'failed') return fail(`the import job failed: ${job.error || '(no error message)'}`)
-if (job.state !== 'done') return fail(`the import job did not finish within ${timeoutSeconds}s (last state: ${job.state}).`)
-if (!job.file) return fail('the import job reported done but has no saved meeting file.')
-console.log(`[check:packaged-asr] import job done: ${job.file}`)
 
-// ── 6. Read the transcript back and assert on real decoded content. ────────────────────────────────
-const meeting = await page.evaluate((file) => window.toto.recallRead(file), job.file)
-if (!meeting?.ok || !meeting.lines?.length) return fail(`the saved meeting has no transcript lines: ${JSON.stringify(meeting)}`)
-const transcript = meeting.lines.map((l) => l.text).join(' ')
-console.log(`[check:packaged-asr] decoded transcript: "${transcript}"`)
-
-const lower = transcript.toLowerCase()
-const hasTarget = lower.includes('seven million')
-const hasFallback = lower.includes('revenue')
-if (!hasTarget && !hasFallback) {
-  return fail(
-    `the packaged Parakeet decode did not produce recognizable content. Expected "seven million" ` +
-      `(or fallback "revenue") somewhere in the transcript, got: "${transcript}"`
-  )
-}
-
-console.log(
-  `[check:packaged-asr] OK — the packaged app decoded real audio through the real Parakeet engine.` +
-    (hasTarget ? ' Matched "seven million".' : ' Matched fallback token "revenue" (exact phrase not recognized verbatim).')
-)
+console.log('[check:packaged-asr] OK — separate real Whisper and Parakeet imports verified; no engine fallback.')
 
 try {
   await app.evaluate(({ app: electronApp }) => electronApp.exit(0))
@@ -235,4 +234,4 @@ safeRmSync(workDir)
 process.exit(0)
 }
 
-await main()
+await main().catch((error) => fail(error instanceof Error ? error.message : String(error)))
