@@ -1,47 +1,28 @@
 #!/usr/bin/env node
 /**
- * Fetch the pinned official Node (22.22.3) — and on Windows the VC++ redist — into
+ * Fetch the shared manifest's pinned official Node — and on Windows the VC++ redist — into
  * resources/managed-node and resources/vcredist so the next electron-builder pack
  * ships them. The user never installs Node, Git, or VC++ themselves.
  *
  *   node scripts/fetch-managed-node.mjs win|mac|all
  *
- * Checksums are the official nodejs.org SHASUMS256.txt values for v22.22.3.
+ * Checksums come from the manifest's official nodejs.org SHASUMS256.txt source.
  */
 
 import { createHash } from 'node:crypto'
-import { createWriteStream, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { get as httpsGet } from 'node:https'
 import { fileURLToPath } from 'node:url'
-import { execFileSync } from 'node:child_process'
+import { provisionManagedNodeArchive } from './lib/managed-node-provision.mjs'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const REPO_ROOT = join(__dirname, '..')
-const NODE_VERSION = '22.22.3'
+const manifest = JSON.parse(readFileSync(join(REPO_ROOT, 'src/shared/managed-node-manifest.json'), 'utf8'))
+const NODE_VERSION = manifest.version
 const BASE = `https://nodejs.org/dist/v${NODE_VERSION}/`
-
-const ASSETS = {
-  'win-x64': {
-    file: `node-v${NODE_VERSION}-win-x64.zip`,
-    sha256: '6c8d54f635feff4df76c2ca80f45332eb2ff57d25226edce36592e51a177ee33',
-    dest: join(REPO_ROOT, 'resources', 'managed-node', 'win-x64'),
-    nodeRel: 'node.exe'
-  },
-  'darwin-arm64': {
-    file: `node-v${NODE_VERSION}-darwin-arm64.tar.gz`,
-    sha256: '0da7ff74ef8611328c8212f17943368713a2ad953fb7d89a8c8a0eae87c23207',
-    dest: join(REPO_ROOT, 'resources', 'managed-node', 'darwin-arm64'),
-    nodeRel: join('bin', 'node')
-  },
-  'darwin-x64': {
-    file: `node-v${NODE_VERSION}-darwin-x64.tar.gz`,
-    sha256: '45830ba752fa0d892c6dcd640946669801293cac820a33591ded40ac075198ec',
-    dest: join(REPO_ROOT, 'resources', 'managed-node', 'darwin-x64'),
-    nodeRel: join('bin', 'node')
-  }
-}
+const ASSETS = manifest.assets
 
 const VC_REDIST_URL = 'https://aka.ms/vs/17/release/vc_redist.x64.exe'
 const VC_DEST = join(REPO_ROOT, 'resources', 'vcredist', 'vc_redist.x64.exe')
@@ -68,23 +49,9 @@ function sha256File(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex')
 }
 
-function extractZip(archive, dest) {
-  mkdirSync(dest, { recursive: true })
-  if (process.platform === 'win32') {
-    const tar = join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe')
-    execFileSync(tar, ['-xf', archive, '-C', dest], { stdio: 'inherit' })
-    return
-  }
-  execFileSync('unzip', ['-qo', archive, '-d', dest], { stdio: 'inherit' })
-}
-
-function extractTarGz(archive, dest) {
-  mkdirSync(dest, { recursive: true })
-  execFileSync('tar', ['-xzf', archive, '-C', dest, '--strip-components=1'], { stdio: 'inherit' })
-}
-
 async function fetchAsset(id) {
   const spec = ASSETS[id]
+  const dest = join(REPO_ROOT, 'resources', 'managed-node', id.replace('win32-', 'win-'))
   const cache = join(REPO_ROOT, 'resources', 'managed-node', '.cache')
   mkdirSync(cache, { recursive: true })
   const archive = join(cache, spec.file)
@@ -92,23 +59,8 @@ async function fetchAsset(id) {
     process.stdout.write(`Downloading ${spec.file}…\n`)
     await download(BASE + spec.file, archive)
   }
-  const actual = sha256File(archive)
-  if (actual !== spec.sha256) {
-    throw new Error(`${spec.file} sha256 ${actual} !== ${spec.sha256}`)
-  }
-  mkdirSync(spec.dest, { recursive: true })
-  if (spec.file.endsWith('.zip')) {
-    const tmp = join(cache, `${id}-extract`)
-    extractZip(archive, tmp)
-    const inner = join(tmp, spec.file.replace(/\.zip$/, ''))
-    const { cpSync, rmSync } = await import('node:fs')
-    cpSync(existsSync(inner) ? inner : tmp, spec.dest, { recursive: true })
-    rmSync(tmp, { recursive: true, force: true })
-  } else {
-    extractTarGz(archive, spec.dest)
-  }
-  writeFileSync(join(spec.dest, '.node-version'), NODE_VERSION + '\n')
-  process.stdout.write(`Ready ${spec.dest}\n`)
+  provisionManagedNodeArchive(archive, dest, spec, NODE_VERSION)
+  process.stdout.write(`Ready ${dest}\n`)
 }
 
 async function fetchVcRedist() {
@@ -122,6 +74,6 @@ async function fetchVcRedist() {
 
 const target = process.argv[2] || 'all'
 const jobs = []
-if (target === 'win' || target === 'all') jobs.push(fetchAsset('win-x64'), fetchVcRedist())
+if (target === 'win' || target === 'all') jobs.push(fetchAsset('win32-x64'), fetchVcRedist())
 if (target === 'mac' || target === 'all') jobs.push(fetchAsset('darwin-arm64'), fetchAsset('darwin-x64'))
 await Promise.all(jobs)
