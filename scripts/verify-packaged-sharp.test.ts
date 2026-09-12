@@ -60,12 +60,12 @@ function fixture(target: 'win' | 'mac' = 'win', arches = ['arm64']): Fixture {
   const source = (relative: string) => join(root, 'node_modules', relative)
   const staged = (relative: string) => join(stage, 'node_modules', relative)
   const backing = (relative: string) => join(resources, 'app.asar.unpacked', 'node_modules', relative)
-  mkdirSync(join(root, 'scripts'), { recursive: true })
-  for (const name of ['check-packaged-runtime.mjs', 'verify-packaged-sharp.mjs']) {
+  mkdirSync(join(root, 'scripts/lib'), { recursive: true })
+  for (const name of ['check-packaged-runtime.mjs', 'verify-packaged-sharp.mjs', 'lib/local-model-inventory.mjs']) {
     if (existsSync(join(repo, 'scripts', name))) copyFileSync(join(repo, 'scripts', name), join(root, 'scripts', name))
   }
   put(join(root, 'scripts/local-model-assets.mjs'),
-    `export const REPO_ROOT = ${JSON.stringify(root)}; export const LOCAL_MODEL_ASSETS = []; export const LOCAL_MODEL_LICENSE = {};`)
+    `export const REPO_ROOT = ${JSON.stringify(root)}; export const LOCAL_MODEL_PAYLOAD = [];`)
   const lock: Record<string, unknown> = {}
   function pkg(name: string, version: string, manifest: object, files: Record<string, string | Buffer>) {
     lock[`node_modules/${name}`] = { version }

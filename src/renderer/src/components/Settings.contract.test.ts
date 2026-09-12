@@ -26,7 +26,7 @@ function blockAfter(startAnchor: string, endMarker: string): string {
   return source.slice(start, end)
 }
 
-describe('Local AI tells the truth about a model that is downloaded, not bundled (MQA-187/188/191)', () => {
+describe('Local AI distinguishes bundled compact weights from optional downloads (MQA-319)', () => {
   const block = blockAfter('function LocalAiSection(', '\nfunction StepBadge(')
   // Copy assertions run over the code with `//` comments stripped. The comments explain WHY the old
   // wording was wrong and legitimately quote it; that text never reaches a user.
@@ -39,20 +39,19 @@ describe('Local AI tells the truth about a model that is downloaded, not bundled
     expect(block).not.toMatch(/localModelsDownload|localModelsCancel|localModelsDelete/)
   })
 
-  it('MQA-188 — never claims the model ships in the installer', () => {
-    // electron-builder.yml copies only the licence file; scripts/check-packaged-runtime.mjs fails the
-    // build if a .gguf ever returns. "Included with Métis" was false on every install, ready ones too.
-    expect(copy).not.toMatch(/Included with Métis/)
-    expect(copy).not.toMatch(/no separate model download/i)
-    expect(copy).not.toMatch(/bundled model/i)
-    // Optional weights are fetched automatically only after opt-in, or by an explicit Retry.
-    expect(copy).toMatch(/downloads automatically only after you enable Local AI/i)
+  it('describes the included compact model separately from optional downloads', () => {
+    expect(copy).toMatch(/The installer includes Qwen3\.5 0\.8B and its screenshot projector/)
+    expect(copy).toMatch(/model\.source === 'bundled' \? 'Included with Métis\.'/)
+    expect(copy).toMatch(/optional 4B model downloads only after selecting it and enabling Local AI or choosing Retry/i)
     expect(copy).toMatch(/Retry to download without enabling/i)
     expect(copy).not.toMatch(/when the app opens|when Métis opens|once on first run|~730 MB/i)
   })
 
-  it('MQA-191 — never tells the user to reinstall, which cannot restore weights no installer carries', () => {
-    expect(copy).not.toMatch(/[Rr]einstall/)
+  it('shows repair guidance only through the invalid-bundle branch, never as optional download recovery', () => {
+    expect(copy).toMatch(/unavailableReason === 'invalid-bundle'\s*\? invalidBundleText/)
+    const retryBranch = block.slice(block.indexOf('const canRetry'), block.indexOf('const percent'))
+    expect(retryBranch).not.toContain('invalid-bundle')
+    expect(copy).toMatch(/Repair or reinstall Métis from the latest official installer/)
   })
 
   it('MQA-187 — an in-flight download reads as a download, with its progress', () => {
@@ -81,8 +80,8 @@ describe('Local AI tells the truth about a model that is downloaded, not bundled
     expect(block).toMatch(/Unavailable/)
   })
 
-  it('a downloaded model remains visibly inactive while Local AI is off', () => {
-    expect(copy).toMatch(/!settings\.localLlm\.enabled\s*\? 'Downloaded\. Local AI is off\. Enable it to use this model\.'/)
+  it('an available model remains visibly inactive while Local AI is off', () => {
+    expect(copy).toMatch(/!settings\.localLlm\.enabled\s*\? 'Available on this device\. Local AI is off\. Enable it to use this model\.'/)
   })
 
   it('a disk or RAM skip is a named refusal with Retry, not a silent idle', () => {

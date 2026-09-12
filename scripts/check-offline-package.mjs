@@ -1,16 +1,15 @@
 #!/usr/bin/env node
-/** Prevent post-install model/runtime bootstrap code from returning to the packaged application. */
+/** Reject unreviewed runtime download/bootstrap paths; this is not a fresh-install inference test. */
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 const roots = ['src/main', 'src/preload', 'src/renderer/src', 'src/shared']
 const sourceExt = /\.(?:ts|tsx|js|mjs)$/
 const testFile = /\.(?:test|spec)\.(?:ts|tsx|js|mjs)$/
-// The Qwen weights are no longer bundled (they made a universal mac package exceed GitHub's 2 GB
-// release-asset limit), so a runtime download URL is now expected — but ONLY in the two files that were
-// reviewed for it: the pinned manifest and the single downloader that verifies size + sha256 before
-// use. Anywhere else it means a second, unaudited fetch path has appeared, which is exactly what this
-// gate exists to stop. Every other rule below is unchanged.
+// Compact Qwen ships in the installer. The optional larger selection and development/unbundled path
+// still use the reviewed manifest/downloader, with immutable size + SHA-256 checks. A Qwen URL anywhere
+// else is an unreviewed fetch path. Packaged inventory and fresh-profile offline inference have their
+// own gates; this source scan must not claim that the application contains no download code.
 const QWEN_DOWNLOAD_ALLOWED = ['src/main/llm/local-models.ts', 'src/main/llm/local-model-download.ts']
 // Import ASR: bundled resources first; userData fetch is the reviewed fallback when the installer
 // or a dev checkout is missing weights. Only this file may hold the sherpa-onnx archive URL.
@@ -60,4 +59,4 @@ if (failures.length) {
   for (const failure of failures) console.error(`  ${failure}`)
   process.exit(1)
 }
-console.log('[check:offline-package] OK — no packaged model downloader, superseded binding, or dependency installer')
+console.log('[check:offline-package] OK — reviewed optional download paths only; no superseded binding or dependency bootstrap')

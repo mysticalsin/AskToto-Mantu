@@ -27,6 +27,15 @@ describe('bundled local-model IPC contract', () => {
     expect(LocalModelSummarySchema.safeParse({ ...valid, apiKey: 'secret' }).success).toBe(false)
   })
 
+  it('distinguishes installed-model repair from optional download failure without exposing paths', () => {
+    expect(LocalModelSummarySchema.parse({ ...valid, source: 'bundled' }).source).toBe('bundled')
+    expect(LocalModelSummarySchema.parse({ ...valid, source: 'download' }).source).toBe('download')
+    expect(LocalModelSummarySchema.safeParse({ ...valid, source: 'other' }).success).toBe(false)
+    const broken = { ...valid, source: 'bundled', ready: false, unavailableReason: 'invalid-bundle', downloadError: 'Repair or reinstall Métis.' }
+    expect(LocalModelSummarySchema.safeParse(broken).success).toBe(true)
+    expect(LocalModelSummarySchema.safeParse({ ...broken, resourcesPath: '/private/app/resources' }).success).toBe(false)
+  })
+
   it('requires every readiness field with the correct type', () => {
     const { ready: _ready, ...withoutReady } = valid
     expect(LocalModelSummarySchema.safeParse(withoutReady).success).toBe(false)

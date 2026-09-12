@@ -15,24 +15,24 @@ Related: [`dpia.md`](./dpia.md) §4 (full risk-mapped data flow), [`tenant-check
 - **Speech-to-text.** Both ASR engines run on-device: **Parakeet** (NVIDIA NeMo TDT 0.6B v3, int8-quantized,
   via `sherpa-onnx`) is the default; **Whisper-base** (Xenova ONNX, quantized, via WASM) is the automatic
   fallback. Neither sends audio to a network endpoint to transcribe.
-- **Local LLM summarization/extraction (when selected).** The macOS arm64 and Windows x64 packages
+- **Local LLM summarization/extraction (when selected).** The macOS universal and Windows x64 packages
   include the pinned llama.cpp `llama-server` b9957 sidecar — the inference runtime is never downloaded.
-  The Métis Local **weights** (quantized GGUF plus its multimodal projector) are **not** in the
-  installer: carrying them pushed a universal macOS package past GitHub's 2 GB per-asset release limit.
-  Which model is fetched depends on the host — Métis selects the largest registered model whose RAM
-  floor the machine meets — so a machine with 8 GB or more receives **Qwen3.5 4B, 3,584,533,344 bytes
-  (3.58 GB)**; the 0.8B (763,759,712 bytes / 0.76 GB) is the floor for smaller hosts.
-  They are fetched **once, on first run**, into the user's own profile directory, from a **pinned,
-  immutable upstream revision** (a commit-pinned Hugging Face URL, not a mutable tag), and are rejected
-  unless both byte size and SHA-256 match the values compiled into the app. That fetch is the only
-  runtime download the app performs, it goes to Hugging Face rather than to Mantu or any Métis service,
-  and it carries no meeting content, telemetry, or identifiers — it is a plain file GET. Once present,
-  local inference is a no-cloud-egress path for supported text and visual-input tasks, and remains an
-  opt-in provider rather than the default.
+  The **Qwen3.5 0.8B default is bundled**, including its quantized GGUF and multimodal projector:
+  **763,759,712 bytes (0.76 GB)** in total. Enabling this model needs no post-install model download.
+  Local AI remains off by default; existing model selections are preserved, not upgraded by host RAM.
+  Packaged files are read-only and checked against immutable byte-size and SHA-256 pins before use.
+  A missing or corrupt packaged default requires repairing the installer, not a silent network fallback.
 
-  *Air-gapped / no-egress deployments:* because the weights arrive over the network, an installation with
-  no outbound internet has no local LLM until that file is placed in the profile directory by other means.
-  ASR is unaffected — those weights **are** bundled (see above), so transcription works with no network at all.
+  **Optional Qwen3.5 4B** requires explicit selection and a first-use download (or explicit Retry) into
+  the user's profile: **3,584,533,344 bytes (3.58 GB)** for its GGUF and projector. This download uses a
+  pinned, immutable upstream revision on Hugging Face and is rejected unless both byte size and SHA-256
+  match. It carries no meeting content. An enabled existing selection can resume provisioning on a later
+  launch; an unselected or disabled optional model is not fetched automatically. Local inference for
+  supported text and visual-input tasks remains an opt-in, no-cloud-egress path.
+
+  *Air-gapped / no-egress deployments:* the compact default is available offline on supported hardware
+  without downloading weights. Using the optional 4B offline requires deployment tooling to pre-place
+  its verified files in the profile directory. ASR is unaffected — its bundled weights are separate.
 
 ## What lands in the Mantu tenant (OneDrive)
 
@@ -82,9 +82,9 @@ affect whether its processing stays local, so it is not counted as part of the p
 |---|---|---|---|
 | ASR (default) | Parakeet TDT 0.6B v3 (NVIDIA NeMo), int8 | On-device, via `sherpa-onnx` | 25 European languages, auto-detect |
 | ASR (fallback) | Whisper-base (Xenova, ONNX, quantized) | On-device, via WASM in the renderer | Automatic fallback if Parakeet is unavailable |
-| Text summarization/extraction (local option) | Qwen3.5 4B or 0.8B, chosen by host RAM (UD-Q4_K_XL GGUF + mmproj-F16) | On-device, via bundled llama.cpp `llama-server` b9957 | The sidecar ships in the installer (macOS universal: Apple Silicon + Intel; Windows x64). The weights do not: the app fetches them once per user profile (3.58 GB for the 4B, 0.76 GB for the 0.8B) from a pinned immutable revision, size- and SHA-256-verified before use |
+| Text summarization/extraction (local option) | Qwen3.5 0.8B default; optional user-selected 4B (UD-Q4_K_XL GGUF + mmproj-F16) | On-device, via bundled llama.cpp `llama-server` b9957 | The sidecar and compact default ship in the installer (macOS universal: Apple Silicon + Intel; Windows x64). Optional 4B is downloaded into the profile after explicit selection. Both models use immutable size/SHA-256 pins |
 | Text summarization/extraction (cloud option) | User-selected: Claude (Anthropic), GPT (OpenAI), or any other provider in `src/shared/providers.ts` | Provider's cloud infrastructure — except **Cloudflare**, which goes first to a Worker in the operator's own Cloudflare account and only then to a vendor | Per-user Settings choice; see [`dpia.md`](./dpia.md) R2 for the transfer implications and [`../CLOUDFLARE.md`](../CLOUDFLARE.md) for the Cloudflare hop |
-| Vision (local option) | Qwen3.5 4B or 0.8B (host-chosen) + mmproj-F16 | On-device, via bundled llama.cpp `llama-server` b9957 | Uses the same first-run payload as the row above for supported screenshot requests; inference itself never leaves the device |
+| Vision (local option) | Qwen3.5 0.8B default or user-selected 4B + mmproj-F16 | On-device, via bundled llama.cpp `llama-server` b9957 | Uses the same bundled default or optional downloaded payload as the row above for supported screenshot requests; inference itself never leaves the device |
 
 ## Diagram
 

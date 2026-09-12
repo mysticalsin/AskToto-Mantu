@@ -2193,18 +2193,17 @@ export type OutlookEventPayload = z.infer<typeof OutlookEventPayloadSchema>
 // at module scope), so this structurally mirrors its renderer-safe summary. `.strict()` prevents a future
 // path, port, or session key from silently crossing the main-to-renderer boundary.
 
-/** Renderer-safe metadata for the on-device model. The weights are NOT in the installer (see
- *  main/llm/local-models.ts): they are fetched once on first run, so "not ready" has to distinguish
- *  downloading / failed / never-attempted — the renderer told users to reinstall for all three
- *  (MQA-187/191), which no installer can satisfy. */
+/** Renderer-safe readiness for the installed compact model and optional downloaded models. A broken
+ * bundle needs repair/reinstall; a failed optional download needs Retry, not a new installer. */
 export const LocalModelSummarySchema = z
   .object({
     id: z.string(),
     label: z.string(),
     minTotalRamGB: z.number(),
     ready: z.boolean(),
+    source: z.enum(['bundled', 'download']).optional(),
     unavailableReason: z
-      .enum(['insufficient-ram', 'insufficient-disk', 'downloading', 'download-failed', 'not-downloaded'])
+      .enum(['invalid-bundle', 'insufficient-ram', 'insufficient-disk', 'downloading', 'download-failed', 'not-downloaded'])
       .nullable(),
     /** 0..1 while `unavailableReason === 'downloading'`, 0 otherwise. */
     downloadProgress: z.number().min(0).max(1),

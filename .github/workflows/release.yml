@@ -199,8 +199,8 @@ jobs:
             resources/llama
             resources/local-llm
           key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
-      # Release scripts fetch and verify every runtime asset before packaging. The Qwen payload is embedded
-      # in the installer; installed application code contains no model download path.
+      # Release scripts fetch and verify every runtime asset before packaging. The compact Qwen default
+      # is embedded; only explicitly selected larger models retain a reviewed optional download path.
       - run: npm run release:build:mac
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
@@ -355,8 +355,8 @@ jobs:
             resources/llama
             resources/local-llm
           key: runtime-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-models.mjs', 'resources/runtime-assets-manifest.json') }}-${{ hashFiles('scripts/fetch-llama-server.mjs') }}-${{ hashFiles('scripts/fetch-local-model.mjs', 'scripts/local-model-assets.mjs') }}
-      # Release scripts fetch and verify every runtime asset before packaging. The Qwen payload is embedded
-      # in the installer; installed application code contains no model download path.
+      # Release scripts fetch and verify every runtime asset before packaging. The compact Qwen default
+      # is embedded; only explicitly selected larger models retain a reviewed optional download path.
       - run: npm run release:build:win
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}

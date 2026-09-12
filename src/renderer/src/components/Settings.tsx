@@ -1889,7 +1889,7 @@ function AsrModelRow({ engine }: { engine: PublicSettings['asrEngine'] }): JSX.E
   )
 }
 
-function LocalAiSection({
+export function LocalAiSection({
   settings,
   patch
 }: {
@@ -1898,8 +1898,7 @@ function LocalAiSection({
 }): JSX.Element {
   const [models, setModels] = useState<LocalModelSummary[] | null>(null)
   const [retrying, setRetrying] = useState(false)
-  // The weights are fetched on first run, not shipped, so this list is a moving target: a card opened
-  // during onboarding is looking at a download in progress. Poll while one is running OR has not
+  // Optional models may still be downloading when this card opens. Poll while one is running OR has not
   // started yet so a late boot fetch (or a fetch that failed before the first read) cannot freeze the
   // card on "Not downloaded yet" (MQA-187).
   useEffect(() => {
@@ -1931,9 +1930,9 @@ function LocalAiSection({
   }, [])
 
   const model =
+    models?.find((m) => m.id === settings.localLlm.modelId) ??
     models?.find((m) => m.unavailableReason === 'downloading') ??
     models?.find((m) => m.unavailableReason === 'insufficient-disk' || m.unavailableReason === 'download-failed') ??
-    models?.find((m) => m.id === settings.localLlm.modelId) ??
     models?.[0]
   const downloading = model?.unavailableReason === 'downloading'
   const canRetry =
@@ -1953,25 +1952,25 @@ function LocalAiSection({
         void window.toto.localModelsList().then(setModels, () => {})
       })
   }
-  // One wording for the blocked case, used by both the status strip and the card. It names the host that
-  // has to be reachable and when Métis tries again. The old copy said the files were "missing or
-  // incomplete" and told the user to reinstall Métis — an instruction the build gate guarantees cannot
-  // work, because no installer contains the weights (MQA-188/191).
+  // Download failures and damaged installed resources need different recovery actions. Neither one
+  // should direct a user to write into the signed app bundle.
   const downloadFailedText =
     'Could not download the on-device model. Select Retry, or Métis retries on the next launch while Local AI is enabled. Check that huggingface.co is reachable from this network.'
   const notDownloadedText =
     'Not downloaded yet. Enable Local AI to start, or select Retry to download without enabling it.'
+  const invalidBundleText = model?.downloadError ??
+    'The included local model is missing or damaged. Repair or reinstall Métis from the latest official installer.'
 
   return (
     <Section
       title="Local AI"
-      desc="Optional on-device model. Off by default. The selected model downloads automatically only after you enable Local AI, or when you select Retry. Cloudflare and any API keys you add stay primary."
+      desc="Optional on-device AI. Off by default. The installer includes Qwen3.5 0.8B and its screenshot projector. The optional 4B model downloads only after selecting it and enabling Local AI or choosing Retry. Cloudflare and any API keys you add stay primary."
       icon={Cpu}
     >
       <div className="flex flex-col gap-3">
         <ToggleRow
           label="Enable Métis Local"
-          desc="Use the on-device model for suggestions, summaries, and screenshot reads. Enabling Local AI downloads the selected model if needed (not part of the installer). Cloudflare and your other API providers stay available."
+          desc="Use the on-device model for suggestions, summaries, and screenshot reads. The included compact model needs no separate download. An optional model that is not included downloads after you enable it or select Retry. Cloudflare and your other API providers stay available."
           on={settings.localLlm.enabled}
           onChange={(v) =>
             patch({
@@ -1990,7 +1989,9 @@ function LocalAiSection({
           <Cpu size={13} className="shrink-0" />
           {models === null
             ? 'Checking the on-device model...'
-            : model?.unavailableReason === 'insufficient-ram'
+            : model?.unavailableReason === 'invalid-bundle'
+              ? invalidBundleText
+              : model?.unavailableReason === 'insufficient-ram'
               ? `Unavailable: the on-device model needs at least ${model.minTotalRamGB} GB RAM.`
               : model?.unavailableReason === 'insufficient-disk'
                 ? model.downloadError
@@ -2007,7 +2008,7 @@ function LocalAiSection({
                     : !model?.ready
                       ? 'Unavailable: Métis could not read the on-device model status.'
                       : !settings.localLlm.enabled
-                        ? 'Downloaded. Local AI is off. Enable it to use this model.'
+                        ? 'Available on this device. Local AI is off. Enable it to use this model.'
                         : settings.localRuntimeState === 'running'
                         ? `Running: ${model?.label ?? settings.localLlm.modelId}`
                         : settings.localRuntimeState === 'starting'
@@ -2038,7 +2039,7 @@ function LocalAiSection({
               <div className="flex flex-col gap-0.5">
                 <span className="text-[12px] font-medium text-[color:var(--cl-foreground)]">{model.label}</span>
                 <span className="text-[11px] leading-snug text-[color:var(--cl-muted-foreground)]">
-                  Downloaded once after enabling Local AI or selecting Retry. Needs {model.minTotalRamGB} GB RAM.
+                  {model.source === 'bundled' ? 'Included with Métis.' : 'Optional download after enabling Local AI or selecting Retry.'} Needs {model.minTotalRamGB} GB RAM.
                 </span>
               </div>
               <span
@@ -2065,7 +2066,9 @@ function LocalAiSection({
             )}
             {!model.ready && !downloading && (
               <p className="text-[11px] leading-snug text-[color:var(--cl-destructive)]">
-                {model.unavailableReason === 'insufficient-ram'
+                {model.unavailableReason === 'invalid-bundle'
+                  ? invalidBundleText
+                  : model.unavailableReason === 'insufficient-ram'
                   ? `This model needs at least ${model.minTotalRamGB} GB RAM.`
                   : model.unavailableReason === 'insufficient-disk'
                     ? model.downloadError

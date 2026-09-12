@@ -21,7 +21,8 @@ import {
   readdirSync
 } from 'node:fs'
 import { basename, dirname, join, resolve } from 'node:path'
-import { LOCAL_MODEL_ASSETS, LOCAL_MODEL_LICENSE, REPO_ROOT } from './local-model-assets.mjs'
+import { REPO_ROOT } from './local-model-assets.mjs'
+import { verifyLocalModelPayload } from './lib/local-model-inventory.mjs'
 import { verifyPackagedSharp } from './verify-packaged-sharp.mjs'
 
 const argv = process.argv.slice(2)
@@ -436,17 +437,9 @@ for (const [root, files] of runtimeByRoot) {
   requireExactInventory(join(resourcesRoot, root), inventoryFromFiles(files), `${root} runtime`)
 }
 
-// The Qwen weights are NOT packaged — local-model-download.ts fetches them on first run (see the
-// extraResources note in electron-builder.yml). The exact-inventory assertion below is the load-bearing
-// half of that: it fails if a stale checkout or a future config change smuggles a ~728 MB model.gguf
-// back into the installer, which is what would silently push the release asset past GitHub's 2 GB cap.
-// The licence text still ships and is still byte-verified.
-await requireAsset(join(resourcesRoot, 'local-llm', 'LICENSE.QWEN3.5-APACHE-2.0.txt'), LOCAL_MODEL_LICENSE)
-requireExactInventory(
-  join(resourcesRoot, 'local-llm'),
-  inventoryFromFiles(['LICENSE.QWEN3.5-APACHE-2.0.txt']),
-  'Qwen local-model'
-)
+// Compact Qwen is a self-contained offline default. Exact inventory rejects extra models/caches;
+// immutable weights and license must match their pinned sizes and hashes even after native signing.
+await verifyLocalModelPayload(join(resourcesRoot, 'local-llm'))
 
 const LLAMA_ARCHIVE_PINS = {
   // Both mac arches ship in every mac package (the .app is universal and selects at spawn time by

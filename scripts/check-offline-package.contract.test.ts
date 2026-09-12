@@ -16,4 +16,10 @@ describe('check-offline-package Parakeet allowlist', () => {
     expect(src).toMatch(/process\.exit\(1\)/)
     expect(src).toMatch(/\[check:offline-package\] FAIL/)
   })
+
+  it('does not claim optional model downloads are absent when it intentionally permits them', () => {
+    expect(src).toContain("const QWEN_DOWNLOAD_ALLOWED = ['src/main/llm/local-models.ts', 'src/main/llm/local-model-download.ts']")
+    expect(src).toContain('reviewed optional download paths only')
+    expect(src).not.toContain('OK — no packaged model downloader')
+  })
 })
