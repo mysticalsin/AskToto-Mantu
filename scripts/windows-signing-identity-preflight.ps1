@@ -13,9 +13,10 @@ function Get-IdentityFacts {
         [string] $Expected
     )
     $facts = [ordered]@{
-        version = 1; privateKeyCount = 0; subjectMatches = $false
+        version = 2; privateKeyCount = 0; subjectMatches = $false
         notBeforeMs = $null; notAfterMs = $null; codeSigningEku = $false
         digitalSignatureUsage = $true; privateKeyAvailable = $false; chain = 'untrusted'
+        chainStatusFlags = @()
     }
     $identity = $null
     foreach ($certificate in $Certificates) {
@@ -81,6 +82,11 @@ function Get-IdentityFacts {
         $chain.ChainPolicy.ExtraStore.AddRange($Certificates)
         $trusted = $chain.Build($identity)
         $statuses = $chain.ChainStatus
+        if ($statuses.Length -gt 32) { $facts.chain = 'error'; return [PSCustomObject]$facts }
+        # Only numeric flag bits enter the bounded pipe. The supervisor reconstructs public names.
+        $facts.chainStatusFlags = @(foreach ($status in $statuses) {
+            ([long]$status.Status -band [long]4294967295)
+        })
         if ($trusted -and $statuses.Length -eq 0) { $facts.chain = 'trusted' }
         else {
             $revoked = $false; $unavailable = $false
@@ -119,6 +125,6 @@ finally {
 }
 try {
     if ($null -eq $report) { [Console]::Out.WriteLine('{"failure":"' + $failure + '"}'); exit 1 }
-    # Facts stay in the supervisor's bounded pipe. Only its fixed category and SHA reach Actions logs.
+    # Facts stay in the bounded pipe. Only the supervisor's fixed categories, codes and SHA are logged.
     [Console]::Out.WriteLine(($report | ConvertTo-Json -Compress))
 } catch { [Console]::Out.WriteLine('{"failure":"PROBE_INTERNAL_FAILED"}'); exit 1 }

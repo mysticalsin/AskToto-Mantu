@@ -8,9 +8,40 @@ const SHA = /^[0-9a-f]{40}$/
 const MAX_CREDENTIAL_CHARACTERS = 65_536
 const MAX_PROBE_BYTES = 4_096
 const PROBE_TIMEOUT_MS = 60_000
+const MAX_CHAIN_STATUS_FLAGS = 32
 const REPORT_KEYS = ['version', 'privateKeyCount', 'subjectMatches', 'notBeforeMs', 'notAfterMs',
-  'codeSigningEku', 'digitalSignatureUsage', 'privateKeyAvailable', 'chain']
+  'codeSigningEku', 'digitalSignatureUsage', 'privateKeyAvailable', 'chain', 'chainStatusFlags']
 const NATIVE_FAILURES = new Set(['CERTIFICATE_LOAD_FAILED', 'PROBE_INTERNAL_FAILED'])
+const CHAIN_FAILURES = new Set(['CHAIN_UNTRUSTED', 'CERTIFICATE_REVOKED', 'REVOCATION_UNAVAILABLE', 'CHAIN_CHECK_FAILED'])
+// Fixed public .NET X509ChainStatusFlags names. Never forward native strings or enum ToString().
+// https://learn.microsoft.com/en-us/dotnet/api/system.security.cryptography.x509certificates.x509chainstatusflags
+const CHAIN_STATUS_CODES = [
+  [0x1, 'NotTimeValid'], [0x2, 'NotTimeNested'], [0x4, 'Revoked'], [0x8, 'NotSignatureValid'],
+  [0x10, 'NotValidForUsage'], [0x20, 'UntrustedRoot'], [0x40, 'RevocationStatusUnknown'], [0x80, 'Cyclic'],
+  [0x100, 'InvalidExtension'], [0x200, 'InvalidPolicyConstraints'], [0x400, 'InvalidBasicConstraints'],
+  [0x800, 'InvalidNameConstraints'], [0x1000, 'HasNotSupportedNameConstraint'],
+  [0x2000, 'HasNotDefinedNameConstraint'], [0x4000, 'HasNotPermittedNameConstraint'],
+  [0x8000, 'HasExcludedNameConstraint'], [0x10000, 'PartialChain'], [0x20000, 'CtlNotTimeValid'],
+  [0x40000, 'CtlNotSignatureValid'], [0x80000, 'CtlNotValidForUsage'], [0x100000, 'HasWeakSignature'],
+  [0x1000000, 'OfflineRevocation'], [0x2000000, 'NoIssuanceChainPolicy'],
+  [0x4000000, 'ExplicitDistrust'], [0x8000000, 'HasNotSupportedCriticalExtension']
+]
+
+function chainStatusCodes(flags) {
+  // Called only after full report validation. OR combines duplicate and composite flags without
+  // preserving their source order. Unsigned conversion retains unknown future high bits.
+  let remaining = flags.reduce((mask, flag) => (mask | flag) >>> 0, 0)
+  const codes = []
+  for (const [bit, name] of CHAIN_STATUS_CODES) {
+    if ((remaining & bit) !== 0) {
+      codes.push(name)
+      remaining = (remaining & ~bit) >>> 0
+    }
+  }
+  if (remaining !== 0) codes.push('UNKNOWN_CHAIN_STATUS')
+  if (codes.length === 0) codes.push('NO_REPORTED_CHAIN_STATUS')
+  return codes.sort()
+}
 
 function selectedEnvironment(env, names) {
   return Object.fromEntries(names.filter((name) => typeof env[name] === 'string').map((name) => [name, env[name]]))
@@ -43,12 +74,22 @@ export function checkTrustedRevision(env = process.env, revisionCommand = execFi
 export function evaluateIdentityReport(report, now = Date.now()) {
   if (!report || typeof report !== 'object' || Array.isArray(report) ||
       Object.keys(report).length !== REPORT_KEYS.length || REPORT_KEYS.some((key) => !Object.hasOwn(report, key)) ||
-      report.version !== 1 || !Number.isSafeInteger(report.privateKeyCount) || report.privateKeyCount < 0 ||
+      report.version !== 2 || !Number.isSafeInteger(report.privateKeyCount) || report.privateKeyCount < 0 ||
       ['subjectMatches', 'codeSigningEku', 'digitalSignatureUsage', 'privateKeyAvailable']
         .some((key) => typeof report[key] !== 'boolean') ||
-      !['trusted', 'untrusted', 'revoked', 'revocation-unavailable', 'error'].includes(report.chain)) {
+      !['trusted', 'untrusted', 'revoked', 'revocation-unavailable', 'error'].includes(report.chain) ||
+      !Array.isArray(report.chainStatusFlags) || report.chainStatusFlags.length > MAX_CHAIN_STATUS_FLAGS ||
+      report.chainStatusFlags.some((flag) => !Number.isInteger(flag) || flag < 0 || flag > 0xffffffff) ||
+      (report.chain === 'trusted' && report.chainStatusFlags.length !== 0)) {
     return 'PROBE_OUTPUT_INVALID'
   }
+  // Match the native probe's precedence: Revoked overrides unknown/offline revocation; other
+  // failures are untrusted. An exception may retain captured flags, so 'error' is not reclassified.
+  const revoked = report.chainStatusFlags.some((flag) => (flag & 0x4) !== 0)
+  const unavailable = report.chainStatusFlags.some((flag) => (flag & 0x1000040) !== 0)
+  if ((report.chain === 'revoked' && !revoked) ||
+      (report.chain === 'revocation-unavailable' && (!unavailable || revoked)) ||
+      (report.chain === 'untrusted' && (revoked || unavailable))) return 'PROBE_OUTPUT_INVALID'
   if (report.privateKeyCount === 0) return 'PRIVATE_KEY_MISSING'
   if (report.privateKeyCount !== 1) return 'PRIVATE_KEY_AMBIGUOUS'
   if (!report.subjectMatches) return 'PUBLISHER_MISMATCH'
@@ -109,7 +150,12 @@ export function runSigningIdentityPreflight({ env = process.env, platform = proc
   }
   if (!bounded || child.stderr || !text) return fail('PROBE_OUTPUT_INVALID')
   try {
-    return fail(evaluateIdentityReport(JSON.parse(text), now ?? Date.now()))
+    const report = JSON.parse(text)
+    const code = evaluateIdentityReport(report, now ?? Date.now())
+    const outcome = fail(code)
+    // Diagnostics never decide acceptance or disclose unrelated data on earlier identity failures.
+    if (CHAIN_FAILURES.has(code)) outcome.chainStatusCodes = chainStatusCodes(report.chainStatusFlags)
+    return outcome
   } catch {
     return fail('PROBE_OUTPUT_INVALID')
   }
