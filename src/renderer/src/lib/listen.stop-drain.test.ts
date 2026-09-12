@@ -8,6 +8,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { WHISPER_WORKLET_SRC } from './whisper-worklet-src'
 
+// keys.ts freezes navigator.platform at import time, before beforeEach can stub the browser. Keep
+// each scenario's platform explicit so a Mac permission test cannot silently take Windows's branch.
+const platform = vi.hoisted(() => ({ isWindows: false }))
+vi.mock('./keys', () => ({ get isWindows() { return platform.isWindows } }))
+
 type Slot = { current: unknown }
 const host = vi.hoisted(() => {
   let slots: Slot[] = []
@@ -246,6 +251,7 @@ async function start(engine: Engine = 'parakeet', startedAt?: number): Promise<L
 }
 
 beforeEach(() => {
+  platform.isWindows = false
   host.reset()
   worklets = []
   workers = []
@@ -936,6 +942,31 @@ describe('useListen Stop flush ownership', () => {
     expect(streams).toHaveLength(streamsBeforePermission)
     expect(worklets).toHaveLength(workletsBeforePermission)
     expect(streams.filter((entry) => entry.kind === 'system')).toHaveLength(0)
+  })
+
+  it('retries Windows loopback in place without polling macOS Screen Recording permissions', async () => {
+    platform.isWindows = true
+    vi.stubGlobal('navigator', { ...navigator, platform: 'Win32' })
+    getDisplayMediaImpl = async () => {
+      throw Object.assign(new Error('synthetic loopback unavailable'), { name: 'NotAllowedError' })
+    }
+    let api = render()
+    await api.start('both', 'fast', 'parakeet', 'English')
+    expect(streams.filter((entry) => entry.kind === 'system')).toHaveLength(0)
+    expect(worklets).toHaveLength(1) // mic remains live while loopback is unavailable
+
+    api = render()
+    host.rerunEffect(1)
+    getDisplayMediaImpl = async () => makeStream('system')
+    await vi.advanceTimersByTimeAsync(3_000)
+    await settle()
+
+    expect(window.toto.getPermissions).not.toHaveBeenCalled()
+    expect(streams.filter((entry) => entry.kind === 'system')).toHaveLength(1)
+    expect(worklets).toHaveLength(2)
+    expect(window.toto.setListeningState).toHaveBeenCalledTimes(1) // recovered, not a new meeting
+    api.stop()
+    await vi.advanceTimersByTimeAsync(1)
   })
 
   it('ignores a stale ACK and accepts only the active Stop request identity', async () => {

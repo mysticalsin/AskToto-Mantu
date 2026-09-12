@@ -11,7 +11,7 @@ import { createAsrModelProtocolHandler } from './asr-model-protocol'
  * traces to exactly one fix-spec finding (metis-qa/fixspecs/C_Main.md).
  */
 
-const source = readFileSync(join(__dirname, 'index.ts'), 'utf8')
+const source = readFileSync(join(__dirname, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
 
 describe('finding 1: "settings" hotkey is registered, not just bindable', () => {
   it('shortcutActions includes a settings entry wired to sendHotkey', () => {
@@ -24,11 +24,20 @@ describe('finding 1: "settings" hotkey is registered, not just bindable', () => 
 })
 
 describe('findings 2 & 4: visionAvailable consults per-agent Dust vision, not the static flag', () => {
-  it("uses dustSelectedAgentVision for 'dust' inside the visionAvailable .some() predicate", () => {
+  it("resolves Dust's selected agent through the helper used by visionAvailable", () => {
+    const helperStart = source.indexOf('const providerVisionReady =')
+    const helperEnd = source.indexOf('const providerReady =', helperStart)
+    expect(helperStart).toBeGreaterThan(-1)
+    expect(helperEnd).toBeGreaterThan(helperStart)
+    const helper = source.slice(helperStart, helperEnd)
+    expect(helper).toMatch(/p === 'dust'\s*\? dustSelectedAgentVision\(s\.providerModels\.dust\)/)
+
     const start = source.indexOf('visionAvailable:')
+    const end = source.indexOf('|| localVisionReady', start)
     expect(start).toBeGreaterThan(-1)
-    const body = source.slice(start, start + 400)
-    expect(body).toMatch(/p === 'dust' \? dustSelectedAgentVision\(s\.providerModels\['dust'\]\) : PROVIDERS\[p\]\.vision/)
+    expect(end).toBeGreaterThan(start)
+    const body = source.slice(start, end)
+    expect(body).toMatch(/providerVisionReady\(p\) &&/)
     // Must still be gated by the org allowlist and the existing key/CLI-connected check, same as before.
     expect(body).toMatch(/!allowed \|\| allowed\.includes\(p\)/)
     expect(body).toMatch(/hasApiKey\(p\)/)

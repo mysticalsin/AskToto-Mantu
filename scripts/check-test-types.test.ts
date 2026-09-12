@@ -1,15 +1,18 @@
 import { execFileSync } from 'node:child_process'
 import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { isAbsolute, join, relative, sep } from 'node:path'
+import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 
 const REPO = join(__dirname, '..')
 const GATE = join(REPO, 'scripts', 'check-test-types.mjs')
 const TRACKED_TEST = fileURLToPath(import.meta.url)
+const baselineMatch = readFileSync(GATE, 'utf8').match(/^const BASELINE = (\d+)\s*$/m)
+if (!baselineMatch) throw new Error('The real test-type gate must declare its ratchet baseline.')
+const BASELINE = Number(baselineMatch[1])
 
-function runGate(gate = GATE, cwd = REPO): { code: number; out: string } {
+function runGate(gate: string, cwd: string): { code: number; out: string } {
   try {
     return { code: 0, out: execFileSync(process.execPath, [gate], { encoding: 'utf8', stdio: 'pipe', cwd }) }
   } catch (e) {
@@ -18,18 +21,8 @@ function runGate(gate = GATE, cwd = REPO): { code: number; out: string } {
   }
 }
 
-function configPath(from: string, to: string): string {
-  const path = relative(from, to)
-  const normalized = path.split(sep).join('/')
-  // path.relative returns an absolute drive path when the fixture and checkout are on different
-  // Windows drives. Prefixing that with './' would corrupt an otherwise valid TypeScript path.
-  if (isAbsolute(path)) return normalized
-  return normalized.startsWith('.') ? normalized : `./${normalized}`
-}
-
-function createFixture(): { root: string; gate: string; invalidProbe: string } {
-  // macOS exposes /var as a symlink to /private/var. Resolve it before calculating relative config
-  // paths so TypeScript never turns a valid /Users path into the nonexistent /private/Users path.
+function createFixture(errorCount = BASELINE): { root: string; gate: string; invalidProbe: string } {
+  // Resolve macOS's /var alias so compiler diagnostics consistently refer to the same fixture.
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'metis-test-types-ratchet-')))
   const scripts = join(root, 'scripts')
   const fixtureNodeModules = join(root, 'node_modules')
@@ -43,21 +36,28 @@ function createFixture(): { root: string; gate: string; invalidProbe: string } {
     process.platform === 'win32' ? 'junction' : 'dir',
   )
 
-  const realConfig = JSON.parse(readFileSync(join(REPO, 'tsconfig.tests.json'), 'utf8')) as {
-    include: string[]
-  }
-  const include = realConfig.include.map((pattern) =>
-    configPath(root, join(REPO, ...pattern.split('/'))),
-  )
-  include.push('./probe-*.ts')
+  // Exercise the unchanged gate and real compiler, but not the whole checkout from inside Vitest.
+  // The dedicated `npm run typecheck` gate still checks every production and test file once. Repeating
+  // it three times here competes with parallel tests and exceeds their timeout on both CI platforms.
   writeFileSync(join(root, 'tsconfig.tests.json'), JSON.stringify({
-    extends: configPath(root, join(REPO, 'tsconfig.tests.json')),
-    include,
+    compilerOptions: {
+      noEmit: true,
+      strict: true,
+      skipLibCheck: true,
+      target: 'ES2022',
+      lib: ['ES2022'],
+      types: [],
+    },
+    include: ['./*.test.ts'],
     exclude: [],
   }, null, 2))
-  writeFileSync(join(root, 'probe-valid.ts'), 'export {}\nconst ratchetProbe: number = 1\nvoid ratchetProbe\n')
+  writeFileSync(join(root, 'known-errors.test.ts'), [
+    'export {}',
+    ...Array.from({ length: errorCount }, (_, index) => `const knownError${index}: number = "synthetic baseline"`),
+  ].join('\n'))
+  writeFileSync(join(root, 'probe-valid.test.ts'), 'export {}\nconst ratchetProbe: number = 1\nvoid ratchetProbe\n')
 
-  return { root, gate, invalidProbe: join(root, 'probe-invalid.ts') }
+  return { root, gate, invalidProbe: join(root, 'probe-invalid.test.ts') }
 }
 
 /**
@@ -75,13 +75,18 @@ function createFixture(): { root: string; gate: string; invalidProbe: string } {
  */
 describe('MQA-248 — the test-file typecheck ratchet', () => {
   it('passes at the current baseline', () => {
-    const r = runGate()
-    expect(r.out).toMatch(/at the baseline/)
-    expect(r.code).toBe(0)
+    const fixture = createFixture()
+    try {
+      const r = runGate(fixture.gate, fixture.root)
+      expect(r.out).toContain(`OK — ${BASELINE} known type errors in test files, at the baseline`)
+      expect(r.code).toBe(0)
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
   })
 
   it('FAILS when a new type error appears — the whole point', () => {
-    // Exercise an exact copy of the real gate against the real project errors plus an isolated probe.
+    // Exercise an exact copy of the real gate against known compiler errors plus an isolated probe.
     // The tracked test file stays immutable, so parallel typechecks can never observe the extra error.
     const trackedBefore = readFileSync(TRACKED_TEST, 'utf8')
     const fixture = createFixture()
@@ -108,12 +113,16 @@ describe('MQA-248 — the test-file typecheck ratchet', () => {
   })
 
   it('also fails when the baseline is STALE — a fixed error must lower it', () => {
-    // The asymmetric half people forget. If the count drops and the baseline does not, the gap silently
-    // becomes headroom for new errors. So dropping below is a failure too, with the new number in the
-    // message ready to paste.
-    const src = readFileSync(GATE, 'utf8')
-    expect(src).toMatch(/count < BASELINE/)
-    expect(src).toMatch(/Set BASELINE = \$\{count\}/)
+    // A lower diagnostic count must fail too, or a fixed error silently becomes regression headroom.
+    const fixture = createFixture(BASELINE - 1)
+    try {
+      const r = runGate(fixture.gate, fixture.root)
+      expect(r.code, r.out).toBe(1)
+      expect(r.out).toContain(`${BASELINE - 1} type errors, BELOW the ${BASELINE} baseline`)
+      expect(r.out).toContain(`Set BASELINE = ${BASELINE - 1}`)
+    } finally {
+      rmSync(fixture.root, { recursive: true, force: true })
+    }
   })
 
   it('runs as part of `npm run typecheck`, not as a thing to remember', () => {

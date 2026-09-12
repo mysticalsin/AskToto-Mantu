@@ -75,8 +75,16 @@ describe('every request seam resolves the endpoint through providerBaseUrl', () 
     expect(indexSource).toMatch(/baseURL: local \? undefined : providerBaseUrl\(provider, settings\)/)
   })
 
-  it('the brain ingest path resolves the same way', () => {
-    expect(ingestSource).toMatch(/baseURL: providerBaseUrl\(provider, s\)/)
+  it('brain ingest sends BYOK to its endpoint and managed requests only through Operator', () => {
+    const start = ingestSource.indexOf('function runCompletionOnce(')
+    const end = ingestSource.indexOf('workspaceId:', start)
+    expect(start).toBeGreaterThan(-1)
+    expect(end).toBeGreaterThan(start)
+    const request = ingestSource.slice(start, end)
+    expect(request).toMatch(/baseURL: picked\.operatorTransport \? undefined : providerBaseUrl\(provider, s\)/)
+    expect(request).toMatch(/apiKey: picked\.operatorTransport \? '' : key/)
+    expect(request).toMatch(/viaOperator: !!picked\.operatorTransport/)
+    expect(request).toMatch(/operatorTransport: picked\.operatorTransport/)
     expect(ingestSource).not.toMatch(/provider === 'custom' \? s\.customBaseUrl/)
   })
 
@@ -92,8 +100,7 @@ describe('an unconfigured endpoint is a routing decision, never a silent redirec
     expect(indexSource).toMatch(/test\(s\.cloudflareBaseUrl\)/)
   })
 
-  // The gate expression is byte-identical at both seams below, so a whole-file toMatch is satisfied by
-  // EITHER copy and would stay green if one were deleted. Both assertions slice to their own seam first.
+  // Inspect each request seam separately: another correct copy elsewhere must not hide a removed gate.
   const sliceFrom = (marker: string, end: string): string => {
     const start = indexSource.indexOf(marker)
     expect(start, `anchor "${marker}" no longer exists in index.ts`).toBeGreaterThan(-1)
@@ -101,27 +108,38 @@ describe('an unconfigured endpoint is a routing decision, never a silent redirec
     expect(stop, `end anchor "${end}" no longer follows "${marker}"`).toBeGreaterThan(start)
     return indexSource.slice(start, stop)
   }
-  const ENDPOINT_GATE = /\(!requiresUserBaseUrl\(p\) \|\| !!providerBaseUrl\(p, s\)\)/
-
   it('pickFailover refuses a bring-your-own-endpoint provider that has none', () => {
     // Cloudflare ships a default model, so the key + model checks alone would let the failover walk hand
     // it to streamOpenAI with no baseURL — where the SDK default base URL is OpenAI's own backend.
-    expect(sliceFrom('const eligible = ', "req.mode !== 'vision'")).toMatch(ENDPOINT_GATE)
+    const eligible = sliceFrom('const eligible = ', "req.mode !== 'vision'")
+    // A funded provider may bypass its BYOK endpoint only while there is NO user key. A user key must
+    // never be sent to an SDK default endpoint merely because that provider is also funded.
+    expect(eligible).toMatch(/\(\(!getApiKey\(p\) && operatorFundedProviders\(\)\.includes\(p\)\) \|\| !requiresUserBaseUrl\(p\) \|\| !!providerBaseUrl\(p, s\)\)/)
+    expect(eligible).toMatch(/!allowed \|\| allowed\.includes\(p\)/)
   })
 
   it('MQA-214: visionAvailable refuses to advertise vision on a provider with no endpoint, so no screen is captured for a request that cannot be sent', () => {
     // Without this gate a stored METIS_PROXY_KEY and no Worker URL — the ordinary state between the
     // operator sending the key and sending the URL — lights up the screen-ask affordances and prewarms
     // REAL captures (App.tsx canPrewarm → Bar.tsx onFocus → prewarmCapture) for an unsendable request.
-    expect(sliceFrom('visionAvailable:', '|| localVisionReady')).toMatch(ENDPOINT_GATE)
+    expect(sliceFrom('visionAvailable:', '|| localVisionReady')).toMatch(
+      /\(managedVisionReady\(p\) \|\| !requiresUserBaseUrl\(p\) \|\| !!providerBaseUrl\(p, s\)\)/
+    )
+    const managed = sliceFrom('const managedVisionReady =', 'const providerVisionReady =')
+    expect(managed).toMatch(/!hasApiKey\(p\) && funded\.includes\(p\) && !!operatorVisionModel\(p,/)
+    expect(sliceFrom('function publicSettings()', 'const managedVisionReady =')).toMatch(
+      /const funded = operatorFundedProviders\(\)/
+    )
   })
 
   it('MQA-215: the import-recap candidate walk applies the same rule, so it neither burns a slot nor reports the wrong cause', () => {
     // Cloudflare sorts last among cloud candidates here, so without the gate streamOpenAI's guard message
     // becomes the lastError an import that failed for unrelated reasons shows the user.
     const recapSource = read('import-recap.ts')
+    expect(recapSource).toMatch(/const transport = gate\.operatorAskTransport\?\.\(settings\)/)
+    expect(recapSource).toMatch(/const managed = !key && !!transport && funded\.includes\(provider\)/)
     expect(recapSource).toMatch(
-      /if \(requiresUserBaseUrl\(provider\) && !gate\.providerBaseUrl\(provider, settings\)\) return false/
+      /if \(!managed && requiresUserBaseUrl\(provider\) && !gate\.providerBaseUrl\(provider, settings\)\) return false/
     )
   })
 
@@ -131,7 +149,9 @@ describe('an unconfigured endpoint is a routing decision, never a silent redirec
   })
 
   it('the brain ingest candidate walk applies the same rule, so no transcript is misrouted', () => {
-    expect(ingestSource).toMatch(/if \(requiresUserBaseUrl\(p\) && !providerBaseUrl\(p, s\)\) continue/)
+    expect(ingestSource).toMatch(/const transport = operatorAskTransport\(s\)/)
+    expect(ingestSource).toMatch(/const operatorTransport = !key && def\.kind !== 'cli' && funded\.includes\(p\) \? transport : null/)
+    expect(ingestSource).toMatch(/if \(!operatorTransport && requiresUserBaseUrl\(p\) && !providerBaseUrl\(p, s\)\) continue/)
   })
 
   it('streamOpenAI still refuses as the last line of defence', () => {
