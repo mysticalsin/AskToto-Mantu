@@ -286,8 +286,8 @@ The combined effect: after `⌘⇧↵`, the overlay shows a skeleton in <50ms, f
                     ▼                                           ▼
        [whisper.worker.ts  — Web Worker]          [parakeet.ts  — main process]
        @huggingface/transformers pipeline          native addon · bundled Parakeet model
-       WebGPU: whisper-large-v3-turbo             IPC window.toto.parakeetFeed()
-       WASM:   whisper-base (q8 fallback)         5 s timeout guard
+       Packaged: Whisper base                    IPC window.toto.parakeetFeed()
+       Large live model: unbundled dev only       5 s timeout guard
        asr-model:// offline protocol              3 failures → fallBackToWhisper()
        prewarm at startup (+4 s idle)
                     │                                           │
@@ -1197,7 +1197,7 @@ Policy keys relevant to privacy/security:
 
 ### I.9 Local processing
 
-The packaged ASR path is fully on-device: Parakeet, Whisper, ONNX Runtime, and FFmpeg are installer-owned assets. **Parakeet is the default live engine** (`asrEngine: 'parakeet'`). A sparse settings file that never wrote `asrEngine` inherits that default; an explicit `whisper` or `apple` choice is never clobbered. First-run Act 3 downloads the Parakeet + Whisper-floor files (progress on the setup row) and will not continue while they are missing. Pack scripts hard-fail if those files are missing after fetch. If a running app is somehow incomplete, it fetches the same reviewed files into `userData` with visible progress rather than asking the user to reinstall.
+The packaged ASR path is fully on-device: Parakeet, Whisper, ONNX Runtime, and FFmpeg are installer-owned assets. Fresh setup chooses Parakeet at 8 GiB RAM or less and Whisper above 8 GiB; invalid RAM data and legacy schema fallback use Parakeet. Existing explicit or managed engine choices are preserved. Packaged live Whisper uses the compact Whisper base model; the optional `whisper-large-v3-turbo` upgrade is import-only. The stored `asrQuality: 'best'` preference does not mean a customer package runs the large live model. First-run setup verifies the bundled Parakeet and Whisper-floor assets and reports progress if recovery is needed. Pack scripts hard-fail if required assets are missing after build-time provisioning; a damaged installation can recover the same reviewed ASR files into `userData` with visible progress. See `docs/asr/QUALITY.md` for the current model and verification contract.
 
 The optional **Métis Local** master switch in Settings → AI is off by default. When enabled, independent toggles let the user process supported live suggestions, summaries, and screen-vision requests through the authenticated loopback-only `llama-server` sidecar. The **Qwen3.5 0.8B default is bundled** with its projector (763,759,712 bytes) and native runtime in the same Electron DMG/EXE, so supported hardware can enable it offline without Ollama, Python, a separate service or a model download. Runtime resolves these read-only packaged files and verifies immutable byte-size/SHA-256 pins; missing or corrupt bundled files require installer repair, never a silent download into the app bundle (MQA-319).
 

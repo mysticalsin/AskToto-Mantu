@@ -57,11 +57,19 @@ describe('ASR quality ship — languages, switch, echo, meaning', () => {
     expect(read('src/main/index.ts')).toMatch(/if \(label\?\.echo\) return \{ text: '', echo: true \}/)
   })
 
-  it('QUALITY.md exists and locks Best as the default before Settings copy', () => {
+  it('documents actual packaged models and RAM-based fresh setup, not the development-only quality switch (MQA-311)', () => {
     const doc = read('docs/asr/QUALITY.md')
-    expect(doc).toMatch(/Default is \*\*Best\*\*/)
-    expect(doc).toMatch(/Fast is a Settings power option/)
+    expect(doc).toMatch(/8 GiB or less[^\n]*Parakeet/i)
+    expect(doc).toMatch(/more than 8 GiB[^\n]*Whisper/i)
+    expect(doc).toMatch(/existing[^\n]*preferences[^\n]*preserved/i)
+    expect(doc).toMatch(/packaged[^\n]*live[^\n]*Whisper base/i)
+    expect(doc).toMatch(/larger[^\n]*imported recordings only/i)
+    expect(doc).not.toMatch(/Default is \*\*Best\*\*|Fast is a Settings power option/)
+    expect(doc).toMatch(/development-only/i)
     expect(doc).toMatch(/SWITCH_AFTER/)
     expect(doc).toMatch(/60\+/)
+    const architecture = read('docs/asktoto-architecture.md')
+    expect(architecture).toMatch(/packaged live Whisper uses[^\n]*Whisper base/i)
+    expect(architecture).toMatch(/large-v3-turbo[^\n]*import-only/i)
   })
 })
