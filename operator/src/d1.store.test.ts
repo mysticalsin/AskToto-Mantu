@@ -35,7 +35,8 @@ function sqliteD1(db: DatabaseSync): D1DatabaseLike {
           return { results: stmt.all(...(bound as never[])) as T[] }
         },
         async run() {
-          return stmt.run(...(bound as never[]))
+          const result = stmt.run(...(bound as never[]))
+          return { success: true, meta: { changes: Number(result.changes) } }
         }
       }
       return wrapper
@@ -421,6 +422,47 @@ describe('issued license update/revoke and group fields', () => {
     }
     expect(await store.listIssuedLicenses()).toHaveLength(3)
     expect(await store.listIssuedLicenses(2)).toHaveLength(2)
+  })
+})
+
+describe.each(['memory', 'D1'] as const)('%s atomic licence binding', (backend) => {
+  let subject: ReturnType<typeof memoryStore>
+  const now = 1_725_000_000_000
+  const jti = '1122334455667788'
+  beforeEach(async () => {
+    subject = backend === 'memory' ? memoryStore() : store
+    await subject.putIssuedLicense({
+      jti, last4: 'test', key_hash: 'verified-token-hash', days: 7,
+      iat: now / 1000, exp: now / 1000 + 604_800, revoked: 0,
+      created_at: now, created_by: 'test-operator'
+    })
+  })
+
+  it('allows exactly one device to claim an unbound licence and permits that device to return', async () => {
+    const results = await Promise.all([
+      subject.bindIssuedLicense(jti, 'verified-token-hash', 'device-a', now),
+      subject.bindIssuedLicense(jti, 'verified-token-hash', 'device-b', now)
+    ])
+    expect(results.filter(Boolean)).toHaveLength(1)
+    const winner = results[0] ? 'device-a' : 'device-b'
+    expect(await subject.getIssuedLicense(jti)).toMatchObject({ activated_device: winner, activated_at: now })
+    expect(await subject.bindIssuedLicense(jti, 'verified-token-hash', winner, now + 1_000)).toBe(true)
+    expect((await subject.getIssuedLicense(jti))?.activated_at).toBe(now)
+  })
+
+  it.each(['revoked', 'expired', 'wrong-hash', 'seat-revoked'] as const)('refuses %s at the mutation itself', async (reason) => {
+    if (reason === 'revoked') await subject.revokeIssuedLicense(jti, now)
+    if (reason === 'expired') await subject.updateIssuedLicense(jti, { exp: now / 1000 })
+    if (reason === 'seat-revoked') await subject.upsertSeat(seat({ device_id: 'device-a', approval: 'revoked' }))
+    expect(await subject.bindIssuedLicense(
+      jti, reason === 'wrong-hash' ? 'wrong-hash' : 'verified-token-hash', 'device-a', now
+    )).toBe(false)
+    expect((await subject.getIssuedLicense(jti))?.activated_device).toBeFalsy()
+  })
+
+  it('consumes a concurrent nonce exactly once', async () => {
+    expect((await Promise.all([subject.takeNonce('one-request', now), subject.takeNonce('one-request', now)])).sort())
+      .toEqual([false, true])
   })
 })
 

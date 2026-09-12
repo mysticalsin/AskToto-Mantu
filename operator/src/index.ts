@@ -18,7 +18,7 @@ import {
 } from './access'
 import { asCrmStatus, CRM_CANONICAL_TITLE, normalizeCrmRow } from './crm'
 import { geoFromRequest, type CfGeo } from './geo'
-import { verifyIngestHmac } from './hmac'
+import { verifyDeviceRequest, withVerifiedLicense, type VerifiedDeviceLicense } from './device-auth'
 import { json } from './http'
 import { d1Store, type D1DatabaseLike } from './d1'
 import { fundedProviders } from './keys'
@@ -35,7 +35,7 @@ import { binaryAssetResponse, isBinaryAssetPath, isPublicAssetPath, publicAssetR
 import { handleAsk } from './ask'
 import { parseAskPathTag } from './ask-meter'
 import { projectAskMode, projectAskModel, projectAskTelemetry } from './privacy'
-import { handleUse } from './use'
+import { handleUse, readUseBody } from './use'
 import { OPERATOR_HMAC_HEADERS } from '../../src/shared/operator-hmac'
 import type { AdminCtx, Env, HandleOpts } from './routes/admin-ctx'
 
@@ -266,15 +266,17 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
     url.pathname === '/v1/ask' ||
     url.pathname === '/v1/integrations'
   ) {
-    const bodyText = request.method === 'GET' ? '' : await request.text()
-    const hmac = await verifyIngestHmac(request, bodyText, env.OPERATOR_INGEST_SECRET, now, (n) => store.takeNonce(n, now))
+    const bodyText = request.method === 'GET' ? '' :
+      url.pathname === '/v1/ask' || url.pathname === '/v1/use' ? await readUseBody(request) : await request.text()
+    if (bodyText === null) return json({ ok: false, error: 'Request is too large. Capture a smaller region or start a new Ask.' }, 413)
+    const hmac = await verifyDeviceRequest(request, bodyText, env.OPERATOR_INGEST_SECRET, store, now)
     if (!hmac.ok) return json({ ok: false, error: hmac.error, ...(hmac.code ? { code: hmac.code } : {}) }, hmac.status)
     const bucket = rateBucketFor(url.pathname)
     if (bucket && (await store.hitRate(`${bucket.key}:${hmac.deviceId}`, now, RATE_WINDOW_MS, bucket.max))) {
       return json({ ok: false, error: 'rate limited', retryAfterMs: RATE_WINDOW_MS }, 429)
     }
     const geo = opts.geo ?? geoFromRequest(request)
-    if (url.pathname === '/v1/heartbeat') return heartbeat(store, hmac.deviceId, bodyText, now, geo)
+    if (url.pathname === '/v1/heartbeat') return heartbeat(store, hmac.deviceId, bodyText, now, geo, hmac.license)
     if (url.pathname === '/v1/skills/manifest') return manifest(store)
     if (url.pathname === '/v1/integrations') {
       if (request.method !== 'GET') return json({ ok: false, error: 'method not allowed' }, 405)
@@ -288,7 +290,7 @@ async function routeRequest(request: Request, env: Env, ctx: AccessCtx, opts: Ha
       if (request.method !== 'POST') return json({ ok: false, error: 'method not allowed' }, 405)
       return handleAsk(store, env, hmac.deviceId, bodyText, now, opts.providerFetch ?? opts.cfFetch ?? fetch, request.signal)
     }
-    return ingest(store, hmac.deviceId, bodyText, now, geo)
+    return ingest(store, hmac.deviceId, bodyText, now, geo, hmac.license)
   }
 
   return json({ ok: false, error: 'not found' }, 404)
@@ -336,8 +338,10 @@ async function adminRoute(
   return json({ ok: false, error: 'not found' }, 404)
 }
 
-async function heartbeat(store: OperatorStore, deviceId: string, bodyText: string, now: number, geo: CfGeo): Promise<Response> {
-  const rawBody = bodyText ? (JSON.parse(bodyText) as Record<string, unknown>) : {}
+async function heartbeat(
+  store: OperatorStore, deviceId: string, bodyText: string, now: number, geo: CfGeo, license?: VerifiedDeviceLicense
+): Promise<Response> {
+  const rawBody = withVerifiedLicense(bodyText ? JSON.parse(bodyText) as Record<string, unknown> : {}, license)
   const body = projectHeartbeatBody(rawBody)
   const seat = seatFromBody(deviceId, body, now, geo)
   await store.upsertSeat(seat)
@@ -368,8 +372,8 @@ async function heartbeat(store: OperatorStore, deviceId: string, bodyText: strin
   const bindJti = parseLicenseId(stored.license_jti)
   if (bindJti) {
     const issued = await store.getIssuedLicense(bindJti)
-    if (issuedLicenseActive(issued, now) && !issued?.activated_device) {
-      await store.updateIssuedLicense(bindJti, { activated_device: deviceId, activated_at: now })
+    if (issued && issuedLicenseActive(issued, now) && !issued.activated_device) {
+      await store.bindIssuedLicense(bindJti, issued.key_hash, deviceId, now)
     }
   }
   const retries = await store.listCrmRetries(deviceId)
@@ -388,8 +392,10 @@ async function heartbeat(store: OperatorStore, deviceId: string, bodyText: strin
   })
 }
 
-async function ingest(store: OperatorStore, deviceId: string, bodyText: string, now: number, geo: CfGeo): Promise<Response> {
-  const rawBody = JSON.parse(bodyText || '{}') as Record<string, unknown>
+async function ingest(
+  store: OperatorStore, deviceId: string, bodyText: string, now: number, geo: CfGeo, license?: VerifiedDeviceLicense
+): Promise<Response> {
+  const rawBody = withVerifiedLicense(JSON.parse(bodyText || '{}') as Record<string, unknown>, license)
   if (rawBody.event === 'crm' && rawBody.confidential === true) {
     return json({ ok: true, id: deviceSuppliedId(rawBody.id), ingested: false })
   }

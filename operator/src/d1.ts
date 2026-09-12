@@ -199,9 +199,11 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
 
   return {
     async takeNonce(nonce, ts) {
-      const existing = await db.prepare('SELECT nonce FROM nonces WHERE nonce = ?').bind(nonce).first<{ nonce: string }>()
-      if (existing) return true
-      await db.prepare('INSERT INTO nonces (nonce, ts) VALUES (?, ?)').bind(nonce, ts).run()
+      const result = await db
+        .prepare('INSERT INTO nonces (nonce, ts) VALUES (?, ?) ON CONFLICT(nonce) DO NOTHING')
+        .bind(nonce, ts)
+        .run() as { meta?: { changes?: number } }
+      if (result?.meta?.changes !== 1) return true
       await db.prepare('DELETE FROM nonces WHERE ts < ?').bind(ts - NONCE_TTL_MS).run()
       return false
     },
@@ -699,6 +701,20 @@ export function d1Store(db: D1DatabaseLike): OperatorStore {
         .bind(...args, jti)
         .run()
       return true
+    },
+    async bindIssuedLicense(jti, keyHash, deviceId, now) {
+      const result = await db
+        .prepare(
+          `UPDATE issued_licenses SET activated_device = ?, activated_at = COALESCE(activated_at, ?)
+           WHERE jti = ? AND key_hash = ? AND revoked = 0 AND exp > ?
+             AND (activated_device IS NULL OR activated_device = '' OR activated_device = ?)
+             AND NOT EXISTS (
+               SELECT 1 FROM seats WHERE device_id = ? AND LOWER(TRIM(COALESCE(approval, ''))) = 'revoked'
+             )`
+        )
+        .bind(deviceId, now, jti, keyHash, now / 1000, deviceId, deviceId)
+        .run() as { meta?: { changes?: number } }
+      return result?.meta?.changes === 1
     },
     async revokeIssuedLicense(jti, now) {
       const existing = await db

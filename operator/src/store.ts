@@ -326,6 +326,8 @@ export interface OperatorStore {
   getIssuedLicense(jti: string): Promise<IssuedLicenseRow | null>
   listIssuedLicenses(limit?: number): Promise<IssuedLicenseRow[]>
   updateIssuedLicense(jti: string, patch: Partial<IssuedLicenseRow>): Promise<boolean>
+  /** Atomically bind an active verified licence to one device, preserving admin revocation. */
+  bindIssuedLicense(jti: string, keyHash: string, deviceId: string, now: number): Promise<boolean>
   revokeIssuedLicense(jti: string, now: number): Promise<boolean>
 
   // Sessions (operator/src/sessions.ts owns the pure 2-minute-gap math this wraps with I/O).
@@ -660,6 +662,14 @@ export function memoryStore(): OperatorStore {
       const row = issued.get(jti)
       if (!row) return false
       issued.set(jti, { ...row, ...patch })
+      return true
+    },
+    async bindIssuedLicense(jti, keyHash, deviceId, now) {
+      const row = issued.get(jti)
+      if (!row || row.key_hash !== keyHash || row.revoked || row.exp * 1000 <= now) return false
+      if (row.activated_device && row.activated_device !== deviceId) return false
+      if ((seats.get(deviceId)?.approval || '').trim().toLowerCase() === 'revoked') return false
+      issued.set(jti, { ...row, activated_device: deviceId, activated_at: row.activated_at ?? now })
       return true
     },
     async revokeIssuedLicense(jti, now) {

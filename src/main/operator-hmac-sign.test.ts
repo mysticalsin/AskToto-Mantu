@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { ingestCanonical, OPERATOR_HMAC_SKEW_MS } from '@shared/operator-hmac'
-import { hashOperatorId, sha256HexUtf8, signOperatorIngest } from './operator-hmac-sign'
+import { hashOperatorId, operatorHmacHeaders, sha256HexUtf8, signOperatorIngest } from './operator-hmac-sign'
 
 describe('operator HMAC signer', () => {
+  it('authenticates a licensed seat without exposing the shared server secret', () => {
+    const token = 'METIS-OP-1.abcdef0123456789.100.200.abcdefghijklmnopqrstuv'
+    const headers = operatorHmacHeaders(token, 'device-test-0001', '{}', 150_000)
+    expect(headers['x-metis-license']).toBe(token)
+    expect(headers['x-metis-sig']).toBe(signOperatorIngest(token, '150000', headers['x-metis-nonce'], 'device-test-0001', '{}'))
+    expect(operatorHmacHeaders('legacy-server-secret', 'device-test-0001', '{}')['x-metis-license']).toBeUndefined()
+  })
   it('matches the Worker canonical string', () => {
     const body = '{"id":"a"}'
     const hash = sha256HexUtf8(body)

@@ -147,15 +147,18 @@ export function issuedLicenseActive(
 /** Approve click or an active Operator-issued license. Revoke always wins. */
 export async function seatAuthorizedForKeys(
   store: Pick<OperatorStore, 'getIssuedLicense'>,
-  seat: Pick<FleetSeat, 'approval' | 'license' | 'license_jti'> | null | undefined,
+  seat: (Pick<FleetSeat, 'approval' | 'license' | 'license_jti'> & { device_id?: string }) | null | undefined,
   now = Date.now()
 ): Promise<boolean> {
   if (!seat) return false
   if ((seat.approval || '').trim().toLowerCase() === 'revoked') return false
-  if (isApprovedSeat(seat)) return true
   const jti = parseLicenseId(seat.license_jti)
+  const issued = jti ? await store.getIssuedLicense(jti) : null
+  if (issued?.revoked) return false
+  if (issued?.activated_device && issued.activated_device !== seat.device_id) return false
+  if (isApprovedSeat(seat)) return true
   if (!jti) return false
-  return issuedLicenseActive(await store.getIssuedLicense(jti), now)
+  return issuedLicenseActive(issued, now)
 }
 
 export function approvalOf(row: Pick<FleetSeat, 'approval' | 'license'>): SeatApproval {
