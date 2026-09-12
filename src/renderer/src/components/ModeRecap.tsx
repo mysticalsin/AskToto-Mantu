@@ -19,7 +19,7 @@ export function modeRecapSections(markdown: string, mode: string): ModeRecapSect
   if (preamble) sections.push({ heading: 'Notes', body: preamble })
   headings.forEach((match, index) => {
     const raw = match[1].trim()
-    const colon = raw.indexOf(':')
+    const colon = raw.search(/[:：]/)
     const heading = (colon > 0 ? raw.slice(0, colon) : raw).trim()
     const inline = colon > 0 ? raw.slice(colon + 1).trim() : ''
     const body = markdown.slice(match.index + match[0].length, headings[index + 1]?.index ?? markdown.length).trim()

@@ -39,6 +39,20 @@ describe('MQA-324 lossless recap display', () => {
     expect(html).toContain('Weekend coverage.')
   })
 
+  it('renders translated full-width inline colons without changing body delimiters (MQA-329)', () => {
+    const text = '## 概要： 合成の会議メモ。\n## 次の手順： 設定：保存: 続行。\n追記：確認する。\n## Open questions: Who covers the weekend?'
+    expect(modeRecapSections(text, 'meeting')).toEqual([
+      { heading: '概要', body: '合成の会議メモ。' },
+      { heading: '次の手順', body: '設定：保存: 続行。\n追記：確認する。' },
+      { heading: 'Open questions', body: 'Who covers the weekend?' }
+    ])
+    const html = render(text)
+    expect(html).toContain('合成の会議メモ。')
+    expect(html).toContain('設定：保存: 続行。')
+    expect(html).toContain('追記：確認する。')
+    expect(html).toContain('Who covers the weekend?')
+  })
+
   it('keeps standard mode ordering and appends unrecognized nonempty sections in source order', () => {
     const html = render('## Vendor note\nEXTRA_ONE\n## Open questions\nOPEN\n## Décisions\nEXTRA_TWO\n## Action items\nACTION\n## Outcome\nOUTCOME\n## Decisions\nDECISION')
     const bodies = ['OUTCOME', 'DECISION', 'ACTION', 'OPEN', 'EXTRA_ONE', 'EXTRA_TWO']
