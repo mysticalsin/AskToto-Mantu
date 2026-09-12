@@ -23,7 +23,14 @@ describe('onboarding user-facing copy — no em dash (U+2014)', () => {
       expect(body, path).not.toMatch(/\u2014/)
     }
     const helpers = readFileSync(join(__dirname, '../components/Onboarding.helpers.test.ts'), 'utf8')
-    expect(helpers).toMatch(/Ready: Métis's built-in Cloudflare/)
+    expect(helpers).toMatch(/Ready: Cloudflare AI connected/)
     expect(helpers).not.toMatch(/Ready —/)
+  })
+
+  it('MQA-304 — directs a licence-only first run to the working Identity activation', () => {
+    const source = stripComments(readFileSync(files[0], 'utf8'))
+    expect(source).toContain('Settings → Identity')
+    expect(source).toContain('automatic summaries and answers')
+    expect(source).not.toContain("Métis's built-in Cloudflare, no key needed")
   })
 })

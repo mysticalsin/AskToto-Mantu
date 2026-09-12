@@ -189,10 +189,10 @@ describe('MQA-279 — Act 3 (Config) AI-readiness row must never claim ready bef
     expect(aiRowStatus(null)).toEqual({ state: 'checking', detail: '' })
   })
 
-  it('reads ready off the embedded Cloudflare default with the exact competence-framed copy', () => {
+  it('MQA-304 — names a verified Cloudflare connection without claiming a shared key is embedded', () => {
     expect(aiRowStatus({ providerReady: true, provider: 'cloudflare' })).toEqual({
       state: 'ready',
-      detail: "Ready: Métis's built-in Cloudflare, no key needed"
+      detail: 'Ready: Cloudflare AI connected'
     })
   })
 

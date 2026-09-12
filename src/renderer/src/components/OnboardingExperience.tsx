@@ -310,9 +310,9 @@ export function micRowStatus(status: PermissionStatus | undefined): { state: Set
 /** Act 3's AI row (MQA-279): "Ready" only ever means what `providerReady` means everywhere else in the
  *  app — main/index.ts's `publicSettings()` computes it as the SAME gate askStart's attempt()/failover
  *  chain enforce before a real ask is allowed through, so this can never show competence the product
- *  cannot back up. The embedded-Cloudflare-default build (embedded-cloudflare-key.ts, MQA-273) makes
- *  `providerReady` true with zero user action, which is the case this row is written to narrate; a
- *  non-Cloudflare provider being ready (a returning/reset profile) still reads as ready, just named.
+ *  cannot back up. Cloudflare may be supplied by a verified managed licence or a user's own endpoint;
+ *  readiness alone does not establish which credential path was used. No shared key is embedded in
+ *  generic releases. A non-Cloudflare provider also reads as ready only when main confirms it.
  *  Never gates onboarding's Continue — adding a personal key stays optional, exactly as it is once
  *  onboarding finishes (Settings → AI). */
 export function aiRowStatus(
@@ -321,7 +321,7 @@ export function aiRowStatus(
   if (!settings) return { state: 'checking', detail: '' }
   if (settings.providerReady) {
     return settings.provider === 'cloudflare'
-      ? { state: 'ready', detail: "Ready: Métis's built-in Cloudflare, no key needed" }
+      ? { state: 'ready', detail: 'Ready: Cloudflare AI connected' }
       : { state: 'ready', detail: `Ready: ${PROVIDERS[settings.provider].label} configured` }
   }
   return { state: 'action', detail: 'not configured yet' }
@@ -1115,8 +1115,8 @@ export function OnboardingExperience({
   const { scanDone, allReady } = summarizeSetupRows(rows)
   // 'blocked' counts here for the same reason 'action' does — it was one of those states before it got
   // its own name, and Continue must not go primary while the mic is still denied. The AI row is
-  // deliberately excluded — a personal provider key is available, never required (the embedded
-  // Cloudflare default already answers), so it never blocks Continue the way mic/screen do.
+  // deliberately excluded: transcription works without AI. A managed licence or personal provider
+  // can be connected after setup, so AI never blocks Continue the way transcription assets do.
   const needsPerms = rows.some(
     (r) => (r.key === 'mic' || r.key === 'screen') && (r.state === 'action' || r.state === 'blocked' || r.state === 'restart')
   )
@@ -1319,7 +1319,7 @@ export function OnboardingExperience({
                   )}
                   {r.key === 'ai' && r.state === 'action' && (
                     <p className="mt-1 text-[11px] leading-snug text-[color:var(--color-ink-3)]">
-                      Transcription works without an AI connection. Connect AI in Settings for automatic summaries and answers.
+                      Transcription works without an AI connection. Activate your Métis licence in Settings → Identity for automatic summaries and answers, or connect your own provider in Settings → AI.
                     </p>
                   )}
                   {r.key === 'ai' && r.state === 'ready' && (
