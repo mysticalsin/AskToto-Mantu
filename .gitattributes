@@ -14,6 +14,11 @@ resources/local-llm/*.txt -text
 # Mode skills are hashed LF-only. Pin checkout so Windows CI does not rewrite them.
 skills/**/*.md text eol=lf
 
+# Frozen recap diagnostics verify exact Git-source bytes on both desktop platforms.
+# Do not weaken the hash verifier to accommodate checkout-time LF -> CRLF conversion.
+src/shared/__fixtures__/golden/*.md text eol=lf
+scripts/evals/fixtures/local-recap/*.json text eol=lf
+
 # Operator Worker sources are fingerprinted/bundled LF-only (build-client.mjs →
 # client.generated.ts). Pin checkout so Windows CI (core.autocrlf) does not rewrite them.
 # Keep binaries binary — operator/ also ships .png/.woff2 map assets.
