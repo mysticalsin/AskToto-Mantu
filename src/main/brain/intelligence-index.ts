@@ -5,6 +5,7 @@
  */
 import { z } from 'zod'
 import type { Settings } from '@shared/ipc'
+import { intelligenceNoProviderMessage, LOCAL_ONLY_INTELLIGENCE_UNAVAILABLE } from '@shared/intelligence-pass'
 import { getSettings } from '../store'
 import { readJson, writeJson } from './store'
 import { requestBackfillRun, type BackfillStartResult, type BackfillCompletion } from './ingest'
@@ -74,9 +75,11 @@ export interface IntelligenceIndexRun {
 export const INCOMPLETE_INDEX_COPY = 'Intelligence could not finish updating. Retry Update Intelligence; your saved meetings are unchanged.'
 export const SUMMARY_INDEX_RETRY_COPY = 'Some meeting summaries could not finish. Retry Update Intelligence or retry the summary from its meeting.'
 
-export function backfillCompletionError(outcome: BackfillCompletion): string | undefined {
+export function backfillCompletionError(outcome: BackfillCompletion, s?: Settings): string | undefined {
   if (outcome.ok) return undefined
-  return outcome.error === 'no-provider' ? NO_PROVIDER_INDEX_COPY : INCOMPLETE_INDEX_COPY
+  return outcome.error === 'no-provider'
+    ? s ? intelligenceNoProviderMessage(s, NO_PROVIDER_INDEX_COPY) : NO_PROVIDER_INDEX_COPY
+    : INCOMPLETE_INDEX_COPY
 }
 
 interface ZonedParts {
@@ -213,7 +216,7 @@ export function resetIntelligenceIndexLockForTests(): void {
 
 export function intelligenceIndexStatus(s: Settings = getSettings()): { running: boolean; lastError?: string } {
   const savedError = readIntelligenceIndexState(s).lastError
-  const safeSavedError = !savedError || [NO_PROVIDER_INDEX_COPY, INCOMPLETE_INDEX_COPY, SUMMARY_INDEX_RETRY_COPY].includes(savedError)
+  const safeSavedError = !savedError || [NO_PROVIDER_INDEX_COPY, LOCAL_ONLY_INTELLIGENCE_UNAVAILABLE, INCOMPLETE_INDEX_COPY, SUMMARY_INDEX_RETRY_COPY].includes(savedError)
     ? savedError
     : INCOMPLETE_INDEX_COPY
   const error = volatileError?.folder === s.meetingsFolder
@@ -259,12 +262,12 @@ export async function runIntelligenceIndex(
       const backfill = requestBackfillRun({ force: true })
       return {
         result: { ...backfill.result, ran: !backfill.result.deferred },
-        completion: backfill.completion.then((outcome) => ({ ok: outcome.ok, error: backfillCompletionError(outcome) }))
+        completion: backfill.completion.then((outcome) => ({ ok: outcome.ok, error: backfillCompletionError(outcome, s) }))
       }
     })()
     const result = {
       ...run.result,
-      ...(run.result.deferred === 'no-provider' ? { error: NO_PROVIDER_INDEX_COPY } : {}),
+      ...(run.result.deferred === 'no-provider' ? { error: intelligenceNoProviderMessage(s, NO_PROVIDER_INDEX_COPY) } : {}),
       lastIndexedAt: lastIndexedAt(s)
     }
     // Attach the terminal handler before returning to IPC. The lock stays owned until every stage

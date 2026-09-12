@@ -28,7 +28,10 @@ import { fnv1a } from '@shared/hash'
 import { alignQuote, verifyNumericFact, extractNumerals, numeralDerivable } from '@shared/grounding'
 import { getSettings, getApiKey, getAllowedProviders, setApiKey, setSettings } from '../store'
 import { createStream } from '../llm'
-import { localBaseReady, resolveRoutingMode } from '../llm/local-routing'
+import { operatorAskTransport, operatorFundedProviders } from '../operator-ingest'
+import { resolvePortalCloudflareModel } from '@shared/ask-routing'
+import { localBaseReady } from '../llm/local-routing'
+import { intelligenceNoProviderMessage, intelligenceRequiresLocal } from '@shared/intelligence-pass'
 import { verifyIntegrity } from '../llm/local-models'
 import { getState as localRuntimeState, activeStreams as localActiveStreams } from '../llm/local-runtime'
 import { readSavedFile, resolveMeetingsFolder } from '../transcripts'
@@ -69,7 +72,7 @@ import {
 import { applyCorrections, readAliasMap, resolveEntitySlug, replayCorrections, readCorrectionsJournalSafe } from './corrections'
 import { publishForExtraction, publishIndexes, publishAll } from './publish'
 import { refuseIfDemoTagged } from '@shared/demo-guard'
-import { pickIntelligencePassCandidates } from './intelligence-pass-route'
+import { pickIntelligencePassCandidates, type IntelligencePassCandidate } from './intelligence-pass-route'
 
 /** Default ingest waterfall, or the Update Intelligence button's local-first then API-once route. */
 export type IngestRoute = 'default' | 'intelligence-pass'
@@ -103,18 +106,17 @@ export function hasUsableProvider(s: Settings): boolean {
 function pickProviderCandidates(
   s: Settings,
   route: IngestRoute = 'default'
-): { provider: ProviderId; model: string; key: string }[] {
+): IntelligencePassCandidate[] {
   // Update Intelligence button only: Local first when ready, configured API once as failover.
   // Must not reuse the default cloud-first waterfall, or a ready Local would be skipped.
   if (route === 'intelligence-pass') return pickIntelligencePassCandidates(s)
 
   // Exclusive on-device when the user opted Local summaries, set Routing mode → Local, or asked
   // consolidation to prefer the on-device model — never waterfalls into cloud (would silently upload).
-  const preferOnDevice =
-    s.localLlm.useFor.summary ||
-    resolveRoutingMode(s) === 'local' ||
-    s.brainConsolidation.preferLocal
-  if (preferOnDevice && localBaseReady(s, getAllowedProviders())) {
+  const preferOnDevice = intelligenceRequiresLocal(s)
+  if (preferOnDevice) {
+    // Runtime availability cannot loosen a user's explicit on-device choice.
+    if (!localBaseReady(s, getAllowedProviders())) return []
     // MQA-018 (exclusive-local parity): honor the SAME session-long 'unavailable' lockout the fallback
     // branch below already excludes, and that localOnlyRebuildBlocked's comment assumes is "already
     // excluded upstream in pickProviderCandidates". This branch must NEVER waterfall to cloud (an explicit
@@ -134,7 +136,9 @@ function pickProviderCandidates(
   const allowed = getAllowedProviders()
   const order = [s.provider, ...(Object.keys(PROVIDERS) as ProviderId[])]
   const seen = new Set<ProviderId>()
-  const candidates: { provider: ProviderId; model: string; key: string }[] = []
+  const candidates: IntelligencePassCandidate[] = []
+  const funded = operatorFundedProviders()
+  const transport = operatorAskTransport(s)
   for (const p of order) {
     // Local is handled above because it has no API key and follows a different opt-in policy.
     if (p === 'local' || seen.has(p)) continue
@@ -143,22 +147,24 @@ function pickProviderCandidates(
     const def = PROVIDERS[p]
     if (!def) continue
     const key = getApiKey(p)
-    const connected = def.kind === 'cli' ? !!s.cliConnected[p] : key.length > 0
+    const operatorTransport = !key && def.kind !== 'cli' && funded.includes(p) ? transport : null
+    const connected = def.kind === 'cli' ? !!s.cliConnected[p] : key.length > 0 || !!operatorTransport
     if (!connected) continue
     if (p === 'dust' && !s.dustWorkspaceId) continue
     // Same rule as the ask path's pickFailover: a provider whose endpoint the USER supplies (Custom, or
     // Cloudflare's operator-deployed Worker) is not a candidate until it has one. Cloudflare ships a
     // default model, so a key alone would otherwise put it in this waterfall with no URL — and the OpenAI
     // SDK's own default base URL is api.openai.com, which is exactly where a transcript must not go.
-    if (requiresUserBaseUrl(p) && !providerBaseUrl(p, s)) continue
-    const model = resolveModelTier(p, s.providerModels, s.providerModelsThinking, 'deep', s.providerModelsDeep)
+    if (!operatorTransport && requiresUserBaseUrl(p) && !providerBaseUrl(p, s)) continue
+    let model = resolveModelTier(p, s.providerModels, s.providerModelsThinking, 'deep', s.providerModelsDeep)
+    if (operatorTransport && p === 'cloudflare') model = resolvePortalCloudflareModel(model, 'deep')
     // MQA-029: a CLI provider may have no configured model at all (codex-cli ships none and takes its
     // own default) — requiring one here dropped a connected Codex subscription out of the waterfall
     // entirely. The ask path exempts kind === 'cli' at both of its seams (index.ts's attempt() ineligible
     // chain and pickFailover); this pipeline has to exempt it the same way or the two disagree about
     // which providers exist.
     if (def.kind !== 'cli' && !model) continue
-    candidates.push({ provider: p, model, key })
+    candidates.push({ provider: p, model, key, ...(operatorTransport ? { operatorTransport } : {}) })
   }
   // Last-resort local fallback: appended AFTER every cloud candidate, never ahead of one, so a
   // meeting still gets indexed when every configured cloud provider has failed or none is configured
@@ -182,7 +188,7 @@ function pickProviderCandidates(
 
 /** Pick the first usable text provider — kept for callers that only need a yes/no or a single candidate
  *  (hasUsableProvider); the extraction path itself now walks pickProviderCandidates. */
-function pickProvider(s: Settings): { provider: ProviderId; model: string; key: string } | null {
+function pickProvider(s: Settings): IntelligencePassCandidate | null {
   return pickProviderCandidates(s)[0] ?? null
 }
 
@@ -228,7 +234,7 @@ async function refreshDustAuthForIngest(): Promise<{ apiKey: string; workspaceId
 /** Run one accumulate-the-stream completion against a SPECIFIC candidate. Rejects on stream error. */
 function runCompletionOnce(
   s: Settings,
-  picked: { provider: ProviderId; model: string; key: string },
+  picked: IntelligencePassCandidate,
   system: string,
   userText: string,
   id: string
@@ -244,8 +250,10 @@ function runCompletionOnce(
     createStream({
       providerId: provider,
       kind: def.kind,
-      apiKey: key,
-      baseURL: providerBaseUrl(provider, s),
+      apiKey: picked.operatorTransport ? '' : key,
+      viaOperator: !!picked.operatorTransport,
+      operatorTransport: picked.operatorTransport,
+      baseURL: picked.operatorTransport ? undefined : providerBaseUrl(provider, s),
       workspaceId: s.dustWorkspaceId,
       refreshDustAuth: provider === 'dust' ? refreshDustAuthForIngest : undefined,
       model,
@@ -2254,7 +2262,7 @@ export async function startRebuild(s: Settings, options: StartRebuildOptions = {
 async function performStartRebuild(s: Settings, options: StartRebuildOptions): Promise<{ queued: number; error?: string }> {
   // Do not wipe usable derived data just to discover that no configured provider can recreate it.
   if (!hasUsableProvider(s)) {
-    return { queued: 0, error: 'Connect an AI provider in Settings → AI, or enable Métis Local summaries before rebuilding Mantu Intelligence.' }
+    return { queued: 0, error: intelligenceNoProviderMessage(s, 'Connect an AI provider in Settings → AI, or enable Métis Local summaries before rebuilding Mantu Intelligence.') }
   }
   const localOnlyError = await localOnlyRebuildBlocked(s)
   if (localOnlyError) return { queued: 0, error: localOnlyError }

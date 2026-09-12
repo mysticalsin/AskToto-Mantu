@@ -15,7 +15,8 @@ import {
   type ProviderId
 } from '@shared/providers'
 import type { TranscriptLine } from '@shared/ipc'
-import { localFallbackEligibleFor, localPrimaryEligibleFor } from './llm/local-routing'
+import { localFallbackEligibleFor, localPrimaryEligibleFor, resolveRoutingMode } from './llm/local-routing'
+import { resolvePortalCloudflareModel } from '@shared/ask-routing'
 import { createStream } from './llm'
 import type { ImportJob } from './import-jobs'
 
@@ -85,11 +86,17 @@ export interface ImportRecapProviderGate {
   getApiKey: (provider: ProviderId) => string
   providerBaseUrl: (provider: ProviderId, settings: Settings) => string
   getAllowedProviders: () => string[] | null
+  operatorFundedProviders?: () => string[]
+  operatorAskTransport?: (settings: Settings) => { url: string; secret: string } | null
+}
+
+function importRecapRequiresLocal(settings: Settings): boolean {
+  return settings.localLlm.useFor.summary || resolveRoutingMode(settings) === 'local'
 }
 
 /**
- * Prefer a connected API at the summary/base tier. Local only when the user asked to redact
- * (keep the transcript on-device) or when no API/CLI candidate exists.
+ * Prefer a connected API at the summary/base tier unless the user explicitly selected local
+ * summaries. Redaction scrubs the outbound transcript; it does not disable configured cloud AI.
  */
 export function pickImportRecapCandidates(
   settings: Settings,
@@ -100,14 +107,19 @@ export function pickImportRecapCandidates(
   const localFallbackReady =
     !localSummaryReady && localFallbackEligibleFor({ mode: 'summary' }, settings, IMPORT_RECAP_TIER, allowed)
   const localReady = localSummaryReady || localFallbackReady
+  if (importRecapRequiresLocal(settings)) return localReady ? (['local'] as ProviderId[]) : []
+  const funded = gate.operatorFundedProviders?.() ?? []
+  const transport = gate.operatorAskTransport?.(settings)
 
   const apiOk = (provider: ProviderId): boolean => {
     const def = PROVIDERS[provider]
     if (!def || (allowed && !allowed.includes(provider))) return false
     if (provider === 'local') return false
     if (def.kind === 'cli') return !!settings.cliConnected[provider]
-    if (!gate.getApiKey(provider)) return false
-    if (requiresUserBaseUrl(provider) && !gate.providerBaseUrl(provider, settings)) return false
+    const key = gate.getApiKey(provider)
+    const managed = !key && !!transport && funded.includes(provider)
+    if (!key && !managed) return false
+    if (!managed && requiresUserBaseUrl(provider) && !gate.providerBaseUrl(provider, settings)) return false
     if (provider === 'dust' && !settings.dustWorkspaceId) return false
     return !!resolveModelTier(
       provider,
@@ -117,8 +129,6 @@ export function pickImportRecapCandidates(
       settings.providerModelsDeep
     )
   }
-
-  if (settings.redactSensitive) return localReady ? (['local'] as ProviderId[]) : []
 
   const ordered: ProviderId[] = [
     ...(settings.dustWorkspaceId && gate.getApiKey('dust') && settings.providerModels.dust
@@ -149,11 +159,8 @@ export function importRecapModel(
   return applyInteractiveGuardrail(provider, IMPORT_RECAP_TIER, raw)
 }
 
-export interface RunImportedRecapDeps {
+export interface RunImportedRecapDeps extends ImportRecapProviderGate {
   getSettings: () => Settings
-  getApiKey: (provider: ProviderId) => string
-  getAllowedProviders: () => string[] | null
-  providerBaseUrl: (provider: ProviderId, settings: Settings) => string
   redactSecrets: (text: string) => string
   createStream: typeof createStream
   refreshDustAuth?: (settings: Settings) => (() => Promise<{ apiKey: string; workspaceId?: string; baseURL?: string } | null>) | undefined
@@ -166,7 +173,12 @@ export async function runImportedRecap(
 ): Promise<string | undefined> {
   const settings = deps.getSettings()
   const candidates = pickImportRecapCandidates(settings, deps)
-  if (!candidates.length) return undefined
+  if (!candidates.length) {
+    if (importRecapRequiresLocal(settings)) {
+      throw new Error('Local-only summaries are enabled, but Métis Local is not ready. Open Settings → AI → Local AI. Nothing was sent to the cloud.')
+    }
+    return undefined
+  }
 
   const rawText = importedTranscriptText(job.lines)
   const transcript = settings.redactSensitive ? deps.redactSecrets(rawText) : rawText
@@ -180,6 +192,15 @@ export async function runImportedRecap(
   for (const provider of attempts) {
     const def = PROVIDERS[provider]
     const local = provider === 'local'
+    const key = local ? '' : deps.getApiKey(provider)
+    const operatorTransport = !local && def.kind !== 'cli' && !key && deps.operatorFundedProviders?.().includes(provider)
+      ? deps.operatorAskTransport?.(settings)
+      : null
+    if (!local && def.kind !== 'cli' && !key && !operatorTransport) {
+      lastError = new Error('Métis managed AI is unavailable. Check your license connection in Settings and retry the summary.')
+      continue
+    }
+    const viaOperator = !!operatorTransport
     const req: AskStart = {
       id: `import-recap-${job.jobId}`,
       mode: local ? 'summary' : 'recap',
@@ -187,15 +208,20 @@ export async function runImportedRecap(
       transcript,
       history: []
     }
-    const model = importRecapModel(provider, settings)
+    const rawModel = importRecapModel(provider, settings)
+    const model = viaOperator && provider === 'cloudflare'
+      ? resolvePortalCloudflareModel(rawModel, IMPORT_RECAP_TIER)
+      : rawModel
     try {
       const recap = await new Promise<string>((resolveRecap, rejectRecap) => {
         let text = ''
         deps.createStream({
           providerId: provider,
           kind: def.kind,
-          apiKey: local ? '' : deps.getApiKey(provider),
-          baseURL: local ? undefined : deps.providerBaseUrl(provider, settings),
+          apiKey: viaOperator ? '' : key,
+          viaOperator,
+          operatorTransport: operatorTransport ?? undefined,
+          baseURL: local || viaOperator ? undefined : deps.providerBaseUrl(provider, settings),
           workspaceId: settings.dustWorkspaceId,
           refreshDustAuth: provider === 'dust' ? deps.refreshDustAuth?.(settings) : undefined,
           model,
