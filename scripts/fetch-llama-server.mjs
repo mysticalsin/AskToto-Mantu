@@ -106,10 +106,11 @@ const ASSETS = {
   }
 }
 
-function assetKeysFor(target) {
+export function assetKeysFor(target) {
   if (target === 'mac') return ['mac-arm64', 'mac-x64']
   if (target === 'win') return ['win-cpu', 'win-vulkan']
-  return ['mac', 'win-cpu', 'win-vulkan']
+  if (target === 'all') return Object.keys(ASSETS)
+  throw new Error(`Unsupported llama runtime target: ${target}`)
 }
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────────────────────────

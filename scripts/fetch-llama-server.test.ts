@@ -6,7 +6,22 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-import { download, extractArchive } from './fetch-llama-server.mjs'
+import { assetKeysFor, download, extractArchive } from './fetch-llama-server.mjs'
+
+describe('MQA-320: all-target llama runtime provisioning', () => {
+  it('expands all to both Mac architectures and both Windows runtimes', () => {
+    expect(assetKeysFor('all')).toEqual(['mac-arm64', 'mac-x64', 'win-cpu', 'win-vulkan'])
+  })
+
+  it('preserves platform-specific target selection', () => {
+    expect(assetKeysFor('mac')).toEqual(['mac-arm64', 'mac-x64'])
+    expect(assetKeysFor('win')).toEqual(['win-cpu', 'win-vulkan'])
+  })
+
+  it('rejects unknown target values instead of inventing an asset key', () => {
+    expect(() => assetKeysFor('unknown')).toThrow(/target/i)
+  })
+})
 
 async function startServer(listener: RequestListener) {
   const sockets = new Set<Socket>()
